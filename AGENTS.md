@@ -163,6 +163,9 @@ same PR.
   guided tenant/API-key/BYO-client add forms, the per-user api_key auth mode):
   [`docs/MCP-CATALOG.md`](docs/MCP-CATALOG.md) +
   [`docs/CONNECTOR-ONBOARDING.md`](docs/CONNECTOR-ONBOARDING.md)
+- **White-labeling from a bundle** (`branding:` — strings, `logo`, the themable
+  color tokens, what stays build-time env, and the trust class of the two brand
+  asset routes): [`docs/BRANDING.md`](docs/BRANDING.md)
 - **Admin-managed workspace feature settings** (the Settings → Admin Features
   panel: DB override > env var > default, live apply, the registry admission
   rule, what stays env-only): [`docs/ADMIN-SETTINGS.md`](docs/ADMIN-SETTINGS.md)

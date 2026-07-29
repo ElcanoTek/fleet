@@ -91,6 +91,12 @@ type Bundle struct {
 	Models     Models
 	EmptyState EmptyState
 
+	// BrandLogoPath is the absolute, symlink-resolved file backing
+	// Branding.Logo, or "" when the bundle declares none. Set at load by
+	// resolveBrandLogo so the HTTP layer serves a path it never has to
+	// re-validate per request.
+	BrandLogoPath string
+
 	// TaskTemplates is the bundle's catalog of pre-filled scheduled-task
 	// configurations (manifest task_templates block), in manifest order. Empty
 	// in the generic bundle's absence of the section; the shipped generic bundle
@@ -385,6 +391,23 @@ type Branding struct {
 	// login page — paints in the client's palette with no flash. An absent block
 	// emits nothing and the built-in defaults stand. See BrandColors.
 	Colors BrandColors `yaml:"colors"`
+	// Logo is a bundle-relative path to the mark the web shell renders in the
+	// navigation rail (e.g. "assets/acme-mark.svg"). Colors alone cannot
+	// white-label a deployment: the rail shows a logo on every page, so without
+	// this a themed deployment wore fleet's mark next to its own app_name.
+	//
+	// The file is served by httpapi's /brand/logo, which resolves it against
+	// Bundle.Dir at request time — fleet copies nothing into web/public, so a
+	// bundle re-theme needs no web rebuild. Empty means the web falls back to
+	// fleet's own mark.
+	//
+	// Validated at bundle load (see validateBrandLogo): the path must be
+	// lexically local (no absolute path, no ".." escape), must resolve inside
+	// the bundle after symlink resolution, must exist as a regular file, and
+	// must carry an extension the HTTP layer knows a content type for. A bundle
+	// naming a missing or unservable logo fails loudly at startup rather than
+	// serving a broken image on every page.
+	Logo string `yaml:"logo"`
 }
 
 // BrandColors holds per-mode palette overrides. Light and Dark are keyed by a
@@ -929,6 +952,9 @@ func Load(dir string) (*Bundle, error) {
 		EvalsDir:          filepath.Join(abs, "evals"),
 	}
 	applyBrandingDefaults(&b.Branding)
+	if err := b.resolveBrandLogo(); err != nil {
+		return nil, err
+	}
 	if err := b.validate(); err != nil {
 		return nil, err
 	}
@@ -986,6 +1012,88 @@ func applyBrandingDefaults(br *Branding) {
 	if br.ShareDescription == "" {
 		br.ShareDescription = "An AI workspace with real tool use."
 	}
+}
+
+// brandLogoContentTypes maps the image extensions a bundle logo may use to the
+// content type /brand/logo serves it as. An allowlist rather than
+// mime.TypeByExtension: the response type is what makes the browser render the
+// bytes, so the set stays deliberately small and image-only — a bundle cannot
+// turn the logo route into a general file server for HTML or scripts by naming
+// a different extension.
+var brandLogoContentTypes = map[string]string{
+	".svg":  "image/svg+xml",
+	".png":  "image/png",
+	".webp": "image/webp",
+	".jpg":  "image/jpeg",
+	".jpeg": "image/jpeg",
+	".ico":  "image/x-icon",
+}
+
+// BrandLogoContentType returns the content type fleet serves a bundle logo
+// under, or "" when the extension is not one it knows. The HTTP layer and the
+// load-time validator share this one map so a bundle can never pass validation
+// with a path the route would then refuse to serve.
+func BrandLogoContentType(p string) string {
+	return brandLogoContentTypes[strings.ToLower(filepath.Ext(p))]
+}
+
+// BrandLogoExtensions returns the supported logo extensions, sorted, for error
+// messages and docs.
+func BrandLogoExtensions() []string {
+	out := make([]string, 0, len(brandLogoContentTypes))
+	for ext := range brandLogoContentTypes {
+		out = append(out, ext)
+	}
+	slices.Sort(out)
+	return out
+}
+
+// resolveBrandLogo validates branding.logo and records the absolute file the
+// HTTP layer serves. Empty is the norm (fleet's own mark stands) and is not an
+// error.
+//
+// The path arrives from a manifest, so it is operator-authored rather than user
+// input — but it is still resolved defensively, because the failure modes are
+// silent and permanent: a "../../etc/passwd" would otherwise be served under an
+// image content type on every page load, and a path that merely doesn't exist
+// would render a broken mark on every page of a deployment that believes it is
+// branded. Both fail at startup instead.
+//
+// filepath.IsLocal rejects an absolute path and any ".." escape lexically;
+// EvalSymlinks then re-checks containment, so a symlink inside the bundle
+// pointing outward cannot widen the reach either.
+func (b *Bundle) resolveBrandLogo() error {
+	rel := strings.TrimSpace(b.Branding.Logo)
+	b.Branding.Logo = rel
+	if rel == "" {
+		return nil
+	}
+	if !filepath.IsLocal(rel) {
+		return fmt.Errorf("branding.logo %q: must be a bundle-relative path (no absolute path, no \"..\")", rel)
+	}
+	if BrandLogoContentType(rel) == "" {
+		return fmt.Errorf("branding.logo %q: unsupported extension (want one of %s)", rel, strings.Join(BrandLogoExtensions(), ", "))
+	}
+	root, err := filepath.EvalSymlinks(b.Dir)
+	if err != nil {
+		return fmt.Errorf("branding.logo %q: resolve bundle dir: %w", rel, err)
+	}
+	resolved, err := filepath.EvalSymlinks(filepath.Join(b.Dir, rel))
+	if err != nil {
+		return fmt.Errorf("branding.logo %q: %w", rel, err)
+	}
+	if resolved != root && !strings.HasPrefix(resolved, root+string(os.PathSeparator)) {
+		return fmt.Errorf("branding.logo %q: resolves outside the bundle (%s)", rel, resolved)
+	}
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return fmt.Errorf("branding.logo %q: %w", rel, err)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("branding.logo %q: not a regular file", rel)
+	}
+	b.BrandLogoPath = resolved
+	return nil
 }
 
 // DefaultBranding returns the neutral generic branding strings fleet renders

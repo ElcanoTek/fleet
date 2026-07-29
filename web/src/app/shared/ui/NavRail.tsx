@@ -141,7 +141,11 @@ function overlayFocusables(container: HTMLElement): HTMLElement[] {
 export function NavRail({
   activeView,
   brandName,
-  brandLogoSrc = "/logos/elcano-mark-primary.svg",
+  // fleet's own mark is the fallback, NOT any one client's: a deployment brands
+  // the rail by declaring branding.logo in its client-config bundle, which
+  // arrives here as the proxied /api/brand/logo path. Callers pass
+  // `branding.logo_url || undefined` so an unset bundle falls back here.
+  brandLogoSrc = "/logos/fleet-mark.svg",
   eyebrow = "Internal",
   opsCount,
   sidebarOpen,

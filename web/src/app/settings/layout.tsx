@@ -67,6 +67,7 @@ export default function SettingsLayout({ children }: { children: ReactNode }) {
       <NavRail
         activeView="settings"
         brandName={branding.app_name}
+        brandLogoSrc={branding.logo_url || undefined}
         sidebarOpen={sidebarOpen}
         setSidebarOpen={setSidebarOpen}
         collapse={collapse}

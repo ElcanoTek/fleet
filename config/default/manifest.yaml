@@ -34,19 +34,44 @@ branding:
   login_tagline: "Sign in to your workspace and pick up where you left off."
   share_title: "Fleet — your team's AI workspace"
   share_description: "Persistent multi-turn conversations with real tool use across files, data, and the web."
+  # Optional: the brand mark the navigation rail renders on every page. A
+  # bundle-relative path to an .svg/.png/.webp/.jpg/.jpeg/.ico file; served by
+  # chat-server /brand/logo (proxied to the browser as /api/brand/logo), so a
+  # re-theme needs no web rebuild. Omit it (as this generic bundle does) and the
+  # rail shows fleet's own mark. The path must stay inside the bundle and must
+  # exist — a missing or unservable file fails at startup rather than rendering
+  # a broken image on every page.
+  # logo: "assets/acme-mark.svg"
+  #
   # Optional: theme the actual web UI (not just the text above) by overriding
   # globals.css custom properties per light/dark mode. Served as a
   # render-blocking stylesheet (chat-server /theme.css) so the shell — including
   # the pre-auth login page — paints in these colors with no flash. Omit the
-  # block (as this generic bundle does) to keep the built-in palette. Themable
-  # tokens: primary, primary_hover, secondary, accent, background, surface_1,
-  # surface_2, text_primary, text_secondary, text_muted, border. Values are hex
-  # or rgb()/rgba()/hsl()/hsla(); anything else is ignored and falls back.
+  # block (as this generic bundle does) to keep the built-in palette.
+  #
+  # Themable tokens:
+  #   core       primary, primary_hover, secondary, accent
+  #   surfaces   background, surface_1, surface_2
+  #   text       text_primary, text_secondary, text_muted, text_disabled
+  #   structure  border, border_strong, border_subtle
+  #   scrims     overlay_soft, overlay_strong
+  #   nav rail   rail_hover, rail_active
+  #
+  # Set the structure/scrim/rail tokens alongside the core ones: globals.css
+  # hand-tints its defaults from fleet's own primary hue, so overriding only
+  # `primary` leaves fleet-tinted emphasis borders and rail rows beside your
+  # palette. Semantic status colors (success/danger/warning) are intentionally
+  # NOT themable — they encode meaning, not brand.
+  #
+  # Values are hex or rgb()/rgba()/hsl()/hsla(); anything else is ignored and
+  # falls back to the default for that one token.
   # colors:
   #   dark:
   #     primary: "#7272ab"
   #     accent: "#9da7ef"
   #     background: "#1a0b1e"
+  #     border_strong: "rgba(114, 114, 171, 0.55)"
+  #     rail_hover: "rgba(255, 255, 255, 0.07)"
   #   light:
   #     primary: "#5f5f97"
   #     accent: "#7c84d6"

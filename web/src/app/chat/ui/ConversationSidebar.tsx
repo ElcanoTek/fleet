@@ -1598,6 +1598,7 @@ export function ConversationSidebar({
     <NavRail
       activeView="chat"
       brandName={branding.app_name}
+      brandLogoSrc={branding.logo_url || undefined}
       sidebarOpen={sidebarOpen}
       setSidebarOpen={setSidebarOpen}
       collapse={collapse}

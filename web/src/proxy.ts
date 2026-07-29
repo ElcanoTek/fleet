@@ -36,6 +36,17 @@ const publicApiPaths = new Set([
   "/api/orchestrator/auth/login",
   "/api/orchestrator/auth/logout",
   "/api/orchestrator/auth/elcano-login",
+  // Brand assets from the client-config bundle. The root layout links
+  // /api/theme as a render-blocking stylesheet on EVERY page, login included,
+  // and the login card may render the bundle's mark — so both must resolve
+  // before a session exists. Without this the login page 401'd on its own
+  // stylesheet and silently fell back to fleet's built-in palette, which is
+  // exactly the surface a white-labeled deployment cares most about. Both
+  // routes are deployment-wide and non-secret (a palette and a logo), and both
+  // return quietly (empty CSS / 404) rather than an error page if the backend
+  // is unreachable, so exposing them adds no failure mode.
+  "/api/theme",
+  "/api/brand/logo",
 ]);
 
 // contentSecurityPolicy builds the CSP for a response (#590). Two tiers:

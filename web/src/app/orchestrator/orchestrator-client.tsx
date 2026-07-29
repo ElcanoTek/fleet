@@ -182,6 +182,7 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
       <NavRail
         activeView="orchestrator"
         brandName={branding.app_name}
+        brandLogoSrc={branding.logo_url || undefined}
         opsCount={dashboard.stats?.running_tasks}
         sidebarOpen={sidebarOpen}
         setSidebarOpen={setSidebarOpen}

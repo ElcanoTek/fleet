@@ -10,7 +10,10 @@ package httpapi
 
 import (
 	"fmt"
+	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -32,8 +35,27 @@ var themeTokenOrder = []struct{ key, cssVar string }{
 	{"text_primary", "--color-text-primary"},
 	{"text_secondary", "--color-text-secondary"},
 	{"text_muted", "--color-text-muted"},
+	{"text_disabled", "--color-text-disabled"},
 	{"border", "--color-border"},
+	// The structural neighbours of the tokens above. globals.css hand-tints
+	// these from fleet's own primary hue rather than deriving them, so a bundle
+	// that set only `border` still showed fleet-purple emphasis borders, muted
+	// scrims, and rail rows next to its own palette. --rail-hover/--rail-active
+	// close the follow-up globals.css records inline ("the later theming PR
+	// repaints these from the per-deployment manifest").
+	{"border_strong", "--color-border-strong"},
+	{"border_subtle", "--color-border-subtle"},
+	{"overlay_soft", "--color-overlay-soft"},
+	{"overlay_strong", "--color-overlay-strong"},
+	{"rail_hover", "--rail-hover"},
+	{"rail_active", "--rail-active"},
 }
+
+// Semantic status colors (--color-success/-danger/-warning and their borders)
+// are deliberately NOT themable. They encode meaning rather than brand — a
+// failed tool call must read as failure in every deployment — and several are
+// derived with color-mix() from the base hue, so a partial override would
+// desynchronize a swatch from its own border.
 
 // colorValueRe whitelists CSS color syntaxes the manifest may use: hex
 // (#rgb..#rrggbbaa) and the rgb()/rgba()/hsl()/hsla() functional forms over a
@@ -94,4 +116,70 @@ func (s *Server) themeCSS(w http.ResponseWriter, r *http.Request) {
 		css = renderThemeCSS(s.clientConfig.Branding.Colors)
 	}
 	_, _ = w.Write([]byte(css))
+}
+
+// brandLogoMaxBytes caps what /brand/logo will stream. A mark is a few KB; the
+// cap exists so a bundle that points the field at a huge file degrades to
+// fleet's own mark instead of shipping megabytes on every page load.
+const brandLogoMaxBytes = 2 << 20 // 2 MiB
+
+// brandLogo serves the bundle's branding.logo file, or 404 when the bundle
+// declares none — the web then falls back to fleet's own mark. Same trust class
+// as /theme.css: a deployment-wide, non-secret brand asset, so the route is
+// token-gated but identity-less (the pre-auth login shell may show it).
+//
+// clientconfig resolved and containment-checked the path at load
+// (resolveBrandLogo), so this handler does no path arithmetic on request input —
+// there is no request input. It re-stats only to fail soft if the file vanished
+// under a running process.
+func (s *Server) brandLogo(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.clientConfig == nil || s.clientConfig.BrandLogoPath == "" {
+		http.NotFound(w, r)
+		return
+	}
+	path := s.clientConfig.BrandLogoPath
+	ctype := clientconfig.BrandLogoContentType(path)
+	if ctype == "" {
+		// Unreachable: load-time validation rejects an unknown extension. Fail
+		// soft rather than guessing a type the browser would sniff.
+		http.NotFound(w, r)
+		return
+	}
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		http.NotFound(w, r)
+		return
+	}
+	if info.Size() > brandLogoMaxBytes {
+		log.Printf("httpapi: branding.logo %s is %d bytes (cap %d); serving fleet's default mark instead", path, info.Size(), brandLogoMaxBytes)
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", ctype)
+	// An SVG mark is a document the browser will parse, and this route is
+	// directly reachable. Bundle content is operator-authored (a bundle push is
+	// already host code execution per SECURITY.md), so this is defense in depth,
+	// not a trust boundary: nosniff pins the declared type, and the CSP means an
+	// SVG carrying <script> still executes nothing if someone opens the URL
+	// directly instead of via the <img> the shell renders.
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox")
+	// Same short max-age as /theme.css: a re-theme (operator restart) propagates
+	// promptly without a hard reload.
+	w.Header().Set("Cache-Control", "public, max-age=300")
+	// G304: path is not request-derived — there is no request input on this route.
+	// It is Bundle.BrandLogoPath, which clientconfig.resolveBrandLogo already
+	// containment-checked against the bundle root (lexically via filepath.IsLocal,
+	// then again after EvalSymlinks) at load time.
+	f, err := os.Open(path) //nolint:gosec // see comment above
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	defer f.Close()
+	http.ServeContent(w, r, filepath.Base(path), info.ModTime(), f)
 }

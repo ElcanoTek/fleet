@@ -19,6 +19,39 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **A bundle can now brand the shell, not just tint it** (`docs/BRANDING.md`):
+  new `branding.logo` — a bundle-relative image path served from the bundle by
+  `/brand/logo` (proxied as `/api/brand/logo`), so the navigation rail's mark is
+  a bundle change plus a restart, never a web rebuild or a file copied into
+  `web/public`. Previously `NavRail` hardcoded `elcano-mark-primary.svg`, so
+  every deployment wore one client's mark beside its own `app_name`; that asset
+  is deleted from fleet and the fallback is fleet's own mark. The path is
+  resolved at load — lexically local, still inside the bundle after symlink
+  resolution, a regular file, a known image extension — so a bad value fails at
+  startup instead of rendering a broken image on every page; the route caps it at
+  2 MiB and pins delivery with `nosniff` + `default-src 'none'; sandbox` so an
+  SVG carrying `<script>` executes nothing. `/client-config` advertises
+  `logo_url` only when a file actually backed the field.
+  **Seven more themable color tokens** — `text_disabled`, `border_strong`,
+  `border_subtle`, `overlay_soft`, `overlay_strong`, `rail_hover`, `rail_active`
+  — because `globals.css` hand-tints those from fleet's own primary hue, so a
+  bundle overriding `primary` alone kept fleet-purple emphasis borders and rail
+  rows beside its palette. The last two close the follow-up `globals.css` records
+  inline. Semantic status colors (success/danger/warning) stay fleet's: they
+  encode meaning, not brand.
+
+### Fixed
+
+- **Bundle branding never actually reached the login page.** The root layout
+  links `/api/theme` as a render-blocking stylesheet on every page, and both
+  `theme.go` and the proxy route documented it as public — but the path was
+  missing from the middleware's public-path set, so a pre-session request 401'd
+  and the login page silently fell back to fleet's built-in palette. That is the
+  one page every user sees before anything else, and the surface a white-labeled
+  deployment cares most about. `/api/theme` and `/api/brand/logo` are now both
+  public (deployment-wide, non-secret, and each degrades quietly to empty
+  CSS / a 404), pinned by a regression test.
+
 - **Catalog refresh: `gamma`** (`design-media`, provenance `official`, `auth:
   oauth`) — Gamma's hosted MCP at `https://mcp.gamma.app/mcp`: generate decks /
   docs / webpages from a prompt, template, or multi-page input, browse, read and
