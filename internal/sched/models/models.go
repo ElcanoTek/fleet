@@ -542,6 +542,13 @@ const (
 	// NOT terminal (it resumes) — so IsTerminal excludes it and the paused row
 	// holds no lease.
 	TaskStatusPausedAwaitingInput TaskStatus = "paused_awaiting_input"
+	// TaskStatusPausedAwaitingWake is the non-terminal pause a scheduled run
+	// enters when its agent calls `sleep` or `wake_on_event` (self-wake,
+	// docs/SELF-WAKE.md): the run has ended and released its sandbox/lease,
+	// and the scheduler's wake sweep re-queues the task when wake_at passes
+	// (or an event wake arrives first). NOT terminal — same lifecycle shape
+	// as the ask pause (#510), keyed on a deadline/event instead of a human.
+	TaskStatusPausedAwaitingWake TaskStatus = "paused_awaiting_wake"
 )
 
 // IsValidReportedStatus reports whether s is a status a worker is allowed to
@@ -1003,7 +1010,20 @@ type Task struct {
 	// re-queued it (injected + cleared at the resumed run's start).
 	PendingQuestion string `json:"pending_question,omitempty"`
 	PendingAnswer   string `json:"pending_answer,omitempty"`
-	Priority        int    `json:"priority"`
+	// Wake* back the self-wake pause (docs/SELF-WAKE.md). Runtime state, never
+	// definition: WakeAt is the deadline the parked task wakes on (always set —
+	// an event wait's timeout, a timer sleep's fire time); WakeEventKey names
+	// the event an event wait listens for; WakeNote is the agent's message to
+	// its future self, injected into the resumed run; WakeReason records why
+	// the task woke (written by the wake transition, injected + cleared like
+	// PendingAnswer); WakeCycles counts total parks so the runner can refuse a
+	// runaway sleep loop.
+	WakeAt       *time.Time `json:"wake_at,omitempty"`
+	WakeEventKey string     `json:"wake_event_key,omitempty"`
+	WakeNote     string     `json:"wake_note,omitempty"`
+	WakeReason   string     `json:"wake_reason,omitempty"`
+	WakeCycles   int        `json:"wake_cycles,omitempty"`
+	Priority     int        `json:"priority"`
 	// EffectivePriority is the value the scheduler actually orders the pending
 	// queue by (#230). Equal to Priority at creation; only the anti-starvation
 	// sweep lowers it (never Priority) so a long-waiting task is eventually

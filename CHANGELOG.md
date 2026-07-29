@@ -19,6 +19,16 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **Self-wake** (`docs/SELF-WAKE.md`): a scheduled run can suspend itself
+  and schedule its own resumption — new `sleep` (park until a deadline) and
+  `wake_on_event` (park until `POST /tasks/{id}/wake` fires the matching
+  key, or a timeout) tools with the exact ask-pause lifecycle: the run ends,
+  sandbox/lease released, task parks in new status `paused_awaiting_wake`,
+  and the scheduler's tick re-queues it as a fresh run carrying the agent's
+  required note-to-self plus the wake reason. Every wake has a deadline
+  (event waits default to 7 days), parks are capped at 100 per task, and
+  cost accumulates on the task across cycles.
+
 - **Discuss this run** (`docs/DISCUSS-RUN.md`): a finished scheduled run's
   log modal gains "Discuss in chat" — a one-way BFF bridge (inverse of
   promote-to-task) that reads the transcript through the caller's

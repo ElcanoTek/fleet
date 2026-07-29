@@ -682,6 +682,14 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 		nativeTools = append(nativeTools, tools.NewAskTool())
 	}
 
+	// self-wake (docs/SELF-WAKE.md): sleep / wake_on_event park the task and
+	// let the scheduler re-queue it on a deadline or a named event. Same
+	// registration contract as ask: handler installed by the runner → tools
+	// registered; absent → the model never sees them.
+	if tools.WakeHandlerInstalled(ctx) {
+		nativeTools = append(nativeTools, tools.NewSleepTool(time.Now), tools.NewWakeOnEventTool(time.Now))
+	}
+
 	// publish_artifact (#204) lets a run mark workspace files as named, downloadable
 	// deliverables (a curated manifest, distinct from the raw workspace the
 	// file-browser endpoints already expose). Wired ONLY when the runner installed
@@ -737,6 +745,18 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 			"A previous run of this task paused to ask a human a question. Continue the task using their answer.\n\n" +
 			"Your question was: " + strings.TrimSpace(task.PendingQuestion) + "\n\n" +
 			"The human answered: " + strings.TrimSpace(task.PendingAnswer) + "\n"
+	}
+
+	// Woken after self-wake (docs/SELF-WAKE.md): this run follows a sleep /
+	// wake_on_event a prior run parked on. Inject WHY it woke and the note the
+	// agent left itself; the runner clears the wake columns at the terminal
+	// transition (like the Q&A columns, #582) so a retried woken run still
+	// sees them.
+	if strings.TrimSpace(task.WakeReason) != "" {
+		taskSystemPrompt += "\n\n## Woken — Continue\n\n" +
+			"A previous run of this task paused itself and scheduled this wake-up. Continue the task.\n\n" +
+			"Why you woke: " + strings.TrimSpace(task.WakeReason) + "\n\n" +
+			"Your note to yourself was: " + strings.TrimSpace(task.WakeNote) + "\n"
 	}
 
 	// Recurring context carry (#504): when the task opted into carry_context, the

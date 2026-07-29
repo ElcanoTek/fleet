@@ -1695,6 +1695,44 @@ paths:
         "400": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
+  /tasks/{task_id}/wake:
+    parameters:
+      - name: task_id
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      summary: Fire a named event at a task parked by wake_on_event (self-wake).
+      description: >-
+        Re-queues a task in paused_awaiting_wake early (status → pending); the
+        event key must match the one the task is waiting for, so a caller can
+        never wake an arbitrary sleeping task. The next run is told the event
+        fired (with the optional note). 409 when the task is not awaiting a
+        wake or waits for a different event. Requires operator (cancel)
+        permission, mirroring /tasks/{task_id}/resume. See docs/SELF-WAKE.md.
+      security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [event]
+              properties:
+                event: { type: string }
+                note: { type: string }
+      responses:
+        "200":
+          description: Re-queued.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
   /tasks/upcoming:
     get:
       summary: Upcoming scheduled runs — calendar/timeline feed (#504).
@@ -2085,6 +2123,61 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/LogSession" }
+        "404": { $ref: "#/components/responses/Error" }
+  /logs/{task_id}/history:
+    parameters:
+      - name: task_id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      summary: List the task's superseded transcripts (per-attempt run log history).
+      description: >-
+        Metadata only (entry id + when a newer transcript replaced it), newest
+        first. History exists only where a retry / ask-resume / wake cycle of
+        the SAME task id overwrote a transcript. Same auth + ownership gate as
+        GET /logs/{task_id}.
+      security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  entries:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: integer }
+                        superseded_at: { type: string, format: date-time }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /logs/{task_id}/history/{entry_id}:
+    parameters:
+      - name: task_id
+        in: path
+        required: true
+        schema: { type: string }
+      - name: entry_id
+        in: path
+        required: true
+        schema: { type: integer }
+    get:
+      summary: Fetch one superseded transcript from the task's run log history.
+      description: >-
+        Returns the LogSession shape GET /logs/{task_id} returns. Entry lookups
+        are task-scoped; same auth + ownership gate as GET /logs/{task_id}.
+      security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LogSession" }
+        "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
 
   /users:

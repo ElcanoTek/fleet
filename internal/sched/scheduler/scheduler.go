@@ -170,6 +170,7 @@ func (s *Scheduler) runLoop() {
 				s.RecoverExpiredLeases()
 				s.runStarvationPromotion()
 				s.runPausedExpiry()
+				s.runWakeSweep()
 			}()
 		case <-cleanupC:
 			func() {
@@ -219,6 +220,22 @@ func (s *Scheduler) runPausedExpiry() {
 	}
 	if n > 0 {
 		log.Printf("scheduler: expired %d paused task(s) awaiting input > %dm", n, s.pausedExpiryMin)
+	}
+}
+
+// runWakeSweep performs one self-wake sweep (docs/SELF-WAKE.md): it re-queues
+// parked tasks whose wake deadline has passed. Always on — a wake is core
+// task lifecycle, not a tunable policy — and data-driven: with no parked
+// tasks the sweep is one cheap indexed query. Logs only when it wakes
+// something; a failure is logged but never fatal — the next tick retries.
+func (s *Scheduler) runWakeSweep() {
+	n, err := s.storage.WakeDueTasks(context.Background())
+	if err != nil {
+		log.Printf("scheduler: wake sweep failed: %v", err)
+		return
+	}
+	if n > 0 {
+		log.Printf("scheduler: woke %d task(s) whose wake deadline passed", n)
 	}
 }
 

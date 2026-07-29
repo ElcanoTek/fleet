@@ -80,7 +80,7 @@ var _ taskListStore = (*storage.Storage)(nil)
 func schedTaskList(argv []string) int {
 	fs := flag.NewFlagSet("sched task list", flag.ContinueOnError)
 	dbURL := fs.String("database-url", "", "sched Postgres DSN")
-	status := fs.String("status", "", "filter by status: scheduled|pending|leased|running|analyzing|success|error|cancelled|dead_lettered|paused_awaiting_input")
+	status := fs.String("status", "", "filter by status: scheduled|pending|leased|running|analyzing|success|error|cancelled|dead_lettered|paused_awaiting_input|paused_awaiting_wake")
 	limit := fs.Int("limit", 50, "maximum tasks to print (most recent first)")
 	asJSON := fs.Bool("json", false, "emit the tasks as a JSON array")
 	if err := fs.Parse(argv); err != nil {
@@ -90,7 +90,7 @@ func schedTaskList(argv []string) int {
 		return errf(1, "--limit must be positive")
 	}
 	if s := strings.TrimSpace(*status); s != "" && !validTaskStatusFilter(s) {
-		return errf(1, "unknown --status %q (want scheduled|pending|leased|running|analyzing|success|error|cancelled|dead_lettered|paused_awaiting_input)", s)
+		return errf(1, "unknown --status %q (want scheduled|pending|leased|running|analyzing|success|error|cancelled|dead_lettered|paused_awaiting_input|paused_awaiting_wake)", s)
 	}
 
 	st, code := openSchedStorage(*dbURL)
@@ -150,7 +150,7 @@ func validTaskStatusFilter(s string) bool {
 	case models.TaskStatusScheduled, models.TaskStatusPending, models.TaskStatusLeased,
 		models.TaskStatusRunning, models.TaskStatusAnalyzing, models.TaskStatusSuccess,
 		models.TaskStatusError, models.TaskStatusCancelled, models.TaskStatusDeadLettered,
-		models.TaskStatusPausedAwaitingInput:
+		models.TaskStatusPausedAwaitingInput, models.TaskStatusPausedAwaitingWake:
 		return true
 	default:
 		return false

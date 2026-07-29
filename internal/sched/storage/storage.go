@@ -1662,3 +1662,25 @@ func (s *Storage) ClearPendingQA(ctx context.Context, taskID, leaseOwner uuid.UU
 func (s *Storage) ListPausedTasks(ctx context.Context, limit int) ([]*models.Task, error) {
 	return s.db.ListPausedTasks(ctx, limit)
 }
+
+// self-wake (docs/SELF-WAKE.md)
+
+// PauseTaskForWake parks a running task awaiting a timer/event wake.
+func (s *Storage) PauseTaskForWake(ctx context.Context, taskID, leaseOwner uuid.UUID, wakeAt time.Time, eventKey, note string) (bool, error) {
+	return s.db.PauseTaskForWake(ctx, taskID, leaseOwner, wakeAt, eventKey, note)
+}
+
+// WakeDueTasks re-queues every parked task whose wake deadline has passed.
+func (s *Storage) WakeDueTasks(ctx context.Context) (int, error) {
+	return s.db.WakeDueTasks(ctx)
+}
+
+// WakeTaskByEvent wakes one parked task early on its named event.
+func (s *Storage) WakeTaskByEvent(ctx context.Context, taskID uuid.UUID, eventKey, note string) (bool, error) {
+	return s.db.WakeTaskByEvent(ctx, taskID, eventKey, note)
+}
+
+// ClearWakeState clears a woken task's wake columns once the run consumed them.
+func (s *Storage) ClearWakeState(ctx context.Context, taskID, leaseOwner uuid.UUID) error {
+	return s.db.ClearWakeState(ctx, taskID, leaseOwner)
+}

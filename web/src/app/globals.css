@@ -1757,6 +1757,13 @@ tr.clickable:hover td {
   background: var(--color-status-cancelled-bg);
   border-color: var(--color-status-cancelled-border);
 }
+/* Self-wake (docs/SELF-WAKE.md): a sleeping task is calm, not a warning —
+   it re-queues itself, unlike paused_awaiting_input which needs a human. */
+.status-paused_awaiting_wake {
+  color: var(--color-status-leased-fg);
+  background: var(--color-status-leased-bg);
+  border-color: var(--color-status-leased-border);
+}
 /* Logs column: colored pill when logs exist, muted ghost when not. */
 .logs-badge {
   display: inline-flex;

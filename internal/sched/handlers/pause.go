@@ -58,6 +58,54 @@ func (h *Handlers) ResumeTask(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"status": string(models.TaskStatusPending)})
 }
 
+type wakeRequest struct {
+	Event string `json:"event"`
+	Note  string `json:"note,omitempty"`
+}
+
+// WakeTask handles POST /tasks/{task_id}/wake — fire a named event at a task
+// parked by wake_on_event (self-wake, docs/SELF-WAKE.md), re-queueing it
+// early. The event key must match the one the task is waiting for, so a
+// caller can never wake an arbitrary sleeping task (and a timer-only sleep
+// has no key to match). Mutating operator action → cancel permission,
+// mirroring ResumeTask.
+func (h *Handlers) WakeTask(w http.ResponseWriter, r *http.Request) {
+	p := h.principalFromRequest(r)
+	if !p.hasPermission(models.PermissionCancelTask) {
+		writeError(w, http.StatusForbidden, "Waking a task requires operator permission")
+		return
+	}
+	task, ok := h.pauseTaskForRequest(w, r, p)
+	if !ok {
+		return
+	}
+	if task.Status != models.TaskStatusPausedAwaitingWake {
+		writeError(w, http.StatusConflict, "task is not awaiting a wake")
+		return
+	}
+	var req wakeRequest
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
+		return
+	}
+	event := strings.TrimSpace(req.Event)
+	if event == "" {
+		writeError(w, http.StatusBadRequest, "event is required")
+		return
+	}
+	ok2, err := h.storage.WakeTaskByEvent(r.Context(), task.ID, event, strings.TrimSpace(req.Note))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to wake task")
+		return
+	}
+	if !ok2 {
+		writeError(w, http.StatusConflict, "task is not waiting for that event")
+		return
+	}
+	log.Printf("Task woken by event: %s (event %s, by %s)", logSafe(task.ID.String()), logSafe(event), logSafe(p.stopLabel())) //nolint:gosec // G706: task.ID is a parsed uuid.UUID and logSafe strips CR/LF.
+	writeJSON(w, http.StatusOK, map[string]any{"status": string(models.TaskStatusPending)})
+}
+
 // ListPausedTasks handles GET /tasks/paused — the "needs a human answer" queue.
 func (h *Handlers) ListPausedTasks(w http.ResponseWriter, r *http.Request) {
 	p := h.principalFromRequest(r)
