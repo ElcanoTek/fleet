@@ -156,6 +156,20 @@ describe("proxy", () => {
     expect(csp).toContain("frame-ancestors 'none'");
   });
 
+  // Regression: the root layout links /api/theme as a render-blocking
+  // stylesheet on EVERY page, and the login card may render the bundle's mark.
+  // Both were caught by the session gate, so a white-labeled deployment showed
+  // fleet's built-in palette and mark on the one page every user sees first.
+  it.each(["/api/theme", "/api/brand/logo"])(
+    "serves %s without a session (bundle branding must reach the login page)",
+    async (path) => {
+      getSessionFromRequestMock.mockResolvedValue(null);
+      const res = await proxy(req(path));
+      expect(res.status).toBe(200);
+      expect(res.headers.get("location")).toBeNull();
+    },
+  );
+
   it("stamps the CSP on redirect and 401 responses too", async () => {
     getSessionFromRequestMock.mockResolvedValue(null);
     const redirect = await proxy(req("/chat"));

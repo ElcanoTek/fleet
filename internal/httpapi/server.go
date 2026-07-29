@@ -719,6 +719,10 @@ func (s *Server) Routes() http.Handler {
 	// /theme.css themes the shell (incl. the pre-auth login page) from the
 	// bundle palette, so it is token-gated but identity-less — see themeCSS.
 	mux.Handle("/theme.css", s.tokenOnlyMiddleware(http.HandlerFunc(s.themeCSS)))
+	// /brand/logo is the same trust class as /theme.css — a deployment-wide,
+	// non-secret brand asset the pre-auth shell may render — so it shares the
+	// token-gated, identity-less chain. 404 when the bundle declares no logo.
+	mux.Handle("/brand/logo", s.tokenOnlyMiddleware(http.HandlerFunc(s.brandLogo)))
 	// Public read-only conversation sharing (#226). Token-gated (shared secret —
 	// only the trusted Next proxy reaches it) but IDENTITY-less, like /theme.css:
 	// the share token in the path is the authorization, and the handler enforces
@@ -1047,7 +1051,19 @@ type clientConfigBranding struct {
 	LoginTagline     string `json:"login_tagline"`
 	ShareTitle       string `json:"share_title"`
 	ShareDescription string `json:"share_description"`
+	// LogoURL is the web path the shell renders as the brand mark, or "" when
+	// the bundle declares no logo (the web then uses fleet's own). A URL rather
+	// than the manifest's bundle-relative path: the browser cannot read the
+	// bundle, and the web is a separate process, so the only thing it can act on
+	// is the proxied route. Omitted from JSON when empty so an older web build
+	// sees exactly what it saw before.
+	LogoURL string `json:"logo_url,omitempty"`
 }
+
+// brandLogoWebPath is the Next-proxied path the browser fetches the bundle mark
+// from. It intentionally mirrors /api/theme: one public proxy per brand asset,
+// so the login shell can render both before a session exists.
+const brandLogoWebPath = "/api/brand/logo"
 
 type clientConfigEmptyState struct {
 	Cards         []map[string]any `json:"cards"`
@@ -1084,6 +1100,11 @@ func (s *Server) clientConfigHandler(w http.ResponseWriter, r *http.Request) {
 			LoginTagline:     b.Branding.LoginTagline,
 			ShareTitle:       b.Branding.ShareTitle,
 			ShareDescription: b.Branding.ShareDescription,
+		}
+		// Advertise the logo only when a file actually backed it at load, so the
+		// web never renders an <img> at a route that 404s.
+		if b.BrandLogoPath != "" {
+			resp.Branding.LogoURL = brandLogoWebPath
 		}
 		if len(b.EmptyState.Cards) > 0 {
 			resp.EmptyState.Cards = b.EmptyState.Cards
