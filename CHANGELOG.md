@@ -19,6 +19,14 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **Discuss this run** (`docs/DISCUSS-RUN.md`): a finished scheduled run's
+  log modal gains "Discuss in chat" — a one-way BFF bridge (inverse of
+  promote-to-task) that reads the transcript through the caller's
+  orchestrator credential, creates a chat conversation seeded with a clamped
+  digest (new optional `seed` on `POST /conversations` — one user message,
+  no turn), and deep-links to it via the new `/chat?c=<id>` boot param. The
+  chat server never reads the sched store; ADR-0005's database split stands.
+
 - **Per-attempt run log history** (`docs/RUN-LOG-HISTORY.md`): re-running the
   same task id — a retry, an ask-pause resume, a self-wake cycle — no longer
   destroys the prior attempt's transcript. The row the `logs` upsert would

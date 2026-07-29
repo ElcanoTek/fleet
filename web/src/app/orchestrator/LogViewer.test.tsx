@@ -309,6 +309,33 @@ describe("LogViewer run history", () => {
   });
 });
 
+describe("LogViewer discuss-this-run", () => {
+  it("creates the seeded conversation via the BFF and navigates to chat", async () => {
+    mockSession(RICH_SESSION);
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ conversation_id: "conv-42" }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<LogViewer task={DONE_TASK} onClose={() => {}} />);
+    fireEvent.click(await screen.findByTestId("discuss-run-button"));
+    await vi.waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        `/api/orchestrator/tasks/${DONE_TASK.id}/discuss`,
+        { method: "POST" },
+      );
+    });
+    vi.unstubAllGlobals();
+  });
+
+  it("hides the button when the task has no transcript", async () => {
+    mockSession({ id: "empty", messages: [] });
+    render(<LogViewer task={DONE_TASK} onClose={() => {}} />);
+    await screen.findByTestId("task-detail-bar");
+    expect(screen.queryByTestId("discuss-run-button")).toBeNull();
+  });
+});
+
 describe("LogViewer per-attempt transcripts", () => {
   it("hides the attempt picker when nothing was superseded", async () => {
     mockSession(RICH_SESSION);

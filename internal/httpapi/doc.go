@@ -18,7 +18,7 @@
 //   - GET    /healthz                           — liveness probe
 //   - GET    /personas                          — list persona YAMLs
 //   - GET    /conversations                     — list user's conversations
-//   - POST   /conversations                     — create empty conversation
+//   - POST   /conversations                     — create empty conversation (optional seed message, docs/DISCUSS-RUN.md)
 //   - GET    /conversations/{id}                — full history replay
 //   - DELETE /conversations/{id}                — delete (+ cascade messages)
 //   - POST   /conversations/{id}/pin            — { pinned: bool }

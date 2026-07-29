@@ -3314,6 +3314,27 @@ export function ChatExperience({
       id !== PENDING_CONV_KEY &&
       !id.startsWith(`${PENDING_CONV_KEY}:`);
 
+    // Deep-link (?c=<conversation id>): open a specific conversation on boot.
+    // Used by the orchestrator's "Discuss this run" bridge, which creates a
+    // seeded conversation and navigates here. The param is consumed once and
+    // stripped immediately so a reload or the warm-session snapshot never
+    // re-applies a stale selection.
+    let deepLinkConvId: string | null = null;
+    {
+      const params = new URLSearchParams(window.location.search);
+      const c = params.get("c");
+      if (isRealConvId(c)) {
+        deepLinkConvId = c;
+        params.delete("c");
+        const qs = params.toString();
+        window.history.replaceState(
+          null,
+          "",
+          window.location.pathname + (qs ? `?${qs}` : ""),
+        );
+      }
+    }
+
     // Personas — nice-to-have; the server falls back to default. Sets the
     // roster always, but the default persona only when no conversation loads.
     const loadPersonas = async () => {
@@ -3415,15 +3436,17 @@ export function ChatExperience({
         const convs = conversationsData.conversations ?? [];
         setConversations(convs);
 
-        const latest = convs[0];
-        if (!latest) {
+        // A deep-linked conversation outranks "most recent" — that's the
+        // conversation the user was just sent to open.
+        const target = deepLinkConvId ?? convs[0]?.id ?? null;
+        if (!target) {
           setActiveConversationId(null);
           return;
         }
         // Flip before awaiting so a personas fetch that resolves after this
         // point does not overwrite the loaded conversation's persona.
         willLoadConversation = true;
-        await loadConversationRef.current(latest.id, { restore: true });
+        await loadConversationRef.current(target, { restore: true });
       } finally {
         if (!cancelled) {
           setIsLoadingHistory(false);
@@ -3507,6 +3530,12 @@ export function ChatExperience({
         pendingHistoryScrollRef.current = activeId;
       }
       void revalidateInBackground();
+      // A deep link overrides the rehydrated selection — the user was just
+      // sent here to open this specific conversation.
+      if (deepLinkConvId) {
+        willLoadConversation = true;
+        void loadConversationRef.current(deepLinkConvId, {});
+      }
     } else {
       void loadInitialState();
     }

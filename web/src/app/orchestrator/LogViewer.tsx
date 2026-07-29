@@ -843,6 +843,35 @@ function LogViewerBody({
   const canResubmit = RESUBMITTABLE.has(task.status ?? "");
   const [historyOpen, setHistoryOpen] = useState(false);
 
+  // "Discuss this run" (docs/DISCUSS-RUN.md): the BFF fetches this run's
+  // transcript, creates a chat conversation seeded with a digest, and we
+  // navigate there. Full page navigation (not router.push) because /chat is
+  // a separate app shell.
+  const [discussing, setDiscussing] = useState(false);
+  const discuss = async () => {
+    if (discussing) return;
+    setDiscussing(true);
+    try {
+      const res = await fetch(
+        `/api/orchestrator/tasks/${encodeURIComponent(task.id)}/discuss`,
+        { method: "POST" },
+      );
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(body?.error ?? `HTTP ${res.status}`);
+      }
+      const { conversation_id } = (await res.json()) as { conversation_id: string | null };
+      if (!conversation_id) throw new Error("no conversation id returned");
+      window.location.href = `/chat?c=${encodeURIComponent(conversation_id)}`;
+    } catch (err) {
+      showToast(
+        `Discuss failed: ${err instanceof Error ? err.message : "unknown error"}`,
+        "error",
+      );
+      setDiscussing(false);
+    }
+  };
+
   return (
     <div
       className="modal-overlay is-open"
@@ -919,6 +948,17 @@ function LogViewerBody({
               >
                 History
               </button>
+              {session && session.messages && session.messages.length > 0 ? (
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  data-testid="discuss-run-button"
+                  disabled={discussing}
+                  onClick={() => void discuss()}
+                >
+                  {discussing ? "Opening chat…" : "Discuss in chat"}
+                </button>
+              ) : null}
               <button
                 type="button"
                 className="btn btn-secondary"
