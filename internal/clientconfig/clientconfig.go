@@ -835,6 +835,11 @@ type RemoteMCPCatalogEntry struct {
 	// expects the key under, e.g. "X-API-Key". Empty means the default shape:
 	// "Authorization: Bearer <key>".
 	APIKeyHeader string `yaml:"api_key_header"`
+	// APIKeyQuery (auth "api_key" only) is the URL query-parameter NAME the
+	// vendor expects the key under, e.g. "browserbaseApiKey" — for hosted
+	// servers that authenticate in the URL rather than a header. The runtime
+	// attaches the sealed key per-request; it is never persisted in a URL.
+	APIKeyQuery string `yaml:"api_key_query"`
 	// ClientRegistration is "manual" when the vendor's authorization server
 	// does not support RFC 7591 dynamic client registration — the user must
 	// bring their own OAuth client (a GCP OAuth client, an Entra app
@@ -1460,6 +1465,17 @@ func validateRemoteMCPEntryMeta(e *RemoteMCPCatalogEntry) error {
 		}
 		if !remoteMCPHeaderShape.MatchString(h) {
 			return fmt.Errorf("remote_mcp_catalog[%q]: api_key_header %q is not a valid header name", name, e.APIKeyHeader)
+		}
+	}
+	if q := strings.TrimSpace(e.APIKeyQuery); q != "" {
+		if e.Auth != "api_key" {
+			return fmt.Errorf("remote_mcp_catalog[%q]: api_key_query is only meaningful with auth: api_key", name)
+		}
+		if strings.TrimSpace(e.APIKeyHeader) != "" {
+			return fmt.Errorf("remote_mcp_catalog[%q]: api_key_header and api_key_query are mutually exclusive", name)
+		}
+		if !remoteMCPHeaderShape.MatchString(q) {
+			return fmt.Errorf("remote_mcp_catalog[%q]: api_key_query %q is not a valid query-parameter name", name, e.APIKeyQuery)
 		}
 	}
 	if e.ClientRegistration != "" && e.ClientRegistration != "manual" {

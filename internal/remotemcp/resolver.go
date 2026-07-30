@@ -51,7 +51,7 @@ func (s *Service) ConnectedServersForUser(ctx context.Context, email string) ([]
 			continue
 		}
 		names[srv.Name] = true
-		out = append(out, agent.RemoteMCPConn{ID: srv.ID, Name: srv.Name, URL: srv.URL, AuthHeader: srv.APIKeyHeader})
+		out = append(out, agent.RemoteMCPConn{ID: srv.ID, Name: srv.Name, URL: srv.URL, AuthHeader: srv.APIKeyHeader, AuthQuery: srv.APIKeyQuery})
 	}
 	for _, srv := range shared {
 		if srv.Status != store.RemoteMCPStatusConnected || !enabledForMe(srv.ID) {
@@ -62,7 +62,7 @@ func (s *Service) ConnectedServersForUser(ctx context.Context, email string) ([]
 			continue
 		}
 		names[srv.Name] = true
-		out = append(out, agent.RemoteMCPConn{ID: srv.ID, Name: srv.Name, URL: srv.URL, Owner: srv.UserEmail, AuthHeader: srv.APIKeyHeader})
+		out = append(out, agent.RemoteMCPConn{ID: srv.ID, Name: srv.Name, URL: srv.URL, Owner: srv.UserEmail, AuthHeader: srv.APIKeyHeader, AuthQuery: srv.APIKeyQuery})
 	}
 	return out, nil
 }

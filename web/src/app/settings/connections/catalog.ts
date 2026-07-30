@@ -27,6 +27,7 @@ export type CatalogThirdParty = {
   setup_hint?: string;
   setup_url?: string;
   api_key_header?: string;
+  api_key_query?: string;
   // "manual" = the vendor's authorization server has no dynamic client
   // registration; the guided form collects a bring-your-own OAuth client ID
   // (+ optional secret) up front.

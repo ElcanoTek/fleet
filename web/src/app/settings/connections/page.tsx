@@ -896,7 +896,11 @@ function ConnectionsPageInner() {
         // discovery path.
         auth: entry.auth === "tenant" ? undefined : entry.auth,
         ...(overrides?.apiKey
-          ? { api_key: overrides.apiKey, api_key_header: entry.api_key_header }
+          ? {
+              api_key: overrides.apiKey,
+              api_key_header: entry.api_key_header,
+              api_key_query: entry.api_key_query,
+            }
           : {}),
         ...(overrides?.clientId
           ? { client_id: overrides.clientId, client_secret: overrides.clientSecret }

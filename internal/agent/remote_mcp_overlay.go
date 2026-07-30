@@ -36,6 +36,10 @@ type RemoteMCPConn struct {
 	// the running user (empty for the user's own servers). Used for audit
 	// attribution: tool calls authenticate with the owner's token host-side.
 	Owner string
+	// AuthQuery is the query-parameter NAME the credential is sent under for
+	// api_key connections that authenticate in the URL (Browserbase). The
+	// transport attaches it per-request; the registered URL stays clean.
+	AuthQuery string
 	// AuthHeader is the header NAME the credential is sent under for api_key
 	// connections (e.g. "X-API-Key"). Empty means the default OAuth/bearer
 	// shape: "Authorization: Bearer <credential>".
@@ -147,11 +151,17 @@ func BuildRemoteMCPOverlay(ctx context.Context, resolver RemoteMCPResolver, emai
 		}
 		opts := mcp.HTTPServerOptions{HTTPClient: httpClient}
 		if bearer != "" {
-			if conn.AuthHeader != "" {
+			switch {
+			case conn.AuthQuery != "":
+				// Query-authenticated vendor: attach the key in the transport so
+				// the registered URL (and every log/error that embeds it) stays
+				// credential-free.
+				opts.HTTPClient = mcp.WithQueryParam(httpClient, conn.AuthQuery, bearer)
+			case conn.AuthHeader != "":
 				// api_key connection with a vendor-specific header: the raw key,
 				// no Bearer scheme.
 				opts.Headers = map[string]string{conn.AuthHeader: bearer}
-			} else {
+			default:
 				opts.Headers = map[string]string{"Authorization": "Bearer " + bearer}
 			}
 		}

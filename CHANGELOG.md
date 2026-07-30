@@ -19,6 +19,14 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **Query-parameter API keys for hosted connectors (Browserbase)**: some
+  vendors authenticate their hosted MCP server with the key in a URL query
+  parameter rather than a header. api_key connectors now support
+  `api_key_query`: the key stays sealed at rest and is attached per-request
+  by the HTTP transport, so the stored URL, logs, and error strings never
+  carry it. The built-in Browserbase directory entry — previously marked
+  OAuth, which its endpoint doesn't serve, so every connect failed at
+  discovery — now uses `api_key_query: browserbaseApiKey` with a setup hint.
 - **Self-wake** (`docs/SELF-WAKE.md`): a scheduled run can suspend itself
   and schedule its own resumption — new `sleep` (park until a deadline) and
   `wake_on_event` (park until `POST /tasks/{id}/wake` fires the matching
