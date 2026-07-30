@@ -45,8 +45,12 @@ indicator is a `before:` bar on an element whose real fill is an 18% tint.
 
 Known, deliberate exceptions:
 
-- `layout.tsx` `themeColor` — meta tags can't read CSS variables; the literals
-  mirror `--color-bg` per theme (comment there says to keep them in sync).
+- `lib/serverBranding.ts` — `DEFAULT_BACKGROUND_LIGHT`/`_DARK`, the two
+  literals `<meta name="theme-color">` falls back to when a bundle declares
+  no background. A meta tag cannot read a CSS variable, so a literal is
+  unavoidable *somewhere*; keeping both in one named place (instead of inline
+  in `layout.tsx`, where they used to be un-overridable by any bundle) means
+  there is exactly one thing to keep in sync with `--color-bg`.
 - `chat/ui/ApprovalCards.tsx` — a local light→dark color-inversion map for
   sandboxed HTML previews; those literals describe *content* colors, not UI.
 

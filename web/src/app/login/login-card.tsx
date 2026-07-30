@@ -26,14 +26,27 @@ function errorCodeToMessage(code: string | null): string | null {
 // isn't configured — e.g. a white-labelled deploy — the secondary button and
 // its divider are omitted entirely so the card shows only the password form
 // and never surfaces the Elcano brand.
+//
+// title/tagline arrive the same way: as props resolved server-side from the
+// bundle's `branding.login_title` / `login_tagline` (#892). They used to be
+// hardcoded literals here, because this is a client component and
+// /client-config — where those strings are served — is member-gated, so a
+// pre-auth card structurally cannot fetch them. The strings were parsed,
+// defaulted, API-served and typed, and then never rendered: a bundle setting
+// login_title to "Reklaim what's yours." still displayed "Welcome aboard."
+// The page-level server component reads them instead and hands them down.
 export default function LoginCard({
   elcanoLoginEnabled,
   oidcEnabled = false,
   oidcLabel = "Sign in with SSO",
+  title,
+  tagline,
 }: {
   elcanoLoginEnabled: boolean;
   oidcEnabled?: boolean;
   oidcLabel?: string;
+  title: string;
+  tagline: string;
 }) {
   const [loginError, setLoginError] = useState<string | null>(null);
 
@@ -62,10 +75,8 @@ export default function LoginCard({
       <div className="w-full max-w-sm rounded-[1.5rem] border border-[var(--color-border)] bg-[var(--composer-surface)] p-6 shadow-[var(--composer-shadow)]">
         <div className="mb-6 flex items-start justify-between gap-4">
           <div className="grid gap-2">
-            <h1 className="text-[1.25rem] font-semibold text-[var(--color-text-primary)]">Welcome aboard.</h1>
-            <p className="text-[0.875rem] text-[var(--color-text-secondary)]">
-              Sign in to your workspace and pick up where you left off.
-            </p>
+            <h1 className="text-[1.25rem] font-semibold text-[var(--color-text-primary)]">{title}</h1>
+            <p className="text-[0.875rem] text-[var(--color-text-secondary)]">{tagline}</p>
           </div>
 
           <ThemeToggle className="inline-flex size-9 shrink-0 items-center justify-center rounded-full border border-[var(--color-border)] text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]" />

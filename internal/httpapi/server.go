@@ -723,6 +723,13 @@ func (s *Server) Routes() http.Handler {
 	// non-secret brand asset the pre-auth shell may render — so it shares the
 	// token-gated, identity-less chain. 404 when the bundle declares no logo.
 	mux.Handle("/brand/logo", s.tokenOnlyMiddleware(http.HandlerFunc(s.brandLogo)))
+	// /brand/meta is the deployment's white-label identity (name, login copy,
+	// share strings, per-mode background) for the web's SERVER-SIDE metadata.
+	// Same trust class again: the login card renders pre-session and unfurl
+	// scrapers are anonymous, so /client-config's member gate is unreachable
+	// from those surfaces. Every field is public by construction — see
+	// brand_meta.go.
+	mux.Handle("/brand/meta", s.tokenOnlyMiddleware(http.HandlerFunc(s.brandMeta)))
 	// Public read-only conversation sharing (#226). Token-gated (shared secret —
 	// only the trusted Next proxy reaches it) but IDENTITY-less, like /theme.css:
 	// the share token in the path is the authorization, and the handler enforces

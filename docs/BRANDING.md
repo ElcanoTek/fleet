@@ -32,23 +32,70 @@ default experience.
 ### Strings
 
 `app_name`, `login_title`, `login_tagline`, `share_title`, `share_description`
-reach the browser through the member-gated `/client-config`.
+reach the browser two ways: through the member-gated `/client-config` for
+in-app, post-login surfaces, and through the token-gated, identity-less
+`/brand/meta` for everything that renders **without a session**.
 
-The **browser tab title** and the **PWA name** are a separate knob:
-`NEXT_PUBLIC_APP_NAME` in the web env file, read at build time by
-`layout.tsx` / `manifest.ts`. They are not bundle-driven, because Next resolves
-static metadata when the app is built and the root layout must not fetch the
-member-gated `/client-config`. Set the env var alongside the bundle so the tab
-matches the shell.
+`/brand/meta` exists because the surfaces that most define a deployment's
+identity are all pre-auth or account-less, and none of them can reach
+`/client-config`:
+
+| Surface | Why it can't use `/client-config` |
+|---|---|
+| The login card's title + tagline | Renders before a session exists |
+| `<title>`, `og:*`, `twitter:*` | Resolved server-side with no user; unfurl scrapers are anonymous |
+| `<meta name="theme-color">`, the PWA manifest | Same, and neither can read a CSS variable |
+
+The web reads it once per request through `web/src/app/lib/serverBranding.ts`
+(memoized in-process for 60s, 2s fetch timeout, and it **never throws** — every
+failure path returns the same defaults `clientconfig.applyBrandingDefaults`
+gives a sparse manifest). `login/page.tsx`, `layout.tsx`'s `generateMetadata` /
+`generateViewport`, and `manifest.ts` all resolve from that one helper, so the
+tab, the login page, the share card, and the installed app cannot disagree about
+what the deployment is called.
+
+Every field on `/brand/meta` is public **by construction** — the app name is in
+the browser tab, the login copy is printed on the pre-auth page, the share
+strings go into OG tags anonymous scrapers read, and the backgrounds are already
+served to that audience by `/theme.css`. It deliberately does **not** carry the
+rest of `/client-config`: the empty-state catalog is workspace content, not
+public identity.
+
+`NEXT_PUBLIC_APP_NAME` is now only a **fallback**, used when the backend is
+unreachable. The bundle wins whenever it can be read, so setting the env var is
+no longer required to get the deployment's own name in the tab.
+
+> **Two build-time traps, both of which shipped as live bugs.** Anything that
+> reads the bundle must render at **request** time. `manifest.ts` was written to
+> resolve the palette per request and never did once — its route was statically
+> prerendered, so the fetch ran during `next build` in a staging dir with the
+> backend down, and every deployment silently served the fallback. Separately, a
+> root-layout `generateMetadata` is not sufficient on its own: routes that don't
+> otherwise opt out get prerendered with the metadata **baked into their HTML**.
+> Hence `export const dynamic = "force-dynamic"` in both `manifest.ts` and
+> `layout.tsx` (where it covers the whole subtree). Both flags are asserted in
+> `serverBranding.test.ts`, because the failure mode is silent — the only symptom
+> is two live endpoints disagreeing. Do not remove them.
 
 The **tab icon** is bundle-driven: `layout.tsx` declares `metadata.icons`
-pointing at `/api/brand/logo`, which deliberately overrides App Router's
-file-convention icons (`icon.svg`, `apple-icon.png`). No build-time knowledge of
-the bundle is needed because the browser resolves that path per request. The
-**installed-app splash color** is bundle-driven too: `manifest.ts` reads the
-bundle's dark `--color-bg` by fetching the token-gated `/theme.css` server-side
-(`/client-config` is member-gated and unreachable there), falling back to the
-built-in default on any failure.
+pointing at `/api/brand/logo`. That overrides App Router's `icon.svg` and
+`apple-icon.png` file conventions — but **not** `app/favicon.ico`, which Next
+special-cases and emits unconditionally. That file used to sit alongside the
+declaration and, being the only candidate carrying `sizes` and `type`, won the
+tab strip, so a white-labeled deployment showed fleet's purple mark beside its
+own name. It has been deleted; **do not reintroduce it**. Unbranded deployments
+lose nothing, because `/api/brand/logo` 307-redirects to `/logos/fleet-mark.svg`
+on every failure path.
+
+The **installed-app icon** and **splash color** are bundle-driven too.
+`manifest.ts` points its `any`-purpose icon at `/api/brand/logo` with
+`sizes: "any"` — no exact size is claimed, because the route serves whatever
+single file the bundle declared and asserting a resolution fleet hasn't verified
+is a lie the OS acts on. The **maskable** icon stays fleet's own asset: a
+maskable icon must keep its artwork inside a safe zone with ~20% bleed, which an
+arbitrary bundle file does not satisfy, and Android would crop a full-bleed
+mark. A bundle supplying its own maskable rendition (`branding.pwa_icons`) is a
+deliberate follow-up.
 
 ### `logo`
 
@@ -154,14 +201,24 @@ rather than brand (a failed tool call must read as failure in every deployment),
 and several are derived with `color-mix()` from the base hue, so a partial
 override would desynchronize a swatch from its own border.
 
-## Trust class of the two asset routes
+## Trust class of the three brand routes
 
-`/theme.css` and `/brand/logo` are both **token-gated but identity-less**, and
-their Next proxies (`/api/theme`, `/api/brand/logo`) are in the middleware's
-public-path set. A palette and a mark are deployment-wide and non-secret, and
-the login shell has to render both before a session exists. Both degrade
-quietly — empty CSS, or a 404 that falls back to fleet's mark — so neither can
-block or break first paint if the backend is unreachable.
+`/theme.css`, `/brand/logo`, and `/brand/meta` are all **token-gated but
+identity-less**. A palette, a mark, and a deployment's name are deployment-wide
+and non-secret, and the login shell has to render all three before a session
+exists. Each degrades quietly — empty CSS, a redirect to fleet's mark, or the
+generic defaults — so none can block or break first paint if the backend is
+unreachable.
+
+`/api/theme` and `/api/brand/logo` are in the middleware's public-path set,
+because the **browser** fetches them. `/brand/meta` has no Next proxy at all: it
+is read only server-side, by `serverBranding.ts`, so there is nothing to expose
+publicly and the surface stays smaller.
+
+The bar for adding a route to this class is that its response is public **by
+construction** — already visible to anyone who can load the login page or scrape
+a shared link — not merely that it looks non-sensitive. `/client-config` stays
+member-gated because it also carries workspace content.
 
 ## Applying a change
 
