@@ -57,11 +57,19 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 }
 
 // tokenOnlyMiddleware enforces the shared-secret but NOT a user identity. It is
-// for deployment-wide, non-secret, non-user-scoped data the pre-auth UI needs —
-// today only /theme.css, the brand palette that themes the login page before a
-// session exists. Only the trusted Next.js layer holds the token, so the
-// browser still cannot reach chat-server directly; dropping the X-User-Email
-// requirement is what lets the un-authenticated login page request it.
+// for deployment-wide, non-secret, non-user-scoped data the pre-auth UI needs:
+// /theme.css (the brand palette that themes the login page before a session
+// exists), /brand/logo (the mark that page may render), /brand/meta (the app
+// name, login copy, and share strings the shell and unfurl scrapers need), and
+// /shared/ (whose authorization is the share token in the path). Only the
+// trusted Next.js layer holds the token, so the browser still cannot reach
+// chat-server directly; dropping the X-User-Email requirement is what lets the
+// un-authenticated login page request them.
+//
+// The bar for adding a route here is that its response is public BY
+// CONSTRUCTION — already visible to anyone who can load the login page or scrape
+// a shared link — not merely non-sensitive-looking. /client-config stays
+// member-gated because it also carries workspace content.
 func (s *Server) tokenOnlyMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		tok := r.Header.Get("X-Chat-Server-Token")

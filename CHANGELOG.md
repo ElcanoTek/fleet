@@ -69,6 +69,46 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **A white-labeled deployment still introduced itself as "Fleet"** (#891, #892,
+  #894, #895) — in its browser tab, its tab icon, its login headline, its PWA
+  name and splash, its browser-chrome tint, and every shared-link unfurl. Four
+  defects with one root cause: the surfaces that most define a deployment's
+  identity all render **without a session**, and `/client-config`, where branding
+  is served, is member-gated. So each had quietly settled for a fleet default:
+  - `branding.login_title` / `login_tagline` were parsed, defaulted, API-served,
+    and typed in the web client — then hardcoded in `login-card.tsx` (#892).
+  - `branding.share_title` / `share_description` were read by **zero**
+    components; `layout.tsx` built its own OG strings from a build-time env var
+    nothing in the deploy path set from the bundle (#894).
+  - `<meta name="theme-color">` was a pair of fleet-purple literals, and it
+    overrides the PWA manifest's `theme_color` in Chrome — so it silently defeated
+    `manifest.ts`'s bundle lookup (#895).
+  - `app/favicon.ico` was still emitted alongside the bundle-driven
+    `metadata.icons` and, being the only candidate carrying `sizes` and `type`,
+    won the tab strip. `metadata.icons` overrides `icon.svg` and `apple-icon.png`
+    but cannot suppress `favicon.ico`, which Next special-cases (#891).
+
+  All four now resolve from one place: a new token-gated, identity-less
+  `/brand/meta` (same trust class as `/theme.css` and `/brand/logo`, which exist
+  for exactly this problem), read server-side through
+  `web/src/app/lib/serverBranding.ts` — memoized 60s in-process, 2s fetch
+  timeout, and it never throws, so branding can never fail a page render.
+  `NEXT_PUBLIC_APP_NAME` is demoted to a backend-unreachable fallback.
+  `favicon.ico` is deleted (unbranded deployments still get fleet's mark via
+  `/api/brand/logo`'s 307), and the PWA's `any`-purpose icon now points at the
+  bundle mark while the maskable one stays fleet's correctly-padded asset.
+
+  Two **build-time traps** were found and closed in the process. `manifest.ts`
+  was written to read the palette per request and never did once — its route was
+  statically prerendered, so the fetch ran during `next build` in a staging dir
+  with the backend down, and every deployment silently served the fallback
+  (`theme_color: "#1a0b1e"` on a host whose `/api/theme` correctly served
+  `#0A0908`). And a root-layout `generateMetadata` is not sufficient alone:
+  `/settings/*`, `/no-access` and `/` were prerendered with `<title>Fleet</title>`
+  **baked into the HTML artifact**, so only *some* tabs would have been wrong.
+  Both are fixed with `force-dynamic` and asserted in tests, since the failure
+  mode is silent.
+
 - **Exports downloaded as a file named `export` with no extension** (#896). Both
   proxy funnels — `proxyToOrchestrator` (all 37 `/api/orchestrator/*` routes) and
   `chatServerPassthrough` — re-emitted only `Content-Type` and dropped every other
