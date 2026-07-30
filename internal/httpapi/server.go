@@ -723,6 +723,12 @@ func (s *Server) Routes() http.Handler {
 	// non-secret brand asset the pre-auth shell may render — so it shares the
 	// token-gated, identity-less chain. 404 when the bundle declares no logo.
 	mux.Handle("/brand/logo", s.tokenOnlyMiddleware(http.HandlerFunc(s.brandLogo)))
+	// /brand/share-image is the bundle's og:image. Same trust class again, and
+	// necessarily so: link-unfurl scrapers (Slack, iMessage, Discord, Teams) are
+	// anonymous, so an og:image behind a session gate would render no preview at
+	// all. 404 when the bundle declares none, and the web falls back to fleet's
+	// own neutral card.
+	mux.Handle("/brand/share-image", s.tokenOnlyMiddleware(http.HandlerFunc(s.brandShareImage)))
 	// /brand/meta is the deployment's white-label identity (name, login copy,
 	// share strings, per-mode background) for the web's SERVER-SIDE metadata.
 	// Same trust class again: the login card renders pre-session and unfurl

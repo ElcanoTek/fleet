@@ -47,6 +47,12 @@ const publicApiPaths = new Set([
   // is unreachable, so exposing them adds no failure mode.
   "/api/theme",
   "/api/brand/logo",
+  // The bundle's og:image. Public is a requirement rather than a convenience:
+  // link-unfurl scrapers (Slack, iMessage, Discord, Teams) are anonymous, so an
+  // og:image behind the session gate renders no preview at all. Like the two
+  // routes above it is deployment-wide, non-secret, and falls back to fleet's
+  // own asset rather than erroring.
+  "/api/brand/share-image",
 ]);
 
 // contentSecurityPolicy builds the CSP for a response (#590). Two tiers:

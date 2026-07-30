@@ -109,25 +109,36 @@ export async function generateMetadata(): Promise<Metadata> {
       title: shareTitle,
       description: b.shareDescription,
       url: PUBLIC_ORIGIN,
-      images: [
-        {
-          url: "/share.png",
-          width: 1280,
-          height: 640,
-          // Driven by the bundle's share_description rather than fleet's own
-          // marketing headline, which every deployment used to send to
-          // unfurlers and screen readers.
-          alt: shareTitle,
-        },
-      ],
+      images: [shareImage(b.shareImageUrl, shareTitle)],
     },
     twitter: {
       card: "summary_large_image",
       title: shareTitle,
       description: b.shareDescription,
-      images: ["/share.png"],
+      images: [b.shareImageUrl ?? FLEET_SHARE_CARD],
     },
   };
+}
+
+// fleet's own neutral share card, used when the bundle declares no share_image.
+const FLEET_SHARE_CARD = "/share.png";
+
+// shareImage builds the og:image entry.
+//
+// The image itself used to be a hardcoded /share.png containing Elcano's logo and
+// wordmark, with fleet's marketing headline as its alt text — served as the
+// og:image for EVERY deployment (#893). Pasting a link to a white-labeled instance
+// into Slack, iMessage, Discord or Teams unfurled with another company's brand,
+// from the client's own domain, so nothing looked amiss to the unfurler.
+//
+// Dimensions are declared ONLY for fleet's own card, whose size we know. fleet
+// does not decode a bundle's image, so it cannot honestly state width/height for
+// an arbitrary asset — and a wrong declared size makes scrapers render a
+// distorted or letterboxed preview. Omitting the tags makes them fetch and
+// measure, which is correct rather than merely safe.
+function shareImage(bundleUrl: string | null, alt: string) {
+  if (bundleUrl) return { url: bundleUrl, alt };
+  return { url: FLEET_SHARE_CARD, width: 1280, height: 640, alt };
 }
 
 // The browser-chrome tint (mobile address bar, PWA titlebar). A <meta> tag cannot

@@ -58,7 +58,22 @@ type brandMetaResponse struct {
 	// /theme.css: one definition of "a color fleet will emit".
 	BackgroundLight string `json:"background_light,omitempty"`
 	BackgroundDark  string `json:"background_dark,omitempty"`
+	// ShareImageURL is the web path for the bundle's og:image, advertised ONLY
+	// when a file actually backed branding.share_image at load — mirroring how
+	// /client-config advertises logo_url — so the web never points an unfurl
+	// scraper at a route that 404s. Empty means fleet's own generic card stands.
+	//
+	// The web omits og:image:width/height when this is set: fleet does not decode
+	// the image, so it cannot honestly declare dimensions for an arbitrary
+	// bundle asset, and a wrong declared size renders a distorted preview.
+	// Scrapers fetch and measure when the tags are absent.
+	ShareImageURL string `json:"share_image_url,omitempty"`
 }
+
+// brandShareImageWebPath is the Next-proxied path an unfurl scraper fetches the
+// bundle's share card from. Mirrors brandLogoWebPath: one public proxy per brand
+// asset.
+const brandShareImageWebPath = "/api/brand/share-image"
 
 // validBackground returns the mode's background token when it is present and a
 // color shape fleet emits, else "".
@@ -99,6 +114,9 @@ func (s *Server) brandMeta(w http.ResponseWriter, r *http.Request) {
 			ShareDescription: b.ShareDescription,
 			BackgroundLight:  validBackground(b.Colors.Light),
 			BackgroundDark:   validBackground(b.Colors.Dark),
+		}
+		if s.clientConfig.BrandShareImagePath != "" {
+			resp.ShareImageURL = brandShareImageWebPath
 		}
 	}
 

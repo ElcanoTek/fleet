@@ -97,6 +97,12 @@ type Bundle struct {
 	// re-validate per request.
 	BrandLogoPath string
 
+	// BrandShareImagePath is the absolute, symlink-resolved file backing
+	// branding.share_image, or "" when the bundle declares none. Set by
+	// resolveBrandShareImage so the HTTP layer serves a path it never has to
+	// re-validate per request.
+	BrandShareImagePath string
+
 	// TaskTemplates is the bundle's catalog of pre-filled scheduled-task
 	// configurations (manifest task_templates block), in manifest order. Empty
 	// in the generic bundle's absence of the section; the shipped generic bundle
@@ -408,6 +414,22 @@ type Branding struct {
 	// naming a missing or unservable logo fails loudly at startup rather than
 	// serving a broken image on every page.
 	Logo string `yaml:"logo"`
+	// ShareImage is a bundle-relative path to the image link-unfurl scrapers
+	// show for this deployment (og:image / twitter:image), e.g.
+	// "assets/acme-share.png". 1280x640 is the conventional size.
+	//
+	// It exists because the OG image was the last un-themable brand surface: a
+	// checked-in web/public/share.png was the og:image for EVERY deployment, so
+	// a link to a white-labeled instance unfurled in Slack, iMessage, Discord or
+	// Teams wearing fleet's own marketing card — served from the client's own
+	// domain, so nothing looked amiss to the unfurler. Omit the field and
+	// fleet's neutral generic card stands.
+	//
+	// Validated at bundle load exactly like Logo (see resolveBrandImage): the
+	// path must be lexically local, must resolve inside the bundle after symlink
+	// resolution, must be a regular file, and must carry an extension the HTTP
+	// layer knows a content type for.
+	ShareImage string `yaml:"share_image"`
 }
 
 // BrandColors holds per-mode palette overrides. Light and Dark are keyed by a
@@ -955,6 +977,9 @@ func Load(dir string) (*Bundle, error) {
 	if err := b.resolveBrandLogo(); err != nil {
 		return nil, err
 	}
+	if err := b.resolveBrandShareImage(); err != nil {
+		return nil, err
+	}
 	if err := b.validate(); err != nil {
 		return nil, err
 	}
@@ -1065,35 +1090,77 @@ func BrandLogoExtensions() []string {
 func (b *Bundle) resolveBrandLogo() error {
 	rel := strings.TrimSpace(b.Branding.Logo)
 	b.Branding.Logo = rel
-	if rel == "" {
-		return nil
-	}
-	if !filepath.IsLocal(rel) {
-		return fmt.Errorf("branding.logo %q: must be a bundle-relative path (no absolute path, no \"..\")", rel)
-	}
-	if BrandLogoContentType(rel) == "" {
-		return fmt.Errorf("branding.logo %q: unsupported extension (want one of %s)", rel, strings.Join(BrandLogoExtensions(), ", "))
-	}
-	root, err := filepath.EvalSymlinks(b.Dir)
+	resolved, err := b.resolveBrandImage("branding.logo", rel)
 	if err != nil {
-		return fmt.Errorf("branding.logo %q: resolve bundle dir: %w", rel, err)
-	}
-	resolved, err := filepath.EvalSymlinks(filepath.Join(b.Dir, rel))
-	if err != nil {
-		return fmt.Errorf("branding.logo %q: %w", rel, err)
-	}
-	if resolved != root && !strings.HasPrefix(resolved, root+string(os.PathSeparator)) {
-		return fmt.Errorf("branding.logo %q: resolves outside the bundle (%s)", rel, resolved)
-	}
-	info, err := os.Stat(resolved)
-	if err != nil {
-		return fmt.Errorf("branding.logo %q: %w", rel, err)
-	}
-	if !info.Mode().IsRegular() {
-		return fmt.Errorf("branding.logo %q: not a regular file", rel)
+		return err
 	}
 	b.BrandLogoPath = resolved
 	return nil
+}
+
+// resolveBrandShareImage validates branding.share_image the same way, and
+// records the absolute file /brand/share-image serves. Empty is the norm
+// (fleet's own generic share card stands) and is not an error.
+//
+// This field exists because the OG image was the last un-themable brand surface:
+// a checked-in web/public/share.png was the og:image for EVERY deployment, so
+// pasting a link to a white-labeled instance into Slack, iMessage, Discord or
+// Teams unfurled with another company's logo — served from the client's own
+// domain, so nothing looked amiss to the unfurler.
+func (b *Bundle) resolveBrandShareImage() error {
+	rel := strings.TrimSpace(b.Branding.ShareImage)
+	b.Branding.ShareImage = rel
+	resolved, err := b.resolveBrandImage("branding.share_image", rel)
+	if err != nil {
+		return err
+	}
+	b.BrandShareImagePath = resolved
+	return nil
+}
+
+// resolveBrandImage is the shared validator for every bundle-relative image path
+// in branding:. field names it for error messages ("branding.logo"). An empty
+// rel returns ("", nil) — declaring no image is the norm, not an error.
+//
+// The path arrives from a manifest, so it is operator-authored rather than user
+// input — but it is still resolved defensively, because the failure modes are
+// silent and permanent: a "../../etc/passwd" would otherwise be served under an
+// image content type on every page load, and a path that merely doesn't exist
+// would render a broken image on every page of a deployment that believes it is
+// branded. Both fail at startup instead.
+//
+// filepath.IsLocal rejects an absolute path and any ".." escape lexically;
+// EvalSymlinks then re-checks containment, so a symlink inside the bundle
+// pointing outward cannot widen the reach either.
+func (b *Bundle) resolveBrandImage(field, rel string) (string, error) {
+	if rel == "" {
+		return "", nil
+	}
+	if !filepath.IsLocal(rel) {
+		return "", fmt.Errorf("%s %q: must be a bundle-relative path (no absolute path, no \"..\")", field, rel)
+	}
+	if BrandLogoContentType(rel) == "" {
+		return "", fmt.Errorf("%s %q: unsupported extension (want one of %s)", field, rel, strings.Join(BrandLogoExtensions(), ", "))
+	}
+	root, err := filepath.EvalSymlinks(b.Dir)
+	if err != nil {
+		return "", fmt.Errorf("%s %q: resolve bundle dir: %w", field, rel, err)
+	}
+	resolved, err := filepath.EvalSymlinks(filepath.Join(b.Dir, rel))
+	if err != nil {
+		return "", fmt.Errorf("%s %q: %w", field, rel, err)
+	}
+	if resolved != root && !strings.HasPrefix(resolved, root+string(os.PathSeparator)) {
+		return "", fmt.Errorf("%s %q: resolves outside the bundle (%s)", field, rel, resolved)
+	}
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return "", fmt.Errorf("%s %q: %w", field, rel, err)
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("%s %q: not a regular file", field, rel)
+	}
+	return resolved, nil
 }
 
 // DefaultBranding returns the neutral generic branding strings fleet renders

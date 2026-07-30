@@ -69,6 +69,35 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Every deployment's shared links unfurled with Elcano's logo** (#893). The
+  `og:image` / `twitter:image` was a checked-in `web/public/share.png` containing
+  Elcano's logo and wordmark, fleet's purple gradient, and fleet's marketing
+  headline — served from the *client's own domain*, so nothing looked amiss to the
+  unfurler. Pasting a link to a white-labeled instance into Slack, iMessage,
+  Discord, Teams or LinkedIn showed another company's brand. The alt text was that
+  same headline, hardcoded, so it leaked even to scrapers that only read
+  `og:image:alt`, and to screen readers.
+
+  New `branding.share_image` (bundle-relative, validated at load through the same
+  `resolveBrandImage` containment checks as `logo` — lexically local, re-checked
+  after `EvalSymlinks`, regular file, known extension), served by
+  `/brand/share-image` and proxied as `/api/brand/share-image`. That proxy is in
+  the middleware's public-path set out of necessity rather than convenience:
+  unfurl scrapers are anonymous, so an `og:image` behind the session gate renders
+  no preview at all. `/brand/meta` advertises `share_image_url` only when a file
+  actually backed the field, mirroring `logo_url`, so the web never points a
+  scraper at a 404. The cap is 5 MiB rather than the logo's 2 MiB, because the
+  asset genuinely is larger — but still capped, since scrapers abandon slow
+  fetches.
+
+  `og:image:width` / `height` are now declared **only** for fleet's own card,
+  whose size fleet knows. fleet does not decode a bundle's image, and a wrongly
+  declared size renders a distorted preview; with the tags absent, scrapers fetch
+  and measure. The committed default `share.png` is replaced with a **fleet-only**
+  card — no Elcano logo or wordmark — so a bundle-less deployment doesn't ship
+  another company's branding either, which also removes client-specific content
+  from the engine repo per the `AGENTS.md` boundary doctrine.
+
 - **A white-labeled deployment still introduced itself as "Fleet"** (#891, #892,
   #894, #895) — in its browser tab, its tab icon, its login headline, its PWA
   name and splash, its browser-chrome tint, and every shared-link unfurl. Four
