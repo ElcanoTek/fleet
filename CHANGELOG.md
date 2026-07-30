@@ -69,6 +69,23 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Exports downloaded as a file named `export` with no extension** (#896). Both
+  proxy funnels — `proxyToOrchestrator` (all 37 `/api/orchestrator/*` routes) and
+  `chatServerPassthrough` — re-emitted only `Content-Type` and dropped every other
+  upstream header, so the `Content-Disposition` filename four Go handlers set on
+  purpose (dataset CSV, prompts, adoption CSV, project export) never reached the
+  browser; a bare `download` attribute then names the file after the URL's last
+  path segment. Header forwarding now lives once in `web/src/app/lib/proxyHeaders.ts`,
+  generalizing the fix `api/conversations/[id]/export` already had by hand.
+  `Content-Length` is deliberately not forwarded — `fetch()` decodes a compressed
+  upstream body, so a copied length can truncate the response. Both funnels also
+  stream `upstream.body` instead of buffering it, which kept whole CSV exports in
+  memory and defeated the streaming writers upstream. The project export's filename
+  moved into its Go handler (the only one that had none) so it saves as
+  `Q3-Planning-a1b2c3d4.json` rather than `project-<uuid>.json`, and
+  `exportFilename` now takes its fallback noun as a parameter instead of
+  hardcoding `"chat"`.
+
 - **White text was hardcoded on 16 token-driven fills, so a light-primary bundle
   rendered invisible labels** (#890). `on_primary` landed in #889 but only the two
   `--gradient-action-primary` consumers were converted; every flat fill still said

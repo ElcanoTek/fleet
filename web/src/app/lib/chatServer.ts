@@ -10,6 +10,8 @@
 
 import { NextResponse } from "next/server";
 
+import { forwardedHeaders } from "@/app/lib/proxyHeaders";
+
 const defaultBase = "http://127.0.0.1:8080";
 
 export function getChatServerBase() {
@@ -105,9 +107,16 @@ export async function chatServerProxy(
 
 /**
  * chatServerPassthrough — the full proxy-route body: chatServerProxy, then
- * re-emit the upstream response verbatim (status + body + Content-Type). The
+ * re-emit the upstream response verbatim (status + body + forwarded headers). The
  * admin proxy routes each used to inline this trio; a passthrough fix (header
  * forwarding, error shaping) belongs here, once.
+ *
+ * The body is STREAMED rather than buffered through `await upstream.text()`.
+ * Nothing here inspects it, and buffering held the whole payload in memory on a
+ * single-box deployment while defeating the streaming writers upstream
+ * (`csv.NewWriter(w)`, `json.NewEncoder(w)`). It also meant any future binary
+ * response through this funnel would be silently corrupted — the failure two
+ * sibling routes already carry comments about avoiding.
  */
 export async function chatServerPassthrough(
   userEmail: string,
@@ -116,9 +125,9 @@ export async function chatServerPassthrough(
 ): Promise<NextResponse> {
   const { upstream, error } = await chatServerProxy(userEmail, path, init);
   if (error) return error;
-  const text = await upstream.text();
-  return new NextResponse(text, {
+  // 204/304 and HEAD have no body; NextResponse requires null, not an empty stream.
+  return new NextResponse(upstream.body, {
     status: upstream.status,
-    headers: { "Content-Type": upstream.headers.get("Content-Type") ?? "application/json" },
+    headers: forwardedHeaders(upstream),
   });
 }
