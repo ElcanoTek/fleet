@@ -54,6 +54,7 @@ type mcpCatalogThirdPartyEntry struct {
 	SetupHint    string `json:"setup_hint,omitempty"`
 	SetupURL     string `json:"setup_url,omitempty"`
 	APIKeyHeader string `json:"api_key_header,omitempty"`
+	APIKeyQuery  string `json:"api_key_query,omitempty"`
 	// "manual" = the vendor's AS has no dynamic client registration; the UI
 	// collects a bring-your-own OAuth client ID (+ optional secret) up front.
 	ClientRegistration string `json:"client_registration,omitempty"`

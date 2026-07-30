@@ -1248,7 +1248,13 @@ servers:
     category: web-search
     tags: [browser, automation, screenshots, stagehand]
     provenance: official
-    auth: oauth
+    auth: api_key
+    api_key_query: browserbaseApiKey
+    setup_hint: >-
+      In the Browserbase dashboard (Overview page), copy your API key and
+      paste it here. The key authenticates the hosted server's browser
+      sessions against your Browserbase project.
+    setup_url: "https://www.browserbase.com/overview"
   - name: exa
     display_name: Exa
     description: >-

@@ -75,6 +75,7 @@ type RemoteMCPServer struct {
 	StatusDetail          string `json:"status_detail,omitempty"`
 	AuthKind              string `json:"auth_kind,omitempty"` // oauth | open | api_key (non-secret; drives the UI's connect affordance)
 	APIKeyHeader          string `json:"-"`                   // header NAME the sealed key is sent under; "" = Authorization: Bearer
+	APIKeyQuery           string `json:"-"`                   // query-parameter NAME the sealed key is sent under; "" = not query-authenticated
 	Issuer                string `json:"-"`
 	AuthorizationEndpoint string `json:"-"`
 	TokenEndpoint         string `json:"-"`
@@ -106,6 +107,7 @@ type RemoteMCPServerInput struct {
 	Status                string // empty defaults to login_required; open/api_key servers use connected
 	AuthKind              string // empty defaults to oauth
 	APIKeyHeader          string // api_key only: header NAME ("" = Authorization: Bearer)
+	APIKeyQuery           string // api_key only: query-parameter NAME ("" = header auth)
 	APIKey                string // api_key only: plaintext; encrypted before insert
 }
 
@@ -180,13 +182,13 @@ func (s *Store) CreateRemoteMCPServer(ctx context.Context, in RemoteMCPServerInp
 			id, user_email, name, url, transport, status, status_detail,
 			issuer, authorization_endpoint, token_endpoint, registration_endpoint, revocation_endpoint,
 			scopes, auth_methods, client_id, client_secret_enc, registration_access_token_enc,
-			auth_kind, api_key_header, api_key_enc,
+			auth_kind, api_key_header, api_key_query, api_key_enc,
 			created_at, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,'',$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$20)`,
+		VALUES ($1,$2,$3,$4,$5,$6,'',$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$21)`,
 		id, email, in.Name, in.URL, in.Transport, status,
 		in.Issuer, in.AuthorizationEndpoint, in.TokenEndpoint, in.RegistrationEndpoint, in.RevocationEndpoint,
 		in.Scopes, in.AuthMethods, in.ClientID, secretEnc, regEnc,
-		authKind, in.APIKeyHeader, apiKeyEnc, now)
+		authKind, in.APIKeyHeader, in.APIKeyQuery, apiKeyEnc, now)
 	if err != nil {
 		if pgUniqueViolation(err) {
 			return nil, fmt.Errorf("a remote MCP server named %q already exists", in.Name)
@@ -198,13 +200,13 @@ func (s *Store) CreateRemoteMCPServer(ctx context.Context, in RemoteMCPServerInp
 
 const remoteMCPColumns = `id, user_email, name, url, transport, status, status_detail,
 	issuer, authorization_endpoint, token_endpoint, registration_endpoint, revocation_endpoint,
-	scopes, auth_methods, client_id, auth_kind, api_key_header, created_at, updated_at`
+	scopes, auth_methods, client_id, auth_kind, api_key_header, api_key_query, created_at, updated_at`
 
 func scanRemoteMCPServer(row interface{ Scan(...any) error }) (*RemoteMCPServer, error) {
 	var m RemoteMCPServer
 	if err := row.Scan(&m.ID, &m.UserEmail, &m.Name, &m.URL, &m.Transport, &m.Status, &m.StatusDetail,
 		&m.Issuer, &m.AuthorizationEndpoint, &m.TokenEndpoint, &m.RegistrationEndpoint, &m.RevocationEndpoint,
-		&m.Scopes, &m.AuthMethods, &m.ClientID, &m.AuthKind, &m.APIKeyHeader, &m.CreatedAt, &m.UpdatedAt); err != nil {
+		&m.Scopes, &m.AuthMethods, &m.ClientID, &m.AuthKind, &m.APIKeyHeader, &m.APIKeyQuery, &m.CreatedAt, &m.UpdatedAt); err != nil {
 		return nil, err
 	}
 	return &m, nil
