@@ -5,10 +5,43 @@ One token-driven system for the whole app (`/chat`, `/orchestrator`, `/admin`,
 [`globals.css`](globals.css); components — Tailwind arbitrary values and plain
 CSS alike — reference tokens, never raw values.
 
-**The rule: no raw hex colors in `.tsx`.** If a color you need has no token,
+**The rule: no raw colors in `.tsx` — hex literals *or* Tailwind color
+utilities.** `text-white` and `text-black` are banned outright and pinned by
+`designTokens.test.ts`; the earlier wording said "no raw *hex* colors", and that
+loophole is exactly how #890 shipped 16 elements painting `text-white` on a
+token-driven fill. If a color you need has no token,
 add a *semantic* token to `globals.css` (defined for **both** the dark `:root`
 block and the `:root[data-theme="light"]` block), then use
 `var(--your-token)`. Never rename or repurpose an existing token — add.
+
+### Foreground on a saturated fill
+
+An element filled with a brand or status color needs a foreground chosen for
+*that fill*, in both themes. There are exactly two right answers:
+
+| Fill | Foreground | Why |
+|---|---|---|
+| `bg-[var(--color-primary)]` | `text-[var(--color-on-primary)]` | The purpose-built token. It cannot be derived — a dark primary needs light text, a light one (yellow, lime, cyan) needs dark text — so a bundle declares it. |
+| `bg-[var(--color-accent)]`, `bg-[var(--color-danger)]` | `text-[var(--color-surface-1)]` | Inverts with the theme (near-black in dark, white in light), which is the polarity a saturated fill needs. Themable, so a bundle keeps control. |
+
+Reaching for `--color-text-primary` on a saturated fill is the common mistake:
+it is the foreground for *ordinary surfaces*, and on a filled button it is
+near-invisible. `designTokens.test.ts` fails the build on that too.
+
+Measured, for the record — white failed on three of the four fills, and on two
+of them it failed for **fleet's own** stock palette, not just a white-labeled
+one:
+
+```
+white on --color-primary (Reklaim #FFDF03) ....  1.33:1  ✗
+white on --color-accent  (fleet dark #9da7ef) .  2.28:1  ✗   stock fleet
+white on --color-danger  (fleet dark #e08080) .  2.77:1  ✗   stock fleet
+surface-1 on those same fills ................  5.9–7.2:1  ✓
+```
+
+A *variant-prefixed* fill (`before:bg-…`, `hover:bg-…`) paints something other
+than the element's own background, so it is outside this rule — NavRail's active
+indicator is a `before:` bar on an element whose real fill is an 18% tint.
 
 Known, deliberate exceptions:
 

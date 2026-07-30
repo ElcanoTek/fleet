@@ -104,7 +104,7 @@ export default function LoginCard({
 
           <button
             type="submit"
-            className="mt-2 rounded-xl bg-[var(--color-primary)] px-4 py-2.5 text-sm font-medium text-white transition hover:opacity-90"
+            className="mt-2 rounded-xl bg-[var(--color-primary)] px-4 py-2.5 text-sm font-medium text-[var(--color-on-primary)] transition hover:opacity-90"
           >
             Sign in
           </button>

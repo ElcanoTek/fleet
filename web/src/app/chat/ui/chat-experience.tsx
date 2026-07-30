@@ -3726,7 +3726,7 @@ export function ChatExperience({
                 </button>
                 <button
                   type="button"
-                  className="rounded-full bg-[var(--color-danger)] px-4 py-2 text-[0.8125rem] font-medium text-white transition hover:opacity-90"
+                  className="rounded-full bg-[var(--color-danger)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-surface-1)] transition hover:opacity-90"
                   onClick={async () => {
                     setConfirmBulkDelete(false);
                     await deleteAllUnpinned();
@@ -4040,7 +4040,7 @@ export function ChatExperience({
                 </button>
                 <button
                   type="button"
-                  className="rounded-full bg-[var(--color-primary)] px-4 py-2 text-[0.8125rem] font-medium text-white transition hover:opacity-90"
+                  className="rounded-full bg-[var(--color-primary)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-on-primary)] transition hover:opacity-90"
                   onClick={() => {
                     setConfirmSummarize(false);
                     void summarizeConversation();
@@ -4157,7 +4157,7 @@ export function ChatExperience({
                   Cancel
                 </button>
                 <button
-                  className="rounded-full bg-[var(--color-primary)] px-4 py-2 text-[0.8125rem] font-medium text-white transition hover:opacity-90"
+                  className="rounded-full bg-[var(--color-primary)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-on-primary)] transition hover:opacity-90"
                   type="button"
                   onClick={() => void confirmDeleteConversation()}
                 >

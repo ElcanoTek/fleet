@@ -44,7 +44,7 @@ export function btnClass({
       : "border-transparent";
   let color: string;
   if (variant === "primary") {
-    color = "bg-[var(--color-primary)] text-white hover:bg-[var(--color-primary-hover)]";
+    color = "bg-[var(--color-primary)] text-[var(--color-on-primary)] hover:bg-[var(--color-primary-hover)]";
   } else if (armed) {
     color =
       "bg-[color-mix(in_srgb,var(--color-danger)_12%,transparent)] text-[var(--color-danger)]";
@@ -234,7 +234,7 @@ export function Segmented<T extends string>({
           className={[
             "px-[0.6rem] py-[0.18rem] text-[0.72rem] font-medium transition focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50",
             value === o.value
-              ? "bg-[var(--color-primary)] text-white"
+              ? "bg-[var(--color-primary)] text-[var(--color-on-primary)]"
               : "text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] focus-visible:bg-[var(--color-overlay-soft)]",
           ].join(" ")}
         >

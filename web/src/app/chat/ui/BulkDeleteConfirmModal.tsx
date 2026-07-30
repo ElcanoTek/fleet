@@ -63,10 +63,16 @@ export function BulkDeleteConfirmModal({
             type="button"
             disabled={!ready}
             className={[
-              "rounded-full px-4 py-2 text-[0.8125rem] font-medium text-white transition",
+              "rounded-full px-4 py-2 text-[0.8125rem] font-medium transition",
+              // The foreground travels with the fill. --color-surface-1 is the
+              // theme-aware readable foreground on a saturated fill (dark in the
+              // dark theme, white in the light one) — white was 2.77:1 on the
+              // dark theme's #e08080. The countdown state is a genuinely
+              // disabled control, so it takes the muted treatment rather than a
+              // high-contrast label on a half-alpha fill.
               ready
-                ? "bg-[var(--color-danger)] hover:opacity-90"
-                : "cursor-not-allowed bg-[var(--color-danger)]/50",
+                ? "bg-[var(--color-danger)] text-[var(--color-surface-1)] hover:opacity-90"
+                : "cursor-not-allowed bg-[var(--color-danger)]/50 text-[var(--color-text-muted)]",
             ].join(" ")}
             onClick={onConfirm}
           >
