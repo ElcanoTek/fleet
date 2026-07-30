@@ -69,6 +69,25 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **White text was hardcoded on 16 token-driven fills, so a light-primary bundle
+  rendered invisible labels** (#890). `on_primary` landed in #889 but only the two
+  `--gradient-action-primary` consumers were converted; every flat fill still said
+  `text-white`. On the Reklaim deployment (`primary: #FFDF03`) that measured
+  **1.33:1** against WCAG AA's 4.5:1 — on the login page's Sign in button, all four
+  tool-approval **Approve** buttons, every primary button in Settings, the user
+  avatar, and the sidebar's selection tick. Primary fills now use
+  `var(--color-on-primary)` (14.87:1 on that palette). Two further fills were
+  failing for **fleet's own** stock palette, not just white-labeled ones — white on
+  the dark theme's `--color-accent` was 2.28:1 and on `--color-danger` 2.77:1 — and
+  now use `var(--color-surface-1)` (5.9–7.2:1), which was already the codebase's
+  idiom at three other sites. The bulk-delete button's countdown state takes the
+  muted disabled treatment instead of a high-contrast label on a half-alpha fill.
+  Root cause was the rule's wording: `DESIGN.md` banned raw *hex* colors, and every
+  offender spelled its color as a Tailwind utility, so nothing caught it. The rule
+  now bans color utilities too, and `web/src/app/designTokens.test.ts` pins it —
+  including a positive check that a primary fill declares `--color-on-primary`,
+  which found a 14th site that grepping for `text-white` had missed.
+
 - **A themed deployment still rendered fleet's colors on its most visible
   surfaces.** `branding.colors` themed the flat tokens, but the gradients did not
   read them: `--gradient-bg` (painted on `<body>`), `--sidebar-surface` (the rail),

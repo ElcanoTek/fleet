@@ -892,7 +892,7 @@ function ConvRow({
                 ].join(" ")}
               >
                 {checked ? (
-                  <Icon name="check" className="size-[0.7rem] text-white" />
+                  <Icon name="check" className="size-[0.7rem] text-[var(--color-on-primary)]" />
                 ) : null}
               </span>
             ) : null}

@@ -28,7 +28,7 @@ function Avatar({ email, className }: { email: string; className?: string }) {
     <span
       aria-hidden="true"
       className={[
-        "grid shrink-0 place-items-center rounded-full bg-[var(--color-primary)] text-[0.78rem] font-semibold text-white",
+        "grid shrink-0 place-items-center rounded-full bg-[var(--color-primary)] text-[0.78rem] font-semibold text-[var(--color-on-primary)]",
         className ?? "size-7",
       ].join(" ")}
     >
@@ -146,7 +146,7 @@ export function AccountMenu({
                 className={[
                   "px-[0.6rem] py-[0.18rem] text-[0.72rem] font-medium capitalize transition focus-visible:outline-none",
                   themePreference === value
-                    ? "bg-[var(--color-primary)] text-white"
+                    ? "bg-[var(--color-primary)] text-[var(--color-on-primary)]"
                     : "text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]",
                 ].join(" ")}
               >

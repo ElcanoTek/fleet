@@ -313,7 +313,7 @@ export function ProjectHome({
                   <button
                     type="button"
                     disabled={savingInstructions}
-                    className="rounded-md bg-[var(--color-accent)] px-2.5 py-1 text-[0.75rem] font-medium text-white transition hover:opacity-90 disabled:opacity-60"
+                    className="rounded-md bg-[var(--color-accent)] px-2.5 py-1 text-[0.75rem] font-medium text-[var(--color-surface-1)] transition hover:opacity-90 disabled:opacity-60"
                     onClick={() => void saveInstructions()}
                   >
                     {savingInstructions ? "Saving…" : "Save"}
@@ -451,7 +451,7 @@ export function ProjectHome({
                 <button
                   type="button"
                   disabled={savingSettings}
-                  className="rounded-md bg-[var(--color-accent)] px-3 py-1.5 text-[0.8rem] font-medium text-white transition hover:opacity-90 disabled:opacity-60"
+                  className="rounded-md bg-[var(--color-accent)] px-3 py-1.5 text-[0.8rem] font-medium text-[var(--color-surface-1)] transition hover:opacity-90 disabled:opacity-60"
                   onClick={() => void saveSettings()}
                 >
                   {savingSettings ? "Saving…" : "Save"}
