@@ -160,8 +160,12 @@ describe("proxy", () => {
   // stylesheet on EVERY page, and the login card may render the bundle's mark.
   // Both were caught by the session gate, so a white-labeled deployment showed
   // fleet's built-in palette and mark on the one page every user sees first.
-  it.each(["/api/theme", "/api/brand/logo"])(
-    "serves %s without a session (bundle branding must reach the login page)",
+  //
+  // /api/brand/share-image joins them for a stronger reason than first paint:
+  // link-unfurl scrapers (Slack, iMessage, Discord, Teams) are anonymous, so an
+  // og:image behind the session gate renders no preview at all (#893).
+  it.each(["/api/theme", "/api/brand/logo", "/api/brand/share-image"])(
+    "serves %s without a session (bundle branding must reach the login page and unfurl scrapers)",
     async (path) => {
       getSessionFromRequestMock.mockResolvedValue(null);
       const res = await proxy(req(path));

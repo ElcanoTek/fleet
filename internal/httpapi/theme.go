@@ -128,6 +128,13 @@ func (s *Server) themeCSS(w http.ResponseWriter, r *http.Request) {
 // fleet's own mark instead of shipping megabytes on every page load.
 const brandLogoMaxBytes = 2 << 20 // 2 MiB
 
+// brandShareImageMaxBytes caps /brand/share-image. Larger than the logo cap
+// because the asset genuinely is: a 1280x640 unfurl card is hundreds of KB
+// (fleet's own is ~700 KB) where a rail mark is a few. It is still capped —
+// unfurl scrapers fetch it and some give up on slow responses, so an oversized
+// card would break the share preview it exists to provide.
+const brandShareImageMaxBytes = 5 << 20 // 5 MiB
+
 // brandLogo serves the bundle's branding.logo file, or 404 when the bundle
 // declares none — the web then falls back to fleet's own mark. Same trust class
 // as /theme.css: a deployment-wide, non-secret brand asset, so the route is
@@ -138,15 +145,38 @@ const brandLogoMaxBytes = 2 << 20 // 2 MiB
 // there is no request input. It re-stats only to fail soft if the file vanished
 // under a running process.
 func (s *Server) brandLogo(w http.ResponseWriter, r *http.Request) {
+	path := ""
+	if s.clientConfig != nil {
+		path = s.clientConfig.BrandLogoPath
+	}
+	s.serveBrandImage(w, r, path, "branding.logo", brandLogoMaxBytes)
+}
+
+// brandShareImage serves the bundle's branding.share_image — the og:image /
+// twitter:image link-unfurl scrapers render for this deployment — or 404 when
+// the bundle declares none, in which case the web falls back to fleet's own
+// neutral card. Same trust class and same hardening as /brand/logo; unfurl
+// scrapers are anonymous, so this must be reachable without a session.
+func (s *Server) brandShareImage(w http.ResponseWriter, r *http.Request) {
+	path := ""
+	if s.clientConfig != nil {
+		path = s.clientConfig.BrandShareImagePath
+	}
+	s.serveBrandImage(w, r, path, "branding.share_image", brandShareImageMaxBytes)
+}
+
+// serveBrandImage streams a load-validated bundle image. field names the manifest
+// key for log messages. An empty path means the bundle declared none — a 404, and
+// the web falls back to fleet's own asset.
+func (s *Server) serveBrandImage(w http.ResponseWriter, r *http.Request, path, field string, maxBytes int64) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if s.clientConfig == nil || s.clientConfig.BrandLogoPath == "" {
+	if path == "" {
 		http.NotFound(w, r)
 		return
 	}
-	path := s.clientConfig.BrandLogoPath
 	ctype := clientconfig.BrandLogoContentType(path)
 	if ctype == "" {
 		// Unreachable: load-time validation rejects an unknown extension. Fail
@@ -159,8 +189,8 @@ func (s *Server) brandLogo(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	if info.Size() > brandLogoMaxBytes {
-		log.Printf("httpapi: branding.logo %s is %d bytes (cap %d); serving fleet's default mark instead", path, info.Size(), brandLogoMaxBytes)
+	if info.Size() > maxBytes {
+		log.Printf("httpapi: %s %s is %d bytes (cap %d); serving fleet's default asset instead", field, path, info.Size(), maxBytes)
 		http.NotFound(w, r)
 		return
 	}
@@ -176,10 +206,11 @@ func (s *Server) brandLogo(w http.ResponseWriter, r *http.Request) {
 	// Same short max-age as /theme.css: a re-theme (operator restart) propagates
 	// promptly without a hard reload.
 	w.Header().Set("Cache-Control", "public, max-age=300")
-	// G304: path is not request-derived — there is no request input on this route.
-	// It is Bundle.BrandLogoPath, which clientconfig.resolveBrandLogo already
-	// containment-checked against the bundle root (lexically via filepath.IsLocal,
-	// then again after EvalSymlinks) at load time.
+	// G304: path is not request-derived — there is no request input on either
+	// route. It is Bundle.BrandLogoPath or Bundle.BrandShareImagePath, both of
+	// which clientconfig.resolveBrandImage already containment-checked against
+	// the bundle root (lexically via filepath.IsLocal, then again after
+	// EvalSymlinks) at load time.
 	f, err := os.Open(path) //nolint:gosec // see comment above
 	if err != nil {
 		http.NotFound(w, r)

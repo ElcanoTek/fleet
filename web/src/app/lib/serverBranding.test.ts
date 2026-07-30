@@ -158,6 +158,34 @@ describe("getServerBranding", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("resolves the bundle's share-image path", async () => {
+    fetchMock.mockResolvedValue(ok({ ...PAYLOAD, share_image_url: "/api/brand/share-image" }));
+    const b = await getServerBranding();
+    expect(b.shareImageUrl).toBe("/api/brand/share-image");
+  });
+
+  it("is null when the bundle declares no share image", async () => {
+    fetchMock.mockResolvedValue(ok(PAYLOAD));
+    const b = await getServerBranding();
+    expect(b.shareImageUrl).toBeNull();
+  });
+
+  // This value lands in an og:image tag. Only our own backend populates it, but
+  // an absolute or protocol-relative URL arriving here would point every unfurl
+  // of this deployment at a third-party host, so it is constrained anyway.
+  it.each([
+    ["absolute http URL", "https://evil.example/card.png"],
+    ["protocol-relative", "//evil.example/card.png"],
+    ["unrooted path", "api/brand/share-image"],
+    ["javascript scheme", "javascript:alert(1)"],
+    ["empty", ""],
+    ["non-string", 42],
+  ])("rejects a share-image value that is not a same-origin path: %s", async (_n, value) => {
+    fetchMock.mockResolvedValue(ok({ ...PAYLOAD, share_image_url: value }));
+    const b = await getServerBranding();
+    expect(b.shareImageUrl).toBeNull();
+  });
+
   it("exposes fleet's own backgrounds as the documented fallback pair", () => {
     // These mirror globals.css; consumers use them when the bundle sets none.
     expect(DEFAULT_BACKGROUND_DARK).toBe("#1a0b1e");
@@ -202,6 +230,23 @@ describe("branding consumers are request-time, not build-time", () => {
     // *some* tabs were wrong. Verified by grepping .next/server/app/*.html.
     const src = readFileSync(join(APP_DIR, "layout.tsx"), "utf8");
     expect(src).toMatch(/export const dynamic\s*=\s*["']force-dynamic["']/);
+  });
+
+  it("layout.tsx no longer hardcodes fleet's marketing copy as og:image:alt", () => {
+    // Every deployment used to send fleet's own headline to unfurlers and screen
+    // readers; the alt text is driven by the bundle's share_title now (#893).
+    const src = readFileSync(join(APP_DIR, "layout.tsx"), "utf8");
+    expect(src).not.toContain("Put your agents to work");
+    expect(src).not.toContain("Persistent multi-turn conversations");
+  });
+
+  it("layout.tsx declares og:image dimensions only for fleet's own card", () => {
+    // fleet does not decode a bundle's image, so it cannot honestly state
+    // width/height for an arbitrary asset — a wrong size renders a distorted
+    // preview. The dimensions must sit on the fallback branch only.
+    const src = readFileSync(join(APP_DIR, "layout.tsx"), "utf8");
+    expect(src).toMatch(/if \(bundleUrl\) return \{ url: bundleUrl, alt \};/);
+    expect(src).toMatch(/url: FLEET_SHARE_CARD, width: 1280, height: 640/);
   });
 
   it("layout.tsx hardcodes no theme-color literal outside the documented fallback", () => {

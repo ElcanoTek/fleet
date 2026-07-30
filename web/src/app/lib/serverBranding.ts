@@ -51,6 +51,13 @@ export type ServerBranding = {
   /** The bundle's `background` token per mode, or null to use the web's own. */
   backgroundLight: string | null;
   backgroundDark: string | null;
+  /**
+   * Web path for the bundle's og:image, or null when it declares none (fleet's
+   * own neutral card then stands). Advertised by the backend only when a file
+   * actually backed `branding.share_image` at load, so this never points an
+   * unfurl scraper at a route that 404s.
+   */
+  shareImageUrl: string | null;
 };
 
 /**
@@ -71,6 +78,7 @@ export const BRANDING_DEFAULTS: ServerBranding = {
   shareDescription: "An AI workspace with real tool use.",
   backgroundLight: null,
   backgroundDark: null,
+  shareImageUrl: null,
 };
 
 /**
@@ -107,6 +115,14 @@ function color(v: unknown): string | null {
   return typeof v === "string" && v.trim() !== "" ? v.trim() : null;
 }
 
+/** A same-origin absolute path ("/api/..."), or null. Never a full URL. */
+function localPath(v: unknown): string | null {
+  if (typeof v !== "string") return null;
+  const t = v.trim();
+  // Reject "//host/x" (protocol-relative) along with anything not rooted.
+  return t.startsWith("/") && !t.startsWith("//") ? t : null;
+}
+
 /**
  * getServerBranding resolves the deployment's identity, memoized for CACHE_TTL_MS.
  * Never throws and never rejects: callers can use the result unconditionally.
@@ -137,6 +153,10 @@ export async function getServerBranding(): Promise<ServerBranding> {
           shareDescription: str(d.share_description, BRANDING_DEFAULTS.shareDescription),
           backgroundLight: color(d.background_light),
           backgroundDark: color(d.background_dark),
+          // Only ever a fleet-authored path from our own backend, but constrain
+          // it anyway: this value lands in an og:image tag, and an absolute URL
+          // arriving here would point every unfurl at a third-party host.
+          shareImageUrl: localPath(d.share_image_url),
         };
       }
     }

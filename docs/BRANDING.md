@@ -15,6 +15,7 @@ branding:
   share_title: "Acme — your team's AI workspace"
   share_description: "Persistent multi-turn conversations with real tool use."
   logo: "assets/acme-mark.svg"
+  share_image: "assets/acme-share.png"
   colors:
     dark:
       primary: "#e6007e"
@@ -133,6 +134,39 @@ the right trade on its own terms. `web/src/app/shared/ui/NavRail.test.tsx` pins
 the behavior by asserting the rendered `src` is the raw path and that no `srcset`
 is generated.
 
+### `share_image`
+
+A bundle-relative path to the image link-unfurl scrapers show for this
+deployment — the `og:image` / `twitter:image`. 1280x640 is conventional. Same
+extensions as `logo` minus nothing, though PNG/WebP/JPEG are the only types the
+proxy passes through: no scraper renders an SVG unfurl, so allowing one would
+widen the route for no benefit.
+
+This was the last un-themable brand surface. A checked-in `web/public/share.png`
+was the `og:image` for **every** deployment, and it contained Elcano's logo and
+wordmark — so pasting a link to a white-labeled instance into Slack, iMessage,
+Discord, Teams or LinkedIn unfurled with another company's brand, served from the
+client's own domain, so nothing looked amiss to the unfurler. The alt text was
+fleet's own marketing headline, hardcoded, which leaked even to scrapers that
+only read `og:image:alt`. The committed default is now a **fleet-only** card, and
+the alt text is driven by `share_title`.
+
+Validated at load exactly like `logo` (both go through `resolveBrandImage`): the
+path must be lexically local, must resolve inside the bundle after symlink
+resolution, must be a regular file, and must carry a known extension. Served from
+the bundle by `/brand/share-image`, proxied as `/api/brand/share-image`, capped
+at 5 MiB — larger than the logo's 2 MiB because the asset genuinely is, but still
+capped, since scrapers give up on slow responses.
+
+`/brand/meta` advertises `share_image_url` **only** when a file actually backed
+the field at load (mirroring `logo_url`), so the web never points a scraper at a
+route that 404s.
+
+fleet declares `og:image:width` / `height` **only** for its own card, whose size
+it knows. It does not decode a bundle's image, so it cannot honestly state
+dimensions for an arbitrary asset — and a wrong declared size makes scrapers
+render a distorted preview. With the tags absent they fetch and measure.
+
 ### What a palette now reaches
 
 Two things used to sit outside `colors` and could not be themed, so a bundle that
@@ -201,17 +235,20 @@ rather than brand (a failed tool call must read as failure in every deployment),
 and several are derived with `color-mix()` from the base hue, so a partial
 override would desynchronize a swatch from its own border.
 
-## Trust class of the three brand routes
+## Trust class of the four brand routes
 
-`/theme.css`, `/brand/logo`, and `/brand/meta` are all **token-gated but
-identity-less**. A palette, a mark, and a deployment's name are deployment-wide
-and non-secret, and the login shell has to render all three before a session
-exists. Each degrades quietly — empty CSS, a redirect to fleet's mark, or the
+`/theme.css`, `/brand/logo`, `/brand/share-image`, and `/brand/meta` are all
+**token-gated but identity-less**. A palette, a mark, a share card, and a
+deployment's name are deployment-wide and non-secret, and the login shell has to
+render the first three before a session exists. Each degrades quietly — empty CSS, a redirect to fleet's mark, or the
 generic defaults — so none can block or break first paint if the backend is
 unreachable.
 
-`/api/theme` and `/api/brand/logo` are in the middleware's public-path set,
-because the **browser** fetches them. `/brand/meta` has no Next proxy at all: it
+`/api/theme`, `/api/brand/logo`, and `/api/brand/share-image` are in the
+middleware's public-path set because something outside a session fetches them.
+For the share image that is a hard requirement rather than a convenience:
+link-unfurl scrapers are anonymous, so an `og:image` behind the session gate
+renders no preview at all. `/brand/meta` has no Next proxy at all: it
 is read only server-side, by `serverBranding.ts`, so there is nothing to expose
 publicly and the surface stays smaller.
 
@@ -224,4 +261,8 @@ member-gated because it also carries workspace content.
 
 Bundle branding is read when the bundle loads, so a re-theme takes a restart
 (`fleet restart`); downstream caching is 5 minutes. `fleet validate-config`
-reports a bad `logo` path before you restart into it.
+reports a bad `logo` or `share_image` path before you restart into it.
+
+Unfurl scrapers cache aggressively on their own side, so a changed `share_image`
+can take a while to appear in Slack even after a restart — Slack's
+`/slackdebug` unfurl tools and `cards-dev.twitter.com/validator` force a refetch.
