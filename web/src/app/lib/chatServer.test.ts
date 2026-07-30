@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import {
   chatServerFetch,
+  chatServerPassthrough,
   chatServerProxy,
   getChatServerBase,
   getSharedToken,
@@ -147,6 +148,65 @@ describe("chatServer.ts", () => {
       expect(result.error!.status).toBe(502);
       const body = await result.error!.json();
       expect(body.error).toMatch(/chat-server unreachable: ECONNREFUSED/);
+    });
+  });
+
+  describe("chatServerPassthrough", () => {
+    beforeEach(() => {
+      process.env.CHAT_SERVER_URL = "http://chat.example.com";
+      process.env.CHAT_SERVER_TOKEN = "test-token";
+    });
+
+    // #896: the funnel forwarded only Content-Type, so the filename the Go
+    // handler chose never reached the browser and downloads saved as the URL's
+    // last path segment.
+    it("forwards Content-Disposition from upstream", async () => {
+      fetchMock.mockResolvedValue(
+        new Response('{"ok":true}', {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+            "Content-Disposition": 'attachment; filename="Q3-Planning-a1b2c3d4.json"',
+          },
+        }),
+      );
+      const res = await chatServerPassthrough("user@example.com", "/projects/x/export");
+      expect(res.headers.get("Content-Disposition")).toBe(
+        'attachment; filename="Q3-Planning-a1b2c3d4.json"',
+      );
+      expect(res.status).toBe(200);
+      expect(await res.text()).toBe('{"ok":true}');
+    });
+
+    it("streams the body through instead of buffering it", async () => {
+      // A body that is only readable as a stream would throw if the funnel
+      // called .text() on it before constructing the response.
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("chunk-1,"));
+          controller.enqueue(new TextEncoder().encode("chunk-2"));
+          controller.close();
+        },
+      });
+      fetchMock.mockResolvedValue(
+        new Response(stream, { status: 200, headers: { "Content-Type": "text/csv" } }),
+      );
+      const res = await chatServerPassthrough("user@example.com", "/export");
+      expect(await res.text()).toBe("chunk-1,chunk-2");
+      expect(res.headers.get("Content-Type")).toBe("text/csv");
+    });
+
+    it("forwards a non-2xx status and its body", async () => {
+      fetchMock.mockResolvedValue(new Response('{"error":"forbidden"}', { status: 403 }));
+      const res = await chatServerPassthrough("user@example.com", "/admin/settings");
+      expect(res.status).toBe(403);
+      expect(await res.text()).toBe('{"error":"forbidden"}');
+    });
+
+    it("returns the 502 shape when chat-server is unreachable", async () => {
+      fetchMock.mockRejectedValue(new Error("ECONNREFUSED"));
+      const res = await chatServerPassthrough("user@example.com", "/admin/settings");
+      expect(res.status).toBe(502);
     });
   });
 });

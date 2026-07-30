@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyOrigin } from "@/app/lib/csrf";
 import { orchestratorFetch } from "@/app/lib/mocServer";
+import { forwardedHeaders } from "@/app/lib/proxyHeaders";
 import { resolveOrchestratorAuth } from "./auth";
 
 // Methods that mutate state get a CSRF Origin check before proxying, mirroring
@@ -68,12 +69,15 @@ export async function proxyToOrchestrator(
     );
   }
 
-  const text = await upstream.text();
-  return new NextResponse(text, {
+  // Stream the body through and forward the header allowlist. Buffering with
+  // `await upstream.text()` dropped Content-Disposition (so /datasets/{id}/export
+  // saved as a file named "export" with no extension) and held whole CSV exports
+  // in memory, defeating the streaming csv.NewWriter upstream. Two sibling routes
+  // already bypass this funnel with comments explaining that buffering corrupts
+  // binary bodies and stalls SSE — streaming here removes the reason to bypass.
+  return new NextResponse(upstream.body, {
     status: upstream.status,
-    headers: {
-      "Content-Type": upstream.headers.get("Content-Type") ?? "application/json",
-    },
+    headers: forwardedHeaders(upstream),
   });
 }
 

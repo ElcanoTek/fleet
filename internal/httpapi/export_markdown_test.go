@@ -77,10 +77,10 @@ func TestRenderConversationMarkdown_Defaults(t *testing.T) {
 }
 
 func TestExportFilename_Extension(t *testing.T) {
-	if got := exportFilename("My Chat!", "abcdef1234567890", "md"); got != "My-Chat-abcdef12.md" {
+	if got := exportFilename("My Chat!", "abcdef1234567890", "md", "chat"); got != "My-Chat-abcdef12.md" {
 		t.Errorf("got %q, want My-Chat-abcdef12.md", got)
 	}
-	if got := exportFilename("", "id", "json"); got != "chat-id.json" {
+	if got := exportFilename("", "id", "json", "chat"); got != "chat-id.json" {
 		t.Errorf("got %q, want chat-id.json", got)
 	}
 }

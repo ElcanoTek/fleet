@@ -8,6 +8,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"net/http"
 	"path/filepath"
@@ -367,6 +368,16 @@ func (s *Server) projectExport(w http.ResponseWriter, r *http.Request, p *store.
 	if convIDs == nil {
 		convIDs = []string{}
 	}
+	// Own the download filename here, like every other export endpoint
+	// (conversation export, dataset CSV, prompts, adoption). The web proxy used
+	// to synthesize `project-<uuid>.json` itself, which meant the saved file was
+	// named after an opaque id; exportFilename gives the project's own name plus
+	// a short id, and one owner of the filename means the proxy just forwards it.
+	// Content-Type is left to writeJSON below, which sets it.
+	w.Header().Set(
+		"Content-Disposition",
+		fmt.Sprintf(`attachment; filename="%s"`, exportFilename(p.Name, p.ID, "json", "project")),
+	)
 	writeJSON(w, map[string]any{
 		"version":          "1",
 		"project":          p,

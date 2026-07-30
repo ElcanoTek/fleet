@@ -2052,7 +2052,7 @@ func (s *Server) conversationByID(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
 			w.Header().Set(
 				"Content-Disposition",
-				fmt.Sprintf(`attachment; filename="%s"`, exportFilename(conv.Title, conv.ID, "md")),
+				fmt.Sprintf(`attachment; filename="%s"`, exportFilename(conv.Title, conv.ID, "md", "chat")),
 			)
 			_, _ = io.WriteString(w, renderConversationMarkdown(conv, history, exportedAt))
 		default:
@@ -2064,7 +2064,7 @@ func (s *Server) conversationByID(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json; charset=utf-8")
 			w.Header().Set(
 				"Content-Disposition",
-				fmt.Sprintf(`attachment; filename="%s"`, exportFilename(conv.Title, conv.ID, "json")),
+				fmt.Sprintf(`attachment; filename="%s"`, exportFilename(conv.Title, conv.ID, "json", "chat")),
 			)
 			_ = json.NewEncoder(w).Encode(body)
 		}
@@ -3387,11 +3387,17 @@ func parseLastEventID(r *http.Request) uint64 {
 
 // ── helpers ────────────────────────────────────────────────────────────────
 
-// exportFilename builds a safe, recognizable filename for the JSON
-// download: slugified title + short id + .json. Keeps the Save dialog
+// exportFilename builds a safe, recognizable filename for a download:
+// slugified title + short id + extension. Keeps the Save dialog
 // self-explanatory without trusting user-chosen characters in the
-// Content-Disposition header.
-func exportFilename(title, id, ext string) string {
+// Content-Disposition header — every rune outside [A-Za-z0-9 _-] is
+// dropped, so a quote can never terminate the header's quoted string.
+//
+// fallback names the thing being exported when the title slugifies to
+// nothing (empty, or all-punctuation like `///"""`). It is a parameter
+// rather than a constant because the callers export different nouns: a
+// project export landing as "chat-a1b2c3d4.json" reads as a bug.
+func exportFilename(title, id, ext, fallback string) string {
 	slug := strings.Map(func(r rune) rune {
 		switch {
 		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
@@ -3406,7 +3412,7 @@ func exportFilename(title, id, ext string) string {
 		slug = slug[:50]
 	}
 	if slug == "" {
-		slug = "chat"
+		slug = fallback
 	}
 	shortID := id
 	if len(shortID) > 8 {
