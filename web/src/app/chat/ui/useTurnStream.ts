@@ -281,8 +281,26 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   const applyStreamEvent = async (
     event: ServerEvent,
     payload: unknown,
-    ctx: { target: string; assistantId: number; thinkingStartedAt: number; hasStartedStreaming: boolean; isReattach: boolean; sawTerminal: boolean },
+    ctx: {
+      target: string;
+      assistantId: number;
+      thinkingStartedAt: number;
+      hasStartedStreaming: boolean;
+      isReattach: boolean;
+      sawTerminal: boolean;
+      evicted: boolean;
+    },
   ) => {
+    if (event.event === "reconnect") {
+      // Synthetic server frame. type:"evicted" means our subscription was
+      // dropped for falling behind while the turn kept running — the stream
+      // is about to end with a clean EOF that must NOT be read as
+      // turn-complete; the pump's caller reattaches instead.
+      const p = payload as { type?: string };
+      if (p.type === "evicted") ctx.evicted = true;
+      return;
+    }
+
     if (event.event === "conversation") {
       const p = payload as { id: string; title: string; persona: string; model?: string };
       // oldTarget is the per-submission pending key this turn was
@@ -723,7 +741,15 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
 
   const pumpStreamResponse = async (
     response: Response,
-    ctx: { target: string; assistantId: number; thinkingStartedAt: number; hasStartedStreaming: boolean; isReattach: boolean; sawTerminal: boolean },
+    ctx: {
+      target: string;
+      assistantId: number;
+      thinkingStartedAt: number;
+      hasStartedStreaming: boolean;
+      isReattach: boolean;
+      sawTerminal: boolean;
+      evicted: boolean;
+    },
   ) => {
     if (!response.body) {
       throw new Error("Empty response body from chat-server.");
@@ -933,6 +959,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         hasStartedStreaming: false,
         isReattach: true,
         sawTerminal: false,
+        evicted: false,
       };
       try {
         await pumpStreamResponse(response, ctx);
@@ -947,22 +974,38 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         // page fixed it because it reloaded from Postgres, which has
         // the canonical final state; this just makes the in-memory
         // store converge to the same shape without a reload.
-        patchAssistantMessage(convId, ctx.assistantId, (m) =>
-          m.state === "thinking" || m.state === "streaming"
-            ? { ...m, state: "done", content: m.content || (m.reasoning ? "" : m.content) }
-            : m,
-        );
-        // After reattach ends (turn finished or server hung up), the
-        // canonical record is in Postgres; refresh so any server-side
-        // state we missed (new title, updated metrics sidebar) shows.
-        if (attachedConvIdsRef.current.has(convId)) {
+        if (ctx.evicted) {
+          // The server dropped this subscription for falling behind while
+          // the turn kept running (event: reconnect, type: evicted). Do NOT
+          // force the slot to done or mark the conversation idle — it isn't.
+          // Detach and reattach with Last-Event-ID to resume the stream.
           attachedConvIdsRef.current.delete(convId);
-          markConvIdle(convId);
+          if (abortControllersRef.current[convId] === abortController) {
+            delete abortControllersRef.current[convId];
+          }
+        } else {
+          patchAssistantMessage(convId, ctx.assistantId, (m) =>
+            m.state === "thinking" || m.state === "streaming"
+              ? { ...m, state: "done", content: m.content || (m.reasoning ? "" : m.content) }
+              : m,
+          );
+          // After reattach ends (turn finished or server hung up), the
+          // canonical record is in Postgres; refresh so any server-side
+          // state we missed (new title, updated metrics sidebar) shows.
+          if (attachedConvIdsRef.current.has(convId)) {
+            attachedConvIdsRef.current.delete(convId);
+            markConvIdle(convId);
+          }
+          if (abortControllersRef.current[convId] === abortController) {
+            delete abortControllersRef.current[convId];
+          }
+          void refreshConversations();
         }
-        if (abortControllersRef.current[convId] === abortController) {
-          delete abortControllersRef.current[convId];
-        }
-        void refreshConversations();
+      }
+      if (ctx.evicted) {
+        // Outside the finally so the in-flight guard (cleared by our caller's
+        // finally) is released before the retry fires.
+        setTimeout(() => void reattachToConv(convId), 150);
       }
     } catch {
       // Silent — reattach is best-effort.
@@ -1028,6 +1071,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       hasStartedStreaming,
       isReattach: false,
       sawTerminal: false,
+      evicted: false,
     };
     await pumpStreamResponse(response, ctx);
     target = ctx.target;
