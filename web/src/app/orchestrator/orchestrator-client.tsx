@@ -40,7 +40,10 @@ function OrchestratorSlimHeader() {
       <div className="ds-app-header">
         <div className="ds-app-header__brand">
           <div className="ds-app-header__text">
-            <p className="ds-app-header__eyebrow">Elcano Internal</p>
+            {/* Neutral, not a company name: this bar renders pre-auth on
+                white-labeled deployments (BRANDING.md — nothing here may
+                hardcode a brand). */}
+            <p className="ds-app-header__eyebrow">Internal</p>
             <h1 className="ds-app-header__title">Operations Center</h1>
           </div>
         </div>

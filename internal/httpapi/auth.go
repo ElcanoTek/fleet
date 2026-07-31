@@ -59,7 +59,8 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 // tokenOnlyMiddleware enforces the shared-secret but NOT a user identity. It is
 // for deployment-wide, non-secret, non-user-scoped data the pre-auth UI needs:
 // /theme.css (the brand palette that themes the login page before a session
-// exists), /brand/logo (the mark that page may render), /brand/meta (the app
+// exists), /brand/logo (the mark that page may render), /brand/share-image
+// (the og:image anonymous unfurl scrapers fetch), /brand/meta (the app
 // name, login copy, and share strings the shell and unfurl scrapers need), and
 // /shared/ (whose authorization is the share token in the path). Only the
 // trusted Next.js layer holds the token, so the browser still cannot reach

@@ -933,8 +933,11 @@ button {
   cursor: pointer;
 }
 
+/* Derived from the accent token, not a literal: a themed deployment's text
+   selection must glow its own brand color, not fleet's (BRANDING.md's
+   no-literal-brand-color rule). */
 ::selection {
-  background: rgba(157, 167, 239, 0.35);
+  background: color-mix(in srgb, var(--color-accent) 35%, transparent);
 }
 
 /* ── Thinking dots ─────────────────────────────────────────── */
