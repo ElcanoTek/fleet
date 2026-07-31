@@ -69,7 +69,7 @@ var themeTokenOrder = []struct{ key, cssVar string }{
 // stylesheet nor inject markup, and the affected token falls back to its
 // default. Manifest content is operator-controlled (bundle push == host code
 // exec per SECURITY.md), so this is defense-in-depth, not a trust boundary.
-var colorValueRe = regexp.MustCompile(`^#[0-9a-fA-F]{3,8}$|^(?:rgb|rgba|hsl|hsla)\([0-9a-zA-Z.,%/\s]+\)$`)
+var colorValueRe = regexp.MustCompile(`^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$|^(?:rgb|rgba|hsl|hsla)\([0-9a-zA-Z.,%/\s]+\)$`)
 
 // writeThemeBlock appends a single `selector{...}` rule for the non-empty,
 // valid tokens in colors. It writes nothing (not even an empty rule) when no

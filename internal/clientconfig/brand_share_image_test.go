@@ -94,6 +94,28 @@ func TestResolveBrandShareImage_Rejects(t *testing.T) {
 	}
 }
 
+// Logo-legal but unfurl-illegal types: no scraper renders an SVG/ICO unfurl
+// and the web proxy would silently redirect one to fleet's generic card, so a
+// share_image with a logo-only extension must fail at load — even when the
+// file exists and would pass every shared path check.
+func TestResolveBrandShareImage_RejectsLogoOnlyExtensions(t *testing.T) {
+	for _, ext := range []string{".svg", ".ico"} {
+		t.Run(ext, func(t *testing.T) {
+			b := shareBundle(t, "assets/share"+ext)
+			if err := os.WriteFile(filepath.Join(b.Dir, "assets", "share"+ext), []byte("x"), 0o644); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+			err := b.resolveBrandShareImage()
+			if err == nil || !strings.Contains(err.Error(), "unsupported extension") {
+				t.Fatalf("err = %v, want an unsupported-extension error", err)
+			}
+			if b.BrandShareImagePath != "" {
+				t.Errorf("BrandShareImagePath = %q, want it unset on failure", b.BrandShareImagePath)
+			}
+		})
+	}
+}
+
 // A directory is not servable content.
 func TestResolveBrandShareImage_RejectsDirectory(t *testing.T) {
 	dir := t.TempDir()

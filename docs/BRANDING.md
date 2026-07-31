@@ -114,7 +114,8 @@ bundle after symlink resolution, must be a regular file, and must carry an
 extension fleet knows a content type for. Beyond that the route caps the file at
 2 MiB and, since bundle content is operator-authored, hardens delivery
 defensively rather than as a trust boundary: `X-Content-Type-Options: nosniff`
-plus `Content-Security-Policy: default-src 'none'; sandbox`, so an SVG carrying
+plus `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; sandbox`
+(the `style-src` allowance is for an SVG's own inline styles), so an SVG carrying
 `<script>` executes nothing even if someone opens the asset URL directly.
 
 `/client-config` advertises `logo_url` **only** when a file actually backed the
@@ -137,10 +138,11 @@ is generated.
 ### `share_image`
 
 A bundle-relative path to the image link-unfurl scrapers show for this
-deployment — the `og:image` / `twitter:image`. 1280x640 is conventional. Same
-extensions as `logo` minus nothing, though PNG/WebP/JPEG are the only types the
-proxy passes through: no scraper renders an SVG unfurl, so allowing one would
-widen the route for no benefit.
+deployment — the `og:image` / `twitter:image`. 1280x640 is conventional.
+PNG/WebP/JPEG only, and the restriction is enforced **at load**: no scraper
+renders an SVG (or ICO) unfurl, the proxy would redirect one to fleet's generic
+card, and a silently generic unfurl is exactly the failure this field exists to
+prevent — so a bundle declaring one fails at startup instead.
 
 This was the last un-themable brand surface. A checked-in `web/public/share.png`
 was the `og:image` for **every** deployment, and it contained Elcano's logo and
@@ -195,10 +197,11 @@ must set it. Every one of those rules previously hardcoded white, so a
 yellow-primary bundle rendered white-on-yellow at **1.33:1**. Declaring
 near-black instead takes the same surface to 14.87:1.
 
-Light mode additionally takes `--color-primary-hover` as the deep end of the
-action gradient, on the reasoning that "the deeper primary" is what that token
-already means there — so a light-primary bundle supplies a deeper *shade of its
-own hue* instead of having fleet mix its brand color toward black.
+Light mode additionally starts the action gradient from `--color-primary-hover`
+(its deep end is `--color-secondary` mixed 85% toward black), on the reasoning
+that "the deeper primary" is what that token already means there — so a
+light-primary bundle supplies a deeper *shade of its own hue* as the gradient's
+leading stop instead of fleet's default.
 
 ### `colors`
 

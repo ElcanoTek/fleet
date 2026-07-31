@@ -52,7 +52,7 @@ export async function GET(request: Request) {
         "Content-Type": type,
         "X-Content-Type-Options": "nosniff",
         "Content-Security-Policy": "default-src 'none'; sandbox",
-        // Longer than the 5-minute brand-asset TTL: unfurl scrapers cache
+        // Same 5-minute TTL as the other brand assets: unfurl scrapers cache
         // aggressively on their own side anyway, and a share card changes only
         // when the bundle does (which needs a restart regardless).
         "Cache-Control": "public, max-age=300",

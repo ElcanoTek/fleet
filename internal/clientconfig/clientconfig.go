@@ -1119,6 +1119,20 @@ func (b *Bundle) resolveBrandShareImage() error {
 	if err != nil {
 		return err
 	}
+	// Unlike the logo, the share image is only ever consumed by link-unfurl
+	// scrapers, and none of them render SVG (or ICO) unfurls — the web proxy
+	// passes through PNG/WebP/JPEG only and redirects anything else to fleet's
+	// generic card. Rejecting the logo-only extensions HERE (after the shared
+	// path/containment checks, so their errors keep precedence) keeps the
+	// branding contract's promise that a bad value fails at startup instead of
+	// every unfurl silently showing the wrong brand.
+	if rel != "" {
+		switch strings.ToLower(filepath.Ext(rel)) {
+		case ".png", ".webp", ".jpg", ".jpeg":
+		default:
+			return fmt.Errorf("branding.share_image %q: unsupported extension (unfurl scrapers only render .png, .webp, .jpg, .jpeg)", rel)
+		}
+	}
 	b.BrandShareImagePath = resolved
 	return nil
 }

@@ -62,6 +62,30 @@ func TestRenderThemeCSS_DropsInvalidAndUnknown(t *testing.T) {
 	}
 }
 
+// #12345 and #1234567 are not CSS colors; only 3/4/6/8-digit hex is. The
+// browser would drop the declaration in /theme.css anyway, but the same
+// validator feeds <meta name="theme-color"> and the PWA manifest, where an
+// invalid value ships as-is — so the regex itself must reject odd lengths.
+func TestRenderThemeCSS_RejectsOddHexLengths(t *testing.T) {
+	css := renderThemeCSS(clientconfig.BrandColors{
+		Dark: map[string]string{
+			"primary":   "#12345",    // 5 digits — invalid
+			"secondary": "#1234567",  // 7 digits — invalid
+			"accent":    "#1234",     // 4 digits (RGBA) — valid
+			"border":    "#12345678", // 8 digits (RRGGBBAA) — valid
+		},
+	})
+	if strings.Contains(css, "#12345;") || strings.Contains(css, "#1234567;") {
+		t.Errorf("odd-length hex emitted: %q", css)
+	}
+	if !strings.Contains(css, "--color-accent:#1234;") {
+		t.Errorf("4-digit hex dropped: %q", css)
+	}
+	if !strings.Contains(css, "--color-border:#12345678;") {
+		t.Errorf("8-digit hex dropped: %q", css)
+	}
+}
+
 func TestRenderThemeCSS_EmptyPaletteEmitsNoRules(t *testing.T) {
 	css := renderThemeCSS(clientconfig.BrandColors{})
 	if strings.Contains(css, "{") {
