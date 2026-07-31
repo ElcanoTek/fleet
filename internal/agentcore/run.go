@@ -356,11 +356,17 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 	// The catalog is data, sourced either from an injected list (broker mode) or
 	// the local client. Decoupling it from the client lets the broker own the
 	// client without the main process double-spawning servers just to discover.
-	catalog := deps.MCPCatalog
-	if catalog == nil {
-		catalog = mcpClient.GetAllTools()
-	}
+	// Resolved INSIDE buildTools: the mid-run MCP-dirty rebuild re-invokes it,
+	// and re-reading the local client is what makes newly loaded servers'
+	// tools actually register (a snapshot taken here made that rebuild re-use
+	// the pre-load catalog — mcp_load appeared to succeed and changed
+	// nothing). An injected deps.MCPCatalog stays static by design: the
+	// injector owns its lifecycle.
 	buildTools := func() ([]fantasy.AgentTool, error) {
+		catalog := deps.MCPCatalog
+		if catalog == nil {
+			catalog = mcpClient.GetAllTools()
+		}
 		tools, err := buildFantasyTools(cfg.NativeTools, catalog, broker, cfg.Allowlist, deps.Policy, cfg.OptionalServers, optIn, toolCfg)
 		if err != nil {
 			return nil, err
