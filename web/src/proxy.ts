@@ -36,6 +36,13 @@ const publicApiPaths = new Set([
   "/api/orchestrator/auth/login",
   "/api/orchestrator/auth/logout",
   "/api/orchestrator/auth/elcano-login",
+  // The brand-theme stylesheet is pre-session by design: layout.tsx links it on
+  // every page so the LOGIN page paints in the bundle's palette before any
+  // session exists. The route is deployment-wide, non-secret, and fail-safe
+  // (always 200; empty CSS on backend trouble) — see app/api/theme/route.ts.
+  // Without this entry the gate 401s it and the login page renders unthemed
+  // (#903).
+  "/api/theme",
 ]);
 
 // contentSecurityPolicy builds the CSP for a response (#590). Two tiers:

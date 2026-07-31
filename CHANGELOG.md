@@ -68,6 +68,15 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **The pre-auth login page now paints in the bundle's brand colors (#903)**:
+  `layout.tsx` links the brand-theme stylesheet (`/api/theme`) on every page
+  and the route is deliberately public, but the web proxy's `publicApiPaths`
+  allowlist did not include it — so logged-out browsers got a 401 and the
+  login page rendered in fleet's default palette instead of the deployment's.
+  `/api/theme` is now allowlisted pre-session; the route stays fail-safe
+  (always 200, empty CSS on backend trouble) and the palette is deployment-wide
+  and non-secret by design.
+
 - **Env-file writes now survive a read round-trip (#834)**: `SetEnvKey` wrote
   values verbatim while both parsers (creds and the server's `loadEnvFile`)
   strip whitespace, surrounding quotes, and ` #`-style inline comments — so a
