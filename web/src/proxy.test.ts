@@ -128,6 +128,15 @@ describe("proxy", () => {
     expect(res.headers.get("location")).toBeNull();
   });
 
+  it("lets the pre-auth brand theme stylesheet through without a session (#903)", async () => {
+    // layout.tsx links /api/theme on every page, including /login — a 401 here
+    // means the login page renders in default colors instead of the bundle's.
+    getSessionFromRequestMock.mockResolvedValue(null);
+    const res = await proxy(req("/api/theme"));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("location")).toBeNull();
+  });
+
   // ── Content-Security-Policy (#590) ──────────────────────────────────────
   // The public /shared view renders assistant-authored HTML in a sandbox=""
   // iframe; sandbox blocks scripts but NOT sub-resource loads, so the page
