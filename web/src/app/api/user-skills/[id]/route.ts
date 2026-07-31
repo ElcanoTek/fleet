@@ -1,5 +1,6 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "@/app/lib/auth";
+import { verifyOrigin } from "@/app/lib/csrf";
 import { chatServerProxy } from "@/app/lib/chatServer";
 
 export const runtime = "nodejs";
@@ -28,12 +29,18 @@ async function proxy(method: "PUT" | "DELETE", id: string, req?: Request) {
   });
 }
 
-export async function PUT(req: Request, { params }: { params: Promise<{ id: string }> }) {
+export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  // Same-origin only — see the POST route's note; a forged PUT could rewrite
+  // an existing skill's body, which the agent reads mid-turn.
+  const csrf = verifyOrigin(req);
+  if (!csrf.ok) return csrf.response;
   const { id } = await params;
   return proxy("PUT", id, req);
 }
 
-export async function DELETE(_req: Request, { params }: { params: Promise<{ id: string }> }) {
+export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const csrf = verifyOrigin(req);
+  if (!csrf.ok) return csrf.response;
   const { id } = await params;
   return proxy("DELETE", id);
 }
