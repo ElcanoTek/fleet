@@ -369,6 +369,16 @@ const maxConsecutiveIdenticalCalls = 3
 // The single divergence between the two front-ends is the closing noun, which
 // is read from o.repeatGuardNoun ("finish the task" vs "reply to the user").
 func (o *orchestrationState) checkRepeatedCall(toolName, rawInput string) (bool, string) {
+	// The deferred-tool dispatcher is a pass-through: every tool_call
+	// invocation immediately re-enters this guard as the REAL tool it
+	// dispatches to. Tracking the wrapper too made the key sequence alternate
+	// (tool_call:h1, mcp_x:h2, tool_call:h1, …), resetting the repeat counter
+	// on every hop — a model looping one deferred tool with identical
+	// arguments could never trip the guard. Skip the wrapper; the real tool's
+	// consecutive calls are what the guard is for.
+	if toolName == toolNameToolCall {
+		return false, ""
+	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
 

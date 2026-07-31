@@ -701,3 +701,28 @@ func TestRedactSecretsInLog(t *testing.T) {
 		t.Fatalf("expected [REDACTED] marker: %s", redacted)
 	}
 }
+
+// A deferred tool's dispatch runs the policy TWICE per invocation — once as
+// the tool_call wrapper, then as the real tool. Tracking the wrapper made the
+// guard's key alternate every hop and the repeat counter reset, so a model
+// looping one deferred tool with identical arguments never tripped it.
+func TestRepeatedCallGuard_DeferredDispatchDoesNotResetCounter(t *testing.T) {
+	o := newOrchStateForTest()
+
+	wrapper := `{"name":"mcp_crm_lookup","arguments":{"id":1}}`
+	realArgs := `{"id":1}`
+	for i := 0; i < maxConsecutiveIdenticalCalls; i++ {
+		if blocked, _ := o.checkRepeatedCall(toolNameToolCall, wrapper); blocked {
+			t.Fatalf("dispatcher pass-through blocked on hop %d", i+1)
+		}
+		if blocked, msg := o.checkRepeatedCall("mcp_crm_lookup", realArgs); blocked {
+			t.Fatalf("call %d blocked unexpectedly: %s", i+1, msg)
+		}
+	}
+	if blocked, _ := o.checkRepeatedCall(toolNameToolCall, wrapper); blocked {
+		t.Fatal("dispatcher pass-through must never block")
+	}
+	if blocked, _ := o.checkRepeatedCall("mcp_crm_lookup", realArgs); !blocked {
+		t.Fatal("expected the guard to block the repeated deferred tool despite interleaved tool_call hops")
+	}
+}
