@@ -812,6 +812,13 @@ function ConnectionsPageInner() {
         }
         const data = (await res.json()) as { redirect_url?: string };
         if (!data.redirect_url) throw new Error("No authorization URL returned.");
+        // The URL comes from the remote server's OAuth discovery document —
+        // third-party data. Navigating this tab (or a tab whose window.opener
+        // is us) to a javascript: URL would run it with scripted access to
+        // the app, so only http(s) may pass.
+        if (!/^https?:\/\//i.test(data.redirect_url)) {
+          throw new Error("Authorization URL has an unsupported scheme.");
+        }
         // The authorization server redirects back to /api/oauth/mcp/callback,
         // which lands on this page with ?connected / ?error — in the new tab.
         // This tab refreshes its list when it regains focus.

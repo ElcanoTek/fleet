@@ -166,6 +166,12 @@ export async function proxy(request: NextRequest) {
 
 export const config = {
   // Widened from chat's matcher so /orchestrator/* is gated by the SAME rule
-  // as /chat/*. Static assets stay excluded (content-hashed, safe to cache).
-  matcher: ["/((?!_next/static|_next/image|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)"],
+  // as /chat/*. Static assets stay excluded (content-hashed, safe to cache) —
+  // but ONLY the checked-in asset directories. A bare any-image-extension
+  // exclusion also bypassed the gate + security headers for API routes whose
+  // PATH merely ends in .svg/.png (e.g. a conversation workspace file), which
+  // are user data, not static assets.
+  matcher: [
+    "/((?!_next/static|_next/image|(?:logos|icons|backgrounds|app-icons)/.*\\.(?:svg|png|jpg|jpeg|gif|webp)$|(?:share|file|globe|next|vercel|window)\\.(?:svg|png)$|favicon\\.ico$).*)",
+  ],
 };

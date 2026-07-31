@@ -1,5 +1,6 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "@/app/lib/auth";
+import { verifyOrigin } from "@/app/lib/csrf";
 import { chatServerProxy } from "@/app/lib/chatServer";
 
 export const runtime = "nodejs";
@@ -35,10 +36,15 @@ export async function GET() {
   return proxy("GET");
 }
 
-export async function PUT(req: Request) {
+export async function PUT(req: NextRequest) {
+  // Mutating route: same-origin only, matching every other write route.
+  const csrf = verifyOrigin(req);
+  if (!csrf.ok) return csrf.response;
   return proxy("PUT", req);
 }
 
-export async function DELETE(req: Request) {
+export async function DELETE(req: NextRequest) {
+  const csrf = verifyOrigin(req);
+  if (!csrf.ok) return csrf.response;
   return proxy("DELETE", req);
 }

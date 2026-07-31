@@ -360,9 +360,36 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       // would otherwise show a stranded "Thinking…" with no question
       // above it. Insert the user slot if it's missing — keyed on
       // adjacency to the assistant slot so we don't double-up.
-      const p = payload as { text?: string };
+      const p = payload as { text?: string; steered?: boolean };
       const text = (p.text ?? "").trim();
       if (!text) return;
+      if (p.steered) {
+        // A steered mid-turn input accepted at a step boundary (#785): render
+        // its user bubble above the streaming assistant slot. This must be
+        // handled HERE, before the replay dedup below — the adjacency check
+        // would see the turn's ORIGINAL user message directly above the
+        // assistant slot and silently drop the steered bubble (which is
+        // exactly what happened when this case lived in a second, unreachable
+        // user.message branch further down).
+        setConvMessages(ctx.target, (current) => {
+          const next = current.slice();
+          const aIdx = next.findIndex((m) => m.id === ctx.assistantId);
+          const prev = aIdx > 0 ? next[aIdx - 1] : null;
+          // Replay dedup: on a reattach that kept local state, the bubble is
+          // already there.
+          if (prev && prev.role === "user" && prev.content === text) return current;
+          const bubble = {
+            id: nowMs(),
+            role: "user" as const,
+            content: text,
+            state: "done" as const,
+          };
+          if (aIdx >= 0) next.splice(aIdx, 0, bubble);
+          else next.push(bubble);
+          return next;
+        });
+        return;
+      }
       setConvMessages(ctx.target, (current) => {
         const assistantIdx = current.findIndex((m) => m.id === ctx.assistantId);
         if (assistantIdx < 0) return current;
@@ -629,23 +656,6 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       return;
     }
 
-    if (event.event === "user.message" && (payload as { steered?: boolean }).steered) {
-      // A steered mid-turn input was accepted at a step boundary (#785):
-      // render its user bubble above the streaming assistant slot.
-      const p = payload as { text?: string };
-      if (p.text) {
-        setConvMessages(ctx.target, (current) => {
-          const next = current.slice();
-          const aIdx = next.findIndex((m) => m.id === ctx.assistantId);
-          const bubble = { id: nowMs(), role: "user" as const, content: p.text as string, state: "done" as const };
-          if (aIdx >= 0) next.splice(aIdx, 0, bubble);
-          else next.push(bubble);
-          return next;
-        });
-      }
-      return;
-    }
-
     if (event.event === "history.persisted") {
       // Post-persist id notification (server.go:runTurnAsync): the turn's
       // history rows now exist in Postgres, and this carries their {id, role}
@@ -886,12 +896,35 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
 
       const lastSeen = lastEventIdByConvRef.current[convId] ?? 0;
       const qs = info.turn_id ? `?turn_id=${encodeURIComponent(info.turn_id)}` : "";
-      const response = await fetch(`/api/conversations/${convId}/stream${qs}`, {
-        method: "GET",
-        cache: "no-store",
-        headers: { "Last-Event-ID": String(lastSeen) },
-      });
-      if (!response.ok) return;
+      // Registered like a live turn's controller so unmount cleanup closes
+      // this socket too — without it every /chat visit during a long turn
+      // opened another reader that outlived the tree it patched.
+      const abortController = new AbortController();
+      abortControllersRef.current[convId] = abortController;
+      let response: Response;
+      try {
+        response = await fetch(`/api/conversations/${convId}/stream${qs}`, {
+          method: "GET",
+          cache: "no-store",
+          headers: { "Last-Event-ID": String(lastSeen) },
+          signal: abortController.signal,
+        });
+        if (!response.ok) {
+          // A failed reattach (server restart, expired retain buffer) must
+          // not strand the conversation in "streaming": that locks the
+          // composer and routes every next submit down the queue path
+          // against a turn that no longer exists, until a full reload.
+          attachedConvIdsRef.current.delete(convId);
+          markConvIdle(convId);
+          delete abortControllersRef.current[convId];
+          return;
+        }
+      } catch (err) {
+        attachedConvIdsRef.current.delete(convId);
+        markConvIdle(convId);
+        delete abortControllersRef.current[convId];
+        throw err;
+      }
 
       const ctx = {
         target: convId,
@@ -925,6 +958,9 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         if (attachedConvIdsRef.current.has(convId)) {
           attachedConvIdsRef.current.delete(convId);
           markConvIdle(convId);
+        }
+        if (abortControllersRef.current[convId] === abortController) {
+          delete abortControllersRef.current[convId];
         }
         void refreshConversations();
       }
