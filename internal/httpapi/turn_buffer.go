@@ -46,6 +46,12 @@ type turnBuffer struct {
 	mu          sync.Mutex
 	events      []bufferedEvent
 	subscribers map[uint64]chan bufferedEvent
+	// evictedSubs marks subscriptions closed for falling behind (Emit /
+	// broadcastControl found their channel full), as opposed to closed by
+	// Finish. The reader consumes the mark to end the stream with an explicit
+	// "evicted" frame — without it a congested client saw the same clean EOF
+	// a finished turn produces and rendered a still-generating turn as done.
+	evictedSubs map[uint64]bool
 	nextSubID   uint64
 	closed      bool
 	finishedAt  time.Time
@@ -86,6 +92,7 @@ func newTurnBuffer(convID, turnID string) *turnBuffer {
 		convID:      convID,
 		turnID:      turnID,
 		subscribers: make(map[uint64]chan bufferedEvent),
+		evictedSubs: make(map[uint64]bool),
 		maxBytes:    sseMaxBytesPerTurn,
 	}
 }
@@ -224,6 +231,7 @@ func (b *turnBuffer) Emit(event string, payload any) {
 		default:
 			// Slow subscriber — evict. They can reattach with
 			// Last-Event-ID and pick up where they dropped.
+			b.evictedSubs[subID] = true
 			close(ch)
 			delete(b.subscribers, subID)
 		}
@@ -268,6 +276,7 @@ func (b *turnBuffer) broadcastControl(name string) {
 		default:
 			// Slow subscriber — evict (mirrors Emit). They reattach and learn of
 			// the shutdown from /healthz 503 / the sealed buffer instead.
+			b.evictedSubs[subID] = true
 			close(ch)
 			delete(b.subscribers, subID)
 		}
@@ -513,6 +522,13 @@ func (b *turnBuffer) Attach(ctx context.Context, lastEventID uint64, w http.Resp
 			return ctx.Err()
 		case ev, ok := <-ch:
 			if !ok {
+				if b.takeEvicted(subID) {
+					// Closed for falling behind, NOT because the turn
+					// finished. End with an explicit evicted frame so the
+					// client reattaches with Last-Event-ID instead of
+					// reading this clean EOF as turn-complete.
+					return writeEvictedFrame(w, flusher)
+				}
 				// Buffer sealed — our subscription was closed by Finish.
 				return nil
 			}
@@ -563,6 +579,30 @@ func (b *turnBuffer) unsubscribe(id uint64) {
 // write error (client disconnect) propagates so Attach can unsubscribe.
 func writeSSEFrame(w http.ResponseWriter, flusher http.Flusher, e bufferedEvent) error {
 	if _, err := fmt.Fprintf(w, "id: %d\nevent: %s\ndata: %s\n\n", e.ID, e.Name, string(e.Data)); err != nil {
+		return err
+	}
+	flusher.Flush()
+	return nil
+}
+
+// takeEvicted reports (and clears) whether subID's channel was closed by
+// eviction rather than by Finish.
+func (b *turnBuffer) takeEvicted(subID uint64) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.evictedSubs[subID] {
+		delete(b.evictedSubs, subID)
+		return true
+	}
+	return false
+}
+
+// writeEvictedFrame emits a synthetic `reconnect` event telling the client its
+// subscription was dropped for falling behind while the turn kept running —
+// the signal to reattach with Last-Event-ID rather than treat the stream's
+// end as turn-complete. No id line, like writeReconnectFrame.
+func writeEvictedFrame(w http.ResponseWriter, flusher http.Flusher) error {
+	if _, err := fmt.Fprint(w, "event: reconnect\ndata: {\"type\":\"evicted\"}\n\n"); err != nil {
 		return err
 	}
 	flusher.Flush()
