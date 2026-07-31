@@ -137,3 +137,44 @@ func readZipPart(f *zip.File) (string, error) {
 	}
 	return string(data), nil
 }
+
+// A zip entry lies about nothing here — it genuinely decompresses past the
+// budget — and the copy must fail rather than buffer it all (the upload path
+// bounds only the compressed size, so this budget is what stops a zip bomb).
+func TestCopyXLSXPart_EnforcesDecompressedBudget(t *testing.T) {
+	t.Parallel()
+
+	var src bytes.Buffer
+	zw := zip.NewWriter(&src)
+	f, err := zw.Create("xl/worksheets/sheet1.xml")
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := f.Write(bytes.Repeat([]byte("A"), 1<<20)); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	zr, err := zip.NewReader(bytes.NewReader(src.Bytes()), int64(src.Len()))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	out := zip.NewWriter(io.Discard)
+	budget := int64(1024) // far below the 1 MiB the entry inflates to
+	err = copyXLSXPart(out, zr.File[0], &budget)
+	if err == nil || !strings.Contains(err.Error(), "cap") {
+		t.Fatalf("err = %v, want a decompressed-cap error", err)
+	}
+
+	// And a part within budget passes, spending it.
+	budget = 2 << 20
+	if err := copyXLSXPart(out, zr.File[0], &budget); err != nil {
+		t.Fatalf("within-budget copy failed: %v", err)
+	}
+	if budget != (2<<20)-(1<<20) {
+		t.Fatalf("budget = %d, want the decompressed size deducted", budget)
+	}
+}
