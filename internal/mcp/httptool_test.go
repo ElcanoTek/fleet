@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -326,4 +327,27 @@ func TestAddHTTPToolsIdempotentAppend(t *testing.T) {
 	if got := len(c.GetAllTools()); got != 2 {
 		t.Errorf("empty-name spec registered a tool; len = %d, want 2", got)
 	}
+}
+
+// A documented mid-session reload can register HTTP tools while an _http call
+// is in flight. tools/call reads the spec map under Server.mu only, so without
+// the transport's own lock this is a concurrent map read+write — a fatal
+// runtime error in the credential-brokering process. Run under -race.
+func TestAddHTTPTools_ConcurrentWithCall(t *testing.T) {
+	t.Parallel()
+	c := NewClient()
+	c.AddHTTPTools([]HTTPToolSpec{{Name: "seed", Method: "GET", URL: "http://127.0.0.1:0/x"}})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 200; i++ {
+			c.AddHTTPTools([]HTTPToolSpec{{Name: fmt.Sprintf("t%d", i), Method: "GET", URL: "http://127.0.0.1:0/x"}})
+		}
+	}()
+	for i := 0; i < 200; i++ {
+		// The named tool is never registered; the call exercises only the
+		// map lookup path, which is the racing read.
+		_, _ = c.CallToolOn(context.Background(), HTTPToolServerName, "missing", nil)
+	}
+	<-done
 }

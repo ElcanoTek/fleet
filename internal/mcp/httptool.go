@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/itchyny/gojq"
@@ -81,6 +82,8 @@ func (c *Client) AddHTTPTools(specs []HTTPToolSpec) {
 		// else claimed it, refuse to corrupt it.
 		return
 	}
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
 	for _, spec := range specs {
 		name := strings.TrimSpace(spec.Name)
 		if name == "" {
@@ -110,6 +113,12 @@ func (c *Client) AddHTTPTools(specs []HTTPToolSpec) {
 // these tools reuse Server.callTool, the broker, and the whole governance stack
 // unchanged.
 type httpToolTransport struct {
+	// mu guards tools. AddHTTPTools writes under Client.mu, but Call runs
+	// under Server.mu only (Client.mu is released before dispatch), so a
+	// documented mid-session reload registering tools concurrently with an
+	// in-flight _http call is a concurrent map read+write — a fatal runtime
+	// error in the process that brokers every credential — without this.
+	mu     sync.RWMutex
 	tools  map[string]HTTPToolSpec
 	client *http.Client
 }
@@ -127,7 +136,9 @@ func (t *httpToolTransport) Call(ctx context.Context, method string, params inte
 		return nil, fmt.Errorf("http tool transport: malformed tools/call params")
 	}
 	name, _ := p[jsonRPCFieldName].(string)
+	t.mu.RLock()
 	spec, ok := t.tools[name]
+	t.mu.RUnlock()
 	if !ok {
 		return nil, fmt.Errorf("http tool not found: %s", name)
 	}

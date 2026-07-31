@@ -51,6 +51,17 @@ func TestStripHeadersOnCrossOriginRedirect_Policy(t *testing.T) {
 		}
 	})
 
+	t.Run("https to http downgrade strips even on the same host", func(t *testing.T) {
+		origin := mkReq("https://api.example.com/a", creds)
+		next := mkReq("http://api.example.com/a", creds)
+		if err := stripHeadersOnCrossOriginRedirect(next, []*http.Request{origin}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got := next.Header.Get("X-Api-Key"); got != "" {
+			t.Fatalf("credential header would be re-sent in cleartext: %q", got)
+		}
+	})
+
 	t.Run("port change is a different origin", func(t *testing.T) {
 		origin := mkReq("http://127.0.0.1:1000/a", creds)
 		next := mkReq("http://127.0.0.1:2000/b", creds)
