@@ -43,6 +43,15 @@ type containerImpl struct {
 
 	// containerID is the random ULID-ish name we assigned at start.
 	// Using a name (not the SHA) keeps `podman ps` readable.
+	//
+	// Guarded by idMu, NOT c.mu: c.mu is held for the entire duration of a
+	// run_python cell, so a concurrent runBash/fileop reading the id under
+	// c.mu would stall behind the cell (the same reason killContainerNow
+	// takes the id as a parameter). close() clears the id under idMu;
+	// cross-goroutine readers snapshot it via currentContainerID and treat
+	// "" as "already torn down". start() writes it before any concurrent
+	// use is possible, but takes idMu anyway to keep the invariant simple.
+	idMu        sync.Mutex
 	containerID string
 
 	// bridge state — lazily initialized on first runPython call.
@@ -432,7 +441,10 @@ func (c *containerImpl) start(ctx context.Context) error {
 	}
 	defer seccompCleanup()
 
-	c.containerID = generateContainerName()
+	name := generateContainerName()
+	c.idMu.Lock()
+	c.containerID = name
+	c.idMu.Unlock()
 
 	args := []string{
 		"run",
@@ -444,7 +456,12 @@ func (c *containerImpl) start(ctx context.Context) error {
 		// --init then reaps the resulting zombie so a long conversation can't leak
 		// PID slots toward --pids-limit. Harmless in per-turn mode.
 		"--init",
-		"--name", c.containerID,
+		"--name", name,
+		// Ownership label for the boot-time orphan sweep: it lets
+		// PruneOrphanedContainers tell a crashed prior run's leftovers apart
+		// from the LIVE containers of another fleet instance sharing the same
+		// podman user (which the shared name prefix alone cannot). See prune.go.
+		"--label", instanceLabelKey + "=" + thisInstanceLabel,
 		// Hardening defaults: --read-only rootfs, no caps,
 		// no-new-privileges. The workspace bind below is the only
 		// persistent writable surface; tmpfs covers IPython /
@@ -603,7 +620,7 @@ func (c *containerImpl) startStatsCollector() {
 		// Collection disabled (operator opt-out) — no goroutine, no rollup.
 		return
 	}
-	containerID := c.containerID
+	containerID := c.currentContainerID()
 	podman := c.cfg.PodmanBinary
 	// NoNetwork containers have an empty namespace; their net counters are
 	// meaningless, so we tell the collector not to surface Net* fields.
@@ -682,6 +699,13 @@ func (c *containerImpl) podmanArgs(rest []string) []string {
 const execReapTimeout = 10 * time.Second
 
 func (c *containerImpl) runBash(ctx context.Context, req BashRequest) (BashResult, error) {
+	// Snapshot the container id up front: close() concurrently clears the
+	// field, and an unsynchronized read is a data race. The snapshot also
+	// pins one consistent id for the exec AND the cancellation kill below.
+	containerID := c.currentContainerID()
+	if containerID == "" {
+		return BashResult{}, fmt.Errorf("run bash: %w", ErrClosed)
+	}
 	timeout := req.Timeout
 	if timeout <= 0 {
 		timeout = 5 * time.Minute
@@ -693,7 +717,7 @@ func (c *containerImpl) runBash(ctx context.Context, req BashRequest) (BashResul
 	if req.WorkingDir != "" {
 		args = append(args, "--workdir", req.WorkingDir)
 	}
-	args = append(args, c.containerID, "bash", "-c", req.Command)
+	args = append(args, containerID, "bash", "-c", req.Command)
 
 	cmd := exec.CommandContext(cmdCtx, c.cfg.PodmanBinary, c.podmanArgs(args)...) //nolint:gosec // bash command runs inside an isolated rootless container by design
 	// Without WaitDelay, cmd.Run blocks until the stdout/stderr pipes
@@ -741,7 +765,7 @@ func (c *containerImpl) runBash(ctx context.Context, req BashRequest) (BashResul
 		// for its whole duration; blocking the kill behind it would re-open
 		// the #796 window (the straggler runs while we wait for the lock).
 		c.execPoisoned.Store(true)
-		res.CleanupConfirmed = c.killContainerNow(c.containerID)
+		res.CleanupConfirmed = c.killContainerNow(containerID)
 		res.SandboxRetired = true
 		return res, nil
 	}
@@ -782,6 +806,17 @@ func (c *containerImpl) killContainerNow(containerID string) bool {
 		return false
 	}
 	return true
+}
+
+// currentContainerID snapshots the container id under idMu. close() clears
+// the field concurrently, so cross-goroutine readers must go through here and
+// treat "" as "already torn down". Deliberately NOT c.mu: that mutex is held
+// for the entire duration of a run_python cell, and a bash/fileop call must
+// not stall behind it just to read the id.
+func (c *containerImpl) currentContainerID() string {
+	c.idMu.Lock()
+	defer c.idMu.Unlock()
+	return c.containerID
 }
 
 // poisoned reports whether a cancelled/timed-out invocation retired this
@@ -832,6 +867,13 @@ func (c *containerImpl) bindFileOpRoot(ctx context.Context, root string) (FileOp
 }
 
 func (c *containerImpl) executeFileOp(ctx context.Context, req FileOpRequest, anchor string) (FileOpResult, error) {
+	// Same snapshot discipline as runBash: close() clears the id field
+	// concurrently, so read it once under idMu and fail closed when the
+	// container is already torn down.
+	containerID := c.currentContainerID()
+	if containerID == "" {
+		return FileOpResult{}, fmt.Errorf("fileop %s: %w", req.Op, ErrClosed)
+	}
 	cmdCtx, cancel := context.WithTimeout(ctx, fileOpTimeout)
 	defer cancel()
 
@@ -872,7 +914,7 @@ func (c *containerImpl) executeFileOp(ctx context.Context, req FileOpRequest, an
 		return FileOpResult{}, fmt.Errorf("marshal fileop: %w", err)
 	}
 
-	args := c.podmanArgs([]string{"exec", "-i", c.containerID, "python3", "-c", string(fileOpsScript)})
+	args := c.podmanArgs([]string{"exec", "-i", containerID, "python3", "-c", string(fileOpsScript)})
 	cmd := exec.CommandContext(cmdCtx, c.cfg.PodmanBinary, args...) //nolint:gosec // fixed embedded script; container is our isolated sandbox
 	cmd.Stdin = bytes.NewReader(reqJSON)
 	cmd.WaitDelay = BashWaitDelay
@@ -885,7 +927,7 @@ func (c *containerImpl) executeFileOp(ctx context.Context, req FileOpRequest, an
 			// down the PID namespace synchronously and poison the handle so the
 			// pool retires it before another turn can borrow it.
 			c.execPoisoned.Store(true)
-			_ = c.killContainerNow(c.containerID)
+			_ = c.killContainerNow(containerID)
 			return FileOpResult{}, fmt.Errorf("fileop %s interrupted (%w); sandbox retired: %w", req.Op, cmdCtx.Err(), ErrPoisoned)
 		}
 		return FileOpResult{}, fmt.Errorf("fileop %s exec: %w%s", req.Op, err, stderrOf(err))
@@ -968,6 +1010,15 @@ func (c *containerImpl) runPython(ctx context.Context, req PythonRequest) (Pytho
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	// Re-validate under the lock: ensureBridge released c.mu before this
+	// re-acquire, and a concurrent close() nils the bridge fields in that
+	// window — writing to a nil bridgeStdin would panic (typed-nil interface
+	// Write), and this path is not under a safe.Go recover, so the panic
+	// would take down the whole single-host process. Fail closed instead.
+	if c.bridgeStdin == nil || c.bridgeStdout == nil {
+		return PythonResult{}, fmt.Errorf("send bridge request: %w", ErrClosed)
+	}
 
 	if _, err := fmt.Fprintf(c.bridgeStdin, "%s\n", reqBytes); err != nil {
 		return PythonResult{}, fmt.Errorf("send bridge request: %w%s", err, c.bridgeStderrSuffix())
@@ -1089,12 +1140,19 @@ func (c *containerImpl) ensureBridge() error {
 		return nil
 	}
 
+	// Snapshot the id (close() clears the field concurrently under idMu) and
+	// refuse to start a bridge in a container that is already torn down.
+	containerID := c.currentContainerID()
+	if containerID == "" {
+		return fmt.Errorf("start bridge: %w", ErrClosed)
+	}
+
 	// `podman exec -i` keeps stdin open; the bridge reads JSON-per-line
 	// from there and writes JSON-per-line to stdout. Tee stderr into
 	// both the parent's stderr (so operators see it in the journal) and
 	// a buffer (so the runPython path can include it when surfacing a
 	// broken-pipe write failure — otherwise the error is opaque).
-	args := []string{"exec", "-i", c.containerID, "python3", "/opt/bridge/bridge.py"}
+	args := []string{"exec", "-i", containerID, "python3", "/opt/bridge/bridge.py"}
 	// The bridge is intentionally not bound to the caller's ctx: it outlives
 	// any single request and is torn down in close() via podman kill.
 	cmd := exec.Command(c.cfg.PodmanBinary, c.podmanArgs(args)...) //nolint:gosec,noctx // G204: fixed operator-configured podman binary + our own args (no shell). noctx: the bridge intentionally outlives any single request ctx and is torn down in close() via podman kill.
@@ -1129,22 +1187,26 @@ func (c *containerImpl) ensureBridge() error {
 
 func (c *containerImpl) close() {
 	c.mu.Lock()
-	if c.bridgeStdin != nil {
-		_ = c.bridgeStdin.Close()
-	}
-	c.bridgeCmd = nil
-	c.bridgeStdin = nil
-	c.bridgeStdout = nil
+	// Tear the bridge down the same way a timeout/cancel does: signal the
+	// `podman exec` client, Wait() it, and clear the fields. Merely closing
+	// stdin and nil'ing bridgeCmd (the old behavior) never reaped the child —
+	// every sandbox that ever ran Python leaked a zombie, its pipe FDs, and
+	// the stderr-copier goroutine cmd.Start spawned for the MultiWriter.
+	c.terminateBridgeLocked()
 	c.bridgeStderr = nil
-	c.bridgeStarted = false
-	containerID := c.containerID
 	scriptPath := c.bridgeScriptPath
 	statsCancel := c.statsCancel
 	statsDone := c.statsDone
 	c.statsCancel = nil
-	c.containerID = ""
 	c.bridgeScriptPath = ""
 	c.mu.Unlock()
+
+	// Clear the id under its own lock (idMu, not c.mu — see the field doc) so
+	// concurrent runBash/fileop snapshots observe the teardown and fail closed.
+	c.idMu.Lock()
+	containerID := c.containerID
+	c.containerID = ""
+	c.idMu.Unlock()
 
 	// Stop the telemetry poller and let it publish its rollup before we tear
 	// the container down. The poller exits promptly on ctx cancel (it only
