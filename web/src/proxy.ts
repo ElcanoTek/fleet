@@ -171,7 +171,11 @@ export const config = {
   // exclusion also bypassed the gate + security headers for API routes whose
   // PATH merely ends in .svg/.png (e.g. a conversation workspace file), which
   // are user data, not static assets.
+  // icon.svg / apple-icon.png are Next file-convention icon ROUTES (not
+  // public/ files) that the login page's <head> references pre-auth, and
+  // Safari probes apple-touch-icon*.png unauthenticated — gating them served
+  // a 307→/login as the tab/touch icon on every white-labeled deployment.
   matcher: [
-    "/((?!_next/static|_next/image|(?:logos|icons|backgrounds|app-icons)/.*\\.(?:svg|png|jpg|jpeg|gif|webp)$|(?:share|file|globe|next|vercel|window)\\.(?:svg|png)$|favicon\\.ico$).*)",
+    "/((?!_next/static|_next/image|(?:logos|icons|backgrounds|app-icons)/.*\\.(?:svg|png|jpg|jpeg|gif|webp)$|(?:share|file|globe|next|vercel|window|icon|apple-icon)\\.(?:svg|png)$|apple-touch-icon[^/]*\\.png$|favicon\\.ico$|sw\\.js$|scripts/theme\\.js$).*)",
   ],
 };
