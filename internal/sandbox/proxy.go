@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/netguard"
 )
 
 // slirpHostGateway is the address at which a rootless-Podman container reaches a
@@ -44,13 +46,24 @@ type EgressProxy struct {
 	srv  *http.Server
 	port int
 
+	// dial and requirePort are the production egress guards, held as fields
+	// ONLY so tests can tunnel to an httptest server (loopback, random port)
+	// without weakening the shipped defaults: dialPublic refuses blocked
+	// address ranges and "443" pins CONNECT to HTTPS.
+	dial        func(ctx context.Context, host, port string) (net.Conn, error)
+	requirePort string
+
 	mu     sync.RWMutex
 	tokens map[string][]string // token -> allowlist (lowercased domain patterns)
 }
 
 // NewEgressProxy returns a not-yet-listening proxy. Call Start to bind + serve.
 func NewEgressProxy() *EgressProxy {
-	return &EgressProxy{tokens: make(map[string][]string)}
+	return &EgressProxy{
+		tokens:      make(map[string][]string),
+		dial:        dialPublic,
+		requirePort: "443",
+	}
 }
 
 // Start binds the proxy to 127.0.0.1 on an ephemeral port and serves in a
@@ -119,6 +132,46 @@ func (p *EgressProxy) ProxyURLForToken(token string) string {
 	return fmt.Sprintf("http://%s:@%s:%d", token, slirpHostGateway, p.port)
 }
 
+// errBlockedUpstream marks a CONNECT target that resolved only to blocked
+// (loopback/private/link-local/metadata) address space.
+var errBlockedUpstream = errors.New("egress proxy: destination resolves to a blocked address range")
+
+// dialPublic resolves host, rejects blocked ranges (netguard's list), and
+// dials the exact validated IP — so a concurrent re-resolution (DNS rebinding)
+// can't swap a blocked address in between check and connect. The proxy dials
+// from the HOST network namespace, which is precisely why a private-range
+// target must never be reachable through it.
+func dialPublic(ctx context.Context, host, port string) (net.Conn, error) {
+	dialer := &net.Dialer{Timeout: 10 * time.Second}
+	if ip := net.ParseIP(host); ip != nil {
+		if netguard.IsBlockedIP(ip) {
+			return nil, errBlockedUpstream
+		}
+		return dialer.DialContext(ctx, "tcp", net.JoinHostPort(host, port))
+	}
+	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return nil, fmt.Errorf("resolve %q: %w", host, err)
+	}
+	var lastErr error
+	for _, ipa := range ips {
+		if netguard.IsBlockedIP(ipa.IP) {
+			lastErr = errBlockedUpstream
+			continue
+		}
+		conn, derr := dialer.DialContext(ctx, "tcp", net.JoinHostPort(ipa.IP.String(), port))
+		if derr != nil {
+			lastErr = derr
+			continue
+		}
+		return conn, nil
+	}
+	if lastErr == nil {
+		lastErr = errBlockedUpstream
+	}
+	return nil, lastErr
+}
+
 // handle implements the CONNECT proxy: authenticate the per-turn token, check
 // the CONNECT target host against that token's allowlist, then tunnel raw bytes.
 func (p *EgressProxy) handle(w http.ResponseWriter, r *http.Request) {
@@ -144,16 +197,31 @@ func (p *EgressProxy) handle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	host := r.Host
-	if h, _, err := net.SplitHostPort(r.Host); err == nil {
-		host = h
+	port := "443"
+	if h, pt, err := net.SplitHostPort(r.Host); err == nil {
+		host, port = h, pt
+	}
+	// The allowlist names DOMAINS, not services: without pinning the port,
+	// `CONNECT allowed.example.com:22` rides an HTTPS allowlist entry to
+	// arbitrary TCP. This proxy exists for HTTPS tunneling only.
+	if p.requirePort != "" && port != p.requirePort {
+		http.Error(w, "egress proxy tunnels HTTPS (port 443) only", http.StatusForbidden)
+		return
 	}
 	if !domainAllowed(host, allowlist) {
 		http.Error(w, "destination not permitted by this sandbox's egress allowlist", http.StatusForbidden)
 		return
 	}
 
-	upstream, err := (&net.Dialer{Timeout: 10 * time.Second}).Dial("tcp", r.Host)
+	upstream, err := p.dial(r.Context(), host, port)
 	if err != nil {
+		if errors.Is(err, errBlockedUpstream) {
+			// An allowlist entry resolving to loopback/private/link-local space
+			// would otherwise turn this proxy — which dials from the HOST
+			// netns — into a tunnel to 127.0.0.1 and the LAN.
+			http.Error(w, "destination resolves to a blocked address range", http.StatusForbidden)
+			return
+		}
 		http.Error(w, "upstream dial failed", http.StatusBadGateway)
 		return
 	}
