@@ -65,6 +65,9 @@ type Server struct {
 	webhookRL     *ratelimit.Limiter
 	hasUsers      atomic.Bool
 	lastUserCheck atomic.Int64
+	// verifyLimit bounds pre-login password attempts (see auth_verify.go) —
+	// the chat limiter can't, since it keys by the authenticated user.
+	verifyLimit verifyLimiter
 
 	// llmProvidersChanged rebuilds + swaps the manager's model-resolver routing
 	// table after an admin LLM-provider edit (WithLLMProvidersChanged). nil in
