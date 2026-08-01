@@ -231,6 +231,11 @@ func (h *Handlers) CreateTaskBatch(w http.ResponseWriter, r *http.Request) {
 			validationFailed = true
 			continue
 		}
+		if msg := requireAdminForRunIf(creator.isAdmin, tc.RunIf); msg != "" {
+			failedList = append(failedList, models.BatchFailed{Index: i, Error: msg})
+			validationFailed = true
+			continue
+		}
 		t := models.NewTask(*tc)
 		// Per-key priority ceiling (#230): enforce the SAME cap as the single-task
 		// path, treating an over-cap task as a per-task failure (atomic → whole

@@ -52,3 +52,20 @@ func TestValidateTaskCreate_RunIf(t *testing.T) {
 		}
 	})
 }
+
+// run_if executes on the HOST as the fleet user, so only an admin principal
+// may attach one — structural validation cannot make an arbitrary creator's
+// shell string safe.
+func TestRequireAdminForRunIf(t *testing.T) {
+	gate := &models.RunIf{Command: "true", OnError: models.RunIfOnErrorSkip, TimeoutSeconds: 5}
+
+	if msg := requireAdminForRunIf(false, gate); msg == "" {
+		t.Fatal("non-admin with a run_if gate must be rejected")
+	}
+	if msg := requireAdminForRunIf(true, gate); msg != "" {
+		t.Fatalf("admin rejected: %s", msg)
+	}
+	if msg := requireAdminForRunIf(false, nil); msg != "" {
+		t.Fatalf("non-admin without a gate rejected: %s", msg)
+	}
+}

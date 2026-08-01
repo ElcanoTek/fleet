@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -544,6 +545,10 @@ func (h *Handlers) CreateTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if msg := requireAdminForRunIf(creator.isAdmin, tc.RunIf); msg != "" {
+		writeError(w, http.StatusForbidden, msg)
+		return
+	}
 
 	// Spending-cap pre-flight: refuse a key that has already reached its daily or
 	// monthly LLM budget. Task cost is only known after completion, so this gates
@@ -836,6 +841,18 @@ func (h *Handlers) validateTaskRouting(tc *models.TaskCreate) error {
 		return fmt.Errorf("run_if: %w", err)
 	}
 	return nil
+}
+
+// requireAdminForRunIf enforces the run_if privilege boundary. A run_if gate
+// executes ON THE HOST as the fleet user (scheduler.go documents it as trusted
+// "exactly like the fleet binary itself") — structural validation cannot make
+// an arbitrary creator's shell string safe, so only an admin principal may
+// attach or change one. Returns the 403 message, or "" when allowed.
+func requireAdminForRunIf(isAdmin bool, runIf *models.RunIf) string {
+	if runIf != nil && !isAdmin {
+		return "run_if: a host-side pre-run gate can only be set by an admin"
+	}
+	return ""
 }
 
 func (h *Handlers) validateTaskCreate(tc *models.TaskCreate) error { //nolint:gocyclo // centralized fail-fast validation keeps every create path identical.
@@ -1676,6 +1693,13 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 
 	if err := h.validateTaskCreate(&tc); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	// Same privilege boundary as create, but edit-shaped: a non-admin editing
+	// a task may keep an existing (admin-authorized) gate byte-identical —
+	// clients echo the full record — but may not add, change, or remove one.
+	if !p.isAdmin && !reflect.DeepEqual(tc.RunIf, task.RunIf) {
+		writeError(w, http.StatusForbidden, "run_if: a host-side pre-run gate can only be changed by an admin")
 		return
 	}
 
