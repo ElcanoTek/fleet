@@ -1,11 +1,13 @@
 package sandbox
 
 import (
+	"bufio"
 	"context"
 	"crypto/tls"
 	"encoding/base64"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -68,6 +70,12 @@ func TestEgressProxyTunnel(t *testing.T) {
 	targetHost := tu.Hostname() // "127.0.0.1"
 
 	p := NewEgressProxy()
+	// Test seams: the httptest upstream is loopback on a random port, which
+	// production guards (port-443 pin + blocked-range dial) rightly refuse.
+	p.requirePort = ""
+	p.dial = func(ctx context.Context, host, port string) (net.Conn, error) {
+		return (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, "tcp", net.JoinHostPort(host, port))
+	}
 	if err := p.Start(); err != nil {
 		t.Fatalf("start proxy: %v", err)
 	}
@@ -166,6 +174,57 @@ func TestEgressProxyTunnel(t *testing.T) {
 	t.Run("ProxyURLForToken targets slirp gateway", func(t *testing.T) {
 		if got := p.ProxyURLForToken("tok"); !strings.Contains(got, slirpHostGateway) || !strings.HasPrefix(got, "http://tok:@") {
 			t.Errorf("ProxyURLForToken = %q", got)
+		}
+	})
+}
+
+// The allowlist names DOMAINS, not services: without the port pin, a CONNECT
+// to allowed.example.com:22 rides an HTTPS allowlist entry to arbitrary TCP.
+// And because the proxy dials from the HOST netns, an allowlist entry that
+// resolves to loopback/private space would tunnel the sandbox into 127.0.0.1
+// and the LAN — dialPublic must refuse those ranges.
+func TestEgressProxyProductionGuards(t *testing.T) {
+	p := NewEgressProxy() // production defaults: requirePort=443, dial=dialPublic
+	if err := p.Start(); err != nil {
+		t.Fatalf("start proxy: %v", err)
+	}
+	defer func() { _ = p.Shutdown(context.Background()) }()
+
+	tok, release, err := p.Register([]string{"127.0.0.1", "example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+
+	connect := func(target string) int {
+		conn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", p.Port()))
+		if err != nil {
+			t.Fatalf("dial proxy: %v", err)
+		}
+		defer conn.Close()
+		auth := base64.StdEncoding.EncodeToString([]byte(tok + ":"))
+		fmt.Fprintf(conn, "CONNECT %s HTTP/1.1\r\nHost: %s\r\nProxy-Authorization: Basic %s\r\n\r\n", target, target, auth)
+		resp, err := http.ReadResponse(bufio.NewReader(conn), &http.Request{Method: http.MethodConnect})
+		if err != nil {
+			t.Fatalf("read CONNECT response: %v", err)
+		}
+		defer resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	t.Run("non-443 port refused even for an allowlisted host", func(t *testing.T) {
+		if code := connect("example.com:22"); code != http.StatusForbidden {
+			t.Errorf("CONNECT :22 = %d, want 403", code)
+		}
+	})
+	t.Run("loopback target refused even when allowlisted", func(t *testing.T) {
+		if code := connect("127.0.0.1:443"); code != http.StatusForbidden {
+			t.Errorf("CONNECT 127.0.0.1:443 = %d, want 403", code)
+		}
+	})
+	t.Run("private-range literal refused", func(t *testing.T) {
+		if code := connect("10.1.2.3:443"); code != http.StatusForbidden {
+			t.Errorf("CONNECT 10.1.2.3:443 = %d, want 403", code)
 		}
 	})
 }
