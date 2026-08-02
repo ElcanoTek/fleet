@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -33,6 +34,99 @@ func mcpHTTPStub(t *testing.T, toolName string) *httptest.Server {
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
 	return srv
+}
+
+func TestReloadMCPServers_InjectedBrokerRefreshesPublicState(t *testing.T) {
+	oldCatalog := []mcp.ServerTool{{ServerName: "A", Tool: mcp.Tool{Name: "tool_a"}}}
+	newCatalog := []mcp.ServerTool{{ServerName: "B", Tool: mcp.Tool{Name: "tool_b"}}}
+	var called bool
+	m := &Manager{
+		mcpBroker:         inertMCPBroker{},
+		mcpCatalog:        oldCatalog,
+		mcpAccounts:       map[string][]string{"A": {"old"}},
+		allowlist:         mcpAllowlist{"A": {"tool_a"}},
+		optionalServers:   mcpOptionalSet{"A": true},
+		enabledMCPServers: map[string]bool{"A": true},
+		mcpToolRoster:     []string{"mcp_A_tool_a"},
+	}
+	m.reloadMCP = func(context.Context) (*MCPReloadResult, error) {
+		called = true
+		_, optional := m.mcpGates()
+		if !optional["B"] {
+			t.Error("new optional gate was not published before broker reload")
+		}
+		return &MCPReloadResult{
+			Summary:  mcp.ReloadSummary{Added: []string{"B"}, Removed: []string{"A"}},
+			Catalog:  newCatalog,
+			Accounts: map[string][]string{"B": {"broker-seat"}},
+		}, nil
+	}
+	m.optionalServerMetadata = m.buildOptionalServerMetadata(map[string]MCPServerSpec{
+		"A": {Enabled: true, Optional: true},
+	})
+
+	specs := map[string]MCPServerSpec{
+		"B": {
+			Enabled:       true,
+			Optional:      true,
+			Description:   "the B server",
+			ToolAllowlist: []string{"tool_b"},
+			AccountVars:   []string{"B_TOKEN"},
+		},
+	}
+	summary, err := m.ReloadMCPServers(context.Background(), specs)
+	if err != nil {
+		t.Fatalf("ReloadMCPServers: %v", err)
+	}
+	if !called || len(summary.Added) != 1 || summary.Added[0] != "B" {
+		t.Fatalf("called=%v summary=%+v", called, summary)
+	}
+	if got := m.MCPCatalog(); len(got) != 1 || got[0].ServerName != "B" || got[0].Tool.Name != "tool_b" {
+		t.Fatalf("catalog = %+v, want B.tool_b", got)
+	}
+	_, gotRoster := m.mcpRosterSnapshot()
+	if got := gotRoster; len(got) != 1 || got[0] != "mcp_B_tool_b" {
+		t.Fatalf("roster = %v, want mcp_B_tool_b", got)
+	}
+	picker := m.MCPServerCatalog()
+	if len(picker) < 1 || picker[0].Name != "B" || len(picker[0].Accounts) != 1 || picker[0].Accounts[0] != "broker-seat" {
+		t.Fatalf("picker = %+v, want B with broker-seat", picker)
+	}
+}
+
+func TestReloadMCPServers_InjectedBrokerFailureRevertsGates(t *testing.T) {
+	wantErr := errors.New("broker reload failed")
+	m := &Manager{
+		mcpBroker:         inertMCPBroker{},
+		mcpCatalog:        []mcp.ServerTool{{ServerName: "A", Tool: mcp.Tool{Name: "tool_a"}}},
+		allowlist:         mcpAllowlist{"A": {"tool_a"}},
+		optionalServers:   mcpOptionalSet{"A": true},
+		enabledMCPServers: map[string]bool{"A": true},
+		reloadMCP: func(context.Context) (*MCPReloadResult, error) {
+			return nil, wantErr
+		},
+	}
+	_, err := m.ReloadMCPServers(context.Background(), map[string]MCPServerSpec{
+		"B": {Enabled: true, Optional: true},
+	})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("ReloadMCPServers = %v, want %v", err, wantErr)
+	}
+	allow, optional := m.mcpGates()
+	if !optional["A"] || optional["B"] || len(allow["A"]) != 1 || !m.enabledMCPServers["A"] || m.enabledMCPServers["B"] {
+		t.Fatalf("gates not reverted: allow=%v optional=%v enabled=%v", allow, optional, m.enabledMCPServers)
+	}
+	if got := m.MCPCatalog(); len(got) != 1 || got[0].ServerName != "A" {
+		t.Fatalf("catalog changed on failed reload: %+v", got)
+	}
+}
+
+func TestReloadMCPServers_InjectedBrokerWithoutReloadSeamFails(t *testing.T) {
+	m := &Manager{mcpBroker: inertMCPBroker{}}
+	_, err := m.ReloadMCPServers(context.Background(), nil)
+	if err == nil || err.Error() != "MCP reload unavailable for injected broker" {
+		t.Fatalf("ReloadMCPServers = %v, want explicit unavailable error", err)
+	}
 }
 
 func TestSpecsToServerDefs(t *testing.T) {

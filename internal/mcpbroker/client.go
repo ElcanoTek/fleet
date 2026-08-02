@@ -319,7 +319,19 @@ func (c *Client) Reload(ctx context.Context) (*ReloadResult, error) {
 	result.Summary.Removed = append([]string(nil), resp.Reload.Summary.Removed...)
 	result.Summary.Restarted = append([]string(nil), resp.Reload.Summary.Restarted...)
 	result.Summary.Unchanged = append([]string(nil), resp.Reload.Summary.Unchanged...)
+	result.Accounts = cloneAccounts(resp.Reload.Accounts)
 	return &result, nil
+}
+
+func cloneAccounts(src map[string][]string) map[string][]string {
+	if src == nil {
+		return nil
+	}
+	dst := make(map[string][]string, len(src))
+	for server, accounts := range src {
+		dst[server] = append([]string(nil), accounts...)
+	}
+	return dst
 }
 
 // Close tears down the reader and fails outstanding calls, then closes the conn.

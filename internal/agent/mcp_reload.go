@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"strings"
 	"time"
@@ -114,8 +115,9 @@ func MCPServerDefs(specs map[string]MCPServerSpec) []mcp.ServerDef {
 // ReloadMCPServers hot-reloads the MCP catalog from a freshly re-read spec map
 // (#218): it diffs newSpecs against the live client and applies the minimum set
 // of server add/remove/restart mutations WITHOUT tearing down unchanged servers,
-// then atomically swaps the spec-derived gating (allowlist / optional-set /
-// tool-roster / picker metadata) so the next turn sees the new catalog. Existing
+// prepublishes safety gating (allowlist / optional-set), then atomically swaps
+// the public catalog / tool-roster / picker metadata so the next turn sees the
+// new catalog. Existing
 // in-flight turns and scheduled runs finish on their current roster; the change
 // takes effect on the NEXT interactive turn (which rebuilds its tool set) and
 // the next scheduled run. The synthetic inline http-tools catalog (#261) is not
@@ -124,7 +126,10 @@ func MCPServerDefs(specs map[string]MCPServerSpec) []mcp.ServerDef {
 // Only operator-configured (bundle-manifest) servers are managed here; per-user
 // remote-MCP overlays (#443/#449) are built fresh per turn and are untouched.
 func (m *Manager) ReloadMCPServers(ctx context.Context, newSpecs map[string]MCPServerSpec) (*mcp.ReloadSummary, error) {
-	if m.mcpClient == nil {
+	if m.mcpClient == nil && m.reloadMCP == nil {
+		if m.mcpBroker != nil {
+			return nil, errors.New("MCP reload unavailable for injected broker")
+		}
 		return &mcp.ReloadSummary{}, nil
 	}
 	// Serialize the whole reload so the client reload + gating swap land as a
@@ -149,7 +154,9 @@ func (m *Manager) ReloadMCPServers(ctx context.Context, newSpecs map[string]MCPS
 			optional[name] = true
 		}
 		enabledServers[name] = true
-		accounts[name] = creds.AccountsFor(spec.AccountVars)
+		if m.mcpClient != nil {
+			accounts[name] = creds.AccountsFor(spec.AccountVars)
+		}
 	}
 
 	// Publish the allowlist + optional-set BEFORE the client gains new servers, so
@@ -164,6 +171,13 @@ func (m *Manager) ReloadMCPServers(ctx context.Context, newSpecs map[string]MCPS
 	m.optionalServers = optional
 	m.enabledMCPServers = enabledServers
 	m.mcpGatingMu.Unlock()
+	revertGates := func() {
+		m.mcpGatingMu.Lock()
+		m.allowlist = prevAllow
+		m.optionalServers = prevOptional
+		m.enabledMCPServers = prevEnabled
+		m.mcpGatingMu.Unlock()
+	}
 
 	// Bound the reload like boot bounds initial registration (60s): a stdio
 	// server that starts but never answers `initialize` would otherwise block
@@ -173,25 +187,45 @@ func (m *Manager) ReloadMCPServers(ctx context.Context, newSpecs map[string]MCPS
 	// all-or-nothing and the gate revert below restores consistency.
 	reloadCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
-	summary, err := m.mcpClient.Reload(reloadCtx, MCPServerDefs(newSpecs))
+	var (
+		summary *mcp.ReloadSummary
+		catalog []mcp.ServerTool
+		err     error
+	)
+	if m.mcpClient != nil {
+		summary, err = m.mcpClient.Reload(reloadCtx, MCPServerDefs(newSpecs))
+		if err == nil {
+			catalog = m.mcpClient.GetAllTools()
+		}
+	} else {
+		var result *MCPReloadResult
+		result, err = m.reloadMCP(reloadCtx)
+		if err == nil && result == nil {
+			err = errors.New("MCP reload seam returned an empty result")
+		}
+		if err == nil {
+			summary = &mcp.ReloadSummary{
+				Added:     append([]string(nil), result.Summary.Added...),
+				Removed:   append([]string(nil), result.Summary.Removed...),
+				Restarted: append([]string(nil), result.Summary.Restarted...),
+				Unchanged: append([]string(nil), result.Summary.Unchanged...),
+			}
+			catalog = cloneMCPCatalog(result.Catalog)
+			accounts = cloneMCPAccounts(result.Accounts)
+		}
+	}
 	if err != nil {
-		m.mcpGatingMu.Lock()
-		m.allowlist = prevAllow
-		m.optionalServers = prevOptional
-		m.enabledMCPServers = prevEnabled
-		m.mcpGatingMu.Unlock()
+		revertGates()
 		return summary, err
 	}
+	// Derive every public view from the same returned catalog/account snapshot,
+	// then publish them together. A turn or picker request must never observe a
+	// new catalog paired with the previous roster or account metadata.
+	roster := computeMCPToolRosterFromCatalog(catalog, allow)
+	metadata := buildOptionalServerMetadataFromCatalog(newSpecs, catalog, accounts)
 	m.mcpGatingMu.Lock()
-	m.mcpCatalog = m.mcpClient.GetAllTools()
+	m.mcpCatalog = catalog
 	m.mcpAccounts = accounts
-	m.mcpGatingMu.Unlock()
-
-	// Refresh the roster (prefixed tool-name list for the system prompt) and the
-	// picker metadata — both read the now-reloaded client — and swap them in.
-	roster := m.computeMCPToolRoster(allow)
-	metadata := m.buildOptionalServerMetadata(newSpecs)
-	m.mcpGatingMu.Lock()
 	m.mcpToolRoster = roster
 	m.optionalServerMetadata = metadata
 	m.mcpGatingMu.Unlock()
