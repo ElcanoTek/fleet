@@ -41,14 +41,18 @@ advertised to the model, but every `mcp_*` call is executed by fixed host-side
 code against a credentialed client. The `mcpbroker` package and `fleet
 mcp-broker` subprocess implement the intended out-of-process boundary, including
 value-free, incident-correlated responses when broker call or discovery code
-panics.
+panics. Its internal [scoped-session protocol](MCP-BROKER-SCOPES.md) can also
+open a per-run client from non-secret account/task/workspace identifiers and
+route calls through an opaque scope ID, which is required before scheduled runs
+with different account selections can share the subprocess safely.
 
 **Current limitation (#167, reopened):** the server does not yet spawn that
 subprocess in production; `agent.New` still owns the credentialed client in the
 main fleet process. Credentials remain outside the sandbox and model context,
 but they are not yet isolated from the agent loop's address space. Do not treat
 the existing broker code as a shipped process-isolation boundary until #167's
-switch-on work lands.
+switch-on work lands. The scoped protocol is a tested prerequisite, not that
+switch-on.
 
 ### Lockdown / network-sealed sandboxes
 

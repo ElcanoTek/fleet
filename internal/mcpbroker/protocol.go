@@ -47,6 +47,14 @@ const (
 	// resolves them against ITS environment (where the secrets live), so the main
 	// process need not hold them.
 	methodListAccounts method = "list_accounts"
+	// methodOpenScope asks the credential-owning process to construct an isolated
+	// per-run MCP client from public account selections and task identity. The
+	// response carries an opaque scope ID plus that scope's discovered tools.
+	methodOpenScope method = "scope_open"
+	// methodCloseScope releases one isolated per-run MCP client. Scope calls use
+	// methodCall with request.Scope set, preserving one call envelope and one
+	// agentcore.MCPBroker seam.
+	methodCloseScope method = "scope_close"
 )
 
 // ToolDescriptor is one entry of the broker's tool catalog — the public shape of
@@ -56,6 +64,21 @@ type ToolDescriptor struct {
 	Tool        string         `json:"tool"`
 	Description string         `json:"description,omitempty"`
 	InputSchema map[string]any `json:"inputSchema,omitempty"`
+}
+
+// ScopeChoice selects one named account for a server. Both fields are public
+// configuration identifiers; credential values are resolved only by the broker.
+type ScopeChoice struct {
+	Server  string `json:"server"`
+	Account string `json:"account"`
+}
+
+// ScopeSpec is the non-secret input needed to build a per-run MCP client in the
+// credential-owning process. Workspace is a path, not workspace contents.
+type ScopeSpec struct {
+	Selection []ScopeChoice `json:"selection,omitempty"`
+	TaskID    string        `json:"taskId,omitempty"`
+	Workspace string        `json:"workspace,omitempty"`
 }
 
 // request is a client -> server frame. The server only ever decodes requests; the
@@ -73,6 +96,10 @@ type request struct {
 	Server string         `json:"server,omitempty"`
 	Tool   string         `json:"tool,omitempty"`
 	Args   map[string]any `json:"args,omitempty"`
+	// Scope is an opaque broker-issued per-run scope ID. It is set on scoped calls
+	// and scope_close; scope_open carries ScopeSpec instead.
+	Scope     string    `json:"scope,omitempty"`
+	ScopeSpec ScopeSpec `json:"scopeSpec,omitempty"`
 	// BaseVars names the env-var bases of a server's credential seat, for
 	// methodListAccounts (the broker scans ITS env for <BASE>_<ACCOUNT> variants).
 	BaseVars []string `json:"baseVars,omitempty"`
@@ -99,4 +126,6 @@ type response struct {
 	// public catalog data (no credentials).
 	Tools    []ToolDescriptor `json:"tools,omitempty"`
 	Accounts []string         `json:"accounts,omitempty"`
+	// Scope answers methodOpenScope with the broker-issued opaque ID.
+	Scope string `json:"scope,omitempty"`
 }

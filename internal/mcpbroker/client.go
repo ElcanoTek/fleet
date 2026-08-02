@@ -16,6 +16,8 @@ import (
 // whose connection has closed (peer hangup, transport error, or Close).
 var errClientClosed = errors.New("mcpbroker: client connection closed")
 
+var errScopeClosed = errors.New("mcpbroker: scope closed")
+
 // Client forwards agentcore.MCPBroker calls to a Server over a connection. It is a
 // drop-in MCPBroker for the agent loop: the loop calls CallMCP exactly as it would
 // the in-process localMCPBroker, but the credentialed work runs in the Server's
@@ -58,9 +60,14 @@ func NewClient(conn io.ReadWriteCloser) *Client {
 // in-process localMCPBroker returns, so the Client is interchangeable with it. The
 // tool-level isError (resp.Err == "") stays distinct from a transport error.
 func (c *Client) CallMCP(ctx context.Context, server, tool string, args map[string]any) (string, bool, error) {
+	return c.callMCP(ctx, "", server, tool, args)
+}
+
+func (c *Client) callMCP(ctx context.Context, scope, server, tool string, args map[string]any) (string, bool, error) {
 	resp, err := c.roundtrip(ctx, request{
 		ID:     c.nextID.Add(1),
 		Method: methodCall,
+		Scope:  scope,
 		Server: server,
 		Tool:   tool,
 		Args:   args,
@@ -72,6 +79,176 @@ func (c *Client) CallMCP(ctx context.Context, server, tool string, args map[stri
 		return resp.Text, resp.IsError, errors.New(resp.Err)
 	}
 	return resp.Text, resp.IsError, nil
+}
+
+// Scope is an isolated per-run MCP client owned by the broker process. Its ID is
+// opaque to the caller; Scope implements the same agentcore.MCPBroker seam as
+// Client while attaching that ID to every call.
+//
+// A Scope is safe for concurrent use. Close waits for its active calls, prevents
+// new calls, and may be retried if the close request fails.
+type Scope struct {
+	client *Client
+	id     string
+	tools  []ToolDescriptor
+
+	mu        sync.Mutex
+	active    int
+	closing   bool
+	closed    bool
+	drained   chan struct{}
+	closeGate chan struct{}
+}
+
+var _ agentcore.MCPBroker = (*Scope)(nil)
+
+// OpenScope asks the broker to construct a per-run client from spec. Spec carries
+// account names and task identity only; connector credential values never cross
+// this connection.
+func (c *Client) OpenScope(ctx context.Context, spec ScopeSpec) (*Scope, error) {
+	resp, err := c.roundtrip(ctx, request{
+		ID:        c.nextID.Add(1),
+		Method:    methodOpenScope,
+		ScopeSpec: spec,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if resp.Err != "" {
+		return nil, errors.New(resp.Err)
+	}
+	if resp.Scope == "" {
+		return nil, errors.New("mcpbroker: scope_open returned an empty scope ID")
+	}
+	return &Scope{
+		client:    c,
+		id:        resp.Scope,
+		tools:     cloneToolDescriptors(resp.Tools),
+		closeGate: make(chan struct{}, 1),
+	}, nil
+}
+
+// CallMCP runs server.tool within this scope.
+func (s *Scope) CallMCP(ctx context.Context, server, tool string, args map[string]any) (string, bool, error) {
+	s.mu.Lock()
+	if s.closed || s.closing {
+		s.mu.Unlock()
+		return "", false, errScopeClosed
+	}
+	s.active++
+	s.mu.Unlock()
+	defer s.finishCall()
+	return s.client.callMCP(ctx, s.id, server, tool, args)
+}
+
+func (s *Scope) finishCall() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.active--
+	if s.active == 0 && s.closing && s.drained != nil {
+		close(s.drained)
+		s.drained = nil
+	}
+}
+
+// Tools returns the public tool catalog discovered for this scope.
+func (s *Scope) Tools() []ToolDescriptor {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return cloneToolDescriptors(s.tools)
+}
+
+func cloneToolDescriptors(src []ToolDescriptor) []ToolDescriptor {
+	dst := make([]ToolDescriptor, len(src))
+	for i, tool := range src {
+		dst[i] = tool
+		if tool.InputSchema != nil {
+			dst[i].InputSchema = cloneJSONObject(tool.InputSchema)
+		}
+	}
+	return dst
+}
+
+func cloneJSONObject(src map[string]any) map[string]any {
+	dst := make(map[string]any, len(src))
+	for key, value := range src {
+		dst[key] = cloneJSONValue(value)
+	}
+	return dst
+}
+
+func cloneJSONValue(value any) any {
+	switch value := value.(type) {
+	case map[string]any:
+		return cloneJSONObject(value)
+	case []any:
+		dst := make([]any, len(value))
+		for i := range value {
+			dst[i] = cloneJSONValue(value[i])
+		}
+		return dst
+	default:
+		return value
+	}
+}
+
+// Close releases this scope in the broker. A failed close leaves the scope open
+// so callers can retry; a successful close is idempotent locally.
+func (s *Scope) Close(ctx context.Context) error {
+	select {
+	case s.closeGate <- struct{}{}:
+		defer func() { <-s.closeGate }()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil
+	}
+	s.closing = true
+	var drained <-chan struct{}
+	if s.active > 0 {
+		s.drained = make(chan struct{})
+		drained = s.drained
+	}
+	s.mu.Unlock()
+
+	if drained != nil {
+		select {
+		case <-drained:
+		case <-ctx.Done():
+			s.reopenAfterCloseFailure()
+			return ctx.Err()
+		}
+	}
+
+	resp, err := s.client.roundtrip(ctx, request{
+		ID:     s.client.nextID.Add(1),
+		Method: methodCloseScope,
+		Scope:  s.id,
+	})
+	if err != nil {
+		s.reopenAfterCloseFailure()
+		return err
+	}
+	if resp.Err != "" {
+		s.reopenAfterCloseFailure()
+		return errors.New(resp.Err)
+	}
+	s.mu.Lock()
+	s.closed = true
+	s.closing = false
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *Scope) reopenAfterCloseFailure() {
+	s.mu.Lock()
+	s.closing = false
+	s.drained = nil
+	s.mu.Unlock()
 }
 
 // Ping confirms the Server is up and serving. It returns nil on a reply, or the
