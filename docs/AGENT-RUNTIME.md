@@ -89,6 +89,14 @@ number of live persistent sandboxes is capped at `FLEET_PYTHON_REPL_MAX`
 (default **32**, LRU-evicting the least-recently-used idle one). It carries the
 same cgroup memory/CPU/PID/disk caps as a per-turn sandbox.
 
+Process shutdown is a hard lifecycle boundary for both modes. Once `Pool.Close`
+marks the sandbox pool closed, new per-turn, persistent, lockdown, and
+allowlisted takes fail with `ErrClosed`; a cold start already in progress is
+reaped if it finishes after that boundary. The pool is marked closed before its
+host-side egress proxy is stopped, so no allowlisted container can be returned
+with a proxy that was already shut down. This is fail-closed resource lifecycle
+behavior, not a host execution fallback.
+
 Independent of mode, `FLEET_PYTHON_CELL_TIMEOUT` (default **0** = disabled) is a
 host-operator ceiling on a single cell; the effective per-cell timeout is
 `min(the call's timeout_seconds, this)`.
