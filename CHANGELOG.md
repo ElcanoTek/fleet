@@ -77,6 +77,17 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Chat input queues no longer grow forever or drain tied positions
+  nondeterministically** (#835). Completed/cancelled rows are now purged after
+  `FLEET_INPUT_QUEUE_RETENTION_DAYS` (30 days by default; `0` disables), at boot
+  and after turns; pending/running/injected work is never retention-eligible.
+  Enqueue and send-now position allocation now serialize per conversation, a
+  partial unique index makes non-terminal positions structurally unique,
+  migration 046 deterministically normalizes legacy ties (including rows that
+  recovery may re-queue), and drain/list queries carry `created_at, id`
+  tie-breakers. Fresh enqueue acknowledgements also return the database-assigned
+  position instead of an incorrect zero value.
+
 - **Every deployment's shared links unfurled with Elcano's logo** (#893). The
   `og:image` / `twitter:image` was a checked-in `web/public/share.png` containing
   Elcano's logo and wordmark, fleet's purple gradient, and fleet's marketing

@@ -427,7 +427,7 @@ func run() error {
 	// Stranded-turn recovery (#798): project any turn left 'running' by a crash
 	// into canonical history. Runs AFTER SetSearchEnabled (projection writes
 	// FTS rows) and BEFORE the HTTP server serves.
-	recoverStrandedTurns(chatStore)
+	recoverStrandedTurns(chatStore, cfg.InputQueueRetentionDays)
 	if cfg.SearchEnabled {
 		safe.Go("store.fts-backfill", func() {
 			bfCtx, bfCancel := context.WithTimeout(context.Background(), 30*time.Minute)
@@ -2506,7 +2506,7 @@ func (a *taskMemoryAdapter) ListTaskMemories(ctx context.Context, taskID uuid.UU
 // turn_events, one explicit interrupted turn per crash. A failure logs loudly
 // but does not abort boot: the DB may be degraded, and the affected turns stay
 // 'running' for the next boot to retry. See docs/TURN-JOURNAL.md + ADR-0039.
-func recoverStrandedTurns(chatStore *store.Store) {
+func recoverStrandedTurns(chatStore *store.Store, inputQueueRetentionDays int) {
 	recCtx, recCancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer recCancel()
 	recovered, err := chatStore.RecoverStrandedTurns(recCtx)
@@ -2529,5 +2529,14 @@ func recoverStrandedTurns(chatStore *store.Store) {
 		log.Printf("input-queue recovery: %v", qerr)
 	} else if requeued+completed+cancelled > 0 {
 		log.Printf("input-queue recovery: %d input(s) re-queued, %d completed, %d cancelled (post-injection side effects; not re-run)", requeued, completed, cancelled) //nolint:gosec // G706: three int counts — no request input.
+	}
+	// Reclaim terminal idempotency rows at boot as well as after turns. Recovery
+	// runs first so a stranded non-terminal row is resolved before retention is
+	// considered; non-terminal rows are never eligible for deletion.
+	if purged, err := chatStore.PurgeTerminalInputs(recCtx,
+		time.Duration(inputQueueRetentionDays)*24*time.Hour); err != nil {
+		log.Printf("input-queue startup purge: %v", err)
+	} else if purged > 0 {
+		log.Printf("input-queue startup purge: removed %d terminal row(s)", purged) //nolint:gosec // G706: purged is an integer database row count, never request-authored text.
 	}
 }

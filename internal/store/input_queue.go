@@ -49,7 +49,21 @@ type InputQueueRow struct {
 func (s *Store) EnqueueInput(ctx context.Context, r InputQueueRow) (InputQueueRow, bool, error) {
 	now := time.Now().Unix()
 	r.CreatedAt, r.UpdatedAt, r.State = now, now, InputStateQueued
-	res, err := s.db.ExecContext(ctx,
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return InputQueueRow{}, false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// Position allocation is a read-then-write operation. Serialize it on the
+	// owning conversation row so concurrent submissions cannot choose the same
+	// MAX(position)+1. The schema's non-terminal partial unique index is the
+	// final backstop;
+	// this lock avoids turning ordinary concurrency into a constraint error.
+	if err := lockInputQueueConversation(ctx, tx, r.ConversationID); err != nil {
+		return InputQueueRow{}, false, err
+	}
+	res, err := tx.ExecContext(ctx,
 		`INSERT INTO chat_input_queue
 		   (id, conversation_id, user_email, client_input_id, message, attachments, mode, state, position, created_at, updated_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
@@ -61,14 +75,28 @@ func (s *Store) EnqueueInput(ctx context.Context, r InputQueueRow) (InputQueueRo
 	if err != nil {
 		return InputQueueRow{}, false, err
 	}
+	created := false
 	if n, _ := res.RowsAffected(); n == 1 {
-		return r, true, nil
+		created = true
 	}
-	existing, err := s.getInputByClientID(ctx, r.ConversationID, r.ClientInputID)
+	// Read the stored row even on a fresh insert so the caller receives the
+	// database-assigned position rather than the input struct's zero value.
+	stored, err := scanInputRow(tx.QueryRowContext(ctx,
+		inputQueueSelect+` WHERE conversation_id = $1 AND client_input_id = $2`,
+		r.ConversationID, r.ClientInputID))
 	if err != nil {
 		return InputQueueRow{}, false, err
 	}
-	return existing, false, nil
+	if err := tx.Commit(); err != nil {
+		return InputQueueRow{}, false, err
+	}
+	return stored, created, nil
+}
+
+func lockInputQueueConversation(ctx context.Context, tx *sql.Tx, convID string) error {
+	var id string
+	return tx.QueryRowContext(ctx,
+		`SELECT id FROM conversations WHERE id = $1 FOR UPDATE`, convID).Scan(&id)
 }
 
 func (s *Store) getInputByClientID(ctx context.Context, convID, clientID string) (InputQueueRow, error) {
@@ -96,7 +124,7 @@ func (s *Store) ListQueuedInputs(ctx context.Context, userEmail, convID string) 
 	rows, err := s.db.QueryContext(ctx,
 		inputQueueSelect+` WHERE conversation_id = $1 AND user_email = $2
 		    AND state IN ('queued','running','injected')
-		  ORDER BY position`, convID, userEmail)
+		  ORDER BY position, created_at, id`, convID, userEmail)
 	if err != nil {
 		return nil, err
 	}
@@ -132,7 +160,7 @@ func (s *Store) ClaimNextQueuedInput(ctx context.Context, convID, turnID string)
 		`UPDATE chat_input_queue SET state = 'running', turn_id = $2, updated_at = $3
 		  WHERE id = (SELECT id FROM chat_input_queue
 		               WHERE conversation_id = $1 AND state = 'queued'
-		               ORDER BY position LIMIT 1
+		               ORDER BY position, created_at, id LIMIT 1
 		                 FOR UPDATE SKIP LOCKED)
 		 RETURNING id, conversation_id, user_email, client_input_id, message, attachments,
 		           mode, state, position, COALESCE(turn_id, ''), created_at, updated_at`,
@@ -219,7 +247,17 @@ func (s *Store) RemoveQueuedInput(ctx context.Context, userEmail, convID, id str
 // (send-now while idle drains it first; while busy the driver additionally
 // offers it to the running turn's steer mailbox).
 func (s *Store) PromoteQueuedInput(ctx context.Context, userEmail, convID, id string) (bool, error) {
-	res, err := s.db.ExecContext(ctx,
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	// Promotion uses MIN(position)-1 and therefore shares the same allocator
+	// lock as enqueue. This keeps simultaneous send-now requests distinct.
+	if err := lockInputQueueConversation(ctx, tx, convID); err != nil {
+		return false, err
+	}
+	res, err := tx.ExecContext(ctx,
 		`UPDATE chat_input_queue
 		    SET position = (SELECT COALESCE(MIN(position), 1) - 1 FROM chat_input_queue WHERE conversation_id = $2),
 		        updated_at = $4
@@ -229,7 +267,32 @@ func (s *Store) PromoteQueuedInput(ctx context.Context, userEmail, convID, id st
 		return false, err
 	}
 	n, err := res.RowsAffected()
-	return n == 1, err
+	if err != nil {
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return n == 1, nil
+}
+
+// PurgeTerminalInputs deletes completed/cancelled queue rows whose terminal
+// transition is older than retention. Pending, running, and injected rows are
+// never retention candidates: they remain durable until their lifecycle is
+// resolved. A non-positive retention disables the purge.
+func (s *Store) PurgeTerminalInputs(ctx context.Context, retention time.Duration) (int, error) {
+	if retention <= 0 {
+		return 0, nil
+	}
+	cutoff := time.Now().Add(-retention).Unix()
+	res, err := s.db.ExecContext(ctx,
+		`DELETE FROM chat_input_queue
+		  WHERE state IN ('completed','cancelled') AND updated_at < $1`, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	n, err := res.RowsAffected()
+	return int(n), err
 }
 
 // RecoverInputQueue runs at boot, after RecoverStrandedTurns. Rows claimed or

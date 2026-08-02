@@ -15,8 +15,10 @@
 // Unpinned conversations expire after CONVERSATION_TTL_DAYS (default 14) of
 // inactivity. Pinned, archived, shared, and project-bound (#509)
 // conversations are exempt from TTL and cap eviction and are kept
-// indefinitely. The [Store.SweepExpired] routine runs at server startup and
-// after every successful turn.
+// indefinitely. The [Store.SweepExpired] routine runs after every successful
+// turn. Terminal input-queue rows retain their idempotency keys for
+// FLEET_INPUT_QUEUE_RETENTION_DAYS (default 30) and are purged at boot and
+// after turns; non-terminal queue rows are never retention candidates.
 //
 // # Schema
 //

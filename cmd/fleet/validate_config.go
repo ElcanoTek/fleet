@@ -176,10 +176,11 @@ func checkEnvVars(cfg *config.Config, cfgErr error) checkResult {
 
 // validateOptionalEnvVars checks the optional numeric env vars that config.Load
 // silently falls back to a default on when malformed. A SET-but-malformed value
-// is an operator error worth surfacing: FLEET_MAX_COST_USD must be a positive
-// float and FLEET_MAX_CONCURRENT_AGENTS a positive int. Unset values are fine
-// (the default applies). It reads the env directly (not cfg) so it can tell
-// "unset" from "set to garbage that fell back to the default".
+// is an operator error worth surfacing: the spend/concurrency bounds must be
+// positive, while the input-queue retention window is non-negative (zero
+// explicitly disables it). Unset values are fine (the default applies). It
+// reads the env directly (not cfg) so it can tell "unset" from "set to garbage
+// that fell back to the default".
 //
 // NOTE: issue #248 also lists "FLEET_DEFAULT_RUNTIME a known flavor". fleet has
 // no such process-level env var — the runtime flavor is a per-task field, not a
@@ -195,6 +196,11 @@ func validateOptionalEnvVars() []string {
 	if raw, ok := lookupFleetEnv("MAX_CONCURRENT_AGENTS"); ok {
 		if n, err := strconv.Atoi(strings.TrimSpace(raw)); err != nil || n <= 0 {
 			problems = append(problems, "FLEET_MAX_CONCURRENT_AGENTS must be a positive integer")
+		}
+	}
+	if raw, ok := lookupFleetEnv("INPUT_QUEUE_RETENTION_DAYS"); ok {
+		if n, err := strconv.Atoi(strings.TrimSpace(raw)); err != nil || n < 0 {
+			problems = append(problems, "FLEET_INPUT_QUEUE_RETENTION_DAYS must be a non-negative integer")
 		}
 	}
 	return problems

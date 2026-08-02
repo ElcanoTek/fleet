@@ -43,6 +43,7 @@ func TestValidateOptionalEnvVars(t *testing.T) {
 	// Unset: no problems.
 	t.Setenv("FLEET_MAX_COST_USD", "")
 	t.Setenv("FLEET_MAX_CONCURRENT_AGENTS", "")
+	t.Setenv("FLEET_INPUT_QUEUE_RETENTION_DAYS", "")
 	if p := validateOptionalEnvVars(); len(p) != 0 {
 		t.Errorf("unset should be clean, got %v", p)
 	}
@@ -50,6 +51,7 @@ func TestValidateOptionalEnvVars(t *testing.T) {
 	// Well-formed.
 	t.Setenv("FLEET_MAX_COST_USD", "12.5")
 	t.Setenv("FLEET_MAX_CONCURRENT_AGENTS", "8")
+	t.Setenv("FLEET_INPUT_QUEUE_RETENTION_DAYS", "30")
 	if p := validateOptionalEnvVars(); len(p) != 0 {
 		t.Errorf("well-formed should be clean, got %v", p)
 	}
@@ -65,6 +67,17 @@ func TestValidateOptionalEnvVars(t *testing.T) {
 	t.Setenv("FLEET_MAX_CONCURRENT_AGENTS", "0")
 	if p := validateOptionalEnvVars(); len(p) != 1 || !strings.Contains(p[0], "FLEET_MAX_CONCURRENT_AGENTS") {
 		t.Errorf("zero concurrency should flag, got %v", p)
+	}
+	t.Setenv("FLEET_MAX_CONCURRENT_AGENTS", "8")
+
+	// Zero explicitly disables terminal queue-row retention; negative is invalid.
+	t.Setenv("FLEET_INPUT_QUEUE_RETENTION_DAYS", "0")
+	if p := validateOptionalEnvVars(); len(p) != 0 {
+		t.Errorf("zero input queue retention should be valid, got %v", p)
+	}
+	t.Setenv("FLEET_INPUT_QUEUE_RETENTION_DAYS", "-1")
+	if p := validateOptionalEnvVars(); len(p) != 1 || !strings.Contains(p[0], "FLEET_INPUT_QUEUE_RETENTION_DAYS") {
+		t.Errorf("negative input queue retention should flag, got %v", p)
 	}
 }
 
