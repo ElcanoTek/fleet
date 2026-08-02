@@ -70,8 +70,11 @@ type Manager struct {
 	// openMCPScope creates one isolated broker-owned client for an interactive
 	// turn. Nil preserves the shared-client compatibility path.
 	openMCPScope MCPScopeOpener
-	mcpAccounts  map[string][]string
-	allowlist    mcpAllowlist
+	// reloadMCP refreshes the credential-owning child and returns only public
+	// state. Nil in broker mode makes operator reload fail explicitly.
+	reloadMCP   MCPReloader
+	mcpAccounts map[string][]string
+	allowlist   mcpAllowlist
 
 	// mcpGatingMu guards the MCP catalog/spec-derived gating fields below
 	// (allowlist, mcpToolRoster, optionalServers, enabledMCPServers,

@@ -152,6 +152,7 @@ func TestBrokerBackend_CloseReapsOutstandingScopes(t *testing.T) {
 func TestBrokerBackend_ReloadRefreshesFutureScopesAndPreservesActiveScope(t *testing.T) {
 	b := newBrokerBackendForScopeTest(t)
 	t.Cleanup(func() { _ = b.Close() })
+	t.Setenv("TEST_SCOPE_TOKEN_BLUE", "reloaded-account-token")
 	b.reloadConfig = func() (*config.Config, error) {
 		return &config.Config{MCPServers: map[string]config.MCPServerConfig{
 			"acct": {
@@ -163,7 +164,8 @@ func TestBrokerBackend_ReloadRefreshesFutureScopesAndPreservesActiveScope(t *tes
 					"TEST_TASK_ID":     "${FLEET_TASK_ID}",
 					"TEST_WORKSPACE":   "${FLEET_WORKSPACE}",
 				},
-				Enabled: true,
+				Enabled:     true,
+				AccountVars: []string{"TEST_SCOPE_TOKEN"},
 			},
 		}}, nil
 	}
@@ -183,6 +185,9 @@ func TestBrokerBackend_ReloadRefreshesFutureScopesAndPreservesActiveScope(t *tes
 	}
 	if len(result.Tools) != 1 || result.Tools[0].Server != "acct" || result.Tools[0].Tool != "identity" {
 		t.Fatalf("reload tools = %+v, want refreshed acct.identity", result.Tools)
+	}
+	if len(result.Accounts["acct"]) != 1 || result.Accounts["acct"][0] != "blue" {
+		t.Fatalf("reload accounts = %+v, want acct:[blue]", result.Accounts)
 	}
 
 	oldText, _, err := b.CallMCPInScope(ctx, oldID, "acct", "identity", nil)

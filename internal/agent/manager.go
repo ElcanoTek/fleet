@@ -224,6 +224,10 @@ type ManagerOptions struct {
 	MCPBroker    agentcore.MCPBroker
 	MCPCatalog   []mcp.ServerTool
 	OpenMCPScope MCPScopeOpener
+	// ReloadMCP asks an injected credential owner to reload its own catalog and
+	// return public metadata. Nil is accepted for transitional embedders, but a
+	// broker-mode reload then fails explicitly instead of silently succeeding.
+	ReloadMCP MCPReloader
 	// MCPAccounts contains public credential-seat names keyed by server. It lets
 	// the picker avoid scanning connector environment variables in broker mode.
 	MCPAccounts map[string][]string
@@ -242,6 +246,19 @@ type MCPScope struct {
 // broker scope rooted at workspace. Credential resolution remains behind the
 // opener's process boundary.
 type MCPScopeOpener func(ctx context.Context, selection agentcore.MCPSelection, workspace string) (*MCPScope, error)
+
+// MCPReloadResult is the public post-reload state returned by an injected
+// credential owner. It contains configuration identifiers and tool schemas,
+// never resolved connector definitions or credential values.
+type MCPReloadResult struct {
+	Summary  mcp.ReloadSummary
+	Catalog  []mcp.ServerTool
+	Accounts map[string][]string
+}
+
+// MCPReloader reloads credential-bearing MCP configuration behind the injected
+// broker boundary and returns one coherent public snapshot.
+type MCPReloader func(ctx context.Context) (*MCPReloadResult, error)
 
 // New constructs a Manager: it dials OpenRouter (via the model resolver), uses
 // an injected MCP broker/catalog or connects enabled MCP servers locally,
@@ -337,6 +354,9 @@ func New(opts ManagerOptions) (*Manager, error) {
 	if opts.MCPBroker != nil && opts.MCPCatalog == nil {
 		return nil, fmt.Errorf("MCP broker requires an explicit MCP catalog")
 	}
+	if opts.ReloadMCP != nil && opts.MCPBroker == nil {
+		return nil, fmt.Errorf("MCP reload seam requires MCP broker")
+	}
 
 	// Multi-provider LLM routing (#289): when the bundle declares a providers:
 	// block, resolve models across the configured providers; otherwise fall back
@@ -404,6 +424,7 @@ func New(opts ManagerOptions) (*Manager, error) {
 		mcpBroker:            broker,
 		mcpCatalog:           catalog,
 		openMCPScope:         opts.OpenMCPScope,
+		reloadMCP:            opts.ReloadMCP,
 		mcpAccounts:          accounts,
 		allowlist:            allow,
 		resolver:             resolver,
@@ -697,7 +718,10 @@ func (m *Manager) Close() error {
 // pure over the gating snapshot — the boot path and a hot reload (#218) each
 // call it with their own allowlist without a lock.
 func (m *Manager) computeMCPToolRoster(allow mcpAllowlist) []string {
-	all := m.mcpCatalogSnapshot()
+	return computeMCPToolRosterFromCatalog(m.mcpCatalogSnapshot(), allow)
+}
+
+func computeMCPToolRosterFromCatalog(all []mcp.ServerTool, allow mcpAllowlist) []string {
 	names := make([]string, 0, len(all))
 	for _, st := range all {
 		if list, ok := allow[st.ServerName]; ok && len(list) > 0 {

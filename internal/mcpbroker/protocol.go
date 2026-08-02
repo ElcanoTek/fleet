@@ -100,6 +100,9 @@ type ReloadSummary struct {
 type ReloadResult struct {
 	Summary ReloadSummary    `json:"summary"`
 	Tools   []ToolDescriptor `json:"tools"`
+	// Accounts contains public provisioned seat names keyed by server. The child
+	// derives them from its freshly loaded bundle and credential environment.
+	Accounts map[string][]string `json:"accounts,omitempty"`
 }
 
 // request is a client -> server frame. The server only ever decodes requests; the

@@ -196,6 +196,13 @@ func TestNew_RejectsIncompleteMCPBrokerInjection(t *testing.T) {
 			opts: ManagerOptions{MCPBroker: inertMCPBroker{}},
 			want: "MCP broker requires an explicit MCP catalog",
 		},
+		{
+			name: "reload seam without broker",
+			opts: ManagerOptions{ReloadMCP: func(context.Context) (*MCPReloadResult, error) {
+				return nil, nil
+			}},
+			want: "MCP reload seam requires MCP broker",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

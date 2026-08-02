@@ -35,11 +35,12 @@ The protocol also supports credential-owner reload. The parent sends an empty
 `reload` request — never resolved server definitions — and the child re-reads
 its bundle and environment-backed connector configuration, applies the same
 minimum add/remove/restart diff as the in-process client, and returns only the
-public summary and refreshed tool catalog. Reload requests use the existing
-correlation, cancellation, and value-free panic-containment machinery. Scope
-opening serializes with reload: an opening scope receives a coherent old or new
-base catalog, while scopes already open keep their original client until close.
-Inline `http_tools` remain boot-pinned, matching the existing reload contract.
+public summary, refreshed tool catalog, and provisioned account-seat names.
+Reload requests use the existing correlation, cancellation, and value-free
+panic-containment machinery. Scope opening serializes with reload: an opening
+scope receives a coherent old or new base catalog, while scopes already open
+keep their original client until close. Inline `http_tools` remain boot-pinned,
+matching the existing reload contract.
 
 ## Why this is separate
 
@@ -86,9 +87,12 @@ failure fails the turn closed before provider or tool execution; it never falls
 back to the local client.
 
 The local-client default remains for transitional callers and tests. Production
-startup does not inject the new Manager options yet. The child-side reload
-protocol is ready, but Manager's reload adapter and production broker injection
-remain part of the switch-on sequence.
+startup does not inject the new Manager options yet. Manager can accept a
+broker-mode reload adapter, prepublish safety gating before the child changes,
+and atomically swap its public catalog, provisioned account names, prompt roster,
+and picker metadata from one child result. A broker without that adapter fails an operator
+reload explicitly instead of reporting a false success. Production broker
+injection remains part of the switch-on sequence.
 
 The scheduled `Agent` accepts the same broker/catalog pair and threads it into
 its existing `agentcore.Run`; governed sub-agents inherit that pair, and the

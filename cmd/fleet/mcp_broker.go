@@ -157,11 +157,18 @@ func (b *brokerBackend) Reload(ctx context.Context) (*mcpbroker.ReloadResult, er
 	if err != nil {
 		return nil, err
 	}
-	summary, err := b.client.Reload(ctx, agent.MCPServerDefs(scheduledrun.BuildMCPSpecs(cfg)))
+	specs := scheduledrun.BuildMCPSpecs(cfg)
+	summary, err := b.client.Reload(ctx, agent.MCPServerDefs(specs))
 	if err != nil {
 		return nil, err
 	}
 	b.bases = scheduledrun.BuildMCPBases(cfg)
+	accounts := make(map[string][]string, len(specs))
+	for name, spec := range specs {
+		if spec.Enabled {
+			accounts[name] = creds.AccountsFor(spec.AccountVars)
+		}
+	}
 
 	return &mcpbroker.ReloadResult{
 		Summary: mcpbroker.ReloadSummary{
@@ -170,7 +177,8 @@ func (b *brokerBackend) Reload(ctx context.Context) (*mcpbroker.ReloadResult, er
 			Restarted: append([]string(nil), summary.Restarted...),
 			Unchanged: append([]string(nil), summary.Unchanged...),
 		},
-		Tools: describeTools(b.client),
+		Tools:    describeTools(b.client),
+		Accounts: accounts,
 	}, nil
 }
 
