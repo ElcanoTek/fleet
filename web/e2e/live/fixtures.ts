@@ -17,6 +17,8 @@ const SCHED_USERNAME = process.env.E2E_SCHED_USERNAME ?? "e2e";
 
 export const creds = { email: TEST_EMAIL, password: TEST_PASSWORD, schedUsername: SCHED_USERNAME };
 
+type AuthCookies = Parameters<import("@playwright/test").BrowserContext["addCookies"]>[0];
+
 // wipeConversations deletes every conversation for the logged-in user via the
 // real DELETE endpoint, so each test starts from a clean slate (conversations
 // share one chat DB across the suite). It must clear BOTH active and archived
@@ -37,12 +39,41 @@ async function wipeConversations(page: import("@playwright/test").Page) {
   }
 }
 
-export const test = base.extend<{
-  // login performs a REAL password login (the chat/elcano_session cookie path),
-  // which gates both /chat and /orchestrator off one middleware, then lands on
-  // the empty chat composer.
-  login: () => Promise<void>;
-}>({
+export const test = base.extend<
+  {
+    // login installs the worker's REAL password-authenticated session cookie,
+    // which gates both /chat and /orchestrator off one middleware, then lands
+    // on the empty chat composer.
+    login: () => Promise<void>;
+  },
+  { authenticatedCookies: AuthCookies }
+>({
+  // Authenticate once per worker, then copy the resulting real session cookie
+  // into each test's isolated browser context. Re-submitting the same password
+  // in every spec exhausts /auth/verify's deliberate five-attempts-per-email
+  // security limit and tests the limiter rather than the feature under test.
+  // auth.spec.ts still drives both valid and invalid password submissions
+  // directly, so the actual login journey remains covered end to end.
+  authenticatedCookies: [
+    async ({ browser }, use) => {
+      const context = await browser.newContext();
+      let cookies: AuthCookies;
+      try {
+        const page = await context.newPage();
+        await page.goto("/login");
+        await page.getByLabel(/email/i).fill(TEST_EMAIL);
+        await page.getByLabel(/password/i).fill(TEST_PASSWORD);
+        await page.getByRole("button", { name: /sign in|log in|continue/i }).click();
+        await page.waitForURL((url) => !url.pathname.startsWith("/login"), { timeout: 20_000 });
+        cookies = await context.cookies();
+      } finally {
+        await context.close();
+      }
+      await use(cookies);
+    },
+    { scope: "worker" },
+  ],
+
   // Reveal the per-turn "details" (tool chips + reasoning + stats) by default so
   // tool-output assertions don't depend on a click; specs can still toggle it.
   page: async ({ page }, use) => {
@@ -58,14 +89,11 @@ export const test = base.extend<{
     await use(page);
   },
 
-  login: async ({ page }, use) => {
+  login: async ({ page, authenticatedCookies }, use) => {
     // eslint-disable-next-line react-hooks/rules-of-hooks
     await use(async () => {
-      await page.goto("/login");
-      await page.getByLabel(/email/i).fill(TEST_EMAIL);
-      await page.getByLabel(/password/i).fill(TEST_PASSWORD);
-      await page.getByRole("button", { name: /sign in|log in|continue/i }).click();
-      await page.waitForURL((url) => !url.pathname.startsWith("/login"), { timeout: 20_000 });
+      await page.context().addCookies(authenticatedCookies);
+      await page.goto("/");
       await wipeConversations(page);
       await page.goto("/");
       await page

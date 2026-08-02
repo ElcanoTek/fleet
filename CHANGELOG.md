@@ -221,6 +221,15 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Live Playwright no longer trips the password-brute-force limiter it is
+  meant to preserve.** The real-stack suite submitted the same test account's
+  password before nearly every spec, deterministically exhausting
+  `/auth/verify`'s five-attempts-per-email window and turning unrelated tests
+  into `/login?e=server` failures. It now creates one real password-authenticated
+  worker session and copies that cookie into each isolated test context; the
+  dedicated auth specs still exercise valid and invalid password submissions,
+  and the production limiter remains unchanged.
+
 - **Root Go gates no longer traverse npm dependencies.** An explicit module
   boundary at `web/` keeps `go build/test/vet ./...` scoped to Fleet-owned Go
   packages even after `npm ci` installs packages containing incidental Go code.
