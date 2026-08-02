@@ -29,7 +29,7 @@ import (
 // agentcore.RunEntry transcript back to agent.HistoryEntry for persistence.
 //
 // This is the concrete implementation of httpapi.turnEngine: RunTurn /
-// Summarize / SuggestTitle / MCPClient / SandboxPool / MCPServerCatalog /
+// Summarize / SuggestTitle / MCPBroker / SandboxPool / MCPServerCatalog /
 // ListPersonas. cmd/fleet constructs it once at boot and hands it to
 // httpapi.New.
 
@@ -605,9 +605,29 @@ func (m *Manager) SetLLMProviders(providers []agentcore.ProviderConfig) error {
 	return nil
 }
 
-// MCPClient exposes the shared MCP client for the out-of-band approval-execution
-// path (runStagedTool).
+// MCPClient exposes the shared MCP client to the scheduled-run compatibility
+// path. Interactive and out-of-band approval calls use MCPBroker instead so
+// production can move connector execution across the broker process boundary.
 func (m *Manager) MCPClient() *mcp.Client { return m.mcpClient }
+
+// MCPBroker returns the interactive manager's MCP call seam. The local-client
+// default is intentionally adapted here rather than in the HTTP layer, so the
+// transport can remain agnostic to where credentialed execution runs.
+func (m *Manager) MCPBroker() agentcore.MCPBroker {
+	if m.mcpClient == nil {
+		return nil
+	}
+	return agentcore.NewLocalMCPBroker(m.mcpClient, agentcore.DefaultRemediationHints)
+}
+
+// MCPCatalog returns the public server-qualified tool catalog used to resolve
+// staged approval calls without reaching into a concrete MCP client.
+func (m *Manager) MCPCatalog() []mcp.ServerTool {
+	if m.mcpClient == nil {
+		return nil
+	}
+	return m.mcpClient.GetAllTools()
+}
 
 // SandboxPool exposes the per-turn sandbox warm pool for the out-of-band
 // approved-bash execution path (runStagedBash).

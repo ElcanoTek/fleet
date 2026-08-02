@@ -45,6 +45,13 @@ prior versions are listed because none have shipped.
   without shadowing bundle servers. The local-client default is unchanged, and
   production `Manager` construction does not inject the seam yet.
 
+- **Approval MCP broker seam (#167 prerequisite):** interactive email
+  pre-validation and post-approval MCP execution now depend on the common
+  broker/catalog seam instead of a concrete credentialed client. Prefixed tool
+  routing remains server-qualified (including underscore-bearing names), and a
+  broker tool-level error now resolves the approval as failed. Production
+  `Manager` still supplies its local-client adapter until the broker switch-on.
+
 - **Query-parameter API keys for hosted connectors (Browserbase)**: some
   vendors authenticate their hosted MCP server with the key in a URL query
   parameter rather than a header. api_key connectors now support
