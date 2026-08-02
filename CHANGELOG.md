@@ -102,6 +102,12 @@ prior versions are listed because none have shipped.
   broker without a reload adapter fails explicitly rather than returning a false
   empty success. Production startup does not inject the adapter yet.
 
+- **Scheduled public MCP inventory (#167 prerequisite):** broker-scoped task
+  runs can expand an empty selection and decide whether to mint a per-run
+  workspace from a live names/`uses_workspace` snapshot, without retaining the
+  credential-bearing `cfg.MCPServers` map. Updating the provider changes the
+  next run while the local compatibility binder keeps its existing config path.
+
 - **Query-parameter API keys for hosted connectors (Browserbase)**: some
   vendors authenticate their hosted MCP server with the key in a URL query
   parameter rather than a header. api_key connectors now support

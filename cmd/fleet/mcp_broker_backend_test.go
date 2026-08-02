@@ -190,7 +190,7 @@ func TestBrokerBackend_ReloadRefreshesFutureScopesAndPreservesActiveScope(t *tes
 		t.Fatalf("reload accounts = %+v, want acct:[blue]", result.Accounts)
 	}
 	if len(result.Servers) != 1 || result.Servers[0].Name != "acct" || len(result.Servers[0].AccountVars) != 1 ||
-		result.Servers[0].AccountVars[0] != "TEST_SCOPE_TOKEN" {
+		result.Servers[0].AccountVars[0] != "TEST_SCOPE_TOKEN" || !result.Servers[0].UsesWorkspace {
 		t.Fatalf("reload servers = %+v, want public acct metadata", result.Servers)
 	}
 

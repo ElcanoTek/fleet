@@ -110,7 +110,11 @@ per-run workspace when a selected server references `${FLEET_WORKSPACE}`. The
 returned broker/catalog feeds the scheduled `Agent` and remote-overlay shadow
 set, and cleanup uses a fresh bounded context after cancellation. Scope-open
 errors fail the run closed. The local binder remains for transitional callers;
-production startup does not inject the opener yet.
+production startup does not inject the opener yet. Broker mode can also receive
+a live public server inventory containing only enabled names and whether each
+server uses `${FLEET_WORKSPACE}`. Empty-selection expansion and workspace
+minting then no longer read credential-bearing `cfg.MCPServers`, and a reload can
+replace the inventory for the next run.
 
 ## Approval integration
 
