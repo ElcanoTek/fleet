@@ -184,16 +184,39 @@ func BuildRemoteMCPOverlay(ctx context.Context, resolver RemoteMCPResolver, emai
 // A nil/empty overlay is a no-op, so callers can apply unconditionally. baseClient
 // is the shared (or per-run bundle) client the run otherwise uses.
 func ApplyMCPOverlay(deps *agentcore.Deps, baseClient *mcp.Client, overlay *RemoteMCPOverlay) {
-	if deps == nil || baseClient == nil || !overlay.Active() {
+	ApplyMCPOverlayWithBase(deps, baseClient, nil, nil, overlay)
+}
+
+// ApplyMCPOverlayWithBase composes a per-user remote overlay with either the
+// historical local base client or an injected out-of-process base broker and
+// catalog. A remote server can still never shadow a base server; only the base
+// call location changes.
+func ApplyMCPOverlayWithBase(
+	deps *agentcore.Deps,
+	baseClient *mcp.Client,
+	baseBroker agentcore.MCPBroker,
+	baseCatalog []mcp.ServerTool,
+	overlay *RemoteMCPOverlay,
+) {
+	if deps == nil || !overlay.Active() {
 		return
 	}
 	hints := agentcore.DefaultRemediationHints
+	if baseBroker == nil {
+		if baseClient == nil {
+			return
+		}
+		baseBroker = agentcore.NewLocalMCPBroker(baseClient, hints)
+	}
+	if baseCatalog == nil && baseClient != nil {
+		baseCatalog = baseClient.GetAllTools()
+	}
 	deps.MCPBroker = &compositeBroker{
 		overlay:        agentcore.NewLocalMCPBroker(overlay.Client, hints),
 		overlayServers: overlay.Servers,
-		base:           agentcore.NewLocalMCPBroker(baseClient, hints),
+		base:           baseBroker,
 	}
-	merged := baseClient.GetAllTools()
+	merged := append([]mcp.ServerTool(nil), baseCatalog...)
 	merged = append(merged, overlay.Catalog...)
 	deps.MCPCatalog = merged
 }

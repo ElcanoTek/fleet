@@ -62,20 +62,27 @@ type TurnConfig struct {
 	NativeTools []fantasy.AgentTool
 	Sandbox     *sandbox.Sandbox
 
-	// MCP wiring: the shared client + the per-conversation opt-in selection +
-	// the catalog gates. agentcore.buildFantasyTools registers the MCP tools
-	// through the SAME InteractivePolicy gate as the native tools, so MCP calls
-	// get cost/repeat/email/approval enforcement in interactive mode too.
-	MCPClient       *mcp.Client
+	// MCP wiring: the local shared client (default) or injected broker/catalog,
+	// plus the per-conversation opt-in selection and catalog gates.
+	// agentcore.buildFantasyTools registers the MCP tools through the SAME
+	// InteractivePolicy gate as the native tools, so MCP calls get
+	// cost/repeat/email/approval enforcement in interactive mode too.
+	MCPClient *mcp.Client
+	// MCPBroker + MCPCatalog replace the local client's call and discovery sides
+	// when bundle MCP runs in the out-of-process broker. Nil preserves the local
+	// client default. The governed loop and policy wrapping remain identical.
+	MCPBroker       agentcore.MCPBroker
+	MCPCatalog      []mcp.ServerTool
 	Allowlist       agentcore.MCPAllowlist
 	OptionalServers agentcore.MCPOptionalSet
 	Selection       agentcore.MCPSelection
 
 	// Overlay is the per-user remote-MCP overlay (#443). When Active, the run
-	// advertises the shared catalog merged with the overlay's and dispatches via a
+	// advertises the base catalog merged with the overlay's and dispatches via a
 	// compositeBroker that routes the overlay's servers (this user's
-	// OAuth-connected servers) to the per-run overlay client. nil = no overlay
-	// (behavior identical to before the feature). The Manager owns its lifecycle.
+	// OAuth-connected servers) to the per-run overlay client and bundle servers to
+	// the local client or injected broker. nil = no overlay (behavior identical to
+	// before the feature). The Manager owns its lifecycle.
 	Overlay *RemoteMCPOverlay
 
 	// Persona is the turn's active persona basename (e.g. "assistant"), used to
@@ -138,9 +145,10 @@ func (m messagesInput) Prompt(_ context.Context) (string, []fantasy.Message, str
 // InteractivePolicy (CanFinish true at round 0 → single pass), the interactive
 // finalize hook, and chat's compaction summarizer. obs receives the run events.
 //
-// MCP tools are registered by agentcore.buildFantasyTools from tc.MCPClient +
-// the opt-in Selection, wrapped in the SAME InteractivePolicy gate as the native
-// tools, so cost/repeat/email/approval enforcement covers both surfaces.
+// MCP tools are registered by agentcore.buildFantasyTools from the injected
+// catalog or tc.MCPClient plus the opt-in Selection, wrapped in the SAME
+// InteractivePolicy gate as the native tools, so cost/repeat/email/approval
+// enforcement covers both surfaces.
 func RunInteractiveTurn(ctx context.Context, tc TurnConfig, obs agentcore.Observer) (agentcore.Result, error) {
 	policy := agentcore.NewInteractivePolicy(tc.MaxCostUSD, tc.MaxTotalTokens, tc.ApprovalStager, tc.MemoryProposer)
 	// propose_note as a single agentcore-boundary guarantee: register the tool iff
@@ -166,6 +174,8 @@ func RunInteractiveTurn(ctx context.Context, tc TurnConfig, obs agentcore.Observ
 		FallbackModel:        tc.FallbackModel,
 		FallbackModels:       tc.FallbackModels,
 		MCPClient:            tc.MCPClient,
+		MCPBroker:            tc.MCPBroker,
+		MCPCatalog:           tc.MCPCatalog,
 		Finalize:             buildInteractiveFinalize(tc),
 		CompactionSummarizer: buildInteractiveCompactionSummarizer(tc),
 		HealthRegistry:       tc.HealthRegistry,
@@ -178,7 +188,7 @@ func RunInteractiveTurn(ctx context.Context, tc TurnConfig, obs agentcore.Observ
 	// OAuth-connected servers route to the per-run overlay client (holding their
 	// bearer) while bundle servers stay on the shared client. The overlay never
 	// mutates the shared client, so concurrent users can't cross-contaminate.
-	ApplyMCPOverlay(&deps, tc.MCPClient, tc.Overlay)
+	ApplyMCPOverlayWithBase(&deps, tc.MCPClient, tc.MCPBroker, tc.MCPCatalog, tc.Overlay)
 
 	cfg := agentcore.RunConfig{
 		ConversationID:      tc.ConversationID,

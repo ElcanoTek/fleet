@@ -10,6 +10,7 @@ import (
 	"charm.land/fantasy"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/mcp"
 )
 
 // itMockModel is a configurable fantasy.LanguageModel for the interactive
@@ -212,6 +213,68 @@ func TestRunInteractiveTurn_OneRoundCollapse(t *testing.T) {
 	}
 	if res.Label != "turn-1" {
 		t.Errorf("Label = %q, want turn-1", res.Label)
+	}
+}
+
+type interactiveRecordingBroker struct {
+	server string
+	tool   string
+	calls  int
+}
+
+func (b *interactiveRecordingBroker) CallMCP(_ context.Context, server, tool string, _ map[string]any) (string, bool, error) {
+	b.server = server
+	b.tool = tool
+	b.calls++
+	return "broker-result", false, nil
+}
+
+func TestRunInteractiveTurn_UsesInjectedMCPBrokerAndCatalog(t *testing.T) {
+	broker := &interactiveRecordingBroker{}
+	calls := 0
+	model := &itMockModel{
+		streamFunc: func(_ context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
+			calls++
+			round := calls
+			return func(yield func(fantasy.StreamPart) bool) {
+				if round == 1 {
+					yield(fantasy.StreamPart{
+						Type:          fantasy.StreamPartTypeToolCall,
+						ID:            "mcp-1",
+						ToolCallName:  "mcp_bundle_lookup",
+						ToolCallInput: `{}`,
+					})
+					yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonToolCalls})
+					return
+				}
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, Delta: "done"})
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonStop})
+			}, nil
+		},
+	}
+	tc := TurnConfig{
+		SystemPrompt: "sys",
+		Messages:     []fantasy.Message{fantasy.NewUserMessage("look it up")},
+		Model:        model,
+		MaxTokens:    1024,
+		MCPBroker:    broker,
+		MCPCatalog: []mcp.ServerTool{{
+			ServerName: "bundle",
+			Tool:       mcp.Tool{Name: "lookup", Description: "lookup"},
+		}},
+	}
+	res, err := RunInteractiveTurn(context.Background(), tc, &captureObs{})
+	if err != nil {
+		t.Fatalf("RunInteractiveTurn: %v", err)
+	}
+	if res.FinalText != "done" {
+		t.Fatalf("FinalText = %q, want done", res.FinalText)
+	}
+	if calls != 2 {
+		t.Fatalf("model calls = %d, want tool round plus final round", calls)
+	}
+	if broker.calls != 1 || broker.server != "bundle" || broker.tool != "lookup" {
+		t.Fatalf("broker calls = %d (%q.%q), want one bundle.lookup", broker.calls, broker.server, broker.tool)
 	}
 }
 

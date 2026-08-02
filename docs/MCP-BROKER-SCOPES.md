@@ -52,3 +52,12 @@ boundary.
 No authorization boundary is added here. Account allowlists, task policy, tool
 approval, and audit remain responsibilities of the existing governed runtime;
 the scope transports the already-authorized selection and cannot widen it.
+
+## Driver integration
+
+The interactive driver accepts an injected `MCPBroker` and public `MCPCatalog`
+on `TurnConfig` and threads them into the same `agentcore.Run` call used by the
+local-client path. Its per-user remote-MCP overlay composes with either base: a
+remote server name routes to the short-lived user client, while every bundle
+server routes to the injected broker. This is a wiring prerequisite only;
+`Manager` does not yet supply these fields in production.
