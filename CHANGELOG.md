@@ -77,6 +77,16 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Sandbox acquisition now fails closed at the pool shutdown boundary.** Every
+  take path (warm, cold, persistent, lockdown, and allowlisted) returns
+  `ErrClosed` after `Pool.Close` marks the pool closed; a concurrent cold start is
+  immediately reaped instead of escaping the shutdown boundary. The pool is
+  marked closed before its allowlist proxy is stopped, preventing a racing turn
+  from receiving a container configured with a dead proxy. A nil pool now
+  returns `ErrContainerUnavailable` instead of panicking, and the existing
+  keeper/close stress test now exercises the advertised race rather than
+  stopping all takers before close.
+
 - **Chat input queues no longer grow forever or drain tied positions
   nondeterministically** (#835). Completed/cancelled rows are now purged after
   `FLEET_INPUT_QUEUE_RETENTION_DAYS` (30 days by default; `0` disables), at boot

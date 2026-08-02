@@ -107,9 +107,9 @@ func TestPool_KeeperLifecycle(t *testing.T) {
 }
 
 // TestPool_ConcurrentTakeKeeperClose stresses the pool under -race: a real
-// short-TTL keeper reaps while many goroutines Take/cleanup, then Close races in.
-// It asserts no panic / data race / deadlock (the keeper draining the channel
-// concurrently with Take and Close is the delicate part of #181).
+// short-TTL keeper reaps while many goroutines Take/cleanup and Close races
+// those callers. It asserts no panic / data race / deadlock and pins the closed
+// pool as a fail-closed lifecycle boundary.
 func TestPool_ConcurrentTakeKeeperClose(t *testing.T) {
 	p := NewPool(PoolConfig{Size: 4, Mode: ModeHost, WarmTTL: 40 * time.Millisecond})
 
@@ -126,6 +126,10 @@ func TestPool_ConcurrentTakeKeeperClose(t *testing.T) {
 				default:
 				}
 				sb, cleanup, err := p.Take()
+				if errors.Is(err, ErrClosed) {
+					cleanup()
+					return
+				}
 				if err == nil && sb != nil {
 					_, _ = sb.RunBash(context.Background(), BashRequest{Command: "true"})
 				}
@@ -134,17 +138,18 @@ func TestPool_ConcurrentTakeKeeperClose(t *testing.T) {
 		}()
 	}
 	time.Sleep(200 * time.Millisecond) // let the keeper tick a few times
+
+	// Close while workers are still taking, rather than stopping them first.
+	// They must converge on ErrClosed instead of cold-starting replacements.
+	p.Close()
 	close(stop)
 	wg.Wait()
 
-	// After the stress, the pool must still hand out a usable sandbox (the keeper
-	// reaping under load must not have left it broken).
 	sb, cleanup, err := p.Take()
-	if err != nil || sb == nil {
-		t.Fatalf("pool unusable after concurrent stress: sb=%v err=%v", sb, err)
+	if !errors.Is(err, ErrClosed) || sb != nil {
+		t.Fatalf("take after close: sb=%v err=%v, want nil/ErrClosed", sb, err)
 	}
 	cleanup()
 
-	p.Close()
 	p.Close() // idempotent
 }
