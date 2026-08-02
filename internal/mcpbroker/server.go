@@ -27,6 +27,19 @@ type Backend interface {
 	ListAccounts(ctx context.Context, server string, baseVars []string) ([]string, error)
 }
 
+// ScopedBackend optionally extends Backend with isolated per-run MCP clients.
+// The production credential owner implements this interface when scoped clients
+// are available; older backends continue serving unscoped calls and receive a
+// clear error if a peer requests a scope.
+type ScopedBackend interface {
+	OpenScope(ctx context.Context, spec ScopeSpec) (scopeID string, tools []ToolDescriptor, err error)
+	// CallMCPInScope must reject unknown scope IDs. CloseScope must coordinate
+	// with calls that reached the backend before it, because cancellation replies
+	// to the client before a connector necessarily observes its cancelled context.
+	CallMCPInScope(ctx context.Context, scopeID, server, tool string, args map[string]any) (string, bool, error)
+	CloseScope(ctx context.Context, scopeID string) error
+}
+
 // Server answers mcpbroker requests by running each against a Backend — the end
 // that holds the connector secrets and the MCP subprocesses. A Client in another
 // process reaches it over a connection.
@@ -120,7 +133,16 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 					mu.Unlock()
 					cancel()
 				}()
-				text, isErr, err := s.backend.CallMCP(callCtx, req.Server, req.Tool, req.Args)
+				var text string
+				var isErr bool
+				var err error
+				if req.Scope == "" {
+					text, isErr, err = s.backend.CallMCP(callCtx, req.Server, req.Tool, req.Args)
+				} else if scoped, ok := s.backend.(ScopedBackend); ok {
+					text, isErr, err = scoped.CallMCPInScope(callCtx, req.Scope, req.Server, req.Tool, req.Args)
+				} else {
+					err = errors.New("mcpbroker: backend does not support scoped sessions")
+				}
 				resp := response{ID: req.ID, Text: text, IsError: isErr}
 				if err != nil {
 					resp.Err = err.Error()
@@ -154,10 +176,77 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 				write(resp)
 			}(req)
 
+		case methodOpenScope:
+			callCtx, cancel := context.WithCancel(ctx)
+			mu.Lock()
+			inflight[req.ID] = cancel
+			mu.Unlock()
+			wg.Add(1)
+			go func(req request) {
+				defer recoverBackendPanic("mcpbroker.scope_open", req.ID, write)
+				defer wg.Done()
+				defer func() {
+					mu.Lock()
+					delete(inflight, req.ID)
+					mu.Unlock()
+					cancel()
+				}()
+				resp := response{ID: req.ID}
+				scoped, ok := s.backend.(ScopedBackend)
+				if !ok {
+					resp.Err = "mcpbroker: backend does not support scoped sessions"
+					write(resp)
+					return
+				}
+				resp.Scope, resp.Tools, resp.Err = openScope(callCtx, scoped, req.ScopeSpec)
+				write(resp)
+			}(req)
+
+		case methodCloseScope:
+			if req.Scope == "" {
+				write(response{ID: req.ID, Err: "mcpbroker: scope_close requires a scope ID"})
+				continue
+			}
+			callCtx, cancel := context.WithCancel(ctx)
+			mu.Lock()
+			inflight[req.ID] = cancel
+			mu.Unlock()
+			wg.Add(1)
+			go func(req request) {
+				defer recoverBackendPanic("mcpbroker.scope_close", req.ID, write)
+				defer wg.Done()
+				defer func() {
+					mu.Lock()
+					delete(inflight, req.ID)
+					mu.Unlock()
+					cancel()
+				}()
+				resp := response{ID: req.ID}
+				if scoped, ok := s.backend.(ScopedBackend); ok {
+					if err := scoped.CloseScope(callCtx, req.Scope); err != nil {
+						resp.Err = err.Error()
+					}
+				} else {
+					resp.Err = "mcpbroker: backend does not support scoped sessions"
+				}
+				write(resp)
+			}(req)
+
 		default:
 			write(response{ID: req.ID, Err: "mcpbroker: unknown method " + string(req.Method)})
 		}
 	}
+}
+
+func openScope(ctx context.Context, backend ScopedBackend, spec ScopeSpec) (string, []ToolDescriptor, string) {
+	id, tools, err := backend.OpenScope(ctx, spec)
+	if err != nil {
+		return id, tools, err.Error()
+	}
+	if id == "" {
+		return "", nil, "mcpbroker: backend returned an empty scope ID"
+	}
+	return id, tools, ""
 }
 
 // recoverBackendPanic contains a panic in one broker request and, critically,

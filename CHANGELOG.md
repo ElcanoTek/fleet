@@ -19,6 +19,17 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **Per-run MCP broker scope protocol (#167 prerequisite):** the internal broker
+  can open an isolated session from non-secret server/account selections, task
+  ID, and workspace path; return its opaque ID and public tool catalog; and route
+  the existing `agentcore.MCPBroker` call seam through that scope. Scope calls
+  retain request correlation and cancellation, close is idempotent after success
+  and retryable after failure, legacy backends fail explicitly, and backend
+  panics remain value-free and incident-correlated. This is protocol groundwork
+  only: production still constructs credentialed clients in the main process,
+  and #167 remains open for subprocess switch-on and remote-MCP isolation. See
+  [`docs/MCP-BROKER-SCOPES.md`](docs/MCP-BROKER-SCOPES.md).
+
 - **Query-parameter API keys for hosted connectors (Browserbase)**: some
   vendors authenticate their hosted MCP server with the key in a URL query
   parameter rather than a header. api_key connectors now support

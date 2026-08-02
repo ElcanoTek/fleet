@@ -46,10 +46,57 @@ type fakeBroker struct {
 	panicListAccounts any
 }
 
+type fakeScopedBroker struct {
+	*fakeBroker
+
+	scopeMu        sync.Mutex
+	scopeID        string
+	scopeTools     []ToolDescriptor
+	openSpec       ScopeSpec
+	lastCallScope  string
+	closedScopes   []string
+	openErr        error
+	closeErr       error
+	panicOpen      any
+	panicScopeCall any
+	panicClose     any
+}
+
 var (
 	_ agentcore.MCPBroker = (*fakeBroker)(nil)
 	_ Backend             = (*fakeBroker)(nil)
+	_ ScopedBackend       = (*fakeScopedBroker)(nil)
 )
+
+func (b *fakeScopedBroker) OpenScope(_ context.Context, spec ScopeSpec) (string, []ToolDescriptor, error) {
+	if b.panicOpen != nil {
+		panic(b.panicOpen)
+	}
+	b.scopeMu.Lock()
+	b.openSpec = spec
+	b.scopeMu.Unlock()
+	return b.scopeID, b.scopeTools, b.openErr
+}
+
+func (b *fakeScopedBroker) CallMCPInScope(ctx context.Context, scopeID, server, tool string, args map[string]any) (string, bool, error) {
+	if b.panicScopeCall != nil {
+		panic(b.panicScopeCall)
+	}
+	b.scopeMu.Lock()
+	b.lastCallScope = scopeID
+	b.scopeMu.Unlock()
+	return b.CallMCP(ctx, server, tool, args)
+}
+
+func (b *fakeScopedBroker) CloseScope(_ context.Context, scopeID string) error {
+	if b.panicClose != nil {
+		panic(b.panicClose)
+	}
+	b.scopeMu.Lock()
+	b.closedScopes = append(b.closedScopes, scopeID)
+	b.scopeMu.Unlock()
+	return b.closeErr
+}
 
 func (b *fakeBroker) CallMCP(ctx context.Context, server, tool string, args map[string]any) (string, bool, error) {
 	if b.panicCall != nil {
@@ -158,6 +205,68 @@ func TestClientServer_BackendPanicsReturnCorrelatedErrors(t *testing.T) {
 	}
 }
 
+func TestClientServer_ScopedBackendPanicsReturnCorrelatedErrors(t *testing.T) {
+	const secret = "scoped-connector-secret-must-not-cross-the-pipe"
+	tests := []struct {
+		name string
+		fake *fakeScopedBroker
+		call func(context.Context, *Client) error
+	}{
+		{
+			name: "open",
+			fake: &fakeScopedBroker{fakeBroker: &fakeBroker{}, panicOpen: secret},
+			call: func(ctx context.Context, c *Client) error {
+				_, err := c.OpenScope(ctx, ScopeSpec{})
+				return err
+			},
+		},
+		{
+			name: "call",
+			fake: &fakeScopedBroker{fakeBroker: &fakeBroker{}, scopeID: "scope-1", panicScopeCall: secret},
+			call: func(ctx context.Context, c *Client) error {
+				scope, err := c.OpenScope(ctx, ScopeSpec{})
+				if err != nil {
+					return err
+				}
+				_, _, err = scope.CallMCP(ctx, "server", "tool", nil)
+				return err
+			},
+		},
+		{
+			name: "close",
+			fake: &fakeScopedBroker{fakeBroker: &fakeBroker{}, scopeID: "scope-1", panicClose: secret},
+			call: func(ctx context.Context, c *Client) error {
+				scope, err := c.OpenScope(ctx, ScopeSpec{})
+				if err != nil {
+					return err
+				}
+				return scope.Close(ctx)
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := loopback(t, tt.fake)
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+
+			err := tt.call(ctx, client)
+			if err == nil || !strings.HasPrefix(err.Error(), "mcpbroker backend panic (incident inc_") {
+				t.Fatalf("error = %v, want correlated backend-panic error", err)
+			}
+			if strings.Contains(err.Error(), secret) {
+				t.Fatalf("panic value crossed broker boundary: %q", err)
+			}
+			if errors.Is(err, context.DeadlineExceeded) {
+				t.Fatal("backend panic left request parked until its context expired")
+			}
+			if err := client.Ping(ctx); err != nil {
+				t.Fatalf("server stopped serving after contained panic: %v", err)
+			}
+		})
+	}
+}
+
 // loopback wires a Client and a Server over an in-memory net.Pipe (no real
 // process), serving against broker. The returned cleanup closes both ends and
 // waits for the server loop to exit.
@@ -190,6 +299,200 @@ func TestClientServer_CallRoundTrip(t *testing.T) {
 	}
 	if fake.lastServer != "deal_sheet" || fake.lastTool != "lookup" || fake.lastArgs["q"] != "x" {
 		t.Fatalf("server got (%q, %q, %v), want the forwarded server/tool/args", fake.lastServer, fake.lastTool, fake.lastArgs)
+	}
+}
+
+func TestClientServer_ScopeLifecycle(t *testing.T) {
+	fake := &fakeScopedBroker{
+		fakeBroker: &fakeBroker{text: "scoped-result"},
+		scopeID:    "scope-opaque-1",
+		scopeTools: []ToolDescriptor{{
+			Server: "deal_sheet",
+			Tool:   "lookup",
+			InputSchema: map[string]any{
+				"properties": map[string]any{"q": map[string]any{"type": "string"}},
+			},
+		}},
+	}
+	client := loopback(t, fake)
+	spec := ScopeSpec{
+		Selection: []ScopeChoice{{Server: "deal_sheet", Account: "seat_a"}},
+		TaskID:    "task-7",
+		Workspace: "/workspace/task-7",
+	}
+
+	scope, err := client.OpenScope(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("OpenScope: %v", err)
+	}
+	tools := scope.Tools()
+	if len(tools) != 1 || tools[0].Server != "deal_sheet" || tools[0].Tool != "lookup" {
+		t.Fatalf("Tools = %+v, want scoped catalog", tools)
+	}
+	tools[0].Tool = "mutated"
+	tools[0].InputSchema["properties"].(map[string]any)["q"].(map[string]any)["type"] = "number"
+	if got := scope.Tools()[0].Tool; got != "lookup" {
+		t.Fatalf("Tools returned mutable internal slice: got %q", got)
+	}
+	gotType := scope.Tools()[0].InputSchema["properties"].(map[string]any)["q"].(map[string]any)["type"]
+	if gotType != "string" {
+		t.Fatalf("Tools returned mutable nested schema: got type %q", gotType)
+	}
+
+	text, isErr, err := scope.CallMCP(context.Background(), "deal_sheet", "lookup", map[string]any{"q": "x"})
+	if err != nil || isErr || text != "scoped-result" {
+		t.Fatalf("scoped CallMCP = (%q, %v, %v), want (scoped-result, false, nil)", text, isErr, err)
+	}
+
+	fake.scopeMu.Lock()
+	gotSpec := fake.openSpec
+	gotScope := fake.lastCallScope
+	fake.scopeMu.Unlock()
+	if gotSpec.TaskID != spec.TaskID || gotSpec.Workspace != spec.Workspace || len(gotSpec.Selection) != 1 || gotSpec.Selection[0] != spec.Selection[0] {
+		t.Fatalf("broker got spec %+v, want %+v", gotSpec, spec)
+	}
+	if gotScope != "scope-opaque-1" {
+		t.Fatalf("scoped call used scope %q, want scope-opaque-1", gotScope)
+	}
+
+	if err := scope.Close(context.Background()); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := scope.Close(context.Background()); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+	fake.scopeMu.Lock()
+	closed := append([]string(nil), fake.closedScopes...)
+	fake.scopeMu.Unlock()
+	if len(closed) != 1 || closed[0] != "scope-opaque-1" {
+		t.Fatalf("closed scopes = %v, want one close for scope-opaque-1", closed)
+	}
+	if _, _, err := scope.CallMCP(context.Background(), "deal_sheet", "lookup", nil); !errors.Is(err, errScopeClosed) {
+		t.Fatalf("CallMCP after scope close = %v, want errScopeClosed", err)
+	}
+}
+
+func TestClientServer_ScopeCloseFailureIsRetryable(t *testing.T) {
+	fake := &fakeScopedBroker{fakeBroker: &fakeBroker{}, scopeID: "scope-1", closeErr: errors.New("busy")}
+	client := loopback(t, fake)
+	scope, err := client.OpenScope(context.Background(), ScopeSpec{})
+	if err != nil {
+		t.Fatalf("OpenScope: %v", err)
+	}
+	if err := scope.Close(context.Background()); err == nil || err.Error() != "busy" {
+		t.Fatalf("first Close = %v, want busy", err)
+	}
+	fake.closeErr = nil
+	if err := scope.Close(context.Background()); err != nil {
+		t.Fatalf("retry Close: %v", err)
+	}
+	fake.scopeMu.Lock()
+	defer fake.scopeMu.Unlock()
+	if len(fake.closedScopes) != 2 {
+		t.Fatalf("CloseScope calls = %d, want failed attempt plus retry", len(fake.closedScopes))
+	}
+}
+
+func TestClientServer_ScopeCloseWaitsForActiveCall(t *testing.T) {
+	fake := &fakeScopedBroker{
+		fakeBroker: &fakeBroker{release: make(chan struct{}), started: make(chan struct{})},
+		scopeID:    "scope-1",
+	}
+	client := loopback(t, fake)
+	scope, err := client.OpenScope(context.Background(), ScopeSpec{})
+	if err != nil {
+		t.Fatalf("OpenScope: %v", err)
+	}
+	callDone := make(chan error, 1)
+	go func() {
+		_, _, err := scope.CallMCP(context.Background(), "s", "t", nil)
+		callDone <- err
+	}()
+	select {
+	case <-fake.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("scoped call never started")
+	}
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- scope.Close(context.Background()) }()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		scope.mu.Lock()
+		closing := scope.closing
+		scope.mu.Unlock()
+		if closing {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("Close never entered closing state")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	select {
+	case err := <-closeDone:
+		t.Fatalf("Close returned before the active call: %v", err)
+	default:
+	}
+	fake.scopeMu.Lock()
+	closeCalls := len(fake.closedScopes)
+	fake.scopeMu.Unlock()
+	if closeCalls != 0 {
+		t.Fatalf("backend CloseScope ran while a scoped call was active")
+	}
+
+	close(fake.release)
+	if err := <-callDone; err != nil {
+		t.Fatalf("CallMCP: %v", err)
+	}
+	if err := <-closeDone; err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+}
+
+func TestClientServer_ScopeCloseContextCancelsWhileWaiting(t *testing.T) {
+	fake := &fakeScopedBroker{
+		fakeBroker: &fakeBroker{release: make(chan struct{}), started: make(chan struct{})},
+		scopeID:    "scope-1",
+	}
+	client := loopback(t, fake)
+	scope, err := client.OpenScope(context.Background(), ScopeSpec{})
+	if err != nil {
+		t.Fatalf("OpenScope: %v", err)
+	}
+	callDone := make(chan error, 1)
+	go func() {
+		_, _, err := scope.CallMCP(context.Background(), "s", "t", nil)
+		callDone <- err
+	}()
+	<-fake.started
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := scope.Close(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Close = %v, want context.Canceled", err)
+	}
+	scope.mu.Lock()
+	closing := scope.closing
+	scope.mu.Unlock()
+	if closing {
+		t.Fatal("cancelled Close left the scope stuck in closing state")
+	}
+
+	close(fake.release)
+	if err := <-callDone; err != nil {
+		t.Fatalf("CallMCP: %v", err)
+	}
+	if err := scope.Close(context.Background()); err != nil {
+		t.Fatalf("retry Close: %v", err)
+	}
+}
+
+func TestClientServer_ScopesUnsupportedByLegacyBackend(t *testing.T) {
+	client := loopback(t, &fakeBroker{})
+	_, err := client.OpenScope(context.Background(), ScopeSpec{})
+	if err == nil || err.Error() != "mcpbroker: backend does not support scoped sessions" {
+		t.Fatalf("OpenScope error = %v, want explicit unsupported error", err)
 	}
 }
 
@@ -247,6 +550,43 @@ func TestClientServer_ConcurrentCallsCorrelate(t *testing.T) {
 	}
 }
 
+func TestClientServer_BaseAndScopedCallsCorrelate(t *testing.T) {
+	fake := &fakeScopedBroker{fakeBroker: &fakeBroker{echoTagAsText: true}, scopeID: "scope-1"}
+	client := loopback(t, fake)
+	scope, err := client.OpenScope(context.Background(), ScopeSpec{})
+	if err != nil {
+		t.Fatalf("OpenScope: %v", err)
+	}
+
+	const n = 24
+	var wg sync.WaitGroup
+	errs := make(chan error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			tag := fmt.Sprintf("mixed-%d", i)
+			var text string
+			var err error
+			if i%2 == 0 {
+				text, _, err = client.CallMCP(context.Background(), "s", "t", map[string]any{"tag": tag})
+			} else {
+				text, _, err = scope.CallMCP(context.Background(), "s", "t", map[string]any{"tag": tag})
+			}
+			if err != nil {
+				errs <- fmt.Errorf("call %d: %w", i, err)
+			} else if text != tag {
+				errs <- fmt.Errorf("call %d got %q, want its own tag %q", i, text, tag)
+			}
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
+	}
+}
+
 // TestClientServer_ContextCancelStopsCall: cancelling the caller's context returns
 // promptly AND propagates to the server so the in-flight MCP call is cancelled.
 func TestClientServer_ContextCancelStopsCall(t *testing.T) {
@@ -282,6 +622,47 @@ func TestClientServer_ContextCancelStopsCall(t *testing.T) {
 	for fake.observedCtxErr() == nil {
 		if time.Now().After(deadline) {
 			t.Fatal("server-side call's context was never cancelled (cancel did not propagate over the wire)")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func TestClientServer_ContextCancelStopsScopedCall(t *testing.T) {
+	fake := &fakeScopedBroker{
+		fakeBroker: &fakeBroker{release: make(chan struct{}), started: make(chan struct{})},
+		scopeID:    "scope-1",
+	}
+	client := loopback(t, fake)
+	defer close(fake.release)
+	scope, err := client.OpenScope(context.Background(), ScopeSpec{})
+	if err != nil {
+		t.Fatalf("OpenScope: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, _, err := scope.CallMCP(ctx, "s", "t", nil)
+		result <- err
+	}()
+	select {
+	case <-fake.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("server-side scoped call never started")
+	}
+	cancel()
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("CallMCP returned %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("scoped CallMCP did not return promptly after context cancellation")
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for fake.observedCtxErr() == nil {
+		if time.Now().After(deadline) {
+			t.Fatal("server-side scoped call context was never cancelled")
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
