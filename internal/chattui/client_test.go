@@ -3,6 +3,7 @@ package chattui
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -122,5 +123,91 @@ func TestClientStream_403ErrorRedactsToken(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "super-secret-token") {
 		t.Errorf("error must NOT leak the token: %v", err)
+	}
+}
+
+func TestClientStream_RequiresSuccessfulTerminalEvent(t *testing.T) {
+	tests := []struct {
+		name      string
+		stream    string
+		wantErr   string
+		cancelled bool
+	}{
+		{
+			name:    "server error",
+			stream:  "event: turn.error\ndata: {\"message\":\"history commit failed\"}\n\n",
+			wantErr: "history commit failed",
+		},
+		{
+			name:    "model required",
+			stream:  "event: turn.model_required\ndata: {\"message\":\"pick a larger model\"}\n\n",
+			wantErr: "pick a larger model",
+		},
+		{
+			name:      "server cancellation",
+			stream:    "event: turn.cancelled\ndata: {}\n\n",
+			cancelled: true,
+		},
+		{
+			name:    "premature eof",
+			stream:  "event: text.delta\ndata: {\"text\":\"partial\"}\n\n",
+			wantErr: "before a terminal turn event",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = io.WriteString(w, tt.stream)
+			}))
+			defer srv.Close()
+
+			client := NewClient(Config{ServerURL: srv.URL, Email: "u@x.co", Token: "token"})
+			_, err := client.Stream(context.Background(), "hi", "", func(Event) {})
+			if err == nil {
+				t.Fatal("Stream returned nil error")
+			}
+			if tt.cancelled {
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("Stream error = %v, want context cancellation", err)
+				}
+			} else if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("Stream error = %q, want %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestClientPingRejectsNonSuccess(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "not fleet", http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	client := NewClient(Config{ServerURL: srv.URL})
+	err := client.Ping(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "404") {
+		t.Fatalf("Ping error = %v, want health status", err)
+	}
+}
+
+func TestClientStream_PropagatesInFlightCancellation(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "event: turn.started\ndata: {}\n\n")
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	client := NewClient(Config{ServerURL: srv.URL, Email: "u@x.co", Token: "token"})
+	_, err := client.Stream(ctx, "hi", "", func(ev Event) {
+		if ev.Name == "turn.started" {
+			cancel()
+		}
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Stream error = %v, want context cancellation", err)
 	}
 }

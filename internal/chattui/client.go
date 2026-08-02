@@ -98,18 +98,45 @@ func (c *Client) Stream(ctx context.Context, message, convID string, onEvent fun
 	}
 
 	newConvID := convID
+	terminalSeen := false
+	var terminalErr error
 	perr := parseSSE(resp.Body, func(ev Event) {
 		if ev.Name == "conversation" {
 			if id := ev.Str("id"); id != "" {
 				newConvID = id
 			}
 		}
+		switch ev.Name {
+		case "turn.completed":
+			terminalSeen = true
+		case "turn.cancelled":
+			terminalSeen = true
+			terminalErr = context.Canceled
+		case "turn.error":
+			terminalSeen = true
+			terminalErr = fmt.Errorf("turn failed: %s", orDefault(ev.Str("message"), "the server reported an error"))
+		case "turn.model_required":
+			terminalSeen = true
+			terminalErr = fmt.Errorf("turn requires another model: %s", orDefault(ev.Str("message"), "select a different model and retry"))
+		}
 		onEvent(ev)
 	})
-	if perr != nil && ctx.Err() == nil {
+	// A terminal event is authoritative: turn.completed is emitted only after
+	// the canonical history commit, so a transport close racing just afterward
+	// must not downgrade that committed outcome to cancellation or read failure.
+	if terminalErr != nil {
+		return newConvID, terminalErr
+	}
+	if terminalSeen {
+		return newConvID, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return newConvID, err
+	}
+	if perr != nil {
 		return newConvID, perr
 	}
-	return newConvID, nil
+	return newConvID, fmt.Errorf("stream ended before a terminal turn event")
 }
 
 // parseSSE reads a text/event-stream and calls fn for each complete frame. It
@@ -181,6 +208,9 @@ func (c *Client) Ping(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("fleet server not reachable at %s (is it running? `fleet status`): %w", c.cfg.ServerURL, err)
 	}
-	_ = resp.Body.Close()
+	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return fmt.Errorf("fleet server health check returned %d", resp.StatusCode)
+	}
 	return nil
 }

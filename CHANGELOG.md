@@ -221,6 +221,11 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **`fleet chat` now honors the server's terminal turn outcome.** The TUI and
+  one-shot mode surface `turn.error`, model-selection failures, cancellation,
+  premature stream EOF, and non-success health checks instead of treating them
+  as successful empty or partial answers.
+
 - **Chat migrations no longer deadlock with a one-connection pool.** The
   advisory lock and every migration query/transaction now share one dedicated
   connection, so `CHAT_DB_MAX_CONNS=1` remains a valid operator setting.
