@@ -70,7 +70,7 @@ func TestBrokerBackend_ScopeOwnsAccountTaskAndWorkspace(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	id, tools, err := b.OpenScope(ctx, mcpbroker.ScopeSpec{
+	id, tools, _, err := b.OpenScope(ctx, mcpbroker.ScopeSpec{
 		Selection: []mcpbroker.ScopeChoice{{Server: "acct", Account: "client_a"}},
 		TaskID:    "task-7",
 		Workspace: "/tmp/fleet-scope-workspace",
@@ -111,7 +111,7 @@ func TestBrokerBackend_OpenScopeRefusesUnknownServer(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, _, err := b.OpenScope(ctx, mcpbroker.ScopeSpec{
+	_, _, _, err := b.OpenScope(ctx, mcpbroker.ScopeSpec{
 		Selection: []mcpbroker.ScopeChoice{{Server: "missing"}},
 	})
 	if err == nil {
@@ -124,12 +124,28 @@ func TestBrokerBackend_OpenScopeRefusesUnknownServer(t *testing.T) {
 	}
 }
 
+func TestBrokerBackend_RemoteScopeFailsUntilImplemented(t *testing.T) {
+	b := newBrokerBackendForScopeTest(t)
+	t.Cleanup(func() { _ = b.Close() })
+	_, _, _, err := b.OpenScope(context.Background(), mcpbroker.ScopeSpec{
+		Remote: &mcpbroker.RemoteScopeSpec{UserEmail: "user@example.com"},
+	})
+	if err == nil || err.Error() != "remote MCP scopes are not implemented" {
+		t.Fatalf("OpenScope error = %v, want explicit unsupported error", err)
+	}
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	if len(b.scopes) != 0 {
+		t.Fatalf("unsupported remote open leaked %d scope(s)", len(b.scopes))
+	}
+}
+
 func TestBrokerBackend_CloseReapsOutstandingScopes(t *testing.T) {
 	b := newBrokerBackendForScopeTest(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	id, _, err := b.OpenScope(ctx, mcpbroker.ScopeSpec{
+	id, _, _, err := b.OpenScope(ctx, mcpbroker.ScopeSpec{
 		Selection: []mcpbroker.ScopeChoice{{Server: "acct"}},
 	})
 	if err != nil {
@@ -172,7 +188,7 @@ func TestBrokerBackend_ReloadRefreshesFutureScopesAndPreservesActiveScope(t *tes
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	oldID, _, err := b.OpenScope(ctx, mcpbroker.ScopeSpec{Selection: []mcpbroker.ScopeChoice{{Server: "acct"}}})
+	oldID, _, _, err := b.OpenScope(ctx, mcpbroker.ScopeSpec{Selection: []mcpbroker.ScopeChoice{{Server: "acct"}}})
 	if err != nil {
 		t.Fatalf("OpenScope before reload: %v", err)
 	}
@@ -202,7 +218,7 @@ func TestBrokerBackend_ReloadRefreshesFutureScopesAndPreservesActiveScope(t *tes
 		t.Fatalf("old scope changed across reload: %q", oldText)
 	}
 
-	newID, _, err := b.OpenScope(ctx, mcpbroker.ScopeSpec{Selection: []mcpbroker.ScopeChoice{{Server: "acct"}}})
+	newID, _, _, err := b.OpenScope(ctx, mcpbroker.ScopeSpec{Selection: []mcpbroker.ScopeChoice{{Server: "acct"}}})
 	if err != nil {
 		t.Fatalf("OpenScope after reload: %v", err)
 	}

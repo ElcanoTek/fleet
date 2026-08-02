@@ -19,6 +19,15 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **Remote MCP scope protocol (#167 prerequisite):** broker scope-open requests
+  can now carry a user email plus public enabled/shadowed remote-server names,
+  with an explicit filter bit preserving interactive “none selected” versus
+  scheduled “all connected.” Scope responses expose only public tools and
+  skipped-server names. Mixed bundle/remote fields and ambiguous filters fail
+  before backend dispatch; the production child still rejects remote scopes
+  until the next implementation slice. See
+  [`docs/MCP-BROKER-SCOPES.md`](docs/MCP-BROKER-SCOPES.md).
+
 - **Remote MCP broker overlay seam (#167 prerequisite):** interactive and
   scheduled runs can now receive a per-user remote-MCP overlay as an injected
   broker, public tool catalog, routing-name set, and bounded close function.
