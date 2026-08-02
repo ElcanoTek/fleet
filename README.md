@@ -57,8 +57,8 @@ them.
   credentials never enter the sandbox or model context. Bundle MCP and inline
   HTTP-tool execution is owned by a dedicated broker subprocess; the main
   agent process retains only public catalog metadata and the call transport.
-  Per-user remote MCP isolation remains tracked by
-  [#167](https://github.com/ElcanoTek/fleet/issues/167).
+  Per-user remote MCP token acquisition and calls use the same child-owned
+  scoped boundary ([ADR-0040](docs/adr/0040-child-owned-remote-mcp-runtime.md)).
 
 - **Two isolation tiers, one config line.** Set `sandbox.runtime: kata` (or
   `libkrun`) and every tool call gets a **dedicated KVM microVM** — escape now
@@ -151,9 +151,10 @@ model-authored local tool call goes through the sandbox under host policy
 **default-deny allow/deny card** with no "approve all", and unattended scheduled
 work is fail-closed — network-sealed by default with an end-of-run verifier
 ([`docs/AGENT-RUNTIME.md`](docs/AGENT-RUNTIME.md)). The out-of-process MCP
-address-space boundary is active for bundle MCP servers and inline HTTP tools;
-per-user remote MCP OAuth clients remain in the main process
-([#167](https://github.com/ElcanoTek/fleet/issues/167)). One caveat to respect: the
+address-space boundary is active for bundle MCP servers, inline HTTP tools, and
+per-run hosted MCP clients. Explicit remote-MCP OAuth/connectors HTTP endpoints
+remain parent-side control-plane code
+([ADR-0040](docs/adr/0040-child-owned-remote-mcp-runtime.md)). One caveat to respect: the
 bundle's own host-side MCP servers *do* receive brokered credentials by design,
 so treat bundle write access as production access
 ([`SECURITY.md`](SECURITY.md)).

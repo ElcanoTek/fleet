@@ -15,10 +15,10 @@ import (
 // Per-user remote (hosted) MCP overlay (#443), shared by BOTH the interactive
 // and scheduled drivers. A user's OAuth-connected remote servers are wired into
 // a run WITHOUT touching the long-lived shared MCP client (process-wide; mutating
-// it would leak one user's bearer to another). Instead a small per-run *mcp.Client
-// holds only this user's servers, registered with a freshly-refreshed bearer over
-// an SSRF-safe HTTP client, and a compositeBroker routes calls for those server
-// names to it while everything else falls through to the base (shared) broker.
+// it would leak one user's bearer to another). The overlay may be an in-process
+// compatibility client or a child-owned broker scope; a compositeBroker routes
+// its server names to that per-run target while everything else falls through
+// to the base broker.
 // ApplyMCPOverlay sets the run's Deps to advertise the merged catalog and
 // dispatch via that composite — the SAME governed loop, just a different broker
 // seam impl. The overlay client is closed by the caller at run end.

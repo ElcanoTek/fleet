@@ -95,6 +95,11 @@ host-brokered credentials/network that by invariant never enter the sandbox:
 - **Host datastore / control state**: `task_tracker`, `notes`, `memory`, and
   `publish_artifact` write governed database/control records, not arbitrary
   model-selected host files.
+- **Credential enrollment control plane**: remote-MCP OAuth authorization and
+  callback endpoints plus API-key connector intake/probes handle credentials in
+  fixed parent-side HTTP code before encrypted storage. They are not
+  model-callable. Per-run lookup, refresh, client construction, and MCP calls
+  are child-owned under ADR-0040.
 - **Host observability/control state**: bash audit and agent audit/session logs
   remain host control-plane state. The former bash/run_python/web_fetch temp
   spills and agent-history overflow breadcrumbs are removed; governed recovery

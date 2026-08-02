@@ -146,6 +146,44 @@ func (r *productionMCPRuntime) openTaskScope(ctx context.Context, selection agen
 	return r.openScope(ctx, selection, taskID, workspace)
 }
 
+// openRemoteOverlay asks the credential-owning child to construct one user's
+// hosted-MCP overlay. Only identity and public routing names cross the process
+// boundary; connection records, URLs, and credentials remain child-side.
+func (r *productionMCPRuntime) openRemoteOverlay(ctx context.Context, email string, shadowed, enabled map[string]bool) (*agent.RemoteMCPOverlay, error) {
+	scope, err := r.client.OpenScope(ctx, mcpbroker.ScopeSpec{Remote: &mcpbroker.RemoteScopeSpec{
+		UserEmail:     email,
+		FilterEnabled: enabled != nil,
+		Enabled:       sortedEnabledNames(enabled),
+		Shadowed:      sortedEnabledNames(shadowed),
+	}})
+	if err != nil {
+		return nil, err
+	}
+	tools := scope.Tools()
+	servers := make(map[string]bool, len(tools))
+	for _, tool := range tools {
+		servers[tool.Server] = true
+	}
+	return &agent.RemoteMCPOverlay{
+		Broker:     scope,
+		Catalog:    brokerToolCatalog(tools),
+		Servers:    servers,
+		CloseScope: scope.Close,
+		Skipped:    scope.Skipped(),
+	}, nil
+}
+
+func sortedEnabledNames(enabled map[string]bool) []string {
+	names := make([]string, 0, len(enabled))
+	for name, on := range enabled {
+		if on {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
 func (r *productionMCPRuntime) openScope(ctx context.Context, selection agentcore.MCPSelection, taskID, workspace string) (*agent.MCPScope, error) {
 	choices := make([]mcpbroker.ScopeChoice, 0, len(selection))
 	for _, choice := range selection {

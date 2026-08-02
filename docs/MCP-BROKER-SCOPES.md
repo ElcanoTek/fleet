@@ -80,16 +80,14 @@ those choices safely. The scoped protocol is the prerequisite that lets the
 broker process construct and own a distinct client for each run while the agent
 loop sees only the existing governed call seam.
 
-## Deliberately deferred
+## Production boundary
 
-Production startup and both bundle run paths now use these scopes. The remaining
-deferred production path is per-user remote hosted MCP: its OAuth overlay still
-decrypts a bearer and builds a short-lived client in the main Fleet process as
-documented by ADR-0009. The drivers now accept a transport-neutral remote
-overlay opener and the broker protocol understands remote selectors, but the
-production child is not asked to use them yet and production does not inject the
-opener. Issue #167 remains open until production activates the remote scope and
-the accepted ADR-0009 process-boundary exception is updated.
+Production startup and both bundle run paths use these scopes. Per-user remote
+hosted MCP is also activated through the transport-neutral opener: the parent
+sends the child only identity and public selection names, and the child owns
+token lookup/refresh and the short-lived remote client (ADR-0040). Explicit
+OAuth/connectors HTTP control-plane operations remain parent-side; no agent run
+driver receives their credential resolver.
 
 No authorization boundary is added here. Account allowlists, task policy, tool
 approval, and audit remain responsibilities of the existing governed runtime;
@@ -112,8 +110,8 @@ opt-in filtering, scheduled all-connected semantics, bundle-name shadowing, and
 skipped-server reporting. Broker-scope cleanup runs on a fresh five-second
 context, so cancellation of the turn cannot strand the remote scope. This seam
 rejects a broker overlay without an explicit close function, rather than
-silently leaking a per-run scope. It does not itself move OAuth token
-acquisition or remote HTTP clients out of the main process.
+silently leaking a per-run scope. Production binds that seam to the child-owned
+remote scope.
 
 `ManagerOptions` can now supply that broker/catalog plus a per-turn scope opener.
 Broker injection requires an explicit public catalog (an explicit empty catalog
