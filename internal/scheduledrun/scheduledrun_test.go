@@ -2,14 +2,158 @@ package scheduledrun
 
 import (
 	"context"
+	"errors"
 	"os/exec"
+	"reflect"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/ElcanoTek/fleet/internal/agent"
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
+
+type scheduledRecordingBroker struct{}
+
+func (*scheduledRecordingBroker) CallMCP(context.Context, string, string, map[string]any) (string, bool, error) {
+	return "", false, nil
+}
+
+func TestBindTaskMCPRuntime_UsesBrokerScope(t *testing.T) {
+	t.Setenv("FLEET_WORKSPACE_ROOT", t.TempDir())
+	taskID := uuid.New()
+	broker := &scheduledRecordingBroker{}
+	var (
+		gotSelection agentcore.MCPSelection
+		gotTaskID    string
+		gotWorkspace string
+		closeCtxErr  = errors.New("scope not closed")
+	)
+	r := &Runner{
+		cfg: &config.Config{MCPServers: map[string]config.MCPServerConfig{
+			"alpha":    {Enabled: true, Env: map[string]string{"WORK": agentcore.WorkspaceEnvToken}},
+			"beta":     {Enabled: true},
+			"disabled": {Enabled: false},
+		}},
+		openTaskMCPScope: func(_ context.Context, selection agentcore.MCPSelection, taskID, workspace string) (*agent.MCPScope, error) {
+			gotSelection = append(agentcore.MCPSelection(nil), selection...)
+			gotTaskID = taskID
+			gotWorkspace = workspace
+			return &agent.MCPScope{
+				Broker:  broker,
+				Catalog: []mcp.ServerTool{{ServerName: "alpha", Tool: mcp.Tool{Name: "lookup"}}},
+				Close: func(ctx context.Context) error {
+					closeCtxErr = ctx.Err()
+					return nil
+				},
+			}, nil
+		},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	binding, err := r.bindTaskMCPRuntime(ctx, &models.Task{ID: taskID})
+	if err != nil {
+		t.Fatalf("bindTaskMCPRuntime: %v", err)
+	}
+	want := agentcore.MCPSelection{{Server: "alpha"}, {Server: "beta"}}
+	if !reflect.DeepEqual(gotSelection, want) {
+		t.Fatalf("scope selection = %#v, want all enabled servers %#v", gotSelection, want)
+	}
+	if gotTaskID != taskID.String() {
+		t.Errorf("scope task ID = %q, want %q", gotTaskID, taskID)
+	}
+	if gotWorkspace == "" || binding.workdir != gotWorkspace {
+		t.Errorf("scope workspace = %q, binding workdir = %q; want one per-run workspace", gotWorkspace, binding.workdir)
+	}
+	if binding.client != nil || binding.broker != broker || len(binding.catalog) != 1 {
+		t.Fatalf("broker binding = %+v", binding)
+	}
+	cancel()
+	binding.cleanup()
+	if closeCtxErr != nil {
+		t.Fatalf("scope close inherited cancelled run context: %v", closeCtxErr)
+	}
+}
+
+func TestBindTaskMCPRuntime_PreservesExplicitSelection(t *testing.T) {
+	var got agentcore.MCPSelection
+	r := &Runner{
+		cfg: &config.Config{MCPServers: map[string]config.MCPServerConfig{
+			"alpha": {Enabled: true},
+			"beta":  {Enabled: true},
+		}},
+		openTaskMCPScope: func(_ context.Context, selection agentcore.MCPSelection, _, _ string) (*agent.MCPScope, error) {
+			got = append(agentcore.MCPSelection(nil), selection...)
+			return &agent.MCPScope{Broker: &scheduledRecordingBroker{}, Catalog: []mcp.ServerTool{}, Close: func(context.Context) error { return nil }}, nil
+		},
+	}
+	binding, err := r.bindTaskMCPRuntime(context.Background(), &models.Task{
+		ID:           uuid.New(),
+		MCPSelection: models.MCPSelection{{Server: "beta", Account: "backup"}},
+	})
+	if err != nil {
+		t.Fatalf("bindTaskMCPRuntime: %v", err)
+	}
+	defer binding.cleanup()
+	want := agentcore.MCPSelection{{Server: "beta", Account: "backup"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("scope selection = %#v, want exact task selection %#v", got, want)
+	}
+	if binding.catalog == nil {
+		t.Fatal("explicit empty scope catalog became nil")
+	}
+}
+
+func TestBindTaskMCPRuntime_ScopeOpenFailureFailsClosed(t *testing.T) {
+	wantErr := errors.New("broker unavailable")
+	r := &Runner{
+		cfg: &config.Config{},
+		openTaskMCPScope: func(context.Context, agentcore.MCPSelection, string, string) (*agent.MCPScope, error) {
+			return nil, wantErr
+		},
+	}
+	_, err := r.bindTaskMCPRuntime(context.Background(), &models.Task{ID: uuid.New()})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("bindTaskMCPRuntime error = %v, want scope-open failure", err)
+	}
+}
+
+func TestBindTaskMCPRuntime_IncompleteScopeIsClosed(t *testing.T) {
+	closed := false
+	r := &Runner{
+		cfg: &config.Config{},
+		openTaskMCPScope: func(context.Context, agentcore.MCPSelection, string, string) (*agent.MCPScope, error) {
+			return &agent.MCPScope{Close: func(context.Context) error { closed = true; return nil }}, nil
+		},
+	}
+	_, err := r.bindTaskMCPRuntime(context.Background(), &models.Task{ID: uuid.New()})
+	if err == nil {
+		t.Fatal("incomplete scope did not fail closed")
+	}
+	if !closed {
+		t.Fatal("incomplete opened scope was not released")
+	}
+}
+
+func TestTaskMCPBinding_LocalDiscoveryRemainsLive(t *testing.T) {
+	client := mcp.NewClient()
+	binding := taskMCPBinding{client: client}
+	client.AddHTTPTools([]mcp.HTTPToolSpec{{Name: "first", URL: "https://example.invalid"}})
+	if got := len(binding.discoveryCatalog()); got != 1 {
+		t.Fatalf("initial local discovery count = %d, want 1", got)
+	}
+	client.AddHTTPTools([]mcp.HTTPToolSpec{{Name: "second", URL: "https://example.invalid"}})
+	if got := len(binding.discoveryCatalog()); got != 2 {
+		t.Fatalf("local discovery froze after client mutation: count = %d, want 2", got)
+	}
+	if binding.catalog != nil {
+		t.Fatal("local binding populated a static catalog and would break MCP-dirty rebuilds")
+	}
+}
 
 // fakeCredServerScript is a minimal stdio MCP server that exposes a single tool,
 // "whoami", which returns the value of the SECRET_TOKEN env var it was spawned

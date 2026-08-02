@@ -83,7 +83,17 @@ The scheduled `Agent` accepts the same broker/catalog pair and threads it into
 its existing `agentcore.Run`; governed sub-agents inherit that pair, and the
 per-user remote overlay composes over it. Broker mode does not advertise the
 in-process `mcp_load_servers` mutation tool because it has no mutable local
-client. The production scheduled `Runner` does not bind broker scopes yet.
+client.
+
+The scheduled `Runner` can now inject a per-task scope opener. An explicit task
+selection is preserved exactly; a selection-less task maps to every enabled
+bundle server on its default seat, matching the shared-client catalog it used
+before. The opener receives public account names, task ID, and a freshly minted
+per-run workspace when a selected server references `${FLEET_WORKSPACE}`. The
+returned broker/catalog feeds the scheduled `Agent` and remote-overlay shadow
+set, and cleanup uses a fresh bounded context after cancellation. Scope-open
+errors fail the run closed. The local binder remains for transitional callers;
+production startup does not inject the opener yet.
 
 ## Approval integration
 

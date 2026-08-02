@@ -73,8 +73,16 @@ prior versions are listed because none have shipped.
   its governed sub-agents can now call and discover bundle tools through an
   injected broker/catalog, including composition with the existing per-user
   remote overlay. Broker mode suppresses the in-process MCP loader tools instead
-  of advertising an unavailable mutation path. The production `Runner` still
-  binds local clients until its per-task scope integration lands.
+  of advertising an unavailable mutation path. Production startup still leaves
+  the `Runner` on its local compatibility path.
+
+- **Scheduled Runner MCP scopes (#167 prerequisite):** `scheduledrun.Runner`
+  can now open and close an isolated broker scope per task, preserving explicit
+  server/account choices and mapping an empty selection to all enabled bundle
+  servers. Task ID and per-run workspace metadata cross the value-free seam;
+  scope failures do not fall back locally, cancellation cannot suppress close,
+  and remote-MCP shadowing uses the returned public catalog. Production startup
+  does not inject this opener yet.
 
 - **Query-parameter API keys for hosted connectors (Browserbase)**: some
   vendors authenticate their hosted MCP server with the key in a URL query
