@@ -52,6 +52,7 @@ type fakeScopedBroker struct {
 	scopeMu        sync.Mutex
 	scopeID        string
 	scopeTools     []ToolDescriptor
+	scopeSkipped   []string
 	openSpec       ScopeSpec
 	lastCallScope  string
 	closedScopes   []string
@@ -95,7 +96,7 @@ func (b *fakeScopedBroker) Reload(ctx context.Context) (*ReloadResult, error) {
 	return b.reloadResult, b.reloadErr
 }
 
-func (b *fakeScopedBroker) OpenScope(_ context.Context, spec ScopeSpec) (string, []ToolDescriptor, error) {
+func (b *fakeScopedBroker) OpenScope(_ context.Context, spec ScopeSpec) (string, []ToolDescriptor, []string, error) {
 	if b.panicOpen != nil {
 		panic(b.panicOpen)
 	}
@@ -108,7 +109,7 @@ func (b *fakeScopedBroker) OpenScope(_ context.Context, spec ScopeSpec) (string,
 	if b.openRelease != nil {
 		<-b.openRelease
 	}
-	return b.scopeID, b.scopeTools, b.openErr
+	return b.scopeID, b.scopeTools, append([]string(nil), b.scopeSkipped...), b.openErr
 }
 
 func (b *fakeScopedBroker) CallMCPInScope(ctx context.Context, scopeID, server, tool string, args map[string]any) (string, bool, error) {
@@ -508,6 +509,87 @@ func TestClientServer_ScopeLifecycle(t *testing.T) {
 	}
 	if _, _, err := scope.CallMCP(context.Background(), "deal_sheet", "lookup", nil); !errors.Is(err, errScopeClosed) {
 		t.Fatalf("CallMCP after scope close = %v, want errScopeClosed", err)
+	}
+}
+
+func TestClientServer_RemoteScopeMetadata(t *testing.T) {
+	fake := &fakeScopedBroker{
+		fakeBroker:   &fakeBroker{},
+		scopeID:      "remote-scope-1",
+		scopeTools:   []ToolDescriptor{{Server: "github", Tool: "search"}},
+		scopeSkipped: []string{"linear"},
+	}
+	client := loopback(t, fake)
+	spec := ScopeSpec{Remote: &RemoteScopeSpec{
+		UserEmail:     "user@example.com",
+		FilterEnabled: true,
+		Enabled:       []string{}, // filter bit preserves "none" when JSON omits it
+		Shadowed:      []string{"bundle"},
+	}}
+
+	scope, err := client.OpenScope(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("OpenScope: %v", err)
+	}
+	fake.scopeMu.Lock()
+	got := fake.openSpec
+	fake.scopeMu.Unlock()
+	if got.Remote == nil || got.Remote.UserEmail != spec.Remote.UserEmail || !got.Remote.FilterEnabled {
+		t.Fatalf("remote spec = %+v, want %+v", got.Remote, spec.Remote)
+	}
+	if len(got.Remote.Enabled) != 0 {
+		t.Fatalf("remote enabled = %#v, want no names", got.Remote.Enabled)
+	}
+	if len(got.Remote.Shadowed) != 1 || got.Remote.Shadowed[0] != "bundle" {
+		t.Fatalf("remote shadowed = %v", got.Remote.Shadowed)
+	}
+	skipped := scope.Skipped()
+	if len(skipped) != 1 || skipped[0] != "linear" {
+		t.Fatalf("Skipped = %v, want [linear]", skipped)
+	}
+	skipped[0] = "mutated"
+	if got := scope.Skipped(); len(got) != 1 || got[0] != "linear" {
+		t.Fatalf("Skipped returned mutable internal slice: %v", got)
+	}
+}
+
+func TestClientServer_RemoteScopeValidation(t *testing.T) {
+	tests := []struct {
+		name string
+		spec ScopeSpec
+		want string
+	}{
+		{
+			name: "mixed bundle fields",
+			spec: ScopeSpec{Selection: []ScopeChoice{{Server: "bundle"}}, Remote: &RemoteScopeSpec{UserEmail: "u@example.com"}},
+			want: "remote scope cannot include bundle scope fields",
+		},
+		{
+			name: "empty user",
+			spec: ScopeSpec{Remote: &RemoteScopeSpec{}},
+			want: "remote scope requires a user email",
+		},
+		{
+			name: "ambiguous enabled list",
+			spec: ScopeSpec{Remote: &RemoteScopeSpec{UserEmail: "u@example.com", Enabled: []string{"github"}}},
+			want: "remote enabled names require filterEnabled",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fake := &fakeScopedBroker{fakeBroker: &fakeBroker{}, scopeID: "must-not-open"}
+			client := loopback(t, fake)
+			_, err := client.OpenScope(context.Background(), tt.spec)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("OpenScope error = %v, want %q", err, tt.want)
+			}
+			fake.scopeMu.Lock()
+			got := fake.openSpec
+			fake.scopeMu.Unlock()
+			if got.Remote != nil {
+				t.Fatalf("invalid scope reached backend: %+v", got)
+			}
+		})
 	}
 }
 

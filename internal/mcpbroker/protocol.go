@@ -48,8 +48,9 @@ const (
 	// process need not hold them.
 	methodListAccounts method = "list_accounts"
 	// methodOpenScope asks the credential-owning process to construct an isolated
-	// per-run MCP client from public account selections and task identity. The
-	// response carries an opaque scope ID plus that scope's discovered tools.
+	// per-run MCP client from public account selections/task identity or one
+	// user's remote-server selector. The response carries an opaque scope ID plus
+	// that scope's public tools and skipped remote-server names.
 	methodOpenScope method = "scope_open"
 	// methodCloseScope releases one isolated per-run MCP client. Scope calls use
 	// methodCall with request.Scope set, preserving one call envelope and one
@@ -83,6 +84,21 @@ type ScopeSpec struct {
 	Selection []ScopeChoice `json:"selection,omitempty"`
 	TaskID    string        `json:"taskId,omitempty"`
 	Workspace string        `json:"workspace,omitempty"`
+	// Remote selects a per-user hosted-MCP overlay instead of bundle servers.
+	// It carries identity and public server names only; connection records,
+	// endpoint URLs, and credential values remain broker-side.
+	Remote *RemoteScopeSpec `json:"remote,omitempty"`
+}
+
+// RemoteScopeSpec selects one user's hosted MCP connections. FilterEnabled is
+// explicit because nil and empty Enabled have different semantics: false means
+// all connected servers (scheduled runs), while true with an empty slice means
+// none (an interactive conversation with every remote server toggled off).
+type RemoteScopeSpec struct {
+	UserEmail     string   `json:"userEmail"`
+	FilterEnabled bool     `json:"filterEnabled,omitempty"`
+	Enabled       []string `json:"enabled,omitempty"`
+	Shadowed      []string `json:"shadowed,omitempty"`
 }
 
 // ReloadSummary is the public, transport-neutral shape of an MCP catalog
@@ -169,6 +185,10 @@ type response struct {
 	Accounts []string         `json:"accounts,omitempty"`
 	// Scope answers methodOpenScope with the broker-issued opaque ID.
 	Scope string `json:"scope,omitempty"`
+	// Skipped names selected remote servers that could not be connected for this
+	// scope. Names are public configuration identifiers; failure details stay in
+	// the credential-owning process because they may contain resolved URLs.
+	Skipped []string `json:"skipped,omitempty"`
 	// Reload answers methodReload with the diff and refreshed public catalog.
 	Reload *ReloadResult `json:"reload,omitempty"`
 }

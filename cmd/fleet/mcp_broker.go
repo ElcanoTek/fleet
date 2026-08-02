@@ -104,7 +104,10 @@ func (b *brokerBackend) ListAccounts(_ context.Context, _ string, baseVars []str
 	return creds.AccountsFor(baseVars), nil
 }
 
-func (b *brokerBackend) OpenScope(ctx context.Context, spec mcpbroker.ScopeSpec) (string, []mcpbroker.ToolDescriptor, error) {
+func (b *brokerBackend) OpenScope(ctx context.Context, spec mcpbroker.ScopeSpec) (string, []mcpbroker.ToolDescriptor, []string, error) {
+	if spec.Remote != nil {
+		return "", nil, nil, errors.New("remote MCP scopes are not implemented")
+	}
 	selection := make(agentcore.MCPSelection, 0, len(spec.Selection))
 	for _, choice := range spec.Selection {
 		selection = append(selection, agentcore.MCPChoice{Server: choice.Server, Account: choice.Account})
@@ -123,7 +126,7 @@ func (b *brokerBackend) OpenScope(ctx context.Context, spec mcpbroker.ScopeSpec)
 	client := mcp.NewClient()
 	if _, err := agentcore.BindMCPSelection(ctx, client, selection, bases, spec.Workspace); err != nil {
 		_ = client.Close()
-		return "", nil, err
+		return "", nil, nil, err
 	}
 	agent.RegisterHTTPTools(client, httpTools)
 
@@ -135,7 +138,7 @@ func (b *brokerBackend) OpenScope(ctx context.Context, spec mcpbroker.ScopeSpec)
 	b.mu.Lock()
 	b.scopes[id] = scope
 	b.mu.Unlock()
-	return id, describeTools(client), nil
+	return id, describeTools(client), nil, nil
 }
 
 // Reload re-reads credential-bearing configuration inside the child, applies

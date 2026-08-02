@@ -91,9 +91,10 @@ func (c *Client) callMCP(ctx context.Context, scope, server, tool string, args m
 // A Scope is safe for concurrent use. Close waits for its active calls, prevents
 // new calls, and may be retried if the close request fails.
 type Scope struct {
-	client *Client
-	id     string
-	tools  []ToolDescriptor
+	client  *Client
+	id      string
+	tools   []ToolDescriptor
+	skipped []string
 
 	mu        sync.Mutex
 	active    int
@@ -106,8 +107,8 @@ type Scope struct {
 var _ agentcore.MCPBroker = (*Scope)(nil)
 
 // OpenScope asks the broker to construct a per-run client from spec. Spec carries
-// account names and task identity only; connector credential values never cross
-// this connection.
+// public account/server names, task identity, or a remote user's email only;
+// connector credential values never cross this connection.
 func (c *Client) OpenScope(ctx context.Context, spec ScopeSpec) (*Scope, error) {
 	resp, err := c.roundtrip(ctx, request{
 		ID:        c.nextID.Add(1),
@@ -127,6 +128,7 @@ func (c *Client) OpenScope(ctx context.Context, spec ScopeSpec) (*Scope, error) 
 		client:    c,
 		id:        resp.Scope,
 		tools:     cloneToolDescriptors(resp.Tools),
+		skipped:   append([]string(nil), resp.Skipped...),
 		closeGate: make(chan struct{}, 1),
 	}, nil
 }
@@ -159,6 +161,14 @@ func (s *Scope) Tools() []ToolDescriptor {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return cloneToolDescriptors(s.tools)
+}
+
+// Skipped returns public remote-server names that were selected but unavailable
+// while the scope opened. It is empty for bundle scopes.
+func (s *Scope) Skipped() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.skipped...)
 }
 
 func cloneToolDescriptors(src []ToolDescriptor) []ToolDescriptor {

@@ -22,6 +22,17 @@ correlation in a background cleanup and closes any late-arriving scope ID; the
 caller still receives cancellation promptly, but the only resource handle is not
 discarded.
 
+Scope-open also has an additive remote-overlay selector. A remote request carries
+the user's email, public enabled and shadowed server names, and an explicit
+`filterEnabled` bit; it never carries a connection row, endpoint URL, access or
+refresh token, API key, or OAuth client secret. The bit preserves the semantic
+difference between a scheduled run's “all connected servers” and an interactive
+run with an empty enabled list. Remote and bundle scope fields cannot be mixed,
+an empty user is rejected, and enabled names without the filter bit are rejected
+before backend dispatch. A successful response may include public names for
+selected servers that could not be connected, exposed through `Scope.Skipped()`
+as a defensive copy alongside the defensive tool-catalog copy.
+
 The `fleet mcp-broker` backend implements that interface. It resolves account
 suffixes, identity-routing refusal, `${FLEET_TASK_ID}`, and
 `${FLEET_WORKSPACE}` inside the child; owns one MCP client per opaque scope; and
@@ -57,8 +68,10 @@ Production startup and both bundle run paths now use these scopes. The remaining
 deferred production path is per-user remote hosted MCP: its OAuth overlay still
 decrypts a bearer and builds a short-lived client in the main Fleet process as
 documented by ADR-0009. The drivers now accept a transport-neutral remote
-overlay opener, but production does not inject it yet. Issue #167 remains open
-until the child implements and production activates the equivalent remote scope.
+overlay opener and the broker protocol understands remote selectors, but the
+production child currently rejects them explicitly and production does not
+inject the opener yet. Issue #167 remains open until the child implements and
+production activates the equivalent remote scope.
 
 No authorization boundary is added here. Account allowlists, task policy, tool
 approval, and audit remain responsibilities of the existing governed runtime;

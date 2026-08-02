@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
@@ -32,7 +33,9 @@ type Backend interface {
 // are available; older backends continue serving unscoped calls and receive a
 // clear error if a peer requests a scope.
 type ScopedBackend interface {
-	OpenScope(ctx context.Context, spec ScopeSpec) (scopeID string, tools []ToolDescriptor, err error)
+	// OpenScope returns public discovery metadata only. skipped contains remote
+	// server names, never connection errors or credential-bearing details.
+	OpenScope(ctx context.Context, spec ScopeSpec) (scopeID string, tools []ToolDescriptor, skipped []string, err error)
 	// CallMCPInScope must reject unknown scope IDs. CloseScope must coordinate
 	// with calls that reached the backend before it, because cancellation replies
 	// to the client before a connector necessarily observes its cancelled context.
@@ -205,7 +208,7 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 					write(resp)
 					return
 				}
-				resp.Scope, resp.Tools, resp.Err = openScope(callCtx, scoped, req.ScopeSpec)
+				resp.Scope, resp.Tools, resp.Skipped, resp.Err = openScope(callCtx, scoped, req.ScopeSpec)
 				write(resp)
 			}(req)
 
@@ -280,15 +283,34 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 	}
 }
 
-func openScope(ctx context.Context, backend ScopedBackend, spec ScopeSpec) (string, []ToolDescriptor, string) {
-	id, tools, err := backend.OpenScope(ctx, spec)
+func openScope(ctx context.Context, backend ScopedBackend, spec ScopeSpec) (string, []ToolDescriptor, []string, string) {
+	if err := validateScopeSpec(spec); err != nil {
+		return "", nil, nil, err.Error()
+	}
+	id, tools, skipped, err := backend.OpenScope(ctx, spec)
 	if err != nil {
-		return id, tools, err.Error()
+		return id, tools, skipped, err.Error()
 	}
 	if id == "" {
-		return "", nil, "mcpbroker: backend returned an empty scope ID"
+		return "", nil, nil, "mcpbroker: backend returned an empty scope ID"
 	}
-	return id, tools, ""
+	return id, tools, skipped, ""
+}
+
+func validateScopeSpec(spec ScopeSpec) error {
+	if spec.Remote == nil {
+		return nil
+	}
+	if len(spec.Selection) != 0 || spec.TaskID != "" || spec.Workspace != "" {
+		return errors.New("mcpbroker: remote scope cannot include bundle scope fields")
+	}
+	if strings.TrimSpace(spec.Remote.UserEmail) == "" {
+		return errors.New("mcpbroker: remote scope requires a user email")
+	}
+	if !spec.Remote.FilterEnabled && len(spec.Remote.Enabled) != 0 {
+		return errors.New("mcpbroker: remote enabled names require filterEnabled")
+	}
+	return nil
 }
 
 // recoverBackendPanic contains a panic in one broker request and, critically,
