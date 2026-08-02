@@ -19,6 +19,9 @@ prior versions are listed because none have shipped.
 
 ### Security
 
+- Cap host-side `run_if` stderr capture at 8 KiB while continuing to drain the
+  command, preventing a noisy admin-authored gate from exhausting Fleet's heap;
+  document the admin-only gate in the host-I/O exception inventory.
 - Remove the unused arbitrary trailing Podman-argument seam from sandbox
   configuration, so internal callers cannot override mandatory hardening flags;
   correct stale package docs that claimed a production host fallback.

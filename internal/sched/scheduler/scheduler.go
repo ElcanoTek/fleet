@@ -67,6 +67,42 @@ type Scheduler struct {
 // promotes per DB round-trip.
 const defaultScheduledBatchSize = 1000
 
+// maxRunIfStderrBytes bounds diagnostics retained from an admin-authored
+// pre-run gate. The command itself is time-bounded, but without a byte bound a
+// noisy gate could still grow the scheduler process's heap until the timeout.
+const maxRunIfStderrBytes = 8 << 10
+
+const runIfStderrTruncated = "\n…[stderr truncated]"
+
+type cappedRunIfStderr struct {
+	buf       bytes.Buffer
+	truncated bool
+}
+
+func (w *cappedRunIfStderr) Write(p []byte) (int, error) {
+	written := len(p)
+	remaining := maxRunIfStderrBytes - w.buf.Len()
+	if remaining < len(p) {
+		w.truncated = true
+	}
+	if remaining > 0 {
+		if len(p) > remaining {
+			p = p[:remaining]
+		}
+		_, _ = w.buf.Write(p)
+	}
+	// Report the whole input consumed so os/exec keeps draining the pipe after
+	// the retained prefix reaches its cap.
+	return written, nil
+}
+
+func (w *cappedRunIfStderr) String() string {
+	if w.truncated {
+		return w.buf.String() + runIfStderrTruncated
+	}
+	return w.buf.String()
+}
+
 // SetRetention configures the automatic daily run-history pruning sweep (#252).
 // Call before Start. retentionDays<=0 leaves pruning OFF (the default). hour is
 // clamped to 0–23.
@@ -447,7 +483,7 @@ func (s *Scheduler) evalRunIf(task *models.Task) (shouldRun bool, reason string,
 	// that reads $HOME (e.g. git -C) doesn't fail on a missing home dir, and so
 	// a stray write doesn't pollute the fleet process's real home.
 	cmd.Env = []string{"PATH=/usr/bin:/bin", "HOME=/tmp"}
-	var stderr bytes.Buffer
+	var stderr cappedRunIfStderr
 	cmd.Stderr = &stderr
 
 	runErr := cmd.Run()
