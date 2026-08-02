@@ -49,6 +49,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
@@ -86,6 +87,14 @@ const DefaultDir = "config/default"
 type Bundle struct {
 	// Dir is the absolute path to the bundle root.
 	Dir string
+
+	// connectorEnvVarNames and connectorAccountVarNames are captured from the
+	// raw manifest before interpolation. Keeping the source names is required by
+	// the out-of-process MCP broker: an already-exported secret is substituted
+	// out of the parsed manifest, but the parent still needs its NAME so it can
+	// remove that key after the broker child inherits the startup environment.
+	connectorEnvVarNames     []string
+	connectorAccountVarNames []string
 
 	Branding   Branding
 	Models     Models
@@ -933,6 +942,18 @@ func Load(dir string) (*Bundle, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read manifest %s: %w", manifestPath, err)
 	}
+	// Parse only the connector-bearing sections before interpolation. This
+	// source snapshot preserves env-var names even when their values are already
+	// exported and the normal interpolation pass below substitutes the tokens
+	// out of the runtime manifest.
+	var rawConnectors struct {
+		MCPServers []ServerDef   `yaml:"mcp_servers"`
+		HTTPTools  []HTTPToolDef `yaml:"http_tools"`
+	}
+	if err := yaml.Unmarshal(raw, &rawConnectors); err != nil {
+		return nil, fmt.Errorf("parse connector env inventory %s: %w", manifestPath, err)
+	}
+	connectorEnvVars, connectorAccountVars := connectorEnvInventory(rawConnectors.MCPServers, rawConnectors.HTTPTools)
 	// Interpolate env references over the RAW bytes before YAML unmarshal so that
 	// "env-or-default" config semantics — ${VAR:-default} / ${VAR:?message} —
 	// resolve at load time. This restores the getEnvOrDefault("VAR","literal")
@@ -953,30 +974,32 @@ func Load(dir string) (*Bundle, error) {
 	}
 
 	b := &Bundle{
-		Dir:               abs,
-		Branding:          m.Branding,
-		Models:            m.Models,
-		EmptyState:        m.EmptyState,
-		TaskTemplates:     m.TaskTemplates,
-		MCPCatalog:        m.MCPServers,
-		HTTPTools:         m.HTTPTools,
-		WebhookTriggers:   m.WebhookTriggers,
-		RemoteMCPCatalog:  m.RemoteMCPs,
-		Providers:         m.Providers,
-		FallbackProviders: m.FallbackProviders,
-		AgentPolicyConfig: m.AgentPolicy,
-		HooksConfig:       m.Hooks,
-		Personas:          m.Personas,
-		PricingConfig:     m.Pricing,
-		SandboxConfig:     resolveSandbox(m.Sandbox, abs),
-		sandboxDeclared:   m.Sandbox != nil,
-		SystemPromptsDir:  filepath.Join(abs, "system_prompts"),
-		PersonasDir:       filepath.Join(abs, "personas"),
-		ProtocolsDir:      filepath.Join(abs, "protocols"),
-		PromptsDir:        filepath.Join(abs, "prompts"),
-		SkillsDir:         filepath.Join(abs, "skills"),
-		MCPDir:            filepath.Join(abs, "mcp"),
-		EvalsDir:          filepath.Join(abs, "evals"),
+		Dir:                      abs,
+		connectorEnvVarNames:     connectorEnvVars,
+		connectorAccountVarNames: connectorAccountVars,
+		Branding:                 m.Branding,
+		Models:                   m.Models,
+		EmptyState:               m.EmptyState,
+		TaskTemplates:            m.TaskTemplates,
+		MCPCatalog:               m.MCPServers,
+		HTTPTools:                m.HTTPTools,
+		WebhookTriggers:          m.WebhookTriggers,
+		RemoteMCPCatalog:         m.RemoteMCPs,
+		Providers:                m.Providers,
+		FallbackProviders:        m.FallbackProviders,
+		AgentPolicyConfig:        m.AgentPolicy,
+		HooksConfig:              m.Hooks,
+		Personas:                 m.Personas,
+		PricingConfig:            m.Pricing,
+		SandboxConfig:            resolveSandbox(m.Sandbox, abs),
+		sandboxDeclared:          m.Sandbox != nil,
+		SystemPromptsDir:         filepath.Join(abs, "system_prompts"),
+		PersonasDir:              filepath.Join(abs, "personas"),
+		ProtocolsDir:             filepath.Join(abs, "protocols"),
+		PromptsDir:               filepath.Join(abs, "prompts"),
+		SkillsDir:                filepath.Join(abs, "skills"),
+		MCPDir:                   filepath.Join(abs, "mcp"),
+		EvalsDir:                 filepath.Join(abs, "evals"),
 	}
 	applyBrandingDefaults(&b.Branding)
 	if err := b.resolveBrandLogo(); err != nil {
@@ -2030,6 +2053,181 @@ func (b *Bundle) EnvVarNames() []string {
 	// .env-file allowlist exactly like an MCP connector credential.
 	for i := range b.Providers {
 		add(b.Providers[i].APIKeyEnv)
+	}
+	return out
+}
+
+// ConnectorEnvVarNames returns the base process-env names referenced by bundle
+// MCP servers and inline HTTP tools. The inventory is captured from the raw
+// manifest, before interpolation can replace an already-exported ${VAR} token
+// with its value. Values are never retained here.
+//
+// This is narrower than EnvVarNames: provider keys and webhook signing secrets
+// remain parent-owned and are deliberately excluded. Account-suffixed variants
+// are represented by every stdio env key that ApplyClientSuffix may probe; use
+// ConnectorEnvironmentKeys to expand those bases against a process environment.
+func (b *Bundle) ConnectorEnvVarNames() []string {
+	return append([]string(nil), b.connectorEnvVarNames...)
+}
+
+// ConnectorEnvironmentKeys returns the exact keys in environ that belong to
+// bundle connectors: every declared base name plus every <stdio-env-key>_<seat>
+// variant recognized by the account suffix convention. Entries and returned
+// values contain names only, never secret values. Matching account variants is
+// case-insensitive, mirroring creds.AccountsFor.
+func (b *Bundle) ConnectorEnvironmentKeys(environ []string) []string {
+	bases := make(map[string]bool, len(b.connectorEnvVarNames))
+	for _, name := range b.connectorEnvVarNames {
+		bases[strings.ToUpper(name)] = true
+	}
+	accountBases := make([]string, 0, len(b.connectorAccountVarNames))
+	for _, name := range b.connectorAccountVarNames {
+		accountBases = append(accountBases, strings.ToUpper(name)+"_")
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, entry := range environ {
+		key, _, ok := strings.Cut(entry, "=")
+		if !ok || key == "" {
+			continue
+		}
+		upper := strings.ToUpper(key)
+		matched := bases[upper]
+		if !matched {
+			for _, prefix := range accountBases {
+				if strings.HasPrefix(upper, prefix) && len(upper) > len(prefix) {
+					matched = true
+					break
+				}
+			}
+		}
+		if matched && !seen[key] {
+			seen[key] = true
+			out = append(out, key)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+func connectorEnvInventory(servers []ServerDef, httpTools []HTTPToolDef) ([]string, []string) {
+	seen := map[string]bool{}
+	accountSeen := map[string]bool{}
+	var names, accountNames []string
+	add := func(dst *[]string, index map[string]bool, name string) {
+		name = strings.TrimSpace(name)
+		if name == "" || reservedRuntimeVar(name) || index[name] {
+			return
+		}
+		index[name] = true
+		*dst = append(*dst, name)
+	}
+	addRef := func(value string) {
+		for _, name := range sourceEnvRefs(value) {
+			add(&names, seen, name)
+		}
+	}
+	for i := range servers {
+		s := &servers[i]
+		for _, name := range s.EnabledEnv {
+			add(&names, seen, name)
+		}
+		for _, group := range s.EnabledGroups {
+			for _, name := range group {
+				add(&names, seen, name)
+			}
+		}
+		for _, name := range s.AccountVars {
+			add(&names, seen, name)
+			add(&accountNames, accountSeen, name)
+		}
+		for _, name := range s.IdentityEnv {
+			add(&names, seen, name)
+		}
+		// ApplyClientSuffix probes <ENV_KEY>_<ACCOUNT> for every stdio env key,
+		// not only the smaller account_vars discovery list. Retain those keys as
+		// account bases so the parent can scrub identity/config overrides too.
+		for name := range s.Env {
+			add(&names, seen, name)
+			add(&accountNames, accountSeen, name)
+		}
+		walkSourceStrings(reflect.ValueOf(*s), addRef)
+	}
+	for i := range httpTools {
+		walkSourceStrings(reflect.ValueOf(httpTools[i]), addRef)
+	}
+	slices.Sort(names)
+	slices.Sort(accountNames)
+	return names, accountNames
+}
+
+// walkSourceStrings visits every string in the raw connector definitions,
+// including nested probe args/input schemas and map keys. The manifest
+// interpolator operates over the entire YAML section, so an inventory limited
+// to today's documented header/env fields could silently miss a future
+// interpolated connector field.
+func walkSourceStrings(value reflect.Value, visit func(string)) {
+	if !value.IsValid() {
+		return
+	}
+	switch value.Kind() {
+	case reflect.Interface, reflect.Pointer:
+		if !value.IsNil() {
+			walkSourceStrings(value.Elem(), visit)
+		}
+	case reflect.String:
+		visit(value.String())
+	case reflect.Struct:
+		for i := 0; i < value.NumField(); i++ {
+			walkSourceStrings(value.Field(i), visit)
+		}
+	case reflect.Slice, reflect.Array:
+		for i := 0; i < value.Len(); i++ {
+			walkSourceStrings(value.Index(i), visit)
+		}
+	case reflect.Map:
+		iter := value.MapRange()
+		for iter.Next() {
+			walkSourceStrings(iter.Key(), visit)
+			walkSourceStrings(iter.Value(), visit)
+		}
+	default:
+		// Scalar non-strings and executable/channel/unsafe kinds carry no
+		// manifest text and therefore cannot contain an env reference.
+	}
+}
+
+// sourceEnvRefs extracts source variable names from ${VAR}, ${VAR:-default},
+// and ${VAR:?message} without consulting the environment. It mirrors the
+// manifest interpolator's brace and escape rules closely enough to inventory
+// exactly the variables interpolation may read.
+func sourceEnvRefs(value string) []string {
+	var out []string
+	for i := 0; i < len(value); {
+		if strings.HasPrefix(value[i:], "$${") {
+			i += 3
+			continue
+		}
+		if !strings.HasPrefix(value[i:], "${") {
+			i++
+			continue
+		}
+		end, ok := matchBrace(value, i+1)
+		if !ok {
+			return out
+		}
+		expr := value[i+2 : end]
+		name := expr
+		if split := strings.Index(expr, ":-"); split >= 0 {
+			name = expr[:split]
+		} else if split := strings.Index(expr, ":?"); split >= 0 {
+			name = expr[:split]
+		}
+		name = strings.TrimSpace(name)
+		if name != "" {
+			out = append(out, name)
+		}
+		i = end + 1
 	}
 	return out
 }

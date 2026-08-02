@@ -52,6 +52,14 @@ prior versions are listed because none have shipped.
   broker tool-level error now resolves the approval as failed. Production
   `Manager` still supplies its local-client adapter until the broker switch-on.
 
+- **Connector env inventory (#167 prerequisite):** client bundles now retain a
+  names-only inventory of MCP and inline-HTTP-tool environment references from
+  the raw manifest, before interpolation can erase already-exported variable
+  names. The inventory also expands account-suffixed stdio env keys against a
+  supplied environment, enabling the production parent to scrub exactly the
+  connector keys after a broker child inherits them. No scrubbing is activated
+  by this prerequisite alone.
+
 - **Query-parameter API keys for hosted connectors (Browserbase)**: some
   vendors authenticate their hosted MCP server with the key in a URL query
   parameter rather than a header. api_key connectors now support

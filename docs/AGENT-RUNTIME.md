@@ -52,7 +52,11 @@ when a per-user remote-MCP overlay is active; the production Manager does not ye
 inject them. The HTTP approval path also consumes only that broker/catalog
 contract for email pre-validation and approved MCP calls; its current Manager
 implementation adapts the same local client, so this removes a concrete-client
-dependency without claiming the production process boundary is active.
+dependency without claiming the production process boundary is active. Bundle
+loading also retains the names (never values) of connector environment inputs
+from the raw manifest, including account-suffixed stdio keys; this prevents
+startup interpolation from erasing the parent's future scrub inventory. The
+production parent does not consume that inventory yet.
 
 **Current limitation (#167, reopened):** the server does not yet spawn that
 subprocess in production; `agent.New` still owns the credentialed client in the
