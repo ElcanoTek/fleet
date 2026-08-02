@@ -31,7 +31,7 @@ import (
 // (the live turn path is only exercised by skipped integration/live tests).
 //
 // MCPServerCatalog and ListPersonas are already provided by the fleet
-// agent.Manager; RunTurn / Summarize / SuggestTitle / MCPClient / SandboxPool
+// agent.Manager; RunTurn / Summarize / SuggestTitle / MCPBroker / SandboxPool
 // are the interactive-engine surface P6b binds.
 type turnEngine interface {
 	// RunTurn executes one interactive turn: it streams events through the
@@ -54,9 +54,11 @@ type turnEngine interface {
 	// prompt-library draft (name + description + content) the user reviews
 	// before saving. Returns an error on failure (user-initiated action).
 	SuggestLibraryPrompt(ctx context.Context, transcript string) (*agent.LibraryPromptDraft, error)
-	// MCPClient exposes the shared MCP client for the out-of-band approval
-	// execution path (runStagedTool).
-	MCPClient() *mcp.Client
+	// MCPBroker and MCPCatalog expose the call seam plus public discovery data
+	// for out-of-band approval execution without requiring a concrete,
+	// credentialed MCP client in the HTTP process.
+	MCPBroker() agentcore.MCPBroker
+	MCPCatalog() []mcp.ServerTool
 	// SandboxPool exposes the per-turn sandbox warm pool for the out-of-band
 	// approved-bash execution path (runStagedBash).
 	SandboxPool() *sandbox.Pool

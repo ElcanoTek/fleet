@@ -61,3 +61,17 @@ local-client path. Its per-user remote-MCP overlay composes with either base: a
 remote server name routes to the short-lived user client, while every bundle
 server routes to the injected broker. This is a wiring prerequisite only;
 `Manager` does not yet supply these fields in production.
+
+## Approval integration
+
+Interactive approval staging and resolution no longer reach through the HTTP
+engine contract for a concrete `mcp.Client`. They receive the common `MCPBroker`
+plus its public catalog, resolve the full `mcp_<server>_<tool>` identity against
+that catalog, and delegate the call. Email pre-validation stays on the same
+server that authored the staged send tool, rather than using an ambiguous bare
+tool lookup. A tool-level MCP error is recorded as a failed approval execution.
+
+The shipped Manager adapter still wraps its local client. This change is the
+transport seam needed for process isolation; it does not yet preserve a scoped
+account selection across a long-lived approval card. That lifecycle and the
+production broker injection remain part of #167.
