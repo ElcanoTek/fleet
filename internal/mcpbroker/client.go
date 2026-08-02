@@ -8,6 +8,7 @@ import (
 	"io"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 )
@@ -17,6 +18,8 @@ import (
 var errClientClosed = errors.New("mcpbroker: client connection closed")
 
 var errScopeClosed = errors.New("mcpbroker: scope closed")
+
+const abandonedScopeCloseTimeout = 3 * time.Second
 
 // Client forwards agentcore.MCPBroker calls to a Server over a connection. It is a
 // drop-in MCPBroker for the agent loop: the loop calls CallMCP exactly as it would
@@ -326,13 +329,38 @@ func (c *Client) roundtrip(ctx context.Context, req request) (response, error) {
 	case resp := <-ch:
 		return resp, nil
 	case <-ctx.Done():
-		c.discard(req.ID)
 		// Best-effort: ask the server to stop the in-flight call so it doesn't keep
 		// running an MCP request whose result nobody will read.
 		_ = c.send(request{ID: req.ID, Method: methodCancel})
+		if req.Method == methodOpenScope {
+			// Keep this pending slot alive: cancellation can race the backend creating
+			// the scope. If a late response owns an ID, release it instead of losing
+			// the only handle and leaking its subprocesses until broker shutdown.
+			//nolint:gosec // cleanup must outlive the request context that triggered it.
+			go c.closeAbandonedScope(ch)
+		} else {
+			c.discard(req.ID)
+		}
 		return response{}, ctx.Err()
 	case <-c.done:
 		return response{}, c.closedErr()
+	}
+}
+
+func (c *Client) closeAbandonedScope(ch <-chan response) {
+	select {
+	case resp := <-ch:
+		if resp.Scope == "" {
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), abandonedScopeCloseTimeout)
+		defer cancel()
+		_, _ = c.roundtrip(ctx, request{
+			ID:     c.nextID.Add(1),
+			Method: methodCloseScope,
+			Scope:  resp.Scope,
+		})
+	case <-c.done:
 	}
 }
 

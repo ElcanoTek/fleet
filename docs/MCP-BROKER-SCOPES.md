@@ -17,6 +17,19 @@ or backend failure. Open, call, and close backend panics produce the same
 value-free, incident-correlated response as unscoped broker operations, without
 stopping the server. Backends that do not implement `ScopedBackend` retain the
 old unscoped behavior and reject scope requests explicitly.
+If cancellation races a successful open, the client retains the pending
+correlation in a background cleanup and closes any late-arriving scope ID; the
+caller still receives cancellation promptly, but the only resource handle is not
+discarded.
+
+The `fleet mcp-broker` backend implements that interface. It resolves account
+suffixes, identity-routing refusal, `${FLEET_TASK_ID}`, and
+`${FLEET_WORKSPACE}` inside the child; owns one MCP client per opaque scope; and
+serializes scope close against calls already admitted to that client. Closing
+the broker after its protocol loop exits also reaps every scope a disconnected
+parent left open. Disabled servers are absent from the shared spawn-definition
+map, so a stale selection cannot launch one through either the broker or the
+legacy scheduled binder.
 
 ## Why this is separate
 
@@ -28,13 +41,13 @@ loop sees only the existing governed call seam.
 
 ## Deliberately deferred
 
-This change adds the internal protocol and tested lifecycle only. It does **not**
-switch production startup or run construction to the subprocess. `agent.New`
-still builds the credentialed client in the main fleet process, and per-user
-remote MCP credentials are not covered by these scopes. Issue #167 remains open
-until the production interactive and scheduled paths use the subprocess, parent
-credential material is scrubbed, and the remote-MCP credential path is moved
-behind an equivalent process boundary.
+The protocol and child backend are implemented, but production startup and run
+construction do **not** yet use them. `agent.New` still builds the credentialed
+client in the main fleet process, and per-user remote MCP credentials are not
+covered by these scopes. Issue #167 remains open until the production interactive
+and scheduled paths use the subprocess, parent credential material is scrubbed,
+and the remote-MCP credential path is moved behind an equivalent process
+boundary.
 
 No authorization boundary is added here. Account allowlists, task policy, tool
 approval, and audit remain responsibilities of the existing governed runtime;

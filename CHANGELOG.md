@@ -30,6 +30,15 @@ prior versions are listed because none have shipped.
   and #167 remains open for subprocess switch-on and remote-MCP isolation. See
   [`docs/MCP-BROKER-SCOPES.md`](docs/MCP-BROKER-SCOPES.md).
 
+- **Credential-owning MCP scope backend (#167 prerequisite):** `fleet
+  mcp-broker` now constructs each requested account/task/workspace scope inside
+  the child, serializes close against admitted calls, and reaps all remaining
+  scoped subprocesses when its protocol loop exits. The shared spawn-definition
+  builder now excludes disabled servers, so a stale task selection cannot launch
+  one. A cancelled open also closes a late-created scope instead of losing its
+  opaque handle. Production still does not spawn or use this broker, and #167
+  remains open for that switch-on and parent credential scrubbing.
+
 - **Query-parameter API keys for hosted connectors (Browserbase)**: some
   vendors authenticate their hosted MCP server with the key in a URL query
   parameter rather than a header. api_key connectors now support
