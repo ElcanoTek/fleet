@@ -42,6 +42,24 @@ parent left open. Disabled servers are absent from the shared spawn-definition
 map, so a stale selection cannot launch one through either the broker or the
 legacy scheduled binder.
 
+When remote MCP is configured, the child also opens the chat store, installs the
+same at-rest cipher, and constructs the `remotemcp.Service` there. That store has
+an independent pool capped at eight open and two idle connections (or a lower
+configured chat-pool limit), and the child repeats the chat/sched database
+separation check before it can migrate. A remote scope resolves the user's own
+and shared connections, decrypts or refreshes the selected credentials under the
+existing row lock, and builds the SSRF-guarded HTTP MCP client entirely inside
+the child. An explicit empty interactive filter still opens an empty lifecycle
+scope without looking up a token; scheduled all-connected selection and
+needs-reauth skipped-name reporting preserve the legacy behavior. The broker
+owns each resulting client until scope close or peer disconnect, then closes its
+remote DB pool during shutdown.
+
+Scope-open resolver and per-server token/handshake failure values are
+deliberately not logged by the overlay builder or returned through scope open.
+A whole-scope resolver failure becomes the fixed `remote MCP scope unavailable`
+error; recoverable per-server failures return only public skipped names.
+
 The protocol also supports credential-owner reload. The parent sends an empty
 `reload` request — never resolved server definitions — and the child re-reads
 its bundle against its boot credential snapshot, applies the same
@@ -69,9 +87,9 @@ deferred production path is per-user remote hosted MCP: its OAuth overlay still
 decrypts a bearer and builds a short-lived client in the main Fleet process as
 documented by ADR-0009. The drivers now accept a transport-neutral remote
 overlay opener and the broker protocol understands remote selectors, but the
-production child currently rejects them explicitly and production does not
-inject the opener yet. Issue #167 remains open until the child implements and
-production activates the equivalent remote scope.
+production child is not asked to use them yet and production does not inject the
+opener. Issue #167 remains open until production activates the remote scope and
+the accepted ADR-0009 process-boundary exception is updated.
 
 No authorization boundary is added here. Account allowlists, task policy, tool
 approval, and audit remain responsibilities of the existing governed runtime;

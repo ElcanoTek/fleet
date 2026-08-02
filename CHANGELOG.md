@@ -19,13 +19,24 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **Child-owned remote MCP scopes (#167 prerequisite):** `fleet mcp-broker`
+  now opens an encrypted chat-store connection when remote MCP is configured,
+  performs per-user connection lookup, token/API-key decryption and refresh,
+  SSRF-guarded handshake, tool discovery, calls, and cleanup inside the child,
+  and returns only public tools and skipped names. The dedicated DB pool is
+  capped at 8 open/2 idle connections, scope-open resolver and per-server
+  token/handshake failure values do not cross the pipe or enter logs, and
+  disabled operation fails explicitly. Production does not request these scopes
+  until the final activation slice. See
+  [`docs/MCP-BROKER-SCOPES.md`](docs/MCP-BROKER-SCOPES.md).
+
 - **Remote MCP scope protocol (#167 prerequisite):** broker scope-open requests
   can now carry a user email plus public enabled/shadowed remote-server names,
   with an explicit filter bit preserving interactive “none selected” versus
   scheduled “all connected.” Scope responses expose only public tools and
   skipped-server names. Mixed bundle/remote fields and ambiguous filters fail
-  before backend dispatch; the production child still rejects remote scopes
-  until the next implementation slice. See
+  before backend dispatch; the production child consumes this selector as
+  described above. See
   [`docs/MCP-BROKER-SCOPES.md`](docs/MCP-BROKER-SCOPES.md).
 
 - **Remote MCP broker overlay seam (#167 prerequisite):** interactive and
