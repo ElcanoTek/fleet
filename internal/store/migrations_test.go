@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"testing"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -198,5 +199,122 @@ func TestMigrations_LoadOrderAndDedup(t *testing.T) {
 			t.Errorf("migrations not strictly ascending: [%d]=%d, [%d]=%d",
 				i-1, ms[i-1].version, i, ms[i].version)
 		}
+	}
+}
+
+func TestMigration046_NormalizesLegacyPositionTies(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	conv, err := s.CreateConversation(ctx, "u@example.com", "", "assistant", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// Recreate migration 045's non-unique index inside the transaction, then
+	// seed the collision migration 046 must repair. Rolling the transaction back
+	// leaves the test database's already-migrated schema untouched.
+	if _, err := tx.ExecContext(ctx, `DROP INDEX IF EXISTS chat_input_queue_active_position`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.ExecContext(ctx, `DROP INDEX IF EXISTS chat_input_queue_pending`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.ExecContext(ctx, `DROP INDEX IF EXISTS chat_input_queue_terminal_retention`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`CREATE INDEX chat_input_queue_pending ON chat_input_queue (conversation_id, position) WHERE state = 'queued'`); err != nil {
+		t.Fatal(err)
+	}
+	for _, values := range []struct {
+		id        string
+		state     string
+		position  int
+		createdAt int
+	}{
+		{"legacy-b", "queued", 5, 100},
+		{"legacy-a", "running", 5, 100},
+		{"legacy-c", "injected", 7, 99},
+	} {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO chat_input_queue
+			   (id, conversation_id, user_email, client_input_id, message, attachments,
+			    mode, state, position, created_at, updated_at)
+			 VALUES ($1, $2, 'u@example.com', $1, $1, '[]', 'queued', $3, $4, $5, $5)`,
+			values.id, conv.ID, values.state, values.position, values.createdAt); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var migrationSQL string
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range migrations {
+		if m.version == 46 {
+			migrationSQL = m.sql
+			break
+		}
+	}
+	if migrationSQL == "" {
+		t.Fatal("migration 046 not embedded")
+	}
+	if _, err := tx.ExecContext(ctx, migrationSQL); err != nil {
+		t.Fatalf("apply migration 046: %v", err)
+	}
+
+	rows, err := tx.QueryContext(ctx,
+		`SELECT id FROM chat_input_queue
+		  WHERE conversation_id = $1 AND state IN ('queued','running','injected')
+		  ORDER BY position`, conv.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			_ = rows.Close()
+			t.Fatal(err)
+		}
+		got = append(got, id)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if want := "legacy-a,legacy-b,legacy-c"; strings.Join(got, ",") != want {
+		t.Fatalf("normalized order = %v, want %s", got, want)
+	}
+
+	if _, err := tx.ExecContext(ctx, `SAVEPOINT duplicate_position`); err != nil {
+		t.Fatal(err)
+	}
+	_, duplicateErr := tx.ExecContext(ctx,
+		`INSERT INTO chat_input_queue
+		   (id, conversation_id, user_email, client_input_id, message, attachments,
+		    mode, state, position, created_at, updated_at)
+		 VALUES ('duplicate-position', $1, 'u@example.com', 'duplicate-position', '', '[]',
+		         'queued', 'queued', 1, 200, 200)`, conv.ID)
+	if duplicateErr == nil {
+		t.Fatal("migration 046 did not enforce unique queued positions")
+	}
+	if _, err := tx.ExecContext(ctx, `ROLLBACK TO SAVEPOINT duplicate_position`); err != nil {
+		t.Fatal(err)
+	}
+	// The index is deliberately partial: terminal history may retain its old
+	// position until the retention sweep removes it.
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO chat_input_queue
+		   (id, conversation_id, user_email, client_input_id, message, attachments,
+		    mode, state, position, created_at, updated_at)
+		 VALUES ('terminal-position', $1, 'u@example.com', 'terminal-position', '', '[]',
+		         'queued', 'completed', 1, 200, 200)`, conv.ID); err != nil {
+		t.Fatalf("terminal duplicate position should remain allowed: %v", err)
 	}
 }

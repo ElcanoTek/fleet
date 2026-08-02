@@ -262,6 +262,9 @@ func (s *fakeChatStore) ListToolCalls(_ context.Context, convID, toolFilter stri
 func (s *fakeChatStore) SweepExpired(context.Context, time.Duration, int) (int, int, error) {
 	return 0, 0, nil
 }
+func (s *fakeChatStore) PurgeTerminalInputs(context.Context, time.Duration) (int, error) {
+	return 0, nil
+}
 func (s *fakeChatStore) SweepOrphanWorkspaces(context.Context, string) (int, error) { return 0, nil }
 
 // SetModel records the per-turn model override (#568) so tests can assert that

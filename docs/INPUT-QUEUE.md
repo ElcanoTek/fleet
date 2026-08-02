@@ -14,7 +14,13 @@ idempotency key, and a state: `queued → running → completed` (drained as a
 turn), or `queued → injected → completed` (steered into the running turn), or
 `cancelled` (removed / covered by Stop). A re-POST of the same
 `(conversation, input_id)` returns the existing item (200) instead of
-duplicating it.
+duplicating it while that row remains within retention.
+
+Terminal (`completed` / `cancelled`) rows are retained for 30 days by default,
+then purged at boot and after turns. `FLEET_INPUT_QUEUE_RETENTION_DAYS` changes
+that window; `0` disables the purge. The window is also the idempotency-key
+retention guarantee: after a terminal row is purged, reusing its
+`client_input_id` creates a new input. Non-terminal rows are never purged.
 
 ## API
 
@@ -87,6 +93,13 @@ cancelled, same #823 predicate as turn-end settlement; otherwise back to
 queued) and deliberately does NOT auto-drain: a restart must not start
 unattended LLM spend — restored inputs are visible in the queue UI and run
 on send-now or the next submission.
+
+Position allocation and send-now promotion serialize on the conversation row,
+and a partial unique index enforces one position per non-terminal item (including
+`running` / `injected` rows that recovery may re-queue). Drain and snapshot
+queries additionally order by `created_at, id`, so databases upgraded from the
+pre-index schema retain deterministic behavior while migration 046 normalizes
+any legacy ties.
 
 ## Honest scope (deferred)
 
