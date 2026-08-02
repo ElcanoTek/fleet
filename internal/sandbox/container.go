@@ -168,10 +168,6 @@ type ContainerConfig struct {
 	// the memory ceiling is raised by the guest overhead (applyKataMemoryOverhead).
 	Runtime string
 
-	// ExtraRunArgs are appended to the `podman run` invocation just
-	// before the image name. Useful for tests or one-off knobs.
-	ExtraRunArgs []string
-
 	// NoNetwork forces `--network=none` so the container has an empty
 	// network namespace — no loopback, no DNS, no route to anywhere.
 	// Used by the lockdown path (TakeContainer) where the security model
@@ -490,7 +486,8 @@ func (c *containerImpl) start(ctx context.Context) error {
 		// per-conversation workspace nor write `marker.txt` next to a
 		// host-MCP-downloaded attachment. Lockdown chats hit this on
 		// every turn (see TakeContainer in pool.go); non-lockdown
-		// chats hid behind Pool.Take()'s degrade-to-host fallback.
+		// Before the host fallback was removed, non-lockdown chats could hide
+		// this because they used the host fixture instead.
 		//
 		// keep-id:uid=N,gid=N tells podman: inside the container, the
 		// host user appears at uid=N. Picking N=1000 lines up with the
@@ -585,7 +582,6 @@ func (c *containerImpl) start(ctx context.Context) error {
 	if c.cfg.Runtime != "" {
 		args = append(args, fmt.Sprintf("--runtime=%s", c.cfg.Runtime))
 	}
-	args = append(args, c.cfg.ExtraRunArgs...)
 	args = append(args, c.cfg.Image)
 	// PID 1 inside the container: a do-nothing process so the
 	// namespace stays alive. We exec into it for actual work.
