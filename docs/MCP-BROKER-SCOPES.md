@@ -35,7 +35,8 @@ The protocol also supports credential-owner reload. The parent sends an empty
 `reload` request — never resolved server definitions — and the child re-reads
 its bundle and environment-backed connector configuration, applies the same
 minimum add/remove/restart diff as the in-process client, and returns only the
-public summary, refreshed tool catalog, and provisioned account-seat names.
+public summary, refreshed tool catalog, provisioned account-seat names, and the
+enabled servers' gating/picker metadata.
 Reload requests use the existing correlation, cancellation, and value-free
 panic-containment machinery. Scope opening serializes with reload: an opening
 scope receives a coherent old or new base catalog, while scopes already open
@@ -88,9 +89,10 @@ back to the local client.
 
 The local-client default remains for transitional callers and tests. Production
 startup does not inject the new Manager options yet. Manager can accept a
-broker-mode reload adapter, prepublish safety gating before the child changes,
-and atomically swap its public catalog, provisioned account names, prompt roster,
-and picker metadata from one child result. A broker without that adapter fails an operator
+broker-mode reload adapter and atomically swap its enabled-server gates, public
+catalog, provisioned account names, prompt roster, and picker metadata from one
+self-describing child result. The scrubbed parent does not re-read connector
+definitions on reload. A broker without that adapter fails an operator
 reload explicitly instead of reporting a false success. Production broker
 injection remains part of the switch-on sequence.
 

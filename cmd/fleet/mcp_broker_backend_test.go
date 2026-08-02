@@ -189,6 +189,10 @@ func TestBrokerBackend_ReloadRefreshesFutureScopesAndPreservesActiveScope(t *tes
 	if len(result.Accounts["acct"]) != 1 || result.Accounts["acct"][0] != "blue" {
 		t.Fatalf("reload accounts = %+v, want acct:[blue]", result.Accounts)
 	}
+	if len(result.Servers) != 1 || result.Servers[0].Name != "acct" || len(result.Servers[0].AccountVars) != 1 ||
+		result.Servers[0].AccountVars[0] != "TEST_SCOPE_TOKEN" {
+		t.Fatalf("reload servers = %+v, want public acct metadata", result.Servers)
+	}
 
 	oldText, _, err := b.CallMCPInScope(ctx, oldID, "acct", "identity", nil)
 	if err != nil {

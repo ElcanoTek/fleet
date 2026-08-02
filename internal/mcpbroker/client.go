@@ -320,7 +320,18 @@ func (c *Client) Reload(ctx context.Context) (*ReloadResult, error) {
 	result.Summary.Restarted = append([]string(nil), resp.Reload.Summary.Restarted...)
 	result.Summary.Unchanged = append([]string(nil), resp.Reload.Summary.Unchanged...)
 	result.Accounts = cloneAccounts(resp.Reload.Accounts)
+	result.Servers = cloneServerDescriptors(resp.Reload.Servers)
 	return &result, nil
+}
+
+func cloneServerDescriptors(src []ServerDescriptor) []ServerDescriptor {
+	dst := make([]ServerDescriptor, len(src))
+	for i, server := range src {
+		dst[i] = server
+		dst[i].ToolAllowlist = append([]string(nil), server.ToolAllowlist...)
+		dst[i].AccountVars = append([]string(nil), server.AccountVars...)
+	}
+	return dst
 }
 
 func cloneAccounts(src map[string][]string) map[string][]string {
