@@ -24,6 +24,43 @@ func (*scheduledRecordingBroker) CallMCP(context.Context, string, string, map[st
 	return "", false, nil
 }
 
+func TestBuildTaskRemoteOverlayUsesInjectedOpenerWithoutResolver(t *testing.T) {
+	ownerID := uuid.New()
+	taskID := uuid.New()
+	var gotEmail string
+	r := &Runner{
+		ownerEmail: func(_ context.Context, got uuid.UUID) (string, error) {
+			if got != ownerID {
+				t.Fatalf("owner ID = %s, want %s", got, ownerID)
+			}
+			return "owner@example.com", nil
+		},
+		openRemoteMCPOverlay: func(_ context.Context, email string, shadowed, enabled map[string]bool) (*agent.RemoteMCPOverlay, error) {
+			gotEmail = email
+			if !shadowed["bundle"] || len(shadowed) != 1 {
+				t.Fatalf("shadowed = %v, want bundle only", shadowed)
+			}
+			if enabled != nil {
+				t.Fatalf("scheduled enabled filter = %v, want nil", enabled)
+			}
+			return &agent.RemoteMCPOverlay{
+				Broker:     &scheduledRecordingBroker{},
+				Servers:    map[string]bool{"remote": true},
+				CloseScope: func(context.Context) error { return nil },
+			}, nil
+		},
+	}
+	task := &models.Task{ID: taskID, CreatedBy: &ownerID}
+
+	overlay := r.buildTaskRemoteOverlay(context.Background(), task, []mcp.ServerTool{{ServerName: "bundle"}})
+	if !overlay.Active() {
+		t.Fatal("injected broker overlay is not active")
+	}
+	if gotEmail != "owner@example.com" {
+		t.Fatalf("email = %q", gotEmail)
+	}
+}
+
 func TestBindTaskMCPRuntime_UsesBrokerScope(t *testing.T) {
 	t.Setenv("FLEET_WORKSPACE_ROOT", t.TempDir())
 	taskID := uuid.New()

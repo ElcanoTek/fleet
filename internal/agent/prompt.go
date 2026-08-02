@@ -176,8 +176,12 @@ type Manager struct {
 	personaPolicies map[string]agentcore.PersonaToolPermissions
 
 	// remoteMCP resolves a user's OAuth-connected remote (hosted) MCP servers and
-	// mints their bearer tokens for the per-turn overlay (#443). nil = feature off.
+	// mints their bearer tokens for the per-turn overlay (#443). It is the
+	// in-process compatibility path; production can instead inject the opener.
 	remoteMCP RemoteMCPResolver
+	// openRemoteMCPOverlay keeps the credentialed remote client behind an
+	// injected scope boundary. It takes precedence over remoteMCP when set.
+	openRemoteMCPOverlay RemoteMCPOverlayOpener
 }
 
 // personaPolicy returns the per-persona tool allowlist for the named persona

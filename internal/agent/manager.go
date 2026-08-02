@@ -207,8 +207,13 @@ type ManagerOptions struct {
 
 	// RemoteMCP resolves a user's OAuth-connected remote (hosted) MCP servers and
 	// mints their bearer tokens for the per-turn overlay (#443). nil = the feature
-	// is off; turns run exactly as before.
+	// is off unless OpenRemoteMCPOverlay is set; retained as the in-process
+	// compatibility path.
 	RemoteMCP RemoteMCPResolver
+	// OpenRemoteMCPOverlay creates a per-user remote-server overlay without
+	// exposing its credentialed client. When set it takes precedence over
+	// RemoteMCP, allowing production to bind the overlay in a broker subprocess.
+	OpenRemoteMCPOverlay RemoteMCPOverlayOpener
 
 	// LLMProviders is the resolved multi-provider routing table (#289), translated
 	// by cmd/fleet from the bundle manifest's providers: block (API-key env vars
@@ -444,6 +449,7 @@ func New(opts ManagerOptions) (*Manager, error) {
 		health:               agentcore.NewProviderHealthRegistry(),
 		personaPolicies:      opts.PersonaPolicies,
 		remoteMCP:            opts.RemoteMCP,
+		openRemoteMCPOverlay: opts.OpenRemoteMCPOverlay,
 	}
 	m.mcpToolRoster = m.computeMCPToolRoster(allow)
 	m.optionalServerMetadata = m.buildOptionalServerMetadata(opts.ServerSpecs)
@@ -919,6 +925,34 @@ func (m *Manager) openTurnMCPScope(ctx context.Context, in TurnInput, workspace 
 	return scope.Broker, cloneMCPCatalog(scope.Catalog), cleanup, nil
 }
 
+func (m *Manager) openRemoteOverlay(ctx context.Context, email string, baseCatalog []mcp.ServerTool, enabledNames []string) (*RemoteMCPOverlay, error) {
+	shadowed := make(map[string]bool, len(baseCatalog))
+	for _, st := range baseCatalog {
+		shadowed[st.ServerName] = true
+	}
+	// A remote server participates in an interactive turn only when the
+	// conversation opted in. New conversations seed this list from discovery,
+	// so newly connected servers remain on by default but toggleable.
+	enabled := make(map[string]bool, len(enabledNames))
+	for _, name := range enabledNames {
+		if n := strings.TrimSpace(name); n != "" {
+			enabled[n] = true
+		}
+	}
+	if m.openRemoteMCPOverlay != nil {
+		overlay, err := m.openRemoteMCPOverlay(ctx, email, shadowed, enabled)
+		if err != nil {
+			return nil, err
+		}
+		if err := overlay.Validate(); err != nil {
+			overlay.Close()
+			return nil, err
+		}
+		return overlay, nil
+	}
+	return BuildRemoteMCPOverlay(ctx, m.remoteMCP, email, shadowed, enabled)
+}
+
 // turnSink adapts the httpapi EventSink to an agentcore.Observer, forwarding the
 // run's streamed events as SSE frames. Run-loop events arrive as
 // (eventType, payload) and pass straight through to Emit — the agentcore stream
@@ -1068,23 +1102,8 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 	// composes with the shared catalog. Best-effort: a server that needs re-auth
 	// is skipped, never failing the turn. The overlay is closed when the turn ends.
 	var overlay *RemoteMCPOverlay
-	if m.remoteMCP != nil && in.UserEmail != "" {
-		shadowed := make(map[string]bool)
-		for _, st := range turnCatalog {
-			shadowed[st.ServerName] = true
-		}
-		// A remote server participates in a turn only when the conversation opted
-		// in (the Tools picker), exactly like a bundle Optional server. New
-		// conversations seed the opt-in list from the catalog (remote servers are
-		// enabled_by_default), so a freshly-connected server is on by default yet
-		// remains toggleable and bounded by the tool ceiling.
-		enabled := make(map[string]bool, len(in.OptionalMCPServersEnabled))
-		for _, name := range in.OptionalMCPServersEnabled {
-			if n := strings.TrimSpace(name); n != "" {
-				enabled[n] = true
-			}
-		}
-		ov, oerr := BuildRemoteMCPOverlay(ctx, m.remoteMCP, in.UserEmail, shadowed, enabled)
+	if in.UserEmail != "" && (m.openRemoteMCPOverlay != nil || m.remoteMCP != nil) {
+		ov, oerr := m.openRemoteOverlay(ctx, in.UserEmail, turnCatalog, in.OptionalMCPServersEnabled)
 		if oerr != nil {
 			log.Printf("RunTurn: remote-mcp overlay unavailable for %s: %v", in.UserEmail, oerr)
 		} else if ov != nil {
