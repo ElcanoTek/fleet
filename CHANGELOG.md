@@ -19,6 +19,9 @@ prior versions are listed because none have shipped.
 
 ### Security
 
+- Remove the unused arbitrary trailing Podman-argument seam from sandbox
+  configuration, so internal callers cannot override mandatory hardening flags;
+  correct stale package docs that claimed a production host fallback.
 - Replace credential-owner MCP call, discovery, scope-open, scope-close, and
   reload error details with stable value-free broker errors; failed calls also
   discard partial output before it can cross IPC.

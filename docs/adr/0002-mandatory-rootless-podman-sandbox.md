@@ -56,7 +56,10 @@ present in production at all (issue #159).
 ## Consequences
 
 - New model-authored local execution capabilities must work *through* the
-  sandbox (e.g. via the `ExtraRunArgs` or FileOp seams), not around it. This
+  sandbox (for example via the FileOp seam or a reviewed fixed container-config
+  field), not around it. Arbitrary trailing Podman arguments are deliberately
+  not exposed: duplicate or privileged flags could override mandatory
+  hardening. This
   shaped how the seccomp filter (#219, now shipped) was added, and shapes how
   features such as an egress allowlist (#211) are added. The seccomp profile defaults ON with the bundled
   default-deny allowlist; operators can point `FLEET_SANDBOX_SECCOMP_PROFILE` at
