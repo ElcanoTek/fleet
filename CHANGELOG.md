@@ -39,6 +39,12 @@ prior versions are listed because none have shipped.
   opaque handle. Production still does not spawn or use this broker, and #167
   remains open for that switch-on and parent credential scrubbing.
 
+- **Interactive MCP broker seam (#167 prerequisite):** `TurnConfig` can now
+  inject an out-of-process broker plus its public catalog into the unchanged
+  `agentcore.Run` path. Per-user remote overlays compose with that injected base
+  without shadowing bundle servers. The local-client default is unchanged, and
+  production `Manager` construction does not inject the seam yet.
+
 - **Query-parameter API keys for hosted connectors (Browserbase)**: some
   vendors authenticate their hosted MCP server with the key in a URL query
   parameter rather than a header. api_key connectors now support

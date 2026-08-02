@@ -46,7 +46,10 @@ open a per-run client from non-secret account/task/workspace identifiers and
 route calls through an opaque scope ID, which is required before scheduled runs
 with different account selections can share the subprocess safely. The child
 backend now owns those scoped clients and reaps them on close; production run
-construction does not use them yet.
+construction does not use them yet. The interactive driver can accept the
+broker's public catalog and call seam without changing `agentcore.Run`, including
+when a per-user remote-MCP overlay is active; the production Manager does not yet
+inject them.
 
 **Current limitation (#167, reopened):** the server does not yet spawn that
 subprocess in production; `agent.New` still owns the credentialed client in the

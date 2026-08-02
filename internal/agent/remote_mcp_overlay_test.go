@@ -183,3 +183,26 @@ func TestApplyMCPOverlayActiveSetsCompositeBroker(t *testing.T) {
 		t.Log("merged catalog is empty (both clients empty) — fine")
 	}
 }
+
+func TestApplyMCPOverlayWithInjectedBaseBroker(t *testing.T) {
+	deps := agentcore.Deps{}
+	base := &recordingBroker{label: "injected"}
+	overlayClient := mcp.NewClient()
+	overlay := &RemoteMCPOverlay{
+		Client:  overlayClient,
+		Servers: map[string]bool{"userserver": true},
+	}
+	baseCatalog := []mcp.ServerTool{{ServerName: "bundle"}}
+
+	ApplyMCPOverlayWithBase(&deps, nil, base, baseCatalog, overlay)
+	if deps.MCPBroker == nil {
+		t.Fatal("injected base + active overlay did not install a composite broker")
+	}
+	text, _, err := deps.MCPBroker.CallMCP(context.Background(), "bundle", "tool", nil)
+	if err != nil || text != "injected:bundle" {
+		t.Fatalf("base route = (%q, %v), want injected broker", text, err)
+	}
+	if len(deps.MCPCatalog) != 1 || deps.MCPCatalog[0].ServerName != "bundle" {
+		t.Fatalf("merged catalog = %+v, want injected base catalog", deps.MCPCatalog)
+	}
+}
