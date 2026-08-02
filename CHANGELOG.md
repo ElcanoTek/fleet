@@ -221,6 +221,10 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Chat migrations no longer deadlock with a one-connection pool.** The
+  advisory lock and every migration query/transaction now share one dedicated
+  connection, so `CHAT_DB_MAX_CONNS=1` remains a valid operator setting.
+
 - **A recovered MCP-broker backend panic no longer strands its caller until the
   request timeout.** Call, tool-discovery, and account-discovery goroutines now
   complete the matching IPC request with a generic, incident-correlated error

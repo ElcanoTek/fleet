@@ -44,6 +44,15 @@ type migration struct {
 	sql     string
 }
 
+// migrationExecutor is implemented by both *sql.DB and *sql.Conn. Production
+// migrations use the dedicated connection that owns the advisory lock; keeping
+// the helpers generic leaves the lower-level tests able to call them directly.
+type migrationExecutor interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+	BeginTx(context.Context, *sql.TxOptions) (*sql.Tx, error)
+}
+
 // loadMigrations reads every NNN_*.sql file from the embedded FS and
 // returns them in ascending-version order.
 func loadMigrations() ([]migration, error) {
@@ -114,7 +123,11 @@ func applyMigrations(ctx context.Context, db *sql.DB) error {
 		_, _ = conn.ExecContext(ctx, `SELECT pg_advisory_unlock($1)`, migrationLockKey)
 	}()
 
-	if err := ensureSchemaMigrationsTable(ctx, db); err != nil {
+	// Run every migration operation on the lock-owning connection. Besides
+	// making lock ownership explicit, this is required when MaxOpenConns is one:
+	// routing these calls back through db would wait forever for the connection
+	// already held above.
+	if err := ensureSchemaMigrationsTable(ctx, conn); err != nil {
 		return fmt.Errorf("ensure schema_migrations: %w", err)
 	}
 
@@ -126,7 +139,7 @@ func applyMigrations(ctx context.Context, db *sql.DB) error {
 		return fmt.Errorf("no migrations found (migrations/*.sql must be embedded)")
 	}
 
-	applied, err := loadAppliedVersions(ctx, db)
+	applied, err := loadAppliedVersions(ctx, conn)
 	if err != nil {
 		return fmt.Errorf("load applied versions: %w", err)
 	}
@@ -150,7 +163,7 @@ func applyMigrations(ctx context.Context, db *sql.DB) error {
 		if applied[m.version] {
 			continue
 		}
-		if err := applyMigration(ctx, db, m); err != nil {
+		if err := applyMigration(ctx, conn, m); err != nil {
 			return fmt.Errorf("migration %d (%s): %w", m.version, m.name, err)
 		}
 	}
@@ -159,7 +172,7 @@ func applyMigrations(ctx context.Context, db *sql.DB) error {
 
 // ensureSchemaMigrationsTable creates the tracking table on first run.
 // IF NOT EXISTS keeps subsequent runs a no-op.
-func ensureSchemaMigrationsTable(ctx context.Context, db *sql.DB) error {
+func ensureSchemaMigrationsTable(ctx context.Context, db migrationExecutor) error {
 	_, err := db.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS schema_migrations (
 			version    INTEGER PRIMARY KEY,
@@ -171,7 +184,7 @@ func ensureSchemaMigrationsTable(ctx context.Context, db *sql.DB) error {
 
 // loadAppliedVersions returns the set of already-applied migration
 // versions.
-func loadAppliedVersions(ctx context.Context, db *sql.DB) (map[int]bool, error) {
+func loadAppliedVersions(ctx context.Context, db migrationExecutor) (map[int]bool, error) {
 	rows, err := db.QueryContext(ctx, `SELECT version FROM schema_migrations`)
 	if err != nil {
 		return nil, err
@@ -286,7 +299,7 @@ func (s *Store) MigrationStatus(ctx context.Context) (MigrationReport, error) {
 
 // applyMigration runs one migration inside a transaction and records
 // the applied version.
-func applyMigration(ctx context.Context, db *sql.DB, m migration) error {
+func applyMigration(ctx context.Context, db migrationExecutor, m migration) error {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
