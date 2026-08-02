@@ -34,7 +34,7 @@ reviewable, and citable. Each record names the file or test that enforces it.
 | [0006](0006-external-client-config-bundle.md) | Client content lives in an external config bundle | Accepted |
 | [0007](0007-governed-sub-agents.md) | Governed sub-agents spawn only through the one run loop | Accepted |
 | [0008](0008-persistent-python-repl-per-conversation.md) | Opt-in persistent Python REPL is scoped per-conversation | Accepted |
-| [0009](0009-per-user-remote-mcp-oauth.md) | Per-user remote MCP servers via OAuth | Accepted |
+| [0009](0009-per-user-remote-mcp-oauth.md) | Per-user remote MCP servers via OAuth | Superseded by ADR-0040 |
 | [0010](0010-microvm-sandbox-runtimes.md) | microVM sandbox runtimes (Kata / libkrun) via a fail-closed `--runtime` selector | Accepted |
 | [0011](0011-remove-worker-node-registry.md) | Remove the worker-node registry; the in-process worker is the only runner | Accepted |
 | [0012](0012-unified-fleet-cli.md) | One `fleet` binary — `serve` plus the operator CLI (back-compat preserved) | Accepted |
@@ -49,3 +49,4 @@ reviewable, and citable. Each record names the file or test that enforces it.
 | [0037](0037-agent-tool-panic-containment.md) | Contain panics at the AgentTool dispatch boundary | Accepted |
 | [0038](0038-governed-lifecycle-hooks.md) | Governed lifecycle hooks (bundle-declared, sandbox-executed) | Accepted |
 | [0039](0039-durable-turn-journal.md) | Durable turn journal gates interactive terminal success | Accepted |
+| [0040](0040-child-owned-remote-mcp-runtime.md) | Child-owned per-user remote MCP runtime | Accepted |

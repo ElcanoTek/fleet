@@ -67,6 +67,42 @@ type Scheduler struct {
 // promotes per DB round-trip.
 const defaultScheduledBatchSize = 1000
 
+// maxRunIfStderrBytes bounds diagnostics retained from an admin-authored
+// pre-run gate. The command itself is time-bounded, but without a byte bound a
+// noisy gate could still grow the scheduler process's heap until the timeout.
+const maxRunIfStderrBytes = 8 << 10
+
+const runIfStderrTruncated = "\n…[stderr truncated]"
+
+type cappedRunIfStderr struct {
+	buf       bytes.Buffer
+	truncated bool
+}
+
+func (w *cappedRunIfStderr) Write(p []byte) (int, error) {
+	written := len(p)
+	remaining := maxRunIfStderrBytes - w.buf.Len()
+	if remaining < len(p) {
+		w.truncated = true
+	}
+	if remaining > 0 {
+		if len(p) > remaining {
+			p = p[:remaining]
+		}
+		_, _ = w.buf.Write(p)
+	}
+	// Report the whole input consumed so os/exec keeps draining the pipe after
+	// the retained prefix reaches its cap.
+	return written, nil
+}
+
+func (w *cappedRunIfStderr) String() string {
+	if w.truncated {
+		return w.buf.String() + runIfStderrTruncated
+	}
+	return w.buf.String()
+}
+
 // SetRetention configures the automatic daily run-history pruning sweep (#252).
 // Call before Start. retentionDays<=0 leaves pruning OFF (the default). hour is
 // clamped to 0–23.
@@ -170,6 +206,7 @@ func (s *Scheduler) runLoop() {
 				s.RecoverExpiredLeases()
 				s.runStarvationPromotion()
 				s.runPausedExpiry()
+				s.runWakeSweep()
 			}()
 		case <-cleanupC:
 			func() {
@@ -219,6 +256,22 @@ func (s *Scheduler) runPausedExpiry() {
 	}
 	if n > 0 {
 		log.Printf("scheduler: expired %d paused task(s) awaiting input > %dm", n, s.pausedExpiryMin)
+	}
+}
+
+// runWakeSweep performs one self-wake sweep (docs/SELF-WAKE.md): it re-queues
+// parked tasks whose wake deadline has passed. Always on — a wake is core
+// task lifecycle, not a tunable policy — and data-driven: with no parked
+// tasks the sweep is one cheap indexed query. Logs only when it wakes
+// something; a failure is logged but never fatal — the next tick retries.
+func (s *Scheduler) runWakeSweep() {
+	n, err := s.storage.WakeDueTasks(context.Background())
+	if err != nil {
+		log.Printf("scheduler: wake sweep failed: %v", err)
+		return
+	}
+	if n > 0 {
+		log.Printf("scheduler: woke %d task(s) whose wake deadline passed", n)
 	}
 }
 
@@ -430,7 +483,7 @@ func (s *Scheduler) evalRunIf(task *models.Task) (shouldRun bool, reason string,
 	// that reads $HOME (e.g. git -C) doesn't fail on a missing home dir, and so
 	// a stray write doesn't pollute the fleet process's real home.
 	cmd.Env = []string{"PATH=/usr/bin:/bin", "HOME=/tmp"}
-	var stderr bytes.Buffer
+	var stderr cappedRunIfStderr
 	cmd.Stderr = &stderr
 
 	runErr := cmd.Run()
@@ -467,9 +520,22 @@ func (s *Scheduler) handleSkip(task *models.Task, reason string) {
 	var nextRun time.Time
 	if task.Recurrence != "" {
 		computed, err := s.storage.ComputeNextRun(task)
-		if err != nil {
+		switch {
+		case err != nil:
 			log.Printf("Error computing next run for skipped task %s: %v", task.ID, err)
-		} else {
+		case task.RecurrenceUntil != nil && computed.After(*task.RecurrenceUntil):
+			// The recurrence's end date falls before the next cron tick: there is
+			// no future occurrence to advance to, so cancel the row instead of
+			// leaving it due (it would otherwise re-skip on every tick forever).
+			if _, cerr := s.storage.UpdateTasksStatusBatch([]uuid.UUID{task.ID},
+				models.TaskStatusScheduled, models.TaskStatusCancelled); cerr != nil {
+				log.Printf("Error ending recurrence for skipped task %s: %v", task.ID, cerr)
+			} else {
+				log.Printf("Recurrence for task %s ended at skip: next tick %s is past recurrence_until %s",
+					task.ID, computed.Format(time.RFC3339), task.RecurrenceUntil.Format(time.RFC3339))
+			}
+			return
+		default:
 			nextRun = computed
 		}
 	}

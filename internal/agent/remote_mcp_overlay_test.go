@@ -1,9 +1,12 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
@@ -38,10 +41,12 @@ type fakeResolver struct {
 	conns    []RemoteMCPConn
 	tokens   map[string]string
 	tokenErr map[string]error
+	listed   int
 	asked    []string // server IDs AcquireTokenByID was called for
 }
 
 func (f *fakeResolver) ConnectedServersForUser(_ context.Context, _ string) ([]RemoteMCPConn, error) {
+	f.listed++
 	return f.conns, nil
 }
 func (f *fakeResolver) AcquireTokenByID(_ context.Context, _, id string) (string, error) {
@@ -74,7 +79,12 @@ func TestBuildRemoteMCPOverlayGuards(t *testing.T) {
 
 func TestBuildRemoteMCPOverlaySkipsAndReportsNeedsReauth(t *testing.T) {
 	ctx := context.Background()
-	reauth := errors.New("needs reauth")
+	const sensitiveDetail = "provider-response-detail-must-stay-private"
+	reauth := errors.New(sensitiveDetail)
+	var logs bytes.Buffer
+	oldWriter := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(oldWriter) })
 	r := &fakeResolver{
 		conns:    []RemoteMCPConn{{ID: "1", Name: "dead", URL: "https://dead.example.com"}},
 		tokenErr: map[string]error{"1": reauth},
@@ -89,6 +99,9 @@ func TestBuildRemoteMCPOverlaySkipsAndReportsNeedsReauth(t *testing.T) {
 	}
 	if len(ov.Skipped) != 1 || ov.Skipped[0] != "dead" {
 		t.Errorf("Skipped = %v, want [dead]", ov.Skipped)
+	}
+	if strings.Contains(logs.String(), sensitiveDetail) {
+		t.Fatal("token failure detail reached logs")
 	}
 }
 
@@ -181,5 +194,106 @@ func TestApplyMCPOverlayActiveSetsCompositeBroker(t *testing.T) {
 		// base + overlay are both empty here, so merged is an empty non-nil slice
 		// only if base had tools; with both empty append yields nil — acceptable.
 		t.Log("merged catalog is empty (both clients empty) — fine")
+	}
+}
+
+func TestApplyMCPOverlayWithInjectedBaseBroker(t *testing.T) {
+	deps := agentcore.Deps{}
+	base := &recordingBroker{label: "injected"}
+	overlayClient := mcp.NewClient()
+	overlay := &RemoteMCPOverlay{
+		Client:  overlayClient,
+		Servers: map[string]bool{"userserver": true},
+	}
+	baseCatalog := []mcp.ServerTool{{ServerName: "bundle"}}
+
+	ApplyMCPOverlayWithBase(&deps, nil, base, baseCatalog, overlay)
+	if deps.MCPBroker == nil {
+		t.Fatal("injected base + active overlay did not install a composite broker")
+	}
+	text, _, err := deps.MCPBroker.CallMCP(context.Background(), "bundle", "tool", nil)
+	if err != nil || text != "injected:bundle" {
+		t.Fatalf("base route = (%q, %v), want injected broker", text, err)
+	}
+	if len(deps.MCPCatalog) != 1 || deps.MCPCatalog[0].ServerName != "bundle" {
+		t.Fatalf("merged catalog = %+v, want injected base catalog", deps.MCPCatalog)
+	}
+}
+
+func TestApplyMCPOverlayWithInjectedOverlayBroker(t *testing.T) {
+	deps := agentcore.Deps{}
+	base := &recordingBroker{label: "base"}
+	overlayBroker := &recordingBroker{label: "remote"}
+	overlay := &RemoteMCPOverlay{
+		Broker:  overlayBroker,
+		Servers: map[string]bool{"userserver": true},
+		Catalog: []mcp.ServerTool{{ServerName: "userserver"}},
+	}
+
+	ApplyMCPOverlayWithBase(&deps, nil, base, nil, overlay)
+	got, _, err := deps.MCPBroker.CallMCP(context.Background(), "userserver", "tool", nil)
+	if err != nil || got != "remote:userserver" {
+		t.Fatalf("remote route = (%q, %v), want injected overlay broker", got, err)
+	}
+	got, _, err = deps.MCPBroker.CallMCP(context.Background(), "bundle", "tool", nil)
+	if err != nil || got != "base:bundle" {
+		t.Fatalf("base route = (%q, %v), want base broker", got, err)
+	}
+}
+
+func TestRemoteMCPOverlayCloseUsesFreshBoundedContext(t *testing.T) {
+	var called bool
+	overlay := &RemoteMCPOverlay{CloseScope: func(ctx context.Context) error {
+		called = true
+		if err := ctx.Err(); err != nil {
+			t.Fatalf("close context already cancelled: %v", err)
+		}
+		if _, ok := ctx.Deadline(); !ok {
+			t.Fatal("close context has no deadline")
+		}
+		return nil
+	}}
+	overlay.Close()
+	if !called {
+		t.Fatal("broker scope close was not called")
+	}
+}
+
+func TestRemoteMCPOverlayValidateRejectsUnownedBroker(t *testing.T) {
+	overlay := &RemoteMCPOverlay{
+		Broker:  &recordingBroker{label: "remote"},
+		Servers: map[string]bool{"remote": true},
+	}
+	if err := overlay.Validate(); err == nil {
+		t.Fatal("broker overlay without close function passed validation")
+	}
+}
+
+func TestManagerOpenRemoteOverlayPrefersInjectedOpener(t *testing.T) {
+	resolver := &fakeResolver{conns: []RemoteMCPConn{{ID: "should-not-list"}}}
+	var gotEmail string
+	manager := &Manager{
+		remoteMCP: resolver,
+		openRemoteMCPOverlay: func(_ context.Context, email string, shadowed, enabled map[string]bool) (*RemoteMCPOverlay, error) {
+			gotEmail = email
+			if !shadowed["bundle"] || len(shadowed) != 1 {
+				t.Fatalf("shadowed = %v, want bundle only", shadowed)
+			}
+			if !enabled["remote"] || len(enabled) != 1 {
+				t.Fatalf("enabled = %v, want remote only", enabled)
+			}
+			return &RemoteMCPOverlay{}, nil
+		},
+	}
+
+	_, err := manager.openRemoteOverlay(context.Background(), "user@example.com", []mcp.ServerTool{{ServerName: "bundle"}}, []string{" ", "remote"})
+	if err != nil {
+		t.Fatalf("openRemoteOverlay: %v", err)
+	}
+	if gotEmail != "user@example.com" {
+		t.Fatalf("email = %q", gotEmail)
+	}
+	if resolver.listed != 0 {
+		t.Fatalf("compatibility resolver was called %d time(s)", resolver.listed)
 	}
 }

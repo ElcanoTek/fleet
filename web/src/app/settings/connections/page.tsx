@@ -2,10 +2,13 @@
 
 import { useEffect, useRef, useState } from "react";
 
+import { Icon } from "@/app/shared/ui/Icon";
 import {
   authHint,
   categoriesOf,
+  categoryIcon,
   consentRequired,
+  FEATURED_SLUG,
   effectiveEnabled,
   fillPlaceholders,
   filterCatalog,
@@ -52,7 +55,7 @@ import {
   SetSection,
 } from "../ui/panels";
 import { useMcpServers } from "@/app/shared/hooks/useMcpServers";
-import { NoticeBanner } from "@/app/shared/ui/NoticeBanner";
+import { ToastProvider, useToast } from "@/app/shared/ui/Toast";
 
 // Per-user remote (hosted) MCP connections (#443). Users add a hosted MCP server
 // by URL, then log in to it via the OAuth handshake (the backend handles
@@ -329,12 +332,14 @@ function DirectoryCard({
   added,
   busy,
   remoteEnabled,
+  redirectUri,
   onAdd,
 }: {
   entry: CatalogThirdParty;
   added: boolean;
   busy: boolean;
   remoteEnabled: boolean;
+  redirectUri?: string;
   // Resolves true when the server was actually added (validated + stored);
   // false keeps the guided form — and whatever the user typed — open so a
   // rejected key or mistyped tenant value can be corrected in place.
@@ -383,6 +388,10 @@ function DirectoryCard({
       className="flex flex-col gap-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[0.95rem] py-[0.85rem]"
     >
       <div className="flex flex-wrap items-center gap-[0.55rem]">
+        <Icon
+          name={categoryIcon(entry.category ?? "")}
+          className="size-4 shrink-0 text-[var(--color-text-muted)]"
+        />
         <span className="text-[0.85rem] font-semibold text-[var(--color-text-primary)] [overflow-wrap:anywhere]">
           {entry.display_name}
         </span>
@@ -449,10 +458,7 @@ function DirectoryCard({
         ) : null}
       </div>
       {remoteEnabled && needsForm && formOpen && !added ? (
-        <div
-          data-testid={`dir-form-${entry.name}`}
-          className="grid gap-2 rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-overlay-soft)] px-3 py-2.5"
-        >
+        <FormShell entry={entry} modal={manualClient} onClose={() => setFormOpen(false)}>
           {placeholders.map((ph) => (
             <label key={ph} className="grid gap-1 text-[0.72rem] text-[var(--color-text-secondary)]">
               <span className="font-medium">Your {placeholderLabel(ph)}</span>
@@ -484,6 +490,28 @@ function DirectoryCard({
           ) : null}
           {manualClient ? (
             <>
+              {redirectUri ? (
+                // min-w-0 (here and on the row) keeps the nowrap URL's intrinsic
+                // width from inflating the form grid's column — without it every
+                // field in the dialog stretches past the container.
+                <div className="grid min-w-0 gap-1 text-[0.72rem] text-[var(--color-text-secondary)]">
+                  <span className="font-medium">
+                    Authorization callback URL for your app registration
+                  </span>
+                  <div className="flex min-w-0 items-center gap-2">
+                    <code className="min-w-0 flex-1 truncate rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-2 py-1.5 font-[family-name:var(--font-code)] text-[0.72rem] text-[var(--color-text-primary)]">
+                      {redirectUri}
+                    </code>
+                    <button
+                      type="button"
+                      className={btnClass({ reveal: true })}
+                      onClick={() => navigator.clipboard?.writeText(redirectUri)}
+                    >
+                      Copy
+                    </button>
+                  </div>
+                </div>
+              ) : null}
               <label className="grid gap-1 text-[0.72rem] text-[var(--color-text-secondary)]">
                 <span className="font-medium">OAuth client ID</span>
                 <input
@@ -506,7 +534,16 @@ function DirectoryCard({
               </label>
             </>
           ) : null}
-          <div className="flex justify-end">
+          <div className="flex justify-end gap-2">
+            {manualClient ? (
+              <button
+                type="button"
+                onClick={() => setFormOpen(false)}
+                className={btnClass({ reveal: true })}
+              >
+                Cancel
+              </button>
+            ) : null}
             <button
               type="button"
               data-testid={`dir-form-add-${entry.name}`}
@@ -517,13 +554,84 @@ function DirectoryCard({
               Add
             </button>
           </div>
-        </div>
+        </FormShell>
       ) : null}
     </div>
   );
 }
 
+// FormShell hosts a directory card's guided add form either inline (the card
+// grows downward — placeholders, API keys) or, for manual OAuth client
+// registration, as a dialog overlay: those forms carry a setup detour (create
+// an OAuth app elsewhere, come back with ID + secret) and deserve the focus
+// of a modal rather than stretching the card.
+function FormShell({
+  entry,
+  modal,
+  onClose,
+  children,
+}: {
+  entry: CatalogThirdParty;
+  modal: boolean;
+  onClose: () => void;
+  children: React.ReactNode;
+}) {
+  const body = (
+    <div
+      data-testid={`dir-form-${entry.name}`}
+      className="grid gap-2 rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-overlay-soft)] px-3 py-2.5"
+    >
+      {children}
+    </div>
+  );
+  if (!modal) return body;
+  const guide = setupLink(entry);
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={`Set up ${entry.display_name}`}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--color-overlay-strong)] px-4"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-md rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-1)] p-5 shadow-[var(--shadow-lg)]"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h3 className="mb-2 text-[0.9375rem] font-semibold">Set up {entry.display_name}</h3>
+        {entry.setup_hint ? (
+          <p className="mb-3 text-[0.8125rem] text-[var(--color-text-secondary)]">
+            {entry.setup_hint}
+            {guide ? (
+              <>
+                {" "}
+                <a
+                  href={guide}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="underline underline-offset-2"
+                >
+                  Setup guide
+                </a>
+              </>
+            ) : null}
+          </p>
+        ) : null}
+        {body}
+      </div>
+    </div>
+  );
+}
+
 export default function ConnectionsPage() {
+  return (
+    <ToastProvider>
+      <ConnectionsPageInner />
+    </ToastProvider>
+  );
+}
+
+function ConnectionsPageInner() {
   const [initialBanner] = useState(readCallbackBanner);
   // Admin visibility only (authorization stays server-side): picks which
   // "remote MCP isn't configured" explanation to show.
@@ -557,6 +665,23 @@ export default function ConnectionsPage() {
   } | null>(null);
   const [error, setError] = useState<string | null>(initialBanner.error);
   const [notice, setNotice] = useState<string | null>(initialBanner.notice);
+  const { showToast } = useToast();
+  // Post-add "sign in now?" prompt for OAuth servers (id + display name).
+  const [connectPromptFor, setConnectPromptFor] = useState<{ id: string; name: string } | null>(
+    null,
+  );
+  // Set when an OAuth sign-in was opened in a new tab; on return to this tab
+  // the server list refreshes so the new connection shows without a reload.
+  const awaitingAuthReturn = useRef(false);
+  // Every action outcome (including the OAuth callback's one-shot
+  // ?connected / ?error result) surfaces as a toast — visible from anywhere
+  // on this long page; there is no inline banner copy.
+  useEffect(() => {
+    if (error) showToast(error, "error", 6000);
+  }, [error, showToast]);
+  useEffect(() => {
+    if (notice) showToast(notice, "success");
+  }, [notice, showToast]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [addServerOpen, setAddServerOpen] = useState(false);
@@ -633,6 +758,17 @@ export default function ConnectionsPage() {
     };
   }, []);
 
+  // Refresh the list when the user comes back from an OAuth sign-in tab.
+  useEffect(() => {
+    const onFocus = () => {
+      if (!awaitingAuthReturn.current) return;
+      awaitingAuthReturn.current = false;
+      refresh();
+    };
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  });
+
   const addServer = (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -647,10 +783,12 @@ export default function ConnectionsPage() {
         if (!res.ok) {
           throw new Error((await res.text()) || `Add failed: ${res.status}`);
         }
+        const data = (await res.json()) as { id?: string; name?: string };
         setName("");
         setUrl("");
         setAddServerOpen(false);
         setNotice("Server added. Click Connect to log in.");
+        if (data.id) setConnectPromptFor({ id: data.id, name: data.name || "the server" });
         refresh();
       })
       .catch((err: unknown) => setError(errMessage(err)))
@@ -660,6 +798,11 @@ export default function ConnectionsPage() {
   const connect = (id: string) => {
     setError(null);
     setBusy(true);
+    // Open the tab NOW, inside the click's user gesture, so popup blockers
+    // allow it; it is pointed at the authorization server once the URL
+    // arrives. The old behavior (same-tab navigation) remains the fallback
+    // when the browser refuses the new tab.
+    const authTab = window.open("about:blank", "_blank");
     fetch(`/api/remote-mcp-servers/${encodeURIComponent(id)}/authorize`, {
       method: "POST",
     })
@@ -669,11 +812,27 @@ export default function ConnectionsPage() {
         }
         const data = (await res.json()) as { redirect_url?: string };
         if (!data.redirect_url) throw new Error("No authorization URL returned.");
-        // Full-page navigation to the authorization server. It redirects back to
-        // /api/oauth/mcp/callback, which returns here with ?connected / ?error.
-        window.location.href = data.redirect_url;
+        // The URL comes from the remote server's OAuth discovery document —
+        // third-party data. Navigating this tab (or a tab whose window.opener
+        // is us) to a javascript: URL would run it with scripted access to
+        // the app, so only http(s) may pass.
+        if (!/^https?:\/\//i.test(data.redirect_url)) {
+          throw new Error("Authorization URL has an unsupported scheme.");
+        }
+        // The authorization server redirects back to /api/oauth/mcp/callback,
+        // which lands on this page with ?connected / ?error — in the new tab.
+        // This tab refreshes its list when it regains focus.
+        if (authTab) {
+          authTab.location.href = data.redirect_url;
+          awaitingAuthReturn.current = true;
+          setBusy(false);
+          setNotice("Finish signing in — this page updates when you return.");
+        } else {
+          window.location.href = data.redirect_url;
+        }
       })
       .catch((err: unknown) => {
+        authTab?.close();
         setError(errMessage(err));
         setBusy(false);
       });
@@ -744,7 +903,11 @@ export default function ConnectionsPage() {
         // discovery path.
         auth: entry.auth === "tenant" ? undefined : entry.auth,
         ...(overrides?.apiKey
-          ? { api_key: overrides.apiKey, api_key_header: entry.api_key_header }
+          ? {
+              api_key: overrides.apiKey,
+              api_key_header: entry.api_key_header,
+              api_key_query: entry.api_key_query,
+            }
           : {}),
         ...(overrides?.clientId
           ? { client_id: overrides.clientId, client_secret: overrides.clientSecret }
@@ -755,12 +918,15 @@ export default function ConnectionsPage() {
         if (!res.ok) {
           throw new Error((await res.text()) || `Add failed: ${res.status}`);
         }
-        const data = (await res.json()) as { tool_count?: number };
-        setNotice(
-          entry.auth === "open" || entry.auth === "api_key"
-            ? `${entry.display_name} connected${toolCountSuffix(data.tool_count)}.`
-            : `${entry.display_name} added. Click Connect to sign in.`,
-        );
+        const data = (await res.json()) as { id?: string; tool_count?: number };
+        if (entry.auth === "open" || entry.auth === "api_key") {
+          setNotice(`${entry.display_name} connected${toolCountSuffix(data.tool_count)}.`);
+        } else {
+          setNotice(`${entry.display_name} added. Click Connect to sign in.`);
+          // OAuth adds land in login_required — offer the sign-in right here
+          // instead of making the user find the row in "Your connections".
+          if (data.id) setConnectPromptFor({ id: data.id, name: entry.display_name });
+        }
         refresh();
         return true;
       })
@@ -853,6 +1019,23 @@ export default function ConnectionsPage() {
       .finally(() => setBusy(false));
   };
 
+  const signOut = (id: string) => {
+    setError(null);
+    setBusy(true);
+    fetch(`/api/remote-mcp-servers/${encodeURIComponent(id)}/signout`, {
+      method: "POST",
+    })
+      .then(async (res) => {
+        if (!res.ok && res.status !== 204) {
+          throw new Error((await res.text()) || `Sign out failed: ${res.status}`);
+        }
+        setNotice("Signed out. The connection is kept — Connect signs back in.");
+        refresh();
+      })
+      .catch((err: unknown) => setError(errMessage(err)))
+      .finally(() => setBusy(false));
+  };
+
   // Remove is confirmed inline on the button itself (InlineConfirmButton) —
   // no window.confirm.
   const disconnect = (id: string) => {
@@ -886,7 +1069,9 @@ export default function ConnectionsPage() {
   // category means the user already knows what they want).
   const dirFeatured = thirdParty.filter((e) => e.featured);
   const activeCategoryLabel =
-    dirCategories.find((c) => c.slug === catalogCategory)?.label ?? catalogCategory;
+    catalogCategory === FEATURED_SLUG
+      ? "Featured"
+      : (dirCategories.find((c) => c.slug === catalogCategory)?.label ?? catalogCategory);
 
   // One card, one prop wiring — shared by the Featured shelf and the category
   // groups. Added-state matches by URL for one-click entries and by
@@ -899,6 +1084,7 @@ export default function ConnectionsPage() {
       added={(servers ?? []).some((s) => s.url === tp.url || s.name === tp.name)}
       busy={busy}
       remoteEnabled={catalog?.remote_mcp_enabled ?? false}
+      redirectUri={catalog?.oauth_redirect_uri}
       onAdd={(overrides) => requestAddFromCatalog(tp, overrides)}
     />
   );
@@ -929,17 +1115,6 @@ export default function ConnectionsPage() {
       title="Connections"
       intro="Connect remote (hosted) MCP servers and sign in to each with your own account. Connected servers’ tools become available to you in chat and your scheduled tasks. Credentials are stored encrypted on the server and never shared with other users."
     >
-      {notice ? (
-        <NoticeBanner tone="success" className="mb-4">
-          {notice}
-        </NoticeBanner>
-      ) : null}
-      {error ? (
-        <NoticeBanner tone="danger" className="mb-4">
-          {error}
-        </NoticeBanner>
-      ) : null}
-
       {/* ── Group 1 — Your connections ── */}
       <ConnGroup>
         <ConnGroupHead title="Your connections">
@@ -1124,6 +1299,19 @@ export default function ConnectionsPage() {
                             {s.status === "connected" ? "Reconnect" : "Connect"}
                           </button>
                         )}
+                        {s.auth_kind !== "api_key" &&
+                        s.auth_kind !== "open" &&
+                        s.status === "connected" ? (
+                          <button
+                            type="button"
+                            onClick={() => signOut(s.id)}
+                            disabled={busy}
+                            title="Ends the authorization but keeps the connection and its OAuth client — Connect signs back in without re-entering credentials."
+                            className={btnClass({ sm: true, reveal: true })}
+                          >
+                            Sign out
+                          </button>
+                        ) : null}
                         <button
                           type="button"
                           aria-expanded={shareOpenFor === s.id}
@@ -1379,6 +1567,17 @@ export default function ConnectionsPage() {
                   >
                     All
                   </DirChip>
+                  {dirFeatured.length > 0 ? (
+                    <DirChip
+                      active={catalogCategory === FEATURED_SLUG}
+                      onClick={() => pickCategory(FEATURED_SLUG)}
+                      count={dirFeatured.length}
+                      role="tab"
+                      ariaSelected={catalogCategory === FEATURED_SLUG}
+                    >
+                      ✦ Featured
+                    </DirChip>
+                  ) : null}
                   {dirCategories.map((c) => (
                     <DirChip
                       key={c.slug}
@@ -1387,6 +1586,12 @@ export default function ConnectionsPage() {
                       count={c.count}
                       role="tab"
                       ariaSelected={catalogCategory === c.slug}
+                      leading={
+                        <Icon
+                          name={categoryIcon(c.slug)}
+                          className="mr-[0.32rem] size-3 shrink-0 self-center"
+                        />
+                      }
                     >
                       {c.label}
                     </DirChip>
@@ -1416,7 +1621,12 @@ export default function ConnectionsPage() {
                 ) : (
                   groupByCategory(dirHits).map((group) => (
                     <div key={group.slug}>
-                      <DirCatHead>{group.label}</DirCatHead>
+                      <DirCatHead>
+                        <span className="inline-flex items-center gap-[0.35rem]">
+                          <Icon name={categoryIcon(group.slug)} className="size-3 shrink-0" />
+                          {group.label}
+                        </span>
+                      </DirCatHead>
                       <div className="grid grid-cols-2 gap-[0.7rem] max-[860px]:grid-cols-1">
                         {group.entries.map(renderDirCard)}
                       </div>
@@ -1452,6 +1662,52 @@ export default function ConnectionsPage() {
           derived tool traffic to (and often parks a delegated access token
           with) the named operator, so the add is gated on an explicit,
           operator-named confirmation. */}
+      {/* Post-add sign-in prompt: an OAuth server was just added and needs a
+          login to finish connecting. Offer it here so the user doesn't have
+          to scroll up to the "Your connections" row to click Connect. */}
+      {connectPromptFor ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Sign in to ${connectPromptFor.name}?`}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--color-overlay-strong)] px-4"
+          onClick={() => setConnectPromptFor(null)}
+        >
+          <div
+            className="w-full max-w-md rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-1)] p-5 shadow-[var(--shadow-lg)]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="mb-2 text-[0.9375rem] font-semibold">
+              {connectPromptFor.name} added — sign in now?
+            </h3>
+            <p className="mb-4 text-[0.8125rem] text-[var(--color-text-secondary)]">
+              One step left: sign in so its tools become available to you. You can also do it
+              later from the Connect button under Your connections.
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setConnectPromptFor(null)}
+                className={btnClass({ reveal: true })}
+              >
+                Later
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const id = connectPromptFor.id;
+                  setConnectPromptFor(null);
+                  connect(id);
+                }}
+                disabled={busy}
+                className={btnClass({ variant: "primary" })}
+              >
+                Sign in
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       {consentFor ? (
         <div
           role="dialog"

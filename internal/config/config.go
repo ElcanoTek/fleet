@@ -85,12 +85,14 @@ const (
 // over the file so operators can override individual values per invocation.
 var allowedEnvVars = map[string]bool{
 	// ── chat transport / data ──
-	"CHAT_SERVER_ADDR":              true,
-	"CHAT_SERVER_TOKEN":             true,
-	"CHAT_DATA_DIR":                 true,
-	"CONVERSATION_TTL_DAYS":         true,
-	"CONVERSATION_UNPINNED_CAP":     true,
-	"FLEET_AUTO_ARCHIVE_AFTER_DAYS": true,
+	"CHAT_SERVER_ADDR":                 true,
+	"CHAT_SERVER_TOKEN":                true,
+	"CHAT_DATA_DIR":                    true,
+	"CONVERSATION_TTL_DAYS":            true,
+	"CONVERSATION_UNPINNED_CAP":        true,
+	"FLEET_AUTO_ARCHIVE_AFTER_DAYS":    true,
+	"FLEET_INPUT_QUEUE_RETENTION_DAYS": true,
+	"FLEET_UPLOAD_MAX_BYTES":           true,
 
 	// ── fleet transport / data (canonical) ──
 	"FLEET_SERVER_ADDR":  true,
@@ -568,6 +570,18 @@ type Config struct {
 	DataDir         string
 	ConversationTTL int // days
 	UnpinnedCap     int // per-user
+	// InputQueueRetentionDays bounds how long completed/cancelled input-queue
+	// rows retain their idempotency keys after terminal transition.
+	// FLEET_INPUT_QUEUE_RETENTION_DAYS, default 30; 0 disables the purge.
+	// Non-terminal rows are never retention candidates.
+	InputQueueRetentionDays int
+	// UploadMaxBytes is the per-file cap for chat /attachments uploads
+	// (FLEET_UPLOAD_MAX_BYTES, default 1 GiB). Surfaced to the browser via
+	// /server-config so the composer can refuse oversize files before the
+	// upload round-trip. Deployments raising it past ~1 GiB must also raise
+	// experimental.proxyClientMaxBodySize in web/next.config.ts, which caps
+	// the whole proxied request at 2 GB.
+	UploadMaxBytes int64
 	// AutoArchiveAfterDays soft-archives unpinned conversations untouched for
 	// this many days (#282). 0 (the default) disables it — a conversation is
 	// then only ever archived by an explicit user action. FLEET_AUTO_ARCHIVE_AFTER_DAYS.
@@ -1154,13 +1168,15 @@ func Load(envFile string) (*Config, error) {
 		TLSHTTPAddr:  getenvDefault("FLEET_TLS_HTTP_ADDR", ":80"),
 
 		// ── data (interactive) ──
-		DataDir:                getenvFleetDefault("DATA_DIR", "./data"),
-		ConversationTTL:        getenvInt("CONVERSATION_TTL_DAYS", 14),
-		UnpinnedCap:            getenvInt("CONVERSATION_UNPINNED_CAP", 50),
-		AutoArchiveAfterDays:   getenvFleetInt("AUTO_ARCHIVE_AFTER_DAYS", 0),
-		SearchEnabled:          getenvBool("FLEET_SEARCH_ENABLED", true),
-		ConversationSoftDelete: getenvBool("FLEET_CONVERSATION_SOFT_DELETE", false),
-		DatabaseURL:            buildDatabaseURL(),
+		DataDir:                 getenvFleetDefault("DATA_DIR", "./data"),
+		ConversationTTL:         getenvInt("CONVERSATION_TTL_DAYS", 14),
+		UnpinnedCap:             getenvInt("CONVERSATION_UNPINNED_CAP", 50),
+		InputQueueRetentionDays: getenvFleetInt("INPUT_QUEUE_RETENTION_DAYS", 30),
+		UploadMaxBytes:          getenvFleetInt64("UPLOAD_MAX_BYTES", 1<<30),
+		AutoArchiveAfterDays:    getenvFleetInt("AUTO_ARCHIVE_AFTER_DAYS", 0),
+		SearchEnabled:           getenvBool("FLEET_SEARCH_ENABLED", true),
+		ConversationSoftDelete:  getenvBool("FLEET_CONVERSATION_SOFT_DELETE", false),
+		DatabaseURL:             buildDatabaseURL(),
 
 		// DB connection pools (#276) — defaults reproduce the historical
 		// hard-coded behavior exactly: 25 open / 5 idle, idle-time reaping OFF
@@ -1445,6 +1461,12 @@ func (c *Config) Validate() error {
 	if c.UnpinnedCap <= 0 {
 		return fmt.Errorf("CONVERSATION_UNPINNED_CAP must be positive")
 	}
+	if c.InputQueueRetentionDays < 0 {
+		return fmt.Errorf("FLEET_INPUT_QUEUE_RETENTION_DAYS must be non-negative")
+	}
+	if c.UploadMaxBytes <= 0 {
+		return fmt.Errorf("FLEET_UPLOAD_MAX_BYTES must be positive")
+	}
 	if c.DatabaseURL == "" {
 		return fmt.Errorf("DATABASE_URL (or DB_HOST/DB_USER/DB_NAME parts) is required")
 	}
@@ -1632,6 +1654,10 @@ func splitEmails(raw string) []string {
 // surrounding quotes. Always overwrites — Load snapshots/restores the
 // pre-existing process env around this call so "process env wins" holds.
 func loadEnvFile(path string) error {
+	return loadEnvFileFiltered(path, func(string) bool { return true })
+}
+
+func loadEnvFileFiltered(path string, include func(string) bool) error {
 	f, err := os.Open(path) // #nosec G304 — path comes from trusted config.
 	if err != nil {
 		return err
@@ -1652,6 +1678,9 @@ func loadEnvFile(path string) error {
 			continue
 		}
 		k := strings.TrimSpace(line[:eq])
+		if include != nil && !include(k) {
+			continue
+		}
 		v := stripInlineComment(strings.TrimSpace(line[eq+1:]))
 		v = stripQuotes(v)
 		if !isAllowedEnvVar(k) {
@@ -1861,6 +1890,15 @@ func normalizePythonREPLMode(raw string) string {
 func getenvFleetInt(suffix string, def int) int {
 	if v, ok := lookupFleet(suffix); ok {
 		if i, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+			return i
+		}
+	}
+	return def
+}
+
+func getenvFleetInt64(suffix string, def int64) int64 {
+	if v, ok := lookupFleet(suffix); ok {
+		if i, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64); err == nil {
 			return i
 		}
 	}

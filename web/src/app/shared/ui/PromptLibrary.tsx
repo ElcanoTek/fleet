@@ -265,7 +265,7 @@ export function PromptLibrary({
                           >
                             <span
                               aria-hidden="true"
-                              className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md ${kind === "git" ? "bg-[color-mix(in_srgb,#7c6bff_16%,transparent)] text-[#a99cff]" : kind === "workspace" ? "bg-[var(--color-status-assigned-bg)] text-[var(--color-status-assigned-fg)]" : "bg-[var(--color-overlay-soft)] text-[var(--color-text-muted)]"}`}
+                              className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md ${kind === "git" ? "bg-[color-mix(in_srgb,var(--color-accent)_16%,transparent)] text-[var(--color-accent)]" : kind === "workspace" ? "bg-[var(--color-status-assigned-bg)] text-[var(--color-status-assigned-fg)]" : "bg-[var(--color-overlay-soft)] text-[var(--color-text-muted)]"}`}
                             >
                               <Icon
                                 name={

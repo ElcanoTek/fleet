@@ -10,11 +10,15 @@ import type { LogSession, Task } from "@/app/shared/lib/orchestratorApi";
 // fails to load degrades to a download link.
 
 const taskLogs = vi.fn();
+const taskLogHistory = vi.fn();
+const taskLogHistoryEntry = vi.fn();
 const rerunTask = vi.fn();
 const tasks = vi.fn();
 vi.mock("@/app/shared/lib/orchestratorApi", () => ({
   orchestratorApi: {
     taskLogs: (...args: unknown[]) => taskLogs(...args),
+    taskLogHistory: (...args: unknown[]) => taskLogHistory(...args),
+    taskLogHistoryEntry: (...args: unknown[]) => taskLogHistoryEntry(...args),
     rerunTask: (...args: unknown[]) => rerunTask(...args),
     tasks: (...args: unknown[]) => tasks(...args),
   },
@@ -26,6 +30,9 @@ const TASK: Task = { id: TASK_ID, prompt: "Generate a weekly infographic" };
 function mockSession(session: LogSession) {
   taskLogs.mockReset();
   taskLogs.mockResolvedValue(session);
+  taskLogHistory.mockReset();
+  taskLogHistory.mockResolvedValue({ entries: [] });
+  taskLogHistoryEntry.mockReset();
 }
 
 afterEach(() => cleanup());
@@ -299,5 +306,64 @@ describe("LogViewer run history", () => {
     render(<LogViewer task={DONE_TASK} onClose={() => {}} />);
     fireEvent.click(await screen.findByTestId("history-button"));
     expect(await screen.findByText(/no other runs of this task yet/i)).toBeTruthy();
+  });
+});
+
+describe("LogViewer discuss-this-run", () => {
+  it("creates the seeded conversation via the BFF and navigates to chat", async () => {
+    mockSession(RICH_SESSION);
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ conversation_id: "conv-42" }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<LogViewer task={DONE_TASK} onClose={() => {}} />);
+    fireEvent.click(await screen.findByTestId("discuss-run-button"));
+    await vi.waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        `/api/orchestrator/tasks/${DONE_TASK.id}/discuss`,
+        { method: "POST" },
+      );
+    });
+    vi.unstubAllGlobals();
+  });
+
+  it("hides the button when the task has no transcript", async () => {
+    mockSession({ id: "empty", messages: [] });
+    render(<LogViewer task={DONE_TASK} onClose={() => {}} />);
+    await screen.findByTestId("task-detail-bar");
+    expect(screen.queryByTestId("discuss-run-button")).toBeNull();
+  });
+});
+
+describe("LogViewer per-attempt transcripts", () => {
+  it("hides the attempt picker when nothing was superseded", async () => {
+    mockSession(RICH_SESSION);
+    render(<LogViewer task={DONE_TASK} onClose={() => {}} />);
+    await screen.findByTestId("task-detail-bar");
+    expect(screen.queryByTestId("attempt-picker")).toBeNull();
+  });
+
+  it("lists superseded attempts and swaps the transcript on selection", async () => {
+    mockSession(RICH_SESSION);
+    taskLogHistory.mockResolvedValue({
+      entries: [{ id: 7, superseded_at: "2026-07-14T09:00:00Z" }],
+    });
+    taskLogHistoryEntry.mockResolvedValue({
+      id: "sess-old",
+      messages: [
+        { id: "o1", role: "assistant", content: "transcript from the superseded attempt" },
+      ],
+    });
+    render(<LogViewer task={DONE_TASK} onClose={() => {}} />);
+    const picker = await screen.findByTestId("attempt-picker");
+    fireEvent.change(picker, { target: { value: "7" } });
+    expect(
+      await screen.findByText(/transcript from the superseded attempt/),
+    ).toBeTruthy();
+    expect(taskLogHistoryEntry).toHaveBeenCalledWith(DONE_TASK.id, 7);
+    // Back to the latest transcript.
+    fireEvent.change(picker, { target: { value: "latest" } });
+    expect(await screen.findByText(/token totals|infographic/i)).toBeTruthy();
   });
 });

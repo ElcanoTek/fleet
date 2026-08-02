@@ -13,6 +13,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/mcp"
 )
 
 // Governed sub-agents (#175, part b). These tests use the fake-LLM seam only
@@ -318,6 +319,23 @@ func TestSpawn_AllowServersOnlyNarrows(t *testing.T) {
 	all := parent.childSelection(nil)
 	if len(all) != 2 || !all["alpha"] || !all["beta"] {
 		t.Fatalf("childSelection(nil) should inherit the full parent set, got %v", all)
+	}
+}
+
+func TestBuildChild_InheritsMCPBrokerAndCatalog(t *testing.T) {
+	broker := &interactiveRecordingBroker{}
+	parent := NewAgent(Options{
+		Config:       &config.Config{},
+		MCPBroker:    broker,
+		MCPCatalog:   []mcp.ServerTool{{ServerName: "bundle", Tool: mcp.Tool{Name: "lookup"}}},
+		SystemPrompt: "parent",
+	})
+	child := parent.buildChild(nil, nil, nil, 0, 0, 0)
+	if child.mcpBroker != broker {
+		t.Fatal("child did not inherit the parent's MCP broker")
+	}
+	if len(child.mcpCatalog) != 1 || child.mcpCatalog[0].ServerName != "bundle" || child.mcpCatalog[0].Tool.Name != "lookup" {
+		t.Fatalf("child MCP catalog = %+v, want inherited bundle.lookup", child.mcpCatalog)
 	}
 }
 

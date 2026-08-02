@@ -17,8 +17,450 @@ prior versions are listed because none have shipped.
 
 ## [Unreleased]
 
+### Security
+
+- Cap host-side `run_if` stderr capture at 8 KiB while continuing to drain the
+  command, preventing a noisy admin-authored gate from exhausting Fleet's heap;
+  document the admin-only gate in the host-I/O exception inventory.
+- Remove the unused arbitrary trailing Podman-argument seam from sandbox
+  configuration, so internal callers cannot override mandatory hardening flags;
+  correct stale package docs that claimed a production host fallback.
+- Replace credential-owner MCP call, discovery, scope-open, scope-close, and
+  reload error details with stable value-free broker errors; failed calls also
+  discard partial output before it can cross IPC.
+- Pin Next.js transitive `postcss` and `sharp` dependencies above their patched
+  floors and refresh both vulnerable `brace-expansion` lines in the web lockfile.
+
 ### Added
 
+- **Production child-owned remote MCP scopes:** interactive and scheduled run
+  drivers now send only user identity and public server-name filters to
+  `fleet mcp-broker`; the child owns token lookup/refresh, SSRF-guarded HTTP MCP
+  clients, scoped calls, and cleanup. Explicit OAuth/connectors HTTP endpoints
+  remain parent-side control-plane operations (ADR-0040).
+
+- **Child-owned remote MCP scopes (#167 prerequisite):** `fleet mcp-broker`
+  now opens an encrypted chat-store connection when remote MCP is configured,
+  performs per-user connection lookup, token/API-key decryption and refresh,
+  SSRF-guarded handshake, tool discovery, calls, and cleanup inside the child,
+  and returns only public tools and skipped names. The dedicated DB pool is
+  capped at 8 open/2 idle connections, scope-open resolver and per-server
+  token/handshake failure values do not cross the pipe or enter logs, and
+  disabled operation fails explicitly. Production consumes these scopes through
+  the activation above. See
+  [`docs/MCP-BROKER-SCOPES.md`](docs/MCP-BROKER-SCOPES.md).
+
+- **Remote MCP scope protocol (#167 prerequisite):** broker scope-open requests
+  can now carry a user email plus public enabled/shadowed remote-server names,
+  with an explicit filter bit preserving interactive “none selected” versus
+  scheduled “all connected.” Scope responses expose only public tools and
+  skipped-server names. Mixed bundle/remote fields and ambiguous filters fail
+  before backend dispatch; the production child consumes this selector as
+  described above. See
+  [`docs/MCP-BROKER-SCOPES.md`](docs/MCP-BROKER-SCOPES.md).
+
+- **Remote MCP broker overlay seam (#167 prerequisite):** interactive and
+  scheduled runs can now receive a per-user remote-MCP overlay as an injected
+  broker, public tool catalog, routing-name set, and bounded close function.
+  The injected opener takes precedence over the existing resolver, while the
+  in-process OAuth client remains a compatibility path for tests and embedders.
+  Production uses the child-owned remote scope described above. See
+  [`docs/MCP-BROKER-SCOPES.md`](docs/MCP-BROKER-SCOPES.md).
+
+- **Production bundle MCP process boundary (#167):** `fleet serve` now starts
+  the credential-owning broker subprocess before serving and routes interactive
+  turns, scheduled tasks, approvals, and MCP reload through it. The parent keeps
+  public catalog/account/gating metadata only; after liveness and discovery
+  succeed it unsets connector env keys, overwrites/drops resolved MCP and inline
+  HTTP definitions, and prevents config hot-reload from rehydrating exact or
+  account-suffixed keys. Startup fails on a connector/parent env-name collision
+  or broker preflight error, without scrubbing on failure. Per-user run-time MCP
+  clients are child-owned by the activation above. See
+  [`docs/MCP-BROKER-SCOPES.md`](docs/MCP-BROKER-SCOPES.md).
+
+- **Per-run MCP broker scope protocol (#167 prerequisite):** the internal broker
+  can open an isolated session from non-secret server/account selections, task
+  ID, and workspace path; return its opaque ID and public tool catalog; and route
+  the existing `agentcore.MCPBroker` call seam through that scope. Scope calls
+  retain request correlation and cancellation, close is idempotent after success
+  and retryable after failure, legacy backends fail explicitly, and backend
+  panics remain value-free and incident-correlated. This protocol groundwork is
+  consumed by the production bundle and remote-MCP boundaries above. See
+  [`docs/MCP-BROKER-SCOPES.md`](docs/MCP-BROKER-SCOPES.md).
+
+- **Credential-owning MCP scope backend (#167 prerequisite):** `fleet
+  mcp-broker` now constructs each requested account/task/workspace scope inside
+  the child, serializes close against admitted calls, and reaps all remaining
+  scoped subprocesses when its protocol loop exits. The shared spawn-definition
+  builder now excludes disabled servers, so a stale task selection cannot launch
+  one. A cancelled open also closes a late-created scope instead of losing its
+  opaque handle. Production now consumes this backend as described above.
+
+- **Interactive MCP broker seam (#167 prerequisite):** `TurnConfig` can now
+  inject an out-of-process broker plus its public catalog into the unchanged
+  `agentcore.Run` path. Per-user remote overlays compose with that injected base
+  without shadowing bundle servers. The local-client default remains for
+  compatibility callers and tests; production injects the subprocess broker.
+
+- **Approval MCP broker seam (#167 prerequisite):** interactive email
+  pre-validation and post-approval MCP execution now depend on the common
+  broker/catalog seam instead of a concrete credentialed client. Prefixed tool
+  routing remains server-qualified (including underscore-bearing names), and a
+  broker tool-level error now resolves the approval as failed. Production uses
+  the child broker's unscoped default-seat path for long-lived approvals.
+
+- **Connector env inventory (#167 prerequisite):** client bundles now retain a
+  names-only inventory of MCP and inline-HTTP-tool environment references from
+  the raw manifest, before interpolation can erase already-exported variable
+  names. The inventory also expands account-suffixed stdio env keys against a
+  supplied environment, enabling the production parent to scrub exactly the
+  connector keys after a broker child inherits them. The production boundary
+  above now consumes this inventory.
+
+- **Interactive Manager MCP scope seam (#167 prerequisite):** Manager can now
+  consume an injected public broker/catalog/account inventory without creating
+  a credentialed local MCP client, and can open one isolated broker scope per
+  chat turn. Scope selection always includes mandatory bundle servers, includes
+  only opted-in optional bundle servers, threads public account names and the
+  bound conversation workspace, fails closed on open errors, and closes with a
+  cancellation-independent timeout. Production now injects this seam.
+
+- **Scheduled MCP broker seam (#167 prerequisite):** the scheduled `Agent` and
+  its governed sub-agents can now call and discover bundle tools through an
+  injected broker/catalog, including composition with the existing per-user
+  remote overlay. Broker mode suppresses the in-process MCP loader tools instead
+  of advertising an unavailable mutation path. Production uses this broker path.
+
+- **Scheduled Runner MCP scopes (#167 prerequisite):** `scheduledrun.Runner`
+  can now open and close an isolated broker scope per task, preserving explicit
+  server/account choices and mapping an empty selection to all enabled bundle
+  servers. Task ID and per-run workspace metadata cross the value-free seam;
+  scope failures do not fall back locally, cancellation cannot suppress close,
+  and remote-MCP shadowing uses the returned public catalog. Production injects
+  this opener for every scheduled run.
+
+- **Credential-owner MCP reload (#167 prerequisite):** the broker protocol can
+  now ask the child to re-read its own bundle against its boot credential
+  snapshot, apply the minimum server diff, and return only the public change summary and tool
+  catalog, provisioned account-seat names, and enabled servers' public gating
+  metadata. Resolved connector definitions never cross the pipe; reload retains
+  request cancellation and value-free panic containment, existing scopes keep
+  their snapshot, and future scope opens serialize onto a coherent old or new
+  catalog.
+
+- **Interactive broker reload seam (#167 prerequisite):** Manager can now apply
+  a credential-owner reload result to its public catalog, account names,
+  allowlists, optional gates, prompt roster, and picker metadata under the same
+  serialized reload path as its local client. Broker-mode reload takes its
+  server metadata from the child result instead of re-reading connector config
+  in the parent, and publishes that entire public view atomically. An injected
+  broker without a reload adapter fails explicitly rather than returning a false
+  empty success. Production injects the credential-owner adapter.
+
+- **Scheduled public MCP inventory (#167 prerequisite):** broker-scoped task
+  runs can expand an empty selection and decide whether to mint a per-run
+  workspace from a live names/`uses_workspace` snapshot, without retaining the
+  credential-bearing `cfg.MCPServers` map. Updating the provider changes the
+  next run while the local compatibility binder keeps its existing config path.
+
+- **Query-parameter API keys for hosted connectors (Browserbase)**: some
+  vendors authenticate their hosted MCP server with the key in a URL query
+  parameter rather than a header. api_key connectors now support
+  `api_key_query`: the key stays sealed at rest and is attached per-request
+  by the HTTP transport, so the stored URL, logs, and error strings never
+  carry it. The built-in Browserbase directory entry — previously marked
+  OAuth, which its endpoint doesn't serve, so every connect failed at
+  discovery — now uses `api_key_query: browserbaseApiKey` with a setup hint.
+- **Self-wake** (`docs/SELF-WAKE.md`): a scheduled run can suspend itself
+  and schedule its own resumption — new `sleep` (park until a deadline) and
+  `wake_on_event` (park until `POST /tasks/{id}/wake` fires the matching
+  key, or a timeout) tools with the exact ask-pause lifecycle: the run ends,
+  sandbox/lease released, task parks in new status `paused_awaiting_wake`,
+  and the scheduler's tick re-queues it as a fresh run carrying the agent's
+  required note-to-self plus the wake reason. Every wake has a deadline
+  (event waits default to 7 days), parks are capped at 100 per task, and
+  cost accumulates on the task across cycles.
+
+- **Discuss this run** (`docs/DISCUSS-RUN.md`): a finished scheduled run's
+  log modal gains "Discuss in chat" — a one-way BFF bridge (inverse of
+  promote-to-task) that reads the transcript through the caller's
+  orchestrator credential, creates a chat conversation seeded with a clamped
+  digest (new optional `seed` on `POST /conversations` — one user message,
+  no turn), and deep-links to it via the new `/chat?c=<id>` boot param. The
+  chat server never reads the sched store; ADR-0005's database split stands.
+
+- **Per-attempt run log history** (`docs/RUN-LOG-HISTORY.md`): re-running the
+  same task id — a retry, an ask-pause resume, a self-wake cycle — no longer
+  destroys the prior attempt's transcript. The row the `logs` upsert would
+  clobber is copied into `run_logs` in the same transaction (archived payloads
+  travel verbatim), capped at 20 per task, pruned with the task by both
+  retention paths. New `GET /logs/{task_id}/history[/{entry_id}]` behind the
+  exact `GET /logs/{task_id}` gate, and an attempt picker in the task log
+  modal that renders only when history exists.
+
+- **A bundle can now brand the shell, not just tint it** (`docs/BRANDING.md`):
+  new `branding.logo` — a bundle-relative image path served from the bundle by
+  `/brand/logo` (proxied as `/api/brand/logo`), so the navigation rail's mark is
+  a bundle change plus a restart, never a web rebuild or a file copied into
+  `web/public`. Previously `NavRail` hardcoded `elcano-mark-primary.svg`, so
+  every deployment wore one client's mark beside its own `app_name`; that asset
+  is deleted from fleet and the fallback is fleet's own mark. The path is
+  resolved at load — lexically local, still inside the bundle after symlink
+  resolution, a regular file, a known image extension — so a bad value fails at
+  startup instead of rendering a broken image on every page; the route caps it at
+  2 MiB and pins delivery with `nosniff` + `default-src 'none'; sandbox` so an
+  SVG carrying `<script>` executes nothing. `/client-config` advertises
+  `logo_url` only when a file actually backed the field.
+  **Seven more themable color tokens** — `text_disabled`, `border_strong`,
+  `border_subtle`, `overlay_soft`, `overlay_strong`, `rail_hover`, `rail_active`
+  — because `globals.css` hand-tints those from fleet's own primary hue, so a
+  bundle overriding `primary` alone kept fleet-purple emphasis borders and rail
+  rows beside its palette. The last two close the follow-up `globals.css` records
+  inline. Semantic status colors (success/danger/warning) stay fleet's: they
+  encode meaning, not brand.
+
+### Fixed
+
+- **Live Playwright no longer trips the password-brute-force limiter it is
+  meant to preserve.** The real-stack suite submitted the same test account's
+  password before nearly every spec, deterministically exhausting
+  `/auth/verify`'s five-attempts-per-email window and turning unrelated tests
+  into `/login?e=server` failures. It now creates one real password-authenticated
+  worker session and copies that cookie into each isolated test context; the
+  dedicated auth specs still exercise valid and invalid password submissions,
+  and the production limiter remains unchanged.
+
+- **Root Go gates no longer traverse npm dependencies.** An explicit module
+  boundary at `web/` keeps `go build/test/vet ./...` scoped to Fleet-owned Go
+  packages even after `npm ci` installs packages containing incidental Go code.
+
+- **`fleet chat` now honors the server's terminal turn outcome.** The TUI and
+  one-shot mode surface `turn.error`, model-selection failures, cancellation,
+  premature stream EOF, and non-success health checks instead of treating them
+  as successful empty or partial answers.
+
+- **Chat migrations no longer deadlock with a one-connection pool.** The
+  advisory lock and every migration query/transaction now share one dedicated
+  connection, so `CHAT_DB_MAX_CONNS=1` remains a valid operator setting.
+
+- **A recovered MCP-broker backend panic no longer strands its caller until the
+  request timeout.** Call, tool-discovery, and account-discovery goroutines now
+  complete the matching IPC request with a generic, incident-correlated error
+  and keep the broker serving subsequent requests. The recovered panic value is
+  classified only and never crosses the broker pipe, so connector material in a
+  panic cannot be reflected into the agent-loop process. Runtime/README claims
+  distinguish the now-active bundle process boundary from the still-in-process
+  per-user remote MCP OAuth path tracked by #167.
+
+- **Sandbox acquisition now fails closed at the pool shutdown boundary.** Every
+  take path (warm, cold, persistent, lockdown, and allowlisted) returns
+  `ErrClosed` after `Pool.Close` marks the pool closed; a concurrent cold start is
+  immediately reaped instead of escaping the shutdown boundary. The pool is
+  marked closed before its allowlist proxy is stopped, preventing a racing turn
+  from receiving a container configured with a dead proxy. A nil pool now
+  returns `ErrContainerUnavailable` instead of panicking, and the existing
+  keeper/close stress test now exercises the advertised race rather than
+  stopping all takers before close.
+
+- **Chat input queues no longer grow forever or drain tied positions
+  nondeterministically** (#835). Completed/cancelled rows are now purged after
+  `FLEET_INPUT_QUEUE_RETENTION_DAYS` (30 days by default; `0` disables), at boot
+  and after turns; pending/running/injected work is never retention-eligible.
+  Enqueue and send-now position allocation now serialize per conversation, a
+  partial unique index makes non-terminal positions structurally unique,
+  migration 046 deterministically normalizes legacy ties (including rows that
+  recovery may re-queue), and drain/list queries carry `created_at, id`
+  tie-breakers. Fresh enqueue acknowledgements also return the database-assigned
+  position instead of an incorrect zero value.
+
+- **Every deployment's shared links unfurled with Elcano's logo** (#893). The
+  `og:image` / `twitter:image` was a checked-in `web/public/share.png` containing
+  Elcano's logo and wordmark, fleet's purple gradient, and fleet's marketing
+  headline — served from the *client's own domain*, so nothing looked amiss to the
+  unfurler. Pasting a link to a white-labeled instance into Slack, iMessage,
+  Discord, Teams or LinkedIn showed another company's brand. The alt text was that
+  same headline, hardcoded, so it leaked even to scrapers that only read
+  `og:image:alt`, and to screen readers.
+
+  New `branding.share_image` (bundle-relative, validated at load through the same
+  `resolveBrandImage` containment checks as `logo` — lexically local, re-checked
+  after `EvalSymlinks`, regular file, known extension), served by
+  `/brand/share-image` and proxied as `/api/brand/share-image`. That proxy is in
+  the middleware's public-path set out of necessity rather than convenience:
+  unfurl scrapers are anonymous, so an `og:image` behind the session gate renders
+  no preview at all. `/brand/meta` advertises `share_image_url` only when a file
+  actually backed the field, mirroring `logo_url`, so the web never points a
+  scraper at a 404. The cap is 5 MiB rather than the logo's 2 MiB, because the
+  asset genuinely is larger — but still capped, since scrapers abandon slow
+  fetches.
+
+  `og:image:width` / `height` are now declared **only** for fleet's own card,
+  whose size fleet knows. fleet does not decode a bundle's image, and a wrongly
+  declared size renders a distorted preview; with the tags absent, scrapers fetch
+  and measure. The committed default `share.png` is replaced with a **fleet-only**
+  card — no Elcano logo or wordmark — so a bundle-less deployment doesn't ship
+  another company's branding either, which also removes client-specific content
+  from the engine repo per the `AGENTS.md` boundary doctrine.
+
+- **A white-labeled deployment still introduced itself as "Fleet"** (#891, #892,
+  #894, #895) — in its browser tab, its tab icon, its login headline, its PWA
+  name and splash, its browser-chrome tint, and every shared-link unfurl. Four
+  defects with one root cause: the surfaces that most define a deployment's
+  identity all render **without a session**, and `/client-config`, where branding
+  is served, is member-gated. So each had quietly settled for a fleet default:
+  - `branding.login_title` / `login_tagline` were parsed, defaulted, API-served,
+    and typed in the web client — then hardcoded in `login-card.tsx` (#892).
+  - `branding.share_title` / `share_description` were read by **zero**
+    components; `layout.tsx` built its own OG strings from a build-time env var
+    nothing in the deploy path set from the bundle (#894).
+  - `<meta name="theme-color">` was a pair of fleet-purple literals, and it
+    overrides the PWA manifest's `theme_color` in Chrome — so it silently defeated
+    `manifest.ts`'s bundle lookup (#895).
+  - `app/favicon.ico` was still emitted alongside the bundle-driven
+    `metadata.icons` and, being the only candidate carrying `sizes` and `type`,
+    won the tab strip. `metadata.icons` overrides `icon.svg` and `apple-icon.png`
+    but cannot suppress `favicon.ico`, which Next special-cases (#891).
+
+  All four now resolve from one place: a new token-gated, identity-less
+  `/brand/meta` (same trust class as `/theme.css` and `/brand/logo`, which exist
+  for exactly this problem), read server-side through
+  `web/src/app/lib/serverBranding.ts` — memoized 60s in-process, 2s fetch
+  timeout, and it never throws, so branding can never fail a page render.
+  `NEXT_PUBLIC_APP_NAME` is demoted to a backend-unreachable fallback.
+  `favicon.ico` is deleted (unbranded deployments still get fleet's mark via
+  `/api/brand/logo`'s 307), and the PWA's `any`-purpose icon now points at the
+  bundle mark while the maskable one stays fleet's correctly-padded asset.
+
+  Two **build-time traps** were found and closed in the process. `manifest.ts`
+  was written to read the palette per request and never did once — its route was
+  statically prerendered, so the fetch ran during `next build` in a staging dir
+  with the backend down, and every deployment silently served the fallback
+  (`theme_color: "#1a0b1e"` on a host whose `/api/theme` correctly served
+  `#0A0908`). And a root-layout `generateMetadata` is not sufficient alone:
+  `/settings/*`, `/no-access` and `/` were prerendered with `<title>Fleet</title>`
+  **baked into the HTML artifact**, so only *some* tabs would have been wrong.
+  Both are fixed with `force-dynamic` and asserted in tests, since the failure
+  mode is silent.
+
+- **Exports downloaded as a file named `export` with no extension** (#896). Both
+  proxy funnels — `proxyToOrchestrator` (all 37 `/api/orchestrator/*` routes) and
+  `chatServerPassthrough` — re-emitted only `Content-Type` and dropped every other
+  upstream header, so the `Content-Disposition` filename four Go handlers set on
+  purpose (dataset CSV, prompts, adoption CSV, project export) never reached the
+  browser; a bare `download` attribute then names the file after the URL's last
+  path segment. Header forwarding now lives once in `web/src/app/lib/proxyHeaders.ts`,
+  generalizing the fix `api/conversations/[id]/export` already had by hand.
+  `Content-Length` is deliberately not forwarded — `fetch()` decodes a compressed
+  upstream body, so a copied length can truncate the response. Both funnels also
+  stream `upstream.body` instead of buffering it, which kept whole CSV exports in
+  memory and defeated the streaming writers upstream. The project export's filename
+  moved into its Go handler (the only one that had none) so it saves as
+  `Q3-Planning-a1b2c3d4.json` rather than `project-<uuid>.json`, and
+  `exportFilename` now takes its fallback noun as a parameter instead of
+  hardcoding `"chat"`.
+
+- **White text was hardcoded on 16 token-driven fills, so a light-primary bundle
+  rendered invisible labels** (#890). `on_primary` landed in #889 but only the two
+  `--gradient-action-primary` consumers were converted; every flat fill still said
+  `text-white`. On the Reklaim deployment (`primary: #FFDF03`) that measured
+  **1.33:1** against WCAG AA's 4.5:1 — on the login page's Sign in button, all four
+  tool-approval **Approve** buttons, every primary button in Settings, the user
+  avatar, and the sidebar's selection tick. Primary fills now use
+  `var(--color-on-primary)` (14.87:1 on that palette). Two further fills were
+  failing for **fleet's own** stock palette, not just white-labeled ones — white on
+  the dark theme's `--color-accent` was 2.28:1 and on `--color-danger` 2.77:1 — and
+  now use `var(--color-surface-1)` (5.9–7.2:1), which was already the codebase's
+  idiom at three other sites. The bulk-delete button's countdown state takes the
+  muted disabled treatment instead of a high-contrast label on a half-alpha fill.
+  Root cause was the rule's wording: `DESIGN.md` banned raw *hex* colors, and every
+  offender spelled its color as a Tailwind utility, so nothing caught it. The rule
+  now bans color utilities too, and `web/src/app/designTokens.test.ts` pins it —
+  including a positive check that a primary fill declares `--color-on-primary`,
+  which found a 14th site that grepping for `text-white` had missed.
+
+- **A themed deployment still rendered fleet's colors on its most visible
+  surfaces.** `branding.colors` themed the flat tokens, but the gradients did not
+  read them: `--gradient-bg` (painted on `<body>`), `--sidebar-surface` (the rail),
+  the surface/panel/card/composer gradients, and `--gradient-action-primary` were
+  hardcoded fleet-purple, as were light-mode agent-link colors and the light
+  usage-bar hue. A bundle could set all 18 tokens and the app still read as
+  fleet-purple with a client-colored trim. All of them now derive from the palette
+  via `color-mix()`; the percentages were fitted against the previous literals for
+  fleet's own palette, so the stock appearance is unchanged (every stop within
+  ΔRGB ≤ 6). See `docs/BRANDING.md`.
+- **A bundle with a light primary had unreadable buttons.** Every rule painting
+  `--color-primary` or `--gradient-action-primary` hardcoded white text, so a
+  yellow-primary bundle rendered white-on-yellow at 1.33:1 — including the send
+  button and the empty-state CTA. New themable `on_primary` token carries the
+  foreground for those surfaces (14.87:1 with near-black on yellow), and light
+  mode's action gradient now deepens via `--color-primary-hover` rather than
+  mixing the brand color toward black.
+- **The tab icon and the installed-app splash color ignored the bundle.**
+  `icon.svg`/`apple-icon.png` are build-time file-convention assets a bundle cannot
+  reach, so every deployment wore fleet's mark in the tab beside its own name; the
+  PWA manifest hardcoded a splash color. The favicon now resolves to
+  `branding.logo` via `/api/brand/logo` (which redirects to fleet's own mark when a
+  bundle declares none, so the link is never dead), and the manifest reads the
+  bundle's dark `--color-bg`.
+- **An SVG bundle logo rendered as a broken image on every page.** `next/image`
+  skips Next's optimizer only when the `src` path literally ends in `.svg`; a
+  bundle mark arrives as `/api/brand/logo`, which has no extension, so it was
+  rewritten to `/_next/image?url=…` — and that endpoint rejects `image/svg+xml`
+  unless `images.dangerouslyAllowSVG` is set, which `next.config.ts` deliberately
+  does not set. Every bundle whose `branding.logo` was an SVG therefore wore a
+  broken mark in the rail, including the format `docs/BRANDING.md` uses in its own
+  example. The rail's `<Image>` is now `unoptimized` (a 28px mark gains nothing
+  from the optimizer anyway), and `NavRail.test.tsx` pins it by asserting the
+  rendered `src` is the raw path with no generated `srcset`.
+- **Bundle branding never actually reached the login page.** The root layout
+  links `/api/theme` as a render-blocking stylesheet on every page, and both
+  `theme.go` and the proxy route documented it as public — but the path was
+  missing from the middleware's public-path set, so a pre-session request 401'd
+  and the login page silently fell back to fleet's built-in palette. That is the
+  one page every user sees before anything else, and the surface a white-labeled
+  deployment cares most about. `/api/theme` and `/api/brand/logo` are now both
+  public (deployment-wide, non-secret, and each degrades quietly to empty
+  CSS / a 404), pinned by a regression test.
+
+- **Catalog refresh: `gamma`** (`design-media`, provenance `official`, `auth:
+  oauth`) — Gamma's hosted MCP at `https://mcp.gamma.app/mcp`: generate decks /
+  docs / webpages from a prompt, template, or multi-page input, browse, read and
+  export existing gammas (PPTX/PDF), read comments, and pull per-deck engagement
+  analytics. Verified before shipping: `initialize` + `tools/list` answer 15
+  tools, and the full OAuth chain resolves — RFC 9728 protected-resource
+  metadata names `https://auth.gamma.app`, whose RFC 8414 metadata advertises an
+  RFC 7591 `registration_endpoint` and PKCE `S256`, so dynamic client
+  registration needs no operator-supplied client (no `client_registration:
+  manual`). Gamma serves that metadata at the **origin root** only — the
+  path-aware location (`/.well-known/oauth-protected-resource/mcp`) 404s — so
+  this entry depends on the origin-root fallback added in #878. Scopes are
+  `generate` and `gamma:read`; the MCP server is available on all Gamma plans
+  and generations charge credits.
+
+- **Bigger uploads with honest failures, plus admin storage visibility and
+  cleanup** (`docs/UPLOADS-AND-STORAGE.md`): the per-file upload cap is now
+  configurable (`FLEET_UPLOAD_MAX_BYTES`) and defaults to 1 GiB (was a
+  hardcoded 256 MiB on chat attachments / 250 MB on task uploads); the chat
+  composer learns the limit from `/server-config` and refuses oversize files
+  at pick time with a visible explanation instead of a silent post-upload
+  413, warns when a queued upload is large, and explains the disabled Send
+  button; oversize errors from the server are human-readable 413s in every
+  case (including the previous opaque `400 unexpected EOF`). Settings →
+  Admin → Server gains a Storage panel — bytes for attachment uploads, task
+  uploads, and workspaces, the largest conversation workspaces with owner/
+  pinned context, and a "clean up now" action that deletes old unpinned
+  chats (pinned/archived/shared/project chats are never touched) and sweeps
+  aged files. The orchestrator's `temp_uploads` cleanup (previously dead
+  code) and the attachment TTL sweep now also run on an hourly timer, so an
+  idle server reclaims disk without waiting for a chat turn.
+
+- **Recurrence end conditions + horizon-based Upcoming**
+  (`docs/RECURRENCE-END.md`): recurring tasks can end on a date
+  (`recurrence_until`) or after a total number of runs
+  (`recurrence_remaining`), exposed in the task modal as "End repeat"; and
+  `GET /tasks/upcoming?until=` projects every occurrence inside the window
+  instead of capping recurring tasks at their next 5, so the week board no
+  longer implies a schedule "ends" five occurrences out.
 - **`fleet doctor` — box-level diagnose AND repair** (patterned on chat's
   `chat doctor`; `docs/DOCTOR.md`): a root pass over every box prerequisite —
   toolchain floors, fleet-critical package currency with broken-dnf-repo
@@ -52,10 +494,10 @@ prior versions are listed because none have shipped.
   instead of the browser-native title, and "Open project" uses the standard
   open/external glyph instead of a bare arrow. Tooltips now shrink-wrap to
   their text instead of always being 14rem wide.
-- **Sealed-chat lock moved next to the Temporary retention note**: it now
-  sits in the Temporary heading with the same muted quiet treatment as the
-  ⚠ beside it (sealed chats land in that list), instead of competing with
-  the green "+" in the Chats header.
+- **Sealed-chat row badge is muted and right-aligned**: the lock marking a
+  sealed conversation moved from a leading accent glyph to a quiet muted
+  lock at the row's right edge (the retention-note treatment). The
+  new-sealed-chat lock button stays in the Chats header next to "+".
 - **Pinned and Temporary read as groups, not chats**: both headers are now
   small-caps eyebrow captions with a leading accent icon (pin / clock) — 
   visually distinct from the chat rows beneath them, but one level below
@@ -66,17 +508,67 @@ prior versions are listed because none have shipped.
   uses one shared CloseButton: same 2rem box, rounding, glyph, and a slight
   red-tint hover. The orphaned `.modal-close` CSS was removed.
 
+### Added
+
+- **"Sign out" on OAuth connectors**: Settings → Connections now separates
+  ending an authorization from deleting the connection. Sign out revokes
+  (best effort) and drops the stored tokens but keeps the registration —
+  including a manually-registered OAuth client's ID/secret — so Connect
+  signs back in without re-entering anything. Remove stays the full delete.
+
 ### Fixed
 
-- **The pre-auth login page now paints in the bundle's brand colors (#903)**:
-  `layout.tsx` links the brand-theme stylesheet (`/api/theme`) on every page
-  and the route is deliberately public, but the web proxy's `publicApiPaths`
-  allowlist did not include it — so logged-out browsers got a 401 and the
-  login page rendered in fleet's default palette instead of the deployment's.
-  `/api/theme` is now allowlisted pre-session; the route stays fail-safe
-  (always 200, empty CSS on backend trouble) and the palette is deployment-wide
-  and non-secret by design.
-
+- **Remote-MCP OAuth discovery finds path-aware metadata (Google Workspace
+  MCP)**: connectors whose resource URL has a path (e.g.
+  `gmailmcp.googleapis.com/mcp/v1`) publish RFC 9728 §3.1 metadata at
+  `/.well-known/oauth-protected-resource/<path>` and 404 the origin-root
+  form fleet probed, so every Google Workspace connect failed at discovery.
+  Discovery now tries the path-inserted location first, then the root.
+- **OAuth connect no longer strands the browser on localhost**: after a
+  successful remote-MCP authorization behind a reverse proxy, the callback
+  route redirected to the internal origin (`localhost:3000`) because it built
+  the URL from `request.url`; it now uses the forwarded host like every auth
+  route (`getRedirectUrl`).
+- **Manual OAuth client forms now show the callback URL**: connector setup
+  hints (GitHub, Google Workspace, …) told users to register their OAuth app
+  with "the callback URL shown in your Fleet instance's OAuth settings", but
+  nothing in the UI displayed it. `/mcp-catalog` now returns
+  `oauth_redirect_uri` and the guided add form renders it with a copy button.
+- **A selection-less scheduled run no longer replays another task's create
+  markers**: `bindTaskMCP` returned the **shared per-deployment** MCP workspace
+  dir as the #717 reconciliation workdir for any task without an
+  `mcp_selection`. That directory's `creates.jsonl` accumulates the markers of
+  every task *and* every chat conversation on the box, keyed only by
+  `(ssp, deal_name)` with no run attribution — so an unrelated task's
+  half-finished create was injected into this task's prompt as "the prior
+  process stopped after submitting these creates", and since an abandoned
+  `submitted` marker is only ever cleared by a matching resolution in the same
+  file, it was replayed into every future run forever. The selection-less path
+  now returns no reconciliation workdir (an unattributable ledger is not a
+  resume signal); a task that wants real per-run resume semantics declares an
+  `mcp_selection` and gets the dedicated client, whose workdir and
+  `${FLEET_TASK_ID}` identify exactly one run. When the catalog references
+  `${FLEET_TASK_ID}` the run now logs that its per-task ledgers are inert, so a
+  missing selection is visible instead of silent. New
+  `agentcore.EnvReferencesTaskID`. Same root confusion — a shared directory
+  treated as a run identity — as the SendGrid send-once bug fixed in
+  elcano-config PR #48, where it made scheduled tasks report emails as sent
+  that were never delivered; `docs/MCP-BUNDLE-ENV.md` now states the rule for
+  both sides.
+- **A sent email now reads as an outcome, not a JSON dump**: `ToolResultView`
+  had purpose-built renderers only for `bash` and `task_tracker`, so a
+  `send_email` result (built-in or any bundle's `mcp_*_send_email`) fell through
+  to the raw `<pre>`. Because the approval gate resolves the call *after* the
+  model's turn has ended, the last thing a user saw after clicking **Send** was
+  the provider payload — status code, message id, and a paragraph of HTML-lint
+  prose about Outlook table borders. It now renders one outcome line (`Queued
+  for delivery` / `Already sent` / `Not sent`) with the message id, any
+  formatting notes, and the full payload behind a collapsed "Delivery details"
+  disclosure. A rejected send is read off the payload's `error`/non-2xx
+  `status_code` rather than the tool-level error flag — the server returns a
+  failure as a normal result, so trusting `is_err` alone printed "queued" over
+  a send that never happened. The pre-approval `APPROVAL_REQUIRED` placeholder
+  now says it is waiting for approval instead of showing the raw sentinel.
 - **Env-file writes now survive a read round-trip (#834)**: `SetEnvKey` wrote
   values verbatim while both parsers (creds and the server's `loadEnvFile`)
   strip whitespace, surrounding quotes, and ` #`-style inline comments — so a

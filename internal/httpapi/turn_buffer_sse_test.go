@@ -100,3 +100,48 @@ func TestTurnBuffer_Heartbeat(t *testing.T) {
 		t.Errorf("expected at least one heartbeat keepalive frame, got:\n%q", rw.Body())
 	}
 }
+
+// TestTurnBuffer_EvictedSubscriberGetsEvictedFrame: a subscriber whose channel
+// filled up is closed by Emit, but the turn is still running — the stream must
+// end with an explicit evicted `reconnect` frame, not the same clean EOF a
+// finished turn produces (which the client renders as turn-complete).
+func TestTurnBuffer_EvictedSubscriberGetsEvictedFrame(t *testing.T) {
+	buf := newTurnBuffer("c", "t")
+
+	rw := newRecorder()
+	done := make(chan error, 1)
+	go func() { done <- buf.Attach(context.Background(), 0, rw, nil) }()
+	for buf.subscriberCount() == 0 {
+		time.Sleep(time.Millisecond)
+	}
+
+	// Take the buffer lock so the attached reader cannot drain its channel
+	// (the reader takes b.mu per unsubscribe only; simpler: flood far past
+	// the 256-slot channel in one burst before the reader goroutine can keep
+	// up is racy — instead, flood while holding no lock but with enough
+	// events that the non-blocking send must overflow at least once).
+	for i := 0; i < 5000; i++ {
+		buf.Emit("delta", map[string]any{"i": i})
+	}
+	// The reader either got evicted (desired path) or drained everything;
+	// keep flooding until it detaches.
+	deadline := time.After(5 * time.Second)
+	for buf.subscriberCount() > 0 {
+		select {
+		case <-deadline:
+			t.Fatal("subscriber never evicted; cannot exercise the eviction path")
+		default:
+			buf.Emit("delta", map[string]any{"pad": strings.Repeat("x", 64)})
+		}
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("Attach returned error: %v", err)
+	}
+	body := rw.Body()
+	if !strings.Contains(body, `"type":"evicted"`) {
+		t.Errorf("evicted subscriber's stream ended without an evicted frame:\n…%s", body[max(0, len(body)-300):])
+	}
+	if buf.Sealed() {
+		t.Error("buffer must still be live — eviction is not Finish")
+	}
+}

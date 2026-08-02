@@ -109,7 +109,7 @@ describe("validateFile", () => {
   it("validates / rejects per size + extension", () => {
     expect(validateFile({ name: "test.txt", size: 1024, type: "text/plain" }).valid).toBe(true);
     expect(validateFile(null).valid).toBe(true);
-    expect(validateFile({ name: "test.txt", size: 300 * 1024 * 1024 }).valid).toBe(false);
+    expect(validateFile({ name: "test.txt", size: 2 * 1024 * 1024 * 1024 }).valid).toBe(false);
     expect(validateFile({ name: "test.txt", size: 2 * 1024 * 1024 }, { maxSize: 1024 * 1024 }).valid).toBe(false);
     expect(validateFile({ name: "test.exe" }, { allowedExtensions: ["txt", "md"] }).valid).toBe(false);
     expect(validateFile({ name: "test.txt" }, { allowedExtensions: ["txt", "md"] }).valid).toBe(true);

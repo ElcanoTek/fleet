@@ -125,8 +125,8 @@ repo `FLEET_CLIENT_CONFIG_DIR` points at). Treat write access to that repo as
 box:
 
 - Its `sandbox/Containerfile` is **built and run** on the host.
-- Its `mcp/*.py` servers run as **host-side subprocesses** with the per-account
-  brokered MCP credentials placed in their environment.
+- Its MCP servers run as **host-side subprocesses of the dedicated MCP broker**
+  with the selected per-account credentials placed in their environment.
 
 So the README's "credentials never enter the sandbox" guarantee is about the
 *sandbox* — brokered secrets **do** reach the bundle's own host-side MCP servers

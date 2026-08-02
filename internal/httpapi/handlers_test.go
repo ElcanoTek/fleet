@@ -198,6 +198,96 @@ func TestConversationsLifecycle(t *testing.T) {
 	}
 }
 
+// TestConversationCreate_Seed proves POST /conversations with a seed persists
+// one user text message WITHOUT running a turn (the "Discuss this run" bridge,
+// docs/DISCUSS-RUN.md), and that an oversized seed is clamped keeping the tail.
+func TestConversationCreate_Seed(t *testing.T) {
+	s := serverFixture(t)
+	h := s.Routes()
+
+	w := do(t, h, http.MethodPost, "/conversations",
+		map[string]string{"title": "Discuss run: nightly", "persona": "victoria", "seed": "RUN DIGEST BODY"}, "u@x.com")
+	if w.Code != http.StatusOK {
+		t.Fatalf("create with seed: %d body=%s", w.Code, w.Body.String())
+	}
+	var conv store.Conversation
+	if err := json.Unmarshal(w.Body.Bytes(), &conv); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	w = do(t, h, http.MethodGet, "/conversations/"+conv.ID, nil, "u@x.com")
+	var getResp struct {
+		History []struct {
+			Role    string          `json:"role"`
+			Type    string          `json:"type"`
+			Content json.RawMessage `json:"content"`
+		} `json:"history"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &getResp); err != nil {
+		t.Fatalf("decode get: %v", err)
+	}
+	if len(getResp.History) != 1 {
+		t.Fatalf("seeded conversation: want exactly 1 history entry, got %d", len(getResp.History))
+	}
+	e := getResp.History[0]
+	if e.Role != "user" || e.Type != "text" {
+		t.Errorf("seed entry: want user/text, got %s/%s", e.Role, e.Type)
+	}
+	var content struct {
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(e.Content, &content); err != nil {
+		t.Fatalf("decode content: %v", err)
+	}
+	if content.Text != "RUN DIGEST BODY" {
+		t.Errorf("seed content: got %q", content.Text)
+	}
+
+	// Empty/whitespace seed: no message appended (plain create unchanged).
+	w = do(t, h, http.MethodPost, "/conversations",
+		map[string]string{"title": "plain", "persona": "victoria", "seed": "   "}, "u@x.com")
+	if w.Code != http.StatusOK {
+		t.Fatalf("create without seed: %d", w.Code)
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &conv)
+	w = do(t, h, http.MethodGet, "/conversations/"+conv.ID, nil, "u@x.com")
+	if err := json.Unmarshal(w.Body.Bytes(), &getResp); err != nil {
+		t.Fatalf("decode get: %v", err)
+	}
+	if len(getResp.History) != 0 {
+		t.Errorf("whitespace seed: want empty history, got %d entries", len(getResp.History))
+	}
+
+	// Oversized seed: clamped to the TAIL (the outcome end of a transcript),
+	// with the truncation marker prefix.
+	huge := strings.Repeat("x", seedMaxChars) + "THE TAIL"
+	w = do(t, h, http.MethodPost, "/conversations",
+		map[string]string{"title": "big", "persona": "victoria", "seed": huge}, "u@x.com")
+	if w.Code != http.StatusOK {
+		t.Fatalf("create with huge seed: %d", w.Code)
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &conv)
+	w = do(t, h, http.MethodGet, "/conversations/"+conv.ID, nil, "u@x.com")
+	if err := json.Unmarshal(w.Body.Bytes(), &getResp); err != nil {
+		t.Fatalf("decode get: %v", err)
+	}
+	if len(getResp.History) != 1 {
+		t.Fatalf("huge seed: want 1 entry, got %d", len(getResp.History))
+	}
+	if err := json.Unmarshal(getResp.History[0].Content, &content); err != nil {
+		t.Fatalf("decode content: %v", err)
+	}
+	if !strings.HasPrefix(content.Text, "[…seed truncated…]") {
+		t.Error("huge seed: missing truncation marker")
+	}
+	if !strings.HasSuffix(content.Text, "THE TAIL") {
+		t.Error("huge seed: clamp must keep the tail")
+	}
+	if len(content.Text) > seedMaxChars+64 {
+		t.Errorf("huge seed: still %d chars after clamp", len(content.Text))
+	}
+}
+
 // TestConversationRename_LocksTitle proves POST /conversations/{id}/rename sets
 // title_locked (#302) so the background auto-titler can't later clobber the
 // user's chosen name.

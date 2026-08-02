@@ -2,9 +2,13 @@ package agent
 
 import (
 	"context"
+	"errors"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/creds"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 )
 
@@ -18,6 +22,55 @@ func (m *Manager) mcpGates() (mcpAllowlist, mcpOptionalSet) {
 	return m.allowlist, m.optionalServers
 }
 
+func (m *Manager) mcpCatalogSnapshot() []mcp.ServerTool {
+	m.mcpGatingMu.RLock()
+	defer m.mcpGatingMu.RUnlock()
+	if m.mcpCatalog != nil {
+		return cloneMCPCatalog(m.mcpCatalog)
+	}
+	if m.mcpClient != nil {
+		return m.mcpClient.GetAllTools()
+	}
+	return nil
+}
+
+func (m *Manager) scopeSelection(optionalEnabled []string, defaults map[string]string) agentcore.MCPSelection {
+	enabledOptional := make(map[string]bool, len(optionalEnabled))
+	for _, name := range optionalEnabled {
+		if name = strings.TrimSpace(name); name != "" {
+			enabledOptional[name] = true
+		}
+	}
+	m.mcpGatingMu.RLock()
+	selection := make(agentcore.MCPSelection, 0, len(m.enabledMCPServers))
+	for name := range m.enabledMCPServers {
+		if m.optionalServers[name] && !enabledOptional[name] {
+			continue
+		}
+		selection = append(selection, agentcore.MCPChoice{Server: name, Account: defaults[name]})
+	}
+	m.mcpGatingMu.RUnlock()
+	sort.Slice(selection, func(i, j int) bool { return selection[i].Server < selection[j].Server })
+	return selection
+}
+
+func cloneMCPAccounts(src map[string][]string) map[string][]string {
+	dst := make(map[string][]string, len(src))
+	for server, accounts := range src {
+		dst[server] = append([]string(nil), accounts...)
+	}
+	return dst
+}
+
+func cloneMCPCatalog(src []mcp.ServerTool) []mcp.ServerTool {
+	if src == nil {
+		return nil
+	}
+	dst := make([]mcp.ServerTool, len(src))
+	copy(dst, src)
+	return dst
+}
+
 // mcpRosterSnapshot returns the (optional-set, tool-roster) pair under the
 // gating RLock. Same snapshot contract as mcpGates.
 func (m *Manager) mcpRosterSnapshot() (mcpOptionalSet, []string) {
@@ -26,12 +79,12 @@ func (m *Manager) mcpRosterSnapshot() (mcpOptionalSet, []string) {
 	return m.optionalServers, m.mcpToolRoster
 }
 
-// specsToServerDefs converts the enabled entries of a resolved spec map into the
+// MCPServerDefs converts the enabled entries of a resolved spec map into the
 // transport-agnostic mcp.ServerDef list the client's Reload diffs against. It
 // mirrors BuildMCPClient's stdio/HTTP dispatch. Disabled specs are dropped so a
 // server toggled off in the manifest is removed on reload. The synthetic inline
 // http-tools server has no spec and is left untouched by Reload.
-func specsToServerDefs(specs map[string]MCPServerSpec) []mcp.ServerDef {
+func MCPServerDefs(specs map[string]MCPServerSpec) []mcp.ServerDef {
 	defs := make([]mcp.ServerDef, 0, len(specs))
 	for name, spec := range specs {
 		if !spec.Enabled {
@@ -62,8 +115,9 @@ func specsToServerDefs(specs map[string]MCPServerSpec) []mcp.ServerDef {
 // ReloadMCPServers hot-reloads the MCP catalog from a freshly re-read spec map
 // (#218): it diffs newSpecs against the live client and applies the minimum set
 // of server add/remove/restart mutations WITHOUT tearing down unchanged servers,
-// then atomically swaps the spec-derived gating (allowlist / optional-set /
-// tool-roster / picker metadata) so the next turn sees the new catalog. Existing
+// prepublishes safety gating (allowlist / optional-set), then atomically swaps
+// the public catalog / tool-roster / picker metadata so the next turn sees the
+// new catalog. Existing
 // in-flight turns and scheduled runs finish on their current roster; the change
 // takes effect on the NEXT interactive turn (which rebuilds its tool set) and
 // the next scheduled run. The synthetic inline http-tools catalog (#261) is not
@@ -72,7 +126,10 @@ func specsToServerDefs(specs map[string]MCPServerSpec) []mcp.ServerDef {
 // Only operator-configured (bundle-manifest) servers are managed here; per-user
 // remote-MCP overlays (#443/#449) are built fresh per turn and are untouched.
 func (m *Manager) ReloadMCPServers(ctx context.Context, newSpecs map[string]MCPServerSpec) (*mcp.ReloadSummary, error) {
-	if m.mcpClient == nil {
+	if m.mcpClient == nil && m.reloadMCP == nil {
+		if m.mcpBroker != nil {
+			return nil, errors.New("MCP reload unavailable for injected broker")
+		}
 		return &mcp.ReloadSummary{}, nil
 	}
 	// Serialize the whole reload so the client reload + gating swap land as a
@@ -80,20 +137,18 @@ func (m *Manager) ReloadMCPServers(ctx context.Context, newSpecs map[string]MCPS
 	// mismatch.
 	m.mcpReloadMu.Lock()
 	defer m.mcpReloadMu.Unlock()
+	if m.mcpClient == nil {
+		return m.reloadInjectedMCP(ctx)
+	}
 
 	// Build the spec-derived gates (fresh maps, never mutating a published one).
-	allow := mcpAllowlist{}
-	optional := mcpOptionalSet{}
+	allow, optional, enabledServers := mcpGatingFromSpecs(newSpecs)
+	accounts := make(map[string][]string)
 	for name, spec := range newSpecs {
 		if !spec.Enabled {
 			continue
 		}
-		if len(spec.ToolAllowlist) > 0 {
-			allow[name] = spec.ToolAllowlist
-		}
-		if spec.Optional {
-			optional[name] = true
-		}
+		accounts[name] = creds.AccountsFor(spec.AccountVars)
 	}
 
 	// Publish the allowlist + optional-set BEFORE the client gains new servers, so
@@ -103,10 +158,18 @@ func (m *Manager) ReloadMCPServers(ctx context.Context, newSpecs map[string]MCPS
 	// fails (its swap is all-or-nothing, so on error the client is unchanged and
 	// the gates must match).
 	m.mcpGatingMu.Lock()
-	prevAllow, prevOptional := m.allowlist, m.optionalServers
+	prevAllow, prevOptional, prevEnabled := m.allowlist, m.optionalServers, m.enabledMCPServers
 	m.allowlist = allow
 	m.optionalServers = optional
+	m.enabledMCPServers = enabledServers
 	m.mcpGatingMu.Unlock()
+	revertGates := func() {
+		m.mcpGatingMu.Lock()
+		m.allowlist = prevAllow
+		m.optionalServers = prevOptional
+		m.enabledMCPServers = prevEnabled
+		m.mcpGatingMu.Unlock()
+	}
 
 	// Bound the reload like boot bounds initial registration (60s): a stdio
 	// server that starts but never answers `initialize` would otherwise block
@@ -116,23 +179,87 @@ func (m *Manager) ReloadMCPServers(ctx context.Context, newSpecs map[string]MCPS
 	// all-or-nothing and the gate revert below restores consistency.
 	reloadCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
-	summary, err := m.mcpClient.Reload(reloadCtx, specsToServerDefs(newSpecs))
+	summary, err := m.mcpClient.Reload(reloadCtx, MCPServerDefs(newSpecs))
 	if err != nil {
-		m.mcpGatingMu.Lock()
-		m.allowlist = prevAllow
-		m.optionalServers = prevOptional
-		m.mcpGatingMu.Unlock()
+		revertGates()
 		return summary, err
 	}
-
-	// Refresh the roster (prefixed tool-name list for the system prompt) and the
-	// picker metadata — both read the now-reloaded client — and swap them in.
-	roster := m.computeMCPToolRoster(allow)
-	metadata := m.buildOptionalServerMetadata(newSpecs)
+	catalog := m.mcpClient.GetAllTools()
+	// Derive every public view from the same returned catalog/account snapshot,
+	// then publish them together. A turn or picker request must never observe a
+	// new catalog paired with the previous roster or account metadata.
+	roster := computeMCPToolRosterFromCatalog(catalog, allow)
+	metadata := buildOptionalServerMetadataFromCatalog(newSpecs, catalog, accounts)
 	m.mcpGatingMu.Lock()
+	m.mcpCatalog = catalog
+	m.mcpAccounts = accounts
 	m.mcpToolRoster = roster
 	m.optionalServerMetadata = metadata
 	m.mcpGatingMu.Unlock()
 
 	return summary, nil
+}
+
+// MCPReloadOwnsConfig reports whether reload configuration belongs to the
+// injected credential owner. Callers use it to avoid re-reading connector
+// definitions in the scrubbed parent process.
+func (m *Manager) MCPReloadOwnsConfig() bool {
+	return m != nil && m.mcpClient == nil && m.reloadMCP != nil
+}
+
+func (m *Manager) reloadInjectedMCP(ctx context.Context) (*mcp.ReloadSummary, error) {
+	reloadCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	result, err := m.reloadMCP(reloadCtx)
+	if err != nil {
+		return nil, err
+	}
+	if result == nil {
+		return nil, errors.New("MCP reload seam returned an empty result")
+	}
+
+	// Scoped broker opens are selected from enabledMCPServers, so a newly added
+	// child server cannot enter a turn before this publication. Unlike the shared
+	// local client, broker mode therefore needs no early optional-gate publish;
+	// all public state can land atomically from the self-describing child result.
+	allow, optional, enabledServers := mcpGatingFromSpecs(result.Specs)
+	catalog := cloneMCPCatalog(result.Catalog)
+	accounts := cloneMCPAccounts(result.Accounts)
+	roster := computeMCPToolRosterFromCatalog(catalog, allow)
+	metadata := buildOptionalServerMetadataFromCatalog(result.Specs, catalog, accounts)
+	summary := &mcp.ReloadSummary{
+		Added:     append([]string(nil), result.Summary.Added...),
+		Removed:   append([]string(nil), result.Summary.Removed...),
+		Restarted: append([]string(nil), result.Summary.Restarted...),
+		Unchanged: append([]string(nil), result.Summary.Unchanged...),
+	}
+	m.mcpGatingMu.Lock()
+	m.allowlist = allow
+	m.optionalServers = optional
+	m.enabledMCPServers = enabledServers
+	m.mcpCatalog = catalog
+	m.mcpAccounts = accounts
+	m.mcpToolRoster = roster
+	m.optionalServerMetadata = metadata
+	m.mcpGatingMu.Unlock()
+	return summary, nil
+}
+
+func mcpGatingFromSpecs(specs map[string]MCPServerSpec) (mcpAllowlist, mcpOptionalSet, map[string]bool) {
+	allow := mcpAllowlist{}
+	optional := mcpOptionalSet{}
+	enabled := make(map[string]bool)
+	for name, spec := range specs {
+		if !spec.Enabled {
+			continue
+		}
+		if len(spec.ToolAllowlist) > 0 {
+			allow[name] = append([]string(nil), spec.ToolAllowlist...)
+		}
+		if spec.Optional {
+			optional[name] = true
+		}
+		enabled[name] = true
+	}
+	return allow, optional, enabled
 }

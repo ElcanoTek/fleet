@@ -23,6 +23,11 @@ import {
 import { computeContextUsage, type ContextUsage } from "@/app/lib/contextUsage";
 import { parseSseChunk } from "@/app/lib/sse";
 import { decideSpreadsheetNudge } from "@/app/lib/spreadsheetNudge";
+import {
+  DEFAULT_UPLOAD_MAX_BYTES,
+  largeUploadWarning,
+  screenFilesForUpload,
+} from "@/app/lib/uploadLimits";
 import { useClientConfig } from "@/app/lib/useClientConfig";
 import {
   filterConversations,
@@ -121,6 +126,11 @@ export type ServerConfig = {
   // "+" button, only show the lockdown one. For sensitive deploys.
   lockdownOnly: boolean;
   lockdownAllowedModels: string[];
+  // uploadMaxBytes: the server's per-file /attachments cap
+  // (FLEET_UPLOAD_MAX_BYTES). The composer screens picked files against
+  // it so oversize files are refused immediately with an explanation
+  // instead of failing after a full upload round-trip.
+  uploadMaxBytes: number;
 };
 
 export type PendingDeleteConversation = {
@@ -566,6 +576,7 @@ export function ChatExperience({
         lockdownAvailable: false,
         lockdownOnly: false,
         lockdownAllowedModels: [],
+        uploadMaxBytes: DEFAULT_UPLOAD_MAX_BYTES,
       },
   );
   // pendingLockdown is set when the user clicks "New lockdown chat"
@@ -668,6 +679,14 @@ export function ChatExperience({
         dismissed: spreadsheetNudgeDismissed,
       }),
     [pendingAttachments, selectedModel, spreadsheetNudgeDismissed],
+  );
+  // Informational banner when the queued attachments are big enough that
+  // the send will noticeably stall on upload. Purely derived — it appears
+  // with the files and disappears when they're removed or sent.
+  const uploadSizeWarning = useMemo(
+    () =>
+      largeUploadWarning(pendingAttachments.reduce((sum, a) => sum + a.size, 0)),
+    [pendingAttachments],
   );
   const promptRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -3295,6 +3314,27 @@ export function ChatExperience({
       id !== PENDING_CONV_KEY &&
       !id.startsWith(`${PENDING_CONV_KEY}:`);
 
+    // Deep-link (?c=<conversation id>): open a specific conversation on boot.
+    // Used by the orchestrator's "Discuss this run" bridge, which creates a
+    // seeded conversation and navigates here. The param is consumed once and
+    // stripped immediately so a reload or the warm-session snapshot never
+    // re-applies a stale selection.
+    let deepLinkConvId: string | null = null;
+    {
+      const params = new URLSearchParams(window.location.search);
+      const c = params.get("c");
+      if (isRealConvId(c)) {
+        deepLinkConvId = c;
+        params.delete("c");
+        const qs = params.toString();
+        window.history.replaceState(
+          null,
+          "",
+          window.location.pathname + (qs ? `?${qs}` : ""),
+        );
+      }
+    }
+
     // Personas — nice-to-have; the server falls back to default. Sets the
     // roster always, but the default persona only when no conversation loads.
     const loadPersonas = async () => {
@@ -3338,12 +3378,19 @@ export function ChatExperience({
             lockdown_available: boolean;
             lockdown_only: boolean;
             lockdown_allowed_models: string[] | null;
+            upload_max_bytes?: number;
           };
           if (!cancelled) {
             setServerConfig({
               lockdownAvailable: cfg.lockdown_available === true,
               lockdownOnly: cfg.lockdown_only === true,
               lockdownAllowedModels: cfg.lockdown_allowed_models ?? [],
+              // Older servers don't advertise the cap — keep the
+              // client-side default rather than treating it as 0.
+              uploadMaxBytes:
+                typeof cfg.upload_max_bytes === "number" && cfg.upload_max_bytes > 0
+                  ? cfg.upload_max_bytes
+                  : DEFAULT_UPLOAD_MAX_BYTES,
             });
           }
         }
@@ -3389,15 +3436,17 @@ export function ChatExperience({
         const convs = conversationsData.conversations ?? [];
         setConversations(convs);
 
-        const latest = convs[0];
-        if (!latest) {
+        // A deep-linked conversation outranks "most recent" — that's the
+        // conversation the user was just sent to open.
+        const target = deepLinkConvId ?? convs[0]?.id ?? null;
+        if (!target) {
           setActiveConversationId(null);
           return;
         }
         // Flip before awaiting so a personas fetch that resolves after this
         // point does not overwrite the loaded conversation's persona.
         willLoadConversation = true;
-        await loadConversationRef.current(latest.id, { restore: true });
+        await loadConversationRef.current(target, { restore: true });
       } finally {
         if (!cancelled) {
           setIsLoadingHistory(false);
@@ -3481,6 +3530,12 @@ export function ChatExperience({
         pendingHistoryScrollRef.current = activeId;
       }
       void revalidateInBackground();
+      // A deep link overrides the rehydrated selection — the user was just
+      // sent here to open this specific conversation.
+      if (deepLinkConvId) {
+        willLoadConversation = true;
+        void loadConversationRef.current(deepLinkConvId, {});
+      }
     } else {
       void loadInitialState();
     }
@@ -3509,18 +3564,26 @@ export function ChatExperience({
 
   const addAttachmentFiles = (files: FileList | null) => {
     if (!files || files.length === 0) return;
-    setAttachmentError(null);
-    const additions: PendingAttachment[] = [];
-    for (const file of Array.from(files)) {
-      additions.push({
-        clientId: crypto.randomUUID(),
-        file,
-        status: "pending",
-        name: file.name,
-        size: file.size,
-        mime: file.type || "",
-      });
-    }
+    // Screen against the server's per-file cap at pick time so an
+    // oversize file is refused with an explanation immediately, not
+    // after a full upload round-trip ends in a 413. Files that fit
+    // are still attached.
+    // `|| DEFAULT` (not ??) also covers a session restored from before
+    // this field existed, where the value deserializes as undefined/0.
+    const { accepted, error } = screenFilesForUpload(
+      Array.from(files),
+      serverConfig.uploadMaxBytes || DEFAULT_UPLOAD_MAX_BYTES,
+    );
+    setAttachmentError(error);
+    if (accepted.length === 0) return;
+    const additions: PendingAttachment[] = accepted.map((file) => ({
+      clientId: crypto.randomUUID(),
+      file,
+      status: "pending",
+      name: file.name,
+      size: file.size,
+      mime: file.type || "",
+    }));
     setPendingAttachments((prev) => [...prev, ...additions]);
   };
 
@@ -3663,7 +3726,7 @@ export function ChatExperience({
                 </button>
                 <button
                   type="button"
-                  className="rounded-full bg-[var(--color-danger)] px-4 py-2 text-[0.8125rem] font-medium text-white transition hover:opacity-90"
+                  className="rounded-full bg-[var(--color-danger)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-surface-1)] transition hover:opacity-90"
                   onClick={async () => {
                     setConfirmBulkDelete(false);
                     await deleteAllUnpinned();
@@ -3977,7 +4040,7 @@ export function ChatExperience({
                 </button>
                 <button
                   type="button"
-                  className="rounded-full bg-[var(--color-primary)] px-4 py-2 text-[0.8125rem] font-medium text-white transition hover:opacity-90"
+                  className="rounded-full bg-[var(--color-primary)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-on-primary)] transition hover:opacity-90"
                   onClick={() => {
                     setConfirmSummarize(false);
                     void summarizeConversation();
@@ -4094,7 +4157,7 @@ export function ChatExperience({
                   Cancel
                 </button>
                 <button
-                  className="rounded-full bg-[var(--color-primary)] px-4 py-2 text-[0.8125rem] font-medium text-white transition hover:opacity-90"
+                  className="rounded-full bg-[var(--color-primary)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-on-primary)] transition hover:opacity-90"
                   type="button"
                   onClick={() => void confirmDeleteConversation()}
                 >
@@ -4414,6 +4477,7 @@ export function ChatExperience({
                 addAttachmentFiles={addAttachmentFiles}
                 pendingAttachments={pendingAttachments}
                 attachmentError={attachmentError}
+                uploadSizeWarning={uploadSizeWarning}
                 removePendingAttachment={removePendingAttachment}
                 spreadsheetNudge={spreadsheetNudge}
                 setSpreadsheetNudgeDismissed={setSpreadsheetNudgeDismissed}

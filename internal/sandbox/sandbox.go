@@ -1,10 +1,10 @@
 // Package sandbox is the per-turn execution boundary for bash and run_python.
 //
 // One Sandbox = one Linux environment that survives for a single agent
-// turn. Every bash invocation and every run_python call within that turn
-// dispatches into the same Sandbox; the workspace bind / chdir is the
-// same one the rest of the chat server uses, so files written here are
-// the files the LLM, the host-side fs tools, and the user all see.
+// turn. Every bash invocation, run_python call, and general file operation
+// within that turn dispatches into the same Sandbox; the workspace bind / chdir
+// is the same one the rest of Fleet uses, so files written here are the files
+// later sandbox calls, governed host brokers, and the user see.
 //
 // Two backends:
 //
@@ -14,12 +14,11 @@
 //     turns seal the namespace (no DNS, no routes); non-lockdown turns
 //     get the rootless slirp4netns default so `pip install` and outbound
 //     HTTP from bash/python both work.
-//   - "host" — the legacy in-process model: bash via os/exec, python via
-//     a long-lived python3 subprocess holding the IPython kernel. Used
-//     for tests and dev environments without Podman, and as the
-//     fallback when Podman is unavailable. Same protocol, same JSON
-//     request/response shape on the wire, so callers don't care which
-//     backend is in use.
+//   - "host" — a test-only fixture: bash via os/exec, Python via a long-lived
+//     python3 subprocess, and file operations via the same fixed helper
+//     protocol. It is compiled only with the fleet_host_executor build tag. A
+//     release build contains a fail-closed stub and never falls back to host
+//     execution when Podman is unavailable.
 //
 // Lifecycle: NewHost / NewContainer to construct, RunBash / RunPython to
 // dispatch, Close to tear down. The Pool wraps NewContainer so the

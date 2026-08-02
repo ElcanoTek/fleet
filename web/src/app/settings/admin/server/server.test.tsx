@@ -23,9 +23,34 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+const STORAGE = {
+  disk_total_bytes: 100 * 1024 ** 3,
+  disk_available_bytes: 75 * 1024 ** 3,
+  uploads: { path: "./data/attachments/uploads", bytes: 2 * 1024 ** 3, files: 12 },
+  temp_uploads: { path: "./data/temp_uploads", bytes: 512 * 1024 ** 2, files: 3 },
+  workspaces: { path: "workspace", bytes: 4 * 1024 ** 3, files: 200 },
+  conversations_total: 42,
+  conversations_pinned: 5,
+  conversations_protected: 9,
+  reclaimable_conversations: 7,
+  default_days: 30,
+  largest_workspaces: [
+    { conversation_id: "0b6f2c1e-1111-2222-3333-444455556666", bytes: 3 * 1024 ** 3, title: "big analysis", user_email: "u@x.com", pinned: false, orphaned: false },
+  ],
+};
+
+// Serve each endpoint its own payload — the page fetches host stats AND
+// the storage accounting on mount.
+const routedFetch = (stats: unknown = STATS, storage: unknown = STORAGE) =>
+  vi.fn().mockImplementation((input: RequestInfo | URL) => {
+    const url = String(input);
+    const body = url.includes("/api/admin/storage") ? storage : stats;
+    return Promise.resolve({ ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) });
+  });
+
 describe("AdminServerPage", () => {
   it("renders lightweight CPU, memory, disk, and network host metrics", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => STATS }));
+    vi.stubGlobal("fetch", routedFetch());
     render(<AdminServerPage />);
 
     const panel = await screen.findByTestId("server-stats-panel");
@@ -41,16 +66,35 @@ describe("AdminServerPage", () => {
   });
 
   it("manually refreshes and surfaces partial-collection warnings", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => ({ ...STATS, warnings: ["network statistics unavailable"] }),
-    });
+    const fetchMock = routedFetch({ ...STATS, warnings: ["network statistics unavailable"] });
     vi.stubGlobal("fetch", fetchMock);
     render(<AdminServerPage />);
     await screen.findByTestId("server-stats-panel");
     expect(screen.getByTestId("server-stats-warnings")).toHaveTextContent("network statistics unavailable");
+    const before = fetchMock.mock.calls.length;
     fireEvent.click(screen.getByRole("button", { name: "Refresh server stats" }));
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThan(before));
+  });
+
+  it("renders the storage panel with tree totals and the cleanup preview", async () => {
+    vi.stubGlobal("fetch", routedFetch());
+    render(<AdminServerPage />);
+
+    const panel = await screen.findByTestId("storage-panel");
+    expect(panel).toHaveTextContent("Attachment uploads");
+    expect(panel).toHaveTextContent("2.00 GB");
+    expect(panel).toHaveTextContent("big analysis");
+    expect(panel).toHaveTextContent("u@x.com");
+    // Cleanup preview names the reclaimable count from the API.
+    expect(panel).toHaveTextContent("would remove 7 conversations");
+    expect(screen.getByTestId("storage-cleanup-run")).toBeEnabled();
+  });
+
+  it("degrades to an error banner when the storage endpoint is missing", async () => {
+    // Older server: /api/admin/storage returns a non-storage payload.
+    vi.stubGlobal("fetch", routedFetch(STATS, { error: "not found" }));
+    render(<AdminServerPage />);
+    await screen.findByTestId("server-stats-panel");
+    expect(await screen.findByTestId("storage-error")).toHaveTextContent("storage stats unavailable on this server");
   });
 });

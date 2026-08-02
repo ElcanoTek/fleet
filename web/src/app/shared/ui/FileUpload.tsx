@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { validateFile } from "@/app/shared/lib/validation";
+import { DEFAULT_UPLOAD_MAX_BYTES } from "@/app/lib/uploadLimits";
 import { formatFileSize, truncateFilename } from "@/app/shared/lib/format";
 
 // FileUpload — compact multi-file attach row for the task form. Owns local
@@ -16,7 +17,7 @@ import { formatFileSize, truncateFilename } from "@/app/shared/lib/format";
 // nothing beyond the cap and says so inline (the old dropzone rejected the
 // whole batch silently).
 
-const MAX_FILE_SIZE = 250 * 1024 * 1024;
+const MAX_FILE_SIZE = DEFAULT_UPLOAD_MAX_BYTES;
 const MAX_FILES = 10;
 
 export type FileEntry = {
@@ -189,7 +190,7 @@ export function FileUpload({ onEntriesChange, registerHandle }: FileUploadProps)
           Attach files
         </button>
         <span className="file-attach-hint">
-          or drag anywhere onto this dialog — 250 MB per file, up to 10 files
+          or drag anywhere onto this dialog — 1 GB per file, up to 10 files
         </span>
         <input
           ref={inputRef}

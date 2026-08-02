@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"strings"
 	"sync"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
@@ -26,12 +28,42 @@ type Backend interface {
 	ListAccounts(ctx context.Context, server string, baseVars []string) ([]string, error)
 }
 
+// ScopedBackend optionally extends Backend with isolated per-run MCP clients.
+// The production credential owner implements this interface when scoped clients
+// are available; older backends continue serving unscoped calls and receive a
+// clear error if a peer requests a scope.
+type ScopedBackend interface {
+	// OpenScope returns public discovery metadata only. skipped contains remote
+	// server names, never connection errors or credential-bearing details.
+	OpenScope(ctx context.Context, spec ScopeSpec) (scopeID string, tools []ToolDescriptor, skipped []string, err error)
+	// CallMCPInScope must reject unknown scope IDs. CloseScope must coordinate
+	// with calls that reached the backend before it, because cancellation replies
+	// to the client before a connector necessarily observes its cancelled context.
+	CallMCPInScope(ctx context.Context, scopeID, server, tool string, args map[string]any) (string, bool, error)
+	CloseScope(ctx context.Context, scopeID string) error
+}
+
+// ReloadBackend optionally extends Backend with child-owned configuration
+// reload. The request intentionally carries no server definitions: the backend
+// re-reads them where connector credentials live and returns public metadata.
+type ReloadBackend interface {
+	Reload(ctx context.Context) (*ReloadResult, error)
+}
+
 // Server answers mcpbroker requests by running each against a Backend — the end
 // that holds the connector secrets and the MCP subprocesses. A Client in another
 // process reaches it over a connection.
 type Server struct {
 	backend Backend
 }
+
+const (
+	errBrokerCallFailed       = "mcpbroker: credential-owner call failed"
+	errBrokerDiscoveryFailed  = "mcpbroker: credential-owner discovery failed"
+	errBrokerScopeOpenFailed  = "mcpbroker: credential-owner scope open failed"
+	errBrokerScopeCloseFailed = "mcpbroker: credential-owner scope close failed"
+	errBrokerReloadFailed     = "mcpbroker: credential-owner reload failed"
+)
 
 // NewServer returns a Server that dispatches requests to backend.
 func NewServer(backend Backend) *Server {
@@ -111,7 +143,7 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 			mu.Unlock()
 			wg.Add(1)
 			go func(req request) {
-				defer safe.Recover("mcpbroker.call", nil)
+				defer recoverBackendPanic("mcpbroker.call", req.ID, write)
 				defer wg.Done()
 				defer func() {
 					mu.Lock()
@@ -119,10 +151,26 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 					mu.Unlock()
 					cancel()
 				}()
-				text, isErr, err := s.backend.CallMCP(callCtx, req.Server, req.Tool, req.Args)
-				resp := response{ID: req.ID, Text: text, IsError: isErr}
+				var text string
+				var isErr bool
+				var err error
+				if req.Scope == "" {
+					text, isErr, err = s.backend.CallMCP(callCtx, req.Server, req.Tool, req.Args)
+				} else if scoped, ok := s.backend.(ScopedBackend); ok {
+					text, isErr, err = scoped.CallMCPInScope(callCtx, req.Scope, req.Server, req.Tool, req.Args)
+				} else {
+					write(response{ID: req.ID, Err: "mcpbroker: backend does not support scoped sessions"})
+					return
+				}
+				resp := response{ID: req.ID}
 				if err != nil {
-					resp.Err = err.Error()
+					// Operational errors can embed connector stderr, URLs, headers,
+					// or provider detail. Discard both the error and any partial text;
+					// only successful tool output may cross the credential boundary.
+					resp.Err = errBrokerCallFailed
+				} else {
+					resp.Text = text
+					resp.IsError = isErr
 				}
 				write(resp)
 			}(req)
@@ -130,12 +178,14 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 		case methodListTools:
 			wg.Add(1)
 			go func(req request) {
-				defer safe.Recover("mcpbroker.list_tools", nil)
+				defer recoverBackendPanic("mcpbroker.list_tools", req.ID, write)
 				defer wg.Done()
 				tools, err := s.backend.ListTools(ctx)
-				resp := response{ID: req.ID, Tools: tools}
+				resp := response{ID: req.ID}
 				if err != nil {
-					resp.Err = err.Error()
+					resp.Err = errBrokerDiscoveryFailed
+				} else {
+					resp.Tools = tools
 				}
 				write(resp)
 			}(req)
@@ -143,12 +193,105 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 		case methodListAccounts:
 			wg.Add(1)
 			go func(req request) {
-				defer safe.Recover("mcpbroker.list_accounts", nil)
+				defer recoverBackendPanic("mcpbroker.list_accounts", req.ID, write)
 				defer wg.Done()
 				accounts, err := s.backend.ListAccounts(ctx, req.Server, req.BaseVars)
-				resp := response{ID: req.ID, Accounts: accounts}
+				resp := response{ID: req.ID}
 				if err != nil {
-					resp.Err = err.Error()
+					resp.Err = errBrokerDiscoveryFailed
+				} else {
+					resp.Accounts = accounts
+				}
+				write(resp)
+			}(req)
+
+		case methodOpenScope:
+			callCtx, cancel := context.WithCancel(ctx)
+			mu.Lock()
+			inflight[req.ID] = cancel
+			mu.Unlock()
+			wg.Add(1)
+			go func(req request) {
+				defer recoverBackendPanic("mcpbroker.scope_open", req.ID, write)
+				defer wg.Done()
+				defer func() {
+					mu.Lock()
+					delete(inflight, req.ID)
+					mu.Unlock()
+					cancel()
+				}()
+				resp := response{ID: req.ID}
+				scoped, ok := s.backend.(ScopedBackend)
+				if !ok {
+					resp.Err = "mcpbroker: backend does not support scoped sessions"
+					write(resp)
+					return
+				}
+				resp.Scope, resp.Tools, resp.Skipped, resp.Err = openScope(callCtx, scoped, req.ScopeSpec)
+				write(resp)
+			}(req)
+
+		case methodCloseScope:
+			if req.Scope == "" {
+				write(response{ID: req.ID, Err: "mcpbroker: scope_close requires a scope ID"})
+				continue
+			}
+			callCtx, cancel := context.WithCancel(ctx)
+			mu.Lock()
+			inflight[req.ID] = cancel
+			mu.Unlock()
+			wg.Add(1)
+			go func(req request) {
+				defer recoverBackendPanic("mcpbroker.scope_close", req.ID, write)
+				defer wg.Done()
+				defer func() {
+					mu.Lock()
+					delete(inflight, req.ID)
+					mu.Unlock()
+					cancel()
+				}()
+				resp := response{ID: req.ID}
+				if scoped, ok := s.backend.(ScopedBackend); ok {
+					if err := scoped.CloseScope(callCtx, req.Scope); err != nil {
+						resp.Err = errBrokerScopeCloseFailed
+					}
+				} else {
+					resp.Err = "mcpbroker: backend does not support scoped sessions"
+				}
+				write(resp)
+			}(req)
+
+		case methodReload:
+			callCtx, cancel := context.WithCancel(ctx)
+			mu.Lock()
+			inflight[req.ID] = cancel
+			mu.Unlock()
+			wg.Add(1)
+			go func(req request) {
+				defer recoverBackendPanic("mcpbroker.reload", req.ID, write)
+				defer wg.Done()
+				defer func() {
+					mu.Lock()
+					delete(inflight, req.ID)
+					mu.Unlock()
+					cancel()
+				}()
+				resp := response{ID: req.ID}
+				if reloadable, ok := s.backend.(ReloadBackend); ok {
+					result, err := reloadable.Reload(callCtx)
+					switch {
+					case err != nil:
+						// Reload errors can embed resolved URLs, headers, or subprocess
+						// environment values. Unlike ordinary tool output, none of that is
+						// permitted to cross from the credential owner to the parent.
+						resp.Err = errBrokerReloadFailed
+					case result == nil:
+						resp.Err = "mcpbroker: backend returned an empty reload result"
+					default:
+						resp.Reload = result
+					}
+				} else {
+					resp.Err = "mcpbroker: backend does not support reload"
 				}
 				write(resp)
 			}(req)
@@ -156,5 +299,53 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 		default:
 			write(response{ID: req.ID, Err: "mcpbroker: unknown method " + string(req.Method)})
 		}
+	}
+}
+
+func openScope(ctx context.Context, backend ScopedBackend, spec ScopeSpec) (string, []ToolDescriptor, []string, string) {
+	if err := validateScopeSpec(spec); err != nil {
+		return "", nil, nil, err.Error()
+	}
+	id, tools, skipped, err := backend.OpenScope(ctx, spec)
+	if err != nil {
+		return "", nil, nil, errBrokerScopeOpenFailed
+	}
+	if id == "" {
+		return "", nil, nil, "mcpbroker: backend returned an empty scope ID"
+	}
+	return id, tools, skipped, ""
+}
+
+func validateScopeSpec(spec ScopeSpec) error {
+	if spec.Remote == nil {
+		return nil
+	}
+	if len(spec.Selection) != 0 || spec.TaskID != "" || spec.Workspace != "" {
+		return errors.New("mcpbroker: remote scope cannot include bundle scope fields")
+	}
+	if strings.TrimSpace(spec.Remote.UserEmail) == "" {
+		return errors.New("mcpbroker: remote scope requires a user email")
+	}
+	if !spec.Remote.FilterEnabled && len(spec.Remote.Enabled) != 0 {
+		return errors.New("mcpbroker: remote enabled names require filterEnabled")
+	}
+	return nil
+}
+
+// recoverBackendPanic contains a panic in one broker request and, critically,
+// completes that request with a value-free error. Recovering without replying
+// leaves the parent Client blocked until its context expires. The incident ID
+// correlates the in-band error with safe's structured event while the recovered
+// value (which may contain connector material) never crosses the broker pipe.
+func recoverBackendPanic(location string, requestID uint64, write func(response)) {
+	if recovered := recover(); recovered != nil {
+		event := safe.EmitPanicWithMetadata(safe.PanicMetadata{
+			Location: location,
+			Boundary: "mcpbroker",
+		}, recovered, nil)
+		write(response{
+			ID:  requestID,
+			Err: fmt.Sprintf("mcpbroker backend panic (incident %s)", event.IncidentID),
+		})
 	}
 }

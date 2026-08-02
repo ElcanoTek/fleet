@@ -98,6 +98,14 @@ type orchestrationState struct {
 	lastCallKey     string
 	lastCallRepeats int
 	loopGuardTrips  int
+	// The tool_call dispatcher gets its own slot: a successful dispatch
+	// re-enters the guard as the real tool, so tracking the wrapper in the
+	// SAME slot made the keys alternate and reset the counter every hop. But
+	// a tool_call that fails BEFORE dispatch (bad JSON, unknown tool) never
+	// reaches the real-tool slot, so the wrapper must still count its own
+	// identical repeats or that failure loops until the run's timeout.
+	lastWrapperKey     string
+	lastWrapperRepeats int
 	// repeatGuardNoun parameterizes the single word that differs between the
 	// two front-ends' loop-guard message: chat says "reply to the user", cutlass
 	// says "finish the task". See checkRepeatedCall.
@@ -369,6 +377,30 @@ const maxConsecutiveIdenticalCalls = 3
 // The single divergence between the two front-ends is the closing noun, which
 // is read from o.repeatGuardNoun ("finish the task" vs "reply to the user").
 func (o *orchestrationState) checkRepeatedCall(toolName, rawInput string) (bool, string) {
+	// The deferred-tool dispatcher is tracked in its OWN slot (see the field
+	// comment on lastWrapperKey): a successful dispatch re-enters this guard
+	// as the real tool, whose slot below does the blocking; but a wrapper
+	// that fails before dispatch never reaches it, so identical wrapper
+	// repeats must trip on their own.
+	if toolName == toolNameToolCall {
+		o.mu.Lock()
+		defer o.mu.Unlock()
+		key := hashString(rawInput)
+		if key != o.lastWrapperKey {
+			o.lastWrapperKey = key
+			o.lastWrapperRepeats = 1
+			return false, ""
+		}
+		o.lastWrapperRepeats++
+		if o.lastWrapperRepeats <= maxConsecutiveIdenticalCalls {
+			return false, ""
+		}
+		o.loopGuardTrips++
+		log.Printf("Enforcement: loop guard blocked %s — %d consecutive identical calls (cap %d, trip %d)",
+			toolName, o.lastWrapperRepeats, maxConsecutiveIdenticalCalls, o.loopGuardTrips)
+		return true, fmt.Sprintf("LOOP_GUARD (block #%d): this exact tool_call with these exact arguments has now been issued %d times in a row (execution cap: %d). Repeating it cannot produce a different result. Fix the arguments (valid JSON, a tool that exists) or take a different action.",
+			o.loopGuardTrips, o.lastWrapperRepeats, maxConsecutiveIdenticalCalls)
+	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
 

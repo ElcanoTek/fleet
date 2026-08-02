@@ -16,6 +16,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/admission"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/creds"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
 	"github.com/ElcanoTek/fleet/internal/tools"
@@ -29,7 +30,7 @@ import (
 // agentcore.RunEntry transcript back to agent.HistoryEntry for persistence.
 //
 // This is the concrete implementation of httpapi.turnEngine: RunTurn /
-// Summarize / SuggestTitle / MCPClient / SandboxPool / MCPServerCatalog /
+// Summarize / SuggestTitle / MCPBroker / SandboxPool / MCPServerCatalog /
 // ListPersonas. cmd/fleet constructs it once at boot and hands it to
 // httpapi.New.
 
@@ -206,8 +207,13 @@ type ManagerOptions struct {
 
 	// RemoteMCP resolves a user's OAuth-connected remote (hosted) MCP servers and
 	// mints their bearer tokens for the per-turn overlay (#443). nil = the feature
-	// is off; turns run exactly as before.
+	// is off unless OpenRemoteMCPOverlay is set; retained as the in-process
+	// compatibility path.
 	RemoteMCP RemoteMCPResolver
+	// OpenRemoteMCPOverlay creates a per-user remote-server overlay without
+	// exposing its credentialed client. When set it takes precedence over
+	// RemoteMCP, allowing production to bind the overlay in a broker subprocess.
+	OpenRemoteMCPOverlay RemoteMCPOverlayOpener
 
 	// LLMProviders is the resolved multi-provider routing table (#289), translated
 	// by cmd/fleet from the bundle manifest's providers: block (API-key env vars
@@ -215,10 +221,53 @@ type ManagerOptions struct {
 	// (NewModelResolver with cfg.OpenRouterAPIKey), so existing deployments are
 	// unchanged.
 	LLMProviders []agentcore.ProviderConfig
+
+	// MCPBroker/MCPCatalog replace the credentialed in-process MCP client with a
+	// call seam and public discovery data. OpenMCPScope, when set, creates an
+	// isolated broker-owned client per interactive turn. The scope input carries
+	// public server/account names and a workspace path, never credential values.
+	MCPBroker    agentcore.MCPBroker
+	MCPCatalog   []mcp.ServerTool
+	OpenMCPScope MCPScopeOpener
+	// ReloadMCP asks an injected credential owner to reload its own catalog and
+	// return public metadata. Nil is accepted for transitional embedders, but a
+	// broker-mode reload then fails explicitly instead of silently succeeding.
+	ReloadMCP MCPReloader
+	// MCPAccounts contains public credential-seat names keyed by server. It lets
+	// the picker avoid scanning connector environment variables in broker mode.
+	MCPAccounts map[string][]string
 }
 
-// New constructs a Manager: it dials OpenRouter (via the model resolver),
-// connects every enabled MCP server in ServerSpecs (credentialed host-side),
+// MCPScope is one isolated per-turn MCP call/discovery lease. Close must release
+// the broker-owned client; Manager invokes it with a fresh bounded context so a
+// cancelled turn cannot suppress cleanup.
+type MCPScope struct {
+	Broker  agentcore.MCPBroker
+	Catalog []mcp.ServerTool
+	Close   func(context.Context) error
+}
+
+// MCPScopeOpener binds the selected public server/account names to a per-turn
+// broker scope rooted at workspace. Credential resolution remains behind the
+// opener's process boundary.
+type MCPScopeOpener func(ctx context.Context, selection agentcore.MCPSelection, workspace string) (*MCPScope, error)
+
+// MCPReloadResult is the public post-reload state returned by an injected
+// credential owner. It contains configuration identifiers and tool schemas,
+// never resolved connector definitions or credential values.
+type MCPReloadResult struct {
+	Summary  mcp.ReloadSummary
+	Catalog  []mcp.ServerTool
+	Accounts map[string][]string
+	Specs    map[string]MCPServerSpec
+}
+
+// MCPReloader reloads credential-bearing MCP configuration behind the injected
+// broker boundary and returns one coherent public snapshot.
+type MCPReloader func(ctx context.Context) (*MCPReloadResult, error)
+
+// New constructs a Manager: it dials OpenRouter (via the model resolver), uses
+// an injected MCP broker/catalog or connects enabled MCP servers locally,
 // registers the native tool set, and builds the per-turn sandbox warm pool.
 // No language model is preloaded — each turn's model is resolved lazily from the
 // slug the frontend sends.
@@ -305,6 +354,15 @@ func New(opts ManagerOptions) (*Manager, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("config required")
 	}
+	if opts.OpenMCPScope != nil && opts.MCPBroker == nil {
+		return nil, fmt.Errorf("open MCP scope requires MCP broker")
+	}
+	if opts.MCPBroker != nil && opts.MCPCatalog == nil {
+		return nil, fmt.Errorf("MCP broker requires an explicit MCP catalog")
+	}
+	if opts.ReloadMCP != nil && opts.MCPBroker == nil {
+		return nil, fmt.Errorf("MCP reload seam requires MCP broker")
+	}
 
 	// Multi-provider LLM routing (#289): when the bundle declares a providers:
 	// block, resolve models across the configured providers; otherwise fall back
@@ -322,15 +380,27 @@ func New(opts ManagerOptions) (*Manager, error) {
 		return nil, err
 	}
 
-	// Connect the catalog (credentialed host-side). The SAME builder backs the
-	// out-of-process broker (fleet mcp-broker), so both register servers
-	// identically — there is no second, divergent credential path (issue #167).
-	// Inline http_tools (issue #261) are registered onto the same client here too.
-	client := BuildMCPClient(opts.ServerSpecs, cfg.HTTPTools)
+	// An injected broker owns credentialed execution and supplies only public
+	// discovery/account data. The compatibility path builds the local client with
+	// the SAME builder used by fleet mcp-broker, so registration does not diverge.
+	// Inline http_tools (#261) join that local client only on the compatibility path.
+	client := (*mcp.Client)(nil)
+	broker := opts.MCPBroker
+	catalog := cloneMCPCatalog(opts.MCPCatalog)
+	accounts := cloneMCPAccounts(opts.MCPAccounts)
+	if broker == nil {
+		client = BuildMCPClient(opts.ServerSpecs, cfg.HTTPTools)
+		broker = agentcore.NewLocalMCPBroker(client, agentcore.DefaultRemediationHints)
+		catalog = client.GetAllTools()
+		for name, spec := range opts.ServerSpecs {
+			accounts[name] = creds.AccountsFor(spec.AccountVars)
+		}
+	}
 	// Gating metadata (per-server allowlist + Optional flag) is pure spec data,
 	// independent of the live connection.
 	allow := mcpAllowlist{}
 	optional := mcpOptionalSet{}
+	enabledServers := make(map[string]bool)
 	for name, spec := range opts.ServerSpecs {
 		if !spec.Enabled {
 			continue
@@ -341,6 +411,7 @@ func New(opts ManagerOptions) (*Manager, error) {
 		if spec.Optional {
 			optional[name] = true
 		}
+		enabledServers[name] = true
 	}
 
 	pool, err := buildSandboxPool(cfg, opts.PersonasDir, opts.ProtocolsDir, opts.SystemPromptsDir, opts.SkillsDir)
@@ -356,6 +427,11 @@ func New(opts ManagerOptions) (*Manager, error) {
 	m := &Manager{
 		config:               cfg,
 		mcpClient:            client,
+		mcpBroker:            broker,
+		mcpCatalog:           catalog,
+		openMCPScope:         opts.OpenMCPScope,
+		reloadMCP:            opts.ReloadMCP,
+		mcpAccounts:          accounts,
 		allowlist:            allow,
 		resolver:             resolver,
 		native:               tools.DefaultTools(),
@@ -363,6 +439,7 @@ func New(opts ManagerOptions) (*Manager, error) {
 		notesProvider:        opts.NotesProvider,
 		noteProposer:         opts.NoteProposer,
 		optionalServers:      optional,
+		enabledMCPServers:    enabledServers,
 		personasDir:          opts.PersonasDir,
 		protocolsDir:         opts.ProtocolsDir,
 		skillsDir:            opts.SkillsDir,
@@ -372,6 +449,7 @@ func New(opts ManagerOptions) (*Manager, error) {
 		health:               agentcore.NewProviderHealthRegistry(),
 		personaPolicies:      opts.PersonaPolicies,
 		remoteMCP:            opts.RemoteMCP,
+		openRemoteMCPOverlay: opts.OpenRemoteMCPOverlay,
 	}
 	m.mcpToolRoster = m.computeMCPToolRoster(allow)
 	m.optionalServerMetadata = m.buildOptionalServerMetadata(opts.ServerSpecs)
@@ -605,9 +683,26 @@ func (m *Manager) SetLLMProviders(providers []agentcore.ProviderConfig) error {
 	return nil
 }
 
-// MCPClient exposes the shared MCP client for the out-of-band approval-execution
-// path (runStagedTool).
+// MCPClient exposes the shared MCP client to the scheduled-run compatibility
+// path. Interactive and out-of-band approval calls use MCPBroker instead so
+// production can move connector execution across the broker process boundary.
 func (m *Manager) MCPClient() *mcp.Client { return m.mcpClient }
+
+// MCPBroker returns the interactive manager's MCP call seam. The local-client
+// default is intentionally adapted here rather than in the HTTP layer, so the
+// transport can remain agnostic to where credentialed execution runs.
+func (m *Manager) MCPBroker() agentcore.MCPBroker {
+	if m.mcpBroker == nil && m.mcpClient != nil {
+		return agentcore.NewLocalMCPBroker(m.mcpClient, agentcore.DefaultRemediationHints)
+	}
+	return m.mcpBroker
+}
+
+// MCPCatalog returns the public server-qualified tool catalog used to resolve
+// staged approval calls without reaching into a concrete MCP client.
+func (m *Manager) MCPCatalog() []mcp.ServerTool {
+	return m.mcpCatalogSnapshot()
+}
 
 // SandboxPool exposes the per-turn sandbox warm pool for the out-of-band
 // approved-bash execution path (runStagedBash).
@@ -630,10 +725,10 @@ func (m *Manager) Close() error {
 // pure over the gating snapshot — the boot path and a hot reload (#218) each
 // call it with their own allowlist without a lock.
 func (m *Manager) computeMCPToolRoster(allow mcpAllowlist) []string {
-	if m.mcpClient == nil {
-		return nil
-	}
-	all := m.mcpClient.GetAllTools()
+	return computeMCPToolRosterFromCatalog(m.mcpCatalogSnapshot(), allow)
+}
+
+func computeMCPToolRosterFromCatalog(all []mcp.ServerTool, allow mcpAllowlist) []string {
 	names := make([]string, 0, len(all))
 	for _, st := range all {
 		if list, ok := allow[st.ServerName]; ok && len(list) > 0 {
@@ -775,34 +870,87 @@ func (m *Manager) ReleaseChatSession(convID string) {
 
 // ── RunTurn ──
 
-func (m *Manager) configureTurnWorkspace(ctx context.Context, sb *sandbox.Sandbox, conversationID string) (context.Context, func(), error) {
+func (m *Manager) configureTurnWorkspace(ctx context.Context, sb *sandbox.Sandbox, conversationID string) (context.Context, string, func(), error) {
 	fileOpRoot := m.config.WorkspaceRoot
 	var err error
 	if conversationID != "" {
 		fileOpRoot, err = tools.EnsureWorkspaceDir(conversationID)
 		if err != nil {
-			return ctx, func() {}, fmt.Errorf("prepare conversation workspace: %w", err)
+			return ctx, "", func() {}, fmt.Errorf("prepare conversation workspace: %w", err)
 		}
 	}
 	if fileOpRoot == "" {
 		fileOpRoot = tools.WorkspaceDirForConversation(conversationID)
 	}
 	if err := sb.BindFileOpRoot(ctx, fileOpRoot); err != nil {
-		return ctx, func() {}, fmt.Errorf("bind conversation file capability: %w", err)
+		return ctx, "", func() {}, fmt.Errorf("bind conversation file capability: %w", err)
 	}
 	// Retained model-output artifacts are an optional recovery aid, never a
 	// reason to weaken the hard output cap or fall back to host I/O. Install the
 	// writer only after this turn owns its live sandbox and private conversation
 	// workspace; agentcore then uses it after governance for native and MCP tools.
 	if conversationID == "" {
-		return ctx, func() {}, nil
+		return ctx, fileOpRoot, func() {}, nil
 	}
 	artifactCtx, releaseArtifacts, artifactErr := tools.WithSandboxModelOutputArtifacts(ctx, sb, fileOpRoot)
 	if artifactErr != nil {
 		log.Printf("conversation %s: governed tool-output artifact recovery unavailable: %v", conversationID, artifactErr)
-		return ctx, func() {}, nil
+		return ctx, fileOpRoot, func() {}, nil
 	}
-	return artifactCtx, releaseArtifacts, nil
+	return artifactCtx, fileOpRoot, releaseArtifacts, nil
+}
+
+func (m *Manager) openTurnMCPScope(ctx context.Context, in TurnInput, workspace string) (agentcore.MCPBroker, []mcp.ServerTool, func(), error) {
+	if m.openMCPScope == nil {
+		return m.mcpBroker, m.mcpCatalogSnapshot(), func() {}, nil
+	}
+	scope, err := m.openMCPScope(ctx, m.scopeSelection(in.OptionalMCPServersEnabled, in.MCPAccountDefaults), workspace)
+	if err != nil {
+		return nil, nil, func() {}, fmt.Errorf("open MCP turn scope: %w", err)
+	}
+	if scope == nil || scope.Close == nil {
+		return nil, nil, func() {}, errors.New("open MCP turn scope: opener returned an incomplete scope")
+	}
+	cleanup := func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), mcpScopeCloseTimeout)
+		defer cancel()
+		if closeErr := scope.Close(closeCtx); closeErr != nil {
+			log.Printf("RunTurn: close MCP turn scope: %v", closeErr)
+		}
+	}
+	if scope.Broker == nil {
+		cleanup()
+		return nil, nil, func() {}, errors.New("open MCP turn scope: opener returned an incomplete scope")
+	}
+	return scope.Broker, cloneMCPCatalog(scope.Catalog), cleanup, nil
+}
+
+func (m *Manager) openRemoteOverlay(ctx context.Context, email string, baseCatalog []mcp.ServerTool, enabledNames []string) (*RemoteMCPOverlay, error) {
+	shadowed := make(map[string]bool, len(baseCatalog))
+	for _, st := range baseCatalog {
+		shadowed[st.ServerName] = true
+	}
+	// A remote server participates in an interactive turn only when the
+	// conversation opted in. New conversations seed this list from discovery,
+	// so newly connected servers remain on by default but toggleable.
+	enabled := make(map[string]bool, len(enabledNames))
+	for _, name := range enabledNames {
+		if n := strings.TrimSpace(name); n != "" {
+			enabled[n] = true
+		}
+	}
+	if m.openRemoteMCPOverlay != nil {
+		overlay, err := m.openRemoteMCPOverlay(ctx, email, shadowed, enabled)
+		if err != nil {
+			return nil, err
+		}
+		if err := overlay.Validate(); err != nil {
+			overlay.Close()
+			return nil, err
+		}
+		return overlay, nil
+	}
+	return BuildRemoteMCPOverlay(ctx, m.remoteMCP, email, shadowed, enabled)
 }
 
 // turnSink adapts the httpapi EventSink to an agentcore.Observer, forwarding the
@@ -833,10 +981,7 @@ func (o turnSink) Observe(eventType string, payload map[string]any) {
 // Mirrors chat's session.go::RunTurn over the unified loop.
 func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*TurnResult, error) {
 	startedAt := time.Now()
-	persona := strings.TrimSpace(in.Persona)
-	if persona == "" {
-		persona = m.config.PersonaDefault
-	}
+	persona := defaultIfEmpty(strings.TrimSpace(in.Persona), m.config.PersonaDefault)
 
 	if in.ConversationID != "" {
 		ctx = tools.WithConversationID(ctx, in.ConversationID)
@@ -886,11 +1031,17 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 		return nil, err
 	}
 	defer sbCleanup()
-	ctx, releaseArtifacts, err := m.configureTurnWorkspace(ctx, sb, in.ConversationID)
+	ctx, workspace, releaseArtifacts, err := m.configureTurnWorkspace(ctx, sb, in.ConversationID)
 	if err != nil {
 		return nil, err
 	}
 	defer releaseArtifacts()
+
+	turnBroker, turnCatalog, releaseMCPScope, err := m.openTurnMCPScope(ctx, in, workspace)
+	if err != nil {
+		return nil, err
+	}
+	defer releaseMCPScope()
 	turnTools := tools.NewTurnTools(sb, tools.WithBrowser(tools.BrowserConfig{
 		Enabled:  m.config.BrowserEnabled,
 		Lockdown: in.Lockdown,
@@ -951,23 +1102,8 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 	// composes with the shared catalog. Best-effort: a server that needs re-auth
 	// is skipped, never failing the turn. The overlay is closed when the turn ends.
 	var overlay *RemoteMCPOverlay
-	if m.remoteMCP != nil && in.UserEmail != "" {
-		shadowed := make(map[string]bool)
-		for _, st := range m.mcpClient.GetAllTools() {
-			shadowed[st.ServerName] = true
-		}
-		// A remote server participates in a turn only when the conversation opted
-		// in (the Tools picker), exactly like a bundle Optional server. New
-		// conversations seed the opt-in list from the catalog (remote servers are
-		// enabled_by_default), so a freshly-connected server is on by default yet
-		// remains toggleable and bounded by the tool ceiling.
-		enabled := make(map[string]bool, len(in.OptionalMCPServersEnabled))
-		for _, name := range in.OptionalMCPServersEnabled {
-			if n := strings.TrimSpace(name); n != "" {
-				enabled[n] = true
-			}
-		}
-		ov, oerr := BuildRemoteMCPOverlay(ctx, m.remoteMCP, in.UserEmail, shadowed, enabled)
+	if in.UserEmail != "" && (m.openRemoteMCPOverlay != nil || m.remoteMCP != nil) {
+		ov, oerr := m.openRemoteOverlay(ctx, in.UserEmail, turnCatalog, in.OptionalMCPServersEnabled)
 		if oerr != nil {
 			log.Printf("RunTurn: remote-mcp overlay unavailable for %s: %v", in.UserEmail, oerr)
 		} else if ov != nil {
@@ -999,6 +1135,8 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 		NativeTools:     turnTools.Tools,
 		Sandbox:         sb,
 		MCPClient:       m.mcpClient,
+		MCPBroker:       turnBroker,
+		MCPCatalog:      turnCatalog,
 		Allowlist:       agentcore.MCPAllowlist(turnAllowlist),
 		OptionalServers: agentcore.MCPOptionalSet(turnOptional),
 		Selection:       selection,
@@ -1254,6 +1392,8 @@ var ErrHistoryCommitFailed = fmt.Errorf("conversation history could not be saved
 // genuinely saturated box yields a fast, honest "at capacity" instead of a hung
 // turn. A var (not const) so tests can shorten it.
 var interactiveAdmitWait = 5 * time.Second
+
+const mcpScopeCloseTimeout = 5 * time.Second
 
 // ErrAtCapacity is the sentinel RunTurn returns when the box is at its concurrency
 // cap and no interactive slot freed within interactiveAdmitWait. The HTTP layer

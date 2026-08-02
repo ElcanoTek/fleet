@@ -18,11 +18,13 @@ import (
 // Policy: follow redirects (some REST APIs legitimately 30x — trailing-slash
 // canonicalisation, presigned URLs), but when a hop leaves the original
 // origin, drop every header the ORIGINAL request carried — that set is exactly
-// the caller-provided credential/static headers. Origin is compared as
-// scheme-independent host:port, stricter than the stdlib's domain-suffix rule:
-// a redirect that changes only the port (or makes a default port explicit)
-// also strips, which fails safe. The stdlib's own sensitive-header rule still
-// applies on top for Authorization/Cookie.
+// the caller-provided credential/static headers. Origin is scheme AND
+// host:port, stricter than the stdlib's domain-suffix rule: a redirect that
+// changes only the port (or makes a default port explicit) also strips, and —
+// critically — an https→http redirect to the same host strips too, so a
+// server cannot bounce the request onto plaintext and receive the secret in
+// cleartext. The stdlib's own sensitive-header rule still applies on top for
+// Authorization/Cookie.
 func stripHeadersOnCrossOriginRedirect(req *http.Request, via []*http.Request) error {
 	// http.Client only applies its 10-hop cap through the default policy, so a
 	// custom CheckRedirect must re-impose it.
@@ -30,7 +32,8 @@ func stripHeadersOnCrossOriginRedirect(req *http.Request, via []*http.Request) e
 		return fmt.Errorf("stopped after 10 redirects")
 	}
 	origin := via[0]
-	if !strings.EqualFold(req.URL.Host, origin.URL.Host) {
+	if !strings.EqualFold(req.URL.Host, origin.URL.Host) ||
+		!strings.EqualFold(req.URL.Scheme, origin.URL.Scheme) {
 		for k := range origin.Header {
 			req.Header.Del(k)
 		}

@@ -161,6 +161,13 @@ servers:
     provenance: official
     auth: oauth
     featured: true
+    setup_hint: >-
+      GitHub's authorization server does not support dynamic client
+      registration: create a GitHub OAuth App (Settings -> Developer
+      settings -> OAuth Apps) with the callback URL shown in your Fleet
+      instance's OAuth settings, then paste its client ID and secret here.
+    setup_url: "https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/creating-an-oauth-app"
+    client_registration: manual
   - name: gitlab
     display_name: GitLab
     description: >-
@@ -589,6 +596,12 @@ servers:
     tags: [hosting, deploy, datastores, paas]
     provenance: official
     auth: oauth
+    setup_hint: >-
+      This service's OAuth server does not support automatic client
+      registration: create an OAuth app in the Render dashboard with the
+      callback URL shown in your Fleet instance's OAuth settings, then
+      paste its client ID and secret here.
+    client_registration: manual
   - name: replit
     display_name: Replit
     description: >-
@@ -753,6 +766,12 @@ servers:
     tags: [postgres, sql, gcp, managed]
     provenance: official
     auth: oauth
+    setup_hint: >-
+      This service's OAuth server does not support automatic client
+      registration: create an OAuth app in the Google Cloud console with the
+      callback URL shown in your Fleet instance's OAuth settings, then
+      paste its client ID and secret here.
+    client_registration: manual
   - name: chroma-package-search
     display_name: Chroma Package Search
     description: >-
@@ -1229,7 +1248,13 @@ servers:
     category: web-search
     tags: [browser, automation, screenshots, stagehand]
     provenance: official
-    auth: oauth
+    auth: api_key
+    api_key_query: browserbaseApiKey
+    setup_hint: >-
+      In the Browserbase dashboard (Overview page), copy your API key and
+      paste it here. The key authenticates the hosted server's browser
+      sessions against your Browserbase project.
+    setup_url: "https://www.browserbase.com/overview"
   - name: exa
     display_name: Exa
     description: >-
@@ -1412,6 +1437,12 @@ servers:
     provenance: official
     auth: oauth
     featured: true
+    setup_hint: >-
+      This service's OAuth server does not support automatic client
+      registration: create an OAuth app in the Asana developer console with the
+      callback URL shown in your Fleet instance's OAuth settings, then
+      paste its client ID and secret here.
+    client_registration: manual
   - name: atlassian
     display_name: Atlassian (Rovo)
     description: >-
@@ -1439,6 +1470,12 @@ servers:
     tags: [files, storage, documents, enterprise]
     provenance: official
     auth: oauth
+    setup_hint: >-
+      This service's OAuth server does not support automatic client
+      registration: create an OAuth app in the Box developer console with the
+      callback URL shown in your Fleet instance's OAuth settings, then
+      paste its client ID and secret here.
+    client_registration: manual
   - name: cal-com
     display_name: Cal.com
     description: >-
@@ -1519,6 +1556,12 @@ servers:
     tags: [esignature, agreements, contracts, workflows]
     provenance: official
     auth: oauth
+    setup_hint: >-
+      This service's OAuth server does not support automatic client
+      registration: create an OAuth app in the Docusign developer account with the
+      callback URL shown in your Fleet instance's OAuth settings, then
+      paste its client ID and secret here.
+    client_registration: manual
   - name: dropbox
     display_name: Dropbox
     description: >-
@@ -1579,6 +1622,26 @@ servers:
       here.
     setup_url: "https://developers.google.com/workspace/guides/configure-mcp-servers"
     client_registration: manual
+  - name: google-docs
+    display_name: Google Docs (Workspace MCP)
+    description: >-
+      Google's Developer Preview hosted MCP server for Docs -- read and edit
+      document content. Requires a Google Cloud project with an
+      OAuth client.
+    url: "https://docsmcp.googleapis.com/mcp/v1"
+    vendor: Google LLC
+    docs_url: "https://developers.google.com/workspace/guides/configure-mcp-servers"
+    category: productivity
+    tags: [documents, google-workspace, preview, oauth]
+    provenance: official
+    auth: oauth
+    setup_hint: >-
+      Requires your own Google Cloud project (Developer Preview): enable
+      the product's API + MCP service, configure the OAuth consent screen,
+      and create an OAuth client — then paste its client ID and secret
+      here.
+    setup_url: "https://developers.google.com/workspace/guides/configure-mcp-servers"
+    client_registration: manual
   - name: google-drive
     display_name: Google Drive (Workspace MCP)
     description: >-
@@ -1617,6 +1680,46 @@ servers:
       Requires your own Google Cloud project (Developer Preview): enable the
       People API + MCP service, configure the OAuth consent screen, and
       create an OAuth client -- then paste its client ID and secret here.
+    setup_url: "https://developers.google.com/workspace/guides/configure-mcp-servers"
+    client_registration: manual
+  - name: google-sheets
+    display_name: Google Sheets (Workspace MCP)
+    description: >-
+      Google's Developer Preview hosted MCP server for Sheets -- read cell
+      values, update cells and formulas, insert rows and columns. Requires a Google Cloud project with an
+      OAuth client.
+    url: "https://sheetsmcp.googleapis.com/mcp/v1"
+    vendor: Google LLC
+    docs_url: "https://developers.google.com/workspace/guides/configure-mcp-servers"
+    category: productivity
+    tags: [spreadsheets, google-workspace, preview, oauth]
+    provenance: official
+    auth: oauth
+    setup_hint: >-
+      Requires your own Google Cloud project (Developer Preview): enable
+      the product's API + MCP service, configure the OAuth consent screen,
+      and create an OAuth client — then paste its client ID and secret
+      here.
+    setup_url: "https://developers.google.com/workspace/guides/configure-mcp-servers"
+    client_registration: manual
+  - name: google-slides
+    display_name: Google Slides (Workspace MCP)
+    description: >-
+      Google's Developer Preview hosted MCP server for Slides -- read and
+      edit presentations. Requires a Google Cloud project with an
+      OAuth client.
+    url: "https://slidesmcp.googleapis.com/mcp/v1"
+    vendor: Google LLC
+    docs_url: "https://developers.google.com/workspace/guides/configure-mcp-servers"
+    category: productivity
+    tags: [presentations, google-workspace, preview, oauth]
+    provenance: official
+    auth: oauth
+    setup_hint: >-
+      Requires your own Google Cloud project (Developer Preview): enable
+      the product's API + MCP service, configure the OAuth consent screen,
+      and create an OAuth client — then paste its client ID and secret
+      here.
     setup_url: "https://developers.google.com/workspace/guides/configure-mcp-servers"
     client_registration: manual
   - name: google-workspace-self-hosted
@@ -1838,6 +1941,18 @@ servers:
     tags: [tasks, todo, habits, calendar]
     provenance: official
     auth: oauth
+  - name: trello
+    display_name: Trello
+    description: >-
+      Atlassian's official hosted MCP server for Trello -- manage boards,
+      lists, cards, and checklists in the workspace you authorize.
+    url: "https://mcp.trello.com/v1"
+    vendor: Atlassian Pty Ltd
+    docs_url: "https://support.atlassian.com/trello/docs/connect-trello-to-ai-assistants-with-trello-mcp/"
+    category: productivity
+    tags: [kanban, boards, tasks, project-management]
+    provenance: official
+    auth: oauth
   - name: todoist
     display_name: Todoist
     description: >-
@@ -1863,6 +1978,12 @@ servers:
     tags: [project-management, tasks, enterprise, oauth]
     provenance: official
     auth: oauth
+    setup_hint: >-
+      This service's OAuth server does not support automatic client
+      registration: create an OAuth app in the Wrike app console with the
+      callback URL shown in your Fleet instance's OAuth settings, then
+      paste its client ID and secret here.
+    client_registration: manual
   - name: zenhub
     display_name: Zenhub
     description: >-
@@ -2104,6 +2225,12 @@ servers:
     auth: oauth
 
   # ── crm-sales ───────────────────────────────────────────────────
+    setup_hint: >-
+      This service's OAuth server does not support automatic client
+      registration: create an OAuth app in the Zoom app marketplace with the
+      callback URL shown in your Fleet instance's OAuth settings, then
+      paste its client ID and secret here.
+    client_registration: manual
   - name: apollo-io
     display_name: Apollo.io
     description: >-
@@ -2309,6 +2436,12 @@ servers:
     tags: [shared-inbox, conversations, contacts, tagging, oauth]
     provenance: official
     auth: oauth
+    setup_hint: >-
+      This service's OAuth server does not support automatic client
+      registration: create an OAuth app in the Front developer settings with the
+      callback URL shown in your Fleet instance's OAuth settings, then
+      paste its client ID and secret here.
+    client_registration: manual
   - name: gorgias
     display_name: Gorgias
     description: >-
@@ -2971,6 +3104,25 @@ servers:
     tags: [trading, brokerage, portfolio, market-data, india]
     provenance: official
     auth: oauth
+  - name: xero
+    display_name: Xero
+    description: >-
+      Official hosted MCP server for Xero accounting -- invoices, contacts,
+      bank transactions, and reports in the organisation you authorize.
+    url: "https://mcp.xero.com/mcp"
+    vendor: Xero Limited
+    docs_url: "https://developer.xero.com/documentation/tools-and-resources/mcp-server"
+    category: finance
+    tags: [accounting, invoices, bookkeeping]
+    provenance: official
+    auth: oauth
+    setup_hint: >-
+      Xero's OAuth server does not support automatic client registration:
+      create an app at developer.xero.com with the callback URL shown in
+      your Fleet instance's OAuth settings, then paste its client ID and
+      secret here.
+    setup_url: "https://developer.xero.com/documentation/tools-and-resources/mcp-server"
+    client_registration: manual
   - name: zerodha-kite
     display_name: Zerodha Kite
     description: >-
@@ -3055,6 +3207,21 @@ servers:
     provenance: official
     auth: oauth
     featured: true
+  - name: gamma
+    display_name: Gamma
+    description: >-
+      Generate decks, docs, and webpages from a prompt, a template, or
+      multi-page input; browse, read, and export existing gammas (PPTX/PDF);
+      read comments; and pull per-deck engagement analytics. Reading and
+      exporting need view access to the gamma in the connected workspace.
+      Available on all Gamma plans; generations charge credits.
+    url: "https://mcp.gamma.app/mcp"
+    vendor: Gamma
+    docs_url: "https://developers.gamma.app/mcp/gamma-mcp-server"
+    category: design-media
+    tags: [presentations, decks, generation, analytics]
+    provenance: official
+    auth: oauth
   - name: miro
     display_name: Miro
     description: >-
@@ -3754,6 +3921,12 @@ servers:
     tags: [gemini, vertex-ai, inference, google-cloud, model-platform]
     provenance: official
     auth: oauth
+    setup_hint: >-
+      This service's OAuth server does not support automatic client
+      registration: create an OAuth app in the Google Cloud console with the
+      callback URL shown in your Fleet instance's OAuth settings, then
+      paste its client ID and secret here.
+    client_registration: manual
   - name: heygen
     display_name: HeyGen
     description: >-
@@ -4073,6 +4246,7 @@ servers:
       the North America endpoint; use advertising-ai-eu.amazon.com for
       Europe or the Far East regional endpoint as applicable.
     setup_url: "https://advertising.amazon.com/API/docs/en-us/mcp/mcp-overview"
+    client_registration: manual
   - name: brevo
     display_name: Brevo
     description: >-
@@ -4480,6 +4654,12 @@ servers:
     tags: [food-delivery, restaurants, ordering, local]
     provenance: official
     auth: oauth
+    setup_hint: >-
+      This service's OAuth server does not support automatic client
+      registration: create an OAuth app in the DoorDash developer portal with the
+      callback URL shown in your Fleet instance's OAuth settings, then
+      paste its client ID and secret here.
+    client_registration: manual
   - name: google-maps
     display_name: Google Maps Grounding Lite
     description: >-

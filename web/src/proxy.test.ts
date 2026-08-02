@@ -128,15 +128,6 @@ describe("proxy", () => {
     expect(res.headers.get("location")).toBeNull();
   });
 
-  it("lets the pre-auth brand theme stylesheet through without a session (#903)", async () => {
-    // layout.tsx links /api/theme on every page, including /login — a 401 here
-    // means the login page renders in default colors instead of the bundle's.
-    getSessionFromRequestMock.mockResolvedValue(null);
-    const res = await proxy(req("/api/theme"));
-    expect(res.status).toBe(200);
-    expect(res.headers.get("location")).toBeNull();
-  });
-
   // ── Content-Security-Policy (#590) ──────────────────────────────────────
   // The public /shared view renders assistant-authored HTML in a sandbox=""
   // iframe; sandbox blocks scripts but NOT sub-resource loads, so the page
@@ -164,6 +155,24 @@ describe("proxy", () => {
     expect(csp).toContain("img-src 'self' data: blob: https:");
     expect(csp).toContain("frame-ancestors 'none'");
   });
+
+  // Regression: the root layout links /api/theme as a render-blocking
+  // stylesheet on EVERY page, and the login card may render the bundle's mark.
+  // Both were caught by the session gate, so a white-labeled deployment showed
+  // fleet's built-in palette and mark on the one page every user sees first.
+  //
+  // /api/brand/share-image joins them for a stronger reason than first paint:
+  // link-unfurl scrapers (Slack, iMessage, Discord, Teams) are anonymous, so an
+  // og:image behind the session gate renders no preview at all (#893).
+  it.each(["/api/theme", "/api/brand/logo", "/api/brand/share-image"])(
+    "serves %s without a session (bundle branding must reach the login page and unfurl scrapers)",
+    async (path) => {
+      getSessionFromRequestMock.mockResolvedValue(null);
+      const res = await proxy(req(path));
+      expect(res.status).toBe(200);
+      expect(res.headers.get("location")).toBeNull();
+    },
+  );
 
   it("stamps the CSP on redirect and 401 responses too", async () => {
     getSessionFromRequestMock.mockResolvedValue(null);

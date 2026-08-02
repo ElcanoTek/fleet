@@ -47,6 +47,19 @@ const (
 	// resolves them against ITS environment (where the secrets live), so the main
 	// process need not hold them.
 	methodListAccounts method = "list_accounts"
+	// methodOpenScope asks the credential-owning process to construct an isolated
+	// per-run MCP client from public account selections/task identity or one
+	// user's remote-server selector. The response carries an opaque scope ID plus
+	// that scope's public tools and skipped remote-server names.
+	methodOpenScope method = "scope_open"
+	// methodCloseScope releases one isolated per-run MCP client. Scope calls use
+	// methodCall with request.Scope set, preserving one call envelope and one
+	// agentcore.MCPBroker seam.
+	methodCloseScope method = "scope_close"
+	// methodReload asks the credential-owning process to re-read its bundle and
+	// environment-backed connector configuration. No resolved server definition
+	// crosses the wire; the response contains only public names and tool metadata.
+	methodReload method = "reload"
 )
 
 // ToolDescriptor is one entry of the broker's tool catalog — the public shape of
@@ -56,6 +69,73 @@ type ToolDescriptor struct {
 	Tool        string         `json:"tool"`
 	Description string         `json:"description,omitempty"`
 	InputSchema map[string]any `json:"inputSchema,omitempty"`
+}
+
+// ScopeChoice selects one named account for a server. Both fields are public
+// configuration identifiers; credential values are resolved only by the broker.
+type ScopeChoice struct {
+	Server  string `json:"server"`
+	Account string `json:"account"`
+}
+
+// ScopeSpec is the non-secret input needed to build a per-run MCP client in the
+// credential-owning process. Workspace is a path, not workspace contents.
+type ScopeSpec struct {
+	Selection []ScopeChoice `json:"selection,omitempty"`
+	TaskID    string        `json:"taskId,omitempty"`
+	Workspace string        `json:"workspace,omitempty"`
+	// Remote selects a per-user hosted-MCP overlay instead of bundle servers.
+	// It carries identity and public server names only; connection records,
+	// endpoint URLs, and credential values remain broker-side.
+	Remote *RemoteScopeSpec `json:"remote,omitempty"`
+}
+
+// RemoteScopeSpec selects one user's hosted MCP connections. FilterEnabled is
+// explicit because nil and empty Enabled have different semantics: false means
+// all connected servers (scheduled runs), while true with an empty slice means
+// none (an interactive conversation with every remote server toggled off).
+type RemoteScopeSpec struct {
+	UserEmail     string   `json:"userEmail"`
+	FilterEnabled bool     `json:"filterEnabled,omitempty"`
+	Enabled       []string `json:"enabled,omitempty"`
+	Shadowed      []string `json:"shadowed,omitempty"`
+}
+
+// ReloadSummary is the public, transport-neutral shape of an MCP catalog
+// reload. Server names are configuration identifiers, not credential values.
+type ReloadSummary struct {
+	Added     []string `json:"added"`
+	Removed   []string `json:"removed"`
+	Restarted []string `json:"restarted"`
+	Unchanged []string `json:"unchanged"`
+}
+
+// ReloadResult reports the registry diff and the refreshed public tool catalog.
+// Returning both in one response gives the parent one coherent post-reload
+// snapshot without exposing the credential-bearing server definitions.
+type ReloadResult struct {
+	Summary ReloadSummary    `json:"summary"`
+	Tools   []ToolDescriptor `json:"tools"`
+	// Accounts contains public provisioned seat names keyed by server. The child
+	// derives them from its freshly loaded bundle and credential environment.
+	Accounts map[string][]string `json:"accounts,omitempty"`
+	// Servers is the freshly enabled public bundle catalog. It lets a scrubbed
+	// parent refresh gating without re-reading credential-bearing definitions.
+	Servers []ServerDescriptor `json:"servers,omitempty"`
+}
+
+// ServerDescriptor is the non-secret subset of one enabled bundle MCP server
+// needed by parent-side gating, roster, and picker metadata.
+type ServerDescriptor struct {
+	Name             string   `json:"name"`
+	ToolAllowlist    []string `json:"toolAllowlist,omitempty"`
+	AccountVars      []string `json:"accountVars,omitempty"`
+	Optional         bool     `json:"optional,omitempty"`
+	DisplayName      string   `json:"displayName,omitempty"`
+	Description      string   `json:"description,omitempty"`
+	Beta             bool     `json:"beta,omitempty"`
+	EnabledByDefault bool     `json:"enabledByDefault,omitempty"`
+	UsesWorkspace    bool     `json:"usesWorkspace,omitempty"`
 }
 
 // request is a client -> server frame. The server only ever decodes requests; the
@@ -73,6 +153,10 @@ type request struct {
 	Server string         `json:"server,omitempty"`
 	Tool   string         `json:"tool,omitempty"`
 	Args   map[string]any `json:"args,omitempty"`
+	// Scope is an opaque broker-issued per-run scope ID. It is set on scoped calls
+	// and scope_close; scope_open carries ScopeSpec instead.
+	Scope     string    `json:"scope,omitempty"`
+	ScopeSpec ScopeSpec `json:"scopeSpec,omitempty"`
 	// BaseVars names the env-var bases of a server's credential seat, for
 	// methodListAccounts (the broker scans ITS env for <BASE>_<ACCOUNT> variants).
 	BaseVars []string `json:"baseVars,omitempty"`
@@ -99,4 +183,12 @@ type response struct {
 	// public catalog data (no credentials).
 	Tools    []ToolDescriptor `json:"tools,omitempty"`
 	Accounts []string         `json:"accounts,omitempty"`
+	// Scope answers methodOpenScope with the broker-issued opaque ID.
+	Scope string `json:"scope,omitempty"`
+	// Skipped names selected remote servers that could not be connected for this
+	// scope. Names are public configuration identifiers; failure details stay in
+	// the credential-owning process because they may contain resolved URLs.
+	Skipped []string `json:"skipped,omitempty"`
+	// Reload answers methodReload with the diff and refreshed public catalog.
+	Reload *ReloadResult `json:"reload,omitempty"`
 }

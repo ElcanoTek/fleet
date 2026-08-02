@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "@/app/lib/auth";
+import { getRedirectUrl, getServerSession } from "@/app/lib/auth";
 import { chatServerProxy } from "@/app/lib/chatServer";
 
 export const runtime = "nodejs";
@@ -21,12 +21,16 @@ export async function GET(request: NextRequest) {
   const state = url.searchParams.get("state") ?? "";
   const oauthError = url.searchParams.get("error") ?? "";
 
-  const settings = (params: string) => NextResponse.redirect(new URL(`/settings/connections${params}`, request.url));
+  // Redirect via the forwarded host, not request.url — behind the reverse
+  // proxy request.url is the internal origin (localhost:3000) and the browser
+  // would be bounced off the site after a SUCCESSFUL connection.
+  const settings = (params: string) =>
+    NextResponse.redirect(getRedirectUrl(request, `/settings/connections${params}`));
 
   const session = await getServerSession();
   if (!session) {
     // Not logged in — bounce to login; the user can retry the connection after.
-    return NextResponse.redirect(new URL("/login", request.url));
+    return NextResponse.redirect(getRedirectUrl(request, "/login"));
   }
 
   if (oauthError) {

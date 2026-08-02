@@ -537,6 +537,18 @@ func (s *Storage) GetLog(taskID uuid.UUID) (*models.LogSession, error) {
 	return s.db.GetLog(context.Background(), taskID)
 }
 
+// ListRunLogHistory lists a task's superseded transcripts (per-attempt run
+// log history), newest first. See db.ListRunLogHistory.
+func (s *Storage) ListRunLogHistory(ctx context.Context, taskID uuid.UUID) ([]models.RunLogMeta, error) {
+	return s.db.ListRunLogHistory(ctx, taskID)
+}
+
+// GetRunLogEntry fetches one superseded transcript from a task's run log
+// history. See db.GetRunLogEntry.
+func (s *Storage) GetRunLogEntry(ctx context.Context, taskID uuid.UUID, entryID int64) (*models.LogSession, error) {
+	return s.db.GetRunLogEntry(ctx, taskID, entryID)
+}
+
 // GetAllLogs gets all stored log sessions.
 func (s *Storage) GetAllLogs() (map[uuid.UUID]*models.LogSession, error) {
 	return s.db.GetAllLogs(context.Background())
@@ -744,9 +756,14 @@ type TaskEdit struct {
 	// Timezone is the IANA timezone the cron Recurrence is evaluated in. The edit
 	// handler pre-fills it from the existing task when the caller omits it, so it
 	// is always a valid name here.
-	Timezone  string
-	Files     []string
-	FileNames []string
+	Timezone string
+	// RecurrenceUntil / RecurrenceRemaining are the recurrence end conditions,
+	// assigned unconditionally from the full edit payload like
+	// ThinkingBudgetTokens (nil = clear → repeat forever).
+	RecurrenceUntil     *time.Time
+	RecurrenceRemaining *int
+	Files               []string
+	FileNames           []string
 	// SetFiles distinguishes "leave files unchanged" from "replace with Files".
 	SetFiles bool
 	// Tags + SetTags mirror Files/SetFiles: the flag distinguishes "leave tags
@@ -830,6 +847,8 @@ func (s *Storage) UpdateEditableTask(ctx context.Context, taskID uuid.UUID, edit
 	task.Persona = edit.Persona
 	task.ScheduledFor = edit.ScheduledFor
 	task.Recurrence = edit.Recurrence
+	task.RecurrenceUntil = edit.RecurrenceUntil
+	task.RecurrenceRemaining = edit.RecurrenceRemaining
 	if edit.Timezone != "" {
 		task.Timezone = edit.Timezone
 	}
@@ -1374,6 +1393,20 @@ func (s *Storage) scheduleNextRecurrence(ctx context.Context, task *models.Task)
 	now := time.Now().In(loc)
 	nextTime := schedule.Next(now).UTC()
 
+	// Recurrence end conditions: an end date means no occurrence may fire past
+	// it, and a remaining-runs counter of 1 means the completing occurrence was
+	// the last allowed run. Either way the chain simply stops — the completing
+	// task keeps its own terminal status.
+	if task.RecurrenceUntil != nil && nextTime.After(*task.RecurrenceUntil) {
+		log.Printf("Recurrence for task %s ended: next occurrence %s is past recurrence_until %s",
+			task.ID, nextTime.Format(time.RFC3339), task.RecurrenceUntil.Format(time.RFC3339))
+		return
+	}
+	if task.RecurrenceRemaining != nil && *task.RecurrenceRemaining <= 1 {
+		log.Printf("Recurrence for task %s ended: run budget exhausted", task.ID)
+		return
+	}
+
 	// Build the next occurrence from the FULL definition of the completing task
 	// via TaskToCreate — the single canonical Task→TaskCreate clone (also used by
 	// re-run/clone #270). A hand-maintained TaskCreate literal here was the
@@ -1385,6 +1418,12 @@ func (s *Storage) scheduleNextRecurrence(ctx context.Context, task *models.Task)
 	// clone recipe, and TestTaskToCreateCarriesEveryDefinitionField guards against
 	// a field being added to TaskCreate without joining that recipe.
 	tc := models.TaskToCreate(task)
+	// Count down the run budget: the clone gets one fewer allowed run than the
+	// occurrence that just completed (TaskToCreate carried the old value).
+	if task.RecurrenceRemaining != nil {
+		remaining := *task.RecurrenceRemaining - 1
+		tc.RecurrenceRemaining = &remaining
+	}
 	// Recurring occurrences are unnamed: Name is the import/export identity key
 	// with a partial unique index on non-empty names, so carrying the completing
 	// occurrence's name would collide with the row still in the table and abort
@@ -1622,4 +1661,26 @@ func (s *Storage) ClearPendingQA(ctx context.Context, taskID, leaseOwner uuid.UU
 // ListPausedTasks returns tasks awaiting a human answer.
 func (s *Storage) ListPausedTasks(ctx context.Context, limit int) ([]*models.Task, error) {
 	return s.db.ListPausedTasks(ctx, limit)
+}
+
+// self-wake (docs/SELF-WAKE.md)
+
+// PauseTaskForWake parks a running task awaiting a timer/event wake.
+func (s *Storage) PauseTaskForWake(ctx context.Context, taskID, leaseOwner uuid.UUID, wakeAt time.Time, eventKey, note string) (bool, error) {
+	return s.db.PauseTaskForWake(ctx, taskID, leaseOwner, wakeAt, eventKey, note)
+}
+
+// WakeDueTasks re-queues every parked task whose wake deadline has passed.
+func (s *Storage) WakeDueTasks(ctx context.Context) (int, error) {
+	return s.db.WakeDueTasks(ctx)
+}
+
+// WakeTaskByEvent wakes one parked task early on its named event.
+func (s *Storage) WakeTaskByEvent(ctx context.Context, taskID uuid.UUID, eventKey, note string) (bool, error) {
+	return s.db.WakeTaskByEvent(ctx, taskID, eventKey, note)
+}
+
+// ClearWakeState clears a woken task's wake columns once the run consumed them.
+func (s *Storage) ClearWakeState(ctx context.Context, taskID, leaseOwner uuid.UUID) error {
+	return s.db.ClearWakeState(ctx, taskID, leaseOwner)
 }

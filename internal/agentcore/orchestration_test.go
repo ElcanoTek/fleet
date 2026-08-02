@@ -701,3 +701,53 @@ func TestRedactSecretsInLog(t *testing.T) {
 		t.Fatalf("expected [REDACTED] marker: %s", redacted)
 	}
 }
+
+// A deferred tool's dispatch runs the policy TWICE per invocation — once as
+// the tool_call wrapper, then as the real tool. Tracking the wrapper made the
+// guard's key alternate every hop and the repeat counter reset, so a model
+// looping one deferred tool with identical arguments never tripped it.
+func TestRepeatedCallGuard_DeferredDispatchDoesNotResetCounter(t *testing.T) {
+	o := newOrchStateForTest()
+
+	// A deferred loop repeats BOTH keys identically (the wrapper embeds the
+	// real args), so whichever slot fills first must block by the cap+1'th
+	// iteration — the wrapper's own slot gets there first.
+	wrapper := `{"name":"mcp_crm_lookup","arguments":{"id":1}}`
+	realArgs := `{"id":1}`
+	for i := 0; i < maxConsecutiveIdenticalCalls; i++ {
+		if blocked, _ := o.checkRepeatedCall(toolNameToolCall, wrapper); blocked {
+			t.Fatalf("wrapper blocked early on hop %d", i+1)
+		}
+		if blocked, msg := o.checkRepeatedCall("mcp_crm_lookup", realArgs); blocked {
+			t.Fatalf("call %d blocked unexpectedly: %s", i+1, msg)
+		}
+	}
+	if blocked, _ := o.checkRepeatedCall(toolNameToolCall, wrapper); !blocked {
+		t.Fatal("expected the guard to block the repeated deferred loop at the cap")
+	}
+}
+
+// A tool_call that fails BEFORE dispatch (malformed JSON, unknown tool) never
+// re-enters the guard as a real tool, so the wrapper's own slot must trip —
+// otherwise an identical failing tool_call loops until the run's timeout.
+func TestRepeatedCallGuard_FailingDeferredDispatchStillTrips(t *testing.T) {
+	o := newOrchStateForTest()
+
+	bad := `{"name":"no_such_tool"`
+	for i := 0; i < maxConsecutiveIdenticalCalls; i++ {
+		if blocked, _ := o.checkRepeatedCall(toolNameToolCall, bad); blocked {
+			t.Fatalf("failing wrapper blocked early on attempt %d", i+1)
+		}
+	}
+	blocked, msg := o.checkRepeatedCall(toolNameToolCall, bad)
+	if !blocked {
+		t.Fatal("expected the guard to block the repeated failing tool_call")
+	}
+	if !strings.Contains(msg, "LOOP_GUARD") {
+		t.Fatalf("guard message missing LOOP_GUARD marker: %s", msg)
+	}
+	// A different wrapper input resets the wrapper slot.
+	if blocked, _ := o.checkRepeatedCall(toolNameToolCall, `{"name":"other"}`); blocked {
+		t.Fatal("changed wrapper input must not be blocked")
+	}
+}

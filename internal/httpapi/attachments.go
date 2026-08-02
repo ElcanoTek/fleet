@@ -3,6 +3,7 @@ package httpapi
 import (
 	"crypto/rand"
 	"encoding/base32"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -18,10 +19,11 @@ import (
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
 
-// Per-file size cap. Generous on purpose — the default SweepAttachments TTL
-// will reclaim unused uploads, and the only real constraint is disk pressure
-// on the host. (Compile-time constant — there is no env override.)
-const defaultMaxUploadBytes int64 = 256 << 20 // 256 MiB
+// Per-file size cap fallback, used only if the config carries no value.
+// The real limit is cfg.UploadMaxBytes (FLEET_UPLOAD_MAX_BYTES, default
+// 1 GiB) — generous on purpose, since the SweepAttachments TTL reclaims
+// unused uploads and the only real constraint is disk pressure on the host.
+const defaultMaxUploadBytes int64 = 1 << 30 // 1 GiB
 
 // uploadedAttachment is the per-file metadata we return to the caller
 // (Next.js), which echoes it back in the next /chat request.
@@ -43,16 +45,29 @@ func (s *Server) postAttachments(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	maxBytes := defaultMaxUploadBytes
+	maxBytes := s.cfg.UploadMaxBytes
+	if maxBytes <= 0 {
+		maxBytes = defaultMaxUploadBytes
+	}
 	// multipart has both per-part and total request caps; we set the
-	// request cap to (maxBytes * 8) to allow a handful of big files per
-	// request while still refusing truly abusive uploads.
-	r.Body = http.MaxBytesReader(w, r.Body, maxBytes*8)
+	// request cap to (maxBytes * 2) to allow a couple of big files per
+	// request while still refusing truly abusive uploads. Kept aligned
+	// with Next.js's experimental.proxyClientMaxBodySize ("2gb"), which
+	// caps the same request one hop earlier.
+	r.Body = http.MaxBytesReader(w, r.Body, maxBytes*2)
 
 	// 32 MiB in-memory threshold — anything larger spills to a temp file,
 	// which we then stream into the final destination. The overall request
 	// size is capped by http.MaxBytesReader above.
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		// Tripping the request cap mid-parse surfaces as a generic parse
+		// error; report it as the size problem it actually is instead of
+		// an opaque 400 the composer can't explain to the user.
+		var mbe *http.MaxBytesError
+		if errors.As(err, &mbe) {
+			http.Error(w, fmt.Sprintf("upload is over this server's %s combined request limit — attach fewer files at once", humanSize(mbe.Limit)), http.StatusRequestEntityTooLarge)
+			return
+		}
 		http.Error(w, "parse multipart: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -69,12 +84,18 @@ func (s *Server) postAttachments(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	out := make([]uploadedAttachment, 0, len(files))
+	// Validate every size up front so an oversize file mid-batch doesn't
+	// leave earlier files orphaned on disk (they'd sit until the TTL
+	// sweep) while the client is told the whole request failed.
 	for _, fh := range files {
 		if fh.Size > maxBytes {
-			http.Error(w, fmt.Sprintf("%q exceeds per-file limit of %d bytes", fh.Filename, maxBytes), http.StatusRequestEntityTooLarge)
+			http.Error(w, fmt.Sprintf("%q is %s — over this server's %s per-file upload limit", fh.Filename, humanSize(fh.Size), humanSize(maxBytes)), http.StatusRequestEntityTooLarge)
 			return
 		}
+	}
+
+	out := make([]uploadedAttachment, 0, len(files))
+	for _, fh := range files {
 		att, err := saveUpload(baseDir, fh)
 		if err != nil {
 			log.Printf("saveUpload %q: %v", fh.Filename, err) //nolint:gosec // filename is %q-quoted

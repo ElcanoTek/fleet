@@ -95,6 +95,17 @@ host-brokered credentials/network that by invariant never enter the sandbox:
 - **Host datastore / control state**: `task_tracker`, `notes`, `memory`, and
   `publish_artifact` write governed database/control records, not arbitrary
   model-selected host files.
+- **Admin-authored scheduler gate**: `run_if` executes a shell command before
+  task promotion as the Fleet host user. Only an authenticated admin can create
+  or change it; the command receives a fixed minimal environment with no Fleet
+  credentials, has a 300-second maximum timeout, and retains at most 8 KiB of
+  stderr. It is operator configuration, not model-authored execution or a task
+  tool, and is deliberately not available to `create_task`.
+- **Credential enrollment control plane**: remote-MCP OAuth authorization and
+  callback endpoints plus API-key connector intake/probes handle credentials in
+  fixed parent-side HTTP code before encrypted storage. They are not
+  model-callable. Per-run lookup, refresh, client construction, and MCP calls
+  are child-owned under ADR-0040.
 - **Host observability/control state**: bash audit and agent audit/session logs
   remain host control-plane state. The former bash/run_python/web_fetch temp
   spills and agent-history overflow breadcrumbs are removed; governed recovery

@@ -617,6 +617,8 @@ func (a *Agent) buildChild(model fantasy.LanguageModel, allowlist agentcore.Cred
 		FallbackModel:  a.fallbackModel,
 		FallbackModels: a.fallbackModels,
 		MCPClient:      a.mcpClient,
+		MCPBroker:      a.mcpBroker,
+		MCPCatalog:     a.mcpCatalog,
 		NativeTools:    a.nativeTools,
 		SystemPrompt:   a.systemPrompt,
 		Persona:        a.persona,

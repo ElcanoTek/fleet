@@ -27,6 +27,7 @@ export type CatalogThirdParty = {
   setup_hint?: string;
   setup_url?: string;
   api_key_header?: string;
+  api_key_query?: string;
   // "manual" = the vendor's authorization server has no dynamic client
   // registration; the guided form collects a bring-your-own OAuth client ID
   // (+ optional secret) up front.
@@ -81,6 +82,9 @@ export type CatalogResponse = {
   bundled: CatalogBundled[];
   third_party: CatalogThirdParty[];
   remote_mcp_enabled: boolean;
+  // The OAuth callback URL manual client registrations must use; shown in the
+  // guided add form so "the callback URL shown in your Fleet instance" exists.
+  oauth_redirect_uri?: string;
 };
 
 // Display names for the curated category slugs the built-in directory uses.
@@ -108,6 +112,36 @@ const CATEGORY_LABELS: Record<string, string> = {
   "travel-local": "Travel & Local",
   other: "Other",
 };
+
+// Icon (core-icons sprite symbol id) for each curated category slug, shown
+// on the directory's category chips and entry cards. An unknown slug (a
+// bundle can invent its own) falls back to the generic connector plug.
+const CATEGORY_ICONS: Record<string, string> = {
+  development: "wrench",
+  "cloud-infrastructure": "cloud",
+  databases: "database",
+  "data-analytics": "bar-chart",
+  "web-search": "search",
+  productivity: "check-square",
+  communication: "message",
+  "crm-sales": "briefcase",
+  "customer-support": "headphones",
+  "commerce-payments": "shopping-cart",
+  finance: "dollar-sign",
+  "design-media": "image",
+  observability: "activity",
+  security: "shield",
+  "ai-ml": "sparkles",
+  automation: "zap",
+  "marketing-social": "megaphone",
+  "knowledge-docs": "book",
+  "travel-local": "map-pin",
+  other: "plug",
+};
+
+export function categoryIcon(slug: string): string {
+  return CATEGORY_ICONS[slug || "other"] ?? "plug";
+}
 
 // Directory section order — curated slugs in a deliberate reading order,
 // unknown categories appended alphabetically, "other" always last.
@@ -142,7 +176,12 @@ export function categoriesOf(
   );
 }
 
-// filterCatalog narrows by a category slug ("" = all) and a free-text query
+// FEATURED_SLUG is the reserved pseudo-category slug for the ✦ Featured
+// chip: it selects entries flagged `featured` across all real categories.
+export const FEATURED_SLUG = "featured";
+
+// filterCatalog narrows by a category slug ("" = all, FEATURED_SLUG =
+// featured entries across categories) and a free-text query
 // matched case-insensitively against name, display name, description, vendor,
 // category, and tags.
 export function filterCatalog(
@@ -152,7 +191,9 @@ export function filterCatalog(
 ): CatalogThirdParty[] {
   const q = query.trim().toLowerCase();
   return entries.filter((e) => {
-    if (category && (e.category || "other") !== category) return false;
+    if (category === FEATURED_SLUG) {
+      if (!e.featured) return false;
+    } else if (category && (e.category || "other") !== category) return false;
     if (!q) return true;
     return (
       e.display_name.toLowerCase().includes(q) ||

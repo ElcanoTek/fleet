@@ -5,6 +5,9 @@ package store
 
 import (
 	"context"
+	"fmt"
+	"sort"
+	"sync"
 	"testing"
 	"time"
 )
@@ -43,9 +46,166 @@ func TestEnqueueInput_IdempotentOnClientID(t *testing.T) {
 	if replay.ID != first.ID {
 		t.Fatalf("replay returned a different row: %s vs %s", replay.ID, first.ID)
 	}
+	if first.Position != 1 || replay.Position != first.Position {
+		t.Fatalf("stored positions = first:%d replay:%d, want 1/1", first.Position, replay.Position)
+	}
 	items, err := s.ListQueuedInputs(ctx, "u@example.com", convID)
 	if err != nil || len(items) != 1 {
 		t.Fatalf("items = %d err=%v, want exactly 1", len(items), err)
+	}
+}
+
+// Position allocation is serialized on the owning conversation. Concurrent
+// submissions must therefore receive distinct FIFO keys instead of surfacing a
+// unique-index error or leaving drain order dependent on a query plan.
+func TestEnqueueInput_ConcurrentPositionsAreUnique(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	convID := seedConvAndTurn(t, s, "t1")
+
+	const count = 16
+	positions := make(chan int64, count)
+	errs := make(chan error, count)
+	var wg sync.WaitGroup
+	for i := 0; i < count; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			row, created, err := s.EnqueueInput(ctx, InputQueueRow{
+				ID: fmt.Sprintf("iq-concurrent-%02d", i), ConversationID: convID,
+				UserEmail: "u@example.com", ClientInputID: fmt.Sprintf("cli-%02d", i),
+				Message: fmt.Sprintf("message-%02d", i), Attachments: "[]", Mode: InputModeQueued,
+			})
+			if err != nil {
+				errs <- err
+				return
+			}
+			if !created {
+				errs <- fmt.Errorf("input %d unexpectedly replayed", i)
+				return
+			}
+			positions <- row.Position
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	close(positions)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := make([]int, 0, count)
+	for p := range positions {
+		got = append(got, int(p))
+	}
+	if len(got) != count {
+		t.Fatalf("received %d positions, want %d", len(got), count)
+	}
+	sort.Ints(got)
+	for i, p := range got {
+		if want := i + 1; p != want {
+			t.Fatalf("positions = %v; index %d got %d want %d", got, i, p, want)
+		}
+	}
+}
+
+func TestPromoteQueuedInput_ConcurrentPromotionsBothSucceed(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	convID := seedConvAndTurn(t, s, "t1")
+	a := enqueue(t, s, convID, "promote-a", "a", InputModeQueued)
+	b := enqueue(t, s, convID, "promote-b", "b", InputModeQueued)
+	anchor := enqueue(t, s, convID, "anchor", "anchor", InputModeQueued)
+
+	type result struct {
+		ok  bool
+		err error
+	}
+	results := make(chan result, 2)
+	var wg sync.WaitGroup
+	for _, id := range []string{a.ID, b.ID} {
+		wg.Add(1)
+		go func(id string) {
+			defer wg.Done()
+			ok, err := s.PromoteQueuedInput(ctx, "u@example.com", convID, id)
+			results <- result{ok: ok, err: err}
+		}(id)
+	}
+	wg.Wait()
+	close(results)
+	for r := range results {
+		if r.err != nil || !r.ok {
+			t.Fatalf("concurrent promotion: ok=%v err=%v", r.ok, r.err)
+		}
+	}
+
+	items, err := s.ListQueuedInputs(ctx, "u@example.com", convID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 3 {
+		t.Fatalf("queue length = %d, want 3", len(items))
+	}
+	if items[2].ID != anchor.ID {
+		t.Fatalf("unpromoted anchor drained before promoted rows: %+v", items)
+	}
+	seenPositions := map[int64]bool{}
+	for _, item := range items {
+		if seenPositions[item.Position] {
+			t.Fatalf("duplicate position %d after concurrent promotions: %+v", item.Position, items)
+		}
+		seenPositions[item.Position] = true
+	}
+}
+
+func TestPurgeTerminalInputs_OnlyOldTerminalRows(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	convID := seedConvAndTurn(t, s, "t1")
+	oldCompleted := enqueue(t, s, convID, "old-completed", "done", InputModeQueued)
+	oldCancelled := enqueue(t, s, convID, "old-cancelled", "cancelled", InputModeQueued)
+	recentCompleted := enqueue(t, s, convID, "recent-completed", "recent", InputModeQueued)
+	oldPending := enqueue(t, s, convID, "old-pending", "pending", InputModeQueued)
+
+	old := time.Now().Add(-48 * time.Hour).Unix()
+	if _, err := s.db.ExecContext(ctx,
+		`UPDATE chat_input_queue
+		    SET state = CASE id
+		          WHEN $1 THEN 'completed'
+		          WHEN $2 THEN 'cancelled'
+		          WHEN $3 THEN 'completed'
+		          ELSE state END,
+		        updated_at = CASE WHEN id IN ($1, $2, $4) THEN $5 ELSE updated_at END
+		  WHERE id IN ($1, $2, $3, $4)`,
+		oldCompleted.ID, oldCancelled.ID, recentCompleted.ID, oldPending.ID, old); err != nil {
+		t.Fatal(err)
+	}
+
+	purged, err := s.PurgeTerminalInputs(ctx, 24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if purged != 2 {
+		t.Fatalf("purged = %d, want 2", purged)
+	}
+	for _, tc := range []struct {
+		clientID string
+		want     bool
+	}{
+		{"old-completed", false}, {"old-cancelled", false},
+		{"recent-completed", true}, {"old-pending", true},
+	} {
+		row, err := s.LookupInput(ctx, convID, tc.clientID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if (row != nil) != tc.want {
+			t.Errorf("%s present=%v, want %v", tc.clientID, row != nil, tc.want)
+		}
+	}
+	if purged, err := s.PurgeTerminalInputs(ctx, 0); err != nil || purged != 0 {
+		t.Fatalf("disabled purge = %d, %v; want no-op", purged, err)
 	}
 }
 

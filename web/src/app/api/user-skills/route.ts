@@ -1,5 +1,6 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "@/app/lib/auth";
+import { verifyOrigin } from "@/app/lib/csrf";
 import { chatServerProxy } from "@/app/lib/chatServer";
 
 export const runtime = "nodejs";
@@ -29,6 +30,12 @@ export async function GET() {
   return proxy("GET");
 }
 
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
+  // Mutating route: same-origin only, like every other write route. Without
+  // this a cross-site form POST could author a skill into the victim's
+  // library — skills are read mid-turn, so that is persistent prompt
+  // injection, not just data noise.
+  const csrf = verifyOrigin(req);
+  if (!csrf.ok) return csrf.response;
   return proxy("POST", req);
 }

@@ -24,6 +24,9 @@ lock-heavy migration from stalling *this* box's restart.
 - The applied `(version, name, applied_at)` is recorded in `schema_migrations`.
 - A `pg_advisory_lock` serializes concurrent boots so two processes can't race
   the same `CREATE TABLE`.
+- The lock and every migration query/transaction share one dedicated database
+  connection. This preserves the serialization boundary and allows an operator
+  to configure a one-connection chat pool without deadlocking startup.
 - On failure the transaction rolls back, the DB stays at the last good version,
   and startup fails loudly.
 - There are **no down-migrations**. This is a deliberate simplicity choice

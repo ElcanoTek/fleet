@@ -268,6 +268,9 @@ func (p *Pool) TakeContainerWithOverrides(ctx context.Context, ov ResourceOverri
 	if p == nil {
 		return nil, func() {}, ErrContainerUnavailable
 	}
+	if p.isClosed() {
+		return nil, func() {}, ErrClosed
+	}
 	if p.cfg.Container.Image == "" {
 		return nil, func() {}, ErrContainerUnavailable
 	}
@@ -289,6 +292,10 @@ func (p *Pool) TakeContainerWithOverrides(ctx context.Context, ov ResourceOverri
 	if err != nil {
 		return nil, func() {}, err
 	}
+	if p.isClosed() {
+		sb.Close()
+		return nil, func() {}, ErrClosed
+	}
 	sb.SetPythonCellTimeout(p.cfg.PythonCellTimeout)
 	return sb, sb.Close, nil
 }
@@ -304,7 +311,13 @@ func (p *Pool) TakeContainerWithOverrides(ctx context.Context, ov ResourceOverri
 // an unrestricted one. Always cold-starts (the per-turn token must be fresh, so
 // a warm container can't be reused).
 func (p *Pool) TakeContainerWithEgress(ctx context.Context, ov ResourceOverride, allowlist []string) (*Sandbox, func(), error) {
-	if p == nil || p.cfg.Container.Image == "" {
+	if p == nil {
+		return nil, func() {}, ErrContainerUnavailable
+	}
+	if p.isClosed() {
+		return nil, func() {}, ErrClosed
+	}
+	if p.cfg.Container.Image == "" {
 		return nil, func() {}, ErrContainerUnavailable
 	}
 	if p.cfg.EgressProxy == nil {
@@ -329,6 +342,11 @@ func (p *Pool) TakeContainerWithEgress(ctx context.Context, ov ResourceOverride,
 		release()
 		return nil, func() {}, err
 	}
+	if p.isClosed() {
+		sb.Close()
+		release()
+		return nil, func() {}, ErrClosed
+	}
 	sb.SetPythonCellTimeout(p.cfg.PythonCellTimeout)
 	return sb, func() { sb.Close(); release() }, nil
 }
@@ -340,20 +358,26 @@ func (p *Pool) TakeContainerWithEgress(ctx context.Context, ov ResourceOverride,
 // separate value to mirror the legacy KernelPool API and to make it
 // harder to forget.
 func (p *Pool) Take() (*Sandbox, func(), error) {
-	if p == nil || p.cfg.Size <= 0 || p.slots == nil {
-		sb, err := p.newSandbox(p.cfg.FillCtx)
-		if err != nil {
-			return nil, func() {}, err
-		}
-		return sb, sb.Close, nil
+	if p == nil {
+		return nil, func() {}, ErrContainerUnavailable
+	}
+	if p.isClosed() {
+		return nil, func() {}, ErrClosed
+	}
+	if p.cfg.Size <= 0 || p.slots == nil {
+		return p.coldStart()
 	}
 	for {
 		select {
 		case ps, ok := <-p.slots:
 			if !ok || ps.sb == nil {
-				// Channel closed (pool shutting down) — cold-start so the caller
-				// still gets a usable sandbox rather than a nil.
-				return p.coldStart()
+				// A closed channel means Pool.Close owns shutdown. Never create a
+				// replacement after that lifecycle boundary.
+				return nil, func() {}, ErrClosed
+			}
+			if p.isClosed() {
+				ps.sb.Close()
+				return nil, func() {}, ErrClosed
 			}
 			// Every received slot — taken or reaped — gets one async refill so the
 			// pool returns to depth.
@@ -363,6 +387,10 @@ func (p *Pool) Take() (*Sandbox, func(), error) {
 				// next parked one rather than hand out a likely-broken sandbox.
 				ps.sb.Close()
 				continue
+			}
+			if p.isClosed() {
+				ps.sb.Close()
+				return nil, func() {}, ErrClosed
 			}
 			return ps.sb, ps.sb.Close, nil
 		default:
@@ -375,11 +403,37 @@ func (p *Pool) Take() (*Sandbox, func(), error) {
 // coldStart constructs a fresh sandbox on the caller's goroutine (the no-warm-slot
 // path of Take).
 func (p *Pool) coldStart() (*Sandbox, func(), error) {
+	if p == nil {
+		return nil, func() {}, ErrContainerUnavailable
+	}
+	if p.isClosed() {
+		return nil, func() {}, ErrClosed
+	}
 	sb, err := p.newSandbox(p.cfg.FillCtx)
 	if err != nil {
 		return nil, func() {}, err
 	}
+	// Container construction is deliberately outside p.mu because it can take
+	// tens of seconds. Recheck after construction: if Close won the race, reap
+	// the just-created sandbox instead of returning a post-shutdown resource.
+	if p.isClosed() {
+		sb.Close()
+		return nil, func() {}, ErrClosed
+	}
 	return sb, sb.Close, nil
+}
+
+// isClosed is the common lifecycle gate for every take path. A successful take
+// either observes the pool open here after construction, or Close linearizes
+// first and the new sandbox is immediately reaped. Slow Podman startup never
+// runs while p.mu is held.
+func (p *Pool) isClosed() bool {
+	if p == nil {
+		return true
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.closed
 }
 
 // Stats reports the configured warm-pool size and how many sandboxes are
@@ -397,8 +451,10 @@ func (p *Pool) Stats() (size, available int) {
 	return p.cfg.Size, len(p.slots)
 }
 
-// Close reaps every remaining sandbox. Safe to call on a nil pool or to
-// call multiple times.
+// Close reaps every remaining sandbox. Safe to call on a nil pool or to call
+// multiple times. Once Close marks the pool closed, every take path fails with
+// ErrClosed; concurrent cold starts that finish after that boundary are
+// immediately reaped.
 // EgressDefault reports the fleet-wide network mode (#211) and the domain
 // allowlist for allowlisted mode. The scheduled run path uses it to choose
 // between the open, allowlisted, and sealed take methods. A nil pool or one with
@@ -414,13 +470,6 @@ func (p *Pool) Close() {
 	if p == nil {
 		return
 	}
-	// Shut the egress proxy (#211) before draining containers; bounded so a hung
-	// proxy can't stall shutdown.
-	if p.cfg.EgressProxy != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		_ = p.cfg.EgressProxy.Shutdown(ctx)
-		cancel()
-	}
 	p.mu.Lock()
 	if p.closed {
 		p.mu.Unlock()
@@ -434,6 +483,16 @@ func (p *Pool) Close() {
 		close(p.slots)
 	}
 	p.mu.Unlock()
+
+	// Mark the pool closed before stopping the egress proxy. Otherwise an
+	// allowlisted take can enter while Shutdown is in progress and receive a
+	// container configured with an already-dead proxy. The timeout prevents a
+	// hung proxy from stalling the rest of teardown indefinitely.
+	if p.cfg.EgressProxy != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		_ = p.cfg.EgressProxy.Shutdown(ctx)
+		cancel()
+	}
 
 	if p.slots != nil {
 		for ps := range p.slots {

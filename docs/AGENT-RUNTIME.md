@@ -36,12 +36,40 @@ operations (host network fetch, brokered credentials, governed datastore
 writes) — enumerated in
 [ADR-0036](adr/0036-sandboxed-file-tools-and-host-io-exceptions.md).
 
-**MCP credentials never enter the sandbox.** MCP tools are advertised to the
-model, but every `mcp_*` call is executed host-side against the per-task
-credentialed client by the **out-of-process MCP broker** (issue #167). The
-sandbox holds no MCP credential; the broker injects the right credential at the
-moment it runs the call and the value never travels into the container or the
-model's context.
+**MCP credentials never enter the sandbox or model context.** MCP tools are
+advertised to the model, but every `mcp_*` call is executed by fixed host-side
+code against a credentialed client. The `mcpbroker` package and `fleet
+mcp-broker` subprocess implement the intended out-of-process boundary, including
+value-free, incident-correlated responses when broker call or discovery code
+panics. Its internal [scoped-session protocol](MCP-BROKER-SCOPES.md) can also
+open a per-run client from non-secret account/task/workspace identifiers and
+route calls through an opaque scope ID, which is required before scheduled runs
+with different account selections can share the subprocess safely. The child
+backend owns those scoped clients and reaps them on close. Production starts
+`fleet mcp-broker` before serving, verifies it with liveness and public
+catalog/account discovery, and then removes connector env keys plus resolved MCP
+and inline-HTTP definitions from the parent. Config hot-reload permanently
+excludes those names, including account-suffixed variants, so it cannot
+rehydrate them from the env file. If a connector tries to reuse an env name the
+parent still needs (a provider/webhook secret, Fleet runtime setting, or core
+process variable), startup fails instead of silently breaking either owner.
+
+Every interactive turn and scheduled task opens a child-owned scope and closes
+it with a fresh bounded context. Manager discovery, picker metadata, account
+names, approvals, and scheduled empty-selection/workspace decisions consume
+only public broker results. MCP hot-reload is also child-owned: the parent sends
+no resolved definitions and publishes the returned public view atomically for
+future runs. Connector env values are a boot snapshot; rotate or add one by
+restarting Fleet. Go cannot guarantee cryptographic zeroization of immutable
+strings that existed during boot, so “scrub” here means environment removal and
+dropping/overwriting reachable runtime definitions, not a claim about forensic
+recovery from old heap pages.
+
+Per-user remote hosted MCP overlays use the same child-owned scope boundary.
+The parent sends identity and public selection names; the child decrypts or
+refreshes credentials and builds the short-lived SSRF-guarded client (ADR-0040).
+Explicit OAuth/connectors HTTP control-plane endpoints remain parent-side and
+are not model-callable.
 
 ### Lockdown / network-sealed sandboxes
 
@@ -88,6 +116,14 @@ and by an idle reaper (`FLEET_PYTHON_REPL_IDLE_TTL`, default **1800s**); the
 number of live persistent sandboxes is capped at `FLEET_PYTHON_REPL_MAX`
 (default **32**, LRU-evicting the least-recently-used idle one). It carries the
 same cgroup memory/CPU/PID/disk caps as a per-turn sandbox.
+
+Process shutdown is a hard lifecycle boundary for both modes. Once `Pool.Close`
+marks the sandbox pool closed, new per-turn, persistent, lockdown, and
+allowlisted takes fail with `ErrClosed`; a cold start already in progress is
+reaped if it finishes after that boundary. The pool is marked closed before its
+host-side egress proxy is stopped, so no allowlisted container can be returned
+with a proxy that was already shut down. This is fail-closed resource lifecycle
+behavior, not a host execution fallback.
 
 Independent of mode, `FLEET_PYTHON_CELL_TIMEOUT` (default **0** = disabled) is a
 host-operator ceiling on a single cell; the effective per-cell timeout is
@@ -265,8 +301,9 @@ their scheduled tasks. In chat they appear in the Tools picker as toggleable,
 default-on entries (gated per conversation exactly like a bundle Optional
 server, so they count against the tool ceiling only when selected); scheduled
 runs use all of the owner's connected servers. Local stdio servers are
-unchanged. See [ADR-0009](adr/0009-per-user-remote-mcp-oauth.md) for the full
-rationale.
+unchanged. See [ADR-0009](adr/0009-per-user-remote-mcp-oauth.md) for the OAuth
+rationale and [ADR-0040](adr/0040-child-owned-remote-mcp-runtime.md) for the
+production process boundary.
 
 The feature is **off until configured** and fails closed:
 

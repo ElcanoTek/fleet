@@ -55,6 +55,10 @@ export type Task = {
   completed_at?: string;
   scheduled_for?: string;
   recurrence?: string;
+  // Recurrence end conditions: repeat until an instant and/or for a total
+  // remaining-run count. Absent = repeat forever.
+  recurrence_until?: string | null;
+  recurrence_remaining?: number | null;
   files?: string[];
   run_if?: RunIf | null;
   skip_count?: number;
@@ -86,6 +90,8 @@ export type TaskCreate = {
   persona?: string;
   scheduled_for?: string;
   recurrence?: string;
+  recurrence_until?: string;
+  recurrence_remaining?: number;
   files?: string[];
   tags?: string[];
   retry_policy?: RetryPolicy;
@@ -429,6 +435,13 @@ export type LogSession = {
   messages?: LogMessage[];
 };
 
+// One superseded transcript in a task's per-attempt run log history
+// (GET /logs/{task_id}/history): the entry id + when a newer transcript
+// replaced it. The payload is fetched per-entry.
+export type RunLogMeta = {
+  id: number;
+  superseded_at: string;
+};
 
 // #508 live task activity stream frames (GET /tasks/{id}/stream).
 export type TaskStreamFrame = {
@@ -548,6 +561,12 @@ export const orchestratorApi = {
   estimateTask: (body: TaskCreate) =>
     request<CostForecast>("/tasks/estimate", { method: "POST", body: JSON.stringify(body) }),
   taskLogs: (taskId: string) => request<LogSession>(`/logs/${encodeURIComponent(taskId)}`),
+  // Per-attempt run log history: transcripts superseded by a retry or an
+  // ask-pause/wake resume of the SAME task id. Metadata list + one entry.
+  taskLogHistory: (taskId: string) =>
+    request<{ entries: RunLogMeta[] }>(`/logs/${encodeURIComponent(taskId)}/history`),
+  taskLogHistoryEntry: (taskId: string, entryId: number) =>
+    request<LogSession>(`/logs/${encodeURIComponent(taskId)}/history/${entryId}`),
   // Edit (PUT /tasks/{id}): rewrites a pending/scheduled task's definition —
   // for a recurring task that means every future run. The server re-checks
   // editability transactionally (409 when the task started meanwhile).
@@ -564,7 +583,10 @@ export const orchestratorApi = {
       method: "POST",
       body: JSON.stringify(overrides ? { overrides } : {}),
     }),
-  upcomingRuns: (limit = 50) => request<{ upcoming: UpcomingRun[] }>(`/tasks/upcoming?limit=${limit}`),
+  upcomingRuns: (limit = 50, until?: string) =>
+    request<{ upcoming: UpcomingRun[] }>(
+      `/tasks/upcoming?limit=${limit}${until ? `&until=${encodeURIComponent(until)}` : ""}`,
+    ),
   // #516 self-improving memory: feedback + versioned learned instructions.
   submitFeedback: (taskId: string, rating: "up" | "down", critique?: string) =>
     request<unknown>(`/tasks/${encodeURIComponent(taskId)}/feedback`, {

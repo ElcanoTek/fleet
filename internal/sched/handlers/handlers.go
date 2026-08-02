@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -45,6 +46,10 @@ type Config struct {
 	Version         string
 	DataDir         string
 	Timezone        string
+	// UploadMaxBytes caps a single POST /upload task-input file. Mirrors
+	// the chat plane's cfg.UploadMaxBytes (FLEET_UPLOAD_MAX_BYTES, default
+	// 1 GiB) so both upload surfaces enforce the same limit.
+	UploadMaxBytes int64
 	// DefaultTaskTimezone (FLEET_DEFAULT_TIMEZONE) is the IANA timezone applied
 	// to a new task whose create request omits one. Distinct from Timezone
 	// (FLEET_TIMEZONE, the server clock); empty defaults to "UTC".
@@ -540,6 +545,10 @@ func (h *Handlers) CreateTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if msg := requireAdminForRunIf(creator.isAdmin, tc.RunIf); msg != "" {
+		writeError(w, http.StatusForbidden, msg)
+		return
+	}
 
 	// Spending-cap pre-flight: refuse a key that has already reached its daily or
 	// monthly LLM budget. Task cost is only known after completion, so this gates
@@ -834,6 +843,18 @@ func (h *Handlers) validateTaskRouting(tc *models.TaskCreate) error {
 	return nil
 }
 
+// requireAdminForRunIf enforces the run_if privilege boundary. A run_if gate
+// executes ON THE HOST as the fleet user (scheduler.go documents it as trusted
+// "exactly like the fleet binary itself") — structural validation cannot make
+// an arbitrary creator's shell string safe, so only an admin principal may
+// attach or change one. Returns the 403 message, or "" when allowed.
+func requireAdminForRunIf(isAdmin bool, runIf *models.RunIf) string {
+	if runIf != nil && !isAdmin {
+		return "run_if: a host-side pre-run gate can only be set by an admin"
+	}
+	return ""
+}
+
 func (h *Handlers) validateTaskCreate(tc *models.TaskCreate) error { //nolint:gocyclo // centralized fail-fast validation keeps every create path identical.
 	tc.Prompt = strings.TrimSpace(tc.Prompt)
 	if tc.Prompt == "" {
@@ -894,6 +915,23 @@ func (h *Handlers) validateTaskCreate(tc *models.TaskCreate) error { //nolint:go
 				next := schedule.Next(time.Now().In(loc)).UTC()
 				tc.ScheduledFor = &next
 			}
+		}
+	}
+
+	// Recurrence end conditions are only meaningful on a recurring task, and a
+	// run budget of zero would be a task that never runs — reject both shapes
+	// at the boundary. A recurrence_until already in the past is allowed (the
+	// first occurrence still runs; the chain just doesn't continue) so exported
+	// definitions stay importable.
+	if tc.RecurrenceUntil != nil && tc.Recurrence == "" {
+		return fmt.Errorf("recurrence_until requires a recurrence")
+	}
+	if tc.RecurrenceRemaining != nil {
+		if tc.Recurrence == "" {
+			return fmt.Errorf("recurrence_remaining requires a recurrence")
+		}
+		if *tc.RecurrenceRemaining < 1 || *tc.RecurrenceRemaining > 10000 {
+			return fmt.Errorf("recurrence_remaining must be between 1 and 10000")
 		}
 	}
 
@@ -1657,6 +1695,13 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	// Same privilege boundary as create, but edit-shaped: a non-admin editing
+	// a task may keep an existing (admin-authorized) gate byte-identical —
+	// clients echo the full record — but may not add, change, or remove one.
+	if !p.isAdmin && !reflect.DeepEqual(tc.RunIf, task.RunIf) {
+		writeError(w, http.StatusForbidden, "run_if: a host-side pre-run gate can only be changed by an admin")
+		return
+	}
 
 	// If recurrence is changed, refresh the next scheduled run unless the user
 	// explicitly chose a different schedule time in this edit.
@@ -1718,6 +1763,8 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 		Persona:                tc.Persona,
 		ScheduledFor:           tc.ScheduledFor,
 		Recurrence:             tc.Recurrence,
+		RecurrenceUntil:        tc.RecurrenceUntil,
+		RecurrenceRemaining:    tc.RecurrenceRemaining,
 		Timezone:               tc.Timezone,
 		Files:                  tc.Files,
 		FileNames:              tc.FileNames,
@@ -2075,6 +2122,69 @@ func (h *Handlers) GetLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	writeJSON(w, http.StatusOK, session)
+}
+
+// logHistoryTaskForRequest parses the path task id and enforces exactly the
+// GetLogs gate (PermissionViewLogs + scoped-principal task visibility), so the
+// per-attempt history endpoints can never leak more than the latest-log one.
+func (h *Handlers) logHistoryTaskForRequest(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
+	p := h.principalFromRequest(r)
+	if !p.hasPermission(models.PermissionViewLogs) {
+		writeError(w, http.StatusForbidden, "Insufficient permissions")
+		return uuid.Nil, false
+	}
+	taskID, err := uuid.Parse(chi.URLParam(r, "task_id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid task ID")
+		return uuid.Nil, false
+	}
+	if scopes := p.scopes(); len(scopes) > 0 {
+		task, err := h.storage.GetTask(taskID)
+		if err != nil || task == nil {
+			writeError(w, http.StatusNotFound, "Logs not found for this task")
+			return uuid.Nil, false
+		}
+		if !taskVisibleToScopes(task, scopes, p.ownerID()) {
+			writeError(w, http.StatusForbidden, "Task not within allowed scopes")
+			return uuid.Nil, false
+		}
+	}
+	return taskID, true
+}
+
+// GetLogHistory handles GET /logs/{task_id}/history — the task's superseded
+// transcripts (per-attempt run log history), newest first, metadata only.
+func (h *Handlers) GetLogHistory(w http.ResponseWriter, r *http.Request) {
+	taskID, ok := h.logHistoryTaskForRequest(w, r)
+	if !ok {
+		return
+	}
+	entries, err := h.storage.ListRunLogHistory(r.Context(), taskID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to list log history")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"entries": entries})
+}
+
+// GetLogHistoryEntry handles GET /logs/{task_id}/history/{entry_id} — one
+// superseded transcript, in the same LogSession shape GetLogs returns.
+func (h *Handlers) GetLogHistoryEntry(w http.ResponseWriter, r *http.Request) {
+	taskID, ok := h.logHistoryTaskForRequest(w, r)
+	if !ok {
+		return
+	}
+	entryID, err := strconv.ParseInt(chi.URLParam(r, "entry_id"), 10, 64)
+	if err != nil || entryID <= 0 {
+		writeError(w, http.StatusBadRequest, "Invalid history entry ID")
+		return
+	}
+	session, err := h.storage.GetRunLogEntry(r.Context(), taskID, entryID)
+	if err != nil || session == nil {
+		writeError(w, http.StatusNotFound, "Log history entry not found")
+		return
+	}
 	writeJSON(w, http.StatusOK, session)
 }
 

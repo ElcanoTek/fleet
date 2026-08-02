@@ -3,8 +3,10 @@ import { describe, expect, it } from "vitest";
 import {
   authHint,
   categoriesOf,
+  categoryIcon,
   categoryLabel,
   consentRequired,
+  FEATURED_SLUG,
   fillPlaceholders,
   filterCatalog,
   groupByCategory,
@@ -59,6 +61,16 @@ const CATALOG: CatalogThirdParty[] = [
   }),
 ];
 
+describe("categoryIcon", () => {
+  it("maps every curated slug to a sprite symbol and falls back to plug", () => {
+    expect(categoryIcon("development")).toBe("wrench");
+    expect(categoryIcon("databases")).toBe("database");
+    expect(categoryIcon("finance")).toBe("dollar-sign");
+    expect(categoryIcon("ad-tech")).toBe("plug");
+    expect(categoryIcon("")).toBe("plug");
+  });
+});
+
 describe("categoryLabel", () => {
   it("maps curated slugs and falls back to title case", () => {
     expect(categoryLabel("development")).toBe("Developer Tools");
@@ -89,6 +101,22 @@ describe("categoriesOf", () => {
 describe("filterCatalog", () => {
   it("returns everything for an empty query and no category", () => {
     expect(filterCatalog(CATALOG, "", "")).toHaveLength(4);
+  });
+
+  it("narrows to featured entries across categories via the reserved slug", () => {
+    const withFeatured = [
+      ...CATALOG,
+      entry({ name: "linear", display_name: "Linear", category: "productivity", featured: true }),
+      entry({ name: "notion", display_name: "Notion", category: "productivity", featured: true }),
+    ];
+    expect(filterCatalog(withFeatured, "", FEATURED_SLUG).map((e) => e.name)).toEqual([
+      "linear",
+      "notion",
+    ]);
+    // The free-text query still composes with the featured filter.
+    expect(filterCatalog(withFeatured, "notion", FEATURED_SLUG).map((e) => e.name)).toEqual([
+      "notion",
+    ]);
   });
 
   it("narrows by category slug", () => {

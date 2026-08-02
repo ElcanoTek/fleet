@@ -8,6 +8,7 @@ import (
 	"charm.land/fantasy"
 
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/mcp"
 )
 
 // newTestScheduledAgent builds a scheduled Agent over a mock model with no MCP
@@ -59,6 +60,63 @@ func TestExecute_ScheduledDoesNotCollapseToOneRound(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&streams); got < 2 {
 		t.Errorf("scheduled run must NOT collapse to 1 round; streamed %d times", got)
+	}
+}
+
+func TestExecute_UsesInjectedMCPBrokerAndCatalog(t *testing.T) {
+	broker := &interactiveRecordingBroker{}
+	calls := int32(0)
+	loaderAdvertised := false
+	model := &itMockModel{
+		streamFunc: func(_ context.Context, call fantasy.Call) (fantasy.StreamResponse, error) {
+			for _, tool := range call.Tools {
+				if tool.GetName() == "mcp_load_servers" {
+					loaderAdvertised = true
+				}
+			}
+			round := atomic.AddInt32(&calls, 1)
+			return func(yield func(fantasy.StreamPart) bool) {
+				if round == 1 {
+					yield(fantasy.StreamPart{
+						Type:          fantasy.StreamPartTypeToolCall,
+						ID:            "mcp-1",
+						ToolCallName:  "mcp_bundle_lookup",
+						ToolCallInput: `{}`,
+					})
+					yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonToolCalls})
+					return
+				}
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonStop})
+			}, nil
+		},
+	}
+	a := NewAgent(Options{
+		Config:        &config.Config{MaxIterations: 2, LLMMaxTokens: 4096, MCPServers: map[string]config.MCPServerConfig{}},
+		Model:         model,
+		SystemPrompt:  "scheduled broker test",
+		MaxIterations: 2,
+		MCPBroker:     broker,
+		MCPCatalog: []mcp.ServerTool{{
+			ServerName: "bundle",
+			Tool:       mcp.Tool{Name: "lookup", Description: "lookup"},
+		}},
+	})
+	err := a.Execute(context.Background(), "look it up")
+	if err == nil {
+		t.Fatal("expected scheduled audit enforcement to remain unfinished")
+	}
+	if broker.calls != 1 || broker.server != "bundle" || broker.tool != "lookup" {
+		t.Fatalf("broker calls = %d (%q.%q), want one bundle.lookup", broker.calls, broker.server, broker.tool)
+	}
+	if loaderAdvertised {
+		t.Fatal("broker mode advertised the in-process MCP loader")
+	}
+}
+
+func TestNewAgent_PreservesExplicitEmptyBrokerCatalog(t *testing.T) {
+	a := NewAgent(Options{MCPBroker: &interactiveRecordingBroker{}, MCPCatalog: []mcp.ServerTool{}})
+	if a.mcpCatalog == nil {
+		t.Fatal("explicit empty broker catalog became nil and could fall back to local discovery")
 	}
 }
 

@@ -49,6 +49,9 @@ const SCHEDULE_PRESETS = [
 
 type ScheduleMode = "now" | "once" | "repeat";
 type RepeatEditor = "simple" | "cron";
+// When the repeat chain stops: never, at the end of a calendar date, or after
+// a total number of runs.
+type RepeatEndMode = "never" | "date" | "count";
 type SimpleFrequency = "daily" | "weekdays" | "weekly";
 
 const WEEKDAYS = [
@@ -155,6 +158,14 @@ function taskToFormValues(task: Task | null) {
     scheduledTime,
     recurrence: rec,
     repeatEditor: (rec && !parsed ? "cron" : "simple") as RepeatEditor,
+    endMode: (task?.recurrence_until
+      ? "date"
+      : typeof task?.recurrence_remaining === "number"
+        ? "count"
+        : "never") as RepeatEndMode,
+    endDate: task?.recurrence_until ? String(task.recurrence_until).slice(0, 10) : "",
+    endCount:
+      typeof task?.recurrence_remaining === "number" ? String(task.recurrence_remaining) : "",
     simpleFrequency: parsed?.frequency ?? ("weekdays" as SimpleFrequency),
     simpleTime: parsed?.time ?? "09:00",
     simpleWeekdays: parsed?.weekdays ?? ["1"],
@@ -292,6 +303,9 @@ export function TaskCreateModal({
   const [simpleFrequency, setSimpleFrequency] = useState<SimpleFrequency>(init.simpleFrequency);
   const [simpleTime, setSimpleTime] = useState(init.simpleTime);
   const [simpleWeekdays, setSimpleWeekdays] = useState<string[]>(init.simpleWeekdays);
+  const [endMode, setEndMode] = useState<RepeatEndMode>(init.endMode);
+  const [endDate, setEndDate] = useState(init.endDate);
+  const [endCount, setEndCount] = useState(init.endCount);
 
   const [contextOpen, setContextOpen] = useState(init.contextOpen);
   const [toolsOpen, setToolsOpen] = useState(init.toolsOpen);
@@ -382,6 +396,7 @@ export function TaskCreateModal({
     emailInput.trim() !== "" ||
     scheduleMode !== "now" ||
     recurrence.trim() !== "" ||
+    endMode !== "never" ||
     scheduledDate !== "" ||
     mcpSelection.length > 0 ||
     fileCount > 0 ||
@@ -407,6 +422,9 @@ export function TaskCreateModal({
     scheduledDate,
     scheduledTime,
     recurrence,
+    endMode,
+    endDate,
+    endCount,
     model,
     fallbackModel,
     maxIterations,
@@ -428,6 +446,9 @@ export function TaskCreateModal({
     init.scheduledDate,
     init.scheduledTime,
     init.recurrence,
+    init.endMode,
+    init.endDate,
+    init.endCount,
     init.model,
     init.fallbackModel,
     init.maxIterations,
@@ -692,7 +713,17 @@ export function TaskCreateModal({
     if (scheduleMode === "once" && scheduledFor) {
       taskData.scheduled_for = new Date(scheduledFor).toISOString();
     }
-    if (scheduleMode === "repeat" && recurrence.trim()) taskData.recurrence = recurrence.trim();
+    if (scheduleMode === "repeat" && recurrence.trim()) {
+      taskData.recurrence = recurrence.trim();
+      // End-of-day local time so "ends on July 31" includes July 31's run.
+      if (endMode === "date" && endDate) {
+        taskData.recurrence_until = new Date(`${endDate}T23:59:59`).toISOString();
+      }
+      if (endMode === "count" && endCount.trim()) {
+        const n = Number.parseInt(endCount, 10);
+        if (Number.isFinite(n) && n >= 1) taskData.recurrence_remaining = n;
+      }
+    }
     // Pre-run shell gate (#269): only attach when a command is set so the
     // default (no gate) round-trips as run_if: null.
     if (runIfCommand.trim()) {
@@ -728,6 +759,12 @@ export function TaskCreateModal({
     if (scheduleMode === "once" && !scheduledDate) next.scheduled_for = "Pick a date and time.";
     if (scheduleMode === "repeat" && !recurrence.trim())
       next.recurrence = "Type a cron expression or pick a preset below.";
+    if (scheduleMode === "repeat" && endMode === "date" && !endDate)
+      next.recurrence_end = "Pick the date the repeat ends.";
+    if (scheduleMode === "repeat" && endMode === "count") {
+      const n = Number.parseInt(endCount, 10);
+      if (!Number.isFinite(n) || n < 1) next.recurrence_end = "Enter how many runs (at least 1).";
+    }
     return next;
   };
 
@@ -1416,6 +1453,58 @@ export function TaskCreateModal({
                       <p className="field-hint" id="recurrence-echo">
                         Choose a schedule above or enter an advanced cron expression.
                       </p>
+                    ) : null}
+                    <div className="simple-schedule-grid" data-testid="repeat-end">
+                      <label className="task-schedule-field">
+                        <span>End repeat</span>
+                        <select
+                          aria-label="End repeat"
+                          value={endMode}
+                          onChange={(e) => {
+                            setEndMode(e.target.value as RepeatEndMode);
+                            setFieldError("recurrence_end", "");
+                          }}
+                        >
+                          <option value="never">Never</option>
+                          <option value="date">On a date</option>
+                          <option value="count">After a number of runs</option>
+                        </select>
+                      </label>
+                      {endMode === "date" ? (
+                        <label className="task-schedule-field">
+                          <span>Ends on</span>
+                          <input
+                            type="date"
+                            aria-label="Repeat end date"
+                            value={endDate}
+                            onChange={(e) => {
+                              setEndDate(e.target.value);
+                              setFieldError("recurrence_end", "");
+                            }}
+                          />
+                        </label>
+                      ) : null}
+                      {endMode === "count" ? (
+                        <label className="task-schedule-field">
+                          <span>Total runs</span>
+                          <input
+                            type="number"
+                            min={1}
+                            max={10000}
+                            aria-label="Total runs before the repeat ends"
+                            value={endCount}
+                            onChange={(e) => {
+                              setEndCount(e.target.value);
+                              setFieldError("recurrence_end", "");
+                            }}
+                          />
+                        </label>
+                      ) : null}
+                    </div>
+                    {errors.recurrence_end ? (
+                      <div className="task-inline-error" data-testid="error-recurrence-end">
+                        {errors.recurrence_end}
+                      </div>
                     ) : null}
                   </div>
                 ) : null}

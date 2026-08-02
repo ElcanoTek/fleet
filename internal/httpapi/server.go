@@ -65,6 +65,9 @@ type Server struct {
 	webhookRL     *ratelimit.Limiter
 	hasUsers      atomic.Bool
 	lastUserCheck atomic.Int64
+	// verifyLimit bounds pre-login password attempts (see auth_verify.go) —
+	// the chat limiter can't, since it keys by the authenticated user.
+	verifyLimit verifyLimiter
 
 	// llmProvidersChanged rebuilds + swaps the manager's model-resolver routing
 	// table after an admin LLM-provider edit (WithLLMProvidersChanged). nil in
@@ -719,6 +722,23 @@ func (s *Server) Routes() http.Handler {
 	// /theme.css themes the shell (incl. the pre-auth login page) from the
 	// bundle palette, so it is token-gated but identity-less — see themeCSS.
 	mux.Handle("/theme.css", s.tokenOnlyMiddleware(http.HandlerFunc(s.themeCSS)))
+	// /brand/logo is the same trust class as /theme.css — a deployment-wide,
+	// non-secret brand asset the pre-auth shell may render — so it shares the
+	// token-gated, identity-less chain. 404 when the bundle declares no logo.
+	mux.Handle("/brand/logo", s.tokenOnlyMiddleware(http.HandlerFunc(s.brandLogo)))
+	// /brand/share-image is the bundle's og:image. Same trust class again, and
+	// necessarily so: link-unfurl scrapers (Slack, iMessage, Discord, Teams) are
+	// anonymous, so an og:image behind a session gate would render no preview at
+	// all. 404 when the bundle declares none, and the web falls back to fleet's
+	// own neutral card.
+	mux.Handle("/brand/share-image", s.tokenOnlyMiddleware(http.HandlerFunc(s.brandShareImage)))
+	// /brand/meta is the deployment's white-label identity (name, login copy,
+	// share strings, per-mode background) for the web's SERVER-SIDE metadata.
+	// Same trust class again: the login card renders pre-session and unfurl
+	// scrapers are anonymous, so /client-config's member gate is unreachable
+	// from those surfaces. Every field is public by construction — see
+	// brand_meta.go.
+	mux.Handle("/brand/meta", s.tokenOnlyMiddleware(http.HandlerFunc(s.brandMeta)))
 	// Public read-only conversation sharing (#226). Token-gated (shared secret —
 	// only the trusted Next proxy reaches it) but IDENTITY-less, like /theme.css:
 	// the share token in the path is the authorization, and the handler enforces
@@ -738,6 +758,12 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("/admin/provider-health", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleProviderHealth)))))
 	mux.Handle("/admin/health-summary", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleHealthSummary)))))
 	mux.Handle("/admin/server-stats", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleServerStats)))))
+	// Storage visibility + reclaim (uploads / temp files / workspaces /
+	// old unpinned chats). Read is a walk of the data trees; the cleanup
+	// POST is destructive but only for cleanup-eligible rows (pinned /
+	// archived / shared / project chats are never touched).
+	mux.Handle("/admin/storage", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminStorage)))))
+	mux.Handle("/admin/storage/cleanup", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminStorageCleanup)))))
 	mux.Handle("/admin/doctor", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleDoctor)))))
 	// Admin Users tab (#237): GET list / POST create on the collection;
 	// PATCH role-team / DELETE / PUT …/password on the item. Admin-gated like
@@ -1003,6 +1029,10 @@ type serverConfigResponse struct {
 	LockdownAvailable     bool     `json:"lockdown_available"`
 	LockdownOnly          bool     `json:"lockdown_only"`
 	LockdownAllowedModels []string `json:"lockdown_allowed_models"`
+	// UploadMaxBytes: per-file /attachments cap. The composer uses it to
+	// reject oversize files client-side instead of discovering the limit
+	// after a full upload round-trip ends in a 413.
+	UploadMaxBytes int64 `json:"upload_max_bytes"`
 }
 
 func (s *Server) serverConfig(w http.ResponseWriter, r *http.Request) {
@@ -1013,6 +1043,7 @@ func (s *Server) serverConfig(w http.ResponseWriter, r *http.Request) {
 	resp := serverConfigResponse{
 		LockdownAvailable: s.cfg.LockdownAvailable(),
 		LockdownOnly:      s.cfg.LockdownOnly,
+		UploadMaxBytes:    s.cfg.UploadMaxBytes,
 	}
 	if resp.LockdownAvailable {
 		resp.LockdownAllowedModels = append(resp.LockdownAllowedModels, s.cfg.LockdownAllowedModels...)
@@ -1036,7 +1067,19 @@ type clientConfigBranding struct {
 	LoginTagline     string `json:"login_tagline"`
 	ShareTitle       string `json:"share_title"`
 	ShareDescription string `json:"share_description"`
+	// LogoURL is the web path the shell renders as the brand mark, or "" when
+	// the bundle declares no logo (the web then uses fleet's own). A URL rather
+	// than the manifest's bundle-relative path: the browser cannot read the
+	// bundle, and the web is a separate process, so the only thing it can act on
+	// is the proxied route. Omitted from JSON when empty so an older web build
+	// sees exactly what it saw before.
+	LogoURL string `json:"logo_url,omitempty"`
 }
+
+// brandLogoWebPath is the Next-proxied path the browser fetches the bundle mark
+// from. It intentionally mirrors /api/theme: one public proxy per brand asset,
+// so the login shell can render both before a session exists.
+const brandLogoWebPath = "/api/brand/logo"
 
 type clientConfigEmptyState struct {
 	Cards         []map[string]any `json:"cards"`
@@ -1073,6 +1116,11 @@ func (s *Server) clientConfigHandler(w http.ResponseWriter, r *http.Request) {
 			LoginTagline:     b.Branding.LoginTagline,
 			ShareTitle:       b.Branding.ShareTitle,
 			ShareDescription: b.Branding.ShareDescription,
+		}
+		// Advertise the logo only when a file actually backed it at load, so the
+		// web never renders an <img> at a route that 404s.
+		if b.BrandLogoPath != "" {
+			resp.Branding.LogoURL = brandLogoWebPath
 		}
 		if len(b.EmptyState.Cards) > 0 {
 			resp.EmptyState.Cards = b.EmptyState.Cards
@@ -1224,6 +1272,28 @@ type createConversationRequest struct {
 	// is validated and the project's default persona/model + curated
 	// connector selection are inherited (explicit request values win).
 	ProjectID string `json:"project_id,omitempty"`
+	// Seed, when non-empty, is appended as the conversation's first user
+	// message WITHOUT running a turn — pre-loaded context the user's first
+	// real message will build on. The orchestrator's "Discuss this run"
+	// bridge uses it to open a chat seeded with a scheduled run's
+	// transcript digest (docs/DISCUSS-RUN.md). Clamped server-side to
+	// seedMaxChars; the tail is kept (the end of a transcript — the
+	// result — matters more than the beginning).
+	Seed string `json:"seed,omitempty"`
+}
+
+// seedMaxChars bounds a seeded first message so a pathological caller can't
+// preload a conversation past any sane context budget. The proactive context
+// compaction in agentcore handles the rest.
+const seedMaxChars = 48_000
+
+// clampSeed enforces seedMaxChars, keeping the TAIL: transcripts end with the
+// outcome, and the outcome is what a discussion seed is for.
+func clampSeed(seed string) string {
+	if len(seed) <= seedMaxChars {
+		return seed
+	}
+	return "[…seed truncated…]\n" + seed[len(seed)-seedMaxChars:]
 }
 
 func (s *Server) listOrCreateConversations(w http.ResponseWriter, r *http.Request) {
@@ -1372,6 +1442,23 @@ func (s *Server) listOrCreateConversations(w http.ResponseWriter, r *http.Reques
 		conv, ok := s.createConversationForRequest(w, r, user, req.ProjectID, title, persona, model, lockdown)
 		if !ok {
 			return
+		}
+		// Optional seed (docs/DISCUSS-RUN.md): persist one user text message
+		// without running a turn, so the next real turn sees it as history.
+		// Best-effort ordering is NOT acceptable here — a discussion opened
+		// on a missing seed is an empty chat with a misleading title — so a
+		// failed append fails the request (the empty conversation row is
+		// harmless and reachable from the sidebar).
+		if seed := strings.TrimSpace(req.Seed); seed != "" {
+			content, err := json.Marshal(map[string]any{"text": clampSeed(seed)})
+			if err == nil {
+				_, err = s.store.AppendHistory(r.Context(), conv.ID,
+					[]agent.HistoryEntry{{Role: "user", Type: "text", Content: content}})
+			}
+			if err != nil {
+				http.Error(w, "failed to seed conversation: "+err.Error(), http.StatusInternalServerError)
+				return
+			}
 		}
 		writeJSON(w, conv)
 	default:
@@ -1981,7 +2068,7 @@ func (s *Server) conversationByID(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
 			w.Header().Set(
 				"Content-Disposition",
-				fmt.Sprintf(`attachment; filename="%s"`, exportFilename(conv.Title, conv.ID, "md")),
+				fmt.Sprintf(`attachment; filename="%s"`, exportFilename(conv.Title, conv.ID, "md", "chat")),
 			)
 			_, _ = io.WriteString(w, renderConversationMarkdown(conv, history, exportedAt))
 		default:
@@ -1993,7 +2080,7 @@ func (s *Server) conversationByID(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json; charset=utf-8")
 			w.Header().Set(
 				"Content-Disposition",
-				fmt.Sprintf(`attachment; filename="%s"`, exportFilename(conv.Title, conv.ID, "json")),
+				fmt.Sprintf(`attachment; filename="%s"`, exportFilename(conv.Title, conv.ID, "json", "chat")),
 			)
 			_ = json.NewEncoder(w).Encode(body)
 		}
@@ -2582,6 +2669,10 @@ func (s *Server) runTurnAsync(
 			time.Duration(s.cfg.ConversationTTL)*24*time.Hour, s.cfg.UnpinnedCap); err != nil {
 			log.Printf("post-turn sweep error: %v", err)
 		}
+		if _, err := s.store.PurgeTerminalInputs(sweepCtx,
+			time.Duration(s.cfg.InputQueueRetentionDays)*24*time.Hour); err != nil {
+			log.Printf("post-turn input-queue purge error: %v", err)
+		}
 		return
 	}
 
@@ -2625,7 +2716,8 @@ func (s *Server) runTurnAsync(
 			conversationID:       conv.ID,
 			userEmail:            user,
 			sink:                 buf,
-			mcpClient:            s.agent.MCPClient(),
+			mcpBroker:            s.agent.MCPBroker(),
+			mcpCatalog:           s.agent.MCPCatalog(),
 			sessionRegistry:      s.sessionApprovals,
 			globalTimeoutSeconds: s.cfg.ApprovalTimeoutSeconds,
 			convTimeoutSeconds:   conv.ApprovalTimeoutSeconds,
@@ -2762,12 +2854,19 @@ func (s *Server) runTurnAsync(
 		}
 	}
 
-	// Sweep expired conversations after every turn.
+	// Sweep expired conversations and terminal input-queue rows after every
+	// turn. Pending/running/injected queue work is never retention-eligible.
 	if expired, evicted, err := s.store.SweepExpired(persistCtx,
 		time.Duration(s.cfg.ConversationTTL)*24*time.Hour, s.cfg.UnpinnedCap); err != nil {
 		log.Printf("post-turn sweep error: %v", err)
 	} else if expired > 0 || evicted > 0 {
 		log.Printf("sweep: %d expired, %d evicted", expired, evicted)
+	}
+	if purged, err := s.store.PurgeTerminalInputs(persistCtx,
+		time.Duration(s.cfg.InputQueueRetentionDays)*24*time.Hour); err != nil {
+		log.Printf("post-turn input-queue purge error: %v", err)
+	} else if purged > 0 {
+		log.Printf("input-queue purge: %d terminal row(s) removed", purged)
 	}
 
 	// Attachment sweep — see comment in cmd/chat-server/main.go.
@@ -3316,11 +3415,17 @@ func parseLastEventID(r *http.Request) uint64 {
 
 // ── helpers ────────────────────────────────────────────────────────────────
 
-// exportFilename builds a safe, recognizable filename for the JSON
-// download: slugified title + short id + .json. Keeps the Save dialog
+// exportFilename builds a safe, recognizable filename for a download:
+// slugified title + short id + extension. Keeps the Save dialog
 // self-explanatory without trusting user-chosen characters in the
-// Content-Disposition header.
-func exportFilename(title, id, ext string) string {
+// Content-Disposition header — every rune outside [A-Za-z0-9 _-] is
+// dropped, so a quote can never terminate the header's quoted string.
+//
+// fallback names the thing being exported when the title slugifies to
+// nothing (empty, or all-punctuation like `///"""`). It is a parameter
+// rather than a constant because the callers export different nouns: a
+// project export landing as "chat-a1b2c3d4.json" reads as a bug.
+func exportFilename(title, id, ext, fallback string) string {
 	slug := strings.Map(func(r rune) rune {
 		switch {
 		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
@@ -3335,7 +3440,7 @@ func exportFilename(title, id, ext string) string {
 		slug = slug[:50]
 	}
 	if slug == "" {
-		slug = "chat"
+		slug = fallback
 	}
 	shortID := id
 	if len(shortID) > 8 {

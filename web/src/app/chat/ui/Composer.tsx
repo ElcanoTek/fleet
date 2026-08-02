@@ -166,6 +166,9 @@ export type ComposerProps = {
   pendingAttachments: PendingAttachment[];
   attachmentError: string | null;
   removePendingAttachment: (clientId: string) => void;
+  // Informational "large upload — this may take a while" banner copy,
+  // null when the queued total is small enough not to matter.
+  uploadSizeWarning: string | null;
 
   // Spreadsheet nudge
   spreadsheetNudge: NudgeDecision;
@@ -243,6 +246,7 @@ export function Composer({
   addAttachmentFiles,
   pendingAttachments,
   attachmentError,
+  uploadSizeWarning,
   removePendingAttachment,
   spreadsheetNudge,
   setSpreadsheetNudgeDismissed,
@@ -476,7 +480,11 @@ export function Composer({
                 id="promptInput"
                 ref={promptRef}
                 className="min-h-[68px] w-full resize-none overflow-y-auto bg-transparent px-[1.05rem] pt-[0.85rem] pb-[0.35rem] text-[16px] leading-[1.5] text-[var(--color-text-primary)] outline-none transition-[height] duration-fast placeholder:text-[var(--color-text-muted)] sm:text-[0.9rem]"
-                placeholder={promptPlaceholder}
+                placeholder={
+                  pendingAttachments.length > 0
+                    ? "Add a message to send your attachments…"
+                    : promptPlaceholder
+                }
                 rows={1}
                 suppressHydrationWarning
                 value={prompt}
@@ -612,10 +620,22 @@ export function Composer({
                     />
                   ))}
                   {attachmentError ? (
-                    <span className="text-[0.7rem] text-[var(--color-danger)]">
+                    <span
+                      role="alert"
+                      className="basis-full rounded-[0.6rem] border border-[var(--color-danger)]/40 bg-[var(--color-danger)]/10 px-2.5 py-1.5 text-[0.75rem] text-[var(--color-danger)]"
+                    >
                       {attachmentError}
                     </span>
                   ) : null}
+                </div>
+              ) : null}
+
+              {uploadSizeWarning ? (
+                <div
+                  role="status"
+                  className="mx-[1.05rem] mb-2 rounded-[0.6rem] border border-[var(--color-border-strong)] bg-[var(--color-overlay-soft)] px-2.5 py-1.5 text-[0.72rem] text-[var(--color-text-secondary)]"
+                >
+                  {uploadSizeWarning}
                 </div>
               ) : null}
 
@@ -1047,7 +1067,9 @@ export function Composer({
                 <div className="flex items-center gap-[0.35rem]">
                   {isStreaming ? (
                     <button
-                      className="text-[0.6875rem] font-medium text-[var(--color-text-muted)] transition hover:text-[var(--color-text-secondary)]"
+                      aria-label="Stop generating"
+                      data-tip-top="Stop generating"
+                      className="inline-flex size-[2.1rem] shrink-0 items-center justify-center rounded-[var(--radius-pill)] border border-[var(--color-border)] text-[var(--color-text-muted)] transition hover:border-[var(--color-border-strong)] hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
                       type="button"
                       onClick={() => {
                         // Tell the server to actually stop the turn.
@@ -1069,7 +1091,8 @@ export function Composer({
                         abortControllersRef.current[convKey]?.abort();
                       }}
                     >
-                      Stop
+                      <Icon name="stop" className="size-[1.125rem]" />
+                      <span className="sr-only">Stop</span>
                     </button>
                   ) : null}
                   {/* Send-key preference toggle (issue #315), restyled as the
@@ -1101,7 +1124,7 @@ export function Composer({
                     aria-label="Send message"
                     className={`inline-flex size-[2.1rem] shrink-0 items-center justify-center rounded-[var(--radius-pill)] transition focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:cursor-not-allowed ${
                       prompt.trim() && !isStreaming && !isUploadingAttachments
-                        ? "bg-[image:var(--gradient-action-primary)] text-white hover:-translate-y-px"
+                        ? "bg-[image:var(--gradient-action-primary)] text-[var(--color-on-primary)] hover:-translate-y-px"
                         : "bg-[var(--color-surface-2)] text-[var(--color-text-disabled)]"
                     }`}
                     type="submit"
@@ -1109,9 +1132,11 @@ export function Composer({
                     title={
                       isUploadingAttachments
                         ? "Uploading attachments…"
-                        : isStreaming
-                          ? "Queue message (runs after the current turn)"
-                          : "Send message"
+                        : !prompt.trim() && pendingAttachments.length > 0
+                          ? "Type a message to send your attachments"
+                          : isStreaming
+                            ? "Queue message (runs after the current turn)"
+                            : "Send message"
                     }
                   >
                     {isUploadingAttachments ? (

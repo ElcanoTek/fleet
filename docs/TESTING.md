@@ -150,6 +150,11 @@ PGPASSWORD=fleet psql -h localhost -U fleet -d fleet -v ON_ERROR_STOP=1 \
    go build ./...        # or: make compile
    ```
 
+   `web/go.mod` is an intentional empty module boundary. It prevents root
+   `./...` patterns from discovering Go source that an npm dependency happens
+   to ship under `web/node_modules`, so Go gates cover the same Fleet-owned
+   packages before and after `npm ci`.
+
 2. **go vet** — tagged so `host.go` (gated behind `fleet_host_executor`) is
    vetted too:
 

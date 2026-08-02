@@ -51,8 +51,8 @@ func appendNoteProposalTool(sb *strings.Builder) {
 		"immediately. After proposing, continue your task — do NOT retry the tool or assume the note is published.\n\n")
 }
 
-// Manager owns the shared state reused across every chat turn: the MCP client
-// connections, the optional-server gating sets, and the persona/protocol/
+// Manager owns the shared state reused across every chat turn: the MCP call and
+// discovery seams, the optional-server gating sets, and the persona/protocol/
 // system-prompt source files. Construct it once at server startup.
 //
 // This is the minimal subset needed by the interactive prompt/roster/optin
@@ -62,10 +62,23 @@ type Manager struct {
 	config *config.Config
 
 	mcpClient *mcp.Client
-	allowlist mcpAllowlist
+	// mcpBroker/mcpCatalog decouple governed calls and public discovery from the
+	// credentialed concrete client. Production may inject the out-of-process
+	// broker while the local client remains the compatibility default.
+	mcpBroker  agentcore.MCPBroker
+	mcpCatalog []mcp.ServerTool
+	// openMCPScope creates one isolated broker-owned client for an interactive
+	// turn. Nil preserves the shared-client compatibility path.
+	openMCPScope MCPScopeOpener
+	// reloadMCP refreshes the credential-owning child and returns only public
+	// state. Nil in broker mode makes operator reload fail explicitly.
+	reloadMCP   MCPReloader
+	mcpAccounts map[string][]string
+	allowlist   mcpAllowlist
 
-	// mcpGatingMu guards the four MCP spec-derived gating fields below
-	// (allowlist, mcpToolRoster, optionalServers, optionalServerMetadata) so a
+	// mcpGatingMu guards the MCP catalog/spec-derived gating fields below
+	// (allowlist, mcpToolRoster, optionalServers, enabledMCPServers,
+	// optionalServerMetadata, mcpCatalog, and mcpAccounts) so a
 	// hot reload (#218, ReloadMCPServers) can swap them race-free while turns
 	// read them. Boot construction and unit-test literals set the fields
 	// directly (single goroutine, happens-before any turn); every RUNTIME read
@@ -113,6 +126,10 @@ type Manager struct {
 	// turn before the system prompt is built, matching the actual tool set
 	// registered for that conversation's opt-ins.
 	mcpToolRoster []string
+	// enabledMCPServers is the complete bundle-server set. A scoped turn binds
+	// every mandatory server and only the optional servers the conversation
+	// enabled; using the UI opt-in list alone would silently drop mandatory MCP.
+	enabledMCPServers map[string]bool
 
 	// optionalServers lists the names of MCP servers marked Optional in
 	// their spec. Referenced by buildFantasyTools on every turn to
@@ -159,8 +176,12 @@ type Manager struct {
 	personaPolicies map[string]agentcore.PersonaToolPermissions
 
 	// remoteMCP resolves a user's OAuth-connected remote (hosted) MCP servers and
-	// mints their bearer tokens for the per-turn overlay (#443). nil = feature off.
+	// mints their bearer tokens for the per-turn overlay (#443). It is the
+	// in-process compatibility path; production can instead inject the opener.
 	remoteMCP RemoteMCPResolver
+	// openRemoteMCPOverlay keeps the credentialed remote client behind an
+	// injected scope boundary. It takes precedence over remoteMCP when set.
+	openRemoteMCPOverlay RemoteMCPOverlayOpener
 }
 
 // personaPolicy returns the per-persona tool allowlist for the named persona

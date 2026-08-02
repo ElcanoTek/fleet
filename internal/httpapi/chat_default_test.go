@@ -98,7 +98,8 @@ func (f *fakeEngine) SuggestRecurringTask(context.Context, string, []string) (*a
 func (f *fakeEngine) SuggestLibraryPrompt(context.Context, string) (*agent.LibraryPromptDraft, error) {
 	return nil, nil
 }
-func (f *fakeEngine) MCPClient() *mcp.Client                       { return nil }
+func (f *fakeEngine) MCPBroker() agentcore.MCPBroker               { return nil }
+func (f *fakeEngine) MCPCatalog() []mcp.ServerTool                 { return nil }
 func (f *fakeEngine) SandboxPool() *sandbox.Pool                   { return nil }
 func (f *fakeEngine) MCPServerCatalog() []agent.OptionalServerInfo { return nil }
 func (f *fakeEngine) ListPersonas() ([]string, error)              { return nil, nil }
@@ -261,6 +262,9 @@ func (s *fakeChatStore) ListToolCalls(_ context.Context, convID, toolFilter stri
 // Sweeps + per-turn overrides the path may touch — all no-ops.
 func (s *fakeChatStore) SweepExpired(context.Context, time.Duration, int) (int, int, error) {
 	return 0, 0, nil
+}
+func (s *fakeChatStore) PurgeTerminalInputs(context.Context, time.Duration) (int, error) {
+	return 0, nil
 }
 func (s *fakeChatStore) SweepOrphanWorkspaces(context.Context, string) (int, error) { return 0, nil }
 

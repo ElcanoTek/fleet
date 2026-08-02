@@ -364,7 +364,7 @@ export function ApprovalCard({
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                className="rounded-full bg-[var(--color-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-white transition hover:opacity-90 disabled:opacity-50"
+                className="rounded-full bg-[var(--color-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-on-primary)] transition hover:opacity-90 disabled:opacity-50"
                 disabled={submitting !== null || countdown.expired}
                 onClick={() => void resolve(true)}
               >
@@ -459,7 +459,7 @@ function BashApprovalCard({
           <div className="flex items-center gap-2">
             <button
               type="button"
-              className="rounded-full bg-[var(--color-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-white transition hover:opacity-90 disabled:opacity-50"
+              className="rounded-full bg-[var(--color-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-on-primary)] transition hover:opacity-90 disabled:opacity-50"
               disabled={submitting !== null || countdown.expired}
               onClick={() => onResolve(true)}
             >
@@ -637,7 +637,7 @@ function ScheduleTaskCard({
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              className="rounded-full bg-[var(--color-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-white transition hover:opacity-90 disabled:opacity-50"
+              className="rounded-full bg-[var(--color-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-on-primary)] transition hover:opacity-90 disabled:opacity-50"
               disabled={submitting !== null || countdown.expired}
               onClick={() => onResolve(true, collectEdits())}
             >
@@ -811,7 +811,7 @@ function SuggestAdvancedModelCard({
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <button
             type="button"
-            className="rounded-full bg-[var(--color-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-white transition hover:opacity-90 disabled:opacity-50"
+            className="rounded-full bg-[var(--color-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-on-primary)] transition hover:opacity-90 disabled:opacity-50"
             disabled={pending !== null}
             onClick={() => void submit("switch_and_retry")}
           >
@@ -871,7 +871,10 @@ function EmailPreview({
   onShowRawChange: (v: boolean) => void;
 }) {
   const viewportPx = PREVIEW_WIDTHS[viewport];
-  const stageBg = inbox === "dark" ? "#121212" : "#f4f6fb";
+  // The stage is chrome AROUND the iframe, not part of the email, so it tracks
+  // the deployment palette. This was the literal #f4f6fb — fleet's own light page
+  // color — which read as a foreign tint inside a bundle-themed shell.
+  const stageBg = inbox === "dark" ? "#121212" : "var(--color-surface-2, #f4f6fb)";
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   // Track the viewport width so the Desktop button can be hidden on
   // phones — there's no point showing a 600px inbox width on a 360px
@@ -934,11 +937,15 @@ function EmailPreview({
         }
         const cs = doc.defaultView?.getComputedStyle(el);
         if (!cs) return;
-        const swapBG = DARK_BG_MAP[normRgb(cs.backgroundColor)];
+        // Tuned map first (fleet's own palette), algorithmic fallback second so a
+        // bundle-themed email inverts sensibly instead of not at all.
+        const swapBG =
+          DARK_BG_MAP[normRgb(cs.backgroundColor)] ?? darkenBackground(cs.backgroundColor);
         if (swapBG) el.style.setProperty("background-color", swapBG, "important");
-        const swapText = DARK_TEXT_MAP[normRgb(cs.color)];
+        const swapText = DARK_TEXT_MAP[normRgb(cs.color)] ?? lightenText(cs.color);
         if (swapText) el.style.setProperty("color", swapText, "important");
-        const swapBorder = DARK_BORDER_MAP[normRgb(cs.borderTopColor)];
+        const swapBorder =
+          DARK_BORDER_MAP[normRgb(cs.borderTopColor)] ?? darkenBorder(cs.borderTopColor);
         if (swapBorder) {
           el.style.setProperty("border-top-color", swapBorder, "important");
           el.style.setProperty("border-right-color", swapBorder, "important");
@@ -1042,6 +1049,15 @@ function EmailPreview({
 // the browser's getComputedStyle always returns colors in that form.
 // Values are the tuned dark-mode hex substitutes; contrast ratios were
 // picked in flag to hit WCAG AA against the new backgrounds.
+//
+// These are an OVERRIDE LAYER, not the whole story. Every key is a hex from
+// fleet's own canonical email palette, so an email themed by a client-config
+// bundle (whose theme find-replaces those hexes for its own) matched almost
+// nothing and the dark preview half-inverted — a few whites swapped, everything
+// else stayed light, which reads as a broken preview rather than a dark inbox.
+// darkenBackground / lightenText below are the palette-agnostic fallback for any
+// color the maps don't name; the maps stay so fleet's own emails keep their
+// hand-tuned appearance exactly.
 const DARK_BG_MAP: Record<string, string> = {
   "rgb(244,246,251)": "#1e1e2e",
   "rgb(250,250,250)": "#2a2a3c",
@@ -1069,6 +1085,85 @@ const DARK_BORDER_MAP: Record<string, string> = {
 
 function normRgb(c: string): string {
   return c.toLowerCase().replace(/\s+/g, "");
+}
+
+// parseRgb pulls the channels out of whatever getComputedStyle returned. Returns
+// null for `transparent` / rgba(...,0) so a see-through element is left alone
+// rather than being painted an opaque dark box.
+function parseRgb(c: string): [number, number, number] | null {
+  const m = /^rgba?\((\d+),(\d+),(\d+)(?:,([\d.]+))?\)$/.exec(normRgb(c));
+  if (!m) return null;
+  if (m[4] !== undefined && Number(m[4]) === 0) return null;
+  return [Number(m[1]), Number(m[2]), Number(m[3])];
+}
+
+// Relative luminance, same formula as the WCAG contrast maths.
+function relLum([r, g, b]: [number, number, number]): number {
+  const f = (v: number) => {
+    const s = v / 255;
+    return s <= 0.04045 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+  };
+  return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
+}
+
+// Hue-preserving lightness remap, done in HSL so a branded accent keeps its
+// identity: a yellow rule stays yellow and a blue CTA stays blue, they just move
+// to a lightness that works against an inverted surface. This is the same shape
+// of transform a real dark-mode-forcing client applies, and deliberately an
+// approximation — the preview says "roughly how this reads in a dark inbox", not
+// "pixel-exact Gmail".
+function remapLightness(
+  [r, g, b]: [number, number, number],
+  lo: number,
+  hi: number,
+  desaturate: number,
+): string {
+  const rn = r / 255;
+  const gn = g / 255;
+  const bn = b / 255;
+  const max = Math.max(rn, gn, bn);
+  const min = Math.min(rn, gn, bn);
+  const l = (max + min) / 2;
+  let h = 0;
+  let s = 0;
+  if (max !== min) {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    if (max === rn) h = ((gn - bn) / d + (gn < bn ? 6 : 0)) / 6;
+    else if (max === gn) h = ((bn - rn) / d + 2) / 6;
+    else h = ((rn - gn) / d + 4) / 6;
+  }
+  // Invert lightness, then compress into the target band so the result is
+  // always usable regardless of how extreme the input was.
+  const target = lo + (1 - l) * (hi - lo);
+  return `hsl(${Math.round(h * 360)} ${Math.round(s * desaturate * 100)}% ${Math.round(target * 100)}%)`;
+}
+
+// A light surface becomes a dark one; an already-dark surface is left alone (an
+// email whose header is deliberately near-black should stay near-black).
+function darkenBackground(c: string): string | null {
+  const rgb = parseRgb(c);
+  if (!rgb) return null;
+  if (relLum(rgb) < 0.22) return null;
+  return remapLightness(rgb, 0.1, 0.26, 0.55);
+}
+
+// Dark body text becomes light. Text that is already light (e.g. white on a
+// branded header band) is left alone so it doesn't get flipped to unreadable.
+function lightenText(c: string): string | null {
+  const rgb = parseRgb(c);
+  if (!rgb) return null;
+  if (relLum(rgb) > 0.5) return null;
+  return remapLightness(rgb, 0.72, 0.95, 0.5);
+}
+
+// Borders land mid-band: visible against a dark surface without becoming a line
+// of hard contrast.
+function darkenBorder(c: string): string | null {
+  const rgb = parseRgb(c);
+  if (!rgb) return null;
+  if (relLum(rgb) < 0.15) return null;
+  return remapLightness(rgb, 0.24, 0.38, 0.4);
 }
 
 function SegGroup({ label, children }: { label: string; children: ReactNode }) {

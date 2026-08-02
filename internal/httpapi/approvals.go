@@ -40,11 +40,6 @@ import (
 	"github.com/ElcanoTek/fleet/internal/webpush"
 )
 
-// mcpToolCaller is the subset of *mcp.Client needed for pre-validation.
-type mcpToolCaller interface {
-	CallTool(ctx context.Context, toolName string, arguments map[string]interface{}) (*mcp.ToolResult, error)
-}
-
 // approvalStager implements agent.ApprovalStager. It persists a pending
 // approval and emits the tool.approval_required event on the live SSE sink
 // so the frontend renders its approval card immediately.
@@ -54,7 +49,8 @@ type approvalStager struct {
 	conversationID string
 	userEmail      string
 	sink           agent.EventSink
-	mcpClient      mcpToolCaller
+	mcpBroker      agentcore.MCPBroker
+	mcpCatalog     []mcp.ServerTool
 	// sessionRegistry holds per-conversation pre-approvals (#300). nil disables
 	// batch approval (every call stages a card, the prior behavior).
 	sessionRegistry *SessionApprovalRegistry
@@ -179,8 +175,8 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 		if err := validateEmailHasContent(toolName, rawInput); err != nil {
 			return "", err
 		}
-		if a.mcpClient != nil {
-			if err := a.prevalidateEmail(rawInput); err != nil {
+		if a.mcpBroker != nil {
+			if err := a.prevalidateEmail(toolName, rawInput); err != nil {
 				return "", err
 			}
 		}
@@ -428,7 +424,7 @@ func (a *approvalStager) StageSuggestion(reason string) (string, string, error) 
 // If the MCP tool itself errors, the error is logged and staging continues;
 // the real send path will still validate. This prevents broken emails from
 // reaching the user's approval card.
-func (a *approvalStager) prevalidateEmail(rawInput string) error {
+func (a *approvalStager) prevalidateEmail(sourceToolName, rawInput string) error {
 	var args map[string]any
 	if err := json.Unmarshal([]byte(rawInput), &args); err != nil {
 		return nil // can't parse, let downstream handle
@@ -442,7 +438,12 @@ func (a *approvalStager) prevalidateEmail(rawInput string) error {
 	ctx, cancel := context.WithTimeout(a.ctx, 10*time.Second)
 	defer cancel()
 
-	result, err := a.mcpClient.CallTool(ctx, "validate_email_content", map[string]interface{}{
+	server, err := resolveEmailValidationServer(a.mcpCatalog, sourceToolName)
+	if err != nil {
+		log.Printf("prevalidateEmail: resolve source tool: %v", err)
+		return nil
+	}
+	text, isError, err := a.mcpBroker.CallMCP(ctx, server, "validate_email_content", map[string]interface{}{
 		"content": content,
 		"subject": subject,
 	})
@@ -450,12 +451,16 @@ func (a *approvalStager) prevalidateEmail(rawInput string) error {
 		log.Printf("prevalidateEmail: validation tool error: %v", err)
 		return nil
 	}
-	if result == nil || len(result.Content) == 0 {
+	if isError {
+		log.Printf("prevalidateEmail: validation tool reported an error")
+		return nil
+	}
+	if strings.TrimSpace(text) == "" {
 		return nil
 	}
 
 	var vr validationResult
-	if err := json.Unmarshal([]byte(result.Content[0].Text), &vr); err != nil {
+	if err := json.Unmarshal([]byte(text), &vr); err != nil {
 		log.Printf("prevalidateEmail: unmarshal validation result: %v", err)
 		return nil
 	}
@@ -463,6 +468,34 @@ func (a *approvalStager) prevalidateEmail(rawInput string) error {
 		return fmt.Errorf("email validation failed:\n  - %s", strings.Join(vr.Errors, "\n  - "))
 	}
 	return nil
+}
+
+// resolveEmailValidationServer keeps an MCP send's validation on its source
+// server. Native preview_email/send_email calls have no server prefix, so they
+// preserve mcp.Client.CallTool's historical deterministic behavior by choosing
+// the lexicographically first server that advertises validate_email_content.
+func resolveEmailValidationServer(catalog []mcp.ServerTool, sourceToolName string) (string, error) {
+	if strings.HasPrefix(sourceToolName, "mcp_") {
+		server, _, err := resolveMCPTool(catalog, sourceToolName)
+		if err != nil {
+			return "", err
+		}
+		for _, st := range catalog {
+			if st.ServerName == server && st.Tool.Name == "validate_email_content" {
+				return server, nil
+			}
+		}
+	}
+	best := ""
+	for _, st := range catalog {
+		if st.Tool.Name == "validate_email_content" && (best == "" || st.ServerName < best) {
+			best = st.ServerName
+		}
+	}
+	if best == "" {
+		return "", errors.New("validate_email_content is not in the MCP catalog")
+	}
+	return best, nil
 }
 
 type validationResult struct {
@@ -1196,9 +1229,9 @@ func (s *Server) runStagedTool(ctx context.Context, approval *store.Approval) (s
 	if approval.ToolName == "preview_email" {
 		return "Preview dismissed by user. No email was sent.", nil
 	}
-	client := mgr.MCPClient()
-	if client == nil {
-		return "", errors.New("MCP client not initialized (mock mode?)")
+	broker := mgr.MCPBroker()
+	if broker == nil {
+		return "", errors.New("MCP broker not initialized (mock mode?)")
 	}
 	// Our internal naming convention is mcp_<server>_<tool>. Route by the
 	// full prefixed name so the call lands on the server that staged it —
@@ -1216,18 +1249,38 @@ func (s *Server) runStagedTool(ctx context.Context, approval *store.Approval) (s
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
-	result, err := client.CallToolPrefixed(ctx, approval.ToolName, args)
+	server, tool, err := resolveMCPTool(mgr.MCPCatalog(), approval.ToolName)
 	if err != nil {
 		return "", err
 	}
-	var sb strings.Builder
-	for _, block := range result.Content {
-		if block.Type == "text" {
-			sb.WriteString(block.Text)
-			sb.WriteString("\n")
+	text, isError, err := broker.CallMCP(ctx, server, tool, args)
+	if err != nil {
+		return "", err
+	}
+	if isError {
+		return "", fmt.Errorf("MCP tool reported an error: %s", strings.TrimSpace(text))
+	}
+	return strings.TrimSpace(text), nil
+}
+
+// resolveMCPTool maps the model-visible mcp_<server>_<tool> identity back to a
+// catalog entry. Complete-name comparison avoids speculative underscore splits;
+// if two catalog identities flatten to the same name, the longest server match
+// preserves mcp.Client.CallToolPrefixed's established routing rule.
+func resolveMCPTool(catalog []mcp.ServerTool, fullName string) (string, string, error) {
+	if !strings.HasPrefix(fullName, "mcp_") {
+		return "", "", fmt.Errorf("not an MCP tool name: %s", fullName)
+	}
+	var best mcp.ServerTool
+	for _, st := range catalog {
+		if "mcp_"+st.ServerName+"_"+st.Tool.Name == fullName && len(st.ServerName) > len(best.ServerName) {
+			best = st
 		}
 	}
-	return strings.TrimSpace(sb.String()), nil
+	if best.ServerName != "" {
+		return best.ServerName, best.Tool.Name, nil
+	}
+	return "", "", fmt.Errorf("no cataloged MCP tool matches %s", fullName)
 }
 
 // runStagedBash executes an approved bash invocation directly. We call

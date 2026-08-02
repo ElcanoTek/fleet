@@ -61,28 +61,32 @@ func TestResolutionCallID(t *testing.T) {
 	}
 }
 
-// fakeMCPClient implements mcpToolCaller for tests.
-type fakeMCPClient struct {
-	result *mcp.ToolResult
-	err    error
+type fakeMCPBroker struct {
+	text    string
+	isError bool
+	err     error
+	server  string
+	tool    string
 }
 
-func (f *fakeMCPClient) CallTool(_ context.Context, _ string, _ map[string]interface{}) (*mcp.ToolResult, error) {
-	return f.result, f.err
+func (f *fakeMCPBroker) CallMCP(_ context.Context, server, tool string, _ map[string]any) (string, bool, error) {
+	f.server = server
+	f.tool = tool
+	return f.text, f.isError, f.err
+}
+
+var sendgridApprovalCatalog = []mcp.ServerTool{
+	{ServerName: "send_grid", Tool: mcp.Tool{Name: "send_email"}},
+	{ServerName: "send_grid", Tool: mcp.Tool{Name: "validate_email_content"}},
 }
 
 func TestPrevalidateEmailRejectsBrokenHTML(t *testing.T) {
 	stager := &approvalStager{
-		ctx: context.Background(),
-		mcpClient: &fakeMCPClient{
-			result: &mcp.ToolResult{
-				Content: []mcp.ContentBlock{
-					{Type: "text", Text: `{"valid":false,"errors":["Unclosed tag: <td>","Unresolved token: {{cta_text}}"],"warnings":[]}`},
-				},
-			},
-		},
+		ctx:        context.Background(),
+		mcpBroker:  &fakeMCPBroker{text: `{"valid":false,"errors":["Unclosed tag: <td>","Unresolved token: {{cta_text}}"],"warnings":[]}`},
+		mcpCatalog: sendgridApprovalCatalog,
 	}
-	err := stager.prevalidateEmail(`{"to_email":"a@b.com","subject":"s","content":"<html><body><td>broken"}`)
+	err := stager.prevalidateEmail("mcp_send_grid_send_email", `{"to_email":"a@b.com","subject":"s","content":"<html><body><td>broken"}`)
 	if err == nil {
 		t.Fatal("expected validation error, got nil")
 	}
@@ -92,30 +96,48 @@ func TestPrevalidateEmailRejectsBrokenHTML(t *testing.T) {
 }
 
 func TestPrevalidateEmailAcceptsValidHTML(t *testing.T) {
+	broker := &fakeMCPBroker{text: `{"valid":true,"errors":[],"warnings":[]}`}
 	stager := &approvalStager{
-		ctx: context.Background(),
-		mcpClient: &fakeMCPClient{
-			result: &mcp.ToolResult{
-				Content: []mcp.ContentBlock{
-					{Type: "text", Text: `{"valid":true,"errors":[],"warnings":[]}`},
-				},
-			},
-		},
+		ctx:        context.Background(),
+		mcpBroker:  broker,
+		mcpCatalog: sendgridApprovalCatalog,
 	}
-	err := stager.prevalidateEmail(`{"to_email":"a@b.com","subject":"s","content":"<html><body>hello</body></html>"}`)
+	err := stager.prevalidateEmail("mcp_send_grid_send_email", `{"to_email":"a@b.com","subject":"s","content":"<html><body>hello</body></html>"}`)
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
+	}
+	if broker.server != "send_grid" || broker.tool != "validate_email_content" {
+		t.Fatalf("prevalidation route = %q.%q, want send_grid.validate_email_content", broker.server, broker.tool)
+	}
+}
+
+func TestPrevalidateNativePreviewUsesFirstValidationServer(t *testing.T) {
+	broker := &fakeMCPBroker{text: `{"valid":true,"errors":[],"warnings":[]}`}
+	stager := &approvalStager{
+		ctx:       context.Background(),
+		mcpBroker: broker,
+		mcpCatalog: []mcp.ServerTool{
+			{ServerName: "zeta", Tool: mcp.Tool{Name: "validate_email_content"}},
+			{ServerName: "alpha", Tool: mcp.Tool{Name: "validate_email_content"}},
+		},
+	}
+	if err := stager.prevalidateEmail("preview_email", `{"subject":"s","content":"hello"}`); err != nil {
+		t.Fatalf("prevalidateEmail: %v", err)
+	}
+	if broker.server != "alpha" || broker.tool != "validate_email_content" {
+		t.Fatalf("prevalidation route = %q.%q, want alpha.validate_email_content", broker.server, broker.tool)
 	}
 }
 
 func TestPrevalidateEmailSkippedWhenMCPDown(t *testing.T) {
 	stager := &approvalStager{
 		ctx: context.Background(),
-		mcpClient: &fakeMCPClient{
+		mcpBroker: &fakeMCPBroker{
 			err: errors.New("mcp server unreachable"),
 		},
+		mcpCatalog: sendgridApprovalCatalog,
 	}
-	err := stager.prevalidateEmail(`{"to_email":"a@b.com","subject":"s","content":"<html><body>hello</body></html>"}`)
+	err := stager.prevalidateEmail("mcp_send_grid_send_email", `{"to_email":"a@b.com","subject":"s","content":"<html><body>hello</body></html>"}`)
 	if err != nil {
 		t.Fatalf("expected no error when MCP is down, got: %v", err)
 	}
@@ -124,9 +146,9 @@ func TestPrevalidateEmailSkippedWhenMCPDown(t *testing.T) {
 func TestPrevalidateEmailSkippedForNonJSON(t *testing.T) {
 	stager := &approvalStager{
 		ctx:       context.Background(),
-		mcpClient: &fakeMCPClient{},
+		mcpBroker: &fakeMCPBroker{},
 	}
-	err := stager.prevalidateEmail(`not json`)
+	err := stager.prevalidateEmail("mcp_send_grid_send_email", `not json`)
 	if err != nil {
 		t.Fatalf("expected no error for non-JSON input, got: %v", err)
 	}
@@ -135,9 +157,9 @@ func TestPrevalidateEmailSkippedForNonJSON(t *testing.T) {
 func TestPrevalidateEmailSkippedWhenNoContent(t *testing.T) {
 	stager := &approvalStager{
 		ctx:       context.Background(),
-		mcpClient: &fakeMCPClient{},
+		mcpBroker: &fakeMCPBroker{},
 	}
-	err := stager.prevalidateEmail(`{"to_email":"a@b.com","subject":"s"}`)
+	err := stager.prevalidateEmail("mcp_send_grid_send_email", `{"to_email":"a@b.com","subject":"s"}`)
 	if err != nil {
 		t.Fatalf("expected no error when no content, got: %v", err)
 	}
@@ -145,18 +167,70 @@ func TestPrevalidateEmailSkippedWhenNoContent(t *testing.T) {
 
 func TestPrevalidateEmailAllowsTemplateExampleDataAsWarning(t *testing.T) {
 	stager := &approvalStager{
-		ctx: context.Background(),
-		mcpClient: &fakeMCPClient{
-			result: &mcp.ToolResult{
-				Content: []mcp.ContentBlock{
-					{Type: "text", Text: `{"valid":true,"errors":[],"warnings":["Template example data detected: Amazon US OLV, $589,075.45"]}`},
-				},
-			},
-		},
+		ctx:        context.Background(),
+		mcpBroker:  &fakeMCPBroker{text: `{"valid":true,"errors":[],"warnings":["Template example data detected: Amazon US OLV, $589,075.45"]}`},
+		mcpCatalog: sendgridApprovalCatalog,
 	}
-	err := stager.prevalidateEmail(`{"to_email":"a@b.com","subject":"s","content":"<html><body>Amazon US OLV spent $589,075.45</body></html>"}`)
+	err := stager.prevalidateEmail("mcp_send_grid_send_email", `{"to_email":"a@b.com","subject":"s","content":"<html><body>Amazon US OLV spent $589,075.45</body></html>"}`)
 	if err != nil {
 		t.Fatalf("expected no blocking error for template example data (warning only), got: %v", err)
+	}
+}
+
+func TestResolveMCPToolUsesExactCatalogIdentity(t *testing.T) {
+	catalog := []mcp.ServerTool{
+		{ServerName: "mail", Tool: mcp.Tool{Name: "service_send_email"}},
+		{ServerName: "mail_service", Tool: mcp.Tool{Name: "send_email"}},
+	}
+	server, tool, err := resolveMCPTool(catalog, "mcp_mail_service_send_email")
+	if err != nil {
+		t.Fatalf("resolveMCPTool: %v", err)
+	}
+	if server != "mail_service" || tool != "send_email" {
+		t.Fatalf("resolved %q.%q, want longest matching server identity", server, tool)
+	}
+}
+
+type approvalEngine struct {
+	*fakeEngine
+	broker  agentcore.MCPBroker
+	catalog []mcp.ServerTool
+}
+
+func (e *approvalEngine) MCPBroker() agentcore.MCPBroker { return e.broker }
+func (e *approvalEngine) MCPCatalog() []mcp.ServerTool   { return e.catalog }
+
+func TestRunStagedToolUsesBrokerSeam(t *testing.T) {
+	broker := &fakeMCPBroker{text: "sent"}
+	s := &Server{agent: &approvalEngine{
+		fakeEngine: &fakeEngine{},
+		broker:     broker,
+		catalog:    sendgridApprovalCatalog,
+	}}
+	text, err := s.runStagedTool(context.Background(), &store.Approval{
+		ToolName: "mcp_send_grid_send_email",
+		ArgsJSON: `{"to":"test@example.com"}`,
+	})
+	if err != nil {
+		t.Fatalf("runStagedTool: %v", err)
+	}
+	if text != "sent" || broker.server != "send_grid" || broker.tool != "send_email" {
+		t.Fatalf("result/route = %q %q.%q, want sent send_grid.send_email", text, broker.server, broker.tool)
+	}
+}
+
+func TestRunStagedToolPropagatesMCPToolError(t *testing.T) {
+	s := &Server{agent: &approvalEngine{
+		fakeEngine: &fakeEngine{},
+		broker:     &fakeMCPBroker{text: "rejected", isError: true},
+		catalog:    sendgridApprovalCatalog,
+	}}
+	_, err := s.runStagedTool(context.Background(), &store.Approval{
+		ToolName: "mcp_send_grid_send_email",
+		ArgsJSON: `{}`,
+	})
+	if err == nil || !strings.Contains(err.Error(), "rejected") {
+		t.Fatalf("runStagedTool error = %v, want tool-level rejection", err)
 	}
 }
 

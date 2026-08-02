@@ -38,7 +38,7 @@ describe("FileUpload", () => {
   it("flags an oversized file as invalid (reusing validateFile)", async () => {
     const { container } = render(<Harness />);
     const input = container.querySelector('input[type="file"]') as HTMLInputElement;
-    fireEvent.change(input, { target: { files: [makeFile("huge.bin", 300 * 1024 * 1024)] } });
+    fireEvent.change(input, { target: { files: [makeFile("huge.bin", 2 * 1024 * 1024 * 1024)] } });
     await waitFor(() => {
       expect(screen.getByText(/File size exceeds maximum allowed size/)).toBeInTheDocument();
     });

@@ -75,6 +75,46 @@ func TestDiscoverFallbackWellKnown(t *testing.T) {
 	}
 }
 
+// Google's Workspace MCP servers (e.g. gmailmcp.googleapis.com/mcp/v1) serve
+// their PRM ONLY at RFC 9728 §3.1's path-aware well-known location, return 200
+// (not 401) to unauthenticated probes, and 404 the origin-root form. Discovery
+// must find the path-inserted document.
+func TestDiscoverFallbackPathAwareWellKnown(t *testing.T) {
+	mux := http.NewServeMux()
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	base := srv.URL
+
+	mux.HandleFunc("/mcp/v1", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK) // stateless 200, no WWW-Authenticate hint
+	})
+	mux.HandleFunc("/.well-known/oauth-protected-resource/mcp/v1", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(ProtectedResourceMetadata{
+			Resource:             base + "/mcp/v1",
+			AuthorizationServers: []string{base},
+		})
+	})
+	mux.HandleFunc("/.well-known/oauth-protected-resource", func(w http.ResponseWriter, _ *http.Request) {
+		http.NotFound(w, nil)
+	})
+	mux.HandleFunc("/.well-known/oauth-authorization-server", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(AuthServerMetadata{
+			Issuer:                        base,
+			AuthorizationEndpoint:         base + "/authorize",
+			TokenEndpoint:                 base + "/token",
+			CodeChallengeMethodsSupported: []string{"S256"},
+		})
+	})
+
+	d, err := Discover(context.Background(), srv.Client(), srv.URL+"/mcp/v1")
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if d.Resource != srv.URL+"/mcp/v1" {
+		t.Errorf("resource = %q, want %q", d.Resource, srv.URL+"/mcp/v1")
+	}
+}
+
 func TestDiscoverIgnoresCrossOriginPRMResource(t *testing.T) {
 	// A PRM that names a resource on a DIFFERENT origin must NOT rebind the
 	// stored identity — Discover keeps the requested server URL (RFC 9728 §3.3).

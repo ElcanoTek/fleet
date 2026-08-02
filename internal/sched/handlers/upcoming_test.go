@@ -19,7 +19,7 @@ import (
 func TestProjectRuns_RecurringCapsAtFive(t *testing.T) {
 	now := time.Date(2026, 7, 1, 8, 0, 0, 0, time.UTC)
 	task := &models.Task{ID: uuid.New(), Name: "hourly", Prompt: "p", Recurrence: "0 * * * *"}
-	runs := projectRuns(task, now)
+	runs := projectRuns(task, now, time.Time{})
 	if len(runs) != upcomingPerTaskMax {
 		t.Fatalf("expected %d occurrences, got %d", upcomingPerTaskMax, len(runs))
 	}
@@ -40,7 +40,7 @@ func TestProjectRuns_RecurringHonorsTimezone(t *testing.T) {
 	now := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
 	// 09:00 daily in New York → not 09:00 UTC.
 	task := &models.Task{ID: uuid.New(), Recurrence: "0 9 * * *", Timezone: "America/New_York"}
-	runs := projectRuns(task, now)
+	runs := projectRuns(task, now, time.Time{})
 	if len(runs) == 0 {
 		t.Fatal("expected occurrences")
 	}
@@ -56,7 +56,7 @@ func TestProjectRuns_OneShotFutureAndPast(t *testing.T) {
 	future := now.Add(2 * time.Hour)
 	past := now.Add(-2 * time.Hour)
 
-	fut := projectRuns(&models.Task{ID: uuid.New(), ScheduledFor: &future}, now)
+	fut := projectRuns(&models.Task{ID: uuid.New(), ScheduledFor: &future}, now, time.Time{})
 	if len(fut) != 1 || fut[0].Recurring {
 		t.Fatalf("expected 1 non-recurring future run, got %+v", fut)
 	}
@@ -64,14 +64,14 @@ func TestProjectRuns_OneShotFutureAndPast(t *testing.T) {
 		t.Fatalf("expected next_run=%v, got %v", future, fut[0].NextRun)
 	}
 
-	if pastRuns := projectRuns(&models.Task{ID: uuid.New(), ScheduledFor: &past}, now); len(pastRuns) != 0 {
+	if pastRuns := projectRuns(&models.Task{ID: uuid.New(), ScheduledFor: &past}, now, time.Time{}); len(pastRuns) != 0 {
 		t.Fatalf("expected past one-shot to project no runs, got %d", len(pastRuns))
 	}
 }
 
 func TestProjectRuns_InvalidCronYieldsNothing(t *testing.T) {
 	now := time.Date(2026, 7, 1, 8, 0, 0, 0, time.UTC)
-	if runs := projectRuns(&models.Task{ID: uuid.New(), Recurrence: "not a cron"}, now); len(runs) != 0 {
+	if runs := projectRuns(&models.Task{ID: uuid.New(), Recurrence: "not a cron"}, now, time.Time{}); len(runs) != 0 {
 		t.Fatalf("expected 0 runs for an invalid cron, got %d", len(runs))
 	}
 }
@@ -132,5 +132,47 @@ func TestGetUpcomingRuns_HandlerReturnsSortedFeed(t *testing.T) {
 		if resp.Upcoming[i].NextRun.Before(resp.Upcoming[i-1].NextRun) {
 			t.Fatalf("runs not sorted ascending at %d", i)
 		}
+	}
+}
+
+func TestProjectRuns_HorizonProjectsWholeWindow(t *testing.T) {
+	now := time.Date(2026, 7, 1, 8, 0, 0, 0, time.UTC)
+	task := &models.Task{ID: uuid.New(), Recurrence: "0 * * * *"} // hourly
+	horizon := now.Add(24 * time.Hour)
+	runs := projectRuns(task, now, horizon)
+	if len(runs) != 24 {
+		t.Fatalf("expected 24 hourly occurrences inside the horizon, got %d", len(runs))
+	}
+	for _, r := range runs {
+		if r.NextRun.After(horizon) {
+			t.Fatalf("occurrence %v is past the horizon %v", r.NextRun, horizon)
+		}
+	}
+}
+
+func TestProjectRuns_HonorsRecurrenceUntil(t *testing.T) {
+	now := time.Date(2026, 7, 1, 8, 0, 0, 0, time.UTC)
+	until := now.Add(3*time.Hour + 30*time.Minute)
+	task := &models.Task{ID: uuid.New(), Recurrence: "0 * * * *", RecurrenceUntil: &until}
+	// Even with a week-long horizon, nothing past the task's own end date.
+	runs := projectRuns(task, now, now.Add(7*24*time.Hour))
+	if len(runs) != 3 {
+		t.Fatalf("expected 3 occurrences up to recurrence_until, got %d", len(runs))
+	}
+	// Count-based mode honors it too.
+	if legacy := projectRuns(task, now, time.Time{}); len(legacy) != 3 {
+		t.Fatalf("expected 3 occurrences in count mode, got %d", len(legacy))
+	}
+}
+
+func TestProjectRuns_HonorsRecurrenceRemaining(t *testing.T) {
+	now := time.Date(2026, 7, 1, 8, 0, 0, 0, time.UTC)
+	remaining := 2
+	task := &models.Task{ID: uuid.New(), Recurrence: "0 * * * *", RecurrenceRemaining: &remaining}
+	if runs := projectRuns(task, now, now.Add(7*24*time.Hour)); len(runs) != 2 {
+		t.Fatalf("expected the 2-run budget to cap the horizon projection, got %d", len(runs))
+	}
+	if runs := projectRuns(task, now, time.Time{}); len(runs) != 2 {
+		t.Fatalf("expected the 2-run budget to cap the count projection, got %d", len(runs))
 	}
 }

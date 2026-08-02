@@ -49,6 +49,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
@@ -87,9 +88,32 @@ type Bundle struct {
 	// Dir is the absolute path to the bundle root.
 	Dir string
 
+	// connectorEnvVarNames and connectorAccountVarNames are captured from the
+	// raw manifest before interpolation. Keeping the source names is required by
+	// the out-of-process MCP broker: an already-exported secret is substituted
+	// out of the parsed manifest, but the parent still needs its NAME so it can
+	// remove that key after the broker child inherits the startup environment.
+	connectorEnvVarNames     []string
+	connectorAccountVarNames []string
+	// scrubbedAlwaysOnServers preserves only the public availability rows after
+	// ScrubConnectorRuntimeDefinitions removes the credential-bearing catalog.
+	scrubbedAlwaysOnServers []AlwaysOnServer
+
 	Branding   Branding
 	Models     Models
 	EmptyState EmptyState
+
+	// BrandLogoPath is the absolute, symlink-resolved file backing
+	// Branding.Logo, or "" when the bundle declares none. Set at load by
+	// resolveBrandLogo so the HTTP layer serves a path it never has to
+	// re-validate per request.
+	BrandLogoPath string
+
+	// BrandShareImagePath is the absolute, symlink-resolved file backing
+	// branding.share_image, or "" when the bundle declares none. Set by
+	// resolveBrandShareImage so the HTTP layer serves a path it never has to
+	// re-validate per request.
+	BrandShareImagePath string
 
 	// TaskTemplates is the bundle's catalog of pre-filled scheduled-task
 	// configurations (manifest task_templates block), in manifest order. Empty
@@ -385,6 +409,39 @@ type Branding struct {
 	// login page — paints in the client's palette with no flash. An absent block
 	// emits nothing and the built-in defaults stand. See BrandColors.
 	Colors BrandColors `yaml:"colors"`
+	// Logo is a bundle-relative path to the mark the web shell renders in the
+	// navigation rail (e.g. "assets/acme-mark.svg"). Colors alone cannot
+	// white-label a deployment: the rail shows a logo on every page, so without
+	// this a themed deployment wore fleet's mark next to its own app_name.
+	//
+	// The file is served by httpapi's /brand/logo, which resolves it against
+	// Bundle.Dir at request time — fleet copies nothing into web/public, so a
+	// bundle re-theme needs no web rebuild. Empty means the web falls back to
+	// fleet's own mark.
+	//
+	// Validated at bundle load (see validateBrandLogo): the path must be
+	// lexically local (no absolute path, no ".." escape), must resolve inside
+	// the bundle after symlink resolution, must exist as a regular file, and
+	// must carry an extension the HTTP layer knows a content type for. A bundle
+	// naming a missing or unservable logo fails loudly at startup rather than
+	// serving a broken image on every page.
+	Logo string `yaml:"logo"`
+	// ShareImage is a bundle-relative path to the image link-unfurl scrapers
+	// show for this deployment (og:image / twitter:image), e.g.
+	// "assets/acme-share.png". 1280x640 is the conventional size.
+	//
+	// It exists because the OG image was the last un-themable brand surface: a
+	// checked-in web/public/share.png was the og:image for EVERY deployment, so
+	// a link to a white-labeled instance unfurled in Slack, iMessage, Discord or
+	// Teams wearing fleet's own marketing card — served from the client's own
+	// domain, so nothing looked amiss to the unfurler. Omit the field and
+	// fleet's neutral generic card stands.
+	//
+	// Validated at bundle load exactly like Logo (see resolveBrandImage): the
+	// path must be lexically local, must resolve inside the bundle after symlink
+	// resolution, must be a regular file, and must carry an extension the HTTP
+	// layer knows a content type for.
+	ShareImage string `yaml:"share_image"`
 }
 
 // BrandColors holds per-mode palette overrides. Light and Dark are keyed by a
@@ -790,6 +847,11 @@ type RemoteMCPCatalogEntry struct {
 	// expects the key under, e.g. "X-API-Key". Empty means the default shape:
 	// "Authorization: Bearer <key>".
 	APIKeyHeader string `yaml:"api_key_header"`
+	// APIKeyQuery (auth "api_key" only) is the URL query-parameter NAME the
+	// vendor expects the key under, e.g. "browserbaseApiKey" — for hosted
+	// servers that authenticate in the URL rather than a header. The runtime
+	// attaches the sealed key per-request; it is never persisted in a URL.
+	APIKeyQuery string `yaml:"api_key_query"`
 	// ClientRegistration is "manual" when the vendor's authorization server
 	// does not support RFC 7591 dynamic client registration — the user must
 	// bring their own OAuth client (a GCP OAuth client, an Entra app
@@ -883,6 +945,18 @@ func Load(dir string) (*Bundle, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read manifest %s: %w", manifestPath, err)
 	}
+	// Parse only the connector-bearing sections before interpolation. This
+	// source snapshot preserves env-var names even when their values are already
+	// exported and the normal interpolation pass below substitutes the tokens
+	// out of the runtime manifest.
+	var rawConnectors struct {
+		MCPServers []ServerDef   `yaml:"mcp_servers"`
+		HTTPTools  []HTTPToolDef `yaml:"http_tools"`
+	}
+	if err := yaml.Unmarshal(raw, &rawConnectors); err != nil {
+		return nil, fmt.Errorf("parse connector env inventory %s: %w", manifestPath, err)
+	}
+	connectorEnvVars, connectorAccountVars := connectorEnvInventory(rawConnectors.MCPServers, rawConnectors.HTTPTools)
 	// Interpolate env references over the RAW bytes before YAML unmarshal so that
 	// "env-or-default" config semantics — ${VAR:-default} / ${VAR:?message} —
 	// resolve at load time. This restores the getEnvOrDefault("VAR","literal")
@@ -903,32 +977,40 @@ func Load(dir string) (*Bundle, error) {
 	}
 
 	b := &Bundle{
-		Dir:               abs,
-		Branding:          m.Branding,
-		Models:            m.Models,
-		EmptyState:        m.EmptyState,
-		TaskTemplates:     m.TaskTemplates,
-		MCPCatalog:        m.MCPServers,
-		HTTPTools:         m.HTTPTools,
-		WebhookTriggers:   m.WebhookTriggers,
-		RemoteMCPCatalog:  m.RemoteMCPs,
-		Providers:         m.Providers,
-		FallbackProviders: m.FallbackProviders,
-		AgentPolicyConfig: m.AgentPolicy,
-		HooksConfig:       m.Hooks,
-		Personas:          m.Personas,
-		PricingConfig:     m.Pricing,
-		SandboxConfig:     resolveSandbox(m.Sandbox, abs),
-		sandboxDeclared:   m.Sandbox != nil,
-		SystemPromptsDir:  filepath.Join(abs, "system_prompts"),
-		PersonasDir:       filepath.Join(abs, "personas"),
-		ProtocolsDir:      filepath.Join(abs, "protocols"),
-		PromptsDir:        filepath.Join(abs, "prompts"),
-		SkillsDir:         filepath.Join(abs, "skills"),
-		MCPDir:            filepath.Join(abs, "mcp"),
-		EvalsDir:          filepath.Join(abs, "evals"),
+		Dir:                      abs,
+		connectorEnvVarNames:     connectorEnvVars,
+		connectorAccountVarNames: connectorAccountVars,
+		Branding:                 m.Branding,
+		Models:                   m.Models,
+		EmptyState:               m.EmptyState,
+		TaskTemplates:            m.TaskTemplates,
+		MCPCatalog:               m.MCPServers,
+		HTTPTools:                m.HTTPTools,
+		WebhookTriggers:          m.WebhookTriggers,
+		RemoteMCPCatalog:         m.RemoteMCPs,
+		Providers:                m.Providers,
+		FallbackProviders:        m.FallbackProviders,
+		AgentPolicyConfig:        m.AgentPolicy,
+		HooksConfig:              m.Hooks,
+		Personas:                 m.Personas,
+		PricingConfig:            m.Pricing,
+		SandboxConfig:            resolveSandbox(m.Sandbox, abs),
+		sandboxDeclared:          m.Sandbox != nil,
+		SystemPromptsDir:         filepath.Join(abs, "system_prompts"),
+		PersonasDir:              filepath.Join(abs, "personas"),
+		ProtocolsDir:             filepath.Join(abs, "protocols"),
+		PromptsDir:               filepath.Join(abs, "prompts"),
+		SkillsDir:                filepath.Join(abs, "skills"),
+		MCPDir:                   filepath.Join(abs, "mcp"),
+		EvalsDir:                 filepath.Join(abs, "evals"),
 	}
 	applyBrandingDefaults(&b.Branding)
+	if err := b.resolveBrandLogo(); err != nil {
+		return nil, err
+	}
+	if err := b.resolveBrandShareImage(); err != nil {
+		return nil, err
+	}
 	if err := b.validate(); err != nil {
 		return nil, err
 	}
@@ -986,6 +1068,144 @@ func applyBrandingDefaults(br *Branding) {
 	if br.ShareDescription == "" {
 		br.ShareDescription = "An AI workspace with real tool use."
 	}
+}
+
+// brandLogoContentTypes maps the image extensions a bundle logo may use to the
+// content type /brand/logo serves it as. An allowlist rather than
+// mime.TypeByExtension: the response type is what makes the browser render the
+// bytes, so the set stays deliberately small and image-only — a bundle cannot
+// turn the logo route into a general file server for HTML or scripts by naming
+// a different extension.
+var brandLogoContentTypes = map[string]string{
+	".svg":  "image/svg+xml",
+	".png":  "image/png",
+	".webp": "image/webp",
+	".jpg":  "image/jpeg",
+	".jpeg": "image/jpeg",
+	".ico":  "image/x-icon",
+}
+
+// BrandLogoContentType returns the content type fleet serves a bundle logo
+// under, or "" when the extension is not one it knows. The HTTP layer and the
+// load-time validator share this one map so a bundle can never pass validation
+// with a path the route would then refuse to serve.
+func BrandLogoContentType(p string) string {
+	return brandLogoContentTypes[strings.ToLower(filepath.Ext(p))]
+}
+
+// BrandLogoExtensions returns the supported logo extensions, sorted, for error
+// messages and docs.
+func BrandLogoExtensions() []string {
+	out := make([]string, 0, len(brandLogoContentTypes))
+	for ext := range brandLogoContentTypes {
+		out = append(out, ext)
+	}
+	slices.Sort(out)
+	return out
+}
+
+// resolveBrandLogo validates branding.logo and records the absolute file the
+// HTTP layer serves. Empty is the norm (fleet's own mark stands) and is not an
+// error.
+//
+// The path arrives from a manifest, so it is operator-authored rather than user
+// input — but it is still resolved defensively, because the failure modes are
+// silent and permanent: a "../../etc/passwd" would otherwise be served under an
+// image content type on every page load, and a path that merely doesn't exist
+// would render a broken mark on every page of a deployment that believes it is
+// branded. Both fail at startup instead.
+//
+// filepath.IsLocal rejects an absolute path and any ".." escape lexically;
+// EvalSymlinks then re-checks containment, so a symlink inside the bundle
+// pointing outward cannot widen the reach either.
+func (b *Bundle) resolveBrandLogo() error {
+	rel := strings.TrimSpace(b.Branding.Logo)
+	b.Branding.Logo = rel
+	resolved, err := b.resolveBrandImage("branding.logo", rel)
+	if err != nil {
+		return err
+	}
+	b.BrandLogoPath = resolved
+	return nil
+}
+
+// resolveBrandShareImage validates branding.share_image the same way, and
+// records the absolute file /brand/share-image serves. Empty is the norm
+// (fleet's own generic share card stands) and is not an error.
+//
+// This field exists because the OG image was the last un-themable brand surface:
+// a checked-in web/public/share.png was the og:image for EVERY deployment, so
+// pasting a link to a white-labeled instance into Slack, iMessage, Discord or
+// Teams unfurled with another company's logo — served from the client's own
+// domain, so nothing looked amiss to the unfurler.
+func (b *Bundle) resolveBrandShareImage() error {
+	rel := strings.TrimSpace(b.Branding.ShareImage)
+	b.Branding.ShareImage = rel
+	resolved, err := b.resolveBrandImage("branding.share_image", rel)
+	if err != nil {
+		return err
+	}
+	// Unlike the logo, the share image is only ever consumed by link-unfurl
+	// scrapers, and none of them render SVG (or ICO) unfurls — the web proxy
+	// passes through PNG/WebP/JPEG only and redirects anything else to fleet's
+	// generic card. Rejecting the logo-only extensions HERE (after the shared
+	// path/containment checks, so their errors keep precedence) keeps the
+	// branding contract's promise that a bad value fails at startup instead of
+	// every unfurl silently showing the wrong brand.
+	if rel != "" {
+		switch strings.ToLower(filepath.Ext(rel)) {
+		case ".png", ".webp", ".jpg", ".jpeg":
+		default:
+			return fmt.Errorf("branding.share_image %q: unsupported extension (unfurl scrapers only render .png, .webp, .jpg, .jpeg)", rel)
+		}
+	}
+	b.BrandShareImagePath = resolved
+	return nil
+}
+
+// resolveBrandImage is the shared validator for every bundle-relative image path
+// in branding:. field names it for error messages ("branding.logo"). An empty
+// rel returns ("", nil) — declaring no image is the norm, not an error.
+//
+// The path arrives from a manifest, so it is operator-authored rather than user
+// input — but it is still resolved defensively, because the failure modes are
+// silent and permanent: a "../../etc/passwd" would otherwise be served under an
+// image content type on every page load, and a path that merely doesn't exist
+// would render a broken image on every page of a deployment that believes it is
+// branded. Both fail at startup instead.
+//
+// filepath.IsLocal rejects an absolute path and any ".." escape lexically;
+// EvalSymlinks then re-checks containment, so a symlink inside the bundle
+// pointing outward cannot widen the reach either.
+func (b *Bundle) resolveBrandImage(field, rel string) (string, error) {
+	if rel == "" {
+		return "", nil
+	}
+	if !filepath.IsLocal(rel) {
+		return "", fmt.Errorf("%s %q: must be a bundle-relative path (no absolute path, no \"..\")", field, rel)
+	}
+	if BrandLogoContentType(rel) == "" {
+		return "", fmt.Errorf("%s %q: unsupported extension (want one of %s)", field, rel, strings.Join(BrandLogoExtensions(), ", "))
+	}
+	root, err := filepath.EvalSymlinks(b.Dir)
+	if err != nil {
+		return "", fmt.Errorf("%s %q: resolve bundle dir: %w", field, rel, err)
+	}
+	resolved, err := filepath.EvalSymlinks(filepath.Join(b.Dir, rel))
+	if err != nil {
+		return "", fmt.Errorf("%s %q: %w", field, rel, err)
+	}
+	if resolved != root && !strings.HasPrefix(resolved, root+string(os.PathSeparator)) {
+		return "", fmt.Errorf("%s %q: resolves outside the bundle (%s)", field, rel, resolved)
+	}
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return "", fmt.Errorf("%s %q: %w", field, rel, err)
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("%s %q: not a regular file", field, rel)
+	}
+	return resolved, nil
 }
 
 // DefaultBranding returns the neutral generic branding strings fleet renders
@@ -1287,6 +1507,17 @@ func validateRemoteMCPEntryMeta(e *RemoteMCPCatalogEntry) error {
 			return fmt.Errorf("remote_mcp_catalog[%q]: api_key_header %q is not a valid header name", name, e.APIKeyHeader)
 		}
 	}
+	if q := strings.TrimSpace(e.APIKeyQuery); q != "" {
+		if e.Auth != "api_key" {
+			return fmt.Errorf("remote_mcp_catalog[%q]: api_key_query is only meaningful with auth: api_key", name)
+		}
+		if strings.TrimSpace(e.APIKeyHeader) != "" {
+			return fmt.Errorf("remote_mcp_catalog[%q]: api_key_header and api_key_query are mutually exclusive", name)
+		}
+		if !remoteMCPHeaderShape.MatchString(q) {
+			return fmt.Errorf("remote_mcp_catalog[%q]: api_key_query %q is not a valid query-parameter name", name, e.APIKeyQuery)
+		}
+	}
 	if e.ClientRegistration != "" && e.ClientRegistration != "manual" {
 		return fmt.Errorf("remote_mcp_catalog[%q]: unknown client_registration %q (want manual or empty)", name, e.ClientRegistration)
 	}
@@ -1314,6 +1545,12 @@ type AlwaysOnServer struct {
 
 // AlwaysOnServers returns the bundle's enabled, non-Optional connectors.
 func (b *Bundle) AlwaysOnServers() []AlwaysOnServer {
+	if b == nil {
+		return nil
+	}
+	if b.MCPCatalog == nil && b.scrubbedAlwaysOnServers != nil {
+		return append([]AlwaysOnServer(nil), b.scrubbedAlwaysOnServers...)
+	}
 	var out []AlwaysOnServer
 	for i := range b.MCPCatalog {
 		sd := &b.MCPCatalog[i]
@@ -1825,6 +2062,208 @@ func (b *Bundle) EnvVarNames() []string {
 	// .env-file allowlist exactly like an MCP connector credential.
 	for i := range b.Providers {
 		add(b.Providers[i].APIKeyEnv)
+	}
+	return out
+}
+
+// ConnectorEnvVarNames returns the base process-env names referenced by bundle
+// MCP servers and inline HTTP tools. The inventory is captured from the raw
+// manifest, before interpolation can replace an already-exported ${VAR} token
+// with its value. Values are never retained here.
+//
+// This is narrower than EnvVarNames: provider keys and webhook signing secrets
+// remain parent-owned and are deliberately excluded. Account-suffixed variants
+// are represented by every stdio env key that ApplyClientSuffix may probe; use
+// ConnectorEnvironmentKeys to expand those bases against a process environment.
+func (b *Bundle) ConnectorEnvVarNames() []string {
+	return append([]string(nil), b.connectorEnvVarNames...)
+}
+
+// ConnectorAccountEnvVarNames returns the stdio env keys whose
+// <KEY>_<ACCOUNT> process-env variants may be consumed by account binding.
+// These names are public identifiers only; values are never retained here.
+func (b *Bundle) ConnectorAccountEnvVarNames() []string {
+	return append([]string(nil), b.connectorAccountVarNames...)
+}
+
+// ConnectorEnvironmentKeys returns the exact keys in environ that belong to
+// bundle connectors: every declared base name plus every <stdio-env-key>_<seat>
+// variant recognized by the account suffix convention. Entries and returned
+// values contain names only, never secret values. Matching account variants is
+// case-insensitive, mirroring creds.AccountsFor.
+func (b *Bundle) ConnectorEnvironmentKeys(environ []string) []string {
+	bases := make(map[string]bool, len(b.connectorEnvVarNames))
+	for _, name := range b.connectorEnvVarNames {
+		bases[strings.ToUpper(name)] = true
+	}
+	accountBases := make([]string, 0, len(b.connectorAccountVarNames))
+	for _, name := range b.connectorAccountVarNames {
+		accountBases = append(accountBases, strings.ToUpper(name)+"_")
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, entry := range environ {
+		key, _, ok := strings.Cut(entry, "=")
+		if !ok || key == "" {
+			continue
+		}
+		upper := strings.ToUpper(key)
+		matched := bases[upper]
+		if !matched {
+			for _, prefix := range accountBases {
+				if strings.HasPrefix(upper, prefix) && len(upper) > len(prefix) {
+					matched = true
+					break
+				}
+			}
+		}
+		if matched && !seen[key] {
+			seen[key] = true
+			out = append(out, key)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+// ScrubConnectorRuntimeDefinitions removes the interpolated connector sections
+// from an already loaded bundle. Call only after all public metadata has been
+// extracted and the credential-owning child has inherited the environment.
+// Branding, providers, webhook triggers, remote directory entries, policies,
+// templates, and content paths remain intact for parent-side consumers.
+func (b *Bundle) ScrubConnectorRuntimeDefinitions() {
+	if b == nil {
+		return
+	}
+	b.scrubbedAlwaysOnServers = append([]AlwaysOnServer{}, b.AlwaysOnServers()...)
+	for i := range b.MCPCatalog {
+		b.MCPCatalog[i] = ServerDef{}
+	}
+	for i := range b.HTTPTools {
+		b.HTTPTools[i] = HTTPToolDef{}
+	}
+	b.MCPCatalog = nil
+	b.HTTPTools = nil
+}
+
+func connectorEnvInventory(servers []ServerDef, httpTools []HTTPToolDef) ([]string, []string) {
+	seen := map[string]bool{}
+	accountSeen := map[string]bool{}
+	var names, accountNames []string
+	add := func(dst *[]string, index map[string]bool, name string) {
+		name = strings.TrimSpace(name)
+		if name == "" || reservedRuntimeVar(name) || index[name] {
+			return
+		}
+		index[name] = true
+		*dst = append(*dst, name)
+	}
+	addRef := func(value string) {
+		for _, name := range sourceEnvRefs(value) {
+			add(&names, seen, name)
+		}
+	}
+	for i := range servers {
+		s := &servers[i]
+		for _, name := range s.EnabledEnv {
+			add(&names, seen, name)
+		}
+		for _, group := range s.EnabledGroups {
+			for _, name := range group {
+				add(&names, seen, name)
+			}
+		}
+		for _, name := range s.AccountVars {
+			add(&names, seen, name)
+			add(&accountNames, accountSeen, name)
+		}
+		for _, name := range s.IdentityEnv {
+			add(&names, seen, name)
+		}
+		// ApplyClientSuffix probes <ENV_KEY>_<ACCOUNT> for every stdio env key,
+		// not only the smaller account_vars discovery list. Retain those keys as
+		// account bases so the parent can scrub identity/config overrides too.
+		for name := range s.Env {
+			add(&names, seen, name)
+			add(&accountNames, accountSeen, name)
+		}
+		walkSourceStrings(reflect.ValueOf(*s), addRef)
+	}
+	for i := range httpTools {
+		walkSourceStrings(reflect.ValueOf(httpTools[i]), addRef)
+	}
+	slices.Sort(names)
+	slices.Sort(accountNames)
+	return names, accountNames
+}
+
+// walkSourceStrings visits every string in the raw connector definitions,
+// including nested probe args/input schemas and map keys. The manifest
+// interpolator operates over the entire YAML section, so an inventory limited
+// to today's documented header/env fields could silently miss a future
+// interpolated connector field.
+func walkSourceStrings(value reflect.Value, visit func(string)) {
+	if !value.IsValid() {
+		return
+	}
+	switch value.Kind() {
+	case reflect.Interface, reflect.Pointer:
+		if !value.IsNil() {
+			walkSourceStrings(value.Elem(), visit)
+		}
+	case reflect.String:
+		visit(value.String())
+	case reflect.Struct:
+		for i := 0; i < value.NumField(); i++ {
+			walkSourceStrings(value.Field(i), visit)
+		}
+	case reflect.Slice, reflect.Array:
+		for i := 0; i < value.Len(); i++ {
+			walkSourceStrings(value.Index(i), visit)
+		}
+	case reflect.Map:
+		iter := value.MapRange()
+		for iter.Next() {
+			walkSourceStrings(iter.Key(), visit)
+			walkSourceStrings(iter.Value(), visit)
+		}
+	default:
+		// Scalar non-strings and executable/channel/unsafe kinds carry no
+		// manifest text and therefore cannot contain an env reference.
+	}
+}
+
+// sourceEnvRefs extracts source variable names from ${VAR}, ${VAR:-default},
+// and ${VAR:?message} without consulting the environment. It mirrors the
+// manifest interpolator's brace and escape rules closely enough to inventory
+// exactly the variables interpolation may read.
+func sourceEnvRefs(value string) []string {
+	var out []string
+	for i := 0; i < len(value); {
+		if strings.HasPrefix(value[i:], "$${") {
+			i += 3
+			continue
+		}
+		if !strings.HasPrefix(value[i:], "${") {
+			i++
+			continue
+		}
+		end, ok := matchBrace(value, i+1)
+		if !ok {
+			return out
+		}
+		expr := value[i+2 : end]
+		name := expr
+		if split := strings.Index(expr, ":-"); split >= 0 {
+			name = expr[:split]
+		} else if split := strings.Index(expr, ":?"); split >= 0 {
+			name = expr[:split]
+		}
+		name = strings.TrimSpace(name)
+		if name != "" {
+			out = append(out, name)
+		}
+		i = end + 1
 	}
 	return out
 }

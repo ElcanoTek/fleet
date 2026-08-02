@@ -22,6 +22,10 @@ else `.env.local`, else `/etc/fleet/fleet.env`), so an operator who can read tha
 0600 file logs in without copying the token anywhere. The token is still never
 accepted on argv — override discovery with `$FLEET_SERVER_TOKEN`, `--token-file`,
 or `--env-file <path>` when the file lives elsewhere.
+Both interactive and one-shot modes require a terminal SSE lifecycle event:
+server-reported turn/model errors and an interrupted stream are failures, and
+one-shot mode exits nonzero so automation cannot mistake a partial answer for
+success.
 
 ```
 fleet bootstrap   →   fleet update   →   fleet status / fleet doctor

@@ -1,14 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { NextRequest } from "next/server";
 
 // Logout clears BOTH session cookies (elcano_session + the shared elcano_auth)
-// and returns the user to chat's own /login — not the auth service. We mock
-// next/headers' cookies() to capture what gets set.
-
-const cookieSet = vi.fn();
-vi.mock("next/headers", () => ({
-  cookies: async () => ({ set: cookieSet }),
-}));
+// and returns the user to chat's own /login — not the auth service. Deletions
+// are RAW appended Set-Cookie headers (a name-keyed cookie store would
+// collapse the two elcano_auth variants into one), so the tests read
+// getSetCookie() rather than mocking next/headers.
 
 import { POST } from "./route";
 
@@ -18,8 +15,10 @@ function postReq(origin: string | null) {
   return new NextRequest("https://chat.elcanotek.com/api/auth/logout", { method: "POST", headers });
 }
 
-function clearedCookie(name: string) {
-  return cookieSet.mock.calls.map((c) => c[0]).find((c) => c.name === name);
+function cleared(res: Response, name: string): string[] {
+  return res.headers
+    .getSetCookie()
+    .filter((c) => c.startsWith(`${name}=;`) && /Max-Age=0/i.test(c));
 }
 
 describe("POST /api/auth/logout", () => {
@@ -27,7 +26,6 @@ describe("POST /api/auth/logout", () => {
 
   beforeEach(() => {
     process.env = { ...originalEnv };
-    cookieSet.mockReset();
   });
 
   afterEach(() => {
@@ -42,33 +40,47 @@ describe("POST /api/auth/logout", () => {
     expect(res.headers.get("location")).toBe("https://chat.elcanotek.com/login");
 
     // chat's own HMAC cookie, host-only (no domain).
-    const session = clearedCookie("elcano_session");
-    expect(session).toMatchObject({ value: "", maxAge: 0, httpOnly: true });
-    expect(session.domain).toBeUndefined();
+    const session = cleared(res, "elcano_session");
+    expect(session).toHaveLength(1);
+    expect(session[0]).toMatch(/HttpOnly/i);
+    expect(session[0]).not.toMatch(/Domain=/i);
 
-    // The shared cookie, deleted on the parent domain so it actually matches.
-    const elcano = clearedCookie("elcano_auth");
-    expect(elcano).toMatchObject({ value: "", maxAge: 0, domain: "elcanotek.com" });
+    // The shared cookie is deleted in BOTH shapes: the configured parent
+    // domain AND host-only. AUTH_COOKIE_DOMAIN can drift from how the auth
+    // service actually minted the cookie, and a deletion that misses the
+    // cookie's shape silently no-ops — the user lands on /login and the next
+    // load signs them straight back in.
+    const elcano = cleared(res, "elcano_auth");
+    expect(elcano).toHaveLength(2);
+    expect(elcano.filter((c) => /Domain=elcanotek\.com/i.test(c))).toHaveLength(1);
+    expect(elcano.filter((c) => !/Domain=/i.test(c))).toHaveLength(1);
   });
 
-  it("omits the domain on elcano_auth when AUTH_COOKIE_DOMAIN is unset (host-only / dev)", async () => {
+  it("sends only the host-only elcano_auth deletion when AUTH_COOKIE_DOMAIN is unset (dev)", async () => {
     delete process.env.AUTH_COOKIE_DOMAIN;
-    await POST(postReq("https://chat.elcanotek.com"));
+    const res = await POST(postReq("https://chat.elcanotek.com"));
 
-    const elcano = clearedCookie("elcano_auth");
-    expect(elcano).toMatchObject({ value: "", maxAge: 0 });
-    expect(elcano.domain).toBeUndefined();
+    const elcano = cleared(res, "elcano_auth");
+    expect(elcano).toHaveLength(1);
+    expect(elcano[0]).not.toMatch(/Domain=/i);
+  });
+
+  it("marks deletions Secure on https so they match Secure-minted cookies", async () => {
+    const res = await POST(postReq("https://chat.elcanotek.com"));
+    for (const c of res.headers.getSetCookie()) {
+      expect(c).toMatch(/Secure/i);
+    }
   });
 
   it("rejects a cross-origin POST (CSRF) without clearing anything", async () => {
     const res = await POST(postReq("https://evil.example.com"));
     expect(res.status).toBe(403);
-    expect(cookieSet).not.toHaveBeenCalled();
+    expect(res.headers.getSetCookie()).toHaveLength(0);
   });
 
   it("rejects a POST with no Origin header", async () => {
     const res = await POST(postReq(null));
     expect(res.status).toBe(403);
-    expect(cookieSet).not.toHaveBeenCalled();
+    expect(res.headers.getSetCookie()).toHaveLength(0);
   });
 });

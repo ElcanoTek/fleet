@@ -33,10 +33,12 @@ const nextConfig: NextConfig = {
   // streaming proxies like /api/attachments. With the default,
   // any upload >10 MB reaches chat-server with a chopped-off
   // multipart stream and `r.ParseMultipartForm` fails with
-  // "unexpected EOF". Match chat-server's 256 MiB per-file cap
-  // so the front- and back-end limits are aligned.
+  // "unexpected EOF". Match the server's whole-request cap
+  // (2× the 1 GiB per-file default; see FLEET_UPLOAD_MAX_BYTES)
+  // so the front- and back-end limits stay aligned. Raise both
+  // together if a deployment lifts the per-file limit.
   experimental: {
-    proxyClientMaxBodySize: "256mb",
+    proxyClientMaxBodySize: "2gb",
   },
 
   // Pin the Next.js build id so the hashed asset paths match the

@@ -88,6 +88,12 @@ import (
 // approval card's expectation that a stale request closes within a minute.
 const approvalExpirySweepInterval = 30 * time.Second
 
+// diskSweepInterval is how often the background disk sweep reclaims expired
+// chat attachment uploads and orchestrator temp_uploads files. Hourly is
+// plenty: the TTLs are measured in days, the sweep exists so an idle server
+// (no chat turns, which used to be the only trigger) still frees disk.
+const diskSweepInterval = time.Hour
+
 func main() {
 	// `fleet` is the ONE unified binary (#461). It dispatches three families:
 	//
@@ -247,9 +253,7 @@ func run() error {
 		Environment: cfg.Environment,
 		Redact:      agentcore.RedactSecrets,
 	})
-	if sentryActive {
-		defer observability.Flush(2 * time.Second)
-	}
+	defer flushObservability(sentryActive)
 	// safe owns recovery and remains SDK-independent; this structured hook is the
 	// single adapter into Sentry. It carries only opaque IDs and boundary names —
 	// never tool arguments/output, recovered values, stacks, or credentials.
@@ -333,6 +337,16 @@ func run() error {
 		CriticalToolSubstitutes: bundlePolicy.CriticalToolSubstitutes,
 		CriticalToolTimeouts:    bundlePolicy.CriticalToolTimeouts,
 	})
+
+	// Connector credentials cross exactly one process boundary at boot: the child
+	// inherits the current environment, proves liveness + public discovery, then
+	// the parent erases connector env keys and every resolved connector config
+	// copy. All subsequent interactive/scheduled MCP work uses broker scopes.
+	mcpRuntime, serverSpecs, err := startDefaultProductionMCPRuntime(bundle, cfg)
+	if err != nil {
+		return fmt.Errorf("start production MCP broker: %w", err)
+	}
+	defer func() { _ = mcpRuntime.Close() }()
 
 	// Governed lifecycle hooks (#788): translate the bundle's declared hooks into
 	// the agentcore form and install them process-wide. The generic bundle ships
@@ -421,7 +435,7 @@ func run() error {
 	// Stranded-turn recovery (#798): project any turn left 'running' by a crash
 	// into canonical history. Runs AFTER SetSearchEnabled (projection writes
 	// FTS rows) and BEFORE the HTTP server serves.
-	recoverStrandedTurns(chatStore)
+	recoverStrandedTurns(chatStore, cfg.InputQueueRetentionDays)
 	if cfg.SearchEnabled {
 		safe.Go("store.fts-backfill", func() {
 			bfCtx, bfCancel := context.WithTimeout(context.Background(), 30*time.Minute)
@@ -510,13 +524,14 @@ func run() error {
 	installStoreCipher(cfg, chatStore)
 
 	// ── per-user remote (hosted) MCP servers + OAuth (#443) ──
-	// remoteMCPSvc is the concrete service (for the HTTP endpoints); remoteMCPResolver
-	// is the same value as the agent-side interface (for the chat + scheduled overlay).
-	// Both nil when the feature is unconfigured, leaving every path unchanged.
-	remoteMCPSvc, remoteMCPResolver := setupRemoteMCP(cfg, chatStore)
+	// The concrete service remains parent-side for explicit OAuth/connectors HTTP
+	// control-plane operations. Run-time token acquisition and remote MCP clients
+	// live in the credential-owning child and are reached only through this public
+	// scope opener. Both are nil when the feature is unconfigured.
+	remoteMCPSvc := setupRemoteMCP(cfg, chatStore)
+	openRemoteMCPOverlay := productionRemoteMCPOverlayOpener(remoteMCPSvc, mcpRuntime)
 
 	// ── interactive engine (the concrete turnEngine) ──
-	serverSpecs := scheduledrun.BuildMCPSpecs(cfg)
 	bundleProviders := toAgentcoreProviders(bundle)
 	mgr, err := buildInteractiveEngine(agent.ManagerOptions{
 		Config:               cfg,
@@ -530,7 +545,12 @@ func run() error {
 		NotesProvider:        notesProvider,
 		NoteProposer:         notesProvider, // same adapter; wires propose_note for every interactive turn
 		PersonaPolicies:      personaPolicies,
-		RemoteMCP:            remoteMCPResolver,
+		OpenRemoteMCPOverlay: openRemoteMCPOverlay,
+		MCPBroker:            mcpRuntime.client,
+		MCPCatalog:           mcpRuntime.catalog,
+		MCPAccounts:          mcpRuntime.accounts,
+		OpenMCPScope:         mcpRuntime.openInteractiveScope,
+		ReloadMCP:            mcpRuntime.reload,
 	}, bundleProviders, chatStore, cfg.OpenRouterAPIKey)
 	if err != nil {
 		return fmt.Errorf("build interactive engine: %w", err)
@@ -634,6 +654,7 @@ func run() error {
 		DataDir:             cfg.DataDir,
 		Timezone:            timezone(),
 		DefaultTaskTimezone: defaultTaskTimezone(),
+		UploadMaxBytes:      cfg.UploadMaxBytes,
 		// Sliding-window rate limits for POST /tasks + /upload (0 disables a window).
 		SchedRateLimitPerMinute:       envIntDefault("FLEET_SCHED_RATE_LIMIT_PER_MINUTE", 60),
 		SchedRateLimitPerDay:          envIntDefault("FLEET_SCHED_RATE_LIMIT_PER_DAY", 500),
@@ -761,18 +782,19 @@ func run() error {
 		// in (allow_task_creation) can enqueue follow-up tasks through the shared
 		// sched storage. Tasks without the flag never see the tool.
 		TaskEnqueuer: schedStorage,
-		// Per-user remote (hosted) MCP + OAuth (#443): the same service the chat
-		// path uses, plus a creator-UUID → email resolver (the sched username IS
-		// the chat email for the elcano-auth tier). Both nil when the feature is
-		// off, leaving scheduled runs unchanged.
-		RemoteMCP:  remoteMCPResolver,
-		OwnerEmail: ownerEmailResolver(schedStorage),
+		// Per-user remote (hosted) MCP + OAuth (#443): the child-owned scope
+		// opener plus a creator-UUID → email resolver (the sched username IS the
+		// chat email for the elcano-auth tier). A nil opener leaves the feature off.
+		OpenRemoteMCPOverlay: openRemoteMCPOverlay,
+		OwnerEmail:           ownerEmailResolver(schedStorage),
 		// The owner's builder skills + propose_skill staging (docs/SKILLS.md):
 		// scheduled runs inline the owner's ACTIVE skills into the prompt and
 		// stage agent-drafted proposals against the same chat-store rows the
 		// Skills page reviews.
-		UserSkills:       userSkillDocsProvider(chatStore),
-		SkillProposerFor: skillProposerFactory(chatStore),
+		UserSkills:         userSkillDocsProvider(chatStore),
+		SkillProposerFor:   skillProposerFactory(chatStore),
+		OpenTaskMCPScope:   mcpRuntime.openTaskScope,
+		MCPServerInventory: mcpRuntime.inventory.snapshot,
 	})
 	// Wire the cost-forecast's system-prompt resolver (#233) from the SAME runner
 	// that assembles the prompt at dispatch, so POST /tasks/estimate counts the
@@ -958,6 +980,7 @@ func run() error {
 			}
 		}
 	}()
+	startDiskSweep(ctx, cfg, h)
 
 	// Listeners are bound; tell a systemd-aware supervisor we are ready (no-op
 	// when NOTIFY_SOCKET is unset, i.e. non-systemd / dev / tests).
@@ -1064,6 +1087,12 @@ func initTracing(serviceVersion string) func() {
 	}
 }
 
+func flushObservability(active bool) {
+	if active {
+		observability.Flush(2 * time.Second)
+	}
+}
+
 // reloadConfigHandler serves POST /admin/reload-config (#286): it re-reads the
 // reloadable settings from the env file + process environment and returns a JSON
 // diff of what changed / was skipped (non-reloadable) / errored. cfg may be nil
@@ -1111,14 +1140,16 @@ func watchConfigReloadSignal(ctx context.Context, cfg *config.Config) func() {
 	return func() { signal.Stop(reloadSig) }
 }
 
-// reloadMCPServers re-reads the client-config bundle's MCP catalog fresh (so
-// operator edits to manifest.yaml take effect) and hot-reloads the running
-// Manager's MCP servers without a restart (#218). It builds specs from a
-// throwaway config carrying only the freshly-loaded MCPServers, so it never
-// mutates the shared cfg.MCPServers that the scheduled path reads concurrently.
+// reloadMCPServers hot-reloads the running Manager's MCP servers (#218). An
+// injected credential owner re-reads its own bundle and returns public metadata;
+// the local compatibility path re-reads the bundle here and builds throwaway
+// specs without mutating the shared cfg.MCPServers.
 func reloadMCPServers(ctx context.Context, mgr *agent.Manager) (*mcp.ReloadSummary, error) {
 	if mgr == nil {
 		return &mcp.ReloadSummary{}, nil
+	}
+	if mgr.MCPReloadOwnsConfig() {
+		return mgr.ReloadMCPServers(ctx, nil)
 	}
 	bundle, err := clientconfig.Load(clientconfig.Dir())
 	if err != nil {
@@ -1340,7 +1371,14 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers, r
 		// /tasks/{task_id} static-vs-param, but chi routes them distinctly.
 		r.Get("/tasks/paused", h.ListPausedTasks)
 		r.Post("/tasks/{task_id}/resume", h.ResumeTask)
+		// self-wake (docs/SELF-WAKE.md): fire a named event at a task parked
+		// by wake_on_event; the key must match what the task waits for.
+		r.Post("/tasks/{task_id}/wake", h.WakeTask)
 		r.Get("/logs/{task_id}", h.GetLogs)
+		// Per-attempt run log history: transcripts a retry / ask-resume /
+		// wake cycle superseded. Same auth/ownership gate as /logs/{task_id}.
+		r.Get("/logs/{task_id}/history", h.GetLogHistory)
+		r.Get("/logs/{task_id}/history/{entry_id}", h.GetLogHistoryEntry)
 		// Live SSE run-log stream for an in-progress task, falling back to a one-shot
 		// replay of the persisted log once finished (#200). Same auth/ownership gate
 		// as /logs/{task_id}.
@@ -2134,22 +2172,22 @@ func installStoreCipher(cfg *config.Config, chatStore *store.Store) {
 
 // setupRemoteMCP wires the per-user remote-MCP + OAuth feature (#443). It is
 // enabled only when an encryption key AND a public base URL are configured;
-// otherwise it fails closed (returns nil, nil) and the endpoints report the
+// otherwise it fails closed (returns nil) and the endpoints report the
 // feature off. On enable it installs the token cipher on the chat store (secrets
 // encrypted at rest) and starts an hourly sweep of abandoned OAuth-flow rows.
-// The returned *Service backs the HTTP endpoints; the same value, typed as the
-// agent resolver interface, backs the chat + scheduled overlay.
-func setupRemoteMCP(cfg *config.Config, chatStore *store.Store) (*remotemcp.Service, agent.RemoteMCPResolver) {
+// The returned Service backs explicit HTTP control-plane operations. Agent runs
+// use the child-owned broker scope and never receive this credential resolver.
+func setupRemoteMCP(cfg *config.Config, chatStore *store.Store) *remotemcp.Service {
 	if len(cfg.MCPOAuthEncryptionKey) == 0 || cfg.PublicBaseURL == "" {
 		log.Printf("remote MCP OAuth: disabled (set FLEET_MCP_OAUTH_ENCRYPTION_KEY + FLEET_PUBLIC_BASE_URL to enable)")
-		return nil, nil
+		return nil
 	}
 	cipher, err := secretbox.NewCipher(cfg.MCPOAuthEncryptionKey)
 	if err != nil {
 		// Config already validates the key length, so this is belt-and-suspenders:
 		// disable rather than crash the whole server on a bad key.
 		log.Printf("remote MCP OAuth: disabled — invalid encryption key: %v", err)
-		return nil, nil
+		return nil
 	}
 	chatStore.SetTokenCipher(cipher)
 	svc := remotemcp.NewService(chatStore, remotemcp.Config{
@@ -2171,13 +2209,48 @@ func setupRemoteMCP(cfg *config.Config, chatStore *store.Store) (*remotemcp.Serv
 	})
 	//nolint:gosec // G706: PublicBaseURL is operator-set config (env var), not request input — it can't forge a log line.
 	log.Printf("remote MCP OAuth: ENABLED (per-user hosted servers; redirect %s/api/oauth/mcp/callback)", cfg.PublicBaseURL)
-	return svc, svc
+	return svc
+}
+
+func productionRemoteMCPOverlayOpener(svc *remotemcp.Service, runtime *productionMCPRuntime) agent.RemoteMCPOverlayOpener {
+	if svc == nil || runtime == nil {
+		return nil
+	}
+	return runtime.openRemoteOverlay
 }
 
 // wireRemoteMCPCatalog injects the per-user remote-MCP catalog provider (#466)
 // into the orchestrator handlers when the feature is on. A nil service (feature
 // disabled) is a no-op, so the bundle catalog is served unchanged. Kept separate
 // from run() so the nil-guard branch stays out of run()'s cyclomatic budget.
+// startDiskSweep reclaims expired chat attachment uploads and orchestrator
+// temp_uploads files on a timer. SweepAttachments otherwise only runs when
+// a chat turn completes, and CleanupTempFiles previously had no caller at
+// all — an idle server never freed upload disk. Bound to ctx so it stops
+// on shutdown; a panic is contained so the sweep can't crash the process.
+func startDiskSweep(ctx context.Context, cfg *config.Config, h *handlers.Handlers) {
+	go func() {
+		defer safe.Recover("cmd.disk-sweep", nil)
+		ticker := time.NewTicker(diskSweepInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				ttl := time.Duration(cfg.ConversationTTL) * 24 * time.Hour
+				if n, err := store.SweepAttachments(cfg.EmailAttachmentDir, ttl); err != nil {
+					log.Printf("disk sweep: attachments: %v", err)
+				} else if n > 0 {
+					//nolint:gosec // G706: only an integer count is formatted (%d).
+					log.Printf("disk sweep: removed %d expired attachment file(s)", n)
+				}
+				h.CleanupTempFiles(ttl)
+			}
+		}
+	}()
+}
+
 func wireRemoteMCPCatalog(h *handlers.Handlers, svc *remotemcp.Service) {
 	if svc == nil {
 		return
@@ -2463,7 +2536,7 @@ func (a *taskMemoryAdapter) ListTaskMemories(ctx context.Context, taskID uuid.UU
 // turn_events, one explicit interrupted turn per crash. A failure logs loudly
 // but does not abort boot: the DB may be degraded, and the affected turns stay
 // 'running' for the next boot to retry. See docs/TURN-JOURNAL.md + ADR-0039.
-func recoverStrandedTurns(chatStore *store.Store) {
+func recoverStrandedTurns(chatStore *store.Store, inputQueueRetentionDays int) {
 	recCtx, recCancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer recCancel()
 	recovered, err := chatStore.RecoverStrandedTurns(recCtx)
@@ -2486,5 +2559,14 @@ func recoverStrandedTurns(chatStore *store.Store) {
 		log.Printf("input-queue recovery: %v", qerr)
 	} else if requeued+completed+cancelled > 0 {
 		log.Printf("input-queue recovery: %d input(s) re-queued, %d completed, %d cancelled (post-injection side effects; not re-run)", requeued, completed, cancelled) //nolint:gosec // G706: three int counts — no request input.
+	}
+	// Reclaim terminal idempotency rows at boot as well as after turns. Recovery
+	// runs first so a stranded non-terminal row is resolved before retention is
+	// considered; non-terminal rows are never eligible for deletion.
+	if purged, err := chatStore.PurgeTerminalInputs(recCtx,
+		time.Duration(inputQueueRetentionDays)*24*time.Hour); err != nil {
+		log.Printf("input-queue startup purge: %v", err)
+	} else if purged > 0 {
+		log.Printf("input-queue startup purge: removed %d terminal row(s)", purged) //nolint:gosec // G706: purged is an integer database row count, never request-authored text.
 	}
 }

@@ -24,6 +24,11 @@ export type ClientBranding = {
   login_tagline: string;
   share_title: string;
   share_description: string;
+  // Web path of the bundle's brand mark, or "" when it declares none (the nav
+  // rail then renders fleet's own). The backend only sets this when a file
+  // actually backed branding.logo at load, so an empty string means "no logo",
+  // never "logo configured but broken".
+  logo_url?: string;
 };
 
 // Neutral, client-agnostic branding. Mirrors config/default/manifest.yaml's

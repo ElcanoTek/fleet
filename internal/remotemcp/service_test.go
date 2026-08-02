@@ -50,7 +50,7 @@ func (f *fakeStore) CreateRemoteMCPServer(_ context.Context, in store.RemoteMCPS
 		Issuer: in.Issuer, AuthorizationEndpoint: in.AuthorizationEndpoint, TokenEndpoint: in.TokenEndpoint,
 		RegistrationEndpoint: in.RegistrationEndpoint, RevocationEndpoint: in.RevocationEndpoint,
 		Scopes: in.Scopes, AuthMethods: in.AuthMethods, ClientID: in.ClientID,
-		AuthKind: in.AuthKind, APIKeyHeader: in.APIKeyHeader,
+		AuthKind: in.AuthKind, APIKeyHeader: in.APIKeyHeader, APIKeyQuery: in.APIKeyQuery,
 	}
 	if srv.Status == "" {
 		srv.Status = store.RemoteMCPStatusLoginRequired
@@ -123,6 +123,17 @@ func (f *fakeStore) GetOAuthTokens(_ context.Context, srv *store.RemoteMCPServer
 	}
 	cp := t
 	return &cp, nil
+}
+
+func (f *fakeStore) ClearOAuthTokens(_ context.Context, email, id string) error {
+	srv, ok := f.servers[id]
+	if !ok || srv.UserEmail != email {
+		return store.ErrRemoteMCPNotFound
+	}
+	delete(f.tokens, id)
+	srv.Status = store.RemoteMCPStatusNeedsReauth
+	srv.StatusDetail = "signed out — reconnect to use"
+	return nil
 }
 
 func (f *fakeStore) StoreOAuthTokens(_ context.Context, srv *store.RemoteMCPServer, t store.RemoteMCPTokens) error {
@@ -669,5 +680,152 @@ func TestResolverIncludesSharedServers(t *testing.T) {
 	conns, _ = svc.ConnectedServersForUser(ctx, "mate@x.com")
 	if len(conns) != 1 || conns[0].ID != mates.ID || conns[0].Owner != "" {
 		t.Fatalf("own server must win the name collision, got %+v", conns)
+	}
+}
+
+// SignOut ends the authorization but keeps the registration: tokens gone,
+// status needs_reauth, server row (and its client credentials) intact. Only
+// OAuth connections can sign out — an api_key connection's key IS its
+// registration, so the action is rejected.
+func TestSignOutKeepsRegistration(t *testing.T) {
+	fs := newFakeStore()
+	as := oauthTestServer(t, "")
+	svc := newTestService(t, fs, as)
+	ctx := context.Background()
+	const email = "user@elcano.com"
+
+	srv, err := fs.CreateRemoteMCPServer(ctx, store.RemoteMCPServerInput{
+		UserEmail: email, Name: "acme", URL: as.URL + "/mcp", AuthKind: "oauth",
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := fs.StoreOAuthTokens(ctx, srv, store.RemoteMCPTokens{AccessToken: "at", RefreshToken: "rt"}); err != nil {
+		t.Fatalf("tokens: %v", err)
+	}
+
+	if err := svc.SignOut(ctx, email, srv.ID); err != nil {
+		t.Fatalf("SignOut: %v", err)
+	}
+	got, err := fs.GetRemoteMCPServer(ctx, email, srv.ID)
+	if err != nil {
+		t.Fatalf("server deleted by sign out: %v", err)
+	}
+	if got.Status != store.RemoteMCPStatusNeedsReauth {
+		t.Errorf("status = %q, want needs_reauth", got.Status)
+	}
+	if _, terr := fs.GetOAuthTokens(ctx, got); terr == nil {
+		t.Error("tokens survived sign out")
+	}
+
+	key, err := fs.CreateRemoteMCPServer(ctx, store.RemoteMCPServerInput{
+		UserEmail: email, Name: "keyed", URL: as.URL + "/mcp", AuthKind: "api_key",
+	})
+	if err != nil {
+		t.Fatalf("create api_key: %v", err)
+	}
+	if err := svc.SignOut(ctx, email, key.ID); err == nil {
+		t.Error("SignOut on api_key connection must be rejected")
+	}
+}
+
+// Query-authenticated vendors (Browserbase's ?browserbaseApiKey=…): the key is
+// attached by the transport per-request — accepted by the vendor, absent from
+// the stored URL, and never sent as a header.
+func TestAddServerAPIKeyQueryParam(t *testing.T) {
+	var sawHeaderKey bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-BB-Key") != "" || strings.Contains(r.Header.Get("Authorization"), "bb-live") {
+			sawHeaderKey = true
+		}
+		if r.URL.Query().Get("browserbaseApiKey") != "bb-live-123" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		var req struct {
+			ID     *int   `json:"id"`
+			Method string `json:"method"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if req.ID == nil {
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
+		resp := map[string]any{"jsonrpc": "2.0", "id": *req.ID}
+		switch req.Method {
+		case "initialize":
+			resp["result"] = map[string]any{
+				"protocolVersion": "2025-06-18",
+				"capabilities":    map[string]any{"tools": map[string]any{}},
+				"serverInfo":      map[string]any{"name": "stagehand-api", "version": "0"},
+			}
+		case "tools/list":
+			resp["result"] = map[string]any{"tools": []map[string]any{
+				{"name": "browserbase_navigate", "inputSchema": map[string]any{"type": "object"}},
+				{"name": "browserbase_screenshot", "inputSchema": map[string]any{"type": "object"}},
+			}}
+		default:
+			resp["result"] = map[string]any{}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	t.Cleanup(srv.Close)
+
+	fs := newFakeStore()
+	svc := newTestService(t, fs, srv)
+	ctx := context.Background()
+
+	// header+query together is a config contradiction — reject.
+	if _, _, err := svc.AddServer(ctx, AddServerInput{
+		Email: "u@x.com", Name: "browserbase", URL: srv.URL, AuthMode: "api_key",
+		APIKey: "bb-live-123", APIKeyHeader: "X-BB-Key", APIKeyQuery: "browserbaseApiKey",
+	}); err == nil {
+		t.Fatal("AddServer accepted header+query api key config")
+	}
+	// Malformed parameter names never reach a request line.
+	for _, q := range []string{"bad name", "k=v", "a&b", "x?y"} {
+		if _, _, err := svc.AddServer(ctx, AddServerInput{
+			Email: "u@x.com", Name: "browserbase", URL: srv.URL, AuthMode: "api_key",
+			APIKey: "bb-live-123", APIKeyQuery: q,
+		}); err == nil {
+			t.Errorf("AddServer accepted query param name %q", q)
+		}
+	}
+	// A wrong key fails the validation probe and stores nothing.
+	if _, _, err := svc.AddServer(ctx, AddServerInput{
+		Email: "u@x.com", Name: "browserbase", URL: srv.URL, AuthMode: "api_key",
+		APIKey: "bb-wrong", APIKeyQuery: "browserbaseApiKey",
+	}); err == nil || !strings.Contains(err.Error(), "did not accept this API key") {
+		t.Fatalf("wrong key: err = %v, want key-rejected", err)
+	}
+	if len(fs.servers) != 0 {
+		t.Fatalf("rejected key stored %d server(s)", len(fs.servers))
+	}
+
+	server, toolCount, err := svc.AddServer(ctx, AddServerInput{
+		Email: "u@x.com", Name: "browserbase", URL: srv.URL, AuthMode: "api_key",
+		APIKey: "bb-live-123", APIKeyQuery: "browserbaseApiKey",
+	})
+	if err != nil {
+		t.Fatalf("AddServer: %v", err)
+	}
+	if toolCount != 2 {
+		t.Errorf("toolCount = %d, want 2", toolCount)
+	}
+	if server.Status != store.RemoteMCPStatusConnected {
+		t.Errorf("status = %q, want connected", server.Status)
+	}
+	if strings.Contains(server.URL, "bb-live-123") || strings.Contains(server.URL, "browserbaseApiKey") {
+		t.Errorf("stored URL carries the credential: %q", server.URL)
+	}
+	if server.APIKeyQuery != "browserbaseApiKey" {
+		t.Errorf("APIKeyQuery = %q", server.APIKeyQuery)
+	}
+	if sawHeaderKey {
+		t.Error("the key leaked into a request header")
 	}
 }

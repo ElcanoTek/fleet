@@ -36,13 +36,23 @@ const publicApiPaths = new Set([
   "/api/orchestrator/auth/login",
   "/api/orchestrator/auth/logout",
   "/api/orchestrator/auth/elcano-login",
-  // The brand-theme stylesheet is pre-session by design: layout.tsx links it on
-  // every page so the LOGIN page paints in the bundle's palette before any
-  // session exists. The route is deployment-wide, non-secret, and fail-safe
-  // (always 200; empty CSS on backend trouble) — see app/api/theme/route.ts.
-  // Without this entry the gate 401s it and the login page renders unthemed
-  // (#903).
+  // Brand assets from the client-config bundle. The root layout links
+  // /api/theme as a render-blocking stylesheet on EVERY page, login included,
+  // and the login card may render the bundle's mark — so both must resolve
+  // before a session exists. Without this the login page 401'd on its own
+  // stylesheet and silently fell back to fleet's built-in palette, which is
+  // exactly the surface a white-labeled deployment cares most about. Both
+  // routes are deployment-wide and non-secret (a palette and a logo), and both
+  // return quietly (empty CSS / 404) rather than an error page if the backend
+  // is unreachable, so exposing them adds no failure mode.
   "/api/theme",
+  "/api/brand/logo",
+  // The bundle's og:image. Public is a requirement rather than a convenience:
+  // link-unfurl scrapers (Slack, iMessage, Discord, Teams) are anonymous, so an
+  // og:image behind the session gate renders no preview at all. Like the two
+  // routes above it is deployment-wide, non-secret, and falls back to fleet's
+  // own asset rather than erroring.
+  "/api/brand/share-image",
 ]);
 
 // contentSecurityPolicy builds the CSP for a response (#590). Two tiers:
@@ -156,6 +166,16 @@ export async function proxy(request: NextRequest) {
 
 export const config = {
   // Widened from chat's matcher so /orchestrator/* is gated by the SAME rule
-  // as /chat/*. Static assets stay excluded (content-hashed, safe to cache).
-  matcher: ["/((?!_next/static|_next/image|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)"],
+  // as /chat/*. Static assets stay excluded (content-hashed, safe to cache) —
+  // but ONLY the checked-in asset directories. A bare any-image-extension
+  // exclusion also bypassed the gate + security headers for API routes whose
+  // PATH merely ends in .svg/.png (e.g. a conversation workspace file), which
+  // are user data, not static assets.
+  // icon.svg / apple-icon.png are Next file-convention icon ROUTES (not
+  // public/ files) that the login page's <head> references pre-auth, and
+  // Safari probes apple-touch-icon*.png unauthenticated — gating them served
+  // a 307→/login as the tab/touch icon on every white-labeled deployment.
+  matcher: [
+    "/((?!_next/static|_next/image|(?:logos|icons|backgrounds|app-icons)/.*\\.(?:svg|png|jpg|jpeg|gif|webp)$|(?:share|file|globe|next|vercel|window|icon|apple-icon)\\.(?:svg|png)$|apple-touch-icon[^/]*\\.png$|favicon\\.ico$|sw\\.js$|scripts/theme\\.js$).*)",
+  ],
 };

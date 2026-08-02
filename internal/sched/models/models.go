@@ -542,6 +542,13 @@ const (
 	// NOT terminal (it resumes) — so IsTerminal excludes it and the paused row
 	// holds no lease.
 	TaskStatusPausedAwaitingInput TaskStatus = "paused_awaiting_input"
+	// TaskStatusPausedAwaitingWake is the non-terminal pause a scheduled run
+	// enters when its agent calls `sleep` or `wake_on_event` (self-wake,
+	// docs/SELF-WAKE.md): the run has ended and released its sandbox/lease,
+	// and the scheduler's wake sweep re-queues the task when wake_at passes
+	// (or an event wake arrives first). NOT terminal — same lifecycle shape
+	// as the ask pause (#510), keyed on a deadline/event instead of a human.
+	TaskStatusPausedAwaitingWake TaskStatus = "paused_awaiting_wake"
 )
 
 // IsValidReportedStatus reports whether s is a status a worker is allowed to
@@ -825,7 +832,16 @@ type TaskCreate struct {
 	InstructionSelfImprove bool            `json:"instruction_self_improve,omitempty"`
 	ScheduledFor           *time.Time      `json:"scheduled_for,omitempty"`
 	Recurrence             string          `json:"recurrence,omitempty"`
-	Files                  []string        `json:"files,omitempty"`
+	// RecurrenceUntil ends the recurrence at an absolute instant: no occurrence
+	// is spawned with a fire time after it. nil = repeat forever (the default).
+	// Only meaningful with a non-empty Recurrence.
+	RecurrenceUntil *time.Time `json:"recurrence_until,omitempty"`
+	// RecurrenceRemaining ends the recurrence after a total number of runs: it
+	// counts the runs still allowed INCLUDING this occurrence, so each spawned
+	// occurrence carries remaining-1 and the spawn is skipped when it would hit
+	// zero. nil = unbounded. Only meaningful with a non-empty Recurrence.
+	RecurrenceRemaining *int     `json:"recurrence_remaining,omitempty"`
+	Files               []string `json:"files,omitempty"`
 	// FileNames optionally supplies the logical, prompt-visible name for each
 	// stored file in Files. When present it must pair 1:1 with Files. The runner
 	// materializes inputs under these names in the per-run connector workspace
@@ -994,7 +1010,20 @@ type Task struct {
 	// re-queued it (injected + cleared at the resumed run's start).
 	PendingQuestion string `json:"pending_question,omitempty"`
 	PendingAnswer   string `json:"pending_answer,omitempty"`
-	Priority        int    `json:"priority"`
+	// Wake* back the self-wake pause (docs/SELF-WAKE.md). Runtime state, never
+	// definition: WakeAt is the deadline the parked task wakes on (always set —
+	// an event wait's timeout, a timer sleep's fire time); WakeEventKey names
+	// the event an event wait listens for; WakeNote is the agent's message to
+	// its future self, injected into the resumed run; WakeReason records why
+	// the task woke (written by the wake transition, injected + cleared like
+	// PendingAnswer); WakeCycles counts total parks so the runner can refuse a
+	// runaway sleep loop.
+	WakeAt       *time.Time `json:"wake_at,omitempty"`
+	WakeEventKey string     `json:"wake_event_key,omitempty"`
+	WakeNote     string     `json:"wake_note,omitempty"`
+	WakeReason   string     `json:"wake_reason,omitempty"`
+	WakeCycles   int        `json:"wake_cycles,omitempty"`
+	Priority     int        `json:"priority"`
 	// EffectivePriority is the value the scheduler actually orders the pending
 	// queue by (#230). Equal to Priority at creation; only the anti-starvation
 	// sweep lowers it (never Priority) so a long-waiting task is eventually
@@ -1042,6 +1071,11 @@ type Task struct {
 	ErrorAnalysis json.RawMessage `json:"error_analysis,omitempty"`
 	ScheduledFor  *time.Time      `json:"scheduled_for,omitempty"`
 	Recurrence    string          `json:"recurrence,omitempty"`
+	// RecurrenceUntil / RecurrenceRemaining are the recurrence end conditions
+	// (see TaskCreate): repeat until an instant and/or for a total run count.
+	// Definition fields, carried through the TaskToCreate clone recipe.
+	RecurrenceUntil     *time.Time `json:"recurrence_until,omitempty"`
+	RecurrenceRemaining *int       `json:"recurrence_remaining,omitempty"`
 	// Timezone is the IANA timezone the cron Recurrence is evaluated in. Always
 	// present in responses ("UTC" for legacy/unset tasks). See TaskCreate.Timezone.
 	Timezone string `json:"timezone"`
@@ -1214,6 +1248,8 @@ func NewTask(tc TaskCreate) *Task {
 		CreatedAt:                  time.Now().UTC(),
 		ScheduledFor:               tc.ScheduledFor,
 		Recurrence:                 tc.Recurrence,
+		RecurrenceUntil:            tc.RecurrenceUntil,
+		RecurrenceRemaining:        tc.RecurrenceRemaining,
 		Timezone:                   tz,
 		Files:                      tc.Files,
 		FileNames:                  tc.FileNames,
@@ -1340,11 +1376,16 @@ func TaskToCreate(t *Task) TaskCreate {
 		Persona:      t.Persona,
 		ScheduledFor: t.ScheduledFor,
 		Recurrence:   t.Recurrence,
-		Timezone:     t.Timezone,
-		Files:        t.Files,
-		FileNames:    t.FileNames,
-		MaxRetries:   &maxRetries,
-		TriggerType:  t.TriggerType,
+		// The recurrence end conditions are part of the recipe so occurrence
+		// #2+ keeps counting down / honoring the end date: RecurrenceRemaining
+		// is decremented by scheduleNextRecurrence before the clone is minted.
+		RecurrenceUntil:     t.RecurrenceUntil,
+		RecurrenceRemaining: t.RecurrenceRemaining,
+		Timezone:            t.Timezone,
+		Files:               t.Files,
+		FileNames:           t.FileNames,
+		MaxRetries:          &maxRetries,
+		TriggerType:         t.TriggerType,
 		// Capability flags are part of the create-recipe so a re-run/clone keeps
 		// the same governance posture (#277). CreatedByTaskID is per-spawn lineage,
 		// like SourceTaskID, and is intentionally NOT carried.
@@ -1401,6 +1442,8 @@ type TaskExportRecord struct {
 	Description                string              `json:"description,omitempty"                yaml:"description,omitempty"`
 	ScheduledFor               *time.Time          `json:"scheduled_for,omitempty"              yaml:"scheduled_for,omitempty"`
 	Recurrence                 string              `json:"recurrence,omitempty"                 yaml:"recurrence,omitempty"`
+	RecurrenceUntil            *time.Time          `json:"recurrence_until,omitempty"           yaml:"recurrence_until,omitempty"`
+	RecurrenceRemaining        *int                `json:"recurrence_remaining,omitempty"       yaml:"recurrence_remaining,omitempty"`
 	Timezone                   string              `json:"timezone,omitempty"                   yaml:"timezone,omitempty"`
 	Files                      []string            `json:"files,omitempty"                      yaml:"files,omitempty"`
 	FileNames                  []string            `json:"file_names,omitempty"                 yaml:"file_names,omitempty"`
@@ -1518,6 +1561,8 @@ func ExportRecordToTaskCreate(rec TaskExportRecord) TaskCreate {
 		Description:                rec.Description,
 		ScheduledFor:               rec.ScheduledFor,
 		Recurrence:                 rec.Recurrence,
+		RecurrenceUntil:            rec.RecurrenceUntil,
+		RecurrenceRemaining:        rec.RecurrenceRemaining,
 		Timezone:                   rec.Timezone,
 		Files:                      rec.Files,
 		FileNames:                  rec.FileNames,
@@ -1574,6 +1619,8 @@ func TaskToExportRecord(t *Task) TaskExportRecord {
 		Description:                t.Description,
 		ScheduledFor:               t.ScheduledFor,
 		Recurrence:                 t.Recurrence,
+		RecurrenceUntil:            t.RecurrenceUntil,
+		RecurrenceRemaining:        t.RecurrenceRemaining,
 		Timezone:                   t.Timezone,
 		Files:                      t.Files,
 		FileNames:                  t.FileNames,
@@ -1704,6 +1751,14 @@ type LogSession struct {
 	// (#797) from the driver to the runner, redacted like every other session
 	// field before it leaves the process boundary.
 	OutputJSON string `json:"output_json,omitempty"`
+}
+
+// RunLogMeta identifies one superseded transcript in a task's per-attempt run
+// log history: the history entry id plus when the newer transcript replaced
+// it. The payload itself is fetched per-entry, never listed.
+type RunLogMeta struct {
+	ID           int64     `json:"id"`
+	SupersededAt time.Time `json:"superseded_at"`
 }
 
 // MarshalJSON implements custom JSON marshaling for LogSession.

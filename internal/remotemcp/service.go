@@ -51,6 +51,7 @@ type tokenStore interface {
 	GetRemoteMCPAPIKey(ctx context.Context, server *store.RemoteMCPServer) (string, error)
 	SetRemoteMCPAPIKey(ctx context.Context, userEmail, id, apiKey string) error
 	GetOAuthTokens(ctx context.Context, server *store.RemoteMCPServer) (*store.RemoteMCPTokens, error)
+	ClearOAuthTokens(ctx context.Context, userEmail, id string) error
 	StoreOAuthTokens(ctx context.Context, server *store.RemoteMCPServer, tokens store.RemoteMCPTokens) error
 	EnsureFreshToken(ctx context.Context, server *store.RemoteMCPServer, marginSeconds int64, refreshFn store.RefreshFunc) (string, error)
 	BeginOAuthFlow(ctx context.Context, state, serverID, userEmail, codeVerifier string, ttl time.Duration) error
@@ -151,6 +152,11 @@ type AddServerInput struct {
 	// the header NAME to send it under ("" = Authorization: Bearer <key>).
 	APIKey       string
 	APIKeyHeader string
+	// APIKeyQuery is the query-parameter NAME to send the key under, for
+	// vendors that authenticate in the URL (Browserbase). Mutually exclusive
+	// with APIKeyHeader; the transport attaches the key per-request so it
+	// never lands in the stored URL.
+	APIKeyQuery string
 }
 
 // AddServer validates + canonicalizes the URL and persists the server. OAuth
@@ -174,7 +180,7 @@ func (s *Service) AddServer(ctx context.Context, in AddServerInput) (*store.Remo
 		return nil, -1, errors.New("a name is required")
 	}
 	if in.AuthMode == store.RemoteMCPAuthOpen {
-		toolCount, perr := s.probeServer(ctx, canonURL, "", "")
+		toolCount, perr := s.probeServer(ctx, canonURL, "", "", "")
 		if perr != nil {
 			return nil, -1, fmt.Errorf("could not connect to the MCP server: %w", perr)
 		}
@@ -191,7 +197,16 @@ func (s *Service) AddServer(ctx context.Context, in AddServerInput) (*store.Remo
 		if verr != nil {
 			return nil, -1, verr
 		}
-		toolCount, perr := s.probeServer(ctx, canonURL, header, in.APIKey)
+		query := strings.TrimSpace(in.APIKeyQuery)
+		if query != "" {
+			if header != "" {
+				return nil, -1, errors.New("an API key is sent under a header OR a query parameter, not both")
+			}
+			if !mcp.QueryParamNameOK(query) {
+				return nil, -1, fmt.Errorf("invalid API key query-parameter name %q", query)
+			}
+		}
+		toolCount, perr := s.probeServer(ctx, canonURL, header, query, in.APIKey)
 		if perr != nil {
 			return nil, -1, fmt.Errorf("the server did not accept this API key — check the key and try again: %w", perr)
 		}
@@ -202,6 +217,7 @@ func (s *Service) AddServer(ctx context.Context, in AddServerInput) (*store.Remo
 			AuthKind:     store.RemoteMCPAuthAPIKey,
 			APIKey:       in.APIKey,
 			APIKeyHeader: header,
+			APIKeyQuery:  query,
 		})
 		return server, toolCount, cerr
 	}
@@ -261,11 +277,16 @@ func (s *Service) AddServer(ctx context.Context, in AddServerInput) (*store.Remo
 // mistyped tenant URL would be stored as "connected" and only fail mid-run,
 // where the error is far from the person who can fix it. The ephemeral client
 // is closed before returning; nothing is registered.
-func (s *Service) probeServer(ctx context.Context, url, headerName, credential string) (int, error) {
+func (s *Service) probeServer(ctx context.Context, url, headerName, queryName, credential string) (int, error) {
 	client := mcp.NewClient()
 	defer func() { _ = client.Close() }()
 	opts := mcp.HTTPServerOptions{HTTPClient: s.httpClient}
-	if credential != "" {
+	switch {
+	case credential != "" && queryName != "":
+		// Query-authenticated vendor: the transport attaches the key so the
+		// probed URL (which lands in error strings) never carries it.
+		opts.HTTPClient = mcp.WithQueryParam(s.httpClient, queryName, credential)
+	case credential != "":
 		header, value := "Authorization", "Bearer "+credential
 		if headerName != "" {
 			header, value = headerName, credential
@@ -330,7 +351,7 @@ func (s *Service) SetAPIKey(ctx context.Context, email, serverID, apiKey string)
 	if server.AuthKind != store.RemoteMCPAuthAPIKey {
 		return 0, errors.New("this connection does not use an API key")
 	}
-	toolCount, err := s.probeServer(ctx, server.URL, server.APIKeyHeader, apiKey)
+	toolCount, err := s.probeServer(ctx, server.URL, server.APIKeyHeader, server.APIKeyQuery, apiKey)
 	if err != nil {
 		return 0, fmt.Errorf("the server did not accept this API key — the previous key is unchanged: %w", err)
 	}
@@ -450,6 +471,27 @@ func (s *Service) Disconnect(ctx context.Context, email, serverID string) error 
 		s.tryRevoke(ctx, server)
 	}
 	return s.store.DeleteRemoteMCPServer(ctx, email, serverID)
+}
+
+// SignOut ends the caller's authorization for an OAuth server without deleting
+// the registration: best-effort token revocation at the AS, then the stored
+// tokens are dropped and the server is marked needs_reauth so the UI offers
+// Reconnect (client ID/secret survive). Disconnect remains the full delete.
+func (s *Service) SignOut(ctx context.Context, email, serverID string) error {
+	if !s.Enabled() {
+		return ErrDisabled
+	}
+	server, err := s.store.GetRemoteMCPServer(ctx, email, serverID)
+	if err != nil {
+		return err
+	}
+	if server.AuthKind != "" && server.AuthKind != "oauth" {
+		return fmt.Errorf("sign out applies to OAuth connections only (this one is %s)", server.AuthKind)
+	}
+	if server.RevocationEndpoint != "" {
+		s.tryRevoke(ctx, server)
+	}
+	return s.store.ClearOAuthTokens(ctx, email, serverID)
 }
 
 // AcquireToken returns a valid bearer for server, refreshing under the store's

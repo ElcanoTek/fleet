@@ -1,4 +1,3 @@
-import { cookies } from "next/headers";
 import { NextRequest, NextResponse } from "next/server";
 import {
   getElcanoCookieDomain,
@@ -29,31 +28,27 @@ export async function POST(request: NextRequest) {
   if (!csrf.ok) return csrf.response;
 
   const secure = isSecureRequest(request);
-  const cookieStore = await cookies();
+  const res = NextResponse.redirect(getRedirectUrl(request, "/login"), { status: 303 });
 
-  cookieStore.set({
-    name: getSessionCookieName(),
-    value: "",
-    httpOnly: true,
-    sameSite: "lax",
-    secure,
-    maxAge: 0,
-    path: "/",
-  });
+  const attrs = `Path=/; Max-Age=0; HttpOnly; SameSite=Lax${secure ? "; Secure" : ""}`;
+  res.headers.append("Set-Cookie", `${getSessionCookieName()}=; ${attrs}`);
 
-  // Cookie deletion matches on name + domain + path, so mirror how auth set it.
-  // Omit domain entirely for host-only cookies (local dev).
+  // Cookie deletion matches on name + domain + path, so mirror how auth set
+  // it. But AUTH_COOKIE_DOMAIN is config that can drift from how the auth
+  // service actually minted the cookie (a fresh deployment with the env unset
+  // deletes host-only while the live cookie carries Domain=…), and a deletion
+  // that misses its shape silently no-ops: the user sees the login page, then
+  // the next load is signed back in. Deleting a shape that doesn't exist is
+  // harmless, so send BOTH variants — appended as raw headers because a
+  // cookie store keyed by name would collapse them into one.
   const elcanoDomain = getElcanoCookieDomain();
-  cookieStore.set({
-    name: getElcanoCookieName(),
-    value: "",
-    httpOnly: true,
-    sameSite: "lax",
-    secure,
-    maxAge: 0,
-    path: "/",
-    ...(elcanoDomain ? { domain: elcanoDomain } : {}),
-  });
+  if (elcanoDomain) {
+    res.headers.append(
+      "Set-Cookie",
+      `${getElcanoCookieName()}=; Domain=${elcanoDomain}; ${attrs}`,
+    );
+  }
+  res.headers.append("Set-Cookie", `${getElcanoCookieName()}=; ${attrs}`);
 
-  return NextResponse.redirect(getRedirectUrl(request, "/login"), { status: 303 });
+  return res;
 }

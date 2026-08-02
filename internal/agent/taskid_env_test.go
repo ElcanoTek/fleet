@@ -10,7 +10,7 @@ import (
 // carrying the reserved ${FLEET_TASK_ID} token must have its key DROPPED — not
 // passed through as a literal placeholder the connector would read as a real
 // value. Only the scheduled per-run path substitutes a real task ID.
-// specsToServerDefs mirrors BuildMCPClient's shared-spawn env exactly (the
+// MCPServerDefs mirrors BuildMCPClient's shared-spawn env exactly (the
 // reload diff compares like with like), so it is the pure seam that pins the
 // behavior for both.
 func TestSpecsToServerDefs_DropsUnresolvedTaskIDToken(t *testing.T) {
@@ -26,7 +26,7 @@ func TestSpecsToServerDefs_DropsUnresolvedTaskIDToken(t *testing.T) {
 		},
 	}
 
-	defs := specsToServerDefs(specs)
+	defs := MCPServerDefs(specs)
 	if len(defs) != 1 {
 		t.Fatalf("expected 1 def, got %d", len(defs))
 	}

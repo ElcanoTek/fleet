@@ -38,6 +38,7 @@ type addRemoteMCPRequest struct {
 	// the header is the NAME to send it under ("" = Authorization: Bearer).
 	APIKey       string `json:"api_key,omitempty"`
 	APIKeyHeader string `json:"api_key_header,omitempty"`
+	APIKeyQuery  string `json:"api_key_query,omitempty"`
 }
 
 // remoteMCPServers handles GET (list) and POST (add) on /remote-mcp-servers.
@@ -93,6 +94,7 @@ func (s *Server) remoteMCPServers(w http.ResponseWriter, r *http.Request) {
 			ClientSecret: req.ClientSecret,
 			APIKey:       req.APIKey,
 			APIKeyHeader: req.APIKeyHeader,
+			APIKeyQuery:  req.APIKeyQuery,
 		})
 		if err != nil {
 			s.remoteMCPError(w, err)
@@ -174,6 +176,12 @@ func (s *Server) remoteMCPServerByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, map[string]any{"ok": true, "tool_count": toolCount})
+	case sub == "signout" && r.Method == http.MethodPost:
+		if err := s.remoteMCP.SignOut(r.Context(), user, id); err != nil {
+			s.remoteMCPError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	case sub == "authorize" && r.Method == http.MethodPost:
 		authURL, err := s.remoteMCP.Authorize(r.Context(), user, id)
 		if err != nil {

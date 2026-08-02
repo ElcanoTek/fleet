@@ -54,6 +54,7 @@ type mcpCatalogThirdPartyEntry struct {
 	SetupHint    string `json:"setup_hint,omitempty"`
 	SetupURL     string `json:"setup_url,omitempty"`
 	APIKeyHeader string `json:"api_key_header,omitempty"`
+	APIKeyQuery  string `json:"api_key_query,omitempty"`
 	// "manual" = the vendor's AS has no dynamic client registration; the UI
 	// collects a bring-your-own OAuth client ID (+ optional secret) up front.
 	ClientRegistration string `json:"client_registration,omitempty"`
@@ -65,6 +66,11 @@ type mcpCatalogResponse struct {
 	Bundled          []mcpCatalogBundledEntry    `json:"bundled"`
 	ThirdParty       []mcpCatalogThirdPartyEntry `json:"third_party"`
 	RemoteMCPEnabled bool                        `json:"remote_mcp_enabled"`
+	// OAuthRedirectURI is the stable callback URL manual client registrations
+	// (GitHub, Google Workspace, …) must be created with. Setup hints tell the
+	// user to find it "in your Fleet instance's OAuth settings" — this field is
+	// what the settings UI shows for that. Empty when the flow is unconfigured.
+	OAuthRedirectURI string `json:"oauth_redirect_uri,omitempty"`
 }
 
 // mcpCatalog handles GET /mcp-catalog. Auth+member like every settings read.
@@ -80,6 +86,9 @@ func (s *Server) mcpCatalog(w http.ResponseWriter, r *http.Request) {
 		Bundled:          []mcpCatalogBundledEntry{},
 		ThirdParty:       []mcpCatalogThirdPartyEntry{},
 		RemoteMCPEnabled: s.remoteMCP != nil && s.remoteMCP.Enabled(),
+	}
+	if resp.RemoteMCPEnabled {
+		resp.OAuthRedirectURI = s.remoteMCP.RedirectURI()
 	}
 	if s.agent != nil {
 		for _, info := range s.agent.MCPServerCatalog() {
