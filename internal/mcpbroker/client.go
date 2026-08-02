@@ -299,6 +299,29 @@ func (c *Client) ListAccounts(ctx context.Context, server string, baseVars []str
 	return resp.Accounts, nil
 }
 
+// Reload asks the credential-owning process to re-read and apply its connector
+// catalog. The request contains no configuration or credential values; the
+// result is a public diff plus the refreshed public tool catalog.
+func (c *Client) Reload(ctx context.Context) (*ReloadResult, error) {
+	resp, err := c.roundtrip(ctx, request{ID: c.nextID.Add(1), Method: methodReload})
+	if err != nil {
+		return nil, err
+	}
+	if resp.Err != "" {
+		return nil, errors.New(resp.Err)
+	}
+	if resp.Reload == nil {
+		return nil, errors.New("mcpbroker: reload returned an empty result")
+	}
+	result := *resp.Reload
+	result.Tools = cloneToolDescriptors(resp.Reload.Tools)
+	result.Summary.Added = append([]string(nil), resp.Reload.Summary.Added...)
+	result.Summary.Removed = append([]string(nil), resp.Reload.Summary.Removed...)
+	result.Summary.Restarted = append([]string(nil), resp.Reload.Summary.Restarted...)
+	result.Summary.Unchanged = append([]string(nil), resp.Reload.Summary.Unchanged...)
+	return &result, nil
+}
+
 // Close tears down the reader and fails outstanding calls, then closes the conn.
 func (c *Client) Close() error {
 	c.fail(errClientClosed)

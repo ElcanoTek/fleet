@@ -29,25 +29,16 @@ import (
 // Frames ride stdin/stdout; all logging goes to stderr (the std logger's default)
 // so it never corrupts the frame stream the parent decodes.
 func runMCPBroker() error {
-	bundle, err := clientconfig.Load(clientconfig.Dir())
+	cfg, err := loadMCPBrokerConfig()
 	if err != nil {
-		return fmt.Errorf("load client config bundle: %w", err)
+		return err
 	}
-	config.RegisterAllowedEnvVars(bundle.EnvVarNames()...)
-
-	cfg, err := config.Load(os.Getenv("FLEET_ENV_FILE"))
-	if err != nil {
-		return fmt.Errorf("load config: %w", err)
-	}
-	cfg.MCPServers = bundle.MCPServerConfigs()
-	cfg.HTTPTools = bundle.HTTPToolConfigs()
 
 	// The SAME builder the interactive Manager uses — one credential path. Inline
 	// http_tools (issue #261) are resolved + registered HERE, in the broker process
 	// that holds the connector secrets, so their auth headers never cross back to
 	// the parent fleet process (only public tool descriptors + rendered text do).
 	client := agent.BuildMCPClient(scheduledrun.BuildMCPSpecs(cfg), cfg.HTTPTools)
-	//nolint:gosec // G706 false positive: the only arg is an int tool count rendered with %d (no CR/LF can forge a log line); it is the size of the connected MCP catalog, not request input.
 	log.Printf("mcp-broker: serving %d MCP tools over stdio", len(client.GetAllTools()))
 
 	backend := &brokerBackend{
@@ -61,6 +52,25 @@ func runMCPBroker() error {
 	return errors.Join(serveErr, backend.Close())
 }
 
+// loadMCPBrokerConfig resolves the bundle and connector environment inside the
+// credential-owning process. It is used at boot and reload so resolved server
+// definitions never need to cross the broker protocol.
+func loadMCPBrokerConfig() (*config.Config, error) {
+	bundle, err := clientconfig.Load(clientconfig.Dir())
+	if err != nil {
+		return nil, fmt.Errorf("load client config bundle: %w", err)
+	}
+	config.RegisterAllowedEnvVars(bundle.EnvVarNames()...)
+
+	cfg, err := config.Load(os.Getenv("FLEET_ENV_FILE"))
+	if err != nil {
+		return nil, fmt.Errorf("load config: %w", err)
+	}
+	cfg.MCPServers = bundle.MCPServerConfigs()
+	cfg.HTTPTools = bundle.HTTPToolConfigs()
+	return cfg, nil
+}
+
 // brokerBackend is the mcpbroker.Backend the broker process serves: calls run
 // through the in-process localMCPBroker over the credentialed client; discovery
 // returns the live tool catalog and the provisioned account names — resolved
@@ -71,9 +81,11 @@ type brokerBackend struct {
 	client              *mcp.Client
 	bases               map[string]agentcore.MCPServerBase
 	httpTools           []config.HTTPToolConfig
+	reloadConfig        func() (*config.Config, error)
 
-	mu     sync.RWMutex
-	scopes map[string]*brokerScope
+	reloadMu sync.Mutex
+	mu       sync.RWMutex
+	scopes   map[string]*brokerScope
 }
 
 type brokerScope struct {
@@ -85,6 +97,7 @@ type brokerScope struct {
 var (
 	_ mcpbroker.Backend       = (*brokerBackend)(nil)
 	_ mcpbroker.ScopedBackend = (*brokerBackend)(nil)
+	_ mcpbroker.ReloadBackend = (*brokerBackend)(nil)
 )
 
 func (b *brokerBackend) ListTools(context.Context) ([]mcpbroker.ToolDescriptor, error) {
@@ -100,7 +113,12 @@ func (b *brokerBackend) OpenScope(ctx context.Context, spec mcpbroker.ScopeSpec)
 	for _, choice := range spec.Selection {
 		selection = append(selection, agentcore.MCPChoice{Server: choice.Server, Account: choice.Account})
 	}
+	// A scope opening concurrently with reload gets one coherent catalog snapshot:
+	// whichever operation acquires reloadMu first. Active scopes remain unchanged.
+	b.reloadMu.Lock()
 	bases := cloneMCPBases(b.bases)
+	httpTools := append([]config.HTTPToolConfig(nil), b.httpTools...)
+	b.reloadMu.Unlock()
 	for name, base := range bases {
 		base.BaseEnv = agentcore.ExpandTaskIDEnv(base.BaseEnv, spec.TaskID)
 		bases[name] = base
@@ -111,7 +129,7 @@ func (b *brokerBackend) OpenScope(ctx context.Context, spec mcpbroker.ScopeSpec)
 		_ = client.Close()
 		return "", nil, err
 	}
-	agent.RegisterHTTPTools(client, b.httpTools)
+	agent.RegisterHTTPTools(client, httpTools)
 
 	scope := &brokerScope{
 		client: client,
@@ -122,6 +140,38 @@ func (b *brokerBackend) OpenScope(ctx context.Context, spec mcpbroker.ScopeSpec)
 	b.scopes[id] = scope
 	b.mu.Unlock()
 	return id, describeTools(client), nil
+}
+
+// Reload re-reads credential-bearing configuration inside the child, applies
+// the minimum shared-client diff, and publishes new bases for future scopes.
+// Existing scopes deliberately retain the catalog they opened with.
+func (b *brokerBackend) Reload(ctx context.Context) (*mcpbroker.ReloadResult, error) {
+	b.reloadMu.Lock()
+	defer b.reloadMu.Unlock()
+
+	load := b.reloadConfig
+	if load == nil {
+		load = loadMCPBrokerConfig
+	}
+	cfg, err := load()
+	if err != nil {
+		return nil, err
+	}
+	summary, err := b.client.Reload(ctx, agent.MCPServerDefs(scheduledrun.BuildMCPSpecs(cfg)))
+	if err != nil {
+		return nil, err
+	}
+	b.bases = scheduledrun.BuildMCPBases(cfg)
+
+	return &mcpbroker.ReloadResult{
+		Summary: mcpbroker.ReloadSummary{
+			Added:     append([]string(nil), summary.Added...),
+			Removed:   append([]string(nil), summary.Removed...),
+			Restarted: append([]string(nil), summary.Restarted...),
+			Unchanged: append([]string(nil), summary.Unchanged...),
+		},
+		Tools: describeTools(b.client),
+	}, nil
 }
 
 func (b *brokerBackend) CallMCPInScope(ctx context.Context, scopeID, server, tool string, args map[string]any) (string, bool, error) {

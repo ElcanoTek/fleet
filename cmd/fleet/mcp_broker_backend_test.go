@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/mcpbroker"
 )
@@ -145,5 +146,62 @@ func TestBrokerBackend_CloseReapsOutstandingScopes(t *testing.T) {
 	}
 	if _, _, err := b.CallMCPInScope(ctx, id, "acct", "identity", nil); err == nil {
 		t.Fatal("closed backend retained an outstanding scope")
+	}
+}
+
+func TestBrokerBackend_ReloadRefreshesFutureScopesAndPreservesActiveScope(t *testing.T) {
+	b := newBrokerBackendForScopeTest(t)
+	t.Cleanup(func() { _ = b.Close() })
+	b.reloadConfig = func() (*config.Config, error) {
+		return &config.Config{MCPServers: map[string]config.MCPServerConfig{
+			"acct": {
+				Type:    "stdio",
+				Command: "python3",
+				Args:    []string{"-u", "-c", brokerScopeServerScript},
+				Env: map[string]string{
+					"TEST_SCOPE_TOKEN": "reloaded-seat",
+					"TEST_TASK_ID":     "${FLEET_TASK_ID}",
+					"TEST_WORKSPACE":   "${FLEET_WORKSPACE}",
+				},
+				Enabled: true,
+			},
+		}}, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	oldID, _, err := b.OpenScope(ctx, mcpbroker.ScopeSpec{Selection: []mcpbroker.ScopeChoice{{Server: "acct"}}})
+	if err != nil {
+		t.Fatalf("OpenScope before reload: %v", err)
+	}
+	result, err := b.Reload(ctx)
+	if err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+	if len(result.Summary.Added) != 1 || result.Summary.Added[0] != "acct" {
+		t.Fatalf("reload summary = %+v, want acct added", result.Summary)
+	}
+	if len(result.Tools) != 1 || result.Tools[0].Server != "acct" || result.Tools[0].Tool != "identity" {
+		t.Fatalf("reload tools = %+v, want refreshed acct.identity", result.Tools)
+	}
+
+	oldText, _, err := b.CallMCPInScope(ctx, oldID, "acct", "identity", nil)
+	if err != nil {
+		t.Fatalf("old scope call: %v", err)
+	}
+	if strings.TrimSpace(oldText) != "default-seat|<unset>|<unset>" {
+		t.Fatalf("old scope changed across reload: %q", oldText)
+	}
+
+	newID, _, err := b.OpenScope(ctx, mcpbroker.ScopeSpec{Selection: []mcpbroker.ScopeChoice{{Server: "acct"}}})
+	if err != nil {
+		t.Fatalf("OpenScope after reload: %v", err)
+	}
+	newText, _, err := b.CallMCPInScope(ctx, newID, "acct", "identity", nil)
+	if err != nil {
+		t.Fatalf("new scope call: %v", err)
+	}
+	if strings.TrimSpace(newText) != "reloaded-seat|<unset>|<unset>" {
+		t.Fatalf("new scope did not use reloaded bases: %q", newText)
 	}
 }

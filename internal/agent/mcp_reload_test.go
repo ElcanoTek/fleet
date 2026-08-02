@@ -36,7 +36,7 @@ func mcpHTTPStub(t *testing.T, toolName string) *httptest.Server {
 }
 
 func TestSpecsToServerDefs(t *testing.T) {
-	defs := specsToServerDefs(map[string]MCPServerSpec{
+	defs := MCPServerDefs(map[string]MCPServerSpec{
 		"http":     {Enabled: true, URL: "https://x.test/mcp", Headers: map[string]string{"A": "b"}},
 		"stdio":    {Enabled: true, Command: "python", Args: []string{"s.py"}, Dir: "/bundle"},
 		"disabled": {Enabled: false, URL: "https://y.test/mcp"},

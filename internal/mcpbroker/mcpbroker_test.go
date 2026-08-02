@@ -60,6 +60,12 @@ type fakeScopedBroker struct {
 	panicOpen      any
 	panicScopeCall any
 	panicClose     any
+	reloadResult   *ReloadResult
+	reloadErr      error
+	panicReload    any
+	reloadRelease  chan struct{}
+	reloadStarted  chan struct{}
+	reloadOnce     sync.Once
 	openRelease    chan struct{}
 	openStarted    chan struct{}
 	openStartOnce  sync.Once
@@ -69,7 +75,25 @@ var (
 	_ agentcore.MCPBroker = (*fakeBroker)(nil)
 	_ Backend             = (*fakeBroker)(nil)
 	_ ScopedBackend       = (*fakeScopedBroker)(nil)
+	_ ReloadBackend       = (*fakeScopedBroker)(nil)
 )
+
+func (b *fakeScopedBroker) Reload(ctx context.Context) (*ReloadResult, error) {
+	if b.panicReload != nil {
+		panic(b.panicReload)
+	}
+	if b.reloadStarted != nil {
+		b.reloadOnce.Do(func() { close(b.reloadStarted) })
+	}
+	if b.reloadRelease != nil {
+		select {
+		case <-b.reloadRelease:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return b.reloadResult, b.reloadErr
+}
 
 func (b *fakeScopedBroker) OpenScope(_ context.Context, spec ScopeSpec) (string, []ToolDescriptor, error) {
 	if b.panicOpen != nil {
@@ -252,6 +276,14 @@ func TestClientServer_ScopedBackendPanicsReturnCorrelatedErrors(t *testing.T) {
 				return scope.Close(ctx)
 			},
 		},
+		{
+			name: "reload",
+			fake: &fakeScopedBroker{fakeBroker: &fakeBroker{}, panicReload: secret},
+			call: func(ctx context.Context, c *Client) error {
+				_, err := c.Reload(ctx)
+				return err
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -273,6 +305,85 @@ func TestClientServer_ScopedBackendPanicsReturnCorrelatedErrors(t *testing.T) {
 				t.Fatalf("server stopped serving after contained panic: %v", err)
 			}
 		})
+	}
+}
+
+func TestClientServer_ReloadRoundTrip(t *testing.T) {
+	fake := &fakeScopedBroker{
+		fakeBroker: &fakeBroker{},
+		reloadResult: &ReloadResult{
+			Summary: ReloadSummary{
+				Added:     []string{"added"},
+				Removed:   []string{"removed"},
+				Restarted: []string{"restarted"},
+				Unchanged: []string{"unchanged"},
+			},
+			Tools: []ToolDescriptor{{Server: "added", Tool: "lookup", InputSchema: map[string]any{"type": "object"}}},
+		},
+	}
+	client := loopback(t, fake)
+
+	result, err := client.Reload(context.Background())
+	if err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+	if len(result.Summary.Added) != 1 || result.Summary.Added[0] != "added" ||
+		len(result.Summary.Removed) != 1 || result.Summary.Removed[0] != "removed" ||
+		len(result.Summary.Restarted) != 1 || result.Summary.Restarted[0] != "restarted" ||
+		len(result.Summary.Unchanged) != 1 || result.Summary.Unchanged[0] != "unchanged" {
+		t.Fatalf("summary = %+v", result.Summary)
+	}
+	if len(result.Tools) != 1 || result.Tools[0].Server != "added" || result.Tools[0].Tool != "lookup" {
+		t.Fatalf("tools = %+v", result.Tools)
+	}
+	result.Summary.Added[0] = "mutated"
+	result.Tools[0].InputSchema["type"] = "array"
+	if fake.reloadResult.Summary.Added[0] != "added" || fake.reloadResult.Tools[0].InputSchema["type"] != "object" {
+		t.Fatal("Reload returned mutable response-owned data")
+	}
+}
+
+func TestClientServer_ReloadUnsupported(t *testing.T) {
+	client := loopback(t, &fakeBroker{})
+	_, err := client.Reload(context.Background())
+	if err == nil || err.Error() != "mcpbroker: backend does not support reload" {
+		t.Fatalf("Reload error = %v, want unsupported error", err)
+	}
+}
+
+func TestClientServer_ReloadErrorDoesNotCrossCredentialValue(t *testing.T) {
+	const secret = "resolved-connector-secret"
+	fake := &fakeScopedBroker{fakeBroker: &fakeBroker{}, reloadErr: errors.New(secret)}
+	client := loopback(t, fake)
+	_, err := client.Reload(context.Background())
+	if err == nil || err.Error() != "mcpbroker: credential-owner reload failed" {
+		t.Fatalf("Reload error = %v, want value-free failure", err)
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Fatalf("credential value crossed reload response: %q", err)
+	}
+}
+
+func TestClientServer_ReloadCancellationReachesBackend(t *testing.T) {
+	fake := &fakeScopedBroker{
+		fakeBroker:    &fakeBroker{},
+		reloadRelease: make(chan struct{}),
+		reloadStarted: make(chan struct{}),
+	}
+	client := loopback(t, fake)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := client.Reload(ctx)
+		done <- err
+	}()
+	<-fake.reloadStarted
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("Reload = %v, want context canceled", err)
+	}
+	if err := client.Ping(context.Background()); err != nil {
+		t.Fatalf("Ping after cancelled reload: %v", err)
 	}
 }
 

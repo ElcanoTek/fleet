@@ -31,6 +31,16 @@ parent left open. Disabled servers are absent from the shared spawn-definition
 map, so a stale selection cannot launch one through either the broker or the
 legacy scheduled binder.
 
+The protocol also supports credential-owner reload. The parent sends an empty
+`reload` request — never resolved server definitions — and the child re-reads
+its bundle and environment-backed connector configuration, applies the same
+minimum add/remove/restart diff as the in-process client, and returns only the
+public summary and refreshed tool catalog. Reload requests use the existing
+correlation, cancellation, and value-free panic-containment machinery. Scope
+opening serializes with reload: an opening scope receives a coherent old or new
+base catalog, while scopes already open keep their original client until close.
+Inline `http_tools` remain boot-pinned, matching the existing reload contract.
+
 ## Why this is separate
 
 Scheduled runs can select different credential accounts and carry different task
@@ -76,8 +86,9 @@ failure fails the turn closed before provider or tool execution; it never falls
 back to the local client.
 
 The local-client default remains for transitional callers and tests. Production
-startup does not inject the new Manager options yet, and broker-mode hot reload
-is deliberately deferred to the switch-on sequence.
+startup does not inject the new Manager options yet. The child-side reload
+protocol is ready, but Manager's reload adapter and production broker injection
+remain part of the switch-on sequence.
 
 The scheduled `Agent` accepts the same broker/catalog pair and threads it into
 its existing `agentcore.Run`; governed sub-agents inherit that pair, and the

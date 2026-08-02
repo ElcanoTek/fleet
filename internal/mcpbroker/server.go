@@ -40,6 +40,13 @@ type ScopedBackend interface {
 	CloseScope(ctx context.Context, scopeID string) error
 }
 
+// ReloadBackend optionally extends Backend with child-owned configuration
+// reload. The request intentionally carries no server definitions: the backend
+// re-reads them where connector credentials live and returns public metadata.
+type ReloadBackend interface {
+	Reload(ctx context.Context) (*ReloadResult, error)
+}
+
 // Server answers mcpbroker requests by running each against a Backend — the end
 // that holds the connector secrets and the MCP subprocesses. A Client in another
 // process reaches it over a connection.
@@ -228,6 +235,41 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 					}
 				} else {
 					resp.Err = "mcpbroker: backend does not support scoped sessions"
+				}
+				write(resp)
+			}(req)
+
+		case methodReload:
+			callCtx, cancel := context.WithCancel(ctx)
+			mu.Lock()
+			inflight[req.ID] = cancel
+			mu.Unlock()
+			wg.Add(1)
+			go func(req request) {
+				defer recoverBackendPanic("mcpbroker.reload", req.ID, write)
+				defer wg.Done()
+				defer func() {
+					mu.Lock()
+					delete(inflight, req.ID)
+					mu.Unlock()
+					cancel()
+				}()
+				resp := response{ID: req.ID}
+				if reloadable, ok := s.backend.(ReloadBackend); ok {
+					result, err := reloadable.Reload(callCtx)
+					switch {
+					case err != nil:
+						// Reload errors can embed resolved URLs, headers, or subprocess
+						// environment values. Unlike ordinary tool output, none of that is
+						// permitted to cross from the credential owner to the parent.
+						resp.Err = "mcpbroker: credential-owner reload failed"
+					case result == nil:
+						resp.Err = "mcpbroker: backend returned an empty reload result"
+					default:
+						resp.Reload = result
+					}
+				} else {
+					resp.Err = "mcpbroker: backend does not support reload"
 				}
 				write(resp)
 			}(req)
