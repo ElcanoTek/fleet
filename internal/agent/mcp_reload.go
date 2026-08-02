@@ -78,12 +78,12 @@ func (m *Manager) mcpRosterSnapshot() (mcpOptionalSet, []string) {
 	return m.optionalServers, m.mcpToolRoster
 }
 
-// specsToServerDefs converts the enabled entries of a resolved spec map into the
+// MCPServerDefs converts the enabled entries of a resolved spec map into the
 // transport-agnostic mcp.ServerDef list the client's Reload diffs against. It
 // mirrors BuildMCPClient's stdio/HTTP dispatch. Disabled specs are dropped so a
 // server toggled off in the manifest is removed on reload. The synthetic inline
 // http-tools server has no spec and is left untouched by Reload.
-func specsToServerDefs(specs map[string]MCPServerSpec) []mcp.ServerDef {
+func MCPServerDefs(specs map[string]MCPServerSpec) []mcp.ServerDef {
 	defs := make([]mcp.ServerDef, 0, len(specs))
 	for name, spec := range specs {
 		if !spec.Enabled {
@@ -173,7 +173,7 @@ func (m *Manager) ReloadMCPServers(ctx context.Context, newSpecs map[string]MCPS
 	// all-or-nothing and the gate revert below restores consistency.
 	reloadCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
-	summary, err := m.mcpClient.Reload(reloadCtx, specsToServerDefs(newSpecs))
+	summary, err := m.mcpClient.Reload(reloadCtx, MCPServerDefs(newSpecs))
 	if err != nil {
 		m.mcpGatingMu.Lock()
 		m.allowlist = prevAllow

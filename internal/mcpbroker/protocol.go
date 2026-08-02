@@ -55,6 +55,10 @@ const (
 	// methodCall with request.Scope set, preserving one call envelope and one
 	// agentcore.MCPBroker seam.
 	methodCloseScope method = "scope_close"
+	// methodReload asks the credential-owning process to re-read its bundle and
+	// environment-backed connector configuration. No resolved server definition
+	// crosses the wire; the response contains only public names and tool metadata.
+	methodReload method = "reload"
 )
 
 // ToolDescriptor is one entry of the broker's tool catalog — the public shape of
@@ -79,6 +83,23 @@ type ScopeSpec struct {
 	Selection []ScopeChoice `json:"selection,omitempty"`
 	TaskID    string        `json:"taskId,omitempty"`
 	Workspace string        `json:"workspace,omitempty"`
+}
+
+// ReloadSummary is the public, transport-neutral shape of an MCP catalog
+// reload. Server names are configuration identifiers, not credential values.
+type ReloadSummary struct {
+	Added     []string `json:"added"`
+	Removed   []string `json:"removed"`
+	Restarted []string `json:"restarted"`
+	Unchanged []string `json:"unchanged"`
+}
+
+// ReloadResult reports the registry diff and the refreshed public tool catalog.
+// Returning both in one response gives the parent one coherent post-reload
+// snapshot without exposing the credential-bearing server definitions.
+type ReloadResult struct {
+	Summary ReloadSummary    `json:"summary"`
+	Tools   []ToolDescriptor `json:"tools"`
 }
 
 // request is a client -> server frame. The server only ever decodes requests; the
@@ -128,4 +149,6 @@ type response struct {
 	Accounts []string         `json:"accounts,omitempty"`
 	// Scope answers methodOpenScope with the broker-issued opaque ID.
 	Scope string `json:"scope,omitempty"`
+	// Reload answers methodReload with the diff and refreshed public catalog.
+	Reload *ReloadResult `json:"reload,omitempty"`
 }

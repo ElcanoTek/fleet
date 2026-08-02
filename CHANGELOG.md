@@ -84,6 +84,14 @@ prior versions are listed because none have shipped.
   and remote-MCP shadowing uses the returned public catalog. Production startup
   does not inject this opener yet.
 
+- **Credential-owner MCP reload (#167 prerequisite):** the broker protocol can
+  now ask the child to re-read its own bundle and credential environment, apply
+  the minimum server diff, and return only the public change summary and tool
+  catalog. Resolved connector definitions never cross the pipe; reload retains
+  request cancellation and value-free panic containment, existing scopes keep
+  their snapshot, and future scope opens serialize onto a coherent old or new
+  catalog. Production startup and Manager reload injection remain deferred.
+
 - **Query-parameter API keys for hosted connectors (Browserbase)**: some
   vendors authenticate their hosted MCP server with the key in a URL query
   parameter rather than a header. api_key connectors now support
