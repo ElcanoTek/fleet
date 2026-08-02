@@ -69,6 +69,28 @@ func TestBuildOptionalServerMetadata_FailedMCP_ToolsIsEmptyArrayNotNull(t *testi
 	}
 }
 
+func TestBuildOptionalServerMetadata_UsesInjectedPublicCatalogAndAccounts(t *testing.T) {
+	m := &Manager{
+		mcpCatalog:  []mcp.ServerTool{{ServerName: "gamma", Tool: mcp.Tool{Name: "render"}}},
+		mcpAccounts: map[string][]string{"gamma": {"primary", "backup"}},
+	}
+	out := m.buildOptionalServerMetadata(map[string]MCPServerSpec{
+		"gamma": {Enabled: true, Optional: true},
+	})
+	var gamma OptionalServerInfo
+	for _, info := range out {
+		if info.Name == "gamma" {
+			gamma = info
+		}
+	}
+	if gamma.ToolCount != 1 || len(gamma.Tools) != 1 || gamma.Tools[0] != "render" {
+		t.Fatalf("injected tool catalog not reflected: %+v", gamma)
+	}
+	if len(gamma.Accounts) != 2 || gamma.Accounts[0] != "primary" || gamma.Accounts[1] != "backup" {
+		t.Fatalf("injected public account names not reflected: %+v", gamma.Accounts)
+	}
+}
+
 func TestMCPServerCatalog_ReturnsSnapshot(t *testing.T) {
 	// Catalog exposes the exact snapshot built at Manager.New(). Test
 	// that mutating the returned slice doesn't leak back into the

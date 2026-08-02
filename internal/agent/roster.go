@@ -6,8 +6,6 @@ import (
 	"strings"
 
 	"charm.land/fantasy"
-
-	"github.com/ElcanoTek/fleet/internal/creds"
 )
 
 // These catalog filters remain driver-side data shapes. Tool registration and
@@ -47,14 +45,14 @@ type OptionalServerInfo struct {
 }
 
 // buildOptionalServerMetadata snapshots the Optional-server subset of the
-// spec map into the catalog shape. Cheap: tool counts come from the live
-// mcp.Client and tool descriptions are discarded (the settings UI only
+// spec map into the catalog shape. Cheap: tool counts come from the public MCP
+// catalog and tool descriptions are discarded (the settings UI only
 // shows server names + human descriptions, not every tool's description).
 // Returns a deterministic list sorted by server name so catalog JSON is
 // stable across requests.
 func (m *Manager) buildOptionalServerMetadata(specs map[string]MCPServerSpec) []OptionalServerInfo {
 	out := make([]OptionalServerInfo, 0)
-	serverTools := m.mcpClient.GetAllTools()
+	serverTools := m.mcpCatalogSnapshot()
 	for name, spec := range specs {
 		if !spec.Enabled || !spec.Optional {
 			continue
@@ -67,7 +65,7 @@ func (m *Manager) buildOptionalServerMetadata(specs map[string]MCPServerSpec) []
 			EnabledByDefault: spec.EnabledByDefault,
 			// Provisioned credential-account seats (names only) so the picker can
 			// surface which accounts back this server. Nil when none are set.
-			Accounts: creds.AccountsFor(spec.AccountVars),
+			Accounts: append([]string(nil), m.mcpAccounts[name]...),
 			// Empty (not nil) so JSON renders `[]` instead of `null`
 			// when the underlying MCP fails to start. The picker calls
 			// `.join()` on this client-side; null would crash the render.

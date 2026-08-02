@@ -62,6 +62,7 @@ func TestSpecsToServerDefs(t *testing.T) {
 // would re-trigger the #433 tool-ceiling overflow).
 func TestReloadMCPServers_RefreshesGating(t *testing.T) {
 	ctx := context.Background()
+	t.Setenv("B_TOKEN_BLUE", "test-placeholder")
 	srvA := mcpHTTPStub(t, "tool_a")
 	srvB := mcpHTTPStub(t, "tool_b")
 
@@ -77,7 +78,13 @@ func TestReloadMCPServers_RefreshesGating(t *testing.T) {
 	// Reload: keep A, add B as an OPTIONAL server.
 	specsAB := map[string]MCPServerSpec{
 		"A": {Enabled: true, URL: srvA.URL},
-		"B": {Enabled: true, URL: srvB.URL, Optional: true, Description: "the B server"},
+		"B": {
+			Enabled:     true,
+			URL:         srvB.URL,
+			Optional:    true,
+			Description: "the B server",
+			AccountVars: []string{"B_TOKEN"},
+		},
 	}
 	sum, err := m.ReloadMCPServers(ctx, specsAB)
 	if err != nil {
@@ -109,6 +116,9 @@ func TestReloadMCPServers_RefreshesGating(t *testing.T) {
 	for _, info := range m.MCPServerCatalog() {
 		if info.Name == "B" {
 			catHasB = true
+			if len(info.Accounts) != 1 || info.Accounts[0] != "blue" {
+				t.Errorf("reloaded B accounts = %v, want [blue]", info.Accounts)
+			}
 		}
 	}
 	if !catHasB {
