@@ -376,7 +376,7 @@ func TestClientServer_ReloadErrorDoesNotCrossCredentialValue(t *testing.T) {
 	fake := &fakeScopedBroker{fakeBroker: &fakeBroker{}, reloadErr: errors.New(secret)}
 	client := loopback(t, fake)
 	_, err := client.Reload(context.Background())
-	if err == nil || err.Error() != "mcpbroker: credential-owner reload failed" {
+	if err == nil || err.Error() != errBrokerReloadFailed {
 		t.Fatalf("Reload error = %v, want value-free failure", err)
 	}
 	if strings.Contains(err.Error(), secret) {
@@ -594,14 +594,15 @@ func TestClientServer_RemoteScopeValidation(t *testing.T) {
 }
 
 func TestClientServer_ScopeCloseFailureIsRetryable(t *testing.T) {
-	fake := &fakeScopedBroker{fakeBroker: &fakeBroker{}, scopeID: "scope-1", closeErr: errors.New("busy")}
+	const secret = "close failed with connector-secret"
+	fake := &fakeScopedBroker{fakeBroker: &fakeBroker{}, scopeID: "scope-1", closeErr: errors.New(secret)}
 	client := loopback(t, fake)
 	scope, err := client.OpenScope(context.Background(), ScopeSpec{})
 	if err != nil {
 		t.Fatalf("OpenScope: %v", err)
 	}
-	if err := scope.Close(context.Background()); err == nil || err.Error() != "busy" {
-		t.Fatalf("first Close = %v, want busy", err)
+	if err := scope.Close(context.Background()); err == nil || err.Error() != errBrokerScopeCloseFailed || strings.Contains(err.Error(), secret) {
+		t.Fatalf("first Close = %v, want value-free retryable failure", err)
 	}
 	fake.closeErr = nil
 	if err := scope.Close(context.Background()); err != nil {
@@ -771,14 +772,45 @@ func TestClientServer_IsErrorPassthrough(t *testing.T) {
 }
 
 func TestClientServer_TransportErrorBecomesGoError(t *testing.T) {
-	client := loopback(t, &fakeBroker{err: errors.New("upstream down")})
+	const secret = "upstream exposed connector-secret"
+	client := loopback(t, &fakeBroker{text: "partial secret output", isErr: true, err: errors.New(secret)})
 
-	_, isErr, err := client.CallMCP(context.Background(), "s", "t", nil)
-	if err == nil || isErr {
+	text, isErr, err := client.CallMCP(context.Background(), "s", "t", nil)
+	if err == nil || isErr || text != "" {
 		t.Fatalf("(isErr=%v, err=%v), want a transport Go error and isErr=false", isErr, err)
 	}
-	if err.Error() != "upstream down" {
-		t.Fatalf("err = %q, want the server-side error string round-tripped", err.Error())
+	if err.Error() != errBrokerCallFailed || strings.Contains(err.Error(), secret) {
+		t.Fatalf("err = %q, want value-free credential-owner failure", err.Error())
+	}
+}
+
+func TestClientServer_DiscoveryErrorsDoNotCrossCredentialValues(t *testing.T) {
+	const secret = "discovery failed with connector-secret"
+	client := loopback(t, &fakeBroker{
+		tools:    []ToolDescriptor{{Server: "partial", Tool: "secret"}},
+		accounts: []string{"partial-secret"},
+		listErr:  errors.New(secret),
+	})
+	if tools, err := client.ListTools(context.Background()); err == nil || err.Error() != errBrokerDiscoveryFailed || len(tools) != 0 || strings.Contains(err.Error(), secret) {
+		t.Fatalf("ListTools = (%v, %v), want empty value-free failure", tools, err)
+	}
+	if accounts, err := client.ListAccounts(context.Background(), "server", []string{"TOKEN"}); err == nil || err.Error() != errBrokerDiscoveryFailed || len(accounts) != 0 || strings.Contains(err.Error(), secret) {
+		t.Fatalf("ListAccounts = (%v, %v), want empty value-free failure", accounts, err)
+	}
+}
+
+func TestClientServer_ScopeOpenErrorDoesNotCrossCredentialValues(t *testing.T) {
+	const secret = "scope failed with connector-secret"
+	client := loopback(t, &fakeScopedBroker{
+		fakeBroker:   &fakeBroker{},
+		scopeID:      "partial-scope",
+		scopeTools:   []ToolDescriptor{{Server: "partial", Tool: "secret"}},
+		scopeSkipped: []string{"partial-secret"},
+		openErr:      errors.New(secret),
+	})
+	scope, err := client.OpenScope(context.Background(), ScopeSpec{})
+	if err == nil || err.Error() != errBrokerScopeOpenFailed || scope != nil || strings.Contains(err.Error(), secret) {
+		t.Fatalf("OpenScope = (%v, %v), want empty value-free failure", scope, err)
 	}
 }
 

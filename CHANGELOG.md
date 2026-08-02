@@ -19,6 +19,9 @@ prior versions are listed because none have shipped.
 
 ### Security
 
+- Replace credential-owner MCP call, discovery, scope-open, scope-close, and
+  reload error details with stable value-free broker errors; failed calls also
+  discard partial output before it can cross IPC.
 - Pin Next.js transitive `postcss` and `sharp` dependencies above their patched
   floors and refresh both vulnerable `brace-expansion` lines in the web lockfile.
 
