@@ -1654,6 +1654,10 @@ func splitEmails(raw string) []string {
 // surrounding quotes. Always overwrites — Load snapshots/restores the
 // pre-existing process env around this call so "process env wins" holds.
 func loadEnvFile(path string) error {
+	return loadEnvFileFiltered(path, func(string) bool { return true })
+}
+
+func loadEnvFileFiltered(path string, include func(string) bool) error {
 	f, err := os.Open(path) // #nosec G304 — path comes from trusted config.
 	if err != nil {
 		return err
@@ -1674,6 +1678,9 @@ func loadEnvFile(path string) error {
 			continue
 		}
 		k := strings.TrimSpace(line[:eq])
+		if include != nil && !include(k) {
+			continue
+		}
 		v := stripInlineComment(strings.TrimSpace(line[eq+1:]))
 		v = stripQuotes(v)
 		if !isAllowedEnvVar(k) {

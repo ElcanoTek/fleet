@@ -19,15 +19,27 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **Production bundle MCP process boundary (#167):** `fleet serve` now starts
+  the credential-owning broker subprocess before serving and routes interactive
+  turns, scheduled tasks, approvals, and MCP reload through it. The parent keeps
+  public catalog/account/gating metadata only; after liveness and discovery
+  succeed it unsets connector env keys, overwrites/drops resolved MCP and inline
+  HTTP definitions, and prevents config hot-reload from rehydrating exact or
+  account-suffixed keys. Startup fails on a connector/parent env-name collision
+  or broker preflight error, without scrubbing on failure. Per-user remote MCP
+  OAuth clients remain in-process under ADR-0009, so #167 stays open for that
+  final credential path. See
+  [`docs/MCP-BROKER-SCOPES.md`](docs/MCP-BROKER-SCOPES.md).
+
 - **Per-run MCP broker scope protocol (#167 prerequisite):** the internal broker
   can open an isolated session from non-secret server/account selections, task
   ID, and workspace path; return its opaque ID and public tool catalog; and route
   the existing `agentcore.MCPBroker` call seam through that scope. Scope calls
   retain request correlation and cancellation, close is idempotent after success
   and retryable after failure, legacy backends fail explicitly, and backend
-  panics remain value-free and incident-correlated. This is protocol groundwork
-  only: production still constructs credentialed clients in the main process,
-  and #167 remains open for subprocess switch-on and remote-MCP isolation. See
+  panics remain value-free and incident-correlated. This protocol groundwork is
+  consumed by the production bundle boundary above; #167 remains open for
+  per-user remote-MCP isolation. See
   [`docs/MCP-BROKER-SCOPES.md`](docs/MCP-BROKER-SCOPES.md).
 
 - **Credential-owning MCP scope backend (#167 prerequisite):** `fleet
@@ -36,29 +48,28 @@ prior versions are listed because none have shipped.
   scoped subprocesses when its protocol loop exits. The shared spawn-definition
   builder now excludes disabled servers, so a stale task selection cannot launch
   one. A cancelled open also closes a late-created scope instead of losing its
-  opaque handle. Production still does not spawn or use this broker, and #167
-  remains open for that switch-on and parent credential scrubbing.
+  opaque handle. Production now consumes this backend as described above.
 
 - **Interactive MCP broker seam (#167 prerequisite):** `TurnConfig` can now
   inject an out-of-process broker plus its public catalog into the unchanged
   `agentcore.Run` path. Per-user remote overlays compose with that injected base
-  without shadowing bundle servers. The local-client default is unchanged, and
-  production `Manager` construction does not inject the seam yet.
+  without shadowing bundle servers. The local-client default remains for
+  compatibility callers and tests; production injects the subprocess broker.
 
 - **Approval MCP broker seam (#167 prerequisite):** interactive email
   pre-validation and post-approval MCP execution now depend on the common
   broker/catalog seam instead of a concrete credentialed client. Prefixed tool
   routing remains server-qualified (including underscore-bearing names), and a
-  broker tool-level error now resolves the approval as failed. Production
-  `Manager` still supplies its local-client adapter until the broker switch-on.
+  broker tool-level error now resolves the approval as failed. Production uses
+  the child broker's unscoped default-seat path for long-lived approvals.
 
 - **Connector env inventory (#167 prerequisite):** client bundles now retain a
   names-only inventory of MCP and inline-HTTP-tool environment references from
   the raw manifest, before interpolation can erase already-exported variable
   names. The inventory also expands account-suffixed stdio env keys against a
   supplied environment, enabling the production parent to scrub exactly the
-  connector keys after a broker child inherits them. No scrubbing is activated
-  by this prerequisite alone.
+  connector keys after a broker child inherits them. The production boundary
+  above now consumes this inventory.
 
 - **Interactive Manager MCP scope seam (#167 prerequisite):** Manager can now
   consume an injected public broker/catalog/account inventory without creating
@@ -66,27 +77,25 @@ prior versions are listed because none have shipped.
   chat turn. Scope selection always includes mandatory bundle servers, includes
   only opted-in optional bundle servers, threads public account names and the
   bound conversation workspace, fails closed on open errors, and closes with a
-  cancellation-independent timeout. Production startup and scheduled runs do
-  not inject this seam yet, so parent credential scrubbing remains deferred.
+  cancellation-independent timeout. Production now injects this seam.
 
 - **Scheduled MCP broker seam (#167 prerequisite):** the scheduled `Agent` and
   its governed sub-agents can now call and discover bundle tools through an
   injected broker/catalog, including composition with the existing per-user
   remote overlay. Broker mode suppresses the in-process MCP loader tools instead
-  of advertising an unavailable mutation path. Production startup still leaves
-  the `Runner` on its local compatibility path.
+  of advertising an unavailable mutation path. Production uses this broker path.
 
 - **Scheduled Runner MCP scopes (#167 prerequisite):** `scheduledrun.Runner`
   can now open and close an isolated broker scope per task, preserving explicit
   server/account choices and mapping an empty selection to all enabled bundle
   servers. Task ID and per-run workspace metadata cross the value-free seam;
   scope failures do not fall back locally, cancellation cannot suppress close,
-  and remote-MCP shadowing uses the returned public catalog. Production startup
-  does not inject this opener yet.
+  and remote-MCP shadowing uses the returned public catalog. Production injects
+  this opener for every scheduled run.
 
 - **Credential-owner MCP reload (#167 prerequisite):** the broker protocol can
-  now ask the child to re-read its own bundle and credential environment, apply
-  the minimum server diff, and return only the public change summary and tool
+  now ask the child to re-read its own bundle against its boot credential
+  snapshot, apply the minimum server diff, and return only the public change summary and tool
   catalog, provisioned account-seat names, and enabled servers' public gating
   metadata. Resolved connector definitions never cross the pipe; reload retains
   request cancellation and value-free panic containment, existing scopes keep
@@ -100,7 +109,7 @@ prior versions are listed because none have shipped.
   server metadata from the child result instead of re-reading connector config
   in the parent, and publishes that entire public view atomically. An injected
   broker without a reload adapter fails explicitly rather than returning a false
-  empty success. Production startup does not inject the adapter yet.
+  empty success. Production injects the credential-owner adapter.
 
 - **Scheduled public MCP inventory (#167 prerequisite):** broker-scoped task
   runs can expand an empty selection and decide whether to mint a per-run
@@ -172,9 +181,8 @@ prior versions are listed because none have shipped.
   and keep the broker serving subsequent requests. The recovered panic value is
   classified only and never crosses the broker pipe, so connector material in a
   panic cannot be reflected into the agent-loop process. Runtime/README claims
-  now also state the current boundary honestly: MCP credentials stay out of the
-  sandbox and model context, while the production out-of-process switch-on
-  remains open in #167.
+  distinguish the now-active bundle process boundary from the still-in-process
+  per-user remote MCP OAuth path tracked by #167.
 
 - **Sandbox acquisition now fails closed at the pool shutdown boundary.** Every
   take path (warm, cold, persistent, lockdown, and allowlisted) returns

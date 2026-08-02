@@ -79,6 +79,42 @@ func TestReload_AppliesChangedReloadable(t *testing.T) {
 	}
 }
 
+func TestReload_ExcludedEnvironmentIsNotRehydrated(t *testing.T) {
+	isolateEnv(t)
+	t.Setenv("TAVILY_API_KEY", "process-winner")
+	t.Setenv("TAVILY_API_KEY_BLUE", "account-winner")
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	writeEnv(t, envPath, "TAVILY_API_KEY=file-secret\nTAVILY_API_KEY_BLUE=file-account-secret\nFLEET_MAX_COST_USD=10\n")
+	cfg, err := Load(envPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if err := cfg.ExcludeEnvVarsFromReload("TAVILY_API_KEY"); err != nil {
+		t.Fatalf("ExcludeEnvVarsFromReload: %v", err)
+	}
+	if err := os.Unsetenv("TAVILY_API_KEY"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Unsetenv("TAVILY_API_KEY_BLUE"); err != nil {
+		t.Fatal(err)
+	}
+
+	writeEnv(t, envPath, "TAVILY_API_KEY=rotated-secret\nTAVILY_API_KEY_BLUE=rotated-account-secret\nFLEET_MAX_COST_USD=22\n")
+	if _, err := cfg.Reload(envPath); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+	if _, ok := os.LookupEnv("TAVILY_API_KEY"); ok {
+		t.Fatal("reload rehydrated excluded exact environment key")
+	}
+	if _, ok := os.LookupEnv("TAVILY_API_KEY_BLUE"); ok {
+		t.Fatal("reload rehydrated excluded account-suffixed environment key")
+	}
+	if cfg.LiveMaxCostUSD() != 22 {
+		t.Fatalf("non-excluded reloadable value = %v, want 22", cfg.LiveMaxCostUSD())
+	}
+}
+
 // TestReload_UnparseableKeepsCurrent: a non-numeric value records an Error and
 // leaves the running value intact.
 func TestReload_UnparseableKeepsCurrent(t *testing.T) {

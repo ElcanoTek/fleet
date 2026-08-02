@@ -95,6 +95,9 @@ type Bundle struct {
 	// remove that key after the broker child inherits the startup environment.
 	connectorEnvVarNames     []string
 	connectorAccountVarNames []string
+	// scrubbedAlwaysOnServers preserves only the public availability rows after
+	// ScrubConnectorRuntimeDefinitions removes the credential-bearing catalog.
+	scrubbedAlwaysOnServers []AlwaysOnServer
 
 	Branding   Branding
 	Models     Models
@@ -1542,6 +1545,12 @@ type AlwaysOnServer struct {
 
 // AlwaysOnServers returns the bundle's enabled, non-Optional connectors.
 func (b *Bundle) AlwaysOnServers() []AlwaysOnServer {
+	if b == nil {
+		return nil
+	}
+	if b.MCPCatalog == nil && b.scrubbedAlwaysOnServers != nil {
+		return append([]AlwaysOnServer(nil), b.scrubbedAlwaysOnServers...)
+	}
 	var out []AlwaysOnServer
 	for i := range b.MCPCatalog {
 		sd := &b.MCPCatalog[i]
@@ -2070,6 +2079,13 @@ func (b *Bundle) ConnectorEnvVarNames() []string {
 	return append([]string(nil), b.connectorEnvVarNames...)
 }
 
+// ConnectorAccountEnvVarNames returns the stdio env keys whose
+// <KEY>_<ACCOUNT> process-env variants may be consumed by account binding.
+// These names are public identifiers only; values are never retained here.
+func (b *Bundle) ConnectorAccountEnvVarNames() []string {
+	return append([]string(nil), b.connectorAccountVarNames...)
+}
+
 // ConnectorEnvironmentKeys returns the exact keys in environ that belong to
 // bundle connectors: every declared base name plus every <stdio-env-key>_<seat>
 // variant recognized by the account suffix convention. Entries and returned
@@ -2108,6 +2124,26 @@ func (b *Bundle) ConnectorEnvironmentKeys(environ []string) []string {
 	}
 	slices.Sort(out)
 	return out
+}
+
+// ScrubConnectorRuntimeDefinitions removes the interpolated connector sections
+// from an already loaded bundle. Call only after all public metadata has been
+// extracted and the credential-owning child has inherited the environment.
+// Branding, providers, webhook triggers, remote directory entries, policies,
+// templates, and content paths remain intact for parent-side consumers.
+func (b *Bundle) ScrubConnectorRuntimeDefinitions() {
+	if b == nil {
+		return
+	}
+	b.scrubbedAlwaysOnServers = append([]AlwaysOnServer{}, b.AlwaysOnServers()...)
+	for i := range b.MCPCatalog {
+		b.MCPCatalog[i] = ServerDef{}
+	}
+	for i := range b.HTTPTools {
+		b.HTTPTools[i] = HTTPToolDef{}
+	}
+	b.MCPCatalog = nil
+	b.HTTPTools = nil
 }
 
 func connectorEnvInventory(servers []ServerDef, httpTools []HTTPToolDef) ([]string, []string) {

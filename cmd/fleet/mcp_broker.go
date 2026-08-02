@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"os"
 	"sort"
 	"sync"
 
@@ -53,23 +52,19 @@ func runMCPBroker() error {
 	return errors.Join(serveErr, backend.Close())
 }
 
-// loadMCPBrokerConfig resolves the bundle and connector environment inside the
-// credential-owning process. It is used at boot and reload so resolved server
-// definitions never need to cross the broker protocol.
+// loadMCPBrokerConfig resolves the bundle against the credential-owning
+// process's boot environment. It is used at boot and catalog reload so resolved
+// server definitions never need to cross the broker protocol; credential env
+// changes deliberately require a process restart.
 func loadMCPBrokerConfig() (*config.Config, error) {
 	bundle, err := clientconfig.Load(clientconfig.Dir())
 	if err != nil {
 		return nil, fmt.Errorf("load client config bundle: %w", err)
 	}
-	config.RegisterAllowedEnvVars(bundle.EnvVarNames()...)
-
-	cfg, err := config.Load(os.Getenv("FLEET_ENV_FILE"))
-	if err != nil {
-		return nil, fmt.Errorf("load config: %w", err)
-	}
-	cfg.MCPServers = bundle.MCPServerConfigs()
-	cfg.HTTPTools = bundle.HTTPToolConfigs()
-	return cfg, nil
+	return &config.Config{
+		MCPServers: bundle.MCPServerConfigs(),
+		HTTPTools:  bundle.HTTPToolConfigs(),
+	}, nil
 }
 
 // brokerBackend is the mcpbroker.Backend the broker process serves: calls run

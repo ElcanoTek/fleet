@@ -40,6 +40,13 @@ Two mechanisms, both equivalent:
 Both re-read values from the env file (`FLEET_ENV_FILE`) and the process
 environment. To change a value, edit the env file and trigger a reload.
 
+Bundle-connector env names are a deliberate exception once the production MCP
+broker has started. The parent permanently excludes those names and their
+account-suffixed variants from config reload, so a later env-file read cannot
+restore connector credentials to the agent process. Connector credential
+changes require a Fleet restart; MCP catalog reload still handles definition
+changes against the broker child's boot credential snapshot.
+
 ## Precedence
 
 Reload reproduces boot's **process-env-over-file** precedence for values that are
