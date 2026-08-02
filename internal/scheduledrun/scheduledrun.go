@@ -20,6 +20,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -92,20 +93,26 @@ type Options struct {
 	// (docs/SKILLS.md). nil = capability off.
 	UserSkills       func(ctx context.Context, email string) ([]UserSkillDoc, error)
 	SkillProposerFor func(ownerEmail string) agentcore.SkillProposer
+
+	// OpenTaskMCPScope creates one broker-owned MCP client for a scheduled run.
+	// Nil preserves the in-process compatibility binder.
+	OpenTaskMCPScope TaskMCPScopeOpener
 }
+
+// TaskMCPScopeOpener binds public server/account choices plus task/workspace
+// identity inside the credential-owning process. Credential values never cross
+// this seam.
+type TaskMCPScopeOpener func(ctx context.Context, selection agentcore.MCPSelection, taskID, workspace string) (*agent.MCPScope, error)
 
 // Runner executes claimed scheduled tasks in-process through the unified runtime
 // (Mode=Scheduled). It reuses the model resolver + sandbox warm pool held on the
 // interactive Manager — the SAME sandbox boundary interactive turns use.
 //
-// Per-task MCP credential-account isolation: when a task carries an mcp_selection
-// with named accounts, the run gets its OWN MCP client onto which the selection's
-// account-variant subprocesses are bound via agentcore.BindMCPSelection (which
-// overlays <VAR>_<ACCOUNT> via creds.ApplyClientSuffix onto the subprocess cmd.Env
-// — never argv, never the sandbox). That per-run client is Closed at run end so no
-// credentialed subprocess leaks across runs or into a concurrent task's client.
-// Tasks with no selection (or a default-account-only selection) reuse the shared
-// process-wide client.
+// Per-task MCP credential-account isolation: an injected OpenTaskMCPScope gives
+// every run a broker-owned client selected by public server/account names and
+// task/workspace identity. The compatibility path retains the existing local
+// behavior: an explicit selection gets a dedicated client bound via
+// agentcore.BindMCPSelection, while an empty selection reuses the shared client.
 type Runner struct {
 	cfg           *config.Config
 	mgr           *agent.Manager
@@ -145,6 +152,8 @@ type Runner struct {
 	// nil = capability off.
 	userSkills       func(ctx context.Context, email string) ([]UserSkillDoc, error)
 	skillProposerFor func(ownerEmail string) agentcore.SkillProposer
+
+	openTaskMCPScope TaskMCPScopeOpener
 }
 
 // UserSkillDoc is one user-authored skill in the shape the scheduled prompt
@@ -191,6 +200,7 @@ func New(opts Options) *Runner {
 		ownerEmail:          opts.OwnerEmail,
 		userSkills:          opts.UserSkills,
 		skillProposerFor:    opts.SkillProposerFor,
+		openTaskMCPScope:    opts.OpenTaskMCPScope,
 	}
 	r.baseSystemPrompt = r.buildBaseSystemPrompt()
 	return r
@@ -709,22 +719,21 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 		maxIter = *task.MaxIterations
 	}
 
-	// Wire per-task MCP credential-account isolation. When the task names
-	// accounts, bind its account-variant subprocesses onto a DEDICATED per-run
-	// client and Close them at run end so credentials never leak across runs or to
-	// a concurrent task. A default-only / empty selection reuses the shared client.
-	mcpClient, mcpCleanup, mcpWorkdir, err := r.bindTaskMCP(ctx, task)
+	// Wire per-task MCP credential-account isolation. Broker mode opens one
+	// child-owned scope per run; the compatibility path retains its dedicated
+	// local client for explicit selections and shared client for an empty one.
+	mcpBinding, err := r.bindTaskMCPRuntime(ctx, task)
 	if err != nil {
 		return nil, false, "", err
 	}
-	defer mcpCleanup()
+	defer mcpBinding.cleanup()
 
 	// Per-user remote (hosted) MCP overlay (#443): wire the task owner's
 	// OAuth-connected servers via the SAME composite mechanism the chat path uses,
 	// so a headless run reaches them without mutating the shared/per-run client.
 	// Best-effort: a server that needs re-auth or whose owner can't be resolved is
 	// skipped, never failing the run.
-	remoteOverlay := r.buildTaskRemoteOverlay(ctx, task, mcpClient)
+	remoteOverlay := r.buildTaskRemoteOverlay(ctx, task, mcpBinding.discoveryCatalog())
 	defer remoteOverlay.Close()
 
 	// The task owner's builder skills + propose_skill staging (docs/SKILLS.md):
@@ -801,7 +810,9 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 		Model:          model,
 		FallbackModel:  fallback,
 		FallbackModels: providerFallbacks,
-		MCPClient:      mcpClient,
+		MCPClient:      mcpBinding.client,
+		MCPBroker:      mcpBinding.broker,
+		MCPCatalog:     mcpBinding.catalog,
 		NativeTools:    nativeTools,
 		SystemPrompt:   taskSystemPrompt,
 		Persona:        taskPersona,
@@ -880,7 +891,7 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 	// mandatory reconciliation sweep so this run verifies before it re-creates.
 	// Appended to the TASK prompt, never the cached system prefix
 	// (docs/PROMPT-CACHE-CONTRACT.md).
-	prompt = agentcore.AugmentTaskWithCreateReconciliation(prompt, mcpWorkdir)
+	prompt = agentcore.AugmentTaskWithCreateReconciliation(prompt, mcpBinding.workdir)
 	runErr := a.Execute(ctx, prompt)
 	session := convertLogSession(task, a.LogSession())
 	if runErr != nil {
@@ -915,7 +926,7 @@ func taskCredentialAllowlist(task *models.Task) agentcore.CredentialAllowlist {
 // chat-side email) and builds a per-user remote-MCP overlay (#443) for the run.
 // Returns nil (a no-op overlay) when the feature is off, the owner can't be
 // resolved, or no server is connected — all best-effort, never fatal.
-func (r *Runner) buildTaskRemoteOverlay(ctx context.Context, task *models.Task, base *mcp.Client) *agent.RemoteMCPOverlay {
+func (r *Runner) buildTaskRemoteOverlay(ctx context.Context, task *models.Task, baseCatalog []mcp.ServerTool) *agent.RemoteMCPOverlay {
 	if r.remoteMCP == nil || r.ownerEmail == nil || task.CreatedBy == nil {
 		return nil
 	}
@@ -928,7 +939,7 @@ func (r *Runner) buildTaskRemoteOverlay(ctx context.Context, task *models.Task, 
 		return nil
 	}
 	shadowed := make(map[string]bool)
-	for _, st := range base.GetAllTools() {
+	for _, st := range baseCatalog {
 		shadowed[st.ServerName] = true
 	}
 	// Scheduled runs have no interactive Tools picker, so all of the owner's
@@ -944,7 +955,105 @@ func (r *Runner) buildTaskRemoteOverlay(ctx context.Context, task *models.Task, 
 	return overlay
 }
 
-// bindTaskMCP resolves the MCP client the scheduled run should use.
+// taskMCPBinding is the scheduled Agent's transport-neutral per-run MCP wiring.
+type taskMCPBinding struct {
+	client  *mcp.Client
+	broker  agentcore.MCPBroker
+	catalog []mcp.ServerTool
+	workdir string
+	cleanup func()
+}
+
+func (b taskMCPBinding) discoveryCatalog() []mcp.ServerTool {
+	if b.catalog != nil {
+		return b.catalog
+	}
+	if b.client != nil {
+		return b.client.GetAllTools()
+	}
+	return nil
+}
+
+const taskMCPScopeCloseTimeout = 5 * time.Second
+
+func (r *Runner) bindTaskMCPRuntime(ctx context.Context, task *models.Task) (taskMCPBinding, error) {
+	if r.openTaskMCPScope == nil {
+		if r.mgr != nil && r.mgr.MCPClient() == nil && r.mgr.MCPBroker() != nil {
+			return taskMCPBinding{}, errors.New("scheduled MCP broker requires a task scope opener")
+		}
+		client, cleanup, workdir, err := r.bindTaskMCP(ctx, task)
+		if err != nil {
+			return taskMCPBinding{}, err
+		}
+		// Keep catalog nil so agentcore re-discovers the mutable local client on
+		// every MCP-dirty rebuild after mcp_load_servers. discoveryCatalog still
+		// snapshots it for remote-server shadowing before the run starts.
+		return taskMCPBinding{client: client, workdir: workdir, cleanup: cleanup}, nil
+	}
+
+	selection := r.taskMCPSelection(task, true)
+	workdir, err := r.prepareTaskMCPWorkspace(task, selection)
+	if err != nil {
+		return taskMCPBinding{}, err
+	}
+	scope, err := r.openTaskMCPScope(ctx, selection, task.ID.String(), workdir)
+	if err != nil {
+		return taskMCPBinding{}, fmt.Errorf("open scheduled MCP scope: %w", err)
+	}
+	if scope == nil || scope.Close == nil {
+		return taskMCPBinding{}, errors.New("open scheduled MCP scope: opener returned an incomplete scope")
+	}
+	cleanup := func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), taskMCPScopeCloseTimeout)
+		defer cancel()
+		if closeErr := scope.Close(closeCtx); closeErr != nil {
+			log.Printf("scheduled task %s: close MCP scope: %v", task.ID, closeErr)
+		}
+	}
+	if scope.Broker == nil {
+		cleanup()
+		return taskMCPBinding{}, errors.New("open scheduled MCP scope: opener returned an incomplete scope")
+	}
+	catalog := append([]mcp.ServerTool(nil), scope.Catalog...)
+	if scope.Catalog != nil && catalog == nil {
+		catalog = []mcp.ServerTool{}
+	}
+	return taskMCPBinding{broker: scope.Broker, catalog: catalog, workdir: workdir, cleanup: cleanup}, nil
+}
+
+func (r *Runner) taskMCPSelection(task *models.Task, allWhenEmpty bool) agentcore.MCPSelection {
+	selection := make(agentcore.MCPSelection, 0, len(task.MCPSelection))
+	for _, choice := range task.MCPSelection {
+		selection = append(selection, agentcore.MCPChoice{Server: choice.Server, Account: choice.Account})
+	}
+	if len(selection) > 0 || !allWhenEmpty || r.cfg == nil {
+		return selection
+	}
+	for name, server := range r.cfg.MCPServers {
+		if server.Enabled {
+			selection = append(selection, agentcore.MCPChoice{Server: name})
+		}
+	}
+	sort.Slice(selection, func(i, j int) bool { return selection[i].Server < selection[j].Server })
+	return selection
+}
+
+func (r *Runner) prepareTaskMCPWorkspace(task *models.Task, selection agentcore.MCPSelection) (string, error) {
+	bases := r.mcpBases()
+	for _, choice := range selection {
+		if base, ok := bases[choice.Server]; ok && agentcore.EnvReferencesWorkspace(base.BaseEnv) {
+			workdir := agentcore.PerRunMCPWorkspaceDir("task-" + task.ID.String() + "-")
+			if err := r.stageTaskInputs(task, filepath.Join(workdir, "inputs")); err != nil {
+				return "", fmt.Errorf("stage task inputs: %w", err)
+			}
+			return workdir, nil
+		}
+	}
+	return "", nil
+}
+
+// bindTaskMCP resolves the local compatibility client the scheduled run should
+// use. bindTaskMCPRuntime selects this path or the injected broker scope above.
 //
 //   - Empty selection → the shared process-wide client (default seat), no-op
 //     cleanup. This preserves the load-on-demand path (mcp_load_servers) for
@@ -952,17 +1061,13 @@ func (r *Runner) buildTaskRemoteOverlay(ctx context.Context, task *models.Task, 
 //   - Non-empty selection → a DEDICATED per-run client onto which the task's
 //     {server, account} choices are bound via agentcore.BindMCPSelection. Named
 //     accounts spawn <server>_<account> subprocesses whose env carries the
-//     <VAR>_<ACCOUNT> overlay (creds.ApplyClientSuffix) on cmd.Env only. The
-//     cleanup Closes those subprocesses at run end so credentials never leak
-//     across runs or into a concurrent task's client. A named account with no
-//     matching <VAR>_<ACCOUNT> creds is REFUSED by BindMCPSelection rather than
+//     <VAR>_<ACCOUNT> overlay on cmd.Env only. Cleanup closes those subprocesses
+//     at run end. A missing named-account credential is refused rather than
 //     silently inheriting the default seat.
 //
-// The third return is the resolved ${FLEET_WORKSPACE} directory the run's MCP
-// servers write their cross-run ledgers into ("" when no configured server
-// references the token). The caller replays unresolved create-ledger markers
-// from it into the task prompt at run start (#717,
-// agentcore.AugmentTaskWithCreateReconciliation).
+// The third return is the resolved ${FLEET_WORKSPACE} directory used for this
+// task's connector ledger reconciliation ("" when no selected server references
+// the token).
 func (r *Runner) bindTaskMCP(ctx context.Context, task *models.Task) (*mcp.Client, func(), string, error) {
 	noop := func() {}
 	if len(task.MCPSelection) == 0 {
@@ -988,10 +1093,7 @@ func (r *Runner) bindTaskMCP(ctx context.Context, task *models.Task) (*mcp.Clien
 		return r.mgr.MCPClient(), noop, "", nil
 	}
 
-	selection := make(agentcore.MCPSelection, 0, len(task.MCPSelection))
-	for _, c := range task.MCPSelection {
-		selection = append(selection, agentcore.MCPChoice{Server: c.Server, Account: c.Account})
-	}
+	selection := r.taskMCPSelection(task, false)
 
 	client := mcp.NewClient()
 	cleanup := func() {
@@ -1009,18 +1111,10 @@ func (r *Runner) bindTaskMCP(ctx context.Context, task *models.Task) (*mcp.Clien
 		base.BaseEnv = agentcore.ExpandTaskIDEnv(base.BaseEnv, task.ID.String())
 		bases[name] = base
 	}
-	workdir := ""
-	for _, c := range selection {
-		if base, ok := bases[c.Server]; ok && agentcore.EnvReferencesWorkspace(base.BaseEnv) {
-			workdir = agentcore.PerRunMCPWorkspaceDir("task-" + task.ID.String() + "-")
-			break
-		}
-	}
-	if workdir != "" {
-		if err := r.stageTaskInputs(task, filepath.Join(workdir, "inputs")); err != nil {
-			cleanup()
-			return nil, noop, "", fmt.Errorf("stage task inputs: %w", err)
-		}
+	workdir, err := r.prepareTaskMCPWorkspace(task, selection)
+	if err != nil {
+		cleanup()
+		return nil, noop, "", err
 	}
 
 	registered, err := agentcore.BindMCPSelection(ctx, client, selection, bases, workdir)
