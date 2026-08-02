@@ -2,11 +2,18 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"os/exec"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/mcp"
@@ -124,19 +131,231 @@ func TestBrokerBackend_OpenScopeRefusesUnknownServer(t *testing.T) {
 	}
 }
 
-func TestBrokerBackend_RemoteScopeFailsUntilImplemented(t *testing.T) {
+func TestBrokerBackend_RemoteScopeFailsWhenDisabled(t *testing.T) {
 	b := newBrokerBackendForScopeTest(t)
 	t.Cleanup(func() { _ = b.Close() })
 	_, _, _, err := b.OpenScope(context.Background(), mcpbroker.ScopeSpec{
 		Remote: &mcpbroker.RemoteScopeSpec{UserEmail: "user@example.com"},
 	})
-	if err == nil || err.Error() != "remote MCP scopes are not implemented" {
-		t.Fatalf("OpenScope error = %v, want explicit unsupported error", err)
+	if err == nil || err.Error() != "remote MCP OAuth is not configured in broker" {
+		t.Fatalf("OpenScope error = %v, want explicit disabled error", err)
 	}
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	if len(b.scopes) != 0 {
-		t.Fatalf("unsupported remote open leaked %d scope(s)", len(b.scopes))
+		t.Fatalf("disabled remote open leaked %d scope(s)", len(b.scopes))
+	}
+}
+
+type brokerRemoteResolver struct {
+	conns    []agent.RemoteMCPConn
+	listErr  error
+	token    string
+	tokenErr error
+	asked    []string
+}
+
+func (r *brokerRemoteResolver) ConnectedServersForUser(context.Context, string) ([]agent.RemoteMCPConn, error) {
+	return append([]agent.RemoteMCPConn(nil), r.conns...), r.listErr
+}
+
+func (r *brokerRemoteResolver) AcquireTokenByID(_ context.Context, _, id string) (string, error) {
+	r.asked = append(r.asked, id)
+	return r.token, r.tokenErr
+}
+
+func (*brokerRemoteResolver) SafeHTTPClient() *http.Client { return http.DefaultClient }
+
+func TestBrokerBackend_RemoteScopeOwnsCredentialedClient(t *testing.T) {
+	const token = "test-remote-bearer"
+	var sawBearer atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.Header.Get("Authorization") == "Bearer "+token {
+			sawBearer.Store(true)
+		}
+		var rpc struct {
+			ID     json.RawMessage `json:"id"`
+			Method string          `json:"method"`
+		}
+		if err := json.NewDecoder(req.Body).Decode(&rpc); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		if len(rpc.ID) == 0 {
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
+		result := map[string]any{}
+		switch rpc.Method {
+		case "initialize":
+			result = map[string]any{"protocolVersion": "2025-06-18", "capabilities": map[string]any{"tools": map[string]any{}}}
+		case "tools/list":
+			result = map[string]any{"tools": []map[string]any{{"name": "echo", "inputSchema": map[string]any{"type": "object"}}}}
+		case "tools/call":
+			result = map[string]any{"content": []map[string]any{{"type": "text", "text": "remote-ok"}}}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": rpc.ID, "result": result})
+	}))
+	t.Cleanup(srv.Close)
+
+	b := newBrokerBackendForScopeTest(t)
+	b.remoteMCP = &brokerRemoteResolver{
+		conns: []agent.RemoteMCPConn{{ID: "remote-id", Name: "remote", URL: srv.URL}},
+		token: token,
+	}
+	t.Cleanup(func() { _ = b.Close() })
+
+	id, tools, skipped, err := b.OpenScope(context.Background(), mcpbroker.ScopeSpec{
+		Remote: &mcpbroker.RemoteScopeSpec{UserEmail: "user@example.com"},
+	})
+	if err != nil {
+		t.Fatalf("OpenScope: %v", err)
+	}
+	if len(tools) != 1 || tools[0].Server != "remote" || tools[0].Tool != "echo" {
+		t.Fatalf("tools = %+v, want remote.echo", tools)
+	}
+	if len(skipped) != 0 {
+		t.Fatalf("skipped = %v", skipped)
+	}
+	publicMetadata, err := json.Marshal(struct {
+		Tools   []mcpbroker.ToolDescriptor
+		Skipped []string
+	}{Tools: tools, Skipped: skipped})
+	if err != nil {
+		t.Fatalf("marshal public metadata: %v", err)
+	}
+	if strings.Contains(string(publicMetadata), token) {
+		t.Fatal("remote bearer reached public scope metadata")
+	}
+	text, isErr, err := b.CallMCPInScope(context.Background(), id, "remote", "echo", nil)
+	if err != nil || isErr || strings.TrimSpace(text) != "remote-ok" {
+		t.Fatalf("CallMCPInScope = (%q, %v, %v)", text, isErr, err)
+	}
+	if !sawBearer.Load() {
+		t.Fatal("child-owned remote client did not attach its bearer")
+	}
+	if err := b.CloseScope(context.Background(), id); err != nil {
+		t.Fatalf("CloseScope: %v", err)
+	}
+}
+
+func TestBrokerBackend_RemoteScopePreservesFilterAndSkippedSemantics(t *testing.T) {
+	b := newBrokerBackendForScopeTest(t)
+	resolver := &brokerRemoteResolver{
+		conns:    []agent.RemoteMCPConn{{ID: "dead-id", Name: "dead", URL: "https://dead.example.com"}},
+		tokenErr: errors.New("needs reauth"),
+	}
+	b.remoteMCP = resolver
+	t.Cleanup(func() { _ = b.Close() })
+
+	// Interactive explicit-none: no connection or token attempt, but the scope
+	// still opens so its lifecycle is identical to a populated remote overlay.
+	id, tools, skipped, err := b.OpenScope(context.Background(), mcpbroker.ScopeSpec{
+		Remote: &mcpbroker.RemoteScopeSpec{UserEmail: "user@example.com", FilterEnabled: true},
+	})
+	if err != nil || len(tools) != 0 || len(skipped) != 0 || len(resolver.asked) != 0 {
+		t.Fatalf("filtered empty scope = (tools=%v skipped=%v asked=%v err=%v)", tools, skipped, resolver.asked, err)
+	}
+	if err := b.CloseScope(context.Background(), id); err != nil {
+		t.Fatalf("CloseScope: %v", err)
+	}
+
+	// Scheduled all-connected: the unavailable token is attempted and its public
+	// server name is surfaced, while the underlying error remains child-side.
+	_, tools, skipped, err = b.OpenScope(context.Background(), mcpbroker.ScopeSpec{
+		Remote: &mcpbroker.RemoteScopeSpec{UserEmail: "user@example.com"},
+	})
+	if err != nil || len(tools) != 0 || len(skipped) != 1 || skipped[0] != "dead" {
+		t.Fatalf("all-connected scope = (tools=%v skipped=%v err=%v)", tools, skipped, err)
+	}
+	if len(resolver.asked) != 1 || resolver.asked[0] != "dead-id" {
+		t.Fatalf("token attempts = %v, want [dead-id]", resolver.asked)
+	}
+}
+
+func TestBrokerBackend_RemoteScopeErrorIsValueFree(t *testing.T) {
+	b := newBrokerBackendForScopeTest(t)
+	const sensitiveDetail = "database-detail-must-not-cross-broker"
+	b.remoteMCP = &brokerRemoteResolver{listErr: errors.New(sensitiveDetail)}
+	t.Cleanup(func() { _ = b.Close() })
+
+	_, _, _, err := b.OpenScope(context.Background(), mcpbroker.ScopeSpec{
+		Remote: &mcpbroker.RemoteScopeSpec{UserEmail: "user@example.com"},
+	})
+	if err == nil || err.Error() != "remote MCP scope unavailable" {
+		t.Fatalf("OpenScope error = %v, want value-free remote error", err)
+	}
+	if strings.Contains(err.Error(), sensitiveDetail) {
+		t.Fatal("resolver detail crossed the broker boundary")
+	}
+}
+
+func TestOpenMCPBrokerRemoteStore(t *testing.T) {
+	if st, resolver, err := openMCPBrokerRemoteStore(&config.Config{}); err != nil || st != nil || resolver != nil {
+		t.Fatalf("disabled store = (%v, %v, %v), want nils", st, resolver, err)
+	}
+	t.Run("refuses shared chat and sched database before open", func(t *testing.T) {
+		const sameDSN = "postgres://db.example.com/shared"
+		t.Setenv("FLEET_CHAT_DATABASE_URL", sameDSN)
+		t.Setenv("FLEET_SCHED_DATABASE_URL", sameDSN)
+		st, resolver, err := openMCPBrokerRemoteStore(&config.Config{
+			PublicBaseURL:         "https://fleet.example.com",
+			MCPOAuthEncryptionKey: []byte("0123456789abcdef0123456789abcdef"),
+		})
+		if err == nil || st != nil || resolver != nil {
+			t.Fatalf("shared database check = (%v, %v, %v), want refusal", st, resolver, err)
+		}
+	})
+
+	dsn := strings.TrimSpace(os.Getenv("FLEET_TEST_DATABASE_URL"))
+	if dsn == "" {
+		dsn = strings.TrimSpace(os.Getenv("CHAT_TEST_DATABASE_URL"))
+	}
+	if dsn == "" {
+		t.Skip("FLEET_TEST_DATABASE_URL/CHAT_TEST_DATABASE_URL not set")
+	}
+	pool := config.DBPoolConfig{
+		MaxOpenConns:    2,
+		MaxIdleConns:    1,
+		ConnMaxLifetime: time.Minute,
+		ConnectTimeout:  5 * time.Second,
+	}
+	st, resolver, err := openMCPBrokerRemoteStore(&config.Config{
+		DatabaseURL:           dsn,
+		ChatDBPool:            pool,
+		PublicBaseURL:         "https://fleet.example.com",
+		MCPOAuthEncryptionKey: []byte("0123456789abcdef0123456789abcdef"),
+	})
+	if err != nil {
+		t.Fatalf("openMCPBrokerRemoteStore: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	if resolver == nil || !st.RemoteMCPEncryptionEnabled() {
+		t.Fatal("enabled broker store did not install the remote resolver and cipher")
+	}
+	if got := st.PoolStats().MaxOpenConnections; got != pool.MaxOpenConns {
+		t.Fatalf("broker store max connections = %d, want %d", got, pool.MaxOpenConns)
+	}
+}
+
+func TestMCPBrokerRemoteConfigured(t *testing.T) {
+	for _, prefix := range []string{"FLEET_", "CHAT_", "CUTLASS_"} {
+		t.Setenv(prefix+"MCP_OAUTH_ENCRYPTION_KEY", "")
+		t.Setenv(prefix+"PUBLIC_BASE_URL", "")
+	}
+	if mcpBrokerRemoteConfigured() {
+		t.Fatal("empty remote environment reported configured")
+	}
+	t.Setenv("FLEET_MCP_OAUTH_ENCRYPTION_KEY", "configured-placeholder")
+	if mcpBrokerRemoteConfigured() {
+		t.Fatal("encryption key without public base URL reported configured")
+	}
+	// Config's canonical/legacy lookup is per field, so a canonical key and
+	// legacy base URL are a valid inherited combination too.
+	t.Setenv("CHAT_PUBLIC_BASE_URL", "https://fleet.example.com")
+	if !mcpBrokerRemoteConfigured() {
+		t.Fatal("complete canonical/legacy remote environment reported disabled")
 	}
 }
 

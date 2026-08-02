@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
@@ -15,8 +17,16 @@ import (
 	"github.com/ElcanoTek/fleet/internal/creds"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/mcpbroker"
+	"github.com/ElcanoTek/fleet/internal/remotemcp"
 	"github.com/ElcanoTek/fleet/internal/scheduledrun"
+	"github.com/ElcanoTek/fleet/internal/secretbox"
+	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/google/uuid"
+)
+
+const (
+	mcpBrokerRemoteDBMaxOpen = 8
+	mcpBrokerRemoteDBMaxIdle = 2
 )
 
 // runMCPBroker is `fleet mcp-broker`: the out-of-process MCP credential broker
@@ -33,6 +43,18 @@ func runMCPBroker() error {
 	if err != nil {
 		return err
 	}
+	var remoteStore *store.Store
+	var remoteMCP agent.RemoteMCPResolver
+	if mcpBrokerRemoteConfigured() {
+		runtimeCfg, loadErr := config.Load("")
+		if loadErr != nil {
+			return fmt.Errorf("load broker runtime config: %w", loadErr)
+		}
+		remoteStore, remoteMCP, err = openMCPBrokerRemoteStore(runtimeCfg)
+		if err != nil {
+			return err
+		}
+	}
 
 	// The SAME builder the interactive Manager uses — one credential path. Inline
 	// http_tools (issue #261) are resolved + registered HERE, in the broker process
@@ -42,14 +64,72 @@ func runMCPBroker() error {
 	log.Printf("mcp-broker: serving %d MCP tools over stdio", len(client.GetAllTools()))
 
 	backend := &brokerBackend{
-		MCPBroker: agentcore.NewLocalMCPBroker(client, agentcore.DefaultRemediationHints),
-		client:    client,
-		bases:     scheduledrun.BuildMCPBases(cfg),
-		httpTools: cfg.HTTPTools,
-		scopes:    make(map[string]*brokerScope),
+		MCPBroker:   agentcore.NewLocalMCPBroker(client, agentcore.DefaultRemediationHints),
+		client:      client,
+		bases:       scheduledrun.BuildMCPBases(cfg),
+		httpTools:   cfg.HTTPTools,
+		scopes:      make(map[string]*brokerScope),
+		remoteMCP:   remoteMCP,
+		remoteStore: remoteStore,
 	}
 	serveErr := mcpbroker.ServeStdio(context.Background(), backend)
 	return errors.Join(serveErr, backend.Close())
+}
+
+func mcpBrokerRemoteConfigured() bool {
+	configured := func(suffix string) bool {
+		for _, prefix := range []string{"FLEET_", "CHAT_", "CUTLASS_"} {
+			if strings.TrimSpace(os.Getenv(prefix+suffix)) != "" {
+				return true
+			}
+		}
+		return false
+	}
+	return configured("MCP_OAUTH_ENCRYPTION_KEY") && configured("PUBLIC_BASE_URL")
+}
+
+func openMCPBrokerRemoteStore(cfg *config.Config) (*store.Store, agent.RemoteMCPResolver, error) {
+	if cfg == nil || len(cfg.MCPOAuthEncryptionKey) == 0 || cfg.PublicBaseURL == "" {
+		return nil, nil, nil
+	}
+	cipher, err := secretbox.NewCipher(cfg.MCPOAuthEncryptionKey)
+	if err != nil {
+		return nil, nil, fmt.Errorf("configure broker remote MCP cipher: %w", err)
+	}
+	chatDB := chatDSN(cfg)
+	if err := ensureDistinctDatabases(chatDB, schedDSN()); err != nil {
+		return nil, nil, err
+	}
+	maxOpen := min(cfg.ChatDBPool.MaxOpenConns, mcpBrokerRemoteDBMaxOpen)
+	if maxOpen <= 0 {
+		maxOpen = mcpBrokerRemoteDBMaxOpen
+	}
+	maxIdle := min(cfg.ChatDBPool.MaxIdleConns, mcpBrokerRemoteDBMaxIdle, maxOpen)
+	if maxIdle < 0 {
+		maxIdle = 0
+	}
+	st, err := store.Open(chatDB, store.PoolConfig{
+		MaxOpenConns:    maxOpen,
+		MaxIdleConns:    maxIdle,
+		ConnMaxIdleTime: cfg.ChatDBPool.ConnMaxIdleTime,
+		ConnMaxLifetime: cfg.ChatDBPool.ConnMaxLifetime,
+		ConnectTimeout:  cfg.ChatDBPool.ConnectTimeout,
+	})
+	if err != nil {
+		// Driver/DSN errors may echo connection details. The broker owns those
+		// values, so startup reports only the failed boundary operation.
+		return nil, nil, errors.New("open broker remote MCP store")
+	}
+	st.SetTokenCipher(cipher)
+	svc := remotemcp.NewService(st, remotemcp.Config{
+		PublicBaseURL:     cfg.PublicBaseURL,
+		AllowInsecureHTTP: cfg.RemoteMCPAllowInsecureHTTP,
+	})
+	if !svc.Enabled() {
+		_ = st.Close()
+		return nil, nil, errors.New("broker remote MCP service is not enabled")
+	}
+	return st, svc, nil
 }
 
 // loadMCPBrokerConfig resolves the bundle against the credential-owning
@@ -79,9 +159,11 @@ type brokerBackend struct {
 	httpTools           []config.HTTPToolConfig
 	reloadConfig        func() (*config.Config, error)
 
-	reloadMu sync.Mutex
-	mu       sync.RWMutex
-	scopes   map[string]*brokerScope
+	reloadMu    sync.Mutex
+	mu          sync.RWMutex
+	scopes      map[string]*brokerScope
+	remoteMCP   agent.RemoteMCPResolver
+	remoteStore *store.Store
 }
 
 type brokerScope struct {
@@ -106,7 +188,7 @@ func (b *brokerBackend) ListAccounts(_ context.Context, _ string, baseVars []str
 
 func (b *brokerBackend) OpenScope(ctx context.Context, spec mcpbroker.ScopeSpec) (string, []mcpbroker.ToolDescriptor, []string, error) {
 	if spec.Remote != nil {
-		return "", nil, nil, errors.New("remote MCP scopes are not implemented")
+		return b.openRemoteScope(ctx, *spec.Remote)
 	}
 	selection := make(agentcore.MCPSelection, 0, len(spec.Selection))
 	for _, choice := range spec.Selection {
@@ -139,6 +221,47 @@ func (b *brokerBackend) OpenScope(ctx context.Context, spec mcpbroker.ScopeSpec)
 	b.scopes[id] = scope
 	b.mu.Unlock()
 	return id, describeTools(client), nil, nil
+}
+
+func (b *brokerBackend) openRemoteScope(ctx context.Context, spec mcpbroker.RemoteScopeSpec) (string, []mcpbroker.ToolDescriptor, []string, error) {
+	if b.remoteMCP == nil {
+		return "", nil, nil, errors.New("remote MCP OAuth is not configured in broker")
+	}
+	shadowed := make(map[string]bool, len(spec.Shadowed))
+	for _, name := range spec.Shadowed {
+		shadowed[name] = true
+	}
+	var enabled map[string]bool
+	if spec.FilterEnabled {
+		enabled = make(map[string]bool, len(spec.Enabled))
+		for _, name := range spec.Enabled {
+			enabled[name] = true
+		}
+	}
+	overlay, err := agent.BuildRemoteMCPOverlay(ctx, b.remoteMCP, spec.UserEmail, shadowed, enabled)
+	if err != nil {
+		// Resolver errors can contain database/provider detail. Discard the value;
+		// the parent receives only a stable, credential-free failure.
+		return "", nil, nil, errors.New("remote MCP scope unavailable")
+	}
+	client := mcp.NewClient()
+	var skipped []string
+	if overlay != nil {
+		if overlay.Client != nil {
+			_ = client.Close()
+			client = overlay.Client
+		}
+		skipped = append([]string(nil), overlay.Skipped...)
+	}
+	scope := &brokerScope{
+		client: client,
+		broker: agentcore.NewLocalMCPBroker(client, agentcore.DefaultRemediationHints),
+	}
+	id := uuid.NewString()
+	b.mu.Lock()
+	b.scopes[id] = scope
+	b.mu.Unlock()
+	return id, describeTools(client), skipped, nil
 }
 
 // Reload re-reads credential-bearing configuration inside the child, applies
@@ -236,6 +359,9 @@ func (b *brokerBackend) Close() error {
 		scope.mu.Unlock()
 	}
 	errs = append(errs, b.client.Close())
+	if b.remoteStore != nil {
+		errs = append(errs, b.remoteStore.Close())
+	}
 	return errors.Join(errs...)
 }
 

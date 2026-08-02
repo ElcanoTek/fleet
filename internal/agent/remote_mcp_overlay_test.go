@@ -1,9 +1,12 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
@@ -76,7 +79,12 @@ func TestBuildRemoteMCPOverlayGuards(t *testing.T) {
 
 func TestBuildRemoteMCPOverlaySkipsAndReportsNeedsReauth(t *testing.T) {
 	ctx := context.Background()
-	reauth := errors.New("needs reauth")
+	const sensitiveDetail = "provider-response-detail-must-stay-private"
+	reauth := errors.New(sensitiveDetail)
+	var logs bytes.Buffer
+	oldWriter := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(oldWriter) })
 	r := &fakeResolver{
 		conns:    []RemoteMCPConn{{ID: "1", Name: "dead", URL: "https://dead.example.com"}},
 		tokenErr: map[string]error{"1": reauth},
@@ -91,6 +99,9 @@ func TestBuildRemoteMCPOverlaySkipsAndReportsNeedsReauth(t *testing.T) {
 	}
 	if len(ov.Skipped) != 1 || ov.Skipped[0] != "dead" {
 		t.Errorf("Skipped = %v, want [dead]", ov.Skipped)
+	}
+	if strings.Contains(logs.String(), sensitiveDetail) {
+		t.Fatal("token failure detail reached logs")
 	}
 }
 

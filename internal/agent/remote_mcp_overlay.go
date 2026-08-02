@@ -189,7 +189,7 @@ func BuildRemoteMCPOverlay(ctx context.Context, resolver RemoteMCPResolver, emai
 		if terr != nil {
 			// needs-reauth / refresh failure: skip this server, keep the rest, and
 			// record it so the caller can tell the owner.
-			log.Printf("remote-mcp: skipping server %q for %s — token unavailable: %v", conn.Name, email, terr)
+			log.Printf("remote-mcp: skipping server %q for %s — token unavailable", conn.Name, email)
 			overlay.Skipped = append(overlay.Skipped, conn.Name)
 			continue
 		}
@@ -210,7 +210,7 @@ func BuildRemoteMCPOverlay(ctx context.Context, resolver RemoteMCPResolver, emai
 			}
 		}
 		if aerr := client.AddHTTPServerWithOptions(ctx, conn.Name, conn.URL, opts); aerr != nil {
-			log.Printf("remote-mcp: skipping server %q for %s — failed to connect: %v", conn.Name, email, aerr)
+			log.Printf("remote-mcp: skipping server %q for %s — failed to connect", conn.Name, email)
 			overlay.Skipped = append(overlay.Skipped, conn.Name)
 			continue
 		}
