@@ -221,6 +221,10 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Root Go gates no longer traverse npm dependencies.** An explicit module
+  boundary at `web/` keeps `go build/test/vet ./...` scoped to Fleet-owned Go
+  packages even after `npm ci` installs packages containing incidental Go code.
+
 - **`fleet chat` now honors the server's terminal turn outcome.** The TUI and
   one-shot mode surface `turn.error`, model-selection failures, cancellation,
   premature stream EOF, and non-success health checks instead of treating them
