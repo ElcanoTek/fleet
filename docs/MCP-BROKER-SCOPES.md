@@ -79,6 +79,12 @@ The local-client default remains for transitional callers and tests. Production
 startup does not inject the new Manager options yet, and broker-mode hot reload
 is deliberately deferred to the switch-on sequence.
 
+The scheduled `Agent` accepts the same broker/catalog pair and threads it into
+its existing `agentcore.Run`; governed sub-agents inherit that pair, and the
+per-user remote overlay composes over it. Broker mode does not advertise the
+in-process `mcp_load_servers` mutation tool because it has no mutable local
+client. The production scheduled `Runner` does not bind broker scopes yet.
+
 ## Approval integration
 
 Interactive approval staging and resolution no longer reach through the HTTP
