@@ -87,18 +87,20 @@ prior versions are listed because none have shipped.
 - **Credential-owner MCP reload (#167 prerequisite):** the broker protocol can
   now ask the child to re-read its own bundle and credential environment, apply
   the minimum server diff, and return only the public change summary and tool
-  catalog plus provisioned account-seat names. Resolved connector definitions
-  never cross the pipe; reload retains request cancellation and value-free panic
-  containment, existing scopes keep their snapshot, and future scope opens
-  serialize onto a coherent old or new catalog.
+  catalog, provisioned account-seat names, and enabled servers' public gating
+  metadata. Resolved connector definitions never cross the pipe; reload retains
+  request cancellation and value-free panic containment, existing scopes keep
+  their snapshot, and future scope opens serialize onto a coherent old or new
+  catalog.
 
 - **Interactive broker reload seam (#167 prerequisite):** Manager can now apply
   a credential-owner reload result to its public catalog, account names,
   allowlists, optional gates, prompt roster, and picker metadata under the same
-  serialized reload path as its local client. Child failures revert prepublished
-  gates, and an injected broker without a reload adapter fails explicitly rather
-  than returning a false empty success. Production startup does not inject the
-  adapter yet.
+  serialized reload path as its local client. Broker-mode reload takes its
+  server metadata from the child result instead of re-reading connector config
+  in the parent, and publishes that entire public view atomically. An injected
+  broker without a reload adapter fails explicitly rather than returning a false
+  empty success. Production startup does not inject the adapter yet.
 
 - **Query-parameter API keys for hosted connectors (Browserbase)**: some
   vendors authenticate their hosted MCP server with the key in a URL query

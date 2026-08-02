@@ -254,6 +254,7 @@ type MCPReloadResult struct {
 	Summary  mcp.ReloadSummary
 	Catalog  []mcp.ServerTool
 	Accounts map[string][]string
+	Specs    map[string]MCPServerSpec
 }
 
 // MCPReloader reloads credential-bearing MCP configuration behind the injected

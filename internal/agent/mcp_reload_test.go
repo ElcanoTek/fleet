@@ -52,34 +52,43 @@ func TestReloadMCPServers_InjectedBrokerRefreshesPublicState(t *testing.T) {
 	m.reloadMCP = func(context.Context) (*MCPReloadResult, error) {
 		called = true
 		_, optional := m.mcpGates()
-		if !optional["B"] {
-			t.Error("new optional gate was not published before broker reload")
+		if !optional["A"] || optional["B"] {
+			t.Error("broker reload changed gates before its self-describing result")
 		}
 		return &MCPReloadResult{
 			Summary:  mcp.ReloadSummary{Added: []string{"B"}, Removed: []string{"A"}},
 			Catalog:  newCatalog,
 			Accounts: map[string][]string{"B": {"broker-seat"}},
+			Specs: map[string]MCPServerSpec{
+				"B": {
+					Enabled:       true,
+					Optional:      true,
+					Description:   "the B server",
+					ToolAllowlist: []string{"tool_b"},
+					AccountVars:   []string{"B_TOKEN"},
+				},
+			},
 		}, nil
 	}
 	m.optionalServerMetadata = m.buildOptionalServerMetadata(map[string]MCPServerSpec{
 		"A": {Enabled: true, Optional: true},
 	})
 
-	specs := map[string]MCPServerSpec{
+	ignoredParentSpecs := map[string]MCPServerSpec{
 		"B": {
-			Enabled:       true,
-			Optional:      true,
-			Description:   "the B server",
-			ToolAllowlist: []string{"tool_b"},
-			AccountVars:   []string{"B_TOKEN"},
+			Enabled:  true,
+			Optional: false,
 		},
 	}
-	summary, err := m.ReloadMCPServers(context.Background(), specs)
+	summary, err := m.ReloadMCPServers(context.Background(), ignoredParentSpecs)
 	if err != nil {
 		t.Fatalf("ReloadMCPServers: %v", err)
 	}
 	if !called || len(summary.Added) != 1 || summary.Added[0] != "B" {
 		t.Fatalf("called=%v summary=%+v", called, summary)
+	}
+	if !m.MCPReloadOwnsConfig() {
+		t.Fatal("injected reload seam should own connector configuration")
 	}
 	if got := m.MCPCatalog(); len(got) != 1 || got[0].ServerName != "B" || got[0].Tool.Name != "tool_b" {
 		t.Fatalf("catalog = %+v, want B.tool_b", got)

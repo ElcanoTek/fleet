@@ -1119,14 +1119,16 @@ func watchConfigReloadSignal(ctx context.Context, cfg *config.Config) func() {
 	return func() { signal.Stop(reloadSig) }
 }
 
-// reloadMCPServers re-reads the client-config bundle's MCP catalog fresh (so
-// operator edits to manifest.yaml take effect) and hot-reloads the running
-// Manager's MCP servers without a restart (#218). It builds specs from a
-// throwaway config carrying only the freshly-loaded MCPServers, so it never
-// mutates the shared cfg.MCPServers that the scheduled path reads concurrently.
+// reloadMCPServers hot-reloads the running Manager's MCP servers (#218). An
+// injected credential owner re-reads its own bundle and returns public metadata;
+// the local compatibility path re-reads the bundle here and builds throwaway
+// specs without mutating the shared cfg.MCPServers.
 func reloadMCPServers(ctx context.Context, mgr *agent.Manager) (*mcp.ReloadSummary, error) {
 	if mgr == nil {
 		return &mcp.ReloadSummary{}, nil
+	}
+	if mgr.MCPReloadOwnsConfig() {
+		return mgr.ReloadMCPServers(ctx, nil)
 	}
 	bundle, err := clientconfig.Load(clientconfig.Dir())
 	if err != nil {

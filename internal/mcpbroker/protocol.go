@@ -103,6 +103,22 @@ type ReloadResult struct {
 	// Accounts contains public provisioned seat names keyed by server. The child
 	// derives them from its freshly loaded bundle and credential environment.
 	Accounts map[string][]string `json:"accounts,omitempty"`
+	// Servers is the freshly enabled public bundle catalog. It lets a scrubbed
+	// parent refresh gating without re-reading credential-bearing definitions.
+	Servers []ServerDescriptor `json:"servers,omitempty"`
+}
+
+// ServerDescriptor is the non-secret subset of one enabled bundle MCP server
+// needed by parent-side gating, roster, and picker metadata.
+type ServerDescriptor struct {
+	Name             string   `json:"name"`
+	ToolAllowlist    []string `json:"toolAllowlist,omitempty"`
+	AccountVars      []string `json:"accountVars,omitempty"`
+	Optional         bool     `json:"optional,omitempty"`
+	DisplayName      string   `json:"displayName,omitempty"`
+	Description      string   `json:"description,omitempty"`
+	Beta             bool     `json:"beta,omitempty"`
+	EnabledByDefault bool     `json:"enabledByDefault,omitempty"`
 }
 
 // request is a client -> server frame. The server only ever decodes requests; the

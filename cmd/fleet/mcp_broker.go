@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sort"
 	"sync"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
@@ -164,11 +165,23 @@ func (b *brokerBackend) Reload(ctx context.Context) (*mcpbroker.ReloadResult, er
 	}
 	b.bases = scheduledrun.BuildMCPBases(cfg)
 	accounts := make(map[string][]string, len(specs))
+	servers := make([]mcpbroker.ServerDescriptor, 0, len(specs))
 	for name, spec := range specs {
 		if spec.Enabled {
 			accounts[name] = creds.AccountsFor(spec.AccountVars)
+			servers = append(servers, mcpbroker.ServerDescriptor{
+				Name:             name,
+				ToolAllowlist:    append([]string(nil), spec.ToolAllowlist...),
+				AccountVars:      append([]string(nil), spec.AccountVars...),
+				Optional:         spec.Optional,
+				DisplayName:      spec.DisplayName,
+				Description:      spec.Description,
+				Beta:             spec.Beta,
+				EnabledByDefault: spec.EnabledByDefault,
+			})
 		}
 	}
+	sort.Slice(servers, func(i, j int) bool { return servers[i].Name < servers[j].Name })
 
 	return &mcpbroker.ReloadResult{
 		Summary: mcpbroker.ReloadSummary{
@@ -179,6 +192,7 @@ func (b *brokerBackend) Reload(ctx context.Context) (*mcpbroker.ReloadResult, er
 		},
 		Tools:    describeTools(b.client),
 		Accounts: accounts,
+		Servers:  servers,
 	}, nil
 }
 

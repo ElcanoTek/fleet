@@ -320,6 +320,12 @@ func TestClientServer_ReloadRoundTrip(t *testing.T) {
 			},
 			Tools:    []ToolDescriptor{{Server: "added", Tool: "lookup", InputSchema: map[string]any{"type": "object"}}},
 			Accounts: map[string][]string{"added": {"blue"}},
+			Servers: []ServerDescriptor{{
+				Name:          "added",
+				ToolAllowlist: []string{"lookup"},
+				AccountVars:   []string{"ADDED_TOKEN"},
+				Optional:      true,
+			}},
 		},
 	}
 	client := loopback(t, fake)
@@ -340,11 +346,17 @@ func TestClientServer_ReloadRoundTrip(t *testing.T) {
 	if len(result.Accounts["added"]) != 1 || result.Accounts["added"][0] != "blue" {
 		t.Fatalf("accounts = %+v", result.Accounts)
 	}
+	if len(result.Servers) != 1 || result.Servers[0].Name != "added" || !result.Servers[0].Optional {
+		t.Fatalf("servers = %+v", result.Servers)
+	}
 	result.Summary.Added[0] = "mutated"
 	result.Tools[0].InputSchema["type"] = "array"
 	result.Accounts["added"][0] = "mutated"
+	result.Servers[0].ToolAllowlist[0] = "mutated"
+	result.Servers[0].AccountVars[0] = "MUTATED"
 	if fake.reloadResult.Summary.Added[0] != "added" || fake.reloadResult.Tools[0].InputSchema["type"] != "object" ||
-		fake.reloadResult.Accounts["added"][0] != "blue" {
+		fake.reloadResult.Accounts["added"][0] != "blue" || fake.reloadResult.Servers[0].ToolAllowlist[0] != "lookup" ||
+		fake.reloadResult.Servers[0].AccountVars[0] != "ADDED_TOKEN" {
 		t.Fatal("Reload returned mutable response-owned data")
 	}
 }
