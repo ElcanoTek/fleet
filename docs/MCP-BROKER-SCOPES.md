@@ -59,6 +59,12 @@ Scope-open resolver and per-server token/handshake failure values are
 deliberately not logged by the overlay builder or returned through scope open.
 A whole-scope resolver failure becomes the fixed `remote MCP scope unavailable`
 error; recoverable per-server failures return only public skipped names.
+All credential-owner operational failures follow the same rule: call,
+discovery, scope-open, scope-close, and reload errors cross the pipe only as
+stable value-free classes. A failed call also discards partial text and the
+tool-error bit. Successful MCP tool-level errors remain model-visible output;
+protocol validation remains precise because neither originates as credentialed
+backend detail.
 
 The protocol also supports credential-owner reload. The parent sends an empty
 `reload` request — never resolved server definitions — and the child re-reads
