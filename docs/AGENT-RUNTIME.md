@@ -65,11 +65,11 @@ strings that existed during boot, so “scrub” here means environment removal 
 dropping/overwriting reachable runtime definitions, not a claim about forensic
 recovery from old heap pages.
 
-**Current limitation (#167):** per-user remote hosted MCP OAuth overlays still
-decrypt bearer credentials and build their short-lived clients in the main
-Fleet process (ADR-0009). They remain host-side and never enter the sandbox or
-model context, but they do not yet have the bundle broker's address-space
-isolation. Issue #167 stays open for that remaining path.
+Per-user remote hosted MCP overlays use the same child-owned scope boundary.
+The parent sends identity and public selection names; the child decrypts or
+refreshes credentials and builds the short-lived SSRF-guarded client (ADR-0040).
+Explicit OAuth/connectors HTTP control-plane endpoints remain parent-side and
+are not model-callable.
 
 ### Lockdown / network-sealed sandboxes
 
@@ -301,8 +301,9 @@ their scheduled tasks. In chat they appear in the Tools picker as toggleable,
 default-on entries (gated per conversation exactly like a bundle Optional
 server, so they count against the tool ceiling only when selected); scheduled
 runs use all of the owner's connected servers. Local stdio servers are
-unchanged. See [ADR-0009](adr/0009-per-user-remote-mcp-oauth.md) for the full
-rationale.
+unchanged. See [ADR-0009](adr/0009-per-user-remote-mcp-oauth.md) for the OAuth
+rationale and [ADR-0040](adr/0040-child-owned-remote-mcp-runtime.md) for the
+production process boundary.
 
 The feature is **off until configured** and fails closed:
 

@@ -524,10 +524,12 @@ func run() error {
 	installStoreCipher(cfg, chatStore)
 
 	// ── per-user remote (hosted) MCP servers + OAuth (#443) ──
-	// remoteMCPSvc is the concrete service (for the HTTP endpoints); remoteMCPResolver
-	// is the same value as the agent-side interface (for the chat + scheduled overlay).
-	// Both nil when the feature is unconfigured, leaving every path unchanged.
-	remoteMCPSvc, remoteMCPResolver := setupRemoteMCP(cfg, chatStore)
+	// The concrete service remains parent-side for explicit OAuth/connectors HTTP
+	// control-plane operations. Run-time token acquisition and remote MCP clients
+	// live in the credential-owning child and are reached only through this public
+	// scope opener. Both are nil when the feature is unconfigured.
+	remoteMCPSvc := setupRemoteMCP(cfg, chatStore)
+	openRemoteMCPOverlay := productionRemoteMCPOverlayOpener(remoteMCPSvc, mcpRuntime)
 
 	// ── interactive engine (the concrete turnEngine) ──
 	bundleProviders := toAgentcoreProviders(bundle)
@@ -543,7 +545,7 @@ func run() error {
 		NotesProvider:        notesProvider,
 		NoteProposer:         notesProvider, // same adapter; wires propose_note for every interactive turn
 		PersonaPolicies:      personaPolicies,
-		RemoteMCP:            remoteMCPResolver,
+		OpenRemoteMCPOverlay: openRemoteMCPOverlay,
 		MCPBroker:            mcpRuntime.client,
 		MCPCatalog:           mcpRuntime.catalog,
 		MCPAccounts:          mcpRuntime.accounts,
@@ -780,12 +782,11 @@ func run() error {
 		// in (allow_task_creation) can enqueue follow-up tasks through the shared
 		// sched storage. Tasks without the flag never see the tool.
 		TaskEnqueuer: schedStorage,
-		// Per-user remote (hosted) MCP + OAuth (#443): the same service the chat
-		// path uses, plus a creator-UUID → email resolver (the sched username IS
-		// the chat email for the elcano-auth tier). Both nil when the feature is
-		// off, leaving scheduled runs unchanged.
-		RemoteMCP:  remoteMCPResolver,
-		OwnerEmail: ownerEmailResolver(schedStorage),
+		// Per-user remote (hosted) MCP + OAuth (#443): the child-owned scope
+		// opener plus a creator-UUID → email resolver (the sched username IS the
+		// chat email for the elcano-auth tier). A nil opener leaves the feature off.
+		OpenRemoteMCPOverlay: openRemoteMCPOverlay,
+		OwnerEmail:           ownerEmailResolver(schedStorage),
 		// The owner's builder skills + propose_skill staging (docs/SKILLS.md):
 		// scheduled runs inline the owner's ACTIVE skills into the prompt and
 		// stage agent-drafted proposals against the same chat-store rows the
@@ -2171,22 +2172,22 @@ func installStoreCipher(cfg *config.Config, chatStore *store.Store) {
 
 // setupRemoteMCP wires the per-user remote-MCP + OAuth feature (#443). It is
 // enabled only when an encryption key AND a public base URL are configured;
-// otherwise it fails closed (returns nil, nil) and the endpoints report the
+// otherwise it fails closed (returns nil) and the endpoints report the
 // feature off. On enable it installs the token cipher on the chat store (secrets
 // encrypted at rest) and starts an hourly sweep of abandoned OAuth-flow rows.
-// The returned *Service backs the HTTP endpoints; the same value, typed as the
-// agent resolver interface, backs the chat + scheduled overlay.
-func setupRemoteMCP(cfg *config.Config, chatStore *store.Store) (*remotemcp.Service, agent.RemoteMCPResolver) {
+// The returned Service backs explicit HTTP control-plane operations. Agent runs
+// use the child-owned broker scope and never receive this credential resolver.
+func setupRemoteMCP(cfg *config.Config, chatStore *store.Store) *remotemcp.Service {
 	if len(cfg.MCPOAuthEncryptionKey) == 0 || cfg.PublicBaseURL == "" {
 		log.Printf("remote MCP OAuth: disabled (set FLEET_MCP_OAUTH_ENCRYPTION_KEY + FLEET_PUBLIC_BASE_URL to enable)")
-		return nil, nil
+		return nil
 	}
 	cipher, err := secretbox.NewCipher(cfg.MCPOAuthEncryptionKey)
 	if err != nil {
 		// Config already validates the key length, so this is belt-and-suspenders:
 		// disable rather than crash the whole server on a bad key.
 		log.Printf("remote MCP OAuth: disabled — invalid encryption key: %v", err)
-		return nil, nil
+		return nil
 	}
 	chatStore.SetTokenCipher(cipher)
 	svc := remotemcp.NewService(chatStore, remotemcp.Config{
@@ -2208,7 +2209,14 @@ func setupRemoteMCP(cfg *config.Config, chatStore *store.Store) (*remotemcp.Serv
 	})
 	//nolint:gosec // G706: PublicBaseURL is operator-set config (env var), not request input — it can't forge a log line.
 	log.Printf("remote MCP OAuth: ENABLED (per-user hosted servers; redirect %s/api/oauth/mcp/callback)", cfg.PublicBaseURL)
-	return svc, svc
+	return svc
+}
+
+func productionRemoteMCPOverlayOpener(svc *remotemcp.Service, runtime *productionMCPRuntime) agent.RemoteMCPOverlayOpener {
+	if svc == nil || runtime == nil {
+		return nil
+	}
+	return runtime.openRemoteOverlay
 }
 
 // wireRemoteMCPCatalog injects the per-user remote-MCP catalog provider (#466)

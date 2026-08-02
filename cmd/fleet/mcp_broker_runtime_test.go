@@ -14,6 +14,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/mcp"
+	"github.com/ElcanoTek/fleet/internal/remotemcp"
 )
 
 const fakeProductionBrokerScript = `
@@ -30,11 +31,26 @@ for line in sys.stdin:
         resp["accounts"] = ["blue"]
     elif method == "scope_open":
         spec = req.get("scopeSpec", {})
-        if spec.get("taskId") != "task-123" or spec.get("workspace") != "/workspace" or spec.get("selection") != [{"server":"demo","account":"blue"}]:
+        remote = spec.get("remote")
+        if remote is not None:
+            if remote == {"userEmail":"scheduled@example.com", "shadowed":["demo"]}:
+                resp["scope"] = "scheduled-remote-scope"
+            elif remote != {"userEmail":"user@example.com", "filterEnabled":True, "enabled":["alpha","zeta"], "shadowed":["base","demo"]}:
+                resp["err"] = "remote scope metadata mismatch"
+            else:
+                resp["scope"] = "remote-scope"
+                resp["tools"] = [{"server":"hosted","tool":"search","inputSchema":{"type":"object"}}]
+                resp["skipped"] = ["needs-login"]
+        elif spec.get("taskId") != "task-123" or spec.get("workspace") != "/workspace" or spec.get("selection") != [{"server":"demo","account":"blue"}]:
             resp["err"] = "scope metadata mismatch"
         else:
             resp["scope"] = "scope-1"
             resp["tools"] = [{"server":"demo","tool":"scoped_lookup","inputSchema":{"type":"object"}}]
+    elif method == "call":
+        if req.get("scope") != "remote-scope" or req.get("server") != "hosted" or req.get("tool") != "search":
+            resp["err"] = "remote call routing mismatch"
+        else:
+            resp["text"] = "remote result"
     elif method == "reload":
         resp["reload"] = {
             "summary": {"added":["future"], "removed":["demo"], "restarted":[], "unchanged":[]},
@@ -114,6 +130,7 @@ func TestStartProductionMCPRuntime_InheritsThenScrubsParent(t *testing.T) {
 	if err := scope.Close(context.Background()); err != nil {
 		t.Fatalf("close task scope: %v", err)
 	}
+	assertProductionRemoteOverlay(t, runtime)
 	reloaded, err := runtime.reload(context.Background())
 	if err != nil {
 		t.Fatalf("reload: %v", err)
@@ -125,6 +142,58 @@ func TestStartProductionMCPRuntime_InheritsThenScrubsParent(t *testing.T) {
 	}
 	if inventory := runtime.inventory.snapshot(); len(inventory) != 1 || !inventory["future"].UsesWorkspace {
 		t.Fatalf("live inventory after reload = %+v", inventory)
+	}
+}
+
+func assertProductionRemoteOverlay(t *testing.T, runtime *productionMCPRuntime) {
+	t.Helper()
+	remote, err := runtime.openRemoteOverlay(
+		context.Background(),
+		"user@example.com",
+		map[string]bool{"demo": true, "ignored": false, "base": true},
+		map[string]bool{"zeta": true, "off": false, "alpha": true},
+	)
+	if err != nil {
+		t.Fatalf("open remote overlay: %v", err)
+	}
+	if err := remote.Validate(); err != nil {
+		t.Fatalf("validate remote overlay: %v", err)
+	}
+	if len(remote.Catalog) != 1 || remote.Catalog[0].ServerName != "hosted" ||
+		remote.Catalog[0].Tool.Name != "search" || !remote.Servers["hosted"] ||
+		!slices.Equal(remote.Skipped, []string{"needs-login"}) {
+		t.Fatalf("remote overlay = %+v", remote)
+	}
+	text, isError, err := remote.Broker.CallMCP(context.Background(), "hosted", "search", map[string]any{"q": "fleet"})
+	if err != nil || isError || text != "remote result" {
+		t.Fatalf("remote call = (%q, %v, %v)", text, isError, err)
+	}
+	remote.Close()
+	scheduledRemote, err := runtime.openRemoteOverlay(
+		context.Background(),
+		"scheduled@example.com",
+		map[string]bool{"demo": true},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("open scheduled remote overlay: %v", err)
+	}
+	if scheduledRemote.Active() || scheduledRemote.Servers == nil {
+		t.Fatalf("empty scheduled remote overlay = %+v", scheduledRemote)
+	}
+	scheduledRemote.Close()
+}
+
+func TestProductionRemoteMCPOverlayOpenerGatesFeature(t *testing.T) {
+	runtime := &productionMCPRuntime{}
+	if opener := productionRemoteMCPOverlayOpener(nil, runtime); opener != nil {
+		t.Fatal("disabled remote MCP produced an overlay opener")
+	}
+	if opener := productionRemoteMCPOverlayOpener(new(remotemcp.Service), nil); opener != nil {
+		t.Fatal("missing broker runtime produced an overlay opener")
+	}
+	if opener := productionRemoteMCPOverlayOpener(new(remotemcp.Service), runtime); opener == nil {
+		t.Fatal("enabled remote MCP did not produce an overlay opener")
 	}
 }
 

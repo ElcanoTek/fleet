@@ -1,6 +1,6 @@
 # ADR-0009: Per-user remote MCP servers via OAuth
 
-- **Status:** Accepted
+- **Status:** Superseded by ADR-0040
 - **Date:** 2026-06-30
 - **Deciders:** fleet maintainers
 

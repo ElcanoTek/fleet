@@ -49,8 +49,9 @@ use the fake-LLM seam and obvious placeholders.
 - The Go parent necessarily resolves bundle connector values during the boot
   handoff. It then unsets their env keys and overwrites/drops reachable runtime
   definitions; immutable-string heap bytes are not claimed to be
-  cryptographically zeroized. Per-user remote MCP OAuth credentials remain the
-  explicitly documented in-process exception in ADR-0009 while #167 is open.
+  cryptographically zeroized. ADR-0040 extends the child-owned runtime boundary
+  to per-user remote MCP token acquisition and calls; explicit OAuth/connectors
+  HTTP control-plane operations remain the parent-side exception.
 
 ## Alternatives considered
 

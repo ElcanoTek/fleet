@@ -19,6 +19,12 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **Production child-owned remote MCP scopes:** interactive and scheduled run
+  drivers now send only user identity and public server-name filters to
+  `fleet mcp-broker`; the child owns token lookup/refresh, SSRF-guarded HTTP MCP
+  clients, scoped calls, and cleanup. Explicit OAuth/connectors HTTP endpoints
+  remain parent-side control-plane operations (ADR-0040).
+
 - **Child-owned remote MCP scopes (#167 prerequisite):** `fleet mcp-broker`
   now opens an encrypted chat-store connection when remote MCP is configured,
   performs per-user connection lookup, token/API-key decryption and refresh,
@@ -26,8 +32,8 @@ prior versions are listed because none have shipped.
   and returns only public tools and skipped names. The dedicated DB pool is
   capped at 8 open/2 idle connections, scope-open resolver and per-server
   token/handshake failure values do not cross the pipe or enter logs, and
-  disabled operation fails explicitly. Production does not request these scopes
-  until the final activation slice. See
+  disabled operation fails explicitly. Production consumes these scopes through
+  the activation above. See
   [`docs/MCP-BROKER-SCOPES.md`](docs/MCP-BROKER-SCOPES.md).
 
 - **Remote MCP scope protocol (#167 prerequisite):** broker scope-open requests
@@ -43,9 +49,8 @@ prior versions are listed because none have shipped.
   scheduled runs can now receive a per-user remote-MCP overlay as an injected
   broker, public tool catalog, routing-name set, and bounded close function.
   The injected opener takes precedence over the existing resolver, while the
-  in-process OAuth client remains the compatibility and production default for
-  this slice. This changes no credential boundary by itself; it prepares the
-  run loops for a child-owned remote scope. See
+  in-process OAuth client remains a compatibility path for tests and embedders.
+  Production uses the child-owned remote scope described above. See
   [`docs/MCP-BROKER-SCOPES.md`](docs/MCP-BROKER-SCOPES.md).
 
 - **Production bundle MCP process boundary (#167):** `fleet serve` now starts
@@ -55,9 +60,8 @@ prior versions are listed because none have shipped.
   succeed it unsets connector env keys, overwrites/drops resolved MCP and inline
   HTTP definitions, and prevents config hot-reload from rehydrating exact or
   account-suffixed keys. Startup fails on a connector/parent env-name collision
-  or broker preflight error, without scrubbing on failure. Per-user remote MCP
-  OAuth clients remain in-process under ADR-0009, so #167 stays open for that
-  final credential path. See
+  or broker preflight error, without scrubbing on failure. Per-user run-time MCP
+  clients are child-owned by the activation above. See
   [`docs/MCP-BROKER-SCOPES.md`](docs/MCP-BROKER-SCOPES.md).
 
 - **Per-run MCP broker scope protocol (#167 prerequisite):** the internal broker
@@ -67,8 +71,7 @@ prior versions are listed because none have shipped.
   retain request correlation and cancellation, close is idempotent after success
   and retryable after failure, legacy backends fail explicitly, and backend
   panics remain value-free and incident-correlated. This protocol groundwork is
-  consumed by the production bundle boundary above; #167 remains open for
-  per-user remote-MCP isolation. See
+  consumed by the production bundle and remote-MCP boundaries above. See
   [`docs/MCP-BROKER-SCOPES.md`](docs/MCP-BROKER-SCOPES.md).
 
 - **Credential-owning MCP scope backend (#167 prerequisite):** `fleet
