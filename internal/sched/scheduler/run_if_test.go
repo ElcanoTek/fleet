@@ -109,6 +109,39 @@ func TestEvalRunIfExitCodeIs(t *testing.T) {
 	if !strings.Contains(reason, "oops") {
 		t.Errorf("evalRunIf(echo+exit3): reason %q must contain captured stderr", reason)
 	}
+
+	// A noisy gate must not grow Fleet's heap without bound while it runs. The
+	// writer keeps draining after the retained prefix fills, so the command can
+	// still exit normally and the reason makes truncation explicit.
+	task = &models.Task{RunIf: &models.RunIf{Command: "yes x | head -c 20000 >&2; exit 3", ExitCodeIs: 0, TimeoutSeconds: 5}}
+	ok, reason, err = s.evalRunIf(task)
+	if err != nil {
+		t.Fatalf("evalRunIf(noisy stderr): unexpected err %v", err)
+	}
+	if ok {
+		t.Error("evalRunIf(noisy stderr): expected skip")
+	}
+	if !strings.Contains(reason, runIfStderrTruncated) {
+		t.Errorf("evalRunIf(noisy stderr): reason must mark truncation, length=%d", len(reason))
+	}
+	if len(reason) > maxRunIfStderrBytes+128 {
+		t.Errorf("evalRunIf(noisy stderr): reason length=%d, want bounded near %d", len(reason), maxRunIfStderrBytes)
+	}
+}
+
+func TestCappedRunIfStderrConsumesAfterCap(t *testing.T) {
+	var got cappedRunIfStderr
+	input := strings.Repeat("x", maxRunIfStderrBytes+100)
+	n, err := got.Write([]byte(input))
+	if err != nil || n != len(input) {
+		t.Fatalf("Write = %d, %v; want %d, nil", n, err, len(input))
+	}
+	if got.buf.Len() != maxRunIfStderrBytes {
+		t.Fatalf("retained bytes = %d, want %d", got.buf.Len(), maxRunIfStderrBytes)
+	}
+	if !strings.HasSuffix(got.String(), runIfStderrTruncated) {
+		t.Fatalf("String() must carry truncation marker")
+	}
 }
 
 // TestEvalRunIfTimeout pins the hard wall-clock timeout (#269): a `sleep` that
