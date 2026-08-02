@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -37,6 +38,11 @@ type reloadState struct {
 	serialize sync.Mutex        // serializes whole Reload calls (they edit process env)
 	bootEnv   map[string]string // original process-env winners (∩ allowlist) — preserves boot precedence on reload
 	bootVals  map[string]string // resolved boot strings of the watched non-reloadable settings
+	// excludedEnv contains credential names whose runtime owner has moved to a
+	// child process. Reload must not rehydrate them into this process from either
+	// the env file or its boot-winner snapshot. Suffixed account variants are
+	// excluded by the same uppercase-alphanumeric convention as env admission.
+	excludedEnv map[string]bool
 	// bootSecrets pins the boot values (nil = unset at boot) of the registered
 	// per-request auth-secret env vars (#584). bootEnv only covers process-env
 	// winners, so a FILE-sourced webhook/Slack signing secret would otherwise be
@@ -54,6 +60,7 @@ func newReloadState(bootEnv map[string]string) *reloadState {
 		bootEnv:     make(map[string]string, len(bootEnv)),
 		bootVals:    make(map[string]string, len(nonReloadableWatched)),
 		bootSecrets: map[string]*string{},
+		excludedEnv: map[string]bool{},
 	}
 	for k, v := range bootEnv {
 		rs.bootEnv[k] = v
@@ -75,6 +82,51 @@ func newReloadState(bootEnv map[string]string) *reloadState {
 		}
 	}
 	return rs
+}
+
+// ExcludeEnvVarsFromReload permanently removes names from this Config's
+// process-env reload surface. It is used after a credential-owning child has
+// inherited connector credentials: later env-file reloads must not silently
+// reintroduce those credentials into the parent. Matching account-suffixed
+// variants are excluded too. Names only are retained.
+func (c *Config) ExcludeEnvVarsFromReload(names ...string) error {
+	if c == nil {
+		return errors.New("exclude environment from reload: nil config")
+	}
+	if c.reload == nil {
+		return nil // literal/test Config values have no reload path to constrain
+	}
+	clean := make([]string, 0, len(names))
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if name == "" || strings.ContainsRune(name, '=') {
+			return fmt.Errorf("invalid reload-excluded environment name %q", name)
+		}
+		clean = append(clean, name)
+	}
+	c.reload.serialize.Lock()
+	defer c.reload.serialize.Unlock()
+	for _, name := range clean {
+		c.reload.excludedEnv[name] = true
+		delete(c.reload.bootEnv, name)
+	}
+	return nil
+}
+
+func (rs *reloadState) envExcluded(name string) bool {
+	if rs.excludedEnv[name] {
+		return true
+	}
+	idx := strings.LastIndexByte(name, '_')
+	if idx <= 0 || idx == len(name)-1 || !rs.excludedEnv[name[:idx]] {
+		return false
+	}
+	for _, r := range name[idx+1:] {
+		if (r < 'A' || r > 'Z') && (r < '0' || r > '9') {
+			return false
+		}
+	}
+	return true
 }
 
 // LiveMaxCostUSD returns the per-run cost ceiling, hot-reload-safe. A nil reload
@@ -210,11 +262,14 @@ func (c *Config) Reload(envFile string) (ReloadResult, error) {
 	defer c.reload.serialize.Unlock()
 
 	if envFile != "" {
-		if err := loadEnvFile(envFile); err != nil && !os.IsNotExist(err) {
+		if err := loadEnvFileFiltered(envFile, func(name string) bool { return !c.reload.envExcluded(name) }); err != nil && !os.IsNotExist(err) {
 			return ReloadResult{}, fmt.Errorf("reload env file %s: %w", envFile, err)
 		}
 	}
 	for k, v := range c.reload.bootEnv {
+		if c.reload.envExcluded(k) {
+			continue
+		}
 		_ = os.Setenv(k, v)
 	}
 

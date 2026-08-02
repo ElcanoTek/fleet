@@ -88,3 +88,24 @@ func TestSourceEnvRefsHandlesDefaultsRequiredAndEscapes(t *testing.T) {
 		t.Fatalf("sourceEnvRefs = %v, want %v", got, want)
 	}
 }
+
+func TestScrubConnectorRuntimeDefinitionsPreservesParentBundleState(t *testing.T) {
+	b := &Bundle{
+		Branding:        Branding{AppName: "Example"},
+		MCPCatalog:      []ServerDef{{Name: "connector", Always: true, DisplayName: "Connector", Env: map[string]string{"TOKEN": "secret"}}},
+		HTTPTools:       []HTTPToolDef{{Name: "lookup", Headers: map[string]string{"Authorization": "secret"}}},
+		WebhookTriggers: []WebhookTriggerDef{{Slug: "events"}},
+		Providers:       []ProviderDef{{Name: "models", APIKeyEnv: "MODEL_KEY"}},
+		TaskTemplates:   []TaskTemplate{{Name: "template"}},
+	}
+	b.ScrubConnectorRuntimeDefinitions()
+	if b.MCPCatalog != nil || b.HTTPTools != nil {
+		t.Fatalf("connector definitions survived scrub: servers=%+v tools=%+v", b.MCPCatalog, b.HTTPTools)
+	}
+	if b.Branding.AppName != "Example" || len(b.WebhookTriggers) != 1 || len(b.Providers) != 1 || len(b.TaskTemplates) != 1 {
+		t.Fatalf("parent bundle state was damaged: %+v", b)
+	}
+	if got := b.AlwaysOnServers(); len(got) != 1 || got[0].Name != "connector" || got[0].DisplayName != "Connector" {
+		t.Fatalf("public always-on catalog was damaged: %+v", got)
+	}
+}

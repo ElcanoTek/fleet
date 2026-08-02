@@ -33,7 +33,7 @@ legacy scheduled binder.
 
 The protocol also supports credential-owner reload. The parent sends an empty
 `reload` request — never resolved server definitions — and the child re-reads
-its bundle and environment-backed connector configuration, applies the same
+its bundle against its boot credential snapshot, applies the same
 minimum add/remove/restart diff as the in-process client, and returns only the
 public summary, refreshed tool catalog, provisioned account-seat names, and the
 enabled servers' gating/picker metadata.
@@ -53,13 +53,11 @@ loop sees only the existing governed call seam.
 
 ## Deliberately deferred
 
-The protocol, child backend, and Manager injection seam are implemented, but
-production startup does **not** yet inject them. Its current options therefore
-still build the credentialed client in the main fleet process. Scheduled runs
-and per-user remote MCP credentials are not covered by these scopes. Issue #167
-remains open until production startup and both run paths use the subprocess,
-parent credential material is scrubbed, and the remote-MCP credential path is
-moved behind an equivalent process boundary.
+Production startup and both bundle run paths now use these scopes. The remaining
+deferred path is per-user remote hosted MCP: its OAuth overlay still decrypts a
+bearer and builds a short-lived client in the main Fleet process as documented
+by ADR-0009. Issue #167 remains open until that credential path moves behind an
+equivalent process boundary.
 
 No authorization boundary is added here. Account allowlists, task policy, tool
 approval, and audit remain responsibilities of the existing governed runtime;
@@ -88,13 +86,13 @@ failure fails the turn closed before provider or tool execution; it never falls
 back to the local client.
 
 The local-client default remains for transitional callers and tests. Production
-startup does not inject the new Manager options yet. Manager can accept a
-broker-mode reload adapter and atomically swap its enabled-server gates, public
+injects the broker, initial public catalog/account inventory, scope opener, and
+reload adapter. Manager atomically swaps its enabled-server gates, public
 catalog, provisioned account names, prompt roster, and picker metadata from one
 self-describing child result. The scrubbed parent does not re-read connector
 definitions on reload. A broker without that adapter fails an operator
 reload explicitly instead of reporting a false success. Production broker
-injection remains part of the switch-on sequence.
+reload keeps credential-bearing connector configuration inside the child.
 
 The scheduled `Agent` accepts the same broker/catalog pair and threads it into
 its existing `agentcore.Run`; governed sub-agents inherit that pair, and the
@@ -110,9 +108,9 @@ per-run workspace when a selected server references `${FLEET_WORKSPACE}`. The
 returned broker/catalog feeds the scheduled `Agent` and remote-overlay shadow
 set, and cleanup uses a fresh bounded context after cancellation. Scope-open
 errors fail the run closed. The local binder remains for transitional callers;
-production startup does not inject the opener yet. Broker mode can also receive
-a live public server inventory containing only enabled names and whether each
-server uses `${FLEET_WORKSPACE}`. Empty-selection expansion and workspace
+production injects the opener and a live public server inventory containing
+only enabled names and whether each server uses `${FLEET_WORKSPACE}`.
+Empty-selection expansion and workspace
 minting then no longer read credential-bearing `cfg.MCPServers`, and a reload can
 replace the inventory for the next run.
 
@@ -125,10 +123,10 @@ that catalog, and delegate the call. Email pre-validation stays on the same
 server that authored the staged send tool, rather than using an ambiguous bare
 tool lookup. A tool-level MCP error is recorded as a failed approval execution.
 
-The shipped Manager adapter still wraps its local client. This change is the
-transport seam needed for process isolation; it does not yet preserve a scoped
-account selection across a long-lived approval card. That lifecycle and the
-production broker injection remain part of #167.
+Production approval execution uses the unscoped child broker because an approval
+card can outlive the turn scope that staged it. It therefore uses the default
+bundle seat; preserving a scoped named-account selection across a long-lived
+approval card remains deferred under #167.
 
 ## Connector environment inventory
 
@@ -141,5 +139,21 @@ original variable name after spawning the broker child. Only names are retained.
 The inventory deliberately excludes parent-owned provider keys and webhook
 signing secrets. For stdio connectors it also recognizes every
 `<env-key>_<account>` variant that `ApplyClientSuffix` may read, not merely the
-smaller `account_vars` discovery list. The production parent does not scrub
-these keys yet; this is the complete, testable input for that switch-on step.
+smaller `account_vars` discovery list. Production unsets the resulting exact
+keys only after the child passes liveness, tool discovery, and account discovery;
+on any boot failure it leaves parent state intact and aborts startup. Resolved
+connector maps/slices are overwritten before references are dropped, while a
+separate public always-on view preserves the Connections UI.
+
+The parent also registers the source and account-base names as permanent config
+reload exclusions, preventing a later env-file reload from restoring either an
+exact key or an uppercase account-suffixed variant. Connector names may not
+overlap parent runtime settings, model-provider keys, webhook signing secrets,
+or core process variables; startup refuses a name-only conflict report. Values
+are never included in that report. Connector env values are boot-pinned in the
+broker and require a process restart to rotate.
+
+Because Go strings are immutable, this is reachability scrubbing rather than a
+cryptographic heap-zeroization claim: the parent necessarily resolved connector
+values during the boot handoff, then removes environment entries and overwrites
+or drops all reachable credential-bearing connector definitions.

@@ -31,6 +31,10 @@ use the fake-LLM seam and obvious placeholders.
 - `gitleaks` gates CI on every push and PR (`.github/workflows/ci.yml`); no
   secret may land in the tree.
 - The broker boundary is exercised by `internal/mcpbroker/*_test.go`.
+- Production startup spawns `fleet mcp-broker`, verifies public discovery before
+  scrubbing connector env/config state from the parent, and routes interactive,
+  scheduled, reload, and approval calls through the broker seam. Config reload
+  excludes scrubbed names so it cannot rehydrate them.
 - The credential allowlist gates which secrets a run may reach.
 
 ## Consequences
@@ -42,6 +46,11 @@ use the fake-LLM seam and obvious placeholders.
   token into the tool" is not an option.
 - Brokering adds an out-of-process hop and some plumbing per connector — the
   accepted cost of keeping secrets off the model path.
+- The Go parent necessarily resolves bundle connector values during the boot
+  handoff. It then unsets their env keys and overwrites/drops reachable runtime
+  definitions; immutable-string heap bytes are not claimed to be
+  cryptographically zeroized. Per-user remote MCP OAuth credentials remain the
+  explicitly documented in-process exception in ADR-0009 while #167 is open.
 
 ## Alternatives considered
 

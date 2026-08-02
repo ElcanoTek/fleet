@@ -45,26 +45,31 @@ panics. Its internal [scoped-session protocol](MCP-BROKER-SCOPES.md) can also
 open a per-run client from non-secret account/task/workspace identifiers and
 route calls through an opaque scope ID, which is required before scheduled runs
 with different account selections can share the subprocess safely. The child
-backend now owns those scoped clients and reaps them on close; production run
-construction does not use them yet. The interactive driver can accept the
-broker's public catalog and call seam without changing `agentcore.Run`, including
-when a per-user remote-MCP overlay is active; the production Manager does not yet
-inject them. The HTTP approval path also consumes only that broker/catalog
-contract for email pre-validation and approved MCP calls; its current Manager
-implementation adapts the same local client, so this removes a concrete-client
-dependency without claiming the production process boundary is active. Bundle
-loading also retains the names (never values) of connector environment inputs
-from the raw manifest, including account-suffixed stdio keys; this prevents
-startup interpolation from erasing the parent's future scrub inventory. The
-production parent does not consume that inventory yet.
+backend owns those scoped clients and reaps them on close. Production starts
+`fleet mcp-broker` before serving, verifies it with liveness and public
+catalog/account discovery, and then removes connector env keys plus resolved MCP
+and inline-HTTP definitions from the parent. Config hot-reload permanently
+excludes those names, including account-suffixed variants, so it cannot
+rehydrate them from the env file. If a connector tries to reuse an env name the
+parent still needs (a provider/webhook secret, Fleet runtime setting, or core
+process variable), startup fails instead of silently breaking either owner.
 
-**Current limitation (#167, reopened):** the server does not yet spawn that
-subprocess in production; `agent.New` still owns the credentialed client in the
-main fleet process. Credentials remain outside the sandbox and model context,
-but they are not yet isolated from the agent loop's address space. Do not treat
-the existing broker code as a shipped process-isolation boundary until #167's
-switch-on work lands. The scoped protocol is a tested prerequisite, not that
-switch-on.
+Every interactive turn and scheduled task opens a child-owned scope and closes
+it with a fresh bounded context. Manager discovery, picker metadata, account
+names, approvals, and scheduled empty-selection/workspace decisions consume
+only public broker results. MCP hot-reload is also child-owned: the parent sends
+no resolved definitions and publishes the returned public view atomically for
+future runs. Connector env values are a boot snapshot; rotate or add one by
+restarting Fleet. Go cannot guarantee cryptographic zeroization of immutable
+strings that existed during boot, so “scrub” here means environment removal and
+dropping/overwriting reachable runtime definitions, not a claim about forensic
+recovery from old heap pages.
+
+**Current limitation (#167):** per-user remote hosted MCP OAuth overlays still
+decrypt bearer credentials and build their short-lived clients in the main
+Fleet process (ADR-0009). They remain host-side and never enter the sandbox or
+model context, but they do not yet have the bundle broker's address-space
+isolation. Issue #167 stays open for that remaining path.
 
 ### Lockdown / network-sealed sandboxes
 

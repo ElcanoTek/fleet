@@ -41,26 +41,25 @@ Three mechanisms, all equivalent:
   turn (each turn rebuilds its tool roster from the live registry). In-flight
   turns finish on their current tool set.
 - **Scheduled tasks that use the shared catalog** (no explicit per-task MCP
-  selection): they run against the same reloaded client, so the *next* run picks
-  up the change.
+  selection): the next run expands against the broker's refreshed public server
+  inventory and opens a new child-owned scope.
+- **Scheduled tasks that pin an explicit MCP selection:** the next run opens its
+  child-owned scope against the refreshed bundle bases. An already-running task
+  keeps the scope snapshot it started with.
 - The **settings picker** (optional-server catalog) and the per-server tool
   allowlists / optional gating are refreshed atomically alongside the client, so
   a newly-added *optional* server is correctly gated rather than always-on.
 
 **Not covered (still needs a restart):**
 
-- **Scheduled tasks that pin an explicit MCP selection** build a fresh per-run
-  client from the boot-time catalog snapshot (`cfg.MCPServers`), which is read
-  concurrently by the scheduler and is therefore not mutated by a reload. Such a
-  task sees manifest changes on the next process restart.
 - **Inline HTTP tools** (`http_tools`, #261) — the synthetic tools server is left
   untouched by a reload.
 - **Per-user remote MCP connections** (#443/#449) are built fresh per turn and
   are unaffected (they were never part of the shared catalog).
-- A server whose manifest entry references a **brand-new environment variable**
-  not present at boot: the value resolves from the process environment at reload
-  time, but a var the operator must also add to the environment still requires
-  whatever mechanism sets that env var.
+- **Connector environment changes**, including rotation, deletion, a new
+  account-suffixed seat, or a brand-new variable. The broker intentionally uses
+  its boot environment snapshot; restart Fleet to transfer a new snapshot and
+  re-scrub the parent.
 
 ## Concurrency + draining
 
@@ -81,18 +80,15 @@ level), so two triggers firing at once (e.g. `kill -HUP` during a `fleet mcp
 reload`) run one after another rather than interleaving into a state where the
 live client and the published tool-gating describe different manifests.
 
-A newly-added *optional* server's gating is published **before** its tools go
-live, so it can never be briefly treated as always-on (which could otherwise
-push a near-full turn past the 128-tool ceiling). One narrow residual remains: a
-turn is single-threaded here but reads its optional-server gating at turn start
-and the live tool catalog slightly later, so a turn whose start straddles a
-reload may, for that one turn, see a just-*removed* optional server's tools; it
-self-heals on the next turn. Removing a server never adds tools, so it cannot
-cause a ceiling failure.
+The child applies its registry diff first and returns one self-describing public
+snapshot. The parent then publishes catalog, accounts, allowlists, optional
+gates, prompt roster, picker metadata, and scheduled server inventory from that
+result; the reload endpoint does not report success before publication. A run
+that already owns a scope remains on its old snapshot. A run starting during the
+brief child-response/parent-publication handoff can only select from the public
+snapshot its driver already held; it does not receive credential-bearing child
+definitions or bypass the normal selection gate.
 
 ## Not yet implemented (honest scope)
 
-- Live reload for scheduled tasks that pin an explicit MCP selection (would
-  require guarding the shared `cfg.MCPServers` snapshot the scheduler reads
-  per-run).
 - Reload of the inline `http_tools` catalog.

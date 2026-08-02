@@ -253,9 +253,7 @@ func run() error {
 		Environment: cfg.Environment,
 		Redact:      agentcore.RedactSecrets,
 	})
-	if sentryActive {
-		defer observability.Flush(2 * time.Second)
-	}
+	defer flushObservability(sentryActive)
 	// safe owns recovery and remains SDK-independent; this structured hook is the
 	// single adapter into Sentry. It carries only opaque IDs and boundary names —
 	// never tool arguments/output, recovered values, stacks, or credentials.
@@ -339,6 +337,16 @@ func run() error {
 		CriticalToolSubstitutes: bundlePolicy.CriticalToolSubstitutes,
 		CriticalToolTimeouts:    bundlePolicy.CriticalToolTimeouts,
 	})
+
+	// Connector credentials cross exactly one process boundary at boot: the child
+	// inherits the current environment, proves liveness + public discovery, then
+	// the parent erases connector env keys and every resolved connector config
+	// copy. All subsequent interactive/scheduled MCP work uses broker scopes.
+	mcpRuntime, serverSpecs, err := startDefaultProductionMCPRuntime(bundle, cfg)
+	if err != nil {
+		return fmt.Errorf("start production MCP broker: %w", err)
+	}
+	defer func() { _ = mcpRuntime.Close() }()
 
 	// Governed lifecycle hooks (#788): translate the bundle's declared hooks into
 	// the agentcore form and install them process-wide. The generic bundle ships
@@ -522,7 +530,6 @@ func run() error {
 	remoteMCPSvc, remoteMCPResolver := setupRemoteMCP(cfg, chatStore)
 
 	// ── interactive engine (the concrete turnEngine) ──
-	serverSpecs := scheduledrun.BuildMCPSpecs(cfg)
 	bundleProviders := toAgentcoreProviders(bundle)
 	mgr, err := buildInteractiveEngine(agent.ManagerOptions{
 		Config:               cfg,
@@ -537,6 +544,11 @@ func run() error {
 		NoteProposer:         notesProvider, // same adapter; wires propose_note for every interactive turn
 		PersonaPolicies:      personaPolicies,
 		RemoteMCP:            remoteMCPResolver,
+		MCPBroker:            mcpRuntime.client,
+		MCPCatalog:           mcpRuntime.catalog,
+		MCPAccounts:          mcpRuntime.accounts,
+		OpenMCPScope:         mcpRuntime.openInteractiveScope,
+		ReloadMCP:            mcpRuntime.reload,
 	}, bundleProviders, chatStore, cfg.OpenRouterAPIKey)
 	if err != nil {
 		return fmt.Errorf("build interactive engine: %w", err)
@@ -778,8 +790,10 @@ func run() error {
 		// scheduled runs inline the owner's ACTIVE skills into the prompt and
 		// stage agent-drafted proposals against the same chat-store rows the
 		// Skills page reviews.
-		UserSkills:       userSkillDocsProvider(chatStore),
-		SkillProposerFor: skillProposerFactory(chatStore),
+		UserSkills:         userSkillDocsProvider(chatStore),
+		SkillProposerFor:   skillProposerFactory(chatStore),
+		OpenTaskMCPScope:   mcpRuntime.openTaskScope,
+		MCPServerInventory: mcpRuntime.inventory.snapshot,
 	})
 	// Wire the cost-forecast's system-prompt resolver (#233) from the SAME runner
 	// that assembles the prompt at dispatch, so POST /tasks/estimate counts the
@@ -1069,6 +1083,12 @@ func initTracing(serviceVersion string) func() {
 		if err := shutdown(ctx); err != nil {
 			log.Printf("otel: shutdown error: %v", err)
 		}
+	}
+}
+
+func flushObservability(active bool) {
+	if active {
+		observability.Flush(2 * time.Second)
 	}
 }
 
