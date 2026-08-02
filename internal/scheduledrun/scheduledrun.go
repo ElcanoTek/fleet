@@ -1103,11 +1103,22 @@ func (r *Runner) taskIdentityRequested() bool {
 }
 
 func (r *Runner) mcpBases() map[string]agentcore.MCPServerBase {
+	return BuildMCPBases(r.cfg)
+}
+
+// BuildMCPBases maps the configured catalog to the credential-bearing spawn
+// definitions consumed by agentcore.BindMCPSelection. It is shared with the
+// out-of-process broker so scheduled in-process binding and broker scopes cannot
+// drift in account overlay, identity refusal, TLS, or required-server behavior.
+func BuildMCPBases(cfg *config.Config) map[string]agentcore.MCPServerBase {
 	bases := map[string]agentcore.MCPServerBase{}
-	if r.cfg == nil {
+	if cfg == nil {
 		return bases
 	}
-	for name, sc := range r.cfg.MCPServers {
+	for name, sc := range cfg.MCPServers {
+		if !sc.Enabled {
+			continue
+		}
 		base := agentcore.MCPServerBase{
 			BaseEnv:     sc.Env,
 			Command:     sc.Command,

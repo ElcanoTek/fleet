@@ -197,6 +197,20 @@ func TestScheduledRunner_UnknownServerFailsFast(t *testing.T) {
 	}
 }
 
+func TestScheduledRunner_DisabledServerFailsFast(t *testing.T) {
+	r := &Runner{cfg: &config.Config{MCPServers: map[string]config.MCPServerConfig{
+		"disabled": {Enabled: false, Command: "should-not-run"},
+	}}}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	task := &models.Task{MCPSelection: models.MCPSelection{{Server: "disabled"}}}
+	_, cleanup, _, err := r.bindTaskMCP(ctx, task)
+	defer cleanup()
+	if err == nil {
+		t.Fatal("disabled server remained selectable through the per-run binder")
+	}
+}
+
 // recordingTaker is a fake sandboxTaker that records which acquisition method
 // takeTaskSandbox invoked, without spinning a real podman container.
 type recordingTaker struct {

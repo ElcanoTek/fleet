@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
+	"sync"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
@@ -14,6 +16,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/mcpbroker"
 	"github.com/ElcanoTek/fleet/internal/scheduledrun"
+	"github.com/google/uuid"
 )
 
 // runMCPBroker is `fleet mcp-broker`: the out-of-process MCP credential broker
@@ -50,8 +53,12 @@ func runMCPBroker() error {
 	backend := &brokerBackend{
 		MCPBroker: agentcore.NewLocalMCPBroker(client, agentcore.DefaultRemediationHints),
 		client:    client,
+		bases:     scheduledrun.BuildMCPBases(cfg),
+		httpTools: cfg.HTTPTools,
+		scopes:    make(map[string]*brokerScope),
 	}
-	return mcpbroker.ServeStdio(context.Background(), backend)
+	serveErr := mcpbroker.ServeStdio(context.Background(), backend)
+	return errors.Join(serveErr, backend.Close())
 }
 
 // brokerBackend is the mcpbroker.Backend the broker process serves: calls run
@@ -62,10 +69,130 @@ func runMCPBroker() error {
 type brokerBackend struct {
 	agentcore.MCPBroker // CallMCP, via localMCPBroker over the credentialed client
 	client              *mcp.Client
+	bases               map[string]agentcore.MCPServerBase
+	httpTools           []config.HTTPToolConfig
+
+	mu     sync.RWMutex
+	scopes map[string]*brokerScope
 }
 
+type brokerScope struct {
+	mu     sync.RWMutex
+	client *mcp.Client
+	broker agentcore.MCPBroker
+}
+
+var (
+	_ mcpbroker.Backend       = (*brokerBackend)(nil)
+	_ mcpbroker.ScopedBackend = (*brokerBackend)(nil)
+)
+
 func (b *brokerBackend) ListTools(context.Context) ([]mcpbroker.ToolDescriptor, error) {
-	tools := b.client.GetAllTools()
+	return describeTools(b.client), nil
+}
+
+func (b *brokerBackend) ListAccounts(_ context.Context, _ string, baseVars []string) ([]string, error) {
+	return creds.AccountsFor(baseVars), nil
+}
+
+func (b *brokerBackend) OpenScope(ctx context.Context, spec mcpbroker.ScopeSpec) (string, []mcpbroker.ToolDescriptor, error) {
+	selection := make(agentcore.MCPSelection, 0, len(spec.Selection))
+	for _, choice := range spec.Selection {
+		selection = append(selection, agentcore.MCPChoice{Server: choice.Server, Account: choice.Account})
+	}
+	bases := cloneMCPBases(b.bases)
+	for name, base := range bases {
+		base.BaseEnv = agentcore.ExpandTaskIDEnv(base.BaseEnv, spec.TaskID)
+		bases[name] = base
+	}
+
+	client := mcp.NewClient()
+	if _, err := agentcore.BindMCPSelection(ctx, client, selection, bases, spec.Workspace); err != nil {
+		_ = client.Close()
+		return "", nil, err
+	}
+	agent.RegisterHTTPTools(client, b.httpTools)
+
+	scope := &brokerScope{
+		client: client,
+		broker: agentcore.NewLocalMCPBroker(client, agentcore.DefaultRemediationHints),
+	}
+	id := uuid.NewString()
+	b.mu.Lock()
+	b.scopes[id] = scope
+	b.mu.Unlock()
+	return id, describeTools(client), nil
+}
+
+func (b *brokerBackend) CallMCPInScope(ctx context.Context, scopeID, server, tool string, args map[string]any) (string, bool, error) {
+	b.mu.RLock()
+	scope := b.scopes[scopeID]
+	if scope != nil {
+		scope.mu.RLock()
+	}
+	b.mu.RUnlock()
+	if scope == nil {
+		return "", false, fmt.Errorf("mcpbroker: unknown scope %q", scopeID)
+	}
+	defer scope.mu.RUnlock()
+	return scope.broker.CallMCP(ctx, server, tool, args)
+}
+
+func (b *brokerBackend) CloseScope(_ context.Context, scopeID string) error {
+	b.mu.Lock()
+	scope := b.scopes[scopeID]
+	delete(b.scopes, scopeID)
+	b.mu.Unlock()
+	if scope == nil {
+		return nil
+	}
+	scope.mu.Lock()
+	defer scope.mu.Unlock()
+	return scope.client.Close()
+}
+
+// Close releases the shared client and every scope left behind by a peer hangup.
+func (b *brokerBackend) Close() error {
+	b.mu.Lock()
+	scopes := b.scopes
+	b.scopes = make(map[string]*brokerScope)
+	b.mu.Unlock()
+
+	errs := make([]error, 0, len(scopes)+1)
+	for _, scope := range scopes {
+		scope.mu.Lock()
+		errs = append(errs, scope.client.Close())
+		scope.mu.Unlock()
+	}
+	errs = append(errs, b.client.Close())
+	return errors.Join(errs...)
+}
+
+func cloneMCPBases(src map[string]agentcore.MCPServerBase) map[string]agentcore.MCPServerBase {
+	dst := make(map[string]agentcore.MCPServerBase, len(src))
+	for name, base := range src {
+		base.BaseEnv = cloneStrings(base.BaseEnv)
+		base.HTTPHeaders = cloneStrings(base.HTTPHeaders)
+		base.Args = append([]string(nil), base.Args...)
+		base.IdentityEnv = append([]string(nil), base.IdentityEnv...)
+		dst[name] = base
+	}
+	return dst
+}
+
+func cloneStrings(src map[string]string) map[string]string {
+	if src == nil {
+		return nil
+	}
+	dst := make(map[string]string, len(src))
+	for key, value := range src {
+		dst[key] = value
+	}
+	return dst
+}
+
+func describeTools(client *mcp.Client) []mcpbroker.ToolDescriptor {
+	tools := client.GetAllTools()
 	out := make([]mcpbroker.ToolDescriptor, 0, len(tools))
 	for _, st := range tools {
 		out = append(out, mcpbroker.ToolDescriptor{
@@ -75,9 +202,5 @@ func (b *brokerBackend) ListTools(context.Context) ([]mcpbroker.ToolDescriptor, 
 			InputSchema: st.Tool.InputSchema,
 		})
 	}
-	return out, nil
-}
-
-func (b *brokerBackend) ListAccounts(_ context.Context, _ string, baseVars []string) ([]string, error) {
-	return creds.AccountsFor(baseVars), nil
+	return out
 }

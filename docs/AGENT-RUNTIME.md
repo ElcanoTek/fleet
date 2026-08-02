@@ -44,7 +44,9 @@ value-free, incident-correlated responses when broker call or discovery code
 panics. Its internal [scoped-session protocol](MCP-BROKER-SCOPES.md) can also
 open a per-run client from non-secret account/task/workspace identifiers and
 route calls through an opaque scope ID, which is required before scheduled runs
-with different account selections can share the subprocess safely.
+with different account selections can share the subprocess safely. The child
+backend now owns those scoped clients and reaps them on close; production run
+construction does not use them yet.
 
 **Current limitation (#167, reopened):** the server does not yet spawn that
 subprocess in production; `agent.New` still owns the credentialed client in the

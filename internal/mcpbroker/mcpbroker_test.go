@@ -60,6 +60,9 @@ type fakeScopedBroker struct {
 	panicOpen      any
 	panicScopeCall any
 	panicClose     any
+	openRelease    chan struct{}
+	openStarted    chan struct{}
+	openStartOnce  sync.Once
 }
 
 var (
@@ -75,6 +78,12 @@ func (b *fakeScopedBroker) OpenScope(_ context.Context, spec ScopeSpec) (string,
 	b.scopeMu.Lock()
 	b.openSpec = spec
 	b.scopeMu.Unlock()
+	if b.openStarted != nil {
+		b.openStartOnce.Do(func() { close(b.openStarted) })
+	}
+	if b.openRelease != nil {
+		<-b.openRelease
+	}
 	return b.scopeID, b.scopeTools, b.openErr
 }
 
@@ -485,6 +494,47 @@ func TestClientServer_ScopeCloseContextCancelsWhileWaiting(t *testing.T) {
 	}
 	if err := scope.Close(context.Background()); err != nil {
 		t.Fatalf("retry Close: %v", err)
+	}
+}
+
+func TestClientServer_CancelledOpenClosesLateScope(t *testing.T) {
+	fake := &fakeScopedBroker{
+		fakeBroker:  &fakeBroker{},
+		scopeID:     "late-scope",
+		openStarted: make(chan struct{}),
+		openRelease: make(chan struct{}),
+	}
+	client := loopback(t, fake)
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, err := client.OpenScope(ctx, ScopeSpec{})
+		result <- err
+	}()
+	<-fake.openStarted
+	cancel()
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("OpenScope = %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("cancelled OpenScope did not return promptly")
+	}
+	close(fake.openRelease)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		fake.scopeMu.Lock()
+		closed := append([]string(nil), fake.closedScopes...)
+		fake.scopeMu.Unlock()
+		if len(closed) == 1 && closed[0] == "late-scope" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("late scope was not closed, CloseScope calls = %v", closed)
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 
