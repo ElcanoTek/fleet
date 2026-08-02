@@ -97,12 +97,26 @@ type Options struct {
 	// OpenTaskMCPScope creates one broker-owned MCP client for a scheduled run.
 	// Nil preserves the in-process compatibility binder.
 	OpenTaskMCPScope TaskMCPScopeOpener
+	// MCPServerInventory returns the live public bundle-server inventory used to
+	// expand an empty task selection and decide whether to mint a workspace. It
+	// carries names and booleans only, so broker mode need not retain cfg secrets.
+	MCPServerInventory TaskMCPServerInventoryProvider
 }
 
 // TaskMCPScopeOpener binds public server/account choices plus task/workspace
 // identity inside the credential-owning process. Credential values never cross
 // this seam.
 type TaskMCPScopeOpener func(ctx context.Context, selection agentcore.MCPSelection, taskID, workspace string) (*agent.MCPScope, error)
+
+// TaskMCPServerInfo is the public per-server state scheduled scope construction
+// needs. Credential-bearing env, headers, URLs, and commands are absent.
+type TaskMCPServerInfo struct {
+	UsesWorkspace bool
+}
+
+// TaskMCPServerInventoryProvider returns a concurrency-safe snapshot of the
+// currently enabled public bundle-server inventory.
+type TaskMCPServerInventoryProvider func() map[string]TaskMCPServerInfo
 
 // Runner executes claimed scheduled tasks in-process through the unified runtime
 // (Mode=Scheduled). It reuses the model resolver + sandbox warm pool held on the
@@ -153,7 +167,8 @@ type Runner struct {
 	userSkills       func(ctx context.Context, email string) ([]UserSkillDoc, error)
 	skillProposerFor func(ownerEmail string) agentcore.SkillProposer
 
-	openTaskMCPScope TaskMCPScopeOpener
+	openTaskMCPScope   TaskMCPScopeOpener
+	mcpServerInventory TaskMCPServerInventoryProvider
 }
 
 // UserSkillDoc is one user-authored skill in the shape the scheduled prompt
@@ -201,6 +216,7 @@ func New(opts Options) *Runner {
 		userSkills:          opts.UserSkills,
 		skillProposerFor:    opts.SkillProposerFor,
 		openTaskMCPScope:    opts.OpenTaskMCPScope,
+		mcpServerInventory:  opts.MCPServerInventory,
 	}
 	r.baseSystemPrompt = r.buildBaseSystemPrompt()
 	return r
@@ -1026,19 +1042,30 @@ func (r *Runner) taskMCPSelection(task *models.Task, allWhenEmpty bool) agentcor
 	for _, choice := range task.MCPSelection {
 		selection = append(selection, agentcore.MCPChoice{Server: choice.Server, Account: choice.Account})
 	}
-	if len(selection) > 0 || !allWhenEmpty || r.cfg == nil {
+	if len(selection) > 0 || !allWhenEmpty {
 		return selection
 	}
-	for name, server := range r.cfg.MCPServers {
-		if server.Enabled {
-			selection = append(selection, agentcore.MCPChoice{Server: name})
-		}
+	for name := range r.taskMCPServerInventory() {
+		selection = append(selection, agentcore.MCPChoice{Server: name})
 	}
 	sort.Slice(selection, func(i, j int) bool { return selection[i].Server < selection[j].Server })
 	return selection
 }
 
 func (r *Runner) prepareTaskMCPWorkspace(task *models.Task, selection agentcore.MCPSelection) (string, error) {
+	if r.openTaskMCPScope != nil {
+		inventory := r.taskMCPServerInventory()
+		for _, choice := range selection {
+			if inventory[choice.Server].UsesWorkspace {
+				workdir := agentcore.PerRunMCPWorkspaceDir("task-" + task.ID.String() + "-")
+				if err := r.stageTaskInputs(task, filepath.Join(workdir, "inputs")); err != nil {
+					return "", fmt.Errorf("stage task inputs: %w", err)
+				}
+				return workdir, nil
+			}
+		}
+		return "", nil
+	}
 	bases := r.mcpBases()
 	for _, choice := range selection {
 		if base, ok := bases[choice.Server]; ok && agentcore.EnvReferencesWorkspace(base.BaseEnv) {
@@ -1050,6 +1077,22 @@ func (r *Runner) prepareTaskMCPWorkspace(task *models.Task, selection agentcore.
 		}
 	}
 	return "", nil
+}
+
+func (r *Runner) taskMCPServerInventory() map[string]TaskMCPServerInfo {
+	if r.mcpServerInventory != nil {
+		return r.mcpServerInventory()
+	}
+	out := map[string]TaskMCPServerInfo{}
+	if r.cfg == nil {
+		return out
+	}
+	for name, server := range r.cfg.MCPServers {
+		if server.Enabled {
+			out[name] = TaskMCPServerInfo{UsesWorkspace: agentcore.EnvReferencesWorkspace(server.Env)}
+		}
+	}
+	return out
 }
 
 // bindTaskMCP resolves the local compatibility client the scheduled run should

@@ -35,11 +35,13 @@ func TestBindTaskMCPRuntime_UsesBrokerScope(t *testing.T) {
 		closeCtxErr  = errors.New("scope not closed")
 	)
 	r := &Runner{
-		cfg: &config.Config{MCPServers: map[string]config.MCPServerConfig{
-			"alpha":    {Enabled: true, Env: map[string]string{"WORK": agentcore.WorkspaceEnvToken}},
-			"beta":     {Enabled: true},
-			"disabled": {Enabled: false},
-		}},
+		cfg: &config.Config{},
+		mcpServerInventory: func() map[string]TaskMCPServerInfo {
+			return map[string]TaskMCPServerInfo{
+				"alpha": {UsesWorkspace: true},
+				"beta":  {},
+			}
+		},
 		openTaskMCPScope: func(_ context.Context, selection agentcore.MCPSelection, taskID, workspace string) (*agent.MCPScope, error) {
 			gotSelection = append(agentcore.MCPSelection(nil), selection...)
 			gotTaskID = taskID
@@ -76,6 +78,25 @@ func TestBindTaskMCPRuntime_UsesBrokerScope(t *testing.T) {
 	binding.cleanup()
 	if closeCtxErr != nil {
 		t.Fatalf("scope close inherited cancelled run context: %v", closeCtxErr)
+	}
+}
+
+func TestTaskMCPSelection_UsesLivePublicInventory(t *testing.T) {
+	inventory := map[string]TaskMCPServerInfo{"alpha": {}}
+	r := &Runner{
+		cfg: &config.Config{},
+		mcpServerInventory: func() map[string]TaskMCPServerInfo {
+			return inventory
+		},
+	}
+	task := &models.Task{}
+	if got := r.taskMCPSelection(task, true); !reflect.DeepEqual(got, agentcore.MCPSelection{{Server: "alpha"}}) {
+		t.Fatalf("initial selection = %#v", got)
+	}
+	inventory = map[string]TaskMCPServerInfo{"beta": {}, "gamma": {UsesWorkspace: true}}
+	want := agentcore.MCPSelection{{Server: "beta"}, {Server: "gamma"}}
+	if got := r.taskMCPSelection(task, true); !reflect.DeepEqual(got, want) {
+		t.Fatalf("reloaded selection = %#v, want %#v", got, want)
 	}
 }
 

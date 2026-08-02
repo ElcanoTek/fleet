@@ -119,6 +119,7 @@ type ServerDescriptor struct {
 	Description      string   `json:"description,omitempty"`
 	Beta             bool     `json:"beta,omitempty"`
 	EnabledByDefault bool     `json:"enabledByDefault,omitempty"`
+	UsesWorkspace    bool     `json:"usesWorkspace,omitempty"`
 }
 
 // request is a client -> server frame. The server only ever decodes requests; the

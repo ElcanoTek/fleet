@@ -325,6 +325,7 @@ func TestClientServer_ReloadRoundTrip(t *testing.T) {
 				ToolAllowlist: []string{"lookup"},
 				AccountVars:   []string{"ADDED_TOKEN"},
 				Optional:      true,
+				UsesWorkspace: true,
 			}},
 		},
 	}
@@ -346,7 +347,7 @@ func TestClientServer_ReloadRoundTrip(t *testing.T) {
 	if len(result.Accounts["added"]) != 1 || result.Accounts["added"][0] != "blue" {
 		t.Fatalf("accounts = %+v", result.Accounts)
 	}
-	if len(result.Servers) != 1 || result.Servers[0].Name != "added" || !result.Servers[0].Optional {
+	if len(result.Servers) != 1 || result.Servers[0].Name != "added" || !result.Servers[0].Optional || !result.Servers[0].UsesWorkspace {
 		t.Fatalf("servers = %+v", result.Servers)
 	}
 	result.Summary.Added[0] = "mutated"
