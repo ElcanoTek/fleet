@@ -69,6 +69,13 @@ prior versions are listed because none have shipped.
   cancellation-independent timeout. Production startup and scheduled runs do
   not inject this seam yet, so parent credential scrubbing remains deferred.
 
+- **Scheduled MCP broker seam (#167 prerequisite):** the scheduled `Agent` and
+  its governed sub-agents can now call and discover bundle tools through an
+  injected broker/catalog, including composition with the existing per-user
+  remote overlay. Broker mode suppresses the in-process MCP loader tools instead
+  of advertising an unavailable mutation path. The production `Runner` still
+  binds local clients until its per-task scope integration lands.
+
 - **Query-parameter API keys for hosted connectors (Browserbase)**: some
   vendors authenticate their hosted MCP server with the key in a URL query
   parameter rather than a header. api_key connectors now support

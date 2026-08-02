@@ -59,6 +59,8 @@ type Agent struct {
 	fallbackModel  fantasy.LanguageModel
 	fallbackModels []fantasy.LanguageModel
 	mcpClient      *mcp.Client
+	mcpBroker      agentcore.MCPBroker
+	mcpCatalog     []mcp.ServerTool
 	overlay        *RemoteMCPOverlay
 	nativeTools    []fantasy.AgentTool
 	systemPrompt   string
@@ -143,13 +145,17 @@ type Options struct {
 	FallbackModel  fantasy.LanguageModel
 	FallbackModels []fantasy.LanguageModel
 	MCPClient      *mcp.Client
-	NativeTools    []fantasy.AgentTool
-	SystemPrompt   string
-	Persona        string
-	MaxIterations  int
-	Sandbox        *sandbox.Sandbox
-	LogFile        string
-	OutputSchema   json.RawMessage
+	// MCPBroker/MCPCatalog replace local-client calls and discovery for a
+	// broker-owned scheduled scope. Nil preserves the concrete client path.
+	MCPBroker     agentcore.MCPBroker
+	MCPCatalog    []mcp.ServerTool
+	NativeTools   []fantasy.AgentTool
+	SystemPrompt  string
+	Persona       string
+	MaxIterations int
+	Sandbox       *sandbox.Sandbox
+	LogFile       string
+	OutputSchema  json.RawMessage
 
 	// NotesProvider supplies the admin-curated knowledge base appended to the
 	// system prompt at run start (both modes inject the same notes). Nil = none.
@@ -275,6 +281,8 @@ func NewAgent(opts Options) *Agent {
 		fallbackModel:       opts.FallbackModel,
 		fallbackModels:      append([]fantasy.LanguageModel(nil), opts.FallbackModels...),
 		mcpClient:           opts.MCPClient,
+		mcpBroker:           opts.MCPBroker,
+		mcpCatalog:          cloneScheduledMCPCatalog(opts.MCPCatalog),
 		overlay:             opts.Overlay,
 		nativeTools:         opts.NativeTools,
 		systemPrompt:        opts.SystemPrompt,
@@ -306,6 +314,15 @@ func NewAgent(opts Options) *Agent {
 		a.subagent.parentTaskID = opts.TaskID.String()
 	}
 	return a
+}
+
+func cloneScheduledMCPCatalog(src []mcp.ServerTool) []mcp.ServerTool {
+	if src == nil {
+		return nil
+	}
+	dst := make([]mcp.ServerTool, len(src))
+	copy(dst, src)
+	return dst
 }
 
 // LogSession exposes the run's session log.
@@ -599,7 +616,10 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 
 	// Loader tools (mcp_list_servers / mcp_load_servers) drive the in-loop tool
 	// rebuild via the agentcore MCPServersDirty hook.
-	loaderTools := a.buildLoaderTools()
+	var loaderTools []fantasy.AgentTool
+	if a.mcpBroker == nil {
+		loaderTools = a.buildLoaderTools()
+	}
 
 	maxTokens := agentcore.DefaultMaxCompletionTokens
 	if a.config != nil && a.config.LLMMaxTokens > 0 {
@@ -628,6 +648,8 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 		FallbackModel:   a.fallbackModel,
 		FallbackModels:  a.fallbackModels,
 		MCPClient:       a.mcpClient,
+		MCPBroker:       a.mcpBroker,
+		MCPCatalog:      a.mcpCatalog,
 		LogSession:      a.logSession,
 		MCPServersDirty: a.mcpDirty,
 		ClearMCPDirty:   a.clearMCPDirty,
@@ -635,7 +657,7 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 	// Per-user remote-MCP overlay (#443): wire the task owner's OAuth-connected
 	// hosted servers via the SAME compositeBroker the interactive path uses, so a
 	// headless run reaches them without mutating the shared/per-run bundle client.
-	ApplyMCPOverlay(&deps, a.mcpClient, a.overlay)
+	ApplyMCPOverlayWithBase(&deps, a.mcpClient, a.mcpBroker, a.mcpCatalog, a.overlay)
 	// The verifier gate wraps the inner policy. We must drive CanFinish through
 	// the wrapper while keeping the inner policy as Deps.Policy so agentcore's
 	// confirm_audit tool + usage accounting bind to the same orchestration. We
