@@ -75,3 +75,17 @@ The shipped Manager adapter still wraps its local client. This change is the
 transport seam needed for process isolation; it does not yet preserve a scoped
 account selection across a long-lived approval card. That lifecycle and the
 production broker injection remain part of #167.
+
+## Connector environment inventory
+
+`clientconfig.Bundle` captures connector environment names from the raw
+`mcp_servers` and `http_tools` sections before manifest interpolation. This
+matters when a credential was exported before startup: interpolation replaces
+`${VAR}` with its value in the parsed bundle, but the parent must still know the
+original variable name after spawning the broker child. Only names are retained.
+
+The inventory deliberately excludes parent-owned provider keys and webhook
+signing secrets. For stdio connectors it also recognizes every
+`<env-key>_<account>` variant that `ApplyClientSuffix` may read, not merely the
+smaller `account_vars` discovery list. The production parent does not scrub
+these keys yet; this is the complete, testable input for that switch-on step.
