@@ -54,10 +54,11 @@ loop sees only the existing governed call seam.
 ## Deliberately deferred
 
 Production startup and both bundle run paths now use these scopes. The remaining
-deferred path is per-user remote hosted MCP: its OAuth overlay still decrypts a
-bearer and builds a short-lived client in the main Fleet process as documented
-by ADR-0009. Issue #167 remains open until that credential path moves behind an
-equivalent process boundary.
+deferred production path is per-user remote hosted MCP: its OAuth overlay still
+decrypts a bearer and builds a short-lived client in the main Fleet process as
+documented by ADR-0009. The drivers now accept a transport-neutral remote
+overlay opener, but production does not inject it yet. Issue #167 remains open
+until the child implements and production activates the equivalent remote scope.
 
 No authorization boundary is added here. Account allowlists, task policy, tool
 approval, and audit remain responsibilities of the existing governed runtime;
@@ -70,6 +71,18 @@ on `TurnConfig` and threads them into the same `agentcore.Run` call used by the
 local-client path. Its per-user remote-MCP overlay composes with either base: a
 remote server name routes to the short-lived user client, while every bundle
 server routes to the injected broker.
+
+The remote overlay itself is now transport-neutral as well. It may own the
+historical short-lived `mcp.Client`, or carry an injected `agentcore.MCPBroker`
+with public catalog/routing metadata and a scope-close function. Manager and the
+scheduled Runner each accept a remote overlay opener; when present it takes
+precedence over the legacy token resolver. Both paths preserve interactive
+opt-in filtering, scheduled all-connected semantics, bundle-name shadowing, and
+skipped-server reporting. Broker-scope cleanup runs on a fresh five-second
+context, so cancellation of the turn cannot strand the remote scope. This seam
+rejects a broker overlay without an explicit close function, rather than
+silently leaking a per-run scope. It does not itself move OAuth token
+acquisition or remote HTTP clients out of the main process.
 
 `ManagerOptions` can now supply that broker/catalog plus a per-turn scope opener.
 Broker injection requires an explicit public catalog (an explicit empty catalog

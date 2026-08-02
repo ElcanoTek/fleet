@@ -2,9 +2,11 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/mcp"
@@ -60,18 +62,30 @@ type RemoteMCPResolver interface {
 	SafeHTTPClient() *http.Client
 }
 
+// RemoteMCPOverlayOpener binds one user's public remote-server selection to a
+// per-run broker overlay. Implementations may keep the historical in-process
+// client or open a scope in a credential-owning subprocess; callers see only
+// public tool metadata and the agentcore call seam.
+type RemoteMCPOverlayOpener func(ctx context.Context, email string, shadowed, enabled map[string]bool) (*RemoteMCPOverlay, error)
+
 // maxOverlayServers caps how many remote servers one user can inject into a
 // single run, a guard against blowing the 128-tool ceiling (and against a
 // pathological number of per-turn handshakes). Excess servers are skipped with a
 // logged warning rather than silently dropped.
 const maxOverlayServers = 8
 
-// RemoteMCPOverlay is the per-run wiring for a user's remote servers. The caller
-// MUST Close Client at run end.
+// RemoteMCPOverlay is the per-run wiring for a user's remote servers. Client is
+// retained for the in-process compatibility path; Broker and CloseScope allow
+// the same overlay to be owned across a process boundary. The caller MUST close
+// the overlay at run end.
 type RemoteMCPOverlay struct {
-	Client  *mcp.Client      // per-run; Close() in the caller's defer
+	Client  *mcp.Client // per-run compatibility client
+	Broker  agentcore.MCPBroker
 	Catalog []mcp.ServerTool // the overlay servers' tools, merged into the run catalog
 	Servers map[string]bool  // registration names handled by the overlay broker
+	// CloseScope releases a broker-owned scope. It is called with a fresh,
+	// bounded context so cancellation of the run cannot suppress cleanup.
+	CloseScope func(context.Context) error
 	// Skipped names servers that were selected but could not be wired this run —
 	// today only because their token is unavailable (needs re-auth) or the server
 	// failed to connect. Callers surface these to the owner (a needs-reauth server
@@ -81,12 +95,42 @@ type RemoteMCPOverlay struct {
 
 // Active reports whether the overlay actually registered any servers.
 func (o *RemoteMCPOverlay) Active() bool {
-	return o != nil && o.Client != nil && len(o.Servers) > 0
+	return o != nil && (o.Broker != nil || o.Client != nil) && len(o.Servers) > 0
 }
 
-// Close tears down the overlay's per-run client (nil-safe).
+// Validate checks the ownership contract an injected opener must satisfy. A
+// broker-backed overlay always represents a per-run scope and therefore needs
+// an explicit release function; selected routing names need a call target.
+func (o *RemoteMCPOverlay) Validate() error {
+	if o == nil {
+		return nil
+	}
+	if o.Broker != nil && o.CloseScope == nil {
+		return errors.New("remote MCP broker overlay has no close function")
+	}
+	if len(o.Servers) > 0 && o.Broker == nil && o.Client == nil {
+		return errors.New("remote MCP overlay has routing names but no call broker")
+	}
+	return nil
+}
+
+const remoteMCPOverlayCloseTimeout = 5 * time.Second
+
+// Close tears down the overlay's per-run client or broker scope (nil-safe). It
+// deliberately uses a fresh bounded context: callers commonly defer it from a
+// run whose context may already be cancelled.
 func (o *RemoteMCPOverlay) Close() {
-	if o != nil && o.Client != nil {
+	if o == nil {
+		return
+	}
+	if o.CloseScope != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), remoteMCPOverlayCloseTimeout)
+		defer cancel()
+		if err := o.CloseScope(ctx); err != nil {
+			log.Printf("remote-mcp: close overlay scope: %v", err)
+		}
+	}
+	if o.Client != nil {
 		_ = o.Client.Close()
 	}
 }
@@ -212,13 +256,20 @@ func ApplyMCPOverlayWithBase(
 		baseCatalog = baseClient.GetAllTools()
 	}
 	deps.MCPBroker = &compositeBroker{
-		overlay:        agentcore.NewLocalMCPBroker(overlay.Client, hints),
+		overlay:        overlay.callBroker(hints),
 		overlayServers: overlay.Servers,
 		base:           baseBroker,
 	}
 	merged := append([]mcp.ServerTool(nil), baseCatalog...)
 	merged = append(merged, overlay.Catalog...)
 	deps.MCPCatalog = merged
+}
+
+func (o *RemoteMCPOverlay) callBroker(hints agentcore.RemediationHints) agentcore.MCPBroker {
+	if o.Broker != nil {
+		return o.Broker
+	}
+	return agentcore.NewLocalMCPBroker(o.Client, hints)
 }
 
 // compositeBroker routes an MCP call to the per-user overlay broker when the

@@ -87,6 +87,10 @@ type Options struct {
 	// disables remote-MCP wiring for scheduled runs even when RemoteMCP is set.
 	RemoteMCP  agent.RemoteMCPResolver
 	OwnerEmail func(ctx context.Context, userID uuid.UUID) (string, error)
+	// OpenRemoteMCPOverlay creates the task owner's remote-server overlay behind
+	// an injected broker boundary. It takes precedence over RemoteMCP and lets
+	// production keep token minting and remote clients out of this process.
+	OpenRemoteMCPOverlay agent.RemoteMCPOverlayOpener
 
 	// UserSkills returns the owner's ACTIVE builder skills for prompt
 	// inlining; SkillProposerFor binds propose_skill staging to the owner
@@ -154,8 +158,9 @@ type Runner struct {
 
 	// remoteMCP + ownerEmail wire a task owner's OAuth-connected remote (hosted)
 	// MCP servers into a headless run (#443). nil = feature off.
-	remoteMCP  agent.RemoteMCPResolver
-	ownerEmail func(ctx context.Context, userID uuid.UUID) (string, error)
+	remoteMCP            agent.RemoteMCPResolver
+	ownerEmail           func(ctx context.Context, userID uuid.UUID) (string, error)
+	openRemoteMCPOverlay agent.RemoteMCPOverlayOpener
 
 	// userSkills + skillProposerFor extend the same owner-resolution to the
 	// skills arc (docs/SKILLS.md): userSkills returns the owner's ACTIVE
@@ -198,25 +203,26 @@ type LearnedInstructionProvider interface {
 // restart, matching the scheduled path's prior behaviour).
 func New(opts Options) *Runner {
 	r := &Runner{
-		cfg:                 opts.Config,
-		mgr:                 opts.Manager,
-		notesProvider:       opts.NotesProvider,
-		noteProposer:        opts.NoteProposer,
-		personasDir:         opts.PersonasDir,
-		systemPromptsDir:    opts.SystemPromptsDir,
-		protocolsDir:        opts.ProtocolsDir,
-		iterationStore:      opts.IterationStore,
-		learnedInstructions: opts.LearnedInstructions,
-		taskEnqueuer:        opts.TaskEnqueuer,
-		personaPolicies:     opts.PersonaPolicies,
-		taskMemory:          opts.TaskMemory,
-		taskMemoryConfig:    opts.TaskMemoryConfig,
-		remoteMCP:           opts.RemoteMCP,
-		ownerEmail:          opts.OwnerEmail,
-		userSkills:          opts.UserSkills,
-		skillProposerFor:    opts.SkillProposerFor,
-		openTaskMCPScope:    opts.OpenTaskMCPScope,
-		mcpServerInventory:  opts.MCPServerInventory,
+		cfg:                  opts.Config,
+		mgr:                  opts.Manager,
+		notesProvider:        opts.NotesProvider,
+		noteProposer:         opts.NoteProposer,
+		personasDir:          opts.PersonasDir,
+		systemPromptsDir:     opts.SystemPromptsDir,
+		protocolsDir:         opts.ProtocolsDir,
+		iterationStore:       opts.IterationStore,
+		learnedInstructions:  opts.LearnedInstructions,
+		taskEnqueuer:         opts.TaskEnqueuer,
+		personaPolicies:      opts.PersonaPolicies,
+		taskMemory:           opts.TaskMemory,
+		taskMemoryConfig:     opts.TaskMemoryConfig,
+		remoteMCP:            opts.RemoteMCP,
+		ownerEmail:           opts.OwnerEmail,
+		openRemoteMCPOverlay: opts.OpenRemoteMCPOverlay,
+		userSkills:           opts.UserSkills,
+		skillProposerFor:     opts.SkillProposerFor,
+		openTaskMCPScope:     opts.OpenTaskMCPScope,
+		mcpServerInventory:   opts.MCPServerInventory,
 	}
 	r.baseSystemPrompt = r.buildBaseSystemPrompt()
 	return r
@@ -943,7 +949,7 @@ func taskCredentialAllowlist(task *models.Task) agentcore.CredentialAllowlist {
 // Returns nil (a no-op overlay) when the feature is off, the owner can't be
 // resolved, or no server is connected — all best-effort, never fatal.
 func (r *Runner) buildTaskRemoteOverlay(ctx context.Context, task *models.Task, baseCatalog []mcp.ServerTool) *agent.RemoteMCPOverlay {
-	if r.remoteMCP == nil || r.ownerEmail == nil || task.CreatedBy == nil {
+	if (r.openRemoteMCPOverlay == nil && r.remoteMCP == nil) || r.ownerEmail == nil || task.CreatedBy == nil {
 		return nil
 	}
 	email, err := r.ownerEmail(ctx, *task.CreatedBy)
@@ -960,7 +966,18 @@ func (r *Runner) buildTaskRemoteOverlay(ctx context.Context, task *models.Task, 
 	}
 	// Scheduled runs have no interactive Tools picker, so all of the owner's
 	// connected servers participate (nil opt-in set), bounded by the overlay cap.
-	overlay, err := agent.BuildRemoteMCPOverlay(ctx, r.remoteMCP, email, shadowed, nil)
+	var overlay *agent.RemoteMCPOverlay
+	if r.openRemoteMCPOverlay != nil {
+		overlay, err = r.openRemoteMCPOverlay(ctx, email, shadowed, nil)
+		if err == nil {
+			err = overlay.Validate()
+			if err != nil {
+				overlay.Close()
+			}
+		}
+	} else {
+		overlay, err = agent.BuildRemoteMCPOverlay(ctx, r.remoteMCP, email, shadowed, nil)
+	}
 	if err != nil {
 		log.Printf("scheduled task %s: remote-mcp overlay unavailable: %v", task.ID, err)
 		return nil

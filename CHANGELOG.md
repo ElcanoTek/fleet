@@ -19,6 +19,15 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **Remote MCP broker overlay seam (#167 prerequisite):** interactive and
+  scheduled runs can now receive a per-user remote-MCP overlay as an injected
+  broker, public tool catalog, routing-name set, and bounded close function.
+  The injected opener takes precedence over the existing resolver, while the
+  in-process OAuth client remains the compatibility and production default for
+  this slice. This changes no credential boundary by itself; it prepares the
+  run loops for a child-owned remote scope. See
+  [`docs/MCP-BROKER-SCOPES.md`](docs/MCP-BROKER-SCOPES.md).
+
 - **Production bundle MCP process boundary (#167):** `fleet serve` now starts
   the credential-owning broker subprocess before serving and routes interactive
   turns, scheduled tasks, approvals, and MCP reload through it. The parent keeps
