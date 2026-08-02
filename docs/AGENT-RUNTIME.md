@@ -36,12 +36,19 @@ operations (host network fetch, brokered credentials, governed datastore
 writes) — enumerated in
 [ADR-0036](adr/0036-sandboxed-file-tools-and-host-io-exceptions.md).
 
-**MCP credentials never enter the sandbox.** MCP tools are advertised to the
-model, but every `mcp_*` call is executed host-side against the per-task
-credentialed client by the **out-of-process MCP broker** (issue #167). The
-sandbox holds no MCP credential; the broker injects the right credential at the
-moment it runs the call and the value never travels into the container or the
-model's context.
+**MCP credentials never enter the sandbox or model context.** MCP tools are
+advertised to the model, but every `mcp_*` call is executed by fixed host-side
+code against a credentialed client. The `mcpbroker` package and `fleet
+mcp-broker` subprocess implement the intended out-of-process boundary, including
+value-free, incident-correlated responses when broker call or discovery code
+panics.
+
+**Current limitation (#167, reopened):** the server does not yet spawn that
+subprocess in production; `agent.New` still owns the credentialed client in the
+main fleet process. Credentials remain outside the sandbox and model context,
+but they are not yet isolated from the agent loop's address space. Do not treat
+the existing broker code as a shipped process-isolation boundary until #167's
+switch-on work lands.
 
 ### Lockdown / network-sealed sandboxes
 

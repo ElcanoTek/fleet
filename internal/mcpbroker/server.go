@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"sync"
 
@@ -111,7 +112,7 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 			mu.Unlock()
 			wg.Add(1)
 			go func(req request) {
-				defer safe.Recover("mcpbroker.call", nil)
+				defer recoverBackendPanic("mcpbroker.call", req.ID, write)
 				defer wg.Done()
 				defer func() {
 					mu.Lock()
@@ -130,7 +131,7 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 		case methodListTools:
 			wg.Add(1)
 			go func(req request) {
-				defer safe.Recover("mcpbroker.list_tools", nil)
+				defer recoverBackendPanic("mcpbroker.list_tools", req.ID, write)
 				defer wg.Done()
 				tools, err := s.backend.ListTools(ctx)
 				resp := response{ID: req.ID, Tools: tools}
@@ -143,7 +144,7 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 		case methodListAccounts:
 			wg.Add(1)
 			go func(req request) {
-				defer safe.Recover("mcpbroker.list_accounts", nil)
+				defer recoverBackendPanic("mcpbroker.list_accounts", req.ID, write)
 				defer wg.Done()
 				accounts, err := s.backend.ListAccounts(ctx, req.Server, req.BaseVars)
 				resp := response{ID: req.ID, Accounts: accounts}
@@ -156,5 +157,23 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 		default:
 			write(response{ID: req.ID, Err: "mcpbroker: unknown method " + string(req.Method)})
 		}
+	}
+}
+
+// recoverBackendPanic contains a panic in one broker request and, critically,
+// completes that request with a value-free error. Recovering without replying
+// leaves the parent Client blocked until its context expires. The incident ID
+// correlates the in-band error with safe's structured event while the recovered
+// value (which may contain connector material) never crosses the broker pipe.
+func recoverBackendPanic(location string, requestID uint64, write func(response)) {
+	if recovered := recover(); recovered != nil {
+		event := safe.EmitPanicWithMetadata(safe.PanicMetadata{
+			Location: location,
+			Boundary: "mcpbroker",
+		}, recovered, nil)
+		write(response{
+			ID:  requestID,
+			Err: fmt.Sprintf("mcpbroker backend panic (incident %s)", event.IncidentID),
+		})
 	}
 }
