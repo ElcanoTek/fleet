@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"strings"
 	"testing"
+	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
@@ -70,6 +71,20 @@ func TestMigrations_IdempotentReopen(t *testing.T) {
 	v2 := maxAppliedVersion(t, s2.db)
 	if v1 != v2 {
 		t.Errorf("version changed across reopens: %d → %d", v1, v2)
+	}
+}
+
+func TestMigrations_SingleConnectionPool(t *testing.T) {
+	raw := openRawDB(t)
+	raw.SetMaxOpenConns(1)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := applyMigrations(ctx, raw); err != nil {
+		t.Fatalf("applyMigrations with MaxOpenConns=1: %v", err)
+	}
+	if err := ctx.Err(); err != nil {
+		t.Fatalf("single-connection migration exceeded deadline: %v", err)
 	}
 }
 
