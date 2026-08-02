@@ -17,6 +17,11 @@ prior versions are listed because none have shipped.
 
 ## [Unreleased]
 
+### Security
+
+- Pin Next.js transitive `postcss` and `sharp` dependencies above their patched
+  floors and refresh both vulnerable `brace-expansion` lines in the web lockfile.
+
 ### Added
 
 - **Production child-owned remote MCP scopes:** interactive and scheduled run
