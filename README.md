@@ -51,10 +51,12 @@ them.
   **at the model layer**, who sees your data — task by task, and you can
   change your mind tomorrow.
 
-- **Sandboxed by default.** Every tool call — bash, Python, file I/O, MCP —
-  runs in an ephemeral rootless-Podman container with **no fast path around
-  it**, and MCP credentials are injected host-side by an out-of-process broker,
-  never entering the sandbox or the model's context.
+- **Sandboxed by default.** Model-authored local execution — bash, Python, and
+  file I/O — runs in an ephemeral rootless-Podman container with **no fast path
+  around it**. MCP calls are a documented host-side broker exception so their
+  credentials never enter the sandbox or model context. The stronger
+  out-of-process broker implementation exists, but its production switch-on is
+  still tracked by [#167](https://github.com/ElcanoTek/fleet/issues/167).
 
 - **Two isolation tiers, one config line.** Set `sandbox.runtime: kata` (or
   `libkrun`) and every tool call gets a **dedicated KVM microVM** — escape now
@@ -89,7 +91,8 @@ fleet ships usable on day one — the platform pieces you'd otherwise assemble
 yourself are already in the box, tested, and governed by the same core:
 
 - **An MCP connector library, two trust classes deep.** Your bundle's own
-  connectors run **in the sandbox with credentials brokered host-side**, and a
+  connectors run as fixed host-side broker operations (not model-authored
+  sandbox code), and a
   curated directory of **hundreds of verified vendor-hosted MCP servers**
   (GitHub, Google, Notion, Slack, Stripe, X, OpenRouter, Hugging Face, AWS, …)
   is one OAuth click away — each explicitly badged *Bundled* vs *Third-party*
@@ -141,11 +144,13 @@ fleet owns execution end to end: there is no self-executing agent it can only
 observe, so the log records what actually ran.
 
 **Am I comfortable handing over control?** The agent has no direct power: every
-tool call goes through the sandbox under host policy (optionally a KVM microVM),
-credentials stay host-side in the broker, sensitive actions raise a
+model-authored local tool call goes through the sandbox under host policy
+(optionally a KVM microVM), credentials stay host-side, sensitive actions raise a
 **default-deny allow/deny card** with no "approve all", and unattended scheduled
 work is fail-closed — network-sealed by default with an end-of-run verifier
-([`docs/AGENT-RUNTIME.md`](docs/AGENT-RUNTIME.md)). One caveat to respect: the
+([`docs/AGENT-RUNTIME.md`](docs/AGENT-RUNTIME.md)). The out-of-process MCP
+address-space boundary is not switched on yet ([#167](https://github.com/ElcanoTek/fleet/issues/167)).
+One caveat to respect: the
 bundle's own host-side MCP servers *do* receive brokered credentials by design,
 so treat bundle write access as production access
 ([`SECURITY.md`](SECURITY.md)).
@@ -198,7 +203,7 @@ internal/
   creds/          MCP credential-account store (host-side credential broker)
   clientconfig/   loads the pluggable CLIENT BUNDLE (branding, MCP catalog, prompts, skills, ...)
   mcp/            merged Go MCP client (stdio + HTTP)
-  mcpbroker/      out-of-process MCP credential broker (keeps connector secrets out of the loop's address space)
+  mcpbroker/      out-of-process MCP broker implementation (production switch-on pending #167)
   sandbox/        the single execution backend (ephemeral container over a persistent workspace)
   tools/          native agent tools (bash, python, ...)
   store/          interactive (chat) Postgres layer + migrations

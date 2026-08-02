@@ -77,6 +77,16 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **A recovered MCP-broker backend panic no longer strands its caller until the
+  request timeout.** Call, tool-discovery, and account-discovery goroutines now
+  complete the matching IPC request with a generic, incident-correlated error
+  and keep the broker serving subsequent requests. The recovered panic value is
+  classified only and never crosses the broker pipe, so connector material in a
+  panic cannot be reflected into the agent-loop process. Runtime/README claims
+  now also state the current boundary honestly: MCP credentials stay out of the
+  sandbox and model context, while the production out-of-process switch-on
+  remains open in #167.
+
 - **Sandbox acquisition now fails closed at the pool shutdown boundary.** Every
   take path (warm, cold, persistent, lockdown, and allowlisted) returns
   `ErrClosed` after `Pool.Close` marks the pool closed; a concurrent cold start is

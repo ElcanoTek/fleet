@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -40,6 +41,9 @@ type fakeBroker struct {
 	listErr           error
 	lastAccountServer string
 	lastBaseVars      []string
+	panicCall         any
+	panicListTools    any
+	panicListAccounts any
 }
 
 var (
@@ -48,6 +52,9 @@ var (
 )
 
 func (b *fakeBroker) CallMCP(ctx context.Context, server, tool string, args map[string]any) (string, bool, error) {
+	if b.panicCall != nil {
+		panic(b.panicCall)
+	}
 	b.mu.Lock()
 	b.calls++
 	b.lastServer, b.lastTool, b.lastArgs = server, tool, args
@@ -79,15 +86,76 @@ func (b *fakeBroker) observedCtxErr() error {
 }
 
 func (b *fakeBroker) ListTools(context.Context) ([]ToolDescriptor, error) {
+	if b.panicListTools != nil {
+		panic(b.panicListTools)
+	}
 	return b.tools, b.listErr
 }
 
 func (b *fakeBroker) ListAccounts(_ context.Context, server string, baseVars []string) ([]string, error) {
+	if b.panicListAccounts != nil {
+		panic(b.panicListAccounts)
+	}
 	b.mu.Lock()
 	b.lastAccountServer = server
 	b.lastBaseVars = baseVars
 	b.mu.Unlock()
 	return b.accounts, b.listErr
+}
+
+func TestClientServer_BackendPanicsReturnCorrelatedErrors(t *testing.T) {
+	const secret = "connector-secret-must-not-cross-the-pipe"
+	tests := []struct {
+		name string
+		fake *fakeBroker
+		call func(context.Context, *Client) error
+	}{
+		{
+			name: "call",
+			fake: &fakeBroker{panicCall: secret},
+			call: func(ctx context.Context, c *Client) error {
+				_, _, err := c.CallMCP(ctx, "server", "tool", nil)
+				return err
+			},
+		},
+		{
+			name: "list tools",
+			fake: &fakeBroker{panicListTools: secret},
+			call: func(ctx context.Context, c *Client) error {
+				_, err := c.ListTools(ctx)
+				return err
+			},
+		},
+		{
+			name: "list accounts",
+			fake: &fakeBroker{panicListAccounts: secret},
+			call: func(ctx context.Context, c *Client) error {
+				_, err := c.ListAccounts(ctx, "server", []string{"KEY"})
+				return err
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := loopback(t, tt.fake)
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+
+			err := tt.call(ctx, client)
+			if err == nil || !strings.HasPrefix(err.Error(), "mcpbroker backend panic (incident inc_") {
+				t.Fatalf("error = %v, want correlated backend-panic error", err)
+			}
+			if strings.Contains(err.Error(), secret) {
+				t.Fatalf("panic value crossed broker boundary: %q", err)
+			}
+			if errors.Is(err, context.DeadlineExceeded) {
+				t.Fatal("backend panic left request parked until its context expired")
+			}
+			if err := client.Ping(ctx); err != nil {
+				t.Fatalf("server stopped serving after contained panic: %v", err)
+			}
+		})
+	}
 }
 
 // loopback wires a Client and a Server over an in-memory net.Pipe (no real
