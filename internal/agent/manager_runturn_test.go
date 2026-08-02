@@ -7,14 +7,17 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/admission"
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/fakellm"
+	"github.com/ElcanoTek/fleet/internal/mcp"
 )
 
 // recordingSink is an EventSink that captures every emitted (event, payload) so
@@ -61,6 +64,10 @@ func (r *recordingSink) has(name string) bool {
 // genuine Manager.RunTurn assembly (prompt + sandbox + model + history →
 // agentcore.Run), not a mock of it.
 func newFakeLLMManager(t *testing.T, fake *fakellm.Server) *Manager {
+	return newFakeLLMManagerWithOptions(t, fake, nil)
+}
+
+func newFakeLLMManagerWithOptions(t *testing.T, fake *fakellm.Server, apply func(*ManagerOptions)) *Manager {
 	t.Helper()
 	ts := httptest.NewServer(fake.Handler())
 	t.Cleanup(ts.Close)
@@ -87,7 +94,7 @@ func newFakeLLMManager(t *testing.T, fake *fakellm.Server) *Manager {
 		PersonaDefault:   "generic",
 		WorkspaceRoot:    workspaceRoot,
 	}
-	mgr, err := New(ManagerOptions{
+	opts := ManagerOptions{
 		Config:           cfg,
 		PersonasDir:      filepath.Join(dir, "personas"),
 		ProtocolsDir:     filepath.Join(dir, "protocols"),
@@ -96,7 +103,11 @@ func newFakeLLMManager(t *testing.T, fake *fakellm.Server) *Manager {
 		// Exercise the admission path on every fake-LLM turn (never saturated at 4
 		// slots, so it must be transparent — and the slot must be released after).
 		Limiter: admission.New(4, 1),
-	})
+	}
+	if apply != nil {
+		apply(&opts)
+	}
+	mgr, err := New(opts)
 	if err != nil {
 		t.Fatalf("agent.New: %v", err)
 	}
@@ -158,6 +169,152 @@ func TestManagerRunTurn_TextOnly(t *testing.T) {
 	// The admission slot the turn held must be released once it returns.
 	if n := mgr.limiter.InFlight(); n != 0 {
 		t.Errorf("limiter still holds %d slot(s) after the turn; release leaked", n)
+	}
+}
+
+type inertMCPBroker struct{}
+
+func (inertMCPBroker) CallMCP(context.Context, string, string, map[string]any) (string, bool, error) {
+	return "", false, nil
+}
+
+func TestNew_RejectsIncompleteMCPBrokerInjection(t *testing.T) {
+	tests := []struct {
+		name string
+		opts ManagerOptions
+		want string
+	}{
+		{
+			name: "scope opener without base broker",
+			opts: ManagerOptions{OpenMCPScope: func(context.Context, agentcore.MCPSelection, string) (*MCPScope, error) {
+				return nil, nil
+			}},
+			want: "open MCP scope requires MCP broker",
+		},
+		{
+			name: "broker without explicit catalog",
+			opts: ManagerOptions{MCPBroker: inertMCPBroker{}},
+			want: "MCP broker requires an explicit MCP catalog",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.opts.Config = &config.Config{}
+			_, err := New(tt.opts)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("New error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestManagerRunTurn_OpensAndClosesScopedMCP(t *testing.T) {
+	fake := fakellm.New()
+	fake.SetDefault(fakellm.Scenario{Steps: []fakellm.Step{fakellm.TextStep("done")}})
+	var (
+		gotSelection agentcore.MCPSelection
+		gotWorkspace string
+		closed       bool
+	)
+	mgr := newFakeLLMManagerWithOptions(t, fake, func(opts *ManagerOptions) {
+		opts.ServerSpecs = map[string]MCPServerSpec{
+			"mandatory":    {Enabled: true},
+			"optional_on":  {Enabled: true, Optional: true},
+			"optional_off": {Enabled: true, Optional: true},
+		}
+		opts.MCPBroker = inertMCPBroker{}
+		opts.MCPCatalog = []mcp.ServerTool{}
+		opts.OpenMCPScope = func(_ context.Context, selection agentcore.MCPSelection, workspace string) (*MCPScope, error) {
+			gotSelection = append(agentcore.MCPSelection(nil), selection...)
+			gotWorkspace = workspace
+			return &MCPScope{
+				Broker:  inertMCPBroker{},
+				Catalog: []mcp.ServerTool{},
+				Close: func(context.Context) error {
+					closed = true
+					return nil
+				},
+			}, nil
+		}
+	})
+	if mgr.mcpClient != nil {
+		t.Fatal("injected broker mode constructed a credentialed local MCP client")
+	}
+
+	_, err := mgr.RunTurn(context.Background(), TurnInput{
+		UserMessage:               "hi",
+		Model:                     "anthropic/claude-opus-4.8",
+		ConversationID:            "scope-test",
+		OptionalMCPServersEnabled: []string{"optional_on"},
+		MCPAccountDefaults:        map[string]string{"mandatory": "primary", "optional_on": "backup"},
+	}, &recordingSink{})
+	if err != nil {
+		t.Fatalf("RunTurn: %v", err)
+	}
+	want := agentcore.MCPSelection{
+		{Server: "mandatory", Account: "primary"},
+		{Server: "optional_on", Account: "backup"},
+	}
+	if !reflect.DeepEqual(gotSelection, want) {
+		t.Fatalf("scope selection = %#v, want %#v", gotSelection, want)
+	}
+	if gotWorkspace == "" || !strings.Contains(gotWorkspace, "scope-test") {
+		t.Errorf("scope workspace = %q, want conversation workspace", gotWorkspace)
+	}
+	if !closed {
+		t.Error("turn returned without closing its MCP scope")
+	}
+}
+
+func TestManagerScopeCleanupIgnoresCancelledTurnContext(t *testing.T) {
+	closeCtxErr := errors.New("scope was not closed")
+	mgr := &Manager{
+		openMCPScope: func(context.Context, agentcore.MCPSelection, string) (*MCPScope, error) {
+			return &MCPScope{
+				Broker: inertMCPBroker{},
+				Close: func(ctx context.Context) error {
+					closeCtxErr = ctx.Err()
+					return nil
+				},
+			}, nil
+		},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	_, _, cleanup, err := mgr.openTurnMCPScope(ctx, TurnInput{}, "/workspace")
+	if err != nil {
+		t.Fatalf("openTurnMCPScope: %v", err)
+	}
+	cancel()
+	cleanup()
+	if closeCtxErr != nil {
+		t.Fatalf("scope close inherited cancelled turn context: %v", closeCtxErr)
+	}
+}
+
+func TestManagerRunTurn_ScopeOpenFailureFailsClosed(t *testing.T) {
+	fake := fakellm.New()
+	mgr := newFakeLLMManager(t, fake)
+	wantErr := errors.New("broker unavailable")
+	mgr.openMCPScope = func(context.Context, agentcore.MCPSelection, string) (*MCPScope, error) {
+		return nil, wantErr
+	}
+	committed := false
+	_, err := mgr.RunTurn(context.Background(), TurnInput{
+		UserMessage: "hi",
+		Model:       "anthropic/claude-opus-4.8",
+		CommitUser: func(context.Context, HistoryEntry) error {
+			committed = true
+			return nil
+		},
+	}, &recordingSink{})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("RunTurn error = %v, want scope-open failure", err)
+	}
+	if committed {
+		t.Error("user history committed even though MCP scope preflight failed")
+	}
+	if hits := fake.Hits("__default__"); hits != 0 {
+		t.Errorf("provider received %d request(s) after MCP scope failure", hits)
 	}
 }
 

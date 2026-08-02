@@ -41,13 +41,13 @@ loop sees only the existing governed call seam.
 
 ## Deliberately deferred
 
-The protocol and child backend are implemented, but production startup and run
-construction do **not** yet use them. `agent.New` still builds the credentialed
-client in the main fleet process, and per-user remote MCP credentials are not
-covered by these scopes. Issue #167 remains open until the production interactive
-and scheduled paths use the subprocess, parent credential material is scrubbed,
-and the remote-MCP credential path is moved behind an equivalent process
-boundary.
+The protocol, child backend, and Manager injection seam are implemented, but
+production startup does **not** yet inject them. Its current options therefore
+still build the credentialed client in the main fleet process. Scheduled runs
+and per-user remote MCP credentials are not covered by these scopes. Issue #167
+remains open until production startup and both run paths use the subprocess,
+parent credential material is scrubbed, and the remote-MCP credential path is
+moved behind an equivalent process boundary.
 
 No authorization boundary is added here. Account allowlists, task policy, tool
 approval, and audit remain responsibilities of the existing governed runtime;
@@ -59,8 +59,25 @@ The interactive driver accepts an injected `MCPBroker` and public `MCPCatalog`
 on `TurnConfig` and threads them into the same `agentcore.Run` call used by the
 local-client path. Its per-user remote-MCP overlay composes with either base: a
 remote server name routes to the short-lived user client, while every bundle
-server routes to the injected broker. This is a wiring prerequisite only;
-`Manager` does not yet supply these fields in production.
+server routes to the injected broker.
+
+`ManagerOptions` can now supply that broker/catalog plus a per-turn scope opener.
+Broker injection requires an explicit public catalog (an explicit empty catalog
+is valid), and a scope opener is rejected unless the base broker is also set;
+miswiring cannot silently construct a local credentialed fallback.
+For every interactive turn, Manager sends all enabled mandatory bundle servers
+and only the conversation's enabled optional bundle servers, carrying the
+user's public default account names and the already-bound conversation workspace
+path. Synthetic native toggles and per-user remote servers are excluded from the
+bundle selection. The returned scope broker/catalog drives the unchanged
+governed loop and remote overlay composition, and Manager closes the scope with
+a fresh bounded context even when the turn context was cancelled. A scope-open
+failure fails the turn closed before provider or tool execution; it never falls
+back to the local client.
+
+The local-client default remains for transitional callers and tests. Production
+startup does not inject the new Manager options yet, and broker-mode hot reload
+is deliberately deferred to the switch-on sequence.
 
 ## Approval integration
 

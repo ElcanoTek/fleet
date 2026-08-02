@@ -60,6 +60,15 @@ prior versions are listed because none have shipped.
   connector keys after a broker child inherits them. No scrubbing is activated
   by this prerequisite alone.
 
+- **Interactive Manager MCP scope seam (#167 prerequisite):** Manager can now
+  consume an injected public broker/catalog/account inventory without creating
+  a credentialed local MCP client, and can open one isolated broker scope per
+  chat turn. Scope selection always includes mandatory bundle servers, includes
+  only opted-in optional bundle servers, threads public account names and the
+  bound conversation workspace, fails closed on open errors, and closes with a
+  cancellation-independent timeout. Production startup and scheduled runs do
+  not inject this seam yet, so parent credential scrubbing remains deferred.
+
 - **Query-parameter API keys for hosted connectors (Browserbase)**: some
   vendors authenticate their hosted MCP server with the key in a URL query
   parameter rather than a header. api_key connectors now support
