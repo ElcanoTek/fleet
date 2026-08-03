@@ -81,6 +81,19 @@ prior versions are listed because none have shipped.
 
 ### Security
 
+- Deny `vmsplice` in the sandbox seccomp profile. Podman's own default profile
+  denies it; ours allowed it, which made fleet's custom profile **weaker than
+  shipping no profile at all** in that one dimension — the opposite of what it
+  exists to do. `vmsplice` lets a process splice pages of its own address space
+  into a pipe, a primitive that has featured in kernel-memory-disclosure and
+  container-escape exploits. Verified nothing in the sandbox needs it: bash
+  pipes, `cp`, 20 MB pipe/copy workloads, `shutil.copyfile`, `os.sendfile`
+  zero-copy, pandas and numpy all work with it denied, and the profile test now
+  pins the denial. `seccomp.go` additionally records the one remaining place
+  ours is weaker than podman's default — unconditional `socket(2)`, where
+  podman narrowly denies `AF_VSOCK` and `AF_NETLINK`+`NETLINK_AUDIT` — and why
+  replicating it is not a one-line change.
+
 - Resolve the sandbox OCI runtime through Podman in the fail-closed preflight
   instead of guessing the binary from its name. `podman --runtime=<r> info`
   resolves the name through `containers.conf` and errors on an unregistered

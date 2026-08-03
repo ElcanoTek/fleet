@@ -29,6 +29,34 @@ import (
 // bash job control would break. See seccomp-default.json for the full list and
 // per-syscall rationale, and sandbox_hardened_test.go for the regression net.
 //
+// HOW THIS PROFILE COMPARES TO PODMAN'S OWN DEFAULT
+// (/usr/share/containers/seccomp.json). Ours is a strict allowlist and is
+// tighter almost everywhere: podman's default ALLOWS ptrace, personality, bpf,
+// perf_event_open, userfaultfd, process_vm_readv, keyctl, mount, umount2,
+// pivot_root, unshare and setns; ours denies all of them. There is one place
+// where ours is still WEAKER, and it is recorded here rather than left for
+// someone to discover:
+//
+//   - socket(2) is allowed unconditionally. Podman's default additionally
+//     denies two narrow cases via argument matching: AF_VSOCK (EPERM) and
+//     AF_NETLINK+NETLINK_AUDIT (EINVAL). AF_VSOCK is the interesting one for
+//     fleet, because under the Kata/libkrun microVM runtimes (ADR-0010) it is
+//     the guest<->host channel.
+//
+//     Replicating those rules is NOT the one-line change it appears to be, and
+//     a naive copy does not work — measured, not assumed. Podman's rules carry
+//     `includes`/`excludes` capability conditions that PODMAN resolves before
+//     handing the profile to the OCI runtime, so the file on disk is a template
+//     rather than the effective filter; and with overlapping arg-matched
+//     allow/deny rules for one syscall, whether the deny wins turned out to
+//     depend on which rules survive that resolution. Copying podman's five
+//     socket rules verbatim into this profile reproduced the NETLINK_AUDIT
+//     denial but NOT the AF_VSOCK one. Closing this properly needs a
+//     libseccomp-level understanding of that precedence, so it is deliberately
+//     left open instead of shipping arg-matching that looks right and is not.
+//     (vmsplice, the other syscall where ours used to be weaker, needed no
+//     argument matching and IS now denied.)
+//
 //go:embed seccomp-default.json
 var defaultSeccompProfile []byte
 

@@ -98,6 +98,17 @@ func TestSeccompProfileBlocksDangerousSyscalls(t *testing.T) {
 		"ptrace", "perf_event_open", "keyctl", "add_key", "request_key",
 		"userfaultfd", "bpf", "personality",
 		"io_uring_setup", "io_uring_enter", "io_uring_register",
+		// vmsplice: podman's OWN default profile denies it
+		// (SCMP_ACT_ERRNO/EPERM in /usr/share/containers/seccomp.json), and
+		// ours used to allow it — making this profile WEAKER than shipping no
+		// custom profile at all in that one dimension, which is the opposite of
+		// what #219 set out to do. It grants a process the ability to splice
+		// pages of its own address space into a pipe, a primitive that has
+		// featured in kernel-memory-disclosure and container-escape exploits.
+		// Verified nothing in the sandbox needs it: bash pipes, cp, gzip-less
+		// coreutils, 20 MB pipe/copy workloads, shutil.copyfile, os.sendfile
+		// zero-copy, pandas and numpy all work with it denied.
+		"vmsplice",
 	}
 	for _, name := range dangerous {
 		if _, ok := allowed[name]; ok {
