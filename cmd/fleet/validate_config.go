@@ -576,20 +576,16 @@ func checkSandbox(ctx context.Context, cfg *config.Config, bundle *clientconfig.
 		res.Detail = "podman not found in PATH"
 		return res
 	}
-	// A non-default OCI runtime must be installed and — for the hypervisor-backed
-	// tiers (kata/krun) — actually able to deliver isolation. Resolve the runtime
-	// the same way the boot path does (env wins, else the bundle manifest), map
-	// the name to the binary podman resolves --runtime to ("kata" → "kata-runtime",
-	// "libkrun"/"krun" → "krun"), and run the real fail-closed preflight (#217).
+	// A non-default OCI runtime must be resolvable by podman and — for the
+	// hypervisor-backed tiers (kata/krun) — actually able to deliver isolation.
+	// Resolve the runtime the same way the boot path does (env wins, else the
+	// bundle manifest) and run the real fail-closed preflight (#217), which asks
+	// podman which binary it will exec rather than guessing from the name. A
+	// separate PATH lookup here would be both weaker and wrong: it validates
+	// whichever same-named binary is first on PATH, and it reports FAIL for a
+	// perfectly good containers.conf that maps the name to an off-PATH binary.
 	if rt := resolveSandboxRuntime(cfg, bundle); rt != "" {
-		if bin := sandbox.RuntimeBinary(rt); bin != "" {
-			if _, err := exec.LookPath(bin); err != nil {
-				res.Status = statusFail
-				res.Detail = fmt.Sprintf("sandbox runtime %q: binary %q not found in PATH", rt, bin)
-				return res
-			}
-		}
-		if err := sandbox.PreflightRuntime(ctx, rt); err != nil {
+		if err := sandbox.PreflightRuntime(ctx, podmanBin, rt); err != nil {
 			res.Status = statusFail
 			res.Detail = err.Error()
 			return res

@@ -6,7 +6,9 @@ package sandbox
 import (
 	"context"
 	"math"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -257,40 +259,149 @@ func TestKataOverheadMB(t *testing.T) {
 	}
 }
 
-func TestPreflightRuntimeNoopForSharedKernel(t *testing.T) {
-	ctx := context.Background()
-	for _, rt := range []string{"", "  ", "runc", "crun", "runsc"} {
-		if err := PreflightRuntime(ctx, rt); err != nil {
-			t.Errorf("PreflightRuntime(%q) = %v, want nil (shared-kernel runtimes need no preflight)", rt, err)
+// ── preflight: podman-authoritative runtime resolution ──
+//
+// PreflightRuntime asks podman which binary it will exec for --runtime=<name>
+// instead of guessing from the name, so these tests substitute a fake podman.
+// That makes the fail-closed paths deterministic on any host — previously the
+// kata/krun failure cases could only be observed by NOT having those runtimes
+// installed, and the +LIBKRUN hard-fail had no coverage at all.
+
+// fakePodmanResolving writes a stub podman that answers
+// `--runtime=<r> info --format ...` with resolvePath (exit 0), or exits 1 with
+// podman's real "not found" wording when resolvePath is empty.
+func fakePodmanResolving(t *testing.T, resolvePath string) string {
+	t.Helper()
+	bin := filepath.Join(t.TempDir(), "fake-podman")
+	var script string
+	if resolvePath == "" {
+		script = "#!/bin/sh\necho 'Error: default OCI runtime not found: invalid argument' >&2\nexit 1\n"
+	} else {
+		script = "#!/bin/sh\nprintf '%s\\n' \"" + resolvePath + "\"\nexit 0\n"
+	}
+	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
+		t.Fatalf("write fake podman: %v", err)
+	}
+	return bin
+}
+
+// fakeRuntimeBinary writes a stub OCI runtime whose --version banner is
+// versionBanner. Used to exercise the +LIBKRUN check without a real crun.
+func fakeRuntimeBinary(t *testing.T, name, versionBanner string) string {
+	t.Helper()
+	bin := filepath.Join(t.TempDir(), name)
+	script := "#!/bin/sh\nprintf '%s\\n' \"" + versionBanner + "\"\nexit 0\n"
+	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
+		t.Fatalf("write fake runtime: %v", err)
+	}
+	return bin
+}
+
+// TestPreflightRuntimeNoopForPodmanDefault: only the EMPTY runtime skips the
+// preflight entirely. A named shared-kernel runtime is no longer a no-op — it
+// must at least be resolvable by podman, which catches the runtime that is
+// installed but never registered in containers.conf (previously it passed a
+// PATH lookup, then failed at every container creation).
+func TestPreflightRuntimeNoopForPodmanDefault(t *testing.T) {
+	// An unresolvable fake podman proves the empty cases never call it.
+	podman := fakePodmanResolving(t, "")
+	for _, rt := range []string{"", "  "} {
+		if err := PreflightRuntime(context.Background(), podman, rt); err != nil {
+			t.Errorf("PreflightRuntime(%q) = %v, want nil (podman default needs no preflight)", rt, err)
 		}
 	}
 }
 
-// TestPreflightRuntimeKataFailsClosedWithoutBinary asserts the no-degrade
-// invariant: when the manifest asks for kata but kata-runtime is absent, the
-// preflight returns an error rather than letting boot proceed (and silently
-// fall back to a shared-kernel container). Guarded so a host that genuinely has
-// kata-runtime installed doesn't fail the assertion.
-func TestPreflightRuntimeKataFailsClosedWithoutBinary(t *testing.T) {
-	if _, err := exec.LookPath("kata-runtime"); err == nil {
-		t.Skip("kata-runtime present on this host; absence path not exercised")
-	}
-	if err := PreflightRuntime(context.Background(), "kata"); err == nil {
-		t.Error("PreflightRuntime(kata) without kata-runtime = nil, want fail-closed error")
+func TestPreflightRuntimeSharedKernelRequiresResolution(t *testing.T) {
+	ctx := context.Background()
+	for _, rt := range []string{"runc", "crun", "runsc"} {
+		t.Run(rt+" resolvable", func(t *testing.T) {
+			podman := fakePodmanResolving(t, "/usr/bin/"+rt)
+			if err := PreflightRuntime(ctx, podman, rt); err != nil {
+				t.Errorf("PreflightRuntime(%q) with a resolvable runtime = %v, want nil", rt, err)
+			}
+		})
+		t.Run(rt+" unresolvable fails closed", func(t *testing.T) {
+			podman := fakePodmanResolving(t, "")
+			err := PreflightRuntime(ctx, podman, rt)
+			if err == nil {
+				t.Fatalf("PreflightRuntime(%q) with an unregistered runtime = nil, want a fail-closed error", rt)
+			}
+			if !strings.Contains(err.Error(), "could not resolve") {
+				t.Errorf("err = %v, want it to name the resolution failure", err)
+			}
+		})
 	}
 }
 
-// TestPreflightRuntimeKrunFailsClosedWithoutKVMorBinary asserts krun fails
-// closed when KVM or the krun binary is unavailable.
-func TestPreflightRuntimeKrunFailsClosedWithoutKVMorBinary(t *testing.T) {
-	_, krunErr := exec.LookPath("krun")
-	kvmErr := kvmAccessible()
-	if krunErr == nil && kvmErr == nil {
-		t.Skip("krun + /dev/kvm both present; failure path not exercised")
+// TestPreflightRuntimeProbesTheResolvedBinary is the core regression guard: a
+// containers.conf remap must make the preflight probe the RESOLVED binary, not
+// whatever same-named binary happens to be first on PATH. Here podman resolves
+// krun to a path that does not exist, so the preflight must fail even though
+// the *name* might resolve fine on PATH.
+func TestPreflightRuntimeProbesTheResolvedBinary(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "definitely-not-installed")
+	podman := fakePodmanResolving(t, missing)
+	err := PreflightRuntime(context.Background(), podman, "krun")
+	if err == nil {
+		t.Fatal("PreflightRuntime(krun) = nil when podman resolves it to a missing binary, want fail-closed")
 	}
-	if err := PreflightRuntime(context.Background(), "libkrun"); err == nil {
-		t.Error("PreflightRuntime(libkrun) without krun/KVM = nil, want fail-closed error")
+	if !strings.Contains(err.Error(), missing) {
+		t.Errorf("err = %v, want it to name the RESOLVED binary %q — probing the PATH guess instead is the bug this guards", err, missing)
 	}
+}
+
+// TestPreflightRuntimeKataFailsClosedWithoutKVM: kata needs usable KVM. On a
+// host that has it, the binary check still has to pass first, so assert the
+// error names one of the two gates rather than skipping.
+func TestPreflightRuntimeKataFailsClosedWithoutKVM(t *testing.T) {
+	if kvmAccessible() == nil {
+		t.Skip("/dev/kvm is usable on this host; the KVM failure path cannot be exercised")
+	}
+	kata := fakeRuntimeBinary(t, "kata-runtime", "kata-runtime : 3.2.0")
+	podman := fakePodmanResolving(t, kata)
+	err := PreflightRuntime(context.Background(), podman, "kata")
+	if err == nil {
+		t.Fatal("PreflightRuntime(kata) without KVM = nil, want fail-closed")
+	}
+	if !strings.Contains(err.Error(), "/dev/kvm") {
+		t.Errorf("err = %v, want it to name /dev/kvm as the gate", err)
+	}
+}
+
+// TestVerifyKrunLibkrun covers the check that a crun renamed to `krun` cannot
+// masquerade as libkrun — the SILENT loss of VM isolation ADR-0010 forbids.
+// Tested directly rather than through PreflightRuntime because the KVM gate
+// runs first and would mask it on every CI host.
+func TestVerifyKrunLibkrun(t *testing.T) {
+	ctx := context.Background()
+	t.Run("plain crun is rejected", func(t *testing.T) {
+		bin := fakeRuntimeBinary(t, "krun", "crun version 1.14\ncommit: abc\nspec: 1.0.0\n+SYSTEMD +SELINUX +CAP +SECCOMP")
+		err := verifyKrunLibkrun(ctx, bin)
+		if err == nil {
+			t.Fatal("a crun build WITHOUT +LIBKRUN was accepted — it would run as a shared-kernel container")
+		}
+		if !strings.Contains(err.Error(), "+LIBKRUN") {
+			t.Errorf("err = %v, want it to name the missing +LIBKRUN feature", err)
+		}
+	})
+	t.Run("a real libkrun build is accepted", func(t *testing.T) {
+		bin := fakeRuntimeBinary(t, "krun", "crun version 1.14\n+SYSTEMD +SELINUX +CAP +SECCOMP +LIBKRUN +WASM")
+		if err := verifyKrunLibkrun(ctx, bin); err != nil {
+			t.Errorf("verifyKrunLibkrun with +LIBKRUN = %v, want nil", err)
+		}
+	})
+	t.Run("banner case does not matter", func(t *testing.T) {
+		bin := fakeRuntimeBinary(t, "krun", "crun version 1.14 +libkrun")
+		if err := verifyKrunLibkrun(ctx, bin); err != nil {
+			t.Errorf("verifyKrunLibkrun with a lowercase banner = %v, want nil (the check is case-insensitive)", err)
+		}
+	})
+	t.Run("an unrunnable binary fails closed", func(t *testing.T) {
+		if err := verifyKrunLibkrun(ctx, filepath.Join(t.TempDir(), "nope")); err == nil {
+			t.Error("verifyKrunLibkrun on a missing binary = nil, want an error")
+		}
+	})
 }
 
 // TestContainerKataRuntime is a hypervisor-gated integration test (acceptance

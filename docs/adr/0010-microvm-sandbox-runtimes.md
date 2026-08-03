@@ -42,17 +42,29 @@ still apply; the microVM is an *additional* boundary.
 
 Three supporting decisions make it safe:
 
-1. **Fail-closed preflight.** When the runtime resolves to `kata` or `krun`,
-   fleet preflights the host **before the first container starts** and aborts
-   boot on failure — it never silently falls back to a shared-kernel container,
-   which would be a silent loss of the requested isolation. The hard gate is
-   read-write access to `/dev/kvm` (no usable KVM ⇒ no hypervisor isolation ⇒
-   refuse to start) plus the runtime binary on `PATH`; for `krun` the binary
-   must report `+LIBKRUN` (a plain `crun` renamed to `krun` would run as an
-   ordinary container — the missing feature flag is a hard fail). `kata-runtime
-   check` runs only as a **non-fatal warning**: run non-root it skips privileged
-   checks and can exit non-zero for reasons that don't mean Kata is unusable, so
-   gating on its exit code would break otherwise-healthy rootless-kata hosts.
+1. **Fail-closed preflight.** fleet preflights **before the first container
+   starts** and aborts boot on failure — it never silently falls back to a
+   shared-kernel container, which would be a silent loss of the requested
+   isolation. Two tiers:
+
+   - **Any** non-empty runtime must be **resolvable by Podman**. The preflight
+     asks Podman which binary it will exec (`podman --runtime=<r> info`, which
+     resolves the name through `containers.conf` `[engine.runtimes]` and errors
+     on an unregistered name) rather than guessing the binary from the name and
+     looking it up on `PATH`. Guessing was wrong in two directions: a
+     `containers.conf` remap pointed Podman at one binary while the preflight
+     validated whichever same-named binary was first on `PATH`, and a runtime
+     installed on `PATH` but never registered with Podman passed the preflight
+     and then failed at every container creation. An empty runtime (Podman's
+     own default) is the only no-op.
+   - **`kata`/`krun`** additionally require read-write access to `/dev/kvm` (no
+     usable KVM ⇒ no hypervisor isolation ⇒ refuse to start), and for `krun`
+     the **resolved** binary must report `+LIBKRUN` (a plain `crun` renamed to
+     `krun` would run as an ordinary container — the missing feature flag is a
+     hard fail). `kata-runtime check` runs only as a **non-fatal warning**: run
+     non-root it skips privileged checks and can exit non-zero for reasons that
+     don't mean Kata is unusable, so gating on its exit code would break
+     otherwise-healthy rootless-kata hosts.
 
 2. **Name normalization.** `libkrun` is the product name; Podman's registered
    runtime is `krun`. fleet normalizes `libkrun → krun` (logged) so the manifest
@@ -72,8 +84,14 @@ Three supporting decisions make it safe:
 
 - `internal/sandbox/oci_runtime.go` holds the normalization, fail-closed
   preflight, runtime→probe-binary mapping, and memory-overhead math;
-  `internal/sandbox/oci_runtime_test.go` pins all of it, including that
-  kata/krun preflight returns an error when KVM or the runtime binary is absent.
+  `internal/sandbox/oci_runtime_test.go` pins all of it with a **fake podman**,
+  so the fail-closed paths are deterministic on any host: an unregistered
+  runtime is rejected, the binary Podman resolves to (not the `PATH` guess) is
+  the one probed, and — via `verifyKrunLibkrun`, split out precisely so the KVM
+  gate cannot mask it on a CI host without `/dev/kvm` — a `crun` build lacking
+  `+LIBKRUN` is rejected. `RuntimeBinary` remains a **best-effort** name→binary
+  heuristic for the health probe; the ADR's guarantees rest on Podman's own
+  resolution, not on it.
 - The single production pool-construction path (`agent.buildSandboxPool`) calls
   `sandbox.PreflightRuntime` and returns its error, so a failed preflight aborts
   boot; `fleet validate-config` runs the same check as an operator preflight.
