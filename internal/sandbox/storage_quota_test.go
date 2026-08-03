@@ -77,8 +77,12 @@ func TestProbeStorageOptSupport_NoImage(t *testing.T) {
 		t.Fatalf("write fake podman: %v", err)
 	}
 	for _, image := range []string{"", "   "} {
-		if ProbeStorageOptSupport(context.Background(), bin, image) {
+		supported, conclusive := ProbeStorageOptSupport(context.Background(), bin, image)
+		if supported {
 			t.Errorf("probe with image %q reported quota support — it must short-circuit to false without invoking podman", image)
+		}
+		if !conclusive {
+			t.Errorf("probe with image %q must be conclusive — a missing image is a config answer, not a cut-short probe", image)
 		}
 	}
 }
@@ -191,7 +195,7 @@ func TestContainerDiskQuotaCapsWorkspaceOnStorageOptHosts(t *testing.T) {
 	if _, err := exec.LookPath("podman"); err != nil {
 		t.Skip("podman not available")
 	}
-	if !ProbeStorageOptSupport(context.Background(), "", testImage()) {
+	if supported, _ := ProbeStorageOptSupport(context.Background(), "", testImage()); !supported {
 		// --storage-opt=size would make `podman run` itself fail on a driver
 		// that does not support it, so this case can only run where it does.
 		t.Skip("storage driver does not support --storage-opt size")
@@ -321,15 +325,123 @@ func TestProbeStorageOptSupport_UsesTheClassification(t *testing.T) {
 	t.Run("exec failure means the quota was accepted", func(t *testing.T) {
 		podman := fakePodmanStorageProbe(t,
 			"Error: crun: executable file `/usr/bin/true` not found: No such file or directory: OCI runtime attempted to invoke a command that was not found")
-		if !ProbeStorageOptSupport(context.Background(), podman, "localhost/busybox-bundle:test") {
+		supported, conclusive := ProbeStorageOptSupport(context.Background(), podman, "localhost/busybox-bundle:test")
+		if !supported {
 			t.Error("a probe whose COMMAND was missing reported no quota support — podman validates --storage-opt before the exec, so the quota was accepted")
+		}
+		if !conclusive {
+			t.Error("an exec-failure probe is a completed determination and must be conclusive")
 		}
 	})
 	t.Run("a real quota rejection still reports no support", func(t *testing.T) {
 		podman := fakePodmanStorageProbe(t,
 			"Error: configure storage: storage option overlay.size and overlay.inodes only supported for backingFS XFS. Found extfs")
-		if ProbeStorageOptSupport(context.Background(), podman, "localhost/img:test") {
+		supported, conclusive := ProbeStorageOptSupport(context.Background(), podman, "localhost/img:test")
+		if supported {
 			t.Error("a driver that rejected the quota was reported as quota-capable — every real container start would then fail")
 		}
+		if !conclusive {
+			t.Error("a quota rejection is a completed determination and must be conclusive (cacheable)")
+		}
 	})
+}
+
+// TestProbeStorageOptSupport_CutShortIsInconclusive pins the ctx arm: a probe
+// that ends because its context did (caller cancelled, or the probe's own
+// timeout) has learned nothing about the storage driver and must say so, or
+// the Pool would cache "unsupported" off a cancelled turn.
+func TestProbeStorageOptSupport_CutShortIsInconclusive(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "fake-podman")
+	// Exits 0 (quota supported) if it were ever allowed to finish — so a false
+	// result can only come from the cancellation, not the fake.
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatalf("write fake podman: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	supported, conclusive := ProbeStorageOptSupport(ctx, bin, "localhost/img:test")
+	if supported {
+		t.Error("a cut-short probe must not report quota support")
+	}
+	if conclusive {
+		t.Error("a probe cut short by ctx cancellation must be INCONCLUSIVE — caching it disables the layer quota for the process lifetime")
+	}
+}
+
+// fakePodmanCounting writes a stub podman that appends one line to a log file
+// per invocation and exits with the given status, so tests can assert how many
+// times the Pool actually probed.
+func fakePodmanCounting(t *testing.T, exitCode int) (bin, callLog string) {
+	t.Helper()
+	dir := t.TempDir()
+	callLog = filepath.Join(dir, "calls.log")
+	bin = filepath.Join(dir, "fake-podman")
+	script := "#!/bin/sh\necho run >> '" + callLog + "'\nexit " + strconv.Itoa(exitCode) + "\n"
+	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
+		t.Fatalf("write fake podman: %v", err)
+	}
+	return bin, callLog
+}
+
+func probeCallCount(t *testing.T, callLog string) int {
+	t.Helper()
+	data, err := os.ReadFile(callLog) //nolint:gosec // test-owned temp path
+	if os.IsNotExist(err) {
+		return 0
+	}
+	if err != nil {
+		t.Fatalf("read call log: %v", err)
+	}
+	return strings.Count(string(data), "run")
+}
+
+// TestPoolStorageProbe_CancelledProbeDoesNotLatch is the regression guard for
+// the permanent-quota-loss bug: the pool used a sync.Once, so a first probe
+// running under an already-cancelled context latched "unsupported" for the
+// process lifetime and every later container ran with no writable-layer quota.
+// An inconclusive probe must not be memoized — the next creation re-probes and
+// the real (supported) answer wins.
+func TestPoolStorageProbe_CancelledProbeDoesNotLatch(t *testing.T) {
+	bin, callLog := fakePodmanCounting(t, 0) // exits 0: the driver DOES support quotas
+	p := &Pool{cfg: PoolConfig{Container: ContainerConfig{PodmanBinary: bin, Image: "localhost/img:test"}}}
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if p.storageOptSupported(cancelled) {
+		t.Fatal("an inconclusive probe must fall back to no layer quota for THIS container")
+	}
+	if p.storageOptSupported(context.Background()) {
+		// The second, completed probe against the exit-0 fake must win.
+	} else {
+		t.Fatal("a cancelled first probe latched 'unsupported' — the quota is disabled for the process lifetime")
+	}
+	if got := probeCallCount(t, callLog); got < 1 {
+		t.Fatalf("completed probe never invoked podman (calls=%d)", got)
+	}
+	// Once conclusive, the answer is cached: no further podman invocations.
+	before := probeCallCount(t, callLog)
+	if !p.storageOptSupported(context.Background()) {
+		t.Fatal("cached conclusive answer changed")
+	}
+	if got := probeCallCount(t, callLog); got != before {
+		t.Errorf("a conclusive probe result was not cached: podman invoked again (calls %d -> %d)", before, got)
+	}
+}
+
+// TestPoolStorageProbe_ConclusiveFailureLatches pins the other half of the
+// memoization contract: a COMPLETED "unsupported" answer is cached, so the
+// probe container is not re-spawned on every take.
+func TestPoolStorageProbe_ConclusiveFailureLatches(t *testing.T) {
+	bin, callLog := fakePodmanCounting(t, 125) // completed run, quota rejected
+	p := &Pool{cfg: PoolConfig{Container: ContainerConfig{PodmanBinary: bin, Image: "localhost/img:test"}}}
+
+	if p.storageOptSupported(context.Background()) {
+		t.Fatal("a completed failing probe must report no support")
+	}
+	if p.storageOptSupported(context.Background()) {
+		t.Fatal("cached conclusive answer changed")
+	}
+	if got := probeCallCount(t, callLog); got != 1 {
+		t.Errorf("conclusive failure was not latched: podman invoked %d times, want 1", got)
+	}
 }

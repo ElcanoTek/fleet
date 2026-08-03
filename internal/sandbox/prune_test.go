@@ -197,3 +197,63 @@ func TestPIDStartedAtUnixRealProcess(t *testing.T) {
 		t.Error("a negative pid must not resolve a start time")
 	}
 }
+
+// TestPruneOrphanedBridgeFiles pins the boot sweep for crash-orphaned bridge
+// and seccomp temp files: only names matching the two CreateTemp patterns, only
+// regular files, and only ones older than the age bound — a file younger than
+// that may belong to a container start still in flight (podman has not read it
+// yet), possibly in a sibling instance sharing the BridgeDir. Before the sweep
+// existed, every non-graceful exit leaked these files permanently.
+func TestPruneOrphanedBridgeFiles(t *testing.T) {
+	dir := t.TempDir()
+	old := time.Now().Add(-2 * time.Hour)
+	writeAged := func(name string, aged bool) string {
+		t.Helper()
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte("x"), 0o644); err != nil { //nolint:gosec // test fixture, non-secret
+			t.Fatalf("write %s: %v", name, err)
+		}
+		if aged {
+			if err := os.Chtimes(path, old, old); err != nil {
+				t.Fatalf("age %s: %v", name, err)
+			}
+		}
+		return path
+	}
+
+	oldBridge := writeAged("chat-sandbox-bridge-1234.py", true)
+	oldSeccomp := writeAged("fleet-sandbox-seccomp-5678.json", true)
+	freshBridge := writeAged("chat-sandbox-bridge-fresh.py", false)
+	unrelated := writeAged("some-other-file.py", true)
+	// A directory whose name matches the glob must never be touched.
+	matchingDir := filepath.Join(dir, "chat-sandbox-bridge-dir.py")
+	if err := os.Mkdir(matchingDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.Chtimes(matchingDir, old, old); err != nil {
+		t.Fatalf("age dir: %v", err)
+	}
+
+	n, err := PruneOrphanedBridgeFiles(dir)
+	if err != nil {
+		t.Fatalf("PruneOrphanedBridgeFiles: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("removed %d files, want 2 (the aged bridge + seccomp leftovers)", n)
+	}
+	for _, path := range []string{oldBridge, oldSeccomp} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Errorf("%s still exists — the crash leak was not reclaimed", filepath.Base(path))
+		}
+	}
+	for _, path := range []string{freshBridge, unrelated, matchingDir} {
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("%s was removed — the sweep must only take aged, pattern-matching regular files", filepath.Base(path))
+		}
+	}
+
+	// A BridgeDir that does not exist yet (fresh install) is nothing to prune.
+	if n, err := PruneOrphanedBridgeFiles(filepath.Join(dir, "missing")); n != 0 || err != nil {
+		t.Errorf("missing dir: got (%d, %v), want (0, nil)", n, err)
+	}
+}

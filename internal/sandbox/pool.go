@@ -58,11 +58,17 @@ type Pool struct {
 	// overridden in tests to exercise reaping deterministically.
 	nowFn func() time.Time
 
-	// storageProbeOnce caches the one-time --storage-opt support probe (#216)
-	// so whether the writable-layer quota is added on top of the always-applied
-	// per-file ulimit is decided once per process. The first container creation
-	// pays the probe cost.
-	storageProbeOnce sync.Once
+	// storageProbeMu serializes the one-time --storage-opt support probe (#216)
+	// that decides whether the writable-layer quota is added on top of the
+	// always-applied per-file ulimit. storageProbeDone latches only a CONCLUSIVE
+	// determination into storageOptOK — deliberately not a sync.Once, because a
+	// probe cut short by its context (e.g. the process's first turn was
+	// cancelled mid-flight) says nothing about the storage driver, and latching
+	// that would run every later container with no layer quota for the process
+	// lifetime. The first container creation pays the probe cost; an
+	// inconclusive probe is retried by the next one.
+	storageProbeMu   sync.Mutex
+	storageProbeDone bool
 	storageOptOK     bool
 
 	// ── persistent per-conversation sandboxes (#213) ──
@@ -649,25 +655,38 @@ func (p *Pool) reapStale() {
 	}
 }
 
-// storageOptSupported probes once (cached) whether the host's storage driver
-// supports `--storage-opt size` disk quotas, logging what the sandbox's disk
-// quota does and does not cover. Thread-safe; the first container creation
-// pays the probe.
+// storageOptSupported probes (cached once conclusive) whether the host's
+// storage driver supports `--storage-opt size` disk quotas, logging what the
+// sandbox's disk quota does and does not cover. Thread-safe; the first
+// container creation pays the probe. An INCONCLUSIVE probe — cut short by ctx
+// before podman answered — is not cached: this container safely omits the
+// layer quota and the next creation re-probes, so one cancelled turn cannot
+// disable the quota for the process lifetime.
 func (p *Pool) storageOptSupported(ctx context.Context) bool {
-	p.storageProbeOnce.Do(func() {
-		gb := effectiveDiskGB(p.cfg.Container.DiskLimitGB)
-		if gb <= 0 {
-			// Quota disabled: no flag either way, so skip the probe container.
-			log.Printf("sandbox disk quota: DISABLED (FLEET_SANDBOX_DISK_GB<=0) — the host disk is unprotected from runaway sandbox writes")
-			return
-		}
-		p.storageOptOK = ProbeStorageOptSupport(ctx, p.cfg.Container.PodmanBinary, p.cfg.Container.Image)
-		if p.storageOptOK {
-			log.Printf("sandbox disk quota: ulimit fsize=%dGiB (per-file, covers the workspace bind mount) + storage-opt size=%dg (total writable LAYER). Total workspace bytes are NOT capped — bind mounts are outside the storage quota.", gb, gb)
-		} else {
-			log.Printf("sandbox disk quota: ulimit fsize=%dGiB only — storage-opt unsupported on this storage driver, so the writable layer has no total cap either (use overlay+xfs(pquota)/btrfs for one). Caps any single file, not total disk use.", gb)
-		}
-	})
+	p.storageProbeMu.Lock()
+	defer p.storageProbeMu.Unlock()
+	if p.storageProbeDone {
+		return p.storageOptOK
+	}
+	gb := effectiveDiskGB(p.cfg.Container.DiskLimitGB)
+	if gb <= 0 {
+		// Quota disabled: no flag either way, so skip the probe container.
+		log.Printf("sandbox disk quota: DISABLED (FLEET_SANDBOX_DISK_GB<=0) — the host disk is unprotected from runaway sandbox writes")
+		p.storageProbeDone = true
+		return false
+	}
+	supported, conclusive := ProbeStorageOptSupport(ctx, p.cfg.Container.PodmanBinary, p.cfg.Container.Image)
+	if !conclusive {
+		log.Printf("sandbox disk quota: --storage-opt probe inconclusive — this container gets the per-file ulimit only; the next container creation re-probes")
+		return false
+	}
+	p.storageProbeDone = true
+	p.storageOptOK = supported
+	if p.storageOptOK {
+		log.Printf("sandbox disk quota: ulimit fsize=%dGiB (per-file, covers the workspace bind mount) + storage-opt size=%dg (total writable LAYER). Total workspace bytes are NOT capped — bind mounts are outside the storage quota.", gb, gb)
+	} else {
+		log.Printf("sandbox disk quota: ulimit fsize=%dGiB only — storage-opt unsupported on this storage driver, so the writable layer has no total cap either (use overlay+xfs(pquota)/btrfs for one). Caps any single file, not total disk use.", gb)
+	}
 	return p.storageOptOK
 }
 
