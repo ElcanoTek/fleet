@@ -74,6 +74,15 @@ prior versions are listed because none have shipped.
     sweeps files matching the two CreateTemp patterns, age-bounded (1h) so a
     start still in flight — here or in a sibling instance sharing the
     directory — is never raced, alongside the existing container orphan prune.
+- With the Go backend down, the chat client read the resulting 502 as an
+  expired session and redirected to `/login`, which sent it straight back to
+  `/chat` — an endless bounce instead of an error. Unauthenticated (401/403)
+  and unreachable (502/503/504, network failure) are now distinguished, and the
+  latter renders a retry state naming the real problem.
+
+- A login attempt refused by the `/auth/verify` rate limiter surfaced as "the
+  chat server isn't reachable" rather than the throttle message the backend
+  actually returned.
 
 - The production MCP-broker boundary refused to boot any bundle that wires the
   documented cutlass-family connector contract: the connector/parent env
@@ -184,6 +193,14 @@ prior versions are listed because none have shipped.
   bundle that claims one of these names now fails broker boot validation
   instead of silently mutating parent runtime behavior; the cutlass-family
   connector wire contract stays claimable as before.
+- `fleet-web` bound `0.0.0.0:3000` while the Caddyfile, `bootstrap.sh` and the
+  deployment docs all described it as loopback-only. On a host without
+  firewalld nothing stopped a client reaching the web tier directly, bypassing
+  Caddy — which matters because the tier trusts `x-forwarded-proto` (a direct
+  plain-HTTP login minted a session cookie without `Secure`) and
+  `x-forwarded-host` (login/logout/OIDC redirects). The unit now binds
+  loopback, and both helpers prefer the configured canonical origin
+  (`NEXT_PUBLIC_PUBLIC_ORIGIN`) over client-supplied forwarding headers.
 
 - Stop the boot-time orphan sweep from being starved by PID reuse, and from
   eating this process's own warm containers. Two independent bugs in the same

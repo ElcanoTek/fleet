@@ -62,6 +62,7 @@ beforeAll(async () => {
 afterEach(() => {
   delete process.env.AUTH_LOGIN_URL;
   delete process.env.AUTH_COOKIE_NAME;
+  delete process.env.NEXT_PUBLIC_PUBLIC_ORIGIN;
 });
 
 describe("verifyElcanoToken", () => {
@@ -159,5 +160,64 @@ describe("auth-service URL + cookie config", () => {
   it("builds a login URL with an encoded return_to", () => {
     const url = auth.buildElcanoLoginUrl("https://chat.elcanotek.com/");
     expect(url).toBe("https://auth.elcanotek.com/?return_to=https%3A%2F%2Fchat.elcanotek.com%2F");
+  });
+});
+
+// x-forwarded-* is client-supplied unless a proxy overwrites it, so a request
+// that reaches `next start` directly (bypassing Caddy) can claim any host and
+// protocol. When the deployment's canonical origin is configured
+// (NEXT_PUBLIC_PUBLIC_ORIGIN — bootstrap writes it for every deploy), redirect
+// targets and the Secure-cookie decision must come from it, not the headers.
+// Without it (local dev over plain http) the header fallback still applies.
+describe("getRedirectUrl / isSecureRequest — canonical origin vs forwarded headers", () => {
+  // reqTo builds a minimal stand-in exposing the two surfaces these helpers
+  // read: the header map and nextUrl.
+  function reqTo(url: string, headers: Record<string, string> = {}): NextRequest {
+    return { headers: new Headers(headers), nextUrl: new URL(url) } as unknown as NextRequest;
+  }
+
+  it("ignores x-forwarded-host/proto when the canonical origin is configured", () => {
+    process.env.NEXT_PUBLIC_PUBLIC_ORIGIN = "https://fleet.example.com";
+    const request = reqTo("http://127.0.0.1:3000/chat", {
+      "x-forwarded-host": "evil.example.com",
+      "x-forwarded-proto": "http",
+    });
+    expect(auth.getRedirectUrl(request, "/login").toString()).toBe(
+      "https://fleet.example.com/login",
+    );
+    expect(auth.isSecureRequest(request)).toBe(true);
+  });
+
+  it("reports insecure for a configured plain-http origin (loopback deploys)", () => {
+    process.env.NEXT_PUBLIC_PUBLIC_ORIGIN = "http://localhost:3000";
+    const request = reqTo("http://localhost:3000/chat", { "x-forwarded-proto": "https" });
+    expect(auth.getRedirectUrl(request, "/login").toString()).toBe("http://localhost:3000/login");
+    expect(auth.isSecureRequest(request)).toBe(false);
+  });
+
+  it("falls back to forwarded headers when no origin is configured", () => {
+    delete process.env.NEXT_PUBLIC_PUBLIC_ORIGIN;
+    const request = reqTo("http://127.0.0.1:3000/chat", {
+      "x-forwarded-host": "chat.example.com",
+      "x-forwarded-proto": "https",
+    });
+    expect(auth.getRedirectUrl(request, "/login").toString()).toBe(
+      "https://chat.example.com/login",
+    );
+    expect(auth.isSecureRequest(request)).toBe(true);
+  });
+
+  it("falls back to the request URL when neither origin nor headers are present", () => {
+    delete process.env.NEXT_PUBLIC_PUBLIC_ORIGIN;
+    const request = reqTo("http://localhost:3000/chat");
+    expect(auth.getRedirectUrl(request, "/login").toString()).toBe("http://localhost:3000/login");
+    expect(auth.isSecureRequest(request)).toBe(false);
+  });
+
+  it("treats an unparseable configured origin as unset", () => {
+    process.env.NEXT_PUBLIC_PUBLIC_ORIGIN = "not a url";
+    const request = reqTo("http://localhost:3000/chat", { "x-forwarded-proto": "https" });
+    expect(auth.getRedirectUrl(request, "/login").toString()).toBe("https://localhost:3000/login");
+    expect(auth.isSecureRequest(request)).toBe(true);
   });
 });

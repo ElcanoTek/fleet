@@ -281,13 +281,36 @@ export function getSessionCookieName() {
   return sessionCookieName;
 }
 
+// getConfiguredOrigin returns the deployment's canonical public origin
+// (NEXT_PUBLIC_PUBLIC_ORIGIN — bootstrap writes it for every deploy), or null
+// when unset/unparseable. Redirect targets and the Secure-cookie decision
+// prefer it over x-forwarded-* because those headers are client-supplied
+// unless a proxy overwrites them: a request that reaches `next start`
+// directly (not through Caddy) could otherwise pick the redirect host and
+// mint a session cookie without Secure by claiming x-forwarded-proto: http.
+function getConfiguredOrigin(): URL | null {
+  const raw = process.env.NEXT_PUBLIC_PUBLIC_ORIGIN?.trim();
+  if (!raw) return null;
+  try {
+    return new URL(raw);
+  } catch {
+    return null;
+  }
+}
+
+// The header fallbacks below keep local dev working (no configured origin,
+// plain http on localhost) and any deploy that predates the origin env.
 export function getRedirectUrl(request: NextRequest, pathname: string) {
+  const configured = getConfiguredOrigin();
+  if (configured) return new URL(pathname, configured);
   const host = request.headers.get("x-forwarded-host") ?? request.headers.get("host") ?? request.nextUrl.host;
   const protocol = request.headers.get("x-forwarded-proto") ?? request.nextUrl.protocol.replace(":", "");
   return new URL(pathname, `${protocol}://${host}`);
 }
 
 export function isSecureRequest(request: NextRequest) {
+  const configured = getConfiguredOrigin();
+  if (configured) return configured.protocol === "https:";
   const protocol = request.headers.get("x-forwarded-proto") ?? request.nextUrl.protocol.replace(":", "");
   return protocol === "https";
 }
