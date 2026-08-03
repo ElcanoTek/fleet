@@ -75,5 +75,6 @@ restrictive than open" wording, which is imprecise in exactly this dimension.
 - No change to `open`-mode deployments (the default): byte-for-byte the prior
   behavior.
 - Does not weaken ADR-0002 (the sandbox is still mandatory) or ADR-0012
-  (allowlisted remains strictly more restrictive than open); it widens
-  ADR-0012's coverage to the chat path it deferred.
+  (allowlisted remains narrower than open for HTTP(S) egress, with the
+  host-loopback exception noted above and threat-modelled in ADR-0012); it
+  widens ADR-0012's coverage to the chat path it deferred.

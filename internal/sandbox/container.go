@@ -178,8 +178,12 @@ type ContainerConfig struct {
 	// the memory ceiling is raised by the guest overhead (applyKataMemoryOverhead).
 	Runtime string
 
-	// NoNetwork forces `--network=none` so the container has an empty
-	// network namespace — no loopback, no DNS, no route to anywhere.
+	// NoNetwork forces `--network=none` so the container gets a private,
+	// otherwise-empty network namespace: the only device is the kernel's
+	// loopback (lo — usable for container-local sockets). There is no other
+	// interface, no route, and no resolver (podman writes no
+	// /etc/resolv.conf), so nothing inside can reach the host, the LAN, or
+	// the internet.
 	// Used by the lockdown path (TakeContainer) where the security model
 	// requires that an LLM-driven prompt injection cannot exfiltrate to
 	// an external host. Non-lockdown chats default to false (slirp4netns,

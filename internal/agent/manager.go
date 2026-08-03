@@ -596,7 +596,7 @@ func buildSandboxPool(cfg *config.Config, personasDir, protocolsDir, systemPromp
 		}
 		poolCfg.EgressProxy = proxy
 		if len(cfg.SandboxNetworkAllowlist) == 0 {
-			log.Printf("sandbox: WARNING network mode=allowlisted but the allowlist is EMPTY — networked SCHEDULED-task sandboxes can reach NO domains (set sandbox.network_allowlist in the bundle manifest)")
+			log.Printf("sandbox: WARNING network mode=allowlisted but the allowlist is EMPTY — networked scheduled-task, interactive chat, AND approved-bash sandboxes can reach NO domains (set sandbox.network_allowlist in the bundle manifest)")
 		} else {
 			log.Printf("sandbox: network mode=allowlisted — networked scheduled-task, interactive chat, AND approved-bash egress filtered to %v via the host proxy (best-effort; ADR-0012).", cfg.SandboxNetworkAllowlist)
 		}

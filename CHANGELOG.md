@@ -17,6 +17,26 @@ prior versions are listed because none have shipped.
 
 ## [Unreleased]
 
+### Documentation
+
+- Correct eleven sandbox documentation claims that outran the code, each
+  verified against current `dev` rather than assumed. The load-bearing ones:
+  `docs/SANDBOX-RUNTIMES.md` opened by listing **MCP** among the tool calls that
+  run inside the sandbox — the exact opposite of the host-side credential
+  brokering invariant (ADR-0003/ADR-0040); ADR-0002's Enforcement section
+  credited `sandbox_hardened_test.go` with pinning the hardening flags, which it
+  never did (and which no CI lane even runs — it is opt-in behind
+  `FLEET_SANDBOX_HARDENED_TEST`), while the test that now genuinely pins them is
+  `podman_args_test.go`; and ADR-0012/ADR-0031/FEATURE-NOTES claimed
+  `allowlisted` is "strictly more restrictive than open", which is false in the
+  host-loopback dimension — `allowlisted` requests
+  `allow_host_loopback=true` and exempts the `10.0.2.2` gateway from `NO_PROXY`,
+  so it can reach loopback-bound services that `open` cannot. That is now
+  threat-modelled rather than denied. Also: the KVM-VM boundary is per
+  container, not "per tool call"; `FLEET_PYTHON_REPL_MAX` is a soft cap checked
+  only at create time; `--network=none` does have a loopback device; and the
+  empty-allowlist boot warning named only scheduled tasks.
+
 ### Security
 
 - Resolve the sandbox OCI runtime through Podman in the fail-closed preflight
