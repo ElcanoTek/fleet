@@ -54,8 +54,9 @@ security boundary against a hostile process.** We state this in the code
 - **`lockdown` as the default-mode value** is an egress kill-switch for the
   paths this change wires: it seals every **scheduled-task** sandbox, overriding
   any per-task `AllowNetwork`. (Interactive chat turns were not wired in this
-  ADR; ADR-0031 extends both `lockdown` and `allowlisted` to the chat path, so
-  the value now genuinely applies fleet-wide.)
+  ADR; ADR-0031 extends both `lockdown` and `allowlisted` to the chat path —
+  including, since a later fix, the out-of-band approved-bash take — so the
+  value now genuinely applies fleet-wide.)
 
 This does not weaken ADR-0002: allowlisted is strictly *more* restrictive than
 the pre-existing **open** mode (which already grants unrestricted egress), and

@@ -23,6 +23,17 @@ import (
 type recordingBashTaker struct {
 	took             []string
 	takeContainerErr error
+
+	// mode/allowlist are what EgressDefault reports — the fleet-wide
+	// FLEET_DEFAULT_NETWORK_MODE the take must honor (ADR-0012/ADR-0031).
+	mode      string
+	allowlist []string
+	// gotAllowlist records the allowlist actually handed to the egress take,
+	// so a test can prove the bundle list is threaded through rather than
+	// silently dropped.
+	gotAllowlist []string
+	// takeEgressErr fails the allowlisted cold start.
+	takeEgressErr error
 }
 
 func (r *recordingBashTaker) Take() (*sandbox.Sandbox, func(), error) {
@@ -36,6 +47,19 @@ func (r *recordingBashTaker) TakeContainer(context.Context) (*sandbox.Sandbox, f
 		return nil, func() {}, r.takeContainerErr
 	}
 	return nil, func() {}, nil
+}
+
+func (r *recordingBashTaker) TakeContainerWithEgress(_ context.Context, _ sandbox.ResourceOverride, allowlist []string) (*sandbox.Sandbox, func(), error) {
+	r.took = append(r.took, "TakeContainerWithEgress")
+	r.gotAllowlist = allowlist
+	if r.takeEgressErr != nil {
+		return nil, func() {}, r.takeEgressErr
+	}
+	return nil, func() {}, nil
+}
+
+func (r *recordingBashTaker) EgressDefault() (string, []string) {
+	return r.mode, r.allowlist
 }
 
 // TestTakeStagedBashSandboxMatchesTurnPath asserts the staged-bash take uses
@@ -65,6 +89,117 @@ func TestTakeStagedBashSandboxMatchesTurnPath(t *testing.T) {
 		}
 		if len(rt.took) != 1 || rt.took[0] != "Take" {
 			t.Fatalf("non-lockdown take = %v, want exactly [Take] (warm pool, matching takeTurnSandbox)", rt.took)
+		}
+	})
+}
+
+// TestTakeStagedBashSandboxHonorsFleetWideMode pins the second posture input:
+// FLEET_DEFAULT_NETWORK_MODE (ADR-0012, extended to the chat path by
+// ADR-0031). Before this was wired up, an approved command from a
+// non-lockdown conversation always took a warm, fully-open container, so a
+// fleet-wide `lockdown` deployment still leaked open egress through the
+// approval path and `allowlisted` skipped the proxy entirely — while the ADRs
+// claimed the setting "genuinely applies fleet-wide".
+func TestTakeStagedBashSandboxHonorsFleetWideMode(t *testing.T) {
+	t.Run("fleet-wide lockdown seals a non-lockdown conversation", func(t *testing.T) {
+		rt := &recordingBashTaker{mode: sandbox.NetworkModeLockdown}
+		if _, _, err := takeStagedBashSandbox(context.Background(), rt, false); err != nil {
+			t.Fatalf("takeStagedBashSandbox: %v", err)
+		}
+		if len(rt.took) != 1 || rt.took[0] != "TakeContainer" {
+			t.Fatalf("fleet-wide lockdown take = %v, want exactly [TakeContainer] (--network=none), matching takeTurnSandboxFrom", rt.took)
+		}
+	})
+
+	t.Run("fleet-wide allowlisted routes through the egress proxy", func(t *testing.T) {
+		rt := &recordingBashTaker{mode: sandbox.NetworkModeAllowlisted, allowlist: []string{"api.example.com"}}
+		if _, _, err := takeStagedBashSandbox(context.Background(), rt, false); err != nil {
+			t.Fatalf("takeStagedBashSandbox: %v", err)
+		}
+		if len(rt.took) != 1 || rt.took[0] != "TakeContainerWithEgress" {
+			t.Fatalf("fleet-wide allowlisted take = %v, want exactly [TakeContainerWithEgress], matching takeTurnSandboxFrom", rt.took)
+		}
+		if len(rt.gotAllowlist) != 1 || rt.gotAllowlist[0] != "api.example.com" {
+			t.Fatalf("allowlist handed to the take = %v, want the bundle allowlist threaded through", rt.gotAllowlist)
+		}
+	})
+
+	t.Run("open mode keeps the warm Take", func(t *testing.T) {
+		for _, mode := range []string{"", sandbox.NetworkModeOpen} {
+			rt := &recordingBashTaker{mode: mode}
+			if _, _, err := takeStagedBashSandbox(context.Background(), rt, false); err != nil {
+				t.Fatalf("takeStagedBashSandbox(mode=%q): %v", mode, err)
+			}
+			if len(rt.took) != 1 || rt.took[0] != "Take" {
+				t.Fatalf("mode %q take = %v, want exactly [Take] — open mode behavior is unchanged", mode, rt.took)
+			}
+		}
+	})
+
+	// The seal must be checked BEFORE the fleet-wide switch, under every
+	// mode. The allowlisted case is the one that matters: hoisting the switch
+	// above the lockdown branch would silently downgrade a sealed
+	// conversation from --network=none to proxied-with-network, and a test
+	// that only covers open mode would stay green through that refactor.
+	t.Run("per-conversation lockdown wins over every fleet-wide mode", func(t *testing.T) {
+		for _, mode := range []string{"", sandbox.NetworkModeOpen, sandbox.NetworkModeAllowlisted, sandbox.NetworkModeLockdown} {
+			rt := &recordingBashTaker{mode: mode, allowlist: []string{"api.example.com"}}
+			if _, _, err := takeStagedBashSandbox(context.Background(), rt, true); err != nil {
+				t.Fatalf("takeStagedBashSandbox(mode=%q): %v", mode, err)
+			}
+			if len(rt.took) != 1 || rt.took[0] != "TakeContainer" {
+				t.Fatalf("lockdown conversation on a %q fleet took %v, want [TakeContainer] — the seal must precede the fleet-wide switch", mode, rt.took)
+			}
+		}
+	})
+}
+
+// TestTakeStagedBashSandboxFleetWideFailsClosed asserts the fleet-wide
+// branches never downgrade to open egress on a real failure. The one
+// deliberate degrade is ErrContainerUnavailable — the signal that there is no
+// container backend at all (a test/dev ModeHost pool; a release build has no
+// host executor to fall back to, #159) — which mirrors
+// takeTurnSandboxFrom exactly, so approvals and turns behave identically.
+func TestTakeStagedBashSandboxFleetWideFailsClosed(t *testing.T) {
+	t.Run("lockdown mode surfaces a real cold-start error", func(t *testing.T) {
+		rt := &recordingBashTaker{mode: sandbox.NetworkModeLockdown, takeContainerErr: errors.New("podman exploded")}
+		if _, _, err := takeStagedBashSandbox(context.Background(), rt, false); err == nil {
+			t.Fatal("want the cold-start error surfaced, got nil")
+		}
+		for _, m := range rt.took {
+			if m == "Take" {
+				t.Fatalf("fleet-wide lockdown fell back to the open warm Take, took = %v", rt.took)
+			}
+		}
+	})
+
+	t.Run("allowlisted mode surfaces a real cold-start error", func(t *testing.T) {
+		rt := &recordingBashTaker{mode: sandbox.NetworkModeAllowlisted, takeEgressErr: errors.New("no egress proxy configured")}
+		if _, _, err := takeStagedBashSandbox(context.Background(), rt, false); err == nil {
+			t.Fatal("want the cold-start error surfaced, got nil")
+		}
+		for _, m := range rt.took {
+			if m == "Take" {
+				t.Fatalf("fleet-wide allowlisted fell back to the unproxied warm Take, took = %v", rt.took)
+			}
+		}
+	})
+
+	t.Run("no container backend degrades to the host take, as the turn path does", func(t *testing.T) {
+		for _, tc := range []struct {
+			name string
+			rt   *recordingBashTaker
+			want string
+		}{
+			{"lockdown", &recordingBashTaker{mode: sandbox.NetworkModeLockdown, takeContainerErr: sandbox.ErrContainerUnavailable}, "TakeContainer"},
+			{"allowlisted", &recordingBashTaker{mode: sandbox.NetworkModeAllowlisted, takeEgressErr: sandbox.ErrContainerUnavailable}, "TakeContainerWithEgress"},
+		} {
+			if _, _, err := takeStagedBashSandbox(context.Background(), tc.rt, false); err != nil {
+				t.Fatalf("%s: takeStagedBashSandbox: %v", tc.name, err)
+			}
+			if len(tc.rt.took) != 2 || tc.rt.took[0] != tc.want || tc.rt.took[1] != "Take" {
+				t.Fatalf("%s take = %v, want [%s Take]", tc.name, tc.rt.took, tc.want)
+			}
 		}
 	})
 }

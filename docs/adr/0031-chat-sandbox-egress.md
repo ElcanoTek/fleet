@@ -42,9 +42,32 @@ The routing lives in a free function `takeTurnSandboxFrom` over a small
 `turnSandboxTaker` interface, mirroring `scheduledrun.takeTaskSandbox`, so the
 posture is unit-tested with a fake rather than a live podman pool.
 
+**The approved-bash path is the third take and was initially missed.** An
+approval is a deferred tool call from a conversation, executed out-of-band by
+`runStagedBash` rather than by the turn loop, so it acquires its own sandbox
+via `takeStagedBashSandbox`. That function honored the *per-conversation*
+lockdown seal (#562) but not `FLEET_DEFAULT_NETWORK_MODE`, so this ADR's
+"fleet-wide" claim was false for it: under `lockdown` an approved command from
+a non-lockdown conversation still ran with open slirp4netns egress, and under
+`allowlisted` it bypassed the proxy entirely — reachable by staging a risky
+command (the interactive gates stage `git push`, package installs, …) and
+having a human click Approve. It now mirrors `takeTurnSandboxFrom`'s
+fleet-wide branches, including the `ErrContainerUnavailable` degrade to the
+host take, while keeping the per-conversation seal's stricter no-degrade rule
+(there is no persistent-REPL borrow to preempt — approved bash has always
+taken a fresh container). With that, all three sandbox takes — interactive
+turn, scheduled task, approved bash — honor the setting. One dimension of an
+`allowlisted` approved-bash container genuinely widens rather than narrows:
+`networkArgs` emits `slirp4netns:allow_host_loopback=true` for allowlisted and
+nothing for open, so it gains host-loopback reachability the open warm
+container did not have. The marginal exposure is nil — ADR-0031 already grants
+that posture to every ordinary chat turn on the same deployment, so no
+approval click is needed to reach it — but see ADR-0012's "strictly more
+restrictive than open" wording, which is imprecise in exactly this dimension.
+
 ## Consequences
 
-- `FLEET_DEFAULT_NETWORK_MODE` now genuinely applies fleet-wide — the ADR-0012
+- `FLEET_DEFAULT_NETWORK_MODE` genuinely applies fleet-wide — the ADR-0012
   boot logs no longer say "chat turns are unaffected".
 - Operators who set `allowlisted`/`lockdown` **and** use the persistent REPL
   lose kernel persistence on chat turns (documented in the code + PII/deployment
