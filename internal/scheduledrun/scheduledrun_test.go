@@ -137,6 +137,37 @@ func TestTaskMCPSelection_UsesLivePublicInventory(t *testing.T) {
 	}
 }
 
+// TestTaskMCPToolAllowlist_PrefersLivePublicInventory: broker mode scrubs
+// cfg.MCPServers after boot, so the Gate-2 allowlist handed to the scheduled
+// agent must come from the live public inventory.
+func TestTaskMCPToolAllowlist_PrefersLivePublicInventory(t *testing.T) {
+	r := &Runner{
+		cfg: &config.Config{},
+		mcpServerInventory: func() map[string]TaskMCPServerInfo {
+			return map[string]TaskMCPServerInfo{
+				"alpha": {ToolAllowlist: []string{"lookup"}},
+				"beta":  {},
+			}
+		},
+	}
+	want := agentcore.MCPAllowlist{"alpha": {"lookup"}}
+	if got := r.taskMCPToolAllowlist(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("broker-mode allowlist = %#v, want %#v", got, want)
+	}
+}
+
+func TestTaskMCPToolAllowlist_CompatPathDerivesFromConfig(t *testing.T) {
+	r := &Runner{cfg: &config.Config{MCPServers: map[string]config.MCPServerConfig{
+		"alpha": {Enabled: true, ToolAllowlist: []string{"lookup"}},
+		"beta":  {Enabled: true},
+		"gamma": {ToolAllowlist: []string{"never"}},
+	}}}
+	want := agentcore.MCPAllowlist{"alpha": {"lookup"}}
+	if got := r.taskMCPToolAllowlist(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("compat allowlist = %#v, want %#v", got, want)
+	}
+}
+
 func TestBindTaskMCPRuntime_PreservesExplicitSelection(t *testing.T) {
 	var got agentcore.MCPSelection
 	r := &Runner{

@@ -121,6 +121,17 @@ prior versions are listed because none have shipped.
   really is admin was refused. Both create and edit now gate on one definition —
   possession of `models.PermissionAdmin` — which admits admin keys and role-admin
   users and refuses scoped keys.
+- A bundle's per-server `tool_allowlist` (Gate-2) was silently ignored in two
+  situations, so agents were offered every tool of every selected connector
+  regardless of what the operator allowlisted. First, activating the production
+  MCP-broker boundary scrubs `cfg.MCPServers` after the broker child boots, and
+  the scheduled agent derived its gates from exactly that field — every
+  scheduled and sub-agent run therefore ran ungated. Second, the gate looked up
+  the allowlist by the *registered* server name, which for a named-account seat
+  is `<server>_<account>`, so selecting a seat dropped the filter for that
+  server. The allowlist now travels with the broker's public inventory, and
+  registered names resolve back to their manifest entry the way the credential
+  and persona filters already did.
 
 - Stop the boot-time orphan sweep from being starved by PID reuse, and from
   eating this process's own warm containers. Two independent bugs in the same

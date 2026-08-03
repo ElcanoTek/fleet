@@ -77,6 +77,7 @@ func TestStartProductionMCPRuntime_InheritsThenScrubsParent(t *testing.T) {
     env:
       TOKEN: "${CONNECTOR_TOKEN}"
       WORK: "${FLEET_WORKSPACE}"
+    tools: [lookup]
     account_vars: [TOKEN]
 `)
 	bundle, err := clientconfig.Load(bundleDir)
@@ -117,6 +118,9 @@ func TestStartProductionMCPRuntime_InheritsThenScrubsParent(t *testing.T) {
 	if !runtime.inventory.snapshot()["demo"].UsesWorkspace {
 		t.Fatal("public scheduled inventory lost uses-workspace metadata")
 	}
+	if !slices.Equal(runtime.inventory.snapshot()["demo"].ToolAllowlist, []string{"lookup"}) {
+		t.Fatalf("public scheduled inventory lost the Gate-2 tool allowlist after scrub: %+v", runtime.inventory.snapshot()["demo"])
+	}
 	if err := runtime.client.Ping(context.Background()); err != nil {
 		t.Fatalf("child lost inherited environment after parent scrub: %v", err)
 	}
@@ -131,6 +135,11 @@ func TestStartProductionMCPRuntime_InheritsThenScrubsParent(t *testing.T) {
 		t.Fatalf("close task scope: %v", err)
 	}
 	assertProductionRemoteOverlay(t, runtime)
+	assertProductionReload(t, runtime)
+}
+
+func assertProductionReload(t *testing.T, runtime *productionMCPRuntime) {
+	t.Helper()
 	reloaded, err := runtime.reload(context.Background())
 	if err != nil {
 		t.Fatalf("reload: %v", err)
@@ -140,7 +149,8 @@ func TestStartProductionMCPRuntime_InheritsThenScrubsParent(t *testing.T) {
 		!reloaded.Specs["future"].Optional || reloaded.Specs["future"].Env != nil {
 		t.Fatalf("public reload result = %+v", reloaded)
 	}
-	if inventory := runtime.inventory.snapshot(); len(inventory) != 1 || !inventory["future"].UsesWorkspace {
+	if inventory := runtime.inventory.snapshot(); len(inventory) != 1 || !inventory["future"].UsesWorkspace ||
+		!slices.Equal(inventory["future"].ToolAllowlist, []string{"fresh_lookup"}) {
 		t.Fatalf("live inventory after reload = %+v", inventory)
 	}
 }
