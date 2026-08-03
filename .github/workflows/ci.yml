@@ -494,6 +494,13 @@ jobs:
         # euid guard). This e2e-live job is the ONLY always-on lane with a real,
         # non-root, rootless-podman sandbox, so run the invariant tests here.
         #
+        # TestSeccompProfileDeniesAtRuntime is here because it is the ONLY test
+        # that proves the seccomp filter actually reaches a live container: the
+        # static profile tests can't, and the older in-container canary
+        # (sandbox_hardened_test.go) is opt-in behind FLEET_SANDBOX_HARDENED_TEST,
+        # which no lane sets. It asserts both directions — AF_VSOCK denied AND
+        # AF_INET still open — so an over-restrictive filter fails it too.
+        #
         # The disk-quota pair is here for the same reason: RLIMIT_FSIZE is the
         # only cap on the workspace bind mount, and nothing else in an always-on
         # lane proves it reaches the kernel. (Its storage-opt sibling is
@@ -510,7 +517,7 @@ jobs:
           FLEET_SANDBOX_TEST_IMAGE: ${{ steps.sandbox.outputs.image }}
         run: |
           set -euo pipefail
-          tests='TestContainerWorkspaceSamePathCoherence|TestContainerReadOnlyMountsSamePath|TestContainerWorkspaceSurvivesConcurrentMount|TestContainerBashSamePath|TestContainerDiskQuotaSetsRLimit|TestContainerDiskQuotaBlocksOversizeFile'
+          tests='TestContainerWorkspaceSamePathCoherence|TestContainerReadOnlyMountsSamePath|TestContainerWorkspaceSurvivesConcurrentMount|TestContainerBashSamePath|TestContainerDiskQuotaSetsRLimit|TestContainerDiskQuotaBlocksOversizeFile|TestSeccompProfileDeniesAtRuntime'
           # -tags fleet_host_executor: these are container-mode invariant tests,
           # but they share the sandbox test package with the host-mode fixtures
           # that are now gated behind this tag (#159) — the package won't COMPILE
@@ -522,7 +529,8 @@ jobs:
             TestContainerWorkspaceSurvivesConcurrentMount \
             TestContainerBashSamePath \
             TestContainerDiskQuotaSetsRLimit \
-            TestContainerDiskQuotaBlocksOversizeFile; do
+            TestContainerDiskQuotaBlocksOversizeFile \
+            TestSeccompProfileDeniesAtRuntime; do
             if ! grep -q -- "--- PASS: ${tc}" sandbox-invariants.log; then
               echo "::error::sandbox invariant test ${tc} did not PASS (skipped or absent) — this always-on lane must actually run it (see issue #34)"
               exit 1
