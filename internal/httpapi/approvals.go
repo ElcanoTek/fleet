@@ -1303,7 +1303,8 @@ func (s *Server) runStagedBash(ctx context.Context, approval *store.Approval) (s
 	// the same network posture the turn that staged it would have used —
 	// otherwise a prompt-injected agent could stage an exfiltrating command
 	// and have the human's Approve click silently lift the --network=none
-	// seal the operator relies on.
+	// seal the operator relies on. The fleet-wide FLEET_DEFAULT_NETWORK_MODE
+	// is the second input and is applied inside takeStagedBashSandbox.
 	lockdown, err := s.stagedBashLockdown(ctx, approval)
 	if err != nil {
 		return "", err
@@ -1356,25 +1357,45 @@ func (s *Server) stagedBashLockdown(ctx context.Context, approval *store.Approva
 
 // stagedBashTaker is the subset of *sandbox.Pool the approved-bash path uses
 // to acquire its execution sandbox. It is an interface so the take-decision
-// (sealed lockdown vs. warm pool) is unit-testable without spinning a real
-// podman container — the same seam pattern as scheduledrun's sandboxTaker.
+// (sealed lockdown vs. allowlisted vs. warm pool) is unit-testable without
+// spinning a real podman container — the same seam pattern as scheduledrun's
+// sandboxTaker and agent.Manager's turnSandboxTaker.
 type stagedBashTaker interface {
 	// Take returns a warm, network-ENABLED sandbox (the interactive default).
 	Take() (*sandbox.Sandbox, func(), error)
 	// TakeContainer cold-starts a fresh sandbox with egress SEALED
 	// (--network=none) — the lockdown boundary.
 	TakeContainer(ctx context.Context) (*sandbox.Sandbox, func(), error)
+	// TakeContainerWithEgress cold-starts a fresh sandbox whose HTTP(S)
+	// clients are routed through the host egress proxy under allowlist.
+	TakeContainerWithEgress(ctx context.Context, ov sandbox.ResourceOverride, allowlist []string) (*sandbox.Sandbox, func(), error)
+	// EgressDefault reports the fleet-wide FLEET_DEFAULT_NETWORK_MODE and its
+	// allowlist. The pool stores these as advisory data and does not act on
+	// them itself — every take path must consult them (ADR-0012, ADR-0031).
+	EgressDefault() (mode string, allowlist []string)
 }
 
 // takeStagedBashSandbox acquires the container an approved bash command runs
-// in, mirroring the interactive turn path's selection (agent.Manager.
-// takeTurnSandbox): lockdown → TakeContainer, a fresh --network=none
-// container (the hard seal); otherwise the warm pool's Take (default rootless
-// slirp4netns egress — unchanged pre-#562 behavior). The lockdown branch
-// FAILS CLOSED: any container error (including ErrContainerUnavailable on an
-// image-less pool) is surfaced, never downgraded to the network-enabled warm
-// take — running approved bash with egress on in a lockdown chat is exactly
-// the exfiltration hole #562 closed.
+// in, mirroring the interactive turn path's selection
+// (agent.takeTurnSandboxFrom) so an approval executes under the same network
+// posture the turn that staged it would have used. Two independent inputs
+// decide the posture:
+//
+//   - The CONVERSATION's lockdown seal (#562) — strictest and checked first.
+//     It FAILS CLOSED: any container error, including ErrContainerUnavailable
+//     on an image-less pool, is surfaced and never downgraded to the
+//     network-enabled warm take. Running approved bash with egress on in a
+//     lockdown chat is exactly the exfiltration hole #562 closed.
+//   - The FLEET-WIDE FLEET_DEFAULT_NETWORK_MODE (ADR-0012, extended to the
+//     chat path by ADR-0031). Before this was wired up, an approved command
+//     from a non-lockdown conversation took an unconditional warm, fully-open
+//     container — so a fleet-wide `lockdown` left approvals as an open-egress
+//     hole in an otherwise sealed deployment, and `allowlisted` let them skip
+//     the proxy entirely. These branches mirror takeTurnSandboxFrom exactly,
+//     including its degrade to the host take on ErrContainerUnavailable: that
+//     signal means there is no container backend at all (a test/dev ModeHost
+//     pool — a release build has no host executor to fall back to, #159), so
+//     there is nothing to seal.
 func takeStagedBashSandbox(ctx context.Context, pool stagedBashTaker, lockdown bool) (*sandbox.Sandbox, func(), error) {
 	if lockdown {
 		sb, cleanup, err := pool.TakeContainer(ctx)
@@ -1383,6 +1404,28 @@ func takeStagedBashSandbox(ctx context.Context, pool stagedBashTaker, lockdown b
 		}
 		return sb, cleanup, nil
 	}
+
+	switch mode, allowlist := pool.EgressDefault(); mode {
+	case sandbox.NetworkModeLockdown:
+		sb, cleanup, err := pool.TakeContainer(ctx)
+		if errors.Is(err, sandbox.ErrContainerUnavailable) {
+			return pool.Take()
+		}
+		if err != nil {
+			return nil, nil, fmt.Errorf("take lockdown sandbox: %w", err)
+		}
+		return sb, cleanup, nil
+	case sandbox.NetworkModeAllowlisted:
+		sb, cleanup, err := pool.TakeContainerWithEgress(ctx, sandbox.ResourceOverride{}, allowlist)
+		if errors.Is(err, sandbox.ErrContainerUnavailable) {
+			return pool.Take()
+		}
+		if err != nil {
+			return nil, nil, fmt.Errorf("take allowlisted sandbox: %w", err)
+		}
+		return sb, cleanup, nil
+	}
+
 	sb, cleanup, err := pool.Take()
 	if err != nil {
 		return nil, nil, fmt.Errorf("take sandbox: %w", err)

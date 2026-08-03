@@ -19,6 +19,13 @@ prior versions are listed because none have shipped.
 
 ### Security
 
+- Apply the fleet-wide `FLEET_DEFAULT_NETWORK_MODE` to the approved-bash take.
+  An approval executes out-of-band of the turn loop and honored only the
+  per-conversation lockdown seal, so on a `lockdown` deployment an approved
+  command from a non-lockdown conversation still ran with open egress, and on
+  an `allowlisted` one it bypassed the proxy — despite ADR-0012/ADR-0031
+  claiming the setting applies fleet-wide. It now mirrors the interactive turn
+  take exactly; the per-conversation seal keeps its stricter no-degrade rule.
 - Extend the #796 straggler guard to `run_python`: a cancelled or timed-out
   cell now synchronously kills the container and poisons the sandbox — parity
   with bash and the sandboxed file tools — instead of killing only the
