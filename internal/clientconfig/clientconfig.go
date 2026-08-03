@@ -160,8 +160,8 @@ type Bundle struct {
 
 	// RemoteMCPCatalog is the manifest's curated directory of THIRD-PARTY hosted
 	// MCP servers (the remote_mcp_catalog: section, #538), in manifest order.
-	// Unlike MCPCatalog entries (bundle-author-defined, run in the sandbox,
-	// credentials brokered host-side), these are pointers to services hosted and
+	// Unlike MCPCatalog entries (bundle-author-defined, run host-side in the
+	// credential-owning broker), these are pointers to services hosted and
 	// operated by an external vendor: connecting one sends conversation-derived
 	// tool traffic to that vendor under its own terms. The catalog is
 	// informational — nothing connects until a user explicitly adds the server
@@ -354,8 +354,8 @@ type Sandbox struct {
 	//	""        — Podman's configured default (crun/runc): rootless containers
 	//	            sharing the host kernel. No extra host requirements (#217).
 	//	"runc"    — explicit runc; same shared-kernel posture as the default.
-	//	"kata"    — Kata Containers: each tool call runs in a dedicated KVM VM
-	//	            with its own guest kernel — escape requires a hypervisor CVE,
+	//	"kata"    — Kata Containers: every sandbox container is a dedicated KVM
+	//	            VM with its own guest kernel — escape requires a hypervisor CVE,
 	//	            not just a container-escape. Requires /dev/kvm + kata-runtime.
 	//	"libkrun" — lightweight microVM (Apple Virtualization.framework on macOS,
 	//	            libkrun on Linux); lower overhead than Kata. Normalized to the

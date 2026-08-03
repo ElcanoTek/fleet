@@ -171,10 +171,11 @@ type ContainerConfig struct {
 	// Runtime overrides the default OCI runtime, emitted verbatim as
 	// `podman run --runtime=<value>`. Empty means Podman's configured default
 	// (crun/runc) — a shared-kernel rootless container. Hypervisor-isolated
-	// values ("kata" for Kata Containers, "krun" for libkrun) run each tool call
-	// in a dedicated KVM VM; "runsc" selects gVisor. The friendly name "libkrun"
-	// is normalized to "krun" upstream (see NormalizeRuntime), and kata/krun are
-	// fail-closed preflighted at boot (PreflightRuntime). When Runtime == "kata"
+	// values ("kata" for Kata Containers, "krun" for libkrun) make this whole
+	// container a dedicated KVM VM; "runsc" selects gVisor. The friendly name
+	// "libkrun" is normalized to "krun" upstream (see NormalizeRuntime), and
+	// kata/krun are fail-closed preflighted at boot (PreflightRuntime). When
+	// Runtime == "kata"
 	// the memory ceiling is raised by the guest overhead (applyKataMemoryOverhead).
 	Runtime string
 
@@ -385,7 +386,7 @@ const (
 // --env) arguments for a container's network posture. It is a pure function so
 // the three modes are unit-testable and cannot drift:
 //
-//   - lockdown   (noNetwork)            → --network=none (empty netns, the hard seal)
+//   - lockdown   (noNetwork)            → --network=none (sealed netns: lo only, no route — the hard seal)
 //   - allowlisted (proxyURL set)        → slirp4netns + host-loopback + HTTP(S)_PROXY
 //     pointed at the host EgressProxy (best-effort; see EgressProxy / ADR-0012)
 //   - open       (neither)              → rootless slirp4netns default (outbound only)

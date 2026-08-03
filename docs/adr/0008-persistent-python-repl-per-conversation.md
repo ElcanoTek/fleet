@@ -69,9 +69,10 @@ Lifecycle safety (`internal/sandbox/persistent.go`):
 - **Reclamation on three paths:** an idle-TTL reaper
   (`FLEET_PYTHON_REPL_IDLE_TTL`, default 30m), conversation delete
   (`ReleaseChatSession`, deferred to the last borrow when a turn is in flight),
-  and process shutdown (`Pool.Close` drains the map). A session cap
-  (`FLEET_PYTHON_REPL_MAX`, default 32) evicts the least-recently-used idle
-  session when exceeded.
+  and process shutdown (`Pool.Close` drains the map). A **soft** session cap
+  (`FLEET_PYTHON_REPL_MAX`, default 32) evicts least-recently-used **idle**
+  sessions on the create path until the count is back under it; a session with
+  a turn in flight is never evicted, and the check runs nowhere else.
 - **Liveness probe + recreate.** A persistent container that died between turns
   (OOM-kill, host reap) is detected on the next take and replaced, rather than
   wedging the conversation.
@@ -115,8 +116,11 @@ cannot live in the kernel).
   accumulate inside the surviving container. The state loss is documented in the
   `run_python` tool description so the agent keeps durable state on disk.
 - **Idle conversations hold a container until the idle TTL or the LRU cap reaps
-  it.** The cap + reaper bound this; an operator sizing for persistent mode
-  should account for up to `FLEET_PYTHON_REPL_MAX` live sandboxes.
+  it.** Because the cap is evaluated only when a new persistent sandbox is
+  created, and never against a session with a turn in flight, the live count can
+  EXCEED `FLEET_PYTHON_REPL_MAX` and stay there until the next create or the
+  idle reaper. An operator sizing for persistent mode should budget for that
+  overshoot, not for the cap as a hard ceiling.
 - **Single-process only.** The per-conversation registry lives in one process.
   A future multi-replica deployment would need sticky-by-conversation routing or
   a shared lease; that boundary is documented, not yet solved.

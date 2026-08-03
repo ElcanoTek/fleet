@@ -60,10 +60,11 @@ turn, scheduled task, approved bash — honor the setting. One dimension of an
 `allowlisted` approved-bash container genuinely widens rather than narrows:
 `networkArgs` emits `slirp4netns:allow_host_loopback=true` for allowlisted and
 nothing for open, so it gains host-loopback reachability the open warm
-container did not have. The marginal exposure is nil — ADR-0031 already grants
-that posture to every ordinary chat turn on the same deployment, so no
-approval click is needed to reach it — but see ADR-0012's "strictly more
-restrictive than open" wording, which is imprecise in exactly this dimension.
+container did not have. The marginal exposure is nil — this ADR already grants
+that posture to every ordinary chat turn on the same deployment, so no approval
+click is needed to reach it — and ADR-0012 now threat-models the host-loopback
+differential directly, including which loopback-bound services are reachable
+and which of them do not authenticate.
 
 ## Consequences
 
@@ -75,6 +76,6 @@ restrictive than open" wording, which is imprecise in exactly this dimension.
 - No change to `open`-mode deployments (the default): byte-for-byte the prior
   behavior.
 - Does not weaken ADR-0002 (the sandbox is still mandatory) or ADR-0012
-  (allowlisted remains narrower than open for HTTP(S) egress, with the
+  (allowlisted remains narrower than open for proxy-honoring clients, with the
   host-loopback exception noted above and threat-modelled in ADR-0012); it
   widens ADR-0012's coverage to the chat path it deferred.

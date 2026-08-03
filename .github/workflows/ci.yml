@@ -485,7 +485,8 @@ jobs:
 
       - name: Assert sandbox isolation invariants (always-on, real rootless podman)
         # The project's #1 non-negotiable invariant (AGENTS.md): every agent tool
-        # call runs in the rootless-Podman sandbox, mapped via
+        # call's model-authored local execution runs in the rootless-Podman
+        # sandbox (MCP is the documented host-side broker exception), mapped via
         # `--userns=keep-id:uid=1000,gid=1000` with same-path `:z` workspace
         # mounts. Its regression tests live in internal/sandbox, but they
         # SELF-SKIP when run as root or with podman masked — which is exactly the

@@ -19,8 +19,10 @@ prior versions are listed because none have shipped.
 
 ### Documentation
 
-- Correct eleven sandbox documentation claims that outran the code, each
-  verified against current `dev` rather than assumed. The load-bearing ones:
+- Correct the sandbox documentation claims that outran the code — across the
+  ADRs, `README.md`, `ONBOARDING.md`, `DEPLOYMENT.md`, the default bundle, and
+  the Go comments that state the same guarantees — each verified against current
+  `dev` rather than assumed. The load-bearing ones:
   `docs/SANDBOX-RUNTIMES.md` opened by listing **MCP** among the tool calls that
   run inside the sandbox — the exact opposite of the host-side credential
   brokering invariant (ADR-0003/ADR-0040); ADR-0002's Enforcement section

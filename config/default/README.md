@@ -143,9 +143,10 @@ sandbox:
 
 ## The agent runtime
 
-fleet runs **one** native agent loop, in the fleet process. Every tool call it
-makes (`bash`, `run_python`, file I/O, MCP) runs inside the rootless-Podman
-sandbox under host policy, and MCP credentials are isolated by the out-of-process
+fleet runs **one** native agent loop, in the fleet process. Every tool call's
+model-authored local execution (`bash`, `run_python`, file I/O) runs inside the
+rootless-Podman sandbox under host policy. MCP calls are the deliberate
+host-side exception, and their credentials are isolated by the out-of-process
 MCP broker — they never enter the sandbox. There is no flavor picker and no
 external-agent delegation. See **[`docs/AGENT-RUNTIME.md`](../../docs/AGENT-RUNTIME.md)**
 for the runtime mechanics (per-turn sandbox seal, cost/token ceilings, context

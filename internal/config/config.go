@@ -1004,10 +1004,11 @@ type Config struct {
 	// (FLEET_PYTHON_REPL_IDLE_TTL, default 1800 = 30m). Only meaningful when
 	// PythonREPLMode == "persistent".
 	PythonREPLIdleTTLSeconds int
-	// PythonREPLMaxSessions caps how many persistent per-conversation sandboxes
-	// may be live at once (FLEET_PYTHON_REPL_MAX, default 32). Past the cap the
-	// least-recently-used idle session is evicted. Only meaningful when
-	// PythonREPLMode == "persistent". 0 disables the cap.
+	// PythonREPLMaxSessions bounds how many persistent per-conversation sandboxes
+	// are kept (FLEET_PYTHON_REPL_MAX, default 32). SOFT cap: evaluated only when
+	// a new one is created, evicting least-recently-used IDLE sessions, so the
+	// live count can overshoot. Only meaningful when PythonREPLMode ==
+	// "persistent". 0 disables the cap.
 	PythonREPLMaxSessions int
 
 	WorkspaceRoot         string

@@ -61,7 +61,8 @@ them.
   scoped boundary ([ADR-0040](docs/adr/0040-child-owned-remote-mcp-runtime.md)).
 
 - **Two isolation tiers, one config line.** Set `sandbox.runtime: kata` (or
-  `libkrun`) and every tool call gets a **dedicated KVM microVM** — escape now
+  `libkrun`) and every sandbox container becomes a **dedicated KVM microVM**
+  (one per turn / scheduled run / persistent-REPL conversation) — escape now
   takes a hypervisor CVE, not a container break-out; fail-closed preflight at
   boot. [`docs/SANDBOX-RUNTIMES.md`](docs/SANDBOX-RUNTIMES.md).
 
@@ -400,12 +401,14 @@ fleet stands on the shoulders of excellent open-source projects and open
 standards. Our thanks to the teams and communities behind them:
 
 - **[Podman](https://github.com/containers/podman)** — rootless, daemonless
-  containers. Every agent tool call (`bash`, `run_python`, MCP) executes inside a
-  rootless-Podman sandbox; there is no trusted fast path that skips it.
+  containers. Every agent tool call's model-authored local execution (`bash`,
+  `run_python`, file I/O) executes inside a rootless-Podman sandbox; there is no
+  trusted fast path that skips it. MCP is the documented host-side broker
+  exception (see above).
 - **[Kata Containers](https://katacontainers.io)** and
   **[libkrun](https://github.com/containers/libkrun)** — the OCI runtimes behind
-  fleet's optional hypervisor-isolation tier: set `sandbox.runtime` and
-  every tool call runs in a dedicated KVM microVM with its own guest kernel,
+  fleet's optional hypervisor-isolation tier: set `sandbox.runtime` and every
+  sandbox container becomes a dedicated KVM microVM with its own guest kernel,
   plugging into the same Podman invocation unchanged.
 - **[Fedora](https://fedoraproject.org)** — `fedora-minimal` is the base image
   for the default sandbox, and we think it's the safest base in the game for
