@@ -95,6 +95,33 @@ prior versions are listed because none have shipped.
 
 ### Security
 
+- Stop the boot-time orphan sweep from being starved by PID reuse, and from
+  eating this process's own warm containers. Two independent bugs in the same
+  sweep:
+  - The `fleet.instance` label records `<pid>@<start>` and `prune.go` claimed the
+    start time "disambiguates pid reuse" — but nothing read it. Once a crashed
+    run's pid was recycled by any unrelated live process, its orphaned container
+    was skipped forever, so the leak the sweep exists to reclaim became
+    permanent. The labeled start time is now compared against the live process's
+    actual `/proc` start time, failing safe in both unknown directions (an
+    unparseable label or an unreadable `/proc` means "assume alive" — leaking a
+    container is recoverable, force-removing a live sibling's sandbox mid-turn is
+    not).
+  - The sweep force-removed any `created`/`exited` container **regardless of
+    label**, and it runs *after* the agent manager is built — which starts the
+    warm pool filling from a goroutine. So this process's own warm containers,
+    caught mid-creation, were removable by their own boot. Containers carrying
+    this process's label are now skipped in every state, and the call-site
+    comment no longer claims the sweep runs "before building the pool".
+- Bound the sandbox telemetry poller so it can never block teardown. `podman
+  stats` had no `WaitDelay`, so `Output()` could wait on pipes that context
+  cancellation does not close (the hazard `BashWaitDelay` already exists for),
+  and `close()` waited on the poller with a bare receive — making sandbox
+  teardown, the turn's sandbox release, and the pool slot hostage to a telemetry
+  goroutine. The poll is now `WaitDelay`-bounded at 2s (a stats sample that slow
+  is discarded anyway) and the teardown wait at 5s, past which the rollup is
+  abandoned with a log line rather than stalling.
+
 - Deny `AF_VSOCK` sockets in the sandbox seccomp profile. Under the Kata/libkrun
   microVM runtimes (ADR-0010) `AF_VSOCK` is the guest↔host channel, and podman's
   own default profile denies it while ours allowed it. Closed with a single
