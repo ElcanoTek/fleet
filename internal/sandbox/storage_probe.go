@@ -12,7 +12,8 @@ import (
 
 // storageProbeTimeout bounds the one-time boot probe for --storage-opt support.
 // Generous because the first container off a freshly-pulled image can be slow to
-// create; a probe that times out simply degrades to the ulimit fallback.
+// create; a probe that times out simply omits the writable-layer quota (the
+// per-file ulimit cap applies regardless).
 const storageProbeTimeout = 30 * time.Second
 
 // ProbeStorageOptSupport reports whether `podman run --storage-opt size=...` is

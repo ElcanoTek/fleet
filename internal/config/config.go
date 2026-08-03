@@ -972,7 +972,8 @@ type Config struct {
 	// stops the classic `dd` bomb from filling the host disk (#216). It does
 	// NOT bound total workspace bytes, and it does not apply to host-side
 	// brokers that stage files into the workspace (attachments, download_url,
-	// generate_image — each separately capped, all well below 1 GiB). See
+	// generate_image), which carry their own separate caps — the attachment
+	// one is FLEET_UPLOAD_MAX_BYTES, default 1 GiB and operator-tunable. See
 	// sandbox.ContainerConfig.DiskLimitGB.
 	SandboxDiskGB int
 	// SandboxWarmSize overrides the warm-pool depth (FLEET_SANDBOX_WARM_SIZE).

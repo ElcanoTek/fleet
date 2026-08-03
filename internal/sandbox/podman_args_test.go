@@ -34,7 +34,7 @@ func fakePodman(t *testing.T) (string, string) {
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "fake-podman")
 	logPath := filepath.Join(dir, "argv.log")
-	script := "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\" >> " + logPath + "; done\nprintf 'deadbeefcafe\\n'\nexit 0\n"
+	script := "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\" >> \"" + logPath + "\"; done\nprintf 'deadbeefcafe\\n'\nexit 0\n"
 	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
 		t.Fatalf("write fake podman: %v", err)
 	}
@@ -126,19 +126,83 @@ func TestContainerRunArgs_PinsHardeningAndQuotaFlags(t *testing.T) {
 		}
 	}
 
-	// Value-bearing flags: assert the flag is present without freezing its
-	// value.
-	for _, prefix := range []string{"--memory=", "--memory-swap=", "--pids-limit=", "--cpus=", "--workdir="} {
+	// The workspace must be bind-mounted at the SAME absolute path on both
+	// sides (ADR-0002) and be the default workdir; the userns mapping is what
+	// makes the rootless container's uid 1000 line up with the host owner.
+	for _, want := range []string{
+		fmt.Sprintf("--volume=%s:%s:rw,z", workspace, workspace),
+		fmt.Sprintf("--workdir=%s", workspace),
+		"--userns=keep-id:uid=1000,gid=1000",
+	} {
+		if !hasArg(args, want) {
+			t.Errorf("missing mount/identity flag %q in podman run argv", want)
+		}
+	}
+
+	// Every tmpfs must carry a size=. They are writable surface that neither
+	// disk-quota flag reaches, and diskQuotaArgs' reasoning explicitly leans
+	// on them being bounded — an unbounded tmpfs is a host-memory fill.
+	sawTmpfs := false
+	for _, a := range args {
+		if !strings.HasPrefix(a, "--tmpfs=") {
+			continue
+		}
+		sawTmpfs = true
+		if !strings.Contains(a, "size=") {
+			t.Errorf("tmpfs mount %q has no size= — unbounded tmpfs is writable surface outside both disk-quota flags", a)
+		}
+	}
+	if !sawTmpfs {
+		t.Error("no --tmpfs mounts in podman run argv — the read-only rootfs needs bounded scratch space")
+	}
+
+	// --memory-swap must EQUAL --memory: that equality is the control (it
+	// disables the swap escape, where a container over its memory cap simply
+	// swaps to disk). Asserting only that the flag exists would pass with
+	// --memory-swap=-1, i.e. unlimited swap.
+	memory, okMem := argValue(args, "--memory=")
+	swap, okSwap := argValue(args, "--memory-swap=")
+	switch {
+	case !okMem:
+		t.Error("missing --memory= in podman run argv")
+	case !okSwap:
+		t.Error("missing --memory-swap= in podman run argv")
+	case memory != swap:
+		t.Errorf("--memory-swap=%s != --memory=%s — the swap escape is open", swap, memory)
+	}
+
+	for _, prefix := range []string{"--pids-limit=", "--cpus="} {
 		if !hasArgWithPrefix(args, prefix) {
 			t.Errorf("missing flag %s… in podman run argv", prefix)
 		}
 	}
 
 	// The seccomp profile is passed as a separate value argument
-	// ("--security-opt", "seccomp=<path>"), so match the pair loosely.
-	if !hasArgWithPrefix(args, "seccomp=") {
-		t.Error("missing seccomp profile in podman run argv — the syscall filter layer would be off")
+	// ("--security-opt", "seccomp=<value>"). Matching only the "seccomp="
+	// prefix is NOT enough: resolveSeccompArg returns the literal
+	// "unconfined" when FLEET_SANDBOX_SECCOMP_PROFILE disables the filter, so
+	// a prefix check passes with the syscall filter entirely off. Require a
+	// real profile path.
+	profile, ok := argValue(args, "seccomp=")
+	if !ok {
+		t.Fatal("missing seccomp profile in podman run argv — the syscall filter layer would be off")
 	}
+	if profile == "unconfined" || profile == "none" {
+		t.Errorf("seccomp=%s — the syscall filter is DISABLED; this test must pin a real profile", profile)
+	}
+	if !strings.HasSuffix(profile, ".json") {
+		t.Errorf("seccomp=%q, want a path to the materialized profile", profile)
+	}
+}
+
+// argValue returns the text after prefix for the first matching argument.
+func argValue(args []string, prefix string) (string, bool) {
+	for _, a := range args {
+		if strings.HasPrefix(a, prefix) {
+			return strings.TrimPrefix(a, prefix), true
+		}
+	}
+	return "", false
 }
 
 // TestContainerRunArgs_QuotaOmitsLayerCapWithoutDriverSupport is the companion
