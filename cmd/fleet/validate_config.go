@@ -576,14 +576,6 @@ func checkSandbox(ctx context.Context, cfg *config.Config, bundle *clientconfig.
 		res.Detail = "podman not found in PATH"
 		return res
 	}
-	// A non-default OCI runtime must be resolvable by podman and — for the
-	// hypervisor-backed tiers (kata/krun) — actually able to deliver isolation.
-	// Resolve the runtime the same way the boot path does (env wins, else the
-	// bundle manifest) and run the real fail-closed preflight (#217), which asks
-	// podman which binary it will exec rather than guessing from the name. A
-	// separate PATH lookup here would be both weaker and wrong: it validates
-	// whichever same-named binary is first on PATH, and it reports FAIL for a
-	// perfectly good containers.conf that maps the name to an off-PATH binary.
 	// `podman info` FIRST: the runtime preflight below also shells out to podman,
 	// so a broken rootless setup would otherwise be reported as "could not
 	// resolve --runtime=…", blaming the runtime for a podman problem.
@@ -594,6 +586,14 @@ func checkSandbox(ctx context.Context, cfg *config.Config, bundle *clientconfig.
 		res.Detail = "podman info failed (rootless/daemon setup not accessible): " + err.Error()
 		return res
 	}
+	// A non-default OCI runtime must be resolvable by podman and — for the
+	// hypervisor-backed tiers (kata/krun) — actually able to deliver isolation.
+	// Resolve the runtime the same way the boot path does (env wins, else the
+	// bundle manifest) and run the real fail-closed preflight (#217), which asks
+	// podman which binary it will exec rather than guessing from the name. A
+	// separate PATH lookup here would be both weaker and wrong: it validates
+	// whichever same-named binary is first on PATH, and it reports FAIL for a
+	// perfectly good containers.conf that maps the name to an off-PATH binary.
 	if rt := resolveSandboxRuntime(cfg, bundle); rt != "" {
 		if err := sandbox.PreflightRuntime(ctx, podmanBin, rt); err != nil {
 			res.Status = statusFail

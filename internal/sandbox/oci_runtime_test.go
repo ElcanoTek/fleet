@@ -288,7 +288,13 @@ func fakePodmanResolving(t *testing.T, wantRuntime, resolvePath string) string {
 	case "<empty>":
 		reply = "exit 0\n"
 	default:
-		reply = "printf '%s\\n' \"" + resolvePath + "\"\nexit 0\n"
+		// A stderr line alongside the exit-0 answer: real podman emits warnings
+		// this way (e.g. "User-selected graph driver ... overwritten") while
+		// still succeeding. resolveRuntimePath must read STDOUT ONLY — with
+		// CombinedOutput the warning would be prepended to the path and every
+		// named-runtime boot on such a host would false-abort.
+		reply = "echo 'time=\"...\" level=warning msg=\"a benign podman warning\"' >&2\n" +
+			"printf '%s\\n' \"" + resolvePath + "\"\nexit 0\n"
 	}
 	script := "#!/bin/sh\n" +
 		"case \" $* \" in *\" --runtime=" + wantRuntime + " \"*) ;; *) echo \"fake-podman: expected --runtime=" + wantRuntime + ", got: $*\" >&2; exit 2;; esac\n" +
@@ -421,6 +427,51 @@ func TestPreflightRuntimeKataFailsClosedWithoutKVM(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "/dev/kvm") {
 		t.Errorf("err = %v, want it to name /dev/kvm as the gate", err)
+	}
+}
+
+// TestPreflightRuntimeKrunFailsClosedWithoutKVM is the krun twin of the kata
+// KVM test. Both other krun cases resolve to a MISSING binary and so fail at
+// the binary lookup before ever reaching the KVM gate — leaving the gate the
+// ADR names untested for krun. Here the resolved binary exists and reports
+// +LIBKRUN, so KVM is the only thing left to fail on.
+func TestPreflightRuntimeKrunFailsClosedWithoutKVM(t *testing.T) {
+	if kvmAccessible() == nil {
+		t.Skip("/dev/kvm is usable on this host; the KVM failure path cannot be exercised")
+	}
+	krun := fakeRuntimeBinary(t, "krun", "crun version 1.14 +LIBKRUN")
+	podman := fakePodmanResolving(t, "krun", krun)
+	err := PreflightRuntime(context.Background(), podman, "krun")
+	if err == nil {
+		t.Fatal("PreflightRuntime(krun) without KVM = nil, want fail-closed")
+	}
+	if !strings.Contains(err.Error(), "/dev/kvm") {
+		t.Errorf("err = %v, want it to name /dev/kvm as the gate", err)
+	}
+}
+
+// TestResolveRuntimePathDefaultsPodmanBinary covers the branch EVERY production
+// boot takes: agent.buildSandboxPool passes poolCfg.Container.PodmanBinary,
+// which is structurally "" there (the field is only filled in by
+// applyContainerDefaults, inside NewContainer). Dropping the ""→"podman"
+// fallback would break every named-runtime boot while leaving the rest of this
+// file green, because the other tests all pass an explicit stub path.
+func TestResolveRuntimePathDefaultsPodmanBinary(t *testing.T) {
+	dir := t.TempDir()
+	// A "podman" on PATH that answers like the real one.
+	stub := filepath.Join(dir, "podman")
+	script := "#!/bin/sh\ncase \" $* \" in *\" --runtime=crun \"*) ;; *) exit 2;; esac\nprintf '%s\\n' /usr/bin/crun\nexit 0\n"
+	if err := os.WriteFile(stub, []byte(script), 0o700); err != nil {
+		t.Fatalf("write stub podman: %v", err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	got, err := resolveRuntimePath(context.Background(), "", "crun")
+	if err != nil {
+		t.Fatalf("resolveRuntimePath with an empty podman binary = %v, want the PATH default to be used", err)
+	}
+	if got != "/usr/bin/crun" {
+		t.Errorf("resolved path = %q, want /usr/bin/crun", got)
 	}
 }
 

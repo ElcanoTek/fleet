@@ -261,8 +261,8 @@ func kvmAccessible() error {
 	return nil
 }
 
-// preflightKata fails closed unless the kata runtime binary (bin, either
-// "kata-runtime" on PATH or an explicit path) resolves and /dev/kvm is usable.
+// preflightKata fails closed unless the kata runtime binary (bin — the path
+// PreflightRuntime got back from Podman) resolves and /dev/kvm is usable.
 // `kata-runtime check` is a SOFT signal only: run non-root
 // it skips the privileged/network checks and can exit non-zero for reasons that
 // do not mean Kata is unusable, so its exit code is logged, NOT fail-closed —
@@ -332,9 +332,10 @@ func verifyKrunLibkrun(ctx context.Context, bin string) error {
 	return nil
 }
 
-// lookRuntimeBinary confirms the preflight's probe binary resolves. An absolute
-// path (the path-form runtime) is checked directly; a bare name goes through
-// PATH lookup. Either way a missing/unexecutable binary fails closed.
+// lookRuntimeBinary confirms the preflight's probe binary resolves. Podman
+// reports an absolute path, so in practice the Stat branch is the one that
+// runs; the PATH-lookup branch remains for a direct caller passing a bare name.
+// Either way a missing/unexecutable binary fails closed.
 func lookRuntimeBinary(bin string) error {
 	if filepath.IsAbs(bin) {
 		info, err := os.Stat(bin)
