@@ -267,18 +267,33 @@ func TestKataOverheadMB(t *testing.T) {
 // kata/krun failure cases could only be observed by NOT having those runtimes
 // installed, and the +LIBKRUN hard-fail had no coverage at all.
 
-// fakePodmanResolving writes a stub podman that answers
-// `--runtime=<r> info --format ...` with resolvePath (exit 0), or exits 1 with
-// podman's real "not found" wording when resolvePath is empty.
-func fakePodmanResolving(t *testing.T, resolvePath string) string {
+// fakePodmanResolving writes a stub podman that ASSERTS its argv before
+// answering. The assertion is the point: an argv-blind stub cannot tell
+// whether the preflight passes `--runtime=<name>` at all, so deleting that
+// flag — the entire mechanism this file exists to pin — would leave every test
+// green. wantRuntime is the normalized name the preflight must ask podman
+// about; the stub exits 2 if it is absent or if the format template is not the
+// runtime path.
+//
+// resolvePath is what the stub reports: a path (exit 0), "" for podman's real
+// "not found" failure (exit 1), or the sentinel "<empty>" for the
+// exit-0-with-no-output case, which must also fail closed.
+func fakePodmanResolving(t *testing.T, wantRuntime, resolvePath string) string {
 	t.Helper()
 	bin := filepath.Join(t.TempDir(), "fake-podman")
-	var script string
-	if resolvePath == "" {
-		script = "#!/bin/sh\necho 'Error: default OCI runtime not found: invalid argument' >&2\nexit 1\n"
-	} else {
-		script = "#!/bin/sh\nprintf '%s\\n' \"" + resolvePath + "\"\nexit 0\n"
+	var reply string
+	switch resolvePath {
+	case "":
+		reply = "echo 'Error: default OCI runtime not found: invalid argument' >&2\nexit 1\n"
+	case "<empty>":
+		reply = "exit 0\n"
+	default:
+		reply = "printf '%s\\n' \"" + resolvePath + "\"\nexit 0\n"
 	}
+	script := "#!/bin/sh\n" +
+		"case \" $* \" in *\" --runtime=" + wantRuntime + " \"*) ;; *) echo \"fake-podman: expected --runtime=" + wantRuntime + ", got: $*\" >&2; exit 2;; esac\n" +
+		"case \"$*\" in *OCIRuntime.Path*) ;; *) echo \"fake-podman: expected the runtime-path format template, got: $*\" >&2; exit 2;; esac\n" +
+		reply
 	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
 		t.Fatalf("write fake podman: %v", err)
 	}
@@ -304,7 +319,7 @@ func fakeRuntimeBinary(t *testing.T, name, versionBanner string) string {
 // PATH lookup, then failed at every container creation).
 func TestPreflightRuntimeNoopForPodmanDefault(t *testing.T) {
 	// An unresolvable fake podman proves the empty cases never call it.
-	podman := fakePodmanResolving(t, "")
+	podman := fakePodmanResolving(t, "never-called", "")
 	for _, rt := range []string{"", "  "} {
 		if err := PreflightRuntime(context.Background(), podman, rt); err != nil {
 			t.Errorf("PreflightRuntime(%q) = %v, want nil (podman default needs no preflight)", rt, err)
@@ -316,13 +331,13 @@ func TestPreflightRuntimeSharedKernelRequiresResolution(t *testing.T) {
 	ctx := context.Background()
 	for _, rt := range []string{"runc", "crun", "runsc"} {
 		t.Run(rt+" resolvable", func(t *testing.T) {
-			podman := fakePodmanResolving(t, "/usr/bin/"+rt)
+			podman := fakePodmanResolving(t, rt, "/usr/bin/"+rt)
 			if err := PreflightRuntime(ctx, podman, rt); err != nil {
 				t.Errorf("PreflightRuntime(%q) with a resolvable runtime = %v, want nil", rt, err)
 			}
 		})
 		t.Run(rt+" unresolvable fails closed", func(t *testing.T) {
-			podman := fakePodmanResolving(t, "")
+			podman := fakePodmanResolving(t, rt, "")
 			err := PreflightRuntime(ctx, podman, rt)
 			if err == nil {
 				t.Fatalf("PreflightRuntime(%q) with an unregistered runtime = nil, want a fail-closed error", rt)
@@ -336,18 +351,58 @@ func TestPreflightRuntimeSharedKernelRequiresResolution(t *testing.T) {
 
 // TestPreflightRuntimeProbesTheResolvedBinary is the core regression guard: a
 // containers.conf remap must make the preflight probe the RESOLVED binary, not
-// whatever same-named binary happens to be first on PATH. Here podman resolves
-// krun to a path that does not exist, so the preflight must fail even though
-// the *name* might resolve fine on PATH.
+// whatever same-named binary happens to be first on PATH.
+//
+// The scenario is synthetic — real podman execs `<bin> --version` during
+// `info`, so it would not return success for a nonexistent path — but that is
+// exactly what makes it a clean discriminator: the error can only name this
+// path if the preflight used podman's answer instead of its own guess.
 func TestPreflightRuntimeProbesTheResolvedBinary(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "definitely-not-installed")
-	podman := fakePodmanResolving(t, missing)
+	podman := fakePodmanResolving(t, "krun", missing)
 	err := PreflightRuntime(context.Background(), podman, "krun")
 	if err == nil {
 		t.Fatal("PreflightRuntime(krun) = nil when podman resolves it to a missing binary, want fail-closed")
 	}
 	if !strings.Contains(err.Error(), missing) {
 		t.Errorf("err = %v, want it to name the RESOLVED binary %q — probing the PATH guess instead is the bug this guards", err, missing)
+	}
+}
+
+// TestPreflightRuntimeEmptyResolutionFailsClosed: podman exiting 0 but naming
+// no binary must NOT be read as success. Without this, dropping the empty-path
+// guard in resolveRuntimePath ships green and the preflight goes on to probe
+// "".
+func TestPreflightRuntimeEmptyResolutionFailsClosed(t *testing.T) {
+	podman := fakePodmanResolving(t, "crun", "<empty>")
+	err := PreflightRuntime(context.Background(), podman, "crun")
+	if err == nil {
+		t.Fatal("PreflightRuntime with an empty resolved path = nil, want fail-closed")
+	}
+	if !strings.Contains(err.Error(), "empty binary path") {
+		t.Errorf("err = %v, want it to name the empty resolution", err)
+	}
+}
+
+// TestPreflightRuntimeAsksPodmanForTheNormalizedName: the operator-facing name
+// is "libkrun" but podman's registered runtime is "krun", so the preflight must
+// ask podman about the NORMALIZED name. Passing the raw value would make
+// podman reject a perfectly good libkrun host. The fake podman asserts the argv,
+// so this fails if normalization is dropped.
+func TestPreflightRuntimeAsksPodmanForTheNormalizedName(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "absent-krun")
+	podman := fakePodmanResolving(t, "krun", missing)
+	err := PreflightRuntime(context.Background(), podman, "libkrun")
+	if err == nil {
+		t.Fatal("PreflightRuntime(libkrun) = nil, want the missing-binary failure")
+	}
+	// A wrong-argv stub exits 2 with "expected --runtime=krun"; reaching the
+	// binary probe instead proves the normalized name was used.
+	if strings.Contains(err.Error(), "expected --runtime=") {
+		t.Fatalf("preflight asked podman for the RAW name, not the normalized one: %v", err)
+	}
+	if !strings.Contains(err.Error(), missing) {
+		t.Errorf("err = %v, want the resolved binary %q named", err, missing)
 	}
 }
 
@@ -359,7 +414,7 @@ func TestPreflightRuntimeKataFailsClosedWithoutKVM(t *testing.T) {
 		t.Skip("/dev/kvm is usable on this host; the KVM failure path cannot be exercised")
 	}
 	kata := fakeRuntimeBinary(t, "kata-runtime", "kata-runtime : 3.2.0")
-	podman := fakePodmanResolving(t, kata)
+	podman := fakePodmanResolving(t, "kata", kata)
 	err := PreflightRuntime(context.Background(), podman, "kata")
 	if err == nil {
 		t.Fatal("PreflightRuntime(kata) without KVM = nil, want fail-closed")

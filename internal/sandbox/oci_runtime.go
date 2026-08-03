@@ -29,8 +29,9 @@ import (
 // (ADR-0002) — an escape needs a hypervisor CVE, not a container-escape. The
 // preflight FAILS CLOSED: a kata/krun runtime whose KVM or runtime binary is
 // missing aborts boot rather than silently degrading to a shared-kernel
-// container (the no-degrade-to-host invariant — ADR-0010). runc/crun/runsc and
-// the empty default share the host kernel by design and need no preflight.
+// container (the no-degrade-to-host invariant — ADR-0010). Any NAMED runtime,
+// hypervisor-backed or not, must also be resolvable by Podman; only the empty
+// default (Podman's own choice) skips the preflight entirely.
 
 const (
 	runtimeKata = "kata"
@@ -219,13 +220,13 @@ func PreflightRuntime(ctx context.Context, podmanBin, runtime string) error {
 		return nil
 	}
 	kind := runtimeKind(runtime)
-	label := kind
-	if label == "" {
-		label = "sandbox runtime"
-	}
+	// A resolution failure is a podman/containers.conf problem, so it is NOT
+	// labelled "kata preflight:" / "krun preflight:" — those prefixes belong to
+	// the hardware gates below and would misdirect an operator whose actual
+	// problem is a broken rootless podman.
 	bin, err := resolveRuntimePath(ctx, podmanBin, normalized)
 	if err != nil {
-		return fmt.Errorf("%s preflight: %w", label, err)
+		return fmt.Errorf("sandbox runtime preflight: %w", err)
 	}
 	// Surface a containers.conf remap rather than silently preflighting a
 	// different binary than an operator reading the config would expect.

@@ -103,6 +103,13 @@ Three supporting decisions make it safe:
 - Operators gain a hypervisor-isolation posture by setting one manifest field,
   at the cost of provisioning `/dev/kvm` + a microVM runtime and tolerating
   slower (~2 s) cold container boots — mitigated by raising the warm-pool depth.
+- Naming **any** runtime now adds a boot-time dependency on a working Podman:
+  a `sandbox.runtime: runsc` deployment aborts startup if `podman info` cannot
+  resolve the name. That is a real widening of the fail-closed surface beyond
+  kata/krun, taken deliberately — a runtime Podman cannot resolve would fail at
+  every container creation anyway, so failing at boot with the reason is
+  strictly more useful. Leaving the runtime unset keeps the previous behavior
+  (no preflight, no boot-time Podman call).
 - The preflight makes a misconfigured kata/krun host **fail loudly at boot**
   instead of running silently degraded. The trade is that a host whose KVM the
   fleet user can't open will refuse to start — which is the correct outcome for
