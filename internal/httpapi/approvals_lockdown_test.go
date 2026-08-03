@@ -136,13 +136,20 @@ func TestTakeStagedBashSandboxHonorsFleetWideMode(t *testing.T) {
 		}
 	})
 
-	t.Run("per-conversation lockdown still wins over an open fleet-wide mode", func(t *testing.T) {
-		rt := &recordingBashTaker{mode: sandbox.NetworkModeOpen}
-		if _, _, err := takeStagedBashSandbox(context.Background(), rt, true); err != nil {
-			t.Fatalf("takeStagedBashSandbox: %v", err)
-		}
-		if len(rt.took) != 1 || rt.took[0] != "TakeContainer" {
-			t.Fatalf("lockdown conversation take = %v, want [TakeContainer] regardless of the fleet-wide mode", rt.took)
+	// The seal must be checked BEFORE the fleet-wide switch, under every
+	// mode. The allowlisted case is the one that matters: hoisting the switch
+	// above the lockdown branch would silently downgrade a sealed
+	// conversation from --network=none to proxied-with-network, and a test
+	// that only covers open mode would stay green through that refactor.
+	t.Run("per-conversation lockdown wins over every fleet-wide mode", func(t *testing.T) {
+		for _, mode := range []string{"", sandbox.NetworkModeOpen, sandbox.NetworkModeAllowlisted, sandbox.NetworkModeLockdown} {
+			rt := &recordingBashTaker{mode: mode, allowlist: []string{"api.example.com"}}
+			if _, _, err := takeStagedBashSandbox(context.Background(), rt, true); err != nil {
+				t.Fatalf("takeStagedBashSandbox(mode=%q): %v", mode, err)
+			}
+			if len(rt.took) != 1 || rt.took[0] != "TakeContainer" {
+				t.Fatalf("lockdown conversation on a %q fleet took %v, want [TakeContainer] — the seal must precede the fleet-wide switch", mode, rt.took)
+			}
 		}
 	})
 }

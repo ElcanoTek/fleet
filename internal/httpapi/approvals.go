@@ -1391,11 +1391,15 @@ type stagedBashTaker interface {
 //     from a non-lockdown conversation took an unconditional warm, fully-open
 //     container — so a fleet-wide `lockdown` left approvals as an open-egress
 //     hole in an otherwise sealed deployment, and `allowlisted` let them skip
-//     the proxy entirely. These branches mirror takeTurnSandboxFrom exactly,
-//     including its degrade to the host take on ErrContainerUnavailable: that
-//     signal means there is no container backend at all (a test/dev ModeHost
-//     pool — a release build has no host executor to fall back to, #159), so
-//     there is nothing to seal.
+//     the proxy entirely. These branches mirror takeTurnSandboxFrom's
+//     fleet-wide branches, including their degrade to the host take on
+//     ErrContainerUnavailable: that signal means there is no container
+//     backend at all (a test/dev ModeHost pool — a release build has no host
+//     executor to fall back to, #159), so there is nothing to seal. Two
+//     deliberate deviations from the turn path, both stricter or
+//     inapplicable: the per-conversation seal above never degrades, and there
+//     is no persistent-REPL borrow to preempt — approved bash has always
+//     taken a fresh container, never the conversation's long-lived kernel.
 func takeStagedBashSandbox(ctx context.Context, pool stagedBashTaker, lockdown bool) (*sandbox.Sandbox, func(), error) {
 	if lockdown {
 		sb, cleanup, err := pool.TakeContainer(ctx)

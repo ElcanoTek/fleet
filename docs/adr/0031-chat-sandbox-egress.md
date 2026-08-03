@@ -51,11 +51,19 @@ lockdown seal (#562) but not `FLEET_DEFAULT_NETWORK_MODE`, so this ADR's
 a non-lockdown conversation still ran with open slirp4netns egress, and under
 `allowlisted` it bypassed the proxy entirely — reachable by staging a risky
 command (the interactive gates stage `git push`, package installs, …) and
-having a human click Approve. It now mirrors `takeTurnSandboxFrom` exactly,
-including the `ErrContainerUnavailable` degrade to the host take, while
-keeping the per-conversation seal's stricter no-degrade rule. With that, all
-three sandbox takes — interactive turn, scheduled task, approved bash — honor
-the setting.
+having a human click Approve. It now mirrors `takeTurnSandboxFrom`'s
+fleet-wide branches, including the `ErrContainerUnavailable` degrade to the
+host take, while keeping the per-conversation seal's stricter no-degrade rule
+(there is no persistent-REPL borrow to preempt — approved bash has always
+taken a fresh container). With that, all three sandbox takes — interactive
+turn, scheduled task, approved bash — honor the setting. One dimension of an
+`allowlisted` approved-bash container genuinely widens rather than narrows:
+`networkArgs` emits `slirp4netns:allow_host_loopback=true` for allowlisted and
+nothing for open, so it gains host-loopback reachability the open warm
+container did not have. The marginal exposure is nil — ADR-0031 already grants
+that posture to every ordinary chat turn on the same deployment, so no
+approval click is needed to reach it — but see ADR-0012's "strictly more
+restrictive than open" wording, which is imprecise in exactly this dimension.
 
 ## Consequences
 
