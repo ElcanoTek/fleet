@@ -205,6 +205,21 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **Restaurant-style model cost indicators ($ … $$$$):** both model pickers —
+  the chat composer's listbox (and its collapsed model chip) and the operations
+  center task form's primary/fallback pickers — now show a four-glyph price tier
+  per model, derived from the OpenRouter catalog's per-token prices blended
+  3 prompt : 1 completion (the ratio that matches fleet's transcript-heavy agent
+  loops). Hover/screen-reader text gives the blended `$/M tokens`. Models with no
+  published pricing (workspace providers, half-typed custom slugs) show no
+  indicator rather than a guessed one, and the tier is a comparison aid only —
+  spend is still governed solely by the per-run cost ceilings, with no price
+  ceiling on model selection. No new network calls: `/api/model-catalog` gained
+  `price_prompt` and `/api/model-rankings` gained both prices, additively, from
+  the already-cached catalog. Catalog prices are also joined back onto the two
+  pinned "recommended" rows, which dedup had been leaving price-less. See
+  [`docs/MODEL-COST-INDICATORS.md`](docs/MODEL-COST-INDICATORS.md).
+
 - **Production child-owned remote MCP scopes:** interactive and scheduled run
   drivers now send only user identity and public server-name filters to
   `fleet mcp-broker`; the child owns token lookup/refresh, SSRF-guarded HTTP MCP

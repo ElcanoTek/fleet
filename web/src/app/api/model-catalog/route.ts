@@ -21,9 +21,12 @@ export async function GET() {
       name: entry.name,
       context_length: entry.contextLength,
       created: entry.created,
-      // Completion price per token — the task-form picker uses it as a
-      // quality-proxy tiebreak when ranking search matches.
+      // Per-token prices. The task-form picker uses the completion price as a
+      // quality-proxy tiebreak when ranking search matches, and both sides
+      // feed the restaurant-style "$ … $$$$" cost indicator (shared/lib/
+      // modelCost.ts blends them 3 prompt : 1 completion).
       price_completion: entry.completionPerToken,
+      price_prompt: entry.promptPerToken,
     }));
     return NextResponse.json({
       models,

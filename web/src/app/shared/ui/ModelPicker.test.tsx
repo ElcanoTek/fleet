@@ -57,6 +57,47 @@ describe("ModelPicker", () => {
     expect(input.value).toBe("z-ai/glm-5.2");
   });
 
+  it("renders the restaurant-style cost tier for priced catalog models", async () => {
+    // Seed-only fallback carries no prices, so this case serves a catalog with
+    // pricing: $3/M prompt + $15/M completion blends (3:1) to $6/M → "$$$".
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async (url: string) => {
+        if (String(url).includes("/api/model-catalog")) {
+          return {
+            ok: true,
+            json: async () => ({
+              models: [
+                {
+                  slug: "anthropic/claude-sonnet-4.5",
+                  name: "Anthropic: Claude Sonnet 4.5",
+                  price_prompt: 0.000003,
+                  price_completion: 0.000015,
+                },
+              ],
+            }),
+          };
+        }
+        return { ok: true, json: async () => ({ models: [], providers: [] }) };
+      }),
+    );
+    render(<Harness />);
+    fireEvent.focus(screen.getByRole("combobox"));
+    const indicator = await waitFor(() =>
+      screen.getByLabelText(/premium cost — about \$6\.00\/M tokens blended/),
+    );
+    expect(indicator).toHaveAttribute("data-cost-tier", "3");
+    expect(indicator).toHaveTextContent("$$$$");
+  });
+
+  it("omits the cost tier for models with no known pricing", async () => {
+    // Seed fallback (fetch rejects) — no prices anywhere, so no glyphs.
+    render(<Harness />);
+    fireEvent.focus(screen.getByRole("combobox"));
+    await waitFor(() => screen.getByText("Z.AI: GLM 5.2"));
+    expect(document.querySelectorAll(".model-cost")).toHaveLength(0);
+  });
+
   it("shows the 'type a custom slug' empty state for no matches", async () => {
     render(<Harness />);
     const input = screen.getByRole("combobox");
