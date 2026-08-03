@@ -3,7 +3,9 @@ package sandbox
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -224,4 +226,85 @@ func TestContainerDiskQuotaCapsWorkspaceOnStorageOptHosts(t *testing.T) {
 	if res.ExitCode == 0 {
 		t.Errorf("dd past the quota into the WORKSPACE succeeded (exit 0) on a storage-opt host — the bind mount is uncapped. stdout=%q stderr=%q", res.Stdout, res.Stderr)
 	}
+}
+
+// TestProbeCommandUnavailable pins the storage probe's error classification.
+//
+// The probe runs `--entrypoint=/usr/bin/true`, which is an assumption about the
+// rootfs of a CLIENT-BUNDLE artifact — a busybox-based bundle has /bin/true. But
+// podman validates --storage-opt at container-CREATE time and only then hands
+// off to the runtime to exec, so a failure to exec proves the quota was
+// ACCEPTED. Verified empirically: on an ext4 host, `--storage-opt=size=1g` with
+// a nonexistent entrypoint reports the QUOTA error, not the exec error.
+//
+// The classification must stay narrow in the fail-closed direction: a false
+// positive means reporting quota-capable on a driver that is not, after which
+// `--storage-opt=size` is passed to every real container and every start fails —
+// worse than losing the writable-layer quota.
+func TestProbeCommandUnavailable(t *testing.T) {
+	// Real podman/crun output, captured on this host.
+	execFailures := []string{
+		"Error: crun: executable file `/usr/bin/true` not found: No such file or directory: OCI runtime attempted to invoke a command that was not found",
+		`Error: unable to start container: executable file not found in $PATH`,
+	}
+	for _, s := range execFailures {
+		if !probeCommandUnavailable(s) {
+			t.Errorf("probeCommandUnavailable(%.60q…) = false, want true — the quota was accepted, only the probe command was missing", s)
+		}
+	}
+
+	// Must NOT be classified as an exec failure: these are real reasons to fall
+	// back to the per-file-only quota, and misreading them breaks every container.
+	quotaAndOtherFailures := []string{
+		"Error: configure storage: storage option overlay.size and overlay.inodes only supported for backingFS XFS. Found extfs",
+		`Error: short-name resolution enforced but cannot prompt without a TTY`,
+		"Error: cannot connect to the podman socket: no such file or directory",
+		"Error: initializing source docker://img: reading manifest: manifest unknown",
+		"",
+	}
+	for _, s := range quotaAndOtherFailures {
+		if probeCommandUnavailable(s) {
+			t.Errorf("probeCommandUnavailable(%.60q…) = true, want false — this must NOT be read as quota-accepted", s)
+		}
+	}
+}
+
+// fakePodmanStorageProbe writes a stub podman that ASSERTS it was asked to run a
+// container with the 1g storage quota, then fails with the given stderr. The argv
+// assertion keeps the stub honest: a probe that stopped passing --storage-opt
+// would be testing nothing.
+func fakePodmanStorageProbe(t *testing.T, stderrBytes string) string {
+	t.Helper()
+	bin := filepath.Join(t.TempDir(), "fake-podman")
+	script := "#!/bin/sh\n" +
+		"case \" $* \" in *\" --storage-opt=size=1g \"*) ;; *) echo \"fake-podman: expected --storage-opt=size=1g, got: $*\" >&2; exit 90;; esac\n" +
+		"cat >&2 <<'FAKE_STDERR'\n" + stderrBytes + "\nFAKE_STDERR\n" +
+		"exit 125\n"
+	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
+		t.Fatalf("write fake podman: %v", err)
+	}
+	return bin
+}
+
+// TestProbeStorageOptSupport_UsesTheClassification pins the WIRING, not just the
+// classifier: ProbeStorageOptSupport must actually consult
+// probeCommandUnavailable. Without this, reverting the carve-out (so an exec
+// failure falls through to `return false`) leaves the classifier's own tests
+// green while a busybox-based bundle silently loses the writable-layer quota
+// again — the very bug this change fixes.
+func TestProbeStorageOptSupport_UsesTheClassification(t *testing.T) {
+	t.Run("exec failure means the quota was accepted", func(t *testing.T) {
+		podman := fakePodmanStorageProbe(t,
+			"Error: crun: executable file `/usr/bin/true` not found: No such file or directory: OCI runtime attempted to invoke a command that was not found")
+		if !ProbeStorageOptSupport(context.Background(), podman, "localhost/busybox-bundle:test") {
+			t.Error("a probe whose COMMAND was missing reported no quota support — podman validates --storage-opt before the exec, so the quota was accepted")
+		}
+	})
+	t.Run("a real quota rejection still reports no support", func(t *testing.T) {
+		podman := fakePodmanStorageProbe(t,
+			"Error: configure storage: storage option overlay.size and overlay.inodes only supported for backingFS XFS. Found extfs")
+		if ProbeStorageOptSupport(context.Background(), podman, "localhost/img:test") {
+			t.Error("a driver that rejected the quota was reported as quota-capable — every real container start would then fail")
+		}
+	})
 }

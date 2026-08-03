@@ -19,6 +19,19 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- The `--storage-opt size` support probe assumed `/usr/bin/true` exists in the
+  sandbox image — a **client-bundle artifact** free to change its base, where a
+  busybox-based bundle has `/bin/true`. Such a bundle failed the probe on every
+  host, so the writable-layer disk quota was silently dropped with only a log
+  line (the per-file `--ulimit fsize` cap still applied, so this was capability
+  loss, not an unbounded workspace). Podman validates `--storage-opt` at
+  container-create time and only then execs the command — verified on an ext4
+  host, where a nonexistent entrypoint still reports the *quota* error — so a
+  failure to exec now counts as quota-accepted. The classification is
+  deliberately narrow in the fail-closed direction: misreading a real quota
+  rejection as an exec failure would pass `--storage-opt` to every container and
+  break every start, which is worse than losing the layer quota.
+
 - **`FLEET_DEFAULT_NETWORK_MODE=allowlisted` was entirely non-functional on a
   stock modern host.** Allowlisted egress emits
   `--network=slirp4netns:allow_host_loopback=true` to reach the host-bound
