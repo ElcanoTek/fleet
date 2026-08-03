@@ -65,10 +65,21 @@ func TestApplyContainerDefaults_DiskLimit(t *testing.T) {
 }
 
 // TestProbeStorageOptSupport_NoImage returns false (safe fallback) without an
-// image — no podman invocation, so it runs anywhere.
+// image, WITHOUT invoking podman.
+//
+// The fake podman here exits 0, i.e. it would report quota support if it were
+// called. That is what makes the guard load-bearing: passing the real "podman"
+// name would also yield false (podman errors on an empty image), so the test
+// would pass with the guard deleted and prove nothing.
 func TestProbeStorageOptSupport_NoImage(t *testing.T) {
-	if ProbeStorageOptSupport(context.Background(), "podman", "") {
-		t.Error("probe with empty image should report false (use the ulimit fallback)")
+	bin := filepath.Join(t.TempDir(), "fake-podman")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatalf("write fake podman: %v", err)
+	}
+	for _, image := range []string{"", "   "} {
+		if ProbeStorageOptSupport(context.Background(), bin, image) {
+			t.Errorf("probe with image %q reported quota support — it must short-circuit to false without invoking podman", image)
+		}
 	}
 }
 
@@ -242,14 +253,18 @@ func TestContainerDiskQuotaCapsWorkspaceOnStorageOptHosts(t *testing.T) {
 // `--storage-opt=size` is passed to every real container and every start fails —
 // worse than losing the writable-layer quota.
 func TestProbeCommandUnavailable(t *testing.T) {
-	// Real podman/crun output, captured on this host.
-	execFailures := []string{
-		"Error: crun: executable file `/usr/bin/true` not found: No such file or directory: OCI runtime attempted to invoke a command that was not found",
-		`Error: unable to start container: executable file not found in $PATH`,
+	// Real podman/crun output captured on this host, plus one case per marker in
+	// ISOLATION. The full crun message happens to contain two of the three
+	// markers, so a combined-only fixture would let either be deleted silently.
+	execFailures := map[string]string{
+		"real crun message (matches two markers)": "Error: crun: executable file `/usr/bin/true` not found: No such file or directory: OCI runtime attempted to invoke a command that was not found",
+		"only the invoke-a-command marker":        "Error: OCI runtime attempted to invoke a command that was not found",
+		"only the backtick marker":                "Error: crun: executable file `/usr/bin/true` not found: No such file or directory",
+		"only the not-found-in-PATH marker":       `Error: unable to start container: executable file not found in $PATH`,
 	}
-	for _, s := range execFailures {
+	for name, s := range execFailures {
 		if !probeCommandUnavailable(s) {
-			t.Errorf("probeCommandUnavailable(%.60q…) = false, want true — the quota was accepted, only the probe command was missing", s)
+			t.Errorf("%s: probeCommandUnavailable = false, want true — the quota was accepted, only the probe command was missing (%.80q)", name, s)
 		}
 	}
 
