@@ -3,7 +3,9 @@ package sandbox
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -63,10 +65,21 @@ func TestApplyContainerDefaults_DiskLimit(t *testing.T) {
 }
 
 // TestProbeStorageOptSupport_NoImage returns false (safe fallback) without an
-// image — no podman invocation, so it runs anywhere.
+// image, WITHOUT invoking podman.
+//
+// The fake podman here exits 0, i.e. it would report quota support if it were
+// called. That is what makes the guard load-bearing: passing the real "podman"
+// name would also yield false (podman errors on an empty image), so the test
+// would pass with the guard deleted and prove nothing.
 func TestProbeStorageOptSupport_NoImage(t *testing.T) {
-	if ProbeStorageOptSupport(context.Background(), "podman", "") {
-		t.Error("probe with empty image should report false (use the ulimit fallback)")
+	bin := filepath.Join(t.TempDir(), "fake-podman")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatalf("write fake podman: %v", err)
+	}
+	for _, image := range []string{"", "   "} {
+		if ProbeStorageOptSupport(context.Background(), bin, image) {
+			t.Errorf("probe with image %q reported quota support — it must short-circuit to false without invoking podman", image)
+		}
 	}
 }
 
@@ -224,4 +237,99 @@ func TestContainerDiskQuotaCapsWorkspaceOnStorageOptHosts(t *testing.T) {
 	if res.ExitCode == 0 {
 		t.Errorf("dd past the quota into the WORKSPACE succeeded (exit 0) on a storage-opt host — the bind mount is uncapped. stdout=%q stderr=%q", res.Stdout, res.Stderr)
 	}
+}
+
+// TestProbeCommandUnavailable pins the storage probe's error classification.
+//
+// The probe runs `--entrypoint=/usr/bin/true`, which is an assumption about the
+// rootfs of a CLIENT-BUNDLE artifact — a busybox-based bundle has /bin/true. But
+// podman validates --storage-opt at container-CREATE time and only then hands
+// off to the runtime to exec, so a failure to exec proves the quota was
+// ACCEPTED. Verified empirically: on an ext4 host, `--storage-opt=size=1g` with
+// a nonexistent entrypoint reports the QUOTA error, not the exec error.
+//
+// The classification must stay narrow in the fail-closed direction: a false
+// positive means reporting quota-capable on a driver that is not, after which
+// `--storage-opt=size` is passed to every real container and every start fails —
+// worse than losing the writable-layer quota.
+func TestProbeCommandUnavailable(t *testing.T) {
+	// Real podman/crun output captured on this host, plus one case per marker in
+	// ISOLATION. The full crun message happens to contain two of the three
+	// markers, so a combined-only fixture would let either be deleted silently.
+	execFailures := map[string]string{
+		// Verbatim from crun 1.28 on this host.
+		"real crun message (matches two markers)": "Error: crun: executable file `/usr/bin/true` not found: No such file or directory: OCI runtime attempted to invoke a command that was not found",
+		// Hand-derived from the above to isolate one marker each, so removing
+		// either is caught rather than covered by its sibling.
+		"only the invoke-a-command marker": "Error: OCI runtime attempted to invoke a command that was not found",
+		"only the backtick marker":         "Error: crun: executable file `/usr/bin/true` not found: No such file or directory",
+		// NOT emitted by this host's crun — this is the runc-family phrasing.
+		// It earns its marker because the runtime is operator-selectable
+		// (runc/kata/krun/runsc), so fleet can be running a runtime that words
+		// it this way.
+		"only the not-found-in-PATH marker (runc-family phrasing)": `Error: unable to start container: executable file not found in $PATH`,
+		// Mixed case: the classifier lower-cases before matching, and nothing
+		// else here would notice if that normalization were dropped.
+		"upper-cased variant": "ERROR: OCI RUNTIME ATTEMPTED TO INVOKE A COMMAND THAT WAS NOT FOUND",
+	}
+	for name, s := range execFailures {
+		if !probeCommandUnavailable(s) {
+			t.Errorf("%s: probeCommandUnavailable = false, want true — the quota was accepted, only the probe command was missing (%.80q)", name, s)
+		}
+	}
+
+	// Must NOT be classified as an exec failure: these are real reasons to fall
+	// back to the per-file-only quota, and misreading them breaks every container.
+	quotaAndOtherFailures := []string{
+		"Error: configure storage: storage option overlay.size and overlay.inodes only supported for backingFS XFS. Found extfs",
+		`Error: short-name resolution enforced but cannot prompt without a TTY`,
+		"Error: cannot connect to the podman socket: no such file or directory",
+		"Error: initializing source docker://img: reading manifest: manifest unknown",
+		"",
+	}
+	for _, s := range quotaAndOtherFailures {
+		if probeCommandUnavailable(s) {
+			t.Errorf("probeCommandUnavailable(%.60q…) = true, want false — this must NOT be read as quota-accepted", s)
+		}
+	}
+}
+
+// fakePodmanStorageProbe writes a stub podman that ASSERTS it was asked to run a
+// container with the 1g storage quota, then fails with the given stderr. The argv
+// assertion keeps the stub honest: a probe that stopped passing --storage-opt
+// would be testing nothing.
+func fakePodmanStorageProbe(t *testing.T, stderrBytes string) string {
+	t.Helper()
+	bin := filepath.Join(t.TempDir(), "fake-podman")
+	script := "#!/bin/sh\n" +
+		"case \" $* \" in *\" --storage-opt=size=1g \"*) ;; *) echo \"fake-podman: expected --storage-opt=size=1g, got: $*\" >&2; exit 90;; esac\n" +
+		"cat >&2 <<'FAKE_STDERR'\n" + stderrBytes + "\nFAKE_STDERR\n" +
+		"exit 125\n"
+	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
+		t.Fatalf("write fake podman: %v", err)
+	}
+	return bin
+}
+
+// TestProbeStorageOptSupport_UsesTheClassification pins the WIRING, not just the
+// classifier: ProbeStorageOptSupport must actually consult
+// probeCommandUnavailable. Without this, reverting the carve-out (so an exec
+// failure falls through to `return false`) leaves the classifier's own tests
+// green while a busybox-based bundle silently loses the writable-layer quota
+// again — the very bug this change fixes.
+func TestProbeStorageOptSupport_UsesTheClassification(t *testing.T) {
+	t.Run("exec failure means the quota was accepted", func(t *testing.T) {
+		podman := fakePodmanStorageProbe(t,
+			"Error: crun: executable file `/usr/bin/true` not found: No such file or directory: OCI runtime attempted to invoke a command that was not found")
+		if !ProbeStorageOptSupport(context.Background(), podman, "localhost/busybox-bundle:test") {
+			t.Error("a probe whose COMMAND was missing reported no quota support — podman validates --storage-opt before the exec, so the quota was accepted")
+		}
+	})
+	t.Run("a real quota rejection still reports no support", func(t *testing.T) {
+		podman := fakePodmanStorageProbe(t,
+			"Error: configure storage: storage option overlay.size and overlay.inodes only supported for backingFS XFS. Found extfs")
+		if ProbeStorageOptSupport(context.Background(), podman, "localhost/img:test") {
+			t.Error("a driver that rejected the quota was reported as quota-capable — every real container start would then fail")
+		}
+	})
 }
