@@ -175,8 +175,8 @@ type ContainerConfig struct {
 	// container a dedicated KVM VM; "runsc" selects gVisor. The friendly name
 	// "libkrun" is normalized to "krun" upstream (see NormalizeRuntime), and
 	// kata/krun are fail-closed preflighted at boot (PreflightRuntime). When
-	// Runtime == "kata"
-	// the memory ceiling is raised by the guest overhead (applyKataMemoryOverhead).
+	// Runtime == "kata" the memory ceiling is raised by the guest overhead
+	// (applyKataMemoryOverhead).
 	Runtime string
 
 	// NoNetwork forces `--network=none` so the container gets a private,
