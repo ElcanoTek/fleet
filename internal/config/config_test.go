@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -1373,4 +1374,28 @@ func TestLoadEnvFileExportPrefix(t *testing.T) {
 		t.Errorf("export-prefixed key = %q, want %q", val, "exported-value")
 	}
 	t.Cleanup(func() { os.Unsetenv("TAVILY_API_KEY") })
+}
+
+// EnvAliases must return the exact spelling family lookupFleet resolves —
+// callers (the MCP broker's env-separation gate) rely on it covering every
+// legacy spelling of a canonical name and on non-prefixed names having none.
+func TestEnvAliases(t *testing.T) {
+	tests := []struct {
+		name string
+		want []string
+	}{
+		{"FLEET_SERVER_TOKEN", []string{"FLEET_SERVER_TOKEN", "CHAT_SERVER_TOKEN", "CUTLASS_SERVER_TOKEN"}},
+		{"CHAT_SERVER_TOKEN", []string{"FLEET_SERVER_TOKEN", "CHAT_SERVER_TOKEN", "CUTLASS_SERVER_TOKEN"}},
+		{"CUTLASS_TASK_MODEL", []string{"FLEET_TASK_MODEL", "CHAT_TASK_MODEL", "CUTLASS_TASK_MODEL"}},
+		{"OPENROUTER_API_KEY", []string{"OPENROUTER_API_KEY"}},
+		{"HOME", []string{"HOME"}},
+		{"http_proxy", []string{"http_proxy"}},
+		{"FLEET_", []string{"FLEET_"}},
+		{"CHATTY_KEY", []string{"CHATTY_KEY"}},
+	}
+	for _, tt := range tests {
+		if got := EnvAliases(tt.name); !slices.Equal(got, tt.want) {
+			t.Errorf("EnvAliases(%q) = %v, want %v", tt.name, got, tt.want)
+		}
+	}
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"reflect"
@@ -234,7 +235,16 @@ func TestValidateConnectorParentEnvSeparation_AllowsCutlassConnectorWireKeys(t *
 }
 
 func TestValidateConnectorParentEnvSeparation_RejectsParentOwnedCutlassNames(t *testing.T) {
-	for _, name := range []string{"CUTLASS_TASK_MODEL", "CUTLASS_LOG_FILE", "CUTLASS_RETRY_MAX_ATTEMPTS"} {
+	for _, name := range []string{
+		"CUTLASS_TASK_MODEL", "CUTLASS_LOG_FILE", "CUTLASS_RETRY_MAX_ATTEMPTS",
+		// Legacy spellings the parent resolves lazily after broker boot: the
+		// shared server auth secret plus the per-run lookups through the
+		// alias machinery (config.lookupFleet, agentcore.EnvPrefix).
+		"CUTLASS_SERVER_TOKEN",
+		"CUTLASS_OPENROUTER_BASE_URL", "CUTLASS_MODEL_CACHE_TTL_MINUTES",
+		"CUTLASS_CONTEXT_PRESSURE_WARN_THRESHOLD", "CUTLASS_CONTEXT_COMPACTION_THRESHOLD",
+		"CUTLASS_SCHEDULED_AUTO_COMPACT", "CUTLASS_MAX_ITERATIONS",
+	} {
 		t.Run(name, func(t *testing.T) {
 			bundle, err := clientconfig.Load(mcpTestBundle(t, `mcp_servers:
   - name: demo
@@ -251,6 +261,51 @@ func TestValidateConnectorParentEnvSeparation_RejectsParentOwnedCutlassNames(t *
 				t.Fatalf("overlap error = %v, want name-only %s refusal", err, name)
 			}
 		})
+	}
+}
+
+// Walks the alias machinery over the whole parent-owned enumeration: every
+// spelling config's FLEET_/CHAT_/CUTLASS_ prefix aliasing resolves for a
+// parent-owned name must be refused, so a name added to the enumeration later
+// cannot silently escape in one of its legacy spellings.
+func TestValidateConnectorParentEnvSeparation_RefusesEveryAliasSpelling(t *testing.T) {
+	spellings := map[string]bool{}
+	var refs strings.Builder
+	for _, name := range parentOwnedRuntimeEnvNames(nil) {
+		for _, spelling := range config.EnvAliases(name) {
+			if spellings[spelling] {
+				continue
+			}
+			spellings[spelling] = true
+			fmt.Fprintf(&refs, "      WIRE_KEY_%d: \"${%s}\"\n", len(spellings), spelling)
+		}
+	}
+	bundle, err := clientconfig.Load(mcpTestBundle(t, `mcp_servers:
+  - name: demo
+    type: stdio
+    command: /bin/true
+    always: true
+    env:
+`+refs.String()))
+	if err != nil {
+		t.Fatalf("load bundle: %v", err)
+	}
+	err = validateConnectorParentEnvSeparation(bundle)
+	if err == nil {
+		t.Fatal("bundle claiming every parent-owned spelling validated")
+	}
+	_, list, ok := strings.Cut(err.Error(), ": ")
+	if !ok {
+		t.Fatalf("overlap error = %v, want ': '-separated name list", err)
+	}
+	refused := map[string]bool{}
+	for _, name := range strings.Split(list, ", ") {
+		refused[name] = true
+	}
+	for spelling := range spellings {
+		if !refused[spelling] {
+			t.Errorf("alias spelling %s of a parent-owned name was not refused", spelling)
+		}
 	}
 }
 

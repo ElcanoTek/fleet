@@ -132,6 +132,20 @@ prior versions are listed because none have shipped.
   server. The allowlist now travels with the broker's public inventory, and
   registered names resolve back to their manifest entry the way the credential
   and persona filters already did.
+- Replacing the blanket `CUTLASS_` parent-owned prefix with a hand-written list
+  of names left real gaps: `CUTLASS_SERVER_TOKEN` (a supported legacy spelling
+  of the shared server token, whose `FLEET_`/`CHAT_` spellings *were* listed)
+  and six knobs the parent resolves lazily after broker boot —
+  `CUTLASS_OPENROUTER_BASE_URL`, `CUTLASS_MODEL_CACHE_TTL_MINUTES`,
+  `CUTLASS_CONTEXT_PRESSURE_WARN_THRESHOLD`,
+  `CUTLASS_CONTEXT_COMPACTION_THRESHOLD`, `CUTLASS_SCHEDULED_AUTO_COMPACT` and
+  `CUTLASS_MAX_ITERATIONS` — could be claimed by a bundle connector, which then
+  unset them in the parent and dropped them from the reload surface. The legacy
+  spellings are now derived from the `FLEET_`-spelled names and the configured
+  legacy prefixes rather than hand-listed, so the set cannot drift again. A
+  bundle that claims one of these names now fails broker boot validation
+  instead of silently mutating parent runtime behavior; the cutlass-family
+  connector wire contract stays claimable as before.
 
 - Stop the boot-time orphan sweep from being starved by PID reuse, and from
   eating this process's own warm containers. Two independent bugs in the same
