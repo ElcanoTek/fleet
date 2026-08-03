@@ -257,10 +257,20 @@ func TestProbeCommandUnavailable(t *testing.T) {
 	// ISOLATION. The full crun message happens to contain two of the three
 	// markers, so a combined-only fixture would let either be deleted silently.
 	execFailures := map[string]string{
+		// Verbatim from crun 1.28 on this host.
 		"real crun message (matches two markers)": "Error: crun: executable file `/usr/bin/true` not found: No such file or directory: OCI runtime attempted to invoke a command that was not found",
-		"only the invoke-a-command marker":        "Error: OCI runtime attempted to invoke a command that was not found",
-		"only the backtick marker":                "Error: crun: executable file `/usr/bin/true` not found: No such file or directory",
-		"only the not-found-in-PATH marker":       `Error: unable to start container: executable file not found in $PATH`,
+		// Hand-derived from the above to isolate one marker each, so removing
+		// either is caught rather than covered by its sibling.
+		"only the invoke-a-command marker": "Error: OCI runtime attempted to invoke a command that was not found",
+		"only the backtick marker":         "Error: crun: executable file `/usr/bin/true` not found: No such file or directory",
+		// NOT emitted by this host's crun — this is the runc-family phrasing.
+		// It earns its marker because the runtime is operator-selectable
+		// (runc/kata/krun/runsc), so fleet can be running a runtime that words
+		// it this way.
+		"only the not-found-in-PATH marker (runc-family phrasing)": `Error: unable to start container: executable file not found in $PATH`,
+		// Mixed case: the classifier lower-cases before matching, and nothing
+		// else here would notice if that normalization were dropped.
+		"upper-cased variant": "ERROR: OCI RUNTIME ATTEMPTED TO INVOKE A COMMAND THAT WAS NOT FOUND",
 	}
 	for name, s := range execFailures {
 		if !probeCommandUnavailable(s) {

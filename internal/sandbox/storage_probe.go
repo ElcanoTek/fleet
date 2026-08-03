@@ -24,14 +24,29 @@ const storageProbeTimeout = 30 * time.Second
 // with a 1g cap running /usr/bin/true. A clean exit means quotas work.
 //
 // A failure to EXEC that command also means quotas work, and is treated as
-// success. Podman validates the storage option before it invokes the container's
-// command — verified empirically: on an ext4 host, `--storage-opt=size=1g` with a
-// nonexistent entrypoint reports the *quota* error, not the exec error. So
-// reaching the exec stage proves the quota was accepted. This matters because the
-// sandbox image is a client-bundle artifact free to change its base, and
-// `/usr/bin/true` is a rootfs assumption: a busybox-based bundle has `/bin/true`.
-// Without this carve-out such a bundle would silently lose the writable-layer
-// quota on every host, quota-capable or not.
+// success. Podman validates the storage option inside `configure storage` at
+// container-create time, before the runtime is invoked at all. Verified in both
+// directions: on an ext4 host `--storage-opt=size=1g` with a nonexistent
+// entrypoint reports the *quota* error rather than the exec error, and on
+// overlay+XFS with prjquota (where the quota IS accepted) the same missing
+// entrypoint surfaces the crun exec error. So reaching the exec stage proves the
+// quota was accepted.
+//
+// This matters because the sandbox image is a client-bundle artifact free to
+// change its base, and `/usr/bin/true` is a rootfs assumption: a busybox-based
+// bundle has `/bin/true`. Without this carve-out such a bundle would silently
+// lose the writable-layer quota on every host, quota-capable or not.
+//
+// Two probe failures on a quota-capable host still report NO support: a
+// `/usr/bin/true` that exists but is not executable, or whose interpreter is
+// broken. Both produce different messages, so both fall through to false. That
+// is the conservative direction and is left as-is.
+//
+// A cleaner mechanism exists and is worth a follow-up: `podman create` validates
+// the quota and leaves no container, so a create+rm probe would need no rootfs
+// assumption and no error-string matching at all (podman/crun wording is not
+// API). Deliberately not folded in here — it changes the probe's shape and
+// deserves its own verification pass.
 //
 // Any OTHER failure — driver can't quota, image missing, timeout — returns false,
 // which simply omits the writable-layer quota; the per-file `--ulimit fsize` cap

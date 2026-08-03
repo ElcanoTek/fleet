@@ -22,9 +22,13 @@ prior versions are listed because none have shipped.
 - The `--storage-opt size` support probe assumed `/usr/bin/true` exists in the
   sandbox image — a **client-bundle artifact** free to change its base, where a
   busybox-based bundle has `/bin/true`. Such a bundle failed the probe on every
-  host, so the writable-layer disk quota was silently dropped with only a log
-  line (the per-file `--ulimit fsize` cap still applied, so this was capability
-  loss, not an unbounded workspace). Podman validates `--storage-opt` at
+  host, so the writable-**layer** disk quota was silently dropped with only a log
+  line. Scope of that loss, stated precisely: the per-file `--ulimit fsize` cap
+  still applied, total *workspace* bytes are unbounded either way (a bind mount
+  is outside any storage-driver quota), and under `--read-only` plus size-bounded
+  tmpfs the writable layer is nearly unwritable anyway — so this restores
+  defense-in-depth, not a cap that was holding back live disk exhaustion. Podman
+  validates `--storage-opt` at
   container-create time and only then execs the command — verified on an ext4
   host, where a nonexistent entrypoint still reports the *quota* error — so a
   failure to exec now counts as quota-accepted. The classification is
