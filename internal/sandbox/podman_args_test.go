@@ -74,6 +74,11 @@ func TestContainerRunArgs_PinsHardeningAndQuotaFlags(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("podman arg assembly is linux-only")
 	}
+	// Pin the DEFAULT seccomp path: an operator env var must not decide what
+	// this test asserts. Without it the test reddens on a valid config (a
+	// custom profile not named *.json) and, worse, its result depends on the
+	// developer's environment.
+	t.Setenv(seccompProfileEnv, "")
 	bin, logPath := fakePodman(t)
 	workspace := t.TempDir()
 
@@ -139,21 +144,33 @@ func TestContainerRunArgs_PinsHardeningAndQuotaFlags(t *testing.T) {
 		}
 	}
 
-	// Every tmpfs must carry a size=. They are writable surface that neither
-	// disk-quota flag reaches, and diskQuotaArgs' reasoning explicitly leans
-	// on them being bounded — an unbounded tmpfs is a host-memory fill.
+	// Every tmpfs must carry a POSITIVE size=. They are writable surface that
+	// neither disk-quota flag reaches, and diskQuotaArgs' reasoning explicitly
+	// leans on them being bounded — an unbounded tmpfs is a host-memory fill.
+	// size=0 is not "no space": the kernel reads max_blocks==0 as UNLIMITED
+	// (verified against real podman — a size=0 tmpfs accepted a 300 MiB
+	// write), so a bare size= presence check would be its own false green.
+	// Both spellings are scanned so a --tmpfs → --mount refactor, which
+	// podman's docs encourage, cannot silently drop the guard.
 	sawTmpfs := false
 	for _, a := range args {
-		if !strings.HasPrefix(a, "--tmpfs=") {
+		isShort := strings.HasPrefix(a, "--tmpfs=")
+		isLong := strings.HasPrefix(a, "--mount=") && strings.Contains(a, "type=tmpfs")
+		if !isShort && !isLong {
 			continue
 		}
 		sawTmpfs = true
-		if !strings.Contains(a, "size=") {
+		size, ok := tmpfsSize(a)
+		if !ok {
 			t.Errorf("tmpfs mount %q has no size= — unbounded tmpfs is writable surface outside both disk-quota flags", a)
+			continue
+		}
+		if size == "" || strings.HasPrefix(size, "0") {
+			t.Errorf("tmpfs mount %q has size=%q — the kernel treats a zero size as UNLIMITED, so this bounds nothing", a, size)
 		}
 	}
 	if !sawTmpfs {
-		t.Error("no --tmpfs mounts in podman run argv — the read-only rootfs needs bounded scratch space")
+		t.Error("no tmpfs mounts in podman run argv — the read-only rootfs needs bounded scratch space")
 	}
 
 	// --memory-swap must EQUAL --memory: that equality is the control (it
@@ -195,6 +212,27 @@ func TestContainerRunArgs_PinsHardeningAndQuotaFlags(t *testing.T) {
 	}
 }
 
+// tmpfsSize extracts the size= value from a --tmpfs= or --mount= argument.
+// Options are comma-separated in both spellings, so split and match the one
+// key rather than substring-scanning (which would also match "tmpfs-size" or
+// a destination path containing "size=").
+func tmpfsSize(arg string) (string, bool) {
+	_, opts, found := strings.Cut(arg, "=")
+	if !found {
+		return "", false
+	}
+	for _, opt := range strings.Split(opts, ",") {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(opt), "size="); ok {
+			return v, true
+		}
+		// --mount spells it tmpfs-size=.
+		if v, ok := strings.CutPrefix(strings.TrimSpace(opt), "tmpfs-size="); ok {
+			return v, true
+		}
+	}
+	return "", false
+}
+
 // argValue returns the text after prefix for the first matching argument.
 func argValue(args []string, prefix string) (string, bool) {
 	for _, a := range args {
@@ -213,6 +251,7 @@ func TestContainerRunArgs_QuotaOmitsLayerCapWithoutDriverSupport(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("podman arg assembly is linux-only")
 	}
+	t.Setenv(seccompProfileEnv, "")
 	bin, logPath := fakePodman(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
