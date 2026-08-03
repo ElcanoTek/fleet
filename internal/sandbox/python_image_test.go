@@ -231,12 +231,16 @@ for p in glob.glob('/proc/[0-9]*/cmdline'):
 print('KERNELS', n)
 `
 
-// TestContainerPython_ReapsOrphanedKernelOnCancel proves the central persistent-
-// mode lifecycle fix (#213): a cancelled cell tears down the bridge and orphans
-// its kernel inside the SURVIVING container, but the next bridge start sweeps
-// the orphan (reap_stale_kernels), so live kernels never accumulate. Without the
-// reap this would observe 2 live kernels (the orphan + the new one).
-func TestContainerPython_ReapsOrphanedKernelOnCancel(t *testing.T) {
+// TestContainerPython_ReapsOrphanedKernelOnBridgeReset proves the central
+// persistent-mode lifecycle fix (#213) on its remaining trigger: a bridge
+// session that dies mid-cell (surfaced host-side as a read error, which
+// resets the session) orphans its kernel inside the SURVIVING container, but
+// the next bridge start sweeps the orphan (reap_stale_kernels), so live
+// kernels never accumulate. Without the reap this would observe 2 live
+// kernels (the orphan + the new one). A cancelled or timed-out cell no longer
+// reaches this path — it kills the whole container and poisons the sandbox
+// (#796 parity; see cancel_integration_test.go).
+func TestContainerPython_ReapsOrphanedKernelOnBridgeReset(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("container backend tested on linux only")
 	}
@@ -266,12 +270,32 @@ func TestContainerPython_ReapsOrphanedKernelOnCancel(t *testing.T) {
 		t.Fatalf("RunPython k1: %v", err)
 	}
 
-	// Cancel a long-running cell mid-flight (simulates registerTurn preempting a
-	// turn): the per-call context fires while req.Timeout is far away, so the
-	// ctx.Done branch tears the bridge down and orphans the sleeping kernel.
-	cctx, ccancel := context.WithTimeout(context.Background(), 2*time.Second)
-	_, _ = sb.RunPython(cctx, PythonRequest{Code: "import time; time.sleep(30)", Timeout: 60 * time.Second})
-	ccancel()
+	// Kill the bridge from inside the running cell (simulates the bridge exec
+	// session dying mid-cell — an OOM-killed or crashed client). The response
+	// never arrives, the host side sees EOF and resets the session, and the
+	// kernel survives as an orphan re-parented to the container's init.
+	killBridge := `
+import os, signal
+me = os.getpid()
+for pid in os.listdir('/proc'):
+    if not pid.isdigit() or int(pid) == me:
+        continue
+    try:
+        with open('/proc/' + pid + '/cmdline', 'rb') as f:
+            cmd = f.read().decode(errors='replace')
+    except OSError:
+        continue
+    if '/opt/bridge/bridge.py' in cmd:
+        os.kill(int(pid), signal.SIGKILL)
+print('killed')
+`
+	_, err = sb.RunPython(context.Background(), PythonRequest{Code: killBridge, Timeout: 60 * time.Second})
+	if err == nil || !strings.Contains(err.Error(), "bridge closed unexpectedly") {
+		t.Fatalf("RunPython with a dying bridge = %v, want a bridge-closed error", err)
+	}
+	if sb.Poisoned() {
+		t.Fatal("a bridge death must not poison the sandbox — the container is intact")
+	}
 
 	// Next call starts a fresh bridge, which reaps the orphan before its own
 	// kernel boots. Exactly one live kernel should remain.

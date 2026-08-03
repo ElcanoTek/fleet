@@ -3,6 +3,7 @@ package sandbox
 import (
 	"bufio"
 	"context"
+	"errors"
 	"io"
 	"os/exec"
 	"strings"
@@ -49,6 +50,12 @@ func TestContainerRunPython_CancelMidReadNoRace(t *testing.T) {
 	_, err = c.runPython(ctx, PythonRequest{Code: "x=1"})
 	if err == nil || !strings.Contains(err.Error(), "cancelled") {
 		t.Fatalf("runPython = %v, want a cancellation error", err)
+	}
+	if !errors.Is(err, ErrPoisoned) {
+		t.Fatalf("cancellation error = %v, want it to wrap ErrPoisoned — a cancelled cell retires the sandbox (#796)", err)
+	}
+	if !c.poisoned() {
+		t.Error("a cancelled cell must poison the sandbox so nothing reuses the container (#796)")
 	}
 	if c.bridgeStarted {
 		t.Error("bridge state must be cleared so ensureBridge starts fresh")

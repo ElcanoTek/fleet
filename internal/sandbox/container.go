@@ -1017,6 +1017,12 @@ func (c *containerImpl) runPython(ctx context.Context, req PythonRequest) (Pytho
 	}
 
 	if _, err := fmt.Fprintf(c.bridgeStdin, "%s\n", reqBytes); err != nil {
+		// A failed write means the exec client is gone (EPIPE) yet
+		// ensureBridge would still judge the session healthy — ProcessState
+		// is nil until the child is Wait()ed — wedging every later
+		// run_python in the turn. Reap and reset so the next call starts
+		// fresh; the container is intact, so no poison.
+		c.terminateBridgeLocked()
 		return PythonResult{}, fmt.Errorf("send bridge request: %w%s", err, c.bridgeStderrSuffix())
 	}
 
@@ -1048,19 +1054,38 @@ func (c *containerImpl) runPython(ctx context.Context, req PythonRequest) (Pytho
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():
-		// Tear the bridge down (mirrors hostImpl.readLocked): the
-		// orphaned reader goroutine above still owns c.bridgeStdout,
-		// and the bridge may still write the late response. Reusing
-		// the session would make the next run_python race that reader
-		// and consume an off-by-one response stream for the rest of
-		// the turn. ensureBridge starts a fresh session next call.
+		// Cancellation reaches only the host side; the kernel keeps executing
+		// the cell inside the container — exactly the bash/fileop straggler
+		// problem (#796). Killing the bridge exec client alone leaves that
+		// cell free to finish a side effect (a delayed file write, a network
+		// call), so tear down the container's PID namespace synchronously and
+		// poison the sandbox before reporting the cancel. currentContainerID
+		// takes only idMu, and killContainerNow deliberately takes no lock at
+		// all, so neither can deadlock against the c.mu we hold here.
+		c.execPoisoned.Store(true)
+		_ = c.killContainerNow(c.currentContainerID())
+		// Also reap the host-side exec client and clear the bridge state
+		// (mirrors hostImpl.readLocked): the orphaned reader goroutine above
+		// still owns c.bridgeStdout and the session's response stream can no
+		// longer be trusted.
 		c.terminateBridgeLocked()
-		return PythonResult{}, fmt.Errorf("python execution cancelled: %w", ctx.Err())
+		return PythonResult{}, fmt.Errorf("python execution cancelled (%w); sandbox retired: %w", ctx.Err(), ErrPoisoned)
 	case <-timer.C:
+		// Same containment as the cancel arm: the timed-out cell is still
+		// running in the container until the PID namespace goes away.
+		c.execPoisoned.Store(true)
+		_ = c.killContainerNow(c.currentContainerID())
 		c.terminateBridgeLocked()
-		return PythonResult{}, fmt.Errorf("python execution timed out after %v", timeout)
+		return PythonResult{}, fmt.Errorf("python execution timed out after %v; sandbox retired: %w", timeout, ErrPoisoned)
 	case r := <-ch:
 		if r.err != nil {
+			// The session is dead (EOF/broken pipe from the exec client) but
+			// ensureBridge's health check cannot see that: ProcessState stays
+			// nil until someone Wait()s the child. Without a reset here every
+			// later run_python in the turn would write into the same corpse
+			// and fail — reap it and clear the state so the next call boots a
+			// fresh bridge. The container itself is intact: no poison.
+			c.terminateBridgeLocked()
 			return PythonResult{}, fmt.Errorf("bridge closed unexpectedly: %w%s", r.err, c.bridgeStderrSuffix())
 		}
 		return parseBridgeResponse(r.data)
@@ -1068,18 +1093,20 @@ func (c *containerImpl) runPython(ctx context.Context, req PythonRequest) (Pytho
 }
 
 // terminateBridgeLocked kills the bridge exec session and clears the
-// bridge state so the next ensureBridge starts fresh. Called after a
-// timeout/cancel left a reader goroutine holding bridgeStdout — the
-// session's response stream can no longer be trusted. Caller must hold c.mu.
+// bridge state so the next ensureBridge starts fresh. Called when the
+// session's response stream can no longer be trusted: after a cancel/timeout
+// (where a reader goroutine still holds bridgeStdout), after a bridge
+// write/read error, and from close(). Caller must hold c.mu.
 //
 // SIGKILLing the host-side `podman exec` client does not run the bridge's
 // in-process cleanup() (which would SIGTERM the kernel's process group), so the
-// kernel can be left orphaned inside the container. In per-turn mode that's
-// moot — the container is torn down right after. In PERSISTENT mode (#213) the
-// container survives, so the orphan is reaped by the NEXT bridge start
+// kernel can be left orphaned inside the container. On the cancel/timeout arms
+// that's moot — runPython kills the whole container and poisons the sandbox
+// first (#796), so nothing survives. On the write/read-error reset paths the
+// container stays alive, and the orphan is reaped by the NEXT bridge start
 // (reap_stale_kernels in python_bridge.py SIGKILLs leftover ipykernel
-// processes), and --init reaps the resulting zombie. A cancelled/timed-out cell
-// therefore restarts the kernel and loses prior-turn state — surfaced in the
+// processes), and --init reaps the resulting zombie. A reset therefore
+// restarts the kernel and loses prior in-conversation state — surfaced in the
 // run_python tool description.
 func (c *containerImpl) terminateBridgeLocked() {
 	if cmd := c.bridgeCmd; cmd != nil && cmd.Process != nil {
@@ -1218,11 +1245,19 @@ func (c *containerImpl) close() {
 	if containerID != "" {
 		// Best-effort kill. --rm in `podman run` means the container is
 		// removed automatically once the root process exits, so killing
-		// is enough.
+		// is enough. A failure here can leak a running container until the
+		// boot-time orphan sweep — say so instead of failing silently, but
+		// stay quiet for the already-gone case (a #796 kill or natural exit
+		// beat us to it), which is routine, not a leak.
 		killCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		stop := exec.CommandContext(killCtx, c.cfg.PodmanBinary, c.podmanArgs([]string{"kill", containerID})...) //nolint:gosec // containerID is our generated UUID, not user input
-		_ = stop.Run()
+		if out, err := stop.CombinedOutput(); err != nil {
+			low := strings.ToLower(string(out))
+			if !strings.Contains(low, "no such container") && !strings.Contains(low, "not running") && !strings.Contains(low, "no container") {
+				log.Printf("sandbox: close-time container kill unconfirmed (%s): %v (%.200s) — the container may linger until the boot-time orphan prune", containerID, err, string(out))
+			}
+		}
 	}
 	if scriptPath != "" {
 		_ = os.Remove(scriptPath)
