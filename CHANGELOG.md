@@ -95,6 +95,15 @@ prior versions are listed because none have shipped.
 
 ### Security
 
+- The `run_if` host-side gate — a scheduled task's shell command, run by the
+  scheduler as the fleet user — was authored by the wrong set of people in both
+  directions. `taskCreator.isAdmin` was set for **any** typed API key carrying
+  `create_task`, so a scoped CI key could attach an arbitrary `sh -c` gate; and
+  it was never set on the web/header-trust or cookie paths, so a user whose role
+  really is admin was refused. Both create and edit now gate on one definition —
+  possession of `models.PermissionAdmin` — which admits admin keys and role-admin
+  users and refuses scoped keys.
+
 - Stop the boot-time orphan sweep from being starved by PID reuse, and from
   eating this process's own warm containers. Two independent bugs in the same
   sweep:

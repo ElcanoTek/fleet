@@ -180,6 +180,10 @@ function taskToFormValues(task: Task | null) {
     runIfCommand: task?.run_if?.command ?? "",
     runIfOnError: (task?.run_if?.on_error ?? "run") as "run" | "skip",
     runIfTimeout: task?.run_if?.timeout_seconds ?? 30,
+    // The form has no exit-code field; carried so an edit echoes the stored
+    // gate faithfully (a lossy echo reads as a run_if change server-side and
+    // 403s non-admin edits of unrelated fields).
+    runIfExitCode: task?.run_if?.exit_code_is ?? 0,
     expectedDuration:
       typeof task?.expected_duration_minutes === "number" &&
       task.expected_duration_minutes > 0
@@ -732,6 +736,9 @@ export function TaskCreateModal({
         on_error: runIfOnError,
         timeout_seconds: runIfTimeout,
       };
+      if (init.runIfExitCode !== 0) {
+        taskData.run_if.exit_code_is = init.runIfExitCode;
+      }
     }
     if (expectedDuration.trim()) {
       const mins = Number.parseInt(expectedDuration, 10);

@@ -24,14 +24,21 @@ const MaxBatchSize = 100
 
 // taskCreator captures the authorization decision shared by CreateTask and
 // CreateTaskBatch: the resolved creator (user) ID, the scoped API key ID that
-// authorized the call (for spend attribution), and whether the caller is an
-// admin (admin key or a scoped key carrying PermissionCreateTask). It is the
-// extracted form of the auth block CreateTask inlines, lifted here so the batch
-// path cannot drift from the single-task auth contract.
+// authorized the call (for spend attribution), and whether the caller carries
+// admin privilege. It is the extracted form of the auth block CreateTask
+// inlines, lifted here so the batch path cannot drift from the single-task
+// auth contract.
 type taskCreator struct {
-	isAdmin    bool
-	creatorID  *uuid.UUID
-	creatorKey *string
+	// hasAdminPermission reports possession of models.PermissionAdmin: the raw
+	// admin API key, a scoped key carrying the admin permission, or a user whose
+	// role grants it. This is the ONE definition of "may author a run_if gate"
+	// (requireAdminForRunIf); UpdateTask enforces the same boundary via
+	// principal.hasPermission(models.PermissionAdmin). A key that merely carries
+	// PermissionCreateTask (e.g. a CI task key) does NOT qualify — run_if
+	// executes on the host as the fleet user.
+	hasAdminPermission bool
+	creatorID          *uuid.UUID
+	creatorKey         *string
 	// creatorUsername is the resolved user's username (an email on a standard
 	// deployment) — the budget gate's user-scope principal id (#601 part 2),
 	// matching the usage report's group_by=user bucket key. Empty for admin-key
@@ -79,7 +86,7 @@ func (h *Handlers) scopedKeyCannotCreate(r *http.Request) bool {
 // route to task creation.
 func (h *Handlers) authorizeTaskCreator(w http.ResponseWriter, r *http.Request) (taskCreator, bool) {
 	if h.verifyAdminKey(r) {
-		return taskCreator{isAdmin: true}, true
+		return taskCreator{hasAdminPermission: true}, true
 	}
 	// Next-proxy header-trust path (#157): POST /tasks (and /tasks/batch,
 	// /tasks/estimate) sit outside the AdminOrUserAuthMiddleware group, so the
@@ -91,7 +98,11 @@ func (h *Handlers) authorizeTaskCreator(w http.ResponseWriter, r *http.Request) 
 		if user == nil {
 			return taskCreator{}, false
 		}
-		return taskCreator{creatorID: &user.ID, creatorUsername: user.Username}, true
+		return taskCreator{
+			creatorID:          &user.ID,
+			creatorUsername:    user.Username,
+			hasAdminPermission: userHasPermission(user, models.PermissionAdmin),
+		}, true
 	}
 	if h.scopedKeyCannotCreate(r) {
 		writeError(w, http.StatusForbidden, "insufficient key scope: this key type cannot create tasks")
@@ -104,7 +115,7 @@ func (h *Handlers) authorizeTaskCreator(w http.ResponseWriter, r *http.Request) 
 		perm := models.PermissionCreateTask
 		valid, key, _ := h.apiKeys.ValidateKey(apiKey, &perm, nil, nil, nil)
 		if valid && key != nil {
-			creator.isAdmin = true
+			creator.hasAdminPermission = key.HasPermission(models.PermissionAdmin)
 			keyID := key.KeyID
 			creator.creatorKey = &keyID
 			if key.MaxPriority != nil {
@@ -142,6 +153,7 @@ func (h *Handlers) authorizeTaskCreator(w http.ResponseWriter, r *http.Request) 
 	}
 	creator.creatorID = &user.ID
 	creator.creatorUsername = user.Username
+	creator.hasAdminPermission = userHasPermission(user, models.PermissionAdmin)
 	return creator, true
 }
 
@@ -231,7 +243,7 @@ func (h *Handlers) CreateTaskBatch(w http.ResponseWriter, r *http.Request) {
 			validationFailed = true
 			continue
 		}
-		if msg := requireAdminForRunIf(creator.isAdmin, tc.RunIf); msg != "" {
+		if msg := requireAdminForRunIf(creator.hasAdminPermission, tc.RunIf); msg != "" {
 			failedList = append(failedList, models.BatchFailed{Index: i, Error: msg})
 			validationFailed = true
 			continue

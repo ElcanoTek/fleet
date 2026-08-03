@@ -149,6 +149,24 @@ func (r *RunIf) EffectiveTimeoutSeconds() int {
 	return r.TimeoutSeconds
 }
 
+// Normalized returns a canonical copy for change detection: defaultable fields
+// resolve to their effective values, so a stored gate and a client echo that
+// differ only in representation (OnError "" vs "run", an omitted timeout)
+// compare equal. Used by the edit path's privilege check, where a raw
+// DeepEqual would misread a lossy round-trip as an attempted run_if change.
+// nil stays nil (no gate).
+func (r *RunIf) Normalized() *RunIf {
+	if r == nil {
+		return nil
+	}
+	return &RunIf{
+		Command:        strings.TrimSpace(r.Command),
+		ExitCodeIs:     r.ExitCodeIs,
+		TimeoutSeconds: r.EffectiveTimeoutSeconds(),
+		OnError:        r.EffectiveOnError(),
+	}
+}
+
 // DefaultLoopMaxIterations bounds a loop whose config omits MaxIterations.
 const DefaultLoopMaxIterations = 5
 

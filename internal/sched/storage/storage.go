@@ -793,6 +793,13 @@ type TaskEdit struct {
 	// the legacy retry policy).
 	RetryPolicy    *models.RetryPolicy
 	SetRetryPolicy bool
+	// RunIf + SetRunIf mirror the same pattern (#269): the flag distinguishes
+	// "leave unchanged" from "replace" (including replacing with nil to remove
+	// the gate). The handler sets the flag only for an admin-permission
+	// principal — run_if executes on the host, so a non-admin edit must never
+	// rewrite it.
+	RunIf    *models.RunIf
+	SetRunIf bool
 }
 
 // UpdateEditableTask applies an edit to a task inside a transaction, re-locking
@@ -837,6 +844,9 @@ func (s *Storage) UpdateEditableTask(ctx context.Context, taskID uuid.UUID, edit
 	}
 	if edit.SetRetryPolicy {
 		task.RetryPolicy = edit.RetryPolicy
+	}
+	if edit.SetRunIf {
+		task.RunIf = edit.RunIf
 	}
 	task.Priority = edit.Priority
 	task.InstructionSelfImprove = edit.InstructionSelfImprove

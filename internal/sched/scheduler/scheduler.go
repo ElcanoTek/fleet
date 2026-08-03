@@ -7,11 +7,14 @@ package scheduler
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"os/exec"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -73,6 +76,12 @@ const defaultScheduledBatchSize = 1000
 const maxRunIfStderrBytes = 8 << 10
 
 const runIfStderrTruncated = "\n…[stderr truncated]"
+
+// runIfWaitDelay bounds how long cmd.Run may keep waiting on the stderr pipe
+// after the gate's process exits or its timeout fires. Without it a grandchild
+// that inherited the pipe and escaped the process-group kill (setsid) would
+// block the sequential scheduler tick indefinitely.
+const runIfWaitDelay = 10 * time.Second
 
 type cappedRunIfStderr struct {
 	buf       bytes.Buffer
@@ -485,10 +494,33 @@ func (s *Scheduler) evalRunIf(task *models.Task) (shouldRun bool, reason string,
 	cmd.Env = []string{"PATH=/usr/bin:/bin", "HOME=/tmp"}
 	var stderr cappedRunIfStderr
 	cmd.Stderr = &stderr
+	// Run the gate as its own process-group leader and SIGKILL the WHOLE group
+	// on cancel/timeout: CommandContext's default kill signals only the direct
+	// sh, so a backgrounded grandchild would survive the timeout while holding
+	// the stderr pipe open — and the pipe copier would block cmd.Run (and this
+	// scheduler tick: lease recovery, the wake sweep) indefinitely. Same
+	// invariant as the host sandbox's bash path (internal/sandbox/host.go).
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		if cmd.Process != nil {
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		}
+		return os.ErrProcessDone // group-killed above; nothing more to signal
+	}
+	// WaitDelay is the backstop for a grandchild that escaped the group (e.g.
+	// setsid): it force-closes the stderr pipe after the gate exits so cmd.Run
+	// honors the documented [1,300]s ceiling instead of blocking on the pipe.
+	cmd.WaitDelay = runIfWaitDelay
 
 	runErr := cmd.Run()
 	if ctx.Err() == context.DeadlineExceeded {
 		return false, "check timed out", ctx.Err()
+	}
+	// ErrWaitDelay means the gate itself exited 0 and only the force-closed
+	// pipe was abnormal (a lingering grandchild held it) — the recorded exit
+	// status is authoritative, so treat it as a clean exit 0.
+	if errors.Is(runErr, exec.ErrWaitDelay) {
+		runErr = nil
 	}
 	want := task.RunIf.ExitCodeIs
 	if runErr != nil {
@@ -556,6 +588,33 @@ func (s *Scheduler) handleSkip(task *models.Task, reason string) {
 	if !nextRun.IsZero() {
 		nextStr = nextRun.Format(time.RFC3339)
 	}
-	log.Printf(`{"event":"task_skipped","task_id":"%s","reason":"%s","next_run_at":"%s"}`,
-		task.ID, reason, nextStr)
+	// The reason carries raw gate stderr, so the event is json.Marshal'ed —
+	// interpolated unescaped, a newline or quote in it would split or forge
+	// log records. The log line clamps the reason to a short prefix; the full
+	// capped text is already persisted to last_skip_reason by RecordSkip above.
+	event, err := json.Marshal(struct {
+		Event     string `json:"event"`
+		TaskID    string `json:"task_id"`
+		Reason    string `json:"reason"`
+		NextRunAt string `json:"next_run_at"`
+	}{"task_skipped", task.ID.String(), clampSkipReason(reason), nextStr})
+	if err != nil {
+		log.Printf("Error marshaling skip event for task %s: %v", task.ID, err)
+		return
+	}
+	log.Printf("%s", event)
+}
+
+// maxSkipReasonLogBytes bounds the gate stderr echoed into the task_skipped
+// LOG line; the full (8 KiB-capped) reason persists to last_skip_reason, so
+// diagnosis is unaffected.
+const maxSkipReasonLogBytes = 256
+
+func clampSkipReason(reason string) string {
+	if len(reason) <= maxSkipReasonLogBytes {
+		return reason
+	}
+	// json.Marshal replaces a rune split by the byte clamp with U+FFFD, so the
+	// cut is safe even mid-UTF-8.
+	return reason[:maxSkipReasonLogBytes] + "…[truncated]"
 }
