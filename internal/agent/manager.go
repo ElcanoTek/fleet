@@ -590,6 +590,15 @@ func buildSandboxPool(cfg *config.Config, personasDir, protocolsDir, systemPromp
 	poolCfg.DefaultEgressAllowlist = cfg.SandboxNetworkAllowlist
 	switch cfg.DefaultNetworkMode {
 	case sandbox.NetworkModeAllowlisted:
+		// Allowlisted is the one posture that needs a specific rootless network
+		// helper (slirp4netns, for the host-loopback route to the proxy). Probe
+		// it BEFORE the warm pool spawns anything: on a host without that helper
+		// every container start fails, and without this check boot would succeed,
+		// log "egress filtered to […]", and then error on every single tool call.
+		// Fails closed — never downgraded to open egress.
+		if err := sandbox.PreflightAllowlistedNetwork(context.Background(), poolCfg.Container.PodmanBinary); err != nil {
+			return nil, fmt.Errorf("sandbox egress preflight failed (fail-closed): %w", err)
+		}
 		proxy := sandbox.NewEgressProxy()
 		if err := proxy.Start(); err != nil {
 			return nil, fmt.Errorf("start sandbox egress proxy (#211): %w", err)

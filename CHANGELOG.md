@@ -17,6 +17,29 @@ prior versions are listed because none have shipped.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`FLEET_DEFAULT_NETWORK_MODE=allowlisted` was entirely non-functional on a
+  stock modern host.** Allowlisted egress emits
+  `--network=slirp4netns:allow_host_loopback=true` to reach the host-bound
+  proxy, but Podman ≥ 5.0 defaults to `pasta` and a stock modern box (verified on
+  Fedora 44) ships
+  pasta *without* `slirp4netns` — so every container start failed. It failed
+  closed (a container that will not start cannot leak), but late and
+  repeatedly: boot succeeded, the proxy bound, the log announced "egress
+  filtered to […]", and then every interactive turn, scheduled task, and
+  approved-bash call errored. `PreflightAllowlistedNetwork` now asks Podman at
+  boot whether it has the helper (`podman info`, image-independent — a container
+  probe would abort boot on any bundle whose rootfs lacked the probe command,
+  since the netns is configured before the exec) and fails boot closed if it
+  does not, naming the helper and the fix; `fleet validate-config` runs the same
+  check; `scripts/bootstrap.sh`
+  installs `slirp4netns` so a bootstrapped box supports the mode. Teaching
+  `networkArgs` to use pasta's `--map-host-loopback` instead is deliberately
+  deferred — pasta exposes the host at a different gateway address, so it also
+  changes the proxy URL and `NO_PROXY`, and that belongs in its own reviewed PR
+  with rootless-host verification (recorded in ADR-0012).
+
 ### Documentation
 
 - Correct the sandbox documentation claims that outran the code — across the

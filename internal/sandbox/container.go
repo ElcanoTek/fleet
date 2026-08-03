@@ -388,8 +388,11 @@ const (
 //
 //   - lockdown   (noNetwork)            → --network=none (sealed netns: lo only, no route — the hard seal)
 //   - allowlisted (proxyURL set)        → slirp4netns + host-loopback + HTTP(S)_PROXY
-//     pointed at the host EgressProxy (best-effort; see EgressProxy / ADR-0012)
-//   - open       (neither)              → rootless slirp4netns default (outbound only)
+//     pointed at the host EgressProxy (best-effort; see EgressProxy / ADR-0012).
+//     This is the one posture that REQUIRES the slirp4netns helper to be
+//     installed — PreflightAllowlistedNetwork fails boot closed if it is not.
+//   - open       (neither)              → no --network flag, i.e. podman's own
+//     rootless default (pasta on >= 5.0, slirp4netns before it), outbound only
 //
 // noNetwork takes precedence: an empty network namespace has no route to the
 // proxy, so a lockdown turn is never put in allowlisted mode.

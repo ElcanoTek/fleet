@@ -43,7 +43,11 @@ approval cards and instead:
    `config/default/sandbox/Containerfile`) and rebuild your sandbox image.
 2. Set `FLEET_BROWSER_ENABLED=true`.
 3. Run allowlisted: `FLEET_DEFAULT_NETWORK_MODE=allowlisted` with your task's
-   target hosts in the bundle's `sandbox.network_allowlist`.
+   target hosts in the bundle's `sandbox.network_allowlist`. This mode needs the
+   `slirp4netns` network helper installed — Podman >= 5.0 defaults to pasta and
+   a stock modern host often ships pasta without it. fleet preflights that at
+   boot and fails closed with the fix
+   ([ADR-0012](adr/0012-sandbox-egress-allowlist.md)).
 
 Without the image layer the tool returns a clear `BROWSER_NOT_INSTALLED` error.
 
