@@ -1,12 +1,16 @@
 package sandbox
 
 import (
+	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // ociSeccompProfile is the subset of the OCI Runtime Spec linux.seccomp shape
@@ -18,6 +22,12 @@ type ociSeccompProfile struct {
 		Names    []string `json:"names"`
 		Action   string   `json:"action"`
 		ErrnoRet *int     `json:"errnoRet"`
+		Args     []struct {
+			Index    int    `json:"index"`
+			Value    uint64 `json:"value"`
+			ValueTwo uint64 `json:"valueTwo"`
+			Op       string `json:"op"`
+		} `json:"args"`
 	} `json:"syscalls"`
 }
 
@@ -225,5 +235,115 @@ func TestResolveSeccompArgCustomPath(t *testing.T) {
 	if _, cleanup, err := resolveSeccompArg(t.TempDir()); err == nil {
 		cleanup()
 		t.Fatal("expected error for nonexistent custom profile path, got nil — a typo'd override must fail loudly, not silently change policy")
+	}
+}
+
+// afVsock is the AF_VSOCK address family. Under the Kata/libkrun microVM
+// runtimes (ADR-0010) it is the guest<->host channel, so the sandboxed payload
+// must not be able to open one.
+const afVsock = 40
+
+// TestSeccompProfileDeniesAFVSock pins that `socket` is NOT unconditionally
+// allowed and that AF_VSOCK specifically falls through to the default-deny.
+//
+// The shape matters as much as the outcome. Podman's own default expresses this
+// with an explicit ERRNO rule for AF_VSOCK plus several broad `SCMP_CMP_NE`
+// ALLOW rules — and copying that verbatim does NOT work here, because one of
+// those broad allows (`arg0 != AF_NETLINK`) also matches AF_VSOCK and absorbs
+// the narrow deny. Measured, not assumed: that arrangement reproduced podman's
+// NETLINK_AUDIT denial but left AF_VSOCK open.
+//
+// So this profile uses ONE non-overlapping rule instead — allow every family
+// except AF_VSOCK — and lets defaultAction (SCMP_ACT_ERRNO) do the denying.
+// Verified against the real image: AF_VSOCK returns EPERM while AF_UNIX,
+// AF_INET, AF_INET6, AF_INET datagram and AF_NETLINK all still open, and DNS,
+// HTTPS and `pip install` all work.
+func TestSeccompProfileDeniesAFVSock(t *testing.T) {
+	p := parseDefaultProfile(t)
+
+	var unconditional, argScoped int
+	sawVsockExclusion := false
+	for _, blk := range p.Syscalls {
+		if blk.Action != "SCMP_ACT_ALLOW" || !slices.Contains(blk.Names, "socket") {
+			continue
+		}
+		if len(blk.Args) == 0 {
+			unconditional++
+			continue
+		}
+		argScoped++
+		for _, a := range blk.Args {
+			if a.Index == 0 && a.Value == afVsock && a.Op == "SCMP_CMP_NE" {
+				sawVsockExclusion = true
+			}
+			// A broad NE on a DIFFERENT family also matches AF_VSOCK and would
+			// absorb the deny — the exact trap described above.
+			if a.Index == 0 && a.Op == "SCMP_CMP_NE" && a.Value != afVsock {
+				t.Errorf("socket ALLOW rule excludes only family %d, which still matches AF_VSOCK (%d) and re-opens it", a.Value, afVsock)
+			}
+		}
+	}
+	if unconditional > 0 {
+		t.Errorf("socket has %d unconditional ALLOW rule(s) — AF_VSOCK is then reachable regardless of any deny rule", unconditional)
+	}
+	if argScoped == 0 {
+		t.Fatal("socket has no argument-scoped ALLOW rule — sockets would be denied outright, breaking all networking")
+	}
+	if !sawVsockExclusion {
+		t.Error("no socket ALLOW rule excludes AF_VSOCK; nothing keeps the guest<->host channel closed")
+	}
+}
+
+// TestSeccompProfileDeniesAtRuntime is the runtime counterpart to the static
+// assertions above: it proves the bundled profile actually reaches a live
+// container and denies what it claims to.
+//
+// The existing ptrace canary lives in sandbox_hardened_test.go, which is opt-in
+// behind FLEET_SANDBOX_HARDENED_TEST and therefore runs in NO CI lane. This one
+// is only podman-gated, so it runs in a normal `make test` on a podman host and
+// in the e2e-live lane — which is where a profile-plumbing regression (a
+// mis-resolved path, a dropped --security-opt) would otherwise go unnoticed.
+func TestSeccompProfileDeniesAtRuntime(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("seccomp is linux-only")
+	}
+	if _, err := exec.LookPath("podman"); err != nil {
+		t.Skip("podman not available")
+	}
+	profile, cleanup, err := resolveSeccompArg(t.TempDir())
+	if err != nil {
+		t.Fatalf("resolveSeccompArg: %v", err)
+	}
+	defer cleanup()
+	if profile == "unconfined" {
+		t.Skip("seccomp disabled via " + seccompProfileEnv)
+	}
+
+	// AF_VSOCK must be refused; AF_INET must still open. Both in one container so
+	// a filter that denied everything would fail the second assertion too.
+	const probe = `import socket, sys
+try:
+    s = socket.socket(40, socket.SOCK_STREAM); s.close(); print("VSOCK_OPEN")
+except OSError:
+    print("VSOCK_DENIED")
+try:
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM); s.close(); print("INET_OPEN")
+except OSError as e:
+    print("INET_DENIED", e)
+`
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "podman", "run", "--rm",
+		"--security-opt", "seccomp="+profile, "--cap-drop=ALL", "--network=none",
+		testImage(), "python3", "-c", probe).CombinedOutput()
+	if err != nil {
+		t.Fatalf("probe container failed: %v\n%s", err, out)
+	}
+	got := string(out)
+	if !strings.Contains(got, "VSOCK_DENIED") {
+		t.Errorf("AF_VSOCK was NOT denied inside a live container — the guest<->host channel is open. Output:\n%s", got)
+	}
+	if !strings.Contains(got, "INET_OPEN") {
+		t.Errorf("AF_INET did not open — the profile is over-restrictive, not just strict. Output:\n%s", got)
 	}
 }

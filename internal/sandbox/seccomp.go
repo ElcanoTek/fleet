@@ -19,43 +19,61 @@ import (
 // This is DEFENSE-IN-DEPTH layered on top of the existing --cap-drop=ALL +
 // no-new-privileges + --read-only posture: capability drops and
 // no-new-privileges do not filter individual syscalls, so an unprivileged
-// process inside the container could still reach those calls without it. The
-// profile only ADDS restriction; it never relaxes any existing isolation.
+// process inside the container could still reach those calls without it.
+//
+// Relative to PODMAN'S DEFAULT profile (which is what a container gets with no
+// --security-opt seccomp at all) this profile is stricter in every dimension we
+// have measured EXCEPT ONE: it still allows socket(2) with
+// AF_NETLINK+NETLINK_AUDIT, which podman denies. See the comparison below.
+//
+// That exception is stated up front on purpose. This file used to claim it "only
+// ADDS restriction; it never relaxes any existing isolation", and that was false
+// twice over — vmsplice (now fixed) and the socket cases (AF_VSOCK now fixed,
+// NETLINK_AUDIT still open). Treat "only adds restriction" as a goal this file is
+// held to by tests, not as a property that follows from shipping a custom
+// profile.
 //
 // clone3 is deliberately given SCMP_ACT_ERRNO with errnoRet=ENOSYS (38) rather
 // than the default EPERM so glibc (>=2.34, which prefers clone3 for
 // pthread_create / fork / posix_spawn) falls back to the allowlisted clone
 // instead of hard-failing — without that, Python threading/multiprocessing and
-// bash job control would break. See seccomp-default.json for the full list and
-// per-syscall rationale, and sandbox_hardened_test.go for the regression net.
+// bash job control would break. seccomp-default.json holds the full allowlist
+// (a bare names array — JSON has no comments, so the rationale lives here and in
+// seccomp_test.go); seccomp_test.go pins the shape statically and
+// sandbox_hardened_test.go proves the filter actually reaches a live container.
 //
 // HOW THIS PROFILE COMPARES TO PODMAN'S OWN DEFAULT
-// (/usr/share/containers/seccomp.json). Ours is a strict allowlist and is
-// tighter almost everywhere: podman's default ALLOWS ptrace, personality, bpf,
-// perf_event_open, userfaultfd, process_vm_readv, keyctl, mount, umount2,
-// pivot_root, unshare and setns; ours denies all of them. There is one place
-// where ours is still WEAKER, and it is recorded here rather than left for
-// someone to discover:
+// (/usr/share/containers/seccomp.json). Ours is a strict allowlist. Podman's
+// default UNCONDITIONALLY allows eight syscalls that ours denies — verified at
+// runtime under --cap-drop=ALL, i.e. they reach the kernel there and return
+// EPERM/ENOSYS here: ptrace, process_vm_readv, keyctl, mount, umount2,
+// pivot_root, unshare, setns.
 //
-//   - socket(2) is allowed unconditionally. Podman's default additionally
-//     denies two narrow cases via argument matching: AF_VSOCK (EPERM) and
-//     AF_NETLINK+NETLINK_AUDIT (EINVAL). AF_VSOCK is the interesting one for
-//     fleet, because under the Kata/libkrun microVM runtimes (ADR-0010) it is
-//     the guest<->host channel.
+// Three more are worth stating precisely, because reading podman's file
+// carelessly gets them backwards (this comment did, once):
 //
-//     Replicating those rules is NOT the one-line change it appears to be, and
-//     a naive copy does not work — measured, not assumed. Podman's rules carry
-//     `includes`/`excludes` capability conditions that PODMAN resolves before
-//     handing the profile to the OCI runtime, so the file on disk is a template
-//     rather than the effective filter; and with overlapping arg-matched
-//     allow/deny rules for one syscall, whether the deny wins turned out to
-//     depend on which rules survive that resolution. Copying podman's five
-//     socket rules verbatim into this profile reproduced the NETLINK_AUDIT
-//     denial but NOT the AF_VSOCK one. Closing this properly needs a
-//     libseccomp-level understanding of that precedence, so it is deliberately
-//     left open instead of shipping arg-matching that looks right and is not.
-//     (vmsplice, the other syscall where ours used to be weaker, needed no
-//     argument matching and IS now denied.)
+//   - userfaultfd: podman DENIES it too — it sits in the same deny block as
+//     vmsplice. Ours denies it. No difference.
+//   - bpf and perf_event_open: podman's rules are capability-CONDITIONAL
+//     (includes/excludes on CAP_SYS_ADMIN / CAP_BPF / CAP_PERFMON). Under
+//     --cap-drop=ALL podman's effective action is DENY, same as ours.
+//   - personality: podman allows only a fixed set of argument values and denies
+//     ADDR_NO_RANDOMIZE. Not a blanket allow.
+//
+// The lesson those three encode: podman's profile is a TEMPLATE whose
+// includes/excludes podman resolves against the container's capability set
+// before handing the filter to the OCI runtime. The file on disk is not the
+// effective filter, and comparing against it without accounting for that
+// produces confident, wrong conclusions.
+//
+// ONE dimension where ours is still weaker: socket(2) with
+// AF_NETLINK+NETLINK_AUDIT, which podman denies (EINVAL) and we allow — writing
+// the kernel audit log from inside the sandbox. Closing it is harder than
+// AF_VSOCK was: podman expresses it as an ERRNO rule on (AF_NETLINK,
+// NETLINK_AUDIT) alongside a broad allow, and reproducing that ordering here
+// did not deny it. AF_VSOCK, the case that actually matters for the microVM
+// runtimes, IS now closed — see TestSeccompProfileDeniesAFVSock for the shape
+// and why one non-overlapping rule beats copying podman's five.
 //
 //go:embed seccomp-default.json
 var defaultSeccompProfile []byte

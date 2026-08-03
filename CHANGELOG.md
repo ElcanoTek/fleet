@@ -81,6 +81,17 @@ prior versions are listed because none have shipped.
 
 ### Security
 
+- Deny `AF_VSOCK` sockets in the sandbox seccomp profile. Under the Kata/libkrun
+  microVM runtimes (ADR-0010) `AF_VSOCK` is the guest↔host channel, and podman's
+  own default profile denies it while ours allowed it. Closed with a single
+  non-overlapping rule (allow every family except `AF_VSOCK`, letting the
+  default-deny do the work) rather than by copying podman's five socket rules —
+  which was tried and measurably does NOT work, because one of podman's broad
+  `SCMP_CMP_NE` allows also matches `AF_VSOCK` and absorbs the narrow deny.
+  Verified against the real image: `AF_VSOCK` returns EPERM while `AF_UNIX`,
+  `AF_INET`, `AF_INET6`, datagram and `AF_NETLINK` sockets all still open, and
+  DNS, HTTPS and `pip install` all work. Still open and now documented in
+  `seccomp.go`: `AF_NETLINK`+`NETLINK_AUDIT`, which podman also denies.
 - Deny `vmsplice` in the sandbox seccomp profile. Podman's own default profile
   denies it; ours allowed it, which made fleet's custom profile **weaker than
   shipping no profile at all** in that one dimension — the opposite of what it
@@ -89,10 +100,7 @@ prior versions are listed because none have shipped.
   container-escape exploits. Verified nothing in the sandbox needs it: bash
   pipes, `cp`, 20 MB pipe/copy workloads, `shutil.copyfile`, `os.sendfile`
   zero-copy, pandas and numpy all work with it denied, and the profile test now
-  pins the denial. `seccomp.go` additionally records the one remaining place
-  ours is weaker than podman's default — unconditional `socket(2)`, where
-  podman narrowly denies `AF_VSOCK` and `AF_NETLINK`+`NETLINK_AUDIT` — and why
-  replicating it is not a one-line change.
+  pins the denial.
 
 - Resolve the sandbox OCI runtime through Podman in the fail-closed preflight
   instead of guessing the binary from its name. `podman --runtime=<r> info`
