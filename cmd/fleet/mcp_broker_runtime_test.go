@@ -197,6 +197,53 @@ func TestProductionRemoteMCPOverlayOpenerGatesFeature(t *testing.T) {
 	}
 }
 
+func TestValidateConnectorParentEnvSeparation_AllowsCutlassConnectorWireKeys(t *testing.T) {
+	t.Setenv("CUTLASS_ALLOWED_DIRS", "/srv/drops")
+	bundle, err := clientconfig.Load(mcpTestBundle(t, `mcp_servers:
+  - name: sendgrid
+    type: stdio
+    command: /bin/true
+    env:
+      CUTLASS_MOC_TASK_ID: "${FLEET_TASK_ID}"
+      CUTLASS_ALLOWED_DIRS: "${CUTLASS_ALLOWED_DIRS}"
+      CUTLASS_RUN_WORKDIR: "${FLEET_WORKSPACE}"
+      CUTLASS_USER_AGENT: "${CUTLASS_USER_AGENT}"
+      CUTLASS_REPORT_DIR: "${CUTLASS_REPORT_DIR}"
+      CUTLASS_INPUT_DIR: "${FLEET_WORKSPACE}/inputs"
+    optional_env:
+      - CUTLASS_ALLOWED_DIRS
+      - CUTLASS_RUN_WORKDIR
+      - CUTLASS_MOC_TASK_ID
+`))
+	if err != nil {
+		t.Fatalf("load bundle: %v", err)
+	}
+	if err := validateConnectorParentEnvSeparation(bundle); err != nil {
+		t.Fatalf("cutlass-family connector wire keys refused: %v", err)
+	}
+}
+
+func TestValidateConnectorParentEnvSeparation_RejectsParentOwnedCutlassNames(t *testing.T) {
+	for _, name := range []string{"CUTLASS_TASK_MODEL", "CUTLASS_LOG_FILE", "CUTLASS_RETRY_MAX_ATTEMPTS"} {
+		t.Run(name, func(t *testing.T) {
+			bundle, err := clientconfig.Load(mcpTestBundle(t, `mcp_servers:
+  - name: demo
+    type: stdio
+    command: /bin/true
+    always: true
+    env:
+      WIRE_KEY: "${`+name+`}"
+`))
+			if err != nil {
+				t.Fatalf("load bundle: %v", err)
+			}
+			if err := validateConnectorParentEnvSeparation(bundle); err == nil || !strings.Contains(err.Error(), name) {
+				t.Fatalf("overlap error = %v, want name-only %s refusal", err, name)
+			}
+		})
+	}
+}
+
 func TestValidateConnectorParentEnvSeparation(t *testing.T) {
 	t.Setenv("MODEL_KEY", "placeholder")
 	bundle, err := clientconfig.Load(mcpTestBundle(t, `mcp_servers:

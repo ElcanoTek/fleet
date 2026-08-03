@@ -19,6 +19,20 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- The production MCP-broker boundary refused to boot any bundle that wires the
+  documented cutlass-family connector contract: the connector/parent env
+  overlap guard treated the whole `CUTLASS_` prefix as parent-owned, but fleet
+  itself designates `CUTLASS_RUN_WORKDIR` / `CUTLASS_MOC_TASK_ID` /
+  `CUTLASS_REPORT_DIR` / `CUTLASS_INPUT_DIR` as bundle-to-connector wire keys
+  (`internal/agentcore/mcp_workspace.go`), and operator passthroughs such as
+  `CUTLASS_ALLOWED_DIRS` / `CUTLASS_USER_AGENT` are never resolved by the
+  parent. Startup failed with "connector environment overlaps parent-owned
+  configuration" on exactly the manifest shape the contract tells bundles to
+  write. The guard still fails closed on overlap with parent runtime settings,
+  provider keys, webhook signing secrets, and the `CUTLASS_*` names the parent
+  itself resolves — those are now enumerated explicitly instead of claimed by
+  prefix.
+
 - The `--storage-opt size` support probe assumed `/usr/bin/true` exists in the
   sandbox image — a **client-bundle artifact** free to change its base, where a
   busybox-based bundle has `/bin/true`. Such a bundle failed the probe on every

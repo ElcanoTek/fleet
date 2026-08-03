@@ -296,7 +296,14 @@ func validateConnectorParentEnvSeparation(bundle *clientconfig.Bundle) error {
 		if parent[upper] {
 			return true
 		}
-		for _, prefix := range []string{"FLEET_", "CHAT_", "CUTLASS_", "DB_", "OPENROUTER_"} {
+		// CUTLASS_ is deliberately NOT a blanket parent-owned prefix: fleet's
+		// own connector contract (internal/agentcore/mcp_workspace.go) hands
+		// CUTLASS_RUN_WORKDIR / CUTLASS_MOC_TASK_ID / CUTLASS_REPORT_DIR /
+		// CUTLASS_INPUT_DIR to cutlass-family MCP servers as bundle-declared
+		// wire keys, and operators pass knobs like CUTLASS_ALLOWED_DIRS through
+		// to connectors. The CUTLASS_* names the parent runtime itself resolves
+		// are enumerated in parentOwnedRuntimeEnvNames instead.
+		for _, prefix := range []string{"FLEET_", "CHAT_", "DB_", "OPENROUTER_"} {
 			if strings.HasPrefix(upper, prefix) {
 				return true
 			}
@@ -361,6 +368,16 @@ func parentOwnedRuntimeEnvNames(bundle *clientconfig.Bundle) []string {
 		"TAVILY_API_KEY", "FLEET_SMTP_PASSWORD", "FLEET_WEBHOOK_SECRET", "FLEET_VAPID_PRIVATE_KEY",
 		"FLEET_MCP_OAUTH_ENCRYPTION_KEY", "CHAT_MCP_OAUTH_ENCRYPTION_KEY", "CUTLASS_MCP_OAUTH_ENCRYPTION_KEY",
 		"FLEET_LOG_ARCHIVE_ENCRYPTION_KEY", "CHAT_LOG_ARCHIVE_ENCRYPTION_KEY", "CUTLASS_LOG_ARCHIVE_ENCRYPTION_KEY",
+		// Legacy CUTLASS_* names the parent runtime itself resolves (boot config,
+		// per-run lookups through the EnvPrefix alias machinery, or lazy os.Getenv
+		// reads) — enumerated explicitly because the CUTLASS_ prefix as a whole is
+		// shared with the cutlass-family connector wire contract and must stay
+		// claimable by bundles (see the isParent comment above).
+		"CUTLASS_TASK_MODEL", "CUTLASS_TASK_FALLBACK_MODEL", "CUTLASS_TASK_MAX_ITERATIONS",
+		"CUTLASS_INPUT_FILES", "CUTLASS_LOG_FILE", "CUTLASS_WORKSPACE_ROOT",
+		"CUTLASS_RETRY_MAX_ATTEMPTS", "CUTLASS_DISABLE_OPENROUTER_MODELS", "CUTLASS_DISABLE_PROMPT_CACHE",
+		"CUTLASS_IMAGE_OUTPUT", "CUTLASS_IMAGE_MODEL",
+		"CUTLASS_TEMPERATURE", "CUTLASS_MAX_COST_USD", "CUTLASS_MAX_TOTAL_TOKENS",
 		// Process/runtime inputs still read after broker boot. A connector cannot
 		// claim one of these because removing it would mutate parent behavior.
 		"HOME", "PATH", "TMPDIR", "SHELL", "USER", "LANG", "TZ", "NOTIFY_SOCKET",
