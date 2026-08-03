@@ -125,6 +125,41 @@ records the same caveat for the chat and approved-bash takes.
   exactly as scheduled tasks do. Per-task/per-conversation overrides + a web UI
   remain deferred.
 
+## Host prerequisite: `slirp4netns`
+
+Allowlisted is the only posture that depends on a specific rootless network
+**helper**. `networkArgs` emits
+`--network=slirp4netns:allow_host_loopback=true` because the container must
+reach the host-bound proxy at `10.0.2.2`, and Podman honors that only if the
+`slirp4netns` binary is installed.
+
+**Podman >= 5.0 defaults to `pasta`, and a stock modern host (Fedora 40+ among
+others) ships pasta WITHOUT slirp4netns.** There, every container start under
+allowlisted mode fails:
+
+```
+Error: could not find slirp4netns, the network namespace can't be configured:
+exec: "slirp4netns": executable file not found in $PATH
+```
+
+That fails **closed** — a container that will not start cannot leak — but it
+used to fail *late and repeatedly*: boot succeeded, the proxy bound, the log
+announced "egress filtered to […]", and then every interactive turn, scheduled
+task, and approved-bash call errored. `PreflightAllowlistedNetwork` now probes
+this at boot with a throwaway container and **fails boot closed**, naming the
+missing helper and the fix. `lockdown` and `open` are unaffected: they need no
+helper beyond whatever Podman already defaults to.
+
+Operators selecting allowlisted must install `slirp4netns`
+(`dnf install slirp4netns` / `apt install slirp4netns`).
+
+**Deferred:** teaching `networkArgs` to use pasta's `--map-host-loopback`
+instead. Pasta exposes the host at a *different* gateway address than
+`slirpHostGateway`, so switching helpers also changes the proxy URL and the
+`NO_PROXY` exemption — a change on a security-relevant path that warrants its
+own PR with rootless-host verification, rather than being folded into a
+preflight.
+
 ## Alternatives considered
 
 - **Hard netns firewall (all egress forced through the proxy).** A real boundary,

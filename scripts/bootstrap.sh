@@ -633,8 +633,14 @@ fi
 # app), podman (the execution sandbox), python3 + pip (host-side Python MCP
 # servers), plus git/curl/jq/gcc. Postgres-server is installed per-mode below
 # (local only). Non-Fedora hosts: install these yourself, then re-run.
+#
+# slirp4netns is here because FLEET_DEFAULT_NETWORK_MODE=allowlisted requires
+# it: podman >= 5.0 defaults to pasta and a stock modern host ships pasta
+# WITHOUT slirp4netns, which makes every allowlisted container start fail
+# (fleet now preflights that at boot and fails closed — see ADR-0012). Cheap
+# to install unconditionally so the mode is available if an operator picks it.
 step "Installing system dependencies (build + runtime + sandbox toolchain)"
-FLEET_DEPS=(git curl jq golang nodejs python3 python3-pip gcc podman)
+FLEET_DEPS=(git curl jq golang nodejs python3 python3-pip gcc podman slirp4netns)
 if command -v dnf >/dev/null 2>&1; then
   run dnf install -y "${FLEET_DEPS[@]}"
   [[ "$DRY_RUN" == "1" ]] || ok "system dependencies present (${FLEET_DEPS[*]})"
