@@ -493,6 +493,12 @@ jobs:
         # euid guard). This e2e-live job is the ONLY always-on lane with a real,
         # non-root, rootless-podman sandbox, so run the invariant tests here.
         #
+        # The disk-quota pair is here for the same reason: RLIMIT_FSIZE is the
+        # only cap on the workspace bind mount, and nothing else in an always-on
+        # lane proves it reaches the kernel. (Its storage-opt sibling is
+        # deliberately NOT listed — it needs an XFS-pquota/btrfs driver these
+        # runners do not have, so it would SKIP and trip the guard below.)
+        #
         # A SKIP is treated as a FAILURE: a silently-skipped invariant test is a
         # false green, which is the precise gap this lane closes (issue #34). We
         # require an explicit `--- PASS` for each named test and fail on any
@@ -503,7 +509,7 @@ jobs:
           FLEET_SANDBOX_TEST_IMAGE: ${{ steps.sandbox.outputs.image }}
         run: |
           set -euo pipefail
-          tests='TestContainerWorkspaceSamePathCoherence|TestContainerReadOnlyMountsSamePath|TestContainerWorkspaceSurvivesConcurrentMount|TestContainerBashSamePath'
+          tests='TestContainerWorkspaceSamePathCoherence|TestContainerReadOnlyMountsSamePath|TestContainerWorkspaceSurvivesConcurrentMount|TestContainerBashSamePath|TestContainerDiskQuotaSetsRLimit|TestContainerDiskQuotaBlocksOversizeFile'
           # -tags fleet_host_executor: these are container-mode invariant tests,
           # but they share the sandbox test package with the host-mode fixtures
           # that are now gated behind this tag (#159) — the package won't COMPILE
@@ -513,7 +519,9 @@ jobs:
             TestContainerWorkspaceSamePathCoherence \
             TestContainerReadOnlyMountsSamePath \
             TestContainerWorkspaceSurvivesConcurrentMount \
-            TestContainerBashSamePath; do
+            TestContainerBashSamePath \
+            TestContainerDiskQuotaSetsRLimit \
+            TestContainerDiskQuotaBlocksOversizeFile; do
             if ! grep -q -- "--- PASS: ${tc}" sandbox-invariants.log; then
               echo "::error::sandbox invariant test ${tc} did not PASS (skipped or absent) — this always-on lane must actually run it (see issue #34)"
               exit 1

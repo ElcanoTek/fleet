@@ -198,21 +198,25 @@ func TestContainerDiskQuotaCapsWorkspaceOnStorageOptHosts(t *testing.T) {
 		t.Fatalf("NewContainer: %v", err)
 	}
 	defer sb.Close()
-	sb.SetDefaultWorkingDir(tmp)
 
 	res, err := sb.RunBash(context.Background(), BashRequest{Command: "ulimit -f"})
 	if err != nil {
 		t.Fatalf("RunBash: %v", err)
+	}
+	if res.ExitCode != 0 {
+		// Without this the next assertion is vacuous: a failed exec yields
+		// empty stdout, which is != "unlimited" and would pass.
+		t.Fatalf("ulimit -f exit=%d stderr=%q", res.ExitCode, res.Stderr)
 	}
 	if got := strings.TrimSpace(string(res.Stdout)); got == "unlimited" {
 		t.Fatal("ulimit -f = unlimited on a storage-opt host — the workspace bind mount has no cap at all")
 	}
 
 	// The workspace is a bind mount, outside any storage-driver quota. Only
-	// RLIMIT_FSIZE can stop this write.
+	// RLIMIT_FSIZE can stop this write. (The workspace is already the default
+	// --workdir, so a bare relative name lands there.)
 	res, err = sb.RunBash(context.Background(), BashRequest{
 		Command: "dd if=/dev/zero of=big bs=1M count=1100",
-		Timeout: 90 * time.Second,
 	})
 	if err != nil {
 		t.Fatalf("RunBash: %v", err)

@@ -27,7 +27,12 @@ prior versions are listed because none have shipped.
   does not apply to bind mounts — so `dd if=/dev/zero of=big` in the default
   workdir could fill the host disk, the scenario `FLEET_SANDBOX_DISK_GB`
   exists to prevent. The boot log and the `DiskLimitGB` docs now state plainly
-  that total workspace bytes remain unbounded.
+  that total workspace bytes remain unbounded. **Operator-visible:** hosts with
+  XFS-pquota / btrfs / zfs now enforce the per-file ceiling they previously had
+  none of — raise `FLEET_SANDBOX_DISK_GB` if a workload legitimately writes
+  single files above the 5 GiB default (a `bash`+`curl` download of a very
+  large file is the likeliest case). Hosts on other drivers are unaffected;
+  they already had this cap.
 - Apply the fleet-wide `FLEET_DEFAULT_NETWORK_MODE` to the approved-bash take.
   An approval executes out-of-band of the turn loop and honored only the
   per-conversation lockdown seal, so on a `lockdown` deployment an approved
