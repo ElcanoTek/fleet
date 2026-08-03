@@ -4241,6 +4241,45 @@ select.mcp-server-picker__account-select {
   font-size: 0.7rem;
   color: var(--color-text-muted);
 }
+/* Restaurant-style cost glyphs ($ … $$$$) shared by both model pickers. The
+   filled glyphs warm from success-green (cheap) to danger-red (top tier); the
+   unfilled remainder stays a dim track so the tier reads as N-of-4. */
+/* In the task form's header row the name + badge lead and the cost trails,
+   matching the chat listbox's trailing-edge meta cluster. */
+.model-picker-header .model-cost {
+  margin-left: auto;
+}
+.model-cost {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: baseline;
+  gap: 0.03em;
+  font-size: 0.68rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  cursor: help;
+}
+.model-cost-filled {
+  color: var(--model-cost-color, var(--color-text-secondary));
+}
+.model-cost-rest {
+  color: var(--color-text-muted);
+  opacity: 0.45;
+}
+.model-cost-tier-1 {
+  --model-cost-color: var(--color-success);
+}
+.model-cost-tier-2 {
+  --model-cost-color: var(--color-text-secondary);
+}
+.model-cost-tier-3 {
+  --model-cost-color: var(--color-warning);
+}
+.model-cost-tier-4 {
+  --model-cost-color: var(--color-danger);
+}
 .model-picker-loading,
 .model-picker-empty {
   padding: 0.6rem 0.7rem;

@@ -48,6 +48,7 @@ import {
   type MemoryProposal,
   type Message,
 } from "./history";
+import { type ModelPrices } from "@/app/shared/lib/modelCost";
 import { PENDING_CONV_KEY } from "./workspaceHref";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
 import { Icon } from "./Icon";
@@ -156,6 +157,11 @@ export type RankedModel = {
   // Drives the "✨ new" pill in the picker — entries within
   // NEW_MODEL_WINDOW_DAYS get the badge.
   created?: number;
+  // OpenRouter per-token prices. Both /api/model-catalog and
+  // /api/model-rankings carry them; workspace-provider models do not, and the
+  // cost indicator renders nothing rather than guessing for those.
+  pricePrompt?: number;
+  priceCompletion?: number;
   // True for models served by an admin-configured workspace provider
   // ("<provider>/<model>" explicit-routing slugs). Drives the picker's
   // "workspace" pill.
@@ -937,6 +943,18 @@ export function ChatExperience({
       workspaceModels.find((m) => m.slug === slug);
     return known?.name ?? selectedModel;
   }, [selectedModel, catalogModels, rankedModels, workspaceModels]);
+  // Prices for the currently selected slug, feeding the cost indicator on the
+  // composer's model chip. Unknown slugs (a half-typed custom slug, a
+  // workspace-provider model) resolve to null and the chip shows no tier.
+  const selectedModelPrices = useMemo<ModelPrices | null>(() => {
+    const slug = selectedModel.trim();
+    if (!slug) return null;
+    const known =
+      catalogModels.find((m) => m.slug === slug) ??
+      rankedModels.find((m) => m.slug === slug);
+    if (!known) return null;
+    return { pricePrompt: known.pricePrompt, priceCompletion: known.priceCompletion };
+  }, [selectedModel, catalogModels, rankedModels]);
   const contextUsage = useMemo<ContextUsage | null>(
     () =>
       computeContextUsage({
@@ -1251,9 +1269,20 @@ export function ChatExperience({
   const MAX_SEARCH_RESULTS = 15;
   const filteredRankedModels = useMemo(() => {
     const query = modelSearchQuery.trim().toLowerCase();
+    // The two pinned rows are hand-written, so their prices have to be joined
+    // back from the catalog (or the ranked list when the catalog is empty) —
+    // otherwise the recommended models would be the only rows in the listbox
+    // without a cost indicator.
+    const pricesFor = (slug: string) => {
+      const hit =
+        catalogModels.find((m) => m.slug === slug) ??
+        rankedModels.find((m) => m.slug === slug);
+      if (!hit) return {};
+      return { pricePrompt: hit.pricePrompt, priceCompletion: hit.priceCompletion };
+    };
     const defaults: RankedModel[] = [
-      { slug: DEFAULT_MODEL, name: DEFAULT_MODEL_LABEL },
-      { slug: ADVANCED_MODEL, name: ADVANCED_MODEL_LABEL },
+      { slug: DEFAULT_MODEL, name: DEFAULT_MODEL_LABEL, ...pricesFor(DEFAULT_MODEL) },
+      { slug: ADVANCED_MODEL, name: ADVANCED_MODEL_LABEL, ...pricesFor(ADVANCED_MODEL) },
     ];
 
     // Lockdown chats are pinned to the operator-configured allow-list.
@@ -1334,8 +1363,24 @@ export function ChatExperience({
         cache: "no-store",
       });
       if (!response.ok) return;
-      const data = (await response.json()) as { models?: RankedModel[] };
-      setRankedModels(data.models ?? []);
+      const data = (await response.json()) as {
+        models?: Array<{
+          slug: string;
+          name: string;
+          created?: number;
+          price_prompt?: number;
+          price_completion?: number;
+        }>;
+      };
+      setRankedModels(
+        (data.models ?? []).map((m) => ({
+          slug: m.slug,
+          name: m.name,
+          created: m.created,
+          pricePrompt: m.price_prompt,
+          priceCompletion: m.price_completion,
+        })),
+      );
     } catch {
       /* optional enhancement only */
     } finally {
@@ -1381,6 +1426,8 @@ export function ChatExperience({
           name: string;
           context_length?: number;
           created?: number;
+          price_prompt?: number;
+          price_completion?: number;
         }>;
       };
       const normalized: RankedModel[] = (data.models ?? []).map((m) => ({
@@ -1388,6 +1435,8 @@ export function ChatExperience({
         name: m.name,
         contextLength: m.context_length,
         created: m.created,
+        pricePrompt: m.price_prompt,
+        priceCompletion: m.price_completion,
       }));
       setCatalogModels(normalized);
     } catch {
@@ -4490,6 +4539,7 @@ export function ChatExperience({
                 selectedModel={selectedModel}
                 setSelectedModel={setSelectedModel}
                 selectedModelLabel={selectedModelLabel}
+                selectedModelPrices={selectedModelPrices}
                 modelError={modelError}
                 modelPickerOpen={modelPickerOpen}
                 setModelPickerOpen={setModelPickerOpen}
