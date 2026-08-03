@@ -1,8 +1,16 @@
 # Sandbox OCI runtimes — runc · Kata · libkrun
 
-Every agent tool call (`bash`, `run_python`, file I/O, MCP) runs inside the
-**mandatory** rootless-Podman sandbox — there is no fast path that skips it
-([ADR-0002](adr/0002-mandatory-rootless-podman-sandbox.md)). What this guide
+Every agent tool call's model-authored local execution (`bash`, `run_python`,
+file I/O) runs inside the **mandatory** rootless-Podman sandbox — there is no
+fast path that skips it
+([ADR-0002](adr/0002-mandatory-rootless-podman-sandbox.md)). MCP tool calls are
+the deliberate exception: they execute **host-side** in the credential-owning
+`fleet mcp-broker` process, so connector secrets never enter the sandbox
+([ADR-0003](adr/0003-host-side-mcp-credential-brokering.md),
+[ADR-0040](adr/0040-child-owned-remote-mcp-runtime.md)) — which also means the
+runtime choice below does not change an MCP call's isolation posture.
+[ADR-0036](adr/0036-sandboxed-file-tools-and-host-io-exceptions.md) enumerates
+the full host-side control-plane/broker exception set. What this guide
 covers is the *isolation posture* of that sandbox: which OCI runtime Podman
 executes the container under, selected per deployment without replacing Podman
 or changing any other invariant.

@@ -41,7 +41,10 @@ turn's grant cannot be reused by another.
 
 This mode is **explicitly a best-effort control for proxy-honoring clients, NOT a
 security boundary against a hostile process.** We state this in the code
-(`EgressProxy` doc), in operator docs (`AGENTS.md`), and here.
+(`EgressProxy` doc, `internal/sandbox/proxy.go`), in the per-feature design
+notes (`docs/FEATURE-NOTES.md`, the #211 entry), and here — not in `AGENTS.md`,
+which no longer mentions sandbox egress (the #211 note that carried it moved to
+`docs/FEATURE-NOTES.md` in #541).
 
 - **Lockdown remains the hard seal.** It is unchanged (`--network=none`) and is
   the only posture valid when adversarial exfiltration is in the threat model.
@@ -58,9 +61,38 @@ security boundary against a hostile process.** We state this in the code
   including, since a later fix, the out-of-band approved-bash take — so the
   value now genuinely applies fleet-wide.)
 
-This does not weaken ADR-0002: allowlisted is strictly *more* restrictive than
-the pre-existing **open** mode (which already grants unrestricted egress), and
-**lockdown** is untouched. No posture that was sealed becomes unsealed.
+This does not weaken ADR-0002: **lockdown** is untouched, and no posture that
+was sealed becomes unsealed. For **proxy-honoring clients**, allowlisted is
+narrower than the pre-existing **open** mode (which already grants unrestricted
+outbound). Against a hostile process it is exactly as wide, because the proxy
+environment variables are obeyed voluntarily — that is the same best-effort
+caveat stated above, not a separate one.
+
+It is **not**, however, more restrictive in every dimension. `networkArgs`
+requests `--network=slirp4netns:allow_host_loopback=true` for allowlisted while
+open passes no network flag at all — and podman's default rootless network
+(pasta on ≥5.0, slirp4netns before it) maps **no** host loopback, while
+`allow_host_loopback=true` does. The injected `NO_PROXY` additionally exempts
+the gateway `10.0.2.2`. An allowlisted sandbox can therefore dial host-loopback
+services directly, out of band of the proxy — whose own `dialPublic`
+deliberately refuses loopback/private targets, so this reach exists *despite*
+the proxy's guard, not through it. Verified empirically: with
+`allow_host_loopback=true` a container reaches a host listener on
+`127.0.0.1`; with the default rootless network it is refused.
+
+On a default deployment the reachable set includes the chat server
+(`127.0.0.1:8080`), the orchestrator (`127.0.0.1:8000`), the egress proxy
+itself, and any loopback-bound Postgres or Rampart service.
+
+**Do not assume those services authenticate the request.** They mostly do, but
+not universally: the health endpoints (`/healthz`, `/livez`, `/readyz`) are
+deliberately unauthenticated, and the optional Rampart PII sidecar
+(`scripts/rampart-service`, bound `127.0.0.1:8787`) has **no authentication at
+all** — under allowlisted an agent can POST arbitrary text to it. So an operator
+selecting `allowlisted` should treat every loopback-bound service on the box as
+sandbox-reachable and authenticate it accordingly, or bind it somewhere the
+sandbox cannot reach. Where neither is acceptable, use **lockdown**. ADR-0031
+records the same caveat for the chat and approved-bash takes.
 
 ## Enforcement
 

@@ -30,8 +30,10 @@ the no-degrade-to-host invariant.
 A single knob — the client bundle's `manifest.yaml` `sandbox.runtime`, overridden
 by the `FLEET_SANDBOX_RUNTIME` env var — selects the OCI runtime, emitted
 verbatim as `podman run --runtime=<value>`. `""`/`runc`/`crun`/`runsc` keep the
-existing shared-kernel (or gVisor) posture; `kata` and `libkrun` give each tool
-call a dedicated KVM VM with its own guest kernel. The runtime selection is
+existing shared-kernel (or gVisor) posture; `kata` and `libkrun` make every
+sandbox container — one per turn, per scheduled run, or per conversation in
+persistent-REPL mode — a dedicated KVM VM with its own guest kernel. The runtime
+selection is
 **trusted operator config**: the bundle manifest already pins the sandbox image
 and Containerfile, so choosing the runtime is no greater an authority.
 

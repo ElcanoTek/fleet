@@ -14,9 +14,11 @@ should read [`AGENTS.md`](AGENTS.md) first.
 
 > **What you are about to stand up.** fleet is **one** Go process that runs
 > interactive chat *and* a scheduling engine on one box, driven by **one**
-> agent runtime (`internal/agentcore`). Every agent tool call — bash, Python,
-> file I/O, MCP — executes inside a **rootless-Podman sandbox**; that sandbox is
-> mandatory and host policy is enforced around it. Tests stay deterministic
+> agent runtime (`internal/agentcore`). Every agent tool call's model-authored
+> local execution — bash, Python, file I/O — executes inside a **rootless-Podman
+> sandbox**; that sandbox is mandatory and host policy is enforced around it.
+> MCP is the documented host-side broker exception, so connector credentials
+> never enter the sandbox. Tests stay deterministic
 > without a live model by using the fake-LLM seam (`internal/fakellm`, reached
 > via `OPENROUTER_BASE_URL`) — never a real key in tests.
 

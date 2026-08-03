@@ -160,9 +160,12 @@ type PoolConfig struct {
 	// sit idle (no run_python/bash call) before the reaper closes it
 	// (FLEET_PYTHON_REPL_IDLE_TTL). Zero falls back to 30m.
 	PersistentIdleTTL time.Duration
-	// PersistentMaxSessions caps how many persistent sandboxes may be live at
-	// once (FLEET_PYTHON_REPL_MAX); past it the least-recently-used idle session
-	// is evicted. Zero disables the cap.
+	// PersistentMaxSessions bounds how many persistent sandboxes are kept
+	// (FLEET_PYTHON_REPL_MAX). SOFT cap: on each create, least-recently-used IDLE
+	// sessions are evicted until the count is back under it — a session with a
+	// turn in flight is skipped, and the check runs on no other path, so the live
+	// count can overshoot until the next create or the idle reaper. Zero disables
+	// it.
 	PersistentMaxSessions int
 }
 

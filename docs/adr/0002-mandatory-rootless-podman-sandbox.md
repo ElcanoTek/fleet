@@ -51,7 +51,21 @@ present in production at all (issue #159).
   Podman in the always-on `e2e-live` CI job, which treats a *skipped* invariant
   test as a failure (a silently-skipped security test is a false green — see
   `.github/workflows/ci.yml`).
-- Hardening flags are pinned by `internal/sandbox/sandbox_hardened_test.go`.
+- The `podman run` hardening flags are pinned by
+  `internal/sandbox/podman_args_test.go`, which substitutes a fake `podman` that
+  records its argv and asserts each flag is present: `--read-only`,
+  `--cap-drop=ALL`, `--security-opt=no-new-privileges`, `--network=none`, a real
+  seccomp profile path (an `unconfined`/`none` value fails the test),
+  `--userns=keep-id:…`, the same-path workspace bind + workdir, a positive
+  `size=` on every tmpfs, `--memory-swap` equal to `--memory`, `--pids-limit`,
+  `--cpus`, and both disk-quota caps. It needs no podman and no image, so it
+  runs in the ordinary `go test` lane.
+- `internal/sandbox/sandbox_hardened_test.go` covers a different layer and pins
+  no flags: it boots a real container to prove the seccomp profile actually
+  blocks `ptrace(2)`, and pins the systemd unit's hardening profile (the
+  cgroup-migration regression and the `RestrictSUIDSGID=true` canary). All three
+  of its tests are opt-in behind `FLEET_SANDBOX_HARDENED_TEST=1`, which **no CI
+  lane sets** — they are validated by operator/manual runs only.
 
 ## Consequences
 

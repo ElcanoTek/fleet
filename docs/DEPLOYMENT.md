@@ -96,8 +96,8 @@ lowers the host's base footprint.
 > **Hypervisor isolation (optional).** By default each sandbox is a rootless
 > container sharing the host kernel. For untrusted prompts or sensitive data,
 > set the bundle manifest's `sandbox.runtime` (or `FLEET_SANDBOX_RUNTIME`) to
-> `kata` or `libkrun` to run every tool call in a dedicated **KVM microVM** with
-> its own guest kernel — an escape then needs a hypervisor CVE, not just a
+> `kata` or `libkrun` to make every sandbox container a dedicated **KVM
+> microVM** with its own guest kernel — an escape then needs a hypervisor CVE, not just a
 > container-escape. Requires `/dev/kvm`; fleet fail-closed preflights it at boot.
 > See [`docs/SANDBOX-RUNTIMES.md`](SANDBOX-RUNTIMES.md) and
 > [ADR-0010](adr/0010-microvm-sandbox-runtimes.md).

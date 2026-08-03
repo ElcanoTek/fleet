@@ -17,9 +17,11 @@ import (
 )
 
 // OCI-runtime selection (#217). The mandatory rootless-Podman sandbox can run
-// each tool call under a hypervisor-isolated runtime — Kata Containers (a
-// dedicated KVM VM with its own guest kernel) or libkrun (a lightweight
-// microVM) — instead of the default shared-kernel container. This file holds
+// under a hypervisor-isolated runtime — Kata Containers (a dedicated KVM VM
+// with its own guest kernel) or libkrun (a lightweight microVM) — instead of
+// the default shared-kernel container. The VM boundary has the granularity of
+// the container it replaces (one per turn / scheduled run / persistent-REPL
+// conversation), so every tool call in a turn shares it. This file holds
 // the runtime-name normalization, the boot-time fail-closed preflight, the
 // host-side probe binary mapping, and the Kata guest-memory overhead math. The
 // `--runtime=<value>` flag itself is emitted unchanged in container.go; this is
