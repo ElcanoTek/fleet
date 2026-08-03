@@ -76,9 +76,11 @@ func allowlistedNetworkHelper() (string, error) {
 	return "", fmt.Errorf("networkArgs emitted no --network flag for allowlisted mode")
 }
 
-// PreflightAllowlistedNetwork verifies the host can actually deliver the
-// allowlisted egress posture, by asking Podman whether it has the rootless
-// network helper that posture requires. Called from the single production
+// PreflightAllowlistedNetwork verifies that Podman can RESOLVE the rootless
+// network helper the allowlisted egress posture requires. Deliberately that and
+// not more: a presence check cannot prove the binary works (a corrupt or
+// non-executable slirp4netns still reports a path), so this catches the common,
+// total failure — the helper is simply not installed — and nothing subtler. Called from the single production
 // pool-construction path (agent.buildSandboxPool) when
 // FLEET_DEFAULT_NETWORK_MODE=allowlisted, and from `fleet validate-config`.
 //
