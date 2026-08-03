@@ -19,6 +19,15 @@ prior versions are listed because none have shipped.
 
 ### Security
 
+- Always emit the per-file `--ulimit fsize` sandbox disk quota, adding
+  `--storage-opt size` on top where the driver supports it, instead of
+  choosing one or the other. The either/or left the workspace **uncapped on
+  exactly the hosts with the better storage driver**: `--storage-opt` bounds
+  the writable layer, which is essentially unwritable under `--read-only`, and
+  does not apply to bind mounts — so `dd if=/dev/zero of=big` in the default
+  workdir could fill the host disk, the scenario `FLEET_SANDBOX_DISK_GB`
+  exists to prevent. The boot log and the `DiskLimitGB` docs now state plainly
+  that total workspace bytes remain unbounded.
 - Apply the fleet-wide `FLEET_DEFAULT_NETWORK_MODE` to the approved-bash take.
   An approval executes out-of-band of the turn loop and honored only the
   per-conversation lockdown seal, so on a `lockdown` deployment an approved

@@ -658,9 +658,9 @@ func (p *Pool) storageOptSupported(ctx context.Context) bool {
 		}
 		p.storageOptOK = ProbeStorageOptSupport(ctx, p.cfg.Container.PodmanBinary, p.cfg.Container.Image)
 		if p.storageOptOK {
-			log.Printf("sandbox disk quota: storage-opt size=%dg — writable layer hard-capped (total usage bounded)", gb)
+			log.Printf("sandbox disk quota: ulimit fsize=%dGiB (per-file, covers the workspace bind mount) + storage-opt size=%dg (total writable LAYER). Total workspace bytes are NOT capped — bind mounts are outside the storage quota.", gb, gb)
 		} else {
-			log.Printf("sandbox disk quota: storage-opt unsupported on this storage driver; falling back to ulimit fsize=%dGiB — caps any single file but NOT total disk use (use overlay+xfs(pquota)/btrfs for a hard cap)", gb)
+			log.Printf("sandbox disk quota: ulimit fsize=%dGiB only — storage-opt unsupported on this storage driver, so the writable layer has no total cap either (use overlay+xfs(pquota)/btrfs for one). Caps any single file, not total disk use.", gb)
 		}
 	})
 	return p.storageOptOK
