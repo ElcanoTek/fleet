@@ -83,6 +83,30 @@ prior versions are listed because none have shipped.
 - A login attempt refused by the `/auth/verify` rate limiter surfaced as "the
   chat server isn't reachable" rather than the throttle message the backend
   actually returned.
+- An env-file override of a `${VAR:-default}` MCP env/header key was silently
+  ignored on the standalone paths (`fleet serve`, `task run`, `mcp test`,
+  `validate-config`): the bundle manifest interpolates BEFORE `config.Load`
+  applies the `.env` file, so the literal default was baked in at load — and
+  the override's var name did not even survive the `.env` allowlist, because
+  `EnvVarNames` scanned the post-interpolation values where the token no
+  longer existed (the fleet#706 residual). Connector env/header values (and
+  inline `http_tools` headers) now keep their raw `${...}` text through the
+  load and resolve against the live process env at catalog-build time, after
+  the `.env` file is applied, so the env-file value wins over the default.
+  The same single-pass resolution repairs the `$${` escape for those fields,
+  which the load pass used to consume so the spawn pass expanded — and
+  blanked — the author's escaped literal. `${VAR:?...}` still validates at
+  load, against the pre-`.env` process env.
+
+- `${FLEET_WORKSPACE:-...}` / `${FLEET_WORKSPACE:?...}` — and any other
+  colon-suffixed spelling of a reserved runtime token — bypassed the
+  reserved-token guard, which matched only the bare form: the token was
+  resolved from the process env (an exported `FLEET_WORKSPACE` could hijack
+  it) or its default was baked into the manifest, silently defeating the
+  launch-time workspace substitution. Non-bare reserved-token spellings now
+  fail the bundle load with an error naming the contract
+  (docs/MCP-BUNDLE-ENV.md), and the reserved names are no longer registered
+  into the `.env` allowlist as if they were ordinary env vars.
 
 - The production MCP-broker boundary refused to boot any bundle that wires the
   documented cutlass-family connector contract: the connector/parent env

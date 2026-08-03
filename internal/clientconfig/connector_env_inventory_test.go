@@ -55,7 +55,7 @@ providers:
 			t.Errorf("ConnectorEnvVarNames = %v, must exclude %q", names, unwanted)
 		}
 	}
-	if got := b.MCPCatalog[0].Env["API_TOKEN"]; got != "connector-secret" {
+	if got := b.MCPServerConfigs()["mail"].Env["API_TOKEN"]; got != "connector-secret" {
 		t.Fatalf("runtime interpolation changed: API_TOKEN = %q", got)
 	}
 }
