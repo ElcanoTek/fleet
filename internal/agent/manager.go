@@ -563,9 +563,9 @@ func buildSandboxPool(cfg *config.Config, personasDir, protocolsDir, systemPromp
 	// Fail closed BEFORE the warm pool spawns its first container: a kata/krun
 	// runtime whose KVM or runtime binary is missing must abort boot, never
 	// silently degrade to a shared-kernel container (the no-degrade invariant,
-	// ADR-0010). A shared-kernel runtime (runc/crun/runsc/empty) preflights as a
-	// no-op.
-	if err := sandbox.PreflightRuntime(context.Background(), sandboxRuntime); err != nil {
+	// ADR-0010). A named shared-kernel runtime (runc/crun/runsc) is checked too,
+	// but only for podman resolvability; the empty default preflights as a no-op.
+	if err := sandbox.PreflightRuntime(context.Background(), poolCfg.Container.PodmanBinary, sandboxRuntime); err != nil {
 		return nil, fmt.Errorf("sandbox runtime preflight failed (fail-closed): %w", err)
 	}
 	log.Printf("sandbox: container mode, image=%s, pool=%d, workspace=%s, runtime=%s",

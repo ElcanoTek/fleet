@@ -69,19 +69,31 @@ Verify a host before going live:
 fleet validate-config
 ```
 
-The `sandbox` check confirms podman is reachable, the image is present, the
-runtime binary is on `PATH`, and — for `kata`/`krun` — runs the same fail-closed
-KVM preflight the boot path runs.
+The `sandbox` check confirms podman is reachable, the image is present, and runs
+exactly the same fail-closed preflight the boot path runs.
 
 ## Fail-closed preflight
 
-When the runtime resolves to `kata` or `krun`, fleet runs a preflight **before
-the warm pool spawns its first container**. A failure **aborts startup** — fleet
-never silently falls back to a shared-kernel container, because that would be a
-silent loss of the isolation you asked for (the no-degrade invariant).
+fleet runs a preflight **before the warm pool spawns its first container**. A
+failure **aborts startup** — fleet never silently falls back to a shared-kernel
+container, because that would be a silent loss of the isolation you asked for
+(the no-degrade invariant).
 
-**Kata** — fails closed unless:
-- `kata-runtime` is on `PATH`, and
+**Any runtime you name** must be resolvable by podman. fleet asks
+`podman --runtime=<name> info` which binary podman will actually exec, rather
+than guessing the binary from the name and looking it up on `PATH`. That means:
+
+- A runtime installed on `PATH` but never registered in `containers.conf` fails
+  at **boot**, with the reason, instead of failing at every container creation.
+- A `containers.conf` `[engine.runtimes]` entry pointing at a binary that is
+  *not* on `PATH` works fine — and is preflighted at its real location.
+- The binary fleet validates is, by construction, the binary that will run your
+  tool calls.
+
+Leaving the runtime unset (podman's own default) skips the preflight: there is
+no name to resolve.
+
+**Kata** — additionally fails closed unless:
 - `/dev/kvm` opens **read-write** (the fleet user must be in the `kvm` group).
 
 `kata-runtime check --no-network-checks` runs too, but only as a **non-fatal
@@ -89,10 +101,9 @@ warning** — run non-root it skips privileged checks and can exit non-zero for
 reasons that don't mean Kata is unusable, so its exit code is logged, not gated
 on. `/dev/kvm` is the real gate.
 
-**libkrun / krun** — fails closed unless:
-- `/dev/kvm` opens read-write,
-- `krun` is on `PATH`, and
-- `krun --version` reports `+LIBKRUN`. A plain `crun` renamed to `krun` would
+**libkrun / krun** — additionally fails closed unless:
+- `/dev/kvm` opens read-write, and
+- the **resolved** binary's `--version` reports `+LIBKRUN`. A plain `crun` renamed to `krun` would
   run as an ordinary shared-kernel container — the missing feature flag is a
   hard fail so that downgrade can't pass silently.
 

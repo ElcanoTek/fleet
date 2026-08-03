@@ -19,6 +19,17 @@ prior versions are listed because none have shipped.
 
 ### Security
 
+- Resolve the sandbox OCI runtime through Podman in the fail-closed preflight
+  instead of guessing the binary from its name. `podman --runtime=<r> info`
+  resolves the name through `containers.conf` and errors on an unregistered
+  one, so the preflight now probes the binary Podman will actually exec: a
+  `containers.conf` remap can no longer make it validate a *different* binary
+  than the one running every tool call, and a runtime installed on `PATH` but
+  never registered now fails at boot rather than at every container creation.
+  Resolution applies to any non-empty runtime (only Podman's own default is a
+  no-op); `kata`/`krun` keep their additional KVM and `+LIBKRUN` gates. This
+  also removes a false FAIL in `fleet validate-config`, which reported a valid
+  `containers.conf` mapping to an off-`PATH` binary as a missing runtime.
 - Always emit the per-file `--ulimit fsize` sandbox disk quota, adding
   `--storage-opt size` on top where the driver supports it, instead of
   choosing one or the other. The either/or left the workspace **uncapped on

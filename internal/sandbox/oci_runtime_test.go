@@ -6,7 +6,9 @@ package sandbox
 import (
 	"context"
 	"math"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -257,40 +259,255 @@ func TestKataOverheadMB(t *testing.T) {
 	}
 }
 
-func TestPreflightRuntimeNoopForSharedKernel(t *testing.T) {
-	ctx := context.Background()
-	for _, rt := range []string{"", "  ", "runc", "crun", "runsc"} {
-		if err := PreflightRuntime(ctx, rt); err != nil {
-			t.Errorf("PreflightRuntime(%q) = %v, want nil (shared-kernel runtimes need no preflight)", rt, err)
+// ── preflight: podman-authoritative runtime resolution ──
+//
+// PreflightRuntime asks podman which binary it will exec for --runtime=<name>
+// instead of guessing from the name, so these tests substitute a fake podman.
+// That makes the fail-closed paths deterministic on any host — previously the
+// kata/krun failure cases could only be observed by NOT having those runtimes
+// installed, and the +LIBKRUN hard-fail had no coverage at all.
+
+// fakePodmanResolving writes a stub podman that ASSERTS its argv before
+// answering. The assertion is the point: an argv-blind stub cannot tell
+// whether the preflight passes `--runtime=<name>` at all, so deleting that
+// flag — the entire mechanism this file exists to pin — would leave every test
+// green. wantRuntime is the normalized name the preflight must ask podman
+// about; the stub exits 2 if it is absent or if the format template is not the
+// runtime path.
+//
+// resolvePath is what the stub reports: a path (exit 0), "" for podman's real
+// "not found" failure (exit 1), or the sentinel "<empty>" for the
+// exit-0-with-no-output case, which must also fail closed.
+func fakePodmanResolving(t *testing.T, wantRuntime, resolvePath string) string {
+	t.Helper()
+	bin := filepath.Join(t.TempDir(), "fake-podman")
+	var reply string
+	switch resolvePath {
+	case "":
+		reply = "echo 'Error: default OCI runtime not found: invalid argument' >&2\nexit 1\n"
+	case "<empty>":
+		reply = "exit 0\n"
+	default:
+		// A stderr line alongside the exit-0 answer: real podman emits warnings
+		// this way (e.g. "User-selected graph driver ... overwritten") while
+		// still succeeding. resolveRuntimePath must read STDOUT ONLY — with
+		// CombinedOutput the warning would be prepended to the path and every
+		// named-runtime boot on such a host would false-abort.
+		reply = "echo 'time=\"...\" level=warning msg=\"a benign podman warning\"' >&2\n" +
+			"printf '%s\\n' \"" + resolvePath + "\"\nexit 0\n"
+	}
+	script := "#!/bin/sh\n" +
+		"case \" $* \" in *\" --runtime=" + wantRuntime + " \"*) ;; *) echo \"fake-podman: expected --runtime=" + wantRuntime + ", got: $*\" >&2; exit 2;; esac\n" +
+		"case \"$*\" in *OCIRuntime.Path*) ;; *) echo \"fake-podman: expected the runtime-path format template, got: $*\" >&2; exit 2;; esac\n" +
+		reply
+	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
+		t.Fatalf("write fake podman: %v", err)
+	}
+	return bin
+}
+
+// fakeRuntimeBinary writes a stub OCI runtime whose --version banner is
+// versionBanner. Used to exercise the +LIBKRUN check without a real crun.
+func fakeRuntimeBinary(t *testing.T, name, versionBanner string) string {
+	t.Helper()
+	bin := filepath.Join(t.TempDir(), name)
+	script := "#!/bin/sh\nprintf '%s\\n' \"" + versionBanner + "\"\nexit 0\n"
+	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
+		t.Fatalf("write fake runtime: %v", err)
+	}
+	return bin
+}
+
+// TestPreflightRuntimeNoopForPodmanDefault: only the EMPTY runtime skips the
+// preflight entirely. A named shared-kernel runtime is no longer a no-op — it
+// must at least be resolvable by podman, which catches the runtime that is
+// installed but never registered in containers.conf (previously it passed a
+// PATH lookup, then failed at every container creation).
+func TestPreflightRuntimeNoopForPodmanDefault(t *testing.T) {
+	// An unresolvable fake podman proves the empty cases never call it.
+	podman := fakePodmanResolving(t, "never-called", "")
+	for _, rt := range []string{"", "  "} {
+		if err := PreflightRuntime(context.Background(), podman, rt); err != nil {
+			t.Errorf("PreflightRuntime(%q) = %v, want nil (podman default needs no preflight)", rt, err)
 		}
 	}
 }
 
-// TestPreflightRuntimeKataFailsClosedWithoutBinary asserts the no-degrade
-// invariant: when the manifest asks for kata but kata-runtime is absent, the
-// preflight returns an error rather than letting boot proceed (and silently
-// fall back to a shared-kernel container). Guarded so a host that genuinely has
-// kata-runtime installed doesn't fail the assertion.
-func TestPreflightRuntimeKataFailsClosedWithoutBinary(t *testing.T) {
-	if _, err := exec.LookPath("kata-runtime"); err == nil {
-		t.Skip("kata-runtime present on this host; absence path not exercised")
-	}
-	if err := PreflightRuntime(context.Background(), "kata"); err == nil {
-		t.Error("PreflightRuntime(kata) without kata-runtime = nil, want fail-closed error")
+func TestPreflightRuntimeSharedKernelRequiresResolution(t *testing.T) {
+	ctx := context.Background()
+	for _, rt := range []string{"runc", "crun", "runsc"} {
+		t.Run(rt+" resolvable", func(t *testing.T) {
+			podman := fakePodmanResolving(t, rt, "/usr/bin/"+rt)
+			if err := PreflightRuntime(ctx, podman, rt); err != nil {
+				t.Errorf("PreflightRuntime(%q) with a resolvable runtime = %v, want nil", rt, err)
+			}
+		})
+		t.Run(rt+" unresolvable fails closed", func(t *testing.T) {
+			podman := fakePodmanResolving(t, rt, "")
+			err := PreflightRuntime(ctx, podman, rt)
+			if err == nil {
+				t.Fatalf("PreflightRuntime(%q) with an unregistered runtime = nil, want a fail-closed error", rt)
+			}
+			if !strings.Contains(err.Error(), "could not resolve") {
+				t.Errorf("err = %v, want it to name the resolution failure", err)
+			}
+		})
 	}
 }
 
-// TestPreflightRuntimeKrunFailsClosedWithoutKVMorBinary asserts krun fails
-// closed when KVM or the krun binary is unavailable.
-func TestPreflightRuntimeKrunFailsClosedWithoutKVMorBinary(t *testing.T) {
-	_, krunErr := exec.LookPath("krun")
-	kvmErr := kvmAccessible()
-	if krunErr == nil && kvmErr == nil {
-		t.Skip("krun + /dev/kvm both present; failure path not exercised")
+// TestPreflightRuntimeProbesTheResolvedBinary is the core regression guard: a
+// containers.conf remap must make the preflight probe the RESOLVED binary, not
+// whatever same-named binary happens to be first on PATH.
+//
+// The scenario is synthetic — real podman execs `<bin> --version` during
+// `info`, so it would not return success for a nonexistent path — but that is
+// exactly what makes it a clean discriminator: the error can only name this
+// path if the preflight used podman's answer instead of its own guess.
+func TestPreflightRuntimeProbesTheResolvedBinary(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "definitely-not-installed")
+	podman := fakePodmanResolving(t, "krun", missing)
+	err := PreflightRuntime(context.Background(), podman, "krun")
+	if err == nil {
+		t.Fatal("PreflightRuntime(krun) = nil when podman resolves it to a missing binary, want fail-closed")
 	}
-	if err := PreflightRuntime(context.Background(), "libkrun"); err == nil {
-		t.Error("PreflightRuntime(libkrun) without krun/KVM = nil, want fail-closed error")
+	if !strings.Contains(err.Error(), missing) {
+		t.Errorf("err = %v, want it to name the RESOLVED binary %q — probing the PATH guess instead is the bug this guards", err, missing)
 	}
+}
+
+// TestPreflightRuntimeEmptyResolutionFailsClosed: podman exiting 0 but naming
+// no binary must NOT be read as success. Without this, dropping the empty-path
+// guard in resolveRuntimePath ships green and the preflight goes on to probe
+// "".
+func TestPreflightRuntimeEmptyResolutionFailsClosed(t *testing.T) {
+	podman := fakePodmanResolving(t, "crun", "<empty>")
+	err := PreflightRuntime(context.Background(), podman, "crun")
+	if err == nil {
+		t.Fatal("PreflightRuntime with an empty resolved path = nil, want fail-closed")
+	}
+	if !strings.Contains(err.Error(), "empty binary path") {
+		t.Errorf("err = %v, want it to name the empty resolution", err)
+	}
+}
+
+// TestPreflightRuntimeAsksPodmanForTheNormalizedName: the operator-facing name
+// is "libkrun" but podman's registered runtime is "krun", so the preflight must
+// ask podman about the NORMALIZED name. Passing the raw value would make
+// podman reject a perfectly good libkrun host. The fake podman asserts the argv,
+// so this fails if normalization is dropped.
+func TestPreflightRuntimeAsksPodmanForTheNormalizedName(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "absent-krun")
+	podman := fakePodmanResolving(t, "krun", missing)
+	err := PreflightRuntime(context.Background(), podman, "libkrun")
+	if err == nil {
+		t.Fatal("PreflightRuntime(libkrun) = nil, want the missing-binary failure")
+	}
+	// A wrong-argv stub exits 2 with "expected --runtime=krun"; reaching the
+	// binary probe instead proves the normalized name was used.
+	if strings.Contains(err.Error(), "expected --runtime=") {
+		t.Fatalf("preflight asked podman for the RAW name, not the normalized one: %v", err)
+	}
+	if !strings.Contains(err.Error(), missing) {
+		t.Errorf("err = %v, want the resolved binary %q named", err, missing)
+	}
+}
+
+// TestPreflightRuntimeKataFailsClosedWithoutKVM: kata needs usable KVM. On a
+// host that has it, the binary check still has to pass first, so assert the
+// error names one of the two gates rather than skipping.
+func TestPreflightRuntimeKataFailsClosedWithoutKVM(t *testing.T) {
+	if kvmAccessible() == nil {
+		t.Skip("/dev/kvm is usable on this host; the KVM failure path cannot be exercised")
+	}
+	kata := fakeRuntimeBinary(t, "kata-runtime", "kata-runtime : 3.2.0")
+	podman := fakePodmanResolving(t, "kata", kata)
+	err := PreflightRuntime(context.Background(), podman, "kata")
+	if err == nil {
+		t.Fatal("PreflightRuntime(kata) without KVM = nil, want fail-closed")
+	}
+	if !strings.Contains(err.Error(), "/dev/kvm") {
+		t.Errorf("err = %v, want it to name /dev/kvm as the gate", err)
+	}
+}
+
+// TestPreflightRuntimeKrunFailsClosedWithoutKVM is the krun twin of the kata
+// KVM test. Both other krun cases resolve to a MISSING binary and so fail at
+// the binary lookup before ever reaching the KVM gate — leaving the gate the
+// ADR names untested for krun. Here the resolved binary exists and reports
+// +LIBKRUN, so KVM is the only thing left to fail on.
+func TestPreflightRuntimeKrunFailsClosedWithoutKVM(t *testing.T) {
+	if kvmAccessible() == nil {
+		t.Skip("/dev/kvm is usable on this host; the KVM failure path cannot be exercised")
+	}
+	krun := fakeRuntimeBinary(t, "krun", "crun version 1.14 +LIBKRUN")
+	podman := fakePodmanResolving(t, "krun", krun)
+	err := PreflightRuntime(context.Background(), podman, "krun")
+	if err == nil {
+		t.Fatal("PreflightRuntime(krun) without KVM = nil, want fail-closed")
+	}
+	if !strings.Contains(err.Error(), "/dev/kvm") {
+		t.Errorf("err = %v, want it to name /dev/kvm as the gate", err)
+	}
+}
+
+// TestResolveRuntimePathDefaultsPodmanBinary covers the branch EVERY production
+// boot takes: agent.buildSandboxPool passes poolCfg.Container.PodmanBinary,
+// which is structurally "" there (the field is only filled in by
+// applyContainerDefaults, inside NewContainer). Dropping the ""→"podman"
+// fallback would break every named-runtime boot while leaving the rest of this
+// file green, because the other tests all pass an explicit stub path.
+func TestResolveRuntimePathDefaultsPodmanBinary(t *testing.T) {
+	dir := t.TempDir()
+	// A "podman" on PATH that answers like the real one.
+	stub := filepath.Join(dir, "podman")
+	script := "#!/bin/sh\ncase \" $* \" in *\" --runtime=crun \"*) ;; *) exit 2;; esac\nprintf '%s\\n' /usr/bin/crun\nexit 0\n"
+	if err := os.WriteFile(stub, []byte(script), 0o700); err != nil {
+		t.Fatalf("write stub podman: %v", err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	got, err := resolveRuntimePath(context.Background(), "", "crun")
+	if err != nil {
+		t.Fatalf("resolveRuntimePath with an empty podman binary = %v, want the PATH default to be used", err)
+	}
+	if got != "/usr/bin/crun" {
+		t.Errorf("resolved path = %q, want /usr/bin/crun", got)
+	}
+}
+
+// TestVerifyKrunLibkrun covers the check that a crun renamed to `krun` cannot
+// masquerade as libkrun — the SILENT loss of VM isolation ADR-0010 forbids.
+// Tested directly rather than through PreflightRuntime because the KVM gate
+// runs first and would mask it on every CI host.
+func TestVerifyKrunLibkrun(t *testing.T) {
+	ctx := context.Background()
+	t.Run("plain crun is rejected", func(t *testing.T) {
+		bin := fakeRuntimeBinary(t, "krun", "crun version 1.14\ncommit: abc\nspec: 1.0.0\n+SYSTEMD +SELINUX +CAP +SECCOMP")
+		err := verifyKrunLibkrun(ctx, bin)
+		if err == nil {
+			t.Fatal("a crun build WITHOUT +LIBKRUN was accepted — it would run as a shared-kernel container")
+		}
+		if !strings.Contains(err.Error(), "+LIBKRUN") {
+			t.Errorf("err = %v, want it to name the missing +LIBKRUN feature", err)
+		}
+	})
+	t.Run("a real libkrun build is accepted", func(t *testing.T) {
+		bin := fakeRuntimeBinary(t, "krun", "crun version 1.14\n+SYSTEMD +SELINUX +CAP +SECCOMP +LIBKRUN +WASM")
+		if err := verifyKrunLibkrun(ctx, bin); err != nil {
+			t.Errorf("verifyKrunLibkrun with +LIBKRUN = %v, want nil", err)
+		}
+	})
+	t.Run("banner case does not matter", func(t *testing.T) {
+		bin := fakeRuntimeBinary(t, "krun", "crun version 1.14 +libkrun")
+		if err := verifyKrunLibkrun(ctx, bin); err != nil {
+			t.Errorf("verifyKrunLibkrun with a lowercase banner = %v, want nil (the check is case-insensitive)", err)
+		}
+	})
+	t.Run("an unrunnable binary fails closed", func(t *testing.T) {
+		if err := verifyKrunLibkrun(ctx, filepath.Join(t.TempDir(), "nope")); err == nil {
+			t.Error("verifyKrunLibkrun on a missing binary = nil, want an error")
+		}
+	})
 }
 
 // TestContainerKataRuntime is a hypervisor-gated integration test (acceptance

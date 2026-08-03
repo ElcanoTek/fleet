@@ -557,9 +557,9 @@ func requiredGateVarsMissing(bundle *clientconfig.Bundle) []string {
 // the resolved sandbox image exists locally (the same ref the boot path consumes
 // via bundle.Sandbox().ResolvedImageRef() / cfg.SandboxImage). If a non-default
 // OCI runtime is selected (FLEET_SANDBOX_RUNTIME or the bundle's sandbox.runtime
-// — e.g. runsc/gVisor, kata, libkrun) its binary must be on PATH, and the
-// hypervisor-backed tiers (kata/krun) must pass the same fail-closed KVM
-// preflight the boot path runs (#217).
+// — e.g. runsc/gVisor, kata, libkrun) podman must be able to resolve it, and the
+// hypervisor-backed tiers (kata/krun) must additionally pass the same
+// fail-closed KVM preflight the boot path runs (#217).
 func checkSandbox(ctx context.Context, cfg *config.Config, bundle *clientconfig.Bundle) checkResult {
 	res := checkResult{Name: "sandbox"}
 	containerBacked := sandboxIsContainerBacked(cfg)
@@ -576,31 +576,30 @@ func checkSandbox(ctx context.Context, cfg *config.Config, bundle *clientconfig.
 		res.Detail = "podman not found in PATH"
 		return res
 	}
-	// A non-default OCI runtime must be installed and — for the hypervisor-backed
-	// tiers (kata/krun) — actually able to deliver isolation. Resolve the runtime
-	// the same way the boot path does (env wins, else the bundle manifest), map
-	// the name to the binary podman resolves --runtime to ("kata" → "kata-runtime",
-	// "libkrun"/"krun" → "krun"), and run the real fail-closed preflight (#217).
-	if rt := resolveSandboxRuntime(cfg, bundle); rt != "" {
-		if bin := sandbox.RuntimeBinary(rt); bin != "" {
-			if _, err := exec.LookPath(bin); err != nil {
-				res.Status = statusFail
-				res.Detail = fmt.Sprintf("sandbox runtime %q: binary %q not found in PATH", rt, bin)
-				return res
-			}
-		}
-		if err := sandbox.PreflightRuntime(ctx, rt); err != nil {
-			res.Status = statusFail
-			res.Detail = err.Error()
-			return res
-		}
-	}
+	// `podman info` FIRST: the runtime preflight below also shells out to podman,
+	// so a broken rootless setup would otherwise be reported as "could not
+	// resolve --runtime=…", blaming the runtime for a podman problem.
 	infoCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	if err := exec.CommandContext(infoCtx, podmanBin, "info").Run(); err != nil {
 		res.Status = statusFail
 		res.Detail = "podman info failed (rootless/daemon setup not accessible): " + err.Error()
 		return res
+	}
+	// A non-default OCI runtime must be resolvable by podman and — for the
+	// hypervisor-backed tiers (kata/krun) — actually able to deliver isolation.
+	// Resolve the runtime the same way the boot path does (env wins, else the
+	// bundle manifest) and run the real fail-closed preflight (#217), which asks
+	// podman which binary it will exec rather than guessing from the name. A
+	// separate PATH lookup here would be both weaker and wrong: it validates
+	// whichever same-named binary is first on PATH, and it reports FAIL for a
+	// perfectly good containers.conf that maps the name to an off-PATH binary.
+	if rt := resolveSandboxRuntime(cfg, bundle); rt != "" {
+		if err := sandbox.PreflightRuntime(ctx, podmanBin, rt); err != nil {
+			res.Status = statusFail
+			res.Detail = err.Error()
+			return res
+		}
 	}
 	// Image existence: the SAME resolved ref the boot path consumes.
 	image := resolveSandboxImage(cfg, bundle)

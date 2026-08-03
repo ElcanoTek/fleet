@@ -41,10 +41,18 @@ var (
 // client + cost-aware caching, and MCP liveness needs a real broker round-trip —
 // reporting either without actually probing would violate the honesty invariant.
 func buildReadinessChecks(cfg *config.Config, chatDB, schedDB dbPinger) []health.Check {
-	// Probe the runtime binary podman would resolve --runtime to: an empty
-	// runtime means the podman default, else the OCI runtime's binary name
+	// Probe a best-effort guess at the runtime binary: an empty runtime means
+	// the podman default, else the OCI runtime's conventional binary name
 	// ("kata" → "kata-runtime", "krun" → "krun"). Mapping via RuntimeBinary keeps
 	// `<bin> --version` from spuriously failing on a bare "kata" (#217).
+	//
+	// Deliberately a GUESS, not podman's resolution: this readiness probe runs
+	// on every /readyz and must stay cheap, whereas resolving through podman
+	// costs a `podman info` per call. Under a containers.conf remap it can
+	// therefore report on a different binary than podman execs. That is
+	// acceptable here because it is a liveness signal, not a security gate —
+	// the fail-closed boot preflight (sandbox.PreflightRuntime) does resolve
+	// through podman and is what the ADR-0010 guarantees rest on.
 	runtimeBin := "podman"
 	if bin := sandbox.RuntimeBinary(cfg.SandboxRuntime); bin != "" {
 		runtimeBin = bin
