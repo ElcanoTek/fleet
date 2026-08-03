@@ -71,9 +71,36 @@ import (
 // the kernel audit log from inside the sandbox. Closing it is harder than
 // AF_VSOCK was: podman expresses it as an ERRNO rule on (AF_NETLINK,
 // NETLINK_AUDIT) alongside a broad allow, and reproducing that ordering here
-// did not deny it. AF_VSOCK, the case that actually matters for the microVM
-// runtimes, IS now closed — see TestSeccompProfileDeniesAFVSock for the shape
-// and why one non-overlapping rule beats copying podman's five.
+// did not deny it.
+//
+// AF_VSOCK — the guest<->host channel under the Kata/libkrun runtimes — is now
+// denied, but be precise about how far that goes:
+//
+//   - It stops the ORDINARY calling convention. socket(AF_VSOCK, …) returns
+//     EPERM. See TestSeccompProfileDeniesAFVSock for the rule shape and why one
+//     non-overlapping rule beats copying podman's five.
+//   - It does NOT stop a hostile payload. seccomp compares the full 64-bit
+//     register while the kernel truncates `domain` to int, so
+//     socket(0x100000028, …) — AF_VSOCK with any high bit set — still succeeds.
+//     Verified from inside the sandbox with six lines of ctypes, i.e. by exactly
+//     the actor ADR-0002 threat-models.
+//   - PODMAN'S OWN DEFAULT HAS THE IDENTICAL BYPASS, measured the same way. So
+//     this is parity with the platform default, not a fleet-specific weakness,
+//     and the rule is still worth having: it closes the accidental and the
+//     library-mediated cases.
+//   - Two obvious hardenings were tried and REJECTED on measurement, not taste.
+//     A single rule ANDing two comparisons on arg0 (NE 40 plus LT 2^32) fails
+//     OPEN — plain AF_VSOCK became reachable again and the container still
+//     started. A SCMP_CMP_MASKED_EQ deny is absorbed by the broad NE allow,
+//     whichever order they appear in: the same trap documented above.
+//
+// Also unguarded, and noted rather than fixed: socketcall(2) is unconditionally
+// allowed while `architectures` still lists SCMP_ARCH_X86 / X32 / ARM. On i386,
+// socket() goes through socketcall, which passes its arguments via a memory
+// array seccomp cannot inspect, so the AF_VSOCK rule does not cover that path.
+// Podman allows socketcall unconditionally too (and its archMap omits i386,
+// where ours does not). Practically gated by the image shipping no 32-bit
+// loader.
 //
 //go:embed seccomp-default.json
 var defaultSeccompProfile []byte

@@ -90,8 +90,16 @@ prior versions are listed because none have shipped.
   `SCMP_CMP_NE` allows also matches `AF_VSOCK` and absorbs the narrow deny.
   Verified against the real image: `AF_VSOCK` returns EPERM while `AF_UNIX`,
   `AF_INET`, `AF_INET6`, datagram and `AF_NETLINK` sockets all still open, and
-  DNS, HTTPS and `pip install` all work. Still open and now documented in
-  `seccomp.go`: `AF_NETLINK`+`NETLINK_AUDIT`, which podman also denies.
+  DNS, HTTPS and `pip install` all work. **Scope, precisely:** this stops the
+  ordinary calling convention, not a hostile payload — seccomp compares the full
+  64-bit register while the kernel truncates `domain` to `int`, so
+  `socket(0x100000028, …)` still succeeds. **Podman's own default has the
+  identical bypass**, so this is parity with the platform default rather than a
+  fleet-specific weakness, and two obvious hardenings were measured and rejected
+  (ANDing two comparisons on one argument fails *open*; a masked-equality deny is
+  absorbed by the broad allow). Also still open and documented in `seccomp.go`:
+  `AF_NETLINK`+`NETLINK_AUDIT`, which podman denies, and `socketcall(2)` on the
+  32-bit architectures the profile still lists.
 - Deny `vmsplice` in the sandbox seccomp profile. Podman's own default profile
   denies it; ours allowed it, which made fleet's custom profile **weaker than
   shipping no profile at all** in that one dimension — the opposite of what it

@@ -300,9 +300,12 @@ func TestSeccompProfileDeniesAFVSock(t *testing.T) {
 //
 // The existing ptrace canary lives in sandbox_hardened_test.go, which is opt-in
 // behind FLEET_SANDBOX_HARDENED_TEST and therefore runs in NO CI lane. This one
-// is only podman-gated, so it runs in a normal `make test` on a podman host and
-// in the e2e-live lane — which is where a profile-plumbing regression (a
-// mis-resolved path, a dropped --security-opt) would otherwise go unnoticed.
+// is only podman-gated, so it runs in a normal `make test` on a podman host —
+// and it is named in the e2e-live invariant list in .github/workflows/ci.yml,
+// the one always-on lane with real rootless podman, which also treats a SKIP as
+// a failure. Being selected there is what makes it catch a profile-plumbing
+// regression (a mis-resolved path, a dropped --security-opt); the `go` job masks
+// podman, so it would self-skip there.
 func TestSeccompProfileDeniesAtRuntime(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("seccomp is linux-only")
