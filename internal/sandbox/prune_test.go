@@ -4,8 +4,10 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fakePrunePodman writes a shell script that stands in for podman: `ps` prints
@@ -49,6 +51,13 @@ func TestPruneOrphanedContainers_ScopedByInstanceLabel(t *testing.T) {
 		"eee|running|" + livePID + "@50",   // live sibling instance → skip
 		"fff|created|",                     // not running → always remove
 		"ggg|running|not-a-label",          // malformed label, can't attribute → skip
+		// The warm-pool race: this process's OWN containers can legitimately be
+		// in "created" state while the sweep lists them, because the sweep runs
+		// after buildInteractiveEngine has started the pool filling. Before the
+		// own-label check these two were force-removed by their own process at
+		// every boot, since the created/exited branch ignored the label.
+		"hhh|created|" + thisInstanceLabel,
+		"iii|exited|" + thisInstanceLabel,
 	}, "\n") + "\n"
 	script, rmArgs := fakePrunePodman(t, psOutput)
 
@@ -63,7 +72,7 @@ func TestPruneOrphanedContainers_ScopedByInstanceLabel(t *testing.T) {
 		t.Fatalf("PruneOrphanedContainers: %v", err)
 	}
 	if removed != 3 {
-		t.Errorf("removed = %d, want 3", removed)
+		t.Errorf("removed = %d, want 3 (this process's own created/exited containers must NOT be swept)", removed)
 	}
 	got, err := os.ReadFile(rmArgs)
 	if err != nil {
@@ -93,21 +102,98 @@ func TestPruneOrphanedContainers_NothingToPrune(t *testing.T) {
 
 func TestInstanceLabelPID(t *testing.T) {
 	cases := []struct {
-		label string
-		pid   int
-		ok    bool
+		label   string
+		pid     int
+		started int64
+		ok      bool
 	}{
-		{"1234@567", 1234, true},
-		{"", 0, false},
-		{"no-at-sign", 0, false},
-		{"abc@567", 0, false},
-		{"-5@567", 0, false},
-		{"0@567", 0, false},
+		{"1234@567", 1234, 567, true},
+		{"", 0, 0, false},
+		{"no-at-sign", 0, 0, false},
+		{"abc@567", 0, 0, false},
+		{"-5@567", 0, 0, false},
+		{"0@567", 0, 0, false},
+		// A label with an unusable start half still yields the pid, with
+		// startedAt 0 meaning "unverifiable" — NOT "started at the epoch",
+		// which would make every such owner look long dead.
+		{"1234@", 1234, 0, true},
+		{"1234@notanumber", 1234, 0, true},
+		{"1234@0", 1234, 0, true},
+		{"1234@-9", 1234, 0, true},
 	}
 	for _, tc := range cases {
-		pid, ok := instanceLabelPID(tc.label)
-		if pid != tc.pid || ok != tc.ok {
-			t.Errorf("instanceLabelPID(%q) = (%d, %v), want (%d, %v)", tc.label, pid, ok, tc.pid, tc.ok)
+		pid, started, ok := instanceLabelOwner(tc.label)
+		if pid != tc.pid || started != tc.started || ok != tc.ok {
+			t.Errorf("instanceLabelOwner(%q) = (%d, %d, %v), want (%d, %d, %v)", tc.label, pid, started, ok, tc.pid, tc.started, tc.ok)
 		}
+	}
+}
+
+// TestLabeledOwnerStillRunningPIDReuse is the starvation guard. Before the
+// start-time check, a crashed run's container was skipped forever once its pid
+// was REUSED by any unrelated live process — the orphan the sweep exists to
+// reclaim became immortal, while prune.go's own comment claimed the label's
+// start time "disambiguates pid reuse". Nothing read it.
+func TestLabeledOwnerStillRunningPIDReuse(t *testing.T) {
+	origAlive, origStart := pidAlive, pidStartedAtUnix
+	t.Cleanup(func() { pidAlive, pidStartedAtUnix = origAlive, origStart })
+
+	cases := []struct {
+		name         string
+		alive        bool
+		labeledStart int64
+		actualStart  int64
+		actualOK     bool
+		want         bool
+	}{
+		{"dead pid is not running", false, 1000, 0, false, false},
+		{"same process (identical start)", true, 1000, 1000, true, true},
+		{"same process (start just before its label)", true, 1000, 998, true, true},
+		{"same process (clock skew inside tolerance)", true, 1000, 1000 + pidReuseTolerance - 1, true, true},
+		// The bug: pid alive but it started long after the label was stamped,
+		// so it is a DIFFERENT process wearing a recycled pid.
+		{"reused pid started well after the label", true, 1000, 1000 + pidReuseTolerance + 1, true, false},
+		{"reused pid started hours later", true, 1000, 1000 + 86400, true, false},
+		// Unknowns fail SAFE: never remove a container we cannot prove stale.
+		{"unverifiable /proc read assumes alive", true, 1000, 0, false, true},
+		{"label without a start half assumes alive", true, 0, 1000 + 86400, true, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pidAlive = func(int) bool { return tc.alive }
+			pidStartedAtUnix = func(int) (int64, bool) { return tc.actualStart, tc.actualOK }
+			if got := labeledOwnerStillRunning(4242, tc.labeledStart); got != tc.want {
+				t.Errorf("labeledOwnerStillRunning = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestPIDStartedAtUnixRealProcess exercises the real /proc reader against this
+// test process and pid 1, so the field offset and the USER_HZ arithmetic are
+// pinned against the running kernel rather than a fixture.
+func TestPIDStartedAtUnixRealProcess(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("/proc-based start time is linux-only")
+	}
+	self, ok := pidStartedAtUnix(os.Getpid())
+	if !ok {
+		t.Fatal("could not read this process's start time from /proc")
+	}
+	now := time.Now().Unix()
+	// This test binary started moments ago; anything outside a wide window means
+	// the field offset or the tick conversion is wrong.
+	if self > now+5 || self < now-3600 {
+		t.Errorf("own start time = %d, which is not plausibly within the last hour of now=%d", self, now)
+	}
+	init, ok := pidStartedAtUnix(1)
+	if !ok {
+		t.Fatal("could not read pid 1's start time")
+	}
+	if init > self {
+		t.Errorf("pid 1 start (%d) is after this process's start (%d) — the arithmetic is wrong", init, self)
+	}
+	if _, ok := pidStartedAtUnix(-1); ok {
+		t.Error("a negative pid must not resolve a start time")
 	}
 }

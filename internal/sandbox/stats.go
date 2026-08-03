@@ -262,12 +262,28 @@ func collectStats(ctx context.Context, podman, containerID string, interval time
 	}
 }
 
+// statsPollWaitDelay bounds how long a single `podman stats` invocation may keep
+// its pipes open after its context is cancelled. Deliberately much shorter than
+// BashWaitDelay (10s): bash output is the user's payload and worth waiting for,
+// whereas a stats sample is telemetry the caller discards on any error — and
+// this one sits on the teardown path.
+const statsPollWaitDelay = 2 * time.Second
+
 // pollOnce runs a single `podman stats --no-stream --format json` and returns
 // the first decoded sample. ok=false on any error (binary missing, container
 // gone, malformed output) so the caller can skip the tick.
 func pollOnce(ctx context.Context, podman, containerID string) (PodmanStatSample, bool) {
 	//nolint:gosec // podman binary + our generated container ID, no shell, no user input
 	cmd := exec.CommandContext(ctx, podman, "stats", "--no-stream", "--format", "json", containerID)
+	// Without WaitDelay, Output() blocks until the stdout/stderr pipes close,
+	// which cancelling ctx does NOT guarantee — CommandContext kills the process
+	// but anything holding those pipes keeps Wait blocked (the same hazard
+	// BashWaitDelay exists for on the bash path). That matters more here than it
+	// looks: close() waits for this poller to finish before tearing the container
+	// down, so a wedged telemetry sample would stall sandbox teardown, and with it
+	// the turn and the pool slot. Short on purpose — a stats sample this slow is
+	// already useless, and the caller simply skips the tick on error.
+	cmd.WaitDelay = statsPollWaitDelay
 	out, err := cmd.Output()
 	if err != nil {
 		return PodmanStatSample{}, false

@@ -727,6 +727,12 @@ func (c *containerImpl) podmanArgs(rest []string) []string {
 	return append(out, rest...)
 }
 
+// statsDrainTimeout bounds how long close() waits for the telemetry poller to
+// publish its rollup. Generously larger than statsPollWaitDelay so the normal
+// path always completes; the point is that teardown can never be blocked
+// indefinitely by a telemetry goroutine.
+const statsDrainTimeout = 5 * time.Second
+
 // execReapTimeout bounds the synchronous container-kill on a cancelled/timed-out
 // bash call (#796). A daemon too wedged to answer in this window still leaves the
 // sandbox poisoned, so it is retired regardless.
@@ -1269,15 +1275,26 @@ func (c *containerImpl) close() {
 	c.containerID = ""
 	c.idMu.Unlock()
 
-	// Stop the telemetry poller and let it publish its rollup before we tear
-	// the container down. The poller exits promptly on ctx cancel (it only
-	// blocks on a ticker / a short-lived `podman stats`), so this adds no
-	// meaningful latency to close.
+	// Stop the telemetry poller and let it publish its rollup before we tear the
+	// container down. The poller blocks only on a ticker or a `podman stats` that
+	// is itself WaitDelay-bounded (statsPollWaitDelay), so it normally returns in
+	// microseconds and this adds no meaningful latency.
+	//
+	// The wait is nonetheless BOUNDED. It used to be a bare receive, which made
+	// teardown hostage to a telemetry goroutine: anything that wedged the poller
+	// stalled close() forever, and with it the turn's sandbox release and the pool
+	// slot. Telemetry must never be able to do that, so past the bound we abandon
+	// the rollup (losing at most one sandbox's resource summary) and proceed to
+	// kill the container.
 	if statsCancel != nil {
 		statsCancel()
 	}
 	if statsDone != nil {
-		<-statsDone
+		select {
+		case <-statsDone:
+		case <-time.After(statsDrainTimeout):
+			log.Printf("sandbox: telemetry poller did not stop within %s; abandoning its resource rollup and tearing the container down anyway", statsDrainTimeout)
+		}
 	}
 
 	if containerID != "" {
