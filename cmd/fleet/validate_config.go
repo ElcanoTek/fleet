@@ -601,6 +601,16 @@ func checkSandbox(ctx context.Context, cfg *config.Config, bundle *clientconfig.
 			return res
 		}
 	}
+	// Allowlisted egress needs a specific rootless network helper. Answering
+	// "can this box run this config" is exactly what this verb is for, so run
+	// the same fail-closed preflight the boot path runs (#211 / ADR-0012).
+	if cfg.DefaultNetworkMode == sandbox.NetworkModeAllowlisted {
+		if err := sandbox.PreflightAllowlistedNetwork(ctx, podmanBin); err != nil {
+			res.Status = statusFail
+			res.Detail = err.Error()
+			return res
+		}
+	}
 	// Image existence: the SAME resolved ref the boot path consumes.
 	image := resolveSandboxImage(cfg, bundle)
 	if image == "" {

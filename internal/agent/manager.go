@@ -596,7 +596,7 @@ func buildSandboxPool(cfg *config.Config, personasDir, protocolsDir, systemPromp
 		// every container start fails, and without this check boot would succeed,
 		// log "egress filtered to […]", and then error on every single tool call.
 		// Fails closed — never downgraded to open egress.
-		if err := sandbox.PreflightAllowlistedNetwork(context.Background(), poolCfg.Container.PodmanBinary, poolCfg.Container.Image); err != nil {
+		if err := sandbox.PreflightAllowlistedNetwork(context.Background(), poolCfg.Container.PodmanBinary); err != nil {
 			return nil, fmt.Errorf("sandbox egress preflight failed (fail-closed): %w", err)
 		}
 		proxy := sandbox.NewEgressProxy()
