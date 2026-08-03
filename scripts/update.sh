@@ -4,8 +4,9 @@
 # Pulls the fleet checkout AND the client-config bundle checkout, rebuilds the
 # fleet binary + the Next web app, deploys the web build into the fleet-web
 # unit's WorkingDirectory (a build left only in the checkout never reaches the
-# browser), rebuilds the sandbox image ONLY when the bundle's Containerfile
-# changed, then restarts the systemd units (fleet, then fleet-web when
+# browser), rebuilds the sandbox image when the bundle's Containerfile or
+# resolved image tag changed (or the tag is missing from the service user's
+# image store), then restarts the systemd units (fleet, then fleet-web when
 # installed). Services self-migrate on restart, so this script NEVER runs
 # application migrations.
 #
@@ -46,7 +47,8 @@
 #
 # Re-run safe (idempotent): when nothing changed it exits early; the web/binary
 # builds are deterministic from the checkout; the sandbox rebuild is gated on the
-# Containerfile hash so the ~2-3min image build is skipped when unchanged.
+# Containerfile hash + resolved image tag (and the tag's presence in the service
+# user's store) so the ~2-3min image build is skipped when unchanged.
 
 set -euo pipefail
 
@@ -326,6 +328,16 @@ else
   fi
 fi
 
+# The unit's User= — the rootless account whose podman image store the running
+# service reads (root's rootful store is a separate namespace). Resolved once
+# for the bundle chown below and the step-4 store probe/prune; empty when the
+# unit (or systemd) is absent, in which case podman runs as the invoking user —
+# the same rule build-sandbox-image.sh applies to the build itself.
+service_user=""
+if command -v systemctl >/dev/null 2>&1; then
+  service_user="$(systemctl show -p User --value "${SERVICE_NAME}.service" 2>/dev/null || true)"
+fi
+
 # Re-apply service-user ownership after the pull, mirroring bootstrap.sh: this
 # script runs as root, so every file the pull creates/rewrites comes out
 # root-owned — and the sandbox bind-mounts bundle dirs with an SELinux relabel
@@ -336,27 +348,52 @@ fi
 # wrong); runs even in rebuild-only mode to heal a checkout a previous
 # root-run pull broke. Idempotent.
 if [[ -d "$CLIENT_DIR/.git" && "$CLIENT_DIR" != "$SRC_DIR"/* && "$CLIENT_DIR" != "config/default" ]]; then
-  service_user="$(systemctl show -p User --value "${SERVICE_NAME}.service" 2>/dev/null)"
-  service_user="${service_user:-fleet}"
+  bundle_owner="${service_user:-fleet}"
   if [[ "$DRY_RUN" == "1" ]]; then
-    info "[dry-run] would chown -R ${service_user}: ${CLIENT_DIR} (rootless sandbox relabel needs service-user ownership)"
-  elif chown -R "$service_user": "$CLIENT_DIR" 2>/dev/null; then
-    ok "bundle ${CLIENT_DIR} owned by ${service_user} (so the rootless sandbox :z relabel is permitted)"
+    info "[dry-run] would chown -R ${bundle_owner}: ${CLIENT_DIR} (rootless sandbox relabel needs service-user ownership)"
+  elif chown -R "$bundle_owner": "$CLIENT_DIR" 2>/dev/null; then
+    ok "bundle ${CLIENT_DIR} owned by ${bundle_owner} (so the rootless sandbox :z relabel is permitted)"
   else
-    warn "could not chown ${CLIENT_DIR} to ${service_user} — sandbox relabel may fail (EPERM) on files the pull rewrote"
+    warn "could not chown ${CLIENT_DIR} to ${bundle_owner} — sandbox relabel may fail (EPERM) on files the pull rewrote"
   fi
 fi
 
-# ── record the pre-build sandbox Containerfile hash (for the change gate) ──
-# Compare a stored hash of the bundle's Containerfile before/after the pulls so
-# the ~2-3min image build only runs when the Containerfile actually changed.
+# ── record the pre-build sandbox gate inputs (Containerfile hash + tag) ──
+# Compare a stored hash of the bundle's Containerfile AND the image tag the
+# build would produce so the ~2-3min image build only runs when either changed.
+# The tag matters as much as the content: a bundle that renames sandbox.tag
+# with an unchanged Containerfile still needs a build, or the service resolves
+# a tag that exists nowhere and every sandboxed tool call fails at runtime
+# (fleet does not verify the image at boot). The tag is resolved by
+# build-sandbox-image.sh --print-tag — the same manifest read the build uses.
 sandbox_cf="$CLIENT_DIR/sandbox/Containerfile"
 hash_file() { [[ -f "$1" ]] && sha256sum "$1" | awk '{print $1}' || printf 'absent'; }
 STATE_DIR="${FLEET_STATE_DIR:-$SRC_DIR/.fleet-state}"
 STAMP_FILE="$STATE_DIR/sandbox-containerfile.sha256"
+REF_FILE="$STATE_DIR/sandbox-image.ref"
 cf_now="$(hash_file "$sandbox_cf")"
 cf_prev="absent"
 [[ -f "$STAMP_FILE" ]] && cf_prev="$(cat "$STAMP_FILE")"
+ref_now="$(FLEET_CLIENT_CONFIG_DIR="$CLIENT_DIR" "$SCRIPT_DIR/build-sandbox-image.sh" --print-tag 2>/dev/null || true)"
+ref_prev=""
+[[ -f "$REF_FILE" ]] && ref_prev="$(tr -d '[:space:]' < "$REF_FILE")"
+
+# sandbox_podman CMD… — podman against the image store the service actually
+# reads: as the unit's User= when running as root and that user exists, else
+# the invoking user (matching where build-sandbox-image.sh lands the build).
+# cd first: rootless podman re-execs inside its user namespace and chdir()s
+# back to the inherited cwd, which the service user may not be able to enter
+# (e.g. /root).
+sandbox_podman() {
+  local home
+  if [[ $EUID -eq 0 && -n "$service_user" && "$service_user" != "root" ]] && id -u "$service_user" >/dev/null 2>&1; then
+    home="$(getent passwd "$service_user" | cut -d: -f6)"
+    ( cd "$home" 2>/dev/null || cd /
+      runuser -u "$service_user" -- env HOME="$home" XDG_RUNTIME_DIR="/run/${service_user}" podman "$@" )
+  else
+    podman "$@"
+  fi
+}
 
 # ── 3. build the fleet binary + the web app ───────────────────────────────
 step "3/5  Building the fleet binary + web app"
@@ -464,35 +501,52 @@ else
   fi
 fi
 
-# ── 4. rebuild the sandbox image ONLY if the Containerfile changed ─────────
-step "4/5  Rebuilding the sandbox image (only if the Containerfile changed)"
+# ── 4. rebuild the sandbox image when its gate inputs changed ───────────────
+step "4/5  Rebuilding the sandbox image (when the Containerfile or tag changed)"
 if [[ "$cf_now" == "absent" ]]; then
   info "no ${sandbox_cf} — bundle ships no sandbox Containerfile (or uses a prebuilt image); skipping."
-elif [[ "$cf_now" == "$cf_prev" && "$NO_PULL" != "1" ]]; then
-  ok "sandbox Containerfile unchanged (${cf_now:0:12}) — skipping the image build."
 elif [[ "$DRY_RUN" == "1" ]]; then
+  info "[dry-run] would rebuild if the Containerfile hash or resolved tag (${ref_now:-unresolved}) changed, or the tag is missing from the service user's store"
   info "[dry-run] would run: FLEET_CLIENT_CONFIG_DIR=${CLIENT_DIR} scripts/build-sandbox-image.sh"
-  info "[dry-run] would record the new Containerfile hash in ${STAMP_FILE}"
+  info "[dry-run] would record the new Containerfile hash + tag under ${STATE_DIR}"
 elif ! command -v podman >/dev/null 2>&1; then
   warn "podman not found — skipping sandbox build (install podman, then run scripts/build-sandbox-image.sh)."
 else
-  if [[ "$cf_prev" == "absent" ]]; then
-    info "no stored Containerfile hash yet — building the sandbox image to establish the baseline."
-  else
-    info "Containerfile changed (${cf_prev:0:12} → ${cf_now:0:12}) — rebuilding the sandbox image."
+  build_reason=""
+  if [[ "$NO_PULL" == "1" ]]; then
+    build_reason="rebuild-only mode"
+  elif [[ "$cf_prev" == "absent" ]]; then
+    build_reason="no stored Containerfile hash yet — establishing the baseline"
+  elif [[ "$cf_now" != "$cf_prev" ]]; then
+    build_reason="Containerfile changed (${cf_prev:0:12} → ${cf_now:0:12})"
+  elif [[ -n "$ref_now" && -n "$ref_prev" && "$ref_now" != "$ref_prev" ]]; then
+    # An empty ref_prev is a pre-tag-stamp box, not a rename — the store probe
+    # below still covers it without forcing a fleet-wide rebuild.
+    build_reason="image tag renamed (${ref_prev} → ${ref_now})"
+  elif [[ -n "$ref_now" ]] && ! sandbox_podman image exists "$ref_now" 2>/dev/null; then
+    # Catches what the stamp files cannot see: a pruned/lost store, a renamed
+    # tag never built, or a pre-fix build that landed in root's store.
+    build_reason="${ref_now} missing from the sandbox image store"
   fi
-  if FLEET_CLIENT_CONFIG_DIR="$CLIENT_DIR" "$SCRIPT_DIR/build-sandbox-image.sh"; then
-    mkdir -p "$STATE_DIR"
-    printf '%s\n' "$cf_now" > "$STAMP_FILE"
-    ok "sandbox image rebuilt; recorded hash ${cf_now:0:12}"
-    # Each rebuild strands the previous image's layers as dangling cruft
-    # (~1.3 GB per rebuild); prune them so regular updates can't fill the
-    # disk. Dangling-only: any still-tagged image is untouched. Best-effort.
-    if podman image prune -f >/dev/null 2>&1; then
-      ok "pruned dangling image layers left by the rebuild (fleet cleanup does more)."
-    fi
+  if [[ -z "$build_reason" ]]; then
+    ok "sandbox image up to date (Containerfile ${cf_now:0:12}, ${ref_now:-tag unresolved}) — skipping the image build."
   else
-    warn "sandbox image build failed — run scripts/build-sandbox-image.sh manually before restarting."
+    info "${build_reason} — building the sandbox image."
+    if FLEET_CLIENT_CONFIG_DIR="$CLIENT_DIR" FLEET_SERVICE_NAME="$SERVICE_NAME" "$SCRIPT_DIR/build-sandbox-image.sh"; then
+      mkdir -p "$STATE_DIR"
+      printf '%s\n' "$cf_now" > "$STAMP_FILE"
+      [[ -n "$ref_now" ]] && printf '%s\n' "$ref_now" > "$REF_FILE"
+      ok "sandbox image rebuilt (${ref_now:-see build output}); recorded hash ${cf_now:0:12}"
+      # Each rebuild strands the previous image's layers as dangling cruft
+      # (~1.3 GB per rebuild) in the store the build targeted; prune THAT
+      # store so regular updates can't fill the disk. Dangling-only: any
+      # still-tagged image is untouched. Best-effort.
+      if sandbox_podman image prune -f >/dev/null 2>&1; then
+        ok "pruned dangling image layers left by the rebuild (fleet cleanup does more)."
+      fi
+    else
+      warn "sandbox image build failed — run scripts/build-sandbox-image.sh manually before restarting."
+    fi
   fi
 fi
 

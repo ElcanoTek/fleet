@@ -282,6 +282,87 @@ func TestUpdateDryRunSmoke(t *testing.T) {
 	}
 }
 
+// TestBuildSandboxImagePrintTag — update.sh's rebuild gate keys on this exact
+// output (the tag a build would produce), so the query mode must resolve the
+// manifest's sandbox.tag without podman and without building anything.
+func TestBuildSandboxImagePrintTag(t *testing.T) {
+	out, err := runScript(t, nil, "build-sandbox-image.sh", "--print-tag")
+	if err != nil {
+		t.Fatalf("--print-tag exited non-zero: %v\n--- output ---\n%s", err, out)
+	}
+	if got := strings.TrimSpace(out); got != "localhost/fleet-sandbox:latest" {
+		t.Errorf("--print-tag = %q, want the generic bundle's sandbox.tag", got)
+	}
+}
+
+// TestBuildSandboxImagePrintTagRenamedBundle — a bundle that renames
+// sandbox.tag with an unchanged Containerfile must resolve to the NEW tag;
+// that resolution is what forces update.sh to rebuild instead of leaving the
+// service asking podman for an image that was never built.
+func TestBuildSandboxImagePrintTagRenamedBundle(t *testing.T) {
+	dir := t.TempDir()
+	manifest := "sandbox:\n  containerfile: sandbox/Containerfile\n  tag: localhost/fleet-sandbox-renamed:latest\n"
+	if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runScript(t, []string{"FLEET_CLIENT_CONFIG_DIR=" + dir}, "build-sandbox-image.sh", "--print-tag")
+	if err != nil {
+		t.Fatalf("--print-tag exited non-zero: %v\n--- output ---\n%s", err, out)
+	}
+	if got := strings.TrimSpace(out); got != "localhost/fleet-sandbox-renamed:latest" {
+		t.Errorf("--print-tag = %q, want the renamed tag", got)
+	}
+}
+
+// TestBuildSandboxImageTargetsServiceStore — a root-run build must land in the
+// systemd unit's User= rootless store, never root's rootful store (which the
+// User=fleet unit cannot see). The real build needs podman + the unit, so this
+// pins the load-bearing strings instead (the TestBootstrapDBGuardAnd-
+// CaddyProtectionPresent style for un-dry-runnable paths).
+func TestBuildSandboxImageTargetsServiceStore(t *testing.T) {
+	root := repoRootFromTest(t)
+	body, err := os.ReadFile(filepath.Join(root, "scripts", "build-sandbox-image.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(body)
+	for _, want := range []string{
+		`systemctl show -p User --value "${FLEET_SERVICE_NAME:-fleet}.service"`,
+		`runuser -u "$BUILD_USER"`,
+		`XDG_RUNTIME_DIR="/run/${BUILD_USER}"`,
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("build-sandbox-image.sh must contain %q", want)
+		}
+	}
+}
+
+// TestUpdateSandboxGatePresent — the sandbox rebuild gate must key on the
+// resolved image tag as well as the Containerfile hash, and must rebuild when
+// the tag is missing from the service user's store (a rename with an unchanged
+// Containerfile, or an image lost to a prune/pre-fix root build, otherwise
+// boots clean and breaks only on the first tool call).
+func TestUpdateSandboxGatePresent(t *testing.T) {
+	root := repoRootFromTest(t)
+	body, err := os.ReadFile(filepath.Join(root, "scripts", "update.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(body)
+	for _, want := range []string{
+		`build-sandbox-image.sh" --print-tag`,
+		"sandbox-image.ref",
+		"sandbox_podman image exists",
+		"sandbox_podman image prune -f",
+		`FLEET_SERVICE_NAME="$SERVICE_NAME"`,
+		`runuser -u "$service_user"`,
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("update.sh must contain %q", want)
+		}
+	}
+}
+
 // TestFleetUpgradeDryRunSmoke is the regression guard for #305 (drain-and-restart
 // upgrade): `fleet-upgrade.sh --dry-run --yes` must succeed and its plan must
 // include the load-bearing steps — build, back up the live binary (so rollback is

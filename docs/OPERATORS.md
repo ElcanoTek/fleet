@@ -364,7 +364,9 @@ runbook, a cron example, and the round-trip verification procedure.
 The execution sandbox is a **per-client bundle artifact**: each bundle ships its
 own `sandbox/Containerfile` (base tracks `fedora-minimal:latest`; pin a digest
 for reproducibility). `bootstrap` builds it on the
-box by default (auditable supply chain); `update` rebuilds it only when the
-Containerfile changed; `status` verifies the resolved image runs. Registry
+box by default (auditable supply chain); `update` rebuilds it when the
+Containerfile or the manifest's `sandbox.tag` changed, or the tag is missing
+from the service user's image store; `status` verifies the resolved image runs.
+Registry
 publish stays opt-in — set `sandbox.image` in the bundle manifest to a prebuilt
 ref and all three steps consume that instead of building.

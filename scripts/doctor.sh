@@ -593,7 +593,7 @@ elif run_as_fleet podman image exists "$sandbox_img" 2>/dev/null; then
     fail "sandbox image $sandbox_img present but NOT runnable as $SERVICE_USER — tool calls will break; rerun verbosely: cd $SERVICE_HOME && sudo -u $SERVICE_USER HOME=$SERVICE_HOME XDG_RUNTIME_DIR=/run/$SERVICE_USER podman run --rm $sandbox_img true"
   fi
 else
-  fail "sandbox image $sandbox_img missing from ${SERVICE_USER}'s rootless store — build it: sudo fleet update (or FLEET_CLIENT_CONFIG_DIR=<bundle> scripts/build-sandbox-image.sh as $SERVICE_USER)"
+  fail "sandbox image $sandbox_img missing from ${SERVICE_USER}'s rootless store — build it: sudo fleet update (or sudo FLEET_CLIENT_CONFIG_DIR=<bundle> scripts/build-sandbox-image.sh; a root run builds into ${SERVICE_USER}'s store)"
 fi
 
 # ── 8. source freshness ──────────────────────────────────────────────────────
