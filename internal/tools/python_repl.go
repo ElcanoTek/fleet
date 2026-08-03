@@ -48,8 +48,10 @@ const runPythonDescription = "Executes Python code in a per-turn IPython kernel 
 	"'persistent' mode the kernel survives across ALL turns of this conversation — `df = pd.read_csv(...)` built in one " +
 	"turn is still in scope turns later, no re-read needed. Either way, within ONE turn multiple run_python calls share " +
 	"the same kernel. Pass reset_kernel=true to deliberately wipe a persistent kernel back to a clean slate. (Lockdown " +
-	"chats always run per-turn.) NOTE: in persistent mode a cancelled or timed-out cell restarts the kernel, so any " +
-	"prior-turn variables are lost — keep durable state in a workspace file if a long cell might be interrupted.\n\n" +
+	"chats always run per-turn.) NOTE: a cancelled or timed-out cell retires the whole sandbox — the container is " +
+	"killed so nothing the cell started keeps running, kernel variables are lost (in persistent mode prior-turn " +
+	"variables too), and further sandbox calls this turn are refused; workspace FILES survive, so keep durable state " +
+	"in a workspace file if a long cell might be interrupted.\n\n" +
 	"ALWAYS LEAVE A TRACE — end EVERY call with a verifiable checkpoint: print() row counts / key values / len(html), " +
 	"or write the artifact to a workspace file and print its path and size. NEVER end a call with only assignments or " +
 	"comments: a silent success gives you nothing to verify, and re-running identical code is blocked by a loop guard.\n\n" +

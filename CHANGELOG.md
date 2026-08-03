@@ -19,6 +19,14 @@ prior versions are listed because none have shipped.
 
 ### Security
 
+- Extend the #796 straggler guard to `run_python`: a cancelled or timed-out
+  cell now synchronously kills the container and poisons the sandbox — parity
+  with bash and the sandboxed file tools — instead of killing only the
+  host-side bridge client while the cell kept executing (and, in persistent
+  REPL mode, could be lent to later turns). Bridge write/read errors now reset
+  the session so the next `run_python` boots a fresh bridge instead of wedging
+  for the rest of the turn, and a failed close-time container kill is logged
+  instead of silently swallowed.
 - Cap host-side `run_if` stderr capture at 8 KiB while continuing to drain the
   command, preventing a noisy admin-authored gate from exhausting Fleet's heap;
   document the admin-only gate in the host-I/O exception inventory.
