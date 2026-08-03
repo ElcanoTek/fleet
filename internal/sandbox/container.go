@@ -145,17 +145,27 @@ type ContainerConfig struct {
 	// disk and crash the whole box. 0 → default (5); a NEGATIVE value disables
 	// the quota (not recommended on production hosts). FLEET_SANDBOX_DISK_GB.
 	//
-	// Applied as `--storage-opt size=Ng` (a hard cap on TOTAL writable-layer
-	// bytes) when the storage driver supports project quotas — see
-	// StorageOptSupported — otherwise as `--ulimit fsize=N*GiB`, which caps the
-	// size of any SINGLE file (the common `dd` bomb) but not the running total.
+	// Always applied as `--ulimit fsize=N*GiB`, which caps the size of any
+	// SINGLE file anywhere the container can write — including the
+	// bind-mounted workspace, the only persistent writable surface under the
+	// --read-only rootfs. On a quota-capable storage driver (see
+	// StorageOptSupported) `--storage-opt size=Ng` is added on top, hard-capping
+	// TOTAL bytes in the writable LAYER.
+	//
+	// HONEST LIMIT: total WORKSPACE bytes are not bounded by either flag —
+	// storage-opt quotas do not apply to bind mounts, and RLIMIT_FSIZE is
+	// per-file. Many files each under the cap still fill the disk. Bounding the
+	// total would need a dedicated quota'd volume per sandbox, which fleet does
+	// not do.
 	DiskLimitGB int
 
 	// StorageOptSupported is set by the Pool from a one-time boot probe
 	// (ProbeStorageOptSupport): true when `podman run --storage-opt size` works
-	// on this host's storage driver + backing filesystem. It selects which disk
-	// quota mechanism start() applies (storage-opt vs the ulimit fallback). A
-	// zero value (false) is safe — it just uses the always-works ulimit path.
+	// on this host's storage driver + backing filesystem. It decides whether
+	// start() ADDS the writable-layer quota on top of the always-applied
+	// per-file ulimit — it is not a choice between the two. A zero value
+	// (false) is safe: the per-file cap, the one that reaches the workspace,
+	// applies either way.
 	StorageOptSupported bool
 
 	// Runtime overrides the default OCI runtime, emitted verbatim as
@@ -295,20 +305,39 @@ func effectiveDiskGB(n int) int {
 	return n
 }
 
-// diskQuotaArgs returns the `podman run` flags that cap the container's writable
-// disk. With a quota-capable storage driver it uses `--storage-opt size`, a hard
-// cap on TOTAL writable-layer bytes; otherwise it falls back to `--ulimit fsize`,
-// which bounds the size of any SINGLE file (stopping the classic `dd` bomb) but
-// not the running total. A non-positive limit disables the quota (returns nil).
+// diskQuotaArgs returns the `podman run` flags that cap the container's
+// writable disk. The two mechanisms cover DIFFERENT surfaces and are therefore
+// applied together, not either/or:
+//
+//   - `--ulimit fsize` (RLIMIT_FSIZE) is per-process and bounds the size of any
+//     SINGLE file wherever it is written — including the bind-mounted
+//     workspace. Always emitted.
+//   - `--storage-opt size` hard-caps TOTAL bytes in the container's writable
+//     LAYER, but only on a quota-capable storage driver, and it does not apply
+//     to bind mounts. Added on top when the boot probe says it works.
+//
+// Applying only storage-opt (the original #216 behavior) left the workspace
+// completely unbounded on exactly the hosts with the better storage driver:
+// the container runs `--read-only` with size-bounded tmpfs, so the writable
+// layer storage-opt caps is essentially unwritable, and the workspace bind
+// mount — which is also the default workdir — was the one persistent writable
+// surface with no cap at all. `dd if=/dev/zero of=big` in the default cwd
+// filled the host disk, the precise scenario DiskLimitGB exists to prevent.
+//
+// Neither flag bounds TOTAL workspace bytes: many files each under the
+// per-file cap still add up. That is a known limit of what podman can express
+// for a bind mount, and DiskLimitGB's doc says so rather than implying a hard
+// total. A non-positive limit disables the quota (returns nil).
 func diskQuotaArgs(diskLimitGB int, storageOptSupported bool) []string {
 	if diskLimitGB <= 0 {
 		return nil
 	}
-	if storageOptSupported {
-		return []string{fmt.Sprintf("--storage-opt=size=%dg", diskLimitGB)}
-	}
 	// RLIMIT_FSIZE is in bytes; N GiB = N << 30.
-	return []string{fmt.Sprintf("--ulimit=fsize=%d", int64(diskLimitGB)<<30)}
+	args := []string{fmt.Sprintf("--ulimit=fsize=%d", int64(diskLimitGB)<<30)}
+	if storageOptSupported {
+		args = append(args, fmt.Sprintf("--storage-opt=size=%dg", diskLimitGB))
+	}
+	return args
 }
 
 // defaultContainerStartTimeout is exposed so callers (Pool.newSandbox,
@@ -547,9 +576,10 @@ func (c *containerImpl) start(ctx context.Context) error {
 		fmt.Sprintf("--volume=%s:/opt/bridge/bridge.py:ro,Z", c.bridgeScriptPath),
 		fmt.Sprintf("--workdir=%s", c.cfg.WorkspaceHostDir),
 	}
-	// Disk quota for the writable layer (#216): without it an agent can fill the
-	// host disk and crash the box. storage-opt (hard total cap) when the driver
-	// supports it, else ulimit fsize (per-file cap). See diskQuotaArgs.
+	// Disk quota (#216): without it an agent can fill the host disk and crash
+	// the box. ulimit fsize (per-file, reaches the workspace bind mount) is
+	// always applied; storage-opt (total writable-LAYER cap) is added on top
+	// where the driver supports it. See diskQuotaArgs for why both.
 	args = append(args, diskQuotaArgs(c.cfg.DiskLimitGB, c.cfg.StorageOptSupported)...)
 	// Supporting-doc bind mounts — same-path so the personas/protocols/
 	// system_prompts symlinks tools/workspace.go drops into the per-

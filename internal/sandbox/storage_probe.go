@@ -12,7 +12,8 @@ import (
 
 // storageProbeTimeout bounds the one-time boot probe for --storage-opt support.
 // Generous because the first container off a freshly-pulled image can be slow to
-// create; a probe that times out simply degrades to the ulimit fallback.
+// create; a probe that times out simply omits the writable-layer quota (the
+// per-file ulimit cap applies regardless).
 const storageProbeTimeout = 30 * time.Second
 
 // ProbeStorageOptSupport reports whether `podman run --storage-opt size=...` is
@@ -21,9 +22,10 @@ const storageProbeTimeout = 30 * time.Second
 // pquota, btrfs, and zfs, but not overlay+ext4 or vfs), so we probe empirically:
 // start a throwaway `--rm` container off the SAME sandbox image (already pulled)
 // with a 1g cap running /usr/bin/true. A clean exit means quotas work; ANY
-// failure — driver can't quota, image missing, timeout — returns false so the
-// caller uses the always-safe `--ulimit fsize` fallback. Best-effort and
-// side-effect-free (the container removes itself on exit).
+// failure — driver can't quota, image missing, timeout — returns false, which
+// simply omits the writable-layer quota; the per-file `--ulimit fsize` cap is
+// applied regardless and is what bounds the workspace bind mount. Best-effort
+// and side-effect-free (the container removes itself on exit).
 func ProbeStorageOptSupport(ctx context.Context, podmanBin, image string) bool {
 	if strings.TrimSpace(image) == "" {
 		return false

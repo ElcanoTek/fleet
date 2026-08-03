@@ -18,9 +18,13 @@ func TestDiskQuotaArgs(t *testing.T) {
 		storeOpt  bool
 		wantFlags []string
 	}{
-		{"storage-opt when supported", 5, true, []string{"--storage-opt=size=5g"}},
-		{"ulimit fallback", 5, false, []string{"--ulimit=fsize=5368709120"}}, // 5 * 1<<30
-		{"ulimit fallback 1g", 1, false, []string{"--ulimit=fsize=1073741824"}},
+		// The per-file ulimit is ALWAYS emitted: it is the only mechanism that
+		// reaches the bind-mounted workspace, which --storage-opt (a
+		// writable-LAYER quota) cannot see. storage-opt is added on top when
+		// the driver supports it.
+		{"both when storage-opt is supported", 5, true, []string{"--ulimit=fsize=5368709120", "--storage-opt=size=5g"}},
+		{"ulimit only when storage-opt is unsupported", 5, false, []string{"--ulimit=fsize=5368709120"}}, // 5 * 1<<30
+		{"ulimit only 1g", 1, false, []string{"--ulimit=fsize=1073741824"}},
 		{"disabled at zero", 0, true, nil},
 		{"disabled when negative", -1, true, nil},
 		{"disabled when negative (ulimit path)", -1, false, nil},
@@ -151,5 +155,73 @@ func TestContainerDiskQuotaBlocksOversizeFile(t *testing.T) {
 	}
 	if res.ExitCode == 0 {
 		t.Errorf("dd past the quota succeeded (exit 0); expected it to be killed. stdout=%q stderr=%q", res.Stdout, res.Stderr)
+	}
+}
+
+// TestContainerDiskQuotaCapsWorkspaceOnStorageOptHosts is the regression guard
+// for the fail-open this test file previously could not see: every
+// dd-past-the-cap case above ran with StorageOptSupported=false, so nothing
+// covered the *better* storage drivers — where the old either/or
+// diskQuotaArgs emitted ONLY --storage-opt. That flag caps the container's
+// writable LAYER, which under --read-only is essentially unwritable, and does
+// not apply to bind mounts; the workspace (also the default workdir) was
+// therefore completely uncapped on exactly those hosts.
+//
+// StorageOptSupported is forced true here regardless of what this host's
+// driver actually supports, because the assertion is about which FLAGS the
+// config produces, not about the driver: RLIMIT_FSIZE must still reach the
+// container and still bound a workspace write.
+func TestContainerDiskQuotaCapsWorkspaceOnStorageOptHosts(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("container backend tested on linux only")
+	}
+	if _, err := exec.LookPath("podman"); err != nil {
+		t.Skip("podman not available")
+	}
+	if !ProbeStorageOptSupport(context.Background(), "", testImage()) {
+		// --storage-opt=size would make `podman run` itself fail on a driver
+		// that does not support it, so this case can only run where it does.
+		t.Skip("storage driver does not support --storage-opt size")
+	}
+	tmp := t.TempDir()
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	sb, err := NewContainer(ctx, ContainerConfig{
+		Image:               testImage(),
+		WorkspaceHostDir:    tmp,
+		BridgeScript:        []byte("# unused\n"),
+		DiskLimitGB:         1,
+		StorageOptSupported: true,
+	})
+	if err != nil {
+		t.Fatalf("NewContainer: %v", err)
+	}
+	defer sb.Close()
+
+	res, err := sb.RunBash(context.Background(), BashRequest{Command: "ulimit -f"})
+	if err != nil {
+		t.Fatalf("RunBash: %v", err)
+	}
+	if res.ExitCode != 0 {
+		// Without this the next assertion is vacuous: a failed exec yields
+		// empty stdout, which is != "unlimited" and would pass.
+		t.Fatalf("ulimit -f exit=%d stderr=%q", res.ExitCode, res.Stderr)
+	}
+	if got := strings.TrimSpace(string(res.Stdout)); got == "unlimited" {
+		t.Fatal("ulimit -f = unlimited on a storage-opt host — the workspace bind mount has no cap at all")
+	}
+
+	// The workspace is a bind mount, outside any storage-driver quota. Only
+	// RLIMIT_FSIZE can stop this write. (The workspace is already the default
+	// --workdir, so a bare relative name lands there.)
+	res, err = sb.RunBash(context.Background(), BashRequest{
+		Command: "dd if=/dev/zero of=big bs=1M count=1100",
+	})
+	if err != nil {
+		t.Fatalf("RunBash: %v", err)
+	}
+	if res.ExitCode == 0 {
+		t.Errorf("dd past the quota into the WORKSPACE succeeded (exit 0) on a storage-opt host — the bind mount is uncapped. stdout=%q stderr=%q", res.Stdout, res.Stderr)
 	}
 }

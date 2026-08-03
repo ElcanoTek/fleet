@@ -966,9 +966,15 @@ type Config struct {
 	SandboxMemoryMaxMB int
 	SandboxCPUsMax     float64
 	SandboxPidsMax     int
-	// SandboxDiskGB caps each sandbox's writable disk usage, in GiB
+	// SandboxDiskGB is the sandbox disk quota, in GiB
 	// (FLEET_SANDBOX_DISK_GB). 0 → sandbox default (5); negative disables the
-	// quota. Stops an agent from filling the host disk (#216).
+	// quota. It bounds any SINGLE file written from INSIDE the sandbox, which
+	// stops the classic `dd` bomb from filling the host disk (#216). It does
+	// NOT bound total workspace bytes, and it does not apply to host-side
+	// brokers that stage files into the workspace (attachments, download_url,
+	// generate_image), which carry their own separate caps — the attachment
+	// one is FLEET_UPLOAD_MAX_BYTES, default 1 GiB and operator-tunable. See
+	// sandbox.ContainerConfig.DiskLimitGB.
 	SandboxDiskGB int
 	// SandboxWarmSize overrides the warm-pool depth (FLEET_SANDBOX_WARM_SIZE).
 	// 0 (default) derives it from MaxConcurrentAgents (clamped 2..8); a positive

@@ -58,9 +58,10 @@ type Pool struct {
 	// overridden in tests to exercise reaping deterministically.
 	nowFn func() time.Time
 
-	// storageProbeOnce caches the one-time --storage-opt support probe (#216) so
-	// the disk-quota mechanism (storage-opt vs the ulimit fallback) is decided
-	// once per process. The first container creation pays the probe cost.
+	// storageProbeOnce caches the one-time --storage-opt support probe (#216)
+	// so whether the writable-layer quota is added on top of the always-applied
+	// per-file ulimit is decided once per process. The first container creation
+	// pays the probe cost.
 	storageProbeOnce sync.Once
 	storageOptOK     bool
 
@@ -646,8 +647,9 @@ func (p *Pool) reapStale() {
 }
 
 // storageOptSupported probes once (cached) whether the host's storage driver
-// supports `--storage-opt size` disk quotas, logging which quota mechanism the
-// sandbox will use. Thread-safe; the first container creation pays the probe.
+// supports `--storage-opt size` disk quotas, logging what the sandbox's disk
+// quota does and does not cover. Thread-safe; the first container creation
+// pays the probe.
 func (p *Pool) storageOptSupported(ctx context.Context) bool {
 	p.storageProbeOnce.Do(func() {
 		gb := effectiveDiskGB(p.cfg.Container.DiskLimitGB)
@@ -658,9 +660,9 @@ func (p *Pool) storageOptSupported(ctx context.Context) bool {
 		}
 		p.storageOptOK = ProbeStorageOptSupport(ctx, p.cfg.Container.PodmanBinary, p.cfg.Container.Image)
 		if p.storageOptOK {
-			log.Printf("sandbox disk quota: storage-opt size=%dg — writable layer hard-capped (total usage bounded)", gb)
+			log.Printf("sandbox disk quota: ulimit fsize=%dGiB (per-file, covers the workspace bind mount) + storage-opt size=%dg (total writable LAYER). Total workspace bytes are NOT capped — bind mounts are outside the storage quota.", gb, gb)
 		} else {
-			log.Printf("sandbox disk quota: storage-opt unsupported on this storage driver; falling back to ulimit fsize=%dGiB — caps any single file but NOT total disk use (use overlay+xfs(pquota)/btrfs for a hard cap)", gb)
+			log.Printf("sandbox disk quota: ulimit fsize=%dGiB only — storage-opt unsupported on this storage driver, so the writable layer has no total cap either (use overlay+xfs(pquota)/btrfs for one). Caps any single file, not total disk use.", gb)
 		}
 	})
 	return p.storageOptOK
