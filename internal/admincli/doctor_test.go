@@ -24,6 +24,7 @@ func TestDoctorDryRunSmoke(t *testing.T) {
 		"functional drift",
 		"OPENROUTER_API_KEY",
 		"/healthz + /readyz",
+		"Scheduled backups",
 		"Sandbox smoke",
 		"Source freshness",
 	} {
@@ -87,6 +88,26 @@ func TestDoctorLoadBearingStrings(t *testing.T) {
 		"re-verifying after the service restart",
 		"without sourcing it",
 		"--network=none",
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("doctor.sh must contain %q", want)
+		}
+	}
+	// #966: the backup check must stay an ADVISORY when no timer is installed
+	// (an operator who snapshots the volume is not misconfigured) and a FAILURE
+	// when the timer's last run did not succeed.
+	for _, want := range []string{
+		`advise "no ${BACKUP_TIMER} + ${BACKUP_SERVICE} pair installed`,
+		`fail "${BACKUP_SERVICE} last run FAILED`,
+		`systemctl show -p Result --value "$BACKUP_SERVICE"`,
+		// is-enabled reads the install symlink only: an enabled-but-stopped
+		// timer fires nothing while its service's Result still says "success".
+		`systemctl is-active --quiet "$BACKUP_TIMER"`,
+		// The pair must ride the same unit-drift check as fleet.service.
+		`for unit in "${SERVICE_NAME}.service" fleet-web.service "$BACKUP_SERVICE" "$BACKUP_TIMER"; do`,
+		// …with the restart it can trigger scoped to the app units: reinstalling
+		// a backup unit must not bounce the chat service.
+		`*) restart_needed=1 ;;`,
 	} {
 		if !strings.Contains(script, want) {
 			t.Errorf("doctor.sh must contain %q", want)

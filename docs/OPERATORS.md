@@ -227,15 +227,22 @@ production-only bug. The pass covers, in order:
    `/run/fleet`, a `podman system migrate` (clears stale pause namespaces),
    and a `podman info` probe **as the service user**.
 4. **Installed artifacts** — functional drift of `fleet.service` /
-   `fleet-web.service` vs `deploy/` (reinstall + `daemon-reload`), and the
-   `/usr/local/bin/fleet` symlink (a stale *copy* there shadows every update).
+   `fleet-web.service` / the `fleet-backup` service + timer vs `deploy/`
+   (reinstall + `daemon-reload`), and the `/usr/local/bin/fleet` symlink (a
+   stale *copy* there shadows every update).
 5. **Configuration** — `/etc/fleet/fleet.env` exists, root-owned `0600`, with
    `OPENROUTER_API_KEY` + both DB DSNs; `fleet-web.env` permissions.
 6. **Services** — `postgresql` (when a local unit exists), `fleet`,
    `fleet-web`, `caddy` active; then the `/healthz` + `/readyz` probes.
-7. **Sandbox smoke** — `podman run --rm --network=none <image> true` **as the
+7. **Scheduled backups** — `fleet-backup.timer` installed, enabled *and
+   active*, and its last run succeeded. A missing timer is an *advisory*, never
+   a failure (an operator who backs up at the volume or hypervisor layer is not
+   misconfigured) and doctor never installs it for you; a timer whose last run
+   **failed** is a failure, because a box that looks covered and is not is the
+   worse state. See [`docs/BACKUP_RESTORE.md`](BACKUP_RESTORE.md).
+8. **Sandbox smoke** — `podman run --rm --network=none <image> true` **as the
    `fleet` user** (the image lives in *that* user's rootless store).
-8. **Source freshness** — reports commits behind upstream. Report-only:
+9. **Source freshness** — reports commits behind upstream. Report-only:
    pulling and rebuilding stays `fleet update`'s job; doctor never deploys.
 
 Exit codes: `0` healthy (or everything fixed) · `1` problems remain.
@@ -352,12 +359,19 @@ fleet backup --db=chat --out /backups # dump just chat into /backups
 fleet restore --db=sched FILE.dump    # restore one DB (--clean --if-exists; overwrites it)
 ```
 
-`backup` prints each dump path on stdout (scriptable for a cron job). `restore`
+`backup` prints each dump path on stdout. `restore`
 is deliberately single-DB — it overwrites a live database, so the target is named
 explicitly (no `--db=all`). Connection params, including the password, are passed
-to the child processes through the environment, never argv. See
-**[`docs/BACKUP_RESTORE.md`](BACKUP_RESTORE.md)** for the full recovery
-runbook, a cron example, and the round-trip verification procedure.
+to the child processes through the environment, never argv.
+
+A **daily timer** (`deploy/fleet-backup.timer`, dumping both DBs to
+`/var/backups/fleet` with a 30-day prune) is installed and enabled by
+`bootstrap --enable-service` unless you pass `--no-backup-timer`, and `fleet
+doctor` advises when no timer is present. A same-host dump protects against
+logical loss — a bad migration, an accidental delete — **not** against losing
+this host or volume, and it does not capture attachment/upload files. See
+**[`docs/BACKUP_RESTORE.md`](BACKUP_RESTORE.md)** for the full recovery runbook,
+the honest scope, and the round-trip verification procedure.
 
 ## Where the sandbox build fits
 

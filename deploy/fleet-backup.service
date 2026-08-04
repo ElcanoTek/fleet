@@ -1,0 +1,60 @@
+# deploy/fleet-backup.service — one `fleet backup` run of BOTH databases.
+#
+# A scheduled backup is a HOST operation: it runs pg_dump against the loopback
+# Postgres and writes to a host directory, so it is a systemd oneshot driven by
+# deploy/fleet-backup.timer — not a Fleet scheduled task (an agent task runs in a
+# network-isolated sandbox that cannot reach the host's Postgres or filesystem).
+#
+# scripts/bootstrap.sh --enable-service installs and enables the pair by default
+# (--no-backup-timer opts out), and `fleet doctor` advises when no timer is
+# present and FAILS when the last run did not succeed. Install by hand with:
+#   install -D -m 0644 deploy/fleet-backup.service /etc/systemd/system/fleet-backup.service
+#   install -D -m 0644 deploy/fleet-backup.timer   /etc/systemd/system/fleet-backup.timer
+#   install -d -m 0700 -o root -g root /var/backups/fleet
+#   systemctl daemon-reload && systemctl enable --now fleet-backup.timer
+#
+# What it covers and what it does NOT: the dumps are the chat + sched databases
+# only. They protect against LOGICAL loss (a bad migration, an accidental
+# delete) — they are not offsite backup (same host, same disk) and they do not
+# capture the attachment/upload files under the data dir. See
+# docs/BACKUP_RESTORE.md for the honest scope and the restore runbook.
+#
+# Runs as ROOT, deliberately: it reads the 0600 root-owned credential env file
+# and writes into a 0700 root-owned backup directory, so the dumps — which
+# contain every conversation, task and user row — are readable by root alone.
+
+[Unit]
+Description=fleet database backup (pg_dump of the chat + sched databases)
+Documentation=https://github.com/ElcanoTek/fleet/blob/main/docs/BACKUP_RESTORE.md
+# Ordering only, no Wants=: a backup must not be what pulls the cluster up, and
+# an external-Postgres box has no local unit to order against (a missing unit in
+# After= is ignored). A dump attempted before Postgres answers fails the run;
+# the timer's next fire retries.
+After=network-online.target postgresql.service
+
+[Service]
+Type=oneshot
+# Default output directory. EnvironmentFile= is merged AFTER Environment=
+# regardless of directive order, so an FLEET_BACKUP_DIR in the env file (which
+# bootstrap writes) wins over this. Without either, `fleet backup` writes to the
+# working directory — "/" under systemd — which is not where dumps belong.
+Environment=FLEET_BACKUP_DIR=/var/backups/fleet
+EnvironmentFile=/etc/fleet/fleet.env
+# --db=all dumps chat AND sched (one pg_dump -Fc file each, each verified with
+# pg_restore --list immediately after it is written); --prune then deletes this
+# tool's own dumps older than FLEET_BACKUP_RETENTION_DAYS (default 30). A dump
+# that fails its integrity check exits non-zero, so a broken backup surfaces in
+# `systemctl status fleet-backup`, the journal, and `fleet doctor`.
+ExecStart=/usr/local/bin/fleet backup --db=all --prune
+# The dumps hold everything the databases hold; keep them owner-only even if the
+# backup directory is ever loosened.
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+# full, not strict: /usr, /boot and /etc go read-only while /var stays writable.
+# FLEET_BACKUP_DIR is operator-configurable, so pinning ReadWritePaths here would
+# break every relocated backup directory.
+ProtectSystem=full
+
+# No [Install] section on purpose: this unit is triggered by fleet-backup.timer.
+# Enable the TIMER, not the service.
