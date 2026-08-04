@@ -60,6 +60,21 @@ func sessionEpochFor(passwordHash string) string {
 	return hex.EncodeToString(sum[:sessionEpochBytes])
 }
 
+// sessionEpochExpr is sessionEpochFor written as SQL over the users row. Reads
+// that only need the epoch SELECT this instead of password_hash, so the hash
+// stays inside Postgres: GetUser runs on every authenticated request and
+// ListUsers covers every account at once, and neither has any business carrying
+// a credential through the request path. The two derivations are the same digest
+// over the same bytes and MUST stay byte-identical — TestSessionEpochSQLMatchesGo
+// pins that over the inputs a users row can hold.
+var sessionEpochExpr = fmt.Sprintf(
+	`encode(substring(sha256(convert_to(password_hash, 'UTF8')) FROM 1 FOR %d), 'hex')`,
+	sessionEpochBytes)
+
+// userColumns is the read projection behind every *User: the row's own columns
+// plus the derived epoch, never password_hash.
+var userColumns = "email, role, team_id, " + sessionEpochExpr + ", created_at, updated_at"
+
 // Role constants (#237). Kept in sync with the CHECK constraint in
 // migrations/024_rbac.sql.
 const (
@@ -145,10 +160,9 @@ func (s *Store) GetUser(ctx context.Context, email string) (*User, error) {
 	}
 	var u User
 	var teamID sql.NullString
-	var hash string
 	err := s.db.QueryRowContext(ctx,
-		`SELECT email, role, team_id, password_hash, created_at, updated_at FROM users WHERE email = $1`, email).
-		Scan(&u.Email, &u.Role, &teamID, &hash, &u.CreatedAt, &u.UpdatedAt)
+		`SELECT `+userColumns+` FROM users WHERE email = $1`, email).
+		Scan(&u.Email, &u.Role, &teamID, &u.SessionEpoch, &u.CreatedAt, &u.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrUserNotFound
 	}
@@ -156,7 +170,6 @@ func (s *Store) GetUser(ctx context.Context, email string) (*User, error) {
 		return nil, err
 	}
 	u.TeamID = teamID.String
-	u.SessionEpoch = sessionEpochFor(hash)
 	return &u, nil
 }
 
@@ -170,13 +183,16 @@ func (s *Store) GetUser(ctx context.Context, email string) (*User, error) {
 // the moment the account is created, rather than silently predating it.
 func (s *Store) SessionEpoch(ctx context.Context, email string) (string, error) {
 	email = normalizeEmail(email)
-	var hash string
+	var epoch string
 	err := s.db.QueryRowContext(ctx,
-		`SELECT password_hash FROM users WHERE email = $1`, email).Scan(&hash)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		`SELECT `+sessionEpochExpr+` FROM users WHERE email = $1`, email).Scan(&epoch)
+	if errors.Is(err, sql.ErrNoRows) {
+		return sessionEpochFor(""), nil
+	}
+	if err != nil {
 		return "", err
 	}
-	return sessionEpochFor(hash), nil
+	return epoch, nil
 }
 
 // SetUserRoleTeam applies a partial role/team update (PATCH /admin/users/{email},
@@ -384,7 +400,7 @@ func (s *Store) DeleteUser(ctx context.Context, email string) error {
 // ListUsers returns every provisioned user, sorted by email.
 func (s *Store) ListUsers(ctx context.Context) ([]User, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT email, role, team_id, password_hash, created_at, updated_at FROM users ORDER BY email ASC`)
+		`SELECT `+userColumns+` FROM users ORDER BY email ASC`)
 	if err != nil {
 		return nil, err
 	}
@@ -393,12 +409,10 @@ func (s *Store) ListUsers(ctx context.Context) ([]User, error) {
 	for rows.Next() {
 		var u User
 		var teamID sql.NullString
-		var hash string
-		if err := rows.Scan(&u.Email, &u.Role, &teamID, &hash, &u.CreatedAt, &u.UpdatedAt); err != nil {
+		if err := rows.Scan(&u.Email, &u.Role, &teamID, &u.SessionEpoch, &u.CreatedAt, &u.UpdatedAt); err != nil {
 			return nil, err
 		}
 		u.TeamID = teamID.String
-		u.SessionEpoch = sessionEpochFor(hash)
 		out = append(out, u)
 	}
 	return out, rows.Err()

@@ -153,6 +153,56 @@ func TestSessionEpoch_UnknownEmailIsWellFormedAndDistinct(t *testing.T) {
 	}
 }
 
+// The epoch is derived in two places: in Go from a hash the process already
+// holds (CreateUser), and in SQL from the stored row (every read that needs the
+// epoch, so password_hash stays inside Postgres). The two MUST agree byte for
+// byte — a drift would revoke every outstanding session the moment a request
+// crossed from one derivation to the other.
+func TestSessionEpochSQLMatchesGo(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	// Values a password_hash column can hold, plus the empty string the
+	// unknown-email path derives from.
+	for _, hash := range []string{
+		"",
+		"$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy",
+		`single ' quote and \backslash`,
+		"ünïcödé ✓",
+	} {
+		var got string
+		if err := s.db.QueryRowContext(ctx,
+			`SELECT `+sessionEpochExpr+` FROM (SELECT $1::text AS password_hash) AS h`, hash).Scan(&got); err != nil {
+			t.Fatalf("SQL derivation for %q: %v", hash, err)
+		}
+		if want := sessionEpochFor(hash); got != want {
+			t.Errorf("epoch for %q: SQL %q, Go %q", hash, got, want)
+		}
+	}
+
+	// And over a real bcrypt hash as actually stored, read back out of the row
+	// the SQL derivation reads.
+	created, err := s.CreateUser(ctx, "u@x.com", "password123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stored string
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT password_hash FROM users WHERE email = $1`, "u@x.com").Scan(&stored); err != nil {
+		t.Fatalf("read password_hash: %v", err)
+	}
+	if want := sessionEpochFor(stored); created.SessionEpoch != want {
+		t.Errorf("CreateUser epoch = %q, want %q", created.SessionEpoch, want)
+	}
+	got, err := s.GetUser(ctx, "u@x.com")
+	if err != nil {
+		t.Fatalf("GetUser: %v", err)
+	}
+	if got.SessionEpoch != created.SessionEpoch {
+		t.Errorf("GetUser (SQL) epoch = %q, CreateUser (Go) epoch = %q", got.SessionEpoch, created.SessionEpoch)
+	}
+}
+
 // Two accounts must not share an epoch, or a reset on one would leave the other
 // admitting a cookie minted for it.
 func TestSessionEpoch_DistinctPerAccount(t *testing.T) {
