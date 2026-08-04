@@ -3,6 +3,7 @@ package clientconfig
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -323,6 +324,104 @@ func TestInterpolateManifestUnit(t *testing.T) {
 				t.Errorf("got %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestInterpolateEnvFileOverrideOfDefaultWins pins the fleet#706 residual: on
+// the standalone path the .env file is applied AFTER the bundle loads
+// (clientconfig.Load runs before config.Load so EnvVarNames can seed the
+// allowlist), so a ${VAR:-default} key must keep its raw form through Load —
+// its name surfaced via EnvVarNames so the env-file value survives the
+// allowlist — and resolve against the LIVE env at catalog-build time, where
+// the env-file override wins over the baked default.
+func TestInterpolateEnvFileOverrideOfDefaultWins(t *testing.T) {
+	os.Unsetenv("PUBMATIC_OWNER_ID")
+	os.Unsetenv("DEMO_TOKEN")
+	dir := writeManifest(t, `
+mcp_servers:
+  - name: pm
+    command: python3
+    args: ["mcp/pm.py"]
+    always: true
+    env:
+      PUBMATIC_OWNER_ID: "${PUBMATIC_OWNER_ID:-60067}"
+http_tools:
+  - name: get_thing
+    method: GET
+    url: "https://api.example.com/things"
+    headers:
+      Authorization: "Bearer ${DEMO_TOKEN:-anon}"
+`)
+	b, err := Load(dir)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	names := b.EnvVarNames()
+	for _, want := range []string{"PUBMATIC_OWNER_ID", "DEMO_TOKEN"} {
+		if !slices.Contains(names, want) {
+			t.Errorf("EnvVarNames = %v, want %q so the env-file value survives the allowlist", names, want)
+		}
+	}
+	// config.Load applies the .env file between Load and the catalog build.
+	t.Setenv("PUBMATIC_OWNER_ID", "99999")
+	t.Setenv("DEMO_TOKEN", "shh-secret")
+	if got := b.MCPServerConfigs()["pm"].Env["PUBMATIC_OWNER_ID"]; got != "99999" {
+		t.Errorf("PUBMATIC_OWNER_ID = %q, want the post-load env override 99999, not the baked default", got)
+	}
+	if got := b.HTTPToolConfigs()[0].Headers["Authorization"]; got != "Bearer shh-secret" {
+		t.Errorf("Authorization = %q, want the post-load env override applied", got)
+	}
+}
+
+// TestInterpolateDefaultStillAppliesAtSpawn: with the var still unset after the
+// .env load, a deferred ${VAR:-default} connector value resolves to its default
+// at catalog-build time.
+func TestInterpolateDefaultStillAppliesAtSpawn(t *testing.T) {
+	os.Unsetenv("PUBMATIC_OWNER_ID")
+	dir := writeManifest(t, `
+mcp_servers:
+  - name: pm
+    command: python3
+    args: ["mcp/pm.py"]
+    always: true
+    env:
+      PUBMATIC_OWNER_ID: "${PUBMATIC_OWNER_ID:-60067}"
+`)
+	b, err := Load(dir)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if got := b.MCPServerConfigs()["pm"].Env["PUBMATIC_OWNER_ID"]; got != "60067" {
+		t.Errorf("PUBMATIC_OWNER_ID = %q, want default 60067", got)
+	}
+}
+
+// TestInterpolateEscapeSurvivesSpawnPass: a "$${" escape in an MCP env value
+// must reach the subprocess as a literal "${" — regression: the load pass
+// consumed the escape, and the spawn-time pass then expanded (blanked) the
+// author's escaped literal. The escaped name is a literal, not an env
+// reference, so it must not be registered for the .env allowlist either.
+func TestInterpolateEscapeSurvivesSpawnPass(t *testing.T) {
+	os.Unsetenv("NOT_A_VAR")
+	dir := writeManifest(t, `
+mcp_servers:
+  - name: s
+    command: python3
+    args: ["mcp/s.py"]
+    always: true
+    env:
+      TEMPLATE: "prefix $${NOT_A_VAR} suffix"
+`)
+	b, err := Load(dir)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	const want = "prefix ${NOT_A_VAR} suffix"
+	if got := b.MCPServerConfigs()["s"].Env["TEMPLATE"]; got != want {
+		t.Errorf("TEMPLATE = %q, want %q", got, want)
+	}
+	if slices.Contains(b.EnvVarNames(), "NOT_A_VAR") {
+		t.Errorf("EnvVarNames = %v, must exclude the escaped literal NOT_A_VAR", b.EnvVarNames())
 	}
 }
 

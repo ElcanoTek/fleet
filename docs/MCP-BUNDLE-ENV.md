@@ -41,7 +41,11 @@ env:
 
 The bare token is RESERVED: both interpolation passes leave it intact (it is
 never resolved from the process env — an exported `FLEET_WORKSPACE` var cannot
-hijack it — and never blanked). The spawn paths substitute it at
+hijack it — and never blanked). Only the bare spelling exists: any
+colon-suffixed form (`${FLEET_WORKSPACE:-fallback}`, `${FLEET_WORKSPACE:?msg}`)
+fails the bundle load — the token takes no default, and resolving it like an
+ordinary env var would silently defeat the substitution below. The same rule
+covers `${FLEET_TASK_ID}`. The spawn paths substitute it at
 subprocess-launch time:
 
 | Spawn path | Substituted value |
@@ -149,10 +153,15 @@ needed.
   Making that the default for *every* scheduled run would mean a per-run spawn
   of the whole catalog and would have to reproduce the shared client's
   optional-server gating; it stays deferred.
-- **Re-ordering bundle-load vs `.env` load**: `${VAR:-default}` manifest forms
-  resolve BEFORE the `.env` file is loaded, so an env-file-only override of a
-  defaulted key does not win. Pre-existing behavior, documented here, tracked
-  as a follow-up.
+- **Full re-ordering of bundle-load vs `.env` load**: manifest interpolation
+  still runs before the `.env` file is applied. MCP `env`/`headers` values and
+  inline `http_tools` headers keep their raw `${...}` text through the load and
+  resolve at catalog-build time against the live process env (after
+  `config.Load` applies the `.env` file), so an env-file override of a
+  `${VAR:-default}` key wins there — the fleet#706 residual. Every other
+  manifest field (server `url`s, branding, providers, …) still resolves at
+  load, before the `.env` file, and `${VAR:?...}` still validates against the
+  pre-`.env` process env even inside connector values.
 
 ## Cross-references
 

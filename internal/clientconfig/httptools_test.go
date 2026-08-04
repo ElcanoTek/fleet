@@ -64,8 +64,7 @@ func TestHTTPToolsParse(t *testing.T) {
 // TestHTTPToolsEnvVarNamesSurvivesAllowlist asserts that when the header's env var
 // is UNSET at load (the deferred case), its name is surfaced via EnvVarNames so it
 // survives the .env-file allowlist and resolves later at call time — exactly as MCP
-// server header references do. (When the var IS set, the manifest pass expands it at
-// load, so it does not appear in EnvVarNames — that is the SET path above.)
+// server header references do.
 func TestHTTPToolsEnvVarNamesSurvivesAllowlist(t *testing.T) {
 	t.Setenv("DEMO_TOKEN", "") // unset/empty => deferred token left intact
 	b, err := Load(writeManifest(t, httpToolFixture))

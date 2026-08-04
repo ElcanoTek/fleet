@@ -207,6 +207,31 @@ func TestCheckManifestGoodBundle(t *testing.T) {
 	}
 }
 
+// TestCheckManifestUnknownFieldFailsLikeBoot pins issue #902's expectation:
+// validate-config loads the bundle through the SAME strict decoder the serve
+// boot path uses (clientconfig.Load), so a manifest with an unknown field —
+// e.g. a typo'd branding key — is a blocking manifest failure carrying boot's
+// "unknown field" error class, never a green validate followed by a
+// crash-looping restart.
+func TestCheckManifestUnknownFieldFailsLikeBoot(t *testing.T) {
+	dir := t.TempDir()
+	manifest := "branding:\n  logo_typo: \"x\"\n"
+	if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bundle, bundleErr := clientconfig.Load(dir)
+	if bundleErr == nil || !strings.Contains(bundleErr.Error(), `unknown field "logo_typo"`) {
+		t.Fatalf("strict load must reject the unknown field, got: %v", bundleErr)
+	}
+	res := checkManifest(bundle, bundleErr, nil)
+	if res.Status != statusFail || !res.Blocking {
+		t.Errorf("unknown-field manifest check = %s blocking=%v, want a blocking failure", res.Status, res.Blocking)
+	}
+	if !strings.Contains(res.Detail, "unknown field") {
+		t.Errorf("detail should carry the boot error class, got %q", res.Detail)
+	}
+}
+
 // TestCheckManifestMissingPersona escalates a missing referenced persona to a
 // blocking failure.
 func TestCheckManifestMissingPersona(t *testing.T) {
