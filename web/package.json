@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start",
+    "start": "next start -H ${FLEET_WEB_HOST:-127.0.0.1}",
     "lint": "eslint",
     "test": "vitest run",
     "test:watch": "vitest",

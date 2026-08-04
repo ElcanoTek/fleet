@@ -49,6 +49,7 @@ import {
   type Message,
 } from "./history";
 import { type ModelPrices } from "@/app/shared/lib/modelCost";
+import { classifyBootstrapFailure } from "./bootstrapFailure";
 import { PENDING_CONV_KEY } from "./workspaceHref";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
 import { Icon } from "./Icon";
@@ -493,6 +494,11 @@ export function ChatExperience({
   const [isLoadingHistory, setIsLoadingHistory] = useState(
     () => restoredSession === null,
   );
+  // Cold bootstrap could not reach the backend (502/503/504 from the proxy
+  // routes, or the fetch itself threw). Renders a full-page retry notice; it
+  // must NOT redirect to /login — the session cookie is still valid there, so
+  // the middleware bounces straight back and the two pages reload in a loop.
+  const [backendUnreachable, setBackendUnreachable] = useState(false);
   const [pendingDeleteConversation, setPendingDeleteConversation] =
     useState<PendingDeleteConversation | null>(null);
   // "Save to prompt library…" target: while set, SavePromptDialog distills
@@ -3457,11 +3463,21 @@ export function ChatExperience({
         if (initialUserEmail) {
           setUserEmail(initialUserEmail);
         } else {
-          const sessionResponse = await fetch("/api/session", {
-            cache: "no-store",
-          });
+          let sessionResponse: Response;
+          try {
+            sessionResponse = await fetch("/api/session", {
+              cache: "no-store",
+            });
+          } catch {
+            if (!cancelled) setBackendUnreachable(true);
+            return;
+          }
           if (!sessionResponse.ok) {
-            window.location.href = "/login";
+            if (classifyBootstrapFailure(sessionResponse.status) === "unauthenticated") {
+              window.location.href = "/login";
+            } else if (!cancelled) {
+              setBackendUnreachable(true);
+            }
             return;
           }
           const sessionData = (await sessionResponse.json()) as {
@@ -3471,11 +3487,21 @@ export function ChatExperience({
           setUserEmail(sessionData.email);
         }
 
-        const conversationsResponse = await fetch("/api/conversations", {
-          cache: "no-store",
-        });
+        let conversationsResponse: Response;
+        try {
+          conversationsResponse = await fetch("/api/conversations", {
+            cache: "no-store",
+          });
+        } catch {
+          if (!cancelled) setBackendUnreachable(true);
+          return;
+        }
         if (!conversationsResponse.ok) {
-          window.location.href = "/login";
+          if (classifyBootstrapFailure(conversationsResponse.status) === "unauthenticated") {
+            window.location.href = "/login";
+          } else if (!cancelled) {
+            setBackendUnreachable(true);
+          }
           return;
         }
         const conversationsData = (await conversationsResponse.json()) as {
@@ -3518,7 +3544,11 @@ export function ChatExperience({
           cache: "no-store",
         });
         if (!sessionResponse.ok) {
-          window.location.href = "/login";
+          // A backend-down status is NOT a sign-out — treat it like the
+          // transient failures below and keep the cached transcript.
+          if (classifyBootstrapFailure(sessionResponse.status) === "unauthenticated") {
+            window.location.href = "/login";
+          }
           return;
         }
         const sessionData = (await sessionResponse.json()) as { email: string };
@@ -3648,6 +3678,32 @@ export function ChatExperience({
     });
     setAttachmentError(null);
   };
+
+  // Backend down/restarting during cold bootstrap. The session is still valid
+  // (auth is verified locally by the web tier), so this is a wait-and-retry
+  // state, not a sign-out — see bootstrapFailure.ts for why redirecting to
+  // /login here loops.
+  if (backendUnreachable) {
+    return (
+      <main className="flex h-[100dvh] items-center justify-center px-6">
+        <div className="w-full max-w-sm rounded-[1.5rem] border border-[var(--color-border)] bg-[var(--composer-surface)] p-6 text-center shadow-[var(--composer-shadow)]">
+          <h1 className="text-[1.25rem] font-semibold text-[var(--color-text-primary)]">
+            Can&apos;t reach the chat server
+          </h1>
+          <p className="mt-2 text-[0.875rem] text-[var(--color-text-secondary)]">
+            You&apos;re still signed in — the server may be restarting. Try again in a moment.
+          </p>
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            className="mt-5 rounded-xl bg-[var(--color-primary)] px-4 py-2.5 text-sm font-medium text-[var(--color-on-primary)] transition hover:opacity-90"
+          >
+            Retry
+          </button>
+        </div>
+      </main>
+    );
+  }
 
   return (
     <div

@@ -74,7 +74,7 @@ function initialDashboardTab(): DashTab {
   return want && (DASH_TABS as readonly string[]).includes(want) ? (want as DashTab) : "tasks";
 }
 
-function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean }) {
+function OrchestratorInner({ magicLinkLoginEnabled }: { magicLinkLoginEnabled: boolean }) {
   const session = useOrchestratorSession();
   const dashboard = useDashboardData(session.signedIn);
   const { servers, loading: serversLoading } = useMcpServers(session.signedIn);
@@ -162,7 +162,7 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
       <div className="container">
         <OrchestratorSlimHeader />
         <OrchestratorLogin
-          elcanoLoginEnabled={elcanoLoginEnabled}
+          magicLinkLoginEnabled={magicLinkLoginEnabled}
           onLogin={session.login}
           error={session.error}
           notice={
@@ -379,10 +379,10 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
   );
 }
 
-export function OrchestratorClient({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean }) {
+export function OrchestratorClient({ magicLinkLoginEnabled }: { magicLinkLoginEnabled: boolean }) {
   return (
     <ToastProvider>
-      <OrchestratorInner elcanoLoginEnabled={elcanoLoginEnabled} />
+      <OrchestratorInner magicLinkLoginEnabled={magicLinkLoginEnabled} />
     </ToastProvider>
   );
 }

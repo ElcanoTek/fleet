@@ -30,7 +30,7 @@ export default async function LoginPage() {
   const branding = await getServerBranding();
   return (
     <LoginCard
-      elcanoLoginEnabled={getAuthSigningPubkey() !== ""}
+      magicLinkLoginEnabled={getAuthSigningPubkey() !== ""}
       oidcEnabled={oidc !== null}
       oidcLabel={oidc?.buttonLabel ?? "Sign in with SSO"}
       title={branding.loginTitle}

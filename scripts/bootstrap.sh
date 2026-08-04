@@ -556,13 +556,18 @@ deploy_web_tier() {
 
   systemctl daemon-reload || true
   if systemctl enable --now fleet-web >/dev/null 2>&1; then
-    ok "fleet-web enabled + started (Next.js on :3000)"
+    ok "fleet-web enabled + started (Next.js on 127.0.0.1:3000)"
   else
     warn "could not enable/start fleet-web — check: journalctl -u fleet-web -n 50"
   fi
 
   if [[ -z "$WEB_DOMAIN" ]]; then
+    # The start script binds 127.0.0.1 unless FLEET_WEB_HOST overrides it, so
+    # "loopback-only" holds even on boxes without firewalld. A TLS proxy on
+    # ANOTHER host needs both the wider bind and the real public origin (the
+    # origin also feeds redirect/Secure-cookie decisions in the web tier).
     info "no --domain → web is loopback-only on :3000; front it with your own TLS proxy for a public URL."
+    info "  (proxy on another host? set FLEET_WEB_HOST=0.0.0.0 + NEXT_PUBLIC_PUBLIC_ORIGIN=https://<domain> in ${web_env}, rebuild web/, restart fleet-web)"
     return
   fi
   step "Web tier: Caddy TLS reverse proxy for ${WEB_DOMAIN}"

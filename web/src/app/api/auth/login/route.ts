@@ -51,6 +51,12 @@ export async function POST(request: NextRequest) {
     return redirectBackWithError(request, "server");
   }
 
+  if (upstream.status === 429) {
+    // The verify endpoint rate-limits pre-login attempts (Retry-After: 60 —
+    // see internal/httpapi/auth_verify.go). Surface the throttle honestly
+    // rather than the misleading "server isn't reachable" copy.
+    return redirectBackWithError(request, "throttled");
+  }
   if (!upstream.ok) {
     return redirectBackWithError(request, "server");
   }
