@@ -30,6 +30,19 @@ prior versions are listed because none have shipped.
   delimiter — the stream stays framed and the healthy subprocess is not
   restarted — and the call fails with an explicit over-cap error rather than
   a silently truncated, plausible-but-wrong result.
+- The storage-quota probe's inconclusive path re-probed on every container
+  creation with no cap or backoff. Right direction — the earlier fix stopped a
+  cancelled first probe from latching "unsupported" for the process lifetime —
+  but on a degraded host (podman hanging) every creation then paid the
+  serialized 30s probe, added straight to turn-start and scheduled-run
+  latency, for as long as the host stayed degraded. Consecutive probe
+  *timeouts* (inconclusive with a live caller context: the host being slow,
+  not a user cancelling a turn) now cap at three, after which the pool treats
+  the driver as unsupported for a 5-minute cooldown before re-probing.
+  Containers created inside the window omit only the writable-layer quota —
+  the per-file ulimit still applies — and a cancelled turn still never counts
+  toward the latch, so a genuinely inconclusive answer still never latches
+  permanently.
 - Every masked MCP-broker failure was undiagnosable. The credential owner
   replaces any operational error with a fixed `mcpbroker: credential-owner …`
   sentence before it crosses back to the parent — correct, because the real error
