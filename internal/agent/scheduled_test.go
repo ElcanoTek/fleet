@@ -7,6 +7,7 @@ import (
 
 	"charm.land/fantasy"
 
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 )
@@ -110,6 +111,47 @@ func TestExecute_UsesInjectedMCPBrokerAndCatalog(t *testing.T) {
 	}
 	if loaderAdvertised {
 		t.Fatal("broker mode advertised the in-process MCP loader")
+	}
+}
+
+// TestExecute_BrokerModeGatesToolsByInjectedAllowlist pins Gate-2 for broker
+// mode: production scrubs config.MCPServers after broker boot, so the run's
+// per-server tool allowlist must come from the driver-injected
+// Options.MCPToolAllowlist — an excluded catalog tool is never advertised to
+// the model.
+func TestExecute_BrokerModeGatesToolsByInjectedAllowlist(t *testing.T) {
+	t.Setenv("FLEET_LOG_FILE", t.TempDir()+"/session.json")
+	advertised := map[string]bool{}
+	model := &itMockModel{
+		streamFunc: func(_ context.Context, call fantasy.Call) (fantasy.StreamResponse, error) {
+			for _, tool := range call.Tools {
+				advertised[tool.GetName()] = true
+			}
+			return func(yield func(fantasy.StreamPart) bool) {
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonStop})
+			}, nil
+		},
+	}
+	a := NewAgent(Options{
+		Config:        &config.Config{MaxIterations: 2, LLMMaxTokens: 4096},
+		Model:         model,
+		SystemPrompt:  "scheduled broker gate-2 test",
+		MaxIterations: 2,
+		MCPBroker:     &interactiveRecordingBroker{},
+		MCPCatalog: []mcp.ServerTool{
+			{ServerName: "bundle", Tool: mcp.Tool{Name: "lookup", Description: "lookup"}},
+			{ServerName: "bundle", Tool: mcp.Tool{Name: "purge", Description: "purge"}},
+		},
+		MCPToolAllowlist: agentcore.MCPAllowlist{"bundle": {"lookup"}},
+	})
+	if err := a.Execute(context.Background(), "look it up"); err == nil {
+		t.Fatal("expected scheduled audit enforcement to remain unfinished")
+	}
+	if !advertised["mcp_bundle_lookup"] {
+		t.Error("allowlisted tool mcp_bundle_lookup was not advertised")
+	}
+	if advertised["mcp_bundle_purge"] {
+		t.Error("tool mcp_bundle_purge escaped the injected Gate-2 allowlist")
 	}
 }
 

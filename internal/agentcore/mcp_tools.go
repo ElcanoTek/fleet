@@ -44,6 +44,27 @@ var toolCallTimeout = 5 * time.Minute
 // mcpAllowlist maps server name → allowed tool names. Empty/missing = allow all.
 type mcpAllowlist map[string][]string
 
+// toolsFor returns the allowlist entry governing a REGISTERED server name.
+// Entries are keyed by manifest server name, but a named-account seat registers
+// as "<server>_<account>" (resolveMCPVariant), so a name without an exact entry
+// falls back to the longest manifest key it extends across an underscore — the
+// same variant treatment the credential allowlist's registered-name projection
+// (permittedRegisteredNames) and the persona filter's mcp:<server>/* prefix
+// apply. nil = no entry (allow all).
+func (al mcpAllowlist) toolsFor(registered string) []string {
+	if list, ok := al[registered]; ok {
+		return list
+	}
+	best := -1
+	var tools []string
+	for name, list := range al {
+		if len(name) > best && strings.HasPrefix(registered, name+"_") {
+			best, tools = len(name), list
+		}
+	}
+	return tools
+}
+
 // mcpOptionalSet reports whether a server is Optional (participates only when
 // opted in for the run).
 type mcpOptionalSet map[string]bool
@@ -134,7 +155,7 @@ func buildFantasyTools(
 			continue
 		}
 		// Gate 2: per-server tool allowlist.
-		if list, ok := allow[st.ServerName]; ok && len(list) > 0 && !slices.Contains(list, st.Tool.Name) {
+		if list := allow.toolsFor(st.ServerName); len(list) > 0 && !slices.Contains(list, st.Tool.Name) {
 			mcpSkippedAllowlist++
 			continue
 		}

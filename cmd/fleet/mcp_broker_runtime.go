@@ -59,7 +59,10 @@ func startDefaultProductionMCPRuntime(bundle *clientconfig.Bundle, cfg *config.C
 func (i *brokerMCPInventory) replace(descriptors []mcpbroker.ServerDescriptor) {
 	servers := make(map[string]scheduledrun.TaskMCPServerInfo, len(descriptors))
 	for _, descriptor := range descriptors {
-		servers[descriptor.Name] = scheduledrun.TaskMCPServerInfo{UsesWorkspace: descriptor.UsesWorkspace}
+		servers[descriptor.Name] = scheduledrun.TaskMCPServerInfo{
+			UsesWorkspace: descriptor.UsesWorkspace,
+			ToolAllowlist: append([]string(nil), descriptor.ToolAllowlist...),
+		}
 	}
 	i.mu.Lock()
 	i.servers = servers
@@ -71,6 +74,7 @@ func (i *brokerMCPInventory) snapshot() map[string]scheduledrun.TaskMCPServerInf
 	defer i.mu.RUnlock()
 	out := make(map[string]scheduledrun.TaskMCPServerInfo, len(i.servers))
 	for name, server := range i.servers {
+		server.ToolAllowlist = append([]string(nil), server.ToolAllowlist...)
 		out[name] = server
 	}
 	return out
@@ -271,7 +275,10 @@ func taskMCPInventoryFromResolvedSpecs(src map[string]agent.MCPServerSpec) map[s
 	out := make(map[string]scheduledrun.TaskMCPServerInfo, len(src))
 	for name, spec := range src {
 		if spec.Enabled {
-			out[name] = scheduledrun.TaskMCPServerInfo{UsesWorkspace: agentcore.EnvReferencesWorkspace(spec.Env)}
+			out[name] = scheduledrun.TaskMCPServerInfo{
+				UsesWorkspace: agentcore.EnvReferencesWorkspace(spec.Env),
+				ToolAllowlist: append([]string(nil), spec.ToolAllowlist...),
+			}
 		}
 	}
 	return out
