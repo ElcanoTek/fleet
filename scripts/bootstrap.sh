@@ -869,6 +869,7 @@ fi
 # the sandbox: block, then interpolate a bare ${VAR:-default} / ${VAR} reference
 # against the process env. An empty result => build-on-box (the default-bundle
 # value "${FLEET_SANDBOX_IMAGE:-}" resolves to empty when the var is unset).
+# Mirrored in scripts/update.sh — keep the two copies in sync.
 resolve_sandbox_image() {
   local file="$1" raw
   [[ -f "$file" ]] || return 0

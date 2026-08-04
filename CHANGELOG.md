@@ -208,6 +208,39 @@ prior versions are listed because none have shipped.
   never built. The gate now also tracks the resolved tag and rebuilds when the
   expected image is absent from the service user's store.
 
+- `fleet update` restarted the service even when the sandbox build it had just
+  attempted failed and the resolved image existed nowhere in the service
+  user's store — a `sandbox.tag` rename plus one transient build failure left
+  the box reporting healthy while every sandboxed tool call failed, until a
+  human noticed. The update now refuses to restart in that state, spelling out
+  the recovery commands; a failed build only warns past when the
+  currently-resolved tag still exists (Containerfile changed under the same
+  tag — the previous image is stale but serviceable).
+
+- The update's sandbox-store probe ran rootless podman as the service user
+  without pre-creating `/run/<user>` — tmpfs, present only while the unit's
+  `RuntimeDirectory=` keeps it alive — so during a stopped-unit maintenance
+  window `podman image exists` failed environmentally and the gate read that
+  as "image missing", burning a spurious multi-GB rebuild. The probe now
+  pre-creates the runtime dir the way the build path already did, and only
+  podman's positive "not found" (exit 1) counts as absent; any other podman
+  failure leaves the image as-is and says so.
+
+- The sandbox rebuild gate keyed on the manifest's `sandbox.tag` even when the
+  bundle resolves `sandbox.image` to a prebuilt ref the service pulls directly
+  (image wins over tag), so the first update after a client switches to
+  registry-published images performed one pointless multi-GB on-box build that
+  nothing reads. `update.sh` now mirrors `bootstrap.sh`'s
+  `resolve_sandbox_image` skip — one rule, same interpolation.
+
+- The update's unit-adoption loop covered only `fleet.service` and
+  `fleet-web.service`, so a fix to the shipped backup units reached
+  provisioned boxes only via doctor, never via the update path operators
+  actually run on release. The loop now also adopts `fleet-backup.service`
+  and `fleet-backup.timer` when they are installed on the box — without any
+  restart, matching doctor's rule: the daemon-reload alone re-arms a rewritten
+  timer's schedule, and restarting the oneshot would run a backup immediately.
+
 - The production MCP-broker boundary refused to boot any bundle that wires the
   documented cutlass-family connector contract: the connector/parent env
   overlap guard treated the whole `CUTLASS_` prefix as parent-owned, but fleet

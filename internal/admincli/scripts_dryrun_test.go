@@ -502,6 +502,108 @@ func TestUpdateSandboxGatePresent(t *testing.T) {
 	}
 }
 
+// TestUpdatePrebuiltImageSkipsSandboxBuild — a bundle that resolves
+// sandbox.image to a prebuilt ref is consumed by the service as a registry
+// pull (internal/clientconfig: image WINS over tag), so update.sh must not
+// key its rebuild gate on sandbox.tag and burn a multi-GB on-box build the
+// service will never read. Mirrors bootstrap.sh's resolve_sandbox_image skip.
+func TestUpdatePrebuiltImageSkipsSandboxBuild(t *testing.T) {
+	dir := t.TempDir()
+	// The bundle ships a Containerfile TOO: image must win over the
+	// build-on-box path, not merely cover the no-Containerfile case.
+	manifest := "sandbox:\n  containerfile: sandbox/Containerfile\n  tag: localhost/fleet-sandbox:latest\n  image: ghcr.io/example/fleet-sandbox:v7\n"
+	if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "sandbox"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "sandbox", "Containerfile"), []byte("FROM scratch\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	assertSkip := func(env []string, wantRef string) {
+		t.Helper()
+		out, err := runScript(t, env, "update.sh", "--dry-run", "--no-pull")
+		if err != nil {
+			t.Fatalf("update --dry-run exited non-zero: %v\n--- output ---\n%s", err, out)
+		}
+		if !strings.Contains(out, "sandbox.image="+wantRef) {
+			t.Errorf("plan must skip the on-box build for the prebuilt %s\n--- output ---\n%s", wantRef, out)
+		}
+		if strings.Contains(out, "build-sandbox-image.sh") {
+			t.Errorf("plan still schedules an on-box sandbox build\n--- output ---\n%s", out)
+		}
+	}
+	assertSkip([]string{"FLEET_CLIENT_CONFIG_DIR=" + dir}, "ghcr.io/example/fleet-sandbox:v7")
+	// The generic bundle's image key is "${FLEET_SANDBOX_IMAGE:-}" — the env
+	// override must interpolate to the same skip (empty ⇒ build-on-box, which
+	// TestUpdateDryRunSmoke covers).
+	assertSkip([]string{"FLEET_SANDBOX_IMAGE=ghcr.io/example/env-override:v1"}, "ghcr.io/example/env-override:v1")
+}
+
+// TestUpdateFailedSandboxBuildRefusesRestart — a failed sandbox build is only
+// survivable while the resolved ref still exists in the service user's store
+// (Containerfile changed under the same tag: the old image is stale but
+// serviceable). When the ref is absent — a sandbox.tag rename plus one
+// transient build failure — restarting would leave the box reporting healthy
+// while every sandboxed tool call fails, so update.sh must die before step 5.
+// The failure path needs a real failing podman build, so this pins the
+// load-bearing lines the way TestUpdateSandboxGatePresent does.
+func TestUpdateFailedSandboxBuildRefusesRestart(t *testing.T) {
+	root := repoRootFromTest(t)
+	body, err := os.ReadFile(filepath.Join(root, "scripts", "update.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(body)
+	for _, want := range []string{
+		// Only a verified still-present ref downgrades the failure to a warn…
+		`if [[ -n "$ref_now" && "$(sandbox_image_state "$ref_now")" == "present" ]]; then`,
+		// …everything else refuses the restart, with the recovery spelled out.
+		`die "sandbox image build failed`,
+		"refusing to restart",
+		`finish:  fleet update --no-pull`,
+		// The store probe must not read an environmental podman failure (e.g.
+		// the unit stopped and /run/<user> absent) as "image missing": the
+		// runtime dir is pre-created like build-sandbox-image.sh does, and
+		// only exit code 1 — podman's positive "not found" — means absent.
+		`install -d -o "$service_user" -g "$service_user" -m 0700 "/run/${service_user}"`,
+		`sandbox_image_state() {`,
+		`absent) build_reason="${ref_now} missing from the sandbox image store"`,
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("update.sh must contain %q", want)
+		}
+	}
+}
+
+// TestUpdateAdoptsBackupUnits — the unit-adoption loop must cover the shipped
+// fleet-backup pair (a timer fix otherwise reaches provisioned boxes only via
+// doctor, not the update path operators actually run on release), and its
+// backup-unit hint must NOT say restart: the daemon-reload alone re-arms a
+// rewritten timer, and restarting the oneshot would run a backup immediately —
+// the same no-bounce rule doctor.sh applies. Absent units are skipped by the
+// loop's both-files-exist check, so a box that declined backups is never
+// force-installed.
+func TestUpdateAdoptsBackupUnits(t *testing.T) {
+	root := repoRootFromTest(t)
+	body, err := os.ReadFile(filepath.Join(root, "scripts", "update.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(body)
+	for _, want := range []string{
+		`for unit in fleet.service fleet-web.service fleet-backup.service fleet-backup.timer; do`,
+		`case "$unit" in fleet-backup.service|fleet-backup.timer) is_backup_unit=1 ;; esac`,
+		// The backup adopt hint ends at daemon-reload — no restart clause.
+		`warn "  adopt:  install -m 0644 $shipped $installed && systemctl daemon-reload"`,
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("update.sh must contain %q", want)
+		}
+	}
+}
+
 // TestFleetUpgradeDryRunSmoke is the regression guard for #305 (drain-and-restart
 // upgrade): `fleet-upgrade.sh --dry-run --yes` must succeed and its plan must
 // include the load-bearing steps — build, back up the live binary (so rollback is

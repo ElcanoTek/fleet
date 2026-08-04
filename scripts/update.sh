@@ -6,7 +6,8 @@
 # unit's WorkingDirectory (a build left only in the checkout never reaches the
 # browser), rebuilds the sandbox image when the bundle's Containerfile or
 # resolved image tag changed (or the tag is missing from the service user's
-# image store), then restarts the systemd units (fleet, then fleet-web when
+# image store; skipped entirely when the bundle resolves sandbox.image to a
+# prebuilt ref), then restarts the systemd units (fleet, then fleet-web when
 # installed). Services self-migrate on restart, so this script NEVER runs
 # application migrations.
 #
@@ -378,6 +379,38 @@ ref_now="$(FLEET_CLIENT_CONFIG_DIR="$CLIENT_DIR" "$SCRIPT_DIR/build-sandbox-imag
 ref_prev=""
 [[ -f "$REF_FILE" ]] && ref_prev="$(tr -d '[:space:]' < "$REF_FILE")"
 
+# resolve_sandbox_image MANIFEST — print the bundle's resolved sandbox.image,
+# the SAME way the Go loader (internal/clientconfig) does: extract the scalar
+# under the sandbox: block, then interpolate a bare ${VAR:-default} / ${VAR}
+# reference against the process env. Mirrored from bootstrap.sh — keep in sync.
+# A non-empty result means the service pulls/uses that prebuilt ref (image WINS
+# over tag) and never reads an on-box build, so step 4 skips entirely; empty —
+# the generic bundle's "${FLEET_SANDBOX_IMAGE:-}" with the var unset — means
+# build-on-box.
+resolve_sandbox_image() {
+  local file="$1" raw
+  [[ -f "$file" ]] || return 0
+  raw="$(awk '
+    /^sandbox:[[:space:]]*$/ { in_block=1; next }
+    /^[^[:space:]]/          { in_block=0 }
+    in_block && $0 ~ "^[[:space:]]+image:" {
+      sub("^[[:space:]]+image:[[:space:]]*", "")
+      sub(/[[:space:]]+#.*$/, "")
+      gsub(/^["'\'']|["'\'']$/, "")
+      print; exit
+    }
+  ' "$file")"
+  # Interpolate a single leading ${VAR} or ${VAR:-default} (the only shapes the
+  # default bundle uses). Anything else is treated as a literal image ref.
+  if [[ "$raw" =~ ^\$\{([A-Za-z_][A-Za-z0-9_]*)(:-([^}]*))?\}$ ]]; then
+    local var="${BASH_REMATCH[1]}" def="${BASH_REMATCH[3]}"
+    printf '%s' "${!var:-$def}"
+  else
+    printf '%s' "$raw"
+  fi
+}
+sandbox_image_ref="$(resolve_sandbox_image "$CLIENT_DIR/manifest.yaml")"
+
 # sandbox_podman CMD… — podman against the image store the service actually
 # reads: as the unit's User= when running as root and that user exists, else
 # the invoking user (matching where build-sandbox-image.sh lands the build).
@@ -388,11 +421,33 @@ sandbox_podman() {
   local home
   if [[ $EUID -eq 0 && -n "$service_user" && "$service_user" != "root" ]] && id -u "$service_user" >/dev/null 2>&1; then
     home="$(getent passwd "$service_user" | cut -d: -f6)"
+    # /run/<user> is tmpfs and only exists while the unit runs (its
+    # RuntimeDirectory= recreates it) — pre-create it the way
+    # build-sandbox-image.sh does before the build, or probing a STOPPED
+    # unit's store fails environmentally during exactly the maintenance
+    # windows updates run in.
+    install -d -o "$service_user" -g "$service_user" -m 0700 "/run/${service_user}"
     ( cd "$home" 2>/dev/null || cd /
       runuser -u "$service_user" -- env HOME="$home" XDG_RUNTIME_DIR="/run/${service_user}" podman "$@" )
   else
     podman "$@"
   fi
+}
+
+# sandbox_image_state REF — print "present", "absent", or "error". `podman
+# image exists` distinguishes these by exit code (0 = found, 1 = not found,
+# 125 = could not access the store at all); collapsing them into one boolean
+# made every environmental failure read as a missing image. Callers must act
+# only on a POSITIVE answer: "error" justifies neither a multi-GB rebuild nor
+# a restart into an unverified store.
+sandbox_image_state() {
+  local rc=0
+  sandbox_podman image exists "$1" >/dev/null 2>&1 || rc=$?
+  case "$rc" in
+    0) printf 'present' ;;
+    1) printf 'absent' ;;
+    *) printf 'error' ;;
+  esac
 }
 
 # ── 3. build the fleet binary + the web app ───────────────────────────────
@@ -503,8 +558,14 @@ fi
 
 # ── 4. rebuild the sandbox image when its gate inputs changed ───────────────
 step "4/5  Rebuilding the sandbox image (when the Containerfile or tag changed)"
-if [[ "$cf_now" == "absent" ]]; then
-  info "no ${sandbox_cf} — bundle ships no sandbox Containerfile (or uses a prebuilt image); skipping."
+if [[ -n "$sandbox_image_ref" ]]; then
+  # image wins over tag (internal/clientconfig): the service pulls/uses the
+  # prebuilt ref and never reads an on-box build, so gating on sandbox.tag
+  # here would burn one pointless multi-GB build the first update after a
+  # client switches to registry images. Same skip bootstrap.sh applies.
+  info "manifest resolves sandbox.image=${sandbox_image_ref} — using a prebuilt/registry image; skipping the on-box build."
+elif [[ "$cf_now" == "absent" ]]; then
+  info "no ${sandbox_cf} — bundle ships no sandbox Containerfile; skipping (set sandbox.image or add one)."
 elif [[ "$DRY_RUN" == "1" ]]; then
   info "[dry-run] would rebuild if the Containerfile hash or resolved tag (${ref_now:-unresolved}) changed, or the tag is missing from the service user's store"
   info "[dry-run] would run: FLEET_CLIENT_CONFIG_DIR=${CLIENT_DIR} scripts/build-sandbox-image.sh"
@@ -523,10 +584,16 @@ else
     # An empty ref_prev is a pre-tag-stamp box, not a rename — the store probe
     # below still covers it without forcing a fleet-wide rebuild.
     build_reason="image tag renamed (${ref_prev} → ${ref_now})"
-  elif [[ -n "$ref_now" ]] && ! sandbox_podman image exists "$ref_now" 2>/dev/null; then
+  elif [[ -n "$ref_now" ]]; then
     # Catches what the stamp files cannot see: a pruned/lost store, a renamed
-    # tag never built, or a pre-fix build that landed in root's store.
-    build_reason="${ref_now} missing from the sandbox image store"
+    # tag never built, or a pre-fix build that landed in root's store. Only a
+    # positive "absent" answer forces the build — a probe that failed
+    # environmentally proves nothing about the image and must not trigger a
+    # spurious full rebuild.
+    case "$(sandbox_image_state "$ref_now")" in
+      absent) build_reason="${ref_now} missing from the sandbox image store" ;;
+      error)  warn "could not probe the sandbox image store for ${ref_now} (podman failed as ${service_user:-$(id -un)}) — leaving the image as-is; check with: fleet doctor" ;;
+    esac
   fi
   if [[ -z "$build_reason" ]]; then
     ok "sandbox image up to date (Containerfile ${cf_now:0:12}, ${ref_now:-tag unresolved}) — skipping the image build."
@@ -545,7 +612,20 @@ else
         ok "pruned dangling image layers left by the rebuild (fleet cleanup does more)."
       fi
     else
-      warn "sandbox image build failed — run scripts/build-sandbox-image.sh manually before restarting."
+      # A failed build is survivable ONLY while the resolved ref still exists
+      # in the service user's store — the Containerfile-changed-under-the-
+      # same-tag case, where the previous image is stale but serviceable.
+      # Anything else (tag renamed, store pruned/lost, probe unanswerable)
+      # means the step-5 restart would bring the box up reporting healthy
+      # while every sandboxed tool call fails, so refuse to continue.
+      if [[ -n "$ref_now" && "$(sandbox_image_state "$ref_now")" == "present" ]]; then
+        warn "sandbox image build failed — the restarted service keeps running the existing (now stale) ${ref_now}; rebuild soon: sudo FLEET_CLIENT_CONFIG_DIR=${CLIENT_DIR} FLEET_SERVICE_NAME=${SERVICE_NAME} ${SCRIPT_DIR}/build-sandbox-image.sh"
+      else
+        warn "the ${SERVICE_NAME} service was NOT restarted — it keeps running the pre-update binary with the bundle it loaded at boot."
+        warn "recover: fix the build error above, then run: sudo FLEET_CLIENT_CONFIG_DIR=${CLIENT_DIR} FLEET_SERVICE_NAME=${SERVICE_NAME} ${SCRIPT_DIR}/build-sandbox-image.sh"
+        warn "finish:  fleet update --no-pull   (runs the remaining update steps + the restart)"
+        die "sandbox image build failed and ${ref_now:-the resolved image} is not known to exist in the service user's store — refusing to restart into a box whose every sandboxed tool call would fail"
+      fi
     fi
   fi
 fi
@@ -561,12 +641,21 @@ fi
 # --adopt-units is set. Overwriting is always gated on explicit consent (a y/N
 # answer, or --adopt-units) so an update can never silently clobber an operator
 # hand-edit. Drop-ins under /etc/systemd/system/<unit>.d/ survive either path.
+# The backup pair adopts the same way but needs NO restart (see below); a box
+# without it installed — bootstrap --no-backup-timer, or volume-layer backups —
+# is skipped by the both-files-exist check, never force-installed.
 NEED_DAEMON_RELOAD=0
 if command -v systemctl >/dev/null 2>&1; then
-  for unit in fleet.service fleet-web.service; do
+  for unit in fleet.service fleet-web.service fleet-backup.service fleet-backup.timer; do
     installed="/etc/systemd/system/$unit"
     shipped="$SRC_DIR/deploy/$unit"
     [[ -f "$installed" && -f "$shipped" ]] || continue
+    # Adopting a backup unit must not add any restart: the oneshot runs only
+    # when the timer fires it, and the step-5 daemon-reload is all systemd
+    # needs to re-arm a rewritten timer's schedule — the same rule doctor.sh
+    # applies. (Restarting the oneshot would even run a backup right now.)
+    is_backup_unit=0
+    case "$unit" in fleet-backup.service|fleet-backup.timer) is_backup_unit=1 ;; esac
     # Byte-identical → nothing to do.
     cmp -s "$shipped" "$installed" && continue
     # Empty functional diff → only comments/whitespace changed; note it and move
@@ -606,8 +695,13 @@ if command -v systemctl >/dev/null 2>&1; then
     elif [[ -t 0 && "$ASSUME_YES" != "1" ]]; then
       show_unit_diff "$funcdiff"
       _extra=""; [[ "$web_needs_user" == "1" ]] && _extra=" + create the fleet-web user"
-      printf '%s?%s Adopt the shipped %s%s%s? %s(install%s, daemon-reload, restart in step 5) (y/N)%s ' \
-        "$c_cyan" "$c_reset" "$c_bold" "$unit" "$c_reset" "$c_dim" "$_extra" "$c_reset"
+      _then="restart in step 5"
+      case "$unit" in
+        fleet-backup.timer)   _then="no restart — the reload re-arms the timer" ;;
+        fleet-backup.service) _then="no restart — the next timer fire uses the new definition" ;;
+      esac
+      printf '%s?%s Adopt the shipped %s%s%s? %s(install%s, daemon-reload, %s) (y/N)%s ' \
+        "$c_cyan" "$c_reset" "$c_bold" "$unit" "$c_reset" "$c_dim" "$_extra" "$_then" "$c_reset"
       read -r answer
       case "${answer,,}" in y|yes) do_adopt=1 ;; esac
     fi
@@ -635,7 +729,13 @@ if command -v systemctl >/dev/null 2>&1; then
       # Declined, non-interactive, or --yes: keep the actionable manual hint so
       # nothing is lost and the operator can adopt out of band.
       warn "  review: diff $installed $shipped"
-      warn "  adopt:  install -m 0644 $shipped $installed && systemctl daemon-reload && systemctl restart ${unit%.service}"
+      if [[ "$is_backup_unit" == "1" ]]; then
+        # No restart in this hint: the reload alone re-arms the timer, and
+        # restarting the oneshot would run a backup immediately.
+        warn "  adopt:  install -m 0644 $shipped $installed && systemctl daemon-reload"
+      else
+        warn "  adopt:  install -m 0644 $shipped $installed && systemctl daemon-reload && systemctl restart ${unit%.service}"
+      fi
       warn "  or re-run: fleet update --adopt-units   (adopts every drifted unit)"
       if [[ "$web_needs_user" == "1" ]]; then
         warn "  first (fleet-web runs as a non-root user now): useradd --system --home-dir /var/lib/fleet-web --shell /usr/sbin/nologin --no-create-home fleet-web && chown -R fleet-web:fleet-web ${web_dst}/.next"
