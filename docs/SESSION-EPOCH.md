@@ -72,6 +72,14 @@ Three rules keep the gate honest in the other direction:
   A chat password reset never governed that credential.
 - **Magic-link (`elcano_auth`) sessions carry no epoch** and stay revocable only
   at the auth service that mints them.
+- **Next-only routes are not gated.** The epoch is enforced by the two
+  backends, so the few endpoints that authorize on `getServerSession()` alone
+  and never call a backend — `/api/session`, `/api/model-catalog`,
+  `/api/model-rankings`, `/api/catwalk-models`, `/api/model-check` — keep
+  answering a revoked cookie until some other call returns `session_revoked`
+  and `dropRevokedSession` removes it. They serve the caller's own email and
+  public model catalogs: no client data, no budget spend. Both UIs reach a
+  backend within the first render, so the window is short in practice.
 - **A stream already open finishes its turn.** The epoch is checked when a
   request connects, so an SSE stream opened before the reset
   (`/api/chat`, `/api/conversations/[id]/stream`, the task run-log stream) keeps

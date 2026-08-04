@@ -277,7 +277,11 @@ each piece yourself):
    >   account's *session epoch*, derived from its stored password hash, and
    >   **both** backends refuse a request whose epoch no longer matches — chat and
    >   the Operations Center, which the one cookie authenticates. A reset
-   >   therefore signs that account out of both views on their next request, and
+   >   therefore signs that account out of both views on their next request that
+   >   reaches a backend — a handful of Next-only endpoints (the session probe and
+   >   the model catalogs) authorize on the cookie alone and keep answering until
+   >   some other call trips the 401, which is when the browser's cookie is
+   >   dropped; neither serves client data or spends budget — and
    >   it works even if you reset to the same password (bcrypt re-salts). This is
    >   the incident-response lever for a stolen cookie. Three carve-outs: a
    >   magic-link (`elcano_auth`) session carries no epoch, so revoke it at the
@@ -306,6 +310,14 @@ each piece yourself):
    > anyway. So a restarting backend, or a `fleet` binary older than that
    > endpoint, is a login **outage** (`/login?e=server` for everyone), not a
    > degraded login: upgrade the two units together and never pin them apart.
+   >
+   > **The Operations Center now reads the chat database on every request.** The
+   > two planes keep separate `users` tables (ADR-0005), so the scheduler
+   > resolves the epoch a cookie claims through a lookup against the chat store.
+   > That lookup failing is answered `500`, never as a revocation — a chat-DB
+   > blip must not sign the whole Operations Center out — but it does mean the
+   > Operations Center is unavailable while the chat database is down, where
+   > previously it was not. It is one indexed lookup by email per request.
 
    Run the Next web app as its own supervised unit (`deploy/fleet-web.service` —
    it `npm run start`s the built app on port 3000), wiring
