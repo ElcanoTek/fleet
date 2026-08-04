@@ -71,6 +71,17 @@ prior versions are listed because none have shipped.
   cron tick now backs off exponentially on the already-tracked `skip_count`
   (30s doubling to a 30m cap), so a permanently-false condition costs ~2
   commands an hour instead of 120.
+- Task export silently dropped `run_if`. The portable definition record had no
+  field for the pre-run gate, so a box migration or backup-restore converted
+  every gated task into an unconditional one with nothing flagging it — tasks
+  whose gate suppressed runs under bad conditions started running
+  unconditionally on the new deployment. The gate is now part of the export
+  record and survives the round-trip (including `conflict=replace`, which
+  overlays it like every other definition field). Because a `run_if` command
+  executes on the host as the fleet user, importing a record that carries one
+  requires admin permission — the same boundary as authoring one, checked
+  up front before any record is written, so import cannot be a path around
+  the create/edit admin gate.
 - Every masked MCP-broker failure was undiagnosable. The credential owner
   replaces any operational error with a fixed `mcpbroker: credential-owner …`
   sentence before it crosses back to the parent — correct, because the real error

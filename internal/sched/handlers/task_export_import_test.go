@@ -478,3 +478,147 @@ func wipeAllTasks(t *testing.T, store *storage.Storage) {
 		t.Fatalf("wipe tasks: %v", err)
 	}
 }
+
+// TestImport_RunIfRequiresAdmin locks the import path to the same run_if
+// authoring boundary as create/edit (requireAdminForRunIf): a create_task
+// principal must not be able to mint a host-side gate command by wrapping it
+// in an export envelope. The same principal importing an UNGATED record still
+// succeeds, so the gate is on run_if, not on importing.
+func TestImport_RunIfRequiresAdmin(t *testing.T) {
+	r, store, cleanup := setupExportImportHandler(t)
+	defer cleanup()
+
+	// A client-role user: create_task + view permissions, no admin.
+	hash := models.HashToken("import-client-token")
+	if _, err := store.AddUser(&models.User{
+		ID: uuid.New(), Username: "import-client", Role: "client",
+		Scopes: []string{}, CreatedAt: time.Now(), SessionToken: &hash,
+	}); err != nil {
+		t.Fatalf("AddUser: %v", err)
+	}
+
+	post := func(env models.TaskExportEnvelope, auth func(*http.Request)) *httptest.ResponseRecorder {
+		body, _ := json.Marshal(env)
+		req := httptest.NewRequest(http.MethodPost, "/tasks/import", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		auth(req)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		return w
+	}
+	asClient := func(r *http.Request) { r.Header.Set("Authorization", "Bearer import-client-token") }
+	asAdmin := func(r *http.Request) { r.Header.Set("X-API-Key", "test-admin-key") }
+
+	gatedEnv := models.TaskExportEnvelope{Version: models.TaskExportVersion, Tasks: []models.TaskExportRecord{
+		{Name: "plain-import", Prompt: "an ungated imported prompt"},
+		{Name: "gated-import", Prompt: "a gated imported prompt", RunIf: &models.RunIf{Command: "true", TimeoutSeconds: 30}},
+	}}
+
+	t.Run("create_task principal importing run_if is 403 before any write", func(t *testing.T) {
+		w := post(gatedEnv, asClient)
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("client gated import = %d, want 403: %s", w.Code, w.Body.String())
+		}
+		// The refusal is up-front: the ungated sibling record must not have landed.
+		if tk, _ := store.GetTaskByName(context.Background(), "plain-import"); tk != nil {
+			t.Error("gated import must refuse before writing ANY record")
+		}
+	})
+
+	t.Run("same principal importing without run_if succeeds", func(t *testing.T) {
+		env := models.TaskExportEnvelope{Version: models.TaskExportVersion, Tasks: []models.TaskExportRecord{
+			{Name: "plain-import", Prompt: "an ungated imported prompt"},
+		}}
+		if w := post(env, asClient); w.Code != http.StatusOK {
+			t.Fatalf("client ungated import = %d, want 200: %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("admin importing run_if succeeds and lands on the scheduler path", func(t *testing.T) {
+		// "plain-import" exists from the subtest above → conflict=error would 409;
+		// import only the gated record here.
+		env := models.TaskExportEnvelope{Version: models.TaskExportVersion, Tasks: []models.TaskExportRecord{
+			gatedEnv.Tasks[1],
+		}}
+		w := post(env, asAdmin)
+		if w.Code != http.StatusOK {
+			t.Fatalf("admin gated import = %d, want 200: %s", w.Code, w.Body.String())
+		}
+		got := mustFindTask(t, store, "gated-import")
+		if got.RunIf == nil || got.RunIf.Command != "true" {
+			t.Fatalf("imported task lost its gate: %+v", got.RunIf)
+		}
+		if got.Status != models.TaskStatusScheduled || got.ScheduledFor == nil {
+			t.Errorf("imported gated task must be parked scheduled with scheduled_for set, got status=%s scheduled_for=%v",
+				got.Status, got.ScheduledFor)
+		}
+	})
+}
+
+// TestImportReplace_RoundTripsRunIf mirrors the sandbox-limits replace test:
+// conflict=replace is a full definition replacement, so it must overlay run_if
+// — applying a new gate and clearing it when the replacing record omits it —
+// but never onto a task already pending dispatch (the gate could not be
+// evaluated for that run; see models.RunIf's enforcement contract).
+func TestImportReplace_RoundTripsRunIf(t *testing.T) {
+	r, store, cleanup := setupExportImportHandler(t)
+	defer cleanup()
+
+	future := time.Now().Add(48 * time.Hour).UTC()
+	orig := models.NewTask(models.TaskCreate{
+		Name: "gated", Prompt: "seed gated task", ScheduledFor: &future,
+		RunIf: &models.RunIf{Command: "test -f /tmp/a", TimeoutSeconds: 30},
+	})
+	if _, err := store.AddTask(orig); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	importReplace := func(rec models.TaskExportRecord) *httptest.ResponseRecorder {
+		t.Helper()
+		env := models.TaskExportEnvelope{Version: models.TaskExportVersion, ExportedAt: time.Now().UTC(), Tasks: []models.TaskExportRecord{rec}}
+		body, _ := json.Marshal(env)
+		req := httptest.NewRequest(http.MethodPost, "/tasks/import?conflict=replace", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-API-Key", "test-admin-key")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		return w
+	}
+
+	// Replace with a NEW gate → it takes effect.
+	if w := importReplace(models.TaskExportRecord{
+		Name: "gated", Prompt: "replaced with new gate",
+		RunIf: &models.RunIf{Command: "test -f /tmp/b", TimeoutSeconds: 60},
+	}); w.Code != http.StatusOK {
+		t.Fatalf("replace with gate: %d (%s)", w.Code, w.Body.String())
+	}
+	got := mustFindTask(t, store, "gated")
+	if got.RunIf == nil || got.RunIf.Command != "test -f /tmp/b" || got.RunIf.TimeoutSeconds != 60 {
+		t.Fatalf("replace did not apply the new run_if: %+v", got.RunIf)
+	}
+
+	// Replace with NO gate → cleared (a full definition replacement).
+	if w := importReplace(models.TaskExportRecord{Name: "gated", Prompt: "replaced with no gate"}); w.Code != http.StatusOK {
+		t.Fatalf("replace without gate: %d (%s)", w.Code, w.Body.String())
+	}
+	if got = mustFindTask(t, store, "gated"); got.RunIf != nil {
+		t.Errorf("replace omitting run_if must clear it, got %+v", got.RunIf)
+	}
+
+	// A PENDING task cannot have a gate attached via replace: the record errors
+	// per-record (207) and the row is untouched.
+	if _, err := store.DB().Conn().ExecContext(context.Background(),
+		"UPDATE tasks SET status = 'pending' WHERE id = $1", got.ID); err != nil {
+		t.Fatalf("force pending: %v", err)
+	}
+	w := importReplace(models.TaskExportRecord{
+		Name: "gated", Prompt: "gate onto a pending task",
+		RunIf: &models.RunIf{Command: "true", TimeoutSeconds: 30},
+	})
+	if w.Code != http.StatusMultiStatus {
+		t.Fatalf("replace gate onto pending = %d, want 207: %s", w.Code, w.Body.String())
+	}
+	if got = mustFindTask(t, store, "gated"); got.RunIf != nil {
+		t.Errorf("pending task must not receive a gate it can never evaluate, got %+v", got.RunIf)
+	}
+}

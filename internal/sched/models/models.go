@@ -1502,6 +1502,13 @@ type TaskExportRecord struct {
 	TriggerType                TriggerType         `json:"trigger_type,omitempty"               yaml:"trigger_type,omitempty"`
 	AllowTaskCreation          bool                `json:"allow_task_creation,omitempty"        yaml:"allow_task_creation,omitempty"`
 	AllowRecurringTaskCreation bool                `json:"allow_recurring_task_creation,omitempty" yaml:"allow_recurring_task_creation,omitempty"`
+	// RunIf is the pre-run host-side gate (#269), part of the portable
+	// definition: dropping it on export turned every gated task unconditional
+	// on the target box, silently. Because the gate executes on the host as
+	// the fleet user, importing a record that carries one requires admin
+	// permission — the same boundary as authoring one (requireAdminForRunIf).
+	// It maps to TaskCreate.RunIf.
+	RunIf *RunIf `json:"run_if,omitempty" yaml:"run_if,omitempty"`
 	// SLA monitoring config (#274) is part of the portable definition so an
 	// exported task keeps its expected-duration + multiplier posture on reimport,
 	// mirroring the clone-recipe (TaskToTaskCreate). Runtime SLA state
@@ -1621,6 +1628,10 @@ func ExportRecordToTaskCreate(rec TaskExportRecord) TaskCreate {
 		TriggerType:                rec.TriggerType,
 		AllowTaskCreation:          rec.AllowTaskCreation,
 		AllowRecurringTaskCreation: rec.AllowRecurringTaskCreation,
+		// RunIf (#269): the import handler has already enforced the admin
+		// authoring boundary; NewTask parks the gated task on the scheduler
+		// path exactly as the public create path does.
+		RunIf: rec.RunIf,
 		// SLA config (#274). Passed straight through; NewTask normalizes a
 		// zero/absent multiplier to the default exactly as the public create path
 		// does, so an imported definition resolves identically to one created via
@@ -1679,6 +1690,7 @@ func TaskToExportRecord(t *Task) TaskExportRecord {
 		TriggerType:                t.TriggerType,
 		AllowTaskCreation:          t.AllowTaskCreation,
 		AllowRecurringTaskCreation: t.AllowRecurringTaskCreation,
+		RunIf:                      t.RunIf,
 		SerializationKey:           t.SerializationKey,
 	}
 	// SLA config (#274) only travels with an expected duration: the multipliers

@@ -4,6 +4,7 @@
 package models
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 )
@@ -64,4 +65,31 @@ func TestNewTaskParksGatedTasksOnSchedulerPath(t *testing.T) {
 			t.Errorf("scheduled_for = %v, want nil", task.ScheduledFor)
 		}
 	})
+}
+
+// TestExportImport_RunIfRoundTrip proves the pre-run gate (#269) is part of the
+// portable task definition: before the fix TaskExportRecord had no run_if
+// field, so a box migration or backup-restore silently converted every gated
+// task into an unconditional one. The recreated task must also land on the
+// scheduler path (RunIf's enforcement contract), never pending.
+func TestExportImport_RunIfRoundTrip(t *testing.T) {
+	src := &Task{
+		Prompt: "gated work",
+		RunIf:  &RunIf{Command: "test -f /tmp/ready", ExitCodeIs: 2, TimeoutSeconds: 60, OnError: RunIfOnErrorSkip},
+	}
+	rec, imported := roundTripDefinition(t, src, json.Marshal, json.Unmarshal)
+	if rec.RunIf == nil {
+		t.Fatal("export record dropped run_if — the gate would silently vanish on migration")
+	}
+	if imported.RunIf == nil ||
+		imported.RunIf.Command != src.RunIf.Command ||
+		imported.RunIf.ExitCodeIs != src.RunIf.ExitCodeIs ||
+		imported.RunIf.TimeoutSeconds != src.RunIf.TimeoutSeconds ||
+		imported.RunIf.OnError != src.RunIf.OnError {
+		t.Errorf("run_if did not round-trip: %+v", imported.RunIf)
+	}
+	if imported.Status != TaskStatusScheduled || imported.ScheduledFor == nil {
+		t.Errorf("imported gated task must be parked on the scheduler path, got status=%s scheduled_for=%v",
+			imported.Status, imported.ScheduledFor)
+	}
 }
