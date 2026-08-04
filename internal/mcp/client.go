@@ -565,6 +565,13 @@ func (s *Server) callTool(ctx context.Context, name string, arguments map[string
 		return nil, fmt.Errorf("MCP server %s was retired by a reload", s.name)
 	}
 
+	// A nil arguments map marshals to "arguments": null, which strict MCP
+	// servers reject with -32602 (arguments must be an object when present).
+	// Empty args arrive as nil after a JSON round-trip that drops empty maps.
+	if arguments == nil {
+		arguments = map[string]interface{}{}
+	}
+
 	result, err := s.transport.Call(ctx, "tools/call", map[string]interface{}{
 		jsonRPCFieldName: name,
 		"arguments":      arguments,

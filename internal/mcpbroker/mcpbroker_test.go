@@ -408,8 +408,26 @@ func TestClientServer_MaskedCallErrorIsLoggedHostSideAndStillMasked(t *testing.T
 	}
 }
 
+// Empty args must survive the round trip as an object, not nil: the wire
+// shape omits empty maps (args,omitempty), and a nil forwarded onward
+// marshals to "arguments": null, which strict MCP servers reject with
+// -32602 (the pages.list_templates outage).
+func TestClientServer_EmptyArgsArriveAsObject(t *testing.T) {
+	fake := &fakeBroker{text: "ok"}
+	client := loopback(t, fake)
+
+	if _, _, err := client.CallMCP(context.Background(), "pages", "list_templates", map[string]any{}); err != nil {
+		t.Fatalf("CallMCP: %v", err)
+	}
+	if fake.lastArgs == nil {
+		t.Fatal("backend received nil args, want a non-nil empty object")
+	}
+	if len(fake.lastArgs) != 0 {
+		t.Fatalf("backend received args %v, want empty", fake.lastArgs)
+	}
+}
+
 // Credentials-never-in-logs still applies to the log we just added.
-//
 // The fixture is deliberately a BARE token — no "Bearer", no "key=" marker — the
 // shape internal/redact's canonical patterns do NOT match (asserted below). It is
 // caught only because this process holds the connector credentials and registers
