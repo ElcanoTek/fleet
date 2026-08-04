@@ -270,7 +270,8 @@ each piece yourself):
    >
    > **Ending a session.** The cookie is a stateless HMAC valid for 14 days, so
    > there is nothing to delete server-side — revocation works by invalidating
-   > what the cookie *claims*. Three levers, narrowest first:
+   > what the cookie *claims* (the design and its carve-outs:
+   > [`SESSION-EPOCH.md`](SESSION-EPOCH.md)). Three levers, narrowest first:
    > - **One account** — reset its password (Settings → Admin → "Users & roles",
    >   or `fleet chat user passwd <email>`). Every session cookie carries the
    >   account's *session epoch*, derived from its stored password hash, and

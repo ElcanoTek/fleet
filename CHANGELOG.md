@@ -222,8 +222,10 @@ prior versions are listed because none have shipped.
   legacy importer, and a reset to the *same* password still rotates it because
   bcrypt re-salts. Magic-link (`elcano_auth`) sessions are unaffected and stay
   revocable at the auth service, which mints that cookie, and an Operations
-  Center bearer login is its own credential; the revocation levers, these
-  carve-outs and their blast radius are written down in
+  Center bearer login is its own credential; the design lives in
+  [`docs/SESSION-EPOCH.md`](docs/SESSION-EPOCH.md) with the invariant in
+  [ADR-0041](docs/adr/0041-mandatory-session-epoch-claim.md), and the revocation
+  levers, these carve-outs and their blast radius in
   [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md), including `APP_SESSION_SECRET`
   rotation as the deliberate break-glass global logout.
   **At deploy time every logged-in user must sign in once more:** cookies minted

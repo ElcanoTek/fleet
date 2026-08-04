@@ -50,3 +50,4 @@ reviewable, and citable. Each record names the file or test that enforces it.
 | [0038](0038-governed-lifecycle-hooks.md) | Governed lifecycle hooks (bundle-declared, sandbox-executed) | Accepted |
 | [0039](0039-durable-turn-journal.md) | Durable turn journal gates interactive terminal success | Accepted |
 | [0040](0040-child-owned-remote-mcp-runtime.md) | Child-owned per-user remote MCP runtime | Accepted |
+| [0041](0041-mandatory-session-epoch-claim.md) | Session cookies carry a mandatory session-epoch claim | Accepted |
