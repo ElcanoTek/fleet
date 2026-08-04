@@ -108,7 +108,7 @@ describe("verifyElcanoToken", () => {
 
 describe("getSessionFromRequest (two-cookie resolution)", () => {
   it("returns a password session for a valid elcano_session (HMAC) cookie", async () => {
-    const token = await auth.createSessionToken("bob@x.com");
+    const token = await auth.createSessionToken("bob@x.com", "epoch-1");
     const session = await auth.getSessionFromRequest(reqWith({ [auth.getSessionCookieName()]: token }));
     expect(session).toMatchObject({ email: "bob@x.com", source: "password" });
   });
@@ -120,7 +120,7 @@ describe("getSessionFromRequest (two-cookie resolution)", () => {
   });
 
   it("prefers the HMAC password cookie when both are present", async () => {
-    const hmac = await auth.createSessionToken("bob@x.com");
+    const hmac = await auth.createSessionToken("bob@x.com", "epoch-1");
     const elcano = await makeToken(priv, { email: "carol@elcanotek.com", exp: future });
     const session = await auth.getSessionFromRequest(
       reqWith({ [auth.getSessionCookieName()]: hmac, [auth.getElcanoCookieName()]: elcano }),
@@ -141,6 +141,55 @@ describe("getSessionFromRequest (two-cookie resolution)", () => {
     expect(
       await auth.getSessionFromRequest(reqWith({ [auth.getElcanoCookieName()]: "bad.token" })),
     ).toBeNull();
+  });
+});
+
+// The session epoch is the per-user revocation generation chat-server compares
+// against the users table (internal/httpapi/auth.go#headerSessionEpoch). This
+// tier cannot check whether the claim is CURRENT — that needs the database — so
+// its job is narrower and load-bearing: carry the claim through, and refuse a
+// cookie that has none, because a claimless cookie is admitted by the Go gate.
+describe("session epoch claim", () => {
+  // mintHmac signs an arbitrary payload with the session secret, standing in for
+  // a cookie minted by a build that predates the epoch claim.
+  async function mintHmac(payload: object): Promise<string> {
+    const key = await crypto.subtle.importKey(
+      "raw",
+      enc.encode(SECRET),
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["sign"],
+    );
+    const body = toBase64Url(enc.encode(JSON.stringify(payload)));
+    const sig = new Uint8Array(await crypto.subtle.sign("HMAC", key, enc.encode(body)));
+    return `${body}.${toBase64Url(sig)}`;
+  }
+
+  it("round-trips the epoch a token was minted with", async () => {
+    const token = await auth.createSessionToken("dave@x.com", "abcdef0123456789");
+    expect(await auth.verifySessionToken(token)).toMatchObject({ epoch: "abcdef0123456789" });
+    const session = await auth.getSessionFromRequest(reqWith({ [auth.getSessionCookieName()]: token }));
+    expect(session).toMatchObject({ email: "dave@x.com", epoch: "abcdef0123456789" });
+  });
+
+  it("refuses a correctly-signed token that carries no epoch claim", async () => {
+    const legacy = await mintHmac({ email: "dave@x.com", exp: future });
+    expect(await auth.verifySessionToken(legacy)).toBeNull();
+    expect(
+      await auth.getSessionFromRequest(reqWith({ [auth.getSessionCookieName()]: legacy })),
+    ).toBeNull();
+  });
+
+  it("refuses an empty epoch claim", async () => {
+    const empty = await mintHmac({ email: "dave@x.com", exp: future, epoch: "" });
+    expect(await auth.verifySessionToken(empty)).toBeNull();
+  });
+
+  it("leaves elcano_auth sessions epoch-less — that cookie is the auth service's", async () => {
+    const token = await makeToken(priv, { email: "carol@elcanotek.com", exp: future });
+    const session = await auth.getSessionFromRequest(reqWith({ [auth.getElcanoCookieName()]: token }));
+    expect(session?.source).toBe("elcano");
+    expect(session?.epoch).toBeUndefined();
   });
 });
 

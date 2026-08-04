@@ -28,7 +28,7 @@ async function mutate(
   if (!csrf.ok) return csrf.response;
   const { key } = await params;
   const body = method === "PUT" ? await request.text() : undefined;
-  return chatServerPassthrough(session.email, `/admin/settings/${encodeURIComponent(key)}`, {
+  return chatServerPassthrough(session, `/admin/settings/${encodeURIComponent(key)}`, {
     method,
     body,
   });

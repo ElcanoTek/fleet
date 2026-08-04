@@ -19,7 +19,7 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   const body = await request.text();
-  const { upstream, error } = await chatServerProxy(session.email, "/conversations/bulk", {
+  const { upstream, error } = await chatServerProxy(session, "/conversations/bulk", {
     method: "PATCH",
     body,
   });

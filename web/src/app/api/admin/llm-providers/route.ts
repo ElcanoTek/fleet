@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "@/app/lib/auth";
-import { chatServerProxy } from "@/app/lib/chatServer";
+import { chatServerProxy, type SessionIdentity } from "@/app/lib/chatServer";
 import { verifyOrigin } from "@/app/lib/csrf";
 
 export const runtime = "nodejs";
@@ -13,8 +13,8 @@ export const runtime = "nodejs";
  * never appear in any response.
  */
 
-async function proxy(email: string, init?: RequestInit) {
-  const { upstream, error } = await chatServerProxy(email, "/admin/llm-providers", init);
+async function proxy(user: SessionIdentity, init?: RequestInit) {
+  const { upstream, error } = await chatServerProxy(user, "/admin/llm-providers", init);
   if (error) return error;
   const text = await upstream.text();
   return new NextResponse(text, {
@@ -28,7 +28,7 @@ export async function GET() {
   if (!session) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  return proxy(session.email, { method: "GET" });
+  return proxy(session, { method: "GET" });
 }
 
 export async function POST(request: NextRequest) {
@@ -41,5 +41,5 @@ export async function POST(request: NextRequest) {
   const csrf = verifyOrigin(request);
   if (!csrf.ok) return csrf.response;
   const body = await request.text();
-  return proxy(session.email, { method: "POST", body });
+  return proxy(session, { method: "POST", body });
 }

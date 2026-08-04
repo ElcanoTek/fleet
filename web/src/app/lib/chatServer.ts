@@ -3,16 +3,41 @@
 // The browser never hits chat-server directly — every call goes through a
 // Next.js API route that:
 //   1. Verifies the session cookie via `getServerSession`.
-//   2. Proxies to chat-server with `X-Chat-Server-Token` and `X-User-Email`.
+//   2. Proxies to chat-server with `X-Chat-Server-Token`, `X-User-Email` and
+//      the session-epoch claim.
 //
 // chat-server listens on CHAT_SERVER_URL (default http://127.0.0.1:8080) and
 // both sides share CHAT_SERVER_TOKEN.
 
+import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
+import { getSessionCookieName } from "@/app/lib/auth";
 import { forwardedHeaders } from "@/app/lib/proxyHeaders";
 
 const defaultBase = "http://127.0.0.1:8080";
+
+/**
+ * What a proxied call forwards about its caller. A `Session` satisfies it
+ * structurally, which is why every call site hands over the whole session
+ * rather than `session.email`: the epoch is half of the identity chat-server
+ * checks, and a bare email would silently drop it.
+ *
+ * `epoch` is absent only where there is no chat-minted session to read it from
+ * — the pre-login /auth/verify and /auth/session-epoch calls, and elcano_auth
+ * sessions, whose cookie the auth service owns.
+ */
+export type SessionIdentity = {
+  email: string;
+  epoch?: string;
+};
+
+/**
+ * Set by chat-server on the 401 it returns when a forwarded epoch no longer
+ * matches the account (internal/httpapi/auth.go#writeSessionRevoked). Mirrored
+ * here rather than shared because the two tiers are separate builds.
+ */
+const sessionRevokedHeader = "X-Session-Revoked";
 
 export function getChatServerBase() {
   return (process.env.CHAT_SERVER_URL ?? defaultBase).replace(/\/+$/, "");
@@ -26,11 +51,59 @@ export function getSharedToken() {
   return t;
 }
 
-export function chatServerHeaders(userEmail: string, extra?: HeadersInit): Headers {
+export function chatServerHeaders(user: SessionIdentity, extra?: HeadersInit): Headers {
   const h = new Headers(extra ?? {});
   h.set("X-Chat-Server-Token", getSharedToken());
-  h.set("X-User-Email", userEmail);
+  h.set("X-User-Email", user.email);
+  if (user.epoch) h.set("X-User-Session-Epoch", user.epoch);
   return h;
+}
+
+/**
+ * fetchSessionEpoch reads the account's current session epoch so a cookie about
+ * to be minted can carry it. Both mint paths (the password form and the OIDC
+ * callback) go through here.
+ *
+ * Returns null when chat-server cannot answer. The caller MUST then refuse to
+ * log the user in: a cookie minted without an epoch is rejected by
+ * verifySessionToken on the very next request, so falling back would strand the
+ * user in a login loop rather than degrade gracefully.
+ */
+export async function fetchSessionEpoch(email: string): Promise<string | null> {
+  let upstream: Response;
+  try {
+    upstream = await chatServerFetch({ email }, "/auth/session-epoch", { method: "GET" });
+  } catch {
+    return null;
+  }
+  if (!upstream.ok) return null;
+  const body = (await upstream.json()) as { session_epoch?: string };
+  return body.session_epoch || null;
+}
+
+/**
+ * dropRevokedSession deletes the session cookie when chat-server reports that
+ * the epoch it was minted against is stale.
+ *
+ * Without this the user is trapped: the cookie's signature is still valid, so
+ * the request proxy treats it as a session and bounces every visit to /login
+ * back to /chat, which 401s again. The Next tier cannot detect the staleness
+ * itself — the epoch lives in the users table — so chat-server's verdict is the
+ * only trigger available.
+ *
+ * Cookie writes are legal in a Route Handler but not while rendering a Server
+ * Component, and that is why the failure is swallowed: the server-rendered
+ * callers (chat/page.tsx) only ever proxy for elcano sessions, which carry no
+ * epoch and so can never receive this verdict, and any client-side call that
+ * follows is a Route Handler that can complete the deletion.
+ */
+async function dropRevokedSession(upstream: Response): Promise<void> {
+  if (upstream.status !== 401 || upstream.headers.get(sessionRevokedHeader) !== "1") return;
+  try {
+    (await cookies()).delete(getSessionCookieName());
+  } catch {
+    // Not in a context that may mutate cookies — see above.
+  }
 }
 
 /**
@@ -41,21 +114,25 @@ export function chatServerHeaders(userEmail: string, extra?: HeadersInit): Heade
  * error into a clean 502 instead of letting it bubble to a generic 500 page.
  */
 export async function chatServerFetch(
-  userEmail: string,
+  user: SessionIdentity,
   path: string,
   init?: RequestInit,
 ): Promise<Response> {
   const base = getChatServerBase();
-  const headers = chatServerHeaders(userEmail, init?.headers);
+  const headers = chatServerHeaders(user, init?.headers);
   if (init?.body && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
-  return fetch(`${base}${path}`, {
+  const upstream = await fetch(`${base}${path}`, {
     ...init,
     headers,
     // Keep the request open for long-running SSE streams.
     cache: "no-store",
   });
+  // Status + header only: the body is never read here, so streaming callers
+  // (SSE, the download passthroughs) still forward it untouched.
+  await dropRevokedSession(upstream);
+  return upstream;
 }
 
 /**
@@ -88,12 +165,12 @@ export async function chatServerFetchPublic(path: string, init?: RequestInit): P
  * chatServerFetch.
  */
 export async function chatServerProxy(
-  userEmail: string,
+  user: SessionIdentity,
   path: string,
   init?: RequestInit,
 ): Promise<{ upstream: Response; error?: undefined } | { upstream?: undefined; error: NextResponse }> {
   try {
-    const upstream = await chatServerFetch(userEmail, path, init);
+    const upstream = await chatServerFetch(user, path, init);
     return { upstream };
   } catch (err) {
     return {
@@ -119,11 +196,11 @@ export async function chatServerProxy(
  * sibling routes already carry comments about avoiding.
  */
 export async function chatServerPassthrough(
-  userEmail: string,
+  user: SessionIdentity,
   path: string,
   init?: RequestInit,
 ): Promise<NextResponse> {
-  const { upstream, error } = await chatServerProxy(userEmail, path, init);
+  const { upstream, error } = await chatServerProxy(user, path, init);
   if (error) return error;
   // 204/304 and HEAD have no body; NextResponse requires null, not an empty stream.
   return new NextResponse(upstream.body, {

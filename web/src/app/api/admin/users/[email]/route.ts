@@ -25,7 +25,7 @@ async function mutate(request: NextRequest, params: Promise<{ email: string }>, 
   const { email } = await params;
   const body = method === "PATCH" ? await request.text() : undefined;
   const { upstream, error } = await chatServerProxy(
-    session.email,
+    session,
     `/admin/users/${encodeURIComponent(email)}`,
     { method, body },
   );

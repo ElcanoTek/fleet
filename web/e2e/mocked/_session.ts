@@ -19,12 +19,17 @@ function b64url(buf: Buffer): string {
 }
 
 // ── elcano_session: HMAC cookie (password path) ────────────────────────────
-// Mirrors createSessionToken: base64url(JSON{email,exp}) + "." +
+// Mirrors createSessionToken: base64url(JSON{email,exp,epoch}) + "." +
 // base64url(HMAC-SHA256(secret, payload)).
+//
+// The epoch claim is mandatory — verifySessionToken refuses a token without one
+// — but its VALUE only matters to the Go tier, which this suite mocks away, so
+// any stand-in works here.
 export function mintSessionToken(email: string): string {
   const payload = JSON.stringify({
     email: email.toLowerCase(),
     exp: Math.floor(Date.now() / 1000) + 60 * 60 * 24,
+    epoch: "e2e-session-epoch",
   });
   const encodedPayload = b64url(Buffer.from(payload, "utf8"));
   const sig = crypto.createHmac("sha256", TEST_SESSION_SECRET).update(encodedPayload).digest();

@@ -268,6 +268,26 @@ each piece yourself):
    > decides *who may use chat*. A stand-alone deploy needs none of this; users
    > just log in with email + password.
    >
+   > **Ending a session.** The cookie is a stateless HMAC valid for 14 days, so
+   > there is nothing to delete server-side — revocation works by invalidating
+   > what the cookie *claims*. Three levers, narrowest first:
+   > - **One account** — reset its password (Settings → Admin → "Users & roles",
+   >   or `fleet chat user passwd <email>`). Every session cookie carries the
+   >   account's *session epoch*, derived from its stored password hash, and the
+   >   backend refuses a cookie whose epoch no longer matches. A reset therefore
+   >   signs that account out everywhere within one request — this is the
+   >   incident-response lever for a stolen cookie, and it works even if you reset
+   >   to the same password (bcrypt re-salts). It does **not** reach a magic-link
+   >   (`elcano_auth`) session: that cookie is minted by the auth service, so it is
+   >   revoked there.
+   > - **One account, permanently** — delete it. The user-list gate then 403s
+   >   every request.
+   > - **Everyone, break-glass** — rotate `APP_SESSION_SECRET` in
+   >   `/etc/fleet/fleet-web.env` and `systemctl restart fleet-web`. Every
+   >   outstanding cookie fails signature verification at once, so all users
+   >   re-log-in. Nothing else reads the value, so rotation is safe at any time;
+   >   reach for it when you can't enumerate the affected accounts.
+   >
    > **`fleet-web` BindsTo `fleet`.** It stays down until the backend is healthy
    > (i.e. until `OPENROUTER_API_KEY` is set), so after a first `--enable-web`
    > bootstrap: set the key, `fleet restart`, then `systemctl start fleet-web`.

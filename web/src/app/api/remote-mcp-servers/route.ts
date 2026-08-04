@@ -14,7 +14,7 @@ export async function GET() {
   if (!session) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  const { upstream, error } = await chatServerProxy(session.email, "/remote-mcp-servers", {
+  const { upstream, error } = await chatServerProxy(session, "/remote-mcp-servers", {
     method: "GET",
   });
   if (error) return error;
@@ -34,7 +34,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   const body = await request.text();
-  const { upstream, error } = await chatServerProxy(session.email, "/remote-mcp-servers", {
+  const { upstream, error } = await chatServerProxy(session, "/remote-mcp-servers", {
     method: "POST",
     body,
   });

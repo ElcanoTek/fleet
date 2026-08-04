@@ -9,7 +9,7 @@ export async function GET() {
   if (!session) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  const { upstream, error } = await chatServerProxy(session.email, "/personas", { method: "GET" });
+  const { upstream, error } = await chatServerProxy(session, "/personas", { method: "GET" });
   if (error) return error;
   const text = await upstream.text();
   return new NextResponse(text, {

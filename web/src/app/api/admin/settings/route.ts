@@ -17,5 +17,5 @@ export async function GET() {
   if (!session) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  return chatServerPassthrough(session.email, "/admin/settings", { method: "GET" });
+  return chatServerPassthrough(session, "/admin/settings", { method: "GET" });
 }

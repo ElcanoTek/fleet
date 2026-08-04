@@ -149,7 +149,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
   const log = (await logRes.json()) as LogSession;
 
   const promptPreview = (task.name || task.prompt || task.id).trim().slice(0, 60);
-  const { upstream, error } = await chatServerProxy(session.email, "/conversations", {
+  const { upstream, error } = await chatServerProxy(session, "/conversations", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({

@@ -11,7 +11,7 @@ export async function GET(request: NextRequest) {
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const search = request.nextUrl.search;
-  const { upstream, error } = await chatServerProxy(session.email, `/memories/graph${search}`, {
+  const { upstream, error } = await chatServerProxy(session, `/memories/graph${search}`, {
     method: "GET",
   });
   if (error) return error;

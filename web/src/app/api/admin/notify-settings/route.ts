@@ -17,7 +17,7 @@ export async function GET() {
   if (!session) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  return chatServerPassthrough(session.email, "/admin/notify-settings", { method: "GET" });
+  return chatServerPassthrough(session, "/admin/notify-settings", { method: "GET" });
 }
 
 async function mutate(request: NextRequest, method: "PUT" | "DELETE"): Promise<NextResponse> {
@@ -30,7 +30,7 @@ async function mutate(request: NextRequest, method: "PUT" | "DELETE"): Promise<N
   const csrf = verifyOrigin(request);
   if (!csrf.ok) return csrf.response;
   const body = method === "PUT" ? await request.text() : undefined;
-  return chatServerPassthrough(session.email, "/admin/notify-settings", { method, body });
+  return chatServerPassthrough(session, "/admin/notify-settings", { method, body });
 }
 
 export async function PUT(request: NextRequest) {

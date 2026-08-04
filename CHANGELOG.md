@@ -199,6 +199,31 @@ prior versions are listed because none have shipped.
 
 ### Security
 
+- A password reset did not end the account's existing sessions, so the standard
+  response to a compromised account did not evict the attacker. The web session
+  cookie is a stateless HMAC over `{email, exp}` that the Next.js tier verifies
+  by itself, and the only server-side gate — the user-list check in
+  `membershipMiddleware` — admits any request whose email still exists. Nothing
+  in the token or the `users` table recorded *when* the session was issued, so a
+  stolen cookie stayed valid for its full remaining lifetime, up to 14 days,
+  no matter how many times the password was changed underneath it. The only
+  working levers were deleting the account outright or rotating
+  `APP_SESSION_SECRET`, which logs out everybody. Sessions now carry a per-user
+  **session epoch** derived from the stored bcrypt hash, forwarded to the backend
+  alongside `X-User-Email`, and compared against the account's live value inside
+  the user lookup `membershipMiddleware` already performs — so a mismatch costs
+  no extra query and a reset takes effect on the next request. Deriving the epoch
+  rather than storing a counter means every password write moves it, including
+  `fleet chat user passwd`, `fleet admin add` on an existing address and the
+  legacy importer, and a reset to the *same* password still rotates it because
+  bcrypt re-salts. Magic-link (`elcano_auth`) sessions are unaffected and stay
+  revocable at the auth service, which mints that cookie; the three revocation
+  levers and their blast radius are now written down in
+  [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md), including `APP_SESSION_SECRET`
+  rotation as the deliberate break-glass global logout.
+  **At deploy time every logged-in user must sign in once more:** cookies minted
+  before this change carry no epoch claim, and the web tier refuses them rather
+  than grandfathering a token that no backend check could evaluate.
 - The `run_if` host-side gate — a scheduled task's shell command, run by the
   scheduler as the fleet user — was authored by the wrong set of people in both
   directions. `taskCreator.isAdmin` was set for **any** typed API key carrying
