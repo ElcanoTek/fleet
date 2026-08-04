@@ -1,0 +1,23 @@
+# deploy/fleet-backup.timer — schedules deploy/fleet-backup.service daily.
+#
+# Enable THIS unit (the service it triggers has no [Install] section):
+#   systemctl daemon-reload && systemctl enable --now fleet-backup.timer
+#   systemctl list-timers fleet-backup.timer     # next + last fire
+#   systemctl start fleet-backup.service         # run one backup now
+#
+# scripts/bootstrap.sh --enable-service installs and enables it by default;
+# --no-backup-timer opts out for operators who back up at the volume or
+# hypervisor layer.
+
+[Unit]
+Description=Daily fleet database backup
+Documentation=https://github.com/ElcanoTek/fleet/blob/main/docs/BACKUP_RESTORE.md
+
+[Timer]
+OnCalendar=*-*-* 02:00:00
+# Persistent: a box that was powered off at 02:00 runs the missed backup shortly
+# after boot instead of silently skipping the day.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -413,6 +413,38 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **Scheduled database backups are part of the deployment now, not a doc the
+  operator had to find.** `docs/BACKUP_RESTORE.md` described a
+  `fleet-backup.service` + `fleet-backup.timer` pair and told the operator to
+  install a daily timer, but `scripts/bootstrap.sh` never installed it and
+  `fleet doctor` never looked for it — so a box could report `38 ok, 0
+  advisories` while holding no backups at all, which is what a production
+  deployment did for five days with live client data (#966). Three changes
+  close the gap. The two units now ship in `deploy/`, version-controlled and
+  covered by doctor's unit-drift check the way `fleet.service` is — as
+  optional-if-absent, since not every deployment installs them.
+  `scripts/bootstrap.sh --enable-service` installs and enables the timer by
+  default: it creates the backup directory `0700` root-owned (a dump holds
+  every conversation, task and user row), writes `FLEET_BACKUP_DIR` and
+  `FLEET_BACKUP_RETENTION_DAYS` into `fleet.env` alongside the DSNs, and
+  converges rather than duplicating on a re-run — an installed unit is left
+  alone, and both settings resolve process env > the value already in the env
+  file > the default, so a re-run keeps a backup directory you relocated
+  instead of resetting it; `--no-backup-timer` is the opt-out. And both halves
+  of doctor — `scripts/doctor.sh` and the in-process `internal/boxdoctor`
+  behind Settings → Admin → Doctor — report the timer's state, in agreement. A
+  missing timer is an **advisory** and doctor never installs one: an operator
+  who backs up at the volume or hypervisor layer is not misconfigured. So is a
+  timer that is enabled but not **active** — `is-enabled` reads only the
+  install symlink, so a stopped timer fires nothing while its service still
+  reports its last `Result` as `success`. A timer whose **last run failed** is
+  a **failure**, because the `oneshot` already exits non-zero when a dump fails
+  its integrity check, and a box that looks covered but is not is worse than
+  one that is visibly bare. Reinstalling a drifted backup unit does not trigger
+  doctor's post-fix restart, so repairing one never costs chat downtime. The
+  doc now states plainly what the timer buys: a same-host `pg_dump` survives a
+  bad migration or an accidental delete, not the loss of this host or volume,
+  and it still does not capture attachment/upload files.
 - **Restaurant-style model cost indicators ($ … $$$$):** both model pickers —
   the chat composer's listbox (and its collapsed model chip) and the operations
   center task form's primary/fallback pickers — now show a four-glyph price tier

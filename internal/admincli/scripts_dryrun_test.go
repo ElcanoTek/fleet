@@ -212,6 +212,145 @@ func TestBootstrapDBGuardAndCaddyProtectionPresent(t *testing.T) {
 	}
 }
 
+// TestBootstrapInstallsBackupTimer — #966: an --enable-service run must plan the
+// backup timer (a deployment that was never told about backups is the one that
+// has none), including the sensitive-by-default backup directory and the env
+// keys the unit resolves its output directory and retention from.
+func TestBootstrapInstallsBackupTimer(t *testing.T) {
+	out := runScriptDryRun(t, "bootstrap.sh", "--dry-run", "--postgres=local", "--enable-service")
+	for _, want := range []string{
+		"Scheduled database backups",
+		"would create /var/backups/fleet if missing (0700 root-owned",
+		"would set FLEET_BACKUP_DIR + FLEET_BACKUP_RETENTION_DAYS=30",
+		"would install deploy/fleet-backup.service + deploy/fleet-backup.timer",
+		"systemctl enable --now fleet-backup.timer",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("bootstrap --dry-run plan missing %q\n--- output ---\n%s", want, out)
+		}
+	}
+}
+
+// TestBootstrapNoBackupTimerOptOut — the opt-out must skip the whole timer path
+// (no unit install, no env keys) and say what the operator now owns.
+func TestBootstrapNoBackupTimerOptOut(t *testing.T) {
+	out := runScriptDryRun(t, "bootstrap.sh", "--dry-run", "--postgres=local",
+		"--enable-service", "--no-backup-timer")
+	if !strings.Contains(out, "--no-backup-timer: no scheduled backup on this box") {
+		t.Errorf("opt-out plan missing the no-backup notice\n--- output ---\n%s", out)
+	}
+	for _, forbid := range []string{
+		"would install deploy/fleet-backup.service",
+		"systemctl enable --now fleet-backup.timer",
+		"FLEET_BACKUP_RETENTION_DAYS=",
+	} {
+		if strings.Contains(out, forbid) {
+			t.Errorf("opt-out plan still installs the timer (%q present)\n--- output ---\n%s", forbid, out)
+		}
+	}
+}
+
+// TestBootstrapRejectsUnsafeBackupSettings — both settings land in the env file
+// the timer reads: a relative directory would put dumps in the unit's "/" cwd,
+// and a non-numeric retention would make --prune's cutoff silently default.
+func TestBootstrapRejectsUnsafeBackupSettings(t *testing.T) {
+	for _, tc := range []struct{ env, wantErr string }{
+		{"FLEET_BACKUP_DIR=backups", "FLEET_BACKUP_DIR must be an absolute path"},
+		{"FLEET_BACKUP_RETENTION_DAYS=0", "FLEET_BACKUP_RETENTION_DAYS must be a positive integer"},
+		{"FLEET_BACKUP_RETENTION_DAYS=thirty", "FLEET_BACKUP_RETENTION_DAYS must be a positive integer"},
+	} {
+		out, err := runScript(t, []string{tc.env}, "bootstrap.sh", "--dry-run", "--postgres=local", "--enable-service")
+		if err == nil {
+			t.Errorf("bootstrap accepted %s\n--- output ---\n%s", tc.env, out)
+			continue
+		}
+		if !strings.Contains(out, tc.wantErr) {
+			t.Errorf("%s: expected %q, got:\n%s", tc.env, tc.wantErr, out)
+		}
+	}
+	// …but only on the runs that write them. A dev run installs no unit, so a
+	// relative FLEET_BACKUP_DIR exported for a local `fleet backup` must not
+	// refuse the whole bootstrap.
+	if out, err := runScript(t, []string{"FLEET_BACKUP_DIR=backups"}, "bootstrap.sh",
+		"--dry-run", "--postgres=local"); err != nil {
+		t.Errorf("a run that installs no timer must not validate FLEET_BACKUP_DIR: %v\n--- output ---\n%s", err, out)
+	}
+}
+
+// TestBootstrapKeepsOperatorBackupSettings — #966 review: every other key in
+// this env file survives a re-run (the DSNs read themselves back out, secrets
+// are generate-if-absent). The backup settings must too: resetting a relocated
+// FLEET_BACKUP_DIR would silently move the dumps back onto the boot volume.
+func TestBootstrapKeepsOperatorBackupSettings(t *testing.T) {
+	envFile := filepath.Join(t.TempDir(), "fleet.env")
+	const existing = "FLEET_BACKUP_DIR=/mnt/backup-volume\nFLEET_BACKUP_RETENTION_DAYS=14\n"
+	if err := os.WriteFile(envFile, []byte(existing), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runScript(t, []string{"FLEET_ENV_FILE=" + envFile}, "bootstrap.sh",
+		"--dry-run", "--postgres=local", "--enable-service")
+	if err != nil {
+		t.Fatalf("bootstrap --dry-run exited non-zero: %v\n--- output ---\n%s", err, out)
+	}
+	for _, want := range []string{
+		"daily fleet-backup.timer → /mnt/backup-volume",
+		"FLEET_BACKUP_RETENTION_DAYS=14",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("re-run plan lost the operator's backup settings (missing %q)\n--- output ---\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "/var/backups/fleet") {
+		t.Errorf("re-run plan fell back to the default backup directory\n--- output ---\n%s", out)
+	}
+}
+
+// TestBackupUnitsShipped — #966: the timer pair lives in deploy/ (version
+// controlled, and covered by doctor's unit-drift check) rather than as fenced
+// blocks in the doc. The load-bearing lines: the oneshot exits non-zero on a
+// failed dump (which is what doctor's failed-run check reads), the output
+// directory has an in-unit default the env file overrides, and the timer is the
+// enable-able half.
+func TestBackupUnitsShipped(t *testing.T) {
+	root := repoRootFromTest(t)
+	service, err := os.ReadFile(filepath.Join(root, "deploy", "fleet-backup.service"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"Type=oneshot",
+		"EnvironmentFile=/etc/fleet/fleet.env",
+		"Environment=FLEET_BACKUP_DIR=/var/backups/fleet",
+		"ExecStart=/usr/local/bin/fleet backup --db=all --prune",
+		"UMask=0077",
+	} {
+		if !strings.Contains(string(service), want) {
+			t.Errorf("deploy/fleet-backup.service must contain %q", want)
+		}
+	}
+	// The service is timer-triggered: an [Install] section would invite
+	// `systemctl enable fleet-backup.service`, which schedules nothing. Match
+	// the section header itself, not the header comment that explains this.
+	for _, line := range strings.Split(string(service), "\n") {
+		if strings.TrimSpace(line) == "[Install]" {
+			t.Error("deploy/fleet-backup.service must not carry an [Install] section — enable the timer")
+		}
+	}
+	timer, err := os.ReadFile(filepath.Join(root, "deploy", "fleet-backup.timer"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"OnCalendar=*-*-* 02:00:00",
+		"Persistent=true",
+		"WantedBy=timers.target",
+	} {
+		if !strings.Contains(string(timer), want) {
+			t.Errorf("deploy/fleet-backup.timer must contain %q", want)
+		}
+	}
+}
+
 // TestFleetServiceWantsPostgres — #718: After= only orders units; Wants= is
 // what pulls the local cluster up with fleet after a reboot.
 func TestFleetServiceWantsPostgres(t *testing.T) {

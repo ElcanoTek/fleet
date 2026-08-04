@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -90,6 +91,48 @@ func TestCheckDBs(t *testing.T) {
 	if c := checkSchedDB(ctx, ""); c.Status != StatusFail {
 		t.Errorf("no DSN: got %s (%s), want fail", c.Status, c.Detail)
 	}
+}
+
+// TestBackupVerdict — #966: a box with no backup mechanism must be visible but
+// must NOT fail the box (backing up at the volume/hypervisor layer is a valid
+// answer), while a timer whose last run failed must fail it.
+func TestBackupVerdict(t *testing.T) {
+	if c := backupVerdict(false, false, false, ""); c.Status != StatusWarn || c.Fix == "" {
+		t.Errorf("no timer: got %s fix=%q, want warn with a fix", c.Status, c.Fix)
+	}
+	if c := backupVerdict(true, false, false, ""); c.Status != StatusWarn || c.Fix == "" {
+		t.Errorf("timer installed but disabled: got %s fix=%q, want warn with a fix", c.Status, c.Fix)
+	}
+	// Enabled but stopped: nothing fires, and the service's Result still reads
+	// "success", so this must not report ok.
+	if c := backupVerdict(true, true, false, "success"); c.Status != StatusWarn || c.Fix == "" {
+		t.Errorf("timer enabled but inactive: got %s fix=%q, want warn with a fix", c.Status, c.Fix)
+	}
+	if c := backupVerdict(true, true, true, "success"); c.Status != StatusOK {
+		t.Errorf("healthy timer: got %s (%s), want ok", c.Status, c.Detail)
+	}
+	// A never-run oneshot also reports Result=success; systemd leaves the
+	// property empty only when the unit is unknown.
+	if c := backupVerdict(true, true, true, ""); c.Status != StatusOK {
+		t.Errorf("never-run timer: got %s (%s), want ok", c.Status, c.Detail)
+	}
+	c := backupVerdict(true, true, true, "exit-code")
+	if c.Status != StatusFail || c.Fix == "" {
+		t.Fatalf("failed last run: got %s fix=%q, want fail with a fix", c.Status, c.Fix)
+	}
+	if !strings.Contains(c.Detail, "exit-code") {
+		t.Errorf("failed last run detail %q should name the systemd Result", c.Detail)
+	}
+}
+
+func TestRunIncludesBackupCheck(t *testing.T) {
+	r := Run(context.Background(), Options{DataDir: t.TempDir()})
+	for _, c := range r.Checks {
+		if c.Name == "scheduled backups" {
+			return
+		}
+	}
+	t.Error("report has no scheduled-backups check")
 }
 
 func TestRunSummarizes(t *testing.T) {

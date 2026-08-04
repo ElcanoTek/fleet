@@ -128,7 +128,9 @@ sudo git clone https://github.com/ElcanoTek/fleet.git /opt/fleet/src
 #    omit it to run bare on config/default, or use the public template
 #    https://github.com/ElcanoTek/example-config to start from.
 #    Under --enable-service the script writes credentials to /etc/fleet/fleet.env
-#    (the path the systemd unit reads) by default.
+#    (the path the systemd unit reads) by default, and installs + enables the
+#    daily database-backup timer (--no-backup-timer opts out; docs/BACKUP_RESTORE.md
+#    covers what a same-host dump does and does not protect against).
 sudo bash /opt/fleet/src/scripts/bootstrap.sh \
   --postgres=local --enable-service \
   --client-config https://github.com/ElcanoTek/example-config.git
