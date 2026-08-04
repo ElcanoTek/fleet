@@ -157,17 +157,26 @@ func TestUpdateTaskRunIfPersistsAndNormalizes(t *testing.T) {
 
 	clientKey := mustCreateScopedKey(t, keyMgr, "client", nil)
 
-	addGated := func(t *testing.T) *models.Task {
+	// The gated tasks are seeded SCHEDULED: that is where a gate normally lives
+	// (models.RunIf's enforcement contract parks every gated task on the
+	// scheduler path), and gate changes on a pending task are refused outright
+	// — the pending refusal has its own subtests below.
+	addGatedWithStatus := func(t *testing.T, status models.TaskStatus) *models.Task {
 		t.Helper()
+		future := time.Now().UTC().Add(time.Hour)
 		task := &models.Task{
 			ID: uuid.New(), Prompt: "a gated task prompt that is long enough",
-			Status: models.TaskStatusPending, CreatedAt: time.Now().UTC(),
+			Status: status, CreatedAt: time.Now().UTC(), ScheduledFor: &future,
 			RunIf: &models.RunIf{Command: "test -f /tmp/ready", ExitCodeIs: 2, TimeoutSeconds: 30},
 		}
 		if _, err := store.AddTask(task); err != nil {
 			t.Fatalf("add task: %v", err)
 		}
 		return task
+	}
+	addGated := func(t *testing.T) *models.Task {
+		t.Helper()
+		return addGatedWithStatus(t, models.TaskStatusScheduled)
 	}
 	put := func(taskID uuid.UUID, auth func(*http.Request), tc models.TaskCreate) *httptest.ResponseRecorder {
 		body, _ := json.Marshal(tc)
@@ -272,6 +281,60 @@ func TestUpdateTaskRunIfPersistsAndNormalizes(t *testing.T) {
 		}
 		if got.RunIf == nil || got.RunIf.Command != "true" {
 			t.Errorf("admin-role gate change must persist, got %+v", got.RunIf)
+		}
+	})
+
+	// A pending task is already past the scheduled→pending promotion — the one
+	// point where a gate is evaluated (models.RunIf's enforcement contract) —
+	// so attaching or changing a gate there would be dead config for the
+	// imminent dispatch and is refused even for admins. Removal stays allowed.
+	t.Run("admin changing the gate on a pending task is 409", func(t *testing.T) {
+		task := addGatedWithStatus(t, models.TaskStatusPending)
+		w := put(task.ID, asAdminKey, models.TaskCreate{
+			Prompt: "an edited prompt that is long enough",
+			RunIf:  &models.RunIf{Command: "test -f /tmp/other", TimeoutSeconds: 30},
+		})
+		if w.Code != http.StatusConflict {
+			t.Fatalf("admin gate change on pending = %d, want 409: %s", w.Code, w.Body.String())
+		}
+		got, err := store.GetTask(task.ID)
+		if err != nil {
+			t.Fatalf("get task: %v", err)
+		}
+		if got.RunIf == nil || got.RunIf.Command != "test -f /tmp/ready" {
+			t.Errorf("refused edit must leave the stored gate untouched, got %+v", got.RunIf)
+		}
+	})
+
+	t.Run("admin attaching a gate to a pending task is 409", func(t *testing.T) {
+		task := &models.Task{
+			ID: uuid.New(), Prompt: "an ungated pending task prompt",
+			Status: models.TaskStatusPending, CreatedAt: time.Now().UTC(),
+		}
+		if _, err := store.AddTask(task); err != nil {
+			t.Fatalf("add task: %v", err)
+		}
+		w := put(task.ID, asAdminKey, models.TaskCreate{
+			Prompt: "an edited prompt that is long enough",
+			RunIf:  &models.RunIf{Command: "true", TimeoutSeconds: 30},
+		})
+		if w.Code != http.StatusConflict {
+			t.Fatalf("admin gate attach on pending = %d, want 409: %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("admin removing the gate on a pending task persists", func(t *testing.T) {
+		task := addGatedWithStatus(t, models.TaskStatusPending)
+		w := put(task.ID, asAdminKey, models.TaskCreate{Prompt: "an edited prompt that is long enough"})
+		if w.Code != http.StatusOK {
+			t.Fatalf("admin gate removal on pending = %d, want 200: %s", w.Code, w.Body.String())
+		}
+		got, err := store.GetTask(task.ID)
+		if err != nil {
+			t.Fatalf("get task: %v", err)
+		}
+		if got.RunIf != nil {
+			t.Errorf("removal must clear the gate, got %+v", got.RunIf)
 		}
 	})
 }

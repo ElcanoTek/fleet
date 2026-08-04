@@ -66,10 +66,12 @@ type connectorInheritance struct {
 	cred bool
 }
 
-// buildTriggerRun clones the trigger's template task into a fresh, immediately
-// claimable one-shot run with the rendered prompt substituted. It deliberately
-// drops Recurrence / ScheduledFor / TriggerType so the spawned run is a normal
-// one-shot task that runs now rather than another inert trigger template. The
+// buildTriggerRun clones the trigger's template task into a fresh one-shot run
+// with the rendered prompt substituted. It deliberately drops Recurrence /
+// ScheduledFor / TriggerType so the spawned run is a normal one-shot task that
+// runs now rather than another inert trigger template — immediately claimable
+// for an ungated template; parked scheduled-for-now when the template carries
+// a run_if gate, so the scheduler evaluates the gate before dispatch. The
 // `inherit` flags decide whether the run carries the template's write-capable
 // connectors — the one place the event-trigger security default is enforced.
 func (s *Storage) buildTriggerRun(ctx context.Context, taskID uuid.UUID, prompt string, inherit connectorInheritance) (uuid.UUID, error) {
@@ -100,6 +102,13 @@ func (s *Storage) buildTriggerRun(ctx context.Context, taskID uuid.UUID, prompt 
 		MaxRetries:             &template.MaxRetries,
 		RetryPolicy:            template.RetryPolicy,
 		Timezone:               template.Timezone,
+		// The pre-run gate is part of the definition every spawned run must
+		// honor (models.RunIf's enforcement contract): NewTask parks the gated
+		// run scheduled-for-now, so the scheduler evaluates the gate before
+		// promoting it. Without this carry, firing a trigger executed the
+		// template's gated work with the admin-authored condition silently
+		// dropped.
+		RunIf: template.RunIf,
 	}
 	// Connector inheritance is the event-trigger security boundary: an untrusted
 	// inbound event never carries the template's write-capable connectors unless
@@ -126,10 +135,10 @@ func (s *Storage) buildTriggerRun(ctx context.Context, taskID uuid.UUID, prompt 
 	return run.ID, nil
 }
 
-// SpawnWebhookRun creates one fresh, immediately-claimable run cloned from the
-// trigger's template task, with the rendered prompt substituted (#177). Behavior
-// is unchanged: the spawned run inherits the template's MCP selection (its
-// historical connector subset).
+// SpawnWebhookRun creates one fresh run cloned from the trigger's template
+// task, with the rendered prompt substituted (#177). Behavior is unchanged:
+// the spawned run inherits the template's MCP selection (its historical
+// connector subset).
 func (s *Storage) SpawnWebhookRun(ctx context.Context, trigger *models.TaskTrigger, prompt string) (uuid.UUID, error) {
 	return s.buildTriggerRun(ctx, trigger.TaskID, prompt, connectorInheritance{mcp: true, cred: false})
 }

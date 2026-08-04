@@ -349,6 +349,25 @@ prior versions are listed because none have shipped.
   will emit a different `redirect_uri` (needs re-registration at the IdP unless
   `FLEET_OIDC_REDIRECT_URI` pins it; the pin still outranks everything) and
   will refuse mutating requests until the origin is corrected.**
+- A `run_if` pre-run gate was only enforced on one of the paths that could
+  dispatch the task it guards. The gate — an admin-authored host-side shell
+  condition, which is why authoring one requires admin permission — is
+  evaluated solely at the scheduler's scheduled→pending promotion, but a task
+  can reach dispatch without ever passing through it: `POST /tasks/{id}/rerun`
+  copies the source's gate and mints an immediate *pending* run (so any
+  principal with mere `create_task` permission could execute the gated work
+  with the condition unchecked), an immediate create with a gate did the same,
+  and a webhook/email trigger spawn dropped the template's gate outright. The
+  contract is now enforced structurally: `models.NewTask` parks every gated
+  cron task on the scheduler path (`scheduled`, with a nil `scheduled_for`
+  defaulted to now), so whatever minted it — create, batch, rerun/clone,
+  trigger spawn, import, recurrence — the gate is evaluated before every
+  occurrence's dispatch, at the cost of up to one 30-second tick of latency
+  for an "immediate" gated run. Trigger spawns now inherit the template's
+  gate, and since a *pending* task is already past its evaluation point, the
+  edit path refuses to attach or change (but still allows removing) a gate on
+  one rather than storing config that would silently never run. The full
+  contract lives on `models.RunIf`.
 - A password reset did not end the account's existing sessions, so the standard
   response to a compromised account did not evict the attacker. The web session
   cookie is a stateless HMAC over `{email, exp}` that the Next.js tier verifies

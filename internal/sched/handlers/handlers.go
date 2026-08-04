@@ -1711,8 +1711,19 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 	// admin-permission principal's payload is authoritative (SetRunIf below),
 	// so an admin edit that changes or removes the gate actually persists.
 	canAuthorRunIf := p.hasPermission(models.PermissionAdmin)
-	if !canAuthorRunIf && !reflect.DeepEqual(tc.RunIf.Normalized(), task.RunIf.Normalized()) {
+	runIfChanged := !reflect.DeepEqual(tc.RunIf.Normalized(), task.RunIf.Normalized())
+	if !canAuthorRunIf && runIfChanged {
 		writeError(w, http.StatusForbidden, "run_if: a host-side pre-run gate can only be changed by an admin")
+		return
+	}
+	// A gate is evaluated once per occurrence, at the scheduled→pending
+	// promotion (models.RunIf's enforcement contract). A pending task is
+	// already past that point, so a gate attached or changed here would never
+	// be evaluated for the imminent dispatch — refuse rather than store dead
+	// config. Removing the gate (tc.RunIf == nil) stays allowed: absence needs
+	// no evaluation point.
+	if runIfChanged && tc.RunIf != nil && task.Status == models.TaskStatusPending {
+		writeError(w, http.StatusConflict, "run_if: task is already pending dispatch, so its gate can no longer be evaluated for this run; change the gate while the task is scheduled, or cancel and recreate it")
 		return
 	}
 
@@ -2038,7 +2049,11 @@ func (h *Handlers) rerunOrClone(w http.ResponseWriter, r *http.Request, keepRecu
 // IMPORTANT: an immediate run uses ScheduledFor=nil — the codebase's "run now"
 // convention (a fresh pending task the worker claims at once). Setting &now would
 // be rejected by validateTaskCreate's "scheduled time cannot be in the past"
-// check, which re-samples a strictly-later now.
+// check, which re-samples a strictly-later now. A gated source is the one
+// exception to "claims at once": TaskToCreate carries run_if, and NewTask parks
+// any gated cron task scheduled-for-now so the scheduler evaluates the gate
+// before dispatch (models.RunIf's enforcement contract) — a rerun must not be a
+// path around the condition the gate exists to enforce.
 func buildRerunTaskCreate(source *models.Task, keepRecurrence bool, o taskRerunOverrides, fallbackLoc *time.Location) (models.TaskCreate, error) {
 	tc := models.TaskToCreate(source)
 	if keepRecurrence && strings.TrimSpace(tc.Recurrence) != "" {

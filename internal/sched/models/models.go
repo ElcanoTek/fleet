@@ -82,12 +82,25 @@ const (
 	RunIfOnErrorSkip = "skip"
 )
 
-// RunIf is the optional pre-run shell gate for a scheduled task (#269): when
-// set, the scheduler evaluates Command on the host (NOT in the sandbox — it is
-// a lightweight gate, not an agent tool call) before promoting a due task. The
+// RunIf is the optional pre-run shell gate for a task (#269): when set, the
+// scheduler evaluates Command on the host (NOT in the sandbox — it is a
+// lightweight gate, not an agent tool call) before promoting a due task. The
 // task is promoted only when the command exits with ExitCodeIs; otherwise it is
 // skipped (next_run_at advances, skip_count increments). nil = the legacy
 // unconditional promotion path; existing tasks are unaffected.
+//
+// ENFORCEMENT CONTRACT: the gate is evaluated exactly once per occurrence, at
+// the scheduled→pending promotion in ProcessScheduledTasks — the only place
+// that evaluates it. To make that promotion unavoidable, NewTask parks EVERY
+// gated cron task as `scheduled` (defaulting a nil scheduled_for to now), so
+// however the task was minted — a scheduled or immediate create, a rerun or
+// clone, a webhook/email trigger spawn (the spawned run inherits the
+// template's gate), an import — the gate runs before dispatch; an "immediate"
+// gated run waits up to one scheduler tick. A webhook TEMPLATE itself stays
+// inert and is never evaluated; its gate applies to each spawned run. Retries
+// of a failed attempt are the SAME occurrence and do not re-evaluate the gate,
+// and because a pending task is already past its evaluation point, the edit
+// and import-replace paths refuse to attach or change a gate on one.
 //
 // IMPORTANT (security note encoded in the schema): the check runs on the host
 // as the fleet process user with a restricted PATH. It is NOT a sandboxed agent
@@ -95,7 +108,8 @@ const (
 // touch MCP credentials — but it DOES mean a run_if command has the host-user
 // privileges of the fleet process. Operators must treat run_if commands as
 // trusted, exactly like the fleet binary itself; the validation path rejects
-// empty commands but does not sandbox them.
+// empty commands but does not sandbox them, which is why only a
+// PermissionAdmin principal may author one (create, edit, or import).
 type RunIf struct {
 	// Command is the shell command evaluated by `sh -c`. Must be non-empty when
 	// RunIf is present. Bash-specific constructs are NOT guaranteed — use POSIX sh.
@@ -1194,8 +1208,25 @@ func NewTask(tc TaskCreate) *Task {
 	}
 
 	status := TaskStatusPending
-	if tc.ScheduledFor != nil && tc.ScheduledFor.After(time.Now()) {
+	scheduledFor := tc.ScheduledFor
+	if scheduledFor != nil && scheduledFor.After(time.Now()) {
 		status = TaskStatusScheduled
+	}
+	// A gated task is ALWAYS dispatched through the scheduler's promotion path
+	// (see the RunIf contract): only ProcessScheduledTasks evaluates run_if, so
+	// a gated cron task minted for immediate dispatch — POST /tasks with no
+	// schedule, rerun/clone, a trigger-spawned run, an import — is parked
+	// scheduled-for-now instead of pending. The gate is therefore evaluated
+	// before EVERY occurrence, at the cost of up to one scheduler tick (~30s)
+	// of dispatch latency for an "immediate" gated run. A webhook template
+	// (below) stays inert with a nil scheduled_for; its gate is carried onto
+	// each spawned run instead, which this branch then parks.
+	if tc.RunIf != nil && triggerType == TriggerTypeCron {
+		status = TaskStatusScheduled
+		if scheduledFor == nil {
+			now := time.Now().UTC()
+			scheduledFor = &now
+		}
 	}
 	// A webhook template is never run by the cron engine. Park it inert as a
 	// scheduled task with no scheduled_for: GetScheduledTasks requires
@@ -1264,7 +1295,7 @@ func NewTask(tc TaskCreate) *Task {
 		Description:                tc.Description,
 		Status:                     status,
 		CreatedAt:                  time.Now().UTC(),
-		ScheduledFor:               tc.ScheduledFor,
+		ScheduledFor:               scheduledFor,
 		Recurrence:                 tc.Recurrence,
 		RecurrenceUntil:            tc.RecurrenceUntil,
 		RecurrenceRemaining:        tc.RecurrenceRemaining,
