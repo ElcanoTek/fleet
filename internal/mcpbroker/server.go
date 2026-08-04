@@ -167,6 +167,9 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 					// Operational errors can embed connector stderr, URLs, headers,
 					// or provider detail. Discard both the error and any partial text;
 					// only successful tool output may cross the credential boundary.
+					// The detail is logged host-side first (redacted) so the failure is
+					// diagnosable here instead of nowhere — see logMasked.
+					logMasked("tool call", req.Server+"."+req.Tool, err)
 					resp.Err = errBrokerCallFailed
 				} else {
 					resp.Text = text
@@ -183,6 +186,7 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 				tools, err := s.backend.ListTools(ctx)
 				resp := response{ID: req.ID}
 				if err != nil {
+					logMasked("tool discovery", "", err)
 					resp.Err = errBrokerDiscoveryFailed
 				} else {
 					resp.Tools = tools
@@ -198,6 +202,7 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 				accounts, err := s.backend.ListAccounts(ctx, req.Server, req.BaseVars)
 				resp := response{ID: req.ID}
 				if err != nil {
+					logMasked("account discovery", req.Server, err)
 					resp.Err = errBrokerDiscoveryFailed
 				} else {
 					resp.Accounts = accounts
@@ -253,6 +258,7 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 				resp := response{ID: req.ID}
 				if scoped, ok := s.backend.(ScopedBackend); ok {
 					if err := scoped.CloseScope(callCtx, req.Scope); err != nil {
+						logMasked("scope close", req.Scope, err)
 						resp.Err = errBrokerScopeCloseFailed
 					}
 				} else {
@@ -284,6 +290,7 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 						// Reload errors can embed resolved URLs, headers, or subprocess
 						// environment values. Unlike ordinary tool output, none of that is
 						// permitted to cross from the credential owner to the parent.
+						logMasked("reload", "", err)
 						resp.Err = errBrokerReloadFailed
 					case result == nil:
 						resp.Err = "mcpbroker: backend returned an empty reload result"
@@ -308,6 +315,7 @@ func openScope(ctx context.Context, backend ScopedBackend, spec ScopeSpec) (stri
 	}
 	id, tools, skipped, err := backend.OpenScope(ctx, spec)
 	if err != nil {
+		logMasked("scope open", "", err)
 		return "", nil, nil, errBrokerScopeOpenFailed
 	}
 	if id == "" {

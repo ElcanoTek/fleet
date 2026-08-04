@@ -19,6 +19,24 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- Every masked MCP-broker failure was undiagnosable. The credential owner
+  replaces any operational error with a fixed `mcpbroker: credential-owner …`
+  sentence before it crosses back to the parent — correct, because the real error
+  can embed connector stderr, resolved URLs, or Authorization headers — but that
+  replacement was the *only* thing that happened to it, so the detail existed
+  nowhere: not in the parent, not in the broker process, not for the operator.
+  A connector answering `Unknown tool: x` and a genuinely revoked credential both
+  reached the agent as the same sentence, and the difference was unrecoverable
+  without the upstream's own logs. In one observed case an agent retried four
+  times and concluded "ops-side credential fix" for what was a version skew
+  between a cached `tools/list` and the process serving the call. The broker now
+  logs each masked failure host-side with its server and tool, scrubbed through
+  `internal/redact` with the connector env registered as literals — so a bare
+  high-entropy token quoted back by a connector is replaced by value, not merely
+  when its shape matches a vendor pattern. The reply to the parent is byte-for-byte
+  unchanged, and credentials-never-in-logs still holds
+  (`internal/mcpbroker/redact.go`).
+
 - The production MCP-broker boundary refused to boot any bundle that wires the
   documented cutlass-family connector contract: the connector/parent env
   overlap guard treated the whole `CUTLASS_` prefix as parent-owned, but fleet
