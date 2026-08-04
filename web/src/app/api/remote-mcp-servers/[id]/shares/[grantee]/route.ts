@@ -21,7 +21,7 @@ export async function DELETE(request: NextRequest, context: RouteContext) {
   }
   const { id, grantee } = await context.params;
   const { upstream, error } = await chatServerProxy(
-    session.email,
+    session,
     `/remote-mcp-servers/${encodeURIComponent(id)}/shares/${encodeURIComponent(grantee)}`,
     { method: "DELETE" },
   );

@@ -41,7 +41,9 @@ func (h *Handlers) AdminAuthMiddleware(next http.Handler) http.Handler {
 // impersonation-load-bearing, so this is fail-closed: a PRESENT-but-wrong token
 // is rejected outright (no fall-through to the weaker scoped-key/bearer/cookie
 // paths). Mirrors chat-server's authMiddleware (shared token + X-User-Email,
-// then the membership gate).
+// then the membership gate, then the session-epoch claim — see
+// session_epoch.go, which is what makes a chat password reset end the cookie's
+// access to THIS plane too).
 //
 // Returns (nil, false) when no token is present — the caller should try its
 // other auth paths. Returns handled=true when the token was present and this
@@ -69,6 +71,11 @@ func (h *Handlers) headerTrustUser(w http.ResponseWriter, r *http.Request) (*mod
 	}
 	if user == nil {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "not_a_member"})
+		return nil, true
+	}
+	// Membership outranks the session: a deleted account gets the 403 the UI keys
+	// on, not a "log in again" verdict it cannot act on.
+	if !h.checkSessionEpoch(w, r, email) {
 		return nil, true
 	}
 	return user, true

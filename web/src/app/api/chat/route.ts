@@ -36,7 +36,7 @@ export async function POST(request: NextRequest) {
 
   let upstream: Response;
   try {
-    upstream = await chatServerFetch(session.email, "/chat", {
+    upstream = await chatServerFetch(session, "/chat", {
       method: "POST",
       body: bodyText,
       signal: request.signal,

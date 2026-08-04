@@ -16,7 +16,7 @@ export async function GET(
   }
   const { name } = await params;
   const { upstream, error } = await chatServerProxy(
-    session.email,
+    session,
     `/skills/${encodeURIComponent(name)}`,
     { method: "GET" },
   );

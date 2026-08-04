@@ -754,6 +754,10 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("/webhooks/", http.HandlerFunc(s.postWebhook))
 	mux.Handle("/auth/membership", auth(member(http.HandlerFunc(s.handleMembership))))
 	mux.Handle("/auth/verify", auth(http.HandlerFunc(s.handleAuthVerify)))
+	// /auth/session-epoch is on auth alone for the same reason as /auth/verify:
+	// the Next.js mint paths call it before a session exists, and it must answer
+	// for a not-yet-provisioned email without leaking the user-list.
+	mux.Handle("/auth/session-epoch", auth(http.HandlerFunc(s.handleSessionEpoch)))
 	mux.Handle("/admin/stats", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminStats)))))
 	mux.Handle("/admin/provider-health", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleProviderHealth)))))
 	mux.Handle("/admin/health-summary", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleHealthSummary)))))

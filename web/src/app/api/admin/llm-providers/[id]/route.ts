@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "@/app/lib/auth";
-import { chatServerProxy } from "@/app/lib/chatServer";
+import { chatServerProxy, type SessionIdentity } from "@/app/lib/chatServer";
 import { verifyOrigin } from "@/app/lib/csrf";
 
 export const runtime = "nodejs";
@@ -11,9 +11,9 @@ export const runtime = "nodejs";
  * and validation (400 invalid row, 404 unknown id), passed through verbatim.
  */
 
-async function proxy(email: string, id: string, init?: RequestInit) {
+async function proxy(user: SessionIdentity, id: string, init?: RequestInit) {
   const { upstream, error } = await chatServerProxy(
-    email,
+    user,
     `/admin/llm-providers/${encodeURIComponent(id)}`,
     init,
   );
@@ -34,7 +34,7 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
   if (!csrf.ok) return csrf.response;
   const { id } = await params;
   const body = await request.text();
-  return proxy(session.email, id, { method: "PUT", body });
+  return proxy(session, id, { method: "PUT", body });
 }
 
 export async function DELETE(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -45,5 +45,5 @@ export async function DELETE(request: NextRequest, { params }: { params: Promise
   const csrf = verifyOrigin(request);
   if (!csrf.ok) return csrf.response;
   const { id } = await params;
-  return proxy(session.email, id, { method: "DELETE" });
+  return proxy(session, id, { method: "DELETE" });
 }

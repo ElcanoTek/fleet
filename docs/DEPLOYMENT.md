@@ -268,9 +268,56 @@ each piece yourself):
    > decides *who may use chat*. A stand-alone deploy needs none of this; users
    > just log in with email + password.
    >
+   > **Ending a session.** The cookie is a stateless HMAC valid for 14 days, so
+   > there is nothing to delete server-side — revocation works by invalidating
+   > what the cookie *claims* (the design and its carve-outs:
+   > [`SESSION-EPOCH.md`](SESSION-EPOCH.md)). Three levers, narrowest first:
+   > - **One account** — reset its password (Settings → Admin → "Users & roles",
+   >   or `fleet chat user passwd <email>`). Every session cookie carries the
+   >   account's *session epoch*, derived from its stored password hash, and
+   >   **both** backends refuse a request whose epoch no longer matches — chat and
+   >   the Operations Center, which the one cookie authenticates. A reset
+   >   therefore signs that account out of both views on their next request that
+   >   reaches a backend — a handful of Next-only endpoints (the session probe and
+   >   the model catalogs) authorize on the cookie alone and keep answering until
+   >   some other call trips the 401, which is when the browser's cookie is
+   >   dropped; neither serves client data or spends budget — and
+   >   it works even if you reset to the same password (bcrypt re-salts). This is
+   >   the incident-response lever for a stolen cookie. Three carve-outs: a
+   >   magic-link (`elcano_auth`) session carries no epoch, so revoke it at the
+   >   auth service that mints it; an Operations Center **bearer** login (the moc
+   >   username/password form) is a separate credential the chat password does not
+   >   govern — end it with `fleet sched user del <name>`, because a sched
+   >   password change alone does not rotate that bearer token; and a stream that is
+   >   already open (a chat turn, a task run-log) finishes its turn, because the
+   >   epoch is checked when a request connects, not per SSE event.
+   > - **One account, permanently** — delete it. The user-list gate then 403s
+   >   every request.
+   > - **Everyone, break-glass** — rotate `APP_SESSION_SECRET` in
+   >   `/etc/fleet/fleet-web.env` and `systemctl restart fleet-web`. Every
+   >   outstanding cookie fails signature verification at once, so all users
+   >   re-log-in. Nothing else reads the value, so rotation is safe at any time;
+   >   reach for it when you can't enumerate the affected accounts.
+   >
    > **`fleet-web` BindsTo `fleet`.** It stays down until the backend is healthy
    > (i.e. until `OPENROUTER_API_KEY` is set), so after a first `--enable-web`
    > bootstrap: set the key, `fleet restart`, then `systemctl start fleet-web`.
+   >
+   > **Login depends on the backend at request time, too.** Before minting a
+   > cookie the web tier reads the account's session epoch from chat-server's
+   > `GET /auth/session-epoch`, and refuses to sign anyone in when that read
+   > fails — a cookie without the epoch would be rejected on the next request
+   > anyway. So a restarting backend, or a `fleet` binary older than that
+   > endpoint, is a login **outage** (`/login?e=server` for everyone), not a
+   > degraded login: upgrade the two units together and never pin them apart.
+   >
+   > **The Operations Center now reads the chat database on every request.** The
+   > two planes keep separate `users` tables (ADR-0005), so the scheduler
+   > resolves the epoch a cookie claims through a lookup against the chat store.
+   > That lookup failing is answered `500`, never as a revocation — a chat-DB
+   > blip must not sign the whole Operations Center out — but it does mean the
+   > Operations Center is unavailable while the chat database is down, where
+   > previously it was not. It is one indexed lookup by email per request.
 
    Run the Next web app as its own supervised unit (`deploy/fleet-web.service` —
    it `npm run start`s the built app on port 3000), wiring

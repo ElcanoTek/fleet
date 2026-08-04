@@ -37,7 +37,7 @@ export async function POST(request: NextRequest) {
 
   let upstream: Response;
   try {
-    upstream = await chatServerFetch(session.email, "/attachments", {
+    upstream = await chatServerFetch(session, "/attachments", {
       method: "POST",
       headers,
       body: request.body,

@@ -24,7 +24,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
   const { id } = await context.params;
   const body = await request.text();
   const { upstream, error } = await chatServerProxy(
-    session.email,
+    session,
     `/remote-mcp-servers/${encodeURIComponent(id)}/shares`,
     { method: "POST", body, headers: { "Content-Type": "application/json" } },
   );

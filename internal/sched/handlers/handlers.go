@@ -214,6 +214,13 @@ type Handlers struct {
 	chatUserDayUsage ChatUserDayUsageProvider
 	chatAccounts     ChatAccountsProvider
 
+	// chatSessionEpoch resolves an email's chat-plane session epoch so the
+	// header-trust path can refuse a session cookie a password reset has already
+	// evicted from chat. Injected by cmd/fleet like the seams above, because the
+	// epoch lives in the chat store's users table (ADR-0005). nil → the claim is
+	// not checked. See session_epoch.go.
+	chatSessionEpoch ChatSessionEpochProvider
+
 	// budgetGate enforces per-principal rolling budgets at task-create (#601
 	// part 2) — injected by cmd/fleet via SetBudgetGate (*budget.Enforcer). nil
 	// → no budget enforcement, today's behavior byte-for-byte. See budgets.go.

@@ -14,7 +14,7 @@ export async function GET() {
   if (!session) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  const { upstream, error } = await chatServerProxy(session.email, "/skills", {
+  const { upstream, error } = await chatServerProxy(session, "/skills", {
     method: "GET",
   });
   if (error) return error;

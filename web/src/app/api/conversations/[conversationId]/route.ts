@@ -13,7 +13,7 @@ export async function GET(_: NextRequest, context: RouteContext) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   const { conversationId } = await context.params;
-  const { upstream, error } = await chatServerProxy(session.email, `/conversations/${encodeURIComponent(conversationId)}`, {
+  const { upstream, error } = await chatServerProxy(session, `/conversations/${encodeURIComponent(conversationId)}`, {
     method: "GET",
   });
   if (error) return error;
@@ -29,7 +29,7 @@ export async function DELETE(request: NextRequest, context: RouteContext) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   const { conversationId } = await context.params;
-  const { upstream, error } = await chatServerProxy(session.email, `/conversations/${encodeURIComponent(conversationId)}`, {
+  const { upstream, error } = await chatServerProxy(session, `/conversations/${encodeURIComponent(conversationId)}`, {
     method: "DELETE",
   });
   if (error) return error;

@@ -9,9 +9,12 @@
 //
 // The orchestrator listens on ORCHESTRATOR_SERVER_URL (default
 // http://127.0.0.1:8000). Both login paths are supported:
-//   - elcano cookie  → forwarded as X-User-Email (+ the shared server token,
-//     mirroring chatServer's X-Chat-Server-Token convention).
+//   - elcano cookie  → forwarded as X-User-Email + the session-epoch claim
+//     (+ the shared server token, mirroring chatServer's X-Chat-Server-Token
+//     convention).
 //   - moc bearer     → forwarded verbatim as Authorization: Bearer <token>.
+
+import { dropRevokedSession } from "@/app/lib/sessionRevocation";
 
 const defaultBase = "http://127.0.0.1:8000";
 
@@ -30,8 +33,14 @@ export function getOrchestratorSharedToken(): string | undefined {
   return process.env.ORCHESTRATOR_SERVER_TOKEN || process.env.CHAT_SERVER_TOKEN || undefined;
 }
 
+// The cookie variant carries the session epoch as well as the email, because
+// the orchestrator gates on BOTH: one elcano_session cookie reaches both
+// backends, so dropping the claim here would leave a password reset evicting
+// the cookie from chat while the Operations Center kept honouring it. `epoch`
+// is absent for an elcano_auth (magic-link) session, whose cookie the auth
+// service mints and revokes.
 export type OrchestratorAuth =
-  | { kind: "cookie"; email: string }
+  | { kind: "cookie"; email: string; epoch?: string }
   | { kind: "bearer"; token: string };
 
 // Build the upstream auth headers from whichever credential the browser
@@ -45,6 +54,7 @@ export function orchestratorHeaders(auth: OrchestratorAuth, extra?: HeadersInit)
     const token = getOrchestratorSharedToken();
     if (token) h.set("X-Orchestrator-Server-Token", token);
     h.set("X-User-Email", auth.email);
+    if (auth.epoch) h.set("X-User-Session-Epoch", auth.epoch);
   }
   return h;
 }
@@ -63,9 +73,13 @@ export async function orchestratorFetch(
   if (init?.body && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
-  return fetch(`${base}${path}`, {
+  const upstream = await fetch(`${base}${path}`, {
     ...init,
     headers,
     cache: "no-store",
   });
+  // Status + header only: the body is never read here, so the streaming callers
+  // (the task run-log SSE, the CSV/workspace passthroughs) forward it untouched.
+  await dropRevokedSession(upstream);
+  return upstream;
 }

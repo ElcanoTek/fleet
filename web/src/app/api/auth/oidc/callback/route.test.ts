@@ -27,9 +27,15 @@ function idToken(overrides: Record<string, unknown> = {}): string {
   return `${b64url({ alg: "RS256" })}.${b64url(claims)}.sig`;
 }
 
-// stubFetch routes the discovery GET and the token-endpoint POST. The token
-// response carries whatever id_token the test wants to exercise.
-function stubFetch(token: string | null) {
+// TEST_EPOCH is what the stubbed chat-server reports for /auth/session-epoch —
+// the value the callback must stamp into the cookie it mints.
+const TEST_EPOCH = "abcdef0123456789";
+
+// stubFetch routes the discovery GET, the token-endpoint POST, and the
+// chat-server session-epoch read the mint path performs. The token response
+// carries whatever id_token the test wants to exercise; `epochStatus` lets a
+// test make chat-server unavailable.
+function stubFetch(token: string | null, epochStatus = 200) {
   globalThis.fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
     const u = String(url);
     if (u.includes("/.well-known/openid-configuration")) {
@@ -39,6 +45,10 @@ function stubFetch(token: string | null) {
       expect(init?.method).toBe("POST");
       if (token === null) return new Response("bad", { status: 400 });
       return new Response(JSON.stringify({ id_token: token, access_token: "at" }), { status: 200 });
+    }
+    if (u.endsWith("/auth/session-epoch")) {
+      if (epochStatus !== 200) return new Response("nope", { status: epochStatus });
+      return new Response(JSON.stringify({ session_epoch: TEST_EPOCH }), { status: 200 });
     }
     throw new Error(`unexpected fetch: ${u}`);
   }) as unknown as typeof fetch;
@@ -65,6 +75,9 @@ describe("GET /api/auth/oidc/callback", () => {
   beforeEach(() => {
     process.env = { ...original };
     process.env.APP_SESSION_SECRET = "test-session-secret-please-ignore";
+    // The mint path reads the session epoch from chat-server, which needs the
+    // shared token.
+    process.env.CHAT_SERVER_TOKEN = "test-chat-token";
     process.env.FLEET_OIDC_ISSUER = "https://idp.example.com";
     process.env.FLEET_OIDC_CLIENT_ID = "client-123";
     process.env.FLEET_OIDC_CLIENT_SECRET = "secret-xyz";
@@ -86,10 +99,22 @@ describe("GET /api/auth/oidc/callback", () => {
     expect(session?.value).toBeTruthy();
     const payload = await verifySessionToken(session!.value);
     expect(payload?.email).toBe("alice@example.com");
+    // The epoch chat-server reported is stamped in, so an admin password reset
+    // evicts this SSO session too.
+    expect(payload?.epoch).toBe(TEST_EPOCH);
 
     // Temp cookies are cleared.
     expect(res.cookies.get("fleet_oidc_state")?.value).toBe("");
     expect(res.cookies.get("fleet_oidc_state")?.maxAge).toBe(0);
+  });
+
+  // A cookie with no epoch claim is refused by verifySessionToken, so minting
+  // one when chat-server is unreachable would strand the user in a login loop.
+  it("refuses to mint a session when the epoch read fails", async () => {
+    stubFetch(idToken(), 503);
+    const res = await GET(callbackReq({ code: "auth-code", state: "the-state" }, GOOD_COOKIES));
+    expect(res.headers.get("location")).toBe("https://chat.example.com/login?e=oidc_error");
+    expect(res.cookies.get("elcano_session")?.value).toBeFalsy();
   });
 
   it("rejects a state mismatch (CSRF) without exchanging the code", async () => {

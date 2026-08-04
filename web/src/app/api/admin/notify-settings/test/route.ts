@@ -20,7 +20,7 @@ export async function POST(request: NextRequest) {
   const csrf = verifyOrigin(request);
   if (!csrf.ok) return csrf.response;
   const body = await request.text();
-  return chatServerPassthrough(session.email, "/admin/notify-settings/test", {
+  return chatServerPassthrough(session, "/admin/notify-settings/test", {
     method: "POST",
     body,
   });

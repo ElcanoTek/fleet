@@ -23,7 +23,7 @@ async function proxy(method: "GET" | "PUT" | "DELETE", req?: Request) {
     const q = new URL(req.url).searchParams;
     path += `?kind=${encodeURIComponent(q.get("kind") ?? "")}&id=${encodeURIComponent(q.get("id") ?? "")}`;
   }
-  const { upstream, error } = await chatServerProxy(session.email, path, init);
+  const { upstream, error } = await chatServerProxy(session, path, init);
   if (error) return error;
   const text = await upstream.text();
   return new NextResponse(text.length > 0 ? text : null, {

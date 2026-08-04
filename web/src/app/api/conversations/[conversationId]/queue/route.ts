@@ -15,7 +15,7 @@ export async function GET(_request: NextRequest, context: RouteContext) {
   }
   const { conversationId } = await context.params;
   const { upstream, error } = await chatServerProxy(
-    session.email,
+    session,
     `/conversations/${encodeURIComponent(conversationId)}/queue`,
     { method: "GET" },
   );

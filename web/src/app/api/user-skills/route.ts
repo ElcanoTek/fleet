@@ -17,7 +17,7 @@ async function proxy(method: "GET" | "POST", req?: Request) {
     init.body = await req.text();
     init.headers = { "Content-Type": "application/json" };
   }
-  const { upstream, error } = await chatServerProxy(session.email, "/user-skills", init);
+  const { upstream, error } = await chatServerProxy(session, "/user-skills", init);
   if (error) return error;
   const text = await upstream.text();
   return new NextResponse(text.length > 0 ? text : null, {

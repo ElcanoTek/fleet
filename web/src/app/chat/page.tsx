@@ -14,7 +14,7 @@ export default async function Home() {
   if (session?.source === "elcano") {
     let denied = false;
     try {
-      const res = await chatServerFetch(session.email, "/auth/membership");
+      const res = await chatServerFetch(session, "/auth/membership");
       denied = res.status === 403;
     } catch {
       // chat-server unreachable — don't trap the user on no-access for a

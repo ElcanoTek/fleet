@@ -7,7 +7,7 @@ import {
   sessionMaxAgeSeconds,
   isSecureRequest,
 } from "@/app/lib/auth";
-import { chatServerFetch } from "@/app/lib/chatServer";
+import { chatServerFetch, fetchSessionEpoch } from "@/app/lib/chatServer";
 import { verifyOrigin } from "@/app/lib/csrf";
 
 /**
@@ -39,10 +39,11 @@ export async function POST(request: NextRequest) {
 
   // chatServerFetch requires a userEmail for the X-User-Email header. For
   // the pre-login verify call we just echo the attempted email — the
-  // server-side verify path doesn't consult that header for authz.
+  // server-side verify path doesn't consult that header for authz. There is
+  // no session yet, hence no epoch to forward.
   let upstream: Response;
   try {
-    upstream = await chatServerFetch(email, "/auth/verify", {
+    upstream = await chatServerFetch({ email }, "/auth/verify", {
       method: "POST",
       body: JSON.stringify({ email, password }),
     });
@@ -67,10 +68,18 @@ export async function POST(request: NextRequest) {
     return redirectBackWithError(request, "invalid");
   }
 
+  // The epoch pins the cookie to the password it was issued against, so a later
+  // reset evicts it. An unreachable backend gives the generic "server" error
+  // rather than an epoch-less cookie the next request would refuse anyway.
+  const epoch = await fetchSessionEpoch(email);
+  if (!epoch) {
+    return redirectBackWithError(request, "server");
+  }
+
   const cookieStore = await cookies();
   cookieStore.set({
     name: getSessionCookieName(),
-    value: await createSessionToken(email),
+    value: await createSessionToken(email, epoch),
     httpOnly: true,
     sameSite: "lax",
     secure: isSecureRequest(request),

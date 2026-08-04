@@ -20,7 +20,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   if (!csrf.ok) return csrf.response;
   const { id } = await params;
   const { upstream, error } = await chatServerProxy(
-    session.email,
+    session,
     `/admin/llm-providers/${encodeURIComponent(id)}/test`,
     { method: "POST" },
   );
