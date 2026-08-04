@@ -12,7 +12,9 @@ import (
 // runWithLivelockGuard runs ProcessScheduledTasks on another goroutine and
 // fails the test if it does not return within a generous deadline — the #566
 // failure mode is an infinite loop, so "the function returns at all" is the
-// assertion.
+// assertion. Gate evaluation is asynchronous, so after the tick returns this
+// also waits for the dispatched gates to settle (promote/skip) before the
+// caller inspects the rows.
 func runWithLivelockGuard(t *testing.T, s *Scheduler) {
 	t.Helper()
 	done := make(chan struct{})
@@ -22,6 +24,7 @@ func runWithLivelockGuard(t *testing.T, s *Scheduler) {
 	}()
 	select {
 	case <-done:
+		s.gateWG.Wait()
 	case <-time.After(30 * time.Second):
 		t.Fatal("ProcessScheduledTasks did not return: live-lock (#566) — a full batch of non-promotable tasks must still terminate the loop")
 	}

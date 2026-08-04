@@ -55,6 +55,22 @@ prior versions are listed because none have shipped.
   probe now applies that plane's verdict rule (`bootstrapFailure.ts`: only
   401/403 are auth verdicts); a 5xx or a network failure surfaces as a distinct
   "can't reach the server" retry notice and leaves the stored bearer untouched.
+- One slow `run_if` gate degraded scheduling for the whole box. The scheduler
+  tick ran task promotion, lease recovery, starvation promotion, paused-task
+  expiry, and the wake sweep sequentially on one goroutine, and gates were
+  evaluated inline during promotion — so a single admin-authored gate pointing
+  at a hung dependency (`timeout_seconds` up to 300) delayed ALL scheduling
+  and crashed-worker lease recovery by its full runtime, while the 30s ticker
+  silently dropped ticks. Gates are now evaluated on a small bounded pool of
+  goroutines and settled (promoted or skipped) asynchronously — the tick never
+  waits on a gate, a task whose gate is still running is not re-dispatched,
+  and one whose slot isn't free simply stays due for a later tick. The cheap
+  recovery sweeps also run before promotion now, so a promotion regression
+  can never starve lease recovery. Separately, a declined one-shot gate used
+  to re-run its host command every 30s tick forever; a decline with no next
+  cron tick now backs off exponentially on the already-tracked `skip_count`
+  (30s doubling to a 30m cap), so a permanently-false condition costs ~2
+  commands an hour instead of 120.
 - Every masked MCP-broker failure was undiagnosable. The credential owner
   replaces any operational error with a fixed `mcpbroker: credential-owner …`
   sentence before it crosses back to the parent — correct, because the real error
