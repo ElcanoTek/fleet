@@ -399,8 +399,10 @@ func (s *Store) DeleteUser(ctx context.Context, email string) error {
 
 // ListUsers returns every provisioned user, sorted by email.
 func (s *Store) ListUsers(ctx context.Context) ([]User, error) {
+	// G202 is a false positive: userColumns is a package-level projection built
+	// from constants, with no caller-supplied value on any path into it.
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT `+userColumns+` FROM users ORDER BY email ASC`)
+		`SELECT `+userColumns+` FROM users ORDER BY email ASC`) //nolint:gosec // G202: see above
 	if err != nil {
 		return nil, err
 	}
