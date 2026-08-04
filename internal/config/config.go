@@ -206,9 +206,14 @@ var allowedEnvVars = map[string]bool{
 	"FLEET_LOG_COMPRESS":     true,
 
 	// ── personas / protocols ──
-	"PERSONA_DEFAULT": true,
-	"PERSONA":         true,
-	"SYSTEM_PROMPT":   true,
+	// The two default-persona knobs are read through the prefix alias machinery
+	// with a bare-name fallback (getenvFleetOrBare), so the canonical FLEET_
+	// spelling must survive the env-file allowlist alongside the historical one.
+	"FLEET_PERSONA_DEFAULT": true,
+	"PERSONA_DEFAULT":       true,
+	"FLEET_PERSONA":         true,
+	"PERSONA":               true,
+	"SYSTEM_PROMPT":         true,
 
 	// ── cutlass agent knobs ──
 	"MAX_ITERATIONS":           true,
@@ -1236,7 +1241,7 @@ func Load(envFile string) (*Config, error) {
 		MaxConcurrentAgents:    getenvFleetInt("MAX_CONCURRENT_AGENTS", 8),
 
 		// ── personas ──
-		PersonaDefault: getenvDefault("PERSONA_DEFAULT", "assistant"),
+		PersonaDefault: getenvFleetOrBare("PERSONA_DEFAULT", "assistant"),
 
 		// ── scheduled task (cutlass) ──
 		TaskModel:         stripQuotes(os.Getenv("CUTLASS_TASK_MODEL")),
@@ -1368,13 +1373,15 @@ func Load(envFile string) (*Config, error) {
 	}
 
 	// ── personas / prompts (cutlass file-name normalization) ──
-	// Defaults are the generic bundle's names; a client bundle sets PERSONA /
-	// SYSTEM_PROMPT (and PERSONA_DEFAULT) to its own.
+	// Defaults are the generic bundle's names; a deployment sets FLEET_PERSONA /
+	// SYSTEM_PROMPT (and FLEET_PERSONA_DEFAULT) to its bundle's own. FLEET_PERSONA
+	// names a FILE the drivers load by basename out of personas/; PERSONA_DEFAULT
+	// names a persona.
 	cfg.SystemPrompt = getEnvOrDefault("SYSTEM_PROMPT", "default.md")
 	if !hasKnownPromptExtension(cfg.SystemPrompt) {
 		cfg.SystemPrompt += ".md"
 	}
-	cfg.Persona = getEnvOrDefault("PERSONA", "personas/assistant.yaml")
+	cfg.Persona = getenvFleetOrBare("PERSONA", "personas/assistant.yaml")
 	if !hasKnownPromptExtension(cfg.Persona) {
 		cfg.Persona += ".yaml"
 	}
@@ -1818,6 +1825,20 @@ func getenvFleetDefault(suffix, def string) string {
 		return v
 	}
 	return def
+}
+
+// getenvFleetOrBare resolves a knob whose historical spelling is UNPREFIXED
+// (PERSONA, PERSONA_DEFAULT): the prefixed spellings first in lookupFleet's
+// order, then the bare name, then def. The bare fallback keeps existing
+// deployments reading; the prefixed lookup is what makes the documented FLEET_
+// convention work at all — without it FLEET_PERSONA was silently ignored and the
+// built-in default applied (#956). Quotes are stripped from whichever spelling
+// wins, matching getEnvOrDefault.
+func getenvFleetOrBare(suffix, def string) string {
+	if v, ok := lookupFleet(suffix); ok {
+		return stripQuotes(v)
+	}
+	return getEnvOrDefault(suffix, def)
 }
 
 // EnvAliases returns every spelling the prefix alias machinery resolves for

@@ -141,8 +141,10 @@ sudo bash /opt/fleet/src/scripts/bootstrap.sh \
 
 # 4. Add your OpenRouter key + connector secrets to the env file, then restart.
 sudo "$EDITOR" /etc/fleet/fleet.env       # set OPENROUTER_API_KEY=… (+ MCP creds)
-#    If the bundle's default persona isn't "assistant", also set
-#    PERSONA_DEFAULT=<persona> here (e.g. PERSONA_DEFAULT=victoria).
+#    If the bundle's default persona isn't "assistant", also set both defaults
+#    here: FLEET_PERSONA_DEFAULT=<name> for chat (e.g. victoria) and
+#    FLEET_PERSONA=personas/<name>.yaml for scheduled tasks — that one is the
+#    bundle-relative PATH to the file, not the persona name.
 sudo fleet restart
 #    With --enable-web, also (re)start the web unit: it BindsTo fleet.service, so
 #    it stays down until the backend is healthy (i.e. until the key is set).

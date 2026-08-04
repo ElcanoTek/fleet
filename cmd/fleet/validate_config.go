@@ -223,10 +223,11 @@ func lookupFleetEnv(suffix string) (string, bool) {
 
 // checkManifest reports the bundle load (clientconfig.Load already validates the
 // manifest schema + the MCP-catalog structural invariants) and then validates
-// the referenced supporting-file paths the server reads at runtime: the default
-// persona, the system-prompt files, and — when the bundle declares any — the
-// protocols and skills dirs. A referenced file that does not exist on disk is a
-// blocking failure (the agent would fail the turn that needs it).
+// the referenced supporting-file paths the server reads at runtime: the two
+// default personas and the system-prompt files. A referenced file that does not
+// exist on disk is a blocking failure (the agent would fail the turn that needs
+// it) — except the SCHEDULED default persona, whose reader degrades instead of
+// failing; see the personaKnob table.
 func checkManifest(bundle *clientconfig.Bundle, bundleErr error, cfg *config.Config) checkResult {
 	res := checkResult{Name: "manifest", Blocking: true}
 	if bundleErr != nil {
@@ -234,7 +235,7 @@ func checkManifest(bundle *clientconfig.Bundle, bundleErr error, cfg *config.Con
 		res.Detail = "bundle load failed: " + bundleErr.Error()
 		return res
 	}
-	var problems []string
+	var problems, advisories []string
 
 	manifestPath := filepath.Join(bundle.Dir, "manifest.yaml")
 	// The interactive base system prompt (chat.md) and the scheduled base
@@ -245,23 +246,140 @@ func checkManifest(bundle *clientconfig.Bundle, bundleErr error, cfg *config.Con
 			problems = append(problems, fmt.Sprintf("system prompt %s missing", name))
 		}
 	}
-	// The default persona the server resolves (config.Persona is e.g.
-	// "personas/assistant.yaml"). Resolve it relative to the bundle dir.
-	if cfg != nil && strings.TrimSpace(cfg.Persona) != "" {
-		p := filepath.Join(bundle.Dir, cfg.Persona)
-		if !fileExists(p) {
-			problems = append(problems, fmt.Sprintf("default persona %s missing", cfg.Persona))
+	if cfg != nil {
+		if miss := personaMiss(bundle, cfg.PersonaDefault, interactivePersonaKnob); miss != "" {
+			problems = append(problems, miss)
+		}
+		if miss := personaMiss(bundle, cfg.Persona, scheduledPersonaKnob); miss != "" {
+			advisories = append(advisories, miss)
 		}
 	}
 
 	if len(problems) > 0 {
 		res.Status = statusFail
-		res.Detail = strings.Join(problems, "; ")
+		res.Detail = strings.Join(append(problems, advisories...), "; ")
+		return res
+	}
+	if len(advisories) > 0 {
+		// Flip Blocking with the status, as checkCredentials does: failed() reads
+		// both fields, but the --json contract (#248) exposes Blocking on its own,
+		// and a consumer keying off it must not read an advisory as must-fix.
+		res.Blocking = false
+		res.Status = statusWarn
+		res.Detail = strings.Join(advisories, "; ")
 		return res
 	}
 	res.Status = statusOK
 	res.Detail = manifestPath
 	return res
+}
+
+// personaKnob is one of the two default-persona settings a deployment's env file
+// carries. They differ in SHAPE (config/default/README.md) and — the reason they
+// are not checked at the same severity — in what their reader does with a miss.
+type personaKnob struct {
+	// role names the knob in the report line, so an operator reading "⚠ manifest"
+	// knows which of the two is wrong.
+	role string
+	// env is the canonical variable that fixes the miss.
+	env string
+	// resolve turns the configured value into the filename its reader opens inside
+	// personas/. Both reduce to a basename, but only the interactive reader
+	// appends .yaml, so the two must not share one rule.
+	resolve func(persona string) string
+	// suggest renders one of the bundle's persona FILENAMES the way env takes it:
+	// a bare name for FLEET_PERSONA_DEFAULT, a bundle-relative path for
+	// FLEET_PERSONA. Suggesting the wrong shape would contradict the docs.
+	suggest func(filename string) string
+}
+
+// The two knobs and their severities (#956).
+//
+// FLEET_PERSONA_DEFAULT is turn-fatal, so a miss is BLOCKING: it is the persona
+// new interactive conversations start on (config.PersonaDefault), which
+// agent.Manager.RunTurn passes to buildSystemPrompt, whose os.ReadFile miss
+// RETURNS AN ERROR (internal/agent/prompt.go) and fails the turn. Nothing
+// upstream catches it first — /api/personas hands the same name to the chat UI
+// as the selected persona with no membership check against the roster beside it
+// — so a deployment naming a persona the bundle does not ship fails every chat
+// turn.
+//
+// FLEET_PERSONA only degrades, so a miss is ADVISORY: it is the scheduled
+// driver's global persona (config.Persona) and its sole reader,
+// scheduledrun.composeSystemPrompt, IGNORES the ReadFile error, dropping the
+// domain-expertise block from the prompt but still running the task.
+//
+// Both are properties of the DEPLOYMENT rather than of the bundle under test,
+// which is what keeps the advisory out of the exit code: unset, the loader falls
+// back to assistant, and a red ✗ on every bundle that names its persona anything
+// else teaches operators to ignore the whole report. The blocking one earns its
+// ✗ despite that same argument, because for it the fallback is not a false
+// alarm — an unset FLEET_PERSONA_DEFAULT against such a bundle really does break
+// every chat turn.
+var (
+	interactivePersonaKnob = personaKnob{
+		role: "interactive default persona",
+		env:  "FLEET_PERSONA_DEFAULT",
+		resolve: func(persona string) string {
+			name := filepath.Base(persona)
+			if !strings.HasSuffix(strings.ToLower(name), ".yaml") {
+				name += ".yaml"
+			}
+			return name
+		},
+		suggest: func(filename string) string { return strings.TrimSuffix(filename, filepath.Ext(filename)) },
+	}
+	scheduledPersonaKnob = personaKnob{
+		role:    "scheduled default persona",
+		env:     "FLEET_PERSONA",
+		resolve: filepath.Base,
+		suggest: func(filename string) string { return "personas/" + filename },
+	}
+)
+
+// personaMiss reports the configured persona when the bundle does not ship it,
+// and "" when it does, resolving the value through knob.resolve — i.e. inside
+// the bundle's personas/ dir, the way that knob's reader does. Resolving against
+// the bundle ROOT instead, as this check used to, reported personas the bundle
+// ships as missing.
+func personaMiss(bundle *clientconfig.Bundle, persona string, knob personaKnob) string {
+	persona = strings.TrimSpace(persona)
+	if bundle == nil || persona == "" {
+		return ""
+	}
+	name := knob.resolve(persona)
+	if fileExists(filepath.Join(bundle.PersonasDir, name)) {
+		return ""
+	}
+	offered := bundlePersonaFiles(bundle)
+	if len(offered) == 0 {
+		return fmt.Sprintf("%s %s not in personas/ — the bundle ships no personas", knob.role, name)
+	}
+	choices := make([]string, 0, len(offered))
+	for _, filename := range offered {
+		choices = append(choices, knob.suggest(filename))
+	}
+	return fmt.Sprintf("%s %s not in personas/ — set %s to one of: %s", knob.role, name, knob.env, strings.Join(choices, ", "))
+}
+
+// bundlePersonaFiles lists the persona files the bundle ships so a finding can
+// name the choices, not just the miss. os.ReadDir already sorts by filename.
+func bundlePersonaFiles(bundle *clientconfig.Bundle) []string {
+	entries, err := os.ReadDir(bundle.PersonasDir)
+	if err != nil {
+		return nil
+	}
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		if ext := strings.ToLower(filepath.Ext(e.Name())); ext != ".yaml" && ext != ".yml" {
+			continue
+		}
+		names = append(names, e.Name())
+	}
+	return names
 }
 
 // ── 3. MCP servers (warning) ──
@@ -844,10 +962,8 @@ func sortedServerNames(m map[string]config.MCPServerConfig) []string {
 
 // fileExists reports whether path is an existing regular (non-dir) file. The
 // path is always operator-config-derived (the bundle dir + a manifest/config
-// reference), never request input — this is a startup diagnostic with no HTTP
-// surface.
-//
-//nolint:gosec // G703: path is operator-config-derived (bundle dir + manifest/config reference), not request input — no traversal vector in a CLI preflight.
+// reference, the latter reduced to a basename), never request input — this is a
+// startup diagnostic with no HTTP surface.
 func fileExists(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && !info.IsDir()
