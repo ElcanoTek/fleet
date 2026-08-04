@@ -297,6 +297,14 @@ each piece yourself):
    > **`fleet-web` BindsTo `fleet`.** It stays down until the backend is healthy
    > (i.e. until `OPENROUTER_API_KEY` is set), so after a first `--enable-web`
    > bootstrap: set the key, `fleet restart`, then `systemctl start fleet-web`.
+   >
+   > **Login depends on the backend at request time, too.** Before minting a
+   > cookie the web tier reads the account's session epoch from chat-server's
+   > `GET /auth/session-epoch`, and refuses to sign anyone in when that read
+   > fails — a cookie without the epoch would be rejected on the next request
+   > anyway. So a restarting backend, or a `fleet` binary older than that
+   > endpoint, is a login **outage** (`/login?e=server` for everyone), not a
+   > degraded login: upgrade the two units together and never pin them apart.
 
    Run the Next web app as its own supervised unit (`deploy/fleet-web.service` —
    it `npm run start`s the built app on port 3000), wiring
