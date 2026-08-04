@@ -82,6 +82,15 @@ prior versions are listed because none have shipped.
   requires admin permission — the same boundary as authoring one, checked
   up front before any record is written, so import cannot be a path around
   the create/edit admin gate.
+- The pre-submission cost forecast (`POST /tasks/estimate`) was dead for every
+  cookie-path Operations Center user — "Estimate failed: Unauthorized" — even
+  though the sibling comment claimed the endpoint honored the Next-proxy
+  header-trust identity. Its auth was a hand-rolled copy of the task-create
+  check that predated header trust (#157) and never learned it; it failed
+  closed, so nothing was exposed, just broken. The copy is gone: the endpoint
+  now shares `authorizeTaskCreator` with `POST /tasks` and `/tasks/batch`, so
+  the header-trust semantics and the session-epoch revocation gate apply
+  identically to all three creation-shaped endpoints and cannot drift again.
 - Every masked MCP-broker failure was undiagnosable. The credential owner
   replaces any operational error with a fixed `mcpbroker: credential-owner …`
   sentence before it crosses back to the parent — correct, because the real error
