@@ -560,6 +560,15 @@ func buildSandboxPool(cfg *config.Config, personasDir, protocolsDir, systemPromp
 		BridgeDir:        filepath.Join(filepath.Dir(workspaceRoot), "data", "sandbox-bridge"),
 		ReadOnlyMounts:   absSupportingDocs(personasDir, protocolsDir, systemPromptsDir, skillsDir, uploadsRoot),
 	}
+	// Reclaim bridge-script/seccomp temp files orphaned by a PRIOR crash: only
+	// the graceful close path removes them, so without this sweep every
+	// non-graceful exit leaks them into BridgeDir permanently. Age-bounded and
+	// best-effort — log and continue, like the container orphan prune.
+	if n, err := sandbox.PruneOrphanedBridgeFiles(poolCfg.Container.BridgeDir); err != nil {
+		log.Printf("sandbox: prune orphaned bridge files: %v", err)
+	} else if n > 0 {
+		log.Printf("sandbox: pruned %d orphaned bridge temp file(s) from a prior run", n)
+	}
 	// Fail closed BEFORE the warm pool spawns its first container: a kata/krun
 	// runtime whose KVM or runtime binary is missing must abort boot, never
 	// silently degrade to a shared-kernel container (the no-degrade invariant,

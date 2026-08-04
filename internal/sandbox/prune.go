@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -234,4 +235,74 @@ func PruneOrphanedContainers(ctx context.Context, podmanBinary string) (int, err
 		return 0, fmt.Errorf("remove %d orphaned sandbox container(s): %w", len(ids), err)
 	}
 	return len(ids), nil
+}
+
+// bridgeFilePruneAge is how old a bridge-script/seccomp temp file must be
+// before PruneOrphanedBridgeFiles may remove it. Files younger than this may
+// belong to a container start still in flight — here or in a SIBLING fleet
+// instance sharing the same BridgeDir — whose `podman run` has not read them
+// yet. A crash's leftovers are minutes-to-days old by the next boot, so the
+// generous bound loses nothing.
+const bridgeFilePruneAge = time.Hour
+
+// PruneOrphanedBridgeFiles removes bridge-script and seccomp temp files
+// (bridgeScriptTempPattern / seccompProfileTempPattern) that a prior crash
+// left in bridgeDir: the graceful close()/deferred-cleanup paths are the only
+// thing that removes them, so every non-graceful exit leaks its files
+// permanently. Companion to PruneOrphanedContainers, called at the same boot
+// stage. An empty bridgeDir falls back to os.TempDir(), matching where
+// os.CreateTemp puts the files when ContainerConfig.BridgeDir is unset.
+//
+// The sweep is bounded by age (bridgeFilePruneAge) rather than by ownership:
+// unlike containers, the files carry no instance label, and removing a LIVE
+// container's script is harmless anyway — the bind mount pins the inode, so
+// the container keeps reading it and only the host directory entry goes.
+// The age bound exists for the one window that is not harmless: a file
+// created but not yet read by `podman run`. Non-matching names, directories,
+// and non-regular files are never touched.
+//
+// Returns the number of files removed; a missing directory is "nothing to
+// prune", not an error.
+func PruneOrphanedBridgeFiles(bridgeDir string) (int, error) {
+	return pruneBridgeFilesBefore(bridgeDir, time.Now().Add(-bridgeFilePruneAge))
+}
+
+func pruneBridgeFilesBefore(bridgeDir string, cutoff time.Time) (int, error) {
+	if bridgeDir == "" {
+		bridgeDir = os.TempDir()
+	}
+	entries, err := os.ReadDir(bridgeDir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("list bridge dir %s: %w", bridgeDir, err)
+	}
+	removed := 0
+	for _, entry := range entries {
+		name := entry.Name()
+		matched := false
+		for _, pattern := range []string{bridgeScriptTempPattern, seccompProfileTempPattern} {
+			// The patterns are fixed literals, so filepath.Match cannot
+			// return its only error (malformed pattern).
+			if ok, _ := filepath.Match(pattern, name); ok {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			continue
+		}
+		info, err := entry.Info()
+		// Only regular files old enough to predate any in-flight start
+		// qualify; a stat error means the file vanished (a concurrent close()
+		// removed it) — skip, best-effort.
+		if err != nil || !info.Mode().IsRegular() || !info.ModTime().Before(cutoff) {
+			continue
+		}
+		if err := os.Remove(filepath.Join(bridgeDir, name)); err == nil {
+			removed++
+		}
+	}
+	return removed, nil
 }

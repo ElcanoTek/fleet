@@ -48,13 +48,21 @@ const storageProbeTimeout = 30 * time.Second
 // API). Deliberately not folded in here — it changes the probe's shape and
 // deserves its own verification pass.
 //
-// Any OTHER failure — driver can't quota, image missing, timeout — returns false,
-// which simply omits the writable-layer quota; the per-file `--ulimit fsize` cap
-// is applied regardless and is what bounds the workspace bind mount. Best-effort
-// and side-effect-free (the container removes itself on exit).
-func ProbeStorageOptSupport(ctx context.Context, podmanBin, image string) bool {
+// Any OTHER completed failure — driver can't quota, image missing — returns
+// supported=false, which simply omits the writable-layer quota; the per-file
+// `--ulimit fsize` cap is applied regardless and is what bounds the workspace
+// bind mount. Best-effort and side-effect-free (the container removes itself on
+// exit).
+//
+// conclusive is false when the probe never reached a determination because its
+// context ended first — the caller's ctx was cancelled (e.g. the first turn of
+// the process was stopped mid-flight) or the probe timed out. That answer says
+// nothing about the host's storage driver, so callers must not cache it: the
+// Pool memoizes only conclusive results, otherwise one cancelled turn would
+// disable the writable-layer quota for the entire process lifetime.
+func ProbeStorageOptSupport(ctx context.Context, podmanBin, image string) (supported, conclusive bool) {
 	if strings.TrimSpace(image) == "" {
-		return false
+		return false, true
 	}
 	if podmanBin == "" {
 		podmanBin = "podman"
@@ -88,12 +96,19 @@ func ProbeStorageOptSupport(ctx context.Context, podmanBin, image string) bool {
 			// leaving an operator to wonder why a quota-capable host logged a
 			// probe failure.
 			log.Printf("sandbox: --storage-opt size probe could not exec /usr/bin/true in %s (%s) — the quota itself was ACCEPTED (podman validates it before the exec), so treating the driver as quota-capable", image, detail)
-			return true
+			return true, true
+		}
+		if probeCtx.Err() != nil {
+			// The probe was cut short (caller cancelled, or the probe's own
+			// timeout fired) before podman answered — that is not a statement
+			// about the storage driver.
+			log.Printf("sandbox: --storage-opt size probe did not complete (%v) — no determination made: %s", probeCtx.Err(), detail)
+			return false, false
 		}
 		log.Printf("sandbox: --storage-opt size probe failed (%v): %s", err, detail)
-		return false
+		return false, true
 	}
-	return true
+	return true, true
 }
 
 // probeCommandUnavailable reports whether a probe failure was the OCI runtime

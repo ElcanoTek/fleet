@@ -36,6 +36,44 @@ prior versions are listed because none have shipped.
   when its shape matches a vendor pattern. The reply to the parent is byte-for-byte
   unchanged, and credentials-never-in-logs still holds
   (`internal/mcpbroker/redact.go`).
+- Five sandbox lifecycle robustness gaps, all host-side and none affecting the
+  container's isolation posture:
+  - **One cancelled turn could permanently disable the `--storage-opt` disk
+    quota.** The pool latched the boot probe's answer with a `sync.Once`, so a
+    first probe running under an already-cancelled context cached
+    "unsupported" for the process lifetime and every later container ran with
+    no writable-layer quota. A probe cut short by its context is now
+    inconclusive: that container safely omits the layer quota and the next
+    creation re-probes; only a completed determination is memoized.
+  - **The run_python bridge response was read into host memory with no
+    ceiling.** The bridge caps its own stdout/stderr/result captures, but
+    `vars` extraction is not size-bounded, so a cell returning a huge variable
+    inflated host RSS without limit — unlike bash output, which
+    `BashOutputCaptureCap` bounds. The response line is now capped at the same
+    ceiling; overflow drains to the delimiter (the session stays framed and is
+    kept), and the call fails with an explicit truncation error instead of a
+    bare JSON parse error.
+  - **A wedged bridge exec could block every operation on its container
+    forever.** `terminateBridgeLocked` runs under the bridge mutex and waited
+    on `cmd.Wait()` unboundedly — anything holding the exec client's pipes
+    (the hazard `BashWaitDelay` documents) stalled bash, run_python and file
+    ops behind it indefinitely. The bridge exec now carries a WaitDelay and
+    the post-SIGKILL reap wait is bounded; past the bound the state is cleared
+    and the abandoned wait finishes on its own.
+  - **Routine teardown of an already-exited container logged a spurious
+    error.** The "already gone" suppression in `close()`/`killContainerNow`
+    predates podman's actual state error — `can only kill running containers.
+    <id> is in state exited: container state improper` (verified verbatim on
+    podman 5.8.2) — so the normal exit-vs-`--rm`-removal race logged "kill
+    unconfirmed" on every occurrence. The matcher now recognizes the dead
+    states (exited/stopped) while a paused container — frozen, not gone —
+    still counts as unconfirmed.
+  - **Crash-orphaned bridge/seccomp temp files leaked permanently.** Only the
+    graceful close path removes the bridge-script and seccomp files written
+    into BridgeDir, so every non-graceful exit leaked them forever. Boot now
+    sweeps files matching the two CreateTemp patterns, age-bounded (1h) so a
+    start still in flight — here or in a sibling instance sharing the
+    directory — is never raced, alongside the existing container orphan prune.
 
 - The production MCP-broker boundary refused to boot any bundle that wires the
   documented cutlass-family connector contract: the connector/parent env

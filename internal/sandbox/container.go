@@ -420,6 +420,13 @@ func networkArgs(noNetwork bool, proxyURL string) []string {
 	}
 }
 
+// bridgeScriptTempPattern is the os.CreateTemp pattern for the bridge-script
+// temp file written into BridgeDir at container start. Also a filepath.Match
+// glob: PruneOrphanedBridgeFiles keys on it to sweep files a crash orphaned
+// (close() removes the file on the graceful path only) — keep the two uses in
+// lockstep.
+const bridgeScriptTempPattern = "chat-sandbox-bridge-*.py"
+
 func (c *containerImpl) start(ctx context.Context) error {
 	// Write the bridge script to a host temp file so we can bind-mount
 	// it into the container. We bind-mount the file (not a directory)
@@ -435,7 +442,7 @@ func (c *containerImpl) start(ctx context.Context) error {
 			return fmt.Errorf("ensure bridge dir: %w", err)
 		}
 	}
-	scriptF, err := os.CreateTemp(bridgeDir, "chat-sandbox-bridge-*.py")
+	scriptF, err := os.CreateTemp(bridgeDir, bridgeScriptTempPattern)
 	if err != nil {
 		return fmt.Errorf("temp bridge file: %w", err)
 	}
@@ -738,6 +745,13 @@ const statsDrainTimeout = 5 * time.Second
 // sandbox poisoned, so it is retired regardless.
 const execReapTimeout = 10 * time.Second
 
+// bridgeReapTimeout bounds how long terminateBridgeLocked waits for the
+// SIGKILLed bridge exec client to be reaped. The wait runs under c.mu, so an
+// unbounded one lets a single wedged client block every bash/python/fileop on
+// the container; past the bound the state is cleared anyway and the abandoned
+// Wait finishes on its own (the exec's WaitDelay force-closes its pipes).
+const bridgeReapTimeout = 5 * time.Second
+
 func (c *containerImpl) runBash(ctx context.Context, req BashRequest) (BashResult, error) {
 	// Snapshot the container id up front: close() concurrently clears the
 	// field, and an unsynchronized read is a data race. The snapshot also
@@ -834,18 +848,35 @@ func (c *containerImpl) killContainerNow(containerID string) bool {
 	args := c.podmanArgs([]string{"kill", "--signal", "KILL", containerID})
 	out, err := exec.CommandContext(killCtx, c.cfg.PodmanBinary, args...).CombinedOutput() //nolint:gosec // containerID is our generated name, not user input
 	if err != nil {
-		// A "no such container"/"already stopped" error means it is already
-		// gone — cleanup is effectively confirmed. Any other error (daemon
-		// wedged, timeout) leaves cleanup unconfirmed; the poison + retirement
-		// below is the backstop.
-		low := strings.ToLower(string(out))
-		if strings.Contains(low, "no such container") || strings.Contains(low, "not running") || strings.Contains(low, "no container") {
+		// An "already gone" error means every process in it is dead — cleanup
+		// is effectively confirmed. Any other error (daemon wedged, timeout)
+		// leaves cleanup unconfirmed; the poison + retirement below is the
+		// backstop.
+		if containerAlreadyGone(string(out)) {
 			return true
 		}
 		log.Printf("sandbox: cancelled-exec container kill unconfirmed (%s): %v (%.200s)", containerID, err, string(out))
 		return false
 	}
 	return true
+}
+
+// containerAlreadyGone reports whether a failed `podman kill`'s output means
+// the container is already dead or removed — the routine teardown race (#796
+// kill or natural exit beat us to it; --rm removal may still be in flight),
+// not a leak. The "can only kill running containers" form is podman's state
+// error for a container that has exited but is not yet removed; it names the
+// state, and only the DEAD states qualify — a paused container's processes
+// are frozen, not gone, so it must keep counting as unconfirmed.
+func containerAlreadyGone(out string) bool {
+	low := strings.ToLower(out)
+	if strings.Contains(low, "no such container") || strings.Contains(low, "not running") || strings.Contains(low, "no container") {
+		return true
+	}
+	// podman 5.x: `Error: can only kill running containers. <id> is in state
+	// exited: container state improper` (verified verbatim on podman 5.8.2).
+	return strings.Contains(low, "can only kill running containers") &&
+		(strings.Contains(low, "in state exited") || strings.Contains(low, "in state stopped"))
 }
 
 // currentContainerID snapshots the container id under idMu. close() clears
@@ -1071,8 +1102,9 @@ func (c *containerImpl) runPython(ctx context.Context, req PythonRequest) (Pytho
 	}
 
 	type readResult struct {
-		data []byte
-		err  error
+		data      []byte
+		discarded int64
+		err       error
 	}
 	ch := make(chan readResult, 1)
 	// Snapshot the reader under c.mu (held for this whole body) BEFORE
@@ -1091,8 +1123,11 @@ func (c *containerImpl) runPython(ctx context.Context, req PythonRequest) (Pytho
 		defer safe.Recover("sandbox.container.bridge_read", func(any) {
 			ch <- readResult{err: fmt.Errorf("bridge reader panicked")}
 		})
-		data, err := stdout.ReadBytes('\n')
-		ch <- readResult{data: data, err: err}
+		// Capped read (mirrors the bash path's BashOutputCaptureCap): the
+		// response line is otherwise buffered whole into host memory, and the
+		// bridge's `vars` field has no size bound of its own.
+		data, discarded, err := readCappedLine(stdout, bridgeResponseCaptureCap)
+		ch <- readResult{data: data, discarded: discarded, err: err}
 	}()
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
@@ -1132,6 +1167,14 @@ func (c *containerImpl) runPython(ctx context.Context, req PythonRequest) (Pytho
 			c.terminateBridgeLocked()
 			return PythonResult{}, fmt.Errorf("bridge closed unexpectedly: %w%s", r.err, c.bridgeStderrSuffix())
 		}
+		if r.discarded > 0 {
+			// The response overran the cap, so its JSON cannot be parsed — but
+			// the reader drained to the newline, the stream is still framed,
+			// and the kernel is healthy: fail only this call, keep the
+			// session. No poison, no reset (mirrors bash truncation, which is
+			// not fatal to the sandbox).
+			return PythonResult{}, fmt.Errorf("bridge response exceeded %d bytes (%d bytes discarded) and was dropped — return large results by writing them to a workspace file instead", bridgeResponseCaptureCap, r.discarded)
+		}
 		return parseBridgeResponse(r.data)
 	}
 }
@@ -1165,7 +1208,18 @@ func (c *containerImpl) terminateBridgeLocked() {
 		case <-done:
 		case <-time.After(200 * time.Millisecond):
 			_ = cmd.Process.Kill()
-			<-done
+			// The post-kill wait is BOUNDED: this runs under c.mu, and a Wait
+			// that never returns (a client wedged in uninterruptible sleep, or
+			// a pre-WaitDelay exec whose pipes are held open) would otherwise
+			// block every other operation on this container forever. Past the
+			// bound the wait goroutine is abandoned; the exec's WaitDelay
+			// force-closes the pipes so it still finishes on its own once the
+			// process exits.
+			select {
+			case <-done:
+			case <-time.After(bridgeReapTimeout):
+				log.Printf("sandbox: bridge exec client did not reap within %s of SIGKILL; abandoning the wait and clearing the bridge state", bridgeReapTimeout)
+			}
 		}
 	}
 	if c.bridgeStdin != nil {
@@ -1223,6 +1277,13 @@ func (c *containerImpl) ensureBridge() error {
 	// The bridge is intentionally not bound to the caller's ctx: it outlives
 	// any single request and is torn down in close() via podman kill.
 	cmd := exec.Command(c.cfg.PodmanBinary, c.podmanArgs(args)...) //nolint:gosec,noctx // G204: fixed operator-configured podman binary + our own args (no shell). noctx: the bridge intentionally outlives any single request ctx and is torn down in close() via podman kill.
+	// Without WaitDelay, terminateBridgeLocked's cmd.Wait() blocks until the
+	// stdout/stderr pipes close — anything that inherited them (conmon, a
+	// stray descendant of the exec client) keeps Wait blocked forever after
+	// the client itself is dead, and terminateBridgeLocked runs under c.mu, so
+	// every other operation on this container stalls behind it. Same hazard
+	// BashWaitDelay exists for on the bash path.
+	cmd.WaitDelay = BashWaitDelay
 	stderrBuf := &syncBuffer{}
 	cmd.Stderr = io.MultiWriter(os.Stderr, stderrBuf)
 
@@ -1308,8 +1369,7 @@ func (c *containerImpl) close() {
 		defer cancel()
 		stop := exec.CommandContext(killCtx, c.cfg.PodmanBinary, c.podmanArgs([]string{"kill", containerID})...) //nolint:gosec // containerID is our generated UUID, not user input
 		if out, err := stop.CombinedOutput(); err != nil {
-			low := strings.ToLower(string(out))
-			if !strings.Contains(low, "no such container") && !strings.Contains(low, "not running") && !strings.Contains(low, "no container") {
+			if !containerAlreadyGone(string(out)) {
 				log.Printf("sandbox: close-time container kill unconfirmed (%s): %v (%.200s) — the container may linger until the boot-time orphan prune", containerID, err, string(out))
 			}
 		}

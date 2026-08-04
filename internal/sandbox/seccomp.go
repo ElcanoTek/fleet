@@ -120,6 +120,13 @@ const seccompProfileEnv = "FLEET_SANDBOX_SECCOMP_PROFILE"
 // (every warm-pool fill spins up a container) doesn't flood the journal.
 var seccompUnconfinedWarnOnce sync.Once
 
+// seccompProfileTempPattern is the os.CreateTemp pattern for the materialized
+// default profile written into bridgeDir. Also a filepath.Match glob:
+// PruneOrphanedBridgeFiles keys on it to sweep files a crash orphaned (the
+// deferred cleanup in start() removes it on the graceful path only) — keep the
+// two uses in lockstep.
+const seccompProfileTempPattern = "fleet-sandbox-seccomp-*.json"
+
 // resolveSeccompArg returns the value for `--security-opt seccomp=<value>` and a
 // cleanup func the caller must defer. It honors FLEET_SANDBOX_SECCOMP_PROFILE:
 //
@@ -160,7 +167,7 @@ func resolveSeccompArg(bridgeDir string) (arg string, cleanup func(), err error)
 	}
 
 	// Default path: materialize the embedded profile so podman can read it.
-	f, err := os.CreateTemp(bridgeDir, "fleet-sandbox-seccomp-*.json")
+	f, err := os.CreateTemp(bridgeDir, seccompProfileTempPattern)
 	if err != nil {
 		return "", noop, fmt.Errorf("temp seccomp file: %w", err)
 	}
