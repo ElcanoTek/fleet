@@ -416,17 +416,22 @@ func TestClientServer_MaskedCallErrorIsLoggedHostSideAndStillMasked(t *testing.T
 // them as literals, which is precisely why brokerRedactor calls
 // RegisterEnvLiterals rather than trusting the pattern set.
 func TestClientServer_MaskedErrorLogRedactsCredentials(t *testing.T) {
-	const token = "Zx7bQ19rLmPq04TnVe82Kd"
-	if scrubbed := redact.NewRedactor(nil).Redact(token); scrubbed != token {
-		t.Fatalf("fixture no longer proves the env-literal path: patterns now catch %q", token)
+	// Obviously fake and low-entropy ON PURPOSE: gitleaks inherits its full
+	// built-in ruleset here, and a realistic-looking high-entropy literal beside
+	// the word "token" is a generic-api-key match that would fail the secret scan
+	// on a repo whose invariant is no-secrets-in-the-repo. Redaction by literal
+	// only needs length (redact.minLiteralLen), not entropy, so nothing is lost.
+	const fixture = "not-a-real-token-just-a-fixture"
+	if scrubbed := redact.NewRedactor(nil).Redact(fixture); scrubbed != fixture {
+		t.Fatalf("fixture no longer proves the env-literal path: patterns now catch %q", fixture)
 	}
 
-	t.Setenv("PAGES_API_TOKEN_TESTONLY", token)
+	t.Setenv("PAGES_API_TOKEN_TESTONLY", fixture)
 	resetBrokerRedactor()
 	t.Cleanup(resetBrokerRedactor)
 
 	logged := captureLog(t)
-	fake := &fakeBroker{err: fmt.Errorf("handshake rejected for seat %s", token)}
+	fake := &fakeBroker{err: fmt.Errorf("handshake rejected for seat %s", fixture)}
 	client := loopback(t, fake)
 
 	_, _, err := client.CallMCP(context.Background(), "pages", "list_pages", nil)
@@ -435,7 +440,7 @@ func TestClientServer_MaskedErrorLogRedactsCredentials(t *testing.T) {
 	}
 
 	out := logged()
-	if strings.Contains(out, token) {
+	if strings.Contains(out, fixture) {
 		t.Fatalf("credential value reached the host log: %q", out)
 	}
 	if !strings.Contains(out, "[REDACTED]") {
