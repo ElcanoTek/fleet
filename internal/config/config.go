@@ -1820,6 +1820,33 @@ func getenvFleetDefault(suffix, def string) string {
 	return def
 }
 
+// EnvAliases returns every spelling the prefix alias machinery resolves for
+// the same knob as name: when name carries the canonical FLEET_ prefix or a
+// legacy prefix, the canonical spelling plus one spelling per legacy prefix,
+// in lookup order (see lookupFleet). A name without a recognized prefix has
+// no aliases and is returned alone. Callers that must reason about a knob's
+// whole alias family (e.g. the MCP broker's connector/parent env-separation
+// gate) derive it here rather than hand-enumerating legacy spellings.
+func EnvAliases(name string) []string {
+	suffix, ok := strings.CutPrefix(name, canonicalPrefix)
+	if !ok {
+		for _, p := range legacyPrefixes {
+			if suffix, ok = strings.CutPrefix(name, p); ok {
+				break
+			}
+		}
+	}
+	if !ok || suffix == "" {
+		return []string{name}
+	}
+	names := make([]string, 0, len(legacyPrefixes)+1)
+	names = append(names, canonicalPrefix+suffix)
+	for _, p := range legacyPrefixes {
+		names = append(names, p+suffix)
+	}
+	return names
+}
+
 // logArchiveEncryptionKey decodes the optional base64 AES-256-GCM key for log
 // archival (#272) from FLEET_LOG_ARCHIVE_ENCRYPTION_KEY. It returns nil when the
 // key is unset (encryption off). A present-but-malformed or wrong-length key is

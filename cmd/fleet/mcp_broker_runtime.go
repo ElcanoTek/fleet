@@ -309,7 +309,7 @@ func validateConnectorParentEnvSeparation(bundle *clientconfig.Bundle) error {
 		// CUTLASS_INPUT_DIR to cutlass-family MCP servers as bundle-declared
 		// wire keys, and operators pass knobs like CUTLASS_ALLOWED_DIRS through
 		// to connectors. The CUTLASS_* names the parent runtime itself resolves
-		// are enumerated in parentOwnedRuntimeEnvNames instead.
+		// are derived in parentOwnedRuntimeEnvNames instead.
 		for _, prefix := range []string{"FLEET_", "CHAT_", "DB_", "OPENROUTER_"} {
 			if strings.HasPrefix(upper, prefix) {
 				return true
@@ -370,21 +370,26 @@ func validAccountEnvSuffix(suffix string) bool {
 func parentOwnedRuntimeEnvNames(bundle *clientconfig.Bundle) []string {
 	names := []string{
 		"FLEET_ENV_FILE", clientconfig.EnvDir,
-		"OPENROUTER_API_KEY", "FLEET_SERVER_TOKEN", "CHAT_SERVER_TOKEN", "ADMIN_API_KEY",
+		"OPENROUTER_API_KEY", "FLEET_SERVER_TOKEN", "ADMIN_API_KEY",
 		"DATABASE_URL", "FLEET_CHAT_DATABASE_URL", "FLEET_SCHED_DATABASE_URL", "DB_PASSWORD",
 		"TAVILY_API_KEY", "FLEET_SMTP_PASSWORD", "FLEET_WEBHOOK_SECRET", "FLEET_VAPID_PRIVATE_KEY",
-		"FLEET_MCP_OAUTH_ENCRYPTION_KEY", "CHAT_MCP_OAUTH_ENCRYPTION_KEY", "CUTLASS_MCP_OAUTH_ENCRYPTION_KEY",
-		"FLEET_LOG_ARCHIVE_ENCRYPTION_KEY", "CHAT_LOG_ARCHIVE_ENCRYPTION_KEY", "CUTLASS_LOG_ARCHIVE_ENCRYPTION_KEY",
-		// Legacy CUTLASS_* names the parent runtime itself resolves (boot config,
-		// per-run lookups through the EnvPrefix alias machinery, or lazy os.Getenv
-		// reads) — enumerated explicitly because the CUTLASS_ prefix as a whole is
-		// shared with the cutlass-family connector wire contract and must stay
-		// claimable by bundles (see the isParent comment above).
+		"FLEET_MCP_OAUTH_ENCRYPTION_KEY", "FLEET_LOG_ARCHIVE_ENCRYPTION_KEY",
+		// Scheduled-task inputs the boot loader reads verbatim under their
+		// legacy names (exact os.Getenv, outside the alias machinery).
 		"CUTLASS_TASK_MODEL", "CUTLASS_TASK_FALLBACK_MODEL", "CUTLASS_TASK_MAX_ITERATIONS",
-		"CUTLASS_INPUT_FILES", "CUTLASS_LOG_FILE", "CUTLASS_WORKSPACE_ROOT",
-		"CUTLASS_RETRY_MAX_ATTEMPTS", "CUTLASS_DISABLE_OPENROUTER_MODELS", "CUTLASS_DISABLE_PROMPT_CACHE",
-		"CUTLASS_IMAGE_OUTPUT", "CUTLASS_IMAGE_MODEL",
-		"CUTLASS_TEMPERATURE", "CUTLASS_MAX_COST_USD", "CUTLASS_MAX_TOTAL_TOKENS",
+		"CUTLASS_INPUT_FILES", "CUTLASS_IMAGE_OUTPUT", "CUTLASS_IMAGE_MODEL",
+		// Knobs the parent still resolves after broker boot through the
+		// FLEET_/CHAT_/CUTLASS_ alias machinery: config reload watches or
+		// re-applies the first group (internal/config/reload.go); the second
+		// group is read lazily per run (config.lookupFleet,
+		// agentcore.EnvPrefix).
+		"FLEET_SERVER_ADDR", "FLEET_MAX_CONCURRENT_AGENTS",
+		"FLEET_TEMPERATURE", "FLEET_MAX_COST_USD", "FLEET_MAX_TOTAL_TOKENS", "FLEET_MAX_ITERATIONS",
+		"FLEET_LOG_FILE", "FLEET_WORKSPACE_ROOT", "FLEET_RETRY_MAX_ATTEMPTS",
+		"FLEET_DISABLE_OPENROUTER_MODELS", "FLEET_DISABLE_PROMPT_CACHE",
+		"FLEET_OPENROUTER_BASE_URL", "FLEET_MODEL_CACHE_TTL_MINUTES",
+		"FLEET_CONTEXT_PRESSURE_WARN_THRESHOLD", "FLEET_CONTEXT_COMPACTION_THRESHOLD",
+		"FLEET_SCHEDULED_AUTO_COMPACT",
 		// Process/runtime inputs still read after broker boot. A connector cannot
 		// claim one of these because removing it would mutate parent behavior.
 		"HOME", "PATH", "TMPDIR", "SHELL", "USER", "LANG", "TZ", "NOTIFY_SOCKET",
@@ -400,7 +405,16 @@ func parentOwnedRuntimeEnvNames(bundle *clientconfig.Bundle) []string {
 			names = append(names, provider.APIKeyEnv)
 		}
 	}
-	return names
+	// Every name is protected in ALL the spellings config's prefix alias
+	// machinery resolves for it. The CUTLASS_ prefix as a whole must stay
+	// claimable by bundles (the connector wire contract — see the isParent
+	// comment above), so the legacy spellings of parent-owned knobs are
+	// derived from config's own prefix list, never hand-enumerated.
+	out := make([]string, 0, len(names))
+	for _, name := range names {
+		out = append(out, config.EnvAliases(name)...)
+	}
+	return out
 }
 
 func scrubParentConnectorState(bundle *clientconfig.Bundle, cfg *config.Config, resolvedSpecs map[string]agent.MCPServerSpec) error {
