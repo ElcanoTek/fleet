@@ -19,6 +19,17 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- The MCP stdio transport read each response line from a server subprocess
+  with no ceiling. In broker mode those servers run host-side, so a single
+  data-driven oversized response — a connector returning a giant query result
+  or a fetched page — was buffered whole in the fleet process's memory before
+  any downstream truncation applied: one response could OOM the process and
+  take down every user. This is the same risk class already capped on the
+  sandbox bridge's response read, and the stdio transport now follows that
+  pattern at the same 64 MiB ceiling: a line past the cap is drained to its
+  delimiter — the stream stays framed and the healthy subprocess is not
+  restarted — and the call fails with an explicit over-cap error rather than
+  a silently truncated, plausible-but-wrong result.
 - Every masked MCP-broker failure was undiagnosable. The credential owner
   replaces any operational error with a fixed `mcpbroker: credential-owner …`
   sentence before it crosses back to the parent — correct, because the real error
