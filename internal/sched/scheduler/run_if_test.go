@@ -1,7 +1,11 @@
 package scheduler
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"log"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -156,6 +160,126 @@ func TestEvalRunIfTimeout(t *testing.T) {
 	}
 	if ok {
 		t.Error("evalRunIf(sleep 10, timeout 1s): must not return ok on timeout")
+	}
+}
+
+// TestEvalRunIfBackgroundChildDoesNotHang pins the group-kill + WaitDelay
+// hardening: a gate that exits immediately but leaves a background child
+// holding the stderr pipe must return promptly with the gate's own exit
+// status, instead of blocking cmd.Run (and the sequential scheduler tick)
+// until the child exits. Mirrors the host sandbox's bash regression test.
+func TestEvalRunIfBackgroundChildDoesNotHang(t *testing.T) {
+	s, _ := newTestScheduler(t)
+
+	// Child outlives the gate but not its timeout: WaitDelay must force the
+	// pipe closed and the gate's clean exit 0 must still count as "run". The
+	// backgrounded sleep inherits the gate's stderr pipe and holds it open.
+	start := time.Now()
+	task := &models.Task{RunIf: &models.RunIf{Command: "sleep 45 & exit 0", ExitCodeIs: 0, TimeoutSeconds: 60}}
+	ok, reason, err := s.evalRunIf(task)
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("evalRunIf(background child): unexpected err %v", err)
+	}
+	if !ok {
+		t.Errorf("evalRunIf(background child): expected ok (gate exited 0), got reason %q", reason)
+	}
+	if elapsed > 25*time.Second {
+		t.Fatalf("evalRunIf blocked %v on a background child's pipe; WaitDelay regression", elapsed)
+	}
+
+	// Child outlives the TIMEOUT: the process-group SIGKILL must reap it at
+	// the deadline so the check errors at ~timeout, not at the child's exit.
+	start = time.Now()
+	task = &models.Task{RunIf: &models.RunIf{Command: "sleep 60 & exit 0", ExitCodeIs: 0, TimeoutSeconds: 2}}
+	_, _, err = s.evalRunIf(task)
+	elapsed = time.Since(start)
+	if err == nil {
+		t.Fatal("evalRunIf(child past timeout): expected timeout error")
+	}
+	if elapsed > 20*time.Second {
+		t.Fatalf("evalRunIf blocked %v past its 2s timeout; group-kill regression", elapsed)
+	}
+}
+
+// TestHandleSkipLogLineIsJSON pins the task_skipped log record against
+// forgery: the reason carries raw gate stderr, so an embedded newline or
+// quote must not split the record or inject fields. The logged reason is
+// clamped; the full text still persists to last_skip_reason.
+func TestHandleSkipLogLineIsJSON(t *testing.T) {
+	s, store := newTestScheduler(t)
+	ctx := context.Background()
+
+	past := time.Now().UTC().Add(-1 * time.Hour)
+	task := &models.Task{
+		ID: uuid.New(), Prompt: "gated", Status: models.TaskStatusScheduled, CreatedAt: time.Now().UTC(),
+		ScheduledFor: &past,
+		RunIf:        &models.RunIf{Command: "false", ExitCodeIs: 0, TimeoutSeconds: 5},
+	}
+	if _, err := store.AddTaskWithContext(ctx, task); err != nil {
+		t.Fatalf("add task: %v", err)
+	}
+
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	reason := "exit 3 (want 0): line one\nline two \"quoted\", {\"event\":\"forged\",\"task_id\":\"x\"}"
+	s.handleSkip(task, reason)
+
+	var logged struct {
+		Event     string `json:"event"`
+		TaskID    string `json:"task_id"`
+		Reason    string `json:"reason"`
+		NextRunAt string `json:"next_run_at"`
+	}
+	var found bool
+	for _, line := range strings.Split(buf.String(), "\n") {
+		idx := strings.Index(line, "{")
+		if idx < 0 || !strings.Contains(line, "task_skipped") {
+			continue
+		}
+		found = true
+		if err := json.Unmarshal([]byte(line[idx:]), &logged); err != nil {
+			t.Fatalf("task_skipped log line is not valid JSON: %v\nline: %q", err, line)
+		}
+	}
+	if !found {
+		t.Fatalf("no task_skipped log line emitted; log: %q", buf.String())
+	}
+	if logged.Event != "task_skipped" || logged.TaskID != task.ID.String() {
+		t.Errorf("logged event = %+v, want task_skipped for %s", logged, task.ID)
+	}
+	if logged.Reason != reason {
+		t.Errorf("logged reason = %q, want the raw reason escaped intact", logged.Reason)
+	}
+
+	// A reason larger than the log clamp is truncated in the LOG line only;
+	// last_skip_reason keeps the full text for diagnosis.
+	buf.Reset()
+	longReason := "exit 3 (want 0): " + strings.Repeat("x", 4096)
+	s.handleSkip(task, longReason)
+	for _, line := range strings.Split(buf.String(), "\n") {
+		idx := strings.Index(line, "{")
+		if idx < 0 || !strings.Contains(line, "task_skipped") {
+			continue
+		}
+		if err := json.Unmarshal([]byte(line[idx:]), &logged); err != nil {
+			t.Fatalf("clamped task_skipped line is not valid JSON: %v", err)
+		}
+	}
+	if len(logged.Reason) > maxSkipReasonLogBytes+64 {
+		t.Errorf("logged reason length = %d, want clamped near %d", len(logged.Reason), maxSkipReasonLogBytes)
+	}
+	if !strings.HasSuffix(logged.Reason, "…[truncated]") {
+		t.Errorf("clamped reason must carry the truncation marker, got %q…", logged.Reason[:64])
+	}
+	got, err := store.GetTask(task.ID)
+	if err != nil {
+		t.Fatalf("get task: %v", err)
+	}
+	if got.LastSkipReason == nil || *got.LastSkipReason != longReason {
+		t.Error("last_skip_reason must keep the full (uncapped-by-the-log-clamp) reason")
 	}
 }
 

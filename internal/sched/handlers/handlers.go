@@ -545,7 +545,7 @@ func (h *Handlers) CreateTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if msg := requireAdminForRunIf(creator.isAdmin, tc.RunIf); msg != "" {
+	if msg := requireAdminForRunIf(creator.hasAdminPermission, tc.RunIf); msg != "" {
 		writeError(w, http.StatusForbidden, msg)
 		return
 	}
@@ -846,10 +846,12 @@ func (h *Handlers) validateTaskRouting(tc *models.TaskCreate) error {
 // requireAdminForRunIf enforces the run_if privilege boundary. A run_if gate
 // executes ON THE HOST as the fleet user (scheduler.go documents it as trusted
 // "exactly like the fleet binary itself") — structural validation cannot make
-// an arbitrary creator's shell string safe, so only an admin principal may
-// attach or change one. Returns the 403 message, or "" when allowed.
-func requireAdminForRunIf(isAdmin bool, runIf *models.RunIf) string {
-	if runIf != nil && !isAdmin {
+// an arbitrary creator's shell string safe, so only a principal carrying
+// models.PermissionAdmin (taskCreator.hasAdminPermission on the create paths,
+// principal.hasPermission(models.PermissionAdmin) on the edit path) may attach
+// or change one. Returns the 403 message, or "" when allowed.
+func requireAdminForRunIf(hasAdminPermission bool, runIf *models.RunIf) string {
+	if runIf != nil && !hasAdminPermission {
 		return "run_if: a host-side pre-run gate can only be set by an admin"
 	}
 	return ""
@@ -1695,10 +1697,14 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	// Same privilege boundary as create, but edit-shaped: a non-admin editing
-	// a task may keep an existing (admin-authorized) gate byte-identical —
-	// clients echo the full record — but may not add, change, or remove one.
-	if !p.isAdmin && !reflect.DeepEqual(tc.RunIf, task.RunIf) {
+	// Same privilege boundary as create, but edit-shaped: a principal without
+	// PermissionAdmin editing a task may keep an existing (admin-authorized)
+	// gate — clients echo the record, modulo defaultable fields, hence the
+	// normalized comparison — but may not add, change, or remove one. An
+	// admin-permission principal's payload is authoritative (SetRunIf below),
+	// so an admin edit that changes or removes the gate actually persists.
+	canAuthorRunIf := p.hasPermission(models.PermissionAdmin)
+	if !canAuthorRunIf && !reflect.DeepEqual(tc.RunIf.Normalized(), task.RunIf.Normalized()) {
 		writeError(w, http.StatusForbidden, "run_if: a host-side pre-run gate can only be changed by an admin")
 		return
 	}
@@ -1771,6 +1777,13 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 		SetFiles:               tc.Files != nil,
 		Tags:                   tc.Tags,
 		SetTags:                tc.Tags != nil,
+		// The payload is authoritative for run_if only for an admin-permission
+		// principal (nil = remove the gate — PUT is full-replace and the web
+		// client omits run_if when the command field is cleared). A non-admin's
+		// echo already passed the normalized equality check above, so the stored
+		// gate is kept byte-identical rather than rewritten from the echo.
+		RunIf:    tc.RunIf,
+		SetRunIf: canAuthorRunIf,
 	}
 
 	updated, err := h.storage.UpdateEditableTask(r.Context(), taskID, edit)

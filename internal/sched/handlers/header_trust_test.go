@@ -132,8 +132,8 @@ func TestAuthorizeTaskCreator_HeaderTrust(t *testing.T) {
 		if creator.creatorID == nil || creator.creatorUsername != "alice@elcanotek.com" {
 			t.Errorf("creator not resolved from header trust: %+v", creator)
 		}
-		if creator.isAdmin {
-			t.Errorf("header-trust member must not be admin")
+		if creator.hasAdminPermission {
+			t.Errorf("header-trust client-role member must not carry admin permission")
 		}
 	})
 
