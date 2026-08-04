@@ -1185,7 +1185,7 @@ if [[ "$DRY_RUN" != "1" ]]; then
   else
     info "remember to add OPENROUTER_API_KEY (fleet config set-openrouter-key) and the bundle's MCP connector credentials."
   fi
-  info "if the bundle's default persona differs from 'assistant', set PERSONA_DEFAULT=<persona> in ${ENV_FILE}."
+  info "if the bundle's default persona differs from 'assistant', set FLEET_PERSONA_DEFAULT=<name> and FLEET_PERSONA=personas/<name>.yaml in ${ENV_FILE}."
 fi
 
 # ── optionally build + install the binary + unit, then enable + start it ──

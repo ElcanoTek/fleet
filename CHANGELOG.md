@@ -175,6 +175,36 @@ prior versions are listed because none have shipped.
   changes the proxy URL and `NO_PROXY`, and that belongs in its own reviewed PR
   with rootless-host verification (recorded in ADR-0012).
 
+- **`validate-config` failed the persona knob that only degrades, ignored the one
+  that is fatal, and `FLEET_PERSONA` did nothing.** The manifest check resolved
+  `PERSONA` against the bundle ROOT and made a miss a blocking failure, so any
+  bundle not shipping `personas/assistant.yaml` — the loader's built-in fallback
+  — got a red `✗ manifest: default persona personas/assistant.yaml missing`
+  unless `PERSONA` happened to be exported in the shell running the check. Our
+  own production bundle, which ships `personas/victoria.yaml`, failed that way;
+  a preflight that reports a bundle as broken when it boots fine teaches
+  operators to ignore the whole report. Meanwhile `PERSONA_DEFAULT` — the
+  interactive default, and the one a miss actually breaks — was never checked at
+  all. Both are now resolved the way their readers resolve them (by basename
+  inside the bundle's `personas/` dir, so `victoria`, `victoria.yaml` and
+  `personas/victoria.yaml` all find the file), each at the severity its runtime
+  earns: a missing `FLEET_PERSONA_DEFAULT` is a blocking `✗`, because
+  `agent.Manager` returns an error when it cannot read the persona and the turn
+  fails, and every new conversation starts on that name; a missing
+  `FLEET_PERSONA` is a non-blocking `⚠`, because the scheduled driver ignores the
+  read error and only loses the persona's expertise block. Either way the report
+  names the knob to set and lists the personas the bundle *does* offer, in the
+  shape that knob takes. Separately, both knobs were read with a bare
+  `os.Getenv`, outside the prefix alias machinery: an operator following the
+  documented `FLEET_` convention got silence and the built-in default, while the
+  broker already treated the names as parent-owned. `FLEET_PERSONA` /
+  `FLEET_PERSONA_DEFAULT` (and their `CHAT_`/`CUTLASS_` spellings) are now read
+  first, with the unprefixed names kept as the back-compat fallback and the
+  canonical spellings added to the env-file allowlist so they survive a
+  `FLEET_ENV_FILE` load. The two shapes are now written down where personas are
+  documented: `FLEET_PERSONA_DEFAULT` takes a persona *name*, `FLEET_PERSONA` a
+  bundle-relative *path*.
+
 ### Documentation
 
 - Correct the sandbox documentation claims that outran the code — across the

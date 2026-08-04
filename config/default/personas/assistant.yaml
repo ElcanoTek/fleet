@@ -1,5 +1,5 @@
-# Generic default persona. A client bundle ships its own persona(s) and sets
-# PERSONA_DEFAULT to one of their names.
+# Generic default persona. A client bundle ships its own persona(s); the
+# deployment's env file points FLEET_PERSONA_DEFAULT (and FLEET_PERSONA) at them.
 name: Assistant
 role: General-purpose helpful assistant
 voice: >

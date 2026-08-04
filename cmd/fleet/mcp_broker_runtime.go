@@ -396,7 +396,12 @@ func parentOwnedRuntimeEnvNames(bundle *clientconfig.Bundle) []string {
 		"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",
 		"SSL_CERT_FILE", "SSL_CERT_DIR", "SCHED_DATABASE_URL",
 		"LLM_MAX_TOKENS",
-		"REASONING_ENABLED", "REASONING_EFFORT", "PERSONA", "PERSONA_DEFAULT", "SYSTEM_PROMPT",
+		"REASONING_ENABLED", "REASONING_EFFORT", "SYSTEM_PROMPT",
+		// The default-persona knobs resolve through the alias machinery AND their
+		// bare historical spelling (config.getenvFleetOrBare), so both forms are
+		// enumerated: the canonical one carries its legacy prefixes via EnvAliases,
+		// the bare one has no alias family of its own.
+		"FLEET_PERSONA", "PERSONA", "FLEET_PERSONA_DEFAULT", "PERSONA_DEFAULT",
 		"MAX_ITERATIONS", "LOG_LEVEL", "DEBUG", "VERBOSE",
 	}
 	if bundle != nil {
