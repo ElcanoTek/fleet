@@ -107,6 +107,21 @@ prior versions are listed because none have shipped.
   fail the bundle load with an error naming the contract
   (docs/MCP-BUNDLE-ENV.md), and the reserved names are no longer registered
   into the `.env` allowlist as if they were ordinary env vars.
+- `sudo fleet update` rebuilt the sandbox image into root's podman store, which
+  the `User=fleet` unit can never read — root's rootful store is a separate
+  namespace from the service user's rootless one, which is why `bootstrap.sh`
+  builds through `runuser`. Every rebuild an operator triggered through
+  `fleet update`, or by following doctor's own "build it: sudo fleet update"
+  hint, was therefore a no-op for the running service. Root-run builds now
+  land in the service user's store, and the fix sits in
+  `scripts/build-sandbox-image.sh` so every root caller inherits it.
+
+- The sandbox-image rebuild gate compared only the Containerfile hash, so a
+  bundle that renames `sandbox.tag` with byte-identical build instructions
+  skipped the build. fleet does not verify the image at boot, so the box came
+  up healthy and then failed every sandboxed tool call against a tag that was
+  never built. The gate now also tracks the resolved tag and rebuilds when the
+  expected image is absent from the service user's store.
 
 - The production MCP-broker boundary refused to boot any bundle that wires the
   documented cutlass-family connector contract: the connector/parent env
