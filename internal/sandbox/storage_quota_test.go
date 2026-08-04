@@ -385,7 +385,7 @@ func fakePodmanCounting(t *testing.T, exitCode int) (bin, callLog string) {
 
 func probeCallCount(t *testing.T, callLog string) int {
 	t.Helper()
-	data, err := os.ReadFile(callLog) //nolint:gosec // test-owned temp path
+	data, err := os.ReadFile(callLog)
 	if os.IsNotExist(err) {
 		return 0
 	}
@@ -410,9 +410,8 @@ func TestPoolStorageProbe_CancelledProbeDoesNotLatch(t *testing.T) {
 	if p.storageOptSupported(cancelled) {
 		t.Fatal("an inconclusive probe must fall back to no layer quota for THIS container")
 	}
-	if p.storageOptSupported(context.Background()) {
-		// The second, completed probe against the exit-0 fake must win.
-	} else {
+	// The second, completed probe against the exit-0 fake must win.
+	if !p.storageOptSupported(context.Background()) {
 		t.Fatal("a cancelled first probe latched 'unsupported' — the quota is disabled for the process lifetime")
 	}
 	if got := probeCallCount(t, callLog); got < 1 {

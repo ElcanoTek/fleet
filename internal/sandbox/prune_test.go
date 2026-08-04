@@ -210,7 +210,7 @@ func TestPruneOrphanedBridgeFiles(t *testing.T) {
 	writeAged := func(name string, aged bool) string {
 		t.Helper()
 		path := filepath.Join(dir, name)
-		if err := os.WriteFile(path, []byte("x"), 0o644); err != nil { //nolint:gosec // test fixture, non-secret
+		if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
 			t.Fatalf("write %s: %v", name, err)
 		}
 		if aged {
