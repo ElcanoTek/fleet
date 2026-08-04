@@ -209,16 +209,21 @@ prior versions are listed because none have shipped.
   no matter how many times the password was changed underneath it. The only
   working levers were deleting the account outright or rotating
   `APP_SESSION_SECRET`, which logs out everybody. Sessions now carry a per-user
-  **session epoch** derived from the stored bcrypt hash, forwarded to the backend
-  alongside `X-User-Email`, and compared against the account's live value inside
-  the user lookup `membershipMiddleware` already performs — so a mismatch costs
-  no extra query and a reset takes effect on the next request. Deriving the epoch
+  **session epoch** derived from the stored bcrypt hash, forwarded alongside
+  `X-User-Email`, and compared against the account's live value by **both**
+  backends the one cookie authenticates: chat, inside the user lookup
+  `membershipMiddleware` already performs, and the Operations Center, whose
+  header-trust path resolves the chat-plane epoch through an injected lookup seam
+  (the two planes keep separate databases, ADR-0005). A mismatch is a 401
+  `session_revoked` that also drops the stale cookie, so a reset takes effect on
+  the next request to either view. Deriving the epoch
   rather than storing a counter means every password write moves it, including
   `fleet chat user passwd`, `fleet admin add` on an existing address and the
   legacy importer, and a reset to the *same* password still rotates it because
   bcrypt re-salts. Magic-link (`elcano_auth`) sessions are unaffected and stay
-  revocable at the auth service, which mints that cookie; the three revocation
-  levers and their blast radius are now written down in
+  revocable at the auth service, which mints that cookie, and an Operations
+  Center bearer login is its own credential; the revocation levers, these
+  carve-outs and their blast radius are written down in
   [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md), including `APP_SESSION_SECRET`
   rotation as the deliberate break-glass global logout.
   **At deploy time every logged-in user must sign in once more:** cookies minted

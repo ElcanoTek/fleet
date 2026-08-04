@@ -7,7 +7,10 @@ import type { OrchestratorAuth } from "@/app/lib/mocServer";
 //   1. A moc username/password Bearer token on the incoming request wins (it's
 //      the explicit moc session) and is forwarded verbatim.
 //   2. Otherwise an elcano session cookie (Ed25519 elcano_auth OR HMAC
-//      elcano_session) supplies the user email.
+//      elcano_session) supplies the user email AND its session epoch, which the
+//      orchestrator checks against the chat account so a password reset ends
+//      this plane's access too. Forwarding the whole session rather than
+//      `session.email` is deliberate: the epoch is half of the identity.
 // Returns null when neither is present, so the route can 401.
 export async function resolveOrchestratorAuth(
   request: NextRequest,
@@ -19,7 +22,7 @@ export async function resolveOrchestratorAuth(
   }
 
   const session = await getServerSession();
-  if (session) return { kind: "cookie", email: session.email };
+  if (session) return { kind: "cookie", email: session.email, epoch: session.epoch };
 
   return null;
 }

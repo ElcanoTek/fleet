@@ -725,6 +725,12 @@ func run() error {
 	// read-only aggregations over what the chat store already records.
 	h.SetChatUserDayUsageProvider(chatUserDayUsageProvider(chatStore))
 	h.SetChatAccountsProvider(chatAccountsProvider(chatStore))
+	// Both planes are reached with the SAME session cookie, so the Operations
+	// Center checks the same revocation claim chat does. The epoch lives in the
+	// chat users table, which this plane cannot read (ADR-0005) — hand it the
+	// lookup, not the schema. Wired unconditionally: the chat store is open by
+	// the time these handlers exist, and a nil seam would silently stop checking.
+	h.SetChatSessionEpochProvider(chatStore.SessionEpoch)
 	// Budget gate for POST /tasks + /tasks/batch and the /admin/budgets CRUD
 	// surface (#601 part 2) — the SAME enforcer the chat schedule_task seam
 	// carries, so no create path can drift.

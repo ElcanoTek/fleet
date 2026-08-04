@@ -273,13 +273,19 @@ each piece yourself):
    > what the cookie *claims*. Three levers, narrowest first:
    > - **One account** — reset its password (Settings → Admin → "Users & roles",
    >   or `fleet chat user passwd <email>`). Every session cookie carries the
-   >   account's *session epoch*, derived from its stored password hash, and the
-   >   backend refuses a cookie whose epoch no longer matches. A reset therefore
-   >   signs that account out everywhere within one request — this is the
-   >   incident-response lever for a stolen cookie, and it works even if you reset
-   >   to the same password (bcrypt re-salts). It does **not** reach a magic-link
-   >   (`elcano_auth`) session: that cookie is minted by the auth service, so it is
-   >   revoked there.
+   >   account's *session epoch*, derived from its stored password hash, and
+   >   **both** backends refuse a request whose epoch no longer matches — chat and
+   >   the Operations Center, which the one cookie authenticates. A reset
+   >   therefore signs that account out of both views on their next request, and
+   >   it works even if you reset to the same password (bcrypt re-salts). This is
+   >   the incident-response lever for a stolen cookie. Three carve-outs: a
+   >   magic-link (`elcano_auth`) session carries no epoch, so revoke it at the
+   >   auth service that mints it; an Operations Center **bearer** login (the moc
+   >   username/password form) is a separate credential the chat password does not
+   >   govern — end it with `fleet sched user del <name>`, because a sched
+   >   password change alone does not rotate that bearer token; and a stream that is
+   >   already open (a chat turn, a task run-log) finishes its turn, because the
+   >   epoch is checked when a request connects, not per SSE event.
    > - **One account, permanently** — delete it. The user-list gate then 403s
    >   every request.
    > - **Everyone, break-glass** — rotate `APP_SESSION_SECRET` in

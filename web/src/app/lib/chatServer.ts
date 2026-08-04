@@ -9,11 +9,10 @@
 // chat-server listens on CHAT_SERVER_URL (default http://127.0.0.1:8080) and
 // both sides share CHAT_SERVER_TOKEN.
 
-import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
-import { getSessionCookieName } from "@/app/lib/auth";
 import { forwardedHeaders } from "@/app/lib/proxyHeaders";
+import { dropRevokedSession } from "@/app/lib/sessionRevocation";
 
 const defaultBase = "http://127.0.0.1:8080";
 
@@ -31,13 +30,6 @@ export type SessionIdentity = {
   email: string;
   epoch?: string;
 };
-
-/**
- * Set by chat-server on the 401 it returns when a forwarded epoch no longer
- * matches the account (internal/httpapi/auth.go#writeSessionRevoked). Mirrored
- * here rather than shared because the two tiers are separate builds.
- */
-const sessionRevokedHeader = "X-Session-Revoked";
 
 export function getChatServerBase() {
   return (process.env.CHAT_SERVER_URL ?? defaultBase).replace(/\/+$/, "");
@@ -79,31 +71,6 @@ export async function fetchSessionEpoch(email: string): Promise<string | null> {
   if (!upstream.ok) return null;
   const body = (await upstream.json()) as { session_epoch?: string };
   return body.session_epoch || null;
-}
-
-/**
- * dropRevokedSession deletes the session cookie when chat-server reports that
- * the epoch it was minted against is stale.
- *
- * Without this the user is trapped: the cookie's signature is still valid, so
- * the request proxy treats it as a session and bounces every visit to /login
- * back to /chat, which 401s again. The Next tier cannot detect the staleness
- * itself — the epoch lives in the users table — so chat-server's verdict is the
- * only trigger available.
- *
- * Cookie writes are legal in a Route Handler but not while rendering a Server
- * Component, and that is why the failure is swallowed: the server-rendered
- * callers (chat/page.tsx) only ever proxy for elcano sessions, which carry no
- * epoch and so can never receive this verdict, and any client-side call that
- * follows is a Route Handler that can complete the deletion.
- */
-async function dropRevokedSession(upstream: Response): Promise<void> {
-  if (upstream.status !== 401 || upstream.headers.get(sessionRevokedHeader) !== "1") return;
-  try {
-    (await cookies()).delete(getSessionCookieName());
-  } catch {
-    // Not in a context that may mutate cookies — see above.
-  }
 }
 
 /**
