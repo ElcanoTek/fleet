@@ -151,6 +151,11 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 					mu.Unlock()
 					cancel()
 				}()
+				// Args arrives nil when the peer's empty map crossed the wire
+				// (args,omitempty drops it); forward an object, not null.
+				if req.Args == nil {
+					req.Args = map[string]any{}
+				}
 				var text string
 				var isErr bool
 				var err error

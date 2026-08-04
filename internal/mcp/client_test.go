@@ -240,6 +240,52 @@ func TestCallToolPrefixed_ResolvesServerFromFullName(t *testing.T) {
 	}
 }
 
+// argsCaptureTransport records the exact params map of the last tools/call.
+type argsCaptureTransport struct {
+	lastParams map[string]interface{}
+}
+
+func (f *argsCaptureTransport) Call(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
+	if method == "tools/call" {
+		f.lastParams, _ = params.(map[string]interface{})
+	}
+	return json.RawMessage(`{"content":[{"type":"text","text":"ok"}]}`), nil
+}
+
+func (f *argsCaptureTransport) Notify(_ context.Context, _ string, _ interface{}) error { return nil }
+
+func (f *argsCaptureTransport) Close() error { return nil }
+
+// A nil arguments map would marshal to "arguments": null on the wire, which
+// strict MCP servers reject with -32602 (arguments must be an object when
+// present). callTool must forward an empty object instead. Regression for the
+// pages.list_templates failure where empty model args crossed the mcpbroker
+// boundary (args,omitempty) as nil and the server refused the call.
+func TestCallTool_NilArgumentsBecomeEmptyObject(t *testing.T) {
+	ft := &argsCaptureTransport{}
+	c := NewClient()
+	c.servers["pages"] = &Server{
+		name:      "pages",
+		transport: ft,
+		tools:     []Tool{{Name: "list_templates"}},
+	}
+
+	if _, err := c.CallToolOn(context.Background(), "pages", "list_templates", nil); err != nil {
+		t.Fatalf("CallToolOn: %v", err)
+	}
+	args, ok := ft.lastParams["arguments"]
+	if !ok {
+		t.Fatal("tools/call params missing arguments")
+	}
+	m, ok := args.(map[string]interface{})
+	if !ok || m == nil {
+		t.Fatalf("arguments = %#v, want a non-nil empty object", args)
+	}
+	if len(m) != 0 {
+		t.Fatalf("arguments = %#v, want empty", m)
+	}
+}
+
 // ===========================================================================
 // cutlass suite — Client integration over stdio/HTTP transports, SSE parsing,
 // RPCError / JSONRPCID handling, the env-UTF8 contract, and the write-vs-read
