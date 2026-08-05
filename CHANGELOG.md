@@ -19,6 +19,20 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- An async run_if gate's settle write could clobber a concurrent reschedule or
+  edit. Both settle paths conditioned only on the task still being `scheduled`
+  — a status an edit legitimately keeps — and the bounded async pool stretched
+  the dispatch-to-settle window from milliseconds to the gate's full runtime
+  (up to 300s). Concretely: a task postponed by an operator while its slow
+  gate evaluated would run tonight anyway on the stale pass verdict, and a
+  stale decline overwrote the operator's new `scheduled_for` with its retry
+  backoff. Every gate settle write (promote to pending, skip record, and the
+  recurrence-ended cancel) is now a compare-and-swap that also requires the
+  row to still carry the `scheduled_for` the evaluation was dispatched
+  against, so any interleaved edit or reschedule wins, the stale verdict is
+  discarded (and logged as such, without counting a skip that never
+  happened), and the next due tick re-evaluates the task's current
+  definition.
 - `Scheduler.Stop`'s run_if gate drain could panic the process during graceful
   shutdown. Stop closed the stop channel and immediately waited on the gate
   WaitGroup, but nothing waited for the scheduler's run loop to exit — a tick

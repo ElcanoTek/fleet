@@ -414,6 +414,15 @@ func (s *Storage) UpdateTasksStatusBatch(taskIDs []uuid.UUID, fromStatus, toStat
 	return s.db.UpdateTasksStatusBatch(context.Background(), taskIDs, fromStatus, toStatus)
 }
 
+// SettleGatedTask transitions one gated task out of `scheduled` to toStatus,
+// but only while the row still carries the scheduled_for the gate evaluation
+// was dispatched against — a concurrent cancel, claim, edit, or reschedule
+// wins over the stale verdict (see db.SettleGatedTask). Returns the number of
+// rows transitioned (0 or 1).
+func (s *Storage) SettleGatedTask(taskID uuid.UUID, observedScheduledFor *time.Time, toStatus models.TaskStatus) (int, error) {
+	return s.db.SettleGatedTask(context.Background(), taskID, observedScheduledFor, toStatus)
+}
+
 // GetPendingTasks gets all pending tasks, sorted by priority.
 func (s *Storage) GetPendingTasks() ([]*models.Task, error) {
 	return s.db.GetPendingTasks(context.Background())
@@ -1494,25 +1503,28 @@ func (s *Storage) ComputeNextRun(task *models.Task) (time.Time, error) {
 
 // RecordSkip records a pre-run-gate skip on a still-scheduled task (#269): it
 // re-locks the row inside a transaction, re-checks the task is still scheduled
-// (a concurrent cancel/claim wins and the skip becomes a no-op), advances
-// scheduled_for to nextRun, increments skip_count, and stamps last_skip_at +
-// last_skip_reason. Returns the updated task. nextRun is computed by the
-// caller via ComputeNextRun (so the scheduler owns the cron math).
-func (s *Storage) RecordSkip(ctx context.Context, taskID uuid.UUID, reason string, nextRun time.Time) (*models.Task, error) {
+// AND still carries the scheduled_for the gate was dispatched against (a
+// concurrent cancel/claim/edit/reschedule wins and the skip becomes a no-op),
+// advances scheduled_for to nextRun, increments skip_count, and stamps
+// last_skip_at + last_skip_reason. Returns the task and whether the skip was
+// actually recorded. nextRun is computed by the caller via ComputeNextRun (so
+// the scheduler owns the cron math); observedScheduledFor is the fetched row's
+// value at dispatch (nil skips the reschedule guard).
+func (s *Storage) RecordSkip(ctx context.Context, taskID uuid.UUID, reason string, nextRun time.Time, observedScheduledFor *time.Time) (*models.Task, bool, error) {
 	tx, err := s.db.BeginTx(ctx)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	task, err := s.db.RecordSkip(ctx, tx, taskID, reason, nextRun)
+	task, recorded, err := s.db.RecordSkip(ctx, tx, taskID, reason, nextRun, observedScheduledFor)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if err := tx.Commit(); err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	return task, nil
+	return task, recorded, nil
 }
 
 // Global storage instance

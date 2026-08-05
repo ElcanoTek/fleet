@@ -79,9 +79,12 @@ func TestRecordSkipAdvancesScheduledFor(t *testing.T) {
 	}
 
 	next := time.Now().UTC().Add(24 * time.Hour).Truncate(time.Second)
-	got, err := store.RecordSkip(ctx, task.ID, "exit 1 (want 0)", next)
+	got, recorded, err := store.RecordSkip(ctx, task.ID, "exit 1 (want 0)", next, &past)
 	if err != nil {
 		t.Fatalf("record skip: %v", err)
+	}
+	if !recorded {
+		t.Fatal("recorded = false, want true (row unchanged since dispatch)")
 	}
 	if got.Status != models.TaskStatusScheduled {
 		t.Errorf("status = %s, want scheduled (skip must not promote)", got.Status)
@@ -99,10 +102,15 @@ func TestRecordSkipAdvancesScheduledFor(t *testing.T) {
 		t.Errorf("scheduled_for = %v, want %v", got.ScheduledFor, next)
 	}
 
-	// A second skip increments skip_count to 2.
-	got, err = store.RecordSkip(ctx, task.ID, "exit 1 (want 0)", next.Add(24*time.Hour))
+	// A second skip increments skip_count to 2. The observed scheduled_for is
+	// the one the first skip advanced the row to (a re-dispatch always carries
+	// the freshly fetched value).
+	got, recorded, err = store.RecordSkip(ctx, task.ID, "exit 1 (want 0)", next.Add(24*time.Hour), &next)
 	if err != nil {
 		t.Fatalf("record skip 2: %v", err)
+	}
+	if !recorded {
+		t.Fatal("recorded = false on the second skip, want true")
 	}
 	if got.SkipCount != 2 {
 		t.Errorf("skip_count = %d, want 2", got.SkipCount)
@@ -126,15 +134,60 @@ func TestRecordSkipNoopAfterPromotion(t *testing.T) {
 	}
 
 	next := time.Now().UTC().Add(24 * time.Hour)
-	got, err := store.RecordSkip(ctx, task.ID, "exit 1", next)
+	got, recorded, err := store.RecordSkip(ctx, task.ID, "exit 1", next, &past)
 	if err != nil {
 		t.Fatalf("record skip on pending task: %v", err)
+	}
+	if recorded {
+		t.Error("recorded = true, want false (task left scheduled)")
 	}
 	if got.SkipCount != 0 {
 		t.Errorf("skip_count = %d, want 0 (skip must be a no-op off scheduled)", got.SkipCount)
 	}
 	if got.ScheduledFor == nil || !got.ScheduledFor.Equal(past) {
 		t.Errorf("scheduled_for = %v, want unchanged %v", got.ScheduledFor, past)
+	}
+}
+
+// TestRecordSkipNoopAfterReschedule pins the async-settle guard: a task edited
+// or postponed while its gate evaluation was in flight (status stays
+// `scheduled`, but scheduled_for moved) must NOT have the stale verdict's
+// backoff clobber the operator's new scheduled_for. The skip is a no-op and
+// the next due tick re-evaluates the current definition.
+func TestRecordSkipNoopAfterReschedule(t *testing.T) {
+	store, _ := newTestStore(t)
+	ctx := context.Background()
+
+	past := time.Now().UTC().Add(-1 * time.Hour).Truncate(time.Microsecond)
+	task := &models.Task{
+		ID: uuid.New(), Prompt: "p", Status: models.TaskStatusScheduled, CreatedAt: time.Now().UTC(),
+		ScheduledFor: &past, RunIf: &models.RunIf{Command: "false", TimeoutSeconds: 5},
+	}
+	if _, err := store.AddTaskWithContext(ctx, task); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+
+	// An operator postpones the task while the gate runs.
+	tomorrow := time.Now().UTC().Add(24 * time.Hour).Truncate(time.Microsecond)
+	if _, err := store.DB().Conn().ExecContext(ctx,
+		"UPDATE tasks SET scheduled_for = $1 WHERE id = $2", tomorrow, task.ID); err != nil {
+		t.Fatalf("reschedule: %v", err)
+	}
+
+	// The stale verdict settles, still carrying the scheduled_for it was
+	// dispatched against.
+	got, recorded, err := store.RecordSkip(ctx, task.ID, "exit 1", time.Now().UTC().Add(time.Minute), &past)
+	if err != nil {
+		t.Fatalf("record skip after reschedule: %v", err)
+	}
+	if recorded {
+		t.Error("recorded = true, want false (the interleaved reschedule must win)")
+	}
+	if got.SkipCount != 0 {
+		t.Errorf("skip_count = %d, want 0", got.SkipCount)
+	}
+	if got.ScheduledFor == nil || !got.ScheduledFor.Equal(tomorrow) {
+		t.Errorf("scheduled_for = %v, want the operator's %v kept", got.ScheduledFor, tomorrow)
 	}
 }
 
@@ -155,9 +208,12 @@ func TestRecordSkipOneShot(t *testing.T) {
 	}
 
 	// For a one-shot task, we pass a zero nextRun time.
-	got, err := store.RecordSkip(ctx, task.ID, "exit 1 (want 0)", time.Time{})
+	got, recorded, err := store.RecordSkip(ctx, task.ID, "exit 1 (want 0)", time.Time{}, &past)
 	if err != nil {
 		t.Fatalf("record skip on one-shot: %v", err)
+	}
+	if !recorded {
+		t.Fatal("recorded = false, want true")
 	}
 	if got.Status != models.TaskStatusScheduled {
 		t.Errorf("status = %s, want scheduled", got.Status)

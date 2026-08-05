@@ -572,8 +572,11 @@ func (s *Scheduler) tryDispatchGateEval(task *models.Task) bool {
 // evalAndSettleGate runs one gated task's run_if check and settles the task:
 // promote to pending on pass (or on a check error under on_error:"run"), skip
 // via handleSkip otherwise. Runs on its own goroutine; both settle paths
-// re-check the row is still `scheduled` inside the DB write, so a task
-// cancelled or edited while its gate ran is never resurrected.
+// re-check inside the DB write that the row is still `scheduled` AND still
+// carries the scheduled_for this evaluation was dispatched against, so a task
+// cancelled, edited, or rescheduled while its gate ran is never resurrected
+// and never has an operator's fresh scheduled_for clobbered by the stale
+// verdict.
 func (s *Scheduler) evalAndSettleGate(task *models.Task) {
 	defer s.gateWG.Done()
 	defer func() {
@@ -597,16 +600,21 @@ func (s *Scheduler) evalAndSettleGate(task *models.Task) {
 }
 
 // promoteGatedTask promotes one gate-passing task from scheduled to pending.
-// The conditional UPDATE (fromStatus=scheduled) makes a concurrent cancel win,
-// exactly like the batch promotion path for ungated tasks.
+// The conditional UPDATE (still `scheduled`, scheduled_for unchanged since
+// dispatch) makes a concurrent cancel win exactly like the batch promotion
+// path for ungated tasks — and, because gates settle asynchronously, also
+// makes a concurrent edit/reschedule win: a task postponed while its gate ran
+// must not run on the stale verdict (the next due tick re-evaluates it).
 func (s *Scheduler) promoteGatedTask(task *models.Task) {
-	n, err := s.storage.UpdateTasksStatusBatch([]uuid.UUID{task.ID}, models.TaskStatusScheduled, models.TaskStatusPending)
+	n, err := s.storage.SettleGatedTask(task.ID, task.ScheduledFor, models.TaskStatusPending)
 	if err != nil {
 		log.Printf("Error promoting gated task %s: %v", task.ID, err)
 		return
 	}
 	if n > 0 {
 		log.Printf("Task %s passed its run_if gate and is now pending", task.ID)
+	} else {
+		log.Printf("Task %s changed while its run_if gate ran — stale pass verdict discarded", task.ID)
 	}
 }
 
@@ -704,12 +712,18 @@ func (s *Scheduler) handleSkip(task *models.Task, reason string) {
 			// The recurrence's end date falls before the next cron tick: there is
 			// no future occurrence to advance to, so cancel the row instead of
 			// leaving it due (it would otherwise re-skip on every tick forever).
-			if _, cerr := s.storage.UpdateTasksStatusBatch([]uuid.UUID{task.ID},
-				models.TaskStatusScheduled, models.TaskStatusCancelled); cerr != nil {
+			// Settled conditionally like the other verdict writes: an edit or
+			// reschedule that landed while the gate ran (it may have changed the
+			// recurrence or its end date) invalidates this cancel too.
+			n, cerr := s.storage.SettleGatedTask(task.ID, task.ScheduledFor, models.TaskStatusCancelled)
+			switch {
+			case cerr != nil:
 				log.Printf("Error ending recurrence for skipped task %s: %v", task.ID, cerr)
-			} else {
+			case n > 0:
 				log.Printf("Recurrence for task %s ended at skip: next tick %s is past recurrence_until %s",
 					task.ID, computed.Format(time.RFC3339), task.RecurrenceUntil.Format(time.RFC3339))
+			default:
+				log.Printf("Task %s changed while its run_if gate ran — stale end-of-recurrence verdict discarded", task.ID)
 			}
 			return
 		default:
@@ -724,8 +738,16 @@ func (s *Scheduler) handleSkip(task *models.Task, reason string) {
 		nextRun = time.Now().UTC().Add(gateSkipBackoff(task.SkipCount))
 	}
 	ctx := context.Background()
-	if _, err := s.storage.RecordSkip(ctx, task.ID, reason, nextRun); err != nil {
+	_, recorded, err := s.storage.RecordSkip(ctx, task.ID, reason, nextRun, task.ScheduledFor)
+	if err != nil {
 		log.Printf("Error recording skip for task %s: %v", task.ID, err)
+		return
+	}
+	if !recorded {
+		// The task was cancelled, claimed, edited, or rescheduled while the
+		// gate ran; nothing was written, so don't count or log a skip that
+		// never happened — the next due tick re-evaluates the current row.
+		log.Printf("Task %s changed while its run_if gate ran — stale skip verdict discarded", task.ID)
 		return
 	}
 	// Distinguish a check_error (the gate timed out / crashed) from a clean
