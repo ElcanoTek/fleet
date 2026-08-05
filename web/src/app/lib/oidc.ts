@@ -18,6 +18,7 @@
 // CSRF and code interception.
 
 import type { NextRequest } from "next/server";
+import { getConfiguredOrigin } from "./auth";
 
 // Temp cookies that carry the per-attempt CSRF material from /start to
 // /callback. Short-lived, httpOnly, SameSite=Lax (so they survive the IdP's
@@ -199,10 +200,16 @@ export function validateIdToken(
 }
 
 // buildRedirectUri returns the callback URL the IdP redirects back to. A pinned
-// FLEET_OIDC_REDIRECT_URI wins; otherwise it is derived from the request's
-// forwarded host so dev and prod work without a hardcoded origin.
+// FLEET_OIDC_REDIRECT_URI wins; next the configured canonical origin
+// (NEXT_PUBLIC_PUBLIC_ORIGIN — see lib/auth.ts#getConfiguredOrigin), because
+// x-forwarded-* is client-supplied unless a proxy overwrites it and the IdP
+// would be handed an attacker-picked callback host. Only when neither is set
+// is the URI derived from the request's forwarded host, which keeps local dev
+// (plain http, no configured origin) working without a hardcoded origin.
 export function buildRedirectUri(config: OidcConfig, request: NextRequest): string {
   if (config.redirectUri) return config.redirectUri;
+  const configured = getConfiguredOrigin();
+  if (configured) return new URL("/api/auth/oidc/callback", configured).toString();
   const host =
     request.headers.get("x-forwarded-host") ?? request.headers.get("host") ?? request.nextUrl.host;
   const proto = request.headers.get("x-forwarded-proto") ?? request.nextUrl.protocol.replace(":", "");

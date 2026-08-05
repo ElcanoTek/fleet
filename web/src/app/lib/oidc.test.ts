@@ -206,4 +206,30 @@ describe("buildRedirectUri", () => {
       "https://pinned.example.com/cb",
     );
   });
+
+  // The configured canonical origin outranks the forwarded headers (same trust
+  // rule as lib/auth.ts): x-forwarded-* is client-supplied unless a proxy
+  // overwrites it, and the IdP must never be handed an attacker-picked
+  // callback host.
+  describe("with a configured canonical origin", () => {
+    afterEach(() => {
+      delete process.env.NEXT_PUBLIC_PUBLIC_ORIGIN;
+    });
+
+    it("ignores a spoofed x-forwarded-host/proto", () => {
+      process.env.NEXT_PUBLIC_PUBLIC_ORIGIN = "https://chat.example.com";
+      const req = new NextRequest("https://chat.example.com/api/auth/oidc/start", {
+        headers: { "x-forwarded-host": "evil.example.net", "x-forwarded-proto": "http" },
+      });
+      expect(buildRedirectUri(config, req)).toBe("https://chat.example.com/api/auth/oidc/callback");
+    });
+
+    it("still lets a pinned redirect uri win", () => {
+      process.env.NEXT_PUBLIC_PUBLIC_ORIGIN = "https://chat.example.com";
+      const req = new NextRequest("https://chat.example.com/api/auth/oidc/start");
+      expect(
+        buildRedirectUri({ ...config, redirectUri: "https://pinned.example.com/cb" }, req),
+      ).toBe("https://pinned.example.com/cb");
+    });
+  });
 });

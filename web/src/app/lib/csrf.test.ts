@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { NextRequest } from "next/server";
 import { verifyOrigin } from "./csrf";
 
@@ -85,6 +85,40 @@ describe("verifyOrigin", () => {
       url: "http://localhost:3000/api/foo",
       origin: "http://localhost:3000",
       host: "localhost:3000",
+    });
+    expect(verifyOrigin(r).ok).toBe(true);
+  });
+});
+
+// When the deployment's canonical origin is configured, it — not the
+// client-supplied x-forwarded-host — is the host the Origin header must match.
+// Same trust rule as lib/auth.ts (getRedirectUrl/isSecureRequest).
+describe("verifyOrigin — configured canonical origin", () => {
+  afterEach(() => {
+    delete process.env.NEXT_PUBLIC_PUBLIC_ORIGIN;
+  });
+
+  it("rejects an Origin that only matches a spoofed x-forwarded-host", () => {
+    process.env.NEXT_PUBLIC_PUBLIC_ORIGIN = "https://fleet.example.com";
+    // A request straight to `next start` (bypassing the proxy) where the
+    // attacker supplies BOTH the Origin and the x-forwarded-host so they
+    // agree with each other — but not with the deployment.
+    const r = req({
+      url: "https://fleet.example.com/api/foo",
+      origin: "https://evil.example.net",
+      host: "fleet.example.com",
+      forwardedHost: "evil.example.net",
+    });
+    expect(verifyOrigin(r).ok).toBe(false);
+  });
+
+  it("accepts the canonical Origin even when x-forwarded-host is spoofed", () => {
+    process.env.NEXT_PUBLIC_PUBLIC_ORIGIN = "https://fleet.example.com";
+    const r = req({
+      url: "https://fleet.example.com/api/foo",
+      origin: "https://fleet.example.com",
+      host: "fleet.example.com",
+      forwardedHost: "evil.example.net",
     });
     expect(verifyOrigin(r).ok).toBe(true);
   });

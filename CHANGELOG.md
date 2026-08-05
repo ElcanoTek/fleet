@@ -253,6 +253,27 @@ prior versions are listed because none have shipped.
 
 ### Security
 
+- Two origin checks still derived their trusted host from client-suppliable
+  `x-forwarded-*` headers after their siblings moved to the configured
+  canonical origin: the OIDC `redirect_uri` a login sends to the IdP
+  (`lib/oidc.ts` `buildRedirectUri`) and the host a mutating request's `Origin`
+  header is compared against (`lib/csrf.ts` `verifyOrigin`). Behind the shipped
+  Caddy config those headers are proxy-set and correct; behind a proxy that
+  forwards a client's own values — the deployment shape the bootstrap no-domain
+  path leaves to the operator's proxy — the SSO start route could hand the IdP
+  an attacker-picked callback host (contained by an exact-match redirect-URI
+  registration at the IdP, which is why this is defense-in-depth rather than an
+  open hole), and the CSRF comparison could be aimed at an attacker-chosen
+  expected host. Both now prefer `NEXT_PUBLIC_PUBLIC_ORIGIN` through the same
+  `lib/auth.ts` helper the redirect and Secure-cookie decisions already use
+  (now exported), keeping the header derivation only as the fallback when no
+  origin is configured, so plain-http local dev is unchanged. **A deployment
+  whose `NEXT_PUBLIC_PUBLIC_ORIGIN` differs from the host users actually hit —
+  in practice a no-domain box fronted by an operator proxy without the
+  `NEXT_PUBLIC_PUBLIC_ORIGIN` line bootstrap already instructs for that shape —
+  will emit a different `redirect_uri` (needs re-registration at the IdP unless
+  `FLEET_OIDC_REDIRECT_URI` pins it; the pin still outranks everything) and
+  will refuse mutating requests until the origin is corrected.**
 - A password reset did not end the account's existing sessions, so the standard
   response to a compromised account did not evict the attacker. The web session
   cookie is a stateless HMAC over `{email, exp}` that the Next.js tier verifies

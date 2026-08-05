@@ -302,12 +302,13 @@ export function getSessionCookieName() {
 
 // getConfiguredOrigin returns the deployment's canonical public origin
 // (NEXT_PUBLIC_PUBLIC_ORIGIN — bootstrap writes it for every deploy), or null
-// when unset/unparseable. Redirect targets and the Secure-cookie decision
+// when unset/unparseable. Redirect targets, the Secure-cookie decision, the
+// OIDC redirect_uri (lib/oidc.ts) and the CSRF expected-host (lib/csrf.ts)
 // prefer it over x-forwarded-* because those headers are client-supplied
 // unless a proxy overwrites them: a request that reaches `next start`
 // directly (not through Caddy) could otherwise pick the redirect host and
 // mint a session cookie without Secure by claiming x-forwarded-proto: http.
-function getConfiguredOrigin(): URL | null {
+export function getConfiguredOrigin(): URL | null {
   const raw = process.env.NEXT_PUBLIC_PUBLIC_ORIGIN?.trim();
   if (!raw) return null;
   try {
