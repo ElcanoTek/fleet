@@ -59,7 +59,10 @@ prior versions are listed because none have shipped.
   metrics scrape sidecar, and the defaults that silently break this pod
   (NodeLocal DNSCache vs. `slirp4netns`, namespace `ResourceQuota`, VPA `Auto`,
   runtime-security signatures firing on normal nested-container operation).
-  States
+  Closes with an appendix carrying the whole manifest set assembled in apply
+  order with a placeholder table, so it transcribes in one paste rather than
+  nine. No Helm chart or in-tree manifests: ADR-0004's enforcement clause stands,
+  and an unmaintained chart would imply support this path does not have. States
   its own scope honestly: hand-verified, **not** exercised by CI, no chart or
   manifest shipped in-tree, and explicit about the weaker outer trust boundary a
   privileged pod implies.

@@ -346,7 +346,8 @@ One dedicated managed node group, one instance, nothing else on it:
 
 ```
 eksctl create nodegroup --cluster <c> --name fleet \
-  --node-type r7i.24xlarge --nodes 1 --nodes-min 1 --nodes-max 1 \
+  --node-type m7i.12xlarge --nodes 1 --nodes-min 1 --nodes-max 1 \
+  --node-zones <single-az> \
   --node-taints dedicated=fleet:NoSchedule \
   --node-labels workload=fleet \
   --node-volume-size 200 --node-volume-type gp3 \
@@ -360,8 +361,15 @@ eksctl create nodegroup --cluster <c> --name fleet \
   succeed; AL2023's permissive default is what this recipe assumes.
 - **Instance family:** memory-per-vCPU is the binding constraint (~1.5–3 GB of
   RAM per concurrent agent for `pandas`/`matplotlib` work), so `r7i`/`r7a` beats
-  `c7i`. `r7i.24xlarge` (96 vCPU / 768 GB) comfortably hosts
-  `FLEET_MAX_CONCURRENT_AGENTS=64`; `m7i.8xlarge` (32/128) suits 24–32.
+  `c7i`. Size from the arithmetic in the next subsection, not from the vCPU
+  count: the 32-agent worked example used below and in the appendix needs
+  ~36 vCPU / 72 GiB once the base and web tier are counted, so **`m7i.12xlarge`
+  (48 vCPU / 192 GiB)** fits it with headroom while a 32-vCPU instance is already
+  short. Step up to `r7i.12xlarge` (48/384) if you intend to raise
+  `FLEET_SANDBOX_MEMORY` to 4–8 GiB for heavy `pandas`/`matplotlib` work, and to
+  `r7i.24xlarge` (96/768) for `FLEET_MAX_CONCURRENT_AGENTS=64` at those per-agent
+  sizes. Don't buy the memory before you've raised the per-sandbox cap that would
+  use it — the default is 512 MiB.
 - **`maxPods`:** the sandboxes are Podman containers *inside* the pod, so they
   don't consume pod IPs or count against `maxPods`. Only fleet's own pod does.
 - **Karpenter:** annotate the pod `karpenter.sh/do-not-disrupt: "true"`. Node
@@ -978,6 +986,276 @@ kubectl -n fleet delete pod fleet-0 --wait=true
 Then, from the UI, run one interactive turn that executes `run_python` and one
 scheduled task, and confirm in `kubectl logs` that no line reports the
 `--storage-opt` fallback or a warm-pool cold-start failure.
+
+## Appendix: the complete manifest set
+
+The sections above explain each piece; this is all of it assembled in apply
+order, so nothing gets missed in transcription. It is the same content — if the
+two ever disagree, the numbered sections are the explanation and this is the
+transcription.
+
+**Fill these in first.** Every placeholder appears in angle brackets:
+
+| Placeholder | Where it comes from |
+|---|---|
+| `<ACCT>`, `<REGION>` | your AWS account ID and region |
+| `<SHA>` | the image tags you built in §3 |
+| `<SANDBOX_DIGEST>` | `sha256:…` of the sandbox image pushed in §3a — pin by digest |
+| `<ROLE_ARN>` | the IRSA/Pod Identity role from §7 |
+| `<ACM_ARN>` | the ACM certificate for your hostname |
+| `<RDS_HOST>`, `<RDS_SUBNET_CIDR>` | the RDS endpoint and its subnet range (§4) |
+| `<VPC_CIDR>` | the cluster VPC range, for the ALB ingress rule (§7) |
+| `<KUBE_DNS_IP>` | `kubectl -n kube-system get svc kube-dns -o jsonpath='{.spec.clusterIP}'` |
+| `<HOSTNAME>` | the public hostname, e.g. `fleet.example.com` |
+| secret values | §7; prefer External Secrets over literals |
+
+Sizing below is the worked 32-concurrent-agent example (`m7i.12xlarge`): raise
+`FLEET_MAX_CONCURRENT_AGENTS`, the per-sandbox caps, the pod resources, and the
+instance type **together** — see [§6](#resource-requests-count-the-sandboxes).
+
+```yaml
+# 1 ── Namespace. The PSA labels are what let the privileged pod be admitted (§7).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: fleet
+  labels:
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/audit: baseline
+    pod-security.kubernetes.io/warn: baseline
+    elbv2.k8s.aws/pod-readiness-gate-inject: enabled
+---
+# 2 ── StorageClass. xfs + prjquota is what makes the sandbox disk quota a HARD
+#      cap instead of the per-file ulimit fallback (§5).
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: fleet-gp3-xfs
+provisioner: ebs.csi.aws.com
+parameters:
+  type: gp3
+  iops: "6000"
+  throughput: "500"
+  fsType: xfs
+mountOptions: ["prjquota"]
+allowVolumeExpansion: true
+volumeBindingMode: WaitForFirstConsumer
+---
+# 3 ── Identity. No Role/RoleBinding: fleet makes zero Kubernetes API calls (§7).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: fleet
+  namespace: fleet
+  annotations:
+    eks.amazonaws.com/role-arn: <ROLE_ARN>
+automountServiceAccountToken: false
+---
+# 4 ── Secrets. Replace with an ExternalSecret / SecretProviderClass in a GitOps
+#      repo — the pod spec below is identical either way (§7).
+apiVersion: v1
+kind: Secret
+metadata:
+  name: fleet-env
+  namespace: fleet
+stringData:
+  OPENROUTER_API_KEY: "<OPENROUTER_API_KEY>"
+  FLEET_CHAT_DATABASE_URL: "postgres://chat:<CHAT_PW>@<RDS_HOST>:5432/chat?sslmode=require"
+  FLEET_SCHED_DATABASE_URL: "postgres://sched:<SCHED_PW>@<RDS_HOST>:5432/sched?sslmode=require"
+  FLEET_SERVER_TOKEN: "<SHARED_CHAT_TOKEN>"
+  ADMIN_API_KEY: "<ORCHESTRATOR_ADMIN_KEY>"
+  APP_SESSION_SECRET: "<WEB_SESSION_SECRET>"
+  # plus every MCP connector credential the bundle's manifest.yaml names
+---
+# 5 ── The workload.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: fleet
+  namespace: fleet
+spec:
+  replicas: 1                       # NEVER raise: single-owner leases + per-process semaphore
+  serviceName: fleet
+  podManagementPolicy: OrderedReady
+  updateStrategy: { type: RollingUpdate }
+  selector:
+    matchLabels: { app: fleet }
+  template:
+    metadata:
+      labels: { app: fleet }
+      annotations:
+        karpenter.sh/do-not-disrupt: "true"
+    spec:
+      serviceAccountName: fleet
+      # Without fsGroup, uid 1000 cannot write the fresh EBS volume and the pod
+      # crash-loops before it ever starts podman (§7).
+      securityContext:
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+      nodeSelector: { workload: fleet }
+      tolerations:
+        - { key: dedicated, value: fleet, effect: NoSchedule }
+      terminationGracePeriodSeconds: 90   # > FLEET_SHUTDOWN_GRACE_SECONDS
+
+      initContainers:
+        - name: pull-sandbox
+          image: <ACCT>.dkr.ecr.<REGION>.amazonaws.com/fleet:<SHA>
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              aws ecr get-login-password --region "$AWS_REGION" \
+                | podman login --username AWS --password-stdin "$ECR_REGISTRY"
+              podman pull "$FLEET_SANDBOX_IMAGE"
+          env:
+            - { name: AWS_REGION,   value: "<REGION>" }
+            - { name: ECR_REGISTRY, value: "<ACCT>.dkr.ecr.<REGION>.amazonaws.com" }
+            - { name: FLEET_SANDBOX_IMAGE, value: "<ACCT>.dkr.ecr.<REGION>.amazonaws.com/fleet-sandbox@<SANDBOX_DIGEST>" }
+            - { name: HOME,            value: "/var/lib/fleet" }
+            - { name: XDG_RUNTIME_DIR, value: "/var/lib/fleet/run" }
+          securityContext: { privileged: true, runAsUser: 1000 }
+          volumeMounts:
+            - { name: state, mountPath: /var/lib/fleet }
+
+      containers:
+        - name: fleet
+          image: <ACCT>.dkr.ecr.<REGION>.amazonaws.com/fleet:<SHA>
+          envFrom:
+            - secretRef: { name: fleet-env }
+          env:
+            - { name: FLEET_SERVER_ADDR,       value: "127.0.0.1:8080" }
+            - { name: FLEET_ORCHESTRATOR_ADDR, value: "127.0.0.1:8000" }  # must stay loopback
+            - { name: FLEET_CLIENT_CONFIG_DIR, value: "/opt/fleet/client" }
+            - { name: FLEET_DATA_DIR,          value: "/var/lib/fleet/data" }
+            - { name: FLEET_WORKSPACE_ROOT,    value: "/var/lib/fleet/workspace" }
+            - { name: HOME,                    value: "/var/lib/fleet" }
+            - { name: XDG_RUNTIME_DIR,         value: "/var/lib/fleet/run" }
+            - { name: FLEET_SANDBOX_IMAGE,     value: "<ACCT>.dkr.ecr.<REGION>.amazonaws.com/fleet-sandbox@<SANDBOX_DIGEST>" }
+            - { name: FLEET_PUBLIC_URL,        value: "https://<HOSTNAME>" }
+            - { name: FLEET_MAX_CONCURRENT_AGENTS,  value: "32" }
+            - { name: FLEET_SANDBOX_MEMORY,         value: "2g" }
+            - { name: FLEET_SANDBOX_CPUS,           value: "1.0" }
+            - { name: FLEET_SANDBOX_WARM_SIZE,      value: "4" }
+            - { name: FLEET_SHUTDOWN_GRACE_SECONDS, value: "60" }
+            - { name: FLEET_TIMEZONE,          value: "UTC" }
+            - { name: FLEET_TRUSTED_PROXIES,   value: "127.0.0.1,::1" }
+          securityContext:
+            privileged: true              # see §2 for what this buys and costs
+            allowPrivilegeEscalation: true # newuidmap/newgidmap file caps
+            runAsUser: 1000                # NOT root — rootful podman ignores keep-id
+            runAsGroup: 1000
+          resources:
+            requests: { cpu: "34", memory: "70Gi" }   # base + 32 × per-sandbox cap
+            limits:   { cpu: "34", memory: "70Gi" }
+          # exec, not httpGet: kubelet dials the pod IP and cannot reach loopback.
+          startupProbe:
+            exec: { command: ["curl", "-fsS", "http://127.0.0.1:8080/readyz"] }
+            periodSeconds: 10
+            failureThreshold: 30
+          livenessProbe:
+            exec: { command: ["curl", "-fsS", "http://127.0.0.1:8080/livez"] }
+            periodSeconds: 30
+            failureThreshold: 4
+          readinessProbe:
+            exec: { command: ["curl", "-fsS", "http://127.0.0.1:8080/readyz"] }
+            periodSeconds: 10
+          volumeMounts:
+            - { name: state, mountPath: /var/lib/fleet }
+
+        - name: web
+          image: <ACCT>.dkr.ecr.<REGION>.amazonaws.com/fleet-web:<SHA>
+          ports:
+            - { name: http, containerPort: 3000 }
+          env:
+            - { name: CHAT_SERVER_URL,         value: "http://127.0.0.1:8080" }
+            - { name: ORCHESTRATOR_SERVER_URL, value: "http://127.0.0.1:8000" }
+            - { name: CHAT_SERVER_TOKEN,         valueFrom: { secretKeyRef: { name: fleet-env, key: FLEET_SERVER_TOKEN } } }
+            - { name: ORCHESTRATOR_SERVER_TOKEN, valueFrom: { secretKeyRef: { name: fleet-env, key: ADMIN_API_KEY } } }
+            - { name: APP_SESSION_SECRET,        valueFrom: { secretKeyRef: { name: fleet-env, key: APP_SESSION_SECRET } } }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+          resources:
+            requests: { cpu: "500m", memory: "1Gi" }
+            limits:   { cpu: "2",    memory: "2Gi" }
+          readinessProbe:
+            httpGet: { path: /, port: 3000 }
+            periodSeconds: 10
+          lifecycle:
+            preStop:
+              exec: { command: ["sleep", "20"] }   # outlive ALB deregistration
+
+  volumeClaimTemplates:                  # immutable — see the Argo notes in §7
+    - metadata: { name: state }
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: fleet-gp3-xfs
+        resources: { requests: { storage: 400Gi } }
+---
+# 6 ── Service (the web tier is the only exposed port).
+apiVersion: v1
+kind: Service
+metadata: { name: fleet, namespace: fleet }
+spec:
+  selector: { app: fleet }
+  ports: [{ name: http, port: 3000, targetPort: 3000 }]
+---
+# 7 ── Ingress. The idle timeout is what keeps SSE turns from being severed.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: fleet
+  namespace: fleet
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+    alb.ingress.kubernetes.io/certificate-arn: <ACM_ARN>
+    alb.ingress.kubernetes.io/ssl-redirect: "443"
+    alb.ingress.kubernetes.io/load-balancer-attributes: idle_timeout.timeout_seconds=1800
+    alb.ingress.kubernetes.io/healthcheck-path: /
+spec:
+  ingressClassName: alb
+  rules:
+    - host: <HOSTNAME>
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend: { service: { name: fleet, port: { number: 3000 } } }
+---
+# 8 ── NetworkPolicy. This governs agent-executed code too: sandbox egress NATs
+#      through the pod's netns (§7). Needs a policy-enforcing CNI.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: fleet, namespace: fleet }
+spec:
+  podSelector: { matchLabels: { app: fleet } }
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    - from: [{ ipBlock: { cidr: <VPC_CIDR> } }]
+      ports: [{ port: 3000, protocol: TCP }]
+  egress:
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } }
+          podSelector: { matchLabels: { k8s-app: kube-dns } }
+      ports: [{ port: 53, protocol: UDP }, { port: 53, protocol: TCP }]
+    - to: [{ ipBlock: { cidr: <RDS_SUBNET_CIDR> } }]
+      ports: [{ port: 5432, protocol: TCP }]
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [<VPC_CIDR>, 169.254.169.254/32]
+      ports: [{ port: 443, protocol: TCP }]
+```
+
+Then, in order: create the node group (§6), apply the above, `kubectl exec` in and
+run the §10 checklist, add an admin (`fleet admin add <email>`), and log in.
+
+Not included above, deliberately: the metrics scrape sidecar and its ConfigMap
+(optional, §7 — add it once Prometheus is wired up), and the `containers.conf`
+`dns_servers` pin, which belongs in the **image** rather than the manifest (§8).
 
 ## What this deployment does not change
 
