@@ -43,6 +43,18 @@ prior versions are listed because none have shipped.
   the per-file ulimit still applies — and a cancelled turn still never counts
   toward the latch, so a genuinely inconclusive answer still never latches
   permanently.
+- The Operations Center rendered its username/password login card whenever the
+  initial `/me` probe failed for any reason other than 403 — including the 500
+  the orchestrator deliberately answers when its fail-closed session-epoch
+  lookup can't reach the chat DB, and thrown network failures. During a chat-DB
+  blip every user loading the page was therefore shown a login form instead of
+  an error. No session was destroyed — the cookie and the stored bearer
+  survived, and a reload after recovery restored the dashboard — but the page
+  invited people to type credentials mid-incident: the same conflation of
+  "unauthenticated" with "backend down" already fixed for the chat plane. The
+  probe now applies that plane's verdict rule (`bootstrapFailure.ts`: only
+  401/403 are auth verdicts); a 5xx or a network failure surfaces as a distinct
+  "can't reach the server" retry notice and leaves the stored bearer untouched.
 - Every masked MCP-broker failure was undiagnosable. The credential owner
   replaces any operational error with a fixed `mcpbroker: credential-owner …`
   sentence before it crosses back to the parent — correct, because the real error
