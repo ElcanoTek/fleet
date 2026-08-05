@@ -19,6 +19,64 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- `fleet update` installed the new binaries and web build BEFORE the
+  sandbox-image gate, so the gate's fail-closed die aborted with new code
+  already on disk while the old service kept running — a silent, deferred
+  inconsistency (the next restart, crash, or reboot would run code no update
+  ever finished deploying) that contradicted the die message's implication
+  that nothing had changed. The sandbox step now runs before the
+  build/install step, so the abort leaves the box coherent: old binaries on
+  disk, old service running. Separately, update.sh resolved the bundle's
+  `${FLEET_SANDBOX_IMAGE:-}` image reference against the update shell's
+  environment, while the service resolves it from
+  `EnvironmentFile=/etc/fleet/fleet.env` (which update.sh deliberately never
+  sources): a value set only in the env file forced a pointless multi-GB
+  on-box build on every update and could trip the new die spuriously, while a
+  value exported only in the operator's shell silently skipped the whole
+  sandbox step — absence probe included — recreating the
+  boots-clean-breaks-on-first-tool-call failure the gate exists to prevent.
+  The reference is now read from the service's env file using doctor.sh's
+  `env_get` idiom, matching what the restarted service will actually see.
+- The CSRF canonical-origin hardening locked operators out of a box reached
+  over an SSH tunnel. `verifyOrigin` compared the Origin host strictly against
+  the configured `NEXT_PUBLIC_PUBLIC_ORIGIN` (which bootstrap writes on every
+  deploy), and it guards every mutating route including the login form — so a
+  browser at `http://localhost:3000` tunneled to a `--domain` box got 403 on
+  every POST, presenting as a total auth outage. A loopback Origin
+  (`localhost` / `127.0.0.1` / `[::1]`, any port — exact hostnames only, so a
+  `localhost.evil.example` lookalike does not qualify) is now also accepted
+  when it exactly matches the connection's own Host header: that pair is only
+  producible by a browser genuinely connected to the box's loopback (the
+  tunnel), never by a victim's browser talking to the real deployment, and
+  x-forwarded-host stays ignored so a forwarded-header attack from a remote
+  origin still fails. A mismatched local port (a different origin) is still
+  rejected, and the server-side 403 log now names the expected vs. actual
+  host so the failure is self-diagnosable.
+- An async run_if gate's settle write could clobber a concurrent reschedule or
+  edit. Both settle paths conditioned only on the task still being `scheduled`
+  — a status an edit legitimately keeps — and the bounded async pool stretched
+  the dispatch-to-settle window from milliseconds to the gate's full runtime
+  (up to 300s). Concretely: a task postponed by an operator while its slow
+  gate evaluated would run tonight anyway on the stale pass verdict, and a
+  stale decline overwrote the operator's new `scheduled_for` with its retry
+  backoff. Every gate settle write (promote to pending, skip record, and the
+  recurrence-ended cancel) is now a compare-and-swap that also requires the
+  row to still carry the `scheduled_for` the evaluation was dispatched
+  against, so any interleaved edit or reschedule wins, the stale verdict is
+  discarded (and logged as such, without counting a skip that never
+  happened), and the next due tick re-evaluates the task's current
+  definition.
+- `Scheduler.Stop`'s run_if gate drain could panic the process during graceful
+  shutdown. Stop closed the stop channel and immediately waited on the gate
+  WaitGroup, but nothing waited for the scheduler's run loop to exit — a tick
+  already inside the loop body kept running and could dispatch another gate
+  evaluation (`WaitGroup.Add`) concurrently with that wait, which
+  sync.WaitGroup forbids. The resulting misuse panic fired in Stop's drain
+  goroutine, which has no recover (the per-tick recover covers only the tick),
+  so it killed the process mid-shutdown and skipped every remaining deferred
+  cleanup in main. The run loop now signals completion on return and Stop
+  waits for it to exit before draining the gates — inside the same 5-second
+  bound as before — so no new dispatch can ever race the drain.
 - The MCP stdio transport read each response line from a server subprocess
   with no ceiling. In broker mode those servers run host-side, so a single
   data-driven oversized response — a connector returning a giant query result

@@ -256,7 +256,14 @@ func TestHandleSkipLogLineIsJSON(t *testing.T) {
 	}
 
 	// A reason larger than the log clamp is truncated in the LOG line only;
-	// last_skip_reason keeps the full text for diagnosis.
+	// last_skip_reason keeps the full text for diagnosis. Re-fetch the row
+	// first: the skip above advanced scheduled_for, and a settle only lands
+	// for the row state it was dispatched against — exactly what a real
+	// dispatch carries (the tick always evaluates a freshly fetched row).
+	task, err := store.GetTask(task.ID)
+	if err != nil {
+		t.Fatalf("refetch task: %v", err)
+	}
 	buf.Reset()
 	longReason := "exit 3 (want 0): " + strings.Repeat("x", 4096)
 	s.handleSkip(task, longReason)
@@ -626,6 +633,74 @@ func TestDeclinedOneShotGateBacksOff(t *testing.T) {
 	}
 }
 
+// TestEditDuringGateEvalWins pins the async-settle guard end to end: gates
+// settle asynchronously (up to their full 300s runtime after dispatch), so an
+// operator can legitimately edit or postpone a task while its gate is still
+// running — status stays `scheduled`, which the old status-only settle
+// condition could not distinguish from "unchanged". The stale verdict must be
+// discarded on BOTH settle paths: a pass must not promote a task that was
+// postponed mid-evaluation (it would run tonight anyway), and a decline's
+// backoff must not overwrite the operator's new scheduled_for.
+func TestEditDuringGateEvalWins(t *testing.T) {
+	s, store := newTestScheduler(t)
+	ctx := context.Background()
+
+	past := time.Now().UTC().Add(-time.Minute)
+	mk := func(prompt, gateCmd string) *models.Task {
+		ts := past
+		task := &models.Task{
+			ID: uuid.New(), Prompt: prompt, Status: models.TaskStatusScheduled, CreatedAt: time.Now().UTC(),
+			ScheduledFor: &ts,
+			// Slow enough that the edit below lands while the gate is in flight.
+			RunIf: &models.RunIf{Command: gateCmd, ExitCodeIs: 0, TimeoutSeconds: 30},
+		}
+		if _, err := store.AddTaskWithContext(ctx, task); err != nil {
+			t.Fatalf("add %s: %v", prompt, err)
+		}
+		return task
+	}
+	passing := mk("edited while passing gate runs", "sleep 2; exit 0")
+	declining := mk("edited while declining gate runs", "sleep 2; exit 1")
+
+	s.ProcessScheduledTasks() // dispatches both gates asynchronously
+
+	// The operator postpones both tasks while their gates are still running.
+	tomorrow := time.Now().UTC().Add(24 * time.Hour).Truncate(time.Microsecond)
+	for _, task := range []*models.Task{passing, declining} {
+		edit := storage.TaskEdit{Prompt: task.Prompt, ScheduledFor: &tomorrow}
+		if _, err := store.UpdateEditableTask(ctx, task.ID, edit); err != nil {
+			t.Fatalf("edit %s mid-evaluation: %v", task.Prompt, err)
+		}
+	}
+
+	s.gateWG.Wait() // both stale verdicts settle against the edited rows
+
+	got, err := store.GetTask(passing.ID)
+	if err != nil {
+		t.Fatalf("get passing: %v", err)
+	}
+	if got.Status != models.TaskStatusScheduled {
+		t.Errorf("postponed task status = %s, want scheduled (a stale pass verdict must not run it tonight)", got.Status)
+	}
+	if got.ScheduledFor == nil || !got.ScheduledFor.Equal(tomorrow) {
+		t.Errorf("postponed task scheduled_for = %v, want the operator's %v kept", got.ScheduledFor, tomorrow)
+	}
+
+	got, err = store.GetTask(declining.ID)
+	if err != nil {
+		t.Fatalf("get declining: %v", err)
+	}
+	if got.Status != models.TaskStatusScheduled {
+		t.Errorf("postponed task status = %s, want scheduled", got.Status)
+	}
+	if got.ScheduledFor == nil || !got.ScheduledFor.Equal(tomorrow) {
+		t.Errorf("postponed task scheduled_for = %v, want the operator's %v (a stale decline's backoff must not clobber it)", got.ScheduledFor, tomorrow)
+	}
+	if got.SkipCount != 0 {
+		t.Errorf("postponed task skip_count = %d, want 0 (the discarded verdict must not count as a skip)", got.SkipCount)
+	}
+}
+
 // TestStopDrainsInFlightGates pins the bounded shutdown drain: a gate still
 // evaluating when Stop is called must have its promote/skip settle write land
 // before Stop returns (gates faster than gateDrainTimeout — the normal,
@@ -657,5 +732,56 @@ func TestStopDrainsInFlightGates(t *testing.T) {
 	}
 	if got.Status != models.TaskStatusPending {
 		t.Errorf("status after Stop = %s, want pending (the passing gate's settle write must land before Stop returns)", got.Status)
+	}
+}
+
+// TestStopDoesNotRaceRunLoopGateDispatch pins Stop against the real Start/Stop
+// lifecycle: Stop must wait for runLoop to exit BEFORE draining gateWG. A tick
+// already inside the loop body when stop closes can still call gateWG.Add via
+// tryDispatchGateEval, and an Add racing the drain's Wait is a sync.WaitGroup
+// misuse — a panic in Stop's drain goroutine (no recover there) that kills the
+// process mid-shutdown. The interleaving is what the race detector flags, so
+// this test is load-bearing under -race: before the fix it reported the
+// unsynchronized Add/Wait pair on every run where a gate was in flight at
+// Stop. The gate dispatch is detected via a marker file the gate command
+// writes — deliberately NOT via the scheduler's own mutexes, which would add
+// the very happens-before edge the test must prove exists without them.
+func TestStopDoesNotRaceRunLoopGateDispatch(t *testing.T) {
+	s, store := newTestScheduler(t)
+	s.tickInterval = 5 * time.Millisecond
+	ctx := context.Background()
+
+	marker := filepath.Join(t.TempDir(), "gate-dispatched")
+	past := time.Now().UTC().Add(-time.Minute)
+	gated := &models.Task{
+		ID: uuid.New(), Prompt: "gated", Status: models.TaskStatusScheduled, CreatedAt: time.Now().UTC(),
+		ScheduledFor: &past,
+		// Long enough to still be in flight when Stop is called, short enough
+		// to settle well inside gateDrainTimeout.
+		RunIf: &models.RunIf{Command: "touch " + marker + "; sleep 0.5", ExitCodeIs: 0, TimeoutSeconds: 30},
+	}
+	if _, err := store.AddTaskWithContext(ctx, gated); err != nil {
+		t.Fatalf("add gated: %v", err)
+	}
+
+	s.Start()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := os.Stat(marker); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("runLoop never dispatched the gate")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	s.Stop() // must first wait out runLoop, then drain the in-flight gate
+
+	got, err := store.GetTask(gated.ID)
+	if err != nil {
+		t.Fatalf("get gated: %v", err)
+	}
+	if got.Status != models.TaskStatusPending {
+		t.Errorf("status after Stop = %s, want pending (drain semantics must survive the loop-exit wait)", got.Status)
 	}
 }
