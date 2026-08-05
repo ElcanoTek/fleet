@@ -698,6 +698,48 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **EKS deployment guide (`docs/EKS-DEPLOYMENT.md`):** an operator recipe for
+  running fleet on Amazon EKS as **one pod on one large, dedicated node** —
+  keeping the single-process/single-writer model of
+  ADR-0004 intact rather than sharding sandboxes across worker nodes (no such
+  seam exists; ADR-0011 removed the worker registry). Covers the rootless
+  Podman-in-a-pod requirements that fail *silently* if missed (subuid ranges,
+  `newuidmap` file caps vs. privilege escalation, an overlay driver instead of
+  vfs, `/dev/fuse` + `/dev/net/tun`, and the writable cgroup subtree without
+  which `--memory`/`--cpus` are ignored and every per-sandbox cap becomes
+  fiction), Containerfiles for the two images the repo does not ship, RDS
+  two-database setup, an xfs+prjquota StorageClass so the writable layer gets a
+  hard **total** cap on top of the per-file `ulimit` that applies regardless
+  (both helpers installed in the image, since pasta is Podman ≥ 5.0's default for
+  normal turns while the allowlisted-egress posture requires slirp4netns
+  specifically), pod sizing that accounts
+  for sandbox cgroups nesting under the pod limit, exec health probes (kubelet
+  dials the pod IP and cannot reach the loopback-only listeners), the ALB idle
+  timeout that otherwise severs SSE turns, and a verification checklist. Also
+  answers the objections a Kubernetes-native reviewer raises, with the cluster
+  integration each one needs: Pod Security Standards / Kyverno-Gatekeeper
+  exceptions for the privileged pod, `fsGroup` so uid 1000 can write the EBS
+  volume, IRSA or Pod Identity with **no** RBAC (fleet makes zero Kubernetes API
+  calls), a NetworkPolicy that does govern agent egress (sandbox traffic NATs
+  through the pod's netns), single-AZ pinning and the honest RTO/RPO of a
+  single-writer workload, Kustomize/Argo packaging including the
+  `volumeClaimTemplates`-immutability and PVC-prune traps, a loopback-preserving
+  metrics scrape sidecar, and the defaults that silently break this pod
+  (NodeLocal DNSCache vs. `slirp4netns`, namespace `ResourceQuota`, VPA `Auto`,
+  runtime-security signatures firing on normal nested-container operation).
+  Closes with an appendix carrying the whole manifest set assembled in apply
+  order with a placeholder table, so it transcribes in one paste rather than
+  nine. Flags the deployment gap the new `fleet-backup.timer` leaves on
+  Kubernetes — the units and their doctor coverage are systemd-only, so a cluster
+  install silently has no scheduled dumps unless RDS backups or a `CronJob` are
+  chosen deliberately (the #966 failure mode), while noting the in-process Doctor
+  panel does still work and reports those checks as `skip` rather than inventing
+  advisories. No Helm chart or in-tree manifests: ADR-0004's enforcement clause stands,
+  and an unmaintained chart would imply support this path does not have. States
+  its own scope honestly: hand-verified, **not** exercised by CI, no chart or
+  manifest shipped in-tree, and explicit about the weaker outer trust boundary a
+  privileged pod implies.
+
 - **Scheduled database backups are part of the deployment now, not a doc the
   operator had to find.** `docs/BACKUP_RESTORE.md` described a
   `fleet-backup.service` + `fleet-backup.timer` pair and told the operator to

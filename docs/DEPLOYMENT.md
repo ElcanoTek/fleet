@@ -15,6 +15,14 @@ proxies, server-side over loopback, to the two Go backends the single process
 boots (chat on `127.0.0.1:8080`, orchestrator on `127.0.0.1:8000`). Caddy fronts the web
 app with TLS; the backends stay loopback-only.
 
+> **Your platform standard is Kubernetes?** fleet's shipped target is this
+> single-VM/systemd model ([ADR-0004](adr/0004-single-box-vm-native-deployment.md)),
+> and no chart or manifest lives in the tree. For an operator recipe that keeps
+> the one-process/one-node model intact inside EKS — one pod on one big node,
+> Podman running *inside* it, nothing split across worker nodes — see
+> [`docs/EKS-DEPLOYMENT.md`](EKS-DEPLOYMENT.md). It is hand-verified, not
+> CI-exercised.
+
 > **Single-host by design.** Scheduled-task crash recovery uses single-owner
 > database leases and the worker-pool concurrency cap is a per-process semaphore —
 > both assume one running process. fleet scales **vertically**: put it on a
