@@ -419,6 +419,19 @@ func TestUpdateDryRunSmoke(t *testing.T) {
 			t.Errorf("update --dry-run plan missing %q\n--- output ---\n%s", want, out)
 		}
 	}
+	// The sandbox gate must run BEFORE the install step: its fail-closed abort
+	// (missing image, failed build) has to leave the box coherent — old
+	// binaries on disk, old service running. With the old order the die fired
+	// AFTER the new binaries were installed, leaving new code on disk while
+	// the old service kept running and the message implied nothing changed.
+	sandboxAt := strings.Index(out, "Rebuilding the sandbox image")
+	buildAt := strings.Index(out, "Building the fleet binary + web app")
+	if sandboxAt < 0 || buildAt < 0 {
+		t.Fatalf("plan missing the sandbox (%d) or build (%d) step header\n--- output ---\n%s", sandboxAt, buildAt, out)
+	}
+	if sandboxAt > buildAt {
+		t.Errorf("sandbox gate (at %d) must run before the binary/web install step (at %d)\n--- output ---\n%s", sandboxAt, buildAt, out)
+	}
 }
 
 // TestBuildSandboxImagePrintTag — update.sh's rebuild gate keys on this exact
@@ -535,18 +548,49 @@ func TestUpdatePrebuiltImageSkipsSandboxBuild(t *testing.T) {
 		}
 	}
 	assertSkip([]string{"FLEET_CLIENT_CONFIG_DIR=" + dir}, "ghcr.io/example/fleet-sandbox:v7")
-	// The generic bundle's image key is "${FLEET_SANDBOX_IMAGE:-}" — the env
-	// override must interpolate to the same skip (empty ⇒ build-on-box, which
-	// TestUpdateDryRunSmoke covers).
-	assertSkip([]string{"FLEET_SANDBOX_IMAGE=ghcr.io/example/env-override:v1"}, "ghcr.io/example/env-override:v1")
+
+	// The generic bundle's image key is "${FLEET_SANDBOX_IMAGE:-}". The
+	// SERVICE resolves that var from its EnvironmentFile
+	// (/etc/fleet/fleet.env), so update.sh must interpolate from the SAME
+	// place — a value set there must produce the same skip.
+	envFile := filepath.Join(t.TempDir(), "fleet.env")
+	if err := os.WriteFile(envFile, []byte("FLEET_SANDBOX_IMAGE=ghcr.io/example/env-file:v1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	assertSkip([]string{"FLEET_ENV_FILE=" + envFile}, "ghcr.io/example/env-file:v1")
+
+	// …and a var exported only in the update SHELL must NOT skip the gate:
+	// the service never sees the shell's environment, so honoring it here
+	// silently skipped the whole sandbox step — absence probe included —
+	// recreating the boots-clean-breaks-on-first-tool-call failure the gate
+	// exists to prevent. The empty env file isolates the run from any real
+	// /etc/fleet/fleet.env on the host.
+	emptyEnvFile := filepath.Join(t.TempDir(), "fleet.env")
+	if err := os.WriteFile(emptyEnvFile, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runScript(t, []string{
+		"FLEET_ENV_FILE=" + emptyEnvFile,
+		"FLEET_SANDBOX_IMAGE=ghcr.io/example/shell-only:v1",
+	}, "update.sh", "--dry-run", "--no-pull")
+	if err != nil {
+		t.Fatalf("update --dry-run exited non-zero: %v\n--- output ---\n%s", err, out)
+	}
+	if strings.Contains(out, "sandbox.image=") {
+		t.Errorf("a shell-only FLEET_SANDBOX_IMAGE must not skip the sandbox gate (the service cannot see it)\n--- output ---\n%s", out)
+	}
+	if !strings.Contains(out, "build-sandbox-image.sh") {
+		t.Errorf("plan must keep the on-box sandbox build when the env file leaves the image unset\n--- output ---\n%s", out)
+	}
 }
 
 // TestUpdateFailedSandboxBuildRefusesRestart — a failed sandbox build is only
 // survivable while the resolved ref still exists in the service user's store
 // (Containerfile changed under the same tag: the old image is stale but
 // serviceable). When the ref is absent — a sandbox.tag rename plus one
-// transient build failure — restarting would leave the box reporting healthy
-// while every sandboxed tool call fails, so update.sh must die before step 5.
+// transient build failure — continuing would leave the box reporting healthy
+// while every sandboxed tool call fails, so update.sh must die BEFORE the
+// install step, leaving old binaries on disk and the old service running.
 // The failure path needs a real failing podman build, so this pins the
 // load-bearing lines the way TestUpdateSandboxGatePresent does.
 func TestUpdateFailedSandboxBuildRefusesRestart(t *testing.T) {
@@ -559,9 +603,12 @@ func TestUpdateFailedSandboxBuildRefusesRestart(t *testing.T) {
 	for _, want := range []string{
 		// Only a verified still-present ref downgrades the failure to a warn…
 		`if [[ -n "$ref_now" && "$(sandbox_image_state "$ref_now")" == "present" ]]; then`,
-		// …everything else refuses the restart, with the recovery spelled out.
+		// …everything else refuses to install the update, with the recovery
+		// spelled out — and, because the gate runs before the install step,
+		// the die's nothing-changed claim is actually true.
 		`die "sandbox image build failed`,
-		"refusing to restart",
+		"refusing to install",
+		"nothing was installed and the ${SERVICE_NAME} service was NOT restarted",
 		`finish:  fleet update --no-pull`,
 		// The store probe must not read an environmental podman failure (e.g.
 		// the unit stopped and /run/<user> absent) as "image missing": the
@@ -570,6 +617,10 @@ func TestUpdateFailedSandboxBuildRefusesRestart(t *testing.T) {
 		`install -d -o "$service_user" -g "$service_user" -m 0700 "/run/${service_user}"`,
 		`sandbox_image_state() {`,
 		`absent) build_reason="${ref_now} missing from the sandbox image store"`,
+		// The image ref is resolved from the service's env file (doctor.sh's
+		// env_get idiom), never from the update shell's environment — the
+		// unit reads EnvironmentFile=, not this shell.
+		`env_get "$var" "$backend_env_file"`,
 	} {
 		if !strings.Contains(script, want) {
 			t.Errorf("update.sh must contain %q", want)
