@@ -59,7 +59,10 @@ func startDefaultProductionMCPRuntime(bundle *clientconfig.Bundle, cfg *config.C
 func (i *brokerMCPInventory) replace(descriptors []mcpbroker.ServerDescriptor) {
 	servers := make(map[string]scheduledrun.TaskMCPServerInfo, len(descriptors))
 	for _, descriptor := range descriptors {
-		servers[descriptor.Name] = scheduledrun.TaskMCPServerInfo{UsesWorkspace: descriptor.UsesWorkspace}
+		servers[descriptor.Name] = scheduledrun.TaskMCPServerInfo{
+			UsesWorkspace: descriptor.UsesWorkspace,
+			ToolAllowlist: append([]string(nil), descriptor.ToolAllowlist...),
+		}
 	}
 	i.mu.Lock()
 	i.servers = servers
@@ -71,6 +74,7 @@ func (i *brokerMCPInventory) snapshot() map[string]scheduledrun.TaskMCPServerInf
 	defer i.mu.RUnlock()
 	out := make(map[string]scheduledrun.TaskMCPServerInfo, len(i.servers))
 	for name, server := range i.servers {
+		server.ToolAllowlist = append([]string(nil), server.ToolAllowlist...)
 		out[name] = server
 	}
 	return out
@@ -271,7 +275,10 @@ func taskMCPInventoryFromResolvedSpecs(src map[string]agent.MCPServerSpec) map[s
 	out := make(map[string]scheduledrun.TaskMCPServerInfo, len(src))
 	for name, spec := range src {
 		if spec.Enabled {
-			out[name] = scheduledrun.TaskMCPServerInfo{UsesWorkspace: agentcore.EnvReferencesWorkspace(spec.Env)}
+			out[name] = scheduledrun.TaskMCPServerInfo{
+				UsesWorkspace: agentcore.EnvReferencesWorkspace(spec.Env),
+				ToolAllowlist: append([]string(nil), spec.ToolAllowlist...),
+			}
 		}
 	}
 	return out
@@ -296,7 +303,14 @@ func validateConnectorParentEnvSeparation(bundle *clientconfig.Bundle) error {
 		if parent[upper] {
 			return true
 		}
-		for _, prefix := range []string{"FLEET_", "CHAT_", "CUTLASS_", "DB_", "OPENROUTER_"} {
+		// CUTLASS_ is deliberately NOT a blanket parent-owned prefix: fleet's
+		// own connector contract (internal/agentcore/mcp_workspace.go) hands
+		// CUTLASS_RUN_WORKDIR / CUTLASS_MOC_TASK_ID / CUTLASS_REPORT_DIR /
+		// CUTLASS_INPUT_DIR to cutlass-family MCP servers as bundle-declared
+		// wire keys, and operators pass knobs like CUTLASS_ALLOWED_DIRS through
+		// to connectors. The CUTLASS_* names the parent runtime itself resolves
+		// are derived in parentOwnedRuntimeEnvNames instead.
+		for _, prefix := range []string{"FLEET_", "CHAT_", "DB_", "OPENROUTER_"} {
 			if strings.HasPrefix(upper, prefix) {
 				return true
 			}
@@ -356,18 +370,38 @@ func validAccountEnvSuffix(suffix string) bool {
 func parentOwnedRuntimeEnvNames(bundle *clientconfig.Bundle) []string {
 	names := []string{
 		"FLEET_ENV_FILE", clientconfig.EnvDir,
-		"OPENROUTER_API_KEY", "FLEET_SERVER_TOKEN", "CHAT_SERVER_TOKEN", "ADMIN_API_KEY",
+		"OPENROUTER_API_KEY", "FLEET_SERVER_TOKEN", "ADMIN_API_KEY",
 		"DATABASE_URL", "FLEET_CHAT_DATABASE_URL", "FLEET_SCHED_DATABASE_URL", "DB_PASSWORD",
 		"TAVILY_API_KEY", "FLEET_SMTP_PASSWORD", "FLEET_WEBHOOK_SECRET", "FLEET_VAPID_PRIVATE_KEY",
-		"FLEET_MCP_OAUTH_ENCRYPTION_KEY", "CHAT_MCP_OAUTH_ENCRYPTION_KEY", "CUTLASS_MCP_OAUTH_ENCRYPTION_KEY",
-		"FLEET_LOG_ARCHIVE_ENCRYPTION_KEY", "CHAT_LOG_ARCHIVE_ENCRYPTION_KEY", "CUTLASS_LOG_ARCHIVE_ENCRYPTION_KEY",
+		"FLEET_MCP_OAUTH_ENCRYPTION_KEY", "FLEET_LOG_ARCHIVE_ENCRYPTION_KEY",
+		// Scheduled-task inputs the boot loader reads verbatim under their
+		// legacy names (exact os.Getenv, outside the alias machinery).
+		"CUTLASS_TASK_MODEL", "CUTLASS_TASK_FALLBACK_MODEL", "CUTLASS_TASK_MAX_ITERATIONS",
+		"CUTLASS_INPUT_FILES", "CUTLASS_IMAGE_OUTPUT", "CUTLASS_IMAGE_MODEL",
+		// Knobs the parent still resolves after broker boot through the
+		// FLEET_/CHAT_/CUTLASS_ alias machinery: config reload watches or
+		// re-applies the first group (internal/config/reload.go); the second
+		// group is read lazily per run (config.lookupFleet,
+		// agentcore.EnvPrefix).
+		"FLEET_SERVER_ADDR", "FLEET_MAX_CONCURRENT_AGENTS",
+		"FLEET_TEMPERATURE", "FLEET_MAX_COST_USD", "FLEET_MAX_TOTAL_TOKENS", "FLEET_MAX_ITERATIONS",
+		"FLEET_LOG_FILE", "FLEET_WORKSPACE_ROOT", "FLEET_RETRY_MAX_ATTEMPTS",
+		"FLEET_DISABLE_OPENROUTER_MODELS", "FLEET_DISABLE_PROMPT_CACHE",
+		"FLEET_OPENROUTER_BASE_URL", "FLEET_MODEL_CACHE_TTL_MINUTES",
+		"FLEET_CONTEXT_PRESSURE_WARN_THRESHOLD", "FLEET_CONTEXT_COMPACTION_THRESHOLD",
+		"FLEET_SCHEDULED_AUTO_COMPACT",
 		// Process/runtime inputs still read after broker boot. A connector cannot
 		// claim one of these because removing it would mutate parent behavior.
 		"HOME", "PATH", "TMPDIR", "SHELL", "USER", "LANG", "TZ", "NOTIFY_SOCKET",
 		"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",
 		"SSL_CERT_FILE", "SSL_CERT_DIR", "SCHED_DATABASE_URL",
 		"LLM_MAX_TOKENS",
-		"REASONING_ENABLED", "REASONING_EFFORT", "PERSONA", "PERSONA_DEFAULT", "SYSTEM_PROMPT",
+		"REASONING_ENABLED", "REASONING_EFFORT", "SYSTEM_PROMPT",
+		// The default-persona knobs resolve through the alias machinery AND their
+		// bare historical spelling (config.getenvFleetOrBare), so both forms are
+		// enumerated: the canonical one carries its legacy prefixes via EnvAliases,
+		// the bare one has no alias family of its own.
+		"FLEET_PERSONA", "PERSONA", "FLEET_PERSONA_DEFAULT", "PERSONA_DEFAULT",
 		"MAX_ITERATIONS", "LOG_LEVEL", "DEBUG", "VERBOSE",
 	}
 	if bundle != nil {
@@ -376,7 +410,16 @@ func parentOwnedRuntimeEnvNames(bundle *clientconfig.Bundle) []string {
 			names = append(names, provider.APIKeyEnv)
 		}
 	}
-	return names
+	// Every name is protected in ALL the spellings config's prefix alias
+	// machinery resolves for it. The CUTLASS_ prefix as a whole must stay
+	// claimable by bundles (the connector wire contract — see the isParent
+	// comment above), so the legacy spellings of parent-owned knobs are
+	// derived from config's own prefix list, never hand-enumerated.
+	out := make([]string, 0, len(names))
+	for _, name := range names {
+		out = append(out, config.EnvAliases(name)...)
+	}
+	return out
 }
 
 func scrubParentConnectorState(bundle *clientconfig.Bundle, cfg *config.Config, resolvedSpecs map[string]agent.MCPServerSpec) error {

@@ -37,7 +37,7 @@ export async function GET(_request: NextRequest, context: RouteContext) {
   let upstream: Response;
   try {
     upstream = await chatServerFetch(
-      session.email,
+      session,
       `/conversations/${encodeURIComponent(conversationId)}/workspace/${upstreamPath}`,
       { method: "GET" },
     );

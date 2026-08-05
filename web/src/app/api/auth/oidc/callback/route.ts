@@ -6,6 +6,7 @@ import {
   isSecureRequest,
   sessionMaxAgeSeconds,
 } from "@/app/lib/auth";
+import { fetchSessionEpoch } from "@/app/lib/chatServer";
 import {
   buildRedirectUri,
   decodeJwtClaims,
@@ -106,12 +107,19 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     return fail("oidc_domain");
   }
 
+  // The session epoch pins the cookie to the account's current password, so an
+  // admin reset evicts SSO sessions too. An email chat has not provisioned still
+  // gets a well-formed epoch (it just never matches once the account exists), so
+  // the no-access path is unchanged; only an unreachable backend fails here.
+  const epoch = await fetchSessionEpoch(validation.email);
+  if (!epoch) return fail("oidc_error");
+
   // Authenticated — mint the standard session cookie and go home.
   const res = NextResponse.redirect(getRedirectUrl(request, "/"), { status: 303 });
   const secure = isSecureRequest(request);
   res.cookies.set({
     name: getSessionCookieName(),
-    value: await createSessionToken(validation.email),
+    value: await createSessionToken(validation.email, epoch),
     httpOnly: true,
     sameSite: "lax",
     secure,

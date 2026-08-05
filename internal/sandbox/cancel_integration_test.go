@@ -12,6 +12,7 @@ package sandbox
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -191,4 +192,115 @@ func TestContainerBashPoisoned_FailsClosed(t *testing.T) {
 	if !strings.Contains(ErrPoisoned.Error(), "retired") {
 		t.Errorf("ErrPoisoned message should explain retirement: %q", ErrPoisoned.Error())
 	}
+}
+
+// newPythonCancelTestContainer is newCancelTestContainer with the real
+// python_bridge.py, for proving the #796 guard on the run_python path with a
+// live kernel. Same podman gating; also skipped when the bridge script is not
+// at its expected relative path.
+func newPythonCancelTestContainer(t *testing.T) (*Sandbox, string) {
+	t.Helper()
+	if runtime.GOOS != "linux" {
+		t.Skip("container backend tested on linux only")
+	}
+	if _, err := exec.LookPath("podman"); err != nil {
+		t.Skip("podman not available")
+	}
+	bridge, err := os.ReadFile("../tools/python_bridge.py")
+	if err != nil {
+		t.Skipf("python_bridge.py not readable: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	workspace := t.TempDir()
+	sb, err := NewContainer(ctx, ContainerConfig{
+		Image:            testImage(),
+		WorkspaceHostDir: workspace,
+		BridgeScript:     bridge,
+	})
+	if err != nil {
+		t.Fatalf("NewContainer: %v", err)
+	}
+	t.Cleanup(sb.Close)
+
+	// Same vacuousness guard as the bash variant: rootless podman maps the
+	// container user to a subordinate uid, so widen the workspace mode and
+	// prove a normal kernel write reaches the host before trusting any
+	// "marker never appeared" assertion below.
+	if err := os.Chmod(workspace, 0o777); err != nil {
+		t.Fatalf("chmod workspace: %v", err)
+	}
+	canary, err := sb.RunPython(context.Background(), PythonRequest{
+		Code:    fmt.Sprintf("import pathlib; pathlib.Path(%q).write_text('ok'); print('done')", filepath.Join(workspace, ".canary")),
+		Timeout: 60 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("canary RunPython: %v", err)
+	}
+	if canary.Status != "success" {
+		t.Fatalf("canary cell failed (status %q, stderr %q, error %q) — marker assertions would be vacuous", canary.Status, canary.Stderr, canary.Error)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, ".canary")); err != nil {
+		t.Fatalf("canary marker not visible on host (%v) — marker assertions would be vacuous", err)
+	}
+	return sb, workspace
+}
+
+// TestContainerPythonCancel_KillsDelayedMarkerWrite is the run_python half of
+// the #796 integration coverage: cancelling a running cell must stop the
+// kernel before it can complete a side effect, poison the sandbox, and refuse
+// all further work on it. Before the fix, cancellation killed only the
+// host-side `podman exec` bridge client — the cell kept executing and the
+// delayed marker write below landed on the host.
+func TestContainerPythonCancel_KillsDelayedMarkerWrite(t *testing.T) {
+	sb, workspace := newPythonCancelTestContainer(t)
+
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	defer cancelRun()
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := sb.RunPython(runCtx, PythonRequest{
+			Code: fmt.Sprintf(
+				"import pathlib, time\n"+
+					"pathlib.Path(%q).write_text('x')\n"+
+					"time.sleep(3)\n"+
+					"pathlib.Path(%q).write_text('survived')",
+				filepath.Join(workspace, "py-started"), filepath.Join(workspace, "py-marker")),
+			Timeout: 60 * time.Second,
+		})
+		errCh <- err
+	}()
+
+	// Wait until the cell is demonstrably executing (its first write reached
+	// the host), so the cancel lands mid-sleep, not during kernel boot.
+	startDeadline := time.Now().Add(45 * time.Second)
+	for {
+		if _, err := os.Stat(filepath.Join(workspace, "py-started")); err == nil {
+			break
+		}
+		if time.Now().After(startDeadline) {
+			t.Fatal("cell never signalled start — kernel did not boot?")
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	cancelRun()
+
+	err := <-errCh
+	if !errors.Is(err, ErrPoisoned) {
+		t.Fatalf("cancelled RunPython = %v, want an error wrapping ErrPoisoned", err)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled RunPython = %v, want the caller's ctx error preserved", err)
+	}
+	if !sb.Poisoned() {
+		t.Fatal("a cancelled cell must poison the sandbox so it is retired")
+	}
+	if _, err := sb.RunPython(context.Background(), PythonRequest{Code: "1"}); !errors.Is(err, ErrPoisoned) {
+		t.Fatalf("poisoned sandbox must refuse further python, got %v", err)
+	}
+	if _, err := sb.RunBash(context.Background(), BashRequest{Command: "true"}); !errors.Is(err, ErrPoisoned) {
+		t.Fatalf("poisoned sandbox must refuse further bash, got %v", err)
+	}
+	// The container is dead; the delayed write must never reach the host.
+	markerAbsent(t, workspace, "py-marker", 4*time.Second)
 }

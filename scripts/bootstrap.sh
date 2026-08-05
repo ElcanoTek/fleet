@@ -32,6 +32,7 @@
 #                                                    # so the plan reflects your answers; pipe stdin to skip)
 #   scripts/bootstrap.sh --client-config <git-url[#<sha-or-tag>]|path>   # check out / point at a client bundle
 #   scripts/bootstrap.sh --enable-service            # systemctl enable --now fleet at the end
+#   scripts/bootstrap.sh --enable-service --no-backup-timer  # ...without the daily database-backup timer
 #   scripts/bootstrap.sh --enable-web [--domain fleet.example.com]  # build + serve the web tier (TLS via Caddy with --domain)
 #
 # Explicit flags always win — each prompt is asked only when its flag was not
@@ -41,7 +42,8 @@
 # in place (--client-config) → build the sandbox image from the bundle → provision
 # both chat+sched roles/databases (local) or validate DSNs (external) → write the
 # resolved DSNs + FLEET_CLIENT_CONFIG_DIR into the env file → optionally enable +
-# start the systemd unit.
+# start the systemd unit → install + enable the daily database-backup timer
+# (--no-backup-timer opts out).
 #
 # Branch A (local):  install + init a local cluster, create the two owner roles
 #                    and two databases idempotently via psql \gexec, sslmode=disable.
@@ -92,6 +94,13 @@
 #                              export → import (docs/LEGACY-IMPORT.md).
 #   --adopt-existing-sched-db  same, for the sched database
 #                              (FLEET_SCHED_DATABASE_URL).
+#   --no-backup-timer          do NOT install/enable the daily database-backup
+#                              timer (deploy/fleet-backup.service + .timer) on an
+#                              --enable-service run. It is installed by default
+#                              because a deployment with no backups at all is the
+#                              worse default; opt out when you back up at the
+#                              volume/hypervisor layer or ship dumps offsite with
+#                              your own tooling.
 #   --force-caddy              with --enable-web --domain: allow overwriting an
 #                              /etc/caddy/Caddyfile this script did not write.
 #                              A timestamped backup is kept and a merge warning
@@ -123,6 +132,11 @@
 #   FLEET_SCHED_DATABASE_URL external sched DSN (external mode; also the adopted
 #                           DSN under --adopt-existing-sched-db)
 #   FLEET_DB_SUPERUSER_URL  external superuser DSN for opt-in role/db creation
+#   FLEET_BACKUP_DIR        absolute directory the backup timer writes dumps to
+#                           (default /var/backups/fleet; created 0700 root-owned —
+#                           a dump holds every conversation, task and user row)
+#   FLEET_BACKUP_RETENTION_DAYS  the timer's --prune cutoff: dumps older than this
+#                           many days are deleted after a successful run (default 30)
 #   FLEET_WEB_APP_NAME      web UI app name (--enable-web; default Fleet)
 #   FLEET_ACME_EMAIL        Let's Encrypt account email for Caddy (--domain; optional)
 set -euo pipefail
@@ -153,6 +167,11 @@ AUTH_PUBKEY_ARG=""
 # without env archaeology.
 ADOPT_CHAT_DB=0
 ADOPT_SCHED_DB=0
+# The daily database-backup timer is installed by default on the --enable-service
+# path (a deployment silently carrying no backups is the worse default);
+# --no-backup-timer is the opt-out for boxes backed up at the volume/hypervisor
+# layer or by the operator's own tooling.
+ENABLE_BACKUP_TIMER=1
 FORCE_CADDY=0
 CHAT_DB_NAME_ARG=""
 CHAT_DB_USER_ARG=""
@@ -184,10 +203,11 @@ while [[ $# -gt 0 ]]; do
     --sched-db-user=*)   SCHED_DB_USER_ARG="${1#*=}" ;;
     --adopt-existing-chat-db)  ADOPT_CHAT_DB=1 ;;
     --adopt-existing-sched-db) ADOPT_SCHED_DB=1 ;;
+    --no-backup-timer)   ENABLE_BACKUP_TIMER=0 ;;
     --force-caddy)       FORCE_CADDY=1 ;;
     --dry-run)           DRY_RUN=1 ;;
     -h|--help)
-      sed -n '2,127p' "$0"; exit 0 ;;
+      sed -n '2,141p' "$0"; exit 0 ;;
     *) echo "error: unknown argument: $1" >&2; exit 1 ;;
   esac
   shift
@@ -204,6 +224,19 @@ warn() { printf '%s! %s%s\n' "$c_yellow" "$*" "$c_reset" >&2; }
 info() { printf '%s» %s%s\n' "$c_dim" "$*" "$c_reset"; }
 die()  { printf '✗ %s\n' "$*" >&2; exit 1; }
 run()  { if [[ "$DRY_RUN" == "1" ]]; then info "[dry-run] $*"; else "$@"; fi; }
+
+# env_get KEY [FILE] — read one key from an env file without sourcing it (the
+# file holds secrets; sourcing would execute arbitrary content on a tampered
+# box). Last assignment wins, surrounding quotes stripped: /etc/fleet/fleet.env
+# is a systemd EnvironmentFile=, where FLEET_BACKUP_DIR="/mnt/x" is legal and
+# the unit sees the unquoted value — a re-run reading the quotes back verbatim
+# would die on its own absolute-path validation below. Same helper as
+# doctor.sh's env_get; keep the two in sync.
+env_get() {
+  local key="$1" file="${2:-$ENV_FILE}"
+  [[ -r "$file" ]] || return 0
+  grep -E "^${key}=" "$file" 2>/dev/null | tail -n1 | cut -d= -f2- | sed -e 's/^["'\'']//' -e 's/["'\'']$//' || true
+}
 
 # ── interactive deployment selection (TTY only; flags always win) ────────────
 # A bare `scripts/bootstrap.sh` on a terminal walks the operator through the
@@ -255,6 +288,27 @@ if [[ "$CLIENT_CONFIG_DIR" != /* ]]; then
   CLIENT_CONFIG_DIR="$(cd "$CLIENT_CONFIG_DIR" 2>/dev/null && pwd || printf '%s/%s' "$REPO_ROOT" "$CLIENT_CONFIG_DIR")"
 fi
 SERVICE_NAME="${FLEET_SERVICE_NAME:-fleet}"
+# Scheduled-backup settings, written into the env file so `fleet backup` (and the
+# timer's ExecStart, which passes no --out) resolve the same directory.
+# Precedence is process env > the value already in the env file > default, the
+# same way the adopted DSNs resolve further down: a re-run must not reset a
+# backup directory or retention the operator moved (dumps would silently start
+# landing somewhere else).
+BACKUP_DIR="${FLEET_BACKUP_DIR:-$(env_get FLEET_BACKUP_DIR "$ENV_FILE")}"
+BACKUP_DIR="${BACKUP_DIR:-/var/backups/fleet}"
+BACKUP_RETENTION_DAYS="${FLEET_BACKUP_RETENTION_DAYS:-$(env_get FLEET_BACKUP_RETENTION_DAYS "$ENV_FILE")}"
+BACKUP_RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-30}"
+# Validated only on the runs that WRITE these keys and install the unit that
+# reads them. A dev run installs no timer, so a relative FLEET_BACKUP_DIR
+# exported for a local `fleet backup` is that caller's business, not a reason to
+# refuse. The path must be ABSOLUTE once it lands in the env file: a relative
+# value there resolves against the unit's working directory ("/" for the
+# oneshot), which is not where dumps belong.
+if [[ "$ENABLE_SERVICE" == "1" && "$ENABLE_BACKUP_TIMER" == "1" ]]; then
+  [[ "$BACKUP_DIR" == /* ]] || die "FLEET_BACKUP_DIR must be an absolute path (got '${BACKUP_DIR}')"
+  [[ "$BACKUP_RETENTION_DAYS" =~ ^[1-9][0-9]*$ ]] \
+    || die "FLEET_BACKUP_RETENTION_DAYS must be a positive integer (got '${BACKUP_RETENTION_DAYS}')"
+fi
 # DB names/roles: flag > env > default. The values are interpolated into the
 # provisioning SQL below, so restrict them to plain identifiers.
 CHAT_DB_NAME="${CHAT_DB_NAME_ARG:-${CHAT_DB_NAME:-chat}}"
@@ -556,13 +610,22 @@ deploy_web_tier() {
 
   systemctl daemon-reload || true
   if systemctl enable --now fleet-web >/dev/null 2>&1; then
-    ok "fleet-web enabled + started (Next.js on :3000)"
+    ok "fleet-web enabled + started (Next.js on 127.0.0.1:3000)"
   else
     warn "could not enable/start fleet-web — check: journalctl -u fleet-web -n 50"
   fi
 
   if [[ -z "$WEB_DOMAIN" ]]; then
+    # The start script binds 127.0.0.1 unless FLEET_WEB_HOST overrides it, so
+    # "loopback-only" holds even on boxes without firewalld. EVERY custom proxy
+    # front — same host or not — needs the real public origin: it decides the
+    # web tier's redirect targets and Secure-cookie flag (web/src/app/lib/
+    # auth.ts), and Next inlines NEXT_PUBLIC_* at build time, so editing the
+    # env file alone changes nothing until web/ is rebuilt. Only a proxy on
+    # ANOTHER host additionally needs the wider bind.
     info "no --domain → web is loopback-only on :3000; front it with your own TLS proxy for a public URL."
+    info "  any custom proxy (same host too): set NEXT_PUBLIC_PUBLIC_ORIGIN=https://<domain> in ${web_env}, then rebuild web/ + restart fleet-web (scripts/update.sh does both) — the origin is baked in at build time, so editing the env file alone is not enough."
+    info "  proxy on ANOTHER host: additionally set FLEET_WEB_HOST=0.0.0.0 in ${web_env} (the web tier binds 127.0.0.1 otherwise)."
     return
   fi
   step "Web tier: Caddy TLS reverse proxy for ${WEB_DOMAIN}"
@@ -633,8 +696,14 @@ fi
 # app), podman (the execution sandbox), python3 + pip (host-side Python MCP
 # servers), plus git/curl/jq/gcc. Postgres-server is installed per-mode below
 # (local only). Non-Fedora hosts: install these yourself, then re-run.
+#
+# slirp4netns is here because FLEET_DEFAULT_NETWORK_MODE=allowlisted requires
+# it: podman >= 5.0 defaults to pasta and a stock modern host ships pasta
+# WITHOUT slirp4netns, which makes every allowlisted container start fail
+# (fleet now preflights that at boot and fails closed — see ADR-0012). Cheap
+# to install unconditionally so the mode is available if an operator picks it.
 step "Installing system dependencies (build + runtime + sandbox toolchain)"
-FLEET_DEPS=(git curl jq golang nodejs python3 python3-pip gcc podman)
+FLEET_DEPS=(git curl jq golang nodejs python3 python3-pip gcc podman slirp4netns)
 if command -v dnf >/dev/null 2>&1; then
   run dnf install -y "${FLEET_DEPS[@]}"
   [[ "$DRY_RUN" == "1" ]] || ok "system dependencies present (${FLEET_DEPS[*]})"
@@ -800,6 +869,7 @@ fi
 # the sandbox: block, then interpolate a bare ${VAR:-default} / ${VAR} reference
 # against the process env. An empty result => build-on-box (the default-bundle
 # value "${FLEET_SANDBOX_IMAGE:-}" resolves to empty when the var is unset).
+# Mirrored in scripts/update.sh — keep the two copies in sync.
 resolve_sandbox_image() {
   local file="$1" raw
   [[ -f "$file" ]] || return 0
@@ -1174,7 +1244,7 @@ if [[ "$DRY_RUN" != "1" ]]; then
   else
     info "remember to add OPENROUTER_API_KEY (fleet config set-openrouter-key) and the bundle's MCP connector credentials."
   fi
-  info "if the bundle's default persona differs from 'assistant', set PERSONA_DEFAULT=<persona> in ${ENV_FILE}."
+  info "if the bundle's default persona differs from 'assistant', set FLEET_PERSONA_DEFAULT=<name> and FLEET_PERSONA=personas/<name>.yaml in ${ENV_FILE}."
 fi
 
 # ── optionally build + install the binary + unit, then enable + start it ──
@@ -1248,6 +1318,59 @@ if [[ "$ENABLE_SERVICE" == "1" ]]; then
       info "          or by hand (cd web && npm ci && npm run build → /opt/fleet/web, fill fleet-web.env, enable fleet-web)."
     fi
   fi
+fi
+
+# ── scheduled database backups (systemd timer; --no-backup-timer opts out) ──
+# fleet ships the units in deploy/ (so they are version-controlled and covered by
+# doctor's unit-drift check) and installs them here: bootstrap already owns the
+# other units, the firewall and the Postgres cluster, and a box that was never
+# told about backups is exactly the box that has none. Idempotent like the rest:
+# an already-installed unit is left alone (doctor owns drift) and `enable --now`
+# on a live timer is a no-op. Runs after the binary install above because the
+# unit's ExecStart is /usr/local/bin/fleet.
+if [[ "$ENABLE_SERVICE" == "1" && "$ENABLE_BACKUP_TIMER" == "1" ]]; then
+  step "Scheduled database backups (daily fleet-backup.timer → ${BACKUP_DIR})"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    info "[dry-run] would create ${BACKUP_DIR} if missing (0700 root-owned — a dump holds every conversation, task and user row)"
+    info "[dry-run] would set FLEET_BACKUP_DIR + FLEET_BACKUP_RETENTION_DAYS=${BACKUP_RETENTION_DAYS} in ${ENV_FILE}"
+    info "[dry-run] would install deploy/fleet-backup.service + deploy/fleet-backup.timer → /etc/systemd/system"
+    info "[dry-run] would run: systemctl enable --now fleet-backup.timer (daily 02:00; --no-backup-timer opts out)"
+  elif ! command -v systemctl >/dev/null 2>&1; then
+    warn "systemctl not found — skipping the backup timer (schedule 'fleet backup --db=all --prune' with cron instead)."
+  else
+    if [[ -d "$BACKUP_DIR" ]]; then
+      # Never re-mode a directory that already exists: FLEET_BACKUP_DIR may point
+      # at a shared mount whose permissions are the operator's call. Say so
+      # instead — and note the unit's UMask=0077 keeps the dump FILES owner-only
+      # regardless of the directory.
+      _backup_mode="$(stat -c '%a' "$BACKUP_DIR" 2>/dev/null || echo unknown)"
+      if [[ "$_backup_mode" == "700" ]]; then
+        info "${BACKUP_DIR} present (0700)"
+      else
+        warn "${BACKUP_DIR} is mode ${_backup_mode}, not 0700 — dumps hold every conversation, task and user row; leaving it as you set it."
+      fi
+      unset _backup_mode
+    else
+      install -d -o root -g root -m 0700 "$BACKUP_DIR"
+      ok "created ${BACKUP_DIR} (0700 root-owned — a dump holds every conversation, task and user row)"
+    fi
+    upsert_env FLEET_BACKUP_DIR "$BACKUP_DIR"
+    upsert_env FLEET_BACKUP_RETENTION_DAYS "$BACKUP_RETENTION_DAYS"
+    for unit in fleet-backup.service fleet-backup.timer; do
+      if [[ -f "$REPO_ROOT/deploy/$unit" ]] && ! systemctl cat "$unit" >/dev/null 2>&1; then
+        install -D -m 0644 "$REPO_ROOT/deploy/$unit" "/etc/systemd/system/$unit"
+        info "installed /etc/systemd/system/$unit"
+      fi
+    done
+    systemctl daemon-reload || warn "systemctl daemon-reload failed"
+    if systemctl enable --now fleet-backup.timer >/dev/null 2>&1; then
+      ok "fleet-backup.timer enabled (daily 02:00 → ${BACKUP_DIR}, ${BACKUP_RETENTION_DAYS}-day retention)"
+    else
+      warn "could not enable fleet-backup.timer — check: systemctl status fleet-backup.timer"
+    fi
+  fi
+elif [[ "$ENABLE_SERVICE" == "1" ]]; then
+  info "--no-backup-timer: no scheduled backup on this box. Back up at the volume/hypervisor layer, or schedule 'fleet backup --db=all --prune' yourself (docs/BACKUP_RESTORE.md). 'fleet doctor' will keep advising that no timer is installed."
 fi
 
 # ── web tier + Caddy TLS (opt-in via --enable-web / --domain) ──
@@ -1325,6 +1448,9 @@ fi
 
 step "Reminders"
 info "Migrations are NOT run here — each service self-migrates on first start."
+info "Backups: a same-host dump protects against LOGICAL loss (bad migration, accidental delete),"
+info "         not the loss of this host or volume, and it does not capture attachment/upload"
+info "         files. Copy dumps offsite yourself — see docs/BACKUP_RESTORE.md."
 info "Set MCP account secrets post-bootstrap: fleet mcp account set <server> <account> --secret KEY=-"
 info "Check health any time:  fleet status     (also: fleet logs, fleet motd, fleet chat)"
 info "Update in place later:  fleet update      (--check for a read-only 'commits behind'; or scripts/update.sh)"

@@ -17,9 +17,11 @@ import (
 )
 
 // OCI-runtime selection (#217). The mandatory rootless-Podman sandbox can run
-// each tool call under a hypervisor-isolated runtime — Kata Containers (a
-// dedicated KVM VM with its own guest kernel) or libkrun (a lightweight
-// microVM) — instead of the default shared-kernel container. This file holds
+// under a hypervisor-isolated runtime — Kata Containers (a dedicated KVM VM
+// with its own guest kernel) or libkrun (a lightweight microVM) — instead of
+// the default shared-kernel container. The VM boundary has the granularity of
+// the container it replaces (one per turn / scheduled run / persistent-REPL
+// conversation), so every tool call in a turn shares it. This file holds
 // the runtime-name normalization, the boot-time fail-closed preflight, the
 // host-side probe binary mapping, and the Kata guest-memory overhead math. The
 // `--runtime=<value>` flag itself is emitted unchanged in container.go; this is
@@ -29,8 +31,9 @@ import (
 // (ADR-0002) — an escape needs a hypervisor CVE, not a container-escape. The
 // preflight FAILS CLOSED: a kata/krun runtime whose KVM or runtime binary is
 // missing aborts boot rather than silently degrading to a shared-kernel
-// container (the no-degrade-to-host invariant — ADR-0010). runc/crun/runsc and
-// the empty default share the host kernel by design and need no preflight.
+// container (the no-degrade-to-host invariant — ADR-0010). Any NAMED runtime,
+// hypervisor-backed or not, must also be resolvable by Podman; only the empty
+// default (Podman's own choice) skips the preflight entirely.
 
 const (
 	runtimeKata = "kata"
@@ -125,13 +128,19 @@ func ResolveRuntime(envRuntime, bundleRuntime string) string {
 	return normalized
 }
 
-// RuntimeBinary returns the executable a host-side liveness/readiness probe (or
-// the preflight) should invoke for the given OCI runtime — the binary Podman
-// resolves `--runtime=<name>` to. Podman maps the runtime NAME to a binary via
-// containers.conf ([engine.runtimes]); "kata" resolves to the "kata-runtime"
-// binary, not a "kata" command, so a bare LookPath("kata") would wrongly report
-// it missing. An explicit path is returned verbatim (probe it directly). An
-// empty runtime (Podman default) returns "" — callers probe "podman" instead.
+// RuntimeBinary returns a BEST-EFFORT guess at the executable Podman resolves
+// `--runtime=<name>` to, for host-side liveness/readiness probes that only need
+// a name to check. Podman maps the runtime NAME to a binary via containers.conf
+// ([engine.runtimes]); "kata" resolves to the "kata-runtime" binary, not a
+// "kata" command, so a bare LookPath("kata") would wrongly report it missing.
+// An explicit path is returned verbatim (probe it directly). An empty runtime
+// (Podman default) returns "" — callers probe "podman" instead.
+//
+// This is a HEURISTIC, not the resolution Podman performs: an operator whose
+// containers.conf remaps the name to some other binary gets a different answer
+// here than Podman will use. The fail-closed preflight therefore does NOT rely
+// on it — PreflightRuntime asks Podman itself (resolveRuntimePath) and probes
+// the binary Podman actually reports.
 func RuntimeBinary(runtime string) string {
 	r, _ := NormalizeRuntime(runtime)
 	switch {
@@ -147,22 +156,94 @@ func RuntimeBinary(runtime string) string {
 	}
 }
 
-// PreflightRuntime verifies, BEFORE the first sandbox container starts, that the
-// host can actually deliver the isolation a hypervisor-backed runtime promises.
+// runtimeResolveTimeout bounds the `podman info` call that resolves a runtime
+// name to its binary. Generous enough for a cold podman on a loaded box, short
+// enough that a wedged podman fails boot promptly instead of hanging it.
+const runtimeResolveTimeout = 20 * time.Second
+
+// resolveRuntimePath asks Podman which binary it will actually exec for
+// `--runtime=<runtime>`, rather than guessing from the name.
+//
+// `podman --runtime=<r> info` is authoritative on both counts we care about: it
+// resolves the name through containers.conf ([engine.runtimes]) and reports the
+// resulting path, AND it fails outright when the name is not registered
+// ("default OCI runtime %q not found"). Guessing instead — the old behavior —
+// was wrong in two directions. A containers.conf remap pointed Podman at one
+// binary while the preflight validated whichever same-named binary happened to
+// be first on PATH; and a runtime installed on PATH but never registered with
+// Podman passed the preflight, then failed at every container creation.
+//
+// Any failure here is fail-closed for the caller: a hypervisor runtime whose
+// binary Podman cannot even name is one whose isolation we cannot verify.
+func resolveRuntimePath(ctx context.Context, podmanBin, runtime string) (string, error) {
+	if podmanBin == "" {
+		podmanBin = "podman"
+	}
+	resolveCtx, cancel := context.WithTimeout(ctx, runtimeResolveTimeout)
+	defer cancel()
+	//nolint:gosec // podmanBin and runtime are operator-set config, not request input
+	out, err := exec.CommandContext(resolveCtx, podmanBin, "--runtime="+runtime, "info", "--format", "{{.Host.OCIRuntime.Path}}").Output()
+	if err != nil {
+		return "", fmt.Errorf("podman could not resolve --runtime=%s (is it registered in containers.conf?): %w%s", runtime, err, stderrOf(err))
+	}
+	path := strings.TrimSpace(string(out))
+	if path == "" {
+		return "", fmt.Errorf("podman reported an empty binary path for --runtime=%s", runtime)
+	}
+	return path, nil
+}
+
+// PreflightRuntime verifies, BEFORE the first sandbox container starts, that
+// the host can actually deliver what the configured OCI runtime promises.
 // Called from the single production pool-construction path
-// (agent.buildSandboxPool) and from `fleet validate-config`. It FAILS CLOSED for
-// kata/krun (whether selected by bare name OR by path) and is a no-op for
-// shared-kernel runtimes (runc/crun/runsc/empty), which need no hardware
-// preflight. The probe binary is RuntimeBinary(runtime), so a path-form runtime
-// is checked at its actual path.
-func PreflightRuntime(ctx context.Context, runtime string) error {
-	bin := RuntimeBinary(runtime)
-	switch runtimeKind(runtime) {
+// (agent.buildSandboxPool) and from `fleet validate-config`.
+//
+// Two tiers, both fail-closed:
+//
+//   - ANY non-empty runtime must be resolvable by Podman. This catches the
+//     runtime that is installed but never registered in containers.conf, which
+//     used to pass a PATH lookup and then fail at every single container
+//     creation.
+//   - kata/krun additionally need usable KVM and, for krun, a genuine +LIBKRUN
+//     build (whether selected by bare name OR by path). A hypervisor runtime
+//     that cannot deliver its isolation must abort boot, never degrade to a
+//     shared-kernel container (ADR-0010).
+//
+// An empty runtime (Podman's own default) is a no-op — there is no name to
+// resolve and no hardware to check.
+//
+// The binary probed is the one PODMAN resolves the runtime to, not a guess from
+// the name (see resolveRuntimePath): validating a different binary than the one
+// that will run every tool call is exactly the silent isolation loss ADR-0010
+// exists to prevent.
+func PreflightRuntime(ctx context.Context, podmanBin, runtime string) error {
+	normalized, _ := NormalizeRuntime(runtime)
+	if normalized == "" {
+		return nil
+	}
+	kind := runtimeKind(runtime)
+	// A resolution failure is a podman/containers.conf problem, so it is NOT
+	// labelled "kata preflight:" / "krun preflight:" — those prefixes belong to
+	// the hardware gates below and would misdirect an operator whose actual
+	// problem is a broken rootless podman.
+	bin, err := resolveRuntimePath(ctx, podmanBin, normalized)
+	if err != nil {
+		return fmt.Errorf("sandbox runtime preflight: %w", err)
+	}
+	// Surface a containers.conf remap rather than silently preflighting a
+	// different binary than an operator reading the config would expect.
+	if guess := RuntimeBinary(runtime); guess != "" && guess != bin && filepath.Base(bin) != guess {
+		log.Printf("sandbox: podman resolves --runtime=%s to %s (the name suggests %q) — preflighting the resolved binary", normalized, bin, guess)
+	}
+	switch kind {
 	case runtimeKata:
 		return preflightKata(ctx, bin)
 	case runtimeKrun:
 		return preflightKrun(ctx, bin)
 	default:
+		// Shared-kernel runtime (runc/crun/runsc/…): resolvability is the whole
+		// check — no hypervisor posture to verify.
+		log.Printf("sandbox: runtime %s preflight OK — podman resolves it to %s", normalized, bin)
 		return nil
 	}
 }
@@ -182,8 +263,8 @@ func kvmAccessible() error {
 	return nil
 }
 
-// preflightKata fails closed unless the kata runtime binary (bin, either
-// "kata-runtime" on PATH or an explicit path) resolves and /dev/kvm is usable.
+// preflightKata fails closed unless the kata runtime binary (bin — the path
+// PreflightRuntime got back from Podman) resolves and /dev/kvm is usable.
 // `kata-runtime check` is a SOFT signal only: run non-root
 // it skips the privileged/network checks and can exit non-zero for reasons that
 // do not mean Kata is unusable, so its exit code is logged, NOT fail-closed —
@@ -224,26 +305,39 @@ func preflightKrun(ctx context.Context, bin string) error {
 	if err := kvmAccessible(); err != nil {
 		return fmt.Errorf("krun preflight: %w", err)
 	}
-	verCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	out, err := exec.CommandContext(verCtx, bin, "--version").CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("krun preflight: %q --version failed: %w", bin, err)
-	}
-	// krun is crun built with +LIBKRUN. A plain crun symlinked/renamed to krun
-	// would run as an ordinary shared-kernel container — a SILENT loss of the VM
-	// isolation the operator asked for — so the missing feature flag is a hard
-	// fail. Case-insensitive to tolerate banner-format drift across crun releases.
-	if !strings.Contains(strings.ToUpper(string(out)), "+LIBKRUN") {
-		return fmt.Errorf("krun preflight: %q lacks +LIBKRUN — this is plain crun without libkrun support and would NOT provide microVM isolation", bin)
+	if err := verifyKrunLibkrun(ctx, bin); err != nil {
+		return fmt.Errorf("krun preflight: %w", err)
 	}
 	log.Printf("sandbox: krun (libkrun) preflight OK — %s has +LIBKRUN and /dev/kvm accessible", bin)
 	return nil
 }
 
-// lookRuntimeBinary confirms the preflight's probe binary resolves. An absolute
-// path (the path-form runtime) is checked directly; a bare name goes through
-// PATH lookup. Either way a missing/unexecutable binary fails closed.
+// verifyKrunLibkrun is the "is this really libkrun?" half of the krun preflight,
+// split out so it is testable on a host without /dev/kvm (the KVM gate runs
+// first and would otherwise mask this check everywhere CI runs).
+//
+// krun is crun built with +LIBKRUN. A plain crun symlinked or renamed to `krun`
+// would run as an ordinary shared-kernel container — a SILENT loss of the VM
+// isolation the operator asked for — so a missing feature flag is a hard fail,
+// not a pass. Case-insensitive to tolerate banner-format drift across crun
+// releases.
+func verifyKrunLibkrun(ctx context.Context, bin string) error {
+	verCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(verCtx, bin, "--version").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%q --version failed: %w", bin, err)
+	}
+	if !strings.Contains(strings.ToUpper(string(out)), "+LIBKRUN") {
+		return fmt.Errorf("%q lacks +LIBKRUN — this is plain crun without libkrun support and would NOT provide microVM isolation", bin)
+	}
+	return nil
+}
+
+// lookRuntimeBinary confirms the preflight's probe binary resolves. Podman
+// reports an absolute path, so in practice the Stat branch is the one that
+// runs; the PATH-lookup branch remains for a direct caller passing a bare name.
+// Either way a missing/unexecutable binary fails closed.
 func lookRuntimeBinary(bin string) error {
 	if filepath.IsAbs(bin) {
 		info, err := os.Stat(bin)

@@ -16,7 +16,7 @@ export async function PATCH(request: NextRequest, { params }: Params) {
 
   const { memoryId } = await params;
   const bodyText = await request.text();
-  const { upstream, error } = await chatServerProxy(session.email, `/memories/${encodeURIComponent(memoryId)}`, {
+  const { upstream, error } = await chatServerProxy(session, `/memories/${encodeURIComponent(memoryId)}`, {
     method: "PATCH",
     body: bodyText,
   });
@@ -36,7 +36,7 @@ export async function DELETE(request: NextRequest, { params }: Params) {
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { memoryId } = await params;
-  const { upstream, error } = await chatServerProxy(session.email, `/memories/${encodeURIComponent(memoryId)}`, {
+  const { upstream, error } = await chatServerProxy(session, `/memories/${encodeURIComponent(memoryId)}`, {
     method: "DELETE",
   });
   if (error) return error;

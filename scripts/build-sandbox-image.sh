@@ -26,12 +26,25 @@
 # (clientconfig.Sandbox().ResolvedImageRef()); an explicit FLEET_SANDBOX_IMAGE
 # in the process env still overrides.
 #
+# Run AS ROOT on a box with the systemd unit installed (the `sudo fleet update`
+# path), the build is re-run as the unit's User= so the image lands in the
+# SERVICE user's rootless store — root's rootful store is a separate namespace
+# the User=fleet unit can never see. FLEET_SERVICE_NAME selects the unit
+# (default fleet); without systemd/the unit the invoking user's store is used.
+#
 # Usage:
 #   scripts/build-sandbox-image.sh                 # → manifest sandbox.tag (default localhost/fleet-sandbox:latest)
 #   scripts/build-sandbox-image.sh v1              # → <image-name>:v1
+#   scripts/build-sandbox-image.sh --print-tag     # print the resolved <image-name>:<tag>; no build, no podman
 #   IMAGE_NAME=ghcr.io/your-org/sandbox scripts/build-sandbox-image.sh   # tag for a client's own registry
 #   FLEET_CLIENT_CONFIG_DIR=/opt/fleet/client scripts/build-sandbox-image.sh   # build a client bundle's sandbox
 set -euo pipefail
+
+PRINT_TAG=0
+if [[ "${1:-}" == "--print-tag" ]]; then
+    PRINT_TAG=1
+    shift
+fi
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUNDLE_DIR="${FLEET_CLIENT_CONFIG_DIR:-$REPO_ROOT/config/default}"
@@ -76,6 +89,14 @@ else
     TAG="${1:-${MANIFEST_TAG##*:}}"
 fi
 
+# Machine-readable resolution for callers that gate on the tag (update.sh's
+# rebuild gate): the exact ref a build would produce, from the SAME manifest
+# read the build uses. No podman, no side effects.
+if [[ "$PRINT_TAG" == "1" ]]; then
+    printf '%s:%s\n' "$IMAGE_NAME" "$TAG"
+    exit 0
+fi
+
 if [[ ! -f "$CONTAINERFILE" ]]; then
     echo "build-sandbox-image: missing $CONTAINERFILE" >&2
     echo "  (FLEET_CLIENT_CONFIG_DIR=$BUNDLE_DIR; the bundle must ship $CF_REL)" >&2
@@ -87,7 +108,34 @@ if ! command -v podman >/dev/null 2>&1; then
 fi
 
 BUILD_CONTEXT="$(dirname "$CONTAINERFILE")"
-echo "Building ${IMAGE_NAME}:${TAG} from ${CONTAINERFILE} ..."
-podman build -t "${IMAGE_NAME}:${TAG}" -f "$CONTAINERFILE" "$BUILD_CONTEXT"
+
+# A root build must not land in root's rootful store: deploy/fleet.service runs
+# the process as its User=, and that rootless account's image store under
+# ~/.local/share/containers is a separate namespace — an image built by root is
+# invisible to the service. Build as the unit's user with the HOME/
+# XDG_RUNTIME_DIR the unit sets (a nologin system account has no login session,
+# and /run/<user> is tmpfs — absent after a reboot until the unit's
+# RuntimeDirectory= recreates it). cd to that HOME first: rootless podman
+# re-execs inside its user namespace and chdir()s back to the inherited cwd,
+# which the service user may not be able to enter (e.g. /root). Mirrors
+# bootstrap.sh's systemd-path build (which cannot delegate here: it runs before
+# the unit is installed) and doctor.sh's run_as_fleet.
+BUILD_USER=""
+if [[ $EUID -eq 0 ]] && command -v systemctl >/dev/null 2>&1; then
+    BUILD_USER="$(systemctl show -p User --value "${FLEET_SERVICE_NAME:-fleet}.service" 2>/dev/null || true)"
+fi
+if [[ -n "$BUILD_USER" && "$BUILD_USER" != "root" ]] && id -u "$BUILD_USER" >/dev/null 2>&1; then
+    BUILD_HOME="$(getent passwd "$BUILD_USER" | cut -d: -f6)"
+    install -d -o "$BUILD_USER" -g "$BUILD_USER" -m 0700 "/run/${BUILD_USER}"
+    echo "Building ${IMAGE_NAME}:${TAG} from ${CONTAINERFILE} (as ${BUILD_USER} — the unit's rootless store) ..."
+    (
+        cd "$BUILD_HOME" 2>/dev/null || cd /
+        runuser -u "$BUILD_USER" -- env HOME="$BUILD_HOME" XDG_RUNTIME_DIR="/run/${BUILD_USER}" \
+            podman build -t "${IMAGE_NAME}:${TAG}" -f "$CONTAINERFILE" "$BUILD_CONTEXT"
+    )
+else
+    echo "Building ${IMAGE_NAME}:${TAG} from ${CONTAINERFILE} ..."
+    podman build -t "${IMAGE_NAME}:${TAG}" -f "$CONTAINERFILE" "$BUILD_CONTEXT"
+fi
 echo "Built ${IMAGE_NAME}:${TAG}."
 echo "Resolved by the fleet process from the bundle (sandbox.tag); FLEET_SANDBOX_IMAGE still overrides."

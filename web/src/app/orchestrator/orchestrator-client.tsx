@@ -74,7 +74,7 @@ function initialDashboardTab(): DashTab {
   return want && (DASH_TABS as readonly string[]).includes(want) ? (want as DashTab) : "tasks";
 }
 
-function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean }) {
+function OrchestratorInner({ magicLinkLoginEnabled }: { magicLinkLoginEnabled: boolean }) {
   const session = useOrchestratorSession();
   const dashboard = useDashboardData(session.signedIn);
   const { servers, loading: serversLoading } = useMcpServers(session.signedIn);
@@ -149,6 +149,32 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
     );
   }
 
+  // Probe failed with a non-auth verdict (5xx/network): the backend — or the
+  // chat DB behind its fail-closed session-epoch check — is down, and the
+  // visitor's session may be perfectly valid. Rendering the login card here
+  // would invite credentials mid-incident, so show a retry notice instead —
+  // the orchestrator's analogue of chat's backendUnreachable card
+  // (chat-experience.tsx / bootstrapFailure.ts).
+  if (session.unreachable) {
+    return (
+      <div className="container">
+        <OrchestratorSlimHeader />
+        <div className="auth-section" role="region" aria-label="Server unreachable">
+          <div className="auth-fields stack-form">
+            <h2>Can&apos;t reach the server</h2>
+            <p className="caption" data-testid="orchestrator-unreachable">
+              The Operations Center backend didn&apos;t answer — it may be restarting. Your
+              sign-in state is untouched; try again in a moment.
+            </p>
+            <button type="button" className="btn btn-primary" onClick={() => window.location.reload()}>
+              Retry
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   // Signed out — slim top bar (theme + cross-link) above the login card; no rail.
   // #458 symptom 1: when the visitor IS signed in to chat but that identity
   // isn't provisioned here (/me → 403 not_a_member, session.noAccess), we still
@@ -162,7 +188,7 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
       <div className="container">
         <OrchestratorSlimHeader />
         <OrchestratorLogin
-          elcanoLoginEnabled={elcanoLoginEnabled}
+          magicLinkLoginEnabled={magicLinkLoginEnabled}
           onLogin={session.login}
           error={session.error}
           notice={
@@ -379,10 +405,10 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
   );
 }
 
-export function OrchestratorClient({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean }) {
+export function OrchestratorClient({ magicLinkLoginEnabled }: { magicLinkLoginEnabled: boolean }) {
   return (
     <ToastProvider>
-      <OrchestratorInner elcanoLoginEnabled={elcanoLoginEnabled} />
+      <OrchestratorInner magicLinkLoginEnabled={magicLinkLoginEnabled} />
     </ToastProvider>
   );
 }

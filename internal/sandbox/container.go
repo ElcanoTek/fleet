@@ -145,31 +145,46 @@ type ContainerConfig struct {
 	// disk and crash the whole box. 0 → default (5); a NEGATIVE value disables
 	// the quota (not recommended on production hosts). FLEET_SANDBOX_DISK_GB.
 	//
-	// Applied as `--storage-opt size=Ng` (a hard cap on TOTAL writable-layer
-	// bytes) when the storage driver supports project quotas — see
-	// StorageOptSupported — otherwise as `--ulimit fsize=N*GiB`, which caps the
-	// size of any SINGLE file (the common `dd` bomb) but not the running total.
+	// Always applied as `--ulimit fsize=N*GiB`, which caps the size of any
+	// SINGLE file anywhere the container can write — including the
+	// bind-mounted workspace, the only persistent writable surface under the
+	// --read-only rootfs. On a quota-capable storage driver (see
+	// StorageOptSupported) `--storage-opt size=Ng` is added on top, hard-capping
+	// TOTAL bytes in the writable LAYER.
+	//
+	// HONEST LIMIT: total WORKSPACE bytes are not bounded by either flag —
+	// storage-opt quotas do not apply to bind mounts, and RLIMIT_FSIZE is
+	// per-file. Many files each under the cap still fill the disk. Bounding the
+	// total would need a dedicated quota'd volume per sandbox, which fleet does
+	// not do.
 	DiskLimitGB int
 
 	// StorageOptSupported is set by the Pool from a one-time boot probe
 	// (ProbeStorageOptSupport): true when `podman run --storage-opt size` works
-	// on this host's storage driver + backing filesystem. It selects which disk
-	// quota mechanism start() applies (storage-opt vs the ulimit fallback). A
-	// zero value (false) is safe — it just uses the always-works ulimit path.
+	// on this host's storage driver + backing filesystem. It decides whether
+	// start() ADDS the writable-layer quota on top of the always-applied
+	// per-file ulimit — it is not a choice between the two. A zero value
+	// (false) is safe: the per-file cap, the one that reaches the workspace,
+	// applies either way.
 	StorageOptSupported bool
 
 	// Runtime overrides the default OCI runtime, emitted verbatim as
 	// `podman run --runtime=<value>`. Empty means Podman's configured default
 	// (crun/runc) — a shared-kernel rootless container. Hypervisor-isolated
-	// values ("kata" for Kata Containers, "krun" for libkrun) run each tool call
-	// in a dedicated KVM VM; "runsc" selects gVisor. The friendly name "libkrun"
-	// is normalized to "krun" upstream (see NormalizeRuntime), and kata/krun are
-	// fail-closed preflighted at boot (PreflightRuntime). When Runtime == "kata"
-	// the memory ceiling is raised by the guest overhead (applyKataMemoryOverhead).
+	// values ("kata" for Kata Containers, "krun" for libkrun) make this whole
+	// container a dedicated KVM VM; "runsc" selects gVisor. The friendly name
+	// "libkrun" is normalized to "krun" upstream (see NormalizeRuntime), and
+	// kata/krun are fail-closed preflighted at boot (PreflightRuntime). When
+	// Runtime == "kata" the memory ceiling is raised by the guest overhead
+	// (applyKataMemoryOverhead).
 	Runtime string
 
-	// NoNetwork forces `--network=none` so the container has an empty
-	// network namespace — no loopback, no DNS, no route to anywhere.
+	// NoNetwork forces `--network=none` so the container gets a private,
+	// otherwise-empty network namespace: the only device is the kernel's
+	// loopback (lo — usable for container-local sockets). There is no other
+	// interface, no route, and no resolver (podman writes no
+	// /etc/resolv.conf), so nothing inside can reach the host, the LAN, or
+	// the internet.
 	// Used by the lockdown path (TakeContainer) where the security model
 	// requires that an LLM-driven prompt injection cannot exfiltrate to
 	// an external host. Non-lockdown chats default to false (slirp4netns,
@@ -295,20 +310,39 @@ func effectiveDiskGB(n int) int {
 	return n
 }
 
-// diskQuotaArgs returns the `podman run` flags that cap the container's writable
-// disk. With a quota-capable storage driver it uses `--storage-opt size`, a hard
-// cap on TOTAL writable-layer bytes; otherwise it falls back to `--ulimit fsize`,
-// which bounds the size of any SINGLE file (stopping the classic `dd` bomb) but
-// not the running total. A non-positive limit disables the quota (returns nil).
+// diskQuotaArgs returns the `podman run` flags that cap the container's
+// writable disk. The two mechanisms cover DIFFERENT surfaces and are therefore
+// applied together, not either/or:
+//
+//   - `--ulimit fsize` (RLIMIT_FSIZE) is per-process and bounds the size of any
+//     SINGLE file wherever it is written — including the bind-mounted
+//     workspace. Always emitted.
+//   - `--storage-opt size` hard-caps TOTAL bytes in the container's writable
+//     LAYER, but only on a quota-capable storage driver, and it does not apply
+//     to bind mounts. Added on top when the boot probe says it works.
+//
+// Applying only storage-opt (the original #216 behavior) left the workspace
+// completely unbounded on exactly the hosts with the better storage driver:
+// the container runs `--read-only` with size-bounded tmpfs, so the writable
+// layer storage-opt caps is essentially unwritable, and the workspace bind
+// mount — which is also the default workdir — was the one persistent writable
+// surface with no cap at all. `dd if=/dev/zero of=big` in the default cwd
+// filled the host disk, the precise scenario DiskLimitGB exists to prevent.
+//
+// Neither flag bounds TOTAL workspace bytes: many files each under the
+// per-file cap still add up. That is a known limit of what podman can express
+// for a bind mount, and DiskLimitGB's doc says so rather than implying a hard
+// total. A non-positive limit disables the quota (returns nil).
 func diskQuotaArgs(diskLimitGB int, storageOptSupported bool) []string {
 	if diskLimitGB <= 0 {
 		return nil
 	}
-	if storageOptSupported {
-		return []string{fmt.Sprintf("--storage-opt=size=%dg", diskLimitGB)}
-	}
 	// RLIMIT_FSIZE is in bytes; N GiB = N << 30.
-	return []string{fmt.Sprintf("--ulimit=fsize=%d", int64(diskLimitGB)<<30)}
+	args := []string{fmt.Sprintf("--ulimit=fsize=%d", int64(diskLimitGB)<<30)}
+	if storageOptSupported {
+		args = append(args, fmt.Sprintf("--storage-opt=size=%dg", diskLimitGB))
+	}
+	return args
 }
 
 // defaultContainerStartTimeout is exposed so callers (Pool.newSandbox,
@@ -352,10 +386,13 @@ const (
 // --env) arguments for a container's network posture. It is a pure function so
 // the three modes are unit-testable and cannot drift:
 //
-//   - lockdown   (noNetwork)            → --network=none (empty netns, the hard seal)
+//   - lockdown   (noNetwork)            → --network=none (sealed netns: lo only, no route — the hard seal)
 //   - allowlisted (proxyURL set)        → slirp4netns + host-loopback + HTTP(S)_PROXY
-//     pointed at the host EgressProxy (best-effort; see EgressProxy / ADR-0012)
-//   - open       (neither)              → rootless slirp4netns default (outbound only)
+//     pointed at the host EgressProxy (best-effort; see EgressProxy / ADR-0012).
+//     This is the one posture that REQUIRES the slirp4netns helper to be
+//     installed — PreflightAllowlistedNetwork fails boot closed if it is not.
+//   - open       (neither)              → no --network flag, i.e. podman's own
+//     rootless default (pasta on >= 5.0, slirp4netns before it), outbound only
 //
 // noNetwork takes precedence: an empty network namespace has no route to the
 // proxy, so a lockdown turn is never put in allowlisted mode.
@@ -383,6 +420,13 @@ func networkArgs(noNetwork bool, proxyURL string) []string {
 	}
 }
 
+// bridgeScriptTempPattern is the os.CreateTemp pattern for the bridge-script
+// temp file written into BridgeDir at container start. Also a filepath.Match
+// glob: PruneOrphanedBridgeFiles keys on it to sweep files a crash orphaned
+// (close() removes the file on the graceful path only) — keep the two uses in
+// lockstep.
+const bridgeScriptTempPattern = "chat-sandbox-bridge-*.py"
+
 func (c *containerImpl) start(ctx context.Context) error {
 	// Write the bridge script to a host temp file so we can bind-mount
 	// it into the container. We bind-mount the file (not a directory)
@@ -398,7 +442,7 @@ func (c *containerImpl) start(ctx context.Context) error {
 			return fmt.Errorf("ensure bridge dir: %w", err)
 		}
 	}
-	scriptF, err := os.CreateTemp(bridgeDir, "chat-sandbox-bridge-*.py")
+	scriptF, err := os.CreateTemp(bridgeDir, bridgeScriptTempPattern)
 	if err != nil {
 		return fmt.Errorf("temp bridge file: %w", err)
 	}
@@ -547,9 +591,10 @@ func (c *containerImpl) start(ctx context.Context) error {
 		fmt.Sprintf("--volume=%s:/opt/bridge/bridge.py:ro,Z", c.bridgeScriptPath),
 		fmt.Sprintf("--workdir=%s", c.cfg.WorkspaceHostDir),
 	}
-	// Disk quota for the writable layer (#216): without it an agent can fill the
-	// host disk and crash the box. storage-opt (hard total cap) when the driver
-	// supports it, else ulimit fsize (per-file cap). See diskQuotaArgs.
+	// Disk quota (#216): without it an agent can fill the host disk and crash
+	// the box. ulimit fsize (per-file, reaches the workspace bind mount) is
+	// always applied; storage-opt (total writable-LAYER cap) is added on top
+	// where the driver supports it. See diskQuotaArgs for why both.
 	args = append(args, diskQuotaArgs(c.cfg.DiskLimitGB, c.cfg.StorageOptSupported)...)
 	// Supporting-doc bind mounts — same-path so the personas/protocols/
 	// system_prompts symlinks tools/workspace.go drops into the per-
@@ -689,10 +734,23 @@ func (c *containerImpl) podmanArgs(rest []string) []string {
 	return append(out, rest...)
 }
 
+// statsDrainTimeout bounds how long close() waits for the telemetry poller to
+// publish its rollup. Generously larger than statsPollWaitDelay so the normal
+// path always completes; the point is that teardown can never be blocked
+// indefinitely by a telemetry goroutine.
+const statsDrainTimeout = 5 * time.Second
+
 // execReapTimeout bounds the synchronous container-kill on a cancelled/timed-out
 // bash call (#796). A daemon too wedged to answer in this window still leaves the
 // sandbox poisoned, so it is retired regardless.
 const execReapTimeout = 10 * time.Second
+
+// bridgeReapTimeout bounds how long terminateBridgeLocked waits for the
+// SIGKILLed bridge exec client to be reaped. The wait runs under c.mu, so an
+// unbounded one lets a single wedged client block every bash/python/fileop on
+// the container; past the bound the state is cleared anyway and the abandoned
+// Wait finishes on its own (the exec's WaitDelay force-closes its pipes).
+const bridgeReapTimeout = 5 * time.Second
 
 func (c *containerImpl) runBash(ctx context.Context, req BashRequest) (BashResult, error) {
 	// Snapshot the container id up front: close() concurrently clears the
@@ -790,18 +848,35 @@ func (c *containerImpl) killContainerNow(containerID string) bool {
 	args := c.podmanArgs([]string{"kill", "--signal", "KILL", containerID})
 	out, err := exec.CommandContext(killCtx, c.cfg.PodmanBinary, args...).CombinedOutput() //nolint:gosec // containerID is our generated name, not user input
 	if err != nil {
-		// A "no such container"/"already stopped" error means it is already
-		// gone — cleanup is effectively confirmed. Any other error (daemon
-		// wedged, timeout) leaves cleanup unconfirmed; the poison + retirement
-		// below is the backstop.
-		low := strings.ToLower(string(out))
-		if strings.Contains(low, "no such container") || strings.Contains(low, "not running") || strings.Contains(low, "no container") {
+		// An "already gone" error means every process in it is dead — cleanup
+		// is effectively confirmed. Any other error (daemon wedged, timeout)
+		// leaves cleanup unconfirmed; the poison + retirement below is the
+		// backstop.
+		if containerAlreadyGone(string(out)) {
 			return true
 		}
 		log.Printf("sandbox: cancelled-exec container kill unconfirmed (%s): %v (%.200s)", containerID, err, string(out))
 		return false
 	}
 	return true
+}
+
+// containerAlreadyGone reports whether a failed `podman kill`'s output means
+// the container is already dead or removed — the routine teardown race (#796
+// kill or natural exit beat us to it; --rm removal may still be in flight),
+// not a leak. The "can only kill running containers" form is podman's state
+// error for a container that has exited but is not yet removed; it names the
+// state, and only the DEAD states qualify — a paused container's processes
+// are frozen, not gone, so it must keep counting as unconfirmed.
+func containerAlreadyGone(out string) bool {
+	low := strings.ToLower(out)
+	if strings.Contains(low, "no such container") || strings.Contains(low, "not running") || strings.Contains(low, "no container") {
+		return true
+	}
+	// podman 5.x: `Error: can only kill running containers. <id> is in state
+	// exited: container state improper` (verified verbatim on podman 5.8.2).
+	return strings.Contains(low, "can only kill running containers") &&
+		(strings.Contains(low, "in state exited") || strings.Contains(low, "in state stopped"))
 }
 
 // currentContainerID snapshots the container id under idMu. close() clears
@@ -1017,12 +1092,19 @@ func (c *containerImpl) runPython(ctx context.Context, req PythonRequest) (Pytho
 	}
 
 	if _, err := fmt.Fprintf(c.bridgeStdin, "%s\n", reqBytes); err != nil {
+		// A failed write means the exec client is gone (EPIPE) yet
+		// ensureBridge would still judge the session healthy — ProcessState
+		// is nil until the child is Wait()ed — wedging every later
+		// run_python in the turn. Reap and reset so the next call starts
+		// fresh; the container is intact, so no poison.
+		c.terminateBridgeLocked()
 		return PythonResult{}, fmt.Errorf("send bridge request: %w%s", err, c.bridgeStderrSuffix())
 	}
 
 	type readResult struct {
-		data []byte
-		err  error
+		data      []byte
+		discarded int64
+		err       error
 	}
 	ch := make(chan readResult, 1)
 	// Snapshot the reader under c.mu (held for this whole body) BEFORE
@@ -1041,45 +1123,77 @@ func (c *containerImpl) runPython(ctx context.Context, req PythonRequest) (Pytho
 		defer safe.Recover("sandbox.container.bridge_read", func(any) {
 			ch <- readResult{err: fmt.Errorf("bridge reader panicked")}
 		})
-		data, err := stdout.ReadBytes('\n')
-		ch <- readResult{data: data, err: err}
+		// Capped read (mirrors the bash path's BashOutputCaptureCap): the
+		// response line is otherwise buffered whole into host memory, and the
+		// bridge's `vars` field has no size bound of its own.
+		data, discarded, err := readCappedLine(stdout, bridgeResponseCaptureCap)
+		ch <- readResult{data: data, discarded: discarded, err: err}
 	}()
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():
-		// Tear the bridge down (mirrors hostImpl.readLocked): the
-		// orphaned reader goroutine above still owns c.bridgeStdout,
-		// and the bridge may still write the late response. Reusing
-		// the session would make the next run_python race that reader
-		// and consume an off-by-one response stream for the rest of
-		// the turn. ensureBridge starts a fresh session next call.
+		// Cancellation reaches only the host side; the kernel keeps executing
+		// the cell inside the container — exactly the bash/fileop straggler
+		// problem (#796). Killing the bridge exec client alone leaves that
+		// cell free to finish a side effect (a delayed file write, a network
+		// call), so tear down the container's PID namespace synchronously and
+		// poison the sandbox before reporting the cancel. currentContainerID
+		// takes only idMu, and killContainerNow deliberately takes no lock at
+		// all, so neither can deadlock against the c.mu we hold here.
+		c.execPoisoned.Store(true)
+		_ = c.killContainerNow(c.currentContainerID())
+		// Also reap the host-side exec client and clear the bridge state
+		// (mirrors hostImpl.readLocked): the orphaned reader goroutine above
+		// still owns c.bridgeStdout and the session's response stream can no
+		// longer be trusted.
 		c.terminateBridgeLocked()
-		return PythonResult{}, fmt.Errorf("python execution cancelled: %w", ctx.Err())
+		return PythonResult{}, fmt.Errorf("python execution cancelled (%w); sandbox retired: %w", ctx.Err(), ErrPoisoned)
 	case <-timer.C:
+		// Same containment as the cancel arm: the timed-out cell is still
+		// running in the container until the PID namespace goes away.
+		c.execPoisoned.Store(true)
+		_ = c.killContainerNow(c.currentContainerID())
 		c.terminateBridgeLocked()
-		return PythonResult{}, fmt.Errorf("python execution timed out after %v", timeout)
+		return PythonResult{}, fmt.Errorf("python execution timed out after %v; sandbox retired: %w", timeout, ErrPoisoned)
 	case r := <-ch:
 		if r.err != nil {
+			// The session is dead (EOF/broken pipe from the exec client) but
+			// ensureBridge's health check cannot see that: ProcessState stays
+			// nil until someone Wait()s the child. Without a reset here every
+			// later run_python in the turn would write into the same corpse
+			// and fail — reap it and clear the state so the next call boots a
+			// fresh bridge. The container itself is intact: no poison.
+			c.terminateBridgeLocked()
 			return PythonResult{}, fmt.Errorf("bridge closed unexpectedly: %w%s", r.err, c.bridgeStderrSuffix())
+		}
+		if r.discarded > 0 {
+			// The response overran the cap, so its JSON cannot be parsed — but
+			// the reader drained to the newline, the stream is still framed,
+			// and the kernel is healthy: fail only this call, keep the
+			// session. No poison, no reset (mirrors bash truncation, which is
+			// not fatal to the sandbox).
+			return PythonResult{}, fmt.Errorf("bridge response exceeded %d bytes (%d bytes discarded) and was dropped — return large results by writing them to a workspace file instead", bridgeResponseCaptureCap, r.discarded)
 		}
 		return parseBridgeResponse(r.data)
 	}
 }
 
 // terminateBridgeLocked kills the bridge exec session and clears the
-// bridge state so the next ensureBridge starts fresh. Called after a
-// timeout/cancel left a reader goroutine holding bridgeStdout — the
-// session's response stream can no longer be trusted. Caller must hold c.mu.
+// bridge state so the next ensureBridge starts fresh. Called when the
+// session's response stream can no longer be trusted: after a cancel/timeout
+// (where a reader goroutine still holds bridgeStdout), after a bridge
+// write/read error, and from close(). Caller must hold c.mu.
 //
 // SIGKILLing the host-side `podman exec` client does not run the bridge's
 // in-process cleanup() (which would SIGTERM the kernel's process group), so the
-// kernel can be left orphaned inside the container. In per-turn mode that's
-// moot — the container is torn down right after. In PERSISTENT mode (#213) the
-// container survives, so the orphan is reaped by the NEXT bridge start
+// kernel can be left orphaned inside the container. On the cancel/timeout arms
+// that's moot — runPython kills the whole container and poisons the sandbox
+// first (#796), so nothing survives. On the write/read-error reset paths the
+// container stays alive, and the orphan is reaped by the NEXT bridge start
 // (reap_stale_kernels in python_bridge.py SIGKILLs leftover ipykernel
-// processes), and --init reaps the resulting zombie. A cancelled/timed-out cell
-// therefore restarts the kernel and loses prior-turn state — surfaced in the
+// processes), and --init reaps the resulting zombie. A reset therefore
+// restarts the kernel and loses prior in-conversation state — surfaced in the
 // run_python tool description.
 func (c *containerImpl) terminateBridgeLocked() {
 	if cmd := c.bridgeCmd; cmd != nil && cmd.Process != nil {
@@ -1094,7 +1208,18 @@ func (c *containerImpl) terminateBridgeLocked() {
 		case <-done:
 		case <-time.After(200 * time.Millisecond):
 			_ = cmd.Process.Kill()
-			<-done
+			// The post-kill wait is BOUNDED: this runs under c.mu, and a Wait
+			// that never returns (a client wedged in uninterruptible sleep, or
+			// a pre-WaitDelay exec whose pipes are held open) would otherwise
+			// block every other operation on this container forever. Past the
+			// bound the wait goroutine is abandoned; the exec's WaitDelay
+			// force-closes the pipes so it still finishes on its own once the
+			// process exits.
+			select {
+			case <-done:
+			case <-time.After(bridgeReapTimeout):
+				log.Printf("sandbox: bridge exec client did not reap within %s of SIGKILL; abandoning the wait and clearing the bridge state", bridgeReapTimeout)
+			}
 		}
 	}
 	if c.bridgeStdin != nil {
@@ -1152,6 +1277,13 @@ func (c *containerImpl) ensureBridge() error {
 	// The bridge is intentionally not bound to the caller's ctx: it outlives
 	// any single request and is torn down in close() via podman kill.
 	cmd := exec.Command(c.cfg.PodmanBinary, c.podmanArgs(args)...) //nolint:gosec,noctx // G204: fixed operator-configured podman binary + our own args (no shell). noctx: the bridge intentionally outlives any single request ctx and is torn down in close() via podman kill.
+	// Without WaitDelay, terminateBridgeLocked's cmd.Wait() blocks until the
+	// stdout/stderr pipes close — anything that inherited them (conmon, a
+	// stray descendant of the exec client) keeps Wait blocked forever after
+	// the client itself is dead, and terminateBridgeLocked runs under c.mu, so
+	// every other operation on this container stalls behind it. Same hazard
+	// BashWaitDelay exists for on the bash path.
+	cmd.WaitDelay = BashWaitDelay
 	stderrBuf := &syncBuffer{}
 	cmd.Stderr = io.MultiWriter(os.Stderr, stderrBuf)
 
@@ -1204,25 +1336,43 @@ func (c *containerImpl) close() {
 	c.containerID = ""
 	c.idMu.Unlock()
 
-	// Stop the telemetry poller and let it publish its rollup before we tear
-	// the container down. The poller exits promptly on ctx cancel (it only
-	// blocks on a ticker / a short-lived `podman stats`), so this adds no
-	// meaningful latency to close.
+	// Stop the telemetry poller and let it publish its rollup before we tear the
+	// container down. The poller blocks only on a ticker or a `podman stats` that
+	// is itself WaitDelay-bounded (statsPollWaitDelay), so it normally returns in
+	// microseconds and this adds no meaningful latency.
+	//
+	// The wait is nonetheless BOUNDED. It used to be a bare receive, which made
+	// teardown hostage to a telemetry goroutine: anything that wedged the poller
+	// stalled close() forever, and with it the turn's sandbox release and the pool
+	// slot. Telemetry must never be able to do that, so past the bound we abandon
+	// the rollup (losing at most one sandbox's resource summary) and proceed to
+	// kill the container.
 	if statsCancel != nil {
 		statsCancel()
 	}
 	if statsDone != nil {
-		<-statsDone
+		select {
+		case <-statsDone:
+		case <-time.After(statsDrainTimeout):
+			log.Printf("sandbox: telemetry poller did not stop within %s; abandoning its resource rollup and tearing the container down anyway", statsDrainTimeout)
+		}
 	}
 
 	if containerID != "" {
 		// Best-effort kill. --rm in `podman run` means the container is
 		// removed automatically once the root process exits, so killing
-		// is enough.
+		// is enough. A failure here can leak a running container until the
+		// boot-time orphan sweep — say so instead of failing silently, but
+		// stay quiet for the already-gone case (a #796 kill or natural exit
+		// beat us to it), which is routine, not a leak.
 		killCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		stop := exec.CommandContext(killCtx, c.cfg.PodmanBinary, c.podmanArgs([]string{"kill", containerID})...) //nolint:gosec // containerID is our generated UUID, not user input
-		_ = stop.Run()
+		if out, err := stop.CombinedOutput(); err != nil {
+			if !containerAlreadyGone(string(out)) {
+				log.Printf("sandbox: close-time container kill unconfirmed (%s): %v (%.200s) — the container may linger until the boot-time orphan prune", containerID, err, string(out))
+			}
+		}
 	}
 	if scriptPath != "" {
 		_ = os.Remove(scriptPath)

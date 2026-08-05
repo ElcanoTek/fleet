@@ -7,11 +7,15 @@ package scheduler
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"os/exec"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -30,6 +34,16 @@ type Scheduler struct {
 	storage  *storage.Storage
 	location *time.Location
 	stop     chan struct{}
+
+	// loopDone is closed by runLoop on return; loopStarted records whether
+	// Start actually launched it. Stop must wait for the loop to exit before
+	// draining gateWG: a tick already inside the loop body when stop closes
+	// can still dispatch gate evaluations (gateWG.Add), and sync.WaitGroup
+	// forbids an Add that races a Wait — that misuse panics, and a panic in
+	// Stop's drain goroutine has no recover and would kill the process
+	// mid-shutdown. Only after runLoop returns is the dispatch side quiescent.
+	loopDone    chan struct{}
+	loopStarted bool
 
 	// Automatic run-history retention (#252). retentionDays<=0 disables the daily
 	// pruning sweep entirely; otherwise terminal runs older than retentionDays are
@@ -61,11 +75,41 @@ type Scheduler struct {
 	// in. Defaults to defaultScheduledBatchSize; a field only so tests can inject
 	// a small value and exercise the multi-batch / soft-hold paths cheaply.
 	scheduledBatchSize int
+
+	// tickInterval is the runLoop ticker period. Defaults to
+	// defaultTickInterval; a field only so tests can shrink it and drive real
+	// Start/Stop lifecycles without waiting out the production cadence.
+	tickInterval time.Duration
+
+	// Bounded, asynchronous run_if evaluation (#269 hardening). A gate is a
+	// host-side shell command with a timeout of up to 300s; evaluating it
+	// inline used to serialize the whole tick — one hung gate delayed ALL
+	// scheduling and lease recovery by its full timeout, and the 30s ticker
+	// drops ticks while the body blocks. Gates are instead dispatched to
+	// goroutines: gateSlots caps how many run concurrently (a full pool defers
+	// the task to a later tick — it stays scheduled and due), gateInFlight
+	// (under gateMu) prevents the next tick from double-dispatching a task
+	// whose gate is still running, and gateWG lets Stop (bounded by
+	// gateDrainTimeout) and tests wait for outstanding evaluations to settle.
+	gateSlots    chan struct{}
+	gateMu       sync.Mutex
+	gateInFlight map[uuid.UUID]struct{}
+	gateWG       sync.WaitGroup
 }
+
+// maxConcurrentGateEvals bounds how many run_if gate commands may execute at
+// once. Small on purpose: gates are meant to be lightweight checks, and the
+// bound is what keeps N hung gates from consuming unbounded host processes —
+// the tick itself never waits on any of them.
+const maxConcurrentGateEvals = 4
 
 // defaultScheduledBatchSize is the number of due tasks ProcessScheduledTasks
 // promotes per DB round-trip.
 const defaultScheduledBatchSize = 1000
+
+// defaultTickInterval is how often runLoop wakes to promote due tasks and run
+// the cheap DB sweeps.
+const defaultTickInterval = 30 * time.Second
 
 // maxRunIfStderrBytes bounds diagnostics retained from an admin-authored
 // pre-run gate. The command itself is time-bounded, but without a byte bound a
@@ -73,6 +117,12 @@ const defaultScheduledBatchSize = 1000
 const maxRunIfStderrBytes = 8 << 10
 
 const runIfStderrTruncated = "\n…[stderr truncated]"
+
+// runIfWaitDelay bounds how long cmd.Run may keep waiting on the stderr pipe
+// after the gate's process exits or its timeout fires. Without it a grandchild
+// that inherited the pipe and escaped the process-group kill (setsid) would
+// block the sequential scheduler tick indefinitely.
+const runIfWaitDelay = 10 * time.Second
 
 type cappedRunIfStderr struct {
 	buf       bytes.Buffer
@@ -151,22 +201,64 @@ func New(store *storage.Storage, timezone string) *Scheduler {
 		storage:            store,
 		location:           loc,
 		stop:               make(chan struct{}),
+		loopDone:           make(chan struct{}),
 		scheduledBatchSize: defaultScheduledBatchSize,
+		tickInterval:       defaultTickInterval,
+		gateSlots:          make(chan struct{}, maxConcurrentGateEvals),
+		gateInFlight:       make(map[uuid.UUID]struct{}),
 	}
 }
 
 // Start starts the scheduler.
 func (s *Scheduler) Start() {
 	log.Println("Starting scheduler...")
+	s.loopStarted = true
 	go s.runLoop()
 }
 
-// Stop stops the scheduler.
-func (s *Scheduler) Stop() { close(s.stop) }
+// gateDrainTimeout bounds how long Stop waits for in-flight run_if gate
+// evaluations to settle. Gates are meant to be lightweight checks, so the
+// common case drains in well under this; a slower gate (they may legitimately
+// run up to 300s) must never hold shutdown for its full runtime, so the wait
+// is a bound, not a guarantee.
+const gateDrainTimeout = 5 * time.Second
+
+// Stop stops the scheduler, waiting up to gateDrainTimeout for runLoop to
+// exit and for in-flight run_if gate evaluations to settle their promote/skip
+// writes. The loop-exit wait comes FIRST, and not just for tidiness: a tick
+// already inside the loop body when stop closes can still dispatch gates
+// (gateWG.Add), and calling gateWG.Wait concurrently with those Adds is a
+// sync.WaitGroup misuse panic — in a goroutine with no recover, so it would
+// kill the process mid-shutdown and skip main's remaining deferred cleanup.
+// A gate still running at the deadline is abandoned to finish on its own: its
+// settle write is conditional (fromStatus=scheduled), so it either lands as
+// it would have or fails harmlessly, and a task left `scheduled` is simply
+// re-evaluated after restart. The bounded wait exists only to close that
+// shutdown race in the common case, never to let a slow gate extend shutdown.
+func (s *Scheduler) Stop() {
+	close(s.stop)
+	settled := make(chan struct{})
+	go func() {
+		// Tests may drive ticks directly without Start; only a started loop
+		// has a runLoop to wait out (and only runLoop dispatches concurrently
+		// with Stop — direct ProcessScheduledTasks callers are sequential).
+		if s.loopStarted {
+			<-s.loopDone
+		}
+		s.gateWG.Wait()
+		close(settled)
+	}()
+	select {
+	case <-settled:
+	case <-time.After(gateDrainTimeout):
+		log.Printf("scheduler: stopped with run_if gate evaluations still in flight; their tasks stay scheduled and are re-evaluated after restart")
+	}
+}
 
 func (s *Scheduler) runLoop() {
+	defer close(s.loopDone)
 	defer safe.Recover("scheduler.runLoop", nil)
-	ticker := time.NewTicker(30 * time.Second)
+	ticker := time.NewTicker(s.tickInterval)
 	defer ticker.Stop()
 
 	// Daily maintenance sweep: a timer that fires at the next cleanupHour:00 UTC,
@@ -200,13 +292,20 @@ func (s *Scheduler) runLoop() {
 		case <-ticker.C:
 			// Recover per tick so a panic in task promotion or lease recovery
 			// fails only that tick — it must never kill the loop or the process.
+			//
+			// Order matters: the four cheap DB sweeps run BEFORE task promotion,
+			// with lease recovery first — it is the crash-recovery backstop, and
+			// promotion is the one tick phase whose cost scales with operator
+			// config (run_if gates; bounded + async, but defense in depth says a
+			// regression there must not be able to starve recovery of crashed
+			// workers' tasks).
 			func() {
 				defer safe.Recover("scheduler.tick", nil)
-				s.ProcessScheduledTasks()
 				s.RecoverExpiredLeases()
 				s.runStarvationPromotion()
 				s.runPausedExpiry()
 				s.runWakeSweep()
+				s.ProcessScheduledTasks()
 			}()
 		case <-cleanupC:
 			func() {
@@ -331,10 +430,11 @@ func (s *Scheduler) RecoverExpiredLeases() {
 	}
 }
 
-// ProcessScheduledTasks promotes due scheduled tasks to pending. Tasks that
-// carry a pre-run shell gate (#269) are evaluated first; only those whose check
-// passes (or whose on_error policy is "run") are promoted. Failing checks skip
-// the task (scheduled_for advances, skip_count increments) via handleSkip.
+// ProcessScheduledTasks promotes due scheduled tasks to pending. Ungated tasks
+// are promoted in batch, synchronously. Tasks that carry a pre-run shell gate
+// (#269) are handed to the bounded async evaluation pool and settled there —
+// promoted when the check passes (or when it errors under on_error:"run"),
+// skipped via handleSkip otherwise — so this tick never blocks on a gate.
 func (s *Scheduler) ProcessScheduledTasks() {
 	now := time.Now().In(s.location)
 	batchSize := s.scheduledBatchSize
@@ -386,9 +486,8 @@ func (s *Scheduler) ProcessScheduledTasks() {
 		}
 		cursorID = last.ID
 
-		recurringCount := 0
+		recurringCount, gatedCount, deferredGates := 0, 0, 0
 		promoteIDs := make([]uuid.UUID, 0, len(tasks))
-		var toSkip []taskSkip
 		for _, task := range tasks {
 			if task.Recurrence != "" {
 				recurringCount++
@@ -397,26 +496,20 @@ func (s *Scheduler) ProcessScheduledTasks() {
 				promoteIDs = append(promoteIDs, task.ID)
 				continue
 			}
-			ok, reason, err := s.evalRunIf(task)
-			if err != nil {
-				if task.RunIf.EffectiveOnError() == models.RunIfOnErrorSkip {
-					toSkip = append(toSkip, taskSkip{task: task, reason: "check_error: " + err.Error()})
-				} else {
-					promoteIDs = append(promoteIDs, task.ID)
-				}
-				continue
-			}
-			if ok {
-				promoteIDs = append(promoteIDs, task.ID)
-			} else {
-				toSkip = append(toSkip, taskSkip{task: task, reason: reason})
+			// Gated tasks are settled ASYNCHRONOUSLY (promote or skip happens in
+			// the eval goroutine) so a slow or hung gate can never stall this
+			// tick. A task that can't be dispatched — its gate is still running
+			// from an earlier tick, or the pool is full — is simply left in the
+			// due set: the cursor has already advanced past it for THIS tick
+			// (the #566 termination argument is unchanged), and the next tick
+			// re-fetches it.
+			gatedCount++
+			if !s.tryDispatchGateEval(task) {
+				deferredGates++
 			}
 		}
-		log.Printf("Processing %d scheduled tasks (%d recurring, %d to skip)", len(tasks), recurringCount, len(toSkip))
-
-		for _, sk := range toSkip {
-			s.handleSkip(sk.task, sk.reason)
-		}
+		log.Printf("Processing %d scheduled tasks (%d recurring, %d gated dispatched async, %d gated deferred)",
+			len(tasks), recurringCount, gatedCount-deferredGates, deferredGates)
 
 		promoted, err := s.storage.UpdateTasksStatusBatch(promoteIDs, models.TaskStatusScheduled, models.TaskStatusPending)
 		if err != nil {
@@ -450,12 +543,79 @@ func (s *Scheduler) ProcessScheduledTasks() {
 // defensive valve for the #566 cursor walk.
 const maxScheduledRowsPerTick = 100_000
 
-// taskSkip pairs a task with the human-readable reason its pre-run gate
-// declined it (#269). The reason is recorded on the task row (last_skip_reason)
-// and logged.
-type taskSkip struct {
-	task   *models.Task
-	reason string
+// tryDispatchGateEval hands a gated task to the async evaluation pool. It
+// returns false — leaving the task scheduled and due, to be retried next tick —
+// when the task's gate is already in flight from an earlier tick or the pool
+// is at maxConcurrentGateEvals. The in-flight mark is taken under gateMu
+// BEFORE the goroutine starts so two ticks can never race one task into two
+// evaluations.
+func (s *Scheduler) tryDispatchGateEval(task *models.Task) bool {
+	s.gateMu.Lock()
+	if _, busy := s.gateInFlight[task.ID]; busy {
+		s.gateMu.Unlock()
+		return false
+	}
+	select {
+	case s.gateSlots <- struct{}{}:
+	default:
+		s.gateMu.Unlock()
+		return false
+	}
+	s.gateInFlight[task.ID] = struct{}{}
+	s.gateMu.Unlock()
+
+	s.gateWG.Add(1)
+	go s.evalAndSettleGate(task)
+	return true
+}
+
+// evalAndSettleGate runs one gated task's run_if check and settles the task:
+// promote to pending on pass (or on a check error under on_error:"run"), skip
+// via handleSkip otherwise. Runs on its own goroutine; both settle paths
+// re-check inside the DB write that the row is still `scheduled` AND still
+// carries the scheduled_for this evaluation was dispatched against, so a task
+// cancelled, edited, or rescheduled while its gate ran is never resurrected
+// and never has an operator's fresh scheduled_for clobbered by the stale
+// verdict.
+func (s *Scheduler) evalAndSettleGate(task *models.Task) {
+	defer s.gateWG.Done()
+	defer func() {
+		<-s.gateSlots
+		s.gateMu.Lock()
+		delete(s.gateInFlight, task.ID)
+		s.gateMu.Unlock()
+	}()
+	defer safe.Recover("scheduler.gateEval", nil)
+
+	ok, reason, err := s.evalRunIf(task)
+	switch {
+	case err != nil && task.RunIf.EffectiveOnError() == models.RunIfOnErrorSkip:
+		s.handleSkip(task, "check_error: "+err.Error())
+	case err != nil || ok:
+		// Pass, or a check error under the default on_error:"run" policy.
+		s.promoteGatedTask(task)
+	default:
+		s.handleSkip(task, reason)
+	}
+}
+
+// promoteGatedTask promotes one gate-passing task from scheduled to pending.
+// The conditional UPDATE (still `scheduled`, scheduled_for unchanged since
+// dispatch) makes a concurrent cancel win exactly like the batch promotion
+// path for ungated tasks — and, because gates settle asynchronously, also
+// makes a concurrent edit/reschedule win: a task postponed while its gate ran
+// must not run on the stale verdict (the next due tick re-evaluates it).
+func (s *Scheduler) promoteGatedTask(task *models.Task) {
+	n, err := s.storage.SettleGatedTask(task.ID, task.ScheduledFor, models.TaskStatusPending)
+	if err != nil {
+		log.Printf("Error promoting gated task %s: %v", task.ID, err)
+		return
+	}
+	if n > 0 {
+		log.Printf("Task %s passed its run_if gate and is now pending", task.ID)
+	} else {
+		log.Printf("Task %s changed while its run_if gate ran — stale pass verdict discarded", task.ID)
+	}
 }
 
 // evalRunIf evaluates a task's pre-run shell gate on the host (#269). The check
@@ -485,10 +645,33 @@ func (s *Scheduler) evalRunIf(task *models.Task) (shouldRun bool, reason string,
 	cmd.Env = []string{"PATH=/usr/bin:/bin", "HOME=/tmp"}
 	var stderr cappedRunIfStderr
 	cmd.Stderr = &stderr
+	// Run the gate as its own process-group leader and SIGKILL the WHOLE group
+	// on cancel/timeout: CommandContext's default kill signals only the direct
+	// sh, so a backgrounded grandchild would survive the timeout while holding
+	// the stderr pipe open — and the pipe copier would block cmd.Run (and this
+	// scheduler tick: lease recovery, the wake sweep) indefinitely. Same
+	// invariant as the host sandbox's bash path (internal/sandbox/host.go).
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		if cmd.Process != nil {
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		}
+		return os.ErrProcessDone // group-killed above; nothing more to signal
+	}
+	// WaitDelay is the backstop for a grandchild that escaped the group (e.g.
+	// setsid): it force-closes the stderr pipe after the gate exits so cmd.Run
+	// honors the documented [1,300]s ceiling instead of blocking on the pipe.
+	cmd.WaitDelay = runIfWaitDelay
 
 	runErr := cmd.Run()
 	if ctx.Err() == context.DeadlineExceeded {
 		return false, "check timed out", ctx.Err()
+	}
+	// ErrWaitDelay means the gate itself exited 0 and only the force-closed
+	// pipe was abnormal (a lingering grandchild held it) — the recorded exit
+	// status is authoritative, so treat it as a clean exit 0.
+	if errors.Is(runErr, exec.ErrWaitDelay) {
+		runErr = nil
 	}
 	want := task.RunIf.ExitCodeIs
 	if runErr != nil {
@@ -510,11 +693,13 @@ func (s *Scheduler) evalRunIf(task *models.Task) (shouldRun bool, reason string,
 }
 
 // handleSkip records a pre-run-gate skip on a task (#269) and advances its
-// scheduled_for to the next cron tick. For a non-recurring task there is no
-// next tick: the skip is recorded (skip_count++, last_skip_at/reason stamped)
-// without advancing scheduled_for, so the task stays due and will be re-evaluated
-// on the next tick (a one-shot skip is effectively a soft hold, not a cancel —
-// see the issue's non-goals). Failures are logged; they never abort the tick.
+// scheduled_for to the next cron tick. A non-recurring task has no next tick:
+// the skip is recorded (skip_count++, last_skip_at/reason stamped) and
+// scheduled_for advances by an exponential backoff on skip_count instead (a
+// one-shot skip is a soft hold that keeps retrying, not a cancel — see the
+// issue's non-goals — but without backoff a declined gate re-ran its host
+// command every 30s tick forever). The same backoff covers a recurring task
+// whose ComputeNextRun errored. Failures are logged; they never abort the tick.
 func (s *Scheduler) handleSkip(task *models.Task, reason string) {
 	class := "check_failed"
 	var nextRun time.Time
@@ -527,21 +712,42 @@ func (s *Scheduler) handleSkip(task *models.Task, reason string) {
 			// The recurrence's end date falls before the next cron tick: there is
 			// no future occurrence to advance to, so cancel the row instead of
 			// leaving it due (it would otherwise re-skip on every tick forever).
-			if _, cerr := s.storage.UpdateTasksStatusBatch([]uuid.UUID{task.ID},
-				models.TaskStatusScheduled, models.TaskStatusCancelled); cerr != nil {
+			// Settled conditionally like the other verdict writes: an edit or
+			// reschedule that landed while the gate ran (it may have changed the
+			// recurrence or its end date) invalidates this cancel too.
+			n, cerr := s.storage.SettleGatedTask(task.ID, task.ScheduledFor, models.TaskStatusCancelled)
+			switch {
+			case cerr != nil:
 				log.Printf("Error ending recurrence for skipped task %s: %v", task.ID, cerr)
-			} else {
+			case n > 0:
 				log.Printf("Recurrence for task %s ended at skip: next tick %s is past recurrence_until %s",
 					task.ID, computed.Format(time.RFC3339), task.RecurrenceUntil.Format(time.RFC3339))
+			default:
+				log.Printf("Task %s changed while its run_if gate ran — stale end-of-recurrence verdict discarded", task.ID)
 			}
 			return
 		default:
 			nextRun = computed
 		}
 	}
+	// No future cron tick to advance to (one-shot, or ComputeNextRun errored):
+	// back the retry off exponentially on the skips already recorded, so a
+	// persistently-declining gate settles at one host command per
+	// gateSkipBackoffCap instead of one per tick.
+	if nextRun.IsZero() {
+		nextRun = time.Now().UTC().Add(gateSkipBackoff(task.SkipCount))
+	}
 	ctx := context.Background()
-	if _, err := s.storage.RecordSkip(ctx, task.ID, reason, nextRun); err != nil {
+	_, recorded, err := s.storage.RecordSkip(ctx, task.ID, reason, nextRun, task.ScheduledFor)
+	if err != nil {
 		log.Printf("Error recording skip for task %s: %v", task.ID, err)
+		return
+	}
+	if !recorded {
+		// The task was cancelled, claimed, edited, or rescheduled while the
+		// gate ran; nothing was written, so don't count or log a skip that
+		// never happened — the next due tick re-evaluates the current row.
+		log.Printf("Task %s changed while its run_if gate ran — stale skip verdict discarded", task.ID)
 		return
 	}
 	// Distinguish a check_error (the gate timed out / crashed) from a clean
@@ -552,10 +758,59 @@ func (s *Scheduler) handleSkip(task *models.Task, reason string) {
 		class = "check_error"
 	}
 	metrics.RecordTaskSkipped(class)
-	nextStr := "none (one-shot)"
-	if !nextRun.IsZero() {
-		nextStr = nextRun.Format(time.RFC3339)
+	nextStr := nextRun.Format(time.RFC3339)
+	// The reason carries raw gate stderr, so the event is json.Marshal'ed —
+	// interpolated unescaped, a newline or quote in it would split or forge
+	// log records. The log line clamps the reason to a short prefix; the full
+	// capped text is already persisted to last_skip_reason by RecordSkip above.
+	event, err := json.Marshal(struct {
+		Event     string `json:"event"`
+		TaskID    string `json:"task_id"`
+		Reason    string `json:"reason"`
+		NextRunAt string `json:"next_run_at"`
+	}{"task_skipped", task.ID.String(), clampSkipReason(reason), nextStr})
+	if err != nil {
+		log.Printf("Error marshaling skip event for task %s: %v", task.ID, err)
+		return
 	}
-	log.Printf(`{"event":"task_skipped","task_id":"%s","reason":"%s","next_run_at":"%s"}`,
-		task.ID, reason, nextStr)
+	log.Printf("%s", event)
+}
+
+// gateSkipBackoffBase / gateSkipBackoffCap bound the retry cadence of a
+// declined gate with no future cron tick to advance to (a one-shot's soft
+// hold, or a recurring task whose ComputeNextRun failed): 30s, 1m, 2m, …,
+// doubling per recorded skip up to the cap. The base matches the tick period
+// (first retry is next tick, preserving the historical behavior for a
+// transient decline); the cap keeps a permanently-declining gate visible in
+// the skip telemetry without hammering its host command.
+const (
+	gateSkipBackoffBase = 30 * time.Second
+	gateSkipBackoffCap  = 30 * time.Minute
+)
+
+// gateSkipBackoff returns the delay before a declined gate is re-evaluated,
+// given how many skips the task has already recorded.
+func gateSkipBackoff(skipCount int) time.Duration {
+	d := gateSkipBackoffBase
+	for i := 0; i < skipCount && d < gateSkipBackoffCap; i++ {
+		d *= 2
+	}
+	if d > gateSkipBackoffCap {
+		d = gateSkipBackoffCap
+	}
+	return d
+}
+
+// maxSkipReasonLogBytes bounds the gate stderr echoed into the task_skipped
+// LOG line; the full (8 KiB-capped) reason persists to last_skip_reason, so
+// diagnosis is unaffected.
+const maxSkipReasonLogBytes = 256
+
+func clampSkipReason(reason string) string {
+	if len(reason) <= maxSkipReasonLogBytes {
+		return reason
+	}
+	// json.Marshal replaces a rune split by the byte clamp with U+FFFD, so the
+	// cut is safe even mid-UTF-8.
+	return reason[:maxSkipReasonLogBytes] + "…[truncated]"
 }

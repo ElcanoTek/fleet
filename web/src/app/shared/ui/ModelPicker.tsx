@@ -8,6 +8,7 @@ import {
   type PickerModel,
 } from "@/app/shared/lib/models";
 import { useCancellableFetch } from "@/app/shared/hooks/useCancellableFetch";
+import { ModelCostIndicator } from "@/app/shared/ui/ModelCostIndicator";
 
 // ModelPicker — combobox autocomplete over OpenRouter model slugs. React port
 // of moc's model-picker.js. The pure filtering/affordability logic lives in
@@ -152,6 +153,14 @@ export function ModelPicker({ id, value, onChange, placeholder, ...rest }: Model
                   ) : model.recommended ? (
                     <span className="model-picker-badge">Recommended</span>
                   ) : null}
+                  {/* Cost tier last so the row's leading edge stays the name;
+                      absent for models with no catalog pricing. */}
+                  <ModelCostIndicator
+                    prices={{
+                      pricePrompt: model.pricePrompt,
+                      priceCompletion: model.priceCompletion,
+                    }}
+                  />
                 </span>
                 <span className="model-picker-slug">{model.id}</span>
               </button>

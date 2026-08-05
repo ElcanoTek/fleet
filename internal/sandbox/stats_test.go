@@ -2,7 +2,9 @@ package sandbox
 
 import (
 	"context"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"testing"
 	"time"
@@ -323,5 +325,49 @@ func TestContainerResourceUsage_E2E(t *testing.T) {
 	}
 	if summary.PidsPeak == 0 {
 		t.Errorf("expected non-zero peak pids, got summary %+v", summary)
+	}
+}
+
+// TestStatsPollWaitDelayIsBounded pins the two properties that keep telemetry
+// off the critical path, both of which were missing:
+//
+//  1. pollOnce sets a WaitDelay. Without it, Output() waits for the stdout pipe
+//     to close, which cancelling ctx does not guarantee — so a `podman stats`
+//     whose pipes are held open blocks the poller indefinitely.
+//  2. close() waits for the poller with a BOUND. It used to be a bare receive,
+//     making sandbox teardown hostage to a telemetry goroutine.
+//
+// The first is asserted end-to-end with a fake podman that ignores SIGTERM and
+// holds stdout open forever: pollOnce must still return, and in well under the
+// unbounded case.
+func TestStatsPollWaitDelayIsBounded(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("process-group behavior asserted on linux only")
+	}
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "fake-podman")
+	// Hold stdout open via a child that outlives the parent, and ignore TERM so
+	// only the WaitDelay can end the wait.
+	script := "#!/bin/sh\ntrap '' TERM\nsleep 300 &\nexec sleep 300\n"
+	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
+		t.Fatalf("write fake podman: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, ok := pollOnce(ctx, bin, "chat-sandbox-deadbeef")
+	elapsed := time.Since(start)
+
+	if ok {
+		t.Error("pollOnce reported a sample from a fake podman that never printed one")
+	}
+	// ctx deadline (0.2s) + WaitDelay (2s) with headroom. Without WaitDelay this
+	// blocks for the child's full 300s and the test times out.
+	if elapsed > statsPollWaitDelay+5*time.Second {
+		t.Errorf("pollOnce took %s — it is not bounded by statsPollWaitDelay (%s)", elapsed, statsPollWaitDelay)
+	}
+	if statsDrainTimeout <= statsPollWaitDelay {
+		t.Errorf("statsDrainTimeout (%s) must exceed statsPollWaitDelay (%s), or close() can abandon a rollup the poller was about to publish", statsDrainTimeout, statsPollWaitDelay)
 	}
 }

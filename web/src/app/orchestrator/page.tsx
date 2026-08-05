@@ -9,5 +9,5 @@ import { OrchestratorClient } from "./orchestrator-client";
 export const dynamic = "force-dynamic";
 
 export default function OrchestratorPage() {
-  return <OrchestratorClient elcanoLoginEnabled={getAuthSigningPubkey() !== ""} />;
+  return <OrchestratorClient magicLinkLoginEnabled={getAuthSigningPubkey() !== ""} />;
 }

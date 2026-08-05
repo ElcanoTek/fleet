@@ -98,6 +98,46 @@ describe("loadModels (fetch + fallback)", () => {
     expect(models.some((m) => m.id === "deepseek/deepseek-v3.2")).toBe(true);
   });
 
+  it("joins catalog prices onto the hand-written seed entries", async () => {
+    // dedupeAndOrder keeps the seed row and drops the fetched duplicate, so
+    // without the enrichment pass the two pinned slugs would be the only rows
+    // in the picker with no cost indicator.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async (url: string) => {
+        if (String(url).includes("/api/model-catalog")) {
+          return {
+            ok: true,
+            json: async () => ({
+              models: [
+                {
+                  slug: "z-ai/glm-5.2",
+                  name: "Z.AI: GLM 5.2",
+                  price_prompt: 0.0000004,
+                  price_completion: 0.0000016,
+                  context_length: 200000,
+                },
+              ],
+            }),
+          };
+        }
+        return { ok: true, json: async () => ({ models: [], providers: [] }) };
+      }),
+    );
+    const models = await loadModels();
+    const seeded = models.find((m) => m.id === "z-ai/glm-5.2");
+    expect(seeded).toMatchObject({
+      // Seed facts win: the curated name and the recommended flag survive.
+      name: "Z.AI: GLM 5.2",
+      recommended: true,
+      pricePrompt: 0.0000004,
+      priceCompletion: 0.0000016,
+      contextLength: 200000,
+    });
+    // And the row is not duplicated by the catalog entry.
+    expect(models.filter((m) => m.id === "z-ai/glm-5.2")).toHaveLength(1);
+  });
+
   it("falls back to the seed list when the fetch fails", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network down")));
     const models = await loadModels();

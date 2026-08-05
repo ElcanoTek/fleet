@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { classifyBootstrapFailure } from "@/app/chat/ui/bootstrapFailure";
 import { OrchestratorError, orchestratorApi } from "@/app/shared/lib/orchestratorApi";
 import {
   clearStoredToken,
@@ -20,6 +21,7 @@ export type OrchestratorSession = {
   username?: string;
   role?: string; // "admin" | "client" | "readonly"; may be absent for an admin-API-key principal
   noAccess: boolean; // authenticated to chat, but not provisioned in the orchestrator (/me → 403 not_a_member)
+  unreachable: boolean; // the probe failed with a non-auth verdict (5xx/network) — backend down, session state unknown
   login: (username: string, password: string) => Promise<boolean>;
   logout: () => Promise<void>;
   error: string | null;
@@ -31,6 +33,7 @@ export function useOrchestratorSession(): OrchestratorSession {
   const [username, setUsername] = useState<string | undefined>(undefined);
   const [role, setRole] = useState<string | undefined>(undefined);
   const [noAccess, setNoAccess] = useState(false);
+  const [unreachable, setUnreachable] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Initial probe (#458 symptoms 1 + 3): ALWAYS hit /me — the route resolves a
@@ -52,22 +55,31 @@ export function useOrchestratorSession(): OrchestratorSession {
         }
       } catch (err) {
         if (cancelled) return;
-        if (err instanceof OrchestratorError && err.status === 403) {
+        const status = err instanceof OrchestratorError ? err.status : null;
+        if (status === null || classifyBootstrapFailure(status) === "unreachable") {
+          // 5xx or a thrown network failure: the backend — or the chat DB the
+          // fail-closed epoch check consults (it answers 500, never a
+          // revocation, on a lookup error: internal/sched/handlers/
+          // session_epoch.go) — is down, which says nothing about the session.
+          // Rendering the login card here would invite people to type
+          // credentials mid-incident, so surface a distinct unreachable state
+          // and keep the stored bearer for the retry. Same 401/403-only auth
+          // verdict as the chat plane (chat/ui/bootstrapFailure.ts).
+          setUnreachable(true);
+        } else if (status === 403) {
           // not_a_member: a valid chat-cookie identity with no orchestrator
           // membership. Authenticated, but lacks access — surface a no-access
           // card rather than the login loop.
           setNoAccess(true);
           setSignedIn(false);
         } else {
-          // 401 or any other failure → genuinely not signed in.
+          // 401 → genuinely not signed in.
           setSignedIn(false);
           setNoAccess(false);
           // Self-heal a stale bearer (#458 symptom 3): an invalid/expired token
           // would otherwise keep shadowing a valid cookie session on every
           // request. Clear it so the next probe falls back to the cookie.
-          if (err instanceof OrchestratorError && err.status === 401) {
-            clearStoredToken();
-          }
+          clearStoredToken();
         }
       } finally {
         if (!cancelled) setReady(true);
@@ -128,5 +140,5 @@ export function useOrchestratorSession(): OrchestratorSession {
     setNoAccess(false);
   }, []);
 
-  return { ready, signedIn, username, role, noAccess, login, logout, error };
+  return { ready, signedIn, username, role, noAccess, unreachable, login, logout, error };
 }

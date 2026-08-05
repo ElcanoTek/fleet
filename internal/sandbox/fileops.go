@@ -15,8 +15,9 @@ import (
 // fileops.go is the sandboxed file-operation seam (#784). The model-callable
 // view_file / write_file / edit_file tools used to run os.ReadFile / os.WriteFile
 // directly in the Fleet host process, contradicting the ADR-0002 invariant that
-// EVERY agent tool call executes inside the rootless-Podman sandbox. This seam
-// routes those operations through the SAME per-turn backend as bash/run_python,
+// every agent tool call's model-authored local execution runs inside the
+// rootless-Podman sandbox. This seam routes those operations through the SAME
+// per-turn backend as bash/run_python,
 // so runtime selection (crun/kata/krun), seccomp, dropped caps, cgroups, PID and
 // disk limits, and the lockdown network posture all apply by construction.
 //

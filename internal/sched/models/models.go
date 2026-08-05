@@ -82,12 +82,31 @@ const (
 	RunIfOnErrorSkip = "skip"
 )
 
-// RunIf is the optional pre-run shell gate for a scheduled task (#269): when
-// set, the scheduler evaluates Command on the host (NOT in the sandbox — it is
-// a lightweight gate, not an agent tool call) before promoting a due task. The
+// RunIf is the optional pre-run shell gate for a task (#269): when set, the
+// scheduler evaluates Command on the host (NOT in the sandbox — it is a
+// lightweight gate, not an agent tool call) before promoting a due task. The
 // task is promoted only when the command exits with ExitCodeIs; otherwise it is
 // skipped (next_run_at advances, skip_count increments). nil = the legacy
 // unconditional promotion path; existing tasks are unaffected.
+//
+// ENFORCEMENT CONTRACT: the gate is evaluated at the scheduled→pending
+// promotion in ProcessScheduledTasks — the ONLY place that evaluates it. To
+// make that promotion unavoidable, NewTask and the task-edit recompute
+// (storage.UpdateEditableTask) both park EVERY gated cron task as `scheduled`
+// via DeriveDispatchState (defaulting a nil scheduled_for to now), so however
+// the task was minted or mutated — a scheduled or immediate create, a rerun
+// or clone, a webhook/email trigger spawn (the spawned run inherits the
+// template's gate), an import, an edit — the gate runs before dispatch; an
+// "immediate" gated run waits up to one scheduler tick. A webhook TEMPLATE
+// itself stays inert and is never evaluated; its gate applies to each spawned
+// run. A clean-failure retry re-parks the task `scheduled` with a backoff
+// (RequeueTaskForRetryWithContext), so the gate IS re-evaluated before each
+// retry attempt; lease-expiry recovery and `fleet-admin sched dlq replay`
+// reset the task straight to pending, re-dispatching WITHOUT a gate
+// evaluation. The edit and import-replace paths refuse to attach or change a
+// gate on a pending task — honoring it would re-park a dispatch that already
+// passed its evaluation point — so that state change stays explicit: change
+// the gate while the task is scheduled, or cancel and recreate it.
 //
 // IMPORTANT (security note encoded in the schema): the check runs on the host
 // as the fleet process user with a restricted PATH. It is NOT a sandboxed agent
@@ -95,7 +114,8 @@ const (
 // touch MCP credentials — but it DOES mean a run_if command has the host-user
 // privileges of the fleet process. Operators must treat run_if commands as
 // trusted, exactly like the fleet binary itself; the validation path rejects
-// empty commands but does not sandbox them.
+// empty commands but does not sandbox them, which is why only a
+// PermissionAdmin principal may author one (create, edit, or import).
 type RunIf struct {
 	// Command is the shell command evaluated by `sh -c`. Must be non-empty when
 	// RunIf is present. Bash-specific constructs are NOT guaranteed — use POSIX sh.
@@ -147,6 +167,24 @@ func (r *RunIf) EffectiveTimeoutSeconds() int {
 		return 30
 	}
 	return r.TimeoutSeconds
+}
+
+// Normalized returns a canonical copy for change detection: defaultable fields
+// resolve to their effective values, so a stored gate and a client echo that
+// differ only in representation (OnError "" vs "run", an omitted timeout)
+// compare equal. Used by the edit path's privilege check, where a raw
+// DeepEqual would misread a lossy round-trip as an attempted run_if change.
+// nil stays nil (no gate).
+func (r *RunIf) Normalized() *RunIf {
+	if r == nil {
+		return nil
+	}
+	return &RunIf{
+		Command:        strings.TrimSpace(r.Command),
+		ExitCodeIs:     r.ExitCodeIs,
+		TimeoutSeconds: r.EffectiveTimeoutSeconds(),
+		OnError:        r.EffectiveOnError(),
+	}
 }
 
 // DefaultLoopMaxIterations bounds a loop whose config omits MaxIterations.
@@ -1168,6 +1206,53 @@ type Task struct {
 	SerializationKey *string `json:"serialization_key,omitempty"`
 }
 
+// DeriveDispatchState computes the (status, scheduled_for) pair that keeps a
+// task on the correct dispatch path for its trigger type and gate. It is the
+// SINGLE derivation rule, shared by NewTask and the task-edit recompute
+// (storage.UpdateEditableTask); when the edit path hand-rolled a
+// ScheduledFor-only version of it, an edit that echoed a gate but omitted
+// scheduled_for flipped a gated task to pending — off the scheduler path,
+// with run_if intact and never evaluated.
+//
+// The rules, in order:
+//
+//   - Plain tasks: a future scheduled_for means `scheduled`, anything else
+//     (nil or past) means `pending` — immediate dispatch.
+//   - A gated cron task is ALWAYS parked `scheduled` (see the RunIf
+//     contract): only ProcessScheduledTasks evaluates run_if, so a gated task
+//     headed for immediate dispatch — POST /tasks with no schedule,
+//     rerun/clone, a trigger-spawned run, an import, an edit — is parked
+//     scheduled-for-now (a nil scheduled_for defaults to now) instead of
+//     pending. The gate is therefore evaluated before EVERY dispatch, at the
+//     cost of up to one scheduler tick (~30s) of latency for an "immediate"
+//     gated run.
+//   - A webhook TEMPLATE is never run by the cron engine. It is parked inert
+//     as `scheduled` with its scheduled_for left as-is (nil):
+//     GetScheduledTasks requires scheduled_for IS NOT NULL, so it is never
+//     promoted; firing the webhook spawns a fresh cron-type run cloned from
+//     it, and the gate carried onto that run is what the previous rule parks.
+func DeriveDispatchState(triggerType TriggerType, runIf *RunIf, scheduledFor *time.Time) (TaskStatus, *time.Time) {
+	if triggerType == "" {
+		triggerType = TriggerTypeCron
+	}
+
+	status := TaskStatusPending
+	if scheduledFor != nil && scheduledFor.After(time.Now()) {
+		status = TaskStatusScheduled
+	}
+	if runIf != nil && triggerType == TriggerTypeCron {
+		status = TaskStatusScheduled
+		if scheduledFor == nil {
+			now := time.Now().UTC()
+			scheduledFor = &now
+		}
+	}
+	if triggerType == TriggerTypeWebhook {
+		status = TaskStatusScheduled
+	}
+	return status, scheduledFor
+}
+
 // NewTask creates a new Task with defaults.
 func NewTask(tc TaskCreate) *Task {
 	triggerType := tc.TriggerType
@@ -1175,17 +1260,7 @@ func NewTask(tc TaskCreate) *Task {
 		triggerType = TriggerTypeCron
 	}
 
-	status := TaskStatusPending
-	if tc.ScheduledFor != nil && tc.ScheduledFor.After(time.Now()) {
-		status = TaskStatusScheduled
-	}
-	// A webhook template is never run by the cron engine. Park it inert as a
-	// scheduled task with no scheduled_for: GetScheduledTasks requires
-	// scheduled_for IS NOT NULL, so it is never promoted; firing the webhook
-	// spawns a fresh cron-type run cloned from it.
-	if triggerType == TriggerTypeWebhook {
-		status = TaskStatusScheduled
-	}
+	status, scheduledFor := DeriveDispatchState(triggerType, tc.RunIf, tc.ScheduledFor)
 
 	tz := tc.Timezone
 	if tz == "" {
@@ -1246,7 +1321,7 @@ func NewTask(tc TaskCreate) *Task {
 		Description:                tc.Description,
 		Status:                     status,
 		CreatedAt:                  time.Now().UTC(),
-		ScheduledFor:               tc.ScheduledFor,
+		ScheduledFor:               scheduledFor,
 		Recurrence:                 tc.Recurrence,
 		RecurrenceUntil:            tc.RecurrenceUntil,
 		RecurrenceRemaining:        tc.RecurrenceRemaining,
@@ -1453,6 +1528,13 @@ type TaskExportRecord struct {
 	TriggerType                TriggerType         `json:"trigger_type,omitempty"               yaml:"trigger_type,omitempty"`
 	AllowTaskCreation          bool                `json:"allow_task_creation,omitempty"        yaml:"allow_task_creation,omitempty"`
 	AllowRecurringTaskCreation bool                `json:"allow_recurring_task_creation,omitempty" yaml:"allow_recurring_task_creation,omitempty"`
+	// RunIf is the pre-run host-side gate (#269), part of the portable
+	// definition: dropping it on export turned every gated task unconditional
+	// on the target box, silently. Because the gate executes on the host as
+	// the fleet user, importing a record that carries one requires admin
+	// permission — the same boundary as authoring one (requireAdminForRunIf).
+	// It maps to TaskCreate.RunIf.
+	RunIf *RunIf `json:"run_if,omitempty" yaml:"run_if,omitempty"`
 	// SLA monitoring config (#274) is part of the portable definition so an
 	// exported task keeps its expected-duration + multiplier posture on reimport,
 	// mirroring the clone-recipe (TaskToTaskCreate). Runtime SLA state
@@ -1572,6 +1654,10 @@ func ExportRecordToTaskCreate(rec TaskExportRecord) TaskCreate {
 		TriggerType:                rec.TriggerType,
 		AllowTaskCreation:          rec.AllowTaskCreation,
 		AllowRecurringTaskCreation: rec.AllowRecurringTaskCreation,
+		// RunIf (#269): the import handler has already enforced the admin
+		// authoring boundary; NewTask parks the gated task on the scheduler
+		// path exactly as the public create path does.
+		RunIf: rec.RunIf,
 		// SLA config (#274). Passed straight through; NewTask normalizes a
 		// zero/absent multiplier to the default exactly as the public create path
 		// does, so an imported definition resolves identically to one created via
@@ -1630,6 +1716,7 @@ func TaskToExportRecord(t *Task) TaskExportRecord {
 		TriggerType:                t.TriggerType,
 		AllowTaskCreation:          t.AllowTaskCreation,
 		AllowRecurringTaskCreation: t.AllowRecurringTaskCreation,
+		RunIf:                      t.RunIf,
 		SerializationKey:           t.SerializationKey,
 	}
 	// SLA config (#274) only travels with an expected duration: the multipliers

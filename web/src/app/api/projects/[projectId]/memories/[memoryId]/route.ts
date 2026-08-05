@@ -15,7 +15,7 @@ export async function DELETE(request: NextRequest, { params }: Params) {
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const { projectId, memoryId } = await params;
   const { upstream, error } = await chatServerProxy(
-    session.email,
+    session,
     `/projects/${encodeURIComponent(projectId)}/memories/${encodeURIComponent(memoryId)}`,
     { method: "DELETE" },
   );

@@ -560,12 +560,21 @@ func buildSandboxPool(cfg *config.Config, personasDir, protocolsDir, systemPromp
 		BridgeDir:        filepath.Join(filepath.Dir(workspaceRoot), "data", "sandbox-bridge"),
 		ReadOnlyMounts:   absSupportingDocs(personasDir, protocolsDir, systemPromptsDir, skillsDir, uploadsRoot),
 	}
+	// Reclaim bridge-script/seccomp temp files orphaned by a PRIOR crash: only
+	// the graceful close path removes them, so without this sweep every
+	// non-graceful exit leaks them into BridgeDir permanently. Age-bounded and
+	// best-effort — log and continue, like the container orphan prune.
+	if n, err := sandbox.PruneOrphanedBridgeFiles(poolCfg.Container.BridgeDir); err != nil {
+		log.Printf("sandbox: prune orphaned bridge files: %v", err)
+	} else if n > 0 {
+		log.Printf("sandbox: pruned %d orphaned bridge temp file(s) from a prior run", n)
+	}
 	// Fail closed BEFORE the warm pool spawns its first container: a kata/krun
 	// runtime whose KVM or runtime binary is missing must abort boot, never
 	// silently degrade to a shared-kernel container (the no-degrade invariant,
-	// ADR-0010). A shared-kernel runtime (runc/crun/runsc/empty) preflights as a
-	// no-op.
-	if err := sandbox.PreflightRuntime(context.Background(), sandboxRuntime); err != nil {
+	// ADR-0010). A named shared-kernel runtime (runc/crun/runsc) is checked too,
+	// but only for podman resolvability; the empty default preflights as a no-op.
+	if err := sandbox.PreflightRuntime(context.Background(), poolCfg.Container.PodmanBinary, sandboxRuntime); err != nil {
 		return nil, fmt.Errorf("sandbox runtime preflight failed (fail-closed): %w", err)
 	}
 	log.Printf("sandbox: container mode, image=%s, pool=%d, workspace=%s, runtime=%s",
@@ -590,18 +599,27 @@ func buildSandboxPool(cfg *config.Config, personasDir, protocolsDir, systemPromp
 	poolCfg.DefaultEgressAllowlist = cfg.SandboxNetworkAllowlist
 	switch cfg.DefaultNetworkMode {
 	case sandbox.NetworkModeAllowlisted:
+		// Allowlisted is the one posture that needs a specific rootless network
+		// helper (slirp4netns, for the host-loopback route to the proxy). Probe
+		// it BEFORE the warm pool spawns anything: on a host without that helper
+		// every container start fails, and without this check boot would succeed,
+		// log "egress filtered to […]", and then error on every single tool call.
+		// Fails closed — never downgraded to open egress.
+		if err := sandbox.PreflightAllowlistedNetwork(context.Background(), poolCfg.Container.PodmanBinary); err != nil {
+			return nil, fmt.Errorf("sandbox egress preflight failed (fail-closed): %w", err)
+		}
 		proxy := sandbox.NewEgressProxy()
 		if err := proxy.Start(); err != nil {
 			return nil, fmt.Errorf("start sandbox egress proxy (#211): %w", err)
 		}
 		poolCfg.EgressProxy = proxy
 		if len(cfg.SandboxNetworkAllowlist) == 0 {
-			log.Printf("sandbox: WARNING network mode=allowlisted but the allowlist is EMPTY — networked SCHEDULED-task sandboxes can reach NO domains (set sandbox.network_allowlist in the bundle manifest)")
+			log.Printf("sandbox: WARNING network mode=allowlisted but the allowlist is EMPTY — networked scheduled-task, interactive chat, AND approved-bash sandboxes can reach NO domains (set sandbox.network_allowlist in the bundle manifest)")
 		} else {
-			log.Printf("sandbox: network mode=allowlisted — networked scheduled-task AND interactive chat egress filtered to %v via the host proxy (best-effort; ADR-0012).", cfg.SandboxNetworkAllowlist)
+			log.Printf("sandbox: network mode=allowlisted — networked scheduled-task, interactive chat, AND approved-bash egress filtered to %v via the host proxy (best-effort; ADR-0012).", cfg.SandboxNetworkAllowlist)
 		}
 	case sandbox.NetworkModeLockdown:
-		log.Printf("sandbox: network mode=lockdown — scheduled-task AND interactive chat egress sealed regardless of per-task AllowNetwork.")
+		log.Printf("sandbox: network mode=lockdown — scheduled-task, interactive chat, AND approved-bash egress sealed regardless of per-task AllowNetwork.")
 	}
 	return sandbox.NewPool(poolCfg), nil
 }

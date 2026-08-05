@@ -12,7 +12,7 @@ export async function GET() {
   if (!session) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  const { upstream, error } = await chatServerProxy(session.email, "/push/vapid-public-key", {
+  const { upstream, error } = await chatServerProxy(session, "/push/vapid-public-key", {
     method: "GET",
   });
   if (error) return error;

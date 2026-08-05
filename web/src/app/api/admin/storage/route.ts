@@ -11,5 +11,5 @@ export const runtime = "nodejs";
 export async function GET() {
   const session = await getServerSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  return chatServerPassthrough(session.email, "/admin/storage", { method: "GET" });
+  return chatServerPassthrough(session, "/admin/storage", { method: "GET" });
 }

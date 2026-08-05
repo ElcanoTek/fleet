@@ -414,6 +414,15 @@ func (s *Storage) UpdateTasksStatusBatch(taskIDs []uuid.UUID, fromStatus, toStat
 	return s.db.UpdateTasksStatusBatch(context.Background(), taskIDs, fromStatus, toStatus)
 }
 
+// SettleGatedTask transitions one gated task out of `scheduled` to toStatus,
+// but only while the row still carries the scheduled_for the gate evaluation
+// was dispatched against — a concurrent cancel, claim, edit, or reschedule
+// wins over the stale verdict (see db.SettleGatedTask). Returns the number of
+// rows transitioned (0 or 1).
+func (s *Storage) SettleGatedTask(taskID uuid.UUID, observedScheduledFor *time.Time, toStatus models.TaskStatus) (int, error) {
+	return s.db.SettleGatedTask(context.Background(), taskID, observedScheduledFor, toStatus)
+}
+
 // GetPendingTasks gets all pending tasks, sorted by priority.
 func (s *Storage) GetPendingTasks() ([]*models.Task, error) {
 	return s.db.GetPendingTasks(context.Background())
@@ -793,11 +802,20 @@ type TaskEdit struct {
 	// the legacy retry policy).
 	RetryPolicy    *models.RetryPolicy
 	SetRetryPolicy bool
+	// RunIf + SetRunIf mirror the same pattern (#269): the flag distinguishes
+	// "leave unchanged" from "replace" (including replacing with nil to remove
+	// the gate). The handler sets the flag only for an admin-permission
+	// principal — run_if executes on the host, so a non-admin edit must never
+	// rewrite it.
+	RunIf    *models.RunIf
+	SetRunIf bool
 }
 
 // UpdateEditableTask applies an edit to a task inside a transaction, re-locking
-// the row and re-checking it is still editable. Status is recomputed from
-// ScheduledFor. Returns ErrTaskNotEditable if no longer editable.
+// the row and re-checking it is still editable. Status and ScheduledFor are
+// recomputed with models.DeriveDispatchState — the same rule NewTask applies —
+// so an edit can never move a gated task (or a webhook template) off the
+// scheduler path. Returns ErrTaskNotEditable if no longer editable.
 func (s *Storage) UpdateEditableTask(ctx context.Context, taskID uuid.UUID, edit TaskEdit) (*models.Task, error) {
 	tx, err := s.db.BeginTx(ctx)
 	if err != nil {
@@ -838,6 +856,9 @@ func (s *Storage) UpdateEditableTask(ctx context.Context, taskID uuid.UUID, edit
 	if edit.SetRetryPolicy {
 		task.RetryPolicy = edit.RetryPolicy
 	}
+	if edit.SetRunIf {
+		task.RunIf = edit.RunIf
+	}
 	task.Priority = edit.Priority
 	task.InstructionSelfImprove = edit.InstructionSelfImprove
 	task.AllowNetwork = edit.AllowNetwork
@@ -860,11 +881,13 @@ func (s *Storage) UpdateEditableTask(ctx context.Context, taskID uuid.UUID, edit
 		task.Tags = edit.Tags
 	}
 
-	if task.ScheduledFor != nil && task.ScheduledFor.After(time.Now().UTC()) {
-		task.Status = models.TaskStatusScheduled
-	} else {
-		task.Status = models.TaskStatusPending
-	}
+	// Recompute the dispatch state with the SAME rule used at creation. The
+	// previous ScheduledFor-only recompute here let an edit move a task off
+	// the scheduler path: echoing a run_if gate unchanged (allowed for any
+	// create_task principal) while omitting scheduled_for flipped a gated
+	// task to pending — dispatching it without the gate ever being evaluated
+	// — and flipped an inert webhook template into a one-shot pending run.
+	task.Status, task.ScheduledFor = models.DeriveDispatchState(task.TriggerType, task.RunIf, task.ScheduledFor)
 
 	if err := s.db.UpdateTaskTx(ctx, tx, task); err != nil {
 		return nil, err
@@ -1480,25 +1503,28 @@ func (s *Storage) ComputeNextRun(task *models.Task) (time.Time, error) {
 
 // RecordSkip records a pre-run-gate skip on a still-scheduled task (#269): it
 // re-locks the row inside a transaction, re-checks the task is still scheduled
-// (a concurrent cancel/claim wins and the skip becomes a no-op), advances
-// scheduled_for to nextRun, increments skip_count, and stamps last_skip_at +
-// last_skip_reason. Returns the updated task. nextRun is computed by the
-// caller via ComputeNextRun (so the scheduler owns the cron math).
-func (s *Storage) RecordSkip(ctx context.Context, taskID uuid.UUID, reason string, nextRun time.Time) (*models.Task, error) {
+// AND still carries the scheduled_for the gate was dispatched against (a
+// concurrent cancel/claim/edit/reschedule wins and the skip becomes a no-op),
+// advances scheduled_for to nextRun, increments skip_count, and stamps
+// last_skip_at + last_skip_reason. Returns the task and whether the skip was
+// actually recorded. nextRun is computed by the caller via ComputeNextRun (so
+// the scheduler owns the cron math); observedScheduledFor is the fetched row's
+// value at dispatch (nil skips the reschedule guard).
+func (s *Storage) RecordSkip(ctx context.Context, taskID uuid.UUID, reason string, nextRun time.Time, observedScheduledFor *time.Time) (*models.Task, bool, error) {
 	tx, err := s.db.BeginTx(ctx)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	task, err := s.db.RecordSkip(ctx, tx, taskID, reason, nextRun)
+	task, recorded, err := s.db.RecordSkip(ctx, tx, taskID, reason, nextRun, observedScheduledFor)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if err := tx.Commit(); err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	return task, nil
+	return task, recorded, nil
 }
 
 // Global storage instance

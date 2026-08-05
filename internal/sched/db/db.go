@@ -1607,6 +1607,35 @@ func (db *Database) UpdateTasksStatusBatch(ctx context.Context, taskIDs []uuid.U
 	return int(affected), nil
 }
 
+// SettleGatedTask transitions one gated task out of `scheduled` to toStatus,
+// but ONLY while the row still carries the scheduled_for the gate evaluation
+// was dispatched against (NULL-safe compare). The status check alone is not
+// enough: an edit or reschedule keeps the task `scheduled`, and since gates
+// settle asynchronously (up to their full 300s runtime later), a stale
+// verdict conditioned only on status would either run a task an operator had
+// just postponed or clobber the operator's new scheduled_for. A task
+// cancelled, claimed, edited, or rescheduled while its gate ran fails the
+// WHERE and the verdict is discarded — the next due tick re-evaluates the
+// task's current definition. Returns the number of rows transitioned (0 or 1).
+func (db *Database) SettleGatedTask(ctx context.Context, taskID uuid.UUID, observedScheduledFor *time.Time, toStatus models.TaskStatus) (int, error) {
+	res, err := db.conn.ExecContext(ctx, `
+		UPDATE tasks SET status = $1
+		WHERE id = $2 AND status = $3 AND scheduled_for IS NOT DISTINCT FROM $4`,
+		string(toStatus),
+		taskID,
+		string(models.TaskStatusScheduled),
+		observedScheduledFor,
+	)
+	if err != nil {
+		return 0, err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	return int(affected), nil
+}
+
 // GetPendingTasks gets all pending tasks, ordered the same way the claim path
 // dispatches them: effective_priority ASC (lower = more urgent, #230), then
 // created_at ASC (FIFO within a tier).
@@ -2885,19 +2914,30 @@ func (db *Database) UpdateTaskTx(ctx context.Context, tx *sql.Tx, task *models.T
 
 // RecordSkip records a pre-run-gate skip on a still-scheduled task (#269): it
 // re-locks the row, re-checks it is still `scheduled` (a concurrent cancel or
-// claim must win and suppress the skip), advances scheduled_for to nextRun,
+// claim must win and suppress the skip) AND still carries the scheduled_for
+// the gate evaluation was dispatched against (a concurrent edit/reschedule
+// must win too — see SettleGatedTask), advances scheduled_for to nextRun,
 // increments skip_count, and stamps last_skip_at / last_skip_reason. status is
-// intentionally left `scheduled` (no promotion to pending). Returns the updated
-// task.
-func (db *Database) RecordSkip(ctx context.Context, tx *sql.Tx, taskID uuid.UUID, reason string, nextRun time.Time) (*models.Task, error) {
+// intentionally left `scheduled` (no promotion to pending). Returns the task
+// (updated when recorded, the fresh row as-is otherwise) and whether the skip
+// was actually recorded. A nil observedScheduledFor skips the reschedule guard
+// (status-only, the pre-async behavior); the scheduler always passes the
+// fetched row's value.
+func (db *Database) RecordSkip(ctx context.Context, tx *sql.Tx, taskID uuid.UUID, reason string, nextRun time.Time, observedScheduledFor *time.Time) (*models.Task, bool, error) {
 	task, err := db.GetTaskForUpdate(ctx, tx, taskID)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	// Only a still-scheduled task can be skipped. A concurrent cancel/claim
 	// (status moved off scheduled) wins and the skip is a no-op.
 	if task.Status != models.TaskStatusScheduled {
-		return task, nil
+		return task, false, nil
+	}
+	// A concurrent edit/reschedule moved scheduled_for while the gate ran: the
+	// verdict is stale, so leave the operator's row untouched — the next due
+	// tick re-evaluates the task's current definition.
+	if observedScheduledFor != nil && !sameScheduledFor(task.ScheduledFor, observedScheduledFor) {
+		return task, false, nil
 	}
 	now := time.Now().UTC()
 	if !nextRun.IsZero() {
@@ -2910,9 +2950,22 @@ func (db *Database) RecordSkip(ctx context.Context, tx *sql.Tx, taskID uuid.UUID
 		task.LastSkipReason = &r
 	}
 	if err := db.UpdateTaskTx(ctx, tx, task); err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	return task, nil
+	return task, true, nil
+}
+
+// sameScheduledFor reports whether a re-fetched row's scheduled_for still
+// equals the one a gate evaluation was dispatched against. Compared at
+// microsecond precision: timestamptz resolves to microseconds and the pgx
+// encoders truncate a finer time.Time on write, so truncating both sides lets
+// an in-memory value that never round-tripped through the DB match its stored
+// twin.
+func sameScheduledFor(current, observed *time.Time) bool {
+	if current == nil || observed == nil {
+		return current == nil && observed == nil
+	}
+	return current.Truncate(time.Microsecond).Equal(observed.Truncate(time.Microsecond))
 }
 
 // ── task_iterations (looped-task telemetry, #179) ──

@@ -54,23 +54,24 @@ func personaLabel(persona string) string {
 // MCP client, the native tools, and the session log; Execute drives one task to
 // completion through agentcore.Run.
 type Agent struct {
-	config         *config.Config
-	model          fantasy.LanguageModel
-	fallbackModel  fantasy.LanguageModel
-	fallbackModels []fantasy.LanguageModel
-	mcpClient      *mcp.Client
-	mcpBroker      agentcore.MCPBroker
-	mcpCatalog     []mcp.ServerTool
-	overlay        *RemoteMCPOverlay
-	nativeTools    []fantasy.AgentTool
-	systemPrompt   string
-	persona        string
-	maxIterations  int
-	logSession     *LogSession
-	sb             *sandbox.Sandbox
-	notesProvider  agentcore.NotesProvider
-	noteProposer   agentcore.NoteProposer
-	skillProposer  agentcore.SkillProposer
+	config           *config.Config
+	model            fantasy.LanguageModel
+	fallbackModel    fantasy.LanguageModel
+	fallbackModels   []fantasy.LanguageModel
+	mcpClient        *mcp.Client
+	mcpBroker        agentcore.MCPBroker
+	mcpCatalog       []mcp.ServerTool
+	mcpToolAllowlist agentcore.MCPAllowlist
+	overlay          *RemoteMCPOverlay
+	nativeTools      []fantasy.AgentTool
+	systemPrompt     string
+	persona          string
+	maxIterations    int
+	logSession       *LogSession
+	sb               *sandbox.Sandbox
+	notesProvider    agentcore.NotesProvider
+	noteProposer     agentcore.NoteProposer
+	skillProposer    agentcore.SkillProposer
 
 	// ── agent self-improvement (#285), gated by the per-task Captain's Log opt-in
 	// (instruction_self_improve). The DRIVER (scheduledrun) leaves these nil unless
@@ -147,15 +148,21 @@ type Options struct {
 	MCPClient      *mcp.Client
 	// MCPBroker/MCPCatalog replace local-client calls and discovery for a
 	// broker-owned scheduled scope. Nil preserves the concrete client path.
-	MCPBroker     agentcore.MCPBroker
-	MCPCatalog    []mcp.ServerTool
-	NativeTools   []fantasy.AgentTool
-	SystemPrompt  string
-	Persona       string
-	MaxIterations int
-	Sandbox       *sandbox.Sandbox
-	LogFile       string
-	OutputSchema  json.RawMessage
+	MCPBroker  agentcore.MCPBroker
+	MCPCatalog []mcp.ServerTool
+	// MCPToolAllowlist is the per-server tool allowlist (Gate-2), keyed by
+	// manifest server name. Production broker mode scrubs Config.MCPServers
+	// after broker boot (the parent retains no connector state), so the DRIVER
+	// injects the public allowlist here; nil derives the gate from
+	// Config.MCPServers (the local compatibility path).
+	MCPToolAllowlist agentcore.MCPAllowlist
+	NativeTools      []fantasy.AgentTool
+	SystemPrompt     string
+	Persona          string
+	MaxIterations    int
+	Sandbox          *sandbox.Sandbox
+	LogFile          string
+	OutputSchema     json.RawMessage
 
 	// NotesProvider supplies the admin-curated knowledge base appended to the
 	// system prompt at run start (both modes inject the same notes). Nil = none.
@@ -283,6 +290,7 @@ func NewAgent(opts Options) *Agent {
 		mcpClient:           opts.MCPClient,
 		mcpBroker:           opts.MCPBroker,
 		mcpCatalog:          cloneScheduledMCPCatalog(opts.MCPCatalog),
+		mcpToolAllowlist:    opts.MCPToolAllowlist,
 		overlay:             opts.Overlay,
 		nativeTools:         opts.NativeTools,
 		systemPrompt:        opts.SystemPrompt,
@@ -740,13 +748,25 @@ func (a *Agent) clearMCPDirty() {
 	a.mcpServersDirty = false
 }
 
-// mcpGates derives the per-server allowlist + the optional-server set from the
-// scheduled config's MCPServers catalog. Servers with a non-empty ToolAllowlist
-// constrain which tools register; every credentialed server is optional (the
-// load-on-demand model — only loaded servers' tools register).
+// mcpGates derives the per-server allowlist + the optional-server set for the
+// run. A driver-injected allowlist (Options.MCPToolAllowlist) wins when set:
+// production broker mode scrubs the parent's config.MCPServers after broker
+// boot, so only the injected public specs still carry ToolAllowlist. With no
+// injected allowlist the gate falls back to the scheduled config's MCPServers
+// catalog. Servers with a non-empty ToolAllowlist constrain which tools
+// register; every credentialed server is optional (the load-on-demand model —
+// only loaded servers' tools register).
 func (a *Agent) mcpGates() (agentcore.MCPAllowlist, agentcore.MCPOptionalSet) {
 	allow := agentcore.MCPAllowlist{}
 	optional := agentcore.MCPOptionalSet{}
+	if a.mcpToolAllowlist != nil {
+		for name, list := range a.mcpToolAllowlist {
+			if len(list) > 0 {
+				allow[name] = list
+			}
+		}
+		return allow, optional
+	}
 	if a.config == nil {
 		return allow, optional
 	}

@@ -27,11 +27,18 @@ export type Session = {
   exp: number;
   tenant?: string;
   source: SessionSource;
+  // epoch is the chat-server session epoch this cookie was minted against, and
+  // is forwarded to chat-server so it can refuse a session the account has
+  // since outlived (a password change moves the epoch). Absent for elcano
+  // sessions: that cookie is minted by the auth service, which chat cannot add
+  // a claim to.
+  epoch?: string;
 };
 
 type SessionPayload = {
   email: string;
   exp: number;
+  epoch: string;
 };
 
 function getSessionSecret() {
@@ -79,10 +86,14 @@ async function signPayload(payload: string) {
   return bytesToBase64Url(new Uint8Array(signature));
 }
 
-export async function createSessionToken(email: string) {
+// createSessionToken mints the HMAC cookie. `epoch` is the account's current
+// chat-server session epoch (fetchSessionEpoch) and is mandatory: a cookie
+// without it is refused by verifySessionToken below, so no mint path may skip it.
+export async function createSessionToken(email: string, epoch: string) {
   const payload = JSON.stringify({
     email: email.toLowerCase(),
     exp: Math.floor(Date.now() / 1000) + sessionMaxAgeSeconds,
+    epoch,
   } satisfies SessionPayload);
   const encodedPayload = encodePayload(payload);
   const signature = await signPayload(encodedPayload);
@@ -114,6 +125,14 @@ export async function verifySessionToken(token: string | undefined | null) {
 
     const payload = JSON.parse(decodePayload(encodedPayload)) as SessionPayload;
     if (!payload.email || payload.exp * 1000 < Date.now()) {
+      return null;
+    }
+    // No epoch claim means the cookie predates per-user session revocation, and
+    // nothing downstream could check it. Refusing here is what makes the
+    // revocation gate unbypassable — a token minted before the claim existed
+    // would otherwise sail past chat-server's "no claim, admit it" rule for the
+    // whole 14 days it was signed for.
+    if (!payload.epoch) {
       return null;
     }
 
@@ -249,7 +268,7 @@ async function resolveSession(
   elcanoToken: string | undefined | null,
 ): Promise<Session | null> {
   const hmac = await verifySessionToken(hmacToken ?? null);
-  if (hmac) return { email: hmac.email, exp: hmac.exp, source: "password" };
+  if (hmac) return { email: hmac.email, exp: hmac.exp, epoch: hmac.epoch, source: "password" };
 
   const elcano = await verifyElcanoToken(elcanoToken ?? null);
   if (elcano) return { email: elcano.email, exp: elcano.exp, tenant: elcano.tenant, source: "elcano" };
@@ -281,13 +300,37 @@ export function getSessionCookieName() {
   return sessionCookieName;
 }
 
+// getConfiguredOrigin returns the deployment's canonical public origin
+// (NEXT_PUBLIC_PUBLIC_ORIGIN — bootstrap writes it for every deploy), or null
+// when unset/unparseable. Redirect targets, the Secure-cookie decision, the
+// OIDC redirect_uri (lib/oidc.ts) and the CSRF expected-host (lib/csrf.ts)
+// prefer it over x-forwarded-* because those headers are client-supplied
+// unless a proxy overwrites them: a request that reaches `next start`
+// directly (not through Caddy) could otherwise pick the redirect host and
+// mint a session cookie without Secure by claiming x-forwarded-proto: http.
+export function getConfiguredOrigin(): URL | null {
+  const raw = process.env.NEXT_PUBLIC_PUBLIC_ORIGIN?.trim();
+  if (!raw) return null;
+  try {
+    return new URL(raw);
+  } catch {
+    return null;
+  }
+}
+
+// The header fallbacks below keep local dev working (no configured origin,
+// plain http on localhost) and any deploy that predates the origin env.
 export function getRedirectUrl(request: NextRequest, pathname: string) {
+  const configured = getConfiguredOrigin();
+  if (configured) return new URL(pathname, configured);
   const host = request.headers.get("x-forwarded-host") ?? request.headers.get("host") ?? request.nextUrl.host;
   const protocol = request.headers.get("x-forwarded-proto") ?? request.nextUrl.protocol.replace(":", "");
   return new URL(pathname, `${protocol}://${host}`);
 }
 
 export function isSecureRequest(request: NextRequest) {
+  const configured = getConfiguredOrigin();
+  if (configured) return configured.protocol === "https:";
   const protocol = request.headers.get("x-forwarded-proto") ?? request.nextUrl.protocol.replace(":", "");
   return protocol === "https";
 }

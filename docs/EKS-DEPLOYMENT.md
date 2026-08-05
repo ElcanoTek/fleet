@@ -51,7 +51,7 @@ that implements it.
 | "…we can't autoscale it" | Scale vertically: raise `FLEET_MAX_CONCURRENT_AGENTS` and the pod resources together ([§6](#resource-requests-count-the-sandboxes)). HPA and VPA are both actively harmful here ([§8](#cluster-integration-gotchas)). |
 | "…the workloads are invisible to the cluster" | True and worth naming: sandboxes are Podman containers inside the pod, so they never appear in `kubectl get pods` or cAdvisor. Where to see them instead: [§8](#cluster-integration-gotchas). |
 | "…it pins itself to one AZ" | It does — `ReadWriteOnce` EBS. Make the node group single-AZ deliberately rather than discovering it during an incident ([§6](#az-pinning-node-loss-and-what-ha-means-here)). |
-| "…NetworkPolicy can't govern what the agent runs" | It can. Sandbox egress traverses the pod's network namespace via `slirp4netns`, so pod-level NetworkPolicy applies to agent-executed code too ([§7](#networkpolicy), [§8](#cluster-integration-gotchas)). |
+| "…NetworkPolicy can't govern what the agent runs" | It can. Sandbox egress traverses the pod's network namespace via the rootless network helper, so pod-level NetworkPolicy applies to agent-executed code too ([§7](#networkpolicy), [§8](#cluster-integration-gotchas)). |
 | "…secrets are in a `Secret`" | Swap in External Secrets Operator or the Secrets Store CSI driver ([§7](#secrets)). fleet's own guarantee is stronger than either: MCP credentials are brokered host-side and never enter a sandbox. |
 | "…nothing here is CI-tested" | Also true. Run [§10](#10-verification-checklist) as an acceptance gate in your own pipeline; that is the substitute. |
 
@@ -95,8 +95,12 @@ The sandbox is mandatory and fails closed, so the pod must be able to run
 rootless Podman. Concretely fleet shells out to
 `podman run --userns=keep-id:uid=1000,gid=1000 --read-only --cap-drop=ALL
 --security-opt=no-new-privileges --security-opt seccomp=… --memory=… --cpus=…
---pids-limit=… --network=slirp4netns:allow_host_loopback=true …` and then
-`podman exec`s each tool call into it. That needs, inside the fleet container:
+--pids-limit=… …` and then `podman exec`s each tool call into it. Network posture
+is per-turn: normal turns pass **no** `--network` flag (podman's rootless default
+— pasta on ≥ 5.0, slirp4netns before it), lockdown and scheduled runs get
+`--network=none`, and the allowlisted-egress posture explicitly requests
+`--network=slirp4netns:allow_host_loopback=true`. That needs, inside the fleet
+container:
 
 | Requirement | Why | How |
 |---|---|---|
@@ -104,7 +108,7 @@ rootless Podman. Concretely fleet shells out to
 | `newuidmap`/`newgidmap` with their file capabilities intact | performs the uid/gid mapping | `shadow-utils` in the image **and** `allowPrivilegeEscalation: true` (file caps are neutralized by `NoNewPrivileges` — the same reason `deploy/fleet.service` sets `NoNewPrivileges=no`) |
 | a writable, **persistent** graph root (`$HOME/.local/share/containers`) | holds the ~1.5 GB sandbox image + per-container writable layers | the PVC mounted at `/var/lib/fleet` (§5) |
 | an overlay-capable storage driver | `vfs` copies the whole ~1.5 GB image per container start — fatal for a per-turn warm pool | native `overlay` (privileged) or `fuse-overlayfs` + `/dev/fuse` |
-| `/dev/net/tun` | `slirp4netns` egress for normal turns and the allowlisted-egress proxy mode | privileged, or a device plugin |
+| `/dev/net/tun` | the rootless network helper: **pasta** on Podman ≥ 5.0 (podman's own default, used by normal turns), or **slirp4netns**, which the allowlisted-egress posture specifically requires | privileged, or a device plugin |
 | a **writable cgroup subtree** | otherwise Podman silently ignores `--memory`/`--cpus`, so the per-sandbox caps and per-task `sandbox_limits` **do not bind** | privileged (rw `/sys/fs/cgroup`); the analogue of `Delegate=yes` in the systemd unit |
 | cgroup **v2** on the node | project-quota/limit behavior above | Amazon Linux 2023 nodes default to cgroup v2 |
 
@@ -200,9 +204,13 @@ RUN make build            # → ./fleet and ./fleet-admin
 
 FROM fedora:41
 # podman + the rootless stack fleet actually invokes; curl for the exec probes (§7).
-# awscli2 is for the ECR-login init container (§7); curl is for the exec probes.
+# Install BOTH rootless network helpers: passt/pasta is podman >= 5.0's default
+# (normal turns), and slirp4netns is required by the allowlisted-egress posture —
+# where a missing binary now aborts boot with a fail-closed preflight rather than
+# erroring on every turn. awscli2 is for the ECR-login init container (§7); curl
+# is for the exec probes.
 RUN dnf install -y --setopt=install_weak_deps=False \
-      podman crun conmon slirp4netns fuse-overlayfs containers-common \
+      podman crun conmon passt slirp4netns fuse-overlayfs containers-common \
       shadow-utils catatonit iptables-nft git curl ca-certificates awscli2 \
  && dnf clean all
 # Fixed unprivileged user, uid 1000 — matches --userns=keep-id:uid=1000 and the
@@ -319,13 +327,15 @@ allowVolumeExpansion: true
 volumeBindingMode: WaitForFirstConsumer
 ```
 
-**Why `xfs` + `prjquota`:** fleet caps each sandbox's writable layer with
-`--storage-opt size=…`, a hard total cap, but Podman only accepts that on a
-quota-capable driver (overlay+xfs with pquota, btrfs, zfs — **not** overlay+ext4
-and not vfs). fleet probes this once at boot and, when unsupported, falls back to
-`--ulimit fsize`, which caps any single file but **not total disk use** — an
-agent can still fill the volume with many files. The fallback is logged at
-startup; the guide's recommendation is to make the probe succeed instead.
+**Why `xfs` + `prjquota`:** the two disk caps are **layered, not either/or**. A
+per-file `--ulimit fsize` cap is applied on every container regardless of
+filesystem, and it is what bounds writes to the workspace bind mount. On top of
+that, fleet adds `--storage-opt size=…` — a hard **total** cap on the writable
+layer — but Podman only accepts that on a quota-capable driver (overlay+xfs with
+pquota, btrfs, zfs — **not** overlay+ext4, and not vfs). fleet probes this once at
+boot; where it isn't supported, the total-size cap is simply omitted and an agent
+can still fill the writable layer with many individually-legal files. The omission
+is logged at startup. Making the probe succeed is the point of this StorageClass.
 
 Sizing: the sandbox image (~1.5 GB) + one writable layer per concurrent sandbox
 (`FLEET_SANDBOX_DISK_GB`, default 5 GiB each) + persistent workspaces + uploads
@@ -721,10 +731,10 @@ layer); see [`docs/DEPLOYMENT.md`](DEPLOYMENT.md) for the login model.
 ### NetworkPolicy
 
 Worth stating explicitly because it answers a real objection: **agent-executed
-code is covered by pod-level NetworkPolicy.** Sandbox containers have no pod IP
-of their own — their egress is NAT'd through the fleet pod's network namespace by
-`slirp4netns` — so a policy on this pod governs what the model's `bash` and
-`run_python` can reach. This composes with, and does not replace, fleet's own
+code is covered by pod-level NetworkPolicy.** Sandbox containers have no pod IP of
+their own — their egress is NAT'd through the fleet pod's network namespace by the
+rootless network helper (pasta on Podman ≥ 5.0, slirp4netns before it) — so a
+policy on this pod governs what the model's `bash` and `run_python` can reach. This composes with, and does not replace, fleet's own
 egress controls: `--network=none` for lockdown and scheduled runs is the hard
 seal, and the allowlisted-egress proxy mode is
 [ADR-0012](adr/0012-sandbox-egress-allowlist.md) /
@@ -857,7 +867,7 @@ either breaks this pod or silently misleads you about it.
 - **NodeLocal DNSCache breaks DNS inside sandboxes.** If the node's
   `/etc/resolv.conf` points at a link-local or loopback address (`169.254.20.10`,
   `127.0.0.1`), that address means something different inside the sandbox's
-  `slirp4netns` namespace, and name resolution fails for `pip install` and every
+  network namespace under either helper, and name resolution fails for every
   outbound HTTP tool — while the fleet process itself resolves fine, so it looks
   like a model problem, not a DNS problem. Pin explicit resolvers for Podman in
   the image's `containers.conf`:
@@ -893,13 +903,22 @@ either breaks this pod or silently misleads you about it.
 | `scripts/bootstrap.sh` | build images (§3) + `kubectl apply` |
 | `fleet update` | build a new image tag, `kubectl set image` / re-apply, pod restarts |
 | `fleet restart` | `kubectl rollout restart statefulset/fleet` |
-| `scripts/doctor.sh` (systemd-specific) | `kubectl exec … -- fleet validate-config` plus §10 |
+| `scripts/doctor.sh` (systemd-specific) | `kubectl exec … -- fleet validate-config` plus §10 — and the in-process Doctor panel still works, see below |
 | `fleet admin add <email>` | `kubectl exec -it sts/fleet -c fleet -- fleet admin add <email>` |
 | `fleet mcp account set …` | same, via `kubectl exec` |
 | journald | `kubectl logs sts/fleet -c fleet` |
 
 `fleet validate-config` is the portable check — it verifies the bundle, podman
 reachability, the sandbox image's presence, and the runtime preflight.
+
+**Settings → Admin → Doctor works here too**, and degrades honestly: its
+container-portable checks (chat and sched databases, model API key,
+subuid/subgid ranges, rootless podman, sandbox image) all run normally, while the
+systemd-dependent ones (sibling unit state, the scheduled-backup timer) report
+`skip` with "systemctl not on PATH (no systemd)" rather than inventing advisories
+about units that were never meant to exist here. Note the consequence, though: a
+`skip` on scheduled backups is *not* reassurance — it is the gap you closed by
+hand above.
 
 **Config and bundle changes.** With the bundle baked into the image, a bundle
 change is an image rebuild + pod restart. If you instead mount the bundle from a
@@ -909,11 +928,30 @@ with `fleet mcp reload` / SIGHUP / the admin endpoint
 setup described in §3b; otherwise change them by editing the manifest and
 restarting.
 
-**Backups.** Two things are stateful: the databases (RDS automated backups +
-snapshots, or `pg_dump` per [`docs/BACKUP_RESTORE.md`](BACKUP_RESTORE.md)) and
+**Backups — read this one carefully.** Two things are stateful: the databases and
 the PVC (EBS snapshots via the CSI `VolumeSnapshot` API — workspaces, uploads,
 audit). The Podman image store on the PVC is reconstructible; don't optimize
 backups for it.
+
+The trap: fleet now ships `deploy/fleet-backup.service` + `fleet-backup.timer`,
+which `bootstrap.sh --enable-service` installs and enables **by default**, and
+`fleet doctor` reports on. **None of that exists here** — those are systemd units,
+`bootstrap.sh` never runs on this deployment, and nothing in the pod will tell you
+backups aren't happening. That gap is precisely the failure the timer was added to
+fix (#966: a box reporting "38 ok, 0 advisories" while holding no backups at all,
+for five days, with live client data). So pick one deliberately and write it down:
+
+- **RDS automated backups + snapshots** (simplest, and what this guide assumes) —
+  covers exactly the loss of a host or volume that a same-host `pg_dump` does not.
+- **A Kubernetes `CronJob`** running `fleet backup` or `pg_dump` on a schedule, if
+  you want the logical dump the timer would have produced (recoverable from a bad
+  migration or an accidental delete). Give it its own ServiceAccount and write to
+  S3, not to the PVC — a dump beside the data it protects is not a backup.
+
+Either way, note that neither captures attachment/upload files, which live on the
+PVC — those need the `VolumeSnapshot` schedule. See
+[`docs/BACKUP_RESTORE.md`](BACKUP_RESTORE.md) for what a dump does and does not
+cover.
 
 **Upgrades and node patching** are downtime windows. Sequence: cordon nothing,
 just `kubectl delete pod` / `rollout restart` and let the drain budget run —
@@ -941,14 +979,21 @@ podman run --rm --userns=keep-id:uid=1000,gid=1000 "$FLEET_SANDBOX_IMAGE" id
 podman run --rm --memory=64m "$FLEET_SANDBOX_IMAGE" cat /sys/fs/cgroup/memory.max
 #    want: 67108864
 
-# 4. slirp4netns egress (needs /dev/net/tun) and the hard seal.
+# 4. All three network postures (each needs /dev/net/tun for its helper).
+#    a) normal turns — podman's rootless default (pasta on >= 5.0):
+podman run --rm "$FLEET_SANDBOX_IMAGE" \
+  python3 -c 'import socket;socket.create_connection(("1.1.1.1",443),5);print("default egress ok")'
+#    b) allowlisted-egress posture — needs the slirp4netns binary specifically.
+#       A missing binary now aborts BOOT with a fail-closed preflight, so check it
+#       here if you plan to enable that mode:
 podman run --rm --network=slirp4netns:allow_host_loopback=true \
-  "$FLEET_SANDBOX_IMAGE" python3 -c 'import socket;socket.create_connection(("1.1.1.1",443),5);print("egress ok")'
+  "$FLEET_SANDBOX_IMAGE" python3 -c 'import socket;socket.create_connection(("1.1.1.1",443),5);print("slirp egress ok")'
+#    c) lockdown / scheduled runs — the hard seal:
 podman run --rm --network=none "$FLEET_SANDBOX_IMAGE" true && echo "sealed mode ok"
 
-# 5. Disk quota — does --storage-opt work, or will fleet fall back to ulimit fsize?
+# 5. The TOTAL writable-layer cap (the per-file ulimit applies either way, §5).
 podman run --rm --storage-opt size=1g "$FLEET_SANDBOX_IMAGE" true \
-  && echo "hard disk cap available" || echo "will fall back to per-file ulimit only"
+  && echo "total-size cap available" || echo "per-file cap only — total layer size unbounded"
 
 # 6. DNS inside a sandbox — the NodeLocal DNSCache trap (§8). Resolution can
 #    fail here while the fleet process itself resolves fine.
@@ -1027,7 +1072,7 @@ metadata:
     elbv2.k8s.aws/pod-readiness-gate-inject: enabled
 ---
 # 2 ── StorageClass. xfs + prjquota is what makes the sandbox disk quota a HARD
-#      cap instead of the per-file ulimit fallback (§5).
+#      cap on top of the per-file ulimit that applies regardless (§5).
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:

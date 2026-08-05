@@ -18,7 +18,7 @@ export async function GET(_request: NextRequest, { params }: Params) {
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const { projectId } = await params;
   return chatServerPassthrough(
-    session.email,
+    session,
     `/projects/${encodeURIComponent(projectId)}/export`,
   );
 }

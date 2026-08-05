@@ -41,6 +41,12 @@ SERVICE_NAME="${FLEET_SERVICE_NAME:-fleet}"
 INSTALL_DIR="${FLEET_INSTALL_DIR:-/opt/fleet}"
 ENV_FILE="${FLEET_ENV_FILE:-/etc/fleet/fleet.env}"
 WEB_ENV_FILE="/etc/fleet/fleet-web.env"
+# The scheduled-backup pair shipped in deploy/ and installed by
+# scripts/bootstrap.sh --enable-service. Fixed names (unlike the fleet unit,
+# which FLEET_SERVICE_NAME renames) because bootstrap installs exactly these —
+# internal/boxdoctor probes the same two.
+BACKUP_SERVICE="fleet-backup.service"
+BACKUP_TIMER="fleet-backup.timer"
 
 # Node floor: Next.js 16 (web/) requires Node >= 20; Fedora's repo nodejs
 # satisfies it. Doctor upgrades via dnf only — fleet does not use NodeSource.
@@ -69,9 +75,9 @@ fleet-critical package currency (podman/crun/passt/conmon/...), the rootless-
 podman prerequisites of the fleet service user (subuid/subgid, /var/lib/fleet
 ownership, containers.conf, stale pause namespaces), systemd unit drift vs
 deploy/, the 0600 env files, service health (postgresql, fleet, fleet-web,
-caddy), the /healthz + /readyz probes, and a sandbox smoke (podman run as the
-fleet user). Reports when the source checkout is behind upstream but never
-pulls or rebuilds — that stays `fleet update`.
+caddy), the /healthz + /readyz probes, the scheduled-backup timer, and a
+sandbox smoke (podman run as the fleet user). Reports when the source checkout
+is behind upstream but never pulls or rebuilds — that stays `fleet update`.
 
 `fleet status` is the quick read-only in-process report; doctor is the deep
 box-level pass with repairs.
@@ -131,15 +137,16 @@ run_as_fleet() {
 # is also the CI seam: the Go smoke test asserts the plan's load-bearing steps.
 if [[ "$DRY_RUN" == "1" ]]; then
   step "fleet doctor --dry-run (src=${SRC_DIR}, service=${SERVICE_NAME}, install=${INSTALL_DIR})"
-  info "[dry-run] 1/8 Toolchain: node >= ${NODE_FLOOR} (dnf upgrade nodejs), go/git/curl/jq/podman/psql/npm present (dnf install)"
-  info "[dry-run] 2/8 Package currency: disable broken dnf repos; dnf upgrade fleet-critical packages (podman crun passt conmon containers-common golang nodejs caddy)"
-  info "[dry-run] 3/8 Rootless podman: ${SERVICE_USER} user + subuid/subgid ranges, ${SERVICE_HOME} + ~/.config/containers ownership, containers.conf (cgroupfs), /run/${SERVICE_USER}, podman system migrate, podman info as ${SERVICE_USER}"
-  info "[dry-run] 4/8 Installed artifacts: ${SERVICE_NAME}.service + fleet-web.service functional drift vs ${SRC_DIR}/deploy (reinstall + daemon-reload), /usr/local/bin/fleet symlink → ${INSTALL_DIR}/fleet, binaries present"
-  info "[dry-run] 5/8 Configuration: ${ENV_FILE} exists root-owned 0600 with OPENROUTER_API_KEY + DB DSNs; ${WEB_ENV_FILE} 0600 when fleet-web is installed"
-  info "[dry-run] 6/8 Services: ${SERVICE_NAME} active; postgresql/fleet-web/caddy active when enabled (systemctl start), then /healthz + /readyz respond"
-  info "[dry-run] 7/8 Sandbox smoke: podman run --rm --network=none <sandbox image> true as ${SERVICE_USER}"
-  info "[dry-run] 8/8 Source freshness: report commits behind upstream (fix stays 'fleet update' — doctor never pulls or rebuilds)"
-  info "[dry-run] would restart ${SERVICE_NAME} + fleet-web if any fix above landed (unless --no-restart)"
+  info "[dry-run] 1/9 Toolchain: node >= ${NODE_FLOOR} (dnf upgrade nodejs), go/git/curl/jq/podman/psql/npm present (dnf install)"
+  info "[dry-run] 2/9 Package currency: disable broken dnf repos; dnf upgrade fleet-critical packages (podman crun passt conmon containers-common golang nodejs caddy)"
+  info "[dry-run] 3/9 Rootless podman: ${SERVICE_USER} user + subuid/subgid ranges, ${SERVICE_HOME} + ~/.config/containers ownership, containers.conf (cgroupfs), /run/${SERVICE_USER}, podman system migrate, podman info as ${SERVICE_USER}"
+  info "[dry-run] 4/9 Installed artifacts: ${SERVICE_NAME}.service + fleet-web.service + the fleet-backup service/timer functional drift vs ${SRC_DIR}/deploy (reinstall + daemon-reload), /usr/local/bin/fleet symlink → ${INSTALL_DIR}/fleet, binaries present"
+  info "[dry-run] 5/9 Configuration: ${ENV_FILE} exists root-owned 0600 with OPENROUTER_API_KEY + DB DSNs; ${WEB_ENV_FILE} 0600 when fleet-web is installed"
+  info "[dry-run] 6/9 Services: ${SERVICE_NAME} active; postgresql/fleet-web/caddy active when enabled (systemctl start), then /healthz + /readyz respond"
+  info "[dry-run] 7/9 Scheduled backups: ${BACKUP_TIMER} installed + enabled + active (advisory when absent), and ${BACKUP_SERVICE}'s last run succeeded"
+  info "[dry-run] 8/9 Sandbox smoke: podman run --rm --network=none <sandbox image> true as ${SERVICE_USER}"
+  info "[dry-run] 9/9 Source freshness: report commits behind upstream (fix stays 'fleet update' — doctor never pulls or rebuilds)"
+  info "[dry-run] would restart ${SERVICE_NAME} + fleet-web after a toolchain/package upgrade or an app-unit reinstall above — a reinstalled fleet-backup unit does not bounce the app (unless --no-restart)"
   exit 0
 fi
 
@@ -158,7 +165,7 @@ command -v dnf >/dev/null 2>&1 && HAVE_DNF=1
 DNF=(dnf --setopt='*.skip_if_unavailable=1')
 
 # ── 1. toolchain ─────────────────────────────────────────────────────────────
-step "1/8  Toolchain"
+step "1/9  Toolchain"
 
 node_major="$(node -v 2>/dev/null | cut -dv -f2 | cut -d. -f1 || true)"
 if [[ "${node_major:-0}" -ge "$NODE_FLOOR" ]]; then
@@ -206,7 +213,7 @@ for tool in go git curl jq podman psql npm python3; do
 done
 
 # ── 2. fleet-critical packages current ───────────────────────────────────────
-step "2/8  Package currency (the version-lottery killer)"
+step "2/9  Package currency (the version-lottery killer)"
 
 if [[ "$HAVE_DNF" == "0" ]]; then
   advise "no dnf on this host — skipping repo health + package currency (keep podman/crun/nodejs current with your package manager)"
@@ -280,7 +287,7 @@ else
 fi
 
 # ── 3. rootless podman for the service user ─────────────────────────────────
-step "3/8  Rootless podman (the ${SERVICE_USER} service user's sandbox)"
+step "3/9  Rootless podman (the ${SERVICE_USER} service user's sandbox)"
 
 if id "$SERVICE_USER" >/dev/null 2>&1; then
   pass "user $SERVICE_USER exists"
@@ -374,13 +381,13 @@ CONF
 fi
 
 # ── 4. installed artifacts vs repo ───────────────────────────────────────────
-step "4/8  Systemd units + binaries"
+step "4/9  Systemd units + binaries"
 
 units_changed=0
 if ! command -v systemctl >/dev/null 2>&1; then
   advise "no systemd on this host — skipping unit checks"
 else
-  for unit in "${SERVICE_NAME}.service" fleet-web.service; do
+  for unit in "${SERVICE_NAME}.service" fleet-web.service "$BACKUP_SERVICE" "$BACKUP_TIMER"; do
     src="$SRC_DIR/deploy/$unit"
     # The generic service name is fleet; a renamed unit has no shipped file.
     [[ "$unit" == "${SERVICE_NAME}.service" && ! -f "$src" ]] && src="$SRC_DIR/deploy/fleet.service"
@@ -392,7 +399,13 @@ else
     if [[ ! -f "$dst" ]]; then
       # Absent unit is informational: fleet-web is optional, and a box may run
       # fleet under another supervisor. bootstrap --enable-service installs it.
-      advise "$unit not installed (scripts/bootstrap.sh --enable-service installs it)"
+      # The backup pair is optional-if-absent too, and step 7 owns that verdict
+      # (with the "you may back up at the volume layer" caveat), so saying it
+      # here as well would double-count one gap as two advisories.
+      case "$unit" in
+        "$BACKUP_SERVICE"|"$BACKUP_TIMER") ;;
+        *) advise "$unit not installed (scripts/bootstrap.sh --enable-service installs it)" ;;
+      esac
       continue
     fi
     # Compare FUNCTIONAL lines only (comments/blank stripped) so a reworded
@@ -404,7 +417,14 @@ else
     else
       install -m 0644 "$src" "$dst"
       fixed "$unit reinstalled from deploy/"
-      restart_needed=1
+      # Only the app units want a process restart, which is user-visible chat
+      # downtime. Neither backup unit touches the running server: the oneshot
+      # runs only when the timer fires it, and the daemon-reload after this loop
+      # is all systemd needs to pick up a rewritten timer's schedule.
+      case "$unit" in
+        "$BACKUP_SERVICE"|"$BACKUP_TIMER") ;;
+        *) restart_needed=1 ;;
+      esac
       units_changed=1
     fi
   done
@@ -430,7 +450,7 @@ else
 fi
 
 # ── 5. configuration ─────────────────────────────────────────────────────────
-step "5/8  Configuration"
+step "5/9  Configuration"
 
 if [[ ! -f "$ENV_FILE" ]]; then
   fail "$ENV_FILE missing — fleet cannot start (scripts/bootstrap.sh creates it; fleet config set-openrouter-key fills the key)"
@@ -479,7 +499,7 @@ if command -v systemctl >/dev/null 2>&1 && systemctl cat fleet-web.service >/dev
 fi
 
 # ── 6. services ──────────────────────────────────────────────────────────────
-step "6/8  Services"
+step "6/9  Services"
 
 if ! command -v systemctl >/dev/null 2>&1; then
   advise "no systemd — skipping service checks (verify your supervisor runs 'fleet serve')"
@@ -549,8 +569,49 @@ for probe in healthz readyz; do
   fi
 done
 
-# ── 7. sandbox smoke ─────────────────────────────────────────────────────────
-step "7/8  Sandbox smoke"
+# ── 7. scheduled backups ─────────────────────────────────────────────────────
+step "7/9  Scheduled backups"
+
+# An ABSENT timer is an advisory, never a failure, and doctor does not install
+# it: a same-host pg_dump protects against logical loss, but an operator who
+# snapshots the volume or the hypervisor has a stronger answer and is not
+# misconfigured — installing backups on a box whose operator declined them
+# (bootstrap --no-backup-timer) would be doctor overreaching. A timer whose LAST
+# RUN FAILED is a genuine fault: the oneshot exits non-zero when a dump fails its
+# integrity check, and a timer failing for a week is worse than no timer at all,
+# because the box looks covered. Kept in lockstep with internal/boxdoctor's
+# checkBackups, which reaches the same verdicts from inside the process.
+if ! command -v systemctl >/dev/null 2>&1; then
+  advise "no systemd — cannot check for a backup timer (schedule 'fleet backup --db=all --prune' with cron)"
+elif ! systemctl cat "$BACKUP_TIMER" >/dev/null 2>&1 || ! systemctl cat "$BACKUP_SERVICE" >/dev/null 2>&1; then
+  # Both halves must be present: a timer whose service unit is missing fires
+  # into nothing, which would otherwise read as "backups are configured".
+  # The hint installs just this pair rather than re-bootstrapping: on an
+  # already-provisioned box, bootstrap also rebuilds binaries and re-provisions
+  # Postgres, which is not what "I want a backup timer" should cost.
+  advise "no ${BACKUP_TIMER} + ${BACKUP_SERVICE} pair installed — nothing on this box dumps the databases; install it with: install -m 0644 -t /etc/systemd/system ${SRC_DIR}/deploy/fleet-backup.{service,timer} && systemctl daemon-reload && systemctl enable --now ${BACKUP_TIMER} (ignore this if you back up at the volume/hypervisor layer)"
+elif ! systemctl is-enabled --quiet "$BACKUP_TIMER" 2>/dev/null; then
+  advise "${BACKUP_TIMER} installed but not enabled — it will never fire: systemctl enable --now ${BACKUP_TIMER}"
+elif ! systemctl is-active --quiet "$BACKUP_TIMER" 2>/dev/null; then
+  # is-enabled only reads the install symlink. A timer that is enabled but
+  # STOPPED (enabled without --now and not rebooted since, an `enable --now`
+  # whose start half failed, someone stopping it) never fires, and its service's
+  # Result stays "success" — exactly the false clean this step exists to remove.
+  advise "${BACKUP_TIMER} is enabled but not active — it will not fire until it is started: systemctl start ${BACKUP_TIMER}"
+else
+  # Result is systemd's verdict on the LAST run: "success" for a clean run and
+  # also for a unit that has never run yet; anything else (exit-code, timeout,
+  # signal, …) means the last backup did not complete.
+  backup_result="$(systemctl show -p Result --value "$BACKUP_SERVICE" 2>/dev/null || true)"
+  if [[ -n "$backup_result" && "$backup_result" != "success" ]]; then
+    fail "${BACKUP_SERVICE} last run FAILED (Result=${backup_result}) — no dump is being written: journalctl -u ${BACKUP_SERVICE%.service} -n 50"
+  else
+    pass "${BACKUP_TIMER} enabled and active, no failed run recorded"
+  fi
+fi
+
+# ── 8. sandbox smoke ─────────────────────────────────────────────────────────
+step "8/9  Sandbox smoke"
 
 # Deferred from step 3: the post-upgrade `podman info` failure should have
 # cleared once step 6 restarted the services off the old container stack.
@@ -593,11 +654,11 @@ elif run_as_fleet podman image exists "$sandbox_img" 2>/dev/null; then
     fail "sandbox image $sandbox_img present but NOT runnable as $SERVICE_USER — tool calls will break; rerun verbosely: cd $SERVICE_HOME && sudo -u $SERVICE_USER HOME=$SERVICE_HOME XDG_RUNTIME_DIR=/run/$SERVICE_USER podman run --rm $sandbox_img true"
   fi
 else
-  fail "sandbox image $sandbox_img missing from ${SERVICE_USER}'s rootless store — build it: sudo fleet update (or FLEET_CLIENT_CONFIG_DIR=<bundle> scripts/build-sandbox-image.sh as $SERVICE_USER)"
+  fail "sandbox image $sandbox_img missing from ${SERVICE_USER}'s rootless store — build it: sudo fleet update (or sudo FLEET_CLIENT_CONFIG_DIR=<bundle> scripts/build-sandbox-image.sh; a root run builds into ${SERVICE_USER}'s store)"
 fi
 
-# ── 8. source freshness ──────────────────────────────────────────────────────
-step "8/8  Source freshness"
+# ── 9. source freshness ──────────────────────────────────────────────────────
+step "9/9  Source freshness"
 
 # Report-only in every mode: pulling and rebuilding is `fleet update`'s job,
 # and doctor silently kicking off a deploy would be a surprise.

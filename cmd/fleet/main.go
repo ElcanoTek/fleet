@@ -725,6 +725,12 @@ func run() error {
 	// read-only aggregations over what the chat store already records.
 	h.SetChatUserDayUsageProvider(chatUserDayUsageProvider(chatStore))
 	h.SetChatAccountsProvider(chatAccountsProvider(chatStore))
+	// Both planes are reached with the SAME session cookie, so the Operations
+	// Center checks the same revocation claim chat does. The epoch lives in the
+	// chat users table, which this plane cannot read (ADR-0005) — hand it the
+	// lookup, not the schema. Wired unconditionally: the chat store is open by
+	// the time these handlers exist, and a nil seam would silently stop checking.
+	h.SetChatSessionEpochProvider(chatStore.SessionEpoch)
 	// Budget gate for POST /tasks + /tasks/batch and the /admin/budgets CRUD
 	// surface (#601 part 2) — the SAME enforcer the chat schedule_task seam
 	// carries, so no create path can drift.
@@ -805,10 +811,16 @@ func run() error {
 	// dispatching on the global default. Reads the bundle's personas dir live
 	// per call, so a bundle hot-reload is reflected without a restart.
 	h.SetPersonaCatalog(func() []string { return listBundlePersonas(personasDir) })
-	// Reclaim sandbox containers orphaned by a PRIOR crash before building the
-	// pool: they run `--detach --rm` under conmon, so a non-graceful exit leaves
-	// them holding host RAM/PIDs across systemd restarts. Best-effort — log and
-	// continue if podman is absent (e.g. mock/dev) or the sweep fails.
+	// Reclaim sandbox containers orphaned by a PRIOR crash: they run
+	// `--detach --rm` under conmon, so a non-graceful exit leaves them holding
+	// host RAM/PIDs across systemd restarts. Best-effort — log and continue if
+	// podman is absent (e.g. mock/dev) or the sweep fails.
+	//
+	// NOTE this runs AFTER buildInteractiveEngine above, which constructs the
+	// sandbox pool and starts it filling. The sweep is safe here only because it
+	// skips containers carrying this process's own instance label in every
+	// state — otherwise a warm container caught in "created" state would be
+	// force-removed by its own process. See sandbox.PruneOrphanedContainers.
 	pruneCtx, pruneCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	if n, err := sandbox.PruneOrphanedContainers(pruneCtx, "podman"); err != nil {
 		log.Printf("startup: prune orphaned sandbox containers: %v", err)

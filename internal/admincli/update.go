@@ -17,7 +17,8 @@ import (
 // (--no-pull / --dry-run / --client-config / --service / --branch / --yes /
 // ...) to the shell script, which owns the in-place update: pull the fleet +
 // client-config checkouts, rebuild the binary + web app, rebuild the sandbox
-// image only if its Containerfile changed, and restart the service. Like
+// image when its Containerfile or resolved tag changed (or the tag is missing
+// from the service user's image store), and restart the service. Like
 // bootstrap, the CLI runs NO migrations (services self-migrate on restart).
 //
 // `--check` short-circuits to a READ-ONLY report (how many commits the local

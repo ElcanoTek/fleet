@@ -48,7 +48,7 @@ describe("GET /api/client-config", () => {
   beforeEach(() => {
     getServerSessionMock.mockReset();
     chatServerFetchMock.mockReset();
-    getServerSessionMock.mockResolvedValue({ email: "alice@example.com", exp: 0 });
+    getServerSessionMock.mockResolvedValue({ email: "alice@example.com", exp: 0, epoch: "epoch-1" });
     chatServerFetchMock.mockResolvedValue(
       new Response(JSON.stringify(CONFIG), {
         status: 200,
@@ -67,10 +67,13 @@ describe("GET /api/client-config", () => {
     const body = await res.json();
     expect(body.branding.app_name).toBe("Fleet");
     expect(body.empty_state.cards).toEqual([]);
-    // Forwards the member's email to the (member-gated) upstream.
-    expect(chatServerFetchMock).toHaveBeenCalledWith("alice@example.com", "/client-config", {
-      method: "GET",
-    });
+    // Forwards the member's identity — email AND session epoch — to the
+    // (member-gated) upstream.
+    expect(chatServerFetchMock).toHaveBeenCalledWith(
+      expect.objectContaining({ email: "alice@example.com", epoch: "epoch-1" }),
+      "/client-config",
+      { method: "GET" },
+    );
   });
 
   it("returns 401 when there is no session", async () => {

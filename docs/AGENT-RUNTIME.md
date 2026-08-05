@@ -82,10 +82,13 @@ runs default to this sealed posture — see below.
 
 By default the per-turn container runs under Podman's shared-kernel OCI runtime
 (`crun`/`runc`). A deployment handling untrusted prompts or sensitive data can
-raise the isolation posture to a **dedicated KVM VM per tool call** by setting
-the bundle manifest's `sandbox.runtime` (or `FLEET_SANDBOX_RUNTIME`) to `kata`
-or `libkrun` — an escape then requires a hypervisor CVE, not just a
-container-escape. fleet emits the value as `podman run --runtime=<value>`,
+raise the isolation posture so that **every sandbox container is a dedicated KVM
+VM** by setting the bundle manifest's `sandbox.runtime` (or
+`FLEET_SANDBOX_RUNTIME`) to `kata` or `libkrun` — an escape then requires a
+hypervisor CVE, not just a container-escape. The VM boundary has exactly the
+granularity of the container it replaces: one per interactive turn, one per
+scheduled run, one per conversation in persistent-REPL mode — every tool call in
+that turn shares it. fleet emits the value as `podman run --runtime=<value>`,
 **fail-closed preflights** `/dev/kvm` + the runtime binary at boot (a missing
 KVM aborts startup rather than degrading to a shared-kernel container), and adds
 the Kata guest-memory overhead so the `--memory` cap still reflects usable guest
@@ -112,10 +115,15 @@ controls is whether that kernel survives **between turns**:
   a persistent kernel back to a clean slate mid-conversation.
 
 A persistent sandbox is reclaimed on conversation delete, on process shutdown,
-and by an idle reaper (`FLEET_PYTHON_REPL_IDLE_TTL`, default **1800s**); the
-number of live persistent sandboxes is capped at `FLEET_PYTHON_REPL_MAX`
-(default **32**, LRU-evicting the least-recently-used idle one). It carries the
-same cgroup memory/CPU/PID/disk caps as a per-turn sandbox.
+and by an idle reaper (`FLEET_PYTHON_REPL_IDLE_TTL`, default **1800s**).
+`FLEET_PYTHON_REPL_MAX` (default **32**; `0` disables it) bounds how many are
+kept: each time a persistent sandbox is created, least-recently-used **idle**
+sessions are evicted until the count is back under the cap. It is a soft cap —
+checked only on that create path, and never against a session with a turn in
+flight — so the live count can exceed it and stay there until the next create or
+the idle reaper reclaims the excess. Size host memory with that overshoot in
+mind. Each one carries the same cgroup memory/CPU/PID/disk caps as a per-turn
+sandbox.
 
 Process shutdown is a hard lifecycle boundary for both modes. Once `Pool.Close`
 marks the sandbox pool closed, new per-turn, persistent, lockdown, and

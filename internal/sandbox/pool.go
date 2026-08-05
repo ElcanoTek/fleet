@@ -58,11 +58,33 @@ type Pool struct {
 	// overridden in tests to exercise reaping deterministically.
 	nowFn func() time.Time
 
-	// storageProbeOnce caches the one-time --storage-opt support probe (#216) so
-	// the disk-quota mechanism (storage-opt vs the ulimit fallback) is decided
-	// once per process. The first container creation pays the probe cost.
-	storageProbeOnce sync.Once
+	// storageProbeMu serializes the one-time --storage-opt support probe (#216)
+	// that decides whether the writable-layer quota is added on top of the
+	// always-applied per-file ulimit. storageProbeDone latches only a CONCLUSIVE
+	// determination into storageOptOK — deliberately not a sync.Once, because a
+	// probe cut short by its context (e.g. the process's first turn was
+	// cancelled mid-flight) says nothing about the storage driver, and latching
+	// that would run every later container with no layer quota for the process
+	// lifetime. The first container creation pays the probe cost; an
+	// inconclusive probe is retried by a later one, bounded by the
+	// strike/cooldown fields below so a degraded host doesn't pay a serialized
+	// 30s re-probe on every container creation.
+	storageProbeMu   sync.Mutex
+	storageProbeDone bool
 	storageOptOK     bool
+	// storageProbeStrikes counts consecutive probes that hit the probe's OWN
+	// timeout while the caller's ctx was still live — i.e. the host was too
+	// slow to answer, not a user cancelling a turn. At
+	// storageProbeMaxStrikes, storageProbeRetryAt opens a cooldown window
+	// during which creations skip the probe (per-file ulimit only). Zero
+	// values mean no strikes / no cooldown, so pools constructed as literals
+	// in tests behave as before.
+	storageProbeStrikes int
+	storageProbeRetryAt time.Time
+	// storageProbeFn is the probe implementation; nil means
+	// ProbeStorageOptSupport. A seam for tests (like nowFn) — production
+	// never sets it.
+	storageProbeFn func(ctx context.Context, podmanBin, image string) (supported, conclusive bool)
 
 	// ── persistent per-conversation sandboxes (#213) ──
 	// When PersistentREPL is set, TakePersistent(convID) keeps ONE sandbox alive
@@ -159,9 +181,12 @@ type PoolConfig struct {
 	// sit idle (no run_python/bash call) before the reaper closes it
 	// (FLEET_PYTHON_REPL_IDLE_TTL). Zero falls back to 30m.
 	PersistentIdleTTL time.Duration
-	// PersistentMaxSessions caps how many persistent sandboxes may be live at
-	// once (FLEET_PYTHON_REPL_MAX); past it the least-recently-used idle session
-	// is evicted. Zero disables the cap.
+	// PersistentMaxSessions bounds how many persistent sandboxes are kept
+	// (FLEET_PYTHON_REPL_MAX). SOFT cap: on each create, least-recently-used IDLE
+	// sessions are evicted until the count is back under it — a session with a
+	// turn in flight is skipped, and the check runs on no other path, so the live
+	// count can overshoot until the next create or the idle reaper. Zero disables
+	// it.
 	PersistentMaxSessions int
 }
 
@@ -645,24 +670,86 @@ func (p *Pool) reapStale() {
 	}
 }
 
-// storageOptSupported probes once (cached) whether the host's storage driver
-// supports `--storage-opt size` disk quotas, logging which quota mechanism the
-// sandbox will use. Thread-safe; the first container creation pays the probe.
+// storageProbeMaxStrikes and storageProbeCooldown bound the inconclusive-probe
+// retry loop. Re-probing after an inconclusive answer is what keeps one
+// cancelled turn from disabling the layer quota for the process lifetime — but
+// unbounded, it means a degraded host (podman hanging) charges every container
+// creation a serialized storageProbeTimeout (30s) re-probe, on turn start and
+// scheduled runs alike. After storageProbeMaxStrikes consecutive probe
+// timeouts the pool treats the driver as unsupported for storageProbeCooldown,
+// then re-probes. TRADEOFF: during a cooldown, containers on a quota-capable
+// host run without the writable-layer quota (the per-file ulimit still
+// applies) — accepted, because the alternative is +30s on every creation for
+// as long as the host stays degraded. The window is temporary by
+// construction, so a genuinely inconclusive answer still never latches
+// permanently. Strikes are not reset when a cooldown expires: on a
+// still-degraded host one more timeout re-opens the window, bounding the
+// probe tax to ~30s per cooldown rather than N×30s.
+const (
+	storageProbeMaxStrikes = 3
+	storageProbeCooldown   = 5 * time.Minute
+)
+
+// storageOptSupported probes (cached once conclusive) whether the host's
+// storage driver supports `--storage-opt size` disk quotas, logging what the
+// sandbox's disk quota does and does not cover. Thread-safe; the first
+// container creation pays the probe. An INCONCLUSIVE probe — cut short by ctx
+// before podman answered — is not cached: this container safely omits the
+// layer quota and a later creation re-probes, so one cancelled turn cannot
+// disable the quota for the process lifetime. Consecutive probe TIMEOUTS are
+// bounded by the strike/cooldown policy above so a degraded host doesn't pay
+// the probe on every creation.
 func (p *Pool) storageOptSupported(ctx context.Context) bool {
-	p.storageProbeOnce.Do(func() {
-		gb := effectiveDiskGB(p.cfg.Container.DiskLimitGB)
-		if gb <= 0 {
-			// Quota disabled: no flag either way, so skip the probe container.
-			log.Printf("sandbox disk quota: DISABLED (FLEET_SANDBOX_DISK_GB<=0) — the host disk is unprotected from runaway sandbox writes")
-			return
+	p.storageProbeMu.Lock()
+	defer p.storageProbeMu.Unlock()
+	if p.storageProbeDone {
+		return p.storageOptOK
+	}
+	gb := effectiveDiskGB(p.cfg.Container.DiskLimitGB)
+	if gb <= 0 {
+		// Quota disabled: no flag either way, so skip the probe container.
+		log.Printf("sandbox disk quota: DISABLED (FLEET_SANDBOX_DISK_GB<=0) — the host disk is unprotected from runaway sandbox writes")
+		p.storageProbeDone = true
+		return false
+	}
+	if !p.storageProbeRetryAt.IsZero() && p.now().Before(p.storageProbeRetryAt) {
+		// Cooling down after repeated probe timeouts. Skip the probe —
+		// entering the cooldown was logged once; logging here would spam
+		// every creation for the whole window.
+		return false
+	}
+	probe := p.storageProbeFn
+	if probe == nil {
+		probe = ProbeStorageOptSupport
+	}
+	supported, conclusive := probe(ctx, p.cfg.Container.PodmanBinary, p.cfg.Container.Image)
+	if !conclusive {
+		if ctx.Err() != nil {
+			// The CALLER's ctx ended mid-probe (e.g. the user cancelled the
+			// turn). That says nothing about the host, and charging a strike
+			// would let a burst of cancels on a healthy host open a cooldown
+			// that runs containers without the layer quota for no reason.
+			log.Printf("sandbox disk quota: --storage-opt probe cut short by the caller — this container gets the per-file ulimit only; the next container creation re-probes")
+			return false
 		}
-		p.storageOptOK = ProbeStorageOptSupport(ctx, p.cfg.Container.PodmanBinary, p.cfg.Container.Image)
-		if p.storageOptOK {
-			log.Printf("sandbox disk quota: storage-opt size=%dg — writable layer hard-capped (total usage bounded)", gb)
-		} else {
-			log.Printf("sandbox disk quota: storage-opt unsupported on this storage driver; falling back to ulimit fsize=%dGiB — caps any single file but NOT total disk use (use overlay+xfs(pquota)/btrfs for a hard cap)", gb)
+		// The probe's own timeout fired with a live caller: the host itself
+		// is slow. Count it toward the cooldown latch.
+		p.storageProbeStrikes++
+		if p.storageProbeStrikes >= storageProbeMaxStrikes {
+			p.storageProbeRetryAt = p.now().Add(storageProbeCooldown)
+			log.Printf("sandbox disk quota: --storage-opt probe timed out (%d consecutive) — treating the driver as unsupported for %v (containers get the per-file ulimit only), then re-probing", p.storageProbeStrikes, storageProbeCooldown)
+			return false
 		}
-	})
+		log.Printf("sandbox disk quota: --storage-opt probe inconclusive — this container gets the per-file ulimit only; the next container creation re-probes")
+		return false
+	}
+	p.storageProbeDone = true
+	p.storageOptOK = supported
+	if p.storageOptOK {
+		log.Printf("sandbox disk quota: ulimit fsize=%dGiB (per-file, covers the workspace bind mount) + storage-opt size=%dg (total writable LAYER). Total workspace bytes are NOT capped — bind mounts are outside the storage quota.", gb, gb)
+	} else {
+		log.Printf("sandbox disk quota: ulimit fsize=%dGiB only — storage-opt unsupported on this storage driver, so the writable layer has no total cap either (use overlay+xfs(pquota)/btrfs for one). Caps any single file, not total disk use.", gb)
+	}
 	return p.storageOptOK
 }
 

@@ -35,7 +35,16 @@ export async function GET() {
       throw new Error("no per-lab models were found");
     }
     return NextResponse.json({
-      models: entries.map((e) => ({ slug: e.slug, name: e.name, created: e.created })),
+      // Prices ride along so the browse-mode rows (shown before the larger
+      // catalog fetch lands, and the only source for them under a failing
+      // catalog) can render the "$ … $$$$" cost indicator too.
+      models: entries.map((e) => ({
+        slug: e.slug,
+        name: e.name,
+        created: e.created,
+        price_prompt: e.promptPerToken,
+        price_completion: e.completionPerToken,
+      })),
       cached_at: catalog.fetchedAt,
     });
   } catch (error) {

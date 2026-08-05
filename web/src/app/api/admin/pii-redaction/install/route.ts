@@ -17,7 +17,7 @@ export async function GET() {
   if (!session) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  return chatServerPassthrough(session.email, "/admin/pii-redaction/install", { method: "GET" });
+  return chatServerPassthrough(session, "/admin/pii-redaction/install", { method: "GET" });
 }
 
 async function mutate(request: NextRequest, method: "POST" | "DELETE"): Promise<NextResponse> {
@@ -27,7 +27,7 @@ async function mutate(request: NextRequest, method: "POST" | "DELETE"): Promise<
   }
   const csrf = verifyOrigin(request);
   if (!csrf.ok) return csrf.response;
-  return chatServerPassthrough(session.email, "/admin/pii-redaction/install", { method });
+  return chatServerPassthrough(session, "/admin/pii-redaction/install", { method });
 }
 
 export async function POST(request: NextRequest) {

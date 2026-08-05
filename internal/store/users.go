@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -24,10 +26,54 @@ type User struct {
 	// TeamID groups users into a read-sharing trust group. Empty = no team. A
 	// teammate sees a conversation only once its owner opts in (team_visible),
 	// so a shared team_id never auto-exposes private history.
-	TeamID    string
-	CreatedAt int64
-	UpdatedAt int64
+	TeamID string
+	// SessionEpoch is the revocation generation a session cookie must carry to
+	// be honoured for this account — see sessionEpochFor. Every constructor of
+	// this struct populates it, so an empty value never means "unknown": the
+	// comparison in httpapi.membershipMiddleware is a plain mismatch, which
+	// fails closed.
+	SessionEpoch string
+	CreatedAt    int64
+	UpdatedAt    int64
 }
+
+// sessionEpochBytes is how much of the digest below makes up the epoch. The
+// value is only ever compared against the same account's current epoch, so
+// 64 bits is ample — a collision would have to land between two hashes of one
+// account — and a short claim keeps the session cookie small.
+const sessionEpochBytes = 8
+
+// sessionEpochFor derives an account's session epoch from its stored bcrypt
+// hash. bcrypt salts every hash, so any password write moves this value
+// without a write path having to remember to bump anything.
+//
+// It is a truncated digest rather than the hash itself because the epoch
+// travels in the session cookie, readable by whoever holds that cookie: a
+// digest over a string that already contains a 128-bit random salt gives an
+// offline attacker nothing to grind, and the bcrypt hash is not a credential
+// /auth/verify would accept in the first place.
+//
+// The empty hash is a legitimate input — it is what Store.SessionEpoch reports
+// for an email with no row.
+func sessionEpochFor(passwordHash string) string {
+	sum := sha256.Sum256([]byte(passwordHash))
+	return hex.EncodeToString(sum[:sessionEpochBytes])
+}
+
+// sessionEpochExpr is sessionEpochFor written as SQL over the users row. Reads
+// that only need the epoch SELECT this instead of password_hash, so the hash
+// stays inside Postgres: GetUser runs on every authenticated request and
+// ListUsers covers every account at once, and neither has any business carrying
+// a credential through the request path. The two derivations are the same digest
+// over the same bytes and MUST stay byte-identical — TestSessionEpochSQLMatchesGo
+// pins that over the inputs a users row can hold.
+var sessionEpochExpr = fmt.Sprintf(
+	`encode(substring(sha256(convert_to(password_hash, 'UTF8')) FROM 1 FOR %d), 'hex')`,
+	sessionEpochBytes)
+
+// userColumns is the read projection behind every *User: the row's own columns
+// plus the derived epoch, never password_hash.
+var userColumns = "email, role, team_id, " + sessionEpochExpr + ", created_at, updated_at"
 
 // Role constants (#237). Kept in sync with the CHECK constraint in
 // migrations/024_rbac.sql.
@@ -95,7 +141,13 @@ func (s *Store) CreateUser(ctx context.Context, email, plainPassword string) (*U
 		return nil, err
 	}
 	// role defaults to 'member' via the column default (#237); reflect that here.
-	return &User{Email: email, Role: RoleMember, CreatedAt: now, UpdatedAt: now}, nil
+	return &User{
+		Email:        email,
+		Role:         RoleMember,
+		SessionEpoch: sessionEpochFor(string(hash)),
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}, nil
 }
 
 // GetUser returns the full user record (role + team included). Returns
@@ -109,8 +161,8 @@ func (s *Store) GetUser(ctx context.Context, email string) (*User, error) {
 	var u User
 	var teamID sql.NullString
 	err := s.db.QueryRowContext(ctx,
-		`SELECT email, role, team_id, created_at, updated_at FROM users WHERE email = $1`, email).
-		Scan(&u.Email, &u.Role, &teamID, &u.CreatedAt, &u.UpdatedAt)
+		`SELECT `+userColumns+` FROM users WHERE email = $1`, email).
+		Scan(&u.Email, &u.Role, &teamID, &u.SessionEpoch, &u.CreatedAt, &u.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrUserNotFound
 	}
@@ -119,6 +171,28 @@ func (s *Store) GetUser(ctx context.Context, email string) (*User, error) {
 	}
 	u.TeamID = teamID.String
 	return &u, nil
+}
+
+// SessionEpoch returns the epoch a freshly minted session cookie for email must
+// carry. The mint paths live in the Next.js tier (password login, OIDC
+// callback), which has no database of its own, so they read it from here.
+//
+// An email with no row reports the epoch of an empty hash — a real value no
+// provisioned account can hold, since every row stores a bcrypt string. A
+// session minted for an address that is not a chat user therefore stops working
+// the moment the account is created, rather than silently predating it.
+func (s *Store) SessionEpoch(ctx context.Context, email string) (string, error) {
+	email = normalizeEmail(email)
+	var epoch string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT `+sessionEpochExpr+` FROM users WHERE email = $1`, email).Scan(&epoch)
+	if errors.Is(err, sql.ErrNoRows) {
+		return sessionEpochFor(""), nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return epoch, nil
 }
 
 // SetUserRoleTeam applies a partial role/team update (PATCH /admin/users/{email},
@@ -217,7 +291,10 @@ func (s *Store) IsUser(ctx context.Context, email string) (bool, error) {
 	return true, nil
 }
 
-// UpdatePassword rotates a user's password. Used by `chat user passwd`.
+// UpdatePassword rotates a user's password. Used by `chat user passwd` and by
+// the admin reset endpoint. The re-hash moves the account's session epoch (see
+// sessionEpochFor), which is what evicts sessions minted under the old password
+// — so a caller must not "rotate" by writing back an unchanged hash.
 func (s *Store) UpdatePassword(ctx context.Context, email, plainPassword string) error {
 	email = normalizeEmail(email)
 	if len(plainPassword) < 8 {
@@ -322,8 +399,10 @@ func (s *Store) DeleteUser(ctx context.Context, email string) error {
 
 // ListUsers returns every provisioned user, sorted by email.
 func (s *Store) ListUsers(ctx context.Context) ([]User, error) {
+	// G202 is a false positive: userColumns is a package-level projection built
+	// from constants, with no caller-supplied value on any path into it.
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT email, role, team_id, created_at, updated_at FROM users ORDER BY email ASC`)
+		`SELECT `+userColumns+` FROM users ORDER BY email ASC`) //nolint:gosec // G202: see above
 	if err != nil {
 		return nil, err
 	}
@@ -332,7 +411,7 @@ func (s *Store) ListUsers(ctx context.Context) ([]User, error) {
 	for rows.Next() {
 		var u User
 		var teamID sql.NullString
-		if err := rows.Scan(&u.Email, &u.Role, &teamID, &u.CreatedAt, &u.UpdatedAt); err != nil {
+		if err := rows.Scan(&u.Email, &u.Role, &teamID, &u.SessionEpoch, &u.CreatedAt, &u.UpdatedAt); err != nil {
 			return nil, err
 		}
 		u.TeamID = teamID.String

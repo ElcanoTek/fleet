@@ -288,6 +288,33 @@ describe("TaskCreateModal — edit mode", () => {
     expect(rerunTask).not.toHaveBeenCalled();
   });
 
+  it("echoes a gate's exit_code_is on edit even though the form has no field for it", async () => {
+    updateTask.mockResolvedValue({ id: EDIT_ID });
+    renderModal({
+      editTask: {
+        ...baseEdit,
+        run_if: { command: "test -f /tmp/ready", exit_code_is: 2, timeout_seconds: 30 },
+      },
+      onUpdated: vi.fn(),
+    });
+
+    fireEvent.change(screen.getByLabelText("Prompt"), {
+      target: { value: "Weekly latency report v2" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /save task changes/i }));
+
+    await waitFor(() => expect(updateTask).toHaveBeenCalledTimes(1));
+    const [, body] = updateTask.mock.calls[0];
+    // A lossy echo (dropping exit_code_is) reads server-side as an attempt to
+    // CHANGE the run_if gate and 403s non-admin edits of unrelated fields.
+    expect(body.run_if).toEqual({
+      command: "test -f /tmp/ready",
+      exit_code_is: 2,
+      on_error: "run",
+      timeout_seconds: 30,
+    });
+  });
+
   it("asks all-future-runs vs run-once for a recurring task; PUT for the definition", async () => {
     updateTask.mockResolvedValue({ id: EDIT_ID });
     renderModal({

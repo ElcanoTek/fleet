@@ -21,12 +21,25 @@ supply the client's prompts, personas, playbooks, and connectors.
   system_prompts/
     default.md         # scheduled-agent base prompt
     chat.md            # interactive-chat base prompt
-  personas/            # *.yaml — one per persona; PERSONA_DEFAULT picks the default
+  personas/            # *.yaml — one per persona; the env file picks the defaults
   protocols/           # *.yaml | *.md — reusable playbooks
   prompts/             # *.yaml | *.yml | *.md | *.txt — Git-backed prompt library
   skills/              # <name>/SKILL.md — Agent Skills (progressive disclosure)
   mcp/                 # the client's Python MCP servers (+ requirements.txt)
 ```
+
+Which persona is the **default** is a deployment setting, not a bundle one: it
+lives in the env file, and the two engines take it in different shapes.
+`FLEET_PERSONA_DEFAULT` (legacy: `PERSONA_DEFAULT`) is the persona new
+conversations start on and takes a bare *name* — `victoria`. `FLEET_PERSONA`
+(legacy: `PERSONA`) is the scheduled-agent default and takes the bundle-relative
+*path* to the file — `personas/victoria.yaml`. Both spellings of each are read,
+`FLEET_`-prefixed first. Leaving them unset means `assistant`, which a bundle
+that ships no `personas/assistant.yaml` will not have; `fleet validate-config`
+reports the miss and lists the personas the bundle does offer. It **fails** on
+`FLEET_PERSONA_DEFAULT`, because a chat turn whose persona file is unreadable
+errors out, and only **warns** on `FLEET_PERSONA`, because the scheduled agent
+just runs without the persona's expertise block.
 
 The optional `prompts/` directory feeds the hybrid prompt library shown in Chat
 and Operations Center. Bundle files are read-only and Git-trackable; users can
@@ -143,9 +156,10 @@ sandbox:
 
 ## The agent runtime
 
-fleet runs **one** native agent loop, in the fleet process. Every tool call it
-makes (`bash`, `run_python`, file I/O, MCP) runs inside the rootless-Podman
-sandbox under host policy, and MCP credentials are isolated by the out-of-process
+fleet runs **one** native agent loop, in the fleet process. Every tool call's
+model-authored local execution (`bash`, `run_python`, file I/O) runs inside the
+rootless-Podman sandbox under host policy. MCP calls are the deliberate
+host-side exception, and their credentials are isolated by the out-of-process
 MCP broker — they never enter the sandbox. There is no flavor picker and no
 external-agent delegation. See **[`docs/AGENT-RUNTIME.md`](../../docs/AGENT-RUNTIME.md)**
 for the runtime mechanics (per-turn sandbox seal, cost/token ceilings, context

@@ -12,7 +12,8 @@ import (
 
 // storageProbeTimeout bounds the one-time boot probe for --storage-opt support.
 // Generous because the first container off a freshly-pulled image can be slow to
-// create; a probe that times out simply degrades to the ulimit fallback.
+// create; a probe that times out simply omits the writable-layer quota (the
+// per-file ulimit cap applies regardless).
 const storageProbeTimeout = 30 * time.Second
 
 // ProbeStorageOptSupport reports whether `podman run --storage-opt size=...` is
@@ -20,13 +21,48 @@ const storageProbeTimeout = 30 * time.Second
 // + backing filesystem at container-create time (it works on overlay+xfs with
 // pquota, btrfs, and zfs, but not overlay+ext4 or vfs), so we probe empirically:
 // start a throwaway `--rm` container off the SAME sandbox image (already pulled)
-// with a 1g cap running /usr/bin/true. A clean exit means quotas work; ANY
-// failure — driver can't quota, image missing, timeout — returns false so the
-// caller uses the always-safe `--ulimit fsize` fallback. Best-effort and
-// side-effect-free (the container removes itself on exit).
-func ProbeStorageOptSupport(ctx context.Context, podmanBin, image string) bool {
+// with a 1g cap running /usr/bin/true. A clean exit means quotas work.
+//
+// A failure to EXEC that command also means quotas work, and is treated as
+// success. Podman validates the storage option inside `configure storage` at
+// container-create time, before the runtime is invoked at all. Verified in both
+// directions: on an ext4 host `--storage-opt=size=1g` with a nonexistent
+// entrypoint reports the *quota* error rather than the exec error, and on
+// overlay+XFS with prjquota (where the quota IS accepted) the same missing
+// entrypoint surfaces the crun exec error. So reaching the exec stage proves the
+// quota was accepted.
+//
+// This matters because the sandbox image is a client-bundle artifact free to
+// change its base, and `/usr/bin/true` is a rootfs assumption: a busybox-based
+// bundle has `/bin/true`. Without this carve-out such a bundle would silently
+// lose the writable-layer quota on every host, quota-capable or not.
+//
+// Two probe failures on a quota-capable host still report NO support: a
+// `/usr/bin/true` that exists but is not executable, or whose interpreter is
+// broken. Both produce different messages, so both fall through to false. That
+// is the conservative direction and is left as-is.
+//
+// A cleaner mechanism exists and is worth a follow-up: `podman create` validates
+// the quota and leaves no container, so a create+rm probe would need no rootfs
+// assumption and no error-string matching at all (podman/crun wording is not
+// API). Deliberately not folded in here — it changes the probe's shape and
+// deserves its own verification pass.
+//
+// Any OTHER completed failure — driver can't quota, image missing — returns
+// supported=false, which simply omits the writable-layer quota; the per-file
+// `--ulimit fsize` cap is applied regardless and is what bounds the workspace
+// bind mount. Best-effort and side-effect-free (the container removes itself on
+// exit).
+//
+// conclusive is false when the probe never reached a determination because its
+// context ended first — the caller's ctx was cancelled (e.g. the first turn of
+// the process was stopped mid-flight) or the probe timed out. That answer says
+// nothing about the host's storage driver, so callers must not cache it: the
+// Pool memoizes only conclusive results, otherwise one cancelled turn would
+// disable the writable-layer quota for the entire process lifetime.
+func ProbeStorageOptSupport(ctx context.Context, podmanBin, image string) (supported, conclusive bool) {
 	if strings.TrimSpace(image) == "" {
-		return false
+		return false, true
 	}
 	if podmanBin == "" {
 		podmanBin = "podman"
@@ -53,8 +89,51 @@ func ProbeStorageOptSupport(ctx context.Context, podmanBin, image string) bool {
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		log.Printf("sandbox: --storage-opt size probe failed (%v): %s", err, strings.TrimSpace(stderr.String()))
-		return false
+		detail := strings.TrimSpace(stderr.String())
+		if probeCommandUnavailable(detail) {
+			// The quota was accepted; only the probe's own command was missing
+			// from this bundle's rootfs. Report support, and say so rather than
+			// leaving an operator to wonder why a quota-capable host logged a
+			// probe failure.
+			log.Printf("sandbox: --storage-opt size probe could not exec /usr/bin/true in %s (%s) — the quota itself was ACCEPTED (podman validates it before the exec), so treating the driver as quota-capable", image, detail)
+			return true, true
+		}
+		if probeCtx.Err() != nil {
+			// The probe was cut short (caller cancelled, or the probe's own
+			// timeout fired) before podman answered — that is not a statement
+			// about the storage driver.
+			log.Printf("sandbox: --storage-opt size probe did not complete (%v) — no determination made: %s", probeCtx.Err(), detail)
+			return false, false
+		}
+		log.Printf("sandbox: --storage-opt size probe failed (%v): %s", err, detail)
+		return false, true
 	}
-	return true
+	return true, true
+}
+
+// probeCommandUnavailable reports whether a probe failure was the OCI runtime
+// being unable to invoke the probe command, as opposed to podman rejecting the
+// storage quota. The two are distinguishable by message because they happen at
+// different stages: podman validates --storage-opt at container-create time and
+// only then hands off to the runtime to exec.
+//
+// The markers are deliberately NARROW. A false positive here is worse than the
+// bug this carve-out fixes: reporting quota-capable on a driver that is not means
+// `--storage-opt=size` gets passed to every real container, and every container
+// start then fails. So only phrases specific to "the runtime could not invoke the
+// command" qualify. A bare "no such file or directory" does not — it appears in
+// unrelated podman failures (missing socket, bad graphroot) that must keep
+// returning false.
+func probeCommandUnavailable(stderr string) bool {
+	low := strings.ToLower(stderr)
+	for _, marker := range []string{
+		"attempted to invoke a command that was not found",
+		"executable file not found",
+		"executable file `", // crun: executable file `/usr/bin/true` not found
+	} {
+		if strings.Contains(low, marker) {
+			return true
+		}
+	}
+	return false
 }

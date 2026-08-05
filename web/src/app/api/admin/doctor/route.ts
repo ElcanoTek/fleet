@@ -19,7 +19,7 @@ export async function GET(req: Request) {
   }
   const deep = new URL(req.url).searchParams.get("deep");
   const upstreamPath = deep === "1" ? "/admin/doctor?deep=1" : "/admin/doctor";
-  const { upstream, error } = await chatServerProxy(session.email, upstreamPath, { method: "GET" });
+  const { upstream, error } = await chatServerProxy(session, upstreamPath, { method: "GET" });
   if (error) return error;
   const text = await upstream.text();
   return new NextResponse(text, {

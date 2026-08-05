@@ -31,6 +31,14 @@
 #   PORT=3000                                      # the port `next start` binds (Caddy proxies to it)
 #   NODE_ENV=production
 #   # plus whatever auth env the web app needs (e.g. the elcano_auth public key).
+#
+# Optional:
+#   FLEET_WEB_HOST=0.0.0.0    # the address `next start` binds. Defaults to
+#                             # 127.0.0.1 (web/package.json's start script):
+#                             # only Caddy on this box should reach :3000,
+#                             # because the web tier trusts x-forwarded-* from
+#                             # its proxy. Widen ONLY when TLS terminates on
+#                             # another host.
 
 [Unit]
 Description=fleet web tier (Next.js app — public origin, proxies to loopback backends)
@@ -44,8 +52,11 @@ BindsTo=fleet.service
 Type=simple
 WorkingDirectory=/opt/fleet/web
 EnvironmentFile=/etc/fleet/fleet-web.env
-# `npm run start` → `next start`. Use an absolute npm if PATH under the unit is
-# minimal (e.g. ExecStart=/usr/bin/npm run start).
+# `npm run start` → `next start -H ${FLEET_WEB_HOST:-127.0.0.1}` — loopback by
+# default, so the topology diagram above is enforced, not just documented
+# (`next start` alone binds 0.0.0.0 and would expose :3000 past Caddy). Use an
+# absolute npm if PATH under the unit is minimal (e.g. ExecStart=/usr/bin/npm
+# run start).
 ExecStart=/usr/bin/npm run start
 Restart=always
 RestartSec=5s

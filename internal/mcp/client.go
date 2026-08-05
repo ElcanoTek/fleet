@@ -565,6 +565,13 @@ func (s *Server) callTool(ctx context.Context, name string, arguments map[string
 		return nil, fmt.Errorf("MCP server %s was retired by a reload", s.name)
 	}
 
+	// A nil arguments map marshals to "arguments": null, which strict MCP
+	// servers reject with -32602 (arguments must be an object when present).
+	// Empty args arrive as nil after a JSON round-trip that drops empty maps.
+	if arguments == nil {
+		arguments = map[string]interface{}{}
+	}
+
 	result, err := s.transport.Call(ctx, "tools/call", map[string]interface{}{
 		jsonRPCFieldName: name,
 		"arguments":      arguments,
@@ -796,6 +803,44 @@ func NewStdioTransportInDir(command string, args []string, env map[string]string
 	}, nil
 }
 
+// stdioResponseCaptureCap bounds how many bytes of a single stdout line from a
+// stdio MCP server are held in host memory. In broker mode the subprocess runs
+// host-side, so one response line — a connector returning a giant query result
+// or a fetched page — was previously buffered whole before any downstream
+// truncation applied, letting a single data-driven oversized response OOM the
+// fleet process. Same 64 MiB ceiling as the sandbox bridge's response cap
+// (bridgeResponseCaptureCap, itself pinned to BashOutputCaptureCap); bytes past
+// it are drained and counted (see readCappedLine) rather than stored.
+const stdioResponseCaptureCap = 64 * 1024 * 1024
+
+// readCappedLine reads one newline-terminated line from r, keeping at most
+// limit bytes and draining-but-counting the rest. Duplicated by hand from
+// internal/sandbox's readCappedLine (bridge path) — this package imports no
+// internal packages and the sandbox is the container runtime, so the 15 lines
+// are copied rather than depended on; keep the two in sync. Draining to the
+// delimiter keeps the stream framed for the next response even when a line
+// overflows the cap. The returned data includes the newline when it fell
+// within the cap; err mirrors bufio.Reader.ReadBytes (nil means the delimiter
+// was found).
+func readCappedLine(r *bufio.Reader, limit int) (data []byte, discarded int64, err error) {
+	for {
+		frag, ferr := r.ReadSlice('\n')
+		keep := limit - len(data)
+		if keep > len(frag) {
+			keep = len(frag)
+		}
+		if keep > 0 {
+			// ReadSlice's bytes are only valid until the next read — copy.
+			data = append(data, frag[:keep]...)
+		}
+		discarded += int64(len(frag) - keep)
+		if errors.Is(ferr, bufio.ErrBufferFull) {
+			continue
+		}
+		return data, discarded, ferr
+	}
+}
+
 func (t *StdioTransport) Call(ctx context.Context, method string, params interface{}) (json.RawMessage, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -828,8 +873,9 @@ func (t *StdioTransport) Call(ctx context.Context, method string, params interfa
 	}
 
 	type result struct {
-		line []byte
-		err  error
+		line      []byte
+		discarded int64
+		err       error
 	}
 
 	// Read lines until the response whose id matches this request.
@@ -843,8 +889,8 @@ func (t *StdioTransport) Call(ctx context.Context, method string, params interfa
 	for {
 		resultChan := make(chan result, 1)
 		go func() {
-			line, err := t.reader.ReadBytes('\n')
-			resultChan <- result{line, err}
+			line, discarded, err := readCappedLine(t.reader, stdioResponseCaptureCap)
+			resultChan <- result{line, discarded, err}
 		}()
 
 		var line []byte
@@ -859,6 +905,19 @@ func (t *StdioTransport) Call(ctx context.Context, method string, params interfa
 		case res := <-resultChan:
 			if res.err != nil {
 				return nil, res.err
+			}
+			if res.discarded > 0 {
+				// The line overran the cap, so its JSON cannot be parsed —
+				// fail this call loudly rather than hand anyone a truncated
+				// response. The reader drained to the newline, so the stream
+				// is still framed and the transport stays usable: no broken
+				// flag, and the message must not match isTransportDeadError's
+				// markers (the subprocess is healthy — a restart would fix
+				// nothing). If the oversized line was an interleaved
+				// notification rather than this call's response, the real
+				// response is consumed by a later call's id match and
+				// discarded there — defined either way.
+				return nil, fmt.Errorf("MCP stdio: response line exceeded %d bytes (%d bytes discarded) and was dropped — narrow the query or page the tool's results", stdioResponseCaptureCap, res.discarded)
 			}
 			line = res.line
 		}
