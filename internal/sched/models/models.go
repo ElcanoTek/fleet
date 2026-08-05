@@ -89,18 +89,24 @@ const (
 // skipped (next_run_at advances, skip_count increments). nil = the legacy
 // unconditional promotion path; existing tasks are unaffected.
 //
-// ENFORCEMENT CONTRACT: the gate is evaluated exactly once per occurrence, at
-// the scheduled→pending promotion in ProcessScheduledTasks — the only place
-// that evaluates it. To make that promotion unavoidable, NewTask parks EVERY
-// gated cron task as `scheduled` (defaulting a nil scheduled_for to now), so
-// however the task was minted — a scheduled or immediate create, a rerun or
-// clone, a webhook/email trigger spawn (the spawned run inherits the
-// template's gate), an import — the gate runs before dispatch; an "immediate"
-// gated run waits up to one scheduler tick. A webhook TEMPLATE itself stays
-// inert and is never evaluated; its gate applies to each spawned run. Retries
-// of a failed attempt are the SAME occurrence and do not re-evaluate the gate,
-// and because a pending task is already past its evaluation point, the edit
-// and import-replace paths refuse to attach or change a gate on one.
+// ENFORCEMENT CONTRACT: the gate is evaluated at the scheduled→pending
+// promotion in ProcessScheduledTasks — the ONLY place that evaluates it. To
+// make that promotion unavoidable, NewTask and the task-edit recompute
+// (storage.UpdateEditableTask) both park EVERY gated cron task as `scheduled`
+// via DeriveDispatchState (defaulting a nil scheduled_for to now), so however
+// the task was minted or mutated — a scheduled or immediate create, a rerun
+// or clone, a webhook/email trigger spawn (the spawned run inherits the
+// template's gate), an import, an edit — the gate runs before dispatch; an
+// "immediate" gated run waits up to one scheduler tick. A webhook TEMPLATE
+// itself stays inert and is never evaluated; its gate applies to each spawned
+// run. A clean-failure retry re-parks the task `scheduled` with a backoff
+// (RequeueTaskForRetryWithContext), so the gate IS re-evaluated before each
+// retry attempt; lease-expiry recovery and `fleet-admin sched dlq replay`
+// reset the task straight to pending, re-dispatching WITHOUT a gate
+// evaluation. The edit and import-replace paths refuse to attach or change a
+// gate on a pending task — honoring it would re-park a dispatch that already
+// passed its evaluation point — so that state change stays explicit: change
+// the gate while the task is scheduled, or cancel and recreate it.
 //
 // IMPORTANT (security note encoded in the schema): the check runs on the host
 // as the fleet process user with a restricted PATH. It is NOT a sandboxed agent
@@ -1200,6 +1206,53 @@ type Task struct {
 	SerializationKey *string `json:"serialization_key,omitempty"`
 }
 
+// DeriveDispatchState computes the (status, scheduled_for) pair that keeps a
+// task on the correct dispatch path for its trigger type and gate. It is the
+// SINGLE derivation rule, shared by NewTask and the task-edit recompute
+// (storage.UpdateEditableTask); when the edit path hand-rolled a
+// ScheduledFor-only version of it, an edit that echoed a gate but omitted
+// scheduled_for flipped a gated task to pending — off the scheduler path,
+// with run_if intact and never evaluated.
+//
+// The rules, in order:
+//
+//   - Plain tasks: a future scheduled_for means `scheduled`, anything else
+//     (nil or past) means `pending` — immediate dispatch.
+//   - A gated cron task is ALWAYS parked `scheduled` (see the RunIf
+//     contract): only ProcessScheduledTasks evaluates run_if, so a gated task
+//     headed for immediate dispatch — POST /tasks with no schedule,
+//     rerun/clone, a trigger-spawned run, an import, an edit — is parked
+//     scheduled-for-now (a nil scheduled_for defaults to now) instead of
+//     pending. The gate is therefore evaluated before EVERY dispatch, at the
+//     cost of up to one scheduler tick (~30s) of latency for an "immediate"
+//     gated run.
+//   - A webhook TEMPLATE is never run by the cron engine. It is parked inert
+//     as `scheduled` with its scheduled_for left as-is (nil):
+//     GetScheduledTasks requires scheduled_for IS NOT NULL, so it is never
+//     promoted; firing the webhook spawns a fresh cron-type run cloned from
+//     it, and the gate carried onto that run is what the previous rule parks.
+func DeriveDispatchState(triggerType TriggerType, runIf *RunIf, scheduledFor *time.Time) (TaskStatus, *time.Time) {
+	if triggerType == "" {
+		triggerType = TriggerTypeCron
+	}
+
+	status := TaskStatusPending
+	if scheduledFor != nil && scheduledFor.After(time.Now()) {
+		status = TaskStatusScheduled
+	}
+	if runIf != nil && triggerType == TriggerTypeCron {
+		status = TaskStatusScheduled
+		if scheduledFor == nil {
+			now := time.Now().UTC()
+			scheduledFor = &now
+		}
+	}
+	if triggerType == TriggerTypeWebhook {
+		status = TaskStatusScheduled
+	}
+	return status, scheduledFor
+}
+
 // NewTask creates a new Task with defaults.
 func NewTask(tc TaskCreate) *Task {
 	triggerType := tc.TriggerType
@@ -1207,34 +1260,7 @@ func NewTask(tc TaskCreate) *Task {
 		triggerType = TriggerTypeCron
 	}
 
-	status := TaskStatusPending
-	scheduledFor := tc.ScheduledFor
-	if scheduledFor != nil && scheduledFor.After(time.Now()) {
-		status = TaskStatusScheduled
-	}
-	// A gated task is ALWAYS dispatched through the scheduler's promotion path
-	// (see the RunIf contract): only ProcessScheduledTasks evaluates run_if, so
-	// a gated cron task minted for immediate dispatch — POST /tasks with no
-	// schedule, rerun/clone, a trigger-spawned run, an import — is parked
-	// scheduled-for-now instead of pending. The gate is therefore evaluated
-	// before EVERY occurrence, at the cost of up to one scheduler tick (~30s)
-	// of dispatch latency for an "immediate" gated run. A webhook template
-	// (below) stays inert with a nil scheduled_for; its gate is carried onto
-	// each spawned run instead, which this branch then parks.
-	if tc.RunIf != nil && triggerType == TriggerTypeCron {
-		status = TaskStatusScheduled
-		if scheduledFor == nil {
-			now := time.Now().UTC()
-			scheduledFor = &now
-		}
-	}
-	// A webhook template is never run by the cron engine. Park it inert as a
-	// scheduled task with no scheduled_for: GetScheduledTasks requires
-	// scheduled_for IS NOT NULL, so it is never promoted; firing the webhook
-	// spawns a fresh cron-type run cloned from it.
-	if triggerType == TriggerTypeWebhook {
-		status = TaskStatusScheduled
-	}
+	status, scheduledFor := DeriveDispatchState(triggerType, tc.RunIf, tc.ScheduledFor)
 
 	tz := tc.Timezone
 	if tz == "" {

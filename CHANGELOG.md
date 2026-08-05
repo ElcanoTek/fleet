@@ -71,6 +71,14 @@ prior versions are listed because none have shipped.
   cron tick now backs off exponentially on the already-tracked `skip_count`
   (30s doubling to a 30m cap), so a permanently-false condition costs ~2
   commands an hour instead of 120.
+- Editing a webhook trigger template turned it into a one-shot run. The task
+  edit's status recompute derived only from `scheduled_for`, so saving any
+  edit to a template (`scheduled`, nil `scheduled_for` — inert by
+  construction) flipped it to `pending` and the worker pool executed the
+  template itself once, outside any trigger firing. Same root cause and same
+  fix as the gated-task edit bypass under Security below: the edit path now
+  recomputes dispatch state with the shared `models.DeriveDispatchState`
+  rule, which keeps a webhook template parked inert.
 - Task export silently dropped `run_if`. The portable definition record had no
   field for the pre-run gate, so a box migration or backup-restore converted
   every gated task into an unconditional one with nothing flagging it — tasks
@@ -393,17 +401,23 @@ prior versions are listed because none have shipped.
   copies the source's gate and mints an immediate *pending* run (so any
   principal with mere `create_task` permission could execute the gated work
   with the condition unchecked), an immediate create with a gate did the same,
-  and a webhook/email trigger spawn dropped the template's gate outright. The
-  contract is now enforced structurally: `models.NewTask` parks every gated
-  cron task on the scheduler path (`scheduled`, with a nil `scheduled_for`
-  defaulted to now), so whatever minted it — create, batch, rerun/clone,
-  trigger spawn, import, recurrence — the gate is evaluated before every
-  occurrence's dispatch, at the cost of up to one 30-second tick of latency
-  for an "immediate" gated run. Trigger spawns now inherit the template's
-  gate, and since a *pending* task is already past its evaluation point, the
-  edit path refuses to attach or change (but still allows removing) a gate on
-  one rather than storing config that would silently never run. The full
-  contract lives on `models.RunIf`.
+  a webhook/email trigger spawn dropped the template's gate outright, and
+  `PUT /tasks/{id}` re-derived the edited task's status from `scheduled_for`
+  alone (so that same `create_task` principal could echo a gated scheduled
+  task unchanged, omit `scheduled_for`, and flip it to `pending` with the
+  gate intact and never evaluated). The contract is now enforced
+  structurally: `models.NewTask` and the edit recompute in
+  `storage.UpdateEditableTask` derive the dispatch state through one shared
+  rule (`models.DeriveDispatchState`) that parks every gated cron task on the
+  scheduler path (`scheduled`, with a nil `scheduled_for` defaulted to now),
+  so whatever minted or last edited it — create, batch, rerun/clone, trigger
+  spawn, import, recurrence, edit — the gate is evaluated before every
+  dispatch, at the cost of up to one 30-second tick of latency for an
+  "immediate" gated run. Trigger spawns now inherit the template's gate, and
+  since a *pending* task is already past its evaluation point, the edit path
+  refuses to attach or change (but still allows removing) a gate on one
+  rather than silently re-parking an imminent dispatch. The full contract
+  lives on `models.RunIf`.
 - A password reset did not end the account's existing sessions, so the standard
   response to a compromised account did not evict the attacker. The web session
   cookie is a stateless HMAC over `{email, exp}` that the Next.js tier verifies

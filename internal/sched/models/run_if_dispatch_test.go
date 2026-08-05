@@ -67,6 +67,69 @@ func TestNewTaskParksGatedTasksOnSchedulerPath(t *testing.T) {
 	})
 }
 
+// TestDeriveDispatchState pins the shared dispatch-state derivation on the
+// edit-shaped inputs NewTask never sees: the task-edit recompute
+// (storage.UpdateEditableTask) feeds it a task's post-edit fields, where a
+// nil scheduled_for is the natural client echo for a parked gated task and a
+// past one can arrive from storage. Before the recompute shared this rule, an
+// edit flipped both shapes to pending — a gate bypass and a template turned
+// one-shot.
+func TestDeriveDispatchState(t *testing.T) {
+	gate := &RunIf{Command: "true", TimeoutSeconds: 30}
+	past := time.Now().UTC().Add(-time.Minute)
+	future := time.Now().UTC().Add(time.Hour)
+
+	t.Run("gated cron with nil scheduled_for parks scheduled-for-now", func(t *testing.T) {
+		before := time.Now().UTC()
+		status, when := DeriveDispatchState(TriggerTypeCron, gate, nil)
+		if status != TaskStatusScheduled {
+			t.Errorf("status = %q, want scheduled", status)
+		}
+		if when == nil || when.Before(before) || when.After(time.Now().UTC()) {
+			t.Errorf("scheduled_for = %v, want defaulted to now", when)
+		}
+	})
+
+	t.Run("gated cron with past scheduled_for stays scheduled and due", func(t *testing.T) {
+		status, when := DeriveDispatchState(TriggerTypeCron, gate, &past)
+		if status != TaskStatusScheduled {
+			t.Errorf("status = %q, want scheduled", status)
+		}
+		if when == nil || !when.Equal(past) {
+			t.Errorf("scheduled_for = %v, want the given %v kept", when, past)
+		}
+	})
+
+	t.Run("empty trigger type is treated as cron", func(t *testing.T) {
+		status, when := DeriveDispatchState("", gate, nil)
+		if status != TaskStatusScheduled || when == nil {
+			t.Errorf("status=%q scheduled_for=%v, want a parked gated task", status, when)
+		}
+	})
+
+	t.Run("webhook template keeps nil scheduled_for and stays scheduled", func(t *testing.T) {
+		status, when := DeriveDispatchState(TriggerTypeWebhook, gate, nil)
+		if status != TaskStatusScheduled {
+			t.Errorf("status = %q, want scheduled (inert)", status)
+		}
+		if when != nil {
+			t.Errorf("scheduled_for = %v, want nil (defaulting it would surface the template as due)", when)
+		}
+	})
+
+	t.Run("ungated cron follows the plain rule", func(t *testing.T) {
+		if status, _ := DeriveDispatchState(TriggerTypeCron, nil, nil); status != TaskStatusPending {
+			t.Errorf("nil scheduled_for: status = %q, want pending", status)
+		}
+		if status, _ := DeriveDispatchState(TriggerTypeCron, nil, &past); status != TaskStatusPending {
+			t.Errorf("past scheduled_for: status = %q, want pending", status)
+		}
+		if status, _ := DeriveDispatchState(TriggerTypeCron, nil, &future); status != TaskStatusScheduled {
+			t.Errorf("future scheduled_for: status = %q, want scheduled", status)
+		}
+	})
+}
+
 // TestExportImport_RunIfRoundTrip proves the pre-run gate (#269) is part of the
 // portable task definition: before the fix TaskExportRecord had no run_if
 // field, so a box migration or backup-restore silently converted every gated

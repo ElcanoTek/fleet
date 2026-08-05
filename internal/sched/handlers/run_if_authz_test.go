@@ -338,3 +338,106 @@ func TestUpdateTaskRunIfPersistsAndNormalizes(t *testing.T) {
 		}
 	})
 }
+
+// TestUpdateTaskKeepsGatedTaskOnSchedulerPath is the regression test for the
+// edit-path gate bypass: UpdateEditableTask used to recompute status from
+// ScheduledFor alone, so a non-admin create_task principal editing a gated
+// SCHEDULED task — echoing the gate unchanged (which passes the run_if
+// authorization checks) and omitting scheduled_for (the natural client echo:
+// the parked past timestamp would be rejected by validateTaskCreate) —
+// flipped the task to status=pending, scheduled_for=nil with run_if intact
+// and never evaluated. The same ScheduledFor-only recompute also flipped an
+// edited webhook trigger TEMPLATE (scheduled, nil scheduled_for) to pending,
+// turning an inert template into a one-shot run. The recompute now shares
+// NewTask's derivation (models.DeriveDispatchState), so no edit can move a
+// gated task or a template off the scheduler path.
+func TestUpdateTaskKeepsGatedTaskOnSchedulerPath(t *testing.T) {
+	r, keyMgr, store := setupRunIfAuthz(t)
+
+	clientKey := mustCreateScopedKey(t, keyMgr, "client", nil)
+	put := func(taskID uuid.UUID, tc models.TaskCreate) *httptest.ResponseRecorder {
+		body, _ := json.Marshal(tc)
+		req := httptest.NewRequest("PUT", "/tasks/"+taskID.String(), bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-API-Key", clientKey)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		return w
+	}
+	// The echo shape a client produces from the stored gate: OnError
+	// round-trips as the resolved "run" (stored ""), everything else
+	// identical, so it passes the runIfChanged guards as an unchanged gate.
+	gate := &models.RunIf{Command: "test -f /tmp/ready", TimeoutSeconds: 30}
+	gateEcho := &models.RunIf{Command: "test -f /tmp/ready", TimeoutSeconds: 30, OnError: models.RunIfOnErrorRun}
+
+	t.Run("gated task cannot be unparked by an edit omitting scheduled_for", func(t *testing.T) {
+		// Seeded the way NewTask parks an immediate gated create: scheduled,
+		// with the parked timestamp in the past by the time the edit lands.
+		past := time.Now().UTC().Add(-time.Minute)
+		task := &models.Task{
+			ID: uuid.New(), Prompt: "a gated task prompt that is long enough",
+			Status: models.TaskStatusScheduled, CreatedAt: time.Now().UTC(),
+			ScheduledFor: &past, RunIf: gate,
+		}
+		if _, err := store.AddTask(task); err != nil {
+			t.Fatalf("add task: %v", err)
+		}
+
+		w := put(task.ID, models.TaskCreate{
+			Prompt: "an edited prompt that is long enough",
+			RunIf:  gateEcho,
+		})
+		if w.Code != http.StatusOK {
+			t.Fatalf("non-admin unchanged-gate edit = %d, want 200: %s", w.Code, w.Body.String())
+		}
+
+		got, err := store.GetTask(task.ID)
+		if err != nil {
+			t.Fatalf("get task: %v", err)
+		}
+		if got.Status != models.TaskStatusScheduled {
+			t.Fatalf("status = %q, want scheduled — the edit moved a gated task off the scheduler path, so its gate would never be evaluated", got.Status)
+		}
+		if got.ScheduledFor == nil {
+			t.Fatal("scheduled_for = nil; GetScheduledTasks requires it non-nil, so the gate would never run — or, pre-fix, the task dispatched as pending")
+		}
+		if got.RunIf == nil || got.RunIf.Command != "test -f /tmp/ready" {
+			t.Errorf("gate must survive the edit, got %+v", got.RunIf)
+		}
+	})
+
+	t.Run("webhook template edit keeps the template inert", func(t *testing.T) {
+		template := models.NewTask(models.TaskCreate{
+			Prompt:      "a webhook template prompt that is long enough",
+			TriggerType: models.TriggerTypeWebhook,
+			RunIf:       gate,
+		})
+		if _, err := store.AddTask(template); err != nil {
+			t.Fatalf("add template: %v", err)
+		}
+
+		w := put(template.ID, models.TaskCreate{
+			Prompt: "an edited template prompt that is long enough",
+			RunIf:  gateEcho,
+		})
+		if w.Code != http.StatusOK {
+			t.Fatalf("template edit = %d, want 200: %s", w.Code, w.Body.String())
+		}
+
+		got, err := store.GetTask(template.ID)
+		if err != nil {
+			t.Fatalf("get template: %v", err)
+		}
+		if got.Status != models.TaskStatusScheduled {
+			t.Fatalf("status = %q, want scheduled — the edit turned an inert template into a one-shot run", got.Status)
+		}
+		// The template itself must never surface as due; its gate applies to
+		// each spawned run instead.
+		if got.ScheduledFor != nil {
+			t.Errorf("scheduled_for = %v, want nil (template must stay inert)", got.ScheduledFor)
+		}
+		if got.Prompt != "an edited template prompt that is long enough" {
+			t.Errorf("unrelated edit must apply, got prompt %q", got.Prompt)
+		}
+	})
+}

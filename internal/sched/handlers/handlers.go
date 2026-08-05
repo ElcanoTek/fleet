@@ -1716,12 +1716,14 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "run_if: a host-side pre-run gate can only be changed by an admin")
 		return
 	}
-	// A gate is evaluated once per occurrence, at the scheduled→pending
-	// promotion (models.RunIf's enforcement contract). A pending task is
-	// already past that point, so a gate attached or changed here would never
-	// be evaluated for the imminent dispatch — refuse rather than store dead
-	// config. Removing the gate (tc.RunIf == nil) stays allowed: absence needs
-	// no evaluation point.
+	// A gate is evaluated only at the scheduled→pending promotion
+	// (models.RunIf's enforcement contract), and a pending task is already
+	// past that point: honoring a new or changed gate would have the
+	// dispatch-state recompute (models.DeriveDispatchState, applied in
+	// UpdateEditableTask) yank the imminent dispatch back onto the scheduler
+	// path. Refuse instead, so that change stays explicit — edit the gate
+	// while the task is scheduled, or cancel and recreate it. Removing the
+	// gate (tc.RunIf == nil) stays allowed: absence needs no evaluation point.
 	if runIfChanged && tc.RunIf != nil && task.Status == models.TaskStatusPending {
 		writeError(w, http.StatusConflict, "run_if: task is already pending dispatch, so its gate can no longer be evaluated for this run; change the gate while the task is scheduled, or cancel and recreate it")
 		return
