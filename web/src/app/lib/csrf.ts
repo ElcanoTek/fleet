@@ -10,8 +10,9 @@
 // "login CSRF" (attacker signs you into their account). For session-
 // authenticated routes, it's classic CSRF.
 //
-// Defense: compare the request's Origin (or Forwarded/X-Forwarded-Host)
-// to our own host. Browsers always set Origin on cross-origin POSTs and
+// Defense: compare the request's Origin to our own host — the configured
+// canonical origin when the deployment sets one, else Forwarded/
+// X-Forwarded-Host. Browsers always set Origin on cross-origin POSTs and
 // can't be tricked into forging it. Same-origin requests from our own
 // UI carry the right Origin automatically.
 //
@@ -23,6 +24,7 @@
 
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
+import { getConfiguredOrigin } from "./auth";
 
 export type CsrfResult = { ok: true } | { ok: false; response: NextResponse };
 
@@ -42,7 +44,13 @@ export function verifyOrigin(request: NextRequest): CsrfResult {
     return { ok: false, response: csrfReject("missing Origin header") };
   }
 
+  // The configured canonical origin outranks the forwarded-host headers
+  // (lib/auth.ts#getConfiguredOrigin): x-forwarded-* is client-supplied
+  // unless a proxy overwrites it, so trusting it here would let an attacker
+  // pick the very host their Origin is compared against. The header chain
+  // stays as the fallback so local dev (no configured origin) keeps working.
   const expectedHost =
+    getConfiguredOrigin()?.host ??
     request.headers.get("x-forwarded-host") ??
     request.headers.get("host") ??
     request.nextUrl.host;

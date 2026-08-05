@@ -1,6 +1,7 @@
-// Pure classifier for a failed bootstrap/revalidation fetch in the chat
-// experience (chat-experience.tsx), exported separately so vitest can pin the
-// contract without booting React.
+// Pure classifier for a failed bootstrap/revalidation fetch, shared by the
+// chat experience (chat-experience.tsx) and the Operations Center session
+// probe (shared/hooks/useOrchestratorSession.ts); exported separately so
+// vitest can pin the contract without booting React.
 //
 // The distinction is load-bearing: /api/conversations proxies to the Go
 // backend, so it answers 502/503/504 whenever that process is down or
@@ -9,7 +10,10 @@
 // cookie on /login and bounces straight back to /chat, which fails the same
 // fetch again, forever. Only a real auth verdict (401/403) may redirect;
 // everything else — backend errors and thrown network failures alike — must
-// surface as "can't reach the chat server" instead.
+// surface as "can't reach the chat server" instead. The Operations Center has
+// the same shape in miniature: its /me probe answers 500 when the fail-closed
+// session-epoch lookup can't reach the chat DB, and treating that as
+// signed-out swapped the dashboard for a login card mid-incident.
 
 export type BootstrapFailure = "unauthenticated" | "unreachable";
 
