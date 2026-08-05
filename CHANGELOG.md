@@ -229,6 +229,58 @@ prior versions are listed because none have shipped.
   documented: `FLEET_PERSONA_DEFAULT` takes a persona *name*, `FLEET_PERSONA` a
   bundle-relative *path*.
 
+- Empty MCP tool-call arguments crossed the broker wire as nil
+  (`args,omitempty` drops empty maps) and were then marshaled onward as
+  `"arguments": null`. Strict MCP servers reject null arguments with `-32602
+  Invalid params` — pages.elcanotek.com refused every no-arg tool
+  (`mcp_pages_list_templates` and friends) — and because the credential owner
+  masks operational errors, the refusal reached the agent as `mcpbroker:
+  credential-owner call failed` and read like a credential problem. A nil
+  arguments map is now normalized to an empty object at both the broker
+  boundary and in `callTool`, pinned by regression tests at each layer. (#958)
+
+- `bootstrap.sh`'s no-`--domain` hint told only an operator proxying from
+  ANOTHER host to set `NEXT_PUBLIC_PUBLIC_ORIGIN`. A same-host TLS proxy
+  operator following it verbatim shipped a web tier that redirects every login
+  to `http://localhost:3000` and mints session cookies without `Secure` — the
+  configured origin drives both decisions (`web/src/app/lib/auth.ts`), same
+  host or not. Diagnosis was non-obvious because Next inlines `NEXT_PUBLIC_*`
+  at build time: editing the env file changes nothing until web/ is rebuilt.
+  The hint now tells EVERY custom-proxy front to set the origin in
+  `fleet-web.env` and rebuild + restart (`scripts/update.sh` does both),
+  keeping `FLEET_WEB_HOST=0.0.0.0` as the extra step only for a proxy on a
+  different host.
+
+- A hand-quoted value in `fleet.env` (`FLEET_BACKUP_DIR="/mnt/x"` — legal in a
+  systemd `EnvironmentFile=`, which strips the quotes) made every later
+  bootstrap re-run die with the misleading `FLEET_BACKUP_DIR must be an
+  absolute path (got '"/mnt/x"')`: the re-run read the value back verbatim,
+  quotes included. Re-running bootstrap is the documented idempotent upgrade
+  path, so a legal env file blocked provisioning until someone spotted the
+  quotes. The backup read-backs now go through the same quote-stripping
+  `env_get` that `doctor.sh` already uses.
+
+- `validate-config`'s persona inventory accepted `.yml` files that no persona
+  roster can load — `agent.ListPersonas`, the task-create catalog and the
+  interactive loader are all `.yaml`-only (the loader force-appends the
+  suffix) — so a `.yml`-only bundle looked persona-equipped and the report
+  offered a remediation that loops: setting the knob to the suggested name
+  still resolves to a `.yaml` file that does not exist, while chat's roster is
+  empty. The inventory is now `.yaml`-only to match the readers, and such a
+  bundle reports as shipping no personas.
+
+- Run as root on a provisioned box (the unit installed), the live-sandbox
+  harnesses (`scripts/e2e-boot-server.sh`, `scripts/run_workflow_live.sh`)
+  built the sandbox image through `build-sandbox-image.sh`, whose root path
+  delegates the build to the fleet unit's `User=` — correct for `sudo fleet
+  update`, wrong here, because the harnesses probe and run fleet as the
+  INVOKING user, whose image store is a separate namespace. Every root run
+  burned a multi-minute rebuild into a store it never reads and then failed
+  anyway — an invitation to "fix" it by weakening the delegation that protects
+  the real deployment. Both harnesses now force a local build by pointing
+  `FLEET_SERVICE_NAME` at a unit that does not exist, with a comment saying
+  why the delegation must stay.
+
 ### Documentation
 
 - Correct the sandbox documentation claims that outran the code — across the
@@ -250,6 +302,17 @@ prior versions are listed because none have shipped.
   container, not "per tool call"; `FLEET_PYTHON_REPL_MAX` is a soft cap checked
   only at create time; `--network=none` does have a loopback device; and the
   empty-allowlist boot warning named only scheduled tasks.
+
+- Two more claims that outran the code, each verified against the current
+  behaviour: `docs/MCP-BROKER-SCOPES.md` still said manifest interpolation
+  replaces `${VAR}` with its value in the parsed bundle for connector values —
+  connector env/header values now keep their raw text through the load and
+  resolve lazily at catalog-build/spawn time, after the `.env` file is applied
+  (the paragraph now also states why the name inventory exists at all: the
+  names must survive independent of when values resolve) — and ADR-0041
+  counted "three callers outside the auth middleware" in the sched epoch test,
+  when `headerTrustUser` has three callers *total*: the middleware plus the
+  two routes outside it (task create, upload).
 
 ### Security
 

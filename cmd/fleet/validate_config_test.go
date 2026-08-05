@@ -346,6 +346,28 @@ func TestCheckManifestBlockingProblemOutranksPersonaAdvisory(t *testing.T) {
 	}
 }
 
+// TestCheckManifestYmlPersonasAreNotOffered: the persona rosters are .yaml-only
+// and the interactive loader forces a ".yaml" suffix onto the configured name,
+// so a .yml file can never back a chat persona. The inventory used to accept
+// .yml too, so a victoria.yml-only bundle looked persona-equipped and the
+// report offered a remediation that loops — setting FLEET_PERSONA_DEFAULT to
+// the suggestion still resolves to a victoria.yaml that does not exist — while
+// chat's roster was empty. Such a bundle must report as shipping no personas.
+func TestCheckManifestYmlPersonasAreNotOffered(t *testing.T) {
+	bundle := personaBundle(t, "victoria.yml")
+	cfg := &config.Config{PersonaDefault: "victoria", Persona: "personas/assistant.yaml"}
+	res := checkManifest(bundle, nil, cfg)
+	if res.Status != statusFail || !res.Blocking {
+		t.Fatalf("status = %s blocking=%v, want a blocking failure: %s", res.Status, res.Blocking, res.Detail)
+	}
+	if strings.Contains(res.Detail, "victoria.yml") {
+		t.Errorf("detail offers a .yml file no persona roster can load, got %q", res.Detail)
+	}
+	if !strings.Contains(res.Detail, "the bundle ships no personas") {
+		t.Errorf("detail should report a persona-less bundle, got %q", res.Detail)
+	}
+}
+
 // TestCheckCredentialsEmptyCatalog: the generic bundle references no credential
 // vars, so the check is ok and non-blocking.
 func TestCheckCredentialsEmptyCatalog(t *testing.T) {
