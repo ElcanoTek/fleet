@@ -126,14 +126,20 @@ fleet update --check      # read-only "commits behind" report; touch nothing
 `update` (ported from the `moc`/`gig` pattern) `git pull`s **both** the fleet
 checkout and the client-config checkout, runs `make build` (fleet binary) and
 `cd web && npm ci && npm run build`, then **rebuilds the sandbox image only when
-the bundle's `sandbox/Containerfile` changed** — it stores a SHA-256 of the
-Containerfile under `.fleet-state/` and compares, skipping the ~2-3 min image
-build when unchanged. Services self-migrate on restart, so `update` runs no
-migrations; it finishes with `systemctl restart fleet` and a unit health check.
+the bundle's `sandbox/Containerfile` or resolved image tag changed, or the tag
+is missing from the service user's image store** — it stores a SHA-256 of the
+Containerfile and the resolved tag under `.fleet-state/` and compares, skipping
+the ~2-3 min image build when unchanged (a bundle that pins a prebuilt
+`sandbox.image` skips the build entirely). Services self-migrate on restart, so
+`update` runs no migrations; it finishes with `systemctl restart fleet` and a
+unit health check.
 If the pull changed `update.sh` itself, the script **re-execs the fresh copy** in
 rebuild-only mode (bash holds the pre-pull inode open, so the fix would otherwise
 only land on the *next* update). On a build failure the live binary/image is left
-untouched; roll back with `git checkout <sha> && fleet update --no-pull`.
+untouched; if the sandbox build fails and the resolved image is absent from the
+service user's store, `update` refuses to restart rather than bring the box up
+reporting healthy with every sandboxed tool call failing. Roll back with
+`git checkout <sha> && fleet update --no-pull`.
 
 ## upgrade — drain, swap, health-gate, auto-roll-back
 
