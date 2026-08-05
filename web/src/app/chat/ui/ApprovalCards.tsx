@@ -106,6 +106,31 @@ function ApprovalCountdown({
   );
 }
 
+// ApprovalResult renders the text a resolved approval came back with.
+//
+// This existed four times in this file with three different treatments. Only the
+// bash card capped and wrapped it; the email and advanced-model cards used a bare
+// <p> with no wrapping at all, and the schedule card wrapped without a cap. Nobody
+// expected an *email* result to be long — until one carried a 4 KB Pages deploy
+// payload, and the card rendered it unwrapped and unbounded: JSON clipped mid-token
+// at the card edge, no scrollbar, filling the viewport.
+//
+// A tool result is arbitrary text of arbitrary length, so there is one treatment:
+// monospace, capped height with its own scroll, and break-all — because minified
+// JSON offers no break opportunities and break-words alone will not wrap it.
+function ApprovalResult({ text }: { text: string }) {
+  if (!text) return null;
+  return (
+    <pre
+      data-testid="approval-result"
+      className="mt-2 max-h-60 min-w-0 max-w-full overflow-auto whitespace-pre-wrap break-all rounded-md bg-[var(--color-overlay-strong)] p-2 text-[0.72rem] leading-[1.45] text-[var(--color-text-muted)]"
+      style={{ fontFamily: "var(--font-code)" }}
+    >
+      {text}
+    </pre>
+  );
+}
+
 export function ApprovalCard({
   approval,
   conversationId,
@@ -396,7 +421,7 @@ export function ApprovalCard({
           </div>
         )
       ) : approval.resultText ? (
-        <p className="mt-2 text-[0.72rem] text-[var(--color-text-muted)]">{approval.resultText}</p>
+        <ApprovalResult text={approval.resultText} />
       ) : null}
     </div>
   );
@@ -477,9 +502,7 @@ function BashApprovalCard({
           <ApprovalCountdown remaining={countdown.remaining} expired={countdown.expired} />
         </div>
       ) : approval.resultText ? (
-        <pre className="mt-2 max-h-60 overflow-auto whitespace-pre-wrap break-all rounded-md bg-[var(--color-overlay-strong)] p-2 font-mono text-[0.72rem] text-[var(--color-text-muted)]">
-          {approval.resultText}
-        </pre>
+        <ApprovalResult text={approval.resultText} />
       ) : null}
     </div>
   );
@@ -677,9 +700,7 @@ function ScheduleTaskCard({
           <ApprovalCountdown remaining={countdown.remaining} expired={countdown.expired} />
         </div>
       ) : approval.resultText ? (
-        <p className="mt-2 whitespace-pre-wrap text-[0.72rem] text-[var(--color-text-muted)]">
-          {approval.resultText}
-        </p>
+        <ApprovalResult text={approval.resultText} />
       ) : null}
     </div>
   );
@@ -835,7 +856,7 @@ function SuggestAdvancedModelCard({
           </button>
         </div>
       ) : approval.resultText ? (
-        <p className="mt-2 text-[0.72rem] text-[var(--color-text-muted)]">{approval.resultText}</p>
+        <ApprovalResult text={approval.resultText} />
       ) : null}
     </div>
   );
