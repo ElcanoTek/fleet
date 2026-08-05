@@ -234,7 +234,17 @@ ensure_sandbox() {
   command -v podman >/dev/null 2>&1 || die "podman is required for the live sandbox"
   if ! podman image exists "$FLEET_SANDBOX_IMAGE" 2>/dev/null; then
     log "sandbox: image $FLEET_SANDBOX_IMAGE not present; building locally"
-    IMAGE_NAME="${FLEET_SANDBOX_IMAGE%%:*}" "$REPO_ROOT/scripts/build-sandbox-image.sh" "${FLEET_SANDBOX_IMAGE##*:}" \
+    # FLEET_SERVICE_NAME points at a unit that does not exist ON PURPOSE: the
+    # builder delegates a root build to the fleet unit's User= so `sudo fleet
+    # update` lands the image where the SERVICE reads it — the right call for
+    # a deployment, the wrong one here, because this harness probes and boots
+    # fleet as the INVOKING user, whose store is a separate namespace. On a
+    # provisioned box a root run would otherwise build into the service user's
+    # store, find nothing in its own, and rebuild-then-fail on every run. Do
+    # NOT "fix" that by removing the builder's delegation — it protects the
+    # real deployment path.
+    IMAGE_NAME="${FLEET_SANDBOX_IMAGE%%:*}" FLEET_SERVICE_NAME="fleet-e2e-no-delegation" \
+      "$REPO_ROOT/scripts/build-sandbox-image.sh" "${FLEET_SANDBOX_IMAGE##*:}" \
       >>"$LOG_DIR/sandbox-build.log" 2>&1 || die "sandbox image build failed (see $LOG_DIR/sandbox-build.log)"
   fi
   log "sandbox: probing $FLEET_SANDBOX_IMAGE (bash + run_python, normal + lockdown)"

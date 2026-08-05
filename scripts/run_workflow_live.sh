@@ -37,8 +37,17 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # builder rather than duplicating the podman build; it builds whatever bundle
 # FLEET_CLIENT_CONFIG_DIR points at. Skip with FLEET_SKIP_SANDBOX_BUILD=1 when the
 # image is already present (or to run host-mode via FLEET_MOCK_MODE=1).
+#
+# FLEET_SERVICE_NAME points at a unit that does not exist ON PURPOSE: the
+# builder delegates a root build to the fleet unit's User= so `sudo fleet
+# update` lands the image where the SERVICE reads it — the right call for a
+# deployment, the wrong one here, because `fleet task run` below executes as
+# the INVOKING user, whose image store is a separate namespace. On a
+# provisioned box a root run would otherwise build into the service user's
+# store and then fail to find the image. Do NOT "fix" that by removing the
+# builder's delegation — it protects the real deployment path.
 if [[ "${FLEET_SKIP_SANDBOX_BUILD:-0}" != "1" ]]; then
-  "$SCRIPT_DIR/build-sandbox-image.sh"
+  FLEET_SERVICE_NAME="fleet-local-run-no-delegation" "$SCRIPT_DIR/build-sandbox-image.sh"
 fi
 
 # A fresh per-run workspace under .fleet-runs/ (gitignored territory), plus a

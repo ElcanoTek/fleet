@@ -225,6 +225,19 @@ info() { printf '%s» %s%s\n' "$c_dim" "$*" "$c_reset"; }
 die()  { printf '✗ %s\n' "$*" >&2; exit 1; }
 run()  { if [[ "$DRY_RUN" == "1" ]]; then info "[dry-run] $*"; else "$@"; fi; }
 
+# env_get KEY [FILE] — read one key from an env file without sourcing it (the
+# file holds secrets; sourcing would execute arbitrary content on a tampered
+# box). Last assignment wins, surrounding quotes stripped: /etc/fleet/fleet.env
+# is a systemd EnvironmentFile=, where FLEET_BACKUP_DIR="/mnt/x" is legal and
+# the unit sees the unquoted value — a re-run reading the quotes back verbatim
+# would die on its own absolute-path validation below. Same helper as
+# doctor.sh's env_get; keep the two in sync.
+env_get() {
+  local key="$1" file="${2:-$ENV_FILE}"
+  [[ -r "$file" ]] || return 0
+  grep -E "^${key}=" "$file" 2>/dev/null | tail -n1 | cut -d= -f2- | sed -e 's/^["'\'']//' -e 's/["'\'']$//' || true
+}
+
 # ── interactive deployment selection (TTY only; flags always win) ────────────
 # A bare `scripts/bootstrap.sh` on a terminal walks the operator through the
 # three deployment choices instead of requiring flag archaeology: systemd
@@ -281,9 +294,9 @@ SERVICE_NAME="${FLEET_SERVICE_NAME:-fleet}"
 # same way the adopted DSNs resolve further down: a re-run must not reset a
 # backup directory or retention the operator moved (dumps would silently start
 # landing somewhere else).
-BACKUP_DIR="${FLEET_BACKUP_DIR:-$(grep '^FLEET_BACKUP_DIR=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- || true)}"
+BACKUP_DIR="${FLEET_BACKUP_DIR:-$(env_get FLEET_BACKUP_DIR "$ENV_FILE")}"
 BACKUP_DIR="${BACKUP_DIR:-/var/backups/fleet}"
-BACKUP_RETENTION_DAYS="${FLEET_BACKUP_RETENTION_DAYS:-$(grep '^FLEET_BACKUP_RETENTION_DAYS=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- || true)}"
+BACKUP_RETENTION_DAYS="${FLEET_BACKUP_RETENTION_DAYS:-$(env_get FLEET_BACKUP_RETENTION_DAYS "$ENV_FILE")}"
 BACKUP_RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-30}"
 # Validated only on the runs that WRITE these keys and install the unit that
 # reads them. A dev run installs no timer, so a relative FLEET_BACKUP_DIR
@@ -604,11 +617,15 @@ deploy_web_tier() {
 
   if [[ -z "$WEB_DOMAIN" ]]; then
     # The start script binds 127.0.0.1 unless FLEET_WEB_HOST overrides it, so
-    # "loopback-only" holds even on boxes without firewalld. A TLS proxy on
-    # ANOTHER host needs both the wider bind and the real public origin (the
-    # origin also feeds redirect/Secure-cookie decisions in the web tier).
+    # "loopback-only" holds even on boxes without firewalld. EVERY custom proxy
+    # front — same host or not — needs the real public origin: it decides the
+    # web tier's redirect targets and Secure-cookie flag (web/src/app/lib/
+    # auth.ts), and Next inlines NEXT_PUBLIC_* at build time, so editing the
+    # env file alone changes nothing until web/ is rebuilt. Only a proxy on
+    # ANOTHER host additionally needs the wider bind.
     info "no --domain → web is loopback-only on :3000; front it with your own TLS proxy for a public URL."
-    info "  (proxy on another host? set FLEET_WEB_HOST=0.0.0.0 + NEXT_PUBLIC_PUBLIC_ORIGIN=https://<domain> in ${web_env}, rebuild web/, restart fleet-web)"
+    info "  any custom proxy (same host too): set NEXT_PUBLIC_PUBLIC_ORIGIN=https://<domain> in ${web_env}, then rebuild web/ + restart fleet-web (scripts/update.sh does both) — the origin is baked in at build time, so editing the env file alone is not enough."
+    info "  proxy on ANOTHER host: additionally set FLEET_WEB_HOST=0.0.0.0 in ${web_env} (the web tier binds 127.0.0.1 otherwise)."
     return
   fi
   step "Web tier: Caddy TLS reverse proxy for ${WEB_DOMAIN}"

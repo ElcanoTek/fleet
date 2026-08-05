@@ -54,8 +54,9 @@ longer sufficient.
   refused afterwards on every gated route while a fresh one works; a forged
   claim is refused; non-membership still outranks the epoch.
 - `internal/sched/handlers/session_epoch_test.go` — the same verdicts on the
-  Operations Center's header-trust path, including the three callers outside the
-  auth middleware, and the 500-not-revocation rule when the chat store is down.
+  Operations Center's header-trust path, including all three `headerTrustUser`
+  callers — the auth middleware plus the two routes outside it (task create,
+  upload) — and the 500-not-revocation rule when the chat store is down.
 - `web/src/app/lib/auth.test.ts` — a claimless token is refused;
   `chatServer.test.ts` / `mocServer.test.ts` — the claim is forwarded and the
   revoked verdict drops the cookie; `api/auth/login/route.test.ts` — the mint

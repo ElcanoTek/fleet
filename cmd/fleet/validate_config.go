@@ -363,7 +363,15 @@ func personaMiss(bundle *clientconfig.Bundle, persona string, knob personaKnob) 
 }
 
 // bundlePersonaFiles lists the persona files the bundle ships so a finding can
-// name the choices, not just the miss. os.ReadDir already sorts by filename.
+// name the choices, not just the miss. Only .yaml is offered: the persona
+// rosters (agent.Manager.ListPersonas, listBundlePersonas) are .yaml-only and
+// the interactive/per-task loaders force a ".yaml" suffix onto the configured
+// name, so a .yml file can never back a chat persona — offering one here would
+// hand the operator a remediation that loops. The one reader that opens its
+// configured filename verbatim (the scheduled global persona,
+// scheduledrun.composeSystemPrompt) could load a .yml, but steering an operator
+// toward a file every other reader is blind to is not a fix. os.ReadDir
+// already sorts by filename.
 func bundlePersonaFiles(bundle *clientconfig.Bundle) []string {
 	entries, err := os.ReadDir(bundle.PersonasDir)
 	if err != nil {
@@ -374,7 +382,7 @@ func bundlePersonaFiles(bundle *clientconfig.Bundle) []string {
 		if e.IsDir() {
 			continue
 		}
-		if ext := strings.ToLower(filepath.Ext(e.Name())); ext != ".yaml" && ext != ".yml" {
+		if !strings.HasSuffix(strings.ToLower(e.Name()), ".yaml") {
 			continue
 		}
 		names = append(names, e.Name())
