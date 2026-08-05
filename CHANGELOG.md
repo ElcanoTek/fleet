@@ -19,6 +19,17 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- `Scheduler.Stop`'s run_if gate drain could panic the process during graceful
+  shutdown. Stop closed the stop channel and immediately waited on the gate
+  WaitGroup, but nothing waited for the scheduler's run loop to exit — a tick
+  already inside the loop body kept running and could dispatch another gate
+  evaluation (`WaitGroup.Add`) concurrently with that wait, which
+  sync.WaitGroup forbids. The resulting misuse panic fired in Stop's drain
+  goroutine, which has no recover (the per-tick recover covers only the tick),
+  so it killed the process mid-shutdown and skipped every remaining deferred
+  cleanup in main. The run loop now signals completion on return and Stop
+  waits for it to exit before draining the gates — inside the same 5-second
+  bound as before — so no new dispatch can ever race the drain.
 - The MCP stdio transport read each response line from a server subprocess
   with no ceiling. In broker mode those servers run host-side, so a single
   data-driven oversized response — a connector returning a giant query result

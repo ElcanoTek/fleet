@@ -659,3 +659,54 @@ func TestStopDrainsInFlightGates(t *testing.T) {
 		t.Errorf("status after Stop = %s, want pending (the passing gate's settle write must land before Stop returns)", got.Status)
 	}
 }
+
+// TestStopDoesNotRaceRunLoopGateDispatch pins Stop against the real Start/Stop
+// lifecycle: Stop must wait for runLoop to exit BEFORE draining gateWG. A tick
+// already inside the loop body when stop closes can still call gateWG.Add via
+// tryDispatchGateEval, and an Add racing the drain's Wait is a sync.WaitGroup
+// misuse — a panic in Stop's drain goroutine (no recover there) that kills the
+// process mid-shutdown. The interleaving is what the race detector flags, so
+// this test is load-bearing under -race: before the fix it reported the
+// unsynchronized Add/Wait pair on every run where a gate was in flight at
+// Stop. The gate dispatch is detected via a marker file the gate command
+// writes — deliberately NOT via the scheduler's own mutexes, which would add
+// the very happens-before edge the test must prove exists without them.
+func TestStopDoesNotRaceRunLoopGateDispatch(t *testing.T) {
+	s, store := newTestScheduler(t)
+	s.tickInterval = 5 * time.Millisecond
+	ctx := context.Background()
+
+	marker := filepath.Join(t.TempDir(), "gate-dispatched")
+	past := time.Now().UTC().Add(-time.Minute)
+	gated := &models.Task{
+		ID: uuid.New(), Prompt: "gated", Status: models.TaskStatusScheduled, CreatedAt: time.Now().UTC(),
+		ScheduledFor: &past,
+		// Long enough to still be in flight when Stop is called, short enough
+		// to settle well inside gateDrainTimeout.
+		RunIf: &models.RunIf{Command: "touch " + marker + "; sleep 0.5", ExitCodeIs: 0, TimeoutSeconds: 30},
+	}
+	if _, err := store.AddTaskWithContext(ctx, gated); err != nil {
+		t.Fatalf("add gated: %v", err)
+	}
+
+	s.Start()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := os.Stat(marker); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("runLoop never dispatched the gate")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	s.Stop() // must first wait out runLoop, then drain the in-flight gate
+
+	got, err := store.GetTask(gated.ID)
+	if err != nil {
+		t.Fatalf("get gated: %v", err)
+	}
+	if got.Status != models.TaskStatusPending {
+		t.Errorf("status after Stop = %s, want pending (drain semantics must survive the loop-exit wait)", got.Status)
+	}
+}
