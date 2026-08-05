@@ -507,10 +507,10 @@ func (h *Handlers) verifyAdminKey(r *http.Request) bool {
 	// Fail closed when no admin key is configured. Otherwise sha256("") on both
 	// sides would match a request that sends NO X-API-Key header, silently
 	// authenticating it as admin — every caller (both admin middlewares, the
-	// principal resolver, and the inline handlers in batch/estimate/upload)
-	// would then grant full access on a deployment that simply left
-	// ADMIN_API_KEY unset. Guarding here closes all of them at once; the
-	// duplicate guard in SchedRateLimitMiddleware is now redundant but harmless.
+	// principal resolver, and the inline handlers in batch/upload) would then
+	// grant full access on a deployment that simply left ADMIN_API_KEY unset.
+	// Guarding here closes all of them at once; the duplicate guard in
+	// SchedRateLimitMiddleware is now redundant but harmless.
 	if h.config.AdminAPIKey == "" {
 		return false
 	}
@@ -1711,8 +1711,21 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 	// admin-permission principal's payload is authoritative (SetRunIf below),
 	// so an admin edit that changes or removes the gate actually persists.
 	canAuthorRunIf := p.hasPermission(models.PermissionAdmin)
-	if !canAuthorRunIf && !reflect.DeepEqual(tc.RunIf.Normalized(), task.RunIf.Normalized()) {
+	runIfChanged := !reflect.DeepEqual(tc.RunIf.Normalized(), task.RunIf.Normalized())
+	if !canAuthorRunIf && runIfChanged {
 		writeError(w, http.StatusForbidden, "run_if: a host-side pre-run gate can only be changed by an admin")
+		return
+	}
+	// A gate is evaluated only at the scheduled→pending promotion
+	// (models.RunIf's enforcement contract), and a pending task is already
+	// past that point: honoring a new or changed gate would have the
+	// dispatch-state recompute (models.DeriveDispatchState, applied in
+	// UpdateEditableTask) yank the imminent dispatch back onto the scheduler
+	// path. Refuse instead, so that change stays explicit — edit the gate
+	// while the task is scheduled, or cancel and recreate it. Removing the
+	// gate (tc.RunIf == nil) stays allowed: absence needs no evaluation point.
+	if runIfChanged && tc.RunIf != nil && task.Status == models.TaskStatusPending {
+		writeError(w, http.StatusConflict, "run_if: task is already pending dispatch, so its gate can no longer be evaluated for this run; change the gate while the task is scheduled, or cancel and recreate it")
 		return
 	}
 
@@ -2038,7 +2051,11 @@ func (h *Handlers) rerunOrClone(w http.ResponseWriter, r *http.Request, keepRecu
 // IMPORTANT: an immediate run uses ScheduledFor=nil — the codebase's "run now"
 // convention (a fresh pending task the worker claims at once). Setting &now would
 // be rejected by validateTaskCreate's "scheduled time cannot be in the past"
-// check, which re-samples a strictly-later now.
+// check, which re-samples a strictly-later now. A gated source is the one
+// exception to "claims at once": TaskToCreate carries run_if, and NewTask parks
+// any gated cron task scheduled-for-now so the scheduler evaluates the gate
+// before dispatch (models.RunIf's enforcement contract) — a rerun must not be a
+// path around the condition the gate exists to enforce.
 func buildRerunTaskCreate(source *models.Task, keepRecurrence bool, o taskRerunOverrides, fallbackLoc *time.Location) (models.TaskCreate, error) {
 	tc := models.TaskToCreate(source)
 	if keepRecurrence && strings.TrimSpace(tc.Recurrence) != "" {

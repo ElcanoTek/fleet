@@ -55,6 +55,55 @@ prior versions are listed because none have shipped.
   probe now applies that plane's verdict rule (`bootstrapFailure.ts`: only
   401/403 are auth verdicts); a 5xx or a network failure surfaces as a distinct
   "can't reach the server" retry notice and leaves the stored bearer untouched.
+- One slow `run_if` gate degraded scheduling for the whole box. The scheduler
+  tick ran task promotion, lease recovery, starvation promotion, paused-task
+  expiry, and the wake sweep sequentially on one goroutine, and gates were
+  evaluated inline during promotion — so a single admin-authored gate pointing
+  at a hung dependency (`timeout_seconds` up to 300) delayed ALL scheduling
+  and crashed-worker lease recovery by its full runtime, while the 30s ticker
+  silently dropped ticks. Gates are now evaluated on a small bounded pool of
+  goroutines and settled (promoted or skipped) asynchronously — the tick never
+  waits on a gate, a task whose gate is still running is not re-dispatched,
+  and one whose slot isn't free simply stays due for a later tick. The cheap
+  recovery sweeps also run before promotion now, so a promotion regression
+  can never starve lease recovery. Separately, a declined one-shot gate used
+  to re-run its host command every 30s tick forever; a decline with no next
+  cron tick now backs off exponentially on the already-tracked `skip_count`
+  (30s doubling to a 30m cap), so a permanently-false condition costs ~2
+  commands an hour instead of 120. Shutdown no longer races those async
+  settles: `Scheduler.Stop` now waits up to 5s for in-flight gate evaluations
+  to land their promote/skip writes; a gate still running at the bound is
+  abandoned to finish on its own (its settle write is conditional, and a task
+  left `scheduled` is simply re-evaluated after restart), so a slow gate can
+  never extend shutdown by its full runtime.
+- Editing a webhook trigger template turned it into a one-shot run. The task
+  edit's status recompute derived only from `scheduled_for`, so saving any
+  edit to a template (`scheduled`, nil `scheduled_for` — inert by
+  construction) flipped it to `pending` and the worker pool executed the
+  template itself once, outside any trigger firing. Same root cause and same
+  fix as the gated-task edit bypass under Security below: the edit path now
+  recomputes dispatch state with the shared `models.DeriveDispatchState`
+  rule, which keeps a webhook template parked inert.
+- Task export silently dropped `run_if`. The portable definition record had no
+  field for the pre-run gate, so a box migration or backup-restore converted
+  every gated task into an unconditional one with nothing flagging it — tasks
+  whose gate suppressed runs under bad conditions started running
+  unconditionally on the new deployment. The gate is now part of the export
+  record and survives the round-trip (including `conflict=replace`, which
+  overlays it like every other definition field). Because a `run_if` command
+  executes on the host as the fleet user, importing a record that carries one
+  requires admin permission — the same boundary as authoring one, checked
+  up front before any record is written, so import cannot be a path around
+  the create/edit admin gate.
+- The pre-submission cost forecast (`POST /tasks/estimate`) was dead for every
+  cookie-path Operations Center user — "Estimate failed: Unauthorized" — even
+  though the sibling comment claimed the endpoint honored the Next-proxy
+  header-trust identity. Its auth was a hand-rolled copy of the task-create
+  check that predated header trust (#157) and never learned it; it failed
+  closed, so nothing was exposed, just broken. The copy is gone: the endpoint
+  now shares `authorizeTaskCreator` with `POST /tasks` and `/tasks/batch`, so
+  the header-trust semantics and the session-epoch revocation gate apply
+  identically to all three creation-shaped endpoints and cannot drift again.
 - Every masked MCP-broker failure was undiagnosable. The credential owner
   replaces any operational error with a fixed `mcpbroker: credential-owner …`
   sentence before it crosses back to the parent — correct, because the real error
@@ -349,6 +398,31 @@ prior versions are listed because none have shipped.
   will emit a different `redirect_uri` (needs re-registration at the IdP unless
   `FLEET_OIDC_REDIRECT_URI` pins it; the pin still outranks everything) and
   will refuse mutating requests until the origin is corrected.**
+- A `run_if` pre-run gate was only enforced on one of the paths that could
+  dispatch the task it guards. The gate — an admin-authored host-side shell
+  condition, which is why authoring one requires admin permission — is
+  evaluated solely at the scheduler's scheduled→pending promotion, but a task
+  can reach dispatch without ever passing through it: `POST /tasks/{id}/rerun`
+  copies the source's gate and mints an immediate *pending* run (so any
+  principal with mere `create_task` permission could execute the gated work
+  with the condition unchecked), an immediate create with a gate did the same,
+  a webhook/email trigger spawn dropped the template's gate outright, and
+  `PUT /tasks/{id}` re-derived the edited task's status from `scheduled_for`
+  alone (so that same `create_task` principal could echo a gated scheduled
+  task unchanged, omit `scheduled_for`, and flip it to `pending` with the
+  gate intact and never evaluated). The contract is now enforced
+  structurally: `models.NewTask` and the edit recompute in
+  `storage.UpdateEditableTask` derive the dispatch state through one shared
+  rule (`models.DeriveDispatchState`) that parks every gated cron task on the
+  scheduler path (`scheduled`, with a nil `scheduled_for` defaulted to now),
+  so whatever minted or last edited it — create, batch, rerun/clone, trigger
+  spawn, import, recurrence, edit — the gate is evaluated before every
+  dispatch, at the cost of up to one 30-second tick of latency for an
+  "immediate" gated run. Trigger spawns now inherit the template's gate, and
+  since a *pending* task is already past its evaluation point, the edit path
+  refuses to attach or change (but still allows removing) a gate on one
+  rather than silently re-parking an imminent dispatch. The full contract
+  lives on `models.RunIf`.
 - A password reset did not end the account's existing sessions, so the standard
   response to a compromised account did not evict the attacker. The web session
   cookie is a stateless HMAC over `{email, exp}` that the Next.js tier verifies

@@ -803,8 +803,10 @@ type TaskEdit struct {
 }
 
 // UpdateEditableTask applies an edit to a task inside a transaction, re-locking
-// the row and re-checking it is still editable. Status is recomputed from
-// ScheduledFor. Returns ErrTaskNotEditable if no longer editable.
+// the row and re-checking it is still editable. Status and ScheduledFor are
+// recomputed with models.DeriveDispatchState — the same rule NewTask applies —
+// so an edit can never move a gated task (or a webhook template) off the
+// scheduler path. Returns ErrTaskNotEditable if no longer editable.
 func (s *Storage) UpdateEditableTask(ctx context.Context, taskID uuid.UUID, edit TaskEdit) (*models.Task, error) {
 	tx, err := s.db.BeginTx(ctx)
 	if err != nil {
@@ -870,11 +872,13 @@ func (s *Storage) UpdateEditableTask(ctx context.Context, taskID uuid.UUID, edit
 		task.Tags = edit.Tags
 	}
 
-	if task.ScheduledFor != nil && task.ScheduledFor.After(time.Now().UTC()) {
-		task.Status = models.TaskStatusScheduled
-	} else {
-		task.Status = models.TaskStatusPending
-	}
+	// Recompute the dispatch state with the SAME rule used at creation. The
+	// previous ScheduledFor-only recompute here let an edit move a task off
+	// the scheduler path: echoing a run_if gate unchanged (allowed for any
+	// create_task principal) while omitting scheduled_for flipped a gated
+	// task to pending — dispatching it without the gate ever being evaluated
+	// — and flipped an inert webhook template into a one-shot pending run.
+	task.Status, task.ScheduledFor = models.DeriveDispatchState(task.TriggerType, task.RunIf, task.ScheduledFor)
 
 	if err := s.db.UpdateTaskTx(ctx, tx, task); err != nil {
 		return nil, err

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -310,6 +311,7 @@ func TestProcessScheduledTasksSkipsFailingGate(t *testing.T) {
 	}
 
 	s.ProcessScheduledTasks()
+	s.gateWG.Wait() // gates settle asynchronously
 
 	// The plain task was promoted to pending; the gated task was skipped.
 	plainGot, err := store.GetTask(plain.ID)
@@ -343,6 +345,7 @@ func TestProcessScheduledTasksSkipsFailingGate(t *testing.T) {
 	future := gatedGot.ScheduledFor.Add(-2 * time.Hour)
 	_ = store.DB().Conn().QueryRowContext(ctx, "UPDATE tasks SET scheduled_for = $1 WHERE id = $2", future, gated.ID).Err()
 	s.ProcessScheduledTasks()
+	s.gateWG.Wait()
 	gatedGot, _ = store.GetTask(gated.ID)
 	if gatedGot.Status != models.TaskStatusScheduled {
 		t.Errorf("gated task status after 2nd tick = %s, want scheduled", gatedGot.Status)
@@ -371,6 +374,7 @@ func TestProcessScheduledTasksOnErrorRun(t *testing.T) {
 	}
 
 	s.ProcessScheduledTasks()
+	s.gateWG.Wait() // gates settle asynchronously
 
 	got, err := store.GetTask(gated.ID)
 	if err != nil {
@@ -401,6 +405,7 @@ func TestProcessScheduledTasksOnErrorSkip(t *testing.T) {
 	}
 
 	s.ProcessScheduledTasks()
+	s.gateWG.Wait() // gates settle asynchronously
 
 	got, err := store.GetTask(gated.ID)
 	if err != nil {
@@ -411,5 +416,246 @@ func TestProcessScheduledTasksOnErrorSkip(t *testing.T) {
 	}
 	if got.SkipCount != 1 {
 		t.Errorf("on_error=skip task skip_count = %d, want 1", got.SkipCount)
+	}
+}
+
+// TestGateSkipBackoff pins the declined-gate retry schedule: 30s doubling per
+// recorded skip, capped at 30m — so a permanently-declining one-shot gate
+// settles at ~2 host commands per hour instead of one per 30s tick forever.
+func TestGateSkipBackoff(t *testing.T) {
+	cases := []struct {
+		skips int
+		want  time.Duration
+	}{
+		{0, 30 * time.Second},
+		{1, time.Minute},
+		{2, 2 * time.Minute},
+		{5, 16 * time.Minute},
+		{6, 30 * time.Minute},  // 32m capped
+		{50, 30 * time.Minute}, // stays at the cap, no overflow
+	}
+	for _, c := range cases {
+		if got := gateSkipBackoff(c.skips); got != c.want {
+			t.Errorf("gateSkipBackoff(%d) = %v, want %v", c.skips, got, c.want)
+		}
+	}
+}
+
+// TestProcessScheduledTasksNotBlockedBySlowGate pins the async-evaluation
+// hardening: a slow gate must not stall the tick. Before the fix the tick ran
+// every gate inline, so one admin-authored gate pointing at a hung dependency
+// (timeout up to 300s) delayed ALL scheduling and lease recovery by its full
+// runtime. The tick must return promptly and promote ungated tasks while the
+// gate is still running; the gated task settles asynchronously.
+func TestProcessScheduledTasksNotBlockedBySlowGate(t *testing.T) {
+	s, store := newTestScheduler(t)
+	ctx := context.Background()
+
+	past := time.Now().UTC().Add(-time.Minute)
+	slow := &models.Task{
+		ID: uuid.New(), Prompt: "slow gate", Status: models.TaskStatusScheduled, CreatedAt: time.Now().UTC(),
+		ScheduledFor: &past,
+		RunIf:        &models.RunIf{Command: "sleep 3", ExitCodeIs: 0, TimeoutSeconds: 30},
+	}
+	plain := &models.Task{
+		ID: uuid.New(), Prompt: "plain", Status: models.TaskStatusScheduled, CreatedAt: time.Now().UTC(),
+		ScheduledFor: &past,
+	}
+	for _, task := range []*models.Task{slow, plain} {
+		if _, err := store.AddTaskWithContext(ctx, task); err != nil {
+			t.Fatalf("add task: %v", err)
+		}
+	}
+
+	start := time.Now()
+	s.ProcessScheduledTasks()
+	elapsed := time.Since(start)
+	if elapsed > 2500*time.Millisecond {
+		t.Fatalf("ProcessScheduledTasks blocked %v on a 3s gate; the tick must not wait on gate evaluation", elapsed)
+	}
+	// The ungated task is already pending, before the gate settles.
+	plainGot, err := store.GetTask(plain.ID)
+	if err != nil {
+		t.Fatalf("get plain: %v", err)
+	}
+	if plainGot.Status != models.TaskStatusPending {
+		t.Errorf("plain task status = %s, want pending while the gate still runs", plainGot.Status)
+	}
+
+	s.gateWG.Wait()
+	slowGot, err := store.GetTask(slow.ID)
+	if err != nil {
+		t.Fatalf("get slow: %v", err)
+	}
+	if slowGot.Status != models.TaskStatusPending {
+		t.Errorf("slow-gated task status = %s, want pending after its passing gate settles", slowGot.Status)
+	}
+}
+
+// TestGateEvalNotDoubleDispatchedWhileInFlight pins the in-flight dedupe: a
+// task whose gate is still running when the next tick re-fetches it (it is
+// still scheduled and due) must NOT have its gate started a second time.
+func TestGateEvalNotDoubleDispatchedWhileInFlight(t *testing.T) {
+	s, store := newTestScheduler(t)
+	ctx := context.Background()
+
+	marker := filepath.Join(t.TempDir(), "gate-runs")
+	past := time.Now().UTC().Add(-time.Minute)
+	gated := &models.Task{
+		ID: uuid.New(), Prompt: "gated", Status: models.TaskStatusScheduled, CreatedAt: time.Now().UTC(),
+		ScheduledFor: &past,
+		RunIf:        &models.RunIf{Command: "echo run >> " + marker + "; sleep 2; exit 1", ExitCodeIs: 0, TimeoutSeconds: 30},
+	}
+	if _, err := store.AddTaskWithContext(ctx, gated); err != nil {
+		t.Fatalf("add gated: %v", err)
+	}
+
+	s.ProcessScheduledTasks() // dispatches the gate
+	s.ProcessScheduledTasks() // gate still in flight: must not dispatch again
+	s.gateWG.Wait()
+
+	data, err := os.ReadFile(marker)
+	if err != nil {
+		t.Fatalf("read marker: %v", err)
+	}
+	if runs := strings.Count(string(data), "run"); runs != 1 {
+		t.Errorf("gate command ran %d times across two ticks, want exactly 1 (in-flight dedupe)", runs)
+	}
+	got, err := store.GetTask(gated.ID)
+	if err != nil {
+		t.Fatalf("get gated: %v", err)
+	}
+	if got.SkipCount != 1 {
+		t.Errorf("skip_count = %d, want 1", got.SkipCount)
+	}
+}
+
+// TestGatePoolFullDefersToNextTick pins the pool bound: with every evaluation
+// slot busy, a due gated task is left scheduled (untouched) for a later tick
+// rather than spawning an unbounded goroutine — and the next tick picks it up
+// once a slot frees.
+func TestGatePoolFullDefersToNextTick(t *testing.T) {
+	s, store := newTestScheduler(t)
+	s.gateSlots = make(chan struct{}, 1) // shrink the pool to one slot
+	ctx := context.Background()
+
+	past := time.Now().UTC().Add(-time.Minute)
+	mk := func(prompt string) *models.Task {
+		ts := past
+		task := &models.Task{
+			ID: uuid.New(), Prompt: prompt, Status: models.TaskStatusScheduled, CreatedAt: time.Now().UTC(),
+			ScheduledFor: &ts,
+			RunIf:        &models.RunIf{Command: "sleep 1; exit 1", ExitCodeIs: 0, TimeoutSeconds: 30},
+		}
+		if _, err := store.AddTaskWithContext(ctx, task); err != nil {
+			t.Fatalf("add %s: %v", prompt, err)
+		}
+		return task
+	}
+	a, b := mk("gated a"), mk("gated b")
+
+	s.ProcessScheduledTasks() // slot 1 taken; the other task is deferred
+	s.gateWG.Wait()
+
+	gotA, _ := store.GetTask(a.ID)
+	gotB, _ := store.GetTask(b.ID)
+	if gotA.SkipCount+gotB.SkipCount != 1 {
+		t.Fatalf("one gate must settle this tick, got skips a=%d b=%d", gotA.SkipCount, gotB.SkipCount)
+	}
+
+	s.ProcessScheduledTasks() // the deferred task is still due and gets the slot
+	s.gateWG.Wait()
+	gotA, _ = store.GetTask(a.ID)
+	gotB, _ = store.GetTask(b.ID)
+	if gotA.SkipCount != 1 || gotB.SkipCount != 1 {
+		t.Errorf("deferred gate must settle on the next tick, got skips a=%d b=%d", gotA.SkipCount, gotB.SkipCount)
+	}
+}
+
+// TestDeclinedOneShotGateBacksOff pins the circuit breaker: a declining
+// one-shot gate must advance scheduled_for by the skip-count backoff instead
+// of staying due and re-running its host command every 30s tick forever.
+func TestDeclinedOneShotGateBacksOff(t *testing.T) {
+	s, store := newTestScheduler(t)
+	ctx := context.Background()
+
+	past := time.Now().UTC().Add(-time.Minute)
+	gated := &models.Task{
+		ID: uuid.New(), Prompt: "one-shot", Status: models.TaskStatusScheduled, CreatedAt: time.Now().UTC(),
+		ScheduledFor: &past,
+		RunIf:        &models.RunIf{Command: "false", ExitCodeIs: 0, TimeoutSeconds: 5},
+	}
+	if _, err := store.AddTaskWithContext(ctx, gated); err != nil {
+		t.Fatalf("add gated: %v", err)
+	}
+
+	s.ProcessScheduledTasks()
+	s.gateWG.Wait()
+	got, err := store.GetTask(gated.ID)
+	if err != nil {
+		t.Fatalf("get gated: %v", err)
+	}
+	if got.SkipCount != 1 || got.Status != models.TaskStatusScheduled {
+		t.Fatalf("want soft hold with 1 skip, got status=%s skips=%d", got.Status, got.SkipCount)
+	}
+	// First decline (skip_count was 0): retry ~30s out — in particular, in the
+	// future, so the next tick does NOT re-run the command.
+	now := time.Now().UTC()
+	if got.ScheduledFor == nil || !got.ScheduledFor.After(now) || got.ScheduledFor.After(now.Add(2*time.Minute)) {
+		t.Errorf("scheduled_for = %v, want ~30s after %v (first-decline backoff)", got.ScheduledFor, now)
+	}
+
+	// A task with an accumulated skip history backs off further: with 5 skips
+	// recorded, the next decline schedules the retry 30s*2^5 = 16m out.
+	if _, err := store.DB().Conn().ExecContext(ctx,
+		"UPDATE tasks SET skip_count = 5, scheduled_for = $1 WHERE id = $2", past, gated.ID); err != nil {
+		t.Fatalf("re-due gated: %v", err)
+	}
+	s.ProcessScheduledTasks()
+	s.gateWG.Wait()
+	got, err = store.GetTask(gated.ID)
+	if err != nil {
+		t.Fatalf("get gated: %v", err)
+	}
+	if got.SkipCount != 6 {
+		t.Fatalf("skip_count = %d, want 6", got.SkipCount)
+	}
+	now = time.Now().UTC()
+	if got.ScheduledFor == nil || got.ScheduledFor.Before(now.Add(10*time.Minute)) || got.ScheduledFor.After(now.Add(20*time.Minute)) {
+		t.Errorf("scheduled_for = %v, want ~16m after %v (backoff must grow with skip_count)", got.ScheduledFor, now)
+	}
+}
+
+// TestStopDrainsInFlightGates pins the bounded shutdown drain: a gate still
+// evaluating when Stop is called must have its promote/skip settle write land
+// before Stop returns (gates faster than gateDrainTimeout — the normal,
+// lightweight kind), so shutdown no longer races the settle writes. Before
+// the drain, Stop returned immediately and this test read the task while its
+// gate goroutine was still sleeping.
+func TestStopDrainsInFlightGates(t *testing.T) {
+	s, store := newTestScheduler(t)
+	ctx := context.Background()
+
+	past := time.Now().UTC().Add(-1 * time.Hour)
+	gated := &models.Task{
+		ID: uuid.New(), Prompt: "gated", Status: models.TaskStatusScheduled, CreatedAt: time.Now().UTC(),
+		ScheduledFor: &past,
+		// Slow enough that an undrained Stop observes it mid-flight, fast
+		// enough to settle well inside gateDrainTimeout.
+		RunIf: &models.RunIf{Command: "sleep 0.3", ExitCodeIs: 0, TimeoutSeconds: 5, OnError: models.RunIfOnErrorRun},
+	}
+	if _, err := store.AddTaskWithContext(ctx, gated); err != nil {
+		t.Fatalf("add gated: %v", err)
+	}
+
+	s.ProcessScheduledTasks() // dispatches the gate to its goroutine
+	s.Stop()                  // must drain the in-flight evaluation
+
+	got, err := store.GetTask(gated.ID)
+	if err != nil {
+		t.Fatalf("get gated: %v", err)
+	}
+	if got.Status != models.TaskStatusPending {
+		t.Errorf("status after Stop = %s, want pending (the passing gate's settle write must land before Stop returns)", got.Status)
 	}
 }

@@ -271,3 +271,39 @@ func TestSpawnWebhookRun_PreservesConnectorBehavior(t *testing.T) {
 		t.Errorf("webhook run should NOT inherit credential allowlist, got %+v", run.CredentialAllowlist)
 	}
 }
+
+// TestSpawnTriggerRun_CarriesRunIfGate pins the RunIf enforcement contract on
+// the trigger-spawn path: a webhook/email trigger whose template carries a
+// pre-run gate must spawn runs that carry the SAME gate and land on the
+// scheduler's promotion path (scheduled, scheduled_for set), so the gate is
+// evaluated before dispatch. Before the fix buildTriggerRun dropped run_if and
+// minted the run pending — firing a trigger executed the gated work with the
+// admin-authored condition silently discarded.
+func TestSpawnTriggerRun_CarriesRunIfGate(t *testing.T) {
+	store, _ := newTestStore(t)
+	template := seedTemplateTask(t, store, nil, nil)
+	gate := &models.RunIf{Command: "test -f /tmp/ready", ExitCodeIs: 0, TimeoutSeconds: 30}
+	template.RunIf = gate
+	if _, err := store.UpdateTask(template); err != nil {
+		t.Fatalf("UpdateTask: %v", err)
+	}
+	trig := &models.TaskTrigger{TaskID: template.ID}
+
+	runID, err := store.SpawnWebhookRun(context.Background(), trig, "prompt")
+	if err != nil {
+		t.Fatalf("SpawnWebhookRun: %v", err)
+	}
+	run, err := store.GetTask(runID)
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if run.RunIf == nil || run.RunIf.Command != gate.Command {
+		t.Fatalf("spawned run must carry the template's run_if, got %+v", run.RunIf)
+	}
+	if run.Status != models.TaskStatusScheduled {
+		t.Errorf("gated spawned run status = %q, want scheduled (pending would dispatch with the gate unevaluated)", run.Status)
+	}
+	if run.ScheduledFor == nil {
+		t.Error("gated spawned run must have scheduled_for set so the scheduler evaluates its gate")
+	}
+}

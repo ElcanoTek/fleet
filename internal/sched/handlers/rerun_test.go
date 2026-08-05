@@ -63,6 +63,34 @@ func TestBuildRerunTaskCreate(t *testing.T) {
 			t.Errorf("non-recurring clone must run immediately (nil ScheduledFor), got %v", tc.ScheduledFor)
 		}
 	})
+
+	t.Run("rerun of a gated source cannot bypass the gate", func(t *testing.T) {
+		// The security regression behind the RunIf enforcement contract: any
+		// create_task principal may rerun an admin-authored gated task, and the
+		// rerun's ScheduledFor=nil run-now convention used to mint it PENDING —
+		// executing the gated work with the condition never evaluated. The
+		// minted task must instead land on the scheduler path, where
+		// ProcessScheduledTasks evaluates the gate before promotion.
+		gated := &models.Task{
+			Prompt:   "do the gated work for the team",
+			Timezone: "UTC",
+			RunIf:    &models.RunIf{Command: "test -f /tmp/ready", TimeoutSeconds: 30},
+		}
+		tc, err := buildRerunTaskCreate(gated, false, taskRerunOverrides{}, time.UTC)
+		if err != nil {
+			t.Fatalf("build: %v", err)
+		}
+		if tc.RunIf == nil {
+			t.Fatal("rerun recipe must carry the source's run_if")
+		}
+		task := models.NewTask(tc)
+		if task.Status != models.TaskStatusScheduled {
+			t.Errorf("gated rerun status = %q, want scheduled (pending would dispatch with the gate unevaluated)", task.Status)
+		}
+		if task.ScheduledFor == nil {
+			t.Error("gated rerun must be parked with a non-nil scheduled_for so the scheduler picks it up")
+		}
+	})
 }
 
 func TestApplyRerunOverrides(t *testing.T) {
