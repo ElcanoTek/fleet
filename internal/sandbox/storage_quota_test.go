@@ -444,3 +444,93 @@ func TestPoolStorageProbe_ConclusiveFailureLatches(t *testing.T) {
 		t.Errorf("conclusive failure was not latched: podman invoked %d times, want 1", got)
 	}
 }
+
+// TestPoolStorageProbe_TimeoutStormEntersCooldown is the regression guard for
+// the unbounded re-probe: with podman hanging, every container creation paid a
+// serialized storageProbeTimeout (30s) probe forever. After
+// storageProbeMaxStrikes consecutive probe timeouts (inconclusive with a LIVE
+// caller ctx) the pool must skip the probe for storageProbeCooldown, and the
+// cooldown must never latch permanently — once it expires, a re-probe runs and
+// a conclusive answer wins.
+func TestPoolStorageProbe_TimeoutStormEntersCooldown(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	probes := 0
+	p := &Pool{
+		cfg:   PoolConfig{Container: ContainerConfig{PodmanBinary: "unused", Image: "localhost/img:test"}},
+		nowFn: func() time.Time { return now },
+		// Inconclusive while the caller's ctx is live = the probe's own
+		// timeout fired (a hanging podman), without waiting 30s of wall time.
+		storageProbeFn: func(context.Context, string, string) (supported, conclusive bool) {
+			probes++
+			return false, false
+		},
+	}
+
+	for i := 0; i < storageProbeMaxStrikes; i++ {
+		if p.storageOptSupported(context.Background()) {
+			t.Fatal("an inconclusive probe must not report quota support")
+		}
+	}
+	if probes != storageProbeMaxStrikes {
+		t.Fatalf("probes = %d, want %d (one per creation until the strike cap)", probes, storageProbeMaxStrikes)
+	}
+
+	// In cooldown: creations must not pay the probe at all.
+	for i := 0; i < 5; i++ {
+		if p.storageOptSupported(context.Background()) {
+			t.Fatal("cooldown must fall back to no layer quota")
+		}
+	}
+	if probes != storageProbeMaxStrikes {
+		t.Fatalf("probe ran during cooldown: probes = %d, want %d", probes, storageProbeMaxStrikes)
+	}
+
+	// Cooldown over, host recovered: the re-probe's conclusive answer wins and
+	// latches — the strikes were a window, not a permanent verdict.
+	now = now.Add(storageProbeCooldown + time.Second)
+	p.storageProbeFn = func(context.Context, string, string) (supported, conclusive bool) {
+		probes++
+		return true, true
+	}
+	if !p.storageOptSupported(context.Background()) {
+		t.Fatal("cooldown latched 'unsupported' past its window — inconclusive answers must never do that")
+	}
+	if !p.storageOptSupported(context.Background()) {
+		t.Fatal("cached conclusive answer changed")
+	}
+	if probes != storageProbeMaxStrikes+1 {
+		t.Errorf("probes = %d, want %d (exactly one re-probe after the cooldown)", probes, storageProbeMaxStrikes+1)
+	}
+}
+
+// TestPoolStorageProbe_CallerCancelDoesNotStrike pins the strike condition: a
+// probe cut short by the CALLER's ctx (a cancelled turn) says nothing about
+// the host, so it must neither count toward the cooldown latch nor stop the
+// next creation from re-probing — the exact property the sync.Once removal
+// established.
+func TestPoolStorageProbe_CallerCancelDoesNotStrike(t *testing.T) {
+	probes := 0
+	p := &Pool{
+		cfg: PoolConfig{Container: ContainerConfig{PodmanBinary: "unused", Image: "localhost/img:test"}},
+		storageProbeFn: func(context.Context, string, string) (supported, conclusive bool) {
+			probes++
+			return false, false
+		},
+	}
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	// Well past the strike cap: cancelled turns must never open a cooldown.
+	want := storageProbeMaxStrikes + 2
+	for i := 0; i < want; i++ {
+		if p.storageOptSupported(cancelled) {
+			t.Fatal("an inconclusive probe must not report quota support")
+		}
+	}
+	if probes != want {
+		t.Errorf("probes = %d, want %d — caller cancels entered the cooldown and stopped re-probing", probes, want)
+	}
+	if p.storageProbeStrikes != 0 {
+		t.Errorf("storageProbeStrikes = %d, want 0 — a cancelled turn charged a strike", p.storageProbeStrikes)
+	}
+}

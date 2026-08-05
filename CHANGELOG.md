@@ -19,6 +19,30 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- The MCP stdio transport read each response line from a server subprocess
+  with no ceiling. In broker mode those servers run host-side, so a single
+  data-driven oversized response — a connector returning a giant query result
+  or a fetched page — was buffered whole in the fleet process's memory before
+  any downstream truncation applied: one response could OOM the process and
+  take down every user. This is the same risk class already capped on the
+  sandbox bridge's response read, and the stdio transport now follows that
+  pattern at the same 64 MiB ceiling: a line past the cap is drained to its
+  delimiter — the stream stays framed and the healthy subprocess is not
+  restarted — and the call fails with an explicit over-cap error rather than
+  a silently truncated, plausible-but-wrong result.
+- The storage-quota probe's inconclusive path re-probed on every container
+  creation with no cap or backoff. Right direction — the earlier fix stopped a
+  cancelled first probe from latching "unsupported" for the process lifetime —
+  but on a degraded host (podman hanging) every creation then paid the
+  serialized 30s probe, added straight to turn-start and scheduled-run
+  latency, for as long as the host stayed degraded. Consecutive probe
+  *timeouts* (inconclusive with a live caller context: the host being slow,
+  not a user cancelling a turn) now cap at three, after which the pool treats
+  the driver as unsupported for a 5-minute cooldown before re-probing.
+  Containers created inside the window omit only the writable-layer quota —
+  the per-file ulimit still applies — and a cancelled turn still never counts
+  toward the latch, so a genuinely inconclusive answer still never latches
+  permanently.
 - Every masked MCP-broker failure was undiagnosable. The credential owner
   replaces any operational error with a fixed `mcpbroker: credential-owner …`
   sentence before it crosses back to the parent — correct, because the real error
