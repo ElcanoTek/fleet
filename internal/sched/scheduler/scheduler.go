@@ -74,8 +74,8 @@ type Scheduler struct {
 	// goroutines: gateSlots caps how many run concurrently (a full pool defers
 	// the task to a later tick — it stays scheduled and due), gateInFlight
 	// (under gateMu) prevents the next tick from double-dispatching a task
-	// whose gate is still running, and gateWG lets tests (and nothing else)
-	// wait for outstanding evaluations to settle.
+	// whose gate is still running, and gateWG lets Stop (bounded by
+	// gateDrainTimeout) and tests wait for outstanding evaluations to settle.
 	gateSlots    chan struct{}
 	gateMu       sync.Mutex
 	gateInFlight map[uuid.UUID]struct{}
@@ -194,8 +194,33 @@ func (s *Scheduler) Start() {
 	go s.runLoop()
 }
 
-// Stop stops the scheduler.
-func (s *Scheduler) Stop() { close(s.stop) }
+// gateDrainTimeout bounds how long Stop waits for in-flight run_if gate
+// evaluations to settle. Gates are meant to be lightweight checks, so the
+// common case drains in well under this; a slower gate (they may legitimately
+// run up to 300s) must never hold shutdown for its full runtime, so the wait
+// is a bound, not a guarantee.
+const gateDrainTimeout = 5 * time.Second
+
+// Stop stops the scheduler, waiting up to gateDrainTimeout for in-flight
+// run_if gate evaluations to settle their promote/skip writes. A gate still
+// running at the deadline is abandoned to finish on its own: its settle write
+// is conditional (fromStatus=scheduled), so it either lands as it would have
+// or fails harmlessly, and a task left `scheduled` is simply re-evaluated
+// after restart. The bounded wait exists only to close that shutdown race in
+// the common case, never to let a slow gate extend shutdown.
+func (s *Scheduler) Stop() {
+	close(s.stop)
+	settled := make(chan struct{})
+	go func() {
+		s.gateWG.Wait()
+		close(settled)
+	}()
+	select {
+	case <-settled:
+	case <-time.After(gateDrainTimeout):
+		log.Printf("scheduler: stopped with run_if gate evaluations still in flight; their tasks stay scheduled and are re-evaluated after restart")
+	}
+}
 
 func (s *Scheduler) runLoop() {
 	defer safe.Recover("scheduler.runLoop", nil)

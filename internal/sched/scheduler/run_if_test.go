@@ -625,3 +625,37 @@ func TestDeclinedOneShotGateBacksOff(t *testing.T) {
 		t.Errorf("scheduled_for = %v, want ~16m after %v (backoff must grow with skip_count)", got.ScheduledFor, now)
 	}
 }
+
+// TestStopDrainsInFlightGates pins the bounded shutdown drain: a gate still
+// evaluating when Stop is called must have its promote/skip settle write land
+// before Stop returns (gates faster than gateDrainTimeout — the normal,
+// lightweight kind), so shutdown no longer races the settle writes. Before
+// the drain, Stop returned immediately and this test read the task while its
+// gate goroutine was still sleeping.
+func TestStopDrainsInFlightGates(t *testing.T) {
+	s, store := newTestScheduler(t)
+	ctx := context.Background()
+
+	past := time.Now().UTC().Add(-1 * time.Hour)
+	gated := &models.Task{
+		ID: uuid.New(), Prompt: "gated", Status: models.TaskStatusScheduled, CreatedAt: time.Now().UTC(),
+		ScheduledFor: &past,
+		// Slow enough that an undrained Stop observes it mid-flight, fast
+		// enough to settle well inside gateDrainTimeout.
+		RunIf: &models.RunIf{Command: "sleep 0.3", ExitCodeIs: 0, TimeoutSeconds: 5, OnError: models.RunIfOnErrorRun},
+	}
+	if _, err := store.AddTaskWithContext(ctx, gated); err != nil {
+		t.Fatalf("add gated: %v", err)
+	}
+
+	s.ProcessScheduledTasks() // dispatches the gate to its goroutine
+	s.Stop()                  // must drain the in-flight evaluation
+
+	got, err := store.GetTask(gated.ID)
+	if err != nil {
+		t.Fatalf("get gated: %v", err)
+	}
+	if got.Status != models.TaskStatusPending {
+		t.Errorf("status after Stop = %s, want pending (the passing gate's settle write must land before Stop returns)", got.Status)
+	}
+}

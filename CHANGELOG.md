@@ -70,7 +70,12 @@ prior versions are listed because none have shipped.
   to re-run its host command every 30s tick forever; a decline with no next
   cron tick now backs off exponentially on the already-tracked `skip_count`
   (30s doubling to a 30m cap), so a permanently-false condition costs ~2
-  commands an hour instead of 120.
+  commands an hour instead of 120. Shutdown no longer races those async
+  settles: `Scheduler.Stop` now waits up to 5s for in-flight gate evaluations
+  to land their promote/skip writes; a gate still running at the bound is
+  abandoned to finish on its own (its settle write is conditional, and a task
+  left `scheduled` is simply re-evaluated after restart), so a slow gate can
+  never extend shutdown by its full runtime.
 - Editing a webhook trigger template turned it into a one-shot run. The task
   edit's status recompute derived only from `scheduled_for`, so saving any
   edit to a template (`scheduled`, nil `scheduled_for` — inert by
