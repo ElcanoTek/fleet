@@ -33,6 +33,25 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **EKS deployment guide (`docs/EKS-DEPLOYMENT.md`):** an operator recipe for
+  running fleet on Amazon EKS as **one pod on one large, dedicated node** —
+  keeping the single-process/single-writer model of
+  ADR-0004 intact rather than sharding sandboxes across worker nodes (no such
+  seam exists; ADR-0011 removed the worker registry). Covers the rootless
+  Podman-in-a-pod requirements that fail *silently* if missed (subuid ranges,
+  `newuidmap` file caps vs. privilege escalation, an overlay driver instead of
+  vfs, `/dev/fuse` + `/dev/net/tun`, and the writable cgroup subtree without
+  which `--memory`/`--cpus` are ignored and every per-sandbox cap becomes
+  fiction), Containerfiles for the two images the repo does not ship, RDS
+  two-database setup, an xfs+prjquota StorageClass so the sandbox disk quota is a
+  hard cap rather than the per-file `ulimit` fallback, pod sizing that accounts
+  for sandbox cgroups nesting under the pod limit, exec health probes (kubelet
+  dials the pod IP and cannot reach the loopback-only listeners), the ALB idle
+  timeout that otherwise severs SSE turns, and a verification checklist. States
+  its own scope honestly: hand-verified, **not** exercised by CI, no chart or
+  manifest shipped in-tree, and explicit about the weaker outer trust boundary a
+  privileged pod implies.
+
 - **Production child-owned remote MCP scopes:** interactive and scheduled run
   drivers now send only user identity and public server-name filters to
   `fleet mcp-broker`; the child owns token lookup/refresh, SSRF-guarded HTTP MCP
