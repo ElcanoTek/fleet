@@ -38,6 +38,23 @@
   `fleet update`, and `scripts/doctor.sh` all assume a systemd host — you replace
   them with image rebuilds and `kubectl exec` (§9).
 
+## The objections a Kubernetes-native reviewer will raise
+
+Answer these before the design review, not during it. Each links to the section
+that implements it.
+
+| "This isn't Kubernetes-native because…" | Answer |
+|---|---|
+| "…there's no Helm chart / it's not GitOps" | Package the §7 manifests as Kustomize or a thin Helm chart and sync with Argo CD or Flux — [§7 GitOps](#packaging-these-manifests-for-gitops). Two Argo-specific gotchas are called out there. |
+| "…a privileged pod will never pass admission" | It won't under `restricted`/`baseline` Pod Security Standards. You need a labelled namespace and a scoped policy exception — [§7 admission control](#namespace-admission-control-and-identity). If your org forbids privileged pods outright, [§2](#if-your-policy-forbids-privileged-pods) is the unprivileged variant and its costs. |
+| "…one replica isn't highly available" | Correct, and it cannot be: single-owner task leases + a per-process semaphore. HA here means fast, *graceful* recovery, not zero downtime — [§6 availability](#az-pinning-node-loss-and-what-ha-means-here) states the RTO/RPO plainly. |
+| "…we can't autoscale it" | Scale vertically: raise `FLEET_MAX_CONCURRENT_AGENTS` and the pod resources together ([§6](#resource-requests-count-the-sandboxes)). HPA and VPA are both actively harmful here ([§8](#cluster-integration-gotchas)). |
+| "…the workloads are invisible to the cluster" | True and worth naming: sandboxes are Podman containers inside the pod, so they never appear in `kubectl get pods` or cAdvisor. Where to see them instead: [§8](#cluster-integration-gotchas). |
+| "…it pins itself to one AZ" | It does — `ReadWriteOnce` EBS. Make the node group single-AZ deliberately rather than discovering it during an incident ([§6](#az-pinning-node-loss-and-what-ha-means-here)). |
+| "…NetworkPolicy can't govern what the agent runs" | It can. Sandbox egress traverses the pod's network namespace via `slirp4netns`, so pod-level NetworkPolicy applies to agent-executed code too ([§7](#networkpolicy), [§8](#cluster-integration-gotchas)). |
+| "…secrets are in a `Secret`" | Swap in External Secrets Operator or the Secrets Store CSI driver ([§7](#secrets)). fleet's own guarantee is stronger than either: MCP credentials are brokered host-side and never enter a sandbox. |
+| "…nothing here is CI-tested" | Also true. Run [§10](#10-verification-checklist) as an acceptance gate in your own pipeline; that is the substitute. |
+
 ## 1. Topology
 
 Everything that was a process on the single box becomes a container in **one
@@ -100,6 +117,15 @@ securityContext:
   runAsUser: 1000        # the image's fleet user, NOT root
   runAsGroup: 1000
 ```
+
+**The container must run as uid 1000, not root — even privileged.** Podman
+running as real root is *rootful*, and rootful Podman **ignores**
+`--userns=keep-id`. The sandbox's uid 1000 then no longer maps to the process
+that owns the workspace directory, so the agent can neither `chdir` into its
+per-conversation workspace nor write files there — the failure the
+`keep-id`/same-path invariant tests in `internal/sandbox` exist to catch. Keep
+`runAsUser: 1000` and give the image a fixed uid-1000 user with subuid ranges
+(§3b).
 
 This is the configuration that reliably satisfies all six rows above. It is also
 the honest trade: **a privileged container is not a security boundary**, so the
@@ -174,9 +200,10 @@ RUN make build            # → ./fleet and ./fleet-admin
 
 FROM fedora:41
 # podman + the rootless stack fleet actually invokes; curl for the exec probes (§7).
+# awscli2 is for the ECR-login init container (§7); curl is for the exec probes.
 RUN dnf install -y --setopt=install_weak_deps=False \
       podman crun conmon slirp4netns fuse-overlayfs containers-common \
-      shadow-utils catatonit iptables-nft git curl ca-certificates \
+      shadow-utils catatonit iptables-nft git curl ca-certificates awscli2 \
  && dnf clean all
 # Fixed unprivileged user, uid 1000 — matches --userns=keep-id:uid=1000 and the
 # sandbox image's USER, so bind-mounted workspace files line up from both sides.
@@ -345,6 +372,35 @@ eksctl create nodegroup --cluster <c> --name fleet \
   deployment means node replacement is a **planned downtime window** — the honest
   consequence of the single-writer design, same as rebooting the single box.
 
+### AZ pinning, node loss, and what "HA" means here
+
+Decide this deliberately — it is the question your reviewer will press hardest on.
+
+- **The pod is pinned to one Availability Zone.** A `ReadWriteOnce` EBS volume
+  exists in exactly one AZ, and `WaitForFirstConsumer` binds it where the pod
+  first scheduled. If your node group spans AZs, a replacement node in a
+  different AZ **cannot** mount the volume and the pod stays `Pending` with a
+  volume-node-affinity conflict. Make the node group **single-AZ on purpose** so
+  a replacement node always lands where the volume is. (EFS as an alternative
+  gets you cross-AZ at the cost of a network filesystem under the Podman graph
+  root and per-conversation workspaces — don't.)
+- **Node loss does not self-heal quickly.** When a node goes `NotReady`, a
+  StatefulSet pod is *not* recreated until the old one is confirmed gone —
+  Kubernetes will not risk two writers, which is the same invariant fleet needs.
+  Recovery is: the node object is deleted (or you `kubectl delete pod --force`),
+  the EBS volume detaches, and the new pod attaches it on a fresh node in the
+  same AZ. Budget minutes, and prefer letting the node group replace the instance
+  over force-deleting by hand.
+- **What HA actually means for this workload:** RTO is one pod restart plus
+  volume reattach; RPO for conversations, tasks, and run history is your RDS
+  backup window (in-flight turns are lost, and the graceful drain is what keeps
+  that number near zero for planned restarts). There is no zero-downtime rolling
+  upgrade, on EKS or on the single box — that is a property of the single-writer
+  design, not of this recipe.
+- **PodDisruptionBudget:** leave it unset, or `maxUnavailable: 1`. A
+  `minAvailable: 1` PDB on a one-replica workload blocks every node drain
+  indefinitely and will page someone at 3am during a routine AMI upgrade.
+
 ### Resource requests: count the sandboxes
 
 The sandbox containers' cgroups nest **under the pod's cgroup**, so their memory
@@ -369,8 +425,73 @@ node runs out of RAM.
 
 ## 7. Manifests
 
-Namespace, secret, and IRSA service account first (use External Secrets or the
-Secrets Store CSI driver in place of a literal `Secret` if that's your standard):
+### Namespace, admission control, and identity
+
+**A privileged pod is rejected outright under the `baseline` or `restricted` Pod
+Security Standards.** This is the single most likely reason a first deploy fails
+in a governed cluster, and it fails at admission with no pod to debug. Label the
+namespace so PSA permits it, and keep the exception scoped to this one namespace:
+
+```yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: fleet
+  labels:
+    # Required for the privileged fleet container (§2). Scope the exception to
+    # THIS namespace; do not relax the cluster-wide default.
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/enforce-version: latest
+    # Keep the warnings visible so you can see exactly which controls you gave up.
+    pod-security.kubernetes.io/audit: baseline
+    pod-security.kubernetes.io/warn: baseline
+    # AWS Load Balancer Controller: hold the pod un-Ready until the ALB target is
+    # registered, so a restart doesn't briefly 5xx (§7 ingress).
+    elbv2.k8s.aws/pod-readiness-gate-inject: enabled
+```
+
+If you run **Kyverno** or **Gatekeeper** as well, PSA labels are not enough —
+those policies evaluate independently. Add a narrowly-scoped exception (namespace
+`fleet`, the `fleet` StatefulSet, the specific rules: privileged,
+`allowPrivilegeEscalation`, host devices) rather than a blanket exemption, and
+write the §2 mitigations into the exception's justification field so the next
+auditor finds the reasoning instead of just the hole.
+
+Identity: **fleet needs no Kubernetes API access at all** — nothing in the
+process talks to the API server. Its ServiceAccount exists only to carry an AWS
+role for ECR pulls (and Secrets Manager, if you use it), so it gets **no Role or
+RoleBinding**, which is a useful thing to be able to say in review:
+
+```yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: fleet
+  namespace: fleet
+  annotations:
+    # IRSA. EKS Pod Identity (eks-pod-identity-agent + a PodIdentityAssociation)
+    # is the newer equivalent and avoids the OIDC-trust-policy boilerplate; use
+    # whichever your platform standardizes on. Neither needs IMDS, which is why
+    # the §6 hop-limit-1 hardening is safe.
+    eks.amazonaws.com/role-arn: arn:aws:iam::<acct>:role/fleet
+# No RBAC Role/RoleBinding: fleet makes zero Kubernetes API calls.
+automountServiceAccountToken: false
+```
+
+The attached IAM policy needs only `ecr:GetAuthorizationToken`,
+`ecr:BatchGetImage`, `ecr:GetDownloadUrlForLayer`, and
+`ecr:BatchCheckLayerAvailability` on the two repositories — plus
+`secretsmanager:GetSecretValue` on your specific secret ARNs if you use External
+Secrets with this role.
+
+### Secrets
+
+The literal `Secret` below is the minimum. For a GitOps repo, replace it with an
+`ExternalSecret` (External Secrets Operator) or a `SecretProviderClass` (Secrets
+Store CSI driver) pointing at Secrets Manager or Parameter Store — the pod spec
+is unchanged either way, since both project a normal `Secret`. Note that rotating
+these takes effect on **pod restart** unless you use the env-file mount described
+in §3b.
 
 ```yaml
 apiVersion: v1
@@ -413,6 +534,13 @@ spec:
         karpenter.sh/do-not-disrupt: "true"
     spec:
       serviceAccountName: fleet
+      # A freshly provisioned EBS volume is root-owned; without fsGroup the
+      # uid-1000 process cannot create the Podman graph root, the workspace, or
+      # XDG_RUNTIME_DIR, and the pod crash-loops on startup. OnRootMismatch keeps
+      # restarts fast once the volume is large (no full recursive rechown).
+      securityContext:
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
       nodeSelector: { workload: fleet }
       tolerations:
         - key: dedicated
@@ -520,6 +648,13 @@ spec:
           readinessProbe:
             httpGet: { path: /, port: 3000 }
             periodSeconds: 10
+          # SIGTERM reaches every container at once, so without this the public
+          # tier can die while fleet is still draining a turn — the browser sees a
+          # dropped stream instead of a finished answer. Sleep past the ALB's
+          # deregistration delay, then let Next exit.
+          lifecycle:
+            preStop:
+              exec: { command: ["sleep", "20"] }
 
   volumeClaimTemplates:
     - metadata: { name: state }
@@ -575,7 +710,111 @@ notification links and share URLs resolve. Login works exactly as on the single
 box (email + password, optional magic-link, optional OIDC SSO — all in the Next
 layer); see [`docs/DEPLOYMENT.md`](DEPLOYMENT.md) for the login model.
 
-## 8. Observability
+### NetworkPolicy
+
+Worth stating explicitly because it answers a real objection: **agent-executed
+code is covered by pod-level NetworkPolicy.** Sandbox containers have no pod IP
+of their own — their egress is NAT'd through the fleet pod's network namespace by
+`slirp4netns` — so a policy on this pod governs what the model's `bash` and
+`run_python` can reach. This composes with, and does not replace, fleet's own
+egress controls: `--network=none` for lockdown and scheduled runs is the hard
+seal, and the allowlisted-egress proxy mode is
+[ADR-0012](adr/0012-sandbox-egress-allowlist.md) /
+[ADR-0031](adr/0031-chat-sandbox-egress.md).
+
+Requires a policy-enforcing CNI — the **VPC CNI enforces NetworkPolicy** only
+with `enableNetworkPolicy: true` (EKS 1.25+); otherwise use Calico or Cilium.
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: fleet, namespace: fleet }
+spec:
+  podSelector: { matchLabels: { app: fleet } }
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    - from: [{ ipBlock: { cidr: <vpc-cidr> } }]   # ALB target-type: ip
+      ports: [{ port: 3000, protocol: TCP }]
+  egress:
+    - to: [{ namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } },
+             podSelector: { matchLabels: { k8s-app: kube-dns } } }]
+      ports: [{ port: 53, protocol: UDP }, { port: 53, protocol: TCP }]
+    - to: [{ ipBlock: { cidr: <rds-subnet-cidr> } }]
+      ports: [{ port: 5432, protocol: TCP }]
+    # Model provider, ECR, and the MCP endpoints you intend. Narrow this as far as
+    # your provider's addressing allows; it is the boundary on agent egress.
+    - to: [{ ipBlock: { cidr: 0.0.0.0/0, except: [<vpc-cidr>, 169.254.169.254/32] } }]
+      ports: [{ port: 443, protocol: TCP }]
+```
+
+Excluding `169.254.169.254/32` is belt-and-braces alongside the §6 IMDS hop
+limit: two independent controls stopping agent code from reaching instance
+credentials.
+
+### Metrics scrape sidecar
+
+`/metrics` is on the orchestrator's loopback listener and is admin-key gated
+(§8). Rather than binding that listener to the pod IP — which would break the
+impersonation boundary — add a tiny proxy that exposes only `GET /metrics` on the
+pod IP and injects the key, then point a `ServiceMonitor`/`PodMonitor` (Prometheus
+Operator) or your scrape config at port 9090:
+
+```yaml
+        - name: metrics-proxy
+          image: nginx:1.27-alpine
+          ports: [{ name: metrics, containerPort: 9090 }]
+          # nginx.conf (mount from a ConfigMap):
+          #   server { listen 9090;
+          #     location = /metrics {
+          #       proxy_pass http://127.0.0.1:8000/metrics;
+          #       proxy_set_header Authorization "Bearer <ADMIN_API_KEY>";
+          #     }
+          #     location / { return 404; } }
+          # Render the key in via envsubst on an nginx.conf.template at startup —
+          # don't bake it into the ConfigMap.
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+          resources:
+            requests: { cpu: "50m", memory: "64Mi" }
+            limits:   { cpu: "200m", memory: "128Mi" }
+```
+
+The orchestrator authenticates admin reads with `Authorization: Bearer
+<ADMIN_API_KEY>`. Keep the proxy's `location /` a 404 so the sidecar cannot become
+a general-purpose hole into the orchestrator, and keep it off the Service that
+backs the Ingress.
+
+### Packaging these manifests for GitOps
+
+Nothing above needs templating to be managed declaratively. A Kustomize base with
+per-environment overlays is the smaller-footprint option; a thin Helm chart is
+fine if charts are your standard:
+
+```
+deploy/k8s/
+  base/           namespace.yaml serviceaccount.yaml statefulset.yaml service.yaml
+                  ingress.yaml networkpolicy.yaml storageclass.yaml kustomization.yaml
+  overlays/prod/  kustomization.yaml (images, replicas:1, resources, host, ARNs)
+```
+
+Two things bite in **Argo CD** specifically:
+
+1. **`volumeClaimTemplates` are immutable.** Any change to them makes the
+   StatefulSet un-patchable, and Argo reports a permanently `OutOfSync` app. To
+   resize, patch the **PVC** directly (`allowVolumeExpansion: true`, §5) and leave
+   the template alone; for a template change, delete the StatefulSet with
+   `--cascade=orphan` and re-apply.
+2. **Set `Replace=false` and avoid auto-prune on the PVC.** An automated sync that
+   prunes the volume claim destroys workspaces, uploads, and the audit dir. Add
+   `argocd.argoproj.io/sync-options: Prune=false` on the PVC, or exclude
+   PersistentVolumeClaims from the app's prune scope.
+
+Also keep **automated sync from being an upgrade mechanism you didn't intend**:
+this workload restarts (with downtime, §6) on every pod-spec change, so pin
+digests in the overlay and let a human promote them.
+
+## 8. Observability and cluster integration
 
 - **Logs** go to stdout/stderr → your CloudWatch/Fluent Bit pipeline. Leave
   `FLEET_LOG_FILE` unset; the file sink exists for hosts without a log collector
@@ -594,6 +833,50 @@ layer); see [`docs/DEPLOYMENT.md`](DEPLOYMENT.md) for the login model.
   isolation ([`docs/DEPLOYMENT.md`](DEPLOYMENT.md)).
 - **Tracing:** `FLEET_OTEL_ENDPOINT` + `FLEET_OTEL_SAMPLE_RATIO` if you run a
   collector.
+
+### Cluster integration gotchas
+
+Each of these is something a Kubernetes-native environment does by default that
+either breaks this pod or silently misleads you about it.
+
+- **The sandboxes are invisible to the Kubernetes API.** They are Podman
+  containers inside the pod: no entry in `kubectl get pods`, no cAdvisor
+  container metrics, no kubelet events, no k8s audit records for them. Where to
+  look instead: `kubectl exec … -- podman ps`, the `fleet_sandbox_*` metrics, the
+  per-task resource telemetry, and the per-run logs / audit dir. Say this out
+  loud in review — a platform team that expects pod-level visibility into agent
+  workloads will otherwise assume it exists.
+- **NodeLocal DNSCache breaks DNS inside sandboxes.** If the node's
+  `/etc/resolv.conf` points at a link-local or loopback address (`169.254.20.10`,
+  `127.0.0.1`), that address means something different inside the sandbox's
+  `slirp4netns` namespace, and name resolution fails for `pip install` and every
+  outbound HTTP tool — while the fleet process itself resolves fine, so it looks
+  like a model problem, not a DNS problem. Pin explicit resolvers for Podman in
+  the image's `containers.conf`:
+
+  ```ini
+  [containers]
+  dns_servers = ["172.20.0.10"]   # your cluster's kube-dns Service IP, or a VPC resolver
+  ```
+
+- **`ResourceQuota` / `LimitRange` in the namespace will reject the pod.** A
+  34-vCPU/70-GiB request trips inherited defaults, and a `LimitRange` with a
+  low `max` silently caps it. Give the namespace its own quota sized to the node,
+  or none.
+- **VPA in `Auto` mode is destructive here** — it restarts the pod to resize it.
+  If you run VPA cluster-wide, exclude this workload or set `updateMode: "Off"`
+  and use its recommendations to hand-tune §6.
+- **`automountServiceAccountToken: false`** is safe and recommended: fleet makes
+  no API calls, and the pod runs code the model wrote. IRSA/Pod Identity project
+  their own token separately and keep working.
+- **Runtime security tooling** (Falco, GuardDuty Runtime Monitoring, Aqua/Sysdig)
+  will see nested container creation, user-namespace clones, and `newuidmap` from
+  a privileged pod, and will alert on all of it. Baseline those signatures for
+  this namespace *before* go-live — otherwise fleet's normal operation reads as an
+  ongoing container-escape attempt, and the noise trains everyone to ignore the
+  detector.
+- **Node AMI upgrades are planned outages** (§6), so exclude this node group from
+  any automatic AMI-refresh schedule and drain it deliberately.
 
 ## 9. Day-2 operations (what replaces bootstrap/update/doctor)
 
@@ -659,11 +942,37 @@ podman run --rm --network=none "$FLEET_SANDBOX_IMAGE" true && echo "sealed mode 
 podman run --rm --storage-opt size=1g "$FLEET_SANDBOX_IMAGE" true \
   && echo "hard disk cap available" || echo "will fall back to per-file ulimit only"
 
-# 6. fleet's own preflight: bundle, podman, image, runtime.
+# 6. DNS inside a sandbox — the NodeLocal DNSCache trap (§8). Resolution can
+#    fail here while the fleet process itself resolves fine.
+podman run --rm --network=slirp4netns:allow_host_loopback=true \
+  "$FLEET_SANDBOX_IMAGE" python3 -c 'import socket;print(socket.gethostbyname("api.openai.com"))'
+
+# 7. The volume is actually writable by uid 1000 (fsGroup, §7).
+touch /var/lib/fleet/.write-probe && rm /var/lib/fleet/.write-probe && echo "volume writable"
+
+# 8. fleet's own preflight: bundle, podman, image, runtime.
 fleet validate-config
 
-# 7. Health + drain semantics.
+# 9. Health + drain semantics.
 curl -fsS http://127.0.0.1:8080/readyz; curl -fsS http://127.0.0.1:8080/livez
+```
+
+From outside the pod, confirm the cluster-side wiring:
+
+```sh
+# Admission actually permits the pod (fails at admission, with no pod to debug).
+kubectl -n fleet get statefulset fleet -o jsonpath='{.status.readyReplicas}'
+kubectl -n fleet describe statefulset fleet | grep -iA3 'FailedCreate\|forbidden'
+
+# The volume landed in the AZ the node group lives in (§6).
+kubectl -n fleet get pvc state-fleet-0 -o jsonpath='{.spec.volumeName}' \
+  | xargs -I{} kubectl get pv {} -o jsonpath='{.spec.nodeAffinity}'
+
+# SSE survives the ALB: this must stream for minutes, not cut off at 60s.
+curl -N https://fleet.example.com/…   # any streaming chat turn
+
+# Graceful drain: /readyz flips to 503 and in-flight work finishes, no SIGKILL.
+kubectl -n fleet delete pod fleet-0 --wait=true
 ```
 
 Then, from the UI, run one interactive turn that executes `run_python` and one

@@ -47,7 +47,19 @@ prior versions are listed because none have shipped.
   hard cap rather than the per-file `ulimit` fallback, pod sizing that accounts
   for sandbox cgroups nesting under the pod limit, exec health probes (kubelet
   dials the pod IP and cannot reach the loopback-only listeners), the ALB idle
-  timeout that otherwise severs SSE turns, and a verification checklist. States
+  timeout that otherwise severs SSE turns, and a verification checklist. Also
+  answers the objections a Kubernetes-native reviewer raises, with the cluster
+  integration each one needs: Pod Security Standards / Kyverno-Gatekeeper
+  exceptions for the privileged pod, `fsGroup` so uid 1000 can write the EBS
+  volume, IRSA or Pod Identity with **no** RBAC (fleet makes zero Kubernetes API
+  calls), a NetworkPolicy that does govern agent egress (sandbox traffic NATs
+  through the pod's netns), single-AZ pinning and the honest RTO/RPO of a
+  single-writer workload, Kustomize/Argo packaging including the
+  `volumeClaimTemplates`-immutability and PVC-prune traps, a loopback-preserving
+  metrics scrape sidecar, and the defaults that silently break this pod
+  (NodeLocal DNSCache vs. `slirp4netns`, namespace `ResourceQuota`, VPA `Auto`,
+  runtime-security signatures firing on normal nested-container operation).
+  States
   its own scope honestly: hand-verified, **not** exercised by CI, no chart or
   manifest shipped in-tree, and explicit about the weaker outer trust boundary a
   privileged pod implies.
