@@ -19,6 +19,21 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- The CSRF canonical-origin hardening locked operators out of a box reached
+  over an SSH tunnel. `verifyOrigin` compared the Origin host strictly against
+  the configured `NEXT_PUBLIC_PUBLIC_ORIGIN` (which bootstrap writes on every
+  deploy), and it guards every mutating route including the login form — so a
+  browser at `http://localhost:3000` tunneled to a `--domain` box got 403 on
+  every POST, presenting as a total auth outage. A loopback Origin
+  (`localhost` / `127.0.0.1` / `[::1]`, any port — exact hostnames only, so a
+  `localhost.evil.example` lookalike does not qualify) is now also accepted
+  when it exactly matches the connection's own Host header: that pair is only
+  producible by a browser genuinely connected to the box's loopback (the
+  tunnel), never by a victim's browser talking to the real deployment, and
+  x-forwarded-host stays ignored so a forwarded-header attack from a remote
+  origin still fails. A mismatched local port (a different origin) is still
+  rejected, and the server-side 403 log now names the expected vs. actual
+  host so the failure is self-diagnosable.
 - An async run_if gate's settle write could clobber a concurrent reschedule or
   edit. Both settle paths conditioned only on the task still being `scheduled`
   — a status an edit legitimately keeps — and the bounded async pool stretched
