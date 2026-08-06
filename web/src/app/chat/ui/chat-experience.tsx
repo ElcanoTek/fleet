@@ -697,7 +697,9 @@ export function ChatExperience({
   // with the files and disappears when they're removed or sent.
   const uploadSizeWarning = useMemo(
     () =>
-      largeUploadWarning(pendingAttachments.reduce((sum, a) => sum + a.size, 0)),
+      largeUploadWarning(
+        pendingAttachments.reduce((sum, a) => sum + a.size, 0),
+      ),
     [pendingAttachments],
   );
   const promptRef = useRef<HTMLTextAreaElement | null>(null);
@@ -959,7 +961,10 @@ export function ChatExperience({
       catalogModels.find((m) => m.slug === slug) ??
       rankedModels.find((m) => m.slug === slug);
     if (!known) return null;
-    return { pricePrompt: known.pricePrompt, priceCompletion: known.priceCompletion };
+    return {
+      pricePrompt: known.pricePrompt,
+      priceCompletion: known.priceCompletion,
+    };
   }, [selectedModel, catalogModels, rankedModels]);
   const contextUsage = useMemo<ContextUsage | null>(
     () =>
@@ -1284,11 +1289,22 @@ export function ChatExperience({
         catalogModels.find((m) => m.slug === slug) ??
         rankedModels.find((m) => m.slug === slug);
       if (!hit) return {};
-      return { pricePrompt: hit.pricePrompt, priceCompletion: hit.priceCompletion };
+      return {
+        pricePrompt: hit.pricePrompt,
+        priceCompletion: hit.priceCompletion,
+      };
     };
     const defaults: RankedModel[] = [
-      { slug: DEFAULT_MODEL, name: DEFAULT_MODEL_LABEL, ...pricesFor(DEFAULT_MODEL) },
-      { slug: ADVANCED_MODEL, name: ADVANCED_MODEL_LABEL, ...pricesFor(ADVANCED_MODEL) },
+      {
+        slug: DEFAULT_MODEL,
+        name: DEFAULT_MODEL_LABEL,
+        ...pricesFor(DEFAULT_MODEL),
+      },
+      {
+        slug: ADVANCED_MODEL,
+        name: ADVANCED_MODEL_LABEL,
+        ...pricesFor(ADVANCED_MODEL),
+      },
     ];
 
     // Lockdown chats are pinned to the operator-configured allow-list.
@@ -1535,16 +1551,48 @@ export function ChatExperience({
     }
   };
 
+  // The user's explicit per-connector availability choices from
+  // Settings → Connections (/connector-prefs, kind "bundled"). A fresh chat
+  // seeds each toggle from this map first and falls back to the operator's
+  // enabled_by_default — so "remember what I chose" is the durable Settings
+  // preference, not whatever the previous conversation happened to have on.
+  // Held in a ref (not state): it only feeds seeding, never rendering.
+  const bundledPrefsRef = useRef<Map<string, boolean>>(new Map());
+
+  const seedServerEnabled = (s: MCPServerInfo): boolean =>
+    bundledPrefsRef.current.get(s.name) ?? s.enabled_by_default ?? false;
+
   // loadMcpServerCatalogPreview fetches the catalog with no per-conversation
   // opt-in state so the Tools picker can render before a conversation row
   // exists (brand-new chat, or zero prior conversations). Called once at
   // startup — per-conversation state takes over once a conversation loads.
+  // The user's connector prefs are fetched alongside and merged in, so the
+  // pre-chat toggles reflect the user's saved choices; a prefs failure
+  // degrades to operator defaults rather than blocking the picker.
   const loadMcpServerCatalogPreview = async () => {
     try {
-      const response = await fetch("/api/mcp-servers", { cache: "no-store" });
+      const [response, prefsResponse] = await Promise.all([
+        fetch("/api/mcp-servers", { cache: "no-store" }),
+        fetch("/api/connector-prefs", { cache: "no-store" }).catch(() => null),
+      ]);
+      if (prefsResponse?.ok) {
+        const prefsData = (await prefsResponse.json()) as {
+          prefs?: { kind: string; connector_id: string; enabled: boolean }[];
+        };
+        bundledPrefsRef.current = new Map(
+          (prefsData.prefs ?? [])
+            .filter((pref) => pref.kind === "bundled")
+            .map((pref) => [pref.connector_id, pref.enabled]),
+        );
+      }
       if (!response.ok) return;
       const data = (await response.json()) as { servers?: MCPServerInfo[] };
-      setMcpServers(data.servers ?? []);
+      setMcpServers(
+        (data.servers ?? []).map((s) => ({
+          ...s,
+          enabled: seedServerEnabled(s),
+        })),
+      );
     } catch {
       /* non-fatal */
     }
@@ -2817,11 +2865,12 @@ export function ChatExperience({
     setActivePillId(null);
     setSidebarOpen(false);
     // New chat = fresh opt-in state. Keep the catalog but reset each toggle
-    // to its default (default-on servers like gamma come back on; everything
-    // else clears) so the Tools picker doesn't inherit the previous
-    // conversation's selection.
+    // to the user's saved Settings → Connections choice, falling back to the
+    // operator default (default-on servers like gamma come back on;
+    // everything else clears) — the previous conversation's selection is
+    // deliberately NOT inherited.
     setMcpServers((prev) =>
-      prev.map((s) => ({ ...s, enabled: s.enabled_by_default ?? false })),
+      prev.map((s) => ({ ...s, enabled: seedServerEnabled(s) })),
     );
     // Lockdown is set per-conversation. New regular chat clears it;
     // new lockdown chat sets it. In LockdownOnly server mode every
@@ -3443,7 +3492,8 @@ export function ChatExperience({
               // Older servers don't advertise the cap — keep the
               // client-side default rather than treating it as 0.
               uploadMaxBytes:
-                typeof cfg.upload_max_bytes === "number" && cfg.upload_max_bytes > 0
+                typeof cfg.upload_max_bytes === "number" &&
+                cfg.upload_max_bytes > 0
                   ? cfg.upload_max_bytes
                   : DEFAULT_UPLOAD_MAX_BYTES,
             });
@@ -3473,7 +3523,10 @@ export function ChatExperience({
             return;
           }
           if (!sessionResponse.ok) {
-            if (classifyBootstrapFailure(sessionResponse.status) === "unauthenticated") {
+            if (
+              classifyBootstrapFailure(sessionResponse.status) ===
+              "unauthenticated"
+            ) {
               window.location.href = "/login";
             } else if (!cancelled) {
               setBackendUnreachable(true);
@@ -3497,7 +3550,10 @@ export function ChatExperience({
           return;
         }
         if (!conversationsResponse.ok) {
-          if (classifyBootstrapFailure(conversationsResponse.status) === "unauthenticated") {
+          if (
+            classifyBootstrapFailure(conversationsResponse.status) ===
+            "unauthenticated"
+          ) {
             window.location.href = "/login";
           } else if (!cancelled) {
             setBackendUnreachable(true);
@@ -3546,7 +3602,10 @@ export function ChatExperience({
         if (!sessionResponse.ok) {
           // A backend-down status is NOT a sign-out — treat it like the
           // transient failures below and keep the cached transcript.
-          if (classifyBootstrapFailure(sessionResponse.status) === "unauthenticated") {
+          if (
+            classifyBootstrapFailure(sessionResponse.status) ===
+            "unauthenticated"
+          ) {
             window.location.href = "/login";
           }
           return;
@@ -3691,7 +3750,8 @@ export function ChatExperience({
             Can&apos;t reach the chat server
           </h1>
           <p className="mt-2 text-[0.875rem] text-[var(--color-text-secondary)]">
-            You&apos;re still signed in — the server may be restarting. Try again in a moment.
+            You&apos;re still signed in — the server may be restarting. Try
+            again in a moment.
           </p>
           <button
             type="button"
@@ -4510,7 +4570,7 @@ export function ChatExperience({
                 <div className="pointer-events-none absolute -top-12 right-3 z-20 flex justify-end sm:-top-14 sm:right-6 lg:right-8">
                   <button
                     aria-label="Jump to latest"
-          data-tip-top="Jump to latest"
+                    data-tip-top="Jump to latest"
                     className="pointer-events-auto inline-flex size-11 items-center justify-center rounded-full border border-[var(--color-border-strong)] bg-[var(--gradient-surface-elevated)] text-[var(--color-text-primary)] shadow-[var(--shadow-md)] backdrop-blur transition hover:border-[var(--color-accent)] hover:text-[var(--color-white)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
                     type="button"
                     onClick={jumpToLatest}
@@ -4562,8 +4622,12 @@ export function ChatExperience({
               {activeConversationId ? (
                 <QueuedInputs
                   items={queuedInputs[activeConversationId] ?? []}
-                  onRemove={(inputId) => void removeQueuedInput(activeConversationId, inputId)}
-                  onSendNow={(inputId) => void sendNowQueuedInput(activeConversationId, inputId)}
+                  onRemove={(inputId) =>
+                    void removeQueuedInput(activeConversationId, inputId)
+                  }
+                  onSendNow={(inputId) =>
+                    void sendNowQueuedInput(activeConversationId, inputId)
+                  }
                 />
               ) : null}
               <Composer
