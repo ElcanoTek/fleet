@@ -1551,48 +1551,33 @@ export function ChatExperience({
     }
   };
 
-  // The user's explicit per-connector availability choices from
-  // Settings → Connections (/connector-prefs, kind "bundled"). A fresh chat
-  // seeds each toggle from this map first and falls back to the operator's
-  // enabled_by_default — so "remember what I chose" is the durable Settings
-  // preference, not whatever the previous conversation happened to have on.
-  // Held in a ref (not state): it only feeds seeding, never rendering.
-  const bundledPrefsRef = useRef<Map<string, boolean>>(new Map());
+  // The server-computed seed state per connector from the last catalog
+  // preview: /api/mcp-servers resolves the user's Settings → Connections
+  // prefs into each server's `enabled` (available AND "on for new chats",
+  // else the operator's enabled_by_default). Cached in a ref so resetting to
+  // a fresh chat can re-seed synchronously without duplicating pref logic
+  // client-side.
+  const seededEnabledRef = useRef<Map<string, boolean>>(new Map());
 
   const seedServerEnabled = (s: MCPServerInfo): boolean =>
-    bundledPrefsRef.current.get(s.name) ?? s.enabled_by_default ?? false;
+    seededEnabledRef.current.get(s.name) ?? s.enabled_by_default ?? false;
 
   // loadMcpServerCatalogPreview fetches the catalog with no per-conversation
   // opt-in state so the Tools picker can render before a conversation row
-  // exists (brand-new chat, or zero prior conversations). Called once at
-  // startup — per-conversation state takes over once a conversation loads.
-  // The user's connector prefs are fetched alongside and merged in, so the
-  // pre-chat toggles reflect the user's saved choices; a prefs failure
-  // degrades to operator defaults rather than blocking the picker.
+  // exists (brand-new chat, or zero prior conversations). Called at startup
+  // and on new-chat resets — per-conversation state takes over once a
+  // conversation loads. The backend has already merged the user's connector
+  // prefs into `enabled`, so the response IS the seed state.
   const loadMcpServerCatalogPreview = async () => {
     try {
-      const [response, prefsResponse] = await Promise.all([
-        fetch("/api/mcp-servers", { cache: "no-store" }),
-        fetch("/api/connector-prefs", { cache: "no-store" }).catch(() => null),
-      ]);
-      if (prefsResponse?.ok) {
-        const prefsData = (await prefsResponse.json()) as {
-          prefs?: { kind: string; connector_id: string; enabled: boolean }[];
-        };
-        bundledPrefsRef.current = new Map(
-          (prefsData.prefs ?? [])
-            .filter((pref) => pref.kind === "bundled")
-            .map((pref) => [pref.connector_id, pref.enabled]),
-        );
-      }
+      const response = await fetch("/api/mcp-servers", { cache: "no-store" });
       if (!response.ok) return;
       const data = (await response.json()) as { servers?: MCPServerInfo[] };
-      setMcpServers(
-        (data.servers ?? []).map((s) => ({
-          ...s,
-          enabled: seedServerEnabled(s),
-        })),
+      const servers = data.servers ?? [];
+      seededEnabledRef.current = new Map(
+        servers.map((s) => [s.name, s.enabled]),
       );
+      setMcpServers(servers);
     } catch {
       /* non-fatal */
     }
@@ -2864,14 +2849,16 @@ export function ChatExperience({
     setActiveConversationId(null);
     setActivePillId(null);
     setSidebarOpen(false);
-    // New chat = fresh opt-in state. Keep the catalog but reset each toggle
-    // to the user's saved Settings → Connections choice, falling back to the
-    // operator default (default-on servers like gamma come back on;
-    // everything else clears) — the previous conversation's selection is
-    // deliberately NOT inherited.
+    // New chat = fresh opt-in state. Re-seed each toggle synchronously from
+    // the last preview's server-computed state (the user's saved
+    // Settings → Connections choices resolved against operator defaults) —
+    // the previous conversation's selection is deliberately NOT inherited.
+    // Then refresh the preview in the background so prefs changed since
+    // startup are picked up.
     setMcpServers((prev) =>
       prev.map((s) => ({ ...s, enabled: seedServerEnabled(s) })),
     );
+    void loadMcpServerCatalogPreviewRef.current();
     // Lockdown is set per-conversation. New regular chat clears it;
     // new lockdown chat sets it. In LockdownOnly server mode every
     // chat is implicitly lockdown — clicking the regular "Clear"

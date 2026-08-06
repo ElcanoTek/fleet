@@ -25,11 +25,16 @@ const (
 // ErrConnectorPrefInvalid is returned for a malformed preference write.
 var ErrConnectorPrefInvalid = errors.New("invalid connector preference")
 
-// ConnectorPref is one explicit per-user availability choice.
+// ConnectorPref is one explicit per-user availability choice. Enabled is the
+// availability toggle ("appears in my pickers"); AutoEnable additionally
+// starts the connector ON in new conversations (bundled connectors only, and
+// meaningful only while Enabled). A row carries the user's COMPLETE explicit
+// state — writers send both fields, so there is no per-field fallback.
 type ConnectorPref struct {
 	Kind           string `json:"kind"`
 	ConnectorID    string `json:"connector_id"`
 	Enabled        bool   `json:"enabled"`
+	AutoEnable     bool   `json:"auto_enable"`
 	DefaultAccount string `json:"default_account,omitempty"`
 	UpdatedAt      int64  `json:"updated_at"`
 }
@@ -47,12 +52,17 @@ func (s *Store) SetConnectorPref(ctx context.Context, userEmail string, p Connec
 		// accounts); a remote connection is one account by construction.
 		return fmt.Errorf("%w: default_account applies only to bundled connectors", ErrConnectorPrefInvalid)
 	}
+	if kind == ConnectorKindRemote && p.AutoEnable {
+		// New-chat seeding is a bundled-catalog concept; remote connections
+		// are governed by availability alone.
+		return fmt.Errorf("%w: auto_enable applies only to bundled connectors", ErrConnectorPrefInvalid)
+	}
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO user_connector_prefs (user_email, connector_kind, connector_id, enabled, default_account, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6)
+		INSERT INTO user_connector_prefs (user_email, connector_kind, connector_id, enabled, auto_enable, default_account, updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7)
 		ON CONFLICT (user_email, connector_kind, connector_id)
-		DO UPDATE SET enabled = EXCLUDED.enabled, default_account = EXCLUDED.default_account, updated_at = EXCLUDED.updated_at`,
-		email, kind, id, p.Enabled, strings.TrimSpace(p.DefaultAccount), time.Now().Unix())
+		DO UPDATE SET enabled = EXCLUDED.enabled, auto_enable = EXCLUDED.auto_enable, default_account = EXCLUDED.default_account, updated_at = EXCLUDED.updated_at`,
+		email, kind, id, p.Enabled, p.AutoEnable, strings.TrimSpace(p.DefaultAccount), time.Now().Unix())
 	return err
 }
 
@@ -69,7 +79,7 @@ func (s *Store) DeleteConnectorPref(ctx context.Context, userEmail, kind, connec
 // kind+"\x00"+connector_id for O(1) lookup by callers.
 func (s *Store) ListConnectorPrefs(ctx context.Context, userEmail string) (map[string]ConnectorPref, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT connector_kind, connector_id, enabled, default_account, updated_at
+		SELECT connector_kind, connector_id, enabled, auto_enable, default_account, updated_at
 		FROM user_connector_prefs WHERE user_email = $1`,
 		normalizeEmail(userEmail))
 	if err != nil {
@@ -79,7 +89,7 @@ func (s *Store) ListConnectorPrefs(ctx context.Context, userEmail string) (map[s
 	out := map[string]ConnectorPref{}
 	for rows.Next() {
 		var p ConnectorPref
-		if err := rows.Scan(&p.Kind, &p.ConnectorID, &p.Enabled, &p.DefaultAccount, &p.UpdatedAt); err != nil {
+		if err := rows.Scan(&p.Kind, &p.ConnectorID, &p.Enabled, &p.AutoEnable, &p.DefaultAccount, &p.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out[ConnectorPrefKey(p.Kind, p.ConnectorID)] = p

@@ -9,6 +9,7 @@ import {
   categoryIcon,
   consentRequired,
   FEATURED_SLUG,
+  effectiveAutoEnable,
   effectiveEnabled,
   fillPlaceholders,
   filterCatalog,
@@ -205,7 +206,13 @@ function ToggleForMe({
 }) {
   return (
     <span className="inline-flex items-center gap-2" title={title}>
-      <SetSwitch small on={on} onToggle={onToggle} label={ariaLabel} disabled={disabled} />
+      <SetSwitch
+        small
+        on={on}
+        onToggle={onToggle}
+        label={ariaLabel}
+        disabled={disabled}
+      />
       <span
         className="cursor-pointer select-none text-[0.74rem] font-medium text-[var(--color-text-secondary)]"
         onClick={() => {
@@ -232,16 +239,20 @@ function BundledCard({
   entry,
   pref,
   on,
+  autoOn,
   busy,
   onToggle,
+  onToggleAuto,
   onPickAccount,
   onReset,
 }: {
   entry: CatalogBundled;
   pref: ConnectorPref | undefined;
   on: boolean;
+  autoOn: boolean;
   busy: boolean;
   onToggle: () => void;
+  onToggleAuto: () => void;
   onPickAccount: (account: string) => void;
   onReset: () => void;
 }) {
@@ -269,6 +280,17 @@ function BundledCard({
           disabled={busy}
           title="Off hides this connector from your chat pickers and runs; scheduled tasks keep their own pinned selection."
         />
+        {on ? (
+          <ToggleForMe
+            on={autoOn}
+            onLabel="On for new chats"
+            offLabel="Off for new chats"
+            ariaLabel={`Start ${label} enabled in new chats`}
+            onToggle={onToggleAuto}
+            disabled={busy}
+            title="On seeds this connector enabled in every new conversation; off means you flip it on per conversation from the Tools picker."
+          />
+        ) : null}
         {on && (entry.accounts?.length ?? 0) > 0 ? (
           <label className="inline-flex items-center gap-[0.45rem] text-[0.73rem] text-[var(--color-text-muted)]">
             Account
@@ -309,7 +331,12 @@ function BundledCard({
 // static catalog entry: the tenant URL with its {placeholders} filled in, the
 // pasted API key (write-only; sealed server-side, never echoed), and/or a
 // bring-your-own OAuth client for vendors without dynamic registration.
-type AddOverrides = { url?: string; apiKey?: string; clientId?: string; clientSecret?: string };
+type AddOverrides = {
+  url?: string;
+  apiKey?: string;
+  clientId?: string;
+  clientSecret?: string;
+};
 
 // dirAddButtonClass — the pill Add/Set up button on a directory card.
 function dirAddButtonClass(added: boolean): string {
@@ -348,8 +375,10 @@ function DirectoryCard({
   const hint = authHint(entry);
   const guide = setupLink(entry);
   const placeholders = placeholdersOf(entry.url);
-  const manualClient = entry.client_registration === "manual" && entry.auth !== "api_key";
-  const needsForm = placeholders.length > 0 || entry.auth === "api_key" || manualClient;
+  const manualClient =
+    entry.client_registration === "manual" && entry.auth !== "api_key";
+  const needsForm =
+    placeholders.length > 0 || entry.auth === "api_key" || manualClient;
   const [formOpen, setFormOpen] = useState(false);
   const [values, setValues] = useState<Record<string, string>>({});
   const [apiKey, setApiKey] = useState("");
@@ -369,7 +398,9 @@ function DirectoryCard({
       ...(manualClient
         ? {
             clientId: clientId.trim(),
-            ...(clientSecret.trim() ? { clientSecret: clientSecret.trim() } : {}),
+            ...(clientSecret.trim()
+              ? { clientSecret: clientSecret.trim() }
+              : {}),
           }
         : {}),
     });
@@ -406,7 +437,12 @@ function DirectoryCard({
           {guide ? (
             <>
               {" "}
-              <a href={guide} target="_blank" rel="noreferrer" className={linkClass}>
+              <a
+                href={guide}
+                target="_blank"
+                rel="noreferrer"
+                className={linkClass}
+              >
                 Setup guide
               </a>
             </>
@@ -419,7 +455,12 @@ function DirectoryCard({
           {entry.docs_url ? (
             <>
               {" · "}
-              <a href={entry.docs_url} target="_blank" rel="noreferrer" className={linkClass}>
+              <a
+                href={entry.docs_url}
+                target="_blank"
+                rel="noreferrer"
+                className={linkClass}
+              >
                 docs
               </a>
             </>
@@ -427,7 +468,12 @@ function DirectoryCard({
           {entry.repo_url ? (
             <>
               {" · "}
-              <a href={entry.repo_url} target="_blank" rel="noreferrer" className={linkClass}>
+              <a
+                href={entry.repo_url}
+                target="_blank"
+                rel="noreferrer"
+                className={linkClass}
+              >
                 source
               </a>
             </>
@@ -435,7 +481,12 @@ function DirectoryCard({
           {entry.setup_url && !entry.setup_hint ? (
             <>
               {" · "}
-              <a href={entry.setup_url} target="_blank" rel="noreferrer" className={linkClass}>
+              <a
+                href={entry.setup_url}
+                target="_blank"
+                rel="noreferrer"
+                className={linkClass}
+              >
                 setup guide
               </a>
             </>
@@ -443,29 +494,48 @@ function DirectoryCard({
         </span>
         {remoteEnabled ? (
           <>
-            {hint ? <span className="shrink-0 whitespace-nowrap">{hint}</span> : null}
+            {hint ? (
+              <span className="shrink-0 whitespace-nowrap">{hint}</span>
+            ) : null}
             <button
               type="button"
               data-testid={`dir-add-${entry.name}`}
               aria-expanded={needsForm ? formOpen : undefined}
-              onClick={() => (needsForm ? setFormOpen((o) => !o) : void onAdd())}
+              onClick={() =>
+                needsForm ? setFormOpen((o) => !o) : void onAdd()
+              }
               disabled={busy || added}
               className={dirAddButtonClass(added)}
             >
-              {added ? "Added" : needsForm ? (formOpen ? "Cancel" : "Set up…") : "Add"}
+              {added
+                ? "Added"
+                : needsForm
+                  ? formOpen
+                    ? "Cancel"
+                    : "Set up…"
+                  : "Add"}
             </button>
           </>
         ) : null}
       </div>
       {remoteEnabled && needsForm && formOpen && !added ? (
-        <FormShell entry={entry} modal={manualClient} onClose={() => setFormOpen(false)}>
+        <FormShell
+          entry={entry}
+          modal={manualClient}
+          onClose={() => setFormOpen(false)}
+        >
           {placeholders.map((ph) => (
-            <label key={ph} className="grid gap-1 text-[0.72rem] text-[var(--color-text-secondary)]">
+            <label
+              key={ph}
+              className="grid gap-1 text-[0.72rem] text-[var(--color-text-secondary)]"
+            >
               <span className="font-medium">Your {placeholderLabel(ph)}</span>
               <input
                 className={SETTINGS_INPUT}
                 value={values[ph] ?? ""}
-                onChange={(e) => setValues((cur) => ({ ...cur, [ph]: e.target.value }))}
+                onChange={(e) =>
+                  setValues((cur) => ({ ...cur, [ph]: e.target.value }))
+                }
                 placeholder={ph}
               />
             </label>
@@ -505,7 +575,9 @@ function DirectoryCard({
                     <button
                       type="button"
                       className={btnClass({ reveal: true })}
-                      onClick={() => navigator.clipboard?.writeText(redirectUri)}
+                      onClick={() =>
+                        navigator.clipboard?.writeText(redirectUri)
+                      }
                     >
                       Copy
                     </button>
@@ -522,7 +594,9 @@ function DirectoryCard({
                 />
               </label>
               <label className="grid gap-1 text-[0.72rem] text-[var(--color-text-secondary)]">
-                <span className="font-medium">OAuth client secret (if your client has one)</span>
+                <span className="font-medium">
+                  OAuth client secret (if your client has one)
+                </span>
                 <input
                   className={SETTINGS_INPUT}
                   type="password"
@@ -598,7 +672,9 @@ function FormShell({
         className="w-full max-w-md rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-1)] p-5 shadow-[var(--shadow-lg)]"
         onClick={(e) => e.stopPropagation()}
       >
-        <h3 className="mb-2 text-[0.9375rem] font-semibold">Set up {entry.display_name}</h3>
+        <h3 className="mb-2 text-[0.9375rem] font-semibold">
+          Set up {entry.display_name}
+        </h3>
         {entry.setup_hint ? (
           <p className="mb-3 text-[0.8125rem] text-[var(--color-text-secondary)]">
             {entry.setup_hint}
@@ -667,9 +743,10 @@ function ConnectionsPageInner() {
   const [notice, setNotice] = useState<string | null>(initialBanner.notice);
   const { showToast } = useToast();
   // Post-add "sign in now?" prompt for OAuth servers (id + display name).
-  const [connectPromptFor, setConnectPromptFor] = useState<{ id: string; name: string } | null>(
-    null,
-  );
+  const [connectPromptFor, setConnectPromptFor] = useState<{
+    id: string;
+    name: string;
+  } | null>(null);
   // Set when an OAuth sign-in was opened in a new tab; on return to this tab
   // the server list refreshes so the new connection shows without a reload.
   const awaitingAuthReturn = useRef(false);
@@ -741,7 +818,9 @@ function ConnectionsPageInner() {
       })
       .catch(() => {});
     fetch("/api/connector-prefs", { cache: "no-store" })
-      .then(async (res) => (res.ok ? ((await res.json()) as { prefs: ConnectorPref[] }) : null))
+      .then(async (res) =>
+        res.ok ? ((await res.json()) as { prefs: ConnectorPref[] }) : null,
+      )
       .then((data) => {
         if (!stale && data) setPrefs(data.prefs ?? []);
       })
@@ -788,7 +867,8 @@ function ConnectionsPageInner() {
         setUrl("");
         setAddServerOpen(false);
         setNotice("Server added. Click Connect to log in.");
-        if (data.id) setConnectPromptFor({ id: data.id, name: data.name || "the server" });
+        if (data.id)
+          setConnectPromptFor({ id: data.id, name: data.name || "the server" });
         refresh();
       })
       .catch((err: unknown) => setError(errMessage(err)))
@@ -808,10 +888,13 @@ function ConnectionsPageInner() {
     })
       .then(async (res) => {
         if (!res.ok) {
-          throw new Error((await res.text()) || `Authorize failed: ${res.status}`);
+          throw new Error(
+            (await res.text()) || `Authorize failed: ${res.status}`,
+          );
         }
         const data = (await res.json()) as { redirect_url?: string };
-        if (!data.redirect_url) throw new Error("No authorization URL returned.");
+        if (!data.redirect_url)
+          throw new Error("No authorization URL returned.");
         // The URL comes from the remote server's OAuth discovery document —
         // third-party data. Navigating this tab (or a tab whose window.opener
         // is us) to a javascript: URL would run it with scripted access to
@@ -855,7 +938,10 @@ function ConnectionsPageInner() {
         if (!res.ok && res.status !== 204) {
           throw new Error((await res.text()) || `Update failed: ${res.status}`);
         }
-        const data = res.status === 204 ? null : ((await res.json()) as { tool_count?: number });
+        const data =
+          res.status === 204
+            ? null
+            : ((await res.json()) as { tool_count?: number });
         setKeyOpenFor(null);
         setKeyValue("");
         setNotice(`API key updated${toolCountSuffix(data?.tool_count)}.`);
@@ -877,7 +963,10 @@ function ConnectionsPageInner() {
   // consent step naming the operator (the operator receives tool-call
   // arguments — which can include conversation content — and, for OAuth
   // flows, often holds the delegated access token).
-  const requestAddFromCatalog = (entry: CatalogThirdParty, overrides?: AddOverrides): Promise<boolean> => {
+  const requestAddFromCatalog = (
+    entry: CatalogThirdParty,
+    overrides?: AddOverrides,
+  ): Promise<boolean> => {
     if (consentRequired(entry)) {
       setConsentFor({ entry, overrides });
       // Not added yet — the card keeps its form; a confirmed consent add
@@ -887,7 +976,10 @@ function ConnectionsPageInner() {
     return addFromCatalog(entry, overrides);
   };
 
-  const addFromCatalog = (entry: CatalogThirdParty, overrides?: AddOverrides): Promise<boolean> => {
+  const addFromCatalog = (
+    entry: CatalogThirdParty,
+    overrides?: AddOverrides,
+  ): Promise<boolean> => {
     setConsentFor(null);
     setError(null);
     setNotice(null);
@@ -910,7 +1002,10 @@ function ConnectionsPageInner() {
             }
           : {}),
         ...(overrides?.clientId
-          ? { client_id: overrides.clientId, client_secret: overrides.clientSecret }
+          ? {
+              client_id: overrides.clientId,
+              client_secret: overrides.clientSecret,
+            }
           : {}),
       }),
     })
@@ -920,12 +1015,15 @@ function ConnectionsPageInner() {
         }
         const data = (await res.json()) as { id?: string; tool_count?: number };
         if (entry.auth === "open" || entry.auth === "api_key") {
-          setNotice(`${entry.display_name} connected${toolCountSuffix(data.tool_count)}.`);
+          setNotice(
+            `${entry.display_name} connected${toolCountSuffix(data.tool_count)}.`,
+          );
         } else {
           setNotice(`${entry.display_name} added. Click Connect to sign in.`);
           // OAuth adds land in login_required — offer the sign-in right here
           // instead of making the user find the row in "Your connections".
-          if (data.id) setConnectPromptFor({ id: data.id, name: entry.display_name });
+          if (data.id)
+            setConnectPromptFor({ id: data.id, name: entry.display_name });
         }
         refresh();
         return true;
@@ -953,7 +1051,10 @@ function ConnectionsPageInner() {
           throw new Error((await res.text()) || `Save failed: ${res.status}`);
         }
         setPrefs((cur) => [
-          ...cur.filter((p) => !(p.kind === pref.kind && p.connector_id === pref.connector_id)),
+          ...cur.filter(
+            (p) =>
+              !(p.kind === pref.kind && p.connector_id === pref.connector_id),
+          ),
           pref,
         ]);
       })
@@ -972,7 +1073,9 @@ function ConnectionsPageInner() {
         if (!res.ok && res.status !== 204) {
           throw new Error((await res.text()) || `Reset failed: ${res.status}`);
         }
-        setPrefs((cur) => cur.filter((p) => !(p.kind === kind && p.connector_id === id)));
+        setPrefs((cur) =>
+          cur.filter((p) => !(p.kind === kind && p.connector_id === id)),
+        );
       })
       .catch((err: unknown) => setError(errMessage(err)))
       .finally(() => setBusy(false));
@@ -1011,7 +1114,9 @@ function ConnectionsPageInner() {
     )
       .then(async (res) => {
         if (!res.ok && res.status !== 204) {
-          throw new Error((await res.text()) || `Unshare failed: ${res.status}`);
+          throw new Error(
+            (await res.text()) || `Unshare failed: ${res.status}`,
+          );
         }
         refresh();
       })
@@ -1027,9 +1132,13 @@ function ConnectionsPageInner() {
     })
       .then(async (res) => {
         if (!res.ok && res.status !== 204) {
-          throw new Error((await res.text()) || `Sign out failed: ${res.status}`);
+          throw new Error(
+            (await res.text()) || `Sign out failed: ${res.status}`,
+          );
         }
-        setNotice("Signed out. The connection is kept — Connect signs back in.");
+        setNotice(
+          "Signed out. The connection is kept — Connect signs back in.",
+        );
         refresh();
       })
       .catch((err: unknown) => setError(errMessage(err)))
@@ -1046,7 +1155,9 @@ function ConnectionsPageInner() {
     })
       .then(async (res) => {
         if (!res.ok && res.status !== 204) {
-          throw new Error((await res.text()) || `Disconnect failed: ${res.status}`);
+          throw new Error(
+            (await res.text()) || `Disconnect failed: ${res.status}`,
+          );
         }
         setNotice("Disconnected.");
         refresh();
@@ -1071,7 +1182,8 @@ function ConnectionsPageInner() {
   const activeCategoryLabel =
     catalogCategory === FEATURED_SLUG
       ? "Featured"
-      : (dirCategories.find((c) => c.slug === catalogCategory)?.label ?? catalogCategory);
+      : (dirCategories.find((c) => c.slug === catalogCategory)?.label ??
+        catalogCategory);
 
   // One card, one prop wiring — shared by the Featured shelf and the category
   // groups. Added-state matches by URL for one-click entries and by
@@ -1081,7 +1193,9 @@ function ConnectionsPageInner() {
     <DirectoryCard
       key={tp.name}
       entry={tp}
-      added={(servers ?? []).some((s) => s.url === tp.url || s.name === tp.name)}
+      added={(servers ?? []).some(
+        (s) => s.url === tp.url || s.name === tp.name,
+      )}
       busy={busy}
       remoteEnabled={catalog?.remote_mcp_enabled ?? false}
       redirectUri={catalog?.oauth_redirect_uri}
@@ -1126,11 +1240,13 @@ function ConnectionsPageInner() {
           <ConnPanel>
             <ConnPanelHead title="Bundled by your workspace" />
             <ConnPanelSub>
-              Reviewed and shipped by your operator. These run inside the sandbox on this
-              deployment with credentials held server-side — nothing leaves the box except the
-              connector’s own API calls. Turning one off here hides it from your chats; pick a
-              default credential account and each conversation can still narrow the set in the
-              Tools picker. Scheduled tasks pin their own selection and are unaffected.
+              Reviewed and shipped by your operator. These run inside the
+              sandbox on this deployment with credentials held server-side —
+              nothing leaves the box except the connector’s own API calls.
+              Turning one off here hides it from your chats; pick a default
+              credential account and each conversation can still narrow the set
+              in the Tools picker. Scheduled tasks pin their own selection and
+              are unaffected.
             </ConnPanelSub>
             <div className="grid grid-cols-2 gap-[0.7rem] max-[860px]:grid-cols-1">
               {catalog.bundled.map((b) => {
@@ -1152,7 +1268,10 @@ function ConnectionsPageInner() {
                           because ClampText's own text color would otherwise
                           win the same-property utility ordering. */}
                       <ClampText
-                        text={b.description || "Enabled by your operator in every conversation."}
+                        text={
+                          b.description ||
+                          "Enabled by your operator in every conversation."
+                        }
                         className="text-[var(--color-text-muted)]!"
                       />
                     </div>
@@ -1160,19 +1279,38 @@ function ConnectionsPageInner() {
                 }
                 const pref = prefFor(prefs, "bundled", b.name);
                 const on = effectiveEnabled(prefs, "bundled", b.name);
+                const autoOn = effectiveAutoEnable(
+                  prefs,
+                  b.name,
+                  b.enabled_by_default,
+                );
                 return (
                   <BundledCard
                     key={b.name}
                     entry={b}
                     pref={pref}
                     on={on}
+                    autoOn={autoOn}
                     busy={busy}
                     onToggle={() =>
                       setConnectorPref({
                         kind: "bundled",
                         connector_id: b.name,
                         enabled: !on,
+                        // First explicit row inherits the current effective
+                        // seeding state so flipping availability alone never
+                        // changes new-chat behavior; disabling clears both.
+                        auto_enable: on ? false : autoOn,
                         default_account: on ? "" : pref?.default_account,
+                      })
+                    }
+                    onToggleAuto={() =>
+                      setConnectorPref({
+                        kind: "bundled",
+                        connector_id: b.name,
+                        enabled: true,
+                        auto_enable: !autoOn,
+                        default_account: pref?.default_account,
                       })
                     }
                     onPickAccount={(account) =>
@@ -1180,6 +1318,7 @@ function ConnectionsPageInner() {
                         kind: "bundled",
                         connector_id: b.name,
                         enabled: true,
+                        auto_enable: autoOn,
                         default_account: account,
                       })
                     }
@@ -1200,8 +1339,8 @@ function ConnectionsPageInner() {
             />
           </ConnPanelHead>
           <ConnPanelSub>
-            Hosted MCP endpoints you’ve connected yourself — from the directory below, or by
-            URL.
+            Hosted MCP endpoints you’ve connected yourself — from the directory
+            below, or by URL.
           </ConnPanelSub>
           {addServerOpen ? (
             <form onSubmit={addServer}>
@@ -1282,7 +1421,9 @@ function ConnectionsPageInner() {
                             onClick={() => {
                               setKeyValue("");
                               setShareOpenFor(null);
-                              setKeyOpenFor((cur) => (cur === s.id ? null : s.id));
+                              setKeyOpenFor((cur) =>
+                                cur === s.id ? null : s.id,
+                              );
                             }}
                             disabled={busy}
                             className={btnClass({ sm: true, reveal: true })}
@@ -1318,7 +1459,9 @@ function ConnectionsPageInner() {
                           onClick={() => {
                             setShareGrantee("");
                             setKeyOpenFor(null);
-                            setShareOpenFor((cur) => (cur === s.id ? null : s.id));
+                            setShareOpenFor((cur) =>
+                              cur === s.id ? null : s.id,
+                            );
                           }}
                           disabled={busy}
                           className={btnClass({ sm: true, reveal: true })}
@@ -1362,11 +1505,15 @@ function ConnectionsPageInner() {
                       ) : shareOpenFor === s.id ? (
                         <div className="mt-2 rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-overlay-soft)] px-3 py-2.5">
                           <p className="mb-2 mt-0 text-[0.75rem] leading-[1.5] text-[var(--color-text-muted)]">
-                            People you share with can use this connection in their chats and
-                            scheduled tasks. Their tool calls run under{" "}
-                            <strong className="text-[var(--color-text-secondary)]">your</strong>{" "}
-                            login, brokered server-side — they never see the credential, and
-                            removing a share revokes access immediately.
+                            People you share with can use this connection in
+                            their chats and scheduled tasks. Their tool calls
+                            run under{" "}
+                            <strong className="text-[var(--color-text-secondary)]">
+                              your
+                            </strong>{" "}
+                            login, brokered server-side — they never see the
+                            credential, and removing a share revokes access
+                            immediately.
                           </p>
                           {(shares[s.id] ?? []).length > 0 ? (
                             <ul className="mb-2 flex flex-wrap gap-1.5">
@@ -1437,7 +1584,8 @@ function ConnectionsPageInner() {
             </ConnRows>
           ) : (
             <ConnEmpty>
-              No remote servers yet — pick one from the directory below, or add one by URL.
+              No remote servers yet — pick one from the directory below, or add
+              one by URL.
             </ConnEmpty>
           )}
         </ConnPanel>
@@ -1446,8 +1594,9 @@ function ConnectionsPageInner() {
           <ConnPanel>
             <ConnPanelHead title="Shared with you" />
             <ConnPanelSub>
-              Connections other users shared with you. Their tools are available in your chats
-              and scheduled tasks; calls run under the owner&apos;s login, brokered server-side.
+              Connections other users shared with you. Their tools are available
+              in your chats and scheduled tasks; calls run under the
+              owner&apos;s login, brokered server-side.
             </ConnPanelSub>
             <ConnRows>
               {sharedWithMe.map((s) => {
@@ -1499,8 +1648,8 @@ function ConnectionsPageInner() {
       {/* ── Group 2 — Credential accounts ── */}
       <ConnGroup>
         <ConnGroupHead title="Credential accounts">
-          Named sign-ins your connectors use — e.g. one per client seat. Secret values are
-          write-only; they are never displayed after saving.
+          Named sign-ins your connectors use — e.g. one per client seat. Secret
+          values are write-only; they are never displayed after saving.
         </ConnGroupHead>
         <CredentialAccountAdmin
           servers={mcpServers}
@@ -1532,12 +1681,13 @@ function ConnectionsPageInner() {
               </button>
             </div>
             <p className="mb-0 mt-[0.35rem] text-[0.78rem] leading-[1.55] text-[var(--color-text-muted)] [&_b]:font-semibold [&_b]:text-[var(--color-text-secondary)]">
-              Hosted servers run by the named operator, not by your workspace. Connecting one
-              signs you in with that operator and sends tool calls — which can include parts of
-              your conversation — to their service under their terms. <b>Official</b> = the
-              service’s own vendor runs the endpoint; <b>Aggregator</b> and <b>Community</b>{" "}
-              endpoints are run by someone else — vet them via the linked docs and source before
-              connecting.
+              Hosted servers run by the named operator, not by your workspace.
+              Connecting one signs you in with that operator and sends tool
+              calls — which can include parts of your conversation — to their
+              service under their terms. <b>Official</b> = the service’s own
+              vendor runs the endpoint; <b>Aggregator</b> and <b>Community</b>{" "}
+              endpoints are run by someone else — vet them via the linked docs
+              and source before connecting.
             </p>
           </div>
 
@@ -1554,7 +1704,11 @@ function ConnectionsPageInner() {
                   placeholder="Search servers — try “postgres”, “crm”, “scraping”…"
                   label="Search connector directory"
                 />
-                <div className="flex flex-wrap gap-[0.35rem]" role="tablist" aria-label="Filter by category">
+                <div
+                  className="flex flex-wrap gap-[0.35rem]"
+                  role="tablist"
+                  aria-label="Filter by category"
+                >
                   <DirChip
                     active={catalogCategory === ""}
                     onClick={() => {
@@ -1602,7 +1756,9 @@ function ConnectionsPageInner() {
               <div ref={directoryResultsRef}>
                 {dirFiltering ? (
                   <p className="m-0 text-[0.72rem] text-[var(--color-text-muted)]">
-                    {dirHits.length === 1 ? "1 server matches" : `${dirHits.length} servers match`}
+                    {dirHits.length === 1
+                      ? "1 server matches"
+                      : `${dirHits.length} servers match`}
                   </p>
                 ) : null}
                 {!dirFiltering && dirFeatured.length > 0 ? (
@@ -1616,14 +1772,20 @@ function ConnectionsPageInner() {
                 {dirHits.length === 0 ? (
                   <ConnEmpty>
                     No servers match “{trimmedQuery}”
-                    {!trimmedQuery && catalogCategory ? ` in ${activeCategoryLabel}` : ""}.
+                    {!trimmedQuery && catalogCategory
+                      ? ` in ${activeCategoryLabel}`
+                      : ""}
+                    .
                   </ConnEmpty>
                 ) : (
                   groupByCategory(dirHits).map((group) => (
                     <div key={group.slug}>
                       <DirCatHead>
                         <span className="inline-flex items-center gap-[0.35rem]">
-                          <Icon name={categoryIcon(group.slug)} className="size-3 shrink-0" />
+                          <Icon
+                            name={categoryIcon(group.slug)}
+                            className="size-3 shrink-0"
+                          />
                           {group.label}
                         </span>
                       </DirCatHead>
@@ -1637,16 +1799,19 @@ function ConnectionsPageInner() {
                   <p className="mt-2 text-[0.72rem] text-[var(--color-text-muted)]">
                     {adminState === "admin" ? (
                       <>
-                        Connecting hosted servers is off because remote MCP isn’t configured.
-                        To enable it, set <CodeChip>FLEET_MCP_OAUTH_ENCRYPTION_KEY</CodeChip>{" "}
-                        (a 32-byte base64 key) and <CodeChip>FLEET_PUBLIC_BASE_URL</CodeChip>{" "}
-                        on the server, then restart — see docs/MCP-CATALOG.md in the fleet
-                        repository for the walkthrough.
+                        Connecting hosted servers is off because remote MCP
+                        isn’t configured. To enable it, set{" "}
+                        <CodeChip>FLEET_MCP_OAUTH_ENCRYPTION_KEY</CodeChip> (a
+                        32-byte base64 key) and{" "}
+                        <CodeChip>FLEET_PUBLIC_BASE_URL</CodeChip> on the
+                        server, then restart — see docs/MCP-CATALOG.md in the
+                        fleet repository for the walkthrough.
                       </>
                     ) : (
                       <>
-                        Connecting hosted servers isn’t enabled on this workspace yet — ask
-                        your administrator to turn on remote MCP connections.
+                        Connecting hosted servers isn’t enabled on this
+                        workspace yet — ask your administrator to turn on remote
+                        MCP connections.
                       </>
                     )}
                   </p>
@@ -1681,8 +1846,9 @@ function ConnectionsPageInner() {
               {connectPromptFor.name} added — sign in now?
             </h3>
             <p className="mb-4 text-[0.8125rem] text-[var(--color-text-secondary)]">
-              One step left: sign in so its tools become available to you. You can also do it
-              later from the Connect button under Your connections.
+              One step left: sign in so its tools become available to you. You
+              can also do it later from the Connect button under Your
+              connections.
             </p>
             <div className="flex justify-end gap-2">
               <button
@@ -1724,7 +1890,9 @@ function ConnectionsPageInner() {
               <h3 className="text-[0.9375rem] font-semibold">
                 Connect {consentFor.entry.display_name}?
               </h3>
-              <ConnBadge variant={provenanceVariant(consentFor.entry.provenance)}>
+              <ConnBadge
+                variant={provenanceVariant(consentFor.entry.provenance)}
+              >
                 {provenanceBadge(consentFor.entry.provenance).label}
               </ConnBadge>
             </div>
@@ -1733,15 +1901,18 @@ function ConnectionsPageInner() {
               <strong className="text-[var(--color-text-primary)]">
                 {consentFor.entry.vendor || "an unnamed operator"}
               </strong>
-              {provenanceBadge(consentFor.entry.provenance).label === "Aggregator"
+              {provenanceBadge(consentFor.entry.provenance).label ===
+              "Aggregator"
                 ? " — a platform that hosts access to other vendors' services, not the services themselves."
                 : " — not the vendor of the underlying service, and not your workspace."}{" "}
-              Once connected, it receives your tool calls (which can include parts of your
-              conversations)
+              Once connected, it receives your tool calls (which can include
+              parts of your conversations)
               {consentFor.entry.auth === "oauth"
                 ? " and holds the access token you grant during sign-in"
                 : ""}
-              {consentFor.overrides?.apiKey ? " and holds the API key you provide" : ""}
+              {consentFor.overrides?.apiKey
+                ? " and holds the API key you provide"
+                : ""}
               .
             </p>
             <p className="mb-4 text-[0.75rem] text-[var(--color-text-muted)]">
@@ -1756,7 +1927,9 @@ function ConnectionsPageInner() {
                   documentation
                 </a>
               ) : null}
-              {consentFor.entry.docs_url && consentFor.entry.repo_url ? " · " : null}
+              {consentFor.entry.docs_url && consentFor.entry.repo_url
+                ? " · "
+                : null}
               {consentFor.entry.repo_url ? (
                 <a
                   href={consentFor.entry.repo_url}
@@ -1781,7 +1954,9 @@ function ConnectionsPageInner() {
               </button>
               <button
                 type="button"
-                onClick={() => void addFromCatalog(consentFor.entry, consentFor.overrides)}
+                onClick={() =>
+                  void addFromCatalog(consentFor.entry, consentFor.overrides)
+                }
                 disabled={busy}
                 className={btnClass({ variant: "primary" })}
               >
