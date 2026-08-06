@@ -595,6 +595,14 @@ type ServerDef struct {
 	Beta             bool   `yaml:"beta"`
 	EnabledByDefault bool   `yaml:"enabled_by_default"`
 
+	// DataSources names the external data this connector reads or writes —
+	// bucket/endpoint identifiers like "s3://index-omnicom-reporting" or
+	// "jmap://my.mailbux.com" — for display on the settings connections page,
+	// so an operator can inventory what a deployment touches without reading
+	// connector source. DECLARATIVE, not verified: the credential's scope
+	// (IAM policy, API key) remains the authority on what is reachable.
+	DataSources []string `yaml:"data_sources"`
+
 	// Probe declares this server's canary for `fleet mcp test --deep`: ONE
 	// read-only tool call that proves the server works end-to-end (credentials
 	// accepted AND the upstream returns real data), one rung past the
@@ -1830,6 +1838,7 @@ func (b *Bundle) MCPServerConfigs() map[string]config.MCPServerConfig {
 			Description:      s.Description,
 			Beta:             s.Beta,
 			EnabledByDefault: s.EnabledByDefault,
+			DataSources:      append([]string(nil), s.DataSources...),
 			Probe:            s.Probe.toConfig(),
 		}
 		switch s.Type {

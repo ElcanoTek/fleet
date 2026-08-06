@@ -235,6 +235,28 @@ const COMPACT_SELECT =
 // BundledCard — one operator-bundled connector (.conn-card): availability
 // toggle, optional default credential-account seat, and the explicit-pref
 // reset. Top-level so ClampText's expand state survives parent re-renders.
+function DataSourceChips({ sources }: { sources?: string[] }) {
+  if (!sources?.length) return null;
+  return (
+    <div
+      className="flex flex-wrap items-center gap-[0.35rem]"
+      data-testid="data-sources"
+    >
+      <span className="text-[0.68rem] uppercase tracking-wide text-[var(--color-text-muted)]">
+        Reads
+      </span>
+      {sources.map((s) => (
+        <code
+          key={s}
+          className="rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] bg-[var(--color-overlay-soft)] px-[0.4rem] py-[0.1rem] text-[0.68rem] text-[var(--color-text-secondary)] [overflow-wrap:anywhere]"
+        >
+          {s}
+        </code>
+      ))}
+    </div>
+  );
+}
+
 function BundledCard({
   entry,
   pref,
@@ -270,6 +292,7 @@ function BundledCard({
         {entry.beta ? <ConnBadge>Beta</ConnBadge> : null}
       </div>
       {entry.description ? <ClampText text={entry.description} /> : null}
+      <DataSourceChips sources={entry.data_sources} />
       <div className="mt-auto flex flex-wrap items-center gap-[0.8rem]">
         <ToggleForMe
           on={on}
@@ -1274,6 +1297,7 @@ function ConnectionsPageInner() {
                         }
                         className="text-[var(--color-text-muted)]!"
                       />
+                      <DataSourceChips sources={b.data_sources} />
                     </div>
                   );
                 }

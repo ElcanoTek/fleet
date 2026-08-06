@@ -33,6 +33,7 @@ type mcpCatalogBundledEntry struct {
 	Optional         bool     `json:"optional"`
 	Accounts         []string `json:"accounts,omitempty"` // credential-account seat names (never values)
 	EnabledByDefault bool     `json:"enabled_by_default"`
+	DataSources      []string `json:"data_sources,omitempty"`
 	Trust            string   `json:"trust"` // always "bundled"
 }
 
@@ -101,6 +102,7 @@ func (s *Server) mcpCatalog(w http.ResponseWriter, r *http.Request) {
 				Optional:         true,
 				Accounts:         info.Accounts,
 				EnabledByDefault: info.EnabledByDefault,
+				DataSources:      append([]string(nil), info.DataSources...),
 				Trust:            "bundled",
 			})
 		}

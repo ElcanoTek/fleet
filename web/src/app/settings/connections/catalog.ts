@@ -46,6 +46,10 @@ export type CatalogBundled = {
   // connector; the availability UI offers them as the user's default seat.
   accounts?: string[];
   enabled_by_default?: boolean;
+  // Manifest-declared external data this connector touches
+  // ("s3://bucket", "jmap://host"). Display-only inventory; the credential's
+  // scope remains the authority on what is actually reachable.
+  data_sources?: string[];
   // false = an always-on connector: wired into every turn by the operator,
   // rendered as a visible-but-locked row (no per-user toggle).
   optional?: boolean;

@@ -1084,6 +1084,9 @@ type MCPServerConfig struct {
 	Description      string
 	Beta             bool
 	EnabledByDefault bool
+	// DataSources: manifest-declared external data identifiers this connector
+	// touches (display-only; see clientconfig.MCPServer.DataSources).
+	DataSources []string
 
 	// TLS hardens an http server's connection (CA pinning / mTLS / public-key
 	// pin) when set in the manifest (#280); nil = default system TLS. Carried

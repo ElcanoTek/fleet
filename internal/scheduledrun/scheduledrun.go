@@ -1390,6 +1390,7 @@ func BuildMCPSpecs(cfg *config.Config) map[string]agent.MCPServerSpec {
 			Description:      sc.Description,
 			Beta:             sc.Beta,
 			EnabledByDefault: sc.EnabledByDefault,
+			DataSources:      append([]string(nil), sc.DataSources...),
 		}
 	}
 	return out
