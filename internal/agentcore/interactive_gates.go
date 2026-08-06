@@ -23,6 +23,14 @@ const (
 	toolNameScheduleTask         = "schedule_task"
 )
 
+// stagedCriticalApproval is one critical tool call this turn parked on an
+// approval card. See orchestrationState.stagedCriticalApprovals for why the set
+// is tracked rather than just counted.
+type stagedCriticalApproval struct {
+	tool       string
+	approvalID string
+}
+
 // checkBashSafety stages risky bash commands (git push, system package-manager
 // actions) for user approval. Non-risky bash passes through. Inert when no
 // approval sink is wired (scheduled mode).
@@ -88,6 +96,14 @@ func (o *orchestrationState) checkCriticalToolApproval(toolName, toolCallID, raw
 	if o.approvalSink == nil {
 		return false, ""
 	}
+	if pending, ok := o.pendingApprovalOnSameServer(toolName); ok {
+		return true, fmt.Sprintf(
+			"APPROVAL_BLOCKED: %s already has a critical action awaiting the user's approval in this turn (%s, approval_id=%s), "+
+				"and its arguments are frozen until the user clicks Approve. A second write staged now would be computed against "+
+				"state that pending action is about to change, so it would land wrong or be rejected outright. Do NOT stage it and "+
+				"do NOT look for another tool that does the same thing. Stop here, summarize what is waiting, and let the user approve it first.",
+			toolName, pending.tool, pending.approvalID)
+	}
 	id, err := o.approvalSink.Stage(toolName, toolCallID, rawInput)
 	if err != nil {
 		log.Printf("approval stage failed (%s): %v", toolName, err)
@@ -100,7 +116,30 @@ func (o *orchestrationState) checkCriticalToolApproval(toolName, toolCallID, raw
 	case PreDeniedSentinel:
 		return true, fmt.Sprintf("APPROVAL_DENIED: the user pre-denied %s for this conversation (session policy). Do NOT retry; tell the user it was blocked by their own pre-approval setting.", toolName)
 	}
-	return true, fmt.Sprintf("APPROVAL_REQUIRED: %s is a critical action and has been staged for explicit user approval (approval_id=%s). Do NOT retry. Summarize what the action would do and wait for the user to click Approve.", toolName, id)
+	o.stagedCriticalApprovals = append(o.stagedCriticalApprovals, stagedCriticalApproval{tool: toolName, approvalID: id})
+	// "Do NOT retry" was read by at least one production model as a rule about
+	// this tool name only, so it went and staged a second, competing write
+	// through a different tool. Name the loophole.
+	return true, fmt.Sprintf(
+		"APPROVAL_REQUIRED: %s is a critical action and has been staged for explicit user approval (approval_id=%s). "+
+			"Do NOT retry, and do NOT attempt the same change through a different tool — every write you stage now is frozen "+
+			"with the arguments it has and cannot see what this one does. Summarize what the action would do and wait for the "+
+			"user to click Approve.", toolName, id)
+}
+
+// pendingApprovalOnSameServer reports an already-staged critical action from the
+// same MCP server (and client variant) as toolName, excluding toolName itself so
+// batch flows over one tool keep working. Caller holds o.mu.
+func (o *orchestrationState) pendingApprovalOnSameServer(toolName string) (stagedCriticalApproval, bool) {
+	for _, staged := range o.stagedCriticalApprovals {
+		if staged.tool == toolName {
+			continue
+		}
+		if sameToolServer(staged.tool, toolName) {
+			return staged, true
+		}
+	}
+	return stagedCriticalApproval{}, false
 }
 
 // checkPreviewEmailSafety always stages a preview_email call for display (the

@@ -19,6 +19,25 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- The interactive critical-tool gate staged one approval card per call with no
+  awareness of the cards already waiting, so a turn could park two competing
+  writes on the same MCP server. Because a card freezes its tool's arguments
+  until the user clicks Approve, the second write is computed against state the
+  first is about to change. A production session lost a Pages deploy this way:
+  `mcp_pages_patch_page` was staged, the model read "Do NOT retry" as a rule
+  about that tool name, rebuilt the same change as a full-file upload, and
+  staged `mcp_pages_deploy_page_upload` for the same page carrying the
+  pre-patch `expected_version`; the user approved both, the patch landed, and
+  the upload was rejected as stale after two CSV ingests, a 14-row
+  reconciliation, and 78 KB already transferred.
+  `checkCriticalToolApproval` now refuses to stage a *different* critical tool
+  on a server that already has a card pending, naming the pending action and
+  its approval id. Keyed on `sameToolServer`, so a repeated tool name still
+  stages (the batch case — N independent records — has no such coupling) and
+  unrelated servers are unaffected; the pre-approval and pre-denial sentinels
+  leave no card pending and so reserve nothing. The `APPROVAL_REQUIRED` text
+  also now forbids re-routing the same change through a different tool, which
+  is the loophole the model actually used.
 - `fleet update` installed the new binaries and web build BEFORE the
   sandbox-image gate, so the gate's fail-closed die aborted with new code
   already on disk while the old service kept running — a silent, deferred
