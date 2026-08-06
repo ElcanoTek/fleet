@@ -19,6 +19,37 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Every Python error was invisible to the agent.** IPython colours its
+  tracebacks; `python_bridge.py` passed `content["traceback"]` through verbatim;
+  JSON encoding turned each ESC into `\u001b`; and
+  `containsEscapedJSONControl` treated any escaped control below `0x20` as
+  smuggled binary. `boundModelVisibleToolResponse` therefore suppressed the
+  whole result at `shown_bytes: 0`, staged **no** artifact (the staging branch
+  is skipped for binary), and told the agent only that "binary previews are
+  intentionally unavailable" — so `run_python` failures came back with the
+  exception erased. A production session took two blind `KeyError`s and a failed
+  `view_file` before abandoning `run_python` for `bash`, where errors arrive as
+  plain text. The same trap ate any `bash` output from a CLI that colours
+  (`git diff --color`, `pytest --color=yes`, `ls --color=always`). ESC is now
+  excluded from the encoded-binary signal — it is the one sub-`0x20` control that
+  ordinary text is full of — and the bridge strips ANSI at the source, so the
+  escapes no longer burn model tokens either. Genuine signals (escaped/literal
+  NUL, `\b`, `\f`, data URIs, base64-named keys, long encoded runs) still
+  suppress.
+- `checkCommandSafety` rejected any bash command containing `":-"`, `":+"`,
+  `":?"`, `"##"` or `"%%"` once a `${` appeared anywhere in it — and the test was
+  against the **whole command**, not the inside of the expansion, so one
+  unrelated `:-` on the line poisoned every expansion. In production
+  `echo "${CUTLASS_INPUT_DIR:-not set}"` was refused, which is the ordinary way
+  to read a variable with a default and what every `set -u` script needs. The
+  rejection bought no safety: those forms only substitute and trim text, and the
+  execution vectors inside an expansion (command substitution, backticks) are
+  matched independently in the same loop — `${` falls through with `continue`, so
+  `${VAR:-$(id)}` is still caught. `${!VAR}` stays blocked as genuine name-level
+  indirection. The guard had no test coverage at all; it does now.
+- The generic sandbox image was missing `file` and `which`. Two agent runs lost
+  a chained command each to `exit 127` reaching for them (`curl … && file x`,
+  `which node && node --check`). Neither was withheld on purpose.
 - The interactive critical-tool gate staged one approval card per call with no
   awareness of the cards already waiting, so a turn could park two competing
   writes on the same MCP server. Because a card freezes its tool's arguments
