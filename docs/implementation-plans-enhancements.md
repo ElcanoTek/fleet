@@ -1,43 +1,114 @@
 # Implementation plans for open enhancements
 
-Working notes for implementers. Source issues remain the work items.
+Working notes for implementers. Prefer the linked issue comment/body when present.
 
-## #989 Kubernetes / dual deployment mode
+| Issue | Plan location |
+| --- | --- |
+| #989 | [comment](https://github.com/ElcanoTek/fleet/issues/989#issuecomment-5198861451) |
+| #988 | [issue body](https://github.com/ElcanoTek/fleet/issues/988) |
+| #987 | [comment](https://github.com/ElcanoTek/fleet/issues/987#issuecomment-5198925257) |
+| #986 | [issue body](https://github.com/ElcanoTek/fleet/issues/986) |
+| #985 | Full plan below (pending issue comment) |
+| #984 | Full plan below (pending issue comment) |
+| #167 | Full plan below (pending issue comment) |
 
-See comment on the issue: https://github.com/ElcanoTek/fleet/issues/989#issuecomment-5198861451
+---
 
-## #988 Remote MCP multi-login
+## #985 — Bento built-in skill (good first issue, size S)
 
-See updated issue body: https://github.com/ElcanoTek/fleet/issues/988
+[Bento](https://github.com/nyblnet/bento) decks are a **single HTML file** (viewer + editor + slides). Agent edits HTML in workspace → downloadable deck **without Gamma or any external API**.
 
-## #987 Browserbase skill
+### Approach
 
-Treat as a **skill + connector**, not a second first-class native tool in v1.
+1. **Built-in skill** in `internal/clientconfig/builtin_skills/`:
+   - `bento-slides/SKILL.md` — when to use; copy template; structure slides; what not to break.
+   - `bento-slides/templates/starter.bento.html` — minimal legal template.
+2. **Agent workflow:** copy template → `workspace/decks/<name>.bento.html` → edit via file tools → user downloads and opens in browser.
+3. **License / attribution:** confirm redistribution allowed; attribute in skill + NOTICE.
+4. **Validation:** `ValidateSkills` frontmatter; optional eval "Create a 5-slide deck about X".
+5. **Docs:** one line in `docs/SKILLS.md`. No new HTTP APIs.
 
-Goals: enable with API key; agent returns live view URL; user logs in / solves captcha; agent continues; explicit/TTL teardown.
+### Non-goals
 
-Non-goals: replace in-sandbox Playwright; unattended captcha; secrets in sandbox env.
+PPTX export; hosted collab editing; PowerPoint animation parity.
 
-Design: BROWSERBASE_API_KEY via broker/catalog; skill pack; clickable live URL; fail closed under network=none; CI skips live calls without secret.
+### Acceptance
 
-Phases: (1) skill + wiring + docs (2) e2e checklist (3) optional Connections entry.
+- [ ] Skill shows in Settings → Skills as Built-in
+- [ ] `/bento-slides` loads instructions
+- [ ] Agent produces openable `.bento.html`
+- [ ] License/attribution settled
+- [ ] Works offline except model provider
 
-## #986 Test official MCPs / improve catalog
+---
 
-Phases: inventory matrix → automated smoke → manual OAuth pack (GitHub, Google, Slack|Notion, Stripe) → hide dead / fill hints → UX polish for found bugs only.
+## #984 — Fleet ↔ Buzz bridge
 
-## #985 Bento built-in skill (size S)
+Stand up a Buzz workspace where a human can **message a Fleet-backed agent** and get real governed fleet turns. Fleet stays execution/governance; Buzz is chat front door.
 
-Built-in skill + template under builtin_skills/bento-slides/. Agent edits single-file HTML deck. No external APIs. Confirm license.
+| System | Role |
+| --- | --- |
+| **Fleet** | Agent loop, sandbox, MCP broker, budgets, approvals |
+| **Buzz** | Human/agent messaging (Nostr + ACP) |
 
-## #984 Fleet ↔ Buzz bridge
+Do **not** reimplement fleet inside Buzz. Thin bridge only.
 
-Thin bridge: Human in Buzz → buzz-acp agent → fleet chat HTTP/SSE as bot user. v1 text in/out + approval deep-link. docs/BUZZ.md runbook.
+```
+Human in Buzz ──▶ buzz-acp agent ("Fleet") ──▶ fleet chat HTTP/SSE (bot user)
+```
 
-## #167 Three residual decisions
+1. **Bridge process** — registers as Buzz agent; on inbound message POSTs fleet turn as service/bot user; streams SSE back to Buzz.
+2. **Auth** — dedicated bot user + token (`fleet chat user add`). v1 single shared fleet user; multi-tenant mapping is v2.
+3. **Capability** — text in/out; approval deep-link to Fleet UI; short tool summaries in Buzz, full detail in fleet run log.
+4. **Runbook** — `docs/BUZZ.md`: create workspace → install fleet → bot user → run bridge → message agent.
+5. **Tests** — contract test with mock SSE; manual integration checklist.
 
-1. Child-side authorization → Implement (policy snapshot on OpenScope).
-2. Approval seat → Persist staged scope (unblocks #988).
-3. OAuth parent-readable → Accept v1 + document; optional v2 separate issue.
+### Phases
 
-Sequence: 2 → 1 → 3 docs. Verify on dev code.
+| Phase | Deliverable |
+| --- | --- |
+| 0 | Spike ACP external command constraints |
+| 1 | Bridge MVP + bot user auth |
+| 2 | Streaming + error/approval messaging |
+| 3 | `docs/BUZZ.md` + smoke checklist |
+
+### Non-goals (v1)
+
+Fleet hosting Buzz relay; full tool UI parity; every Buzz user → fleet user map.
+
+### Acceptance
+
+- [ ] Documented Buzz + fleet setup
+- [ ] Message in Buzz → fleet turn → answer in Buzz
+- [ ] Clear errors for fleet down / 401 / timeout
+- [ ] Bot token not logged; secrets in env only
+
+Size: **M** if ACP external command is clean; **L** if deep Buzz harness embed needed.
+
+---
+
+## #167 — Three residual decisions
+
+Delivered broker work (can't-read) is solid. Explicit decisions:
+
+### 1. Child-side authorization → **Implement**
+
+Parent-only gating is insufficient (Gate-2 proof). On `OpenScope`, pass policy snapshot; child enforces allowlists on every CallTool/discovery; restrict unscoped shared client for agent paths; tests for refused disallowed tools. Update `docs/MCP-BROKER-SCOPES.md`.
+
+### 2. Approval execution seat → **Persist staged scope**
+
+Preserve `{server, account}` at staging; reopen scope on approve; fail closed if account revoked; show account in UI. Unblocks #988. Tests: stage with B, approve later, assert B used.
+
+### 3. OAuth control-plane tokens parent-readable → **Accept v1 + document**
+
+Accept connect/callback/CRUD parent-side for v1; document threat model (parent compromise ⇒ remote MCP tokens). Agent runs stay child-side (ADR-0040). Optional v2: full control-plane behind child as separate issue.
+
+### Closing criteria
+
+| Residual | Resolution |
+| --- | --- |
+| 1 Child auth | Implemented + tests on `dev` |
+| 2 Approval seat | Implemented + tests on `dev` |
+| 3 OAuth parent-readable | Explicit accept + docs **or** isolation |
+
+Sequence: **2 → 1 → 3 docs**. Verify against code, not PR descriptions alone.
