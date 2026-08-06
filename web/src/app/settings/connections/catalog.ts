@@ -46,6 +46,10 @@ export type CatalogBundled = {
   // connector; the availability UI offers them as the user's default seat.
   accounts?: string[];
   enabled_by_default?: boolean;
+  // Manifest-declared external data this connector touches
+  // ("s3://bucket", "jmap://host"). Display-only inventory; the credential's
+  // scope remains the authority on what is actually reachable.
+  data_sources?: string[];
   // false = an always-on connector: wired into every turn by the operator,
   // rendered as a visible-but-locked row (no per-user toggle).
   optional?: boolean;
@@ -171,9 +175,15 @@ export function categoriesOf(
   const unknown = [...counts.keys()]
     .filter((s) => !CATEGORY_ORDER.includes(s))
     .sort();
-  return [...known.filter((s) => s !== "other"), ...unknown, ...(counts.has("other") ? ["other"] : [])].map(
-    (slug) => ({ slug, label: categoryLabel(slug), count: counts.get(slug) ?? 0 }),
-  );
+  return [
+    ...known.filter((s) => s !== "other"),
+    ...unknown,
+    ...(counts.has("other") ? ["other"] : []),
+  ].map((slug) => ({
+    slug,
+    label: categoryLabel(slug),
+    count: counts.get(slug) ?? 0,
+  }));
 }
 
 // FEATURED_SLUG is the reserved pseudo-category slug for the ✦ Featured
@@ -270,7 +280,10 @@ export function placeholderLabel(ph: string): string {
 // are trimmed; slashes are allowed (some templates take a host or a path
 // segment) but whitespace and braces are not — the preview + backend URL
 // validation catch the rest.
-export function fillPlaceholders(url: string, values: Record<string, string>): string {
+export function fillPlaceholders(
+  url: string,
+  values: Record<string, string>,
+): string {
   return url.replace(/\{([^{}]+)\}/g, (whole, ph: string) => {
     const v = (values[ph] ?? "").trim();
     return v === "" ? whole : v;

@@ -246,6 +246,7 @@ func publicSpecsFromDescriptors(descriptors []mcpbroker.ServerDescriptor) map[st
 			Description:      descriptor.Description,
 			Beta:             descriptor.Beta,
 			EnabledByDefault: descriptor.EnabledByDefault,
+			DataSources:      append([]string(nil), descriptor.DataSources...),
 		}
 	}
 	return out
@@ -266,6 +267,7 @@ func publicMCPServerSpecs(src map[string]agent.MCPServerSpec) map[string]agent.M
 			Description:      spec.Description,
 			Beta:             spec.Beta,
 			EnabledByDefault: spec.EnabledByDefault,
+			DataSources:      append([]string(nil), spec.DataSources...),
 		}
 	}
 	return out

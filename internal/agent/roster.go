@@ -43,6 +43,10 @@ type OptionalServerInfo struct {
 	// the `<VAR>_<ACCOUNT>` suffix scan over AccountVars). Names only — never
 	// secret values. Empty when the server has no named accounts provisioned.
 	Accounts []string `json:"accounts,omitempty"`
+	// DataSources: manifest-declared external data identifiers this connector
+	// touches ("s3://bucket", "jmap://host"). Display-only inventory for the
+	// settings connections page; the credential's scope stays the authority.
+	DataSources []string `json:"data_sources,omitempty"`
 }
 
 // buildOptionalServerMetadata snapshots the Optional-server subset of the
@@ -78,6 +82,7 @@ func buildOptionalServerMetadataFromCatalog(
 			Description:      spec.Description,
 			Beta:             spec.Beta,
 			EnabledByDefault: spec.EnabledByDefault,
+			DataSources:      append([]string(nil), spec.DataSources...),
 			// Provisioned credential-account seats (names only) so the picker can
 			// surface which accounts back this server. Nil when none are set.
 			Accounts: append([]string(nil), accounts[name]...),

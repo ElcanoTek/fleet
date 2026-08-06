@@ -299,6 +299,7 @@ func (b *brokerBackend) Reload(ctx context.Context) (*mcpbroker.ReloadResult, er
 				Description:      spec.Description,
 				Beta:             spec.Beta,
 				EnabledByDefault: spec.EnabledByDefault,
+				DataSources:      append([]string(nil), spec.DataSources...),
 				UsesWorkspace:    agentcore.EnvReferencesWorkspace(spec.Env),
 			})
 		}

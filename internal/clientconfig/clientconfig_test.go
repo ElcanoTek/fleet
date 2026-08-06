@@ -481,6 +481,7 @@ mcp_servers:
     display_name: "Always On"
     description: "an optional connector"
     beta: true
+    data_sources: ["s3://bucket-a", "jmap://mail.example.com"]
     env:
       A_OUT: "${A_SECRET}"
       A_LITERAL: "fixed"
@@ -557,6 +558,9 @@ mcp_servers:
 	}
 	if a.DisplayName != "Always On" || a.Description != "an optional connector" {
 		t.Errorf("always_on optional labels dropped: display=%q desc=%q", a.DisplayName, a.Description)
+	}
+	if len(a.DataSources) != 2 || a.DataSources[0] != "s3://bucket-a" {
+		t.Errorf("data_sources dropped: %v", a.DataSources)
 	}
 
 	h := cfgs["http_one"]

@@ -275,6 +275,10 @@ type MCPServerSpec struct {
 	// connectors we want first-class whenever their credentials are
 	// configured (e.g. gamma).
 	EnabledByDefault bool
+
+	// DataSources: manifest-declared external data identifiers this connector
+	// touches, for the settings-UI inventory (display-only).
+	DataSources []string
 }
 
 // fastIOSystemPromptSection is the dedicated Fast.io guidance for
