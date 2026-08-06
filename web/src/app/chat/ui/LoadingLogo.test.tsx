@@ -39,4 +39,16 @@ describe("LoadingLogo", () => {
     // fleet's orbital star must not render
     expect(container.textContent).not.toContain("1135.96");
   });
+
+  it("keeps the branded loader at the caller's size — never the logo's natural size", () => {
+    clientConfig.logoUrl = "/api/brand/logo";
+    const { container } = render(<LoadingLogo size={20} />);
+    const box = container.firstElementChild as HTMLElement;
+    expect(box.style.width).toBe("20px");
+    expect(box.style.height).toBe("20px");
+    // the mark sits inset inside the box (64%), leaving room for the arc
+    const img = container.querySelector("img") as HTMLElement;
+    expect(img.style.inset).toBe("18%");
+    expect(img.style.width).toBe("64%");
+  });
 });
