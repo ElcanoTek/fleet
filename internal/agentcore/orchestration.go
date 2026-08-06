@@ -119,6 +119,21 @@ type orchestrationState struct {
 	approvalSink   ApprovalStager
 	memoryProposer MemoryProposer
 
+	// stagedCriticalApprovals is every critical tool this turn staged for
+	// approval that has not executed yet. A staged card freezes its arguments:
+	// the human clicks Approve minutes later and the tool runs with whatever the
+	// model wrote at stage time. That makes two staged writes to the same MCP
+	// server actively unsafe when the second one's arguments depend on the
+	// first's outcome — an optimistic-concurrency token, a record id, a version
+	// pointer. A real session lost a Pages deploy exactly this way: patch_page
+	// was staged, the model read "Do NOT retry" as "use a different tool",
+	// staged deploy_page_upload for the same page with expected_version frozen
+	// at the pre-patch version, the human approved both, and the second write
+	// died on stale_version after all the work was done. checkCriticalToolApproval
+	// refuses the second stage instead. Same tool name is allowed through: that
+	// is the batch case (N independent records), which has no such coupling.
+	stagedCriticalApprovals []stagedCriticalApproval
+
 	// noteProposer stages agent-proposed admin-notes edits (BOTH modes), unlike
 	// memoryProposer which is interactive-only. Wired by the drivers via
 	// setNoteProposer; nil leaves propose_note reporting "not wired".

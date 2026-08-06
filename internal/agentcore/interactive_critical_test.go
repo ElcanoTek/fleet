@@ -129,3 +129,87 @@ func TestInteractiveCriticalToolApproval(t *testing.T) {
 		}
 	})
 }
+
+// TestOneStagedWritePerServer pins the fix for a production data loss: an agent
+// staged mcp_pages_patch_page for approval, read the "Do NOT retry" in the
+// result as a rule about that tool name, rebuilt the same change as a full-file
+// upload, and staged mcp_pages_deploy_page_upload for the SAME page. Both cards
+// carried frozen arguments; the human approved both; the patch landed as version
+// 145 and the upload — still carrying expected_version 143 from before the patch
+// existed — was rejected as stale after every expensive step was already paid
+// for. A second write to the same server must be refused at stage time.
+func TestOneStagedWritePerServer(t *testing.T) {
+	t.Cleanup(func() { ConfigureAgentPolicy(testFixturePolicy()) })
+	ConfigureAgentPolicy(AgentPolicy{CriticalToolSuffixes: []string{
+		"patch_page", "deploy_page_upload", "create_datastream", "create_deal",
+	}})
+
+	t.Run("a different write on the same server is refused, not staged", func(t *testing.T) {
+		sink := &stagerFake{}
+		p := NewInteractivePolicy(0, 0, sink, nil)
+
+		blocked, msg := p.BeforeToolCall("mcp_pages_patch_page", "tc-1", `{"slug":"energizer-weather-kpi"}`)
+		if !blocked || !strings.Contains(msg, "APPROVAL_REQUIRED") {
+			t.Fatalf("first write should stage: blocked=%v msg=%s", blocked, msg)
+		}
+		// The message must close the loophole the model actually walked through.
+		if !strings.Contains(msg, "different tool") {
+			t.Errorf("staging message must forbid re-routing through another tool, got: %s", msg)
+		}
+
+		blocked, msg = p.BeforeToolCall("mcp_pages_deploy_page_upload", "tc-2", `{"expected_version":"143"}`)
+		if !blocked {
+			t.Fatal("a second competing write must be blocked")
+		}
+		if !strings.Contains(msg, "APPROVAL_BLOCKED") {
+			t.Errorf("want APPROVAL_BLOCKED, got: %s", msg)
+		}
+		if !strings.Contains(msg, "mcp_pages_patch_page") || !strings.Contains(msg, "appr-1") {
+			t.Errorf("message must name the pending action and its approval id, got: %s", msg)
+		}
+		if len(sink.staged) != 1 {
+			t.Errorf("the second write must never reach the sink, staged = %v", sink.staged)
+		}
+	})
+
+	t.Run("repeating the same tool stays allowed for batch flows", func(t *testing.T) {
+		sink := &stagerFake{}
+		p := NewInteractivePolicy(0, 0, sink, nil)
+		p.BeforeToolCall("mcp_pubmatic_mcp_create_deal", "tc-1", `{"id":"1"}`)
+		if blocked, msg := p.BeforeToolCall("mcp_pubmatic_mcp_create_deal", "tc-2", `{"id":"2"}`); !blocked ||
+			!strings.Contains(msg, "APPROVAL_REQUIRED") {
+			t.Fatalf("N independent records on one tool must each stage: blocked=%v msg=%s", blocked, msg)
+		}
+		if len(sink.staged) != 2 {
+			t.Errorf("both batch records should stage, got %v", sink.staged)
+		}
+	})
+
+	t.Run("a write on a different server stays allowed", func(t *testing.T) {
+		sink := &stagerFake{}
+		p := NewInteractivePolicy(0, 0, sink, nil)
+		p.BeforeToolCall("mcp_pages_patch_page", "tc-1", `{}`)
+		if blocked, msg := p.BeforeToolCall("mcp_keel_create_datastream", "tc-2", `{}`); !blocked ||
+			!strings.Contains(msg, "APPROVAL_REQUIRED") {
+			t.Fatalf("unrelated server must still stage: blocked=%v msg=%s", blocked, msg)
+		}
+		if len(sink.staged) != 2 {
+			t.Errorf("staged = %v, want one per server", sink.staged)
+		}
+	})
+
+	t.Run("pre-approved and pre-denied calls do not reserve the server", func(t *testing.T) {
+		// Neither leaves a card pending, so neither can be overtaken by a later
+		// write. Recording them would block legitimate follow-up work.
+		for _, sentinel := range []string{PreApprovedSentinel, PreDeniedSentinel} {
+			sink := &stagerFake{ret: sentinel}
+			p := NewInteractivePolicy(0, 0, sink, nil)
+			p.BeforeToolCall("mcp_pages_patch_page", "tc-1", `{}`)
+			sink.ret = ""
+			blocked, msg := p.BeforeToolCall("mcp_pages_deploy_page_upload", "tc-2", `{}`)
+			if !blocked || strings.Contains(msg, "APPROVAL_BLOCKED") {
+				t.Errorf("%s must not reserve the server, got blocked=%v msg=%s", sentinel, blocked, msg)
+			}
+		}
+	})
+}
