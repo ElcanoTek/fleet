@@ -126,7 +126,11 @@ func bundledPrefFor(prefs map[string]store.ConnectorPref, info agent.OptionalSer
 	if seat != "" && !slices.Contains(info.Accounts, seat) {
 		seat = ""
 	}
-	return p.Enabled, p.Enabled, seat
+	// Two-toggle semantics: availability and new-chat seeding are independent
+	// intents. A row carries the user's complete explicit state, so defaultOn
+	// is simply "available AND chosen always-on" — no fallback to the
+	// operator's enabled_by_default once the user has expressed a choice.
+	return p.Enabled, p.Enabled && p.AutoEnable, seat
 }
 
 // remoteEnabledFor resolves a user's effective "enabled for me" state for a

@@ -122,6 +122,29 @@ func TestBundledPrefResolution(t *testing.T) {
 		t.Errorf("seat = %q, want client-a", seat)
 	}
 
+	// Two-toggle semantics: an explicit row carries the user's complete
+	// choice — available without auto_enable means new chats start OFF even
+	// when the operator default is on; auto_enable turns seeding back on;
+	// and a disabled row never seeds regardless of auto_enable.
+	availOnly := map[string]store.ConnectorPref{
+		store.ConnectorPrefKey(store.ConnectorKindBundled, "gamma"): {Kind: store.ConnectorKindBundled, ConnectorID: "gamma", Enabled: true},
+	}
+	if avail, on, _ := bundledPrefFor(availOnly, info); !avail || on {
+		t.Errorf("available-only pref: avail=%v on=%v, want true,false", avail, on)
+	}
+	alwaysOn := map[string]store.ConnectorPref{
+		store.ConnectorPrefKey(store.ConnectorKindBundled, "gamma"): {Kind: store.ConnectorKindBundled, ConnectorID: "gamma", Enabled: true, AutoEnable: true},
+	}
+	if avail, on, _ := bundledPrefFor(alwaysOn, info); !avail || !on {
+		t.Errorf("always-on pref: avail=%v on=%v, want true,true", avail, on)
+	}
+	disabledAuto := map[string]store.ConnectorPref{
+		store.ConnectorPrefKey(store.ConnectorKindBundled, "gamma"): {Kind: store.ConnectorKindBundled, ConnectorID: "gamma", Enabled: false, AutoEnable: true},
+	}
+	if avail, on, _ := bundledPrefFor(disabledAuto, info); avail || on {
+		t.Errorf("disabled pref: avail=%v on=%v, want false,false", avail, on)
+	}
+
 	if !remoteEnabledFor(none, "srv-1") {
 		t.Error("remote defaults to enabled")
 	}
