@@ -6,6 +6,7 @@ import json
 import math
 import os
 import queue
+import re
 import signal
 import subprocess
 import sys
@@ -271,6 +272,21 @@ def remaining_time(deadline):
     return max(0.01, deadline - time.time())
 
 
+# IPython colours every traceback it emits, and the kernel hands those ANSI
+# sequences straight through content["traceback"]. Nobody downstream is a
+# terminal: the escapes reach a model as noise it pays for by the token, and a
+# JSON-encoded ESC () used to trip the host's encoded-binary detector, which
+# suppressed the entire error. Strip them at the source — CSI/SGR sequences plus
+# the bare two-character forms IPython also uses.
+ANSI_ESCAPE_RE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|[@-Z\\-_])")
+
+
+def strip_ansi(text):
+    if not text:
+        return text
+    return ANSI_ESCAPE_RE.sub("", text)
+
+
 def run_code_on_kernel(code, client, timeout_seconds=None):
     """Helper to run code and capture output."""
     timeout = timeout_seconds if timeout_seconds else DEFAULT_EXECUTION_TIMEOUT_SECONDS
@@ -295,7 +311,7 @@ def run_code_on_kernel(code, client, timeout_seconds=None):
                     shell_content = shell_msg.get("content", {})
                     if shell_content.get("status") == "error":
                         traceback = shell_content.get("traceback", [])
-                        error_content = "\n".join(traceback) or error_content
+                        error_content = strip_ansi("\n".join(traceback)) or error_content
                         status = "error"
             except queue.Empty:
                 pass
@@ -324,7 +340,7 @@ def run_code_on_kernel(code, client, timeout_seconds=None):
                 collect_image(data, images)
             elif msg_type == 'error':
                 traceback = content.get('traceback', [])
-                error_content = '\n'.join(traceback)
+                error_content = strip_ansi('\n'.join(traceback))
                 status = "error"
             elif msg_type == 'status':
                 if content['execution_state'] == 'idle':

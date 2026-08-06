@@ -66,6 +66,7 @@ RUN microdnf upgrade -y \
         bash \
         ca-certificates \
         coreutils \
+        file \
         findutils \
         git \
         grep \
@@ -96,6 +97,7 @@ RUN microdnf upgrade -y \
         python3-xlsxwriter \
         ripgrep \
         sed \
+        which \
         shadow-utils \
     && microdnf clean all \
     && rm -rf /var/cache/dnf /var/cache/yum /var/log/dnf* /var/log/yum* /usr/share/locale/* /usr/share/man \

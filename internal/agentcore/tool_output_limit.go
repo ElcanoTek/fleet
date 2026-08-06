@@ -626,6 +626,18 @@ func containsFoldASCII(s, needle string) bool {
 	return false
 }
 
+// escControl is ESC (0x1b). A JSON encoder emits it as , and that is the
+// first byte of every ANSI colour sequence — so it is the one sub-0x20 control
+// that ordinary TEXT output is full of, not a sign of smuggled binary. Treating
+// it as binary silently destroyed every Python error on the platform: IPython
+// colours its tracebacks, python_bridge.py hands them through verbatim, the JSON
+// encoding turned each ESC into , and boundModelVisibleToolResponse
+// suppressed the whole result with shown_bytes 0 and no staged artifact — so the
+// agent was told only that "binary previews are intentionally unavailable" and
+// never saw its own exception. The same trap ate any bash output from a CLI that
+// colours (git diff --color, pytest --color=yes, ls --color=always).
+const escControl = 0x1b
+
 func containsEscapedJSONControl(s string) bool {
 	for i := 0; i < len(s); i++ {
 		if s[i] != '\\' || i+1 >= len(s) {
@@ -643,7 +655,7 @@ func containsEscapedJSONControl(s string) bool {
 			continue
 		}
 		value, ok := parseHex4(s[i+2 : i+6])
-		if ok && value < 0x20 {
+		if ok && value < 0x20 && value != escControl {
 			return true
 		}
 		i += 5
