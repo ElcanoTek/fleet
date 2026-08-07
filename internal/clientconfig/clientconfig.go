@@ -485,10 +485,10 @@ type EmptyState struct {
 // path. A template therefore cannot grant any capability the create path does
 // not already validate.
 type TaskTemplate struct {
-	Name        string           `yaml:"name"`
-	Description string           `yaml:"description"`
-	Icon        string           `yaml:"icon"`
-	Task        TaskTemplateTask `yaml:"task"`
+	Name        string           `yaml:"name" json:"name"`
+	Description string           `yaml:"description" json:"description,omitempty"`
+	Icon        string           `yaml:"icon" json:"icon,omitempty"`
+	Task        TaskTemplateTask `yaml:"task" json:"task"`
 }
 
 // TaskTemplateTask is the partial task payload a template carries — the subset
