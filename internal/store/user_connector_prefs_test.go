@@ -72,7 +72,11 @@ func TestConnectorPrefs(t *testing.T) {
 		t.Fatalf("re-delete: %v", err)
 	}
 	prefs, _ = s.ListConnectorPrefs(ctx, email)
-	if len(prefs) != 1 {
-		t.Errorf("want 1 pref after delete, got %+v", prefs)
+	// xandr (bundled) + feeds (bundled, the auto_enable row) remain.
+	if len(prefs) != 2 {
+		t.Errorf("want 2 prefs after delete, got %+v", prefs)
+	}
+	if _, gone := prefs[ConnectorPrefKey(ConnectorKindRemote, "srv-1")]; gone {
+		t.Errorf("deleted remote pref still present: %+v", prefs)
 	}
 }
