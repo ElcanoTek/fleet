@@ -234,7 +234,6 @@ func (s *Server) handleAdminTeamRename(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	//nolint:gosec // G706: %q escapes CR/LF, so request-supplied values cannot forge a log line.
 	log.Printf("admin teams: renamed %q -> %q (%d users, %d projects) by %q",
 		body.From, body.To, usersN, projectsN, userFromCtx(r.Context()))
 	w.Header().Set("Content-Type", "application/json")
