@@ -774,6 +774,8 @@ func (s *Server) Routes() http.Handler {
 	// the other /admin/* endpoints; role writes also drive the ops-center seam.
 	mux.Handle("/admin/users", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminUsers)))))
 	mux.Handle("/admin/users/", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminUserItem)))))
+	// Team rename: relabels users.team_id + projects.team_id atomically.
+	mux.Handle("/admin/teams/rename", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminTeamRename)))))
 	// Migration status (#256): applied vs pending chat-DB migrations. Admin-gated
 	// like the other /admin/* reads; strictly read-only (applies nothing).
 	mux.Handle("/admin/migrations", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleMigrations)))))

@@ -429,3 +429,50 @@ func TestNormalizeEmail(t *testing.T) {
 		})
 	}
 }
+
+// TestRenameTeam pins the atomic relabel: users AND team-shared projects move
+// together; unknown teams error; merging onto an existing team is allowed.
+func TestRenameTeam(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	mk := func(email, team string) {
+		t.Helper()
+		if _, err := s.CreateUser(ctx, email, "long-enough-pw"); err != nil {
+			t.Fatalf("create %s: %v", email, err)
+		}
+		if team != "" {
+			if _, err := s.SetUserRoleTeam(ctx, email, nil, &team); err != nil {
+				t.Fatalf("team %s: %v", email, err)
+			}
+		}
+	}
+	mk("a@x.com", "devops")
+	mk("b@x.com", "devops")
+	mk("c@x.com", "growth")
+
+	users, projects, err := s.RenameTeam(ctx, "devops", "platform")
+	if err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+	if users != 2 || projects != 0 {
+		t.Errorf("counts = %d users %d projects, want 2/0", users, projects)
+	}
+	u, _ := s.GetUser(ctx, "a@x.com")
+	if u.TeamID != "platform" {
+		t.Errorf("a team = %q", u.TeamID)
+	}
+	if u, _ = s.GetUser(ctx, "c@x.com"); u.TeamID != "growth" {
+		t.Errorf("growth bystander renamed: %q", u.TeamID)
+	}
+
+	if _, _, err = s.RenameTeam(ctx, "nope", "x"); err == nil {
+		t.Error("unknown team accepted")
+	}
+	if _, _, err = s.RenameTeam(ctx, "growth", "growth"); err == nil {
+		t.Error("same-name rename accepted")
+	}
+	// merge onto an existing team
+	if users, _, err = s.RenameTeam(ctx, "growth", "platform"); err != nil || users != 1 {
+		t.Errorf("merge: users=%d err=%v", users, err)
+	}
+}

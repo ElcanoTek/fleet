@@ -200,6 +200,11 @@ export default function AdminUsersPage() {
   const [filterRole, setFilterRole] = useState("all");
   const [filterOps, setFilterOps] = useState("all");
   const [filterTeam, setFilterTeam] = useState("all");
+  // Rename-team flow: non-null = the inline rename input is open, holding the
+  // draft new name. Renames relabel the team everywhere (all members + team-
+  // shared projects) server-side in one transaction.
+  const [renameDraft, setRenameDraft] = useState<string | null>(null);
+  const [renameStatus, setRenameStatus] = useState<string | null>(null);
 
   useEffect(() => {
     if (admin === "member") router.replace("/settings");
@@ -416,6 +421,32 @@ export default function AdminUsersPage() {
     }
   };
 
+  const renameTeam = async (from: string, to: string) => {
+    setRenameStatus("saving");
+    try {
+      const res = await fetch("/api/admin/teams/rename", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ from, to }),
+      });
+      if (!res.ok) {
+        throw new Error(
+          await readErrorText(res, `Rename failed (${res.status}).`),
+        );
+      }
+      const out = (await res.json()) as { users_updated?: number };
+      setRenameStatus(
+        `Renamed "${from}" to "${to.trim()}" (${out.users_updated ?? 0} member${(out.users_updated ?? 0) === 1 ? "" : "s"}).`,
+      );
+      setRenameDraft(null);
+      setFilterTeam(to.trim());
+      const rows = await fetchUsers();
+      if (rows !== null) setUsers(rows);
+    } catch (err) {
+      setRenameStatus(err instanceof Error ? err.message : "Rename failed.");
+    }
+  };
+
   const addDisabled =
     addStatus === "saving" || newEmail.trim() === "" || newPassword.length < 8;
 
@@ -477,6 +508,13 @@ export default function AdminUsersPage() {
         <NoticeBanner tone="danger">{error}</NoticeBanner>
       ) : (
         <ConnPanel>
+          {/* Existing team names as type-ahead suggestions for every team
+              input on the page (free text still allowed for new teams). */}
+          <datalist id="admin-users-teams">
+            {teams.map((t) => (
+              <option key={t} value={t} />
+            ))}
+          </datalist>
           {/* ── discovery toolbar: search, filters, grouping ── */}
           <div className="mb-3 flex flex-wrap items-center gap-[0.55rem]">
             <input
@@ -526,7 +564,66 @@ export default function AdminUsersPage() {
                 </option>
               ))}
             </select>
+            {filterTeam !== "all" && filterTeam !== "(none)" ? (
+              renameDraft === null ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRenameStatus(null);
+                    setRenameDraft(filterTeam);
+                  }}
+                  className={btnClass({ sm: true, reveal: true })}
+                  title="Rename this team for every member and every team-shared project"
+                >
+                  Rename team
+                </button>
+              ) : (
+                <span className="inline-flex items-center gap-[0.35rem]">
+                  <input
+                    aria-label={`New name for team ${filterTeam}`}
+                    value={renameDraft}
+                    autoFocus
+                    onChange={(e) => setRenameDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (
+                        e.key === "Enter" &&
+                        renameDraft.trim() &&
+                        renameDraft.trim() !== filterTeam
+                      ) {
+                        void renameTeam(filterTeam, renameDraft);
+                      }
+                      if (e.key === "Escape") setRenameDraft(null);
+                    }}
+                    className={`${SETTINGS_INPUT} w-[10rem]`}
+                  />
+                  <button
+                    type="button"
+                    disabled={
+                      !renameDraft.trim() ||
+                      renameDraft.trim() === filterTeam ||
+                      renameStatus === "saving"
+                    }
+                    onClick={() => void renameTeam(filterTeam, renameDraft)}
+                    className={btnClass({ variant: "primary", sm: true })}
+                  >
+                    {renameStatus === "saving" ? "Renaming…" : "Rename"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setRenameDraft(null)}
+                    className={btnClass({ sm: true, reveal: true })}
+                  >
+                    Cancel
+                  </button>
+                </span>
+              )
+            ) : null}
           </div>
+          {renameStatus && renameStatus !== "saving" ? (
+            <p className="mb-2 text-[0.72rem] text-[var(--color-text-secondary)]">
+              {renameStatus}
+            </p>
+          ) : null}
           <p className="mb-2 text-[0.72rem] text-[var(--color-text-muted)]">
             {rows.length}
             {filtersActive ? ` of ${allRows.length}` : ""} account
@@ -729,6 +826,7 @@ export default function AdminUsersPage() {
                   aria-label={`Team for ${menu.email}`}
                   value={menu.team}
                   placeholder="—"
+                  list="admin-users-teams"
                   onChange={(e) => setMenu({ ...menu, team: e.target.value })}
                   className={`${SETTINGS_INPUT} min-h-[2.1rem]! min-w-0 flex-1 px-[0.55rem]! py-[0.3rem]! text-[0.78rem]!`}
                 />
