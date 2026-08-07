@@ -195,6 +195,11 @@ export default function AdminUsersPage() {
   // Per-email freshly reset password, shown ONCE until dismissed/navigated.
   const [resetShown, setResetShown] = useState<Record<string, string>>({});
   const [menu, setMenu] = useState<Menu | null>(null);
+  // ── discovery toolbar state (search / filters / grouping) ──
+  const [query, setQuery] = useState("");
+  const [filterRole, setFilterRole] = useState("all");
+  const [filterOps, setFilterOps] = useState("all");
+  const [filterTeam, setFilterTeam] = useState("all");
 
   useEffect(() => {
     if (admin === "member") router.replace("/settings");
@@ -416,7 +421,35 @@ export default function AdminUsersPage() {
 
   if (admin !== "admin") return null;
 
-  const rows = joinRows(users, stats);
+  const allRows = joinRows(users, stats);
+  const teams = Array.from(
+    new Set(
+      allRows.map((r) => r.account?.team_id.trim() ?? "").filter(Boolean),
+    ),
+  ).sort();
+  const q = query.trim().toLowerCase();
+  const rows = allRows.filter((r) => {
+    const a = r.account;
+    if (q) {
+      const hay = `${r.email} ${a?.team_id ?? ""}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    if (filterRole !== "all" && (a?.role ?? "member") !== filterRole)
+      return false;
+    if (filterOps !== "all" && (a ? opsRoleOf(a) : "none") !== filterOps)
+      return false;
+    if (filterTeam !== "all") {
+      const team = a?.team_id.trim() ?? "";
+      if (filterTeam === "(none)" ? team !== "" : team !== filterTeam)
+        return false;
+    }
+    return true;
+  });
+  const filtersActive =
+    q !== "" ||
+    filterRole !== "all" ||
+    filterOps !== "all" ||
+    filterTeam !== "all";
   const menuAccount = menu
     ? (users?.find((u) => u.email === menu.email) ?? null)
     : null;
@@ -444,6 +477,66 @@ export default function AdminUsersPage() {
         <NoticeBanner tone="danger">{error}</NoticeBanner>
       ) : (
         <ConnPanel>
+          {/* ── discovery toolbar: search, filters, grouping ── */}
+          <div className="mb-3 flex flex-wrap items-center gap-[0.55rem]">
+            <input
+              aria-label="Search users"
+              placeholder="Search email, team, tag…"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              className={`${SETTINGS_INPUT} min-w-[12rem] flex-1 basis-[14rem]`}
+            />
+            <select
+              aria-label="Filter by chat role"
+              value={filterRole}
+              onChange={(e) => setFilterRole(e.target.value)}
+              className={`${SETTINGS_INPUT} w-auto`}
+            >
+              <option value="all">Chat: all</option>
+              {ROLES.map((r) => (
+                <option key={r} value={r}>
+                  Chat: {r}
+                </option>
+              ))}
+            </select>
+            <select
+              aria-label="Filter by Ops Center role"
+              value={filterOps}
+              onChange={(e) => setFilterOps(e.target.value)}
+              className={`${SETTINGS_INPUT} w-auto`}
+            >
+              <option value="all">Ops: all</option>
+              {OPS_ROLE_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  Ops: {o.label.toLowerCase()}
+                </option>
+              ))}
+            </select>
+            <select
+              aria-label="Filter by team"
+              value={filterTeam}
+              onChange={(e) => setFilterTeam(e.target.value)}
+              className={`${SETTINGS_INPUT} w-auto`}
+            >
+              <option value="all">Team: all</option>
+              <option value="(none)">Team: none</option>
+              {teams.map((t) => (
+                <option key={t} value={t}>
+                  Team: {t}
+                </option>
+              ))}
+            </select>
+          </div>
+          <p className="mb-2 text-[0.72rem] text-[var(--color-text-muted)]">
+            {rows.length}
+            {filtersActive ? ` of ${allRows.length}` : ""} account
+            {rows.length === 1 ? "" : "s"}
+            {" · "}
+            {allRows.filter((r) => r.account?.role === "admin").length} admin
+            {" · "}
+            {teams.length} team{teams.length === 1 ? "" : "s"}
+          </p>
+
           <div className="overflow-x-auto [scrollbar-width:thin]">
             <table className="w-full border-collapse text-[0.85rem] text-[var(--color-text-secondary)]">
               <thead>
