@@ -352,3 +352,29 @@ describe("AdminUsersPage", () => {
     expect(screen.getByText("alice@x.com")).toBeInTheDocument();
   });
 });
+
+it("search narrows the table and the summary reflects it", async () => {
+  mockFetch(listImpl(USERS));
+  render(<AdminUsersPage />);
+  await screen.findByText(USERS[0].email);
+  expect(screen.getByText(USERS[1].email)).toBeInTheDocument();
+
+  fireEvent.change(screen.getByLabelText("Search users"), {
+    target: { value: USERS[1].email.slice(0, 3) },
+  });
+  expect(screen.queryByText(USERS[0].email)).not.toBeInTheDocument();
+  expect(screen.getByText(USERS[1].email)).toBeInTheDocument();
+  expect(screen.getByText(/1 of 2 accounts?/)).toBeInTheDocument();
+});
+
+it("role filter narrows to admins", async () => {
+  mockFetch(listImpl(USERS));
+  render(<AdminUsersPage />);
+  await screen.findByText(USERS[0].email);
+  fireEvent.change(screen.getByLabelText("Filter by chat role"), {
+    target: { value: "admin" },
+  });
+  // USERS[0] is the admin fixture; the viewer row disappears
+  expect(screen.getByText(USERS[0].email)).toBeInTheDocument();
+  expect(screen.queryByText(USERS[1].email)).not.toBeInTheDocument();
+});
