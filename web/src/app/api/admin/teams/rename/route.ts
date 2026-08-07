@@ -12,8 +12,8 @@ export const runtime = "nodejs";
  * through. Mutating route → same-origin check like every other write proxy.
  */
 export async function POST(req: NextRequest) {
-  const origin = verifyOrigin(req);
-  if (origin) return origin;
+  const csrf = verifyOrigin(req);
+  if (!csrf.ok) return csrf.response;
   const session = await getServerSession();
   if (!session) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
