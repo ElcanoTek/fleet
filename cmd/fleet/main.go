@@ -2148,6 +2148,30 @@ func (o opsAdminsService) List(ctx context.Context) ([]string, error) {
 	return out, nil
 }
 
+// SetRole is the generalized grant: "none" removes the sched-side row
+// (mirroring Remove); any other role creates-or-re-roles the account via the
+// same primitive the bootstrap admin seed uses.
+func (o opsAdminsService) SetRole(ctx context.Context, email, role string) error {
+	if role == "" || role == "none" {
+		return o.Remove(ctx, email)
+	}
+	return o.st.EnsureUserWithRole(ctx, email, role)
+}
+
+// Roles returns every sched-plane account's role keyed by lowercased email —
+// the batched lookup the admin users table renders from.
+func (o opsAdminsService) Roles(ctx context.Context) (map[string]string, error) {
+	users, err := o.st.ListUsers(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]string, len(users))
+	for _, u := range users {
+		out[strings.ToLower(u.Username)] = u.Role
+	}
+	return out, nil
+}
+
 func workerStatsProvider(schedStorage *storage.Storage) func(context.Context) (*httpapi.WorkerStats, error) {
 	return func(context.Context) (*httpapi.WorkerStats, error) {
 		ds, err := schedStorage.GetDashboardStats()

@@ -642,22 +642,33 @@ func (s *Storage) GetUserByUsername(username string) (*models.User, error) {
 // random, UNUSABLE bcrypt password hash — a bootstrap admin authenticates ONLY
 // via the cookie/header-trust path, never the moc username/password login.
 func (s *Storage) EnsureAdminUser(ctx context.Context, username string) error {
+	return s.EnsureUserWithRole(ctx, username, "admin")
+}
+
+// EnsureUserWithRole is the generalized two-plane grant primitive: create (or
+// re-role) the sched-side account for username with the given role
+// (admin|client|readonly). Created accounts get a random unusable moc
+// password — cookie-auth only, matching the bootstrap-admin convention.
+func (s *Storage) EnsureUserWithRole(ctx context.Context, username, role string) error {
 	username = strings.ToLower(strings.TrimSpace(username))
 	if username == "" {
 		return nil
+	}
+	if _, ok := models.RolePermissions[role]; !ok {
+		return fmt.Errorf("invalid ops role %q (want admin|client|readonly)", role)
 	}
 	existing, err := s.db.GetUserByUsername(ctx, username)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
 	if existing != nil {
-		if existing.Role == "admin" {
+		if existing.Role == role {
 			return nil
 		}
-		return s.db.UpdateUserRole(ctx, existing.ID, "admin")
+		return s.db.UpdateUserRole(ctx, existing.ID, role)
 	}
-	// New bootstrap admin: a 32-byte random secret bcrypt-hashed so the moc
-	// password login can never succeed for this account (cookie-auth only).
+	// New account: a 32-byte random secret bcrypt-hashed so the moc password
+	// login can never succeed for this account (cookie-auth only).
 	secret := make([]byte, 32)
 	if _, err := rand.Read(secret); err != nil {
 		return err
@@ -670,7 +681,7 @@ func (s *Storage) EnsureAdminUser(ctx context.Context, username string) error {
 		ID:           uuid.New(),
 		Username:     username,
 		PasswordHash: string(hash),
-		Role:         "admin",
+		Role:         role,
 		CreatedAt:    time.Now().UTC(),
 	})
 	return err

@@ -39,6 +39,9 @@ export type AdminUser = {
   created_at: number;
   updated_at: number;
   ops_center_admin?: boolean;
+  // Operations Center (sched-plane) role: "admin" | "client" | "readonly" |
+  // "" (no ops access). Independent of the chat role.
+  ops_center_role?: string;
 };
 
 const ROLES = ["member", "viewer", "admin"] as const;
@@ -49,6 +52,23 @@ const ROLE_OPTIONS = [
   { value: "viewer", label: "Viewer" },
   { value: "admin", label: "Admin" },
 ] as const satisfies readonly { value: Role; label: string }[];
+
+// Operations Center roles (the sched plane). "client" is presented as
+// "Operator" — it can create and run tasks; "readonly" watches.
+const OPS_ROLES = ["none", "readonly", "client", "admin"] as const;
+type OpsRole = (typeof OPS_ROLES)[number];
+const OPS_ROLE_OPTIONS = [
+  { value: "none", label: "None" },
+  { value: "readonly", label: "Viewer" },
+  { value: "client", label: "Operator" },
+  { value: "admin", label: "Admin" },
+] as const satisfies readonly { value: OpsRole; label: string }[];
+const opsRoleOf = (u: AdminUser): OpsRole =>
+  (OPS_ROLES as readonly string[]).includes(u.ops_center_role ?? "")
+    ? ((u.ops_center_role || "none") as OpsRole)
+    : u.ops_center_admin
+      ? "admin"
+      : "none";
 
 // generatePassword returns a random 16-char password from an unambiguous
 // alphabet (no 0/O/1/l/I). crypto.getRandomValues + rejection sampling keeps
@@ -150,7 +170,14 @@ function RoleBadge({
 
 // The kebab popover's state: which row it edits, its fixed-position anchor,
 // and the pending (unsaved) role/team edits.
-type Menu = { email: string; x: number; y: number; role: Role; team: string };
+type Menu = {
+  email: string;
+  x: number;
+  y: number;
+  role: Role;
+  team: string;
+  opsRole: OpsRole;
+};
 
 const MENU_WIDTH_PX = 248; // 15.5rem
 const MENU_EST_HEIGHT_PX = 250; // flip-above threshold, per the design
@@ -224,47 +251,90 @@ export default function AdminUsersPage() {
     // Fixed positioning, ported from the design's openMenu math: clamp x into
     // the viewport, open below the kebab, flip above when it would overflow.
     const rect = e.currentTarget.getBoundingClientRect();
-    const x = Math.max(8, Math.min(rect.right - MENU_WIDTH_PX, window.innerWidth - MENU_WIDTH_PX - 8));
+    const x = Math.max(
+      8,
+      Math.min(
+        rect.right - MENU_WIDTH_PX,
+        window.innerWidth - MENU_WIDTH_PX - 8,
+      ),
+    );
     let y = rect.bottom + 6;
-    if (y + MENU_EST_HEIGHT_PX > window.innerHeight) y = Math.max(8, rect.top - MENU_EST_HEIGHT_PX);
+    if (y + MENU_EST_HEIGHT_PX > window.innerHeight)
+      y = Math.max(8, rect.top - MENU_EST_HEIGHT_PX);
     setMenu({
       email: u.email,
       x,
       y,
-      role: (ROLES as readonly string[]).includes(u.role) ? (u.role as Role) : "member",
+      role: (ROLES as readonly string[]).includes(u.role)
+        ? (u.role as Role)
+        : "member",
       team: u.team_id,
+      opsRole: opsRoleOf(u),
     });
   };
 
-  const save = async (u: AdminUser, next: { role: string; team_id: string }) => {
+  const save = async (
+    u: AdminUser,
+    next: { role: string; team_id: string; ops_role?: string },
+  ) => {
     setRowStatus((s) => ({ ...s, [u.email]: "saving" }));
     try {
-      const res = await fetch(`/api/admin/users/${encodeURIComponent(u.email)}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ role: next.role, team_id: next.team_id }),
-      });
+      // ops_role rides along only when it actually changed: an explicit write
+      // pins an ops-plane row, and untouched accounts should keep following
+      // the implied chat-admin semantics.
+      const body: Record<string, string> = {
+        role: next.role,
+        team_id: next.team_id,
+      };
+      if (next.ops_role !== undefined && next.ops_role !== opsRoleOf(u)) {
+        body.ops_role = next.ops_role;
+      }
+      const res = await fetch(
+        `/api/admin/users/${encodeURIComponent(u.email)}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        },
+      );
       if (!res.ok) {
-        throw new Error(await readErrorText(res, `Save failed (${res.status}).`));
+        throw new Error(
+          await readErrorText(res, `Save failed (${res.status}).`),
+        );
       }
       const updated = (await res.json()) as AdminUser;
-      setUsers((prev) => (prev ? prev.map((x) => (x.email === u.email ? updated : x)) : prev));
+      setUsers((prev) =>
+        prev ? prev.map((x) => (x.email === u.email ? updated : x)) : prev,
+      );
       setRowStatus((s) => ({ ...s, [u.email]: "saved" }));
     } catch (err) {
-      setRowStatus((s) => ({ ...s, [u.email]: err instanceof Error ? err.message : "Save failed." }));
+      setRowStatus((s) => ({
+        ...s,
+        [u.email]: err instanceof Error ? err.message : "Save failed.",
+      }));
     }
   };
 
   const remove = async (u: AdminUser) => {
     setRowStatus((s) => ({ ...s, [u.email]: "saving" }));
     try {
-      const res = await fetch(`/api/admin/users/${encodeURIComponent(u.email)}`, { method: "DELETE" });
+      const res = await fetch(
+        `/api/admin/users/${encodeURIComponent(u.email)}`,
+        { method: "DELETE" },
+      );
       if (!res.ok) {
-        throw new Error(await readErrorText(res, `Delete failed (${res.status}).`));
+        throw new Error(
+          await readErrorText(res, `Delete failed (${res.status}).`),
+        );
       }
-      setUsers((prev) => (prev ? prev.filter((x) => x.email !== u.email) : prev));
+      setUsers((prev) =>
+        prev ? prev.filter((x) => x.email !== u.email) : prev,
+      );
     } catch (err) {
-      setRowStatus((s) => ({ ...s, [u.email]: err instanceof Error ? err.message : "Delete failed." }));
+      setRowStatus((s) => ({
+        ...s,
+        [u.email]: err instanceof Error ? err.message : "Delete failed.",
+      }));
     }
   };
 
@@ -272,18 +342,26 @@ export default function AdminUsersPage() {
     const password = generatePassword();
     setRowStatus((s) => ({ ...s, [u.email]: "saving" }));
     try {
-      const res = await fetch(`/api/admin/users/${encodeURIComponent(u.email)}/password`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password }),
-      });
+      const res = await fetch(
+        `/api/admin/users/${encodeURIComponent(u.email)}/password`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ password }),
+        },
+      );
       if (!res.ok) {
-        throw new Error(await readErrorText(res, `Reset failed (${res.status}).`));
+        throw new Error(
+          await readErrorText(res, `Reset failed (${res.status}).`),
+        );
       }
       setRowStatus((s) => ({ ...s, [u.email]: "saved" }));
       setResetShown((s) => ({ ...s, [u.email]: password }));
     } catch (err) {
-      setRowStatus((s) => ({ ...s, [u.email]: err instanceof Error ? err.message : "Reset failed." }));
+      setRowStatus((s) => ({
+        ...s,
+        [u.email]: err instanceof Error ? err.message : "Reset failed.",
+      }));
     }
   };
 
@@ -293,7 +371,10 @@ export default function AdminUsersPage() {
   const [newPassword, setNewPassword] = useState("");
   const [newRole, setNewRole] = useState<Role>("member");
   const [addStatus, setAddStatus] = useState<string | null>(null);
-  const [addedPassword, setAddedPassword] = useState<{ email: string; password: string } | null>(null);
+  const [addedPassword, setAddedPassword] = useState<{
+    email: string;
+    password: string;
+  } | null>(null);
 
   const addUser = async () => {
     setAddStatus("saving");
@@ -302,13 +383,23 @@ export default function AdminUsersPage() {
       const res = await fetch("/api/admin/users", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: newEmail.trim(), password: newPassword, role: newRole }),
+        body: JSON.stringify({
+          email: newEmail.trim(),
+          password: newPassword,
+          role: newRole,
+        }),
       });
       if (!res.ok) {
-        throw new Error(await readErrorText(res, `Create failed (${res.status}).`));
+        throw new Error(
+          await readErrorText(res, `Create failed (${res.status}).`),
+        );
       }
       const created = (await res.json()) as AdminUser;
-      setUsers((prev) => (prev ? [...prev, created].sort((a, b) => a.email.localeCompare(b.email)) : [created]));
+      setUsers((prev) =>
+        prev
+          ? [...prev, created].sort((a, b) => a.email.localeCompare(b.email))
+          : [created],
+      );
       setAddedPassword({ email: created.email, password: newPassword });
       setNewEmail("");
       setNewPassword("");
@@ -320,24 +411,32 @@ export default function AdminUsersPage() {
     }
   };
 
-  const addDisabled = addStatus === "saving" || newEmail.trim() === "" || newPassword.length < 8;
+  const addDisabled =
+    addStatus === "saving" || newEmail.trim() === "" || newPassword.length < 8;
 
   if (admin !== "admin") return null;
 
   const rows = joinRows(users, stats);
-  const menuAccount = menu ? (users?.find((u) => u.email === menu.email) ?? null) : null;
-  const menuDirty = menu && menuAccount ? menu.role !== menuAccount.role || menu.team !== menuAccount.team_id : false;
+  const menuAccount = menu
+    ? (users?.find((u) => u.email === menu.email) ?? null)
+    : null;
+  const menuDirty =
+    menu && menuAccount
+      ? menu.role !== menuAccount.role ||
+        menu.team !== menuAccount.team_id ||
+        menu.opsRole !== opsRoleOf(menuAccount)
+      : false;
 
   return (
     <SetSection
       title="Users"
       intro={
         <>
-          View usage and manage roles of everyone in the workspace. Numbers here are all-time
-          interactive-chat activity per account; for windowed spend across chat + scheduled tasks
-          and the per-user adoption audit, open the{" "}
-          <a href="/orchestrator?tab=usage">Operations Center → Usage</a> and{" "}
-          <a href="/orchestrator?tab=adoption">Adoption</a> views.
+          View usage and manage roles of everyone in the workspace. Numbers here
+          are all-time interactive-chat activity per account; for windowed spend
+          across chat + scheduled tasks and the per-user adoption audit, open
+          the <a href="/orchestrator?tab=usage">Operations Center → Usage</a>{" "}
+          and <a href="/orchestrator?tab=adoption">Adoption</a> views.
         </>
       }
     >
@@ -365,7 +464,10 @@ export default function AdminUsersPage() {
               <tbody>
                 {loading ? (
                   <tr className="group/row">
-                    <td colSpan={6} className={`${TD} py-4 text-center text-[var(--color-text-muted)]`}>
+                    <td
+                      colSpan={6}
+                      className={`${TD} py-4 text-center text-[var(--color-text-muted)]`}
+                    >
                       Loading…
                     </td>
                   </tr>
@@ -379,16 +481,46 @@ export default function AdminUsersPage() {
                       <tr key={row.email} className="group/row">
                         <td className={`${TD} min-w-[12rem] whitespace-normal`}>
                           <span className="flex flex-wrap items-center gap-[0.45rem]">
-                            <span className="text-[0.8rem] text-[var(--color-text-primary)]">{row.email}</span>
-                            {account?.role === "admin" ? <RoleBadge accent>Admin</RoleBadge> : null}
-                            {account?.role === "viewer" ? <RoleBadge>Viewer</RoleBadge> : null}
-                            {account?.ops_center_admin ? (
-                              <RoleBadge title="Also an Operations Center admin">ops</RoleBadge>
+                            <span className="text-[0.8rem] text-[var(--color-text-primary)]">
+                              {row.email}
+                            </span>
+                            {account?.role === "admin" ? (
+                              <RoleBadge accent>Admin</RoleBadge>
+                            ) : null}
+                            {account?.role === "viewer" ? (
+                              <RoleBadge>Viewer</RoleBadge>
+                            ) : null}
+                            {account && opsRoleOf(account) !== "none" ? (
+                              <RoleBadge
+                                title={`Operations Center ${
+                                  {
+                                    admin: "admin",
+                                    client: "operator (creates tasks)",
+                                    readonly: "viewer (read-only)",
+                                  }[
+                                    opsRoleOf(account) as
+                                      "admin" | "client" | "readonly"
+                                  ]
+                                }`}
+                              >
+                                {`ops: ${
+                                  {
+                                    admin: "admin",
+                                    client: "operator",
+                                    readonly: "viewer",
+                                  }[
+                                    opsRoleOf(account) as
+                                      "admin" | "client" | "readonly"
+                                  ]
+                                }`}
+                              </RoleBadge>
                             ) : null}
                           </span>
                           <span className="mt-[0.18rem] block text-[0.7rem] text-[var(--color-text-muted)]">
                             last active {formatAgo(stat?.last_activity ?? 0)}
-                            {account?.team_id.trim() ? ` · team: ${account.team_id.trim()}` : ""}
+                            {account?.team_id.trim()
+                              ? ` · team: ${account.team_id.trim()}`
+                              : ""}
                           </span>
                           {resetShown[row.email] ? (
                             <span className="mt-[0.18rem] block text-[0.7rem] text-[var(--color-text-muted)]">
@@ -407,14 +539,26 @@ export default function AdminUsersPage() {
                               }`}
                               title={status}
                             >
-                              {status === "saving" ? "Saving…" : status === "saved" ? "Saved" : status}
+                              {status === "saving"
+                                ? "Saving…"
+                                : status === "saved"
+                                  ? "Saved"
+                                  : status}
                             </span>
                           ) : null}
                         </td>
-                        <td className={TD_NUM}>{stat ? stat.conversation_count : "—"}</td>
-                        <td className={TD_NUM}>{stat ? stat.pinned_count : "—"}</td>
-                        <td className={TD_NUM}>{stat ? stat.total_turns : "—"}</td>
-                        <td className={TD_NUM}>{stat ? formatUSD(stat.total_cost_usd) : "—"}</td>
+                        <td className={TD_NUM}>
+                          {stat ? stat.conversation_count : "—"}
+                        </td>
+                        <td className={TD_NUM}>
+                          {stat ? stat.pinned_count : "—"}
+                        </td>
+                        <td className={TD_NUM}>
+                          {stat ? stat.total_turns : "—"}
+                        </td>
+                        <td className={TD_NUM}>
+                          {stat ? formatUSD(stat.total_cost_usd) : "—"}
+                        </td>
                         <td className={`${TD} w-[2.4rem] text-right`}>
                           {account ? (
                             <button
@@ -434,7 +578,10 @@ export default function AdminUsersPage() {
                   })
                 ) : (
                   <tr className="group/row">
-                    <td colSpan={6} className={`${TD} py-4 text-center text-[var(--color-text-muted)]`}>
+                    <td
+                      colSpan={6}
+                      className={`${TD} py-4 text-center text-[var(--color-text-muted)]`}
+                    >
                       No users provisioned yet — add one below.
                     </td>
                   </tr>
@@ -454,14 +601,31 @@ export default function AdminUsersPage() {
                 {menu.email}
               </div>
               <div className="flex items-center justify-between gap-[0.6rem]">
-                <span className="text-[0.64rem] font-bold uppercase tracking-[0.07em] text-[var(--color-text-muted)]">
-                  Role
+                <span
+                  className="text-[0.64rem] font-bold uppercase tracking-[0.07em] text-[var(--color-text-muted)]"
+                  title="Chat permissions: what this account can do in chat. Viewer is read-only; Admin includes these settings pages."
+                >
+                  Chat
                 </span>
                 <Segmented
                   value={menu.role}
                   options={ROLE_OPTIONS}
                   onChange={(role) => setMenu({ ...menu, role })}
-                  label="Role"
+                  label="Chat permissions"
+                />
+              </div>
+              <div className="flex items-center justify-between gap-[0.6rem]">
+                <span
+                  className="text-[0.64rem] font-bold uppercase tracking-[0.07em] text-[var(--color-text-muted)]"
+                  title="Ops Center permissions: Viewer sees tasks and logs; Operator also creates tasks; Admin controls the ops plane. Chat Admin implies Ops Admin."
+                >
+                  Ops Center
+                </span>
+                <Segmented
+                  value={menu.opsRole}
+                  options={OPS_ROLE_OPTIONS}
+                  onChange={(opsRole) => setMenu({ ...menu, opsRole })}
+                  label="Ops Center permissions"
                 />
               </div>
               <div className="flex items-center justify-between gap-[0.6rem]">
@@ -477,7 +641,11 @@ export default function AdminUsersPage() {
                 />
               </div>
               <div className="mt-[0.05rem] flex justify-end gap-[0.45rem]">
-                <button type="button" onClick={() => setMenu(null)} className={btnClass({ sm: true, reveal: true })}>
+                <button
+                  type="button"
+                  onClick={() => setMenu(null)}
+                  className={btnClass({ sm: true, reveal: true })}
+                >
                   Cancel
                 </button>
                 <button
@@ -485,7 +653,11 @@ export default function AdminUsersPage() {
                   disabled={!menuDirty}
                   onClick={() => {
                     setMenu(null);
-                    void save(menuAccount, { role: menu.role, team_id: menu.team });
+                    void save(menuAccount, {
+                      role: menu.role,
+                      team_id: menu.team,
+                      ops_role: menu.opsRole,
+                    });
                   }}
                   className={btnClass({ variant: "primary", sm: true })}
                 >
@@ -581,21 +753,33 @@ export default function AdminUsersPage() {
               </ConnForm>
             ) : null}
             {addStatus && addStatus !== "saving" ? (
-              <p className="mt-2 text-[0.75rem] text-[var(--color-danger-soft)]">{addStatus}</p>
+              <p className="mt-2 text-[0.75rem] text-[var(--color-danger-soft)]">
+                {addStatus}
+              </p>
             ) : null}
             {addedPassword ? (
               <p className="mt-2 text-[0.75rem] text-[var(--color-text-muted)]">
-                Created <span className="text-[var(--color-text-secondary)]">{addedPassword.email}</span> — password
-                (shown once):{" "}
+                Created{" "}
+                <span className="text-[var(--color-text-secondary)]">
+                  {addedPassword.email}
+                </span>{" "}
+                — password (shown once):{" "}
                 <code className="font-[family-name:var(--font-code)] text-[var(--color-text-secondary)]">
                   {addedPassword.password}
                 </code>
               </p>
             ) : null}
             <p className="mt-2 text-[0.75rem] text-[var(--color-text-muted)]">
-              Granting <span className="uppercase">admin</span> also grants Operations Center admin; demoting or
-              deleting revokes it. CLI equivalent:{" "}
-              <code className="font-[family-name:var(--font-code)]">fleet admin add</code>.
+              Chat and Ops Center permissions are separate: chat roles gate this
+              app, Ops Center roles gate the task scheduler (Viewer watches,
+              Operator creates tasks). Granting chat{" "}
+              <span className="uppercase">admin</span> also grants Ops Center
+              admin; explicit Ops grants survive chat-role changes. CLI
+              equivalent for the admin case:{" "}
+              <code className="font-[family-name:var(--font-code)]">
+                fleet admin add
+              </code>
+              .
             </p>
           </div>
         </ConnPanel>
