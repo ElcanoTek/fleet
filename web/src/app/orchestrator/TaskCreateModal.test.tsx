@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
 import { TaskCreateModal } from "./TaskCreateModal";
-import type { McpServer, Task } from "@/app/shared/lib/orchestratorApi";
+import type { McpServer, Task, TaskTemplate } from "@/app/shared/lib/orchestratorApi";
 
 // Component tests for the redesigned New Task modal: schedule mode segment,
 // launch gating + footer reason, blur validation with the design's error copy,
@@ -30,8 +30,11 @@ const SERVERS: McpServer[] = [
   { name: "xandr", description: "Xandr DSP", tool_count: 7, accounts: ["client_a"] },
 ];
 
-function renderModal(overrides: Partial<Parameters<typeof TaskCreateModal>[0]> = {}) {
-  taskTemplates.mockResolvedValue([]);
+function renderModal(
+  overrides: Partial<Parameters<typeof TaskCreateModal>[0]> = {},
+  templateList: TaskTemplate[] = [],
+) {
+  taskTemplates.mockResolvedValue(templateList);
   const onClose = vi.fn();
   const onCreated = vi.fn();
   const utils = render(
@@ -367,5 +370,94 @@ describe("TaskCreateModal — edit mode", () => {
     fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
     expect(screen.queryByText(/unsaved changes/i)).toBeNull();
     expect(onClose).toHaveBeenCalled();
+  });
+});
+
+describe("TaskCreateModal — task templates", () => {
+  const TEMPLATES: TaskTemplate[] = [
+    {
+      name: "Site Watch",
+      description: "Drive a browser to a page on a schedule.",
+      icon: "👁️",
+      variables: ["url", "what"],
+      task: {
+        prompt: "Open {url}, extract {what}, compare to last run. Today is {date}.",
+        model: "anthropic/claude-sonnet-4.5",
+        allow_network: true,
+        tags: ["monitoring"],
+        expected_duration_minutes: 10,
+      },
+    },
+    {
+      name: "Plain Summary",
+      description: "No custom variables.",
+      variables: [],
+      task: { prompt: "Summarize today's inbox. Today is {date}." },
+    },
+  ];
+  const TODAY = new Date().toISOString().slice(0, 10);
+
+  it("renders the template cards with name and description", async () => {
+    renderModal({}, TEMPLATES);
+    await screen.findByTestId("task-template-section");
+    expect(screen.getByText("Site Watch")).toBeInTheDocument();
+    expect(screen.getByText("Drive a browser to a page on a schedule.")).toBeInTheDocument();
+    expect(screen.getByText("Plain Summary")).toBeInTheDocument();
+  });
+
+  it("opens the inline variable fill (no native prompt), humanizing the labels", async () => {
+    const promptSpy = vi.spyOn(window, "prompt").mockImplementation(() => null);
+    renderModal({}, TEMPLATES);
+    await screen.findByTestId("task-template-section");
+    fireEvent.click(screen.getByText("Site Watch"));
+
+    expect(await screen.findByTestId("template-var-fill")).toBeInTheDocument();
+    expect(screen.getByText("Fill in: Site Watch")).toBeInTheDocument();
+    expect(screen.getByLabelText("Url")).toBeInTheDocument();
+    expect(screen.getByLabelText("What")).toBeInTheDocument();
+    // The card grid swaps out while the fill is open.
+    expect(screen.queryByTestId("task-template-section")).not.toBeInTheDocument();
+    expect(promptSpy).not.toHaveBeenCalled();
+    promptSpy.mockRestore();
+  });
+
+  it("applies filled values, keeps blank placeholders visible, and seeds the form", async () => {
+    renderModal({}, TEMPLATES);
+    await screen.findByTestId("task-template-section");
+    fireEvent.click(screen.getByText("Site Watch"));
+
+    fireEvent.change(await screen.findByLabelText("Url"), {
+      target: { value: "https://example.com" },
+    });
+    // "What" is deliberately left blank — its {what} placeholder must survive.
+    fireEvent.keyDown(screen.getByLabelText("What"), { key: "Enter" });
+
+    const promptBox = screen.getByLabelText("Prompt") as HTMLTextAreaElement;
+    expect(promptBox.value).toContain("Open https://example.com");
+    expect(promptBox.value).toContain("{what}");
+    expect(promptBox.value).toContain(`Today is ${TODAY}.`);
+    // Non-prompt fields seed too, and the cards return for further editing.
+    expect((screen.getByLabelText("Tags") as HTMLInputElement).value).toBe("monitoring");
+    expect(screen.getByTestId("task-template-section")).toBeInTheDocument();
+  });
+
+  it("Back returns to the cards without seeding the form", async () => {
+    renderModal({}, TEMPLATES);
+    await screen.findByTestId("task-template-section");
+    fireEvent.click(screen.getByText("Site Watch"));
+    fireEvent.click(await screen.findByTestId("template-var-back"));
+
+    expect(screen.getByTestId("task-template-section")).toBeInTheDocument();
+    expect((screen.getByLabelText("Prompt") as HTMLTextAreaElement).value).toBe("");
+  });
+
+  it("a template with no custom variables applies immediately", async () => {
+    renderModal({}, TEMPLATES);
+    await screen.findByTestId("task-template-section");
+    fireEvent.click(screen.getByText("Plain Summary"));
+
+    expect(screen.queryByTestId("template-var-fill")).not.toBeInTheDocument();
+    const promptBox = screen.getByLabelText("Prompt") as HTMLTextAreaElement;
+    expect(promptBox.value).toBe(`Summarize today's inbox. Today is ${TODAY}.`);
   });
 });

@@ -3923,6 +3923,12 @@ tr.sla-row-fail {
   font-size: 0.75rem;
   color: var(--color-text-muted);
 }
+.template-var-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 0.875rem;
+}
 
 /* ── Email results: a chip FIELD — chips + the add-input live inside one
    bordered control (type, Enter adds, ✕ removes; the field itself carries the

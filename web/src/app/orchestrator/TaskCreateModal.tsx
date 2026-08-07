@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CostForecast, McpServer, MCPChoice, Task, TaskCreate, TaskTemplate } from "@/app/shared/lib/orchestratorApi";
 import { orchestratorApi } from "@/app/shared/lib/orchestratorApi";
-import { applyTemplateVars, promptableVars } from "@/app/shared/lib/taskTemplates";
+import { applyTemplateVars, humanizeVarName, promptableVars } from "@/app/shared/lib/taskTemplates";
 import { validateTaskForm, validateCronExpression, describeEmailError } from "@/app/shared/lib/validation";
 import { isValidEmail } from "@/app/shared/lib/format";
 import { describeCronExpression } from "@/app/shared/lib/cron";
@@ -372,6 +372,12 @@ export function TaskCreateModal({
   // shapes. Fetched once when the modal opens; an empty catalog (or a fetch
   // failure) suppresses the section — the blank form is always available.
   const [templates, setTemplates] = useState<TaskTemplate[]>([]);
+  // Template variable fill: the template the user picked that still has
+  // unresolved {variables} (built-ins like {date} never land here — they
+  // substitute silently). Non-null swaps the card grid for the inline fill
+  // form; templateVarValues carries the per-variable input state.
+  const [pendingTemplate, setPendingTemplate] = useState<TaskTemplate | null>(null);
+  const [templateVarValues, setTemplateVarValues] = useState<Record<string, string>>({});
 
   useEffect(() => {
     if (!open) return;
@@ -498,6 +504,8 @@ export function TaskCreateModal({
     setExpectedDuration("");
     setThinkingBudget("");
     setMcpSelection([]);
+    setPendingTemplate(null);
+    setTemplateVarValues({});
     setErrors({});
     setForecast(null);
     setEstimateKey("");
@@ -545,18 +553,15 @@ export function TaskCreateModal({
     updateScrollShadows();
   }, [open, contextOpen, toolsOpen, advancedOpen, templates, updateScrollShadows]);
 
-  // applyTemplate pre-fills the form from a template. Built-in variables ({date},
-  // {user_name}) are substituted automatically; any remaining custom {token} is
-  // collected through a small prompt() per variable, then substituted. Every
-  // field stays editable afterward — this only seeds the form. The task is still
+  // applyTemplate picks a template card. Built-in variables ({date},
+  // fillFormFromTemplate seeds every form field from the template payload.
+  // Built-in variables ({date}, {user_name}) substitute automatically; values
+  // the user left blank keep their {token} placeholder in the prompt, visible
+  // rather than silently dropped (applyTemplateVars contract). Every field
+  // stays editable afterward — this only seeds the form. The task is still
   // created through the ordinary submit/createTask path.
-  const applyTemplate = (tpl: TaskTemplate) => {
+  const fillFormFromTemplate = (tpl: TaskTemplate, userValues: Record<string, string>) => {
     const ctx = { userName: undefined as string | undefined };
-    const userValues: Record<string, string> = {};
-    for (const name of promptableVars(tpl.variables ?? [], ctx)) {
-      const entered = window.prompt(`Value for {${name}}`, "");
-      if (entered != null && entered !== "") userValues[name] = entered;
-    }
     const t = tpl.task ?? {};
     setPrompt(t.prompt ? applyTemplateVars(t.prompt, userValues, ctx) : "");
     setDescription(t.description ?? "");
@@ -593,12 +598,36 @@ export function TaskCreateModal({
     }
   };
 
+  // applyTemplate picks a template card. A template whose {variables} are all
+  // built-ins fills immediately; anything still unresolved swaps the card grid
+  // for the inline fill form (no native dialogs).
+  const applyTemplate = (tpl: TaskTemplate) => {
+    if (promptableVars(tpl.variables ?? [], {}).length === 0) {
+      fillFormFromTemplate(tpl, {});
+      return;
+    }
+    setTemplateVarValues({});
+    setPendingTemplate(tpl);
+  };
+
+  const confirmTemplateVars = () => {
+    if (!pendingTemplate) return;
+    fillFormFromTemplate(pendingTemplate, templateVarValues);
+    setPendingTemplate(null);
+  };
+
   if (!open) return null;
 
   // ── Derived display state ─────────────────────────────────────────────────
 
   const cronDescription = describeCronExpression(recurrence);
   const cronNext = cronDescription ? nextCronOccurrence(recurrence) : null;
+
+  // The {variables} the picked template still needs from the user (built-ins
+  // never appear — they substitute silently at apply time).
+  const templatePendingVars = pendingTemplate
+    ? promptableVars(pendingTemplate.variables ?? [], {})
+    : [];
 
   const contextCount = [description, tagsInput, persona].filter((v) => v.trim() !== "").length;
 
@@ -1050,8 +1079,61 @@ export function TaskCreateModal({
           >
             <fieldset className="task-form" disabled={submitting}>
               {/* Task templates (#262) — pre-filled starting points. Suppressed
-                  entirely when the bundle ships none. */}
-              {templates.length > 0 && !editing ? (
+                  entirely when the bundle ships none. A card whose prompt still
+                  has unresolved {variables} swaps the grid for an inline fill
+                  form — no native prompt() dialogs. */}
+              {!editing && pendingTemplate ? (
+                <section className="task-group" data-testid="template-var-fill">
+                  <div className="task-group-label">
+                    Fill in: {pendingTemplate.name}
+                  </div>
+                  <div className="field-grid">
+                    {templatePendingVars.map((name, i) => (
+                      <div className="form-group" key={name}>
+                        <label className="task-field-label" htmlFor={`templateVar-${name}`}>
+                          {humanizeVarName(name)}
+                        </label>
+                        <input
+                          id={`templateVar-${name}`}
+                          name={`templateVar-${name}`}
+                          type="text"
+                          placeholder={`{${name}}`}
+                          autoFocus={i === 0}
+                          data-testid={`template-var-input-${name}`}
+                          value={templateVarValues[name] ?? ""}
+                          onChange={(e) =>
+                            setTemplateVarValues((v) => ({ ...v, [name]: e.target.value }))
+                          }
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              confirmTemplateVars();
+                            }
+                          }}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                  <div className="template-var-actions">
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      data-testid="template-var-back"
+                      onClick={() => setPendingTemplate(null)}
+                    >
+                      Back
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      data-testid="template-var-apply"
+                      onClick={confirmTemplateVars}
+                    >
+                      Apply template
+                    </button>
+                  </div>
+                </section>
+              ) : !editing && templates.length > 0 ? (
                 <section className="task-group" data-testid="task-template-section">
                   <div className="task-group-label">Start from a template</div>
                   <div className="template-card-grid" role="group" aria-label="Task templates">
