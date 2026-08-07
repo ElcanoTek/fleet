@@ -432,3 +432,47 @@ func (s *Store) CountUsers(ctx context.Context) (int, error) {
 	}
 	return n, nil
 }
+
+// RenameTeam relabels a team across the deployment in one transaction: every
+// users.team_id AND every projects.team_id equal to from becomes to — the two
+// tables share the team string (a team-shared project matches users.team_id at
+// read time), so a partial rename would silently detach shared projects.
+// Renaming onto an existing team merges the two. Returns the row counts.
+func (s *Store) RenameTeam(ctx context.Context, from, to string) (usersUpdated, projectsUpdated int64, err error) {
+	from = strings.TrimSpace(from)
+	to = strings.TrimSpace(to)
+	if from == "" || to == "" {
+		return 0, 0, fmt.Errorf("both team names are required")
+	}
+	if from == to {
+		return 0, 0, fmt.Errorf("new team name equals the current name")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	now := time.Now().Unix()
+	res, err := tx.ExecContext(ctx,
+		`UPDATE users SET team_id = $2, updated_at = $3 WHERE team_id = $1`, from, to, now)
+	if err != nil {
+		return 0, 0, err
+	}
+	usersUpdated, _ = res.RowsAffected()
+	res, err = tx.ExecContext(ctx,
+		`UPDATE projects SET team_id = $2, updated_at = $3 WHERE team_id = $1`, from, to, now)
+	if err != nil {
+		return 0, 0, err
+	}
+	projectsUpdated, _ = res.RowsAffected()
+	if usersUpdated == 0 && projectsUpdated == 0 {
+		err = fmt.Errorf("no team named %q", from)
+		return 0, 0, err
+	}
+	err = tx.Commit()
+	return usersUpdated, projectsUpdated, err
+}

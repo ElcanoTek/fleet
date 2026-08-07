@@ -212,3 +212,31 @@ func (s *Server) toAdminUserAnnotated(r *http.Request, u store.User) adminUser {
 	}
 	return out
 }
+
+// handleAdminTeamRename serves POST /admin/teams/rename — relabel a team
+// everywhere it appears (users + team-shared projects, one transaction).
+// Body: {"from": "devops", "to": "platform"}. Admin-gated at the route.
+func (s *Server) handleAdminTeamRename(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		From string `json:"from"`
+		To   string `json:"to"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	usersN, projectsN, err := s.store.RenameTeam(r.Context(), body.From, body.To)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	//nolint:gosec // G706: %q escapes CR/LF, so request-supplied values cannot forge a log line.
+	log.Printf("admin teams: renamed %q -> %q (%d users, %d projects) by %q",
+		body.From, body.To, usersN, projectsN, userFromCtx(r.Context()))
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"users_updated": usersN, "projects_updated": projectsN})
+}
