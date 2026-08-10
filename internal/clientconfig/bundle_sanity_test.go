@@ -3,11 +3,37 @@ package clientconfig_test
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
 	clientconfig "github.com/ElcanoTek/fleet/internal/clientconfig"
 )
+
+var spriteSymbolRe = regexp.MustCompile(`<symbol\s+id="([^"]+)"`)
+
+// spriteSymbolIDs reads the symbol ids the web's icon sprite defines. The sprite
+// is the single source of truth for which icon names a bundle may name — the
+// in-repo counterpart to this check is web/src/app/spriteCoverage.test.ts, which
+// covers fleet's own references and the built-in config/default bundle.
+func spriteSymbolIDs(t *testing.T) map[string]bool {
+	t.Helper()
+	const sprite = "../../web/public/icons/core-icons.svg"
+	svg, err := os.ReadFile(sprite)
+	if err != nil {
+		t.Fatalf("read icon sprite %s: %v", sprite, err)
+	}
+	ids := map[string]bool{}
+	for _, m := range spriteSymbolRe.FindAllStringSubmatch(string(svg), -1) {
+		ids[m[1]] = true
+	}
+	if len(ids) < 40 {
+		// A sprite that parsed to (almost) nothing would make the icon check
+		// below fail on every card instead of only the broken ones.
+		t.Fatalf("icon sprite parsed to %d symbols; expected the full set", len(ids))
+	}
+	return ids
+}
 
 // TestRealBundleSanity is an opt-in SANITY check against one or more REAL
 // out-of-repo client bundles. It is skipped unless FLEET_SANITY_BUNDLE_DIR is
@@ -105,6 +131,39 @@ func TestRealBundleSanity(t *testing.T) {
 				{"mcp arg paths validate", func(t *testing.T) {
 					for _, problem := range b.ValidateMCPArgPaths() {
 						t.Errorf("mcp arg path validation: %s", problem)
+					}
+				}},
+				{"empty-state card icons exist in the sprite", func(t *testing.T) {
+					// A card's `icon` is a symbol id in the web's core-icons
+					// sprite, rendered as <use href="…#id">. A name the sprite
+					// lacks fails SILENTLY — no console error, no failed
+					// request, just an empty icon box on the chat home screen.
+					// That is how a bundle shipped `globe` and `mail` cards
+					// that rendered blank while its `search` and `bar-chart`
+					// cards looked fine.
+					//
+					// Go deliberately treats cards as opaque pass-through JSON
+					// and this check does not change that: it reads one field
+					// to validate it, and still interprets none of them.
+					ids := spriteSymbolIDs(t)
+					for _, group := range []struct {
+						kind  string
+						cards []map[string]any
+					}{
+						{"card", b.EmptyState.Cards},
+						{"protocol pill", b.EmptyState.ProtocolPills},
+					} {
+						for _, card := range group.cards {
+							icon, _ := card["icon"].(string)
+							id, _ := card["id"].(string)
+							if strings.TrimSpace(icon) == "" {
+								t.Errorf("%s %q declares no icon", group.kind, id)
+								continue
+							}
+							if !ids[icon] {
+								t.Errorf("%s %q icon %q is not a symbol in the sprite — it renders as an empty box; add the glyph to web/public/icons/core-icons.svg", group.kind, id, icon)
+							}
+						}
 					}
 				}},
 			} {
