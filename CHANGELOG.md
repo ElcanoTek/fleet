@@ -19,6 +19,23 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- Four chat empty-state cards rendered an empty icon box because the
+  `core-icons` sprite had no symbol for the name they asked for: `file-text`
+  (the `config/default` and example-config "Summarize a document" card, plus
+  `DEFAULT_PILLS` — the hardcoded fallback the web renders whenever the
+  `/config` fetch fails, so this one hit a bare install and every degraded
+  one), `book-open` (example-config), and `globe` + `mail` (a client bundle's
+  browse-a-site and mailbox cards, blank beside the `search` and `bar-chart`
+  cards that worked). The four Lucide-derived glyphs are now in the sprite.
+  An `<svg><use>` pointing at an undefined symbol id renders nothing and
+  reports nothing — no console error, no failed request, no build or test
+  failure — so two guards now close that silent-failure hole:
+  `web/src/app/spriteCoverage.test.ts` checks every icon name this repo
+  references (source literals, the `*_ICONS` lookup maps, and the built-in
+  bundle's cards) against the sprite, and `TestRealBundleSanity` gained the
+  same check for an out-of-repo bundle's cards when run with
+  `FLEET_SANITY_BUNDLE_DIR`. Bundles were not changed: a bundle names an icon
+  and the engine owes the glyph, so the fix belongs in the sprite.
 - **Every Python error was invisible to the agent.** IPython colours its
   tracebacks; `python_bridge.py` passed `content["traceback"]` through verbatim;
   JSON encoding turned each ESC into `\u001b`; and
