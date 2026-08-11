@@ -179,8 +179,8 @@ type Menu = {
   opsRole: OpsRole;
 };
 
-const MENU_WIDTH_PX = 248; // 15.5rem
-const MENU_EST_HEIGHT_PX = 250; // flip-above threshold, per the design
+const MENU_WIDTH_PX = 352; // 22rem — four-segment Ops row needs the room
+const MENU_EST_HEIGHT_PX = 330; // flip-above threshold (labels sit above controls now)
 
 export default function AdminUsersPage() {
   const router = useRouter();
@@ -789,12 +789,12 @@ export default function AdminUsersPage() {
             <div
               style={{ left: menu.x, top: menu.y }}
               onClick={(e) => e.stopPropagation()}
-              className="fixed z-[400] grid w-[15.5rem] gap-[0.7rem] rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-surface-2)] px-[0.85rem] py-[0.8rem] shadow-[var(--shadow-md)] motion-safe:animate-set-fade"
+              className="fixed z-[400] grid w-[22rem] gap-[0.7rem] rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-surface-2)] px-[0.85rem] py-[0.8rem] shadow-[var(--shadow-md)] motion-safe:animate-set-fade"
             >
               <div className="text-[0.76rem] font-semibold text-[var(--color-text-primary)] [overflow-wrap:anywhere]">
                 {menu.email}
               </div>
-              <div className="flex items-center justify-between gap-[0.6rem]">
+              <div className="grid gap-[0.3rem]">
                 <span
                   className="text-[0.64rem] font-bold uppercase tracking-[0.07em] text-[var(--color-text-muted)]"
                   title="Chat permissions: what this account can do in chat. Viewer is read-only; Admin includes these settings pages."
@@ -808,7 +808,7 @@ export default function AdminUsersPage() {
                   label="Chat permissions"
                 />
               </div>
-              <div className="flex items-center justify-between gap-[0.6rem]">
+              <div className="grid gap-[0.3rem]">
                 <span
                   className="text-[0.64rem] font-bold uppercase tracking-[0.07em] text-[var(--color-text-muted)]"
                   title="Ops Center permissions: Viewer sees tasks and logs; Operator also creates tasks; Admin controls the ops plane. Chat Admin implies Ops Admin."
@@ -822,7 +822,7 @@ export default function AdminUsersPage() {
                   label="Ops Center permissions"
                 />
               </div>
-              <div className="flex items-center justify-between gap-[0.6rem]">
+              <div className="grid gap-[0.3rem]">
                 <span className="text-[0.64rem] font-bold uppercase tracking-[0.07em] text-[var(--color-text-muted)]">
                   Team
                 </span>
