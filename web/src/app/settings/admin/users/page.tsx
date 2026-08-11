@@ -515,109 +515,113 @@ export default function AdminUsersPage() {
               <option key={t} value={t} />
             ))}
           </datalist>
-          {/* ── discovery toolbar: search, filters, grouping ── */}
-          <div className="mb-3 flex flex-wrap items-center gap-[0.55rem]">
+          {/* ── discovery toolbar: search on its own bar, filters sharing one
+              row as equal thirds (SETTINGS_INPUT carries w-full, so the
+              selects need the important override to sit side by side). ── */}
+          <div className="mb-3 grid gap-[0.55rem]">
             <input
               aria-label="Search users"
-              placeholder="Search email, team, tag…"
+              placeholder="Search email or team…"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              className={`${SETTINGS_INPUT} min-w-[12rem] flex-1 basis-[14rem]`}
+              className={SETTINGS_INPUT}
             />
-            <select
-              aria-label="Filter by chat role"
-              value={filterRole}
-              onChange={(e) => setFilterRole(e.target.value)}
-              className={`${SETTINGS_INPUT} w-auto`}
-            >
-              <option value="all">Chat: all</option>
-              {ROLES.map((r) => (
-                <option key={r} value={r}>
-                  Chat: {r}
-                </option>
-              ))}
-            </select>
-            <select
-              aria-label="Filter by Ops Center role"
-              value={filterOps}
-              onChange={(e) => setFilterOps(e.target.value)}
-              className={`${SETTINGS_INPUT} w-auto`}
-            >
-              <option value="all">Ops: all</option>
-              {OPS_ROLE_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value}>
-                  Ops: {o.label.toLowerCase()}
-                </option>
-              ))}
-            </select>
-            <select
-              aria-label="Filter by team"
-              value={filterTeam}
-              onChange={(e) => setFilterTeam(e.target.value)}
-              className={`${SETTINGS_INPUT} w-auto`}
-            >
-              <option value="all">Team: all</option>
-              <option value="(none)">Team: none</option>
-              {teams.map((t) => (
-                <option key={t} value={t}>
-                  Team: {t}
-                </option>
-              ))}
-            </select>
-            {filterTeam !== "all" && filterTeam !== "(none)" ? (
-              renameDraft === null ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setRenameStatus(null);
-                    setRenameDraft(filterTeam);
-                  }}
-                  className={btnClass({ sm: true, reveal: true })}
-                  title="Rename this team for every member and every team-shared project"
-                >
-                  Rename team
-                </button>
-              ) : (
-                <span className="inline-flex items-center gap-[0.35rem]">
-                  <input
-                    aria-label={`New name for team ${filterTeam}`}
-                    value={renameDraft}
-                    autoFocus
-                    onChange={(e) => setRenameDraft(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (
-                        e.key === "Enter" &&
-                        renameDraft.trim() &&
-                        renameDraft.trim() !== filterTeam
-                      ) {
-                        void renameTeam(filterTeam, renameDraft);
-                      }
-                      if (e.key === "Escape") setRenameDraft(null);
+            <div className="flex flex-wrap items-center gap-[0.55rem]">
+              <select
+                aria-label="Filter by chat role"
+                value={filterRole}
+                onChange={(e) => setFilterRole(e.target.value)}
+                className={`${SETTINGS_INPUT} w-auto! min-w-[7.5rem] flex-1 basis-0`}
+              >
+                <option value="all">Chat: all</option>
+                {ROLES.map((r) => (
+                  <option key={r} value={r}>
+                    Chat: {r}
+                  </option>
+                ))}
+              </select>
+              <select
+                aria-label="Filter by Ops Center role"
+                value={filterOps}
+                onChange={(e) => setFilterOps(e.target.value)}
+                className={`${SETTINGS_INPUT} w-auto! min-w-[7.5rem] flex-1 basis-0`}
+              >
+                <option value="all">Ops: all</option>
+                {OPS_ROLE_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    Ops: {o.label.toLowerCase()}
+                  </option>
+                ))}
+              </select>
+              <select
+                aria-label="Filter by team"
+                value={filterTeam}
+                onChange={(e) => setFilterTeam(e.target.value)}
+                className={`${SETTINGS_INPUT} w-auto! min-w-[7.5rem] flex-1 basis-0`}
+              >
+                <option value="all">Team: all</option>
+                <option value="(none)">Team: none</option>
+                {teams.map((t) => (
+                  <option key={t} value={t}>
+                    Team: {t}
+                  </option>
+                ))}
+              </select>
+              {filterTeam !== "all" && filterTeam !== "(none)" ? (
+                renameDraft === null ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRenameStatus(null);
+                      setRenameDraft(filterTeam);
                     }}
-                    className={`${SETTINGS_INPUT} w-[10rem]`}
-                  />
-                  <button
-                    type="button"
-                    disabled={
-                      !renameDraft.trim() ||
-                      renameDraft.trim() === filterTeam ||
-                      renameStatus === "saving"
-                    }
-                    onClick={() => void renameTeam(filterTeam, renameDraft)}
-                    className={btnClass({ variant: "primary", sm: true })}
-                  >
-                    {renameStatus === "saving" ? "Renaming…" : "Rename"}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setRenameDraft(null)}
                     className={btnClass({ sm: true, reveal: true })}
+                    title="Rename this team for every member and every team-shared project"
                   >
-                    Cancel
+                    Rename team
                   </button>
-                </span>
-              )
-            ) : null}
+                ) : (
+                  <span className="inline-flex items-center gap-[0.35rem]">
+                    <input
+                      aria-label={`New name for team ${filterTeam}`}
+                      value={renameDraft}
+                      autoFocus
+                      onChange={(e) => setRenameDraft(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (
+                          e.key === "Enter" &&
+                          renameDraft.trim() &&
+                          renameDraft.trim() !== filterTeam
+                        ) {
+                          void renameTeam(filterTeam, renameDraft);
+                        }
+                        if (e.key === "Escape") setRenameDraft(null);
+                      }}
+                      className={`${SETTINGS_INPUT} w-[10rem]`}
+                    />
+                    <button
+                      type="button"
+                      disabled={
+                        !renameDraft.trim() ||
+                        renameDraft.trim() === filterTeam ||
+                        renameStatus === "saving"
+                      }
+                      onClick={() => void renameTeam(filterTeam, renameDraft)}
+                      className={btnClass({ variant: "primary", sm: true })}
+                    >
+                      {renameStatus === "saving" ? "Renaming…" : "Rename"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setRenameDraft(null)}
+                      className={btnClass({ sm: true, reveal: true })}
+                    >
+                      Cancel
+                    </button>
+                  </span>
+                )
+              ) : null}
+            </div>
           </div>
           {renameStatus && renameStatus !== "saving" ? (
             <p className="mb-2 text-[0.72rem] text-[var(--color-text-secondary)]">
