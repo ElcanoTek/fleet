@@ -794,7 +794,7 @@ export default function AdminUsersPage() {
               <div className="text-[0.76rem] font-semibold text-[var(--color-text-primary)] [overflow-wrap:anywhere]">
                 {menu.email}
               </div>
-              <div className="grid gap-[0.3rem]">
+              <div className="grid justify-items-start gap-[0.3rem]">
                 <span
                   className="text-[0.64rem] font-bold uppercase tracking-[0.07em] text-[var(--color-text-muted)]"
                   title="Chat permissions: what this account can do in chat. Viewer is read-only; Admin includes these settings pages."
@@ -806,9 +806,10 @@ export default function AdminUsersPage() {
                   options={ROLE_OPTIONS}
                   onChange={(role) => setMenu({ ...menu, role })}
                   label="Chat permissions"
+                  dividers
                 />
               </div>
-              <div className="grid gap-[0.3rem]">
+              <div className="grid justify-items-start gap-[0.3rem]">
                 <span
                   className="text-[0.64rem] font-bold uppercase tracking-[0.07em] text-[var(--color-text-muted)]"
                   title="Ops Center permissions: Viewer sees tasks and logs; Operator also creates tasks; Admin controls the ops plane. Chat Admin implies Ops Admin."
@@ -820,6 +821,7 @@ export default function AdminUsersPage() {
                   options={OPS_ROLE_OPTIONS}
                   onChange={(opsRole) => setMenu({ ...menu, opsRole })}
                   label="Ops Center permissions"
+                  dividers
                 />
               </div>
               <div className="grid gap-[0.3rem]">
