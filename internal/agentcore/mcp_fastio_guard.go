@@ -37,10 +37,14 @@ const fastIOInlineUploadByteCap = 10 * 1024
 // blob flow). DefaultRemediationHints reproduces the union of the chat blob-flow
 // hint and the cutlass native-tool hint.
 type RemediationHints struct {
-	// NativeUploadTool, when non-empty, advertises a host-side native tool that
-	// reads the file from disk and base64-encodes it deterministically (cutlass:
-	// "fastio_upload_file path=<file> workspace_id=<id> ..."). Empty omits the
-	// native-tool line.
+	// NativeUploadTool, when non-empty, advertises a path-taking upload tool that
+	// reads the file from disk and base64-encodes it off the model's context.
+	// Empty omits that line, leaving the blob flow as the only remediation.
+	//
+	// fleet no longer ships one: the fast.io tooling moved to the client bundle,
+	// which is where a vendor- and client-specific convention belongs. A bundle
+	// names its own replacement here rather than fleet hardcoding a tool it does
+	// not own.
 	NativeUploadTool string
 	// IncludeBlobFlow, when true, includes the chunked blob upload flow
 	// (create-session → POST /blob → chunk → finalize) that both products use
@@ -48,12 +52,12 @@ type RemediationHints struct {
 	IncludeBlobFlow bool
 }
 
-// DefaultRemediationHints exposes BOTH remediation paths — the cutlass native
-// `fastio_upload_file` tool AND the chat blob upload flow — so the merged guard
-// satisfies both front-ends' parity tests.
+// DefaultRemediationHints points at the chunked blob flow, the one remediation
+// fleet can name without knowing what a bundle installs. The native-tool line is
+// empty now that the fast.io tools live in the bundle; a deployment whose bundle
+// ships a path-taking upload sets NativeUploadTool to it.
 var DefaultRemediationHints = RemediationHints{
-	NativeUploadTool: "fastio_upload_file path=<file> workspace_id=<19-digit id> [filename=...] [parent_node_id=...]",
-	IncludeBlobFlow:  true,
+	IncludeBlobFlow: true,
 }
 
 // fastIOServerEnabled reports whether the fast_io MCP server is wired up for
