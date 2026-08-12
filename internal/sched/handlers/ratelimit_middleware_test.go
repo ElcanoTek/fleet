@@ -22,7 +22,7 @@ func okHandler() http.Handler {
 // throttled by the per-identity (here, per-IP) window, and that the 429 carries
 // the full header set and JSON body.
 func TestSchedRateLimitMiddleware_PerIdentityLimit(t *testing.T) {
-	h := New(Config{SchedRateLimitPerMinute: 2, SchedGlobalRateLimitPerMinute: 1000}, nil, nil)
+	h := New(Config{DefaultTaskModel: "test/model", SchedRateLimitPerMinute: 2, SchedGlobalRateLimitPerMinute: 1000}, nil, nil)
 	mw := h.SchedRateLimitMiddleware(okHandler())
 	do := func() *httptest.ResponseRecorder {
 		req := httptest.NewRequest("POST", "/tasks", nil)
@@ -67,7 +67,7 @@ func TestSchedRateLimitMiddleware_PerIdentityLimit(t *testing.T) {
 // TestSchedRateLimitMiddleware_AdminBypass verifies the admin key is never
 // throttled, even past a tiny limit.
 func TestSchedRateLimitMiddleware_AdminBypass(t *testing.T) {
-	h := New(Config{AdminAPIKey: "admin-secret", SchedRateLimitPerMinute: 1, SchedGlobalRateLimitPerMinute: 1}, nil, nil)
+	h := New(Config{DefaultTaskModel: "test/model", AdminAPIKey: "admin-secret", SchedRateLimitPerMinute: 1, SchedGlobalRateLimitPerMinute: 1}, nil, nil)
 	mw := h.SchedRateLimitMiddleware(okHandler())
 	for i := 0; i < 5; i++ {
 		req := httptest.NewRequest("POST", "/tasks", nil)
@@ -84,7 +84,7 @@ func TestSchedRateLimitMiddleware_AdminBypass(t *testing.T) {
 // TestSchedRateLimitMiddleware_GlobalCap verifies the process-wide cap blocks a
 // second caller even from a different identity.
 func TestSchedRateLimitMiddleware_GlobalCap(t *testing.T) {
-	h := New(Config{SchedRateLimitPerMinute: 1000, SchedGlobalRateLimitPerMinute: 1}, nil, nil)
+	h := New(Config{DefaultTaskModel: "test/model", SchedRateLimitPerMinute: 1000, SchedGlobalRateLimitPerMinute: 1}, nil, nil)
 	mw := h.SchedRateLimitMiddleware(okHandler())
 
 	req1 := httptest.NewRequest("POST", "/tasks", nil)
@@ -121,7 +121,7 @@ func TestSchedRateLimitMiddleware_PerKeyOverride(t *testing.T) {
 		t.Fatalf("CreateKey: %v", err)
 	}
 
-	h := New(Config{SchedRateLimitPerMinute: 100, SchedGlobalRateLimitPerMinute: 1000}, nil, mgr)
+	h := New(Config{DefaultTaskModel: "test/model", SchedRateLimitPerMinute: 100, SchedGlobalRateLimitPerMinute: 1000}, nil, mgr)
 	mw := h.SchedRateLimitMiddleware(okHandler())
 	do := func() int {
 		req := httptest.NewRequest("POST", "/tasks", nil)

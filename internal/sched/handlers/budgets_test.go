@@ -109,7 +109,7 @@ func setupBudgetEnv(t *testing.T) (*budgetTestEnv, func()) {
 		now: time.Date(2026, 7, 2, 12, 0, 0, 0, time.UTC),
 	}
 
-	h := New(Config{
+	h := New(Config{DefaultTaskModel: "test/model",
 		OrchestratorURL: "http://localhost:8000",
 		AdminAPIKey:     "test-admin-key",
 		Version:         "0.1.0",
@@ -349,7 +349,7 @@ func TestBudgetSoftAlert_OncePerWindow_AcrossRestart(t *testing.T) {
 
 	// "Restart": a brand-new enforcer over the same database must see the
 	// persisted marker and stay silent.
-	h2 := New(Config{OrchestratorURL: "http://localhost:8000", AdminAPIKey: "test-admin-key", Version: "0.1.0"}, env.store, env.keyMgr)
+	h2 := New(Config{DefaultTaskModel: "test/model", OrchestratorURL: "http://localhost:8000", AdminAPIKey: "test-admin-key", Version: "0.1.0"}, env.store, env.keyMgr)
 	h2.SetBudgetGate(env.newEnforcer())
 	r2 := chi.NewRouter()
 	r2.Post("/tasks", h2.CreateTask)
