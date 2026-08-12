@@ -44,7 +44,7 @@ func setupFullHandler(t *testing.T) (*storage.Storage, *Handlers, func()) {
 	// setupTestHandlerWithStore already constructed the Handlers internally; to
 	// get a handle to it we rebuild via the same New call it used. The config
 	// matches the shared helper so verifyAdminKey etc. behave identically.
-	h := New(Config{
+	h := New(Config{DefaultTaskModel: "test/model",
 		OrchestratorURL: "http://localhost:8000",
 		AdminAPIKey:     "test-admin-key",
 		Version:         "0.1.0",
@@ -411,7 +411,7 @@ func TestExportImport_PermissionGates(t *testing.T) {
 func TestExportImport_ReplaceRequiresAdmin(t *testing.T) {
 	_, store, cleanup := setupExportImportHandler(t)
 	defer cleanup()
-	h := New(Config{AdminAPIKey: "test-admin-key"}, store, nil)
+	h := New(Config{DefaultTaskModel: "test/model", AdminAPIKey: "test-admin-key"}, store, nil)
 
 	// Seed an existing named task so the replace path is reachable.
 	future := time.Now().Add(48 * time.Hour).UTC()

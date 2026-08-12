@@ -104,7 +104,7 @@ func TestTypedKeyCannotCreateTask(t *testing.T) {
 	if err != nil {
 		t.Fatalf("key mgr: %v", err)
 	}
-	h := New(Config{Version: "0.1.0"}, store, keyMgr)
+	h := New(Config{DefaultTaskModel: "test/model", Version: "0.1.0"}, store, keyMgr)
 	r := chi.NewRouter()
 	r.Post("/tasks", h.CreateTask)
 

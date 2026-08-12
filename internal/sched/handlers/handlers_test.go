@@ -78,6 +78,12 @@ func setupTestHandlerWithStore(t *testing.T) (*chi.Mux, *storage.Storage, func()
 		OrchestratorURL: "http://localhost:8000",
 		AdminAPIKey:     "test-admin-key",
 		Version:         "0.1.0",
+		// A deployment with no default task model can only accept tasks that pin
+		// their own — validateTaskCreate refuses the rest, because the dispatcher
+		// would only dead-letter them (#1014). These tests post model-less tasks
+		// to exercise everything else, so the fixture stands in for an
+		// orchestrator that can actually run what it accepts.
+		DefaultTaskModel: "test/model",
 	}, store, keyMgr)
 
 	r := chi.NewRouter()

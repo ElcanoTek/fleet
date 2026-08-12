@@ -33,7 +33,7 @@ func setupRunIfAuthz(t *testing.T) (*chi.Mux, *apikeys.Manager, *storage.Storage
 	if err != nil {
 		t.Fatalf("key mgr: %v", err)
 	}
-	h := New(Config{AdminAPIKey: "test-admin-key", Version: "0.1.0"}, store, keyMgr)
+	h := New(Config{DefaultTaskModel: "test/model", AdminAPIKey: "test-admin-key", Version: "0.1.0"}, store, keyMgr)
 
 	r := chi.NewRouter()
 	r.Post("/tasks", h.CreateTask)
