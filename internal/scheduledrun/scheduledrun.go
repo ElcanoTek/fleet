@@ -604,7 +604,7 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 		modelSlug = strings.TrimSpace(*task.Model)
 	}
 	if modelSlug == "" {
-		return nil, false, "", fmt.Errorf("no model configured for scheduled task (set CUTLASS_TASK_MODEL or the task's model)")
+		return nil, false, "", fmt.Errorf("no model configured for scheduled task (set FLEET_TASK_MODEL on the orchestrator, or pin the task's model)")
 	}
 	model, providerFallbacks, err := r.mgr.ResolveWithFallbacks(ctx, modelSlug)
 	if err != nil {

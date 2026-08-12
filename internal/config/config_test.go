@@ -1487,3 +1487,92 @@ func TestLoad_PersonaFleetSpellingFromEnvFile(t *testing.T) {
 		t.Errorf("PersonaDefault = %q, want victoria", cfg.PersonaDefault)
 	}
 }
+
+// TestTaskModelResolvesEveryPrefix pins that the task-model knobs resolve the
+// whole FLEET_/CHAT_/CUTLASS_ alias family, in that precedence order.
+//
+// These two were the only model knobs in Load() read with a bare os.Getenv, so
+// FLEET_TASK_MODEL — the documented canonical spelling, and the one EnvAliases
+// advertises — was silently dropped. A deployment that used it got no task model
+// at all and dead-lettered every scheduled task with "no model configured"
+// (#1015). TestEnvAliases covers the advertiser; this covers the consumer.
+func TestTaskModelResolvesEveryPrefix(t *testing.T) {
+	tmpfile, err := os.CreateTemp("", "test-task-model-prefix.env")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(tmpfile.Name())
+	if _, err := tmpfile.Write([]byte("OPENROUTER_API_KEY=test-openrouter-key\n")); err != nil {
+		t.Fatal(err)
+	}
+	tmpfile.Close()
+
+	for _, tt := range []struct {
+		name string
+		set  map[string]string
+		want string
+	}{
+		{"canonical FLEET_ prefix", map[string]string{"FLEET_TASK_MODEL": "a/fleet"}, "a/fleet"},
+		{"legacy CHAT_ prefix", map[string]string{"CHAT_TASK_MODEL": "a/chat"}, "a/chat"},
+		{"legacy CUTLASS_ prefix", map[string]string{"CUTLASS_TASK_MODEL": "a/cutlass"}, "a/cutlass"},
+		{"FLEET_ wins over both legacy spellings", map[string]string{
+			"FLEET_TASK_MODEL":   "a/fleet",
+			"CHAT_TASK_MODEL":    "a/chat",
+			"CUTLASS_TASK_MODEL": "a/cutlass",
+		}, "a/fleet"},
+		{"CHAT_ wins over CUTLASS_", map[string]string{
+			"CHAT_TASK_MODEL":    "a/chat",
+			"CUTLASS_TASK_MODEL": "a/cutlass",
+		}, "a/chat"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			clearEnvVars()
+			defer clearEnvVars()
+			for k, v := range tt.set {
+				os.Setenv(k, v)
+				defer os.Unsetenv(k)
+			}
+			cfg, err := Load(tmpfile.Name())
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if cfg.TaskModel != tt.want {
+				t.Errorf("TaskModel = %q, want %q", cfg.TaskModel, tt.want)
+			}
+		})
+	}
+}
+
+// TestTaskFallbackModelResolvesEveryPrefix is the same guarantee for the fallback
+// knob, which had the identical bare-os.Getenv bug (#1015).
+func TestTaskFallbackModelResolvesEveryPrefix(t *testing.T) {
+	tmpfile, err := os.CreateTemp("", "test-task-fallback-prefix.env")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(tmpfile.Name())
+	if _, err := tmpfile.Write([]byte("OPENROUTER_API_KEY=test-openrouter-key\n")); err != nil {
+		t.Fatal(err)
+	}
+	tmpfile.Close()
+
+	for name, env := range map[string]string{
+		"canonical FLEET_ prefix": "FLEET_TASK_FALLBACK_MODEL",
+		"legacy CHAT_ prefix":     "CHAT_TASK_FALLBACK_MODEL",
+		"legacy CUTLASS_ prefix":  "CUTLASS_TASK_FALLBACK_MODEL",
+	} {
+		t.Run(name, func(t *testing.T) {
+			clearEnvVars()
+			defer clearEnvVars()
+			os.Setenv(env, "a/fallback")
+			defer os.Unsetenv(env)
+			cfg, err := Load(tmpfile.Name())
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if cfg.TaskFallbackModel != "a/fallback" {
+				t.Errorf("TaskFallbackModel via %s = %q, want %q", env, cfg.TaskFallbackModel, "a/fallback")
+			}
+		})
+	}
+}

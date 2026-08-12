@@ -19,6 +19,29 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- Scheduled tasks created from chat carried no model and dead-lettered on their
+  first dispatch, before running anything, with `no model configured for
+  scheduled task`. `schedule_task`'s `model` is optional and the agent was told
+  it "defaults to the orchestrator's configured model" — a promise nothing kept:
+  the chat seam copied the empty value through, `ParentModel` inheritance existed
+  only task→task, and a deployment with no `*_TASK_MODEL` had nothing behind it.
+  A chat-created task now **inherits the model of the conversation it was
+  scheduled from**, which also makes the run reproducible instead of drifting
+  with a server env var. Two create-time gates (the `POST /tasks` validator and
+  the chat seam, which bypasses it) now refuse a task that has neither its own
+  model nor a deployment default, so an unrunnable task fails immediately and
+  visibly rather than up to a cron period later in the dead-letter queue. The
+  dispatcher's error text and a new boot warning name every accepted spelling.
+  (#1014)
+- `FLEET_TASK_MODEL` and `FLEET_TASK_FALLBACK_MODEL` were silently ignored.
+  These were the only two model knobs in `config.Load` read with a bare
+  `os.Getenv("CUTLASS_…")`, so they skipped the `FLEET_`/`CHAT_`/`CUTLASS_`
+  alias family that `EnvAliases` advertises for them and `TestEnvAliases`
+  pins — an operator following the documented convention got no task model at
+  all, and every scheduled task on that deployment dead-lettered. Both now
+  resolve the whole family in precedence order; existing `CUTLASS_`-spelled
+  deployments are unaffected. (#1015)
+
 - Four chat empty-state cards rendered an empty icon box because the
   `core-icons` sprite had no symbol for the name they asked for: `file-text`
   (the `config/default` and example-config "Summarize a document" card, plus

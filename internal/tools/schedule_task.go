@@ -24,7 +24,7 @@ type ScheduleTaskParams struct {
 	Prompt               string   `json:"prompt" description:"Full instructions for what the scheduled agent should do each run. Required."`
 	Cron                 string   `json:"cron,omitempty" description:"Standard 5-field cron expression for a RECURRING task, e.g. '0 9 * * MON-FRI'. Omit for one-time runs. Mutually exclusive with run_at."`
 	RunAt                string   `json:"run_at,omitempty" description:"RFC3339 / ISO-8601 datetime for a ONE-TIME future run, e.g. '2026-07-01T09:00:00Z'. Omit for recurring tasks. Mutually exclusive with cron."`
-	Model                string   `json:"model,omitempty" description:"Optional model slug override for the scheduled task. Defaults to the orchestrator's configured model."`
+	Model                string   `json:"model,omitempty" description:"Optional model slug override for the scheduled task. Omit to inherit THIS conversation's model, which is almost always what you want; the orchestrator's configured model is the last resort."`
 	MaxIterations        int      `json:"max_iterations,omitempty" description:"Optional cap on agent steps per run. Omit for the orchestrator default."`
 	AllowNetwork         bool     `json:"allow_network,omitempty" description:"Whether the scheduled task's sandbox keeps outbound network egress. Default false (sealed). Set true only when the task genuinely needs to reach the network."`
 	ThinkingBudgetTokens *int     `json:"thinking_budget_tokens,omitempty" description:"Optional per-task extended-thinking budget in tokens (Claude models). Omit to inherit the deployment default; 0 disables thinking for this task; a positive value sets its budget."`

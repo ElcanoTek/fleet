@@ -886,6 +886,14 @@ func (h *Handlers) validateTaskCreate(tc *models.TaskCreate) error { //nolint:go
 	if err := normalizeOptionalModel(&tc.FallbackModel, "fallback_model"); err != nil {
 		return err
 	}
+	// A task with neither its own model nor a deployment default can never run:
+	// the dispatcher fails it terminally on the first attempt and dead-letters it
+	// (#1014). Refuse it here instead, so the author sees the problem while they
+	// are still looking at the request rather than up to a cron period later, in
+	// the DLQ, having published nothing.
+	if tc.Model == nil && strings.TrimSpace(h.config.DefaultTaskModel) == "" {
+		return fmt.Errorf("no model configured: set FLEET_TASK_MODEL on the orchestrator, or pass model on the task")
+	}
 	if err := validateTaskLimits(tc); err != nil {
 		return err
 	}

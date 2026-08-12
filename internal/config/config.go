@@ -1247,8 +1247,14 @@ func Load(envFile string) (*Config, error) {
 		PersonaDefault: getenvFleetOrBare("PERSONA_DEFAULT", "assistant"),
 
 		// ── scheduled task (cutlass) ──
-		TaskModel:         stripQuotes(os.Getenv("CUTLASS_TASK_MODEL")),
-		TaskFallbackModel: stripQuotes(os.Getenv("CUTLASS_TASK_FALLBACK_MODEL")),
+		// getenvFleet, not a bare os.Getenv: these resolve FLEET_TASK_MODEL →
+		// CHAT_TASK_MODEL → CUTLASS_TASK_MODEL like every other knob here, and
+		// like EnvAliases already advertises for them. Reading only the legacy
+		// spelling silently dropped FLEET_TASK_MODEL on deployments that follow
+		// the documented convention, leaving every scheduled task to dead-letter
+		// with "no model configured" (#1015).
+		TaskModel:         getenvFleet("TASK_MODEL"),
+		TaskFallbackModel: getenvFleet("TASK_FALLBACK_MODEL"),
 		TaskMaxIterations: getEnvOrDefaultInt("CUTLASS_TASK_MAX_ITERATIONS", 0),
 		LLMTemperature:    getEnvOrDefaultFloat("CUTLASS_TEMPERATURE", 0.3),
 
