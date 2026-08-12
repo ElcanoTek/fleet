@@ -70,7 +70,9 @@ func TestTaskSchedulerProvider_BudgetGate(t *testing.T) {
 	}
 
 	enforcer := budget.New(budget.Config{Store: store, Now: func() time.Time { return now }})
-	provider := taskSchedulerProvider(store, enforcer)
+	// The deployment default keeps these requests runnable, so this test stays
+	// about the budget gate rather than tripping the create-time model gate (#1014).
+	provider := taskSchedulerProvider(store, enforcer, "test/model")
 
 	// The budgeted user is refused BEFORE any task is created.
 	_, err := provider(ctx, httpapi.TaskScheduleRequest{Prompt: "do the thing tomorrow", RequestedBy: "alice@example.com"})
@@ -94,4 +96,41 @@ func TestTaskSchedulerProvider_BudgetGate(t *testing.T) {
 	if res.ID == "" {
 		t.Error("expected a created task id")
 	}
+
+	// EnqueueTask skips the HTTP handler's validation, so the chat path enforces
+	// the create-time model gate itself (#1014) — otherwise this is the one seam
+	// that can enqueue a task the dispatcher will only ever dead-letter.
+	t.Run("no model and no deployment default is refused", func(t *testing.T) {
+		before, err := store.GetAllTasks()
+		if err != nil {
+			t.Fatalf("GetAllTasks: %v", err)
+		}
+		modelless := taskSchedulerProvider(store, enforcer, "")
+		if _, err := modelless(ctx, httpapi.TaskScheduleRequest{
+			Prompt: "would never run", RequestedBy: "carol@example.com",
+		}); err == nil || !strings.Contains(err.Error(), "no model configured") {
+			t.Fatalf("want a no-model refusal, got %v", err)
+		}
+		after, err := store.GetAllTasks()
+		if err != nil {
+			t.Fatalf("GetAllTasks: %v", err)
+		}
+		if len(after) != len(before) {
+			t.Errorf("a refused schedule_task must not create a task (%d → %d rows)", len(before), len(after))
+		}
+	})
+
+	// An explicit model is enough even with no deployment default.
+	t.Run("explicit model needs no deployment default", func(t *testing.T) {
+		modelless := taskSchedulerProvider(store, enforcer, "")
+		res, err := modelless(ctx, httpapi.TaskScheduleRequest{
+			Prompt: "pins its own model", RequestedBy: "dave@example.com", Model: "vendor/pinned",
+		})
+		if err != nil {
+			t.Fatalf("schedule_task with an explicit model: %v", err)
+		}
+		if res.ID == "" {
+			t.Error("expected a created task id")
+		}
+	})
 }

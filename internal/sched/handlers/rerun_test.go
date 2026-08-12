@@ -11,7 +11,7 @@ import (
 // that a rerun's immediate run must use ScheduledFor=nil (NOT &now), so it
 // passes validateTaskCreate's "not in the past" check.
 func TestBuildRerunTaskCreate(t *testing.T) {
-	h := &Handlers{}
+	h := newValidateTestHandlers()
 	src := &models.Task{
 		Prompt:     "do the work for the team",
 		Priority:   3,

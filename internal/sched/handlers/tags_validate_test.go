@@ -10,7 +10,7 @@ import (
 // TestValidateTaskCreate_Tags pins that validateTaskCreate normalizes tags in
 // place (lowercase/dedupe) and rejects invalid ones — on the create+edit path.
 func TestValidateTaskCreate_Tags(t *testing.T) {
-	h := &Handlers{}
+	h := newValidateTestHandlers()
 	prompt := "do the thing for the team"
 
 	t.Run("normalizes in place", func(t *testing.T) {
