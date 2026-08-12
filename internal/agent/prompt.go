@@ -281,38 +281,6 @@ type MCPServerSpec struct {
 	DataSources []string
 }
 
-// fastIOSystemPromptSection is the dedicated Fast.io guidance for
-// turns where the fast.io MCP server is wired up. Lives here (not in
-// system_prompts/default.md) because Fast.io is optional — deployments
-// without FAST_IO_MCP_TOKEN should not see Fast.io references at all,
-// or the model wastes context on tools it can't call.
-//
-// Includes (1) the read/write model overview, (2) the `fastio_find`
-// discovery flow with the file-pick policy, (3) the upload flow via
-// `fastio_upload_file`, (4) the protocol reference, and (5) two hard
-// rules about what NOT to delegate to the user. Mirrors the prior
-// in-default-md copy with the `fastio_find` doc added since the tool
-// only exists now.
-const fastIOSystemPromptSection = `## Fast.io: the shared read/write file store
-
-Fast.io is the team's shared workspace — think of it as a OneDrive/Dropbox/Google Drive that *you* have hands-on access to via the ` + "`mcp_fast_io_*`" + ` tools. It is **not** a static archive and **not** something the user has to babysit through a browser. When the user says *"create a file for me in Fast.io"*, *"save this under KOC"*, *"update the master tracking sheet"*, or *"amend the KOC doc"*, **you do the entire find → download → edit → upload loop yourself.**
-
-**Finding a file → use ` + "`fastio_find`" + `.** This native tool wraps storage search + bulk details into one round-trip and returns a tight markdown table — id, name, parent, modified, size, mimetype — sorted newest-first. It auto-promotes ELC codes in your query (` + "`fastio_find query=\"ABC plumbing ELC00109\"`" + ` also searches just ` + "`\"ELC00109\"`" + ` and unions the results), which fixes Fast.io keyword search's AND-tokenized blindspot for natural-language phrasing. **File-pick policy enforced by the tool's response:** 1 match → proceed; 2+ matches → STOP and ask the user which one (the response includes a recommended file and a pre-written question to quote back). Reach for raw ` + "`mcp_fast_io_storage action=search`" + ` only for parameters fastio_find doesn't expose (cursor pagination past 25 hits, semantic search via intelligence=true).
-
-**Uploading a file you produced locally → use ` + "`fastio_upload_file`" + `.** This native tool takes a file path (not bytes), reads it from your workspace, and forwards it to Fast.io for you. The bytes never enter your context — no base64 in ` + "`run_python.vars`" + `, no ` + "`content_base64`" + ` in tool args, no length-mangling on the JSON round-trip. Required params: ` + "`path`" + ` (workspace-relative is fine) and ` + "`workspace_id`" + ` (19-digit, from ` + "`mcp_fast_io_workspace action=list`" + `). Optional: ` + "`filename`" + ` (defaults to basename), ` + "`parent_node_id`" + ` (defaults to root), ` + "`content_type`" + ` (auto-detected). Caps at 5 MB raw; for larger files drive ` + "`mcp_fast_io_upload`" + ` chunked blob flow yourself.
-
-**Downloading a Fast.io file → ` + "`mcp_fast_io_download action=file-url`" + ` then ` + "`download_url`" + `.** The MCP returns a signed, short-lived URL; ` + "`download_url`" + ` GETs that URL and lands the bytes in this conversation's workspace in a single tool turn (no Python/curl detour). Pass the signed URL as ` + "`url`" + ` and an optional ` + "`filename`" + `; the native tool defaults ` + "`output_dir`" + ` to your scratch so the file is immediately readable by ` + "`bash`" + `/` + "`run_python`" + `/` + "`xlsx_workbook`" + `.
-
-For everything else — workspace-id discovery, the required ` + "`profile_type`" + `/` + "`profile_id`" + ` on ` + "`storage`" + `/` + "`download`" + ` calls, the chunked blob flow for files over the native tool's 5 MB cap, the ` + "`web-import`" + ` shortcut for URL → Fast.io copies, share creation, and the "same-name upload overwrites in place" rule — read **` + "`protocols/fastio-mcp.md`" + ` once** at the start of any Fast.io task and follow it step by step.
-
-**Persistence offer:** if a user-attached file looks like something they (or a teammate) will want to reference or edit again later — a source document, a dataset, anything they'd otherwise have to re-upload — proactively offer to drop it in Fast.io via ` + "`fastio_upload_file`" + `. Frame it as a one-line offer ("I can save this to Fast.io so we can update it from any chat going forward; want me to?") and only call the tool after they say yes. Don't bother offering for one-shot files (a quick snippet, a throwaway screenshot, the output of a single ad-hoc question).
-
-Two hard rules that apply outside the protocol's mechanics:
-
-- **Do not** tell the user to "open Fast.io in your browser, download the file, edit it, re-upload it." That is your job. The only time you ask the user to attach from their machine is when the source file genuinely lives behind an auth wall you can't bypass (SharePoint/Google login) — and even then, frame it as a one-step handoff ("attach it here and I'll save the update to Fast.io"), not a workflow they repeat every time.
-- **Do not** describe Fast.io as a static repository, snapshot store, or "you do the edits, I just store" surface. From the user's perspective it is a live shared drive that you operate on their behalf.
-`
-
 // fastIOEnabledForTurn reports whether the fast.io MCP server has any
 // tools wired up for this turn. Drives conditional system-prompt
 // content: when fast.io is off (FAST_IO_MCP_TOKEN unset on the
@@ -421,16 +389,6 @@ func (m *Manager) buildSystemPrompt(persona, conversationID string, memories []s
 	}
 	sb.Write(sp)
 	sb.WriteString("\n\n")
-
-	// 1a. Fast.io dedicated section — only when the fast.io MCP is
-	// wired up. Kept out of default.md so deployments without
-	// FAST_IO_MCP_TOKEN never see Fast.io guidance for tools they
-	// can't call. The section name lives in the protocol table at
-	// step 5 below (also gated on fastIOOn).
-	if fastIOOn {
-		sb.WriteString(fastIOSystemPromptSection)
-		sb.WriteString("\n")
-	}
 
 	// 2. persona
 	personaFile := persona

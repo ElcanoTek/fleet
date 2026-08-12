@@ -83,7 +83,7 @@ const runPythonDescription = "Executes Python code in a per-turn IPython kernel 
 	"If you write `\"content_base64\": \"${tool:abc123.vars.payload}\"` into a downstream argument, that literal string is what the next tool receives — fast.io and friends will reject it as malformed input. " +
 	"This is the single most common chaining mistake; do not make it.\n" +
 	"  For SMALL values, set `return_vars=[\"payload\"]` and use the returned `vars` value in the next call. All tool results share a final model-visible size boundary: a large `vars` response is always replaced by a valid bounded envelope with byte counts, never partial JSON/base64. Governed non-binary text may offer a `view_file` recovery path; encoded/binary values intentionally do not.\n" +
-	"  For payloads larger than about 10 KB, write them to a workspace file and pass the path/URL/blob id (`fastio_upload_file path=...` for fast.io uploads, image tools that accept a workspace path, etc.). This keeps bytes out of model context and avoids corruption. The chat-server actively rejects oversized inline base64 uploads to fast.io; do not try to drive the upload yourself via `mcp_fast_io_upload action=stream-upload`."
+	"  For payloads larger than about 10 KB, write them to a workspace file and pass the path/URL/blob id (a path-taking upload tool, image tools that accept a workspace path, etc.). This keeps bytes out of model context and avoids corruption. The server actively rejects oversized inline base64 uploads to fast.io; do not try to drive the upload yourself via `mcp_fast_io_upload action=stream-upload`."
 
 const defaultPythonTimeoutSeconds = 300
 

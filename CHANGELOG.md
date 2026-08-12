@@ -17,6 +17,30 @@ prior versions are listed because none have shipped.
 
 ## [Unreleased]
 
+### Removed
+
+- The fast.io native tools (`fastio_find`, `fastio_upload_file`) and the
+  dedicated Fast.io system-prompt section. They encoded a vendor integration
+  **and** one client's `ELCxxxxx` account-code convention — including a
+  `regexp.MustCompile("(?i)\\bELC\\d{3,6}\\b")` — inside the client-agnostic
+  engine, against this repo's own rule that client content lives in the bundle.
+  They also could not express the shape the data actually has: a date-partitioned
+  folder tree, where `fastio_find`'s 25-result cap and opaque parent ids silently
+  reduce a month of daily partitions to whichever file was touched last.
+  Replaced by `fastio_helpers` in the client bundle (`resolve_path`,
+  `list_partitions`, `find`, `upload_file`), which adds path resolution and
+  partition enumeration and states truncation instead of hiding it.
+
+  Both native tools were **already dead code**: neither `NewFastIOFindTool` nor
+  `NewFastIOUploadFileTool` had a single call site, so nothing registered them —
+  while the system prompt instructed every agent with fast.io enabled to use
+  them. Agents fell back to raw `mcp_fast_io_storage action=search` with none of
+  the mitigations the prompt promised. Deleting them changes no runtime
+  behaviour; the prompt no longer advertises tools that do not exist. The
+  inline-base64 upload guard now defaults to the blob-flow hint alone and lets a
+  bundle name its own path-taking upload via `RemediationHints.NativeUploadTool`.
+  (#1016)
+
 ### Fixed
 
 - Scheduled tasks created from chat carried no model and dead-lettered on their
