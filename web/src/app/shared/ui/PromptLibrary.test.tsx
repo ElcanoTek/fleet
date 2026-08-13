@@ -39,7 +39,9 @@ describe("PromptLibrary", () => {
     fireEvent.click(screen.getByRole("button", { name: "Open prompt library" }));
     expect(await screen.findAllByText("Daily scan")).toHaveLength(2);
     fireEvent.click(screen.getByRole("button", { name: "Use prompt" }));
-    expect(onInsert).toHaveBeenCalledWith(gitPrompt.content);
+    // The entry's display name rides along so a caller can label what it just
+    // inserted (the task form seeds an empty Title from it).
+    expect(onInsert).toHaveBeenCalledWith(gitPrompt.content, gitPrompt.name);
     expect(screen.queryByRole("dialog", { name: "Prompt library" })).not.toBeInTheDocument();
   });
 

@@ -14,6 +14,7 @@ const estimateTask = vi.fn();
 const uploadFile = vi.fn();
 const updateTask = vi.fn();
 const rerunTask = vi.fn();
+const prompts = vi.fn();
 
 vi.mock("@/app/shared/lib/orchestratorApi", () => ({
   orchestratorApi: {
@@ -23,6 +24,7 @@ vi.mock("@/app/shared/lib/orchestratorApi", () => ({
     uploadFile: (...args: unknown[]) => uploadFile(...args),
     updateTask: (...args: unknown[]) => updateTask(...args),
     rerunTask: (...args: unknown[]) => rerunTask(...args),
+    prompts: (...args: unknown[]) => prompts(...args),
   },
 }));
 
@@ -520,5 +522,48 @@ describe("TaskCreateModal — title", () => {
     await screen.findByTestId("task-template-section");
     fireEvent.click(screen.getByText("Plain Summary"));
     expect(screen.getByLabelText("Title")).toHaveValue("Plain Summary");
+  });
+});
+
+describe("TaskCreateModal — title from the prompt library", () => {
+  const LIBRARY_ENTRY = {
+    id: "git:Reklaim_Daily_DoD_Health_Scan.yaml",
+    name: "Reklaim daily day-over-day campaign health scan",
+    description: "The daily half of the DoD/WoW pair.",
+    content: "name: Reklaim daily day-over-day campaign health scan\ngoal: produce the scan",
+    source: "git",
+    visibility: "workspace",
+    read_only: true,
+    path: "prompts/Reklaim_Daily_DoD_Health_Scan.yaml",
+  };
+
+  const openLibraryAndUse = async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Open prompt library" }));
+    await screen.findByRole("button", { name: "Use prompt" });
+    fireEvent.click(screen.getByRole("button", { name: "Use prompt" }));
+  };
+
+  it("names the task after the library entry it inserted", async () => {
+    prompts.mockResolvedValue([LIBRARY_ENTRY]);
+    renderModal();
+    await openLibraryAndUse();
+
+    await waitFor(() =>
+      expect(screen.getByLabelText("Title")).toHaveValue(LIBRARY_ENTRY.name),
+    );
+    // The prompt still receives the entry's exact content.
+    expect(screen.getByLabelText("Prompt")).toHaveValue(LIBRARY_ENTRY.content);
+  });
+
+  it("does not overwrite a title the operator already typed", async () => {
+    prompts.mockResolvedValue([LIBRARY_ENTRY]);
+    renderModal();
+    fireEvent.change(screen.getByLabelText("Title"), { target: { value: "My own name" } });
+    await openLibraryAndUse();
+
+    await waitFor(() =>
+      expect(screen.getByLabelText("Prompt")).toHaveValue(LIBRARY_ENTRY.content),
+    );
+    expect(screen.getByLabelText("Title")).toHaveValue("My own name");
   });
 });
