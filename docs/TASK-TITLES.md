@@ -76,6 +76,11 @@ re-run, and every clone of a job lists under the same title.
 - **Templates** — a bundle template may set `task.title`; the create form
   otherwise seeds the title from the template's own name, which is what the
   operator picked it by. Either way it stays editable.
+- **The prompt library** — inserting an entry seeds an empty title from the
+  entry's display name. For a bundle prompt that name is the file's own `name:`
+  header, which is precisely the line operators were reading off the top of the
+  prompt to identify the job, so picking a prompt now names the task too. A
+  title the operator already typed is never overwritten.
 
 ## Storage
 

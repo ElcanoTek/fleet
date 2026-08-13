@@ -13,7 +13,12 @@ import { useDialogA11y } from "./useDialogA11y";
 
 type Props = {
   currentText: string;
-  onInsert: (content: string) => void;
+  // onInsert receives the entry's content and its display name. The name lets a
+  // caller label what it just inserted — the task form seeds an empty Title
+  // from it, so picking "Reklaim daily health scan" out of the library names
+  // the task as well as filling its prompt. Callers with nowhere to put a name
+  // (chat's composer) simply ignore the second argument.
+  onInsert: (content: string, name?: string) => void;
   compact?: boolean;
 };
 
@@ -433,7 +438,7 @@ export function PromptLibrary({
                             type="button"
                             className="btn btn-primary"
                             onClick={() => {
-                              onInsert(selected.content);
+                              onInsert(selected.content, selected.name);
                               setOpen(false);
                             }}
                           >

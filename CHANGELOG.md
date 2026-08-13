@@ -32,7 +32,10 @@ prior versions are listed because none have shipped.
   job list under the same label. Optional, single-line, ≤120 characters, never
   injected into the agent's prompt; untitled tasks render exactly as before. A
   bundle template may set `task.title`, and the create form otherwise seeds it
-  from the template's name.
+  from the template's name. Inserting a **prompt-library** entry seeds an empty
+  title from the entry's name too — for a bundle prompt that is the file's own
+  `name:` header, the very line operators were reading off the top of the prompt
+  to identify the job — without ever overwriting a title already typed.
 
 - **Run now, for a job that has not run yet.** The Operations Center could only
   *Resubmit*, and only a task that had already finished — so a scheduled job had

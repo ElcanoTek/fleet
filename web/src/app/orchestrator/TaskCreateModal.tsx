@@ -1224,7 +1224,18 @@ export function TaskCreateModal({
                     Prompt
                   </label>
                   <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <PromptLibrary currentText={prompt} onInsert={setPrompt} />
+                    <PromptLibrary
+                      currentText={prompt}
+                      // Seed the title from the library entry's name — for a
+                      // bundle prompt that name IS the `name:` header operators
+                      // were reading off the top of the prompt to identify the
+                      // job. Only when the title is still empty: an operator who
+                      // already titled the task keeps their wording.
+                      onInsert={(content, name) => {
+                        setPrompt(content);
+                        if (name && !title.trim()) setTitle(name.slice(0, TITLE_MAX_LENGTH));
+                      }}
+                    />
                     <span className="task-required-badge">Required</span>
                   </span>
                 </div>
