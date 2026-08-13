@@ -839,7 +839,18 @@ type TaskCreate struct {
 	// Empty = unnamed (the historical default); a non-empty name must be unique
 	// across tasks (enforced by a partial DB unique index). Not injected into the
 	// agent prompt; purely an operator convenience + import/export key.
-	Name          string       `json:"name,omitempty"`
+	Name string `json:"name,omitempty"`
+	// Title is the short operator-facing label for the task — what the
+	// Operations Center shows wherever the task is listed. Empty = untitled, and
+	// clients fall back to the prompt's first line (which is why operators used
+	// to write a title line at the head of the prompt).
+	//
+	// It is deliberately NOT Name: a title is a label, not an identity, so it
+	// carries no unique index, and it IS carried by TaskToCreate — every
+	// occurrence of a recurring task, every re-run and every clone keeps it,
+	// whereas Name must be cleared on each copy to avoid colliding with the row
+	// it was copied from. Not injected into the agent prompt.
+	Title         string       `json:"title,omitempty"`
 	Prompt        string       `json:"prompt"`
 	Model         *string      `json:"model,omitempty"`
 	FallbackModel *string      `json:"fallback_model,omitempty"`
@@ -1010,7 +1021,12 @@ type Task struct {
 	ID uuid.UUID `json:"id"`
 	// Name is the optional operator label / import-export identity key (#238).
 	// Empty = unnamed. See TaskCreate.Name.
-	Name          string       `json:"name,omitempty"`
+	Name string `json:"name,omitempty"`
+	// Title is the short human label shown wherever the task is listed. Empty =
+	// untitled (clients fall back to the prompt's first line). Unlike Name it is
+	// NOT unique and IS carried onto every occurrence / re-run / clone, so all
+	// the runs of one job share it. See TaskCreate.Title.
+	Title         string       `json:"title,omitempty"`
 	Prompt        string       `json:"prompt"`
 	Model         *string      `json:"model,omitempty"`
 	FallbackModel *string      `json:"fallback_model,omitempty"`
@@ -1300,6 +1316,7 @@ func NewTask(tc TaskCreate) *Task {
 	return &Task{
 		ID:                         uuid.New(),
 		Name:                       tc.Name,
+		Title:                      tc.Title,
 		Prompt:                     tc.Prompt,
 		Model:                      tc.Model,
 		FallbackModel:              tc.FallbackModel,
@@ -1422,7 +1439,10 @@ type BatchTaskResult struct {
 func TaskToCreate(t *Task) TaskCreate {
 	maxRetries := t.MaxRetries
 	return TaskCreate{
-		Name:                   t.Name,
+		Name: t.Name,
+		// Title IS carried (unlike Name, which every copy path must clear): all
+		// the runs of one job — occurrences, re-runs, clones — share its title.
+		Title:                  t.Title,
 		Prompt:                 t.Prompt,
 		Model:                  t.Model,
 		FallbackModel:          t.FallbackModel,
@@ -1495,7 +1515,11 @@ type TaskExportRecord struct {
 	// Empty = unnamed (the task is always created fresh on import). Non-empty
 	// must be unique within the target deployment (enforced by a partial DB
 	// unique index). It maps to TaskCreate.Name.
-	Name                       string              `json:"name,omitempty"                       yaml:"name,omitempty"`
+	Name string `json:"name,omitempty"                       yaml:"name,omitempty"`
+	// Title is the operator-facing display label (non-unique, carried onto every
+	// occurrence/copy). Exported so a task definition keeps its title when it is
+	// moved between deployments. It maps to TaskCreate.Title.
+	Title                      string              `json:"title,omitempty"                      yaml:"title,omitempty"`
 	Prompt                     string              `json:"prompt"                               yaml:"prompt"`
 	Model                      *string             `json:"model,omitempty"                      yaml:"model,omitempty"`
 	FallbackModel              *string             `json:"fallback_model,omitempty"             yaml:"fallback_model,omitempty"`
@@ -1622,6 +1646,7 @@ func ExportRecordToTaskCreate(rec TaskExportRecord) TaskCreate {
 	}
 	return TaskCreate{
 		Name:                       rec.Name,
+		Title:                      rec.Title,
 		Prompt:                     rec.Prompt,
 		Model:                      rec.Model,
 		FallbackModel:              rec.FallbackModel,
@@ -1684,6 +1709,7 @@ func TaskToExportRecord(t *Task) TaskExportRecord {
 	}
 	rec := TaskExportRecord{
 		Name:                       t.Name,
+		Title:                      t.Title,
 		Prompt:                     t.Prompt,
 		Model:                      t.Model,
 		FallbackModel:              t.FallbackModel,

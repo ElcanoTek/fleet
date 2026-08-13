@@ -19,6 +19,21 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **Tasks have titles** (`docs/TASK-TITLES.md`). The Operations Center
+  identified a task by the first ~80 characters of its prompt, so operators were
+  writing a title line at the head of the prompt to tell jobs apart — display
+  text smuggled into the model's input. A task now carries an optional short
+  title, shown in Recent Tasks (leading the row, prompt demoted to a muted
+  second line), the Upcoming timeline and week board, the task-detail header,
+  and the SLA report; the task search matches it alongside prompt and id. It is
+  **not** the existing `name` column, which is the unique import/export identity
+  key *and* is cleared on every recurrence occurrence — a title is non-unique
+  and is carried onto every occurrence, re-run and clone, so all the runs of one
+  job list under the same label. Optional, single-line, ≤120 characters, never
+  injected into the agent's prompt; untitled tasks render exactly as before. A
+  bundle template may set `task.title`, and the create form otherwise seeds it
+  from the template's name.
+
 - **Run now, for a job that has not run yet.** The Operations Center could only
   *Resubmit*, and only a task that had already finished — so a scheduled job had
   no on-demand kick-off at all. A daily task created in the afternoon could not

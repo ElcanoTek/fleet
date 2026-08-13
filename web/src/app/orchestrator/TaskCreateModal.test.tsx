@@ -461,3 +461,64 @@ describe("TaskCreateModal — task templates", () => {
     expect(promptBox.value).toBe(`Summarize today's inbox. Today is ${TODAY}.`);
   });
 });
+
+// ── title ─────────────────────────────────────────────────────────────────────
+
+describe("TaskCreateModal — title", () => {
+  it("sends the trimmed title with the create payload", async () => {
+    createTask.mockReset();
+    createTask.mockResolvedValue({ id: "t-1" });
+    renderModal();
+    fireEvent.change(screen.getByLabelText("Title"), {
+      target: { value: "  Daily pacing summary  " },
+    });
+    fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Do the thing" } });
+    fireEvent.click(screen.getByRole("button", { name: "Launch task" }));
+
+    await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
+    const body = createTask.mock.calls[0][0] as Record<string, unknown>;
+    expect(body.title).toBe("Daily pacing summary");
+  });
+
+  it("omits title entirely when left blank, so the task stays untitled", async () => {
+    createTask.mockReset();
+    createTask.mockResolvedValue({ id: "t-1" });
+    renderModal();
+    fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Do the thing" } });
+    fireEvent.click(screen.getByRole("button", { name: "Launch task" }));
+
+    await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
+    const body = createTask.mock.calls[0][0] as Record<string, unknown>;
+    expect(body.title).toBeUndefined();
+  });
+
+  it("rejects an over-long title in the form instead of round-tripping a 400", async () => {
+    createTask.mockReset();
+    renderModal();
+    fireEvent.change(screen.getByLabelText("Title"), { target: { value: "a".repeat(121) } });
+    fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Do the thing" } });
+    fireEvent.click(screen.getByRole("button", { name: "Launch task" }));
+
+    expect(await screen.findByTestId("error-title")).toBeInTheDocument();
+    expect(createTask).not.toHaveBeenCalled();
+  });
+
+  it("prefills the title when editing a titled task", () => {
+    renderModal({ editTask: { ...baseEdit, title: "Weekly latency" } });
+    expect(screen.getByLabelText("Title")).toHaveValue("Weekly latency");
+  });
+
+  it("seeds the title from the template's name", async () => {
+    renderModal({}, [
+      {
+        name: "Plain Summary",
+        description: "No custom variables.",
+        variables: [],
+        task: { prompt: "Summarize today's inbox." },
+      },
+    ]);
+    await screen.findByTestId("task-template-section");
+    fireEvent.click(screen.getByText("Plain Summary"));
+    expect(screen.getByLabelText("Title")).toHaveValue("Plain Summary");
+  });
+});

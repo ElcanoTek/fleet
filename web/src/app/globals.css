@@ -2841,6 +2841,29 @@ tr.sla-row-fail {
   line-height: 1.45;
   color: var(--color-text-primary);
 }
+/* Titled tasks: the title is the identity line and the prompt drops to a
+   muted subtitle beneath it. Untitled tasks keep the prompt at full strength,
+   so nothing regresses while titles are being adopted. */
+.task-title-line {
+  display: block;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+.task-prompt-line {
+  display: block;
+  font-size: 0.8125rem;
+  color: var(--color-text-muted);
+}
+.task-card-title {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--color-text-primary);
+}
+.task-card-title + .task-card-prompt {
+  font-size: 0.8125rem;
+  color: var(--color-text-muted);
+}
 .task-card-meta {
   display: flex;
   flex-wrap: wrap;
@@ -3032,12 +3055,17 @@ tr.sla-row-fail {
   font-weight: 600;
   color: var(--color-text-primary);
 }
-.task-required-badge {
+.task-required-badge,
+.task-optional-badge {
   font-size: 0.66rem;
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--color-text-muted);
+}
+.task-optional-badge {
+  font-weight: 500;
+  opacity: 0.75;
 }
 .task-field-label {
   display: block;
@@ -3624,6 +3652,11 @@ tr.sla-row-fail {
   font-weight: 500;
   color: var(--color-text-primary);
   font-size: 0.875rem;
+}
+/* Title: one line, sized like the prompt field so the two read as one block. */
+.task-modal .task-title-input {
+  width: 100%;
+  line-height: 1.55;
 }
 /* Prompt textarea: auto-grows via JS (3 → ~8 lines), no native resize grip. */
 .task-modal .task-prompt-input {

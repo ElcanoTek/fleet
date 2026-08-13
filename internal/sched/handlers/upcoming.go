@@ -18,8 +18,12 @@ import (
 
 // UpcomingRun is one projected future execution.
 type UpcomingRun struct {
-	TaskID     string    `json:"task_id"`
-	Name       string    `json:"name,omitempty"`
+	TaskID string `json:"task_id"`
+	Name   string `json:"name,omitempty"`
+	// Title is the task's display label. Unlike Name it survives every
+	// occurrence of a recurring task, so it is the field the timeline should
+	// label a run with; Name stays for the import/export identity.
+	Title      string    `json:"title,omitempty"`
 	Prompt     string    `json:"prompt"`
 	Recurrence string    `json:"recurrence,omitempty"`
 	NextRun    time.Time `json:"next_run"`
@@ -107,7 +111,7 @@ func (h *Handlers) GetUpcomingRuns(w http.ResponseWriter, r *http.Request) {
 // projected, and a recurrence_remaining budget caps the number of occurrences
 // (the scheduled row itself is the first of the remaining runs).
 func projectRuns(t *models.Task, now time.Time, horizon time.Time) []UpcomingRun {
-	base := UpcomingRun{TaskID: t.ID.String(), Name: t.Name, Prompt: t.Prompt, Recurrence: t.Recurrence}
+	base := UpcomingRun{TaskID: t.ID.String(), Name: t.Name, Title: t.Title, Prompt: t.Prompt, Recurrence: t.Recurrence}
 	if t.Recurrence != "" {
 		schedule, err := cron.ParseStandard(t.Recurrence)
 		if err != nil {

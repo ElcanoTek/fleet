@@ -768,6 +768,10 @@ type TaskEdit struct {
 	// Persona replaces the task's per-task persona override (#221), assigned
 	// unconditionally from the full edit payload (empty = use the global persona).
 	Persona string
+	// Title replaces the task's operator-facing display label. Like Prompt it is
+	// assigned unconditionally from the full edit payload (empty = untitled), so
+	// clearing the field in the edit form clears the title.
+	Title string
 	// Description replaces the task's operator documentation (#281). Like Prompt,
 	// it is assigned unconditionally from the full edit payload (empty = clear).
 	Description  string
@@ -848,6 +852,7 @@ func (s *Storage) UpdateEditableTask(ctx context.Context, taskID uuid.UUID, edit
 	}
 
 	task.Prompt = edit.Prompt
+	task.Title = edit.Title
 	task.Description = edit.Description
 	task.Model = edit.Model
 	task.FallbackModel = edit.FallbackModel

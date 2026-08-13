@@ -209,3 +209,48 @@ describe("TasksTable Run now action (#1019)", () => {
     expect(onRunNow).toHaveBeenCalledWith(scheduled);
   });
 });
+
+describe("TasksTable titles", () => {
+  const base: Task = {
+    id: "dddddddd-eeee-ffff-0000-111111111111",
+    prompt: "Pull yesterday's numbers and email the pacing summary",
+    status: "success",
+  };
+
+  function renderTasks(tasks: Task[]) {
+    return render(
+      <TasksTable
+        tasks={tasks}
+        total={tasks.length}
+        page={1}
+        pageSize={20}
+        filters={FILTERS}
+        onFilters={() => {}}
+        onPage={() => {}}
+        onPageSize={() => {}}
+        onOpenLogs={() => {}}
+      />,
+    );
+  }
+
+  it("leads with the title and keeps the prompt as the secondary line", () => {
+    renderTasks([{ ...base, title: "Daily pacing summary" }]);
+    // Rendered in both the desktop row and the phone card (CSS picks one).
+    expect(screen.getAllByText("Daily pacing summary").length).toBe(2);
+    expect(
+      screen.getAllByText(/Pull yesterday's numbers/).length,
+    ).toBeGreaterThan(0);
+  });
+
+  it("falls back to the prompt alone when the task is untitled", () => {
+    renderTasks([base]);
+    expect(screen.getAllByText(/Pull yesterday's numbers/).length).toBe(2);
+    expect(document.querySelector(".task-title-line")).toBeNull();
+    expect(document.querySelector(".task-card-title")).toBeNull();
+  });
+
+  it("treats a whitespace-only title as untitled", () => {
+    renderTasks([{ ...base, title: "   " }]);
+    expect(document.querySelector(".task-title-line")).toBeNull();
+  });
+});

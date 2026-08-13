@@ -37,6 +37,10 @@ import { PromptLibrary } from "@/app/shared/ui/PromptLibrary";
 //    in the footer) — with field errors it stays enabled and the footer counts
 //    what's blocking.
 
+// TITLE_MAX_LENGTH mirrors the server's maxTaskTitleChars, so an over-long
+// title is caught in the form instead of coming back as a 400.
+const TITLE_MAX_LENGTH = 120;
+
 const DEFAULT_PRIMARY_MODEL = "z-ai/glm-5.2";
 const DEFAULT_FALLBACK_MODEL = "openai/gpt-5.6-sol";
 
@@ -149,6 +153,7 @@ function taskToFormValues(task: Task | null) {
     }
   }
   return {
+    title: task?.title ?? "",
     prompt: task?.prompt ?? "",
     description: task?.description ?? "",
     tagsInput: (task?.tags ?? []).join(", "),
@@ -290,6 +295,7 @@ export function TaskCreateModal({
   // fresh state — no prefill effects needed.
   const [init] = useState(() => taskToFormValues(editTask ?? null));
 
+  const [title, setTitle] = useState(init.title);
   const [prompt, setPrompt] = useState(init.prompt);
   const [description, setDescription] = useState(init.description);
   const [tagsInput, setTagsInput] = useState(init.tagsInput);
@@ -398,6 +404,7 @@ export function TaskCreateModal({
   const scheduledFor = scheduledDate ? `${scheduledDate}T${scheduledTime || "09:00"}` : "";
 
   const createDirty =
+    title.trim() !== "" ||
     prompt.trim() !== "" ||
     description.trim() !== "" ||
     tagsInput.trim() !== "" ||
@@ -424,6 +431,7 @@ export function TaskCreateModal({
   // component remounts per edit target via the parent's key, so `init` is the
   // mount-time truth); create mode keeps its semantic any-field-set check.
   const formSnapshot = JSON.stringify([
+    title,
     prompt,
     description,
     tagsInput,
@@ -448,6 +456,7 @@ export function TaskCreateModal({
     mcpSelection,
   ]);
   const initSnapshot = JSON.stringify([
+    init.title,
     init.prompt,
     init.description,
     init.tagsInput,
@@ -564,6 +573,9 @@ export function TaskCreateModal({
     const ctx = { userName: undefined as string | undefined };
     const t = tpl.task ?? {};
     setPrompt(t.prompt ? applyTemplateVars(t.prompt, userValues, ctx) : "");
+    // Seed the title from the template's own name — that is what the operator
+    // just picked the task by. Editable afterwards like every seeded field.
+    setTitle(t.title ?? tpl.name ?? "");
     setDescription(t.description ?? "");
     setTagsInput((t.tags ?? []).join(", "));
     setPersona(t.persona ?? "");
@@ -729,6 +741,7 @@ export function TaskCreateModal({
   // them).
   const buildTaskData = (finalPrompt: string): TaskCreate => {
     const taskData: TaskCreate = { prompt: finalPrompt };
+    if (title.trim()) taskData.title = title.trim();
     if (description.trim()) taskData.description = description;
     const tags = tagsInput
       .split(",")
@@ -792,6 +805,8 @@ export function TaskCreateModal({
       scheduled_for: scheduleMode === "once" ? scheduledFor : "",
     });
     const next: Record<string, string> = { ...(validation.errors as Record<string, string>) };
+    if (title.trim().length > TITLE_MAX_LENGTH)
+      next.title = `Title cannot exceed ${TITLE_MAX_LENGTH} characters.`;
     if (scheduleMode === "once" && !scheduledDate) next.scheduled_for = "Pick a date and time.";
     if (scheduleMode === "repeat" && !recurrence.trim())
       next.recurrence = "Type a cron expression or pick a preset below.";
@@ -805,6 +820,7 @@ export function TaskCreateModal({
   };
 
   const ERROR_FOCUS_TARGETS: Record<string, string> = {
+    title: "titleInput",
     prompt: "promptTextarea",
     scheduled_for: "scheduledForDate",
     recurrence: "recurrenceInput",
@@ -909,6 +925,7 @@ export function TaskCreateModal({
           // Only fields the rerun endpoint accepts as overrides are sent.
           const created = await orchestratorApi.rerunTask(editTask.id, {
             prompt: taskData.prompt,
+            title: taskData.title ?? "",
             description: taskData.description ?? "",
             model: taskData.model,
             fallback_model: taskData.fallback_model,
@@ -1161,6 +1178,44 @@ export function TaskCreateModal({
                   </div>
                 </section>
               ) : null}
+
+              {/* ── Title ──────────────────────────────────────────────
+                  Sits ABOVE the prompt on purpose: it is the field that
+                  replaces writing a title line at the top of the prompt, so
+                  it has to be the thing you meet first. Optional — an
+                  untitled task still lists by its prompt's first line. */}
+              <section className="task-group">
+                <div className="task-label-row">
+                  <label className="task-label" htmlFor="titleInput">
+                    Title
+                  </label>
+                  <span className="task-optional-badge">Optional</span>
+                </div>
+                <input
+                  id="titleInput"
+                  name="title"
+                  type="text"
+                  className={`task-title-input${errors.title ? " has-error" : ""}`}
+                  maxLength={TITLE_MAX_LENGTH}
+                  placeholder="Daily pacing summary"
+                  aria-describedby={errors.title ? "title-error title-help" : "title-help"}
+                  value={title}
+                  onChange={(e) => {
+                    setTitle(e.target.value);
+                    if (errors.title) setFieldError("title", "");
+                  }}
+                />
+                {errors.title ? (
+                  <div className="validation-error" id="title-error" data-testid="error-title">
+                    {errors.title}
+                  </div>
+                ) : null}
+                <p className="field-hint" id="title-help">
+                  How this job is listed in the Operations Center. Every run of it — including
+                  future scheduled ones — carries the same title. Left empty, the list falls back
+                  to the first line of the prompt.
+                </p>
+              </section>
 
               {/* ── Prompt ─────────────────────────────────────────────── */}
               <section className="task-group">
