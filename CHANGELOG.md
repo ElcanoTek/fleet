@@ -17,6 +17,23 @@ prior versions are listed because none have shipped.
 
 ## [Unreleased]
 
+### Added
+
+- **A server clock on the Operations Center dashboard**, beside the agent-status
+  cards. A cron recurrence fires in the *server's* timezone, not the operator's,
+  so `0 9 * * *` ran at 9am somewhere the UI never named — and
+  `orchestratorApi.config()`, which knew the zone, had no callers at all. The
+  clock now reads the orchestrator's own now from `GET /api/config` (which gains
+  `server_time`, formatted in the server's location so the offset travels with
+  it, plus `default_task_timezone`, the zone a task with no explicit one lands
+  in). The browser measures its skew against that once and ticks locally, so a
+  wrong laptop clock can't make the readout lie, a long-lived dashboard survives
+  a DST change (hourly resync), and a browser whose zone database has never
+  heard of the configured zone still shows the right wall time via the embedded
+  offset. Hovering names the zone — and names the task-scheduling default too
+  when a deployment has set it differently. An orchestrator that reports no
+  `server_time` renders no clock rather than local time under a server label.
+
 ### Fixed
 
 - **The task prompt field is adjustable, and no longer opens a long prompt into

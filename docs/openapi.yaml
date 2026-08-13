@@ -680,10 +680,35 @@ paths:
               schema: { type: string }
   /api/config:
     get:
-      summary: Public dashboard config (branding, feature flags).
+      summary: Public dashboard config (version, server clock, task-scheduling default zone).
       security: []
       responses:
-        "200": { description: OK }
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  version: { type: string }
+                  timezone:
+                    type: string
+                    description: "IANA name of the server clock (FLEET_TIMEZONE)."
+                  server_time:
+                    type: string
+                    format: date-time
+                    description: >-
+                      The orchestrator's current time, formatted in its own
+                      configured location so the UTC offset travels with it. A
+                      client computes its clock skew from this once and ticks
+                      locally, so a wrong browser clock cannot make the
+                      dashboard display a confident lie about server time.
+                  default_task_timezone:
+                    type: string
+                    description: >-
+                      IANA zone a scheduled task gets when its create request
+                      names none (FLEET_DEFAULT_TIMEZONE). Distinct from
+                      timezone — this is the zone a cron recurrence fires in.
 
   /tasks:
     get:
