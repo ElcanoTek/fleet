@@ -79,9 +79,11 @@ re-run, and every clone of a job lists under the same title.
 
 ## Storage
 
-Migration `060_add_task_title` adds `title TEXT NOT NULL DEFAULT ''` plus a
-partial `LOWER(title)` index for the search path. The column threads the
-standard route for a new per-task field: `taskColumns` / `scanTask` / `AddTask` /
+Migration `060_add_task_title` adds `title TEXT NOT NULL DEFAULT ''`, and no
+index: the search matches with a leading-wildcard `title ILIKE '%q%'`, which no
+btree can serve, and the trigram alternative would require a `CREATE EXTENSION`
+of every deployment. The same query already scans `prompt` the same way. The
+column threads the standard route for a new per-task field: `taskColumns` / `scanTask` / `AddTask` /
 `taskInsertColumns` + `taskInsertArgs` + `taskInsertColumnsCount` /
 `taskInsertOnConflict` / `UpdateTaskTx`, plus `TaskExportRecord` so a definition
 keeps its title when it moves between deployments.

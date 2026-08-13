@@ -21,7 +21,8 @@
 -- the UI falls back to the prompt's first line exactly as it does today.
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS title TEXT NOT NULL DEFAULT '';
 
--- The Recent Tasks search box matches title alongside prompt and id; the ILIKE
--- is a leading-wildcard match, so this is a plain btree on the lowercased value
--- to keep the common "starts with" prefix search off a sequential scan.
-CREATE INDEX IF NOT EXISTS idx_tasks_title ON tasks (LOWER(title)) WHERE title <> '';
+-- No index. The Recent Tasks search matches title with a LEADING-wildcard
+-- `title ILIKE '%q%'`, which no btree can serve, and the alternative (a pg_trgm
+-- GIN index) needs a CREATE EXTENSION this migration has no business requiring
+-- of every deployment. The same query already scans `prompt` the same way, so
+-- an index here would cost writes and return nothing.
