@@ -176,8 +176,15 @@ if [[ -z "$INSTALL_DIR" ]]; then
     # the path= field. The old `awk '{print $1}'` grabbed the literal "{" and
     # resolved INSTALL_DIR to the operator's cwd, so the swap (and therefore
     # the backup/rollback guarantee) never touched /opt/fleet.
+    # `|| true`: this whole pipeline is best-effort probing, not a check that
+    # must succeed. Under `set -e` + `pipefail` a non-zero exit anywhere in it
+    # aborts the upgrade — and `systemctl show` exits non-zero whenever it can
+    # not reach systemd, which is every container where the systemctl binary
+    # exists but PID 1 is not systemd (`head -n1` can also SIGPIPE it). The
+    # fallback below already handles "no path found"; swallowing the status is
+    # what lets it be reached instead of dying two steps into the upgrade.
     exec_start="$(systemctl show -p ExecStart --value "${SERVICE_NAME}.service" 2>/dev/null \
-      | sed -n 's/.*path=\([^ ;]*\).*/\1/p' | head -n1)"
+      | sed -n 's/.*path=\([^ ;]*\).*/\1/p' | head -n1 || true)"
   else
     exec_start=""
   fi

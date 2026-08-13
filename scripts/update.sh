@@ -599,8 +599,12 @@ else
     # path= field. The old `awk '{print $1}'` grabbed the literal "{", made
     # dirname yield "." (== $SRC_DIR after the cd above), and the install was
     # silently skipped as "in place": the restart re-ran the OLD binary.
+    # `|| true` for the same reason as fleet-upgrade.sh: under `set -e` +
+    # pipefail a `systemctl show` that cannot reach systemd (any container
+    # carrying the binary without systemd as PID 1) would abort the update
+    # rather than fall through to the /opt/fleet default below.
     exec_start="$(systemctl show -p ExecStart --value "${SERVICE_NAME}.service" 2>/dev/null \
-      | sed -n 's/.*path=\([^ ;]*\).*/\1/p' | head -n1)"
+      | sed -n 's/.*path=\([^ ;]*\).*/\1/p' | head -n1 || true)"
     if [[ "$exec_start" == /* && -x "$(dirname "$exec_start")" ]]; then
       INSTALL_DIR="$(dirname "$exec_start")"
     else
