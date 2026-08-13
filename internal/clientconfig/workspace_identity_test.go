@@ -59,6 +59,66 @@ mcp_servers:
 	}
 }
 
+// TestReservedTokenOpFormsFailTheLoad pins the guard companion to the
+// preserved-verbatim contract above: any colon-suffixed spelling of a reserved
+// runtime token (:-, :?, or a typo'd op) fails the load loudly, naming the
+// contract. Left through, ${FLEET_WORKSPACE:-...} would resolve from the
+// process env or bake its default into the manifest — silently defeating the
+// launch-time workspace substitution the bare token exists for.
+func TestReservedTokenOpFormsFailTheLoad(t *testing.T) {
+	cases := []struct{ name, value string }{
+		{"workspace default form", `"${FLEET_WORKSPACE:-/tmp/fallback}"`},
+		{"workspace required form", `"${FLEET_WORKSPACE:?must be set}"`},
+		{"workspace unknown op", `"${FLEET_WORKSPACE:junk}"`},
+		{"task id default form", `"${FLEET_TASK_ID:-none}"`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := writeManifest(t, `
+mcp_servers:
+  - name: sspd
+    command: python3
+    args: ["mcp/sspd.py"]
+    always: true
+    env:
+      CUTLASS_RUN_WORKDIR: `+tc.value+`
+`)
+			_, err := Load(dir)
+			if err == nil {
+				t.Fatal("expected the load to fail on a non-bare reserved-token form")
+			}
+			if !strings.Contains(err.Error(), "RESERVED runtime token") {
+				t.Errorf("error should name the reserved-token contract, got: %v", err)
+			}
+		})
+	}
+}
+
+// TestReservedTokensExcludedFromEnvVarNames: the reserved tokens are spawn-time
+// substitution placeholders, not process-env vars, so they must not be
+// registered into the .env-file allowlist.
+func TestReservedTokensExcludedFromEnvVarNames(t *testing.T) {
+	dir := writeManifest(t, `
+mcp_servers:
+  - name: sspd
+    command: python3
+    args: ["mcp/sspd.py"]
+    always: true
+    env:
+      CUTLASS_RUN_WORKDIR: "${FLEET_WORKSPACE}"
+      LEGACY_TASK_ID: "${FLEET_TASK_ID}"
+`)
+	b, err := Load(dir)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	for _, name := range b.EnvVarNames() {
+		if name == "FLEET_WORKSPACE" || name == "FLEET_TASK_ID" {
+			t.Errorf("EnvVarNames must exclude reserved token %q, got %v", name, b.EnvVarNames())
+		}
+	}
+}
+
 // TestReservedWorkspaceTokenNotDroppedByOptionalEnv pins that a token-bearing
 // key survives optional_env (its resolved value is non-empty — the token), so
 // the spawn-time substitution still sees it.

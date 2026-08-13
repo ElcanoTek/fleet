@@ -17,7 +17,7 @@ async function proxy(method: "PUT" | "DELETE", id: string, req?: Request) {
     init.headers = { "Content-Type": "application/json" };
   }
   const { upstream, error } = await chatServerProxy(
-    session.email,
+    session,
     `/user-skills/${encodeURIComponent(id)}`,
     init,
   );

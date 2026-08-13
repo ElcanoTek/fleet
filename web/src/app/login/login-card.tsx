@@ -11,6 +11,9 @@ function errorCodeToMessage(code: string | null): string | null {
   if (code === "invalid") return "Invalid email or password.";
   if (code === "missing") return "Please enter both email and password.";
   if (code === "server") return "The chat server isn't reachable right now. Try again in a moment.";
+  // "in a minute" matches the verify endpoint's Retry-After: 60
+  // (internal/httpapi/auth_verify.go).
+  if (code === "throttled") return "Too many sign-in attempts. Try again in a minute.";
   if (code === "elcano_unavailable")
     return "Elcano email sign-in isn't available right now. Use your email and password.";
   if (code === "oidc_unavailable")
@@ -21,7 +24,7 @@ function errorCodeToMessage(code: string | null): string | null {
   return "Could not sign in.";
 }
 
-// elcanoLoginEnabled is resolved server-side from AUTH_SIGNING_PUBKEY (the same
+// magicLinkLoginEnabled is resolved server-side from AUTH_SIGNING_PUBKEY (the same
 // gate the backend uses) and passed in as a prop. When the Elcano-email path
 // isn't configured — e.g. a white-labelled deploy — the secondary button and
 // its divider are omitted entirely so the card shows only the password form
@@ -36,13 +39,13 @@ function errorCodeToMessage(code: string | null): string | null {
 // login_title to "Reklaim what's yours." still displayed "Welcome aboard."
 // The page-level server component reads them instead and hands them down.
 export default function LoginCard({
-  elcanoLoginEnabled,
+  magicLinkLoginEnabled,
   oidcEnabled = false,
   oidcLabel = "Sign in with SSO",
   title,
   tagline,
 }: {
-  elcanoLoginEnabled: boolean;
+  magicLinkLoginEnabled: boolean;
   oidcEnabled?: boolean;
   oidcLabel?: string;
   title: string;
@@ -121,7 +124,7 @@ export default function LoginCard({
           </button>
         </form>
 
-        {elcanoLoginEnabled || oidcEnabled ? (
+        {magicLinkLoginEnabled || oidcEnabled ? (
           <>
             <div className="my-5 flex items-center gap-3 text-[0.6875rem] uppercase tracking-wide text-[var(--color-text-muted)]">
               <span className="h-px flex-1 bg-[var(--color-border)]" />
@@ -141,7 +144,7 @@ export default function LoginCard({
                   {oidcLabel}
                 </a>
               ) : null}
-              {elcanoLoginEnabled ? (
+              {magicLinkLoginEnabled ? (
                 <a
                   href="/api/auth/elcano-login"
                   className="flex items-center justify-center rounded-xl border border-[var(--color-border)] px-4 py-2.5 text-sm font-medium text-[var(--color-text-primary)] transition hover:bg-[var(--color-overlay-soft)] focus-visible:outline-none focus-visible:[box-shadow:var(--focus-ring)]"

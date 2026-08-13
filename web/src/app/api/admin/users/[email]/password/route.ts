@@ -22,7 +22,7 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
   const { email } = await params;
   const body = await request.text();
   const { upstream, error } = await chatServerProxy(
-    session.email,
+    session,
     `/admin/users/${encodeURIComponent(email)}/password`,
     { method: "PUT", body },
   );

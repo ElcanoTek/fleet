@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -132,8 +133,8 @@ func TestAuthorizeTaskCreator_HeaderTrust(t *testing.T) {
 		if creator.creatorID == nil || creator.creatorUsername != "alice@elcanotek.com" {
 			t.Errorf("creator not resolved from header trust: %+v", creator)
 		}
-		if creator.isAdmin {
-			t.Errorf("header-trust member must not be admin")
+		if creator.hasAdminPermission {
+			t.Errorf("header-trust client-role member must not carry admin permission")
 		}
 	})
 
@@ -203,6 +204,81 @@ func TestHandleUpload_HeaderTrust(t *testing.T) {
 		rr := do("topsecret", "stranger@example.com")
 		if rr.Code != http.StatusForbidden {
 			t.Errorf("status %d want 403 (not_a_member)", rr.Code)
+		}
+	})
+}
+
+// POST /tasks/estimate is creation-shaped (same body, same rate limiter as
+// POST /tasks) and sits outside the auth middleware group like its siblings.
+// It used to enforce a hand-rolled auth copy that predated header trust, so
+// the pre-submission cost forecast was silently dead ("Estimate failed:
+// Unauthorized") for every cookie-path Operations Center user — fail-closed,
+// but broken. It now shares authorizeTaskCreator, including the session-epoch
+// revocation gate.
+func TestEstimateTask_HeaderTrust(t *testing.T) {
+	newEstimateHandler := func() *Handlers {
+		h := newHeaderTrustHandler()
+		h.config.DefaultTaskModel = "anthropic/claude-haiku-4-5"
+		h.config.DefaultMaxIterations = 5
+		return h
+	}
+	do := func(h *Handlers, token, email, epoch string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/tasks/estimate",
+			strings.NewReader(`{"prompt":"estimate this prompt please"}`))
+		req.Header.Set("Content-Type", "application/json")
+		if token != "" {
+			req.Header.Set("X-Orchestrator-Server-Token", token)
+		}
+		if email != "" {
+			req.Header.Set("X-User-Email", email)
+		}
+		if epoch != "" {
+			req.Header.Set("X-User-Session-Epoch", epoch)
+		}
+		rr := httptest.NewRecorder()
+		h.EstimateTask(rr, req)
+		return rr
+	}
+
+	t.Run("valid token + member gets a forecast", func(t *testing.T) {
+		rr := do(newEstimateHandler(), "topsecret", "alice@elcanotek.com", "")
+		if rr.Code != http.StatusOK {
+			t.Fatalf("status %d want 200 (header-trust user must be able to estimate): %s", rr.Code, rr.Body.String())
+		}
+	})
+
+	t.Run("wrong token fails closed with 403", func(t *testing.T) {
+		rr := do(newEstimateHandler(), "wrong", "alice@elcanotek.com", "")
+		if rr.Code != http.StatusForbidden {
+			t.Errorf("status %d want 403", rr.Code)
+		}
+	})
+
+	t.Run("valid token + non-member is 403", func(t *testing.T) {
+		rr := do(newEstimateHandler(), "topsecret", "stranger@example.com", "")
+		if rr.Code != http.StatusForbidden {
+			t.Errorf("status %d want 403 (not_a_member)", rr.Code)
+		}
+	})
+
+	t.Run("revoked session epoch is 401", func(t *testing.T) {
+		h := newEstimateHandler()
+		h.chatSessionEpoch = func(_ context.Context, _ string) (string, error) { return "live-epoch", nil }
+		rr := do(h, "topsecret", "alice@elcanotek.com", "stale-epoch")
+		if rr.Code != http.StatusUnauthorized {
+			t.Errorf("status %d want 401 (session-epoch revocation must apply to estimate too)", rr.Code)
+		}
+		if rr.Header().Get("X-Session-Revoked") != "1" {
+			t.Error("missing X-Session-Revoked verdict header")
+		}
+	})
+
+	t.Run("matching session epoch is admitted", func(t *testing.T) {
+		h := newEstimateHandler()
+		h.chatSessionEpoch = func(_ context.Context, _ string) (string, error) { return "live-epoch", nil }
+		rr := do(h, "topsecret", "alice@elcanotek.com", "live-epoch")
+		if rr.Code != http.StatusOK {
+			t.Errorf("status %d want 200: %s", rr.Code, rr.Body.String())
 		}
 	})
 }

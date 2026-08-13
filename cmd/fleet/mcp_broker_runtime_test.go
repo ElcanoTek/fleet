@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"reflect"
@@ -77,6 +78,7 @@ func TestStartProductionMCPRuntime_InheritsThenScrubsParent(t *testing.T) {
     env:
       TOKEN: "${CONNECTOR_TOKEN}"
       WORK: "${FLEET_WORKSPACE}"
+    tools: [lookup]
     account_vars: [TOKEN]
 `)
 	bundle, err := clientconfig.Load(bundleDir)
@@ -117,6 +119,9 @@ func TestStartProductionMCPRuntime_InheritsThenScrubsParent(t *testing.T) {
 	if !runtime.inventory.snapshot()["demo"].UsesWorkspace {
 		t.Fatal("public scheduled inventory lost uses-workspace metadata")
 	}
+	if !slices.Equal(runtime.inventory.snapshot()["demo"].ToolAllowlist, []string{"lookup"}) {
+		t.Fatalf("public scheduled inventory lost the Gate-2 tool allowlist after scrub: %+v", runtime.inventory.snapshot()["demo"])
+	}
 	if err := runtime.client.Ping(context.Background()); err != nil {
 		t.Fatalf("child lost inherited environment after parent scrub: %v", err)
 	}
@@ -131,6 +136,11 @@ func TestStartProductionMCPRuntime_InheritsThenScrubsParent(t *testing.T) {
 		t.Fatalf("close task scope: %v", err)
 	}
 	assertProductionRemoteOverlay(t, runtime)
+	assertProductionReload(t, runtime)
+}
+
+func assertProductionReload(t *testing.T, runtime *productionMCPRuntime) {
+	t.Helper()
 	reloaded, err := runtime.reload(context.Background())
 	if err != nil {
 		t.Fatalf("reload: %v", err)
@@ -140,7 +150,8 @@ func TestStartProductionMCPRuntime_InheritsThenScrubsParent(t *testing.T) {
 		!reloaded.Specs["future"].Optional || reloaded.Specs["future"].Env != nil {
 		t.Fatalf("public reload result = %+v", reloaded)
 	}
-	if inventory := runtime.inventory.snapshot(); len(inventory) != 1 || !inventory["future"].UsesWorkspace {
+	if inventory := runtime.inventory.snapshot(); len(inventory) != 1 || !inventory["future"].UsesWorkspace ||
+		!slices.Equal(inventory["future"].ToolAllowlist, []string{"fresh_lookup"}) {
 		t.Fatalf("live inventory after reload = %+v", inventory)
 	}
 }
@@ -194,6 +205,107 @@ func TestProductionRemoteMCPOverlayOpenerGatesFeature(t *testing.T) {
 	}
 	if opener := productionRemoteMCPOverlayOpener(new(remotemcp.Service), runtime); opener == nil {
 		t.Fatal("enabled remote MCP did not produce an overlay opener")
+	}
+}
+
+func TestValidateConnectorParentEnvSeparation_AllowsCutlassConnectorWireKeys(t *testing.T) {
+	t.Setenv("CUTLASS_ALLOWED_DIRS", "/srv/drops")
+	bundle, err := clientconfig.Load(mcpTestBundle(t, `mcp_servers:
+  - name: sendgrid
+    type: stdio
+    command: /bin/true
+    env:
+      CUTLASS_MOC_TASK_ID: "${FLEET_TASK_ID}"
+      CUTLASS_ALLOWED_DIRS: "${CUTLASS_ALLOWED_DIRS}"
+      CUTLASS_RUN_WORKDIR: "${FLEET_WORKSPACE}"
+      CUTLASS_USER_AGENT: "${CUTLASS_USER_AGENT}"
+      CUTLASS_REPORT_DIR: "${CUTLASS_REPORT_DIR}"
+      CUTLASS_INPUT_DIR: "${FLEET_WORKSPACE}/inputs"
+    optional_env:
+      - CUTLASS_ALLOWED_DIRS
+      - CUTLASS_RUN_WORKDIR
+      - CUTLASS_MOC_TASK_ID
+`))
+	if err != nil {
+		t.Fatalf("load bundle: %v", err)
+	}
+	if err := validateConnectorParentEnvSeparation(bundle); err != nil {
+		t.Fatalf("cutlass-family connector wire keys refused: %v", err)
+	}
+}
+
+func TestValidateConnectorParentEnvSeparation_RejectsParentOwnedCutlassNames(t *testing.T) {
+	for _, name := range []string{
+		"CUTLASS_TASK_MODEL", "CUTLASS_LOG_FILE", "CUTLASS_RETRY_MAX_ATTEMPTS",
+		// Legacy spellings the parent resolves lazily after broker boot: the
+		// shared server auth secret plus the per-run lookups through the
+		// alias machinery (config.lookupFleet, agentcore.EnvPrefix).
+		"CUTLASS_SERVER_TOKEN",
+		"CUTLASS_OPENROUTER_BASE_URL", "CUTLASS_MODEL_CACHE_TTL_MINUTES",
+		"CUTLASS_CONTEXT_PRESSURE_WARN_THRESHOLD", "CUTLASS_CONTEXT_COMPACTION_THRESHOLD",
+		"CUTLASS_SCHEDULED_AUTO_COMPACT", "CUTLASS_MAX_ITERATIONS",
+	} {
+		t.Run(name, func(t *testing.T) {
+			bundle, err := clientconfig.Load(mcpTestBundle(t, `mcp_servers:
+  - name: demo
+    type: stdio
+    command: /bin/true
+    always: true
+    env:
+      WIRE_KEY: "${`+name+`}"
+`))
+			if err != nil {
+				t.Fatalf("load bundle: %v", err)
+			}
+			if err := validateConnectorParentEnvSeparation(bundle); err == nil || !strings.Contains(err.Error(), name) {
+				t.Fatalf("overlap error = %v, want name-only %s refusal", err, name)
+			}
+		})
+	}
+}
+
+// Walks the alias machinery over the whole parent-owned enumeration: every
+// spelling config's FLEET_/CHAT_/CUTLASS_ prefix aliasing resolves for a
+// parent-owned name must be refused, so a name added to the enumeration later
+// cannot silently escape in one of its legacy spellings.
+func TestValidateConnectorParentEnvSeparation_RefusesEveryAliasSpelling(t *testing.T) {
+	spellings := map[string]bool{}
+	var refs strings.Builder
+	for _, name := range parentOwnedRuntimeEnvNames(nil) {
+		for _, spelling := range config.EnvAliases(name) {
+			if spellings[spelling] {
+				continue
+			}
+			spellings[spelling] = true
+			fmt.Fprintf(&refs, "      WIRE_KEY_%d: \"${%s}\"\n", len(spellings), spelling)
+		}
+	}
+	bundle, err := clientconfig.Load(mcpTestBundle(t, `mcp_servers:
+  - name: demo
+    type: stdio
+    command: /bin/true
+    always: true
+    env:
+`+refs.String()))
+	if err != nil {
+		t.Fatalf("load bundle: %v", err)
+	}
+	err = validateConnectorParentEnvSeparation(bundle)
+	if err == nil {
+		t.Fatal("bundle claiming every parent-owned spelling validated")
+	}
+	_, list, ok := strings.Cut(err.Error(), ": ")
+	if !ok {
+		t.Fatalf("overlap error = %v, want ': '-separated name list", err)
+	}
+	refused := map[string]bool{}
+	for _, name := range strings.Split(list, ", ") {
+		refused[name] = true
+	}
+	for spelling := range spellings {
+		if !refused[spelling] {
+			t.Errorf("alias spelling %s of a parent-owned name was not refused", spelling)
+		}
 	}
 }
 

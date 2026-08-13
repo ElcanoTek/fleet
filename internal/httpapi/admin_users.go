@@ -31,6 +31,13 @@ type OpsAdmins interface {
 	Ensure(ctx context.Context, email string) error
 	Remove(ctx context.Context, email string) error
 	List(ctx context.Context) ([]string, error)
+	// SetRole grants email the sched-plane role (admin|client|readonly);
+	// role "none" (or "") removes the row entirely. The generalized form of
+	// Ensure/Remove for the non-admin Operations Center roles.
+	SetRole(ctx context.Context, email, role string) error
+	// Roles returns every provisioned sched-plane account's role, keyed by
+	// lowercased email — the batched lookup the users table renders from.
+	Roles(ctx context.Context) (map[string]string, error)
 }
 
 // WithOpsAdmins injects the Operations-Center admin service. nil (the default)
@@ -147,6 +154,28 @@ func (s *Server) handleAdminUserPassword(w http.ResponseWriter, r *http.Request,
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// setOpsRole applies an explicit Operations Center role ("none" removes the
+// row). Best-effort like ensureOpsAdmin — the chat plane is untouched either
+// way; failures are logged, never unwound.
+func (s *Server) setOpsRole(r *http.Request, email, role string) {
+	if s.opsAdmins == nil {
+		return
+	}
+	if err := s.opsAdmins.SetRole(r.Context(), email, role); err != nil {
+		//nolint:gosec // G706: %q escapes CR/LF; role is validated before this call.
+		log.Printf("WARNING: admin users: set ops role %q for %q failed: %v", role, email, err)
+	}
+}
+
+// opsRolesBestEffort returns the sched-plane role map, or an error when the
+// seam is absent/unreachable (callers then skip conditional ops writes).
+func (s *Server) opsRolesBestEffort(r *http.Request) (map[string]string, error) {
+	if s.opsAdmins == nil {
+		return nil, errors.New("no ops seam")
+	}
+	return s.opsAdmins.Roles(r.Context())
+}
+
 // ensureOpsAdmin / removeOpsAdmin apply the second (Operations Center) plane
 // best-effort: the chat-plane write already succeeded, so a sched-plane
 // failure is reported in the log — never by unwinding the chat write. nil seam
@@ -176,14 +205,37 @@ func (s *Server) removeOpsAdmin(r *http.Request, email string) {
 func (s *Server) toAdminUserAnnotated(r *http.Request, u store.User) adminUser {
 	out := toAdminUser(u)
 	if s.opsAdmins != nil {
-		if admins, err := s.opsAdmins.List(r.Context()); err == nil {
-			for _, a := range admins {
-				if strings.EqualFold(a, u.Email) {
-					out.OpsCenterAdmin = true
-					break
-				}
-			}
+		if roles, err := s.opsAdmins.Roles(r.Context()); err == nil {
+			out.OpsCenterRole = roles[strings.ToLower(u.Email)]
+			out.OpsCenterAdmin = out.OpsCenterRole == "admin"
 		}
 	}
 	return out
+}
+
+// handleAdminTeamRename serves POST /admin/teams/rename — relabel a team
+// everywhere it appears (users + team-shared projects, one transaction).
+// Body: {"from": "devops", "to": "platform"}. Admin-gated at the route.
+func (s *Server) handleAdminTeamRename(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		From string `json:"from"`
+		To   string `json:"to"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	usersN, projectsN, err := s.store.RenameTeam(r.Context(), body.From, body.To)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	log.Printf("admin teams: renamed %q -> %q (%d users, %d projects) by %q",
+		body.From, body.To, usersN, projectsN, userFromCtx(r.Context()))
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"users_updated": usersN, "projects_updated": projectsN})
 }

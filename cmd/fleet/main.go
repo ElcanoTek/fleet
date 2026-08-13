@@ -612,7 +612,9 @@ func run() error {
 	// path POST /tasks uses — no second governance/create path is forked. The
 	// seam carries the budget gate so scheduling from chat cannot bypass a
 	// budget that would refuse the same user on POST /tasks (#601 part 2).
-	chatOpts = append(chatOpts, httpapi.WithTaskScheduler(taskSchedulerProvider(schedStorage, budgetEnforcer)))
+	chatOpts = append(chatOpts, httpapi.WithTaskScheduler(taskSchedulerProvider(schedStorage, budgetEnforcer, cfg.TaskModel)))
+
+	warnIfNoDefaultTaskModel(cfg.TaskModel)
 
 	// Admin-managed LLM providers: after a persisted edit the handler invokes
 	// this to re-read the store, re-merge with the bundle table, and swap the
@@ -725,6 +727,12 @@ func run() error {
 	// read-only aggregations over what the chat store already records.
 	h.SetChatUserDayUsageProvider(chatUserDayUsageProvider(chatStore))
 	h.SetChatAccountsProvider(chatAccountsProvider(chatStore))
+	// Both planes are reached with the SAME session cookie, so the Operations
+	// Center checks the same revocation claim chat does. The epoch lives in the
+	// chat users table, which this plane cannot read (ADR-0005) — hand it the
+	// lookup, not the schema. Wired unconditionally: the chat store is open by
+	// the time these handlers exist, and a nil seam would silently stop checking.
+	h.SetChatSessionEpochProvider(chatStore.SessionEpoch)
 	// Budget gate for POST /tasks + /tasks/batch and the /admin/budgets CRUD
 	// surface (#601 part 2) — the SAME enforcer the chat schedule_task seam
 	// carries, so no create path can drift.
@@ -805,10 +813,16 @@ func run() error {
 	// dispatching on the global default. Reads the bundle's personas dir live
 	// per call, so a bundle hot-reload is reflected without a restart.
 	h.SetPersonaCatalog(func() []string { return listBundlePersonas(personasDir) })
-	// Reclaim sandbox containers orphaned by a PRIOR crash before building the
-	// pool: they run `--detach --rm` under conmon, so a non-graceful exit leaves
-	// them holding host RAM/PIDs across systemd restarts. Best-effort — log and
-	// continue if podman is absent (e.g. mock/dev) or the sweep fails.
+	// Reclaim sandbox containers orphaned by a PRIOR crash: they run
+	// `--detach --rm` under conmon, so a non-graceful exit leaves them holding
+	// host RAM/PIDs across systemd restarts. Best-effort — log and continue if
+	// podman is absent (e.g. mock/dev) or the sweep fails.
+	//
+	// NOTE this runs AFTER buildInteractiveEngine above, which constructs the
+	// sandbox pool and starts it filling. The sweep is safe here only because it
+	// skips containers carrying this process's own instance label in every
+	// state — otherwise a warm container caught in "created" state would be
+	// force-removed by its own process. See sandbox.PruneOrphanedContainers.
 	pruneCtx, pruneCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	if n, err := sandbox.PruneOrphanedContainers(pruneCtx, "podman"); err != nil {
 		log.Printf("startup: prune orphaned sandbox containers: %v", err)
@@ -2049,7 +2063,20 @@ func emailReplierFor(n *notify.Notifier) runner.EmailReplier {
 	return n
 }
 
-func taskSchedulerProvider(schedStorage *storage.Storage, budgetGate *budget.Enforcer) func(context.Context, httpapi.TaskScheduleRequest) (*httpapi.TaskScheduleResult, error) {
+// warnIfNoDefaultTaskModel says once at boot that this deployment can only run
+// scheduled tasks that pin their own model, rather than letting that surface
+// per-task in the dead-letter queue (#1014). It names every accepted spelling,
+// since the knob resolves through the FLEET_/CHAT_/CUTLASS_ alias family (#1015)
+// and the old error text pointed only at the legacy one.
+func warnIfNoDefaultTaskModel(taskModel string) {
+	if strings.TrimSpace(taskModel) != "" {
+		return
+	}
+	log.Printf("WARNING: no default task model configured (FLEET_TASK_MODEL, or CHAT_/CUTLASS_TASK_MODEL). " +
+		"Scheduled tasks that do not pin their own model will be refused at create time.")
+}
+
+func taskSchedulerProvider(schedStorage *storage.Storage, budgetGate *budget.Enforcer, defaultTaskModel string) func(context.Context, httpapi.TaskScheduleRequest) (*httpapi.TaskScheduleResult, error) {
 	return func(ctx context.Context, req httpapi.TaskScheduleRequest) (*httpapi.TaskScheduleResult, error) {
 		// Per-principal rolling budget (#601 part 2): the chat path runs the
 		// SAME shared gate POST /tasks and /tasks/batch run, keyed on the
@@ -2068,6 +2095,13 @@ func taskSchedulerProvider(schedStorage *storage.Storage, budgetGate *budget.Enf
 		}
 		if m := strings.TrimSpace(req.Model); m != "" {
 			tc.Model = &m
+		}
+		// EnqueueTask skips the HTTP handler's validation, so the create-time
+		// model gate (#1014) is applied here too — otherwise the chat path is the
+		// one way to enqueue a task that cannot possibly run. Surfaces in chat as
+		// the schedule_task failure text, like the budget refusal above.
+		if tc.Model == nil && strings.TrimSpace(defaultTaskModel) == "" {
+			return nil, fmt.Errorf("no model configured: set FLEET_TASK_MODEL on the orchestrator, or pass model on the task")
 		}
 		if req.MaxIterations > 0 {
 			iters := req.MaxIterations
@@ -2132,6 +2166,30 @@ func (o opsAdminsService) List(ctx context.Context) ([]string, error) {
 		if u.Role == "admin" {
 			out = append(out, u.Username)
 		}
+	}
+	return out, nil
+}
+
+// SetRole is the generalized grant: "none" removes the sched-side row
+// (mirroring Remove); any other role creates-or-re-roles the account via the
+// same primitive the bootstrap admin seed uses.
+func (o opsAdminsService) SetRole(ctx context.Context, email, role string) error {
+	if role == "" || role == "none" {
+		return o.Remove(ctx, email)
+	}
+	return o.st.EnsureUserWithRole(ctx, email, role)
+}
+
+// Roles returns every sched-plane account's role keyed by lowercased email —
+// the batched lookup the admin users table renders from.
+func (o opsAdminsService) Roles(ctx context.Context) (map[string]string, error) {
+	users, err := o.st.ListUsers(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]string, len(users))
+	for _, u := range users {
+		out[strings.ToLower(u.Username)] = u.Role
 	}
 	return out, nil
 }

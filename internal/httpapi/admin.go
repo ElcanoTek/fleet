@@ -116,7 +116,11 @@ type adminUser struct {
 	// Operations Center (sched-plane) admin role — the two-plane view the
 	// `fleet admin list` CLI prints. Always false when no orchestrator seam
 	// is wired (WithOpsAdmins), so it never claims access that can't exist.
+	// Kept alongside OpsCenterRole for older clients.
 	OpsCenterAdmin bool `json:"ops_center_admin"`
+	// OpsCenterRole is the sched-plane role for the same email:
+	// "admin" | "client" | "readonly" | "" (no Operations Center access).
+	OpsCenterRole string `json:"ops_center_role"`
 }
 
 func toAdminUser(u store.User) adminUser {
@@ -150,18 +154,17 @@ func (s *Server) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
 	}
 	// One batched ops-center lookup for the whole table (never per-row).
 	// Best-effort: a briefly unreachable sched DB must not blank the user list.
-	opsSet := map[string]bool{}
+	opsRoles := map[string]string{}
 	if s.opsAdmins != nil {
-		if admins, err := s.opsAdmins.List(r.Context()); err == nil {
-			for _, a := range admins {
-				opsSet[strings.ToLower(a)] = true
-			}
+		if roles, err := s.opsAdmins.Roles(r.Context()); err == nil {
+			opsRoles = roles
 		}
 	}
 	out := make([]adminUser, 0, len(users))
 	for _, u := range users {
 		au := toAdminUser(u)
-		au.OpsCenterAdmin = opsSet[strings.ToLower(u.Email)]
+		au.OpsCenterRole = opsRoles[strings.ToLower(u.Email)]
+		au.OpsCenterAdmin = au.OpsCenterRole == "admin"
 		out = append(out, au)
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -209,14 +212,26 @@ func (s *Server) handleAdminUserPatch(w http.ResponseWriter, r *http.Request, em
 	var body struct {
 		Role   *string `json:"role"`
 		TeamID *string `json:"team_id"`
+		// OpsRole sets the Operations Center (sched-plane) role explicitly:
+		// "none" | "readonly" | "client" | "admin". Independent of the chat
+		// role except that chat admin implies ops admin (below).
+		OpsRole *string `json:"ops_role"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
-	if body.Role == nil && body.TeamID == nil {
-		http.Error(w, "nothing to update (provide role and/or team_id)", http.StatusBadRequest)
+	if body.Role == nil && body.TeamID == nil && body.OpsRole == nil {
+		http.Error(w, "nothing to update (provide role, team_id and/or ops_role)", http.StatusBadRequest)
 		return
+	}
+	if body.OpsRole != nil {
+		switch *body.OpsRole {
+		case "none", "readonly", "client", "admin":
+		default:
+			http.Error(w, "invalid ops_role (want none|readonly|client|admin)", http.StatusBadRequest)
+			return
+		}
 	}
 	if body.Role != nil && *body.Role != store.RoleAdmin &&
 		strings.EqualFold(strings.TrimSpace(email), strings.TrimSpace(userFromCtx(r.Context()))) {
@@ -238,11 +253,21 @@ func (s *Server) handleAdminUserPatch(w http.ResponseWriter, r *http.Request, em
 	if body.Role != nil {
 		if *body.Role == store.RoleAdmin {
 			s.ensureOpsAdmin(r, u.Email)
-		} else {
-			s.removeOpsAdmin(r, u.Email)
+		} else if body.OpsRole == nil {
+			// Chat demote: drop an ops-ADMIN row (the implied grant), but leave
+			// an explicit client/readonly grant standing — those are granted
+			// deliberately via ops_role, not implied by the chat role.
+			if roles, rerr := s.opsRolesBestEffort(r); rerr == nil && roles[strings.ToLower(u.Email)] == "admin" {
+				s.removeOpsAdmin(r, u.Email)
+			}
 		}
 		//nolint:gosec // G706: %q escapes CR/LF, so request-supplied values cannot forge a log line; role is store-validated.
 		log.Printf("admin users: set role of %q to %s by %q", u.Email, u.Role, userFromCtx(r.Context()))
+	}
+	if body.OpsRole != nil {
+		s.setOpsRole(r, u.Email, *body.OpsRole)
+		//nolint:gosec // G706: %q escapes CR/LF; ops_role is validated above.
+		log.Printf("admin users: set ops role of %q to %s by %q", u.Email, *body.OpsRole, userFromCtx(r.Context()))
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(s.toAdminUserAnnotated(r, *u))

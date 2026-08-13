@@ -1,5 +1,5 @@
 import type { Task } from "@/app/shared/lib/orchestratorApi";
-import { formatTimeFirst } from "@/app/shared/lib/format";
+import { formatTimeFirst, truncate } from "@/app/shared/lib/format";
 import {
   describeCronExpression,
   describeCronExpressionShort,
@@ -17,6 +17,20 @@ export function createdByLabel(task: Task): string {
   if (uuid.test(task.created_by))
     return `user: ${task.created_by.slice(0, 6)}…`;
   return task.created_by;
+}
+
+// taskRunLabel is the short human name for a task — the title when it has one,
+// and otherwise the prompt's first non-empty line (which is where operators put
+// a title before the field existed). The short ID is the last resort, for an
+// untitled task whose prompt starts with something unprintable.
+export function taskRunLabel(task: Task, maxLength = 60): string {
+  const title = (task.title ?? "").trim();
+  if (title) return truncate(title, maxLength);
+  const firstLine = (task.prompt ?? "")
+    .split("\n")
+    .map((line) => line.trim())
+    .find((line) => line !== "");
+  return firstLine ? truncate(firstLine, maxLength) : task.id.slice(0, 8);
 }
 
 export function scheduleLabel(task: Task): string {

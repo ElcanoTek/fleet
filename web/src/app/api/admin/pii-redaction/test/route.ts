@@ -18,5 +18,5 @@ export async function POST(request: NextRequest) {
   }
   const csrf = verifyOrigin(request);
   if (!csrf.ok) return csrf.response;
-  return chatServerPassthrough(session.email, "/admin/pii-redaction/test", { method: "POST" });
+  return chatServerPassthrough(session, "/admin/pii-redaction/test", { method: "POST" });
 }

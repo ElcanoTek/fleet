@@ -48,6 +48,8 @@ import {
   type MemoryProposal,
   type Message,
 } from "./history";
+import { type ModelPrices } from "@/app/shared/lib/modelCost";
+import { classifyBootstrapFailure } from "./bootstrapFailure";
 import { PENDING_CONV_KEY } from "./workspaceHref";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
 import { Icon } from "./Icon";
@@ -156,6 +158,11 @@ export type RankedModel = {
   // Drives the "✨ new" pill in the picker — entries within
   // NEW_MODEL_WINDOW_DAYS get the badge.
   created?: number;
+  // OpenRouter per-token prices. Both /api/model-catalog and
+  // /api/model-rankings carry them; workspace-provider models do not, and the
+  // cost indicator renders nothing rather than guessing for those.
+  pricePrompt?: number;
+  priceCompletion?: number;
   // True for models served by an admin-configured workspace provider
   // ("<provider>/<model>" explicit-routing slugs). Drives the picker's
   // "workspace" pill.
@@ -487,6 +494,11 @@ export function ChatExperience({
   const [isLoadingHistory, setIsLoadingHistory] = useState(
     () => restoredSession === null,
   );
+  // Cold bootstrap could not reach the backend (502/503/504 from the proxy
+  // routes, or the fetch itself threw). Renders a full-page retry notice; it
+  // must NOT redirect to /login — the session cookie is still valid there, so
+  // the middleware bounces straight back and the two pages reload in a loop.
+  const [backendUnreachable, setBackendUnreachable] = useState(false);
   const [pendingDeleteConversation, setPendingDeleteConversation] =
     useState<PendingDeleteConversation | null>(null);
   // "Save to prompt library…" target: while set, SavePromptDialog distills
@@ -685,7 +697,9 @@ export function ChatExperience({
   // with the files and disappears when they're removed or sent.
   const uploadSizeWarning = useMemo(
     () =>
-      largeUploadWarning(pendingAttachments.reduce((sum, a) => sum + a.size, 0)),
+      largeUploadWarning(
+        pendingAttachments.reduce((sum, a) => sum + a.size, 0),
+      ),
     [pendingAttachments],
   );
   const promptRef = useRef<HTMLTextAreaElement | null>(null);
@@ -937,6 +951,21 @@ export function ChatExperience({
       workspaceModels.find((m) => m.slug === slug);
     return known?.name ?? selectedModel;
   }, [selectedModel, catalogModels, rankedModels, workspaceModels]);
+  // Prices for the currently selected slug, feeding the cost indicator on the
+  // composer's model chip. Unknown slugs (a half-typed custom slug, a
+  // workspace-provider model) resolve to null and the chip shows no tier.
+  const selectedModelPrices = useMemo<ModelPrices | null>(() => {
+    const slug = selectedModel.trim();
+    if (!slug) return null;
+    const known =
+      catalogModels.find((m) => m.slug === slug) ??
+      rankedModels.find((m) => m.slug === slug);
+    if (!known) return null;
+    return {
+      pricePrompt: known.pricePrompt,
+      priceCompletion: known.priceCompletion,
+    };
+  }, [selectedModel, catalogModels, rankedModels]);
   const contextUsage = useMemo<ContextUsage | null>(
     () =>
       computeContextUsage({
@@ -1251,9 +1280,31 @@ export function ChatExperience({
   const MAX_SEARCH_RESULTS = 15;
   const filteredRankedModels = useMemo(() => {
     const query = modelSearchQuery.trim().toLowerCase();
+    // The two pinned rows are hand-written, so their prices have to be joined
+    // back from the catalog (or the ranked list when the catalog is empty) —
+    // otherwise the recommended models would be the only rows in the listbox
+    // without a cost indicator.
+    const pricesFor = (slug: string) => {
+      const hit =
+        catalogModels.find((m) => m.slug === slug) ??
+        rankedModels.find((m) => m.slug === slug);
+      if (!hit) return {};
+      return {
+        pricePrompt: hit.pricePrompt,
+        priceCompletion: hit.priceCompletion,
+      };
+    };
     const defaults: RankedModel[] = [
-      { slug: DEFAULT_MODEL, name: DEFAULT_MODEL_LABEL },
-      { slug: ADVANCED_MODEL, name: ADVANCED_MODEL_LABEL },
+      {
+        slug: DEFAULT_MODEL,
+        name: DEFAULT_MODEL_LABEL,
+        ...pricesFor(DEFAULT_MODEL),
+      },
+      {
+        slug: ADVANCED_MODEL,
+        name: ADVANCED_MODEL_LABEL,
+        ...pricesFor(ADVANCED_MODEL),
+      },
     ];
 
     // Lockdown chats are pinned to the operator-configured allow-list.
@@ -1334,8 +1385,24 @@ export function ChatExperience({
         cache: "no-store",
       });
       if (!response.ok) return;
-      const data = (await response.json()) as { models?: RankedModel[] };
-      setRankedModels(data.models ?? []);
+      const data = (await response.json()) as {
+        models?: Array<{
+          slug: string;
+          name: string;
+          created?: number;
+          price_prompt?: number;
+          price_completion?: number;
+        }>;
+      };
+      setRankedModels(
+        (data.models ?? []).map((m) => ({
+          slug: m.slug,
+          name: m.name,
+          created: m.created,
+          pricePrompt: m.price_prompt,
+          priceCompletion: m.price_completion,
+        })),
+      );
     } catch {
       /* optional enhancement only */
     } finally {
@@ -1381,6 +1448,8 @@ export function ChatExperience({
           name: string;
           context_length?: number;
           created?: number;
+          price_prompt?: number;
+          price_completion?: number;
         }>;
       };
       const normalized: RankedModel[] = (data.models ?? []).map((m) => ({
@@ -1388,6 +1457,8 @@ export function ChatExperience({
         name: m.name,
         contextLength: m.context_length,
         created: m.created,
+        pricePrompt: m.price_prompt,
+        priceCompletion: m.price_completion,
       }));
       setCatalogModels(normalized);
     } catch {
@@ -1480,16 +1551,33 @@ export function ChatExperience({
     }
   };
 
+  // The server-computed seed state per connector from the last catalog
+  // preview: /api/mcp-servers resolves the user's Settings → Connections
+  // prefs into each server's `enabled` (available AND "on for new chats",
+  // else the operator's enabled_by_default). Cached in a ref so resetting to
+  // a fresh chat can re-seed synchronously without duplicating pref logic
+  // client-side.
+  const seededEnabledRef = useRef<Map<string, boolean>>(new Map());
+
+  const seedServerEnabled = (s: MCPServerInfo): boolean =>
+    seededEnabledRef.current.get(s.name) ?? s.enabled_by_default ?? false;
+
   // loadMcpServerCatalogPreview fetches the catalog with no per-conversation
   // opt-in state so the Tools picker can render before a conversation row
-  // exists (brand-new chat, or zero prior conversations). Called once at
-  // startup — per-conversation state takes over once a conversation loads.
+  // exists (brand-new chat, or zero prior conversations). Called at startup
+  // and on new-chat resets — per-conversation state takes over once a
+  // conversation loads. The backend has already merged the user's connector
+  // prefs into `enabled`, so the response IS the seed state.
   const loadMcpServerCatalogPreview = async () => {
     try {
       const response = await fetch("/api/mcp-servers", { cache: "no-store" });
       if (!response.ok) return;
       const data = (await response.json()) as { servers?: MCPServerInfo[] };
-      setMcpServers(data.servers ?? []);
+      const servers = data.servers ?? [];
+      seededEnabledRef.current = new Map(
+        servers.map((s) => [s.name, s.enabled]),
+      );
+      setMcpServers(servers);
     } catch {
       /* non-fatal */
     }
@@ -2761,13 +2849,16 @@ export function ChatExperience({
     setActiveConversationId(null);
     setActivePillId(null);
     setSidebarOpen(false);
-    // New chat = fresh opt-in state. Keep the catalog but reset each toggle
-    // to its default (default-on servers like gamma come back on; everything
-    // else clears) so the Tools picker doesn't inherit the previous
-    // conversation's selection.
+    // New chat = fresh opt-in state. Re-seed each toggle synchronously from
+    // the last preview's server-computed state (the user's saved
+    // Settings → Connections choices resolved against operator defaults) —
+    // the previous conversation's selection is deliberately NOT inherited.
+    // Then refresh the preview in the background so prefs changed since
+    // startup are picked up.
     setMcpServers((prev) =>
-      prev.map((s) => ({ ...s, enabled: s.enabled_by_default ?? false })),
+      prev.map((s) => ({ ...s, enabled: seedServerEnabled(s) })),
     );
+    void loadMcpServerCatalogPreviewRef.current();
     // Lockdown is set per-conversation. New regular chat clears it;
     // new lockdown chat sets it. In LockdownOnly server mode every
     // chat is implicitly lockdown — clicking the regular "Clear"
@@ -3388,7 +3479,8 @@ export function ChatExperience({
               // Older servers don't advertise the cap — keep the
               // client-side default rather than treating it as 0.
               uploadMaxBytes:
-                typeof cfg.upload_max_bytes === "number" && cfg.upload_max_bytes > 0
+                typeof cfg.upload_max_bytes === "number" &&
+                cfg.upload_max_bytes > 0
                   ? cfg.upload_max_bytes
                   : DEFAULT_UPLOAD_MAX_BYTES,
             });
@@ -3408,11 +3500,24 @@ export function ChatExperience({
         if (initialUserEmail) {
           setUserEmail(initialUserEmail);
         } else {
-          const sessionResponse = await fetch("/api/session", {
-            cache: "no-store",
-          });
+          let sessionResponse: Response;
+          try {
+            sessionResponse = await fetch("/api/session", {
+              cache: "no-store",
+            });
+          } catch {
+            if (!cancelled) setBackendUnreachable(true);
+            return;
+          }
           if (!sessionResponse.ok) {
-            window.location.href = "/login";
+            if (
+              classifyBootstrapFailure(sessionResponse.status) ===
+              "unauthenticated"
+            ) {
+              window.location.href = "/login";
+            } else if (!cancelled) {
+              setBackendUnreachable(true);
+            }
             return;
           }
           const sessionData = (await sessionResponse.json()) as {
@@ -3422,11 +3527,24 @@ export function ChatExperience({
           setUserEmail(sessionData.email);
         }
 
-        const conversationsResponse = await fetch("/api/conversations", {
-          cache: "no-store",
-        });
+        let conversationsResponse: Response;
+        try {
+          conversationsResponse = await fetch("/api/conversations", {
+            cache: "no-store",
+          });
+        } catch {
+          if (!cancelled) setBackendUnreachable(true);
+          return;
+        }
         if (!conversationsResponse.ok) {
-          window.location.href = "/login";
+          if (
+            classifyBootstrapFailure(conversationsResponse.status) ===
+            "unauthenticated"
+          ) {
+            window.location.href = "/login";
+          } else if (!cancelled) {
+            setBackendUnreachable(true);
+          }
           return;
         }
         const conversationsData = (await conversationsResponse.json()) as {
@@ -3469,7 +3587,14 @@ export function ChatExperience({
           cache: "no-store",
         });
         if (!sessionResponse.ok) {
-          window.location.href = "/login";
+          // A backend-down status is NOT a sign-out — treat it like the
+          // transient failures below and keep the cached transcript.
+          if (
+            classifyBootstrapFailure(sessionResponse.status) ===
+            "unauthenticated"
+          ) {
+            window.location.href = "/login";
+          }
           return;
         }
         const sessionData = (await sessionResponse.json()) as { email: string };
@@ -3599,6 +3724,33 @@ export function ChatExperience({
     });
     setAttachmentError(null);
   };
+
+  // Backend down/restarting during cold bootstrap. The session is still valid
+  // (auth is verified locally by the web tier), so this is a wait-and-retry
+  // state, not a sign-out — see bootstrapFailure.ts for why redirecting to
+  // /login here loops.
+  if (backendUnreachable) {
+    return (
+      <main className="flex h-[100dvh] items-center justify-center px-6">
+        <div className="w-full max-w-sm rounded-[1.5rem] border border-[var(--color-border)] bg-[var(--composer-surface)] p-6 text-center shadow-[var(--composer-shadow)]">
+          <h1 className="text-[1.25rem] font-semibold text-[var(--color-text-primary)]">
+            Can&apos;t reach the chat server
+          </h1>
+          <p className="mt-2 text-[0.875rem] text-[var(--color-text-secondary)]">
+            You&apos;re still signed in — the server may be restarting. Try
+            again in a moment.
+          </p>
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            className="mt-5 rounded-xl bg-[var(--color-primary)] px-4 py-2.5 text-sm font-medium text-[var(--color-on-primary)] transition hover:opacity-90"
+          >
+            Retry
+          </button>
+        </div>
+      </main>
+    );
+  }
 
   return (
     <div
@@ -4405,7 +4557,7 @@ export function ChatExperience({
                 <div className="pointer-events-none absolute -top-12 right-3 z-20 flex justify-end sm:-top-14 sm:right-6 lg:right-8">
                   <button
                     aria-label="Jump to latest"
-          data-tip-top="Jump to latest"
+                    data-tip-top="Jump to latest"
                     className="pointer-events-auto inline-flex size-11 items-center justify-center rounded-full border border-[var(--color-border-strong)] bg-[var(--gradient-surface-elevated)] text-[var(--color-text-primary)] shadow-[var(--shadow-md)] backdrop-blur transition hover:border-[var(--color-accent)] hover:text-[var(--color-white)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
                     type="button"
                     onClick={jumpToLatest}
@@ -4457,8 +4609,12 @@ export function ChatExperience({
               {activeConversationId ? (
                 <QueuedInputs
                   items={queuedInputs[activeConversationId] ?? []}
-                  onRemove={(inputId) => void removeQueuedInput(activeConversationId, inputId)}
-                  onSendNow={(inputId) => void sendNowQueuedInput(activeConversationId, inputId)}
+                  onRemove={(inputId) =>
+                    void removeQueuedInput(activeConversationId, inputId)
+                  }
+                  onSendNow={(inputId) =>
+                    void sendNowQueuedInput(activeConversationId, inputId)
+                  }
                 />
               ) : null}
               <Composer
@@ -4490,6 +4646,7 @@ export function ChatExperience({
                 selectedModel={selectedModel}
                 setSelectedModel={setSelectedModel}
                 selectedModelLabel={selectedModelLabel}
+                selectedModelPrices={selectedModelPrices}
                 modelError={modelError}
                 modelPickerOpen={modelPickerOpen}
                 setModelPickerOpen={setModelPickerOpen}

@@ -1,12 +1,13 @@
 "use client";
 
 import { useRef, useState } from "react";
-import type { Task } from "@/app/shared/lib/orchestratorApi";
+import { orchestratorApi, type Task } from "@/app/shared/lib/orchestratorApi";
 import { useOrchestratorSession } from "@/app/shared/hooks/useOrchestratorSession";
 import { useDashboardData } from "@/app/shared/hooks/useDashboardData";
 import { useMcpServers } from "@/app/shared/hooks/useMcpServers";
 import { useClientConfig } from "@/app/lib/useClientConfig";
-import { ToastProvider } from "@/app/shared/ui/Toast";
+import { ToastProvider, useToast } from "@/app/shared/ui/Toast";
+import { ConfirmDialog } from "@/app/shared/ui/ConfirmDialog";
 import { ThemeToggle } from "@/app/shared/ui/ThemeToggle";
 import { NavToChat } from "@/app/shared/ui/CrossViewNav";
 import { NavRail, useRailCollapse } from "@/app/shared/ui/NavRail";
@@ -14,6 +15,7 @@ import { PageTopBar } from "@/app/shared/ui/PageTopBar";
 import { Icon } from "@/app/shared/ui/Icon";
 import { OrchestratorLogin } from "./OrchestratorLogin";
 import { StatsGrid, type StatFilter } from "./StatsGrid";
+import { ServerClock } from "./ServerClock";
 import { TasksTable } from "./TasksTable";
 import { TaskCreateModal } from "./TaskCreateModal";
 import { LogViewer } from "./LogViewer";
@@ -22,6 +24,7 @@ import { UsagePanel } from "./UsagePanel";
 import { AdoptionPanel } from "./AdoptionPanel";
 import { DatasetsPanel } from "./DatasetsPanel";
 import { UpcomingPanel } from "./UpcomingPanel";
+import { taskRunLabel } from "./taskDisplay";
 
 // OrchestratorClient — the top-level orchestrator (Operations Center) view. It
 // now renders inside the shared unified rail (#169): when signed in, the
@@ -74,7 +77,7 @@ function initialDashboardTab(): DashTab {
   return want && (DASH_TABS as readonly string[]).includes(want) ? (want as DashTab) : "tasks";
 }
 
-function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean }) {
+function OrchestratorInner({ magicLinkLoginEnabled }: { magicLinkLoginEnabled: boolean }) {
   const session = useOrchestratorSession();
   const dashboard = useDashboardData(session.signedIn);
   const { servers, loading: serversLoading } = useMcpServers(session.signedIn);
@@ -84,7 +87,34 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
   const [taskModalOpen, setTaskModalOpen] = useState(false);
   const [editTask, setEditTask] = useState<Task | null>(null);
   const [logTask, setLogTask] = useState<Task | null>(null);
+  // "Run now" (#1019): the task awaiting the kick-off confirm, and the in-flight
+  // guard that keeps a double-click from submitting two runs.
+  const [runNowTask, setRunNowTask] = useState<Task | null>(null);
+  const [runNowBusy, setRunNowBusy] = useState(false);
+  const { showToast } = useToast();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  // runNow resubmits the task as a fresh one-off run that starts immediately
+  // (POST /tasks/{id}/rerun). The source is untouched — a recurring job keeps
+  // its cron and still fires on its next tick — so this is "kick it off now",
+  // not "reschedule it".
+  const runNow = async (task: Task) => {
+    if (runNowBusy) return;
+    setRunNowBusy(true);
+    try {
+      const created = await orchestratorApi.rerunTask(task.id);
+      showToast(`Started run ${created.id.slice(0, 8)}… from this task`, "success");
+      setRunNowTask(null);
+      void dashboard.reload();
+    } catch (err) {
+      showToast(
+        `Run now failed: ${err instanceof Error ? err.message : "unknown error"}`,
+        "error",
+      );
+    } finally {
+      setRunNowBusy(false);
+    }
+  };
   // Desktop rail collapse + ≤900px auto-collapse/overlay (shared shell).
   const railCollapse = useRailCollapse();
   // Top-level dashboard tab (#274): defaults to Recent Tasks (the existing
@@ -149,6 +179,32 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
     );
   }
 
+  // Probe failed with a non-auth verdict (5xx/network): the backend — or the
+  // chat DB behind its fail-closed session-epoch check — is down, and the
+  // visitor's session may be perfectly valid. Rendering the login card here
+  // would invite credentials mid-incident, so show a retry notice instead —
+  // the orchestrator's analogue of chat's backendUnreachable card
+  // (chat-experience.tsx / bootstrapFailure.ts).
+  if (session.unreachable) {
+    return (
+      <div className="container">
+        <OrchestratorSlimHeader />
+        <div className="auth-section" role="region" aria-label="Server unreachable">
+          <div className="auth-fields stack-form">
+            <h2>Can&apos;t reach the server</h2>
+            <p className="caption" data-testid="orchestrator-unreachable">
+              The Operations Center backend didn&apos;t answer — it may be restarting. Your
+              sign-in state is untouched; try again in a moment.
+            </p>
+            <button type="button" className="btn btn-primary" onClick={() => window.location.reload()}>
+              Retry
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   // Signed out — slim top bar (theme + cross-link) above the login card; no rail.
   // #458 symptom 1: when the visitor IS signed in to chat but that identity
   // isn't provisioned here (/me → 403 not_a_member, session.noAccess), we still
@@ -162,7 +218,7 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
       <div className="container">
         <OrchestratorSlimHeader />
         <OrchestratorLogin
-          elcanoLoginEnabled={elcanoLoginEnabled}
+          magicLinkLoginEnabled={magicLinkLoginEnabled}
           onLogin={session.login}
           error={session.error}
           notice={
@@ -234,6 +290,9 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
         <div className="min-h-0 flex-1 overflow-y-auto">
           <div className="container">
             <div className="dashboard-content visible" data-testid="orchestrator-dashboard">
+              <div className="dashboard-status-row">
+                <ServerClock />
+              </div>
               <StatsGrid stats={dashboard.stats} activeFilter={statFilter} onFilter={applyStatFilter} />
 
               <div
@@ -339,6 +398,7 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
                   onPageSize={dashboard.setPageSize}
                   onOpenLogs={setLogTask}
                   onEdit={setEditTask}
+                  onRunNow={setRunNowTask}
                 />
               )}
               </div>
@@ -364,6 +424,32 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
         editTask={editTask}
         onUpdated={() => void dashboard.reload()}
       />
+      {/* Run-now confirm: the row action sits next to a click target that
+          opens the log viewer, and a run costs real model spend — so the
+          kick-off is confirmed, and the copy states plainly that the source's
+          own schedule is left alone. */}
+      <ConfirmDialog
+        open={!!runNowTask}
+        title="Run now"
+        message={
+          runNowTask
+            ? `Start a run of "${taskRunLabel(runNowTask)}" right now?${
+                runNowTask.recurrence
+                  ? " This is a one-off copy — the task keeps its schedule and still runs at its next scheduled time."
+                  : runNowTask.scheduled_for
+                    ? " This is a one-off copy — the task stays scheduled and will still run at its scheduled time."
+                    : ""
+              }`
+            : ""
+        }
+        confirmLabel={runNowBusy ? "Starting…" : "Run now"}
+        onConfirm={() => {
+          if (runNowTask) void runNow(runNowTask);
+        }}
+        onCancel={() => {
+          if (!runNowBusy) setRunNowTask(null);
+        }}
+      />
       <LogViewer
         task={logTask}
         onClose={() => setLogTask(null)}
@@ -379,10 +465,10 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
   );
 }
 
-export function OrchestratorClient({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean }) {
+export function OrchestratorClient({ magicLinkLoginEnabled }: { magicLinkLoginEnabled: boolean }) {
   return (
     <ToastProvider>
-      <OrchestratorInner elcanoLoginEnabled={elcanoLoginEnabled} />
+      <OrchestratorInner magicLinkLoginEnabled={magicLinkLoginEnabled} />
     </ToastProvider>
   );
 }

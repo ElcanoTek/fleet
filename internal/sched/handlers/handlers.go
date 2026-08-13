@@ -214,6 +214,13 @@ type Handlers struct {
 	chatUserDayUsage ChatUserDayUsageProvider
 	chatAccounts     ChatAccountsProvider
 
+	// chatSessionEpoch resolves an email's chat-plane session epoch so the
+	// header-trust path can refuse a session cookie a password reset has already
+	// evicted from chat. Injected by cmd/fleet like the seams above, because the
+	// epoch lives in the chat store's users table (ADR-0005). nil → the claim is
+	// not checked. See session_epoch.go.
+	chatSessionEpoch ChatSessionEpochProvider
+
 	// budgetGate enforces per-principal rolling budgets at task-create (#601
 	// part 2) — injected by cmd/fleet via SetBudgetGate (*budget.Enforcer). nil
 	// → no budget enforcement, today's behavior byte-for-byte. See budgets.go.
@@ -353,7 +360,12 @@ const (
 	// maxTaskDescriptionChars caps the optional operator documentation field (#281)
 	// at 10k runes — generous for a runbook, bounded so it can't bloat the row.
 	maxTaskDescriptionChars = 10000
-	taskScheduleMaxYears    = 5
+	// maxTaskTitleChars caps the display label. It is rendered in a table cell
+	// and a calendar tile, so it is short by design: long enough for
+	// "Reklaim daily day-over-day campaign health scan", short enough that no
+	// title can push a column off screen.
+	maxTaskTitleChars    = 120
+	taskScheduleMaxYears = 5
 )
 
 func newRateLimiter(limit int, window time.Duration) *rateLimiter {
@@ -500,10 +512,10 @@ func (h *Handlers) verifyAdminKey(r *http.Request) bool {
 	// Fail closed when no admin key is configured. Otherwise sha256("") on both
 	// sides would match a request that sends NO X-API-Key header, silently
 	// authenticating it as admin — every caller (both admin middlewares, the
-	// principal resolver, and the inline handlers in batch/estimate/upload)
-	// would then grant full access on a deployment that simply left
-	// ADMIN_API_KEY unset. Guarding here closes all of them at once; the
-	// duplicate guard in SchedRateLimitMiddleware is now redundant but harmless.
+	// principal resolver, and the inline handlers in batch/upload) would then
+	// grant full access on a deployment that simply left ADMIN_API_KEY unset.
+	// Guarding here closes all of them at once; the duplicate guard in
+	// SchedRateLimitMiddleware is now redundant but harmless.
 	if h.config.AdminAPIKey == "" {
 		return false
 	}
@@ -545,7 +557,7 @@ func (h *Handlers) CreateTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if msg := requireAdminForRunIf(creator.isAdmin, tc.RunIf); msg != "" {
+	if msg := requireAdminForRunIf(creator.hasAdminPermission, tc.RunIf); msg != "" {
 		writeError(w, http.StatusForbidden, msg)
 		return
 	}
@@ -793,6 +805,18 @@ func (h *Handlers) validateTaskRouting(tc *models.TaskCreate) error {
 	if err := tc.WorktreeConfig.Validate(); err != nil {
 		return fmt.Errorf("worktree_config: %w", err)
 	}
+	// Title: the optional display label. Normalized to a single trimmed line —
+	// it is rendered inline in a table cell and a calendar tile, where an
+	// embedded newline is at best ignored and at worst breaks the row, and a
+	// caller pasting a multi-line prompt into the title field should be told so
+	// rather than silently getting a mangled label.
+	tc.Title = strings.TrimSpace(tc.Title)
+	if strings.ContainsAny(tc.Title, "\r\n") {
+		return fmt.Errorf("title must be a single line")
+	}
+	if utf8.RuneCountInString(tc.Title) > maxTaskTitleChars {
+		return fmt.Errorf("title cannot exceed %d characters", maxTaskTitleChars)
+	}
 	// Description (#281): optional operator documentation, bounded so it can't
 	// bloat the task row. Counted in runes (not bytes) to be Unicode-fair.
 	if utf8.RuneCountInString(tc.Description) > maxTaskDescriptionChars {
@@ -846,10 +870,12 @@ func (h *Handlers) validateTaskRouting(tc *models.TaskCreate) error {
 // requireAdminForRunIf enforces the run_if privilege boundary. A run_if gate
 // executes ON THE HOST as the fleet user (scheduler.go documents it as trusted
 // "exactly like the fleet binary itself") — structural validation cannot make
-// an arbitrary creator's shell string safe, so only an admin principal may
-// attach or change one. Returns the 403 message, or "" when allowed.
-func requireAdminForRunIf(isAdmin bool, runIf *models.RunIf) string {
-	if runIf != nil && !isAdmin {
+// an arbitrary creator's shell string safe, so only a principal carrying
+// models.PermissionAdmin (taskCreator.hasAdminPermission on the create paths,
+// principal.hasPermission(models.PermissionAdmin) on the edit path) may attach
+// or change one. Returns the 403 message, or "" when allowed.
+func requireAdminForRunIf(hasAdminPermission bool, runIf *models.RunIf) string {
+	if runIf != nil && !hasAdminPermission {
 		return "run_if: a host-side pre-run gate can only be set by an admin"
 	}
 	return ""
@@ -876,6 +902,14 @@ func (h *Handlers) validateTaskCreate(tc *models.TaskCreate) error { //nolint:go
 	}
 	if err := normalizeOptionalModel(&tc.FallbackModel, "fallback_model"); err != nil {
 		return err
+	}
+	// A task with neither its own model nor a deployment default can never run:
+	// the dispatcher fails it terminally on the first attempt and dead-letters it
+	// (#1014). Refuse it here instead, so the author sees the problem while they
+	// are still looking at the request rather than up to a cron period later, in
+	// the DLQ, having published nothing.
+	if tc.Model == nil && strings.TrimSpace(h.config.DefaultTaskModel) == "" {
+		return fmt.Errorf("no model configured: set FLEET_TASK_MODEL on the orchestrator, or pass model on the task")
 	}
 	if err := validateTaskLimits(tc); err != nil {
 		return err
@@ -1695,11 +1729,28 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	// Same privilege boundary as create, but edit-shaped: a non-admin editing
-	// a task may keep an existing (admin-authorized) gate byte-identical —
-	// clients echo the full record — but may not add, change, or remove one.
-	if !p.isAdmin && !reflect.DeepEqual(tc.RunIf, task.RunIf) {
+	// Same privilege boundary as create, but edit-shaped: a principal without
+	// PermissionAdmin editing a task may keep an existing (admin-authorized)
+	// gate — clients echo the record, modulo defaultable fields, hence the
+	// normalized comparison — but may not add, change, or remove one. An
+	// admin-permission principal's payload is authoritative (SetRunIf below),
+	// so an admin edit that changes or removes the gate actually persists.
+	canAuthorRunIf := p.hasPermission(models.PermissionAdmin)
+	runIfChanged := !reflect.DeepEqual(tc.RunIf.Normalized(), task.RunIf.Normalized())
+	if !canAuthorRunIf && runIfChanged {
 		writeError(w, http.StatusForbidden, "run_if: a host-side pre-run gate can only be changed by an admin")
+		return
+	}
+	// A gate is evaluated only at the scheduled→pending promotion
+	// (models.RunIf's enforcement contract), and a pending task is already
+	// past that point: honoring a new or changed gate would have the
+	// dispatch-state recompute (models.DeriveDispatchState, applied in
+	// UpdateEditableTask) yank the imminent dispatch back onto the scheduler
+	// path. Refuse instead, so that change stays explicit — edit the gate
+	// while the task is scheduled, or cancel and recreate it. Removing the
+	// gate (tc.RunIf == nil) stays allowed: absence needs no evaluation point.
+	if runIfChanged && tc.RunIf != nil && task.Status == models.TaskStatusPending {
+		writeError(w, http.StatusConflict, "run_if: task is already pending dispatch, so its gate can no longer be evaluated for this run; change the gate while the task is scheduled, or cancel and recreate it")
 		return
 	}
 
@@ -1740,6 +1791,7 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 	// overwritten (which would resurrect the task and clobber its lease).
 	edit := storage.TaskEdit{
 		Prompt:                 tc.Prompt,
+		Title:                  tc.Title,
 		Description:            tc.Description,
 		Model:                  tc.Model,
 		FallbackModel:          tc.FallbackModel,
@@ -1771,6 +1823,13 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 		SetFiles:               tc.Files != nil,
 		Tags:                   tc.Tags,
 		SetTags:                tc.Tags != nil,
+		// The payload is authoritative for run_if only for an admin-permission
+		// principal (nil = remove the gate — PUT is full-replace and the web
+		// client omits run_if when the command field is cleared). A non-admin's
+		// echo already passed the normalized equality check above, so the stored
+		// gate is kept byte-identical rather than rewritten from the echo.
+		RunIf:    tc.RunIf,
+		SetRunIf: canAuthorRunIf,
 	}
 
 	updated, err := h.storage.UpdateEditableTask(r.Context(), taskID, edit)
@@ -1922,6 +1981,7 @@ type taskRerunOverrides struct {
 	// a negative value clears back to inherit-global; absent leaves it.
 	ThinkingBudgetTokens *int     `json:"thinking_budget_tokens,omitempty"`
 	Description          *string  `json:"description,omitempty"`
+	Title                *string  `json:"title,omitempty"`
 	Tags                 []string `json:"tags,omitempty"`
 	Persona              *string  `json:"persona,omitempty"`
 }
@@ -2018,9 +2078,19 @@ func (h *Handlers) rerunOrClone(w http.ResponseWriter, r *http.Request, keepRecu
 // IMPORTANT: an immediate run uses ScheduledFor=nil — the codebase's "run now"
 // convention (a fresh pending task the worker claims at once). Setting &now would
 // be rejected by validateTaskCreate's "scheduled time cannot be in the past"
-// check, which re-samples a strictly-later now.
+// check, which re-samples a strictly-later now. A gated source is the one
+// exception to "claims at once": TaskToCreate carries run_if, and NewTask parks
+// any gated cron task scheduled-for-now so the scheduler evaluates the gate
+// before dispatch (models.RunIf's enforcement contract) — a rerun must not be a
+// path around the condition the gate exists to enforce.
 func buildRerunTaskCreate(source *models.Task, keepRecurrence bool, o taskRerunOverrides, fallbackLoc *time.Location) (models.TaskCreate, error) {
 	tc := models.TaskToCreate(source)
+	// A copy is never the named DEFINITION. Name is the import/export identity
+	// key and carries a partial unique index on non-empty names, so inheriting
+	// the source's name collides with the source row still in the table and the
+	// insert fails (a 500 on every re-run of a named task). Storage's recurrence
+	// chain clears Name for exactly this reason; the copy paths must match.
+	tc.Name = ""
 	if keepRecurrence && strings.TrimSpace(tc.Recurrence) != "" {
 		schedule, perr := cron.ParseStandard(tc.Recurrence)
 		if perr != nil {
@@ -2079,6 +2149,9 @@ func applyRerunOverrides(tc *models.TaskCreate, o taskRerunOverrides) {
 	}
 	if o.Description != nil {
 		tc.Description = *o.Description
+	}
+	if o.Title != nil {
+		tc.Title = *o.Title
 	}
 	if o.Tags != nil {
 		tc.Tags = o.Tags
@@ -2538,11 +2611,28 @@ func (h *Handlers) GetCurrentUser(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// GetDashboardConfig handles GET /api/config
+// GetDashboardConfig handles GET /api/config.
+//
+// server_time is the orchestrator's own clock, formatted in ITS configured
+// location so the offset travels with it. The dashboard clock needs it for two
+// reasons the timezone name alone cannot cover: an operator's browser clock may
+// be wrong (rendering "now" locally would then display a confident lie), and a
+// deployment may be configured with a zone the browser's ICU data does not
+// know, in which case the embedded offset is still enough to render the time.
+// A client computes its skew once from this and ticks locally.
 func (h *Handlers) GetDashboardConfig(w http.ResponseWriter, _ *http.Request) {
+	loc := h.storage.Location()
+	if loc == nil {
+		loc = time.UTC
+	}
 	config := map[string]interface{}{
-		"version":  h.config.Version,
-		"timezone": h.config.Timezone,
+		"version":     h.config.Version,
+		"timezone":    h.config.Timezone,
+		"server_time": time.Now().In(loc).Format(time.RFC3339),
+		// The zone a scheduled task lands in when its create request names none
+		// — distinct from the server clock above, and the one that actually
+		// decides when "0 9 * * *" fires.
+		"default_task_timezone": h.defaultTaskTimezone(),
 	}
 
 	writeJSON(w, http.StatusOK, config)

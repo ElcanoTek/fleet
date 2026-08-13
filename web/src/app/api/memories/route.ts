@@ -9,7 +9,7 @@ export async function GET() {
   const session = await getServerSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const { upstream, error } = await chatServerProxy(session.email, "/memories", { method: "GET" });
+  const { upstream, error } = await chatServerProxy(session, "/memories", { method: "GET" });
   if (error) return error;
   const text = await upstream.text();
   return new NextResponse(text, {
@@ -26,7 +26,7 @@ export async function POST(request: NextRequest) {
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const bodyText = await request.text();
-  const { upstream, error } = await chatServerProxy(session.email, "/memories", {
+  const { upstream, error } = await chatServerProxy(session, "/memories", {
     method: "POST",
     body: bodyText,
   });

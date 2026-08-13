@@ -20,7 +20,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
 
 
   const upstream = await chatServerFetch(
-    session.email,
+    session,
     `/conversations/${encodeURIComponent(conversationId)}/model`,
     { method: "POST", body },
   );

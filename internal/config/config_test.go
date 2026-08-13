@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -1373,4 +1374,205 @@ func TestLoadEnvFileExportPrefix(t *testing.T) {
 		t.Errorf("export-prefixed key = %q, want %q", val, "exported-value")
 	}
 	t.Cleanup(func() { os.Unsetenv("TAVILY_API_KEY") })
+}
+
+// EnvAliases must return the exact spelling family lookupFleet resolves —
+// callers (the MCP broker's env-separation gate) rely on it covering every
+// legacy spelling of a canonical name and on non-prefixed names having none.
+func TestEnvAliases(t *testing.T) {
+	tests := []struct {
+		name string
+		want []string
+	}{
+		{"FLEET_SERVER_TOKEN", []string{"FLEET_SERVER_TOKEN", "CHAT_SERVER_TOKEN", "CUTLASS_SERVER_TOKEN"}},
+		{"CHAT_SERVER_TOKEN", []string{"FLEET_SERVER_TOKEN", "CHAT_SERVER_TOKEN", "CUTLASS_SERVER_TOKEN"}},
+		{"CUTLASS_TASK_MODEL", []string{"FLEET_TASK_MODEL", "CHAT_TASK_MODEL", "CUTLASS_TASK_MODEL"}},
+		{"OPENROUTER_API_KEY", []string{"OPENROUTER_API_KEY"}},
+		{"HOME", []string{"HOME"}},
+		{"http_proxy", []string{"http_proxy"}},
+		{"FLEET_", []string{"FLEET_"}},
+		{"CHATTY_KEY", []string{"CHATTY_KEY"}},
+	}
+	for _, tt := range tests {
+		if got := EnvAliases(tt.name); !slices.Equal(got, tt.want) {
+			t.Errorf("EnvAliases(%q) = %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}
+
+// The two default-persona knobs read through the prefix alias machinery with a
+// bare-name fallback (#956). They used to be bare os.Getenv reads, so an operator
+// following the documented FLEET_ convention got silence and the built-in
+// default; the unprefixed spellings must keep working exactly as before.
+func TestLoad_PersonaEnvAliases(t *testing.T) {
+	tests := []struct {
+		name            string
+		env             map[string]string
+		wantPersona     string
+		wantDefaultName string
+	}{
+		{
+			name:            "unset uses the generic bundle's names",
+			wantPersona:     "personas/assistant.yaml",
+			wantDefaultName: "assistant",
+		},
+		{
+			name:            "canonical FLEET_ spelling",
+			env:             map[string]string{"FLEET_PERSONA": "personas/victoria.yaml", "FLEET_PERSONA_DEFAULT": "victoria"},
+			wantPersona:     "personas/victoria.yaml",
+			wantDefaultName: "victoria",
+		},
+		{
+			name:            "bare spelling still honored",
+			env:             map[string]string{"PERSONA": "personas/victoria.yaml", "PERSONA_DEFAULT": "victoria"},
+			wantPersona:     "personas/victoria.yaml",
+			wantDefaultName: "victoria",
+		},
+		{
+			name:            "legacy prefixes honored",
+			env:             map[string]string{"CHAT_PERSONA": "personas/victoria.yaml", "CUTLASS_PERSONA_DEFAULT": "victoria"},
+			wantPersona:     "personas/victoria.yaml",
+			wantDefaultName: "victoria",
+		},
+		{
+			name:            "canonical wins over the bare spelling",
+			env:             map[string]string{"FLEET_PERSONA": "personas/victoria.yaml", "PERSONA": "personas/analyst.yaml", "FLEET_PERSONA_DEFAULT": "victoria", "PERSONA_DEFAULT": "analyst"},
+			wantPersona:     "personas/victoria.yaml",
+			wantDefaultName: "victoria",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			isolateEnv(t)
+			chdir(t, t.TempDir())
+			for k, v := range tt.env {
+				t.Setenv(k, v)
+			}
+			cfg, err := Load("")
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if cfg.Persona != tt.wantPersona {
+				t.Errorf("Persona = %q, want %q", cfg.Persona, tt.wantPersona)
+			}
+			if cfg.PersonaDefault != tt.wantDefaultName {
+				t.Errorf("PersonaDefault = %q, want %q", cfg.PersonaDefault, tt.wantDefaultName)
+			}
+		})
+	}
+}
+
+// The env file is where deployments set the default persona (docs/DEPLOYMENT.md),
+// and a key missing from allowedEnvVars is silently dropped — so the canonical
+// spellings have to survive that allowlist too, not just the process env.
+func TestLoad_PersonaFleetSpellingFromEnvFile(t *testing.T) {
+	isolateEnv(t)
+	dir := t.TempDir()
+	chdir(t, dir)
+
+	path := filepath.Join(dir, ".env.local")
+	content := "FLEET_PERSONA=personas/victoria.yaml\nFLEET_PERSONA_DEFAULT=victoria\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write env file: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Persona != "personas/victoria.yaml" {
+		t.Errorf("Persona = %q, want personas/victoria.yaml", cfg.Persona)
+	}
+	if cfg.PersonaDefault != "victoria" {
+		t.Errorf("PersonaDefault = %q, want victoria", cfg.PersonaDefault)
+	}
+}
+
+// TestTaskModelResolvesEveryPrefix pins that the task-model knobs resolve the
+// whole FLEET_/CHAT_/CUTLASS_ alias family, in that precedence order.
+//
+// These two were the only model knobs in Load() read with a bare os.Getenv, so
+// FLEET_TASK_MODEL — the documented canonical spelling, and the one EnvAliases
+// advertises — was silently dropped. A deployment that used it got no task model
+// at all and dead-lettered every scheduled task with "no model configured"
+// (#1015). TestEnvAliases covers the advertiser; this covers the consumer.
+func TestTaskModelResolvesEveryPrefix(t *testing.T) {
+	tmpfile, err := os.CreateTemp("", "test-task-model-prefix.env")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(tmpfile.Name())
+	if _, err := tmpfile.Write([]byte("OPENROUTER_API_KEY=test-openrouter-key\n")); err != nil {
+		t.Fatal(err)
+	}
+	tmpfile.Close()
+
+	for _, tt := range []struct {
+		name string
+		set  map[string]string
+		want string
+	}{
+		{"canonical FLEET_ prefix", map[string]string{"FLEET_TASK_MODEL": "a/fleet"}, "a/fleet"},
+		{"legacy CHAT_ prefix", map[string]string{"CHAT_TASK_MODEL": "a/chat"}, "a/chat"},
+		{"legacy CUTLASS_ prefix", map[string]string{"CUTLASS_TASK_MODEL": "a/cutlass"}, "a/cutlass"},
+		{"FLEET_ wins over both legacy spellings", map[string]string{
+			"FLEET_TASK_MODEL":   "a/fleet",
+			"CHAT_TASK_MODEL":    "a/chat",
+			"CUTLASS_TASK_MODEL": "a/cutlass",
+		}, "a/fleet"},
+		{"CHAT_ wins over CUTLASS_", map[string]string{
+			"CHAT_TASK_MODEL":    "a/chat",
+			"CUTLASS_TASK_MODEL": "a/cutlass",
+		}, "a/chat"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			clearEnvVars()
+			defer clearEnvVars()
+			for k, v := range tt.set {
+				os.Setenv(k, v)
+				defer os.Unsetenv(k)
+			}
+			cfg, err := Load(tmpfile.Name())
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if cfg.TaskModel != tt.want {
+				t.Errorf("TaskModel = %q, want %q", cfg.TaskModel, tt.want)
+			}
+		})
+	}
+}
+
+// TestTaskFallbackModelResolvesEveryPrefix is the same guarantee for the fallback
+// knob, which had the identical bare-os.Getenv bug (#1015).
+func TestTaskFallbackModelResolvesEveryPrefix(t *testing.T) {
+	tmpfile, err := os.CreateTemp("", "test-task-fallback-prefix.env")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(tmpfile.Name())
+	if _, err := tmpfile.Write([]byte("OPENROUTER_API_KEY=test-openrouter-key\n")); err != nil {
+		t.Fatal(err)
+	}
+	tmpfile.Close()
+
+	for name, env := range map[string]string{
+		"canonical FLEET_ prefix": "FLEET_TASK_FALLBACK_MODEL",
+		"legacy CHAT_ prefix":     "CHAT_TASK_FALLBACK_MODEL",
+		"legacy CUTLASS_ prefix":  "CUTLASS_TASK_FALLBACK_MODEL",
+	} {
+		t.Run(name, func(t *testing.T) {
+			clearEnvVars()
+			defer clearEnvVars()
+			os.Setenv(env, "a/fallback")
+			defer os.Unsetenv(env)
+			cfg, err := Load(tmpfile.Name())
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if cfg.TaskFallbackModel != "a/fallback" {
+				t.Errorf("TaskFallbackModel via %s = %q, want %q", env, cfg.TaskFallbackModel, "a/fallback")
+			}
+		})
+	}
 }

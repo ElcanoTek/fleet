@@ -754,6 +754,10 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("/webhooks/", http.HandlerFunc(s.postWebhook))
 	mux.Handle("/auth/membership", auth(member(http.HandlerFunc(s.handleMembership))))
 	mux.Handle("/auth/verify", auth(http.HandlerFunc(s.handleAuthVerify)))
+	// /auth/session-epoch is on auth alone for the same reason as /auth/verify:
+	// the Next.js mint paths call it before a session exists, and it must answer
+	// for a not-yet-provisioned email without leaking the user-list.
+	mux.Handle("/auth/session-epoch", auth(http.HandlerFunc(s.handleSessionEpoch)))
 	mux.Handle("/admin/stats", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminStats)))))
 	mux.Handle("/admin/provider-health", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleProviderHealth)))))
 	mux.Handle("/admin/health-summary", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleHealthSummary)))))
@@ -770,6 +774,8 @@ func (s *Server) Routes() http.Handler {
 	// the other /admin/* endpoints; role writes also drive the ops-center seam.
 	mux.Handle("/admin/users", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminUsers)))))
 	mux.Handle("/admin/users/", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminUserItem)))))
+	// Team rename: relabels users.team_id + projects.team_id atomically.
+	mux.Handle("/admin/teams/rename", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminTeamRename)))))
 	// Migration status (#256): applied vs pending chat-DB migrations. Admin-gated
 	// like the other /admin/* reads; strictly read-only (applies nothing).
 	mux.Handle("/admin/migrations", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleMigrations)))))
@@ -1184,6 +1190,8 @@ func (s *Server) listMCPServerCatalog(w http.ResponseWriter, r *http.Request) {
 			// Separate group so adding this longer key doesn't re-align
 			// the block above.
 			"enabled_by_default": info.EnabledByDefault,
+			// Manifest-declared external data this connector touches.
+			"data_sources": info.DataSources,
 			// Provisioned credential-account seat names (never secret values).
 			"accounts": info.Accounts,
 		})

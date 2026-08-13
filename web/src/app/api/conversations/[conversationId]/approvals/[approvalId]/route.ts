@@ -26,7 +26,7 @@ export async function POST(req: NextRequest, context: RouteContext) {
   const { conversationId, approvalId } = await context.params;
   const body = await req.text();
   const { upstream, error } = await chatServerProxy(
-    session.email,
+    session,
     `/conversations/${encodeURIComponent(conversationId)}/approvals/${encodeURIComponent(approvalId)}`,
     { method: "POST", body },
   );

@@ -34,6 +34,7 @@ import (
 //	stale_first     → emit a response with id 999999, then the real one
 //	sleep_forever   → never respond (used for cancel/desync tests)
 //	rpc_error       → respond with a JSON-RPC error whose message contains "EOF"
+//	huge            → respond with a blob of params["bytes"] bytes (capped-read test)
 const fakeServerScript = `
 import json, sys
 for line in sys.stdin:
@@ -43,6 +44,9 @@ for line in sys.stdin:
         sys.stdout.write(json.dumps(obj) + "\n")
         sys.stdout.flush()
     if method == "sleep_forever":
+        continue
+    if method == "huge":
+        send({"jsonrpc": "2.0", "id": rid, "result": {"blob": "x" * req["params"]["bytes"]}})
         continue
     if method == "notify_first":
         send({"jsonrpc": "2.0", "method": "notifications/progress", "params": {"p": 1}})
@@ -104,6 +108,41 @@ func TestStdioCall_DiscardsMismatchedIDs(t *testing.T) {
 	}
 	if strings.Contains(string(res), "stale") {
 		t.Fatalf("stale response with wrong id returned to caller: %s", res)
+	}
+}
+
+// TestStdioCall_OversizedResponseFailsLoud is the regression guard for the
+// unbounded response read: a response line past stdioResponseCaptureCap must
+// fail THIS call with an explicit over-cap error — never be buffered whole in
+// host memory, never be silently truncated into a parseable-but-wrong result,
+// and never kill the transport (the reader drains to the delimiter, so the
+// stream stays framed and the next call works without a restart). Before the
+// fix the whole line was buffered and returned as a successful result.
+func TestStdioCall_OversizedResponseFailsLoud(t *testing.T) {
+	tr := newFakeTransport(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	// The blob alone exceeds the cap; the JSON envelope only adds to it.
+	_, err := tr.Call(ctx, "huge", map[string]any{"bytes": stdioResponseCaptureCap + 1})
+	if err == nil || !strings.Contains(err.Error(), "exceeded") {
+		t.Fatalf("Call = %v, want an over-cap error", err)
+	}
+	if isTransportDeadError(err) {
+		t.Errorf("over-cap error %q matches the dead-transport markers — a healthy subprocess would be restarted for nothing", err)
+	}
+	if isRequestNotDeliveredError(err) {
+		t.Errorf("over-cap error %q reads as not-delivered — a retry would just fetch the same oversized response", err)
+	}
+
+	// The drain left the stream framed: the same transport must answer the
+	// next call, with no restart in between.
+	res, err := callEcho(t, tr, "echo")
+	if err != nil {
+		t.Fatalf("call after oversized response: %v — the drain broke the framing", err)
+	}
+	if !strings.Contains(string(res), "echo") {
+		t.Fatalf("unexpected result after oversized response: %s", res)
 	}
 }
 
@@ -237,6 +276,52 @@ func TestCallToolPrefixed_ResolvesServerFromFullName(t *testing.T) {
 	}
 	if _, err := c.CallToolPrefixed(context.Background(), "bash", nil); err == nil {
 		t.Fatal("expected error for non-MCP name")
+	}
+}
+
+// argsCaptureTransport records the exact params map of the last tools/call.
+type argsCaptureTransport struct {
+	lastParams map[string]interface{}
+}
+
+func (f *argsCaptureTransport) Call(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
+	if method == "tools/call" {
+		f.lastParams, _ = params.(map[string]interface{})
+	}
+	return json.RawMessage(`{"content":[{"type":"text","text":"ok"}]}`), nil
+}
+
+func (f *argsCaptureTransport) Notify(_ context.Context, _ string, _ interface{}) error { return nil }
+
+func (f *argsCaptureTransport) Close() error { return nil }
+
+// A nil arguments map would marshal to "arguments": null on the wire, which
+// strict MCP servers reject with -32602 (arguments must be an object when
+// present). callTool must forward an empty object instead. Regression for the
+// pages.list_templates failure where empty model args crossed the mcpbroker
+// boundary (args,omitempty) as nil and the server refused the call.
+func TestCallTool_NilArgumentsBecomeEmptyObject(t *testing.T) {
+	ft := &argsCaptureTransport{}
+	c := NewClient()
+	c.servers["pages"] = &Server{
+		name:      "pages",
+		transport: ft,
+		tools:     []Tool{{Name: "list_templates"}},
+	}
+
+	if _, err := c.CallToolOn(context.Background(), "pages", "list_templates", nil); err != nil {
+		t.Fatalf("CallToolOn: %v", err)
+	}
+	args, ok := ft.lastParams["arguments"]
+	if !ok {
+		t.Fatal("tools/call params missing arguments")
+	}
+	m, ok := args.(map[string]interface{})
+	if !ok || m == nil {
+		t.Fatalf("arguments = %#v, want a non-nil empty object", args)
+	}
+	if len(m) != 0 {
+		t.Fatalf("arguments = %#v, want empty", m)
 	}
 }
 

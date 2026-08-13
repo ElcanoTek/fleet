@@ -223,10 +223,11 @@ func lookupFleetEnv(suffix string) (string, bool) {
 
 // checkManifest reports the bundle load (clientconfig.Load already validates the
 // manifest schema + the MCP-catalog structural invariants) and then validates
-// the referenced supporting-file paths the server reads at runtime: the default
-// persona, the system-prompt files, and — when the bundle declares any — the
-// protocols and skills dirs. A referenced file that does not exist on disk is a
-// blocking failure (the agent would fail the turn that needs it).
+// the referenced supporting-file paths the server reads at runtime: the two
+// default personas and the system-prompt files. A referenced file that does not
+// exist on disk is a blocking failure (the agent would fail the turn that needs
+// it) — except the SCHEDULED default persona, whose reader degrades instead of
+// failing; see the personaKnob table.
 func checkManifest(bundle *clientconfig.Bundle, bundleErr error, cfg *config.Config) checkResult {
 	res := checkResult{Name: "manifest", Blocking: true}
 	if bundleErr != nil {
@@ -234,7 +235,7 @@ func checkManifest(bundle *clientconfig.Bundle, bundleErr error, cfg *config.Con
 		res.Detail = "bundle load failed: " + bundleErr.Error()
 		return res
 	}
-	var problems []string
+	var problems, advisories []string
 
 	manifestPath := filepath.Join(bundle.Dir, "manifest.yaml")
 	// The interactive base system prompt (chat.md) and the scheduled base
@@ -245,23 +246,148 @@ func checkManifest(bundle *clientconfig.Bundle, bundleErr error, cfg *config.Con
 			problems = append(problems, fmt.Sprintf("system prompt %s missing", name))
 		}
 	}
-	// The default persona the server resolves (config.Persona is e.g.
-	// "personas/assistant.yaml"). Resolve it relative to the bundle dir.
-	if cfg != nil && strings.TrimSpace(cfg.Persona) != "" {
-		p := filepath.Join(bundle.Dir, cfg.Persona)
-		if !fileExists(p) {
-			problems = append(problems, fmt.Sprintf("default persona %s missing", cfg.Persona))
+	if cfg != nil {
+		if miss := personaMiss(bundle, cfg.PersonaDefault, interactivePersonaKnob); miss != "" {
+			problems = append(problems, miss)
+		}
+		if miss := personaMiss(bundle, cfg.Persona, scheduledPersonaKnob); miss != "" {
+			advisories = append(advisories, miss)
 		}
 	}
 
 	if len(problems) > 0 {
 		res.Status = statusFail
-		res.Detail = strings.Join(problems, "; ")
+		res.Detail = strings.Join(append(problems, advisories...), "; ")
+		return res
+	}
+	if len(advisories) > 0 {
+		// Flip Blocking with the status, as checkCredentials does: failed() reads
+		// both fields, but the --json contract (#248) exposes Blocking on its own,
+		// and a consumer keying off it must not read an advisory as must-fix.
+		res.Blocking = false
+		res.Status = statusWarn
+		res.Detail = strings.Join(advisories, "; ")
 		return res
 	}
 	res.Status = statusOK
 	res.Detail = manifestPath
 	return res
+}
+
+// personaKnob is one of the two default-persona settings a deployment's env file
+// carries. They differ in SHAPE (config/default/README.md) and — the reason they
+// are not checked at the same severity — in what their reader does with a miss.
+type personaKnob struct {
+	// role names the knob in the report line, so an operator reading "⚠ manifest"
+	// knows which of the two is wrong.
+	role string
+	// env is the canonical variable that fixes the miss.
+	env string
+	// resolve turns the configured value into the filename its reader opens inside
+	// personas/. Both reduce to a basename, but only the interactive reader
+	// appends .yaml, so the two must not share one rule.
+	resolve func(persona string) string
+	// suggest renders one of the bundle's persona FILENAMES the way env takes it:
+	// a bare name for FLEET_PERSONA_DEFAULT, a bundle-relative path for
+	// FLEET_PERSONA. Suggesting the wrong shape would contradict the docs.
+	suggest func(filename string) string
+}
+
+// The two knobs and their severities (#956).
+//
+// FLEET_PERSONA_DEFAULT is turn-fatal, so a miss is BLOCKING: it is the persona
+// new interactive conversations start on (config.PersonaDefault), which
+// agent.Manager.RunTurn passes to buildSystemPrompt, whose os.ReadFile miss
+// RETURNS AN ERROR (internal/agent/prompt.go) and fails the turn. Nothing
+// upstream catches it first — /api/personas hands the same name to the chat UI
+// as the selected persona with no membership check against the roster beside it
+// — so a deployment naming a persona the bundle does not ship fails every chat
+// turn.
+//
+// FLEET_PERSONA only degrades, so a miss is ADVISORY: it is the scheduled
+// driver's global persona (config.Persona) and its sole reader,
+// scheduledrun.composeSystemPrompt, IGNORES the ReadFile error, dropping the
+// domain-expertise block from the prompt but still running the task.
+//
+// Both are properties of the DEPLOYMENT rather than of the bundle under test,
+// which is what keeps the advisory out of the exit code: unset, the loader falls
+// back to assistant, and a red ✗ on every bundle that names its persona anything
+// else teaches operators to ignore the whole report. The blocking one earns its
+// ✗ despite that same argument, because for it the fallback is not a false
+// alarm — an unset FLEET_PERSONA_DEFAULT against such a bundle really does break
+// every chat turn.
+var (
+	interactivePersonaKnob = personaKnob{
+		role: "interactive default persona",
+		env:  "FLEET_PERSONA_DEFAULT",
+		resolve: func(persona string) string {
+			name := filepath.Base(persona)
+			if !strings.HasSuffix(strings.ToLower(name), ".yaml") {
+				name += ".yaml"
+			}
+			return name
+		},
+		suggest: func(filename string) string { return strings.TrimSuffix(filename, filepath.Ext(filename)) },
+	}
+	scheduledPersonaKnob = personaKnob{
+		role:    "scheduled default persona",
+		env:     "FLEET_PERSONA",
+		resolve: filepath.Base,
+		suggest: func(filename string) string { return "personas/" + filename },
+	}
+)
+
+// personaMiss reports the configured persona when the bundle does not ship it,
+// and "" when it does, resolving the value through knob.resolve — i.e. inside
+// the bundle's personas/ dir, the way that knob's reader does. Resolving against
+// the bundle ROOT instead, as this check used to, reported personas the bundle
+// ships as missing.
+func personaMiss(bundle *clientconfig.Bundle, persona string, knob personaKnob) string {
+	persona = strings.TrimSpace(persona)
+	if bundle == nil || persona == "" {
+		return ""
+	}
+	name := knob.resolve(persona)
+	if fileExists(filepath.Join(bundle.PersonasDir, name)) {
+		return ""
+	}
+	offered := bundlePersonaFiles(bundle)
+	if len(offered) == 0 {
+		return fmt.Sprintf("%s %s not in personas/ — the bundle ships no personas", knob.role, name)
+	}
+	choices := make([]string, 0, len(offered))
+	for _, filename := range offered {
+		choices = append(choices, knob.suggest(filename))
+	}
+	return fmt.Sprintf("%s %s not in personas/ — set %s to one of: %s", knob.role, name, knob.env, strings.Join(choices, ", "))
+}
+
+// bundlePersonaFiles lists the persona files the bundle ships so a finding can
+// name the choices, not just the miss. Only .yaml is offered: the persona
+// rosters (agent.Manager.ListPersonas, listBundlePersonas) are .yaml-only and
+// the interactive/per-task loaders force a ".yaml" suffix onto the configured
+// name, so a .yml file can never back a chat persona — offering one here would
+// hand the operator a remediation that loops. The one reader that opens its
+// configured filename verbatim (the scheduled global persona,
+// scheduledrun.composeSystemPrompt) could load a .yml, but steering an operator
+// toward a file every other reader is blind to is not a fix. os.ReadDir
+// already sorts by filename.
+func bundlePersonaFiles(bundle *clientconfig.Bundle) []string {
+	entries, err := os.ReadDir(bundle.PersonasDir)
+	if err != nil {
+		return nil
+	}
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		if !strings.HasSuffix(strings.ToLower(e.Name()), ".yaml") {
+			continue
+		}
+		names = append(names, e.Name())
+	}
+	return names
 }
 
 // ── 3. MCP servers (warning) ──
@@ -557,9 +683,9 @@ func requiredGateVarsMissing(bundle *clientconfig.Bundle) []string {
 // the resolved sandbox image exists locally (the same ref the boot path consumes
 // via bundle.Sandbox().ResolvedImageRef() / cfg.SandboxImage). If a non-default
 // OCI runtime is selected (FLEET_SANDBOX_RUNTIME or the bundle's sandbox.runtime
-// — e.g. runsc/gVisor, kata, libkrun) its binary must be on PATH, and the
-// hypervisor-backed tiers (kata/krun) must pass the same fail-closed KVM
-// preflight the boot path runs (#217).
+// — e.g. runsc/gVisor, kata, libkrun) podman must be able to resolve it, and the
+// hypervisor-backed tiers (kata/krun) must additionally pass the same
+// fail-closed KVM preflight the boot path runs (#217).
 func checkSandbox(ctx context.Context, cfg *config.Config, bundle *clientconfig.Bundle) checkResult {
 	res := checkResult{Name: "sandbox"}
 	containerBacked := sandboxIsContainerBacked(cfg)
@@ -576,31 +702,45 @@ func checkSandbox(ctx context.Context, cfg *config.Config, bundle *clientconfig.
 		res.Detail = "podman not found in PATH"
 		return res
 	}
-	// A non-default OCI runtime must be installed and — for the hypervisor-backed
-	// tiers (kata/krun) — actually able to deliver isolation. Resolve the runtime
-	// the same way the boot path does (env wins, else the bundle manifest), map
-	// the name to the binary podman resolves --runtime to ("kata" → "kata-runtime",
-	// "libkrun"/"krun" → "krun"), and run the real fail-closed preflight (#217).
-	if rt := resolveSandboxRuntime(cfg, bundle); rt != "" {
-		if bin := sandbox.RuntimeBinary(rt); bin != "" {
-			if _, err := exec.LookPath(bin); err != nil {
-				res.Status = statusFail
-				res.Detail = fmt.Sprintf("sandbox runtime %q: binary %q not found in PATH", rt, bin)
-				return res
-			}
-		}
-		if err := sandbox.PreflightRuntime(ctx, rt); err != nil {
-			res.Status = statusFail
-			res.Detail = err.Error()
-			return res
-		}
-	}
+	// `podman info` FIRST: the runtime preflight below also shells out to podman,
+	// so a broken rootless setup would otherwise be reported as "could not
+	// resolve --runtime=…", blaming the runtime for a podman problem.
 	infoCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	if err := exec.CommandContext(infoCtx, podmanBin, "info").Run(); err != nil {
 		res.Status = statusFail
 		res.Detail = "podman info failed (rootless/daemon setup not accessible): " + err.Error()
 		return res
+	}
+	// A non-default OCI runtime must be resolvable by podman and — for the
+	// hypervisor-backed tiers (kata/krun) — actually able to deliver isolation.
+	// Resolve the runtime the same way the boot path does (env wins, else the
+	// bundle manifest) and run the real fail-closed preflight (#217), which asks
+	// podman which binary it will exec rather than guessing from the name. A
+	// separate PATH lookup here would be both weaker and wrong: it validates
+	// whichever same-named binary is first on PATH, and it reports FAIL for a
+	// perfectly good containers.conf that maps the name to an off-PATH binary.
+	if rt := resolveSandboxRuntime(cfg, bundle); rt != "" {
+		if err := sandbox.PreflightRuntime(ctx, podmanBin, rt); err != nil {
+			res.Status = statusFail
+			res.Detail = err.Error()
+			return res
+		}
+	}
+	// Allowlisted egress needs a specific rootless network helper. Answering
+	// "can this box run this config" is exactly what this verb is for, so run
+	// the same fail-closed preflight the boot path runs (#211 / ADR-0012).
+	networkHelperNote := ""
+	if cfg.DefaultNetworkMode == sandbox.NetworkModeAllowlisted {
+		if err := sandbox.PreflightAllowlistedNetwork(ctx, podmanBin); err != nil {
+			res.Status = statusFail
+			res.Detail = err.Error()
+			return res
+		}
+		// Say so on success too: an operator running this verb specifically to
+		// check an allowlisted host should see the check ran, not just a generic
+		// sandbox OK.
+		networkHelperNote = "; allowlisted egress network helper present"
 	}
 	// Image existence: the SAME resolved ref the boot path consumes.
 	image := resolveSandboxImage(cfg, bundle)
@@ -618,7 +758,7 @@ func checkSandbox(ctx context.Context, cfg *config.Config, bundle *clientconfig.
 		return res
 	}
 	res.Status = statusOK
-	res.Detail = fmt.Sprintf("podman ok; image %q present", image)
+	res.Detail = fmt.Sprintf("podman ok; image %q present%s", image, networkHelperNote)
 	return res
 }
 
@@ -830,10 +970,8 @@ func sortedServerNames(m map[string]config.MCPServerConfig) []string {
 
 // fileExists reports whether path is an existing regular (non-dir) file. The
 // path is always operator-config-derived (the bundle dir + a manifest/config
-// reference), never request input — this is a startup diagnostic with no HTTP
-// surface.
-//
-//nolint:gosec // G703: path is operator-config-derived (bundle dir + manifest/config reference), not request input — no traversal vector in a CLI preflight.
+// reference, the latter reduced to a basename), never request input — this is a
+// startup diagnostic with no HTTP surface.
 func fileExists(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && !info.IsDir()

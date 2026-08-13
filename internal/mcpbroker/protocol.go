@@ -135,6 +135,7 @@ type ServerDescriptor struct {
 	Description      string   `json:"description,omitempty"`
 	Beta             bool     `json:"beta,omitempty"`
 	EnabledByDefault bool     `json:"enabledByDefault,omitempty"`
+	DataSources      []string `json:"dataSources,omitempty"`
 	UsesWorkspace    bool     `json:"usesWorkspace,omitempty"`
 }
 

@@ -3,10 +3,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CostForecast, McpServer, MCPChoice, Task, TaskCreate, TaskTemplate } from "@/app/shared/lib/orchestratorApi";
 import { orchestratorApi } from "@/app/shared/lib/orchestratorApi";
-import { applyTemplateVars, promptableVars } from "@/app/shared/lib/taskTemplates";
+import { applyTemplateVars, humanizeVarName, promptableVars } from "@/app/shared/lib/taskTemplates";
 import { validateTaskForm, validateCronExpression, describeEmailError } from "@/app/shared/lib/validation";
 import { isValidEmail } from "@/app/shared/lib/format";
 import { describeCronExpression } from "@/app/shared/lib/cron";
+import { Icon } from "@/app/shared/ui/Icon";
 import { nextCronOccurrence, formatNextRun } from "@/app/shared/lib/cronNext";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
 import { useToast } from "@/app/shared/ui/Toast";
@@ -36,6 +37,21 @@ import { PromptLibrary } from "@/app/shared/ui/PromptLibrary";
 //    field; Launch is disabled ONLY while the prompt is empty (visible reason
 //    in the footer) — with field errors it stays enabled and the footer counts
 //    what's blocking.
+
+// TITLE_MAX_LENGTH mirrors the server's maxTaskTitleChars, so an over-long
+// title is caught in the form instead of coming back as a 400.
+const TITLE_MAX_LENGTH = 120;
+
+// PROMPT_AUTOGROW_MAX_PX caps how tall the prompt field grows on its OWN. It is
+// deliberately modest — the schedule, tools and Launch button live below it, and
+// an auto-grown field that swallows the form makes them unreachable. Deliberate
+// enlargement (the drag grip, the Expand toggle) is bounded far higher by the
+// stylesheet's max-height instead.
+const PROMPT_AUTOGROW_MAX_PX = 240;
+
+// The expanded-editor preference is per browser: an operator who edits long
+// protocol prompts wants the tall pane every time, not once per modal.
+const PROMPT_EXPANDED_STORAGE_KEY = "fleet-task-prompt-expanded";
 
 const DEFAULT_PRIMARY_MODEL = "z-ai/glm-5.2";
 const DEFAULT_FALLBACK_MODEL = "openai/gpt-5.6-sol";
@@ -149,6 +165,7 @@ function taskToFormValues(task: Task | null) {
     }
   }
   return {
+    title: task?.title ?? "",
     prompt: task?.prompt ?? "",
     description: task?.description ?? "",
     tagsInput: (task?.tags ?? []).join(", "),
@@ -180,6 +197,10 @@ function taskToFormValues(task: Task | null) {
     runIfCommand: task?.run_if?.command ?? "",
     runIfOnError: (task?.run_if?.on_error ?? "run") as "run" | "skip",
     runIfTimeout: task?.run_if?.timeout_seconds ?? 30,
+    // The form has no exit-code field; carried so an edit echoes the stored
+    // gate faithfully (a lossy echo reads as a run_if change server-side and
+    // 403s non-admin edits of unrelated fields).
+    runIfExitCode: task?.run_if?.exit_code_is ?? 0,
     expectedDuration:
       typeof task?.expected_duration_minutes === "number" &&
       task.expected_duration_minutes > 0
@@ -286,6 +307,7 @@ export function TaskCreateModal({
   // fresh state — no prefill effects needed.
   const [init] = useState(() => taskToFormValues(editTask ?? null));
 
+  const [title, setTitle] = useState(init.title);
   const [prompt, setPrompt] = useState(init.prompt);
   const [description, setDescription] = useState(init.description);
   const [tagsInput, setTagsInput] = useState(init.tagsInput);
@@ -358,6 +380,25 @@ export function TaskCreateModal({
   const modalRef = useRef<HTMLDivElement | null>(null);
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const promptRef = useRef<HTMLTextAreaElement | null>(null);
+  // Prompt sizing. `expanded` is the tall-pane toggle (persisted); manualHeight
+  // records that the operator dragged the grip, after which auto-grow must stop
+  // — otherwise the next keystroke would snap their chosen height away. lastAuto
+  // is how a drag is TOLD APART from our own writes: any height we did not set
+  // came from the user.
+  // Lazily seeded from storage, matching UpcomingPanel's view toggle. It is read
+  // at MOUNT: the parent keys this modal per edit target, so each Edit picks the
+  // preference up, while the long-lived create instance adopts a change made
+  // elsewhere on the next page load.
+  const [promptExpanded, setPromptExpanded] = useState(() => {
+    if (typeof window === "undefined") return false;
+    try {
+      return window.localStorage.getItem(PROMPT_EXPANDED_STORAGE_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
+  const promptManualHeight = useRef(false);
+  const promptLastAutoHeight = useRef<string | null>(null);
   const emailInputRef = useRef<HTMLInputElement | null>(null);
   // Outside-click close: only when both mousedown AND click land on the overlay
   // itself (a drag from inside the form that ends on the overlay must not
@@ -368,6 +409,12 @@ export function TaskCreateModal({
   // shapes. Fetched once when the modal opens; an empty catalog (or a fetch
   // failure) suppresses the section — the blank form is always available.
   const [templates, setTemplates] = useState<TaskTemplate[]>([]);
+  // Template variable fill: the template the user picked that still has
+  // unresolved {variables} (built-ins like {date} never land here — they
+  // substitute silently). Non-null swaps the card grid for the inline fill
+  // form; templateVarValues carries the per-variable input state.
+  const [pendingTemplate, setPendingTemplate] = useState<TaskTemplate | null>(null);
+  const [templateVarValues, setTemplateVarValues] = useState<Record<string, string>>({});
 
   useEffect(() => {
     if (!open) return;
@@ -388,6 +435,7 @@ export function TaskCreateModal({
   const scheduledFor = scheduledDate ? `${scheduledDate}T${scheduledTime || "09:00"}` : "";
 
   const createDirty =
+    title.trim() !== "" ||
     prompt.trim() !== "" ||
     description.trim() !== "" ||
     tagsInput.trim() !== "" ||
@@ -414,6 +462,7 @@ export function TaskCreateModal({
   // component remounts per edit target via the parent's key, so `init` is the
   // mount-time truth); create mode keeps its semantic any-field-set check.
   const formSnapshot = JSON.stringify([
+    title,
     prompt,
     description,
     tagsInput,
@@ -438,6 +487,7 @@ export function TaskCreateModal({
     mcpSelection,
   ]);
   const initSnapshot = JSON.stringify([
+    init.title,
     init.prompt,
     init.description,
     init.tagsInput,
@@ -494,6 +544,8 @@ export function TaskCreateModal({
     setExpectedDuration("");
     setThinkingBudget("");
     setMcpSelection([]);
+    setPendingTemplate(null);
+    setTemplateVarValues({});
     setErrors({});
     setForecast(null);
     setEstimateKey("");
@@ -541,20 +593,20 @@ export function TaskCreateModal({
     updateScrollShadows();
   }, [open, contextOpen, toolsOpen, advancedOpen, templates, updateScrollShadows]);
 
-  // applyTemplate pre-fills the form from a template. Built-in variables ({date},
-  // {user_name}) are substituted automatically; any remaining custom {token} is
-  // collected through a small prompt() per variable, then substituted. Every
-  // field stays editable afterward — this only seeds the form. The task is still
+  // applyTemplate picks a template card. Built-in variables ({date},
+  // fillFormFromTemplate seeds every form field from the template payload.
+  // Built-in variables ({date}, {user_name}) substitute automatically; values
+  // the user left blank keep their {token} placeholder in the prompt, visible
+  // rather than silently dropped (applyTemplateVars contract). Every field
+  // stays editable afterward — this only seeds the form. The task is still
   // created through the ordinary submit/createTask path.
-  const applyTemplate = (tpl: TaskTemplate) => {
+  const fillFormFromTemplate = (tpl: TaskTemplate, userValues: Record<string, string>) => {
     const ctx = { userName: undefined as string | undefined };
-    const userValues: Record<string, string> = {};
-    for (const name of promptableVars(tpl.variables ?? [], ctx)) {
-      const entered = window.prompt(`Value for {${name}}`, "");
-      if (entered != null && entered !== "") userValues[name] = entered;
-    }
     const t = tpl.task ?? {};
     setPrompt(t.prompt ? applyTemplateVars(t.prompt, userValues, ctx) : "");
+    // Seed the title from the template's own name — that is what the operator
+    // just picked the task by. Editable afterwards like every seeded field.
+    setTitle(t.title ?? tpl.name ?? "");
     setDescription(t.description ?? "");
     setTagsInput((t.tags ?? []).join(", "));
     setPersona(t.persona ?? "");
@@ -589,12 +641,96 @@ export function TaskCreateModal({
     }
   };
 
+  // applyTemplate picks a template card. A template whose {variables} are all
+  // built-ins fills immediately; anything still unresolved swaps the card grid
+  // for the inline fill form (no native dialogs).
+  const applyTemplate = (tpl: TaskTemplate) => {
+    if (promptableVars(tpl.variables ?? [], {}).length === 0) {
+      fillFormFromTemplate(tpl, {});
+      return;
+    }
+    setTemplateVarValues({});
+    setPendingTemplate(tpl);
+  };
+
+  const confirmTemplateVars = () => {
+    if (!pendingTemplate) return;
+    fillFormFromTemplate(pendingTemplate, templateVarValues);
+    setPendingTemplate(null);
+  };
+
+  // autoGrowPrompt sizes the field to its content, but yields to the operator:
+  // once they expand it or drag it, their height stands until they reset it.
+  const autoGrowPrompt = (el: HTMLTextAreaElement) => {
+    if (promptExpanded) {
+      // The .is-expanded rule owns the height; an inline value would beat it.
+      el.style.height = "";
+      promptLastAutoHeight.current = null;
+      return;
+    }
+    if (promptManualHeight.current) return;
+    el.style.height = "auto";
+    const next = `${Math.min(el.scrollHeight, PROMPT_AUTOGROW_MAX_PX)}px`;
+    el.style.height = next;
+    promptLastAutoHeight.current = next;
+  };
+
+  // Size the field for content the operator did NOT type: the prefill when
+  // editing an existing task, a template, a prompt-library insert. Without this
+  // the edit form opened a 200-line protocol into a three-row box — the whole
+  // reason this field needed to become adjustable.
+  useEffect(() => {
+    const el = promptRef.current;
+    if (!el || !open) return;
+    autoGrowPrompt(el);
+    // autoGrowPrompt is recreated per render; the sizing inputs are what matter.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prompt, promptExpanded, open]);
+
+  // Tell a drag of the native grip apart from our own height writes. jsdom has
+  // no ResizeObserver (unit tests) — there the drag simply is not detectable,
+  // which costs those tests nothing.
+  useEffect(() => {
+    const el = promptRef.current;
+    if (!el || !open || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => {
+      const current = el.style.height;
+      if (!current || current === promptLastAutoHeight.current) return;
+      promptManualHeight.current = true;
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [open]);
+
+  // togglePromptExpanded doubles as the reset for a dragged height: clearing the
+  // inline value hands sizing back to the class rule (expanded) or to auto-grow
+  // (collapsed), so an operator who dragged themselves into a bad size has one
+  // obvious way out.
+  const togglePromptExpanded = () => {
+    const next = !promptExpanded;
+    setPromptExpanded(next);
+    promptManualHeight.current = false;
+    promptLastAutoHeight.current = null;
+    if (promptRef.current) promptRef.current.style.height = "";
+    try {
+      window.localStorage.setItem(PROMPT_EXPANDED_STORAGE_KEY, next ? "1" : "0");
+    } catch {
+      /* storage blocked — the toggle still works for this session */
+    }
+  };
+
   if (!open) return null;
 
   // ── Derived display state ─────────────────────────────────────────────────
 
   const cronDescription = describeCronExpression(recurrence);
   const cronNext = cronDescription ? nextCronOccurrence(recurrence) : null;
+
+  // The {variables} the picked template still needs from the user (built-ins
+  // never appear — they substitute silently at apply time).
+  const templatePendingVars = pendingTemplate
+    ? promptableVars(pendingTemplate.variables ?? [], {})
+    : [];
 
   const contextCount = [description, tagsInput, persona].filter((v) => v.trim() !== "").length;
 
@@ -696,6 +832,7 @@ export function TaskCreateModal({
   // them).
   const buildTaskData = (finalPrompt: string): TaskCreate => {
     const taskData: TaskCreate = { prompt: finalPrompt };
+    if (title.trim()) taskData.title = title.trim();
     if (description.trim()) taskData.description = description;
     const tags = tagsInput
       .split(",")
@@ -732,6 +869,9 @@ export function TaskCreateModal({
         on_error: runIfOnError,
         timeout_seconds: runIfTimeout,
       };
+      if (init.runIfExitCode !== 0) {
+        taskData.run_if.exit_code_is = init.runIfExitCode;
+      }
     }
     if (expectedDuration.trim()) {
       const mins = Number.parseInt(expectedDuration, 10);
@@ -756,6 +896,8 @@ export function TaskCreateModal({
       scheduled_for: scheduleMode === "once" ? scheduledFor : "",
     });
     const next: Record<string, string> = { ...(validation.errors as Record<string, string>) };
+    if (title.trim().length > TITLE_MAX_LENGTH)
+      next.title = `Title cannot exceed ${TITLE_MAX_LENGTH} characters.`;
     if (scheduleMode === "once" && !scheduledDate) next.scheduled_for = "Pick a date and time.";
     if (scheduleMode === "repeat" && !recurrence.trim())
       next.recurrence = "Type a cron expression or pick a preset below.";
@@ -769,6 +911,7 @@ export function TaskCreateModal({
   };
 
   const ERROR_FOCUS_TARGETS: Record<string, string> = {
+    title: "titleInput",
     prompt: "promptTextarea",
     scheduled_for: "scheduledForDate",
     recurrence: "recurrenceInput",
@@ -873,6 +1016,7 @@ export function TaskCreateModal({
           // Only fields the rerun endpoint accepts as overrides are sent.
           const created = await orchestratorApi.rerunTask(editTask.id, {
             prompt: taskData.prompt,
+            title: taskData.title ?? "",
             description: taskData.description ?? "",
             model: taskData.model,
             fallback_model: taskData.fallback_model,
@@ -963,11 +1107,6 @@ export function TaskCreateModal({
     setRepeatEditor("simple");
   };
 
-  const autoGrowPrompt = (el: HTMLTextAreaElement) => {
-    el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, 240)}px`;
-  };
-
   const footerStatus = submitting
     ? null
     : errorCount > 0
@@ -1043,8 +1182,61 @@ export function TaskCreateModal({
           >
             <fieldset className="task-form" disabled={submitting}>
               {/* Task templates (#262) — pre-filled starting points. Suppressed
-                  entirely when the bundle ships none. */}
-              {templates.length > 0 && !editing ? (
+                  entirely when the bundle ships none. A card whose prompt still
+                  has unresolved {variables} swaps the grid for an inline fill
+                  form — no native prompt() dialogs. */}
+              {!editing && pendingTemplate ? (
+                <section className="task-group" data-testid="template-var-fill">
+                  <div className="task-group-label">
+                    Fill in: {pendingTemplate.name}
+                  </div>
+                  <div className="field-grid">
+                    {templatePendingVars.map((name, i) => (
+                      <div className="form-group" key={name}>
+                        <label className="task-field-label" htmlFor={`templateVar-${name}`}>
+                          {humanizeVarName(name)}
+                        </label>
+                        <input
+                          id={`templateVar-${name}`}
+                          name={`templateVar-${name}`}
+                          type="text"
+                          placeholder={`{${name}}`}
+                          autoFocus={i === 0}
+                          data-testid={`template-var-input-${name}`}
+                          value={templateVarValues[name] ?? ""}
+                          onChange={(e) =>
+                            setTemplateVarValues((v) => ({ ...v, [name]: e.target.value }))
+                          }
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              confirmTemplateVars();
+                            }
+                          }}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                  <div className="template-var-actions">
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      data-testid="template-var-back"
+                      onClick={() => setPendingTemplate(null)}
+                    >
+                      Back
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      data-testid="template-var-apply"
+                      onClick={confirmTemplateVars}
+                    >
+                      Apply template
+                    </button>
+                  </div>
+                </section>
+              ) : !editing && templates.length > 0 ? (
                 <section className="task-group" data-testid="task-template-section">
                   <div className="task-group-label">Start from a template</div>
                   <div className="template-card-grid" role="group" aria-label="Task templates">
@@ -1073,6 +1265,44 @@ export function TaskCreateModal({
                 </section>
               ) : null}
 
+              {/* ── Title ──────────────────────────────────────────────
+                  Sits ABOVE the prompt on purpose: it is the field that
+                  replaces writing a title line at the top of the prompt, so
+                  it has to be the thing you meet first. Optional — an
+                  untitled task still lists by its prompt's first line. */}
+              <section className="task-group">
+                <div className="task-label-row">
+                  <label className="task-label" htmlFor="titleInput">
+                    Title
+                  </label>
+                  <span className="task-optional-badge">Optional</span>
+                </div>
+                <input
+                  id="titleInput"
+                  name="title"
+                  type="text"
+                  className={`task-title-input${errors.title ? " has-error" : ""}`}
+                  maxLength={TITLE_MAX_LENGTH}
+                  placeholder="Daily pacing summary"
+                  aria-describedby={errors.title ? "title-error title-help" : "title-help"}
+                  value={title}
+                  onChange={(e) => {
+                    setTitle(e.target.value);
+                    if (errors.title) setFieldError("title", "");
+                  }}
+                />
+                {errors.title ? (
+                  <div className="validation-error" id="title-error" data-testid="error-title">
+                    {errors.title}
+                  </div>
+                ) : null}
+                <p className="field-hint" id="title-help">
+                  How this job is listed in the Operations Center. Every run of it — including
+                  future scheduled ones — carries the same title. Left empty, the list falls back
+                  to the first line of the prompt.
+                </p>
+              </section>
+
               {/* ── Prompt ─────────────────────────────────────────────── */}
               <section className="task-group">
                 <div className="task-label-row">
@@ -1080,7 +1310,34 @@ export function TaskCreateModal({
                     Prompt
                   </label>
                   <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <PromptLibrary currentText={prompt} onInsert={setPrompt} />
+                    <PromptLibrary
+                      currentText={prompt}
+                      // Seed the title from the library entry's name — for a
+                      // bundle prompt that name IS the `name:` header operators
+                      // were reading off the top of the prompt to identify the
+                      // job. Only when the title is still empty: an operator who
+                      // already titled the task keeps their wording.
+                      onInsert={(content, name) => {
+                        setPrompt(content);
+                        if (name && !title.trim()) setTitle(name.slice(0, TITLE_MAX_LENGTH));
+                      }}
+                    />
+                    <button
+                      type="button"
+                      className="task-prompt-resize-btn"
+                      data-testid="prompt-expand-toggle"
+                      aria-pressed={promptExpanded}
+                      aria-controls="promptTextarea"
+                      aria-label={promptExpanded ? "Collapse prompt editor" : "Expand prompt editor"}
+                      data-tip-top={promptExpanded ? "Collapse the editor" : "Expand the editor"}
+                      onClick={togglePromptExpanded}
+                    >
+                      {promptExpanded ? (
+                        <Icon name="compress" className="size-4" />
+                      ) : (
+                        <Icon name="expand" className="size-4" />
+                      )}
+                    </button>
                     <span className="task-required-badge">Required</span>
                   </span>
                 </div>
@@ -1088,7 +1345,9 @@ export function TaskCreateModal({
                   id="promptTextarea"
                   name="prompt"
                   ref={promptRef}
-                  className={`task-prompt-input${errors.prompt ? " has-error" : ""}`}
+                  className={`task-prompt-input${errors.prompt ? " has-error" : ""}${
+                    promptExpanded ? " is-expanded" : ""
+                  }`}
                   required
                   rows={3}
                   maxLength={100000}

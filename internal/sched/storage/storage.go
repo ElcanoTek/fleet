@@ -414,6 +414,15 @@ func (s *Storage) UpdateTasksStatusBatch(taskIDs []uuid.UUID, fromStatus, toStat
 	return s.db.UpdateTasksStatusBatch(context.Background(), taskIDs, fromStatus, toStatus)
 }
 
+// SettleGatedTask transitions one gated task out of `scheduled` to toStatus,
+// but only while the row still carries the scheduled_for the gate evaluation
+// was dispatched against — a concurrent cancel, claim, edit, or reschedule
+// wins over the stale verdict (see db.SettleGatedTask). Returns the number of
+// rows transitioned (0 or 1).
+func (s *Storage) SettleGatedTask(taskID uuid.UUID, observedScheduledFor *time.Time, toStatus models.TaskStatus) (int, error) {
+	return s.db.SettleGatedTask(context.Background(), taskID, observedScheduledFor, toStatus)
+}
+
 // GetPendingTasks gets all pending tasks, sorted by priority.
 func (s *Storage) GetPendingTasks() ([]*models.Task, error) {
 	return s.db.GetPendingTasks(context.Background())
@@ -633,22 +642,33 @@ func (s *Storage) GetUserByUsername(username string) (*models.User, error) {
 // random, UNUSABLE bcrypt password hash — a bootstrap admin authenticates ONLY
 // via the cookie/header-trust path, never the moc username/password login.
 func (s *Storage) EnsureAdminUser(ctx context.Context, username string) error {
+	return s.EnsureUserWithRole(ctx, username, "admin")
+}
+
+// EnsureUserWithRole is the generalized two-plane grant primitive: create (or
+// re-role) the sched-side account for username with the given role
+// (admin|client|readonly). Created accounts get a random unusable moc
+// password — cookie-auth only, matching the bootstrap-admin convention.
+func (s *Storage) EnsureUserWithRole(ctx context.Context, username, role string) error {
 	username = strings.ToLower(strings.TrimSpace(username))
 	if username == "" {
 		return nil
+	}
+	if _, ok := models.RolePermissions[role]; !ok {
+		return fmt.Errorf("invalid ops role %q (want admin|client|readonly)", role)
 	}
 	existing, err := s.db.GetUserByUsername(ctx, username)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
 	if existing != nil {
-		if existing.Role == "admin" {
+		if existing.Role == role {
 			return nil
 		}
-		return s.db.UpdateUserRole(ctx, existing.ID, "admin")
+		return s.db.UpdateUserRole(ctx, existing.ID, role)
 	}
-	// New bootstrap admin: a 32-byte random secret bcrypt-hashed so the moc
-	// password login can never succeed for this account (cookie-auth only).
+	// New account: a 32-byte random secret bcrypt-hashed so the moc password
+	// login can never succeed for this account (cookie-auth only).
 	secret := make([]byte, 32)
 	if _, err := rand.Read(secret); err != nil {
 		return err
@@ -661,7 +681,7 @@ func (s *Storage) EnsureAdminUser(ctx context.Context, username string) error {
 		ID:           uuid.New(),
 		Username:     username,
 		PasswordHash: string(hash),
-		Role:         "admin",
+		Role:         role,
 		CreatedAt:    time.Now().UTC(),
 	})
 	return err
@@ -748,6 +768,10 @@ type TaskEdit struct {
 	// Persona replaces the task's per-task persona override (#221), assigned
 	// unconditionally from the full edit payload (empty = use the global persona).
 	Persona string
+	// Title replaces the task's operator-facing display label. Like Prompt it is
+	// assigned unconditionally from the full edit payload (empty = untitled), so
+	// clearing the field in the edit form clears the title.
+	Title string
 	// Description replaces the task's operator documentation (#281). Like Prompt,
 	// it is assigned unconditionally from the full edit payload (empty = clear).
 	Description  string
@@ -793,11 +817,20 @@ type TaskEdit struct {
 	// the legacy retry policy).
 	RetryPolicy    *models.RetryPolicy
 	SetRetryPolicy bool
+	// RunIf + SetRunIf mirror the same pattern (#269): the flag distinguishes
+	// "leave unchanged" from "replace" (including replacing with nil to remove
+	// the gate). The handler sets the flag only for an admin-permission
+	// principal — run_if executes on the host, so a non-admin edit must never
+	// rewrite it.
+	RunIf    *models.RunIf
+	SetRunIf bool
 }
 
 // UpdateEditableTask applies an edit to a task inside a transaction, re-locking
-// the row and re-checking it is still editable. Status is recomputed from
-// ScheduledFor. Returns ErrTaskNotEditable if no longer editable.
+// the row and re-checking it is still editable. Status and ScheduledFor are
+// recomputed with models.DeriveDispatchState — the same rule NewTask applies —
+// so an edit can never move a gated task (or a webhook template) off the
+// scheduler path. Returns ErrTaskNotEditable if no longer editable.
 func (s *Storage) UpdateEditableTask(ctx context.Context, taskID uuid.UUID, edit TaskEdit) (*models.Task, error) {
 	tx, err := s.db.BeginTx(ctx)
 	if err != nil {
@@ -819,6 +852,7 @@ func (s *Storage) UpdateEditableTask(ctx context.Context, taskID uuid.UUID, edit
 	}
 
 	task.Prompt = edit.Prompt
+	task.Title = edit.Title
 	task.Description = edit.Description
 	task.Model = edit.Model
 	task.FallbackModel = edit.FallbackModel
@@ -837,6 +871,9 @@ func (s *Storage) UpdateEditableTask(ctx context.Context, taskID uuid.UUID, edit
 	}
 	if edit.SetRetryPolicy {
 		task.RetryPolicy = edit.RetryPolicy
+	}
+	if edit.SetRunIf {
+		task.RunIf = edit.RunIf
 	}
 	task.Priority = edit.Priority
 	task.InstructionSelfImprove = edit.InstructionSelfImprove
@@ -860,11 +897,13 @@ func (s *Storage) UpdateEditableTask(ctx context.Context, taskID uuid.UUID, edit
 		task.Tags = edit.Tags
 	}
 
-	if task.ScheduledFor != nil && task.ScheduledFor.After(time.Now().UTC()) {
-		task.Status = models.TaskStatusScheduled
-	} else {
-		task.Status = models.TaskStatusPending
-	}
+	// Recompute the dispatch state with the SAME rule used at creation. The
+	// previous ScheduledFor-only recompute here let an edit move a task off
+	// the scheduler path: echoing a run_if gate unchanged (allowed for any
+	// create_task principal) while omitting scheduled_for flipped a gated
+	// task to pending — dispatching it without the gate ever being evaluated
+	// — and flipped an inert webhook template into a one-shot pending run.
+	task.Status, task.ScheduledFor = models.DeriveDispatchState(task.TriggerType, task.RunIf, task.ScheduledFor)
 
 	if err := s.db.UpdateTaskTx(ctx, tx, task); err != nil {
 		return nil, err
@@ -1480,25 +1519,28 @@ func (s *Storage) ComputeNextRun(task *models.Task) (time.Time, error) {
 
 // RecordSkip records a pre-run-gate skip on a still-scheduled task (#269): it
 // re-locks the row inside a transaction, re-checks the task is still scheduled
-// (a concurrent cancel/claim wins and the skip becomes a no-op), advances
-// scheduled_for to nextRun, increments skip_count, and stamps last_skip_at +
-// last_skip_reason. Returns the updated task. nextRun is computed by the
-// caller via ComputeNextRun (so the scheduler owns the cron math).
-func (s *Storage) RecordSkip(ctx context.Context, taskID uuid.UUID, reason string, nextRun time.Time) (*models.Task, error) {
+// AND still carries the scheduled_for the gate was dispatched against (a
+// concurrent cancel/claim/edit/reschedule wins and the skip becomes a no-op),
+// advances scheduled_for to nextRun, increments skip_count, and stamps
+// last_skip_at + last_skip_reason. Returns the task and whether the skip was
+// actually recorded. nextRun is computed by the caller via ComputeNextRun (so
+// the scheduler owns the cron math); observedScheduledFor is the fetched row's
+// value at dispatch (nil skips the reschedule guard).
+func (s *Storage) RecordSkip(ctx context.Context, taskID uuid.UUID, reason string, nextRun time.Time, observedScheduledFor *time.Time) (*models.Task, bool, error) {
 	tx, err := s.db.BeginTx(ctx)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	task, err := s.db.RecordSkip(ctx, tx, taskID, reason, nextRun)
+	task, recorded, err := s.db.RecordSkip(ctx, tx, taskID, reason, nextRun, observedScheduledFor)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if err := tx.Commit(); err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	return task, nil
+	return task, recorded, nil
 }
 
 // Global storage instance

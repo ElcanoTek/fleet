@@ -15,7 +15,7 @@ export async function GET(request: NextRequest) {
   // active list, so the archived view would silently show active conversations.
   const archived = request.nextUrl.searchParams.get("archived") === "true";
   const path = archived ? "/conversations?archived=true" : "/conversations";
-  const { upstream, error } = await chatServerProxy(session.email, path, { method: "GET" });
+  const { upstream, error } = await chatServerProxy(session, path, { method: "GET" });
   if (error) return error;
   return passthrough(upstream);
 }
@@ -29,7 +29,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   const body = await request.text();
-  const { upstream, error } = await chatServerProxy(session.email, "/conversations", {
+  const { upstream, error } = await chatServerProxy(session, "/conversations", {
     method: "POST",
     body,
   });
@@ -55,7 +55,7 @@ export async function DELETE(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   const body = await request.text();
-  const { upstream, error } = await chatServerProxy(session.email, "/conversations", {
+  const { upstream, error } = await chatServerProxy(session, "/conversations", {
     method: "DELETE",
     body: body.length > 0 ? body : undefined,
   });

@@ -17,7 +17,7 @@ export async function POST(request: NextRequest) {
   const csrf = verifyOrigin(request);
   if (!csrf.ok) return csrf.response;
   const body = await request.text();
-  return chatServerPassthrough(session.email, "/admin/storage/cleanup", {
+  return chatServerPassthrough(session, "/admin/storage/cleanup", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body,

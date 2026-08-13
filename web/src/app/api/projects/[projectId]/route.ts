@@ -16,7 +16,7 @@ async function forward(request: NextRequest, projectId: string, method: string, 
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const init: { method: string; body?: string } = { method };
   if (withBody) init.body = await request.text();
-  const { upstream, error } = await chatServerProxy(session.email, `/projects/${encodeURIComponent(projectId)}`, init);
+  const { upstream, error } = await chatServerProxy(session, `/projects/${encodeURIComponent(projectId)}`, init);
   if (error) return error;
   if (upstream.status === 204) return new NextResponse(null, { status: 204 });
   return new NextResponse(await upstream.text(), {

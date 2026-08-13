@@ -11,7 +11,7 @@ import (
 // that a rerun's immediate run must use ScheduledFor=nil (NOT &now), so it
 // passes validateTaskCreate's "not in the past" check.
 func TestBuildRerunTaskCreate(t *testing.T) {
-	h := &Handlers{}
+	h := newValidateTestHandlers()
 	src := &models.Task{
 		Prompt:     "do the work for the team",
 		Priority:   3,
@@ -61,6 +61,58 @@ func TestBuildRerunTaskCreate(t *testing.T) {
 		}
 		if tc.ScheduledFor != nil {
 			t.Errorf("non-recurring clone must run immediately (nil ScheduledFor), got %v", tc.ScheduledFor)
+		}
+	})
+
+	t.Run("a copy never inherits the source's name", func(t *testing.T) {
+		// tasks.name is the import/export identity key and carries a PARTIAL
+		// UNIQUE index on non-empty names. Inheriting it means the copy's INSERT
+		// collides with the source row that is still in the table, so every
+		// re-run of a named task 500s. Both copy modes must clear it — the same
+		// rule storage.scheduleNextRecurrence already applies to the next
+		// occurrence of a recurring task.
+		named := &models.Task{
+			Name:       "reklaim-daily-health-scan",
+			Prompt:     "do the work for the team",
+			Recurrence: "0 9 * * *",
+			Timezone:   "UTC",
+		}
+		for _, keepRecurrence := range []bool{false, true} {
+			tc, err := buildRerunTaskCreate(named, keepRecurrence, taskRerunOverrides{}, time.UTC)
+			if err != nil {
+				t.Fatalf("build(keepRecurrence=%v): %v", keepRecurrence, err)
+			}
+			if tc.Name != "" {
+				t.Errorf("keepRecurrence=%v: copy name = %q, want empty (unique-index collision with the source)", keepRecurrence, tc.Name)
+			}
+		}
+	})
+
+	t.Run("rerun of a gated source cannot bypass the gate", func(t *testing.T) {
+		// The security regression behind the RunIf enforcement contract: any
+		// create_task principal may rerun an admin-authored gated task, and the
+		// rerun's ScheduledFor=nil run-now convention used to mint it PENDING —
+		// executing the gated work with the condition never evaluated. The
+		// minted task must instead land on the scheduler path, where
+		// ProcessScheduledTasks evaluates the gate before promotion.
+		gated := &models.Task{
+			Prompt:   "do the gated work for the team",
+			Timezone: "UTC",
+			RunIf:    &models.RunIf{Command: "test -f /tmp/ready", TimeoutSeconds: 30},
+		}
+		tc, err := buildRerunTaskCreate(gated, false, taskRerunOverrides{}, time.UTC)
+		if err != nil {
+			t.Fatalf("build: %v", err)
+		}
+		if tc.RunIf == nil {
+			t.Fatal("rerun recipe must carry the source's run_if")
+		}
+		task := models.NewTask(tc)
+		if task.Status != models.TaskStatusScheduled {
+			t.Errorf("gated rerun status = %q, want scheduled (pending would dispatch with the gate unevaluated)", task.Status)
+		}
+		if task.ScheduledFor == nil {
+			t.Error("gated rerun must be parked with a non-nil scheduled_for so the scheduler picks it up")
 		}
 	})
 }

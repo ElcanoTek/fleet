@@ -137,3 +137,120 @@ describe("TasksTable SLA badge (#274)", () => {
     expect(onOpenLogs).toHaveBeenCalledWith(baseTask);
   });
 });
+
+describe("TasksTable Run now action (#1019)", () => {
+  const scheduled: Task = {
+    id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+    prompt: "Reklaim daily health scan",
+    status: "scheduled",
+    recurrence: "0 9 * * *",
+  };
+
+  function renderWithRunNow(tasks: Task[], onRunNow?: (t: Task) => void) {
+    return render(
+      <TasksTable
+        tasks={tasks}
+        total={tasks.length}
+        page={1}
+        pageSize={20}
+        filters={FILTERS}
+        onFilters={() => {}}
+        onPage={() => {}}
+        onPageSize={() => {}}
+        onOpenLogs={() => {}}
+        onRunNow={onRunNow}
+      />,
+    );
+  }
+
+  it("offers Run now on a scheduled task that has not run yet", () => {
+    const onRunNow = vi.fn();
+    renderWithRunNow([scheduled], onRunNow);
+    fireEvent.click(screen.getByTestId("task-run-now-button"));
+    expect(onRunNow).toHaveBeenCalledWith(scheduled);
+  });
+
+  it("does not open the log viewer when Run now is clicked (row click is suppressed)", () => {
+    const onOpenLogs = vi.fn();
+    render(
+      <TasksTable
+        tasks={[scheduled]}
+        total={1}
+        page={1}
+        pageSize={20}
+        filters={FILTERS}
+        onFilters={() => {}}
+        onPage={() => {}}
+        onPageSize={() => {}}
+        onOpenLogs={onOpenLogs}
+        onRunNow={() => {}}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("task-run-now-button"));
+    expect(onOpenLogs).not.toHaveBeenCalled();
+  });
+
+  it("hides Run now for an in-flight task", () => {
+    renderWithRunNow([{ ...scheduled, status: "running" }], vi.fn());
+    expect(screen.queryByTestId("task-run-now-button")).toBeNull();
+    expect(screen.queryByTestId("task-run-now-button-card")).toBeNull();
+  });
+
+  it("omits the action entirely when the parent passes no handler", () => {
+    renderWithRunNow([scheduled]);
+    expect(screen.queryByTestId("task-run-now-button")).toBeNull();
+  });
+
+  it("fires from the phone card view too", () => {
+    const onRunNow = vi.fn();
+    renderWithRunNow([scheduled], onRunNow);
+    const cards = screen.getByTestId("task-cards");
+    fireEvent.click(within(cards).getByTestId("task-run-now-button-card"));
+    expect(onRunNow).toHaveBeenCalledWith(scheduled);
+  });
+});
+
+describe("TasksTable titles", () => {
+  const base: Task = {
+    id: "dddddddd-eeee-ffff-0000-111111111111",
+    prompt: "Pull yesterday's numbers and email the pacing summary",
+    status: "success",
+  };
+
+  function renderTasks(tasks: Task[]) {
+    return render(
+      <TasksTable
+        tasks={tasks}
+        total={tasks.length}
+        page={1}
+        pageSize={20}
+        filters={FILTERS}
+        onFilters={() => {}}
+        onPage={() => {}}
+        onPageSize={() => {}}
+        onOpenLogs={() => {}}
+      />,
+    );
+  }
+
+  it("leads with the title and keeps the prompt as the secondary line", () => {
+    renderTasks([{ ...base, title: "Daily pacing summary" }]);
+    // Rendered in both the desktop row and the phone card (CSS picks one).
+    expect(screen.getAllByText("Daily pacing summary").length).toBe(2);
+    expect(
+      screen.getAllByText(/Pull yesterday's numbers/).length,
+    ).toBeGreaterThan(0);
+  });
+
+  it("falls back to the prompt alone when the task is untitled", () => {
+    renderTasks([base]);
+    expect(screen.getAllByText(/Pull yesterday's numbers/).length).toBe(2);
+    expect(document.querySelector(".task-title-line")).toBeNull();
+    expect(document.querySelector(".task-card-title")).toBeNull();
+  });
+
+  it("treats a whitespace-only title as untitled", () => {
+    renderTasks([{ ...base, title: "   " }]);
+    expect(document.querySelector(".task-title-line")).toBeNull();
+  });
+});

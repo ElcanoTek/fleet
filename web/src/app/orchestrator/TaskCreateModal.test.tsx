@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
 import { TaskCreateModal } from "./TaskCreateModal";
-import type { McpServer, Task } from "@/app/shared/lib/orchestratorApi";
+import type { McpServer, Task, TaskTemplate } from "@/app/shared/lib/orchestratorApi";
 
 // Component tests for the redesigned New Task modal: schedule mode segment,
 // launch gating + footer reason, blur validation with the design's error copy,
@@ -14,6 +14,7 @@ const estimateTask = vi.fn();
 const uploadFile = vi.fn();
 const updateTask = vi.fn();
 const rerunTask = vi.fn();
+const prompts = vi.fn();
 
 vi.mock("@/app/shared/lib/orchestratorApi", () => ({
   orchestratorApi: {
@@ -23,6 +24,7 @@ vi.mock("@/app/shared/lib/orchestratorApi", () => ({
     uploadFile: (...args: unknown[]) => uploadFile(...args),
     updateTask: (...args: unknown[]) => updateTask(...args),
     rerunTask: (...args: unknown[]) => rerunTask(...args),
+    prompts: (...args: unknown[]) => prompts(...args),
   },
 }));
 
@@ -30,8 +32,11 @@ const SERVERS: McpServer[] = [
   { name: "xandr", description: "Xandr DSP", tool_count: 7, accounts: ["client_a"] },
 ];
 
-function renderModal(overrides: Partial<Parameters<typeof TaskCreateModal>[0]> = {}) {
-  taskTemplates.mockResolvedValue([]);
+function renderModal(
+  overrides: Partial<Parameters<typeof TaskCreateModal>[0]> = {},
+  templateList: TaskTemplate[] = [],
+) {
+  taskTemplates.mockResolvedValue(templateList);
   const onClose = vi.fn();
   const onCreated = vi.fn();
   const utils = render(
@@ -288,6 +293,33 @@ describe("TaskCreateModal — edit mode", () => {
     expect(rerunTask).not.toHaveBeenCalled();
   });
 
+  it("echoes a gate's exit_code_is on edit even though the form has no field for it", async () => {
+    updateTask.mockResolvedValue({ id: EDIT_ID });
+    renderModal({
+      editTask: {
+        ...baseEdit,
+        run_if: { command: "test -f /tmp/ready", exit_code_is: 2, timeout_seconds: 30 },
+      },
+      onUpdated: vi.fn(),
+    });
+
+    fireEvent.change(screen.getByLabelText("Prompt"), {
+      target: { value: "Weekly latency report v2" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /save task changes/i }));
+
+    await waitFor(() => expect(updateTask).toHaveBeenCalledTimes(1));
+    const [, body] = updateTask.mock.calls[0];
+    // A lossy echo (dropping exit_code_is) reads server-side as an attempt to
+    // CHANGE the run_if gate and 403s non-admin edits of unrelated fields.
+    expect(body.run_if).toEqual({
+      command: "test -f /tmp/ready",
+      exit_code_is: 2,
+      on_error: "run",
+      timeout_seconds: 30,
+    });
+  });
+
   it("asks all-future-runs vs run-once for a recurring task; PUT for the definition", async () => {
     updateTask.mockResolvedValue({ id: EDIT_ID });
     renderModal({
@@ -340,5 +372,250 @@ describe("TaskCreateModal — edit mode", () => {
     fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
     expect(screen.queryByText(/unsaved changes/i)).toBeNull();
     expect(onClose).toHaveBeenCalled();
+  });
+});
+
+describe("TaskCreateModal — task templates", () => {
+  const TEMPLATES: TaskTemplate[] = [
+    {
+      name: "Site Watch",
+      description: "Drive a browser to a page on a schedule.",
+      icon: "👁️",
+      variables: ["url", "what"],
+      task: {
+        prompt: "Open {url}, extract {what}, compare to last run. Today is {date}.",
+        model: "anthropic/claude-sonnet-4.5",
+        allow_network: true,
+        tags: ["monitoring"],
+        expected_duration_minutes: 10,
+      },
+    },
+    {
+      name: "Plain Summary",
+      description: "No custom variables.",
+      variables: [],
+      task: { prompt: "Summarize today's inbox. Today is {date}." },
+    },
+  ];
+  const TODAY = new Date().toISOString().slice(0, 10);
+
+  it("renders the template cards with name and description", async () => {
+    renderModal({}, TEMPLATES);
+    await screen.findByTestId("task-template-section");
+    expect(screen.getByText("Site Watch")).toBeInTheDocument();
+    expect(screen.getByText("Drive a browser to a page on a schedule.")).toBeInTheDocument();
+    expect(screen.getByText("Plain Summary")).toBeInTheDocument();
+  });
+
+  it("opens the inline variable fill (no native prompt), humanizing the labels", async () => {
+    const promptSpy = vi.spyOn(window, "prompt").mockImplementation(() => null);
+    renderModal({}, TEMPLATES);
+    await screen.findByTestId("task-template-section");
+    fireEvent.click(screen.getByText("Site Watch"));
+
+    expect(await screen.findByTestId("template-var-fill")).toBeInTheDocument();
+    expect(screen.getByText("Fill in: Site Watch")).toBeInTheDocument();
+    expect(screen.getByLabelText("Url")).toBeInTheDocument();
+    expect(screen.getByLabelText("What")).toBeInTheDocument();
+    // The card grid swaps out while the fill is open.
+    expect(screen.queryByTestId("task-template-section")).not.toBeInTheDocument();
+    expect(promptSpy).not.toHaveBeenCalled();
+    promptSpy.mockRestore();
+  });
+
+  it("applies filled values, keeps blank placeholders visible, and seeds the form", async () => {
+    renderModal({}, TEMPLATES);
+    await screen.findByTestId("task-template-section");
+    fireEvent.click(screen.getByText("Site Watch"));
+
+    fireEvent.change(await screen.findByLabelText("Url"), {
+      target: { value: "https://example.com" },
+    });
+    // "What" is deliberately left blank — its {what} placeholder must survive.
+    fireEvent.keyDown(screen.getByLabelText("What"), { key: "Enter" });
+
+    const promptBox = screen.getByLabelText("Prompt") as HTMLTextAreaElement;
+    expect(promptBox.value).toContain("Open https://example.com");
+    expect(promptBox.value).toContain("{what}");
+    expect(promptBox.value).toContain(`Today is ${TODAY}.`);
+    // Non-prompt fields seed too, and the cards return for further editing.
+    expect((screen.getByLabelText("Tags") as HTMLInputElement).value).toBe("monitoring");
+    expect(screen.getByTestId("task-template-section")).toBeInTheDocument();
+  });
+
+  it("Back returns to the cards without seeding the form", async () => {
+    renderModal({}, TEMPLATES);
+    await screen.findByTestId("task-template-section");
+    fireEvent.click(screen.getByText("Site Watch"));
+    fireEvent.click(await screen.findByTestId("template-var-back"));
+
+    expect(screen.getByTestId("task-template-section")).toBeInTheDocument();
+    expect((screen.getByLabelText("Prompt") as HTMLTextAreaElement).value).toBe("");
+  });
+
+  it("a template with no custom variables applies immediately", async () => {
+    renderModal({}, TEMPLATES);
+    await screen.findByTestId("task-template-section");
+    fireEvent.click(screen.getByText("Plain Summary"));
+
+    expect(screen.queryByTestId("template-var-fill")).not.toBeInTheDocument();
+    const promptBox = screen.getByLabelText("Prompt") as HTMLTextAreaElement;
+    expect(promptBox.value).toBe(`Summarize today's inbox. Today is ${TODAY}.`);
+  });
+});
+
+// ── title ─────────────────────────────────────────────────────────────────────
+
+describe("TaskCreateModal — title", () => {
+  it("sends the trimmed title with the create payload", async () => {
+    createTask.mockReset();
+    createTask.mockResolvedValue({ id: "t-1" });
+    renderModal();
+    fireEvent.change(screen.getByLabelText("Title"), {
+      target: { value: "  Daily pacing summary  " },
+    });
+    fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Do the thing" } });
+    fireEvent.click(screen.getByRole("button", { name: "Launch task" }));
+
+    await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
+    const body = createTask.mock.calls[0][0] as Record<string, unknown>;
+    expect(body.title).toBe("Daily pacing summary");
+  });
+
+  it("omits title entirely when left blank, so the task stays untitled", async () => {
+    createTask.mockReset();
+    createTask.mockResolvedValue({ id: "t-1" });
+    renderModal();
+    fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Do the thing" } });
+    fireEvent.click(screen.getByRole("button", { name: "Launch task" }));
+
+    await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
+    const body = createTask.mock.calls[0][0] as Record<string, unknown>;
+    expect(body.title).toBeUndefined();
+  });
+
+  it("rejects an over-long title in the form instead of round-tripping a 400", async () => {
+    createTask.mockReset();
+    renderModal();
+    fireEvent.change(screen.getByLabelText("Title"), { target: { value: "a".repeat(121) } });
+    fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Do the thing" } });
+    fireEvent.click(screen.getByRole("button", { name: "Launch task" }));
+
+    expect(await screen.findByTestId("error-title")).toBeInTheDocument();
+    expect(createTask).not.toHaveBeenCalled();
+  });
+
+  it("prefills the title when editing a titled task", () => {
+    renderModal({ editTask: { ...baseEdit, title: "Weekly latency" } });
+    expect(screen.getByLabelText("Title")).toHaveValue("Weekly latency");
+  });
+
+  it("seeds the title from the template's name", async () => {
+    renderModal({}, [
+      {
+        name: "Plain Summary",
+        description: "No custom variables.",
+        variables: [],
+        task: { prompt: "Summarize today's inbox." },
+      },
+    ]);
+    await screen.findByTestId("task-template-section");
+    fireEvent.click(screen.getByText("Plain Summary"));
+    expect(screen.getByLabelText("Title")).toHaveValue("Plain Summary");
+  });
+});
+
+describe("TaskCreateModal — title from the prompt library", () => {
+  const LIBRARY_ENTRY = {
+    id: "git:Reklaim_Daily_DoD_Health_Scan.yaml",
+    name: "Reklaim daily day-over-day campaign health scan",
+    description: "The daily half of the DoD/WoW pair.",
+    content: "name: Reklaim daily day-over-day campaign health scan\ngoal: produce the scan",
+    source: "git",
+    visibility: "workspace",
+    read_only: true,
+    path: "prompts/Reklaim_Daily_DoD_Health_Scan.yaml",
+  };
+
+  const openLibraryAndUse = async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Open prompt library" }));
+    await screen.findByRole("button", { name: "Use prompt" });
+    fireEvent.click(screen.getByRole("button", { name: "Use prompt" }));
+  };
+
+  it("names the task after the library entry it inserted", async () => {
+    prompts.mockResolvedValue([LIBRARY_ENTRY]);
+    renderModal();
+    await openLibraryAndUse();
+
+    await waitFor(() =>
+      expect(screen.getByLabelText("Title")).toHaveValue(LIBRARY_ENTRY.name),
+    );
+    // The prompt still receives the entry's exact content.
+    expect(screen.getByLabelText("Prompt")).toHaveValue(LIBRARY_ENTRY.content);
+  });
+
+  it("does not overwrite a title the operator already typed", async () => {
+    prompts.mockResolvedValue([LIBRARY_ENTRY]);
+    renderModal();
+    fireEvent.change(screen.getByLabelText("Title"), { target: { value: "My own name" } });
+    await openLibraryAndUse();
+
+    await waitFor(() =>
+      expect(screen.getByLabelText("Prompt")).toHaveValue(LIBRARY_ENTRY.content),
+    );
+    expect(screen.getByLabelText("Title")).toHaveValue("My own name");
+  });
+});
+
+describe("TaskCreateModal — prompt editor sizing", () => {
+  const LONG_PROMPT = Array.from({ length: 60 }, (_, i) => `line ${i + 1}`).join("\n");
+
+  afterEach(() => {
+    try {
+      window.localStorage.clear();
+    } catch {
+      /* ignore */
+    }
+  });
+
+  it("grows a prefilled prompt instead of leaving it in a three-row box", () => {
+    renderModal({ editTask: { ...baseEdit, prompt: LONG_PROMPT } });
+    const el = screen.getByLabelText("Prompt") as HTMLTextAreaElement;
+    // jsdom reports scrollHeight 0, so the exact px cannot be asserted — what
+    // matters is that the prefill was measured at all (an inline height set),
+    // which is precisely what never happened before: edit mode only ever ran
+    // auto-grow from onChange, so an untouched prefill kept rows={3}.
+    expect(el.style.height).not.toBe("");
+  });
+
+  it("toggles the tall editing pane and remembers the choice", () => {
+    const { unmount } = renderModal();
+    const toggle = screen.getByTestId("prompt-expand-toggle");
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByLabelText("Prompt").className).not.toContain("is-expanded");
+
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    const expanded = screen.getByLabelText("Prompt");
+    expect(expanded.className).toContain("is-expanded");
+    // The class rule owns the height while expanded, so no inline value may
+    // shadow it.
+    expect((expanded as HTMLTextAreaElement).style.height).toBe("");
+
+    // A fresh mount restores the preference.
+    unmount();
+    renderModal();
+    expect(screen.getByTestId("prompt-expand-toggle")).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByLabelText("Prompt").className).toContain("is-expanded");
+  });
+
+  it("collapsing hands sizing back to auto-grow", () => {
+    renderModal();
+    const toggle = screen.getByTestId("prompt-expand-toggle");
+    fireEvent.click(toggle);
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByLabelText("Prompt").className).not.toContain("is-expanded");
   });
 });

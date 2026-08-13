@@ -197,7 +197,7 @@ func TestCheckManifestGoodBundle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load bundle: %v", err)
 	}
-	cfg := &config.Config{Persona: "personas/assistant.yaml"}
+	cfg := &config.Config{Persona: "personas/assistant.yaml", PersonaDefault: "assistant"}
 	res := checkManifest(bundle, nil, cfg)
 	if res.Status != statusOK {
 		t.Errorf("good bundle manifest check = %s: %s", res.Status, res.Detail)
@@ -207,17 +207,164 @@ func TestCheckManifestGoodBundle(t *testing.T) {
 	}
 }
 
-// TestCheckManifestMissingPersona escalates a missing referenced persona to a
-// blocking failure.
-func TestCheckManifestMissingPersona(t *testing.T) {
-	bundle, err := clientconfig.Load(repoConfigDefault(t))
+// TestCheckManifestUnknownFieldFailsLikeBoot pins issue #902's expectation:
+// validate-config loads the bundle through the SAME strict decoder the serve
+// boot path uses (clientconfig.Load), so a manifest with an unknown field —
+// e.g. a typo'd branding key — is a blocking manifest failure carrying boot's
+// "unknown field" error class, never a green validate followed by a
+// crash-looping restart.
+func TestCheckManifestUnknownFieldFailsLikeBoot(t *testing.T) {
+	dir := t.TempDir()
+	manifest := "branding:\n  logo_typo: \"x\"\n"
+	if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bundle, bundleErr := clientconfig.Load(dir)
+	if bundleErr == nil || !strings.Contains(bundleErr.Error(), `unknown field "logo_typo"`) {
+		t.Fatalf("strict load must reject the unknown field, got: %v", bundleErr)
+	}
+	res := checkManifest(bundle, bundleErr, nil)
+	if res.Status != statusFail || !res.Blocking {
+		t.Errorf("unknown-field manifest check = %s blocking=%v, want a blocking failure", res.Status, res.Blocking)
+	}
+	if !strings.Contains(res.Detail, "unknown field") {
+		t.Errorf("detail should carry the boot error class, got %q", res.Detail)
+	}
+}
+
+// personaBundle builds a minimal loadable bundle whose personas/ holds exactly
+// the named files — the shape of a client bundle that calls its persona
+// something other than the loader's built-in assistant default.
+func personaBundle(t *testing.T, personaFiles ...string) *clientconfig.Bundle {
+	t.Helper()
+	dir := t.TempDir()
+	write := func(path, content string) {
+		if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(filepath.Join(dir, "manifest.yaml"), "mcp_servers: []\n")
+	write(filepath.Join(dir, "system_prompts", "chat.md"), "chat\n")
+	write(filepath.Join(dir, "system_prompts", "default.md"), "default\n")
+	for _, name := range personaFiles {
+		write(filepath.Join(dir, "personas", name), "role: test\n")
+	}
+	bundle, err := clientconfig.Load(dir)
 	if err != nil {
 		t.Fatalf("load bundle: %v", err)
 	}
-	cfg := &config.Config{Persona: "personas/does-not-exist.yaml"}
+	return bundle
+}
+
+// TestCheckManifestInteractivePersonaDefaultMissingBlocks pins the severity the
+// runtime justifies: agent.Manager.RunTurn feeds cfg.PersonaDefault to
+// buildSystemPrompt, whose ReadFile miss returns an error, so a deployment whose
+// interactive default is not in the bundle fails EVERY chat turn. The check used
+// to look at cfg.Persona only, leaving that with no exit-code signal at all.
+func TestCheckManifestInteractivePersonaDefaultMissingBlocks(t *testing.T) {
+	bundle := personaBundle(t, "victoria.yaml")
+	for _, name := range []string{"assistant", "does-not-exist"} {
+		cfg := &config.Config{PersonaDefault: name, Persona: "personas/victoria.yaml"}
+		res := checkManifest(bundle, nil, cfg)
+		if res.Status != statusFail || !res.Blocking {
+			t.Fatalf("default %q = %s blocking=%v, want a blocking failure: %s", name, res.Status, res.Blocking, res.Detail)
+		}
+		if !strings.Contains(res.Detail, "FLEET_PERSONA_DEFAULT") || !strings.Contains(res.Detail, "victoria") {
+			t.Errorf("default %q: detail should name the knob and the bundle's personas, got %q", name, res.Detail)
+		}
+		if code := emitReport(&bytes.Buffer{}, []checkResult{res}, false); code != 1 {
+			t.Errorf("default %q: exit = %d, want 1 — a turn-fatal default must fail the run", name, code)
+		}
+	}
+}
+
+// TestCheckManifestScheduledPersonaMissingIsAdvisory pins issue #956: a bundle
+// that names its persona anything other than the loader's built-in
+// personas/assistant.yaml failed the whole manifest check with a blocking ✗
+// unless PERSONA happened to be exported in the validating shell. The scheduled
+// driver ignores its persona ReadFile error, so a miss is a warning — carrying
+// blocking=false, since #248's --json contract exposes that flag on its own.
+func TestCheckManifestScheduledPersonaMissingIsAdvisory(t *testing.T) {
+	bundle := personaBundle(t, "victoria.yaml")
+	for _, persona := range []string{"personas/assistant.yaml", "personas/does-not-exist.yaml"} {
+		cfg := &config.Config{PersonaDefault: "victoria", Persona: persona}
+		res := checkManifest(bundle, nil, cfg)
+		if res.Status != statusWarn || res.Blocking {
+			t.Fatalf("persona %q = %s blocking=%v, want a non-blocking warn: %s", persona, res.Status, res.Blocking, res.Detail)
+		}
+		// The suggestion must be in the shape FLEET_PERSONA takes (a
+		// bundle-relative path), not the bare name FLEET_PERSONA_DEFAULT takes.
+		if !strings.Contains(res.Detail, "FLEET_PERSONA to one of: personas/victoria.yaml") {
+			t.Errorf("persona %q: detail should offer the bundle's personas as paths, got %q", persona, res.Detail)
+		}
+		if code := emitReport(&bytes.Buffer{}, []checkResult{res}, false); code != 0 {
+			t.Errorf("persona %q: exit = %d, want 0 — an advisory must not fail the run", persona, code)
+		}
+	}
+}
+
+// TestCheckManifestPersonaResolvesLikeTheReaders: both readers open the persona
+// by BASENAME out of personas/, so a bundle-relative path and a bare filename
+// name the same file — resolving against the bundle root instead reported
+// "victoria.yaml missing" for a bundle that ships exactly that file. Only the
+// interactive reader appends .yaml, so only that knob takes an extensionless
+// name; cfg.Persona always arrives with one (config.Load appends it).
+func TestCheckManifestPersonaResolvesLikeTheReaders(t *testing.T) {
+	bundle := personaBundle(t, "victoria.yaml")
+	for _, spelling := range []string{"personas/victoria.yaml", "victoria.yaml", "victoria"} {
+		cfg := &config.Config{PersonaDefault: spelling, Persona: "personas/victoria.yaml"}
+		if res := checkManifest(bundle, nil, cfg); res.Status != statusOK {
+			t.Errorf("FLEET_PERSONA_DEFAULT=%q = %s: %s", spelling, res.Status, res.Detail)
+		}
+	}
+	for _, spelling := range []string{"personas/victoria.yaml", "victoria.yaml"} {
+		cfg := &config.Config{PersonaDefault: "victoria", Persona: spelling}
+		if res := checkManifest(bundle, nil, cfg); res.Status != statusOK {
+			t.Errorf("FLEET_PERSONA=%q = %s: %s", spelling, res.Status, res.Detail)
+		}
+	}
+}
+
+// TestCheckManifestBlockingProblemOutranksPersonaAdvisory: downgrading the
+// scheduled persona miss must not soften a genuinely missing system prompt
+// sharing the check, and must not drop the advisory from the report either.
+func TestCheckManifestBlockingProblemOutranksPersonaAdvisory(t *testing.T) {
+	bundle := personaBundle(t, "victoria.yaml")
+	if err := os.Remove(filepath.Join(bundle.SystemPromptsDir, "chat.md")); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{PersonaDefault: "victoria", Persona: "personas/assistant.yaml"}
 	res := checkManifest(bundle, nil, cfg)
-	if res.Status != statusFail {
-		t.Errorf("missing persona should fail, got %s: %s", res.Status, res.Detail)
+	if res.Status != statusFail || !res.Blocking {
+		t.Fatalf("status = %s blocking=%v, want a blocking failure: %s", res.Status, res.Blocking, res.Detail)
+	}
+	if !strings.Contains(res.Detail, "chat.md") || !strings.Contains(res.Detail, "set FLEET_PERSONA to") {
+		t.Errorf("detail should carry both findings, got %q", res.Detail)
+	}
+}
+
+// TestCheckManifestYmlPersonasAreNotOffered: the persona rosters are .yaml-only
+// and the interactive loader forces a ".yaml" suffix onto the configured name,
+// so a .yml file can never back a chat persona. The inventory used to accept
+// .yml too, so a victoria.yml-only bundle looked persona-equipped and the
+// report offered a remediation that loops — setting FLEET_PERSONA_DEFAULT to
+// the suggestion still resolves to a victoria.yaml that does not exist — while
+// chat's roster was empty. Such a bundle must report as shipping no personas.
+func TestCheckManifestYmlPersonasAreNotOffered(t *testing.T) {
+	bundle := personaBundle(t, "victoria.yml")
+	cfg := &config.Config{PersonaDefault: "victoria", Persona: "personas/assistant.yaml"}
+	res := checkManifest(bundle, nil, cfg)
+	if res.Status != statusFail || !res.Blocking {
+		t.Fatalf("status = %s blocking=%v, want a blocking failure: %s", res.Status, res.Blocking, res.Detail)
+	}
+	if strings.Contains(res.Detail, "victoria.yml") {
+		t.Errorf("detail offers a .yml file no persona roster can load, got %q", res.Detail)
+	}
+	if !strings.Contains(res.Detail, "the bundle ships no personas") {
+		t.Errorf("detail should report a persona-less bundle, got %q", res.Detail)
 	}
 }
 

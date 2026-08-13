@@ -192,13 +192,17 @@ func TestBuildSystemPrompt_Layering(t *testing.T) {
 	}
 }
 
-// TestBuildSystemPrompt_FastIOGated verifies the Fast.io system-prompt
-// section, the fastio-mcp.md protocol entry, and the fastio-specific
-// tool guidance are ONLY included when the fast.io MCP server has
-// tools wired up for this turn. Fast.io is optional — deployments
-// without FAST_IO_MCP_TOKEN must not see Fast.io references at all,
-// or the agent wastes context and may try to call tools that don't
-// exist.
+// TestBuildSystemPrompt_FastIOGated verifies the fastio-mcp.md protocol entry is
+// ONLY listed when the fast.io MCP server has tools wired up for this turn.
+// Fast.io is optional — deployments without FAST_IO_MCP_TOKEN must not see
+// references to it at all, or the agent wastes context on tools it cannot call.
+//
+// It also pins the repo boundary: fleet's prompt must not name the fast.io
+// helper tools. Those live in the client bundle now, along with the ELC account
+// -code convention and the DSP folder shape they encode, because fleet is
+// client-agnostic ground (CLAUDE.md: "do not add client-specific content to this
+// repo"). The bundle's protocol file carries that guidance; fleet only decides
+// whether to surface it.
 func TestBuildSystemPrompt_FastIOGated(t *testing.T) {
 	m := fixtureManager(t)
 	// Add the fastio-mcp.md protocol file to the fixture so we can
@@ -210,15 +214,8 @@ func TestBuildSystemPrompt_FastIOGated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildSystemPrompt off: %v", err)
 	}
-	for _, mustnt := range []string{
-		"## Fast.io: the shared read/write file store",
-		"fastio_find",
-		"fastio_upload_file",
-		"protocols/fastio-mcp.md",
-	} {
-		if strings.Contains(off, mustnt) {
-			t.Errorf("Fast.io content leaked into the OFF prompt: %q\n--- prompt ---\n%s", mustnt, off)
-		}
+	if strings.Contains(off, "protocols/fastio-mcp.md") {
+		t.Errorf("Fast.io protocol leaked into the OFF prompt\n--- prompt ---\n%s", off)
 	}
 
 	// Fast.io ON — pretend the fast_io MCP server is wired up by
@@ -228,15 +225,22 @@ func TestBuildSystemPrompt_FastIOGated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildSystemPrompt on: %v", err)
 	}
-	for _, must := range []string{
-		"## Fast.io: the shared read/write file store",
-		"fastio_find",
-		"fastio_upload_file",
-		"File-pick policy",
-		"protocols/fastio-mcp.md", // listed in the dynamic protocols block
-	} {
-		if !strings.Contains(on, must) {
-			t.Errorf("Fast.io content missing from the ON prompt: %q\n--- prompt ---\n%s", must, on)
+	if !strings.Contains(on, "protocols/fastio-mcp.md") {
+		t.Errorf("Fast.io protocol missing from the ON prompt\n--- prompt ---\n%s", on)
+	}
+
+	// Neither state may name a bundle-owned tool. fleet shipped `fastio_find`
+	// and `fastio_upload_file` in this prompt while neither was ever registered
+	// as a tool — the agent was told to call things that did not exist. The
+	// replacements are the bundle's; fleet must not hardcode them either.
+	for _, state := range []struct {
+		name   string
+		prompt string
+	}{{"off", off}, {"on", on}} {
+		for _, banned := range []string{"fastio_find", "fastio_upload_file", "mcp_fastio_helpers_"} {
+			if strings.Contains(state.prompt, banned) {
+				t.Errorf("%s prompt names bundle-owned tool %q; that guidance belongs in the bundle protocol", state.name, banned)
+			}
 		}
 	}
 }

@@ -16,6 +16,9 @@ export type PickerModel = {
   recommended: boolean;
   created?: number | null;
   priceCompletion?: number | null;
+  // Prompt price per token. Together with priceCompletion it drives the
+  // restaurant-style cost indicator (shared/lib/modelCost.ts).
+  pricePrompt?: number | null;
   contextLength?: number | null;
   // True for models served by an admin-configured workspace provider
   // (Settings → Admin → Model providers) rather than the OpenRouter catalog.
@@ -40,6 +43,7 @@ type RawCatalogModel = {
   created?: unknown;
   context_length?: unknown;
   price_completion?: unknown;
+  price_prompt?: unknown;
 };
 
 function parseFiniteNumber(raw: unknown): number | null {
@@ -60,6 +64,7 @@ export function normaliseCatalogModel(raw: RawCatalogModel): PickerModel | null 
     recommended: false,
     created: parseFiniteNumber(raw?.created),
     priceCompletion: parseFiniteNumber(raw?.price_completion),
+    pricePrompt: parseFiniteNumber(raw?.price_prompt),
     contextLength: parseFiniteNumber(raw?.context_length),
   };
 }
@@ -75,6 +80,30 @@ export function dedupeAndOrder(seedList: PickerModel[], fetchedList: PickerModel
     }
   }
   return out;
+}
+
+// enrichFromCatalog fills the catalog-only facts (prices, context length,
+// created) onto entries that carry none — the hand-written SEED_MODELS.
+// dedupeAndOrder keeps the seed entry and drops the fetched duplicate, so
+// without this the two pinned slugs would be the only rows in the picker with
+// no cost indicator even when the catalog loaded fine.
+export function enrichFromCatalog(
+  models: PickerModel[],
+  fetchedList: PickerModel[],
+): PickerModel[] {
+  if (fetchedList.length === 0) return models;
+  const byId = new Map(fetchedList.map((m) => [m.id, m]));
+  return models.map((m) => {
+    const hit = byId.get(m.id);
+    if (!hit) return m;
+    return {
+      ...m,
+      priceCompletion: m.priceCompletion ?? hit.priceCompletion,
+      pricePrompt: m.pricePrompt ?? hit.pricePrompt,
+      contextLength: m.contextLength ?? hit.contextLength,
+      created: m.created ?? hit.created,
+    };
+  });
 }
 
 export function scoreMatch(model: PickerModel, query: string): number {
@@ -150,7 +179,10 @@ export async function loadModels(): Promise<PickerModel[]> {
       contextLength: m.contextLength ?? null,
       workspace: true,
     }));
-    const base = fetched.length > 0 ? dedupeAndOrder(SEED_MODELS, fetched) : SEED_MODELS.slice();
+    const base =
+      fetched.length > 0
+        ? dedupeAndOrder(enrichFromCatalog(SEED_MODELS, fetched), fetched)
+        : SEED_MODELS.slice();
     cachedModels = dedupeAndOrder(workspace, base);
     inflight = null;
     return cachedModels;

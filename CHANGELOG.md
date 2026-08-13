@@ -19,6 +19,885 @@ prior versions are listed because none have shipped.
 
 ### Security
 
+- **Cleared the three high-severity npm advisories and all seven govulncheck
+  findings.** `npm audit` in `web/` reported 3 high-severity vulnerabilities and
+  the Go CVE gate reported 7 reachable standard-library vulnerabilities; both
+  now report clean. On the web side: `undici` 7.28.0 → 7.29.0 (five advisories —
+  response desynchronization via the retry interceptor, cross-user disclosure
+  and a parse-time crash via degenerate private cache directives, CRLF injection
+  via a blob-like body `type`, cross-user disclosure via whitespace around `=`
+  in `Cache-Control`, and cookie attribute injection via unsanitized `domain`),
+  `nanoid` 3.3.16 → 3.3.18 (`GHSA-2v37-7h3g-55p8`, a custom generator can loop
+  forever at size zero — pulled up by bumping its parent `postcss` 8.5.25 →
+  8.5.26, since `npm audit fix` alone would not reach a transitive two levels
+  down), and `js-yaml` 4.3.0 → 4.3.1 (`GHSA-5p4m-2wfm-xmqj`, quadratic CPU in
+  `!!omap` resolution), which arrives on dev by merging main. All three are
+  lockfile-only: no `package.json` range moved.
+- **Bumped the pinned Go toolchain 1.26.5 → 1.26.6**, which is what actually
+  fixes the seven standard-library CVEs govulncheck found reachable from fleet's
+  own call graph — `GO-2026-6218` (`net/url`), `GO-2026-6091` (`html/template`),
+  `GO-2026-6090` (`crypto/tls`), `GO-2026-6089` and `GO-2026-5026` (`net/http`),
+  `GO-2026-6088` (`encoding/xml`), and `GO-2026-5972` (`encoding/asn1`). The pin
+  is bumped in every place it is written down so the gate and a local run agree:
+  `go.mod`, `web/go.mod`, the `run.go` target in `.golangci.yml`, the four
+  workflows that name a `go-version` explicitly (`ci.yml`, `benchmark.yml`,
+  `e2e-canary.yml`, `screenshots.yml` — `dev-ci.yml` reads `go.mod`), and the
+  two docs that quote the version (`ONBOARDING.md`, `docs/TESTING.md`). No fleet
+  source changed; this is a toolchain bump, not a language-version migration.
+
+### Added
+
+- **A server clock on the Operations Center dashboard**, beside the agent-status
+  cards. A cron recurrence fires in the *server's* timezone, not the operator's,
+  so `0 9 * * *` ran at 9am somewhere the UI never named — and
+  `orchestratorApi.config()`, which knew the zone, had no callers at all. The
+  clock now reads the orchestrator's own now from `GET /api/config` (which gains
+  `server_time`, formatted in the server's location so the offset travels with
+  it, plus `default_task_timezone`, the zone a task with no explicit one lands
+  in). The browser measures its skew against that once and ticks locally, so a
+  wrong laptop clock can't make the readout lie, a long-lived dashboard survives
+  a DST change (hourly resync), and a browser whose zone database has never
+  heard of the configured zone still shows the right wall time via the embedded
+  offset. Hovering names the zone — and names the task-scheduling default too
+  when a deployment has set it differently. An orchestrator that reports no
+  `server_time` renders no clock rather than local time under a server label.
+
+### Fixed
+
+- **The task prompt field is adjustable, and no longer opens a long prompt into
+  a three-row box.** Editing an existing task showed its prompt through a ~78px
+  window: auto-grow only ever ran from the textarea's `onChange`, and a prefill
+  fires no change event — so the field stayed at `rows={3}` no matter how long
+  the prompt was, which made editing one section of a long protocol a scrolling
+  exercise. The prefill (and a template or prompt-library insert) is now sized
+  like typed text, and the operator can take the height over two ways: **drag**
+  the native grip (the field was `resize: none`), or hit the new **Expand**
+  toggle beside the Prompt label for a tall editing pane, remembered per
+  browser. Auto-grow yields to either — a chosen height is no longer snapped
+  away by the next keystroke — and Expand/Collapse doubles as the reset. The
+  auto-grow ceiling stays modest so the fields below stay reachable; a
+  deliberate drag goes much further.
+
+### Added
+
+- **Tasks have titles** (`docs/TASK-TITLES.md`). The Operations Center
+  identified a task by the first ~80 characters of its prompt, so operators were
+  writing a title line at the head of the prompt to tell jobs apart — display
+  text smuggled into the model's input. A task now carries an optional short
+  title, shown in Recent Tasks (leading the row, prompt demoted to a muted
+  second line), the Upcoming timeline and week board, the task-detail header,
+  and the SLA report; the task search matches it alongside prompt and id. It is
+  **not** the existing `name` column, which is the unique import/export identity
+  key *and* is cleared on every recurrence occurrence — a title is non-unique
+  and is carried onto every occurrence, re-run and clone, so all the runs of one
+  job list under the same label. Optional, single-line, ≤120 characters, never
+  injected into the agent's prompt; untitled tasks render exactly as before. A
+  bundle template may set `task.title`, and the create form otherwise seeds it
+  from the template's name. Inserting a **prompt-library** entry seeds an empty
+  title from the entry's name too — for a bundle prompt that is the file's own
+  `name:` header, the very line operators were reading off the top of the prompt
+  to identify the job — without ever overwriting a title already typed.
+
+- **Run now, for a job that has not run yet.** The Operations Center could only
+  *Resubmit*, and only a task that had already finished — so a scheduled job had
+  no on-demand kick-off at all. A daily task created in the afternoon could not
+  be exercised until the next morning, which made the authoring loop for a new
+  job a day long. Recent Tasks rows (and phone cards) now carry a **Run now**
+  bolt beside the edit pencil, and the task-detail modal offers the same action
+  for pending/scheduled tasks. It posts the existing
+  `POST /tasks/{id}/rerun`: a fresh one-off copy that starts immediately and
+  leaves the source **and its cron untouched** — the confirm dialog says so, so
+  nobody has to guess whether "run now" also cancelled tonight's run. In-flight
+  tasks are excluded (a second concurrent copy of a running job is a footgun),
+  and the wording splits by state: a finished task is *Resubmitted*, one that
+  has never run is *Run now*.
+
+### Removed
+
+- The fast.io native tools (`fastio_find`, `fastio_upload_file`) and the
+  dedicated Fast.io system-prompt section. They encoded a vendor integration
+  **and** one client's `ELCxxxxx` account-code convention — including a
+  `regexp.MustCompile("(?i)\\bELC\\d{3,6}\\b")` — inside the client-agnostic
+  engine, against this repo's own rule that client content lives in the bundle.
+  They also could not express the shape the data actually has: a date-partitioned
+  folder tree, where `fastio_find`'s 25-result cap and opaque parent ids silently
+  reduce a month of daily partitions to whichever file was touched last.
+  Replaced by `fastio_helpers` in the client bundle (`resolve_path`,
+  `list_partitions`, `find`, `upload_file`), which adds path resolution and
+  partition enumeration and states truncation instead of hiding it.
+
+  Both native tools were **already dead code**: neither `NewFastIOFindTool` nor
+  `NewFastIOUploadFileTool` had a single call site, so nothing registered them —
+  while the system prompt instructed every agent with fast.io enabled to use
+  them. Agents fell back to raw `mcp_fast_io_storage action=search` with none of
+  the mitigations the prompt promised. Deleting them changes no runtime
+  behaviour; the prompt no longer advertises tools that do not exist. The
+  inline-base64 upload guard now defaults to the blob-flow hint alone and lets a
+  bundle name its own path-taking upload via `RemediationHints.NativeUploadTool`.
+  (#1016)
+
+### Fixed
+
+- Re-running or cloning a **named** task returned a 500. The copy inherited the
+  source's `name`, which carries a partial unique index (it is the import/export
+  identity key), so the insert collided with the source row still in the table.
+  Both copy paths now clear it — the rule `scheduleNextRecurrence` already
+  applied when minting the next occurrence of a recurring task.
+- Scheduled tasks created from chat carried no model and dead-lettered on their
+  first dispatch, before running anything, with `no model configured for
+  scheduled task`. `schedule_task`'s `model` is optional and the agent was told
+  it "defaults to the orchestrator's configured model" — a promise nothing kept:
+  the chat seam copied the empty value through, `ParentModel` inheritance existed
+  only task→task, and a deployment with no `*_TASK_MODEL` had nothing behind it.
+  A chat-created task now **inherits the model of the conversation it was
+  scheduled from**, which also makes the run reproducible instead of drifting
+  with a server env var. Two create-time gates (the `POST /tasks` validator and
+  the chat seam, which bypasses it) now refuse a task that has neither its own
+  model nor a deployment default, so an unrunnable task fails immediately and
+  visibly rather than up to a cron period later in the dead-letter queue. The
+  dispatcher's error text and a new boot warning name every accepted spelling.
+  (#1014)
+- `FLEET_TASK_MODEL` and `FLEET_TASK_FALLBACK_MODEL` were silently ignored.
+  These were the only two model knobs in `config.Load` read with a bare
+  `os.Getenv("CUTLASS_…")`, so they skipped the `FLEET_`/`CHAT_`/`CUTLASS_`
+  alias family that `EnvAliases` advertises for them and `TestEnvAliases`
+  pins — an operator following the documented convention got no task model at
+  all, and every scheduled task on that deployment dead-lettered. Both now
+  resolve the whole family in precedence order; existing `CUTLASS_`-spelled
+  deployments are unaffected. (#1015)
+
+- Four chat empty-state cards rendered an empty icon box because the
+  `core-icons` sprite had no symbol for the name they asked for: `file-text`
+  (the `config/default` and example-config "Summarize a document" card, plus
+  `DEFAULT_PILLS` — the hardcoded fallback the web renders whenever the
+  `/config` fetch fails, so this one hit a bare install and every degraded
+  one), `book-open` (example-config), and `globe` + `mail` (a client bundle's
+  browse-a-site and mailbox cards, blank beside the `search` and `bar-chart`
+  cards that worked). The four Lucide-derived glyphs are now in the sprite.
+  An `<svg><use>` pointing at an undefined symbol id renders nothing and
+  reports nothing — no console error, no failed request, no build or test
+  failure — so two guards now close that silent-failure hole:
+  `web/src/app/spriteCoverage.test.ts` checks every icon name this repo
+  references (source literals, the `*_ICONS` lookup maps, and the built-in
+  bundle's cards) against the sprite, and `TestRealBundleSanity` gained the
+  same check for an out-of-repo bundle's cards when run with
+  `FLEET_SANITY_BUNDLE_DIR`. Bundles were not changed: a bundle names an icon
+  and the engine owes the glyph, so the fix belongs in the sprite.
+- **Every Python error was invisible to the agent.** IPython colours its
+  tracebacks; `python_bridge.py` passed `content["traceback"]` through verbatim;
+  JSON encoding turned each ESC into `\u001b`; and
+  `containsEscapedJSONControl` treated any escaped control below `0x20` as
+  smuggled binary. `boundModelVisibleToolResponse` therefore suppressed the
+  whole result at `shown_bytes: 0`, staged **no** artifact (the staging branch
+  is skipped for binary), and told the agent only that "binary previews are
+  intentionally unavailable" — so `run_python` failures came back with the
+  exception erased. A production session took two blind `KeyError`s and a failed
+  `view_file` before abandoning `run_python` for `bash`, where errors arrive as
+  plain text. The same trap ate any `bash` output from a CLI that colours
+  (`git diff --color`, `pytest --color=yes`, `ls --color=always`). ESC is now
+  excluded from the encoded-binary signal — it is the one sub-`0x20` control that
+  ordinary text is full of — and the bridge strips ANSI at the source, so the
+  escapes no longer burn model tokens either. Genuine signals (escaped/literal
+  NUL, `\b`, `\f`, data URIs, base64-named keys, long encoded runs) still
+  suppress.
+- `checkCommandSafety` rejected any bash command containing `":-"`, `":+"`,
+  `":?"`, `"##"` or `"%%"` once a `${` appeared anywhere in it — and the test was
+  against the **whole command**, not the inside of the expansion, so one
+  unrelated `:-` on the line poisoned every expansion. In production
+  `echo "${CUTLASS_INPUT_DIR:-not set}"` was refused, which is the ordinary way
+  to read a variable with a default and what every `set -u` script needs. The
+  rejection bought no safety: those forms only substitute and trim text, and the
+  execution vectors inside an expansion (command substitution, backticks) are
+  matched independently in the same loop — `${` falls through with `continue`, so
+  `${VAR:-$(id)}` is still caught. `${!VAR}` stays blocked as genuine name-level
+  indirection. The guard had no test coverage at all; it does now.
+- The generic sandbox image was missing `file` and `which`. Two agent runs lost
+  a chained command each to `exit 127` reaching for them (`curl … && file x`,
+  `which node && node --check`). Neither was withheld on purpose.
+- The interactive critical-tool gate staged one approval card per call with no
+  awareness of the cards already waiting, so a turn could park two competing
+  writes on the same MCP server. Because a card freezes its tool's arguments
+  until the user clicks Approve, the second write is computed against state the
+  first is about to change. A production session lost a Pages deploy this way:
+  `mcp_pages_patch_page` was staged, the model read "Do NOT retry" as a rule
+  about that tool name, rebuilt the same change as a full-file upload, and
+  staged `mcp_pages_deploy_page_upload` for the same page carrying the
+  pre-patch `expected_version`; the user approved both, the patch landed, and
+  the upload was rejected as stale after two CSV ingests, a 14-row
+  reconciliation, and 78 KB already transferred.
+  `checkCriticalToolApproval` now refuses to stage a *different* critical tool
+  on a server that already has a card pending, naming the pending action and
+  its approval id. Keyed on `sameToolServer`, so a repeated tool name still
+  stages (the batch case — N independent records — has no such coupling) and
+  unrelated servers are unaffected; the pre-approval and pre-denial sentinels
+  leave no card pending and so reserve nothing. The `APPROVAL_REQUIRED` text
+  also now forbids re-routing the same change through a different tool, which
+  is the loophole the model actually used.
+- `fleet update` installed the new binaries and web build BEFORE the
+  sandbox-image gate, so the gate's fail-closed die aborted with new code
+  already on disk while the old service kept running — a silent, deferred
+  inconsistency (the next restart, crash, or reboot would run code no update
+  ever finished deploying) that contradicted the die message's implication
+  that nothing had changed. The sandbox step now runs before the
+  build/install step, so the abort leaves the box coherent: old binaries on
+  disk, old service running. Separately, update.sh resolved the bundle's
+  `${FLEET_SANDBOX_IMAGE:-}` image reference against the update shell's
+  environment, while the service resolves it from
+  `EnvironmentFile=/etc/fleet/fleet.env` (which update.sh deliberately never
+  sources): a value set only in the env file forced a pointless multi-GB
+  on-box build on every update and could trip the new die spuriously, while a
+  value exported only in the operator's shell silently skipped the whole
+  sandbox step — absence probe included — recreating the
+  boots-clean-breaks-on-first-tool-call failure the gate exists to prevent.
+  The reference is now read from the service's env file using doctor.sh's
+  `env_get` idiom, matching what the restarted service will actually see.
+- The CSRF canonical-origin hardening locked operators out of a box reached
+  over an SSH tunnel. `verifyOrigin` compared the Origin host strictly against
+  the configured `NEXT_PUBLIC_PUBLIC_ORIGIN` (which bootstrap writes on every
+  deploy), and it guards every mutating route including the login form — so a
+  browser at `http://localhost:3000` tunneled to a `--domain` box got 403 on
+  every POST, presenting as a total auth outage. A loopback Origin
+  (`localhost` / `127.0.0.1` / `[::1]`, any port — exact hostnames only, so a
+  `localhost.evil.example` lookalike does not qualify) is now also accepted
+  when it exactly matches the connection's own Host header: that pair is only
+  producible by a browser genuinely connected to the box's loopback (the
+  tunnel), never by a victim's browser talking to the real deployment, and
+  x-forwarded-host stays ignored so a forwarded-header attack from a remote
+  origin still fails. A mismatched local port (a different origin) is still
+  rejected, and the server-side 403 log now names the expected vs. actual
+  host so the failure is self-diagnosable.
+- An async run_if gate's settle write could clobber a concurrent reschedule or
+  edit. Both settle paths conditioned only on the task still being `scheduled`
+  — a status an edit legitimately keeps — and the bounded async pool stretched
+  the dispatch-to-settle window from milliseconds to the gate's full runtime
+  (up to 300s). Concretely: a task postponed by an operator while its slow
+  gate evaluated would run tonight anyway on the stale pass verdict, and a
+  stale decline overwrote the operator's new `scheduled_for` with its retry
+  backoff. Every gate settle write (promote to pending, skip record, and the
+  recurrence-ended cancel) is now a compare-and-swap that also requires the
+  row to still carry the `scheduled_for` the evaluation was dispatched
+  against, so any interleaved edit or reschedule wins, the stale verdict is
+  discarded (and logged as such, without counting a skip that never
+  happened), and the next due tick re-evaluates the task's current
+  definition.
+- `Scheduler.Stop`'s run_if gate drain could panic the process during graceful
+  shutdown. Stop closed the stop channel and immediately waited on the gate
+  WaitGroup, but nothing waited for the scheduler's run loop to exit — a tick
+  already inside the loop body kept running and could dispatch another gate
+  evaluation (`WaitGroup.Add`) concurrently with that wait, which
+  sync.WaitGroup forbids. The resulting misuse panic fired in Stop's drain
+  goroutine, which has no recover (the per-tick recover covers only the tick),
+  so it killed the process mid-shutdown and skipped every remaining deferred
+  cleanup in main. The run loop now signals completion on return and Stop
+  waits for it to exit before draining the gates — inside the same 5-second
+  bound as before — so no new dispatch can ever race the drain.
+- The MCP stdio transport read each response line from a server subprocess
+  with no ceiling. In broker mode those servers run host-side, so a single
+  data-driven oversized response — a connector returning a giant query result
+  or a fetched page — was buffered whole in the fleet process's memory before
+  any downstream truncation applied: one response could OOM the process and
+  take down every user. This is the same risk class already capped on the
+  sandbox bridge's response read, and the stdio transport now follows that
+  pattern at the same 64 MiB ceiling: a line past the cap is drained to its
+  delimiter — the stream stays framed and the healthy subprocess is not
+  restarted — and the call fails with an explicit over-cap error rather than
+  a silently truncated, plausible-but-wrong result.
+- The storage-quota probe's inconclusive path re-probed on every container
+  creation with no cap or backoff. Right direction — the earlier fix stopped a
+  cancelled first probe from latching "unsupported" for the process lifetime —
+  but on a degraded host (podman hanging) every creation then paid the
+  serialized 30s probe, added straight to turn-start and scheduled-run
+  latency, for as long as the host stayed degraded. Consecutive probe
+  *timeouts* (inconclusive with a live caller context: the host being slow,
+  not a user cancelling a turn) now cap at three, after which the pool treats
+  the driver as unsupported for a 5-minute cooldown before re-probing.
+  Containers created inside the window omit only the writable-layer quota —
+  the per-file ulimit still applies — and a cancelled turn still never counts
+  toward the latch, so a genuinely inconclusive answer still never latches
+  permanently.
+- The Operations Center rendered its username/password login card whenever the
+  initial `/me` probe failed for any reason other than 403 — including the 500
+  the orchestrator deliberately answers when its fail-closed session-epoch
+  lookup can't reach the chat DB, and thrown network failures. During a chat-DB
+  blip every user loading the page was therefore shown a login form instead of
+  an error. No session was destroyed — the cookie and the stored bearer
+  survived, and a reload after recovery restored the dashboard — but the page
+  invited people to type credentials mid-incident: the same conflation of
+  "unauthenticated" with "backend down" already fixed for the chat plane. The
+  probe now applies that plane's verdict rule (`bootstrapFailure.ts`: only
+  401/403 are auth verdicts); a 5xx or a network failure surfaces as a distinct
+  "can't reach the server" retry notice and leaves the stored bearer untouched.
+- One slow `run_if` gate degraded scheduling for the whole box. The scheduler
+  tick ran task promotion, lease recovery, starvation promotion, paused-task
+  expiry, and the wake sweep sequentially on one goroutine, and gates were
+  evaluated inline during promotion — so a single admin-authored gate pointing
+  at a hung dependency (`timeout_seconds` up to 300) delayed ALL scheduling
+  and crashed-worker lease recovery by its full runtime, while the 30s ticker
+  silently dropped ticks. Gates are now evaluated on a small bounded pool of
+  goroutines and settled (promoted or skipped) asynchronously — the tick never
+  waits on a gate, a task whose gate is still running is not re-dispatched,
+  and one whose slot isn't free simply stays due for a later tick. The cheap
+  recovery sweeps also run before promotion now, so a promotion regression
+  can never starve lease recovery. Separately, a declined one-shot gate used
+  to re-run its host command every 30s tick forever; a decline with no next
+  cron tick now backs off exponentially on the already-tracked `skip_count`
+  (30s doubling to a 30m cap), so a permanently-false condition costs ~2
+  commands an hour instead of 120. Shutdown no longer races those async
+  settles: `Scheduler.Stop` now waits up to 5s for in-flight gate evaluations
+  to land their promote/skip writes; a gate still running at the bound is
+  abandoned to finish on its own (its settle write is conditional, and a task
+  left `scheduled` is simply re-evaluated after restart), so a slow gate can
+  never extend shutdown by its full runtime.
+- Editing a webhook trigger template turned it into a one-shot run. The task
+  edit's status recompute derived only from `scheduled_for`, so saving any
+  edit to a template (`scheduled`, nil `scheduled_for` — inert by
+  construction) flipped it to `pending` and the worker pool executed the
+  template itself once, outside any trigger firing. Same root cause and same
+  fix as the gated-task edit bypass under Security below: the edit path now
+  recomputes dispatch state with the shared `models.DeriveDispatchState`
+  rule, which keeps a webhook template parked inert.
+- Task export silently dropped `run_if`. The portable definition record had no
+  field for the pre-run gate, so a box migration or backup-restore converted
+  every gated task into an unconditional one with nothing flagging it — tasks
+  whose gate suppressed runs under bad conditions started running
+  unconditionally on the new deployment. The gate is now part of the export
+  record and survives the round-trip (including `conflict=replace`, which
+  overlays it like every other definition field). Because a `run_if` command
+  executes on the host as the fleet user, importing a record that carries one
+  requires admin permission — the same boundary as authoring one, checked
+  up front before any record is written, so import cannot be a path around
+  the create/edit admin gate.
+- The pre-submission cost forecast (`POST /tasks/estimate`) was dead for every
+  cookie-path Operations Center user — "Estimate failed: Unauthorized" — even
+  though the sibling comment claimed the endpoint honored the Next-proxy
+  header-trust identity. Its auth was a hand-rolled copy of the task-create
+  check that predated header trust (#157) and never learned it; it failed
+  closed, so nothing was exposed, just broken. The copy is gone: the endpoint
+  now shares `authorizeTaskCreator` with `POST /tasks` and `/tasks/batch`, so
+  the header-trust semantics and the session-epoch revocation gate apply
+  identically to all three creation-shaped endpoints and cannot drift again.
+- Every masked MCP-broker failure was undiagnosable. The credential owner
+  replaces any operational error with a fixed `mcpbroker: credential-owner …`
+  sentence before it crosses back to the parent — correct, because the real error
+  can embed connector stderr, resolved URLs, or Authorization headers — but that
+  replacement was the *only* thing that happened to it, so the detail existed
+  nowhere: not in the parent, not in the broker process, not for the operator.
+  A connector answering `Unknown tool: x` and a genuinely revoked credential both
+  reached the agent as the same sentence, and the difference was unrecoverable
+  without the upstream's own logs. In one observed case an agent retried four
+  times and concluded "ops-side credential fix" for what was a version skew
+  between a cached `tools/list` and the process serving the call. The broker now
+  logs each masked failure host-side with its server and tool, scrubbed through
+  `internal/redact` with the connector env registered as literals — so a bare
+  high-entropy token quoted back by a connector is replaced by value, not merely
+  when its shape matches a vendor pattern. The reply to the parent is byte-for-byte
+  unchanged, and credentials-never-in-logs still holds
+  (`internal/mcpbroker/redact.go`).
+- Five sandbox lifecycle robustness gaps, all host-side and none affecting the
+  container's isolation posture:
+  - **One cancelled turn could permanently disable the `--storage-opt` disk
+    quota.** The pool latched the boot probe's answer with a `sync.Once`, so a
+    first probe running under an already-cancelled context cached
+    "unsupported" for the process lifetime and every later container ran with
+    no writable-layer quota. A probe cut short by its context is now
+    inconclusive: that container safely omits the layer quota and the next
+    creation re-probes; only a completed determination is memoized.
+  - **The run_python bridge response was read into host memory with no
+    ceiling.** The bridge caps its own stdout/stderr/result captures, but
+    `vars` extraction is not size-bounded, so a cell returning a huge variable
+    inflated host RSS without limit — unlike bash output, which
+    `BashOutputCaptureCap` bounds. The response line is now capped at the same
+    ceiling; overflow drains to the delimiter (the session stays framed and is
+    kept), and the call fails with an explicit truncation error instead of a
+    bare JSON parse error.
+  - **A wedged bridge exec could block every operation on its container
+    forever.** `terminateBridgeLocked` runs under the bridge mutex and waited
+    on `cmd.Wait()` unboundedly — anything holding the exec client's pipes
+    (the hazard `BashWaitDelay` documents) stalled bash, run_python and file
+    ops behind it indefinitely. The bridge exec now carries a WaitDelay and
+    the post-SIGKILL reap wait is bounded; past the bound the state is cleared
+    and the abandoned wait finishes on its own.
+  - **Routine teardown of an already-exited container logged a spurious
+    error.** The "already gone" suppression in `close()`/`killContainerNow`
+    predates podman's actual state error — `can only kill running containers.
+    <id> is in state exited: container state improper` (verified verbatim on
+    podman 5.8.2) — so the normal exit-vs-`--rm`-removal race logged "kill
+    unconfirmed" on every occurrence. The matcher now recognizes the dead
+    states (exited/stopped) while a paused container — frozen, not gone —
+    still counts as unconfirmed.
+  - **Crash-orphaned bridge/seccomp temp files leaked permanently.** Only the
+    graceful close path removes the bridge-script and seccomp files written
+    into BridgeDir, so every non-graceful exit leaked them forever. Boot now
+    sweeps files matching the two CreateTemp patterns, age-bounded (1h) so a
+    start still in flight — here or in a sibling instance sharing the
+    directory — is never raced, alongside the existing container orphan prune.
+- With the Go backend down, the chat client read the resulting 502 as an
+  expired session and redirected to `/login`, which sent it straight back to
+  `/chat` — an endless bounce instead of an error. Unauthenticated (401/403)
+  and unreachable (502/503/504, network failure) are now distinguished, and the
+  latter renders a retry state naming the real problem.
+
+- A login attempt refused by the `/auth/verify` rate limiter surfaced as "the
+  chat server isn't reachable" rather than the throttle message the backend
+  actually returned.
+- An env-file override of a `${VAR:-default}` MCP env/header key was silently
+  ignored on the standalone paths (`fleet serve`, `task run`, `mcp test`,
+  `validate-config`): the bundle manifest interpolates BEFORE `config.Load`
+  applies the `.env` file, so the literal default was baked in at load — and
+  the override's var name did not even survive the `.env` allowlist, because
+  `EnvVarNames` scanned the post-interpolation values where the token no
+  longer existed (the fleet#706 residual). Connector env/header values (and
+  inline `http_tools` headers) now keep their raw `${...}` text through the
+  load and resolve against the live process env at catalog-build time, after
+  the `.env` file is applied, so the env-file value wins over the default.
+  The same single-pass resolution repairs the `$${` escape for those fields,
+  which the load pass used to consume so the spawn pass expanded — and
+  blanked — the author's escaped literal. `${VAR:?...}` still validates at
+  load, against the pre-`.env` process env.
+
+- `${FLEET_WORKSPACE:-...}` / `${FLEET_WORKSPACE:?...}` — and any other
+  colon-suffixed spelling of a reserved runtime token — bypassed the
+  reserved-token guard, which matched only the bare form: the token was
+  resolved from the process env (an exported `FLEET_WORKSPACE` could hijack
+  it) or its default was baked into the manifest, silently defeating the
+  launch-time workspace substitution. Non-bare reserved-token spellings now
+  fail the bundle load with an error naming the contract
+  (docs/MCP-BUNDLE-ENV.md), and the reserved names are no longer registered
+  into the `.env` allowlist as if they were ordinary env vars.
+- `sudo fleet update` rebuilt the sandbox image into root's podman store, which
+  the `User=fleet` unit can never read — root's rootful store is a separate
+  namespace from the service user's rootless one, which is why `bootstrap.sh`
+  builds through `runuser`. Every rebuild an operator triggered through
+  `fleet update`, or by following doctor's own "build it: sudo fleet update"
+  hint, was therefore a no-op for the running service. Root-run builds now
+  land in the service user's store, and the fix sits in
+  `scripts/build-sandbox-image.sh` so every root caller inherits it.
+
+- The sandbox-image rebuild gate compared only the Containerfile hash, so a
+  bundle that renames `sandbox.tag` with byte-identical build instructions
+  skipped the build. fleet does not verify the image at boot, so the box came
+  up healthy and then failed every sandboxed tool call against a tag that was
+  never built. The gate now also tracks the resolved tag and rebuilds when the
+  expected image is absent from the service user's store.
+
+- `fleet update` restarted the service even when the sandbox build it had just
+  attempted failed and the resolved image existed nowhere in the service
+  user's store — a `sandbox.tag` rename plus one transient build failure left
+  the box reporting healthy while every sandboxed tool call failed, until a
+  human noticed. The update now refuses to restart in that state, spelling out
+  the recovery commands; a failed build only warns past when the
+  currently-resolved tag still exists (Containerfile changed under the same
+  tag — the previous image is stale but serviceable).
+
+- The update's sandbox-store probe ran rootless podman as the service user
+  without pre-creating `/run/<user>` — tmpfs, present only while the unit's
+  `RuntimeDirectory=` keeps it alive — so during a stopped-unit maintenance
+  window `podman image exists` failed environmentally and the gate read that
+  as "image missing", burning a spurious multi-GB rebuild. The probe now
+  pre-creates the runtime dir the way the build path already did, and only
+  podman's positive "not found" (exit 1) counts as absent; any other podman
+  failure leaves the image as-is and says so.
+
+- The sandbox rebuild gate keyed on the manifest's `sandbox.tag` even when the
+  bundle resolves `sandbox.image` to a prebuilt ref the service pulls directly
+  (image wins over tag), so the first update after a client switches to
+  registry-published images performed one pointless multi-GB on-box build that
+  nothing reads. `update.sh` now mirrors `bootstrap.sh`'s
+  `resolve_sandbox_image` skip — one rule, same interpolation.
+
+- The update's unit-adoption loop covered only `fleet.service` and
+  `fleet-web.service`, so a fix to the shipped backup units reached
+  provisioned boxes only via doctor, never via the update path operators
+  actually run on release. The loop now also adopts `fleet-backup.service`
+  and `fleet-backup.timer` when they are installed on the box — without any
+  restart, matching doctor's rule: the daemon-reload alone re-arms a rewritten
+  timer's schedule, and restarting the oneshot would run a backup immediately.
+
+- The production MCP-broker boundary refused to boot any bundle that wires the
+  documented cutlass-family connector contract: the connector/parent env
+  overlap guard treated the whole `CUTLASS_` prefix as parent-owned, but fleet
+  itself designates `CUTLASS_RUN_WORKDIR` / `CUTLASS_MOC_TASK_ID` /
+  `CUTLASS_REPORT_DIR` / `CUTLASS_INPUT_DIR` as bundle-to-connector wire keys
+  (`internal/agentcore/mcp_workspace.go`), and operator passthroughs such as
+  `CUTLASS_ALLOWED_DIRS` / `CUTLASS_USER_AGENT` are never resolved by the
+  parent. Startup failed with "connector environment overlaps parent-owned
+  configuration" on exactly the manifest shape the contract tells bundles to
+  write. The guard still fails closed on overlap with parent runtime settings,
+  provider keys, webhook signing secrets, and the `CUTLASS_*` names the parent
+  itself resolves — those are now enumerated explicitly instead of claimed by
+  prefix.
+
+- The `--storage-opt size` support probe assumed `/usr/bin/true` exists in the
+  sandbox image — a **client-bundle artifact** free to change its base, where a
+  busybox-based bundle has `/bin/true`. Such a bundle failed the probe on every
+  host, so the writable-**layer** disk quota was silently dropped with only a log
+  line. Scope of that loss, stated precisely: the per-file `--ulimit fsize` cap
+  still applied, total *workspace* bytes are unbounded either way (a bind mount
+  is outside any storage-driver quota), and under `--read-only` plus size-bounded
+  tmpfs the writable layer is nearly unwritable anyway — so this restores
+  defense-in-depth, not a cap that was holding back live disk exhaustion. Podman
+  validates `--storage-opt` at
+  container-create time and only then execs the command — verified on an ext4
+  host, where a nonexistent entrypoint still reports the *quota* error — so a
+  failure to exec now counts as quota-accepted. The classification is
+  deliberately narrow in the fail-closed direction: misreading a real quota
+  rejection as an exec failure would pass `--storage-opt` to every container and
+  break every start, which is worse than losing the layer quota.
+
+- **`FLEET_DEFAULT_NETWORK_MODE=allowlisted` was entirely non-functional on a
+  stock modern host.** Allowlisted egress emits
+  `--network=slirp4netns:allow_host_loopback=true` to reach the host-bound
+  proxy, but Podman ≥ 5.0 defaults to `pasta` and a stock modern box (verified on
+  Fedora 44) ships
+  pasta *without* `slirp4netns` — so every container start failed. It failed
+  closed (a container that will not start cannot leak), but late and
+  repeatedly: boot succeeded, the proxy bound, the log announced "egress
+  filtered to […]", and then every interactive turn, scheduled task, and
+  approved-bash call errored. `PreflightAllowlistedNetwork` now asks Podman at
+  boot whether it has the helper (`podman info`, image-independent — a container
+  probe would abort boot on any bundle whose rootfs lacked the probe command,
+  since the netns is configured before the exec) and fails boot closed if it
+  does not, naming the helper and the fix; `fleet validate-config` runs the same
+  check; `scripts/bootstrap.sh`
+  installs `slirp4netns` so a bootstrapped box supports the mode. Teaching
+  `networkArgs` to use pasta's `--map-host-loopback` instead is deliberately
+  deferred — pasta exposes the host at a different gateway address, so it also
+  changes the proxy URL and `NO_PROXY`, and that belongs in its own reviewed PR
+  with rootless-host verification (recorded in ADR-0012).
+
+- **`validate-config` failed the persona knob that only degrades, ignored the one
+  that is fatal, and `FLEET_PERSONA` did nothing.** The manifest check resolved
+  `PERSONA` against the bundle ROOT and made a miss a blocking failure, so any
+  bundle not shipping `personas/assistant.yaml` — the loader's built-in fallback
+  — got a red `✗ manifest: default persona personas/assistant.yaml missing`
+  unless `PERSONA` happened to be exported in the shell running the check. Our
+  own production bundle, which ships `personas/victoria.yaml`, failed that way;
+  a preflight that reports a bundle as broken when it boots fine teaches
+  operators to ignore the whole report. Meanwhile `PERSONA_DEFAULT` — the
+  interactive default, and the one a miss actually breaks — was never checked at
+  all. Both are now resolved the way their readers resolve them (by basename
+  inside the bundle's `personas/` dir, so `victoria`, `victoria.yaml` and
+  `personas/victoria.yaml` all find the file), each at the severity its runtime
+  earns: a missing `FLEET_PERSONA_DEFAULT` is a blocking `✗`, because
+  `agent.Manager` returns an error when it cannot read the persona and the turn
+  fails, and every new conversation starts on that name; a missing
+  `FLEET_PERSONA` is a non-blocking `⚠`, because the scheduled driver ignores the
+  read error and only loses the persona's expertise block. Either way the report
+  names the knob to set and lists the personas the bundle *does* offer, in the
+  shape that knob takes. Separately, both knobs were read with a bare
+  `os.Getenv`, outside the prefix alias machinery: an operator following the
+  documented `FLEET_` convention got silence and the built-in default, while the
+  broker already treated the names as parent-owned. `FLEET_PERSONA` /
+  `FLEET_PERSONA_DEFAULT` (and their `CHAT_`/`CUTLASS_` spellings) are now read
+  first, with the unprefixed names kept as the back-compat fallback and the
+  canonical spellings added to the env-file allowlist so they survive a
+  `FLEET_ENV_FILE` load. The two shapes are now written down where personas are
+  documented: `FLEET_PERSONA_DEFAULT` takes a persona *name*, `FLEET_PERSONA` a
+  bundle-relative *path*.
+
+- Empty MCP tool-call arguments crossed the broker wire as nil
+  (`args,omitempty` drops empty maps) and were then marshaled onward as
+  `"arguments": null`. Strict MCP servers reject null arguments with `-32602
+  Invalid params` — pages.elcanotek.com refused every no-arg tool
+  (`mcp_pages_list_templates` and friends) — and because the credential owner
+  masks operational errors, the refusal reached the agent as `mcpbroker:
+  credential-owner call failed` and read like a credential problem. A nil
+  arguments map is now normalized to an empty object at both the broker
+  boundary and in `callTool`, pinned by regression tests at each layer. (#958)
+
+- `bootstrap.sh`'s no-`--domain` hint told only an operator proxying from
+  ANOTHER host to set `NEXT_PUBLIC_PUBLIC_ORIGIN`. A same-host TLS proxy
+  operator following it verbatim shipped a web tier that redirects every login
+  to `http://localhost:3000` and mints session cookies without `Secure` — the
+  configured origin drives both decisions (`web/src/app/lib/auth.ts`), same
+  host or not. Diagnosis was non-obvious because Next inlines `NEXT_PUBLIC_*`
+  at build time: editing the env file changes nothing until web/ is rebuilt.
+  The hint now tells EVERY custom-proxy front to set the origin in
+  `fleet-web.env` and rebuild + restart (`scripts/update.sh` does both),
+  keeping `FLEET_WEB_HOST=0.0.0.0` as the extra step only for a proxy on a
+  different host.
+
+- A hand-quoted value in `fleet.env` (`FLEET_BACKUP_DIR="/mnt/x"` — legal in a
+  systemd `EnvironmentFile=`, which strips the quotes) made every later
+  bootstrap re-run die with the misleading `FLEET_BACKUP_DIR must be an
+  absolute path (got '"/mnt/x"')`: the re-run read the value back verbatim,
+  quotes included. Re-running bootstrap is the documented idempotent upgrade
+  path, so a legal env file blocked provisioning until someone spotted the
+  quotes. The backup read-backs now go through the same quote-stripping
+  `env_get` that `doctor.sh` already uses.
+
+- `validate-config`'s persona inventory accepted `.yml` files that no persona
+  roster can load — `agent.ListPersonas`, the task-create catalog and the
+  interactive loader are all `.yaml`-only (the loader force-appends the
+  suffix) — so a `.yml`-only bundle looked persona-equipped and the report
+  offered a remediation that loops: setting the knob to the suggested name
+  still resolves to a `.yaml` file that does not exist, while chat's roster is
+  empty. The inventory is now `.yaml`-only to match the readers, and such a
+  bundle reports as shipping no personas.
+
+- Run as root on a provisioned box (the unit installed), the live-sandbox
+  harnesses (`scripts/e2e-boot-server.sh`, `scripts/run_workflow_live.sh`)
+  built the sandbox image through `build-sandbox-image.sh`, whose root path
+  delegates the build to the fleet unit's `User=` — correct for `sudo fleet
+  update`, wrong here, because the harnesses probe and run fleet as the
+  INVOKING user, whose image store is a separate namespace. Every root run
+  burned a multi-minute rebuild into a store it never reads and then failed
+  anyway — an invitation to "fix" it by weakening the delegation that protects
+  the real deployment. Both harnesses now force a local build by pointing
+  `FLEET_SERVICE_NAME` at a unit that does not exist, with a comment saying
+  why the delegation must stay.
+
+### Documentation
+
+- Correct the sandbox documentation claims that outran the code — across the
+  ADRs, `README.md`, `ONBOARDING.md`, `DEPLOYMENT.md`, the default bundle, and
+  the Go comments that state the same guarantees — each verified against current
+  `dev` rather than assumed. The load-bearing ones:
+  `docs/SANDBOX-RUNTIMES.md` opened by listing **MCP** among the tool calls that
+  run inside the sandbox — the exact opposite of the host-side credential
+  brokering invariant (ADR-0003/ADR-0040); ADR-0002's Enforcement section
+  credited `sandbox_hardened_test.go` with pinning the hardening flags, which it
+  never did (and which no CI lane even runs — it is opt-in behind
+  `FLEET_SANDBOX_HARDENED_TEST`), while the test that now genuinely pins them is
+  `podman_args_test.go`; and ADR-0012/ADR-0031/FEATURE-NOTES claimed
+  `allowlisted` is "strictly more restrictive than open", which is false in the
+  host-loopback dimension — `allowlisted` requests
+  `allow_host_loopback=true` and exempts the `10.0.2.2` gateway from `NO_PROXY`,
+  so it can reach loopback-bound services that `open` cannot. That is now
+  threat-modelled rather than denied. Also: the KVM-VM boundary is per
+  container, not "per tool call"; `FLEET_PYTHON_REPL_MAX` is a soft cap checked
+  only at create time; `--network=none` does have a loopback device; and the
+  empty-allowlist boot warning named only scheduled tasks.
+
+- Two more claims that outran the code, each verified against the current
+  behaviour: `docs/MCP-BROKER-SCOPES.md` still said manifest interpolation
+  replaces `${VAR}` with its value in the parsed bundle for connector values —
+  connector env/header values now keep their raw text through the load and
+  resolve lazily at catalog-build/spawn time, after the `.env` file is applied
+  (the paragraph now also states why the name inventory exists at all: the
+  names must survive independent of when values resolve) — and ADR-0041
+  counted "three callers outside the auth middleware" in the sched epoch test,
+  when `headerTrustUser` has three callers *total*: the middleware plus the
+  two routes outside it (task create, upload).
+
+### Security
+
+- Two origin checks still derived their trusted host from client-suppliable
+  `x-forwarded-*` headers after their siblings moved to the configured
+  canonical origin: the OIDC `redirect_uri` a login sends to the IdP
+  (`lib/oidc.ts` `buildRedirectUri`) and the host a mutating request's `Origin`
+  header is compared against (`lib/csrf.ts` `verifyOrigin`). Behind the shipped
+  Caddy config those headers are proxy-set and correct; behind a proxy that
+  forwards a client's own values — the deployment shape the bootstrap no-domain
+  path leaves to the operator's proxy — the SSO start route could hand the IdP
+  an attacker-picked callback host (contained by an exact-match redirect-URI
+  registration at the IdP, which is why this is defense-in-depth rather than an
+  open hole), and the CSRF comparison could be aimed at an attacker-chosen
+  expected host. Both now prefer `NEXT_PUBLIC_PUBLIC_ORIGIN` through the same
+  `lib/auth.ts` helper the redirect and Secure-cookie decisions already use
+  (now exported), keeping the header derivation only as the fallback when no
+  origin is configured, so plain-http local dev is unchanged. **A deployment
+  whose `NEXT_PUBLIC_PUBLIC_ORIGIN` differs from the host users actually hit —
+  in practice a no-domain box fronted by an operator proxy without the
+  `NEXT_PUBLIC_PUBLIC_ORIGIN` line bootstrap already instructs for that shape —
+  will emit a different `redirect_uri` (needs re-registration at the IdP unless
+  `FLEET_OIDC_REDIRECT_URI` pins it; the pin still outranks everything) and
+  will refuse mutating requests until the origin is corrected.**
+- A `run_if` pre-run gate was only enforced on one of the paths that could
+  dispatch the task it guards. The gate — an admin-authored host-side shell
+  condition, which is why authoring one requires admin permission — is
+  evaluated solely at the scheduler's scheduled→pending promotion, but a task
+  can reach dispatch without ever passing through it: `POST /tasks/{id}/rerun`
+  copies the source's gate and mints an immediate *pending* run (so any
+  principal with mere `create_task` permission could execute the gated work
+  with the condition unchecked), an immediate create with a gate did the same,
+  a webhook/email trigger spawn dropped the template's gate outright, and
+  `PUT /tasks/{id}` re-derived the edited task's status from `scheduled_for`
+  alone (so that same `create_task` principal could echo a gated scheduled
+  task unchanged, omit `scheduled_for`, and flip it to `pending` with the
+  gate intact and never evaluated). The contract is now enforced
+  structurally: `models.NewTask` and the edit recompute in
+  `storage.UpdateEditableTask` derive the dispatch state through one shared
+  rule (`models.DeriveDispatchState`) that parks every gated cron task on the
+  scheduler path (`scheduled`, with a nil `scheduled_for` defaulted to now),
+  so whatever minted or last edited it — create, batch, rerun/clone, trigger
+  spawn, import, recurrence, edit — the gate is evaluated before every
+  dispatch, at the cost of up to one 30-second tick of latency for an
+  "immediate" gated run. Trigger spawns now inherit the template's gate, and
+  since a *pending* task is already past its evaluation point, the edit path
+  refuses to attach or change (but still allows removing) a gate on one
+  rather than silently re-parking an imminent dispatch. The full contract
+  lives on `models.RunIf`.
+- A password reset did not end the account's existing sessions, so the standard
+  response to a compromised account did not evict the attacker. The web session
+  cookie is a stateless HMAC over `{email, exp}` that the Next.js tier verifies
+  by itself, and the only server-side gate — the user-list check in
+  `membershipMiddleware` — admits any request whose email still exists. Nothing
+  in the token or the `users` table recorded *when* the session was issued, so a
+  stolen cookie stayed valid for its full remaining lifetime, up to 14 days,
+  no matter how many times the password was changed underneath it. The only
+  working levers were deleting the account outright or rotating
+  `APP_SESSION_SECRET`, which logs out everybody. Sessions now carry a per-user
+  **session epoch** derived from the stored bcrypt hash, forwarded alongside
+  `X-User-Email`, and compared against the account's live value by **both**
+  backends the one cookie authenticates: chat, inside the user lookup
+  `membershipMiddleware` already performs, and the Operations Center, whose
+  header-trust path resolves the chat-plane epoch through an injected lookup seam
+  (the two planes keep separate databases, ADR-0005). A mismatch is a 401
+  `session_revoked` that also drops the stale cookie, so a reset takes effect on
+  the next request to either view. Deriving the epoch
+  rather than storing a counter means every password write moves it, including
+  `fleet chat user passwd`, `fleet admin add` on an existing address and the
+  legacy importer, and a reset to the *same* password still rotates it because
+  bcrypt re-salts. Magic-link (`elcano_auth`) sessions are unaffected and stay
+  revocable at the auth service, which mints that cookie, and an Operations
+  Center bearer login is its own credential; the design lives in
+  [`docs/SESSION-EPOCH.md`](docs/SESSION-EPOCH.md) with the invariant in
+  [ADR-0041](docs/adr/0041-mandatory-session-epoch-claim.md), and the revocation
+  levers, these carve-outs and their blast radius in
+  [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md), including `APP_SESSION_SECRET`
+  rotation as the deliberate break-glass global logout.
+  **At deploy time every logged-in user must sign in once more:** cookies minted
+  before this change carry no epoch claim, and the web tier refuses them rather
+  than grandfathering a token that no backend check could evaluate.
+- The `run_if` host-side gate — a scheduled task's shell command, run by the
+  scheduler as the fleet user — was authored by the wrong set of people in both
+  directions. `taskCreator.isAdmin` was set for **any** typed API key carrying
+  `create_task`, so a scoped CI key could attach an arbitrary `sh -c` gate; and
+  it was never set on the web/header-trust or cookie paths, so a user whose role
+  really is admin was refused. Both create and edit now gate on one definition —
+  possession of `models.PermissionAdmin` — which admits admin keys and role-admin
+  users and refuses scoped keys.
+- A bundle's per-server `tool_allowlist` (Gate-2) was silently ignored in two
+  situations, so agents were offered every tool of every selected connector
+  regardless of what the operator allowlisted. First, activating the production
+  MCP-broker boundary scrubs `cfg.MCPServers` after the broker child boots, and
+  the scheduled agent derived its gates from exactly that field — every
+  scheduled and sub-agent run therefore ran ungated. Second, the gate looked up
+  the allowlist by the *registered* server name, which for a named-account seat
+  is `<server>_<account>`, so selecting a seat dropped the filter for that
+  server. The allowlist now travels with the broker's public inventory, and
+  registered names resolve back to their manifest entry the way the credential
+  and persona filters already did.
+- Replacing the blanket `CUTLASS_` parent-owned prefix with a hand-written list
+  of names left real gaps: `CUTLASS_SERVER_TOKEN` (a supported legacy spelling
+  of the shared server token, whose `FLEET_`/`CHAT_` spellings *were* listed)
+  and six knobs the parent resolves lazily after broker boot —
+  `CUTLASS_OPENROUTER_BASE_URL`, `CUTLASS_MODEL_CACHE_TTL_MINUTES`,
+  `CUTLASS_CONTEXT_PRESSURE_WARN_THRESHOLD`,
+  `CUTLASS_CONTEXT_COMPACTION_THRESHOLD`, `CUTLASS_SCHEDULED_AUTO_COMPACT` and
+  `CUTLASS_MAX_ITERATIONS` — could be claimed by a bundle connector, which then
+  unset them in the parent and dropped them from the reload surface. The legacy
+  spellings are now derived from the `FLEET_`-spelled names and the configured
+  legacy prefixes rather than hand-listed, so the set cannot drift again. A
+  bundle that claims one of these names now fails broker boot validation
+  instead of silently mutating parent runtime behavior; the cutlass-family
+  connector wire contract stays claimable as before.
+- `fleet-web` bound `0.0.0.0:3000` while the Caddyfile, `bootstrap.sh` and the
+  deployment docs all described it as loopback-only. On a host without
+  firewalld nothing stopped a client reaching the web tier directly, bypassing
+  Caddy — which matters because the tier trusts `x-forwarded-proto` (a direct
+  plain-HTTP login minted a session cookie without `Secure`) and
+  `x-forwarded-host` (login/logout/OIDC redirects). The unit now binds
+  loopback, and both helpers prefer the configured canonical origin
+  (`NEXT_PUBLIC_PUBLIC_ORIGIN`) over client-supplied forwarding headers.
+
+- Stop the boot-time orphan sweep from being starved by PID reuse, and from
+  eating this process's own warm containers. Two independent bugs in the same
+  sweep:
+  - The `fleet.instance` label records `<pid>@<start>` and `prune.go` claimed the
+    start time "disambiguates pid reuse" — but nothing read it. Once a crashed
+    run's pid was recycled by any unrelated live process, its orphaned container
+    was skipped forever, so the leak the sweep exists to reclaim became
+    permanent. The labeled start time is now compared against the live process's
+    actual `/proc` start time, failing safe in both unknown directions (an
+    unparseable label or an unreadable `/proc` means "assume alive" — leaking a
+    container is recoverable, force-removing a live sibling's sandbox mid-turn is
+    not).
+  - The sweep force-removed any `created`/`exited` container **regardless of
+    label**, and it runs *after* the agent manager is built — which starts the
+    warm pool filling from a goroutine. So this process's own warm containers,
+    caught mid-creation, were removable by their own boot. Containers carrying
+    this process's label are now skipped in every state, and the call-site
+    comment no longer claims the sweep runs "before building the pool".
+- Bound the sandbox telemetry poller so it can never block teardown. `podman
+  stats` had no `WaitDelay`, so `Output()` could wait on pipes that context
+  cancellation does not close (the hazard `BashWaitDelay` already exists for),
+  and `close()` waited on the poller with a bare receive — making sandbox
+  teardown, the turn's sandbox release, and the pool slot hostage to a telemetry
+  goroutine. The poll is now `WaitDelay`-bounded at 2s (a stats sample that slow
+  is discarded anyway) and the teardown wait at 5s, past which the rollup is
+  abandoned with a log line rather than stalling.
+
+- Deny `AF_VSOCK` sockets in the sandbox seccomp profile. Under the Kata/libkrun
+  microVM runtimes (ADR-0010) `AF_VSOCK` is the guest↔host channel, and podman's
+  own default profile denies it while ours allowed it. Closed with a single
+  non-overlapping rule (allow every family except `AF_VSOCK`, letting the
+  default-deny do the work) rather than by copying podman's five socket rules —
+  which was tried and measurably does NOT work, because one of podman's broad
+  `SCMP_CMP_NE` allows also matches `AF_VSOCK` and absorbs the narrow deny.
+  Verified against the real image: `AF_VSOCK` returns EPERM while `AF_UNIX`,
+  `AF_INET`, `AF_INET6`, datagram and `AF_NETLINK` sockets all still open, and
+  DNS, HTTPS and `pip install` all work. **Scope, precisely:** this stops the
+  ordinary calling convention, not a hostile payload — seccomp compares the full
+  64-bit register while the kernel truncates `domain` to `int`, so
+  `socket(0x100000028, …)` still succeeds. **Podman's own default has the
+  identical bypass**, so this is parity with the platform default rather than a
+  fleet-specific weakness, and two obvious hardenings were measured and rejected
+  (ANDing two comparisons on one argument fails *open*; a masked-equality deny is
+  absorbed by the broad allow). Also still open and documented in `seccomp.go`:
+  `AF_NETLINK`+`NETLINK_AUDIT`, which podman denies, and `socketcall(2)` on the
+  32-bit architectures the profile still lists.
+- Deny `vmsplice` in the sandbox seccomp profile. Podman's own default profile
+  denies it; ours allowed it, which made fleet's custom profile **weaker than
+  shipping no profile at all** in that one dimension — the opposite of what it
+  exists to do. `vmsplice` lets a process splice pages of its own address space
+  into a pipe, a primitive that has featured in kernel-memory-disclosure and
+  container-escape exploits. Verified nothing in the sandbox needs it: bash
+  pipes, `cp`, 20 MB pipe/copy workloads, `shutil.copyfile`, `os.sendfile`
+  zero-copy, pandas and numpy all work with it denied, and the profile test now
+  pins the denial.
+
+- Resolve the sandbox OCI runtime through Podman in the fail-closed preflight
+  instead of guessing the binary from its name. `podman --runtime=<r> info`
+  resolves the name through `containers.conf` and errors on an unregistered
+  one, so the preflight now probes the binary Podman will actually exec: a
+  `containers.conf` remap can no longer make it validate a *different* binary
+  than the one running every tool call, and a runtime installed on `PATH` but
+  never registered now fails at boot rather than at every container creation.
+  Resolution applies to any non-empty runtime (only Podman's own default is a
+  no-op); `kata`/`krun` keep their additional KVM and `+LIBKRUN` gates. This
+  also removes a false FAIL in `fleet validate-config`, which reported a valid
+  `containers.conf` mapping to an off-`PATH` binary as a missing runtime.
+- Always emit the per-file `--ulimit fsize` sandbox disk quota, adding
+  `--storage-opt size` on top where the driver supports it, instead of
+  choosing one or the other. The either/or left the workspace **uncapped on
+  exactly the hosts with the better storage driver**: `--storage-opt` bounds
+  the writable layer, which is essentially unwritable under `--read-only`, and
+  does not apply to bind mounts — so `dd if=/dev/zero of=big` in the default
+  workdir could fill the host disk, the scenario `FLEET_SANDBOX_DISK_GB`
+  exists to prevent. The boot log and the `DiskLimitGB` docs now state plainly
+  that total workspace bytes remain unbounded. **Operator-visible:** hosts with
+  XFS-pquota / btrfs / zfs now enforce the per-file ceiling they previously had
+  none of — raise `FLEET_SANDBOX_DISK_GB` if a workload legitimately writes
+  single files above the 5 GiB default (a `bash`+`curl` download of a very
+  large file is the likeliest case). Hosts on other drivers are unaffected;
+  they already had this cap.
+- Apply the fleet-wide `FLEET_DEFAULT_NETWORK_MODE` to the approved-bash take.
+  An approval executes out-of-band of the turn loop and honored only the
+  per-conversation lockdown seal, so on a `lockdown` deployment an approved
+  command from a non-lockdown conversation still ran with open egress, and on
+  an `allowlisted` one it bypassed the proxy — despite ADR-0012/ADR-0031
+  claiming the setting applies fleet-wide. It now mirrors the interactive turn
+  take exactly; the per-conversation seal keeps its stricter no-degrade rule.
+- Extend the #796 straggler guard to `run_python`: a cancelled or timed-out
+  cell now synchronously kills the container and poisons the sandbox — parity
+  with bash and the sandboxed file tools — instead of killing only the
+  host-side bridge client while the cell kept executing (and, in persistent
+  REPL mode, could be lent to later turns). Bridge write/read errors now reset
+  the session so the next `run_python` boots a fresh bridge instead of wedging
+  for the rest of the turn, and a failed close-time container kill is logged
+  instead of silently swallowed.
 - Cap host-side `run_if` stderr capture at 8 KiB while continuing to drain the
   command, preventing a noisy admin-authored gate from exhausting Fleet's heap;
   document the admin-only gate in the host-I/O exception inventory.
@@ -32,6 +911,95 @@ prior versions are listed because none have shipped.
   floors and refresh both vulnerable `brace-expansion` lines in the web lockfile.
 
 ### Added
+
+- **EKS deployment guide (`docs/EKS-DEPLOYMENT.md`):** an operator recipe for
+  running fleet on Amazon EKS as **one pod on one large, dedicated node** —
+  keeping the single-process/single-writer model of
+  ADR-0004 intact rather than sharding sandboxes across worker nodes (no such
+  seam exists; ADR-0011 removed the worker registry). Covers the rootless
+  Podman-in-a-pod requirements that fail *silently* if missed (subuid ranges,
+  `newuidmap` file caps vs. privilege escalation, an overlay driver instead of
+  vfs, `/dev/fuse` + `/dev/net/tun`, and the writable cgroup subtree without
+  which `--memory`/`--cpus` are ignored and every per-sandbox cap becomes
+  fiction), Containerfiles for the two images the repo does not ship, RDS
+  two-database setup, an xfs+prjquota StorageClass so the writable layer gets a
+  hard **total** cap on top of the per-file `ulimit` that applies regardless
+  (both helpers installed in the image, since pasta is Podman ≥ 5.0's default for
+  normal turns while the allowlisted-egress posture requires slirp4netns
+  specifically), pod sizing that accounts
+  for sandbox cgroups nesting under the pod limit, exec health probes (kubelet
+  dials the pod IP and cannot reach the loopback-only listeners), the ALB idle
+  timeout that otherwise severs SSE turns, and a verification checklist. Also
+  answers the objections a Kubernetes-native reviewer raises, with the cluster
+  integration each one needs: Pod Security Standards / Kyverno-Gatekeeper
+  exceptions for the privileged pod, `fsGroup` so uid 1000 can write the EBS
+  volume, IRSA or Pod Identity with **no** RBAC (fleet makes zero Kubernetes API
+  calls), a NetworkPolicy that does govern agent egress (sandbox traffic NATs
+  through the pod's netns), single-AZ pinning and the honest RTO/RPO of a
+  single-writer workload, Kustomize/Argo packaging including the
+  `volumeClaimTemplates`-immutability and PVC-prune traps, a loopback-preserving
+  metrics scrape sidecar, and the defaults that silently break this pod
+  (NodeLocal DNSCache vs. `slirp4netns`, namespace `ResourceQuota`, VPA `Auto`,
+  runtime-security signatures firing on normal nested-container operation).
+  Closes with an appendix carrying the whole manifest set assembled in apply
+  order with a placeholder table, so it transcribes in one paste rather than
+  nine. Flags the deployment gap the new `fleet-backup.timer` leaves on
+  Kubernetes — the units and their doctor coverage are systemd-only, so a cluster
+  install silently has no scheduled dumps unless RDS backups or a `CronJob` are
+  chosen deliberately (the #966 failure mode), while noting the in-process Doctor
+  panel does still work and reports those checks as `skip` rather than inventing
+  advisories. No Helm chart or in-tree manifests: ADR-0004's enforcement clause stands,
+  and an unmaintained chart would imply support this path does not have. States
+  its own scope honestly: hand-verified, **not** exercised by CI, no chart or
+  manifest shipped in-tree, and explicit about the weaker outer trust boundary a
+  privileged pod implies.
+
+- **Scheduled database backups are part of the deployment now, not a doc the
+  operator had to find.** `docs/BACKUP_RESTORE.md` described a
+  `fleet-backup.service` + `fleet-backup.timer` pair and told the operator to
+  install a daily timer, but `scripts/bootstrap.sh` never installed it and
+  `fleet doctor` never looked for it — so a box could report `38 ok, 0
+  advisories` while holding no backups at all, which is what a production
+  deployment did for five days with live client data (#966). Three changes
+  close the gap. The two units now ship in `deploy/`, version-controlled and
+  covered by doctor's unit-drift check the way `fleet.service` is — as
+  optional-if-absent, since not every deployment installs them.
+  `scripts/bootstrap.sh --enable-service` installs and enables the timer by
+  default: it creates the backup directory `0700` root-owned (a dump holds
+  every conversation, task and user row), writes `FLEET_BACKUP_DIR` and
+  `FLEET_BACKUP_RETENTION_DAYS` into `fleet.env` alongside the DSNs, and
+  converges rather than duplicating on a re-run — an installed unit is left
+  alone, and both settings resolve process env > the value already in the env
+  file > the default, so a re-run keeps a backup directory you relocated
+  instead of resetting it; `--no-backup-timer` is the opt-out. And both halves
+  of doctor — `scripts/doctor.sh` and the in-process `internal/boxdoctor`
+  behind Settings → Admin → Doctor — report the timer's state, in agreement. A
+  missing timer is an **advisory** and doctor never installs one: an operator
+  who backs up at the volume or hypervisor layer is not misconfigured. So is a
+  timer that is enabled but not **active** — `is-enabled` reads only the
+  install symlink, so a stopped timer fires nothing while its service still
+  reports its last `Result` as `success`. A timer whose **last run failed** is
+  a **failure**, because the `oneshot` already exits non-zero when a dump fails
+  its integrity check, and a box that looks covered but is not is worse than
+  one that is visibly bare. Reinstalling a drifted backup unit does not trigger
+  doctor's post-fix restart, so repairing one never costs chat downtime. The
+  doc now states plainly what the timer buys: a same-host `pg_dump` survives a
+  bad migration or an accidental delete, not the loss of this host or volume,
+  and it still does not capture attachment/upload files.
+- **Restaurant-style model cost indicators ($ … $$$$):** both model pickers —
+  the chat composer's listbox (and its collapsed model chip) and the operations
+  center task form's primary/fallback pickers — now show a four-glyph price tier
+  per model, derived from the OpenRouter catalog's per-token prices blended
+  3 prompt : 1 completion (the ratio that matches fleet's transcript-heavy agent
+  loops). Hover/screen-reader text gives the blended `$/M tokens`. Models with no
+  published pricing (workspace providers, half-typed custom slugs) show no
+  indicator rather than a guessed one, and the tier is a comparison aid only —
+  spend is still governed solely by the per-run cost ceilings, with no price
+  ceiling on model selection. No new network calls: `/api/model-catalog` gained
+  `price_prompt` and `/api/model-rankings` gained both prices, additively, from
+  the already-cached catalog. Catalog prices are also joined back onto the two
+  pinned "recommended" rows, which dedup had been leaving price-less. See
+  [`docs/MODEL-COST-INDICATORS.md`](docs/MODEL-COST-INDICATORS.md).
 
 - **Production child-owned remote MCP scopes:** interactive and scheduled run
   drivers now send only user identity and public server-name filters to

@@ -1,10 +1,12 @@
 package mcpbroker
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"strings"
 	"sync"
@@ -12,6 +14,7 @@ import (
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/redact"
 )
 
 // fakeBroker is the server-side agentcore.MCPBroker the Server wraps in tests.
@@ -382,6 +385,154 @@ func TestClientServer_ReloadErrorDoesNotCrossCredentialValue(t *testing.T) {
 	if strings.Contains(err.Error(), secret) {
 		t.Fatalf("credential value crossed reload response: %q", err)
 	}
+}
+
+// The masked reply is the security boundary; the log is the diagnosability fix.
+// Both must hold at once: the peer still learns nothing, and the operator can
+// finally tell "unknown tool" apart from "revoked credential".
+func TestClientServer_MaskedCallErrorIsLoggedHostSideAndStillMasked(t *testing.T) {
+	logged := captureLog(t)
+	fake := &fakeBroker{err: errors.New("Unknown tool: list_templates")}
+	client := loopback(t, fake)
+
+	_, _, err := client.CallMCP(context.Background(), "pages", "list_templates", nil)
+	if err == nil || err.Error() != errBrokerCallFailed {
+		t.Fatalf("CallMCP err = %v, want the masked %q", err, errBrokerCallFailed)
+	}
+
+	out := logged()
+	for _, want := range []string{"tool call", "pages.list_templates", "Unknown tool: list_templates"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("host log missing %q; got %q", want, out)
+		}
+	}
+}
+
+// Empty args must survive the round trip as an object, not nil: the wire
+// shape omits empty maps (args,omitempty), and a nil forwarded onward
+// marshals to "arguments": null, which strict MCP servers reject with
+// -32602 (the pages.list_templates outage).
+func TestClientServer_EmptyArgsArriveAsObject(t *testing.T) {
+	fake := &fakeBroker{text: "ok"}
+	client := loopback(t, fake)
+
+	if _, _, err := client.CallMCP(context.Background(), "pages", "list_templates", map[string]any{}); err != nil {
+		t.Fatalf("CallMCP: %v", err)
+	}
+	if fake.lastArgs == nil {
+		t.Fatal("backend received nil args, want a non-nil empty object")
+	}
+	if len(fake.lastArgs) != 0 {
+		t.Fatalf("backend received args %v, want empty", fake.lastArgs)
+	}
+}
+
+// Credentials-never-in-logs still applies to the log we just added.
+// The fixture is deliberately a BARE token — no "Bearer", no "key=" marker — the
+// shape internal/redact's canonical patterns do NOT match (asserted below). It is
+// caught only because this process holds the connector credentials and registers
+// them as literals, which is precisely why brokerRedactor calls
+// RegisterEnvLiterals rather than trusting the pattern set.
+func TestClientServer_MaskedErrorLogRedactsCredentials(t *testing.T) {
+	// Obviously fake and low-entropy ON PURPOSE: gitleaks inherits its full
+	// built-in ruleset here, and a realistic-looking high-entropy literal beside
+	// the word "token" is a generic-api-key match that would fail the secret scan
+	// on a repo whose invariant is no-secrets-in-the-repo. Redaction by literal
+	// only needs length (redact.minLiteralLen), not entropy, so nothing is lost.
+	const fixture = "not-a-real-token-just-a-fixture"
+	if scrubbed := redact.NewRedactor(nil).Redact(fixture); scrubbed != fixture {
+		t.Fatalf("fixture no longer proves the env-literal path: patterns now catch %q", fixture)
+	}
+
+	t.Setenv("PAGES_API_TOKEN_TESTONLY", fixture)
+	resetBrokerRedactor()
+	t.Cleanup(resetBrokerRedactor)
+
+	logged := captureLog(t)
+	fake := &fakeBroker{err: fmt.Errorf("handshake rejected for seat %s", fixture)}
+	client := loopback(t, fake)
+
+	_, _, err := client.CallMCP(context.Background(), "pages", "list_pages", nil)
+	if err == nil || err.Error() != errBrokerCallFailed {
+		t.Fatalf("CallMCP err = %v, want the masked %q", err, errBrokerCallFailed)
+	}
+
+	out := logged()
+	if strings.Contains(out, fixture) {
+		t.Fatalf("credential value reached the host log: %q", out)
+	}
+	if !strings.Contains(out, "[REDACTED]") {
+		t.Errorf("expected the scrubbed placeholder in %q", out)
+	}
+	// Still diagnosable: the shape of the failure survives redaction.
+	if !strings.Contains(out, "handshake rejected for seat") || !strings.Contains(out, "pages.list_pages") {
+		t.Errorf("host log lost the failure shape or its server/tool context: %q", out)
+	}
+}
+
+// Every masked reply path logs, not just tools/call — discovery and reload were
+// equally silent.
+func TestClientServer_MaskedDiscoveryAndReloadAreLogged(t *testing.T) {
+	logged := captureLog(t)
+	fake := &fakeScopedBroker{
+		fakeBroker: &fakeBroker{listErr: errors.New("connector handshake timeout")},
+		reloadErr:  errors.New("bundle re-read failed"),
+	}
+	client := loopback(t, fake)
+
+	if _, err := client.ListTools(context.Background()); err == nil {
+		t.Fatal("ListTools should have failed")
+	}
+	if _, err := client.Reload(context.Background()); err == nil {
+		t.Fatal("Reload should have failed")
+	}
+
+	out := logged()
+	for _, want := range []string{"tool discovery", "connector handshake timeout", "reload", "bundle re-read failed"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("host log missing %q; got %q", want, out)
+		}
+	}
+}
+
+// captureLog redirects the stdlib logger (fleet's convention, bridged into slog
+// by internal/logging) for the duration of one test.
+func captureLog(t *testing.T) func() string {
+	t.Helper()
+	var mu sync.Mutex
+	var buf bytes.Buffer
+	prevOut, prevFlags := log.Writer(), log.Flags()
+	log.SetOutput(&lockedWriter{mu: &mu, w: &buf})
+	log.SetFlags(0)
+	t.Cleanup(func() {
+		log.SetOutput(prevOut)
+		log.SetFlags(prevFlags)
+	})
+	return func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		return buf.String()
+	}
+}
+
+// The server writes from per-request goroutines, so the sink must be safe under
+// the race detector.
+type lockedWriter struct {
+	mu *sync.Mutex
+	w  *bytes.Buffer
+}
+
+func (l *lockedWriter) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.w.Write(p)
+}
+
+// resetBrokerRedactor drops the once-built scrubber so a test can register new
+// env literals. Production builds it exactly once, at first masked failure.
+func resetBrokerRedactor() {
+	redactorOnce = sync.Once{}
+	sharedRedactor = nil
 }
 
 func TestClientServer_ReloadCancellationReachesBackend(t *testing.T) {

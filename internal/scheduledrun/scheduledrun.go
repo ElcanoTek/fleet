@@ -116,6 +116,11 @@ type TaskMCPScopeOpener func(ctx context.Context, selection agentcore.MCPSelecti
 // needs. Credential-bearing env, headers, URLs, and commands are absent.
 type TaskMCPServerInfo struct {
 	UsesWorkspace bool
+	// ToolAllowlist is the server's Gate-2 tool allowlist (empty = every
+	// advertised tool). Carried here because broker mode scrubs the parent's
+	// config.MCPServers after boot, leaving this inventory as the only public
+	// copy a scheduled run can gate tool registration with.
+	ToolAllowlist []string
 }
 
 // TaskMCPServerInventoryProvider returns a concurrency-safe snapshot of the
@@ -599,7 +604,7 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 		modelSlug = strings.TrimSpace(*task.Model)
 	}
 	if modelSlug == "" {
-		return nil, false, "", fmt.Errorf("no model configured for scheduled task (set CUTLASS_TASK_MODEL or the task's model)")
+		return nil, false, "", fmt.Errorf("no model configured for scheduled task (set FLEET_TASK_MODEL on the orchestrator, or pin the task's model)")
 	}
 	model, providerFallbacks, err := r.mgr.ResolveWithFallbacks(ctx, modelSlug)
 	if err != nil {
@@ -828,21 +833,22 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 	learnedInstruction := r.activeLearnedInstruction(ctx, task.ID)
 
 	a := agent.NewAgent(agent.Options{
-		Config:         r.cfg,
-		Model:          model,
-		FallbackModel:  fallback,
-		FallbackModels: providerFallbacks,
-		MCPClient:      mcpBinding.client,
-		MCPBroker:      mcpBinding.broker,
-		MCPCatalog:     mcpBinding.catalog,
-		NativeTools:    nativeTools,
-		SystemPrompt:   taskSystemPrompt,
-		Persona:        taskPersona,
-		MaxIterations:  maxIter,
-		Sandbox:        sb,
-		NotesProvider:  r.notesProvider,
-		NoteProposer:   r.noteProposer,
-		SkillProposer:  r.taskSkillProposer(ownerSkillEmail),
+		Config:           r.cfg,
+		Model:            model,
+		FallbackModel:    fallback,
+		FallbackModels:   providerFallbacks,
+		MCPClient:        mcpBinding.client,
+		MCPBroker:        mcpBinding.broker,
+		MCPCatalog:       mcpBinding.catalog,
+		MCPToolAllowlist: r.taskMCPToolAllowlist(),
+		NativeTools:      nativeTools,
+		SystemPrompt:     taskSystemPrompt,
+		Persona:          taskPersona,
+		MaxIterations:    maxIter,
+		Sandbox:          sb,
+		NotesProvider:    r.notesProvider,
+		NoteProposer:     r.noteProposer,
+		SkillProposer:    r.taskSkillProposer(ownerSkillEmail),
 		// Captain's Log persistent memory (#285): nil unless the task opted in (above).
 		TaskMemory:          taskMemory,
 		TaskID:              task.ID,
@@ -1106,10 +1112,27 @@ func (r *Runner) taskMCPServerInventory() map[string]TaskMCPServerInfo {
 	}
 	for name, server := range r.cfg.MCPServers {
 		if server.Enabled {
-			out[name] = TaskMCPServerInfo{UsesWorkspace: agentcore.EnvReferencesWorkspace(server.Env)}
+			out[name] = TaskMCPServerInfo{
+				UsesWorkspace: agentcore.EnvReferencesWorkspace(server.Env),
+				ToolAllowlist: append([]string(nil), server.ToolAllowlist...),
+			}
 		}
 	}
 	return out
+}
+
+// taskMCPToolAllowlist projects the live public inventory onto the Gate-2
+// allowlist shape the scheduled agent gates tool registration with. Always
+// non-nil so the agent prefers it over config.MCPServers, which broker mode
+// scrubs after boot.
+func (r *Runner) taskMCPToolAllowlist() agentcore.MCPAllowlist {
+	allow := agentcore.MCPAllowlist{}
+	for name, server := range r.taskMCPServerInventory() {
+		if len(server.ToolAllowlist) > 0 {
+			allow[name] = append([]string(nil), server.ToolAllowlist...)
+		}
+	}
+	return allow
 }
 
 // bindTaskMCP resolves the local compatibility client the scheduled run should
@@ -1367,6 +1390,7 @@ func BuildMCPSpecs(cfg *config.Config) map[string]agent.MCPServerSpec {
 			Description:      sc.Description,
 			Beta:             sc.Beta,
 			EnabledByDefault: sc.EnabledByDefault,
+			DataSources:      append([]string(nil), sc.DataSources...),
 		}
 	}
 	return out

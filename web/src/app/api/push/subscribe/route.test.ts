@@ -51,7 +51,7 @@ describe("POST /api/push/subscribe", () => {
     chatServerFetchMock.mockReset();
     verifyOriginMock.mockReset();
     verifyOriginMock.mockReturnValue({ ok: true });
-    getServerSessionMock.mockResolvedValue({ email: "alice@example.com", exp: 0 });
+    getServerSessionMock.mockResolvedValue({ email: "alice@example.com", exp: 0, epoch: "epoch-1" });
     chatServerFetchMock.mockResolvedValue(new Response(null, { status: 204 }));
   });
 
@@ -63,7 +63,7 @@ describe("POST /api/push/subscribe", () => {
     const res = await POST(subscribeRequest());
     expect(res.status).toBe(204);
     expect(chatServerFetchMock).toHaveBeenCalledWith(
-      "alice@example.com",
+      expect.objectContaining({ email: "alice@example.com", epoch: "epoch-1" }),
       "/push/subscribe",
       expect.objectContaining({ method: "POST" }),
     );

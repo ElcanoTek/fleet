@@ -11,7 +11,7 @@ import (
 // valid run_if gate and rejects a structurally-broken one (#269): empty command,
 // out-of-range timeout, and an invalid on_error policy.
 func TestValidateTaskCreate_RunIf(t *testing.T) {
-	h := &Handlers{}
+	h := newValidateTestHandlers()
 	prompt := "do the thing for the team"
 
 	t.Run("nil accepted", func(t *testing.T) {

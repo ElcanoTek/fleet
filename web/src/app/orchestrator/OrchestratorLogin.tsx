@@ -10,7 +10,7 @@ import { useState } from "react";
 // LoginCard, but with username/password (moc) instead of email/password.
 
 export type OrchestratorLoginProps = {
-  elcanoLoginEnabled: boolean;
+  magicLinkLoginEnabled: boolean;
   onLogin: (username: string, password: string) => Promise<boolean>;
   error: string | null;
   // notice is an informational banner shown ABOVE the form (distinct from the
@@ -23,7 +23,7 @@ export type OrchestratorLoginProps = {
   notice?: string | null;
 };
 
-export function OrchestratorLogin({ elcanoLoginEnabled, onLogin, error, notice }: OrchestratorLoginProps) {
+export function OrchestratorLogin({ magicLinkLoginEnabled, onLogin, error, notice }: OrchestratorLoginProps) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -108,7 +108,7 @@ export function OrchestratorLogin({ elcanoLoginEnabled, onLogin, error, notice }
           {submitting ? "Authenticating…" : "Sign In"}
         </button>
 
-        {elcanoLoginEnabled ? (
+        {magicLinkLoginEnabled ? (
           <>
             <div className="auth-divider" aria-hidden="true">
               or

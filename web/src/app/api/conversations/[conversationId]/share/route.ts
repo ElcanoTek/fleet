@@ -20,7 +20,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
   const { conversationId } = await context.params;
   const body = await request.text();
   const { upstream, error } = await chatServerProxy(
-    session.email,
+    session,
     `/conversations/${encodeURIComponent(conversationId)}/share`,
     { method: "POST", body },
   );
@@ -43,7 +43,7 @@ export async function DELETE(request: NextRequest, context: RouteContext) {
   }
   const { conversationId } = await context.params;
   const { upstream, error } = await chatServerProxy(
-    session.email,
+    session,
     `/conversations/${encodeURIComponent(conversationId)}/share`,
     { method: "DELETE" },
   );

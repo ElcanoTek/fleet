@@ -4,8 +4,6 @@
 package handlers
 
 import (
-	"database/sql"
-	"errors"
 	"net/http"
 	"strings"
 
@@ -32,63 +30,20 @@ func (h *Handlers) SetPersonaCatalog(p func() []string) {
 	h.personaCatalog = p
 }
 
-// authorizeTaskCreate enforces the SAME authorization as CreateTask: an admin
-// API key, a scoped key carrying PermissionCreateTask, a user bearer token, or
-// the Elcano scoped-tier cookie (which must resolve to a provisioned member).
-// On failure it writes the appropriate error response and returns ok=false; the
-// caller must stop. It is read-only — it creates nothing — so the forecast
-// endpoint cannot become a weaker path to task creation.
-func (h *Handlers) authorizeTaskCreate(w http.ResponseWriter, r *http.Request) (ok bool) {
-	if h.verifyAdminKey(r) {
-		return true
-	}
-	if h.scopedKeyCannotCreate(r) {
-		writeError(w, http.StatusForbidden, "insufficient key scope: this key type cannot create tasks")
-		return false
-	}
-
-	// Scoped API key with the create-task permission.
-	if apiKey := r.Header.Get("X-API-Key"); apiKey != "" {
-		perm := models.PermissionCreateTask
-		valid, key, _ := h.apiKeys.ValidateKey(apiKey, &perm, nil, nil, nil)
-		if valid && key != nil {
-			return true
-		}
-	}
-
-	// User token (password login).
-	if authHeader := r.Header.Get("Authorization"); authHeader != "" {
-		token := strings.TrimPrefix(authHeader, "Bearer ")
-		if u, err := h.storage.GetUserByToken(token); err == nil && u != nil {
-			return true
-		}
-	}
-
-	// Elcano unified-auth cookie (scoped tier): verify natively, then require the
-	// email to be a provisioned user — matching CreateTask exactly.
-	if sess := h.elcanoSessionFromRequest(r); sess != nil {
-		u, err := h.lookupMember(r.Context(), sess.Email)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			writeError(w, http.StatusInternalServerError, "Membership check failed")
-			return false
-		}
-		if u == nil {
-			writeJSON(w, http.StatusForbidden, map[string]string{"error": "not_a_member"})
-			return false
-		}
-		return true
-	}
-
-	writeError(w, http.StatusUnauthorized, "Unauthorized")
-	return false
-}
-
 // EstimateTask handles POST /tasks/estimate — same request body as POST /tasks
 // (models.TaskCreate) but returns a pre-submission cost/token forecast WITHOUT
 // creating or persisting anything. Pure local computation: no model call, no DB
 // write (issue #233). Same auth + rate limiter as CreateTask.
 func (h *Handlers) EstimateTask(w http.ResponseWriter, r *http.Request) {
-	if !h.authorizeTaskCreate(w, r) {
+	// Authorization is the SHARED authorizeTaskCreator (batch.go) — admin key,
+	// Next-proxy header trust with its session-epoch gate, scoped key with
+	// create permission, user bearer token, Elcano cookie member — so the
+	// creation-shaped endpoints cannot drift. This handler used to enforce a
+	// hand-rolled copy that predated the header-trust path (#157), which made
+	// the forecast silently dead ("Unauthorized") for every cookie-path
+	// Operations Center user. The resolved creator is discarded: the forecast
+	// creates nothing, so this cannot become a weaker path to task creation.
+	if _, ok := h.authorizeTaskCreator(w, r); !ok {
 		return
 	}
 

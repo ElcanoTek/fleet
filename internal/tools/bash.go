@@ -344,17 +344,31 @@ func checkCommandSafety(command string) error {
 	cmdLower := strings.ToLower(command)
 	for _, pattern := range obfuscationPatterns {
 		if strings.Contains(cmdLower, pattern) {
-			// Allow simple variable references like $HOME, $PATH but not ${...} expansion
+			// Allow ordinary parameter expansion; block only INDIRECT expansion.
+			//
+			// This used to also reject any command containing ":-", ":+", ":?",
+			// "##" or "%%" — and note the test was against the WHOLE command, not
+			// the inside of the ${...}, so one unrelated ":-" anywhere poisoned
+			// every expansion in the line. `echo "${CUTLASS_INPUT_DIR:-not set}"`
+			// was refused in production; that is the single most common bash idiom
+			// there is, and the one every `set -u` script needs.
+			//
+			// It bought no safety. ${VAR:-default}, ${VAR:+alt}, ${VAR##pfx} and
+			// ${VAR%%sfx} only substitute and trim text — they cannot execute
+			// anything. The execution vectors people reach for INSIDE an expansion
+			// are command substitution and backticks, and those are matched
+			// independently by the `$(` and "`" patterns in this same loop: `${`
+			// falls through with `continue`, so the loop keeps scanning and still
+			// catches ${VAR:-$(id)}. (Pattern substitution, ${VAR/a/b}, was never
+			// on the list at all — more evidence the set was arbitrary rather than
+			// a threat model.)
+			//
+			// ${!VAR} stays blocked: indirect expansion resolves a variable whose
+			// NAME comes from another variable, which is genuine name-level
+			// indirection and the one form here that obscures what is being read.
 			if pattern == "${" {
-				// Check if this is complex expansion vs simple like ${HOME}
-				// Block ${VAR:-default}, ${VAR:+alt}, ${!prefix*}, etc.
-				if strings.Contains(command, "${!") ||
-					strings.Contains(command, ":-") ||
-					strings.Contains(command, ":+") ||
-					strings.Contains(command, ":?") ||
-					strings.Contains(command, "##") ||
-					strings.Contains(command, "%%") {
-					return fmt.Errorf("complex variable expansion is blocked for security reasons")
+				if strings.Contains(command, "${!") {
+					return fmt.Errorf("indirect variable expansion ${!...} is blocked for security reasons")
 				}
 				continue
 			}

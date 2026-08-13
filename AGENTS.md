@@ -153,6 +153,8 @@ same PR.
   discovery + deprecation contract): [`docs/api-versioning.md`](docs/api-versioning.md)
 - **Database migrations** (the two runners, safe-DDL patterns, the migration DDL
   linter, `fleet migrate status`, rollback scope): [`docs/MIGRATIONS.md`](docs/MIGRATIONS.md)
+- **Task titles** (the operator-facing display label, and why it is NOT the
+  unique import/export `name` column): [`docs/TASK-TITLES.md`](docs/TASK-TITLES.md)
 - **MCP server hot-reload** (add/remove/update MCP servers without a restart via
   `fleet mcp reload` / SIGHUP / admin endpoint): [`docs/MCP-RELOAD.md`](docs/MCP-RELOAD.md)
 - **Testing MCP servers** (`fleet mcp test` per-server smoke: handshake +
@@ -204,11 +206,16 @@ tarpit:
    calling fleet's API and receiving webhooks — one create seam in, one
    outcome callback out — and they own their contract checks as data
    fixtures in their own repos.
-3. **MCP source of truth.** While v1 (cutlass/moc/gig) is live, the SSP MCP
-   servers are authored in cutlass and synced byte-identically into the
-   bundles (cutlass `scripts/mcp_sync_consumers.py`). Never patch a synced
-   server inside a bundle; fix it upstream and re-sync. After the v2 flip
-   the bundles become the only per-customer home.
+3. **MCP source of truth: the bundle.** Each *-config bundle fully owns the
+   MCP servers under its `mcp/`. Fix a server **in the bundle that ships
+   it** — that is the only place a fix reaches a customer. The bundles are
+   peers: there is no upstream among them and no sync between them, so a
+   fix that matters to more than one is hand-ported into each, as its own
+   reviewed PR. cutlass is deprecated; its `mcp/` copy serves the legacy v1
+   stack only and is not authoritative for any bundle. The cutlass → bundle
+   sync was deleted on 2026-08-13 (it had silently reverted a bundle-side
+   fix; see cutlass `mcp/docs/CONSUMER_SYNC.md`) — do not re-introduce an
+   automated sync, and do not tell anyone to "fix it upstream and re-sync".
 4. **Identity/credentials are harness-side.** Host-side broker + suffixed
    account vars + `identity_env` refusal; servers read plain env and stay
    customer-agnostic. Bundle manifests name the *variables*, never values.

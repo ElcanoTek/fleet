@@ -12,7 +12,7 @@ export async function GET(_request: NextRequest, { params }: Params) {
   const session = await getServerSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const { projectId } = await params;
-  const { upstream, error } = await chatServerProxy(session.email, `/projects/${encodeURIComponent(projectId)}/memories`);
+  const { upstream, error } = await chatServerProxy(session, `/projects/${encodeURIComponent(projectId)}/memories`);
   if (error) return error;
   return new NextResponse(await upstream.text(), {
     status: upstream.status,
@@ -26,7 +26,7 @@ export async function POST(request: NextRequest, { params }: Params) {
   const session = await getServerSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const { projectId } = await params;
-  const { upstream, error } = await chatServerProxy(session.email, `/projects/${encodeURIComponent(projectId)}/memories`, {
+  const { upstream, error } = await chatServerProxy(session, `/projects/${encodeURIComponent(projectId)}/memories`, {
     method: "POST",
     body: await request.text(),
   });

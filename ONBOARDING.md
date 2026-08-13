@@ -14,9 +14,11 @@ should read [`AGENTS.md`](AGENTS.md) first.
 
 > **What you are about to stand up.** fleet is **one** Go process that runs
 > interactive chat *and* a scheduling engine on one box, driven by **one**
-> agent runtime (`internal/agentcore`). Every agent tool call — bash, Python,
-> file I/O, MCP — executes inside a **rootless-Podman sandbox**; that sandbox is
-> mandatory and host policy is enforced around it. Tests stay deterministic
+> agent runtime (`internal/agentcore`). Every agent tool call's model-authored
+> local execution — bash, Python, file I/O — executes inside a **rootless-Podman
+> sandbox**; that sandbox is mandatory and host policy is enforced around it.
+> MCP is the documented host-side broker exception, so connector credentials
+> never enter the sandbox. Tests stay deterministic
 > without a live model by using the fake-LLM seam (`internal/fakellm`, reached
 > via `OPENROUTER_BASE_URL`) — never a real key in tests.
 
@@ -29,7 +31,7 @@ them so a local run agrees with the gate.
 
 | Tool | Version | Why |
 | --- | --- | --- |
-| **Go** | the version pinned in `go.mod` (currently **1.26.5**) | the backend; CI uses `go-version: 1.26.5` |
+| **Go** | the version pinned in `go.mod` (currently **1.26.6**) | the backend; CI uses `go-version: 1.26.6` |
 | **Node.js** | **22** + npm | the `web/` Next.js app; CI uses `node-version: 22` |
 | **golangci-lint** | **v2.12.2** | the lint gate (`.golangci.yml` is the v2 schema and is tuned to this version — keep them in sync) |
 | **Podman** (rootless) | recent | the execution sandbox; needed for the sandbox-backed tests / first chat turn. Most unit tests self-skip when podman is absent. |

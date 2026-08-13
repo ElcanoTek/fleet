@@ -40,7 +40,7 @@ export async function GET(request: NextRequest, context: RouteContext) {
 
   let upstream: Response;
   try {
-    upstream = await chatServerFetch(session.email, path, {
+    upstream = await chatServerFetch(session, path, {
       method: "GET",
       headers,
       signal: request.signal,

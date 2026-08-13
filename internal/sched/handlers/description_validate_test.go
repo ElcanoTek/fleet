@@ -11,7 +11,7 @@ import (
 // to maxTaskDescriptionChars runes is accepted; one rune over is rejected; empty
 // is fine. Counting is rune-based, so multibyte text is not penalized by bytes.
 func TestValidateTaskCreate_Description(t *testing.T) {
-	h := &Handlers{}
+	h := newValidateTestHandlers()
 	prompt := "do the thing for the team"
 
 	t.Run("empty description accepted", func(t *testing.T) {

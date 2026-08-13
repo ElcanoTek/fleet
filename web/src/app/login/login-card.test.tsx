@@ -20,13 +20,13 @@ describe("LoginCard — Elcano-email button gating", () => {
   afterEach(cleanup);
 
   it("renders the password form regardless of the Elcano-email gate", () => {
-    render(<LoginCard elcanoLoginEnabled={false} {...DEFAULT_COPY} />);
+    render(<LoginCard magicLinkLoginEnabled={false} {...DEFAULT_COPY} />);
     // Two password-path fields + the Sign in submit are always present.
     expect(screen.getByRole("button", { name: "Sign in" })).toBeInTheDocument();
   });
 
   it("shows neutral, client-agnostic welcome copy (no Elcano brand text)", () => {
-    render(<LoginCard elcanoLoginEnabled={false} {...DEFAULT_COPY} />);
+    render(<LoginCard magicLinkLoginEnabled={false} {...DEFAULT_COPY} />);
     expect(screen.getByText("Welcome aboard.")).toBeInTheDocument();
     expect(
       screen.getByText("Sign in to your workspace and pick up where you left off."),
@@ -38,7 +38,7 @@ describe("LoginCard — Elcano-email button gating", () => {
   it("renders the bundle's login copy rather than a hardcoded default", () => {
     render(
       <LoginCard
-        elcanoLoginEnabled={false}
+        magicLinkLoginEnabled={false}
         title="Reklaim what's yours."
         tagline="Sign in and pick up where you left off."
       />,
@@ -49,7 +49,7 @@ describe("LoginCard — Elcano-email button gating", () => {
   });
 
   it("shows the Use Elcano email button when enabled", () => {
-    render(<LoginCard elcanoLoginEnabled={true} {...DEFAULT_COPY} />);
+    render(<LoginCard magicLinkLoginEnabled={true} {...DEFAULT_COPY} />);
     const button = screen.getByRole("link", { name: "Use Elcano email" });
     expect(button).toHaveAttribute("href", "/api/auth/elcano-login");
     // The "or" divider only makes sense alongside the secondary path.
@@ -57,7 +57,7 @@ describe("LoginCard — Elcano-email button gating", () => {
   });
 
   it("omits the button and divider when disabled (white-label)", () => {
-    render(<LoginCard elcanoLoginEnabled={false} {...DEFAULT_COPY} />);
+    render(<LoginCard magicLinkLoginEnabled={false} {...DEFAULT_COPY} />);
     expect(screen.queryByRole("link", { name: "Use Elcano email" })).toBeNull();
     expect(screen.queryByText("or")).toBeNull();
   });
@@ -72,7 +72,7 @@ describe("LoginCard — OIDC SSO button gating", () => {
   it("shows the SSO button with the operator label when enabled", () => {
     render(
       <LoginCard
-        elcanoLoginEnabled={false}
+        magicLinkLoginEnabled={false}
         oidcEnabled
         oidcLabel="Sign in with Okta"
         {...DEFAULT_COPY}
@@ -85,13 +85,13 @@ describe("LoginCard — OIDC SSO button gating", () => {
   });
 
   it("omits the SSO button when disabled", () => {
-    render(<LoginCard elcanoLoginEnabled={false} oidcEnabled={false} {...DEFAULT_COPY} />);
+    render(<LoginCard magicLinkLoginEnabled={false} oidcEnabled={false} {...DEFAULT_COPY} />);
     expect(screen.queryByRole("link", { name: /sign in with/i })).toBeNull();
   });
 
   it("renders both secondary buttons when both paths are enabled", () => {
     render(
-      <LoginCard elcanoLoginEnabled oidcEnabled oidcLabel="Sign in with SSO" {...DEFAULT_COPY} />,
+      <LoginCard magicLinkLoginEnabled oidcEnabled oidcLabel="Sign in with SSO" {...DEFAULT_COPY} />,
     );
     expect(screen.getByRole("link", { name: "Sign in with SSO" })).toHaveAttribute(
       "href",
@@ -101,6 +101,33 @@ describe("LoginCard — OIDC SSO button gating", () => {
       "href",
       "/api/auth/elcano-login",
     );
+  });
+});
+
+// The ?e= codes are the only channel the POST /api/auth/login redirect has to
+// explain a failure. "throttled" (verify endpoint's 429) must render the
+// throttle copy — it used to fall into the generic could-not-sign-in bucket
+// via the "server" code, telling rate-limited users the server was down.
+describe("LoginCard — ?e= error rendering", () => {
+  afterEach(() => {
+    cleanup();
+    window.history.replaceState(null, "", "/login");
+  });
+
+  it("renders the throttle message for e=throttled", async () => {
+    window.history.replaceState(null, "", "/login?e=throttled");
+    render(<LoginCard magicLinkLoginEnabled={false} {...DEFAULT_COPY} />);
+    expect(
+      await screen.findByText("Too many sign-in attempts. Try again in a minute."),
+    ).toBeInTheDocument();
+  });
+
+  it("renders the unreachable message for e=server", async () => {
+    window.history.replaceState(null, "", "/login?e=server");
+    render(<LoginCard magicLinkLoginEnabled={false} {...DEFAULT_COPY} />);
+    expect(
+      await screen.findByText("The chat server isn't reachable right now. Try again in a moment."),
+    ).toBeInTheDocument();
   });
 });
 
@@ -132,7 +159,7 @@ describe("LoginPage — server-side wiring", () => {
     })) as unknown as typeof fetch;
   }
 
-  it("passes elcanoLoginEnabled=true when AUTH_SIGNING_PUBKEY is set", async () => {
+  it("passes magicLinkLoginEnabled=true when AUTH_SIGNING_PUBKEY is set", async () => {
     process.env.AUTH_SIGNING_PUBKEY = "Zm9vYmFyZm9vYmFyZm9vYmFyZm9vYmFyMzI=";
     stubMeta(null, false);
     const { default: LoginPage } = await import("./page");
@@ -140,7 +167,7 @@ describe("LoginPage — server-side wiring", () => {
     expect(screen.getByRole("link", { name: "Use Elcano email" })).toBeInTheDocument();
   });
 
-  it("passes elcanoLoginEnabled=false when AUTH_SIGNING_PUBKEY is unset", async () => {
+  it("passes magicLinkLoginEnabled=false when AUTH_SIGNING_PUBKEY is unset", async () => {
     delete process.env.AUTH_SIGNING_PUBKEY;
     stubMeta(null, false);
     const { default: LoginPage } = await import("./page");

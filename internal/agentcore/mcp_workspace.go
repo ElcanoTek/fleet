@@ -38,8 +38,8 @@ import (
 // literal "${FLEET_WORKSPACE}" path or a confusing blank.
 const (
 	// WorkspaceEnvToken is the reserved token as it appears in a manifest env
-	// value. Only this bare spelling is reserved; ${FLEET_WORKSPACE:-x} forms
-	// are not supported.
+	// value. Only this bare spelling is reserved; a ${FLEET_WORKSPACE:-x} /
+	// :? spelling fails the bundle load (internal/clientconfig).
 	//nolint:gosec // G101 false positive: an interpolation placeholder name, not a credential.
 	WorkspaceEnvToken = "${FLEET_WORKSPACE}"
 	// TaskIDEnvToken is replaced for dedicated scheduled-task MCP clients with

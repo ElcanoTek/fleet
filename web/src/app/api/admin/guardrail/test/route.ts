@@ -10,5 +10,5 @@ export async function POST(request: NextRequest) {
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const csrf = verifyOrigin(request);
   if (!csrf.ok) return csrf.response;
-  return chatServerPassthrough(session.email, "/admin/guardrail/test", { method: "POST" });
+  return chatServerPassthrough(session, "/admin/guardrail/test", { method: "POST" });
 }

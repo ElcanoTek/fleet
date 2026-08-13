@@ -206,9 +206,14 @@ var allowedEnvVars = map[string]bool{
 	"FLEET_LOG_COMPRESS":     true,
 
 	// ── personas / protocols ──
-	"PERSONA_DEFAULT": true,
-	"PERSONA":         true,
-	"SYSTEM_PROMPT":   true,
+	// The two default-persona knobs are read through the prefix alias machinery
+	// with a bare-name fallback (getenvFleetOrBare), so the canonical FLEET_
+	// spelling must survive the env-file allowlist alongside the historical one.
+	"FLEET_PERSONA_DEFAULT": true,
+	"PERSONA_DEFAULT":       true,
+	"FLEET_PERSONA":         true,
+	"PERSONA":               true,
+	"SYSTEM_PROMPT":         true,
 
 	// ── cutlass agent knobs ──
 	"MAX_ITERATIONS":           true,
@@ -966,9 +971,15 @@ type Config struct {
 	SandboxMemoryMaxMB int
 	SandboxCPUsMax     float64
 	SandboxPidsMax     int
-	// SandboxDiskGB caps each sandbox's writable disk usage, in GiB
+	// SandboxDiskGB is the sandbox disk quota, in GiB
 	// (FLEET_SANDBOX_DISK_GB). 0 → sandbox default (5); negative disables the
-	// quota. Stops an agent from filling the host disk (#216).
+	// quota. It bounds any SINGLE file written from INSIDE the sandbox, which
+	// stops the classic `dd` bomb from filling the host disk (#216). It does
+	// NOT bound total workspace bytes, and it does not apply to host-side
+	// brokers that stage files into the workspace (attachments, download_url,
+	// generate_image), which carry their own separate caps — the attachment
+	// one is FLEET_UPLOAD_MAX_BYTES, default 1 GiB and operator-tunable. See
+	// sandbox.ContainerConfig.DiskLimitGB.
 	SandboxDiskGB int
 	// SandboxWarmSize overrides the warm-pool depth (FLEET_SANDBOX_WARM_SIZE).
 	// 0 (default) derives it from MaxConcurrentAgents (clamped 2..8); a positive
@@ -998,10 +1009,11 @@ type Config struct {
 	// (FLEET_PYTHON_REPL_IDLE_TTL, default 1800 = 30m). Only meaningful when
 	// PythonREPLMode == "persistent".
 	PythonREPLIdleTTLSeconds int
-	// PythonREPLMaxSessions caps how many persistent per-conversation sandboxes
-	// may be live at once (FLEET_PYTHON_REPL_MAX, default 32). Past the cap the
-	// least-recently-used idle session is evicted. Only meaningful when
-	// PythonREPLMode == "persistent". 0 disables the cap.
+	// PythonREPLMaxSessions bounds how many persistent per-conversation sandboxes
+	// are kept (FLEET_PYTHON_REPL_MAX, default 32). SOFT cap: evaluated only when
+	// a new one is created, evicting least-recently-used IDLE sessions, so the
+	// live count can overshoot. Only meaningful when PythonREPLMode ==
+	// "persistent". 0 disables the cap.
 	PythonREPLMaxSessions int
 
 	WorkspaceRoot         string
@@ -1072,6 +1084,9 @@ type MCPServerConfig struct {
 	Description      string
 	Beta             bool
 	EnabledByDefault bool
+	// DataSources: manifest-declared external data identifiers this connector
+	// touches (display-only; see clientconfig.MCPServer.DataSources).
+	DataSources []string
 
 	// TLS hardens an http server's connection (CA pinning / mTLS / public-key
 	// pin) when set in the manifest (#280); nil = default system TLS. Carried
@@ -1229,11 +1244,17 @@ func Load(envFile string) (*Config, error) {
 		MaxConcurrentAgents:    getenvFleetInt("MAX_CONCURRENT_AGENTS", 8),
 
 		// ── personas ──
-		PersonaDefault: getenvDefault("PERSONA_DEFAULT", "assistant"),
+		PersonaDefault: getenvFleetOrBare("PERSONA_DEFAULT", "assistant"),
 
 		// ── scheduled task (cutlass) ──
-		TaskModel:         stripQuotes(os.Getenv("CUTLASS_TASK_MODEL")),
-		TaskFallbackModel: stripQuotes(os.Getenv("CUTLASS_TASK_FALLBACK_MODEL")),
+		// getenvFleet, not a bare os.Getenv: these resolve FLEET_TASK_MODEL →
+		// CHAT_TASK_MODEL → CUTLASS_TASK_MODEL like every other knob here, and
+		// like EnvAliases already advertises for them. Reading only the legacy
+		// spelling silently dropped FLEET_TASK_MODEL on deployments that follow
+		// the documented convention, leaving every scheduled task to dead-letter
+		// with "no model configured" (#1015).
+		TaskModel:         getenvFleet("TASK_MODEL"),
+		TaskFallbackModel: getenvFleet("TASK_FALLBACK_MODEL"),
 		TaskMaxIterations: getEnvOrDefaultInt("CUTLASS_TASK_MAX_ITERATIONS", 0),
 		LLMTemperature:    getEnvOrDefaultFloat("CUTLASS_TEMPERATURE", 0.3),
 
@@ -1361,13 +1382,15 @@ func Load(envFile string) (*Config, error) {
 	}
 
 	// ── personas / prompts (cutlass file-name normalization) ──
-	// Defaults are the generic bundle's names; a client bundle sets PERSONA /
-	// SYSTEM_PROMPT (and PERSONA_DEFAULT) to its own.
+	// Defaults are the generic bundle's names; a deployment sets FLEET_PERSONA /
+	// SYSTEM_PROMPT (and FLEET_PERSONA_DEFAULT) to its bundle's own. FLEET_PERSONA
+	// names a FILE the drivers load by basename out of personas/; PERSONA_DEFAULT
+	// names a persona.
 	cfg.SystemPrompt = getEnvOrDefault("SYSTEM_PROMPT", "default.md")
 	if !hasKnownPromptExtension(cfg.SystemPrompt) {
 		cfg.SystemPrompt += ".md"
 	}
-	cfg.Persona = getEnvOrDefault("PERSONA", "personas/assistant.yaml")
+	cfg.Persona = getenvFleetOrBare("PERSONA", "personas/assistant.yaml")
 	if !hasKnownPromptExtension(cfg.Persona) {
 		cfg.Persona += ".yaml"
 	}
@@ -1811,6 +1834,47 @@ func getenvFleetDefault(suffix, def string) string {
 		return v
 	}
 	return def
+}
+
+// getenvFleetOrBare resolves a knob whose historical spelling is UNPREFIXED
+// (PERSONA, PERSONA_DEFAULT): the prefixed spellings first in lookupFleet's
+// order, then the bare name, then def. The bare fallback keeps existing
+// deployments reading; the prefixed lookup is what makes the documented FLEET_
+// convention work at all — without it FLEET_PERSONA was silently ignored and the
+// built-in default applied (#956). Quotes are stripped from whichever spelling
+// wins, matching getEnvOrDefault.
+func getenvFleetOrBare(suffix, def string) string {
+	if v, ok := lookupFleet(suffix); ok {
+		return stripQuotes(v)
+	}
+	return getEnvOrDefault(suffix, def)
+}
+
+// EnvAliases returns every spelling the prefix alias machinery resolves for
+// the same knob as name: when name carries the canonical FLEET_ prefix or a
+// legacy prefix, the canonical spelling plus one spelling per legacy prefix,
+// in lookup order (see lookupFleet). A name without a recognized prefix has
+// no aliases and is returned alone. Callers that must reason about a knob's
+// whole alias family (e.g. the MCP broker's connector/parent env-separation
+// gate) derive it here rather than hand-enumerating legacy spellings.
+func EnvAliases(name string) []string {
+	suffix, ok := strings.CutPrefix(name, canonicalPrefix)
+	if !ok {
+		for _, p := range legacyPrefixes {
+			if suffix, ok = strings.CutPrefix(name, p); ok {
+				break
+			}
+		}
+	}
+	if !ok || suffix == "" {
+		return []string{name}
+	}
+	names := make([]string, 0, len(legacyPrefixes)+1)
+	names = append(names, canonicalPrefix+suffix)
+	for _, p := range legacyPrefixes {
+		names = append(names, p+suffix)
+	}
+	return names
 }
 
 // logArchiveEncryptionKey decodes the optional base64 AES-256-GCM key for log

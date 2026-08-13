@@ -6,11 +6,49 @@ package sandbox
 // fleet_host_executor tag with the host executor (#159).
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 )
+
+// bridgeResponseCaptureCap bounds how many bytes of a single bridge response
+// line are held in host memory. The bridge caps its own stdout/stderr/result
+// captures (MAX_CAPTURE_BYTES in python_bridge.py), but `vars` extraction is
+// not size-bounded, so a cell returning a huge variable produces an
+// arbitrarily large response line — and an uncapped ReadBytes would buffer all
+// of it on the host. Same ceiling as the bash path's BashOutputCaptureCap;
+// bytes past it are drained and counted (see readCappedLine) rather than
+// stored.
+const bridgeResponseCaptureCap = BashOutputCaptureCap
+
+// readCappedLine reads one newline-terminated line from r, keeping at most
+// limit bytes and draining-but-counting the rest — the same
+// store-then-discard semantics as cappedBuffer on the bash path, applied to
+// the bridge's response stream. Draining to the delimiter keeps the stream
+// framed for the next request even when a response overflows the cap. The
+// returned data includes the newline when it fell within the cap; err mirrors
+// bufio.Reader.ReadBytes (nil means the delimiter was found).
+func readCappedLine(r *bufio.Reader, limit int) (data []byte, discarded int64, err error) {
+	for {
+		frag, ferr := r.ReadSlice('\n')
+		keep := limit - len(data)
+		if keep > len(frag) {
+			keep = len(frag)
+		}
+		if keep > 0 {
+			// ReadSlice's bytes are only valid until the next read — copy.
+			data = append(data, frag[:keep]...)
+		}
+		discarded += int64(len(frag) - keep)
+		if errors.Is(ferr, bufio.ErrBufferFull) {
+			continue
+		}
+		return data, discarded, ferr
+	}
+}
 
 // bridgeRequest mirrors the JSON shape the embedded bridge.py expects on
 // stdin. Field names must match — change in lockstep.

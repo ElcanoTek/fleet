@@ -21,7 +21,7 @@ export async function GET(request: NextRequest, context: RouteContext) {
   }
   const { conversationId } = await context.params;
   const { upstream, error } = await chatServerProxy(
-    session.email,
+    session,
     `/conversations/${encodeURIComponent(conversationId)}/mcp-servers`,
     { method: "GET" },
   );
@@ -48,7 +48,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
   const { conversationId } = await context.params;
   const body = await request.text();
   const { upstream, error } = await chatServerProxy(
-    session.email,
+    session,
     `/conversations/${encodeURIComponent(conversationId)}/mcp-servers`,
     { method: "POST", body },
   );

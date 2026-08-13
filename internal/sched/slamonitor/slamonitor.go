@@ -147,13 +147,18 @@ func effectiveFailMul(v float64) float64 {
 }
 
 // TaskName derives the bounded task-name label for the SLA metrics + report
-// (#274). fleet has no separate `name` column, so the prompt is the closest
-// stable grouping key — but a raw prompt is unbounded free-form text (the
-// cardinality anti-pattern RecordDeadLetterQueued calls out). Truncate to the
-// first non-empty line and cap at 64 chars so recurring tasks with identical
-// prompts collapse to one series while still being recognizable.
+// (#274). A titled task uses its title — that is the operator's own name for the
+// job, it is carried onto every occurrence, and it is already short. Untitled
+// tasks fall back to the prompt, the closest stable grouping key — but a raw
+// prompt is unbounded free-form text (the cardinality anti-pattern
+// RecordDeadLetterQueued calls out). Either way, truncate to the first non-empty
+// line and cap at 64 chars so recurring tasks collapse to one series while
+// still being recognizable.
 func TaskName(t *models.Task) string {
 	p := t.Prompt
+	if title := strings.TrimSpace(t.Title); title != "" {
+		p = title
+	}
 	if i := strings.IndexByte(p, '\n'); i >= 0 {
 		p = p[:i]
 	}

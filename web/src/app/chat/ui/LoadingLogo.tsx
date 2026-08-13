@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 
+import { useClientConfig } from "@/app/lib/useClientConfig";
+
 /**
  * LoadingLogo v4 — orbital
  *
@@ -17,6 +19,14 @@ import { useEffect, useState } from "react";
  *
  * The default color rides the shared --color-primary token so the logo
  * themes with the rest of the app; any CSS color (or var()) works.
+ *
+ * Branded deployments: when the client bundle declares branding.logo, the
+ * orbital fleet mark would put the VENDOR's logo in the client's chat, so
+ * this component renders the bundle's mark instead — gently pulsing inside a
+ * rotating arc in the same theme color. LoadingLogo only mounts on
+ * authenticated surfaces (the chat transcript), so useClientConfig is safe
+ * here; while the config is loading it falls back to the fleet mark, same as
+ * an unbranded deployment.
  */
 
 let instanceCount = 0;
@@ -27,12 +37,18 @@ interface LoadingLogoProps {
   className?: string;
 }
 
-export function LoadingLogo({ size = 80, color = "var(--color-primary)", className }: LoadingLogoProps) {
+export function LoadingLogo({
+  size = 80,
+  color = "var(--color-primary)",
+  className,
+}: LoadingLogoProps) {
   // Stable, per-instance prefix so multiple mounted logos don't collide on
   // CSS/SVG ids. Lazy useState runs the initializer exactly once on mount —
   // unlike reading useRef().current during render (which the react-hooks
   // rules flag, and which also re-evaluated `++instanceCount` every render).
   const [prefix] = useState(() => `ll${++instanceCount}`);
+  const { branding } = useClientConfig();
+  const brandLogoSrc = branding.logo_url || "";
 
   useEffect(() => {
     const p = prefix;
@@ -140,11 +156,84 @@ export function LoadingLogo({ size = 80, color = "var(--color-primary)", classNa
         }
       }
     `;
+    style.textContent += `
+      #${p}-brandmark {
+        animation: ${p}-brandpulse 2.2s ease-in-out infinite;
+      }
+      @keyframes ${p}-brandpulse {
+        0%, 100% { opacity: 1;   transform: scale(1); }
+        50%      { opacity: .72; transform: scale(.94); }
+      }
+      #${p}-brandarc {
+        transform-origin: 50% 50%;
+        animation: ${p}-brandspin 1.6s linear infinite;
+      }
+      @keyframes ${p}-brandspin {
+        to { transform: rotate(360deg); }
+      }
+    `;
     document.head.appendChild(style);
-    return () => { document.getElementById(`${p}-styles`)?.remove(); };
+    return () => {
+      document.getElementById(`${p}-styles`)?.remove();
+    };
   }, [prefix]);
 
   const p = prefix;
+
+  if (brandLogoSrc) {
+    return (
+      <span
+        className={className}
+        role="img"
+        aria-label="Loading"
+        style={{
+          position: "relative",
+          display: "block",
+          width: size,
+          height: size,
+        }}
+      >
+        {/* eslint-disable-next-line @next/next/no-img-element -- the brand
+            mark is a same-origin SVG/PNG served by /api/brand/logo; next/image
+            adds nothing for a tiny always-fresh asset and complicates sizing */}
+        <img
+          id={`${p}-brandmark`}
+          src={brandLogoSrc}
+          alt=""
+          style={{
+            position: "absolute",
+            inset: "18%",
+            width: "64%",
+            height: "64%",
+          }}
+        />
+        <svg
+          id={`${p}-brandarc`}
+          viewBox="0 0 32 32"
+          aria-hidden="true"
+          style={{
+            position: "absolute",
+            inset: 0,
+            width: "100%",
+            height: "100%",
+            overflow: "visible",
+          }}
+        >
+          <circle
+            cx="16"
+            cy="16"
+            r="15"
+            fill="none"
+            stroke={color}
+            strokeWidth="1.6"
+            strokeDasharray="24 70.2"
+            strokeLinecap="round"
+            opacity="0.9"
+          />
+        </svg>
+      </span>
+    );
+  }
 
   const STAR = `
     M 1135.96 575.54
@@ -175,36 +264,55 @@ export function LoadingLogo({ size = 80, color = "var(--color-primary)", classNa
     >
       <defs>
         <radialGradient id={`${p}-grad`} cx="50%" cy="50%" r="50%">
-          <stop offset="0%"   stopColor={color} stopOpacity="0.2" />
-          <stop offset="100%" stopColor={color} stopOpacity="0"   />
+          <stop offset="0%" stopColor={color} stopOpacity="0.2" />
+          <stop offset="100%" stopColor={color} stopOpacity="0" />
         </radialGradient>
       </defs>
 
-      <ellipse id={`${p}-glow`} cx="826.655" cy="826.715" rx="700" ry="700" fill={`url(#${p}-grad)`} />
+      <ellipse
+        id={`${p}-glow`}
+        cx="826.655"
+        cy="826.715"
+        rx="700"
+        ry="700"
+        fill={`url(#${p}-grad)`}
+      />
 
       <g id={`${p}-star`}>
         <path fill={color} d={STAR} />
       </g>
 
       <g id={`${p}-tr`}>
-        <path fill={color} d="M 1135.96 575.55 C 1273.07 698.87,1454.41 773.98,1653.31 773.98 V 0 H 879.34 C 879.34 205.80,959.81 392.68,1090.80 531.31 Z" />
+        <path
+          fill={color}
+          d="M 1135.96 575.55 C 1273.07 698.87,1454.41 773.98,1653.31 773.98 V 0 H 879.34 C 879.34 205.80,959.81 392.68,1090.80 531.31 Z"
+        />
       </g>
       <g id={`${p}-tl`}>
-        <path fill={color} d="M 568.01 525.54 C 695.78 387.51,773.97 202.93,773.97 0 C 346.52 0,0 346.52,0 773.97 C 202.54 773.97,386.85 696.07,524.81 568.70 Z" />
+        <path
+          fill={color}
+          d="M 568.01 525.54 C 695.78 387.51,773.97 202.93,773.97 0 C 346.52 0,0 346.52,0 773.97 C 202.54 773.97,386.85 696.07,524.81 568.70 Z"
+        />
       </g>
       <g id={`${p}-bl`}>
-        <path fill={color} d="M 531.17 1090.79 C 392.54 959.86,205.70 879.45,0 879.45 V 1653.42 H 773.97 C 773.97 1454.50,698.87 1273.18,575.57 1136.09 Z" />
+        <path
+          fill={color}
+          d="M 531.17 1090.79 C 392.54 959.86,205.70 879.45,0 879.45 V 1653.42 H 773.97 C 773.97 1454.50,698.87 1273.18,575.57 1136.09 Z"
+        />
       </g>
       <g id={`${p}-br`}>
-        <path fill={color} d="M 1083.05 1130.25 C 956.60 1268.01,879.34 1451.66,879.34 1653.42 C 1306.79 1653.42,1653.31 1306.90,1653.31 879.45 C 1451.28 879.45,1267.38 956.94,1129.54 1083.73 Z" />
+        <path
+          fill={color}
+          d="M 1083.05 1130.25 C 956.60 1268.01,879.34 1451.66,879.34 1653.42 C 1306.79 1653.42,1653.31 1306.90,1653.31 879.45 C 1451.28 879.45,1267.38 956.94,1129.54 1083.73 Z"
+        />
       </g>
 
-      {[1,2,3,4].map(i => (
+      {[1, 2, 3, 4].map((i) => (
         <g key={i} id={`${p}-pt${i}`} className={`${p}-pt`}>
           <circle cx="826.655" cy="826.715" r="18" fill={color} opacity="0" />
         </g>
       ))}
-      {[5,6,7,8].map(i => (
+      {[5, 6, 7, 8].map((i) => (
         <g key={i} id={`${p}-pt${i}`} className={`${p}-pt`}>
           <circle cx="826.655" cy="826.715" r="11" fill={color} opacity="0" />
         </g>

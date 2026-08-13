@@ -3,7 +3,9 @@ package sandbox
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -18,9 +20,13 @@ func TestDiskQuotaArgs(t *testing.T) {
 		storeOpt  bool
 		wantFlags []string
 	}{
-		{"storage-opt when supported", 5, true, []string{"--storage-opt=size=5g"}},
-		{"ulimit fallback", 5, false, []string{"--ulimit=fsize=5368709120"}}, // 5 * 1<<30
-		{"ulimit fallback 1g", 1, false, []string{"--ulimit=fsize=1073741824"}},
+		// The per-file ulimit is ALWAYS emitted: it is the only mechanism that
+		// reaches the bind-mounted workspace, which --storage-opt (a
+		// writable-LAYER quota) cannot see. storage-opt is added on top when
+		// the driver supports it.
+		{"both when storage-opt is supported", 5, true, []string{"--ulimit=fsize=5368709120", "--storage-opt=size=5g"}},
+		{"ulimit only when storage-opt is unsupported", 5, false, []string{"--ulimit=fsize=5368709120"}}, // 5 * 1<<30
+		{"ulimit only 1g", 1, false, []string{"--ulimit=fsize=1073741824"}},
 		{"disabled at zero", 0, true, nil},
 		{"disabled when negative", -1, true, nil},
 		{"disabled when negative (ulimit path)", -1, false, nil},
@@ -59,10 +65,25 @@ func TestApplyContainerDefaults_DiskLimit(t *testing.T) {
 }
 
 // TestProbeStorageOptSupport_NoImage returns false (safe fallback) without an
-// image — no podman invocation, so it runs anywhere.
+// image, WITHOUT invoking podman.
+//
+// The fake podman here exits 0, i.e. it would report quota support if it were
+// called. That is what makes the guard load-bearing: passing the real "podman"
+// name would also yield false (podman errors on an empty image), so the test
+// would pass with the guard deleted and prove nothing.
 func TestProbeStorageOptSupport_NoImage(t *testing.T) {
-	if ProbeStorageOptSupport(context.Background(), "podman", "") {
-		t.Error("probe with empty image should report false (use the ulimit fallback)")
+	bin := filepath.Join(t.TempDir(), "fake-podman")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatalf("write fake podman: %v", err)
+	}
+	for _, image := range []string{"", "   "} {
+		supported, conclusive := ProbeStorageOptSupport(context.Background(), bin, image)
+		if supported {
+			t.Errorf("probe with image %q reported quota support — it must short-circuit to false without invoking podman", image)
+		}
+		if !conclusive {
+			t.Errorf("probe with image %q must be conclusive — a missing image is a config answer, not a cut-short probe", image)
+		}
 	}
 }
 
@@ -151,5 +172,365 @@ func TestContainerDiskQuotaBlocksOversizeFile(t *testing.T) {
 	}
 	if res.ExitCode == 0 {
 		t.Errorf("dd past the quota succeeded (exit 0); expected it to be killed. stdout=%q stderr=%q", res.Stdout, res.Stderr)
+	}
+}
+
+// TestContainerDiskQuotaCapsWorkspaceOnStorageOptHosts is the regression guard
+// for the fail-open this test file previously could not see: every
+// dd-past-the-cap case above ran with StorageOptSupported=false, so nothing
+// covered the *better* storage drivers — where the old either/or
+// diskQuotaArgs emitted ONLY --storage-opt. That flag caps the container's
+// writable LAYER, which under --read-only is essentially unwritable, and does
+// not apply to bind mounts; the workspace (also the default workdir) was
+// therefore completely uncapped on exactly those hosts.
+//
+// StorageOptSupported is forced true here regardless of what this host's
+// driver actually supports, because the assertion is about which FLAGS the
+// config produces, not about the driver: RLIMIT_FSIZE must still reach the
+// container and still bound a workspace write.
+func TestContainerDiskQuotaCapsWorkspaceOnStorageOptHosts(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("container backend tested on linux only")
+	}
+	if _, err := exec.LookPath("podman"); err != nil {
+		t.Skip("podman not available")
+	}
+	if supported, _ := ProbeStorageOptSupport(context.Background(), "", testImage()); !supported {
+		// --storage-opt=size would make `podman run` itself fail on a driver
+		// that does not support it, so this case can only run where it does.
+		t.Skip("storage driver does not support --storage-opt size")
+	}
+	tmp := t.TempDir()
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	sb, err := NewContainer(ctx, ContainerConfig{
+		Image:               testImage(),
+		WorkspaceHostDir:    tmp,
+		BridgeScript:        []byte("# unused\n"),
+		DiskLimitGB:         1,
+		StorageOptSupported: true,
+	})
+	if err != nil {
+		t.Fatalf("NewContainer: %v", err)
+	}
+	defer sb.Close()
+
+	res, err := sb.RunBash(context.Background(), BashRequest{Command: "ulimit -f"})
+	if err != nil {
+		t.Fatalf("RunBash: %v", err)
+	}
+	if res.ExitCode != 0 {
+		// Without this the next assertion is vacuous: a failed exec yields
+		// empty stdout, which is != "unlimited" and would pass.
+		t.Fatalf("ulimit -f exit=%d stderr=%q", res.ExitCode, res.Stderr)
+	}
+	if got := strings.TrimSpace(string(res.Stdout)); got == "unlimited" {
+		t.Fatal("ulimit -f = unlimited on a storage-opt host — the workspace bind mount has no cap at all")
+	}
+
+	// The workspace is a bind mount, outside any storage-driver quota. Only
+	// RLIMIT_FSIZE can stop this write. (The workspace is already the default
+	// --workdir, so a bare relative name lands there.)
+	res, err = sb.RunBash(context.Background(), BashRequest{
+		Command: "dd if=/dev/zero of=big bs=1M count=1100",
+	})
+	if err != nil {
+		t.Fatalf("RunBash: %v", err)
+	}
+	if res.ExitCode == 0 {
+		t.Errorf("dd past the quota into the WORKSPACE succeeded (exit 0) on a storage-opt host — the bind mount is uncapped. stdout=%q stderr=%q", res.Stdout, res.Stderr)
+	}
+}
+
+// TestProbeCommandUnavailable pins the storage probe's error classification.
+//
+// The probe runs `--entrypoint=/usr/bin/true`, which is an assumption about the
+// rootfs of a CLIENT-BUNDLE artifact — a busybox-based bundle has /bin/true. But
+// podman validates --storage-opt at container-CREATE time and only then hands
+// off to the runtime to exec, so a failure to exec proves the quota was
+// ACCEPTED. Verified empirically: on an ext4 host, `--storage-opt=size=1g` with
+// a nonexistent entrypoint reports the QUOTA error, not the exec error.
+//
+// The classification must stay narrow in the fail-closed direction: a false
+// positive means reporting quota-capable on a driver that is not, after which
+// `--storage-opt=size` is passed to every real container and every start fails —
+// worse than losing the writable-layer quota.
+func TestProbeCommandUnavailable(t *testing.T) {
+	// Real podman/crun output captured on this host, plus one case per marker in
+	// ISOLATION. The full crun message happens to contain two of the three
+	// markers, so a combined-only fixture would let either be deleted silently.
+	execFailures := map[string]string{
+		// Verbatim from crun 1.28 on this host.
+		"real crun message (matches two markers)": "Error: crun: executable file `/usr/bin/true` not found: No such file or directory: OCI runtime attempted to invoke a command that was not found",
+		// Hand-derived from the above to isolate one marker each, so removing
+		// either is caught rather than covered by its sibling.
+		"only the invoke-a-command marker": "Error: OCI runtime attempted to invoke a command that was not found",
+		"only the backtick marker":         "Error: crun: executable file `/usr/bin/true` not found: No such file or directory",
+		// NOT emitted by this host's crun — this is the runc-family phrasing.
+		// It earns its marker because the runtime is operator-selectable
+		// (runc/kata/krun/runsc), so fleet can be running a runtime that words
+		// it this way.
+		"only the not-found-in-PATH marker (runc-family phrasing)": `Error: unable to start container: executable file not found in $PATH`,
+		// Mixed case: the classifier lower-cases before matching, and nothing
+		// else here would notice if that normalization were dropped.
+		"upper-cased variant": "ERROR: OCI RUNTIME ATTEMPTED TO INVOKE A COMMAND THAT WAS NOT FOUND",
+	}
+	for name, s := range execFailures {
+		if !probeCommandUnavailable(s) {
+			t.Errorf("%s: probeCommandUnavailable = false, want true — the quota was accepted, only the probe command was missing (%.80q)", name, s)
+		}
+	}
+
+	// Must NOT be classified as an exec failure: these are real reasons to fall
+	// back to the per-file-only quota, and misreading them breaks every container.
+	quotaAndOtherFailures := []string{
+		"Error: configure storage: storage option overlay.size and overlay.inodes only supported for backingFS XFS. Found extfs",
+		`Error: short-name resolution enforced but cannot prompt without a TTY`,
+		"Error: cannot connect to the podman socket: no such file or directory",
+		"Error: initializing source docker://img: reading manifest: manifest unknown",
+		"",
+	}
+	for _, s := range quotaAndOtherFailures {
+		if probeCommandUnavailable(s) {
+			t.Errorf("probeCommandUnavailable(%.60q…) = true, want false — this must NOT be read as quota-accepted", s)
+		}
+	}
+}
+
+// fakePodmanStorageProbe writes a stub podman that ASSERTS it was asked to run a
+// container with the 1g storage quota, then fails with the given stderr. The argv
+// assertion keeps the stub honest: a probe that stopped passing --storage-opt
+// would be testing nothing.
+func fakePodmanStorageProbe(t *testing.T, stderrBytes string) string {
+	t.Helper()
+	bin := filepath.Join(t.TempDir(), "fake-podman")
+	script := "#!/bin/sh\n" +
+		"case \" $* \" in *\" --storage-opt=size=1g \"*) ;; *) echo \"fake-podman: expected --storage-opt=size=1g, got: $*\" >&2; exit 90;; esac\n" +
+		"cat >&2 <<'FAKE_STDERR'\n" + stderrBytes + "\nFAKE_STDERR\n" +
+		"exit 125\n"
+	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
+		t.Fatalf("write fake podman: %v", err)
+	}
+	return bin
+}
+
+// TestProbeStorageOptSupport_UsesTheClassification pins the WIRING, not just the
+// classifier: ProbeStorageOptSupport must actually consult
+// probeCommandUnavailable. Without this, reverting the carve-out (so an exec
+// failure falls through to `return false`) leaves the classifier's own tests
+// green while a busybox-based bundle silently loses the writable-layer quota
+// again — the very bug this change fixes.
+func TestProbeStorageOptSupport_UsesTheClassification(t *testing.T) {
+	t.Run("exec failure means the quota was accepted", func(t *testing.T) {
+		podman := fakePodmanStorageProbe(t,
+			"Error: crun: executable file `/usr/bin/true` not found: No such file or directory: OCI runtime attempted to invoke a command that was not found")
+		supported, conclusive := ProbeStorageOptSupport(context.Background(), podman, "localhost/busybox-bundle:test")
+		if !supported {
+			t.Error("a probe whose COMMAND was missing reported no quota support — podman validates --storage-opt before the exec, so the quota was accepted")
+		}
+		if !conclusive {
+			t.Error("an exec-failure probe is a completed determination and must be conclusive")
+		}
+	})
+	t.Run("a real quota rejection still reports no support", func(t *testing.T) {
+		podman := fakePodmanStorageProbe(t,
+			"Error: configure storage: storage option overlay.size and overlay.inodes only supported for backingFS XFS. Found extfs")
+		supported, conclusive := ProbeStorageOptSupport(context.Background(), podman, "localhost/img:test")
+		if supported {
+			t.Error("a driver that rejected the quota was reported as quota-capable — every real container start would then fail")
+		}
+		if !conclusive {
+			t.Error("a quota rejection is a completed determination and must be conclusive (cacheable)")
+		}
+	})
+}
+
+// TestProbeStorageOptSupport_CutShortIsInconclusive pins the ctx arm: a probe
+// that ends because its context did (caller cancelled, or the probe's own
+// timeout) has learned nothing about the storage driver and must say so, or
+// the Pool would cache "unsupported" off a cancelled turn.
+func TestProbeStorageOptSupport_CutShortIsInconclusive(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "fake-podman")
+	// Exits 0 (quota supported) if it were ever allowed to finish — so a false
+	// result can only come from the cancellation, not the fake.
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatalf("write fake podman: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	supported, conclusive := ProbeStorageOptSupport(ctx, bin, "localhost/img:test")
+	if supported {
+		t.Error("a cut-short probe must not report quota support")
+	}
+	if conclusive {
+		t.Error("a probe cut short by ctx cancellation must be INCONCLUSIVE — caching it disables the layer quota for the process lifetime")
+	}
+}
+
+// fakePodmanCounting writes a stub podman that appends one line to a log file
+// per invocation and exits with the given status, so tests can assert how many
+// times the Pool actually probed.
+func fakePodmanCounting(t *testing.T, exitCode int) (bin, callLog string) {
+	t.Helper()
+	dir := t.TempDir()
+	callLog = filepath.Join(dir, "calls.log")
+	bin = filepath.Join(dir, "fake-podman")
+	script := "#!/bin/sh\necho run >> '" + callLog + "'\nexit " + strconv.Itoa(exitCode) + "\n"
+	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
+		t.Fatalf("write fake podman: %v", err)
+	}
+	return bin, callLog
+}
+
+func probeCallCount(t *testing.T, callLog string) int {
+	t.Helper()
+	data, err := os.ReadFile(callLog)
+	if os.IsNotExist(err) {
+		return 0
+	}
+	if err != nil {
+		t.Fatalf("read call log: %v", err)
+	}
+	return strings.Count(string(data), "run")
+}
+
+// TestPoolStorageProbe_CancelledProbeDoesNotLatch is the regression guard for
+// the permanent-quota-loss bug: the pool used a sync.Once, so a first probe
+// running under an already-cancelled context latched "unsupported" for the
+// process lifetime and every later container ran with no writable-layer quota.
+// An inconclusive probe must not be memoized — the next creation re-probes and
+// the real (supported) answer wins.
+func TestPoolStorageProbe_CancelledProbeDoesNotLatch(t *testing.T) {
+	bin, callLog := fakePodmanCounting(t, 0) // exits 0: the driver DOES support quotas
+	p := &Pool{cfg: PoolConfig{Container: ContainerConfig{PodmanBinary: bin, Image: "localhost/img:test"}}}
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if p.storageOptSupported(cancelled) {
+		t.Fatal("an inconclusive probe must fall back to no layer quota for THIS container")
+	}
+	// The second, completed probe against the exit-0 fake must win.
+	if !p.storageOptSupported(context.Background()) {
+		t.Fatal("a cancelled first probe latched 'unsupported' — the quota is disabled for the process lifetime")
+	}
+	if got := probeCallCount(t, callLog); got < 1 {
+		t.Fatalf("completed probe never invoked podman (calls=%d)", got)
+	}
+	// Once conclusive, the answer is cached: no further podman invocations.
+	before := probeCallCount(t, callLog)
+	if !p.storageOptSupported(context.Background()) {
+		t.Fatal("cached conclusive answer changed")
+	}
+	if got := probeCallCount(t, callLog); got != before {
+		t.Errorf("a conclusive probe result was not cached: podman invoked again (calls %d -> %d)", before, got)
+	}
+}
+
+// TestPoolStorageProbe_ConclusiveFailureLatches pins the other half of the
+// memoization contract: a COMPLETED "unsupported" answer is cached, so the
+// probe container is not re-spawned on every take.
+func TestPoolStorageProbe_ConclusiveFailureLatches(t *testing.T) {
+	bin, callLog := fakePodmanCounting(t, 125) // completed run, quota rejected
+	p := &Pool{cfg: PoolConfig{Container: ContainerConfig{PodmanBinary: bin, Image: "localhost/img:test"}}}
+
+	if p.storageOptSupported(context.Background()) {
+		t.Fatal("a completed failing probe must report no support")
+	}
+	if p.storageOptSupported(context.Background()) {
+		t.Fatal("cached conclusive answer changed")
+	}
+	if got := probeCallCount(t, callLog); got != 1 {
+		t.Errorf("conclusive failure was not latched: podman invoked %d times, want 1", got)
+	}
+}
+
+// TestPoolStorageProbe_TimeoutStormEntersCooldown is the regression guard for
+// the unbounded re-probe: with podman hanging, every container creation paid a
+// serialized storageProbeTimeout (30s) probe forever. After
+// storageProbeMaxStrikes consecutive probe timeouts (inconclusive with a LIVE
+// caller ctx) the pool must skip the probe for storageProbeCooldown, and the
+// cooldown must never latch permanently — once it expires, a re-probe runs and
+// a conclusive answer wins.
+func TestPoolStorageProbe_TimeoutStormEntersCooldown(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	probes := 0
+	p := &Pool{
+		cfg:   PoolConfig{Container: ContainerConfig{PodmanBinary: "unused", Image: "localhost/img:test"}},
+		nowFn: func() time.Time { return now },
+		// Inconclusive while the caller's ctx is live = the probe's own
+		// timeout fired (a hanging podman), without waiting 30s of wall time.
+		storageProbeFn: func(context.Context, string, string) (supported, conclusive bool) {
+			probes++
+			return false, false
+		},
+	}
+
+	for i := 0; i < storageProbeMaxStrikes; i++ {
+		if p.storageOptSupported(context.Background()) {
+			t.Fatal("an inconclusive probe must not report quota support")
+		}
+	}
+	if probes != storageProbeMaxStrikes {
+		t.Fatalf("probes = %d, want %d (one per creation until the strike cap)", probes, storageProbeMaxStrikes)
+	}
+
+	// In cooldown: creations must not pay the probe at all.
+	for i := 0; i < 5; i++ {
+		if p.storageOptSupported(context.Background()) {
+			t.Fatal("cooldown must fall back to no layer quota")
+		}
+	}
+	if probes != storageProbeMaxStrikes {
+		t.Fatalf("probe ran during cooldown: probes = %d, want %d", probes, storageProbeMaxStrikes)
+	}
+
+	// Cooldown over, host recovered: the re-probe's conclusive answer wins and
+	// latches — the strikes were a window, not a permanent verdict.
+	now = now.Add(storageProbeCooldown + time.Second)
+	p.storageProbeFn = func(context.Context, string, string) (supported, conclusive bool) {
+		probes++
+		return true, true
+	}
+	if !p.storageOptSupported(context.Background()) {
+		t.Fatal("cooldown latched 'unsupported' past its window — inconclusive answers must never do that")
+	}
+	if !p.storageOptSupported(context.Background()) {
+		t.Fatal("cached conclusive answer changed")
+	}
+	if probes != storageProbeMaxStrikes+1 {
+		t.Errorf("probes = %d, want %d (exactly one re-probe after the cooldown)", probes, storageProbeMaxStrikes+1)
+	}
+}
+
+// TestPoolStorageProbe_CallerCancelDoesNotStrike pins the strike condition: a
+// probe cut short by the CALLER's ctx (a cancelled turn) says nothing about
+// the host, so it must neither count toward the cooldown latch nor stop the
+// next creation from re-probing — the exact property the sync.Once removal
+// established.
+func TestPoolStorageProbe_CallerCancelDoesNotStrike(t *testing.T) {
+	probes := 0
+	p := &Pool{
+		cfg: PoolConfig{Container: ContainerConfig{PodmanBinary: "unused", Image: "localhost/img:test"}},
+		storageProbeFn: func(context.Context, string, string) (supported, conclusive bool) {
+			probes++
+			return false, false
+		},
+	}
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	// Well past the strike cap: cancelled turns must never open a cooldown.
+	want := storageProbeMaxStrikes + 2
+	for i := 0; i < want; i++ {
+		if p.storageOptSupported(cancelled) {
+			t.Fatal("an inconclusive probe must not report quota support")
+		}
+	}
+	if probes != want {
+		t.Errorf("probes = %d, want %d — caller cancels entered the cooldown and stopped re-probing", probes, want)
+	}
+	if p.storageProbeStrikes != 0 {
+		t.Errorf("storageProbeStrikes = %d, want 0 — a cancelled turn charged a strike", p.storageProbeStrikes)
 	}
 }

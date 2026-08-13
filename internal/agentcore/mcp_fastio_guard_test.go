@@ -1,10 +1,11 @@
 package agentcore
 
-// Merged from chat + cutlass mcp_fastio_guard_test.go. The headline assertion
-// is the parameterization win: with DefaultRemediationHints the rejection hint
-// exposes BOTH remediation paths — the cutlass native `fastio_upload_file` tool
-// AND the chat blob upload flow (create-session → chunk → finalize) — so both
-// front-ends' expectations are satisfied by one guard.
+// Merged from chat + cutlass mcp_fastio_guard_test.go. The headline assertion is
+// the parameterization: the rejection hint renders whichever remediation paths a
+// deployment configures. fleet's own default is the blob flow alone — it ships no
+// upload tool of its own since the fast.io tooling moved to the client bundle —
+// while a bundle that installs a path-taking upload names it via NativeUploadTool
+// and gets both paths in the hint.
 
 import (
 	"strings"
@@ -13,10 +14,12 @@ import (
 	"github.com/ElcanoTek/fleet/internal/mcp"
 )
 
-// TestRejectFastIOInlineBase64Upload_ExposesBothRemediationHints is the merge
-// gate: the rejection hint must name BOTH the native tool (cutlass) and the
-// blob upload flow (chat).
-func TestRejectFastIOInlineBase64Upload_ExposesBothRemediationHints(t *testing.T) {
+// TestRejectFastIOInlineBase64Upload_DefaultHintIsBlobFlowOnly pins fleet's own
+// default: the blob flow, and no native-tool line. fleet used to hardcode
+// `fastio_upload_file` here, which became a pointer to a tool that no longer
+// exists in this repo — a rejection hint that names an unreachable tool is worse
+// than one that names none, because the model burns a turn trying it.
+func TestRejectFastIOInlineBase64Upload_DefaultHintIsBlobFlowOnly(t *testing.T) {
 	args := map[string]any{
 		"action":         "stream-upload",
 		"filename":       "doc.docx",
@@ -28,16 +31,33 @@ func TestRejectFastIOInlineBase64Upload_ExposesBothRemediationHints(t *testing.T
 	if ok {
 		t.Fatal("expected rejection for oversized content_base64")
 	}
-	// cutlass native-tool hint AND chat blob-flow hint, plus the shared markers.
-	for _, want := range []string{
-		"fastio_upload_file", // cutlass native tool
-		"blob",               // chat blob upload flow
-		"create-session",
-		"chunk",
-		"finalize",
-		"stream-upload",
-		"content_base64",
-	} {
+	for _, want := range []string{"blob", "create-session", "chunk", "finalize", "stream-upload", "content_base64"} {
+		if !strings.Contains(hint, want) {
+			t.Errorf("hint missing %q\n--- hint ---\n%s", want, hint)
+		}
+	}
+	if strings.Contains(hint, "fastio_upload_file") {
+		t.Errorf("default hint names a tool fleet no longer ships:\n%s", hint)
+	}
+}
+
+// TestRejectFastIOInlineBase64Upload_BundleNativeToolHint asserts a deployment
+// whose bundle installs a path-taking upload gets BOTH paths — the parameterized
+// behaviour the merged guard exists for.
+func TestRejectFastIOInlineBase64Upload_BundleNativeToolHint(t *testing.T) {
+	args := map[string]any{
+		"action":         "stream-upload",
+		"content_base64": strings.Repeat("A", fastIOInlineUploadByteCap+1),
+	}
+	hints := RemediationHints{
+		NativeUploadTool: "mcp_fastio_helpers_upload_file path=<file> workspace_id=<19-digit id>",
+		IncludeBlobFlow:  true,
+	}
+	ok, hint := rejectFastIOInlineBase64Upload(fastIOUploadToolName, args, hints)
+	if ok {
+		t.Fatal("expected rejection")
+	}
+	for _, want := range []string{"mcp_fastio_helpers_upload_file", "blob", "create-session"} {
 		if !strings.Contains(hint, want) {
 			t.Errorf("hint missing %q\n--- hint ---\n%s", want, hint)
 		}

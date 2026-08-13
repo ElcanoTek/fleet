@@ -18,7 +18,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   const body = await request.text();
-  const { upstream, error } = await chatServerProxy(session.email, "/push/subscribe", {
+  const { upstream, error } = await chatServerProxy(session, "/push/subscribe", {
     method: "POST",
     body,
   });

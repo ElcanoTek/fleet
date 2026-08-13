@@ -21,7 +21,7 @@ export async function DELETE(request: NextRequest, context: RouteContext) {
   }
   const { conversationId, inputId } = await context.params;
   const { upstream, error } = await chatServerProxy(
-    session.email,
+    session,
     `/conversations/${encodeURIComponent(conversationId)}/queue/${encodeURIComponent(inputId)}`,
     { method: "DELETE" },
   );

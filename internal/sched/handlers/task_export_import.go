@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"reflect"
 	"strings"
 	"time"
 
@@ -155,6 +156,21 @@ func (h *Handlers) HandleTaskImport(w http.ResponseWriter, r *http.Request) {
 		if err := validateExportRecord(rec); err != nil {
 			writeError(w, http.StatusBadRequest, fmt.Sprintf("task[%d] (name=%s): %v", i, rec.Name, err))
 			return
+		}
+	}
+
+	// A run_if gate executes on the host as the fleet user, so IMPORTING one is
+	// gated exactly like authoring one (requireAdminForRunIf on the create and
+	// edit paths): without this, any create_task principal could mint a
+	// host-side command by wrapping it in an export envelope. Checked up front,
+	// before any write, mirroring the conflict=replace admin gate above.
+	if !p.hasPermission(models.PermissionAdmin) {
+		for i, rec := range envelope.Tasks {
+			if rec.RunIf != nil {
+				writeError(w, http.StatusForbidden, fmt.Sprintf(
+					"task[%d] (name=%s): run_if: a host-side pre-run gate can only be imported by an admin", i, rec.Name))
+				return
+			}
 		}
 	}
 
@@ -328,6 +344,18 @@ func (h *Handlers) replaceTaskByName(r *http.Request, rec models.TaskExportRecor
 	existing.TriggerType = tc.TriggerType
 	existing.AllowTaskCreation = tc.AllowTaskCreation
 	existing.AllowRecurringTaskCreation = tc.AllowRecurringTaskCreation
+	// run_if is a full-definition field like the rest of the overlay (replace
+	// already requires admin, matching the authoring boundary) — but a PENDING
+	// task is past the scheduled→pending promotion where a gate is evaluated
+	// (models.RunIf's enforcement contract), so attaching or changing one there
+	// would be dead config for the imminent dispatch; refuse, mirroring the
+	// UpdateTask edit path. Removal (record omits run_if) stays allowed.
+	if !reflect.DeepEqual(tc.RunIf.Normalized(), existing.RunIf.Normalized()) {
+		if tc.RunIf != nil && existing.Status == models.TaskStatusPending {
+			return uuid.Nil, fmt.Errorf("run_if: task is already pending dispatch, so its gate can no longer be evaluated for this run")
+		}
+		existing.RunIf = tc.RunIf
+	}
 	// Serialization key (#709): normalized the same way NewTask does, so a
 	// replaced definition can never carry a whitespace-only key the claim gate
 	// would treat as a real key.

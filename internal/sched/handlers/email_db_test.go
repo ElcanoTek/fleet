@@ -54,7 +54,7 @@ func setupEmailTest(t *testing.T) (*chi.Mux, *storage.Storage, func()) {
 		}
 	}
 
-	h := New(Config{OrchestratorURL: "http://localhost:8000", AdminAPIKey: "test-admin-key", Version: "0.1.0"}, store, keyMgr)
+	h := New(Config{DefaultTaskModel: "test/model", OrchestratorURL: "http://localhost:8000", AdminAPIKey: "test-admin-key", Version: "0.1.0"}, store, keyMgr)
 	r := chi.NewRouter()
 	r.Post("/triggers/email/{slug}", h.HandleEmailTrigger)
 

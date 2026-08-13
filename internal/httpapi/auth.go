@@ -8,7 +8,8 @@
 //   - X-User-Email: the authenticated user's email, used for row-level
 //     scoping of every SQL query.
 //
-// Both are mandatory on every non-/healthz endpoint.
+// Both are mandatory on every non-/healthz endpoint. A third header,
+// X-User-Session-Epoch, is optional — see headerSessionEpoch.
 package httpapi
 
 import (
@@ -20,6 +21,25 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/store"
 )
+
+// headerSessionEpoch carries the session-epoch claim the Next.js tier read out
+// of the session cookie it verified. membershipMiddleware compares it against
+// the account's live epoch, which is what makes a password change evict the
+// sessions minted before it: the session token itself is a stateless HMAC the
+// Next tier verifies locally, so this lookup is the only place a revocation
+// decision can be made.
+//
+// It is trusted exactly as far as X-User-Email is, and no further: both arrive
+// over the X-Chat-Server-Token channel, and anything holding that secret can
+// already assert an arbitrary identity outright, so forwarding the claim opens
+// no new spoofing surface.
+//
+// A request carrying NO claim is admitted. The Ed25519 elcano_auth cookie is
+// minted by the auth service, which chat cannot add a claim to, so those
+// sessions have no epoch and stay revocable only there; the chat-minted cookies
+// that this defends are refused by the Next tier outright when the claim is
+// missing (web/src/app/lib/auth.ts#verifySessionToken).
+const headerSessionEpoch = "X-User-Session-Epoch"
 
 type ctxKey string
 
@@ -143,6 +163,11 @@ func (s *Server) membershipMiddleware(next http.Handler) http.Handler {
 			http.Error(w, "membership check failed", http.StatusInternalServerError)
 			return
 		}
+		if claim := r.Header.Get(headerSessionEpoch); claim != "" &&
+			subtle.ConstantTimeCompare([]byte(claim), []byte(u.SessionEpoch)) != 1 {
+			writeSessionRevoked(w)
+			return
+		}
 		ctx = context.WithValue(ctx, ctxKeyRole, u.Role)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
@@ -154,6 +179,51 @@ func writeNotAMember(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusForbidden)
 	_, _ = w.Write([]byte(`{"error":"not_a_member"}`))
+}
+
+// headerSessionRevoked marks the response below for the Next.js proxy funnel.
+// The verdict has to be readable without touching the body, because that funnel
+// streams the body straight through to the browser (chatServerPassthrough, the
+// SSE routes) and consuming it there would break those callers.
+const headerSessionRevoked = "X-Session-Revoked"
+
+// writeSessionRevoked answers a request whose session-epoch claim no longer
+// matches the account. 401 rather than the membership 403: the account is fine,
+// the session is not, and re-authenticating is the fix — the web client's
+// classifier already routes 401 to the login page, and the proxy funnel drops
+// the stale cookie on the way out so /login does not bounce it straight back.
+func writeSessionRevoked(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set(headerSessionRevoked, "1")
+	w.WriteHeader(http.StatusUnauthorized)
+	_, _ = w.Write([]byte(`{"error":"session_revoked"}`))
+}
+
+type sessionEpochResponse struct {
+	SessionEpoch string `json:"session_epoch"`
+}
+
+// handleSessionEpoch serves GET /auth/session-epoch — the epoch the Next.js tier
+// stamps into a session cookie it is about to mint.
+//
+// It sits on authMiddleware alone, deliberately outside the membership gate:
+// both mint paths run before any session exists, and an email chat has not
+// provisioned must still get a well-formed answer rather than a 403 the login
+// flow would have to special-case. Unlike /auth/verify this is not reachable
+// from the login form, so it is not an enumeration surface: the only caller is
+// the shared-token-holding Next.js tier, which can already assert any identity
+// it likes.
+func (s *Server) handleSessionEpoch(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	epoch, err := s.store.SessionEpoch(r.Context(), userFromCtx(r.Context()))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, sessionEpochResponse{SessionEpoch: epoch})
 }
 
 // rejectViewerWrites blocks the read-only "viewer" role (#237) from MUTATING a

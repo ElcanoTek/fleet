@@ -51,8 +51,9 @@
 # rules below take precedence for the security-sensitive paths.
 *                                       @bradflaugher
 
-# Sandbox hardening — every agent tool call runs inside this rootless-Podman
-# sandbox; there is no fast path that skips it.
+# Sandbox hardening — every agent tool call's model-authored local execution
+# runs inside this rootless-Podman sandbox; there is no fast path that skips it.
+# (MCP is the documented host-side broker exception — see ADR-0036.)
 /internal/sandbox/                      @bradflaugher
 /config/default/sandbox/                @bradflaugher
 

@@ -179,10 +179,14 @@ approval card remains deferred under #167.
 ## Connector environment inventory
 
 `clientconfig.Bundle` captures connector environment names from the raw
-`mcp_servers` and `http_tools` sections before manifest interpolation. This
-matters when a credential was exported before startup: interpolation replaces
-`${VAR}` with its value in the parsed bundle, but the parent must still know the
-original variable name after spawning the broker child. Only names are retained.
+`mcp_servers` and `http_tools` sections before manifest interpolation.
+Connector env/header values keep their raw `${VAR}` text through `Load` and
+resolve lazily against the live process env at catalog-build/spawn time, after
+the `.env` file is applied — but the inventory cannot depend on when (or
+whether) a given value resolves: other connector fields are still substituted
+at load, a resolved value no longer carries its source name, and the parent
+must know the exact names either way, to unset them after the broker child
+boots and to register them as reload exclusions. Only names are retained.
 
 The inventory deliberately excludes parent-owned provider keys and webhook
 signing secrets. For stdio connectors it also recognizes every

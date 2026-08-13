@@ -33,6 +33,8 @@ import {
   DEFAULT_MODEL,
   tierForModel,
 } from "@/app/lib/modelAliases";
+import { ModelCostIndicator } from "@/app/shared/ui/ModelCostIndicator";
+import type { ModelPrices } from "@/app/shared/lib/modelCost";
 import type { ContextUsage } from "@/app/lib/contextUsage";
 import type { NudgeDecision } from "@/app/lib/spreadsheetNudge";
 import type { Message } from "./history";
@@ -190,6 +192,10 @@ export type ComposerProps = {
   // shows — falling back to the raw slug/typed text. Resolved by
   // ChatExperience, which owns the catalog.
   selectedModelLabel: string;
+  // OpenRouter prices for the selected slug, driving the "$ … $$$$" cost tier
+  // on the chip. null whenever the slug has no catalog pricing (workspace
+  // provider, half-typed custom slug) — the chip then shows no tier.
+  selectedModelPrices: ModelPrices | null;
   modelError: { message: string; modelsUrl: string } | null;
   modelPickerOpen: boolean;
   setModelPickerOpen: Dispatch<SetStateAction<boolean>>;
@@ -259,6 +265,7 @@ export function Composer({
   selectedModel,
   setSelectedModel,
   selectedModelLabel,
+  selectedModelPrices,
   modelError,
   modelPickerOpen,
   setModelPickerOpen,
@@ -732,6 +739,9 @@ export function Composer({
                         className={`size-[0.85rem] ${modelError ? "" : "text-[var(--color-accent)]"}`}
                       />
                       <span className="max-w-[11rem] truncate">{selectedModelLabel}</span>
+                      {/* Cost tier for the *selected* model, so the running
+                          price band is visible without opening the picker. */}
+                      <ModelCostIndicator prices={selectedModelPrices} />
                       <Icon name="selector" className="size-[0.8rem] text-[var(--color-text-muted)]" />
                     </button>
                     {modelPickerOpen && !isStreaming ? (
@@ -844,7 +854,20 @@ export function Composer({
                                   }}
                                 >
                                   <span className={`${POP_TITLE} min-w-0 break-words`}>{model.name}</span>
-                                  {pill}
+                                  {/* Right-side meta cluster: the single
+                                      status pill (if any) plus the cost tier.
+                                      Grouped so the row's justify-between
+                                      keeps them together at the trailing
+                                      edge instead of spreading them apart. */}
+                                  <span className="flex shrink-0 items-center gap-[0.35rem]">
+                                    {pill}
+                                    <ModelCostIndicator
+                                      prices={{
+                                        pricePrompt: model.pricePrompt,
+                                        priceCompletion: model.priceCompletion,
+                                      }}
+                                    />
+                                  </span>
                                 </button>
                               );
                             })

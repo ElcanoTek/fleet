@@ -126,14 +126,20 @@ fleet update --check      # read-only "commits behind" report; touch nothing
 `update` (ported from the `moc`/`gig` pattern) `git pull`s **both** the fleet
 checkout and the client-config checkout, runs `make build` (fleet binary) and
 `cd web && npm ci && npm run build`, then **rebuilds the sandbox image only when
-the bundle's `sandbox/Containerfile` changed** — it stores a SHA-256 of the
-Containerfile under `.fleet-state/` and compares, skipping the ~2-3 min image
-build when unchanged. Services self-migrate on restart, so `update` runs no
-migrations; it finishes with `systemctl restart fleet` and a unit health check.
+the bundle's `sandbox/Containerfile` or resolved image tag changed, or the tag
+is missing from the service user's image store** — it stores a SHA-256 of the
+Containerfile and the resolved tag under `.fleet-state/` and compares, skipping
+the ~2-3 min image build when unchanged (a bundle that pins a prebuilt
+`sandbox.image` skips the build entirely). Services self-migrate on restart, so
+`update` runs no migrations; it finishes with `systemctl restart fleet` and a
+unit health check.
 If the pull changed `update.sh` itself, the script **re-execs the fresh copy** in
 rebuild-only mode (bash holds the pre-pull inode open, so the fix would otherwise
 only land on the *next* update). On a build failure the live binary/image is left
-untouched; roll back with `git checkout <sha> && fleet update --no-pull`.
+untouched; if the sandbox build fails and the resolved image is absent from the
+service user's store, `update` refuses to restart rather than bring the box up
+reporting healthy with every sandboxed tool call failing. Roll back with
+`git checkout <sha> && fleet update --no-pull`.
 
 ## upgrade — drain, swap, health-gate, auto-roll-back
 
@@ -227,15 +233,22 @@ production-only bug. The pass covers, in order:
    `/run/fleet`, a `podman system migrate` (clears stale pause namespaces),
    and a `podman info` probe **as the service user**.
 4. **Installed artifacts** — functional drift of `fleet.service` /
-   `fleet-web.service` vs `deploy/` (reinstall + `daemon-reload`), and the
-   `/usr/local/bin/fleet` symlink (a stale *copy* there shadows every update).
+   `fleet-web.service` / the `fleet-backup` service + timer vs `deploy/`
+   (reinstall + `daemon-reload`), and the `/usr/local/bin/fleet` symlink (a
+   stale *copy* there shadows every update).
 5. **Configuration** — `/etc/fleet/fleet.env` exists, root-owned `0600`, with
    `OPENROUTER_API_KEY` + both DB DSNs; `fleet-web.env` permissions.
 6. **Services** — `postgresql` (when a local unit exists), `fleet`,
    `fleet-web`, `caddy` active; then the `/healthz` + `/readyz` probes.
-7. **Sandbox smoke** — `podman run --rm --network=none <image> true` **as the
+7. **Scheduled backups** — `fleet-backup.timer` installed, enabled *and
+   active*, and its last run succeeded. A missing timer is an *advisory*, never
+   a failure (an operator who backs up at the volume or hypervisor layer is not
+   misconfigured) and doctor never installs it for you; a timer whose last run
+   **failed** is a failure, because a box that looks covered and is not is the
+   worse state. See [`docs/BACKUP_RESTORE.md`](BACKUP_RESTORE.md).
+8. **Sandbox smoke** — `podman run --rm --network=none <image> true` **as the
    `fleet` user** (the image lives in *that* user's rootless store).
-8. **Source freshness** — reports commits behind upstream. Report-only:
+9. **Source freshness** — reports commits behind upstream. Report-only:
    pulling and rebuilding stays `fleet update`'s job; doctor never deploys.
 
 Exit codes: `0` healthy (or everything fixed) · `1` problems remain.
@@ -352,19 +365,28 @@ fleet backup --db=chat --out /backups # dump just chat into /backups
 fleet restore --db=sched FILE.dump    # restore one DB (--clean --if-exists; overwrites it)
 ```
 
-`backup` prints each dump path on stdout (scriptable for a cron job). `restore`
+`backup` prints each dump path on stdout. `restore`
 is deliberately single-DB — it overwrites a live database, so the target is named
 explicitly (no `--db=all`). Connection params, including the password, are passed
-to the child processes through the environment, never argv. See
-**[`docs/BACKUP_RESTORE.md`](BACKUP_RESTORE.md)** for the full recovery
-runbook, a cron example, and the round-trip verification procedure.
+to the child processes through the environment, never argv.
+
+A **daily timer** (`deploy/fleet-backup.timer`, dumping both DBs to
+`/var/backups/fleet` with a 30-day prune) is installed and enabled by
+`bootstrap --enable-service` unless you pass `--no-backup-timer`, and `fleet
+doctor` advises when no timer is present. A same-host dump protects against
+logical loss — a bad migration, an accidental delete — **not** against losing
+this host or volume, and it does not capture attachment/upload files. See
+**[`docs/BACKUP_RESTORE.md`](BACKUP_RESTORE.md)** for the full recovery runbook,
+the honest scope, and the round-trip verification procedure.
 
 ## Where the sandbox build fits
 
 The execution sandbox is a **per-client bundle artifact**: each bundle ships its
 own `sandbox/Containerfile` (base tracks `fedora-minimal:latest`; pin a digest
 for reproducibility). `bootstrap` builds it on the
-box by default (auditable supply chain); `update` rebuilds it only when the
-Containerfile changed; `status` verifies the resolved image runs. Registry
+box by default (auditable supply chain); `update` rebuilds it when the
+Containerfile or the manifest's `sandbox.tag` changed, or the tag is missing
+from the service user's image store; `status` verifies the resolved image runs.
+Registry
 publish stays opt-in — set `sandbox.image` in the bundle manifest to a prebuilt
 ref and all three steps consume that instead of building.

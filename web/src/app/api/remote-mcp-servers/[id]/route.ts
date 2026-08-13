@@ -20,7 +20,7 @@ export async function DELETE(request: NextRequest, context: RouteContext) {
   }
   const { id } = await context.params;
   const { upstream, error } = await chatServerProxy(
-    session.email,
+    session,
     `/remote-mcp-servers/${encodeURIComponent(id)}`,
     { method: "DELETE" },
   );

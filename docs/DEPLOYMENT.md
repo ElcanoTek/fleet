@@ -15,6 +15,14 @@ proxies, server-side over loopback, to the two Go backends the single process
 boots (chat on `127.0.0.1:8080`, orchestrator on `127.0.0.1:8000`). Caddy fronts the web
 app with TLS; the backends stay loopback-only.
 
+> **Your platform standard is Kubernetes?** fleet's shipped target is this
+> single-VM/systemd model ([ADR-0004](adr/0004-single-box-vm-native-deployment.md)),
+> and no chart or manifest lives in the tree. For an operator recipe that keeps
+> the one-process/one-node model intact inside EKS — one pod on one big node,
+> Podman running *inside* it, nothing split across worker nodes — see
+> [`docs/EKS-DEPLOYMENT.md`](EKS-DEPLOYMENT.md). It is hand-verified, not
+> CI-exercised.
+
 > **Single-host by design.** Scheduled-task crash recovery uses single-owner
 > database leases and the worker-pool concurrency cap is a per-process semaphore —
 > both assume one running process. fleet scales **vertically**: put it on a
@@ -96,8 +104,8 @@ lowers the host's base footprint.
 > **Hypervisor isolation (optional).** By default each sandbox is a rootless
 > container sharing the host kernel. For untrusted prompts or sensitive data,
 > set the bundle manifest's `sandbox.runtime` (or `FLEET_SANDBOX_RUNTIME`) to
-> `kata` or `libkrun` to run every tool call in a dedicated **KVM microVM** with
-> its own guest kernel — an escape then needs a hypervisor CVE, not just a
+> `kata` or `libkrun` to make every sandbox container a dedicated **KVM
+> microVM** with its own guest kernel — an escape then needs a hypervisor CVE, not just a
 > container-escape. Requires `/dev/kvm`; fleet fail-closed preflights it at boot.
 > See [`docs/SANDBOX-RUNTIMES.md`](SANDBOX-RUNTIMES.md) and
 > [ADR-0010](adr/0010-microvm-sandbox-runtimes.md).
@@ -128,7 +136,9 @@ sudo git clone https://github.com/ElcanoTek/fleet.git /opt/fleet/src
 #    omit it to run bare on config/default, or use the public template
 #    https://github.com/ElcanoTek/example-config to start from.
 #    Under --enable-service the script writes credentials to /etc/fleet/fleet.env
-#    (the path the systemd unit reads) by default.
+#    (the path the systemd unit reads) by default, and installs + enables the
+#    daily database-backup timer (--no-backup-timer opts out; docs/BACKUP_RESTORE.md
+#    covers what a same-host dump does and does not protect against).
 sudo bash /opt/fleet/src/scripts/bootstrap.sh \
   --postgres=local --enable-service \
   --client-config https://github.com/ElcanoTek/example-config.git
@@ -141,8 +151,10 @@ sudo bash /opt/fleet/src/scripts/bootstrap.sh \
 
 # 4. Add your OpenRouter key + connector secrets to the env file, then restart.
 sudo "$EDITOR" /etc/fleet/fleet.env       # set OPENROUTER_API_KEY=… (+ MCP creds)
-#    If the bundle's default persona isn't "assistant", also set
-#    PERSONA_DEFAULT=<persona> here (e.g. PERSONA_DEFAULT=victoria).
+#    If the bundle's default persona isn't "assistant", also set both defaults
+#    here: FLEET_PERSONA_DEFAULT=<name> for chat (e.g. victoria) and
+#    FLEET_PERSONA=personas/<name>.yaml for scheduled tasks — that one is the
+#    bundle-relative PATH to the file, not the persona name.
 sudo fleet restart
 #    With --enable-web, also (re)start the web unit: it BindsTo fleet.service, so
 #    it stays down until the backend is healthy (i.e. until the key is set).
@@ -268,9 +280,56 @@ each piece yourself):
    > decides *who may use chat*. A stand-alone deploy needs none of this; users
    > just log in with email + password.
    >
+   > **Ending a session.** The cookie is a stateless HMAC valid for 14 days, so
+   > there is nothing to delete server-side — revocation works by invalidating
+   > what the cookie *claims* (the design and its carve-outs:
+   > [`SESSION-EPOCH.md`](SESSION-EPOCH.md)). Three levers, narrowest first:
+   > - **One account** — reset its password (Settings → Admin → "Users & roles",
+   >   or `fleet chat user passwd <email>`). Every session cookie carries the
+   >   account's *session epoch*, derived from its stored password hash, and
+   >   **both** backends refuse a request whose epoch no longer matches — chat and
+   >   the Operations Center, which the one cookie authenticates. A reset
+   >   therefore signs that account out of both views on their next request that
+   >   reaches a backend — a handful of Next-only endpoints (the session probe and
+   >   the model catalogs) authorize on the cookie alone and keep answering until
+   >   some other call trips the 401, which is when the browser's cookie is
+   >   dropped; neither serves client data or spends budget — and
+   >   it works even if you reset to the same password (bcrypt re-salts). This is
+   >   the incident-response lever for a stolen cookie. Three carve-outs: a
+   >   magic-link (`elcano_auth`) session carries no epoch, so revoke it at the
+   >   auth service that mints it; an Operations Center **bearer** login (the moc
+   >   username/password form) is a separate credential the chat password does not
+   >   govern — end it with `fleet sched user del <name>`, because a sched
+   >   password change alone does not rotate that bearer token; and a stream that is
+   >   already open (a chat turn, a task run-log) finishes its turn, because the
+   >   epoch is checked when a request connects, not per SSE event.
+   > - **One account, permanently** — delete it. The user-list gate then 403s
+   >   every request.
+   > - **Everyone, break-glass** — rotate `APP_SESSION_SECRET` in
+   >   `/etc/fleet/fleet-web.env` and `systemctl restart fleet-web`. Every
+   >   outstanding cookie fails signature verification at once, so all users
+   >   re-log-in. Nothing else reads the value, so rotation is safe at any time;
+   >   reach for it when you can't enumerate the affected accounts.
+   >
    > **`fleet-web` BindsTo `fleet`.** It stays down until the backend is healthy
    > (i.e. until `OPENROUTER_API_KEY` is set), so after a first `--enable-web`
    > bootstrap: set the key, `fleet restart`, then `systemctl start fleet-web`.
+   >
+   > **Login depends on the backend at request time, too.** Before minting a
+   > cookie the web tier reads the account's session epoch from chat-server's
+   > `GET /auth/session-epoch`, and refuses to sign anyone in when that read
+   > fails — a cookie without the epoch would be rejected on the next request
+   > anyway. So a restarting backend, or a `fleet` binary older than that
+   > endpoint, is a login **outage** (`/login?e=server` for everyone), not a
+   > degraded login: upgrade the two units together and never pin them apart.
+   >
+   > **The Operations Center now reads the chat database on every request.** The
+   > two planes keep separate `users` tables (ADR-0005), so the scheduler
+   > resolves the epoch a cookie claims through a lookup against the chat store.
+   > That lookup failing is answered `500`, never as a revocation — a chat-DB
+   > blip must not sign the whole Operations Center out — but it does mean the
+   > Operations Center is unavailable while the chat database is down, where
+   > previously it was not. It is one indexed lookup by email per request.
 
    Run the Next web app as its own supervised unit (`deploy/fleet-web.service` —
    it `npm run start`s the built app on port 3000), wiring

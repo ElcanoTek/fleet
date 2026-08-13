@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
@@ -89,6 +90,19 @@ func TestListTaskTemplates_FromProvider(t *testing.T) {
 	got := body[0]
 	if got.Name != "Code Review" || got.Icon != "🔍" {
 		t.Errorf("template head wrong: %+v", got)
+	}
+	// Pin the WIRE shape: the UI is a case-sensitive JSON consumer, and a
+	// struct-decode round trip cannot catch missing json tags (Unmarshal
+	// matches field names case-insensitively). The OpenAPI contract is
+	// lowercase name/description/icon/task.
+	raw := rr.Body.String()
+	for _, want := range []string{`"name":"Code Review"`, `"icon":"🔍"`, `"task":`, `"variables":`} {
+		if !strings.Contains(raw, want) {
+			t.Errorf("wire body missing %s: %s", want, raw)
+		}
+	}
+	if strings.Contains(raw, `"Name"`) {
+		t.Errorf("wire body carries untagged Go field names: %s", raw)
 	}
 	// Variables are extracted from the prompt, sorted + deduped.
 	if want := []string{"area", "repo_path"}; !reflect.DeepEqual(got.Variables, want) {

@@ -160,8 +160,8 @@ type Bundle struct {
 
 	// RemoteMCPCatalog is the manifest's curated directory of THIRD-PARTY hosted
 	// MCP servers (the remote_mcp_catalog: section, #538), in manifest order.
-	// Unlike MCPCatalog entries (bundle-author-defined, run in the sandbox,
-	// credentials brokered host-side), these are pointers to services hosted and
+	// Unlike MCPCatalog entries (bundle-author-defined, run host-side in the
+	// credential-owning broker), these are pointers to services hosted and
 	// operated by an external vendor: connecting one sends conversation-derived
 	// tool traffic to that vendor under its own terms. The catalog is
 	// informational — nothing connects until a user explicitly adds the server
@@ -354,8 +354,8 @@ type Sandbox struct {
 	//	""        — Podman's configured default (crun/runc): rootless containers
 	//	            sharing the host kernel. No extra host requirements (#217).
 	//	"runc"    — explicit runc; same shared-kernel posture as the default.
-	//	"kata"    — Kata Containers: each tool call runs in a dedicated KVM VM
-	//	            with its own guest kernel — escape requires a hypervisor CVE,
+	//	"kata"    — Kata Containers: every sandbox container is a dedicated KVM
+	//	            VM with its own guest kernel — escape requires a hypervisor CVE,
 	//	            not just a container-escape. Requires /dev/kvm + kata-runtime.
 	//	"libkrun" — lightweight microVM (Apple Virtualization.framework on macOS,
 	//	            libkrun on Linux); lower overhead than Kata. Normalized to the
@@ -485,10 +485,10 @@ type EmptyState struct {
 // path. A template therefore cannot grant any capability the create path does
 // not already validate.
 type TaskTemplate struct {
-	Name        string           `yaml:"name"`
-	Description string           `yaml:"description"`
-	Icon        string           `yaml:"icon"`
-	Task        TaskTemplateTask `yaml:"task"`
+	Name        string           `yaml:"name" json:"name"`
+	Description string           `yaml:"description" json:"description,omitempty"`
+	Icon        string           `yaml:"icon" json:"icon,omitempty"`
+	Task        TaskTemplateTask `yaml:"task" json:"task"`
 }
 
 // TaskTemplateTask is the partial task payload a template carries — the subset
@@ -516,6 +516,9 @@ type TaskTemplate struct {
 // YAML key is distinguishable from an explicit zero. The struct is serialized to
 // the UI as opaque JSON; the Go side never interprets the values beyond parsing.
 type TaskTemplateTask struct {
+	// Title pre-fills the task's display label. Omitted, the create form falls
+	// back to the template's own name, which is what the operator picked it by.
+	Title                  string   `yaml:"title,omitempty" json:"title,omitempty"`
 	Prompt                 string   `yaml:"prompt" json:"prompt,omitempty"`
 	Model                  *string  `yaml:"model,omitempty" json:"model,omitempty"`
 	FallbackModel          *string  `yaml:"fallback_model,omitempty" json:"fallback_model,omitempty"`
@@ -594,6 +597,14 @@ type ServerDef struct {
 	Description      string `yaml:"description"`
 	Beta             bool   `yaml:"beta"`
 	EnabledByDefault bool   `yaml:"enabled_by_default"`
+
+	// DataSources names the external data this connector reads or writes —
+	// bucket/endpoint identifiers like "s3://index-omnicom-reporting" or
+	// "jmap://my.mailbux.com" — for display on the settings connections page,
+	// so an operator can inventory what a deployment touches without reading
+	// connector source. DECLARATIVE, not verified: the credential's scope
+	// (IAM policy, API key) remains the authority on what is reachable.
+	DataSources []string `yaml:"data_sources"`
 
 	// Probe declares this server's canary for `fleet mcp test --deep`: ONE
 	// read-only tool call that proves the server works end-to-end (credentials
@@ -974,6 +985,25 @@ func Load(dir string) (*Bundle, error) {
 	// to scope it. Fail loud at startup instead.
 	if err := yaml.UnmarshalWithOptions(interpolated, &m, yaml.Strict()); err != nil {
 		return nil, fmt.Errorf("parse manifest %s: %w", manifestPath, err)
+	}
+	// Connector env/header values resolve against the LIVE process env at
+	// catalog-build time (resolveEnvMap) — deliberately NOT here: this load
+	// runs before config.Load applies the .env file (the allowlist is seeded
+	// from EnvVarNames below), so keeping the pass's output would bake a
+	// ${VAR:-default} literal that an env-file override was meant to beat
+	// (fleet#706) and would consume the $${ escape one pass early. Re-source
+	// those maps from the raw manifest; the pass above still fail-loads an
+	// unset ${VAR:?...} or a non-bare reserved token inside them.
+	if len(rawConnectors.MCPServers) != len(m.MCPServers) || len(rawConnectors.HTTPTools) != len(m.HTTPTools) {
+		return nil, fmt.Errorf("client config manifest %s: env interpolation altered the connector list shape (mcp_servers %d -> %d, http_tools %d -> %d); a substituted value must not inject YAML structure",
+			manifestPath, len(rawConnectors.MCPServers), len(m.MCPServers), len(rawConnectors.HTTPTools), len(m.HTTPTools))
+	}
+	for i := range m.MCPServers {
+		m.MCPServers[i].Env = rawConnectors.MCPServers[i].Env
+		m.MCPServers[i].Headers = rawConnectors.MCPServers[i].Headers
+	}
+	for i := range m.HTTPTools {
+		m.HTTPTools[i].Headers = rawConnectors.HTTPTools[i].Headers
 	}
 
 	b := &Bundle{
@@ -1811,6 +1841,7 @@ func (b *Bundle) MCPServerConfigs() map[string]config.MCPServerConfig {
 			Description:      s.Description,
 			Beta:             s.Beta,
 			EnabledByDefault: s.EnabledByDefault,
+			DataSources:      append([]string(nil), s.DataSources...),
 			Probe:            s.Probe.toConfig(),
 		}
 		switch s.Type {
@@ -2004,7 +2035,7 @@ func (b *Bundle) EnvVarNames() []string {
 	var out []string
 	add := func(name string) {
 		name = strings.TrimSpace(name)
-		if name == "" || seen[name] {
+		if name == "" || reservedRuntimeVar(name) || seen[name] {
 			return
 		}
 		seen[name] = true
@@ -2030,12 +2061,12 @@ func (b *Bundle) EnvVarNames() []string {
 			add(v)
 		}
 		for _, v := range s.Env {
-			for _, name := range envRefs(v) {
+			for _, name := range sourceEnvRefs(v) {
 				add(name)
 			}
 		}
 		for _, v := range s.Headers {
-			for _, name := range envRefs(v) {
+			for _, name := range sourceEnvRefs(v) {
 				add(name)
 			}
 		}
@@ -2044,7 +2075,7 @@ func (b *Bundle) EnvVarNames() []string {
 	// they are resolved host-side at call time exactly like an MCP server's headers.
 	for i := range b.HTTPTools {
 		for _, v := range b.HTTPTools[i].Headers {
-			for _, name := range envRefs(v) {
+			for _, name := range sourceEnvRefs(v) {
 				add(name)
 			}
 		}
@@ -2290,24 +2321,6 @@ func (b *Bundle) WebhookSecretEnvNames() []string {
 	return out
 }
 
-// envRefs extracts the ${VAR} names referenced in a manifest value.
-func envRefs(v string) []string {
-	var out []string
-	for {
-		start := strings.Index(v, "${")
-		if start < 0 {
-			return out
-		}
-		v = v[start+2:]
-		end := strings.Index(v, "}")
-		if end < 0 {
-			return out
-		}
-		out = append(out, strings.TrimSpace(v[:end]))
-		v = v[end+1:]
-	}
-}
-
 // enabled evaluates the server's gate against the process env.
 func (s *ServerDef) enabled() bool {
 	if s.Always {
@@ -2342,9 +2355,10 @@ func allSet(vars []string) bool {
 	return len(vars) > 0
 }
 
-// resolveEnvMap interpolates ${VAR} references against the process env and drops
-// keys whose resolved value is empty AND listed in optional. A value with no
-// ${...} reference is passed through literally.
+// resolveEnvMap interpolates the ${...} references (all the forms interpolate
+// supports) against the process env and drops keys whose resolved value is
+// empty AND listed in optional. A value with no ${...} reference is passed
+// through literally.
 func resolveEnvMap(in map[string]string, optional []string) map[string]string {
 	if len(in) == 0 {
 		return map[string]string{}
@@ -2400,6 +2414,15 @@ func resolveEnvMap(in map[string]string, optional []string) map[string]string {
 // An unquoted value would make the YAML parser read the ':' as a mapping
 // separator. The interpolation runs on raw bytes before unmarshal, so the quotes
 // remain around the substituted value and the YAML round-trips correctly.
+//
+// Connector env/header values (mcp_servers[].env/headers, http_tools[].headers)
+// are special: this pass VALIDATES them — an unset ${VAR:?...} or a non-bare
+// reserved token still fails the load — but its substitutions there are
+// discarded. Load re-sources those maps from the raw manifest so they resolve
+// against the live process env at catalog-build time, after the .env file is
+// applied (see interpolate/resolveEnvMap); this pass runs before the env file
+// exists in the process env, so its output would bake defaults an env-file
+// override is meant to beat.
 func interpolateManifest(raw []byte, manifestPath string) ([]byte, error) {
 	s := string(raw)
 	var sb strings.Builder
@@ -2454,7 +2477,7 @@ type expandResult struct {
 // agentcore). Both interpolation passes leave the bare token INTACT — it is
 // never resolved from the process env (even if an operator exports a var of
 // that name) and never blanked. Only the bare ${FLEET_WORKSPACE} spelling is
-// reserved; :-/:? forms are not supported for it.
+// reserved; any colon-suffixed (:-/:?) spelling fails the load (expandExpr).
 const (
 	reservedWorkspaceVar = "FLEET_WORKSPACE"
 	reservedTaskIDVar    = "FLEET_TASK_ID"
@@ -2468,6 +2491,17 @@ func reservedRuntimeVar(name string) bool {
 // the braces) into a replacement, implementing the ${VAR}, ${VAR:-default} and
 // ${VAR:?message} forms.
 func expandExpr(expr, manifestPath string) (expandResult, error) {
+	// Reserved spawn-time tokens admit ONLY the bare spelling. Any
+	// colon-suffixed form (:-, :?, or a typo'd op) would resolve the token from
+	// the process env or a literal default — silently defeating the launch-time
+	// substitution — so it fails the load.
+	if idx := strings.IndexByte(expr, ':'); idx >= 0 {
+		if name := strings.TrimSpace(expr[:idx]); reservedRuntimeVar(name) {
+			return expandResult{}, fmt.Errorf(
+				"client config manifest %s: ${%s}: %s is a RESERVED runtime token that fleet substitutes at MCP launch; only the bare ${%s} spelling is supported — it is never read from the process env and takes no default (see docs/MCP-BUNDLE-ENV.md)",
+				manifestPath, expr, name, name)
+		}
+	}
 	// Find the first ":-" or ":?" operator at the TOP of the expression. The var
 	// name itself never contains ':', so the first ':' (if any) starts the op.
 	if idx := strings.IndexByte(expr, ':'); idx >= 0 && idx+1 < len(expr) {
@@ -2537,38 +2571,79 @@ func matchBrace(s string, open int) (int, bool) {
 	return 0, false
 }
 
-// interpolate replaces ${VAR} occurrences with the process-env value (empty
-// when unset). A bare "${VAR}" with no surrounding text is the common case.
-// The reserved ${FLEET_WORKSPACE} token is left INTACT (never env-resolved,
-// never blanked) for the MCP spawn paths to substitute — see
-// reservedWorkspaceVar.
+// interpolate resolves the ${...} references in an MCP env/header value
+// against the process env at catalog-build time — AFTER config.Load has
+// applied the .env file, which is why those values keep their raw manifest
+// text through Load (see the re-source step there). It is the single
+// substituting pass for those fields and supports the same forms as
+// interpolateManifest: "$${" emits a literal "${" without expanding, ${VAR}
+// substitutes the value (empty when unset — resolveEnvMap's optional_env drop
+// keys on that), ${VAR:-default} falls back to the default, and ${VAR:?msg}
+// substitutes the value (an unset var cannot reach here: interpolateManifest
+// already failed the load). The reserved runtime tokens (reservedRuntimeVar)
+// are preserved verbatim — never env-resolved, never blanked — for the MCP
+// spawn paths to substitute. An unterminated "${" is copied through verbatim.
 func interpolate(v string) string {
 	if !strings.Contains(v, "${") {
 		return v
 	}
 	var sb strings.Builder
-	for {
-		start := strings.Index(v, "${")
-		if start < 0 {
-			sb.WriteString(v)
+	sb.Grow(len(v))
+	for i := 0; i < len(v); {
+		// Escape: "$${" -> literal "${" (consume one leading '$').
+		if strings.HasPrefix(v[i:], "$${") {
+			sb.WriteString("${")
+			i += 3
+			continue
+		}
+		if !strings.HasPrefix(v[i:], "${") {
+			sb.WriteByte(v[i])
+			i++
+			continue
+		}
+		end, ok := matchBrace(v, i+1)
+		if !ok {
+			sb.WriteString(v[i:])
 			break
 		}
-		sb.WriteString(v[:start])
-		end := strings.Index(v[start:], "}")
-		if end < 0 {
-			sb.WriteString(v[start:])
-			break
-		}
-		// Trim the var name for parity with lookupNonEmpty/envRefs — the load
-		// pass registers "${ FOO }" as FOO, so spawn-time resolution must
-		// read the same key.
-		name := strings.TrimSpace(v[start+2 : start+end])
-		if reservedRuntimeVar(name) {
-			sb.WriteString(v[start : start+end+1]) // preserve the reserved token verbatim
-		} else {
-			sb.WriteString(strings.TrimSpace(os.Getenv(name)))
-		}
-		v = v[start+end+1:]
+		sb.WriteString(resolveSpawnExpr(v[i+2:end], v[i:end+1]))
+		i = end + 1
 	}
 	return sb.String()
+}
+
+// resolveSpawnExpr resolves one ${...} expression at catalog-build time (expr
+// is the text between the braces, token the original "${...}" spelling). It
+// mirrors expandExpr with the two load/spawn differences: an unset bare ${VAR}
+// resolves to "" (there is no later pass to defer to), and a reserved runtime
+// token is preserved verbatim in ANY spelling rather than erroring — the load
+// pass already rejected non-bare reserved forms, so this is belt-and-braces
+// against a value that never went through it.
+func resolveSpawnExpr(expr, token string) string {
+	head := expr
+	if idx := strings.IndexByte(expr, ':'); idx >= 0 {
+		head = expr[:idx]
+	}
+	if reservedRuntimeVar(strings.TrimSpace(head)) {
+		return token
+	}
+	if idx := strings.IndexByte(expr, ':'); idx >= 0 && idx+1 < len(expr) {
+		name := expr[:idx]
+		op := expr[idx+1]
+		body := expr[idx+2:]
+		switch op {
+		case '-': // ${VAR:-default}
+			if v, ok := lookupNonEmpty(name); ok {
+				return v
+			}
+			return body
+		case '?': // ${VAR:?message}
+			v, _ := lookupNonEmpty(name)
+			return v
+		}
+		// Any other ':X' is not a form we support; treat the whole expression
+		// as a bare name, matching expandExpr.
+	}
+	v, _ := lookupNonEmpty(expr)
+	return v
 }

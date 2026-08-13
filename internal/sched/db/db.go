@@ -374,7 +374,7 @@ func (db *Database) rowToUser(row *sql.Row) (*models.User, error) {
 
 // Task operations
 
-const taskColumns = "id, name, prompt, model, fallback_model, max_iterations, mcp_selection, priority, instruction_self_improve, status, agent_session_id, created_at, started_at, completed_at, result, error_message, scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at, attempt_count, max_retries, allow_network, timezone, created_by_key_id, trigger_type, credential_allowlist, loop_config, worktree_config, description, tags, retry_policy, source_task_id, persona, workspace_path, allow_task_creation, allow_recurring_task_creation, created_by_task_id, dead_lettered_at, dead_letter_reason, dead_letter_attempts, run_if, skip_count, last_skip_at, last_skip_reason, expected_duration_minutes, sla_warn_multiplier, sla_fail_multiplier, sla_breached, actual_duration_seconds, effective_priority, sandbox_limits, allow_delegation, output_schema, output_json, error_analysis, artifacts, pending_question, pending_answer, carry_context, allow_event_triggers, thinking_budget_tokens, file_names, serialization_key, recurrence_until, recurrence_remaining, wake_at, wake_event_key, wake_note, wake_reason, wake_cycles"
+const taskColumns = "id, name, prompt, model, fallback_model, max_iterations, mcp_selection, priority, instruction_self_improve, status, agent_session_id, created_at, started_at, completed_at, result, error_message, scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at, attempt_count, max_retries, allow_network, timezone, created_by_key_id, trigger_type, credential_allowlist, loop_config, worktree_config, description, tags, retry_policy, source_task_id, persona, workspace_path, allow_task_creation, allow_recurring_task_creation, created_by_task_id, dead_lettered_at, dead_letter_reason, dead_letter_attempts, run_if, skip_count, last_skip_at, last_skip_reason, expected_duration_minutes, sla_warn_multiplier, sla_fail_multiplier, sla_breached, actual_duration_seconds, effective_priority, sandbox_limits, allow_delegation, output_schema, output_json, error_analysis, artifacts, pending_question, pending_answer, carry_context, allow_event_triggers, thinking_budget_tokens, file_names, serialization_key, recurrence_until, recurrence_remaining, wake_at, wake_event_key, wake_note, wake_reason, wake_cycles, title"
 
 // sourceTaskIDValue maps the optional source-task lineage pointer (#270) to a
 // nullable column value: nil → SQL NULL, set → the UUID string.
@@ -426,10 +426,11 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 			run_if, skip_count, last_skip_at, last_skip_reason,
 			expected_duration_minutes, sla_warn_multiplier, sla_fail_multiplier,
 			sla_breached, actual_duration_seconds, effective_priority, sandbox_limits, allow_delegation, output_schema, output_json, carry_context, allow_event_triggers, thinking_budget_tokens,
-			file_names, serialization_key, recurrence_until, recurrence_remaining
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, $58, $59, $60, $61, $62, $63, $64)
+			file_names, serialization_key, recurrence_until, recurrence_remaining, title
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, $58, $59, $60, $61, $62, $63, $64, $65)
 		ON CONFLICT (id) DO UPDATE SET
 			name = EXCLUDED.name,
+			title = EXCLUDED.title,
 			prompt = EXCLUDED.prompt,
 			model = EXCLUDED.model,
 			fallback_model = EXCLUDED.fallback_model,
@@ -562,6 +563,7 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 		serializationKeyValue(task.SerializationKey),
 		task.RecurrenceUntil,
 		recurrenceRemainingValue(task.RecurrenceRemaining),
+		task.Title,
 	)
 	return err
 }
@@ -648,6 +650,7 @@ func maybeComputeActualDuration(task *models.Task) {
 // through this upsert) can never clobber a promotion with a stale in-memory value.
 const taskInsertOnConflict = ` ON CONFLICT (id) DO UPDATE SET
 			name = EXCLUDED.name,
+			title = EXCLUDED.title,
 			prompt = EXCLUDED.prompt,
 			model = EXCLUDED.model,
 			fallback_model = EXCLUDED.fallback_model,
@@ -722,7 +725,7 @@ const taskInsertColumns = `id, name, prompt, model, fallback_model, max_iteratio
 			allow_task_creation, allow_recurring_task_creation, created_by_task_id,
 			dead_lettered_at, dead_letter_reason, dead_letter_attempts,
 			run_if, skip_count, last_skip_at, last_skip_reason,
-			expected_duration_minutes, sla_warn_multiplier, sla_fail_multiplier, sla_breached, actual_duration_seconds, effective_priority, sandbox_limits, allow_delegation, output_schema, output_json, carry_context, allow_event_triggers, thinking_budget_tokens, file_names, serialization_key, recurrence_until, recurrence_remaining`
+			expected_duration_minutes, sla_warn_multiplier, sla_fail_multiplier, sla_breached, actual_duration_seconds, effective_priority, sandbox_limits, allow_delegation, output_schema, output_json, carry_context, allow_event_triggers, thinking_budget_tokens, file_names, serialization_key, recurrence_until, recurrence_remaining, title`
 
 // taskInsertArgs returns the positional INSERT values for a task, in the
 // exact column order of taskInsertColumns. Shared by AddTask and AddTaskBatch so
@@ -796,6 +799,7 @@ func taskInsertArgs(t *models.Task) []any {
 		serializationKeyValue(t.SerializationKey),
 		t.RecurrenceUntil,
 		recurrenceRemainingValue(t.RecurrenceRemaining),
+		t.Title,
 	}
 }
 
@@ -805,9 +809,9 @@ func taskInsertArgs(t *models.Task) []any {
 // (#710 added file_names without bumping this, breaking every multi-row
 // AddTaskBatch INSERT — caught only once the dev lane gained a Postgres
 // service, #723. 64 = 61 + serialization_key (#709) + recurrence_until +
-// recurrence_remaining (recurrence end conditions).
+// recurrence_remaining (recurrence end conditions), 65 = 64 + title.
 // TestTaskInsertColumnsCount pins the count DB-free.)
-const taskInsertColumnsCount = 64
+const taskInsertColumnsCount = 65
 
 // AddTaskBatch inserts a slice of tasks in a single parameterised INSERT (#227),
 // replacing N sequential ExecContext round-trips. It does NOT run inside an
@@ -1128,6 +1132,7 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 	var (
 		id                     uuid.UUID
 		name                   string
+		title                  string
 		prompt                 string
 		model                  sql.NullString
 		fallbackModel          sql.NullString
@@ -1214,7 +1219,7 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 		&expectedDur, &slaWarnMul, &slaFailMul, &slaBreached, &actualDurSecs,
 		&effectivePriority, &sandboxLimits, &allowDelegation, &outputSchema, &outputJSON, &errorAnalysis, &artifacts,
 		&pendingQuestion, &pendingAnswer, &carryContext, &allowEventTriggers, &thinkingBudget, &fileNames, &serializationKey, &recurrenceUntil, &recurrenceRemaining,
-		&wakeAt, &wakeEventKey, &wakeNote, &wakeReason, &wakeCycles,
+		&wakeAt, &wakeEventKey, &wakeNote, &wakeReason, &wakeCycles, &title,
 	)
 	if err != nil {
 		return nil, err
@@ -1223,6 +1228,7 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 	task := &models.Task{
 		ID:                     id,
 		Name:                   name,
+		Title:                  title,
 		Prompt:                 prompt,
 		Priority:               priority,
 		EffectivePriority:      effectivePriority,
@@ -1596,6 +1602,35 @@ func (db *Database) UpdateTasksStatusBatch(ctx context.Context, taskIDs []uuid.U
 		string(toStatus),
 		uuidStrings(taskIDs),
 		string(fromStatus),
+	)
+	if err != nil {
+		return 0, err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	return int(affected), nil
+}
+
+// SettleGatedTask transitions one gated task out of `scheduled` to toStatus,
+// but ONLY while the row still carries the scheduled_for the gate evaluation
+// was dispatched against (NULL-safe compare). The status check alone is not
+// enough: an edit or reschedule keeps the task `scheduled`, and since gates
+// settle asynchronously (up to their full 300s runtime later), a stale
+// verdict conditioned only on status would either run a task an operator had
+// just postponed or clobber the operator's new scheduled_for. A task
+// cancelled, claimed, edited, or rescheduled while its gate ran fails the
+// WHERE and the verdict is discarded — the next due tick re-evaluates the
+// task's current definition. Returns the number of rows transitioned (0 or 1).
+func (db *Database) SettleGatedTask(ctx context.Context, taskID uuid.UUID, observedScheduledFor *time.Time, toStatus models.TaskStatus) (int, error) {
+	res, err := db.conn.ExecContext(ctx, `
+		UPDATE tasks SET status = $1
+		WHERE id = $2 AND status = $3 AND scheduled_for IS NOT DISTINCT FROM $4`,
+		string(toStatus),
+		taskID,
+		string(models.TaskStatusScheduled),
+		observedScheduledFor,
 	)
 	if err != nil {
 		return 0, err
@@ -2160,7 +2195,11 @@ func (db *Database) GetSLAReport(ctx context.Context, windowDays int) (*models.S
 	}
 	rows, err := db.conn.QueryContext(ctx, `
 		SELECT
-			prompt                                                  AS task_name,
+			-- Group by the operator's title when the job has one: every
+			-- occurrence of a recurring task shares its title, so titled jobs
+			-- collapse into one row per job instead of one per prompt variant.
+			-- Untitled tasks keep the historical prompt grouping.
+			COALESCE(NULLIF(title, ''), prompt)                      AS task_name,
 			expected_duration_minutes,
 			COALESCE(PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY actual_duration_seconds), 0) / 60.0,
 			COALESCE(PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY actual_duration_seconds), 0) / 60.0,
@@ -2171,8 +2210,8 @@ func (db *Database) GetSLAReport(ctx context.Context, windowDays int) (*models.S
 		WHERE completed_at >= NOW() - make_interval(days => $1)
 		AND expected_duration_minutes IS NOT NULL
 		AND actual_duration_seconds IS NOT NULL
-		GROUP BY prompt, expected_duration_minutes
-		ORDER BY 5 DESC, prompt ASC`,
+		GROUP BY COALESCE(NULLIF(title, ''), prompt), expected_duration_minutes
+		ORDER BY 5 DESC, 1 ASC`,
 		windowDays)
 	if err != nil {
 		return nil, err
@@ -2816,7 +2855,8 @@ func (db *Database) UpdateTaskTx(ctx context.Context, tx *sql.Tx, task *models.T
 			pending_answer = $58,
 			carry_context = $59,
 			recurrence_until = $60,
-			recurrence_remaining = $61
+			recurrence_remaining = $61,
+			title = $62
 		WHERE id = $1`,
 		task.ID,
 		task.Prompt,
@@ -2879,25 +2919,37 @@ func (db *Database) UpdateTaskTx(ctx context.Context, tx *sql.Tx, task *models.T
 		task.CarryContext,
 		task.RecurrenceUntil,
 		recurrenceRemainingValue(task.RecurrenceRemaining),
+		task.Title,
 	)
 	return err
 }
 
 // RecordSkip records a pre-run-gate skip on a still-scheduled task (#269): it
 // re-locks the row, re-checks it is still `scheduled` (a concurrent cancel or
-// claim must win and suppress the skip), advances scheduled_for to nextRun,
+// claim must win and suppress the skip) AND still carries the scheduled_for
+// the gate evaluation was dispatched against (a concurrent edit/reschedule
+// must win too — see SettleGatedTask), advances scheduled_for to nextRun,
 // increments skip_count, and stamps last_skip_at / last_skip_reason. status is
-// intentionally left `scheduled` (no promotion to pending). Returns the updated
-// task.
-func (db *Database) RecordSkip(ctx context.Context, tx *sql.Tx, taskID uuid.UUID, reason string, nextRun time.Time) (*models.Task, error) {
+// intentionally left `scheduled` (no promotion to pending). Returns the task
+// (updated when recorded, the fresh row as-is otherwise) and whether the skip
+// was actually recorded. A nil observedScheduledFor skips the reschedule guard
+// (status-only, the pre-async behavior); the scheduler always passes the
+// fetched row's value.
+func (db *Database) RecordSkip(ctx context.Context, tx *sql.Tx, taskID uuid.UUID, reason string, nextRun time.Time, observedScheduledFor *time.Time) (*models.Task, bool, error) {
 	task, err := db.GetTaskForUpdate(ctx, tx, taskID)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	// Only a still-scheduled task can be skipped. A concurrent cancel/claim
 	// (status moved off scheduled) wins and the skip is a no-op.
 	if task.Status != models.TaskStatusScheduled {
-		return task, nil
+		return task, false, nil
+	}
+	// A concurrent edit/reschedule moved scheduled_for while the gate ran: the
+	// verdict is stale, so leave the operator's row untouched — the next due
+	// tick re-evaluates the task's current definition.
+	if observedScheduledFor != nil && !sameScheduledFor(task.ScheduledFor, observedScheduledFor) {
+		return task, false, nil
 	}
 	now := time.Now().UTC()
 	if !nextRun.IsZero() {
@@ -2910,9 +2962,22 @@ func (db *Database) RecordSkip(ctx context.Context, tx *sql.Tx, taskID uuid.UUID
 		task.LastSkipReason = &r
 	}
 	if err := db.UpdateTaskTx(ctx, tx, task); err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	return task, nil
+	return task, true, nil
+}
+
+// sameScheduledFor reports whether a re-fetched row's scheduled_for still
+// equals the one a gate evaluation was dispatched against. Compared at
+// microsecond precision: timestamptz resolves to microseconds and the pgx
+// encoders truncate a finer time.Time on write, so truncating both sides lets
+// an in-memory value that never round-tripped through the DB match its stored
+// twin.
+func sameScheduledFor(current, observed *time.Time) bool {
+	if current == nil || observed == nil {
+		return current == nil && observed == nil
+	}
+	return current.Truncate(time.Microsecond).Equal(observed.Truncate(time.Microsecond))
 }
 
 // ── task_iterations (looped-task telemetry, #179) ──
@@ -3089,7 +3154,10 @@ func (db *Database) GetTasksFiltered(ctx context.Context, filter TaskFilter, lim
 			args = append(args, id)
 			argIndex++
 		} else {
-			whereClauses = append(whereClauses, fmt.Sprintf("(prompt ILIKE $%d OR CAST(id AS TEXT) ILIKE $%d)", argIndex, argIndex))
+			// title is matched alongside prompt: once a job has a title, the
+			// title is what the operator remembers it by, and searching only the
+			// prompt would fail to find a task by the label the list displays.
+			whereClauses = append(whereClauses, fmt.Sprintf("(title ILIKE $%d OR prompt ILIKE $%d OR CAST(id AS TEXT) ILIKE $%d)", argIndex, argIndex, argIndex))
 			args = append(args, "%"+query+"%")
 			argIndex++
 		}

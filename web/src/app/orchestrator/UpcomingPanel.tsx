@@ -229,7 +229,7 @@ function UpcomingWeek({ runs }: { runs: UpcomingRun[] }) {
                     >
                       <span className="upcoming-week-run-time">{timeLabel(when)}</span>
                       <span className="upcoming-week-run-name">
-                        {run.name || run.prompt.slice(0, 60) || "(untitled task)"}
+                        {run.title || run.name || run.prompt.slice(0, 60) || "(untitled task)"}
                       </span>
                     </li>
                   );
@@ -275,7 +275,7 @@ function UpcomingTimeline({ runs }: { runs: UpcomingRun[] }) {
                 <li key={`${run.task_id}-${i}`} className="upcoming-run-row" data-testid="upcoming-run-row">
                   <span className="upcoming-run-time">{timeLabel(when)}</span>
                   <span className="upcoming-run-name" title={run.prompt}>
-                    {run.name || run.prompt.slice(0, 80) || "(untitled task)"}
+                    {run.title || run.name || run.prompt.slice(0, 80) || "(untitled task)"}
                   </span>
                   <span className={`upcoming-run-kind upcoming-run-kind-${run.recurring ? "recurring" : "oneshot"}`}>
                     {run.recurring ? describeCronExpression(run.recurrence) : "One-time"}

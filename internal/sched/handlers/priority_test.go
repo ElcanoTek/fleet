@@ -54,7 +54,7 @@ func setupPriorityHandler(t *testing.T) (*chi.Mux, *storage.Storage, *apikeys.Ma
 		}
 	}
 
-	h := New(Config{
+	h := New(Config{DefaultTaskModel: "test/model",
 		OrchestratorURL: "http://localhost:8000",
 		AdminAPIKey:     "test-admin-key",
 		Version:         "0.1.0",

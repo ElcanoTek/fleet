@@ -145,37 +145,83 @@ loopback Postgres and writes to a host directory. It is therefore driven by a
 agent inside a network-isolated sandbox that cannot reach the host's Postgres or
 filesystem, so it is the wrong mechanism for a host backup.
 
-Install a daily timer (the unit reads the same env file as the fleet service, so
-the DSNs and `FLEET_BACKUP_DIR` / `FLEET_BACKUP_RETENTION_DAYS` resolve):
+**`scripts/bootstrap.sh --enable-service` installs and enables the timer by
+default.** It creates the backup directory if it is missing (`/var/backups/fleet`,
+mode `0700`, root-owned — a dump holds every conversation, task and user row),
+writes `FLEET_BACKUP_DIR` and `FLEET_BACKUP_RETENTION_DAYS` into `fleet.env`,
+installs the two units, and runs `systemctl enable --now fleet-backup.timer`.
+Re-running bootstrap converges rather than duplicating: an already-installed unit
+is left alone (unit drift is `fleet doctor`'s job), enabling a live timer is a
+no-op, and a backup directory that already exists keeps whatever ownership and
+permissions you gave it (bootstrap says so rather than re-moding a shared mount;
+the unit's `UMask=0077` keeps the dump *files* owner-only either way). Both
+settings resolve **process env > the value already in `fleet.env` > the
+default**, so a directory or retention you edited into the env file survives
+every later re-run — export `FLEET_BACKUP_DIR` / `FLEET_BACKUP_RETENTION_DAYS`
+on the bootstrap command line to change them. `FLEET_BACKUP_DIR` must be
+absolute (a relative value would resolve against the unit's `/` working
+directory) and the retention a positive integer; bootstrap refuses on the runs
+that write those keys.
 
-```ini
-# /etc/systemd/system/fleet-backup.service
-[Unit]
-Description=fleet database backup
-After=network-online.target
+Pass **`--no-backup-timer`** to opt out — the right choice if you snapshot the
+volume or the hypervisor, or ship dumps offsite with your own tooling.
 
-[Service]
-Type=oneshot
-EnvironmentFile=/etc/fleet/fleet.env
-ExecStart=/usr/local/bin/fleet backup --db=all --prune
-```
-
-```ini
-# /etc/systemd/system/fleet-backup.timer
-[Unit]
-Description=Daily fleet database backup
-
-[Timer]
-OnCalendar=*-*-* 02:00:00
-Persistent=true
-
-[Install]
-WantedBy=timers.target
-```
+The units live in the repo at [`deploy/fleet-backup.service`](../deploy/fleet-backup.service)
+and [`deploy/fleet-backup.timer`](../deploy/fleet-backup.timer), so they are
+version-controlled and covered by doctor's unit-drift check like `fleet.service`
+and `fleet-web.service`. To install them by hand:
 
 ```sh
+install -D -m 0644 deploy/fleet-backup.service /etc/systemd/system/fleet-backup.service
+install -D -m 0644 deploy/fleet-backup.timer   /etc/systemd/system/fleet-backup.timer
+install -d -m 0700 -o root -g root /var/backups/fleet
 systemctl daemon-reload && systemctl enable --now fleet-backup.timer
+systemctl list-timers fleet-backup.timer   # next + last fire
+systemctl start fleet-backup.service       # run one backup now
 ```
+
+The service reads the same env file as the fleet service, so the DSNs and
+`FLEET_BACKUP_DIR` / `FLEET_BACKUP_RETENTION_DAYS` resolve from there; the unit
+carries `Environment=FLEET_BACKUP_DIR=/var/backups/fleet` as a fallback default,
+which the env file overrides. It runs as **root** — it reads the 0600 root-owned
+credential file and writes into the 0700 root-owned backup directory.
 
 The `oneshot` service exits non-zero if any dump fails its integrity check, so a
 failed backup surfaces in `systemctl status fleet-backup` and the journal.
+
+## What `fleet doctor` reports
+
+Backups used to be the one operational essential doctor did not check, so a box
+with no backups at all could report `38 ok, 0 advisories` (issue #966 — found on
+a production deployment five days in). Both halves of doctor
+([`scripts/doctor.sh`](../scripts/doctor.sh) and the in-process
+`internal/boxdoctor` behind Settings → Admin → Doctor) now report:
+
+| State | Verdict |
+|---|---|
+| the `fleet-backup` timer + service pair not installed (either half missing) | **advisory** — backing up at the volume/hypervisor layer is a valid answer, so this never fails the box, and doctor never installs the timer for you |
+| installed but not enabled | **advisory** — it will never fire; `systemctl enable --now fleet-backup.timer` |
+| enabled but not active | **advisory** — `is-enabled` only reads the install symlink, so a stopped timer fires nothing while the service's `Result` still says `success`; `systemctl start fleet-backup.timer` |
+| enabled + active, last run failed | **failure** — the dump did not complete; `journalctl -u fleet-backup -n 50` |
+| enabled + active, no failed run recorded | ok |
+
+A timer that has been failing for a week is worse than no timer, because the box
+looks covered — hence the failed-run case is the one that fails doctor.
+
+## What this does NOT protect against
+
+Be clear-eyed about the scope of a scheduled `fleet backup`:
+
+- **It is not offsite backup.** The dumps land on the same host — usually the
+  same disk — as the databases they came from. They survive a bad migration, an
+  accidental delete, or a botched restore; they do not survive losing the host,
+  the volume, or the datacenter. Copy them somewhere else (object storage,
+  another box, a snapshot of the backup volume) if that matters to you, and
+  verify the copy by restoring it.
+- **It does not capture on-disk files.** `fleet backup` dumps the two databases
+  and nothing else — no attachment/upload files, no workspaces (see the file
+  list at the top of this page). Restoring the dumps brings back conversations
+  and tasks but not the files they reference.
+- **It is not tested by taking it.** A dump is verified as a readable archive,
+  not as a restorable database. Do the round trip described in
+  [Verifying a backup](#verifying-a-backup) at least once.

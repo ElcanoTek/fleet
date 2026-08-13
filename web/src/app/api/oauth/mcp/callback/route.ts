@@ -40,7 +40,7 @@ export async function GET(request: NextRequest) {
     return settings("?error=missing_code_or_state");
   }
 
-  const { upstream, error } = await chatServerProxy(session.email, "/oauth/mcp/callback", {
+  const { upstream, error } = await chatServerProxy(session, "/oauth/mcp/callback", {
     method: "POST",
     body: JSON.stringify({ code, state }),
   });

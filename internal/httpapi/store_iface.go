@@ -185,10 +185,14 @@ type chatStore interface {
 	// GetUser returns the full record (role + team) used by membershipMiddleware
 	// to admit AND enrich a request with the caller's role/team (#237).
 	GetUser(ctx context.Context, email string) (*store.User, error)
+	// SessionEpoch backs GET /auth/session-epoch: the value the Next.js tier
+	// stamps into a session cookie it is about to mint.
+	SessionEpoch(ctx context.Context, email string) (string, error)
 	// ListUsers + SetUserRoleTeam back the admin Users tab (#237): list every
 	// provisioned account, and PATCH a single account's role/team.
 	ListUsers(ctx context.Context) ([]store.User, error)
 	SetUserRoleTeam(ctx context.Context, email string, role, teamID *string) (*store.User, error)
+	RenameTeam(ctx context.Context, from, to string) (usersUpdated, projectsUpdated int64, err error)
 	// CreateUser/DeleteUser/UpdatePassword complete the admin Users tab CRUD so
 	// user management no longer requires CLI access to the box (`fleet admin
 	// add` / `fleet chat user ...` stay the scriptable equivalents).

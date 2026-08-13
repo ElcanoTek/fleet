@@ -13,7 +13,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   const qs = request.nextUrl.search; // "?q=…" (already URL-encoded) or ""
-  const { upstream, error } = await chatServerProxy(session.email, `/search${qs}`, { method: "GET" });
+  const { upstream, error } = await chatServerProxy(session, `/search${qs}`, { method: "GET" });
   if (error) return error;
   const text = await upstream.text();
   return new NextResponse(text, {

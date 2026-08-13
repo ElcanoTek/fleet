@@ -1655,6 +1655,47 @@ button {
    worker-node "agents" counters were removed in #459; these four task counters
    are the live dashboard signal. Each card stays a clickable filter (applies the
    matching Recent Tasks filter) while matching the design handoff's card look. */
+/* Status row above the stat cards: right-aligned, quiet, and out of the stats
+   grid's column math (the grid is a fixed 4/6 columns — a clock card would
+   distort it, and a clock is not a stat anyway). */
+.dashboard-status-row {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  margin-bottom: 0.5rem;
+  min-height: 1.25rem;
+}
+.server-clock {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.78rem;
+  color: var(--color-text-muted);
+  cursor: default;
+}
+.server-clock-icon {
+  width: 0.9rem;
+  height: 0.9rem;
+  opacity: 0.8;
+}
+.server-clock-label {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 600;
+}
+.server-clock-time {
+  color: var(--color-text-secondary);
+  /* Tabular figures so the seconds ticking over cannot reflow the row. */
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+@media (max-width: 720px) {
+  /* The label is redundant next to a clock icon once space is tight. */
+  .server-clock-label {
+    display: none;
+  }
+}
+
 .stats-bar {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
@@ -2841,6 +2882,29 @@ tr.sla-row-fail {
   line-height: 1.45;
   color: var(--color-text-primary);
 }
+/* Titled tasks: the title is the identity line and the prompt drops to a
+   muted subtitle beneath it. Untitled tasks keep the prompt at full strength,
+   so nothing regresses while titles are being adopted. */
+.task-title-line {
+  display: block;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+.task-prompt-line {
+  display: block;
+  font-size: 0.8125rem;
+  color: var(--color-text-muted);
+}
+.task-card-title {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--color-text-primary);
+}
+.task-card-title + .task-card-prompt {
+  font-size: 0.8125rem;
+  color: var(--color-text-muted);
+}
 .task-card-meta {
   display: flex;
   flex-wrap: wrap;
@@ -3032,12 +3096,17 @@ tr.sla-row-fail {
   font-weight: 600;
   color: var(--color-text-primary);
 }
-.task-required-badge {
+.task-required-badge,
+.task-optional-badge {
   font-size: 0.66rem;
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--color-text-muted);
+}
+.task-optional-badge {
+  font-weight: 500;
+  opacity: 0.75;
 }
 .task-field-label {
   display: block;
@@ -3625,12 +3694,55 @@ tr.sla-row-fail {
   color: var(--color-text-primary);
   font-size: 0.875rem;
 }
-/* Prompt textarea: auto-grows via JS (3 → ~8 lines), no native resize grip. */
+/* Title: one line, sized like the prompt field so the two read as one block. */
+.task-modal .task-title-input {
+  width: 100%;
+  line-height: 1.55;
+}
+/* Prompt textarea. It auto-grows via JS (3 → ~9 lines), and because a task
+   prompt is often a long protocol that gets EDITED — not just typed once — the
+   operator can also take over its height two ways: drag the native grip, or hit
+   Expand for a tall editing pane. The auto-grow ceiling (PROMPT_AUTOGROW_MAX_PX)
+   stays modest so the fields below it remain reachable without scrolling; the
+   max-height here is the ceiling for a deliberate drag, which is much taller. */
 .task-modal .task-prompt-input {
   min-height: 4.875rem;
-  max-height: 15rem;
-  resize: none;
+  max-height: 70vh;
+  resize: vertical;
   line-height: 1.55;
+}
+/* Expanded: a fixed tall pane. JS clears the inline height it would otherwise
+   have set, so this rule is what applies. */
+.task-modal .task-prompt-input.is-expanded {
+  height: 60vh;
+}
+/* The Expand/Collapse toggle beside the Prompt label — same footprint and
+   states as the prompt-library trigger it sits next to. */
+.task-prompt-resize-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 1.95rem;
+  width: 1.95rem;
+  flex-shrink: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition:
+    color var(--transition-fast),
+    border-color var(--transition-fast),
+    background var(--transition-fast);
+}
+.task-prompt-resize-btn:hover {
+  color: var(--color-text-primary);
+  border-color: var(--color-border);
+  background: var(--color-overlay-soft);
+}
+.task-prompt-resize-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
 }
 .task-modal .task-doc-input {
   resize: none;
@@ -3922,6 +4034,12 @@ tr.sla-row-fail {
 .template-card-desc {
   font-size: 0.75rem;
   color: var(--color-text-muted);
+}
+.template-var-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 0.875rem;
 }
 
 /* ── Email results: a chip FIELD — chips + the add-input live inside one
@@ -4241,6 +4359,45 @@ select.mcp-server-picker__account-select {
   font-size: 0.7rem;
   color: var(--color-text-muted);
 }
+/* Restaurant-style cost glyphs ($ … $$$$) shared by both model pickers. The
+   filled glyphs warm from success-green (cheap) to danger-red (top tier); the
+   unfilled remainder stays a dim track so the tier reads as N-of-4. */
+/* In the task form's header row the name + badge lead and the cost trails,
+   matching the chat listbox's trailing-edge meta cluster. */
+.model-picker-header .model-cost {
+  margin-left: auto;
+}
+.model-cost {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: baseline;
+  gap: 0.03em;
+  font-size: 0.68rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  cursor: help;
+}
+.model-cost-filled {
+  color: var(--model-cost-color, var(--color-text-secondary));
+}
+.model-cost-rest {
+  color: var(--color-text-muted);
+  opacity: 0.45;
+}
+.model-cost-tier-1 {
+  --model-cost-color: var(--color-success);
+}
+.model-cost-tier-2 {
+  --model-cost-color: var(--color-text-secondary);
+}
+.model-cost-tier-3 {
+  --model-cost-color: var(--color-warning);
+}
+.model-cost-tier-4 {
+  --model-cost-color: var(--color-danger);
+}
 .model-picker-loading,
 .model-picker-empty {
   padding: 0.6rem 0.7rem;
@@ -4540,13 +4697,15 @@ select.mcp-server-picker__account-select {
 }
 
 /* Row/card edit affordance: a small pencil that opens the edit form without
-   triggering the row's open-logs click. */
+   triggering the row's open-logs click. The run-now bolt beside it shares the
+   shape and states — it kicks off a one-off run of the row's task. */
 .task-row-actions {
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
 }
-.task-edit-btn {
+.task-edit-btn,
+.task-run-now-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -4562,14 +4721,21 @@ select.mcp-server-picker__account-select {
     border-color var(--transition-fast),
     background var(--transition-fast);
 }
-.task-edit-btn:hover {
+.task-edit-btn:hover,
+.task-run-now-btn:hover {
   color: var(--color-text-primary);
   border-color: var(--color-border);
   background: var(--color-overlay-soft);
 }
-.task-edit-btn:focus-visible {
+.task-edit-btn:focus-visible,
+.task-run-now-btn:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
+}
+/* The bolt reads as the "go" action of the pair, so its hover picks up the
+   accent rather than the neutral text color the pencil settles on. */
+.task-run-now-btn:hover {
+  color: var(--color-accent);
 }
 
 /* Log viewer — moc-style task detail modal. The log modal is the ops

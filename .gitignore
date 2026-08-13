@@ -51,6 +51,13 @@ __pycache__/
 
 # Node / Next.js (fleet web)
 node_modules/
+# ...and as a plain path, so the SYMLINK form is ignored too. Developing in a
+# `git worktree` means a fresh tree has no web/node_modules until `npm ci`, and
+# the usual shortcut is to symlink it at the main checkout's copy. The trailing
+# slash above matches only a directory, so that symlink is a tracked-able file
+# — it reached `dev` once and broke the CodeQL run, which cannot stat a link
+# pointing outside the workspace.
+web/node_modules
 .next/
 *.tsbuildinfo
 web/test-results/

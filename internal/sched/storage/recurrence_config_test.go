@@ -31,6 +31,7 @@ func TestRecurringTaskCarriesFullConfigForward(t *testing.T) {
 	orig := &models.Task{
 		ID:            uuid.New(),
 		Name:          "daily-config-test",
+		Title:         "Daily config test",
 		Prompt:        "fetch prices every morning",
 		Model:         strPtr("anthropic/claude-sonnet-4-5"),
 		FallbackModel: strPtr("openai/gpt-5"),
@@ -98,6 +99,12 @@ func TestRecurringTaskCarriesFullConfigForward(t *testing.T) {
 	// names; carrying the name would collide with the completed row).
 	if next.Name != "" {
 		t.Errorf("next occurrence should be unnamed, got %q", next.Name)
+	}
+	// The TITLE, by contrast, must be carried: it is a non-unique display label,
+	// and a job whose title vanished after its first run would be exactly the
+	// "which one is this?" list the title exists to fix.
+	if next.Title != "Daily config test" {
+		t.Errorf("next occurrence title = %q, want it carried from the completed occurrence", next.Title)
 	}
 
 	// Every definition field must survive.

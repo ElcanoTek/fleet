@@ -62,6 +62,7 @@ beforeAll(async () => {
 afterEach(() => {
   delete process.env.AUTH_LOGIN_URL;
   delete process.env.AUTH_COOKIE_NAME;
+  delete process.env.NEXT_PUBLIC_PUBLIC_ORIGIN;
 });
 
 describe("verifyElcanoToken", () => {
@@ -107,7 +108,7 @@ describe("verifyElcanoToken", () => {
 
 describe("getSessionFromRequest (two-cookie resolution)", () => {
   it("returns a password session for a valid elcano_session (HMAC) cookie", async () => {
-    const token = await auth.createSessionToken("bob@x.com");
+    const token = await auth.createSessionToken("bob@x.com", "epoch-1");
     const session = await auth.getSessionFromRequest(reqWith({ [auth.getSessionCookieName()]: token }));
     expect(session).toMatchObject({ email: "bob@x.com", source: "password" });
   });
@@ -119,7 +120,7 @@ describe("getSessionFromRequest (two-cookie resolution)", () => {
   });
 
   it("prefers the HMAC password cookie when both are present", async () => {
-    const hmac = await auth.createSessionToken("bob@x.com");
+    const hmac = await auth.createSessionToken("bob@x.com", "epoch-1");
     const elcano = await makeToken(priv, { email: "carol@elcanotek.com", exp: future });
     const session = await auth.getSessionFromRequest(
       reqWith({ [auth.getSessionCookieName()]: hmac, [auth.getElcanoCookieName()]: elcano }),
@@ -143,6 +144,55 @@ describe("getSessionFromRequest (two-cookie resolution)", () => {
   });
 });
 
+// The session epoch is the per-user revocation generation chat-server compares
+// against the users table (internal/httpapi/auth.go#headerSessionEpoch). This
+// tier cannot check whether the claim is CURRENT — that needs the database — so
+// its job is narrower and load-bearing: carry the claim through, and refuse a
+// cookie that has none, because a claimless cookie is admitted by the Go gate.
+describe("session epoch claim", () => {
+  // mintHmac signs an arbitrary payload with the session secret, standing in for
+  // a cookie minted by a build that predates the epoch claim.
+  async function mintHmac(payload: object): Promise<string> {
+    const key = await crypto.subtle.importKey(
+      "raw",
+      enc.encode(SECRET),
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["sign"],
+    );
+    const body = toBase64Url(enc.encode(JSON.stringify(payload)));
+    const sig = new Uint8Array(await crypto.subtle.sign("HMAC", key, enc.encode(body)));
+    return `${body}.${toBase64Url(sig)}`;
+  }
+
+  it("round-trips the epoch a token was minted with", async () => {
+    const token = await auth.createSessionToken("dave@x.com", "abcdef0123456789");
+    expect(await auth.verifySessionToken(token)).toMatchObject({ epoch: "abcdef0123456789" });
+    const session = await auth.getSessionFromRequest(reqWith({ [auth.getSessionCookieName()]: token }));
+    expect(session).toMatchObject({ email: "dave@x.com", epoch: "abcdef0123456789" });
+  });
+
+  it("refuses a correctly-signed token that carries no epoch claim", async () => {
+    const legacy = await mintHmac({ email: "dave@x.com", exp: future });
+    expect(await auth.verifySessionToken(legacy)).toBeNull();
+    expect(
+      await auth.getSessionFromRequest(reqWith({ [auth.getSessionCookieName()]: legacy })),
+    ).toBeNull();
+  });
+
+  it("refuses an empty epoch claim", async () => {
+    const empty = await mintHmac({ email: "dave@x.com", exp: future, epoch: "" });
+    expect(await auth.verifySessionToken(empty)).toBeNull();
+  });
+
+  it("leaves elcano_auth sessions epoch-less — that cookie is the auth service's", async () => {
+    const token = await makeToken(priv, { email: "carol@elcanotek.com", exp: future });
+    const session = await auth.getSessionFromRequest(reqWith({ [auth.getElcanoCookieName()]: token }));
+    expect(session?.source).toBe("elcano");
+    expect(session?.epoch).toBeUndefined();
+  });
+});
+
 describe("auth-service URL + cookie config", () => {
   it("defaults the login URL and strips trailing slashes", () => {
     expect(auth.getAuthLoginUrl()).toBe("https://auth.elcanotek.com");
@@ -159,5 +209,64 @@ describe("auth-service URL + cookie config", () => {
   it("builds a login URL with an encoded return_to", () => {
     const url = auth.buildElcanoLoginUrl("https://chat.elcanotek.com/");
     expect(url).toBe("https://auth.elcanotek.com/?return_to=https%3A%2F%2Fchat.elcanotek.com%2F");
+  });
+});
+
+// x-forwarded-* is client-supplied unless a proxy overwrites it, so a request
+// that reaches `next start` directly (bypassing Caddy) can claim any host and
+// protocol. When the deployment's canonical origin is configured
+// (NEXT_PUBLIC_PUBLIC_ORIGIN — bootstrap writes it for every deploy), redirect
+// targets and the Secure-cookie decision must come from it, not the headers.
+// Without it (local dev over plain http) the header fallback still applies.
+describe("getRedirectUrl / isSecureRequest — canonical origin vs forwarded headers", () => {
+  // reqTo builds a minimal stand-in exposing the two surfaces these helpers
+  // read: the header map and nextUrl.
+  function reqTo(url: string, headers: Record<string, string> = {}): NextRequest {
+    return { headers: new Headers(headers), nextUrl: new URL(url) } as unknown as NextRequest;
+  }
+
+  it("ignores x-forwarded-host/proto when the canonical origin is configured", () => {
+    process.env.NEXT_PUBLIC_PUBLIC_ORIGIN = "https://fleet.example.com";
+    const request = reqTo("http://127.0.0.1:3000/chat", {
+      "x-forwarded-host": "evil.example.com",
+      "x-forwarded-proto": "http",
+    });
+    expect(auth.getRedirectUrl(request, "/login").toString()).toBe(
+      "https://fleet.example.com/login",
+    );
+    expect(auth.isSecureRequest(request)).toBe(true);
+  });
+
+  it("reports insecure for a configured plain-http origin (loopback deploys)", () => {
+    process.env.NEXT_PUBLIC_PUBLIC_ORIGIN = "http://localhost:3000";
+    const request = reqTo("http://localhost:3000/chat", { "x-forwarded-proto": "https" });
+    expect(auth.getRedirectUrl(request, "/login").toString()).toBe("http://localhost:3000/login");
+    expect(auth.isSecureRequest(request)).toBe(false);
+  });
+
+  it("falls back to forwarded headers when no origin is configured", () => {
+    delete process.env.NEXT_PUBLIC_PUBLIC_ORIGIN;
+    const request = reqTo("http://127.0.0.1:3000/chat", {
+      "x-forwarded-host": "chat.example.com",
+      "x-forwarded-proto": "https",
+    });
+    expect(auth.getRedirectUrl(request, "/login").toString()).toBe(
+      "https://chat.example.com/login",
+    );
+    expect(auth.isSecureRequest(request)).toBe(true);
+  });
+
+  it("falls back to the request URL when neither origin nor headers are present", () => {
+    delete process.env.NEXT_PUBLIC_PUBLIC_ORIGIN;
+    const request = reqTo("http://localhost:3000/chat");
+    expect(auth.getRedirectUrl(request, "/login").toString()).toBe("http://localhost:3000/login");
+    expect(auth.isSecureRequest(request)).toBe(false);
+  });
+
+  it("treats an unparseable configured origin as unset", () => {
+    process.env.NEXT_PUBLIC_PUBLIC_ORIGIN = "not a url";
+    const request = reqTo("http://localhost:3000/chat", { "x-forwarded-proto": "https" });
+    expect(auth.getRedirectUrl(request, "/login").toString()).toBe("https://localhost:3000/login");
+    expect(auth.isSecureRequest(request)).toBe(true);
   });
 });

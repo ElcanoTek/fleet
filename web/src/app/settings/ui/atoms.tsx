@@ -44,7 +44,8 @@ export function btnClass({
       : "border-transparent";
   let color: string;
   if (variant === "primary") {
-    color = "bg-[var(--color-primary)] text-[var(--color-on-primary)] hover:bg-[var(--color-primary-hover)]";
+    color =
+      "bg-[var(--color-primary)] text-[var(--color-on-primary)] hover:bg-[var(--color-primary-hover)]";
   } else if (armed) {
     color =
       "bg-[color-mix(in_srgb,var(--color-danger)_12%,transparent)] text-[var(--color-danger)]";
@@ -111,7 +112,8 @@ export function ConnBadge({
   children: ReactNode;
 }) {
   const variantClass = {
-    neutral: "border-[var(--color-border-strong)] text-[var(--color-text-muted)]",
+    neutral:
+      "border-[var(--color-border-strong)] text-[var(--color-text-muted)]",
     success: "border-[var(--color-success-border)] text-[var(--color-success)]",
     warn: "border-[color-mix(in_srgb,var(--color-warning)_50%,transparent)] text-[var(--color-warning)]",
     overridden:
@@ -145,7 +147,9 @@ export function SetRow({
   return (
     <div className="flex items-center gap-8 border-b border-[var(--color-border-subtle)] py-4 last:border-b-0 max-[640px]:flex-col max-[640px]:items-start max-[640px]:gap-[0.7rem]">
       <div className="grid min-w-0 flex-1 gap-[0.3rem]">
-        <span className="text-[0.9rem] font-semibold text-[var(--color-text-primary)]">{label}</span>
+        <span className="text-[0.9rem] font-semibold text-[var(--color-text-primary)]">
+          {label}
+        </span>
         {desc ? (
           <span className="max-w-[32rem] text-[0.78rem] leading-[1.5] text-[var(--color-text-muted)]">
             {desc}
@@ -211,18 +215,25 @@ export function Segmented<T extends string>({
   onChange,
   label,
   disabled,
+  dividers,
 }: {
   value: T;
   options: readonly { value: T; label: string }[];
   onChange: (next: T) => void;
   label: string;
   disabled?: boolean;
+  /** Hairline separators between segments — for controls with 3+ textual
+   *  options where the boundaries otherwise blur together. */
+  dividers?: boolean;
 }) {
   return (
     <span
       role="group"
       aria-label={label}
-      className="inline-flex shrink-0 overflow-hidden rounded-[var(--radius-pill)] border border-[var(--color-border)]"
+      className={[
+        "inline-flex shrink-0 overflow-hidden rounded-[var(--radius-pill)] border border-[var(--color-border)]",
+        dividers ? "divide-x divide-[var(--color-border-subtle)]" : "",
+      ].join(" ")}
     >
       {options.map((o) => (
         <button
@@ -262,14 +273,21 @@ export function ActStatus({
     err: "text-[var(--color-danger)]",
   }[state];
   return (
-    <span role="status" className={["text-[0.74rem]", color, className ?? ""].join(" ")}>
+    <span
+      role="status"
+      className={["text-[0.74rem]", color, className ?? ""].join(" ")}
+    >
       {children}
     </span>
   );
 }
 
 export function ActNote({ children }: { children: ReactNode }) {
-  return <span className="text-[0.72rem] text-[var(--color-text-muted)]">{children}</span>;
+  return (
+    <span className="text-[0.72rem] text-[var(--color-text-muted)]">
+      {children}
+    </span>
+  );
 }
 
 /* ── Two-click inline-confirmed danger button ── */

@@ -126,6 +126,7 @@ func Run(ctx context.Context, opts Options) *Report {
 	for _, c := range checkUnits(ctx, serviceName(opts.ServiceName)) {
 		add(c)
 	}
+	add(checkBackups(ctx))
 
 	for _, c := range r.Checks {
 		switch c.Status {
@@ -372,6 +373,84 @@ func checkUnits(ctx context.Context, service string) []Check {
 		out = append(out, c)
 	}
 	return out
+}
+
+// The scheduled-backup pair shipped in deploy/ and installed by
+// scripts/bootstrap.sh --enable-service. Fixed names (unlike the fleet unit,
+// which FLEET_SERVICE_NAME can rename) because bootstrap installs exactly these.
+const (
+	backupTimerUnit   = "fleet-backup.timer"
+	backupServiceUnit = "fleet-backup.service"
+)
+
+// checkBackups reports whether this box takes scheduled database dumps. It
+// probes the same units scripts/doctor.sh does, and reaches the same verdicts.
+func checkBackups(ctx context.Context) Check {
+	if _, err := exec.LookPath("systemctl"); err != nil {
+		return Check{Name: "scheduled backups", Status: StatusSkip, Detail: "systemctl not on PATH (no systemd)"}
+	}
+	sctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	// Both halves must be present: a timer whose service unit is missing fires
+	// into nothing, and reporting that as "backups are configured" would be the
+	// same false comfort this check exists to remove.
+	installed := exec.CommandContext(sctx, "systemctl", "cat", backupTimerUnit).Run() == nil &&
+		exec.CommandContext(sctx, "systemctl", "cat", backupServiceUnit).Run() == nil
+	enabled := false
+	if installed {
+		enabled = exec.CommandContext(sctx, "systemctl", "is-enabled", "--quiet", backupTimerUnit).Run() == nil
+	}
+	// is-enabled only reads the install symlink, so an enabled timer that is not
+	// RUNNING still has to be probed separately — see backupVerdict.
+	active := false
+	if enabled {
+		active = exec.CommandContext(sctx, "systemctl", "is-active", "--quiet", backupTimerUnit).Run() == nil
+	}
+	lastResult := ""
+	if active {
+		out, _ := exec.CommandContext(sctx, "systemctl", "show", "-p", "Result", "--value", backupServiceUnit).Output()
+		lastResult = strings.TrimSpace(string(out))
+	}
+	return backupVerdict(installed, enabled, active, lastResult)
+}
+
+// backupVerdict maps the probed timer state onto a verdict; split out so the
+// matrix is testable on a host without systemd.
+//
+// A MISSING timer is an advisory, never a failure: a same-host pg_dump protects
+// against logical loss, but an operator who snapshots the volume or the
+// hypervisor has a stronger answer and is not misconfigured. An ENABLED BUT
+// INACTIVE timer never fires either, and its service's Result stays "success",
+// so it would otherwise read as a clean box. A timer whose LAST RUN FAILED is a
+// genuine fault — the oneshot exits non-zero when a dump fails its integrity
+// check, and a timer that has been failing for a week is worse than no timer,
+// because the box looks covered.
+func backupVerdict(installed, enabled, active bool, lastResult string) Check {
+	c := Check{Name: "scheduled backups"}
+	switch {
+	case !installed:
+		c.Status = StatusWarn
+		c.Detail = "no " + backupTimerUnit + " + " + backupServiceUnit + " pair installed — nothing on this box dumps the databases"
+		// Installing just this pair, not a re-bootstrap: on a provisioned box
+		// bootstrap also rebuilds binaries and re-provisions Postgres.
+		c.Fix = "run on the box, from the fleet checkout: sudo install -m 0644 -t /etc/systemd/system deploy/fleet-backup.{service,timer} && sudo systemctl daemon-reload && sudo systemctl enable --now " + backupTimerUnit + " (skip if you back up at the volume/hypervisor layer)"
+	case !enabled:
+		c.Status = StatusWarn
+		c.Detail = backupTimerUnit + " installed but not enabled — it will never fire"
+		c.Fix = "run on the box: sudo systemctl enable --now " + backupTimerUnit
+	case !active:
+		c.Status = StatusWarn
+		c.Detail = backupTimerUnit + " is enabled but not active — it will not fire until it is started"
+		c.Fix = "run on the box: sudo systemctl start " + backupTimerUnit
+	case lastResult != "" && lastResult != "success":
+		c.Status = StatusFail
+		c.Detail = fmt.Sprintf("%s last run failed (Result=%s) — no dump is being written", backupServiceUnit, lastResult)
+		c.Fix = "run on the box: journalctl -u fleet-backup -n 50 (then retry: sudo systemctl start " + backupServiceUnit + ")"
+	default:
+		c.Status = StatusOK
+		c.Detail = backupTimerUnit + " enabled and active, no failed run recorded"
+	}
+	return c
 }
 
 // ── small helpers ───────────────────────────────────────────────────────────

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -14,6 +15,9 @@ import (
 type fakeOpsAdmins struct {
 	ensured, removed []string
 	admins           []string
+	// roles: explicit per-email sched-plane roles set via SetRole; admins
+	// listed above are reported as role "admin" alongside.
+	roles map[string]string
 }
 
 func (f *fakeOpsAdmins) Ensure(_ context.Context, email string) error {
@@ -36,6 +40,33 @@ func (f *fakeOpsAdmins) Remove(_ context.Context, email string) error {
 
 func (f *fakeOpsAdmins) List(context.Context) ([]string, error) {
 	return append([]string(nil), f.admins...), nil
+}
+
+func (f *fakeOpsAdmins) SetRole(_ context.Context, email, role string) error {
+	if f.roles == nil {
+		f.roles = map[string]string{}
+	}
+	key := strings.ToLower(email)
+	if role == "" || role == "none" {
+		delete(f.roles, key)
+		return f.Remove(context.Background(), email)
+	}
+	f.roles[key] = role
+	if role == "admin" {
+		f.admins = append(f.admins, email)
+	}
+	return nil
+}
+
+func (f *fakeOpsAdmins) Roles(context.Context) (map[string]string, error) {
+	out := map[string]string{}
+	for _, a := range f.admins {
+		out[strings.ToLower(a)] = "admin"
+	}
+	for k, v := range f.roles {
+		out[k] = v
+	}
+	return out, nil
 }
 
 // TestAdminUserLifecycle drives the full UI user-management surface end to
@@ -175,5 +206,66 @@ func TestAdminUserEndpointsRequireAdmin(t *testing.T) {
 		if w.Code != http.StatusForbidden {
 			t.Errorf("%s %s as member: status %d want 403", tc.method, tc.path, w.Code)
 		}
+	}
+}
+
+// TestAdminUserOpsRole locks in the split-permission semantics: ops_role
+// grants client/readonly without touching the chat role; chat demote drops an
+// implied ops-admin row but leaves an explicit client grant standing.
+func TestAdminUserOpsRole(t *testing.T) {
+	s := memberFixture(t, "boss@x.com")
+	setRole(t, s, "boss@x.com", "admin", "")
+	ops := &fakeOpsAdmins{}
+	WithOpsAdmins(ops)(s)
+	h := s.Routes()
+
+	decode := func(w *httptest.ResponseRecorder) adminUser {
+		t.Helper()
+		var u adminUser
+		if err := json.Unmarshal(w.Body.Bytes(), &u); err != nil {
+			t.Fatalf("decode: %v (body %s)", err, w.Body.String())
+		}
+		return u
+	}
+
+	w := do(t, h, http.MethodPost, "/admin/users",
+		map[string]any{"email": "op@x.com", "password": "op-pw-12345"}, "boss@x.com")
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create: status %d (body %s)", w.Code, w.Body.String())
+	}
+
+	// grant ops client without touching the chat role
+	w = do(t, h, http.MethodPatch, "/admin/users/op@x.com",
+		map[string]any{"ops_role": "client"}, "boss@x.com")
+	got := decode(w)
+	if got.Role != "member" || got.OpsCenterRole != "client" || got.OpsCenterAdmin {
+		t.Fatalf("ops client grant: %+v", got)
+	}
+
+	// invalid ops_role rejected
+	w = do(t, h, http.MethodPatch, "/admin/users/op@x.com",
+		map[string]any{"ops_role": "supreme"}, "boss@x.com")
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("invalid ops_role: status %d", w.Code)
+	}
+
+	// chat promote → implied ops admin; chat demote → implied row dropped
+	do(t, h, http.MethodPatch, "/admin/users/op@x.com", map[string]any{"role": "admin"}, "boss@x.com")
+	w = do(t, h, http.MethodPatch, "/admin/users/op@x.com", map[string]any{"role": "member"}, "boss@x.com")
+	if got = decode(w); got.OpsCenterRole == "admin" {
+		t.Fatalf("chat demote left ops admin standing: %+v", got)
+	}
+
+	// explicit client grant survives a later chat-role change
+	do(t, h, http.MethodPatch, "/admin/users/op@x.com", map[string]any{"ops_role": "client"}, "boss@x.com")
+	w = do(t, h, http.MethodPatch, "/admin/users/op@x.com", map[string]any{"role": "viewer"}, "boss@x.com")
+	if got = decode(w); got.OpsCenterRole != "client" {
+		t.Fatalf("chat role change stomped explicit ops grant: %+v", got)
+	}
+
+	// none revokes
+	w = do(t, h, http.MethodPatch, "/admin/users/op@x.com", map[string]any{"ops_role": "none"}, "boss@x.com")
+	if got = decode(w); got.OpsCenterRole != "" {
+		t.Fatalf("ops_role none did not revoke: %+v", got)
 	}
 }

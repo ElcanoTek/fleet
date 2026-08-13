@@ -14,9 +14,10 @@
 #       --tmpfs=/tmp:rw,size=128m \
 #       --tmpfs=/home/sandbox/.ipython:rw,size=32m \
 #       --tmpfs=/home/sandbox/.cache:rw,size=32m \
-#       --storage-opt=size=5g \           # writable-layer disk quota (#216);
-#                                         # falls back to --ulimit=fsize=5368709120
-#                                         # on drivers without project-quota support
+#       --ulimit=fsize=5368709120 \       # per-file disk quota (#216) — the only
+#                                         # one that reaches the workspace bind mount
+#       --storage-opt=size=5g \           # writable-LAYER quota, added on top on
+#                                         # drivers with project-quota support
 #       --volume=/path/to/workspace:/workspace:rw,Z \
 #       localhost/fleet-sandbox:latest
 #
@@ -65,6 +66,7 @@ RUN microdnf upgrade -y \
         bash \
         ca-certificates \
         coreutils \
+        file \
         findutils \
         git \
         grep \
@@ -95,6 +97,7 @@ RUN microdnf upgrade -y \
         python3-xlsxwriter \
         ripgrep \
         sed \
+        which \
         shadow-utils \
     && microdnf clean all \
     && rm -rf /var/cache/dnf /var/cache/yum /var/log/dnf* /var/log/yum* /usr/share/locale/* /usr/share/man \
