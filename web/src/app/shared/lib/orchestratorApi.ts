@@ -653,7 +653,16 @@ export const orchestratorApi = {
       feed(decoder.decode(value, { stream: true }));
     }
   },
-  config: () => request<{ version?: string; timezone?: string }>("/config"),
+  // server_time is the orchestrator's own clock, formatted in ITS location so
+  // the offset rides along; default_task_timezone is the zone a cron recurrence
+  // fires in when a task names none (distinct from `timezone`, the server clock).
+  config: () =>
+    request<{
+      version?: string;
+      timezone?: string;
+      server_time?: string;
+      default_task_timezone?: string;
+    }>("/config"),
   me: () => request<{ authenticated: boolean; username?: string; role?: string }>("/me"),
 
   // SLA report (#274): admin-only per-task actual-duration p50/p95 + breach

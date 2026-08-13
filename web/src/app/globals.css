@@ -1655,6 +1655,47 @@ button {
    worker-node "agents" counters were removed in #459; these four task counters
    are the live dashboard signal. Each card stays a clickable filter (applies the
    matching Recent Tasks filter) while matching the design handoff's card look. */
+/* Status row above the stat cards: right-aligned, quiet, and out of the stats
+   grid's column math (the grid is a fixed 4/6 columns — a clock card would
+   distort it, and a clock is not a stat anyway). */
+.dashboard-status-row {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  margin-bottom: 0.5rem;
+  min-height: 1.25rem;
+}
+.server-clock {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.78rem;
+  color: var(--color-text-muted);
+  cursor: default;
+}
+.server-clock-icon {
+  width: 0.9rem;
+  height: 0.9rem;
+  opacity: 0.8;
+}
+.server-clock-label {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 600;
+}
+.server-clock-time {
+  color: var(--color-text-secondary);
+  /* Tabular figures so the seconds ticking over cannot reflow the row. */
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+@media (max-width: 720px) {
+  /* The label is redundant next to a clock icon once space is tight. */
+  .server-clock-label {
+    display: none;
+  }
+}
+
 .stats-bar {
   display: grid;
   grid-template-columns: repeat(4, 1fr);

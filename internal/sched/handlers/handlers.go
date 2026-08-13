@@ -2611,11 +2611,28 @@ func (h *Handlers) GetCurrentUser(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// GetDashboardConfig handles GET /api/config
+// GetDashboardConfig handles GET /api/config.
+//
+// server_time is the orchestrator's own clock, formatted in ITS configured
+// location so the offset travels with it. The dashboard clock needs it for two
+// reasons the timezone name alone cannot cover: an operator's browser clock may
+// be wrong (rendering "now" locally would then display a confident lie), and a
+// deployment may be configured with a zone the browser's ICU data does not
+// know, in which case the embedded offset is still enough to render the time.
+// A client computes its skew once from this and ticks locally.
 func (h *Handlers) GetDashboardConfig(w http.ResponseWriter, _ *http.Request) {
+	loc := h.storage.Location()
+	if loc == nil {
+		loc = time.UTC
+	}
 	config := map[string]interface{}{
-		"version":  h.config.Version,
-		"timezone": h.config.Timezone,
+		"version":     h.config.Version,
+		"timezone":    h.config.Timezone,
+		"server_time": time.Now().In(loc).Format(time.RFC3339),
+		// The zone a scheduled task lands in when its create request names none
+		// — distinct from the server clock above, and the one that actually
+		// decides when "0 9 * * *" fires.
+		"default_task_timezone": h.defaultTaskTimezone(),
 	}
 
 	writeJSON(w, http.StatusOK, config)

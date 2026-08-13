@@ -15,6 +15,7 @@ import { PageTopBar } from "@/app/shared/ui/PageTopBar";
 import { Icon } from "@/app/shared/ui/Icon";
 import { OrchestratorLogin } from "./OrchestratorLogin";
 import { StatsGrid, type StatFilter } from "./StatsGrid";
+import { ServerClock } from "./ServerClock";
 import { TasksTable } from "./TasksTable";
 import { TaskCreateModal } from "./TaskCreateModal";
 import { LogViewer } from "./LogViewer";
@@ -289,6 +290,9 @@ function OrchestratorInner({ magicLinkLoginEnabled }: { magicLinkLoginEnabled: b
         <div className="min-h-0 flex-1 overflow-y-auto">
           <div className="container">
             <div className="dashboard-content visible" data-testid="orchestrator-dashboard">
+              <div className="dashboard-status-row">
+                <ServerClock />
+              </div>
               <StatsGrid stats={dashboard.stats} activeFilter={statFilter} onFilter={applyStatFilter} />
 
               <div
