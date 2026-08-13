@@ -17,6 +17,34 @@ prior versions are listed because none have shipped.
 
 ## [Unreleased]
 
+### Security
+
+- **Cleared the three high-severity npm advisories and all seven govulncheck
+  findings.** `npm audit` in `web/` reported 3 high-severity vulnerabilities and
+  the Go CVE gate reported 7 reachable standard-library vulnerabilities; both
+  now report clean. On the web side: `undici` 7.28.0 → 7.29.0 (five advisories —
+  response desynchronization via the retry interceptor, cross-user disclosure
+  and a parse-time crash via degenerate private cache directives, CRLF injection
+  via a blob-like body `type`, cross-user disclosure via whitespace around `=`
+  in `Cache-Control`, and cookie attribute injection via unsanitized `domain`),
+  `nanoid` 3.3.16 → 3.3.18 (`GHSA-2v37-7h3g-55p8`, a custom generator can loop
+  forever at size zero — pulled up by bumping its parent `postcss` 8.5.25 →
+  8.5.26, since `npm audit fix` alone would not reach a transitive two levels
+  down), and `js-yaml` 4.3.0 → 4.3.1 (`GHSA-5p4m-2wfm-xmqj`, quadratic CPU in
+  `!!omap` resolution), which arrives on dev by merging main. All three are
+  lockfile-only: no `package.json` range moved.
+- **Bumped the pinned Go toolchain 1.26.5 → 1.26.6**, which is what actually
+  fixes the seven standard-library CVEs govulncheck found reachable from fleet's
+  own call graph — `GO-2026-6218` (`net/url`), `GO-2026-6091` (`html/template`),
+  `GO-2026-6090` (`crypto/tls`), `GO-2026-6089` and `GO-2026-5026` (`net/http`),
+  `GO-2026-6088` (`encoding/xml`), and `GO-2026-5972` (`encoding/asn1`). The pin
+  is bumped in every place it is written down so the gate and a local run agree:
+  `go.mod`, `web/go.mod`, the `run.go` target in `.golangci.yml`, the four
+  workflows that name a `go-version` explicitly (`ci.yml`, `benchmark.yml`,
+  `e2e-canary.yml`, `screenshots.yml` — `dev-ci.yml` reads `go.mod`), and the
+  two docs that quote the version (`ONBOARDING.md`, `docs/TESTING.md`). No fleet
+  source changed; this is a toolchain bump, not a language-version migration.
+
 ### Added
 
 - **A server clock on the Operations Center dashboard**, beside the agent-status

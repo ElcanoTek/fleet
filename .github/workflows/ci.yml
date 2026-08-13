@@ -168,7 +168,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
-          go-version: '1.26.5'
+          go-version: '1.26.6'
           check-latest: true
 
       - name: Install postgresql-client-18 (so pg_dump matches the server major)
@@ -233,7 +233,7 @@ jobs:
         uses: golangci/golangci-lint-action@v9
         with:
           # Repo .golangci.yml is the v2 schema (version: "2") and pins
-          # run.go: "1.26.5". Pin the binary to the SAME version the repo config
+          # run.go: "1.26.6". Pin the binary to the SAME version the repo config
           # is tuned against (see the header note in .golangci.yml) so CI and a
           # local `golangci-lint run` agree and the full gate never flaps on a
           # version bump.
@@ -434,7 +434,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
-          go-version: '1.26.5'
+          go-version: '1.26.6'
           check-latest: true
 
       - name: Set up Node
