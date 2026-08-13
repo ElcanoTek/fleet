@@ -64,6 +64,20 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **`fleet-upgrade.sh` and `update.sh` no longer abort two steps in when
+  systemd is not reachable.** Both resolve `INSTALL_DIR` by probing the unit's
+  `ExecStart` with `systemctl show … | sed … | head -n1`, and both run under
+  `set -euo pipefail` — so the pipeline's non-zero exit killed the script
+  outright instead of falling through to the `/opt/fleet` default that exists
+  for exactly this case. The `command -v systemctl` guard did not help: the
+  failing condition is not a *missing* `systemctl` but an unreachable systemd,
+  which is every container carrying the binary without systemd as PID 1 (and
+  `head -n1` can SIGPIPE the probe even where systemd is running). Both call
+  sites now end in `|| true`, since the probe is best-effort and the fallback
+  already covers "no path found". This was visible as
+  `TestFleetUpgradeDryRunSmoke` failing on any container-based dev box while
+  passing in CI, where the runners do have systemd — the test now passes in
+  both.
 - **The task prompt field is adjustable, and no longer opens a long prompt into
   a three-row box.** Editing an existing task showed its prompt through a ~78px
   window: auto-grow only ever ran from the textarea's `onChange`, and a prefill
