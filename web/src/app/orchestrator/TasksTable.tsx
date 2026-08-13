@@ -19,6 +19,15 @@ const EDITABLE_STATUSES = new Set([
   "dead_lettered",
 ]);
 
+// Statuses whose tasks can be kicked off on demand ("Run now"): a copy of the
+// task runs immediately and the source's schedule is left alone. Deliberately
+// the same set as EDITABLE_STATUSES — a task that is already in flight
+// (assigned/leased/running/analyzing) is excluded, because a second concurrent
+// copy of a running job is a footgun, not a feature. A scheduled/pending task
+// IS included: waiting a day for the next cron tick to see whether a new job
+// works was the gap this closes.
+const RUNNABLE_STATUSES = EDITABLE_STATUSES;
+
 // TasksTable — the Recent Tasks table + filter bar + pagination. React port of
 // moc dashboard.js renderTasks()/buildTaskQueryString()/pagination controls.
 // Clicking a row opens the log viewer (parent's onOpenLogs).
@@ -34,6 +43,9 @@ export type TasksTableProps = {
   onPageSize: (size: number) => void;
   onOpenLogs: (task: Task) => void;
   onEdit?: (task: Task) => void;
+  // Kick this task off now. The parent owns the confirm + API call so the
+  // table stays presentational (same contract as onEdit/onOpenLogs).
+  onRunNow?: (task: Task) => void;
 };
 
 const STATUS_OPTIONS = [
@@ -59,6 +71,7 @@ export function TasksTable({
   onPageSize,
   onOpenLogs,
   onEdit,
+  onRunNow,
 }: TasksTableProps) {
   // Debounce ONLY the search box. The status/createdBy selects, the
   // scheduledOnly checkbox, and the stat-card quick filters all call onFilters
@@ -225,6 +238,21 @@ export function TasksTable({
                         <span className={`logs-badge ${hasLogs ? "" : "no-logs"}`}>
                           {hasLogs ? "View" : "None"}
                         </span>
+                        {onRunNow && RUNNABLE_STATUSES.has(task.status ?? "") ? (
+                          <button
+                            type="button"
+                            className="icon-action task-run-now-btn"
+                            aria-label={`Run task ${task.id.slice(0, 8)} now`}
+                            title="Run now"
+                            data-testid="task-run-now-button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onRunNow(task);
+                            }}
+                          >
+                            <Icon name="zap" className="size-3.5" />
+                          </button>
+                        ) : null}
                         {onEdit && EDITABLE_STATUSES.has(task.status ?? "") ? (
                           <button
                             type="button"
@@ -296,6 +324,29 @@ export function TasksTable({
                     <span className={`logs-badge ${hasLogs ? "" : "no-logs"}`}>
                       {hasLogs ? "View logs" : "No logs"}
                     </span>
+                    {onRunNow && RUNNABLE_STATUSES.has(task.status ?? "") ? (
+                      <span
+                        role="button"
+                        tabIndex={0}
+                        className="icon-action task-run-now-btn"
+                        aria-label={`Run task ${task.id.slice(0, 8)} now`}
+                        title="Run now"
+                        data-testid="task-run-now-button-card"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onRunNow(task);
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            onRunNow(task);
+                          }
+                        }}
+                      >
+                        <Icon name="zap" className="size-3.5" />
+                      </span>
+                    ) : null}
                     {onEdit && EDITABLE_STATUSES.has(task.status ?? "") ? (
                       <span
                         role="button"

@@ -104,9 +104,15 @@ export function LogViewer({ task, onClose, canStop, onResubmitted, onEdit, onSel
   );
 }
 
-// Terminal statuses that make sense to resubmit as a fresh one-off run. A
-// pending/scheduled task will run on its own; a running one already is.
+// Terminal statuses that make sense to resubmit as a fresh one-off run.
 const RESUBMITTABLE = new Set(["success", "error", "cancelled", "dead_lettered"]);
+
+// Statuses that can be kicked off on demand: the terminal ones (resubmit) plus
+// the not-yet-run ones (run now). A pending/scheduled task does run on its own
+// eventually — but "eventually" is the next cron tick, which is why a freshly
+// created daily job could not be exercised until the following day. Only an
+// in-flight task is excluded; it is already running.
+const RUNNABLE = new Set([...RESUBMITTABLE, "pending", "scheduled"]);
 
 // TaskSummary mirrors the Recent Tasks row the user clicked (ID / Status /
 // SLA / Schedule / Created By / Created) so the modal carries the row's
@@ -803,19 +809,29 @@ function LogViewerBody({
       return next;
     });
 
+  // hasRun distinguishes the two shapes of the same action: a finished task is
+  // RESUBMITTED, a not-yet-run one is kicked off NOW. Both post the same
+  // one-off copy and leave the source (and its schedule) untouched; only the
+  // wording differs, because "Resubmit" on a job that has never run reads as
+  // though something went wrong.
+  const hasRun = RESUBMITTABLE.has(task.status ?? "");
+  const actionLabel = hasRun ? "Resubmit" : "Run now";
+
   const resubmit = async () => {
     if (resubmitting) return;
     setResubmitting(true);
     try {
       const created = await orchestratorApi.rerunTask(task.id);
       showToast(
-        `Resubmitted as task ${created.id.slice(0, 8)}… — running now`,
+        hasRun
+          ? `Resubmitted as task ${created.id.slice(0, 8)}… — running now`
+          : `Started run ${created.id.slice(0, 8)}… — the task keeps its schedule`,
         "success",
       );
       onResubmitted?.();
     } catch (err) {
       showToast(
-        `Resubmit failed: ${err instanceof Error ? err.message : "unknown error"}`,
+        `${actionLabel} failed: ${err instanceof Error ? err.message : "unknown error"}`,
         "error",
       );
     } finally {
@@ -840,7 +856,7 @@ function LogViewerBody({
     URL.revokeObjectURL(url);
   };
 
-  const canResubmit = RESUBMITTABLE.has(task.status ?? "");
+  const canResubmit = RUNNABLE.has(task.status ?? "");
   const [historyOpen, setHistoryOpen] = useState(false);
 
   // "Discuss this run" (docs/DISCUSS-RUN.md): the BFF fetches this run's
@@ -918,7 +934,7 @@ function LogViewerBody({
                   ))}
                 </select>
               ) : null}
-              {onEdit && ["pending", "scheduled", ...RESUBMITTABLE].includes(task.status ?? "") ? (
+              {onEdit && RUNNABLE.has(task.status ?? "") ? (
                 <button
                   type="button"
                   className="btn btn-secondary"
@@ -936,7 +952,7 @@ function LogViewerBody({
                   disabled={resubmitting}
                   onClick={() => void resubmit()}
                 >
-                  {resubmitting ? "Resubmitting…" : "Resubmit"}
+                  {resubmitting ? (hasRun ? "Resubmitting…" : "Starting…") : actionLabel}
                 </button>
               ) : null}
               <button

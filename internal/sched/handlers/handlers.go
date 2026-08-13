@@ -2066,6 +2066,12 @@ func (h *Handlers) rerunOrClone(w http.ResponseWriter, r *http.Request, keepRecu
 // path around the condition the gate exists to enforce.
 func buildRerunTaskCreate(source *models.Task, keepRecurrence bool, o taskRerunOverrides, fallbackLoc *time.Location) (models.TaskCreate, error) {
 	tc := models.TaskToCreate(source)
+	// A copy is never the named DEFINITION. Name is the import/export identity
+	// key and carries a partial unique index on non-empty names, so inheriting
+	// the source's name collides with the source row still in the table and the
+	// insert fails (a 500 on every re-run of a named task). Storage's recurrence
+	// chain clears Name for exactly this reason; the copy paths must match.
+	tc.Name = ""
 	if keepRecurrence && strings.TrimSpace(tc.Recurrence) != "" {
 		schedule, perr := cron.ParseStandard(tc.Recurrence)
 		if perr != nil {

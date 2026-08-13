@@ -4585,13 +4585,15 @@ select.mcp-server-picker__account-select {
 }
 
 /* Row/card edit affordance: a small pencil that opens the edit form without
-   triggering the row's open-logs click. */
+   triggering the row's open-logs click. The run-now bolt beside it shares the
+   shape and states — it kicks off a one-off run of the row's task. */
 .task-row-actions {
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
 }
-.task-edit-btn {
+.task-edit-btn,
+.task-run-now-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -4607,14 +4609,21 @@ select.mcp-server-picker__account-select {
     border-color var(--transition-fast),
     background var(--transition-fast);
 }
-.task-edit-btn:hover {
+.task-edit-btn:hover,
+.task-run-now-btn:hover {
   color: var(--color-text-primary);
   border-color: var(--color-border);
   background: var(--color-overlay-soft);
 }
-.task-edit-btn:focus-visible {
+.task-edit-btn:focus-visible,
+.task-run-now-btn:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
+}
+/* The bolt reads as the "go" action of the pair, so its hover picks up the
+   accent rather than the neutral text color the pencil settles on. */
+.task-run-now-btn:hover {
+  color: var(--color-accent);
 }
 
 /* Log viewer — moc-style task detail modal. The log modal is the ops
