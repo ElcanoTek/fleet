@@ -3658,12 +3658,50 @@ tr.sla-row-fail {
   width: 100%;
   line-height: 1.55;
 }
-/* Prompt textarea: auto-grows via JS (3 → ~8 lines), no native resize grip. */
+/* Prompt textarea. It auto-grows via JS (3 → ~9 lines), and because a task
+   prompt is often a long protocol that gets EDITED — not just typed once — the
+   operator can also take over its height two ways: drag the native grip, or hit
+   Expand for a tall editing pane. The auto-grow ceiling (PROMPT_AUTOGROW_MAX_PX)
+   stays modest so the fields below it remain reachable without scrolling; the
+   max-height here is the ceiling for a deliberate drag, which is much taller. */
 .task-modal .task-prompt-input {
   min-height: 4.875rem;
-  max-height: 15rem;
-  resize: none;
+  max-height: 70vh;
+  resize: vertical;
   line-height: 1.55;
+}
+/* Expanded: a fixed tall pane. JS clears the inline height it would otherwise
+   have set, so this rule is what applies. */
+.task-modal .task-prompt-input.is-expanded {
+  height: 60vh;
+}
+/* The Expand/Collapse toggle beside the Prompt label — same footprint and
+   states as the prompt-library trigger it sits next to. */
+.task-prompt-resize-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 1.95rem;
+  width: 1.95rem;
+  flex-shrink: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition:
+    color var(--transition-fast),
+    border-color var(--transition-fast),
+    background var(--transition-fast);
+}
+.task-prompt-resize-btn:hover {
+  color: var(--color-text-primary);
+  border-color: var(--color-border);
+  background: var(--color-overlay-soft);
+}
+.task-prompt-resize-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
 }
 .task-modal .task-doc-input {
   resize: none;

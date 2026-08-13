@@ -7,6 +7,7 @@ import { applyTemplateVars, humanizeVarName, promptableVars } from "@/app/shared
 import { validateTaskForm, validateCronExpression, describeEmailError } from "@/app/shared/lib/validation";
 import { isValidEmail } from "@/app/shared/lib/format";
 import { describeCronExpression } from "@/app/shared/lib/cron";
+import { Icon } from "@/app/shared/ui/Icon";
 import { nextCronOccurrence, formatNextRun } from "@/app/shared/lib/cronNext";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
 import { useToast } from "@/app/shared/ui/Toast";
@@ -40,6 +41,17 @@ import { PromptLibrary } from "@/app/shared/ui/PromptLibrary";
 // TITLE_MAX_LENGTH mirrors the server's maxTaskTitleChars, so an over-long
 // title is caught in the form instead of coming back as a 400.
 const TITLE_MAX_LENGTH = 120;
+
+// PROMPT_AUTOGROW_MAX_PX caps how tall the prompt field grows on its OWN. It is
+// deliberately modest — the schedule, tools and Launch button live below it, and
+// an auto-grown field that swallows the form makes them unreachable. Deliberate
+// enlargement (the drag grip, the Expand toggle) is bounded far higher by the
+// stylesheet's max-height instead.
+const PROMPT_AUTOGROW_MAX_PX = 240;
+
+// The expanded-editor preference is per browser: an operator who edits long
+// protocol prompts wants the tall pane every time, not once per modal.
+const PROMPT_EXPANDED_STORAGE_KEY = "fleet-task-prompt-expanded";
 
 const DEFAULT_PRIMARY_MODEL = "z-ai/glm-5.2";
 const DEFAULT_FALLBACK_MODEL = "openai/gpt-5.6-sol";
@@ -368,6 +380,25 @@ export function TaskCreateModal({
   const modalRef = useRef<HTMLDivElement | null>(null);
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const promptRef = useRef<HTMLTextAreaElement | null>(null);
+  // Prompt sizing. `expanded` is the tall-pane toggle (persisted); manualHeight
+  // records that the operator dragged the grip, after which auto-grow must stop
+  // — otherwise the next keystroke would snap their chosen height away. lastAuto
+  // is how a drag is TOLD APART from our own writes: any height we did not set
+  // came from the user.
+  // Lazily seeded from storage, matching UpcomingPanel's view toggle. It is read
+  // at MOUNT: the parent keys this modal per edit target, so each Edit picks the
+  // preference up, while the long-lived create instance adopts a change made
+  // elsewhere on the next page load.
+  const [promptExpanded, setPromptExpanded] = useState(() => {
+    if (typeof window === "undefined") return false;
+    try {
+      return window.localStorage.getItem(PROMPT_EXPANDED_STORAGE_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
+  const promptManualHeight = useRef(false);
+  const promptLastAutoHeight = useRef<string | null>(null);
   const emailInputRef = useRef<HTMLInputElement | null>(null);
   // Outside-click close: only when both mousedown AND click land on the overlay
   // itself (a drag from inside the form that ends on the overlay must not
@@ -626,6 +657,66 @@ export function TaskCreateModal({
     if (!pendingTemplate) return;
     fillFormFromTemplate(pendingTemplate, templateVarValues);
     setPendingTemplate(null);
+  };
+
+  // autoGrowPrompt sizes the field to its content, but yields to the operator:
+  // once they expand it or drag it, their height stands until they reset it.
+  const autoGrowPrompt = (el: HTMLTextAreaElement) => {
+    if (promptExpanded) {
+      // The .is-expanded rule owns the height; an inline value would beat it.
+      el.style.height = "";
+      promptLastAutoHeight.current = null;
+      return;
+    }
+    if (promptManualHeight.current) return;
+    el.style.height = "auto";
+    const next = `${Math.min(el.scrollHeight, PROMPT_AUTOGROW_MAX_PX)}px`;
+    el.style.height = next;
+    promptLastAutoHeight.current = next;
+  };
+
+  // Size the field for content the operator did NOT type: the prefill when
+  // editing an existing task, a template, a prompt-library insert. Without this
+  // the edit form opened a 200-line protocol into a three-row box — the whole
+  // reason this field needed to become adjustable.
+  useEffect(() => {
+    const el = promptRef.current;
+    if (!el || !open) return;
+    autoGrowPrompt(el);
+    // autoGrowPrompt is recreated per render; the sizing inputs are what matter.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prompt, promptExpanded, open]);
+
+  // Tell a drag of the native grip apart from our own height writes. jsdom has
+  // no ResizeObserver (unit tests) — there the drag simply is not detectable,
+  // which costs those tests nothing.
+  useEffect(() => {
+    const el = promptRef.current;
+    if (!el || !open || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => {
+      const current = el.style.height;
+      if (!current || current === promptLastAutoHeight.current) return;
+      promptManualHeight.current = true;
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [open]);
+
+  // togglePromptExpanded doubles as the reset for a dragged height: clearing the
+  // inline value hands sizing back to the class rule (expanded) or to auto-grow
+  // (collapsed), so an operator who dragged themselves into a bad size has one
+  // obvious way out.
+  const togglePromptExpanded = () => {
+    const next = !promptExpanded;
+    setPromptExpanded(next);
+    promptManualHeight.current = false;
+    promptLastAutoHeight.current = null;
+    if (promptRef.current) promptRef.current.style.height = "";
+    try {
+      window.localStorage.setItem(PROMPT_EXPANDED_STORAGE_KEY, next ? "1" : "0");
+    } catch {
+      /* storage blocked — the toggle still works for this session */
+    }
   };
 
   if (!open) return null;
@@ -1016,11 +1107,6 @@ export function TaskCreateModal({
     setRepeatEditor("simple");
   };
 
-  const autoGrowPrompt = (el: HTMLTextAreaElement) => {
-    el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, 240)}px`;
-  };
-
   const footerStatus = submitting
     ? null
     : errorCount > 0
@@ -1236,6 +1322,22 @@ export function TaskCreateModal({
                         if (name && !title.trim()) setTitle(name.slice(0, TITLE_MAX_LENGTH));
                       }}
                     />
+                    <button
+                      type="button"
+                      className="task-prompt-resize-btn"
+                      data-testid="prompt-expand-toggle"
+                      aria-pressed={promptExpanded}
+                      aria-controls="promptTextarea"
+                      aria-label={promptExpanded ? "Collapse prompt editor" : "Expand prompt editor"}
+                      data-tip-top={promptExpanded ? "Collapse the editor" : "Expand the editor"}
+                      onClick={togglePromptExpanded}
+                    >
+                      {promptExpanded ? (
+                        <Icon name="compress" className="size-4" />
+                      ) : (
+                        <Icon name="expand" className="size-4" />
+                      )}
+                    </button>
                     <span className="task-required-badge">Required</span>
                   </span>
                 </div>
@@ -1243,7 +1345,9 @@ export function TaskCreateModal({
                   id="promptTextarea"
                   name="prompt"
                   ref={promptRef}
-                  className={`task-prompt-input${errors.prompt ? " has-error" : ""}`}
+                  className={`task-prompt-input${errors.prompt ? " has-error" : ""}${
+                    promptExpanded ? " is-expanded" : ""
+                  }`}
                   required
                   rows={3}
                   maxLength={100000}
