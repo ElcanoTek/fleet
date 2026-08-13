@@ -360,7 +360,12 @@ const (
 	// maxTaskDescriptionChars caps the optional operator documentation field (#281)
 	// at 10k runes — generous for a runbook, bounded so it can't bloat the row.
 	maxTaskDescriptionChars = 10000
-	taskScheduleMaxYears    = 5
+	// maxTaskTitleChars caps the display label. It is rendered in a table cell
+	// and a calendar tile, so it is short by design: long enough for
+	// "Reklaim daily day-over-day campaign health scan", short enough that no
+	// title can push a column off screen.
+	maxTaskTitleChars    = 120
+	taskScheduleMaxYears = 5
 )
 
 func newRateLimiter(limit int, window time.Duration) *rateLimiter {
@@ -799,6 +804,18 @@ func (h *Handlers) validateTaskRouting(tc *models.TaskCreate) error {
 	// non-negative cleanup delay) — fail fast at creation.
 	if err := tc.WorktreeConfig.Validate(); err != nil {
 		return fmt.Errorf("worktree_config: %w", err)
+	}
+	// Title: the optional display label. Normalized to a single trimmed line —
+	// it is rendered inline in a table cell and a calendar tile, where an
+	// embedded newline is at best ignored and at worst breaks the row, and a
+	// caller pasting a multi-line prompt into the title field should be told so
+	// rather than silently getting a mangled label.
+	tc.Title = strings.TrimSpace(tc.Title)
+	if strings.ContainsAny(tc.Title, "\r\n") {
+		return fmt.Errorf("title must be a single line")
+	}
+	if utf8.RuneCountInString(tc.Title) > maxTaskTitleChars {
+		return fmt.Errorf("title cannot exceed %d characters", maxTaskTitleChars)
 	}
 	// Description (#281): optional operator documentation, bounded so it can't
 	// bloat the task row. Counted in runes (not bytes) to be Unicode-fair.
@@ -1774,6 +1791,7 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 	// overwritten (which would resurrect the task and clobber its lease).
 	edit := storage.TaskEdit{
 		Prompt:                 tc.Prompt,
+		Title:                  tc.Title,
 		Description:            tc.Description,
 		Model:                  tc.Model,
 		FallbackModel:          tc.FallbackModel,
@@ -1963,6 +1981,7 @@ type taskRerunOverrides struct {
 	// a negative value clears back to inherit-global; absent leaves it.
 	ThinkingBudgetTokens *int     `json:"thinking_budget_tokens,omitempty"`
 	Description          *string  `json:"description,omitempty"`
+	Title                *string  `json:"title,omitempty"`
 	Tags                 []string `json:"tags,omitempty"`
 	Persona              *string  `json:"persona,omitempty"`
 }
@@ -2130,6 +2149,9 @@ func applyRerunOverrides(tc *models.TaskCreate, o taskRerunOverrides) {
 	}
 	if o.Description != nil {
 		tc.Description = *o.Description
+	}
+	if o.Title != nil {
+		tc.Title = *o.Title
 	}
 	if o.Tags != nil {
 		tc.Tags = o.Tags
