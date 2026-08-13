@@ -3,4 +3,4 @@
 // in web/; the frontend remains managed by package.json/package-lock.json.
 module github.com/ElcanoTek/fleet/web
 
-go 1.26.5
+go 1.26.6

@@ -62,7 +62,7 @@ image); run them via the `npm` scripts documented below.
 
 ## Prerequisites
 
-- **Go** — the version pinned in `go.mod` (CI uses `1.26.5`).
+- **Go** — the version pinned in `go.mod` (CI uses `1.26.6`).
 - **golangci-lint `v2.12.2`** — CI pins this exact version (it matches
   `run.go` in [`.golangci.yml`](../.golangci.yml)); a different version may flag
   or miss findings.
