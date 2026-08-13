@@ -17,6 +17,22 @@ prior versions are listed because none have shipped.
 
 ## [Unreleased]
 
+### Added
+
+- **Run now, for a job that has not run yet.** The Operations Center could only
+  *Resubmit*, and only a task that had already finished — so a scheduled job had
+  no on-demand kick-off at all. A daily task created in the afternoon could not
+  be exercised until the next morning, which made the authoring loop for a new
+  job a day long. Recent Tasks rows (and phone cards) now carry a **Run now**
+  bolt beside the edit pencil, and the task-detail modal offers the same action
+  for pending/scheduled tasks. It posts the existing
+  `POST /tasks/{id}/rerun`: a fresh one-off copy that starts immediately and
+  leaves the source **and its cron untouched** — the confirm dialog says so, so
+  nobody has to guess whether "run now" also cancelled tonight's run. In-flight
+  tasks are excluded (a second concurrent copy of a running job is a footgun),
+  and the wording splits by state: a finished task is *Resubmitted*, one that
+  has never run is *Run now*.
+
 ### Removed
 
 - The fast.io native tools (`fastio_find`, `fastio_upload_file`) and the
@@ -43,6 +59,11 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- Re-running or cloning a **named** task returned a 500. The copy inherited the
+  source's `name`, which carries a partial unique index (it is the import/export
+  identity key), so the insert collided with the source row still in the table.
+  Both copy paths now clear it — the rule `scheduleNextRecurrence` already
+  applied when minting the next occurrence of a recurring task.
 - Scheduled tasks created from chat carried no model and dead-lettered on their
   first dispatch, before running anything, with `no model configured for
   scheduled task`. `schedule_task`'s `model` is optional and the agent was told

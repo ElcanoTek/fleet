@@ -137,3 +137,75 @@ describe("TasksTable SLA badge (#274)", () => {
     expect(onOpenLogs).toHaveBeenCalledWith(baseTask);
   });
 });
+
+describe("TasksTable Run now action (#1019)", () => {
+  const scheduled: Task = {
+    id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+    prompt: "Reklaim daily health scan",
+    status: "scheduled",
+    recurrence: "0 9 * * *",
+  };
+
+  function renderWithRunNow(tasks: Task[], onRunNow?: (t: Task) => void) {
+    return render(
+      <TasksTable
+        tasks={tasks}
+        total={tasks.length}
+        page={1}
+        pageSize={20}
+        filters={FILTERS}
+        onFilters={() => {}}
+        onPage={() => {}}
+        onPageSize={() => {}}
+        onOpenLogs={() => {}}
+        onRunNow={onRunNow}
+      />,
+    );
+  }
+
+  it("offers Run now on a scheduled task that has not run yet", () => {
+    const onRunNow = vi.fn();
+    renderWithRunNow([scheduled], onRunNow);
+    fireEvent.click(screen.getByTestId("task-run-now-button"));
+    expect(onRunNow).toHaveBeenCalledWith(scheduled);
+  });
+
+  it("does not open the log viewer when Run now is clicked (row click is suppressed)", () => {
+    const onOpenLogs = vi.fn();
+    render(
+      <TasksTable
+        tasks={[scheduled]}
+        total={1}
+        page={1}
+        pageSize={20}
+        filters={FILTERS}
+        onFilters={() => {}}
+        onPage={() => {}}
+        onPageSize={() => {}}
+        onOpenLogs={onOpenLogs}
+        onRunNow={() => {}}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("task-run-now-button"));
+    expect(onOpenLogs).not.toHaveBeenCalled();
+  });
+
+  it("hides Run now for an in-flight task", () => {
+    renderWithRunNow([{ ...scheduled, status: "running" }], vi.fn());
+    expect(screen.queryByTestId("task-run-now-button")).toBeNull();
+    expect(screen.queryByTestId("task-run-now-button-card")).toBeNull();
+  });
+
+  it("omits the action entirely when the parent passes no handler", () => {
+    renderWithRunNow([scheduled]);
+    expect(screen.queryByTestId("task-run-now-button")).toBeNull();
+  });
+
+  it("fires from the phone card view too", () => {
+    const onRunNow = vi.fn();
+    renderWithRunNow([scheduled], onRunNow);
+    const cards = screen.getByTestId("task-cards");
+    fireEvent.click(within(cards).getByTestId("task-run-now-button-card"));
+    expect(onRunNow).toHaveBeenCalledWith(scheduled);
+  });
+});

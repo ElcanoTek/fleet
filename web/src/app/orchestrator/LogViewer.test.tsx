@@ -241,15 +241,38 @@ describe("LogViewer task-detail modal", () => {
     await waitFor(() => expect(onResubmitted).toHaveBeenCalled());
   });
 
-  it("hides Resubmit for a scheduled task and downloads the session JSON", async () => {
+  it("offers Run now (not Resubmit) for a scheduled task that has not run yet", async () => {
     mockSession(RICH_SESSION);
+    rerunTask.mockReset();
+    rerunTask.mockResolvedValue({ id: "99999999-9999-9999-9999-999999999999" });
+    const onResubmitted = vi.fn();
     render(
       <LogViewer
         task={{ ...DONE_TASK, status: "scheduled" }}
         onClose={() => {}}
+        onResubmitted={onResubmitted}
+      />,
+    );
+    const button = await screen.findByTestId("resubmit-task-button");
+    // A job that has never run is kicked off, not "resubmitted".
+    expect(button).toHaveTextContent("Run now");
+    fireEvent.click(button);
+    await waitFor(() => expect(rerunTask).toHaveBeenCalledWith(TASK_ID));
+    await waitFor(() => expect(onResubmitted).toHaveBeenCalled());
+  });
+
+  it("hides the kick-off button for an in-flight task and downloads the session JSON", async () => {
+    mockSession(RICH_SESSION);
+    render(
+      // "analyzing" is in flight but past the live-stream view, so the stored
+      // session body (and its download) still renders.
+      <LogViewer
+        task={{ ...DONE_TASK, status: "analyzing" }}
+        onClose={() => {}}
       />,
     );
     const download = await screen.findByTestId("download-logs-button");
+    // An in-flight task is already running: a second concurrent copy is a footgun.
     expect(screen.queryByTestId("resubmit-task-button")).toBeNull();
 
     const createObjectURL = vi.fn(() => "blob:mock");

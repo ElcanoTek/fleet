@@ -1,12 +1,13 @@
 "use client";
 
 import { useRef, useState } from "react";
-import type { Task } from "@/app/shared/lib/orchestratorApi";
+import { orchestratorApi, type Task } from "@/app/shared/lib/orchestratorApi";
 import { useOrchestratorSession } from "@/app/shared/hooks/useOrchestratorSession";
 import { useDashboardData } from "@/app/shared/hooks/useDashboardData";
 import { useMcpServers } from "@/app/shared/hooks/useMcpServers";
 import { useClientConfig } from "@/app/lib/useClientConfig";
-import { ToastProvider } from "@/app/shared/ui/Toast";
+import { ToastProvider, useToast } from "@/app/shared/ui/Toast";
+import { ConfirmDialog } from "@/app/shared/ui/ConfirmDialog";
 import { ThemeToggle } from "@/app/shared/ui/ThemeToggle";
 import { NavToChat } from "@/app/shared/ui/CrossViewNav";
 import { NavRail, useRailCollapse } from "@/app/shared/ui/NavRail";
@@ -22,6 +23,7 @@ import { UsagePanel } from "./UsagePanel";
 import { AdoptionPanel } from "./AdoptionPanel";
 import { DatasetsPanel } from "./DatasetsPanel";
 import { UpcomingPanel } from "./UpcomingPanel";
+import { taskRunLabel } from "./taskDisplay";
 
 // OrchestratorClient — the top-level orchestrator (Operations Center) view. It
 // now renders inside the shared unified rail (#169): when signed in, the
@@ -84,7 +86,34 @@ function OrchestratorInner({ magicLinkLoginEnabled }: { magicLinkLoginEnabled: b
   const [taskModalOpen, setTaskModalOpen] = useState(false);
   const [editTask, setEditTask] = useState<Task | null>(null);
   const [logTask, setLogTask] = useState<Task | null>(null);
+  // "Run now" (#1019): the task awaiting the kick-off confirm, and the in-flight
+  // guard that keeps a double-click from submitting two runs.
+  const [runNowTask, setRunNowTask] = useState<Task | null>(null);
+  const [runNowBusy, setRunNowBusy] = useState(false);
+  const { showToast } = useToast();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  // runNow resubmits the task as a fresh one-off run that starts immediately
+  // (POST /tasks/{id}/rerun). The source is untouched — a recurring job keeps
+  // its cron and still fires on its next tick — so this is "kick it off now",
+  // not "reschedule it".
+  const runNow = async (task: Task) => {
+    if (runNowBusy) return;
+    setRunNowBusy(true);
+    try {
+      const created = await orchestratorApi.rerunTask(task.id);
+      showToast(`Started run ${created.id.slice(0, 8)}… from this task`, "success");
+      setRunNowTask(null);
+      void dashboard.reload();
+    } catch (err) {
+      showToast(
+        `Run now failed: ${err instanceof Error ? err.message : "unknown error"}`,
+        "error",
+      );
+    } finally {
+      setRunNowBusy(false);
+    }
+  };
   // Desktop rail collapse + ≤900px auto-collapse/overlay (shared shell).
   const railCollapse = useRailCollapse();
   // Top-level dashboard tab (#274): defaults to Recent Tasks (the existing
@@ -365,6 +394,7 @@ function OrchestratorInner({ magicLinkLoginEnabled }: { magicLinkLoginEnabled: b
                   onPageSize={dashboard.setPageSize}
                   onOpenLogs={setLogTask}
                   onEdit={setEditTask}
+                  onRunNow={setRunNowTask}
                 />
               )}
               </div>
@@ -389,6 +419,32 @@ function OrchestratorInner({ magicLinkLoginEnabled }: { magicLinkLoginEnabled: b
         onCreated={() => void dashboard.reload()}
         editTask={editTask}
         onUpdated={() => void dashboard.reload()}
+      />
+      {/* Run-now confirm: the row action sits next to a click target that
+          opens the log viewer, and a run costs real model spend — so the
+          kick-off is confirmed, and the copy states plainly that the source's
+          own schedule is left alone. */}
+      <ConfirmDialog
+        open={!!runNowTask}
+        title="Run now"
+        message={
+          runNowTask
+            ? `Start a run of "${taskRunLabel(runNowTask)}" right now?${
+                runNowTask.recurrence
+                  ? " This is a one-off copy — the task keeps its schedule and still runs at its next scheduled time."
+                  : runNowTask.scheduled_for
+                    ? " This is a one-off copy — the task stays scheduled and will still run at its scheduled time."
+                    : ""
+              }`
+            : ""
+        }
+        confirmLabel={runNowBusy ? "Starting…" : "Run now"}
+        onConfirm={() => {
+          if (runNowTask) void runNow(runNowTask);
+        }}
+        onCancel={() => {
+          if (!runNowBusy) setRunNowTask(null);
+        }}
       />
       <LogViewer
         task={logTask}
