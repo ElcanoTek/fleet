@@ -33,6 +33,12 @@ export type RunIf = {
 
 export type Task = {
   id: string;
+  // Short operator-facing label shown wherever the task is listed. Absent/empty
+  // = untitled, and every surface falls back to the prompt's first line (which
+  // is why operators used to write a title line at the top of the prompt).
+  // Distinct from the server-side `name`, which is the unique import/export
+  // identity key and is cleared on every copy.
+  title?: string;
   prompt?: string;
   description?: string;
   model?: string;
@@ -75,6 +81,7 @@ export type Task = {
 };
 
 export type TaskCreate = {
+  title?: string;
   prompt: string;
   description?: string;
   model?: string;
@@ -103,8 +110,9 @@ export type TaskCreate = {
 };
 
 // SLAReport / SLAReportTask mirror models.SLAReport (#274): the
-// GET /admin/sla-report response. task_name is the prompt's first line (fleet
-// has no separate `name` column).
+// GET /admin/sla-report response. task_name is the task's title when it has
+// one — so a titled job's occurrences collapse into a single row — and the
+// prompt's first line otherwise.
 export type SLAReportTask = {
   task_name: string;
   expected_minutes: number;
@@ -262,6 +270,9 @@ export type CostForecast = {
 // editable fields the create form pre-fills (#262). Mirrors
 // clientconfig.TaskTemplateTask. Omitted fields leave the form at its default.
 export type TaskTemplateTask = {
+  // An explicit title for the seeded task. Omitted, the form falls back to the
+  // template's own name.
+  title?: string;
   prompt?: string;
   model?: string;
   fallback_model?: string;
@@ -508,6 +519,7 @@ export type TaskLearnedInstruction = {
 export type UpcomingRun = {
   task_id: string;
   name?: string;
+  title?: string;
   prompt: string;
   recurrence?: string;
   next_run: string;

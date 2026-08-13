@@ -204,6 +204,7 @@ components:
       properties:
         prompt: { type: string }
         name: { type: string, description: "Optional, human-readable label; the identity key for the definition import/export endpoints (#238). A non-empty name must be unique across tasks. Never injected into the agent prompt." }
+        title: { type: string, description: "Optional short display label shown wherever the task is listed. Unlike name it is NOT unique and IS carried onto every occurrence, re-run and clone, so all the runs of one job share it. Single line, max 120 characters. Never injected into the agent prompt." }
         model: { type: string }
         fallback_model: { type: string }
         max_iterations: { type: integer }
@@ -269,6 +270,8 @@ components:
       type: object
       properties:
         id: { type: string, format: uuid }
+        name: { type: string, description: "Import/export identity key (#238); unique across tasks when non-empty. Cleared on every copy (recurrence occurrence, re-run, clone)." }
+        title: { type: string, description: "Optional short display label shown wherever the task is listed. Unlike name it is NOT unique and IS carried onto every occurrence, re-run and clone, so all the runs of one job share it. Single line, max 120 characters. Never injected into the agent prompt." }
         prompt: { type: string }
         model: { type: string }
         fallback_model: { type: string }
@@ -1096,6 +1099,7 @@ paths:
                     runtime_flavor: { type: string }
                     allow_network: { type: boolean }
                     description: { type: string }
+                    title: { type: string, description: "Relabel the copy; omitted inherits the source's title." }
                     tags: { type: array, items: { type: string } }
       responses:
         "201":
@@ -1761,6 +1765,7 @@ paths:
                       properties:
                         task_id: { type: string }
                         name: { type: string }
+                        title: { type: string, description: "The task's display label; survives every occurrence, unlike name." }
                         prompt: { type: string }
                         recurrence: { type: string }
                         next_run: { type: string, format: date-time }

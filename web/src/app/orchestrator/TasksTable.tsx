@@ -166,7 +166,7 @@ export function TasksTable({
             id="taskSearchFilter"
             type="text"
             className="filter-input"
-            placeholder="Search prompt or ID..."
+            placeholder="Search title, prompt, or ID..."
             aria-label="Search tasks"
             value={queryDraft}
             onChange={(e) => setQueryDraft(e.target.value)}
@@ -179,7 +179,7 @@ export function TasksTable({
           <thead>
             <tr>
               <th scope="col">ID</th>
-              <th scope="col">Prompt</th>
+              <th scope="col">Task</th>
               <th scope="col">Status</th>
               <th scope="col">SLA</th>
               <th scope="col">Schedule</th>
@@ -220,7 +220,16 @@ export function TasksTable({
                       <code>{task.id.slice(0, 8)}...</code>
                     </td>
                     <td className="prompt-cell" title={task.prompt ?? ""}>
-                      {truncate((task.prompt ?? "").trim(), 80)}
+                      {task.title?.trim() ? (
+                        <>
+                          <span className="task-title-line">{task.title.trim()}</span>
+                          <span className="task-prompt-line">
+                            {truncate((task.prompt ?? "").trim(), 80)}
+                          </span>
+                        </>
+                      ) : (
+                        truncate((task.prompt ?? "").trim(), 80)
+                      )}
                     </td>
                     <td>
                       <span className={`status-badge status-${task.status ?? "unknown"}`}>
@@ -315,6 +324,9 @@ export function TasksTable({
                       </span>
                     ) : null}
                   </span>
+                  {task.title?.trim() ? (
+                    <span className="task-card-title">{task.title.trim()}</span>
+                  ) : null}
                   <span className="task-card-prompt">{truncate((task.prompt ?? "").trim(), 120)}</span>
                   <span className="task-card-meta">
                     <code>{task.id.slice(0, 8)}</code>

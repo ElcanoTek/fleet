@@ -21,7 +21,7 @@ import { orchestratorApi } from "@/app/shared/lib/orchestratorApi";
 import { formatTimeFirst, stripAnsiCodes } from "@/app/shared/lib/format";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
 import { useToast } from "@/app/shared/ui/Toast";
-import { createdByLabel, scheduleLabel, TaskSlaBadge } from "./taskDisplay";
+import { createdByLabel, scheduleLabel, taskRunLabel, TaskSlaBadge } from "./taskDisplay";
 import { useCancellableFetch } from "@/app/shared/hooks/useCancellableFetch";
 import {
   Checklist,
@@ -897,9 +897,10 @@ function LogViewerBody({
     >
       <div className="modal modal-log">
         <div className="modal-header">
+          {/* Lead with the operator's own title when the job has one; the
+              full prompt stays in the tooltip either way. */}
           <h3 className="modal-log-title" title={task.prompt ?? ""}>
-            Task: {(task.prompt ?? "").trim().slice(0, 90) || task.id.slice(0, 8)}
-            {(task.prompt ?? "").trim().length > 90 ? "…" : ""}
+            Task: {taskRunLabel(task, 90)}
           </h3>
           <CloseButton label="Close modal" onClick={onClose} />
         </div>

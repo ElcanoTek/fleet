@@ -516,6 +516,9 @@ type TaskTemplate struct {
 // YAML key is distinguishable from an explicit zero. The struct is serialized to
 // the UI as opaque JSON; the Go side never interprets the values beyond parsing.
 type TaskTemplateTask struct {
+	// Title pre-fills the task's display label. Omitted, the create form falls
+	// back to the template's own name, which is what the operator picked it by.
+	Title                  string   `yaml:"title,omitempty" json:"title,omitempty"`
 	Prompt                 string   `yaml:"prompt" json:"prompt,omitempty"`
 	Model                  *string  `yaml:"model,omitempty" json:"model,omitempty"`
 	FallbackModel          *string  `yaml:"fallback_model,omitempty" json:"fallback_model,omitempty"`

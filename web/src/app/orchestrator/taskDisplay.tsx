@@ -19,12 +19,13 @@ export function createdByLabel(task: Task): string {
   return task.created_by;
 }
 
-// taskRunLabel is the short human name for a task in prose — confirm dialogs,
-// toasts. Operators put a title line at the head of the prompt because there is
-// nowhere else to put one, so the prompt's first non-empty line is the closest
-// thing to a name a task currently has; the short ID is the fallback for a task
-// whose prompt starts with something unprintable.
+// taskRunLabel is the short human name for a task — the title when it has one,
+// and otherwise the prompt's first non-empty line (which is where operators put
+// a title before the field existed). The short ID is the last resort, for an
+// untitled task whose prompt starts with something unprintable.
 export function taskRunLabel(task: Task, maxLength = 60): string {
+  const title = (task.title ?? "").trim();
+  if (title) return truncate(title, maxLength);
   const firstLine = (task.prompt ?? "")
     .split("\n")
     .map((line) => line.trim())
