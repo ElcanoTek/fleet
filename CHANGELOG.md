@@ -17,6 +17,22 @@ prior versions are listed because none have shipped.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The task prompt field is adjustable, and no longer opens a long prompt into
+  a three-row box.** Editing an existing task showed its prompt through a ~78px
+  window: auto-grow only ever ran from the textarea's `onChange`, and a prefill
+  fires no change event — so the field stayed at `rows={3}` no matter how long
+  the prompt was, which made editing one section of a long protocol a scrolling
+  exercise. The prefill (and a template or prompt-library insert) is now sized
+  like typed text, and the operator can take the height over two ways: **drag**
+  the native grip (the field was `resize: none`), or hit the new **Expand**
+  toggle beside the Prompt label for a tall editing pane, remembered per
+  browser. Auto-grow yields to either — a chosen height is no longer snapped
+  away by the next keystroke — and Expand/Collapse doubles as the reset. The
+  auto-grow ceiling stays modest so the fields below stay reachable; a
+  deliberate drag goes much further.
+
 ### Added
 
 - **Tasks have titles** (`docs/TASK-TITLES.md`). The Operations Center

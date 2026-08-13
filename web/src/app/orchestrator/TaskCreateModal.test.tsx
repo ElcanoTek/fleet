@@ -567,3 +567,55 @@ describe("TaskCreateModal — title from the prompt library", () => {
     expect(screen.getByLabelText("Title")).toHaveValue("My own name");
   });
 });
+
+describe("TaskCreateModal — prompt editor sizing", () => {
+  const LONG_PROMPT = Array.from({ length: 60 }, (_, i) => `line ${i + 1}`).join("\n");
+
+  afterEach(() => {
+    try {
+      window.localStorage.clear();
+    } catch {
+      /* ignore */
+    }
+  });
+
+  it("grows a prefilled prompt instead of leaving it in a three-row box", () => {
+    renderModal({ editTask: { ...baseEdit, prompt: LONG_PROMPT } });
+    const el = screen.getByLabelText("Prompt") as HTMLTextAreaElement;
+    // jsdom reports scrollHeight 0, so the exact px cannot be asserted — what
+    // matters is that the prefill was measured at all (an inline height set),
+    // which is precisely what never happened before: edit mode only ever ran
+    // auto-grow from onChange, so an untouched prefill kept rows={3}.
+    expect(el.style.height).not.toBe("");
+  });
+
+  it("toggles the tall editing pane and remembers the choice", () => {
+    const { unmount } = renderModal();
+    const toggle = screen.getByTestId("prompt-expand-toggle");
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByLabelText("Prompt").className).not.toContain("is-expanded");
+
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    const expanded = screen.getByLabelText("Prompt");
+    expect(expanded.className).toContain("is-expanded");
+    // The class rule owns the height while expanded, so no inline value may
+    // shadow it.
+    expect((expanded as HTMLTextAreaElement).style.height).toBe("");
+
+    // A fresh mount restores the preference.
+    unmount();
+    renderModal();
+    expect(screen.getByTestId("prompt-expand-toggle")).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByLabelText("Prompt").className).toContain("is-expanded");
+  });
+
+  it("collapsing hands sizing back to auto-grow", () => {
+    renderModal();
+    const toggle = screen.getByTestId("prompt-expand-toggle");
+    fireEvent.click(toggle);
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByLabelText("Prompt").className).not.toContain("is-expanded");
+  });
+});
