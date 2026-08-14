@@ -16,7 +16,7 @@ const defaultFreshnessLookbackDays = 2
 
 // runtimeNow is the clock used for per-run date context and stale-window
 // annotation. Production uses time.Now; tests override it.
-var runtimeNow = func() time.Time { return time.Now() }
+var runtimeNow = time.Now
 
 // RuntimeToday returns the UTC calendar date (YYYY-MM-DD) that this turn
 // must treat as "today". Never derive this from conversation history,
