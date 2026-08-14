@@ -79,7 +79,7 @@ func TestBindTaskMCPRuntime_UsesBrokerScope(t *testing.T) {
 				"beta":  {},
 			}
 		},
-		openTaskMCPScope: func(_ context.Context, selection agentcore.MCPSelection, taskID, workspace string) (*agent.MCPScope, error) {
+		openTaskMCPScope: func(_ context.Context, selection agentcore.MCPSelection, _ agent.MCPScopePolicy, taskID, workspace string) (*agent.MCPScope, error) {
 			gotSelection = append(agentcore.MCPSelection(nil), selection...)
 			gotTaskID = taskID
 			gotWorkspace = workspace
@@ -171,12 +171,16 @@ func TestBindTaskMCPRuntime_DenyAllBindsNoServers(t *testing.T) {
 	inventory := map[string]TaskMCPServerInfo{"alpha": {UsesWorkspace: true}, "beta": {}}
 
 	t.Run("broker scope opens with an empty selection", func(t *testing.T) {
-		var gotSelection agentcore.MCPSelection
+		var (
+			gotSelection agentcore.MCPSelection
+			gotPolicy    agent.MCPScopePolicy
+		)
 		r := &Runner{
 			cfg:                &config.Config{},
 			mcpServerInventory: func() map[string]TaskMCPServerInfo { return inventory },
-			openTaskMCPScope: func(_ context.Context, selection agentcore.MCPSelection, _, _ string) (*agent.MCPScope, error) {
+			openTaskMCPScope: func(_ context.Context, selection agentcore.MCPSelection, policy agent.MCPScopePolicy, _, _ string) (*agent.MCPScope, error) {
 				gotSelection = append(agentcore.MCPSelection(nil), selection...)
+				gotPolicy = policy
 				return &agent.MCPScope{
 					Broker: &scheduledRecordingBroker{},
 					Close:  func(context.Context) error { return nil },
@@ -190,6 +194,12 @@ func TestBindTaskMCPRuntime_DenyAllBindsNoServers(t *testing.T) {
 		defer binding.cleanup()
 		if len(gotSelection) != 0 {
 			t.Errorf("deny-all scope selection = %#v, want no servers", gotSelection)
+		}
+		// The credential owner re-derives its own gates (#167 residual 1), so the
+		// deny must reach it as a VALUE — a nil allowlist would read as
+		// inherit-global on the far side of the boundary too.
+		if !gotPolicy.CredentialAllowlist.DeniesAll() {
+			t.Errorf("scope policy allowlist = %#v, want an explicit deny-all", gotPolicy.CredentialAllowlist)
 		}
 	})
 
@@ -271,7 +281,7 @@ func TestBindTaskMCPRuntime_PreservesExplicitSelection(t *testing.T) {
 			"alpha": {Enabled: true},
 			"beta":  {Enabled: true},
 		}},
-		openTaskMCPScope: func(_ context.Context, selection agentcore.MCPSelection, _, _ string) (*agent.MCPScope, error) {
+		openTaskMCPScope: func(_ context.Context, selection agentcore.MCPSelection, _ agent.MCPScopePolicy, _, _ string) (*agent.MCPScope, error) {
 			got = append(agentcore.MCPSelection(nil), selection...)
 			return &agent.MCPScope{Broker: &scheduledRecordingBroker{}, Catalog: []mcp.ServerTool{}, Close: func(context.Context) error { return nil }}, nil
 		},
@@ -297,7 +307,7 @@ func TestBindTaskMCPRuntime_ScopeOpenFailureFailsClosed(t *testing.T) {
 	wantErr := errors.New("broker unavailable")
 	r := &Runner{
 		cfg: &config.Config{},
-		openTaskMCPScope: func(context.Context, agentcore.MCPSelection, string, string) (*agent.MCPScope, error) {
+		openTaskMCPScope: func(context.Context, agentcore.MCPSelection, agent.MCPScopePolicy, string, string) (*agent.MCPScope, error) {
 			return nil, wantErr
 		},
 	}
@@ -311,7 +321,7 @@ func TestBindTaskMCPRuntime_IncompleteScopeIsClosed(t *testing.T) {
 	closed := false
 	r := &Runner{
 		cfg: &config.Config{},
-		openTaskMCPScope: func(context.Context, agentcore.MCPSelection, string, string) (*agent.MCPScope, error) {
+		openTaskMCPScope: func(context.Context, agentcore.MCPSelection, agent.MCPScopePolicy, string, string) (*agent.MCPScope, error) {
 			return &agent.MCPScope{Close: func(context.Context) error { closed = true; return nil }}, nil
 		},
 	}

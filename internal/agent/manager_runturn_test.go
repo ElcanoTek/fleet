@@ -186,7 +186,7 @@ func TestNew_RejectsIncompleteMCPBrokerInjection(t *testing.T) {
 	}{
 		{
 			name: "scope opener without base broker",
-			opts: ManagerOptions{OpenMCPScope: func(context.Context, agentcore.MCPSelection, string) (*MCPScope, error) {
+			opts: ManagerOptions{OpenMCPScope: func(context.Context, agentcore.MCPSelection, MCPScopePolicy, string) (*MCPScope, error) {
 				return nil, nil
 			}},
 			want: "open MCP scope requires MCP broker",
@@ -231,7 +231,7 @@ func TestManagerRunTurn_OpensAndClosesScopedMCP(t *testing.T) {
 		}
 		opts.MCPBroker = inertMCPBroker{}
 		opts.MCPCatalog = []mcp.ServerTool{}
-		opts.OpenMCPScope = func(_ context.Context, selection agentcore.MCPSelection, workspace string) (*MCPScope, error) {
+		opts.OpenMCPScope = func(_ context.Context, selection agentcore.MCPSelection, _ MCPScopePolicy, workspace string) (*MCPScope, error) {
 			gotSelection = append(agentcore.MCPSelection(nil), selection...)
 			gotWorkspace = workspace
 			return &MCPScope{
@@ -276,7 +276,7 @@ func TestManagerRunTurn_OpensAndClosesScopedMCP(t *testing.T) {
 func TestManagerScopeCleanupIgnoresCancelledTurnContext(t *testing.T) {
 	closeCtxErr := errors.New("scope was not closed")
 	mgr := &Manager{
-		openMCPScope: func(context.Context, agentcore.MCPSelection, string) (*MCPScope, error) {
+		openMCPScope: func(context.Context, agentcore.MCPSelection, MCPScopePolicy, string) (*MCPScope, error) {
 			return &MCPScope{
 				Broker: inertMCPBroker{},
 				Close: func(ctx context.Context) error {
@@ -287,7 +287,7 @@ func TestManagerScopeCleanupIgnoresCancelledTurnContext(t *testing.T) {
 		},
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	_, _, cleanup, err := mgr.openTurnMCPScope(ctx, TurnInput{}, "/workspace")
+	_, _, cleanup, err := mgr.openTurnMCPScope(ctx, nil, MCPScopePolicy{}, "/workspace")
 	if err != nil {
 		t.Fatalf("openTurnMCPScope: %v", err)
 	}
@@ -302,7 +302,7 @@ func TestManagerRunTurn_ScopeOpenFailureFailsClosed(t *testing.T) {
 	fake := fakellm.New()
 	mgr := newFakeLLMManager(t, fake)
 	wantErr := errors.New("broker unavailable")
-	mgr.openMCPScope = func(context.Context, agentcore.MCPSelection, string) (*MCPScope, error) {
+	mgr.openMCPScope = func(context.Context, agentcore.MCPSelection, MCPScopePolicy, string) (*MCPScope, error) {
 		return nil, wantErr
 	}
 	committed := false

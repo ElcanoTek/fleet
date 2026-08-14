@@ -81,11 +81,7 @@ func (al CredentialAllowlist) permittedRegisteredNames() map[string]bool {
 		if e.Server == "" {
 			continue
 		}
-		name := e.Server
-		if acct := creds.CanonicalAccount(e.Account); acct != "" {
-			name = e.Server + "_" + acct
-		}
-		out[name] = true
+		out[RegisteredMCPName(e.Server, e.Account)] = true
 	}
 	return out
 }

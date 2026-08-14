@@ -66,7 +66,8 @@ func newBrokerBackendForScopeTest(t *testing.T) *brokerBackend {
 				},
 			},
 		},
-		scopes: make(map[string]*brokerScope),
+		enabled: map[string]bool{"acct": true},
+		scopes:  make(map[string]*brokerScope),
 	}
 }
 

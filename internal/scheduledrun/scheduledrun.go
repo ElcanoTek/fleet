@@ -110,7 +110,7 @@ type Options struct {
 // TaskMCPScopeOpener binds public server/account choices plus task/workspace
 // identity inside the credential-owning process. Credential values never cross
 // this seam.
-type TaskMCPScopeOpener func(ctx context.Context, selection agentcore.MCPSelection, taskID, workspace string) (*agent.MCPScope, error)
+type TaskMCPScopeOpener func(ctx context.Context, selection agentcore.MCPSelection, policy agent.MCPScopePolicy, taskID, workspace string) (*agent.MCPScope, error)
 
 // TaskMCPServerInfo is the public per-server state scheduled scope construction
 // needs. Credential-bearing env, headers, URLs, and commands are absent.
@@ -1052,7 +1052,15 @@ func (r *Runner) bindTaskMCPRuntime(ctx context.Context, task *models.Task) (tas
 	if err != nil {
 		return taskMCPBinding{}, err
 	}
-	scope, err := r.openTaskMCPScope(ctx, selection, task.ID.String(), workdir)
+	// The credential owner enforces this run's gates itself (#167 residual 1):
+	// the Gate-2 allowlist it can also re-derive from the bundle, plus the
+	// per-task Gate-3 credential pairs, which are task data it has no other
+	// source for.
+	policy := agent.MCPScopePolicy{
+		ToolAllowlist:       r.taskMCPToolAllowlist(),
+		CredentialAllowlist: taskCredentialAllowlist(task),
+	}
+	scope, err := r.openTaskMCPScope(ctx, selection, policy, task.ID.String(), workdir)
 	if err != nil {
 		return taskMCPBinding{}, fmt.Errorf("open scheduled MCP scope: %w", err)
 	}

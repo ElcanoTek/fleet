@@ -1625,6 +1625,10 @@ func (s *Server) conversationByID(w http.ResponseWriter, r *http.Request) {
 				"summary":     summarizeApprovalInput(a.ToolName, a.ArgsJSON, id),
 				// Re-hydrate the countdown on reload (#225); 0 = no expiry.
 				"expires_at": a.ExpiresAt,
+				// Re-hydrate the seat badge (#167 residual 2); empty account
+				// means the default bundle seat and renders no badge.
+				"mcp_server":  a.MCPServer,
+				"mcp_account": a.MCPAccount,
 			})
 		}
 		// Pending memory proposals — same pattern as approvals. Without

@@ -27,6 +27,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/robfig/cron/v3"
@@ -49,8 +50,22 @@ type approvalStager struct {
 	conversationID string
 	userEmail      string
 	sink           agent.EventSink
-	mcpBroker      agentcore.MCPBroker
-	mcpCatalog     []mcp.ServerTool
+	// mcpBroker / mcpCatalog are the credential seam staging uses to
+	// pre-validate an email and to resolve mcp_<server>_<tool> identities. They
+	// start as the manager's process-wide default-seat pair and are replaced by
+	// the live turn scope through BindTurnMCPScope (#167 residual 2) — a
+	// named-account turn registers its servers as "<server>_<account>", which
+	// the default-seat catalog cannot resolve at all.
+	mcpBroker  agentcore.MCPBroker
+	mcpCatalog []mcp.ServerTool
+	// mcpSeats maps a REGISTERED server name to the public {server, account}
+	// selection behind it, so a staged card records the seat an approval must
+	// reopen. Populated from the turn scope's own selection.
+	mcpSeats map[string]store.ApprovalSeat
+	// mcpMu guards the three fields above: BindTurnMCPScope runs on the turn
+	// goroutine before the loop starts, but Stage can be reached from a
+	// parallel tool dispatch.
+	mcpMu sync.RWMutex
 	// sessionRegistry holds per-conversation pre-approvals (#300). nil disables
 	// batch approval (every call stages a card, the prior behavior).
 	sessionRegistry *SessionApprovalRegistry
@@ -70,6 +85,57 @@ type approvalStager struct {
 	// (#292), so a backgrounded tab still learns the turn is blocked on them.
 	// nil = feature off.
 	push *webpush.Service
+}
+
+var _ agent.MCPScopeBinder = (*approvalStager)(nil)
+
+// BindTurnMCPScope adopts the per-turn credential scope. Everything staging
+// does against MCP — resolving the tool's server, pre-validating an email,
+// recording the seat — then reflects the account the turn is really running on.
+func (a *approvalStager) BindTurnMCPScope(scope agent.TurnMCPScope) {
+	seats := make(map[string]store.ApprovalSeat, len(scope.Selection))
+	for _, choice := range scope.Selection {
+		if choice.Server == "" {
+			continue
+		}
+		seats[agentcore.RegisteredMCPName(choice.Server, choice.Account)] = store.ApprovalSeat{
+			Server:  choice.Server,
+			Account: choice.Account,
+		}
+	}
+	a.mcpMu.Lock()
+	defer a.mcpMu.Unlock()
+	if scope.Broker != nil {
+		a.mcpBroker = scope.Broker
+	}
+	if scope.Catalog != nil {
+		a.mcpCatalog = scope.Catalog
+	}
+	a.mcpSeats = seats
+}
+
+// mcpScope reads the staging-time credential context under the lock.
+func (a *approvalStager) mcpScope() (agentcore.MCPBroker, []mcp.ServerTool, map[string]store.ApprovalSeat) {
+	a.mcpMu.RLock()
+	defer a.mcpMu.RUnlock()
+	return a.mcpBroker, a.mcpCatalog, a.mcpSeats
+}
+
+// seatFor resolves the credential seat behind a staged tool name. A tool whose
+// registered server is not in the turn's selection (the transitional
+// local-client path, or the synthetic inline http-tools server) records the
+// registered name on the default seat — the same seat execution would have
+// used before, so nothing regresses when there is no scope to preserve.
+func (a *approvalStager) seatFor(toolName string) store.ApprovalSeat {
+	_, catalog, seats := a.mcpScope()
+	server, _, err := resolveMCPTool(catalog, toolName)
+	if err != nil {
+		return store.ApprovalSeat{}
+	}
+	if seat, ok := seats[server]; ok {
+		return seat
+	}
+	return store.ApprovalSeat{Server: server}
 }
 
 // maxApprovalTimeoutSeconds bounds a per-conversation approval-timeout override
@@ -175,7 +241,7 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 		if err := validateEmailHasContent(toolName, rawInput); err != nil {
 			return "", err
 		}
-		if a.mcpBroker != nil {
+		if broker, _, _ := a.mcpScope(); broker != nil {
 			if err := a.prevalidateEmail(toolName, rawInput); err != nil {
 				return "", err
 			}
@@ -200,7 +266,8 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 		})
 	}
 
-	approval, err := a.store.CreateApproval(a.ctx, a.conversationID, a.userEmail, toolName, toolCallID, rawInput, a.expiryUnixFor(toolName))
+	seat := a.seatFor(toolName)
+	approval, err := a.store.CreateApproval(a.ctx, a.conversationID, a.userEmail, toolName, toolCallID, rawInput, a.expiryUnixFor(toolName), seat)
 	if err != nil {
 		return "", err
 	}
@@ -216,6 +283,11 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 		// Unix-seconds default-deny deadline (#225); the UI renders a countdown
 		// and transitions the card to a timed-out state at this instant.
 		"expires_at": approval.ExpiresAt,
+		// The public seat the approved call will run under (#167 residual 2).
+		// Empty for native tools and for the default bundle seat, which the UI
+		// renders as no account badge at all.
+		"mcp_server":  approval.MCPServer,
+		"mcp_account": approval.MCPAccount,
 	})
 	a.firePushNotification(toolName)
 	return approval.ID, nil
@@ -395,8 +467,11 @@ func (a *approvalStager) StageSuggestion(reason string) (string, string, error) 
 	// suggest_advanced_model has no agent-emitted tool_call to thread
 	// back to — it's a server-staged card. Empty toolCallID is fine;
 	// resolutionCallID falls back to the approval id at write time.
+	// A model-switch suggestion is server-staged and calls no MCP server, so it
+	// records no credential seat.
 	approval, err := a.store.CreateApproval(a.ctx, a.conversationID, a.userEmail,
-		tools.SuggestAdvancedModelToolName, "", string(rawInput), a.expiryUnixFor(tools.SuggestAdvancedModelToolName))
+		tools.SuggestAdvancedModelToolName, "", string(rawInput), a.expiryUnixFor(tools.SuggestAdvancedModelToolName),
+		store.ApprovalSeat{})
 	if err != nil {
 		return "", "", err
 	}
@@ -438,12 +513,13 @@ func (a *approvalStager) prevalidateEmail(sourceToolName, rawInput string) error
 	ctx, cancel := context.WithTimeout(a.ctx, 10*time.Second)
 	defer cancel()
 
-	server, err := resolveEmailValidationServer(a.mcpCatalog, sourceToolName)
+	broker, catalog, _ := a.mcpScope()
+	server, err := resolveEmailValidationServer(catalog, sourceToolName)
 	if err != nil {
 		log.Printf("prevalidateEmail: resolve source tool: %v", err)
 		return nil
 	}
-	text, isError, err := a.mcpBroker.CallMCP(ctx, server, "validate_email_content", map[string]interface{}{
+	text, isError, err := broker.CallMCP(ctx, server, "validate_email_content", map[string]interface{}{
 		"content": content,
 		"subject": subject,
 	})
@@ -1229,10 +1305,6 @@ func (s *Server) runStagedTool(ctx context.Context, approval *store.Approval) (s
 	if approval.ToolName == "preview_email" {
 		return "Preview dismissed by user. No email was sent.", nil
 	}
-	broker := mgr.MCPBroker()
-	if broker == nil {
-		return "", errors.New("MCP broker not initialized (mock mode?)")
-	}
 	// Our internal naming convention is mcp_<server>_<tool>. Route by the
 	// full prefixed name so the call lands on the server that staged it —
 	// bare names collide across servers (sendgrid and mailbux both
@@ -1249,7 +1321,18 @@ func (s *Server) runStagedTool(ctx context.Context, approval *store.Approval) (s
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
-	server, tool, err := resolveMCPTool(mgr.MCPCatalog(), approval.ToolName)
+	// Reopen the seat the card was staged under (#167 residual 2). The turn
+	// scope that staged it is long gone, so this is a fresh short-lived scope
+	// carrying the same public {server, account} selection. A revoked account
+	// fails the open and therefore the approval — it never falls back to the
+	// default bundle seat, which would send as the wrong client.
+	broker, catalog, release, err := s.approvalMCPScope(ctx, approval)
+	if err != nil {
+		return "", err
+	}
+	defer release()
+
+	server, tool, err := resolveMCPTool(catalog, approval.ToolName)
 	if err != nil {
 		return "", err
 	}
@@ -1261,6 +1344,60 @@ func (s *Server) runStagedTool(ctx context.Context, approval *store.Approval) (s
 		return "", fmt.Errorf("MCP tool reported an error: %s", strings.TrimSpace(text))
 	}
 	return strings.TrimSpace(text), nil
+}
+
+// approvalScopeCloseTimeout bounds the post-execution scope close so a hung
+// credential owner cannot hold the approval HTTP request open.
+const approvalScopeCloseTimeout = 5 * time.Second
+
+// approvalMCPScope resolves the call seam an approved MCP tool executes on.
+// With a recorded seat and a scope-capable engine it opens a per-approval
+// scope; otherwise it falls back to the engine's shared broker — the
+// pre-#167-residual-2 behaviour, which is still correct for legacy rows (no
+// seat was ever recorded) and for the transitional local-client mode.
+func (s *Server) approvalMCPScope(ctx context.Context, approval *store.Approval) (agentcore.MCPBroker, []mcp.ServerTool, func(), error) {
+	shared := func() (agentcore.MCPBroker, []mcp.ServerTool, func(), error) {
+		broker := s.agent.MCPBroker()
+		if broker == nil {
+			return nil, nil, nil, errors.New("MCP broker not initialized (mock mode?)")
+		}
+		return broker, s.agent.MCPCatalog(), func() {}, nil
+	}
+	if approval.MCPServer == "" {
+		return shared()
+	}
+	workspace := tools.WorkspaceDirForConversation(approval.ConversationID)
+	scope, err := s.agent.OpenApprovalMCPScope(ctx, agentcore.MCPSelection{{
+		Server:  approval.MCPServer,
+		Account: approval.MCPAccount,
+	}}, workspace)
+	if err != nil {
+		// Fail closed: a seat that no longer resolves (account revoked, server
+		// removed from the bundle) must surface, not silently downgrade to the
+		// default seat.
+		return nil, nil, nil, fmt.Errorf("open approval MCP scope for %s: %w", approvalSeatLabel(approval), err)
+	}
+	if scope == nil {
+		return shared()
+	}
+	release := func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), approvalScopeCloseTimeout)
+		defer cancel()
+		if err := scope.Close(closeCtx); err != nil {
+			//nolint:gosec // G706: approval.ID is a server-minted uuid read back from
+			// our own row, and it is rendered with %q so any CR/LF would be escaped.
+			log.Printf("approval %q: close MCP scope: %v", approval.ID, err)
+		}
+	}
+	return scope.Broker, scope.Catalog, release, nil
+}
+
+// approvalSeatLabel renders the public seat for an operator-facing error.
+func approvalSeatLabel(approval *store.Approval) string {
+	if approval.MCPAccount == "" {
+		return approval.MCPServer + " (default seat)"
+	}
+	return approval.MCPServer + " (account " + approval.MCPAccount + ")"
 }
 
 // resolveMCPTool maps the model-visible mcp_<server>_<tool> identity back to a
