@@ -1,10 +1,12 @@
 package agent
 
 import (
+	"context"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/config"
 )
 
@@ -31,6 +33,38 @@ func TestRenderMCPCatalog_SurfacesAccountSeats(t *testing.T) {
 	if strings.Contains(out, "plainsv — accounts:") {
 		t.Fatalf("plainsv has no suffixed env → should report no accounts, got:\n%s", out)
 	}
+}
+
+// TestLoaderToolsForRun_DenyAllGetsNoLoader: mcp_load_servers spawns
+// credentialed MCP subprocesses as a side effect of being called, so a run whose
+// credential allowlist denies every server must not be offered it (#979) — Gate-3
+// would refuse the resulting calls, but the spawn already happened. The nil case
+// is the one that matters most: nil is "inherit global", NOT "deny all", so a
+// run with no allowlist keeps the loader exactly as before.
+func TestLoaderToolsForRun_DenyAllGetsNoLoader(t *testing.T) {
+	denyAll := &Agent{credentialAllowlist: agentcore.CredentialAllowlist{}}
+	if got := denyAll.loaderToolsForRun(); got != nil {
+		t.Errorf("deny-all run got %d loader tool(s), want none", len(got))
+	}
+	inheritGlobal := &Agent{}
+	if got := inheritGlobal.loaderToolsForRun(); len(got) != 2 {
+		t.Errorf("nil allowlist (inherit global) got %d loader tool(s), want 2", len(got))
+	}
+	scoped := &Agent{credentialAllowlist: agentcore.CredentialAllowlist{{Server: "github"}}}
+	if got := scoped.loaderToolsForRun(); len(got) != 2 {
+		t.Errorf("scoped allowlist got %d loader tool(s), want 2", len(got))
+	}
+	// Broker mode owns server lifecycle out of process: still no loader.
+	brokered := &Agent{mcpBroker: noopBrokerForLoaderTest{}}
+	if got := brokered.loaderToolsForRun(); got != nil {
+		t.Errorf("broker-mode run got %d loader tool(s), want none", len(got))
+	}
+}
+
+type noopBrokerForLoaderTest struct{}
+
+func (noopBrokerForLoaderTest) CallMCP(context.Context, string, string, map[string]any) (string, bool, error) {
+	return "", false, nil
 }
 
 // The loader's prose has always called client optional, but without omitempty

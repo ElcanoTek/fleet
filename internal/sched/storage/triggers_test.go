@@ -238,6 +238,13 @@ func TestSpawnEmailRun_ConnectorGating(t *testing.T) {
 	if len(out.MCPSelection) != 0 || len(out.CredentialAllowlist) != 0 {
 		t.Errorf("opt-out run inherited connectors: mcp=%+v cred=%+v", out.MCPSelection, out.CredentialAllowlist)
 	}
+	// ...and the deny is EXPLICIT, not merely absent (#979). A nil allowlist is
+	// "inherit global" — every seat — so the opted-OUT run must persist a non-nil
+	// empty list, which survives the nullable JSONB round trip as "deny all".
+	// Asserting only len()==0 above is what let the boundary invert unnoticed.
+	if out.CredentialAllowlist == nil {
+		t.Error("opt-out run has a NIL credential allowlist: nil means inherit-global (ALL seats), not none")
+	}
 
 	// Opt-in: inherits BOTH.
 	inID, err := store.SpawnEmailRun(ctx, trig, "prompt", true)

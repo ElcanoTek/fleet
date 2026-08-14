@@ -19,6 +19,29 @@ prior versions are listed because none have shipped.
 
 ### Security
 
+- **Un-inverted the event-trigger connector boundary: `allow_event_triggers=false`
+  now grants zero connector seats instead of all of them** (#979). The opted-out
+  spawn left its `credential_allowlist` unset, and an unset allowlist means
+  *inherit global* — every seat — not *none*, so the secure default produced the
+  most permissive run in the system, the exact inverse of what the code's own
+  comment promised. On an email trigger whose policy approves a bare domain, any
+  sender in that domain drove an agent holding every bundle connector, credential
+  gating disabled. The opted-out run now persists an explicit deny-all allowlist
+  (non-nil, empty), and the scheduled runner honors that value by wiring **no**
+  connector rather than wiring them all and rejecting each call: an empty MCP
+  selection (which otherwise means *the deployment default set*), a dedicated
+  empty MCP client instead of the shared process-wide one, no
+  `mcp_list_servers`/`mcp_load_servers` loader tools (calling `mcp_load_servers`
+  spawns credentialed subprocesses as a side effect), and no per-user hosted
+  remote-MCP overlay — the last of which was attached from the task *owner*, so a
+  template that looked connector-less in an audit still reached everything that
+  human had personally OAuth-connected. Tests now assert the **negative** (a
+  `false` spawn reaches zero seats, checked through the same Gate-3 predicate the
+  broker enforces); asserting only that the run "inherited nothing" is what let
+  the code and its documentation drift apart, since `len(allowlist) == 0` is true
+  for both deny-all and inherit-global. The `#177` webhook path is unchanged — it
+  is HMAC-authenticated against a per-trigger secret. See
+  [`docs/EVENT-TRIGGERS.md`](docs/EVENT-TRIGGERS.md).
 - **Cleared the three high-severity npm advisories and all seven govulncheck
   findings.** `npm audit` in `web/` reported 3 high-severity vulnerabilities and
   the Go CVE gate reported 7 reachable standard-library vulnerabilities; both

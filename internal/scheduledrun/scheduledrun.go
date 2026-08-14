@@ -958,6 +958,16 @@ func (r *Runner) buildTaskRemoteOverlay(ctx context.Context, task *models.Task, 
 	if (r.openRemoteMCPOverlay == nil && r.remoteMCP == nil) || r.ownerEmail == nil || task.CreatedBy == nil {
 		return nil
 	}
+	// A deny-all task reaches no connector, and the owner's hosted connections are
+	// connectors the task's own mcp_selection never names — an operator auditing
+	// the task sees nothing, so they must not be wired behind its back (#979).
+	// Gate-3 would refuse every call anyway; stopping here also avoids minting the
+	// owner's bearer tokens and dialing third-party servers for a run that can
+	// never use them.
+	if taskCredentialAllowlist(task).DeniesAll() {
+		log.Printf("scheduled task %s: credential allowlist denies all MCP, skipping the owner's remote connections", task.ID)
+		return nil
+	}
 	email, err := r.ownerEmail(ctx, *task.CreatedBy)
 	if err != nil {
 		log.Printf("scheduled task %s: cannot resolve owner email for remote MCP: %v", task.ID, err)
@@ -1016,11 +1026,18 @@ func (b taskMCPBinding) discoveryCatalog() []mcp.ServerTool {
 const taskMCPScopeCloseTimeout = 5 * time.Second
 
 func (r *Runner) bindTaskMCPRuntime(ctx context.Context, task *models.Task) (taskMCPBinding, error) {
+	// "May call no MCP server" is wired as "has no MCP server" (#979). Gate-3
+	// already refuses every call at the broker seam, but an empty selection means
+	// the DEPLOYMENT DEFAULT SET everywhere else in this file, so a deny-all run
+	// would otherwise spawn every bundle server and advertise its whole tool
+	// roster to the model just to reject each call. Both paths below therefore
+	// bind an empty selection rather than the default expansion.
+	denyAll := taskCredentialAllowlist(task).DeniesAll()
 	if r.openTaskMCPScope == nil {
 		if r.mgr != nil && r.mgr.MCPClient() == nil && r.mgr.MCPBroker() != nil {
 			return taskMCPBinding{}, errors.New("scheduled MCP broker requires a task scope opener")
 		}
-		client, cleanup, workdir, err := r.bindTaskMCP(ctx, task)
+		client, cleanup, workdir, err := r.bindTaskMCP(ctx, task, denyAll)
 		if err != nil {
 			return taskMCPBinding{}, err
 		}
@@ -1030,7 +1047,7 @@ func (r *Runner) bindTaskMCPRuntime(ctx context.Context, task *models.Task) (tas
 		return taskMCPBinding{client: client, workdir: workdir, cleanup: cleanup}, nil
 	}
 
-	selection := r.taskMCPSelection(task, true)
+	selection := r.taskMCPSelection(task, !denyAll)
 	workdir, err := r.prepareTaskMCPWorkspace(task, selection)
 	if err != nil {
 		return taskMCPBinding{}, err
@@ -1148,11 +1165,28 @@ func (r *Runner) taskMCPToolAllowlist() agentcore.MCPAllowlist {
 //     at run end. A missing named-account credential is refused rather than
 //     silently inheriting the default seat.
 //
+// A denyAll task (explicit empty credential allowlist) gets a DEDICATED EMPTY
+// client on either branch: no bundle server, no http_tools, no shared-client
+// fallback. See bindTaskMCPRuntime.
+//
 // The third return is the resolved ${FLEET_WORKSPACE} directory used for this
 // task's connector ledger reconciliation ("" when no selected server references
 // the token).
-func (r *Runner) bindTaskMCP(ctx context.Context, task *models.Task) (*mcp.Client, func(), string, error) {
+func (r *Runner) bindTaskMCP(ctx context.Context, task *models.Task, denyAll bool) (*mcp.Client, func(), string, error) {
 	noop := func() {}
+	if denyAll {
+		// An empty per-run client, NOT the shared one: the shared client already
+		// holds every boot-loaded bundle server, and handing it over would put that
+		// whole roster in the model's tool list for a run permitted to call none of
+		// it. Nothing is registered here, so there is no subprocess to reap — but
+		// the client is still closed for symmetry with the dedicated path below.
+		client := mcp.NewClient()
+		return client, func() {
+			if err := client.Close(); err != nil {
+				log.Printf("scheduled task %s: error closing empty per-run MCP client: %v", task.ID, err)
+			}
+		}, "", nil
+	}
 	if len(task.MCPSelection) == 0 {
 		// NO reconciliation workdir on this path, deliberately. The shared
 		// client's workspace-armed servers were spawned at boot against the

@@ -16,6 +16,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
@@ -299,6 +300,60 @@ func TestHandleEmailTrigger_ConnectorOptIn(t *testing.T) {
 	run := runFromResp(t, store, wIn)
 	if len(run.MCPSelection) != 1 || run.MCPSelection[0].Server != "github" {
 		t.Errorf("opt-in run should inherit connectors, got %+v", run.MCPSelection)
+	}
+}
+
+// TestHandleEmailTrigger_OptOutRunReachesZeroConnectorSeats asserts the NEGATIVE
+// the opt-in test above never did (#979): that an allow_event_triggers=false
+// spawn can reach no connector seat at all. It walks the boundary end to end —
+// inbound email → spawned run → the agentcore Gate-3 verdict the run loop
+// actually enforces — because the bug was invisible at every intermediate step:
+// the run's allowlist was empty by len(), and empty by len() was ALL seats, since
+// a nil allowlist means "inherit global". Asserting the run merely "inherited
+// nothing" is what let the code and its own comment drift apart.
+func TestHandleEmailTrigger_OptOutRunReachesZeroConnectorSeats(t *testing.T) {
+	r, store, cleanup := setupEmailTest(t)
+	defer cleanup()
+
+	mcp := models.MCPSelection{{Server: "ssp", Account: "client_a"}}
+	secret := seedEmailTrigger(t, store, "zeroseats", validPolicy(), false, mcp)
+	// Scope the TEMPLATE to a real seat, so "inherited nothing" and "may call
+	// nothing" are distinguishable outcomes rather than the same empty list.
+	trig, err := store.GetTriggerBySlug(context.Background(), "zeroseats")
+	if err != nil {
+		t.Fatalf("GetTriggerBySlug: %v", err)
+	}
+	tmplAllow := models.CredentialAllowlist{{Server: "ssp", Account: "client_a"}}
+	if _, err := store.UpdateTaskCredentialAllowlist(context.Background(), trig.TaskID, tmplAllow); err != nil {
+		t.Fatalf("UpdateTaskCredentialAllowlist: %v", err)
+	}
+
+	w := postEmail(r, "zeroseats", secret, goodEmail())
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202 (%s)", w.Code, w.Body.String())
+	}
+	run := runFromResp(t, store, w)
+
+	if run.CredentialAllowlist == nil {
+		t.Fatal("opt-out run has a NIL credential allowlist — nil is inherit-global, i.e. EVERY seat")
+	}
+	// The same conversion the scheduled runner performs, then the same Gate-3
+	// predicate the broker enforces on every MCP call.
+	al := make(agentcore.CredentialAllowlist, 0, len(run.CredentialAllowlist))
+	for _, e := range run.CredentialAllowlist {
+		al = append(al, agentcore.CredentialAllowlistEntry{Server: e.Server, Account: e.Account})
+	}
+	if !al.DeniesAll() {
+		t.Fatalf("opt-out run allowlist is not deny-all: %+v", al)
+	}
+	for _, seat := range []struct{ server, account string }{
+		{"ssp", "client_a"}, // the template's own seat
+		{"ssp", ""},         // the same server's default seat
+		{"mailbox", ""},     // any other bundle connector
+	} {
+		if al.Permits(seat.server, seat.account) {
+			t.Errorf("opt-out run may call (%q, %q); an untrusted email must reach ZERO seats", seat.server, seat.account)
+		}
 	}
 }
 

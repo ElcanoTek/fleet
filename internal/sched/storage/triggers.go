@@ -61,10 +61,32 @@ func (s *Storage) GetTriggerEventByRunID(ctx context.Context, runID uuid.UUID) (
 // and its credential allowlist to actually write, so #511's opt-in gates both
 // together; #177's webhook path predates the gate and inherits its historical
 // subset (mcp only) unchanged.
-type connectorInheritance struct {
-	mcp  bool
-	cred bool
-}
+//
+// It is a closed three-way enum rather than a pair of booleans because "did not
+// inherit" is NOT the same statement as "may reach nothing", and conflating the
+// two is exactly how #979 happened: leaving the credential allowlist unset on
+// the opted-OUT spawn produced a nil allowlist, and nil means "inherit global"
+// — every seat — at every consumer (agentcore.CredentialAllowlist.Permits).
+// The secure default therefore has to SET something, not omit it.
+type connectorInheritance int
+
+const (
+	// connectorsDenied is the secure default for event ingress (#511): the
+	// spawned run carries none of the template's connectors and may call no MCP
+	// server at all. Encoded EXPLICITLY as a non-nil empty credential allowlist
+	// (deny all) — see the type comment for why absent is not an option.
+	connectorsDenied connectorInheritance = iota
+	// connectorsMCPOnly is #177's historical webhook subset, unchanged: the run
+	// inherits the template's MCP selection and its credential allowlist is left
+	// to the deployment default (nil ⇒ inherit global). Webhook ingress is
+	// HMAC-authenticated against a per-trigger secret, so its trust model is the
+	// operator who holds that secret, not an arbitrary inbound sender.
+	connectorsMCPOnly
+	// connectorsInherited is the allow_event_triggers=true opt-in (#511): the run
+	// carries BOTH facets exactly as the template declares them, including a nil
+	// credential allowlist when the template itself never scoped one.
+	connectorsInherited
+)
 
 // buildTriggerRun clones the trigger's template task into a fresh one-shot run
 // with the rendered prompt substituted. It deliberately drops Recurrence /
@@ -114,11 +136,22 @@ func (s *Storage) buildTriggerRun(ctx context.Context, taskID uuid.UUID, prompt 
 	// inbound event never carries the template's write-capable connectors unless
 	// the template explicitly opted in (allow_event_triggers). Off ⇒ native tools
 	// only (no MCP selection, no credentials).
-	if inherit.mcp {
+	switch inherit {
+	case connectorsInherited:
 		tc.MCPSelection = template.MCPSelection
-	}
-	if inherit.cred {
 		tc.CredentialAllowlist = template.CredentialAllowlist
+	case connectorsMCPOnly:
+		tc.MCPSelection = template.MCPSelection
+	default: // connectorsDenied
+		// Deny-all, stated explicitly. The credential allowlist is the load-bearing
+		// half: it is a NULLABLE column that round-trips nil-vs-empty (#184), so an
+		// empty list persists as "deny all" and the scheduled runner refuses to wire
+		// ANY connector for the run — local bundle servers and the owner's hosted
+		// remote connections alike. The MCP selection is deliberately left nil: the
+		// mcp_selection column is coerced to `[]` on write (db.mcpSelectionOrEmpty),
+		// so an "explicitly empty" selection is indistinguishable from an absent one
+		// and cannot carry the deny by itself. See docs/EVENT-TRIGGERS.md.
+		tc.CredentialAllowlist = models.CredentialAllowlist{}
 	}
 
 	run := models.NewTask(tc)
@@ -140,15 +173,19 @@ func (s *Storage) buildTriggerRun(ctx context.Context, taskID uuid.UUID, prompt 
 // the spawned run inherits the template's MCP selection (its historical
 // connector subset).
 func (s *Storage) SpawnWebhookRun(ctx context.Context, trigger *models.TaskTrigger, prompt string) (uuid.UUID, error) {
-	return s.buildTriggerRun(ctx, trigger.TaskID, prompt, connectorInheritance{mcp: true, cred: false})
+	return s.buildTriggerRun(ctx, trigger.TaskID, prompt, connectorsMCPOnly)
 }
 
 // SpawnEmailRun creates one fresh run from an email trigger's template (#511).
 // inheritConnectors reflects the template's allow_event_triggers opt-in: false
-// (the secure default) spawns a native-tools-only run that carries NONE of the
-// template's write-capable connectors, so an untrusted inbound email can never
-// auto-escalate; true inherits both the MCP selection and its credential
+// (the secure default) spawns a native-tools-only run whose credential allowlist
+// is an explicit deny-all, so an untrusted inbound email can never auto-escalate
+// through a connector; true inherits both the MCP selection and its credential
 // allowlist (a connector needs both to write).
 func (s *Storage) SpawnEmailRun(ctx context.Context, trigger *models.TaskTrigger, prompt string, inheritConnectors bool) (uuid.UUID, error) {
-	return s.buildTriggerRun(ctx, trigger.TaskID, prompt, connectorInheritance{mcp: inheritConnectors, cred: inheritConnectors})
+	inherit := connectorsDenied
+	if inheritConnectors {
+		inherit = connectorsInherited
+	}
+	return s.buildTriggerRun(ctx, trigger.TaskID, prompt, inherit)
 }

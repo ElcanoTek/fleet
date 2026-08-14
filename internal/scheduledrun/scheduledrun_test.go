@@ -118,6 +118,102 @@ func TestBindTaskMCPRuntime_UsesBrokerScope(t *testing.T) {
 	}
 }
 
+// denyAllTask is a task whose credential allowlist is the explicit deny-all form
+// (non-nil, empty) — what an allow_event_triggers=false email spawn persists.
+func denyAllTask() *models.Task {
+	return &models.Task{ID: uuid.New(), CredentialAllowlist: models.CredentialAllowlist{}}
+}
+
+// TestBuildTaskRemoteOverlay_SkippedForDenyAllTask: the owner's hosted OAuth
+// connections are wired from the task OWNER, not from the task's own
+// mcp_selection, so an operator auditing a connector-less template sees nothing
+// while the run still reaches everything that human personally connected (#979).
+// A deny-all run must not open them at all — not merely fail every call — since
+// opening one mints the owner's bearer and dials a third party.
+func TestBuildTaskRemoteOverlay_SkippedForDenyAllTask(t *testing.T) {
+	ownerID := uuid.New()
+	opened := false
+	r := &Runner{
+		ownerEmail: func(context.Context, uuid.UUID) (string, error) { return "owner@example.com", nil },
+		openRemoteMCPOverlay: func(context.Context, string, map[string]bool, map[string]bool) (*agent.RemoteMCPOverlay, error) {
+			opened = true
+			return &agent.RemoteMCPOverlay{
+				Broker:     &scheduledRecordingBroker{},
+				Servers:    map[string]bool{"remote": true},
+				CloseScope: func(context.Context) error { return nil },
+			}, nil
+		},
+	}
+	task := denyAllTask()
+	task.CreatedBy = &ownerID
+
+	if overlay := r.buildTaskRemoteOverlay(context.Background(), task, nil); overlay.Active() {
+		t.Error("deny-all task got an active remote overlay")
+	}
+	if opened {
+		t.Error("deny-all task opened the owner's remote connections (bearer minted, third party dialed)")
+	}
+	// Control: the same runner DOES wire the overlay when the task may call MCP.
+	permitted := &models.Task{ID: uuid.New(), CreatedBy: &ownerID}
+	if overlay := r.buildTaskRemoteOverlay(context.Background(), permitted, nil); !overlay.Active() {
+		t.Fatal("control task lost its remote overlay; the guard is too broad")
+	}
+}
+
+// TestBindTaskMCPRuntime_DenyAllBindsNoServers: an empty mcp_selection means the
+// DEPLOYMENT DEFAULT SET on both binding paths, so a run permitted to call
+// nothing would otherwise be handed every bundle server (broker scope) or the
+// shared process-wide client (compatibility path). Gate-3 would reject each call,
+// but the roster would still be advertised to the model — and on the shared
+// client the servers are already live. Deny-all must bind nothing.
+func TestBindTaskMCPRuntime_DenyAllBindsNoServers(t *testing.T) {
+	t.Setenv("FLEET_WORKSPACE_ROOT", t.TempDir())
+	inventory := map[string]TaskMCPServerInfo{"alpha": {UsesWorkspace: true}, "beta": {}}
+
+	t.Run("broker scope opens with an empty selection", func(t *testing.T) {
+		var gotSelection agentcore.MCPSelection
+		r := &Runner{
+			cfg:                &config.Config{},
+			mcpServerInventory: func() map[string]TaskMCPServerInfo { return inventory },
+			openTaskMCPScope: func(_ context.Context, selection agentcore.MCPSelection, _, _ string) (*agent.MCPScope, error) {
+				gotSelection = append(agentcore.MCPSelection(nil), selection...)
+				return &agent.MCPScope{
+					Broker: &scheduledRecordingBroker{},
+					Close:  func(context.Context) error { return nil },
+				}, nil
+			},
+		}
+		binding, err := r.bindTaskMCPRuntime(context.Background(), denyAllTask())
+		if err != nil {
+			t.Fatalf("bindTaskMCPRuntime: %v", err)
+		}
+		defer binding.cleanup()
+		if len(gotSelection) != 0 {
+			t.Errorf("deny-all scope selection = %#v, want no servers", gotSelection)
+		}
+	})
+
+	t.Run("compatibility path avoids the shared client", func(t *testing.T) {
+		// r.mgr is deliberately left nil: reaching for the shared process-wide
+		// client would panic rather than silently hand over its whole roster.
+		r := &Runner{
+			cfg:                &config.Config{},
+			mcpServerInventory: func() map[string]TaskMCPServerInfo { return inventory },
+		}
+		binding, err := r.bindTaskMCPRuntime(context.Background(), denyAllTask())
+		if err != nil {
+			t.Fatalf("bindTaskMCPRuntime: %v", err)
+		}
+		defer binding.cleanup()
+		if binding.client == nil {
+			t.Fatal("compatibility path returned no client")
+		}
+		if got := binding.client.GetAllTools(); len(got) != 0 {
+			t.Errorf("deny-all per-run client advertises %d tool(s), want none", len(got))
+		}
+	})
+}
+
 func TestTaskMCPSelection_UsesLivePublicInventory(t *testing.T) {
 	inventory := map[string]TaskMCPServerInfo{"alpha": {}}
 	r := &Runner{
@@ -304,7 +400,7 @@ func callWhoami(t *testing.T, r *Runner, sel models.MCPSelection, serverName str
 	defer cancel()
 
 	task := &models.Task{MCPSelection: sel}
-	client, cleanup, _, err := r.bindTaskMCP(ctx, task)
+	client, cleanup, _, err := r.bindTaskMCP(ctx, task, false)
 	if err != nil {
 		cleanup()
 		t.Fatalf("bindTaskMCP(%+v): %v", sel, err)
@@ -383,7 +479,7 @@ func TestScheduledRunner_RefusesAccountWithoutCreds(t *testing.T) {
 	defer cancel()
 
 	task := &models.Task{MCPSelection: models.MCPSelection{{Server: "acct", Account: "client_c"}}}
-	client, cleanup, _, err := r.bindTaskMCP(ctx, task)
+	client, cleanup, _, err := r.bindTaskMCP(ctx, task, false)
 	defer cleanup()
 	if err == nil {
 		t.Fatalf("expected refusal binding an account with no <VAR>_CLIENT_C creds, got client=%v", client)
@@ -402,7 +498,7 @@ func TestScheduledRunner_PerRunClientClosedReapsSubprocess(t *testing.T) {
 	defer cancel()
 
 	task := &models.Task{MCPSelection: models.MCPSelection{{Server: "acct", Account: "client_a"}}}
-	client, cleanup, _, err := r.bindTaskMCP(ctx, task)
+	client, cleanup, _, err := r.bindTaskMCP(ctx, task, false)
 	if err != nil {
 		cleanup()
 		t.Fatalf("bindTaskMCP: %v", err)
@@ -423,7 +519,7 @@ func TestScheduledRunner_UnknownServerFailsFast(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	task := &models.Task{MCPSelection: models.MCPSelection{{Server: "nope"}}}
-	_, cleanup, _, err := r.bindTaskMCP(ctx, task)
+	_, cleanup, _, err := r.bindTaskMCP(ctx, task, false)
 	defer cleanup()
 	if err == nil {
 		t.Fatalf("expected unknown-server error for selection referencing an unconfigured server")
@@ -437,7 +533,7 @@ func TestScheduledRunner_DisabledServerFailsFast(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	task := &models.Task{MCPSelection: models.MCPSelection{{Server: "disabled"}}}
-	_, cleanup, _, err := r.bindTaskMCP(ctx, task)
+	_, cleanup, _, err := r.bindTaskMCP(ctx, task, false)
 	defer cleanup()
 	if err == nil {
 		t.Fatal("disabled server remained selectable through the per-run binder")
