@@ -13,8 +13,9 @@
 //     convention).
 //   - bearer         → forwarded verbatim as Authorization: Bearer <token>.
 //
-// The bearer path is the leftover moc username/password login; it will be
-// removed in the wave-2 operator-honesty pass (cookie/OIDC is the real path).
+// The bearer path is leftover moc username/password login. The Operations
+// Center form that minted those tokens is gone; the proxy still forwards a
+// presented bearer so API clients and any stored token keep working.
 
 import { dropRevokedSession } from "@/app/lib/sessionRevocation";
 

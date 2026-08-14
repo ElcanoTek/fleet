@@ -9,11 +9,10 @@ import {
   setStoredToken,
 } from "@/app/shared/lib/orchestratorAuth";
 
-// useOrchestratorSession owns the orchestrator's TWO-path login state:
-//   - moc bearer  (username/password) → token in localStorage.
-//   - elcano cookie ("Use Elcano email") → no token; detected by probing
-//     /api/orchestrator/me, which succeeds for any valid credential.
-// Mirrors moc's auth-session.js isAuthenticated()/cookie-session probe.
+// useOrchestratorSession owns the orchestrator's login state.
+// Cookie/OIDC is the operator path (the username/password form is gone).
+// login() still posts to /auth/login so a bearer client can mint a token;
+// the UI no longer calls it. /me remains the single source of truth.
 
 export type OrchestratorSession = {
   ready: boolean; // initial probe complete

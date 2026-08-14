@@ -144,6 +144,17 @@ function TaskSummary({ task }: { task: Task }) {
     { label: "Created by", node: <span>{createdByLabel(task)}</span> },
     { label: "Created", node: <span>{formatTimeFirst(task.created_at)}</span> },
   ];
+  if (task.status === "paused_awaiting_wake") {
+    items.push({
+      label: "Wake",
+      node: (
+        <span data-testid="wake-summary">
+          {task.wake_event_key ? `event “${task.wake_event_key}”` : "timer"}
+          {task.wake_at ? ` · by ${formatTimeFirst(task.wake_at)}` : ""}
+        </span>
+      ),
+    });
+  }
   return (
     <div className="task-summary" data-testid="task-summary">
       {items.map((it) => (
@@ -1022,6 +1033,27 @@ function LogViewerBody({
 
   const canResubmit = RUNNABLE.has(task.status ?? "");
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [wakeNote, setWakeNote] = useState("");
+  const [waking, setWaking] = useState(false);
+  const canFireWake =
+    task.status === "paused_awaiting_wake" && Boolean(task.wake_event_key);
+
+  const fireWake = async () => {
+    if (waking || !task.wake_event_key) return;
+    setWaking(true);
+    try {
+      await orchestratorApi.wakeTask(task.id, task.wake_event_key, wakeNote.trim());
+      showToast(`Fired “${task.wake_event_key}” — task is pending again`, "success");
+      onResubmitted?.();
+    } catch (err) {
+      showToast(
+        `Fire event failed: ${err instanceof Error ? err.message : "unknown error"}`,
+        "error",
+      );
+    } finally {
+      setWaking(false);
+    }
+  };
 
   // "Discuss this run" (docs/DISCUSS-RUN.md): the BFF fetches this run's
   // transcript, creates a chat conversation seeded with a digest, and we
@@ -1119,6 +1151,26 @@ function LogViewerBody({
                 >
                   {resubmitting ? (hasRun ? "Resubmitting…" : "Starting…") : actionLabel}
                 </button>
+              ) : null}
+              {canFireWake ? (
+                <span className="wake-fire" data-testid="wake-fire">
+                  <input
+                    type="text"
+                    aria-label="Wake note"
+                    placeholder="optional note"
+                    value={wakeNote}
+                    onChange={(e) => setWakeNote(e.target.value)}
+                  />
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    data-testid="fire-event-button"
+                    disabled={waking}
+                    onClick={() => void fireWake()}
+                  >
+                    {waking ? "Firing…" : `Fire “${task.wake_event_key}”`}
+                  </button>
+                </span>
               ) : null}
               <button
                 type="button"

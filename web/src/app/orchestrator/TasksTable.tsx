@@ -58,6 +58,8 @@ const STATUS_OPTIONS = [
   "error",
   "cancelled",
   "scheduled",
+  "paused_awaiting_input",
+  "paused_awaiting_wake",
 ];
 
 export function TasksTable({
@@ -126,7 +128,7 @@ export function TasksTable({
             >
               {STATUS_OPTIONS.map((s) => (
                 <option key={s || "all"} value={s}>
-                  {s ? s[0].toUpperCase() + s.slice(1) : "All"}
+                  {s ? s.replaceAll("_", " ") : "All"}
                 </option>
               ))}
             </select>

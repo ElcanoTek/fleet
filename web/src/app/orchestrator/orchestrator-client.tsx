@@ -17,6 +17,7 @@ import { OrchestratorLogin } from "./OrchestratorLogin";
 import { StatsGrid, type StatFilter } from "./StatsGrid";
 import { ServerClock } from "./ServerClock";
 import { TasksTable } from "./TasksTable";
+import { SleepingTasks } from "./SleepingTasks";
 import { TaskCreateModal } from "./TaskCreateModal";
 import { LogViewer } from "./LogViewer";
 import { SLAReportPanel } from "./SLAReportPanel";
@@ -206,27 +207,28 @@ function OrchestratorInner({ magicLinkLoginEnabled }: { magicLinkLoginEnabled: b
   }
 
   // Signed out — slim top bar (theme + cross-link) above the login card; no rail.
-  // #458 symptom 1: when the visitor IS signed in to chat but that identity
-  // isn't provisioned here (/me → 403 not_a_member, session.noAccess), we still
-  // render the login card — the username/password (moc) path can admit a
-  // provisioned operator even when the cookie identity can't — but with a notice
-  // explaining why a login prompt appeared, instead of a bare, confusing form or
-  // a dead-end card that would strand a valid moc user. A genuinely signed-out
-  // visitor (401) gets the plain card with no notice.
+  // #458: a chat-signed-in visitor whose identity isn't provisioned here
+  // (/me → 403 not_a_member, session.noAccess) gets a dead-end card. The moc
+  // username/password form that used to sit under that notice is gone — cookie
+  // / OIDC is the only operator path. A genuinely signed-out visitor (401)
+  // gets the Elcano-email (or Chat) handoff.
   if (!session.signedIn) {
     return (
       <div className="container">
         <OrchestratorSlimHeader />
-        <OrchestratorLogin
-          magicLinkLoginEnabled={magicLinkLoginEnabled}
-          onLogin={session.login}
-          error={session.error}
-          notice={
-            session.noAccess
-              ? "You're signed in, but that identity isn't provisioned for the Operations Center. Sign in with Operations Center credentials below, or ask an administrator to provision your account."
-              : undefined
-          }
-        />
+        {session.noAccess ? (
+          <div className="auth-section" role="region" aria-label="No access">
+            <div className="auth-fields stack-form">
+              <h2>No access</h2>
+              <p className="caption" data-testid="orchestrator-no-access">
+                You&apos;re signed in, but that identity isn&apos;t provisioned for the
+                Operations Center. Ask an administrator to provision your account.
+              </p>
+            </div>
+          </div>
+        ) : (
+          <OrchestratorLogin magicLinkLoginEnabled={magicLinkLoginEnabled} />
+        )}
       </div>
     );
   }
@@ -387,7 +389,9 @@ function OrchestratorInner({ magicLinkLoginEnabled }: { magicLinkLoginEnabled: b
               ) : tab === "adoption" && isAdmin ? (
                 <AdoptionPanel />
               ) : (
-                <TasksTable
+                <>
+                  <SleepingTasks onOpen={setLogTask} />
+                  <TasksTable
                   tasks={dashboard.tasks}
                   total={dashboard.total}
                   page={dashboard.page}
@@ -400,6 +404,7 @@ function OrchestratorInner({ magicLinkLoginEnabled }: { magicLinkLoginEnabled: b
                   onEdit={setEditTask}
                   onRunNow={setRunNowTask}
                 />
+                </>
               )}
               </div>
 

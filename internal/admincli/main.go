@@ -22,9 +22,10 @@
 //	fleet chat user add|update|role|del|list
 //	fleet sched user add|update|set-role|rename|del|list
 //	fleet sched apikey create|list|revoke|rotate|delete
-//	fleet sched task list|export|import|set-model|set-credentials|set-description|tag|estimate|batch-create
+//	fleet sched task list|export|import|set-model|set-credentials|set-description|set-limits|tag|estimate|batch-create
 //	fleet sched trigger create|list|delete|rotate
 //	fleet sched dlq list|replay
+//	fleet sched budget list|create|delete
 //	fleet task run <task.yaml>   (local one-shot through the governed runtime — dispatched by the fleet binary)
 //	fleet task export|import    (definition-only #238: portable JSON/YAML, name-based conflict resolution)
 //	fleet task memories list|clear|delete <task_id> [key]
@@ -189,10 +190,13 @@ Users, credentials, notes:
   fleet sched task set-model --model <slug> [--fallback-model <slug>] [--from-model <slug>] [--dry-run]
   fleet sched task set-credentials <task_id> --allow server[:account] ... | --clear   (per-task MCP credential allowlist)
   fleet sched task set-description <task_id> <text>|-    (operator docs; - reads stdin, e.g. < TASK_README.md)
+  fleet sched task set-limits <task_id> --memory-mb N --cpus N --pids N | --clear
+                                                 (per-task sandbox cgroup override; --clear reverts to global defaults)
   fleet sched task tag <task_id> --add <tag> ... --remove <tag> ...   (organize tasks by label)
   fleet sched task estimate --model <slug> --prompt <text> [--max-iter N] [--mcp-tools N] [--max-cost USD] [--system-prompt <text>] [--json]   (pre-submission cost forecast; no DB, no model call)
   fleet sched trigger create --task <task_id> --slug <slug> [--kind webhook|email] | list | rotate <trigger_id> | delete <trigger_id>   (event triggers; #177/#511)
   fleet sched dlq list [--tag <tag>] [--limit N] [--json] | replay <task_id>   (dead-letter queue review/replay; #253)
+  fleet sched budget list | create --scope user|key --principal <id> --window day|week|month [--soft-usd N] [--hard-usd N] [--soft-tokens N] [--hard-tokens N] | delete <budget_id>
   fleet task run <task.yaml> [--log FILE] [--workspace DIR]   (local one-shot through the governed runtime)
   fleet task memories list|clear|delete <task_id> [key]   (inspect/reset a task's Captain's Log memory; #198)
   fleet task export [--ids uuid1,uuid2] [--format json|yaml] [--recurrence-only]   (definition-only export → stdout; #238)

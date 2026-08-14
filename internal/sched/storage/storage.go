@@ -838,6 +838,9 @@ type TaskEdit struct {
 	// rewrite it.
 	RunIf    *models.RunIf
 	SetRunIf bool
+	// SandboxLimits replaces the per-task cgroup override (#205). Assigned
+	// unconditionally from the full edit payload (nil = use global defaults).
+	SandboxLimits *models.TaskSandboxLimits
 }
 
 // UpdateEditableTask applies an edit to a task inside a transaction, re-locking
@@ -910,6 +913,7 @@ func (s *Storage) UpdateEditableTask(ctx context.Context, taskID uuid.UUID, edit
 	if edit.SetTags {
 		task.Tags = edit.Tags
 	}
+	task.SandboxLimits = edit.SandboxLimits
 
 	// Recompute the dispatch state with the SAME rule used at creation. The
 	// previous ScheduledFor-only recompute here let an edit move a task off
@@ -977,6 +981,39 @@ func (s *Storage) UpdateTaskDescription(ctx context.Context, taskID uuid.UUID, d
 	}
 
 	task.Description = description
+	if err := s.db.UpdateTaskTx(ctx, tx, task); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return task, nil
+}
+
+// UpdateTaskSandboxLimits sets a task's per-task sandbox cgroup override
+// (#205), leaving all other fields untouched. Editable tasks only
+// (pending/scheduled). A nil / all-zero value clears the override so the
+// global FLEET_SANDBOX_* defaults apply.
+func (s *Storage) UpdateTaskSandboxLimits(ctx context.Context, taskID uuid.UUID, limits *models.TaskSandboxLimits) (*models.Task, error) {
+	tx, err := s.db.BeginTx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	task, err := s.db.GetTaskForUpdate(ctx, tx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	if task.Status != models.TaskStatusPending && task.Status != models.TaskStatusScheduled {
+		return nil, ErrTaskNotEditable
+	}
+
+	if limits.IsZero() {
+		task.SandboxLimits = nil
+	} else {
+		task.SandboxLimits = limits
+	}
 	if err := s.db.UpdateTaskTx(ctx, tx, task); err != nil {
 		return nil, err
 	}

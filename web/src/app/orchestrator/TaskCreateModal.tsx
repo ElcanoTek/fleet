@@ -211,6 +211,18 @@ function taskToFormValues(task: Task | null) {
       task.expected_duration_minutes > 0
         ? String(task.expected_duration_minutes)
         : "",
+    sandboxMemory:
+      typeof task?.sandbox_limits?.memory_mb === "number" && task.sandbox_limits.memory_mb > 0
+        ? String(task.sandbox_limits.memory_mb)
+        : "",
+    sandboxCpus:
+      typeof task?.sandbox_limits?.cpus === "number" && task.sandbox_limits.cpus > 0
+        ? String(task.sandbox_limits.cpus)
+        : "",
+    sandboxPids:
+      typeof task?.sandbox_limits?.pids === "number" && task.sandbox_limits.pids > 0
+        ? String(task.sandbox_limits.pids)
+        : "",
     contextOpen: Boolean(task?.description || task?.tags?.length || task?.persona),
     toolsOpen: Boolean(task?.mcp_selection?.length),
   };
@@ -355,6 +367,9 @@ export function TaskCreateModal({
   // Per-task extended-thinking override (#220): "" = inherit the deployment
   // default, "0" = off, a positive value = this task's budget in tokens.
   const [thinkingBudget, setThinkingBudget] = useState("");
+  const [sandboxMemory, setSandboxMemory] = useState(init.sandboxMemory);
+  const [sandboxCpus, setSandboxCpus] = useState(init.sandboxCpus);
+  const [sandboxPids, setSandboxPids] = useState(init.sandboxPids);
 
   // The per-task MCP selection (replaces the legacy target_node_name).
   const [mcpSelection, setMcpSelection] = useState<MCPChoice[]>(init.mcpSelection);
@@ -459,6 +474,9 @@ export function TaskCreateModal({
     maxIterations.trim() !== "" ||
     expectedDuration.trim() !== "" ||
     thinkingBudget.trim() !== "" ||
+    sandboxMemory.trim() !== "" ||
+    sandboxCpus.trim() !== "" ||
+    sandboxPids.trim() !== "" ||
     captainsLog ||
     allowNetwork ||
     !allowDelegation ||
@@ -492,6 +510,9 @@ export function TaskCreateModal({
     runIfOnError,
     runIfTimeout,
     expectedDuration,
+    sandboxMemory,
+    sandboxCpus,
+    sandboxPids,
     mcpSelection,
   ]);
   const initSnapshot = JSON.stringify([
@@ -518,6 +539,9 @@ export function TaskCreateModal({
     init.runIfOnError,
     init.runIfTimeout,
     init.expectedDuration,
+    init.sandboxMemory,
+    init.sandboxCpus,
+    init.sandboxPids,
     init.mcpSelection,
   ]);
   const dirty = editing ? formSnapshot !== initSnapshot : createDirty;
@@ -552,6 +576,9 @@ export function TaskCreateModal({
     setRunIfTimeout(30);
     setExpectedDuration("");
     setThinkingBudget("");
+    setSandboxMemory("");
+    setSandboxCpus("");
+    setSandboxPids("");
     setMcpSelection([]);
     setPendingTemplate(null);
     setTemplateVarValues({});
@@ -644,6 +671,21 @@ export function TaskCreateModal({
     setThinkingBudget(
       typeof t.thinking_budget_tokens === "number" ? String(t.thinking_budget_tokens) : "",
     );
+    setSandboxMemory(
+      typeof t.sandbox_limits?.memory_mb === "number" && t.sandbox_limits.memory_mb > 0
+        ? String(t.sandbox_limits.memory_mb)
+        : "",
+    );
+    setSandboxCpus(
+      typeof t.sandbox_limits?.cpus === "number" && t.sandbox_limits.cpus > 0
+        ? String(t.sandbox_limits.cpus)
+        : "",
+    );
+    setSandboxPids(
+      typeof t.sandbox_limits?.pids === "number" && t.sandbox_limits.pids > 0
+        ? String(t.sandbox_limits.pids)
+        : "",
+    );
     setMaxIterations(typeof t.max_iterations === "number" ? String(t.max_iterations) : "");
     if (t.description || t.tags?.length || t.persona) setContextOpen(true);
     if (
@@ -651,7 +693,8 @@ export function TaskCreateModal({
       t.allow_network ||
       t.allow_delegation === false ||
       t.carry_context ||
-      t.instruction_self_improve
+      t.instruction_self_improve ||
+      t.sandbox_limits
     ) {
       setAdvancedOpen(true);
     }
@@ -756,6 +799,9 @@ export function TaskCreateModal({
     maxIterations.trim() !== "",
     expectedDuration.trim() !== "",
     thinkingBudget.trim() !== "",
+    sandboxMemory.trim() !== "",
+    sandboxCpus.trim() !== "",
+    sandboxPids.trim() !== "",
     captainsLog,
     allowNetwork,
     // Delegation is ON by default (#1043): the opt-OUT is the non-default state
@@ -904,6 +950,14 @@ export function TaskCreateModal({
       const budget = Number.parseInt(thinkingBudget, 10);
       if (Number.isFinite(budget) && budget >= 0) taskData.thinking_budget_tokens = budget;
     }
+    const memoryMb = Number.parseInt(sandboxMemory, 10);
+    const cpus = Number.parseFloat(sandboxCpus);
+    const pids = Number.parseInt(sandboxPids, 10);
+    const limits: { memory_mb?: number; cpus?: number; pids?: number } = {};
+    if (sandboxMemory.trim() && Number.isFinite(memoryMb) && memoryMb > 0) limits.memory_mb = memoryMb;
+    if (sandboxCpus.trim() && Number.isFinite(cpus) && cpus > 0) limits.cpus = cpus;
+    if (sandboxPids.trim() && Number.isFinite(pids) && pids > 0) limits.pids = pids;
+    if (limits.memory_mb || limits.cpus || limits.pids) taskData.sandbox_limits = limits;
     return taskData;
   };
 
@@ -2030,6 +2084,57 @@ export function TaskCreateModal({
                       />
                       <span className="task-limit-help" id="thinking-help">
                         Tokens, Claude models. Blank = inherit · 0 = off.
+                      </span>
+                      <label className="task-limit-label" htmlFor="taskSandboxMemory">
+                        Sandbox memory
+                      </label>
+                      <input
+                        id="taskSandboxMemory"
+                        type="number"
+                        min={128}
+                        step={128}
+                        inputMode="numeric"
+                        placeholder="default"
+                        aria-describedby="sandbox-memory-help"
+                        value={sandboxMemory}
+                        onChange={(e) => setSandboxMemory(e.target.value)}
+                      />
+                      <span className="task-limit-help" id="sandbox-memory-help">
+                        MiB. Blank = global default. Floor 128.
+                      </span>
+                      <label className="task-limit-label" htmlFor="taskSandboxCpus">
+                        Sandbox CPUs
+                      </label>
+                      <input
+                        id="taskSandboxCpus"
+                        type="number"
+                        min={0.1}
+                        step={0.5}
+                        inputMode="decimal"
+                        placeholder="default"
+                        aria-describedby="sandbox-cpus-help"
+                        value={sandboxCpus}
+                        onChange={(e) => setSandboxCpus(e.target.value)}
+                      />
+                      <span className="task-limit-help" id="sandbox-cpus-help">
+                        Fractional CPUs. Blank = global default.
+                      </span>
+                      <label className="task-limit-label" htmlFor="taskSandboxPids">
+                        Sandbox PIDs
+                      </label>
+                      <input
+                        id="taskSandboxPids"
+                        type="number"
+                        min={16}
+                        step={16}
+                        inputMode="numeric"
+                        placeholder="default"
+                        aria-describedby="sandbox-pids-help"
+                        value={sandboxPids}
+                        onChange={(e) => setSandboxPids(e.target.value)}
+                      />
+                      <span className="task-limit-help" id="sandbox-pids-help">
+                        Max processes. Blank = global default. Floor 16.
                       </span>
                     </div>
                   </div>

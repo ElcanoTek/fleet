@@ -1,16 +1,22 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor, cleanup, fireEvent } from "@testing-library/react";
 import { UsagePanel } from "./UsagePanel";
-import type { UsageBucket, UsageReport } from "@/app/shared/lib/orchestratorApi";
+import type { BudgetStatus, UsageBucket, UsageReport } from "@/app/shared/lib/orchestratorApi";
 
 // UsagePanel renders the GET /admin/usage read model (#601 part 1): KPI tiles,
 // a single-hue bar/column chart, the full table twin, and the honest-scope
-// pricing note (#289).
+// pricing note (#289). Budgets (#601 part 2) sit under the report.
 
 const usage = vi.fn();
+const budgets = vi.fn();
+const createBudget = vi.fn();
+const deleteBudget = vi.fn();
 vi.mock("@/app/shared/lib/orchestratorApi", () => ({
   orchestratorApi: {
     usage: (...args: unknown[]) => usage(...args),
+    budgets: (...args: unknown[]) => budgets(...args),
+    createBudget: (...args: unknown[]) => createBudget(...args),
+    deleteBudget: (...args: unknown[]) => deleteBudget(...args),
   },
 }));
 
@@ -47,6 +53,12 @@ function report(overrides: Partial<UsageReport>): UsageReport {
 function mockReport(r: UsageReport) {
   usage.mockReset();
   usage.mockResolvedValue(r);
+  budgets.mockReset();
+  budgets.mockResolvedValue({ budgets: [] });
+  createBudget.mockReset();
+  createBudget.mockResolvedValue({ id: "new-budget" });
+  deleteBudget.mockReset();
+  deleteBudget.mockResolvedValue({ status: "deleted" });
 }
 
 describe("UsagePanel (#601)", () => {
@@ -172,5 +184,57 @@ describe("UsagePanel (#601)", () => {
         value: original,
       });
     }
+  });
+
+  it("renders the budget create form when none are configured", async () => {
+    mockReport(report({}));
+    render(<UsagePanel />);
+    await screen.findByTestId("budgets-empty");
+    expect(screen.getByTestId("budget-create-form")).toBeTruthy();
+  });
+
+  it("creates a budget from the form", async () => {
+    mockReport(report({}));
+    render(<UsagePanel />);
+    await screen.findByTestId("budget-create-form");
+    fireEvent.change(screen.getByLabelText("Budget principal"), {
+      target: { value: "alice@example.com" },
+    });
+    fireEvent.change(screen.getByLabelText("Hard USD bound"), {
+      target: { value: "50" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save budget" }));
+    await waitFor(() =>
+      expect(createBudget).toHaveBeenCalledWith(
+        expect.objectContaining({
+          scope: "user",
+          principal_id: "alice@example.com",
+          window: "month",
+          hard_usd: 50,
+        }),
+      ),
+    );
+  });
+
+  it("lists configured budgets and deletes one", async () => {
+    mockReport(report({}));
+    const row: BudgetStatus = {
+      id: "budget-1",
+      scope: "user",
+      principal_id: "alice@example.com",
+      window: "month",
+      hard_usd: 50,
+      window_start: "2026-08-01T00:00:00Z",
+      window_end: "2026-09-01T00:00:00Z",
+      spend_usd: 10,
+      spend_tokens: 1000,
+      soft_alerted: false,
+    };
+    budgets.mockResolvedValue({ budgets: [row] });
+    render(<UsagePanel />);
+    await screen.findByTestId("budgets-table");
+    expect(screen.getByText("alice@example.com")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("budget-delete"));
+    await waitFor(() => expect(deleteBudget).toHaveBeenCalledWith("budget-1"));
   });
 });

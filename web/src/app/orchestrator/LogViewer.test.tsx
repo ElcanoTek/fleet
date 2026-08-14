@@ -14,6 +14,7 @@ const taskLogHistory = vi.fn();
 const taskLogHistoryEntry = vi.fn();
 const taskSubagentLog = vi.fn();
 const rerunTask = vi.fn();
+const wakeTask = vi.fn();
 const tasks = vi.fn();
 vi.mock("@/app/shared/lib/orchestratorApi", () => ({
   orchestratorApi: {
@@ -22,6 +23,7 @@ vi.mock("@/app/shared/lib/orchestratorApi", () => ({
     taskLogHistoryEntry: (...args: unknown[]) => taskLogHistoryEntry(...args),
     taskSubagentLog: (...args: unknown[]) => taskSubagentLog(...args),
     rerunTask: (...args: unknown[]) => rerunTask(...args),
+    wakeTask: (...args: unknown[]) => wakeTask(...args),
     tasks: (...args: unknown[]) => tasks(...args),
   },
 }));
@@ -283,6 +285,46 @@ describe("LogViewer task-detail modal", () => {
     fireEvent.click(download);
     expect(createObjectURL).toHaveBeenCalledTimes(1);
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:mock");
+  });
+
+  it("fires the parked wake event from the log viewer", async () => {
+    mockSession(RICH_SESSION);
+    wakeTask.mockReset();
+    wakeTask.mockResolvedValue({ status: "pending" });
+    const onResubmitted = vi.fn();
+    render(
+      <LogViewer
+        task={{
+          ...DONE_TASK,
+          status: "paused_awaiting_wake",
+          wake_event_key: "deploy-finished",
+          wake_at: "2026-08-15T12:00:00Z",
+        }}
+        onClose={() => {}}
+        onResubmitted={onResubmitted}
+      />,
+    );
+    expect(await screen.findByTestId("wake-summary")).toHaveTextContent("deploy-finished");
+    fireEvent.change(screen.getByLabelText("Wake note"), {
+      target: { value: "build 812 green" },
+    });
+    fireEvent.click(screen.getByTestId("fire-event-button"));
+    await waitFor(() =>
+      expect(wakeTask).toHaveBeenCalledWith(TASK_ID, "deploy-finished", "build 812 green"),
+    );
+    await waitFor(() => expect(onResubmitted).toHaveBeenCalled());
+  });
+
+  it("does not offer Fire event for a timer-only sleep", async () => {
+    mockSession(RICH_SESSION);
+    render(
+      <LogViewer
+        task={{ ...DONE_TASK, status: "paused_awaiting_wake", wake_at: "2026-08-15T12:00:00Z" }}
+        onClose={() => {}}
+      />,
+    );
+    await screen.findByTestId("wake-summary");
+    expect(screen.queryByTestId("fire-event-button")).toBeNull();
   });
 });
 
