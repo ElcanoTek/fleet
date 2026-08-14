@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -50,7 +51,7 @@ func TestUpdateTaskSandboxLimits(t *testing.T) {
 	if _, err := store.AddTaskWithContext(ctx, running); err != nil {
 		t.Fatalf("add running: %v", err)
 	}
-	if _, err := store.UpdateTaskSandboxLimits(ctx, running.ID, lim); err != ErrTaskNotEditable {
+	if _, err := store.UpdateTaskSandboxLimits(ctx, running.ID, lim); !errors.Is(err, ErrTaskNotEditable) {
 		t.Fatalf("running task: got %v, want ErrTaskNotEditable", err)
 	}
 }
