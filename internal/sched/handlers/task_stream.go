@@ -70,7 +70,6 @@ func (h *Handlers) StreamTaskLogs(w http.ResponseWriter, r *http.Request) {
 			}
 			if err := buf.Attach(r.Context(), lastID, w); err != nil &&
 				!errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
-				//nolint:gosec // G706 false positive: taskID is a uuid.UUID parsed via uuid.Parse; String() is canonical hex+dashes and cannot carry CR/LF.
 				log.Printf("StreamTaskLogs: attach error for task %s: %v", taskID, err)
 			}
 			return

@@ -41,6 +41,30 @@ func TestCredentialAllowlist_Permits(t *testing.T) {
 	}
 }
 
+// TestCredentialAllowlist_DeniesAll pins the sentinel callers use to decide
+// whether a run may reach ANY connector (#979). The trap it guards is that
+// len(al) == 0 is true for BOTH the deny-all and the inherit-global forms, and
+// those two are opposites — so "no entries" is never the question to ask.
+func TestCredentialAllowlist_DeniesAll(t *testing.T) {
+	if CredentialAllowlist(nil).DeniesAll() {
+		t.Error("nil allowlist must NOT report deny-all: nil inherits global (every seat)")
+	}
+	if !(CredentialAllowlist{}).DeniesAll() {
+		t.Error("non-nil empty allowlist must report deny-all")
+	}
+	if (CredentialAllowlist{{Server: "github"}}).DeniesAll() {
+		t.Error("populated allowlist must not report deny-all")
+	}
+	// The sentinel and the enforcement predicate must agree: deny-all permits
+	// nothing, inherit-global permits everything.
+	if (CredentialAllowlist{}).Permits("github", "") {
+		t.Error("deny-all allowlist permitted a call")
+	}
+	if !CredentialAllowlist(nil).Permits("github", "") {
+		t.Error("nil allowlist must permit (inherit global)")
+	}
+}
+
 func TestCredentialAllowlist_PermittedRegisteredNames(t *testing.T) {
 	if CredentialAllowlist(nil).permittedRegisteredNames() != nil {
 		t.Error("nil allowlist must project to nil (inherit global), not an empty set")
