@@ -34,7 +34,7 @@ which creates nothing, reads no transcripts at all. A fleet-wide log reader is
 an explicit grant, not a key type: mint it with the `view_all_logs` permission
 (`POST /keys` with `{"permissions": ["view_tasks", "view_logs",
 "view_all_logs"]}`), or use an admin key. See
-[ADR-0042](adr/0042-per-task-run-log-scoping.md).
+[ADR-0043](adr/0043-per-task-run-log-scoping.md).
 
 ## 2. Kick off a job
 

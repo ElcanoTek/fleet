@@ -1853,6 +1853,8 @@ export function ChatExperience({
           tool: string;
           summary: Approval["summary"];
           expires_at?: number;
+          mcp_server?: string;
+          mcp_account?: string;
         }>;
         pending_memory_proposals?: Array<{
           proposal_id: string;
@@ -1894,6 +1896,8 @@ export function ChatExperience({
           summary: p.summary,
           status: "pending",
           expiresAt: p.expires_at,
+          mcpServer: p.mcp_server,
+          mcpAccount: p.mcp_account,
         }));
         const memoryCards: MemoryProposal[] = pendingMemoryProposals.map(
           (p) => ({

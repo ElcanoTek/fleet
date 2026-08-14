@@ -34,6 +34,7 @@ import {
   tierForModel,
 } from "@/app/lib/modelAliases";
 import { ModelCostIndicator } from "@/app/shared/ui/ModelCostIndicator";
+import { compactModelLabel } from "@/app/shared/lib/models";
 import type { ModelPrices } from "@/app/shared/lib/modelCost";
 import type { ContextUsage } from "@/app/lib/contextUsage";
 import type { NudgeDecision } from "@/app/lib/spreadsheetNudge";
@@ -695,7 +696,11 @@ export function Composer({
               />
 
               <div className="flex items-center justify-between gap-2 px-[0.7rem] pt-[0.45rem] pb-[0.6rem]">
-                <div className="flex min-w-0 flex-wrap items-center gap-[0.35rem] overflow-visible">
+                {/* One row, always. The icon buttons are fixed-width and never
+                    shrink; the model chip is the single elastic item, so a
+                    narrow (phone) toolbar squeezes the model label instead of
+                    wrapping the trailing controls onto a second line. */}
+                <div className="flex min-w-0 flex-1 items-center gap-[0.15rem] overflow-visible sm:gap-[0.35rem]">
                   {/* Model chip (the design's .model-chip): icon + current
                       model + caret opening the .composer-pop listbox. The
                       search field at the top of the popover preserves the
@@ -703,7 +708,7 @@ export function Composer({
                       slug entry; Esc closes and returns focus to the chip. */}
                   <div
                     ref={modelPickerRef}
-                    className="relative inline-flex"
+                    className="relative inline-flex min-w-0"
                     onKeyDown={(event) => {
                       if (event.key === "Escape" && modelPickerOpen) {
                         event.stopPropagation();
@@ -722,7 +727,7 @@ export function Composer({
                           ? modelError.message
                           : `OpenRouter model slug — e.g. ${DEFAULT_MODEL} (recommended) or ${ADVANCED_MODEL} (strongest)`
                       }
-                      className={`inline-flex h-[1.95rem] shrink-0 items-center gap-[0.4rem] rounded-[var(--radius-md)] py-[0.3rem] pl-[0.6rem] pr-[0.5rem] text-[0.78rem] font-medium transition focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-40 ${
+                      className={`inline-flex h-[1.95rem] min-w-0 items-center gap-[0.25rem] rounded-[var(--radius-md)] py-[0.3rem] pl-[0.4rem] pr-[0.3rem] text-[0.78rem] font-medium transition sm:gap-[0.4rem] sm:pl-[0.6rem] sm:pr-[0.5rem] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-40 ${
                         modelError
                           ? "text-[var(--color-danger)]"
                           : modelPickerOpen
@@ -736,13 +741,42 @@ export function Composer({
                     >
                       <Icon
                         name="model"
-                        className={`size-[0.85rem] ${modelError ? "" : "text-[var(--color-accent)]"}`}
+                        className={`size-[0.85rem] shrink-0 ${modelError ? "" : "text-[var(--color-accent)]"}`}
                       />
-                      <span className="max-w-[11rem] truncate">{selectedModelLabel}</span>
+                      {/* Two renderings of the same label, one visible at a
+                          time: phones/small tablets get the vendor prefix
+                          dropped ("Z.AI: GLM 5.2" → "GLM 5.2") so the model
+                          is still readable in the space left after the icon
+                          buttons; ≥sm shows the full catalog name. Both
+                          truncate with an ellipsis rather than pushing the
+                          toolbar wider. aria-hidden on the short one so the
+                          accessible name stays the full label exactly once. */}
+                      <span
+                        aria-hidden="true"
+                        data-testid="composer-model-label-short"
+                        className="truncate sm:hidden"
+                      >
+                        {compactModelLabel(selectedModelLabel)}
+                      </span>
+                      <span
+                        data-testid="composer-model-label-full"
+                        className="hidden max-w-[11rem] truncate sm:inline"
+                      >
+                        {selectedModelLabel}
+                      </span>
+                      <span className="sr-only sm:hidden">{selectedModelLabel}</span>
                       {/* Cost tier for the *selected* model, so the running
-                          price band is visible without opening the picker. */}
-                      <ModelCostIndicator prices={selectedModelPrices} />
-                      <Icon name="selector" className="size-[0.8rem] text-[var(--color-text-muted)]" />
+                          price band is visible without opening the picker.
+                          Hidden below sm — four glyphs are the widest thing
+                          on the chip that isn't the model's name, and the
+                          tier is still shown on every row of the picker.
+                          The wrapper carries the responsive display because
+                          .model-cost sets `display: inline-flex` outside
+                          Tailwind's utility layer and would win otherwise. */}
+                      <span className="hidden shrink-0 items-center sm:inline-flex">
+                        <ModelCostIndicator prices={selectedModelPrices} />
+                      </span>
+                      <Icon name="selector" className="size-[0.8rem] shrink-0 text-[var(--color-text-muted)]" />
                     </button>
                     {modelPickerOpen && !isStreaming ? (
                       <div className={COMPOSER_POP_WIDE}>
@@ -880,7 +914,7 @@ export function Composer({
                       chip and the icon-button cluster. */}
                   <span
                     aria-hidden="true"
-                    className="mx-[0.15rem] h-[1.1rem] w-px shrink-0 bg-[var(--color-border-strong)]"
+                    className="mx-[0.05rem] h-[1.1rem] w-px shrink-0 bg-[var(--color-border-strong)] sm:mx-[0.15rem]"
                   />
                   {(() => {
                     // Persona is locked server-side once a conversation has any
@@ -1087,7 +1121,7 @@ export function Composer({
                   ) : null}
                 </div>
 
-                <div className="flex items-center gap-[0.35rem]">
+                <div className="flex shrink-0 items-center gap-[0.35rem]">
                   {isStreaming ? (
                     <button
                       aria-label="Stop generating"

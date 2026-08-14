@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/store"
@@ -199,6 +200,9 @@ type approvalEngine struct {
 
 func (e *approvalEngine) MCPBroker() agentcore.MCPBroker { return e.broker }
 func (e *approvalEngine) MCPCatalog() []mcp.ServerTool   { return e.catalog }
+func (e *approvalEngine) OpenApprovalMCPScope(context.Context, agentcore.MCPSelection, string) (*agent.MCPScope, error) {
+	return nil, nil
+}
 
 func TestRunStagedToolUsesBrokerSeam(t *testing.T) {
 	broker := &fakeMCPBroker{text: "sent"}

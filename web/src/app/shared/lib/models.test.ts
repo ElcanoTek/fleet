@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  compactModelLabel,
   filterModels,
   loadModels,
   normaliseCatalogModel,
@@ -40,6 +41,29 @@ describe("scoreMatch / filterModels", () => {
 
   it("returns nothing for a query that matches no model", () => {
     expect(filterModels(models, "zzz-nonexistent")).toEqual([]);
+  });
+});
+
+describe("compactModelLabel", () => {
+  it("drops the vendor prefix", () => {
+    expect(compactModelLabel("Z.AI: GLM 5.2")).toBe("GLM 5.2");
+    expect(compactModelLabel("OpenAI: GPT-5.6 Sol")).toBe("GPT-5.6 Sol");
+  });
+
+  it("keeps everything after the first separator", () => {
+    expect(compactModelLabel("Anthropic: Claude: Opus")).toBe("Claude: Opus");
+  });
+
+  it("leaves labels without a vendor prefix alone", () => {
+    expect(compactModelLabel("default")).toBe("default");
+    expect(compactModelLabel("z-ai/glm-5.2")).toBe("z-ai/glm-5.2");
+    // A colon with no following space is part of the name, not a prefix.
+    expect(compactModelLabel("weird:name")).toBe("weird:name");
+  });
+
+  it("falls back to the full label when nothing would be left", () => {
+    expect(compactModelLabel("Vendor:   ")).toBe("Vendor:   ");
+    expect(compactModelLabel("")).toBe("");
   });
 });
 

@@ -609,6 +609,14 @@ func (m *mcpTool) Run(ctx context.Context, params fantasy.ToolCall) (fantasy.Too
 	var outputBlocked bool
 	resultText, outputBlocked = governToolOutput(ctx, toolName, resultText)
 
+	// Engine-authored date-window / empty-search reminders (#1026). Applied
+	// after output governance so the reminder cannot be used to smuggle
+	// connector bytes past the scrubber, and before post_tool_use / the
+	// model-output boundary so it is capped like every other result.
+	if !outputBlocked {
+		resultText = AnnotateDateWindow(toolName, params.Input, resultText, runtimeNow())
+	}
+
 	// Map MCP isError to a fantasy error response so both the LLM and the log
 	// know the call failed (per MCP 2025-06-18 spec, tool-level errors arrive as
 	// a successful JSON-RPC response with isError=true). The fast.io guard above

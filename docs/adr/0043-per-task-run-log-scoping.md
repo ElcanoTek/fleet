@@ -1,4 +1,4 @@
-# ADR-0042: Run-log transcripts are creator-scoped; fleet-wide reads need an explicit grant
+# ADR-0043: Run-log transcripts are creator-scoped; fleet-wide reads need an explicit grant
 
 - **Status:** Accepted
 - **Date:** 2026-08-14

@@ -297,7 +297,7 @@ func (s *Storage) EnqueueTask(ctx context.Context, tc models.TaskCreate) (uuid.U
 // CreatedByTaskID, not a human).
 //
 // Attribution is load-bearing, not cosmetic: run-log reads are creator-scoped
-// (#980, ADR-0042) and the per-user push audience resolves through CreatedBy, so
+// (#980, ADR-0043) and the per-user push audience resolves through CreatedBy, so
 // a create path that drops the creator strands the human who asked for the task
 // — they can no longer read its transcript unless they are an admin.
 func (s *Storage) EnqueueTaskAs(ctx context.Context, tc models.TaskCreate, createdBy *uuid.UUID) (uuid.UUID, string, time.Time, error) {
