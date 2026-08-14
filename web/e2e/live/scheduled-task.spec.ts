@@ -1,4 +1,4 @@
-import { test, expect, creds } from "./fixtures";
+import { test, expect } from "./fixtures";
 
 // LIVE scheduled-task journey against the fully real stack. A task created
 // through the orchestrator UI is leased by the REAL worker pool and run to
@@ -7,10 +7,9 @@ import { test, expect, creds } from "./fixtures";
 // which clears the scheduled-mode self-audit enforcement gate so the task can
 // reach success). Logs are then retrievable through the real log viewer.
 //
-// The orchestrator's task-create + status auth is the moc username/password
-// (Bearer-token) path, so this spec logs into the orchestrator view with the
-// seeded sched admin user rather than relying on the chat cookie (which the
-// orchestrator's CreateTask handler does not honor for write auth).
+// Auth is the shared chat cookie: the Next proxy forwards the session as
+// X-User-Email, and the e2e seed provisions that email as an Operations Center
+// admin. The leftover moc username/password form is gone.
 
 test.describe("live scheduled task → real worker pool + sandbox", () => {
   test("create a task, the real worker runs it to success, logs are retrievable", async ({
@@ -21,19 +20,11 @@ test.describe("live scheduled task → real worker pool + sandbox", () => {
     // take time; give this journey room well beyond the 60s default.
     test.setTimeout(240_000);
 
-    // TWO auth layers are required for the orchestrator write path:
-    //  1. the app SESSION cookie (login fixture) — the Next middleware gates
-    //     /orchestrator and redirects to /login without it;
-    //  2. the orchestrator MOC bearer (username/password) — the orchestrator's
-    //     CreateTask handler authorizes writes by Bearer token, not the cookie.
+    // The login fixture installs the chat session cookie. The e2e seed
+    // provisions that email as an Operations Center admin, so the cookie
+    // path admits CreateTask — no second moc login.
     await login();
     await page.goto("/orchestrator");
-
-    // Orchestrator login card (OrchestratorLogin). Its inputs carry an explicit
-    // aria-label; scope by it (exact) to avoid the show/hide-password button.
-    await page.getByLabel("Username", { exact: true }).fill(creds.schedUsername);
-    await page.getByLabel("Password", { exact: true }).fill(creds.password);
-    await page.getByRole("button", { name: "Login with username and password" }).click();
 
     await expect(page.getByTestId("orchestrator-dashboard")).toBeVisible({ timeout: 20_000 });
 

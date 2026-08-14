@@ -204,10 +204,10 @@ mirroring the `priorityCapError` shared-helper discipline:
   `BudgetStatus`; bound in the route/schema parity tests), registered like
   `/admin/usage` behind `AdminOrUserAuthMiddleware` with the admin gate
   enforced in-handler (#458).
-- The Operations Center Usage panel renders the budget list **read-only**
-  under the usage report (spend, bounds with the clamp made visible, and an
-  ok/alerted/exhausted status), with the token-vs-dollar coverage caveat
-  spelled out. Budget create/delete is deliberately API-only for now.
+- The Operations Center Usage panel lists budgets under the usage report
+  (spend, bounds with the clamp made visible, and an ok/alerted/exhausted
+  status) and now creates / deletes them in place. `fleet sched budget
+  list|create|delete` is the CLI twin.
 
 ## Honest scope (part 2)
 
@@ -246,7 +246,6 @@ mirroring the `priorityCapError` shared-helper discipline:
 
 - Project-scope enforcement (above), run-start enforcement, and gating the
   in-process spawn/rerun paths.
-- Budget create/edit/delete UI (the panel is read-only; CRUD is API-only).
 - Slack (or other) alert channels — the alert rides the existing notify
   pipeline; new channels belong to that seam.
 - Per-budget alert recipients: alerts go to the deployment-wide

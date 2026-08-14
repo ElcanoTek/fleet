@@ -69,7 +69,7 @@ unless `E2E_PROD=1` is set. The Next server boots with the throwaway test env
 
 | Spec | Asserts |
 | --- | --- |
-| `login.spec.ts` | unauthenticated `/chat` redirects to `/login`; `/orchestrator` is gated by the same middleware; the login card renders the password form and the "Use Elcano email" link; a verified password login lands on `/chat`; an invalid password stays on `/login`; the magic-link button bounces to the auth-service flow; a valid `elcano_auth` cookie authenticates the same as a password session. |
+| `login.spec.ts` | unauthenticated `/chat` redirects to `/login`; `/orchestrator` is gated by the same middleware; the chat login card renders the password form and the "Use Elcano email" link; a verified password login lands on `/chat`; an invalid password stays on `/login`; the magic-link button bounces to the auth-service flow; a valid `elcano_auth` cookie authenticates the same as a password session; a signed-in non-member sees the Operations Center no-access card (no username/password bypass). |
 | `chat.spec.ts` | authenticated `/chat` reaches the empty composer; a sent turn streams text deltas + a final assistant message; the streamed `tool.call`/`tool.result` render in the execution trail; config-driven empty-state cards render from a stubbed `/api/client-config`. |
 | `protocol-pills.spec.ts` | the neutral fallback pills render; the Summarize form templates its prompt and the mocked chat echoes it; the Draft form gates on its required field then sends the template. |
 | `orchestrator.spec.ts` | the dashboard loads stats + the task list; a task is created via `<McpServerPicker>` with an `mcp_selection` and no `target_node_name`; opening a task renders its log viewer. |

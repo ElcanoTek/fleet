@@ -16,10 +16,10 @@ import (
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
 )
 
-// cmdSched dispatches `fleet-admin sched user|apikey|task|trigger ...`.
+// cmdSched dispatches `fleet-admin sched user|apikey|task|trigger|dlq|budget ...`.
 func cmdSched(argv []string) int {
 	if len(argv) < 1 {
-		return errf(1, "usage: fleet sched user|apikey|task|trigger|dlq ...")
+		return errf(1, "usage: fleet sched user|apikey|task|trigger|dlq|budget ...")
 	}
 	switch argv[0] {
 	case "user":
@@ -32,6 +32,8 @@ func cmdSched(argv []string) int {
 		return cmdSchedTrigger(argv[1:])
 	case "dlq":
 		return cmdSchedDLQ(argv[1:])
+	case "budget":
+		return cmdSchedBudget(argv[1:])
 	default:
 		return errf(1, "unknown sched subcommand %q", argv[0])
 	}

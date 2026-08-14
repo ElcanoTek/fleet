@@ -45,7 +45,11 @@ cycles as across any runs.
 - `POST /tasks/{task_id}/wake {event, note?}` wakes an event-parked task
   early. The key must match the one the task waits for — a caller can never
   wake an arbitrary sleeping task — and the endpoint requires operator
-  (cancel) permission, mirroring `POST /tasks/{id}/resume`.
+  (cancel) permission, mirroring `POST /tasks/{id}/resume`. The Operations
+  Center log viewer offers **Fire event** on a `paused_awaiting_wake` task
+  that is waiting for a named event (timer-only sleeps have no key to
+  fire). A thin **Sleeping** list on the tasks tab surfaces parked work
+  without a status-filter click.
 - **Cycle cap:** `wake_cycles` counts every park over the task's lifetime
   (incremented inside the lease-guarded park write); past 100 the runner
   refuses the park and the tool tells the model to finish normally. A
@@ -65,12 +69,9 @@ cycles as across any runs.
 
 ## Deliberately deferred / honest scope
 
-- Inbound webhook triggers (ADR-0016/0027) still only SPAWN runs; wiring a
-  trigger to `POST /tasks/{id}/wake` (event-driven standing watches without
-  an operator in the loop) is a natural follow-on.
-- No web UI affordance to fire an event or list sleeping tasks beyond the
-  status badge and the ordinary task table; the endpoint + CLI filters
-  (`--status paused_awaiting_wake`) are the operator surface.
+- No webhook-to-wake wiring: inbound webhook triggers (ADR-0016/0027) still
+  only SPAWN runs; wiring a trigger to `POST /tasks/{id}/wake` (event-driven
+  standing watches without an operator in the loop) is a natural follow-on.
 - `wake_cycles` cap is a constant (100), not configurable.
 - The stream's terminal frame for a parking run is `sleeping`; clients that
   don't know the status render it like any other terminal frame.

@@ -3,6 +3,7 @@
 import { useCallback, useState } from "react";
 import {
   orchestratorApi,
+  type BudgetCreate,
   type BudgetStatus,
   type UsageBucket,
   type UsageGroupBy,
@@ -199,69 +200,247 @@ export function UsagePanel() {
   );
 }
 
-// BudgetsSection — the read-only view of the per-principal rolling budgets
-// (#601 part 2) that gate task creation over this same metering: configured
-// bounds (dollars AND tokens — dollar coverage depends on pricing config), the
-// live current-window spend, and whether this window's one soft alert fired.
-// Budgets are managed via the API (POST/DELETE /admin/budgets); rendering them
-// beside the usage report keeps the spend numbers and the limits that act on
-// them in one place. Hidden entirely when none are configured.
+// BudgetsSection — per-principal rolling budgets (#601 part 2) that gate task
+// creation over this same metering. Create/delete live here (and on
+// `fleet sched budget`); leftover project-scope rows still list but cannot
+// be created.
 function BudgetsSection() {
-  const { data, error } = useCancellableFetch(
+  const { data, error, reload } = useCancellableFetch(
     useCallback(() => orchestratorApi.budgets(), []),
     [],
   );
+  const [scope, setScope] = useState<BudgetCreate["scope"]>("user");
+  const [principal, setPrincipal] = useState("");
+  const [windowKind, setWindowKind] = useState<BudgetCreate["window"]>("month");
+  const [softUsd, setSoftUsd] = useState("");
+  const [hardUsd, setHardUsd] = useState("");
+  const [softTokens, setSoftTokens] = useState("");
+  const [hardTokens, setHardTokens] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState<string | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
+
+  const submit = async () => {
+    if (saving) return;
+    setFormError(null);
+    const body: BudgetCreate = {
+      scope,
+      principal_id: principal.trim(),
+      window: windowKind,
+    };
+    const su = Number.parseFloat(softUsd);
+    const hu = Number.parseFloat(hardUsd);
+    const st = Number.parseInt(softTokens, 10);
+    const ht = Number.parseInt(hardTokens, 10);
+    if (softUsd.trim() && Number.isFinite(su)) body.soft_usd = su;
+    if (hardUsd.trim() && Number.isFinite(hu)) body.hard_usd = hu;
+    if (softTokens.trim() && Number.isFinite(st)) body.soft_tokens = st;
+    if (hardTokens.trim() && Number.isFinite(ht)) body.hard_tokens = ht;
+    if (!body.principal_id) {
+      setFormError("Principal is required (user email or API key id).");
+      return;
+    }
+    if (
+      body.soft_usd === undefined &&
+      body.hard_usd === undefined &&
+      body.soft_tokens === undefined &&
+      body.hard_tokens === undefined
+    ) {
+      setFormError("Set at least one bound (USD or tokens, soft or hard).");
+      return;
+    }
+    setSaving(true);
+    try {
+      await orchestratorApi.createBudget(body);
+      setPrincipal("");
+      setSoftUsd("");
+      setHardUsd("");
+      setSoftTokens("");
+      setHardTokens("");
+      await reload();
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : "Failed to save budget");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const remove = async (id: string) => {
+    if (deleting) return;
+    setFormError(null);
+    setDeleting(id);
+    try {
+      await orchestratorApi.deleteBudget(id);
+      await reload();
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : "Failed to delete budget");
+    } finally {
+      setDeleting(null);
+    }
+  };
+
   if (error) {
     return <div className="table-error">Failed to load budgets: {error}</div>;
   }
   const budgets = data?.budgets ?? [];
-  if (budgets.length === 0) {
-    return (
-      <p className="usage-note" data-testid="budgets-empty">
-        No budgets configured. Per-principal rolling budgets (soft alert / hard refusal per
-        day, week, or month) are managed via <code>POST /admin/budgets</code>.
-      </p>
-    );
-  }
   return (
     <div data-testid="budgets-section">
       <h3 className="usage-subheading">Budgets</h3>
-      <div className="table-wrapper">
-        <table data-testid="budgets-table">
-          <thead>
-            <tr>
-              <th scope="col">Scope</th>
-              <th scope="col">Principal</th>
-              <th scope="col">Window</th>
-              <th scope="col">Spend</th>
-              <th scope="col">Soft / hard (USD)</th>
-              <th scope="col">Soft / hard (tokens)</th>
-              <th scope="col">Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {budgets.map((b) => (
-              <tr key={b.id} data-testid="budget-row">
-                <td>{b.scope}</td>
-                <td className="prompt-cell" title={b.principal_id}>
-                  {b.principal_id}
-                </td>
-                <td>{b.window}</td>
-                <td>
-                  {fmtUSD(b.spend_usd)} · {compact.format(b.spend_tokens)} tok
-                </td>
-                <td>{budgetBound(b.soft_usd, b.hard_usd, b.effective_hard_usd, fmtUSD)}</td>
-                <td>
-                  {budgetBound(b.soft_tokens, b.hard_tokens, b.effective_hard_tokens, (v) =>
-                    compact.format(v),
-                  )}
-                </td>
-                <td>{budgetStateLabel(b)}</td>
+      {budgets.length === 0 ? (
+        <p className="usage-note" data-testid="budgets-empty">
+          No budgets configured. A per-principal rolling budget (soft alert / hard
+          refusal per day, week, or month) refuses new task creation when the
+          window is exhausted.
+        </p>
+      ) : (
+        <div className="table-wrapper">
+          <table data-testid="budgets-table">
+            <thead>
+              <tr>
+                <th scope="col">Scope</th>
+                <th scope="col">Principal</th>
+                <th scope="col">Window</th>
+                <th scope="col">Spend</th>
+                <th scope="col">Soft / hard (USD)</th>
+                <th scope="col">Soft / hard (tokens)</th>
+                <th scope="col">Status</th>
+                <th scope="col">Actions</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody>
+              {budgets.map((b) => (
+                <tr key={b.id} data-testid="budget-row">
+                  <td>{b.scope}</td>
+                  <td className="prompt-cell" title={b.principal_id}>
+                    {b.principal_id}
+                  </td>
+                  <td>{b.window}</td>
+                  <td>
+                    {fmtUSD(b.spend_usd)} · {compact.format(b.spend_tokens)} tok
+                  </td>
+                  <td>{budgetBound(b.soft_usd, b.hard_usd, b.effective_hard_usd, fmtUSD)}</td>
+                  <td>
+                    {budgetBound(b.soft_tokens, b.hard_tokens, b.effective_hard_tokens, (v) =>
+                      compact.format(v),
+                    )}
+                  </td>
+                  <td>{budgetStateLabel(b)}</td>
+                  <td>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      data-testid="budget-delete"
+                      disabled={deleting === b.id}
+                      onClick={() => void remove(b.id)}
+                    >
+                      {deleting === b.id ? "Deleting…" : "Delete"}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <form
+        className="budget-form"
+        data-testid="budget-create-form"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void submit();
+        }}
+      >
+        <div className="task-eyebrow">New budget</div>
+        <div className="budget-form-grid">
+          <label htmlFor="budgetScope">Scope</label>
+          <select
+            id="budgetScope"
+            aria-label="Budget scope"
+            value={scope}
+            onChange={(e) => setScope(e.target.value as BudgetCreate["scope"])}
+          >
+            <option value="user">User</option>
+            <option value="key">API key</option>
+          </select>
+          <label htmlFor="budgetPrincipal">Principal</label>
+          <input
+            id="budgetPrincipal"
+            type="text"
+            aria-label="Budget principal"
+            placeholder={scope === "user" ? "alice@example.com" : "key id"}
+            value={principal}
+            onChange={(e) => setPrincipal(e.target.value)}
+          />
+          <label htmlFor="budgetWindow">Window</label>
+          <select
+            id="budgetWindow"
+            aria-label="Budget window"
+            value={windowKind}
+            onChange={(e) => setWindowKind(e.target.value as BudgetCreate["window"])}
+          >
+            <option value="day">Day</option>
+            <option value="week">Week</option>
+            <option value="month">Month</option>
+          </select>
+          <label htmlFor="budgetSoftUsd">Soft USD</label>
+          <input
+            id="budgetSoftUsd"
+            type="number"
+            min={0}
+            step="0.01"
+            inputMode="decimal"
+            aria-label="Soft USD bound"
+            placeholder="optional"
+            value={softUsd}
+            onChange={(e) => setSoftUsd(e.target.value)}
+          />
+          <label htmlFor="budgetHardUsd">Hard USD</label>
+          <input
+            id="budgetHardUsd"
+            type="number"
+            min={0}
+            step="0.01"
+            inputMode="decimal"
+            aria-label="Hard USD bound"
+            placeholder="optional"
+            value={hardUsd}
+            onChange={(e) => setHardUsd(e.target.value)}
+          />
+          <label htmlFor="budgetSoftTokens">Soft tokens</label>
+          <input
+            id="budgetSoftTokens"
+            type="number"
+            min={0}
+            step={1}
+            inputMode="numeric"
+            aria-label="Soft token bound"
+            placeholder="optional"
+            value={softTokens}
+            onChange={(e) => setSoftTokens(e.target.value)}
+          />
+          <label htmlFor="budgetHardTokens">Hard tokens</label>
+          <input
+            id="budgetHardTokens"
+            type="number"
+            min={0}
+            step={1}
+            inputMode="numeric"
+            aria-label="Hard token bound"
+            placeholder="optional"
+            value={hardTokens}
+            onChange={(e) => setHardTokens(e.target.value)}
+          />
+        </div>
+        {formError ? (
+          <div className="validation-error" role="alert" data-testid="budget-form-error">
+            {formError}
+          </div>
+        ) : null}
+        <button type="submit" className="btn btn-primary" disabled={saving}>
+          {saving ? "Saving…" : "Save budget"}
+        </button>
+      </form>
       <p className="usage-note">
         A soft bound fires one alert per window; a hard bound refuses new task creation until
         the window rolls over. Hard bounds never exceed the live global ceilings. Dollar bounds

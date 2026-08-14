@@ -1,127 +1,41 @@
 "use client";
 
-import { useState } from "react";
-
-// Orchestrator login card. Renders moc's username/password form PLUS the
-// "Use Elcano email" handoff — the two login paths the unified gate accepts.
-// The password path persists a bearer token (useOrchestratorSession.login);
-// the Elcano path bounces to the auth service and comes back with the shared
-// cookie (no token needed). This is the orchestrator analogue of chat's
-// LoginCard, but with username/password (moc) instead of email/password.
+// Orchestrator sign-in card. Cookie/OIDC is the only operator path: the
+// leftover moc username/password form is gone (EnsureAdminUser mints an
+// unusable random password, so that form could not admit a real operator).
+// Backend POST /auth/login + the bearer proxy stay for API clients.
+//
+// A genuinely signed-out visitor almost never sees this card: the Next gate
+// bounces them to /login first. This is the safety-net for a 401 /me after
+// that gate, plus the "Use Elcano email" handoff when magic-link is enabled.
 
 export type OrchestratorLoginProps = {
   magicLinkLoginEnabled: boolean;
-  onLogin: (username: string, password: string) => Promise<boolean>;
-  error: string | null;
-  // notice is an informational banner shown ABOVE the form (distinct from the
-  // error alert). It surfaces the #458 not_a_member case: the visitor holds a
-  // valid chat session but that identity isn't provisioned in the Operations
-  // Center, so the cookie path can't admit them — yet the username/password
-  // (moc) path below still can, and an admin can provision their email. We keep
-  // the form rather than a dead-end card precisely so that second auth path
-  // stays reachable.
-  notice?: string | null;
 };
 
-export function OrchestratorLogin({ magicLinkLoginEnabled, onLogin, error, notice }: OrchestratorLoginProps) {
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const [showPassword, setShowPassword] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
-
-  const submit = async () => {
-    setSubmitting(true);
-    try {
-      await onLogin(username, password);
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
+export function OrchestratorLogin({ magicLinkLoginEnabled }: OrchestratorLoginProps) {
   return (
     <div className="auth-section" role="region" aria-label="Authentication">
       <div className="auth-fields stack-form">
         <h2>Sign in</h2>
-        <p className="caption">Sign in to access the internal Operations Center workspace.</p>
-
-        {notice ? (
-          <div className="validation-error" role="status" data-testid="orchestrator-no-access">
-            {notice}
-          </div>
-        ) : null}
-
-        {error ? (
-          <div className="validation-error" role="alert" data-testid="orchestrator-login-error">
-            {error}
-          </div>
-        ) : null}
-
-        <label htmlFor="orch-username">Username</label>
-        <input
-          id="orch-username"
-          type="text"
-          autoComplete="username"
-          aria-label="Username"
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              void submit();
-            }
-          }}
-        />
-
-        <label htmlFor="orch-password">Password</label>
-        <div className="password-wrapper">
-          <input
-            id="orch-password"
-            type={showPassword ? "text" : "password"}
-            autoComplete="current-password"
-            aria-label="Password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                void submit();
-              }
-            }}
-          />
-          <button
-            type="button"
-            className="password-toggle"
-            aria-label={showPassword ? "Hide password" : "Show password"}
-            onClick={() => setShowPassword((s) => !s)}
-          >
-            {showPassword ? "Hide" : "Show"}
-          </button>
-        </div>
-
-        <button
-          type="button"
-          className="btn btn-primary"
-          aria-label="Login with username and password"
-          disabled={submitting}
-          onClick={() => void submit()}
-        >
-          {submitting ? "Authenticating…" : "Sign In"}
-        </button>
+        <p className="caption">
+          Sign in with the same account you use for Chat. Operations Center
+          access is provisioned by an administrator.
+        </p>
 
         {magicLinkLoginEnabled ? (
-          <>
-            <div className="auth-divider" aria-hidden="true">
-              or
-            </div>
-            <a
-              className="btn btn-secondary"
-              href="/api/orchestrator/auth/elcano-login"
-              aria-label="Sign in with your Elcano email"
-            >
-              Use Elcano email
-            </a>
-          </>
-        ) : null}
+          <a
+            className="btn btn-primary"
+            href="/api/orchestrator/auth/elcano-login"
+            aria-label="Sign in with your Elcano email"
+          >
+            Use Elcano email
+          </a>
+        ) : (
+          <a className="btn btn-primary" href="/login">
+            Sign in via Chat
+          </a>
+        )}
       </div>
     </div>
   );

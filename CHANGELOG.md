@@ -19,6 +19,11 @@ prior versions are listed because none have shipped.
 
 ### Removed
 
+- **Operations Center username/password form.** Cookie/OIDC is the operator
+  path. `fleet admin add` mints an unusable random password, so that form
+  could not admit a real operator. Backend `POST /auth/login` and the bearer
+  proxy stay for API clients. A chat-signed-in visitor who is not provisioned
+  here sees a dead-end "ask an admin" card.
 - **Budget `scope=project` is rejected on create.** A project budget was
   accepted and listed but never enforced (tasks have no project dimension).
   `POST /admin/budgets` now returns 400 for `scope=project`. Leftover rows
@@ -26,6 +31,18 @@ prior versions are listed because none have shipped.
 - **Dead `GET /concurrency` Playwright stubs.** The moc-heritage concurrency
   card was already gone; the mocked e2e still answered an endpoint fleet never
   served.
+
+### Added
+
+- **Budget create/delete in the Usage panel** and `fleet sched budget
+  list|create|delete`. The panel was read-only; CRUD is no longer API-only.
+- **Per-task sandbox limits on the task form** (Advanced: memory / CPUs /
+  PIDs) and `fleet sched task set-limits`. Create and edit persist
+  `sandbox_limits`; `--clear` reverts to the global defaults.
+- **Fire event + sleeping-task list.** A `paused_awaiting_wake` task waiting
+  on a named event can be woken from the log viewer. A thin Sleeping list on
+  the tasks tab surfaces parked work. Status filters include both pause
+  states.
 
 ### Changed
 
@@ -37,9 +54,6 @@ prior versions are listed because none have shipped.
   attaches to `leased`/`running`.
 - **Renamed `web/src/app/lib/mocServer.ts` → `orchestratorServer.ts`.** Same
   helpers; the filename was leftover moc vocabulary.
-- **Decision (wave 2):** the Operations Center username/password form will be
-  removed. `fleet admin add` mints an unusable random password; cookie/OIDC
-  is the real path.
 
 - **Sub-agents are now ON by default, and the parent agent decides whether to
   use them (#1043, amending ADR-0007).** The enablement compose inverts from
