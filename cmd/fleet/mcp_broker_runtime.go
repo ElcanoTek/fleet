@@ -142,12 +142,12 @@ func startProductionMCPRuntime(bundle *clientconfig.Bundle, cfg *config.Config, 
 
 func (r *productionMCPRuntime) Close() error { return r.stop() }
 
-func (r *productionMCPRuntime) openInteractiveScope(ctx context.Context, selection agentcore.MCPSelection, workspace string) (*agent.MCPScope, error) {
-	return r.openScope(ctx, selection, "", workspace)
+func (r *productionMCPRuntime) openInteractiveScope(ctx context.Context, selection agentcore.MCPSelection, policy agent.MCPScopePolicy, workspace string) (*agent.MCPScope, error) {
+	return r.openScope(ctx, selection, policy, "", workspace)
 }
 
-func (r *productionMCPRuntime) openTaskScope(ctx context.Context, selection agentcore.MCPSelection, taskID, workspace string) (*agent.MCPScope, error) {
-	return r.openScope(ctx, selection, taskID, workspace)
+func (r *productionMCPRuntime) openTaskScope(ctx context.Context, selection agentcore.MCPSelection, policy agent.MCPScopePolicy, taskID, workspace string) (*agent.MCPScope, error) {
+	return r.openScope(ctx, selection, policy, taskID, workspace)
 }
 
 // openRemoteOverlay asks the credential-owning child to construct one user's
@@ -188,16 +188,50 @@ func sortedEnabledNames(enabled map[string]bool) []string {
 	return names
 }
 
-func (r *productionMCPRuntime) openScope(ctx context.Context, selection agentcore.MCPSelection, taskID, workspace string) (*agent.MCPScope, error) {
+func (r *productionMCPRuntime) openScope(ctx context.Context, selection agentcore.MCPSelection, policy agent.MCPScopePolicy, taskID, workspace string) (*agent.MCPScope, error) {
 	choices := make([]mcpbroker.ScopeChoice, 0, len(selection))
 	for _, choice := range selection {
 		choices = append(choices, mcpbroker.ScopeChoice{Server: choice.Server, Account: choice.Account})
 	}
-	scope, err := r.client.OpenScope(ctx, mcpbroker.ScopeSpec{Selection: choices, TaskID: taskID, Workspace: workspace})
+	scope, err := r.client.OpenScope(ctx, mcpbroker.ScopeSpec{
+		Selection: choices,
+		TaskID:    taskID,
+		Workspace: workspace,
+		Policy:    brokerScopePolicy(policy),
+	})
 	if err != nil {
 		return nil, err
 	}
 	return &agent.MCPScope{Broker: scope, Catalog: brokerToolCatalog(scope.Tools()), Close: scope.Close}, nil
+}
+
+// brokerScopePolicy serializes the parent's effective gates for the credential
+// owner. Only public names cross: server names, tool names, and account labels.
+// A run with no narrowing at all sends no policy, which the child reads as
+// "apply your own bundle allowlist and nothing more".
+func brokerScopePolicy(policy agent.MCPScopePolicy) *mcpbroker.ScopePolicy {
+	out := &mcpbroker.ScopePolicy{}
+	if len(policy.ToolAllowlist) > 0 {
+		out.Tools = make(map[string][]string, len(policy.ToolAllowlist))
+		for server, tools := range policy.ToolAllowlist {
+			if len(tools) > 0 {
+				out.Tools[server] = append([]string(nil), tools...)
+			}
+		}
+	}
+	if policy.CredentialAllowlist != nil {
+		// Explicit, because a nil allowlist ("inherit global") and an empty one
+		// ("deny every call") are different answers (#184).
+		out.RestrictCredentials = true
+		out.Credentials = make([]mcpbroker.ScopeChoice, 0, len(policy.CredentialAllowlist))
+		for _, entry := range policy.CredentialAllowlist {
+			out.Credentials = append(out.Credentials, mcpbroker.ScopeChoice{Server: entry.Server, Account: entry.Account})
+		}
+	}
+	if len(out.Tools) == 0 && !out.RestrictCredentials {
+		return nil
+	}
+	return out
 }
 
 func (r *productionMCPRuntime) reload(ctx context.Context) (*agent.MCPReloadResult, error) {

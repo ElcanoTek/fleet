@@ -17,8 +17,114 @@ prior versions are listed because none have shipped.
 
 ## [Unreleased]
 
+### Changed
+
+- The recommended everyday model is now `deepseek/deepseek-v4-flash-0731`
+  (was `z-ai/glm-5.2`); the strong tier is unchanged (`openai/gpt-5.6-sol`).
+  Updated in every place the slug is mirrored: the frontend `DEFAULT_MODEL` /
+  `DEFAULT_MODEL_LABEL` and the picker seed list, the Operations Center's
+  `DEFAULT_PRIMARY_MODEL` for new tasks, `agentcore.DefaultCoreModel`,
+  `config.DefaultTitleModel`, and the lockdown allow-list default. Same
+  text-only modality as the model it replaces, with tool and reasoning support,
+  so no capability is lost; roughly 4.5x cheaper on input and 7x on output.
+- **DeepSeek models are now pinned to the first-party DeepSeek upstream**
+  (`canonicalUpstream`, non-strict `Order` + fallbacks). OpenRouter serves this
+  family from 28 endpoints whose context lengths span 131K-1M and whose
+  quantization spans fp4-fp8, so an unpinned route was neither reproducible in
+  quality nor safely sized - on top of losing the per-upstream prompt cache,
+  which is the same reason `z-ai/` pins to Z.AI.
+- The static context-window table resolves `deepseek/deepseek-v4*` to
+  1,048,576, ahead of the `deepseek/` -> 128,000 entry that still covers the V3
+  line (the table returns its FIRST prefix match, so ordering is what makes it
+  longest-first). Cold-start/offline path only - a running fleet reads the live
+  OpenRouter catalog - but without it a cold boot would compact a 1M-window
+  default at 128K.
+
 ### Security
 
+- **Un-inverted the event-trigger connector boundary: `allow_event_triggers=false`
+  now grants zero connector seats instead of all of them** (#979). The opted-out
+  spawn left its `credential_allowlist` unset, and an unset allowlist means
+  *inherit global* — every seat — not *none*, so the secure default produced the
+  most permissive run in the system, the exact inverse of what the code's own
+  comment promised. On an email trigger whose policy approves a bare domain, any
+  sender in that domain drove an agent holding every bundle connector, credential
+  gating disabled. The opted-out run now persists an explicit deny-all allowlist
+  (non-nil, empty), and the scheduled runner honors that value by wiring **no**
+  connector rather than wiring them all and rejecting each call: an empty MCP
+  selection (which otherwise means *the deployment default set*), a dedicated
+  empty MCP client instead of the shared process-wide one, no
+  `mcp_list_servers`/`mcp_load_servers` loader tools (calling `mcp_load_servers`
+  spawns credentialed subprocesses as a side effect), and no per-user hosted
+  remote-MCP overlay — the last of which was attached from the task *owner*, so a
+  template that looked connector-less in an audit still reached everything that
+  human had personally OAuth-connected. Tests now assert the **negative** (a
+  `false` spawn reaches zero seats, checked through the same Gate-3 predicate the
+  broker enforces); asserting only that the run "inherited nothing" is what let
+  the code and its documentation drift apart, since `len(allowlist) == 0` is true
+  for both deny-all and inherit-global. The `#177` webhook path is unchanged — it
+  is HMAC-authenticated against a per-trigger secret. See
+  [`docs/EVENT-TRIGGERS.md`](docs/EVENT-TRIGGERS.md).
+- **Run-log transcripts are no longer readable fleet-wide by every `view_logs`
+  holder** (#980). `GET /logs/{task_id}`, its per-attempt `/history` siblings,
+  and the live `GET /tasks/{task_id}/stream` all authorized on the `view_logs`
+  permission alone, with no scoping to the caller's own tasks — so any principal
+  holding it (including a `fleet_task_*` key minted for one automation, and every
+  `fleet_readonly_*` key) could read the transcript of every task on the box,
+  with task ids enumerable through `GET /tasks`. A transcript carries the run's
+  verbatim tool traffic — connector query results, whatever PII the agent
+  handled, and cost data — so on a multi-client deployment one leaked or
+  over-issued key was a cross-tenant read. The scope check these routes did carry
+  was a no-op: `taskVisibleToScopes` returns true unconditionally, and unscoped
+  principals skipped it entirely. All four routes now share one gate
+  (`internal/sched/handlers/log_authz.go`): `view_logs` plus **ownership** of the
+  task (creating user or creating API key — the same predicate that already made
+  workspace files creator-private), or the new explicit fleet-wide
+  **`view_all_logs`** permission, which `PermissionAdmin` implies and no role
+  grants. `POST /keys` accepts an explicit `permissions` array on the legacy path
+  so an operator can mint a fleet-wide log auditor without handing out an admin
+  key; it 400s rather than silently losing to a `role` or `type` in the same
+  request. Workspace files stay stricter (admin-or-creator) and are deliberately
+  *not* widened by `view_all_logs`. Because ownership is now load-bearing, the
+  one create path that dropped it was fixed too: a task scheduled from chat
+  (`schedule_task`) is attributed to the approving user, so its own author can
+  read its transcript — and, as a side effect, finally gets the completion push
+  notification that path never fired. See
+  [ADR-0043](docs/adr/0043-per-task-run-log-scoping.md) for the decision, the
+  operational breaks (a readonly key reads no transcripts; a non-admin user keeps
+  only its own), and the residual it does not close (the task *row* itself,
+  prompt and result included, is still fleet-wide under `view_tasks`).
+
+- **The MCP broker now authorizes, not just transports (#167, ADR-0042).** The
+  credential-owning `fleet mcp-broker` child used to bind whatever
+  `{server, account}` selection it was sent and run whatever tool a call frame
+  named: every gate lived parent-side, inside the address space the boundary
+  exists to distrust, so a parent-side gating bug was a total bypass. That was
+  not hypothetical — activating the production boundary scrubbed the very
+  `cfg.MCPServers` the scheduled agent read its Gate-2 allowlist from, and every
+  scheduled run silently lost its tool allowlist (#960) with nothing on the
+  credential side looking. The child now re-derives the per-server tool
+  allowlist and the enabled-server set from **its own** bundle (refreshed inside
+  `Reload`, under the lock that publishes new bases) and treats the parent's
+  effective sets, which now cross as `ScopeSpec.Policy`, as narrowing only. A
+  selection naming a server the child does not have enabled is refused before
+  anything spawns; a call outside the scope's bound set is refused at dispatch;
+  the scope's advertised catalog is filtered through the same gate that judges
+  its calls; and the per-task credential allowlist (#184) is enforced child-side
+  through the same `agentcore.GateMCPBrokerWithAllowlist` the in-process loop
+  uses, preserving the nil ("inherit global") versus empty ("deny all")
+  distinction. Refusals are value-free tool-level results carrying a stable
+  `mcp_broker_policy_denied` marker. The unscoped shared client is restricted
+  rather than removed: no production agent path reaches it any more, and what
+  does is still bounded by the bundle allowlist. `docs/MCP-BROKER-SCOPES.md` no
+  longer says "no authorization boundary is added here", because there is one.
+- **Recorded the remote-MCP OAuth control-plane boundary as accepted, in
+  writing (#167).** Per-user hosted MCP *runs* resolve tokens in the child
+  (ADR-0040), but connect / callback / connection CRUD stay parent-side, so the
+  parent installs the at-rest cipher and can decrypt any user's stored
+  remote-MCP tokens. `SECURITY.md` now states the threat model plainly —
+  compromise of the fleet parent process implies compromise of stored
+  remote-MCP tokens — instead of leaving the gap implied by omission.
 - **Cleared the three high-severity npm advisories and all seven govulncheck
   findings.** `npm audit` in `web/` reported 3 high-severity vulnerabilities and
   the Go CVE gate reported 7 reachable standard-library vulnerabilities; both
@@ -64,6 +170,47 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Multi-day chats no longer stay anchored to yesterday's mailbox
+  dates (#1026).** The engine already injected a day-granular Runtime Date
+  Context in the system prompt; the model still reused the previous turn's
+  `date_from`/`date_to`, so a "check again" on August 13 searched only
+  August 12 and missed mail that had already arrived. Every run now also
+  gets a structured `runtime_today` + 3-day `freshness_window` in the
+  message tail (interactive and scheduled), and mailbox/search MCP results
+  whose `date_to` (or `on_or_before`) is before today — or that return
+  `matches_found=0` on an exact sender/subject query — are annotated so an
+  empty exact hit cannot be treated as proof of absence. OpenX-specific
+  discovery, coverage-date parsing, and the pre-send ledger stay in the
+  client bundle; this is the engine-side date/search gate. See
+  [`docs/RUNTIME-DATE.md`](docs/RUNTIME-DATE.md).
+- **The chat composer toolbar now fits on one row on a phone.** The model chip
+  carried the full vendor-prefixed catalog name (`Z.AI: GLM 5.2`) plus the four
+  cost glyphs, and the toolbar row wrapped — the tools button and the context
+  ring dropped onto a second line under the chip. The row no longer wraps: the
+  icon buttons keep their fixed size and the chip is the single elastic item,
+  so it truncates with an ellipsis instead of pushing anything down. Below the
+  `sm` breakpoint the chip also drops the vendor prefix (`GLM 5.2` — the full
+  name stays the button's accessible name) and hides the cost glyphs, which are
+  still shown on every row of the model picker. Desktop and tablet are
+  unchanged: full name, capped at 11rem with an ellipsis, cost tier visible.
+- **An approved MCP call runs on the account its turn was using, not the
+  connector's default seat (#167).** An approval card outlives the turn scope
+  that staged it, so execution reached for the unscoped broker at the default
+  bundle seat — a multi-account footgun: a turn on a named account could have
+  its approved send go out as a different client. Staging now records the public
+  `{server, account}` seat (`approvals.mcp_server` / `mcp_account`, migration
+  048) and approve/execute opens a fresh short-lived scope carrying that same
+  selection; a seat that no longer resolves fails the approval with the seat
+  named rather than silently downgrading. The card shows which account a
+  named-seat send will run as. Rows staged before the migration carry no seat
+  and execute on the shared broker exactly as before.
+- **Approval staging looks at the turn's catalog instead of the process-wide
+  default-seat one (#167).** `RunTurn` now hands the stager the turn scope's
+  broker, catalog, and selection before any tool can stage a card. Previously,
+  during a named-account turn, the staged tool identity
+  (`mcp_<server>_<account>_<tool>`) did not appear in the stager's catalog at
+  all, so email pre-validation ran against the wrong seat and the staged-call
+  resolution could not find its own tool.
 - **`fleet update` no longer fails on a box whose distro Go lags `go.mod`.**
   The Makefile now exports `GOTOOLCHAIN=auto`, so every build path fetches the
   pinned toolchain instead of demanding it be pre-installed. `go.mod` pins an

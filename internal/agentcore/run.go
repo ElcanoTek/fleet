@@ -309,6 +309,12 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 	if err != nil {
 		return Result{}, err
 	}
+	// Per-run runtime_today in the message tail (#1026). The system prompt
+	// already carries a day-granular date, but multi-day chats still reused
+	// yesterday's mailbox bounds; restating it here (append-only, after
+	// hooks) makes the current UTC date harder to ignore without touching
+	// the cached prefix.
+	messages = appendRuntimeDateMessage(messages, runtimeNow())
 
 	maxTokens := int64(DefaultMaxCompletionTokens)
 	if cfg.MaxCompletionTokens > 0 {

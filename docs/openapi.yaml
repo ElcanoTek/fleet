@@ -316,6 +316,15 @@ components:
       properties:
         name: { type: string }
         role: { type: string, enum: [admin, client, readonly] }
+        permissions:
+          type: array
+          items: { type: string, enum: [create_task, view_tasks, cancel_task, view_logs, view_all_logs, manage_keys, admin] }
+          description: >-
+            Explicit permission set for the legacy (role-based) path, for grants
+            no role expresses — chiefly view_all_logs, the fleet-wide transcript
+            read. Rejected with 400 when combined with role or type (a typed key
+            derives its permissions from its type), or when it names an unknown
+            permission.
         allowed_node_patterns: { type: array, items: { type: string }, description: "Scope patterns limiting the key's task visibility." }
         rate_limit: { type: integer }
         expires_in_days: { type: integer }
@@ -1181,6 +1190,7 @@ paths:
           content:
             text/event-stream:
               schema: { type: string }
+        "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
   /tasks/{task_id}/workspace:
     parameters:
@@ -2146,6 +2156,13 @@ paths:
         schema: { type: string }
     get:
       summary: Get the captain's-log session for a task.
+      description: >-
+        Requires the view_logs permission AND either ownership of the task (the
+        creating user or API key) or the explicit fleet-wide view_all_logs
+        permission, which PermissionAdmin implies. A transcript carries the run's
+        verbatim tool traffic, so a view_logs holder reads its OWN tasks only;
+        anyone else's is 403. Same gate on the /history siblings and on
+        GET /tasks/{task_id}/stream.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
       responses:
         "200":
@@ -2153,6 +2170,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/LogSession" }
+        "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
   /logs/{task_id}/history:
     parameters:

@@ -623,11 +623,9 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 	}
 
 	// Loader tools (mcp_list_servers / mcp_load_servers) drive the in-loop tool
-	// rebuild via the agentcore MCPServersDirty hook.
-	var loaderTools []fantasy.AgentTool
-	if a.mcpBroker == nil {
-		loaderTools = a.buildLoaderTools()
-	}
+	// rebuild via the agentcore MCPServersDirty hook. See loaderToolsForRun for
+	// the two cases that get none.
+	loaderTools := a.loaderToolsForRun()
 
 	maxTokens := agentcore.DefaultMaxCompletionTokens
 	if a.config != nil && a.config.LLMMaxTokens > 0 {

@@ -103,8 +103,11 @@ func (f *gatedEngine) SuggestRecurringTask(context.Context, string, []string) (*
 func (f *gatedEngine) SuggestLibraryPrompt(context.Context, string) (*agent.LibraryPromptDraft, error) {
 	return nil, nil
 }
-func (f *gatedEngine) MCPBroker() agentcore.MCPBroker               { return nil }
-func (f *gatedEngine) MCPCatalog() []mcp.ServerTool                 { return nil }
+func (f *gatedEngine) MCPBroker() agentcore.MCPBroker { return nil }
+func (f *gatedEngine) MCPCatalog() []mcp.ServerTool   { return nil }
+func (f *gatedEngine) OpenApprovalMCPScope(context.Context, agentcore.MCPSelection, string) (*agent.MCPScope, error) {
+	return nil, nil
+}
 func (f *gatedEngine) SandboxPool() *sandbox.Pool                   { return nil }
 func (f *gatedEngine) MCPServerCatalog() []agent.OptionalServerInfo { return nil }
 func (f *gatedEngine) ListPersonas() ([]string, error)              { return nil, nil }

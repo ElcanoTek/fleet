@@ -2161,35 +2161,16 @@ func applyRerunOverrides(tc *models.TaskCreate, o taskRerunOverrides) {
 	}
 }
 
-// GetLogs handles GET /logs/{task_id}
+// GetLogs handles GET /logs/{task_id}. Authorization is the shared transcript
+// gate (see log_authz.go): view_logs plus per-task ownership, or the explicit
+// fleet-wide view_all_logs.
 func (h *Handlers) GetLogs(w http.ResponseWriter, r *http.Request) {
-	p := h.principalFromRequest(r)
-	if !p.hasPermission(models.PermissionViewLogs) {
-		writeError(w, http.StatusForbidden, "Insufficient permissions")
+	task, ok := h.logReadableTask(w, r, "Logs not found for this task")
+	if !ok {
 		return
 	}
 
-	taskIDStr := chi.URLParam(r, "task_id")
-	taskID, err := uuid.Parse(taskIDStr)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "Invalid task ID")
-		return
-	}
-
-	if scopes := p.scopes(); len(scopes) > 0 {
-		task, err := h.storage.GetTask(taskID)
-		if err != nil || task == nil {
-			writeError(w, http.StatusNotFound, "Logs not found for this task")
-			return
-		}
-
-		if !taskVisibleToScopes(task, scopes, p.ownerID()) {
-			writeError(w, http.StatusForbidden, "Task not within allowed scopes")
-			return
-		}
-	}
-
-	session, err := h.storage.GetLog(taskID)
+	session, err := h.storage.GetLog(task.ID)
 	if err != nil || session == nil {
 		writeError(w, http.StatusNotFound, "Logs not found for this task")
 		return
@@ -2199,31 +2180,14 @@ func (h *Handlers) GetLogs(w http.ResponseWriter, r *http.Request) {
 }
 
 // logHistoryTaskForRequest parses the path task id and enforces exactly the
-// GetLogs gate (PermissionViewLogs + scoped-principal task visibility), so the
-// per-attempt history endpoints can never leak more than the latest-log one.
+// GetLogs gate (the shared transcript gate in log_authz.go), so the per-attempt
+// history endpoints can never leak more than the latest-log one.
 func (h *Handlers) logHistoryTaskForRequest(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
-	p := h.principalFromRequest(r)
-	if !p.hasPermission(models.PermissionViewLogs) {
-		writeError(w, http.StatusForbidden, "Insufficient permissions")
+	task, ok := h.logReadableTask(w, r, "Logs not found for this task")
+	if !ok {
 		return uuid.Nil, false
 	}
-	taskID, err := uuid.Parse(chi.URLParam(r, "task_id"))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "Invalid task ID")
-		return uuid.Nil, false
-	}
-	if scopes := p.scopes(); len(scopes) > 0 {
-		task, err := h.storage.GetTask(taskID)
-		if err != nil || task == nil {
-			writeError(w, http.StatusNotFound, "Logs not found for this task")
-			return uuid.Nil, false
-		}
-		if !taskVisibleToScopes(task, scopes, p.ownerID()) {
-			writeError(w, http.StatusForbidden, "Task not within allowed scopes")
-			return uuid.Nil, false
-		}
-	}
-	return taskID, true
+	return task.ID, true
 }
 
 // GetLogHistory handles GET /logs/{task_id}/history — the task's superseded
@@ -2278,6 +2242,28 @@ func (h *Handlers) CreateAPIKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// An explicit permission set (#980) is the legacy path's escape hatch for a
+	// grant no role expresses. Reject the ambiguous combinations up front rather
+	// than picking a winner silently — CreateKey prefers role over permissions,
+	// and a typed key ignores both, so a caller that sent two of them would get a
+	// key with permissions it did not ask for.
+	if len(keyCreate.Permissions) > 0 {
+		switch {
+		case keyCreate.Type != "":
+			writeError(w, http.StatusBadRequest, "permissions cannot be combined with type; a typed key derives its permissions from its type")
+			return
+		case keyCreate.Role != nil:
+			writeError(w, http.StatusBadRequest, "permissions cannot be combined with role; set one or the other")
+			return
+		}
+		for _, perm := range keyCreate.Permissions {
+			if !perm.Valid() {
+				writeError(w, http.StatusBadRequest, fmt.Sprintf("unknown permission %q", perm))
+				return
+			}
+		}
+	}
+
 	var (
 		key    *apikeys.APIKey
 		rawKey string
@@ -2313,11 +2299,12 @@ func (h *Handlers) CreateAPIKey(w http.ResponseWriter, r *http.Request) {
 			keyCreate.Description,
 		)
 	} else {
-		// Legacy role-based path: mints an untyped sk- key, unchanged.
+		// Legacy role-based path: mints an untyped sk- key. Unchanged except that
+		// an explicit (validated, role-free) permission set is now honored.
 		key, rawKey, err = h.apiKeys.CreateKey(
 			keyCreate.Name,
 			keyCreate.AllowedNodePatterns,
-			nil,
+			keyCreate.Permissions,
 			keyCreate.Role,
 			keyCreate.RateLimit,
 			keyCreate.ExpiresInDays,

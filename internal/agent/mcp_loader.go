@@ -26,6 +26,23 @@ type mcpLoadServersInput struct {
 	Client string   `json:"client,omitempty" description:"Optional client/account suffix selecting a non-default credential set (e.g. \"reklaim\" picks env vars suffixed with _REKLAIM). Spawns a separate subprocess under \"<server>_<client>\"; tools surface as mcp_<server>_<client>_*. Omit for the default account. Stdio servers only — HTTP servers reject this."`
 }
 
+// loaderToolsForRun decides whether THIS run gets the loader tools at all.
+//
+//   - Broker mode owns server lifecycle in a child process, so the in-process
+//     loader has nothing to load onto.
+//   - A run whose credential allowlist denies ALL servers gets none either
+//     (#979): Gate-3 refuses every call the loader could enable, and
+//     mcp_load_servers spawns credentialed subprocesses as a side effect of
+//     being called — a side effect that must not be reachable from a run
+//     permitted to call nothing (an untrusted event-spawned run, for one).
+//     Note the sentinel: a NIL allowlist inherits global and keeps the loader.
+func (a *Agent) loaderToolsForRun() []fantasy.AgentTool {
+	if a.mcpBroker != nil || a.credentialAllowlist.DeniesAll() {
+		return nil
+	}
+	return a.buildLoaderTools()
+}
+
 func (a *Agent) buildLoaderTools() []fantasy.AgentTool {
 	return []fantasy.AgentTool{
 		fantasy.NewAgentTool(

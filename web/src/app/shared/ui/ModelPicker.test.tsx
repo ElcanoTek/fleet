@@ -41,9 +41,9 @@ describe("ModelPicker", () => {
     const input = screen.getByRole("combobox");
     fireEvent.focus(input);
     await waitFor(() => screen.getByText("OpenAI: GPT-5.6 Sol"));
-    fireEvent.change(input, { target: { value: "glm" } });
+    fireEvent.change(input, { target: { value: "deepseek" } });
     await waitFor(() => {
-      expect(screen.getByText("Z.AI: GLM 5.2")).toBeInTheDocument();
+      expect(screen.getByText("DeepSeek: DeepSeek V4 Flash 0731")).toBeInTheDocument();
     });
     expect(screen.queryByText("OpenAI: GPT-5.6 Sol")).not.toBeInTheDocument();
   });
@@ -52,9 +52,9 @@ describe("ModelPicker", () => {
     render(<Harness />);
     const input = screen.getByRole("combobox") as HTMLInputElement;
     fireEvent.focus(input);
-    await waitFor(() => screen.getByText("Z.AI: GLM 5.2"));
-    fireEvent.click(screen.getByText("Z.AI: GLM 5.2"));
-    expect(input.value).toBe("z-ai/glm-5.2");
+    await waitFor(() => screen.getByText("DeepSeek: DeepSeek V4 Flash 0731"));
+    fireEvent.click(screen.getByText("DeepSeek: DeepSeek V4 Flash 0731"));
+    expect(input.value).toBe("deepseek/deepseek-v4-flash-0731");
   });
 
   it("renders the restaurant-style cost tier for priced catalog models", async () => {
@@ -94,7 +94,7 @@ describe("ModelPicker", () => {
     // Seed fallback (fetch rejects) — no prices anywhere, so no glyphs.
     render(<Harness />);
     fireEvent.focus(screen.getByRole("combobox"));
-    await waitFor(() => screen.getByText("Z.AI: GLM 5.2"));
+    await waitFor(() => screen.getByText("DeepSeek: DeepSeek V4 Flash 0731"));
     expect(document.querySelectorAll(".model-cost")).toHaveLength(0);
   });
 

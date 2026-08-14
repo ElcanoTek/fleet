@@ -513,8 +513,10 @@ func TestSplitLockdownModels_DefaultsWhenEmpty(t *testing.T) {
 	if len(got) < 2 {
 		t.Fatalf("expected default list with both tier slots, got %v", got)
 	}
+	// One slug per product tier slot, kept in sync with the frontend's
+	// DEFAULT_MODEL / ADVANCED_MODEL and the agentcore mirrors.
 	wantContains := []string{
-		"z-ai/glm-5.2",
+		"deepseek/deepseek-v4-flash-0731",
 		"openai/gpt-5.6-sol",
 	}
 	for _, w := range wantContains {

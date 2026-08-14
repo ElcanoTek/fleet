@@ -359,7 +359,8 @@ func (m *Manager) ListPersonas() ([]string, error) {
 //
 //  1. The shared system_prompts/default.md (interactive chat operating model).
 //  2. The chosen persona YAML, flagged as "Persona Context".
-//  3. Runtime date context so the model doesn't infer "today" from stale data.
+//  3. Runtime date context so the model doesn't infer "today" from stale data
+//     (day-granular; restated again in the per-turn message tail — #1026).
 //  4. A one-line listing of protocol files the model may `view_file` when
 //     referenced by name.
 //  5. The per-conversation workspace path, so the agent can hand it to
@@ -582,9 +583,14 @@ func (m *Manager) buildSystemPrompt(persona, conversationID string, memories []s
 // cache_control breakpoints (Anthropic). One refresh per UTC day is plenty
 // for "today's date" reasoning.
 func runtimeDateContext(now time.Time) string {
+	today := now.UTC().Format("2006-01-02")
+	from := now.UTC().AddDate(0, 0, -2).Format("2006-01-02")
 	return fmt.Sprintf("## Runtime Date Context\n\n"+
 		"- Current UTC date: %s\n"+
-		"- Treat the date above as 'today' for any rolling window. Do not infer 'today' from message history or tool output.\n",
-		now.UTC().Format("2006-01-02"),
+		"- runtime_today: %s\n"+
+		"- freshness_window: %s .. %s\n"+
+		"- Treat runtime_today as 'today' for any rolling window. Do not infer 'today' from message history, filenames, or prior tool output.\n"+
+		"- For \"today\", \"latest\", or \"check again\", search freshness_window unless the user asked for a narrower historical range.\n",
+		today, today, from, today,
 	)
 }

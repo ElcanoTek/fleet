@@ -75,7 +75,53 @@ when the template task set `allow_event_triggers: true`**. Off (the default), an
 email-spawned run gets **native tools only** — no MCP selection, no credential
 allowlist — so an untrusted inbound email can never auto-escalate through a
 connector. This is the hard rule from the issue. (The pre-existing #177 webhook
-path is unchanged: it still inherits the template's MCP selection.)
+path is unchanged: it still inherits the template's MCP selection. Webhook
+ingress is HMAC-authenticated against a per-trigger secret, so its trust model is
+the operator holding that secret, not an arbitrary inbound sender.)
+
+### "None" is written down, not left blank (#979)
+
+The opted-out spawn persists a **non-nil empty `credential_allowlist`** — the
+explicit deny-all form. That distinction is the whole boundary, because the
+allowlist has three states and only two of them are visible in a length check:
+
+| Stored value | Meaning at the Gate-3 broker seam |
+| --- | --- |
+| `NULL` (nil) | **inherit global** — every seat the deployment has |
+| `[]` (non-nil, empty) | **deny all** — no MCP call may be made |
+| `[{server, account}, …]` | only the listed pairs |
+
+Leaving the allowlist unset on the opted-out run therefore granted **every** seat
+rather than none — the exact inverse of the documented rule, and invisible to a
+test that only asserted the run "inherited nothing" (`len(...) == 0` is true for
+both the top and middle rows). fleet now writes the deny down, and the tests
+assert the negative: an `allow_event_triggers=false` spawn reaches **zero** seats.
+
+Two consequences follow from that one value, both enforced in the scheduled
+runner:
+
+- **No connector is wired for the run at all** — not merely denied at call time.
+  An empty `mcp_selection` means *the deployment default set* everywhere else
+  (`taskMCPSelection(..., allWhenEmpty)`, the shared process-wide MCP client), so
+  a deny-all run gets an empty selection and a dedicated empty client instead,
+  and no `mcp_list_servers` / `mcp_load_servers` loader tools (calling
+  `mcp_load_servers` spawns credentialed subprocesses as a side effect, which a
+  run permitted to call nothing must not be able to do).
+- **The task owner's hosted (OAuth) remote connections are skipped.** Those are
+  attached from the run's *owner*, not from the task's own `mcp_selection`, so an
+  operator auditing a connector-less template would see nothing while the run
+  still reached whatever that human personally connected. A deny-all run does not
+  open them, so no bearer is minted and no third party is dialed.
+
+`mcp_selection` cannot carry the deny by itself: the column is coerced to `[]` on
+write, so an "explicitly empty" selection is indistinguishable from an absent one.
+The credential allowlist is the single load-bearing encoding of "none", and
+`agentcore.CredentialAllowlist.DeniesAll()` is the one predicate that reads it.
+
+The general trap, worth remembering wherever this codebase uses the same
+sentinel: **nil-means-permissive is fine for a config default and wrong for a
+security boundary.** Anything that has to express "denied" must express it as a
+value, never as an absence.
 
 ## Tying the run to the event + reply-back
 

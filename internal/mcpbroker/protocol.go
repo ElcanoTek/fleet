@@ -88,6 +88,37 @@ type ScopeSpec struct {
 	// It carries identity and public server names only; connection records,
 	// endpoint URLs, and credential values remain broker-side.
 	Remote *RemoteScopeSpec `json:"remote,omitempty"`
+	// Policy is the parent's effective, already-decided authorization snapshot
+	// for this scope. It can only NARROW: the credential owner intersects it
+	// with the gates it re-derives from its own bundle, so a parent-side bug
+	// can restrict a scope but never widen one. nil = no parent narrowing.
+	Policy *ScopePolicy `json:"policy,omitempty"`
+}
+
+// ScopePolicy carries the parent's effective gates across the credential
+// boundary so the credential owner can enforce them itself (issue #167). It is
+// deliberately a snapshot of already-decided SETS, never ambient configuration
+// the child would have to re-interpret.
+//
+// Both fields are public configuration identifiers. Nothing here is a
+// credential value, and nothing here is authoritative on its own — the child
+// applies its own bundle tool allowlist first and treats these as further
+// narrowing.
+type ScopePolicy struct {
+	// Tools maps a BUNDLE server name to the tool names the parent's gates
+	// leave callable on it. Same convention as the in-process Gate-2 allowlist:
+	// a missing key, or an empty list, means "the parent adds no narrowing for
+	// this server" — it never means "allow everything", because the child's own
+	// bundle allowlist still applies underneath.
+	Tools map[string][]string `json:"tools,omitempty"`
+	// RestrictCredentials switches on Gate-3 ({server, account} pair)
+	// enforcement in the child. It is explicit because nil and empty
+	// Credentials differ: false means "the run inherits global" (the historical
+	// nil allowlist), while true with an empty list denies every call.
+	RestrictCredentials bool `json:"restrictCredentials,omitempty"`
+	// Credentials lists the permitted {server, account} pairs when
+	// RestrictCredentials is set.
+	Credentials []ScopeChoice `json:"credentials,omitempty"`
 }
 
 // RemoteScopeSpec selects one user's hosted MCP connections. FilterEnabled is

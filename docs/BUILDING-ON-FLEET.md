@@ -27,6 +27,15 @@ Optionally cap what it may submit (`--max-priority 30`) or rate-limit it.
 Authenticate with either header: `X-API-Key: <key>` or
 `Authorization: Bearer <key>`.
 
+**Run logs are scoped to the key that submitted the task.** A key reads the
+transcript of the tasks it created (`/logs/{id}`, its `/history` siblings, and
+`/tasks/{id}/stream`) and 403s on anyone else's — so a `fleet_readonly_…` key,
+which creates nothing, reads no transcripts at all. A fleet-wide log reader is
+an explicit grant, not a key type: mint it with the `view_all_logs` permission
+(`POST /keys` with `{"permissions": ["view_tasks", "view_logs",
+"view_all_logs"]}`), or use an admin key. See
+[ADR-0043](adr/0043-per-task-run-log-scoping.md).
+
 ## 2. Kick off a job
 
 ```sh

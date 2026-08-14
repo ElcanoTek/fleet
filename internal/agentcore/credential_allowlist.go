@@ -39,6 +39,16 @@ type CredentialAllowlistEntry struct {
 //   - populated     → only the listed pairs are permitted.
 type CredentialAllowlist []CredentialAllowlistEntry
 
+// DeniesAll reports whether the allowlist is the EXPLICIT deny-all form: non-nil
+// and empty. This is the only encoding of "this run may reach NO connector" —
+// a nil allowlist means "inherit global", i.e. every seat (see Permits). Callers
+// that want to skip wiring a run's MCP surface entirely (rather than wire it and
+// have every call denied at the broker) test this, so "none" is expressed once
+// and read the same way everywhere. See docs/EVENT-TRIGGERS.md.
+func (al CredentialAllowlist) DeniesAll() bool {
+	return al != nil && len(al) == 0
+}
+
 // Permits reports whether the (server, account) pair is allowed. Account names
 // are canonicalized on both sides so `client-a` and `client_a` resolve to one
 // seat (matching the env-suffix folding the credential store uses).
@@ -71,11 +81,7 @@ func (al CredentialAllowlist) permittedRegisteredNames() map[string]bool {
 		if e.Server == "" {
 			continue
 		}
-		name := e.Server
-		if acct := creds.CanonicalAccount(e.Account); acct != "" {
-			name = e.Server + "_" + acct
-		}
-		out[name] = true
+		out[RegisteredMCPName(e.Server, e.Account)] = true
 	}
 	return out
 }

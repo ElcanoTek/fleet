@@ -120,6 +120,7 @@ const (
 	upstreamProviderOpenAI    = "OpenAI"
 	upstreamProviderMoonshot  = "Moonshot AI"
 	upstreamProviderZAI       = "Z.AI"
+	upstreamProviderDeepSeek  = "DeepSeek"
 )
 
 // canonicalUpstream pins each model family to a single OpenRouter upstream so
@@ -137,6 +138,12 @@ var canonicalUpstream = []struct {
 	{"openai/", upstreamProviderOpenAI, false},
 	{"moonshotai/", upstreamProviderMoonshot, false},
 	{"z-ai/", upstreamProviderZAI, false},
+	// DeepSeek's own endpoint, non-strict. 28 OpenRouter endpoints serve this
+	// family at context lengths from 131K to 1M and quantizations from fp4 to
+	// fp8, so an unpinned route varies in both window and quality run to run —
+	// on top of losing the per-upstream prompt cache. Order (not Only) keeps
+	// graceful degradation if the first-party endpoint is unavailable.
+	{"deepseek/", upstreamProviderDeepSeek, false},
 }
 
 // upstreamPinFor returns the OpenRouter provider routing policy for a model

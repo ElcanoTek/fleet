@@ -51,3 +51,5 @@ reviewable, and citable. Each record names the file or test that enforces it.
 | [0039](0039-durable-turn-journal.md) | Durable turn journal gates interactive terminal success | Accepted |
 | [0040](0040-child-owned-remote-mcp-runtime.md) | Child-owned per-user remote MCP runtime | Accepted |
 | [0041](0041-mandatory-session-epoch-claim.md) | Session cookies carry a mandatory session-epoch claim | Accepted |
+| [0042](0042-child-side-mcp-scope-authorization.md) | Child-side MCP scope authorization (the broker enforces, not just transports) | Accepted |
+| [0043](0043-per-task-run-log-scoping.md) | Run-log transcripts are creator-scoped; fleet-wide reads need an explicit grant | Accepted |
