@@ -747,21 +747,25 @@ type Config struct {
 	PhoneAFriendEnabled bool
 	PhoneAFriendModel   string
 
-	// ── sub-agents / delegation (#175, #264) ──
+	// ── sub-agents / delegation (#175, #264, #1043) ──
 	// SubagentsEnabled turns on the spawn_subagent native tool fleet-wide, which
 	// lets a governed run delegate a scoped piece of work to a CHILD run. The child
 	// is not a new or weaker loop: it is another agentcore.Run governed exactly like
 	// the parent (ADR-0001), inheriting the parent's sandbox network posture, MCP
 	// + credential allowlist (least-privilege: it may only SUBTRACT), and a SLICE
 	// of the parent's remaining cost/token budget — the parent ceiling is the hard
-	// wall across all descendants. OFF by default (FLEET_SUBAGENTS_ENABLED) so
-	// config/default behaviour is unchanged.
+	// wall across all descendants. ON by default (#1043): the tool being registered
+	// is the feature — the PARENT AGENT decides whether to actually spawn; a
+	// sequential run that never delegates is a successful use of it.
+	// FLEET_SUBAGENTS_ENABLED=false (or the Admin → Features override) is the
+	// fleet-wide KILL SWITCH, not an enable.
 	//
-	// Delegation is ALSO opt-in PER TASK via the task's allow_delegation flag (#264):
-	// a task with allow_delegation=true gets the tool even when this fleet-wide flag
-	// is off. The two compose as OR (see internal/scheduledrun) — the env flag is the
-	// operator-level override, the per-task flag the granular opt-in. Either way the
-	// tool is registered ONLY in scheduled mode, never in interactive chat.
+	// Delegation is ALSO gated PER TASK via the task's allow_delegation flag
+	// (default true, #1043): the two compose as AND (see internal/scheduledrun) —
+	// the operator only ever opts OUT, per task or fleet-wide. When the composed
+	// gate is false the tool is not registered at all (structural, not a soft
+	// check). Interactive chat registers the tool too (#1043) whenever the
+	// fleet-wide flag is on; chat has no per-conversation opt-out column.
 	//
 	// SubagentsMaxDepth caps recursion; the default is 1 ("parent → sub-agent only",
 	// #264) — a child does not get the spawn tool. SubagentsMaxChildren caps per-parent
@@ -1262,8 +1266,10 @@ func Load(envFile string) (*Config, error) {
 		PhoneAFriendEnabled: getenvFleetBool("PHONE_A_FRIEND_ENABLED", false),
 		PhoneAFriendModel:   getenvFleet("PHONE_A_FRIEND_MODEL"),
 
-		// ── sub-agents / delegation (#175, #264) ──
-		SubagentsEnabled:        getenvFleetBool("SUBAGENTS_ENABLED", false),
+		// ── sub-agents / delegation (#175, #264, #1043) ──
+		// Default TRUE (#1043): the parent agent decides whether to delegate;
+		// FLEET_SUBAGENTS_ENABLED=false is the fleet-wide kill switch.
+		SubagentsEnabled:        getenvFleetBool("SUBAGENTS_ENABLED", true),
 		SubagentsMaxDepth:       getenvFleetInt("SUBAGENTS_MAX_DEPTH", defaultSubagentsMaxDepth),
 		SubagentsMaxChildren:    getenvFleetInt("SUBAGENTS_MAX_CHILDREN", defaultSubagentsMaxChildren),
 		SubagentsBudgetFraction: normalizeBudgetFraction(getenvFleetFloat("SUBAGENTS_BUDGET_FRACTION", defaultSubagentsBudgetFraction)),

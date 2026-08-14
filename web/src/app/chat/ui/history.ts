@@ -775,6 +775,8 @@ export function humanToolLabel(name: string): string {
       return "Fetching page";
     case "smart_search":
       return "Searching the web";
+    case "spawn_subagent":
+      return "Delegating to sub-agent";
     case "mcp_email_send_email":
       return "Sending email";
     case "mcp_email_search_emails":
@@ -811,6 +813,7 @@ export function toolIcon(name: string): string {
   if (name === "task_tracker") return "✓";
   if (name === "view_file" || name === "write_file" || name === "edit_file") return "📄";
   if (name === "web_fetch" || name === "smart_search") return "🔎";
+  if (name === "spawn_subagent") return "🤖";
   if (name.startsWith("mcp_email_")) return "📧";
   if (name.startsWith("mcp_sendgrid_")) return "📤";
   return "🛠";

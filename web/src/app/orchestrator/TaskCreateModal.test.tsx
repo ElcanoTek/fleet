@@ -619,3 +619,55 @@ describe("TaskCreateModal — prompt editor sizing", () => {
     expect(screen.getByLabelText("Prompt").className).not.toContain("is-expanded");
   });
 });
+
+// ── sub-agent delegation (#1043) ──────────────────────────────────────────────
+// Default-on with an Advanced opt-out: the toggle starts checked, an untouched
+// form omits the field (server default = true), and switching it off sends the
+// explicit false.
+
+describe("TaskCreateModal — sub-agent delegation", () => {
+  const openAdvanced = () =>
+    fireEvent.click(screen.getByRole("button", { name: /Advanced/ }));
+
+  it("defaults the toggle ON and omits allow_delegation from the create payload", async () => {
+    createTask.mockResolvedValue({ id: "t-1" });
+    renderModal();
+    fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Do it" } });
+    openAdvanced();
+    expect(
+      screen.getByRole("checkbox", { name: /Allow sub-agent delegation/ }),
+    ).toBeChecked();
+    fireEvent.click(screen.getByRole("button", { name: "Launch task" }));
+    await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
+    const body = createTask.mock.calls[0][0] as Record<string, unknown>;
+    expect(body.allow_delegation).toBeUndefined();
+  });
+
+  it("sends the explicit opt-out when toggled off", async () => {
+    createTask.mockResolvedValue({ id: "t-2" });
+    renderModal();
+    fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Do it" } });
+    openAdvanced();
+    fireEvent.click(screen.getByRole("checkbox", { name: /Allow sub-agent delegation/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Launch task" }));
+    await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
+    const body = createTask.mock.calls[0][0] as Record<string, unknown>;
+    expect(body.allow_delegation).toBe(false);
+  });
+
+  it("prefills an edited task's explicit opt-out (and an old payload as on)", () => {
+    renderModal({ editTask: { ...baseEdit, allow_delegation: false } });
+    openAdvanced();
+    expect(
+      screen.getByRole("checkbox", { name: /Allow sub-agent delegation/ }),
+    ).not.toBeChecked();
+    cleanup();
+    vi.clearAllMocks();
+    // A pre-#1043 payload has no field at all: treat as the default (on).
+    renderModal({ editTask: baseEdit });
+    openAdvanced();
+    expect(
+      screen.getByRole("checkbox", { name: /Allow sub-agent delegation/ }),
+    ).toBeChecked();
+  });
+});

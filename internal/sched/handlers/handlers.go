@@ -1810,7 +1810,7 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 		InstructionSelfImprove: tc.InstructionSelfImprove,
 		AllowNetwork:           tc.AllowNetwork,
 		CarryContext:           tc.CarryContext,
-		AllowDelegation:        tc.AllowDelegation,
+		AllowDelegation:        tc.DelegationAllowed(),
 		ThinkingBudgetTokens:   tc.ThinkingBudgetTokens,
 		Persona:                tc.Persona,
 		ScheduledFor:           tc.ScheduledFor,
@@ -2137,7 +2137,7 @@ func applyRerunOverrides(tc *models.TaskCreate, o taskRerunOverrides) {
 		tc.AllowNetwork = *o.AllowNetwork
 	}
 	if o.AllowDelegation != nil {
-		tc.AllowDelegation = *o.AllowDelegation
+		tc.AllowDelegation = o.AllowDelegation
 	}
 	if o.ThinkingBudgetTokens != nil {
 		if *o.ThinkingBudgetTokens < 0 {

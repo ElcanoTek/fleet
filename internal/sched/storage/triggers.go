@@ -116,7 +116,7 @@ func (s *Storage) buildTriggerRun(ctx context.Context, taskID uuid.UUID, prompt 
 		Priority:               template.Priority,
 		InstructionSelfImprove: template.InstructionSelfImprove,
 		AllowNetwork:           template.AllowNetwork,
-		AllowDelegation:        template.AllowDelegation,
+		AllowDelegation:        models.BoolPtr(template.AllowDelegation),
 		ThinkingBudgetTokens:   template.ThinkingBudgetTokens,
 		OutputSchema:           append(json.RawMessage(nil), template.OutputSchema...),
 		Files:                  template.Files,

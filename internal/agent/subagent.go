@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/tools"
 )
 
 // Governed sub-agents / agent delegation (#175 part b, completed by #264).
@@ -72,14 +73,36 @@ import (
 //     model context, and the child's tool calls run sandboxed under host policy —
 //     identical to the parent, because it IS the same machinery.
 //
-// OFF by default (subagentConfig.enabled == false) so config/default behaviour is
-// unchanged: the tool is not even registered unless FLEET_SUBAGENTS_ENABLED is set.
+// ON by default since #1043 (amending ADR-0007): the fleet-wide flag
+// (FLEET_SUBAGENTS_ENABLED / Admin → Features) and the per-task allow_delegation
+// column both default TRUE and compose as AND — the operator only ever opts OUT.
+// Registering the tool is the feature; the PARENT AGENT decides whether to spawn
+// (a sequential run that never delegates is a successful use of it). When the
+// composed gate is false the tool is not registered at all (structural).
+// Interactive chat registers the same tool (#1043) when the fleet flag is on —
+// see RunInteractiveTurn.
+//
+// #1043 also adds TYPED CHILDREN: role=explore (the default — a read-only
+// research child whose roster is stripped of write-capable native tools, see
+// exploreDeniedNativeTools) and role=worker (full scheduled roster, for children
+// that must create or edit files). Every child, either role, gets an ISOLATED
+// working directory <parent workspace>/subagents/<child-session-id>/ forced as
+// its bash/file-tool default cwd — still inside the parent's sandbox and
+// bind-mounted workspace (no new namespace, no privilege widen) — so parallel
+// children never clobber one another's outputs. The JSON result reports
+// {role, child_session_id, workdir} alongside the answer and spend.
 
 // subagentConfig is the per-Agent sub-agent state: the feature gate, the caps,
 // this run's depth-in-tree, the per-child model resolution, and the live fan-out
 // counter. Built by newSubagentConfig from the driver-supplied SubagentOptions.
 type subagentConfig struct {
-	enabled        bool
+	enabled bool
+	// role is the typed-child role of THIS run (#1043): "" for a root run,
+	// SubagentRoleExplore or SubagentRoleWorker for a spawned child. Execute
+	// filters an explore child's final tool roster through
+	// exploreDeniedNativeTools so the strip covers run-time-appended tools
+	// (remember, propose_note, spawn itself) as well as the inherited set.
+	role           string
 	depth          int // this run's depth in the spawn tree; root = 0
 	maxDepth       int
 	maxChildren    int
@@ -162,10 +185,72 @@ const (
 	subagentMinChildTokens  = 1000
 )
 
+// Typed child roles (#1043). explore is the SAFE DEFAULT: a read-only research
+// child. worker is the opt-in for children that must create or edit files.
+// An empty or unrecognized role normalizes to explore — never to worker.
+const (
+	SubagentRoleExplore = "explore"
+	SubagentRoleWorker  = "worker"
+)
+
+// normalizeSubagentRole maps the model-supplied role to a valid one. Anything
+// that is not exactly "worker" (case/space-insensitively) is explore: the safe
+// default must also be the failure mode of a typo.
+func normalizeSubagentRole(role string) string {
+	if strings.EqualFold(strings.TrimSpace(role), SubagentRoleWorker) {
+		return SubagentRoleWorker
+	}
+	return SubagentRoleExplore
+}
+
+// exploreDeniedNativeTools is THE single write-capable native-tool strip set for
+// role=explore children (#1043) — the one place the "read-only child" posture is
+// defined, unit-tested in subagent_role_test.go. It denies known writers by name
+// rather than inventing a second agent type: file writers (write_file/edit_file/
+// xlsx_workbook/generate_image), outward publishers (publish_artifact, browser —
+// a browser can submit forms), datastore mutators (create_task, remember,
+// propose_note, propose_skill). Read tools (view_file, bash, web_fetch,
+// download_url, recall, MCP reads) stay. Bash cannot be made read-only, so an
+// explore child is "no purpose-built writers", not a filesystem guarantee — the
+// isolation subdir plus this strip is the honest posture (see docs/SUBAGENTS.md).
+// MCP write tools are NOT inferred here (out of scope per #1043); the child's
+// prompt carries the read-only instruction instead.
+var exploreDeniedNativeTools = map[string]bool{
+	"write_file":                  true,
+	"edit_file":                   true,
+	"xlsx_workbook":               true,
+	"generate_image":              true,
+	"browser":                     true,
+	tools.CreateTaskToolName:      true,
+	tools.PublishArtifactToolName: true,
+	"remember":                    true,
+	"propose_note":                true,
+	"propose_skill":               true,
+}
+
+// filterExploreDeniedTools returns the roster minus the explore strip set.
+// Applied by Execute to the FINAL composed roster of an explore child, so
+// run-time-appended tools are covered too.
+func filterExploreDeniedTools(all []fantasy.AgentTool) []fantasy.AgentTool {
+	out := make([]fantasy.AgentTool, 0, len(all))
+	for _, t := range all {
+		if exploreDeniedNativeTools[t.Info().Name] {
+			continue
+		}
+		out = append(out, t)
+	}
+	return out
+}
+
 // spawnSubagentInput is the typed tool input. Field names retained from #175
 // (task, allow_servers) plus the #264 additions (max_iterations, timeout_minutes).
 type spawnSubagentInput struct {
 	Task string `json:"task" description:"The self-contained task for the child agent to complete. It runs in a fresh context with NO access to this conversation's history, so include everything it needs (instructions AND any data/file contents)."`
+	// Role selects the typed child (#1043). explore (the default, and anything
+	// unrecognized) is a read-only research child: write-capable native tools are
+	// stripped from its roster. worker keeps the full roster for children that
+	// must create or edit files.
+	Role string `json:"role,omitempty" description:"Child role: explore (read-only research, preferred for search/analysis) or worker (may write files). Default explore."`
 	// MaxCostUSD / MaxTotalTokens REQUEST a budget slice; the actual ceiling is
 	// capped at the per-child limit (a fraction of the parent's remaining budget)
 	// AND at what the parent has genuinely left. A request ABOVE the per-child limit
@@ -197,6 +282,13 @@ type spawnSubagentOutput struct {
 	CostUSD float64 `json:"cost_usd"`
 	Tokens  int     `json:"tokens"`
 	Success bool    `json:"success"`
+	// #1043 additions: the child's resolved role, its session id (matches the
+	// parent log's subagent_spawned linkage entry and the child's sibling log
+	// file), and the isolated working directory its outputs live in. Empty on a
+	// refusal (no child was built).
+	Role           string `json:"role,omitempty"`
+	ChildSessionID string `json:"child_session_id,omitempty"`
+	Workdir        string `json:"workdir,omitempty"`
 }
 
 // budgetEpsilon absorbs float rounding when comparing a requested cost against
@@ -206,12 +298,17 @@ const budgetEpsilon = 1e-9
 // newSpawnSubagentTool builds the spawn_subagent native tool bound to this
 // (parent) Agent. Registered only when the feature is enabled (see Execute).
 func (a *Agent) newSpawnSubagentTool() fantasy.AgentTool {
-	description := `Delegate a scoped subtask to a CHILD agent that runs to completion in its own fresh context, then returns its final answer to you as JSON {result, cost_usd, tokens, success}.
+	description := `Delegate a scoped subtask to a CHILD agent that runs to completion in its own fresh context, then returns its final answer to you as JSON {result, cost_usd, tokens, success, role, child_session_id, workdir}.
 
-Use this to PARALLELIZE or isolate self-contained work (research a sub-question, analyze one of N files, draft one section). Call it MULTIPLE times in a single turn to fan out: the children run concurrently and all their results come back before your next step. The child is a FULL governed agent: it runs sandboxed under the same policy you do, with the same tools and credentials, and its spend counts against YOUR budget.
+WHEN to spawn: the work is independent, parallelizable, and self-contained (research a sub-question, analyze one of N files, fetch and summarize one of N URLs, draft one section). Call this tool MULTIPLE times in a single turn to fan out: the children run concurrently and all their results come back before your next step.
+When NOT to spawn: the steps are sequential (each needs the previous result), the work is one cheap tool call you can do yourself, or you cannot write the child a complete standalone task string. Doing the work yourself is often correct — never spawn for the sake of spawning.
+
+Roles: PREFER role=explore (the default) — a read-only research child with write tools stripped. Use role=worker ONLY when the child must create or edit files. Each child works in its own isolated subdirectory (returned as workdir) inside your workspace; tell it where inputs live via the task text, and read its outputs from workdir.
+
+The child is a FULL governed agent: it runs sandboxed under the same policy you do, and its spend counts against YOUR budget.
 
 Hard limits (a spawn that violates one is refused with success=false, not silently downgraded):
-- The child's budget is capped at a fraction of your REMAINING budget (default 10%); requesting max_cost_usd/max_total_tokens above that cap is refused. Its spend reduces yours.
+- The child's budget is capped at a fraction of your REMAINING budget (default 10%); requesting max_cost_usd/max_total_tokens above that cap is refused. Omit both unless you deliberately want a SMALLER slice. Its spend reduces yours.
 - The number of children you may spawn is capped; an extra spawn is refused with "max concurrent sub-agents reached".
 - A child cannot itself delegate (it does not get this tool).
 - The child inherits your sandbox and MCP/credential permissions and may only have FEWER, never more (least privilege).
@@ -244,6 +341,9 @@ func (a *Agent) spawn(ctx context.Context, in spawnSubagentInput) (fantasy.ToolR
 	if task == "" {
 		return refuseSpawn("spawn_subagent requires a non-empty task."), nil
 	}
+	// Typed child (#1043): explore (read-only, the default) or worker. Anything
+	// else — including empty — is explore, so a typo can never grant write tools.
+	role := normalizeSubagentRole(in.Role)
 	if in.TimeoutMinutes < 0 {
 		return refuseSpawn("timeout_minutes must be non-negative."), nil
 	}
@@ -299,11 +399,28 @@ func (a *Agent) spawn(ctx context.Context, in spawnSubagentInput) (fantasy.ToolR
 	// are NARROWED from the parent's — never widened.
 	childModel, modelDesc := a.resolveChildModel(ctx, in.Model)
 	childAllowlist := a.narrowedCredentialAllowlist()
-	childAgent := a.buildChild(childModel, childAllowlist, in.AllowServers, childCost, childTokens, in.MaxIterations)
+	childAgent := a.buildChild(role, childModel, childAllowlist, in.AllowServers, childCost, childTokens, in.MaxIterations)
 
-	log.Printf("spawn_subagent: depth %d→%d, model=%s, cost_ceiling=%s, token_ceiling=%s, timeout=%s, parent_task=%s",
-		a.subagent.depth, a.subagent.depth+1, modelDesc,
-		fmtCostCeiling(childCost), fmtTokenCeiling(childTokens), fmtTimeout(in.TimeoutMinutes), a.subagent.parentTaskID)
+	// ── CHILD WRITE ISOLATION (#1043) ───────────────────────────────────────
+	// Every child gets a unique <parent workspace>/subagents/<child-session-id>/
+	// directory forced as its default cwd (bash + file tools, via the same
+	// WithForcedWorkingDir seam git-worktree isolation uses), so concurrent
+	// children never share a default write path. The dir is INSIDE the parent's
+	// workspace/worktree and the child still runs in the parent's sandbox — this
+	// subtracts nothing and adds nothing privilege-wise; it only de-conflicts
+	// writes. Isolation is required, so a dir we cannot create refuses the spawn
+	// (returning the slot and the reservation) rather than running unisolated.
+	childWorkdir, wdErr := ensureChildWorkdir(ctx, childAgent.LogSession().ID)
+	if wdErr != nil {
+		a.settleChildBudget(childCost, childTokens, agentcore.RunUsage{})
+		a.releaseChildSlot()
+		return refuseSpawn(fmt.Sprintf(
+			"SUBAGENT_WORKDIR_UNAVAILABLE: could not create the child's isolated working directory: %v", wdErr)), nil
+	}
+
+	log.Printf("spawn_subagent: depth %d→%d, role=%s, model=%s, cost_ceiling=%s, token_ceiling=%s, timeout=%s, workdir=%s, parent_task=%s",
+		a.subagent.depth, a.subagent.depth+1, role, modelDesc,
+		fmtCostCeiling(childCost), fmtTokenCeiling(childTokens), fmtTimeout(in.TimeoutMinutes), childWorkdir, a.subagent.parentTaskID)
 
 	// Release this child's in-flight reservation and charge its ACTUAL spend back
 	// into the parent's budget UNCONDITIONALLY (even on error / partial run / timeout
@@ -323,10 +440,14 @@ func (a *Agent) spawn(ctx context.Context, in spawnSubagentInput) (fantasy.ToolR
 	// The child runs through (*Agent).Execute → agentcore.Run. No second loop. The
 	// child context is derived from the parent's, so a parent kill-switch / deadline
 	// cancels the child too; an optional per-child timeout (#264) bounds it further.
-	childCtx := ctx
+	// The forced working dir scopes the child's bash/file-tool default cwd into its
+	// isolated subdir (#1043) — it overrides the parent's own forced dir (scheduled
+	// worktree) and the per-conversation workspace (interactive) for the child's
+	// tool calls only; the parent's context is untouched.
+	childCtx := tools.WithForcedWorkingDir(ctx, childWorkdir)
 	if in.TimeoutMinutes > 0 {
 		var cancel context.CancelFunc
-		childCtx, cancel = context.WithTimeout(ctx, time.Duration(in.TimeoutMinutes)*time.Minute)
+		childCtx, cancel = context.WithTimeout(childCtx, time.Duration(in.TimeoutMinutes)*time.Minute)
 		defer cancel()
 	}
 	runErr := childAgent.Execute(childCtx, task)
@@ -338,11 +459,48 @@ func (a *Agent) spawn(ctx context.Context, in spawnSubagentInput) (fantasy.ToolR
 	answer := strings.TrimSpace(latestAssistantText(childAgent.LogSession()))
 
 	// Record a structured linkage entry on the PARENT's (persisted) session log so a
-	// spawned child is traceable to its parent task with its spend (#264). The
-	// child's own session also carries parent_task_id (set in buildChild).
-	a.recordSubagentSpawn(childAgent.LogSession().ID, childUsage, runErr == nil && !timedOut)
+	// spawned child is traceable to its parent task with its role, workdir, and
+	// spend (#264, #1043). The child's own session also carries parent_task_id
+	// (set in buildChild).
+	a.recordSubagentSpawn(childAgent.LogSession().ID, role, childWorkdir, childUsage, runErr == nil && !timedOut)
 
-	return spawnResult(answer, childUsage, runErr, timedOut), nil
+	return spawnResult(answer, role, childAgent.LogSession().ID, childWorkdir, childUsage, runErr, timedOut), nil
+}
+
+// ensureChildWorkdir creates the child's isolated working directory (#1043):
+// <parent effective workspace>/subagents/<child-session-id>/. The parent root is
+// resolved exactly the way the child's own tool calls would resolve their cwd —
+// the run's forced working dir (scheduled runs / worktrees) first, then the
+// per-conversation workspace (interactive), then the process cwd — so the child
+// dir is always INSIDE the tree the sandbox has bind-mounted and the file-op
+// capability is bound to. 0o755 for the same rootless-podman uid-mapping reason
+// as tools.EnsureWorkspaceDir: the sandbox user must be able to chdir into it.
+func ensureChildWorkdir(ctx context.Context, childID string) (string, error) {
+	root := tools.ForcedWorkingDirFromContext(ctx)
+	if root == "" {
+		if convID := tools.ConversationIDFromContext(ctx); convID != "" {
+			if dir, err := tools.EnsureWorkspaceDir(convID); err == nil {
+				root = dir
+			} else {
+				root = tools.WorkspaceDirForConversation(convID)
+			}
+		}
+	}
+	if root == "" {
+		wd, err := os.Getwd()
+		if err != nil {
+			return "", err
+		}
+		root = wd
+	}
+	if abs, err := filepath.Abs(root); err == nil {
+		root = abs
+	}
+	dir := filepath.Join(root, "subagents", childID)
+	if err := os.MkdirAll(dir, 0o755); err != nil { //nolint:gosec // sandbox uid mapping — see doc comment
+		return "", err
+	}
+	return dir, nil
 }
 
 // reserveChildSlot atomically increments the fan-out counter iff it is below the
@@ -602,13 +760,26 @@ func (a *Agent) childSelection(allowServers []string) map[string]bool {
 //
 // maxIter optionally caps the child's agent steps (#264), bounded at the parent's
 // own iteration budget so a child can never run more steps than the parent may.
-func (a *Agent) buildChild(model fantasy.LanguageModel, allowlist agentcore.CredentialAllowlist, allowServers []string, childCost float64, childTokens int, maxIter int) *Agent {
+//
+// role (#1043) types the child: an explore child's SYSTEM PROMPT carries the
+// read-only instruction here, and its final tool roster is stripped of
+// write-capable native tools in Execute (via subagent.role) so run-time-appended
+// tools are covered too. Either role, the inherited roster drops the
+// interactive-only staging tools (preview_email etc.) — their raw bodies are
+// fatal tripwires outside a supervised chat turn, and a child always runs the
+// scheduled (run-to-completion) loop even when its parent is an interactive turn.
+func (a *Agent) buildChild(role string, model fantasy.LanguageModel, allowlist agentcore.CredentialAllowlist, allowServers []string, childCost float64, childTokens int, maxIter int) *Agent {
 	childDepth := a.subagent.depth + 1
 	childCanDelegate := a.subagent.enabled && childDepth < a.subagent.maxDepth
 
 	childIter := a.maxIterations
 	if maxIter > 0 && (childIter <= 0 || maxIter < childIter) {
 		childIter = maxIter
+	}
+
+	childSystemPrompt := a.systemPrompt
+	if role == SubagentRoleExplore {
+		childSystemPrompt += exploreChildPromptSection
 	}
 
 	child := NewAgent(Options{
@@ -620,8 +791,8 @@ func (a *Agent) buildChild(model fantasy.LanguageModel, allowlist agentcore.Cred
 		MCPBroker:        a.mcpBroker,
 		MCPCatalog:       a.mcpCatalog,
 		MCPToolAllowlist: a.mcpToolAllowlist,
-		NativeTools:      a.nativeTools,
-		SystemPrompt:     a.systemPrompt,
+		NativeTools:      tools.ExcludeInteractiveOnly(a.nativeTools),
+		SystemPrompt:     childSystemPrompt,
 		Persona:          a.persona,
 		MaxIterations:    childIter,
 		Sandbox:          a.sb,
@@ -652,8 +823,10 @@ func (a *Agent) buildChild(model fantasy.LanguageModel, allowlist agentcore.Cred
 	})
 	// Advance the child's depth (NewAgent resets it to 0). Done here rather than
 	// via Options so the depth field stays a true internal invariant the model
-	// cannot influence.
+	// cannot influence. The role is stamped the same way: Execute reads it to
+	// apply the explore write-tool strip to the FINAL composed roster (#1043).
 	child.subagent.depth = childDepth
+	child.subagent.role = role
 	// Link the child's run back to the parent task for traceability (#264): a fresh,
 	// unique session ID (concurrent children must not collide on the timestamp-based
 	// default), the parent task id, and a descriptive title. The child writes to its
@@ -717,12 +890,14 @@ func (a *Agent) usageForParent() agentcore.RunUsage {
 	}
 }
 
-// spawnResult builds the JSON tool result the parent model sees (#264):
-// {result, cost_usd, tokens, success}. `result` carries the child's final answer
-// (with a leading note when the child errored or timed out); success is false on
-// any error / timeout / empty answer so the parent can branch deterministically
-// even when several results return at once. tokens is prompt+completion.
-func spawnResult(answer string, usage agentcore.RunUsage, runErr error, timedOut bool) fantasy.ToolResponse {
+// spawnResult builds the JSON tool result the parent model sees (#264, #1043):
+// {result, cost_usd, tokens, success, role, child_session_id, workdir}. `result`
+// carries the child's final answer (with a leading note when the child errored or
+// timed out); success is false on any error / timeout / empty answer so the
+// parent can branch deterministically even when several results return at once.
+// tokens is prompt+completion. workdir tells the parent where a worker child's
+// outputs live.
+func spawnResult(answer, role, childSessionID, workdir string, usage agentcore.RunUsage, runErr error, timedOut bool) fantasy.ToolResponse {
 	success := true
 	var note string
 	switch {
@@ -739,10 +914,13 @@ func spawnResult(answer string, usage agentcore.RunUsage, runErr error, timedOut
 		result = note + "[sub-agent produced no final answer]"
 	}
 	return marshalSpawnOutput(spawnSubagentOutput{
-		Result:  result,
-		CostUSD: usage.CostUSD,
-		Tokens:  usage.PromptTokens + usage.CompletionTokens,
-		Success: success,
+		Result:         result,
+		CostUSD:        usage.CostUSD,
+		Tokens:         usage.PromptTokens + usage.CompletionTokens,
+		Success:        success,
+		Role:           role,
+		ChildSessionID: childSessionID,
+		Workdir:        workdir,
 	})
 }
 
@@ -766,22 +944,28 @@ func marshalSpawnOutput(out spawnSubagentOutput) fantasy.ToolResponse {
 }
 
 // recordSubagentSpawn appends a structured linkage entry to the PARENT's session
-// log (#264) so a spawned child is traceable to the parent task with its spend.
-// The parent's log is the one persisted for the scheduled run, so this is the
-// queryable record; the child's own session additionally carries parent_task_id.
-func (a *Agent) recordSubagentSpawn(childSessionID string, usage agentcore.RunUsage, success bool) {
+// log (#264, #1043) so a spawned child is traceable to the parent task with its
+// role, isolated workdir, and spend — the record the task page's child cards are
+// built from. The parent's log is the one persisted for the scheduled run, so
+// this is the queryable record; the child's own session additionally carries
+// parent_task_id.
+func (a *Agent) recordSubagentSpawn(childSessionID, role, workdir string, usage agentcore.RunUsage, success bool) {
 	if a.logSession == nil {
 		return
 	}
 	payload, err := json.Marshal(struct {
 		ParentTaskID   string  `json:"parent_task_id,omitempty"`
 		ChildSessionID string  `json:"child_session_id"`
+		Role           string  `json:"role,omitempty"`
+		Workdir        string  `json:"workdir,omitempty"`
 		CostUSD        float64 `json:"cost_usd"`
 		Tokens         int     `json:"tokens"`
 		Success        bool    `json:"success"`
 	}{
 		ParentTaskID:   a.subagent.parentTaskID,
 		ChildSessionID: childSessionID,
+		Role:           role,
+		Workdir:        workdir,
 		CostUSD:        usage.CostUSD,
 		Tokens:         usage.PromptTokens + usage.CompletionTokens,
 		Success:        success,
@@ -792,6 +976,36 @@ func (a *Agent) recordSubagentSpawn(childSessionID string, usage agentcore.RunUs
 	t := "subagent_spawned"
 	a.logSession.AddMessageWithMetadata(roleTool, string(payload), nil, nil, &t, nil, nil, "")
 }
+
+// DelegationPromptSection is the short parent-policy section appended to the
+// system prompt — scheduled AND interactive — whenever spawn_subagent is
+// registered (#1043), so the advertised tool always arrives with its usage
+// policy. It must stay byte-stable for a given enablement state
+// (docs/PROMPT-CACHE-CONTRACT.md): no volatile tokens.
+func DelegationPromptSection() string { return delegationPromptSection }
+
+const delegationPromptSection = `
+
+## Sub-agent delegation
+
+You have a spawn_subagent tool. Delegation is a choice, not a requirement — most work is done best directly, and finishing without spawning is normal.
+
+- SPAWN when the work is independent, parallelizable, and self-contained: N files to analyze, N URLs to fetch, N sections to draft. Fan out by calling spawn_subagent several times in ONE turn.
+- DO NOT spawn when steps are sequential, when the work is one cheap tool call, or when you cannot write the child a complete standalone task.
+- PREFER role=explore (read-only research, the default). Use role=worker only when the child must create or edit files; read its outputs from the returned workdir.
+- BUDGET: each child is capped at a fraction (default 10%) of your remaining budget. Omit max_cost_usd/max_total_tokens unless you deliberately want a smaller slice — asking for more than the cap is refused.
+- The child cannot see this conversation: put everything it needs (instructions, data, file paths) in the task string.
+`
+
+// exploreChildPromptSection is appended to an explore child's system prompt so
+// the read-only posture is taught, not just enforced by the native-tool strip
+// (MCP write tools are not name-inferred — this instruction is the guard there).
+const exploreChildPromptSection = `
+
+## Read-only research role
+
+You are an explore-role sub-agent: research, read, search, and analyze, then report. Do NOT create, modify, or publish anything — your file-writing tools have been removed, and you must not use MCP or bash to mutate external state either. Beyond incidental temp output in your working directory, treat every system you touch as read-only. Your final message is your product.
+`
 
 func fmtCostCeiling(c float64) string {
 	if c <= 0 {

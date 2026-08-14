@@ -69,6 +69,9 @@ type taskYAML struct {
 	FallbackModel string          `yaml:"fallback_model"`
 	MaxIterations *int            `yaml:"max_iterations"`
 	MCPSelection  []mcpChoiceYAML `yaml:"mcp_selection"`
+	// AllowDelegation mirrors the task column (#1043): omitted defaults to TRUE
+	// (sub-agents are opt-out), matching what a task created through the API gets.
+	AllowDelegation *bool `yaml:"allow_delegation"`
 }
 
 type mcpChoiceYAML struct {
@@ -207,6 +210,9 @@ func loadTaskYAML(path string) (*models.Task, error) {
 		Prompt:    y.Prompt,
 		Status:    models.TaskStatusRunning,
 		CreatedAt: time.Now().UTC(),
+		// Same default a task created through the API gets (#1043): delegation
+		// is opt-out, so an omitted key means true.
+		AllowDelegation: y.AllowDelegation == nil || *y.AllowDelegation,
 	}
 	if s := strings.TrimSpace(y.Model); s != "" {
 		task.Model = &s

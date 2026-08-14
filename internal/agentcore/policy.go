@@ -103,6 +103,18 @@ func (p *InteractivePolicy) CanFinish(_ int) (bool, []string) {
 	return true, nil
 }
 
+// Budget exposes this turn's current cost/token ceilings and accumulated spend
+// — the same seam ScheduledPolicy offers (#175). Interactive chat registers
+// spawn_subagent too (#1043); the tool sizes a child's sliced ceiling against
+// THIS turn's remaining budget, so the parent ceiling stays the hard wall
+// across descendants in both modes.
+func (p *InteractivePolicy) Budget() BudgetState { return p.orch.budgetState() }
+
+// ChargeChildUsage folds a completed child run's usage into THIS turn's
+// accumulated cost/token counters (#1043), so the turn's own ceiling check,
+// later sibling spawns, AND the chat cost chip all account for child spend.
+func (p *InteractivePolicy) ChargeChildUsage(u RunUsage) { p.orch.chargeChildUsage(u) }
+
 // ScheduledPolicy is the run-to-completion policy bundle.
 type ScheduledPolicy struct {
 	orch *orchestrationState

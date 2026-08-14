@@ -66,7 +66,7 @@ needs a restart, ever.
 | `tool_disclosure_threshold` | int 1–100000 | `FLEET_TOOL_DISCLOSURE_THRESHOLD` | Roster size that triggers BM25 tool disclosure ([TOOL-DISCLOSURE.md](TOOL-DISCLOSURE.md)) |
 | `max_tool_output_bytes` | int 1024–128 KiB, or 0 = 64 KiB default | `FLEET_MAX_TOOL_OUTPUT_BYTES` | Operational per-tool result cap inside the non-disableable 128 KiB model-visible boundary ([TOOL-OUTPUT-BOUNDARY.md](TOOL-OUTPUT-BOUNDARY.md)) |
 | `phone_a_friend_enabled` | bool | `FLEET_PHONE_A_FRIEND_ENABLED` | One-time super-LLM review of scheduled runs ([AGENT-RUNTIME.md](AGENT-RUNTIME.md)) |
-| `subagents_enabled` | bool | `FLEET_SUBAGENTS_ENABLED` | Fleet-wide sub-agent delegation (per-task `allow_delegation` still works) |
+| `subagents_enabled` | bool | `FLEET_SUBAGENTS_ENABLED` | Fleet-wide **kill switch** for sub-agent delegation — default **on** (#1043); composes AND with per-task `allow_delegation` ([SUBAGENTS.md](SUBAGENTS.md)) |
 | `memory_autoindex_enabled` | bool | `FLEET_MEMORY_AUTOINDEX_ENABLED` | Post-turn memory auto-indexer ([MEMORY.md](MEMORY.md)) |
 | `error_analysis_enabled` | bool | `FLEET_ERROR_ANALYSIS_ENABLED` | Post-failure LLM diagnosis of failed tasks (#317) |
 | `auto_title_enabled` | bool | `FLEET_AUTO_TITLE` | LLM-generated conversation titles (#302) |
