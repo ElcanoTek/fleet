@@ -1,6 +1,6 @@
 # deploy/Caddyfile — TLS reverse-proxy fronting the fleet web origin.
 #
-# Topology (see web/src/app/lib/{chatServer,mocServer}.ts):
+# Topology (see web/src/app/lib/{chatServer,orchestratorServer}.ts):
 #
 #   browser ──TLS──▶ Caddy ──▶ Next.js web app (127.0.0.1:3000)
 #                                   │  server-side proxy (loopback):

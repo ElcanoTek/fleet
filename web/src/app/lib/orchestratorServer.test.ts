@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { orchestratorFetch, orchestratorHeaders } from "./mocServer";
+import { orchestratorFetch, orchestratorHeaders } from "./orchestratorServer";
 
 // The Operations Center is reached with the SAME elcano_session cookie chat is,
 // so it forwards the SAME session-epoch claim and honours the same revocation
@@ -12,7 +12,7 @@ vi.mock("next/headers", () => ({
   cookies: () => Promise.resolve({ delete: (name: string) => cookieDelete(name) }),
 }));
 
-describe("mocServer.ts session epoch", () => {
+describe("orchestratorServer.ts session epoch", () => {
   const originalEnv = process.env;
   let fetchMock: ReturnType<typeof vi.fn>;
 

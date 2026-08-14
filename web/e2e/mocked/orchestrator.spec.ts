@@ -49,8 +49,6 @@ async function mockOrchestrator(page: Page, captured: { createBody?: Record<stri
     if (path === "/stats") return route.fulfill({ json: STATS });
     if (path === "/mcp-servers") return route.fulfill({ json: MCP_SERVERS });
     if (path === "/config") return route.fulfill({ json: { timezone: "America/New_York" } });
-    if (path === "/concurrency")
-      return route.fulfill({ json: { max_concurrent_agents: 4, warm_pool_size: 2 } });
 
     if (path === "/tasks" && method === "GET") {
       const tasks = [...SEED_TASKS, ...(captured.createBody ? [createdTask(captured.createBody)] : [])];

@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server";
 import { getServerSession } from "@/app/lib/auth";
-import type { OrchestratorAuth } from "@/app/lib/mocServer";
+import type { OrchestratorAuth } from "@/app/lib/orchestratorServer";
 
 // resolveOrchestratorAuth picks the credential the orchestrator proxy routes
 // forward upstream. BOTH login paths are honored:

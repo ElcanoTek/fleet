@@ -8,7 +8,7 @@ issue, and what was deliberately deferred.
 
 - **Part 1 — the read model**: `GET /admin/usage` + the Operations Center
   Usage panel. Strictly read-only.
-- **Part 2 — rolling budgets**: `{scope: user|key|project, window:
+- **Part 2 — rolling budgets**: `{scope: user|key, window:
   day|week|month, soft/hard bounds in dollars AND tokens}`, enforced by one
   shared gate at every task-create path, with a once-per-window soft alert
   through the existing notifier. See "Part 2" below.
@@ -130,7 +130,7 @@ the group key, cost columns, and token/iteration/turn counts, plus a trailing
 
 ### The budget model (one table, all scopes)
 
-A budget is `{scope: user|key|project, principal_id, window: day|week|month,
+A budget is `{scope: user|key, principal_id, window: day|week|month,
 soft_usd?, hard_usd?, soft_tokens?, hard_tokens?}` — persisted in a single new
 sched-DB table `budgets` (migration 052), unique on `(scope, principal_id,
 window)`. All bounds are optional individually; at least one is required, and
@@ -138,7 +138,8 @@ soft may not exceed hard per measure.
 
 **Persistence choice, recorded honestly:** the issue offered "a small table
 (sched migration) or fields on the scoped API key (like `MaxPriority`, #190) —
-pick per scope". One table covers **all three scopes**, including `key`,
+pick per scope". One table covers **user and key** (and could hold a
+future project scope), including `key`,
 because the API key's existing per-key caps (`MaxCostPerDayUSD` /
 `MaxCostPerMonthUSD`) are a *separate accounting path* — a JSON-file
 accumulator fed by task-completion callbacks — while #601's budgets must be
@@ -210,12 +211,10 @@ mirroring the `priorityCapError` shared-helper discipline:
 
 ## Honest scope (part 2)
 
-- **`scope=project` is recorded and reported but NOT enforced at create.**
-  Tasks carry no project dimension and no task-create path resolves one (the
-  chat `schedule_task` seam does not thread the conversation's project
-  through). A project budget row is accepted, listed with its chat-side spend,
-  and evaluated by nothing. Enforcing it (e.g. by threading the conversation
-  project into the seam) is deferred.
+- **`scope=project` is rejected on write.** Tasks carry no project dimension
+  and no task-create path resolves one, so a project budget could only be
+  recorded and never enforced. Leftover rows still list. Re-introduce the
+  scope when chat `schedule_task` threads `project_id`.
 - **Admin-key submissions are not budget-gated.** The admin API key carries
   neither a user nor a scoped key — it is the box operator, whose bound is the
   global ceiling. Likewise the in-process spawn paths (`create_task` from a

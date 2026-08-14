@@ -17,7 +17,29 @@ prior versions are listed because none have shipped.
 
 ## [Unreleased]
 
+### Removed
+
+- **Budget `scope=project` is rejected on create.** A project budget was
+  accepted and listed but never enforced (tasks have no project dimension).
+  `POST /admin/budgets` now returns 400 for `scope=project`. Leftover rows
+  still list. `user` and `key` scopes are unchanged.
+- **Dead `GET /concurrency` Playwright stubs.** The moc-heritage concurrency
+  card was already gone; the mocked e2e still answered an endpoint fleet never
+  served.
+
 ### Changed
+
+- **`analyzing` is no longer a worker-reportable status.** Fleet never wrote
+  it (error analysis is a post-terminal annotation). Leftover imported rows
+  still decode, recover, and filter; workers can no longer report it. The
+  Operations Center status filter now lists `leased` (a real in-flight status)
+  instead of the leftover moc `assigned` value, and the live-log viewer
+  attaches to `leased`/`running`.
+- **Renamed `web/src/app/lib/mocServer.ts` → `orchestratorServer.ts`.** Same
+  helpers; the filename was leftover moc vocabulary.
+- **Decision (wave 2):** the Operations Center username/password form will be
+  removed. `fleet admin add` mints an unusable random password; cookie/OIDC
+  is the real path.
 
 - **Sub-agents are now ON by default, and the parent agent decides whether to
   use them (#1043, amending ADR-0007).** The enablement compose inverts from

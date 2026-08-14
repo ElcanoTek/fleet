@@ -80,7 +80,7 @@ var _ taskListStore = (*storage.Storage)(nil)
 func schedTaskList(argv []string) int {
 	fs := flag.NewFlagSet("sched task list", flag.ContinueOnError)
 	dbURL := fs.String("database-url", "", "sched Postgres DSN")
-	status := fs.String("status", "", "filter by status: scheduled|pending|leased|running|analyzing|success|error|cancelled|dead_lettered|paused_awaiting_input|paused_awaiting_wake")
+	status := fs.String("status", "", "filter by status: scheduled|pending|leased|running|analyzing (legacy)|success|error|cancelled|dead_lettered|paused_awaiting_input|paused_awaiting_wake")
 	limit := fs.Int("limit", 50, "maximum tasks to print (most recent first)")
 	asJSON := fs.Bool("json", false, "emit the tasks as a JSON array")
 	if err := fs.Parse(argv); err != nil {
