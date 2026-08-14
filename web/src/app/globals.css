@@ -2278,7 +2278,6 @@ tr.sla-row-fail {
 .budget-form-grid select {
   min-width: 0;
 }
-}
 .usage-bars {
   display: flex;
   flex-direction: column;
