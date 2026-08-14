@@ -841,6 +841,15 @@ type TaskEdit struct {
 	// SandboxLimits replaces the per-task cgroup override (#205). Assigned
 	// unconditionally from the full edit payload (nil = use global defaults).
 	SandboxLimits *models.TaskSandboxLimits
+	// ExpectedDurationMinutes replaces the task's SLA expectation (#274),
+	// assigned unconditionally from the full edit payload like
+	// ThinkingBudgetTokens (nil = no SLA; the monitor skips the task).
+	ExpectedDurationMinutes *int
+	// SLAWarnMultiplier / SLAFailMultiplier replace the SLA thresholds.
+	// Non-positive values resolve to the defaults — the same rule NewTask
+	// applies — so the NOT NULL columns always hold usable thresholds.
+	SLAWarnMultiplier float64
+	SLAFailMultiplier float64
 }
 
 // UpdateEditableTask applies an edit to a task inside a transaction, re-locking
@@ -914,6 +923,8 @@ func (s *Storage) UpdateEditableTask(ctx context.Context, taskID uuid.UUID, edit
 		task.Tags = edit.Tags
 	}
 	task.SandboxLimits = edit.SandboxLimits
+	task.ExpectedDurationMinutes = edit.ExpectedDurationMinutes
+	task.SLAWarnMultiplier, task.SLAFailMultiplier = models.ResolveSLAMultipliers(edit.SLAWarnMultiplier, edit.SLAFailMultiplier)
 
 	// Recompute the dispatch state with the SAME rule used at creation. The
 	// previous ScheduledFor-only recompute here let an edit move a task off

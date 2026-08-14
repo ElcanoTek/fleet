@@ -44,6 +44,18 @@ prior versions are listed because none have shipped.
   the tasks tab surfaces parked work. Status filters include both pause
   states.
 
+### Fixed
+
+- **Task SLA config is now validated and editable (#274).** `ValidateSLA`
+  existed but no create path called it, so a task with a fail threshold at or
+  below the warn threshold (or a non-positive expected duration) was accepted
+  and misfired alerts at runtime; every create path (create, edit, import,
+  estimate) now rejects it with a 400. Editing a task also actually persists
+  `expected_duration_minutes` — the edit form sent it, the backend silently
+  dropped it — and an edit that omits it clears the SLA. The web edit modal
+  echoes API-set `sla_warn_multiplier`/`sla_fail_multiplier` so a UI edit no
+  longer resets them to the defaults.
+
 ### Changed
 
 - **`analyzing` is no longer a worker-reportable status.** Fleet never wrote
