@@ -41,6 +41,37 @@ func openrouterCost(metadata fantasy.ProviderMetadata) *float64 {
 	return &opts.Usage.Cost
 }
 
+// openrouterServedProvider extracts the upstream that ACTUALLY served a step
+// from OpenRouter's provider metadata ("" when absent). upstreamPinFor states a
+// preference; this is the outcome, and the two diverge exactly when a soft pin
+// falls back. Without it a response degraded by a fallback route is
+// indistinguishable from the model itself being bad, which is precisely the
+// question you need answered when a turn comes back wrong.
+func openrouterServedProvider(metadata fantasy.ProviderMetadata) string {
+	raw, ok := metadata[openrouter.Name]
+	if !ok {
+		return ""
+	}
+	opts, ok := raw.(*openrouter.ProviderMetadata)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(opts.Provider)
+}
+
+// preferredUpstreamFor returns the upstream name a slug is pinned to (""
+// when the family has no canonical pin). Read alongside the served provider to
+// detect a fallback.
+func preferredUpstreamFor(modelSlug string) string {
+	matchSlug := strings.TrimPrefix(modelSlug, "~")
+	for _, c := range canonicalUpstream {
+		if strings.HasPrefix(matchSlug, c.prefix) {
+			return c.name
+		}
+	}
+	return ""
+}
+
 // sendEmailSucceeded reports whether a send_email tool result indicates the
 // send was queued (SendGrid returns status_code 202). cutlass's JSON-parsing
 // form: any non-2xx / error payload is a failure.

@@ -185,6 +185,10 @@ same PR.
 - **Prompt-cache prefix-stability contract** (what must stay byte-stable in the
   cacheable prefix so the provider prompt cache keeps hitting):
   [`docs/PROMPT-CACHE-CONTRACT.md`](docs/PROMPT-CACHE-CONTRACT.md)
+- **Upstream routing floor** (why a soft provider pin needs a serving-precision
+  allow-list under it, and the served-upstream attribution that tells a routing
+  fallback apart from a bad model):
+  [`docs/UPSTREAM-ROUTING-FLOOR.md`](docs/UPSTREAM-ROUTING-FLOOR.md)
 - **Evals & regression gating** (golden capture, the `evals/` bundle contract,
   scorers + LLM-judge, `fleet eval` CLI):
   [`docs/EVALS.md`](docs/EVALS.md) + [`docs/adr/0018-self-hosted-eval-harness.md`](docs/adr/0018-self-hosted-eval-harness.md)

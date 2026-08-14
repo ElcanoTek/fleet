@@ -123,27 +123,52 @@ const (
 	upstreamProviderDeepSeek  = "DeepSeek"
 )
 
+// fp8AndAbove is the quantization allow-list for families whose OpenRouter
+// endpoint pool mixes serving precisions. It names every level at or above fp8
+// (OpenRouter's spelling), so routing may prefer a HIGHER-precision endpoint but
+// can never silently drop to a lower one. "unknown" is deliberately absent:
+// an endpoint that does not declare its precision cannot be shown to clear the
+// floor, and the whole point of the floor is that it holds on the fallback path
+// where nobody is watching.
+var fp8AndAbove = []string{"fp8", "fp16", "bf16", "fp32"}
+
 // canonicalUpstream pins each model family to a single OpenRouter upstream so
 // prompt caches (which are per-upstream) survive across calls. strict=true
 // (Only + AllowFallbacks=false) is required for Google (encrypted thought
 // signatures validate only at the minting upstream); strict=false (Order +
 // AllowFallbacks=true) gives cache locality with graceful degradation.
+//
+// quantizations, when set, is a serving-precision FLOOR applied on top of the
+// upstream preference. It is the guard the non-strict pins were missing: Order
+// expresses a preference, not a constraint, so with AllowFallbacks=true every
+// soft-pinned request is one busy first-party endpoint away from being served
+// by whatever else in the pool answers — including a lower-precision quant of
+// the same slug. The pin fixed cache locality and left quality unguarded.
 var canonicalUpstream = []struct {
-	prefix string
-	name   string
-	strict bool
+	prefix        string
+	name          string
+	strict        bool
+	quantizations []string
 }{
-	{"google/", upstreamProviderGoogle, true},
-	{"anthropic/", upstreamProviderAnthropic, false},
-	{"openai/", upstreamProviderOpenAI, false},
-	{"moonshotai/", upstreamProviderMoonshot, false},
-	{"z-ai/", upstreamProviderZAI, false},
+	{"google/", upstreamProviderGoogle, true, nil},
+	{"anthropic/", upstreamProviderAnthropic, false, nil},
+	{"openai/", upstreamProviderOpenAI, false, nil},
+	{"moonshotai/", upstreamProviderMoonshot, false, nil},
+	{"z-ai/", upstreamProviderZAI, false, nil},
 	// DeepSeek's own endpoint, non-strict. 28 OpenRouter endpoints serve this
 	// family at context lengths from 131K to 1M and quantizations from fp4 to
 	// fp8, so an unpinned route varies in both window and quality run to run —
 	// on top of losing the per-upstream prompt cache. Order (not Only) keeps
 	// graceful degradation if the first-party endpoint is unavailable.
-	{"deepseek/", upstreamProviderDeepSeek, false},
+	//
+	// The fp8 floor is what makes that degradation graceful rather than silent.
+	// This family is the recommended everyday default (DefaultCoreModel), so the
+	// fallback path is the hot path for ordinary chat turns, and an fp4 serving
+	// of a flash-tier model degrades in a way that reads as the model being
+	// broken (token-level misspellings, topic drift, runaway output) rather than
+	// as a routing event. DeepSeek's first-party endpoint is fp8, so the floor
+	// costs nothing on the preferred route.
+	{"deepseek/", upstreamProviderDeepSeek, false, fp8AndAbove},
 }
 
 // upstreamPinFor returns the OpenRouter provider routing policy for a model
@@ -162,6 +187,12 @@ func upstreamPinFor(modelSlug string) *openrouter.Provider {
 			p.Only = []string{c.name}
 		} else {
 			p.Order = []string{c.name}
+		}
+		// Copy: the returned Provider is handed to the request builder, and a
+		// shared backing array would let one call's mutation reach every later
+		// request for the family.
+		if len(c.quantizations) > 0 {
+			p.Quantizations = append([]string(nil), c.quantizations...)
 		}
 		return p
 	}
