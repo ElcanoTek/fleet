@@ -320,6 +320,32 @@ describe("TaskCreateModal — edit mode", () => {
     });
   });
 
+  it("echoes SLA multipliers on edit even though the form has no fields for them", async () => {
+    updateTask.mockResolvedValue({ id: EDIT_ID });
+    renderModal({
+      editTask: {
+        ...baseEdit,
+        expected_duration_minutes: 30,
+        sla_warn_multiplier: 1.2,
+        sla_fail_multiplier: 3,
+      },
+      onUpdated: vi.fn(),
+    });
+
+    fireEvent.change(screen.getByLabelText("Prompt"), {
+      target: { value: "Weekly latency report v2" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /save task changes/i }));
+
+    await waitFor(() => expect(updateTask).toHaveBeenCalledTimes(1));
+    const [, body] = updateTask.mock.calls[0];
+    // PUT is full-replace server-side: a lossy echo would silently reset
+    // API-set thresholds to the defaults.
+    expect(body.expected_duration_minutes).toBe(30);
+    expect(body.sla_warn_multiplier).toBe(1.2);
+    expect(body.sla_fail_multiplier).toBe(3);
+  });
+
   it("asks all-future-runs vs run-once for a recurring task; PUT for the definition", async () => {
     updateTask.mockResolvedValue({ id: EDIT_ID });
     renderModal({

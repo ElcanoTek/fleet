@@ -211,6 +211,11 @@ function taskToFormValues(task: Task | null) {
       task.expected_duration_minutes > 0
         ? String(task.expected_duration_minutes)
         : "",
+    // The form has no multiplier fields; carried so an edit echoes API-set
+    // SLA thresholds faithfully (PUT is full-replace server-side, so a lossy
+    // echo would reset them to the defaults).
+    slaWarnMultiplier: task?.sla_warn_multiplier ?? 0,
+    slaFailMultiplier: task?.sla_fail_multiplier ?? 0,
     sandboxMemory:
       typeof task?.sandbox_limits?.memory_mb === "number" && task.sandbox_limits.memory_mb > 0
         ? String(task.sandbox_limits.memory_mb)
@@ -944,8 +949,10 @@ export function TaskCreateModal({
     }
     if (expectedDuration.trim()) {
       const mins = Number.parseInt(expectedDuration, 10);
-    if (Number.isFinite(mins) && mins > 0) taskData.expected_duration_minutes = mins;
+      if (Number.isFinite(mins) && mins > 0) taskData.expected_duration_minutes = mins;
     }
+    if (init.slaWarnMultiplier > 0) taskData.sla_warn_multiplier = init.slaWarnMultiplier;
+    if (init.slaFailMultiplier > 0) taskData.sla_fail_multiplier = init.slaFailMultiplier;
     if (thinkingBudget.trim()) {
       const budget = Number.parseInt(thinkingBudget, 10);
       if (Number.isFinite(budget) && budget >= 0) taskData.thinking_budget_tokens = budget;
