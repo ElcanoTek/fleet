@@ -4,6 +4,12 @@
 # their OWN line (a trailing "# ..." on a fingerprint line is parsed as part of
 # the fingerprint and silently ignored by gitleaks v8, so do not use them).
 #
+# The startline is part of the fingerprint, so ANY edit that inserts or removes
+# lines ABOVE a fixture shifts it and silently un-ignores it — the gate then
+# fails on a file the change never touched (that is what #1038 did to the two
+# config_test.go entries below). After editing a file named here, re-run
+# `gitleaks dir . --exit-code 1` and update the line numbers in the same commit.
+#
 # A full security scan confirmed NO real secrets in this repo's tree or history;
 # every fingerprint below is a fabricated value living in a *_test.go file. Any
 # NEW or un-ignored finding will still fail the gitleaks CI job.
@@ -22,11 +28,11 @@ internal/agentcore/mcp_fastio_response_test.go:jwt:117
 
 # fake: fabricated "sk-or-v1-..."-shaped string in TestLoadWithQuotedEnvFromPodman
 # (double-quote-stripping test).
-internal/config/config_test.go:generic-api-key:1156
+internal/config/config_test.go:generic-api-key:1158
 
 # fake: fabricated "sk-or-v1-..."-shaped string in TestLoadWithSingleQuotedEnvFromPodman
 # (single-quote-stripping test).
-internal/config/config_test.go:generic-api-key:1174
+internal/config/config_test.go:generic-api-key:1176
 
 # fake: fabricated secrets in the redact package table tests (TestRedactor_*),
 # fed to Redactor.Redact to assert they are scrubbed. All fabricated fixtures.
