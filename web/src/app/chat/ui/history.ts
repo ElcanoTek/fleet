@@ -145,6 +145,15 @@ export type Approval = {
    * server-side sweep auto-denies it. 0 / undefined = no expiry (no countdown).
    */
   expiresAt?: number;
+  /**
+   * Public credential seat the approved call will execute on (#167). The
+   * approval reopens this {server, account} pair rather than running on the
+   * connector's default seat, so a card staged during a named-account turn
+   * says which account it will send as. Empty account = the default seat,
+   * which renders no badge.
+   */
+  mcpServer?: string;
+  mcpAccount?: string;
 };
 
 /** Per-turn cost + tokens + duration for the inline chip under assistant messages. */

@@ -10,7 +10,7 @@ Working notes for implementers. Prefer the linked issue comment/body when presen
 | #986 | [issue body](https://github.com/ElcanoTek/fleet/issues/986) |
 | #985 | Full plan below (pending issue comment) |
 | #984 | Full plan below (pending issue comment) |
-| #167 | Full plan below (pending issue comment) |
+| #167 | Full plan below — **all three residuals resolved**; see `docs/MCP-BROKER-SCOPES.md`, ADR-0042, `SECURITY.md` |
 
 ---
 
@@ -103,12 +103,10 @@ Preserve `{server, account}` at staging; reopen scope on approve; fail closed if
 
 Accept connect/callback/CRUD parent-side for v1; document threat model (parent compromise ⇒ remote MCP tokens). Agent runs stay child-side (ADR-0040). Optional v2: full control-plane behind child as separate issue.
 
-### Closing criteria
+### Closing criteria — resolved
 
 | Residual | Resolution |
 | --- | --- |
-| 1 Child auth | Implemented + tests on `dev` |
-| 2 Approval seat | Implemented + tests on `dev` |
-| 3 OAuth parent-readable | Explicit accept + docs **or** isolation |
-
-Sequence: **2 → 1 → 3 docs**. Verify against code, not PR descriptions alone.
+| 1 Child auth | **Implemented.** `cmd/fleet/mcp_broker_authz.go`; bundle-derived Gate-2 floor, `ScopeSpec.Policy` narrowing, child-side Gate-3, filtered scope catalogs, restricted unscoped client. ADR-0042; tests in `cmd/fleet/mcp_broker_authz_test.go`. |
+| 2 Approval seat | **Implemented.** Migration 048 (`approvals.mcp_server` / `mcp_account`), `BindTurnMCPScope` at staging, `OpenApprovalMCPScope` at execution, fail-closed on a revoked seat, account badge on the card. Tests in `internal/httpapi/approvals_seat_test.go`, `internal/store/approval_seat_test.go`, `web/.../ApprovalCards.seat.test.tsx`. |
+| 3 OAuth parent-readable | **Accepted + documented** (2026-08-14). `SECURITY.md` and `docs/MCP-BROKER-SCOPES.md` state the threat model: parent compromise ⇒ stored remote-MCP tokens. Agent runs stay child-side (ADR-0040). Full control-plane isolation would be a separate change. |

@@ -156,7 +156,7 @@ type chatStore interface {
 	ListPendingMemoryProposalsForConversation(ctx context.Context, userEmail, conversationID string) ([]store.Memory, error)
 
 	// Approvals.
-	CreateApproval(ctx context.Context, convID, userEmail, toolName, toolCallID, argsJSON string, expiresAt int64) (*store.Approval, error)
+	CreateApproval(ctx context.Context, convID, userEmail, toolName, toolCallID, argsJSON string, expiresAt int64, seat store.ApprovalSeat) (*store.Approval, error)
 	GetApproval(ctx context.Context, userEmail, approvalID string) (*store.Approval, error)
 	ClaimApproval(ctx context.Context, userEmail, approvalID, newStatus, resultText string) (bool, error)
 	ResolveApproval(ctx context.Context, userEmail, approvalID, newStatus, resultText string) error

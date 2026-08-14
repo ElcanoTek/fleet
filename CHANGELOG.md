@@ -19,6 +19,36 @@ prior versions are listed because none have shipped.
 
 ### Security
 
+- **The MCP broker now authorizes, not just transports (#167, ADR-0042).** The
+  credential-owning `fleet mcp-broker` child used to bind whatever
+  `{server, account}` selection it was sent and run whatever tool a call frame
+  named: every gate lived parent-side, inside the address space the boundary
+  exists to distrust, so a parent-side gating bug was a total bypass. That was
+  not hypothetical — activating the production boundary scrubbed the very
+  `cfg.MCPServers` the scheduled agent read its Gate-2 allowlist from, and every
+  scheduled run silently lost its tool allowlist (#960) with nothing on the
+  credential side looking. The child now re-derives the per-server tool
+  allowlist and the enabled-server set from **its own** bundle (refreshed inside
+  `Reload`, under the lock that publishes new bases) and treats the parent's
+  effective sets, which now cross as `ScopeSpec.Policy`, as narrowing only. A
+  selection naming a server the child does not have enabled is refused before
+  anything spawns; a call outside the scope's bound set is refused at dispatch;
+  the scope's advertised catalog is filtered through the same gate that judges
+  its calls; and the per-task credential allowlist (#184) is enforced child-side
+  through the same `agentcore.GateMCPBrokerWithAllowlist` the in-process loop
+  uses, preserving the nil ("inherit global") versus empty ("deny all")
+  distinction. Refusals are value-free tool-level results carrying a stable
+  `mcp_broker_policy_denied` marker. The unscoped shared client is restricted
+  rather than removed: no production agent path reaches it any more, and what
+  does is still bounded by the bundle allowlist. `docs/MCP-BROKER-SCOPES.md` no
+  longer says "no authorization boundary is added here", because there is one.
+- **Recorded the remote-MCP OAuth control-plane boundary as accepted, in
+  writing (#167).** Per-user hosted MCP *runs* resolve tokens in the child
+  (ADR-0040), but connect / callback / connection CRUD stay parent-side, so the
+  parent installs the at-rest cipher and can decrypt any user's stored
+  remote-MCP tokens. `SECURITY.md` now states the threat model plainly —
+  compromise of the fleet parent process implies compromise of stored
+  remote-MCP tokens — instead of leaving the gap implied by omission.
 - **Cleared the three high-severity npm advisories and all seven govulncheck
   findings.** `npm audit` in `web/` reported 3 high-severity vulnerabilities and
   the Go CVE gate reported 7 reachable standard-library vulnerabilities; both
@@ -87,6 +117,24 @@ prior versions are listed because none have shipped.
   name stays the button's accessible name) and hides the cost glyphs, which are
   still shown on every row of the model picker. Desktop and tablet are
   unchanged: full name, capped at 11rem with an ellipsis, cost tier visible.
+- **An approved MCP call runs on the account its turn was using, not the
+  connector's default seat (#167).** An approval card outlives the turn scope
+  that staged it, so execution reached for the unscoped broker at the default
+  bundle seat — a multi-account footgun: a turn on a named account could have
+  its approved send go out as a different client. Staging now records the public
+  `{server, account}` seat (`approvals.mcp_server` / `mcp_account`, migration
+  048) and approve/execute opens a fresh short-lived scope carrying that same
+  selection; a seat that no longer resolves fails the approval with the seat
+  named rather than silently downgrading. The card shows which account a
+  named-seat send will run as. Rows staged before the migration carry no seat
+  and execute on the shared broker exactly as before.
+- **Approval staging looks at the turn's catalog instead of the process-wide
+  default-seat one (#167).** `RunTurn` now hands the stager the turn scope's
+  broker, catalog, and selection before any tool can stage a card. Previously,
+  during a named-account turn, the staged tool identity
+  (`mcp_<server>_<account>_<tool>`) did not appear in the stager's catalog at
+  all, so email pre-validation ran against the wrong seat and the staged-call
+  resolution could not find its own tool.
 - **`fleet update` no longer fails on a box whose distro Go lags `go.mod`.**
   The Makefile now exports `GOTOOLCHAIN=auto`, so every build path fetches the
   pinned toolchain instead of demanding it be pre-installed. `go.mod` pins an

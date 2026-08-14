@@ -40,6 +40,19 @@ type MCPChoice struct {
 // MCPSelection is the per-run list of chosen servers.
 type MCPSelection []MCPChoice
 
+// RegisteredMCPName is the name BindMCPSelection registers a {server, account}
+// choice under, and therefore the name every dispatch path — the agent loop,
+// the credential allowlist projection, and the out-of-process broker — keys on.
+// Exported so a caller that must map a registered name back to (or forward
+// from) its public selection uses the ONE formula rather than reparsing a name
+// whose server part may itself contain underscores.
+func RegisteredMCPName(server, account string) string {
+	if acct := creds.CanonicalAccount(account); acct != "" {
+		return server + "_" + acct
+	}
+	return server
+}
+
 // OptInSet returns the set of enabled server NAMES, derived from the selection.
 // This is the per-run enabled set fed to buildFantasyTools' Gate-1 (accounts do
 // not affect which tools register).

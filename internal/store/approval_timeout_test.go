@@ -18,7 +18,7 @@ func TestCreateApproval_PersistsExpiresAt(t *testing.T) {
 	}
 
 	deadline := time.Now().Unix() + 300
-	a, err := s.CreateApproval(ctx, conv.ID, "alice@example.com", "mcp_sendgrid_send_email", "call_1", `{}`, deadline)
+	a, err := s.CreateApproval(ctx, conv.ID, "alice@example.com", "mcp_sendgrid_send_email", "call_1", `{}`, deadline, ApprovalSeat{})
 	if err != nil {
 		t.Fatalf("CreateApproval: %v", err)
 	}
@@ -34,7 +34,7 @@ func TestCreateApproval_PersistsExpiresAt(t *testing.T) {
 	}
 
 	// Zero deadline → stored NULL → read back as 0 (no expiry).
-	b, err := s.CreateApproval(ctx, conv.ID, "alice@example.com", "bash", "call_2", `{}`, 0)
+	b, err := s.CreateApproval(ctx, conv.ID, "alice@example.com", "bash", "call_2", `{}`, 0, ApprovalSeat{})
 	if err != nil {
 		t.Fatalf("CreateApproval (no expiry): %v", err)
 	}
@@ -63,18 +63,18 @@ func TestListExpiredApprovals_FiltersCorrectly(t *testing.T) {
 	}
 	now := time.Now().Unix()
 
-	past, err := s.CreateApproval(ctx, conv.ID, "alice@example.com", "bash", "c_past", `{}`, now-10)
+	past, err := s.CreateApproval(ctx, conv.ID, "alice@example.com", "bash", "c_past", `{}`, now-10, ApprovalSeat{})
 	if err != nil {
 		t.Fatalf("create past: %v", err)
 	}
-	if _, err := s.CreateApproval(ctx, conv.ID, "alice@example.com", "bash", "c_future", `{}`, now+300); err != nil {
+	if _, err := s.CreateApproval(ctx, conv.ID, "alice@example.com", "bash", "c_future", `{}`, now+300, ApprovalSeat{}); err != nil {
 		t.Fatalf("create future: %v", err)
 	}
-	if _, err := s.CreateApproval(ctx, conv.ID, "alice@example.com", "bash", "c_none", `{}`, 0); err != nil {
+	if _, err := s.CreateApproval(ctx, conv.ID, "alice@example.com", "bash", "c_none", `{}`, 0, ApprovalSeat{}); err != nil {
 		t.Fatalf("create no-expiry: %v", err)
 	}
 	// An expired-but-already-resolved row must be excluded.
-	resolved, err := s.CreateApproval(ctx, conv.ID, "alice@example.com", "bash", "c_resolved", `{}`, now-20)
+	resolved, err := s.CreateApproval(ctx, conv.ID, "alice@example.com", "bash", "c_resolved", `{}`, now-20, ApprovalSeat{})
 	if err != nil {
 		t.Fatalf("create resolved: %v", err)
 	}

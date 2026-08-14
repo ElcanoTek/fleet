@@ -80,6 +80,12 @@ same PR.
 - **Credentials stay host-side.** MCP/connector credentials are brokered on the
   host and **never** enter the sandbox, the agent container, the model context, or
   logs. Never ship a secret into a container or print one.
+- **The broker authorizes, it does not just transport.** The credential-owning
+  child re-derives each server's tool allowlist and enabled-server set from its
+  OWN bundle and treats the parent's gates as narrowing only, so a parent-side
+  gating bug restricts a run instead of unbounding it
+  ([ADR-0042](docs/adr/0042-child-side-mcp-scope-authorization.md)). Do not add a
+  broker path that binds or dispatches without going through that gate.
 - **Governance is one core.** `agentcore.Run` is the single governed loop (policy,
   cost/token ceilings, audit, notes). New entrypoints **adapt I/O around it** —
   they must not fork a second, weaker governance path.

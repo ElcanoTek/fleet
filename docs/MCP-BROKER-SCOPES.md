@@ -95,9 +95,61 @@ token lookup/refresh and the short-lived remote client (ADR-0040). Explicit
 OAuth/connectors HTTP control-plane operations remain parent-side; no agent run
 driver receives their credential resolver.
 
-No authorization boundary is added here. Account allowlists, task policy, tool
-approval, and audit remain responsibilities of the existing governed runtime;
-the scope transports the already-authorized selection and cannot widen it.
+That last sentence is an **accepted boundary**, recorded here rather than left
+as an open question. Because connect / callback / connection CRUD are
+parent-side, the parent installs the at-rest cipher on the chat store and can
+therefore decrypt any user's stored remote-MCP tokens. The threat model is
+explicit: compromise of the fleet parent process implies compromise of stored
+remote-MCP tokens. Agent *runs* are unaffected — they resolve tokens in the
+child. Moving mint/refresh/decrypt behind the child, so the parent only ever
+holds opaque connection ids, is a possible future change and would need its own
+authenticated control protocol; it is deliberately out of scope here. See
+`SECURITY.md` and ADR-0040.
+
+## Child-side authorization
+
+The credential owner enforces the run's gates itself; the parent's gates are
+narrowing input, not the whole answer (ADR-0042). The rule is that the child
+applies what it can re-derive from its OWN bundle, and treats anything from the
+wire as a further restriction only.
+
+- **Gate-2 (per-server tool allowlist) is authoritative child-side.** The child
+  derives it, and the enabled-server set, from the bundle it loads — and
+  re-derives both from the same bundle read inside `Reload`, under the lock that
+  publishes new bases. A parent that lost its own allowlist (the #960 failure
+  mode, where activating this boundary scrubbed the `cfg.MCPServers` the
+  scheduled agent read its gates from) degrades to the bundle allowlist instead
+  of to no allowlist at all.
+- **`ScopeSpec.Policy` carries the parent's effective sets and may only narrow.**
+  It holds the run's Gate-2 map and, for scheduled runs, the per-task Gate-3
+  `{server, account}` pairs (#184) — public names, never configuration the child
+  would have to re-interpret. Tool sets are intersected with the child's own;
+  Gate-3 rides the same `agentcore.GateMCPBrokerWithAllowlist` the in-process
+  loop uses, and preserves the nil ("inherit global") versus empty ("deny all")
+  distinction through an explicit `restrictCredentials` bit.
+- **A scope reaches only what it was bound to.** A selection naming a server the
+  child does not have enabled is refused at open, before anything spawns; a call
+  naming a server outside the scope's registered set is refused at dispatch.
+  Named-account seats are keyed through `agentcore.RegisteredMCPName`, the same
+  formula `BindMCPSelection` registers under.
+- **A denied tool is never advertised.** The scope's returned catalog is filtered
+  through the gate that will judge its calls, so the parent's roster cannot
+  disagree with what dispatch permits.
+- **Refusals are tool-level, value-free results.** They carry the stable
+  `mcp_broker_policy_denied` marker and public names only, exactly as the
+  in-process credential allowlist denies a call — the model sees a governance
+  result and the caller records it for audit.
+
+The unscoped shared client is **restricted, not removed**. Production agent
+turns and scheduled runs fail closed without a scope, and approval execution
+reopens the seat it staged under, so no agent path reaches it; what remains
+(approval rows staged before migration 048 recorded a seat, and operator
+tooling) is still gated by the child's bundle allowlist and enabled set.
+
+Persona narrowing (Gate-4) stays a parent-side registration filter: it governs
+what a model may *see*, is resolved from persona definitions the parent owns,
+and can only subtract from what the gates above permit. Tool approval and audit
+likewise remain responsibilities of the governed runtime.
 
 ## Driver integration
 
@@ -171,10 +223,27 @@ that catalog, and delegate the call. Email pre-validation stays on the same
 server that authored the staged send tool, rather than using an ambiguous bare
 tool lookup. A tool-level MCP error is recorded as a failed approval execution.
 
-Production approval execution uses the unscoped child broker because an approval
-card can outlive the turn scope that staged it. It therefore uses the default
-bundle seat; preserving a scoped named-account selection across a long-lived
-approval card remains deferred under #167.
+An approval card outlives the turn scope that staged it, so execution cannot
+reuse that scope — but it does reuse its **seat**. Staging records the public
+`{server, account}` the turn was running on (`approvals.mcp_server` /
+`mcp_account`, migration 048), and approve/execute opens a NEW short-lived scope
+carrying that same selection. A seat that no longer resolves — account revoked,
+server removed from the bundle — fails the approval with the seat named, rather
+than silently downgrading to the default bundle seat and transacting as the
+wrong client.
+
+Staging itself now runs against the turn scope too: `RunTurn` hands the stager
+the turn's broker, catalog, and selection through `BindTurnMCPScope` before any
+tool can stage a card. That fixes a related gap — the stager previously held the
+process-wide default-seat catalog, in which a named-account tool identity
+(`mcp_<server>_<account>_<tool>`) does not appear at all, so both email
+pre-validation and the staged-call resolution were looking at the wrong seat.
+
+Rows staged before migration 048 carry no seat and execute on the shared broker
+exactly as they did before. Native tools (`bash`, `preview_email`) and the
+server-staged `suggest_advanced_model` card record no seat, because they call no
+MCP server. The approval card shows the account a named-seat send will run as;
+the default seat renders no badge, since there is nothing to disambiguate.
 
 ## Connector environment inventory
 

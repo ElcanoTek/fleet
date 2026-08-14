@@ -136,6 +136,39 @@ the next `update`. Protect the bundle repo accordingly: restrict who can push,
 require signed commits / branch protection, and pin the checkout to a reviewed
 commit when you can.
 
+## What the MCP broker boundary does and does not protect
+
+Connector execution runs in a separate `fleet mcp-broker` process, and the agent
+loop's process scrubs every connector environment key once that child is verified
+up. Two things are worth stating plainly about the shape of that boundary, so it
+is not read as more than it is.
+
+**What it protects.** After boot, the agent-loop process cannot read a bundle
+connector secret, and it cannot exercise one past the gates: the credential owner
+re-derives each server's tool allowlist and enabled-server set from its own copy
+of the bundle, refuses a scope selection naming a server it does not have, and
+refuses a call outside the scope's bound set — so a gating bug in the agent-loop
+process restricts a run rather than unbounding it. See ADR-0042 and
+`docs/MCP-BROKER-SCOPES.md`.
+
+**What it does not protect: remote-MCP OAuth tokens at rest.** Per-user hosted
+MCP *runs* resolve their tokens in the child (ADR-0040), but the OAuth **control
+plane** — connect, callback, and connection CRUD — is parent-side by design, and
+the parent therefore installs the at-rest cipher on the chat store. Code running
+in the parent process can decrypt any user's stored remote-MCP tokens. This is an
+**accepted boundary**, not an oversight: browser redirects and user credential
+intake are host control-plane operations, they are not model-callable, and moving
+them behind the child would require a second authenticated control protocol
+without changing where model-initiated MCP calls execute.
+
+The threat model that follows is explicit: **compromise of the fleet parent
+process implies compromise of stored remote-MCP tokens** (and of the other
+secrets the same store cipher protects). The broker boundary is an
+address-space-isolation claim about *connector credentials and agent-initiated
+calls*, not a claim that a fully compromised parent cannot reach the database or
+its encryption key. Full control-plane isolation is a possible future change,
+tracked separately rather than left ambiguous.
+
 ## Scope
 
 This policy covers the code in this repository. Deployments are configured by a

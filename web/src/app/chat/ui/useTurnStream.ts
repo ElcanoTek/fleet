@@ -557,6 +557,8 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         tool: string;
         summary: Approval["summary"];
         expires_at?: number;
+        mcp_server?: string;
+        mcp_account?: string;
       };
       // send_email cards can land below an expanded preview iframe — queue
       // a scroll-into-view so the user sees the action card without
@@ -568,7 +570,15 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         ...m,
         approvals: [
           ...(m.approvals ?? []),
-          { id: p.approval_id, tool: p.tool, summary: p.summary, status: "pending", expiresAt: p.expires_at },
+          {
+            id: p.approval_id,
+            tool: p.tool,
+            summary: p.summary,
+            status: "pending",
+            expiresAt: p.expires_at,
+            mcpServer: p.mcp_server,
+            mcpAccount: p.mcp_account,
+          },
         ],
       }));
       return;

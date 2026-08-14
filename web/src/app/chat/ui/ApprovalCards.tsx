@@ -78,6 +78,27 @@ function formatCountdown(totalSeconds: number): string {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
+// ApprovalSeatBadge names the credential account an approved MCP call will run
+// under (#167). An approval card outlives the turn that staged it, and the
+// server reopens that turn's {server, account} seat to execute it — so when the
+// turn was on a named account, the user is told which one BEFORE they click
+// Send. The default seat renders nothing: there is no ambiguity to resolve.
+function ApprovalSeatBadge({ server, account }: { server?: string; account?: string }) {
+  if (!server || !account) return null;
+  return (
+    <div
+      data-testid="approval-seat"
+      className="flex items-center gap-1.5 text-[0.72rem]"
+      style={{ color: "var(--color-text-muted)" }}
+    >
+      <span>
+        Sending as <span className="font-mono">{account}</span> on{" "}
+        <span className="font-mono">{server}</span>
+      </span>
+    </div>
+  );
+}
+
 // ApprovalCountdown renders the inline "Auto-denying in m:ss" line (or the
 // timed-out notice once the deadline passes). Renders nothing when the approval
 // has no deadline (remaining === null), preserving the prior no-timeout UI.
@@ -404,6 +425,7 @@ export function ApprovalCard({
                 {submitting === "cancel" ? "Cancelling…" : applyAll ? "Deny + block all" : "Cancel"}
               </button>
             </div>
+            <ApprovalSeatBadge server={approval.mcpServer} account={approval.mcpAccount} />
             <ApprovalCountdown remaining={countdown.remaining} expired={countdown.expired} />
             {/* Batch approval (#300): pre-approve/deny the rest of this tool's
                 calls for the conversation so the agent isn't gated per call. */}

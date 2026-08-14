@@ -59,6 +59,11 @@ type turnEngine interface {
 	// credentialed MCP client in the HTTP process.
 	MCPBroker() agentcore.MCPBroker
 	MCPCatalog() []mcp.ServerTool
+	// OpenApprovalMCPScope reopens the credential seat a staged approval
+	// recorded so the approved call runs on the account its turn used, not the
+	// default bundle seat (#167 residual 2). (nil, nil) means the engine has no
+	// scope opener and the caller falls back to MCPBroker().
+	OpenApprovalMCPScope(ctx context.Context, selection agentcore.MCPSelection, workspace string) (*agent.MCPScope, error)
 	// SandboxPool exposes the per-turn sandbox warm pool for the out-of-band
 	// approved-bash execution path (runStagedBash).
 	SandboxPool() *sandbox.Pool
