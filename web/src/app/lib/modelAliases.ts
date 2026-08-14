@@ -34,8 +34,8 @@
 export const DEFAULT_MODEL = "deepseek/deepseek-v4-flash-0731";
 export const DEFAULT_MODEL_LABEL = "DeepSeek: DeepSeek V4 Flash 0731";
 
-export const ADVANCED_MODEL = "openai/gpt-5.6-sol";
-export const ADVANCED_MODEL_LABEL = "OpenAI: GPT-5.6 Sol";
+export const ADVANCED_MODEL = "x-ai/grok-4.6";
+export const ADVANCED_MODEL_LABEL = "SpaceXAI: Grok 4.6";
 
 // TIER_MODELS is the ordered list the picker pins to the top of the
 // dropdown when no search query is active. Rows render their display

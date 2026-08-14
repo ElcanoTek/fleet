@@ -517,7 +517,7 @@ func TestSplitLockdownModels_DefaultsWhenEmpty(t *testing.T) {
 	// DEFAULT_MODEL / ADVANCED_MODEL and the agentcore mirrors.
 	wantContains := []string{
 		"deepseek/deepseek-v4-flash-0731",
-		"openai/gpt-5.6-sol",
+		"x-ai/grok-4.6",
 	}
 	for _, w := range wantContains {
 		found := false
