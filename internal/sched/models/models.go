@@ -805,12 +805,51 @@ const (
 	PermissionCreateTask Permission = "create_task"
 	PermissionViewTasks  Permission = "view_tasks"
 	PermissionCancelTask Permission = "cancel_task"
-	PermissionViewLogs   Permission = "view_logs"
-	PermissionManageKeys Permission = "manage_keys"
-	PermissionAdmin      Permission = "admin"
+	// PermissionViewLogs admits a principal to the run-log read surface at all.
+	// It is NOT a fleet-wide grant: since #980 it reads the transcripts of the
+	// principal's OWN tasks only (the tasks it created). Reading another
+	// principal's transcript additionally requires PermissionViewAllLogs.
+	PermissionViewLogs Permission = "view_logs"
+	// PermissionViewAllLogs is the explicit fleet-wide transcript grant (#980).
+	// A run-log transcript carries connector query results, whatever PII the
+	// agent handled, and cost data, so cross-principal reads are a deliberate,
+	// separately-granted privilege rather than a side effect of holding
+	// view_logs. PermissionAdmin implies it (see APIKey.hasPermission /
+	// userHasPermission); no role grants it, so an operator who wants a
+	// non-admin fleet-wide auditor mints a key with it explicitly.
+	PermissionViewAllLogs Permission = "view_all_logs"
+	PermissionManageKeys  Permission = "manage_keys"
+	PermissionAdmin       Permission = "admin"
 )
 
-// RolePermissions maps role names to their permission sets.
+// AllPermissions is the permission vocabulary, used to validate an explicitly
+// requested permission set on key creation. Keep it in sync with the constants
+// above — an unknown string in a key's permission list would silently grant
+// nothing, which is the failure mode this rejects up front.
+var AllPermissions = []Permission{
+	PermissionCreateTask,
+	PermissionViewTasks,
+	PermissionCancelTask,
+	PermissionViewLogs,
+	PermissionViewAllLogs,
+	PermissionManageKeys,
+	PermissionAdmin,
+}
+
+// Valid reports whether p is one of the known permissions.
+func (p Permission) Valid() bool {
+	for _, known := range AllPermissions {
+		if p == known {
+			return true
+		}
+	}
+	return false
+}
+
+// RolePermissions maps role names to their permission sets. No role carries
+// PermissionViewAllLogs except by way of PermissionAdmin: fleet-wide transcript
+// reads are admin-only unless an operator mints a key with the permission
+// explicitly (#980).
 var RolePermissions = map[string][]Permission{
 	"admin":    {PermissionAdmin},
 	"client":   {PermissionCreateTask, PermissionViewTasks, PermissionViewLogs},
@@ -1909,9 +1948,16 @@ type APIKeyCreate struct {
 	AllowedTriggerSlugs []string `json:"allowed_trigger_slugs,omitempty"`
 	AllowedNodePatterns []string `json:"allowed_node_patterns"`
 	Role                *string  `json:"role,omitempty"`
-	RateLimit           int      `json:"rate_limit"`
-	ExpiresInDays       *int     `json:"expires_in_days,omitempty"`
-	Description         string   `json:"description"`
+	// Permissions is an explicit permission set for the legacy (role-based)
+	// path, for the grants no role expresses — chiefly view_all_logs, the
+	// fleet-wide transcript read (#980). It is mutually exclusive with both Role
+	// and Type: a typed key derives its permissions from its type, and silently
+	// ignoring the field on either path is how an operator ends up believing
+	// they minted an auditor key that in fact reads nothing.
+	Permissions   []Permission `json:"permissions,omitempty"`
+	RateLimit     int          `json:"rate_limit"`
+	ExpiresInDays *int         `json:"expires_in_days,omitempty"`
+	Description   string       `json:"description"`
 	// Spending caps (nil = unlimited).
 	MaxCostPerDayUSD   *float64 `json:"max_cost_per_day_usd,omitempty"`
 	MaxCostPerMonthUSD *float64 `json:"max_cost_per_month_usd,omitempty"`

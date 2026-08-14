@@ -36,7 +36,9 @@ first — the cap can never be exceeded between sweeps.
 as its `logs` row, so history never outlives the task or dodges retention.
 
 **Read surface.** Two endpoints behind exactly the `GET /logs/{task_id}`
-gate (`PermissionViewLogs` + scoped-principal task visibility):
+gate — `PermissionViewLogs` plus per-task ownership, or the explicit fleet-wide
+`view_all_logs` grant ([ADR-0043](adr/0043-per-task-run-log-scoping.md)); a
+superseded transcript is no more readable than the latest one:
 
 - `GET /logs/{task_id}/history` — metadata only (`id`, `superseded_at`),
   newest first; never drags payloads across the wire.

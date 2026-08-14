@@ -42,6 +42,36 @@ prior versions are listed because none have shipped.
   for both deny-all and inherit-global. The `#177` webhook path is unchanged — it
   is HMAC-authenticated against a per-trigger secret. See
   [`docs/EVENT-TRIGGERS.md`](docs/EVENT-TRIGGERS.md).
+- **Run-log transcripts are no longer readable fleet-wide by every `view_logs`
+  holder** (#980). `GET /logs/{task_id}`, its per-attempt `/history` siblings,
+  and the live `GET /tasks/{task_id}/stream` all authorized on the `view_logs`
+  permission alone, with no scoping to the caller's own tasks — so any principal
+  holding it (including a `fleet_task_*` key minted for one automation, and every
+  `fleet_readonly_*` key) could read the transcript of every task on the box,
+  with task ids enumerable through `GET /tasks`. A transcript carries the run's
+  verbatim tool traffic — connector query results, whatever PII the agent
+  handled, and cost data — so on a multi-client deployment one leaked or
+  over-issued key was a cross-tenant read. The scope check these routes did carry
+  was a no-op: `taskVisibleToScopes` returns true unconditionally, and unscoped
+  principals skipped it entirely. All four routes now share one gate
+  (`internal/sched/handlers/log_authz.go`): `view_logs` plus **ownership** of the
+  task (creating user or creating API key — the same predicate that already made
+  workspace files creator-private), or the new explicit fleet-wide
+  **`view_all_logs`** permission, which `PermissionAdmin` implies and no role
+  grants. `POST /keys` accepts an explicit `permissions` array on the legacy path
+  so an operator can mint a fleet-wide log auditor without handing out an admin
+  key; it 400s rather than silently losing to a `role` or `type` in the same
+  request. Workspace files stay stricter (admin-or-creator) and are deliberately
+  *not* widened by `view_all_logs`. Because ownership is now load-bearing, the
+  one create path that dropped it was fixed too: a task scheduled from chat
+  (`schedule_task`) is attributed to the approving user, so its own author can
+  read its transcript — and, as a side effect, finally gets the completion push
+  notification that path never fired. See
+  [ADR-0043](docs/adr/0043-per-task-run-log-scoping.md) for the decision, the
+  operational breaks (a readonly key reads no transcripts; a non-admin user keeps
+  only its own), and the residual it does not close (the task *row* itself,
+  prompt and result included, is still fleet-wide under `view_tasks`).
+
 - **The MCP broker now authorizes, not just transports (#167, ADR-0042).** The
   credential-owning `fleet mcp-broker` child used to bind whatever
   `{server, account}` selection it was sent and run whatever tool a call frame

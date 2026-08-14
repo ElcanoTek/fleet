@@ -402,7 +402,11 @@ func (m *Manager) CreateKey(name string, allowedNodePatterns []string, permissio
 			perms = rolePerms
 		}
 	}
-	if perms == nil && permissions != nil {
+	// An EMPTY explicit list is treated as "unset", not as "a key with no
+	// permissions": a caller that sends `"permissions": []` decodes to a non-nil
+	// empty slice, and honouring that would quietly mint a key that can do
+	// nothing while reporting success.
+	if perms == nil && len(permissions) > 0 {
 		perms = permissions
 	}
 	if perms == nil {

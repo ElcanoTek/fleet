@@ -21,7 +21,6 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
 	"github.com/ElcanoTek/fleet/internal/sched/models"
@@ -50,36 +49,16 @@ func (h *Handlers) SetTaskStreamProvider(lookup TaskStreamLookup) {
 // running task's run log live, or replays the persisted log one-shot when the task
 // is no longer in flight.
 //
-// Auth + ownership are IDENTICAL to GetLogs (GET /logs/{task_id}): PermissionViewLogs
-// plus, for a scoped principal, the same per-task scope check. The new endpoint is
-// additive and changes neither GetLogs nor the chat SSE.
+// Auth + ownership are IDENTICAL to GetLogs (GET /logs/{task_id}): the shared
+// transcript gate in log_authz.go — PermissionViewLogs plus per-task ownership,
+// or the explicit fleet-wide PermissionViewAllLogs. Streaming a transcript live
+// must never be a way around the gate on reading it afterwards.
 func (h *Handlers) StreamTaskLogs(w http.ResponseWriter, r *http.Request) {
-	p := h.principalFromRequest(r)
-	if !p.hasPermission(models.PermissionViewLogs) {
-		writeError(w, http.StatusForbidden, "Insufficient permissions")
+	task, ok := h.logReadableTask(w, r, "No log found for this task")
+	if !ok {
 		return
 	}
-
-	taskIDStr := chi.URLParam(r, "task_id")
-	taskID, err := uuid.Parse(taskIDStr)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "Invalid task ID")
-		return
-	}
-
-	// Ownership: a scoped principal may only stream a task within its scopes —
-	// exactly the GetLogs gate, so the live view leaks no more than the stored one.
-	if scopes := p.scopes(); len(scopes) > 0 {
-		task, terr := h.storage.GetTask(taskID)
-		if terr != nil || task == nil {
-			writeError(w, http.StatusNotFound, "No log found for this task")
-			return
-		}
-		if !taskVisibleToScopes(task, scopes, p.ownerID()) {
-			writeError(w, http.StatusForbidden, "Task not within allowed scopes")
-			return
-		}
-	}
+	taskID := task.ID
 
 	// Live path: attach to the in-flight buffer with Last-Event-ID replay so a
 	// reconnecting EventSource resumes without losing events.
@@ -106,11 +85,9 @@ func (h *Handlers) StreamTaskLogs(w http.ResponseWriter, r *http.Request) {
 	}
 	// The replay's terminal frame reports the task's REAL outcome (#508 — it
 	// was previously hardcoded "succeeded", misreporting failed/stopped runs).
-	terminal := "succeeded"
-	if task, terr := h.storage.GetTask(taskID); terr == nil && task != nil {
-		terminal = replayTerminalStatus(task.Status)
-	}
-	replayStoredLog(w, taskID, session, terminal)
+	// The row the authorization gate already loaded is the same row this used to
+	// re-fetch, so the status is read from it rather than hitting storage twice.
+	replayStoredLog(w, taskID, session, replayTerminalStatus(task.Status))
 }
 
 // replayTerminalStatus maps a terminal task status onto the stream's status
