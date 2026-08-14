@@ -22,6 +22,7 @@ import {
   type ApprovalStatus,
   type MemoryProposal,
 } from "./history";
+import { EmailSendResult, parseEmailSendPayload } from "./ToolChips";
 
 // Preview viewport presets for the inline email preview. These mirror the
 // widths real clients render at — 375px ≈ iPhone portrait, 700px is the
@@ -149,6 +150,24 @@ function ApprovalResult({ text }: { text: string }) {
     >
       {text}
     </pre>
+  );
+}
+
+// EmailApprovalOutcome renders a resolved email approval's result. The send
+// tool answers with a provider JSON payload, and this card used to dump it raw
+// under "Email sent ✓" — which read as an error to the non-technical users the
+// approval flow exists for. When the result parses as that payload, reuse the
+// transcript chip's humanized treatment (status badge, warnings count, raw
+// payload behind a "Delivery details" disclosure); anything else — network
+// error strings, a cancelled send's note — keeps the raw view, which is the
+// honest form for text we can't summarize.
+function EmailApprovalOutcome({ text, failed }: { text: string; failed: boolean }) {
+  const payload = parseEmailSendPayload(text);
+  if (!payload) return <ApprovalResult text={text} />;
+  return (
+    <div className="mt-2 min-w-0 max-w-full">
+      <EmailSendResult result={payload} isErr={failed} raw={text} />
+    </div>
   );
 }
 
@@ -443,7 +462,14 @@ export function ApprovalCard({
           </div>
         )
       ) : approval.resultText ? (
-        <ApprovalResult text={approval.resultText} />
+        isPreviewOnly ? (
+          <ApprovalResult text={approval.resultText} />
+        ) : (
+          <EmailApprovalOutcome
+            text={approval.resultText}
+            failed={approval.status === "failed"}
+          />
+        )
       ) : null}
     </div>
   );

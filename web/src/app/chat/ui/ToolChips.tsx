@@ -786,6 +786,21 @@ export function isEmailSendTool(name: string): boolean {
   return name === "send_email" || name.endsWith("_send_email");
 }
 
+// parseEmailSendPayload returns the provider's result JSON for a send_email
+// style result text, or null when the text isn't a JSON object (plain error
+// strings, the APPROVAL_REQUIRED placeholder) — callers fall back to their
+// raw-text view. Shared with the approval card, which resolves the same tool
+// call and receives the same payload shape.
+export function parseEmailSendPayload(
+  text: string,
+): Record<string, unknown> | null {
+  const parsed = parseJSON(text);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return null;
+  }
+  return parsed as Record<string, unknown>;
+}
+
 /** One validation warning from the provider's HTML pre-flight. */
 type EmailWarning = { rule: string; severity: string; message: string; hint: string };
 
@@ -967,7 +982,12 @@ function EmailSendPending() {
   );
 }
 
-function EmailSendResult({
+// Exported for the email approval card (ApprovalCards.tsx), which resolves the
+// same send_email call and used to dump the same provider JSON raw under
+// "Email sent ✓" — confusing for non-technical users. Both surfaces now render
+// this one outcome treatment: a status badge with the payload behind a
+// disclosure.
+export function EmailSendResult({
   result,
   isErr,
   raw,

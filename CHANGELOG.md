@@ -46,6 +46,22 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Email approval card no longer dumps provider JSON after Send.** A
+  successful send resolved the card to "Email sent ✓" and then printed the
+  provider's raw JSON payload (status code, message id, HTML-lint warnings)
+  under it, which read as an error to non-technical users. The card now reuses
+  the transcript chip's humanized outcome — a status badge ("Queued for
+  delivery" / "Not sent" / "Already sent") with the full payload behind a
+  collapsed "Delivery details" disclosure. Non-JSON results (network errors,
+  cancel notes) keep the raw view.
+- **Themed deployments no longer flash fleet's default palette on refresh.**
+  The brand palette's `html:root[data-theme=…]` rules need the `data-theme`
+  attribute, but the script that set it ran via `next/script`
+  `beforeInteractive`, which the App Router queues through the framework
+  bootstrap — after first paint. Every hard refresh on a white-labeled
+  deployment (reported on Reklaim) showed fleet's own colors for a beat. The
+  bootstrap is now an inline synchronous `<head>` script, which executes
+  during parse, before anything paints; `/scripts/theme.js` is gone.
 - **Task SLA config is now validated and editable (#274).** `ValidateSLA`
   existed but no create path called it, so a task with a fail threshold at or
   below the warn threshold (or a non-positive expected duration) was accepted
