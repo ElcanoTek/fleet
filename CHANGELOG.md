@@ -64,6 +64,19 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Multi-day chats no longer stay anchored to yesterday's mailbox
+  dates (#1026).** The engine already injected a day-granular Runtime Date
+  Context in the system prompt; the model still reused the previous turn's
+  `date_from`/`date_to`, so a "check again" on August 13 searched only
+  August 12 and missed mail that had already arrived. Every run now also
+  gets a structured `runtime_today` + 3-day `freshness_window` in the
+  message tail (interactive and scheduled), and mailbox/search MCP results
+  whose `date_to` (or `on_or_before`) is before today — or that return
+  `matches_found=0` on an exact sender/subject query — are annotated so an
+  empty exact hit cannot be treated as proof of absence. OpenX-specific
+  discovery, coverage-date parsing, and the pre-send ledger stay in the
+  client bundle; this is the engine-side date/search gate. See
+  [`docs/RUNTIME-DATE.md`](docs/RUNTIME-DATE.md).
 - **The chat composer toolbar now fits on one row on a phone.** The model chip
   carried the full vendor-prefixed catalog name (`Z.AI: GLM 5.2`) plus the four
   cost glyphs, and the toolbar row wrapped — the tools button and the context
