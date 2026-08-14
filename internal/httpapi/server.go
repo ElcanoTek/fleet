@@ -1560,6 +1560,14 @@ func (s *Server) conversationByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Sub-agent child transcript (#1043) —
+	// GET /conversations/{id}/subagents/{childSessionID}. Same ownership gate
+	// as every other conversation sub-route, plus a history-linkage check.
+	if sub == "subagents" && subArg != "" && r.Method == http.MethodGet {
+		s.handleSubagentLog(w, r, id, subArg)
+		return
+	}
+
 	// Stream reattach + inflight probe — see handleStream/handleInflight.
 	if sub == "stream" && r.Method == http.MethodGet {
 		s.handleStream(w, r, id)

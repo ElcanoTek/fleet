@@ -657,7 +657,12 @@ export function ChatTranscript({
                                   {toolCalls.length > 0 ? (
                                     <div className="flex flex-wrap gap-1.5">
                                       {toolCalls.map((tc) => (
-                                        <ToolChip key={tc.id} tc={tc} taskTrackerDisplay={taskTrackerDisplay} />
+                                        <ToolChip
+                                          key={tc.id}
+                                          tc={tc}
+                                          taskTrackerDisplay={taskTrackerDisplay}
+                                          conversationId={realConvId(currentConvKey)}
+                                        />
                                       ))}
                                     </div>
                                   ) : null}

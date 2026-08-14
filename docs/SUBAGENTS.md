@@ -39,9 +39,13 @@ successful use of it. Fan-out is never forced.
 - **Typed children.** `role` argument on the one tool (never a second tool
   name): `explore` (default; any invalid value falls back to it) strips
   write-capable native tools via the single unit-tested denylist
-  `exploreDeniedNativeTools` applied to the child's **final composed roster**;
-  `worker` keeps the full scheduled roster. Both roles drop the
-  interactive-only staging tools.
+  `exploreDeniedNativeTools` applied to the child's **final composed roster**,
+  and additionally narrows the child's MCP Gate-2 allowlist through the
+  best-effort NAME denylist `exploreMCPToolAllowlist` (mutation verbs like
+  create/update/delete/send/upload as whole snake_case segments; every catalog
+  server gets an explicit entry so a mid-run `mcp_load_servers` cannot bypass
+  it, and the parent's own allowlist is only ever narrowed). `worker` keeps the
+  full scheduled roster. Both roles drop the interactive-only staging tools.
 - **Child write isolation.** Every child gets
   `<parent workspace>/subagents/<child-session-id>/` created before it runs and
   forced as its bash/file-tool default cwd (the same `WithForcedWorkingDir` seam
@@ -56,6 +60,19 @@ successful use of it. Fan-out is never forced.
   task page (stored transcript + live stream) and the chat transcript render
   child cards — id, role, status (running/done/refused/timed out/failed), spend,
   workdir, result behind a disclosure — never raw JSON blobs.
+- **Child transcripts.** Every child's governed run writes its own sibling
+  session log (`fleet-session.subagent-<uuid>.json`, redacted like every
+  session log). Two endpoints serve it to the child cards' Transcript
+  disclosure: `GET /logs/{task_id}/subagents/{child_session_id}` (orchestrator;
+  gated by the task transcript gate PLUS a linkage check — the id must appear
+  in a `subagent_spawned` entry of that task's persisted log, latest or any
+  history attempt) and `GET /conversations/{id}/subagents/{child_session_id}`
+  (chat; the standard conversation-ownership gate PLUS the id appearing in the
+  conversation's persisted history). Both validate the id against the strict
+  `subagent-<uuid>` shape before any filesystem path is derived from it. The
+  file is host-local by design (the issue's "may already be filesystem"
+  contract): after a host wipe the endpoint 404s while the linkage entry
+  (role, spend, workdir, result) remains the durable record.
 - **Parent policy as prompt.** When the tool is registered, a short delegation
   section is appended to the system prompt (scheduled + interactive): spawn for
   independent parallel work; don't for sequential steps or one cheap call;
@@ -70,31 +87,37 @@ creds, subtract only); hard budget split (≤10% of remaining per child, refuse
 over-cap, atomic reserve+settle under the parent mutex); depth 1 (children have
 no spawn tool); fan-out 5; credentials host-side.
 
-## Deviations & deliberate deferrals
+## Honest scope
 
 - **Explore is "no purpose-built writers", not a filesystem guarantee.** Bash
-  cannot be made read-only, and MCP write tools are not name-inferred (out of
-  scope per the issue). The strip set + the child's read-only prompt section is
-  the honest posture.
-- **Child transcript links.** The child cards show id/role/status/spend/workdir
-  and the child's final answer; the child's full transcript is its sibling
-  session-log **file** (`fleet-session.subagent-<id>.json`, path derived by
-  `childLogFilePath`). No HTTP endpoint serves those files yet, so the cards do
-  not deep-link a child transcript viewer — deferred as a follow-up rather than
-  shipping a hasty file-serving route.
-- **Chat children use the turn user's default MCP accounts.** Per-server
-  non-default account choices are not threaded into chat children.
-- **Also deferred** (out of scope per the issue): depth > 1, raising the 10%
-  fraction, `subagent_start`/`subagent_end` hooks, per-conversation chat
-  opt-out, operator-picked child count/model in the form, git
-  worktree-per-child.
+  cannot be made read-only, and the MCP strip is a NAME denylist (the issue
+  explicitly scopes it to "a simple name denylist" — full write-tool inference
+  is out of scope), so a mutator with an innocuous name slips both. The native
+  strip + MCP name denylist + the child's read-only prompt section is the
+  honest posture.
+- **Child transcripts are host-local files.** The transcript endpoints serve
+  the sibling session-log file from the process's own log path (the mechanism
+  the issue names); the DB keeps the linkage entry, not the transcript, so an
+  old child's transcript can 404 after a host wipe while its card metadata
+  survives. Session-log files have no retention policy (pre-existing behavior —
+  parents overwrite one file, children accumulate one each).
+- **Chat children share the turn's MCP scope.** They call through the parent
+  turn's already-bound broker seats — the same servers and account seats the
+  turn itself uses.
+- **Excluded by the issue** (its "Out of scope" list): depth > 1, raising the
+  10% fraction, a second tool name, `subagent_start`/`subagent_end` hooks,
+  per-conversation chat opt-out, operator-picked child count/model in the
+  form, git worktree-per-child.
 
 ## Tests
 
 Unit: role normalization + strip-set pinning + explore/worker rosters end to end
-(`internal/agent/subagent_role_test.go`), workdir isolation + JSON shape,
-interactive registration on/off, InteractivePolicy budget seam, plus the
-pre-existing budget/depth/fan-out/`-race` suites (all still green).
+(`internal/agent/subagent_role_test.go`), the explore MCP name denylist
+(narrow-only, deny-all sentinel, read-verb safety), workdir isolation + JSON
+shape, interactive registration on/off, InteractivePolicy budget seam, the
+transcript id gate + linkage check (`TestSubagentSessionIDValidation`,
+`TestSessionReferencesSubagent`), plus the pre-existing
+budget/depth/fan-out/`-race` suites (all still green).
 E2E (fake-LLM, no key): `internal/taskrun/subagents_e2e_test.go` — a DEFAULT
 task fans out an explore + a worker child through the full scheduled runtime
 (charge-back into the parent totals, linkage entries, sibling child logs,

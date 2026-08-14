@@ -157,9 +157,13 @@ export function PythonOutput({
 export function ToolChip({
   tc,
   taskTrackerDisplay,
+  conversationId,
 }: {
   tc: ToolCall;
   taskTrackerDisplay: TaskTrackerDisplay | null;
+  // Threaded so the spawn_subagent result card can fetch the child's own
+  // transcript through this conversation's authorized endpoint (#1043).
+  conversationId?: string | null;
 }) {
   const [open, setOpen] = useState(false);
   const label = prettyToolName(tc.name);
@@ -222,6 +226,7 @@ export function ToolChip({
               resultText={tc.resultText}
               isErr={tc.state === "error"}
               taskTrackerDisplay={taskTrackerDisplay}
+              conversationId={conversationId}
             />
           ) : null}
         </div>
@@ -618,11 +623,13 @@ function ToolResultView({
   resultText,
   isErr,
   taskTrackerDisplay,
+  conversationId,
 }: {
   name: string;
   resultText: string;
   isErr: boolean;
   taskTrackerDisplay: TaskTrackerDisplay | null;
+  conversationId?: string | null;
 }) {
   if (name === "bash") {
     const parsed = parseJSON(resultText);
@@ -655,7 +662,10 @@ function ToolResultView({
     const parsed = parseJSON(resultText);
     if (parsed && typeof parsed === "object") {
       return (
-        <SubagentSpawnResult result={parsed as Record<string, unknown>} />
+        <SubagentSpawnResult
+          result={parsed as Record<string, unknown>}
+          conversationId={conversationId}
+        />
       );
     }
   }
@@ -797,10 +807,100 @@ function readWarnings(value: unknown): EmailWarning[] {
   });
 }
 
+// SubagentTranscriptMessage is the subset of a child session-log message the
+// chat-side transcript viewer renders.
+type SubagentTranscriptMessage = {
+  role?: string;
+  content?: string;
+  tool_name?: string;
+};
+
+// SubagentChatTranscript lazy-loads a chat-spawned child's own session log
+// (#1043) through the conversation-authorized endpoint the first time its
+// disclosure opens, rendering a compact role-labelled message list. The
+// transcript file is best-effort (host-local) — a 404 renders as an inline
+// note.
+function SubagentChatTranscript({
+  conversationId,
+  childId,
+}: {
+  conversationId: string;
+  childId: string;
+}) {
+  const [state, setState] = useState<"idle" | "loading" | "error" | "loaded">("idle");
+  const [note, setNote] = useState("");
+  const [messages, setMessages] = useState<SubagentTranscriptMessage[]>([]);
+  const load = async () => {
+    setState("loading");
+    try {
+      const res = await fetch(
+        `/api/conversations/${encodeURIComponent(conversationId)}/subagents/${encodeURIComponent(childId)}`,
+        { cache: "no-store" },
+      );
+      if (!res.ok) {
+        setNote(
+          res.status === 404
+            ? "Transcript not available (it may have been cleaned up on the server)."
+            : `Transcript fetch failed (${res.status}).`,
+        );
+        setState("error");
+        return;
+      }
+      const session = (await res.json()) as { messages?: SubagentTranscriptMessage[] };
+      setMessages(session.messages ?? []);
+      setState("loaded");
+    } catch {
+      setNote("Transcript fetch failed.");
+      setState("error");
+    }
+  };
+  return (
+    <details
+      className="border-t border-[var(--color-border)] px-2 py-1 text-[0.72rem]"
+      data-testid="chat-subagent-transcript"
+      onToggle={(e) => {
+        if ((e.target as HTMLDetailsElement).open && state === "idle") void load();
+      }}
+    >
+      <summary className="cursor-pointer text-[var(--color-text-muted)]">Transcript</summary>
+      {state === "loading" ? (
+        <p className="py-1 text-[var(--color-text-muted)]">Loading transcript…</p>
+      ) : null}
+      {state === "error" ? <p className="py-1 text-[var(--color-text-muted)]">{note}</p> : null}
+      {state === "loaded" ? (
+        <div className="grid gap-1 py-1">
+          {messages.map((m, i) => (
+            <div key={i} className="min-w-0">
+              <span className="text-[0.65rem] uppercase tracking-wider text-[var(--color-text-muted)]">
+                {m.role ?? "?"}
+                {m.tool_name ? ` · ${m.tool_name}` : ""}
+              </span>
+              {(m.content ?? "").trim() ? (
+                <pre
+                  className="overflow-auto whitespace-pre-wrap leading-[1.4] text-[var(--color-text-secondary)]"
+                  style={{ maxHeight: "10rem" }}
+                >
+                  {m.content}
+                </pre>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </details>
+  );
+}
+
 // SubagentSpawnResult renders a spawn_subagent JSON result (#1043) as a child
-// card — status, role, spend — with the child's answer behind a disclosure,
-// never a raw JSON blob.
-function SubagentSpawnResult({ result }: { result: Record<string, unknown> }) {
+// card — status, role, spend — with the child's answer and full transcript
+// behind disclosures, never a raw JSON blob.
+function SubagentSpawnResult({
+  result,
+  conversationId,
+}: {
+  result: Record<string, unknown>;
+  conversationId?: string | null;
+}) {
   const success = result.success === true;
   const role = typeof result.role === "string" ? result.role : "";
   const childId =
@@ -850,6 +950,9 @@ function SubagentSpawnResult({ result }: { result: Record<string, unknown> }) {
             {answer}
           </pre>
         </details>
+      ) : null}
+      {conversationId && childId ? (
+        <SubagentChatTranscript conversationId={conversationId} childId={childId} />
       ) : null}
     </div>
   );

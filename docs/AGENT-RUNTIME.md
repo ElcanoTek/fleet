@@ -708,9 +708,12 @@ spawn / don't-spawn / prefer-explore / budget rules.
 any invalid role — is a read-only research child: a single unit-tested denylist
 strips write-capable native tools (`write_file`, `edit_file`, `xlsx_workbook`,
 `generate_image`, `browser`, `create_task`, `publish_artifact`, `remember`,
-`propose_note`, `propose_skill`) from its final composed roster, and its system
-prompt carries the read-only instruction (MCP write tools are **not**
-name-inferred — that instruction plus the native strip is the honest posture).
+`propose_note`, `propose_skill`) from its final composed roster, a best-effort
+**name** denylist narrows its MCP Gate-2 allowlist (mutation verbs like
+create/update/delete/send/upload as whole snake_case segments; every catalog
+server covered explicitly; the parent's own allowlist only ever narrowed), and
+its system prompt carries the read-only instruction for mutators neither list
+recognizes — that layering is the honest posture.
 `role=worker` keeps the full scheduled roster. Either role, the roster drops the
 interactive-only staging tools. **Every child gets an isolated working
 directory** `<workspace>/subagents/<child-session-id>/` forced as its bash/file
@@ -762,10 +765,14 @@ a child's wall-clock (spend is still charged back on timeout, `success=false`), 
 run is linked back to its owning task via `parent_task_id` (on the child's session
 log and a `subagent_spawned` entry — child id, role, workdir, spend, success — in
 the parent's persisted log) for traceability; the task page and chat transcript
-render those as **child cards** (id, role, status, spend), never raw JSON.
-`FLEET_SUBAGENTS_MODEL` names a default child model slug; empty means the child
-inherits the parent's model. See [`docs/SUBAGENTS.md`](SUBAGENTS.md) for the
-#1043 design note (what shipped, deviations, deliberate deferrals).
+render those as **child cards** (id, role, status, spend), never raw JSON, each
+with a Transcript disclosure that loads the child's own session log through
+`GET /logs/{task_id}/subagents/{child_session_id}` (orchestrator; task
+transcript gate + linkage check) or
+`GET /conversations/{id}/subagents/{child_session_id}` (chat; conversation
+ownership + history linkage). `FLEET_SUBAGENTS_MODEL` names a default child
+model slug; empty means the child inherits the parent's model. See
+[`docs/SUBAGENTS.md`](SUBAGENTS.md) for the #1043 design note.
 
 ---
 

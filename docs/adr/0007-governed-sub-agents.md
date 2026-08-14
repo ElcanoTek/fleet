@@ -182,18 +182,26 @@ which move a wall:
 - **Typed children.** `role=explore` (the default — and the fallback for any
   invalid role) is a read-only research child: a single unit-tested denylist
   (`exploreDeniedNativeTools`) strips write-capable native tools from its FINAL
-  composed roster; MCP write tools are not name-inferred (out of scope) — the
-  child's prompt carries the read-only instruction. `role=worker` keeps the full
-  scheduled roster. This is what makes default-on safe: the common research case
-  spawns a child that structurally cannot write. One tool, role as an argument —
-  never a second tool name.
+  composed roster, and a best-effort NAME denylist (`exploreMCPToolAllowlist`)
+  narrows its MCP Gate-2 allowlist — mutation verbs as whole snake_case
+  segments, every catalog server covered explicitly so a mid-run server load
+  cannot bypass it, only ever narrowing what the parent could call. Full MCP
+  write-tool inference stays out of scope; the child's prompt carries the
+  read-only instruction for mutators the names don't reveal. `role=worker`
+  keeps the full scheduled roster. This is what makes default-on safe: the
+  common research case spawns a child that structurally cannot write. One tool,
+  role as an argument — never a second tool name.
 - **Child write isolation.** Every child (either role) gets a unique
   `<workspace>/subagents/<child-session-id>/` directory forced as its bash/file
   default cwd — still inside the parent's sandbox and bind-mounted workspace, so
   privilege is unchanged; only default write paths de-conflict. The JSON result
   gains `{role, child_session_id, workdir}` and the parent-log `subagent_spawned`
   linkage entry gains role + workdir, which the task page / chat render as child
-  cards (id, role, status, spend).
+  cards (id, role, status, spend) with a Transcript disclosure served by the
+  child-transcript endpoints (`/logs/{task}/subagents/{child}` and
+  `/conversations/{id}/subagents/{child}` — transcript gate / conversation
+  ownership PLUS a linkage check, strict id validation before any path
+  derivation).
 
 Walls that did **not** move: one governed core, monotonic privilege, the 10%
 remaining-budget fraction with refuse-over-cap and atomic reserve+settle, depth 1,

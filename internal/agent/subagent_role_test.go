@@ -11,6 +11,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
 
@@ -240,6 +241,80 @@ func TestRunInteractiveTurn_SpawnToolRegistration(t *testing.T) {
 				t.Fatalf("spawn_subagent advertised=%v, want %v (structural registration); tools=%v", got, enabled, advertised)
 			}
 		})
+	}
+}
+
+// TestExploreMCPToolAllowlist pins the best-effort MCP write-tool name denylist
+// (#1043): read tools survive, mutation-verb tools are stripped, an all-writer
+// server gets the deny-all sentinel (an empty entry would mean "allow all"),
+// the parent's allowlist is only ever narrowed, and parent entries for
+// non-catalog servers are preserved.
+func TestExploreMCPToolAllowlist(t *testing.T) {
+	catalog := []mcp.ServerTool{
+		{ServerName: "crm", Tool: mcp.Tool{Name: "get_contact"}},
+		{ServerName: "crm", Tool: mcp.Tool{Name: "list_deals"}},
+		{ServerName: "crm", Tool: mcp.Tool{Name: "update_contact"}},
+		{ServerName: "crm", Tool: mcp.Tool{Name: "delete_deal"}},
+		{ServerName: "mail", Tool: mcp.Tool{Name: "send_email"}},
+		{ServerName: "mail", Tool: mcp.Tool{Name: "create_draft"}},
+		{ServerName: "search", Tool: mcp.Tool{Name: "search_web"}},
+	}
+	parent := agentcore.MCPAllowlist{
+		// The parent itself may only call get_contact — the child must not
+		// regain list_deals through the explore derivation.
+		"crm":   {"get_contact", "update_contact"},
+		"other": {"anything"},
+	}
+	out := exploreMCPToolAllowlist(catalog, parent)
+
+	if got := out["crm"]; len(got) != 1 || got[0] != "get_contact" {
+		t.Fatalf("crm allowlist = %v, want [get_contact] (reads kept, writers stripped, parent narrowing honored)", got)
+	}
+	if got := out["mail"]; len(got) != 1 || got[0] != exploreNoToolsSentinel {
+		t.Fatalf("mail allowlist = %v, want the deny-all sentinel (every tool is a writer)", got)
+	}
+	if got := out["search"]; len(got) != 1 || got[0] != "search_web" {
+		t.Fatalf("search allowlist = %v, want [search_web]", got)
+	}
+	if got := out["other"]; len(got) != 1 || got[0] != "anything" {
+		t.Fatalf("non-catalog parent entry must be preserved, got %v", got)
+	}
+	// Read verbs never match the denylist pattern.
+	for _, ok := range []string{"get_posts", "list_reports", "download_file", "search_emails", "find_meeting_availability"} {
+		if exploreDeniedMCPNamePattern.MatchString(ok) {
+			t.Errorf("read tool %q must not match the explore denylist", ok)
+		}
+	}
+	for _, bad := range []string{"send_email", "batch_delete_messages", "sharepoint_upload_file", "set_vacation", "create_event", "respond_to_event"} {
+		if !exploreDeniedMCPNamePattern.MatchString(bad) {
+			t.Errorf("writer %q must match the explore denylist", bad)
+		}
+	}
+}
+
+// TestSubagentSessionIDValidation pins the transcript API's id gate (#1043):
+// only the exact "subagent-<uuid>" shape passes, so a request can never smuggle
+// path components into the child log-file lookup.
+func TestSubagentSessionIDValidation(t *testing.T) {
+	ok := "subagent-12345678-1234-1234-1234-123456789abc"
+	if !IsSubagentSessionID(ok) {
+		t.Fatalf("%q must validate", ok)
+	}
+	for _, bad := range []string{
+		"", "subagent-", "subagent-notauuid",
+		"subagent-12345678-1234-1234-1234-123456789abc/../../etc/passwd",
+		"../subagent-12345678-1234-1234-1234-123456789abc",
+		"subagent-12345678-1234-1234-1234-123456789ABC", // uppercase — uuid.NewString is lowercase
+		"fleet-session.json",
+	} {
+		if IsSubagentSessionID(bad) {
+			t.Errorf("%q must NOT validate", bad)
+		}
+	}
+	// The path derivation matches what buildChild used for a server-mode parent.
+	t.Setenv("FLEET_LOG_FILE", "/var/lib/fleet/fleet-session.json")
+	if got, want := ChildLogFilePath(ok), "/var/lib/fleet/fleet-session."+ok+".json"; got != want {
+		t.Fatalf("ChildLogFilePath = %q, want %q", got, want)
 	}
 }
 

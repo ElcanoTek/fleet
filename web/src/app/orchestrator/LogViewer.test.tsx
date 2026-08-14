@@ -12,6 +12,7 @@ import type { LogSession, Task } from "@/app/shared/lib/orchestratorApi";
 const taskLogs = vi.fn();
 const taskLogHistory = vi.fn();
 const taskLogHistoryEntry = vi.fn();
+const taskSubagentLog = vi.fn();
 const rerunTask = vi.fn();
 const tasks = vi.fn();
 vi.mock("@/app/shared/lib/orchestratorApi", () => ({
@@ -19,6 +20,7 @@ vi.mock("@/app/shared/lib/orchestratorApi", () => ({
     taskLogs: (...args: unknown[]) => taskLogs(...args),
     taskLogHistory: (...args: unknown[]) => taskLogHistory(...args),
     taskLogHistoryEntry: (...args: unknown[]) => taskLogHistoryEntry(...args),
+    taskSubagentLog: (...args: unknown[]) => taskSubagentLog(...args),
     rerunTask: (...args: unknown[]) => rerunTask(...args),
     tasks: (...args: unknown[]) => tasks(...args),
   },
@@ -429,6 +431,40 @@ describe("LogViewer sub-agent child cards", () => {
     expect(card).toHaveTextContent("/ws/subagents/subagent-abcdef12-3456");
     // The raw JSON payload must not be dumped as a tool message.
     expect(screen.queryByText(/"child_session_id"/)).not.toBeInTheDocument();
+  });
+
+  it("loads the child's own transcript when the Transcript disclosure opens", async () => {
+    mockSession({
+      id: "sess-sub-t",
+      messages: [
+        {
+          id: "t1",
+          role: "tool",
+          message_type: "subagent_spawned",
+          content: JSON.stringify({
+            child_session_id: "subagent-abcdef12-3456",
+            role: "explore",
+            success: true,
+          }),
+        },
+      ],
+    });
+    taskSubagentLog.mockResolvedValue({
+      id: "subagent-abcdef12-3456",
+      messages: [{ id: "c1", role: "assistant", content: "child answer body" }],
+    });
+
+    render(<LogViewer task={TASK} onClose={() => {}} />);
+
+    const transcript = await screen.findByTestId("subagent-transcript");
+    // Opening the disclosure triggers the lazy fetch of the child session
+    // (jsdom does not fire toggle on attribute flips, so dispatch it).
+    transcript.toggleAttribute("open", true);
+    fireEvent(transcript, new Event("toggle", { bubbles: false }));
+    await waitFor(() =>
+      expect(taskSubagentLog).toHaveBeenCalledWith(TASK_ID, "subagent-abcdef12-3456"),
+    );
+    expect(await screen.findByText("child answer body")).toBeInTheDocument();
   });
 
   it("marks an unsuccessful child failed", async () => {

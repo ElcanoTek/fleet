@@ -1393,6 +1393,10 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers, r
 		// wake cycle superseded. Same auth/ownership gate as /logs/{task_id}.
 		r.Get("/logs/{task_id}/history", h.GetLogHistory)
 		r.Get("/logs/{task_id}/history/{entry_id}", h.GetLogHistoryEntry)
+		// Sub-agent child transcript (#1043): the sibling session log a spawned
+		// child wrote, gated by the same transcript gate PLUS a linkage check
+		// (the child id must appear in this task's persisted log).
+		r.Get("/logs/{task_id}/subagents/{child_session_id}", h.GetSubagentLog)
 		// Live SSE run-log stream for an in-progress task, falling back to a one-shot
 		// replay of the persisted log once finished (#200). Same auth/ownership gate
 		// as /logs/{task_id}.

@@ -7,6 +7,8 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -15,6 +17,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
 
@@ -213,8 +216,9 @@ func normalizeSubagentRole(role string) string {
 // download_url, recall, MCP reads) stay. Bash cannot be made read-only, so an
 // explore child is "no purpose-built writers", not a filesystem guarantee — the
 // isolation subdir plus this strip is the honest posture (see docs/SUBAGENTS.md).
-// MCP write tools are NOT inferred here (out of scope per #1043); the child's
-// prompt carries the read-only instruction instead.
+// MCP tools get the parallel best-effort NAME denylist below
+// (exploreMCPToolAllowlist); mutators neither list recognizes are covered by
+// the child's read-only prompt section.
 var exploreDeniedNativeTools = map[string]bool{
 	"write_file":                  true,
 	"edit_file":                   true,
@@ -238,6 +242,60 @@ func filterExploreDeniedTools(all []fantasy.AgentTool) []fantasy.AgentTool {
 			continue
 		}
 		out = append(out, t)
+	}
+	return out
+}
+
+// exploreDeniedMCPNamePattern is the BEST-EFFORT MCP write-tool name denylist
+// for role=explore children (#1043): an MCP tool whose snake_case name contains
+// one of these mutation verbs as a whole segment is excluded from the child's
+// Gate-2 allowlist. Name-based only, by design — the issue scopes explore's MCP
+// stripping to "a simple name denylist"; a mutator with an innocuous name still
+// gets through and is covered by the child's read-only prompt section instead.
+// Read verbs (get/list/search/read/fetch/find/view/download) never match.
+var exploreDeniedMCPNamePattern = regexp.MustCompile(`(?i)(?:^|_)(write|create|update|delete|remove|insert|upsert|send|upload|post|put|patch|set|add|modify|rename|move|copy|archive|cancel|trash|untrash|mark|publish|execute|submit|respond|forward|reply)(?:$|_)`)
+
+// exploreNoToolsSentinel is placed in a server's allowlist entry when the
+// explore filter removes EVERY tool: agentcore treats an EMPTY entry as "allow
+// all" (mcpAllowlist semantics), so denying a whole server needs one
+// never-matching name rather than an empty list.
+const exploreNoToolsSentinel = "__explore_role_denies_all_tools__"
+
+// exploreMCPToolAllowlist derives an explore child's Gate-2 tool allowlist
+// (#1043): every catalog server gets an EXPLICIT entry — the parent's allowed
+// set (or the server's full catalog set when the parent had no entry) minus the
+// write-verb names above. Explicit entries matter because a missing server key
+// means "allow all"; covering the whole catalog covers servers the child could
+// still load mid-run via mcp_load_servers. Parent entries for servers absent
+// from the catalog are preserved unchanged (they can only narrow further).
+// Monotonic: this only ever removes names from what the parent could call.
+func exploreMCPToolAllowlist(catalog []mcp.ServerTool, parent agentcore.MCPAllowlist) agentcore.MCPAllowlist {
+	byServer := map[string][]string{}
+	for _, st := range catalog {
+		byServer[st.ServerName] = append(byServer[st.ServerName], st.Tool.Name)
+	}
+	out := make(agentcore.MCPAllowlist, len(byServer)+len(parent))
+	for server, names := range byServer {
+		parentList := parent[server]
+		allowed := make([]string, 0, len(names))
+		for _, n := range names {
+			if exploreDeniedMCPNamePattern.MatchString(n) {
+				continue
+			}
+			if len(parentList) > 0 && !slices.Contains(parentList, n) {
+				continue // the parent could not call it either — Gate-2 stays monotonic
+			}
+			allowed = append(allowed, n)
+		}
+		if len(allowed) == 0 {
+			allowed = []string{exploreNoToolsSentinel}
+		}
+		out[server] = allowed
+	}
+	for server, list := range parent {
+		if _, ok := out[server]; !ok {
+			out[server] = list
+		}
 	}
 	return out
 }
@@ -778,8 +836,14 @@ func (a *Agent) buildChild(role string, model fantasy.LanguageModel, allowlist a
 	}
 
 	childSystemPrompt := a.systemPrompt
+	childMCPAllowlist := a.mcpToolAllowlist
 	if role == SubagentRoleExplore {
 		childSystemPrompt += exploreChildPromptSection
+		// Best-effort MCP write stripping (#1043): the explore child's Gate-2
+		// allowlist is the parent's, minus write-verb tool names, with every
+		// catalog server covered explicitly. Name-based only; the prompt section
+		// above is the guard for mutators the pattern cannot recognize.
+		childMCPAllowlist = exploreMCPToolAllowlist(a.mcpCatalog, a.mcpToolAllowlist)
 	}
 
 	child := NewAgent(Options{
@@ -790,7 +854,7 @@ func (a *Agent) buildChild(role string, model fantasy.LanguageModel, allowlist a
 		MCPClient:        a.mcpClient,
 		MCPBroker:        a.mcpBroker,
 		MCPCatalog:       a.mcpCatalog,
-		MCPToolAllowlist: a.mcpToolAllowlist,
+		MCPToolAllowlist: childMCPAllowlist,
 		NativeTools:      tools.ExcludeInteractiveOnly(a.nativeTools),
 		SystemPrompt:     childSystemPrompt,
 		Persona:          a.persona,
@@ -849,6 +913,24 @@ func (a *Agent) buildChild(role string, model fantasy.LanguageModel, allowlist a
 	child.costCeilingOverride = childCost
 	child.tokenCeilingOverride = childTokens
 	return child
+}
+
+// subagentSessionIDPattern is the exact shape of a child session id
+// ("subagent-" + a UUID, minted in buildChild). The transcript API validates a
+// client-supplied id against this BEFORE any filesystem path is derived from
+// it, so a request can never smuggle path components into the log-file lookup.
+var subagentSessionIDPattern = regexp.MustCompile(`^subagent-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
+// IsSubagentSessionID reports whether s is a well-formed child session id.
+func IsSubagentSessionID(s string) bool { return subagentSessionIDPattern.MatchString(s) }
+
+// ChildLogFilePath resolves the sibling session-log file a spawned child wrote
+// (#1043 visibility): the same derivation buildChild used when the parent had
+// no explicit log file (server mode), so a handler in the same process reads
+// the exact path the child wrote. The id MUST be validated with
+// IsSubagentSessionID first — this function only joins strings.
+func ChildLogFilePath(childSessionID string) string {
+	return childLogFilePath("", childSessionID)
 }
 
 // childLogFilePath derives a UNIQUE per-child log-file path from the parent's
@@ -998,8 +1080,9 @@ You have a spawn_subagent tool. Delegation is a choice, not a requirement — mo
 `
 
 // exploreChildPromptSection is appended to an explore child's system prompt so
-// the read-only posture is taught, not just enforced by the native-tool strip
-// (MCP write tools are not name-inferred — this instruction is the guard there).
+// the read-only posture is taught, not just enforced by the native strip + the
+// best-effort MCP name denylist (a mutator with an innocuous name slips both —
+// this instruction is the guard there).
 const exploreChildPromptSection = `
 
 ## Read-only research role
