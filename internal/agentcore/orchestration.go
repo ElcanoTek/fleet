@@ -159,6 +159,15 @@ type orchestrationState struct {
 	CachedTokens        int
 	CacheCreationTokens int
 	CostUSD             float64
+
+	// LastServedUpstream is the OpenRouter upstream that served the most recent
+	// step ("" when the provider reported none). ServedFallback records that at
+	// least one step in the run was served by an upstream OTHER than the one the
+	// slug is pinned to — a soft pin is a preference, so this is the only signal
+	// that a run silently left its canonical (cache-warm, precision-floored)
+	// route. Kept on the run state so an Observer can surface it next to cost.
+	LastServedUpstream string
+	ServedFallback     bool
 }
 
 // pendingCriticalAction tracks a critical tool call blocked by audit gating.
@@ -623,6 +632,23 @@ func (o *orchestrationState) updateUsage(modelSlug string, usage fantasy.Usage, 
 
 	cost := computeCostFromUsage(modelSlug, usage, openrouterCost(metadata), pricingConfig())
 	o.CostUSD += cost
+
+	// Attribute the step to the upstream that actually served it. A soft pin
+	// (Order + AllowFallbacks) routes AWAY from the canonical upstream whenever
+	// it is busy, which costs the per-upstream prompt cache and — for a family
+	// whose pool mixes serving precisions — can drop below the quantization
+	// floor's intent on any endpoint that ignores it. Logged once per transition
+	// rather than per step: the signal is the switch, and a per-step line would
+	// be noise on a long run.
+	if served := openrouterServedProvider(metadata); served != "" {
+		if served != o.LastServedUpstream {
+			if preferred := preferredUpstreamFor(modelSlug); preferred != "" && served != preferred {
+				o.ServedFallback = true
+				log.Printf("⚠️  Upstream fallback: model=%s pinned=%s served=%s (prompt cache cold; verify serving precision if output quality is off)", modelSlug, preferred, served)
+			}
+		}
+		o.LastServedUpstream = served
+	}
 
 	if o.logSession != nil {
 		o.logSession.mu.Lock()
