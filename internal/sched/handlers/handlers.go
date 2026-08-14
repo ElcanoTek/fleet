@@ -674,6 +674,14 @@ func validateTaskLimits(tc *models.TaskCreate) error {
 	if tc.Priority < models.PriorityMin || tc.Priority > models.PriorityMax {
 		return fmt.Errorf("priority must be between %d and %d", models.PriorityMin, models.PriorityMax)
 	}
+	// SLA config (#274): a statically-broken triple (non-positive expected
+	// duration, or a fail threshold at or below the warn) would fire spurious
+	// alerts on every run — reject it while the author is still looking at the
+	// request. Runs through every create path (create, edit, import, estimate)
+	// because they all funnel into validateTaskCreate.
+	if err := models.ValidateSLA(tc.ExpectedDurationMinutes, tc.SLAWarnMultiplier, tc.SLAFailMultiplier); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -1831,6 +1839,11 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 		RunIf:         tc.RunIf,
 		SetRunIf:      canAuthorRunIf,
 		SandboxLimits: tc.SandboxLimits,
+		// SLA config (#274) already passed ValidateSLA above; the web client
+		// echoes the stored multipliers so a UI edit round-trips API-set values.
+		ExpectedDurationMinutes: tc.ExpectedDurationMinutes,
+		SLAWarnMultiplier:       tc.SLAWarnMultiplier,
+		SLAFailMultiplier:       tc.SLAFailMultiplier,
 	}
 
 	updated, err := h.storage.UpdateEditableTask(r.Context(), taskID, edit)
