@@ -66,10 +66,14 @@ func (s *Server) handleSubagentLog(w http.ResponseWriter, r *http.Request, convI
 		http.Error(w, "sub-agent transcript file not available (it may have been cleaned up on this host)", http.StatusNotFound)
 		return
 	}
-	if !json.Valid(data) {
+	// Round-trip through encoding/json rather than echoing the file bytes: it
+	// validates the payload is JSON and re-encodes with HTML escaping (gosec
+	// G705), so file content can never reach the response as markup.
+	var child map[string]any
+	if err := json.Unmarshal(data, &child); err != nil {
 		http.Error(w, "sub-agent transcript file is unreadable", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_, _ = w.Write(data)
+	_ = json.NewEncoder(w).Encode(child)
 }
