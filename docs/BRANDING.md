@@ -208,7 +208,12 @@ leading stop instead of fleet's default.
 Per-mode overrides of the CSS custom properties `globals.css` defines, rendered
 by `/theme.css` as a render-blocking stylesheet linked from the root layout — so
 the shell, **including the pre-auth login page**, paints in the deployment's
-palette with no flash.
+palette with no flash. Two pieces make that true: the stylesheet link blocks
+paint until the palette rules arrive, and an inline script in the layout's
+`<head>` stamps `data-theme` on `<html>` synchronously during parse — the
+palette's `html:root[data-theme=…]` selectors need that attribute, so setting
+it any later (as the old deferred bootstrap script did) flashed fleet's default
+colors on every hard refresh before the brand rules could match.
 
 | Group | Tokens |
 |---|---|

@@ -1351,14 +1351,7 @@ func NewTask(tc TaskCreate) *Task {
 	// (their column is NOT NULL DEFAULT) so a later edit that adds an expected
 	// duration doesn't have to backfill them. 0 / negative values map to the
 	// defaults; explicit non-default values are validated by ValidateSLA.
-	warnMul := tc.SLAWarnMultiplier
-	if warnMul <= 0 {
-		warnMul = DefaultSLAWarnMultiplier
-	}
-	failMul := tc.SLAFailMultiplier
-	if failMul <= 0 {
-		failMul = DefaultSLAFailMultiplier
-	}
+	warnMul, failMul := ResolveSLAMultipliers(tc.SLAWarnMultiplier, tc.SLAFailMultiplier)
 
 	// Resolve the scheduling priority once at creation (#230): the zero value
 	// (unset) becomes Normal, and EffectivePriority starts equal to Priority —
@@ -1423,6 +1416,20 @@ func NewTask(tc TaskCreate) *Task {
 	}
 }
 
+// ResolveSLAMultipliers maps non-positive multipliers to the defaults — the
+// shared rule applied at task creation (NewTask) and on edit
+// (storage.UpdateEditableTask), so the persisted NOT NULL columns always hold
+// usable thresholds regardless of which write path last touched the row.
+func ResolveSLAMultipliers(warnMul, failMul float64) (float64, float64) {
+	if warnMul <= 0 {
+		warnMul = DefaultSLAWarnMultiplier
+	}
+	if failMul <= 0 {
+		failMul = DefaultSLAFailMultiplier
+	}
+	return warnMul, failMul
+}
+
 // ValidateSLA checks an expected-duration / multiplier triple for internal
 // consistency so a statically-broken SLA config is rejected at task creation
 // rather than firing spurious alerts at runtime (#274). nil expected duration
@@ -1441,12 +1448,7 @@ func ValidateSLA(expected *int, warnMul, failMul float64) error {
 		return fmt.Errorf("sla multipliers must be >= 0")
 	}
 	// Resolve the same defaults NewTask applies before comparing thresholds.
-	if warnMul <= 0 {
-		warnMul = DefaultSLAWarnMultiplier
-	}
-	if failMul <= 0 {
-		failMul = DefaultSLAFailMultiplier
-	}
+	warnMul, failMul = ResolveSLAMultipliers(warnMul, failMul)
 	if failMul <= warnMul {
 		return fmt.Errorf("sla_fail_multiplier (%.2f) must exceed sla_warn_multiplier (%.2f)", failMul, warnMul)
 	}
