@@ -18,13 +18,16 @@ import (
 // either mode resolves the same model.
 const (
 	// DefaultCoreModel is the cost-efficient primary (scheduled tasks + the
-	// Operations Center default). No :nitro variant: throughput-priority
-	// routing sprays requests across ~26 GLM providers, and prompt caches are
-	// per-upstream — so the implicit-cache discount (~80% on cached input)
-	// almost never hit. The plain slug is soft-pinned to the Z.AI upstream
-	// (see canonicalUpstream) for cache locality, verified live 2026-07-09:
-	// 3968/4018 prompt tokens served from cache on the second pinned call.
-	DefaultCoreModel = "z-ai/glm-5.2"
+	// Operations Center default). No :nitro variant and no `~…-latest` alias:
+	// throughput-priority routing sprays requests across providers, and prompt
+	// caches are per-upstream — so the implicit-cache discount (~80% on cached
+	// input) almost never hit. The slug is soft-pinned to the first-party
+	// DeepSeek upstream (see canonicalUpstream) for cache locality, which also
+	// fixes the window: OpenRouter serves this model from 28 endpoints whose
+	// context lengths range from 131K to 1M and whose quantization ranges from
+	// fp4 to fp8, so an unpinned route is neither reproducible nor safely
+	// sized. DeepSeek's own endpoint is the full 1,048,576 at fp8.
+	DefaultCoreModel = "deepseek/deepseek-v4-flash-0731"
 	// DefaultMaxModel is the strong/fallback tier — the model escalation
 	// (suggest_advanced_model) and task fallback resolve to. Pinned, never a
 	// `~latest` alias.
@@ -56,6 +59,12 @@ var modelContextWindows = []struct {
 	{"google/gemini-2.0", 1_000_000},
 	{"google/gemini-1.5-pro", 1_000_000},
 	{"moonshotai/kimi", 256_000},
+	// The V4 family is 1M, an order of magnitude past the V3 line below it.
+	// Longer prefix first: this table returns the FIRST match, so ordering is
+	// what makes "longest-first" true. Cold-start/offline only — a running
+	// fleet gets this from the live OpenRouter catalog — but getting it wrong
+	// means compacting a 1M-window default at 128K on every cold boot.
+	{"deepseek/deepseek-v4", 1_048_576},
 	{"deepseek/", 128_000},
 	{"openai/gpt-4.1", 1_000_000},
 	{"openai/o1", 200_000},

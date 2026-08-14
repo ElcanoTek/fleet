@@ -54,8 +54,8 @@ test("the composer toolbar keeps every control on one row", async ({ page }) => 
       json: {
         models: [
           {
-            slug: "z-ai/glm-5.2",
-            name: "Z.AI: GLM 5.2",
+            slug: "deepseek/deepseek-v4-flash-0731",
+            name: "DeepSeek: DeepSeek V4 Flash 0731",
             price_prompt: 0.0000004,
             price_completion: 0.0000016,
             context_length: 200000,
@@ -72,9 +72,9 @@ test("the composer toolbar keeps every control on one row", async ({ page }) => 
 
   // Vendor prefix dropped on mobile so the model still reads in the space left
   // after the icon buttons; the full label stays available to assistive tech.
-  await expect(chip.getByTestId("composer-model-label-short")).toHaveText("GLM 5.2");
+  await expect(chip.getByTestId("composer-model-label-short")).toHaveText("DeepSeek V4 Flash 0731");
   await expect(chip.getByTestId("composer-model-label-full")).toBeHidden();
-  await expect(chip).toHaveAccessibleName(/Z\.AI: GLM 5\.2/);
+  await expect(chip).toHaveAccessibleName(/DeepSeek: DeepSeek V4 Flash 0731/);
   // Cost glyphs are picker-only at this width.
   await expect(chip.locator(".model-cost")).toBeHidden();
 

@@ -53,7 +53,7 @@ const PROMPT_AUTOGROW_MAX_PX = 240;
 // protocol prompts wants the tall pane every time, not once per modal.
 const PROMPT_EXPANDED_STORAGE_KEY = "fleet-task-prompt-expanded";
 
-const DEFAULT_PRIMARY_MODEL = "z-ai/glm-5.2";
+const DEFAULT_PRIMARY_MODEL = "deepseek/deepseek-v4-flash-0731";
 const DEFAULT_FALLBACK_MODEL = "openai/gpt-5.6-sol";
 
 const SCHEDULE_PRESETS = [
@@ -1914,7 +1914,7 @@ export function TaskCreateModal({
                           id="taskModelInput"
                           value={model}
                           onChange={setModel}
-                          placeholder="z-ai/glm-5.2"
+                          placeholder="deepseek/deepseek-v4-flash-0731"
                         />
                         {errors.model ? (
                           <div className="validation-error" data-testid="error-model">

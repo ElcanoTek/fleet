@@ -12,12 +12,16 @@ func TestUpstreamPinFor(t *testing.T) {
 		wantOrder string // "" = expect nil pin
 		strict    bool
 	}{
-		{DefaultCoreModel, "Z.AI", false},
+		{DefaultCoreModel, "DeepSeek", false},
+		{"z-ai/glm-5.2", "Z.AI", false},
 		{"z-ai/glm-4.6", "Z.AI", false},
 		{"~z-ai/glm-latest", "Z.AI", false}, // `~` alias inherits the pin
 		{DefaultMaxModel, "OpenAI", false},
 		{"google/gemini-3-flash-preview", "Google", true},
-		{"deepseek/deepseek-v3.1", "", false},
+		// The whole DeepSeek family pins to the first-party upstream: OpenRouter
+		// serves it from 28 endpoints spanning 131K–1M context and fp4–fp8, so an
+		// unpinned route varies in window and quality between runs.
+		{"deepseek/deepseek-v3.1", "DeepSeek", false},
 		{"x-ai/grok-4", "", false}, // "x-ai/" must not collide with "z-ai/"
 	}
 	for _, tc := range cases {

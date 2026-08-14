@@ -17,6 +17,29 @@ prior versions are listed because none have shipped.
 
 ## [Unreleased]
 
+### Changed
+
+- The recommended everyday model is now `deepseek/deepseek-v4-flash-0731`
+  (was `z-ai/glm-5.2`); the strong tier is unchanged (`openai/gpt-5.6-sol`).
+  Updated in every place the slug is mirrored: the frontend `DEFAULT_MODEL` /
+  `DEFAULT_MODEL_LABEL` and the picker seed list, the Operations Center's
+  `DEFAULT_PRIMARY_MODEL` for new tasks, `agentcore.DefaultCoreModel`,
+  `config.DefaultTitleModel`, and the lockdown allow-list default. Same
+  text-only modality as the model it replaces, with tool and reasoning support,
+  so no capability is lost; roughly 4.5x cheaper on input and 7x on output.
+- **DeepSeek models are now pinned to the first-party DeepSeek upstream**
+  (`canonicalUpstream`, non-strict `Order` + fallbacks). OpenRouter serves this
+  family from 28 endpoints whose context lengths span 131K-1M and whose
+  quantization spans fp4-fp8, so an unpinned route was neither reproducible in
+  quality nor safely sized - on top of losing the per-upstream prompt cache,
+  which is the same reason `z-ai/` pins to Z.AI.
+- The static context-window table resolves `deepseek/deepseek-v4*` to
+  1,048,576, ahead of the `deepseek/` -> 128,000 entry that still covers the V3
+  line (the table returns its FIRST prefix match, so ordering is what makes it
+  longest-first). Cold-start/offline path only - a running fleet reads the live
+  OpenRouter catalog - but without it a cold boot would compact a 1M-window
+  default at 128K.
+
 ### Security
 
 - **The MCP broker now authorizes, not just transports (#167, ADR-0042).** The
