@@ -278,6 +278,12 @@ func TestRuntimeDateContextFormat(t *testing.T) {
 	if !strings.Contains(s, "Runtime Date Context") {
 		t.Errorf("missing heading: %s", s)
 	}
+	if !strings.Contains(s, "runtime_today: 2026-04-17") {
+		t.Errorf("missing runtime_today: %s", s)
+	}
+	if !strings.Contains(s, "freshness_window: 2026-04-15 .. 2026-04-17") {
+		t.Errorf("missing freshness_window: %s", s)
+	}
 }
 
 // Day-precision is load-bearing for prompt caching: the system prompt feeds

@@ -67,7 +67,11 @@ prompt stable within a conversation:
   (`runtimeDateContext`, `internal/agent/prompt.go`) embeds the current UTC
   date at **day** granularity — a deliberate compromise that costs exactly one
   cache miss per conversation per UTC-midnight rollover in exchange for
-  correct "today" reasoning. Do not tighten it below day precision.
+  correct "today" reasoning. Do not tighten it below day precision. The
+  per-turn `runtime_today` restatement (`RuntimeDateTurnSuffix`,
+  `internal/agentcore/datewindow.go`) lives in the **message tail**, not this
+  prefix, so a multi-day chat can be re-anchored every turn without an extra
+  prefix miss (#1026).
 - **Deterministic roster.** The MCP/skill/persona roster injected into the prompt
   must be built from a stable, ordered source (sort before joining), never a raw
   map range.
