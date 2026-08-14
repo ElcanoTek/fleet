@@ -9,11 +9,13 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
 	"github.com/ElcanoTek/fleet/internal/sched/models"
+	"github.com/ElcanoTek/fleet/internal/sched/storage"
 )
 
 // fakeStream is a trivial TaskStream double: it replays a fixed set of preformatted
@@ -65,11 +67,29 @@ func streamRouter(h *Handlers) *chi.Mux {
 	return r
 }
 
+// addStreamTask persists the task row the stream endpoint's authorization gate
+// resolves (#980): a transcript is only readable per-task, so the handler now
+// loads the task on every path, live buffer or stored replay. In production the
+// row always exists — a task cannot be running without one — so these fixtures
+// persist it rather than streaming an id the scheduler never knew about.
+func addStreamTask(t *testing.T, store *storage.Storage, taskID uuid.UUID, status models.TaskStatus) {
+	t.Helper()
+	if _, err := store.AddTask(&models.Task{
+		ID:        taskID,
+		Prompt:    "streamed task",
+		Status:    status,
+		CreatedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("AddTask: %v", err)
+	}
+}
+
 // TestStreamTaskLogs_LivePath: when the task is in flight the handler attaches to
 // the injected live buffer and streams its frames.
 func TestStreamTaskLogs_LivePath(t *testing.T) {
-	h, _ := setupTest(t)
+	h, store := setupTest(t)
 	taskID := uuid.New()
+	addStreamTask(t, store, taskID, models.TaskStatusRunning)
 	stream := &fakeStream{frames: []string{
 		"id: 1\nevent: status\ndata: {\"status\":\"running\"}\n\n",
 		"id: 2\nevent: agent_message\ndata: {\"content\":\"hi\"}\n\n",
@@ -95,8 +115,9 @@ func TestStreamTaskLogs_LivePath(t *testing.T) {
 // TestStreamTaskLogs_LastEventIDReplay: the Last-Event-ID header is parsed and
 // forwarded to Attach so a reconnect resumes past the events already seen.
 func TestStreamTaskLogs_LastEventIDReplay(t *testing.T) {
-	h, _ := setupTest(t)
+	h, store := setupTest(t)
 	taskID := uuid.New()
+	addStreamTask(t, store, taskID, models.TaskStatusRunning)
 	stream := &fakeStream{frames: []string{
 		"id: 1\nevent: a\ndata: {}\n\n",
 		"id: 2\nevent: b\ndata: {}\n\n",
@@ -124,6 +145,7 @@ func TestStreamTaskLogs_LastEventIDReplay(t *testing.T) {
 func TestStreamTaskLogs_FallbackToStoredLog(t *testing.T) {
 	h, store := setupTest(t)
 	taskID := uuid.New()
+	addStreamTask(t, store, taskID, models.TaskStatusSuccess)
 	if _, err := store.AddLog(taskID, &models.LogSession{
 		ID:    "sess-1",
 		Title: "t",

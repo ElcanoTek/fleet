@@ -88,19 +88,19 @@ func workspaceDownloadMaxBytes() int64 {
 
 // taskWorkspaceOwned reports whether the request principal may read the given
 // task's workspace files. This is STRICTER than taskVisibleToScopes: a workspace
-// is private to its creator. Admin always wins; a user principal must be the
-// creating user; an API-key principal must be the creating key.
+// is private to its creator. Admin always wins; otherwise the principal must be
+// the task's creator (taskCreatedByPrincipal — the shared ownership predicate
+// the run-log gate also uses).
+//
+// It stays stricter than the run-log gate on purpose: the fleet-wide
+// PermissionViewAllLogs (#980) opens transcripts to a designated auditor, not
+// the file bytes a run produced. Widening workspace access is a separate
+// decision, and this is deliberately not it.
 func taskWorkspaceOwned(p principal, task *models.Task) bool {
 	if p.isAdmin {
 		return true
 	}
-	if p.user != nil && task.CreatedBy != nil && *task.CreatedBy == p.user.ID {
-		return true
-	}
-	if p.apiKey != nil && task.CreatedByKeyID != nil && p.apiKey.KeyID == *task.CreatedByKeyID {
-		return true
-	}
-	return false
+	return taskCreatedByPrincipal(p, task)
 }
 
 // loadWorkspaceTask resolves + authorizes the task for a workspace request and

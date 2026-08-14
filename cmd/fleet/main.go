@@ -2121,7 +2121,21 @@ func taskSchedulerProvider(schedStorage *storage.Storage, budgetGate *budget.Enf
 		}
 		tc.Tags = normalizedTags
 
-		id, status, nextRunAt, err := schedStorage.EnqueueTask(ctx, tc)
+		// Attribute the task to the chat user who approved it (#980): run-log
+		// reads are creator-scoped, so a chat-scheduled task with no creator is
+		// one its own author cannot read the transcript of. The sched username IS
+		// the chat email for the elcano-auth tier — the same assumption the
+		// header-trust path and the push-audience resolver already make. A
+		// deployment whose chat users are not provisioned in sched simply falls
+		// through to an unattributed task, exactly as before.
+		var createdBy *uuid.UUID
+		if email := strings.ToLower(strings.TrimSpace(req.RequestedBy)); email != "" {
+			if u, uerr := schedStorage.GetUserByUsernameWithContext(ctx, email); uerr == nil && u != nil {
+				createdBy = &u.ID
+			}
+		}
+
+		id, status, nextRunAt, err := schedStorage.EnqueueTaskAs(ctx, tc, createdBy)
 		if err != nil {
 			return nil, err
 		}

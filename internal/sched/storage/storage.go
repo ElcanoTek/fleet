@@ -288,6 +288,19 @@ func (s *Storage) AddTaskBatch(ctx context.Context, tasks []*models.Task, atomic
 // the already-authorized scheduled run itself, and lineage (CreatedByTaskID) is
 // set by the tool, never by an external client.
 func (s *Storage) EnqueueTask(ctx context.Context, tc models.TaskCreate) (uuid.UUID, string, time.Time, error) {
+	return s.EnqueueTaskAs(ctx, tc, nil)
+}
+
+// EnqueueTaskAs is EnqueueTask with an explicit creator. createdBy is the sched
+// user the new task is attributed to, or nil for an unattributed task (the
+// create_task tool's lineage case: a task spawned BY a task, whose provenance is
+// CreatedByTaskID, not a human).
+//
+// Attribution is load-bearing, not cosmetic: run-log reads are creator-scoped
+// (#980, ADR-0042) and the per-user push audience resolves through CreatedBy, so
+// a create path that drops the creator strands the human who asked for the task
+// — they can no longer read its transcript unless they are an admin.
+func (s *Storage) EnqueueTaskAs(ctx context.Context, tc models.TaskCreate, createdBy *uuid.UUID) (uuid.UUID, string, time.Time, error) {
 	tc.Prompt = strings.TrimSpace(tc.Prompt)
 	if tc.Prompt == "" {
 		return uuid.Nil, "", time.Time{}, fmt.Errorf("prompt is required")
@@ -315,6 +328,7 @@ func (s *Storage) EnqueueTask(ctx context.Context, tc models.TaskCreate) (uuid.U
 	}
 
 	task := models.NewTask(tc)
+	task.CreatedBy = createdBy
 	if _, err := s.AddTaskWithContext(ctx, task); err != nil {
 		return uuid.Nil, "", time.Time{}, err
 	}
