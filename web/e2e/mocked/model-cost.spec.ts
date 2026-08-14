@@ -9,7 +9,7 @@ import { mockChatBoot } from "./_mocks";
 // shared/lib/modelCost.ts) is exercised end-to-end through the real UI:
 //
 //   v4-flash     $0.40/$1.60 → $0.70/M  → $
-//   gpt-5.6-sol  $1.25/$10   → $3.44/M  → $$
+//   grok-4.6     $1.25/$10   → $3.44/M  → $$
 //   sonnet       $3/$15      → $6.00/M  → $$$
 //   opus         $15/$75     → $30.00/M → $$$$
 //
@@ -26,8 +26,8 @@ const PRICED = {
       context_length: 200000,
     },
     {
-      slug: "openai/gpt-5.6-sol",
-      name: "OpenAI: GPT-5.6 Sol",
+      slug: "x-ai/grok-4.6",
+      name: "SpaceXAI: Grok 4.6",
       price_prompt: 0.00000125,
       price_completion: 0.00001,
       context_length: 400000,
@@ -68,7 +68,7 @@ test("the chat composer shows a cost tier per model and on the chip", async ({ p
   const tierOf = (name: string) =>
     rows.filter({ hasText: name }).locator(".model-cost").first();
   await expect(tierOf("DeepSeek: DeepSeek V4 Flash 0731")).toHaveAttribute("data-cost-tier", "1");
-  await expect(tierOf("OpenAI: GPT-5.6 Sol")).toHaveAttribute("data-cost-tier", "2");
+  await expect(tierOf("SpaceXAI: Grok 4.6")).toHaveAttribute("data-cost-tier", "2");
   await expect(tierOf("Claude Sonnet 4.5")).toHaveAttribute("data-cost-tier", "3");
   await expect(tierOf("Claude Opus 4.8")).toHaveAttribute("data-cost-tier", "4");
   await expect(tierOf("Claude Sonnet 4.5")).toHaveAttribute(

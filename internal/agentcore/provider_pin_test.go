@@ -16,7 +16,11 @@ func TestUpstreamPinFor(t *testing.T) {
 		{"z-ai/glm-5.2", "Z.AI", false},
 		{"z-ai/glm-4.6", "Z.AI", false},
 		{"~z-ai/glm-latest", "Z.AI", false}, // `~` alias inherits the pin
-		{DefaultMaxModel, "OpenAI", false},
+		// The strong tier has NO pin: OpenRouter serves it from xAI alone, so
+		// there is no provider spread to collapse and the prompt cache is already
+		// single-upstream. openai/ still pins for any other OpenAI slug.
+		{DefaultMaxModel, "", false},
+		{"openai/gpt-5.4", "OpenAI", false},
 		{"google/gemini-3-flash-preview", "Google", true},
 		// The whole DeepSeek family pins to the first-party upstream: OpenRouter
 		// serves it from 28 endpoints spanning 131K–1M context and fp4–fp8, so an

@@ -19,6 +19,19 @@ prior versions are listed because none have shipped.
 
 ### Changed
 
+- The strong/escalation tier is now `x-ai/grok-4.6` (was `openai/gpt-5.6-sol`).
+  This is what `suggest_advanced_model`, the spreadsheet nudge, and the task
+  fallback resolve to. Same text+image+file modality with tool and reasoning
+  support, so escalation keeps every input type it had; roughly 2.5x cheaper on
+  input and 5x on output. **Its context window is smaller — 500,000 vs the
+  1,050,000 the previous strong tier carried** — which matters because this is
+  the tier a user escalates to for the hardest, usually largest, problems.
+  Updated alongside `ADVANCED_MODEL` / `ADVANCED_MODEL_LABEL`, the picker seed
+  list, the Operations Center's `DEFAULT_FALLBACK_MODEL`, and the lockdown
+  allow-list. No `canonicalUpstream` entry: OpenRouter serves it from xAI alone,
+  so there is no provider spread to collapse and the prompt cache is already
+  single-upstream. The static context table gained
+  `x-ai/grok-4.6` -> 500,000 ahead of the generic `x-ai/grok` -> 131,072 row.
 - The recommended everyday model is now `deepseek/deepseek-v4-flash-0731`
   (was `z-ai/glm-5.2`); the strong tier is unchanged (`openai/gpt-5.6-sol`).
   Updated in every place the slug is mirrored: the frontend `DEFAULT_MODEL` /
