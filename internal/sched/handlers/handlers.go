@@ -1810,7 +1810,7 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 		InstructionSelfImprove: tc.InstructionSelfImprove,
 		AllowNetwork:           tc.AllowNetwork,
 		CarryContext:           tc.CarryContext,
-		AllowDelegation:        tc.AllowDelegation,
+		AllowDelegation:        tc.DelegationAllowed(),
 		ThinkingBudgetTokens:   tc.ThinkingBudgetTokens,
 		Persona:                tc.Persona,
 		ScheduledFor:           tc.ScheduledFor,
@@ -1828,8 +1828,9 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 		// client omits run_if when the command field is cleared). A non-admin's
 		// echo already passed the normalized equality check above, so the stored
 		// gate is kept byte-identical rather than rewritten from the echo.
-		RunIf:    tc.RunIf,
-		SetRunIf: canAuthorRunIf,
+		RunIf:         tc.RunIf,
+		SetRunIf:      canAuthorRunIf,
+		SandboxLimits: tc.SandboxLimits,
 	}
 
 	updated, err := h.storage.UpdateEditableTask(r.Context(), taskID, edit)
@@ -2137,7 +2138,7 @@ func applyRerunOverrides(tc *models.TaskCreate, o taskRerunOverrides) {
 		tc.AllowNetwork = *o.AllowNetwork
 	}
 	if o.AllowDelegation != nil {
-		tc.AllowDelegation = *o.AllowDelegation
+		tc.AllowDelegation = o.AllowDelegation
 	}
 	if o.ThinkingBudgetTokens != nil {
 		if *o.ThinkingBudgetTokens < 0 {

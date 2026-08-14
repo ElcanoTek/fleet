@@ -12,14 +12,18 @@ import type { LogSession, Task } from "@/app/shared/lib/orchestratorApi";
 const taskLogs = vi.fn();
 const taskLogHistory = vi.fn();
 const taskLogHistoryEntry = vi.fn();
+const taskSubagentLog = vi.fn();
 const rerunTask = vi.fn();
+const wakeTask = vi.fn();
 const tasks = vi.fn();
 vi.mock("@/app/shared/lib/orchestratorApi", () => ({
   orchestratorApi: {
     taskLogs: (...args: unknown[]) => taskLogs(...args),
     taskLogHistory: (...args: unknown[]) => taskLogHistory(...args),
     taskLogHistoryEntry: (...args: unknown[]) => taskLogHistoryEntry(...args),
+    taskSubagentLog: (...args: unknown[]) => taskSubagentLog(...args),
     rerunTask: (...args: unknown[]) => rerunTask(...args),
+    wakeTask: (...args: unknown[]) => wakeTask(...args),
     tasks: (...args: unknown[]) => tasks(...args),
   },
 }));
@@ -282,6 +286,46 @@ describe("LogViewer task-detail modal", () => {
     expect(createObjectURL).toHaveBeenCalledTimes(1);
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:mock");
   });
+
+  it("fires the parked wake event from the log viewer", async () => {
+    mockSession(RICH_SESSION);
+    wakeTask.mockReset();
+    wakeTask.mockResolvedValue({ status: "pending" });
+    const onResubmitted = vi.fn();
+    render(
+      <LogViewer
+        task={{
+          ...DONE_TASK,
+          status: "paused_awaiting_wake",
+          wake_event_key: "deploy-finished",
+          wake_at: "2026-08-15T12:00:00Z",
+        }}
+        onClose={() => {}}
+        onResubmitted={onResubmitted}
+      />,
+    );
+    expect(await screen.findByTestId("wake-summary")).toHaveTextContent("deploy-finished");
+    fireEvent.change(screen.getByLabelText("Wake note"), {
+      target: { value: "build 812 green" },
+    });
+    fireEvent.click(screen.getByTestId("fire-event-button"));
+    await waitFor(() =>
+      expect(wakeTask).toHaveBeenCalledWith(TASK_ID, "deploy-finished", "build 812 green"),
+    );
+    await waitFor(() => expect(onResubmitted).toHaveBeenCalled());
+  });
+
+  it("does not offer Fire event for a timer-only sleep", async () => {
+    mockSession(RICH_SESSION);
+    render(
+      <LogViewer
+        task={{ ...DONE_TASK, status: "paused_awaiting_wake", wake_at: "2026-08-15T12:00:00Z" }}
+        onClose={() => {}}
+      />,
+    );
+    await screen.findByTestId("wake-summary");
+    expect(screen.queryByTestId("fire-event-button")).toBeNull();
+  });
 });
 
 // ── run history ───────────────────────────────────────────────────────────────
@@ -388,5 +432,107 @@ describe("LogViewer per-attempt transcripts", () => {
     // Back to the latest transcript.
     fireEvent.change(picker, { target: { value: "latest" } });
     expect(await screen.findByText(/token totals|infographic/i)).toBeTruthy();
+  });
+});
+
+// ── sub-agent child cards (#1043) ─────────────────────────────────────────────
+// A `subagent_spawned` linkage entry on the stored transcript renders as a
+// child card — id, role, status, spend, workdir — not a raw JSON tool message.
+
+describe("LogViewer sub-agent child cards", () => {
+  it("renders a subagent_spawned entry as a child card", async () => {
+    mockSession({
+      id: "sess-sub",
+      messages: [
+        { id: "u1", role: "user", content: "fan out" },
+        {
+          id: "t1",
+          role: "tool",
+          message_type: "subagent_spawned",
+          content: JSON.stringify({
+            child_session_id: "subagent-abcdef12-3456",
+            role: "explore",
+            workdir: "/ws/subagents/subagent-abcdef12-3456",
+            cost_usd: 0.0234,
+            tokens: 1234,
+            success: true,
+          }),
+        },
+      ],
+    });
+
+    render(<LogViewer task={TASK} onClose={() => {}} />);
+
+    const card = await screen.findByTestId("subagent-card");
+    expect(card).toHaveTextContent("Sub-agent");
+    expect(card).toHaveTextContent("abcdef12");
+    expect(card).toHaveTextContent("explore");
+    expect(card).toHaveTextContent("done");
+    expect(card).toHaveTextContent("$0.0234");
+    expect(card).toHaveTextContent("1,234 tokens");
+    expect(card).toHaveTextContent("/ws/subagents/subagent-abcdef12-3456");
+    // The raw JSON payload must not be dumped as a tool message.
+    expect(screen.queryByText(/"child_session_id"/)).not.toBeInTheDocument();
+  });
+
+  it("loads the child's own transcript when the Transcript disclosure opens", async () => {
+    mockSession({
+      id: "sess-sub-t",
+      messages: [
+        {
+          id: "t1",
+          role: "tool",
+          message_type: "subagent_spawned",
+          content: JSON.stringify({
+            child_session_id: "subagent-abcdef12-3456",
+            role: "explore",
+            success: true,
+          }),
+        },
+      ],
+    });
+    taskSubagentLog.mockResolvedValue({
+      id: "subagent-abcdef12-3456",
+      messages: [{ id: "c1", role: "assistant", content: "child answer body" }],
+    });
+
+    render(<LogViewer task={TASK} onClose={() => {}} />);
+
+    const transcript = await screen.findByTestId("subagent-transcript");
+    // Opening the disclosure triggers the lazy fetch of the child session
+    // (jsdom does not fire toggle on attribute flips, so dispatch it).
+    transcript.toggleAttribute("open", true);
+    fireEvent(transcript, new Event("toggle", { bubbles: false }));
+    await waitFor(() =>
+      expect(taskSubagentLog).toHaveBeenCalledWith(TASK_ID, "subagent-abcdef12-3456"),
+    );
+    expect(await screen.findByText("child answer body")).toBeInTheDocument();
+  });
+
+  it("marks an unsuccessful child failed", async () => {
+    mockSession({
+      id: "sess-sub-2",
+      messages: [
+        {
+          id: "t1",
+          role: "tool",
+          message_type: "subagent_spawned",
+          content: JSON.stringify({
+            child_session_id: "subagent-feedbeef",
+            role: "worker",
+            workdir: "/ws/subagents/subagent-feedbeef",
+            cost_usd: 0.01,
+            tokens: 200,
+            success: false,
+          }),
+        },
+      ],
+    });
+
+    render(<LogViewer task={TASK} onClose={() => {}} />);
+
+    const card = await screen.findByTestId("subagent-card");
+    expect(card).toHaveTextContent("worker");
+    expect(card).toHaveTextContent("failed");
   });
 });

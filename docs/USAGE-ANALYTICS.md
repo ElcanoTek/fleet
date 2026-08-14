@@ -8,7 +8,7 @@ issue, and what was deliberately deferred.
 
 - **Part 1 — the read model**: `GET /admin/usage` + the Operations Center
   Usage panel. Strictly read-only.
-- **Part 2 — rolling budgets**: `{scope: user|key|project, window:
+- **Part 2 — rolling budgets**: `{scope: user|key, window:
   day|week|month, soft/hard bounds in dollars AND tokens}`, enforced by one
   shared gate at every task-create path, with a once-per-window soft alert
   through the existing notifier. See "Part 2" below.
@@ -130,7 +130,7 @@ the group key, cost columns, and token/iteration/turn counts, plus a trailing
 
 ### The budget model (one table, all scopes)
 
-A budget is `{scope: user|key|project, principal_id, window: day|week|month,
+A budget is `{scope: user|key, principal_id, window: day|week|month,
 soft_usd?, hard_usd?, soft_tokens?, hard_tokens?}` — persisted in a single new
 sched-DB table `budgets` (migration 052), unique on `(scope, principal_id,
 window)`. All bounds are optional individually; at least one is required, and
@@ -138,7 +138,8 @@ soft may not exceed hard per measure.
 
 **Persistence choice, recorded honestly:** the issue offered "a small table
 (sched migration) or fields on the scoped API key (like `MaxPriority`, #190) —
-pick per scope". One table covers **all three scopes**, including `key`,
+pick per scope". One table covers **user and key** (and could hold a
+future project scope), including `key`,
 because the API key's existing per-key caps (`MaxCostPerDayUSD` /
 `MaxCostPerMonthUSD`) are a *separate accounting path* — a JSON-file
 accumulator fed by task-completion callbacks — while #601's budgets must be
@@ -203,19 +204,17 @@ mirroring the `priorityCapError` shared-helper discipline:
   `BudgetStatus`; bound in the route/schema parity tests), registered like
   `/admin/usage` behind `AdminOrUserAuthMiddleware` with the admin gate
   enforced in-handler (#458).
-- The Operations Center Usage panel renders the budget list **read-only**
-  under the usage report (spend, bounds with the clamp made visible, and an
-  ok/alerted/exhausted status), with the token-vs-dollar coverage caveat
-  spelled out. Budget create/delete is deliberately API-only for now.
+- The Operations Center Usage panel lists budgets under the usage report
+  (spend, bounds with the clamp made visible, and an ok/alerted/exhausted
+  status) and now creates / deletes them in place. `fleet sched budget
+  list|create|delete` is the CLI twin.
 
 ## Honest scope (part 2)
 
-- **`scope=project` is recorded and reported but NOT enforced at create.**
-  Tasks carry no project dimension and no task-create path resolves one (the
-  chat `schedule_task` seam does not thread the conversation's project
-  through). A project budget row is accepted, listed with its chat-side spend,
-  and evaluated by nothing. Enforcing it (e.g. by threading the conversation
-  project into the seam) is deferred.
+- **`scope=project` is rejected on write.** Tasks carry no project dimension
+  and no task-create path resolves one, so a project budget could only be
+  recorded and never enforced. Leftover rows still list. Re-introduce the
+  scope when chat `schedule_task` threads `project_id`.
 - **Admin-key submissions are not budget-gated.** The admin API key carries
   neither a user nor a scoped key — it is the box operator, whose bound is the
   global ceiling. Likewise the in-process spawn paths (`create_task` from a
@@ -247,7 +246,6 @@ mirroring the `priorityCapError` shared-helper discipline:
 
 - Project-scope enforcement (above), run-start enforcement, and gating the
   in-process spawn/rerun paths.
-- Budget create/edit/delete UI (the panel is read-only; CRUD is API-only).
 - Slack (or other) alert channels — the alert rides the existing notify
   pipeline; new channels belong to that seam.
 - Per-budget alert recipients: alerts go to the deployment-wide

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyOrigin } from "@/app/lib/csrf";
-import { getOrchestratorBase } from "@/app/lib/mocServer";
+import { getOrchestratorBase } from "@/app/lib/orchestratorServer";
 
 export const runtime = "nodejs";
 

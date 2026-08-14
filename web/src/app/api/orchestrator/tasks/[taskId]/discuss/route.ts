@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "@/app/lib/auth";
 import { chatServerProxy } from "@/app/lib/chatServer";
 import { verifyOrigin } from "@/app/lib/csrf";
-import { orchestratorFetch } from "@/app/lib/mocServer";
+import { orchestratorFetch } from "@/app/lib/orchestratorServer";
 import { resolveOrchestratorAuth } from "../../../_lib/auth";
 
 export const runtime = "nodejs";

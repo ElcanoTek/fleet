@@ -569,14 +569,14 @@ components:
         POST /admin/budgets body (#601 part 2): create or replace the rolling
         budget for one (scope, principal_id, window). scope=user is keyed by
         the sched username (an email on a standard deployment), scope=key by
-        the scoped API key id, scope=project by the chat project id (recorded
-        and reported, but not yet enforced at create — tasks carry no project).
+        the scoped API key id. scope=project is rejected: tasks carry no
+        project dimension, so a project budget could never be enforced.
         Bounds are optional individually but at least one must be set, soft
         must not exceed hard per measure, and budgets bound TOKENS as well as
         dollars because dollar coverage depends on pricing configuration
         (#289). An upsert resets the once-per-window soft-alert marker.
       properties:
-        scope: { type: string, enum: [user, key, project] }
+        scope: { type: string, enum: [user, key] }
         principal_id: { type: string }
         window: { type: string, enum: [day, week, month], description: "UTC calendar window (weeks start Monday 00:00 UTC)." }
         soft_usd: { type: number, description: "Dollar spend that fires the once-per-window notify alert." }
@@ -2225,6 +2225,37 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/LogSession" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+
+  /logs/{task_id}/subagents/{child_session_id}:
+    parameters:
+      - name: task_id
+        in: path
+        required: true
+        schema: { type: string }
+      - name: child_session_id
+        in: path
+        required: true
+        schema: { type: string, pattern: "^subagent-[0-9a-f-]{36}$" }
+    get:
+      summary: Fetch a spawned sub-agent's own transcript (#1043).
+      description: >-
+        Returns the sibling session log (LogSession shape) a sub-agent child
+        run wrote. Same auth + ownership gate as GET /logs/{task_id}, PLUS a
+        linkage check — the child id must appear in a subagent_spawned entry of
+        this task's persisted log (latest or any history attempt). The
+        transcript file is host-local and best-effort: 404 when it is no
+        longer present, while the parent log's linkage entry remains the
+        durable record.
+      security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LogSession" }
+        "400": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
 

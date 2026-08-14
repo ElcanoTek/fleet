@@ -48,6 +48,10 @@ export type Task = {
   instruction_self_improve?: boolean;
   allow_network?: boolean;
   carry_context?: boolean;
+  // Sub-agent delegation gate (#1043). Defaults TRUE server-side (opt-out);
+  // the server always serializes it, so absence only happens on old payloads —
+  // treat undefined as true.
+  allow_delegation?: boolean;
   persona?: string;
   tags?: string[];
   retry_policy?: RetryPolicy;
@@ -78,6 +82,11 @@ export type Task = {
   sla_fail_multiplier?: number;
   sla_breached?: boolean;
   actual_duration_seconds?: number | null;
+  thinking_budget_tokens?: number | null;
+  sandbox_limits?: TaskSandboxLimits | null;
+  wake_at?: string | null;
+  wake_event_key?: string;
+  wake_note?: string;
 };
 
 export type TaskCreate = {
@@ -91,6 +100,9 @@ export type TaskCreate = {
   instruction_self_improve?: boolean;
   allow_network?: boolean;
   carry_context?: boolean;
+  // Sub-agent delegation gate (#1043): omit for the server default (TRUE);
+  // send false explicitly to opt the task out.
+  allow_delegation?: boolean;
   // Per-task extended-thinking override (#220): omit to inherit the deployment
   // default, 0 = off, >0 = this task's budget in tokens.
   thinking_budget_tokens?: number | null;
@@ -107,6 +119,15 @@ export type TaskCreate = {
   expected_duration_minutes?: number | null;
   sla_warn_multiplier?: number;
   sla_fail_multiplier?: number;
+  sandbox_limits?: TaskSandboxLimits | null;
+};
+
+// Per-task sandbox cgroup override (#205). Zero/omit a field to keep the
+// global FLEET_SANDBOX_* default. Floors: memory_mb >= 128, pids >= 16, cpus > 0.
+export type TaskSandboxLimits = {
+  memory_mb?: number;
+  cpus?: number;
+  pids?: number;
 };
 
 // SLAReport / SLAReportTask mirror models.SLAReport (#274): the
@@ -226,8 +247,7 @@ export type AdoptionReport = {
 // per-principal rolling budget plus its live evaluation — current window
 // [start, end), spend recomputed from the persisted metering, the effective
 // hard bounds after the fail-safe clamp against the live global ceilings, and
-// whether this window's one soft alert has fired. Budgets are managed via the
-// API (POST/DELETE /admin/budgets); this panel renders them read-only.
+// whether this window's one soft alert has fired.
 export type BudgetStatus = {
   id: string;
   scope: "user" | "key" | "project";
@@ -244,6 +264,18 @@ export type BudgetStatus = {
   effective_hard_usd?: number;
   effective_hard_tokens?: number;
   soft_alerted: boolean;
+};
+
+// BudgetCreate is the POST /admin/budgets body. scope=project is rejected
+// server-side (Wave 1); leftover project rows still list.
+export type BudgetCreate = {
+  scope: "user" | "key";
+  principal_id: string;
+  window: "day" | "week" | "month";
+  soft_usd?: number;
+  hard_usd?: number;
+  soft_tokens?: number;
+  hard_tokens?: number;
 };
 
 // CostForecast mirrors agentcore.CostForecast (#233): the pre-submission token +
@@ -282,6 +314,8 @@ export type TaskTemplateTask = {
   timezone?: string;
   priority?: number;
   allow_network?: boolean;
+  // Omitted = the form default (true, #1043); an explicit false opts out.
+  allow_delegation?: boolean;
   carry_context?: boolean;
   instruction_self_improve?: boolean;
   persona?: string;
@@ -294,6 +328,7 @@ export type TaskTemplateTask = {
   // Per-task extended-thinking override (#220): omit to inherit the default,
   // 0 = off, >0 = this task's budget in tokens.
   thinking_budget_tokens?: number | null;
+  sandbox_limits?: TaskSandboxLimits | null;
 };
 
 // TaskTemplate is one "new task from a template" entry from the bundle's
@@ -573,6 +608,13 @@ export const orchestratorApi = {
   estimateTask: (body: TaskCreate) =>
     request<CostForecast>("/tasks/estimate", { method: "POST", body: JSON.stringify(body) }),
   taskLogs: (taskId: string) => request<LogSession>(`/logs/${encodeURIComponent(taskId)}`),
+  // A spawned child's own transcript (#1043) — 404 when the transcript file is
+  // no longer on the host (the linkage entry on the parent log stays the
+  // durable record either way).
+  taskSubagentLog: (taskId: string, childSessionId: string) =>
+    request<LogSession>(
+      `/logs/${encodeURIComponent(taskId)}/subagents/${encodeURIComponent(childSessionId)}`,
+    ),
   // Per-attempt run log history: transcripts superseded by a retry or an
   // ask-pause/wake resume of the SAME task id. Metadata list + one entry.
   taskLogHistory: (taskId: string) =>
@@ -594,6 +636,13 @@ export const orchestratorApi = {
     request<Task>(`/tasks/${encodeURIComponent(taskId)}/rerun`, {
       method: "POST",
       body: JSON.stringify(overrides ? { overrides } : {}),
+    }),
+  // Fire a named event at a task parked by wake_on_event (docs/SELF-WAKE.md).
+  // The key must match the one the task is waiting for.
+  wakeTask: (taskId: string, event: string, note?: string) =>
+    request<{ status: string }>(`/tasks/${encodeURIComponent(taskId)}/wake`, {
+      method: "POST",
+      body: JSON.stringify({ event, note: note ?? "" }),
     }),
   upcomingRuns: (limit = 50, until?: string) =>
     request<{ upcoming: UpcomingRun[] }>(
@@ -693,9 +742,14 @@ export const orchestratorApi = {
     return request<AdoptionReport>(`/admin/usage/adoption${suffix}`);
   },
 
-  // Per-principal rolling budgets (#601 part 2): admin-only list with live
-  // current-window spend. Create/delete stay API-only for now.
+  // Per-principal rolling budgets (#601 part 2): admin-only list + upsert/delete.
   budgets: () => request<{ budgets: BudgetStatus[] }>("/admin/budgets"),
+  createBudget: (body: BudgetCreate) =>
+    request<BudgetStatus>("/admin/budgets", { method: "POST", body: JSON.stringify(body) }),
+  deleteBudget: (budgetId: string) =>
+    request<{ status: string }>(`/admin/budgets/${encodeURIComponent(budgetId)}`, {
+      method: "DELETE",
+    }),
 
   // Read-only task-template catalog for "new task from a template" (#262).
   taskTemplates: () => request<TaskTemplate[]>("/task-templates"),

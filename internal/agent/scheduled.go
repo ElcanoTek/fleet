@@ -100,7 +100,7 @@ type Agent struct {
 	// (runtimePolicy) is captured in Execute so the spawn tool can read the
 	// parent's remaining budget and charge child spend back against it.
 	subagent      subagentConfig
-	runtimePolicy *agentcore.ScheduledPolicy
+	runtimePolicy runtimeBudgetPolicy
 
 	// budgetOverride, when set (>0), forces this run's cost/token ceilings instead
 	// of the config defaults. A spawned CHILD sets these to its SLICED budget so
@@ -224,23 +224,39 @@ type Options struct {
 	PhoneAFriendEnabled bool
 	ReviewerModel       fantasy.LanguageModel
 
-	// ── sub-agents (#175, part b) ──
-	// Subagent configures the spawn_subagent native tool. OFF by default
-	// (Subagent.Enabled=false) so config/default behaviour is unchanged. See
+	// ── sub-agents (#175 part b, #1043) ──
+	// Subagent configures the spawn_subagent native tool. The DRIVERS compose
+	// Enabled — scheduledrun: fleet flag AND task.allow_delegation (both default
+	// true, #1043); interactive (RunInteractiveTurn): the fleet flag alone. A
+	// zero-value Options (tests, embedders) still means "not registered". See
 	// subagentConfig / subagent.go for the governance properties (monotonic
-	// privilege, budget split, depth/fan-out caps). The DRIVER (scheduledrun)
-	// builds this from config + the Manager's model resolver + sandbox.
+	// privilege, budget split, depth/fan-out caps).
 	Subagent SubagentOptions
 }
 
+// runtimeBudgetPolicy is the slice of the live run policy the spawn_subagent
+// tool needs: read the parent's remaining budget, and charge a finished child's
+// spend back into it. Both run-to-completion (*agentcore.ScheduledPolicy) and
+// live-turn (*agentcore.InteractivePolicy) policies satisfy it, which is what
+// lets interactive chat register the same tool (#1043) without a second
+// accounting path — the budget the tool reads is the budget the loop enforces.
+type runtimeBudgetPolicy interface {
+	Budget() agentcore.BudgetState
+	ChargeChildUsage(agentcore.RunUsage)
+}
+
 // SubagentOptions is the spawn_subagent feature configuration the driver supplies
-// (#175, part b). It is OFF unless Enabled is set. The child run inherits the
-// parent's sandbox, MCP client, and allowlists from the parent Agent itself; this
-// struct carries only the policy knobs and the host-side model resolver a child
-// needs.
+// (#175 part b, #1043). The tool is registered only when Enabled is set — the
+// DRIVER composes the default-on gates (see Options.Subagent). The child run
+// inherits the parent's sandbox, MCP client, and allowlists from the parent
+// Agent itself; this struct carries only the policy knobs and the host-side
+// model resolver a child needs.
 type SubagentOptions struct {
-	// Enabled gates the whole feature (FLEET_SUBAGENTS_ENABLED). When false the
-	// spawn_subagent tool is not registered at all.
+	// Enabled gates the whole feature. When false the spawn_subagent tool is not
+	// registered at all (structural — not a soft check). Drivers compose it from
+	// the fleet-wide kill switch (FLEET_SUBAGENTS_ENABLED / Admin → Features,
+	// default true) and, for scheduled runs, the task's allow_delegation
+	// (default true), ANDed (#1043).
 	Enabled bool
 	// MaxDepth caps recursion depth (root run = depth 0; a spawn at MaxDepth is
 	// refused). MaxChildren caps fan-out per parent. Both <=0 fall back to the
@@ -613,13 +629,23 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 			tools.NewRecallTool(a.taskMemory, a.taskID))
 	}
 
-	// spawn_subagent (#175, part b): register the tool ONLY when the feature is
-	// enabled, so config/default behaviour is unchanged. The tool body adapts I/O
-	// around a CHILD agentcore.Run (a fresh agent.Agent.Execute) — no second
-	// governance path. See subagent.go for the monotonic-privilege + budget-split
-	// + depth/fan-out enforcement.
+	// spawn_subagent (#175 part b, #1043): register the tool ONLY when the
+	// composed gate is enabled (fleet-wide flag AND per-task allow_delegation,
+	// both default true — the driver composes them). Registration is structural:
+	// when disabled the tool does not exist. The tool body adapts I/O around a
+	// CHILD agentcore.Run (a fresh agent.Agent.Execute) — no second governance
+	// path. See subagent.go for the monotonic-privilege + budget-split +
+	// depth/fan-out enforcement.
 	if a.subagent.enabled {
 		nativeTools = append(append([]fantasy.AgentTool{}, nativeTools...), a.newSpawnSubagentTool())
+	}
+
+	// role=explore write-tool strip (#1043): a read-only child's roster is
+	// filtered LAST, over the fully composed set, so the strip covers the
+	// run-time-appended tools (remember, propose_note, propose_skill) as well as
+	// the inherited base roster. Root runs and worker children pass unchanged.
+	if a.subagent.role == SubagentRoleExplore {
+		nativeTools = filterExploreDeniedTools(nativeTools)
 	}
 
 	// Loader tools (mcp_list_servers / mcp_load_servers) drive the in-loop tool

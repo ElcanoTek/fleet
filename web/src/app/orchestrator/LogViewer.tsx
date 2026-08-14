@@ -80,7 +80,7 @@ export function LogViewer({ task, onClose, canStop, onResubmitted, onEdit, onSel
   // Key the inner body on the task id so switching tasks remounts the fetch
   // hook — that reproduces the old "reset session to null then refetch on task
   // change" behavior cleanly, without a manual reset effect.
-  const live = task.status === "running" || task.status === "assigned";
+  const live = task.status === "running" || task.status === "leased";
   if (live) {
     return (
       <LiveTaskView
@@ -144,6 +144,17 @@ function TaskSummary({ task }: { task: Task }) {
     { label: "Created by", node: <span>{createdByLabel(task)}</span> },
     { label: "Created", node: <span>{formatTimeFirst(task.created_at)}</span> },
   ];
+  if (task.status === "paused_awaiting_wake") {
+    items.push({
+      label: "Wake",
+      node: (
+        <span data-testid="wake-summary">
+          {task.wake_event_key ? `event “${task.wake_event_key}”` : "timer"}
+          {task.wake_at ? ` · by ${formatTimeFirst(task.wake_at)}` : ""}
+        </span>
+      ),
+    });
+  }
   return (
     <div className="task-summary" data-testid="task-summary">
       {items.map((it) => (
@@ -422,6 +433,157 @@ function LogMessageCard({
         ) : null}
       </div>
     </div>
+  );
+}
+
+// ── #1043 sub-agent child cards ──────────────────────────────────────────────
+// A spawn is productized as a card (id, role, status, spend, workdir) instead
+// of a raw JSON blob. Two sources feed it: the parent log's `subagent_spawned`
+// linkage entries (stored transcript) and the spawn_subagent tool call/result
+// frames (live stream).
+
+type SubagentInfo = {
+  childSessionId?: string;
+  role?: string;
+  workdir?: string;
+  costUsd?: number;
+  tokens?: number;
+  success?: boolean;
+  result?: string;
+  pending?: boolean;
+};
+
+// parseSubagentPayload reads either shape — the linkage entry
+// {child_session_id, role, workdir, cost_usd, tokens, success} or the tool
+// result {…same…, result} — returning null on unparseable content.
+function parseSubagentPayload(raw: string | undefined): SubagentInfo | null {
+  if (!raw) return null;
+  try {
+    const p = JSON.parse(raw) as Record<string, unknown>;
+    if (typeof p !== "object" || p === null) return null;
+    return {
+      childSessionId:
+        typeof p.child_session_id === "string" ? p.child_session_id : undefined,
+      role: typeof p.role === "string" ? p.role : undefined,
+      workdir: typeof p.workdir === "string" ? p.workdir : undefined,
+      costUsd: typeof p.cost_usd === "number" ? p.cost_usd : undefined,
+      tokens: typeof p.tokens === "number" ? p.tokens : undefined,
+      success: typeof p.success === "boolean" ? p.success : undefined,
+      result: typeof p.result === "string" ? p.result : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function subagentStatus(info: SubagentInfo): {
+  label: string;
+  tone: "running" | "done" | "failed";
+} {
+  if (info.pending) return { label: "running", tone: "running" };
+  if (info.success) return { label: "done", tone: "done" };
+  // A refusal never built a child, so it has no session id.
+  if (!info.childSessionId) return { label: "refused", tone: "failed" };
+  if ((info.result ?? "").includes("timed out")) return { label: "timed out", tone: "failed" };
+  return { label: "failed", tone: "failed" };
+}
+
+function SubagentCard({ info, taskId }: { info: SubagentInfo; taskId?: string }) {
+  const status = subagentStatus(info);
+  const shortId = info.childSessionId
+    ? info.childSessionId.replace(/^subagent-/, "").slice(0, 8)
+    : null;
+  return (
+    <article
+      className={`subagent-card subagent-card--${status.tone}`}
+      data-testid="subagent-card"
+    >
+      <div className="subagent-card-head">
+        <span className="subagent-card-title">
+          Sub-agent{shortId ? <code> {shortId}…</code> : null}
+        </span>
+        {info.role ? <span className="subagent-card-role">{info.role}</span> : null}
+        <span className={`subagent-card-status subagent-card-status--${status.tone}`}>
+          {status.label}
+        </span>
+      </div>
+      <div className="subagent-card-meta">
+        {typeof info.costUsd === "number" && info.costUsd > 0 ? (
+          <span>${info.costUsd.toFixed(4)}</span>
+        ) : null}
+        {typeof info.tokens === "number" && info.tokens > 0 ? (
+          <span>{info.tokens.toLocaleString()} tokens</span>
+        ) : null}
+        {info.workdir ? (
+          <code className="subagent-card-workdir" title={info.workdir}>
+            {info.workdir}
+          </code>
+        ) : null}
+      </div>
+      {info.result ? (
+        <details className="subagent-card-result">
+          <summary>Result</summary>
+          <pre className="log-pre">{stripAnsiCodes(info.result)}</pre>
+        </details>
+      ) : null}
+      {taskId && info.childSessionId && !info.pending ? (
+        <SubagentTranscript taskId={taskId} childSessionId={info.childSessionId} />
+      ) : null}
+    </article>
+  );
+}
+
+// SubagentTranscript lazy-loads a child's own session log (#1043) the first
+// time its disclosure opens and renders it with the same message cards the
+// parent transcript uses. The transcript file is best-effort (it lives on the
+// serving host, not in the DB) — a 404 renders as an inline note, never an
+// error state for the whole card.
+function SubagentTranscript({
+  taskId,
+  childSessionId,
+}: {
+  taskId: string;
+  childSessionId: string;
+}) {
+  const [state, setState] = useState<"idle" | "loading" | "error" | "loaded">("idle");
+  const [error, setError] = useState("");
+  const [session, setSession] = useState<LogSession | null>(null);
+  const load = useCallback(async () => {
+    setState((prev) => (prev === "idle" || prev === "error" ? "loading" : prev));
+    try {
+      const s = await orchestratorApi.taskSubagentLog(taskId, childSessionId);
+      setSession(s);
+      setState("loaded");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setState("error");
+    }
+  }, [taskId, childSessionId]);
+  return (
+    <details
+      className="subagent-card-transcript"
+      data-testid="subagent-transcript"
+      onToggle={(e) => {
+        if ((e.target as HTMLDetailsElement).open && state !== "loaded" && state !== "loading") {
+          void load();
+        }
+      }}
+    >
+      <summary>Transcript</summary>
+      {state === "loading" ? (
+        <p className="subagent-card-transcript-note">Loading transcript…</p>
+      ) : null}
+      {state === "error" ? (
+        <p className="subagent-card-transcript-note">Transcript unavailable: {error}</p>
+      ) : null}
+      {state === "loaded" && session ? (
+        <div className="log-session">
+          {(session.messages ?? []).map((m, i) => (
+            <LogMessageCard key={m.id ?? i} msg={m} taskId={taskId} toolName={m.tool_name} />
+          ))}
+        </div>
+      ) : null}
+    </details>
   );
 }
 
@@ -704,6 +866,19 @@ function LiveTaskView({
                 <div key={e.key} className="live-activity-message" data-testid="live-assistant-message">
                   {e.text}
                 </div>
+              ) : e.name === "spawn_subagent" ? (
+                // Live child card (#1043): pending until the spawn's result
+                // frame lands, then status/spend from the tool's JSON result —
+                // never a raw JSON blob.
+                <SubagentCard
+                  key={e.key}
+                  taskId={task.id}
+                  info={
+                    e.pending
+                      ? { pending: true, ...(parseSubagentPayload(e.text) ?? {}) }
+                      : (parseSubagentPayload(e.result) ?? { success: !e.isError })
+                  }
+                />
               ) : (
                 <article
                   key={e.key}
@@ -858,6 +1033,27 @@ function LogViewerBody({
 
   const canResubmit = RUNNABLE.has(task.status ?? "");
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [wakeNote, setWakeNote] = useState("");
+  const [waking, setWaking] = useState(false);
+  const canFireWake =
+    task.status === "paused_awaiting_wake" && Boolean(task.wake_event_key);
+
+  const fireWake = async () => {
+    if (waking || !task.wake_event_key) return;
+    setWaking(true);
+    try {
+      await orchestratorApi.wakeTask(task.id, task.wake_event_key, wakeNote.trim());
+      showToast(`Fired “${task.wake_event_key}” — task is pending again`, "success");
+      onResubmitted?.();
+    } catch (err) {
+      showToast(
+        `Fire event failed: ${err instanceof Error ? err.message : "unknown error"}`,
+        "error",
+      );
+    } finally {
+      setWaking(false);
+    }
+  };
 
   // "Discuss this run" (docs/DISCUSS-RUN.md): the BFF fetches this run's
   // transcript, creates a chat conversation seeded with a digest, and we
@@ -956,6 +1152,26 @@ function LogViewerBody({
                   {resubmitting ? (hasRun ? "Resubmitting…" : "Starting…") : actionLabel}
                 </button>
               ) : null}
+              {canFireWake ? (
+                <span className="wake-fire" data-testid="wake-fire">
+                  <input
+                    type="text"
+                    aria-label="Wake note"
+                    placeholder="optional note"
+                    value={wakeNote}
+                    onChange={(e) => setWakeNote(e.target.value)}
+                  />
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    data-testid="fire-event-button"
+                    disabled={waking}
+                    onClick={() => void fireWake()}
+                  >
+                    {waking ? "Firing…" : `Fire “${task.wake_event_key}”`}
+                  </button>
+                </span>
+              ) : null}
               <button
                 type="button"
                 className="btn btn-secondary"
@@ -1012,14 +1228,26 @@ function LogViewerBody({
                 total={messages.length}
               />
               <div className="log-session">
-                {visibleIdx.map((i) => (
-                  <LogMessageCard
-                    key={messages[i].id ?? i}
-                    msg={messages[i]}
-                    taskId={task.id}
-                    toolName={toolNames.get(i)}
-                  />
-                ))}
+                {visibleIdx.map((i) => {
+                  // Sub-agent linkage entries (#1043) render as child cards,
+                  // not raw JSON tool messages.
+                  if (messages[i].message_type === "subagent_spawned") {
+                    const info = parseSubagentPayload(messages[i].content);
+                    if (info) {
+                      return (
+                        <SubagentCard key={messages[i].id ?? i} info={info} taskId={task.id} />
+                      );
+                    }
+                  }
+                  return (
+                    <LogMessageCard
+                      key={messages[i].id ?? i}
+                      msg={messages[i]}
+                      taskId={task.id}
+                      toolName={toolNames.get(i)}
+                    />
+                  );
+                })}
               </div>
             </>
           )}

@@ -33,10 +33,10 @@ type taskExportEnvelope struct {
 	Tasks   []*models.Task `json:"tasks"`
 }
 
-// cmdSchedTask dispatches `fleet-admin sched task list|export|import|set-model|set-credentials|set-description`.
+// cmdSchedTask dispatches `fleet-admin sched task list|export|import|set-model|set-credentials|set-description|set-limits`.
 func cmdSchedTask(argv []string) int {
 	if len(argv) < 1 {
-		return errf(1, "usage: fleet sched task list|export|import|set-model|set-credentials|set-description|tag|estimate|batch-create")
+		return errf(1, "usage: fleet sched task list|export|import|set-model|set-credentials|set-description|set-limits|tag|estimate|batch-create")
 	}
 	switch argv[0] {
 	case "list", "ls":
@@ -51,6 +51,8 @@ func cmdSchedTask(argv []string) int {
 		return schedTaskSetCredentials(argv[1:])
 	case "set-description":
 		return schedTaskSetDescription(argv[1:])
+	case "set-limits":
+		return schedTaskSetLimits(argv[1:])
 	case "tag":
 		return schedTaskTag(argv[1:])
 	case "estimate":
@@ -58,7 +60,7 @@ func cmdSchedTask(argv []string) int {
 	case "batch-create":
 		return schedTaskBatchCreate(argv[1:])
 	default:
-		return errf(1, "unknown sched task subcommand %q (want list|export|import|set-model|set-credentials|set-description|tag|estimate|batch-create)", argv[0])
+		return errf(1, "unknown sched task subcommand %q (want list|export|import|set-model|set-credentials|set-description|set-limits|tag|estimate|batch-create)", argv[0])
 	}
 }
 
@@ -80,7 +82,7 @@ var _ taskListStore = (*storage.Storage)(nil)
 func schedTaskList(argv []string) int {
 	fs := flag.NewFlagSet("sched task list", flag.ContinueOnError)
 	dbURL := fs.String("database-url", "", "sched Postgres DSN")
-	status := fs.String("status", "", "filter by status: scheduled|pending|leased|running|analyzing|success|error|cancelled|dead_lettered|paused_awaiting_input|paused_awaiting_wake")
+	status := fs.String("status", "", "filter by status: scheduled|pending|leased|running|analyzing (legacy)|success|error|cancelled|dead_lettered|paused_awaiting_input|paused_awaiting_wake")
 	limit := fs.Int("limit", 50, "maximum tasks to print (most recent first)")
 	asJSON := fs.Bool("json", false, "emit the tasks as a JSON array")
 	if err := fs.Parse(argv); err != nil {
@@ -364,6 +366,69 @@ func schedTaskSetDescription(argv []string) int {
 		fmt.Fprintf(os.Stderr, "cleared description on task %s\n", updated.ID)
 	} else {
 		fmt.Fprintf(os.Stderr, "set description on task %s (%d chars)\n", updated.ID, len([]rune(updated.Description)))
+	}
+	return 0
+}
+
+// schedTaskSetLimits sets (or clears) a task's per-task sandbox cgroup
+// override (#205). At least one of --memory-mb/--cpus/--pids is required,
+// unless --clear reverts to the global FLEET_SANDBOX_* defaults. The task
+// must still be editable (pending/scheduled). Floors match the HTTP path:
+// memory_mb >= 128, pids >= 16, cpus > 0.
+func schedTaskSetLimits(argv []string) int {
+	fs := flag.NewFlagSet("sched task set-limits", flag.ContinueOnError)
+	dbURL := fs.String("database-url", "", "sched Postgres DSN")
+	memoryMB := fs.Int("memory-mb", 0, "container memory ceiling in MiB (0 = leave / global)")
+	cpus := fs.Float64("cpus", 0, "fractional CPU ceiling (0 = leave / global)")
+	pids := fs.Int("pids", 0, "max process IDs (0 = leave / global)")
+	doClear := fs.Bool("clear", false, "clear the override (revert to global FLEET_SANDBOX_* defaults)")
+	idStr, flagArgs := splitPositional(argv)
+	if err := fs.Parse(flagArgs); err != nil {
+		return 1
+	}
+	taskID, err := uuid.Parse(strings.TrimSpace(idStr))
+	if err != nil {
+		return errf(1, "usage: fleet sched task set-limits <task_id> --memory-mb N --cpus N --pids N | --clear")
+	}
+	if *doClear && (*memoryMB != 0 || *cpus != 0 || *pids != 0) {
+		return errf(1, "--clear cannot be combined with --memory-mb/--cpus/--pids")
+	}
+	if !*doClear && *memoryMB == 0 && *cpus == 0 && *pids == 0 {
+		return errf(1, "set at least one of --memory-mb/--cpus/--pids, or pass --clear")
+	}
+	if *memoryMB != 0 && *memoryMB < 128 {
+		return errf(1, "--memory-mb must be >= 128 (or 0 to leave unset)")
+	}
+	if *cpus < 0 {
+		return errf(1, "--cpus must be > 0 (or 0 to leave unset)")
+	}
+	if *pids != 0 && *pids < 16 {
+		return errf(1, "--pids must be >= 16 (or 0 to leave unset)")
+	}
+
+	var limits *models.TaskSandboxLimits
+	if !*doClear {
+		limits = &models.TaskSandboxLimits{MemoryMB: *memoryMB, CPUs: *cpus, Pids: *pids}
+	}
+
+	st, code := openSchedStorage(*dbURL)
+	if st == nil {
+		return code
+	}
+	defer st.Close()
+
+	updated, err := st.UpdateTaskSandboxLimits(context.Background(), taskID, limits)
+	if err != nil {
+		if errors.Is(err, storage.ErrTaskNotEditable) {
+			return errf(4, "task %s is no longer editable (must be pending or scheduled)", taskID)
+		}
+		return errf(5, "set limits: %v", err)
+	}
+	if updated.SandboxLimits.IsZero() {
+		fmt.Fprintf(os.Stderr, "cleared sandbox_limits on task %s (global defaults)\n", updated.ID)
+	} else {
+		fmt.Fprintf(os.Stderr, "set sandbox_limits on task %s: memory_mb=%d cpus=%.2f pids=%d\n",
+			updated.ID, updated.SandboxLimits.MemoryMB, updated.SandboxLimits.CPUs, updated.SandboxLimits.Pids)
 	}
 	return 0
 }

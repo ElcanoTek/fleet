@@ -1,7 +1,7 @@
 // The session-revocation verdict, shared by both backend proxies.
 //
 // One elcano_session cookie reaches two backends — chat-server (chatServer.ts)
-// and the orchestrator (mocServer.ts) — so both forward the cookie's session
+// and the orchestrator (orchestratorServer.ts) — so both forward the cookie's session
 // epoch and both can answer "that session is no longer valid". The wire
 // contract and the browser-side consequence live here once, because a funnel
 // that recognised the verdict but left the cookie in place would trap the user.

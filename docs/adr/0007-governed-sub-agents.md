@@ -1,7 +1,8 @@
 # ADR-0007: Governed sub-agents spawn only through the one run loop
 
 - **Status:** Accepted
-- **Date:** 2026-06-28 (amended 2026-06-30 for #264)
+- **Date:** 2026-06-28 (amended 2026-06-30 for #264, 2026-08-14 for #1043:
+  default-on, parent decides, typed children, interactive in scope)
 - **Deciders:** fleet maintainers
 
 ## Context
@@ -27,12 +28,16 @@ constraint, and the additional invariants their power demands.
 
 A sub-agent is **another `agentcore.Run`, governed exactly like its parent.** The
 `spawn_subagent` native tool (`internal/agent/subagent.go`) only adapts I/O around
-a fresh `agent.Agent.Execute` (→ `agentcore.Run`). It is **OFF by default** and
-turned on **per task** via `allow_delegation: true` OR **fleet-wide** via
-`FLEET_SUBAGENTS_ENABLED` (the two compose as OR — the env flag is the operator
-override, the task flag the granular opt-in; #264). When both are off the tool is
-not even registered, and it is **only ever** registered in scheduled mode, never in
-interactive chat. When on, every spawn obeys these non-negotiable properties:
+a fresh `agent.Agent.Execute` (→ `agentcore.Run`). Since #1043 it is **ON by
+default**: the fleet-wide flag (`FLEET_SUBAGENTS_ENABLED` / Admin → Features) and
+the per-task `allow_delegation` column both default **true** and compose as
+**AND** — the operator only ever opts **out**, per task or fleet-wide (two
+independent kill switches). Interactive chat registers the same tool whenever the
+fleet flag is on (chat has no per-conversation column). When the composed gate is
+off the tool is not even registered — structural, not a soft check. Registering
+the tool is the feature: the **parent agent decides** whether to spawn 0, 1, or N
+children, and a sequential run that never delegates is a successful use of it.
+When registered, every spawn obeys these non-negotiable properties:
 
 1. **Governance is one core.** The child runs through `(*Agent).Execute`, the same
    governed entrypoint the conformance test pins. No second loop, no second
@@ -92,9 +97,13 @@ interactive chat. When on, every spawn obeys these non-negotiable properties:
   `childSelection` (intersection, never union). Tests:
   `TestSpawn_AllowServersOnlyNarrows`,
   `TestSpawn_ChildRunsThroughGovernedCoreWithSlicedBudgetAndDepth`.
-- **Off by default:** `config.SubagentsEnabled` defaults false and no task opts in;
-  the tool is registered only when enabled (`Execute`). Test:
-  `TestExecute_RegistersSpawnToolOnlyWhenEnabled`.
+- **Structural registration (default-on since #1043):** `config.SubagentsEnabled`
+  and `tasks.allow_delegation` both default true; the drivers compose them as AND
+  and the tool is registered only when the composed gate is on (`Execute` /
+  `RunInteractiveTurn`). Either kill switch removes the tool from the roster
+  entirely. Tests: `TestExecute_RegistersSpawnToolOnlyWhenEnabled`,
+  `TestRunInteractiveTurn_SpawnToolRegistration`,
+  `TestSubagents_KillSwitchesHideTool` (fake-LLM e2e).
 
 ## #264 amendment — agent delegation completed
 
@@ -140,6 +149,64 @@ all preserving the properties above:
   with the child id + spend. Tests: `TestBuildChild_ParentTaskIDLinkage`,
   `TestRecordSubagentSpawn_AppendsToParentLog`.
 
+## #1043 amendment — default-on, parent decides, typed children
+
+Off-by-default and "never interactive" were the right ship-the-engine posture and
+the wrong finished-product posture: operators had to discover a hidden flag before
+a job could fan out, while the agent — which sees the work and already holds every
+spawn argument — was the party positioned to decide. Industry harnesses (Claude
+Code, Codex, Grok Build, OpenCode, Goose) register the delegation tool by default
+and let the parent decide; #1043 aligns fleet. The behavioural deltas, none of
+which move a wall:
+
+- **Enablement inverts from `env || task` (both default false) to `env && task`
+  (both default true).** The operator only ever opts *out*: per task via
+  `allow_delegation: false`, or fleet-wide via `FLEET_SUBAGENTS_ENABLED=false` /
+  Admin → Features. Existing task rows are **backfilled to true** (migration 061;
+  pre-#1043 false was just the default nobody chose, not an explicit opt-out —
+  recorded as a behavior change in the CHANGELOG). `TaskCreate.allow_delegation`
+  becomes tri-state (`*bool`): an omitted field — old exports, bundle templates,
+  API clients — means the default (true), an explicit false survives every
+  round-trip.
+- **Do not force fan-out.** Default-on means the *tool is registered*; the parent
+  decides. The prompt section + tool description carry the policy (spawn for
+  independent parallel work; don't for sequential steps; prefer `explore`; omit
+  budget args unless slicing smaller). A sequential parent that never spawns is
+  pinned as a passing e2e (`TestSubagents_SequentialParentNeverSpawns`).
+- **Interactive chat is in scope.** The old "never interactive" rule guarded
+  against unattended cost — and default-on turns unattended delegation on anyway,
+  while chat has a human on the loop. `RunInteractiveTurn` registers the same
+  tool (same walls) bound to the turn's `InteractivePolicy` for budget slicing
+  and charge-back, so the chat cost chip includes child spend. A chat child runs
+  the scheduled (run-to-completion) loop through the one governed core.
+- **Typed children.** `role=explore` (the default — and the fallback for any
+  invalid role) is a read-only research child: a single unit-tested denylist
+  (`exploreDeniedNativeTools`) strips write-capable native tools from its FINAL
+  composed roster, and a best-effort NAME denylist (`exploreMCPToolAllowlist`)
+  narrows its MCP Gate-2 allowlist — mutation verbs as whole snake_case
+  segments, every catalog server covered explicitly so a mid-run server load
+  cannot bypass it, only ever narrowing what the parent could call. Full MCP
+  write-tool inference stays out of scope; the child's prompt carries the
+  read-only instruction for mutators the names don't reveal. `role=worker`
+  keeps the full scheduled roster. This is what makes default-on safe: the
+  common research case spawns a child that structurally cannot write. One tool,
+  role as an argument — never a second tool name.
+- **Child write isolation.** Every child (either role) gets a unique
+  `<workspace>/subagents/<child-session-id>/` directory forced as its bash/file
+  default cwd — still inside the parent's sandbox and bind-mounted workspace, so
+  privilege is unchanged; only default write paths de-conflict. The JSON result
+  gains `{role, child_session_id, workdir}` and the parent-log `subagent_spawned`
+  linkage entry gains role + workdir, which the task page / chat render as child
+  cards (id, role, status, spend) with a Transcript disclosure served by the
+  child-transcript endpoints (`/logs/{task}/subagents/{child}` and
+  `/conversations/{id}/subagents/{child}` — transcript gate / conversation
+  ownership PLUS a linkage check, strict id validation before any path
+  derivation).
+
+Walls that did **not** move: one governed core, monotonic privilege, the 10%
+remaining-budget fraction with refuse-over-cap and atomic reserve+settle, depth 1,
+fan-out 5, credentials host-side.
+
 This ADR **extends** ADR-0001 rather than superseding it: it does not weaken the
 one-governed-loop invariant, it adds the privilege/budget/recursion constraints
 that make a *governed* child safe.
@@ -153,8 +220,10 @@ that make a *governed* child safe.
   budget.
 - A child cannot escalate: the worst a model can do via `spawn_subagent` is run a
   weaker, smaller-budget copy of itself, bounded by depth and fan-out.
-- The feature is invisible until an operator opts in, so the default deployment is
-  byte-for-byte unchanged.
+- Since #1043 the tool is present by default (a deliberate behavior change,
+  CHANGELOG'd); a default deployment's runs may delegate, bounded by the same
+  parent ceiling. The operator's control is the two kill switches, not discovery
+  of an enable flag.
 - Cost: per-child accounting combines an **atomic up-front reservation** of each
   child's granted ceiling with **charge-back** of the child's actual spend on
   return. The grant is conservative (a child rarely spends its whole slice), so

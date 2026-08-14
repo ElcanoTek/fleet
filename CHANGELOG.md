@@ -17,7 +17,71 @@ prior versions are listed because none have shipped.
 
 ## [Unreleased]
 
+### Removed
+
+- **Operations Center username/password form.** Cookie/OIDC is the operator
+  path. `fleet admin add` mints an unusable random password, so that form
+  could not admit a real operator. Backend `POST /auth/login` and the bearer
+  proxy stay for API clients. A chat-signed-in visitor who is not provisioned
+  here sees a dead-end "ask an admin" card.
+- **Budget `scope=project` is rejected on create.** A project budget was
+  accepted and listed but never enforced (tasks have no project dimension).
+  `POST /admin/budgets` now returns 400 for `scope=project`. Leftover rows
+  still list. `user` and `key` scopes are unchanged.
+- **Dead `GET /concurrency` Playwright stubs.** The moc-heritage concurrency
+  card was already gone; the mocked e2e still answered an endpoint fleet never
+  served.
+
+### Added
+
+- **Budget create/delete in the Usage panel** and `fleet sched budget
+  list|create|delete`. The panel was read-only; CRUD is no longer API-only.
+- **Per-task sandbox limits on the task form** (Advanced: memory / CPUs /
+  PIDs) and `fleet sched task set-limits`. Create and edit persist
+  `sandbox_limits`; `--clear` reverts to the global defaults.
+- **Fire event + sleeping-task list.** A `paused_awaiting_wake` task waiting
+  on a named event can be woken from the log viewer. A thin Sleeping list on
+  the tasks tab surfaces parked work. Status filters include both pause
+  states.
+
 ### Changed
+
+- **`analyzing` is no longer a worker-reportable status.** Fleet never wrote
+  it (error analysis is a post-terminal annotation). Leftover imported rows
+  still decode, recover, and filter; workers can no longer report it. The
+  Operations Center status filter now lists `leased` (a real in-flight status)
+  instead of the leftover moc `assigned` value, and the live-log viewer
+  attaches to `leased`/`running`.
+- **Renamed `web/src/app/lib/mocServer.ts` → `orchestratorServer.ts`.** Same
+  helpers; the filename was leftover moc vocabulary.
+
+- **Sub-agents are now ON by default, and the parent agent decides whether to
+  use them (#1043, amending ADR-0007).** The enablement compose inverts from
+  `FLEET_SUBAGENTS_ENABLED || allow_delegation` (both default false) to
+  `FLEET_SUBAGENTS_ENABLED && allow_delegation` (both default **true**), and
+  migration 061 **backfills existing task rows to `allow_delegation = true`** —
+  existing scheduled tasks start seeing the `spawn_subagent` tool and may
+  delegate, bounded by the unchanged walls (depth 1, fan-out 5, ≤10% of the
+  parent's remaining budget per child, refuse over-cap, spend charged back to
+  the parent ceiling). Fan-out is never forced: registering the tool is the
+  feature, and a run that never spawns is a successful use of it. Opt out per
+  task with the new "Allow sub-agent delegation" toggle (Task form → Advanced,
+  on by default) / `allow_delegation: false`, or fleet-wide via Admin →
+  Features `subagents_enabled` / `FLEET_SUBAGENTS_ENABLED=false`. New in the
+  same change: **interactive chat** registers the tool when the fleet flag is
+  on (child spend shows in the chat cost chip); **typed children** —
+  `role=explore` (default) is a read-only research child with write-capable
+  native tools stripped, `role=worker` keeps the full roster; **per-child
+  isolated workdirs** (`<workspace>/subagents/<child-session-id>/`, returned as
+  `workdir` in the tool's JSON result); **child cards** on the task page
+  (stored + live) and in the chat transcript (id, role, status, spend) instead
+  of raw JSON, each with a **Transcript** disclosure backed by new
+  child-transcript endpoints (`GET /logs/{task}/subagents/{child}` on the
+  orchestrator, `GET /conversations/{id}/subagents/{child}` on chat — existing
+  transcript/ownership gates plus a linkage check and strict id validation);
+  and a **best-effort MCP write-tool name denylist** for explore children on
+  top of the native strip. Design note:
+  [docs/SUBAGENTS.md](docs/SUBAGENTS.md).
 
 - The strong/escalation tier is now `x-ai/grok-4.6` (was `openai/gpt-5.6-sol`).
   This is what `suggest_advanced_model`, the spreadsheet nudge, and the task

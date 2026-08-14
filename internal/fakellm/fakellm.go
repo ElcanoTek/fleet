@@ -126,6 +126,10 @@ type Server struct {
 
 	// hits counts requests per scenario for assertions/debugging.
 	hits map[string]int
+	// toolsSeen records, per scenario, the union of tool names advertised across
+	// that scenario's requests — so a spec can assert a tool WAS or WAS NOT in
+	// the roster the runtime offered (e.g. spawn_subagent registration, #1043).
+	toolsSeen map[string]map[string]bool
 }
 
 // New returns a Server with a sensible DefaultScenario (single canned reply)
@@ -147,7 +151,8 @@ func New() *Server {
 			"google/gemini-3.5-flash",
 			"openai/gpt-5.2",
 		},
-		hits: map[string]int{},
+		hits:      map[string]int{},
+		toolsSeen: map[string]map[string]bool{},
 	}
 }
 
@@ -175,6 +180,14 @@ func (s *Server) Hits(name string) int {
 	return s.hits[name]
 }
 
+// SawTool reports whether any request that selected the given scenario
+// advertised a tool with the given name (union across the scenario's requests).
+func (s *Server) SawTool(scenario, tool string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.toolsSeen[scenario][tool]
+}
+
 // Handler returns the http.Handler. Mount it on any server/listener.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
@@ -193,6 +206,14 @@ type chatRequest struct {
 	Model    string        `json:"model"`
 	Messages []chatMessage `json:"messages"`
 	Stream   bool          `json:"stream"`
+	// Tools carries only what SawTool needs: each entry's function name.
+	Tools []chatTool `json:"tools"`
+}
+
+type chatTool struct {
+	Function struct {
+		Name string `json:"name"`
+	} `json:"function"`
 }
 
 type chatMessage struct {
@@ -235,6 +256,18 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	name, sc := s.selectScenario(req.Messages)
 	s.mu.Lock()
 	s.hits[name]++
+	if len(req.Tools) > 0 {
+		seen := s.toolsSeen[name]
+		if seen == nil {
+			seen = map[string]bool{}
+			s.toolsSeen[name] = seen
+		}
+		for _, tl := range req.Tools {
+			if tl.Function.Name != "" {
+				seen[tl.Function.Name] = true
+			}
+		}
+	}
 	s.mu.Unlock()
 
 	turn := assistantTurns(req.Messages)

@@ -563,6 +563,10 @@ const (
 	TaskStatusScheduled TaskStatus = "scheduled"
 	TaskStatusLeased    TaskStatus = "leased"
 	TaskStatusRunning   TaskStatus = "running"
+	// TaskStatusAnalyzing is a leftover moc in-flight status. Fleet never
+	// writes it (error analysis is a post-terminal annotation, not a
+	// transition). The constant stays so leftover imported rows still
+	// decode, recover, and filter. Workers cannot report it.
 	TaskStatusAnalyzing TaskStatus = "analyzing"
 	TaskStatusSuccess   TaskStatus = "success"
 	TaskStatusError     TaskStatus = "error"
@@ -593,9 +597,10 @@ const (
 // report for its own task. The orchestrator owns the rest of the lifecycle.
 // TaskStatusDeadLettered is intentionally excluded: only the runner's terminal
 // switch quarantines a task (#253), never a self-reporting worker.
+// TaskStatusAnalyzing is also excluded: fleet never writes it.
 func (s TaskStatus) IsValidReportedStatus() bool {
 	switch s {
-	case TaskStatusLeased, TaskStatusRunning, TaskStatusAnalyzing, TaskStatusSuccess, TaskStatusError:
+	case TaskStatusLeased, TaskStatusRunning, TaskStatusSuccess, TaskStatusError:
 		return true
 	default:
 		return false
@@ -960,13 +965,16 @@ type TaskCreate struct {
 	// never auto-escalate through a connector. (The #177 webhook path predates
 	// this gate and always inherits — unchanged.)
 	AllowEventTriggers bool `json:"allow_event_triggers,omitempty"`
-	// AllowDelegation opts THIS task into agent delegation (#264): the spawn_subagent
-	// native tool is registered so the run can fan out scoped subtasks to governed
-	// child runs (sliced budget, depth/fan-out caps, parent_task_id linkage). The
-	// default (false) registers nothing — byte-for-byte unchanged. It composes with
-	// the fleet-wide FLEET_SUBAGENTS_ENABLED operator flag as OR (either enables it),
-	// and is honoured ONLY in scheduled mode (delegation never enters interactive chat).
-	AllowDelegation bool `json:"allow_delegation,omitempty"`
+	// AllowDelegation gates agent delegation for THIS task (#264, #1043): the
+	// spawn_subagent native tool is registered so the run can fan out scoped
+	// subtasks to governed child runs (sliced budget, depth/fan-out caps,
+	// parent_task_id linkage). Tri-state: nil (field omitted) means the DEFAULT,
+	// which since #1043 is TRUE — delegation is opt-OUT, the parent agent decides
+	// whether to actually spawn. Explicit false is the per-task kill switch. It
+	// composes with the fleet-wide FLEET_SUBAGENTS_ENABLED operator flag as AND
+	// (both must be on for the tool to be registered). Resolve via
+	// DelegationAllowed(), never by reading the pointer directly.
+	AllowDelegation *bool `json:"allow_delegation,omitempty"`
 	// Persona is the optional per-task persona override (#221): a personas/<name>.yaml
 	// (named without extension, e.g. "security-auditor") whose domain-expertise
 	// block is injected into the system prompt. Empty = the runner's global
@@ -1134,9 +1142,11 @@ type Task struct {
 	// task's write-capable connectors. Default false ⇒ native tools only; see
 	// TaskCreate.AllowEventTriggers.
 	AllowEventTriggers bool `json:"allow_event_triggers,omitempty"`
-	// AllowDelegation opts this task into agent delegation (#264). Default false
-	// registers no spawn_subagent tool; see TaskCreate.AllowDelegation.
-	AllowDelegation bool `json:"allow_delegation,omitempty"`
+	// AllowDelegation gates agent delegation for this task (#264, #1043). Default
+	// TRUE since #1043 (delegation is opt-out); see TaskCreate.AllowDelegation.
+	// Serialized WITHOUT omitempty so an explicit false survives the round trip
+	// to clients now that false is the non-default value.
+	AllowDelegation bool `json:"allow_delegation"`
 	// Persona is the per-task persona override (#221). See TaskCreate.Persona.
 	Persona string `json:"persona,omitempty"`
 	// Description is optional operator documentation (#281). See TaskCreate.Description.
@@ -1309,6 +1319,19 @@ func DeriveDispatchState(triggerType TriggerType, runIf *RunIf, scheduledFor *ti
 }
 
 // NewTask creates a new Task with defaults.
+// DelegationAllowed resolves the tri-state AllowDelegation: nil (field omitted
+// by the client / an older export / a bundle template) means the DEFAULT, which
+// since #1043 is TRUE — sub-agent delegation is opt-OUT. An explicit pointer
+// value wins either way. Every consumer of TaskCreate.AllowDelegation must go
+// through this so the default lives in exactly one place.
+func (tc TaskCreate) DelegationAllowed() bool {
+	return tc.AllowDelegation == nil || *tc.AllowDelegation
+}
+
+// BoolPtr returns a pointer to v — for populating tri-state *bool fields
+// (e.g. TaskCreate.AllowDelegation) from a concrete task's stored value.
+func BoolPtr(v bool) *bool { return &v }
+
 func NewTask(tc TaskCreate) *Task {
 	triggerType := tc.TriggerType
 	if triggerType == "" {
@@ -1372,7 +1395,7 @@ func NewTask(tc TaskCreate) *Task {
 		AllowNetwork:               tc.AllowNetwork,
 		CarryContext:               tc.CarryContext,
 		AllowEventTriggers:         tc.AllowEventTriggers,
-		AllowDelegation:            tc.AllowDelegation,
+		AllowDelegation:            tc.DelegationAllowed(),
 		Persona:                    tc.Persona,
 		Description:                tc.Description,
 		Status:                     status,
@@ -1503,7 +1526,7 @@ func TaskToCreate(t *Task) TaskCreate {
 		// the very feature after occurrence #1 (issue #565).
 		CarryContext:       t.CarryContext,
 		AllowEventTriggers: t.AllowEventTriggers,
-		AllowDelegation:    t.AllowDelegation,
+		AllowDelegation:    BoolPtr(t.AllowDelegation),
 		// Persona (#221) is part of the recipe so a recurrence/clone runs under the
 		// same per-task persona override rather than falling back to the global
 		// default on occurrence #2+ (issue #565).
@@ -1558,39 +1581,43 @@ type TaskExportRecord struct {
 	// Title is the operator-facing display label (non-unique, carried onto every
 	// occurrence/copy). Exported so a task definition keeps its title when it is
 	// moved between deployments. It maps to TaskCreate.Title.
-	Title                      string              `json:"title,omitempty"                      yaml:"title,omitempty"`
-	Prompt                     string              `json:"prompt"                               yaml:"prompt"`
-	Model                      *string             `json:"model,omitempty"                      yaml:"model,omitempty"`
-	FallbackModel              *string             `json:"fallback_model,omitempty"             yaml:"fallback_model,omitempty"`
-	MaxIterations              *int                `json:"max_iterations,omitempty"             yaml:"max_iterations,omitempty"`
-	MCPSelection               MCPSelection        `json:"mcp_selection,omitempty"              yaml:"mcp_selection,omitempty"`
-	CredentialAllowlist        CredentialAllowlist `json:"credential_allowlist,omitempty" yaml:"credential_allowlist,omitempty"`
-	LoopConfig                 *LoopConfig         `json:"loop_config,omitempty"                yaml:"loop_config,omitempty"`
-	WorktreeConfig             *WorktreeConfig     `json:"worktree_config,omitempty"         yaml:"worktree_config,omitempty"`
-	SandboxLimits              *TaskSandboxLimits  `json:"sandbox_limits,omitempty"          yaml:"sandbox_limits,omitempty"`
-	OutputSchema               json.RawMessage     `json:"output_schema,omitempty"           yaml:"output_schema,omitempty"`
-	Priority                   int                 `json:"priority,omitempty"                   yaml:"priority,omitempty"`
-	InstructionSelfImprove     bool                `json:"instruction_self_improve,omitempty"  yaml:"instruction_self_improve,omitempty"`
-	AllowNetwork               bool                `json:"allow_network,omitempty"              yaml:"allow_network,omitempty"`
-	CarryContext               bool                `json:"carry_context,omitempty"              yaml:"carry_context,omitempty"`
-	AllowEventTriggers         bool                `json:"allow_event_triggers,omitempty"       yaml:"allow_event_triggers,omitempty"`
-	AllowDelegation            bool                `json:"allow_delegation,omitempty"           yaml:"allow_delegation,omitempty"`
-	ThinkingBudgetTokens       *int                `json:"thinking_budget_tokens,omitempty"     yaml:"thinking_budget_tokens,omitempty"`
-	Persona                    string              `json:"persona,omitempty"                    yaml:"persona,omitempty"`
-	Description                string              `json:"description,omitempty"                yaml:"description,omitempty"`
-	ScheduledFor               *time.Time          `json:"scheduled_for,omitempty"              yaml:"scheduled_for,omitempty"`
-	Recurrence                 string              `json:"recurrence,omitempty"                 yaml:"recurrence,omitempty"`
-	RecurrenceUntil            *time.Time          `json:"recurrence_until,omitempty"           yaml:"recurrence_until,omitempty"`
-	RecurrenceRemaining        *int                `json:"recurrence_remaining,omitempty"       yaml:"recurrence_remaining,omitempty"`
-	Timezone                   string              `json:"timezone,omitempty"                   yaml:"timezone,omitempty"`
-	Files                      []string            `json:"files,omitempty"                      yaml:"files,omitempty"`
-	FileNames                  []string            `json:"file_names,omitempty"                 yaml:"file_names,omitempty"`
-	Tags                       []string            `json:"tags,omitempty"                       yaml:"tags,omitempty"`
-	MaxRetries                 *int                `json:"max_retries,omitempty"                yaml:"max_retries,omitempty"`
-	RetryPolicy                *RetryPolicy        `json:"retry_policy,omitempty"               yaml:"retry_policy,omitempty"`
-	TriggerType                TriggerType         `json:"trigger_type,omitempty"               yaml:"trigger_type,omitempty"`
-	AllowTaskCreation          bool                `json:"allow_task_creation,omitempty"        yaml:"allow_task_creation,omitempty"`
-	AllowRecurringTaskCreation bool                `json:"allow_recurring_task_creation,omitempty" yaml:"allow_recurring_task_creation,omitempty"`
+	Title                  string              `json:"title,omitempty"                      yaml:"title,omitempty"`
+	Prompt                 string              `json:"prompt"                               yaml:"prompt"`
+	Model                  *string             `json:"model,omitempty"                      yaml:"model,omitempty"`
+	FallbackModel          *string             `json:"fallback_model,omitempty"             yaml:"fallback_model,omitempty"`
+	MaxIterations          *int                `json:"max_iterations,omitempty"             yaml:"max_iterations,omitempty"`
+	MCPSelection           MCPSelection        `json:"mcp_selection,omitempty"              yaml:"mcp_selection,omitempty"`
+	CredentialAllowlist    CredentialAllowlist `json:"credential_allowlist,omitempty" yaml:"credential_allowlist,omitempty"`
+	LoopConfig             *LoopConfig         `json:"loop_config,omitempty"                yaml:"loop_config,omitempty"`
+	WorktreeConfig         *WorktreeConfig     `json:"worktree_config,omitempty"         yaml:"worktree_config,omitempty"`
+	SandboxLimits          *TaskSandboxLimits  `json:"sandbox_limits,omitempty"          yaml:"sandbox_limits,omitempty"`
+	OutputSchema           json.RawMessage     `json:"output_schema,omitempty"           yaml:"output_schema,omitempty"`
+	Priority               int                 `json:"priority,omitempty"                   yaml:"priority,omitempty"`
+	InstructionSelfImprove bool                `json:"instruction_self_improve,omitempty"  yaml:"instruction_self_improve,omitempty"`
+	AllowNetwork           bool                `json:"allow_network,omitempty"              yaml:"allow_network,omitempty"`
+	CarryContext           bool                `json:"carry_context,omitempty"              yaml:"carry_context,omitempty"`
+	AllowEventTriggers     bool                `json:"allow_event_triggers,omitempty"       yaml:"allow_event_triggers,omitempty"`
+	// AllowDelegation mirrors TaskCreate.AllowDelegation (tri-state, #1043): a
+	// pointer so exports written by this version always carry the explicit value
+	// (TaskToExportRecord sets it) while an older export that omits the key
+	// imports as nil → the default (true) rather than silently opting out.
+	AllowDelegation            *bool        `json:"allow_delegation,omitempty"           yaml:"allow_delegation,omitempty"`
+	ThinkingBudgetTokens       *int         `json:"thinking_budget_tokens,omitempty"     yaml:"thinking_budget_tokens,omitempty"`
+	Persona                    string       `json:"persona,omitempty"                    yaml:"persona,omitempty"`
+	Description                string       `json:"description,omitempty"                yaml:"description,omitempty"`
+	ScheduledFor               *time.Time   `json:"scheduled_for,omitempty"              yaml:"scheduled_for,omitempty"`
+	Recurrence                 string       `json:"recurrence,omitempty"                 yaml:"recurrence,omitempty"`
+	RecurrenceUntil            *time.Time   `json:"recurrence_until,omitempty"           yaml:"recurrence_until,omitempty"`
+	RecurrenceRemaining        *int         `json:"recurrence_remaining,omitempty"       yaml:"recurrence_remaining,omitempty"`
+	Timezone                   string       `json:"timezone,omitempty"                   yaml:"timezone,omitempty"`
+	Files                      []string     `json:"files,omitempty"                      yaml:"files,omitempty"`
+	FileNames                  []string     `json:"file_names,omitempty"                 yaml:"file_names,omitempty"`
+	Tags                       []string     `json:"tags,omitempty"                       yaml:"tags,omitempty"`
+	MaxRetries                 *int         `json:"max_retries,omitempty"                yaml:"max_retries,omitempty"`
+	RetryPolicy                *RetryPolicy `json:"retry_policy,omitempty"               yaml:"retry_policy,omitempty"`
+	TriggerType                TriggerType  `json:"trigger_type,omitempty"               yaml:"trigger_type,omitempty"`
+	AllowTaskCreation          bool         `json:"allow_task_creation,omitempty"        yaml:"allow_task_creation,omitempty"`
+	AllowRecurringTaskCreation bool         `json:"allow_recurring_task_creation,omitempty" yaml:"allow_recurring_task_creation,omitempty"`
 	// RunIf is the pre-run host-side gate (#269), part of the portable
 	// definition: dropping it on export turned every gated task unconditional
 	// on the target box, silently. Because the gate executes on the host as
@@ -1764,7 +1791,7 @@ func TaskToExportRecord(t *Task) TaskExportRecord {
 		AllowNetwork:               t.AllowNetwork,
 		CarryContext:               t.CarryContext,
 		AllowEventTriggers:         t.AllowEventTriggers,
-		AllowDelegation:            t.AllowDelegation,
+		AllowDelegation:            BoolPtr(t.AllowDelegation),
 		ThinkingBudgetTokens:       t.ThinkingBudgetTokens,
 		Persona:                    t.Persona,
 		Description:                t.Description,
@@ -2264,10 +2291,10 @@ const (
 	// BudgetScopeKey bounds a scoped API key, keyed by the key id
 	// (tasks.created_by_key_id).
 	BudgetScopeKey = "key"
-	// BudgetScopeProject bounds a chat project, keyed by the project id.
-	// Honest scope: no task-create path carries a project today (tasks have no
-	// project dimension), so a project budget is recorded and reported but not
-	// yet enforced at create — see docs/USAGE-ANALYTICS.md.
+	// BudgetScopeProject is reserved for a future chat-project budget.
+	// It is NOT a legal create scope: tasks have no project dimension, so
+	// a project budget could only be recorded and never enforced. Leftover
+	// rows still list and report.
 	BudgetScopeProject = "project"
 )
 
@@ -2284,7 +2311,7 @@ const (
 
 // budgetScopes / budgetWindows are the closed validation sets for BudgetCreate.
 var (
-	budgetScopes  = map[string]bool{BudgetScopeUser: true, BudgetScopeKey: true, BudgetScopeProject: true}
+	budgetScopes  = map[string]bool{BudgetScopeUser: true, BudgetScopeKey: true}
 	budgetWindows = map[string]bool{BudgetWindowDay: true, BudgetWindowWeek: true, BudgetWindowMonth: true}
 )
 
@@ -2334,7 +2361,7 @@ const maxBudgetPrincipalIDLen = 320
 // alert threshold you can never reach before refusal is a misconfiguration).
 func (bc *BudgetCreate) Validate() error {
 	if !budgetScopes[bc.Scope] {
-		return fmt.Errorf("scope must be one of user|key|project (got %q)", bc.Scope)
+		return fmt.Errorf("scope must be one of user|key (got %q)", bc.Scope)
 	}
 	if !budgetWindows[bc.Window] {
 		return fmt.Errorf("window must be one of day|week|month (got %q)", bc.Window)
@@ -2389,8 +2416,8 @@ type BudgetStatus struct {
 // gate can look up every budget that applies. Empty fields = the create path
 // has no such principal (e.g. an admin-key submission carries neither a user
 // nor a scoped key and is therefore not budget-gated — the admin key is the
-// box operator, not a meterable principal). Project is reserved: no create
-// path resolves a project today (see BudgetScopeProject).
+// box operator, not a meterable principal). Project is unused: no create
+// path resolves one, and scope=project is rejected on write.
 type BudgetPrincipals struct {
 	User    string
 	Key     string

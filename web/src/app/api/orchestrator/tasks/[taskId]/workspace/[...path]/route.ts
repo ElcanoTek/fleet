@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { orchestratorFetch } from "@/app/lib/mocServer";
+import { orchestratorFetch } from "@/app/lib/orchestratorServer";
 import { resolveOrchestratorAuth } from "../../../../_lib/auth";
 
 export const runtime = "nodejs";

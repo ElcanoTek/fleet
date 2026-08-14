@@ -1989,6 +1989,71 @@ tr.clickable:hover td {
   background: var(--color-status-leased-bg);
   border-color: var(--color-status-leased-border);
 }
+.sleeping-tasks {
+  margin: 0 0 1.25rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.75rem;
+  background: color-mix(in srgb, var(--color-status-leased-bg) 55%, transparent);
+}
+.sleeping-tasks-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+.sleeping-tasks-head h3 {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+.sleeping-tasks-count {
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+}
+.sleeping-tasks-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.sleeping-task-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.1rem;
+  width: 100%;
+  text-align: left;
+  padding: 0.4rem 0.5rem;
+  border: 0;
+  border-radius: 0.5rem;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.sleeping-task-row:hover,
+.sleeping-task-row:focus-visible {
+  background: color-mix(in srgb, var(--color-text-primary) 6%, transparent);
+}
+.sleeping-task-title {
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+.sleeping-task-meta {
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+}
+.wake-fire {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.wake-fire input {
+  width: 10rem;
+  min-width: 0;
+}
 /* Logs column: colored pill when logs exist, muted ghost when not. */
 .logs-badge {
   display: inline-flex;
@@ -2197,6 +2262,21 @@ tr.sla-row-fail {
   font-weight: 600;
   color: var(--color-text-primary);
   margin: 1.25rem 0 0.5rem;
+}
+.budget-form {
+  margin-top: 1rem;
+  max-width: 40rem;
+}
+.budget-form-grid {
+  display: grid;
+  grid-template-columns: 8.5rem minmax(0, 1fr);
+  gap: 0.5rem 0.75rem;
+  align-items: center;
+  margin: 0.5rem 0 0.75rem;
+}
+.budget-form-grid input,
+.budget-form-grid select {
+  min-width: 0;
 }
 .usage-bars {
   display: flex;
@@ -2686,6 +2766,92 @@ tr.sla-row-fail {
   justify-content: space-between;
   gap: 0.75rem;
   padding: 0.6rem 0.75rem;
+}
+
+/* Sub-agent child cards (#1043) — one per spawned child, stored + live. */
+.subagent-card {
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-left: 3px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-2);
+  padding: 0.6rem 0.75rem;
+}
+.subagent-card--done {
+  border-left-color: var(--color-success-border);
+}
+.subagent-card--failed {
+  border-left-color: var(--color-danger-border);
+}
+.subagent-card--running {
+  border-left-color: var(--color-warning-border);
+}
+.subagent-card-head {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+.subagent-card-title {
+  color: var(--color-text-primary);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+.subagent-card-role {
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 999px;
+  padding: 0 0.5rem;
+  color: var(--color-text-muted);
+  font-size: 0.7rem;
+}
+.subagent-card-status {
+  margin-left: auto;
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+.subagent-card-status--done {
+  color: var(--color-success);
+}
+.subagent-card-status--failed {
+  color: var(--color-danger);
+}
+.subagent-card-status--running {
+  color: var(--color-warning);
+}
+.subagent-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin-top: 0.25rem;
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
+}
+.subagent-card-workdir {
+  min-width: 0;
+  overflow: hidden;
+  max-width: 100%;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.subagent-card-result {
+  margin-top: 0.35rem;
+  font-size: 0.78rem;
+}
+.subagent-card-transcript {
+  margin-top: 0.35rem;
+  font-size: 0.78rem;
+}
+.subagent-card-transcript > summary {
+  cursor: pointer;
+  color: var(--color-text-muted);
+}
+.subagent-card-transcript-note {
+  margin: 0.35rem 0 0;
+  color: var(--color-text-muted);
+  font-size: 0.75rem;
+}
+.subagent-card-transcript .log-session {
+  margin-top: 0.5rem;
 }
 .live-tool-heading code {
   min-width: 0;

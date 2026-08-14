@@ -674,30 +674,51 @@ ceilings, and round cap as everything else.
 
 ---
 
-## Governed sub-agents / agent delegation (#175, completed by #264)
+## Governed sub-agents / agent delegation (#175, #264, finished by #1043)
 
-An **optional, off-by-default** capability that adds a `spawn_subagent` native tool
-so a scheduled run can delegate a scoped subtask to a **child** run — the agent
-delegation issue #264 asks for, realized as this one tool rather than a second
-`delegate_task` entrypoint (a second tool would be the forked, weaker path
+An **on-by-default** capability (#1043, amending ADR-0007): the `spawn_subagent`
+native tool lets a governed run delegate scoped subtasks to **child** runs — the
+agent delegation issue #264 asks for, realized as this one tool rather than a
+second `delegate_task` entrypoint (a second tool would be the forked, weaker path
 [ADR-0001](adr/0001-one-governed-run-loop.md)/[ADR-0007](adr/0007-governed-sub-agents.md)
 forbid). The child is **not** a new or weaker loop — it is another `agentcore.Run`,
 governed exactly like the parent. The tool body (`internal/agent/subagent.go`) only
 adapts I/O around a fresh `agent.Agent.Execute`.
 
-**Two ways to turn it on (either suffices):**
+**Registering the tool is the feature; the parent agent decides** whether to
+spawn 0, 1, or N children — a sequential run that never delegates is a successful
+use of it. The operator only ever opts **out**, via two independent kill switches:
 
-- **Per task** — set `allow_delegation: true` on the scheduled task. This is the
-  granular opt-in (#264): the tool is registered for that task even when the
-  fleet-wide flag is off.
-- **Fleet-wide** — `FLEET_SUBAGENTS_ENABLED` is the operator override that enables
-  it for every scheduled task (the #175 behaviour, retained).
+- **Per task** — `allow_delegation: false` (the column defaults **true**; existing
+  rows were backfilled by migration 061). Tri-state on create: an omitted field
+  means the default, an explicit false sticks.
+- **Fleet-wide** — `FLEET_SUBAGENTS_ENABLED=false` or Admin → Features
+  `subagents_enabled` off.
 
-They compose as **OR** (`FLEET_SUBAGENTS_ENABLED || task.allow_delegation`). With
-both off (the default) the tool is **not even registered** and behaviour is
-identical to before. Delegation is honoured **only in scheduled mode** — it is
-never registered in interactive chat, regardless of config (parallel unattended
-sub-agents are too expensive/unpredictable for a live session).
+They compose as **AND** (`FLEET_SUBAGENTS_ENABLED && task.allow_delegation`).
+When the composed gate is off the tool is **not even registered** — structural,
+not a soft check. **Interactive chat registers the tool too** (#1043) whenever
+the fleet flag is on (chat has no per-conversation column): same walls, budget
+sliced from and charged back to the live turn's policy, so the chat cost chip
+includes child spend. When the tool is registered, a short delegation-policy
+section is appended to the system prompt (scheduled and interactive) teaching
+spawn / don't-spawn / prefer-explore / budget rules.
+
+**Typed children (#1043).** `role=explore` — the default, and the fallback for
+any invalid role — is a read-only research child: a single unit-tested denylist
+strips write-capable native tools (`write_file`, `edit_file`, `xlsx_workbook`,
+`generate_image`, `browser`, `create_task`, `publish_artifact`, `remember`,
+`propose_note`, `propose_skill`) from its final composed roster, a best-effort
+**name** denylist narrows its MCP Gate-2 allowlist (mutation verbs like
+create/update/delete/send/upload as whole snake_case segments; every catalog
+server covered explicitly; the parent's own allowlist only ever narrowed), and
+its system prompt carries the read-only instruction for mutators neither list
+recognizes — that layering is the honest posture.
+`role=worker` keeps the full scheduled roster. Either role, the roster drops the
+interactive-only staging tools. **Every child gets an isolated working
+directory** `<workspace>/subagents/<child-session-id>/` forced as its bash/file
+default cwd — still inside the parent's sandbox and bind-mounted workspace, so
+privilege is unchanged; parallel children just never share a default write path.
 
 Each spawn obeys these non-negotiable properties:
 
@@ -730,8 +751,9 @@ Each spawn obeys these non-negotiable properties:
 emits several `spawn_subagent` calls in one turn, fantasy dispatches them
 **concurrently** (bounded by its parallel-tool semaphore) and the parent collects
 all results before its next LLM call. The result is **machine-parseable JSON**
-`{result, cost_usd, tokens, success}` so the parent can branch deterministically
-even when several children return at once. The budget split combines an **atomic
+`{result, cost_usd, tokens, success, role, child_session_id, workdir}` so the
+parent can branch deterministically even when several children return at once —
+and knows where a worker child's outputs live. The budget split combines an **atomic
 up-front reservation** of each child's granted ceiling (held against the parent's
 remaining budget under the parent mutex for as long as the child runs) with
 **charge-back** of the child's actual spend on return — so even N **concurrent**
@@ -741,9 +763,16 @@ fan-out actually runs in parallel). An optional per-child `timeout_minutes` boun
 a child's wall-clock (spend is still charged back on timeout, `success=false`), and
 `max_iterations` caps its agent steps (clamped at the parent's). A spawned child's
 run is linked back to its owning task via `parent_task_id` (on the child's session
-log and a `subagent_spawned` entry in the parent's persisted log) for traceability.
-`FLEET_SUBAGENTS_MODEL` names a default child model slug; empty means the child
-inherits the parent's model.
+log and a `subagent_spawned` entry — child id, role, workdir, spend, success — in
+the parent's persisted log) for traceability; the task page and chat transcript
+render those as **child cards** (id, role, status, spend), never raw JSON, each
+with a Transcript disclosure that loads the child's own session log through
+`GET /logs/{task_id}/subagents/{child_session_id}` (orchestrator; task
+transcript gate + linkage check) or
+`GET /conversations/{id}/subagents/{child_session_id}` (chat; conversation
+ownership + history linkage). `FLEET_SUBAGENTS_MODEL` names a default child
+model slug; empty means the child inherits the parent's model. See
+[`docs/SUBAGENTS.md`](SUBAGENTS.md) for the #1043 design note.
 
 ---
 

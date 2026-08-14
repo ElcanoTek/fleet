@@ -1,10 +1,9 @@
-// Thin helpers for talking to the orchestrator HTTP server (was moc, the Go
-// fleet orchestrator listener on :8000).
+// Thin helpers for talking to the orchestrator HTTP server (listener on :8000).
 //
 // The browser never hits the orchestrator directly — every call goes through a
 // Next.js API route under /api/orchestrator/* that:
 //   1. Either verifies an elcano session cookie (getServerSession) OR forwards
-//      a moc username/password Bearer token from the incoming request.
+//      a username/password Bearer token from the incoming request.
 //   2. Proxies to the orchestrator, injecting the user's identity.
 //
 // The orchestrator listens on ORCHESTRATOR_SERVER_URL (default
@@ -12,7 +11,11 @@
 //   - elcano cookie  → forwarded as X-User-Email + the session-epoch claim
 //     (+ the shared server token, mirroring chatServer's X-Chat-Server-Token
 //     convention).
-//   - moc bearer     → forwarded verbatim as Authorization: Bearer <token>.
+//   - bearer         → forwarded verbatim as Authorization: Bearer <token>.
+//
+// The bearer path is leftover moc username/password login. The Operations
+// Center form that minted those tokens is gone; the proxy still forwards a
+// presented bearer so API clients and any stored token keep working.
 
 import { dropRevokedSession } from "@/app/lib/sessionRevocation";
 
@@ -44,7 +47,7 @@ export type OrchestratorAuth =
   | { kind: "bearer"; token: string };
 
 // Build the upstream auth headers from whichever credential the browser
-// presented. A moc bearer wins when present (it's the explicit moc login); the
+// presented. A bearer token wins when present (the explicit password login); the
 // elcano cookie is the fallback.
 export function orchestratorHeaders(auth: OrchestratorAuth, extra?: HeadersInit): Headers {
   const h = new Headers(extra ?? {});

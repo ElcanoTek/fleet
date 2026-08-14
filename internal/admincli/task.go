@@ -335,7 +335,7 @@ func replaceTaskDefinitionCLI(ctx context.Context, st definitionStore, rec model
 	existing.Priority = tc.Priority
 	existing.InstructionSelfImprove = tc.InstructionSelfImprove
 	existing.AllowNetwork = tc.AllowNetwork
-	existing.AllowDelegation = tc.AllowDelegation
+	existing.AllowDelegation = tc.DelegationAllowed()
 	existing.ThinkingBudgetTokens = tc.ThinkingBudgetTokens
 	existing.Persona = tc.Persona
 	existing.Description = tc.Description
