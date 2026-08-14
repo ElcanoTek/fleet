@@ -34,7 +34,7 @@ export const MAX_RESULTS = 50;
 // catalog fetch fails. Pinned release slugs (not floating `~` aliases).
 export const SEED_MODELS: PickerModel[] = [
   { id: "deepseek/deepseek-v4-flash-0731", name: "DeepSeek: DeepSeek V4 Flash 0731", recommended: true },
-  { id: "openai/gpt-5.6-sol", name: "OpenAI: GPT-5.6 Sol", recommended: true },
+  { id: "x-ai/grok-4.6", name: "SpaceXAI: Grok 4.6", recommended: true },
 ];
 
 type RawCatalogModel = {

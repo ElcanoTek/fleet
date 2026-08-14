@@ -1578,7 +1578,7 @@ func splitLockdownModels(raw string) []string {
 	if raw == "" {
 		return []string{
 			"deepseek/deepseek-v4-flash-0731", // recommended default
-			"openai/gpt-5.6-sol",              // strong tier
+			"x-ai/grok-4.6",                   // strong tier
 		}
 	}
 	parts := strings.Split(raw, ",")

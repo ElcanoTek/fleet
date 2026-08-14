@@ -30,8 +30,10 @@ const (
 	DefaultCoreModel = "deepseek/deepseek-v4-flash-0731"
 	// DefaultMaxModel is the strong/fallback tier — the model escalation
 	// (suggest_advanced_model) and task fallback resolve to. Pinned, never a
-	// `~latest` alias.
-	DefaultMaxModel = "openai/gpt-5.6-sol"
+	// `~latest` alias. No canonicalUpstream entry: OpenRouter serves this one
+	// from xAI alone, so there is no provider spread to pin away and the prompt
+	// cache is already single-upstream.
+	DefaultMaxModel = "x-ai/grok-4.6"
 	// AdvancedModelSlug is chat's name for the same strong tier. Kept in sync
 	// with DefaultMaxModel.
 	AdvancedModelSlug = DefaultMaxModel
@@ -70,6 +72,9 @@ var modelContextWindows = []struct {
 	{"openai/o1", 200_000},
 	{modelOpenAIGPT5, 400_000},
 	{"anthropic/claude", 200_000},
+	// The strong tier is 500K; the generic grok entry below is the old 131K
+	// line and still covers earlier builds. Longer prefix first, as above.
+	{"x-ai/grok-4.6", 500_000},
 	{"x-ai/grok", 131_072},
 }
 

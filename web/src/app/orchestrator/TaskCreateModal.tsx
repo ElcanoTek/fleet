@@ -54,7 +54,7 @@ const PROMPT_AUTOGROW_MAX_PX = 240;
 const PROMPT_EXPANDED_STORAGE_KEY = "fleet-task-prompt-expanded";
 
 const DEFAULT_PRIMARY_MODEL = "deepseek/deepseek-v4-flash-0731";
-const DEFAULT_FALLBACK_MODEL = "openai/gpt-5.6-sol";
+const DEFAULT_FALLBACK_MODEL = "x-ai/grok-4.6";
 
 const SCHEDULE_PRESETS = [
   { label: "Weekdays 9am", cron: "0 9 * * 1-5" },
