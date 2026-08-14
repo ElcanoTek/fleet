@@ -106,6 +106,20 @@ export function enrichFromCatalog(
   });
 }
 
+// compactModelLabel drops the vendor prefix from an OpenRouter display name
+// ("Z.AI: GLM 5.2" → "GLM 5.2") so the chat composer's model chip still names
+// the model on a phone-width toolbar, where the full label would truncate to
+// the vendor and an ellipsis. Only the prefix before the FIRST ": " is
+// dropped — anything after it (including further colons) is the model name.
+// Labels with no vendor prefix, or whose remainder is empty/whitespace, come
+// back unchanged: a shortened label is only worth it when something is left.
+export function compactModelLabel(label: string): string {
+  const separator = label.indexOf(": ");
+  if (separator === -1) return label;
+  const rest = label.slice(separator + 2).trim();
+  return rest === "" ? label : rest;
+}
+
 export function scoreMatch(model: PickerModel, query: string): number {
   const id = model.id.toLowerCase();
   const name = model.name.toLowerCase();

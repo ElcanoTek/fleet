@@ -64,6 +64,16 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **The chat composer toolbar now fits on one row on a phone.** The model chip
+  carried the full vendor-prefixed catalog name (`Z.AI: GLM 5.2`) plus the four
+  cost glyphs, and the toolbar row wrapped — the tools button and the context
+  ring dropped onto a second line under the chip. The row no longer wraps: the
+  icon buttons keep their fixed size and the chip is the single elastic item,
+  so it truncates with an ellipsis instead of pushing anything down. Below the
+  `sm` breakpoint the chip also drops the vendor prefix (`GLM 5.2` — the full
+  name stays the button's accessible name) and hides the cost glyphs, which are
+  still shown on every row of the model picker. Desktop and tablet are
+  unchanged: full name, capped at 11rem with an ellipsis, cost tier visible.
 - **`fleet update` no longer fails on a box whose distro Go lags `go.mod`.**
   The Makefile now exports `GOTOOLCHAIN=auto`, so every build path fetches the
   pinned toolchain instead of demanding it be pre-installed. `go.mod` pins an
