@@ -176,6 +176,6 @@ export const config = {
   // Safari probes apple-touch-icon*.png unauthenticated — gating them served
   // a 307→/login as the tab/touch icon on every white-labeled deployment.
   matcher: [
-    "/((?!_next/static|_next/image|(?:logos|icons|backgrounds|app-icons)/.*\\.(?:svg|png|jpg|jpeg|gif|webp)$|(?:share|file|globe|next|vercel|window|icon|apple-icon)\\.(?:svg|png)$|apple-touch-icon[^/]*\\.png$|favicon\\.ico$|sw\\.js$|scripts/theme\\.js$).*)",
+    "/((?!_next/static|_next/image|(?:logos|icons|backgrounds|app-icons)/.*\\.(?:svg|png|jpg|jpeg|gif|webp)$|(?:share|file|globe|next|vercel|window|icon|apple-icon)\\.(?:svg|png)$|apple-touch-icon[^/]*\\.png$|favicon\\.ico$|sw\\.js$).*)",
   ],
 };

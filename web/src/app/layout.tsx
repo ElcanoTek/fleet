@@ -1,5 +1,4 @@
 import type { Metadata, Viewport } from "next";
-import Script from "next/script";
 import { GeistSans } from "geist/font/sans";
 import { GeistMono } from "geist/font/mono";
 import {
@@ -174,6 +173,40 @@ export async function generateViewport(): Promise<Viewport> {
   };
 }
 
+// themeInitScript stamps data-theme on <html> BEFORE first paint. Both the
+// globals.css light palette AND the bundle's brand palette (/api/theme, whose
+// rules are html:root[data-theme=…]) key off that attribute, so until it
+// exists the browser paints fleet's default :root colors.
+//
+// It MUST be an inline synchronous <script>. It used to be
+// <Script src="/scripts/theme.js" strategy="beforeInteractive" />, but the App
+// Router doesn't emit beforeInteractive scripts as parser-blocking tags — it
+// queues them through the framework bootstrap (self.__next_s), which runs
+// after streaming has started painting. Result: every hard refresh on a
+// themed deployment flashed fleet's own palette for a beat before the brand
+// rules could match (reported by a Reklaim user). An inline script in <head>
+// executes during parse, before any body content exists to paint, closing the
+// gap for both the light/dark choice and the brand palette.
+//
+// Keep the storage key + fallback in sync with useTheme.ts, which owns the
+// same contract after hydration (THEME_STORAGE_KEY there; it can't be imported
+// here because this is a server component and that module is client-only).
+const themeInitScript = `(() => {
+  const storageKey = "chat-theme-preference";
+  const root = document.documentElement;
+  try {
+    const stored = window.localStorage.getItem(storageKey);
+    const theme = stored === "light" || stored === "dark"
+      ? stored
+      : window.matchMedia("(prefers-color-scheme: dark)").matches
+        ? "dark"
+        : "light";
+    root.setAttribute("data-theme", theme);
+  } catch {
+    root.setAttribute("data-theme", "dark");
+  }
+})();`;
+
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -186,15 +219,18 @@ export default function RootLayout({
       suppressHydrationWarning
     >
       <head>
-        <Script src="/scripts/theme.js" strategy="beforeInteractive" />
+        {/* Runs before the parser reaches <body>: see themeInitScript above. */}
+        <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
         {/* Brand palette from the client-config bundle (branding.colors),
             served by chat-server as a render-blocking stylesheet. Its
             html:root[data-theme=…] rules out-specify globals.css, so the shell —
             including the pre-auth login page — paints in the client's colors
-            with no flash. Empty (a no-op) when the bundle declares no colors.
-            Deliberately a runtime <link>, not build-bundled CSS: the palette is
-            resolved from the manifest at request time, which next/font-style
-            CSS handling can't express — hence the rule suppression. */}
+            with no flash (the inline script above guarantees the attribute
+            those rules match on is set before first paint). Empty (a no-op)
+            when the bundle declares no colors. Deliberately a runtime <link>,
+            not build-bundled CSS: the palette is resolved from the manifest at
+            request time, which next/font-style CSS handling can't express —
+            hence the rule suppression. */}
         {/* eslint-disable-next-line @next/next/no-css-tags */}
         <link rel="stylesheet" href="/api/theme" />
       </head>

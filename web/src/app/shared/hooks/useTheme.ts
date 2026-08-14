@@ -7,8 +7,8 @@ import { useCallback, useEffect, useState } from "react";
 // same logic; consolidating it here keeps the shared shell's theme behavior
 // identical across every view.
 //
-// Contract (persisted prefs and the render-blocking /scripts/theme.js
-// bootstrap keep working):
+// Contract (persisted prefs and the inline pre-paint bootstrap in layout.tsx
+// keep working):
 //   - An explicit preference is stored under the "chat-theme-preference"
 //     localStorage key as the literal string "light" or "dark".
 //   - "System" is the absence of a stored preference: the OS
@@ -18,9 +18,10 @@ import { useCallback, useEffect, useState } from "react";
 //   - The resolved theme is applied to <html data-theme="…">, which the
 //     globals.css / brand-palette CSS variables key off.
 //
-// The first paint is handled before hydration by /scripts/theme.js (wired in
-// layout.tsx), so this hook's mount effect only syncs React state to the
-// attribute that script already set — there is no theme flash.
+// The first paint is handled by the inline theme-init script in layout.tsx
+// (synchronous in <head>, so it runs before anything paints), and this hook's
+// mount effect only syncs React state to the attribute that script already
+// set — there is no theme flash.
 
 export const THEME_STORAGE_KEY = "chat-theme-preference";
 
@@ -39,7 +40,8 @@ function readStoredTheme(): Theme | null {
 
 function systemTheme(): Theme {
   // matchMedia is absent in some non-browser runtimes (older jsdom, SSR
-  // shims). Default to dark — mirrors the catch fallback in /scripts/theme.js.
+  // shims). Default to dark — mirrors the catch fallback in layout.tsx's
+  // inline theme-init script.
   if (typeof window.matchMedia !== "function") return "dark";
   return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
@@ -57,9 +59,9 @@ export type UseTheme = {
 };
 
 export function useTheme(): UseTheme {
-  // Defaults to "dark"/"system" to match the pre-hydration default in
-  // /scripts/theme.js; the mount effect below reconciles to the real values
-  // synchronously after hydration so SSR markup never mismatches.
+  // Defaults to "dark"/"system" to match the pre-paint default in layout.tsx's
+  // inline theme-init script; the mount effect below reconciles to the real
+  // values synchronously after hydration so SSR markup never mismatches.
   const [theme, setThemeState] = useState<Theme>("dark");
   const [themePreference, setThemePreference] = useState<ThemePreference>("system");
 
