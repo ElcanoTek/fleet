@@ -1,6 +1,29 @@
 .PHONY: all build compile bins fleet-bench install test test-race test-cover lint lint-go lint-migrations fmt tidy clean help \
 	govulncheck ci-go ci-web ci-e2e-mocked ci-local
 
+# GOTOOLCHAIN=auto — the operator does NOT have to hand-install the pinned Go.
+#
+# go.mod pins an exact patch release, and that pin moves every time a Go
+# security release lands, because govulncheck gates `main` and reports stdlib
+# CVEs against whatever toolchain built the code. Distro Go packages lag that by
+# days-to-weeks, and Fedora's `golang` additionally ships `GOTOOLCHAIN=local` in
+# its go.env — which turns the lag into a hard build failure ("go.mod requires
+# go >= 1.26.6 (running go 1.26.2; GOTOOLCHAIN=local)") instead of the download
+# Go would otherwise do on its own.
+#
+# The env var takes precedence over that go.env default, so setting it here is
+# what makes `fleet update` work on a stock Fedora box. It belongs in the
+# Makefile rather than in each caller because every build path funnels through
+# here — scripts/update.sh, scripts/fleet-upgrade.sh, bootstrap.sh, and CI all
+# shell out to `make build`. (bootstrap.sh already passed GOTOOLCHAIN=auto by
+# hand for exactly this reason; `fleet update` did not, so a box would install
+# fine and then fail every upgrade.)
+#
+# `?=` so an operator who has deliberately chosen a value — an air-gapped host
+# pinned to `local`, or a specific `go1.26.6` — keeps it.
+GOTOOLCHAIN ?= auto
+export GOTOOLCHAIN
+
 all: build
 
 help:

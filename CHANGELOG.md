@@ -64,6 +64,40 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **`fleet update` no longer fails on a box whose distro Go lags `go.mod`.**
+  The Makefile now exports `GOTOOLCHAIN=auto`, so every build path fetches the
+  pinned toolchain instead of demanding it be pre-installed. `go.mod` pins an
+  exact patch release and that pin moves on every Go security release (the
+  govulncheck gate reports stdlib CVEs against whatever toolchain built the
+  code), which distro packages trail by days to weeks — and Fedora's `golang`
+  additionally ships `GOTOOLCHAIN=local` in its `go.env`, turning that lag into
+  a hard stop: `go: go.mod requires go >= 1.26.6 (running go 1.24.7;
+  GOTOOLCHAIN=local)`. An environment variable outranks that `go.env` default,
+  which is what makes the build work on a stock Fedora host. `bootstrap.sh`
+  already passed `GOTOOLCHAIN=auto` by hand for exactly this reason, so a box
+  would **install** cleanly and then fail **every** subsequent `fleet update` —
+  setting it in the Makefile covers `update.sh`, `fleet-upgrade.sh`,
+  `bootstrap.sh`, and CI at once, since all of them shell out to `make build`.
+  `?=` leaves a deliberately-set `GOTOOLCHAIN` (an air-gapped host pinned to
+  `local`) alone. Both upgrade scripts also gained a preflight that names the
+  one case the fetch cannot cover — a Go older than 1.21, which predates
+  `GOTOOLCHAIN` — rather than letting `make build` fail on a raw version
+  mismatch. The operator-facing upshot, now documented in `ONBOARDING.md` and
+  `docs/TESTING.md`: you need Go 1.21+, not the pinned patch release.
+- **`fleet-upgrade.sh` and `update.sh` no longer abort two steps in when
+  systemd is not reachable.** Both resolve `INSTALL_DIR` by probing the unit's
+  `ExecStart` with `systemctl show … | sed … | head -n1`, and both run under
+  `set -euo pipefail` — so the pipeline's non-zero exit killed the script
+  outright instead of falling through to the `/opt/fleet` default that exists
+  for exactly this case. The `command -v systemctl` guard did not help: the
+  failing condition is not a *missing* `systemctl` but an unreachable systemd,
+  which is every container carrying the binary without systemd as PID 1 (and
+  `head -n1` can SIGPIPE the probe even where systemd is running). Both call
+  sites now end in `|| true`, since the probe is best-effort and the fallback
+  already covers "no path found". This was visible as
+  `TestFleetUpgradeDryRunSmoke` failing on any container-based dev box while
+  passing in CI, where the runners do have systemd — the test now passes in
+  both.
 - **The task prompt field is adjustable, and no longer opens a long prompt into
   a three-row box.** Editing an existing task showed its prompt through a ~78px
   window: auto-grow only ever ran from the textarea's `onChange`, and a prefill

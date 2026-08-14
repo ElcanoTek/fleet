@@ -113,6 +113,25 @@ ok()   { printf '%s✓ %s%s\n' "$c_green" "$*" "$c_reset"; }
 warn() { printf '%s! %s%s\n' "$c_yellow" "$*" "$c_reset" >&2; }
 info() { printf '%s» %s%s\n' "$c_dim" "$*" "$c_reset"; }
 die()  { printf '%s✗ %s%s\n' "$c_red" "$*" "$c_reset" >&2; exit 1; }
+
+# require_go_toolchain — same guard as update.sh, and for the same reason: the
+# Makefile exports GOTOOLCHAIN=auto so go.mod's exact pinned patch release is
+# fetched rather than required on the box, but a Go older than 1.21 predates
+# GOTOOLCHAIN and cannot do that fetch. Name that case instead of letting
+# `make build` fail on a raw version-mismatch line.
+require_go_toolchain() {
+  command -v go >/dev/null 2>&1 \
+    || die "go not found on PATH — install Go (1.21 or newer) and re-run; the build fetches the exact pinned toolchain itself, so the distro's version does not have to match go.mod"
+  local goversion minor pinned
+  goversion="$(go env GOVERSION 2>/dev/null || true)"   # e.g. "go1.26.2"
+  [[ "$goversion" == go1.* ]] || return 0
+  minor="${goversion#go1.}"; minor="${minor%%.*}"
+  [[ "$minor" =~ ^[0-9]+$ ]] || return 0
+  if (( minor < 21 )); then
+    pinned="$(awk '/^go /{print $2; exit}' "$SRC_DIR/go.mod" 2>/dev/null || true)"
+    die "installed Go is ${goversion}, which predates GOTOOLCHAIN (added in 1.21) and so cannot fetch the pinned toolchain${pinned:+ (go.mod pins $pinned)} — upgrade Go and re-run; live binaries left in place"
+  fi
+}
 run()  { if [[ "$DRY_RUN" == "1" ]]; then info "[dry-run] $*"; else "$@"; fi; }
 
 [[ -d "$SRC_DIR" ]] || die "fleet source dir not found: $SRC_DIR"
@@ -159,6 +178,7 @@ if [[ "$NO_BUILD" == "1" ]]; then
 elif [[ "$DRY_RUN" == "1" ]]; then
   info "[dry-run] would run: (cd ${SRC_DIR} && make build)  → ${SRC_DIR}/fleet + fleet-admin"
 else
+  require_go_toolchain
   ( cd "$SRC_DIR" && make build ) || die "make build failed — live binaries left in place"
   [[ -x "$SRC_DIR/fleet" && -x "$SRC_DIR/fleet-admin" ]] \
     || die "make build did not emit ${SRC_DIR}/fleet + ${SRC_DIR}/fleet-admin"
@@ -176,8 +196,15 @@ if [[ -z "$INSTALL_DIR" ]]; then
     # the path= field. The old `awk '{print $1}'` grabbed the literal "{" and
     # resolved INSTALL_DIR to the operator's cwd, so the swap (and therefore
     # the backup/rollback guarantee) never touched /opt/fleet.
+    # `|| true`: this whole pipeline is best-effort probing, not a check that
+    # must succeed. Under `set -e` + `pipefail` a non-zero exit anywhere in it
+    # aborts the upgrade — and `systemctl show` exits non-zero whenever it can
+    # not reach systemd, which is every container where the systemctl binary
+    # exists but PID 1 is not systemd (`head -n1` can also SIGPIPE it). The
+    # fallback below already handles "no path found"; swallowing the status is
+    # what lets it be reached instead of dying two steps into the upgrade.
     exec_start="$(systemctl show -p ExecStart --value "${SERVICE_NAME}.service" 2>/dev/null \
-      | sed -n 's/.*path=\([^ ;]*\).*/\1/p' | head -n1)"
+      | sed -n 's/.*path=\([^ ;]*\).*/\1/p' | head -n1 || true)"
   else
     exec_start=""
   fi
