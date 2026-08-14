@@ -2757,6 +2757,22 @@ tr.sla-row-fail {
   margin-top: 0.35rem;
   font-size: 0.78rem;
 }
+.subagent-card-transcript {
+  margin-top: 0.35rem;
+  font-size: 0.78rem;
+}
+.subagent-card-transcript > summary {
+  cursor: pointer;
+  color: var(--color-text-muted);
+}
+.subagent-card-transcript-note {
+  margin: 0.35rem 0 0;
+  color: var(--color-text-muted);
+  font-size: 0.75rem;
+}
+.subagent-card-transcript .log-session {
+  margin-top: 0.5rem;
+}
 .live-tool-heading code {
   min-width: 0;
   overflow: hidden;

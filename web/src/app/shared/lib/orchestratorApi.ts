@@ -582,6 +582,13 @@ export const orchestratorApi = {
   estimateTask: (body: TaskCreate) =>
     request<CostForecast>("/tasks/estimate", { method: "POST", body: JSON.stringify(body) }),
   taskLogs: (taskId: string) => request<LogSession>(`/logs/${encodeURIComponent(taskId)}`),
+  // A spawned child's own transcript (#1043) — 404 when the transcript file is
+  // no longer on the host (the linkage entry on the parent log stays the
+  // durable record either way).
+  taskSubagentLog: (taskId: string, childSessionId: string) =>
+    request<LogSession>(
+      `/logs/${encodeURIComponent(taskId)}/subagents/${encodeURIComponent(childSessionId)}`,
+    ),
   // Per-attempt run log history: transcripts superseded by a retry or an
   // ask-pause/wake resume of the SAME task id. Metadata list + one entry.
   taskLogHistory: (taskId: string) =>

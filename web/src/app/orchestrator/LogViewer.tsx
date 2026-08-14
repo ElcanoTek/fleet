@@ -477,7 +477,7 @@ function subagentStatus(info: SubagentInfo): {
   return { label: "failed", tone: "failed" };
 }
 
-function SubagentCard({ info }: { info: SubagentInfo }) {
+function SubagentCard({ info, taskId }: { info: SubagentInfo; taskId?: string }) {
   const status = subagentStatus(info);
   const shortId = info.childSessionId
     ? info.childSessionId.replace(/^subagent-/, "").slice(0, 8)
@@ -515,7 +515,64 @@ function SubagentCard({ info }: { info: SubagentInfo }) {
           <pre className="log-pre">{stripAnsiCodes(info.result)}</pre>
         </details>
       ) : null}
+      {taskId && info.childSessionId && !info.pending ? (
+        <SubagentTranscript taskId={taskId} childSessionId={info.childSessionId} />
+      ) : null}
     </article>
+  );
+}
+
+// SubagentTranscript lazy-loads a child's own session log (#1043) the first
+// time its disclosure opens and renders it with the same message cards the
+// parent transcript uses. The transcript file is best-effort (it lives on the
+// serving host, not in the DB) — a 404 renders as an inline note, never an
+// error state for the whole card.
+function SubagentTranscript({
+  taskId,
+  childSessionId,
+}: {
+  taskId: string;
+  childSessionId: string;
+}) {
+  const [state, setState] = useState<"idle" | "loading" | "error" | "loaded">("idle");
+  const [error, setError] = useState("");
+  const [session, setSession] = useState<LogSession | null>(null);
+  const load = useCallback(async () => {
+    setState((prev) => (prev === "idle" || prev === "error" ? "loading" : prev));
+    try {
+      const s = await orchestratorApi.taskSubagentLog(taskId, childSessionId);
+      setSession(s);
+      setState("loaded");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setState("error");
+    }
+  }, [taskId, childSessionId]);
+  return (
+    <details
+      className="subagent-card-transcript"
+      data-testid="subagent-transcript"
+      onToggle={(e) => {
+        if ((e.target as HTMLDetailsElement).open && state !== "loaded" && state !== "loading") {
+          void load();
+        }
+      }}
+    >
+      <summary>Transcript</summary>
+      {state === "loading" ? (
+        <p className="subagent-card-transcript-note">Loading transcript…</p>
+      ) : null}
+      {state === "error" ? (
+        <p className="subagent-card-transcript-note">Transcript unavailable: {error}</p>
+      ) : null}
+      {state === "loaded" && session ? (
+        <div className="log-session">
+          {(session.messages ?? []).map((m, i) => (
+            <LogMessageCard key={m.id ?? i} msg={m} taskId={taskId} toolName={m.tool_name} />
+          ))}
+        </div>
+      ) : null}
+    </details>
   );
 }
 
@@ -804,6 +861,7 @@ function LiveTaskView({
                 // never a raw JSON blob.
                 <SubagentCard
                   key={e.key}
+                  taskId={task.id}
                   info={
                     e.pending
                       ? { pending: true, ...(parseSubagentPayload(e.text) ?? {}) }
@@ -1124,7 +1182,9 @@ function LogViewerBody({
                   if (messages[i].message_type === "subagent_spawned") {
                     const info = parseSubagentPayload(messages[i].content);
                     if (info) {
-                      return <SubagentCard key={messages[i].id ?? i} info={info} />;
+                      return (
+                        <SubagentCard key={messages[i].id ?? i} info={info} taskId={task.id} />
+                      );
                     }
                   }
                   return (

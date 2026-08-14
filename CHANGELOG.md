@@ -37,9 +37,15 @@ prior versions are listed because none have shipped.
   `role=explore` (default) is a read-only research child with write-capable
   native tools stripped, `role=worker` keeps the full roster; **per-child
   isolated workdirs** (`<workspace>/subagents/<child-session-id>/`, returned as
-  `workdir` in the tool's JSON result); and **child cards** on the task page
+  `workdir` in the tool's JSON result); **child cards** on the task page
   (stored + live) and in the chat transcript (id, role, status, spend) instead
-  of raw JSON. Design note: [docs/SUBAGENTS.md](docs/SUBAGENTS.md).
+  of raw JSON, each with a **Transcript** disclosure backed by new
+  child-transcript endpoints (`GET /logs/{task}/subagents/{child}` on the
+  orchestrator, `GET /conversations/{id}/subagents/{child}` on chat — existing
+  transcript/ownership gates plus a linkage check and strict id validation);
+  and a **best-effort MCP write-tool name denylist** for explore children on
+  top of the native strip. Design note:
+  [docs/SUBAGENTS.md](docs/SUBAGENTS.md).
 
 - The strong/escalation tier is now `x-ai/grok-4.6` (was `openai/gpt-5.6-sol`).
   This is what `suggest_advanced_model`, the spreadsheet nudge, and the task
