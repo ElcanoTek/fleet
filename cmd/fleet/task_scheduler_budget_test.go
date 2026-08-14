@@ -120,6 +120,47 @@ func TestTaskSchedulerProvider_BudgetGate(t *testing.T) {
 		}
 	})
 
+	// Attribution (#980): run-log reads are creator-scoped, so a chat-scheduled
+	// task must record the approving user when that user exists in sched —
+	// otherwise its own author cannot read its transcript.
+	t.Run("attributes the task to the approving chat user", func(t *testing.T) {
+		erin := &schedmodels.User{ID: uuid.New(), Username: "erin@example.com", Role: "client", CreatedAt: now}
+		if _, err := store.AddUser(erin); err != nil {
+			t.Fatalf("AddUser: %v", err)
+		}
+		res, err := provider(ctx, httpapi.TaskScheduleRequest{
+			Prompt: "attributed to erin", RequestedBy: "Erin@Example.com", // case-insensitive lookup
+		})
+		if err != nil {
+			t.Fatalf("schedule_task: %v", err)
+		}
+		created, err := store.GetTask(uuid.MustParse(res.ID))
+		if err != nil || created == nil {
+			t.Fatalf("GetTask: %v", err)
+		}
+		if created.CreatedBy == nil || *created.CreatedBy != erin.ID {
+			t.Fatalf("want created_by=%s, got %v", erin.ID, created.CreatedBy)
+		}
+	})
+
+	// A chat user with no sched account falls through to an unattributed task
+	// rather than failing the schedule — the pre-#980 behavior for that case.
+	t.Run("unknown chat user leaves the task unattributed", func(t *testing.T) {
+		res, err := provider(ctx, httpapi.TaskScheduleRequest{
+			Prompt: "no sched account", RequestedBy: "nobody@example.com",
+		})
+		if err != nil {
+			t.Fatalf("schedule_task: %v", err)
+		}
+		created, err := store.GetTask(uuid.MustParse(res.ID))
+		if err != nil || created == nil {
+			t.Fatalf("GetTask: %v", err)
+		}
+		if created.CreatedBy != nil {
+			t.Fatalf("want an unattributed task, got created_by=%v", created.CreatedBy)
+		}
+	})
+
 	// An explicit model is enough even with no deployment default.
 	t.Run("explicit model needs no deployment default", func(t *testing.T) {
 		modelless := taskSchedulerProvider(store, enforcer, "")
