@@ -71,7 +71,6 @@ test("orchestrator dashboard", async ({ page }) => {
     if (path === "/stats") return route.fulfill({ json: STATS });
     if (path === "/mcp-servers") return route.fulfill({ json: MCP_SERVERS });
     if (path === "/config") return route.fulfill({ json: { timezone: "America/New_York" } });
-    if (path === "/concurrency") return route.fulfill({ json: { max_concurrent_agents: 4, warm_pool_size: 2 } });
     if (path === "/tasks") return route.fulfill({ json: { data: TASKS, total: TASKS.length, limit: 20, offset: 0 } });
     return route.fulfill({ json: {} });
   });

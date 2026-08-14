@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyOrigin } from "@/app/lib/csrf";
-import { orchestratorFetch } from "@/app/lib/mocServer";
+import { orchestratorFetch } from "@/app/lib/orchestratorServer";
 import { forwardedHeaders } from "@/app/lib/proxyHeaders";
 import { resolveOrchestratorAuth } from "./auth";
 

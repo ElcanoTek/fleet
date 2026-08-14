@@ -214,6 +214,7 @@ func TestBudgetCRUDEndpoints(t *testing.T) {
 	}
 	for _, bad := range []string{
 		`{"scope":"team","principal_id":"x","window":"day","hard_usd":1}`,
+		`{"scope":"project","principal_id":"proj-1","window":"day","hard_usd":1}`,
 		`{"scope":"user","principal_id":"x","window":"hour","hard_usd":1}`,
 		`{"scope":"user","principal_id":"","window":"day","hard_usd":1}`,
 		`{"scope":"user","principal_id":"x","window":"day"}`,

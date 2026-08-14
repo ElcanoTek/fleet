@@ -80,7 +80,7 @@ export function LogViewer({ task, onClose, canStop, onResubmitted, onEdit, onSel
   // Key the inner body on the task id so switching tasks remounts the fetch
   // hook — that reproduces the old "reset session to null then refetch on task
   // change" behavior cleanly, without a manual reset effect.
-  const live = task.status === "running" || task.status === "assigned";
+  const live = task.status === "running" || task.status === "leased";
   if (live) {
     return (
       <LiveTaskView

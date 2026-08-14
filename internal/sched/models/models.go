@@ -563,6 +563,10 @@ const (
 	TaskStatusScheduled TaskStatus = "scheduled"
 	TaskStatusLeased    TaskStatus = "leased"
 	TaskStatusRunning   TaskStatus = "running"
+	// TaskStatusAnalyzing is a leftover moc in-flight status. Fleet never
+	// writes it (error analysis is a post-terminal annotation, not a
+	// transition). The constant stays so leftover imported rows still
+	// decode, recover, and filter. Workers cannot report it.
 	TaskStatusAnalyzing TaskStatus = "analyzing"
 	TaskStatusSuccess   TaskStatus = "success"
 	TaskStatusError     TaskStatus = "error"
@@ -593,9 +597,10 @@ const (
 // report for its own task. The orchestrator owns the rest of the lifecycle.
 // TaskStatusDeadLettered is intentionally excluded: only the runner's terminal
 // switch quarantines a task (#253), never a self-reporting worker.
+// TaskStatusAnalyzing is also excluded: fleet never writes it.
 func (s TaskStatus) IsValidReportedStatus() bool {
 	switch s {
-	case TaskStatusLeased, TaskStatusRunning, TaskStatusAnalyzing, TaskStatusSuccess, TaskStatusError:
+	case TaskStatusLeased, TaskStatusRunning, TaskStatusSuccess, TaskStatusError:
 		return true
 	default:
 		return false
@@ -2286,10 +2291,10 @@ const (
 	// BudgetScopeKey bounds a scoped API key, keyed by the key id
 	// (tasks.created_by_key_id).
 	BudgetScopeKey = "key"
-	// BudgetScopeProject bounds a chat project, keyed by the project id.
-	// Honest scope: no task-create path carries a project today (tasks have no
-	// project dimension), so a project budget is recorded and reported but not
-	// yet enforced at create — see docs/USAGE-ANALYTICS.md.
+	// BudgetScopeProject is reserved for a future chat-project budget.
+	// It is NOT a legal create scope: tasks have no project dimension, so
+	// a project budget could only be recorded and never enforced. Leftover
+	// rows still list and report.
 	BudgetScopeProject = "project"
 )
 
@@ -2306,7 +2311,7 @@ const (
 
 // budgetScopes / budgetWindows are the closed validation sets for BudgetCreate.
 var (
-	budgetScopes  = map[string]bool{BudgetScopeUser: true, BudgetScopeKey: true, BudgetScopeProject: true}
+	budgetScopes  = map[string]bool{BudgetScopeUser: true, BudgetScopeKey: true}
 	budgetWindows = map[string]bool{BudgetWindowDay: true, BudgetWindowWeek: true, BudgetWindowMonth: true}
 )
 
@@ -2356,7 +2361,7 @@ const maxBudgetPrincipalIDLen = 320
 // alert threshold you can never reach before refusal is a misconfiguration).
 func (bc *BudgetCreate) Validate() error {
 	if !budgetScopes[bc.Scope] {
-		return fmt.Errorf("scope must be one of user|key|project (got %q)", bc.Scope)
+		return fmt.Errorf("scope must be one of user|key (got %q)", bc.Scope)
 	}
 	if !budgetWindows[bc.Window] {
 		return fmt.Errorf("window must be one of day|week|month (got %q)", bc.Window)
@@ -2411,8 +2416,8 @@ type BudgetStatus struct {
 // gate can look up every budget that applies. Empty fields = the create path
 // has no such principal (e.g. an admin-key submission carries neither a user
 // nor a scoped key and is therefore not budget-gated — the admin key is the
-// box operator, not a meterable principal). Project is reserved: no create
-// path resolves a project today (see BudgetScopeProject).
+// box operator, not a meterable principal). Project is unused: no create
+// path resolves one, and scope=project is rejected on write.
 type BudgetPrincipals struct {
 	User    string
 	Key     string
