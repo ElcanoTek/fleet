@@ -98,8 +98,11 @@ func (f *fakeEngine) SuggestRecurringTask(context.Context, string, []string) (*a
 func (f *fakeEngine) SuggestLibraryPrompt(context.Context, string) (*agent.LibraryPromptDraft, error) {
 	return nil, nil
 }
-func (f *fakeEngine) MCPBroker() agentcore.MCPBroker               { return nil }
-func (f *fakeEngine) MCPCatalog() []mcp.ServerTool                 { return nil }
+func (f *fakeEngine) MCPBroker() agentcore.MCPBroker { return nil }
+func (f *fakeEngine) MCPCatalog() []mcp.ServerTool   { return nil }
+func (f *fakeEngine) OpenApprovalMCPScope(context.Context, agentcore.MCPSelection, string) (*agent.MCPScope, error) {
+	return nil, nil
+}
 func (f *fakeEngine) SandboxPool() *sandbox.Pool                   { return nil }
 func (f *fakeEngine) MCPServerCatalog() []agent.OptionalServerInfo { return nil }
 func (f *fakeEngine) ListPersonas() ([]string, error)              { return nil, nil }

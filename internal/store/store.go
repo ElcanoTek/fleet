@@ -1424,6 +1424,14 @@ type Approval struct {
 	// 0 means "no expiry" (legacy rows, or a non-positive resolved timeout);
 	// the sweep and the UI countdown both treat 0 as "never expires".
 	ExpiresAt int64
+	// MCPServer / MCPAccount record the credential seat that was active when
+	// the call was staged (#167 residual 2). A card outlives its turn scope,
+	// so execution reopens a scope from this pair instead of silently running
+	// on the broker's default bundle seat. MCPServer is empty for native tools
+	// and for rows staged before the columns existed; MCPAccount empty means
+	// the default seat.
+	MCPServer  string
+	MCPAccount string
 }
 
 // ListPendingApprovals returns every pending approval for a conversation,
@@ -1433,7 +1441,8 @@ func (s *Store) ListPendingApprovals(ctx context.Context, userEmail, convID stri
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, conversation_id, user_email, tool_name, args_json, status,
 		        COALESCE(result_text, ''), created_at, COALESCE(resolved_at, 0),
-		        COALESCE(tool_call_id, ''), COALESCE(expires_at, 0)
+		        COALESCE(tool_call_id, ''), COALESCE(expires_at, 0),
+		        COALESCE(mcp_server, ''), COALESCE(mcp_account, '')
 		 FROM approvals
 		 WHERE conversation_id = $1 AND user_email = $2 AND status = 'pending'
 		 ORDER BY created_at ASC`,
@@ -1447,7 +1456,8 @@ func (s *Store) ListPendingApprovals(ctx context.Context, userEmail, convID stri
 	for rows.Next() {
 		var a Approval
 		if err := rows.Scan(&a.ID, &a.ConversationID, &a.UserEmail, &a.ToolName,
-			&a.ArgsJSON, &a.Status, &a.ResultText, &a.CreatedAt, &a.ResolvedAt, &a.ToolCallID, &a.ExpiresAt); err != nil {
+			&a.ArgsJSON, &a.Status, &a.ResultText, &a.CreatedAt, &a.ResolvedAt, &a.ToolCallID, &a.ExpiresAt,
+			&a.MCPServer, &a.MCPAccount); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
@@ -1463,17 +1473,27 @@ func (s *Store) ListPendingApprovals(ctx context.Context, userEmail, convID stri
 // expiresAt is the unix-seconds default-deny deadline for the staged approval
 // (#225); pass 0 for "no expiry" (the column is stored NULL and the server-side
 // expiry sweep skips the row).
-func (s *Store) CreateApproval(ctx context.Context, convID, userEmail, toolName, toolCallID, argsJSON string, expiresAt int64) (*Approval, error) {
+// seat records the credential {server, account} the staging turn was running on
+// (#167 residual 2). A zero ApprovalSeat is a native tool or an unknown seat and
+// stores NULL, which execution reads back as "the default bundle seat".
+func (s *Store) CreateApproval(ctx context.Context, convID, userEmail, toolName, toolCallID, argsJSON string, expiresAt int64, seat ApprovalSeat) (*Approval, error) {
 	id := uuid.NewString()
 	now := time.Now().Unix()
 	var expiresArg any // NULL when there is no timeout
 	if expiresAt > 0 {
 		expiresArg = expiresAt
 	}
+	// The seat is stored only when a server authored the call. Writing NULL for
+	// a native tool keeps "no seat recorded" distinct from "the default seat was
+	// deliberately chosen", which is what a recorded server + empty account means.
+	var serverArg, accountArg any
+	if seat.Server != "" {
+		serverArg, accountArg = seat.Server, seat.Account
+	}
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO approvals (id, conversation_id, user_email, tool_name, tool_call_id, args_json, status, created_at, expires_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7, $8)`,
-		id, convID, userEmail, toolName, toolCallID, argsJSON, now, expiresArg,
+		`INSERT INTO approvals (id, conversation_id, user_email, tool_name, tool_call_id, args_json, status, created_at, expires_at, mcp_server, mcp_account)
+		 VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7, $8, $9, $10)`,
+		id, convID, userEmail, toolName, toolCallID, argsJSON, now, expiresArg, serverArg, accountArg,
 	)
 	if err != nil {
 		return nil, err
@@ -1482,7 +1502,18 @@ func (s *Store) CreateApproval(ctx context.Context, convID, userEmail, toolName,
 		ID: id, ConversationID: convID, UserEmail: userEmail,
 		ToolName: toolName, ToolCallID: toolCallID, ArgsJSON: argsJSON, Status: approvalStatusPending,
 		CreatedAt: now, ExpiresAt: expiresAt,
+		MCPServer: seat.Server, MCPAccount: seat.Account,
 	}, nil
+}
+
+// ApprovalSeat is the public credential selection a staged MCP call ran under.
+// Both fields are configuration identifiers; no credential value is stored.
+type ApprovalSeat struct {
+	// Server is the bundle server name that exports the staged tool. Empty for
+	// native tools (bash, preview_email).
+	Server string
+	// Account is the named seat, or empty for the default bundle seat.
+	Account string
 }
 
 // GetApproval looks up a pending approval, scoped by user_email.
@@ -1490,13 +1521,15 @@ func (s *Store) GetApproval(ctx context.Context, userEmail, approvalID string) (
 	row := s.db.QueryRowContext(ctx,
 		`SELECT id, conversation_id, user_email, tool_name, args_json, status,
 		        COALESCE(result_text, ''), created_at, COALESCE(resolved_at, 0),
-		        COALESCE(tool_call_id, ''), COALESCE(expires_at, 0)
+		        COALESCE(tool_call_id, ''), COALESCE(expires_at, 0),
+		        COALESCE(mcp_server, ''), COALESCE(mcp_account, '')
 		 FROM approvals WHERE id = $1 AND user_email = $2`,
 		approvalID, userEmail,
 	)
 	var a Approval
 	if err := row.Scan(&a.ID, &a.ConversationID, &a.UserEmail, &a.ToolName,
-		&a.ArgsJSON, &a.Status, &a.ResultText, &a.CreatedAt, &a.ResolvedAt, &a.ToolCallID, &a.ExpiresAt); err != nil {
+		&a.ArgsJSON, &a.Status, &a.ResultText, &a.CreatedAt, &a.ResolvedAt, &a.ToolCallID, &a.ExpiresAt,
+		&a.MCPServer, &a.MCPAccount); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
@@ -1520,7 +1553,8 @@ func (s *Store) ListExpiredApprovals(ctx context.Context, now int64) ([]Approval
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, conversation_id, user_email, tool_name, args_json, status,
 		        COALESCE(result_text, ''), created_at, COALESCE(resolved_at, 0),
-		        COALESCE(tool_call_id, ''), COALESCE(expires_at, 0)
+		        COALESCE(tool_call_id, ''), COALESCE(expires_at, 0),
+		        COALESCE(mcp_server, ''), COALESCE(mcp_account, '')
 		 FROM approvals
 		 WHERE status = 'pending' AND expires_at IS NOT NULL AND expires_at > 0 AND expires_at < $1
 		 ORDER BY expires_at ASC
@@ -1535,7 +1569,8 @@ func (s *Store) ListExpiredApprovals(ctx context.Context, now int64) ([]Approval
 	for rows.Next() {
 		var a Approval
 		if err := rows.Scan(&a.ID, &a.ConversationID, &a.UserEmail, &a.ToolName,
-			&a.ArgsJSON, &a.Status, &a.ResultText, &a.CreatedAt, &a.ResolvedAt, &a.ToolCallID, &a.ExpiresAt); err != nil {
+			&a.ArgsJSON, &a.Status, &a.ResultText, &a.CreatedAt, &a.ResolvedAt, &a.ToolCallID, &a.ExpiresAt,
+			&a.MCPServer, &a.MCPAccount); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
@@ -1616,7 +1651,8 @@ func (s *Store) LatestApprovalByTool(ctx context.Context, convID, toolName strin
 	row := s.db.QueryRowContext(ctx,
 		`SELECT id, conversation_id, user_email, tool_name, args_json, status,
 		        COALESCE(result_text, ''), created_at, COALESCE(resolved_at, 0),
-		        COALESCE(tool_call_id, ''), COALESCE(expires_at, 0)
+		        COALESCE(tool_call_id, ''), COALESCE(expires_at, 0),
+		        COALESCE(mcp_server, ''), COALESCE(mcp_account, '')
 		 FROM approvals
 		 WHERE conversation_id = $1 AND tool_name = $2
 		 ORDER BY created_at DESC
@@ -1625,7 +1661,8 @@ func (s *Store) LatestApprovalByTool(ctx context.Context, convID, toolName strin
 	)
 	var a Approval
 	if err := row.Scan(&a.ID, &a.ConversationID, &a.UserEmail, &a.ToolName,
-		&a.ArgsJSON, &a.Status, &a.ResultText, &a.CreatedAt, &a.ResolvedAt, &a.ToolCallID, &a.ExpiresAt); err != nil {
+		&a.ArgsJSON, &a.Status, &a.ResultText, &a.CreatedAt, &a.ResolvedAt, &a.ToolCallID, &a.ExpiresAt,
+		&a.MCPServer, &a.MCPAccount); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}

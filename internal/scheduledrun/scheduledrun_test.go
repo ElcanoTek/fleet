@@ -79,7 +79,7 @@ func TestBindTaskMCPRuntime_UsesBrokerScope(t *testing.T) {
 				"beta":  {},
 			}
 		},
-		openTaskMCPScope: func(_ context.Context, selection agentcore.MCPSelection, taskID, workspace string) (*agent.MCPScope, error) {
+		openTaskMCPScope: func(_ context.Context, selection agentcore.MCPSelection, _ agent.MCPScopePolicy, taskID, workspace string) (*agent.MCPScope, error) {
 			gotSelection = append(agentcore.MCPSelection(nil), selection...)
 			gotTaskID = taskID
 			gotWorkspace = workspace
@@ -175,7 +175,7 @@ func TestBindTaskMCPRuntime_PreservesExplicitSelection(t *testing.T) {
 			"alpha": {Enabled: true},
 			"beta":  {Enabled: true},
 		}},
-		openTaskMCPScope: func(_ context.Context, selection agentcore.MCPSelection, _, _ string) (*agent.MCPScope, error) {
+		openTaskMCPScope: func(_ context.Context, selection agentcore.MCPSelection, _ agent.MCPScopePolicy, _, _ string) (*agent.MCPScope, error) {
 			got = append(agentcore.MCPSelection(nil), selection...)
 			return &agent.MCPScope{Broker: &scheduledRecordingBroker{}, Catalog: []mcp.ServerTool{}, Close: func(context.Context) error { return nil }}, nil
 		},
@@ -201,7 +201,7 @@ func TestBindTaskMCPRuntime_ScopeOpenFailureFailsClosed(t *testing.T) {
 	wantErr := errors.New("broker unavailable")
 	r := &Runner{
 		cfg: &config.Config{},
-		openTaskMCPScope: func(context.Context, agentcore.MCPSelection, string, string) (*agent.MCPScope, error) {
+		openTaskMCPScope: func(context.Context, agentcore.MCPSelection, agent.MCPScopePolicy, string, string) (*agent.MCPScope, error) {
 			return nil, wantErr
 		},
 	}
@@ -215,7 +215,7 @@ func TestBindTaskMCPRuntime_IncompleteScopeIsClosed(t *testing.T) {
 	closed := false
 	r := &Runner{
 		cfg: &config.Config{},
-		openTaskMCPScope: func(context.Context, agentcore.MCPSelection, string, string) (*agent.MCPScope, error) {
+		openTaskMCPScope: func(context.Context, agentcore.MCPSelection, agent.MCPScopePolicy, string, string) (*agent.MCPScope, error) {
 			return &agent.MCPScope{Close: func(context.Context) error { closed = true; return nil }}, nil
 		},
 	}

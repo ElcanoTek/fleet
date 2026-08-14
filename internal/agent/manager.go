@@ -247,10 +247,31 @@ type MCPScope struct {
 	Close   func(context.Context) error
 }
 
+// MCPScopePolicy is the parent's effective, already-decided gate snapshot for
+// one scope. It crosses the credential boundary at scope open so the credential
+// owner can enforce the run's limits itself (#167 residual 1) instead of
+// trusting that the distrusted address space did.
+//
+// It carries public configuration identifiers only, and it can only NARROW: the
+// credential owner re-derives the bundle tool allowlist from its own copy of
+// the bundle and intersects this with it, so a parent-side bug (or a scrubbed
+// parent that lost its gates entirely, the #960 failure mode) restricts a scope
+// rather than widening one.
+type MCPScopePolicy struct {
+	// ToolAllowlist is the run's effective Gate-2 map (bundle server name →
+	// allowed tools). Same convention as in-process: an absent or empty entry
+	// adds no narrowing.
+	ToolAllowlist agentcore.MCPAllowlist
+	// CredentialAllowlist is the run's effective Gate-3 pairs, or nil for
+	// "inherit global" — the scheduled driver's per-task allowlist (#184). Only
+	// the scheduled driver sets it; interactive turns leave it nil.
+	CredentialAllowlist agentcore.CredentialAllowlist
+}
+
 // MCPScopeOpener binds the selected public server/account names to a per-turn
-// broker scope rooted at workspace. Credential resolution remains behind the
-// opener's process boundary.
-type MCPScopeOpener func(ctx context.Context, selection agentcore.MCPSelection, workspace string) (*MCPScope, error)
+// broker scope rooted at workspace, under the run's effective policy.
+// Credential resolution remains behind the opener's process boundary.
+type MCPScopeOpener func(ctx context.Context, selection agentcore.MCPSelection, policy MCPScopePolicy, workspace string) (*MCPScope, error)
 
 // MCPReloadResult is the public post-reload state returned by an injected
 // credential owner. It contains configuration identifiers and tool schemas,
@@ -722,6 +743,39 @@ func (m *Manager) MCPCatalog() []mcp.ServerTool {
 	return m.mcpCatalogSnapshot()
 }
 
+// OpenApprovalMCPScope reopens the credential seat a staged approval recorded,
+// so an approved call executes on the {server, account} its turn was running on
+// instead of the broker's default bundle seat (#167 residual 2). An approval
+// card can outlive its turn scope, so this is a NEW short-lived scope carrying
+// the same public selection — never a rehydration of the closed one.
+//
+// It returns (nil, nil) when this Manager has no scope opener (the transitional
+// local-client mode), which tells the caller to fall back to MCPBroker(). A
+// seat the credential owner no longer provisions fails the open, and the
+// approval fails closed rather than silently running as a different account.
+func (m *Manager) OpenApprovalMCPScope(ctx context.Context, selection agentcore.MCPSelection, workspace string) (*MCPScope, error) {
+	if m.openMCPScope == nil {
+		return nil, nil
+	}
+	// The card's own turn is gone, so the live gates are the right snapshot:
+	// a tool the operator has since removed from a server's allowlist must not
+	// execute just because it was staged while it was still permitted.
+	allow, _ := m.mcpGates()
+	scope, err := m.openMCPScope(ctx, selection, MCPScopePolicy{ToolAllowlist: agentcore.MCPAllowlist(allow)}, workspace)
+	if err != nil {
+		return nil, err
+	}
+	if scope == nil || scope.Broker == nil || scope.Close == nil {
+		if scope != nil && scope.Close != nil {
+			closeCtx, cancel := context.WithTimeout(context.Background(), mcpScopeCloseTimeout)
+			defer cancel()
+			_ = scope.Close(closeCtx)
+		}
+		return nil, errors.New("open MCP approval scope: opener returned an incomplete scope")
+	}
+	return scope, nil
+}
+
 // SandboxPool exposes the per-turn sandbox warm pool for the out-of-band
 // approved-bash execution path (runStagedBash).
 func (m *Manager) SandboxPool() *sandbox.Pool { return m.sandboxPool }
@@ -918,11 +972,11 @@ func (m *Manager) configureTurnWorkspace(ctx context.Context, sb *sandbox.Sandbo
 	return artifactCtx, fileOpRoot, releaseArtifacts, nil
 }
 
-func (m *Manager) openTurnMCPScope(ctx context.Context, in TurnInput, workspace string) (agentcore.MCPBroker, []mcp.ServerTool, func(), error) {
+func (m *Manager) openTurnMCPScope(ctx context.Context, selection agentcore.MCPSelection, policy MCPScopePolicy, workspace string) (agentcore.MCPBroker, []mcp.ServerTool, func(), error) {
 	if m.openMCPScope == nil {
 		return m.mcpBroker, m.mcpCatalogSnapshot(), func() {}, nil
 	}
-	scope, err := m.openMCPScope(ctx, m.scopeSelection(in.OptionalMCPServersEnabled, in.MCPAccountDefaults), workspace)
+	scope, err := m.openMCPScope(ctx, selection, policy, workspace)
 	if err != nil {
 		return nil, nil, func() {}, fmt.Errorf("open MCP turn scope: %w", err)
 	}
@@ -1055,11 +1109,30 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 	}
 	defer releaseArtifacts()
 
-	turnBroker, turnCatalog, releaseMCPScope, err := m.openTurnMCPScope(ctx, in, workspace)
+	// Snapshot the MCP gating ONCE under one RLock (#218 can swap it mid-turn)
+	// and use that single snapshot for both halves of enforcement: the scope
+	// policy the credential owner enforces, and the tool registration below.
+	// Two reads could disagree, which would show up as a tool the loop
+	// advertises and the broker then refuses.
+	turnAllowlist, turnOptional := m.mcpGates()
+	turnSelection := m.scopeSelection(in.OptionalMCPServersEnabled, in.MCPAccountDefaults)
+	turnBroker, turnCatalog, releaseMCPScope, err := m.openTurnMCPScope(ctx, turnSelection,
+		MCPScopePolicy{ToolAllowlist: agentcore.MCPAllowlist(turnAllowlist)}, workspace)
 	if err != nil {
 		return nil, err
 	}
 	defer releaseMCPScope()
+	// Hand the approval stager the seat this turn actually runs on, before any
+	// tool can stage a card (#167 residual 2). Without it, staging resolves and
+	// pre-validates against the process-wide default-seat catalog, and the
+	// approval it persists carries no seat for execution to reopen.
+	if binder, ok := in.ApprovalStager.(MCPScopeBinder); ok && binder != nil {
+		binder.BindTurnMCPScope(TurnMCPScope{
+			Broker:    turnBroker,
+			Catalog:   turnCatalog,
+			Selection: turnSelection,
+		})
+	}
 	turnTools := tools.NewTurnTools(sb, tools.WithBrowser(tools.BrowserConfig{
 		Enabled:  m.config.BrowserEnabled,
 		Lockdown: in.Lockdown,
@@ -1133,11 +1206,6 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 			}
 		}
 	}
-
-	// Snapshot the MCP gating together under one RLock so this turn sees a
-	// consistent (allowlist, optional-set) pair even if a hot reload (#218)
-	// swaps them concurrently.
-	turnAllowlist, turnOptional := m.mcpGates()
 
 	tc := TurnConfig{
 		SystemPrompt:    systemPrompt,

@@ -125,7 +125,7 @@ func TestStartProductionMCPRuntime_InheritsThenScrubsParent(t *testing.T) {
 	if err := runtime.client.Ping(context.Background()); err != nil {
 		t.Fatalf("child lost inherited environment after parent scrub: %v", err)
 	}
-	scope, err := runtime.openTaskScope(context.Background(), agentcore.MCPSelection{{Server: "demo", Account: "blue"}}, "task-123", "/workspace")
+	scope, err := runtime.openTaskScope(context.Background(), agentcore.MCPSelection{{Server: "demo", Account: "blue"}}, agent.MCPScopePolicy{}, "task-123", "/workspace")
 	if err != nil {
 		t.Fatalf("open task scope: %v", err)
 	}
