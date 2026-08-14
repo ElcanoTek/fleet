@@ -425,6 +425,100 @@ function LogMessageCard({
   );
 }
 
+// ── #1043 sub-agent child cards ──────────────────────────────────────────────
+// A spawn is productized as a card (id, role, status, spend, workdir) instead
+// of a raw JSON blob. Two sources feed it: the parent log's `subagent_spawned`
+// linkage entries (stored transcript) and the spawn_subagent tool call/result
+// frames (live stream).
+
+type SubagentInfo = {
+  childSessionId?: string;
+  role?: string;
+  workdir?: string;
+  costUsd?: number;
+  tokens?: number;
+  success?: boolean;
+  result?: string;
+  pending?: boolean;
+};
+
+// parseSubagentPayload reads either shape — the linkage entry
+// {child_session_id, role, workdir, cost_usd, tokens, success} or the tool
+// result {…same…, result} — returning null on unparseable content.
+function parseSubagentPayload(raw: string | undefined): SubagentInfo | null {
+  if (!raw) return null;
+  try {
+    const p = JSON.parse(raw) as Record<string, unknown>;
+    if (typeof p !== "object" || p === null) return null;
+    return {
+      childSessionId:
+        typeof p.child_session_id === "string" ? p.child_session_id : undefined,
+      role: typeof p.role === "string" ? p.role : undefined,
+      workdir: typeof p.workdir === "string" ? p.workdir : undefined,
+      costUsd: typeof p.cost_usd === "number" ? p.cost_usd : undefined,
+      tokens: typeof p.tokens === "number" ? p.tokens : undefined,
+      success: typeof p.success === "boolean" ? p.success : undefined,
+      result: typeof p.result === "string" ? p.result : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function subagentStatus(info: SubagentInfo): {
+  label: string;
+  tone: "running" | "done" | "failed";
+} {
+  if (info.pending) return { label: "running", tone: "running" };
+  if (info.success) return { label: "done", tone: "done" };
+  // A refusal never built a child, so it has no session id.
+  if (!info.childSessionId) return { label: "refused", tone: "failed" };
+  if ((info.result ?? "").includes("timed out")) return { label: "timed out", tone: "failed" };
+  return { label: "failed", tone: "failed" };
+}
+
+function SubagentCard({ info }: { info: SubagentInfo }) {
+  const status = subagentStatus(info);
+  const shortId = info.childSessionId
+    ? info.childSessionId.replace(/^subagent-/, "").slice(0, 8)
+    : null;
+  return (
+    <article
+      className={`subagent-card subagent-card--${status.tone}`}
+      data-testid="subagent-card"
+    >
+      <div className="subagent-card-head">
+        <span className="subagent-card-title">
+          Sub-agent{shortId ? <code> {shortId}…</code> : null}
+        </span>
+        {info.role ? <span className="subagent-card-role">{info.role}</span> : null}
+        <span className={`subagent-card-status subagent-card-status--${status.tone}`}>
+          {status.label}
+        </span>
+      </div>
+      <div className="subagent-card-meta">
+        {typeof info.costUsd === "number" && info.costUsd > 0 ? (
+          <span>${info.costUsd.toFixed(4)}</span>
+        ) : null}
+        {typeof info.tokens === "number" && info.tokens > 0 ? (
+          <span>{info.tokens.toLocaleString()} tokens</span>
+        ) : null}
+        {info.workdir ? (
+          <code className="subagent-card-workdir" title={info.workdir}>
+            {info.workdir}
+          </code>
+        ) : null}
+      </div>
+      {info.result ? (
+        <details className="subagent-card-result">
+          <summary>Result</summary>
+          <pre className="log-pre">{stripAnsiCodes(info.result)}</pre>
+        </details>
+      ) : null}
+    </article>
+  );
+}
+
 // ── #508 live activity view ──────────────────────────────────────────────────
 
 type ActivityEntry = {
@@ -704,6 +798,18 @@ function LiveTaskView({
                 <div key={e.key} className="live-activity-message" data-testid="live-assistant-message">
                   {e.text}
                 </div>
+              ) : e.name === "spawn_subagent" ? (
+                // Live child card (#1043): pending until the spawn's result
+                // frame lands, then status/spend from the tool's JSON result —
+                // never a raw JSON blob.
+                <SubagentCard
+                  key={e.key}
+                  info={
+                    e.pending
+                      ? { pending: true, ...(parseSubagentPayload(e.text) ?? {}) }
+                      : (parseSubagentPayload(e.result) ?? { success: !e.isError })
+                  }
+                />
               ) : (
                 <article
                   key={e.key}
@@ -1012,14 +1118,24 @@ function LogViewerBody({
                 total={messages.length}
               />
               <div className="log-session">
-                {visibleIdx.map((i) => (
-                  <LogMessageCard
-                    key={messages[i].id ?? i}
-                    msg={messages[i]}
-                    taskId={task.id}
-                    toolName={toolNames.get(i)}
-                  />
-                ))}
+                {visibleIdx.map((i) => {
+                  // Sub-agent linkage entries (#1043) render as child cards,
+                  // not raw JSON tool messages.
+                  if (messages[i].message_type === "subagent_spawned") {
+                    const info = parseSubagentPayload(messages[i].content);
+                    if (info) {
+                      return <SubagentCard key={messages[i].id ?? i} info={info} />;
+                    }
+                  }
+                  return (
+                    <LogMessageCard
+                      key={messages[i].id ?? i}
+                      msg={messages[i]}
+                      taskId={task.id}
+                      toolName={toolNames.get(i)}
+                    />
+                  );
+                })}
               </div>
             </>
           )}

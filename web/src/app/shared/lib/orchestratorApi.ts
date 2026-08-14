@@ -48,6 +48,10 @@ export type Task = {
   instruction_self_improve?: boolean;
   allow_network?: boolean;
   carry_context?: boolean;
+  // Sub-agent delegation gate (#1043). Defaults TRUE server-side (opt-out);
+  // the server always serializes it, so absence only happens on old payloads —
+  // treat undefined as true.
+  allow_delegation?: boolean;
   persona?: string;
   tags?: string[];
   retry_policy?: RetryPolicy;
@@ -91,6 +95,9 @@ export type TaskCreate = {
   instruction_self_improve?: boolean;
   allow_network?: boolean;
   carry_context?: boolean;
+  // Sub-agent delegation gate (#1043): omit for the server default (TRUE);
+  // send false explicitly to opt the task out.
+  allow_delegation?: boolean;
   // Per-task extended-thinking override (#220): omit to inherit the deployment
   // default, 0 = off, >0 = this task's budget in tokens.
   thinking_budget_tokens?: number | null;
@@ -282,6 +289,8 @@ export type TaskTemplateTask = {
   timezone?: string;
   priority?: number;
   allow_network?: boolean;
+  // Omitted = the form default (true, #1043); an explicit false opts out.
+  allow_delegation?: boolean;
   carry_context?: boolean;
   instruction_self_improve?: boolean;
   persona?: string;

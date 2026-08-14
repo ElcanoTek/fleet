@@ -173,7 +173,7 @@ func TestSpawn_ChildRunsThroughGovernedCoreWithSlicedBudgetAndDepth(t *testing.T
 	// (2) + depth: assert directly on buildChild that privilege only narrows and
 	// depth advances. (spawn() builds the child internally; buildChild is the unit
 	// that sets these invariants.)
-	c := parent.buildChild(child, parent.narrowedCredentialAllowlist(), nil, 0.05, 50, 0)
+	c := parent.buildChild(SubagentRoleWorker, child, parent.narrowedCredentialAllowlist(), nil, 0.05, 50, 0)
 	if c.subagent.depth != parent.subagent.depth+1 {
 		t.Fatalf("child depth = %d, want parent+1 = %d", c.subagent.depth, parent.subagent.depth+1)
 	}
@@ -330,7 +330,7 @@ func TestBuildChild_InheritsMCPBrokerAndCatalog(t *testing.T) {
 		MCPCatalog:   []mcp.ServerTool{{ServerName: "bundle", Tool: mcp.Tool{Name: "lookup"}}},
 		SystemPrompt: "parent",
 	})
-	child := parent.buildChild(nil, nil, nil, 0, 0, 0)
+	child := parent.buildChild(SubagentRoleWorker, nil, nil, nil, 0, 0, 0)
 	if child.mcpBroker != broker {
 		t.Fatal("child did not inherit the parent's MCP broker")
 	}

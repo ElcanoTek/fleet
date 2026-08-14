@@ -525,6 +525,28 @@ function ToolInputView({
     );
   }
 
+  // Governed sub-agent delegation (#1043): show the child's role + task, not
+  // raw JSON.
+  if (name === "spawn_subagent" && typeof args.task === "string") {
+    const role = typeof args.role === "string" && args.role ? args.role : "explore";
+    return (
+      <div className="rounded-[0.6rem] border border-[var(--color-border)] bg-[var(--color-overlay-strong)] min-w-0 max-w-full">
+        <div className="flex items-center gap-2 border-b border-[var(--color-border)] px-2 py-0.5 text-[0.65rem] uppercase tracking-wider text-[var(--color-text-muted)]">
+          <span>sub-agent</span>
+          <span className="rounded-full border border-[var(--color-border)] px-1.5 normal-case tracking-normal">
+            {role}
+          </span>
+        </div>
+        <pre
+          className="overflow-auto whitespace-pre-wrap px-2 py-1.5 text-[0.72rem] leading-[1.4] text-[var(--color-text-primary)]"
+          style={{ maxHeight: "10rem" }}
+        >
+          {args.task}
+        </pre>
+      </div>
+    );
+  }
+
   return <JsonFallback raw={input} />;
 }
 
@@ -626,6 +648,15 @@ function ToolResultView({
     const parsed = parseJSON(resultText);
     if (parsed && typeof parsed === "object") {
       return <TaskTrackerResult result={parsed as Record<string, unknown>} />;
+    }
+  }
+
+  if (name === "spawn_subagent") {
+    const parsed = parseJSON(resultText);
+    if (parsed && typeof parsed === "object") {
+      return (
+        <SubagentSpawnResult result={parsed as Record<string, unknown>} />
+      );
     }
   }
 
@@ -764,6 +795,64 @@ function readWarnings(value: unknown): EmailWarning[] {
       },
     ];
   });
+}
+
+// SubagentSpawnResult renders a spawn_subagent JSON result (#1043) as a child
+// card — status, role, spend — with the child's answer behind a disclosure,
+// never a raw JSON blob.
+function SubagentSpawnResult({ result }: { result: Record<string, unknown> }) {
+  const success = result.success === true;
+  const role = typeof result.role === "string" ? result.role : "";
+  const childId =
+    typeof result.child_session_id === "string" ? result.child_session_id : "";
+  const refused = !success && !childId; // a refusal never built a child
+  const cost = typeof result.cost_usd === "number" ? result.cost_usd : 0;
+  const tokens = typeof result.tokens === "number" ? result.tokens : 0;
+  const answer = typeof result.result === "string" ? result.result : "";
+  const status = success ? "done" : refused ? "refused" : "failed";
+  return (
+    <div
+      className="rounded-[0.6rem] border bg-[var(--color-overlay-strong)] min-w-0 max-w-full"
+      style={{
+        borderColor: success ? "var(--color-border)" : "var(--color-danger-border)",
+      }}
+      data-testid="chat-subagent-card"
+    >
+      <div className="flex items-center gap-2 px-2 py-1 text-[0.7rem]">
+        <span className="font-semibold text-[var(--color-text-primary)]">
+          Sub-agent{childId ? ` ${childId.replace(/^subagent-/, "").slice(0, 8)}…` : ""}
+        </span>
+        {role ? (
+          <span className="rounded-full border border-[var(--color-border)] px-1.5 text-[var(--color-text-muted)]">
+            {role}
+          </span>
+        ) : null}
+        <span
+          className="ml-auto font-semibold"
+          style={{ color: success ? "var(--color-success)" : "var(--color-danger)" }}
+        >
+          {status}
+        </span>
+      </div>
+      <div className="flex flex-wrap gap-2 px-2 pb-1 text-[0.68rem] text-[var(--color-text-muted)]">
+        {cost > 0 ? <span>${cost.toFixed(4)}</span> : null}
+        {tokens > 0 ? <span>{tokens.toLocaleString()} tokens</span> : null}
+      </div>
+      {answer ? (
+        <details className="border-t border-[var(--color-border)] px-2 py-1 text-[0.72rem]">
+          <summary className="cursor-pointer text-[var(--color-text-muted)]">
+            Result
+          </summary>
+          <pre
+            className="overflow-auto whitespace-pre-wrap py-1 leading-[1.4] text-[var(--color-text-secondary)]"
+            style={{ maxHeight: "12rem" }}
+          >
+            {answer}
+          </pre>
+        </details>
+      ) : null}
+    </div>
+  );
 }
 
 function EmailSendPending() {

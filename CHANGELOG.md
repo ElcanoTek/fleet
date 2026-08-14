@@ -19,6 +19,28 @@ prior versions are listed because none have shipped.
 
 ### Changed
 
+- **Sub-agents are now ON by default, and the parent agent decides whether to
+  use them (#1043, amending ADR-0007).** The enablement compose inverts from
+  `FLEET_SUBAGENTS_ENABLED || allow_delegation` (both default false) to
+  `FLEET_SUBAGENTS_ENABLED && allow_delegation` (both default **true**), and
+  migration 061 **backfills existing task rows to `allow_delegation = true`** —
+  existing scheduled tasks start seeing the `spawn_subagent` tool and may
+  delegate, bounded by the unchanged walls (depth 1, fan-out 5, ≤10% of the
+  parent's remaining budget per child, refuse over-cap, spend charged back to
+  the parent ceiling). Fan-out is never forced: registering the tool is the
+  feature, and a run that never spawns is a successful use of it. Opt out per
+  task with the new "Allow sub-agent delegation" toggle (Task form → Advanced,
+  on by default) / `allow_delegation: false`, or fleet-wide via Admin →
+  Features `subagents_enabled` / `FLEET_SUBAGENTS_ENABLED=false`. New in the
+  same change: **interactive chat** registers the tool when the fleet flag is
+  on (child spend shows in the chat cost chip); **typed children** —
+  `role=explore` (default) is a read-only research child with write-capable
+  native tools stripped, `role=worker` keeps the full roster; **per-child
+  isolated workdirs** (`<workspace>/subagents/<child-session-id>/`, returned as
+  `workdir` in the tool's JSON result); and **child cards** on the task page
+  (stored + live) and in the chat transcript (id, role, status, spend) instead
+  of raw JSON. Design note: [docs/SUBAGENTS.md](docs/SUBAGENTS.md).
+
 - The strong/escalation tier is now `x-ai/grok-4.6` (was `openai/gpt-5.6-sol`).
   This is what `suggest_advanced_model`, the spreadsheet nudge, and the task
   fallback resolve to. Same text+image+file modality with tool and reasoning

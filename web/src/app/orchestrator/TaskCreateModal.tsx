@@ -192,6 +192,11 @@ function taskToFormValues(task: Task | null) {
       typeof task?.max_iterations === "number" ? String(task.max_iterations) : "",
     captainsLog: Boolean(task?.instruction_self_improve),
     allowNetwork: Boolean(task?.allow_network),
+    // Sub-agent delegation (#1043) defaults ON: a fresh form starts true, and an
+    // edited/cloned task only starts false when it explicitly opted out (the
+    // server always serializes the field, so undefined means "old payload" =
+    // the default).
+    allowDelegation: task ? task.allow_delegation !== false : true,
     carryContext: Boolean(task?.carry_context),
     mcpSelection: task?.mcp_selection ?? [],
     runIfCommand: task?.run_if?.command ?? "",
@@ -338,6 +343,7 @@ export function TaskCreateModal({
   const [maxIterations, setMaxIterations] = useState(init.maxIterations);
   const [captainsLog, setCaptainsLog] = useState(init.captainsLog);
   const [allowNetwork, setAllowNetwork] = useState(init.allowNetwork);
+  const [allowDelegation, setAllowDelegation] = useState(init.allowDelegation);
   const [carryContext, setCarryContext] = useState(init.carryContext);
   // Pre-run shell gate (#269): empty = no gate (unconditional promotion).
   const [runIfCommand, setRunIfCommand] = useState(init.runIfCommand);
@@ -455,6 +461,7 @@ export function TaskCreateModal({
     thinkingBudget.trim() !== "" ||
     captainsLog ||
     allowNetwork ||
+    !allowDelegation ||
     carryContext ||
     runIfCommand.trim() !== "";
 
@@ -479,6 +486,7 @@ export function TaskCreateModal({
     maxIterations,
     captainsLog,
     allowNetwork,
+    allowDelegation,
     carryContext,
     runIfCommand,
     runIfOnError,
@@ -504,6 +512,7 @@ export function TaskCreateModal({
     init.maxIterations,
     init.captainsLog,
     init.allowNetwork,
+    init.allowDelegation,
     init.carryContext,
     init.runIfCommand,
     init.runIfOnError,
@@ -624,6 +633,7 @@ export function TaskCreateModal({
     setModel(t.model ?? DEFAULT_PRIMARY_MODEL);
     setFallbackModel(t.fallback_model ?? DEFAULT_FALLBACK_MODEL);
     setAllowNetwork(Boolean(t.allow_network));
+    setAllowDelegation(t.allow_delegation !== false);
     setCarryContext(Boolean(t.carry_context));
     setCaptainsLog(Boolean(t.instruction_self_improve));
     setExpectedDuration(
@@ -636,7 +646,13 @@ export function TaskCreateModal({
     );
     setMaxIterations(typeof t.max_iterations === "number" ? String(t.max_iterations) : "");
     if (t.description || t.tags?.length || t.persona) setContextOpen(true);
-    if (t.persona || t.allow_network || t.carry_context || t.instruction_self_improve) {
+    if (
+      t.persona ||
+      t.allow_network ||
+      t.allow_delegation === false ||
+      t.carry_context ||
+      t.instruction_self_improve
+    ) {
       setAdvancedOpen(true);
     }
   };
@@ -742,6 +758,9 @@ export function TaskCreateModal({
     thinkingBudget.trim() !== "",
     captainsLog,
     allowNetwork,
+    // Delegation is ON by default (#1043): the opt-OUT is the non-default state
+    // worth surfacing in the Advanced badge.
+    !allowDelegation,
     carryContext,
     runIfCommand.trim() !== "",
   ].filter(Boolean).length;
@@ -845,6 +864,10 @@ export function TaskCreateModal({
     if (maxIterations.trim()) taskData.max_iterations = Number.parseInt(maxIterations, 10);
     if (captainsLog) taskData.instruction_self_improve = true;
     if (allowNetwork) taskData.allow_network = true;
+    // Delegation defaults ON server-side (#1043): omit when on, send the
+    // explicit false only for an opt-out — the tri-state server field treats a
+    // missing key as the default.
+    if (!allowDelegation) taskData.allow_delegation = false;
     if (carryContext) taskData.carry_context = true;
     if (mcpSelection.length > 0) taskData.mcp_selection = mcpSelection;
     if (scheduleMode === "once" && scheduledFor) {
@@ -1024,6 +1047,7 @@ export function TaskCreateModal({
               ? { max_iterations: taskData.max_iterations }
               : {}),
             allow_network: Boolean(taskData.allow_network),
+            allow_delegation: allowDelegation,
             tags: taskData.tags ?? [],
             persona: taskData.persona ?? "",
             ...(taskData.thinking_budget_tokens != null
@@ -2041,6 +2065,21 @@ export function TaskCreateModal({
                           <span className="switch-row-title">Allow network egress</span>
                           <span className="switch-row-desc">
                             Off = sealed — the sandbox has no internet access.
+                          </span>
+                        </span>
+                      </label>
+                      <label className="switch-row">
+                        <input
+                          type="checkbox"
+                          className="ui-switch"
+                          checked={allowDelegation}
+                          onChange={(e) => setAllowDelegation(e.target.checked)}
+                        />
+                        <span className="switch-row-text">
+                          <span className="switch-row-title">Allow sub-agent delegation</span>
+                          <span className="switch-row-desc">
+                            The agent may fan work out to governed child agents (capped at 5,
+                            each ≤10% of the remaining budget). Off = this task never delegates.
                           </span>
                         </span>
                       </label>

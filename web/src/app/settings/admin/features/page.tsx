@@ -132,7 +132,7 @@ const META: Record<string, SettingMeta> = {
   subagents_enabled: {
     label: "Sub-agent delegation",
     description:
-      "Allow scheduled tasks to spawn governed child agents fleet-wide (individual tasks can also opt in with allow_delegation). Children inherit ceilings and policy from the parent run.",
+      "Fleet-wide kill switch for governed sub-agents (on by default). When on, scheduled tasks (unless a task opts out via allow_delegation) and chat turns register spawn_subagent — the agent decides whether to use it. Children inherit ceilings and policy from the parent run; turning this off hides the tool everywhere.",
   },
   memory_autoindex_enabled: {
     label: "Memory auto-index",

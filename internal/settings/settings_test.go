@@ -58,7 +58,7 @@ func testDefaults() map[string]string {
 		"tool_disclosure_threshold":         "128",
 		"max_tool_output_bytes":             "65536",
 		"phone_a_friend_enabled":            "false",
-		"subagents_enabled":                 "false",
+		"subagents_enabled":                 "true",
 		"memory_autoindex_enabled":          "false",
 		"error_analysis_enabled":            "true",
 		"auto_title_enabled":                "true",

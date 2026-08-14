@@ -176,7 +176,7 @@ func TestBuildChild_DepthLimitChildHasNoDelegationTool(t *testing.T) {
 		t.Setenv("FLEET_LOG_FILE", t.TempDir()+"/session.json")
 		capModel := &toolCapturingModel{}
 		parent := newParentForSpawn(t, capModel, 1.0, 0, 1 /*maxDepth*/, 5)
-		child := parent.buildChild(capModel, nil, nil, 0.01, 0, 0)
+		child := parent.buildChild(SubagentRoleWorker, capModel, nil, nil, 0.01, 0, 0)
 		if child.subagent.enabled {
 			t.Fatal("a child at the depth limit must have delegation DISABLED (#264 parent → sub-agent only)")
 		}
@@ -189,7 +189,7 @@ func TestBuildChild_DepthLimitChildHasNoDelegationTool(t *testing.T) {
 
 	t.Run("maxDepth 2 — child below the limit can delegate", func(t *testing.T) {
 		parent := newParentForSpawn(t, &budgetMockModel{name: "c"}, 1.0, 0, 2 /*maxDepth*/, 5)
-		child := parent.buildChild(&budgetMockModel{name: "c"}, nil, nil, 0.01, 0, 0)
+		child := parent.buildChild(SubagentRoleWorker, &budgetMockModel{name: "c"}, nil, nil, 0.01, 0, 0)
 		if !child.subagent.enabled {
 			t.Fatal("with maxDepth=2 a depth-1 child should still be able to delegate")
 		}
@@ -206,15 +206,15 @@ func TestBuildChild_MaxIterationsCappedAtParent(t *testing.T) {
 	parent.maxIterations = 50
 
 	// Request fewer than the parent's → honored.
-	if c := parent.buildChild(&budgetMockModel{name: "c"}, nil, nil, 0.01, 0, 10); c.maxIterations != 10 {
+	if c := parent.buildChild(SubagentRoleWorker, &budgetMockModel{name: "c"}, nil, nil, 0.01, 0, 10); c.maxIterations != 10 {
 		t.Fatalf("child maxIterations = %d, want 10 (the smaller request)", c.maxIterations)
 	}
 	// Request MORE than the parent's → clamped to the parent's.
-	if c := parent.buildChild(&budgetMockModel{name: "c"}, nil, nil, 0.01, 0, 9999); c.maxIterations != 50 {
+	if c := parent.buildChild(SubagentRoleWorker, &budgetMockModel{name: "c"}, nil, nil, 0.01, 0, 9999); c.maxIterations != 50 {
 		t.Fatalf("child maxIterations = %d, want 50 (clamped to parent)", c.maxIterations)
 	}
 	// Unspecified (0) → inherit the parent's.
-	if c := parent.buildChild(&budgetMockModel{name: "c"}, nil, nil, 0.01, 0, 0); c.maxIterations != 50 {
+	if c := parent.buildChild(SubagentRoleWorker, &budgetMockModel{name: "c"}, nil, nil, 0.01, 0, 0); c.maxIterations != 50 {
 		t.Fatalf("child maxIterations = %d, want 50 (inherited)", c.maxIterations)
 	}
 }
@@ -235,7 +235,7 @@ func TestBuildChild_ParentTaskIDLinkage(t *testing.T) {
 	if parent.subagent.parentTaskID != taskID.String() {
 		t.Fatalf("parent.subagent.parentTaskID = %q, want %q", parent.subagent.parentTaskID, taskID.String())
 	}
-	child := parent.buildChild(&budgetMockModel{name: "c"}, nil, nil, 0.01, 0, 0)
+	child := parent.buildChild(SubagentRoleWorker, &budgetMockModel{name: "c"}, nil, nil, 0.01, 0, 0)
 	if child.logSession.ParentTaskID != taskID.String() {
 		t.Fatalf("child session ParentTaskID = %q, want %q", child.logSession.ParentTaskID, taskID.String())
 	}
@@ -259,7 +259,7 @@ func TestRecordSubagentSpawn_AppendsToParentLog(t *testing.T) {
 		TaskID:        taskID,
 		Subagent:      SubagentOptions{Enabled: true, MaxDepth: 1, MaxChildren: 5},
 	})
-	parent.recordSubagentSpawn("subagent-xyz", agentcore.RunUsage{CostUSD: 0.02, PromptTokens: 100, CompletionTokens: 20}, true)
+	parent.recordSubagentSpawn("subagent-xyz", SubagentRoleExplore, "/tmp/ws/subagents/subagent-xyz", agentcore.RunUsage{CostUSD: 0.02, PromptTokens: 100, CompletionTokens: 20}, true)
 	msgs := parent.logSession.SnapshotMessages()
 	var found *LogMessage
 	for i := range msgs {

@@ -518,17 +518,19 @@ type TaskTemplate struct {
 type TaskTemplateTask struct {
 	// Title pre-fills the task's display label. Omitted, the create form falls
 	// back to the template's own name, which is what the operator picked it by.
-	Title                  string   `yaml:"title,omitempty" json:"title,omitempty"`
-	Prompt                 string   `yaml:"prompt" json:"prompt,omitempty"`
-	Model                  *string  `yaml:"model,omitempty" json:"model,omitempty"`
-	FallbackModel          *string  `yaml:"fallback_model,omitempty" json:"fallback_model,omitempty"`
-	MaxIterations          *int     `yaml:"max_iterations,omitempty" json:"max_iterations,omitempty"`
-	MaxRetries             *int     `yaml:"max_retries,omitempty" json:"max_retries,omitempty"`
-	Recurrence             string   `yaml:"recurrence,omitempty" json:"recurrence,omitempty"`
-	Timezone               string   `yaml:"timezone,omitempty" json:"timezone,omitempty"`
-	Priority               int      `yaml:"priority,omitempty" json:"priority,omitempty"`
-	AllowNetwork           bool     `yaml:"allow_network,omitempty" json:"allow_network,omitempty"`
-	AllowDelegation        bool     `yaml:"allow_delegation,omitempty" json:"allow_delegation,omitempty"`
+	Title         string  `yaml:"title,omitempty" json:"title,omitempty"`
+	Prompt        string  `yaml:"prompt" json:"prompt,omitempty"`
+	Model         *string `yaml:"model,omitempty" json:"model,omitempty"`
+	FallbackModel *string `yaml:"fallback_model,omitempty" json:"fallback_model,omitempty"`
+	MaxIterations *int    `yaml:"max_iterations,omitempty" json:"max_iterations,omitempty"`
+	MaxRetries    *int    `yaml:"max_retries,omitempty" json:"max_retries,omitempty"`
+	Recurrence    string  `yaml:"recurrence,omitempty" json:"recurrence,omitempty"`
+	Timezone      string  `yaml:"timezone,omitempty" json:"timezone,omitempty"`
+	Priority      int     `yaml:"priority,omitempty" json:"priority,omitempty"`
+	AllowNetwork  bool    `yaml:"allow_network,omitempty" json:"allow_network,omitempty"`
+	// AllowDelegation is a pointer so an omitted key leaves the create form at
+	// its default (true since #1043) instead of forcing an opt-out.
+	AllowDelegation        *bool    `yaml:"allow_delegation,omitempty" json:"allow_delegation,omitempty"`
 	InstructionSelfImprove bool     `yaml:"instruction_self_improve,omitempty" json:"instruction_self_improve,omitempty"`
 	Persona                string   `yaml:"persona,omitempty" json:"persona,omitempty"`
 	Description            string   `yaml:"description,omitempty" json:"description,omitempty"`

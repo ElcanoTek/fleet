@@ -555,6 +555,16 @@ func (m *Manager) buildSystemPrompt(persona, conversationID string, memories []s
 		sb.WriteString("\n")
 	}
 
+	// Sub-agent delegation policy (#1043): appended in lockstep with the tool
+	// registration — RunInteractiveTurn registers spawn_subagent from the same
+	// LiveSubagentsEnabled flag the Manager passes as Subagent.Enabled, so the
+	// prompt teaches the tool exactly when the roster carries it. Stable within
+	// an enablement state (an admin toggle is a deliberate cache-busting act).
+	if m.config.LiveSubagentsEnabled() {
+		sb.WriteString(DelegationPromptSection())
+		sb.WriteString("\n")
+	}
+
 	// 6. per-conversation absolute workspace path. Native tools
 	// (bash, run_python) already cwd into this dir, so the agent can
 	// use bare relative paths there. MCP subprocesses do NOT inherit

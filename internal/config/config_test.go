@@ -129,8 +129,11 @@ func TestLoad_DefaultsApply(t *testing.T) {
 	if cfg.SubagentsBudgetFraction != 0.10 {
 		t.Errorf("SubagentsBudgetFraction default: got %v, want 0.10", cfg.SubagentsBudgetFraction)
 	}
-	if cfg.SubagentsEnabled {
-		t.Error("SubagentsEnabled default: expected false (off by default)")
+	// Default-on since #1043: registering the tool is the feature — the parent
+	// agent decides whether to spawn; FLEET_SUBAGENTS_ENABLED=false is the
+	// fleet-wide kill switch.
+	if !cfg.SubagentsEnabled {
+		t.Error("SubagentsEnabled default: expected true (default-on, #1043)")
 	}
 }
 
