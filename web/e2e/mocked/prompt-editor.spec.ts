@@ -76,10 +76,31 @@ test("the prompt field can be dragged taller, and a dragged height survives typi
 
   // Simulate the drag's effect, then type: auto-grow must yield to the operator
   // rather than snapping their chosen height back to the content height.
-  await prompt.evaluate((el) => {
-    el.style.height = "420px";
-    el.dispatchEvent(new Event("input", { bubbles: true }));
-  });
+  //
+  // The "operator dragged it" flag is set by a ResizeObserver, whose callback is
+  // delivered after layout on a LATER frame. A real drag spans many frames, so
+  // the flag is always set well before the operator types. Writing the height
+  // programmatically and typing straight away races that callback instead, and
+  // losing the race is unrecoverable: auto-grow clamps to PROMPT_AUTOGROW_MAX_PX
+  // and records 240px as its own last write, so when the observer finally runs
+  // it sees its own value and returns early — the flag never gets set and the
+  // poll below sits at 240 until it times out. That is a flake in this test, not
+  // in the product; waiting two frames makes the test observe the same ordering
+  // a human drag guarantees.
+  //
+  // (No synthetic "input" event here: React's value tracking drops one whose
+  // value did not change, so it never reached autoGrowPrompt anyway.)
+  await prompt.evaluate(
+    (el) =>
+      new Promise<void>((resolve) => {
+        el.style.height = "420px";
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      }),
+  );
+  // Precondition, asserted separately from the one below so a future failure
+  // says WHICH half broke: the drag not taking effect, or typing undoing it.
+  expect(await prompt.evaluate((el) => el.getBoundingClientRect().height)).toBeGreaterThan(400);
+
   await prompt.focus();
   await page.keyboard.type("xyz");
   await expect
