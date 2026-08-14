@@ -33,7 +33,7 @@ export const MAX_RESULTS = 50;
 // Hand-picked entries shown immediately and used as a fallback when the
 // catalog fetch fails. Pinned release slugs (not floating `~` aliases).
 export const SEED_MODELS: PickerModel[] = [
-  { id: "z-ai/glm-5.2", name: "Z.AI: GLM 5.2", recommended: true },
+  { id: "deepseek/deepseek-v4-flash-0731", name: "DeepSeek: DeepSeek V4 Flash 0731", recommended: true },
   { id: "openai/gpt-5.6-sol", name: "OpenAI: GPT-5.6 Sol", recommended: true },
 ];
 

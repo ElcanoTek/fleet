@@ -8,7 +8,7 @@ import { mockChatBoot } from "./_mocks";
 // so the tier arithmetic (blended 3 prompt : 1 completion, see
 // shared/lib/modelCost.ts) is exercised end-to-end through the real UI:
 //
-//   glm-5.2      $0.40/$1.60 → $0.70/M  → $
+//   v4-flash     $0.40/$1.60 → $0.70/M  → $
 //   gpt-5.6-sol  $1.25/$10   → $3.44/M  → $$
 //   sonnet       $3/$15      → $6.00/M  → $$$
 //   opus         $15/$75     → $30.00/M → $$$$
@@ -19,8 +19,8 @@ import { mockChatBoot } from "./_mocks";
 const PRICED = {
   models: [
     {
-      slug: "z-ai/glm-5.2",
-      name: "Z.AI: GLM 5.2",
+      slug: "deepseek/deepseek-v4-flash-0731",
+      name: "DeepSeek: DeepSeek V4 Flash 0731",
       price_prompt: 0.0000004,
       price_completion: 0.0000016,
       context_length: 200000,
@@ -67,7 +67,7 @@ test("the chat composer shows a cost tier per model and on the chip", async ({ p
   const rows = listbox.locator("[role='option']");
   const tierOf = (name: string) =>
     rows.filter({ hasText: name }).locator(".model-cost").first();
-  await expect(tierOf("Z.AI: GLM 5.2")).toHaveAttribute("data-cost-tier", "1");
+  await expect(tierOf("DeepSeek: DeepSeek V4 Flash 0731")).toHaveAttribute("data-cost-tier", "1");
   await expect(tierOf("OpenAI: GPT-5.6 Sol")).toHaveAttribute("data-cost-tier", "2");
   await expect(tierOf("Claude Sonnet 4.5")).toHaveAttribute("data-cost-tier", "3");
   await expect(tierOf("Claude Opus 4.8")).toHaveAttribute("data-cost-tier", "4");
@@ -106,6 +106,6 @@ test("the task form's model picker shows a cost tier per option", async ({ page 
   const options = page.locator(".model-picker-dropdown [role='option']");
   const tierOf = (slug: string) =>
     options.filter({ has: page.locator(`text=${slug}`) }).locator(".model-cost").first();
-  await expect(tierOf("z-ai/glm-5.2")).toHaveAttribute("data-cost-tier", "1");
+  await expect(tierOf("deepseek/deepseek-v4-flash-0731")).toHaveAttribute("data-cost-tier", "1");
   await expect(tierOf("anthropic/claude-opus-4.8")).toHaveAttribute("data-cost-tier", "4");
 });

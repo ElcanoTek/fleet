@@ -31,8 +31,8 @@
 // `signature` in `thinking` block" (root-caused + live-verified
 // 2026-06-04). Trade-off: lab refreshes require bumping these constants
 // — and their server-side mirrors — instead of floating automatically.
-export const DEFAULT_MODEL = "z-ai/glm-5.2";
-export const DEFAULT_MODEL_LABEL = "Z.AI: GLM 5.2";
+export const DEFAULT_MODEL = "deepseek/deepseek-v4-flash-0731";
+export const DEFAULT_MODEL_LABEL = "DeepSeek: DeepSeek V4 Flash 0731";
 
 export const ADVANCED_MODEL = "openai/gpt-5.6-sol";
 export const ADVANCED_MODEL_LABEL = "OpenAI: GPT-5.6 Sol";
