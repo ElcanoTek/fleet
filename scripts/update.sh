@@ -160,6 +160,33 @@ warn() { printf '%s! %s%s\n' "$c_yellow" "$*" "$c_reset" >&2; }
 info() { printf '%s» %s%s\n' "$c_dim" "$*" "$c_reset"; }
 die()  { printf '%s✗ %s%s\n' "$c_red" "$*" "$c_reset" >&2; exit 1; }
 run()  { if [[ "$DRY_RUN" == "1" ]]; then info "[dry-run] $*"; else "$@"; fi; }
+
+# require_go_toolchain — fail the build step with an actionable message rather
+# than an opaque one.
+#
+# The Makefile exports GOTOOLCHAIN=auto, so the operator does NOT need go.mod's
+# exact pinned patch release installed: Go fetches it. What Go cannot do is
+# bootstrap that fetch from a toolchain older than 1.21, which is when
+# GOTOOLCHAIN was introduced. That is the one case worth naming up front —
+# otherwise `make build` dies on a raw version-mismatch line the operator has to
+# decode into "upgrade Go".
+#
+# A GOVERSION we can't parse (a devel/source build) is not treated as a failure:
+# the build itself is the real check, and refusing to run on an unrecognized
+# string would be worse than letting it proceed.
+require_go_toolchain() {
+  command -v go >/dev/null 2>&1 \
+    || die "go not found on PATH — install Go (1.21 or newer) and re-run; the build fetches the exact pinned toolchain itself, so the distro's version does not have to match go.mod"
+  local goversion minor pinned
+  goversion="$(go env GOVERSION 2>/dev/null || true)"   # e.g. "go1.26.2"
+  [[ "$goversion" == go1.* ]] || return 0
+  minor="${goversion#go1.}"; minor="${minor%%.*}"
+  [[ "$minor" =~ ^[0-9]+$ ]] || return 0
+  if (( minor < 21 )); then
+    pinned="$(awk '/^go /{print $2; exit}' "$SRC_DIR/go.mod" 2>/dev/null || true)"
+    die "installed Go is ${goversion}, which predates GOTOOLCHAIN (added in 1.21) and so cannot fetch the pinned toolchain${pinned:+ (go.mod pins $pinned)} — upgrade Go and re-run; live binary left in place"
+  fi
+}
 # upsert_env_file FILE KEY VALUE — update one key without sourcing the secrets
 # file or disturbing operator-managed entries.
 upsert_env_file() {
@@ -585,6 +612,7 @@ if [[ "$DRY_RUN" == "1" ]]; then
   info "[dry-run] would run: (cd ${SRC_DIR}/web && npm ci && npm run build) with the NEXT_PUBLIC_* stamps from /etc/fleet/fleet-web.env"
   info "[dry-run] would deploy the web build → the fleet-web unit's WorkingDirectory (else /opt/fleet/web)"
 else
+  require_go_toolchain
   ( cd "$SRC_DIR" && make build ) || die "make build failed — live binary left in place"
   [[ -x "$SRC_DIR/fleet" && -x "$SRC_DIR/fleet-admin" ]] \
     || die "make build did not emit ${SRC_DIR}/fleet + ${SRC_DIR}/fleet-admin"

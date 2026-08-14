@@ -31,7 +31,7 @@ them so a local run agrees with the gate.
 
 | Tool | Version | Why |
 | --- | --- | --- |
-| **Go** | the version pinned in `go.mod` (currently **1.26.6**) | the backend; CI uses `go-version: 1.26.6` |
+| **Go** | **1.21 or newer** — you do *not* need the pinned patch release (currently **1.26.6**) | the backend; CI uses `go-version: 1.26.6`. The Makefile exports `GOTOOLCHAIN=auto`, so `make build` fetches the pinned toolchain itself — a distro Go that lags `go.mod` is fine, it just needs to be new enough (1.21+) to do the fetch |
 | **Node.js** | **22** + npm | the `web/` Next.js app; CI uses `node-version: 22` |
 | **golangci-lint** | **v2.12.2** | the lint gate (`.golangci.yml` is the v2 schema and is tuned to this version — keep them in sync) |
 | **Podman** (rootless) | recent | the execution sandbox; needed for the sandbox-backed tests / first chat turn. Most unit tests self-skip when podman is absent. |
