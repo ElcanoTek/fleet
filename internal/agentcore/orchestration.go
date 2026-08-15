@@ -144,6 +144,13 @@ type orchestrationState struct {
 	taskTrackerUsed   bool
 	latestTaskTracker taskTrackerSnapshot
 
+	// delegatedFinish marks this run as a spawned SUB-AGENT (#1043 follow-up):
+	// checkFinishEnforcement then skips the self-audit ritual blocks and keeps
+	// every other finish gate. See checkFinishEnforcement for why the ritual is
+	// a root-run gate, and NewDelegatedPolicy for the one constructor that sets
+	// it — the flag is never model-reachable.
+	delegatedFinish bool
+
 	// ── ceilings (interactive); zero means unlimited ──
 	maxCostUSD     float64
 	maxTotalTokens int
@@ -239,6 +246,14 @@ func (o *orchestrationState) setRepeatGuardNoun(noun string) {
 	if noun != "" {
 		o.repeatGuardNoun = noun
 	}
+}
+
+// setDelegatedFinish marks the run as a spawned sub-agent's, relaxing ONLY the
+// self-audit finish ritual (see checkFinishEnforcement).
+func (o *orchestrationState) setDelegatedFinish(v bool) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.delegatedFinish = v
 }
 
 // setCeilings configures the per-turn guardrails (interactive).

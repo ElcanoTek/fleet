@@ -283,7 +283,7 @@ func TestRecordSubagentSpawn_AppendsToParentLog(t *testing.T) {
 func TestSpawn_JSONResultShape(t *testing.T) {
 	child := &budgetMockModel{name: "child", inTokens: 100, outTokens: 20, costUSD: 0.02}
 	parent := newParentForSpawn(t, child, 1.0, 0, 1, 5)
-	resp, err := parent.spawn(context.Background(), spawnSubagentInput{Task: "do work", MaxCostUSD: 0.02})
+	resp, err := parent.spawn(context.Background(), spawnSubagentInput{Task: "do work", MaxCostUSD: 0.02}, "call-1")
 	if err != nil {
 		t.Fatalf("transport error: %v", err)
 	}
@@ -313,12 +313,12 @@ func TestSpawn_DefaultFanoutIsFiveSixthRefused(t *testing.T) {
 		t.Fatalf("default maxChildren = %d, want 5 (#264)", parent.subagent.maxChildren)
 	}
 	for i := 0; i < 5; i++ {
-		resp, _ := parent.spawn(context.Background(), spawnSubagentInput{Task: "t", MaxCostUSD: 0.001})
+		resp, _ := parent.spawn(context.Background(), spawnSubagentInput{Task: "t", MaxCostUSD: 0.001}, "call-1")
 		if out := parseSpawnOutput(t, resp); !out.Success {
 			t.Fatalf("spawn %d within the cap was refused: %q", i, out.Result)
 		}
 	}
-	resp, _ := parent.spawn(context.Background(), spawnSubagentInput{Task: "sixth", MaxCostUSD: 0.001})
+	resp, _ := parent.spawn(context.Background(), spawnSubagentInput{Task: "sixth", MaxCostUSD: 0.001}, "call-1")
 	if out := parseSpawnOutput(t, resp); out.Success || !strings.Contains(out.Result, "max concurrent sub-agents reached") {
 		t.Fatalf("6th spawn must be refused with the documented message, got success=%v result=%q", out.Success, out.Result)
 	}
@@ -334,7 +334,7 @@ func TestSpawn_TimeoutBranchAndChargeBack(t *testing.T) {
 	t.Run("timeout_minutes set, fast child finishes within it", func(t *testing.T) {
 		child := &budgetMockModel{name: "c", inTokens: 10, outTokens: 2, costUSD: 0.01}
 		parent := newParentForSpawn(t, child, 1.0, 0, 1, 5)
-		resp, err := parent.spawn(context.Background(), spawnSubagentInput{Task: "quick", MaxCostUSD: 0.01, TimeoutMinutes: 1})
+		resp, err := parent.spawn(context.Background(), spawnSubagentInput{Task: "quick", MaxCostUSD: 0.01, TimeoutMinutes: 1}, "call-1")
 		if err != nil {
 			t.Fatalf("transport error: %v", err)
 		}
@@ -354,7 +354,7 @@ func TestSpawn_TimeoutBranchAndChargeBack(t *testing.T) {
 		parent := newParentForSpawn(t, child, 1.0, 0, 1, 5)
 		ctx, cancel := context.WithCancel(context.Background())
 		go func() { time.Sleep(50 * time.Millisecond); cancel() }()
-		resp, err := parent.spawn(ctx, spawnSubagentInput{Task: "slow", MaxCostUSD: 0.01})
+		resp, err := parent.spawn(ctx, spawnSubagentInput{Task: "slow", MaxCostUSD: 0.01}, "call-1")
 		if err != nil {
 			t.Fatalf("transport error: %v", err)
 		}
@@ -378,7 +378,7 @@ func TestSpawn_TimeoutMinutesValidated(t *testing.T) {
 		{Task: "t", TimeoutMinutes: -1},
 		{Task: "t", MaxIterations: -1},
 	} {
-		resp, err := parent.spawn(context.Background(), in)
+		resp, err := parent.spawn(context.Background(), in, "call-1")
 		if err != nil {
 			t.Fatalf("transport error: %v", err)
 		}

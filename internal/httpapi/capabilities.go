@@ -54,12 +54,16 @@ var allSSECapabilities = []SSECapability{
 // fleet.capabilities frames) and is ALWAYS emitted regardless of the client's
 // declared set.
 var capabilityForEvent = map[string]SSECapability{
-	"text.delta":               CapText,
-	"reasoning.start":          CapReasoning,
-	"reasoning.delta":          CapReasoning,
-	"reasoning.end":            CapReasoning,
-	"tool.call":                CapToolCalls,
-	"tool.result":              CapToolResults,
+	"text.delta":      CapText,
+	"reasoning.start": CapReasoning,
+	"reasoning.delta": CapReasoning,
+	"reasoning.end":   CapReasoning,
+	"tool.call":       CapToolCalls,
+	"tool.result":     CapToolResults,
+	// A sub-agent's relabeled steps are tool-call activity (of a child run), so
+	// they ride the same capability: a client that declared it cannot render
+	// tool calls has no use for a child's tool calls either (#1043 follow-up).
+	"subagent.progress":        CapToolCalls,
 	"tool.approval_required":   CapApprovalCards,
 	"tool.approval_superseded": CapApprovalCards,
 	"tool.auto_resolved":       CapApprovalCards,

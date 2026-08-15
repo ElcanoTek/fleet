@@ -12,7 +12,179 @@ export type ToolCall = {
   input: string;
   resultText?: string;
   state: ToolCallState;
+  /**
+   * Live sub-agent activity for a `spawn_subagent` call (#1043 follow-up).
+   * Built from `subagent.progress` SSE events, which carry the parent's
+   * tool_call_id so concurrent children attach to their own chip. Live-only:
+   * the durable record after a reload is the tool result JSON (status, spend,
+   * steps, tools_used) plus the child's transcript endpoint.
+   */
+  subagent?: SubagentActivity;
 };
+
+/** One line of a sub-agent's work trail, as it happened. */
+export type SubagentStep = {
+  /** started | tool | tool_result | text | thinking | note | finished */
+  phase: string;
+  /** Tool name for tool/tool_result phases. */
+  tool?: string;
+  /** Short human preview: argument summary, result head, or text tail. */
+  detail?: string;
+  isErr?: boolean;
+};
+
+export type SubagentActivity = {
+  childId: string;
+  role: string;
+  /** Latest phase seen — "finished" flips the card to its terminal state. */
+  phase: string;
+  /** Number of tool calls the child has made so far. */
+  steps: number;
+  /** What the child is doing right now, already humanized for display. */
+  current?: string;
+  /** Distinct tools the child has reached for, in first-call order. */
+  toolsUsed: string[];
+  /** The last few steps, newest last — the scrolling activity trail. */
+  trail: SubagentStep[];
+  workdir?: string;
+  model?: string;
+  /** Terminal fields (phase === "finished"). */
+  success?: boolean;
+  costUsd?: number;
+  tokens?: number;
+  durationMs?: number;
+  note?: string;
+};
+
+/** How many trail lines a live sub-agent card keeps. */
+export const SUBAGENT_TRAIL_LIMIT = 6;
+
+/** JSON shape of a `subagent.progress` SSE event payload. */
+export type SubagentProgressEventPayload = {
+  tool_call_id?: string;
+  child_session_id?: string;
+  role?: string;
+  phase?: string;
+  tool?: string;
+  detail?: string;
+  step?: number;
+  is_err?: boolean;
+  task?: string;
+  workdir?: string;
+  model?: string;
+  success?: boolean;
+  cost_usd?: number;
+  tokens?: number;
+  steps?: number;
+  tools_used?: string[];
+  duration_ms?: number;
+  note?: string;
+};
+
+/**
+ * applySubagentProgress folds one `subagent.progress` event into a tool call's
+ * live activity. Pure so the reducer stays testable: it never mutates the
+ * input.
+ *
+ * Phases are additive — a child that emits only text previews still shows
+ * movement, and a `finished` event settles the card even if the tool result
+ * has not been flushed yet.
+ */
+export function applySubagentProgress(
+  prev: SubagentActivity | undefined,
+  p: SubagentProgressEventPayload,
+): SubagentActivity {
+  const base: SubagentActivity = prev ?? {
+    childId: p.child_session_id ?? "",
+    role: p.role ?? "",
+    phase: p.phase ?? "started",
+    steps: 0,
+    toolsUsed: [],
+    trail: [],
+  };
+  const phase = p.phase ?? base.phase;
+  const detail = typeof p.detail === "string" ? p.detail : undefined;
+  const next: SubagentActivity = {
+    ...base,
+    childId: p.child_session_id || base.childId,
+    role: p.role || base.role,
+    phase,
+    steps: typeof p.step === "number" ? Math.max(base.steps, p.step) : base.steps,
+    current: subagentCurrentLabel(phase, p.tool, detail) ?? base.current,
+  };
+
+  if (phase === "started") {
+    next.workdir = p.workdir || base.workdir;
+    next.model = p.model || base.model;
+    next.current = "starting…";
+    return next;
+  }
+
+  if (phase === "finished") {
+    next.success = p.success === true;
+    next.costUsd = typeof p.cost_usd === "number" ? p.cost_usd : base.costUsd;
+    next.tokens = typeof p.tokens === "number" ? p.tokens : base.tokens;
+    next.durationMs =
+      typeof p.duration_ms === "number" ? p.duration_ms : base.durationMs;
+    next.steps = typeof p.steps === "number" ? p.steps : base.steps;
+    next.toolsUsed = Array.isArray(p.tools_used) ? p.tools_used : base.toolsUsed;
+    next.note = typeof p.note === "string" && p.note ? p.note : undefined;
+    next.current = undefined;
+    return next;
+  }
+
+  if (phase === "tool" && p.tool) {
+    next.toolsUsed = base.toolsUsed.includes(p.tool)
+      ? base.toolsUsed
+      : [...base.toolsUsed, p.tool];
+  }
+
+  // Only real steps join the trail: text/thinking previews are the *current*
+  // line and would otherwise flood it with fragments of one sentence.
+  if (phase === "tool" || phase === "tool_result" || phase === "note") {
+    next.trail = [
+      ...base.trail,
+      { phase, tool: p.tool, detail, isErr: p.is_err === true },
+    ].slice(-SUBAGENT_TRAIL_LIMIT);
+  }
+  return next;
+}
+
+/**
+ * liveSubagentLabel renders a one-line "what the sub-agent is doing" label for
+ * the thinking indicator, or null when the call is not a live delegation. Kept
+ * short — the indicator truncates — and always prefixed so it reads as the
+ * CHILD's work, not the parent's.
+ */
+export function liveSubagentLabel(tc: ToolCall): string | null {
+  const sa = tc.subagent;
+  if (tc.name !== "spawn_subagent" || !sa || sa.phase === "finished") return null;
+  const head = sa.role ? `Sub-agent (${sa.role})` : "Sub-agent";
+  const step = sa.steps > 0 ? ` · step ${sa.steps}` : "";
+  return sa.current ? `${head}${step} · ${sa.current}` : `${head}${step}`;
+}
+
+/** subagentCurrentLabel renders the "doing right now" line for a phase. */
+function subagentCurrentLabel(
+  phase: string,
+  tool?: string,
+  detail?: string,
+): string | undefined {
+  switch (phase) {
+    case "tool":
+      return tool ? `${tool}${detail ? ` · ${detail}` : ""}` : undefined;
+    case "tool_result":
+      return tool ? `${tool} returned` : undefined;
+    case "text":
+      return detail ? `writing: ${detail}` : "writing…";
+    case "thinking":
+      return detail ? `thinking: ${detail}` : "thinking…";
+    case "note":
+      return detail;
+    default:
+      return undefined;
+  }
+}
 
 export type PythonStream = {
   /** Parsed stdout from the run_python bridge, or the raw tool text when parsing fails. */
