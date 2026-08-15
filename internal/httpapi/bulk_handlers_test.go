@@ -95,14 +95,14 @@ func TestBulkDelete_AllMatchingRequiresConfirm(t *testing.T) {
 	h := s.Routes()
 	seedConvs(t, s, "u@x.com", 1)
 
-	w := do(t, h, http.MethodDelete, "/conversations?folder=Old%20work",
+	w := do(t, h, http.MethodDelete, "/conversations?label=old%20work",
 		map[string]any{"all_matching": true, "confirm": false}, "u@x.com")
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400: %s", w.Code, w.Body.String())
 	}
 }
 
-// TestBulkDelete_AllMatching deletes conversations matching the folder filter.
+// TestBulkDelete_AllMatching deletes conversations matching the label filter.
 func TestBulkDelete_AllMatching(t *testing.T) {
 	s := serverFixture(t)
 	h := s.Routes()
@@ -111,12 +111,12 @@ func TestBulkDelete_AllMatching(t *testing.T) {
 
 	keep, _ := st.CreateConversation(context.Background(), "u@x.com", "", "victoria", "", false)
 	gone, _ := st.CreateConversation(context.Background(), "u@x.com", "", "victoria", "", false)
-	// Put `gone` in the "Old work" folder.
-	if _, err := st.BulkPatch(context.Background(), "u@x.com", []string{gone.ID}, nil, strPtr("Old work"), nil); err != nil {
-		t.Fatalf("seed folder: %v", err)
+	// Tag `gone` so the label filter selects exactly it.
+	if _, err := st.BulkPatch(context.Background(), "u@x.com", []string{gone.ID}, nil, []string{"old work"}); err != nil {
+		t.Fatalf("seed label: %v", err)
 	}
 
-	w := do(t, h, http.MethodDelete, "/conversations?folder=Old%20work",
+	w := do(t, h, http.MethodDelete, "/conversations?label=old%20work",
 		map[string]any{"all_matching": true, "confirm": true}, "u@x.com")
 	if w.Code != http.StatusOK {
 		t.Fatalf("status %d: %s", w.Code, w.Body.String())
@@ -146,7 +146,6 @@ func TestBulkPatch_AppliesChanges(t *testing.T) {
 		"conversation_ids": ids,
 		"changes": map[string]any{
 			"pinned": true,
-			"folder": "Archive",
 			"labels": []string{"done"},
 		},
 	}, "u@x.com")
@@ -169,7 +168,7 @@ func TestBulkPatch_AppliesChanges(t *testing.T) {
 		}
 		_ = json.Unmarshal(g.Body.Bytes(), &getResp)
 		c := getResp.Conversation
-		if !c.Pinned || c.Folder != "Archive" || len(c.Labels) != 1 || c.Labels[0] != "done" {
+		if !c.Pinned || len(c.Labels) != 1 || c.Labels[0] != "done" {
 			t.Errorf("conversation %s not patched: %+v", id, c)
 		}
 	}
@@ -200,6 +199,3 @@ func TestBulkPatch_ForeignIDRejected(t *testing.T) {
 		t.Errorf("owner conversation mutated by rejected bulk patch")
 	}
 }
-
-// strPtr is a tiny helper to take the address of a string literal.
-func strPtr(s string) *string { return &s }

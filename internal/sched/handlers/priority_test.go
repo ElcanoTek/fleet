@@ -125,7 +125,7 @@ func TestCreateTask_KeyPriorityCeiling(t *testing.T) {
 	r, _, keyMgr, cleanup := setupPriorityHandler(t)
 	defer cleanup()
 
-	key, raw, err := keyMgr.CreateKey("capped", nil, []models.Permission{models.PermissionCreateTask}, nil, 0, nil, "")
+	key, raw, err := keyMgr.CreateKey("capped", []models.Permission{models.PermissionCreateTask}, nil, 0, nil, "")
 	if err != nil {
 		t.Fatalf("CreateKey: %v", err)
 	}
@@ -151,7 +151,7 @@ func TestCreateTaskBatch_KeyPriorityCeiling(t *testing.T) {
 	r, store, keyMgr, cleanup := setupPriorityHandler(t)
 	defer cleanup()
 
-	key, raw, err := keyMgr.CreateKey("capped", nil, []models.Permission{models.PermissionCreateTask}, nil, 0, nil, "")
+	key, raw, err := keyMgr.CreateKey("capped", []models.Permission{models.PermissionCreateTask}, nil, 0, nil, "")
 	if err != nil {
 		t.Fatalf("CreateKey: %v", err)
 	}

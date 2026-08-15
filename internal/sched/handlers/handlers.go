@@ -129,9 +129,6 @@ type Handlers struct {
 	// Prometheus surface is deferred to the metrics issue (#176).
 	taskRLCounter *rateLimitCounter
 
-	// Cache for file checksums to avoid repeated disk I/O
-	checksumCache *checksumCache
-
 	// Cache for dashboard stats
 	statsCache *statsCache
 
@@ -308,44 +305,6 @@ func (c *statsCache) Set(key string, stats *models.DashboardStats, ttl time.Dura
 	}
 }
 
-// checksumCache caches file checksums to avoid repeated disk I/O.
-type checksumCache struct {
-	mu    sync.RWMutex
-	store map[string]string
-}
-
-func newChecksumCache() *checksumCache {
-	return &checksumCache{
-		store: make(map[string]string),
-	}
-}
-
-func (c *checksumCache) Get(filename string) (string, bool) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	val, ok := c.store[filename]
-	return val, ok
-}
-
-func (c *checksumCache) Set(filename, checksum string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.store[filename] = checksum
-}
-
-func (c *checksumCache) Delete(filename string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	delete(c.store, filename)
-}
-
-// Clear removes all entries from the cache.
-func (c *checksumCache) Clear() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.store = make(map[string]string)
-}
-
 // rateLimiter provides simple per-IP rate limiting.
 type rateLimiter struct {
 	mu       sync.Mutex
@@ -441,7 +400,6 @@ func New(cfg Config, store *storage.Storage, keyMgr *apikeys.Manager) *Handlers 
 		taskKeyRL:        ratelimit.New(cfg.SchedRateLimitPerMinute, cfg.SchedRateLimitPerDay),
 		taskGlobalRL:     ratelimit.New(cfg.SchedGlobalRateLimitPerMinute, 0),
 		taskRLCounter:    newRateLimitCounter(),
-		checksumCache:    newChecksumCache(),
 		statsCache:       newStatsCache(),
 	}
 }
@@ -560,17 +518,6 @@ func (h *Handlers) CreateTask(w http.ResponseWriter, r *http.Request) {
 	if msg := requireAdminForRunIf(creator.hasAdminPermission, tc.RunIf); msg != "" {
 		writeError(w, http.StatusForbidden, msg)
 		return
-	}
-
-	// Spending-cap pre-flight: refuse a key that has already reached its daily or
-	// monthly LLM budget. Task cost is only known after completion, so this gates
-	// on the already-accumulated spend.
-	if creator.creatorKey != nil {
-		if err := h.apiKeys.CheckBudget(*creator.creatorKey); err != nil {
-			w.Header().Set("Retry-After", "3600")
-			writeError(w, http.StatusTooManyRequests, err.Error())
-			return
-		}
 	}
 
 	// Per-principal rolling budget (#601 part 2): the SAME budgetCapError gate
@@ -1221,14 +1168,6 @@ func (h *Handlers) ListTasks(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// If the principal is scoped (user or API key), add visibility filters.
-	if scopes := p.scopes(); len(scopes) > 0 {
-		filter.VisibleToUserID = p.ownerID()
-		filter.VisibleToScopes = scopes
-		// Ensure we use the filtered path
-		hasFilters = true
-	}
-
 	var tasks []*models.Task
 	var total int
 	var err error
@@ -1278,13 +1217,6 @@ func (h *Handlers) GetTask(w http.ResponseWriter, r *http.Request) {
 	if err != nil || task == nil {
 		writeError(w, http.StatusNotFound, "Task not found")
 		return
-	}
-
-	if scopes := p.scopes(); len(scopes) > 0 {
-		if !taskVisibleToScopes(task, scopes, p.ownerID()) {
-			writeError(w, http.StatusForbidden, "Task not within allowed scopes")
-			return
-		}
 	}
 
 	// Populate CreatedByUsername for display
@@ -1337,12 +1269,6 @@ func (h *Handlers) GetTaskOutput(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if scopes := p.scopes(); len(scopes) > 0 {
-		if !taskVisibleToScopes(task, scopes, p.ownerID()) {
-			writeError(w, http.StatusForbidden, "Task not within allowed scopes")
-			return
-		}
-	}
 	if len(task.OutputSchema) == 0 {
 		writeError(w, http.StatusNotFound, "Task did not declare output_schema")
 		return
@@ -1411,13 +1337,6 @@ func (h *Handlers) GetTaskErrorAnalysis(w http.ResponseWriter, r *http.Request) 
 	if err != nil || task == nil {
 		writeError(w, http.StatusNotFound, "Task not found")
 		return
-	}
-
-	if scopes := p.scopes(); len(scopes) > 0 {
-		if !taskVisibleToScopes(task, scopes, p.ownerID()) {
-			writeError(w, http.StatusForbidden, "Task not within allowed scopes")
-			return
-		}
 	}
 
 	if len(task.ErrorAnalysis) == 0 {
@@ -1613,23 +1532,6 @@ func (h *Handlers) CancelTask(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// If the principal is scoped, verify it has access to this task.
-	if scopes := p.scopes(); len(scopes) > 0 {
-		task := taskForAuth
-		if task == nil {
-			task, err = h.storage.GetTask(taskID)
-		}
-		if err != nil || task == nil {
-			writeError(w, http.StatusNotFound, "Task not found")
-			return
-		}
-
-		if !taskVisibleToScopes(task, scopes, p.ownerID()) {
-			writeError(w, http.StatusForbidden, "Task not within allowed scopes")
-			return
-		}
-	}
-
 	// Atomic cancel with WHO-stopped-it attribution (#508): the reason lands on
 	// the task's terminal record, so an operator stop is auditable.
 	who := p.stopLabel()
@@ -1709,14 +1611,6 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 	if task.Status != models.TaskStatusPending && task.Status != models.TaskStatusScheduled {
 		writeError(w, http.StatusBadRequest, "Only pending or scheduled tasks can be edited")
 		return
-	}
-
-	// If the principal is scoped, verify access.
-	if scopes := p.scopes(); len(scopes) > 0 {
-		if !taskVisibleToScopes(task, scopes, p.ownerID()) {
-			writeError(w, http.StatusForbidden, "Task not within allowed scopes")
-			return
-		}
 	}
 
 	// Parse the update payload
@@ -1947,13 +1841,6 @@ func (h *Handlers) UpdateTaskTags(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "Task not found")
 		return
 	}
-	if scopes := p.scopes(); len(scopes) > 0 {
-		if !taskVisibleToScopes(task, scopes, p.ownerID()) {
-			writeError(w, http.StatusForbidden, "Task not within allowed scopes")
-			return
-		}
-	}
-
 	var body tagMutation
 	if err := readJSON(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "Invalid request body")
@@ -2037,13 +1924,6 @@ func (h *Handlers) rerunOrClone(w http.ResponseWriter, r *http.Request, keepRecu
 		writeError(w, http.StatusNotFound, "Task not found")
 		return
 	}
-	if scopes := p.scopes(); len(scopes) > 0 {
-		if !taskVisibleToScopes(source, scopes, p.ownerID()) {
-			writeError(w, http.StatusForbidden, "Task not within allowed scopes")
-			return
-		}
-	}
-
 	// The body is optional; only decode when present (rerun-with-no-changes sends none).
 	var req taskRerunRequest
 	if r.Body != nil && r.ContentLength != 0 {
@@ -2249,6 +2129,17 @@ func (h *Handlers) CreateAPIKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The per-key spending caps are retired: nothing ever fed their accumulator,
+	// so a cap set here was silently unenforced. Refuse the field rather than
+	// accept it — an operator who believes a key is capped at $50/day and is
+	// wrong is worse off than one who gets an error naming the replacement.
+	// Checked BEFORE creating the key so a rejected request mints nothing.
+	if keyCreate.MaxCostPerDayUSD != nil || keyCreate.MaxCostPerMonthUSD != nil {
+		writeError(w, http.StatusBadRequest,
+			"max_cost_per_day_usd/max_cost_per_month_usd are no longer supported; create a rolling budget instead: POST /admin/budgets {\"scope\":\"key\",\"principal_id\":\"<key_id>\",\"window\":\"day|week|month\",\"hard_usd\":…}")
+		return
+	}
+
 	// Validate the optional task-urgency ceiling (#230) BEFORE creating the key,
 	// so a bad value never leaves a half-created (uncapped) key behind.
 	if keyCreate.MaxPriority != nil && (*keyCreate.MaxPriority < models.PriorityMin || *keyCreate.MaxPriority > models.PriorityMax) {
@@ -2307,7 +2198,6 @@ func (h *Handlers) CreateAPIKey(w http.ResponseWriter, r *http.Request) {
 			keyCreate.Name,
 			kt,
 			keyCreate.AllowedTriggerSlugs,
-			keyCreate.AllowedNodePatterns,
 			keyCreate.RateLimit,
 			keyCreate.ExpiresInDays,
 			keyCreate.Description,
@@ -2317,7 +2207,6 @@ func (h *Handlers) CreateAPIKey(w http.ResponseWriter, r *http.Request) {
 		// an explicit (validated, role-free) permission set is now honored.
 		key, rawKey, err = h.apiKeys.CreateKey(
 			keyCreate.Name,
-			keyCreate.AllowedNodePatterns,
 			keyCreate.Permissions,
 			keyCreate.Role,
 			keyCreate.RateLimit,
@@ -2328,14 +2217,6 @@ func (h *Handlers) CreateAPIKey(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Failed to create API key")
 		return
-	}
-
-	// Apply optional spending caps (CreateKey keeps a stable signature; budgets
-	// are set in a follow-up so the field set can grow without churning callers).
-	if keyCreate.MaxCostPerDayUSD != nil || keyCreate.MaxCostPerMonthUSD != nil {
-		if err := h.apiKeys.SetBudgets(key.KeyID, keyCreate.MaxCostPerDayUSD, keyCreate.MaxCostPerMonthUSD); err != nil {
-			log.Printf("Warning: failed to set budgets on new key %s: %v", key.KeyID, err)
-		}
 	}
 
 	// Apply the optional task-urgency ceiling (#230), validated above.
@@ -2352,31 +2233,6 @@ func (h *Handlers) CreateAPIKey(w http.ResponseWriter, r *http.Request) {
 		APIKeyResponse: resp,
 		APIKey:         rawKey,
 	})
-}
-
-// GetKeySpending handles GET /keys/{key_id}/spending — current spend vs caps
-// with next reset instants.
-func (h *Handlers) GetKeySpending(w http.ResponseWriter, r *http.Request) {
-	keyID := chi.URLParam(r, "key_id")
-	snap, ok := h.apiKeys.SpendingSnapshot(keyID)
-	if !ok {
-		writeError(w, http.StatusNotFound, "API key not found")
-		return
-	}
-	writeJSON(w, http.StatusOK, snap)
-}
-
-// ResetKeySpending handles POST /keys/{key_id}/reset-spending — operator
-// override that zeros a key's accumulators (admin-gated by the route group).
-func (h *Handlers) ResetKeySpending(w http.ResponseWriter, r *http.Request) {
-	keyID := chi.URLParam(r, "key_id")
-	if err := h.apiKeys.ResetSpending(keyID); err != nil {
-		writeError(w, http.StatusNotFound, "API key not found")
-		return
-	}
-	h.apiKeys.LogAction(keyID, "reset_spending", "api_key", &keyID, nil, nil, nil, true, nil)
-	snap, _ := h.apiKeys.SpendingSnapshot(keyID)
-	writeJSON(w, http.StatusOK, snap)
 }
 
 // ListAPIKeys handles GET /keys
@@ -2519,66 +2375,15 @@ func (h *Handlers) GetDashboardStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var stats *models.DashboardStats
-	var err error
-	var scopes []string
-	var scopeOwnerID *uuid.UUID
-
-	// Check for scopes from user token
-	if user != nil && len(user.Scopes) > 0 {
-		scopes = user.Scopes
-		scopeOwnerID = &user.ID
-	}
-
-	// Check for scopes from API key (if not already scoped by user)
-	if len(scopes) == 0 && user == nil {
-		// First check if API key was set in context by middleware
-		if apiKeyFromCtx := GetAPIKeyFromContext(r.Context()); apiKeyFromCtx != nil {
-			if len(apiKeyFromCtx.AllowedNodePatterns) > 0 {
-				scopes = apiKeyFromCtx.AllowedNodePatterns
-			}
-		} else {
-			// Fallback: check header directly. Skip the admin key (unrestricted)
-			// using the constant-time verifier rather than a plain string compare.
-			apiKey := r.Header.Get("X-API-Key")
-			if apiKey != "" && !h.verifyAdminKey(r) {
-				// Check if it's a scoped API key
-				perm := models.PermissionViewTasks
-				valid, key, _ := h.apiKeys.ValidateKey(apiKey, &perm, nil, nil, nil)
-				if valid && key != nil && len(key.AllowedNodePatterns) > 0 {
-					scopes = key.AllowedNodePatterns
-				}
-			}
-		}
-	}
-
-	// Generate cache key
-	cacheKey := "global"
-	if len(scopes) > 0 {
-		// Include scopes in key to ensure uniqueness even if user's scopes change
-		// and to handle the API key case uniformly.
-		scopesStr := strings.Join(scopes, ",")
-		if scopeOwnerID != nil {
-			cacheKey = "user:" + scopeOwnerID.String() + ":scopes:" + scopesStr
-		} else {
-			// For API keys, use the scopes as the key
-			cacheKey = "scopes:" + scopesStr
-		}
-	}
-
-	// Check cache (short TTL — see Set below)
+	// One box, one task table: every principal that clears the permission check
+	// above sees the same counts, so the stats are cached under a single key.
+	const cacheKey = "global"
 	if cached, ok := h.statsCache.Get(cacheKey); ok {
 		writeJSON(w, http.StatusOK, h.withAgentPool(cached))
 		return
 	}
 
-	// Get stats based on scopes
-	if len(scopes) > 0 {
-		stats, err = h.storage.GetDashboardStatsForUser(scopeOwnerID, scopes)
-	} else {
-		stats, err = h.storage.GetDashboardStats()
-	}
-
+	stats, err := h.storage.GetDashboardStats()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Failed to get dashboard stats")
 		return
@@ -2666,10 +2471,9 @@ func userHasPermission(user *models.User, permission models.Permission) bool {
 // principal is the resolved identity for a request authenticated through
 // AdminOrUserAuthMiddleware. It unifies the three credential types — the admin
 // API key, a scoped API key, and a user token/Elcano cookie — so that handlers
-// enforce permissions and node-name scopes uniformly. Before this existed,
-// scope and permission checks were gated on `user != nil`, which silently
-// granted scoped API keys unrestricted, cross-tenant access (and let read-only
-// keys mutate tasks).
+// enforce permissions uniformly. Before this existed, permission checks were
+// gated on `user != nil`, which silently granted API keys unrestricted,
+// cross-tenant access (and let read-only keys mutate tasks).
 type principal struct {
 	user    *models.User
 	apiKey  *apikeys.APIKey
@@ -2698,22 +2502,6 @@ func (p principal) hasPermission(perm models.Permission) bool {
 	}
 }
 
-// scopes returns the node-name glob patterns that constrain this principal's
-// visibility. A nil/empty result means unrestricted access (admin key, or a
-// user/key configured without scopes).
-func (p principal) scopes() []string {
-	if p.isAdmin {
-		return nil
-	}
-	if p.user != nil {
-		return p.user.Scopes
-	}
-	if p.apiKey != nil {
-		return p.apiKey.AllowedNodePatterns
-	}
-	return nil
-}
-
 // ownerID returns the user ID used for creator-based task visibility, or nil
 // for API-key principals (key-created tasks have no creator user).
 func (p principal) ownerID() *uuid.UUID {
@@ -2730,35 +2518,6 @@ func (p principal) ownerID() *uuid.UUID {
 func (p principal) ownsTask(task *models.Task) bool {
 	ownerID := p.ownerID()
 	return task != nil && ownerID != nil && task.CreatedBy != nil && *ownerID == *task.CreatedBy
-}
-
-// taskVisibleToUser reports whether a task is visible to the given user under
-// the user's node-name scopes.
-func taskVisibleToUser(task *models.Task, user *models.User) bool {
-	if user == nil {
-		return false
-	}
-	return taskVisibleToScopes(task, user.Scopes, &user.ID)
-}
-
-// taskVisibleToScopes reports whether a task is visible to a principal
-// constrained to the given node-name scope patterns. Tasks no longer carry a
-// node target (the per-task mcp_selection replaced node routing), so a task is
-// either: visible because the principal is unscoped, visible because it is the
-// principal's own task, or — for any scoped principal — visible because an
-// untargeted task can run anywhere. The result is therefore always true: every
-// task is visible to every principal that reaches this check. ownerID (nil for
-// API keys) is retained for signature compatibility with the unscoped fast path.
-func taskVisibleToScopes(task *models.Task, scopes []string, ownerID *uuid.UUID) bool {
-	if len(scopes) == 0 {
-		return true
-	}
-	if ownerID != nil && task.CreatedBy != nil && *task.CreatedBy == *ownerID {
-		return true
-	}
-	// Untargeted tasks can run on any node — including ones within the scope —
-	// so every scoped principal may see and use them.
-	return true
 }
 
 // populateCreatedByUsernames populates the CreatedByUsername field for each task.

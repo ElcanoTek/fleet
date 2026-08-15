@@ -17,8 +17,127 @@ prior versions are listed because none have shipped.
 
 ## [Unreleased]
 
+### Fixed
+
+- **OAuth-connected remote MCP servers could wedge permanently on token
+  refresh.** Only `invalid_grant` was treated as terminal; every other
+  token-endpoint error was classified transient, so a connection whose *client
+  registration* the authorization server had dropped (`invalid_client`) or that
+  was barred from the refresh grant (`unauthorized_client`) failed identically on
+  every run, forever, with no path to recovery — the connection stayed "connected"
+  and the UI never offered a reconnect. These are now terminal
+  (`mcpoauth.IsTerminalRefreshError`): the connection is marked `needs_reauth`,
+  and reconnecting re-runs dynamic client registration through the normal connect
+  flow. Network failures and 5xx stay transient, so a blip still costs nobody a
+  manual reconnect.
+- **A narrowed OAuth scope grant wedged refresh the same way.** fleet stores the
+  scopes it *requested* at connect time and sent them on every refresh, but an
+  authorization server may grant a narrower set — and RFC 6749 §6 forbids
+  refreshing a wider scope than was granted. The result was a permanent
+  `invalid_scope`. `FlowConfig.Refresh` now retries once without the `scope`
+  parameter, whose omission §6 defines as "identical to the scope originally
+  granted" (mirroring the existing `invalid_target` → retry-without-`resource`
+  fallback). The retry fires at most once and only when scopes are configured.
+- **A needs-reauth connection claimed the authorization had "expired" whatever
+  the cause.** `store.RefreshResult` carries an optional `ReauthDetail` that the
+  connections UI renders, so a dropped client registration now says so. The
+  authorization server's own `error_description` is deliberately never echoed —
+  it is attacker-influenced free text from a user-supplied server.
+
 ### Removed
 
+- **Per-API-key spending caps (`max_cost_per_day_usd` /
+  `max_cost_per_month_usd`) and the two endpoints that read them**
+  (`GET /keys/{id}/spending`, `POST /keys/{id}/reset-spending`).
+  **Breaking at the API surface, but not a behavior change: the caps never
+  enforced anything.** Nothing in the unified runtime ever called
+  `AccumulateCost`, so the counter `CheckBudget` compared against was frozen at
+  zero — a key set to `$50/day` was uncapped, and `/keys/{id}/spending`
+  reported `$0.00` for every key, forever. (The moc-era task-completion callback
+  that fed the counter did not survive the fold into the in-process runner, and
+  the package's own tests passed because they called `AccumulateCost`
+  themselves.) `POST /keys` now returns **400** naming the replacement rather
+  than accepting a cap it would not enforce. That replacement already shipped
+  and is strictly stronger: `POST /admin/budgets` with `{"scope":"key",
+  "principal_id":"<key_id>","window":"day|week|month","hard_usd":…}` is
+  computed from the persisted metering (no second accounting path), adds week
+  windows, token bounds, and soft alerts, and counts chat turns as well as
+  tasks. Read live spend with `GET /admin/budgets` or
+  `GET /admin/usage?group_by=key`. Old key files load unchanged and no
+  migration runs. See
+  [ADR-0046](docs/adr/0046-remove-per-key-spending-caps.md).
+- **Node-name scopes (ADR-0045).** Every principal carried a list of glob
+  patterns — `users.scopes` for accounts, `api_keys.allowed_node_patterns` for
+  keys — matched against the name of the worker node a task ran on. The node
+  registry went away in ADR-0011, which kept the globs "for forward
+  compatibility"; with nothing left to match, they degenerated into an
+  authorization surface that enforced nothing while looking like it did.
+  `taskVisibleToScopes` returned `true` on every path (its own comment said so)
+  behind ten call sites that wrote an unreachable `403 Task not within
+  allowed scopes`; `TaskFilter.VisibleToScopes` was consumed by a literal
+  `_ = filter.VisibleToScopes`; `GetDashboardStatsForUser` hand-rolled
+  `WHERE (created_by = $9 OR TRUE)` — the unscoped query with extra steps; and
+  `APIKey.CanTargetNode` was unreachable because every `ValidateKey` call site
+  passes a nil node name. All of it is gone, along with `principal.scopes()`,
+  `taskVisibleToUser`, `storage.MatchGlob` (whose only caller was
+  `CanTargetNode`), `TaskFilter.VisibleToUserID`, the `node_access_denied`
+  audit action, and the `allowed_node_patterns` parameters of `CreateKey` /
+  `CreateTypedKey` / `ValidateKey`. Migration `062_drop_user_scopes` drops the
+  column (a reviewed `migration-lint: allow-dangerous` directive).
+  **API surface:** `allowed_node_patterns` leaves `POST /keys` and the API-key
+  responses, `scopes` leaves the user create/response bodies and
+  `docs/openapi.yaml`, and `fleet-admin sched user add --scopes` is removed. An
+  old client still sending either field is ignored rather than having its input
+  stored and echoed back; nothing it could previously do changes, because the
+  patterns never narrowed anything. A legacy-import dump's `sched.users[].scopes`
+  array imports and is ignored. **No authorization boundary is weakened** — the
+  permission set, the typed-key gates (trigger slugs, budgets, priority
+  ceiling), `ownsTask`, and the creator-scoped workspace/run-log gates
+  (ADR-0043) are untouched.
+- **Dead code swept from the `internal/` tree** — every function that a
+  whole-program reachability analysis (`golang.org/x/tools/cmd/deadcode`, run
+  with tests and the `fleet_host_executor` tag) found unreachable from any
+  entry point *or* any test:
+  - `sched/storage.GetStorage`/`InitGlobalStorage` and
+    `sched/apikeys.GetManager`/`InitGlobalManager` (plus their package-level
+    `globalStorage`/`globalManager` vars) — process-wide singletons superseded
+    by the constructor-injected `Storage`/`Manager` the server actually wires.
+  - `sched/handlers.checksumCache` in full — the type, the `Handlers` field, its
+    constructor, and the `Clear()` call in `CleanupTempFiles`. Nothing ever
+    called `Set`, so the map was permanently empty and the periodic "prevent
+    memory leaks" clear was clearing nothing.
+  - `sched/models.HashTokenIfNeeded` — passed any 64-char hex input through
+    **unhashed**, so a session token that happened to look like a digest would
+    have been stored and compared raw. Every caller already uses `HashToken`.
+  - `observability.CapturePanic` and its private `panicClass` — a byte-identical
+    duplicate of the live `safe.PanicClass`, and the last entry point that
+    accepted a *raw* recovered value; real recovery boundaries classify first and
+    call `CapturePanicClass`/`CapturePanicClassWithTags`.
+  - `agent.ApplyMCPOverlay` — a two-line wrapper only its own test called;
+    `ApplyMCPOverlayWithBase` is the real entry point and the tests now use it.
+  - `internal/agent/toolresult.go` (+ its test) — a verbatim cutlass port for
+    scheduled-driver log formatting that was never wired to a driver.
+  - `health.CheckNames` and `sched/db.GetMigrationVersion` (superseded by the
+    richer `MigrationStatus` report behind `fleet migrate status`).
+
+- **Conversation folders (#258/#279).** Projects (#509) superseded folders when
+  they shipped, and the folders UI came out with them — but the whole server
+  half stayed: a `folder TEXT` column, `GET /folders`, `POST /folders/rename`,
+  a `?folder=` list filter, a `?folder=` bulk-delete filter, and a `folder`
+  field on the bulk PATCH. No client had written any of it since, so every row
+  carried the `''` default. All of it is gone, along with
+  `store.ListFolders`/`RenameFolder`/`FolderCount` and `ListFilter.Folder`;
+  `DeleteAllMatching` and `BulkPatch` lose their folder parameter. Migration
+  `049_drop_conversation_folder.sql` drops the column and its index (a reviewed
+  `allow-dangerous` DDL — the data is uniformly the default). **Labels are
+  untouched**: they are the live, multi-assignment sibling the rail still uses,
+  so `internal/httpapi/folders.go` becomes `labels.go` and
+  `normalizeAndValidateFolderLabels` becomes `normalizeAndValidateLabels`.
+  Filing a conversation used to auto-pin it, so previously-filed chats are
+  already visible under Pinned; nothing becomes unreachable. Alongside it,
+  `store.Get` and `ListFiltered` now share the one `conversationColumns` list
+  and a single `scanConversation`, instead of spelling the column order out
+  three times.
 - **The in-sandbox `browser` tool (#503) and `FLEET_BROWSER_ENABLED`.**
   **Breaking for deployments that set that flag** — the tool is gone and the
   variable is no longer read (it is also out of the `.env` allowlist, so a
@@ -57,6 +176,19 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **The SSE reconnect counter recorded nothing in tests.** `httpapi.Server`'s
+  `sseReconnects` is wired by `New()`, but the handler-test fixture builds the
+  struct literally and omitted it; `inc` is nil-safe, so every `/stream`
+  reattach in every handler test tallied into a nil counter silently. The
+  fixture now wires it, and the reconnect outcomes (`buffer_expired`,
+  `no_content`) are asserted — previously `SSEReconnectCounts` had no reader at
+  all, which is why the reachability scan flagged it.
+- **The "never format a recovered panic value" regression test guarded the wrong
+  function.** It asserted against `observability.panicClass` (the dead
+  duplicate, now removed) while `safe.PanicClass` — the classifier every real
+  recovery boundary calls before anything reaches logs or Sentry — had no test.
+  The assertion moved to `internal/safe` and covers error/string/nil/struct
+  values.
 - **Sub-agents finish, and you can see what they are doing.** A spawned child
   ran the ROOT run's finish enforcement: it was refused a finish until it read
   `protocols/self-audit.md` and called `confirm_audit(...)`, and the host-side

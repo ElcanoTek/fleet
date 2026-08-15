@@ -43,8 +43,8 @@ export async function POST(request: NextRequest) {
  * Forwards the request body (conversation_ids / all_matching / confirm) so the
  * backend's targeted-delete path receives it. With no body, the backend falls
  * back to the legacy "delete all unpinned" behavior (back-compat for older
- * clients). The ?folder=&label= query params are already part of the URL and
- * pass through unchanged.
+ * clients). The ?label= query param is already part of the URL and passes
+ * through unchanged.
  */
 export async function DELETE(request: NextRequest) {
   const csrf = verifyOrigin(request);

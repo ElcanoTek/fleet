@@ -81,7 +81,6 @@ type bundleSchedUser struct {
 	Username     string     `json:"username"`
 	PasswordHash string     `json:"password_hash"`
 	Role         string     `json:"role"`
-	Scopes       []string   `json:"scopes,omitempty"`
 	CreatedAt    time.Time  `json:"created_at"`
 	LastLogin    *time.Time `json:"last_login,omitempty"`
 }
@@ -518,7 +517,6 @@ func importSchedSection(ctx context.Context, st *storage.Storage, sec *schedSect
 				Username:     username,
 				PasswordHash: u.PasswordHash,
 				Role:         role,
-				Scopes:       u.Scopes,
 				CreatedAt:    u.CreatedAt,
 				LastLogin:    u.LastLogin,
 			}); err != nil {

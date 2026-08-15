@@ -179,3 +179,37 @@ func TestEmitPanicWithMetadata_ReportingHookPanicIsContained(t *testing.T) {
 		t.Fatal("recovery event lost after reporting hook panic")
 	}
 }
+
+// panicSecretError is an error whose Error() text is a credential — the exact
+// shape PanicClass must never invoke.
+type panicSecretError struct{ secret string }
+
+func (e panicSecretError) Error() string { return e.secret }
+
+// TestPanicClassNeverFormatsRecoveredValue pins the value-free classification
+// contract on the LIVE classifier: PanicClass must report only the recovered
+// value's kind, never call Error()/String() on it, and never echo any part of
+// it. A regression here would let a credential copied into a panic reach logs
+// and telemetry, since every recovery boundary in the tree classifies through
+// this function before anything is emitted.
+func TestPanicClassNeverFormatsRecoveredValue(t *testing.T) {
+	const secret = "Authorization: Bearer fake-panic-regression-secret"
+	for _, tc := range []struct {
+		name string
+		val  any
+		want string
+	}{
+		{"error carrying a secret", panicSecretError{secret: secret}, "error"},
+		{"raw secret string", secret, "string"},
+		{"nil", nil, "nil"},
+		{"struct", struct{ Token string }{Token: secret}, "struct"},
+	} {
+		got := PanicClass(tc.val)
+		if got != tc.want {
+			t.Errorf("%s: PanicClass = %q, want %q", tc.name, got, tc.want)
+		}
+		if strings.Contains(got, secret) {
+			t.Errorf("%s: PanicClass leaked the recovered value: %q", tc.name, got)
+		}
+	}
+}

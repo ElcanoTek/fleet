@@ -1,7 +1,13 @@
 // Package apikeys provides scoped API key management for the fleet orchestrator
-// (sched). Ported from moc's internal/apikeys. The only change vs moc:
-// CanTargetNode matches scope patterns via storage.MatchGlob directly (moc's
-// NodeMatchesTask glob router was removed with per-task node routing).
+// (sched). Ported from moc's internal/apikeys, minus the node-name scope
+// patterns: fleet has no node registry (ADR-0011), so a key's authority is its
+// permission set plus the typed-key gates (trigger slugs, rate limit, priority
+// ceiling) — see ADR-0045.
+//
+// Spend is deliberately NOT a key attribute. Per-principal dollar/token limits
+// live in internal/sched/budget (`scope: key`), which recomputes a window's
+// spend from the persisted metering rather than accumulating a counter here —
+// one accounting path, so nothing can drift (docs/USAGE-ANALYTICS.md part 2).
 package apikeys
 
 import (
@@ -21,17 +27,15 @@ import (
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/sched/models"
-	"github.com/ElcanoTek/fleet/internal/sched/storage"
 )
 
 // APIKey represents a scoped API key.
 type APIKey struct {
-	KeyID               string              `json:"key_id"`
-	Name                string              `json:"name"`
-	KeyHash             string              `json:"key_hash"`
-	KeyPrefix           string              `json:"key_prefix"`
-	AllowedNodePatterns []string            `json:"allowed_node_patterns"`
-	Permissions         []models.Permission `json:"permissions"`
+	KeyID       string              `json:"key_id"`
+	Name        string              `json:"name"`
+	KeyHash     string              `json:"key_hash"`
+	KeyPrefix   string              `json:"key_prefix"`
+	Permissions []models.Permission `json:"permissions"`
 
 	// Type is the key's access class (#190), encoded in its prefix
 	// (fleet_{type}_…). Empty (KeyTypeLegacy) for untyped sk- keys minted before
@@ -49,37 +53,10 @@ type APIKey struct {
 	PreviousKeyHash     *string    `json:"previous_key_hash,omitempty"`
 	PreviousKeyExpires  *time.Time `json:"previous_key_expires,omitempty"`
 
-	// Spending caps (nil = unlimited). Cost is accumulated from the LogSession of
-	// every task this key submitted; CheckBudget refuses new submissions once a
-	// cap is reached. Counters reset lazily at the UTC day/month boundary on the
-	// next access (no background goroutine).
-	MaxCostPerDayUSD   *float64  `json:"max_cost_per_day_usd,omitempty"`
-	MaxCostPerMonthUSD *float64  `json:"max_cost_per_month_usd,omitempty"`
-	CostTodayUSD       float64   `json:"cost_today_usd"`
-	CostThisMonthUSD   float64   `json:"cost_this_month_usd"`
-	CostDayResetAt     time.Time `json:"cost_day_reset_at"`   // UTC day the daily counter is current for
-	CostMonthResetAt   time.Time `json:"cost_month_reset_at"` // first of the UTC month the monthly counter is current for
-
 	// MaxPriority caps the task urgency this key may submit (#230): a task at a
 	// priority MORE urgent (lower integer) than this value is rejected. nil =
 	// uncapped. Range [models.PriorityMin, models.PriorityMax].
 	MaxPriority *int `json:"max_priority,omitempty"`
-}
-
-// CanTargetNode checks if this key can target a node with the given name.
-func (k *APIKey) CanTargetNode(nodeName string) bool {
-	if k.hasPermission(models.PermissionAdmin) {
-		return true
-	}
-	if len(k.AllowedNodePatterns) == 0 {
-		return true
-	}
-	for _, pattern := range k.AllowedNodePatterns {
-		if storage.MatchGlob(pattern, nodeName) {
-			return true
-		}
-	}
-	return false
 }
 
 // AllowsTriggerSlug reports whether this (webhook) key is scoped to fire the
@@ -129,7 +106,6 @@ func (k *APIKey) ToResponse() models.APIKeyResponse {
 		KeyPrefix:           k.KeyPrefix,
 		Type:                string(k.Type),
 		AllowedTriggerSlugs: k.AllowedTriggerSlugs,
-		AllowedNodePatterns: k.AllowedNodePatterns,
 		Permissions:         perms,
 		RateLimit:           k.RateLimit,
 		CreatedAt:           k.CreatedAt,
@@ -137,10 +113,6 @@ func (k *APIKey) ToResponse() models.APIKeyResponse {
 		ExpiresAt:           k.ExpiresAt,
 		Enabled:             k.Enabled,
 		Description:         k.Description,
-		MaxCostPerDayUSD:    k.MaxCostPerDayUSD,
-		MaxCostPerMonthUSD:  k.MaxCostPerMonthUSD,
-		CostTodayUSD:        k.CostTodayUSD,
-		CostThisMonthUSD:    k.CostThisMonthUSD,
 		MaxPriority:         k.MaxPriority,
 	}
 }
@@ -383,7 +355,7 @@ func (m *Manager) logAudit(entry AuditLogEntry) {
 }
 
 // CreateKey creates a new API key.
-func (m *Manager) CreateKey(name string, allowedNodePatterns []string, permissions []models.Permission, role *string, rateLimit int, expiresInDays *int, description string) (*APIKey, string, error) {
+func (m *Manager) CreateKey(name string, permissions []models.Permission, role *string, rateLimit int, expiresInDays *int, description string) (*APIKey, string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -419,22 +391,17 @@ func (m *Manager) CreateKey(name string, allowedNodePatterns []string, permissio
 		expiresAt = &t
 	}
 
-	if allowedNodePatterns == nil {
-		allowedNodePatterns = []string{}
-	}
-
 	key := &APIKey{
-		KeyID:               keyID,
-		Name:                name,
-		KeyHash:             keyHash,
-		KeyPrefix:           keyPrefix,
-		AllowedNodePatterns: allowedNodePatterns,
-		Permissions:         perms,
-		RateLimit:           rateLimit,
-		CreatedAt:           time.Now().UTC(),
-		ExpiresAt:           expiresAt,
-		Enabled:             true,
-		Description:         description,
+		KeyID:       keyID,
+		Name:        name,
+		KeyHash:     keyHash,
+		KeyPrefix:   keyPrefix,
+		Permissions: perms,
+		RateLimit:   rateLimit,
+		CreatedAt:   time.Now().UTC(),
+		ExpiresAt:   expiresAt,
+		Enabled:     true,
+		Description: description,
 	}
 
 	m.keys[keyID] = key
@@ -456,10 +423,9 @@ func (m *Manager) CreateKey(name string, allowedNodePatterns []string, permissio
 		ResourceType: "api_key",
 		ResourceID:   &keyID,
 		Details: map[string]interface{}{
-			"name":                  name,
-			"allowed_node_patterns": allowedNodePatterns,
-			"permissions":           permStrings,
-			"rate_limit":            rateLimit,
+			"name":        name,
+			"permissions": permStrings,
+			"rate_limit":  rateLimit,
 		},
 		Success: true,
 	})
@@ -471,7 +437,7 @@ func (m *Manager) CreateKey(name string, allowedNodePatterns []string, permissio
 // (KeyType.Permissions). allowedTriggerSlugs scopes a webhook key to specific
 // trigger slugs and is ignored for the other types. The raw key is returned
 // once; only its hash is stored.
-func (m *Manager) CreateTypedKey(name string, kt KeyType, allowedTriggerSlugs, allowedNodePatterns []string, rateLimit int, expiresInDays *int, description string) (*APIKey, string, error) {
+func (m *Manager) CreateTypedKey(name string, kt KeyType, allowedTriggerSlugs []string, rateLimit int, expiresInDays *int, description string) (*APIKey, string, error) {
 	if !kt.Valid() {
 		return nil, "", fmt.Errorf("invalid key type: %q", kt)
 	}
@@ -492,9 +458,6 @@ func (m *Manager) CreateTypedKey(name string, kt KeyType, allowedTriggerSlugs, a
 		t := time.Now().UTC().AddDate(0, 0, *expiresInDays)
 		expiresAt = &t
 	}
-	if allowedNodePatterns == nil {
-		allowedNodePatterns = []string{}
-	}
 	// Trigger slugs are meaningful only for webhook keys; drop any supplied for
 	// another type so the stored record can't carry misleading scope.
 	if kt != KeyTypeWebhook {
@@ -509,7 +472,6 @@ func (m *Manager) CreateTypedKey(name string, kt KeyType, allowedTriggerSlugs, a
 		KeyPrefix:           keyPrefix,
 		Type:                kt,
 		AllowedTriggerSlugs: allowedTriggerSlugs,
-		AllowedNodePatterns: allowedNodePatterns,
 		Permissions:         perms,
 		RateLimit:           rateLimit,
 		CreatedAt:           time.Now().UTC(),
@@ -540,7 +502,6 @@ func (m *Manager) CreateTypedKey(name string, kt KeyType, allowedTriggerSlugs, a
 			"name":                  name,
 			"type":                  string(kt),
 			"allowed_trigger_slugs": allowedTriggerSlugs,
-			"allowed_node_patterns": allowedNodePatterns,
 			"permissions":           permStrings,
 			"rate_limit":            rateLimit,
 		},
@@ -644,7 +605,7 @@ func (m *Manager) DeleteKey(keyID string) error {
 }
 
 // ValidateKey validates an API key and checks permissions.
-func (m *Manager) ValidateKey(rawKey string, requiredPermission *models.Permission, targetNodeName, ipAddress, userAgent *string) (bool, *APIKey, string) {
+func (m *Manager) ValidateKey(rawKey string, requiredPermission *models.Permission, ipAddress, userAgent *string) (bool, *APIKey, string) {
 	keyHash := m.hashKey(rawKey)
 
 	m.mu.Lock()
@@ -707,12 +668,6 @@ func (m *Manager) ValidateKey(rawKey string, requiredPermission *models.Permissi
 	if requiredPermission != nil && !key.HasPermission(*requiredPermission) {
 		errMsg := fmt.Sprintf("Missing permission: %s", *requiredPermission)
 		m.logAudit(AuditLogEntry{KeyID: keyID, Action: "permission_denied", ResourceType: "api_key", ResourceID: &keyID, Details: map[string]interface{}{"required_permission": string(*requiredPermission)}, IPAddress: ipAddress, UserAgent: userAgent, Success: false, ErrorMessage: &errMsg})
-		return false, nil, errMsg
-	}
-
-	if targetNodeName != nil && !key.CanTargetNode(*targetNodeName) {
-		errMsg := fmt.Sprintf("Cannot target node: %s", *targetNodeName)
-		m.logAudit(AuditLogEntry{KeyID: keyID, Action: "node_access_denied", ResourceType: "api_key", ResourceID: &keyID, Details: map[string]interface{}{"target_node": *targetNodeName}, IPAddress: ipAddress, UserAgent: userAgent, Success: false, ErrorMessage: &errMsg})
 		return false, nil, errMsg
 	}
 
@@ -813,21 +768,6 @@ func (m *Manager) ConsumeN(keyID string, n int) bool {
 	return true
 }
 
-// SetBudgets sets (or clears, when nil) a key's daily/monthly spending caps and
-// persists them. Used by the create/update handlers. Returns an error for an
-// unknown key.
-func (m *Manager) SetBudgets(keyID string, daily, monthly *float64) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	key, ok := m.keys[keyID]
-	if !ok {
-		return fmt.Errorf("api key not found: %s", keyID)
-	}
-	key.MaxCostPerDayUSD = daily
-	key.MaxCostPerMonthUSD = monthly
-	return m.save()
-}
-
 // SetMaxPriority sets (or clears, when max is nil) a key's task-urgency ceiling
 // (#230) and persists it. Used by the create/update handlers. Returns an error
 // for an unknown key.
@@ -840,116 +780,6 @@ func (m *Manager) SetMaxPriority(keyID string, ceiling *int) error {
 	}
 	key.MaxPriority = ceiling
 	return m.save()
-}
-
-// maybeResetSpendingLocked zeros a key's daily/monthly accumulators when their
-// UTC window has rolled over since the counter was last current. Lazy (no
-// background goroutine): called under m.mu by AccumulateCost / CheckBudget /
-// spending reads. Returns true when anything changed (so callers can persist).
-func maybeResetSpendingLocked(key *APIKey, now time.Time) bool {
-	changed := false
-	today := now.UTC().Truncate(24 * time.Hour)
-	if key.CostDayResetAt.Before(today) {
-		key.CostTodayUSD = 0
-		key.CostDayResetAt = today
-		changed = true
-	}
-	monthStart := time.Date(now.UTC().Year(), now.UTC().Month(), 1, 0, 0, 0, 0, time.UTC)
-	if key.CostMonthResetAt.Before(monthStart) {
-		key.CostThisMonthUSD = 0
-		key.CostMonthResetAt = monthStart
-		changed = true
-	}
-	return changed
-}
-
-// AccumulateCost adds costUSD to a key's daily and monthly running totals
-// (resetting first if a window rolled over) and persists. No-op for an unknown
-// key or non-positive cost.
-func (m *Manager) AccumulateCost(keyID string, costUSD float64) {
-	if costUSD <= 0 {
-		return
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	key, ok := m.keys[keyID]
-	if !ok {
-		return
-	}
-	maybeResetSpendingLocked(key, time.Now())
-	key.CostTodayUSD += costUSD
-	key.CostThisMonthUSD += costUSD
-	if err := m.save(); err != nil {
-		log.Printf("apikeys: failed to persist accumulated cost for key %s: %v", keyID, err)
-	}
-}
-
-// CheckBudget reports whether keyID may submit more work. It refuses once the
-// already-accumulated spend has reached a configured daily or monthly cap (task
-// cost is only known after completion, so this is a hard "already over" gate).
-// Returns nil for an unknown key (ValidateKey surfaces that) or one with no caps.
-func (m *Manager) CheckBudget(keyID string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	key, ok := m.keys[keyID]
-	if !ok {
-		return nil
-	}
-	if maybeResetSpendingLocked(key, time.Now()) {
-		if err := m.save(); err != nil {
-			log.Printf("apikeys: failed to persist spending reset for key %s: %v", keyID, err)
-		}
-	}
-	if key.MaxCostPerDayUSD != nil && key.CostTodayUSD >= *key.MaxCostPerDayUSD {
-		return fmt.Errorf("daily budget exceeded: spent $%.4f of $%.2f daily cap", key.CostTodayUSD, *key.MaxCostPerDayUSD)
-	}
-	if key.MaxCostPerMonthUSD != nil && key.CostThisMonthUSD >= *key.MaxCostPerMonthUSD {
-		return fmt.Errorf("monthly budget exceeded: spent $%.4f of $%.2f monthly cap", key.CostThisMonthUSD, *key.MaxCostPerMonthUSD)
-	}
-	return nil
-}
-
-// ResetSpending zeros a key's daily and monthly accumulators (operator override,
-// e.g. after a billing dispute) and persists. Returns an error for an unknown key.
-func (m *Manager) ResetSpending(keyID string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	key, ok := m.keys[keyID]
-	if !ok {
-		return fmt.Errorf("api key not found: %s", keyID)
-	}
-	now := time.Now().UTC()
-	key.CostTodayUSD = 0
-	key.CostThisMonthUSD = 0
-	key.CostDayResetAt = now.Truncate(24 * time.Hour)
-	key.CostMonthResetAt = time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
-	return m.save()
-}
-
-// SpendingSnapshot returns a key's current spend vs caps with the next reset
-// instants, applying any pending lazy reset first. ok=false for an unknown key.
-func (m *Manager) SpendingSnapshot(keyID string) (snap models.APIKeySpending, ok bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	key, found := m.keys[keyID]
-	if !found {
-		return models.APIKeySpending{}, false
-	}
-	if maybeResetSpendingLocked(key, time.Now()) {
-		if err := m.save(); err != nil {
-			log.Printf("apikeys: failed to persist spending reset for key %s: %v", keyID, err)
-		}
-	}
-	now := time.Now().UTC()
-	return models.APIKeySpending{
-		KeyID:              key.KeyID,
-		CostTodayUSD:       key.CostTodayUSD,
-		MaxCostPerDayUSD:   key.MaxCostPerDayUSD,
-		CostThisMonthUSD:   key.CostThisMonthUSD,
-		MaxCostPerMonthUSD: key.MaxCostPerMonthUSD,
-		DailyResetAt:       now.Truncate(24*time.Hour).AddDate(0, 0, 1),
-		MonthlyResetAt:     time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC).AddDate(0, 1, 0),
-	}, true
 }
 
 // LogAction logs an action performed with an API key.
@@ -1105,20 +935,4 @@ func (m *Manager) GetAuditLog(keyID, action *string, since *time.Time, limit int
 		}
 	}
 	return entries
-}
-
-// Global manager instance
-var globalManager *Manager
-
-// GetManager returns the global API key manager.
-func GetManager() *Manager { return globalManager }
-
-// InitGlobalManager initializes the global API key manager.
-func InitGlobalManager(dataDir string) error {
-	var err error
-	globalManager, err = NewManager(
-		filepath.Join(dataDir, "api_keys.json"),
-		filepath.Join(dataDir, "audit_log.jsonl"),
-	)
-	return err
 }

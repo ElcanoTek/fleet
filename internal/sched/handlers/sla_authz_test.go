@@ -28,7 +28,6 @@ func TestSLAReportAdminGate(t *testing.T) {
 			ID:           uuid.New(),
 			Username:     username,
 			Role:         role,
-			Scopes:       []string{},
 			CreatedAt:    time.Now(),
 			SessionToken: &hash,
 		}

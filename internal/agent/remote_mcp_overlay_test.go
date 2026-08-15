@@ -162,12 +162,12 @@ func TestApplyMCPOverlayNoopWhenInactive(t *testing.T) {
 	deps := agentcore.Deps{}
 	base := mcp.NewClient()
 	// nil overlay → no broker/catalog wiring.
-	ApplyMCPOverlay(&deps, base, nil)
+	ApplyMCPOverlayWithBase(&deps, base, nil, nil, nil)
 	if deps.MCPBroker != nil || deps.MCPCatalog != nil {
 		t.Error("nil overlay should leave Deps untouched")
 	}
 	// Inactive overlay (no servers) → no-op too.
-	ApplyMCPOverlay(&deps, base, &RemoteMCPOverlay{Client: base})
+	ApplyMCPOverlayWithBase(&deps, base, nil, nil, &RemoteMCPOverlay{Client: base})
 	if deps.MCPBroker != nil || deps.MCPCatalog != nil {
 		t.Error("inactive overlay should leave Deps untouched")
 	}
@@ -182,7 +182,7 @@ func TestApplyMCPOverlayActiveSetsCompositeBroker(t *testing.T) {
 		Servers: map[string]bool{"userserver": true},
 		Catalog: nil,
 	}
-	ApplyMCPOverlay(&deps, base, overlay)
+	ApplyMCPOverlayWithBase(&deps, base, nil, nil, overlay)
 	if deps.MCPBroker == nil {
 		t.Fatal("active overlay should set a composite broker")
 	}

@@ -293,10 +293,10 @@ func (s *fakeChatStore) UpdateTitle(context.Context, string, string, string) err
 func (s *fakeChatStore) DeleteByIDs(_ context.Context, _ string, ids []string) (int, error) {
 	return len(ids), nil
 }
-func (s *fakeChatStore) DeleteAllMatching(_ context.Context, _ string, _, _ string) (int, error) {
+func (s *fakeChatStore) DeleteAllMatching(_ context.Context, _, _ string) (int, error) {
 	return 0, nil
 }
-func (s *fakeChatStore) BulkPatch(_ context.Context, _ string, ids []string, _ *bool, _ *string, _ []string) (int, error) {
+func (s *fakeChatStore) BulkPatch(_ context.Context, _ string, ids []string, _ *bool, _ []string) (int, error) {
 	return len(ids), nil
 }
 

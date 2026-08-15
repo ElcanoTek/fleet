@@ -360,7 +360,7 @@ func (s *Store) DeleteProjectMemory(ctx context.Context, projectID, memoryID str
 // member's chats — each member sees only their own slice.
 func (s *Store) ListProjectConversationsForUser(ctx context.Context, userEmail, projectID string) ([]Conversation, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT `+conversationListColumns+` FROM conversations
+		`SELECT `+conversationColumns+` FROM conversations
 		 WHERE user_email = $1 AND project_id = $2 AND deleted_at IS NULL AND archived_at IS NULL
 		 ORDER BY updated_at DESC, id DESC`,
 		userEmail, projectID)

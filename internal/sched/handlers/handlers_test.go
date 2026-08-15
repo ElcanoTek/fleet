@@ -103,8 +103,6 @@ func setupTestHandlerWithStore(t *testing.T) (*chi.Mux, *storage.Storage, func()
 		r.Get("/keys", h.ListAPIKeys)
 		r.Get("/keys/audit", h.GetAuditLog)
 		r.Get("/keys/{key_id}", h.GetAPIKey)
-		r.Get("/keys/{key_id}/spending", h.GetKeySpending)
-		r.Post("/keys/{key_id}/reset-spending", h.ResetKeySpending)
 		r.Post("/keys/{key_id}/rotate", h.RotateAPIKey)
 		r.Post("/keys/{key_id}/revoke", h.RevokeAPIKey)
 		r.Delete("/keys/{key_id}", h.DeleteAPIKey)
@@ -176,57 +174,48 @@ func TestTaskTimezoneValidationAndScheduling(t *testing.T) {
 	}
 }
 
-func TestKeySpendingEndpoint(t *testing.T) {
+// The retired per-key spending caps are refused rather than ignored, and the
+// refusal happens before the key is minted — a request that names a cap must
+// not leave an uncapped key behind for the caller to never notice.
+func TestCreateKeyRejectsRetiredSpendingCaps(t *testing.T) {
 	r, cleanup := setupTestHandler(t)
 	defer cleanup()
 
-	// Create a key with a daily cap via the HTTP path.
-	body := `{"name":"ci-key","max_cost_per_day_usd":10.5}`
-	req := httptest.NewRequest("POST", "/keys", bytes.NewBufferString(body))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-API-Key", "test-admin-key")
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("create key: status %d (%s)", w.Code, w.Body.String())
-	}
-	var created models.APIKeyCreated
-	if err := json.NewDecoder(w.Body).Decode(&created); err != nil {
-		t.Fatalf("decode created key: %v", err)
-	}
-	if created.MaxCostPerDayUSD == nil || *created.MaxCostPerDayUSD != 10.5 {
-		t.Errorf("created key cap = %v, want 10.5", created.MaxCostPerDayUSD)
+	countKeys := func() int {
+		req := httptest.NewRequest("GET", "/keys", nil)
+		req.Header.Set("X-API-Key", "test-admin-key")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("list keys: status %d (%s)", w.Code, w.Body.String())
+		}
+		var keys []models.APIKeyResponse
+		if err := json.NewDecoder(w.Body).Decode(&keys); err != nil {
+			t.Fatalf("decode keys: %v", err)
+		}
+		return len(keys)
 	}
 
-	// Fetch its spending.
-	req = httptest.NewRequest("GET", "/keys/"+created.KeyID+"/spending", nil)
-	req.Header.Set("X-API-Key", "test-admin-key")
-	w = httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("get spending: status %d (%s)", w.Code, w.Body.String())
+	before := countKeys()
+	for _, body := range []string{
+		`{"name":"ci-key","max_cost_per_day_usd":10.5}`,
+		`{"name":"ci-key","max_cost_per_month_usd":250}`,
+	} {
+		req := httptest.NewRequest("POST", "/keys", bytes.NewBufferString(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-API-Key", "test-admin-key")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("create key %s: status %d, want 400 (%s)", body, w.Code, w.Body.String())
+		}
+		// The error must name the replacement, not just the removal.
+		if !strings.Contains(w.Body.String(), "/admin/budgets") {
+			t.Errorf("refusal does not point at the replacement: %s", w.Body.String())
+		}
 	}
-	var snap models.APIKeySpending
-	if err := json.NewDecoder(w.Body).Decode(&snap); err != nil {
-		t.Fatalf("decode spending: %v", err)
-	}
-	if snap.KeyID != created.KeyID {
-		t.Errorf("spending key_id = %q, want %q", snap.KeyID, created.KeyID)
-	}
-	if snap.CostTodayUSD != 0 {
-		t.Errorf("fresh key CostTodayUSD = %v, want 0", snap.CostTodayUSD)
-	}
-	if snap.MaxCostPerDayUSD == nil || *snap.MaxCostPerDayUSD != 10.5 {
-		t.Errorf("spending cap = %v, want 10.5", snap.MaxCostPerDayUSD)
-	}
-
-	// Unknown key → 404.
-	req = httptest.NewRequest("GET", "/keys/key_nope/spending", nil)
-	req.Header.Set("X-API-Key", "test-admin-key")
-	w = httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	if w.Code != http.StatusNotFound {
-		t.Errorf("unknown key spending: status %d, want 404", w.Code)
+	if after := countKeys(); after != before {
+		t.Errorf("rejected creates minted %d key(s); want none", after-before)
 	}
 }
 
@@ -421,16 +410,17 @@ func TestAPIKeyManagement(t *testing.T) {
 	}
 }
 
-// TestScopedAPIKeyUsage verifies a scoped (client-role) API key can create a
-// task. Node-target gating was removed with the move to per-task mcp_selection,
-// so a scoped key no longer has to (and cannot) name a target node — it simply
-// creates the task.
-func TestScopedAPIKeyUsage(t *testing.T) {
+// TestRoleKeyCreatesTask verifies a non-admin (client-role) API key can create a
+// task, and pins the ADR-0045 back-compat contract: a create body still carrying
+// the removed allowed_node_patterns field is accepted and the field ignored, so
+// an old client keeps working — it simply gets a key whose authority is its
+// permission set, which is all the patterns ever conferred.
+func TestRoleKeyCreatesTask(t *testing.T) {
 	r, cleanup := setupTestHandler(t)
 	defer cleanup()
 
-	// Create scoped API key
-	body := `{"name": "Scoped Key", "role": "client", "allowed_node_patterns": ["client-acme-*"]}`
+	// Create a client-role key, with a legacy (ignored) allowed_node_patterns field.
+	body := `{"name": "Client Key", "role": "client", "allowed_node_patterns": ["client-acme-*"]}`
 	req := httptest.NewRequest("POST", "/keys", bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-API-Key", "test-admin-key")
@@ -439,8 +429,11 @@ func TestScopedAPIKeyUsage(t *testing.T) {
 
 	var keyCreated models.APIKeyCreated
 	json.NewDecoder(w.Body).Decode(&keyCreated)
+	if bytes.Contains(w.Body.Bytes(), []byte("allowed_node_patterns")) {
+		t.Error("key response must not echo the removed allowed_node_patterns field")
+	}
 
-	// Use scoped key to create a task.
+	// Use the key to create a task.
 	body = `{"prompt": "Test task from scoped key"}`
 	req = httptest.NewRequest("POST", "/tasks", bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")

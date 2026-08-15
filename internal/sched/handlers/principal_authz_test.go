@@ -82,10 +82,10 @@ func setupAuthzHandler(t *testing.T) (*storage.Storage, *apikeys.Manager, *chi.M
 	return store, keyMgr, r, cleanup
 }
 
-func mustCreateScopedKey(t *testing.T, keyMgr *apikeys.Manager, role string, patterns []string) string {
+func mustCreateRoleKey(t *testing.T, keyMgr *apikeys.Manager, role string) string {
 	t.Helper()
 	r := role
-	_, raw, err := keyMgr.CreateKey("test-"+role, patterns, nil, &r, 0, nil, "")
+	_, raw, err := keyMgr.CreateKey("test-"+role, nil, &r, 0, nil, "")
 	if err != nil {
 		t.Fatalf("create key: %v", err)
 	}
@@ -136,7 +136,7 @@ func TestScopedAPIKeyAuthorization(t *testing.T) {
 
 	// A readonly key scoped to client-a-* carries view permissions but no
 	// mutating ones.
-	roKey := mustCreateScopedKey(t, keyMgr, "readonly", []string{"client-a-*"})
+	roKey := mustCreateRoleKey(t, keyMgr, "readonly")
 
 	t.Run("readonly key cannot cancel any task", func(t *testing.T) {
 		req := httptest.NewRequest("DELETE", "/tasks/"+taskA.ID.String(), nil)
@@ -164,7 +164,7 @@ func TestScopedAPIKeyAuthorization(t *testing.T) {
 		// The client role carries create_task (which gates editing) but not
 		// cancel_task, so editing is the right op to test mutating authorization
 		// on a call a scoped key is actually permitted to make.
-		clientKey := mustCreateScopedKey(t, keyMgr, "client", []string{"client-a-*"})
+		clientKey := mustCreateRoleKey(t, keyMgr, "client")
 
 		body, _ := json.Marshal(models.TaskCreate{Prompt: "edited prompt that is sufficiently long"})
 		req := httptest.NewRequest("PUT", "/tasks/"+taskA.ID.String(), bytes.NewReader(body))

@@ -1,6 +1,7 @@
 # ADR-0011: Remove the worker-node registry; the in-process worker is the only runner
 
-- **Status:** Accepted
+- **Status:** Accepted; the `allowed_node_patterns` retention clause below is
+  superseded by [ADR-0045](0045-remove-node-name-scopes.md)
 - **Date:** 2026-06-30
 - **Deciders:** fleet maintainers
 
@@ -75,7 +76,10 @@ re-introducing a node registry inside one fleet.
 - The scoped-API-key glob mechanism (`allowed_node_patterns`) is retained — it
   is the shared task-visibility scope concept, cosmetically node-named, not node
   routing. It no longer narrows anything by node but stays for forward
-  compatibility of API-key scoping.
+  compatibility of API-key scoping. **(Superseded by
+  [ADR-0045](0045-remove-node-name-scopes.md): with no node to match, the
+  retained mechanism was a constant-true predicate advertising a boundary fleet
+  did not have, so it was removed rather than kept.)**
 
 ## Alternatives considered
 

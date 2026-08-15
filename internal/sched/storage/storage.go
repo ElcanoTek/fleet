@@ -3,8 +3,7 @@
 // transactions and row-level locking. There is no worker-node registry: on one
 // box a single synthetic in-process worker claims work through
 // db.ClaimNextPendingTask (FOR UPDATE SKIP LOCKED) under a lease keyed by a
-// synthetic lease_owner, never a node table. The MatchGlob helper survives for
-// scoped-visibility checks in the handlers.
+// synthetic lease_owner, never a node table.
 package storage
 
 import (
@@ -15,7 +14,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -51,46 +49,6 @@ var ErrTaskLeaseNotHeld = errors.New("worker does not hold the lease on this tas
 // whether the transaction landed; earlier lease/validation/write errors are
 // definite failures and must never borrow another worker's terminal result.
 var ErrTaskCommitOutcomeUnknown = errors.New("task transaction commit outcome unknown")
-
-// MatchGlob implements simple glob matching similar to Python's fnmatch. It
-// survives the node-routing removal because scoped API keys / users still match
-// node-name scope patterns for visibility checks.
-func MatchGlob(pattern, name string) bool {
-	return match(pattern, name)
-}
-
-func match(pattern, name string) bool {
-	for len(pattern) > 0 {
-		switch pattern[0] {
-		case '*':
-			for len(pattern) > 0 && pattern[0] == '*' {
-				pattern = pattern[1:]
-			}
-			if len(pattern) == 0 {
-				return true
-			}
-			for i := 0; i <= len(name); i++ {
-				if match(pattern, name[i:]) {
-					return true
-				}
-			}
-			return false
-		case '?':
-			if len(name) == 0 {
-				return false
-			}
-			pattern = pattern[1:]
-			name = name[1:]
-		default:
-			if len(name) == 0 || pattern[0] != name[0] {
-				return false
-			}
-			pattern = pattern[1:]
-			name = name[1:]
-		}
-	}
-	return len(name) == 0
-}
 
 // Storage provides persistent storage for scheduled tasks.
 type Storage struct {
@@ -519,11 +477,6 @@ func (s *Storage) GetTasksCompletedToday() ([]*models.Task, error) {
 // GetDashboardStats gets statistics for the dashboard.
 func (s *Storage) GetDashboardStats() (*models.DashboardStats, error) {
 	return s.db.GetDashboardStats(context.Background())
-}
-
-// GetDashboardStatsForUser gets statistics scoped to a user's permissions.
-func (s *Storage) GetDashboardStatsForUser(userID *uuid.UUID, scopes []string) (*models.DashboardStats, error) {
-	return s.db.GetDashboardStatsForUser(context.Background(), userID, scopes)
 }
 
 // Log operations
@@ -1535,7 +1488,7 @@ func (s *Storage) scheduleNextRecurrence(ctx context.Context, task *models.Task)
 	newTask := models.NewTask(tc)
 	newTask.CreatedBy = task.CreatedBy
 	// Carry the originating API key forward so recurring task cost keeps counting
-	// against the key's spending caps.
+	// against the key's usage bucket (and any scope=key budget).
 	newTask.CreatedByKeyID = task.CreatedByKeyID
 
 	if _, err := s.AddTaskWithContext(ctx, newTask); err != nil {
@@ -1603,23 +1556,6 @@ func (s *Storage) RecordSkip(ctx context.Context, taskID uuid.UUID, reason strin
 		return nil, false, err
 	}
 	return task, recorded, nil
-}
-
-// Global storage instance
-var globalStorage *Storage
-
-// GetStorage returns the global storage instance.
-func GetStorage() *Storage {
-	if globalStorage == nil {
-		globalStorage = New()
-	}
-	return globalStorage
-}
-
-// InitGlobalStorage initializes the global storage.
-func InitGlobalStorage(dataDir string) error {
-	globalStorage = New()
-	return globalStorage.Initialize(filepath.Join(dataDir, "orchestrator.db"), db.DefaultPoolConfig())
 }
 
 // Eval & regression harness (#502)

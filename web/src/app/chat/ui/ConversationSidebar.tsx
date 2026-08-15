@@ -1984,9 +1984,9 @@ export function ConversationSidebar({
         </div>
       </div>
       {/* Multi-select bulk bar (#279, the design's .bulk-bar): pinned to the
-          rail's foot below the conversation list — count + 1.9rem icon actions with data-tip-top tooltips. Move-to-folder / Add-label
-          reuse the kebab's panels (including their inline create inputs) in
-          menus that open above the bar. Actions disable at zero selected. */}
+          rail's foot below the conversation list — count + 1.9rem icon actions with data-tip-top tooltips. Add-label
+          reuses the kebab's panel (including its inline create input) in a
+          menu that opens above the bar. Actions disable at zero selected. */}
       {selecting ? (
         <>
           <div

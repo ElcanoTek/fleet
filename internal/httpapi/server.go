@@ -672,11 +672,6 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("/attachments", auth(member(mutate(http.HandlerFunc(s.postAttachments)))))
 	mux.Handle("/conversations", auth(member(mutate(http.HandlerFunc(s.listOrCreateConversations)))))
 	mux.Handle("/conversations/", auth(member(mutate(http.HandlerFunc(s.conversationByID)))))
-	// Folders (#258): enumerate folders + counts, and rename (a bulk re-tag).
-	// Both are exact (no trailing slash) patterns, so they never shadow each other
-	// regardless of order; /folders/{anything else} simply 404s.
-	mux.Handle("/folders/rename", auth(member(mutate(http.HandlerFunc(s.renameFolder)))))
-	mux.Handle("/folders", auth(member(http.HandlerFunc(s.listFolders))))
 	mux.Handle("/search", auth(member(http.HandlerFunc(s.search))))
 	// Projects / Spaces (#509): shared team workspaces binding instructions +
 	// curated connectors + shared memory + membership (team RBAC).
@@ -685,7 +680,7 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("/memories", auth(member(mutate(http.HandlerFunc(s.memories)))))
 	// Knowledge graph (#523): the exact pattern outranks the /memories/ prefix
 	// in ServeMux matching, so "graph" is never mistaken for a memory id.
-	// Read-only, hence no mutate wrapper (like /folders and /search).
+	// Read-only, hence no mutate wrapper (like /search).
 	mux.Handle("/memories/graph", auth(member(http.HandlerFunc(s.memoryGraph))))
 	mux.Handle("/memories/", auth(member(mutate(http.HandlerFunc(s.memoryByID)))))
 	mux.Handle("/personas", auth(member(http.HandlerFunc(s.listPersonas))))
@@ -1310,8 +1305,8 @@ func (s *Server) listOrCreateConversations(w http.ResponseWriter, r *http.Reques
 	case http.MethodGet:
 		// ?archived=true returns the archived conversations (the collapsed
 		// "Archived" sidebar section, #282); default returns active ones.
-		// ?folder= restricts to one folder, and ?label= (repeatable, AND
-		// semantics) restricts to conversations carrying every listed label (#258).
+		// ?label= (repeatable, AND semantics) restricts to conversations
+		// carrying every listed label (#258).
 		q := r.URL.Query()
 		// ?scope=team returns the conversations same-team members have shared
 		// (team_visible), read-only (#237) — the manager/teammate view. It is a
@@ -1330,15 +1325,10 @@ func (s *Server) listOrCreateConversations(w http.ResponseWriter, r *http.Reques
 			writeJSON(w, map[string]any{"conversations": list})
 			return
 		}
-		filter := store.ListFilter{
+		list, err := s.store.ListFiltered(r.Context(), user, store.ListFilter{
 			ArchivedOnly: q.Get("archived") == "true",
 			Labels:       q["label"],
-		}
-		if q.Has("folder") {
-			folder := q.Get("folder")
-			filter.Folder = &folder
-		}
-		list, err := s.store.ListFiltered(r.Context(), user, filter)
+		})
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -1352,9 +1342,9 @@ func (s *Server) listOrCreateConversations(w http.ResponseWriter, r *http.Reques
 		//     aborts the whole request with 403 and deletes nothing.
 		//
 		//   • all_matching: { "all_matching": true, "confirm": true }
-		//     with optional ?folder=&label= query filters. Requires
-		//     confirm:true so an accidental bulk wipe can't fire. With no
-		//     filter this replicates the legacy "nuke all unpinned" behavior.
+		//     with an optional ?label= query filter. Requires confirm:true so
+		//     an accidental bulk wipe can't fire. With no filter this
+		//     replicates the legacy "nuke all unpinned" behavior.
 		//
 		// A request with neither conversation_ids nor all_matching falls
 		// back to the legacy DeleteAllUnpinned path (back-compat for older
@@ -1383,9 +1373,7 @@ func (s *Server) listOrCreateConversations(w http.ResponseWriter, r *http.Reques
 				http.Error(w, "conversation_ids is mutually exclusive with all_matching", http.StatusBadRequest)
 				return
 			}
-			folder := r.URL.Query().Get("folder")
-			label := r.URL.Query().Get("label")
-			n, err := s.store.DeleteAllMatching(r.Context(), user, folder, label)
+			n, err := s.store.DeleteAllMatching(r.Context(), user, r.URL.Query().Get("label"))
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
@@ -1475,8 +1463,8 @@ func (s *Server) listOrCreateConversations(w http.ResponseWriter, r *http.Reques
 }
 
 // bulkPatchConversations handles PATCH /conversations/bulk (#279): applies the
-// same additive mutation (pinned / folder / labels) to up to 100 conversations
-// in a single transaction. A nil pointer in `changes` (an omitted field) means
+// same additive mutation (pinned / labels) to up to 100 conversations in a
+// single transaction. A nil pointer in `changes` (an omitted field) means
 // "leave untouched"; a non-nil pointer — including an empty labels slice —
 // overwrites the stored value. A foreign or unknown ID returns 403 and rolls
 // the whole transaction back so nothing is partially mutated.
@@ -1486,7 +1474,6 @@ func (s *Server) bulkPatchConversations(w http.ResponseWriter, r *http.Request) 
 		ConversationIDs []string `json:"conversation_ids"`
 		Changes         struct {
 			Pinned *bool    `json:"pinned"`
-			Folder *string  `json:"folder"`
 			Labels []string `json:"labels"`
 		} `json:"changes"`
 	}
@@ -1500,16 +1487,16 @@ func (s *Server) bulkPatchConversations(w http.ResponseWriter, r *http.Request) 
 	}
 	// At least one change must be supplied — a bare PATCH with an empty changes
 	// object is a no-op the caller almost certainly didn't intend.
-	if req.Changes.Pinned == nil && req.Changes.Folder == nil && req.Changes.Labels == nil {
-		http.Error(w, "changes must include at least one of pinned, folder, labels", http.StatusBadRequest)
+	if req.Changes.Pinned == nil && req.Changes.Labels == nil {
+		http.Error(w, "changes must include at least one of pinned, labels", http.StatusBadRequest)
 		return
 	}
-	// Bound + normalize the folder/label metadata (#258) before persisting.
-	if err := normalizeAndValidateFolderLabels(req.Changes.Folder, req.Changes.Labels); err != nil {
+	// Bound + normalize the label metadata (#258) before persisting.
+	if err := normalizeAndValidateLabels(req.Changes.Labels); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	n, err := s.store.BulkPatch(r.Context(), user, req.ConversationIDs, req.Changes.Pinned, req.Changes.Folder, req.Changes.Labels)
+	n, err := s.store.BulkPatch(r.Context(), user, req.ConversationIDs, req.Changes.Pinned, req.Changes.Labels)
 	if errors.Is(err, store.ErrForeignConversation) {
 		http.Error(w, "one or more conversation IDs not owned by caller", http.StatusForbidden)
 		return
@@ -1545,7 +1532,7 @@ func (s *Server) conversationByID(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Bulk patch (#279): PATCH /conversations/bulk applies the same additive
-	// mutation (pinned / folder / labels) to multiple conversations in a single
+	// mutation (pinned / labels) to multiple conversations in a single
 	// transaction. Routed here because /conversations/bulk falls under the
 	// /conversations/ prefix; "bulk" is a reserved pseudo-id, never a UUID, so
 	// it can't collide with a real conversation.

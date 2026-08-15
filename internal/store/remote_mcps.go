@@ -430,16 +430,21 @@ func (s *Store) GetOAuthTokens(ctx context.Context, server *RemoteMCPServer) (*R
 }
 
 // RefreshResult is what a RefreshFunc returns: either fresh tokens, or a signal
-// that the refresh token is dead and the connection needs re-authorization.
+// that the grant is dead and the connection needs re-authorization.
 type RefreshResult struct {
 	Tokens     RemoteMCPTokens
 	NeedReauth bool
+	// ReauthDetail is the user-facing reason shown in the connections UI when
+	// NeedReauth is set. Empty falls back to the generic expiry wording, so a
+	// caller that doesn't classify keeps the previous behavior.
+	ReauthDetail string
 }
 
 // RefreshFunc performs the network token refresh for the given current tokens.
 // It MUST be bounded by a timeout (it runs while a DB row lock is held). Return
-// NeedReauth=true with a nil error for a terminal invalid_grant; return a
-// non-nil error for transient failures (the transaction rolls back).
+// NeedReauth=true with a nil error for a terminal failure (the grant or client
+// registration itself is dead — retrying cannot help); return a non-nil error
+// for transient failures (the transaction rolls back).
 type RefreshFunc func(ctx context.Context, current RemoteMCPTokens) (RefreshResult, error)
 
 // EnsureFreshToken returns a valid access token for server, refreshing if the
@@ -510,13 +515,17 @@ func (s *Store) EnsureFreshToken(ctx context.Context, server *RemoteMCPServer, m
 	if res.NeedReauth {
 		// Terminal: mark needs_reauth + bump the failure counter, then COMMIT so
 		// the status sticks. Return the sentinel for graceful degradation.
+		detail := res.ReauthDetail
+		if detail == "" {
+			detail = "authorization expired — reconnect required"
+		}
 		if _, err := tx.ExecContext(ctx,
 			`UPDATE remote_mcp_oauth SET failed_refresh_count = failed_refresh_count + 1 WHERE server_id = $1`, server.ID); err != nil {
 			return "", err
 		}
 		if _, err := tx.ExecContext(ctx,
 			`UPDATE remote_mcp_servers SET status = $2, status_detail = $3, updated_at = $4 WHERE id = $1`,
-			server.ID, RemoteMCPStatusNeedsReauth, "authorization expired — reconnect required", now); err != nil {
+			server.ID, RemoteMCPStatusNeedsReauth, detail, now); err != nil {
 			return "", err
 		}
 		committed = true

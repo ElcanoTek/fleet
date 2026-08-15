@@ -117,10 +117,6 @@ type Conversation struct {
 	// While true, the background auto-titler skips it so a manual name is never
 	// silently overwritten.
 	TitleLocked bool `json:"title_locked"`
-	// Folder is a free-form bucket name (e.g. "Archive", "Old work") used by
-	// bulk move (#279). Empty string is the default "no folder" state. Set via
-	// PATCH /conversations/bulk with changes.folder.
-	Folder string `json:"folder,omitempty"`
 	// Labels is a tag set for grouping/filtering (#279). Empty = unlabeled.
 	// Set via PATCH /conversations/bulk with changes.labels.
 	Labels []string `json:"labels,omitempty"`
@@ -922,23 +918,20 @@ func (s *Store) DeleteByIDs(ctx context.Context, userEmail string, ids []string)
 	return int(n), nil
 }
 
-// DeleteAllMatching removes (or, in soft-delete mode, tombstones) every
-// conversation for the user matching the optional folder and label filters.
-// An empty folder string is treated as "no folder filter"; pass a non-empty
-// folder to target a bucket. An empty label is "no label filter". Returns the
-// count affected.
+// DeleteAllMatching removes (or, in soft-delete mode, tombstones) every unpinned
+// conversation for the user carrying the optional label. An empty label is "no
+// label filter". Returns the count affected.
 //
-// The query binds both filters as parameters with an `$n = ”` short-circuit so
-// no SQL is concatenated from the inputs (defense against injection-by-clause).
-func (s *Store) DeleteAllMatching(ctx context.Context, userEmail, folder, label string) (int, error) {
+// The filter is bound as a parameter with an `$n = ”` short-circuit so no SQL is
+// concatenated from the input (defense against injection-by-clause).
+func (s *Store) DeleteAllMatching(ctx context.Context, userEmail, label string) (int, error) {
 	now := time.Now().Unix()
 	if s.softDelete {
 		res, err := s.db.ExecContext(ctx,
 			`UPDATE conversations SET deleted_at = NOW(), updated_at = $1
 			 WHERE user_email = $2 AND pinned = FALSE AND deleted_at IS NULL
-			   AND ($3 = '' OR folder = $3)
-			   AND ($4 = '' OR $4 = ANY(labels))`,
-			now, userEmail, folder, label,
+			   AND ($3 = '' OR $3 = ANY(labels))`,
+			now, userEmail, label,
 		)
 		if err != nil {
 			return 0, err
@@ -949,9 +942,8 @@ func (s *Store) DeleteAllMatching(ctx context.Context, userEmail, folder, label 
 	res, err := s.db.ExecContext(ctx,
 		`DELETE FROM conversations
 		 WHERE user_email = $1 AND pinned = FALSE AND deleted_at IS NULL
-		   AND ($2 = '' OR folder = $2)
-		   AND ($3 = '' OR $3 = ANY(labels))`,
-		userEmail, folder, label,
+		   AND ($2 = '' OR $2 = ANY(labels))`,
+		userEmail, label,
 	)
 	if err != nil {
 		return 0, err
@@ -961,12 +953,12 @@ func (s *Store) DeleteAllMatching(ctx context.Context, userEmail, folder, label 
 }
 
 // BulkPatch applies the supplied mutations to the conversations identified by
-// ids in a single transaction. A nil pointer (pinned / folder / labels) means
-// "leave that field untouched"; a non-nil pointer — including an empty labels
-// slice — overwrites the stored value. Returns ErrForeignConversation (mapped to
-// 403) if any supplied ID is foreign or unknown; the transaction rolls back so
-// nothing is mutated. The caller caps len(ids) (HTTP layer enforces 100).
-func (s *Store) BulkPatch(ctx context.Context, userEmail string, ids []string, pinned *bool, folder *string, labels []string) (int, error) {
+// ids in a single transaction. A nil pointer (pinned / labels) means "leave that
+// field untouched"; a non-nil pointer — including an empty labels slice —
+// overwrites the stored value. Returns ErrForeignConversation (mapped to 403) if
+// any supplied ID is foreign or unknown; the transaction rolls back so nothing
+// is mutated. The caller caps len(ids) (HTTP layer enforces 100).
+func (s *Store) BulkPatch(ctx context.Context, userEmail string, ids []string, pinned *bool, labels []string) (int, error) {
 	if len(ids) == 0 {
 		return 0, nil
 	}
@@ -991,12 +983,11 @@ func (s *Store) BulkPatch(ctx context.Context, userEmail string, ids []string, p
 	res, err := tx.ExecContext(ctx,
 		`UPDATE conversations
          SET pinned     = COALESCE($3, pinned),
-             folder     = COALESCE($4, folder),
-             labels     = COALESCE($5, labels),
-             updated_at = $6
+             labels     = COALESCE($4, labels),
+             updated_at = $5
          WHERE id = ANY($1) AND user_email = $2 AND deleted_at IS NULL`,
 		pq.Array(ids), userEmail,
-		pinned, folder, pq.Array(labels),
+		pinned, pq.Array(labels),
 		time.Now().Unix(),
 	)
 	if err != nil {
@@ -1012,12 +1003,10 @@ func (s *Store) BulkPatch(ctx context.Context, userEmail string, ids []string, p
 // ListFilter constrains ListFiltered (#258). The zero value lists all active
 // conversations (the default sidebar view). ArchivedOnly selects the archived
 // section instead (#282). Labels has AND semantics — every listed label must be
-// present (Postgres array containment). Folder, when non-nil, restricts to that
-// folder; a pointer to "" means the explicit "no folder" bucket (folder = ”).
+// present (Postgres array containment).
 type ListFilter struct {
 	ArchivedOnly bool
 	Labels       []string
-	Folder       *string
 }
 
 // ListFiltered returns the user's conversations matching f, pinned first, newest
@@ -1026,27 +1015,22 @@ type ListFilter struct {
 // sidebar view; when true it returns only the archived ones (#282), so the
 // frontend can render them in a separate, collapsed section.
 func (s *Store) ListFiltered(ctx context.Context, userEmail string, f ListFilter) ([]Conversation, error) {
-	// A single CONSTANT query with sentinel-guarded optional filters (mirroring
+	// A single CONSTANT query with a sentinel-guarded optional filter (mirroring
 	// DeleteAllMatching) — no string concatenation, so every value is bound and
 	// the query plan is stable. $2 picks the active/archived partition; $3 (NULL =
-	// no label filter) does AND-containment; $4 (NULL = no folder filter, '' = the
-	// explicit no-folder bucket) does folder equality.
-	var labelsArg, folderArg any
+	// no label filter) does AND-containment.
+	var labelsArg any
 	if len(f.Labels) > 0 {
 		labelsArg = pq.Array(f.Labels)
 	}
-	if f.Folder != nil {
-		folderArg = *f.Folder
-	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, optional_mcp_servers_enabled, folder, labels, approval_timeout_seconds, COALESCE(share_token, ''), COALESCE(parent_conversation_id, ''), COALESCE(branch_point_message_id, 0), thinking_config, COALESCE(project_id, '')
+		`SELECT `+conversationColumns+`
 		 FROM conversations
 		 WHERE user_email = $1 AND deleted_at IS NULL
 		   AND (CASE WHEN $2 THEN archived_at IS NOT NULL ELSE archived_at IS NULL END)
 		   AND ($3::text[] IS NULL OR labels @> $3::text[])
-		   AND ($4::text IS NULL OR folder = $4::text)
 		 ORDER BY pinned DESC, updated_at DESC, id DESC`,
-		userEmail, f.ArchivedOnly, labelsArg, folderArg,
+		userEmail, f.ArchivedOnly, labelsArg,
 	)
 	if err != nil {
 		return nil, err
@@ -1055,25 +1039,36 @@ func (s *Store) ListFiltered(ctx context.Context, userEmail string, f ListFilter
 	return scanConversationRows(rows)
 }
 
-// conversationListColumns is the SELECT list (in scan order) every conversation-
-// LIST query shares, so ListFiltered and ListTeamConversations stay in lockstep.
-// (Aliased with a `c.` prefix-friendly bare form; callers prefix as needed.)
-const conversationListColumns = `id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, optional_mcp_servers_enabled, folder, labels, approval_timeout_seconds, COALESCE(share_token, ''), COALESCE(parent_conversation_id, ''), COALESCE(branch_point_message_id, 0), thinking_config, COALESCE(project_id, '')`
+// conversationColumns is the SELECT list (in scan order) every conversation query
+// shares, so Get, ListFiltered and ListTeamConversations stay in lockstep with
+// scanConversation. (Bare column names, so a `c.`-aliased query can use it too.)
+const conversationColumns = `id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, optional_mcp_servers_enabled, labels, approval_timeout_seconds, COALESCE(share_token, ''), COALESCE(parent_conversation_id, ''), COALESCE(branch_point_message_id, 0), thinking_config, COALESCE(project_id, '')`
 
-// scanConversationRows scans a rows set produced with conversationListColumns.
+// scanConversation scans one row produced with conversationColumns. It takes the
+// package's rowScanner (the one method *sql.Row and *sql.Rows share) so the
+// single-row Get and the row-by-row list scans share one scan order.
+func scanConversation(sc rowScanner) (Conversation, error) {
+	var c Conversation
+	var optionalRaw []byte
+	var approvalTimeout sql.NullInt64
+	var thinkingRaw []byte
+	if err := sc.Scan(&c.ID, &c.UserEmail, &c.Title, &c.Persona, &c.Model, &c.Pinned, &c.Lockdown, &c.CreatedAt, &c.UpdatedAt, &c.ArchivedAt, &c.TitleLocked, &optionalRaw, pq.Array(&c.Labels), &approvalTimeout, &c.ShareToken, &c.ParentConversationID, &c.BranchPointMessageID, &thinkingRaw, &c.ProjectID); err != nil {
+		return Conversation{}, err
+	}
+	c.OptionalMCPServersEnabled = scanOptionalMCPServers(optionalRaw)
+	c.ApprovalTimeoutSeconds = nullableSeconds(approvalTimeout)
+	c.ThinkingConfig = scanThinkingConfig(thinkingRaw)
+	return c, nil
+}
+
+// scanConversationRows scans a rows set produced with conversationColumns.
 func scanConversationRows(rows *sql.Rows) ([]Conversation, error) {
 	var out []Conversation
 	for rows.Next() {
-		var c Conversation
-		var optionalRaw []byte
-		var approvalTimeout sql.NullInt64
-		var thinkingRaw []byte
-		if err := rows.Scan(&c.ID, &c.UserEmail, &c.Title, &c.Persona, &c.Model, &c.Pinned, &c.Lockdown, &c.CreatedAt, &c.UpdatedAt, &c.ArchivedAt, &c.TitleLocked, &optionalRaw, &c.Folder, pq.Array(&c.Labels), &approvalTimeout, &c.ShareToken, &c.ParentConversationID, &c.BranchPointMessageID, &thinkingRaw, &c.ProjectID); err != nil {
+		c, err := scanConversation(rows)
+		if err != nil {
 			return nil, err
 		}
-		c.OptionalMCPServersEnabled = scanOptionalMCPServers(optionalRaw)
-		c.ApprovalTimeoutSeconds = nullableSeconds(approvalTimeout)
-		c.ThinkingConfig = scanThinkingConfig(thinkingRaw)
 		out = append(out, c)
 	}
 	return out, rows.Err()
@@ -1100,7 +1095,7 @@ func (s *Store) ListTeamConversations(ctx context.Context, callerEmail string) (
 		return nil, ErrNoTeam
 	}
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT `+conversationListColumns+`
+		SELECT `+conversationColumns+`
 		FROM conversations c
 		WHERE c.deleted_at IS NULL
 		  AND c.archived_at IS NULL
@@ -1137,83 +1132,24 @@ func (s *Store) SetConversationTeamVisible(ctx context.Context, ownerEmail, conv
 
 // List returns the user's active (or, when archivedOnly, archived) conversations,
 // pinned first, newest first. Thin wrapper over ListFiltered preserved for the
-// many callers that don't filter by folder/label.
+// many callers that don't filter by label.
 func (s *Store) List(ctx context.Context, userEmail string, archivedOnly bool) ([]Conversation, error) {
 	return s.ListFiltered(ctx, userEmail, ListFilter{ArchivedOnly: archivedOnly})
 }
 
-// FolderCount is one folder name and the number of the user's active
-// conversations in it (#258).
-type FolderCount struct {
-	Name  string `json:"name"`
-	Count int    `json:"count"`
-}
-
-// ListFolders returns the distinct non-empty folder names the user has, each with
-// the count of its active (live, non-archived) conversations, ordered by name
-// (#258). The "no folder" bucket (folder = ”) is intentionally omitted — it is
-// the implicit "All Conversations" default, not a named folder.
-func (s *Store) ListFolders(ctx context.Context, userEmail string) ([]FolderCount, error) {
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT folder, COUNT(*) FROM conversations
-		 WHERE user_email = $1 AND folder <> '' AND deleted_at IS NULL AND archived_at IS NULL
-		 GROUP BY folder ORDER BY folder`,
-		userEmail,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := make([]FolderCount, 0)
-	for rows.Next() {
-		var fc FolderCount
-		if err := rows.Scan(&fc.Name, &fc.Count); err != nil {
-			return nil, err
-		}
-		out = append(out, fc)
-	}
-	return out, rows.Err()
-}
-
-// RenameFolder moves every one of the user's conversations from folder `from` to
-// folder `to` (a single UPDATE — there is no separate folders table, so a folder
-// IS just the set of conversations naming it). Returns the number of
-// conversations moved (0 when the source folder was empty/unknown). Archived
-// conversations sharing the name are moved too (unlike ListFolders, which counts
-// only active ones) so a folder's grouping stays consistent across the rename. (#258)
-func (s *Store) RenameFolder(ctx context.Context, userEmail, from, to string) (int, error) {
-	res, err := s.db.ExecContext(ctx,
-		`UPDATE conversations SET folder = $1, updated_at = $2
-		 WHERE user_email = $3 AND folder = $4 AND deleted_at IS NULL`,
-		to, time.Now().Unix(), userEmail, from,
-	)
-	if err != nil {
-		return 0, err
-	}
-	n, _ := res.RowsAffected()
-	return int(n), nil
-}
-
 // Get fetches a single conversation (without messages).
 func (s *Store) Get(ctx context.Context, userEmail, convID string) (*Conversation, error) {
-	row := s.db.QueryRowContext(ctx,
-		`SELECT id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, optional_mcp_servers_enabled, folder, labels, approval_timeout_seconds, COALESCE(share_token, ''), COALESCE(parent_conversation_id, ''), COALESCE(branch_point_message_id, 0), thinking_config, COALESCE(project_id, '')
+	c, err := scanConversation(s.db.QueryRowContext(ctx,
+		`SELECT `+conversationColumns+`
 		 FROM conversations WHERE id = $1 AND user_email = $2 AND deleted_at IS NULL`,
 		convID, userEmail,
-	)
-	var c Conversation
-	var optionalRaw []byte
-	var approvalTimeout sql.NullInt64
-	var thinkingRaw []byte
-	if err := row.Scan(&c.ID, &c.UserEmail, &c.Title, &c.Persona, &c.Model, &c.Pinned, &c.Lockdown, &c.CreatedAt, &c.UpdatedAt, &c.ArchivedAt, &c.TitleLocked, &optionalRaw, &c.Folder, pq.Array(&c.Labels), &approvalTimeout, &c.ShareToken, &c.ParentConversationID, &c.BranchPointMessageID, &thinkingRaw, &c.ProjectID); err != nil {
+	))
+	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, err
 	}
-	c.OptionalMCPServersEnabled = scanOptionalMCPServers(optionalRaw)
-	c.ApprovalTimeoutSeconds = nullableSeconds(approvalTimeout)
-	c.ThinkingConfig = scanThinkingConfig(thinkingRaw)
 	return &c, nil
 }
 

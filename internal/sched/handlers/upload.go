@@ -64,7 +64,7 @@ func (h *Handlers) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		}
 		if apiKey := r.Header.Get("X-API-Key"); apiKey != "" {
 			perm := models.PermissionCreateTask
-			if valid, key, _ := h.apiKeys.ValidateKey(apiKey, &perm, nil, nil, nil); valid && key != nil {
+			if valid, key, _ := h.apiKeys.ValidateKey(apiKey, &perm, nil, nil); valid && key != nil {
 				isAuthed = true
 			}
 		}
@@ -259,11 +259,6 @@ func (h *Handlers) HandleDownload(w http.ResponseWriter, r *http.Request) {
 // CleanupTempFiles removes files older than the specified duration.
 func (h *Handlers) CleanupTempFiles(maxAge time.Duration) {
 	tempDir := filepath.Join(h.config.DataDir, "temp_uploads")
-
-	// Safety: clear the checksum cache periodically to prevent any possibility of memory leaks
-	// or stale entries accumulating over long periods (since files are temp anyway).
-	// This is a simple and effective strategy since checksums are cheap to re-read from sidecar files.
-	h.checksumCache.Clear()
 
 	err := filepath.Walk(tempDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {

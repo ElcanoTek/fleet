@@ -115,6 +115,16 @@ func (f FlowConfig) Refresh(ctx context.Context, httpClient *http.Client, refres
 		form.Set("scope", strings.Join(f.Scopes, " "))
 	}
 	tok, err := f.tokenRequestWithResourceFallback(ctx, httpClient, form)
+	if err != nil && IsInvalidScope(err) && len(f.Scopes) > 0 {
+		// fleet stores the scopes it REQUESTED at connect time; an AS is free to
+		// grant a narrower set. RFC 6749 §6 forbids asking to refresh a scope
+		// wider than the one granted, and makes `scope` optional — omitting it
+		// means "identical to the scope originally granted". Without this retry a
+		// narrowed grant wedges the connection permanently: every refresh asks
+		// for too much, is refused, and the error is transient so it repeats.
+		form.Del("scope")
+		tok, err = f.tokenRequestWithResourceFallback(ctx, httpClient, form)
+	}
 	if err != nil {
 		return nil, err
 	}

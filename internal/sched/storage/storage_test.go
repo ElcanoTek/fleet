@@ -57,14 +57,6 @@ func newTestStore(t *testing.T) (*Storage, *db.Database) {
 func TestStorage(t *testing.T) {
 	store, _ := newTestStore(t)
 
-	// MatchGlob (the surviving scope-matching helper).
-	if !MatchGlob("foo*", "foobar") {
-		t.Error("MatchGlob failed")
-	}
-	if MatchGlob("foo*", "barfoo") {
-		t.Error("MatchGlob matched incorrectly")
-	}
-
 	// A pending task is claimed via ClaimNextPendingTask (no node routing).
 	taskPending := &models.Task{ID: uuid.New(), Prompt: "pending task", Status: models.TaskStatusPending, Priority: 10, CreatedAt: time.Now().UTC()}
 	if _, err := store.AddTask(taskPending); err != nil {

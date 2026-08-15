@@ -89,7 +89,6 @@ func schedUserAdd(argv []string) int {
 	fs := flag.NewFlagSet("sched user add", flag.ContinueOnError)
 	dbURL := fs.String("database-url", "", "sched Postgres DSN")
 	role := fs.String("role", "client", "role: admin|client|readonly")
-	scopes := fs.String("scopes", "", "comma-separated scopes (optional)")
 	pw := fs.String("password", "", `password ("-" reads from stdin)`)
 	username, flagArgs := splitPositional(argv)
 	if err := fs.Parse(flagArgs); err != nil {
@@ -132,7 +131,6 @@ func schedUserAdd(argv []string) int {
 		Username:     username,
 		PasswordHash: string(hash),
 		Role:         *role,
-		Scopes:       parseScopes(*scopes),
 		CreatedAt:    time.Now().UTC(),
 	}
 	if _, err := st.AddUser(user); err != nil {
@@ -367,7 +365,7 @@ func schedAPIKeyCreate(argv []string) int {
 		if !kt.Valid() {
 			return errf(1, "unknown key type %q (want admin|task|webhook|readonly)", t)
 		}
-		slugs := parseScopes(*triggerSlugs)
+		slugs := parseCSVList(*triggerSlugs)
 		if kt == apikeys.KeyTypeWebhook {
 			if len(slugs) == 0 {
 				return errf(1, "--type webhook requires --trigger-slugs")
@@ -380,7 +378,7 @@ func schedAPIKeyCreate(argv []string) int {
 				}
 			}
 		}
-		key, raw, err := mgr.CreateTypedKey(name, kt, slugs, nil, *rateLimit, nil, "created via fleet-admin")
+		key, raw, err := mgr.CreateTypedKey(name, kt, slugs, *rateLimit, nil, "created via fleet-admin")
 		if err != nil {
 			return errf(5, "%v", err)
 		}
@@ -394,7 +392,7 @@ func schedAPIKeyCreate(argv []string) int {
 
 	// Legacy role-based path: mints an untyped sk- key, unchanged.
 	roleVal := *role
-	key, raw, err := mgr.CreateKey(name, nil, nil, &roleVal, *rateLimit, nil, "created via fleet-admin")
+	key, raw, err := mgr.CreateKey(name, nil, &roleVal, *rateLimit, nil, "created via fleet-admin")
 	if err != nil {
 		return errf(5, "%v", err)
 	}
@@ -485,21 +483,6 @@ func schedAPIKeyDelete(argv []string) int {
 	return 0
 }
 
-func parseScopes(raw string) []string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil
-	}
-	parts := strings.Split(raw, ",")
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		if p = strings.TrimSpace(p); p != "" {
-			out = append(out, p)
-		}
-	}
-	return out
-}
-
 // splitTwoPositional lifts the first TWO positional args out of argv.
 func splitTwoPositional(argv []string) (positional []string, flagArgs []string) {
 	for _, a := range argv {
@@ -513,4 +496,21 @@ func splitTwoPositional(argv []string) (positional []string, flagArgs []string) 
 		}
 	}
 	return positional, flagArgs
+}
+
+// parseCSVList splits a comma-separated flag value into trimmed, non-empty
+// items (nil when the flag is unset).
+func parseCSVList(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }

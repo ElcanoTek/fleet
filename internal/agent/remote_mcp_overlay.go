@@ -222,15 +222,6 @@ func BuildRemoteMCPOverlay(ctx context.Context, resolver RemoteMCPResolver, emai
 	return overlay, nil
 }
 
-// ApplyMCPOverlay wires an overlay into a run's Deps: the run advertises the base
-// client's catalog merged with the overlay's, and dispatches through a
-// compositeBroker that routes the overlay's server names to the overlay client.
-// A nil/empty overlay is a no-op, so callers can apply unconditionally. baseClient
-// is the shared (or per-run bundle) client the run otherwise uses.
-func ApplyMCPOverlay(deps *agentcore.Deps, baseClient *mcp.Client, overlay *RemoteMCPOverlay) {
-	ApplyMCPOverlayWithBase(deps, baseClient, nil, nil, overlay)
-}
-
 // ApplyMCPOverlayWithBase composes a per-user remote overlay with either the
 // historical local base client or an injected out-of-process base broker and
 // catalog. A remote server can still never shadow a base server; only the base

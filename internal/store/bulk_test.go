@@ -145,9 +145,8 @@ func TestBulkPatch_AdditiveFields(t *testing.T) {
 	ids := createNConvs(t, s, "u@x.com", 3)
 
 	pin := true
-	folder := "Archive"
 	labels := []string{"done", "review"}
-	n, err := s.BulkPatch(ctx, "u@x.com", ids, &pin, &folder, labels)
+	n, err := s.BulkPatch(ctx, "u@x.com", ids, &pin, labels)
 	if err != nil {
 		t.Fatalf("BulkPatch: %v", err)
 	}
@@ -159,7 +158,7 @@ func TestBulkPatch_AdditiveFields(t *testing.T) {
 		if g == nil {
 			t.Fatalf("Get %s: nil", id)
 		}
-		if !g.Pinned || g.Folder != "Archive" || len(g.Labels) != 2 {
+		if !g.Pinned || len(g.Labels) != 2 {
 			t.Errorf("conversation %s = %+v", id, g)
 		}
 	}
@@ -172,22 +171,21 @@ func TestBulkPatch_NilFieldsUntouched(t *testing.T) {
 	ctx := context.Background()
 	ids := createNConvs(t, s, "u@x.com", 1)
 
-	// First patch: set folder + labels.
-	folder := "Old work"
+	// First patch: set labels.
 	labels := []string{"keep"}
-	if _, err := s.BulkPatch(ctx, "u@x.com", ids, nil, &folder, labels); err != nil {
+	if _, err := s.BulkPatch(ctx, "u@x.com", ids, nil, labels); err != nil {
 		t.Fatalf("BulkPatch set: %v", err)
 	}
-	// Second patch: only flip pinned; folder + labels must survive.
+	// Second patch: only flip pinned; labels must survive.
 	pin := true
-	if _, err := s.BulkPatch(ctx, "u@x.com", ids, &pin, nil, nil); err != nil {
+	if _, err := s.BulkPatch(ctx, "u@x.com", ids, &pin, nil); err != nil {
 		t.Fatalf("BulkPatch pin: %v", err)
 	}
 	g, _ := s.Get(ctx, "u@x.com", ids[0])
 	if g == nil {
 		t.Fatal("Get: nil")
 	}
-	if !g.Pinned || g.Folder != "Old work" || len(g.Labels) != 1 || g.Labels[0] != "keep" {
+	if !g.Pinned || len(g.Labels) != 1 || g.Labels[0] != "keep" {
 		t.Errorf("nil-field untouched: %+v", g)
 	}
 }
@@ -205,7 +203,7 @@ func TestBulkPatch_ForeignIDRejected(t *testing.T) {
 
 	req := []string{ownerIDs[0], intruderConv.ID}
 	pin := true
-	n, err := s.BulkPatch(ctx, "owner@x.com", req, &pin, nil, nil)
+	n, err := s.BulkPatch(ctx, "owner@x.com", req, &pin, nil)
 	if !errors.Is(err, ErrForeignConversation) {
 		t.Fatalf("err = %v, want ErrForeignConversation", err)
 	}
@@ -219,41 +217,38 @@ func TestBulkPatch_ForeignIDRejected(t *testing.T) {
 	}
 }
 
-// TestDeleteAllMatching_FolderLabel proves filter-based bulk delete respects the
-// optional folder/label params and leaves non-matching rows alone.
-func TestDeleteAllMatching_FolderLabel(t *testing.T) {
+// TestDeleteAllMatching_Label proves filter-based bulk delete respects the
+// optional label param and leaves non-matching rows alone.
+func TestDeleteAllMatching_Label(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 
-	mk := func(folder string, labels []string) string {
+	mk := func(labels []string) string {
 		c, _ := s.CreateConversation(ctx, "u@x.com", "", "victoria", "", false)
 		_, _ = s.db.ExecContext(ctx,
-			`UPDATE conversations SET folder = $1, labels = $2 WHERE id = $3`,
-			folder, labels, c.ID)
+			`UPDATE conversations SET labels = $1 WHERE id = $2`, labels, c.ID)
 		return c.ID
 	}
-	keep := mk("", nil)
-	inFolder := mk("Old work", nil)
-	tagged := mk("", []string{"archived"})
-	taggedInFolder := mk("Old work", []string{"archived"})
+	keep := mk(nil)
+	other := mk([]string{"keep"})
+	tagged := mk([]string{"archived"})
 
-	// Delete everything in the "Old work" folder tagged "archived".
-	n, err := s.DeleteAllMatching(ctx, "u@x.com", "Old work", "archived")
+	n, err := s.DeleteAllMatching(ctx, "u@x.com", "archived")
 	if err != nil {
 		t.Fatalf("DeleteAllMatching: %v", err)
 	}
 	if n != 1 {
-		t.Errorf("deleted = %d, want 1 (only the tagged-in-folder row)", n)
+		t.Errorf("deleted = %d, want 1 (only the tagged row)", n)
 	}
-	// The other three survive.
-	for _, id := range []string{keep, inFolder, tagged} {
+	// The other two survive.
+	for _, id := range []string{keep, other} {
 		if g, _ := s.Get(ctx, "u@x.com", id); g == nil {
 			t.Errorf("non-matching conversation %s was deleted", id)
 		}
 	}
 	// The matched row is gone.
-	if g, _ := s.Get(ctx, "u@x.com", taggedInFolder); g != nil {
-		t.Errorf("matched conversation %s survived", taggedInFolder)
+	if g, _ := s.Get(ctx, "u@x.com", tagged); g != nil {
+		t.Errorf("matched conversation %s survived", tagged)
 	}
 }
 

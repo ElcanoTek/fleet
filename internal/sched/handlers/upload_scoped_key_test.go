@@ -67,7 +67,7 @@ func multipartUploadRequest(t *testing.T, apiKey string) *http.Request {
 func TestUpload_ScopedCreateTaskKey(t *testing.T) {
 	h, keyMgr := setupUploadTest(t)
 
-	_, raw, err := keyMgr.CreateKey("intake", nil, []models.Permission{models.PermissionCreateTask}, nil, 0, nil, "")
+	_, raw, err := keyMgr.CreateKey("intake", []models.Permission{models.PermissionCreateTask}, nil, 0, nil, "")
 	if err != nil {
 		t.Fatalf("CreateKey: %v", err)
 	}
@@ -85,7 +85,7 @@ func TestUpload_ScopedCreateTaskKey(t *testing.T) {
 func TestUpload_UnderScopedTypedKey(t *testing.T) {
 	h, keyMgr := setupUploadTest(t)
 
-	_, raw, err := keyMgr.CreateTypedKey("viewer", apikeys.KeyTypeReadonly, nil, nil, 0, nil, "")
+	_, raw, err := keyMgr.CreateTypedKey("viewer", apikeys.KeyTypeReadonly, nil, 0, nil, "")
 	if err != nil {
 		t.Fatalf("CreateTypedKey: %v", err)
 	}

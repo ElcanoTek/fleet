@@ -49,8 +49,7 @@ func setupRunIfAuthz(t *testing.T) (*chi.Mux, *apikeys.Manager, *storage.Storage
 	} {
 		hash := models.HashToken(u.token)
 		if _, err := store.AddUser(&models.User{
-			ID: uuid.New(), Username: u.username, Role: u.role,
-			Scopes: []string{}, CreatedAt: time.Now(), SessionToken: &hash,
+			ID: uuid.New(), Username: u.username, Role: u.role, CreatedAt: time.Now(), SessionToken: &hash,
 		}); err != nil {
 			t.Fatalf("AddUser(%s): %v", u.username, err)
 		}
@@ -66,8 +65,8 @@ func setupRunIfAuthz(t *testing.T) (*chi.Mux, *apikeys.Manager, *storage.Storage
 func TestCreateTaskRunIfRequiresAdminPermission(t *testing.T) {
 	r, keyMgr, _ := setupRunIfAuthz(t)
 
-	clientKey := mustCreateScopedKey(t, keyMgr, "client", nil)
-	adminScopedKey := mustCreateScopedKey(t, keyMgr, "admin", nil)
+	clientKey := mustCreateRoleKey(t, keyMgr, "client")
+	adminScopedKey := mustCreateRoleKey(t, keyMgr, "admin")
 
 	gated := models.TaskCreate{
 		Prompt: "a gated task prompt that is long enough",
@@ -155,7 +154,7 @@ func TestCreateTaskRunIfRequiresAdminPermission(t *testing.T) {
 func TestUpdateTaskRunIfPersistsAndNormalizes(t *testing.T) {
 	r, keyMgr, store := setupRunIfAuthz(t)
 
-	clientKey := mustCreateScopedKey(t, keyMgr, "client", nil)
+	clientKey := mustCreateRoleKey(t, keyMgr, "client")
 
 	// The gated tasks are seeded SCHEDULED: that is where a gate normally lives
 	// (models.RunIf's enforcement contract parks every gated task on the
@@ -354,7 +353,7 @@ func TestUpdateTaskRunIfPersistsAndNormalizes(t *testing.T) {
 func TestUpdateTaskKeepsGatedTaskOnSchedulerPath(t *testing.T) {
 	r, keyMgr, store := setupRunIfAuthz(t)
 
-	clientKey := mustCreateScopedKey(t, keyMgr, "client", nil)
+	clientKey := mustCreateRoleKey(t, keyMgr, "client")
 	put := func(taskID uuid.UUID, tc models.TaskCreate) *httptest.ResponseRecorder {
 		body, _ := json.Marshal(tc)
 		req := httptest.NewRequest("PUT", "/tasks/"+taskID.String(), bytes.NewReader(body))

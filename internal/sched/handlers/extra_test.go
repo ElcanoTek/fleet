@@ -205,7 +205,6 @@ func TestDashboardStatsWithUserToken(t *testing.T) {
 		ID:        uuid.New(),
 		Username:  "dashboard-user",
 		Role:      "client",
-		Scopes:    []string{},
 		CreatedAt: time.Now(),
 	}
 	token := "dashboard-test-token"

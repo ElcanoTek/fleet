@@ -10,9 +10,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/go-chi/chi/v5"
-	"github.com/google/uuid"
-
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
 
@@ -28,7 +25,7 @@ func (h *Handlers) ResumeTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "Resuming a paused task requires operator permission")
 		return
 	}
-	task, ok := h.pauseTaskForRequest(w, r, p)
+	task, ok := h.taskFromPath(w, r)
 	if !ok {
 		return
 	}
@@ -75,7 +72,7 @@ func (h *Handlers) WakeTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "Waking a task requires operator permission")
 		return
 	}
-	task, ok := h.pauseTaskForRequest(w, r, p)
+	task, ok := h.taskFromPath(w, r)
 	if !ok {
 		return
 	}
@@ -126,25 +123,4 @@ func (h *Handlers) ListPausedTasks(w http.ResponseWriter, r *http.Request) {
 		localizeTask(t)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"tasks": tasks})
-}
-
-// pauseTaskForRequest loads the path task and enforces the scoped-principal
-// visibility gate (mirrors CancelTask). Named distinctly so it never collides
-// with a sibling helper.
-func (h *Handlers) pauseTaskForRequest(w http.ResponseWriter, r *http.Request, p principal) (*models.Task, bool) {
-	taskID, err := uuid.Parse(chi.URLParam(r, "task_id"))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "Invalid task ID")
-		return nil, false
-	}
-	task, err := h.storage.GetTask(taskID)
-	if err != nil || task == nil {
-		writeError(w, http.StatusNotFound, "Task not found")
-		return nil, false
-	}
-	if scopes := p.scopes(); len(scopes) > 0 && !taskVisibleToScopes(task, scopes, p.ownerID()) {
-		writeError(w, http.StatusForbidden, "Task not within allowed scopes")
-		return nil, false
-	}
-	return task, true
 }

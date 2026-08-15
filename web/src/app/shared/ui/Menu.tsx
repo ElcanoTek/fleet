@@ -6,7 +6,7 @@
 // family (same surface, same keyboard contract), per the design.
 //
 // Optional side flyout (#169 audit / handoff): a Menu may host ONE flyout (e.g.
-// "Add to folder" / "Labels") that opens BESIDE the main menu — both visible at
+// "Labels") that opens BESIDE the main menu — both visible at
 // once — anchored to the triggering menu item and placed to the side, flipping
 // to stay on-screen (the handoff's placeFlyout behavior). The caller owns which
 // flyout is open (so opening one closes the other); the Menu owns positioning,
@@ -134,7 +134,7 @@ function positionMenu(menu: HTMLElement, anchor: DOMRect, placement: MenuPlaceme
     menu.style.left = `${Math.round(clamp(anchor.left + 5, vw - mw - VIEWPORT_MARGIN))}px`;
     menu.style.bottom = `${Math.round(vh - anchor.top + 6)}px`;
   } else if (placement === "top-end") {
-    // Bulk-bar popovers (the design's .bulk-folder-menu): open ABOVE the bar,
+    // Bulk-bar popovers: open ABOVE the bar,
     // right edges aligned to the anchor, clamped fully on-screen.
     const left = clamp(anchor.right - w, vw - w - VIEWPORT_MARGIN);
     menu.style.right = "auto";
@@ -204,7 +204,7 @@ export function Menu({
   placement?: MenuPlacement;
   label?: string;
   className?: string;
-  // Optional side flyout (e.g. folder/labels). When flyoutOpen, `flyout` renders
+  // Optional side flyout (e.g. labels). When flyoutOpen, `flyout` renders
   // beside the menu, anchored to flyoutAnchorRef (the triggering item).
   flyout?: ReactNode;
   flyoutOpen?: boolean;

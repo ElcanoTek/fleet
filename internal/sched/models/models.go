@@ -29,16 +29,6 @@ func HashToken(token string) string {
 	return hex.EncodeToString(hash[:])
 }
 
-// HashTokenIfNeeded returns the token if it's already a SHA-256 hash, otherwise hashes it.
-func HashTokenIfNeeded(token string) string {
-	if len(token) == 64 {
-		if _, err := hex.DecodeString(token); err == nil {
-			return token
-		}
-	}
-	return HashToken(token)
-}
-
 // MCPChoice names one chosen MCP server and its credential account for a task.
 // Account=="" means the default/shared seat. This mirrors
 // agentcore.MCPChoice byte-for-byte at the JSON level so a task's selection
@@ -519,7 +509,6 @@ type User struct {
 	Username       string     `json:"username"`
 	PasswordHash   string     `json:"-"`
 	Role           string     `json:"role"`
-	Scopes         []string   `json:"scopes"`
 	CreatedAt      time.Time  `json:"created_at"`
 	LastLogin      *time.Time `json:"last_login,omitempty"`
 	SessionToken   *string    `json:"-"`
@@ -528,10 +517,9 @@ type User struct {
 
 // UserCreate represents the request to create a user.
 type UserCreate struct {
-	Username string   `json:"username"`
-	Password string   `json:"password"`
-	Role     string   `json:"role"`
-	Scopes   []string `json:"scopes"`
+	Username string `json:"username"`
+	Password string `json:"password"`
+	Role     string `json:"role"`
 }
 
 // UserLogin represents a login request.
@@ -545,7 +533,6 @@ type UserResponse struct {
 	ID        uuid.UUID `json:"id"`
 	Username  string    `json:"username"`
 	Role      string    `json:"role"`
-	Scopes    []string  `json:"scopes"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
@@ -1183,8 +1170,10 @@ type Task struct {
 	// present in responses ("UTC" for legacy/unset tasks). See TaskCreate.Timezone.
 	Timezone string `json:"timezone"`
 	// CreatedByKeyID is the scoped API key (if any) that submitted this task, set
-	// server-side at creation so the completion path can attribute cost back to
-	// the key for spending caps. Persisted; not settable by clients.
+	// server-side at creation. It is the `key` bucket of the usage read model
+	// (and so the principal a scope=key budget is evaluated against), and the
+	// ownership check behind the transcript gate. Persisted; not settable by
+	// clients.
 	CreatedByKeyID *string `json:"created_by_key_id,omitempty"`
 	// SourceTaskID is the task this one was re-run / cloned from (#270), set
 	// server-side by POST /tasks/{id}/rerun|clone. nil for original tasks.
@@ -1975,7 +1964,6 @@ type APIKeyCreate struct {
 	// AllowedTriggerSlugs.
 	Type                string   `json:"type,omitempty"`
 	AllowedTriggerSlugs []string `json:"allowed_trigger_slugs,omitempty"`
-	AllowedNodePatterns []string `json:"allowed_node_patterns"`
 	Role                *string  `json:"role,omitempty"`
 	// Permissions is an explicit permission set for the legacy (role-based)
 	// path, for the grants no role expresses — chiefly view_all_logs, the
@@ -1987,7 +1975,11 @@ type APIKeyCreate struct {
 	RateLimit     int          `json:"rate_limit"`
 	ExpiresInDays *int         `json:"expires_in_days,omitempty"`
 	Description   string       `json:"description"`
-	// Spending caps (nil = unlimited).
+	// MaxCostPerDayUSD / MaxCostPerMonthUSD are RETIRED per-key spending caps,
+	// kept on the request model for one purpose: so CreateAPIKey can answer a
+	// caller that still sends them with a 400 naming the replacement
+	// (POST /admin/budgets, scope=key) instead of accepting a cap it would
+	// never enforce. They are never persisted.
 	MaxCostPerDayUSD   *float64 `json:"max_cost_per_day_usd,omitempty"`
 	MaxCostPerMonthUSD *float64 `json:"max_cost_per_month_usd,omitempty"`
 	// MaxPriority caps how urgent a task this key may submit (#230): the key
@@ -2003,7 +1995,6 @@ type APIKeyResponse struct {
 	KeyPrefix           string     `json:"key_prefix"`
 	Type                string     `json:"type,omitempty"`
 	AllowedTriggerSlugs []string   `json:"allowed_trigger_slugs,omitempty"`
-	AllowedNodePatterns []string   `json:"allowed_node_patterns"`
 	Permissions         []string   `json:"permissions"`
 	RateLimit           int        `json:"rate_limit"`
 	CreatedAt           time.Time  `json:"created_at"`
@@ -2011,25 +2002,8 @@ type APIKeyResponse struct {
 	ExpiresAt           *time.Time `json:"expires_at,omitempty"`
 	Enabled             bool       `json:"enabled"`
 	Description         string     `json:"description"`
-	// Spending caps + live accumulators (nil cap = unlimited).
-	MaxCostPerDayUSD   *float64 `json:"max_cost_per_day_usd,omitempty"`
-	MaxCostPerMonthUSD *float64 `json:"max_cost_per_month_usd,omitempty"`
-	CostTodayUSD       float64  `json:"cost_today_usd"`
-	CostThisMonthUSD   float64  `json:"cost_this_month_usd"`
 	// MaxPriority is the key's task-urgency ceiling (#230); nil = uncapped.
 	MaxPriority *int `json:"max_priority,omitempty"`
-}
-
-// APIKeySpending is the GET /keys/{id}/spending response: current spend vs caps
-// with the next reset instants.
-type APIKeySpending struct {
-	KeyID              string    `json:"key_id"`
-	CostTodayUSD       float64   `json:"cost_today_usd"`
-	MaxCostPerDayUSD   *float64  `json:"max_cost_per_day_usd,omitempty"`
-	CostThisMonthUSD   float64   `json:"cost_this_month_usd"`
-	MaxCostPerMonthUSD *float64  `json:"max_cost_per_month_usd,omitempty"`
-	DailyResetAt       time.Time `json:"daily_reset_at"`
-	MonthlyResetAt     time.Time `json:"monthly_reset_at"`
 }
 
 // APIKeyCreated is the response model when a new key is created.
