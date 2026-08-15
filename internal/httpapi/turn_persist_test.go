@@ -269,6 +269,40 @@ func TestStreamEndpoint_DBFallback(t *testing.T) {
 			t.Errorf("DB replay missing %q:\n%s", want, body)
 		}
 	}
+	// The reconnect is classified as buffer_expired (not db_fallback): the turn
+	// had already finished, so the DB holds the complete event log including the
+	// terminal frame. The distinction drives the UI's inline "turn completed"
+	// notice, so pin it rather than just the replayed bytes.
+	if counts := s.SSEReconnectCounts(); counts["buffer_expired"] != 1 {
+		t.Errorf("reconnect outcomes = %v, want buffer_expired=1", counts)
+	}
+}
+
+// A reconnect that names no turn_id with nothing buffered has nothing to serve:
+// the handler 204s and tallies the outcome as no_content. Together with the
+// buffer_expired assertion above this pins the classification the reconnect
+// counter reports — it is written on every /stream reattach, so a mislabelled
+// outcome would otherwise go unnoticed.
+func TestStreamEndpoint_NoContentReconnectIsTallied(t *testing.T) {
+	s := serverFixture(t)
+	conv, err := s.store.CreateConversation(t.Context(), "alice@x.com", "hi", "victoria", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet,
+		"/conversations/"+conv.ID+"/stream", bytes.NewReader(nil))
+	req.Header.Set("X-Chat-Server-Token", "tok")
+	req.Header.Set("X-User-Email", "alice@x.com")
+	w := httptest.NewRecorder()
+	s.Routes().ServeHTTP(w, req)
+
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("stream: status %d, want 204; body=%s", w.Code, w.Body.String())
+	}
+	if counts := s.SSEReconnectCounts(); counts["no_content"] != 1 {
+		t.Errorf("reconnect outcomes = %v, want no_content=1", counts)
+	}
 }
 
 // A turn that's still 'running' on startup gets marked errored and

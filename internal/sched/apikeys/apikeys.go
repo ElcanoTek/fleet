@@ -1106,19 +1106,3 @@ func (m *Manager) GetAuditLog(keyID, action *string, since *time.Time, limit int
 	}
 	return entries
 }
-
-// Global manager instance
-var globalManager *Manager
-
-// GetManager returns the global API key manager.
-func GetManager() *Manager { return globalManager }
-
-// InitGlobalManager initializes the global API key manager.
-func InitGlobalManager(dataDir string) error {
-	var err error
-	globalManager, err = NewManager(
-		filepath.Join(dataDir, "api_keys.json"),
-		filepath.Join(dataDir, "audit_log.jsonl"),
-	)
-	return err
-}

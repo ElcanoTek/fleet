@@ -10,7 +10,6 @@ package health
 
 import (
 	"context"
-	"sort"
 	"sync"
 	"time"
 )
@@ -145,15 +144,4 @@ func runOne(ctx context.Context, c Check) (res Result) {
 		// The probe overran its deadline (or the parent ctx was cancelled).
 		return Result{Status: StatusError, Detail: "timeout"}
 	}
-}
-
-// CheckNames returns the check names in sorted order (handy for stable test
-// assertions and logging).
-func CheckNames(checks []Check) []string {
-	names := make([]string, 0, len(checks))
-	for _, c := range checks {
-		names = append(names, c.Name)
-	}
-	sort.Strings(names)
-	return names
 }

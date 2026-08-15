@@ -19,6 +19,48 @@ prior versions are listed because none have shipped.
 
 ### Removed
 
+- **Dead code swept from the `internal/` tree** — every function that a
+  whole-program reachability analysis (`golang.org/x/tools/cmd/deadcode`, run
+  with tests and the `fleet_host_executor` tag) found unreachable from any
+  entry point *or* any test:
+  - `sched/storage.GetStorage`/`InitGlobalStorage` and
+    `sched/apikeys.GetManager`/`InitGlobalManager` (plus their package-level
+    `globalStorage`/`globalManager` vars) — process-wide singletons superseded
+    by the constructor-injected `Storage`/`Manager` the server actually wires.
+  - `sched/handlers.checksumCache` in full — the type, the `Handlers` field, its
+    constructor, and the `Clear()` call in `CleanupTempFiles`. Nothing ever
+    called `Set`, so the map was permanently empty and the periodic "prevent
+    memory leaks" clear was clearing nothing.
+  - `sched/models.HashTokenIfNeeded` — passed any 64-char hex input through
+    **unhashed**, so a session token that happened to look like a digest would
+    have been stored and compared raw. Every caller already uses `HashToken`.
+  - `observability.CapturePanic` and its private `panicClass` — a byte-identical
+    duplicate of the live `safe.PanicClass`, and the last entry point that
+    accepted a *raw* recovered value; real recovery boundaries classify first and
+    call `CapturePanicClass`/`CapturePanicClassWithTags`.
+  - `agent.ApplyMCPOverlay` — a two-line wrapper only its own test called;
+    `ApplyMCPOverlayWithBase` is the real entry point and the tests now use it.
+  - `internal/agent/toolresult.go` (+ its test) — a verbatim cutlass port for
+    scheduled-driver log formatting that was never wired to a driver.
+  - `health.CheckNames` and `sched/db.GetMigrationVersion` (superseded by the
+    richer `MigrationStatus` report behind `fleet migrate status`).
+
+### Fixed
+
+- **The SSE reconnect counter recorded nothing in tests.** `httpapi.Server`'s
+  `sseReconnects` is wired by `New()`, but the handler-test fixture builds the
+  struct literally and omitted it; `inc` is nil-safe, so every `/stream`
+  reattach in every handler test tallied into a nil counter silently. The
+  fixture now wires it, and the reconnect outcomes (`buffer_expired`,
+  `no_content`) are asserted — previously `SSEReconnectCounts` had no reader at
+  all, which is why the reachability scan flagged it.
+- **The "never format a recovered panic value" regression test guarded the wrong
+  function.** It asserted against `observability.panicClass` (the dead
+  duplicate, now removed) while `safe.PanicClass` — the classifier every real
+  recovery boundary calls before anything reaches logs or Sentry — had no test.
+  The assertion moved to `internal/safe` and covers error/string/nil/struct
+  values.
+
 - **Conversation folders (#258/#279).** Projects (#509) superseded folders when
   they shipped, and the folders UI came out with them — but the whole server
   half stayed: a `folder TEXT` column, `GET /folders`, `POST /folders/rename`,
