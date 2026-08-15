@@ -520,17 +520,6 @@ func (h *Handlers) CreateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Spending-cap pre-flight: refuse a key that has already reached its daily or
-	// monthly LLM budget. Task cost is only known after completion, so this gates
-	// on the already-accumulated spend.
-	if creator.creatorKey != nil {
-		if err := h.apiKeys.CheckBudget(*creator.creatorKey); err != nil {
-			w.Header().Set("Retry-After", "3600")
-			writeError(w, http.StatusTooManyRequests, err.Error())
-			return
-		}
-	}
-
 	// Per-principal rolling budget (#601 part 2): the SAME budgetCapError gate
 	// the batch and chat schedule_task paths run. At a hard bound the create is
 	// refused (402 + Retry-After at the window rollover); a soft crossing fires
@@ -2140,6 +2129,17 @@ func (h *Handlers) CreateAPIKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The per-key spending caps are retired: nothing ever fed their accumulator,
+	// so a cap set here was silently unenforced. Refuse the field rather than
+	// accept it — an operator who believes a key is capped at $50/day and is
+	// wrong is worse off than one who gets an error naming the replacement.
+	// Checked BEFORE creating the key so a rejected request mints nothing.
+	if keyCreate.MaxCostPerDayUSD != nil || keyCreate.MaxCostPerMonthUSD != nil {
+		writeError(w, http.StatusBadRequest,
+			"max_cost_per_day_usd/max_cost_per_month_usd are no longer supported; create a rolling budget instead: POST /admin/budgets {\"scope\":\"key\",\"principal_id\":\"<key_id>\",\"window\":\"day|week|month\",\"hard_usd\":…}")
+		return
+	}
+
 	// Validate the optional task-urgency ceiling (#230) BEFORE creating the key,
 	// so a bad value never leaves a half-created (uncapped) key behind.
 	if keyCreate.MaxPriority != nil && (*keyCreate.MaxPriority < models.PriorityMin || *keyCreate.MaxPriority > models.PriorityMax) {
@@ -2219,14 +2219,6 @@ func (h *Handlers) CreateAPIKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Apply optional spending caps (CreateKey keeps a stable signature; budgets
-	// are set in a follow-up so the field set can grow without churning callers).
-	if keyCreate.MaxCostPerDayUSD != nil || keyCreate.MaxCostPerMonthUSD != nil {
-		if err := h.apiKeys.SetBudgets(key.KeyID, keyCreate.MaxCostPerDayUSD, keyCreate.MaxCostPerMonthUSD); err != nil {
-			log.Printf("Warning: failed to set budgets on new key %s: %v", key.KeyID, err)
-		}
-	}
-
 	// Apply the optional task-urgency ceiling (#230), validated above.
 	if keyCreate.MaxPriority != nil {
 		if err := h.apiKeys.SetMaxPriority(key.KeyID, keyCreate.MaxPriority); err != nil {
@@ -2241,31 +2233,6 @@ func (h *Handlers) CreateAPIKey(w http.ResponseWriter, r *http.Request) {
 		APIKeyResponse: resp,
 		APIKey:         rawKey,
 	})
-}
-
-// GetKeySpending handles GET /keys/{key_id}/spending — current spend vs caps
-// with next reset instants.
-func (h *Handlers) GetKeySpending(w http.ResponseWriter, r *http.Request) {
-	keyID := chi.URLParam(r, "key_id")
-	snap, ok := h.apiKeys.SpendingSnapshot(keyID)
-	if !ok {
-		writeError(w, http.StatusNotFound, "API key not found")
-		return
-	}
-	writeJSON(w, http.StatusOK, snap)
-}
-
-// ResetKeySpending handles POST /keys/{key_id}/reset-spending — operator
-// override that zeros a key's accumulators (admin-gated by the route group).
-func (h *Handlers) ResetKeySpending(w http.ResponseWriter, r *http.Request) {
-	keyID := chi.URLParam(r, "key_id")
-	if err := h.apiKeys.ResetSpending(keyID); err != nil {
-		writeError(w, http.StatusNotFound, "API key not found")
-		return
-	}
-	h.apiKeys.LogAction(keyID, "reset_spending", "api_key", &keyID, nil, nil, nil, true, nil)
-	snap, _ := h.apiKeys.SpendingSnapshot(keyID)
-	writeJSON(w, http.StatusOK, snap)
 }
 
 // ListAPIKeys handles GET /keys

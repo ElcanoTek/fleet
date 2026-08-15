@@ -328,8 +328,18 @@ components:
         rate_limit: { type: integer }
         expires_in_days: { type: integer }
         description: { type: string }
-        max_cost_per_day_usd: { type: number, description: "Daily spend cap in USD (omit for unlimited)." }
-        max_cost_per_month_usd: { type: number, description: "Monthly spend cap in USD (omit for unlimited)." }
+        max_cost_per_day_usd:
+          type: number
+          deprecated: true
+          description: >-
+            RETIRED. Sending this (or max_cost_per_month_usd) is rejected with
+            400 — the per-key accumulator that would have enforced it never
+            existed. Use a rolling budget instead:
+            POST /admin/budgets {"scope":"key","principal_id":"<key_id>","window":"day","hard_usd":…}.
+        max_cost_per_month_usd:
+          type: number
+          deprecated: true
+          description: 'RETIRED — see max_cost_per_day_usd. Use POST /admin/budgets with window "month".'
       required: [name]
     APIKeyCreated:
       type: object
@@ -2509,30 +2519,6 @@ paths:
       security: [{ adminApiKey: [] }]
       responses:
         "200": { description: Deleted }
-  /keys/{key_id}/spending:
-    parameters:
-      - name: key_id
-        in: path
-        required: true
-        schema: { type: string }
-    get:
-      summary: Get an API key's current spend vs. daily/monthly caps.
-      security: [{ adminApiKey: [] }]
-      responses:
-        "200": { description: OK }
-        "404": { $ref: "#/components/responses/Error" }
-  /keys/{key_id}/reset-spending:
-    parameters:
-      - name: key_id
-        in: path
-        required: true
-        schema: { type: string }
-    post:
-      summary: Reset an API key's daily/monthly spend accumulators (operator override).
-      security: [{ adminApiKey: [] }]
-      responses:
-        "200": { description: Reset }
-        "404": { $ref: "#/components/responses/Error" }
   /keys/{key_id}/rotate:
     parameters:
       - name: key_id

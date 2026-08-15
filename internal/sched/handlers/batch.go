@@ -192,18 +192,6 @@ func (h *Handlers) CreateTaskBatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Spending-cap pre-flight for the scoped key path: refuse a key that has
-	// already hit its daily/monthly LLM budget before doing any work, mirroring
-	// CreateTask. A batch is N potential runs, so the cap is checked up front
-	// (per-task cost is only known at completion; this gates on accumulated spend).
-	if creator.creatorKey != nil {
-		if err := h.apiKeys.CheckBudget(*creator.creatorKey); err != nil {
-			w.Header().Set("Retry-After", "3600")
-			writeError(w, http.StatusTooManyRequests, err.Error())
-			return
-		}
-	}
-
 	// Per-principal rolling budget (#601 part 2): the SAME budgetCapError gate
 	// the single-task and chat schedule_task paths run, checked up front for
 	// the whole batch — the budget bounds the principal, not any one task, so

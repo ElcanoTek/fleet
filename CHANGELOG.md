@@ -46,6 +46,26 @@ prior versions are listed because none have shipped.
 
 ### Removed
 
+- **Per-API-key spending caps (`max_cost_per_day_usd` /
+  `max_cost_per_month_usd`) and the two endpoints that read them**
+  (`GET /keys/{id}/spending`, `POST /keys/{id}/reset-spending`).
+  **Breaking at the API surface, but not a behavior change: the caps never
+  enforced anything.** Nothing in the unified runtime ever called
+  `AccumulateCost`, so the counter `CheckBudget` compared against was frozen at
+  zero — a key set to `$50/day` was uncapped, and `/keys/{id}/spending`
+  reported `$0.00` for every key, forever. (The moc-era task-completion callback
+  that fed the counter did not survive the fold into the in-process runner, and
+  the package's own tests passed because they called `AccumulateCost`
+  themselves.) `POST /keys` now returns **400** naming the replacement rather
+  than accepting a cap it would not enforce. That replacement already shipped
+  and is strictly stronger: `POST /admin/budgets` with `{"scope":"key",
+  "principal_id":"<key_id>","window":"day|week|month","hard_usd":…}` is
+  computed from the persisted metering (no second accounting path), adds week
+  windows, token bounds, and soft alerts, and counts chat turns as well as
+  tasks. Read live spend with `GET /admin/budgets` or
+  `GET /admin/usage?group_by=key`. Old key files load unchanged and no
+  migration runs. See
+  [ADR-0046](docs/adr/0046-remove-per-key-spending-caps.md).
 - **Node-name scopes (ADR-0045).** Every principal carried a list of glob
   patterns — `users.scopes` for accounts, `api_keys.allowed_node_patterns` for
   keys — matched against the name of the worker node a task ran on. The node

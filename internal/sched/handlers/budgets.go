@@ -63,8 +63,8 @@ func (h *Handlers) budgetCapError(ctx context.Context, creator taskCreator) erro
 
 // writeBudgetRefusal maps a budgetCapError failure onto the wire: a hard-bound
 // refusal is 402 Payment Required (the principal's spend allowance for the
-// window is exhausted — distinct from the 429 the per-key rate/spending caps
-// use) with Retry-After pointing at the window rollover; anything else is an
+// window is exhausted — distinct from the 429 the per-key rate limiter uses)
+// with Retry-After pointing at the window rollover; anything else is an
 // unverifiable budget, surfaced as 500 rather than admitting work unchecked.
 func writeBudgetRefusal(w http.ResponseWriter, err error) {
 	var exceeded *budget.ExceededError
