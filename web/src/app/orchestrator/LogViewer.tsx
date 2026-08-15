@@ -451,6 +451,9 @@ type SubagentInfo = {
   success?: boolean;
   result?: string;
   pending?: boolean;
+  /** Live step count + current action while the child is still running. */
+  steps?: number;
+  current?: string;
 };
 
 // parseSubagentPayload reads either shape — the linkage entry
@@ -507,7 +510,16 @@ function SubagentCard({ info, taskId }: { info: SubagentInfo; taskId?: string })
           {status.label}
         </span>
       </div>
+      {/* What the child is doing right now — the live half of the card. */}
+      {info.current ? (
+        <div className="subagent-card-activity" data-testid="subagent-card-activity">
+          {info.current}
+        </div>
+      ) : null}
       <div className="subagent-card-meta">
+        {typeof info.steps === "number" && info.steps > 0 ? (
+          <span>{info.steps} steps</span>
+        ) : null}
         {typeof info.costUsd === "number" && info.costUsd > 0 ? (
           <span>${info.costUsd.toFixed(4)}</span>
         ) : null}
@@ -599,7 +611,69 @@ type ActivityEntry = {
   isError?: boolean;
   pending?: boolean;
   repeats?: number;
+  /**
+   * Live sub-agent activity for a spawn_subagent entry (#1043 follow-up), fed
+   * by subagent_progress frames. Without it a delegation showed "running…" for
+   * its whole (multi-minute) life with nothing underneath.
+   */
+  subagent?: LiveSubagentActivity;
 };
+
+type LiveSubagentActivity = {
+  childSessionId?: string;
+  role?: string;
+  steps: number;
+  current?: string;
+};
+
+/**
+ * liveSubagentActivity folds one subagent_progress frame into an entry's live
+ * activity. Pure, and tolerant of a frame that arrives before the spawn entry's
+ * own tool_call (the caller drops those).
+ */
+export function liveSubagentActivity(
+  prev: LiveSubagentActivity | undefined,
+  frame: TaskStreamFrame,
+): LiveSubagentActivity {
+  const base: LiveSubagentActivity = prev ?? { steps: 0 };
+  const next: LiveSubagentActivity = {
+    childSessionId: frame.child_session_id || base.childSessionId,
+    role: frame.role || base.role,
+    steps:
+      typeof frame.steps === "number"
+        ? frame.steps
+        : typeof frame.step === "number"
+          ? Math.max(base.steps, frame.step)
+          : base.steps,
+    current: base.current,
+  };
+  switch (frame.phase) {
+    case "started":
+      next.current = "starting…";
+      break;
+    case "tool":
+      next.current = frame.tool
+        ? `${frame.tool}${frame.detail ? ` · ${frame.detail}` : ""}`
+        : base.current;
+      break;
+    case "tool_result":
+      next.current = frame.tool ? `${frame.tool} returned` : base.current;
+      break;
+    case "text":
+      next.current = frame.detail ? `writing: ${frame.detail}` : "writing…";
+      break;
+    case "thinking":
+      next.current = frame.detail ? `thinking: ${frame.detail}` : "thinking…";
+      break;
+    case "note":
+      next.current = frame.detail || base.current;
+      break;
+    case "finished":
+      next.current = undefined;
+      break;
+  }
+  return next;
+}
 
 function sameFailedCall(a: ActivityEntry, b: ActivityEntry) {
   return a.kind === "tool" && b.kind === "tool" && a.isError && b.isError &&
@@ -666,6 +740,19 @@ function LiveTaskView({
           const entry: ActivityEntry = { key: `e${seq.current++}`, kind: "message", text: content };
           return [...prev, entry].slice(-1000);
         });
+        return;
+      } else if (frame.type === "subagent_progress") {
+        // A spawned child's step, attached to the spawn entry that produced it.
+        // A frame whose call we have not rendered yet (reconnect mid-child) is
+        // dropped rather than inventing an entry with no task text.
+        if (!frame.tool_call_id) return;
+        setEntries((prev) =>
+          prev.map((e) =>
+            e.kind === "tool" && e.callId === frame.tool_call_id
+              ? { ...e, subagent: liveSubagentActivity(e.subagent, frame) }
+              : e,
+          ),
+        );
         return;
       } else if (frame.type === "tool_call") {
         // task_tracker is represented once by the dedicated progress panel.
@@ -875,7 +962,14 @@ function LiveTaskView({
                   taskId={task.id}
                   info={
                     e.pending
-                      ? { pending: true, ...(parseSubagentPayload(e.text) ?? {}) }
+                      ? {
+                          pending: true,
+                          ...(parseSubagentPayload(e.text) ?? {}),
+                          childSessionId: e.subagent?.childSessionId,
+                          role: e.subagent?.role,
+                          steps: e.subagent?.steps,
+                          current: e.subagent?.current,
+                        }
                       : (parseSubagentPayload(e.result) ?? { success: !e.isError })
                   }
                 />

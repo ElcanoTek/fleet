@@ -491,7 +491,13 @@ export type RunLogMeta = {
 
 // #508 live task activity stream frames (GET /tasks/{id}/stream).
 export type TaskStreamFrame = {
-  type: "agent_message" | "tool_call" | "tool_result" | "status" | string;
+  type:
+    | "agent_message"
+    | "tool_call"
+    | "tool_result"
+    | "status"
+    | "subagent_progress"
+    | string;
   role?: string;
   content?: string;
   call_id?: string;
@@ -503,6 +509,16 @@ export type TaskStreamFrame = {
   task_id?: string;
   cost_usd?: number;
   stopped_by?: string;
+  // subagent_progress (#1043 follow-up): a spawned child's relabeled step,
+  // attached to its spawn entry via tool_call_id.
+  tool_call_id?: string;
+  child_session_id?: string;
+  phase?: string;
+  tool?: string;
+  detail?: string;
+  step?: number;
+  is_err?: boolean;
+  steps?: number;
   // SSE transport id, attached client-side (not part of the JSON payload).
   // Used to resume a dropped live-log connection without duplicate activity.
   _event_id?: string;

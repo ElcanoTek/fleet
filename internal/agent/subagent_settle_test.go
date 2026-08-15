@@ -148,7 +148,7 @@ func TestSpawn_ConcurrentSpawnsNeverOverCommitParentBudget(t *testing.T) {
 			resp, err := parent.spawn(context.Background(), spawnSubagentInput{
 				Task:       "scoped subtask",
 				MaxCostUSD: 0.05,
-			})
+			}, "call-1")
 			if err != nil {
 				t.Errorf("spawn %d transport error: %v", i, err)
 				return

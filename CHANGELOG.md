@@ -46,6 +46,35 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Sub-agents finish, and you can see what they are doing.** A spawned child
+  ran the ROOT run's finish enforcement: it was refused a finish until it read
+  `protocols/self-audit.md` and called `confirm_audit(...)`, and the host-side
+  end-of-run verifier re-checked its deliverables. Neither is a child's gate.
+  Against a real model, a child asked for a haiku spent 85 s and 31k prompt
+  tokens flailing at the ritual and returned it narrated into the answer; a
+  child that ran out of enforcement rounds mid-ritual returned nothing, which
+  the parent surfaced as `[sub-agent produced no final answer]` — the reported
+  "it spawns a sub-agent but never does anything with it". A child now runs
+  `agentcore.NewDelegatedPolicy`: the same `ScheduledPolicy`, same gate chain,
+  same ceilings and critical-tool audit gating, with **only** the self-audit
+  ritual skipped at finish (task-tracker items, pending critical actions, and
+  undischarged commitments still gate it, and the parent still audits the
+  delegated work). The verifier no longer wraps a child either, and every child
+  gets a short "you are a sub-agent" prompt section. The same live delegation
+  now takes 13 s and comes back clean. See
+  [ADR-0007](docs/adr/0007-governed-sub-agents.md) and
+  [docs/SUBAGENTS.md](docs/SUBAGENTS.md).
+- **A running sub-agent is no longer a black box.** A delegation showed the
+  spawn arguments and then nothing at all — often for minutes — so a working
+  child was indistinguishable from a stuck one. The child's own run events are
+  now relabeled onto the parent's stream as `subagent.progress` (started / tool
+  / tool_result / text / thinking / finished) carrying the parent's tool-call
+  id, so: the chat spawn chip opens by default with a live activity panel and
+  step count, the thinking indicator names what the CHILD is doing, and a
+  scheduled run's child card shows its current action. Related: a scheduled
+  child's raw events used to leak unattributed into the parent task's live feed
+  (they arrive relabeled now), and the spawn result gained `{steps, tools_used}`
+  so a reloaded transcript still shows a child's work trail.
 - **Email approval card no longer dumps provider JSON after Send.** A
   successful send resolved the card to "Email sent ✓" and then printed the
   provider's raw JSON payload (status code, message id, HTML-lint warnings)

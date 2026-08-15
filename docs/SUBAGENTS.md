@@ -80,6 +80,86 @@ successful use of it. Fan-out is never forced.
   child sees nothing of the conversation. The tool description carries the same
   rules. No swarm-config UI — the create form has exactly one opt-out toggle.
 
+## Follow-up: children that finish, and children you can watch
+
+The first cut shipped a child that was governed but not *usable*, and invisible
+while it ran. Both are fixed here; the walls below still did not move.
+
+### The child's finish gate (the "spawns but nothing happens" bug)
+
+A child ran the **root** run's finish enforcement: it was refused a finish until
+it had read `protocols/self-audit.md` and called `confirm_audit(...)`, then the
+host-side end-of-run **verifier** re-checked its deliverables. Against a live
+model that meant a child asked for a haiku burned **85 s / 31k prompt tokens**
+hunting a protocol file it could not read, and returned the audit narration
+glued to its answer; a child that hit the enforcement-round cap mid-ritual
+returned nothing, and the parent reported `[sub-agent produced no final answer]`.
+
+A child now runs `agentcore.NewDelegatedPolicy`: the SAME `ScheduledPolicy` with
+**only** the two self-audit ritual blocks skipped in `checkFinishEnforcement`.
+Task-tracker items, pending critical actions, and undischarged commitments still
+gate a child's finish, `confirm_audit` is still registered (a child that wants a
+critical tool still has to pass that gate), and the parent still audits the
+delegated work in its own run. The verifier/phone-a-friend wrappers no longer
+wrap a child — both are root-run finish gates. Every child also gets a short
+**"You are a sub-agent"** prompt section (both roles): one scoped task, no live
+user, final message is the product, no audit ritual. Same live run as above:
+**13 s**, one clean haiku, `success=true`.
+
+### Live child progress (`subagent.progress`)
+
+The child's own run Observer is tee'd into a forwarder that relabels each event
+onto the **parent's** Observer as one `subagent.progress` event — phases
+`started / tool / tool_result / text / thinking / note / finished` — carrying the
+parent's **tool-call id** (a turn can fan out several children concurrently), the
+child session id, role, step number, a short humanized detail, and, on
+`finished`, status + spend + duration + the step trail. No new execution and no
+second event path: these events already existed, they were simply not attributed
+and not forwarded. Text/reasoning deltas are coalesced (≤1 preview per 700 ms,
+tail-truncated); tool steps are forwarded one for one.
+
+Surfaces:
+
+- **Chat.** The SSE event rides the existing sink (gated by the `tool_calls`
+  capability). The spawn chip is **open by default**, shows role + live step
+  count on the collapsed pill, and renders an activity panel — what the child is
+  doing right now plus its last few steps. With "Show details" off, the thinking
+  indicator itself reads `Sub-agent (explore) · step 2 · web_fetch · url=…`.
+- **Scheduled runs.** A child's RAW events used to reach the task's live stream
+  through the inherited stream observer, landing in the parent's activity feed
+  indistinguishable from the parent's own steps. They now arrive as
+  `subagent_progress` frames and fold into that spawn's own child card (current
+  action + step count) instead.
+- **After the fact.** The spawn result JSON gains `{steps, tools_used}`, so a
+  reloaded transcript still distinguishes a child that tried and failed (5 steps,
+  no answer) from one that never got off the ground — and the full child
+  transcript stays one click away behind the existing endpoints.
+
+### Stopping a parent stops its children
+
+A child's context is **derived from the context of the spawn tool call**, which
+is the parent run's own context: fantasy hands the stream context to every tool
+it dispatches (sequential and parallel alike), the spawn body only wraps it
+(forced working dir, optional per-child timeout), and the child's
+`agentcore.Run` re-checks `ctx.Err()` at the top of every enforcement round. So
+chat's Stop button (which cancels the turn context) and a scheduled stop both
+propagate into any in-flight child. A child also cannot outlive its parent's
+tool call at all: `spawn` is synchronous — the parent's call does not return
+until the child has — so there is no detached goroutine to orphan. The child's
+partial spend is still charged back and its budget reservation released on the
+cancel path.
+
+Honest bound: cancellation is cooperative. A child stops at its next
+context-observing point — the in-flight provider request aborts, and no new
+round, model call, or tool call starts — but a tool call already inside a
+non-cancellable operation runs to its own completion first (the same bound the
+parent has for its own tools). Pinned by
+`TestInteractiveTurn_StopCancelsInFlightChild` (Stop mid-delegation: the turn
+returns promptly, the child's model observes cancellation and does not run to
+completion, and the delegation reports `success:false`),
+`TestSpawn_ChildContextDerivesFromTheParentCall` (no reservation leak), and the
+pre-existing `TestSpawn_TimeoutBranchAndChargeBack`.
+
 ## Walls that did not move
 
 One governed core (`agentcore.Run`); monotonic privilege (inherit sandbox / MCP /
@@ -125,3 +205,27 @@ explore offered no `write_file`, children offered no `spawn_subagent`); a
 sequential parent finishes with the tool advertised and zero spawns; both kill
 switches structurally hide the tool. UI: TaskCreateModal toggle payloads and
 LogViewer child-card rendering (vitest).
+
+Follow-up (finish gate + visibility). Go: the delegated finish gate and its
+narrowness (`internal/agentcore/delegated_policy_test.go` — finishes without the
+ritual, still blocked by tracker/ceiling gates, same gate chain), the child that
+answers and is believed (`TestSpawn_ChildAnswersWithoutSelfAuditRitual`,
+`TestChildRunUsesTheDelegatedPolicy`), the child prompt contract, and the
+progress stream end to end (`TestSpawn_StreamsChildProgressToTheParentObserver`
+— ordered phases, correlation ids, trail in the result; plus coalescing,
+argument summaries, the nil-observer path, and the chat host's wiring). The
+scheduled frame projection is pinned by
+`TestTaskStreamBuffer_SubagentProgress`. Web (vitest): the progress reducer and
+the thinking-indicator label (`history.subagent.test.ts`), the chip's live panel
+and the persisted trail on the child card (`ToolChips.subagent.test.tsx`), and
+the orchestrator's live fold (`liveSubagentActivity.test.ts`).
+
+LIVE (env-gated, real key — CI stays offline): `internal/agent/subagent_live_test.go`,
+run with `FLEET_SUBAGENT_LIVE=1 OPENROUTER_API_KEY=… go test ./internal/agent/
+-tags fleet_host_executor -run TestLive_ -v`. One test drives a real chat turn
+through a delegation (asserts the child's answer reaches the reply, the progress
+stream starts and settles successfully, and no audit narration leaks into the
+answer); the other has an explore child fetch a URL (asserts tool-phase events
+and the reported trail). These exist because the failure they pin was invisible
+to the mocked suite — a mock model simply stops, where a real one flails at a
+gate it cannot satisfy.

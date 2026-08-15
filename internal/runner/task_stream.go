@@ -166,7 +166,40 @@ func (b *taskStreamBuffer) Observe(eventType string, payload map[string]any) {
 			"output":  payload["text"],
 			"error":   isErr,
 		})
+	case subagentProgressEvent:
+		// A spawned sub-agent's relabeled steps (#1043 follow-up). The child's
+		// RAW events used to reach this buffer (it inherited the run's stream
+		// observer), which put a child's tool calls in the parent's activity
+		// feed indistinguishable from the parent's own. They now arrive here
+		// already attributed, and are forwarded as their own frame type so the
+		// task page can render them as the child's work, in the child's own
+		// entry, instead of silently interleaving them.
+		b.Emit("subagent_progress", subagentProgressFrame(payload))
 	}
+}
+
+// subagentProgressEvent mirrors agent.SubagentProgressEvent. It is duplicated as
+// a literal rather than imported because internal/agent already depends on this
+// package's siblings; the value is pinned by TestTaskStreamBuffer_SubagentProgress.
+const subagentProgressEvent = "subagent.progress"
+
+// subagentProgressFrame projects the progress payload onto the stream frame the
+// orchestrator UI reads. Only the display fields cross: the child's id (which
+// entry this belongs to), what it is doing, and its terminal spend.
+func subagentProgressFrame(payload map[string]any) map[string]any {
+	frame := map[string]any{"type": "subagent_progress"}
+	for _, k := range []string{
+		// tool_call_id is what lets the page attach the child's steps to the
+		// spawn entry it already rendered (a run can fan out several children).
+		"tool_call_id",
+		"child_session_id", "role", "phase", "tool", "detail", "step", "is_err",
+		"success", "cost_usd", "tokens", "steps", "duration_ms", "note", "task",
+	} {
+		if v, ok := payload[k]; ok {
+			frame[k] = v
+		}
+	}
+	return frame
 }
 
 // Finish seals the buffer: Emit becomes a no-op and every live subscriber channel

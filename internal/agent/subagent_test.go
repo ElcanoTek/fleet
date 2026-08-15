@@ -142,7 +142,7 @@ func TestSpawn_ChildRunsThroughGovernedCoreWithSlicedBudgetAndDepth(t *testing.T
 		Task:           "do a scoped subtask",
 		MaxCostUSD:     0.05, // one step's worth → child stops after its first paid step
 		MaxTotalTokens: 50,
-	})
+	}, "call-1")
 	if err != nil {
 		t.Fatalf("spawn returned a transport error (should be tool-level at worst): %v", err)
 	}
@@ -207,7 +207,7 @@ func TestSpawn_BudgetNeverExceedsParentCeiling(t *testing.T) {
 		resp, err := parent.spawn(context.Background(), spawnSubagentInput{
 			Task:       "subtask",
 			MaxCostUSD: 0.05,
-		})
+		}, "call-1")
 		if err != nil {
 			t.Fatalf("spawn %d transport error: %v", i, err)
 		}
@@ -250,7 +250,7 @@ func TestSpawn_DepthCapRefusesAtMaxDepth(t *testing.T) {
 	// Force this run to BE at maxDepth (as if it were a child that may not recurse).
 	parent.subagent.depth = maxDepth
 
-	resp, err := parent.spawn(context.Background(), spawnSubagentInput{Task: "go deeper"})
+	resp, err := parent.spawn(context.Background(), spawnSubagentInput{Task: "go deeper"}, "call-1")
 	if err != nil {
 		t.Fatalf("spawn transport error: %v", err)
 	}
@@ -279,7 +279,7 @@ func TestSpawn_FanOutCapRefusesExtraChild(t *testing.T) {
 	parent := newParentForSpawn(t, child, 10.0 /*ample cost*/, 0 /*unlimited tokens*/, 2, maxChildren)
 
 	for i := 0; i < maxChildren; i++ {
-		resp, err := parent.spawn(context.Background(), spawnSubagentInput{Task: "subtask", MaxCostUSD: 0.001})
+		resp, err := parent.spawn(context.Background(), spawnSubagentInput{Task: "subtask", MaxCostUSD: 0.001}, "call-1")
 		if err != nil {
 			t.Fatalf("spawn %d transport error: %v", i, err)
 		}
@@ -289,7 +289,7 @@ func TestSpawn_FanOutCapRefusesExtraChild(t *testing.T) {
 	}
 	// The (maxChildren+1)-th spawn must be refused (#264: "max concurrent sub-agents
 	// reached") with an error RESULT, not a block.
-	resp, err := parent.spawn(context.Background(), spawnSubagentInput{Task: "one too many", MaxCostUSD: 0.001})
+	resp, err := parent.spawn(context.Background(), spawnSubagentInput{Task: "one too many", MaxCostUSD: 0.001}, "call-1")
 	if err != nil {
 		t.Fatalf("overflow spawn transport error: %v", err)
 	}
@@ -346,7 +346,7 @@ func TestSpawn_DisabledIsRefused(t *testing.T) {
 	parent := newParentForSpawn(t, child, 0, 0, 2, 4)
 	parent.subagent.enabled = false
 
-	resp, err := parent.spawn(context.Background(), spawnSubagentInput{Task: "x"})
+	resp, err := parent.spawn(context.Background(), spawnSubagentInput{Task: "x"}, "call-1")
 	if err != nil {
 		t.Fatalf("transport error: %v", err)
 	}
@@ -517,7 +517,7 @@ func TestSpawn_ConcurrentNeverBreachesParentCeiling(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, _ = p.spawn(context.Background(), spawnSubagentInput{Task: "subtask", MaxCostUSD: 0.02})
+			_, _ = p.spawn(context.Background(), spawnSubagentInput{Task: "subtask", MaxCostUSD: 0.02}, "call-1")
 		}()
 	}
 	wg.Wait()

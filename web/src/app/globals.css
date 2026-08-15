@@ -2818,6 +2818,16 @@ tr.sla-row-fail {
 .subagent-card-status--running {
   color: var(--color-warning);
 }
+/* What a running sub-agent is doing right now (#1043 follow-up): one line,
+   truncated, above the spend meta. */
+.subagent-card-activity {
+  margin-top: 0.25rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-secondary);
+  font-size: 0.74rem;
+}
 .subagent-card-meta {
   display: flex;
   flex-wrap: wrap;
