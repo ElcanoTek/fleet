@@ -579,6 +579,15 @@ type Config struct {
 	// FLEET_INPUT_QUEUE_RETENTION_DAYS, default 30; 0 disables the purge.
 	// Non-terminal rows are never retention candidates.
 	InputQueueRetentionDays int
+	// TurnEventRetentionDays bounds how long finished turns keep their durable
+	// SSE ledger (turns rows plus turn_events and turn_journal via FK cascade)
+	// after reaching a terminal state. The ledger exists for reattach/replay
+	// and crash recovery — canonical history lives in messages — so it only
+	// needs to outlive any plausible reconnect, not the conversation.
+	// FLEET_TURN_EVENT_RETENTION_DAYS, default 14 (matching the conversation
+	// TTL default); 0 disables the sweep. Running turns are never retention
+	// candidates.
+	TurnEventRetentionDays int
 	// UploadMaxBytes is the per-file cap for chat /attachments uploads
 	// (FLEET_UPLOAD_MAX_BYTES, default 1 GiB). Surfaced to the browser via
 	// /server-config so the composer can refuse oversize files before the
@@ -1185,6 +1194,7 @@ func Load(envFile string) (*Config, error) {
 		ConversationTTL:         getenvInt("CONVERSATION_TTL_DAYS", 14),
 		UnpinnedCap:             getenvInt("CONVERSATION_UNPINNED_CAP", 50),
 		InputQueueRetentionDays: getenvFleetInt("INPUT_QUEUE_RETENTION_DAYS", 30),
+		TurnEventRetentionDays:  getenvFleetInt("TURN_EVENT_RETENTION_DAYS", 14),
 		UploadMaxBytes:          getenvFleetInt64("UPLOAD_MAX_BYTES", 1<<30),
 		AutoArchiveAfterDays:    getenvFleetInt("AUTO_ARCHIVE_AFTER_DAYS", 0),
 		SearchEnabled:           getenvBool("FLEET_SEARCH_ENABLED", true),
@@ -1485,6 +1495,9 @@ func (c *Config) Validate() error {
 	}
 	if c.InputQueueRetentionDays < 0 {
 		return fmt.Errorf("FLEET_INPUT_QUEUE_RETENTION_DAYS must be non-negative")
+	}
+	if c.TurnEventRetentionDays < 0 {
+		return fmt.Errorf("FLEET_TURN_EVENT_RETENTION_DAYS must be non-negative")
 	}
 	if c.UploadMaxBytes <= 0 {
 		return fmt.Errorf("FLEET_UPLOAD_MAX_BYTES must be positive")

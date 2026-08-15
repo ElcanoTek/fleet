@@ -93,3 +93,18 @@ keeps the evidence).
 Postgres does one extra commit per turn (user entry) and two synchronous
 INSERTs per tool call. On a WAN-remote Postgres that adds ~2×RTT per tool
 call; text streaming is unaffected.
+
+### Retention
+
+The ledger is reattach/replay and crash-recovery state, not canonical history
+(that's `messages`), so it ages out: the post-turn retention sweep
+(`store.SweepTurnEvents`, run from `httpapi.sweepRetention` alongside the
+conversation and input-queue sweeps) deletes turns that reached a terminal
+state more than `FLEET_TURN_EVENT_RETENTION_DAYS` ago (default 14, matching
+the conversation-TTL default; `0` disables the sweep and keeps the ledger
+forever). The FK cascade reclaims the turn's `turn_events` and `turn_journal`
+rows with it. Running turns are never swept, and boot-time
+`RecoverStrandedTurns` scans before the server takes traffic, so recovery
+always sees its inputs. One consequence to know about: the journal's
+"evidence for manual reconstruction" of a failed-commit turn (above) is kept
+only within the retention window.

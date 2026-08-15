@@ -218,6 +218,10 @@ type chatStore interface {
 	DeleteLLMProvider(ctx context.Context, id string) error
 	SweepExpired(ctx context.Context, ttl time.Duration, unpinnedCap int) (expired int, evicted int, err error)
 	PurgeTerminalInputs(ctx context.Context, retention time.Duration) (int, error)
+	// SweepTurnEvents prunes the durable SSE ledger (turns + turn_events +
+	// turn_journal via cascade) for turns terminal longer than ttl; a
+	// non-positive ttl disables it. See store.SweepTurnEvents.
+	SweepTurnEvents(ctx context.Context, ttl time.Duration) (int, error)
 	AutoArchiveOlderThan(ctx context.Context, d time.Duration) (int, error)
 	SweepOrphanWorkspaces(ctx context.Context, root string) (int, error)
 	// Admin storage panel (disk visibility + reclaim).
