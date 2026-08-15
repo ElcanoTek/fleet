@@ -144,6 +144,26 @@ prior versions are listed because none have shipped.
   longest-first). Cold-start/offline path only - a running fleet reads the live
   OpenRouter catalog - but without it a cold boot would compact a 1M-window
   default at 128K.
+- **A serving-precision floor now backs the DeepSeek pin, and the upstream that
+  actually served each step is recorded.** Pinning the family fixed cache
+  locality but left quality unguarded: a non-strict pin is `Order` +
+  `AllowFallbacks=true`, i.e. a *preference*, so every request was one busy
+  first-party endpoint away from being served by anything else in a pool that
+  spans **fp4-fp8** — and `provider.quantizations` was set nowhere in the repo.
+  Since this family is the recommended everyday default, that fallback path is
+  the hot path for ordinary chat turns, and an fp4 serving of a flash-tier model
+  degrades in a way that reads as the model being broken (token-level
+  misspellings, topic drift, runaway output) rather than as a routing event.
+  `upstreamPinFor` now attaches an fp8-and-above allow-list
+  (`fp8|fp16|bf16|fp32`, excluding `unknown`, which cannot be shown to clear the
+  floor) to the DeepSeek pin; DeepSeek's own endpoint is fp8, so the preferred
+  route is unchanged. Families whose pool does not mix precisions carry no
+  filter and their requests stay byte-identical. Separately, `updateUsage` read
+  only `.Usage.Cost` off OpenRouter's provider metadata and discarded
+  `.Provider`, so a turn degraded by a fallback route was indistinguishable from
+  a bad model; the run now records `LastServedUpstream`, latches a
+  `ServedFallback` flag, and logs one line per upstream transition. Diagnosis
+  only — it does not change routing or fail a run.
 
 ### Security
 
