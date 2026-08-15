@@ -338,7 +338,6 @@ var allowedEnvVars = map[string]bool{
 	"FLEET_GUARDRAIL_URL":                     true,
 	"FLEET_CONTEXT_HANDLES_ENABLED":           true,
 	"FLEET_CONNECTOR_RECOMMENDATIONS_ENABLED": true,
-	"FLEET_BROWSER_ENABLED":                   true,
 	"FLEET_SANDBOX_MEMORY":                    true,
 	"FLEET_SANDBOX_CPUS":                      true,
 	"FLEET_SANDBOX_PIDS":                      true,
@@ -908,11 +907,6 @@ type Config struct {
 	// ── sandbox ──
 	SandboxImage   string
 	SandboxRuntime string
-	// BrowserEnabled turns on the in-sandbox governed browser tool (#503) for
-	// interactive turns. Default OFF: the tool needs Chromium+Playwright in the
-	// sandbox image (an optional client-bundle Containerfile addition, not the
-	// default image), so it is opt-in per deployment. From FLEET_BROWSER_ENABLED.
-	BrowserEnabled bool
 	// PIIRedactionEnabled gates the OPTIONAL PII redaction pass (#450) applied to
 	// tool output before it enters the model context. FLEET_PII_REDACTION_ENABLED,
 	// default false (byte-for-byte unchanged when off). Provider-neutral; the
@@ -1328,7 +1322,6 @@ func Load(envFile string) (*Config, error) {
 		// ── sandbox ──
 		SandboxImage:       getenvFleet("SANDBOX_IMAGE"),
 		SandboxRuntime:     getenvFleet("SANDBOX_RUNTIME"),
-		BrowserEnabled:     getenvFleetBool("BROWSER_ENABLED", false),
 		DefaultNetworkMode: strings.ToLower(strings.TrimSpace(getenvFleet("DEFAULT_NETWORK_MODE"))),
 
 		// PII redaction (#450) — optional, default off.

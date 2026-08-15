@@ -1133,10 +1133,7 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 			Selection: turnSelection,
 		})
 	}
-	turnTools := tools.NewTurnTools(sb, tools.WithBrowser(tools.BrowserConfig{
-		Enabled:  m.config.BrowserEnabled,
-		Lockdown: in.Lockdown,
-	}))
+	turnTools := tools.NewTurnTools(sb)
 	turnTools.Tools = filterNativeToolsByOptIn(turnTools.Tools, in.OptionalMCPServersEnabled)
 
 	model, providerFallbacks, err := m.modelResolver().ResolveWithFallbacks(ctx, in.Model)
