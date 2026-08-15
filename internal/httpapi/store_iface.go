@@ -29,12 +29,8 @@ type chatStore interface {
 	BranchConversation(ctx context.Context, userEmail, parentConvID string, branchPointMessageID int64, title string) (*store.Conversation, error)
 	Get(ctx context.Context, userEmail, convID string) (*store.Conversation, error)
 	List(ctx context.Context, userEmail string, archivedOnly bool) ([]store.Conversation, error)
-	// Folders & labels (#258). ListFiltered backs the ?folder= / ?label= filters
-	// on GET /conversations; ListFolders enumerates the user's folders + counts
-	// for GET /folders; RenameFolder backs POST /folders/rename.
+	// Labels (#258): ListFiltered backs the ?label= filter on GET /conversations.
 	ListFiltered(ctx context.Context, userEmail string, f store.ListFilter) ([]store.Conversation, error)
-	ListFolders(ctx context.Context, userEmail string) ([]store.FolderCount, error)
-	RenameFolder(ctx context.Context, userEmail, from, to string) (int, error)
 	Delete(ctx context.Context, userEmail, convID string) error
 	DeleteAllUnpinned(ctx context.Context, userEmail string) (int, error)
 	// Bulk conversation operations (#279). DeleteByIDs hard-deletes (or, when
@@ -44,8 +40,8 @@ type chatStore interface {
 	// (nil pointer = leave the field untouched) to the supplied IDs in a single
 	// transaction with the same ownership pre-check.
 	DeleteByIDs(ctx context.Context, userEmail string, ids []string) (int, error)
-	DeleteAllMatching(ctx context.Context, userEmail, folder, label string) (int, error)
-	BulkPatch(ctx context.Context, userEmail string, ids []string, pinned *bool, folder *string, labels []string) (int, error)
+	DeleteAllMatching(ctx context.Context, userEmail, label string) (int, error)
+	BulkPatch(ctx context.Context, userEmail string, ids []string, pinned *bool, labels []string) (int, error)
 	SetPinned(ctx context.Context, userEmail, convID string, pinned bool) error
 	SetArchived(ctx context.Context, userEmail, convID string, archived bool) error
 	// SetConversationProject re-files a conversation into a project ("" =

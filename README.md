@@ -117,7 +117,7 @@ yourself are already in the box, tested, and governed by the same core:
   ([`docs/MEMORY.md`](docs/MEMORY.md)).
 - **Team surfaces.** Projects/spaces with shared instructions + curated
   connectors + shared memory, team RBAC, read-only share links, conversation
-  branching, folders/labels, and a dataset/table agent for row-by-row
+  branching, conversation labels, and a dataset/table agent for row-by-row
   background work with human-approved write-backs.
 - **Quality gates for your agents.** A self-hosted eval & regression harness
   (`fleet eval`) that replays golden prompts through the real loop and gates
