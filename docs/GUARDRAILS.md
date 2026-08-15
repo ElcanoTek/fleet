@@ -5,7 +5,7 @@ The check runs host-side, outside the sandbox and agent loop, so a persona,
 skill, tool, or model cannot disable it.
 
 It covers user and scheduled-task messages before the first provider request,
-plus native, MCP, HTTP, browser, file, and other tool output at the shared tool
+plus native, MCP, HTTP, file, and other tool output at the shared tool
 result boundary. The operator-trusted system prompt is not screened or mutated,
 which preserves the prompt-cache prefix contract.
 

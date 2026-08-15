@@ -127,6 +127,6 @@ not silently missing):
 - The user's own chat / scheduled-task **prompt** and the assistant's own
   generated text (ingestion-side redaction with careful history-persistence
   handling).
-- Tool **arguments**, notifications (#292), eval goldens (#502), browser OCR.
+- Tool **arguments**, notifications (#292), eval goldens (#502).
 - Per-conversation / per-task mode overrides (the admin setting is
   workspace-global).

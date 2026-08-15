@@ -122,7 +122,7 @@ yourself are already in the box, tested, and governed by the same core:
 - **Quality gates for your agents.** A self-hosted eval & regression harness
   (`fleet eval`) that replays golden prompts through the real loop and gates
   model/bundle changes ([`docs/EVALS.md`](docs/EVALS.md)); per-run error
-  analysis; optional PII redaction; a governed in-sandbox browser tool.
+  analysis; optional PII redaction.
 - **Three clients out of the box.** The web chat UI, the Operations Center,
   and a full terminal client (`fleet chat`) — all thin views over the same
   governed API.
