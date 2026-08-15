@@ -1,6 +1,6 @@
 # ADR-0022: The browser is a kernel-resident tool; egress is the boundary
 
-- **Status:** Accepted
+- **Status:** Superseded by [ADR-0044](0044-remove-in-sandbox-browser-tool.md)
 - **Date:** 2026-07-01
 - **Deciders:** fleet maintainers
 

@@ -210,8 +210,8 @@ func normalizeSubagentRole(role string) string {
 // role=explore children (#1043) — the one place the "read-only child" posture is
 // defined, unit-tested in subagent_role_test.go. It denies known writers by name
 // rather than inventing a second agent type: file writers (write_file/edit_file/
-// xlsx_workbook/generate_image), outward publishers (publish_artifact, browser —
-// a browser can submit forms), datastore mutators (create_task, remember,
+// xlsx_workbook/generate_image), outward publishers (publish_artifact),
+// datastore mutators (create_task, remember,
 // propose_note, propose_skill). Read tools (view_file, bash, web_fetch,
 // download_url, recall, MCP reads) stay. Bash cannot be made read-only, so an
 // explore child is "no purpose-built writers", not a filesystem guarantee — the
@@ -224,7 +224,6 @@ var exploreDeniedNativeTools = map[string]bool{
 	"edit_file":                   true,
 	"xlsx_workbook":               true,
 	"generate_image":              true,
-	"browser":                     true,
 	tools.CreateTaskToolName:      true,
 	tools.PublishArtifactToolName: true,
 	"remember":                    true,

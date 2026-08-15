@@ -707,7 +707,7 @@ spawn / don't-spawn / prefer-explore / budget rules.
 **Typed children (#1043).** `role=explore` — the default, and the fallback for
 any invalid role — is a read-only research child: a single unit-tested denylist
 strips write-capable native tools (`write_file`, `edit_file`, `xlsx_workbook`,
-`generate_image`, `browser`, `create_task`, `publish_artifact`, `remember`,
+`generate_image`, `create_task`, `publish_artifact`, `remember`,
 `propose_note`, `propose_skill`) from its final composed roster, a best-effort
 **name** denylist narrows its MCP Gate-2 allowlist (mutation verbs like
 create/update/delete/send/upload as whole snake_case segments; every catalog

@@ -19,6 +19,17 @@ prior versions are listed because none have shipped.
 
 ### Removed
 
+- **The in-sandbox `browser` tool (#503) and `FLEET_BROWSER_ENABLED`.**
+  **Breaking for deployments that set that flag** — the tool is gone and the
+  variable is no longer read (it is also out of the `.env` allowlist, so a
+  leftover line is ignored rather than silently inert). The Playwright/Chromium
+  reference layer is dropped from `config/default/sandbox/Containerfile`.
+  It was never installable on the image fleet ships, its real Chromium path was
+  never exercised in CI, and its shipped scope was DOM-only with no credentials
+  and no login-walled sites. Browser automation now arrives as an MCP connector
+  (e.g. Browserbase) under the existing host-side credential broker.
+  See [ADR-0044](docs/adr/0044-remove-in-sandbox-browser-tool.md), which
+  supersedes ADR-0022; `docs/BROWSER.md` is removed.
 - **Operations Center username/password form.** Cookie/OIDC is the operator
   path. `fleet admin add` mints an unusable random password, so that form
   could not admit a real operator. Backend `POST /auth/login` and the bearer

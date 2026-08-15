@@ -40,7 +40,7 @@ func TestNormalizeSubagentRole(t *testing.T) {
 // core read tools are not.
 func TestExploreStripSet_PinsKnownWriters(t *testing.T) {
 	for _, name := range []string{
-		"write_file", "edit_file", "xlsx_workbook", "generate_image", "browser",
+		"write_file", "edit_file", "xlsx_workbook", "generate_image",
 		"create_task", "publish_artifact", "remember", "propose_note", "propose_skill",
 	} {
 		if !exploreDeniedNativeTools[name] {

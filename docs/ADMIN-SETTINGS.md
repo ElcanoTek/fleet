@@ -86,8 +86,8 @@ knob. These deliberately did **not** move into the panel:
 - **Boot-bound plumbing** — listener addresses, DB DSNs/pools, TLS,
   `FLEET_MAX_CONCURRENT_AGENTS` (sizes the admission semaphore + sandbox warm
   pool), sandbox image/resources, the Python REPL pool
-  (`FLEET_PYTHON_REPL_*`), search FTS upkeep (`FLEET_SEARCH_ENABLED`), the
-  browser tool (`FLEET_BROWSER_ENABLED`), self-improving memory
+  (`FLEET_PYTHON_REPL_*`), search FTS upkeep (`FLEET_SEARCH_ENABLED`),
+  self-improving memory
   (`FLEET_SELF_IMPROVE_ENABLED`), memory graph, log/retention/cleanup
   schedules. These bind into listeners, pools, or wiring at startup; a restart
   is the honest unit of change. (The web UI's old concurrency-cap card, which
