@@ -138,15 +138,27 @@ soft may not exceed hard per measure.
 
 **Persistence choice, recorded honestly:** the issue offered "a small table
 (sched migration) or fields on the scoped API key (like `MaxPriority`, #190) —
-pick per scope". One table covers **user and key** (and could hold a
-future project scope), including `key`,
-because the API key's existing per-key caps (`MaxCostPerDayUSD` /
-`MaxCostPerMonthUSD`) are a *separate accounting path* — a JSON-file
-accumulator fed by task-completion callbacks — while #601's budgets must be
-computed from the part-1 usage read model (the persisted `task_iterations` +
-`turn_metrics` metering), and must support week windows, token bounds, and
-soft alerts uniformly across scopes. The legacy per-key caps remain and
-compose: both gates only ever narrow.
+pick per scope". One table covers **user and key** (and could hold a future
+project scope), including `key`, because a budget must be computed from the
+part-1 usage read model (the persisted `task_iterations` + `turn_metrics`
+metering) and must support week windows, token bounds, and soft alerts
+uniformly across scopes.
+
+The API key's own per-key caps (`max_cost_per_day_usd` /
+`max_cost_per_month_usd`) were the predecessor and are **removed**. They were
+a second accounting path — a counter on the key's JSON row — and nothing in
+the unified runtime ever incremented it: the moc-era task-completion callback
+that fed it did not survive the in-process runner, so the cap could never
+fire and `GET /keys/{id}/spending` reported `$0.00` forever. A budget with
+`scope: key` is the replacement, and it is strictly better: it reads real
+metering, adds week windows, token bounds, and soft alerts, and covers chat
+turns as well as tasks.
+
+```sh
+# was: POST /keys {"name":"ci","max_cost_per_day_usd":50}   → now 400
+curl -X POST "$FLEET/admin/budgets" -H "X-API-Key: $ADMIN_KEY" \
+  -d '{"scope":"key","principal_id":"<key_id>","window":"day","hard_usd":50}'
+```
 
 - Window boundaries are UTC calendar windows (day = UTC day; week = Monday
   00:00 UTC, matching `date_trunc('week')` in the part-1 queries; month = UTC
@@ -171,7 +183,7 @@ mirroring the `priorityCapError` shared-helper discipline:
 - **Hard bound reached** → the create is refused with **402 Payment Required**
   plus `Retry-After` at the window rollover (the chat path surfaces the same
   error as the schedule_task failure text). Distinct from the 429 the per-key
-  rate/spending caps use.
+  rate limiter uses.
 - **Soft bound crossed** → the create is admitted and **exactly one** notify
   alert fires per window crossing, through the SAME `internal/notify` pipeline
   task-completion notifications use (email/webhook, plus Web Push routed to

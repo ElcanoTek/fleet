@@ -157,7 +157,7 @@ func (s *Storage) buildTriggerRun(ctx context.Context, taskID uuid.UUID, prompt 
 	run := models.NewTask(tc)
 	run.CreatedBy = template.CreatedBy
 	// Carry the originating API key forward so spawned-run cost keeps counting
-	// against the template owner's spending caps.
+	// against the template owner's usage bucket (and any scope=key budget).
 	run.CreatedByKeyID = template.CreatedByKeyID
 
 	// Route every spawned run through the same schema/contract gate as public
