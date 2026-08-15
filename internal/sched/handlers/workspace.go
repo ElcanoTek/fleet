@@ -87,8 +87,7 @@ func workspaceDownloadMaxBytes() int64 {
 }
 
 // taskWorkspaceOwned reports whether the request principal may read the given
-// task's workspace files. This is STRICTER than taskVisibleToScopes: a workspace
-// is private to its creator. Admin always wins; otherwise the principal must be
+// task's workspace files. A workspace is private to its creator. Admin always wins; otherwise the principal must be
 // the task's creator (taskCreatedByPrincipal — the shared ownership predicate
 // the run-log gate also uses).
 //

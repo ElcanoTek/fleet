@@ -33,7 +33,7 @@ func TestCLIMintedKeyVisibleWithoutRestart(t *testing.T) {
 	// mtime granularity can be 1s on some filesystems; make the write land
 	// strictly after the server's load time.
 	time.Sleep(1100 * time.Millisecond)
-	_, raw, err := cli.CreateTypedKey("ci-bot", KeyTypeTask, nil, nil, 0, nil, "")
+	_, raw, err := cli.CreateTypedKey("ci-bot", KeyTypeTask, nil, 0, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +44,7 @@ func TestCLIMintedKeyVisibleWithoutRestart(t *testing.T) {
 	if kt, _, ok := server.LookupKeyType(raw); !ok || kt != KeyTypeTask {
 		t.Errorf("LookupKeyType: ok=%v type=%q", ok, kt)
 	}
-	if valid, key, msg := server.ValidateKey(raw, nil, nil, nil, nil); !valid {
+	if valid, key, msg := server.ValidateKey(raw, nil, nil, nil); !valid {
 		t.Errorf("ValidateKey: %s", msg)
 	} else if key.Name != "ci-bot" {
 		t.Errorf("key name %q", key.Name)
@@ -57,7 +57,7 @@ func TestCLIMintedKeyVisibleWithoutRestart(t *testing.T) {
 	}()); err != nil {
 		t.Fatal(err)
 	}
-	if valid, _, _ := server.ValidateKey(raw, nil, nil, nil, nil); valid {
+	if valid, _, _ := server.ValidateKey(raw, nil, nil, nil); valid {
 		t.Error("revoked key still validates")
 	}
 

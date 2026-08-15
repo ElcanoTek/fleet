@@ -491,8 +491,7 @@ func TestImport_RunIfRequiresAdmin(t *testing.T) {
 	// A client-role user: create_task + view permissions, no admin.
 	hash := models.HashToken("import-client-token")
 	if _, err := store.AddUser(&models.User{
-		ID: uuid.New(), Username: "import-client", Role: "client",
-		Scopes: []string{}, CreatedAt: time.Now(), SessionToken: &hash,
+		ID: uuid.New(), Username: "import-client", Role: "client", CreatedAt: time.Now(), SessionToken: &hash,
 	}); err != nil {
 		t.Fatalf("AddUser: %v", err)
 	}

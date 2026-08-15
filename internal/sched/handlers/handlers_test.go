@@ -421,16 +421,17 @@ func TestAPIKeyManagement(t *testing.T) {
 	}
 }
 
-// TestScopedAPIKeyUsage verifies a scoped (client-role) API key can create a
-// task. Node-target gating was removed with the move to per-task mcp_selection,
-// so a scoped key no longer has to (and cannot) name a target node — it simply
-// creates the task.
-func TestScopedAPIKeyUsage(t *testing.T) {
+// TestRoleKeyCreatesTask verifies a non-admin (client-role) API key can create a
+// task, and pins the ADR-0045 back-compat contract: a create body still carrying
+// the removed allowed_node_patterns field is accepted and the field ignored, so
+// an old client keeps working — it simply gets a key whose authority is its
+// permission set, which is all the patterns ever conferred.
+func TestRoleKeyCreatesTask(t *testing.T) {
 	r, cleanup := setupTestHandler(t)
 	defer cleanup()
 
-	// Create scoped API key
-	body := `{"name": "Scoped Key", "role": "client", "allowed_node_patterns": ["client-acme-*"]}`
+	// Create a client-role key, with a legacy (ignored) allowed_node_patterns field.
+	body := `{"name": "Client Key", "role": "client", "allowed_node_patterns": ["client-acme-*"]}`
 	req := httptest.NewRequest("POST", "/keys", bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-API-Key", "test-admin-key")
@@ -439,8 +440,11 @@ func TestScopedAPIKeyUsage(t *testing.T) {
 
 	var keyCreated models.APIKeyCreated
 	json.NewDecoder(w.Body).Decode(&keyCreated)
+	if bytes.Contains(w.Body.Bytes(), []byte("allowed_node_patterns")) {
+		t.Error("key response must not echo the removed allowed_node_patterns field")
+	}
 
-	// Use scoped key to create a task.
+	// Use the key to create a task.
 	body = `{"prompt": "Test task from scoped key"}`
 	req = httptest.NewRequest("POST", "/tasks", bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")

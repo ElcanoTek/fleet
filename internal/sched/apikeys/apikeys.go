@@ -1,7 +1,8 @@
 // Package apikeys provides scoped API key management for the fleet orchestrator
-// (sched). Ported from moc's internal/apikeys. The only change vs moc:
-// CanTargetNode matches scope patterns via storage.MatchGlob directly (moc's
-// NodeMatchesTask glob router was removed with per-task node routing).
+// (sched). Ported from moc's internal/apikeys, minus the node-name scope
+// patterns: fleet has no node registry (ADR-0011), so a key's authority is its
+// permission set plus the typed-key gates (trigger slugs, budgets, priority
+// ceiling) — see ADR-0045.
 package apikeys
 
 import (
@@ -21,17 +22,15 @@ import (
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/sched/models"
-	"github.com/ElcanoTek/fleet/internal/sched/storage"
 )
 
 // APIKey represents a scoped API key.
 type APIKey struct {
-	KeyID               string              `json:"key_id"`
-	Name                string              `json:"name"`
-	KeyHash             string              `json:"key_hash"`
-	KeyPrefix           string              `json:"key_prefix"`
-	AllowedNodePatterns []string            `json:"allowed_node_patterns"`
-	Permissions         []models.Permission `json:"permissions"`
+	KeyID       string              `json:"key_id"`
+	Name        string              `json:"name"`
+	KeyHash     string              `json:"key_hash"`
+	KeyPrefix   string              `json:"key_prefix"`
+	Permissions []models.Permission `json:"permissions"`
 
 	// Type is the key's access class (#190), encoded in its prefix
 	// (fleet_{type}_…). Empty (KeyTypeLegacy) for untyped sk- keys minted before
@@ -64,22 +63,6 @@ type APIKey struct {
 	// priority MORE urgent (lower integer) than this value is rejected. nil =
 	// uncapped. Range [models.PriorityMin, models.PriorityMax].
 	MaxPriority *int `json:"max_priority,omitempty"`
-}
-
-// CanTargetNode checks if this key can target a node with the given name.
-func (k *APIKey) CanTargetNode(nodeName string) bool {
-	if k.hasPermission(models.PermissionAdmin) {
-		return true
-	}
-	if len(k.AllowedNodePatterns) == 0 {
-		return true
-	}
-	for _, pattern := range k.AllowedNodePatterns {
-		if storage.MatchGlob(pattern, nodeName) {
-			return true
-		}
-	}
-	return false
 }
 
 // AllowsTriggerSlug reports whether this (webhook) key is scoped to fire the
@@ -129,7 +112,6 @@ func (k *APIKey) ToResponse() models.APIKeyResponse {
 		KeyPrefix:           k.KeyPrefix,
 		Type:                string(k.Type),
 		AllowedTriggerSlugs: k.AllowedTriggerSlugs,
-		AllowedNodePatterns: k.AllowedNodePatterns,
 		Permissions:         perms,
 		RateLimit:           k.RateLimit,
 		CreatedAt:           k.CreatedAt,
@@ -383,7 +365,7 @@ func (m *Manager) logAudit(entry AuditLogEntry) {
 }
 
 // CreateKey creates a new API key.
-func (m *Manager) CreateKey(name string, allowedNodePatterns []string, permissions []models.Permission, role *string, rateLimit int, expiresInDays *int, description string) (*APIKey, string, error) {
+func (m *Manager) CreateKey(name string, permissions []models.Permission, role *string, rateLimit int, expiresInDays *int, description string) (*APIKey, string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -419,22 +401,17 @@ func (m *Manager) CreateKey(name string, allowedNodePatterns []string, permissio
 		expiresAt = &t
 	}
 
-	if allowedNodePatterns == nil {
-		allowedNodePatterns = []string{}
-	}
-
 	key := &APIKey{
-		KeyID:               keyID,
-		Name:                name,
-		KeyHash:             keyHash,
-		KeyPrefix:           keyPrefix,
-		AllowedNodePatterns: allowedNodePatterns,
-		Permissions:         perms,
-		RateLimit:           rateLimit,
-		CreatedAt:           time.Now().UTC(),
-		ExpiresAt:           expiresAt,
-		Enabled:             true,
-		Description:         description,
+		KeyID:       keyID,
+		Name:        name,
+		KeyHash:     keyHash,
+		KeyPrefix:   keyPrefix,
+		Permissions: perms,
+		RateLimit:   rateLimit,
+		CreatedAt:   time.Now().UTC(),
+		ExpiresAt:   expiresAt,
+		Enabled:     true,
+		Description: description,
 	}
 
 	m.keys[keyID] = key
@@ -456,10 +433,9 @@ func (m *Manager) CreateKey(name string, allowedNodePatterns []string, permissio
 		ResourceType: "api_key",
 		ResourceID:   &keyID,
 		Details: map[string]interface{}{
-			"name":                  name,
-			"allowed_node_patterns": allowedNodePatterns,
-			"permissions":           permStrings,
-			"rate_limit":            rateLimit,
+			"name":        name,
+			"permissions": permStrings,
+			"rate_limit":  rateLimit,
 		},
 		Success: true,
 	})
@@ -471,7 +447,7 @@ func (m *Manager) CreateKey(name string, allowedNodePatterns []string, permissio
 // (KeyType.Permissions). allowedTriggerSlugs scopes a webhook key to specific
 // trigger slugs and is ignored for the other types. The raw key is returned
 // once; only its hash is stored.
-func (m *Manager) CreateTypedKey(name string, kt KeyType, allowedTriggerSlugs, allowedNodePatterns []string, rateLimit int, expiresInDays *int, description string) (*APIKey, string, error) {
+func (m *Manager) CreateTypedKey(name string, kt KeyType, allowedTriggerSlugs []string, rateLimit int, expiresInDays *int, description string) (*APIKey, string, error) {
 	if !kt.Valid() {
 		return nil, "", fmt.Errorf("invalid key type: %q", kt)
 	}
@@ -492,9 +468,6 @@ func (m *Manager) CreateTypedKey(name string, kt KeyType, allowedTriggerSlugs, a
 		t := time.Now().UTC().AddDate(0, 0, *expiresInDays)
 		expiresAt = &t
 	}
-	if allowedNodePatterns == nil {
-		allowedNodePatterns = []string{}
-	}
 	// Trigger slugs are meaningful only for webhook keys; drop any supplied for
 	// another type so the stored record can't carry misleading scope.
 	if kt != KeyTypeWebhook {
@@ -509,7 +482,6 @@ func (m *Manager) CreateTypedKey(name string, kt KeyType, allowedTriggerSlugs, a
 		KeyPrefix:           keyPrefix,
 		Type:                kt,
 		AllowedTriggerSlugs: allowedTriggerSlugs,
-		AllowedNodePatterns: allowedNodePatterns,
 		Permissions:         perms,
 		RateLimit:           rateLimit,
 		CreatedAt:           time.Now().UTC(),
@@ -540,7 +512,6 @@ func (m *Manager) CreateTypedKey(name string, kt KeyType, allowedTriggerSlugs, a
 			"name":                  name,
 			"type":                  string(kt),
 			"allowed_trigger_slugs": allowedTriggerSlugs,
-			"allowed_node_patterns": allowedNodePatterns,
 			"permissions":           permStrings,
 			"rate_limit":            rateLimit,
 		},
@@ -644,7 +615,7 @@ func (m *Manager) DeleteKey(keyID string) error {
 }
 
 // ValidateKey validates an API key and checks permissions.
-func (m *Manager) ValidateKey(rawKey string, requiredPermission *models.Permission, targetNodeName, ipAddress, userAgent *string) (bool, *APIKey, string) {
+func (m *Manager) ValidateKey(rawKey string, requiredPermission *models.Permission, ipAddress, userAgent *string) (bool, *APIKey, string) {
 	keyHash := m.hashKey(rawKey)
 
 	m.mu.Lock()
@@ -707,12 +678,6 @@ func (m *Manager) ValidateKey(rawKey string, requiredPermission *models.Permissi
 	if requiredPermission != nil && !key.HasPermission(*requiredPermission) {
 		errMsg := fmt.Sprintf("Missing permission: %s", *requiredPermission)
 		m.logAudit(AuditLogEntry{KeyID: keyID, Action: "permission_denied", ResourceType: "api_key", ResourceID: &keyID, Details: map[string]interface{}{"required_permission": string(*requiredPermission)}, IPAddress: ipAddress, UserAgent: userAgent, Success: false, ErrorMessage: &errMsg})
-		return false, nil, errMsg
-	}
-
-	if targetNodeName != nil && !key.CanTargetNode(*targetNodeName) {
-		errMsg := fmt.Sprintf("Cannot target node: %s", *targetNodeName)
-		m.logAudit(AuditLogEntry{KeyID: keyID, Action: "node_access_denied", ResourceType: "api_key", ResourceID: &keyID, Details: map[string]interface{}{"target_node": *targetNodeName}, IPAddress: ipAddress, UserAgent: userAgent, Success: false, ErrorMessage: &errMsg})
 		return false, nil, errMsg
 	}
 

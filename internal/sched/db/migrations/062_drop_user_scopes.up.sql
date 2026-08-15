@@ -1,0 +1,14 @@
+-- migration-lint: allow-dangerous  drops users.scopes, a column no code reads
+--
+-- 062_drop_user_scopes.up.sql — remove the vestigial node-name scope column.
+--
+-- users.scopes held glob patterns matched against worker-node names. The node
+-- registry went away in ADR-0011 (migration 043_drop_nodes), which left the
+-- patterns matching against nothing: the visibility predicate they fed
+-- (taskVisibleToScopes) returned true unconditionally, and the task-list filter
+-- discarded them. The scoping code is removed in the same change (ADR-0045), so
+-- the column has no reader left.
+--
+-- Single-box deploys land the binary and the migration together (ADR-0004), and
+-- no row's value was ever consulted, so there is nothing to migrate forward.
+ALTER TABLE users DROP COLUMN IF EXISTS scopes;

@@ -312,7 +312,7 @@ func TestUserOperations(t *testing.T) {
 	defer db.Close()
 	ctx := context.Background()
 
-	user := &models.User{ID: uuid.New(), Username: "testuser", PasswordHash: "hash", Role: "admin", Scopes: []string{"*"}, CreatedAt: time.Now().UTC()}
+	user := &models.User{ID: uuid.New(), Username: "testuser", PasswordHash: "hash", Role: "admin", CreatedAt: time.Now().UTC()}
 	if err := db.AddUser(ctx, user); err != nil {
 		t.Fatalf("Failed to add user: %v", err)
 	}

@@ -19,7 +19,7 @@ func newSpendingManager(t *testing.T) (*Manager, string) {
 
 func TestSpendingCaps_AccumulateAndCheck(t *testing.T) {
 	m, _ := newSpendingManager(t)
-	key, _, err := m.CreateKey("ci", nil, nil, nil, 0, nil, "")
+	key, _, err := m.CreateKey("ci", nil, nil, 0, nil, "")
 	if err != nil {
 		t.Fatalf("CreateKey: %v", err)
 	}
@@ -61,7 +61,7 @@ func TestSpendingCaps_AccumulateAndCheck(t *testing.T) {
 
 func TestSpendingCaps_NoCapAlwaysPasses(t *testing.T) {
 	m, _ := newSpendingManager(t)
-	key, _, _ := m.CreateKey("ci", nil, nil, nil, 0, nil, "")
+	key, _, _ := m.CreateKey("ci", nil, nil, 0, nil, "")
 	m.AccumulateCost(key.KeyID, 9999)
 	if err := m.CheckBudget(key.KeyID); err != nil {
 		t.Errorf("no cap configured should always pass, got: %v", err)
@@ -70,7 +70,7 @@ func TestSpendingCaps_NoCapAlwaysPasses(t *testing.T) {
 
 func TestSpendingCaps_Persist(t *testing.T) {
 	m, path := newSpendingManager(t)
-	key, _, _ := m.CreateKey("ci", nil, nil, nil, 0, nil, "")
+	key, _, _ := m.CreateKey("ci", nil, nil, 0, nil, "")
 	m.AccumulateCost(key.KeyID, 3.5)
 
 	// Reload from disk: the accumulated spend survives.
@@ -86,7 +86,7 @@ func TestSpendingCaps_Persist(t *testing.T) {
 
 func TestSpendingCaps_LazyDailyReset(t *testing.T) {
 	m, _ := newSpendingManager(t)
-	key, _, _ := m.CreateKey("ci", nil, nil, nil, 0, nil, "")
+	key, _, _ := m.CreateKey("ci", nil, nil, 0, nil, "")
 	m.AccumulateCost(key.KeyID, 5)
 
 	// Backdate the daily window to two days ago; the next access should reset it.

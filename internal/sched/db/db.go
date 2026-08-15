@@ -194,13 +194,12 @@ func uuidStrings(ids []uuid.UUID) []string {
 func (db *Database) AddUser(ctx context.Context, user *models.User) error {
 	_, err := db.conn.ExecContext(ctx, `
 		INSERT INTO users (
-			id, username, password_hash, role, scopes, created_at, last_login, session_token, token_expires_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+			id, username, password_hash, role, created_at, last_login, session_token, token_expires_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		ON CONFLICT (id) DO UPDATE SET
 			username = EXCLUDED.username,
 			password_hash = EXCLUDED.password_hash,
 			role = EXCLUDED.role,
-			scopes = EXCLUDED.scopes,
 			last_login = EXCLUDED.last_login,
 			session_token = EXCLUDED.session_token,
 			token_expires_at = EXCLUDED.token_expires_at`,
@@ -208,7 +207,6 @@ func (db *Database) AddUser(ctx context.Context, user *models.User) error {
 		user.Username,
 		user.PasswordHash,
 		user.Role,
-		marshalJSON(user.Scopes),
 		user.CreatedAt,
 		user.LastLogin,
 		user.SessionToken,
@@ -271,7 +269,7 @@ func (db *Database) DeleteUser(ctx context.Context, userID uuid.UUID) error {
 // GetUser gets a user by ID.
 func (db *Database) GetUser(ctx context.Context, userID uuid.UUID) (*models.User, error) {
 	row := db.conn.QueryRowContext(ctx,
-		"SELECT id, username, password_hash, role, scopes, created_at, last_login, session_token, token_expires_at FROM users WHERE id = $1",
+		"SELECT id, username, password_hash, role, created_at, last_login, session_token, token_expires_at FROM users WHERE id = $1",
 		userID)
 	return db.rowToUser(row)
 }
@@ -279,7 +277,7 @@ func (db *Database) GetUser(ctx context.Context, userID uuid.UUID) (*models.User
 // GetUserByUsername gets a user by username.
 func (db *Database) GetUserByUsername(ctx context.Context, username string) (*models.User, error) {
 	row := db.conn.QueryRowContext(ctx,
-		"SELECT id, username, password_hash, role, scopes, created_at, last_login, session_token, token_expires_at FROM users WHERE username = $1",
+		"SELECT id, username, password_hash, role, created_at, last_login, session_token, token_expires_at FROM users WHERE username = $1",
 		username)
 	return db.rowToUser(row)
 }
@@ -287,7 +285,7 @@ func (db *Database) GetUserByUsername(ctx context.Context, username string) (*mo
 // ListUsers returns all users ordered by username. Used by the admin CLI.
 func (db *Database) ListUsers(ctx context.Context) ([]models.User, error) {
 	rows, err := db.conn.QueryContext(ctx,
-		"SELECT id, username, password_hash, role, scopes, created_at, last_login, session_token, token_expires_at FROM users ORDER BY username")
+		"SELECT id, username, password_hash, role, created_at, last_login, session_token, token_expires_at FROM users ORDER BY username")
 	if err != nil {
 		return nil, err
 	}
@@ -299,16 +297,15 @@ func (db *Database) ListUsers(ctx context.Context) ([]models.User, error) {
 			username       string
 			passwordHash   string
 			role           string
-			scopes         string
 			createdAt      time.Time
 			lastLogin      sql.NullTime
 			sessionToken   sql.NullString
 			tokenExpiresAt sql.NullTime
 		)
-		if err := rows.Scan(&id, &username, &passwordHash, &role, &scopes, &createdAt, &lastLogin, &sessionToken, &tokenExpiresAt); err != nil {
+		if err := rows.Scan(&id, &username, &passwordHash, &role, &createdAt, &lastLogin, &sessionToken, &tokenExpiresAt); err != nil {
 			return nil, err
 		}
-		u := models.User{ID: id, Username: username, PasswordHash: passwordHash, Role: role, Scopes: unmarshalStringSlice(scopes), CreatedAt: createdAt}
+		u := models.User{ID: id, Username: username, PasswordHash: passwordHash, Role: role, CreatedAt: createdAt}
 		if lastLogin.Valid {
 			u.LastLogin = &lastLogin.Time
 		}
@@ -329,7 +326,7 @@ func (db *Database) CountUsers(ctx context.Context) (int, error) {
 func (db *Database) GetUserByToken(ctx context.Context, token string) (*models.User, error) {
 	token = models.HashToken(token)
 	row := db.conn.QueryRowContext(ctx,
-		"SELECT id, username, password_hash, role, scopes, created_at, last_login, session_token, token_expires_at FROM users WHERE session_token = $1 AND (token_expires_at IS NULL OR token_expires_at > $2)",
+		"SELECT id, username, password_hash, role, created_at, last_login, session_token, token_expires_at FROM users WHERE session_token = $1 AND (token_expires_at IS NULL OR token_expires_at > $2)",
 		token, time.Now().UTC())
 	return db.rowToUser(row)
 }
@@ -340,14 +337,13 @@ func (db *Database) rowToUser(row *sql.Row) (*models.User, error) {
 		username       string
 		passwordHash   string
 		role           string
-		scopes         string
 		createdAt      time.Time
 		lastLogin      sql.NullTime
 		sessionToken   sql.NullString
 		tokenExpiresAt sql.NullTime
 	)
 
-	err := row.Scan(&id, &username, &passwordHash, &role, &scopes, &createdAt, &lastLogin, &sessionToken, &tokenExpiresAt)
+	err := row.Scan(&id, &username, &passwordHash, &role, &createdAt, &lastLogin, &sessionToken, &tokenExpiresAt)
 	if err != nil {
 		return nil, err
 	}
@@ -357,7 +353,6 @@ func (db *Database) rowToUser(row *sql.Row) (*models.User, error) {
 		Username:     username,
 		PasswordHash: passwordHash,
 		Role:         role,
-		Scopes:       unmarshalStringSlice(scopes),
 		CreatedAt:    createdAt,
 	}
 	if lastLogin.Valid {
@@ -2303,58 +2298,6 @@ func (db *Database) GetDashboardStats(ctx context.Context) (*models.DashboardSta
 	return stats, nil
 }
 
-// GetDashboardStatsForUser gets stats scoped to a user's permissions. Tasks are
-// visible when created by the user or untargeted; mcp_selection-based tasks carry
-// no node target, so every non-creator task falls under the untargeted branch and
-// is visible to any scoped user. (The scope patterns themselves no longer narrow
-// anything now that the node registry is gone — they are retained on the principal
-// only for forward-compatibility of the API-key scoping concept.)
-func (db *Database) GetDashboardStatsForUser(ctx context.Context, userID *uuid.UUID, scopes []string) (*models.DashboardStats, error) {
-	if len(scopes) == 0 {
-		return db.GetDashboardStats(ctx)
-	}
-
-	stats := &models.DashboardStats{}
-
-	now := time.Now().UTC()
-	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
-	todayEnd := time.Date(now.Year(), now.Month(), now.Day(), 23, 59, 59, 999999999, time.UTC)
-
-	// Without node targeting, a scoped user sees their own tasks plus all
-	// untargeted tasks (every task is untargeted now).
-	var args []interface{}
-	args = append(args,
-		string(models.TaskStatusPending),   // $1
-		string(models.TaskStatusRunning),   // $2
-		string(models.TaskStatusAnalyzing), // $3
-		string(models.TaskStatusSuccess),   // $4
-		todayStart,                         // $5
-		todayEnd,                           // $6
-		string(models.TaskStatusError),     // $7
-		string(models.TaskStatusLeased),    // $8
-	)
-	whereClause := "TRUE" // all tasks are untargeted → visible to any scoped user
-	if userID != nil {
-		args = append(args, *userID) // $9
-		whereClause = fmt.Sprintf("(created_by = $%d OR TRUE)", len(args))
-	}
-
-	query := fmt.Sprintf(`
-		SELECT
-			COUNT(*) FILTER (WHERE status = $1) as pending_tasks,
-			COUNT(*) FILTER (WHERE status IN ($2, $3, $8)) as running_tasks,
-			COUNT(*) FILTER (WHERE status = $4 AND completed_at BETWEEN $5 AND $6) as completed_today,
-			COUNT(*) FILTER (WHERE status = $7 AND completed_at BETWEEN $5 AND $6) as failed_today
-		FROM tasks
-		WHERE %s`, whereClause)
-
-	err := db.conn.QueryRowContext(ctx, query, args...).Scan(&stats.PendingTasks, &stats.RunningTasks, &stats.CompletedTasksToday, &stats.FailedTasksToday)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get task stats: %w", err)
-	}
-	return stats, nil
-}
-
 // Log operations
 
 // runLogHistoryKeep bounds how many superseded transcripts run_logs retains
@@ -3128,11 +3071,6 @@ type TaskFilter struct {
 	// SourceTaskID, when set, restricts to tasks re-run/cloned from that source
 	// task — the lineage view (#270).
 	SourceTaskID *uuid.UUID
-	// Visibility filters for scoped users. With node targeting removed, scoped
-	// visibility reduces to "own tasks OR all untargeted tasks" (every task is
-	// untargeted now), so a scoped user with VisibleToScopes set sees all tasks.
-	VisibleToUserID *uuid.UUID
-	VisibleToScopes []string
 }
 
 // GetTasksFiltered gets tasks with optional filters and pagination.
@@ -3204,12 +3142,6 @@ func (db *Database) GetTasksFiltered(ctx context.Context, filter TaskFilter, lim
 		args = append(args, filter.SourceTaskID.String())
 		argIndex++
 	}
-
-	// Scoped visibility: with node targeting removed, a scoped user sees their
-	// own tasks plus all untargeted tasks — and every task is untargeted now —
-	// so this adds no restriction beyond what an unscoped user sees. (Kept as a
-	// no-op branch for parity with the handler's call sites.)
-	_ = filter.VisibleToScopes
 
 	whereSQL := ""
 	if len(whereClauses) > 0 {

@@ -19,6 +19,35 @@ prior versions are listed because none have shipped.
 
 ### Removed
 
+- **Node-name scopes (ADR-0045).** Every principal carried a list of glob
+  patterns — `users.scopes` for accounts, `api_keys.allowed_node_patterns` for
+  keys — matched against the name of the worker node a task ran on. The node
+  registry went away in ADR-0011, which kept the globs "for forward
+  compatibility"; with nothing left to match, they degenerated into an
+  authorization surface that enforced nothing while looking like it did.
+  `taskVisibleToScopes` returned `true` on every path (its own comment said so)
+  behind eleven call sites that wrote an unreachable `403 Task not within
+  allowed scopes`; `TaskFilter.VisibleToScopes` was consumed by a literal
+  `_ = filter.VisibleToScopes`; `GetDashboardStatsForUser` hand-rolled
+  `WHERE (created_by = $9 OR TRUE)` — the unscoped query with extra steps; and
+  `APIKey.CanTargetNode` was unreachable because every `ValidateKey` call site
+  passes a nil node name. All of it is gone, along with `principal.scopes()`,
+  `taskVisibleToUser`, `storage.MatchGlob` (whose only caller was
+  `CanTargetNode`), `TaskFilter.VisibleToUserID`, the `node_access_denied`
+  audit action, and the `allowed_node_patterns` parameters of `CreateKey` /
+  `CreateTypedKey` / `ValidateKey`. Migration `062_drop_user_scopes` drops the
+  column (a reviewed `migration-lint: allow-dangerous` directive).
+  **API surface:** `allowed_node_patterns` leaves `POST /keys` and the API-key
+  responses, `scopes` leaves the user create/response bodies and
+  `docs/openapi.yaml`, and `fleet-admin sched user add --scopes` is removed. An
+  old client still sending either field is ignored rather than having its input
+  stored and echoed back; nothing it could previously do changes, because the
+  patterns never narrowed anything. A legacy-import dump's `sched.users[].scopes`
+  array imports and is ignored. **No authorization boundary is weakened** — the
+  permission set, the typed-key gates (trigger slugs, budgets, priority
+  ceiling), `ownsTask`, and the creator-scoped workspace/run-log gates
+  (ADR-0043) are untouched.
+
 - **Conversation folders (#258/#279).** Projects (#509) superseded folders when
   they shipped, and the folders UI came out with them — but the whole server
   half stayed: a `folder TEXT` column, `GET /folders`, `POST /folders/rename`,

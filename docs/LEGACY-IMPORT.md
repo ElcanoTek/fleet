@@ -129,7 +129,7 @@ otherwise mix both schemas into one `DATABASE_URL` database.
   "sched": {
     "users": [
       { "id": "<uuid>", "username": "brad", "password_hash": "$2a$...",
-        "role": "admin|client|readonly", "scopes": [],
+        "role": "admin|client|readonly",
         "created_at": "2026-01-01T00:00:00Z",
         "last_login": "2026-06-01T00:00:00Z" }          // optional
     ],
@@ -193,7 +193,9 @@ sched section:
 - **users** — matched by **username**: if the username already exists in fleet
   (e.g. the bootstrap admin), the existing account wins and imported tasks'
   `created_by` is remapped to its UUID; otherwise the user is inserted with its
-  original UUID, hash, role, and scopes preserved.
+  original UUID, hash, and role preserved. A legacy dump's `scopes` array is
+  accepted and ignored — node-name scopes were removed in
+  [ADR-0045](adr/0045-remove-node-name-scopes.md) and never narrowed anything.
 - **tasks** — inserted by UUID; a UUID already present in fleet is skipped so
   a re-run never reverts state fleet has since written (`--overwrite` replaces
   it instead — restore mode). Live tasks (`pending`/`scheduled`) get

@@ -113,7 +113,7 @@ func (h *Handlers) AdminOrUserAuthMiddleware(next http.Handler) http.Handler {
 		//     deployed sk- key behaves.
 		apiKey := r.Header.Get("X-API-Key")
 		if apiKey != "" {
-			valid, key, _ := h.apiKeys.ValidateKey(apiKey, nil, nil, nil, nil)
+			valid, key, _ := h.apiKeys.ValidateKey(apiKey, nil, nil, nil)
 			if valid && key != nil {
 				authorized := false
 				switch {

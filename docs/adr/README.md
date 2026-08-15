@@ -54,3 +54,4 @@ reviewable, and citable. Each record names the file or test that enforces it.
 | [0042](0042-child-side-mcp-scope-authorization.md) | Child-side MCP scope authorization (the broker enforces, not just transports) | Accepted |
 | [0043](0043-per-task-run-log-scoping.md) | Run-log transcripts are creator-scoped; fleet-wide reads need an explicit grant | Accepted |
 | [0044](0044-remove-in-sandbox-browser-tool.md) | Remove the in-sandbox browser tool; browser automation is a connector | Accepted |
+| [0045](0045-remove-node-name-scopes.md) | Remove node-name scopes; a principal's authority is its permission set | Accepted |
