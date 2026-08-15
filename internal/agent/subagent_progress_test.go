@@ -52,8 +52,9 @@ func (o *recordingObserver) progress() []subagentEvent {
 }
 
 func (o *recordingObserver) phases() []string {
-	var out []string
-	for _, e := range o.progress() {
+	events := o.progress()
+	out := make([]string, 0, len(events))
+	for _, e := range events {
 		phase, _ := e.payload["phase"].(string)
 		out = append(out, phase)
 	}

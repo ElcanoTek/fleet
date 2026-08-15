@@ -322,20 +322,20 @@ func collapseWhitespace(s string) string {
 
 // truncateRunes bounds a preview by RUNES (not bytes) so a multi-byte character
 // is never split into invalid UTF-8 on its way into a JSON event payload.
-func truncateRunes(s string, max int) string {
+func truncateRunes(s string, limit int) string {
 	r := []rune(s)
-	if len(r) <= max {
+	if len(r) <= limit {
 		return s
 	}
-	return string(r[:max]) + "…"
+	return string(r[:limit]) + "…"
 }
 
-// tailRunes keeps the LAST max runes — the live edge of what the child is
+// tailRunes keeps the LAST limit runes — the live edge of what the child is
 // writing.
-func tailRunes(s string, max int) string {
+func tailRunes(s string, limit int) string {
 	r := []rune(s)
-	if len(r) <= max {
+	if len(r) <= limit {
 		return s
 	}
-	return "…" + string(r[len(r)-max:])
+	return "…" + string(r[len(r)-limit:])
 }

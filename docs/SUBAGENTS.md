@@ -135,6 +135,31 @@ Surfaces:
   no answer) from one that never got off the ground — and the full child
   transcript stays one click away behind the existing endpoints.
 
+### Stopping a parent stops its children
+
+A child's context is **derived from the context of the spawn tool call**, which
+is the parent run's own context: fantasy hands the stream context to every tool
+it dispatches (sequential and parallel alike), the spawn body only wraps it
+(forced working dir, optional per-child timeout), and the child's
+`agentcore.Run` re-checks `ctx.Err()` at the top of every enforcement round. So
+chat's Stop button (which cancels the turn context) and a scheduled stop both
+propagate into any in-flight child. A child also cannot outlive its parent's
+tool call at all: `spawn` is synchronous — the parent's call does not return
+until the child has — so there is no detached goroutine to orphan. The child's
+partial spend is still charged back and its budget reservation released on the
+cancel path.
+
+Honest bound: cancellation is cooperative. A child stops at its next
+context-observing point — the in-flight provider request aborts, and no new
+round, model call, or tool call starts — but a tool call already inside a
+non-cancellable operation runs to its own completion first (the same bound the
+parent has for its own tools). Pinned by
+`TestInteractiveTurn_StopCancelsInFlightChild` (Stop mid-delegation: the turn
+returns promptly, the child's model observes cancellation and does not run to
+completion, and the delegation reports `success:false`),
+`TestSpawn_ChildContextDerivesFromTheParentCall` (no reservation leak), and the
+pre-existing `TestSpawn_TimeoutBranchAndChargeBack`.
+
 ## Walls that did not move
 
 One governed core (`agentcore.Run`); monotonic privilege (inherit sandbox / MCP /
