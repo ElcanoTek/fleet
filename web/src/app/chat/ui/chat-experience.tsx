@@ -102,10 +102,6 @@ export type ConversationSummary = {
   // archived ones (#282). Archived conversations live in the collapsed
   // "Archived" sidebar section, not the main list.
   archived_at?: number | null;
-  // folder is the old flat bucket (#279). The server still stores/serves the
-  // field, but the folders UI was removed (projects superseded them) — the
-  // rail ignores it now. Kept in the type because it's on the wire.
-  folder?: string;
   // labels is the conversation's tag set (#279) — up to 10, 32 chars each,
   // colored by name-hash. Undefined/empty = unlabeled.
   labels?: string[];
@@ -2048,14 +2044,14 @@ export function ChatExperience({
     }
   };
 
-  // patchConversationIds applies pinned/folder/labels to the given conversation
+  // patchConversationIds applies pinned/labels to the given conversation
   // IDs via the live PATCH /conversations/bulk endpoint (#279) and reflects the
   // change locally so the rail updates without a refetch. Undefined fields are
   // dropped by JSON.stringify, so the backend leaves them untouched (COALESCE);
-  // folder "" clears the folder, and labels is a full replace.
+  // labels is a full replace.
   const patchConversationIds = async (
     ids: string[],
-    changes: { pinned?: boolean; folder?: string; labels?: string[] },
+    changes: { pinned?: boolean; labels?: string[] },
   ) => {
     if (ids.length === 0) return;
     const response = await fetch("/api/conversations/bulk", {
@@ -2070,7 +2066,6 @@ export function ChatExperience({
         if (!idSet.has(c.id)) return c;
         const next = { ...c };
         if (changes.pinned !== undefined) next.pinned = changes.pinned;
-        if (changes.folder !== undefined) next.folder = changes.folder;
         if (changes.labels !== undefined) next.labels = changes.labels;
         return next;
       }),
@@ -2078,11 +2073,8 @@ export function ChatExperience({
   };
 
   // bulkPatchConversations targets the current multi-select set.
-  const bulkPatchConversations = (changes: {
-    pinned?: boolean;
-    folder?: string;
-    labels?: string[];
-  }) => patchConversationIds(Array.from(selectedIds), changes);
+  const bulkPatchConversations = (changes: { pinned?: boolean; labels?: string[] }) =>
+    patchConversationIds(Array.from(selectedIds), changes);
 
   // setConversationLabels replaces a single conversation's label set. The bulk
   // endpoint replaces (not appends), so the rail computes the next full set

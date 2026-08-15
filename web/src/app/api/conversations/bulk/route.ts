@@ -7,7 +7,7 @@ export const runtime = "nodejs";
 
 /**
  * PATCH /api/conversations/bulk — apply the same additive mutation (pinned /
- * folder / labels) to multiple conversations in a single transaction (#279).
+ * labels) to multiple conversations in a single transaction (#279).
  * Forwards the JSON body { conversation_ids, changes } to the backend.
  */
 export async function PATCH(request: NextRequest) {

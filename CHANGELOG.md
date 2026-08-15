@@ -19,6 +19,24 @@ prior versions are listed because none have shipped.
 
 ### Removed
 
+- **Conversation folders (#258/#279).** Projects (#509) superseded folders when
+  they shipped, and the folders UI came out with them — but the whole server
+  half stayed: a `folder TEXT` column, `GET /folders`, `POST /folders/rename`,
+  a `?folder=` list filter, a `?folder=` bulk-delete filter, and a `folder`
+  field on the bulk PATCH. No client had written any of it since, so every row
+  carried the `''` default. All of it is gone, along with
+  `store.ListFolders`/`RenameFolder`/`FolderCount` and `ListFilter.Folder`;
+  `DeleteAllMatching` and `BulkPatch` lose their folder parameter. Migration
+  `049_drop_conversation_folder.sql` drops the column and its index (a reviewed
+  `allow-dangerous` DDL — the data is uniformly the default). **Labels are
+  untouched**: they are the live, multi-assignment sibling the rail still uses,
+  so `internal/httpapi/folders.go` becomes `labels.go` and
+  `normalizeAndValidateFolderLabels` becomes `normalizeAndValidateLabels`.
+  Filing a conversation used to auto-pin it, so previously-filed chats are
+  already visible under Pinned; nothing becomes unreachable. Alongside it,
+  `store.Get` and `ListFiltered` now share the one `conversationColumns` list
+  and a single `scanConversation`, instead of spelling the column order out
+  three times.
 - **The in-sandbox `browser` tool (#503) and `FLEET_BROWSER_ENABLED`.**
   **Breaking for deployments that set that flag** — the tool is gone and the
   variable is no longer read (it is also out of the `.env` allowlist, so a
