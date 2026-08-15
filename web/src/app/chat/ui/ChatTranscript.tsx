@@ -53,7 +53,7 @@ function MessageMarkdown({
     </Suspense>
   );
 }
-import { humanToolLabel, shortModelName, type Message } from "./history";
+import { humanToolLabel, liveSubagentLabel, shortModelName, type Message } from "./history";
 
 export type ChatTranscriptProps = {
   // Scroll container + bottom sentinel refs (owned by ChatExperience)
@@ -589,9 +589,18 @@ export function ChatTranscript({
                     // Index Exchange" while the agent was actually
                     // calling list_reports / pull_report.
                     let activeToolName: string | null = null;
+                    // A delegation runs for minutes, so "Delegating to a
+                    // sub-agent" alone is the least informative thing the
+                    // indicator can say for the longest time. When the pending
+                    // call is a spawn with live child activity, we show what
+                    // the CHILD is doing instead (#1043 follow-up) — this is
+                    // the only sub-agent signal visible with "Show details"
+                    // off.
+                    let activeSubagentLabel: string | null = null;
                     for (let j = toolCalls.length - 1; j >= 0; j--) {
                       if (toolCalls[j].state === "pending") {
                         activeToolName = toolCalls[j].name;
+                        activeSubagentLabel = liveSubagentLabel(toolCalls[j]);
                         break;
                       }
                     }
@@ -717,7 +726,7 @@ export function ChatTranscript({
                                     ) : null}
                                     {activeToolName ? (
                                       <span className="thinking-shimmer min-w-0 flex-1 truncate">
-                                        {humanToolLabel(activeToolName)}
+                                        {activeSubagentLabel ?? humanToolLabel(activeToolName)}
                                       </span>
                                     ) : null}
                                     {!activeTaskTitle && !activeToolName ? (

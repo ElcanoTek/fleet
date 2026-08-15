@@ -91,7 +91,7 @@ func TestSpawn_ExploreChildHasNoWriteTools(t *testing.T) {
 			parent := newRosterParentForSpawn(t, capModel)
 			ctx, _ := spawnCtx(t)
 
-			resp, err := parent.spawn(ctx, spawnSubagentInput{Task: "research something", Role: role})
+			resp, err := parent.spawn(ctx, spawnSubagentInput{Task: "research something", Role: role}, "call-1")
 			if err != nil {
 				t.Fatalf("spawn: %v", err)
 			}
@@ -121,7 +121,7 @@ func TestSpawn_WorkerChildKeepsWriteTools(t *testing.T) {
 	parent := newRosterParentForSpawn(t, capModel)
 	ctx, _ := spawnCtx(t)
 
-	resp, err := parent.spawn(ctx, spawnSubagentInput{Task: "write the report file", Role: "worker"})
+	resp, err := parent.spawn(ctx, spawnSubagentInput{Task: "write the report file", Role: "worker"}, "call-1")
 	if err != nil {
 		t.Fatalf("spawn: %v", err)
 	}
@@ -151,7 +151,7 @@ func TestSpawn_ChildWorkdirIsolation(t *testing.T) {
 
 	seen := map[string]bool{}
 	for i := 0; i < 2; i++ {
-		resp, err := parent.spawn(ctx, spawnSubagentInput{Task: "t"})
+		resp, err := parent.spawn(ctx, spawnSubagentInput{Task: "t"}, "call-1")
 		if err != nil {
 			t.Fatalf("spawn %d: %v", i, err)
 		}

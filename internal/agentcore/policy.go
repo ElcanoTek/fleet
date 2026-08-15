@@ -132,6 +132,21 @@ func NewScheduledPolicy(logSession *LogSession, maxIterations int, maxCostUSD fl
 	return &ScheduledPolicy{orch: o}
 }
 
+// NewDelegatedPolicy builds the run-to-completion bundle for a SPAWNED
+// SUB-AGENT (#1043 follow-up). It is the SAME ScheduledPolicy — same gate
+// chain, same ceilings, same critical-tool audit gating, same orchestration
+// state the confirm_audit tool and usage accounting bind to — with exactly one
+// difference: CanFinish does not demand the self-audit ritual (see
+// checkFinishEnforcement). This is configuration of the one governed core, not
+// a second policy path: a child that unlocks a critical action through
+// confirm_audit is still held to its commitments, and the PARENT still has to
+// pass its own audit over the delegated work.
+func NewDelegatedPolicy(logSession *LogSession, maxIterations int, maxCostUSD float64, maxTotalTokens int) *ScheduledPolicy {
+	p := NewScheduledPolicy(logSession, maxIterations, maxCostUSD, maxTotalTokens)
+	p.orch.setDelegatedFinish(true)
+	return p
+}
+
 func (p *ScheduledPolicy) orchestration() *orchestrationState { return p.orch }
 
 // SetNoteProposer wires the admin-notes proposer (propose_note) for this run.

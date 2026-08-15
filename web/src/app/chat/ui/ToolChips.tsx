@@ -16,6 +16,7 @@ import {
   toolIcon,
   type Message,
   type PythonStream,
+  type SubagentActivity,
   type ToolCall,
 } from "./history";
 // From its own module (not AssistantContent) so this file doesn't statically
@@ -165,7 +166,11 @@ export function ToolChip({
   // transcript through this conversation's authorized endpoint (#1043).
   conversationId?: string | null;
 }) {
-  const [open, setOpen] = useState(false);
+  // A delegation opens by default (#1043 follow-up): it is the one tool call
+  // that runs for minutes with the operator otherwise staring at a collapsed
+  // pill, and its live activity panel is the whole point of the events behind
+  // it. Every other tool keeps the click-to-open default.
+  const [open, setOpen] = useState(tc.name === "spawn_subagent");
   const label = prettyToolName(tc.name);
   const stateStyle: React.CSSProperties =
     tc.state === "error"
@@ -194,6 +199,14 @@ export function ToolChip({
       >
         <span>{toolIcon(tc.name)}</span>
         <span className="font-medium">{label}</span>
+        {/* The child's live step count rides the collapsed pill so a
+            delegation shows movement even with the panel closed. */}
+        {tc.subagent && tc.state === "pending" ? (
+          <span className="text-[var(--color-text-muted)]">
+            · {tc.subagent.role || "explore"}
+            {tc.subagent.steps > 0 ? ` · ${tc.subagent.steps} steps` : ""}
+          </span>
+        ) : null}
         {tc.state === "pending" ? (
           <span className="thinking-dots" aria-hidden="true">
             <span className="thinking-dot" />
@@ -220,6 +233,12 @@ export function ToolChip({
               taskTrackerDisplay={taskTrackerDisplay}
             />
           )}
+          {/* Live sub-agent activity, while the child is still running. Once
+              the result arrives the card below carries the same trail from the
+              persisted JSON, so this panel retires rather than duplicating. */}
+          {tc.subagent && !tc.resultText ? (
+            <SubagentActivityPanel activity={tc.subagent} />
+          ) : null}
           {tc.resultText ? (
             <ToolResultView
               name={tc.name}
@@ -822,6 +841,57 @@ function readWarnings(value: unknown): EmailWarning[] {
   });
 }
 
+// SubagentActivityPanel renders a running child's live trail (#1043
+// follow-up): what it is doing right now, how many steps it has taken, and the
+// last handful of tool calls with their argument/result previews. It exists
+// because a delegation used to be a spinner over the task text for its whole
+// (multi-minute) lifetime — the operator could not tell a working child from a
+// stuck one. Live-only: the tool result card replaces it once the child returns.
+function SubagentActivityPanel({ activity }: { activity: SubagentActivity }) {
+  const running = activity.phase !== "finished";
+  return (
+    <div
+      className="rounded-[0.6rem] border border-[var(--color-border)] bg-[var(--color-overlay-strong)] min-w-0 max-w-full"
+      data-testid="chat-subagent-activity"
+    >
+      <div className="flex items-center gap-2 border-b border-[var(--color-border)] px-2 py-0.5 text-[0.65rem] uppercase tracking-wider text-[var(--color-text-muted)]">
+        <span>sub-agent activity</span>
+        {activity.steps > 0 ? (
+          <span className="normal-case tracking-normal">{activity.steps} steps</span>
+        ) : null}
+        {running ? (
+          <span className="ml-auto normal-case tracking-normal">running…</span>
+        ) : null}
+      </div>
+      {activity.current ? (
+        <div className="px-2 py-1 text-[0.72rem] text-[var(--color-text-primary)]">
+          <span className="truncate">{activity.current}</span>
+        </div>
+      ) : null}
+      {activity.trail.length > 0 ? (
+        <ul className="grid gap-0.5 px-2 pb-1 text-[0.7rem] text-[var(--color-text-muted)]">
+          {activity.trail.map((s, i) => (
+            <li key={i} className="flex min-w-0 items-baseline gap-1.5">
+              <span
+                className="shrink-0"
+                style={s.isErr ? { color: "var(--color-danger)" } : undefined}
+                aria-hidden
+              >
+                {s.phase === "tool" ? "→" : s.phase === "tool_result" ? (s.isErr ? "✗" : "✓") : "•"}
+              </span>
+              <span className="min-w-0 truncate">
+                {s.tool ? <span className="text-[var(--color-text-secondary)]">{s.tool}</span> : null}
+                {s.tool && s.detail ? " · " : null}
+                {s.detail}
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+
 // SubagentTranscriptMessage is the subset of a child session-log message the
 // chat-side transcript viewer renders.
 type SubagentTranscriptMessage = {
@@ -925,6 +995,14 @@ function SubagentSpawnResult({
   const tokens = typeof result.tokens === "number" ? result.tokens : 0;
   const answer = typeof result.result === "string" ? result.result : "";
   const status = success ? "done" : refused ? "refused" : "failed";
+  // The work trail the child reported (#1043 follow-up). Persisted in the tool
+  // result, so it survives a reload — unlike the live activity panel — and it
+  // is what distinguishes a child that tried and failed from one that never
+  // ran a step.
+  const steps = typeof result.steps === "number" ? result.steps : 0;
+  const toolsUsed = Array.isArray(result.tools_used)
+    ? result.tools_used.filter((t): t is string => typeof t === "string")
+    : [];
   return (
     <div
       className="rounded-[0.6rem] border bg-[var(--color-overlay-strong)] min-w-0 max-w-full"
@@ -952,6 +1030,12 @@ function SubagentSpawnResult({
       <div className="flex flex-wrap gap-2 px-2 pb-1 text-[0.68rem] text-[var(--color-text-muted)]">
         {cost > 0 ? <span>${cost.toFixed(4)}</span> : null}
         {tokens > 0 ? <span>{tokens.toLocaleString()} tokens</span> : null}
+        {steps > 0 ? <span>{steps} steps</span> : null}
+        {toolsUsed.length > 0 ? (
+          <span className="min-w-0 truncate" title={toolsUsed.join(", ")}>
+            {toolsUsed.join(", ")}
+          </span>
+        ) : null}
       </div>
       {answer ? (
         <details className="border-t border-[var(--color-border)] px-2 py-1 text-[0.72rem]">

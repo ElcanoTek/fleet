@@ -112,6 +112,118 @@ test("the streamed tool.call and tool.result render in the execution trail", asy
   await expect(page.getByText("It is 72F and sunny in Boston.")).toBeVisible();
 });
 
+// A delegation turn: the spawn tool call, the child's live subagent.progress
+// steps, then the spawn's JSON result. The progress events are what make a
+// running sub-agent visible — before them the chip showed the task text and
+// nothing else for the child's whole (multi-minute) life (#1043 follow-up).
+async function mockDelegationTurn(page: Page) {
+  await page.route("**/api/chat", (r: Route) =>
+    fulfillSse(r, [
+      { event: "conversation", id: 1, data: { id: "conv-1", title: "New chat", persona: "default" } },
+      {
+        event: "tool.call",
+        id: 2,
+        data: {
+          id: "call-sub-1",
+          name: "spawn_subagent",
+          input: JSON.stringify({ task: "Summarize the last 3 emails", role: "explore" }),
+        },
+      },
+      {
+        event: "subagent.progress",
+        id: 3,
+        data: {
+          tool_call_id: "call-sub-1",
+          child_session_id: "subagent-11111111-2222-3333-4444-555555555555",
+          role: "explore",
+          phase: "started",
+          task: "Summarize the last 3 emails",
+        },
+      },
+      {
+        event: "subagent.progress",
+        id: 4,
+        data: {
+          tool_call_id: "call-sub-1",
+          child_session_id: "subagent-11111111-2222-3333-4444-555555555555",
+          role: "explore",
+          phase: "tool",
+          tool: "outlook_email_search",
+          detail: "query=is:unread",
+          step: 1,
+        },
+      },
+      {
+        event: "subagent.progress",
+        id: 5,
+        data: {
+          tool_call_id: "call-sub-1",
+          child_session_id: "subagent-11111111-2222-3333-4444-555555555555",
+          role: "explore",
+          phase: "finished",
+          success: true,
+          cost_usd: 0.0042,
+          tokens: 3100,
+          steps: 2,
+          tools_used: ["outlook_email_search"],
+          duration_ms: 9100,
+        },
+      },
+      {
+        event: "tool.result",
+        id: 6,
+        data: {
+          id: "call-sub-1",
+          name: "spawn_subagent",
+          text: JSON.stringify({
+            result: "Three emails: a renewal, a standup note, and an invoice.",
+            success: true,
+            role: "explore",
+            child_session_id: "subagent-11111111-2222-3333-4444-555555555555",
+            cost_usd: 0.0042,
+            tokens: 3100,
+            steps: 2,
+            tools_used: ["outlook_email_search"],
+          }),
+          is_err: false,
+        },
+      },
+      { event: "text.delta", id: 7, data: { text: "Here is the summary of your last 3 emails." } },
+      { event: "turn.completed", id: 8, data: { cost_usd: 0.006, model: "anthropic/claude-opus-4.8" } },
+    ]),
+  );
+}
+
+test("a delegation streams live sub-agent activity, then settles into a child card", async ({
+  page,
+  context,
+}) => {
+  await context.addInitScript(() => window.localStorage.setItem("chat-show-stats", "1"));
+  await mockChatBoot(page);
+  await mockDelegationTurn(page);
+  await page.goto("/chat");
+  await page.getByRole("heading", { name: /what can i help with/i }).waitFor({ timeout: 15_000 });
+
+  const composer = page.getByRole("textbox").first();
+  await composer.fill("Summarize my last 3 emails with a sub-agent");
+  await composer.press("Enter");
+
+  // The delegation's chip opens itself, so the child's task and its work trail
+  // are visible without hunting for a disclosure.
+  await expect(page.getByText("Summarize the last 3 emails")).toBeVisible({ timeout: 15_000 });
+
+  // Once the result lands, the live panel retires and the child card carries
+  // the durable trail: status, spend, steps, and the tools the child used.
+  const card = page.getByTestId("chat-subagent-card");
+  await expect(card).toBeVisible({ timeout: 15_000 });
+  await expect(card).toContainText("done");
+  await expect(card).toContainText("explore");
+  await expect(card).toContainText("2 steps");
+  await expect(card).toContainText("outlook_email_search");
+  await expect(page.getByTestId("chat-subagent-activity")).toHaveCount(0);
+  await expect(page.getByText("Here is the summary of your last 3 emails.")).toBeVisible();
+});
+
 test("config-driven empty-state cards render from a stubbed /api/client-config", async ({ page }) => {
   // The protocol-pill empty-state cards render whenever the client config
   // supplies any (persona-AGNOSTIC — regression guard for #80, where the gate

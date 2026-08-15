@@ -311,19 +311,36 @@ func (o *orchestrationState) checkCriticalTool(toolName, _ string, rawInput stri
 
 // checkFinishEnforcement checks whether the agent is allowed to stop
 // (scheduled). The interactive Policy bypasses this entirely via CanFinish.
+//
+// A DELEGATED run (a spawned sub-agent, #1043 follow-up) skips the two
+// self-audit blocks below and nothing else: the self-audit ritual is the
+// TOP-LEVEL run's deliverable gate — it re-reads protocols/self-audit.md and
+// re-checks the task's contract, neither of which a scoped child was given.
+// Forcing a child through it made every delegation cost several extra rounds
+// of "read protocols/self-audit.md" flailing (a child usually cannot even see
+// that file), polluted the answer the parent gets back with audit narration,
+// and — when the child ran out of iterations mid-ritual — returned no answer
+// at all. The child's real gate is its PARENT's audit: the parent still has to
+// confirm_audit over the delegated work before IT can finish. Every other
+// enforcement below (task tracker, pending critical actions, undischarged
+// commitments) still applies to a child unchanged, so a child that DID unlock
+// a critical action through confirm_audit is held to it exactly like a root
+// run.
 func (o *orchestrationState) checkFinishEnforcement() (bool, []string) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 
-	if !o.selfAuditRequested {
-		o.selfAuditRequested = true
-		log.Println("Enforcement: Self Audit not requested. Rejecting finish.")
-		return false, []string{"Before finishing: read protocols/self-audit.md, verify your work, then call confirm_audit(...)."}
-	}
+	if !o.delegatedFinish {
+		if !o.selfAuditRequested {
+			o.selfAuditRequested = true
+			log.Println("Enforcement: Self Audit not requested. Rejecting finish.")
+			return false, []string{"Before finishing: read protocols/self-audit.md, verify your work, then call confirm_audit(...)."}
+		}
 
-	if !o.selfAuditConfirmedOnce {
-		log.Println("Enforcement: Self Audit not confirmed. Rejecting finish.")
-		return false, []string{"Audit not confirmed. Call confirm_audit(...) with evidence to proceed."}
+		if !o.selfAuditConfirmedOnce {
+			log.Println("Enforcement: Self Audit not confirmed. Rejecting finish.")
+			return false, []string{"Audit not confirmed. Call confirm_audit(...) with evidence to proceed."}
+		}
 	}
 
 	if o.auditTerminalFailure {

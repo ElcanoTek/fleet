@@ -102,6 +102,21 @@ type Agent struct {
 	subagent      subagentConfig
 	runtimePolicy runtimeBudgetPolicy
 
+	// spawnObserver is THIS run's Observer, captured so the spawn_subagent tool
+	// can stream a child's progress back to whoever is watching the parent (the
+	// chat SSE sink interactively, the task's live log stream + captain's log
+	// when scheduled). Without it a delegation was a silent black box for its
+	// whole lifetime — the operator saw the spawn arguments and then nothing
+	// until the child returned minutes later. Set by Execute (scheduled) and by
+	// newInteractiveSpawnHost (chat); nil = nobody is watching, and the spawn
+	// path degrades to exactly its pre-#1043-follow-up behaviour.
+	spawnObserver agentcore.Observer
+
+	// childProgress is set on a spawned CHILD by buildChild: the child's own
+	// Execute composes it into its run Observer so every child step is relabeled
+	// into the parent's stream as a subagent.progress event. nil on a root run.
+	childProgress agentcore.Observer
+
 	// budgetOverride, when set (>0), forces this run's cost/token ceilings instead
 	// of the config defaults. A spawned CHILD sets these to its SLICED budget so
 	// its own agentcore.Run enforces the sliced ceiling via the SAME checkCeilings
@@ -429,6 +444,33 @@ func composeObserver(ctx context.Context, base agentcore.Observer) agentcore.Obs
 	return base
 }
 
+// isDelegatedChild reports whether THIS run is a spawned sub-agent's. buildChild
+// stamps the role (never empty on a child, always empty on a root run), so it is
+// an internal invariant the model cannot influence — the same property the depth
+// counter has.
+func (a *Agent) isDelegatedChild() bool { return a.subagent.role != "" }
+
+// runObserver builds this run's Observer. A ROOT run keeps the pre-existing
+// shape: the captain's-log writer plus the context-carried live stream sink.
+//
+// A spawned CHILD swaps that live sink for its parent's progress forwarder
+// (childProgress, set by buildChild). Two reasons it must not inherit the
+// parent's sink directly: the child's raw tool.call/tool.result events would be
+// written into the PARENT task's live stream with no attribution — reading as
+// if the parent had made them — and the forwarder is what turns those steps
+// into the attributed subagent.progress events the chat/task UIs render. The
+// child's OWN session log (its captain's log) is unaffected either way.
+func (a *Agent) runObserver(ctx context.Context) agentcore.Observer {
+	base := agentcore.Observer(&scheduledObserver{session: a.logSession})
+	if a.isDelegatedChild() {
+		if a.childProgress == nil {
+			return base
+		}
+		return multiObserver{base, a.childProgress}
+	}
+	return composeObserver(ctx, base)
+}
+
 // scheduledPolicy layers two host-side finish gates onto agentcore.ScheduledPolicy,
 // in order: the end-of-run verifier, then the "phone a friend" super-LLM review
 // (part of #175). agentcore's audit/finish enforcement gates finishing first;
@@ -591,7 +633,20 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 	if a.tokenCeilingOverride > 0 {
 		maxTotalTokens = a.tokenCeilingOverride
 	}
-	inner := agentcore.NewScheduledPolicy(a.logSession, a.maxIterations, maxCostUSD, maxTotalTokens)
+	// A DELEGATED run (this Agent is a spawned child) uses the delegated policy:
+	// the same ScheduledPolicy with the self-audit FINISH ritual relaxed. The
+	// ritual is the root run's deliverable gate — a scoped child forced through
+	// it burned rounds hunting protocols/self-audit.md, narrated the audit into
+	// the answer its parent got back, and sometimes ran out of iterations before
+	// producing any answer at all. Everything else (ceilings, repeat guard,
+	// critical-tool audit gating, commitments) is identical, and the PARENT's own
+	// audit still covers the delegated work.
+	var inner *agentcore.ScheduledPolicy
+	if a.isDelegatedChild() {
+		inner = agentcore.NewDelegatedPolicy(a.logSession, a.maxIterations, maxCostUSD, maxTotalTokens)
+	} else {
+		inner = agentcore.NewScheduledPolicy(a.logSession, a.maxIterations, maxCostUSD, maxTotalTokens)
+	}
 	if a.noteProposer != nil {
 		inner.SetNoteProposer(a.noteProposer)
 	}
@@ -668,12 +723,20 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 		taskID = a.taskID.String()
 	}
 
+	// Observer is the captain's-log writer, tee'd to a live SSE buffer when the
+	// worker pool attached one via agentcore.WithStreamObserver (#200) so an
+	// in-progress task's run log can be tailed without forking the event path.
+	// A spawned CHILD instead tees to its parent's progress forwarder: its raw
+	// events would otherwise land unattributed in the PARENT task's live stream,
+	// indistinguishable from the parent's own steps.
+	observer := a.runObserver(ctx)
+	// Captured so this run's spawn_subagent calls can stream their children's
+	// progress to whoever is watching (see Agent.spawnObserver).
+	a.spawnObserver = observer
+
 	deps := agentcore.Deps{
-		Input: scheduledInput{systemPrompt: systemPrompt, task: task, label: a.logSession.Title},
-		// Observer is the captain's-log writer, tee'd to a live SSE buffer when the
-		// worker pool attached one via agentcore.WithStreamObserver (#200) so an
-		// in-progress task's run log can be tailed without forking the event path.
-		Observer:        composeObserver(ctx, &scheduledObserver{session: a.logSession}),
+		Input:           scheduledInput{systemPrompt: systemPrompt, task: task, label: a.logSession.Title},
+		Observer:        observer,
 		Policy:          inner, // inner policy exposes orchestration() for confirm_audit + usage
 		Executor:        NewSandboxExecutor(a.sb),
 		Model:           a.model,
@@ -696,7 +759,15 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 	// achieve that by giving the wrapper the same orchestration: agentcore reads
 	// CanFinish off Deps.Policy, so we instead set Deps.Policy to the wrapper and
 	// rely on the wrapper delegating BeforeToolCall/RecordToolResult to inner.
-	deps.Policy = policy
+	//
+	// A spawned CHILD skips the wrapper entirely: the end-of-run verifier is a
+	// deliverable re-check for the run the OPERATOR asked for, and running it per
+	// child bought an extra host-side LLM call (plus an enforcement round) on
+	// every delegation while the parent's own verifier still re-checks the whole
+	// run afterwards. Phone-a-friend is already off for children (buildChild).
+	if !a.isDelegatedChild() {
+		deps.Policy = policy
+	}
 
 	cfg := agentcore.RunConfig{
 		TaskID:              taskID,

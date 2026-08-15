@@ -5,6 +5,7 @@ import {
   applyContextPressure,
   applyModelRequired,
   applyRetryNotice,
+  applySubagentProgress,
   clearRetryNotice,
   historyToMessages,
   parsePythonStream,
@@ -16,6 +17,7 @@ import {
   type Message,
   type ModelRequiredEventPayload,
   type RetryEventPayload,
+  type SubagentProgressEventPayload,
   type ToolCallState,
 } from "./history";
 import { parseSseChunk, stepStreamDedup, type ServerEvent } from "@/app/lib/sse";
@@ -490,6 +492,25 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           ...(m.toolCalls ?? []),
           { id: p.id, name: p.name, input: p.input, state: "pending" },
         ],
+      }));
+      return;
+    }
+
+    if (event.event === "subagent.progress") {
+      // Live sub-agent activity (#1043 follow-up). Attaches to the spawn chip
+      // by tool_call_id — a turn can fan out several children concurrently, so
+      // the child session id alone would not place the event. An event whose
+      // call we haven't seen (reattach mid-child) is dropped rather than
+      // inventing a chip.
+      const p = payload as SubagentProgressEventPayload;
+      if (!p.tool_call_id) return;
+      patchAssistantMessage(ctx.target, ctx.assistantId, (m) => ({
+        ...clearRetryNotice(m),
+        toolCalls: (m.toolCalls ?? []).map((tc) =>
+          tc.id === p.tool_call_id
+            ? { ...tc, subagent: applySubagentProgress(tc.subagent, p) }
+            : tc,
+        ),
       }));
       return;
     }

@@ -347,6 +347,14 @@ type spawnSubagentOutput struct {
 	Role           string `json:"role,omitempty"`
 	ChildSessionID string `json:"child_session_id,omitempty"`
 	Workdir        string `json:"workdir,omitempty"`
+	// Steps / ToolsUsed are the child's work trail (#1043 follow-up): how many
+	// tool calls it made and which tools it reached for. They cost the parent a
+	// few tokens and buy it the one thing the answer alone never showed — whether
+	// an unsuccessful child actually tried (5 steps, ended empty) or never got
+	// off the ground (0 steps). The same pair renders on the child card, so the
+	// trail survives a page reload; the full transcript stays one click away.
+	Steps     int      `json:"steps,omitempty"`
+	ToolsUsed []string `json:"tools_used,omitempty"`
 }
 
 // budgetEpsilon absorbs float rounding when comparing a requested cost against
@@ -378,9 +386,13 @@ Give the child a complete, standalone task — it cannot see this conversation.`
 	// concurrency), so the parent fans out and collects all results before its next
 	// LLM call. The fan-out / budget reservation is already atomic under a.mu, so
 	// concurrent execution is safe — see reserveChildSlot / reserveChildBudget.
+	// The tool call's own id is threaded into spawn so every progress event a
+	// child emits can be attached to the exact spawn chip that produced it — a
+	// parent may fan out several children in ONE turn and they run concurrently,
+	// so the child session id alone is not enough for a UI to place the events.
 	return fantasy.NewParallelAgentTool("spawn_subagent", description,
-		func(ctx context.Context, in spawnSubagentInput, _ fantasy.ToolCall) (fantasy.ToolResponse, error) {
-			return a.spawn(ctx, in)
+		func(ctx context.Context, in spawnSubagentInput, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
+			return a.spawn(ctx, in, call.ID)
 		})
 }
 
@@ -389,7 +401,7 @@ Give the child a complete, standalone task — it cannot see this conversation.`
 // and charges its spend back to the parent. Every refusal path returns a JSON
 // result with success=false — surfaced to the model as a tool result, never a
 // transport error or a panic.
-func (a *Agent) spawn(ctx context.Context, in spawnSubagentInput) (fantasy.ToolResponse, error) {
+func (a *Agent) spawn(ctx context.Context, in spawnSubagentInput, toolCallID string) (fantasy.ToolResponse, error) {
 	if !a.subagent.enabled {
 		// Defensive: the tool is not registered when disabled, so this is
 		// unreachable in normal flow — but never silently allow if it is reached.
@@ -480,6 +492,17 @@ func (a *Agent) spawn(ctx context.Context, in spawnSubagentInput) (fantasy.ToolR
 		a.subagent.depth, a.subagent.depth+1, role, modelDesc,
 		fmtCostCeiling(childCost), fmtTokenCeiling(childTokens), fmtTimeout(in.TimeoutMinutes), childWorkdir, a.subagent.parentTaskID)
 
+	// ── LIVE PROGRESS (#1043 follow-up) ─────────────────────────────────────
+	// Tee the child's own run events into this run's Observer, relabeled and
+	// attributed (subagent.progress). This is what turns a delegation from a
+	// silent multi-minute spinner into a live card showing which tool the child
+	// is on. nil when nobody is watching this run — the forwarder is nil-safe
+	// throughout, so the spawn path is otherwise unchanged.
+	progress := newChildProgress(a.spawnObserver, toolCallID, childAgent.LogSession().ID, role)
+	childAgent.childProgress = progress.observer()
+	progress.started(task, childWorkdir, modelDesc)
+	startedAt := time.Now()
+
 	// Release this child's in-flight reservation and charge its ACTUAL spend back
 	// into the parent's budget UNCONDITIONALLY (even on error / partial run / timeout
 	// / panic): the child may have spent before stopping, and that spend must count
@@ -515,14 +538,37 @@ func (a *Agent) spawn(ctx context.Context, in spawnSubagentInput) (fantasy.ToolR
 
 	childUsage := childAgent.usageForParent()
 	answer := strings.TrimSpace(latestAssistantText(childAgent.LogSession()))
+	steps, toolsUsed := progress.snapshot()
 
 	// Record a structured linkage entry on the PARENT's (persisted) session log so a
 	// spawned child is traceable to its parent task with its role, workdir, and
 	// spend (#264, #1043). The child's own session also carries parent_task_id
 	// (set in buildChild).
-	a.recordSubagentSpawn(childAgent.LogSession().ID, role, childWorkdir, childUsage, runErr == nil && !timedOut)
+	succeeded := runErr == nil && !timedOut && answer != ""
+	a.recordSubagentSpawn(childAgent.LogSession().ID, role, childWorkdir, childUsage, succeeded)
 
-	return spawnResult(answer, role, childAgent.LogSession().ID, childWorkdir, childUsage, runErr, timedOut), nil
+	result := spawnResult(answer, role, childAgent.LogSession().ID, childWorkdir, childUsage, runErr, timedOut, steps, toolsUsed)
+	// Terminal progress event: status + spend + step trail, so a live card
+	// settles into its final state without waiting for the parent's next model
+	// step to flush the tool result.
+	progress.finished(succeeded, childUsage, time.Since(startedAt), spawnFailureNote(runErr, timedOut, answer))
+	return result, nil
+}
+
+// spawnFailureNote explains a non-success outcome in one short phrase for the
+// terminal progress event (the JSON result carries the same information for the
+// model; this is for the human watching).
+func spawnFailureNote(runErr error, timedOut bool, answer string) string {
+	switch {
+	case timedOut:
+		return "timed out"
+	case runErr != nil:
+		return truncateRunes(collapseWhitespace(runErr.Error()), subagentDetailChars)
+	case answer == "":
+		return "no final answer"
+	default:
+		return ""
+	}
 }
 
 // ensureChildWorkdir creates the child's isolated working directory (#1043):
@@ -835,7 +881,15 @@ func (a *Agent) buildChild(role string, model fantasy.LanguageModel, allowlist a
 		childIter = maxIter
 	}
 
-	childSystemPrompt := a.systemPrompt
+	// Every child, either role, is told what a child IS (#1043 follow-up). The
+	// inherited prompt is the PARENT's — a scheduled task contract or the whole
+	// interactive chat prompt — and read literally it tells the child to behave
+	// like the run it was cloned from: address the user, keep the conversation
+	// going, and (scheduled) close with the self-audit ritual. That is exactly
+	// what a child was observed doing: hunting for protocols/self-audit.md it
+	// could not read, then narrating the hunt into the answer the parent
+	// received. This section states the child's actual contract instead.
+	childSystemPrompt := a.systemPrompt + subagentChildPromptSection
 	childMCPAllowlist := a.mcpToolAllowlist
 	if role == SubagentRoleExplore {
 		childSystemPrompt += exploreChildPromptSection
@@ -979,7 +1033,7 @@ func (a *Agent) usageForParent() agentcore.RunUsage {
 // parent can branch deterministically even when several results return at once.
 // tokens is prompt+completion. workdir tells the parent where a worker child's
 // outputs live.
-func spawnResult(answer, role, childSessionID, workdir string, usage agentcore.RunUsage, runErr error, timedOut bool) fantasy.ToolResponse {
+func spawnResult(answer, role, childSessionID, workdir string, usage agentcore.RunUsage, runErr error, timedOut bool, steps int, toolsUsed []string) fantasy.ToolResponse {
 	success := true
 	var note string
 	switch {
@@ -1003,6 +1057,8 @@ func spawnResult(answer, role, childSessionID, workdir string, usage agentcore.R
 		Role:           role,
 		ChildSessionID: childSessionID,
 		Workdir:        workdir,
+		Steps:          steps,
+		ToolsUsed:      toolsUsed,
 	})
 }
 
@@ -1077,6 +1133,25 @@ You have a spawn_subagent tool. Delegation is a choice, not a requirement — mo
 - PREFER role=explore (read-only research, the default). Use role=worker only when the child must create or edit files; read its outputs from the returned workdir.
 - BUDGET: each child is capped at a fraction (default 10%) of your remaining budget. Omit max_cost_usd/max_total_tokens unless you deliberately want a smaller slice — asking for more than the cap is refused.
 - The child cannot see this conversation: put everything it needs (instructions, data, file paths) in the task string.
+`
+
+// subagentChildPromptSection is appended to EVERY child's system prompt (both
+// roles) directly after the inherited parent prompt. It is the child's contract:
+// one scoped task, no live user, final message is the product, and no
+// finish-time self-audit ritual (the run loop no longer gates on it for a child
+// — see agentcore.NewDelegatedPolicy — so the prompt must not send the child
+// looking for it either).
+const subagentChildPromptSection = `
+
+## You are a sub-agent
+
+You were spawned by another agent to complete ONE scoped task — the message below is that task, and it is all you get: you cannot see the conversation that produced it, and there is no user reading along or available to answer questions.
+
+- Complete the task with the tools you have, then stop. Do not ask for clarification; if the task is ambiguous, state the assumption you made and continue.
+- Your FINAL MESSAGE is the entire product. The agent that spawned you receives that text and nothing else — not your tool calls, not your intermediate notes — so it must stand alone: the findings, the numbers, the file paths, in full.
+- There is no end-of-run self-audit gate on your run. Do not look for protocols/self-audit.md and do not narrate an audit; the agent that spawned you owns that check. (If a specific tool is gated behind confirm_audit, follow that tool's own instructions.)
+- If something blocks you, say plainly what blocked you and what you did get. A short honest failure is more useful to your parent than a padded guess.
+- Be economical: you are running on a slice of your parent's budget.
 `
 
 // exploreChildPromptSection is appended to an explore child's system prompt so

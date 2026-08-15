@@ -185,7 +185,11 @@ func RunInteractiveTurn(ctx context.Context, tc TurnConfig, obs agentcore.Observ
 	// Same walls as scheduled: depth 1, fan-out 5, 10% remaining, refuse
 	// over-cap, monotonic privilege.
 	if tc.Subagent.Enabled {
-		host := newInteractiveSpawnHost(tc, policy)
+		// obs is the turn's SSE sink: handing it to the host is what lets a
+		// child's steps stream to the browser as subagent.progress events while
+		// it runs, instead of the chip sitting on the spawn arguments until the
+		// child returns (#1043 follow-up).
+		host := newInteractiveSpawnHost(tc, policy, obs)
 		nativeTools = append(append([]fantasy.AgentTool{}, nativeTools...), host.newSpawnSubagentTool())
 	}
 
@@ -241,8 +245,9 @@ func RunInteractiveTurn(ctx context.Context, tc TurnConfig, obs agentcore.Observ
 // the set a child inherits or narrows (childSelection intersects; never
 // widens). Children run with the turn user's DEFAULT MCP accounts; per-server
 // account choices beyond the default are not threaded into children (see
-// docs/SUBAGENTS.md).
-func newInteractiveSpawnHost(tc TurnConfig, policy *agentcore.InteractivePolicy) *Agent {
+// docs/SUBAGENTS.md). obs is the turn's Observer — the host forwards each
+// child's relabeled progress events onto it (nil is fine: no forwarding).
+func newInteractiveSpawnHost(tc TurnConfig, policy *agentcore.InteractivePolicy, obs agentcore.Observer) *Agent {
 	host := NewAgent(Options{
 		Config:           tc.Config,
 		Model:            tc.Model,
@@ -263,6 +268,7 @@ func newInteractiveSpawnHost(tc TurnConfig, policy *agentcore.InteractivePolicy)
 		Subagent:         tc.Subagent,
 	})
 	host.runtimePolicy = policy
+	host.spawnObserver = obs
 	for _, choice := range tc.Selection {
 		if s := strings.TrimSpace(choice.Server); s != "" {
 			host.loadedServers[s] = true

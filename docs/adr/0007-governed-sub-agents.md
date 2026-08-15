@@ -2,7 +2,9 @@
 
 - **Status:** Accepted
 - **Date:** 2026-06-28 (amended 2026-06-30 for #264, 2026-08-14 for #1043:
-  default-on, parent decides, typed children, interactive in scope)
+  default-on, parent decides, typed children, interactive in scope; 2026-08-15
+  for the #1043 follow-up: the child's finish gate is delegated, and child
+  progress streams to the parent)
 - **Deciders:** fleet maintainers
 
 ## Context
@@ -210,6 +212,60 @@ fan-out 5, credentials host-side.
 This ADR **extends** ADR-0001 rather than superseding it: it does not weaken the
 one-governed-loop invariant, it adds the privilege/budget/recursion constraints
 that make a *governed* child safe.
+
+## #1043 follow-up amendment — the child's finish gate, and child progress is visible
+
+Shipping #1043 exposed one wall in the wrong place. A child ran the **root** run's
+finish gate: `checkFinishEnforcement` refused its finish until it had "read
+protocols/self-audit.md … then call `confirm_audit(...)`", and the host-side
+end-of-run **verifier** re-checked its deliverables. Neither belongs to a child.
+The self-audit ritual re-checks the **task contract the operator asked for**, over
+a protocol file a child (especially a chat child) often cannot even read; the
+verifier re-checks the run's deliverables, which the parent's own verifier checks
+again anyway. Measured against a live model, a child asked for a haiku spent
+**85 s and 31k prompt tokens** flailing at the ritual and returned an answer with
+the audit narrated into it; a child that ran out of enforcement rounds mid-ritual
+returned **no answer at all**, which the parent surfaced as
+`[sub-agent produced no final answer]`. Delegation was, in practice, unusable.
+
+Amendment, in two parts:
+
+- **The child's finish gate is delegated, not weaker.** A spawned child runs
+  `agentcore.NewDelegatedPolicy` — the SAME `ScheduledPolicy` (same gate chain,
+  same ceilings, same critical-tool audit gating, same orchestration state the
+  `confirm_audit` tool and usage accounting bind to) with exactly one difference:
+  `checkFinishEnforcement` skips the two **self-audit ritual** blocks. Every other
+  finish gate still applies to a child — task-tracker items, pending critical
+  actions, undischarged commitments — so a child that unlocks a critical action
+  through `confirm_audit` is held to it exactly like a root run, and the tool
+  remains registered for that purpose. The host-side **verifier / phone-a-friend**
+  wrappers are likewise root-run finish gates and no longer wrap a child (phone-a-
+  friend was already off for children). The delegated flag is set by that one
+  constructor and is never model-reachable. The child also receives a short
+  **sub-agent contract** prompt section (both roles) so it stops behaving like the
+  run it was cloned from. Tests: `TestDelegatedPolicy_FinishesWithoutSelfAuditRitual`,
+  `TestDelegatedPolicy_KeepsEveryOtherFinishGate`,
+  `TestDelegatedPolicy_SharesTheScheduledGateChain`,
+  `TestSpawn_ChildAnswersWithoutSelfAuditRitual`, `TestChildRunUsesTheDelegatedPolicy`,
+  `TestChildPromptCarriesTheSubagentContract`, plus the live pair
+  `TestLive_*` (env-gated, real key).
+
+- **A child's steps are visible while it runs.** The child's ordinary run Observer
+  is tee'd into a forwarder that relabels each of its events onto the PARENT's
+  Observer as one `subagent.progress` event (phases: started / tool / tool_result /
+  text / thinking / note / finished), carrying the parent's **tool-call id** so a
+  UI can attach concurrent children to their own chips. No new execution and no
+  second event path: these events already existed. Two related corrections ride
+  along — a scheduled child's RAW events no longer leak unattributed into the
+  parent task's live stream (they arrive relabeled instead), and the spawn result
+  gains `{steps, tools_used}` so an unsuccessful child is still legible after a
+  reload. Text/reasoning previews are coalesced and truncated; the child's full
+  transcript remains behind the existing transcript endpoints.
+
+Walls that did **not** move: one governed core (a child is still
+`(*Agent).Execute` → `agentcore.Run`), monotonic privilege, the hard budget split
+with atomic reserve+settle, depth 1, fan-out 5, credentials host-side, and the
+structural registration gates.
 
 ## Consequences
 

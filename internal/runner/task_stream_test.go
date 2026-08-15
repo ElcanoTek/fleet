@@ -222,6 +222,46 @@ func TestTaskStreamBuffer_ObserveMapsRunEvents(t *testing.T) {
 	}
 }
 
+// TestTaskStreamBuffer_SubagentProgress pins the sub-agent frame (#1043
+// follow-up): a spawned child's relabeled steps reach the task page as their
+// own frame type, carrying the correlation id that attaches them to the spawn
+// entry — and the event name matches agent.SubagentProgressEvent, which this
+// package pins as a literal.
+func TestTaskStreamBuffer_SubagentProgress(t *testing.T) {
+	if subagentProgressEvent != "subagent.progress" {
+		t.Fatalf("subagentProgressEvent = %q; it must mirror agent.SubagentProgressEvent", subagentProgressEvent)
+	}
+	buf := newTaskStreamBuffer()
+	buf.Observe(subagentProgressEvent, map[string]any{
+		"tool_call_id":     "call-9",
+		"child_session_id": "subagent-abc",
+		"role":             "explore",
+		"phase":            "tool",
+		"tool":             "web_fetch",
+		"detail":           "url=https://example.com",
+		"step":             2,
+		"secret_internal":  "must not cross", // only display fields are projected
+	})
+	buf.Finish()
+
+	rw := newSSERecorder()
+	if err := buf.Attach(context.Background(), 0, rw); err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+	body := rw.Body()
+	for _, want := range []string{
+		"event: subagent_progress", `"tool_call_id":"call-9"`, `"child_session_id":"subagent-abc"`,
+		`"phase":"tool"`, `"tool":"web_fetch"`, `"step":2`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("expected %q in stream:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, "must not cross") {
+		t.Errorf("only the projected display fields may reach the browser:\n%s", body)
+	}
+}
+
 // TestTaskStreamRegistry_Lifecycle: register exposes a buffer via Lookup; release
 // seals it (a subsequent Attach returns immediately) but keeps it retained for the
 // replay window so a late joiner still finds it.
