@@ -66,7 +66,6 @@ func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
 			ID:        user.ID,
 			Username:  user.Username,
 			Role:      user.Role,
-			Scopes:    user.Scopes,
 			CreatedAt: user.CreatedAt,
 		},
 	})
@@ -125,7 +124,6 @@ func (h *Handlers) CreateUser(w http.ResponseWriter, r *http.Request) {
 		Username:     req.Username,
 		PasswordHash: string(hash),
 		Role:         req.Role,
-		Scopes:       req.Scopes,
 		CreatedAt:    time.Now().UTC(),
 	}
 
@@ -138,7 +136,6 @@ func (h *Handlers) CreateUser(w http.ResponseWriter, r *http.Request) {
 		ID:        user.ID,
 		Username:  user.Username,
 		Role:      user.Role,
-		Scopes:    user.Scopes,
 		CreatedAt: user.CreatedAt,
 	})
 }

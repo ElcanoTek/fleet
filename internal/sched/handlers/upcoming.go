@@ -91,10 +91,6 @@ func (h *Handlers) GetUpcomingRuns(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 	runs := make([]UpcomingRun, 0, len(tasks))
 	for _, t := range tasks {
-		// Scoped principals only see tasks within their scope.
-		if scopes := p.scopes(); len(scopes) > 0 && !taskVisibleToScopes(t, scopes, p.ownerID()) {
-			continue
-		}
 		runs = append(runs, projectRuns(t, now, horizon)...)
 	}
 	sort.Slice(runs, func(a, b int) bool { return runs[a].NextRun.Before(runs[b].NextRun) })

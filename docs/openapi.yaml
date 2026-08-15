@@ -56,7 +56,7 @@ components:
       type: apiKey
       in: header
       name: X-API-Key
-      description: A scoped (non-admin) API key; access limited to its scopes.
+      description: A non-admin API key; access limited to its permission set.
     bearerToken:
       type: http
       scheme: bearer
@@ -325,7 +325,6 @@ components:
             read. Rejected with 400 when combined with role or type (a typed key
             derives its permissions from its type), or when it names an unknown
             permission.
-        allowed_node_patterns: { type: array, items: { type: string }, description: "Scope patterns limiting the key's task visibility." }
         rate_limit: { type: integer }
         expires_in_days: { type: integer }
         description: { type: string }
@@ -340,7 +339,6 @@ components:
         key_id: { type: string }
         name: { type: string }
         key_prefix: { type: string }
-        allowed_node_patterns: { type: array, items: { type: string } }
         permissions: { type: array, items: { type: string } }
         rate_limit: { type: integer }
         created_at: { type: string, format: date-time }

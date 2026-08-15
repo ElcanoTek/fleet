@@ -167,7 +167,7 @@ func (env *budgetTestEnv) seedKeySpend(t *testing.T, keyID string, costUSD float
 
 func (env *budgetTestEnv) createKey(t *testing.T) (keyID, raw string) {
 	t.Helper()
-	key, raw, err := env.keyMgr.CreateKey("budgeted", nil, []models.Permission{models.PermissionCreateTask}, nil, 0, nil, "")
+	key, raw, err := env.keyMgr.CreateKey("budgeted", []models.Permission{models.PermissionCreateTask}, nil, 0, nil, "")
 	if err != nil {
 		t.Fatalf("CreateKey: %v", err)
 	}

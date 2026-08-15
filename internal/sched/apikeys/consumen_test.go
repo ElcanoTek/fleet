@@ -23,7 +23,7 @@ func TestConsumeN(t *testing.T) {
 	}
 
 	// No per-key cap (RateLimit=0) → ConsumeN is a no-op success.
-	key, raw, err := mgr.CreateKey("nocap", nil, nil, nil, 0, nil, "")
+	key, raw, err := mgr.CreateKey("nocap", nil, nil, 0, nil, "")
 	if err != nil {
 		t.Fatalf("create key: %v", err)
 	}
@@ -33,11 +33,11 @@ func TestConsumeN(t *testing.T) {
 
 	// Capped key (RateLimit=5): ValidateKey charges 1, then ConsumeN(4) reaches
 	// exactly 5. A further ConsumeN(1) must fail (would exceed).
-	capped, rawCapped, err := mgr.CreateKey("capped", nil, nil, nil, 5, nil, "")
+	capped, rawCapped, err := mgr.CreateKey("capped", nil, nil, 5, nil, "")
 	if err != nil {
 		t.Fatalf("create capped key: %v", err)
 	}
-	if _, _, msg := mgr.ValidateKey(rawCapped, nil, nil, nil, nil); !mgr.ConsumeN(capped.KeyID, 4) {
+	if _, _, msg := mgr.ValidateKey(rawCapped, nil, nil, nil); !mgr.ConsumeN(capped.KeyID, 4) {
 		t.Fatalf("ConsumeN(4) after 1 ValidateKey should succeed (1+4=5==cap): %s", msg)
 	}
 	if mgr.ConsumeN(capped.KeyID, 1) {
@@ -71,13 +71,13 @@ func TestConsumeN_RejectsOverBudget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("manager: %v", err)
 	}
-	capped, raw, err := mgr.CreateKey("capped", nil, nil, nil, 5, nil, "")
+	capped, raw, err := mgr.CreateKey("capped", nil, nil, 5, nil, "")
 	if err != nil {
 		t.Fatalf("create key: %v", err)
 	}
 	// ValidateKey charges 1 → remaining = 4. ConsumeN(5) would reach 6 > 5 →
 	// rejected, and the counter must stay at 1 so a subsequent ConsumeN(4) fits.
-	if ok, _, _ := mgr.ValidateKey(raw, nil, nil, nil, nil); !ok {
+	if ok, _, _ := mgr.ValidateKey(raw, nil, nil, nil); !ok {
 		t.Fatal("setup ValidateKey failed")
 	}
 	if mgr.ConsumeN(capped.KeyID, 5) {

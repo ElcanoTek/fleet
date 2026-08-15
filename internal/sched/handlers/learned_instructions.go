@@ -50,7 +50,7 @@ func (h *Handlers) SubmitFeedback(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "Insufficient permissions")
 		return
 	}
-	task, ok := h.taskForRequest(w, r, &p)
+	task, ok := h.taskFromPath(w, r)
 	if !ok {
 		return
 	}
@@ -132,7 +132,7 @@ func (h *Handlers) LearnedInstructions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "Insufficient permissions")
 		return
 	}
-	task, ok := h.taskForRequest(w, r, &p)
+	task, ok := h.taskFromPath(w, r)
 	if !ok {
 		return
 	}
@@ -186,9 +186,10 @@ func (h *Handlers) LearnedInstructions(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// taskForRequest loads the path task and enforces the scoped-principal
-// visibility gate (mirrors the CancelTask/StreamTaskLogs ownership check).
-func (h *Handlers) taskForRequest(w http.ResponseWriter, r *http.Request, p *principal) (*models.Task, bool) {
+// taskFromPath loads the {task_id} path task, writing the 400/404 itself. It is
+// lookup only: a handler that needs an authorization decision makes it on the
+// returned task (permission, ownership, or the creator-scoped gates).
+func (h *Handlers) taskFromPath(w http.ResponseWriter, r *http.Request) (*models.Task, bool) {
 	taskID, err := uuid.Parse(chi.URLParam(r, "task_id"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "Invalid task ID")
@@ -197,10 +198,6 @@ func (h *Handlers) taskForRequest(w http.ResponseWriter, r *http.Request, p *pri
 	task, err := h.storage.GetTask(taskID)
 	if err != nil || task == nil {
 		writeError(w, http.StatusNotFound, "Task not found")
-		return nil, false
-	}
-	if scopes := p.scopes(); len(scopes) > 0 && !taskVisibleToScopes(task, scopes, p.ownerID()) {
-		writeError(w, http.StatusForbidden, "Task not within allowed scopes")
 		return nil, false
 	}
 	return task, true

@@ -19,7 +19,7 @@ import (
 
 func mustCreateTypedKey(t *testing.T, keyMgr *apikeys.Manager, kt apikeys.KeyType, slugs []string) string {
 	t.Helper()
-	_, raw, err := keyMgr.CreateTypedKey("test-"+string(kt), kt, slugs, nil, 0, nil, "")
+	_, raw, err := keyMgr.CreateTypedKey("test-"+string(kt), kt, slugs, 0, nil, "")
 	if err != nil {
 		t.Fatalf("create typed key: %v", err)
 	}

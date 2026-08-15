@@ -509,7 +509,6 @@ type User struct {
 	Username       string     `json:"username"`
 	PasswordHash   string     `json:"-"`
 	Role           string     `json:"role"`
-	Scopes         []string   `json:"scopes"`
 	CreatedAt      time.Time  `json:"created_at"`
 	LastLogin      *time.Time `json:"last_login,omitempty"`
 	SessionToken   *string    `json:"-"`
@@ -518,10 +517,9 @@ type User struct {
 
 // UserCreate represents the request to create a user.
 type UserCreate struct {
-	Username string   `json:"username"`
-	Password string   `json:"password"`
-	Role     string   `json:"role"`
-	Scopes   []string `json:"scopes"`
+	Username string `json:"username"`
+	Password string `json:"password"`
+	Role     string `json:"role"`
 }
 
 // UserLogin represents a login request.
@@ -535,7 +533,6 @@ type UserResponse struct {
 	ID        uuid.UUID `json:"id"`
 	Username  string    `json:"username"`
 	Role      string    `json:"role"`
-	Scopes    []string  `json:"scopes"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
@@ -1965,7 +1962,6 @@ type APIKeyCreate struct {
 	// AllowedTriggerSlugs.
 	Type                string   `json:"type,omitempty"`
 	AllowedTriggerSlugs []string `json:"allowed_trigger_slugs,omitempty"`
-	AllowedNodePatterns []string `json:"allowed_node_patterns"`
 	Role                *string  `json:"role,omitempty"`
 	// Permissions is an explicit permission set for the legacy (role-based)
 	// path, for the grants no role expresses — chiefly view_all_logs, the
@@ -1993,7 +1989,6 @@ type APIKeyResponse struct {
 	KeyPrefix           string     `json:"key_prefix"`
 	Type                string     `json:"type,omitempty"`
 	AllowedTriggerSlugs []string   `json:"allowed_trigger_slugs,omitempty"`
-	AllowedNodePatterns []string   `json:"allowed_node_patterns"`
 	Permissions         []string   `json:"permissions"`
 	RateLimit           int        `json:"rate_limit"`
 	CreatedAt           time.Time  `json:"created_at"`
