@@ -166,6 +166,35 @@ func TestEnsureFreshTokenNeedsReauth(t *testing.T) {
 	if srv.Status != RemoteMCPStatusNeedsReauth {
 		t.Errorf("status = %q, want needs_reauth", srv.Status)
 	}
+	// An unclassified refresh keeps the generic wording.
+	if srv.StatusDetail != "authorization expired — reconnect required" {
+		t.Errorf("detail = %q, want the generic fallback", srv.StatusDetail)
+	}
+}
+
+// A RefreshFunc that classified the failure supplies its own user-facing reason,
+// so the connections UI names the real cause instead of claiming expiry for a
+// client-registration problem.
+func TestEnsureFreshTokenNeedsReauthCarriesDetail(t *testing.T) {
+	s := newTestStoreWithCipher(t)
+	ctx := context.Background()
+	srv, _ := s.CreateRemoteMCPServer(ctx, sampleServerInput("u@x.com"))
+	_ = s.StoreOAuthTokens(ctx, srv, RemoteMCPTokens{AccessToken: "at", RefreshToken: "rt", ExpiresAt: time.Now().Add(10 * time.Second).Unix()})
+
+	const detail = "the authorization server no longer recognizes this client — reconnect required"
+	_, err := s.EnsureFreshToken(ctx, srv, 300, func(context.Context, RemoteMCPTokens) (RefreshResult, error) {
+		return RefreshResult{NeedReauth: true, ReauthDetail: detail}, nil
+	})
+	if !errors.Is(err, ErrRemoteMCPNeedsReauth) {
+		t.Fatalf("err = %v, want ErrRemoteMCPNeedsReauth", err)
+	}
+	srv, _ = s.GetRemoteMCPServer(ctx, "u@x.com", srv.ID)
+	if srv.Status != RemoteMCPStatusNeedsReauth {
+		t.Errorf("status = %q, want needs_reauth", srv.Status)
+	}
+	if srv.StatusDetail != detail {
+		t.Errorf("detail = %q, want %q", srv.StatusDetail, detail)
+	}
 }
 
 func TestEnsureFreshTokenNoExpiryUsable(t *testing.T) {

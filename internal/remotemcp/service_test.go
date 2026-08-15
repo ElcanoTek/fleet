@@ -159,6 +159,9 @@ func (f *fakeStore) EnsureFreshToken(ctx context.Context, srv *store.RemoteMCPSe
 	if res.NeedReauth {
 		if s := f.servers[srv.ID]; s != nil {
 			s.Status = store.RemoteMCPStatusNeedsReauth
+			if res.ReauthDetail != "" {
+				s.StatusDetail = res.ReauthDetail
+			}
 		}
 		return "", store.ErrRemoteMCPNeedsReauth
 	}
@@ -308,9 +311,21 @@ func oauthTestServer(t *testing.T, refreshBehavior string) *httptest.Server {
 		case "authorization_code":
 			_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "at-init", "refresh_token": "rt-init", "token_type": "Bearer", "expires_in": 1})
 		case "refresh_token":
-			if refreshBehavior == "invalid_grant" {
+			switch refreshBehavior {
+			case "rotate":
+			case "narrow_scope":
+				// Models an AS that GRANTED less than fleet requested: asking to
+				// refresh the wider requested scope is refused, omitting scope
+				// (RFC 6749 §6: "identical to the scope originally granted") works.
+				if r.Form.Get("scope") != "" {
+					w.WriteHeader(http.StatusBadRequest)
+					_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid_scope"})
+					return
+				}
+			default:
+				// Any other behavior is an RFC 6749 §5.2 error code to emit.
 				w.WriteHeader(http.StatusBadRequest)
-				_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid_grant"})
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": refreshBehavior})
 				return
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "at-refreshed", "refresh_token": "rt-rotated", "token_type": "Bearer", "expires_in": 3600})
@@ -827,5 +842,102 @@ func TestAddServerAPIKeyQueryParam(t *testing.T) {
 	}
 	if sawHeaderKey {
 		t.Error("the key leaked into a request header")
+	}
+}
+
+// connectAndStale drives Add → Authorize → Complete against the fake AS and
+// waits out the 1s access token, leaving the server one AcquireToken away from a
+// refresh. Returns the reloaded server row.
+func connectAndStale(t *testing.T, svc *Service, fs *fakeStore, srv *httptest.Server) *store.RemoteMCPServer {
+	t.Helper()
+	ctx := context.Background()
+	server, _, err := svc.AddServer(ctx, AddServerInput{Email: "u@x.com", Name: "acme", URL: srv.URL + "/mcp"})
+	if err != nil {
+		t.Fatalf("AddServer: %v", err)
+	}
+	if _, err := svc.Authorize(ctx, "u@x.com", server.ID); err != nil {
+		t.Fatalf("Authorize: %v", err)
+	}
+	var state string
+	for k := range fs.flows {
+		state = k
+	}
+	if _, err := svc.Complete(ctx, "u@x.com", state, "c"); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	time.Sleep(1100 * time.Millisecond) // let the 1s access token go stale
+	server, _ = svc.store.GetRemoteMCPServer(ctx, "u@x.com", server.ID)
+	return server
+}
+
+// invalid_client on refresh means the authorization server no longer recognizes
+// our client registration. Re-issuing the same refresh can never succeed, so the
+// connection must land in needs_reauth — where the UI offers a reconnect that
+// re-runs registration — instead of returning the same opaque error on every run
+// forever.
+func TestServiceAcquireTokenInvalidClientNeedsReauth(t *testing.T) {
+	fs := newFakeStore()
+	srv := oauthTestServer(t, "invalid_client")
+	svc := newTestService(t, fs, srv)
+	ctx := context.Background()
+
+	server := connectAndStale(t, svc, fs, srv)
+	if _, err := svc.AcquireToken(ctx, server); !errors.Is(err, store.ErrRemoteMCPNeedsReauth) {
+		t.Fatalf("AcquireToken = %v, want ErrRemoteMCPNeedsReauth", err)
+	}
+	server, _ = svc.store.GetRemoteMCPServer(ctx, "u@x.com", server.ID)
+	if server.Status != store.RemoteMCPStatusNeedsReauth {
+		t.Errorf("status = %q, want needs_reauth", server.Status)
+	}
+	// The reason names the client, not a made-up expiry.
+	if !strings.Contains(server.StatusDetail, "no longer recognizes this client") {
+		t.Errorf("status detail = %q, want it to name the client registration", server.StatusDetail)
+	}
+}
+
+// A 5xx at the token endpoint is transient: the connection must stay connected
+// and be retried, NOT be pushed into needs_reauth (which would make a blip cost
+// the user a manual reconnect).
+func TestServiceAcquireTokenTransientErrorKeepsConnection(t *testing.T) {
+	fs := newFakeStore()
+	srv := oauthTestServer(t, "temporarily_unavailable")
+	svc := newTestService(t, fs, srv)
+	ctx := context.Background()
+
+	server := connectAndStale(t, svc, fs, srv)
+	if _, err := svc.AcquireToken(ctx, server); err == nil {
+		t.Fatal("expected a transient refresh error")
+	} else if errors.Is(err, store.ErrRemoteMCPNeedsReauth) {
+		t.Fatalf("transient failure was treated as terminal: %v", err)
+	}
+	server, _ = svc.store.GetRemoteMCPServer(ctx, "u@x.com", server.ID)
+	if server.Status == store.RemoteMCPStatusNeedsReauth {
+		t.Error("a transient refresh failure must not force a reconnect")
+	}
+}
+
+// End-to-end for the scope fallback: an AS that granted a narrower scope than
+// fleet requested refuses a refresh carrying the requested scope. Refresh drops
+// the parameter and retries, so the connection keeps working instead of wedging.
+func TestServiceAcquireTokenRecoversFromNarrowedScope(t *testing.T) {
+	fs := newFakeStore()
+	srv := oauthTestServer(t, "narrow_scope")
+	svc := newTestService(t, fs, srv)
+	ctx := context.Background()
+
+	server := connectAndStale(t, svc, fs, srv)
+	if server.Scopes == "" {
+		t.Fatal("fixture precondition: server has no requested scopes, so the fallback is untested")
+	}
+	bearer, err := svc.AcquireToken(ctx, server)
+	if err != nil {
+		t.Fatalf("AcquireToken: %v", err)
+	}
+	if bearer != "at-refreshed" {
+		t.Errorf("bearer = %q, want at-refreshed", bearer)
+	}
+	server, _ = svc.store.GetRemoteMCPServer(ctx, "u@x.com", server.ID)
+	if server.Status == store.RemoteMCPStatusNeedsReauth {
+		t.Error("a recoverable narrowed scope must not force a reconnect")
 	}
 }

@@ -17,6 +17,33 @@ prior versions are listed because none have shipped.
 
 ## [Unreleased]
 
+### Fixed
+
+- **OAuth-connected remote MCP servers could wedge permanently on token
+  refresh.** Only `invalid_grant` was treated as terminal; every other
+  token-endpoint error was classified transient, so a connection whose *client
+  registration* the authorization server had dropped (`invalid_client`) or that
+  was barred from the refresh grant (`unauthorized_client`) failed identically on
+  every run, forever, with no path to recovery — the connection stayed "connected"
+  and the UI never offered a reconnect. These are now terminal
+  (`mcpoauth.IsTerminalRefreshError`): the connection is marked `needs_reauth`,
+  and reconnecting re-runs dynamic client registration through the normal connect
+  flow. Network failures and 5xx stay transient, so a blip still costs nobody a
+  manual reconnect.
+- **A narrowed OAuth scope grant wedged refresh the same way.** fleet stores the
+  scopes it *requested* at connect time and sent them on every refresh, but an
+  authorization server may grant a narrower set — and RFC 6749 §6 forbids
+  refreshing a wider scope than was granted. The result was a permanent
+  `invalid_scope`. `FlowConfig.Refresh` now retries once without the `scope`
+  parameter, whose omission §6 defines as "identical to the scope originally
+  granted" (mirroring the existing `invalid_target` → retry-without-`resource`
+  fallback). The retry fires at most once and only when scopes are configured.
+- **A needs-reauth connection claimed the authorization had "expired" whatever
+  the cause.** `store.RefreshResult` carries an optional `ReauthDetail` that the
+  connections UI renders, so a dropped client registration now says so. The
+  authorization server's own `error_description` is deliberately never echoed —
+  it is attacker-influenced free text from a user-supplied server.
+
 ### Removed
 
 - **Node-name scopes (ADR-0045).** Every principal carried a list of glob

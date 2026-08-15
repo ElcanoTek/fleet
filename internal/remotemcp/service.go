@@ -514,8 +514,17 @@ func (s *Service) refreshFunc(fc mcpoauth.FlowConfig) store.RefreshFunc {
 		defer cancel()
 		tok, err := fc.Refresh(rctx, s.httpClient, current.RefreshToken)
 		if err != nil {
-			if mcpoauth.IsInvalidGrant(err) {
-				return store.RefreshResult{NeedReauth: true}, nil
+			// Terminal failures condemn the stored grant or client registration:
+			// re-issuing the same refresh can never succeed, so hand the
+			// connection back to the user as needs-reauth (reconnecting re-runs
+			// registration through the normal connect flow) instead of returning
+			// the same opaque error on every run forever. Everything else —
+			// network, 5xx — stays transient and is retried on the next call.
+			if mcpoauth.IsTerminalRefreshError(err) {
+				return store.RefreshResult{
+					NeedReauth:   true,
+					ReauthDetail: mcpoauth.ReauthDetail(err),
+				}, nil
 			}
 			return store.RefreshResult{}, err
 		}

@@ -348,6 +348,25 @@ How the invariants hold:
   row lock with a post-lock expiry re-check, persisting any rotated (single-use)
   refresh token in the same transaction. A dead refresh token marks the
   connection `needs_reauth` and the server is skipped — the run still completes.
+- **Refresh failures are classified, not lumped together.** The split decides
+  whether the user is asked to do something, so it errs toward *not* bothering
+  them (`mcpoauth.IsTerminalRefreshError`):
+  - **Terminal** — `invalid_grant` (refresh token revoked/expired/already
+    rotated), `invalid_client` (the AS no longer recognizes our client
+    credentials), `unauthorized_client` (this client may not use the
+    refresh grant). Re-issuing the same request can never succeed, so the
+    connection is marked `needs_reauth` with a reason naming the actual cause
+    (`mcpoauth.ReauthDetail`, rendered in Settings → Connections) and the user
+    reconnects — which re-runs DCR through the normal connect flow.
+  - **Recoverable in place** — `invalid_target` retries without the RFC 8707
+    `resource` parameter; `invalid_scope` retries once **without `scope`**.
+    fleet stores the scopes it *requested* at connect time, and an AS may grant
+    a narrower set; RFC 6749 §6 forbids refreshing a wider scope than was
+    granted and defines an omitted `scope` as "identical to the scope originally
+    granted". Without that retry a narrowed grant wedges the connection forever.
+  - **Transient** — network failures and 5xx. The transaction rolls back and the
+    next call retries; the connection is left connected, so a blip never costs
+    the user a manual reconnect.
 
 Scheduled tasks resolve the **task owner's email** (the orchestrator username)
 to look up that user's connected servers, so a headless run reaches them with no
