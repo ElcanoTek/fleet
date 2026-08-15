@@ -147,20 +147,3 @@ func MigrationStatus(ctx context.Context, conn *sql.DB) (MigrationReport, error)
 	}
 	return report, nil
 }
-
-// GetMigrationVersion returns the current migration version.
-func GetMigrationVersion(conn *sql.DB) (uint, bool, error) {
-	source, err := iofs.New(migrationsFS, "migrations")
-	if err != nil {
-		return 0, false, fmt.Errorf("failed to create migration source: %w", err)
-	}
-	driver, err := postgres.WithInstance(conn, &postgres.Config{})
-	if err != nil {
-		return 0, false, fmt.Errorf("failed to create migration driver: %w", err)
-	}
-	m, err := migrate.NewWithInstance("iofs", source, "postgres", driver)
-	if err != nil {
-		return 0, false, fmt.Errorf("failed to create migrate instance: %w", err)
-	}
-	return m.Version()
-}

@@ -129,9 +129,6 @@ type Handlers struct {
 	// Prometheus surface is deferred to the metrics issue (#176).
 	taskRLCounter *rateLimitCounter
 
-	// Cache for file checksums to avoid repeated disk I/O
-	checksumCache *checksumCache
-
 	// Cache for dashboard stats
 	statsCache *statsCache
 
@@ -308,44 +305,6 @@ func (c *statsCache) Set(key string, stats *models.DashboardStats, ttl time.Dura
 	}
 }
 
-// checksumCache caches file checksums to avoid repeated disk I/O.
-type checksumCache struct {
-	mu    sync.RWMutex
-	store map[string]string
-}
-
-func newChecksumCache() *checksumCache {
-	return &checksumCache{
-		store: make(map[string]string),
-	}
-}
-
-func (c *checksumCache) Get(filename string) (string, bool) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	val, ok := c.store[filename]
-	return val, ok
-}
-
-func (c *checksumCache) Set(filename, checksum string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.store[filename] = checksum
-}
-
-func (c *checksumCache) Delete(filename string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	delete(c.store, filename)
-}
-
-// Clear removes all entries from the cache.
-func (c *checksumCache) Clear() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.store = make(map[string]string)
-}
-
 // rateLimiter provides simple per-IP rate limiting.
 type rateLimiter struct {
 	mu       sync.Mutex
@@ -441,7 +400,6 @@ func New(cfg Config, store *storage.Storage, keyMgr *apikeys.Manager) *Handlers 
 		taskKeyRL:        ratelimit.New(cfg.SchedRateLimitPerMinute, cfg.SchedRateLimitPerDay),
 		taskGlobalRL:     ratelimit.New(cfg.SchedGlobalRateLimitPerMinute, 0),
 		taskRLCounter:    newRateLimitCounter(),
-		checksumCache:    newChecksumCache(),
 		statsCache:       newStatsCache(),
 	}
 }

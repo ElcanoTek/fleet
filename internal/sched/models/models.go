@@ -29,16 +29,6 @@ func HashToken(token string) string {
 	return hex.EncodeToString(hash[:])
 }
 
-// HashTokenIfNeeded returns the token if it's already a SHA-256 hash, otherwise hashes it.
-func HashTokenIfNeeded(token string) string {
-	if len(token) == 64 {
-		if _, err := hex.DecodeString(token); err == nil {
-			return token
-		}
-	}
-	return HashToken(token)
-}
-
 // MCPChoice names one chosen MCP server and its credential account for a task.
 // Account=="" means the default/shared seat. This mirrors
 // agentcore.MCPChoice byte-for-byte at the JSON level so a task's selection

@@ -25,7 +25,6 @@ import (
 	"context"
 	"errors"
 	"log"
-	"reflect"
 	"time"
 
 	"github.com/getsentry/sentry-go"
@@ -122,16 +121,6 @@ func CaptureException(ctx context.Context, err error, scope func(*sentry.Scope))
 	})
 }
 
-// CapturePanic classifies a recovered panic without formatting it, then ships
-// only that class to Sentry. Calling Error or String here could persist a
-// credential-bearing panic value before BeforeSend has a chance to scrub it.
-func CapturePanic(ctx context.Context, val any, scope func(*sentry.Scope)) {
-	if val == nil {
-		return
-	}
-	CapturePanicClass(ctx, panicClass(val), scope)
-}
-
 // CapturePanicClass ships a pre-classified panic without accepting diagnostic
 // content. Unknown values collapse to "unknown" so callers cannot accidentally
 // pass a recovered message through the class argument.
@@ -150,16 +139,6 @@ func CapturePanicClassWithTags(ctx context.Context, class string, tags map[strin
 			}
 		}
 	})
-}
-
-func panicClass(val any) string {
-	if val == nil {
-		return "nil"
-	}
-	if _, ok := val.(error); ok {
-		return "error"
-	}
-	return reflect.TypeOf(val).Kind().String()
 }
 
 func normalizedPanicClass(class string) string {
