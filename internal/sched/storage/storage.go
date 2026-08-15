@@ -15,7 +15,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -1603,23 +1602,6 @@ func (s *Storage) RecordSkip(ctx context.Context, taskID uuid.UUID, reason strin
 		return nil, false, err
 	}
 	return task, recorded, nil
-}
-
-// Global storage instance
-var globalStorage *Storage
-
-// GetStorage returns the global storage instance.
-func GetStorage() *Storage {
-	if globalStorage == nil {
-		globalStorage = New()
-	}
-	return globalStorage
-}
-
-// InitGlobalStorage initializes the global storage.
-func InitGlobalStorage(dataDir string) error {
-	globalStorage = New()
-	return globalStorage.Initialize(filepath.Join(dataDir, "orchestrator.db"), db.DefaultPoolConfig())
 }
 
 // Eval & regression harness (#502)

@@ -260,11 +260,6 @@ func (h *Handlers) HandleDownload(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) CleanupTempFiles(maxAge time.Duration) {
 	tempDir := filepath.Join(h.config.DataDir, "temp_uploads")
 
-	// Safety: clear the checksum cache periodically to prevent any possibility of memory leaks
-	// or stale entries accumulating over long periods (since files are temp anyway).
-	// This is a simple and effective strategy since checksums are cheap to re-read from sidecar files.
-	h.checksumCache.Clear()
-
 	err := filepath.Walk(tempDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			// Log but continue walking - we want to clean up as many files as possible
