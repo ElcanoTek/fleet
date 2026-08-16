@@ -21,14 +21,34 @@ const (
 	apiKeyContextKey = contextKey("apiKey")
 )
 
-// AdminAuthMiddleware requires the X-API-Key header to match the configured Admin API Key.
+// AdminAuthMiddleware guards the admin-only route group (/keys, /users,
+// /metrics, /admin/*, …). It accepts the bootstrap ADMIN_API_KEY or a
+// hash-verified typed admin key (fleet_admin_…, #1081) — the admin type
+// carries PermissionAdmin and exists for exactly these routes, so rejecting
+// it here left a key type that could not do the thing its name claims. The
+// gate stays type-based and does NOT widen to the other classes: a valid key
+// of any other type (task/readonly/webhook/legacy) is a definitive 403,
+// mirroring AdminOrUserAuthMiddleware's under-scope verdict, and an unknown
+// or absent key stays 401.
 func (h *Handlers) AdminAuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !h.verifyAdminKey(r) {
-			writeError(w, http.StatusUnauthorized, "Invalid API key")
+		if h.verifyAdminKey(r) {
+			next.ServeHTTP(w, r)
 			return
 		}
-		next.ServeHTTP(w, r)
+		if apiKey := r.Header.Get("X-API-Key"); apiKey != "" {
+			valid, key, _ := h.apiKeys.ValidateKey(apiKey, nil, nil, nil)
+			if valid && key != nil {
+				if key.Type == apikeys.KeyTypeAdmin {
+					ctx := context.WithValue(r.Context(), apiKeyContextKey, key)
+					next.ServeHTTP(w, r.WithContext(ctx))
+					return
+				}
+				writeError(w, http.StatusForbidden, "insufficient key scope for this route")
+				return
+			}
+		}
+		writeError(w, http.StatusUnauthorized, "Invalid API key")
 	})
 }
 
