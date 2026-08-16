@@ -19,6 +19,14 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **`FLEET_LOCKDOWN_ONLY` and `FLEET_LOCKDOWN_ALLOWED_MODELS` were silent
+  no-ops** — the lockdown knobs were the last bare `CHAT_`-only reads, so an
+  operator following the documented `FLEET_` prefix convention got an unsealed
+  instance while believing lockdown was on. Both knobs now resolve through the
+  standard `FLEET_` → `CHAT_` → `CUTLASS_` alias chain and the `FLEET_`
+  spellings are on the env-file allowlist; the `CHAT_` spellings keep working,
+  so existing deployments stay sealed. (#1080)
+
 - **The project home's chat list and Sources panel, and the rail's
   move-to-project flow, were dead in real deployments — their Next.js proxy
   routes were never created.** The Go handlers (`GET

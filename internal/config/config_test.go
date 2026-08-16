@@ -618,6 +618,79 @@ func TestLoad_LockdownAllowedModelsEnvOverride(t *testing.T) {
 	}
 }
 
+// TestLoad_LockdownEnvSpellings pins that both lockdown knobs resolve through
+// the FLEET_ → CHAT_ → CUTLASS_ alias chain (#1080): the canonical spelling
+// must seal turns, and the legacy spellings must keep existing deploys sealed.
+func TestLoad_LockdownEnvSpellings(t *testing.T) {
+	for _, prefix := range []string{"FLEET_", "CHAT_", "CUTLASS_"} {
+		t.Run(prefix, func(t *testing.T) {
+			isolateEnv(t)
+			t.Setenv(prefix+"LOCKDOWN_ONLY", "true")
+			t.Setenv(prefix+"LOCKDOWN_ALLOWED_MODELS", "foo/bar,baz/quux")
+			t.Setenv("FLEET_SANDBOX_IMAGE", "ghcr.io/example/sandbox:test")
+			cfg, err := Load("")
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if !cfg.LockdownOnly {
+				t.Errorf("%sLOCKDOWN_ONLY=true did not set LockdownOnly", prefix)
+			}
+			want := []string{"foo/bar", "baz/quux"}
+			if !slices.Equal(cfg.LockdownAllowedModels, want) {
+				t.Errorf("LockdownAllowedModels = %v, want %v", cfg.LockdownAllowedModels, want)
+			}
+		})
+	}
+}
+
+// TestLoad_LockdownFleetSpellingWins pins alias precedence: when both the
+// canonical and a legacy spelling are set, FLEET_ wins.
+func TestLoad_LockdownFleetSpellingWins(t *testing.T) {
+	isolateEnv(t)
+	t.Setenv("FLEET_LOCKDOWN_ONLY", "true")
+	t.Setenv("CHAT_LOCKDOWN_ONLY", "false")
+	t.Setenv("FLEET_LOCKDOWN_ALLOWED_MODELS", "fleet/model")
+	t.Setenv("CHAT_LOCKDOWN_ALLOWED_MODELS", "chat/model")
+	t.Setenv("FLEET_SANDBOX_IMAGE", "ghcr.io/example/sandbox:test")
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.LockdownOnly {
+		t.Error("FLEET_LOCKDOWN_ONLY=true should beat CHAT_LOCKDOWN_ONLY=false")
+	}
+	if want := []string{"fleet/model"}; !slices.Equal(cfg.LockdownAllowedModels, want) {
+		t.Errorf("LockdownAllowedModels = %v, want %v", cfg.LockdownAllowedModels, want)
+	}
+}
+
+// TestLoad_LockdownFleetNamesSurviveEnvFile pins that the FLEET_ lockdown
+// spellings are on the env-file allowlist: an operator setting them in a .env
+// file (not the process env) still gets a sealed instance.
+func TestLoad_LockdownFleetNamesSurviveEnvFile(t *testing.T) {
+	isolateEnv(t)
+	dir := t.TempDir()
+	chdir(t, dir)
+
+	envFile := filepath.Join(dir, ".env.local")
+	_ = os.WriteFile(envFile, []byte(
+		`FLEET_LOCKDOWN_ONLY="true"`+"\n"+
+			`FLEET_LOCKDOWN_ALLOWED_MODELS="foo/bar"`+"\n"+
+			`FLEET_SANDBOX_IMAGE="ghcr.io/example/sandbox:test"`+"\n",
+	), 0o600)
+
+	cfg, err := Load(envFile)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.LockdownOnly {
+		t.Error("FLEET_LOCKDOWN_ONLY from the env file should set LockdownOnly")
+	}
+	if want := []string{"foo/bar"}; !slices.Equal(cfg.LockdownAllowedModels, want) {
+		t.Errorf("LockdownAllowedModels = %v, want %v", cfg.LockdownAllowedModels, want)
+	}
+}
+
 // ──────────────────────────────────────────────────────────────────────────
 // Scheduled (cutlass) config suite — ported; colliding names disambiguated.
 // ──────────────────────────────────────────────────────────────────────────
