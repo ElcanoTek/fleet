@@ -1093,6 +1093,21 @@ func (h *Handlers) ListTasks(w http.ResponseWriter, r *http.Request) {
 	var filter db.TaskFilter
 	hasFilters := false
 
+	// Own-rows visibility (#1082): a principal without the fleet-wide grant
+	// (admin / view_all_logs) lists only tasks it created — filtered in SQL so
+	// pagination totals stay correct. Layered UNDER the caller's filters: a
+	// created_by=<someone else> query from a scoped principal ANDs to nothing
+	// rather than widening.
+	if !p.fleetWideTaskVisibility() {
+		switch {
+		case p.user != nil:
+			filter.VisibleToUserID = &p.user.ID
+		case p.apiKey != nil:
+			filter.VisibleToKeyID = &p.apiKey.KeyID
+		}
+		hasFilters = true
+	}
+
 	if status := r.URL.Query().Get("status"); status != "" {
 		filter.Status = &status
 		hasFilters = true
@@ -1219,6 +1234,14 @@ func (h *Handlers) GetTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Own-rows visibility (#1082). 403 after load, mirroring logReadableTask:
+	// task ids are unguessable UUIDs, and the list endpoint no longer exposes
+	// other principals' ids to scope an oracle against.
+	if !taskVisibleToPrincipal(p, task) {
+		writeError(w, http.StatusForbidden, "Tasks are private to their creator")
+		return
+	}
+
 	// Populate CreatedByUsername for display
 	if err := h.populateCreatedByUsernames(r.Context(), []*models.Task{task}); err != nil {
 		log.Printf("Warning: failed to populate creator username: %v", err)
@@ -1266,6 +1289,13 @@ func (h *Handlers) GetTaskOutput(w http.ResponseWriter, r *http.Request) {
 	task, err := h.storage.GetTask(taskID)
 	if err != nil || task == nil {
 		writeError(w, http.StatusNotFound, "Task not found")
+		return
+	}
+
+	// Own-rows visibility (#1082): the structured result is at least as
+	// sensitive as the task row itself.
+	if !taskVisibleToPrincipal(p, task) {
+		writeError(w, http.StatusForbidden, "Tasks are private to their creator")
 		return
 	}
 
@@ -1339,6 +1369,12 @@ func (h *Handlers) GetTaskErrorAnalysis(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Own-rows visibility (#1082): the diagnosis quotes the failed run.
+	if !taskVisibleToPrincipal(p, task) {
+		writeError(w, http.StatusForbidden, "Tasks are private to their creator")
+		return
+	}
+
 	if len(task.ErrorAnalysis) == 0 {
 		// Distinguish "not ready yet" (still running — analysis only runs on a
 		// terminal failure, and then asynchronously) from "never will be" (terminal,
@@ -1387,11 +1423,12 @@ func (h *Handlers) GetTaskArtifacts(w http.ResponseWriter, r *http.Request) {
 
 	// The manifest is the directory index of the creator-private per-run workspace
 	// (#287) — paths plus agent-authored descriptions — so it is gated with the
-	// SAME creator-only ownership check as the workspace file endpoints, NOT the
-	// permissive task-visibility scope check the /output and /error-analysis
-	// siblings use. Otherwise it would leak another user's workspace file metadata
-	// under a looser gate than the bytes it indexes (which taskWorkspaceOwned
-	// already restricts to admin/creator).
+	// SAME creator-only ownership check as the workspace file endpoints. It stays
+	// STRICTER than the taskVisibleToPrincipal check the /output and
+	// /error-analysis siblings use (#1082): the view_all_logs auditor grant opens
+	// transcripts and task rows, not workspace bytes, and the manifest must not
+	// leak file metadata under a looser gate than the bytes it indexes (which
+	// taskWorkspaceOwned already restricts to admin/creator).
 	if !taskWorkspaceOwned(p, task) {
 		writeError(w, http.StatusForbidden, "Artifacts are private to the task creator")
 		return
@@ -1922,6 +1959,12 @@ func (h *Handlers) rerunOrClone(w http.ResponseWriter, r *http.Request, keepRecu
 	source, err := h.storage.GetTask(taskID)
 	if err != nil || source == nil {
 		writeError(w, http.StatusNotFound, "Task not found")
+		return
+	}
+	// Own-rows visibility (#1082): the copy inherits the source's prompt and
+	// config, so re-running/cloning a task you cannot see would read it.
+	if !taskVisibleToPrincipal(p, source) {
+		writeError(w, http.StatusForbidden, "Tasks are private to their creator")
 		return
 	}
 	// The body is optional; only decode when present (rerun-with-no-changes sends none).

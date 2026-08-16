@@ -19,6 +19,19 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **A typed task key (`fleet_task_…`) could read every task in the fleet.**
+  The type is sold as scoped — one key per automation — but every task-read
+  surface authorized on `view_tasks` alone, so any such key (and any non-admin
+  user) could enumerate and read every task's row, structured output, error
+  analysis, export bundle, and upcoming-runs projection (prompts included).
+  Task-row visibility now mirrors the run-log model (#980): a principal sees
+  its own tasks (`created_by` / `created_by_key_id`) unless it holds a
+  fleet-wide grant — the bootstrap `ADMIN_API_KEY`, `PermissionAdmin` carriers
+  (typed admin keys, admin-role users), or the explicit `view_all_logs`
+  auditor permission. The list filter runs in SQL so pagination totals stay
+  honest, and a caller-supplied `created_by` can only narrow further, never
+  widen. (#1082)
+
 - **Typed admin keys (`fleet_admin_…`) were rejected on the only routes that
   need them** — you could mint an `admin`-type key carrying `PermissionAdmin`,
   but `AdminAuthMiddleware` (`/keys`, `/users`, `/metrics`, `/admin/*`) only
