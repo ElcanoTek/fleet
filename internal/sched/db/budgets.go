@@ -99,18 +99,17 @@ func (db *Database) ListBudgets(ctx context.Context) ([]models.Budget, error) {
 }
 
 // BudgetsFor returns every budget matching the principals one create carries:
-// user (sched username), key (scoped API key id), project (chat project id).
+// user (sched username), key (scoped API key id).
 // Empty arguments never match — the predicate requires a non-empty parameter
 // per scope, so a create path lacking a principal can't accidentally match a
 // budget whose principal_id is empty.
-func (db *Database) BudgetsFor(ctx context.Context, user, key, project string) ([]models.Budget, error) {
+func (db *Database) BudgetsFor(ctx context.Context, user, key string) ([]models.Budget, error) {
 	rows, err := db.conn.QueryContext(ctx, `
 		SELECT `+budgetColumns+` FROM budgets
 		WHERE (scope = 'user'    AND $1 <> '' AND principal_id = $1)
 		   OR (scope = 'key'     AND $2 <> '' AND principal_id = $2)
-		   OR (scope = 'project' AND $3 <> '' AND principal_id = $3)
 		ORDER BY scope, time_window`,
-		user, key, project)
+		user, key)
 	if err != nil {
 		return nil, err
 	}

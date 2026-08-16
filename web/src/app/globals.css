@@ -94,7 +94,7 @@
   /* Per-status badge triplets (fg on tinted bg with a matching border),
      ported from the MOC dashboard / flag design system so the Operations
      Center task lifecycle reads at a glance by hue: gray=pending,
-     amber=scheduled, cyan=running, violet=analyzing/proposed, green=success,
+     amber=scheduled, cyan=running, violet=proposed, green=success,
      red=error, orange=dead-lettered/warning, slate=cancelled. Redefined in
      the light-theme block below. */
   --color-status-pending-fg: #d3dde6;
@@ -112,9 +112,9 @@
   --color-status-running-fg: #c9f0ff;
   --color-status-running-bg: rgba(47, 183, 220, 0.22);
   --color-status-running-border: rgba(47, 183, 220, 0.62);
-  --color-status-analyzing-fg: #d6ddff;
-  --color-status-analyzing-bg: rgba(124, 107, 255, 0.22);
-  --color-status-analyzing-border: rgba(124, 107, 255, 0.62);
+  --color-status-proposed-fg: #d6ddff;
+  --color-status-proposed-bg: rgba(124, 107, 255, 0.22);
+  --color-status-proposed-border: rgba(124, 107, 255, 0.62);
   --color-status-success-fg: #cbfdd8;
   --color-status-success-bg: rgba(80, 250, 123, 0.14);
   --color-status-success-border: rgba(80, 250, 123, 0.6);
@@ -422,9 +422,9 @@
   --color-status-running-fg: #0f5e78;
   --color-status-running-bg: rgba(47, 183, 220, 0.22);
   --color-status-running-border: rgba(47, 183, 220, 0.46);
-  --color-status-analyzing-fg: #3b3391;
-  --color-status-analyzing-bg: rgba(124, 107, 255, 0.2);
-  --color-status-analyzing-border: rgba(124, 107, 255, 0.44);
+  --color-status-proposed-fg: #3b3391;
+  --color-status-proposed-bg: rgba(124, 107, 255, 0.2);
+  --color-status-proposed-border: rgba(124, 107, 255, 0.44);
   --color-status-success-fg: #1c5a33;
   --color-status-success-bg: rgba(80, 250, 123, 0.16);
   --color-status-success-border: rgba(80, 250, 123, 0.42);
@@ -1944,11 +1944,10 @@ tr.clickable:hover td {
   background: var(--color-status-running-bg);
   border-color: var(--color-status-running-border);
 }
-.status-analyzing,
 .status-proposed {
-  color: var(--color-status-analyzing-fg);
-  background: var(--color-status-analyzing-bg);
-  border-color: var(--color-status-analyzing-border);
+  color: var(--color-status-proposed-fg);
+  background: var(--color-status-proposed-bg);
+  border-color: var(--color-status-proposed-border);
 }
 .status-scheduled {
   color: var(--color-status-scheduled-fg);

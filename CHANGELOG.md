@@ -19,6 +19,36 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **`download_url`, `generate_image`, and `xlsx_workbook` no longer touch the
+  host filesystem.** #784 moved `view`/`write`/`edit_file` into the sandbox
+  FileOp seam but left these three as documented host-staging leftovers:
+  `download_url` wrote fetched bytes with host `os` calls, `generate_image`
+  read reference images and wrote provider output host-side, and `xlsx` did a
+  host zip read/rewrite. All three are now bound to the per-turn sandbox and
+  move every file byte through `Sandbox.RunFileOp` (reads enforce size caps
+  against true file size; writes are atomic and create parents in-sandbox;
+  download_url's collision probe is a sandboxed 1-byte read instead of host
+  `os.Stat`). Their network halves stay host-side by design — the ADR-0036
+  brokered-fetch class (SSRF guard + `fleet-download://` handle resolution for
+  `download_url`, `OPENROUTER_API_KEY` for `generate_image`) — so no
+  credential enters the sandbox. A nil sandbox fails closed: there is no
+  host-execution fallback, and the schema-only `DefaultTools` bindings error
+  if ever invoked. The reserved, unused `xlsx.Values` field is deleted.
+  ADR-0036's host-exception classes are narrowed accordingly. (#1083)
+
+- **A typed task key (`fleet_task_…`) could read every task in the fleet.**
+  The type is sold as scoped — one key per automation — but every task-read
+  surface authorized on `view_tasks` alone, so any such key (and any non-admin
+  user) could enumerate and read every task's row, structured output, error
+  analysis, export bundle, and upcoming-runs projection (prompts included).
+  Task-row visibility now mirrors the run-log model (#980): a principal sees
+  its own tasks (`created_by` / `created_by_key_id`) unless it holds a
+  fleet-wide grant — the bootstrap `ADMIN_API_KEY`, `PermissionAdmin` carriers
+  (typed admin keys, admin-role users), or the explicit `view_all_logs`
+  auditor permission. The list filter runs in SQL so pagination totals stay
+  honest, and a caller-supplied `created_by` can only narrow further, never
+  widen. (#1082)
+
 - **Typed admin keys (`fleet_admin_…`) were rejected on the only routes that
   need them** — you could mint an `admin`-type key carrying `PermissionAdmin`,
   but `AdminAuthMiddleware` (`/keys`, `/users`, `/metrics`, `/admin/*`) only
@@ -104,6 +134,35 @@ prior versions are listed because none have shipped.
   it is attacker-influenced free text from a user-supplied server.
 
 ### Removed
+
+- **`GET /search?type=tasks` no longer answers 200 with a lying empty set.**
+  The `tasks` type was a stub from a follow-up that never landed (task-log FTS
+  was advertised alongside #308's conversation search but never indexed), and
+  `all` was silently an alias for conversations. Search is conversations-only:
+  `type=conversations` (or no `type`) works as before, and any other value is
+  now an honest 400 instead of a successful-looking search with no hits. The
+  web UI never sent `type`, so nothing user-facing changes. (#1076)
+
+- **The reserved `BudgetScopeProject` budget scope is gone.** The constant
+  existed only "for later": create always rejected `scope=project` (tasks have
+  no project dimension, so a project budget could be recorded but never
+  enforced), yet the matcher arm and a leftover-row reporting path kept
+  implying a feature that cannot work. The constant, the `BudgetsFor` /
+  `groupByForScope` project arms, and the unused `BudgetPrincipals.Project`
+  field are deleted; unknown scopes (including `project`) stay rejected on
+  create, and leftover `project` rows still list but get no special reporting
+  path. Project budgets wait until tasks actually have a project dimension.
+  (#1078)
+
+- **The leftover moc `analyzing` task status is retired.** Fleet never wrote
+  it — the constant survived #124 only so leftover moc-imported rows still
+  decoded, which meant claim/lease/recovery/reporting SQL, the admin CLI, and
+  the web status filter all had to special-case a status the current worker
+  loop never produces. A one-shot sched migration (063) rewrites any leftover
+  `analyzing` rows to `running` (recovery re-queues them on lease expiry
+  exactly as before) and rebuilds the serialization-key partial index without
+  the retired status; the status constant and every special case are
+  deleted. Workers still cannot report unknown/legacy statuses. (#1077)
 
 - **The `cutlass` deprecation shim (`cmd/cutlass`) is gone — its one-release
   deprecation window is over.** The shim only printed a DEPRECATED warning and

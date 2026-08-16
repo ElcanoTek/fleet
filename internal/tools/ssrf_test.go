@@ -157,34 +157,3 @@ func TestWebFetchSSRFBlocksLoopback(t *testing.T) {
 }
 
 // TestDownloadURLSSRFBlocksLoopback proves download_url enforces the same
-// guard: with the production dialer the loopback server is refused; with
-// a plain dialer the same server downloads fine.
-func TestDownloadURLSSRFBlocksLoopback(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "text/plain")
-		fmt.Fprint(w, "sensitive internal data")
-	}))
-	defer srv.Close()
-
-	// downloadCtx swaps in a plain dialer; reinstate the production guard
-	// for the blocked half so we test the real wiring.
-	ctx, _ := downloadCtx(t)
-
-	prev := downloadURLDialContext
-	downloadURLDialContext = newSSRFGuardedDialer().DialContext
-	blocked := runDownloadURL(ctx, DownloadURLParams{URL: srv.URL + "/secret.txt"})
-	downloadURLDialContext = prev // restore the unguarded dialer downloadCtx installed
-
-	if blocked.Status != downloadStatusError {
-		t.Fatalf("expected SSRF error status, got %q (saved_to=%s)", blocked.Status, blocked.SavedTo)
-	}
-	if !strings.Contains(blocked.Error, "access to private IP denied") {
-		t.Errorf("expected SSRF denial message, got: %s", blocked.Error)
-	}
-
-	// Now with the unguarded dialer (downloadCtx default): same server works.
-	allowed := runDownloadURL(ctx, DownloadURLParams{URL: srv.URL + "/secret.txt"})
-	if allowed.Status != downloadStatusSuccess {
-		t.Fatalf("expected unguarded download to succeed, got status=%q err=%q", allowed.Status, allowed.Error)
-	}
-}

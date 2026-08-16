@@ -580,8 +580,9 @@ components:
         POST /admin/budgets body (#601 part 2): create or replace the rolling
         budget for one (scope, principal_id, window). scope=user is keyed by
         the sched username (an email on a standard deployment), scope=key by
-        the scoped API key id. scope=project is rejected: tasks carry no
-        project dimension, so a project budget could never be enforced.
+        the scoped API key id. Any other scope (including the legacy
+        project) is rejected: tasks carry no project dimension, so such a
+        budget could never be enforced.
         Bounds are optional individually but at least one must be set, soft
         must not exceed hard per measure, and budgets bound TOKENS as well as
         dollars because dollar coverage depends on pricing configuration
@@ -732,7 +733,12 @@ paths:
 
   /tasks:
     get:
-      summary: List tasks.
+      summary: >-
+        List tasks. Visibility is own-rows for principals without a fleet-wide
+        grant (#1082): a non-admin user or scoped API key lists only tasks it
+        created; the admin key, PermissionAdmin carriers, and view_all_logs
+        holders list every task. The same scope applies to the single-task
+        reads, export, and the upcoming projection.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
       responses:
         "200":

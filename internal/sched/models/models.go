@@ -550,11 +550,6 @@ const (
 	TaskStatusScheduled TaskStatus = "scheduled"
 	TaskStatusLeased    TaskStatus = "leased"
 	TaskStatusRunning   TaskStatus = "running"
-	// TaskStatusAnalyzing is a leftover moc in-flight status. Fleet never
-	// writes it (error analysis is a post-terminal annotation, not a
-	// transition). The constant stays so leftover imported rows still
-	// decode, recover, and filter. Workers cannot report it.
-	TaskStatusAnalyzing TaskStatus = "analyzing"
 	TaskStatusSuccess   TaskStatus = "success"
 	TaskStatusError     TaskStatus = "error"
 	TaskStatusCancelled TaskStatus = "cancelled"
@@ -583,8 +578,9 @@ const (
 // IsValidReportedStatus reports whether s is a status a worker is allowed to
 // report for its own task. The orchestrator owns the rest of the lifecycle.
 // TaskStatusDeadLettered is intentionally excluded: only the runner's terminal
-// switch quarantines a task (#253), never a self-reporting worker.
-// TaskStatusAnalyzing is also excluded: fleet never writes it.
+// switch quarantines a task (#253), never a self-reporting worker. Legacy moc
+// statuses (e.g. the retired 'analyzing', rewritten by migration 063) are
+// unknown here and therefore rejected too.
 func (s TaskStatus) IsValidReportedStatus() bool {
 	switch s {
 	case TaskStatusLeased, TaskStatusRunning, TaskStatusSuccess, TaskStatusError:
@@ -1032,7 +1028,7 @@ type TaskCreate struct {
 	ActualDurationSeconds *int `json:"actual_duration_seconds,omitempty"`
 	// SerializationKey is an opaque mutual-exclusion token supplied by the
 	// intake caller (#709). Fleet guarantees at most one task per key is in an
-	// ACTIVE state (leased/running/analyzing) at a time: a pending task whose
+	// ACTIVE state (leased/running) at a time: a pending task whose
 	// key matches an active task is not claimable and waits for a later claim
 	// pass — it is skipped, never failed. Fleet NEVER interprets the key's
 	// contents (coupling doctrine: the key's meaning is owned by the intake
@@ -2267,11 +2263,6 @@ const (
 	// BudgetScopeKey bounds a scoped API key, keyed by the key id
 	// (tasks.created_by_key_id).
 	BudgetScopeKey = "key"
-	// BudgetScopeProject is reserved for a future chat-project budget.
-	// It is NOT a legal create scope: tasks have no project dimension, so
-	// a project budget could only be recorded and never enforced. Leftover
-	// rows still list and report.
-	BudgetScopeProject = "project"
 )
 
 // Budget windows (#601 part 2): the UTC calendar window spend is summed over.
@@ -2392,12 +2383,10 @@ type BudgetStatus struct {
 // gate can look up every budget that applies. Empty fields = the create path
 // has no such principal (e.g. an admin-key submission carries neither a user
 // nor a scoped key and is therefore not budget-gated — the admin key is the
-// box operator, not a meterable principal). Project is unused: no create
-// path resolves one, and scope=project is rejected on write.
+// box operator, not a meterable principal).
 type BudgetPrincipals struct {
-	User    string
-	Key     string
-	Project string
+	User string
+	Key  string
 }
 
 // EvalRun is one eval & regression harness invocation (#502): the set-level

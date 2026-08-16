@@ -3,7 +3,7 @@
 
 // Package budget enforces per-principal rolling budgets (#601 part 2).
 //
-// A budget ({scope: user|key|project, principal, window: day|week|month,
+// A budget ({scope: user|key, principal, window: day|week|month,
 // soft/hard bounds in dollars AND tokens}) is evaluated at TASK-CREATE time by
 // the ONE Enforcer every create path shares — POST /tasks, POST /tasks/batch,
 // and the chat schedule_task approval seam — mirroring the priorityCapError
@@ -51,7 +51,7 @@ import (
 type Store interface {
 	// BudgetsFor returns the budgets matching a create's principals; empty
 	// arguments match nothing.
-	BudgetsFor(ctx context.Context, user, key, project string) ([]models.Budget, error)
+	BudgetsFor(ctx context.Context, user, key string) ([]models.Budget, error)
 	// ListBudgets returns every configured budget (for GET /admin/budgets).
 	ListBudgets(ctx context.Context) ([]models.Budget, error)
 	// TaskUsage is the part-1 aggregation over task_iterations ⋈ tasks.
@@ -168,14 +168,10 @@ func windowEnd(start time.Time, window string) time.Time {
 // groupByForScope maps a budget scope to the part-1 usage group_by whose bucket
 // keys carry that principal id.
 func groupByForScope(scope string) string {
-	switch scope {
-	case models.BudgetScopeKey:
+	if scope == models.BudgetScopeKey {
 		return "key"
-	case models.BudgetScopeProject:
-		return "project"
-	default:
-		return "user"
 	}
+	return "user"
 }
 
 func (e *Enforcer) now() time.Time {
@@ -258,11 +254,10 @@ func (e *Enforcer) CheckCreate(ctx context.Context, p models.BudgetPrincipals) e
 	}
 	user := strings.TrimSpace(p.User)
 	key := strings.TrimSpace(p.Key)
-	project := strings.TrimSpace(p.Project)
-	if user == "" && key == "" && project == "" {
+	if user == "" && key == "" {
 		return nil
 	}
-	budgets, err := e.cfg.Store.BudgetsFor(ctx, user, key, project)
+	budgets, err := e.cfg.Store.BudgetsFor(ctx, user, key)
 	if err != nil {
 		return fmt.Errorf("look up budgets: %w", err)
 	}

@@ -80,12 +80,16 @@ host-brokered credentials/network that by invariant never enter the sandbox:
   host-side credentials and the egress-proxy/allowlist posture; running them in
   the sandbox would either leak credentials in or lose the host broker.
 - **Host workspace staging** (path-validated legacy exceptions):
-  `download_url` writes fetched bytes; `generate_image` reads reference images
-  and writes provider output; `fastio_upload` reads bytes for an outbound
-  upload; `xlsx` performs a fixed-schema, pure-library spreadsheet transform.
-  `publish_artifact` stats a confined path and records a pointer rather than
-  opening arbitrary content. None invokes a shell, dynamic import, or template
-  executor; all model-selected paths pass the workspace/pathsec allowlist.
+  `fastio_upload` reads bytes for an outbound upload; `publish_artifact` stats
+  a confined path and records a pointer rather than opening arbitrary content.
+  Neither invokes a shell, dynamic import, or template executor; all
+  model-selected paths pass the workspace/pathsec allowlist. This class
+  originally also covered `download_url` (writing fetched bytes),
+  `generate_image` (reading reference images, writing provider output), and
+  `xlsx` (a host zip read/rewrite) — those three were migrated in #1083: they
+  are bound to the per-turn sandbox and move every file byte through the
+  `RunFileOp` seam (nil sandbox fails closed, no host fallback), while their
+  network halves stay host-side under the brokered-fetch class above.
 - **Approval/email broker staging**: `email_materialize` reads a size-bounded,
   conversation-confined content file after the send-email approval stager has
   selected it; inline email previews similarly read validated upload/workspace

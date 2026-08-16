@@ -87,6 +87,11 @@ func (h *Handlers) GetUpcomingRuns(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
+	// Own-rows visibility (#1082): the projection carries each task's prompt,
+	// so it is scoped like GET /tasks. Filtered after the cap for simplicity —
+	// a scoped principal on a box with >upcomingHorizonMaxTasks queued tasks
+	// may see fewer of its own runs than exist, never someone else's.
+	tasks = visibleTasks(p, tasks)
 
 	now := time.Now()
 	runs := make([]UpcomingRun, 0, len(tasks))

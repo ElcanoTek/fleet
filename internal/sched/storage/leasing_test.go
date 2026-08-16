@@ -190,7 +190,7 @@ func TestRecoveredTaskRejectsOldNode(t *testing.T) {
 
 // TestRecoverExpiredLeasesSelectivity pins the recovery predicate's
 // selectivity: RecoverExpiredLeases must re-queue ONLY genuinely-expired active
-// leases (status in leased/running/analyzing AND lease_expires_at < now). A
+// leases (status in leased/running AND lease_expires_at < now). A
 // not-yet-expired lease, a terminal task, and a plain pending task must all be
 // left untouched — so the crash-safe backstop never steals a live worker's task
 // nor resurrects a finished one. The existing TestTaskLeasing only asserts the
@@ -208,7 +208,6 @@ func TestRecoverExpiredLeasesSelectivity(t *testing.T) {
 	}{
 		{"expired-leased", models.TaskStatusLeased, &past, true},
 		{"expired-running", models.TaskStatusRunning, &past, true},
-		{"expired-analyzing", models.TaskStatusAnalyzing, &past, true},
 		{"live-running-not-expired", models.TaskStatusRunning, &future, false},
 		{"live-leased-not-expired", models.TaskStatusLeased, &future, false},
 		{"terminal-success-stale-lease", models.TaskStatusSuccess, &past, false},

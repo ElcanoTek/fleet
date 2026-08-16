@@ -268,10 +268,10 @@ describe("LogViewer task-detail modal", () => {
   it("hides the kick-off button for an in-flight task and downloads the session JSON", async () => {
     mockSession(RICH_SESSION);
     render(
-      // "analyzing" is in flight but past the live-stream view, so the stored
-      // session body (and its download) still renders.
+      // A paused task is not runnable but is past the live-stream view, so the
+      // stored session body (and its download) still renders.
       <LogViewer
-        task={{ ...DONE_TASK, status: "analyzing" }}
+        task={{ ...DONE_TASK, status: "paused_awaiting_wake" }}
         onClose={() => {}}
       />,
     );

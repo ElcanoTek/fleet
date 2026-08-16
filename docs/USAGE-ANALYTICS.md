@@ -223,10 +223,12 @@ mirroring the `priorityCapError` shared-helper discipline:
 
 ## Honest scope (part 2)
 
-- **`scope=project` is rejected on write.** Tasks carry no project dimension
-  and no task-create path resolves one, so a project budget could only be
-  recorded and never enforced. Leftover rows still list. Re-introduce the
-  scope when chat `schedule_task` threads `project_id`.
+- **There is no `scope=project`.** Tasks carry no project dimension and no
+  task-create path resolves one, so a project budget could only ever be
+  recorded and never enforced — the reserved scope was removed rather than
+  left implying a feature that cannot work (#1078). Leftover `project` rows
+  still list but get no special reporting path (their spend reads as zero). A
+  project budget waits until tasks actually have a project dimension.
 - **Admin-key submissions are not budget-gated.** The admin API key carries
   neither a user nor a scoped key — it is the box operator, whose bound is the
   global ceiling. Likewise the in-process spawn paths (`create_task` from a

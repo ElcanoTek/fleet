@@ -1663,7 +1663,6 @@ func taskActiveStatuses() []any {
 	return []any{
 		string(models.TaskStatusLeased),
 		string(models.TaskStatusRunning),
-		string(models.TaskStatusAnalyzing),
 	}
 }
 
@@ -1673,14 +1672,14 @@ func taskActiveStatuses() []any {
 // blocked task at the head of the queue would starve every task behind it).
 // This filter is best-effort VISIBILITY only; the correctness guarantee is the
 // advisory-lock re-check in ClaimNextPendingTask, which runs under the per-key
-// lock at claim time. $2–$4 are the active statuses (taskActiveStatuses).
+// lock at claim time. $2–$3 are the active statuses (taskActiveStatuses).
 const serializationNotBlockedSQL = `(
 			tasks.serialization_key IS NULL
 			OR NOT EXISTS (
 				SELECT 1 FROM tasks blocked
 				WHERE blocked.serialization_key = tasks.serialization_key
 				AND blocked.id <> tasks.id
-				AND blocked.status IN ($2, $3, $4)
+				AND blocked.status IN ($2, $3)
 			)
 		)`
 
@@ -1708,7 +1707,7 @@ func hasActiveTaskWithSerializationKeyTx(ctx context.Context, tx *sql.Tx, key st
 			SELECT 1 FROM tasks
 			WHERE serialization_key = $1
 			AND id <> $2
-			AND status IN ($3, $4, $5)
+			AND status IN ($3, $4)
 		)`,
 		append([]any{key, excludeTaskID}, taskActiveStatuses()...)...,
 	).Scan(&exists)
@@ -1727,7 +1726,7 @@ func hasActiveTaskWithSerializationKeyTx(ctx context.Context, tx *sql.Tx, key st
 // in-box lease owner, no node routing, no glob matching.
 //
 // Serialization gate (#709, moc#442 parity): at most one task per
-// serialization_key may be active (leased/running/analyzing) at a time. The
+// serialization_key may be active (leased/running) at a time. The
 // candidate SELECT filters out visibly-blocked tasks (best-effort, so a
 // blocked head-of-queue task never starves the tasks behind it), and a
 // candidate that DOES carry a key is re-checked under a transaction-scoped
@@ -1931,9 +1930,8 @@ func (db *Database) PendingQueueStats(ctx context.Context) ([]models.QueuePriori
 func (db *Database) GetRunningTasks(ctx context.Context) ([]*models.Task, error) {
 	rows, err := db.conn.QueryContext(ctx, `
 		SELECT `+taskColumns+` FROM tasks
-		WHERE status IN ($1, $2, $3)`,
+		WHERE status IN ($1, $2)`,
 		string(models.TaskStatusRunning),
-		string(models.TaskStatusAnalyzing),
 		string(models.TaskStatusLeased))
 	if err != nil {
 		return nil, err
@@ -1974,7 +1972,7 @@ func (db *Database) GetDeadLetteredTasks(ctx context.Context, limit, offset int)
 
 // GetRunningTasksWithSLA returns the in-flight tasks that carry an SLA
 // (expected_duration_minutes IS NOT NULL) for the SLA monitor goroutine (#274).
-// "In-flight" mirrors GetRunningTasks: leased / running / analyzing — the
+// "In-flight" mirrors GetRunningTasks: leased / running — the
 // statuses where StartedAt is set and the task has not yet reached a terminal
 // state. The partial index idx_tasks_sla does NOT cover this query (it is
 // keyed on completed_at), but the in-flight set is small (one host, capped
@@ -1983,11 +1981,10 @@ func (db *Database) GetDeadLetteredTasks(ctx context.Context, limit, offset int)
 func (db *Database) GetRunningTasksWithSLA(ctx context.Context) ([]*models.Task, error) {
 	rows, err := db.conn.QueryContext(ctx, `
 		SELECT `+taskColumns+` FROM tasks
-		WHERE status IN ($1, $2, $3)
+		WHERE status IN ($1, $2)
 		AND expected_duration_minutes IS NOT NULL`,
 		string(models.TaskStatusLeased),
-		string(models.TaskStatusRunning),
-		string(models.TaskStatusAnalyzing))
+		string(models.TaskStatusRunning))
 	if err != nil {
 		return nil, err
 	}
@@ -2279,18 +2276,17 @@ func (db *Database) GetDashboardStats(ctx context.Context) (*models.DashboardSta
 	err := db.conn.QueryRowContext(ctx, `
 		SELECT
 			COUNT(*) FILTER (WHERE status = $1) as pending_tasks,
-			COUNT(*) FILTER (WHERE status IN ($2, $3, $8)) as running_tasks,
+			COUNT(*) FILTER (WHERE status IN ($2, $3)) as running_tasks,
 			COUNT(*) FILTER (WHERE status = $4 AND completed_at BETWEEN $5 AND $6) as completed_today,
 			COUNT(*) FILTER (WHERE status = $7 AND completed_at BETWEEN $5 AND $6) as failed_today
 		FROM tasks`,
 		string(models.TaskStatusPending),
 		string(models.TaskStatusRunning),
-		string(models.TaskStatusAnalyzing),
+		string(models.TaskStatusLeased),
 		string(models.TaskStatusSuccess),
 		todayStart,
 		todayEnd,
 		string(models.TaskStatusError),
-		string(models.TaskStatusLeased),
 	).Scan(&stats.PendingTasks, &stats.RunningTasks, &stats.CompletedTasksToday, &stats.FailedTasksToday)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get task stats: %w", err)
@@ -3022,12 +3018,11 @@ func (db *Database) RecoverExpiredLeases(ctx context.Context, now time.Time) (in
 			output_json = NULL,
 			artifacts = NULL,
 			attempt_count = attempt_count + 1
-		WHERE status IN ($2, $3, $4)
-		AND (lease_expires_at < $5 OR lease_expires_at IS NULL)`,
+		WHERE status IN ($2, $3)
+		AND (lease_expires_at < $4 OR lease_expires_at IS NULL)`,
 		string(models.TaskStatusPending),
 		string(models.TaskStatusLeased),
 		string(models.TaskStatusRunning),
-		string(models.TaskStatusAnalyzing),
 		now,
 	)
 	if err != nil {
@@ -3071,6 +3066,14 @@ type TaskFilter struct {
 	// SourceTaskID, when set, restricts to tasks re-run/cloned from that source
 	// task — the lineage view (#270).
 	SourceTaskID *uuid.UUID
+	// VisibleToUserID / VisibleToKeyID restrict to rows the principal created
+	// (#1082): tasks whose created_by is this user, or whose created_by_key_id
+	// is this API key. Set by the handler for principals without the
+	// fleet-wide visibility grant; at most one is set per request. They AND
+	// with every other filter, so a caller-supplied created_by can only
+	// narrow further, never widen.
+	VisibleToUserID *uuid.UUID
+	VisibleToKeyID  *string
 }
 
 // GetTasksFiltered gets tasks with optional filters and pagination.
@@ -3140,6 +3143,18 @@ func (db *Database) GetTasksFiltered(ctx context.Context, filter TaskFilter, lim
 	if filter.SourceTaskID != nil {
 		whereClauses = append(whereClauses, fmt.Sprintf("source_task_id = $%d", argIndex))
 		args = append(args, filter.SourceTaskID.String())
+		argIndex++
+	}
+
+	if filter.VisibleToUserID != nil {
+		whereClauses = append(whereClauses, fmt.Sprintf("created_by = $%d", argIndex))
+		args = append(args, *filter.VisibleToUserID)
+		argIndex++
+	}
+
+	if filter.VisibleToKeyID != nil {
+		whereClauses = append(whereClauses, fmt.Sprintf("created_by_key_id = $%d", argIndex))
+		args = append(args, *filter.VisibleToKeyID)
 		argIndex++
 	}
 

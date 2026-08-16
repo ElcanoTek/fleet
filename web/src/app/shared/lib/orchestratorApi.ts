@@ -266,8 +266,8 @@ export type BudgetStatus = {
   soft_alerted: boolean;
 };
 
-// BudgetCreate is the POST /admin/budgets body. scope=project is rejected
-// server-side (Wave 1); leftover project rows still list.
+// BudgetCreate is the POST /admin/budgets body. Only user|key scopes exist;
+// anything else (including the legacy project scope) is rejected server-side.
 export type BudgetCreate = {
   scope: "user" | "key";
   principal_id: string;

@@ -10,13 +10,14 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
 
 	"charm.land/fantasy"
+
+	"github.com/ElcanoTek/fleet/internal/sandbox"
 )
 
 // downloadURLDialContext is the dial function download_url's HTTP client
@@ -77,13 +78,16 @@ type downloadURLResult struct {
 	Error         string   `json:"error,omitempty"`
 }
 
-// NewDownloadURLTool returns the native download_url tool. It carries
-// no external dependencies (no MCP client, no sandbox) — purely a
-// Go-side HTTP fetcher that writes into the per-conversation workspace.
-func NewDownloadURLTool() fantasy.AgentTool {
+// NewDownloadURLTool returns the native download_url tool, bound to the
+// per-turn sandbox. The HTTP fetch itself stays host-side by design — it is
+// the ADR-0036 brokered-network class (SSRF guard, fleet-download:// handle
+// resolution that keeps signed URLs out of the model's reach) — but the
+// fetched bytes land on disk through the sandbox FileOp seam (#1083), so the
+// tool performs no host file I/O. A nil sandbox fails closed.
+func NewDownloadURLTool(sb *sandbox.Sandbox) fantasy.AgentTool {
 	return fantasy.NewAgentTool("download_url", downloadURLDescription,
 		func(ctx context.Context, params DownloadURLParams, _ fantasy.ToolCall) (fantasy.ToolResponse, error) {
-			payload := runDownloadURL(ctx, params)
+			payload := runDownloadURL(ctx, sb, params)
 			body, err := json.Marshal(payload)
 			if err != nil {
 				return fantasy.NewTextErrorResponse(err.Error()), nil
@@ -95,13 +99,18 @@ func NewDownloadURLTool() fantasy.AgentTool {
 		})
 }
 
-// runDownloadURL is the testable core: validate → fetch → write.
+// runDownloadURL is the testable core: validate → fetch → sandboxed write.
 // It always returns a populated downloadURLResult — the caller decides
 // how to surface success vs error.
-func runDownloadURL(ctx context.Context, params DownloadURLParams) downloadURLResult {
+func runDownloadURL(ctx context.Context, sb *sandbox.Sandbox, params DownloadURLParams) downloadURLResult {
 	displayURL := strings.TrimSpace(params.URL)
 	res := downloadURLResult{URL: displayURL}
 
+	if sb == nil {
+		res.Status = downloadStatusError
+		res.Error = "download_url requires a sandbox; pool.Take returned nil or was bypassed"
+		return res
+	}
 	if displayURL == "" {
 		res.Status = downloadStatusError
 		res.Error = "url is required"
@@ -124,11 +133,6 @@ func runDownloadURL(ctx context.Context, params DownloadURLParams) downloadURLRe
 	if err != nil {
 		res.Status = downloadStatusError
 		res.Error = err.Error()
-		return res
-	}
-	if mkErr := os.MkdirAll(dir, 0o755); mkErr != nil { //nolint:gosec // dir already validated against allowed roots
-		res.Status = downloadStatusError
-		res.Error = fmt.Sprintf("create output_dir: %v", mkErr)
 		return res
 	}
 
@@ -233,40 +237,44 @@ func runDownloadURL(ctx context.Context, params DownloadURLParams) downloadURLRe
 		return res
 	}
 
-	pickedName := pickDownloadFilename(params.Filename, resp, finalURL)
-	outPath := buildCollisionSafePath(dir, pickedName, displayURL)
-
-	f, err := os.OpenFile(outPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644) //nolint:gosec // outPath is built from resolveDownloadDir() + a sanitized basename; both are pre-validated
+	// Read the body host-side (bounded), then land the bytes on disk through
+	// the sandbox FileOp seam — the write inherits the container's runtime,
+	// limits, and confinement instead of running as host os I/O (#1083).
+	body, err := io.ReadAll(io.LimitReader(resp.Body, downloadURLMaxBytes+1))
 	if err != nil {
 		res.Status = downloadStatusError
-		res.Error = fmt.Sprintf("open %s: %v", outPath, err)
+		res.Error = fmt.Sprintf("read response body: %v", err)
 		return res
 	}
-	written, err := io.Copy(f, io.LimitReader(resp.Body, downloadURLMaxBytes+1))
-	closeErr := f.Close()
-	if err != nil {
-		_ = os.Remove(outPath)
-		res.Status = downloadStatusError
-		res.Error = fmt.Sprintf("write %s: %v", outPath, err)
-		return res
-	}
-	if closeErr != nil {
-		_ = os.Remove(outPath)
-		res.Status = downloadStatusError
-		res.Error = fmt.Sprintf("close %s: %v", outPath, closeErr)
-		return res
-	}
-	if written > downloadURLMaxBytes {
-		_ = os.Remove(outPath)
+	if int64(len(body)) > downloadURLMaxBytes {
 		res.Status = downloadStatusError
 		res.Error = fmt.Sprintf("response exceeded %d-byte cap; refusing to save partial file. Use bash + curl or run_python with a streaming download if the file is genuinely this large.", downloadURLMaxBytes)
 		return res
 	}
 
+	pickedName := pickDownloadFilename(params.Filename, resp, finalURL)
+	outPath, err := buildCollisionSafePath(ctx, sb, dir, pickedName, displayURL)
+	if err != nil {
+		res.Status = downloadStatusError
+		res.Error = err.Error()
+		return res
+	}
+	validOut, err := ValidatePath(outPath)
+	if err != nil {
+		res.Status = downloadStatusError
+		res.Error = fmt.Sprintf("output path validation failed: %v", err)
+		return res
+	}
+	if err := sandboxWriteFile(ctx, sb, outPath, validOut, body); err != nil {
+		res.Status = downloadStatusError
+		res.Error = fmt.Sprintf("write %s: %v", validOut, err)
+		return res
+	}
+
 	res.Status = downloadStatusSuccess
-	res.Filename = filepath.Base(outPath)
-	res.SavedTo = outPath
-	res.SizeBytes = written
+	res.Filename = filepath.Base(validOut)
+	res.SavedTo = validOut
+	res.SizeBytes = int64(len(body))
 	return res
 }
 
@@ -431,8 +439,9 @@ func sanitizeDownloadFilename(s string) string {
 // same URL into the same dir produce a deterministic, predictable
 // path. If a file at that path already exists (e.g. the same URL was
 // downloaded twice in one conversation), tack on `_1`, `_2`, … until
-// a free slot is found.
-func buildCollisionSafePath(dir, filename, sourceURL string) string {
+// a free slot is found. Existence is probed through the sandbox FileOp
+// seam (a 1-byte read), not host os.Stat (#1083).
+func buildCollisionSafePath(ctx context.Context, sb *sandbox.Sandbox, dir, filename, sourceURL string) (string, error) {
 	ext := filepath.Ext(filename)
 	stem := strings.TrimSuffix(filename, ext)
 	if stem == "" {
@@ -442,14 +451,18 @@ func buildCollisionSafePath(dir, filename, sourceURL string) string {
 	token := hex.EncodeToString(sum[:])[:8]
 	candidate := filepath.Join(dir, fmt.Sprintf("%s__%s%s", stem, token, ext))
 	for i := 1; i < 1000; i++ {
-		if _, err := os.Stat(candidate); os.IsNotExist(err) {
-			return candidate
+		exists, err := sandboxFileExists(ctx, sb, candidate, candidate)
+		if err != nil {
+			return "", fmt.Errorf("probe %s: %w", candidate, err)
+		}
+		if !exists {
+			return candidate, nil
 		}
 		candidate = filepath.Join(dir, fmt.Sprintf("%s__%s_%d%s", stem, token, i, ext))
 	}
 	// Astronomically unlikely; surface a deterministic fallback so the
 	// caller still gets *some* path back rather than an infinite loop.
-	return filepath.Join(dir, fmt.Sprintf("%s__%s_overflow%s", stem, token, ext))
+	return filepath.Join(dir, fmt.Sprintf("%s__%s_overflow%s", stem, token, ext)), nil
 }
 
 // extensionFromContentType maps a few common MIME types to extensions
