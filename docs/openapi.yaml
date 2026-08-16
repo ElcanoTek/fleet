@@ -733,7 +733,12 @@ paths:
 
   /tasks:
     get:
-      summary: List tasks.
+      summary: >-
+        List tasks. Visibility is own-rows for principals without a fleet-wide
+        grant (#1082): a non-admin user or scoped API key lists only tasks it
+        created; the admin key, PermissionAdmin carriers, and view_all_logs
+        holders list every task. The same scope applies to the single-task
+        reads, export, and the upcoming projection.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
       responses:
         "200":

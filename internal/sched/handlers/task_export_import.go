@@ -63,6 +63,10 @@ func (h *Handlers) HandleTaskExport(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "export failed")
 		return
 	}
+	// Own-rows visibility (#1082): the export bundle carries full task
+	// definitions (prompts included), so it is scoped like GET /tasks — a
+	// principal without the fleet-wide grant exports only its own tasks.
+	tasks = visibleTasks(p, tasks)
 
 	records := make([]models.TaskExportRecord, 0, len(tasks))
 	for _, t := range tasks {

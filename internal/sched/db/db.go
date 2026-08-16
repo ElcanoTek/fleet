@@ -3066,6 +3066,14 @@ type TaskFilter struct {
 	// SourceTaskID, when set, restricts to tasks re-run/cloned from that source
 	// task — the lineage view (#270).
 	SourceTaskID *uuid.UUID
+	// VisibleToUserID / VisibleToKeyID restrict to rows the principal created
+	// (#1082): tasks whose created_by is this user, or whose created_by_key_id
+	// is this API key. Set by the handler for principals without the
+	// fleet-wide visibility grant; at most one is set per request. They AND
+	// with every other filter, so a caller-supplied created_by can only
+	// narrow further, never widen.
+	VisibleToUserID *uuid.UUID
+	VisibleToKeyID  *string
 }
 
 // GetTasksFiltered gets tasks with optional filters and pagination.
@@ -3135,6 +3143,18 @@ func (db *Database) GetTasksFiltered(ctx context.Context, filter TaskFilter, lim
 	if filter.SourceTaskID != nil {
 		whereClauses = append(whereClauses, fmt.Sprintf("source_task_id = $%d", argIndex))
 		args = append(args, filter.SourceTaskID.String())
+		argIndex++
+	}
+
+	if filter.VisibleToUserID != nil {
+		whereClauses = append(whereClauses, fmt.Sprintf("created_by = $%d", argIndex))
+		args = append(args, *filter.VisibleToUserID)
+		argIndex++
+	}
+
+	if filter.VisibleToKeyID != nil {
+		whereClauses = append(whereClauses, fmt.Sprintf("created_by_key_id = $%d", argIndex))
+		args = append(args, *filter.VisibleToKeyID)
 		argIndex++
 	}
 
