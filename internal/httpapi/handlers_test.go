@@ -80,8 +80,8 @@ func allowAllMembers(context.Context, string) (bool, error) { return true, nil }
 // concreteStore returns the Postgres store behind a DB-backed fixture. Server
 // holds the chatStore interface (so the always-on tests can inject an in-memory
 // fake), but serverFixture/mockServer always wire a real *store.Store, so the
-// DB-gated tests that need concrete-only methods (CreateUser, MarkRunningTurns-
-// Errored) recover it through this assertion.
+// DB-gated tests that need concrete-only methods (CreateUser,
+// InsertTurnJournal) recover it through this assertion.
 func (s *Server) concreteStore(t *testing.T) *store.Store {
 	t.Helper()
 	st, ok := s.store.(*store.Store)

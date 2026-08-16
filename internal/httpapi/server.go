@@ -2672,14 +2672,7 @@ func (s *Server) runTurnAsync(
 		}
 		sweepCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		if _, _, err := s.store.SweepExpired(sweepCtx,
-			time.Duration(s.cfg.ConversationTTL)*24*time.Hour, s.cfg.UnpinnedCap); err != nil {
-			log.Printf("post-turn sweep error: %v", err)
-		}
-		if _, err := s.store.PurgeTerminalInputs(sweepCtx,
-			time.Duration(s.cfg.InputQueueRetentionDays)*24*time.Hour); err != nil {
-			log.Printf("post-turn input-queue purge error: %v", err)
-		}
+		s.sweepRetention(sweepCtx)
 		return
 	}
 
@@ -2861,20 +2854,10 @@ func (s *Server) runTurnAsync(
 		}
 	}
 
-	// Sweep expired conversations and terminal input-queue rows after every
-	// turn. Pending/running/injected queue work is never retention-eligible.
-	if expired, evicted, err := s.store.SweepExpired(persistCtx,
-		time.Duration(s.cfg.ConversationTTL)*24*time.Hour, s.cfg.UnpinnedCap); err != nil {
-		log.Printf("post-turn sweep error: %v", err)
-	} else if expired > 0 || evicted > 0 {
-		log.Printf("sweep: %d expired, %d evicted", expired, evicted)
-	}
-	if purged, err := s.store.PurgeTerminalInputs(persistCtx,
-		time.Duration(s.cfg.InputQueueRetentionDays)*24*time.Hour); err != nil {
-		log.Printf("post-turn input-queue purge error: %v", err)
-	} else if purged > 0 {
-		log.Printf("input-queue purge: %d terminal row(s) removed", purged)
-	}
+	// Sweep expired conversations, terminal input-queue rows, and aged-out
+	// turn ledgers after every turn. Pending/running/injected queue work and
+	// running turns are never retention-eligible.
+	s.sweepRetention(persistCtx)
 
 	// Attachment sweep — see comment in cmd/chat-server/main.go.
 	if removed, err := store.SweepAttachments(s.cfg.EmailAttachmentDir,
@@ -2908,6 +2891,34 @@ func (s *Server) runTurnAsync(
 		memCtx, memCancel := context.WithTimeout(turnCtx, 30*time.Second)
 		s.autoIndexMemories(memCtx, buf, conv.ID, user, userInput, res.FinalText)
 		memCancel()
+	}
+}
+
+// sweepRetention runs the post-turn database retention sweeps — expired
+// conversations, terminal input-queue rows, and finished turns' durable SSE
+// ledgers (turns + turn_events + turn_journal, which otherwise outlive their
+// usefulness as reattach/recovery state and grow without bound in long-lived
+// conversations). Shared by the real and mock turn paths so retention can
+// never drift between them. Best-effort: each sweep logs and moves on, and
+// the store treats a non-positive TTL as "disabled".
+func (s *Server) sweepRetention(ctx context.Context) {
+	if expired, evicted, err := s.store.SweepExpired(ctx,
+		time.Duration(s.cfg.ConversationTTL)*24*time.Hour, s.cfg.UnpinnedCap); err != nil {
+		log.Printf("post-turn sweep error: %v", err)
+	} else if expired > 0 || evicted > 0 {
+		log.Printf("sweep: %d expired, %d evicted", expired, evicted)
+	}
+	if purged, err := s.store.PurgeTerminalInputs(ctx,
+		time.Duration(s.cfg.InputQueueRetentionDays)*24*time.Hour); err != nil {
+		log.Printf("post-turn input-queue purge error: %v", err)
+	} else if purged > 0 {
+		log.Printf("input-queue purge: %d terminal row(s) removed", purged)
+	}
+	if swept, err := s.store.SweepTurnEvents(ctx,
+		time.Duration(s.cfg.TurnEventRetentionDays)*24*time.Hour); err != nil {
+		log.Printf("post-turn turn-ledger sweep error: %v", err)
+	} else if swept > 0 {
+		log.Printf("turn-ledger sweep: %d aged-out turn(s) removed", swept)
 	}
 }
 
