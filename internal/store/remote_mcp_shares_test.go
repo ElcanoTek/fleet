@@ -30,19 +30,12 @@ func TestRemoteMCPShares(t *testing.T) {
 		if err := s.ShareRemoteMCPServer(ctx, owner, srv.ID, mate); err != nil {
 			t.Fatalf("re-share: %v", err)
 		}
-		got, err := s.ListRemoteMCPShares(ctx, owner, srv.ID)
-		if err != nil {
-			t.Fatalf("list shares: %v", err)
-		}
-		if len(got) != 1 || got[0] != mate {
-			t.Errorf("shares = %v, want [%s] (normalized, deduped)", got, mate)
-		}
 		byOwner, err := s.ListRemoteMCPSharesByOwner(ctx, owner)
 		if err != nil {
 			t.Fatalf("by owner: %v", err)
 		}
-		if len(byOwner[srv.ID]) != 1 {
-			t.Errorf("by-owner map = %v", byOwner)
+		if got := byOwner[srv.ID]; len(got) != 1 || got[0] != mate {
+			t.Errorf("shares = %v, want [%s] (normalized, deduped)", got, mate)
 		}
 	})
 

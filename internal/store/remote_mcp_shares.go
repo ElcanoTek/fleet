@@ -84,29 +84,6 @@ func (s *Store) UnshareRemoteMCPServer(ctx context.Context, ownerEmail, serverID
 	return nil
 }
 
-// ListRemoteMCPShares returns the grantees of one owned server, sorted.
-func (s *Store) ListRemoteMCPShares(ctx context.Context, ownerEmail, serverID string) ([]string, error) {
-	if err := s.ownsRemoteMCPServer(ctx, normalizeEmail(ownerEmail), serverID); err != nil {
-		return nil, err
-	}
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT grantee FROM remote_mcp_shares WHERE server_id = $1 ORDER BY grantee`,
-		serverID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := []string{}
-	for rows.Next() {
-		var g string
-		if err := rows.Scan(&g); err != nil {
-			return nil, err
-		}
-		out = append(out, g)
-	}
-	return out, rows.Err()
-}
-
 // ListRemoteMCPSharesByOwner returns every grant on the owner's servers in one
 // query, keyed by server id — the list endpoint decorates each row without an
 // N+1.

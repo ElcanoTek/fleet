@@ -259,17 +259,6 @@ func (s *Store) TruncateAllForTest(ctx context.Context) error {
 	return err
 }
 
-// RecordPanic appends a legacy recovered-panic row (#241). New production
-// recovery paths use RecordPanicEvent through safe.StructuredPanicEventWriter.
-// Its diagnostic arguments are deliberately ignored so legacy callers cannot
-// persist a secret-bearing panic value or stack.
-func (s *Store) RecordPanic(ctx context.Context, location, _, _ string) error {
-	return s.RecordPanicEvent(ctx, PanicEventRecord{
-		Location: location,
-		Class:    "legacy",
-	})
-}
-
 // PanicEventRecord is the secret-safe persistence shape for one contained
 // panic. Raw recovered values, stacks, tool arguments, and results are
 // intentionally absent; only opaque attribution and a bounded class cross it.
@@ -298,13 +287,6 @@ func (s *Store) RecordPanicEvent(ctx context.Context, event PanicEventRecord) er
 		event.ConversationID, event.Class, "",
 	)
 	return err
-}
-
-// CountPanics returns the number of recorded panic events (test/diagnostic helper).
-func (s *Store) CountPanics(ctx context.Context) (int, error) {
-	var n int
-	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM panic_events`).Scan(&n)
-	return n, err
 }
 
 // CreateConversation inserts a new conversation and returns its generated ID.

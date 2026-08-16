@@ -58,8 +58,9 @@ unknown-outcome error (`synthesized=TRUE` journal marker, model-visible
 "did NOT execute" marker when the journal was active and the call has no
 intent row (the barrier proves it was blocked before dispatch); append a
 model-visible interruption marker + a cancelled `turn_summary`; project with
-provenance; flip the turn to `error` with `recovered_at` and a synthetic
-`turn.error` SSE frame. Idempotent across repeated/interrupted recoveries.
+provenance; flip the turn to `error` with a synthetic `turn.error` SSE frame
+(its message names the restart). Idempotent across repeated/interrupted
+recoveries.
 
 Two guarded special cases: a turn whose history committed but whose process
 died before `FinishTurn` is flipped to `completed` (nothing to project — the

@@ -76,6 +76,40 @@ prior versions are listed because none have shipped.
 
 ### Removed
 
+- **A dead-code sweep of half-wired surface that parsed, persisted, or served
+  data nothing ever read.** None of these change behavior — each removed half
+  had no consumer:
+  - **Config knobs parsed into fields no code consulted**: `REASONING_ENABLED`
+    / `REASONING_EFFORT` (reasoning is actually configured through
+    `FLEET_DEFAULT_THINKING_BUDGET_TOKENS`; the fields defaulted and sat),
+    `CUTLASS_TASK_MAX_ITERATIONS` (the scheduler's per-task iteration default
+    reads `FLEET_MAX_ITERATIONS` — a comment claiming the CUTLASS knob was
+    honored is fixed), `TavilyAPIKey` (the search tools read `TAVILY_API_KEY`
+    from the process env directly — the env var keeps working), and the
+    cutlass-era `InputDir`/`InputFiles` pair whose consumer did not survive
+    the v2 fold (bundle-declared `CUTLASS_INPUT_DIR` interpolation for MCP
+    servers is a different, live mechanism and is untouched).
+  - **`turns.recovered_at`**: written on every crash recovery since #041,
+    never read by anything — no scan, no API field, no UI. Recovery provenance
+    already reaches consumers through the projected history marker and the
+    synthetic `turn.error` frame. Migration 050 drops the column;
+    `history_committed_at`, its load-bearing sibling, stays.
+  - **`GET /admin/provider-health`**: the only registered route with no web
+    caller, no CLI verb, no docs, and no OpenAPI entry. The same circuit
+    snapshot is already served through `/healthz` and `/admin/health-summary`,
+    both of which have consumers.
+  - **Exported dead surface**: `store.RecordPanic`/`CountPanics` (the legacy
+    #241 shims; `RecordPanicEvent` is the one production writer),
+    `store.ListRemoteMCPShares` (superseded by the by-owner variant the API
+    uses), and `webpush.SendToUser` (production sends go through
+    `NotifyApprovalRequired`/`SendEvent`; the fan-out logic and its tests keep
+    running through the unexported seam).
+  - **Web orphans**: two orchestrator proxy routes no client ever called
+    (`/api/orchestrator/prompts/export`, `/api/orchestrator/mcp-accounts` —
+    the Go endpoints remain public API), and the permanently-disabled "Apply"
+    placeholder button on diff blocks ("coming in a future release" since
+    #180, with no apply backend behind it).
+
 - **Per-API-key spending caps (`max_cost_per_day_usd` /
   `max_cost_per_month_usd`) and the two endpoints that read them**
   (`GET /keys/{id}/spending`, `POST /keys/{id}/reset-spending`).

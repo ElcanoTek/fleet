@@ -412,8 +412,8 @@ func parentOwnedRuntimeEnvNames(bundle *clientconfig.Bundle) []string {
 		"FLEET_MCP_OAUTH_ENCRYPTION_KEY", "FLEET_LOG_ARCHIVE_ENCRYPTION_KEY",
 		// Scheduled-task inputs the boot loader reads verbatim under their
 		// legacy names (exact os.Getenv, outside the alias machinery).
-		"CUTLASS_TASK_MODEL", "CUTLASS_TASK_FALLBACK_MODEL", "CUTLASS_TASK_MAX_ITERATIONS",
-		"CUTLASS_INPUT_FILES", "CUTLASS_IMAGE_OUTPUT", "CUTLASS_IMAGE_MODEL",
+		"CUTLASS_TASK_MODEL", "CUTLASS_TASK_FALLBACK_MODEL",
+		"CUTLASS_IMAGE_OUTPUT", "CUTLASS_IMAGE_MODEL",
 		// Knobs the parent still resolves after broker boot through the
 		// FLEET_/CHAT_/CUTLASS_ alias machinery: config reload watches or
 		// re-applies the first group (internal/config/reload.go); the second
@@ -431,8 +431,7 @@ func parentOwnedRuntimeEnvNames(bundle *clientconfig.Bundle) []string {
 		"HOME", "PATH", "TMPDIR", "SHELL", "USER", "LANG", "TZ", "NOTIFY_SOCKET",
 		"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",
 		"SSL_CERT_FILE", "SSL_CERT_DIR", "SCHED_DATABASE_URL",
-		"LLM_MAX_TOKENS",
-		"REASONING_ENABLED", "REASONING_EFFORT", "SYSTEM_PROMPT",
+		"LLM_MAX_TOKENS", "SYSTEM_PROMPT",
 		// The default-persona knobs resolve through the alias machinery AND their
 		// bare historical spelling (config.getenvFleetOrBare), so both forms are
 		// enumerated: the canonical one carries its legacy prefixes via EnvAliases,

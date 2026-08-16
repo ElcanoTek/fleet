@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -271,23 +270,4 @@ func (s *Server) handleAdminUserPatch(w http.ResponseWriter, r *http.Request, em
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(s.toAdminUserAnnotated(r, *u))
-}
-
-// handleProviderHealth returns the per-model LLM circuit-breaker snapshot (#267)
-// so on-call engineers can see whether a model is degraded and the engine is
-// routing around it. Admin-gated (same adminMiddleware as /admin/stats).
-func (s *Server) handleProviderHealth(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	var models []agentcore.ModelHealth
-	if s.agent != nil {
-		models = s.agent.ProviderHealth()
-	}
-	if models == nil {
-		models = []agentcore.ModelHealth{}
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"models": models})
 }

@@ -381,7 +381,7 @@ func (s *Store) recoverOneTurn(ctx context.Context, turnID, convID string) (Reco
 	// though history is now whole).
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE turns SET status = 'error', finished_at = $1,
-		        history_committed_at = $1, recovered_at = $1
+		        history_committed_at = $1
 		  WHERE turn_id = $2 AND status = 'running'`,
 		now, turnID); err != nil {
 		return rec, err

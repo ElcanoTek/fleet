@@ -192,8 +192,6 @@ var allowedEnvVars = map[string]bool{
 	"FLEET_TASK_MEMORY_MAX_VALUE_BYTES":    true,
 	"FLEET_CLEANUP_HOUR":                   true,
 	"LLM_MAX_TOKENS":                       true,
-	"REASONING_ENABLED":                    true,
-	"REASONING_EFFORT":                     true,
 	"FLEET_MAX_TOOL_OUTPUT_BYTES":          true,
 
 	// ── process log file sink (#298) — opt-in rotating file, default OFF ──
@@ -230,9 +228,6 @@ var allowedEnvVars = map[string]bool{
 	// ── cutlass task input (set by runner) ──
 	"CUTLASS_TASK_MODEL":          true,
 	"CUTLASS_TASK_FALLBACK_MODEL": true,
-	"CUTLASS_TASK_MAX_ITERATIONS": true,
-	"CUTLASS_INPUT_DIR":           true,
-	"CUTLASS_INPUT_FILES":         true,
 	"CUTLASS_ALLOWED_DIRS":        true,
 	"GH_TOKEN":                    true,
 
@@ -642,8 +637,6 @@ type Config struct {
 	TurnTimeoutSeconds          int
 	Temperature                 float64
 	LLMMaxTokens                int
-	ReasoningEnabled            bool
-	ReasoningEffort             string
 	TitleModel                  string
 	// MetadataModel is the fast/cheap model the suggest_branch_name /
 	// suggest_commit_message / suggest_pr_description tools (#191) call to
@@ -737,7 +730,6 @@ type Config struct {
 	// ── scheduled task config (cutlass) ──
 	TaskModel         string
 	TaskFallbackModel string
-	TaskMaxIterations int
 	LLMTemperature    float64
 	SystemPrompt      string
 	Persona           string
@@ -857,9 +849,6 @@ type Config struct {
 	// (FLEET_REMOTE_MCP_ALLOW_INSECURE_HTTP). Dev/test only; default false (https).
 	RemoteMCPAllowInsecureHTTP bool
 
-	InputDir   string
-	InputFiles []string
-
 	// MCPServers is the runtime MCP server catalog. It is sourced from the
 	// client bundle's manifest (internal/clientconfig) — cmd/fleet builds it via
 	// Bundle.MCPServerConfigs() and assigns it here — NOT loaded from typed
@@ -894,9 +883,6 @@ type Config struct {
 	// attachments to and where uploads are staged for the sandbox bind mount.
 	// Generic infrastructure, independent of any specific email connector.
 	EmailAttachmentDir string
-
-	// ── web search ──
-	TavilyAPIKey string
 
 	// ── rate limit (interactive) ──
 	RatePerMinute int
@@ -1233,8 +1219,6 @@ func Load(envFile string) (*Config, error) {
 		TurnTimeoutSeconds:     getenvFleetInt("TURN_TIMEOUT_SECONDS", 1800),
 		Temperature:            getenvFleetFloat("TEMPERATURE", 0.3),
 		LLMMaxTokens:           getenvInt("LLM_MAX_TOKENS", 16384),
-		ReasoningEnabled:       getenvBool("REASONING_ENABLED", true),
-		ReasoningEffort:        getenvDefault("REASONING_EFFORT", "medium"),
 		TitleModel:             getenvFleetDefault("TITLE_MODEL", DefaultTitleModel),
 		MetadataModel:          getenvFleetDefault("METADATA_MODEL", getenvFleetDefault("TITLE_MODEL", DefaultTitleModel)),
 		ErrorAnalysisModel:     getenvFleetDefault("ERROR_ANALYSIS_MODEL", getenvFleetDefault("METADATA_MODEL", getenvFleetDefault("TITLE_MODEL", DefaultTitleModel))),
@@ -1263,7 +1247,6 @@ func Load(envFile string) (*Config, error) {
 		// with "no model configured" (#1015).
 		TaskModel:         getenvFleet("TASK_MODEL"),
 		TaskFallbackModel: getenvFleet("TASK_FALLBACK_MODEL"),
-		TaskMaxIterations: getEnvOrDefaultInt("CUTLASS_TASK_MAX_ITERATIONS", 0),
 		LLMTemperature:    getEnvOrDefaultFloat("CUTLASS_TEMPERATURE", 0.3),
 
 		// ── phone a friend: super-LLM review (#175) ──
@@ -1316,9 +1299,6 @@ func Load(envFile string) (*Config, error) {
 
 		// ── attachments / uploads (generic infra) ──
 		EmailAttachmentDir: getenvDefault("EMAIL_ATTACHMENT_DIR", "./data/attachments"),
-
-		// ── web search ──
-		TavilyAPIKey: stripQuotes(os.Getenv("TAVILY_API_KEY")),
 
 		// ── rate limit (interactive) ──
 		RatePerMinute:       getenvInt("CHAT_RATE_PER_MIN", 40),
@@ -1402,12 +1382,6 @@ func Load(envFile string) (*Config, error) {
 	cfg.Persona = getenvFleetOrBare("PERSONA", "personas/assistant.yaml")
 	if !hasKnownPromptExtension(cfg.Persona) {
 		cfg.Persona += ".yaml"
-	}
-
-	// ── scheduled-mode input files (cutlass) ──
-	cfg.InputDir = stripQuotes(os.Getenv("CUTLASS_INPUT_DIR"))
-	if inputFiles := stripQuotes(os.Getenv("CUTLASS_INPUT_FILES")); inputFiles != "" {
-		cfg.InputFiles = strings.Split(inputFiles, ",")
 	}
 
 	// The MCP server catalog is NOT built here — it is sourced from the client
