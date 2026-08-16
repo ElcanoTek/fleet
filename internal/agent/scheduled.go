@@ -714,7 +714,7 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 	}
 	temp := 0.3
 	if a.config != nil {
-		temp = a.config.LiveLLMTemperature()
+		temp = a.config.LiveTemperature()
 	}
 
 	allow, optional := a.mcpGates()

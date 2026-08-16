@@ -19,6 +19,17 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **`FLEET_TEMPERATURE` did not move scheduled-task sampling** — the scheduled
+  runner had its own temperature field read from the exact `CUTLASS_TEMPERATURE`
+  env var only (and hot-reloaded by that exact name only), so an operator
+  following the documented `FLEET_` prefix convention changed interactive
+  sampling while scheduled runs kept sampling at the leftover value. The
+  separate scheduled-only knob is gone: interactive and scheduled runs now share
+  the one `Temperature` field, resolved through the standard `FLEET_` → `CHAT_`
+  → `CUTLASS_` alias chain at boot and on reload, so `CUTLASS_TEMPERATURE` keeps
+  working as the last-resort alias and existing deploys do not jump temperature.
+  (#1079)
+
 - **`FLEET_LOCKDOWN_ONLY` and `FLEET_LOCKDOWN_ALLOWED_MODELS` were silent
   no-ops** — the lockdown knobs were the last bare `CHAT_`-only reads, so an
   operator following the documented `FLEET_` prefix convention got an unsealed
