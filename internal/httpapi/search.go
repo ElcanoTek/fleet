@@ -18,9 +18,11 @@ type searchResponse struct {
 // full-text matches across the authenticated user's conversation titles and
 // message content. Returns 404 when FLEET_SEARCH_ENABLED=false.
 //
-// The `type` filter accepts "conversations" (default) and "all" (currently an
-// alias — task-log search is a documented follow-up); "tasks" returns an empty
-// set rather than pretending to search a surface that isn't indexed yet.
+// Search is conversations-only: `type` accepts "conversations" (the default
+// when absent) and nothing else. Any other value — including the retired
+// "tasks" stub and its "all" alias, which used to answer 200 with a lying
+// empty set (#1076) — is a 400, so a caller asking for an unindexed surface
+// hears "no such surface" instead of "no hits".
 func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 	if s.cfg == nil || !s.cfg.SearchEnabled {
 		http.Error(w, "search is disabled", http.StatusNotFound)
@@ -30,16 +32,13 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	if t := r.URL.Query().Get("type"); t != "" && t != "conversations" {
+		http.Error(w, `unknown search type (only "conversations" is indexed)`, http.StatusBadRequest)
+		return
+	}
 	user := userFromCtx(r.Context())
 	q := strings.TrimSpace(r.URL.Query().Get("q"))
 	if q == "" {
-		writeJSON(w, searchResponse{Results: []store.SearchResult{}, Total: 0})
-		return
-	}
-
-	if t := r.URL.Query().Get("type"); t == "tasks" {
-		// Task / session-log search is not indexed yet (see PR notes). Be honest:
-		// return an empty set rather than silently returning conversation hits.
 		writeJSON(w, searchResponse{Results: []store.SearchResult{}, Total: 0})
 		return
 	}

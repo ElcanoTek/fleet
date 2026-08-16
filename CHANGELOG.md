@@ -105,6 +105,14 @@ prior versions are listed because none have shipped.
 
 ### Removed
 
+- **`GET /search?type=tasks` no longer answers 200 with a lying empty set.**
+  The `tasks` type was a stub from a follow-up that never landed (task-log FTS
+  was advertised alongside #308's conversation search but never indexed), and
+  `all` was silently an alias for conversations. Search is conversations-only:
+  `type=conversations` (or no `type`) works as before, and any other value is
+  now an honest 400 instead of a successful-looking search with no hits. The
+  web UI never sent `type`, so nothing user-facing changes. (#1076)
+
 - **The reserved `BudgetScopeProject` budget scope is gone.** The constant
   existed only "for later": create always rejected `scope=project` (tasks have
   no project dimension, so a project budget could be recorded but never
