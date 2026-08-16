@@ -9,7 +9,7 @@ this is the fleet port of that proven design.
 
 - `TaskCreate` accepts an optional, opaque `serialization_key` (string).
   Fleet guarantees **at most one task per key is active at a time** — active
-  means `leased`, `running`, or `analyzing`.
+  means `leased` or `running`.
 - A pending task whose key matches an active task is **skipped at claim time**:
   it stays queued and is retried on a later claim pass. It is never failed,
   cancelled, or reordered — just deferred.

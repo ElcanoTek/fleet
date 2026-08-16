@@ -550,11 +550,6 @@ const (
 	TaskStatusScheduled TaskStatus = "scheduled"
 	TaskStatusLeased    TaskStatus = "leased"
 	TaskStatusRunning   TaskStatus = "running"
-	// TaskStatusAnalyzing is a leftover moc in-flight status. Fleet never
-	// writes it (error analysis is a post-terminal annotation, not a
-	// transition). The constant stays so leftover imported rows still
-	// decode, recover, and filter. Workers cannot report it.
-	TaskStatusAnalyzing TaskStatus = "analyzing"
 	TaskStatusSuccess   TaskStatus = "success"
 	TaskStatusError     TaskStatus = "error"
 	TaskStatusCancelled TaskStatus = "cancelled"
@@ -583,8 +578,9 @@ const (
 // IsValidReportedStatus reports whether s is a status a worker is allowed to
 // report for its own task. The orchestrator owns the rest of the lifecycle.
 // TaskStatusDeadLettered is intentionally excluded: only the runner's terminal
-// switch quarantines a task (#253), never a self-reporting worker.
-// TaskStatusAnalyzing is also excluded: fleet never writes it.
+// switch quarantines a task (#253), never a self-reporting worker. Legacy moc
+// statuses (e.g. the retired 'analyzing', rewritten by migration 063) are
+// unknown here and therefore rejected too.
 func (s TaskStatus) IsValidReportedStatus() bool {
 	switch s {
 	case TaskStatusLeased, TaskStatusRunning, TaskStatusSuccess, TaskStatusError:
@@ -1032,7 +1028,7 @@ type TaskCreate struct {
 	ActualDurationSeconds *int `json:"actual_duration_seconds,omitempty"`
 	// SerializationKey is an opaque mutual-exclusion token supplied by the
 	// intake caller (#709). Fleet guarantees at most one task per key is in an
-	// ACTIVE state (leased/running/analyzing) at a time: a pending task whose
+	// ACTIVE state (leased/running) at a time: a pending task whose
 	// key matches an active task is not claimable and waits for a later claim
 	// pass — it is skipped, never failed. Fleet NEVER interprets the key's
 	// contents (coupling doctrine: the key's meaning is owned by the intake

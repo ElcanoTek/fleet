@@ -11,7 +11,7 @@ import (
 
 // TestSerializationKeyMutualExclusion verifies the claim-time gate (#709,
 // moc#442 parity): at most one task per serialization_key may be active
-// (leased/running/analyzing) at a time, the key is held through the whole
+// (leased/running) at a time, the key is held through the whole
 // active lifecycle, and a terminal transition releases it. The blocked task is
 // skipped — it stays pending for a later claim pass, never failed.
 func TestSerializationKeyMutualExclusion(t *testing.T) {

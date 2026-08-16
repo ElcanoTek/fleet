@@ -1102,11 +1102,11 @@ func (s *Storage) UpdateTaskStatusAtomicWithContext(ctx context.Context, taskID 
 	}
 
 	now := time.Now().UTC()
-	if update.Status == models.TaskStatusRunning || update.Status == models.TaskStatusAnalyzing || update.Status == models.TaskStatusLeased {
+	if update.Status == models.TaskStatusRunning || update.Status == models.TaskStatusLeased {
 		task.Status = update.Status
 		expiresAt := now.Add(LeaseDuration)
 		task.LeaseExpiresAt = &expiresAt
-		if (task.Status == models.TaskStatusRunning || task.Status == models.TaskStatusAnalyzing) && task.StartedAt == nil {
+		if task.Status == models.TaskStatusRunning && task.StartedAt == nil {
 			task.StartedAt = &now
 		}
 	} else {

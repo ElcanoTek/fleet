@@ -105,6 +105,16 @@ prior versions are listed because none have shipped.
 
 ### Removed
 
+- **The leftover moc `analyzing` task status is retired.** Fleet never wrote
+  it — the constant survived #124 only so leftover moc-imported rows still
+  decoded, which meant claim/lease/recovery/reporting SQL, the admin CLI, and
+  the web status filter all had to special-case a status the current worker
+  loop never produces. A one-shot sched migration (063) rewrites any leftover
+  `analyzing` rows to `running` (recovery re-queues them on lease expiry
+  exactly as before) and rebuilds the serialization-key partial index without
+  the retired status; the status constant and every special case are
+  deleted. Workers still cannot report unknown/legacy statuses. (#1077)
+
 - **The `cutlass` deprecation shim (`cmd/cutlass`) is gone — its one-release
   deprecation window is over.** The shim only printed a DEPRECATED warning and
   forwarded to the same `internal/taskrun` entrypoint; `fleet task run

@@ -9,7 +9,7 @@ import { createdByLabel, scheduleLabel, slaBadge, TaskSlaBadge } from "./taskDis
 
 // Statuses whose tasks can be edited: pending/scheduled edit in place;
 // terminal ones reopen the form to resubmit with changes. In-flight tasks
-// (leased/running/analyzing) can only be stopped, not edited.
+// (leased/running) can only be stopped, not edited.
 const EDITABLE_STATUSES = new Set([
   "pending",
   "scheduled",
@@ -22,7 +22,7 @@ const EDITABLE_STATUSES = new Set([
 // Statuses whose tasks can be kicked off on demand ("Run now"): a copy of the
 // task runs immediately and the source's schedule is left alone. Deliberately
 // the same set as EDITABLE_STATUSES — a task that is already in flight
-// (leased/running/analyzing) is excluded, because a second concurrent
+// (leased/running) is excluded, because a second concurrent
 // copy of a running job is a footgun, not a feature. A scheduled/pending task
 // IS included: waiting a day for the next cron tick to see whether a new job
 // works was the gap this closes.
@@ -53,7 +53,6 @@ const STATUS_OPTIONS = [
   "pending",
   "leased",
   "running",
-  "analyzing",
   "success",
   "error",
   "cancelled",

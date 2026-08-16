@@ -464,7 +464,7 @@ func validSchedTaskStatus(s models.TaskStatus) bool {
 		models.TaskStatusCancelled, models.TaskStatusDeadLettered:
 		return true
 	case models.TaskStatusLeased, models.TaskStatusRunning,
-		models.TaskStatusAnalyzing, models.TaskStatusPausedAwaitingInput,
+		models.TaskStatusPausedAwaitingInput,
 		models.TaskStatusPausedAwaitingWake:
 		return false
 	default:
