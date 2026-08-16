@@ -1264,17 +1264,6 @@ button {
   gap: 0.35rem;
 }
 
-/* Disabled forward-compat "Apply" placeholder (git-worktree apply, #180). */
-.diff-block-apply:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
-.diff-block-apply:disabled:hover {
-  color: var(--color-text-muted);
-  background: transparent;
-}
-
 .diff-block-body {
   overflow-x: auto;
   font-size: 0.82rem;

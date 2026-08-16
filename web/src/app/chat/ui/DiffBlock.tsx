@@ -52,14 +52,6 @@ export function DiffBlock({ raw }: { raw: string }) {
       <div className="diff-block-toolbar assistant-markdown-pre-toolbar">
         <span className="assistant-markdown-pre-lang">diff</span>
         <span className="diff-block-actions">
-          <button
-            type="button"
-            className="assistant-markdown-pre-copy diff-block-apply"
-            disabled
-            title="Apply is coming in a future release"
-          >
-            Apply
-          </button>
           <CopyButton text={copyText} title="Copy diff to clipboard" variant="compact" />
         </span>
       </div>

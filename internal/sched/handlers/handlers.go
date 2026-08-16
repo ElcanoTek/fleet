@@ -64,7 +64,7 @@ type Config struct {
 	// (CUTLASS_TASK_MODEL). MaxCostUSD is the per-turn cost ceiling
 	// (CUTLASS_MAX_COST_USD); 0 disables the would-hit-ceiling check.
 	// DefaultMaxIterations is the loop iteration cap applied when a task omits
-	// one (CUTLASS_TASK_MAX_ITERATIONS, then MAX_ITERATIONS).
+	// one (FLEET_MAX_ITERATIONS via config.MaxIterations).
 	DefaultTaskModel     string
 	MaxCostUSD           float64
 	DefaultMaxIterations int

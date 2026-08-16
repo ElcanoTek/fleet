@@ -48,36 +48,3 @@ func TestHealthz_HalfOpenIsHealthy(t *testing.T) {
 		t.Errorf("half-open (recovering) should be healthy: code=%d, want 200", rr.Code)
 	}
 }
-
-func TestProviderHealthEndpoint(t *testing.T) {
-	fe := &fakeEngine{providerHealth: []agentcore.ModelHealth{
-		{Slug: "anthropic/claude", State: "open", RecentErrors: 7, LastError: "503 Service Unavailable"},
-	}}
-	s := New(&config.Config{}, fe, nil)
-	rr := httptest.NewRecorder()
-	s.handleProviderHealth(rr, httptest.NewRequest("GET", "/admin/provider-health", nil))
-	if rr.Code != http.StatusOK {
-		t.Fatalf("code=%d, want 200", rr.Code)
-	}
-	var resp struct {
-		Models []agentcore.ModelHealth `json:"models"`
-	}
-	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if len(resp.Models) != 1 || resp.Models[0].Slug != "anthropic/claude" || resp.Models[0].State != "open" {
-		t.Errorf("models = %+v, want one open anthropic/claude", resp.Models)
-	}
-}
-
-func TestProviderHealthEndpoint_EmptyWhenNoEngine(t *testing.T) {
-	s := New(&config.Config{}, nil, nil) // nil engine (mock mode)
-	rr := httptest.NewRecorder()
-	s.handleProviderHealth(rr, httptest.NewRequest("GET", "/admin/provider-health", nil))
-	if rr.Code != http.StatusOK {
-		t.Fatalf("code=%d, want 200", rr.Code)
-	}
-	if rr.Body.String() != `{"models":[]}`+"\n" {
-		t.Errorf("body=%q, want empty models array", rr.Body.String())
-	}
-}

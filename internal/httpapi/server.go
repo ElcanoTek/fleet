@@ -754,7 +754,6 @@ func (s *Server) Routes() http.Handler {
 	// for a not-yet-provisioned email without leaking the user-list.
 	mux.Handle("/auth/session-epoch", auth(http.HandlerFunc(s.handleSessionEpoch)))
 	mux.Handle("/admin/stats", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminStats)))))
-	mux.Handle("/admin/provider-health", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleProviderHealth)))))
 	mux.Handle("/admin/health-summary", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleHealthSummary)))))
 	mux.Handle("/admin/server-stats", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleServerStats)))))
 	// Storage visibility + reclaim (uploads / temp files / workspaces /
