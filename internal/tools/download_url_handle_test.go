@@ -1,3 +1,5 @@
+//go:build fleet_host_executor
+
 package tools
 
 import (
@@ -56,7 +58,7 @@ func TestDownloadURL_OpaqueHandleFetchesWithoutLeakingBearerURL(t *testing.T) {
 	ctx, _ := downloadCtx(t)
 	raw := srv.URL + "/download?" + secretQuery
 	handle := registerDownloadURLHandle(raw)
-	res := runDownloadURL(ctx, DownloadURLParams{URL: handle})
+	res := runDownloadURL(ctx, fsTestSandbox(t), DownloadURLParams{URL: handle})
 	if res.Status != downloadStatusSuccess {
 		t.Fatalf("download failed: %+v", res)
 	}
@@ -86,7 +88,7 @@ func TestDownloadURL_ExpiredOpaqueHandleFailsClosed(t *testing.T) {
 	downloadURLHandles.entries[id] = entry
 	downloadURLHandles.Unlock()
 
-	res := runDownloadURL(context.Background(), DownloadURLParams{URL: handle})
+	res := runDownloadURL(context.Background(), fsTestSandbox(t), DownloadURLParams{URL: handle})
 	if res.Status != downloadStatusError || !strings.Contains(res.Error, "invalid or expired") {
 		t.Fatalf("expired handle result = %+v", res)
 	}

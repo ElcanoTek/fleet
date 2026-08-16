@@ -19,6 +19,23 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **`download_url`, `generate_image`, and `xlsx_workbook` no longer touch the
+  host filesystem.** #784 moved `view`/`write`/`edit_file` into the sandbox
+  FileOp seam but left these three as documented host-staging leftovers:
+  `download_url` wrote fetched bytes with host `os` calls, `generate_image`
+  read reference images and wrote provider output host-side, and `xlsx` did a
+  host zip read/rewrite. All three are now bound to the per-turn sandbox and
+  move every file byte through `Sandbox.RunFileOp` (reads enforce size caps
+  against true file size; writes are atomic and create parents in-sandbox;
+  download_url's collision probe is a sandboxed 1-byte read instead of host
+  `os.Stat`). Their network halves stay host-side by design — the ADR-0036
+  brokered-fetch class (SSRF guard + `fleet-download://` handle resolution for
+  `download_url`, `OPENROUTER_API_KEY` for `generate_image`) — so no
+  credential enters the sandbox. A nil sandbox fails closed: there is no
+  host-execution fallback, and the schema-only `DefaultTools` bindings error
+  if ever invoked. The reserved, unused `xlsx.Values` field is deleted.
+  ADR-0036's host-exception classes are narrowed accordingly. (#1083)
+
 - **A typed task key (`fleet_task_…`) could read every task in the fleet.**
   The type is sold as scoped — one key per automation — but every task-read
   surface authorized on `view_tasks` alone, so any such key (and any non-admin

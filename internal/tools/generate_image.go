@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"charm.land/fantasy"
+
+	"github.com/ElcanoTek/fleet/internal/sandbox"
 )
 
 // generate_image lets the agent produce a PNG/JPEG/WebP from a text prompt
@@ -108,12 +110,17 @@ const generateImageDescription = "Generates a photorealistic / illustrative imag
 	"Do NOT use this for charts, plots, or data visualizations — use run_python with matplotlib instead (free, deterministic, can read your data). Requires OPENROUTER_API_KEY."
 
 // NewGenerateImageTool returns a fantasy.AgentTool that produces an image
-// from a prompt and writes it under the conversation workspace.
-func NewGenerateImageTool() fantasy.AgentTool {
+// from a prompt and writes it under the conversation workspace, bound to the
+// per-turn sandbox. The provider API call stays host-side by design — it is
+// the ADR-0036 brokered-network class (OPENROUTER_API_KEY never enters the
+// sandbox) — but the reference-image reads and the output write go through
+// the sandbox FileOp seam (#1083), so the tool performs no host file I/O. A
+// nil sandbox fails closed.
+func NewGenerateImageTool(sb *sandbox.Sandbox) fantasy.AgentTool {
 	client := &http.Client{Timeout: defaultImageGenTimeout}
 	return fantasy.NewAgentTool("generate_image", generateImageDescription,
 		func(ctx context.Context, params GenerateImageParams, _ fantasy.ToolCall) (fantasy.ToolResponse, error) {
-			result, err := runGenerateImage(ctx, client, params)
+			result, err := runGenerateImage(ctx, sb, client, params)
 			if err != nil {
 				return fantasy.NewTextErrorResponse(err.Error()), nil
 			}
@@ -125,7 +132,10 @@ func NewGenerateImageTool() fantasy.AgentTool {
 		})
 }
 
-func runGenerateImage(ctx context.Context, client *http.Client, params GenerateImageParams) (*imageGenResult, error) {
+func runGenerateImage(ctx context.Context, sb *sandbox.Sandbox, client *http.Client, params GenerateImageParams) (*imageGenResult, error) {
+	if sb == nil {
+		return nil, errors.New("generate_image requires a sandbox; pool.Take returned nil or was bypassed")
+	}
 	if strings.TrimSpace(params.Prompt) == "" {
 		return nil, errors.New("prompt is required")
 	}
@@ -163,14 +173,10 @@ func runGenerateImage(ctx context.Context, client *http.Client, params GenerateI
 		if err != nil {
 			return nil, fmt.Errorf("reference image %q: %w", ref, err)
 		}
-		info, err := os.Stat(validRef)
-		if err != nil {
-			return nil, fmt.Errorf("reference image %q: %w", ref, err)
-		}
-		if info.Size() > maxImageGenReferenceBytes {
-			return nil, fmt.Errorf("reference image %q exceeds %d bytes", ref, maxImageGenReferenceBytes)
-		}
-		data, err := os.ReadFile(validRef) //nolint:gosec // G304: validRef came from ValidatePathForRead (pathsec containment check), not raw input.
+		// Read through the sandbox FileOp seam (#1083): size cap enforced
+		// against the file's true size, bytes transferred inside the
+		// container's confinement — no host os.Stat / os.ReadFile.
+		data, err := sandboxReadFile(ctx, sb, resolvedRef, validRef, maxImageGenReferenceBytes)
 		if err != nil {
 			return nil, fmt.Errorf("read reference image %q: %w", ref, err)
 		}
@@ -252,10 +258,9 @@ func runGenerateImage(ctx context.Context, client *http.Client, params GenerateI
 	if err != nil {
 		return nil, fmt.Errorf("output path validation failed: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Dir(validOut), 0o755); err != nil { //nolint:gosec // workspace dir must be readable by the sandbox user
-		return nil, fmt.Errorf("mkdir output: %w", err)
-	}
-	if err := os.WriteFile(validOut, data, 0o644); err != nil { //nolint:gosec // workspace files are readable by the same user
+	// Write through the sandbox FileOp seam (#1083): parent directories are
+	// created by the in-sandbox executor and the replacement is atomic.
+	if err := sandboxWriteFile(ctx, sb, resolved, validOut, data); err != nil {
 		return nil, fmt.Errorf("write output: %w", err)
 	}
 
