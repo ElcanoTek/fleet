@@ -639,9 +639,14 @@ type Config struct {
 	// Claude's [1024, 100000] window by the producer.
 	DefaultThinkingBudgetTokens int
 	TurnTimeoutSeconds          int
-	Temperature                 float64
-	LLMMaxTokens                int
-	TitleModel                  string
+	// Temperature is the sampling temperature for BOTH interactive turns and
+	// scheduled-task runs. It resolves through the standard FLEET_ → CHAT_ →
+	// CUTLASS_ chain, so the legacy CUTLASS_TEMPERATURE spelling still works as
+	// the last-resort alias (#1079 collapsed the separate scheduled-only knob
+	// that read CUTLASS_TEMPERATURE exclusively).
+	Temperature  float64
+	LLMMaxTokens int
+	TitleModel   string
 	// MetadataModel is the fast/cheap model the suggest_branch_name /
 	// suggest_commit_message / suggest_pr_description tools (#191) call to
 	// produce git metadata. FLEET_METADATA_MODEL, defaulting to TitleModel so
@@ -734,7 +739,6 @@ type Config struct {
 	// ── scheduled task config (cutlass) ──
 	TaskModel         string
 	TaskFallbackModel string
-	LLMTemperature    float64
 	SystemPrompt      string
 	Persona           string
 
@@ -1251,7 +1255,6 @@ func Load(envFile string) (*Config, error) {
 		// with "no model configured" (#1015).
 		TaskModel:         getenvFleet("TASK_MODEL"),
 		TaskFallbackModel: getenvFleet("TASK_FALLBACK_MODEL"),
-		LLMTemperature:    getEnvOrDefaultFloat("CUTLASS_TEMPERATURE", 0.3),
 
 		// ── phone a friend: super-LLM review (#175) ──
 		PhoneAFriendEnabled: getenvFleetBool("PHONE_A_FRIEND_ENABLED", false),
@@ -1778,15 +1781,6 @@ func getEnvOrDefaultInt(key string, defaultValue int) int {
 		// strconv (not Sscanf) so trailing garbage like "12abc" is REJECTED and
 		// falls back to the default, rather than being silently parsed as 12.
 		if result, err := strconv.Atoi(value); err == nil {
-			return result
-		}
-	}
-	return defaultValue
-}
-
-func getEnvOrDefaultFloat(key string, defaultValue float64) float64 {
-	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
-		if result, err := strconv.ParseFloat(value, 64); err == nil {
 			return result
 		}
 	}

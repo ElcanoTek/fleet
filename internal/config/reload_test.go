@@ -79,6 +79,37 @@ func TestReload_AppliesChangedReloadable(t *testing.T) {
 	}
 }
 
+// TestReload_TemperatureHonorsAliasChain pins that the temperature reload walks
+// the FLEET_ → CHAT_ → CUTLASS_ chain rather than one exact name (#1079): an
+// env file carrying only the legacy CUTLASS_TEMPERATURE spelling still moves
+// the live value, which drives BOTH interactive and scheduled sampling.
+func TestReload_TemperatureHonorsAliasChain(t *testing.T) {
+	isolateEnv(t)
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	writeEnv(t, envPath, "CUTLASS_TEMPERATURE=0.3\n")
+
+	cfg, err := Load(envPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := cfg.LiveTemperature(); got != 0.3 {
+		t.Fatalf("initial LiveTemperature = %v, want 0.3", got)
+	}
+
+	writeEnv(t, envPath, "CUTLASS_TEMPERATURE=0.7\n")
+	res, err := cfg.Reload(envPath)
+	if err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+	if cfg.LiveTemperature() != 0.7 {
+		t.Errorf("LiveTemperature = %v, want 0.7 (CUTLASS_ spelling must reload via the chain)", cfg.LiveTemperature())
+	}
+	if len(res.Errors) != 0 {
+		t.Errorf("unexpected errors: %+v", res.Errors)
+	}
+}
+
 func TestReload_ExcludedEnvironmentIsNotRehydrated(t *testing.T) {
 	isolateEnv(t)
 	t.Setenv("TAVILY_API_KEY", "process-winner")
@@ -381,9 +412,9 @@ func TestReload_BootProcessEnvWins(t *testing.T) {
 // nil reload state; the Live* getters must read the field directly without
 // panicking — that is the path the test suite's hand-built Configs take.
 func TestReload_NilStateGettersReadDirectly(t *testing.T) {
-	cfg := &Config{MaxCostUSD: 7.5, MaxTotalTokens: 9, MaxIterations: 11, Temperature: 0.4, LLMTemperature: 0.6}
+	cfg := &Config{MaxCostUSD: 7.5, MaxTotalTokens: 9, MaxIterations: 11, Temperature: 0.4}
 	if cfg.LiveMaxCostUSD() != 7.5 || cfg.LiveMaxTotalTokens() != 9 || cfg.LiveMaxIterations() != 11 ||
-		cfg.LiveTemperature() != 0.4 || cfg.LiveLLMTemperature() != 0.6 {
+		cfg.LiveTemperature() != 0.4 {
 		t.Errorf("nil-state getters did not read fields directly: %+v", cfg)
 	}
 	if _, err := cfg.Reload(""); err == nil {
@@ -426,7 +457,6 @@ func TestReload_RaceSafe(t *testing.T) {
 					_ = cfg.LiveMaxIterations()
 					_ = cfg.LiveTemperature()
 					_ = cfg.LiveMaxTotalTokens()
-					_ = cfg.LiveLLMTemperature()
 				}
 			}
 		}()

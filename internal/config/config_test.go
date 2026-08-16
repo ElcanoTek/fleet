@@ -754,33 +754,65 @@ func TestGetEnvOrDefault(t *testing.T) {
 	}
 }
 
-// TestGetEnvOrDefaultIntFloat_RejectTrailingGarbage proves the strconv-based
-// parsers reject trailing garbage (the #134 fix: "12abc"/"0.3xyz" must fall back
-// to the default, not silently parse as 12/0.3 the way fmt.Sscanf did), while
-// accepting clean values with surrounding whitespace.
-func TestGetEnvOrDefaultIntFloat_RejectTrailingGarbage(t *testing.T) {
-	t.Run("int", func(t *testing.T) {
-		t.Setenv("TEST_INT", "12abc")
-		if got := getEnvOrDefaultInt("TEST_INT", 7); got != 7 {
-			t.Errorf("trailing garbage: got %d, want default 7", got)
+// TestGetEnvOrDefaultInt_RejectTrailingGarbage proves the strconv-based parser
+// rejects trailing garbage (the #134 fix: "12abc" must fall back to the
+// default, not silently parse as 12 the way fmt.Sscanf did), while accepting
+// clean values with surrounding whitespace.
+func TestGetEnvOrDefaultInt_RejectTrailingGarbage(t *testing.T) {
+	t.Setenv("TEST_INT", "12abc")
+	if got := getEnvOrDefaultInt("TEST_INT", 7); got != 7 {
+		t.Errorf("trailing garbage: got %d, want default 7", got)
+	}
+	t.Setenv("TEST_INT", "  12  ")
+	if got := getEnvOrDefaultInt("TEST_INT", 7); got != 12 {
+		t.Errorf("trimmed value: got %d, want 12", got)
+	}
+	os.Unsetenv("TEST_INT")
+	if got := getEnvOrDefaultInt("TEST_INT", 7); got != 7 {
+		t.Errorf("unset: got %d, want default 7", got)
+	}
+}
+
+// TestLoad_TemperatureEnvSpellings pins that the ONE temperature knob — which
+// drives both interactive and scheduled sampling (#1079) — resolves through the
+// FLEET_ → CHAT_ → CUTLASS_ alias chain: the canonical spelling must work, and
+// the legacy spellings must keep existing deploys sampling where they were.
+func TestLoad_TemperatureEnvSpellings(t *testing.T) {
+	for _, prefix := range []string{"FLEET_", "CHAT_", "CUTLASS_"} {
+		t.Run(prefix, func(t *testing.T) {
+			isolateEnv(t)
+			t.Setenv(prefix+"TEMPERATURE", "0.7")
+			cfg, err := Load("")
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if cfg.Temperature != 0.7 {
+				t.Errorf("%sTEMPERATURE=0.7: Temperature = %v, want 0.7", prefix, cfg.Temperature)
+			}
+		})
+	}
+
+	t.Run("default", func(t *testing.T) {
+		isolateEnv(t)
+		cfg, err := Load("")
+		if err != nil {
+			t.Fatalf("Load: %v", err)
 		}
-		t.Setenv("TEST_INT", "  12  ")
-		if got := getEnvOrDefaultInt("TEST_INT", 7); got != 12 {
-			t.Errorf("trimmed value: got %d, want 12", got)
-		}
-		os.Unsetenv("TEST_INT")
-		if got := getEnvOrDefaultInt("TEST_INT", 7); got != 7 {
-			t.Errorf("unset: got %d, want default 7", got)
+		if cfg.Temperature != 0.3 {
+			t.Errorf("unset: Temperature = %v, want default 0.3", cfg.Temperature)
 		}
 	})
-	t.Run("float", func(t *testing.T) {
-		t.Setenv("TEST_FLOAT", "0.3xyz")
-		if got := getEnvOrDefaultFloat("TEST_FLOAT", 1.5); got != 1.5 {
-			t.Errorf("trailing garbage: got %v, want default 1.5", got)
+
+	t.Run("precedence", func(t *testing.T) {
+		isolateEnv(t)
+		t.Setenv("FLEET_TEMPERATURE", "0.1")
+		t.Setenv("CUTLASS_TEMPERATURE", "0.9")
+		cfg, err := Load("")
+		if err != nil {
+			t.Fatalf("Load: %v", err)
 		}
-		t.Setenv("TEST_FLOAT", " 0.3 ")
-		if got := getEnvOrDefaultFloat("TEST_FLOAT", 1.5); got != 0.3 {
-			t.Errorf("trimmed value: got %v, want 0.3", got)
+		if cfg.Temperature != 0.1 {
+			t.Errorf("FLEET_ should beat CUTLASS_: Temperature = %v, want 0.1", cfg.Temperature)
 		}
 	})
 }

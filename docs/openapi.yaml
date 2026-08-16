@@ -1903,9 +1903,9 @@ paths:
       description: >-
         Re-reads the small, explicitly safe subset of settings that a running
         fleet may change mid-flight — the per-run cost/token ceilings, the
-        per-turn iteration ceiling, and the interactive/scheduled sampling
-        temperatures (FLEET_MAX_COST_USD, FLEET_MAX_TOTAL_TOKENS,
-        FLEET_MAX_ITERATIONS, FLEET_TEMPERATURE, CUTLASS_TEMPERATURE). Values are
+        per-turn iteration ceiling, and the sampling temperature shared by
+        interactive and scheduled runs (FLEET_MAX_COST_USD,
+        FLEET_MAX_TOTAL_TOKENS, FLEET_MAX_ITERATIONS, FLEET_TEMPERATURE). Values are
         re-read from the env file (FLEET_ENV_FILE) and process environment with
         the same precedence as boot. Equivalent to sending SIGUSR2. Settings that
         are bound into a listener, connection pool, or signing context at startup
