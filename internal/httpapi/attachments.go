@@ -297,17 +297,22 @@ func (s *Server) validateAttachments(atts []chatAttachment) []chatAttachment {
 			continue
 		}
 		abs = filepath.Clean(abs)
-		// Confine abs to the uploads root. filepath.Rel + filepath.IsLocal is the
-		// containment check CodeQL's path-injection query recognizes: Rel's
-		// nil-error result sanitizes abs, and IsLocal rejects a "../" escape that
-		// Rel would otherwise hand back with a nil error. So the os.Stat below
-		// clears on rescan while staying provably inside <EmailAttachmentDir>/uploads
-		// (rel == "." — abs is the uploads dir itself — is dropped by !IsRegular).
+		// Confine the path to the uploads root: filepath.Rel splits off the
+		// remainder below root, and filepath.IsLocal rejects a "../" escape
+		// that Rel would otherwise hand back with a nil error. Everything
+		// after the guard uses ONLY the vetted remainder rejoined to the
+		// trusted root — never the raw client value — so the path handed to
+		// os.Stat is derived from sanitized data (this is also the shape
+		// CodeQL's path-injection query recognizes; Join(root, rel) is
+		// byte-identical to abs whenever the guard passes). rel == "." —
+		// the uploads dir itself — passes IsLocal but is dropped below by
+		// !IsRegular.
 		rel, relErr := filepath.Rel(root, abs)
 		if relErr != nil || !filepath.IsLocal(rel) {
 			log.Printf("attachment rejected (outside uploads root): %s", a.Path)
 			continue
 		}
+		abs = filepath.Join(root, rel)
 		info, err := os.Stat(abs)
 		if err != nil || !info.Mode().IsRegular() {
 			log.Printf("attachment rejected (stat): %s: %v", a.Path, err)

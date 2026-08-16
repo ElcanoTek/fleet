@@ -19,6 +19,15 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Attachment validation stats the vetted path, not the raw client value.**
+  `validateAttachments` already confined chat-attachment paths to the uploads
+  root (`filepath.Rel` + `filepath.IsLocal`), but then passed the original
+  client-derived absolute path to `os.Stat`, which CodeQL's path-injection
+  query kept flagging. The path handed to `os.Stat` is now rebuilt from the
+  trusted root plus the vetted relative remainder (`filepath.Join(root,
+  rel)`) — byte-identical to the old value whenever the guard passes, so no
+  behavior change, but the sink now provably consumes only sanitized data.
+
 - **Sandbox image: patched the open Grype/code-scanning CVEs in pypdf,
   soupsieve, pip, and pygments.** Fedora's RPMs for these pure-Python packages
   lag upstream security releases (pypdf 4.2.0 vs upstream 6.x carried ~30
