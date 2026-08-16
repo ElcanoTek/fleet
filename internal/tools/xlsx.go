@@ -9,31 +9,39 @@ import (
 	"fmt"
 	"html"
 	"io"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 
 	"charm.land/fantasy"
+
+	"github.com/ElcanoTek/fleet/internal/sandbox"
 )
 
+// xlsxMaxBytes bounds the workbook the tool will load into memory for its
+// pure-library zip/XML transform. Matches download_url's 100 MB cap.
+const xlsxMaxBytes = 100 * 1024 * 1024
+
 type XLSXParams struct {
-	Action     string   `json:"action" description:"Action to perform: inspect, rename_sheet, set_cell."`
-	Path       string   `json:"path" description:"Path to the .xlsx workbook."`
-	OutputPath string   `json:"output_path,omitempty" description:"Optional output path. If omitted, edits are made in place."`
-	SheetName  string   `json:"sheet_name,omitempty" description:"Worksheet name for set_cell, or current sheet name for rename_sheet."`
-	NewName    string   `json:"new_name,omitempty" description:"New worksheet name for rename_sheet."`
-	Cell       string   `json:"cell,omitempty" description:"Cell coordinate for set_cell, such as C1."`
-	Value      string   `json:"value,omitempty" description:"Plain text value for set_cell."`
-	Values     []string `json:"values,omitempty" description:"Reserved for future row operations."`
+	Action     string `json:"action" description:"Action to perform: inspect, rename_sheet, set_cell."`
+	Path       string `json:"path" description:"Path to the .xlsx workbook."`
+	OutputPath string `json:"output_path,omitempty" description:"Optional output path. If omitted, edits are made in place."`
+	SheetName  string `json:"sheet_name,omitempty" description:"Worksheet name for set_cell, or current sheet name for rename_sheet."`
+	NewName    string `json:"new_name,omitempty" description:"New worksheet name for rename_sheet."`
+	Cell       string `json:"cell,omitempty" description:"Cell coordinate for set_cell, such as C1."`
+	Value      string `json:"value,omitempty" description:"Plain text value for set_cell."`
 }
 
-func NewXLSXTool() fantasy.AgentTool {
+// NewXLSXTool returns the xlsx_workbook tool, bound to the per-turn sandbox.
+// The zip/XML transform is a pure in-memory library operation; the workbook
+// bytes are read and written through the sandbox FileOp seam (#1083), so the
+// tool performs no host file I/O. A nil sandbox fails closed.
+func NewXLSXTool(sb *sandbox.Sandbox) fantasy.AgentTool {
 	description := `Safely inspects and performs targeted edits on .xlsx workbooks without rebuilding them through pandas/openpyxl. Use this for formula-heavy Excel files before uploading to Fast.io. Actions: inspect validates package/workbook XML, lists sheets, and reports formula cache coverage; rename_sheet updates the workbook sheet name in-place; set_cell changes one cell's text value by editing only the target worksheet XML. This preserves formulas, cached formula values, styles, images, and unrelated workbook parts.`
 	return fantasy.NewAgentTool("xlsx_workbook", description,
 		func(ctx context.Context, params XLSXParams, _ fantasy.ToolCall) (fantasy.ToolResponse, error) {
-			out, err := runXLSXAction(ctx, params)
+			out, err := runXLSXAction(ctx, sb, params)
 			if err != nil {
 				return fantasy.NewTextErrorResponse(err.Error()), nil
 			}
@@ -41,7 +49,10 @@ func NewXLSXTool() fantasy.AgentTool {
 		})
 }
 
-func runXLSXAction(ctx context.Context, params XLSXParams) (string, error) {
+func runXLSXAction(ctx context.Context, sb *sandbox.Sandbox, params XLSXParams) (string, error) {
+	if sb == nil {
+		return "", fmt.Errorf("xlsx_workbook requires a sandbox; pool.Take returned nil or was bypassed")
+	}
 	resolved, err := resolveWorkspacePath(ctx, params.Path)
 	if err != nil {
 		return "", err
@@ -50,7 +61,11 @@ func runXLSXAction(ctx context.Context, params XLSXParams) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	wb, err := readXLSXPackage(path)
+	raw, err := sandboxReadFile(ctx, sb, resolved, path, xlsxMaxBytes)
+	if err != nil {
+		return "", err
+	}
+	wb, err := parseXLSXPackage(raw)
 	if err != nil {
 		return "", err
 	}
@@ -74,18 +89,22 @@ func runXLSXAction(ctx context.Context, params XLSXParams) (string, error) {
 	default:
 		return "", fmt.Errorf("unsupported xlsx action %q", params.Action)
 	}
-	outPath := path
+	outPath, outResolved := path, resolved
 	if params.OutputPath != "" {
-		resolvedOut, err := resolveWorkspacePath(ctx, params.OutputPath)
+		outResolved, err = resolveWorkspacePath(ctx, params.OutputPath)
 		if err != nil {
 			return "", err
 		}
-		outPath, err = ValidatePath(resolvedOut)
+		outPath, err = ValidatePath(outResolved)
 		if err != nil {
 			return "", err
 		}
 	}
-	if err := writeXLSXPackage(outPath, wb); err != nil {
+	packed, err := buildXLSXPackage(wb)
+	if err != nil {
+		return "", err
+	}
+	if err := sandboxWriteFile(ctx, sb, outResolved, outPath, packed); err != nil {
 		return "", err
 	}
 	result := map[string]any{"status": "success", "path": outPath, "action": params.Action}
@@ -98,12 +117,13 @@ type xlsxPackage struct {
 	files map[string][]byte
 }
 
-func readXLSXPackage(path string) (*xlsxPackage, error) {
-	r, err := zip.OpenReader(path)
+// parseXLSXPackage unpacks an in-memory .xlsx (zip) into its parts. The bytes
+// arrive via the sandbox FileOp seam; nothing here touches the host filesystem.
+func parseXLSXPackage(raw []byte) (*xlsxPackage, error) {
+	r, err := zip.NewReader(bytes.NewReader(raw), int64(len(raw)))
 	if err != nil {
 		return nil, err
 	}
-	defer r.Close()
 	out := &xlsxPackage{files: map[string][]byte{}}
 	for _, f := range r.File {
 		rc, err := f.Open()
@@ -122,14 +142,12 @@ func readXLSXPackage(path string) (*xlsxPackage, error) {
 	return out, nil
 }
 
-func writeXLSXPackage(path string, pkg *xlsxPackage) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), "xlsx-tool-*.xlsx")
-	if err != nil {
-		return err
-	}
-	tmpPath := tmp.Name()
-	defer os.Remove(tmpPath)
-	w := zip.NewWriter(tmp)
+// buildXLSXPackage re-zips the (possibly edited) parts in their original
+// order. The result is handed to the sandbox FileOp seam, whose write is
+// atomic — replacing the tmp-file + rename dance the host-side writer needed.
+func buildXLSXPackage(pkg *xlsxPackage) ([]byte, error) {
+	var buf bytes.Buffer
+	w := zip.NewWriter(&buf)
 	seen := map[string]bool{}
 	for _, name := range pkg.order {
 		data, ok := pkg.files[name]
@@ -140,23 +158,17 @@ func writeXLSXPackage(path string, pkg *xlsxPackage) error {
 		fw, err := w.Create(name)
 		if err != nil {
 			_ = w.Close()
-			_ = tmp.Close()
-			return err
+			return nil, err
 		}
 		if _, err := fw.Write(data); err != nil {
 			_ = w.Close()
-			_ = tmp.Close()
-			return err
+			return nil, err
 		}
 	}
 	if err := w.Close(); err != nil {
-		_ = tmp.Close()
-		return err
+		return nil, err
 	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmpPath, path)
+	return buf.Bytes(), nil
 }
 
 func inspectXLSX(pkg *xlsxPackage) (string, error) {

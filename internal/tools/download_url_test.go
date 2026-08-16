@@ -1,3 +1,5 @@
+//go:build fleet_host_executor
+
 package tools
 
 import (
@@ -51,7 +53,7 @@ func TestDownloadURL_SuccessUsesURLPathFilename(t *testing.T) {
 	defer srv.Close()
 
 	ctx, dir := downloadCtx(t)
-	res := runDownloadURL(ctx, DownloadURLParams{URL: srv.URL + "/path/report.csv"})
+	res := runDownloadURL(ctx, fsTestSandbox(t), DownloadURLParams{URL: srv.URL + "/path/report.csv"})
 
 	if res.Status != "success" {
 		t.Fatalf("status=%q err=%q", res.Status, res.Error)
@@ -83,7 +85,7 @@ func TestDownloadURL_FilenameFromContentDisposition(t *testing.T) {
 	defer srv.Close()
 
 	ctx, _ := downloadCtx(t)
-	res := runDownloadURL(ctx, DownloadURLParams{URL: srv.URL + "/storage/abc/read"})
+	res := runDownloadURL(ctx, fsTestSandbox(t), DownloadURLParams{URL: srv.URL + "/storage/abc/read"})
 
 	if res.Status != "success" {
 		t.Fatalf("status=%q err=%q", res.Status, res.Error)
@@ -103,7 +105,7 @@ func TestDownloadURL_FilenameFromContentTypeFallback(t *testing.T) {
 	ctx, _ := downloadCtx(t)
 	// URL path has no extension and no Content-Disposition → fall back
 	// to the content-type-derived `.pdf`.
-	res := runDownloadURL(ctx, DownloadURLParams{URL: srv.URL + "/download"})
+	res := runDownloadURL(ctx, fsTestSandbox(t), DownloadURLParams{URL: srv.URL + "/download"})
 
 	if res.Status != "success" {
 		t.Fatalf("status=%q err=%q", res.Status, res.Error)
@@ -121,7 +123,7 @@ func TestDownloadURL_CallerFilenameOverrides(t *testing.T) {
 	defer srv.Close()
 
 	ctx, _ := downloadCtx(t)
-	res := runDownloadURL(ctx, DownloadURLParams{
+	res := runDownloadURL(ctx, fsTestSandbox(t), DownloadURLParams{
 		URL:      srv.URL + "/r",
 		Filename: "agent_chose_this.csv",
 	})
@@ -136,7 +138,7 @@ func TestDownloadURL_CallerFilenameOverrides(t *testing.T) {
 
 func TestDownloadURL_RejectsBadScheme(t *testing.T) {
 	ctx, _ := downloadCtx(t)
-	res := runDownloadURL(ctx, DownloadURLParams{URL: "file:///etc/passwd"})
+	res := runDownloadURL(ctx, fsTestSandbox(t), DownloadURLParams{URL: "file:///etc/passwd"})
 	if res.Status != "error" {
 		t.Fatalf("want error for file:// scheme, got %+v", res)
 	}
@@ -147,7 +149,7 @@ func TestDownloadURL_RejectsBadScheme(t *testing.T) {
 
 func TestDownloadURL_RejectsEmptyURL(t *testing.T) {
 	ctx, _ := downloadCtx(t)
-	res := runDownloadURL(ctx, DownloadURLParams{URL: ""})
+	res := runDownloadURL(ctx, fsTestSandbox(t), DownloadURLParams{URL: ""})
 	if res.Status != "error" || !strings.Contains(res.Error, "url is required") {
 		t.Fatalf("want url required error, got %+v", res)
 	}
@@ -161,7 +163,7 @@ func TestDownloadURL_HTTPErrorStatusSurfacesBodyPreview(t *testing.T) {
 	defer srv.Close()
 
 	ctx, _ := downloadCtx(t)
-	res := runDownloadURL(ctx, DownloadURLParams{URL: srv.URL})
+	res := runDownloadURL(ctx, fsTestSandbox(t), DownloadURLParams{URL: srv.URL})
 	if res.Status != "error" {
 		t.Fatalf("want error status, got %+v", res)
 	}
@@ -192,7 +194,7 @@ func TestDownloadURL_RedirectChainRecorded(t *testing.T) {
 	srvURL = srv.URL
 
 	ctx, _ := downloadCtx(t)
-	res := runDownloadURL(ctx, DownloadURLParams{URL: srv.URL + "/start"})
+	res := runDownloadURL(ctx, fsTestSandbox(t), DownloadURLParams{URL: srv.URL + "/start"})
 	if res.Status != "success" {
 		t.Fatalf("status=%q err=%q", res.Status, res.Error)
 	}
@@ -216,7 +218,7 @@ func TestDownloadURL_NoRedirectChainIsSingleEntry(t *testing.T) {
 	defer srv.Close()
 
 	ctx, _ := downloadCtx(t)
-	res := runDownloadURL(ctx, DownloadURLParams{URL: srv.URL + "/x.txt"})
+	res := runDownloadURL(ctx, fsTestSandbox(t), DownloadURLParams{URL: srv.URL + "/x.txt"})
 	if res.Status != "success" {
 		t.Fatalf("status=%q err=%q", res.Status, res.Error)
 	}
@@ -238,7 +240,7 @@ func TestDownloadURL_SizeCapEnforced(t *testing.T) {
 	defer srv.Close()
 
 	ctx, dir := downloadCtx(t)
-	res := runDownloadURL(ctx, DownloadURLParams{URL: srv.URL + "/big.bin"})
+	res := runDownloadURL(ctx, fsTestSandbox(t), DownloadURLParams{URL: srv.URL + "/big.bin"})
 	if res.Status != "error" {
 		t.Fatalf("want error past 100MB cap, got %+v", res)
 	}
@@ -265,8 +267,8 @@ func TestDownloadURL_DeduplicatesByURLHash(t *testing.T) {
 	ctx, dir := downloadCtx(t)
 	url := srv.URL + "/same.txt"
 
-	first := runDownloadURL(ctx, DownloadURLParams{URL: url})
-	second := runDownloadURL(ctx, DownloadURLParams{URL: url})
+	first := runDownloadURL(ctx, fsTestSandbox(t), DownloadURLParams{URL: url})
+	second := runDownloadURL(ctx, fsTestSandbox(t), DownloadURLParams{URL: url})
 
 	if first.Status != "success" || second.Status != "success" {
 		t.Fatalf("downloads failed: first=%q second=%q", first.Error, second.Error)
@@ -294,7 +296,7 @@ func TestDownloadURL_AbsoluteOutputDirOutsideAllowedRejected(t *testing.T) {
 	// /root is generally NOT inside any allowed dir for the test
 	// process (cwd is the chat server dir; temp dir is whitelisted).
 	// Pick an outside-allowed absolute path that exists.
-	res := runDownloadURL(ctx, DownloadURLParams{
+	res := runDownloadURL(ctx, fsTestSandbox(t), DownloadURLParams{
 		URL:       srv.URL,
 		OutputDir: "/etc",
 	})
@@ -313,7 +315,7 @@ func TestDownloadURL_RelativeOutputDirAnchorsToWorkspace(t *testing.T) {
 	defer srv.Close()
 
 	ctx, workspaceDir := downloadCtx(t)
-	res := runDownloadURL(ctx, DownloadURLParams{
+	res := runDownloadURL(ctx, fsTestSandbox(t), DownloadURLParams{
 		URL:       srv.URL + "/r.csv",
 		OutputDir: "subdir/nested",
 	})
@@ -340,7 +342,7 @@ func TestDownloadURL_RelativeOutputDirTraversalRejected(t *testing.T) {
 	} {
 		// resolveDownloadDir runs before any dial, so no server is needed —
 		// the reject must fire before the fetch.
-		res := runDownloadURL(c, DownloadURLParams{
+		res := runDownloadURL(c, fsTestSandbox(t), DownloadURLParams{
 			URL:       "http://example.invalid/x",
 			OutputDir: "../../../../../../etc",
 		})
@@ -375,7 +377,7 @@ func TestDownloadURL_ResultMarshalsAsJSON(t *testing.T) {
 	defer srv.Close()
 
 	ctx, _ := downloadCtx(t)
-	res := runDownloadURL(ctx, DownloadURLParams{URL: srv.URL + "/api"})
+	res := runDownloadURL(ctx, fsTestSandbox(t), DownloadURLParams{URL: srv.URL + "/api"})
 	b, err := json.Marshal(res)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -438,7 +440,7 @@ func TestDownloadURL_ErrorJSONPreservesHTTPStatus(t *testing.T) {
 	defer srv.Close()
 
 	ctx, _ := downloadCtx(t)
-	res := runDownloadURL(ctx, DownloadURLParams{URL: srv.URL})
+	res := runDownloadURL(ctx, fsTestSandbox(t), DownloadURLParams{URL: srv.URL})
 	if res.HTTPStatus != http.StatusForbidden {
 		t.Fatalf("http_status=%d want 403", res.HTTPStatus)
 	}
@@ -448,5 +450,50 @@ func TestDownloadURL_ErrorJSONPreservesHTTPStatus(t *testing.T) {
 	}
 	if !strings.Contains(string(b), `"http_status":403`) {
 		t.Fatalf("http_status field missing from JSON: %s", b)
+	}
+}
+
+// TestDownloadURL_NilSandboxFailsClosed pins #1083: with no per-turn sandbox
+// (the DefaultTools schema-only binding) the tool refuses to fetch or write —
+// there is no host-execution fallback.
+func TestDownloadURL_NilSandboxFailsClosed(t *testing.T) {
+	ctx, _ := downloadCtx(t)
+	res := runDownloadURL(ctx, nil, DownloadURLParams{URL: "http://example.invalid/x"})
+	if res.Status != downloadStatusError || !strings.Contains(res.Error, "sandbox") {
+		t.Fatalf("want fail-closed sandbox error, got %+v", res)
+	}
+}
+
+// Moved from ssrf_test.go with #1083: the tool is now sandbox-bound, so its
+// tests live behind the fleet_host_executor tag like the other FileOp tools.
+// guard: with the production dialer the loopback server is refused; with
+// a plain dialer the same server downloads fine.
+func TestDownloadURLSSRFBlocksLoopback(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		fmt.Fprint(w, "sensitive internal data")
+	}))
+	defer srv.Close()
+
+	// downloadCtx swaps in a plain dialer; reinstate the production guard
+	// for the blocked half so we test the real wiring.
+	ctx, _ := downloadCtx(t)
+
+	prev := downloadURLDialContext
+	downloadURLDialContext = newSSRFGuardedDialer().DialContext
+	blocked := runDownloadURL(ctx, fsTestSandbox(t), DownloadURLParams{URL: srv.URL + "/secret.txt"})
+	downloadURLDialContext = prev // restore the unguarded dialer downloadCtx installed
+
+	if blocked.Status != downloadStatusError {
+		t.Fatalf("expected SSRF error status, got %q (saved_to=%s)", blocked.Status, blocked.SavedTo)
+	}
+	if !strings.Contains(blocked.Error, "access to private IP denied") {
+		t.Errorf("expected SSRF denial message, got: %s", blocked.Error)
+	}
+
+	// Now with the unguarded dialer (downloadCtx default): same server works.
+	allowed := runDownloadURL(ctx, fsTestSandbox(t), DownloadURLParams{URL: srv.URL + "/secret.txt"})
+	if allowed.Status != downloadStatusSuccess {
+		t.Fatalf("expected unguarded download to succeed, got status=%q err=%q", allowed.Status, allowed.Error)
 	}
 }

@@ -1,3 +1,5 @@
+//go:build fleet_host_executor
+
 package tools
 
 import (
@@ -187,7 +189,7 @@ func TestRunGenerateImage_StubExtensionFromMIME(t *testing.T) {
 	defer srv.Close()
 
 	client := &http.Client{Transport: rewriteRoundTripper{target: srv.URL}}
-	res, err := runGenerateImage(context.Background(), client, GenerateImageParams{
+	res, err := runGenerateImage(context.Background(), fsTestSandbox(t), client, GenerateImageParams{
 		Prompt:   "a banner",
 		Filename: "banner.png", // wrong-format hint must be ignored
 	})
@@ -225,7 +227,7 @@ func TestRunGenerateImage_DefaultFilename(t *testing.T) {
 	defer srv.Close()
 
 	client := &http.Client{Transport: rewriteRoundTripper{target: srv.URL}}
-	res, err := runGenerateImage(context.Background(), client, GenerateImageParams{Prompt: "x"})
+	res, err := runGenerateImage(context.Background(), fsTestSandbox(t), client, GenerateImageParams{Prompt: "x"})
 	if err != nil {
 		t.Fatalf("runGenerateImage: %v", err)
 	}
@@ -237,7 +239,7 @@ func TestRunGenerateImage_DefaultFilename(t *testing.T) {
 
 func TestRunGenerateImage_RequiresAPIKey(t *testing.T) {
 	t.Setenv("OPENROUTER_API_KEY", "")
-	if _, err := runGenerateImage(context.Background(), http.DefaultClient, GenerateImageParams{
+	if _, err := runGenerateImage(context.Background(), fsTestSandbox(t), http.DefaultClient, GenerateImageParams{
 		Prompt: "x",
 	}); err == nil || !strings.Contains(err.Error(), "OPENROUTER_API_KEY") {
 		t.Errorf("expected API key error, got %v", err)
@@ -246,7 +248,7 @@ func TestRunGenerateImage_RequiresAPIKey(t *testing.T) {
 
 func TestRunGenerateImage_RequiresPrompt(t *testing.T) {
 	t.Setenv("OPENROUTER_API_KEY", "k")
-	if _, err := runGenerateImage(context.Background(), http.DefaultClient, GenerateImageParams{
+	if _, err := runGenerateImage(context.Background(), fsTestSandbox(t), http.DefaultClient, GenerateImageParams{
 		Prompt: "",
 	}); err == nil {
 		t.Error("expected prompt-required error")

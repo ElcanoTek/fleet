@@ -1,3 +1,5 @@
+//go:build fleet_host_executor
+
 package tools
 
 import (
@@ -43,7 +45,7 @@ func TestGenerateImage_Live(t *testing.T) {
 	)
 	const attempts = 3
 	for i := 1; i <= attempts; i++ {
-		res, err = runGenerateImage(ctx, &http.Client{Timeout: 180 * time.Second}, GenerateImageParams{
+		res, err = runGenerateImage(ctx, fsTestSandbox(t), &http.Client{Timeout: 180 * time.Second}, GenerateImageParams{
 			Prompt:   "A simple solid blue square on a white background, 256x256, no text, minimalist.",
 			Filename: "smoke",
 		})

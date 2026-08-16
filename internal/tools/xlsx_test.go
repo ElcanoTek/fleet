@@ -1,3 +1,5 @@
+//go:build fleet_host_executor
+
 package tools
 
 import (
@@ -20,7 +22,7 @@ func TestXLSXWorkbookSetCellPreservesFormulaCache(t *testing.T) {
 		t.Fatalf("write workbook: %v", err)
 	}
 
-	if _, err := runXLSXAction(context.Background(), XLSXParams{
+	if _, err := runXLSXAction(context.Background(), fsTestSandbox(t), XLSXParams{
 		Action:    "set_cell",
 		Path:      path,
 		SheetName: "Data",
@@ -39,7 +41,7 @@ func TestXLSXWorkbookSetCellPreservesFormulaCache(t *testing.T) {
 		t.Fatalf("target cell was not updated: %s", sheet)
 	}
 
-	out, err := runXLSXAction(context.Background(), XLSXParams{Action: "inspect", Path: path})
+	out, err := runXLSXAction(context.Background(), fsTestSandbox(t), XLSXParams{Action: "inspect", Path: path})
 	if err != nil {
 		t.Fatalf("inspect: %v", err)
 	}

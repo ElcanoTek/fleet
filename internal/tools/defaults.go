@@ -45,17 +45,18 @@ func ExcludeInteractiveOnly(all []fantasy.AgentTool) []fantasy.AgentTool {
 	return out
 }
 
-// DefaultTools returns the stateless native-tool set, plus bash and
-// run_python entries bound to a nil sandbox. Those two surface a
+// DefaultTools returns the stateless native-tool set, plus the
+// sandbox-bound entries bound to a nil sandbox. Those surface a
 // clear "no sandbox" error if ever invoked through this slice —
 // production turns rebuild via [NewTurnTools] with a real per-turn
-// sandbox, and that's the only path that should fire bash/run_python.
-// The nil-bound entries here (bash, view/write/edit_file — all sandbox
-// data-plane tools since #784) exist so the tool *schemas* (name,
-// description, parameters) stay stable for the system prompt and
-// prompt-prefix caching, even before the agent has Take()d a
-// sandbox for the turn. Invoked with a nil sandbox they fail closed —
-// there is no host-execution fallback.
+// sandbox, and that's the only path that should fire them.
+// The nil-bound entries here (bash, run_python, view/write/edit_file —
+// sandbox data-plane since #784 — and download_url, xlsx_workbook,
+// generate_image, whose file I/O moved into the sandbox FileOp seam in
+// #1083) exist so the tool *schemas* (name, description, parameters)
+// stay stable for the system prompt and prompt-prefix caching, even
+// before the agent has Take()d a sandbox for the turn. Invoked with a
+// nil sandbox they fail closed — there is no host-execution fallback.
 func DefaultTools() []fantasy.AgentTool {
 	return []fantasy.AgentTool{
 		NewBashTool(nil),
@@ -64,15 +65,15 @@ func DefaultTools() []fantasy.AgentTool {
 		NewEditFileTool(nil),
 		NewTaskTrackerTool(),
 		NewWebFetchTool(),
-		NewDownloadURLTool(),
+		NewDownloadURLTool(nil),
 		NewSmartSearchTool(),
 		NewPreviewEmailTool(),
 		NewScheduleTaskTool(),
 		NewSuggestAdvancedModelTool(),
-		NewXLSXTool(),
+		NewXLSXTool(nil),
 		NewProposeMemoryTool(),
 		NewRunPythonTool(nil),
-		NewGenerateImageTool(),
+		NewGenerateImageTool(nil),
 	}
 }
 
@@ -95,15 +96,15 @@ func NewTurnTools(sb *sandbox.Sandbox) TurnTools {
 			NewEditFileTool(sb),
 			NewTaskTrackerTool(),
 			NewWebFetchTool(),
-			NewDownloadURLTool(),
+			NewDownloadURLTool(sb),
 			NewSmartSearchTool(),
 			NewPreviewEmailTool(),
 			NewScheduleTaskTool(),
 			NewSuggestAdvancedModelTool(),
-			NewXLSXTool(),
+			NewXLSXTool(sb),
 			NewProposeMemoryTool(),
 			NewRunPythonTool(sb),
-			NewGenerateImageTool(),
+			NewGenerateImageTool(sb),
 		},
 		Cleanup: sb.Close,
 	}
