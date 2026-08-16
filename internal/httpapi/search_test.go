@@ -47,21 +47,25 @@ func TestSearch_EmptyQueryReturnsEmpty(t *testing.T) {
 	}
 }
 
-func TestSearch_TasksTypeReturnsEmpty(t *testing.T) {
-	// type=tasks is accepted but not yet indexed — must return an empty set, never
-	// silently fall through to conversation hits.
+func TestSearch_UnknownTypeRejected(t *testing.T) {
+	// Search is conversations-only. The retired "tasks" stub (and its "all"
+	// alias) used to answer 200 with a lying empty set (#1076); any type other
+	// than "conversations" must now be an honest 400.
 	s := New(&config.Config{SearchEnabled: true}, &fakeEngine{}, nil)
-	rr := httptest.NewRecorder()
-	s.search(rr, httptest.NewRequest(http.MethodGet, "/search?q=anything&type=tasks", nil))
-	if rr.Code != http.StatusOK {
-		t.Fatalf("tasks search: code=%d, want 200", rr.Code)
+	for _, typ := range []string{"tasks", "all", "garbage"} {
+		rr := httptest.NewRecorder()
+		s.search(rr, httptest.NewRequest(http.MethodGet, "/search?q=anything&type="+typ, nil))
+		if rr.Code != http.StatusBadRequest {
+			t.Errorf("type=%s: code=%d, want 400", typ, rr.Code)
+		}
 	}
-	var resp searchResponse
-	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if resp.Total != 0 || len(resp.Results) != 0 {
-		t.Errorf("tasks search: total=%d len=%d, want 0/0", resp.Total, len(resp.Results))
+	// The one indexed surface stays accepted, spelled out or defaulted.
+	for _, target := range []string{"/search?q=&type=conversations", "/search?q="} {
+		rr := httptest.NewRecorder()
+		s.search(rr, httptest.NewRequest(http.MethodGet, target, nil))
+		if rr.Code != http.StatusOK {
+			t.Errorf("%s: code=%d, want 200", target, rr.Code)
+		}
 	}
 }
 
