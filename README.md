@@ -199,7 +199,6 @@ and status codes remain documentary.
 cmd/
   fleet/          the one unified binary — server (`fleet serve`: chat HTTP/SSE + orchestrator HTTP + scheduler + worker pool) AND operator CLI (every other verb)
   fleet-admin/    transitional deprecation shim — forwards to `fleet`; removed after one release
-  cutlass/        DEPRECATED shim → `fleet task run` (removed after one release)
   sandbox-probe/  deploy-time sandbox smoke test
 internal/
   agentcore/      the one unified run loop + shared agent primitives (cost ceilings, policy)
@@ -288,7 +287,7 @@ web app, and the Playwright e2e suites), see
 server, no database — through the **same governed runtime** the production
 scheduler uses (sandbox and credential brokering included). A debug
 entrypoint, not a second execution path. _(Formerly the separate `cutlass`
-binary; that name still forwards for one deprecation release.)_
+binary; its deprecation shim has been removed.)_
 
 ```
 fleet task run --log out.json path/to/task.yaml               # run one task through the governed runtime
