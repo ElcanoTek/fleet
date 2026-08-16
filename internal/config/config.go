@@ -348,8 +348,12 @@ var allowedEnvVars = map[string]bool{
 	"FLEET_PYTHON_REPL_IDLE_TTL":              true,
 	"FLEET_PYTHON_REPL_MAX":                   true,
 	"FLEET_WORKSPACE_ROOT":                    true,
-	"CHAT_LOCKDOWN_ONLY":                      true,
-	"CHAT_LOCKDOWN_ALLOWED_MODELS":            true,
+	// Lockdown reads through the FLEET_ alias chain (#1080); the CHAT_
+	// spellings stay allowlisted so existing env files keep sealing.
+	"FLEET_LOCKDOWN_ONLY":           true,
+	"FLEET_LOCKDOWN_ALLOWED_MODELS": true,
+	"CHAT_LOCKDOWN_ONLY":            true,
+	"CHAT_LOCKDOWN_ALLOWED_MODELS":  true,
 
 	// ── test harness ──
 	"CHAT_MOCK_MODE":  true,
@@ -1345,8 +1349,8 @@ func Load(envFile string) (*Config, error) {
 		PythonREPLMaxSessions:    getenvFleetInt("PYTHON_REPL_MAX", 32),
 
 		WorkspaceRoot:         getenvFleet("WORKSPACE_ROOT"),
-		LockdownOnly:          getenvBool("CHAT_LOCKDOWN_ONLY", false),
-		LockdownAllowedModels: splitLockdownModels(os.Getenv("CHAT_LOCKDOWN_ALLOWED_MODELS")),
+		LockdownOnly:          getenvFleetBool("LOCKDOWN_ONLY", false),
+		LockdownAllowedModels: splitLockdownModels(getenvFleet("LOCKDOWN_ALLOWED_MODELS")),
 		MockMode:              getenvFleetBool("MOCK_MODE", false),
 
 		// ── observability: Sentry error tracking (#193) ──
@@ -1390,7 +1394,7 @@ func Load(envFile string) (*Config, error) {
 
 	// Lockdown is a no-op without an image. Surface the misconfiguration loudly.
 	if cfg.LockdownOnly && cfg.SandboxImage == "" {
-		fmt.Fprintln(os.Stderr, "warn: CHAT_LOCKDOWN_ONLY=true but sandbox image is unset; cannot enforce — treating as disabled")
+		fmt.Fprintln(os.Stderr, "warn: FLEET_LOCKDOWN_ONLY=true but sandbox image is unset; cannot enforce — treating as disabled")
 		cfg.LockdownOnly = false
 	}
 
