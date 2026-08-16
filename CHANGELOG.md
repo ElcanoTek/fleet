@@ -105,6 +105,17 @@ prior versions are listed because none have shipped.
 
 ### Removed
 
+- **The reserved `BudgetScopeProject` budget scope is gone.** The constant
+  existed only "for later": create always rejected `scope=project` (tasks have
+  no project dimension, so a project budget could be recorded but never
+  enforced), yet the matcher arm and a leftover-row reporting path kept
+  implying a feature that cannot work. The constant, the `BudgetsFor` /
+  `groupByForScope` project arms, and the unused `BudgetPrincipals.Project`
+  field are deleted; unknown scopes (including `project`) stay rejected on
+  create, and leftover `project` rows still list but get no special reporting
+  path. Project budgets wait until tasks actually have a project dimension.
+  (#1078)
+
 - **The leftover moc `analyzing` task status is retired.** Fleet never wrote
   it — the constant survived #124 only so leftover moc-imported rows still
   decoded, which meant claim/lease/recovery/reporting SQL, the admin CLI, and

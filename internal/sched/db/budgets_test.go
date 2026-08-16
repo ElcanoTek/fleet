@@ -83,17 +83,17 @@ func TestBudgetCRUDAndUpsert(t *testing.T) {
 	}
 
 	// BudgetsFor matches only the named principals; empty args match nothing.
-	got, err := db.BudgetsFor(ctx, "alice@example.com", "", "")
+	got, err := db.BudgetsFor(ctx, "alice@example.com", "")
 	if err != nil {
 		t.Fatalf("BudgetsFor: %v", err)
 	}
 	if len(got) != 2 {
 		t.Errorf("BudgetsFor(alice) = %d budgets, want 2", len(got))
 	}
-	if got, _ := db.BudgetsFor(ctx, "bob@example.com", "", ""); len(got) != 0 {
+	if got, _ := db.BudgetsFor(ctx, "bob@example.com", ""); len(got) != 0 {
 		t.Errorf("BudgetsFor(bob) = %d budgets, want 0", len(got))
 	}
-	if got, _ := db.BudgetsFor(ctx, "", "", ""); len(got) != 0 {
+	if got, _ := db.BudgetsFor(ctx, "", ""); len(got) != 0 {
 		t.Errorf("BudgetsFor(empty) = %d budgets, want 0 (empty principals must never match)", len(got))
 	}
 
