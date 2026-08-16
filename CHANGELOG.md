@@ -19,6 +19,36 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **The project home's chat list and Sources panel, and the rail's
+  move-to-project flow, were dead in real deployments — their Next.js proxy
+  routes were never created.** The Go handlers (`GET
+  /projects/{id}/conversations`, `GET /projects/{id}/files`, `POST
+  /conversations/{id}/project`) shipped fully implemented and tested, and the
+  UI called them, but the three `/api/*` proxy routes in between didn't exist,
+  so every call 404ed: the Sources panel always rendered its empty state, chat
+  previews silently fell back to titles-only, and dragging a chat into a
+  project failed with an error blaming the server version. All three proxies
+  now exist (thin `chatServerPassthrough` wrappers; the re-file route is
+  CSRF-gated like every other mutating proxy) with route tests that import the
+  real route modules — the gap survived because the mocked e2e suite stubs
+  these paths at the network layer, so nothing exercised the routes
+  themselves.
+
+- **The durable turn ledger grew without bound — its retention sweep existed
+  but was never wired.** `store.SweepTurnEvents` shipped fully written and
+  tested, with a comment claiming it ran "after every successful turn", yet
+  nothing called it: every SSE frame a turn ever streamed (`turn_events`),
+  plus its `turns` row and `turn_journal` records, lived as long as the
+  conversation did. The sweep now actually runs after every turn (real and
+  mock paths share one `sweepRetention` helper, alongside the conversation
+  and input-queue sweeps), pruning turns terminal for longer than
+  `FLEET_TURN_EVENT_RETENTION_DAYS` (default 14; `0` keeps the ledger
+  forever). Running turns are never swept, so crash recovery is unaffected,
+  and canonical history in `messages` is untouched — the ledger is a
+  reattach/replay layer. Also removed the superseded
+  `store.MarkRunningTurnsErrored` startup path, which
+  `RecoverStrandedTurns` (#798) had replaced.
+
 - **OAuth-connected remote MCP servers could wedge permanently on token
   refresh.** Only `invalid_grant` was treated as terminal; every other
   token-endpoint error was classified transient, so a connection whose *client

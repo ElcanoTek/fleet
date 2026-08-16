@@ -305,46 +305,45 @@ func TestStreamEndpoint_NoContentReconnectIsTallied(t *testing.T) {
 	}
 }
 
-// A turn that's still 'running' on startup gets marked errored and
-// given a synthetic terminal event. Simulates crash recovery.
-func TestCrashRecovery_MarksRunningTurnsErrored(t *testing.T) {
+// The post-turn retention sweep prunes the durable turn ledger: a turn
+// terminal for longer than FLEET_TURN_EVENT_RETENTION_DAYS loses its turns
+// row and, via cascade, its turn_events — while a fresh turn survives. This
+// exercises the same sweepRetention call both turn paths run, so the ledger
+// can never silently return to unbounded growth.
+func TestSweepRetention_PrunesAgedTurnLedger(t *testing.T) {
 	s := serverFixture(t)
+	s.cfg.TurnEventRetentionDays = 14
 	conv, err := s.store.CreateConversation(t.Context(), "alice@x.com", "hi", "victoria", "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// Create a turn and a partial event log — as if the previous
-	// process died mid-flight.
-	turnID := "stranded-turn-1"
-	if err := s.store.CreateTurn(t.Context(), turnID, conv.ID, time.Now().Unix()); err != nil {
-		t.Fatalf("CreateTurn: %v", err)
+	mkTurn := func(turnID string, finishedAt int64) {
+		t.Helper()
+		if err := s.store.CreateTurn(t.Context(), turnID, conv.ID, finishedAt-1); err != nil {
+			t.Fatalf("CreateTurn: %v", err)
+		}
+		if err := s.store.InsertTurnEvents(t.Context(), []store.TurnEvent{
+			{TurnID: turnID, EventID: 1, Name: "turn.started", Data: []byte(`{}`), CreatedAt: finishedAt - 1},
+		}); err != nil {
+			t.Fatalf("InsertTurnEvents: %v", err)
+		}
+		if err := s.store.FinishTurn(t.Context(), turnID, store.TurnStatusCompleted, finishedAt, false); err != nil {
+			t.Fatalf("FinishTurn: %v", err)
+		}
 	}
-	if err := s.store.InsertTurnEvents(t.Context(), []store.TurnEvent{
-		{TurnID: turnID, EventID: 1, Name: "turn.started", Data: []byte(`{}`), CreatedAt: time.Now().Unix()},
-		{TurnID: turnID, EventID: 2, Name: "text.delta", Data: []byte(`{"text":"partial"}`), CreatedAt: time.Now().Unix()},
-	}); err != nil {
-		t.Fatalf("InsertTurnEvents: %v", err)
-	}
+	mkTurn("aged-turn", time.Now().AddDate(0, 0, -15).Unix())
+	mkTurn("fresh-turn", time.Now().Unix())
 
-	stranded, err := s.concreteStore(t).MarkRunningTurnsErrored(t.Context())
-	if err != nil {
-		t.Fatalf("MarkRunningTurnsErrored: %v", err)
-	}
-	if len(stranded) != 1 || stranded[0] != turnID {
-		t.Errorf("stranded = %v, want [%s]", stranded, turnID)
-	}
+	s.sweepRetention(t.Context())
 
-	rec, _ := s.store.LookupTurn(t.Context(), turnID)
-	if rec == nil || rec.Status != "error" {
-		t.Errorf("status = %+v, want error", rec)
+	if rec, _ := s.store.LookupTurn(t.Context(), "aged-turn"); rec != nil {
+		t.Errorf("aged turn survived the retention sweep: %+v", rec)
 	}
-
-	events, _ := s.store.LoadTurnEvents(t.Context(), turnID, 0)
-	if len(events) != 3 {
-		t.Fatalf("len(events) = %d, want 3 (2 original + 1 synthetic)", len(events))
+	if events, _ := s.store.LoadTurnEvents(t.Context(), "aged-turn", 0); len(events) != 0 {
+		t.Errorf("aged turn's events survived the retention sweep: %d", len(events))
 	}
-	if events[2].Name != "turn.error" {
-		t.Errorf("synthetic event name = %q, want turn.error", events[2].Name)
+	if rec, _ := s.store.LookupTurn(t.Context(), "fresh-turn"); rec == nil {
+		t.Error("fresh turn was swept; retention must only reclaim aged-out turns")
 	}
 }

@@ -293,89 +293,22 @@ func (s *Store) LookupTurn(ctx context.Context, turnID string) (*TurnRecord, err
 	return &r, nil
 }
 
-// MarkRunningTurnsErrored runs at startup. Any turn still flagged
-// 'running' was mid-flight when the previous process died; we upgrade
-// it to 'error' and append a synthetic terminal event so a reattaching
-// client sees a clean EOF instead of hanging.
-// Returns the list of touched turn IDs so the caller can log.
-func (s *Store) MarkRunningTurnsErrored(ctx context.Context) ([]string, error) {
-	now := time.Now().Unix()
-
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	rows, err := tx.QueryContext(ctx,
-		`SELECT turn_id FROM turns WHERE status = 'running'`)
-	if err != nil {
-		return nil, err
-	}
-	var turnIDs []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			_ = rows.Close()
-			return nil, err
-		}
-		turnIDs = append(turnIDs, id)
-	}
-	_ = rows.Close()
-	if len(turnIDs) == 0 {
-		return nil, tx.Commit()
-	}
-
-	// Flip status + stamp finished_at for every running turn in one
-	// statement, then append a synthetic turn.error event to each.
-	if _, err := tx.ExecContext(ctx,
-		`UPDATE turns SET status = 'error', finished_at = $1 WHERE status = 'running'`,
-		now,
-	); err != nil {
-		return nil, err
-	}
-
-	// One synthetic event per turn. Reuse the batch helper shape to
-	// stay inside the same transaction.
-	for _, id := range turnIDs {
-		// Find the next event_id so we don't collide with whatever was
-		// already persisted before the crash.
-		var maxID sql.NullInt64
-		if err := tx.QueryRowContext(ctx,
-			`SELECT MAX(event_id) FROM turn_events WHERE turn_id = $1`, id,
-		).Scan(&maxID); err != nil {
-			return nil, err
-		}
-		next := int64(1)
-		if maxID.Valid {
-			next = maxID.Int64 + 1
-		}
-		// Derive the pagination columns from the owning turn the same way
-		// InsertTurnEvents does (conversation_id NOT NULL since #189) so the
-		// synthetic terminal frame is part of the paginated stream too.
-		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO turn_events
-			   (turn_id, conversation_id, turn_index, sequence, event_id, event_name, data_json, created_at)
-			 SELECT t.turn_id, t.conversation_id, t.turn_index,
-			        (SELECT COALESCE(MAX(te.sequence), 0)
-			           FROM turn_events te
-			          WHERE te.conversation_id = t.conversation_id) + 1,
-			        $2, 'turn.error', $3, $4
-			   FROM turns t WHERE t.turn_id = $1`,
-			id, next, `{"message":"server restarted mid-turn"}`, now,
-		); err != nil {
-			return nil, err
-		}
-	}
-
-	return turnIDs, tx.Commit()
-}
-
-// SweepTurnEvents deletes turns (and their events, via FK cascade)
-// that finished more than ttl ago. Called after every successful turn
-// — cheap enough at chat scale not to warrant a separate janitor.
-// Running turns are never swept.
+// SweepTurnEvents deletes finished turns — and, via FK cascade, their
+// turn_events ledger rows and turn_journal records — that reached a terminal
+// state more than ttl ago. Called from the post-turn retention sweep
+// (httpapi.sweepRetention), alongside the conversation and input-queue
+// sweeps; cheap enough at chat scale not to warrant a separate janitor.
+//
+// Running turns are never swept, so startup recovery (RecoverStrandedTurns,
+// which scans status='running' before the server takes traffic) always sees
+// its inputs; a swept turn is by definition one whose recovery window closed
+// ttl ago. Canonical history is unaffected: messages rows are the durable
+// record, the ledger is a delivery/replay layer (see docs/TURN-JOURNAL.md).
+// A non-positive ttl disables the sweep, mirroring PurgeTerminalInputs.
 func (s *Store) SweepTurnEvents(ctx context.Context, ttl time.Duration) (int, error) {
+	if ttl <= 0 {
+		return 0, nil
+	}
 	cutoff := time.Now().Add(-ttl).Unix()
 	res, err := s.db.ExecContext(ctx,
 		`DELETE FROM turns

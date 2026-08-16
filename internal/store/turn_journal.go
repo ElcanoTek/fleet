@@ -242,8 +242,9 @@ type RecoveredTurn struct {
 // repeated recovery (crash during recovery, double boot) a no-op. The entry
 // list is a deterministic function of the two ledgers.
 //
-// Supersedes MarkRunningTurnsErrored (which flipped status but reconstructed
-// nothing — the "answer disappears on reload" path this issue closes).
+// Superseded (and removed) the old MarkRunningTurnsErrored startup path,
+// which flipped status but reconstructed nothing — the "answer disappears on
+// reload" path this issue closes.
 func (s *Store) RecoverStrandedTurns(ctx context.Context) ([]RecoveredTurn, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT turn_id, conversation_id FROM turns WHERE status = 'running' ORDER BY started_at`)
@@ -376,8 +377,8 @@ func (s *Store) recoverOneTurn(ctx context.Context, turnID, convID string) (Reco
 	}
 
 	// Terminal flip + markers, then the synthetic terminal SSE frame so a
-	// reattaching client sees clean EOF (same shape MarkRunningTurnsErrored
-	// wrote; the event stays for pagination even though history is now whole).
+	// reattaching client sees clean EOF (the event stays for pagination even
+	// though history is now whole).
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE turns SET status = 'error', finished_at = $1,
 		        history_committed_at = $1, recovered_at = $1

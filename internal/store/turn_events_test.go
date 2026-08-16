@@ -172,81 +172,6 @@ func TestInsertAndLoadTurnEvents(t *testing.T) {
 	}
 }
 
-func TestMarkRunningTurnsErrored(t *testing.T) {
-	s := newTestStore(t)
-	ctx := context.Background()
-
-	// Setup
-	if _, err := s.CreateUser(ctx, "error@example.com", "password123"); err != nil {
-		t.Fatalf("CreateUser: %v", err)
-	}
-	conv, err := s.CreateConversation(ctx, "error@example.com", "t", "victoria", "", false)
-	if err != nil {
-		t.Fatalf("CreateConversation: %v", err)
-	}
-
-	// 1. Running turn
-	turnRunning := "turn_running"
-	if err := s.CreateTurn(ctx, turnRunning, conv.ID, time.Now().Unix()); err != nil {
-		t.Fatalf("CreateTurn: %v", err)
-	}
-	// Add an event so we can test the next event_id calculation
-	if err := s.InsertTurnEvents(ctx, []TurnEvent{{TurnID: turnRunning, EventID: 1, Name: "test", Data: []byte("{}"), CreatedAt: time.Now().Unix()}}); err != nil {
-		t.Fatalf("InsertTurnEvents: %v", err)
-	}
-
-	// 2. Finished turn
-	turnFinished := "turn_finished"
-	if err := s.CreateTurn(ctx, turnFinished, conv.ID, time.Now().Unix()); err != nil {
-		t.Fatalf("CreateTurn: %v", err)
-	}
-	if err := s.FinishTurn(ctx, turnFinished, TurnStatusCompleted, time.Now().Unix(), false); err != nil {
-		t.Fatalf("FinishTurn: %v", err)
-	}
-
-	// Mark running turns errored
-	touched, err := s.MarkRunningTurnsErrored(ctx)
-	if err != nil {
-		t.Fatalf("MarkRunningTurnsErrored: %v", err)
-	}
-
-	// Verify only the running turn was touched
-	if len(touched) != 1 || touched[0] != turnRunning {
-		t.Fatalf("expected touched [%s], got %v", turnRunning, touched)
-	}
-
-	// Verify status upgraded to error
-	r, _ := s.LookupTurn(ctx, turnRunning)
-	if r.Status != TurnStatusError {
-		t.Errorf("expected running turn to be upgraded to %s, got %s", TurnStatusError, r.Status)
-	}
-	if !r.FinishedAt.Valid {
-		t.Errorf("expected finished_at to be populated for errored turn")
-	}
-
-	// Verify finished turn is untouched
-	rFin, _ := s.LookupTurn(ctx, turnFinished)
-	if rFin.Status != TurnStatusCompleted {
-		t.Errorf("expected finished turn to stay %s, got %s", TurnStatusCompleted, rFin.Status)
-	}
-
-	// Verify synthetic event appended
-	events, err := s.LoadTurnEvents(ctx, turnRunning, 0)
-	if err != nil {
-		t.Fatalf("LoadTurnEvents: %v", err)
-	}
-	if len(events) != 2 {
-		t.Fatalf("expected 2 events, got %d", len(events))
-	}
-	synthEvent := events[1]
-	if synthEvent.EventID != 2 {
-		t.Errorf("expected synthetic event to have EventID 2, got %d", synthEvent.EventID)
-	}
-	if synthEvent.Name != "turn.error" {
-		t.Errorf("expected synthetic event name 'turn.error', got '%s'", synthEvent.Name)
-	}
-}
-
 func TestSweepTurnEvents(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -263,10 +188,17 @@ func TestSweepTurnEvents(t *testing.T) {
 	twoHoursAgo := time.Now().Add(-2 * time.Hour).Unix()
 	halfHourAgo := time.Now().Add(-30 * time.Minute).Unix()
 
-	// 1. Old turn (should be swept)
+	// 1. Old turn (should be swept), carrying both an SSE event and a journal
+	// row so the test proves the FK cascade reclaims all three tables.
 	turnOld := "turn_old"
 	if err := s.CreateTurn(ctx, turnOld, conv.ID, twoHoursAgo-10); err != nil {
 		t.Fatalf("CreateTurn: %v", err)
+	}
+	if err := s.InsertTurnEvents(ctx, []TurnEvent{{TurnID: turnOld, EventID: 1, Name: "turn.started", Data: []byte(`{}`), CreatedAt: twoHoursAgo - 10}}); err != nil {
+		t.Fatalf("InsertTurnEvents: %v", err)
+	}
+	if err := s.InsertTurnJournal(ctx, TurnJournalRow{TurnID: turnOld, Seq: 1, Kind: TurnJournalIntent, CallID: "c1", ToolName: "t", Content: "{}", CreatedAt: twoHoursAgo - 10}); err != nil {
+		t.Fatalf("InsertTurnJournal: %v", err)
 	}
 	if err := s.FinishTurn(ctx, turnOld, TurnStatusCompleted, twoHoursAgo, false); err != nil {
 		t.Fatalf("FinishTurn: %v", err)
@@ -287,8 +219,20 @@ func TestSweepTurnEvents(t *testing.T) {
 		t.Fatalf("CreateTurn: %v", err)
 	}
 
+	// A non-positive TTL disables the sweep entirely.
+	deleted, err := s.SweepTurnEvents(ctx, 0)
+	if err != nil {
+		t.Fatalf("SweepTurnEvents(0): %v", err)
+	}
+	if deleted != 0 {
+		t.Fatalf("expected disabled sweep to delete nothing, got %d", deleted)
+	}
+	if r, _ := s.LookupTurn(ctx, turnOld); r == nil {
+		t.Fatal("disabled sweep must not delete turns")
+	}
+
 	// Sweep with TTL of 1 hour
-	deleted, err := s.SweepTurnEvents(ctx, time.Hour)
+	deleted, err = s.SweepTurnEvents(ctx, time.Hour)
 	if err != nil {
 		t.Fatalf("SweepTurnEvents: %v", err)
 	}
@@ -296,10 +240,16 @@ func TestSweepTurnEvents(t *testing.T) {
 		t.Fatalf("expected 1 turn deleted, got %d", deleted)
 	}
 
-	// Verify old is gone
+	// Verify old is gone, along with its cascaded ledger rows
 	oldR, _ := s.LookupTurn(ctx, turnOld)
 	if oldR != nil {
 		t.Errorf("expected old turn to be deleted, got %v", oldR)
+	}
+	if events, err := s.LoadTurnEvents(ctx, turnOld, 0); err != nil || len(events) != 0 {
+		t.Errorf("expected old turn's events swept via cascade, got %d (err=%v)", len(events), err)
+	}
+	if journal, err := s.LoadTurnJournal(ctx, turnOld); err != nil || len(journal) != 0 {
+		t.Errorf("expected old turn's journal swept via cascade, got %d (err=%v)", len(journal), err)
 	}
 
 	// Verify recent and running persist
