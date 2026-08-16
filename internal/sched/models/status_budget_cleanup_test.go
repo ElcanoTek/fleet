@@ -21,7 +21,7 @@ func TestIsValidReportedStatus_DropsLegacyAnalyzing(t *testing.T) {
 func TestBudgetCreateValidate_RejectsProjectScope(t *testing.T) {
 	hard := 10.0
 	bc := BudgetCreate{
-		Scope:       BudgetScopeProject,
+		Scope:       "project", // the reserved constant is gone; the raw string pins the rejection
 		PrincipalID: "proj-1",
 		Window:      BudgetWindowDay,
 		HardUSD:     &hard,

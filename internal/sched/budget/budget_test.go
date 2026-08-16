@@ -34,13 +34,12 @@ type fakeStore struct {
 	markers    map[uuid.UUID]time.Time
 }
 
-func (f *fakeStore) BudgetsFor(_ context.Context, user, key, project string) ([]models.Budget, error) {
+func (f *fakeStore) BudgetsFor(_ context.Context, user, key string) ([]models.Budget, error) {
 	var out []models.Budget
 	for _, b := range f.budgets {
 		switch {
 		case b.Scope == models.BudgetScopeUser && user != "" && b.PrincipalID == user,
-			b.Scope == models.BudgetScopeKey && key != "" && b.PrincipalID == key,
-			b.Scope == models.BudgetScopeProject && project != "" && b.PrincipalID == project:
+			b.Scope == models.BudgetScopeKey && key != "" && b.PrincipalID == key:
 			bb := b
 			if ws, ok := f.markers[b.ID]; ok {
 				w := ws

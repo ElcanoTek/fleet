@@ -1354,8 +1354,8 @@ func (s *Storage) ListBudgets(ctx context.Context) ([]models.Budget, error) {
 
 // BudgetsFor returns the budgets matching a create's principals (#601 part 2).
 // See db.BudgetsFor.
-func (s *Storage) BudgetsFor(ctx context.Context, user, key, project string) ([]models.Budget, error) {
-	return s.db.BudgetsFor(ctx, user, key, project)
+func (s *Storage) BudgetsFor(ctx context.Context, user, key string) ([]models.Budget, error) {
+	return s.db.BudgetsFor(ctx, user, key)
 }
 
 // DeleteBudget removes a budget by id (#601 part 2). See db.DeleteBudget.

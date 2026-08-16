@@ -2263,11 +2263,6 @@ const (
 	// BudgetScopeKey bounds a scoped API key, keyed by the key id
 	// (tasks.created_by_key_id).
 	BudgetScopeKey = "key"
-	// BudgetScopeProject is reserved for a future chat-project budget.
-	// It is NOT a legal create scope: tasks have no project dimension, so
-	// a project budget could only be recorded and never enforced. Leftover
-	// rows still list and report.
-	BudgetScopeProject = "project"
 )
 
 // Budget windows (#601 part 2): the UTC calendar window spend is summed over.
@@ -2388,12 +2383,10 @@ type BudgetStatus struct {
 // gate can look up every budget that applies. Empty fields = the create path
 // has no such principal (e.g. an admin-key submission carries neither a user
 // nor a scoped key and is therefore not budget-gated — the admin key is the
-// box operator, not a meterable principal). Project is unused: no create
-// path resolves one, and scope=project is rejected on write.
+// box operator, not a meterable principal).
 type BudgetPrincipals struct {
-	User    string
-	Key     string
-	Project string
+	User string
+	Key  string
 }
 
 // EvalRun is one eval & regression harness invocation (#502): the set-level
