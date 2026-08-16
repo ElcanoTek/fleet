@@ -51,7 +51,10 @@ components:
       type: apiKey
       in: header
       name: X-API-Key
-      description: The configured admin API key (full access).
+      description: >-
+        The bootstrap ADMIN_API_KEY or a typed admin API key
+        (fleet_admin_…, #1081). Full access; other key types are rejected
+        on admin-only routes.
     scopedApiKey:
       type: apiKey
       in: header

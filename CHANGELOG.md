@@ -19,6 +19,16 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Typed admin keys (`fleet_admin_…`) were rejected on the only routes that
+  need them** — you could mint an `admin`-type key carrying `PermissionAdmin`,
+  but `AdminAuthMiddleware` (`/keys`, `/users`, `/metrics`, `/admin/*`) only
+  accepted the bootstrap `ADMIN_API_KEY`, 401ing a valid typed admin key. The
+  middleware now also accepts a hash-verified typed admin key. The gate stays
+  type-based and does not widen: a valid key of any other class
+  (`task`/`readonly`/`webhook`/legacy `sk-`, even with an admin role) is a
+  definitive 403 on those routes, the bootstrap key keeps working, and
+  unknown/absent/revoked keys stay 401. (#1081)
+
 - **`FLEET_TEMPERATURE` did not move scheduled-task sampling** — the scheduled
   runner had its own temperature field read from the exact `CUTLASS_TEMPERATURE`
   env var only (and hot-reloaded by that exact name only), so an operator
