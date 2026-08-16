@@ -161,7 +161,8 @@ func (c *Config) LiveMaxIterations() int {
 	return c.MaxIterations
 }
 
-// LiveTemperature returns the interactive sampling temperature, hot-reload-safe.
+// LiveTemperature returns the sampling temperature (interactive and scheduled
+// runs share the one knob, #1079), hot-reload-safe.
 func (c *Config) LiveTemperature() float64 {
 	if c.reload == nil {
 		return c.Temperature
@@ -169,17 +170,6 @@ func (c *Config) LiveTemperature() float64 {
 	c.reload.mu.RLock()
 	defer c.reload.mu.RUnlock()
 	return c.Temperature
-}
-
-// LiveLLMTemperature returns the scheduled-task sampling temperature,
-// hot-reload-safe.
-func (c *Config) LiveLLMTemperature() float64 {
-	if c.reload == nil {
-		return c.LLMTemperature
-	}
-	c.reload.mu.RLock()
-	defer c.reload.mu.RUnlock()
-	return c.LLMTemperature
 }
 
 // FieldChange records one reloadable setting whose value actually changed.
@@ -297,11 +287,10 @@ func (c *Config) applyReloadableLocked(result *ReloadResult) {
 	reloadFleetFloat(result, "MAX_COST_USD", c.MaxCostUSD, 0, func(v float64) { c.MaxCostUSD = v })
 	reloadFleetInt(result, "MAX_TOTAL_TOKENS", c.MaxTotalTokens, 0, 0, func(v int) { c.MaxTotalTokens = v })
 	reloadFleetInt(result, "MAX_ITERATIONS", c.MaxIterations, 1, 10000, func(v int) { c.MaxIterations = v })
+	// One temperature knob covers interactive and scheduled sampling (#1079);
+	// the FLEET_/CHAT_/CUTLASS_ chain still picks up a legacy CUTLASS_TEMPERATURE
+	// spelling as the last-resort alias.
 	reloadFleetFloat(result, "TEMPERATURE", c.Temperature, 0, func(v float64) { c.Temperature = v })
-	// LLMTemperature is the scheduled-task knob, loaded from the exact env var
-	// CUTLASS_TEMPERATURE (not via the FLEET_/CHAT_ prefix machinery), so resolve
-	// it the same way here.
-	reloadExactFloat(result, "CUTLASS_TEMPERATURE", c.LLMTemperature, 0, func(v float64) { c.LLMTemperature = v })
 }
 
 // restoreBootSecrets re-pins every registered per-request auth-secret env var
@@ -352,16 +341,6 @@ func reloadFleetFloat(result *ReloadResult, suffix string, cur, minVal float64, 
 		return
 	}
 	applyFloat(result, canonicalPrefix+suffix, raw, cur, minVal, set)
-}
-
-// reloadExactFloat is reloadFleetFloat for a setting read from one exact env var
-// name (no prefix machinery).
-func reloadExactFloat(result *ReloadResult, key string, cur, minVal float64, set func(float64)) {
-	raw := os.Getenv(key)
-	if strings.TrimSpace(raw) == "" {
-		return
-	}
-	applyFloat(result, key, raw, cur, minVal, set)
 }
 
 func applyFloat(result *ReloadResult, key, raw string, cur, minVal float64, set func(float64)) {

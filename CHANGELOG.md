@@ -19,6 +19,35 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Typed admin keys (`fleet_admin_…`) were rejected on the only routes that
+  need them** — you could mint an `admin`-type key carrying `PermissionAdmin`,
+  but `AdminAuthMiddleware` (`/keys`, `/users`, `/metrics`, `/admin/*`) only
+  accepted the bootstrap `ADMIN_API_KEY`, 401ing a valid typed admin key. The
+  middleware now also accepts a hash-verified typed admin key. The gate stays
+  type-based and does not widen: a valid key of any other class
+  (`task`/`readonly`/`webhook`/legacy `sk-`, even with an admin role) is a
+  definitive 403 on those routes, the bootstrap key keeps working, and
+  unknown/absent/revoked keys stay 401. (#1081)
+
+- **`FLEET_TEMPERATURE` did not move scheduled-task sampling** — the scheduled
+  runner had its own temperature field read from the exact `CUTLASS_TEMPERATURE`
+  env var only (and hot-reloaded by that exact name only), so an operator
+  following the documented `FLEET_` prefix convention changed interactive
+  sampling while scheduled runs kept sampling at the leftover value. The
+  separate scheduled-only knob is gone: interactive and scheduled runs now share
+  the one `Temperature` field, resolved through the standard `FLEET_` → `CHAT_`
+  → `CUTLASS_` alias chain at boot and on reload, so `CUTLASS_TEMPERATURE` keeps
+  working as the last-resort alias and existing deploys do not jump temperature.
+  (#1079)
+
+- **`FLEET_LOCKDOWN_ONLY` and `FLEET_LOCKDOWN_ALLOWED_MODELS` were silent
+  no-ops** — the lockdown knobs were the last bare `CHAT_`-only reads, so an
+  operator following the documented `FLEET_` prefix convention got an unsealed
+  instance while believing lockdown was on. Both knobs now resolve through the
+  standard `FLEET_` → `CHAT_` → `CUTLASS_` alias chain and the `FLEET_`
+  spellings are on the env-file allowlist; the `CHAT_` spellings keep working,
+  so existing deployments stay sealed. (#1080)
+
 - **The project home's chat list and Sources panel, and the rail's
   move-to-project flow, were dead in real deployments — their Next.js proxy
   routes were never created.** The Go handlers (`GET

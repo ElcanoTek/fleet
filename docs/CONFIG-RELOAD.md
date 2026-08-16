@@ -85,8 +85,7 @@ effect on the next turn or task:
 | `FLEET_MAX_COST_USD` | per-run cost ceiling (USD) | `>= 0` |
 | `FLEET_MAX_TOTAL_TOKENS` | per-run token ceiling | `>= 0` |
 | `FLEET_MAX_ITERATIONS` | per-turn iteration ceiling | `1`–`10000` |
-| `FLEET_TEMPERATURE` | interactive sampling temperature | `>= 0` |
-| `CUTLASS_TEMPERATURE` | scheduled-task sampling temperature | `>= 0` |
+| `FLEET_TEMPERATURE` | sampling temperature (interactive turns and scheduled tasks share the one knob) | `>= 0` |
 
 ## Non-reloadable settings (require a restart)
 
