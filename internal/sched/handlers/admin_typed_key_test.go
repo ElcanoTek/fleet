@@ -25,7 +25,7 @@ import (
 
 // setupAdminAuthz wires representative admin-only routes behind the real
 // AdminAuthMiddleware so each credential class travels the whole path.
-func setupAdminAuthz(t *testing.T) (*storage.Storage, *apikeys.Manager, *chi.Mux) {
+func setupAdminAuthz(t *testing.T) (*apikeys.Manager, *chi.Mux) {
 	t.Helper()
 	tmpDir := t.TempDir()
 
@@ -60,7 +60,7 @@ func setupAdminAuthz(t *testing.T) (*storage.Storage, *apikeys.Manager, *chi.Mux
 		r.Post("/keys/{key_id}/rotate", h.RotateAPIKey)
 		r.Post("/users", h.CreateUser)
 	})
-	return store, keyMgr, r
+	return keyMgr, r
 }
 
 func adminAuthzDo(r *chi.Mux, method, path, key string, body []byte) *httptest.ResponseRecorder {
@@ -79,7 +79,7 @@ func adminAuthzDo(r *chi.Mux, method, path, key string, body []byte) *httptest.R
 // TestAdminAuth_TypedAdminKeyWorks pins the #1081 fix: a fleet_admin_ key can
 // list keys, rotate a key, and create a user — the routes its type exists for.
 func TestAdminAuth_TypedAdminKeyWorks(t *testing.T) {
-	_, keyMgr, r := setupAdminAuthz(t)
+	keyMgr, r := setupAdminAuthz(t)
 
 	adminKey := mustCreateTypedKey(t, keyMgr, apikeys.KeyTypeAdmin, nil)
 	victim, _, err := keyMgr.CreateTypedKey("rotate-me", apikeys.KeyTypeTask, nil, 0, nil, "")
@@ -102,7 +102,7 @@ func TestAdminAuth_TypedAdminKeyWorks(t *testing.T) {
 // TestAdminAuth_BootstrapKeyStillWorks pins that the env-configured
 // ADMIN_API_KEY keeps working unchanged alongside typed admin keys.
 func TestAdminAuth_BootstrapKeyStillWorks(t *testing.T) {
-	_, _, r := setupAdminAuthz(t)
+	_, r := setupAdminAuthz(t)
 
 	if w := adminAuthzDo(r, "GET", "/keys", "bootstrap-admin-key", nil); w.Code != http.StatusOK {
 		t.Errorf("bootstrap GET /keys = %d, want 200: %s", w.Code, w.Body.String())
@@ -116,7 +116,7 @@ func TestAdminAuth_BootstrapKeyStillWorks(t *testing.T) {
 // as admin; the legacy case pins that the gate is type-based, not
 // permission-based.
 func TestAdminAuth_NonAdminKeysAreDefinitive403(t *testing.T) {
-	_, keyMgr, r := setupAdminAuthz(t)
+	keyMgr, r := setupAdminAuthz(t)
 
 	adminRole := "admin"
 	_, legacyAdminKey, err := keyMgr.CreateKey("legacy-admin", nil, &adminRole, 0, nil, "")
@@ -149,7 +149,7 @@ func TestAdminAuth_NonAdminKeysAreDefinitive403(t *testing.T) {
 // no key, an unknown key, and a REVOKED typed admin key are all 401 — a
 // revoked admin key must lose these routes immediately.
 func TestAdminAuth_InvalidOrAbsentKeysStay401(t *testing.T) {
-	_, keyMgr, r := setupAdminAuthz(t)
+	keyMgr, r := setupAdminAuthz(t)
 
 	revoked, revokedRaw, err := keyMgr.CreateTypedKey("revoked-admin", apikeys.KeyTypeAdmin, nil, 0, nil, "")
 	if err != nil {
