@@ -6,7 +6,7 @@ import { DiffBlock } from "./DiffBlock";
 // Integration-flavored tests: drive the real ReactMarkdown pipeline the chat
 // UI uses and assert that diff fences (and auto-detected bare diffs) render
 // through DiffBlock with coloured +/- rows, a hunk header, a file pill, and the
-// copy/apply toolbar — while non-diff code blocks stay on the plain <pre> path.
+// copy toolbar — while non-diff code blocks stay on the plain <pre> path.
 
 const FENCED_DIFF = [
   "```diff",
@@ -79,13 +79,6 @@ describe("DiffBlock", () => {
     // Screen-reader labels back up the colour for assistive tech.
     expect(screen.getByText(/added line/i)).toBeInTheDocument();
     expect(screen.getByText(/removed line/i)).toBeInTheDocument();
-  });
-
-  it("renders a disabled Apply button with a forward-compat tooltip", () => {
-    render(<DiffBlock raw={"@@ -1 +1 @@\n-a\n+b"} />);
-    const apply = screen.getByRole("button", { name: /apply/i });
-    expect(apply).toBeDisabled();
-    expect(apply).toHaveAttribute("title", "Apply is coming in a future release");
   });
 
   it("renders a Copy diff button", () => {

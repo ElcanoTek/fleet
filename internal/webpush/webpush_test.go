@@ -175,7 +175,7 @@ func TestNilServiceIsNoOp(t *testing.T) {
 	if svc.PublicKey() != "" {
 		t.Error("nil service must have no public key")
 	}
-	if err := svc.SendToUser(context.Background(), "u@x.com", "t", "b", ""); err != nil {
+	if err := svc.sendToUser(context.Background(), "u@x.com", "t", "b", "", webpushgo.UrgencyNormal); err != nil {
 		t.Errorf("nil SendToUser: %v", err)
 	}
 	if err := svc.SendEvent(context.Background(), notify.Event{Status: notify.StatusSuccess, Audience: "u@x.com"}); err != nil {
@@ -197,7 +197,7 @@ func TestSendToUser_FansOutEncrypted(t *testing.T) {
 	relay := &fakeRelay{}
 	svc := newTestService(t, st, relay)
 
-	if err := svc.SendToUser(context.Background(), "u@x.com", "secret-title", "secret-body", "https://fleet.example.com/x"); err != nil {
+	if err := svc.sendToUser(context.Background(), "u@x.com", "secret-title", "secret-body", "https://fleet.example.com/x", webpushgo.UrgencyNormal); err != nil {
 		t.Fatalf("SendToUser: %v", err)
 	}
 	if len(relay.requests) != 2 {
@@ -221,7 +221,7 @@ func TestSendToUser_FansOutEncrypted(t *testing.T) {
 		t.Errorf("healthy sends must not delete subscriptions: %v", st.deleted)
 	}
 	// No subscriptions for another user: a clean no-op, no extra requests.
-	if err := svc.SendToUser(context.Background(), "nobody@x.com", "t", "", ""); err != nil {
+	if err := svc.sendToUser(context.Background(), "nobody@x.com", "t", "", "", webpushgo.UrgencyNormal); err != nil {
 		t.Fatalf("SendToUser (no subs): %v", err)
 	}
 	if len(relay.requests) != 2 {
@@ -244,7 +244,7 @@ func TestSendToUser_ExpiredSubscriptionDeleted(t *testing.T) {
 	}}
 	svc := newTestService(t, st, relay)
 
-	if err := svc.SendToUser(context.Background(), "u@x.com", "t", "", ""); err != nil {
+	if err := svc.sendToUser(context.Background(), "u@x.com", "t", "", "", webpushgo.UrgencyNormal); err != nil {
 		t.Fatalf("SendToUser: %v", err)
 	}
 	if len(relay.requests) != 4 {

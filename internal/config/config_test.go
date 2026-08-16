@@ -72,7 +72,6 @@ func clearEnvVars() {
 		"TEST_VAR",
 		"CUTLASS_TASK_MODEL",
 		"CUTLASS_TASK_FALLBACK_MODEL",
-		"CUTLASS_TASK_MAX_ITERATIONS",
 		"CUTLASS_ALLOWED_DIRS",
 		"GH_TOKEN",
 		"FAST_IO_MCP_TOKEN",
@@ -105,9 +104,6 @@ func TestLoad_DefaultsApply(t *testing.T) {
 	}
 	if cfg.UnpinnedCap != 50 {
 		t.Errorf("UnpinnedCap default: got %d", cfg.UnpinnedCap)
-	}
-	if !cfg.ReasoningEnabled {
-		t.Error("ReasoningEnabled default: expected true")
 	}
 	if cfg.PersonaDefault != "assistant" {
 		t.Errorf("PersonaDefault default: got %q", cfg.PersonaDefault)

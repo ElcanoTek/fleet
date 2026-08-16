@@ -182,16 +182,12 @@ type pushPayload struct {
 	URL   string `json:"url,omitempty"`
 }
 
-// SendToUser delivers a low-detail notification to EVERY subscription the
+// sendToUser delivers a low-detail notification to EVERY subscription the
 // user holds (each browser they opted in from). Per-subscription failures are
 // logged and do not stop the fan-out; an endpoint the relay reports expired
 // (404/410) is deleted so dead browsers age out. Returns the first hard error
 // (store read, or a marshal failure) — send failures are best-effort.
 // nil-safe no-op when the service is disabled.
-func (s *Service) SendToUser(ctx context.Context, userEmail, title, body, deepLink string) error {
-	return s.sendToUser(ctx, userEmail, title, body, deepLink, webpushgo.UrgencyNormal)
-}
-
 func (s *Service) sendToUser(ctx context.Context, userEmail, title, body, deepLink string, urgency webpushgo.Urgency) error {
 	if !s.Enabled() || strings.TrimSpace(userEmail) == "" {
 		return nil

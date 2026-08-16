@@ -27,14 +27,14 @@ internal/agentcore/mcp_fastio_response_test.go:jwt:114
 internal/agentcore/mcp_fastio_response_test.go:jwt:117
 
 # fake: fabricated "sk-or-v1-..."-shaped string in TestLoadWithQuotedEnvFromPodman
-# (double-quote-stripping test). Shifted +3 by the #1043 default-on comment
-# block earlier in the file.
-internal/config/config_test.go:generic-api-key:1161
+# (double-quote-stripping test). Shifted -4 by the #1073 dead-knob removals
+# earlier in the file.
+internal/config/config_test.go:generic-api-key:1157
 
 # fake: fabricated "sk-or-v1-..."-shaped string in TestLoadWithSingleQuotedEnvFromPodman
-# (single-quote-stripping test). Shifted +3 by the #1043 default-on comment
-# block earlier in the file.
-internal/config/config_test.go:generic-api-key:1179
+# (single-quote-stripping test). Shifted -4 by the #1073 dead-knob removals
+# earlier in the file.
+internal/config/config_test.go:generic-api-key:1175
 
 # fake: fabricated secrets in the redact package table tests (TestRedactor_*),
 # fed to Redactor.Redact to assert they are scrubbed. All fabricated fixtures.
