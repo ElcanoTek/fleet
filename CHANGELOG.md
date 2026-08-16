@@ -19,6 +19,17 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Sandbox image: patched the open Grype/code-scanning CVEs in pypdf,
+  soupsieve, pip, and pygments.** Fedora's RPMs for these pure-Python packages
+  lag upstream security releases (pypdf 4.2.0 vs upstream 6.x carried ~30
+  GHSAs, soupsieve 2.8.3 two High ones, plus Medium/Low findings in pip and
+  pygments). The default-bundle Containerfile now overlays the current PyPI
+  releases into `/usr/local` and removes the vulnerable RPM copies, with a
+  build-time check that the overlay actually won. The native-extension stack
+  (numpy, lxml, pyarrow, …) stays on Fedora RPMs; the overlay is unpinned so
+  every rebuild keeps picking up upstream fixes, same policy as the base
+  image.
+
 - **`download_url`, `generate_image`, and `xlsx_workbook` no longer touch the
   host filesystem.** #784 moved `view`/`write`/`edit_file` into the sandbox
   FileOp seam but left these three as documented host-staging leftovers:
