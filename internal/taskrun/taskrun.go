@@ -51,8 +51,7 @@ import (
 )
 
 // Run executes one task YAML to completion and returns the process exit code.
-// progName labels messages/usage ("fleet task run" from the unified binary;
-// "cutlass" from the deprecated shim).
+// progName labels messages/usage ("fleet task run" from the unified binary).
 func Run(argv []string, progName string) int {
 	if err := run(argv, progName); err != nil {
 		fmt.Fprintf(os.Stderr, "%s: %v\n", progName, err)

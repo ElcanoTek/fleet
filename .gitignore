@@ -33,7 +33,7 @@ go.work.sum
 .fleet-client/
 .fleet/tool-output/
 
-# cutlass one-shot run workspaces + logs (scripts/run_workflow_live.sh)
+# `fleet task run` one-shot run workspaces + logs (scripts/run_workflow_live.sh)
 .fleet-runs/
 
 # Editor/IDE
@@ -72,7 +72,6 @@ web/.e2e-live.env
 /fleet
 /fleet-admin
 /fleet-bench
-/cutlass
 fleet-session.json
 *.pid
 /workspace/

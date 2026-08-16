@@ -5,7 +5,7 @@
 // every fleet entrypoint shares.
 //
 // Two callers drive it: cmd/fleet's capped worker pool (the production scheduler)
-// and cmd/cutlass's local one-shot harness. Both reach the SAME governed loop, so
+// and `fleet task run`'s local one-shot harness. Both reach the SAME governed loop, so
 // the harness is not a second, weaker execution path — it is the production
 // driver with a CLI front-end instead of the orchestrator round-trip. This is why
 // the logic lives here, in a shared internal package, rather than being copied:
@@ -1419,7 +1419,7 @@ func convertLogSession(_ *models.Task, ls *agent.LogSession) *models.LogSession 
 
 // BuildMCPSpecs converts config.MCPServers into the agent.MCPServerSpec map the
 // interactive Manager connects at construction. Shared by cmd/fleet (the
-// interactive engine) and cmd/cutlass (the one-shot harness) so all callers
+// interactive engine) and `fleet task run` (the one-shot harness) so all callers
 // resolve identical MCP specs.
 func BuildMCPSpecs(cfg *config.Config) map[string]agent.MCPServerSpec {
 	out := make(map[string]agent.MCPServerSpec, len(cfg.MCPServers))

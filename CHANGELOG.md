@@ -76,6 +76,14 @@ prior versions are listed because none have shipped.
 
 ### Removed
 
+- **The `cutlass` deprecation shim (`cmd/cutlass`) is gone — its one-release
+  deprecation window is over.** The shim only printed a DEPRECATED warning and
+  forwarded to the same `internal/taskrun` entrypoint; `fleet task run
+  <task.yaml>` is (and remains) the documented way to run one task locally.
+  Nothing in the Makefile, CI, or deploy scripts built the shim, so no build
+  surface changes — the `CUTLASS_*` env-var aliases are a separate
+  compatibility mechanism and are untouched.
+
 - **A dead-code sweep of half-wired surface that parsed, persisted, or served
   data nothing ever read.** None of these change behavior — each removed half
   had no consumer:
