@@ -1291,7 +1291,11 @@ paths:
               type: object
               properties:
                 model: { type: string }
-                fallback_model: { type: string }
+                fallback_model:
+                  type: string
+                  description: >-
+                    Omit to leave each task's existing fallback_model untouched;
+                    send an empty string to clear it to NULL; send a slug to set it.
                 from_model: { type: string }
                 dry_run: { type: boolean }
               required: [model]

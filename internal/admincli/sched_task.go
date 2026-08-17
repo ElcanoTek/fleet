@@ -1,6 +1,7 @@
 package admincli
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -509,19 +510,25 @@ func schedTaskSetCredentials(argv []string) int {
 // schedTaskSetModel bulk re-assigns the pinned model (and optional fallback)
 // across SCHEDULED tasks, optionally limited to those pinned to --from-model.
 // --dry-run prints the matched tasks without writing. Fleet-wide, operator-only.
+//
+// --fallback-model is optional: omit it to leave existing fallback_model
+// values untouched; pass --fallback-model="" to clear them. A fleet-wide
+// write requires a TTY confirmation (or --no-confirm), matching restore (#1120).
 func schedTaskSetModel(argv []string) int {
 	fs := flag.NewFlagSet("sched task set-model", flag.ContinueOnError)
 	dbURL := fs.String("database-url", "", "sched Postgres DSN")
 	model := fs.String("model", "", "the model slug to set (required)")
-	fallback := fs.String("fallback-model", "", "optional fallback model slug ('' clears it to NULL)")
+	fallback := fs.String("fallback-model", "", "optional fallback model slug (omit to keep existing; '' clears it to NULL)")
 	fromModel := fs.String("from-model", "", "only re-assign tasks currently pinned to this slug")
 	dryRun := fs.Bool("dry-run", false, "print the tasks that would change without writing")
+	noConfirm := fs.Bool("no-confirm", false, "skip the interactive confirmation (for scripted bulk updates)")
 	if err := fs.Parse(argv); err != nil {
 		return 1
 	}
 	if strings.TrimSpace(*model) == "" {
 		return errf(1, "--model is required")
 	}
+	fallbackArg := optionalFlag(fs, "fallback-model", fallback)
 	st, code := openSchedStorage(*dbURL)
 	if st == nil {
 		return code
@@ -539,22 +546,100 @@ func schedTaskSetModel(argv []string) int {
 			if *fromModel != "" && (t.Model == nil || *t.Model != *fromModel) {
 				continue
 			}
-			cur := "<none>"
-			if t.Model != nil {
-				cur = *t.Model
-			}
-			fmt.Printf("%s\t%s → %s\n", t.ID, cur, *model)
+			fmt.Print(formatSetModelDryRun(t, *model, fallbackArg))
 			n++
 		}
 		fmt.Fprintf(os.Stderr, "dry-run: %d scheduled task(s) would be re-assigned\n", n)
 		return 0
 	}
 
-	updated, err := st.BulkUpdateScheduledTaskModel(ctx, *model, *fallback, *fromModel)
+	if code := confirmBulkMutation(*noConfirm, setModelConfirmPrompt(*model, fallbackArg, *fromModel)); code != 0 {
+		return code
+	}
+
+	updated, err := st.BulkUpdateScheduledTaskModel(ctx, *model, fallbackArg, *fromModel)
 	if err != nil {
 		return errf(5, "re-assign model: %v", err)
 	}
 	fmt.Fprintf(os.Stderr, "re-assigned model on %d scheduled task(s)\n", updated)
+	return 0
+}
+
+// optionalFlag returns nil when name was not provided on the command line,
+// otherwise a pointer to the parsed value. Distinguishes "flag omitted"
+// from `--flag=""` (#1120).
+func optionalFlag(fs *flag.FlagSet, name string, value *string) *string {
+	if !flagWasSet(fs, name) {
+		return nil
+	}
+	return value
+}
+
+func flagWasSet(fs *flag.FlagSet, name string) bool {
+	set := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			set = true
+		}
+	})
+	return set
+}
+
+func formatSetModelDryRun(t *models.Task, newModel string, fallback *string) string {
+	cur := "<none>"
+	if t.Model != nil {
+		cur = *t.Model
+	}
+	return fmt.Sprintf("%s\tmodel %s → %s\tfallback %s\n", t.ID, cur, newModel, formatFallbackChange(t.FallbackModel, fallback))
+}
+
+func formatFallbackChange(current *string, next *string) string {
+	cur := "<none>"
+	if current != nil && *current != "" {
+		cur = *current
+	}
+	if next == nil {
+		return cur + " (unchanged)"
+	}
+	if *next == "" {
+		return cur + " → <cleared>"
+	}
+	return cur + " → " + *next
+}
+
+func setModelConfirmPrompt(model string, fallback *string, fromModel string) string {
+	scope := "all scheduled tasks"
+	if fromModel != "" {
+		scope = "scheduled tasks currently pinned to " + fromModel
+	}
+	extra := "existing fallback_model values will be kept"
+	if fallback != nil {
+		if *fallback == "" {
+			extra = "fallback_model will be cleared"
+		} else {
+			extra = "fallback_model will be set to " + *fallback
+		}
+	}
+	return fmt.Sprintf("this will re-assign model=%s on %s (%s).", model, scope, extra)
+}
+
+// confirmBulkMutation is the restore-style gate for fleet-wide writes (#1120):
+// --no-confirm proceeds; a TTY prompts [y/N]; a non-TTY without --no-confirm
+// refuses rather than silently mutating.
+func confirmBulkMutation(noConfirm bool, warning string) int {
+	if noConfirm {
+		return 0
+	}
+	if !isTerminal(os.Stdin) {
+		return errf(1, "refusing fleet-wide mutation without confirmation: pass --no-confirm for scripted updates (or --dry-run to preview)")
+	}
+	fmt.Fprintf(os.Stderr, "WARNING: %s Continue? [y/N]: ", warning)
+	reader := bufio.NewReader(os.Stdin)
+	line, _ := reader.ReadString('\n')
+	if ans := strings.ToLower(strings.TrimSpace(line)); ans != "y" && ans != "yes" {
+		fmt.Fprintln(os.Stderr, "aborted")
+		return 1
+	}
 	return 0
 }
 

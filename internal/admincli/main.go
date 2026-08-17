@@ -187,7 +187,7 @@ Users, credentials, notes:
   fleet sched task import < tasks.json     (recreate tasks from stdin; upsert on id)
   fleet sched task batch-create --from-file <file> [--atomic]
                                                  (submit multiple tasks atomically or best-effort from a JSON file)
-  fleet sched task set-model --model <slug> [--fallback-model <slug>] [--from-model <slug>] [--dry-run]
+  fleet sched task set-model --model <slug> [--fallback-model <slug>] [--from-model <slug>] [--dry-run] [--no-confirm]
   fleet sched task set-credentials <task_id> --allow server[:account] ... | --clear   (per-task MCP credential allowlist)
   fleet sched task set-description <task_id> <text>|-    (operator docs; - reads stdin, e.g. < TASK_README.md)
   fleet sched task set-limits <task_id> --memory-mb N --cpus N --pids N | --clear

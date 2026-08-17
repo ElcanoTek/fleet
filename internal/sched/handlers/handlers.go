@@ -1499,17 +1499,22 @@ func (h *Handlers) BulkSetTaskModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Validate the optional fallback with the same rule the per-task path uses.
-	fallback := req.FallbackModel
-	if fallback != "" {
-		fp := &fallback
-		if err := normalizeOptionalModel(&fp, "fallback_model"); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		if fp != nil {
-			fallback = *fp
+	// Distinguishing omit (keep existing) from "" (explicit clear) is the #1120
+	// contract — normalizeOptionalModel nils empty strings, so we handle
+	// explicit-clear ourselves.
+	var fallback *string
+	if req.FallbackModel != nil {
+		trimmed := strings.TrimSpace(*req.FallbackModel)
+		if trimmed == "" {
+			empty := ""
+			fallback = &empty
 		} else {
-			fallback = ""
+			fp := &trimmed
+			if err := normalizeOptionalModel(&fp, "fallback_model"); err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			fallback = fp
 		}
 	}
 
@@ -1538,7 +1543,15 @@ func (h *Handlers) BulkSetTaskModel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to re-assign task model")
 		return
 	}
-	log.Printf("Bulk re-assigned model=%q fallback=%q from=%q on %d scheduled task(s)", req.Model, fallback, req.FromModel, updated)
+	fbLog := "<unchanged>"
+	if fallback != nil {
+		if *fallback == "" {
+			fbLog = "<cleared>"
+		} else {
+			fbLog = *fallback
+		}
+	}
+	log.Printf("Bulk re-assigned model=%q fallback=%s from=%q on %d scheduled task(s)", req.Model, fbLog, req.FromModel, updated)
 	writeJSON(w, http.StatusOK, models.BulkModelUpdateResult{DryRun: false, UpdatedCount: updated})
 }
 

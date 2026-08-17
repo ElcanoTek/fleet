@@ -19,6 +19,17 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **`fleet sched task set-model` no longer silently NULLs every matched
+  task's `fallback_model` (#1120).** The CLI passed the
+  `--fallback-model` flag's default `""` straight into
+  `UpdateTasksModelBatch`, which writes `fallback_model = NULL`
+  unconditionally. `set-model --model x` (no fallback flag) now leaves
+  existing fallbacks in place; explicit `--fallback-model=""` still
+  clears them. `--dry-run` prints the fallback change (or
+  `(unchanged)`). Fleet-wide writes require a TTY confirmation or
+  `--no-confirm`, matching `fleet restore`. `POST /tasks/model` uses
+  the same omit-vs-clear contract (`fallback_model` is now a pointer).
+
 - **Malformed JSON on `DELETE /conversations` no longer wipes every
   unpinned conversation (#1110).** The handler swallowed every decode
   error so a bare (empty-body) DELETE could keep its legacy
