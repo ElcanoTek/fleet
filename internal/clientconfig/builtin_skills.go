@@ -57,10 +57,7 @@ func materializeMergedSkills(bundleSkillsDir string, builtinEnabled bool, hidden
 	if !builtinEnabled {
 		return bundleSkillsDir, nil
 	}
-	base, err := mergedSkillsBase()
-	if err != nil {
-		return bundleSkillsDir, err
-	}
+	base := mergedSkillsBase()
 	if err := ensureTrustedDir(base); err != nil {
 		return bundleSkillsDir, fmt.Errorf("merged-skills root: %w", err)
 	}
@@ -77,17 +74,17 @@ func materializeMergedSkills(bundleSkillsDir string, builtinEnabled bool, hidden
 // next to the rest of fleet state, not under world-writable /tmp. Fall
 // back to the user cache, then a uid-scoped temp name — still never the
 // predictable shared /tmp/fleet-skills path (#1121).
-func mergedSkillsBase() (string, error) {
+func mergedSkillsBase() string {
 	if d := strings.TrimSpace(os.Getenv("FLEET_DATA_DIR")); d != "" {
-		return filepath.Join(d, mergedSkillsDirName), nil
+		return filepath.Join(d, mergedSkillsDirName)
 	}
 	if d := strings.TrimSpace(os.Getenv("CHAT_DATA_DIR")); d != "" {
-		return filepath.Join(d, mergedSkillsDirName), nil
+		return filepath.Join(d, mergedSkillsDirName)
 	}
 	if cache, err := os.UserCacheDir(); err == nil && strings.TrimSpace(cache) != "" {
-		return filepath.Join(cache, "fleet", mergedSkillsDirName), nil
+		return filepath.Join(cache, "fleet", mergedSkillsDirName)
 	}
-	return filepath.Join(os.TempDir(), fmt.Sprintf("fleet-skills-%d", os.Geteuid())), nil
+	return filepath.Join(os.TempDir(), fmt.Sprintf("fleet-skills-%d", os.Geteuid()))
 }
 
 // ensureTrustedDir creates path if missing and refuses to use it unless it

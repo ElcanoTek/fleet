@@ -472,11 +472,14 @@ func wrapWebhookTransportErr(err error) error {
 			op = "request"
 		}
 		if ue.Err != nil {
-			return fmt.Errorf("webhook request: %s %s: %v", op, host, ue.Err)
+			// Wrapping ue.Err (the inner cause, e.g. a *net.OpError) keeps
+			// errors.Is/As working without putting the URL-printing
+			// *url.Error itself back into the chain.
+			return fmt.Errorf("webhook request: %s %s: %w", op, host, ue.Err)
 		}
 		return fmt.Errorf("webhook request: %s %s", op, host)
 	}
-	return fmt.Errorf("webhook request: %v", err)
+	return fmt.Errorf("webhook request: %w", err)
 }
 
 // RenderWebhookBody renders tmpl against ev, falling back to a sensible default
