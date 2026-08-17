@@ -669,7 +669,7 @@ func (s *Server) Routes() http.Handler {
 	// INSIDE member (member enriches the role mutate reads).
 	mutate := s.rejectViewerWrites
 	mux.Handle("/chat", auth(member(mutate(s.rateLimitMiddleware(http.HandlerFunc(s.postChat))))))
-	mux.Handle("/attachments", auth(member(mutate(http.HandlerFunc(s.postAttachments)))))
+	mux.Handle("/attachments", auth(member(mutate(s.rateLimitMiddleware(http.HandlerFunc(s.postAttachments))))))
 	mux.Handle("/conversations", auth(member(mutate(http.HandlerFunc(s.listOrCreateConversations)))))
 	mux.Handle("/conversations/", auth(member(mutate(http.HandlerFunc(s.conversationByID)))))
 	mux.Handle("/search", auth(member(http.HandlerFunc(s.search))))
@@ -815,7 +815,7 @@ const maxJSONBodyBytes = 1 << 20 // 1 MB
 func bodyLimitMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
-		case http.MethodPost, http.MethodPut, http.MethodPatch:
+		case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
 			// /attachments has its own (larger) multipart cap; don't double-limit.
 			if !strings.HasPrefix(r.URL.Path, "/attachments") {
 				r.Body = http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)
@@ -1355,9 +1355,14 @@ func (s *Server) listOrCreateConversations(w http.ResponseWriter, r *http.Reques
 			Confirm         bool     `json:"confirm"`
 		}
 		if r.Body != nil {
-			// An empty body is allowed (legacy bare DELETE → DeleteAllUnpinned);
-			// decode errors on a truly empty reader are swallowed.
-			_ = json.NewDecoder(r.Body).Decode(&req)
+			// Empty body (io.EOF) is the legacy bare DELETE → DeleteAllUnpinned.
+			// Any other decode error is a client that *intended* a targeted
+			// bulk delete but sent malformed / truncated JSON — refuse with
+			// 400 rather than wipe every unpinned conversation (#1110).
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+				http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+				return
+			}
 		}
 
 		switch {
@@ -2968,7 +2973,9 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, convID str
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	turn, err := s.store.LookupTurn(r.Context(), requestedTurnID)
+	// Conversation scope is in the query (#1112). The equality check
+	// below stays as defense in depth.
+	turn, err := s.store.LookupTurnInConversation(r.Context(), requestedTurnID, convID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

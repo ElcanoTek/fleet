@@ -11,9 +11,11 @@
 // Both are authenticated, origin-local proxies scoped to a single run's
 // workspace dir. The rewrite ONLY targets relative paths the agent
 // emitted (a file it actually wrote into its own workspace); every
-// absolute http(s)/data/mailto/protocol-relative/site-root href passes
-// through untouched, so neither caller can be coaxed into fetching an
-// arbitrary remote URL (no SSRF / tracking-pixel vector — see #271).
+// absolute http(s)/data/mailto/protocol-relative/site-root href, and
+// any href whose decoded path contains a `.` or `..` segment (including
+// `%2e%2e` / `%252e%252e`), passes through untouched, so neither caller
+// can be coaxed into fetching an arbitrary same-origin or remote URL
+// (no SSRF / tracking-pixel / authenticated-GET vector — see #271, #1113).
 
 // Sentinel for messages that belong to a brand-new chat whose server
 // id we haven't received yet. Mirrors the constant in chat-experience.tsx.
@@ -41,9 +43,10 @@ export type WorkspaceHref = {
  * the conversation's workspace dir.
  *
  * Absolute http(s)/data/mailto URLs, protocol-relative `//`, site-root
- * paths, and in-page `#anchor` / `?query` references pass through
- * unchanged. The conversation id is required and must not be the
- * pending sentinel (we don't yet know the real id at that point).
+ * paths, in-page `#anchor` / `?query` references, and any path with a
+ * `.` / `..` segment pass through unchanged. The conversation id is
+ * required and must not be the pending sentinel (we don't yet know the
+ * real id at that point).
  */
 export function resolveWorkspaceHref(
   raw: string | undefined | null,
@@ -69,8 +72,8 @@ export function resolveWorkspaceHref(
  *
  * It shares the EXACT safety rules of the chat path: only relative paths
  * are rewritten; absolute http(s)/data/mailto/protocol-relative/site-root
- * hrefs pass through unchanged, so a task log can never make the browser
- * fetch an arbitrary remote URL.
+ * hrefs and any `.` / `..` segment pass through unchanged, so a task log
+ * can never make the browser fetch an arbitrary remote or same-origin URL.
  */
 export function resolveTaskWorkspaceHref(
   raw: string | undefined | null,
@@ -86,11 +89,39 @@ export function resolveTaskWorkspaceHref(
   );
 }
 
+function decodeURIComponentSafe(segment: string): string {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
+}
+
+/**
+ * Fully decode a path segment so a single pass cannot miss `%252e%252e`
+ * (double-encoded `..`). Bounded so a pathological `%25%25…` chain cannot
+ * loop; five rounds is well past anything a markdown href would carry.
+ */
+function fullyDecodeSegment(segment: string): string {
+  let current = segment;
+  for (let i = 0; i < 5; i++) {
+    const next = decodeURIComponentSafe(current);
+    if (next === current) return current;
+    current = next;
+  }
+  return current;
+}
+
+function isDotOrDotDot(segment: string): boolean {
+  return segment === "." || segment === "..";
+}
+
 /**
  * resolveScopedWorkspaceHref is the shared core: it applies the
- * sandbox-prefix stripping, the absolute-URL bailout, and the
- * per-segment percent-encoding, then joins the surviving relative path
- * onto `basePath` (which must already be a trailing-slash workspace API
+ * sandbox-prefix stripping, the absolute-URL bailout, the `.`/`..`
+ * traversal reject (including encoded forms), and the per-segment
+ * percent-encoding, then joins the surviving relative path onto
+ * `basePath` (which must already be a trailing-slash workspace API
  * prefix). Keeping the policy in one place is what guarantees the chat
  * and task-log callers can never drift apart on what counts as a "safe,
  * workspace-local" reference.
@@ -131,6 +162,15 @@ function resolveScopedWorkspaceHref(
   if (rawSegments.length === 0) {
     return { href: value, isWorkspaceFile: false, downloadFilename: "" };
   }
+  // Reject path traversal. encodeURIComponent leaves "." / ".." untouched,
+  // so a prompt-injected `[x](../../auth/elcano-login)` would rewrite to
+  // `/api/conversations/<id>/workspace/../../auth/elcano-login` and the
+  // browser would normalize that into an authenticated same-origin GET
+  // at `/api/auth/elcano-login` (#1113). Check the fully-decoded form so
+  // `%2e%2e` and `%252e%252e` cannot sneak through a single decode.
+  if (rawSegments.some((s) => isDotOrDotDot(fullyDecodeSegment(s)))) {
+    return { href: value, isWorkspaceFile: false, downloadFilename: "" };
+  }
   // Decode each segment before re-encoding so the encoding is idempotent.
   // Models routinely hand us a filename whose spaces / unicode are ALREADY
   // percent-encoded — both the markdown-link convention (`[x](My%20File.csv)`)
@@ -141,13 +181,7 @@ function resolveScopedWorkspaceHref(
   // space and an encoded `%20` now converge on the same single-encoded
   // segment. A stray literal `%` that decodeURIComponent rejects falls back
   // to the raw segment.
-  const decodedSegments = rawSegments.map((s) => {
-    try {
-      return decodeURIComponent(s);
-    } catch {
-      return s;
-    }
-  });
+  const decodedSegments = rawSegments.map(decodeURIComponentSafe);
   const segments = decodedSegments.map((s) => encodeURIComponent(s)).join("/");
   const downloadFilename = decodedSegments[decodedSegments.length - 1];
 

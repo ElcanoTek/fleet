@@ -548,6 +548,12 @@ func TestBulkSetTaskModel(t *testing.T) {
 	old1 := seedScheduledTask(t, store, "old/model")
 	old2 := seedScheduledTask(t, store, "old/model")
 	other := seedScheduledTask(t, store, "other/model")
+	// Give old1 a fallback so the omit-vs-clear contract is testable (#1120).
+	fb := "fb/old"
+	old1.FallbackModel = &fb
+	if _, err := store.UpdateTask(old1); err != nil {
+		t.Fatalf("seed fallback: %v", err)
+	}
 
 	post := func(t *testing.T, body string, withAdmin bool) *httptest.ResponseRecorder {
 		t.Helper()
@@ -611,6 +617,9 @@ func TestBulkSetTaskModel(t *testing.T) {
 		if got.Model == nil || *got.Model != "new/model" {
 			t.Errorf("task %s model = %v, want new/model", id, got.Model)
 		}
+	}
+	if got, _ := store.GetTask(old1.ID); got.FallbackModel == nil || *got.FallbackModel != "fb/old" {
+		t.Errorf("omitted fallback_model must leave fb/old in place, got %v", got.FallbackModel)
 	}
 	if got, _ := store.GetTask(other.ID); got.Model == nil || *got.Model != "other/model" {
 		t.Errorf("from_model filter must leave other/model untouched, got %v", got.Model)

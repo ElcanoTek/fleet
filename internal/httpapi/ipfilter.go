@@ -25,9 +25,14 @@ import (
 // working.
 //
 // X-Forwarded-For is honored ONLY when the immediate TCP peer is a configured
-// trusted proxy (FLEET_TRUSTED_PROXIES). With no trusted proxies configured the
-// header is never read, so an untrusted client cannot spoof an allowlisted
-// source by setting X-Forwarded-For itself.
+// trusted proxy (FLEET_TRUSTED_PROXIES). The chain is then walked from the
+// RIGHT, skipping hops that are themselves trusted proxies, and the first
+// untrusted address is the client. A chain of only trusted addresses falls
+// back to the TCP peer. With no trusted proxies configured the header is
+// never read, so an untrusted client cannot spoof an allowlisted source by
+// setting X-Forwarded-For itself. (The leftmost-entry convention is
+// attacker-controlled: a client sends `X-Forwarded-For: <spoof>` and a
+// correctly-appending proxy forwards `<spoof>, <real>` — see #1111.)
 
 // logIPFilter emits the active filter state once at construction so an operator
 // can confirm their config loaded. Silent when neither list is set — silence
@@ -102,12 +107,13 @@ func blockIP(w http.ResponseWriter, reason string) {
 }
 
 // clientIP resolves the real client IP for filtering. It starts from the
-// immediate TCP peer (r.RemoteAddr). Only when that peer is a configured trusted
-// proxy does it consult X-Forwarded-For and take the LEFTMOST entry (the
-// originating client per the XFF convention). With no trusted proxies, the
-// header is ignored entirely — closing the spoofing bypass where an untrusted
-// client sets X-Forwarded-For to an allowlisted address. Returns nil when
-// RemoteAddr cannot be parsed.
+// immediate TCP peer (r.RemoteAddr). Only when that peer is a configured
+// trusted proxy does it consult X-Forwarded-For, walking the chain from the
+// right and skipping hops that are themselves trusted proxies (#1111). A
+// chain of only trusted (or unparseable) entries falls back to the TCP
+// peer. With no trusted proxies, the header is ignored entirely — closing
+// the spoofing bypass where an untrusted client sets X-Forwarded-For to an
+// allowlisted address. Returns nil when RemoteAddr cannot be parsed.
 func clientIP(r *http.Request, trustedProxies []net.IP) net.IP {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
@@ -125,12 +131,31 @@ func clientIP(r *http.Request, trustedProxies []net.IP) net.IP {
 	if xff == "" {
 		return peer
 	}
-	// Leftmost entry is the client the chain claims to have originated from.
-	first := strings.TrimSpace(strings.SplitN(xff, ",", 2)[0])
-	if client := net.ParseIP(first); client != nil {
+	if client := rightmostUntrusted(xff, trustedProxies); client != nil {
 		return client
 	}
 	return peer
+}
+
+// rightmostUntrusted walks the X-Forwarded-For chain from the right
+// (closest hop), skipping entries that are themselves trusted proxies or
+// unparseable, and returns the first untrusted address. Returns nil when
+// every parseable hop is trusted so the caller can fall back to the TCP
+// peer. Matches the orchestrator's chi ClientIPFromXFF convention
+// (cmd/fleet/main.go) and the #1111 contract.
+func rightmostUntrusted(xff string, trusted []net.IP) net.IP {
+	parts := strings.Split(xff, ",")
+	for i := len(parts) - 1; i >= 0; i-- {
+		ip := net.ParseIP(strings.TrimSpace(parts[i]))
+		if ip == nil {
+			continue
+		}
+		if isTrustedProxy(ip, trusted) {
+			continue
+		}
+		return ip
+	}
+	return nil
 }
 
 // isTrustedProxy reports whether peer is one of the configured trusted proxy IPs.

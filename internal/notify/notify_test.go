@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -173,6 +174,42 @@ func TestWebhookSend_SignedAndStatus(t *testing.T) {
 	n2 := New(Config{WebhookURL: bad.URL})
 	if err := sendWebhook(context.Background(), n2.snapshot(), sampleEvent()); err == nil {
 		t.Error("expected an error for a 500 response")
+	}
+}
+
+func TestWrapWebhookTransportErr_OmitsPathAndQuery(t *testing.T) {
+	err := wrapWebhookTransportErr(&url.Error{
+		Op:  "Post",
+		URL: "https://hooks.slack.com/services/T00/B00/secret?token=abc",
+		Err: fmt.Errorf("connection refused"),
+	})
+	msg := err.Error()
+	for _, leak := range []string{"secret", "token=", "/services/", "abc"} {
+		if strings.Contains(msg, leak) {
+			t.Errorf("leaked %q in %q", leak, msg)
+		}
+	}
+	if !strings.Contains(msg, "hooks.slack.com") {
+		t.Errorf("should name the host: %q", msg)
+	}
+	if !strings.Contains(msg, "webhook request") {
+		t.Errorf("should prefix webhook request: %q", msg)
+	}
+}
+
+func TestSendWebhook_TransportErrorDoesNotLeakURL(t *testing.T) {
+	// Port 1 is almost never listening; the transport error must not
+	// include the query secret.
+	n := New(Config{WebhookURL: "http://127.0.0.1:1/hooks/T00/secret?token=supersecret"})
+	err := sendWebhook(context.Background(), n.snapshot(), sampleEvent())
+	if err == nil {
+		t.Fatal("expected a transport error")
+	}
+	msg := err.Error()
+	for _, leak := range []string{"supersecret", "token=", "/hooks/", "secret"} {
+		if strings.Contains(msg, leak) {
+			t.Fatalf("transport error leaked URL material %q: %s", leak, msg)
+		}
 	}
 }
 

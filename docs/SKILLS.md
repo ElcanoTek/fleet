@@ -121,8 +121,9 @@ the skills analogue of the built-in MCP directory.
 
 Skills are real files the sandbox bind-mounts, so inheritance works by
 **materialization**: `clientconfig.Load` syncs the bundle's `skills/` and the
-embedded pack into a merged on-disk dir (under `os.TempDir()/fleet-skills/`,
-keyed by bundle path; bundle wins a name collision, loudly) and points
+embedded pack into a merged on-disk dir (under `$FLEET_DATA_DIR/skills-merged/`,
+keyed by bundle path, never world-writable `/tmp`; bundle wins a name
+collision, loudly) and points
 `Bundle.SkillsDir` at it. Every consumer — prompt roster, sandbox mounts,
 workspace symlinks, `/skills`, taskrun, evals — picks the pack up unchanged.
 `Skills()` resyncs from sources on read, preserving the edit-a-skill-in-place

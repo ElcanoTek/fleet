@@ -149,6 +149,26 @@ func TestTeamVisibleConversations(t *testing.T) {
 		t.Error("private conversation leaked into team view")
 	}
 
+	// A public share token on the team-visible conversation must not
+	// appear in the teammate listing (#1112).
+	if err := s.SetShareToken(ctx, "alice@x.com", shared.ID, "cap-token-xyz", nil); err != nil {
+		t.Fatalf("SetShareToken: %v", err)
+	}
+	list, err = s.ListTeamConversations(ctx, "bob@x.com")
+	if err != nil {
+		t.Fatalf("ListTeamConversations after share token: %v", err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("team view after share token = %d, want 1", len(list))
+	}
+	if list[0].ShareToken != "" {
+		t.Errorf("teammate listing leaked share_token %q", list[0].ShareToken)
+	}
+	owner, err := s.Get(ctx, "alice@x.com", shared.ID)
+	if err != nil || owner == nil || owner.ShareToken != "cap-token-xyz" {
+		t.Fatalf("owner Get should still see the token: %+v %v", owner, err)
+	}
+
 	// Carol (different team) sees nothing.
 	if list, err := s.ListTeamConversations(ctx, "carol@x.com"); err != nil || len(list) != 0 {
 		t.Errorf("cross-team view = (%v, %v), want empty", list, err)

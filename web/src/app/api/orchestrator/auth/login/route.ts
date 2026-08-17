@@ -6,10 +6,10 @@ export const runtime = "nodejs";
 
 // POST /api/orchestrator/auth/login → orchestrator POST /auth/login
 //
-// moc's username/password login path. The form posts {username, password};
-// the orchestrator returns {token, user}. The browser stores the bearer token
-// and sends it on subsequent /api/orchestrator/* calls. This route is public
-// (no session required) so the user can obtain the bearer in the first place.
+// moc's username/password login path (API/CLI clients). The browser no
+// longer stores the returned bearer (#1115); the web UI authenticates
+// via the httpOnly chat/elcano session cookie. This route stays public
+// so a bearer client can still obtain a token.
 export async function POST(request: NextRequest) {
   const csrf = verifyOrigin(request);
   if (!csrf.ok) return csrf.response;

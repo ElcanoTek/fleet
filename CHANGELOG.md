@@ -19,6 +19,103 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Admin pipeline-metrics and first-run log archival no longer load
+  every payload into memory (#1122).** `GET /admin/pipeline-metrics`
+  called `GetAllLogs`, which decompressed every stored session — and
+  the route comment claimed retention bounded the table, but
+  `FLEET_RUN_LOG_RETENTION_DAYS <= 0` (the default) disables pruning.
+  The scan is now keyset-paginated; the handler keeps a running
+  aggregate and only the most recent `?runs=` summaries. `ArchiveOldLogs`
+  pages candidates the same way so enabling archival on a large table
+  no longer materializes every live payload at once.
+
+- **Expired approvals are no longer claimable between the deadline and
+  the next sweep tick (#1109).** `ClaimApproval` checked only
+  `status = 'pending'`, so a still-pending card past `expires_at` could
+  be approved and executed until `SweepExpiredApprovals` ran. The claim
+  UPDATE now requires `expires_at` to be NULL, 0, or in the future.
+  The sweep uses a dedicated `ClaimExpiredApproval` so notification and
+  audit still land; default-deny is authoritative at click time.
+
+- **`fleet sched task set-model` no longer silently NULLs every matched
+  task's `fallback_model` (#1120).** The CLI passed the
+  `--fallback-model` flag's default `""` straight into
+  `UpdateTasksModelBatch`, which writes `fallback_model = NULL`
+  unconditionally. `set-model --model x` (no fallback flag) now leaves
+  existing fallbacks in place; explicit `--fallback-model=""` still
+  clears them. `--dry-run` prints the fallback change (or
+  `(unchanged)`). Fleet-wide writes require a TTY confirmation or
+  `--no-confirm`, matching `fleet restore`. `POST /tasks/model` uses
+  the same omit-vs-clear contract (`fallback_model` is now a pointer).
+
+- **Malformed JSON on `DELETE /conversations` no longer wipes every
+  unpinned conversation (#1110).** The handler swallowed every decode
+  error so a bare (empty-body) DELETE could keep its legacy
+  delete-all-unpinned behavior. A client that intended a targeted
+  `{conversation_ids: [...]}` bulk delete but sent truncated or
+  invalid JSON therefore fell through to the wipe and returned 200.
+  Empty body (`io.EOF`) is still the legacy path; any other decode
+  error is now 400 with zero deletions. DELETE bodies are also
+  subject to the same 1 MiB JSON cap as POST/PUT/PATCH (previously
+  exempt, so `DELETE /conversations` and `DELETE /push/unsubscribe`
+  could stream an unbounded body into `json.Decode`).
+
+### Security
+
+- **HTTP API hardening (#1112).** Webhook transport errors no longer
+  leak the full URL (path + query secrets) into logs or the admin Test
+  response. `GET /conversations?scope=team` no longer includes each
+  conversation's public `share_token`. `POST /attachments` shares the
+  `/chat` rate-limit window. Stream DB-fallback turn lookup is scoped
+  by `conversation_id` in the query itself.
+
+- **Web no longer persists the orchestrator bearer token in
+  `localStorage` (#1115).** The moc username/password form was already
+  gone from the UI, but `orchestratorAuth` still stored the token (and
+  attached it as `Authorization`) so any XSS could exfiltrate it. The
+  browser now authenticates orchestrator API calls via the same
+  httpOnly cookie session as chat. Leftover `orchestratorToken` /
+  `userToken` keys are purged on first load after upgrade.
+
+- **Merged-skills materialization no longer uses a predictable path
+  under world-writable `/tmp` (#1121).** `materializeMergedSkills`
+  wrote to `os.TempDir()/fleet-skills/<hash>` with `MkdirAll 0755` and
+  no ownership check, so on a shared box another local user could
+  pre-create the tree and plant skill content that fleet would inject
+  into agent prompts and bind-mount into the sandbox. The merged tree
+  now lives under `$FLEET_DATA_DIR/skills-merged` (user cache /
+  uid-scoped temp as fallbacks), and every reuse refuses a path that
+  is a symlink, not a directory, not owned by the fleet uid, or
+  group/world-writable. An untrusted pre-existing path is a loud
+  error and falls back to the bundle's own skills dir — never adopted.
+
+- **IP allowlist no longer trusts the leftmost `X-Forwarded-For` entry
+  behind a trusted proxy (#1111).** When the TCP peer was in
+  `FLEET_TRUSTED_PROXIES`, `clientIP` took the leftmost XFF value — the
+  one an external client controls. A request of
+  `X-Forwarded-For: <spoofed-allowlisted>` forwarded by Caddy as
+  `<spoofed>, <real>` was therefore filtered on the spoof, defeating the
+  operator's network control (including for the pre-auth `/webhooks/` and
+  `/auth/verify` surfaces). The chain is now walked from the right,
+  skipping hops that are themselves trusted proxies, matching the
+  orchestrator's existing `ClientIPFromXFF` convention; an all-trusted
+  chain falls back to the TCP peer. The filter is still defense-in-depth
+  in front of shared-token auth, so a bypass alone grants no data access.
+
+- **Workspace href rewrite no longer lets `..` segments escape the
+  workspace-local prefix (#1113).** `resolveScopedWorkspaceHref` decoded
+  then re-encoded each path segment with `encodeURIComponent`, which
+  leaves `.` / `..` untouched and had no filter — a prompt-injected
+  `[x](../../auth/elcano-login)` rewrote to
+  `/api/conversations/<id>/workspace/../../auth/elcano-login`, which the
+  browser normalizes into an authenticated same-origin GET at
+  `/api/auth/elcano-login`. Any decoded (or double-encoded) `.` / `..`
+  segment now bails to the raw href, matching the existing absolute-URL
+  fallback. State-changing routes stay POST-only with CSRF, so this was
+  a same-origin GET primitive, not a write.
+
+### Fixed
+
 - **A scheduled task that hits its cost/token ceiling is no longer recorded as
   SUCCESS.** (#1105) The scheduled driver returned a nil error for a
   budget-stopped (or cancelled) run, so the worker pool's terminal

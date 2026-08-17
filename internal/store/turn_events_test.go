@@ -50,6 +50,20 @@ func TestTurnLifecycle(t *testing.T) {
 		t.Errorf("expected startedAt %d, got %d", startedAt, r.StartedAt)
 	}
 
+	// Conversation-scoped lookup: same turn + matching conv succeeds;
+	// a foreign conv id is not found (#1112).
+	scoped, err := s.LookupTurnInConversation(ctx, turnID, conv.ID)
+	if err != nil || scoped == nil {
+		t.Fatalf("LookupTurnInConversation matching: %v %v", scoped, err)
+	}
+	miss, err := s.LookupTurnInConversation(ctx, turnID, "not-this-conversation")
+	if err != nil {
+		t.Fatalf("LookupTurnInConversation foreign: %v", err)
+	}
+	if miss != nil {
+		t.Fatalf("foreign conversation leaked turn %v", miss)
+	}
+
 	// 3. Finish turn
 	finishedAt := startedAt + 10
 	if err := s.FinishTurn(ctx, turnID, TurnStatusCompleted, finishedAt, false); err != nil {

@@ -56,11 +56,13 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/smtp"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -434,14 +436,14 @@ func sendWebhook(ctx context.Context, st *notifierState, ev Event) error {
 	}
 	req, err := http.NewRequestWithContext(ctx, method, st.cfg.WebhookURL, bytes.NewReader(body))
 	if err != nil {
-		return err
+		return fmt.Errorf("webhook request: invalid url")
 	}
 	req.Header.Set("Content-Type", "application/json")
 	setSignatureHeader(req, body, st.cfg.WebhookSecret)
 
 	resp, err := st.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("webhook request: %w", err)
+		return wrapWebhookTransportErr(err)
 	}
 	defer func() {
 		// Drain so the connection can be reused, then close.
@@ -452,6 +454,29 @@ func sendWebhook(ctx context.Context, st *notifierState, ev Event) error {
 		return fmt.Errorf("webhook returned status %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// wrapWebhookTransportErr turns a client.Do failure into an error that names
+// only the operation and host — never the URL's path or query. *url.Error
+// prints the full URL (Slack-style path secrets, ?token=…), and that string
+// used to reach process logs and the admin Test button (#1112).
+func wrapWebhookTransportErr(err error) error {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		host := "webhook-host"
+		if parsed, perr := url.Parse(ue.URL); perr == nil && parsed.Host != "" {
+			host = parsed.Host
+		}
+		op := ue.Op
+		if op == "" {
+			op = "request"
+		}
+		if ue.Err != nil {
+			return fmt.Errorf("webhook request: %s %s: %v", op, host, ue.Err)
+		}
+		return fmt.Errorf("webhook request: %s %s", op, host)
+	}
+	return fmt.Errorf("webhook request: %v", err)
 }
 
 // RenderWebhookBody renders tmpl against ev, falling back to a sensible default

@@ -111,6 +111,10 @@ type chatStore interface {
 	// cursor/direction contract.
 	GetTurnEventPage(ctx context.Context, conversationID string, cursor int64, limit int, asc bool) ([]store.TurnEvent, int64, error)
 	LookupTurn(ctx context.Context, turnID string) (*store.TurnRecord, error)
+	// LookupTurnInConversation folds conversation scope into the query
+	// (#1112) so the stream DB-fallback cannot leak another conversation's
+	// turn events if the handler's equality check is ever dropped.
+	LookupTurnInConversation(ctx context.Context, turnID, conversationID string) (*store.TurnRecord, error)
 
 	// Tool-call audit ledger (#224): one row per tool invocation, written from
 	// the post-turn persistence path and read by GET /conversations/{id}/audit.
@@ -155,11 +159,18 @@ type chatStore interface {
 	CreateApproval(ctx context.Context, convID, userEmail, toolName, toolCallID, argsJSON string, expiresAt int64, seat store.ApprovalSeat) (*store.Approval, error)
 	GetApproval(ctx context.Context, userEmail, approvalID string) (*store.Approval, error)
 	ClaimApproval(ctx context.Context, userEmail, approvalID, newStatus, resultText string) (bool, error)
+	// ClaimExpiredApproval is the sweep-only counterpart: it claims a
+	// pending row whose expires_at has already passed. User-facing
+	// ClaimApproval refuses those rows so default-deny is authoritative
+	// at click time (#1109), not whenever the next sweep tick runs.
+	ClaimExpiredApproval(ctx context.Context, userEmail, approvalID, newStatus, resultText string) (bool, error)
 	ResolveApproval(ctx context.Context, userEmail, approvalID, newStatus, resultText string) error
 	SetApprovalResult(ctx context.Context, userEmail, approvalID, resultText string) error
 	ListPendingApprovals(ctx context.Context, userEmail, convID string) ([]store.Approval, error)
-	// ListExpiredApprovals + ClaimApproval back the server-side expiry sweep
-	// (#225): pending approvals past their expires_at deadline are auto-denied.
+	// ListExpiredApprovals + ClaimExpiredApproval back the server-side
+	// expiry sweep (#225): pending approvals past their expires_at
+	// deadline are auto-denied for notification/audit. The claim-time
+	// check on ClaimApproval is what makes the deny authoritative.
 	ListExpiredApprovals(ctx context.Context, now int64) ([]store.Approval, error)
 	LatestApprovalByTool(ctx context.Context, convID, toolName string) (*store.Approval, error)
 	SupersedePendingApprovals(ctx context.Context, convID, toolName string) (int64, error)

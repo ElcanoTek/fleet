@@ -353,8 +353,10 @@ func (s *Storage) UpdateTask(task *models.Task) (*models.Task, error) {
 	return task, nil
 }
 
-// BulkUpdateScheduledTaskModel updates model + fallback_model on scheduled tasks.
-func (s *Storage) BulkUpdateScheduledTaskModel(ctx context.Context, model, fallbackModel, fromModel string) (int, error) {
+// BulkUpdateScheduledTaskModel updates the pinned model on scheduled tasks.
+// fallbackModel is optional: nil leaves existing fallback_model values
+// untouched; a non-nil empty string clears them to NULL (#1120).
+func (s *Storage) BulkUpdateScheduledTaskModel(ctx context.Context, model string, fallbackModel *string, fromModel string) (int, error) {
 	return s.db.UpdateTasksModelBatch(ctx, model, fallbackModel, fromModel)
 }
 
@@ -528,6 +530,12 @@ func (s *Storage) GetRunLogEntry(ctx context.Context, taskID uuid.UUID, entryID 
 // GetAllLogs gets all stored log sessions.
 func (s *Storage) GetAllLogs() (map[uuid.UUID]*models.LogSession, error) {
 	return s.db.GetAllLogs(context.Background())
+}
+
+// ForEachLog visits every stored log session in keyset pages so callers
+// can stream without holding the full table in memory (#1122).
+func (s *Storage) ForEachLog(ctx context.Context, fn func(uuid.UUID, *models.LogSession) error) error {
+	return s.db.ForEachLog(ctx, fn)
 }
 
 // Cleanup operations

@@ -1,13 +1,13 @@
 "use client";
 
-// Client-side bearer-token storage for the orchestrator's moc username/password
-// login path. Ported from moc's assets/js/auth-session.js (token persistence
-// half). The elcano-cookie path needs none of this — the httpOnly cookie rides
-// along automatically — so a "cookie session" flag tracks that case so the
-// dashboard knows it's signed in even with no token in storage.
+// The orchestrator used to persist moc's username/password bearer in
+// localStorage (`orchestratorToken`, plus moc's original `userToken`).
+// That path is retired (#1115): the password form is gone, and anything
+// in localStorage is readable by XSS. Auth now rides the same httpOnly
+// cookie session as chat. This module's only job is a one-time cleanup
+// that drops leftover tokens on first load after upgrade.
 
-const USER_TOKEN_KEY = "orchestratorToken";
-const LEGACY_TOKEN_KEY = "userToken"; // moc's original key, migrated on read
+const LEGACY_TOKEN_KEYS = ["orchestratorToken", "userToken"] as const;
 
 function safeStorage(): Storage | null {
   try {
@@ -17,24 +17,20 @@ function safeStorage(): Storage | null {
   }
 }
 
-export function getStoredToken(): string {
-  const ls = safeStorage();
-  if (!ls) return "";
-  return ls.getItem(USER_TOKEN_KEY) || ls.getItem(LEGACY_TOKEN_KEY) || "";
-}
-
-export function setStoredToken(token: string): void {
-  const ls = safeStorage();
-  if (!ls) return;
-  if (token) {
-    ls.setItem(USER_TOKEN_KEY, token);
-    ls.removeItem(LEGACY_TOKEN_KEY);
-  } else {
-    ls.removeItem(USER_TOKEN_KEY);
-    ls.removeItem(LEGACY_TOKEN_KEY);
+/** Drop leftover moc bearer tokens. Safe to call repeatedly. */
+export function purgeLegacyOrchestratorTokens(): void {
+  for (const store of [safeStorage(), safeSessionStorage()]) {
+    if (!store) continue;
+    for (const key of LEGACY_TOKEN_KEYS) {
+      store.removeItem(key);
+    }
   }
 }
 
-export function clearStoredToken(): void {
-  setStoredToken("");
+function safeSessionStorage(): Storage | null {
+  try {
+    return typeof window !== "undefined" ? window.sessionStorage : null;
+  } catch {
+    return null;
+  }
 }

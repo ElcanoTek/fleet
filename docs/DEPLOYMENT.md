@@ -381,7 +381,10 @@ each piece yourself):
      **Deny overrides allow** — an address in both lists is denied.
    - `FLEET_TRUSTED_PROXIES` — comma-separated IPs of trusted reverse proxies
      (e.g. the fronting Caddy: `127.0.0.1,::1`). Only when the immediate peer is
-     one of these does fleet read the real client IP from `X-Forwarded-For`.
+     one of these does fleet read the real client IP from `X-Forwarded-For`,
+     walking the chain from the right and skipping hops that are themselves
+     trusted proxies (so a client-supplied leftmost value cannot spoof the
+     allowlist). A chain of only trusted addresses is treated as the TCP peer.
      **Without this set, `X-Forwarded-For` is never consulted**, so an untrusted
      client cannot spoof an allowlisted address via the header — you must
      explicitly opt in by naming your proxy IPs.

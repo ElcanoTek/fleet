@@ -603,10 +603,11 @@ type Config struct {
 	IPDenylist []*net.IPNet
 	// TrustedProxies is parsed from FLEET_TRUSTED_PROXIES (comma-separated IPs).
 	// Only when the immediate peer (r.RemoteAddr) is one of these does Fleet read
-	// the real client IP from X-Forwarded-For. Empty (the default) means
-	// X-Forwarded-For is NEVER consulted, so an untrusted client cannot spoof an
-	// allowlisted address via the header. Operators MUST explicitly opt in by
-	// naming their reverse-proxy (e.g. Caddy) IPs.
+	// the real client IP from X-Forwarded-For, walking the chain from the right
+	// and skipping hops that are themselves trusted proxies (#1111). Empty (the
+	// default) means X-Forwarded-For is NEVER consulted, so an untrusted client
+	// cannot spoof an allowlisted address via the header. Operators MUST
+	// explicitly opt in by naming their reverse-proxy (e.g. Caddy) IPs.
 	TrustedProxies []net.IP
 
 	// ── process lifecycle ──

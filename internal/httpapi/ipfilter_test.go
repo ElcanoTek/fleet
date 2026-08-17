@@ -120,12 +120,44 @@ func TestIPFilterMiddleware(t *testing.T) {
 			wantCode:   http.StatusForbidden,
 		},
 		{
-			name:       "XFF trusted: leftmost entry of a chain is used",
+			name:       "XFF trusted: rightmost untrusted entry of a chain is used",
 			allow:      cidrs(t, "192.168.1.0/24"),
 			trusted:    []net.IP{net.ParseIP("127.0.0.1")},
 			remoteAddr: "127.0.0.1:9999",
-			xff:        "192.168.1.42, 10.9.9.9, 127.0.0.1",
-			wantCode:   http.StatusOK,
+			// Real client is 192.168.1.42; 127.0.0.1 is the trusted hop the
+			// proxy appended. Leftmost 10.9.9.9 is client-controlled spoof.
+			xff:      "10.9.9.9, 192.168.1.42, 127.0.0.1",
+			wantCode: http.StatusOK,
+		},
+		{
+			name:       "XFF trusted: spoofed leftmost entry is ignored (anti-spoof)",
+			allow:      cidrs(t, "192.168.1.0/24"),
+			trusted:    []net.IP{net.ParseIP("127.0.0.1")},
+			remoteAddr: "127.0.0.1:9999",
+			// Attacker sent X-Forwarded-For: 192.168.1.42; the trusted proxy
+			// appended the real 8.8.8.8. Leftmost would have allowlisted the
+			// spoof (#1111); rightmost-untrusted filters on 8.8.8.8 → deny.
+			xff:      "192.168.1.42, 8.8.8.8",
+			wantCode: http.StatusForbidden,
+		},
+		{
+			name:       "XFF trusted: multi-hop chain through several trusted proxies",
+			allow:      cidrs(t, "203.0.113.0/24"),
+			trusted:    []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("10.0.0.1")},
+			remoteAddr: "127.0.0.1:9999",
+			// Walk from the right: 10.0.0.1 trusted → skip; 203.0.113.7 is
+			// the first untrusted hop (the real client). 198.51.100.1 is
+			// the attacker-controlled leftmost value and must not win.
+			xff:      "198.51.100.1, 203.0.113.7, 10.0.0.1",
+			wantCode: http.StatusOK,
+		},
+		{
+			name:       "XFF trusted: entirely-trusted chain falls back to TCP peer",
+			allow:      cidrs(t, "192.168.1.0/24"),
+			trusted:    []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("10.0.0.1")},
+			remoteAddr: "127.0.0.1:9999",
+			xff:        "10.0.0.1, 127.0.0.1",
+			wantCode:   http.StatusForbidden, // peer 127.0.0.1 is not allowlisted
 		},
 		{
 			name:  "XFF untrusted: header ignored, real peer NOT allowlisted, blocked (anti-spoof)",
@@ -213,10 +245,11 @@ func TestIPFilterMiddleware_NoConfigReturnsUnwrapped(t *testing.T) {
 	}
 }
 
-// TestClientIP exercises the IP-resolution seam directly: trust gating, leftmost
-// XFF selection, and unparseable input.
+// TestClientIP exercises the IP-resolution seam directly: trust gating,
+// rightmost-untrusted XFF selection (#1111), and unparseable input.
 func TestClientIP(t *testing.T) {
 	trusted := []net.IP{net.ParseIP("127.0.0.1")}
+	multiHop := []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("10.0.0.1")}
 	tests := []struct {
 		name       string
 		remoteAddr string
@@ -225,7 +258,11 @@ func TestClientIP(t *testing.T) {
 		want       string // "" means nil
 	}{
 		{name: "bare peer, no proxies", remoteAddr: "8.8.8.8:1234", want: "8.8.8.8"},
-		{name: "trusted peer reads leftmost XFF", remoteAddr: "127.0.0.1:80", xff: "1.2.3.4, 5.6.7.8", trusted: trusted, want: "1.2.3.4"},
+		{name: "trusted peer reads rightmost untrusted XFF", remoteAddr: "127.0.0.1:80", xff: "1.2.3.4, 5.6.7.8", trusted: trusted, want: "5.6.7.8"},
+		{name: "trusted peer ignores spoofed leftmost XFF", remoteAddr: "127.0.0.1:80", xff: "1.2.3.4, 8.8.8.8", trusted: trusted, want: "8.8.8.8"},
+		{name: "trusted peer walks past a trusted hop in the chain", remoteAddr: "127.0.0.1:80", xff: "9.9.9.9, 127.0.0.1", trusted: trusted, want: "9.9.9.9"},
+		{name: "multi-hop trusted proxies resolve to the real client", remoteAddr: "127.0.0.1:80", xff: "9.9.9.9, 10.0.0.1", trusted: multiHop, want: "9.9.9.9"},
+		{name: "entirely trusted chain falls back to peer", remoteAddr: "127.0.0.1:80", xff: "10.0.0.1, 127.0.0.1", trusted: multiHop, want: "127.0.0.1"},
 		{name: "untrusted peer ignores XFF", remoteAddr: "8.8.8.8:1234", xff: "1.2.3.4", trusted: trusted, want: "8.8.8.8"},
 		{name: "trusted peer, empty XFF falls back to peer", remoteAddr: "127.0.0.1:80", xff: "", trusted: trusted, want: "127.0.0.1"},
 		{name: "trusted peer, garbage XFF falls back to peer", remoteAddr: "127.0.0.1:80", xff: "not-an-ip", trusted: trusted, want: "127.0.0.1"},

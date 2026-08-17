@@ -47,9 +47,11 @@ func (c *rateHitCounter) snapshot() map[string]int64 {
 // RateLimitHits returns a snapshot of the chat rate-limit 429 tallies by reason.
 func (s *Server) RateLimitHits() map[string]int64 { return s.rateLimitHits.snapshot() }
 
-// rateLimitMiddleware guards /chat with the shared sliding-window limiter
-// (internal/ratelimit), keyed by user email. Applied only to /chat because the
-// other chat endpoints are cheap and shouldn't block the UI on a limit hit.
+// rateLimitMiddleware guards /chat and /attachments with the shared
+// sliding-window limiter (internal/ratelimit), keyed by user email.
+// Other chat endpoints are cheap; /attachments is the other high-cost
+// write (up to 2× UploadMaxBytes per request) so it shares the window
+// (#1112).
 //
 // Admins (ADMIN_EMAILS) are exempt. Every non-admin response — success or 429 —
 // carries advisory X-RateLimit-Limit/Remaining/Reset headers; a 429 adds
