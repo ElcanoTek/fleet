@@ -19,6 +19,19 @@ prior versions are listed because none have shipped.
 
 ### Security
 
+- **IP allowlist no longer trusts the leftmost `X-Forwarded-For` entry
+  behind a trusted proxy (#1111).** When the TCP peer was in
+  `FLEET_TRUSTED_PROXIES`, `clientIP` took the leftmost XFF value — the
+  one an external client controls. A request of
+  `X-Forwarded-For: <spoofed-allowlisted>` forwarded by Caddy as
+  `<spoofed>, <real>` was therefore filtered on the spoof, defeating the
+  operator's network control (including for the pre-auth `/webhooks/` and
+  `/auth/verify` surfaces). The chain is now walked from the right,
+  skipping hops that are themselves trusted proxies, matching the
+  orchestrator's existing `ClientIPFromXFF` convention; an all-trusted
+  chain falls back to the TCP peer. The filter is still defense-in-depth
+  in front of shared-token auth, so a bypass alone grants no data access.
+
 - **Workspace href rewrite no longer lets `..` segments escape the
   workspace-local prefix (#1113).** `resolveScopedWorkspaceHref` decoded
   then re-encoded each path segment with `encodeURIComponent`, which
