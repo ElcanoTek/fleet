@@ -4,12 +4,13 @@
 package handlers
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
-	"reflect"
 	"strings"
 	"time"
 
@@ -294,10 +295,13 @@ func (h *Handlers) createTaskFromRecord(_ *http.Request, rec models.TaskExportRe
 }
 
 // replaceTaskByName updates an existing task's DEFINITION in place (the import
-// "replace" path). It fetches the colliding task by name, overlays the record's
-// definition fields onto it (preserving id, status, attempt_count, lease,
-// timestamps, created_by, lineage), and re-saves via UpdateTask. Runtime state
-// is therefore preserved; only the configuration is replaced.
+// "replace" path). The record is validated exactly like a create, then handed
+// to storage.ReplaceTaskDefinition, which re-locks the row, re-checks it is
+// still pending/scheduled, overlays ONLY definition fields (the shared
+// models.OverlayTaskDefinition — execution state is never copied from the
+// record), and recomputes the dispatch state (#1104). A task that was claimed
+// or finished since the pre-flight is therefore refused per-record instead of
+// having its status/lease silently rewound into a second execution.
 func (h *Handlers) replaceTaskByName(r *http.Request, rec models.TaskExportRecord) (uuid.UUID, error) {
 	existing, err := h.storage.GetTaskByName(r.Context(), rec.Name)
 	if err != nil {
@@ -312,67 +316,16 @@ func (h *Handlers) replaceTaskByName(r *http.Request, rec models.TaskExportRecor
 	if err := h.validateTaskCreate(&tc); err != nil {
 		return uuid.Nil, err
 	}
-	// Overlay definition fields onto the existing task, preserving runtime state.
-	existing.Name = tc.Name
-	existing.Prompt = tc.Prompt
-	existing.Model = tc.Model
-	existing.FallbackModel = tc.FallbackModel
-	existing.MaxIterations = tc.MaxIterations
-	existing.MCPSelection = tc.MCPSelection
-	existing.CredentialAllowlist = tc.CredentialAllowlist
-	existing.LoopConfig = tc.LoopConfig
-	existing.WorktreeConfig = tc.WorktreeConfig
-	existing.SandboxLimits = tc.SandboxLimits
-	existing.OutputSchema = tc.OutputSchema
-	existing.Priority = tc.Priority
-	existing.InstructionSelfImprove = tc.InstructionSelfImprove
-	existing.AllowNetwork = tc.AllowNetwork
-	existing.AllowDelegation = tc.DelegationAllowed()
-	existing.ThinkingBudgetTokens = tc.ThinkingBudgetTokens
-	existing.Persona = tc.Persona
-	existing.Description = tc.Description
-	existing.ScheduledFor = tc.ScheduledFor
-	existing.Recurrence = tc.Recurrence
-	existing.RecurrenceUntil = tc.RecurrenceUntil
-	existing.RecurrenceRemaining = tc.RecurrenceRemaining
-	existing.Timezone = tc.Timezone
-	existing.Files = tc.Files
-	existing.FileNames = tc.FileNames
-	existing.Tags = tc.Tags
-	if tc.MaxRetries != nil {
-		existing.MaxRetries = *tc.MaxRetries
-	} else {
-		existing.MaxRetries = 0
-	}
-	existing.RetryPolicy = tc.RetryPolicy
-	existing.TriggerType = tc.TriggerType
-	existing.AllowTaskCreation = tc.AllowTaskCreation
-	existing.AllowRecurringTaskCreation = tc.AllowRecurringTaskCreation
-	// run_if is a full-definition field like the rest of the overlay (replace
-	// already requires admin, matching the authoring boundary) — but a PENDING
-	// task is past the scheduled→pending promotion where a gate is evaluated
-	// (models.RunIf's enforcement contract), so attaching or changing one there
-	// would be dead config for the imminent dispatch; refuse, mirroring the
-	// UpdateTask edit path. Removal (record omits run_if) stays allowed.
-	if !reflect.DeepEqual(tc.RunIf.Normalized(), existing.RunIf.Normalized()) {
-		if tc.RunIf != nil && existing.Status == models.TaskStatusPending {
-			return uuid.Nil, fmt.Errorf("run_if: task is already pending dispatch, so its gate can no longer be evaluated for this run")
+	updated, err := h.storage.ReplaceTaskDefinition(r.Context(), existing.ID, tc)
+	if err != nil {
+		// Deleted between the name lookup and the row lock: the same race as the
+		// nil branch above, with the same answer — land the record as a create.
+		if errors.Is(err, sql.ErrNoRows) {
+			return h.createTaskFromRecord(r, rec, h.principalFromRequest(r))
 		}
-		existing.RunIf = tc.RunIf
-	}
-	// Serialization key (#709): normalized the same way NewTask does, so a
-	// replaced definition can never carry a whitespace-only key the claim gate
-	// would treat as a real key.
-	existing.SerializationKey = nil
-	if tc.SerializationKey != nil {
-		if trimmed := strings.TrimSpace(*tc.SerializationKey); trimmed != "" {
-			existing.SerializationKey = &trimmed
-		}
-	}
-	if _, err := h.storage.UpdateTask(existing); err != nil {
 		return uuid.Nil, err
 	}
-	return existing.ID, nil
+	return updated.ID, nil
 }
 
 // validateExportRecord enforces the load-bearing, PORTABLE create-time checks

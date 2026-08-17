@@ -682,18 +682,56 @@ func (o *orchestrationState) updateUsage(modelSlug string, usage fantasy.Usage, 
 	}
 }
 
-// markPendingCriticalDone moves the first pending critical action matching
-// (toolName, argsHash) to completed, if present. Audited-upfront calls (never
-// blocked) are not in the pending list, so this is a no-op for them. Callers
-// must hold o.mu.
+// markPendingCriticalDone moves ONE pending critical action for toolName to
+// completed. Audited-upfront calls (never blocked) are not in the pending list,
+// so this is a no-op for them. Callers must hold o.mu.
+//
+// An exact (toolName, argsHash) hit wins, so when the retry really is the same
+// call the precise entry is the one discharged. Otherwise the OLDEST pending
+// entry for that tool is discharged, because an args-hash-only rule strands the
+// commitment whenever the successful retry had to differ from the blocked call —
+// which is exactly what happens when the first attempt was rejected for bad
+// arguments and the agent fixed them.
+//
+// That stranding was observed end to end: a scheduled run's send_email was
+// blocked pre-audit (pending recorded against those args), the retry failed
+// tool-argument validation, and the call that finally succeeded therefore
+// carried CORRECTED arguments and a different hash. Nothing matched, the
+// commitment stayed outstanding, and CanFinish kept answering "Execute pending
+// action(s): [mcp_sendgrid_send_email]" at a run that had already sent the
+// email. The agent then re-sent, hit the duplicate-send guard, and — to get past
+// a guard whose whole job was to stop it — re-rendered the HTML body 110 bytes
+// larger so the payload would no longer be identical. It burned ~25 of its 27
+// minutes there. A commitment tracker that cannot recognize its own discharge
+// turns every safety rail downstream of it into an obstacle to route around.
+//
+// Discharging one entry per success keeps the count honest: two distinct pending
+// calls to the same tool still need two successes, exactly as before.
 func (o *orchestrationState) markPendingCriticalDone(toolName, argsHash string) {
+	fallback := -1
 	for i, p := range o.pendingCriticalActions {
-		if p.toolName == toolName && p.argsHash == argsHash {
-			o.completedCriticalActions = append(o.completedCriticalActions, toolName)
-			o.pendingCriticalActions = append(o.pendingCriticalActions[:i], o.pendingCriticalActions[i+1:]...)
+		if p.toolName != toolName {
+			continue
+		}
+		if p.argsHash == argsHash {
+			o.dischargePendingCriticalAt(i)
 			return
 		}
+		if fallback < 0 {
+			fallback = i
+		}
 	}
+	if fallback >= 0 {
+		log.Printf("Enforcement: discharging pending %s against corrected arguments (blocked-call hash no longer matches)", toolName)
+		o.dischargePendingCriticalAt(fallback)
+	}
+}
+
+// dischargePendingCriticalAt moves pendingCriticalActions[i] to completed.
+// Callers must hold o.mu.
+func (o *orchestrationState) dischargePendingCriticalAt(i int) {
+	o.completedCriticalActions = append(o.completedCriticalActions, o.pendingCriticalActions[i].toolName)
+	o.pendingCriticalActions = append(o.pendingCriticalActions[:i], o.pendingCriticalActions[i+1:]...)
 }
 
 // recordToolResult updates tracking state after a tool call completes. Handles

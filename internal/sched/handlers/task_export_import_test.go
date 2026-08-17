@@ -621,3 +621,81 @@ func TestImportReplace_RoundTripsRunIf(t *testing.T) {
 		t.Errorf("pending task must not receive a gate it can never evaluate, got %+v", got.RunIf)
 	}
 }
+
+// importReplaceOne posts a one-record conflict=replace import as admin and
+// returns the recorder — shared by the #1104 regression tests below.
+func importReplaceOne(t *testing.T, r http.Handler, rec models.TaskExportRecord) *httptest.ResponseRecorder {
+	t.Helper()
+	env := models.TaskExportEnvelope{Version: models.TaskExportVersion, ExportedAt: time.Now().UTC(), Tasks: []models.TaskExportRecord{rec}}
+	body, _ := json.Marshal(env)
+	req := httptest.NewRequest(http.MethodPost, "/tasks/import?conflict=replace", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-API-Key", "test-admin-key")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	return w
+}
+
+// TestImportReplace_RefusesClaimedTask is the #1104 double-execution guard at
+// the HTTP boundary: once a runner has claimed the colliding task, a
+// conflict=replace of it must be refused per-record (207) — before the fix the
+// unlocked read → full-row upsert rewound status to `scheduled` and nulled the
+// lease, re-dispatching a live run.
+func TestImportReplace_RefusesClaimedTask(t *testing.T) {
+	r, store, cleanup := setupExportImportHandler(t)
+	defer cleanup()
+
+	seed := models.NewTask(models.TaskCreate{Name: "claimed", Prompt: "seed claimed task"})
+	if _, err := store.AddTask(seed); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	claimed, err := store.ClaimNextPendingTask(context.Background(), "worker-1")
+	if err != nil || claimed == nil || claimed.ID != seed.ID {
+		t.Fatalf("claim: %v %v", claimed, err)
+	}
+
+	w := importReplaceOne(t, r, models.TaskExportRecord{Name: "claimed", Prompt: "must not land"})
+	if w.Code != http.StatusMultiStatus {
+		t.Fatalf("replace of claimed task = %d, want 207: %s", w.Code, w.Body.String())
+	}
+	var resp models.TaskImportResponse
+	json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp.Errors != 1 || resp.Replaced != 0 {
+		t.Errorf("resp = %+v, want the colliding record errored", resp)
+	}
+	got := mustFindTask(t, store, "claimed")
+	if got.Status != models.TaskStatusLeased || got.LeaseOwner == nil || *got.LeaseOwner != "worker-1" {
+		t.Errorf("refused replace disturbed the claim: status=%s owner=%v", got.Status, got.LeaseOwner)
+	}
+	if got.Prompt != "seed claimed task" {
+		t.Errorf("refused replace rewrote the definition: %q", got.Prompt)
+	}
+}
+
+// TestImportReplace_ReschedulesScheduleLessRecord is the #1104 wedge guard: a
+// record with no scheduled_for/recurrence replacing a scheduled one-shot must
+// yield a dispatchable state (pending, like creating the record fresh) — never
+// `scheduled` with a NULL scheduled_for, which GetScheduledTasks (scheduled_for
+// IS NOT NULL) can never promote.
+func TestImportReplace_ReschedulesScheduleLessRecord(t *testing.T) {
+	r, store, cleanup := setupExportImportHandler(t)
+	defer cleanup()
+
+	future := time.Now().Add(48 * time.Hour).UTC()
+	seed := models.NewTask(models.TaskCreate{Name: "oneshot", Prompt: "seed one-shot", ScheduledFor: &future})
+	if _, err := store.AddTask(seed); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	if w := importReplaceOne(t, r, models.TaskExportRecord{Name: "oneshot", Prompt: "replaced, no schedule"}); w.Code != http.StatusOK {
+		t.Fatalf("replace: %d (%s)", w.Code, w.Body.String())
+	}
+	got := mustFindTask(t, store, "oneshot")
+	if got.Prompt != "replaced, no schedule" {
+		t.Fatalf("replace did not update definition: %+v", got)
+	}
+	if got.Status != models.TaskStatusPending || got.ScheduledFor != nil {
+		t.Errorf("schedule-less replace: status=%s scheduled_for=%v, want pending/nil (a scheduled+NULL row would be wedged forever)",
+			got.Status, got.ScheduledFor)
+	}
+}

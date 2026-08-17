@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -159,6 +161,89 @@ func TestNewAgent_PreservesExplicitEmptyBrokerCatalog(t *testing.T) {
 	a := NewAgent(Options{MCPBroker: &interactiveRecordingBroker{}, MCPCatalog: []mcp.ServerTool{}})
 	if a.mcpCatalog == nil {
 		t.Fatal("explicit empty broker catalog became nil and could fall back to local discovery")
+	}
+}
+
+// TestExecute_CostCeilingStopIsAnError is the driver-level regression guard for
+// #1105: a free-form scheduled run that trips its cost/token ceiling mid-work
+// must return an error wrapping agentcore.ErrCostCeilingExceeded (the sentinel
+// the runner's classifyFailure maps to the cost_ceiling class), NOT the nil
+// that recorded the task as SUCCESS — success notification, email reply-back,
+// no finish gates. The partial transcript must still persist to the session log
+// exactly as before.
+func TestExecute_CostCeilingStopIsAnError(t *testing.T) {
+	model := &itMockModel{
+		streamFunc: func(_ context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
+			return func(yield func(fantasy.StreamPart) bool) {
+				if !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, ID: "t", Delta: "partial work"}) {
+					return
+				}
+				yield(fantasy.StreamPart{
+					Type:         fantasy.StreamPartTypeFinish,
+					FinishReason: fantasy.FinishReasonStop,
+					// One step's usage blows straight through the 10-token
+					// ceiling below, so the budget-guarded PrepareStep aborts
+					// the run before the next paid completion.
+					Usage: fantasy.Usage{InputTokens: 50, OutputTokens: 10},
+				})
+			}, nil
+		},
+	}
+	t.Setenv("FLEET_LOG_FILE", t.TempDir()+"/session.json")
+	a := NewAgent(Options{
+		Config:        &config.Config{MaxIterations: 50, LLMMaxTokens: 4096, MaxTotalTokens: 10, MCPServers: map[string]config.MCPServerConfig{}},
+		Model:         model,
+		SystemPrompt:  "you are a scheduled agent",
+		MaxIterations: 50,
+	})
+
+	err := a.Execute(context.Background(), "burn the budget")
+	if !errors.Is(err, agentcore.ErrCostCeilingExceeded) {
+		t.Fatalf("budget-stopped run returned %v, want an error wrapping ErrCostCeilingExceeded", err)
+	}
+	// The partial transcript survives the reclassification: the assistant text
+	// streamed before the ceiling fired is in the session log.
+	var sawPartial bool
+	for _, m := range a.logSession.SnapshotMessages() {
+		if m.Role == roleAssistant && strings.Contains(m.Content, "partial work") {
+			sawPartial = true
+		}
+	}
+	if !sawPartial {
+		t.Fatal("budget-stopped run lost its partial transcript")
+	}
+}
+
+// TestExecute_CancelledRunIsAnError pins the cancel half of #1105: a run whose
+// agentcore Result comes back Cancelled (nil error) must surface as an
+// ErrRunCancelled-wrapped error carrying the ctx cause — the runner's
+// stop/pause markers attribute it; with no marker it now classifies as a
+// failure instead of falling through to success. The cancel is attribution, not
+// a fault, so no "[fatal]" line is written to the session log.
+func TestExecute_CancelledRunIsAnError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	model := &itMockModel{
+		streamFunc: func(c context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
+			// Cancel mid-run, the way a stop/pause handler does, then fail the
+			// stream with the ctx error so the run classifies it as a cancel.
+			cancel()
+			return nil, c.Err()
+		},
+	}
+	a := newTestScheduledAgent(t, model)
+
+	err := a.Execute(ctx, "long task")
+	if !errors.Is(err, agentcore.ErrRunCancelled) {
+		t.Fatalf("cancelled run returned %v, want an error wrapping ErrRunCancelled", err)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled run error %v must carry the ctx cause", err)
+	}
+	for _, m := range a.logSession.SnapshotMessages() {
+		if strings.HasPrefix(m.Content, "[fatal]") {
+			t.Fatalf("a surfaced cancel must not write a [fatal] transcript line, got %q", m.Content)
+		}
 	}
 }
 

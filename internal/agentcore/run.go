@@ -242,6 +242,17 @@ type Result struct {
 	Usage RunUsage
 }
 
+// ErrRunCancelled is the driver-facing classification for a run whose Result
+// came back Cancelled with a nil error. Run itself deliberately returns nil on
+// a cancel so the INTERACTIVE driver can persist the partial turn and render
+// "stopped by user" (see streamErrorResult); a headless driver has no user
+// reading that nuance — a nil error there was recorded as task SUCCESS
+// (#1105) — so it re-surfaces the outcome wrapped in this sentinel. The
+// scheduled runner's stop/pause/interrupt attribution still takes precedence
+// over the error; the sentinel exists so its Sentry gate can recognize a
+// surfaced cancel as an interruption rather than an application failure.
+var ErrRunCancelled = errors.New("run cancelled before completion")
+
 // RunUsage is the accumulated token + cost accounting for a run. It follows the
 // LogSession token convention: PromptTokens INCLUDES cache reads, CachedTokens
 // is that cached subset (so uncached spend is PromptTokens - CachedTokens, the

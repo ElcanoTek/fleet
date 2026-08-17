@@ -19,6 +19,59 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **A scheduled task that hits its cost/token ceiling is no longer recorded as
+  SUCCESS.** (#1105) The scheduled driver returned a nil error for a
+  budget-stopped (or cancelled) run, so the worker pool's terminal
+  classification fell through to success: the task row read `succeeded`, the
+  success notification fired, and an email-triggered run replied "here is your
+  result" to the external sender — while none of the finish gates (CanFinish,
+  the end-of-run verifier, phone-a-friend) had run. The driver now surfaces a
+  budget stop as `ErrCostCeilingExceeded` (the existing `cost_ceiling` failure
+  class — terminal failure + failure notification, non-retryable by default)
+  and an unattributed cancel as the new `agentcore.ErrRunCancelled` (operator
+  stop / ask-pause / self-wake / shutdown attribution still take precedence).
+  Partial transcripts persist exactly as before, and a sub-agent child stopping
+  at its deliberately sliced ceiling still returns its partial answer to the
+  parent instead of erroring.
+
+- Task import `conflict=replace` (HTTP and CLI, #1104) is no longer an unlocked
+  read-modify-write. Both paths now go through one storage seam
+  (`storage.ReplaceTaskDefinition`) that re-locks the row, re-checks it is still
+  pending/scheduled inside the transaction, applies the single shared
+  definition overlay (`models.OverlayTaskDefinition` — pinned by a completeness
+  test against every `TaskExportRecord` field), and recomputes the dispatch
+  state with `models.DeriveDispatchState`. This closes three failure modes: a
+  replace racing the scheduler/claimer could rewind a claimed run to
+  `scheduled` with its lease nulled (double execution) or flip a completed row
+  back to non-terminal, erasing its result; each path hand-rolled its own
+  overlay and silently dropped definition fields (`title`, `carry_context`,
+  `allow_event_triggers`, the SLA trio on both; plus `sandbox_limits`,
+  `output_schema`, recurrence end conditions, `run_if`, and
+  `serialization_key` on the CLI); and a schedule-less record replacing a
+  scheduled one-shot left the row `scheduled` with a NULL `scheduled_for`,
+  which the scheduler can never promote. A replace of a leased, running, or
+  terminal task is now refused per-record with a clear error instead of being
+  silently applied.
+
+- A critical-tool commitment is no longer stranded when the successful call
+  carried corrected arguments. `markPendingCriticalDone` discharged a pending
+  action only on an exact `(toolName, argsHash)` match, so a call that was
+  blocked pre-audit, rejected on its first retry for bad tool arguments, and
+  then **fixed** could never discharge — the winning call hashed differently
+  precisely because fixing it is what made it win. `CanFinish` kept answering
+  *"Execute pending action(s): [mcp_sendgrid_send_email]"* to a run that had
+  already sent the email (SendGrid `202`, message id recorded in the session).
+  The run then re-sent, hit the duplicate-send guard, and re-rendered its HTML
+  body 110 bytes larger so the payload would no longer be identical — defeating
+  a guard whose entire job was to stop exactly that. It spent roughly 25 of its
+  27 minutes there and finished `success` having published nothing.
+  An exact args hit still wins when the retry really is the same call; otherwise
+  the oldest pending entry for that tool is discharged. One entry per success,
+  so two distinct pending calls to the same tool still need two successes, and a
+  success for one tool never discharges another's.
+
+### Fixed
+
 - **Attachment validation stats the vetted path, not the raw client value.**
   `validateAttachments` already confined chat-attachment paths to the uploads
   root (`filepath.Rel` + `filepath.IsLocal`), but then passed the original
