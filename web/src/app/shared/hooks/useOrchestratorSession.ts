@@ -3,16 +3,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { classifyBootstrapFailure } from "@/app/chat/ui/bootstrapFailure";
 import { OrchestratorError, orchestratorApi } from "@/app/shared/lib/orchestratorApi";
-import {
-  clearStoredToken,
-  getStoredToken,
-  setStoredToken,
-} from "@/app/shared/lib/orchestratorAuth";
+import { purgeLegacyOrchestratorTokens } from "@/app/shared/lib/orchestratorAuth";
 
 // useOrchestratorSession owns the orchestrator's login state.
-// Cookie/OIDC is the operator path (the username/password form is gone).
-// login() still posts to /auth/login so a bearer client can mint a token;
-// the UI no longer calls it. /me remains the single source of truth.
+// Cookie/OIDC is the only operator path (the username/password form and
+// its localStorage bearer are gone — #1115). /me remains the single
+// source of truth; the proxy resolves the httpOnly session cookie.
 
 export type OrchestratorSession = {
   ready: boolean; // initial probe complete
@@ -35,11 +31,14 @@ export function useOrchestratorSession(): OrchestratorSession {
   const [unreachable, setUnreachable] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Initial probe (#458 symptoms 1 + 3): ALWAYS hit /me — the route resolves a
-  // stored bearer OR a valid elcano cookie, so it is the single source of truth
-  // for signedIn/username/role. Probing unconditionally fixes the old early
-  // return that left username unset (account menu stuck on "Loading…") on a
-  // bearer reload, and it distinguishes "not signed in" (401) from
+  // Drop leftover moc bearer tokens on first load after upgrade (#1115).
+  useEffect(() => {
+    purgeLegacyOrchestratorTokens();
+  }, []);
+
+  // Initial probe (#458 symptoms 1 + 3): ALWAYS hit /me — the route
+  // resolves a valid elcano cookie, so it is the single source of truth
+  // for signedIn/username/role. Distinguishes "not signed in" (401) from
   // "signed in but not an orchestrator member" (403 not_a_member).
   useEffect(() => {
     let cancelled = false;
@@ -61,9 +60,9 @@ export function useOrchestratorSession(): OrchestratorSession {
           // revocation, on a lookup error: internal/sched/handlers/
           // session_epoch.go) — is down, which says nothing about the session.
           // Rendering the login card here would invite people to type
-          // credentials mid-incident, so surface a distinct unreachable state
-          // and keep the stored bearer for the retry. Same 401/403-only auth
-          // verdict as the chat plane (chat/ui/bootstrapFailure.ts).
+          // credentials mid-incident, so surface a distinct unreachable state.
+          // Same 401/403-only auth verdict as the chat plane
+          // (chat/ui/bootstrapFailure.ts).
           setUnreachable(true);
         } else if (status === 403) {
           // not_a_member: a valid chat-cookie identity with no orchestrator
@@ -75,10 +74,6 @@ export function useOrchestratorSession(): OrchestratorSession {
           // 401 → genuinely not signed in.
           setSignedIn(false);
           setNoAccess(false);
-          // Self-heal a stale bearer (#458 symptom 3): an invalid/expired token
-          // would otherwise keep shadowing a valid cookie session on every
-          // request. Clear it so the next probe falls back to the cookie.
-          clearStoredToken();
         }
       } finally {
         if (!cancelled) setReady(true);
@@ -89,50 +84,24 @@ export function useOrchestratorSession(): OrchestratorSession {
     };
   }, []);
 
-  const login = useCallback(async (user: string, password: string): Promise<boolean> => {
-    setError(null);
-    if (!user || !password) {
-      setError("Please enter username and password");
-      return false;
-    }
-    try {
-      const res = await fetch("/api/orchestrator/auth/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: user, password }),
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({ detail: "Login failed" }));
-        setError(body.detail || "Invalid credentials");
-        return false;
-      }
-      const data = await res.json();
-      if (!data.token) {
-        setError("No token received from server");
-        return false;
-      }
-      setStoredToken(data.token);
-      setSignedIn(true);
-      setUsername(data.user?.username);
-      setRole(data.user?.role);
-      return true;
-    } catch (err) {
-      setError((err as Error).message || "Login failed");
-      return false;
-    }
+  // Username/password login is retired (#1115). Kept on the type so a
+  // leftover caller gets a loud no instead of silently minting a
+  // localStorage bearer.
+  const login = useCallback(async (_user: string, _password: string): Promise<boolean> => {
+    setError("Username/password login is retired; sign in through the chat session.");
+    return false;
   }, []);
 
   const logout = useCallback(async () => {
     try {
-      const token = getStoredToken();
       await fetch("/api/orchestrator/auth/logout", {
         method: "POST",
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        credentials: "same-origin",
       });
     } catch {
       /* best effort */
     }
-    clearStoredToken();
+    purgeLegacyOrchestratorTokens();
     setSignedIn(false);
     setUsername(undefined);
     setRole(undefined);

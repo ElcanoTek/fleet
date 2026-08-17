@@ -8,7 +8,6 @@ export const runtime = "nodejs";
 //
 // Clears the shared httpOnly elcano_auth cookie (JS can't) so the user is
 // signed out of all Elcano services. POST so the Origin CSRF check applies.
-// The browser separately drops its stored moc bearer token.
 export async function POST(request: NextRequest) {
   const csrf = verifyOrigin(request);
   if (!csrf.ok) return csrf.response;

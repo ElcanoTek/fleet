@@ -1,12 +1,10 @@
 "use client";
 
 // Browser-side client for the orchestrator. Every call goes through the
-// /api/orchestrator/* proxy (which injects the user's identity), so this module
-// only deals with relative URLs and the bearer token (when the user logged in
-// via moc's username/password). Elcano-cookie users carry no bearer; the cookie
-// rides along automatically and the proxy resolves it.
+// /api/orchestrator/* proxy, which resolves the caller's identity from the
+// httpOnly chat/elcano session cookie (#1115). Relative URLs only — no
+// bearer token is stored or attached in the browser.
 
-import { getStoredToken } from "./orchestratorAuth";
 import { parseSseChunk } from "@/app/lib/sse";
 
 // MCPChoice mirrors agentcore.MCPChoice: which optional server is on + which
@@ -585,17 +583,15 @@ class OrchestratorError extends Error {
   }
 }
 
-function authHeaders(extra?: Record<string, string>): Record<string, string> {
-  const headers: Record<string, string> = { ...(extra ?? {}) };
-  const token = getStoredToken();
-  if (token) headers["Authorization"] = `Bearer ${token}`;
-  return headers;
+function requestHeaders(extra?: Record<string, string>): Record<string, string> {
+  return { ...(extra ?? {}) };
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`/api/orchestrator${path}`, {
     ...init,
-    headers: authHeaders(init?.headers as Record<string, string> | undefined),
+    credentials: "same-origin",
+    headers: requestHeaders(init?.headers as Record<string, string> | undefined),
     cache: "no-store",
   });
   if (!res.ok) {
@@ -699,10 +695,11 @@ export const orchestratorApi = {
     signal: AbortSignal,
     lastEventID?: string,
   ): Promise<void> => {
-    const headers = authHeaders({ Accept: "text/event-stream" });
+    const headers = requestHeaders({ Accept: "text/event-stream" });
     if (lastEventID) headers["Last-Event-ID"] = lastEventID;
     const res = await fetch(`/api/orchestrator/tasks/${encodeURIComponent(taskId)}/stream`, {
       headers,
+      credentials: "same-origin",
       cache: "no-store",
       signal,
     });
@@ -837,7 +834,8 @@ export const orchestratorApi = {
     form.append("file", file);
     const res = await fetch("/api/orchestrator/upload", {
       method: "POST",
-      headers: authHeaders(),
+      credentials: "same-origin",
+      headers: requestHeaders(),
       body: form,
     });
     if (!res.ok) throw new OrchestratorError(`Upload failed (${res.status})`, res.status);

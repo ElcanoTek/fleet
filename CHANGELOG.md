@@ -52,6 +52,14 @@ prior versions are listed because none have shipped.
 
 ### Security
 
+- **Web no longer persists the orchestrator bearer token in
+  `localStorage` (#1115).** The moc username/password form was already
+  gone from the UI, but `orchestratorAuth` still stored the token (and
+  attached it as `Authorization`) so any XSS could exfiltrate it. The
+  browser now authenticates orchestrator API calls via the same
+  httpOnly cookie session as chat. Leftover `orchestratorToken` /
+  `userToken` keys are purged on first load after upgrade.
+
 - **Merged-skills materialization no longer uses a predictable path
   under world-writable `/tmp` (#1121).** `materializeMergedSkills`
   wrote to `os.TempDir()/fleet-skills/<hash>` with `MkdirAll 0755` and
