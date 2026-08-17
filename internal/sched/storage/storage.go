@@ -532,6 +532,12 @@ func (s *Storage) GetAllLogs() (map[uuid.UUID]*models.LogSession, error) {
 	return s.db.GetAllLogs(context.Background())
 }
 
+// ForEachLog visits every stored log session in keyset pages so callers
+// can stream without holding the full table in memory (#1122).
+func (s *Storage) ForEachLog(ctx context.Context, fn func(uuid.UUID, *models.LogSession) error) error {
+	return s.db.ForEachLog(ctx, fn)
+}
+
 // Cleanup operations
 
 // CleanupHistory deletes tasks and logs older than days.

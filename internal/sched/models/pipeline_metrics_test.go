@@ -72,3 +72,55 @@ func TestAggregatePipelineMetrics(t *testing.T) {
 		t.Errorf("empty aggregate: %+v", empty)
 	}
 }
+
+func TestPipelineMetricsAccumulator_MatchesAggregate(t *testing.T) {
+	runs := []RunPipelineMetrics{
+		{TaskID: "a", ToolTurns: 0, CreatedAt: 1},
+		{TaskID: "b", ToolTurns: 1, DistinctTools: 1, CreatedAt: 2},
+		{TaskID: "c", ToolTurns: 3, DistinctTools: 2, CreatedAt: 3},
+		{TaskID: "d", ToolTurns: 7, DistinctTools: 4, CreatedAt: 4},
+		{TaskID: "e", ToolTurns: 12, DistinctTools: 6, CreatedAt: 5},
+	}
+	acc := NewPipelineMetricsAccumulator()
+	for _, r := range runs {
+		acc.Add(r)
+	}
+	got := acc.Result()
+	want := AggregatePipelineMetrics(append([]RunPipelineMetrics(nil), runs...))
+	if got.Runs != want.Runs || got.PctRunsAtLeast5ToolTurns != want.PctRunsAtLeast5ToolTurns {
+		t.Fatalf("acc=%+v want=%+v", got, want)
+	}
+	for k, v := range want.ToolTurnHistogram {
+		if got.ToolTurnHistogram[k] != v {
+			t.Errorf("histogram[%s] = %d, want %d", k, got.ToolTurnHistogram[k], v)
+		}
+	}
+}
+
+func TestRecentRuns_KeepsMostRecentN(t *testing.T) {
+	r := NewRecentRuns(3)
+	for _, m := range []RunPipelineMetrics{
+		{TaskID: "old", CreatedAt: 1},
+		{TaskID: "mid", CreatedAt: 2},
+		{TaskID: "new", CreatedAt: 4},
+		{TaskID: "older", CreatedAt: 0},
+		{TaskID: "newest", CreatedAt: 5},
+	} {
+		r.Add(m)
+	}
+	got := r.Items()
+	if len(got) != 3 {
+		t.Fatalf("kept %d, want 3: %+v", len(got), got)
+	}
+	if got[0].TaskID != "newest" || got[1].TaskID != "new" || got[2].TaskID != "mid" {
+		t.Errorf("order/contents = %v,%v,%v", got[0].TaskID, got[1].TaskID, got[2].TaskID)
+	}
+}
+
+func TestRecentRuns_ZeroLimitHoldsNothing(t *testing.T) {
+	r := NewRecentRuns(0)
+	r.Add(RunPipelineMetrics{TaskID: "x", CreatedAt: 1})
+	if items := r.Items(); len(items) != 0 {
+		t.Fatalf("limit 0 kept %d", len(items))
+	}
+}

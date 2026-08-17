@@ -19,6 +19,16 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Admin pipeline-metrics and first-run log archival no longer load
+  every payload into memory (#1122).** `GET /admin/pipeline-metrics`
+  called `GetAllLogs`, which decompressed every stored session — and
+  the route comment claimed retention bounded the table, but
+  `FLEET_RUN_LOG_RETENTION_DAYS <= 0` (the default) disables pruning.
+  The scan is now keyset-paginated; the handler keeps a running
+  aggregate and only the most recent `?runs=` summaries. `ArchiveOldLogs`
+  pages candidates the same way so enabling archival on a large table
+  no longer materializes every live payload at once.
+
 - **Expired approvals are no longer claimable between the deadline and
   the next sweep tick (#1109).** `ClaimApproval` checked only
   `status = 'pending'`, so a still-pending card past `expires_at` could

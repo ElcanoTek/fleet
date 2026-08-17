@@ -97,32 +97,96 @@ func toolTurnBucket(turns int) string {
 // AggregatePipelineMetrics rolls per-run metrics up fleet-wide and sorts runs
 // most-recent-first (callers typically truncate for display).
 func AggregatePipelineMetrics(runs []RunPipelineMetrics) PipelineMetricsAggregate {
-	agg := PipelineMetricsAggregate{
-		Runs:              len(runs),
-		ToolTurnHistogram: map[string]int{"0": 0, "1": 0, "2-4": 0, "5-9": 0, "10+": 0},
-	}
-	if len(runs) == 0 {
-		return agg
+	acc := NewPipelineMetricsAccumulator()
+	for _, r := range runs {
+		acc.Add(r)
 	}
 	sort.Slice(runs, func(i, j int) bool { return runs[i].CreatedAt > runs[j].CreatedAt })
-	var turns, distinct, prompt, completion, wall, longRuns int
-	for _, r := range runs {
-		agg.ToolTurnHistogram[toolTurnBucket(r.ToolTurns)]++
-		turns += r.ToolTurns
-		distinct += r.DistinctTools
-		prompt += r.PromptTokens
-		completion += r.CompletionTokens
-		wall += int(r.WallClockSeconds)
-		if r.ToolTurns >= 5 {
-			longRuns++
+	return acc.Result()
+}
+
+// PipelineMetricsAccumulator incrementally rolls up fleet-wide metrics so
+// callers can stream sessions without retaining every RunPipelineMetrics
+// (#1122). Result() is equivalent to AggregatePipelineMetrics over the
+// same sequence (minus the in-place sort of the input slice).
+type PipelineMetricsAccumulator struct {
+	n, turns, distinct, prompt, completion, wall, longRuns int
+	hist                                                   map[string]int
+}
+
+func NewPipelineMetricsAccumulator() *PipelineMetricsAccumulator {
+	return &PipelineMetricsAccumulator{
+		hist: map[string]int{"0": 0, "1": 0, "2-4": 0, "5-9": 0, "10+": 0},
+	}
+}
+
+func (a *PipelineMetricsAccumulator) Add(r RunPipelineMetrics) {
+	a.n++
+	a.hist[toolTurnBucket(r.ToolTurns)]++
+	a.turns += r.ToolTurns
+	a.distinct += r.DistinctTools
+	a.prompt += r.PromptTokens
+	a.completion += r.CompletionTokens
+	a.wall += int(r.WallClockSeconds)
+	if r.ToolTurns >= 5 {
+		a.longRuns++
+	}
+}
+
+func (a *PipelineMetricsAccumulator) Result() PipelineMetricsAggregate {
+	agg := PipelineMetricsAggregate{
+		Runs:              a.n,
+		ToolTurnHistogram: a.hist,
+	}
+	if a.n == 0 {
+		return agg
+	}
+	n := float64(a.n)
+	agg.PctRunsAtLeast5ToolTurns = float64(a.longRuns) / n * 100
+	agg.AvgToolTurns = float64(a.turns) / n
+	agg.AvgDistinctTools = float64(a.distinct) / n
+	agg.AvgPromptTokens = float64(a.prompt) / n
+	agg.AvgCompletionTokens = float64(a.completion) / n
+	agg.AvgWallClockSeconds = float64(a.wall) / n
+	return agg
+}
+
+// RecentRuns keeps the most recent N RunPipelineMetrics (by CreatedAt)
+// in O(limit) memory so the admin listing does not retain every run (#1122).
+type RecentRuns struct {
+	limit int
+	items []RunPipelineMetrics
+}
+
+func NewRecentRuns(limit int) *RecentRuns {
+	if limit < 0 {
+		limit = 0
+	}
+	return &RecentRuns{limit: limit, items: make([]RunPipelineMetrics, 0, limit)}
+}
+
+func (r *RecentRuns) Add(m RunPipelineMetrics) {
+	if r.limit == 0 {
+		return
+	}
+	if len(r.items) < r.limit {
+		r.items = append(r.items, m)
+		return
+	}
+	oldest := 0
+	for i := 1; i < len(r.items); i++ {
+		if r.items[i].CreatedAt < r.items[oldest].CreatedAt {
+			oldest = i
 		}
 	}
-	n := float64(len(runs))
-	agg.PctRunsAtLeast5ToolTurns = float64(longRuns) / n * 100
-	agg.AvgToolTurns = float64(turns) / n
-	agg.AvgDistinctTools = float64(distinct) / n
-	agg.AvgPromptTokens = float64(prompt) / n
-	agg.AvgCompletionTokens = float64(completion) / n
-	agg.AvgWallClockSeconds = float64(wall) / n
-	return agg
+	if m.CreatedAt > r.items[oldest].CreatedAt {
+		r.items[oldest] = m
+	}
+}
+
+// Items returns a most-recent-first copy of the kept runs.
+func (r *RecentRuns) Items() []RunPipelineMetrics {
+	out := append([]RunPipelineMetrics(nil), r.items...)
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt > out[j].CreatedAt })
+	return out
 }
