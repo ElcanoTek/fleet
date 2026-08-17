@@ -78,7 +78,7 @@ func TestListExpiredApprovals_FiltersCorrectly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create resolved: %v", err)
 	}
-	if ok, err := s.ClaimApproval(ctx, "alice@example.com", resolved.ID, "approved", "done"); err != nil || !ok {
+	if ok, err := s.ClaimExpiredApproval(ctx, "alice@example.com", resolved.ID, "approved", "done"); err != nil || !ok {
 		t.Fatalf("claim resolved: ok=%v err=%v", ok, err)
 	}
 
@@ -94,6 +94,64 @@ func TestListExpiredApprovals_FiltersCorrectly(t *testing.T) {
 	}
 	if expired[0].ExpiresAt != now-10 {
 		t.Errorf("expired[0].ExpiresAt = %d, want %d", expired[0].ExpiresAt, now-10)
+	}
+}
+
+// TestClaimApproval_RefusesExpired is the #1109 contract: a still-pending
+// approval past its expires_at deadline is not claimable, even if the
+// sweep has not run. Default-deny is authoritative at click time.
+func TestClaimApproval_RefusesExpired(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	conv, err := s.CreateConversation(ctx, "alice@example.com", "t", "victoria", "m", false)
+	if err != nil {
+		t.Fatalf("CreateConversation: %v", err)
+	}
+	now := time.Now().Unix()
+
+	expired, err := s.CreateApproval(ctx, conv.ID, "alice@example.com", "bash", "c_exp", `{}`, now-10, ApprovalSeat{})
+	if err != nil {
+		t.Fatalf("create expired: %v", err)
+	}
+	live, err := s.CreateApproval(ctx, conv.ID, "alice@example.com", "bash", "c_live", `{}`, now+300, ApprovalSeat{})
+	if err != nil {
+		t.Fatalf("create live: %v", err)
+	}
+	forever, err := s.CreateApproval(ctx, conv.ID, "alice@example.com", "bash", "c_none", `{}`, 0, ApprovalSeat{})
+	if err != nil {
+		t.Fatalf("create no-expiry: %v", err)
+	}
+
+	if claimed, err := s.ClaimApproval(ctx, "alice@example.com", expired.ID, "approved", "too late"); err != nil {
+		t.Fatalf("ClaimApproval expired: %v", err)
+	} else if claimed {
+		t.Fatal("expired approval must not be claimable (sweep has not run)")
+	}
+	got, err := s.GetApproval(ctx, "alice@example.com", expired.ID)
+	if err != nil {
+		t.Fatalf("GetApproval expired: %v", err)
+	}
+	if got.Status != "pending" {
+		t.Errorf("expired row status = %q, want pending (sweep owns the deny write)", got.Status)
+	}
+
+	if claimed, err := s.ClaimApproval(ctx, "alice@example.com", live.ID, "approved", "ok"); err != nil || !claimed {
+		t.Fatalf("unexpired approval must still be claimable (claimed=%v err=%v)", claimed, err)
+	}
+	if claimed, err := s.ClaimApproval(ctx, "alice@example.com", forever.ID, "approved", "ok"); err != nil || !claimed {
+		t.Fatalf("no-expiry approval must still be claimable (claimed=%v err=%v)", claimed, err)
+	}
+
+	// Sweep counterpart can still flip the expired row for audit.
+	if claimed, err := s.ClaimExpiredApproval(ctx, "alice@example.com", expired.ID, "rejected", "timed out"); err != nil || !claimed {
+		t.Fatalf("ClaimExpiredApproval: claimed=%v err=%v", claimed, err)
+	}
+	got, err = s.GetApproval(ctx, "alice@example.com", expired.ID)
+	if err != nil {
+		t.Fatalf("GetApproval after sweep claim: %v", err)
+	}
+	if got.Status != "rejected" {
+		t.Errorf("after sweep claim status = %q, want rejected", got.Status)
 	}
 }
 

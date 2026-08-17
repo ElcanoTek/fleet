@@ -19,6 +19,14 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Expired approvals are no longer claimable between the deadline and
+  the next sweep tick (#1109).** `ClaimApproval` checked only
+  `status = 'pending'`, so a still-pending card past `expires_at` could
+  be approved and executed until `SweepExpiredApprovals` ran. The claim
+  UPDATE now requires `expires_at` to be NULL, 0, or in the future.
+  The sweep uses a dedicated `ClaimExpiredApproval` so notification and
+  audit still land; default-deny is authoritative at click time.
+
 - **`fleet sched task set-model` no longer silently NULLs every matched
   task's `fallback_model` (#1120).** The CLI passed the
   `--fallback-model` flag's default `""` straight into

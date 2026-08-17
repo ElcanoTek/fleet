@@ -1240,11 +1240,14 @@ const approvalTimeoutResultText = "Approval timed out — auto-denied. The actio
 // emit (the staging turn is long over; the card resolves to its rejected state
 // on the next reload, and the client-side countdown has already greyed it out).
 //
-// Claiming via ClaimApproval is the race gate: if the user clicked Send in the
-// grace window before this sweep, their claim already flipped the row and the
-// sweep's claim returns not-claimed, so a late human decision wins. Returns the
-// number of approvals auto-denied (for logging). Run on a periodic ticker by
-// cmd/fleet; safe to call concurrently with user resolutions.
+// Claiming via ClaimExpiredApproval is the race gate against a concurrent
+// sweep tick. User clicks after the deadline no longer win: ClaimApproval
+// refuses expired rows (#1109), so default-deny is authoritative at click
+// time. A user click *before* the deadline still wins because
+// ClaimApproval requires expires_at > now, and this sweep's claim then
+// returns not-claimed. Returns the number of approvals auto-denied (for
+// logging). Run on a periodic ticker by cmd/fleet; safe to call
+// concurrently with user resolutions.
 func (s *Server) SweepExpiredApprovals(ctx context.Context) (int, error) {
 	expired, err := s.store.ListExpiredApprovals(ctx, time.Now().Unix())
 	if err != nil {
@@ -1269,7 +1272,7 @@ func (s *Server) SweepExpiredApprovals(ctx context.Context) (int, error) {
 			break
 		}
 		a := expired[i]
-		claimed, err := s.store.ClaimApproval(ctx, a.UserEmail, a.ID, "rejected", approvalTimeoutResultText)
+		claimed, err := s.store.ClaimExpiredApproval(ctx, a.UserEmail, a.ID, "rejected", approvalTimeoutResultText)
 		if err != nil {
 			log.Printf("approval expiry sweep: claim %s: %v", a.ID, err)
 			continue
