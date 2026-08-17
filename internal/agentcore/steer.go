@@ -75,9 +75,8 @@ func steeringStep(source SteerSource, state *steerState, sink *streamSink) fanta
 			// compaction rebuilt the history shorter) advances past any tool
 			// messages so a ToolCallPart keeps its results adjacent —
 			// provider-valid at the cost of, at worst, one cache-miss step.
-			for pos < len(messages) && messages[pos].Role == fantasy.MessageRoleTool {
-				pos++
-			}
+			// (Same boundary rule as compaction — see snapCutForward.)
+			pos = snapCutForward(messages, pos)
 			if steerAlreadyPresent(messages, m.text, pos) {
 				continue
 			}
