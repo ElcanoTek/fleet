@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"reflect"
 	"regexp"
 	"strings"
 	"time"
@@ -1809,6 +1810,96 @@ func TaskToExportRecord(t *Task) TaskExportRecord {
 		rec.SLAFailMultiplier = t.SLAFailMultiplier
 	}
 	return rec
+}
+
+// OverlayTaskDefinition applies a full imported definition (a TaskCreate
+// materialized from a TaskExportRecord) onto an existing task IN PLACE — the
+// import conflict=replace overlay (#238, #1104). It is the SINGLE overlay
+// shared by the HTTP import handler and the admin CLI (both via
+// storage.ReplaceTaskDefinition), so the two replace paths cannot drift
+// field-by-field; before it existed each path hand-rolled its own field list
+// and silently dropped the fields the other carried (issue #1104).
+// TestOverlayTaskDefinitionCarriesEveryExportField pins it against every
+// TaskExportRecord field, so a future export-record field cannot silently
+// miss the overlay.
+//
+// Only DEFINITION fields are written. Execution state — id, status, lease,
+// attempt_count, started_at/completed_at, result/error, skip/wake/dead-letter
+// state, created_by/lineage — is never copied from the record: a
+// TaskExportRecord cannot even express it, and the caller re-derives
+// status/scheduled_for with DeriveDispatchState after the overlay.
+// Normalizations mirror NewTask exactly (priority, timezone, trigger type,
+// SLA multipliers, serialization key), so a replaced definition resolves the
+// same way a freshly created one would.
+func OverlayTaskDefinition(task *Task, tc TaskCreate) error {
+	// run_if is a full-definition field like the rest (replace already requires
+	// admin, matching the authoring boundary) — but a PENDING task is past the
+	// scheduled→pending promotion where a gate is evaluated (RunIf's enforcement
+	// contract), so attaching or changing one there would be dead config for the
+	// imminent dispatch; refuse, mirroring the PUT /tasks edit path. Removal
+	// (record omits run_if) stays allowed: absence needs no evaluation point.
+	// Checked first so a refusal leaves the task entirely unmodified.
+	if !reflect.DeepEqual(tc.RunIf.Normalized(), task.RunIf.Normalized()) {
+		if tc.RunIf != nil && task.Status == TaskStatusPending {
+			return fmt.Errorf("run_if: task is already pending dispatch, so its gate can no longer be evaluated for this run")
+		}
+		task.RunIf = tc.RunIf
+	}
+
+	task.Name = tc.Name
+	task.Title = tc.Title
+	task.Prompt = tc.Prompt
+	task.Model = tc.Model
+	task.FallbackModel = tc.FallbackModel
+	task.MaxIterations = tc.MaxIterations
+	task.MCPSelection = tc.MCPSelection
+	task.CredentialAllowlist = tc.CredentialAllowlist
+	task.LoopConfig = tc.LoopConfig
+	task.WorktreeConfig = tc.WorktreeConfig
+	task.SandboxLimits = tc.SandboxLimits
+	task.OutputSchema = tc.OutputSchema
+	task.Priority = NormalizePriority(tc.Priority)
+	task.InstructionSelfImprove = tc.InstructionSelfImprove
+	task.AllowNetwork = tc.AllowNetwork
+	task.CarryContext = tc.CarryContext
+	task.AllowEventTriggers = tc.AllowEventTriggers
+	task.AllowDelegation = tc.DelegationAllowed()
+	task.ThinkingBudgetTokens = tc.ThinkingBudgetTokens
+	task.Persona = tc.Persona
+	task.Description = tc.Description
+	task.ScheduledFor = tc.ScheduledFor
+	task.Recurrence = tc.Recurrence
+	task.RecurrenceUntil = tc.RecurrenceUntil
+	task.RecurrenceRemaining = tc.RecurrenceRemaining
+	if tc.Timezone != "" {
+		task.Timezone = tc.Timezone
+	} else {
+		task.Timezone = "UTC"
+	}
+	task.Files = tc.Files
+	task.FileNames = tc.FileNames
+	task.Tags = tc.Tags
+	task.MaxRetries = derefOr(tc.MaxRetries, 0)
+	task.RetryPolicy = tc.RetryPolicy
+	if tc.TriggerType != "" {
+		task.TriggerType = tc.TriggerType
+	} else {
+		task.TriggerType = TriggerTypeCron
+	}
+	task.AllowTaskCreation = tc.AllowTaskCreation
+	task.AllowRecurringTaskCreation = tc.AllowRecurringTaskCreation
+	task.ExpectedDurationMinutes = tc.ExpectedDurationMinutes
+	task.SLAWarnMultiplier, task.SLAFailMultiplier = ResolveSLAMultipliers(tc.SLAWarnMultiplier, tc.SLAFailMultiplier)
+	// Serialization key (#709): normalized the same way NewTask does, so a
+	// replaced definition can never carry a whitespace-only key the claim gate
+	// would treat as a real key.
+	task.SerializationKey = nil
+	if tc.SerializationKey != nil {
+		if trimmed := strings.TrimSpace(*tc.SerializationKey); trimmed != "" {
+			task.SerializationKey = &trimmed
+		}
+	}
+	return nil
 }
 
 // StatusUpdate is a status update for a task (from the in-process worker).

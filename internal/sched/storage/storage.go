@@ -896,6 +896,68 @@ func (s *Storage) UpdateEditableTask(ctx context.Context, taskID uuid.UUID, edit
 	return task, nil
 }
 
+// ReplaceTaskDefinition overlays a full imported definition (import
+// conflict=replace, #238) onto an existing task inside one transaction,
+// re-locking the row and re-checking it is still editable — the same contract
+// as UpdateEditableTask. It exists because the previous replace paths did an
+// unlocked read → full-row upsert (issue #1104): between the read and the
+// write the scheduler could promote the task and a runner claim it, and the
+// stale write-back then reverted status/lease (double execution) or flipped a
+// completed row back to non-terminal, erasing its result. Here the row lock
+// plus the in-transaction status check make a concurrent claim and a replace
+// strictly ordered: whichever commits second sees the other's state, and a
+// replace that lost the race is refused with ErrTaskNotEditable (wrapped)
+// instead of silently rewinding execution state.
+//
+// Only definition fields are written (models.OverlayTaskDefinition — the one
+// overlay both the HTTP and CLI import paths share), and status/scheduled_for
+// are recomputed with models.DeriveDispatchState — the same rule NewTask and
+// UpdateEditableTask apply — so a record with no schedule can never leave a
+// row wedged as `scheduled` with a NULL scheduled_for (which
+// GetScheduledTasks can never promote), nor flip a gated or webhook task off
+// the scheduler path.
+func (s *Storage) ReplaceTaskDefinition(ctx context.Context, taskID uuid.UUID, tc models.TaskCreate) (*models.Task, error) {
+	tx, err := s.db.BeginTx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	// See UpdateEditableTask for why the rollback result is ignored.
+	defer func() { _ = tx.Rollback() }()
+
+	task, err := s.db.GetTaskForUpdate(ctx, tx, taskID)
+	if err != nil {
+		return nil, err
+	}
+
+	if task.Status != models.TaskStatusPending && task.Status != models.TaskStatusScheduled {
+		return nil, fmt.Errorf("%w: conflict=replace only rewrites a pending or scheduled task (status is %q) — a leased, running, or finished row keeps its execution state", ErrTaskNotEditable, task.Status)
+	}
+
+	if err := models.OverlayTaskDefinition(task, tc); err != nil {
+		return nil, err
+	}
+	// Same schema check UpdateTask applies: the overlay can replace
+	// output_schema, and the CLI import path has no handler-side
+	// validateTaskCreate in front of it.
+	if err := validateStoredOutputContract(task); err != nil {
+		return nil, err
+	}
+
+	// Recompute the dispatch state with the SAME rule used at creation (see
+	// UpdateEditableTask): preserving the pre-replace status verbatim let a
+	// schedule-less record strand a one-shot as scheduled+NULL, and a scheduled
+	// record land as pending — dispatching immediately instead of waiting.
+	task.Status, task.ScheduledFor = models.DeriveDispatchState(task.TriggerType, task.RunIf, task.ScheduledFor)
+
+	if err := s.db.UpdateTaskTx(ctx, tx, task); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return task, nil
+}
+
 // UpdateTaskCredentialAllowlist replaces a task's credential allowlist (#184),
 // re-locking the row and re-checking it is still editable (pending/scheduled).
 // A nil allowlist reverts the task to global inherit; a non-nil (possibly empty)
