@@ -2129,10 +2129,12 @@ type CleanupResponse struct {
 // change to tasks currently pinned to that slug (e.g. a deprecated model). DryRun
 // returns the tasks that WOULD change without writing.
 type BulkModelUpdate struct {
-	Model         string `json:"model"`
-	FallbackModel string `json:"fallback_model"`
-	FromModel     string `json:"from_model"`
-	DryRun        bool   `json:"dry_run"`
+	Model string `json:"model"`
+	// FallbackModel is optional: omit to keep each task's existing
+	// fallback; send "" to clear it to NULL; send a slug to set it (#1120).
+	FallbackModel *string `json:"fallback_model"`
+	FromModel     string  `json:"from_model"`
+	DryRun        bool    `json:"dry_run"`
 }
 
 // BulkModelUpdateResult is the POST /tasks/model response. On a dry run it lists

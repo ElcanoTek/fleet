@@ -1468,23 +1468,36 @@ func (db *Database) UpdateTask(ctx context.Context, task *models.Task) error {
 	return db.AddTask(ctx, task)
 }
 
-// UpdateTasksModelBatch updates model + fallback_model of scheduled tasks.
-func (db *Database) UpdateTasksModelBatch(ctx context.Context, model, fallbackModel, fromModel string) (int, error) {
+// UpdateTasksModelBatch updates the pinned model of scheduled tasks.
+// fallbackModel is optional: nil leaves existing fallback_model values
+// untouched; a non-nil empty string clears them to NULL; a non-nil
+// non-empty string sets them. Callers must distinguish "flag not
+// provided" from "explicitly clear" (#1120).
+func (db *Database) UpdateTasksModelBatch(ctx context.Context, model string, fallbackModel *string, fromModel string) (int, error) {
 	var res sql.Result
 	var err error
-	// fallback_model is nullable TEXT: an empty fallback must persist as NULL (not
-	// ""), matching the per-task nullableString path so scanTask reads it back as a
-	// nil *string. model stays raw — callers (handler + CLI) require it non-empty.
-	if fromModel != "" {
+	status := string(models.TaskStatusScheduled)
+	switch {
+	case fallbackModel == nil && fromModel != "":
+		res, err = db.conn.ExecContext(ctx, `
+			UPDATE tasks SET model = $1
+			WHERE status = $2 AND model = $3`,
+			model, status, fromModel)
+	case fallbackModel == nil:
+		res, err = db.conn.ExecContext(ctx, `
+			UPDATE tasks SET model = $1
+			WHERE status = $2`,
+			model, status)
+	case fromModel != "":
 		res, err = db.conn.ExecContext(ctx, `
 			UPDATE tasks SET model = $1, fallback_model = $2
 			WHERE status = $3 AND model = $4`,
-			model, nullableString(fallbackModel), string(models.TaskStatusScheduled), fromModel)
-	} else {
+			model, nullableString(*fallbackModel), status, fromModel)
+	default:
 		res, err = db.conn.ExecContext(ctx, `
 			UPDATE tasks SET model = $1, fallback_model = $2
 			WHERE status = $3`,
-			model, nullableString(fallbackModel), string(models.TaskStatusScheduled))
+			model, nullableString(*fallbackModel), status)
 	}
 	if err != nil {
 		return 0, err

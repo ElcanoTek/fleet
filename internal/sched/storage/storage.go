@@ -353,8 +353,10 @@ func (s *Storage) UpdateTask(task *models.Task) (*models.Task, error) {
 	return task, nil
 }
 
-// BulkUpdateScheduledTaskModel updates model + fallback_model on scheduled tasks.
-func (s *Storage) BulkUpdateScheduledTaskModel(ctx context.Context, model, fallbackModel, fromModel string) (int, error) {
+// BulkUpdateScheduledTaskModel updates the pinned model on scheduled tasks.
+// fallbackModel is optional: nil leaves existing fallback_model values
+// untouched; a non-nil empty string clears them to NULL (#1120).
+func (s *Storage) BulkUpdateScheduledTaskModel(ctx context.Context, model string, fallbackModel *string, fromModel string) (int, error) {
 	return s.db.UpdateTasksModelBatch(ctx, model, fallbackModel, fromModel)
 }
 
