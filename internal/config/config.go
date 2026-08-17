@@ -83,6 +83,13 @@ const (
 // allowedEnvVars is the union allowlist of keys that may be set from a .env
 // file. Anything else in the file is ignored. The process environment wins
 // over the file so operators can override individual values per invocation.
+//
+// Every env var the loader reads MUST be listed here, or an env-file-only
+// value is silently dropped — a bug class that has now recurred three times
+// (the per-store DSNs, the boot-read operator keys below, and ~20 loader
+// knobs in #1107). TestEnvFileAllowlistCoversLoaderReads mechanically
+// cross-checks this map against every literal env read in internal/config
+// and cmd/fleet, so a new read fails the suite until its key lands here.
 var allowedEnvVars = map[string]bool{
 	// ── chat transport / data ──
 	"CHAT_SERVER_ADDR":                 true,
@@ -92,6 +99,7 @@ var allowedEnvVars = map[string]bool{
 	"CONVERSATION_UNPINNED_CAP":        true,
 	"FLEET_AUTO_ARCHIVE_AFTER_DAYS":    true,
 	"FLEET_INPUT_QUEUE_RETENTION_DAYS": true,
+	"FLEET_TURN_EVENT_RETENTION_DAYS":  true,
 	"FLEET_UPLOAD_MAX_BYTES":           true,
 
 	// ── fleet transport / data (canonical) ──
@@ -121,6 +129,8 @@ var allowedEnvVars = map[string]bool{
 	// with an empty-DSN error despite a correct env file.
 	"FLEET_CHAT_DATABASE_URL":  true,
 	"FLEET_SCHED_DATABASE_URL": true,
+	// Legacy bare spelling schedDSN still reads as a fallback.
+	"SCHED_DATABASE_URL": true,
 	// Other keys boot reads via os.Getenv that predated this allowlist (an
 	// env-file value was silently ignored; only the process env worked).
 	"ADMIN_API_KEY":                        true,
@@ -163,6 +173,8 @@ var allowedEnvVars = map[string]bool{
 	"CHAT_MAX_COST_USD":                    true,
 	"CHAT_MAX_TOTAL_TOKENS":                true,
 	"CHAT_TURN_TIMEOUT_SECONDS":            true,
+	"FLEET_TURN_TIMEOUT_SECONDS":           true,
+	"FLEET_SHUTDOWN_GRACE_SECONDS":         true,
 	"CHAT_TEMPERATURE":                     true,
 	"CHAT_TITLE_MODEL":                     true,
 	"CHAT_METADATA_MODEL":                  true,
@@ -182,6 +194,7 @@ var allowedEnvVars = map[string]bool{
 	"FLEET_MEMORY_GRAPH_MODEL":             true,
 	"FLEET_MEMORY_GRAPH_ENABLED":           true,
 	"FLEET_RECURRING_TASK_MODEL":           true,
+	"FLEET_LIBRARY_PROMPT_MODEL":           true,
 	"FLEET_APPROVAL_TIMEOUT_SECONDS":       true,
 	"FLEET_AUTO_APPROVE_IN_TEST":           true,
 	"FLEET_MAX_CONCURRENT_AGENTS":          true,
@@ -202,6 +215,17 @@ var allowedEnvVars = map[string]bool{
 	"FLEET_LOG_FORMAT":       true,
 	"FLEET_LOG_LEVEL":        true,
 	"FLEET_LOG_COMPRESS":     true,
+
+	// ── log archival (#272) ── the AES key is a SECRET held host-side; it is
+	// decoded in-process and never logged or shipped into the sandbox.
+	"FLEET_LOG_ARCHIVE_AFTER_DAYS":     true,
+	"FLEET_LOG_ARCHIVE_ENCRYPTION_KEY": true,
+
+	// ── remote MCP OAuth (#443) ── the AES key is a SECRET held host-side; it
+	// is decoded in-process and never logged or shipped into the sandbox.
+	"FLEET_PUBLIC_BASE_URL":                true,
+	"FLEET_MCP_OAUTH_ENCRYPTION_KEY":       true,
+	"FLEET_REMOTE_MCP_ALLOW_INSECURE_HTTP": true,
 
 	// ── personas / protocols ──
 	// The two default-persona knobs are read through the prefix alias machinery
@@ -226,10 +250,34 @@ var allowedEnvVars = map[string]bool{
 	"OPENROUTER_X_TITLE":      true,
 
 	// ── cutlass task input (set by runner) ──
+	// The canonical FLEET_ spellings stay adjacent to their legacy twins: the
+	// loader resolves FLEET_TASK_MODEL → CHAT_ → CUTLASS_ (#1015), so both must
+	// survive the env-file filter (#1107).
+	"FLEET_TASK_MODEL":            true,
 	"CUTLASS_TASK_MODEL":          true,
+	"FLEET_TASK_FALLBACK_MODEL":   true,
 	"CUTLASS_TASK_FALLBACK_MODEL": true,
 	"CUTLASS_ALLOWED_DIRS":        true,
 	"GH_TOKEN":                    true,
+
+	// ── phone a friend: super-LLM review (#175) ──
+	"FLEET_PHONE_A_FRIEND_ENABLED": true,
+	"FLEET_PHONE_A_FRIEND_MODEL":   true,
+
+	// ── sub-agents / delegation (#175, #264, #1043) ──
+	"FLEET_SUBAGENTS_ENABLED":         true,
+	"FLEET_SUBAGENTS_MAX_DEPTH":       true,
+	"FLEET_SUBAGENTS_MAX_CHILDREN":    true,
+	"FLEET_SUBAGENTS_BUDGET_FRACTION": true,
+	"FLEET_SUBAGENTS_MODEL":           true,
+
+	// ── task scheduler pacing: anti-starvation (#230), paused expiry (#510),
+	// and the POST /tasks + /upload sliding-window rate limits (cmd/fleet) ──
+	"FLEET_TASK_STARVATION_WINDOW_MINUTES":     true,
+	"FLEET_PAUSED_TASK_EXPIRY_MINUTES":         true,
+	"FLEET_SCHED_RATE_LIMIT_PER_MINUTE":        true,
+	"FLEET_SCHED_RATE_LIMIT_PER_DAY":           true,
+	"FLEET_SCHED_RATE_LIMIT_GLOBAL_PER_MINUTE": true,
 
 	// ── logging / debug (cutlass) ──
 	"LOG_LEVEL": true,
