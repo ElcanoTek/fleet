@@ -17,6 +17,20 @@ prior versions are listed because none have shipped.
 
 ## [Unreleased]
 
+### Security
+
+- **Workspace href rewrite no longer lets `..` segments escape the
+  workspace-local prefix (#1113).** `resolveScopedWorkspaceHref` decoded
+  then re-encoded each path segment with `encodeURIComponent`, which
+  leaves `.` / `..` untouched and had no filter — a prompt-injected
+  `[x](../../auth/elcano-login)` rewrote to
+  `/api/conversations/<id>/workspace/../../auth/elcano-login`, which the
+  browser normalizes into an authenticated same-origin GET at
+  `/api/auth/elcano-login`. Any decoded (or double-encoded) `.` / `..`
+  segment now bails to the raw href, matching the existing absolute-URL
+  fallback. State-changing routes stay POST-only with CSRF, so this was
+  a same-origin GET primitive, not a write.
+
 ### Fixed
 
 - **A scheduled task that hits its cost/token ceiling is no longer recorded as

@@ -167,6 +167,56 @@ describe("resolveWorkspaceHref", () => {
     const result = resolveWorkspaceHref("x.png", "weird id/with slash");
     expect(result.href.startsWith("/api/conversations/weird%20id%2Fwith%20slash/workspace/")).toBe(true);
   });
+
+  it("refuses . / .. / encoded-dot segments instead of rewriting them (#1113)", () => {
+    const passthrough = (raw: string) => ({
+      href: raw,
+      isWorkspaceFile: false,
+      downloadFilename: "",
+    });
+
+    // The motivating prompt-injection: a markdown link that would become
+    // /api/conversations/<id>/workspace/../../auth/elcano-login and then
+    // a cookie-bearing GET of /api/auth/elcano-login after the browser
+    // normalizes dot-segments.
+    expect(resolveWorkspaceHref("../../auth/elcano-login", CONV)).toEqual(
+      passthrough("../../auth/elcano-login"),
+    );
+    expect(resolveWorkspaceHref("foo/../secret", CONV)).toEqual(passthrough("foo/../secret"));
+    expect(resolveWorkspaceHref("./file.xlsx", CONV)).toEqual(passthrough("./file.xlsx"));
+    expect(resolveWorkspaceHref("out/./chart.png", CONV)).toEqual(passthrough("out/./chart.png"));
+    expect(resolveWorkspaceHref(".", CONV)).toEqual(passthrough("."));
+    expect(resolveWorkspaceHref("..", CONV)).toEqual(passthrough(".."));
+
+    // Single-encoded (decodeURIComponent("%2e%2e") === "..").
+    expect(resolveWorkspaceHref("%2e%2e/%2e%2e/auth/elcano-login", CONV)).toEqual(
+      passthrough("%2e%2e/%2e%2e/auth/elcano-login"),
+    );
+    expect(resolveWorkspaceHref("%2E%2E/secret", CONV)).toEqual(passthrough("%2E%2E/secret"));
+    expect(resolveWorkspaceHref("%2e/file.xlsx", CONV)).toEqual(passthrough("%2e/file.xlsx"));
+
+    // Double-encoded: one decode yields "%2e%2e", not "..".
+    expect(resolveWorkspaceHref("%252e%252e/secret", CONV)).toEqual(
+      passthrough("%252e%252e/secret"),
+    );
+    expect(resolveWorkspaceHref("%252E%252E/%252e/file.xlsx", CONV)).toEqual(
+      passthrough("%252E%252E/%252e/file.xlsx"),
+    );
+
+    // A real workspace filename that merely starts with a dot is still rewritten.
+    const hidden = resolveWorkspaceHref(".gitignore", CONV);
+    expect(hidden).toEqual({
+      href: `/api/conversations/${CONV}/workspace/.gitignore`,
+      isWorkspaceFile: true,
+      downloadFilename: ".gitignore",
+    });
+    const dotted = resolveWorkspaceHref("out/.cache/chart.png", CONV);
+    expect(dotted).toEqual({
+      href: `/api/conversations/${CONV}/workspace/out/.cache/chart.png`,
+      isWorkspaceFile: true,
+      downloadFilename: "chart.png",
+    });
+  });
 });
 
 describe("resolveTaskWorkspaceHref", () => {
@@ -249,5 +299,24 @@ describe("resolveTaskWorkspaceHref", () => {
     expect(
       result.href.startsWith("/api/orchestrator/tasks/weird%20id%2Fwith%20slash/workspace/"),
     ).toBe(true);
+  });
+
+  it("refuses . / .. / encoded-dot segments instead of rewriting them (#1113)", () => {
+    const passthrough = (raw: string) => ({
+      href: raw,
+      isWorkspaceFile: false,
+      downloadFilename: "",
+    });
+    expect(resolveTaskWorkspaceHref("../../auth/elcano-login", TASK)).toEqual(
+      passthrough("../../auth/elcano-login"),
+    );
+    expect(resolveTaskWorkspaceHref("%2e%2e/secret", TASK)).toEqual(passthrough("%2e%2e/secret"));
+    expect(resolveTaskWorkspaceHref("%252e%252e/secret", TASK)).toEqual(
+      passthrough("%252e%252e/secret"),
+    );
+    expect(resolveTaskWorkspaceHref("./chart.png", TASK)).toEqual(passthrough("./chart.png"));
+    const hidden = resolveTaskWorkspaceHref(".gitignore", TASK);
+    expect(hidden.isWorkspaceFile).toBe(true);
+    expect(hidden.href).toBe(`/api/orchestrator/tasks/${TASK}/workspace/.gitignore`);
   });
 });
