@@ -33,6 +33,18 @@ prior versions are listed because none have shipped.
 
 ### Security
 
+- **Merged-skills materialization no longer uses a predictable path
+  under world-writable `/tmp` (#1121).** `materializeMergedSkills`
+  wrote to `os.TempDir()/fleet-skills/<hash>` with `MkdirAll 0755` and
+  no ownership check, so on a shared box another local user could
+  pre-create the tree and plant skill content that fleet would inject
+  into agent prompts and bind-mount into the sandbox. The merged tree
+  now lives under `$FLEET_DATA_DIR/skills-merged` (user cache /
+  uid-scoped temp as fallbacks), and every reuse refuses a path that
+  is a symlink, not a directory, not owned by the fleet uid, or
+  group/world-writable. An untrusted pre-existing path is a loud
+  error and falls back to the bundle's own skills dir — never adopted.
+
 - **IP allowlist no longer trusts the leftmost `X-Forwarded-For` entry
   behind a trusted proxy (#1111).** When the TCP peer was in
   `FLEET_TRUSTED_PROXIES`, `clientIP` took the leftmost XFF value — the
