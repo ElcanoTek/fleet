@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -531,6 +532,18 @@ func (a *Agent) spawn(ctx context.Context, in spawnSubagentInput, toolCallID str
 		defer cancel()
 	}
 	runErr := childAgent.Execute(childCtx, task)
+	// Execute surfaces StoppedByBudget as ErrCostCeilingExceeded for the
+	// scheduled runner's terminal classification (#1105). For a CHILD, though,
+	// its sliced ceiling is the parent's leash working as designed (#175): the
+	// child stops, its REAL spend is charged back (defer above), and the parent
+	// judges the partial answer — the pre-#1105 contract, preserved here so a
+	// deliberately small slice doesn't turn every bounded delegation into an
+	// error result. A cancel is NOT unwrapped: it means the parent (or its
+	// operator, or the per-child timeout below) tore the run down, and
+	// spawnResult already reports that as success=false.
+	if errors.Is(runErr, agentcore.ErrCostCeilingExceeded) {
+		runErr = nil
+	}
 	// A per-child timeout (parent NOT itself cancelled) is reported as a failed
 	// result rather than an error, but the spend is still charged back (defer above).
 	timedOut := in.TimeoutMinutes > 0 && childCtx.Err() == context.DeadlineExceeded && ctx.Err() == nil

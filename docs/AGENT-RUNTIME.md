@@ -157,6 +157,17 @@ a runaway loop costs a capped turn, not an open-ended invoice. The observer
 events persist as a per-turn audit trail answering "what did this agent do, and
 what did it cost?".
 
+A ceiling stop is a clean abort of the run, but **not** a completed task. An
+interactive turn renders it as "budget reached" with the partial transcript; a
+**scheduled** run terminates as a **failure with class `cost_ceiling`** (#1105)
+— failure notification, no email reply-back, partial transcript preserved —
+non-retryable by default (a re-run would just burn the budget again) unless the
+task's retry policy opts `cost_ceiling` into `retry_on`. It previously fell
+through to *success*, skipping the finish gates entirely. A sub-agent child
+stopping at its **sliced** ceiling is the exception by design: the slice is the
+parent's leash, so the child returns its partial answer and spend to the parent
+rather than failing the run.
+
 Scheduled runs additionally carry a **per-task wall-clock timeout** (#724):
 `FLEET_TASK_WALL_TIMEOUT` (a Go duration; default **4h**, `0` disables) bounds
 one run's total elapsed time, enforced by the worker pool around the run

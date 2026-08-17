@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"path/filepath"
@@ -565,7 +566,11 @@ func (p *scheduledPolicy) Unwrap() agentcore.Policy { return p.inner }
 func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 	defer writeLogFile(a.logSession, a.logFile)
 	defer func() {
-		if retErr != nil {
+		// A surfaced cancel (#1105) is attribution, not a fault: the runner's
+		// stop/pause/interrupt paths write their own transcript line ("Task
+		// stopped by …", "Paused awaiting human input: …"), so a "[fatal]"
+		// entry here would mislabel every ask-pause and operator stop.
+		if retErr != nil && !errors.Is(retErr, agentcore.ErrRunCancelled) {
 			t := "error"
 			a.logSession.AddMessageWithMetadata(roleUser, "[fatal] "+retErr.Error(), nil, nil, &t, nil, nil, "")
 			log.Printf("Execute returning error: %v", retErr)
@@ -804,6 +809,9 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 	if err != nil {
 		return err
 	}
+	// Persist the partial-or-final text BEFORE classifying the outcome below,
+	// so a budget-stopped or cancelled run keeps its transcript exactly as it
+	// always has.
 	if res.FinalText != "" {
 		a.logSession.AddMessage(roleAssistant, res.FinalText, nil, nil)
 	}
@@ -813,7 +821,43 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 	if len(res.OutputJSON) > 0 {
 		a.logSession.SetOutputJSON(string(res.OutputJSON))
 	}
-	return nil
+	return scheduledTerminalError(ctx, res)
+}
+
+// scheduledTerminalError converts a nil-error agentcore Result that did NOT
+// actually finish into the run error a headless driver must report (#1105).
+// agentcore deliberately returns nil for a budget stop / caller cancel so the
+// INTERACTIVE driver can persist the partial turn and tell the user "budget
+// reached" / "stopped" (manager.go cancelledTurnResult). A scheduled run has no
+// user on the loop: a nil error here was recorded as task SUCCESS — success
+// notification, email reply-back — and none of the finish gates (CanFinish,
+// verifier, phone-a-friend) ever ran on the budget path. So, after the partial
+// transcript is persisted above, the driver re-surfaces the stop:
+//
+//   - StoppedByBudget wraps ErrCostCeilingExceeded, so the runner's existing
+//     cost_ceiling failure class fires for free-form tasks exactly as it
+//     already does for structured-output ones. (With a declared OutputSchema
+//     agentcore returns the sentinel itself and Execute errors before reaching
+//     here — no double handling.)
+//   - A bare cancel wraps ErrRunCancelled plus the ctx cause when one exists;
+//     the runner's stop/pause/wake/interrupt attribution still takes
+//     precedence over the error — this only closes the no-marker path that
+//     previously fell through to success.
+//
+// Checked in this order because the budget path sets Cancelled too.
+func scheduledTerminalError(ctx context.Context, res agentcore.Result) error {
+	switch {
+	case res.StoppedByBudget:
+		return fmt.Errorf("%w: run stopped after $%.4f spent without finishing the task",
+			agentcore.ErrCostCeilingExceeded, res.Usage.CostUSD)
+	case res.Cancelled:
+		if cause := context.Cause(ctx); cause != nil {
+			return fmt.Errorf("%w: %w", agentcore.ErrRunCancelled, cause)
+		}
+		return agentcore.ErrRunCancelled
+	default:
+		return nil
+	}
 }
 
 // scheduledThinkingConfig resolves the extended-thinking config for a scheduled
