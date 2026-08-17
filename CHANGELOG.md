@@ -62,6 +62,13 @@ prior versions are listed because none have shipped.
 
 ### Security
 
+- **HTTP API hardening (#1112).** Webhook transport errors no longer
+  leak the full URL (path + query secrets) into logs or the admin Test
+  response. `GET /conversations?scope=team` no longer includes each
+  conversation's public `share_token`. `POST /attachments` shares the
+  `/chat` rate-limit window. Stream DB-fallback turn lookup is scoped
+  by `conversation_id` in the query itself.
+
 - **Web no longer persists the orchestrator bearer token in
   `localStorage` (#1115).** The moc username/password form was already
   gone from the UI, but `orchestratorAuth` still stored the token (and

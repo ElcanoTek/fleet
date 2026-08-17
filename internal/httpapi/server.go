@@ -669,7 +669,7 @@ func (s *Server) Routes() http.Handler {
 	// INSIDE member (member enriches the role mutate reads).
 	mutate := s.rejectViewerWrites
 	mux.Handle("/chat", auth(member(mutate(s.rateLimitMiddleware(http.HandlerFunc(s.postChat))))))
-	mux.Handle("/attachments", auth(member(mutate(http.HandlerFunc(s.postAttachments)))))
+	mux.Handle("/attachments", auth(member(mutate(s.rateLimitMiddleware(http.HandlerFunc(s.postAttachments))))))
 	mux.Handle("/conversations", auth(member(mutate(http.HandlerFunc(s.listOrCreateConversations)))))
 	mux.Handle("/conversations/", auth(member(mutate(http.HandlerFunc(s.conversationByID)))))
 	mux.Handle("/search", auth(member(http.HandlerFunc(s.search))))
@@ -2973,7 +2973,9 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, convID str
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	turn, err := s.store.LookupTurn(r.Context(), requestedTurnID)
+	// Conversation scope is in the query (#1112). The equality check
+	// below stays as defense in depth.
+	turn, err := s.store.LookupTurnInConversation(r.Context(), requestedTurnID, convID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

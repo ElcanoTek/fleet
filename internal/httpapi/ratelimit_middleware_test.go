@@ -21,6 +21,11 @@ func chatReq(user string) *http.Request {
 	return req.WithContext(context.WithValue(req.Context(), ctxKeyUser, user))
 }
 
+func attachReq(user string) *http.Request {
+	req := httptest.NewRequest("POST", "/attachments", nil)
+	return req.WithContext(context.WithValue(req.Context(), ctxKeyUser, user))
+}
+
 // TestChatRateLimitMiddleware_HeadersAnd429 verifies the RPM window blocks the
 // over-limit request with a JSON 429 + Retry-After, and that every response
 // carries advisory X-RateLimit-* headers.
@@ -87,5 +92,23 @@ func TestChatRateLimitMiddleware_Disabled(t *testing.T) {
 		if w.Code != http.StatusOK {
 			t.Fatalf("disabled: req %d blocked: %d", i+1, w.Code)
 		}
+	}
+}
+
+// TestAttachmentsRateLimitMiddleware_429: /attachments shares the /chat
+// sliding window (#1112) so a member cannot loop multi-GB uploads.
+func TestAttachmentsRateLimitMiddleware_429(t *testing.T) {
+	s := New(&config.Config{RateLimitEnabled: true, RatePerMinute: 1}, nil, nil)
+	mw := s.rateLimitMiddleware(okNext())
+
+	w := httptest.NewRecorder()
+	mw.ServeHTTP(w, attachReq("u@x.com"))
+	if w.Code != http.StatusOK {
+		t.Fatalf("1st attachments req: got %d, want 200", w.Code)
+	}
+	w = httptest.NewRecorder()
+	mw.ServeHTTP(w, attachReq("u@x.com"))
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("2nd attachments req: got %d, want 429", w.Code)
 	}
 }

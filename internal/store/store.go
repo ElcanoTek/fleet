@@ -1026,6 +1026,11 @@ func (s *Store) ListFiltered(ctx context.Context, userEmail string, f ListFilter
 // scanConversation. (Bare column names, so a `c.`-aliased query can use it too.)
 const conversationColumns = `id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, optional_mcp_servers_enabled, labels, approval_timeout_seconds, COALESCE(share_token, ''), COALESCE(parent_conversation_id, ''), COALESCE(branch_point_message_id, 0), thinking_config, COALESCE(project_id, '')`
 
+// teamConversationColumns is conversationColumns with share_token forced to
+// empty so a teammate listing cannot harvest the owner's public share
+// capability URL (#1112). Column count and scan order stay identical.
+const teamConversationColumns = `id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, optional_mcp_servers_enabled, labels, approval_timeout_seconds, '' AS share_token, COALESCE(parent_conversation_id, ''), COALESCE(branch_point_message_id, 0), thinking_config, COALESCE(project_id, '')`
+
 // scanConversation scans one row produced with conversationColumns. It takes the
 // package's rowScanner (the one method *sql.Row and *sql.Rows share) so the
 // single-row Get and the row-by-row list scans share one scan order.
@@ -1077,7 +1082,7 @@ func (s *Store) ListTeamConversations(ctx context.Context, callerEmail string) (
 		return nil, ErrNoTeam
 	}
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT `+conversationColumns+`
+		SELECT `+teamConversationColumns+`
 		FROM conversations c
 		WHERE c.deleted_at IS NULL
 		  AND c.archived_at IS NULL
@@ -1090,7 +1095,16 @@ func (s *Store) ListTeamConversations(ctx context.Context, callerEmail string) (
 		return nil, err
 	}
 	defer rows.Close()
-	return scanConversationRows(rows)
+	list, err := scanConversationRows(rows)
+	if err != nil {
+		return nil, err
+	}
+	// Belt-and-suspenders: never serialize a teammate's share token even
+	// if the SELECT list drifts back to conversationColumns.
+	for i := range list {
+		list[i].ShareToken = ""
+	}
+	return list, nil
 }
 
 // SetConversationTeamVisible flips a conversation's team_visible flag (#237). Only

@@ -278,9 +278,30 @@ type TurnRecord struct {
 }
 
 func (s *Store) LookupTurn(ctx context.Context, turnID string) (*TurnRecord, error) {
-	row := s.db.QueryRowContext(ctx,
-		`SELECT turn_id, conversation_id, started_at, finished_at, status, lossy
-		 FROM turns WHERE turn_id = $1`, turnID)
+	return s.lookupTurn(ctx, turnID, "")
+}
+
+// LookupTurnInConversation is the scoped lookup used by the stream
+// DB-fallback. conversation_id lives in the query so a future refactor
+// cannot drop the handler's equality check and leak another conversation's
+// turn events (#1112). Returns (nil, nil) when the turn is missing or
+// belongs to a different conversation.
+func (s *Store) LookupTurnInConversation(ctx context.Context, turnID, conversationID string) (*TurnRecord, error) {
+	if conversationID == "" {
+		return nil, nil
+	}
+	return s.lookupTurn(ctx, turnID, conversationID)
+}
+
+func (s *Store) lookupTurn(ctx context.Context, turnID, conversationID string) (*TurnRecord, error) {
+	q := `SELECT turn_id, conversation_id, started_at, finished_at, status, lossy
+		 FROM turns WHERE turn_id = $1`
+	args := []any{turnID}
+	if conversationID != "" {
+		q += ` AND conversation_id = $2`
+		args = append(args, conversationID)
+	}
+	row := s.db.QueryRowContext(ctx, q, args...)
 	var r TurnRecord
 	var status string
 	if err := row.Scan(&r.TurnID, &r.ConversationID, &r.StartedAt, &r.FinishedAt, &status, &r.Lossy); err != nil {

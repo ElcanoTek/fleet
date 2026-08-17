@@ -111,6 +111,10 @@ type chatStore interface {
 	// cursor/direction contract.
 	GetTurnEventPage(ctx context.Context, conversationID string, cursor int64, limit int, asc bool) ([]store.TurnEvent, int64, error)
 	LookupTurn(ctx context.Context, turnID string) (*store.TurnRecord, error)
+	// LookupTurnInConversation folds conversation scope into the query
+	// (#1112) so the stream DB-fallback cannot leak another conversation's
+	// turn events if the handler's equality check is ever dropped.
+	LookupTurnInConversation(ctx context.Context, turnID, conversationID string) (*store.TurnRecord, error)
 
 	// Tool-call audit ledger (#224): one row per tool invocation, written from
 	// the post-turn persistence path and read by GET /conversations/{id}/audit.
