@@ -1533,14 +1533,44 @@ func (s *Store) ResolveApproval(ctx context.Context, userEmail, approvalID, newS
 // only be fired by the winner — two concurrent approve requests (a
 // double-click, a mobile retry, two open tabs) would otherwise both
 // pass an in-memory "still pending" check and both send the email.
+//
+// Expired rows are not claimable: a still-pending approval past its
+// expires_at deadline is default-deny (#225 / #1109), regardless of
+// whether SweepExpiredApprovals has run yet. Rows with NULL/0
+// expires_at never expire. The expiry sweep uses ClaimExpiredApproval
+// so it can still flip those rows for notification/audit.
 func (s *Store) ClaimApproval(ctx context.Context, userEmail, approvalID, newStatus, resultText string) (bool, error) {
 	if !validApprovalResolution(newStatus) {
 		return false, fmt.Errorf("invalid approval status %q", newStatus)
 	}
+	now := time.Now().Unix()
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE approvals SET status = $1, result_text = $2, resolved_at = $3
-		 WHERE id = $4 AND user_email = $5 AND status = 'pending'`,
-		newStatus, resultText, time.Now().Unix(), approvalID, userEmail,
+		 WHERE id = $4 AND user_email = $5 AND status = 'pending'
+		   AND (expires_at IS NULL OR expires_at = 0 OR expires_at > $6)`,
+		newStatus, resultText, now, approvalID, userEmail, now,
+	)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// ClaimExpiredApproval atomically rejects (or otherwise resolves) a
+// pending approval whose expires_at deadline has already passed. Used
+// only by the expiry sweep (#225) so notification/audit still happens
+// after ClaimApproval starts refusing expired rows (#1109).
+func (s *Store) ClaimExpiredApproval(ctx context.Context, userEmail, approvalID, newStatus, resultText string) (bool, error) {
+	if !validApprovalResolution(newStatus) {
+		return false, fmt.Errorf("invalid approval status %q", newStatus)
+	}
+	now := time.Now().Unix()
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE approvals SET status = $1, result_text = $2, resolved_at = $3
+		 WHERE id = $4 AND user_email = $5 AND status = 'pending'
+		   AND expires_at IS NOT NULL AND expires_at > 0 AND expires_at <= $6`,
+		newStatus, resultText, now, approvalID, userEmail, now,
 	)
 	if err != nil {
 		return false, err
