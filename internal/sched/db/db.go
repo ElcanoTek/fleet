@@ -2795,7 +2795,11 @@ func (db *Database) UpdateTaskTx(ctx context.Context, tx *sql.Tx, task *models.T
 			carry_context = $59,
 			recurrence_until = $60,
 			recurrence_remaining = $61,
-			title = $62
+			title = $62,
+			name = $63,
+			trigger_type = $64,
+			allow_event_triggers = $65,
+			serialization_key = $66
 		WHERE id = $1`,
 		task.ID,
 		task.Prompt,
@@ -2859,6 +2863,15 @@ func (db *Database) UpdateTaskTx(ctx context.Context, tx *sql.Tx, task *models.T
 		task.RecurrenceUntil,
 		recurrenceRemainingValue(task.RecurrenceRemaining),
 		task.Title,
+		// name, trigger_type, allow_event_triggers, serialization_key joined the
+		// UPDATE for import conflict=replace (#1104), which is the only tx write
+		// path that changes them: every other UpdateTaskTx caller writes back the
+		// values it scanned under the same row lock (GetTaskForUpdate /
+		// ClaimNextPendingTask), so for them these are no-op write-backs.
+		task.Name,
+		triggerTypeOrCron(task.TriggerType),
+		task.AllowEventTriggers,
+		serializationKeyValue(task.SerializationKey),
 	)
 	return err
 }

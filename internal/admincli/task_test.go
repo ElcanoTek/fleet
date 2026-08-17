@@ -3,6 +3,7 @@ package admincli
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -64,17 +65,30 @@ func (f *fakeDefinitionStore) AddTaskWithContext(_ context.Context, t *models.Ta
 	}
 	return t, nil
 }
-func (f *fakeDefinitionStore) UpdateTask(t *models.Task) (*models.Task, error) {
-	f.updated = append(f.updated, t)
-	if t.Name != "" {
-		f.byName[t.Name] = t
-	}
-	for i, ex := range f.tasks {
-		if ex.ID == t.ID {
-			f.tasks[i] = t
+
+// ReplaceTaskDefinition mimics the storage seam's contract (#1104): editable
+// (pending/scheduled) rows only, definition-only overlay via the SHARED
+// models.OverlayTaskDefinition, dispatch state re-derived — so the DB-free CLI
+// tests exercise the same refusal and overlay semantics as the real store.
+func (f *fakeDefinitionStore) ReplaceTaskDefinition(_ context.Context, taskID uuid.UUID, tc models.TaskCreate) (*models.Task, error) {
+	for _, ex := range f.tasks {
+		if ex.ID != taskID {
+			continue
 		}
+		if ex.Status != models.TaskStatusPending && ex.Status != models.TaskStatusScheduled {
+			return nil, storage.ErrTaskNotEditable
+		}
+		if err := models.OverlayTaskDefinition(ex, tc); err != nil {
+			return nil, err
+		}
+		ex.Status, ex.ScheduledFor = models.DeriveDispatchState(ex.TriggerType, ex.RunIf, ex.ScheduledFor)
+		f.updated = append(f.updated, ex)
+		if ex.Name != "" {
+			f.byName[ex.Name] = ex
+		}
+		return ex, nil
 	}
-	return t, nil
+	return nil, sql.ErrNoRows
 }
 
 func TestExportTaskDefinitions_JSON(t *testing.T) {
@@ -161,8 +175,31 @@ func TestImportTaskDefinitions_CreateAndConflict(t *testing.T) {
 	if alpha.Prompt != "a" {
 		t.Errorf("replace did not update alpha: %+v", alpha)
 	}
-	if alpha.AttemptCount != 7 || alpha.Status != models.TaskStatusScheduled {
-		t.Errorf("replace clobbered runtime state: status=%s attempt=%d", alpha.Status, alpha.AttemptCount)
+	if alpha.AttemptCount != 7 {
+		t.Errorf("replace clobbered runtime state: attempt=%d", alpha.AttemptCount)
+	}
+	// The dispatch state is re-derived from the record (#1104): the record has no
+	// scheduled_for, so alpha is pending (immediately dispatchable) — exactly what
+	// CLI-importing the record fresh would produce — and never left wedged as
+	// scheduled with a NULL scheduled_for.
+	if alpha.Status != models.TaskStatusPending || alpha.ScheduledFor != nil {
+		t.Errorf("replace must re-derive dispatch state: status=%s scheduled_for=%v", alpha.Status, alpha.ScheduledFor)
+	}
+
+	// conflict=replace onto a LEASED task → refused per-record (#1104): the
+	// definition write must never rewind a claimed run's status/lease into a
+	// second execution.
+	leased := &models.Task{ID: uuid.New(), Name: "alpha", Prompt: "old", Status: models.TaskStatusLeased, AttemptCount: 1}
+	st6 := newFakeDefinitionStore(leased)
+	resp, err = importTaskDefinitions(context.Background(), st6, bytes.NewReader(body), "", false, models.TaskImportConflictReplace)
+	if err != nil {
+		t.Fatalf("replace leased: %v", err)
+	}
+	if resp.Errors != 1 || resp.Replaced != 0 {
+		t.Fatalf("replace leased resp = %+v, want the colliding record errored", resp)
+	}
+	if leased.Prompt != "old" || leased.Status != models.TaskStatusLeased {
+		t.Errorf("refused replace must leave the leased task untouched: %+v", leased)
 	}
 
 	// dry_run → no writes, plan returned.
