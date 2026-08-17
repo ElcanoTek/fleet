@@ -19,6 +19,21 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **A scheduled task that hits its cost/token ceiling is no longer recorded as
+  SUCCESS.** (#1105) The scheduled driver returned a nil error for a
+  budget-stopped (or cancelled) run, so the worker pool's terminal
+  classification fell through to success: the task row read `succeeded`, the
+  success notification fired, and an email-triggered run replied "here is your
+  result" to the external sender — while none of the finish gates (CanFinish,
+  the end-of-run verifier, phone-a-friend) had run. The driver now surfaces a
+  budget stop as `ErrCostCeilingExceeded` (the existing `cost_ceiling` failure
+  class — terminal failure + failure notification, non-retryable by default)
+  and an unattributed cancel as the new `agentcore.ErrRunCancelled` (operator
+  stop / ask-pause / self-wake / shutdown attribution still take precedence).
+  Partial transcripts persist exactly as before, and a sub-agent child stopping
+  at its deliberately sliced ceiling still returns its partial answer to the
+  parent instead of erroring.
+
 - Task import `conflict=replace` (HTTP and CLI, #1104) is no longer an unlocked
   read-modify-write. Both paths now go through one storage seam
   (`storage.ReplaceTaskDefinition`) that re-locks the row, re-checks it is still

@@ -26,11 +26,30 @@ func TestClassifyFailure(t *testing.T) {
 		{agentcore.ErrStructuredOutputPersistence, models.FailureOutputPersist},
 		{errors.New("no model configured"), models.FailureTerminal},
 		{fmt.Errorf("wrapped: %w", agentcore.ErrCostCeilingExceeded), models.FailureCostCeiling},
+		// A surfaced cancel (#1105) with no stop/pause marker and a live task
+		// ctx is an anonymous teardown: terminal, never retried by default.
+		{agentcore.ErrRunCancelled, models.FailureTerminal},
+		{fmt.Errorf("%w: context canceled", agentcore.ErrRunCancelled), models.FailureTerminal},
 	}
 	for _, c := range cases {
 		if got := classifyFailure(c.err); got != c.class {
 			t.Errorf("classifyFailure(%v) = %q, want %q", c.err, got, c.class)
 		}
+	}
+}
+
+// TestReportableRunFailure_CancelVsBudget pins the Sentry gate around the #1105
+// surfaced errors: a cancel is an interruption (shutdown drain, wall timeout,
+// stop race) and must not page, while a budget stop remains a reportable
+// failure — matching the structured-output path that always surfaced it.
+func TestReportableRunFailure_CancelVsBudget(t *testing.T) {
+	cancelErr := fmt.Errorf("%w: shutdown", agentcore.ErrRunCancelled)
+	if reportableRunFailure(cancelErr, false, false) {
+		t.Error("a surfaced cancel must not be captured as an application failure")
+	}
+	budgetErr := fmt.Errorf("%w: run stopped", agentcore.ErrCostCeilingExceeded)
+	if !reportableRunFailure(budgetErr, false, false) {
+		t.Error("a budget stop is a real failure and must stay reportable")
 	}
 }
 

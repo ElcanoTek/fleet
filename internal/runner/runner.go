@@ -703,10 +703,11 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 	session, runErr := p.runner.Run(runCtx, task)
 
 	// Operator stop (#508): consume the attribution marker StopTask recorded
-	// BEFORE classifying the outcome. This must come first — a cancelled
-	// agentcore run returns a nil error with a partial session (Result.Cancelled
-	// is dropped by the scheduled driver), so without the marker an operator
-	// stop would be mislabeled as success.
+	// BEFORE classifying the outcome. This must come first — the scheduled
+	// driver surfaces a cancelled run as an ErrRunCancelled-wrapped error
+	// (#1105; it used to return nil, which mislabeled the stop as success), and
+	// only the marker can attribute that generic cancel to "stopped by <who>"
+	// instead of routing it through the failure machinery.
 	p.mu.Lock()
 	stoppedBy, wasStopped := p.stopRequested[task.ID]
 	delete(p.stopRequested, task.ID)
@@ -814,12 +815,12 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 	// Interrupted when the task context was cancelled — with the decoupled
 	// per-task ctx that happens ONLY when the shutdown grace period expired (or
 	// ForceCancel fired); the operator-stop case returned above. runErr is NOT
-	// required: a cancelled agentcore run reports Cancelled via a nil error, so
-	// requiring runErr here used to mislabel a force-cancelled single-pass run
-	// as success with a truncated transcript. (The narrow race — a run that
-	// completed fully in the same instant the grace expired — now records as
-	// interrupted; re-running a completed task is safer than trusting a
-	// possibly-truncated "success".)
+	// required: the ctx check keeps the interruption attribution even if a
+	// driver drops the cancel (the scheduled driver now surfaces it as
+	// ErrRunCancelled, #1105, but this branch must not depend on that), and it
+	// keeps the narrow race — a run that completed fully in the same instant
+	// the grace expired — recording as interrupted; re-running a completed task
+	// is safer than trusting a possibly-truncated "success".
 	interrupted := taskCtx.Err() != nil
 	// Wall-clock ceiling expiry (#724) is a DETERMINISTIC terminal failure: it
 	// must be classified BEFORE the interrupted/retry cases (its cancellation
@@ -912,8 +913,16 @@ func runEligibleForStructuredCommit(runErr error, wasPaused, wasStopped bool, co
 	return runErr == nil && !wasPaused && !wasStopped && contextErr == nil
 }
 
+// reportableRunFailure gates Sentry capture: transient infra weather is
+// non-actionable, and a surfaced cancel (agentcore.ErrRunCancelled, #1105) is
+// an interruption the stop/interrupted/wall-timeout branches attribute — not an
+// application failure. Without the cancel exclusion every graceful-shutdown
+// drain and wall-timeout expiry would page. A budget stop
+// (ErrCostCeilingExceeded) stays reportable, matching the structured-output
+// path that has always surfaced it as an error.
 func reportableRunFailure(runErr error, wasPaused, wasStopped bool) bool {
-	return runErr != nil && !wasPaused && !wasStopped && !transientAgentFailure(runErr)
+	return runErr != nil && !wasPaused && !wasStopped &&
+		!transientAgentFailure(runErr) && !errors.Is(runErr, agentcore.ErrRunCancelled)
 }
 
 // validateStructuredRunOutput is defense in depth around TaskRunner
