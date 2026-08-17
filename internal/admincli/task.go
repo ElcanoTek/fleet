@@ -2,6 +2,7 @@ package admincli
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -54,7 +55,10 @@ type definitionStore interface {
 	FindTaskIDsByName(ctx context.Context, names []string) (map[string]uuid.UUID, error)
 	GetTaskByName(ctx context.Context, name string) (*models.Task, error)
 	AddTaskWithContext(ctx context.Context, task *models.Task) (*models.Task, error)
-	UpdateTask(task *models.Task) (*models.Task, error)
+	// ReplaceTaskDefinition is the locked, editability-checked, definition-only
+	// overlay used by conflict=replace (#1104) — the same storage seam the HTTP
+	// import handler uses, so the two paths cannot drift.
+	ReplaceTaskDefinition(ctx context.Context, taskID uuid.UUID, tc models.TaskCreate) (*models.Task, error)
 }
 
 // taskExport implements `fleet-admin task export` (#238). It writes a versioned
@@ -307,8 +311,12 @@ func importTaskDefinitions(ctx context.Context, st definitionStore, r io.Reader,
 	return resp, nil
 }
 
-// replaceTaskDefinitionCLI overlays rec's definition onto the existing task
-// (matched by name) and re-saves it, preserving runtime state.
+// replaceTaskDefinitionCLI hands the record to the store's
+// ReplaceTaskDefinition — the locked, editability-checked, definition-only
+// overlay the HTTP import handler also uses (#1104). The CLI previously
+// hand-rolled its own unlocked read-modify-write with its own (incomplete)
+// field list; sharing the storage seam fixes both the double-execution race
+// and the field drift in one place.
 func replaceTaskDefinitionCLI(ctx context.Context, st definitionStore, rec models.TaskExportRecord) (uuid.UUID, error) {
 	existing, err := st.GetTaskByName(ctx, rec.Name)
 	if err != nil {
@@ -316,48 +324,28 @@ func replaceTaskDefinitionCLI(ctx context.Context, st definitionStore, rec model
 	}
 	if existing == nil {
 		// Raced: deleted between pre-flight and now. Fall back to a fresh create.
-		task := models.NewTask(models.ExportRecordToTaskCreate(rec))
-		if _, cerr := st.AddTaskWithContext(ctx, task); cerr != nil {
-			return uuid.Nil, cerr
+		return createTaskFromRecordCLI(ctx, st, rec)
+	}
+	updated, err := st.ReplaceTaskDefinition(ctx, existing.ID, models.ExportRecordToTaskCreate(rec))
+	if err != nil {
+		// Deleted between the name lookup and the row lock: same race as the nil
+		// branch above, same answer — land the record as a create.
+		if errors.Is(err, sql.ErrNoRows) {
+			return createTaskFromRecordCLI(ctx, st, rec)
 		}
-		return task.ID, nil
-	}
-	tc := models.ExportRecordToTaskCreate(rec)
-	existing.Name = tc.Name
-	existing.Prompt = tc.Prompt
-	existing.Model = tc.Model
-	existing.FallbackModel = tc.FallbackModel
-	existing.MaxIterations = tc.MaxIterations
-	existing.MCPSelection = tc.MCPSelection
-	existing.CredentialAllowlist = tc.CredentialAllowlist
-	existing.LoopConfig = tc.LoopConfig
-	existing.WorktreeConfig = tc.WorktreeConfig
-	existing.Priority = tc.Priority
-	existing.InstructionSelfImprove = tc.InstructionSelfImprove
-	existing.AllowNetwork = tc.AllowNetwork
-	existing.AllowDelegation = tc.DelegationAllowed()
-	existing.ThinkingBudgetTokens = tc.ThinkingBudgetTokens
-	existing.Persona = tc.Persona
-	existing.Description = tc.Description
-	existing.ScheduledFor = tc.ScheduledFor
-	existing.Recurrence = tc.Recurrence
-	existing.Timezone = tc.Timezone
-	existing.Files = tc.Files
-	existing.FileNames = tc.FileNames
-	existing.Tags = tc.Tags
-	if tc.MaxRetries != nil {
-		existing.MaxRetries = *tc.MaxRetries
-	} else {
-		existing.MaxRetries = 0
-	}
-	existing.RetryPolicy = tc.RetryPolicy
-	existing.TriggerType = tc.TriggerType
-	existing.AllowTaskCreation = tc.AllowTaskCreation
-	existing.AllowRecurringTaskCreation = tc.AllowRecurringTaskCreation
-	if _, err := st.UpdateTask(existing); err != nil {
 		return uuid.Nil, err
 	}
-	return existing.ID, nil
+	return updated.ID, nil
+}
+
+// createTaskFromRecordCLI mints a fresh task from a portable record — the
+// CLI's create path and the fallback when a replace target vanished mid-import.
+func createTaskFromRecordCLI(ctx context.Context, st definitionStore, rec models.TaskExportRecord) (uuid.UUID, error) {
+	task := models.NewTask(models.ExportRecordToTaskCreate(rec))
+	if _, err := st.AddTaskWithContext(ctx, task); err != nil {
+		return uuid.Nil, err
+	}
+	return task.ID, nil
 }
 
 // validateExportRecordCLI is the CLI mirror of the handler's

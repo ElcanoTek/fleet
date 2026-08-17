@@ -1682,3 +1682,72 @@ func TestTaskFallbackModelResolvesEveryPrefix(t *testing.T) {
 		})
 	}
 }
+
+// TestLoadEnvFileAppliesPreviouslyMissingKeys pins the env-file path for a
+// sample of the ~20 loader knobs that were read at boot but missing from
+// allowedEnvVars, so a value set ONLY in FLEET_ENV_FILE was silently dropped
+// and the built-in default applied (#1107). One key per flavor: a model knob,
+// an int knob, a bool knob, a write-only secret (the OAuth encryption key,
+// decoded in-process), and a key cmd/fleet reads from the process env after
+// Load (the sched rate limit). TestEnvFileAllowlistCoversLoaderReads is the
+// mechanical backstop; this proves the end-to-end behavior.
+func TestLoadEnvFileAppliesPreviouslyMissingKeys(t *testing.T) {
+	clearEnvVars()
+	defer clearEnvVars()
+
+	envKeys := []string{
+		"FLEET_TASK_MODEL",
+		"FLEET_TURN_TIMEOUT_SECONDS",
+		"FLEET_REMOTE_MCP_ALLOW_INSECURE_HTTP",
+		"FLEET_MCP_OAUTH_ENCRYPTION_KEY",
+		"FLEET_SCHED_RATE_LIMIT_PER_MINUTE",
+	}
+	for _, k := range envKeys {
+		os.Unsetenv(k)
+	}
+	t.Cleanup(func() {
+		for _, k := range envKeys {
+			os.Unsetenv(k)
+		}
+	})
+
+	// A valid 32-byte AES key, base64-encoded (obvious test placeholder).
+	const testOAuthKey = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
+
+	tmpfile, err := os.CreateTemp("", "test-missing-allowlist-keys.env")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(tmpfile.Name())
+	content := "FLEET_TASK_MODEL=envfile/task-model\n" +
+		"FLEET_TURN_TIMEOUT_SECONDS=123\n" +
+		"FLEET_REMOTE_MCP_ALLOW_INSECURE_HTTP=true\n" +
+		"FLEET_MCP_OAUTH_ENCRYPTION_KEY=" + testOAuthKey + "\n" +
+		"FLEET_SCHED_RATE_LIMIT_PER_MINUTE=7\n"
+	if _, err := tmpfile.Write([]byte(content)); err != nil {
+		t.Fatal(err)
+	}
+	tmpfile.Close()
+
+	cfg, err := Load(tmpfile.Name())
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.TaskModel != "envfile/task-model" {
+		t.Errorf("TaskModel = %q, want envfile/task-model (env-file value dropped)", cfg.TaskModel)
+	}
+	if cfg.TurnTimeoutSeconds != 123 {
+		t.Errorf("TurnTimeoutSeconds = %d, want 123 (env-file value dropped)", cfg.TurnTimeoutSeconds)
+	}
+	if !cfg.RemoteMCPAllowInsecureHTTP {
+		t.Error("RemoteMCPAllowInsecureHTTP = false, want true (env-file value dropped)")
+	}
+	if got := len(cfg.MCPOAuthEncryptionKey); got != 32 {
+		t.Errorf("MCPOAuthEncryptionKey decoded to %d bytes, want 32 (env-file value dropped)", got)
+	}
+	// cmd/fleet reads the sched rate limits from the process env after Load, so
+	// the file value must have survived into the environment.
+	if got := os.Getenv("FLEET_SCHED_RATE_LIMIT_PER_MINUTE"); got != "7" {
+		t.Errorf("FLEET_SCHED_RATE_LIMIT_PER_MINUTE = %q in process env, want 7 (env-file value dropped)", got)
+	}
+}

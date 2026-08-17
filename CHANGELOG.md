@@ -34,6 +34,25 @@ prior versions are listed because none have shipped.
   at its deliberately sliced ceiling still returns its partial answer to the
   parent instead of erroring.
 
+- Task import `conflict=replace` (HTTP and CLI, #1104) is no longer an unlocked
+  read-modify-write. Both paths now go through one storage seam
+  (`storage.ReplaceTaskDefinition`) that re-locks the row, re-checks it is still
+  pending/scheduled inside the transaction, applies the single shared
+  definition overlay (`models.OverlayTaskDefinition` — pinned by a completeness
+  test against every `TaskExportRecord` field), and recomputes the dispatch
+  state with `models.DeriveDispatchState`. This closes three failure modes: a
+  replace racing the scheduler/claimer could rewind a claimed run to
+  `scheduled` with its lease nulled (double execution) or flip a completed row
+  back to non-terminal, erasing its result; each path hand-rolled its own
+  overlay and silently dropped definition fields (`title`, `carry_context`,
+  `allow_event_triggers`, the SLA trio on both; plus `sandbox_limits`,
+  `output_schema`, recurrence end conditions, `run_if`, and
+  `serialization_key` on the CLI); and a schedule-less record replacing a
+  scheduled one-shot left the row `scheduled` with a NULL `scheduled_for`,
+  which the scheduler can never promote. A replace of a leased, running, or
+  terminal task is now refused per-record with a clear error instead of being
+  silently applied.
+
 - A critical-tool commitment is no longer stranded when the successful call
   carried corrected arguments. `markPendingCriticalDone` discharged a pending
   action only on an exact `(toolName, argsHash)` match, so a call that was

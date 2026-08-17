@@ -165,6 +165,37 @@ func compactionHeadLen(messages []fantasy.Message) int {
 	return 1
 }
 
+// snapCutForward returns the nearest index >= idx at which messages can be
+// split without separating an assistant message's ToolCallParts from their
+// tool-role results. fantasy keeps a call's results in the tool-role messages
+// immediately following the assistant message that issued it, so a cut is safe
+// exactly when it does not land ON a tool-role message: advancing past any
+// tool messages keeps the whole exchange on the earlier side. Providers reject
+// a history whose tool results lost their call (or vice versa) with a 400 that
+// classifyStreamError treats as fatal, so an unsafe cut in a compaction kills
+// the very run compaction was rescuing (#1106). Shared by both compaction
+// paths and the #785 steering re-injection (steeringStep), which needs the
+// same boundary rule for a mid-slice insert.
+func snapCutForward(messages []fantasy.Message, idx int) int {
+	for idx < len(messages) && messages[idx].Role == fantasy.MessageRoleTool {
+		idx++
+	}
+	return idx
+}
+
+// snapCutBackward is snapCutForward's mirror: the nearest safe cut at or
+// before idx. Retreating off a tool-role message stops on the assistant
+// message carrying the calls, so the whole exchange lands on the LATER side
+// of the cut — the direction to prefer when the later side is the verbatim
+// kept slice, because it widens what survives instead of dropping fresh
+// results.
+func snapCutBackward(messages []fantasy.Message, idx int) int {
+	for idx > 0 && idx < len(messages) && messages[idx].Role == fantasy.MessageRoleTool {
+		idx--
+	}
+	return idx
+}
+
 // forceCompactMessageHistory runs a head/summary/tail compaction unconditionally
 // (the context-too-large recovery path: the provider already rejected the size).
 // Uses the engine's compactionSummarizer when set, else a deterministic
@@ -175,7 +206,18 @@ func (e *engine) forceCompactMessageHistory(ctx context.Context, messages []fant
 		return messages
 	}
 	head := append([]fantasy.Message{}, messages[:keepHead]...)
-	tailStart := len(messages) - compactionKeepTail
+	// The raw N-from-the-end boundary can land inside a tool exchange, leaving
+	// the kept tail starting with orphaned tool results (#1106). Snap BACKWARD
+	// first — compactionKeepTail means "at least the recent N messages", so
+	// expanding the tail to include the paired tool call preserves that intent
+	// where shrinking it would drop the freshest results. Only when the whole
+	// middle is tool-role (backward snapping reaches the head — a degenerate,
+	// already-invalid history) fall forward so the summary still relieves the
+	// pressure that got the prompt rejected.
+	tailStart := snapCutBackward(messages, len(messages)-compactionKeepTail)
+	if tailStart <= keepHead {
+		tailStart = snapCutForward(messages, len(messages)-compactionKeepTail)
+	}
 	tail := append([]fantasy.Message{}, messages[tailStart:]...)
 	middle := messages[keepHead:tailStart]
 	if len(middle) == 0 {
@@ -222,7 +264,18 @@ type proactiveCompactResult struct {
 func (e *engine) proactiveCompact(ctx context.Context, messages []fantasy.Message) proactiveCompactResult {
 	head := compactionHeadLen(messages)
 	active := messages[head:]
-	midpoint := len(active) / 2
+	// The raw midpoint follows the same #1106 boundary rule as
+	// forceCompactMessageHistory: never split a tool exchange, or the kept half
+	// starts with tool results whose call was summarized away and the provider
+	// rejects the compacted prompt. Snap backward first (widening the kept
+	// half, mirroring the force path's preference for the verbatim side); if
+	// that leaves nothing droppable, snap forward instead — either direction
+	// keeps the invariant, and the guards below refuse the degenerate cases
+	// where no safe split makes progress.
+	midpoint := snapCutBackward(active, len(active)/2)
+	if midpoint < 1 {
+		midpoint = snapCutForward(active, len(active)/2)
+	}
 	// Nothing worth doing if there is fewer than one droppable message or the
 	// kept half would be empty.
 	if midpoint < 1 || len(active)-midpoint < 1 {
