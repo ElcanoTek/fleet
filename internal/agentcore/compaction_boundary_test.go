@@ -129,7 +129,8 @@ func TestForceCompact_SnapsTailPastSingleToolExchange(t *testing.T) {
 	e := newMockEngine(t, &mockModel{})
 	// HEAD(0) + 9 fillers (1-9) + assistant c0 (10) + result (11) + 19 fillers
 	// (12-30). len = 31 → raw tail boundary = 31-20 = 11: the tool result.
-	msgs := []fantasy.Message{fantasy.NewUserMessage("HEAD")}
+	msgs := make([]fantasy.Message, 0, 64)
+	msgs = append(msgs, fantasy.NewUserMessage("HEAD"))
 	msgs = append(msgs, fillerMessages(9, 8)...)
 	msgs = append(msgs, toolExchange("c", 1)...)
 	msgs = append(msgs, fillerMessages(19, 8)...)
@@ -162,7 +163,8 @@ func TestForceCompact_SnapsTailPastParallelCallResults(t *testing.T) {
 	// HEAD(0) + 8 fillers (1-8) + assistant c0..c2 (9) + results (10-12) + 18
 	// fillers (13-30). len = 31 → raw tail boundary 11: the SECOND of three
 	// results.
-	msgs := []fantasy.Message{fantasy.NewUserMessage("HEAD")}
+	msgs := make([]fantasy.Message, 0, 64)
+	msgs = append(msgs, fantasy.NewUserMessage("HEAD"))
 	msgs = append(msgs, fillerMessages(8, 8)...)
 	msgs = append(msgs, toolExchange("c", 3)...)
 	msgs = append(msgs, fillerMessages(18, 8)...)
@@ -184,7 +186,8 @@ func TestForceCompact_BackToBackExchangesSplitBetween(t *testing.T) {
 	// HEAD(0) + 6 fillers (1-6) + exchange a (assistant 7, result 8) +
 	// exchange b (assistant 9, results 10-11) + 19 fillers (12-30). len = 31 →
 	// raw tail boundary 11: exchange b's second result.
-	msgs := []fantasy.Message{fantasy.NewUserMessage("HEAD")}
+	msgs := make([]fantasy.Message, 0, 64)
+	msgs = append(msgs, fantasy.NewUserMessage("HEAD"))
 	msgs = append(msgs, fillerMessages(6, 8)...)
 	msgs = append(msgs, toolExchange("a", 1)...)
 	msgs = append(msgs, toolExchange("b", 2)...)
@@ -210,7 +213,8 @@ func TestForceCompact_FallsForwardWhenBackwardSnapReachesHead(t *testing.T) {
 	// HEAD(0) + assistant with 25 calls (1) + 25 results (2-26) + 5 fillers
 	// (27-31). len = 32 → raw tail boundary 12, deep inside the result block;
 	// backward snapping reaches index 1 <= keepHead.
-	msgs := []fantasy.Message{fantasy.NewUserMessage("HEAD")}
+	msgs := make([]fantasy.Message, 0, 64)
+	msgs = append(msgs, fantasy.NewUserMessage("HEAD"))
 	msgs = append(msgs, toolExchange("c", 25)...)
 	msgs = append(msgs, fillerMessages(5, 8)...)
 
@@ -234,7 +238,8 @@ func TestProactiveCompact_SnapsMidpointPastToolExchange(t *testing.T) {
 	e := newMockEngine(t, &mockModel{})
 	// HEAD + active: 3 fillers, assistant c0..c1, 2 results, 3 fillers →
 	// len(active) = 9, raw midpoint 4 = the first tool result.
-	msgs := []fantasy.Message{fantasy.NewUserMessage("HEAD")}
+	msgs := make([]fantasy.Message, 0, 64)
+	msgs = append(msgs, fantasy.NewUserMessage("HEAD"))
 	msgs = append(msgs, fillerMessages(3, 8)...)
 	msgs = append(msgs, toolExchange("c", 2)...)
 	msgs = append(msgs, fillerMessages(3, 8)...)
@@ -264,7 +269,8 @@ func TestProactiveCompact_NoSafeSplitIsNoop(t *testing.T) {
 	e := newMockEngine(t, &mockModel{})
 	// HEAD + assistant c0..c1 + 2 results → active = [assistant, tool, tool],
 	// raw midpoint 1 (a result).
-	msgs := []fantasy.Message{fantasy.NewUserMessage("HEAD")}
+	msgs := make([]fantasy.Message, 0, 64)
+	msgs = append(msgs, fantasy.NewUserMessage("HEAD"))
 	msgs = append(msgs, toolExchange("c", 2)...)
 
 	res := e.proactiveCompact(context.Background(), msgs)
@@ -285,7 +291,8 @@ func TestProactiveCompact_NoSafeSplitIsNoop(t *testing.T) {
 // the raw cut indices of both compaction paths across every phase of an
 // exchange (assistant, first/middle/last result, between exchanges).
 func buildMixedHistory(n int) []fantasy.Message {
-	msgs := []fantasy.Message{fantasy.NewUserMessage("HEAD")}
+	msgs := make([]fantasy.Message, 0, 64)
+	msgs = append(msgs, fantasy.NewUserMessage("HEAD"))
 	for i := 0; len(msgs) < n; i++ {
 		switch i % 6 {
 		case 0, 3:
