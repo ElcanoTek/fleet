@@ -985,9 +985,15 @@ func TestUpdateTasksModelBatch(t *testing.T) {
 		t.Errorf("task with no fallback should stay nil, got %q", *got2.FallbackModel)
 	}
 
-	// Explicit empty fallback → NULL.
-	if _, err := db.UpdateTasksModelBatch(ctx, "new/model", sp(""), "old/model"); err != nil {
+	// Explicit empty fallback → NULL. The first call re-pinned these rows to
+	// new/model, so filter on that — and assert the count so a filter that
+	// matches nothing cannot fake a pass.
+	n, err = db.UpdateTasksModelBatch(ctx, "new/model", sp(""), "new/model")
+	if err != nil {
 		t.Fatalf("UpdateTasksModelBatch clear: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("clear updated %d, want 2", n)
 	}
 	if got, _ := db.GetTask(ctx, old1.ID); got.FallbackModel != nil {
 		t.Errorf("explicit empty fallback must persist as NULL, got %q", *got.FallbackModel)
