@@ -2613,12 +2613,14 @@ func (h *Handlers) populateCreatedByUsernames(ctx context.Context, tasks []*mode
 // PipelineMetrics handles GET /admin/pipeline-metrics (#543): the sensor
 // behind data-driven optimization decisions (#505's reopen criteria). It
 // derives tool-pipeline shape — tool turns, distinct tools, tokens, latency —
-// from the session logs fleet already persists, so it works retroactively on
-// every retained run and needs no new columns. Reading every stored log is
-// acceptable here: retention bounds the table (FLEET_RUN_LOG_RETENTION_DAYS /
-// FLEET_KEEP_RUNS_PER_TASK) and this is an occasional admin read, not a hot
-// path. Admin-gated by the route group; ?runs= caps the per-run rows returned
-// (default 100, max 500) — the aggregate always covers every retained log.
+// from the session logs fleet already persists, so it works retroactively.
+//
+// Retention does NOT bound this table by default (FLEET_RUN_LOG_RETENTION_DAYS
+// <= 0 leaves pruning off), so the scan is keyset-paginated: one page of
+// payloads at a time, a running aggregate, and only the most recent ?runs=
+// summaries retained (default 100, max 500). The aggregate still covers
+// every stored log; peak memory is O(page + runs limit), not O(table) (#1122).
+// Admin-gated by the route group.
 func (h *Handlers) PipelineMetrics(w http.ResponseWriter, r *http.Request) {
 	limit := 100
 	if v := r.URL.Query().Get("runs"); v != "" {
@@ -2629,21 +2631,20 @@ func (h *Handlers) PipelineMetrics(w http.ResponseWriter, r *http.Request) {
 	if limit > 500 {
 		limit = 500
 	}
-	logs, err := h.storage.GetAllLogs()
+	acc := models.NewPipelineMetricsAccumulator()
+	recent := models.NewRecentRuns(limit)
+	err := h.storage.ForEachLog(r.Context(), func(taskID uuid.UUID, session *models.LogSession) error {
+		m := models.ComputePipelineMetrics(taskID.String(), session)
+		acc.Add(m)
+		recent.Add(m)
+		return nil
+	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Failed to read session logs")
 		return
 	}
-	runs := make([]models.RunPipelineMetrics, 0, len(logs))
-	for taskID, session := range logs {
-		runs = append(runs, models.ComputePipelineMetrics(taskID.String(), session))
-	}
-	agg := models.AggregatePipelineMetrics(runs) // sorts runs most-recent-first
-	if len(runs) > limit {
-		runs = runs[:limit]
-	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"aggregate": agg,
-		"runs":      runs,
+		"aggregate": acc.Result(),
+		"runs":      recent.Items(),
 	})
 }
