@@ -17,6 +17,20 @@ prior versions are listed because none have shipped.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Malformed JSON on `DELETE /conversations` no longer wipes every
+  unpinned conversation (#1110).** The handler swallowed every decode
+  error so a bare (empty-body) DELETE could keep its legacy
+  delete-all-unpinned behavior. A client that intended a targeted
+  `{conversation_ids: [...]}` bulk delete but sent truncated or
+  invalid JSON therefore fell through to the wipe and returned 200.
+  Empty body (`io.EOF`) is still the legacy path; any other decode
+  error is now 400 with zero deletions. DELETE bodies are also
+  subject to the same 1 MiB JSON cap as POST/PUT/PATCH (previously
+  exempt, so `DELETE /conversations` and `DELETE /push/unsubscribe`
+  could stream an unbounded body into `json.Decode`).
+
 ### Security
 
 - **IP allowlist no longer trusts the leftmost `X-Forwarded-For` entry

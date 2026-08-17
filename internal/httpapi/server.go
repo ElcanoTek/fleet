@@ -815,7 +815,7 @@ const maxJSONBodyBytes = 1 << 20 // 1 MB
 func bodyLimitMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
-		case http.MethodPost, http.MethodPut, http.MethodPatch:
+		case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
 			// /attachments has its own (larger) multipart cap; don't double-limit.
 			if !strings.HasPrefix(r.URL.Path, "/attachments") {
 				r.Body = http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)
@@ -1355,9 +1355,14 @@ func (s *Server) listOrCreateConversations(w http.ResponseWriter, r *http.Reques
 			Confirm         bool     `json:"confirm"`
 		}
 		if r.Body != nil {
-			// An empty body is allowed (legacy bare DELETE → DeleteAllUnpinned);
-			// decode errors on a truly empty reader are swallowed.
-			_ = json.NewDecoder(r.Body).Decode(&req)
+			// Empty body (io.EOF) is the legacy bare DELETE → DeleteAllUnpinned.
+			// Any other decode error is a client that *intended* a targeted
+			// bulk delete but sent malformed / truncated JSON — refuse with
+			// 400 rather than wipe every unpinned conversation (#1110).
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+				http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+				return
+			}
 		}
 
 		switch {

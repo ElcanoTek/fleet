@@ -126,8 +126,11 @@ type fakeChatStore struct {
 	created    int
 	setModels  int
 	turnEvents int
-	toolCalls  []store.ToolCallEntry
-	queue      []store.InputQueueRow
+	// deleteAllUnpinned counts DELETE /conversations fall-throughs so
+	// #1110's malformed-body test can assert the wipe never ran.
+	deleteAllUnpinned int
+	toolCalls         []store.ToolCallEntry
+	queue             []store.InputQueueRow
 }
 
 func newFakeChatStore() *fakeChatStore {
@@ -297,6 +300,12 @@ func (s *fakeChatStore) DeleteByIDs(_ context.Context, _ string, ids []string) (
 	return len(ids), nil
 }
 func (s *fakeChatStore) DeleteAllMatching(_ context.Context, _, _ string) (int, error) {
+	return 0, nil
+}
+func (s *fakeChatStore) DeleteAllUnpinned(_ context.Context, _ string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.deleteAllUnpinned++
 	return 0, nil
 }
 func (s *fakeChatStore) BulkPatch(_ context.Context, _ string, ids []string, _ *bool, _ []string) (int, error) {
