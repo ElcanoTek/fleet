@@ -19,6 +19,25 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- A critical-tool commitment is no longer stranded when the successful call
+  carried corrected arguments. `markPendingCriticalDone` discharged a pending
+  action only on an exact `(toolName, argsHash)` match, so a call that was
+  blocked pre-audit, rejected on its first retry for bad tool arguments, and
+  then **fixed** could never discharge — the winning call hashed differently
+  precisely because fixing it is what made it win. `CanFinish` kept answering
+  *"Execute pending action(s): [mcp_sendgrid_send_email]"* to a run that had
+  already sent the email (SendGrid `202`, message id recorded in the session).
+  The run then re-sent, hit the duplicate-send guard, and re-rendered its HTML
+  body 110 bytes larger so the payload would no longer be identical — defeating
+  a guard whose entire job was to stop exactly that. It spent roughly 25 of its
+  27 minutes there and finished `success` having published nothing.
+  An exact args hit still wins when the retry really is the same call; otherwise
+  the oldest pending entry for that tool is discharged. One entry per success,
+  so two distinct pending calls to the same tool still need two successes, and a
+  success for one tool never discharges another's.
+
+### Fixed
+
 - **Attachment validation stats the vetted path, not the raw client value.**
   `validateAttachments` already confined chat-attachment paths to the uploads
   root (`filepath.Rel` + `filepath.IsLocal`), but then passed the original
