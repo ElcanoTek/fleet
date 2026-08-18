@@ -21,9 +21,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
+
 	// Register pgx as the "pgx" database/sql driver.
 	_ "github.com/jackc/pgx/v5/stdlib"
-	"github.com/lib/pq"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/secretbox"
@@ -870,7 +871,7 @@ func (s *Store) DeleteByIDs(ctx context.Context, userEmail string, ids []string)
 	var owned int
 	if err := s.db.QueryRowContext(ctx,
 		`SELECT count(*) FROM conversations WHERE id = ANY($1) AND user_email = $2 AND deleted_at IS NULL`,
-		pq.Array(ids), userEmail,
+		ids, userEmail,
 	).Scan(&owned); err != nil {
 		return 0, err
 	}
@@ -881,7 +882,7 @@ func (s *Store) DeleteByIDs(ctx context.Context, userEmail string, ids []string)
 		res, err := s.db.ExecContext(ctx,
 			`UPDATE conversations SET deleted_at = NOW(), updated_at = $1
 			 WHERE id = ANY($2) AND user_email = $3 AND deleted_at IS NULL`,
-			time.Now().Unix(), pq.Array(ids), userEmail,
+			time.Now().Unix(), ids, userEmail,
 		)
 		if err != nil {
 			return 0, err
@@ -891,7 +892,7 @@ func (s *Store) DeleteByIDs(ctx context.Context, userEmail string, ids []string)
 	}
 	res, err := s.db.ExecContext(ctx,
 		`DELETE FROM conversations WHERE id = ANY($1) AND user_email = $2`,
-		pq.Array(ids), userEmail,
+		ids, userEmail,
 	)
 	if err != nil {
 		return 0, err
@@ -954,7 +955,7 @@ func (s *Store) BulkPatch(ctx context.Context, userEmail string, ids []string, p
 	var owned int
 	if err := tx.QueryRowContext(ctx,
 		`SELECT count(*) FROM conversations WHERE id = ANY($1) AND user_email = $2 AND deleted_at IS NULL`,
-		pq.Array(ids), userEmail,
+		ids, userEmail,
 	).Scan(&owned); err != nil {
 		return 0, err
 	}
@@ -968,8 +969,8 @@ func (s *Store) BulkPatch(ctx context.Context, userEmail string, ids []string, p
              labels     = COALESCE($4, labels),
              updated_at = $5
          WHERE id = ANY($1) AND user_email = $2 AND deleted_at IS NULL`,
-		pq.Array(ids), userEmail,
-		pinned, pq.Array(labels),
+		ids, userEmail,
+		pinned, labels,
 		time.Now().Unix(),
 	)
 	if err != nil {
@@ -1003,7 +1004,7 @@ func (s *Store) ListFiltered(ctx context.Context, userEmail string, f ListFilter
 	// no label filter) does AND-containment.
 	var labelsArg any
 	if len(f.Labels) > 0 {
-		labelsArg = pq.Array(f.Labels)
+		labelsArg = f.Labels
 	}
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT `+conversationColumns+`
@@ -1031,6 +1032,45 @@ const conversationColumns = `id, user_email, title, persona, model, pinned, lock
 // capability URL (#1112). Column count and scan order stay identical.
 const teamConversationColumns = `id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, optional_mcp_servers_enabled, labels, approval_timeout_seconds, '' AS share_token, COALESCE(parent_conversation_id, ''), COALESCE(branch_point_message_id, 0), thinking_config, COALESCE(project_id, '')`
 
+// pgTypeMap is the pgx type map used to decode Postgres array literals reaching
+// this package over database/sql. It is read-only after init and safe for
+// concurrent use.
+var pgTypeMap = pgtype.NewMap()
+
+// textArray is a sql.Scanner for a Postgres text[] column.
+//
+// Binding an array needs no wrapper — the pgx stdlib driver implements
+// driver.NamedValueChecker, so a plain Go slice ([]string) is handed to pgx and
+// encoded as an array. Scanning is the asymmetric half: database/sql receives
+// the column as pgx's text-format array LITERAL (e.g. `{a,"b,c"}`) and cannot
+// convert that string into a *[]string on its own. Rather than hand-roll a
+// literal parser — labels are user-supplied and may contain commas, quotes,
+// backslashes, braces, or the bare word NULL — this delegates to pgx's own
+// array codec.
+//
+// A SQL NULL decodes to a nil slice, matching the column's absent-value sense.
+type textArray struct{ vals *[]string }
+
+func (a textArray) Scan(src any) error {
+	if src == nil {
+		*a.vals = nil
+		return nil
+	}
+	var raw []byte
+	switch v := src.(type) {
+	case string:
+		raw = []byte(v)
+	case []byte:
+		raw = v
+	default:
+		return fmt.Errorf("textArray: cannot scan %T into []string", src)
+	}
+	if err := pgTypeMap.Scan(pgtype.TextArrayOID, pgtype.TextFormatCode, raw, a.vals); err != nil {
+		return fmt.Errorf("textArray: decode text[]: %w", err)
+	}
+	return nil
+}
+
 // scanConversation scans one row produced with conversationColumns. It takes the
 // package's rowScanner (the one method *sql.Row and *sql.Rows share) so the
 // single-row Get and the row-by-row list scans share one scan order.
@@ -1039,7 +1079,7 @@ func scanConversation(sc rowScanner) (Conversation, error) {
 	var optionalRaw []byte
 	var approvalTimeout sql.NullInt64
 	var thinkingRaw []byte
-	if err := sc.Scan(&c.ID, &c.UserEmail, &c.Title, &c.Persona, &c.Model, &c.Pinned, &c.Lockdown, &c.CreatedAt, &c.UpdatedAt, &c.ArchivedAt, &c.TitleLocked, &optionalRaw, pq.Array(&c.Labels), &approvalTimeout, &c.ShareToken, &c.ParentConversationID, &c.BranchPointMessageID, &thinkingRaw, &c.ProjectID); err != nil {
+	if err := sc.Scan(&c.ID, &c.UserEmail, &c.Title, &c.Persona, &c.Model, &c.Pinned, &c.Lockdown, &c.CreatedAt, &c.UpdatedAt, &c.ArchivedAt, &c.TitleLocked, &optionalRaw, textArray{&c.Labels}, &approvalTimeout, &c.ShareToken, &c.ParentConversationID, &c.BranchPointMessageID, &thinkingRaw, &c.ProjectID); err != nil {
 		return Conversation{}, err
 	}
 	c.OptionalMCPServersEnabled = scanOptionalMCPServers(optionalRaw)
