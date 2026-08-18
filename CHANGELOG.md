@@ -102,6 +102,48 @@ prior versions are listed because none have shipped.
   scope and turned it into a red `Web lint / test / build`. The type now
   matches the projection's key list.
 
+- **MCP client transports hardened against hostile or wedged servers
+  (#1108).** One pass over `internal/mcp`, three fixes plus three small ones:
+
+  - **HTTP/SSE responses are bounded at the stdio cap (64 MiB).**
+    `parseJSONResponse` decoded the body unbounded and `parseSSEResponse`
+    capped only a single SSE line (10 MB), not total accumulation — so a
+    user-supplied remote server (#443; `remotemcp.probeServer` and the
+    per-run overlay both route through `HTTPTransport`) could stream
+    gigabytes inside the 2-minute timeout and OOM the credential-owning
+    process. Both paths now read through an `io.LimitReader` at
+    `stdioResponseCaptureCap`; an oversized response fails just that call
+    with an explicit over-cap error and the transport stays usable.
+  - **The stdio write path honors its context.** `t.stdin.Write` ran bare
+    under the transport mutex, so a request larger than the 64 KiB kernel
+    pipe buffer against a subprocess that stopped reading stdin blocked
+    forever — and since `callTool` holds `Server.mu` for the whole call,
+    one wedged connector cascaded: every call to that server hung,
+    `drainAndClose` blocked, and `Reload` sat in its drain holding
+    `reloadMu`, permanently disabling hot-reload. The write now uses the
+    same goroutine-plus-select pattern as the read and poisons the
+    transport on timeout/cancel, so the existing restart path recovers and
+    a reload completes with the wedged server drained and retired.
+  - **`Client.Close` retires servers, mirroring reload's `drainAndClose`.**
+    Close only closed transports, so an in-flight `callTool` whose
+    transport died during Close matched `isTransportDeadError` and
+    `restartLocked` respawned a credentialed subprocess *after* Close, with
+    nothing left to close it (broker mode's process-group SIGKILL contained
+    it; in-process mode leaked it). Close now takes each `Server.mu`, sets
+    `retired`, and closes whatever transport the racing call left behind —
+    a restarted one included.
+  - Lows, same pass: `isTransportDeadError` no longer matches bare `"eof"`
+    as a substring (it misread messages like "whereof" and restarted
+    healthy subprocesses) — it now checks wrapped stdlib identities via
+    `errors.Is` (`io.EOF`, `syscall.EPIPE`, `os.ErrClosed`, …) plus precise
+    string forms, with EOF matched only as a standalone uppercase word (the
+    legacy `"write |1:"` substring is gone too — its real underliers are
+    matched structurally and via "broken pipe"/"file already closed");
+    `AddHTTPTools` dedupes repeat registrations instead of appending
+    duplicate catalog entries; and `HTTPTransport` verifies the JSON-RPC
+    response `id` against the request the way stdio does (a foreign-id JSON
+    response is rejected, a foreign-id SSE event is skipped).
+
 - **Teams are settable from the UI, so projects can actually be shared
   (#1157).** Two bugs made the shipped team/projects feature unreachable on a
   fresh box:

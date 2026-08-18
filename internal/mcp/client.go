@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -82,10 +83,12 @@ type Server struct {
 	def ServerDef
 
 	// retired is set under mu when a reload (#218) removes or replaces this
-	// server, after its transport is closed. callTool refuses a call to a
-	// retired server, so a caller that captured this *Server just before the
-	// registry swap can't resurrect a killed stdio subprocess via the
-	// dead-transport restart path (which would leak an unreachable process).
+	// server, or when Client.Close shuts it down (#1108) — in both cases after
+	// any in-flight call drains and before/as its transport is closed. callTool
+	// refuses a call to a retired server, so a caller that captured this
+	// *Server just before the registry swap (or racing shutdown) can't
+	// resurrect a killed stdio subprocess via the dead-transport restart path
+	// (which would leak an unreachable, credential-holding process).
 	retired bool
 
 	// Restart state for stdio servers (nil for HTTP servers).
@@ -468,17 +471,47 @@ func (c *Client) CallToolPrefixed(ctx context.Context, fullName string, argument
 	return best.callTool(ctx, bestTool, arguments)
 }
 
-// Close closes all server connections
+// Close closes all server connections. Each server is retired under its own
+// mutex — mirroring reload's drainAndClose — because just closing transports
+// left a race (#1108): an in-flight callTool whose transport died while Close
+// ran matched isTransportDeadError and restartLocked respawned a credentialed
+// subprocess AFTER Close returned, with nothing left to ever close it (broker
+// mode's process-group SIGKILL contains that; in-process mode leaked it).
+// Taking Server.mu waits for the in-flight call — bounded, since every
+// transport Call respects its context — then closes whatever transport that
+// call left behind (a restarted one included), and retired refuses every
+// later call instead of respawning.
 func (c *Client) Close() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	var errs []error
+	c.mu.RLock()
+	servers := make([]*Server, 0, len(c.servers))
 	for _, server := range c.servers {
-		if err := server.transport.Close(); err != nil {
-			errs = append(errs, err)
-		}
+		servers = append(servers, server)
 	}
+	c.mu.RUnlock()
+
+	// Retire concurrently, matching Reload's drain: one server with a long
+	// in-flight call (or a hung child eating the full stdioCloseGrace) must
+	// not delay shutting down the others.
+	var (
+		wg     sync.WaitGroup
+		errsMu sync.Mutex
+		errs   []error
+	)
+	for _, server := range servers {
+		wg.Add(1)
+		go func(s *Server) {
+			defer wg.Done()
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			s.retired = true
+			if err := s.transport.Close(); err != nil {
+				errsMu.Lock()
+				errs = append(errs, err)
+				errsMu.Unlock()
+			}
+		}(server)
+	}
+	wg.Wait()
 
 	if len(errs) > 0 {
 		return fmt.Errorf("errors closing servers: %v", errs)
@@ -554,15 +587,16 @@ func (s *Server) callTool(ctx context.Context, name string, arguments map[string
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// A reload (#218) may have retired this server (closed its transport, removed
-	// it from the registry) between a caller capturing the *Server and reaching
-	// here. Refuse rather than call a closed transport — for a stdio server that
-	// would otherwise trip the dead-transport restart path and spawn an orphaned,
-	// unreachable subprocess. drainAndClose sets `retired` under this same mutex,
-	// so a call already in flight when the reload lands completes first (and the
-	// reload closes whatever transport it leaves behind).
+	// A reload (#218) or Client.Close (#1108) may have retired this server
+	// (closed its transport, removed it from service) between a caller capturing
+	// the *Server and reaching here. Refuse rather than call a closed transport —
+	// for a stdio server that would otherwise trip the dead-transport restart
+	// path and spawn an orphaned, unreachable subprocess. Both retirers set
+	// `retired` under this same mutex, so a call already in flight when
+	// retirement lands completes first (and the retirer closes whatever
+	// transport it leaves behind).
 	if s.retired {
-		return nil, fmt.Errorf("MCP server %s was retired by a reload", s.name)
+		return nil, fmt.Errorf("MCP server %s was retired (removed by a reload or client shutdown)", s.name)
 	}
 
 	// A nil arguments map marshals to "arguments": null, which strict MCP
@@ -695,6 +729,16 @@ func isRequestNotDeliveredError(err error) bool {
 // Application-level JSON-RPC errors never count: a tool error whose
 // message happens to contain "EOF" (e.g. a Python parse traceback) must
 // not kill and restart a healthy subprocess.
+//
+// Detection is layered (#1108). Sentinel and stdlib identities come first:
+// the exec pipe errors this path actually sees keep their wrap chain intact
+// (*fs.PathError → syscall.Errno / os.ErrClosed, io.EOF from the reader), so
+// errors.Is matches them exactly. A small set of precise string forms backs
+// that up for errors whose chain was flattened (fmt.Errorf with %v, an error
+// rebuilt from a message). The old bare "eof" substring match is gone — it
+// classified ANY message containing those three letters (e.g. "whereof") as
+// a dead transport and restarted a healthy subprocess; EOF now only matches
+// as a standalone word, the exact way io.EOF renders.
 func isTransportDeadError(err error) bool {
 	if err == nil {
 		return false
@@ -706,14 +750,48 @@ func isTransportDeadError(err error) bool {
 	if errors.Is(err, errTransportDesynced) {
 		return true
 	}
-	errStr := strings.ToLower(err.Error())
-	return strings.Contains(errStr, "broken pipe") ||
-		strings.Contains(errStr, "write |1:") ||
-		strings.Contains(errStr, "eof") ||
-		strings.Contains(errStr, "connection reset") ||
-		strings.Contains(errStr, "process already finished") ||
-		strings.Contains(errStr, "file already closed") ||
-		strings.Contains(errStr, "transport marked dead")
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
+		errors.Is(err, io.ErrClosedPipe) || errors.Is(err, syscall.EPIPE) ||
+		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, os.ErrClosed) ||
+		errors.Is(err, os.ErrProcessDone) {
+		return true
+	}
+	errStr := err.Error()
+	lower := strings.ToLower(errStr)
+	return strings.Contains(lower, "broken pipe") ||
+		strings.Contains(lower, "connection reset") ||
+		strings.Contains(lower, "process already finished") ||
+		strings.Contains(lower, "file already closed") ||
+		strings.Contains(lower, "transport marked dead") ||
+		containsEOFToken(errStr)
+}
+
+// containsEOFToken reports whether s contains "EOF" as a standalone word —
+// the exact rendering of io.EOF and its stdlib wrappers ("EOF",
+// "unexpected EOF"), including when the wrap chain was flattened into a
+// plain string. Deliberately case-sensitive and word-bounded so an
+// application message that merely contains the letters ("EOFError: bad
+// CSV", "whereof") can never be misread as a dead transport.
+func containsEOFToken(s string) bool {
+	for i := 0; ; {
+		j := strings.Index(s[i:], "EOF")
+		if j < 0 {
+			return false
+		}
+		j += i
+		leftOK := j == 0 || !isWordByte(s[j-1])
+		rightOK := j+3 == len(s) || !isWordByte(s[j+3])
+		if leftOK && rightOK {
+			return true
+		}
+		i = j + 3
+	}
+}
+
+// isWordByte reports whether c is an ASCII letter, digit, or underscore —
+// the byte classes that would glue "EOF" into a larger identifier.
+func isWordByte(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_'
 }
 
 // StdioTransport implements Transport for stdio-based MCP servers
@@ -864,12 +942,12 @@ func (t *StdioTransport) Call(ctx context.Context, method string, params interfa
 		return nil, err
 	}
 
-	// Write request. Wrap failures with a distinct marker: a write error
-	// means the request never reached the server, so Server.callTool may
-	// safely retry it after a restart — unlike a read-side failure, where
-	// the server may have executed the call before dying.
-	if _, err := t.stdin.Write(append(requestBytes, '\n')); err != nil {
-		return nil, fmt.Errorf("%s: %w", errStdioWriteFailed, err)
+	// Write request. Failures carry a distinct marker: a write error means
+	// the request never reached the server, so Server.callTool may safely
+	// retry it after a restart — unlike a read-side failure, where the
+	// server may have executed the call before dying.
+	if err := t.writeLocked(ctx, append(requestBytes, '\n')); err != nil {
+		return nil, err
 	}
 
 	type result struct {
@@ -961,9 +1039,10 @@ func (t *StdioTransport) Call(ctx context.Context, method string, params interfa
 }
 
 // Notify writes a JSON-RPC notification (no id, no response read) to the
-// subprocess. ctx is accepted for interface parity; the write itself is local
-// and non-blocking.
-func (t *StdioTransport) Notify(_ context.Context, method string, params interface{}) error {
+// subprocess. The write honors ctx like Call's does: even a small
+// notification blocks forever against a full pipe whose child stopped
+// reading stdin.
+func (t *StdioTransport) Notify(ctx context.Context, method string, params interface{}) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.broken {
@@ -978,10 +1057,58 @@ func (t *StdioTransport) Notify(_ context.Context, method string, params interfa
 	if err != nil {
 		return err
 	}
-	if _, err := t.stdin.Write(append(b, '\n')); err != nil {
-		return fmt.Errorf("%s: %w", errStdioWriteFailed, err)
+	return t.writeLocked(ctx, append(b, '\n'))
+}
+
+// writeLocked writes b to the subprocess's stdin, honoring ctx. The write
+// runs in a goroutine with a select on ctx.Done() — the same pattern as the
+// read side — because a write to a full pipe (64 KiB kernel buffer) against
+// a child that stopped reading stdin blocks forever, and model-authored
+// tools/call arguments easily exceed 64 KiB. Without this, one wedged
+// connector cascaded (#1108): Server.callTool holds Server.mu for the whole
+// call, so every future call to that server hung; drainAndClose blocked on
+// that mutex; and Reload blocked in its drain while holding reloadMu —
+// permanently disabling hot-reload, un-cancellable from the parent.
+//
+// On timeout/cancel the transport is poisoned (broken): part of the request
+// may already sit in the pipe, so the stream framing can't be trusted, and
+// the orphaned writer may still complete later. The next Call fails fast
+// with errTransportDesynced and the server layer restarts the subprocess —
+// whose teardown closes stdin, which also unblocks the orphaned writer.
+// Errors carry the errStdioWriteFailed marker: the child never received the
+// full request line, so a post-restart replay is double-execution-safe.
+// Caller must hold t.mu.
+func (t *StdioTransport) writeLocked(ctx context.Context, b []byte) error {
+	writeDone := make(chan error, 1)
+	go func() {
+		_, err := t.stdin.Write(b)
+		writeDone <- err
+	}()
+	select {
+	case <-ctx.Done():
+		// Both select cases can be ready when cancellation races a
+		// fast write; Go picks one at random. A completed write must
+		// not be reported as "request not delivered" — the child has
+		// the full line and may execute the call, and that error text
+		// invites re-issuing a non-idempotent tool. Drain writeDone
+		// non-blockingly: a finished write keeps its honest outcome
+		// (success falls through to the read side's ctx handling).
+		select {
+		case err := <-writeDone:
+			if err != nil {
+				return fmt.Errorf("%s: %w", errStdioWriteFailed, err)
+			}
+			return nil
+		default:
+		}
+		t.broken = true
+		return fmt.Errorf("%s: %w", errStdioWriteFailed, ctx.Err())
+	case err := <-writeDone:
+		if err != nil {
+			return fmt.Errorf("%s: %w", errStdioWriteFailed, err)
+		}
+		return nil
 	}
-	return nil
 }
 
 // stdioResponse is the JSON-RPC envelope read off a stdio MCP server's
@@ -1101,11 +1228,11 @@ func (t *HTTPTransport) Call(ctx context.Context, method string, params interfac
 	// Handle SSE (Server-Sent Events) responses
 	contentType := resp.Header.Get("Content-Type")
 	if strings.Contains(contentType, "text/event-stream") {
-		return t.parseSSEResponse(resp.Body)
+		return t.parseSSEResponse(resp.Body, id)
 	}
 
 	// Handle standard JSON responses
-	return t.parseJSONResponse(resp.Body)
+	return t.parseJSONResponse(resp.Body, id)
 }
 
 // Notify POSTs a JSON-RPC notification (no id) and discards the (typically
@@ -1142,7 +1269,10 @@ func (t *HTTPTransport) Notify(ctx context.Context, method string, params interf
 	}
 	defer resp.Body.Close()
 	t.captureSessionID(resp.Header)
-	_, _ = io.Copy(io.Discard, resp.Body) // a notification has no response body
+	// A notification has no response body; drain (bounded — the bytes are
+	// discarded, but time inside the client timeout shouldn't be burned on a
+	// server streaming garbage past the response cap).
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, int64(httpResponseCaptureCap)))
 	if resp.StatusCode >= 400 {
 		return fmt.Errorf("notification %s: unexpected status %d", method, resp.StatusCode)
 	}
@@ -1180,8 +1310,23 @@ func (t *HTTPTransport) captureSessionID(headers http.Header) {
 	}
 }
 
-// parseJSONResponse parses a standard JSON-RPC response
-func (t *HTTPTransport) parseJSONResponse(body io.Reader) (json.RawMessage, error) {
+// httpResponseCaptureCap bounds how many bytes of an HTTP or SSE MCP
+// response body are held in host memory — the same 64 MiB ceiling as the
+// stdio path's stdioResponseCaptureCap (#1108). The 2-minute client timeout
+// bounds duration, not bytes: without this cap a hostile or buggy server —
+// including a user-supplied remote one (#443), which remotemcp.probeServer
+// and the per-run overlay both route through this transport — could stream
+// gigabytes into the credential-owning process within the timeout and OOM
+// it. A var (not const) only so tests can exercise the bound without
+// allocating 64 MiB; production code never reassigns it.
+var httpResponseCaptureCap = stdioResponseCaptureCap
+
+// parseJSONResponse parses a standard JSON-RPC response, reading at most
+// httpResponseCaptureCap bytes; past the cap the call fails with a clean
+// per-call error instead of buffering the body unbounded. wantID is the
+// JSON-RPC id of the request this response answers: a mismatch is rejected
+// (the stdio path matches ids the same way) rather than misattributed.
+func (t *HTTPTransport) parseJSONResponse(body io.Reader, wantID int) (json.RawMessage, error) {
 	var response struct {
 		JSONRPC string          `json:"jsonrpc"`
 		ID      JSONRPCID       `json:"id"`
@@ -1189,8 +1334,28 @@ func (t *HTTPTransport) parseJSONResponse(body io.Reader) (json.RawMessage, erro
 		Error   json.RawMessage `json:"error"`
 	}
 
-	if err := json.NewDecoder(body).Decode(&response); err != nil {
+	// N is cap+1 so "hit the cap" is distinguishable from "read exactly cap
+	// bytes of valid JSON": a decode failure with the limiter exhausted means
+	// the body overran the ceiling, not that its JSON was malformed.
+	limited := &io.LimitedReader{R: body, N: int64(httpResponseCaptureCap) + 1}
+	if err := json.NewDecoder(limited).Decode(&response); err != nil {
+		if limited.N <= 0 {
+			return nil, fmt.Errorf("MCP http: response exceeded %d bytes and was dropped — narrow the query or page the tool's results", httpResponseCaptureCap)
+		}
 		return nil, err
+	}
+
+	if !response.ID.matchesInt(wantID) {
+		// A server that cannot attribute a request answers with id:null
+		// (or a wrong id), and its error member is the only diagnostic
+		// it offers. The call still fails — a response that doesn't
+		// match the request id must never be attributed as its result —
+		// but surface that error text so the operator debugs the
+		// server's real complaint, not a phantom id mismatch.
+		if len(response.Error) > 0 && string(response.Error) != nullString {
+			return nil, fmt.Errorf("MCP http: response id %s does not match request id %d (response carried error: %s)", response.ID.String(), wantID, string(response.Error))
+		}
+		return nil, fmt.Errorf("MCP http: response id %s does not match request id %d", response.ID.String(), wantID)
 	}
 
 	if len(response.Error) > 0 && string(response.Error) != nullString {
@@ -1204,11 +1369,19 @@ func (t *HTTPTransport) parseJSONResponse(body io.Reader) (json.RawMessage, erro
 	return response.Result, nil
 }
 
-// parseSSEResponse parses a Server-Sent Events (SSE) stream and extracts JSON-RPC response
-// SSE format: lines like "event: message" and "data: {json...}"
-// We read data: lines until we find a complete JSON-RPC response
-func (t *HTTPTransport) parseSSEResponse(body io.Reader) (json.RawMessage, error) {
-	scanner := bufio.NewScanner(body)
+// parseSSEResponse parses a Server-Sent Events (SSE) stream and extracts the
+// JSON-RPC response whose id matches wantID. SSE format: lines like
+// "event: message" and "data: {json...}"; data: lines are accumulated until
+// a complete JSON-RPC response is found. The whole stream is read through a
+// limiter at httpResponseCaptureCap (#1108) — which also bounds dataBuffer's
+// total growth, since it only accumulates bytes read from the stream — so an
+// endless or oversized stream fails this call cleanly instead of growing
+// host memory; a single SSE line is additionally capped at 10MB by the
+// scanner. Responses carrying a different id (an interleaved stale event)
+// are skipped, mirroring the stdio path's id matching.
+func (t *HTTPTransport) parseSSEResponse(body io.Reader, wantID int) (json.RawMessage, error) {
+	limited := &io.LimitedReader{R: body, N: int64(httpResponseCaptureCap) + 1}
+	scanner := bufio.NewScanner(limited)
 	scanner.Buffer(make([]byte, 64*1024), 10*1024*1024) // allow up to 10MB per SSE line
 	var dataBuffer strings.Builder
 	var foundData bool
@@ -1236,7 +1409,7 @@ func (t *HTTPTransport) parseSSEResponse(body io.Reader) (json.RawMessage, error
 		if line == "" && foundData {
 			jsonData := dataBuffer.String()
 			if jsonData != "" {
-				result, err := t.tryParseJSONRPCFromSSE(jsonData)
+				result, err := t.tryParseJSONRPCFromSSE(jsonData, wantID)
 				if err == nil {
 					return result, nil
 				}
@@ -1246,7 +1419,8 @@ func (t *HTTPTransport) parseSSEResponse(body io.Reader) (json.RawMessage, error
 				if errors.As(err, &rpcErr) {
 					return nil, rpcErr
 				}
-				// If parsing failed (not a JSON-RPC response), continue reading more events
+				// If parsing failed (not a JSON-RPC response, or a response to a
+				// different request id), continue reading more events
 			}
 			// Reset for next event
 			dataBuffer.Reset()
@@ -1258,16 +1432,28 @@ func (t *HTTPTransport) parseSSEResponse(body io.Reader) (json.RawMessage, error
 		return nil, fmt.Errorf("SSE read error: %w", err)
 	}
 
+	// The limiter ran dry before a matching response completed: the stream
+	// overran the cap. Fail loudly rather than hand back a truncated tail
+	// (the scanner sees the cut as a plain EOF, so without this check the
+	// error would be a misleading "no valid JSON-RPC response").
+	if limited.N <= 0 {
+		return nil, fmt.Errorf("MCP http: SSE response exceeded %d bytes without a complete JSON-RPC response and was dropped — narrow the query or page the tool's results", httpResponseCaptureCap)
+	}
+
 	// Try parsing any remaining data
 	if foundData && dataBuffer.Len() > 0 {
-		return t.tryParseJSONRPCFromSSE(dataBuffer.String())
+		return t.tryParseJSONRPCFromSSE(dataBuffer.String(), wantID)
 	}
 
 	return nil, fmt.Errorf("no valid JSON-RPC response found in SSE stream")
 }
 
-// tryParseJSONRPCFromSSE attempts to parse JSON-RPC response from SSE data
-func (t *HTTPTransport) tryParseJSONRPCFromSSE(jsonData string) (json.RawMessage, error) {
+// tryParseJSONRPCFromSSE attempts to parse a JSON-RPC response to request
+// wantID from SSE data. A well-formed response (result or error) whose id
+// differs from wantID returns a plain error so the SSE loop skips it and
+// keeps reading — the same treatment stdio gives a stale response line —
+// rather than attributing another request's result (or error) to this call.
+func (t *HTTPTransport) tryParseJSONRPCFromSSE(jsonData string, wantID int) (json.RawMessage, error) {
 	var response struct {
 		JSONRPC string          `json:"jsonrpc"`
 		ID      JSONRPCID       `json:"id"`
@@ -1282,6 +1468,13 @@ func (t *HTTPTransport) tryParseJSONRPCFromSSE(jsonData string) (json.RawMessage
 	// Verify this is a JSON-RPC response (has result or error)
 	if len(response.Result) == 0 && len(response.Error) == 0 {
 		return nil, fmt.Errorf("not a JSON-RPC response")
+	}
+
+	// Never hand this caller a response for a different request — checked
+	// before the error branch so a stale error isn't returned as this call's.
+	if !response.ID.matchesInt(wantID) {
+		log.Printf("MCP http: discarding SSE response with id %s while waiting for %d", response.ID.String(), wantID)
+		return nil, fmt.Errorf("JSON-RPC response id %s does not match request id %d", response.ID.String(), wantID)
 	}
 
 	if len(response.Error) > 0 && string(response.Error) != nullString {
