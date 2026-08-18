@@ -54,7 +54,7 @@ const PROMPT_AUTOGROW_MAX_PX = 240;
 const PROMPT_EXPANDED_STORAGE_KEY = "fleet-task-prompt-expanded";
 
 const DEFAULT_PRIMARY_MODEL = "google/gemini-3.7-flash";
-const DEFAULT_FALLBACK_MODEL = "x-ai/grok-4.6";
+const DEFAULT_FALLBACK_MODEL = "openai/gpt-5.6-sol";
 
 const SCHEDULE_PRESETS = [
   { label: "Weekdays 9am", cron: "0 9 * * 1-5" },
