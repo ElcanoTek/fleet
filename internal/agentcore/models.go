@@ -21,13 +21,16 @@ const (
 	// Operations Center default). No :nitro variant and no `~…-latest` alias:
 	// throughput-priority routing sprays requests across providers, and prompt
 	// caches are per-upstream — so the implicit-cache discount (~80% on cached
-	// input) almost never hit. The slug is soft-pinned to the first-party
-	// DeepSeek upstream (see canonicalUpstream) for cache locality, which also
-	// fixes the window: OpenRouter serves this model from 28 endpoints whose
-	// context lengths range from 131K to 1M and whose quantization ranges from
-	// fp4 to fp8, so an unpinned route is neither reproducible nor safely
-	// sized. DeepSeek's own endpoint is the full 1,048,576 at fp8.
-	DefaultCoreModel = "deepseek/deepseek-v4-flash-0731"
+	// input) almost never hit; and an alias slug defeats the send-side
+	// reasoning reconstruction (see isAliasModel).
+	//
+	// Google serves this family themselves, so canonicalUpstream pins it STRICT
+	// (Only, no fallbacks): there is no provider spread to degrade across, which
+	// is also why it carries no serving-precision floor — the fp8 floor under
+	// the previous DeepSeek default existed because 28 OpenRouter endpoints
+	// served that family at fp4-to-fp8. One upstream also means one prompt
+	// cache and one context length: the full 1,048,576.
+	DefaultCoreModel = "google/gemini-3.7-flash"
 	// DefaultMaxModel is the strong/fallback tier — the model escalation
 	// (suggest_advanced_model) and task fallback resolve to. Pinned, never a
 	// `~latest` alias. No canonicalUpstream entry: OpenRouter serves this one
@@ -57,6 +60,14 @@ var modelContextWindows = []struct {
 	prefix string
 	tokens int
 }{
+	// The everyday default (DefaultCoreModel). An exact-slug entry, not a
+	// `google/gemini-3` family prefix: the Nano Banana image variants in that
+	// family are 65K-131K, and an over-large window is worse than a missing one
+	// — a missing entry falls back to the conservative 200K default and merely
+	// compacts early, while an over-large one feeds the upstream more than it
+	// accepts and hard-errors. Cold-start/offline only; a running fleet gets
+	// this from the live OpenRouter catalog.
+	{"google/gemini-3.7-flash", 1_048_576},
 	{"google/gemini-2.5-pro", 1_000_000},
 	{"google/gemini-2.0", 1_000_000},
 	{"google/gemini-1.5-pro", 1_000_000},

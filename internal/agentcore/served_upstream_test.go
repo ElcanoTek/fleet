@@ -38,13 +38,13 @@ func TestOpenrouterServedProvider(t *testing.T) {
 // A run served by its canonical upstream is not a fallback.
 func TestUpdateUsage_CanonicalUpstreamIsNotAFallback(t *testing.T) {
 	o := newOrchestrationState(NewLogSession(), 50)
-	o.updateUsage(DefaultCoreModel, fantasy.Usage{InputTokens: 10, OutputTokens: 5}, orMetadata("DeepSeek"))
+	o.updateUsage(DefaultCoreModel, fantasy.Usage{InputTokens: 10, OutputTokens: 5}, orMetadata("Google"))
 
 	if o.ServedFallback {
 		t.Error("ServedFallback = true for a step served by the pinned upstream")
 	}
-	if o.LastServedUpstream != "DeepSeek" {
-		t.Errorf("LastServedUpstream = %q, want %q", o.LastServedUpstream, "DeepSeek")
+	if o.LastServedUpstream != "Google" {
+		t.Errorf("LastServedUpstream = %q, want %q", o.LastServedUpstream, "Google")
 	}
 }
 
@@ -63,12 +63,12 @@ func TestUpdateUsage_RecordsUpstreamFallback(t *testing.T) {
 
 	// The flag latches: a later step returning to the canonical upstream must
 	// not erase the fact that part of the run was served elsewhere.
-	o.updateUsage(DefaultCoreModel, fantasy.Usage{InputTokens: 10, OutputTokens: 5}, orMetadata("DeepSeek"))
+	o.updateUsage(DefaultCoreModel, fantasy.Usage{InputTokens: 10, OutputTokens: 5}, orMetadata("Google"))
 	if !o.ServedFallback {
 		t.Error("ServedFallback cleared after the run returned to the pinned upstream; it must latch")
 	}
-	if o.LastServedUpstream != "DeepSeek" {
-		t.Errorf("LastServedUpstream = %q, want the most recent upstream %q", o.LastServedUpstream, "DeepSeek")
+	if o.LastServedUpstream != "Google" {
+		t.Errorf("LastServedUpstream = %q, want the most recent upstream %q", o.LastServedUpstream, "Google")
 	}
 }
 
@@ -89,10 +89,10 @@ func TestUpdateUsage_UnpinnedFamilyNeverFlagsFallback(t *testing.T) {
 // rather than clobbering a previously recorded one with "".
 func TestUpdateUsage_AbsentMetadataPreservesAttribution(t *testing.T) {
 	o := newOrchestrationState(NewLogSession(), 50)
-	o.updateUsage(DefaultCoreModel, fantasy.Usage{InputTokens: 10, OutputTokens: 5}, orMetadata("DeepSeek"))
+	o.updateUsage(DefaultCoreModel, fantasy.Usage{InputTokens: 10, OutputTokens: 5}, orMetadata("Google"))
 	o.updateUsage(DefaultCoreModel, fantasy.Usage{InputTokens: 10, OutputTokens: 5}, fantasy.ProviderMetadata{})
 
-	if o.LastServedUpstream != "DeepSeek" {
-		t.Errorf("LastServedUpstream = %q, want the last known upstream %q", o.LastServedUpstream, "DeepSeek")
+	if o.LastServedUpstream != "Google" {
+		t.Errorf("LastServedUpstream = %q, want the last known upstream %q", o.LastServedUpstream, "Google")
 	}
 }

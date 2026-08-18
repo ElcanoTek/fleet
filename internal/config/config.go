@@ -56,7 +56,7 @@ const (
 
 // DefaultTitleModel is the fallback for FLEET_TITLE_MODEL / CHAT_TITLE_MODEL.
 // Mirrors the frontend's DEFAULT_MODEL (the recommended everyday pick).
-const DefaultTitleModel = "deepseek/deepseek-v4-flash-0731"
+const DefaultTitleModel = "google/gemini-3.7-flash"
 
 // DefaultFromEmail is the fallback From address for outgoing mail. Neutral by
 // default; a deployment overrides via SENDGRID_FROM_EMAIL / MAILBUX_FROM_EMAIL.
@@ -1619,8 +1619,8 @@ func splitLockdownModels(raw string) []string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return []string{
-			"deepseek/deepseek-v4-flash-0731", // recommended default
-			"x-ai/grok-4.6",                   // strong tier
+			"google/gemini-3.7-flash", // recommended default
+			"x-ai/grok-4.6",           // strong tier
 		}
 	}
 	parts := strings.Split(raw, ",")

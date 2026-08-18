@@ -31,8 +31,8 @@
 // `signature` in `thinking` block" (root-caused + live-verified
 // 2026-06-04). Trade-off: lab refreshes require bumping these constants
 // — and their server-side mirrors — instead of floating automatically.
-export const DEFAULT_MODEL = "deepseek/deepseek-v4-flash-0731";
-export const DEFAULT_MODEL_LABEL = "DeepSeek: DeepSeek V4 Flash 0731";
+export const DEFAULT_MODEL = "google/gemini-3.7-flash";
+export const DEFAULT_MODEL_LABEL = "Google: Gemini 3.7 Flash";
 
 export const ADVANCED_MODEL = "x-ai/grok-4.6";
 export const ADVANCED_MODEL_LABEL = "SpaceXAI: Grok 4.6";
