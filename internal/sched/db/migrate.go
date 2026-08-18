@@ -13,7 +13,7 @@ import (
 	"strings"
 
 	"github.com/golang-migrate/migrate/v4"
-	"github.com/golang-migrate/migrate/v4/database/postgres"
+	pgxmigrate "github.com/golang-migrate/migrate/v4/database/pgx/v5"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
 )
 
@@ -21,19 +21,25 @@ import (
 var migrationsFS embed.FS
 
 // RunMigrations runs all pending database migrations using golang-migrate with
-// the embedded SQL files. golang-migrate's postgres driver works against the
-// *sql.DB regardless of whether it was opened with lib/pq or pgx — it issues
-// plain SQL over database/sql.
+// the embedded SQL files. It uses golang-migrate's pgx/v5 driver rather than its
+// `postgres` one: the two are forks that agree on everything fleet depends on —
+// the same `schema_migrations` table (version bigint primary key, dirty boolean)
+// and the same GenerateAdvisoryLockId/pg_advisory_lock key, so the migration lock
+// still mutually excludes across a mixed-version rollout — but the `postgres`
+// driver imports lib/pq, which is unmaintained and carries unfixed advisories
+// (GO-2026-6166, GO-2026-6168 through GO-2026-6173). Selecting the pgx driver
+// puts the whole binary on the one Postgres driver it already opens connections
+// with, and takes lib/pq out of the build entirely.
 func RunMigrations(conn *sql.DB) error {
 	source, err := iofs.New(migrationsFS, "migrations")
 	if err != nil {
 		return fmt.Errorf("failed to create migration source: %w", err)
 	}
-	driver, err := postgres.WithInstance(conn, &postgres.Config{})
+	driver, err := pgxmigrate.WithInstance(conn, &pgxmigrate.Config{})
 	if err != nil {
 		return fmt.Errorf("failed to create migration driver: %w", err)
 	}
-	m, err := migrate.NewWithInstance("iofs", source, "postgres", driver)
+	m, err := migrate.NewWithInstance("iofs", source, "pgx5", driver)
 	if err != nil {
 		return fmt.Errorf("failed to create migrate instance: %w", err)
 	}
@@ -105,11 +111,11 @@ func availableMigrations() ([]MigrationInfo, error) {
 
 // MigrationStatus reports applied vs pending sched-DB migrations (#256). It is
 // strictly READ-ONLY: it reads golang-migrate's schema_migrations tracking row
-// directly (guarded by to_regclass) rather than via postgres.WithInstance, which
-// would CREATE that table as a side effect — so it applies nothing and creates
-// nothing, and is safe to call against a fresh database (every migration is then
-// reported pending). The context bounds both queries so a hung DB (or a
-// disconnected HTTP client) can't block indefinitely.
+// directly (guarded by to_regclass) rather than via the migrate driver's
+// WithInstance, which would CREATE that table as a side effect — so it applies
+// nothing and creates nothing, and is safe to call against a fresh database
+// (every migration is then reported pending). The context bounds both queries so
+// a hung DB (or a disconnected HTTP client) can't block indefinitely.
 func MigrationStatus(ctx context.Context, conn *sql.DB) (MigrationReport, error) {
 	report := MigrationReport{DB: "sched", Runner: "golang-migrate", MigrationTable: "schema_migrations"}
 	available, err := availableMigrations()

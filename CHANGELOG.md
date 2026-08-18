@@ -90,6 +90,18 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **`TaskStreamFrame` was missing five fields the task stream actually sends,
+  failing the TypeScript build.** `subagentProgressFrame`
+  (`internal/runner/task_stream.go`) forwards `success`, `tokens`,
+  `duration_ms`, `note`, and `task` on `subagent_progress` frames — emitted
+  by `childProgress.started` / `.finished` — but the client-side type
+  declared none of them, so a frame literal naming `success` was a type
+  error. `npx tsc --noEmit` already
+  reported it; `next build` did not type-check the test file that hit it, so
+  the error sat latent until Next 16.3.0 widened the build's type-check
+  scope and turned it into a red `Web lint / test / build`. The type now
+  matches the projection's key list.
+
 - **Teams are settable from the UI, so projects can actually be shared
   (#1157).** Two bugs made the shipped team/projects feature unreachable on a
   fresh box:
@@ -163,6 +175,45 @@ prior versions are listed because none have shipped.
   could stream an unbounded body into `json.Decode`).
 
 ### Security
+
+- **Dropped `github.com/lib/pq` from the build, unblocking the govulncheck
+  gate.** Seven advisories landed against lib/pq — GO-2026-6166 (GSS
+  authentication completes without mutual proof), GO-2026-6168 (unbounded SCRAM
+  iteration count → CPU DoS), GO-2026-6169 (wrong `.pgpass` credential
+  disclosed via `hostaddr`), GO-2026-6170/6171 (panics on malformed backend
+  frames and RowDescription/DataRow messages), and GO-2026-6172/6173 (memory
+  exhaustion before frame-length validation). All seven are `Fixed in: N/A`:
+  lib/pq is unmaintained, so no version bump could clear them, and every one was
+  call-graph-reachable — `go run golang.org/x/vuln/cmd/govulncheck@latest ./...`
+  failed, taking `CI` on `main` red with it.
+
+  fleet already opened every connection with pgx (`jackc/pgx/v5/stdlib`), so
+  lib/pq survived only in two vestigial roles, both now gone:
+
+  - `pq.Array` in `internal/store`, as a bind wrapper and a scan destination.
+    Binding needed no wrapper at all — the pgx stdlib driver implements
+    `driver.NamedValueChecker`, so a plain `[]string` is encoded as a Postgres
+    array. Scanning is the asymmetric half: `database/sql` receives a `text[]`
+    as pgx's array *literal* and cannot convert it to `*[]string`, so the new
+    `textArray` scanner delegates to pgx's own array codec rather than
+    hand-rolling a literal parser — labels are user-supplied and may contain
+    separators, quotes, backslashes, braces, or the bare word `NULL`. Absent-value
+    semantics are unchanged: a nil slice still binds as SQL NULL and an empty
+    slice as `{}`.
+  - golang-migrate's `database/postgres` driver, which imports lib/pq
+    transitively. `internal/sched/db` now selects that driver's pgx/v5 fork. The
+    two agree on everything fleet depends on — the same `schema_migrations` table
+    (`version bigint primary key, dirty boolean`) and the same
+    `GenerateAdvisoryLockId`/`pg_advisory_lock` key, so the migration lock still
+    mutually excludes across a mixed-version rollout — and it puts the whole
+    binary on the one Postgres driver it was already using.
+
+  `go list -deps ./...` now reports zero packages reaching lib/pq (it remains in
+  `go.mod` as an unbuilt `// indirect` requirement of the module graph), and
+  govulncheck reports no called vulnerabilities. New tests in
+  `internal/store/labels_test.go` pin the `text[]` round trip against exactly the
+  label values that would break a naive parser.
+
 
 - **HTTP API hardening (#1112).** Webhook transport errors no longer
   leak the full URL (path + query secrets) into logs or the admin Test
