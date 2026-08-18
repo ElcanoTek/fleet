@@ -100,6 +100,11 @@ claiming a guarantee the code no longer makes (honesty-in-docs invariant).
 - The columns are additive with safe defaults (`member`, `team_id NULL`,
   `team_visible FALSE`), so existing rows and the byte-for-byte default behavior
   are unchanged until an admin assigns a role/team.
+- **Assignment was admin-only, which proved to be a dead end** on a box whose
+  only admin came from `ADMIN_EMAILS`; [ADR-0047](0047-self-serve-team-membership.md)
+  splits it — creating and leaving a team are self-serve (`PUT /me/team`), while
+  joining a team that already has members stays an admin grant. The read gates
+  above are unchanged.
 
 ## Alternatives considered
 

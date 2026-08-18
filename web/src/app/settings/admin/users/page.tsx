@@ -287,18 +287,24 @@ export default function AdminUsersPage() {
     u: AdminUser,
     next: { role: string; team_id: string; ops_role?: string },
   ) => {
+    // Send ONLY what changed. Resending an unchanged role used to make a
+    // self-edit look like a self-demotion upstream — an ADMIN_EMAILS bootstrap
+    // admin (whose users.role is the default "member") could not set their own
+    // team at all (#1157). The server-side guard is narrowed too; this keeps
+    // the request honest about what the admin actually touched.
+    //
+    // ops_role rides along on the same rule: an explicit write pins an
+    // ops-plane row, and untouched accounts should keep following the implied
+    // chat-admin semantics.
+    const body: Record<string, string> = {};
+    if (next.role !== u.role) body.role = next.role;
+    if (next.team_id !== u.team_id) body.team_id = next.team_id;
+    if (next.ops_role !== undefined && next.ops_role !== opsRoleOf(u)) {
+      body.ops_role = next.ops_role;
+    }
+    if (Object.keys(body).length === 0) return; // nothing to do
     setRowStatus((s) => ({ ...s, [u.email]: "saving" }));
     try {
-      // ops_role rides along only when it actually changed: an explicit write
-      // pins an ops-plane row, and untouched accounts should keep following
-      // the implied chat-admin semantics.
-      const body: Record<string, string> = {
-        role: next.role,
-        team_id: next.team_id,
-      };
-      if (next.ops_role !== undefined && next.ops_role !== opsRoleOf(u)) {
-        body.ops_role = next.ops_role;
-      }
       const res = await fetch(
         `/api/admin/users/${encodeURIComponent(u.email)}`,
         {

@@ -195,6 +195,97 @@ func (s *Store) SessionEpoch(ctx context.Context, email string) (string, error) 
 	return epoch, nil
 }
 
+// ErrTeamExists reports a self-serve team write that would have JOINED an
+// existing trust group. SetOwnTeam returns it instead of writing, because a
+// shared team_id is exactly what exposes team-visible conversations and
+// team-shared projects (ADR-0013): letting anyone type an existing team name
+// would turn the opt-in trust group into an open door. Creating a fresh team
+// and leaving one stay self-serve; joining is an admin action.
+var ErrTeamExists = errors.New("team already exists")
+
+// maxTeamNameLen bounds the free-text label so a stray paste cannot become a
+// team name that no UI can render or match. The column is unconstrained TEXT;
+// this is the one place a user (rather than an admin) writes it.
+const maxTeamNameLen = 64
+
+// SetOwnTeam is the self-serve half of team assignment: a caller sets its OWN
+// users.team_id, so a fresh box can form a team without an admin round-trip
+// (#1157). The privacy gate lives here:
+//
+//   - clearing (empty teamID) always succeeds — leaving a trust group takes
+//     access away, never grants it;
+//   - re-stating the team you are already in is an idempotent no-op;
+//   - a new name succeeds only when NO other user and NO team-shared project
+//     already carries it (case-insensitively) — that is a create, not a join;
+//   - otherwise the write is refused with ErrTeamExists.
+//
+// allowExisting lifts the gate for admins, who already have the unrestricted
+// SetUserRoleTeam path and are the intended way to add someone to an existing
+// team.
+func (s *Store) SetOwnTeam(ctx context.Context, email, teamID string, allowExisting bool) (*User, error) {
+	email = normalizeEmail(email)
+	team := strings.TrimSpace(teamID)
+	if team == "" {
+		empty := ""
+		return s.SetUserRoleTeam(ctx, email, nil, &empty)
+	}
+	if len(team) > maxTeamNameLen {
+		return nil, fmt.Errorf("team name is too long (max %d characters)", maxTeamNameLen)
+	}
+	cur, err := s.GetUser(ctx, email)
+	if err != nil {
+		return nil, err
+	}
+	if strings.EqualFold(cur.TeamID, team) {
+		return cur, nil // already there — nothing to gate, nothing to write
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }() // no-op after a successful Commit
+
+	if !allowExisting {
+		// hashtext(lower(team)) serializes concurrent creates of the SAME name.
+		// A plain SELECT cannot lock rows that do not exist yet, so without this
+		// two simultaneous callers would each see an empty team and the second
+		// would silently land inside the first one's trust group.
+		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, strings.ToLower(team)); err != nil {
+			return nil, err
+		}
+		// Projects are checked alongside users because a team-shared project
+		// outlives its team's last member (they left, or the account was
+		// deleted) — its shared memory must not become claimable by name.
+		var taken bool
+		if err := tx.QueryRowContext(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM users    WHERE lower(team_id) = lower($1) AND email <> $2
+				UNION ALL
+				SELECT 1 FROM projects WHERE lower(team_id) = lower($1)
+			)`, team, email).Scan(&taken); err != nil {
+			return nil, err
+		}
+		if taken {
+			return nil, ErrTeamExists
+		}
+	}
+
+	res, err := tx.ExecContext(ctx,
+		`UPDATE users SET team_id = $2, updated_at = $3 WHERE email = $1`,
+		email, team, time.Now().Unix())
+	if err != nil {
+		return nil, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return nil, ErrUserNotFound
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return s.GetUser(ctx, email)
+}
+
 // SetUserRoleTeam applies a partial role/team update (PATCH /admin/users/{email},
 // #237): a nil pointer leaves that column untouched, a non-nil one writes it (an
 // empty team_id string clears the team → NULL). Validates role against the CHECK

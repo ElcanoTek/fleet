@@ -57,6 +57,7 @@ export function ProjectHome({
   onNewChat,
   onSaveInstructions,
   onUpdateSettings,
+  myTeam,
   onDelete,
 }: {
   project: Project;
@@ -75,6 +76,10 @@ export function ProjectHome({
     name?: string;
     team_shared?: boolean;
   }) => Promise<boolean>;
+  // The viewer's own team (#1157): "" = not in a team, so team sharing cannot
+  // work yet and the dialog says where to fix that instead of letting the
+  // toggle 400. undefined = not read yet — the copy stays neutral.
+  myTeam?: string;
   onDelete: () => void;
 }) {
   const [files, setFiles] = useState<ProjectFileEntry[] | null>(null);
@@ -424,14 +429,20 @@ export function ProjectHome({
               aria-label="Project name"
               className="mb-4 w-full rounded-md border border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-2.5 py-2 text-[0.875rem] text-[var(--color-text-primary)] outline-none focus-visible:border-[var(--color-border-strong)]"
             />
-            <label className="mb-4 flex items-center gap-2 text-[0.85rem] text-[var(--color-text-primary)]">
+            <label className="mb-1 flex items-center gap-2 text-[0.85rem] text-[var(--color-text-primary)]">
               <input
                 type="checkbox"
                 checked={sharedDraft}
+                disabled={myTeam === ""}
                 onChange={(e) => setSharedDraft(e.target.checked)}
               />
-              Share with my team
+              Share with my team{myTeam ? ` (${myTeam})` : ""}
             </label>
+            <p className="mb-4 text-[0.75rem] leading-[1.5] text-[var(--color-text-muted)]">
+              {myTeam === ""
+                ? "You are not in a team yet — create one in Settings → Team, then share this project with it."
+                : "Members can chat in the project and read/write its shared memory; only you can edit or delete it."}
+            </p>
             <div className="flex items-center justify-between">
               <button
                 type="button"

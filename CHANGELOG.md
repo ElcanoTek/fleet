@@ -17,7 +17,109 @@ prior versions are listed because none have shipped.
 
 ## [Unreleased]
 
+### Changed
+
+- **The strong/escalation tier is back to `openai/gpt-5.6-sol`** (OpenAI: GPT-5.6
+  Sol), reverting the one-release move to `x-ai/grok-4.6` (#1040). This is what
+  `suggest_advanced_model`, the spreadsheet nudge, and the task fallback resolve
+  to. Moved in lockstep across the mirrors the contract in `modelAliases.ts`
+  names: `ADVANCED_MODEL` / `ADVANCED_MODEL_LABEL`, the picker's `SEED_MODELS`,
+  the Operations Center's `DEFAULT_FALLBACK_MODEL`, `agentcore.DefaultMaxModel`
+  (`AdvancedModelSlug` follows it), and `splitLockdownModels`' strong-tier entry.
+
+  **This restores the escalation window: 500,000 → 1,050,000.** The Grok move
+  flagged that reduction as its one real regression, on the grounds that this is
+  the tier users escalate to for the hardest — and usually largest — problems.
+  It costs more at current catalog prices: $2.50/M prompt and $15.00/M
+  completion, versus $2.00 and $6.00 (1.25x input, 2.5x output). Modality and
+  tool/reasoning support are identical (text+image+file in).
+
+  Two things the swap changes that a slug-for-slug edit would have missed:
+
+  - **The tier is pinned again.** `x-ai/` has no `canonicalUpstream` entry (xAI
+    is its only upstream, so a pin buys nothing), but `openai/` carries a soft
+    pin — so the escalation path regains per-upstream prompt-cache locality. The
+    pin and served-upstream tests that asserted "the strong tier is unpinned"
+    now assert it pins to OpenAI, and the unpinned-family case they were
+    covering moved onto an explicit `x-ai/grok-4.6` slug so it stays covered.
+  - **The static cold-start context table needed a new row.**
+    `openai/gpt-5.6-sol` prefix-matches the existing `openai/gpt-5` → 400,000
+    entry, and the table returns the FIRST match — so without a longer-prefix
+    row ahead of it, a cold boot would compact the escalation target at 38% of
+    its real window. Added `openai/gpt-5.6` → 1,050,000 (the whole 5.6 family —
+    sol/luna/terra and their `-pro` variants — is 1,050,000). This row did not
+    exist the last time `sol` held the tier, so the under-sizing is fixed rather
+    than restored. The `x-ai/grok-4.6` → 500,000 row stays: the slug remains
+    selectable.
+
+  Also adds `google/gemini-3.7-flash` to the fake-LLM catalog's model list — one
+  of the hand-synced tier mirrors that the everyday-default swap (#1154) missed.
+
+- **The recommended everyday model is now `google/gemini-3.7-flash`** (Google:
+  Gemini 3.7 Flash), replacing `deepseek/deepseek-v4-flash-0731` in every
+  default slot: `agentcore.DefaultCoreModel` (chat + scheduled runs + the
+  Operations Center form), `config.DefaultTitleModel` (and the metadata /
+  memory / recurring-task / library-prompt models that chain off it), the
+  lockdown allow-list default, and the frontend `DEFAULT_MODEL` +
+  seeded picker row.
+
+  Routing changes shape with it. DeepSeek needed a *soft* pin plus an
+  `fp8AndAbove` floor because 28 OpenRouter endpoints served that family at
+  fp4-to-fp8; Google serves this family alone, so `canonicalUpstream` already
+  pins it **strictly** (`Only`, no fallbacks) and it needs no floor — there is
+  no pool to vary precision across. The DeepSeek pin and floor stay for
+  operators who still select those slugs. A new test,
+  `TestDefaultCoreModelCannotBeServedAtArbitraryPrecision`, asserts the property
+  rather than the lab — whichever family holds the default slot must be either
+  strictly pinned or floored — so a future swap cannot quietly drop the
+  guarantee.
+
+  The static cold-start context table gains an exact-slug entry at 1,048,576.
+  It is deliberately not a `google/gemini-3` family prefix: the Nano Banana
+  image variants in that family are 65K–131K, and an over-large window is worse
+  than a missing one (a missing entry falls back to the conservative 200K and
+  merely compacts early; an over-large one feeds the upstream more than it
+  accepts and hard-errors).
+
+  **Cost note:** Gemini 3.7 Flash is priced above the model it replaces
+  ($0.375/M prompt and $1.875/M completion, versus $0.14 and $0.28), so
+  everyday spend rises unless a deployment overrides the slot. It buys a
+  multimodal default (text+image+file+audio+video in, versus text-only) at the
+  same 1M-class context window.
+
+
 ### Fixed
+
+- **Teams are settable from the UI, so projects can actually be shared
+  (#1157).** Two bugs made the shipped team/projects feature unreachable on a
+  fresh box:
+
+  - The admin Users tab PATCHes `role` and `team_id` together, and
+    `PATCH /admin/users/{email}` refused *any* self-PATCH whose role was not
+    `admin`. An `ADMIN_EMAILS` bootstrap admin has the default
+    `users.role = 'member'`, so every attempt that admin made to set their **own**
+    team was rejected with "refusing to demote your own account" — the first
+    operator of a box could not create a team at all. The guard now fires only on
+    an actual demotion (self, new role ≠ admin, current DB role = admin, and not
+    in `ADMIN_EMAILS` — the env grant survives any column write), and the Users
+    tab sends only the fields the admin changed.
+  - With no team, "Share with my team" 400s, and the message said "ask an
+    admin" — pointing back at the broken path.
+
+  Team membership is now split by what the write grants (ADR-0047):
+  **creating a team and leaving one are self-serve** — `PUT /me/team`
+  (`{"team_id": "platform"}`, `""` leaves), plus `GET /me` for
+  `{email, role, team_id, admin}` — while **joining a team that already has
+  members** (or that owns a team-shared project) is refused with `409` and stays
+  an admin grant, because a shared `team_id` is what exposes team-shared projects
+  and team-visible conversations. The check holds a per-name advisory lock so two
+  concurrent creates of the same name cannot silently merge, and reserves names
+  held by team-shared projects so orphaned shared memory is not claimable.
+
+  New UI: **Settings → Team** (see your team, create one, leave it, and what a
+  team unlocks); the Projects modal offers an inline "create team" where the
+  unusable share checkbox used to be; the project-home settings dialog names the
+  team it shares with, or points at Settings → Team when there is none.
 
 - **Admin pipeline-metrics and first-run log archival no longer load
   every payload into memory (#1122).** `GET /admin/pipeline-metrics`

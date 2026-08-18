@@ -199,6 +199,11 @@ type chatStore interface {
 	// provisioned account, and PATCH a single account's role/team.
 	ListUsers(ctx context.Context) ([]store.User, error)
 	SetUserRoleTeam(ctx context.Context, email string, role, teamID *string) (*store.User, error)
+	// SetOwnTeam is the member-facing team write (#1157): the caller sets its
+	// OWN team_id. Creating a team and leaving one are self-serve; joining a
+	// team that already has members is refused with store.ErrTeamExists unless
+	// allowExisting (admins). See internal/httpapi/me.go.
+	SetOwnTeam(ctx context.Context, email, teamID string, allowExisting bool) (*store.User, error)
 	RenameTeam(ctx context.Context, from, to string) (usersUpdated, projectsUpdated int64, err error)
 	// CreateUser/DeleteUser/UpdatePassword complete the admin Users tab CRUD so
 	// user management no longer requires CLI access to the box (`fleet admin

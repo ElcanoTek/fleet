@@ -1,7 +1,7 @@
 "use client";
 
 // SetNav — the settings area's sticky left sub-nav (the design's .set-nav).
-// General · Connections · Skills, plus an expandable Admin parent whose
+// General · Team · Connections · Skills, plus an expandable Admin parent whose
 // children (Overview · Server · Doctor · Users · Features · Providers · Notifications) indent
 // behind a left border and fade in. Admin renders only for admins (resolved
 // client-side by useIsAdmin; every admin API stays server-gated regardless).
@@ -19,6 +19,7 @@ import { useIsAdmin } from "./useIsAdmin";
 
 const SECTIONS = [
   { href: "/settings", label: "General" },
+  { href: "/settings/team", label: "Team" },
   { href: "/settings/connections", label: "Connections" },
   { href: "/settings/skills", label: "Skills" },
 ] as const;
