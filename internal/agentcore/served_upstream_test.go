@@ -38,13 +38,13 @@ func TestOpenrouterServedProvider(t *testing.T) {
 // A run served by its canonical upstream is not a fallback.
 func TestUpdateUsage_CanonicalUpstreamIsNotAFallback(t *testing.T) {
 	o := newOrchestrationState(NewLogSession(), 50)
-	o.updateUsage(DefaultCoreModel, fantasy.Usage{InputTokens: 10, OutputTokens: 5}, orMetadata("DeepSeek"))
+	o.updateUsage(DefaultCoreModel, fantasy.Usage{InputTokens: 10, OutputTokens: 5}, orMetadata("Google"))
 
 	if o.ServedFallback {
 		t.Error("ServedFallback = true for a step served by the pinned upstream")
 	}
-	if o.LastServedUpstream != "DeepSeek" {
-		t.Errorf("LastServedUpstream = %q, want %q", o.LastServedUpstream, "DeepSeek")
+	if o.LastServedUpstream != "Google" {
+		t.Errorf("LastServedUpstream = %q, want %q", o.LastServedUpstream, "Google")
 	}
 }
 
@@ -63,22 +63,23 @@ func TestUpdateUsage_RecordsUpstreamFallback(t *testing.T) {
 
 	// The flag latches: a later step returning to the canonical upstream must
 	// not erase the fact that part of the run was served elsewhere.
-	o.updateUsage(DefaultCoreModel, fantasy.Usage{InputTokens: 10, OutputTokens: 5}, orMetadata("DeepSeek"))
+	o.updateUsage(DefaultCoreModel, fantasy.Usage{InputTokens: 10, OutputTokens: 5}, orMetadata("Google"))
 	if !o.ServedFallback {
 		t.Error("ServedFallback cleared after the run returned to the pinned upstream; it must latch")
 	}
-	if o.LastServedUpstream != "DeepSeek" {
-		t.Errorf("LastServedUpstream = %q, want the most recent upstream %q", o.LastServedUpstream, "DeepSeek")
+	if o.LastServedUpstream != "Google" {
+		t.Errorf("LastServedUpstream = %q, want the most recent upstream %q", o.LastServedUpstream, "Google")
 	}
 }
 
 // An UNPINNED family has no canonical upstream, so no route is a "fallback".
 func TestUpdateUsage_UnpinnedFamilyNeverFlagsFallback(t *testing.T) {
 	o := newOrchestrationState(NewLogSession(), 50)
-	o.updateUsage(DefaultMaxModel, fantasy.Usage{InputTokens: 10, OutputTokens: 5}, orMetadata("xAI"))
+	const unpinned = "x-ai/grok-4.6" // no canonicalUpstream entry: xAI is its only upstream
+	o.updateUsage(unpinned, fantasy.Usage{InputTokens: 10, OutputTokens: 5}, orMetadata("xAI"))
 
 	if o.ServedFallback {
-		t.Errorf("ServedFallback = true for unpinned model %q", DefaultMaxModel)
+		t.Errorf("ServedFallback = true for unpinned model %q", unpinned)
 	}
 	if o.LastServedUpstream != "xAI" {
 		t.Errorf("LastServedUpstream = %q, want %q", o.LastServedUpstream, "xAI")
@@ -89,10 +90,10 @@ func TestUpdateUsage_UnpinnedFamilyNeverFlagsFallback(t *testing.T) {
 // rather than clobbering a previously recorded one with "".
 func TestUpdateUsage_AbsentMetadataPreservesAttribution(t *testing.T) {
 	o := newOrchestrationState(NewLogSession(), 50)
-	o.updateUsage(DefaultCoreModel, fantasy.Usage{InputTokens: 10, OutputTokens: 5}, orMetadata("DeepSeek"))
+	o.updateUsage(DefaultCoreModel, fantasy.Usage{InputTokens: 10, OutputTokens: 5}, orMetadata("Google"))
 	o.updateUsage(DefaultCoreModel, fantasy.Usage{InputTokens: 10, OutputTokens: 5}, fantasy.ProviderMetadata{})
 
-	if o.LastServedUpstream != "DeepSeek" {
-		t.Errorf("LastServedUpstream = %q, want the last known upstream %q", o.LastServedUpstream, "DeepSeek")
+	if o.LastServedUpstream != "Google" {
+		t.Errorf("LastServedUpstream = %q, want the last known upstream %q", o.LastServedUpstream, "Google")
 	}
 }

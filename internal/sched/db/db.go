@@ -1468,23 +1468,36 @@ func (db *Database) UpdateTask(ctx context.Context, task *models.Task) error {
 	return db.AddTask(ctx, task)
 }
 
-// UpdateTasksModelBatch updates model + fallback_model of scheduled tasks.
-func (db *Database) UpdateTasksModelBatch(ctx context.Context, model, fallbackModel, fromModel string) (int, error) {
+// UpdateTasksModelBatch updates the pinned model of scheduled tasks.
+// fallbackModel is optional: nil leaves existing fallback_model values
+// untouched; a non-nil empty string clears them to NULL; a non-nil
+// non-empty string sets them. Callers must distinguish "flag not
+// provided" from "explicitly clear" (#1120).
+func (db *Database) UpdateTasksModelBatch(ctx context.Context, model string, fallbackModel *string, fromModel string) (int, error) {
 	var res sql.Result
 	var err error
-	// fallback_model is nullable TEXT: an empty fallback must persist as NULL (not
-	// ""), matching the per-task nullableString path so scanTask reads it back as a
-	// nil *string. model stays raw — callers (handler + CLI) require it non-empty.
-	if fromModel != "" {
+	status := string(models.TaskStatusScheduled)
+	switch {
+	case fallbackModel == nil && fromModel != "":
+		res, err = db.conn.ExecContext(ctx, `
+			UPDATE tasks SET model = $1
+			WHERE status = $2 AND model = $3`,
+			model, status, fromModel)
+	case fallbackModel == nil:
+		res, err = db.conn.ExecContext(ctx, `
+			UPDATE tasks SET model = $1
+			WHERE status = $2`,
+			model, status)
+	case fromModel != "":
 		res, err = db.conn.ExecContext(ctx, `
 			UPDATE tasks SET model = $1, fallback_model = $2
 			WHERE status = $3 AND model = $4`,
-			model, nullableString(fallbackModel), string(models.TaskStatusScheduled), fromModel)
-	} else {
+			model, nullableString(*fallbackModel), status, fromModel)
+	default:
 		res, err = db.conn.ExecContext(ctx, `
 			UPDATE tasks SET model = $1, fallback_model = $2
 			WHERE status = $3`,
-			model, nullableString(fallbackModel), string(models.TaskStatusScheduled))
+			model, nullableString(*fallbackModel), status)
 	}
 	if err != nil {
 		return 0, err
@@ -2466,24 +2479,88 @@ func (db *Database) GetRunLogEntry(ctx context.Context, taskID uuid.UUID, entryI
 	return &session, nil
 }
 
+// logScanChunk is the keyset page size for ForEachLog / GetAllLogs.
+// One page of decoded sessions is the peak payload memory (#1122).
+const logScanChunk = 64
+
+// archiveScanChunk is the keyset page size for ArchiveOldLogs. Each
+// candidate holds a live (uncompressed) payload, so the page is small
+// on purpose — first-run archival of a year-old table stays bounded (#1122).
+const archiveScanChunk = 32
+
 // GetAllLogs gets all stored log sessions, transparently inflating archived
-// payloads (#272).
+// payloads (#272). Implemented via ForEachLog so the scan itself is
+// keyset-paginated; the returned map still holds every session (test /
+// runner callers have small tables). Admin pipeline-metrics uses
+// ForEachLog directly so it never materializes the full set (#1122).
 func (db *Database) GetAllLogs(ctx context.Context) (map[uuid.UUID]*models.LogSession, error) {
-	rows, err := db.conn.QueryContext(ctx, "SELECT task_id, session_data, session_data_gz, session_compression FROM logs")
+	logs := make(map[uuid.UUID]*models.LogSession)
+	err := db.ForEachLog(ctx, func(taskID uuid.UUID, session *models.LogSession) error {
+		logs[taskID] = session
+		return nil
+	})
+	return logs, err
+}
+
+// ForEachLog visits every stored log session in task_id order, inflating
+// archived payloads. Sessions are fetched in keyset pages of logScanChunk
+// so peak memory is one page + the callback's own working set (#1122).
+// A decode/unmarshal failure skips that row (same as GetAllLogs).
+func (db *Database) ForEachLog(ctx context.Context, fn func(uuid.UUID, *models.LogSession) error) error {
+	var after uuid.UUID
+	haveAfter := false
+	for {
+		n, last, err := db.scanLogPage(ctx, haveAfter, after, fn)
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return nil
+		}
+		after = last
+		haveAfter = true
+		if n < logScanChunk {
+			return nil
+		}
+	}
+}
+
+func (db *Database) scanLogPage(ctx context.Context, haveAfter bool, after uuid.UUID, fn func(uuid.UUID, *models.LogSession) error) (int, uuid.UUID, error) {
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if haveAfter {
+		rows, err = db.conn.QueryContext(ctx, `
+			SELECT task_id, session_data, session_data_gz, session_compression
+			FROM logs
+			WHERE task_id > $1
+			ORDER BY task_id
+			LIMIT $2`, after, logScanChunk)
+	} else {
+		rows, err = db.conn.QueryContext(ctx, `
+			SELECT task_id, session_data, session_data_gz, session_compression
+			FROM logs
+			ORDER BY task_id
+			LIMIT $1`, logScanChunk)
+	}
 	if err != nil {
-		return nil, err
+		return 0, uuid.Nil, err
 	}
 	defer rows.Close()
 
-	logs := make(map[uuid.UUID]*models.LogSession)
+	n := 0
+	var last uuid.UUID
 	for rows.Next() {
 		var taskID uuid.UUID
 		var sessionData *string
 		var gz []byte
 		var codec sql.NullString
 		if err := rows.Scan(&taskID, &sessionData, &gz, &codec); err != nil {
-			return nil, err
+			return n, last, err
 		}
+		last = taskID
+		n++
 		raw, err := db.decodeLogRow(sessionData, gz, codec.String)
 		if err != nil {
 			continue
@@ -2492,9 +2569,11 @@ func (db *Database) GetAllLogs(ctx context.Context) (map[uuid.UUID]*models.LogSe
 		if err := json.Unmarshal(raw, &session); err != nil {
 			continue
 		}
-		logs[taskID] = &session
+		if err := fn(taskID, &session); err != nil {
+			return n, last, err
+		}
 	}
-	return logs, rows.Err()
+	return n, last, rows.Err()
 }
 
 // cleanupEligibleSubquery selects terminal task ids eligible for pruning (#252):
@@ -2628,24 +2707,34 @@ type logArchiveCandidate struct {
 	raw    []byte
 }
 
-// archiveCandidates reads the live (un-archived) log payloads of terminal tasks
-// completed before cutoff, fully draining and closing the cursor before it
-// returns so the caller can issue UPDATEs on the same (possibly single-conn)
-// pool without deadlocking.
-func (db *Database) archiveCandidates(ctx context.Context, cutoff time.Time) ([]logArchiveCandidate, error) {
-	rows, err := db.conn.QueryContext(ctx, `
+// archiveCandidatesPage reads one keyset page of live (un-archived) log
+// payloads for terminal tasks completed before cutoff. The cursor is fully
+// drained and closed before return so the caller can UPDATE on the same
+// (possibly single-conn) pool without deadlocking. after, when non-nil,
+// is the exclusive lower bound on task_id (#1122).
+func (db *Database) archiveCandidatesPage(ctx context.Context, cutoff time.Time, after *uuid.UUID, limit int) ([]logArchiveCandidate, error) {
+	q := `
 		SELECT l.task_id, l.session_data
 		FROM logs l
 		JOIN tasks t ON t.id = l.task_id
 		WHERE t.status IN ($1, $2, $3)
 		  AND t.completed_at < $4
 		  AND l.session_data IS NOT NULL
-		  AND l.session_compression IS NULL`,
+		  AND l.session_compression IS NULL`
+	args := []any{
 		string(models.TaskStatusSuccess),
 		string(models.TaskStatusError),
 		string(models.TaskStatusCancelled),
 		cutoff,
-	)
+	}
+	if after != nil {
+		q += ` AND l.task_id > $5 ORDER BY l.task_id LIMIT $6`
+		args = append(args, *after, limit)
+	} else {
+		q += ` ORDER BY l.task_id LIMIT $5`
+		args = append(args, limit)
+	}
+	rows, err := db.conn.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -2675,42 +2764,53 @@ func (db *Database) archiveCandidates(ctx context.Context, cutoff time.Time) ([]
 // raw-minus-stored sizes; ~always positive for real log payloads). Each row is
 // committed independently: a row's archive write and its DB update are one
 // statement, so there is no window where the payload exists in neither column.
+// Candidates are fetched in keyset pages of archiveScanChunk so first-run
+// archival of a large table stays memory-bounded (#1122).
 func (db *Database) ArchiveOldLogs(ctx context.Context, days int) (int, int64, error) {
 	if days <= 0 {
 		return 0, 0, nil
 	}
 	cutoff := time.Now().UTC().AddDate(0, 0, -days)
 
-	candidates, err := db.archiveCandidates(ctx, cutoff)
-	if err != nil {
-		return 0, 0, err
-	}
-
 	var archived int
 	var bytesSaved int64
-	for _, c := range candidates {
-		stored, codec, err := encodeArchive(c.raw, db.archiveKey)
+	var after *uuid.UUID
+	for {
+		candidates, err := db.archiveCandidatesPage(ctx, cutoff, after, archiveScanChunk)
 		if err != nil {
 			return archived, bytesSaved, err
 		}
-		// One statement flips the row from live to archived: set the compressed
-		// payload + codec and null session_data together. The guard re-checks
-		// session_compression IS NULL so two concurrent sweeps can't double-archive.
-		res, err := db.conn.ExecContext(ctx, `
-			UPDATE logs
-			SET session_data = NULL, session_data_gz = $1, session_compression = $2
-			WHERE task_id = $3 AND session_compression IS NULL`,
-			stored, codec, c.taskID)
-		if err != nil {
-			return archived, bytesSaved, err
+		if len(candidates) == 0 {
+			return archived, bytesSaved, nil
 		}
-		if n, _ := res.RowsAffected(); n == 0 {
-			continue // raced by another sweep; leave counters untouched
+		for _, c := range candidates {
+			stored, codec, err := encodeArchive(c.raw, db.archiveKey)
+			if err != nil {
+				return archived, bytesSaved, err
+			}
+			// One statement flips the row from live to archived: set the compressed
+			// payload + codec and null session_data together. The guard re-checks
+			// session_compression IS NULL so two concurrent sweeps can't double-archive.
+			res, err := db.conn.ExecContext(ctx, `
+				UPDATE logs
+				SET session_data = NULL, session_data_gz = $1, session_compression = $2
+				WHERE task_id = $3 AND session_compression IS NULL`,
+				stored, codec, c.taskID)
+			if err != nil {
+				return archived, bytesSaved, err
+			}
+			if n, _ := res.RowsAffected(); n == 0 {
+				continue // raced by another sweep; leave counters untouched
+			}
+			archived++
+			bytesSaved += int64(len(c.raw) - len(stored))
+			id := c.taskID
+			after = &id
 		}
-		archived++
-		bytesSaved += int64(len(c.raw) - len(stored))
+		if len(candidates) < archiveScanChunk {
+			return archived, bytesSaved, nil
+		}
 	}
-	return archived, bytesSaved, nil
 }
 
 // Transaction support for atomic operations

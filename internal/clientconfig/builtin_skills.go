@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 // Fleet ships a small pack of generally-useful Agent Skills baked into the
@@ -27,31 +28,101 @@ import (
 //   skills_builtin: false      # opt out of the built-in pack entirely
 //   skills_hidden: [name, …]   # drop individual built-in skills
 //
-// The merged dir lives under os.TempDir() keyed by the bundle path — stable
-// for the life of the box (prompt paths stay byte-identical across turns, per
-// docs/PROMPT-CACHE-CONTRACT.md) and rebuilt from sources on every Load and on
-// every Skills() read (cheap fingerprint check), which preserves the
-// edit-a-skill-in-place live-reload contract for bundle skills.
+// The merged dir lives under the fleet data dir (`$FLEET_DATA_DIR/skills-merged`,
+// falling back to the user cache, never world-writable `/tmp/fleet-skills`)
+// keyed by the bundle path — stable for the life of the box (prompt paths
+// stay byte-identical across turns, per docs/PROMPT-CACHE-CONTRACT.md) and
+// rebuilt from sources on every Load and on every Skills() read (cheap
+// fingerprint check), which preserves the edit-a-skill-in-place live-reload
+// contract for bundle skills. Every reuse verifies the tree is owned by
+// this process and not group/world-writable, so a pre-planted attacker
+// directory is refused rather than adopted (#1121).
 
 //go:embed all:builtin_skills
 var builtinSkillsFS embed.FS
 
 const builtinSkillsRoot = "builtin_skills"
 
+// mergedSkillsDirName is the stable subdirectory under the data/cache root
+// that holds per-bundle merged trees. Kept short so prompt-cache paths stay
+// compact.
+const mergedSkillsDirName = "skills-merged"
+
 // materializeMergedSkills builds (or refreshes) the merged skills dir for the
 // bundle and returns its path. A failure is returned to the caller — Load
 // degrades to the bundle's own skills dir with a loud log rather than failing
-// the boot (skills are a capability, not a boot invariant).
+// the boot (skills are a capability, not a boot invariant). An untrusted
+// pre-existing path is NEVER adopted (#1121).
 func materializeMergedSkills(bundleSkillsDir string, builtinEnabled bool, hidden []string) (string, error) {
 	if !builtinEnabled {
 		return bundleSkillsDir, nil
 	}
+	base := mergedSkillsBase()
+	if err := ensureTrustedDir(base); err != nil {
+		return bundleSkillsDir, fmt.Errorf("merged-skills root: %w", err)
+	}
 	sum := sha256.Sum256([]byte(bundleSkillsDir))
-	merged := filepath.Join(os.TempDir(), "fleet-skills", hex.EncodeToString(sum[:6]))
+	merged := filepath.Join(base, hex.EncodeToString(sum[:6]))
 	if err := syncMergedSkills(bundleSkillsDir, merged, hidden); err != nil {
 		return bundleSkillsDir, err
 	}
 	return merged, nil
+}
+
+// mergedSkillsBase is the parent of per-bundle merged trees. Prefer the
+// operator's data dir (FLEET_DATA_DIR / CHAT_DATA_DIR) so the tree lives
+// next to the rest of fleet state, not under world-writable /tmp. Fall
+// back to the user cache, then a uid-scoped temp name — still never the
+// predictable shared /tmp/fleet-skills path (#1121).
+func mergedSkillsBase() string {
+	if d := strings.TrimSpace(os.Getenv("FLEET_DATA_DIR")); d != "" {
+		return filepath.Join(d, mergedSkillsDirName)
+	}
+	if d := strings.TrimSpace(os.Getenv("CHAT_DATA_DIR")); d != "" {
+		return filepath.Join(d, mergedSkillsDirName)
+	}
+	if cache, err := os.UserCacheDir(); err == nil && strings.TrimSpace(cache) != "" {
+		return filepath.Join(cache, "fleet", mergedSkillsDirName)
+	}
+	return filepath.Join(os.TempDir(), fmt.Sprintf("fleet-skills-%d", os.Geteuid()))
+}
+
+// ensureTrustedDir creates path if missing and refuses to use it unless it
+// is a real directory owned by this process and not group/world-writable.
+// A pre-existing attacker-owned or world-writable path is a hard error so
+// fleet never reads skill content out of a tree it did not create (#1121).
+func ensureTrustedDir(path string) error {
+	if err := os.MkdirAll(path, 0o755); err != nil { //nolint:gosec // world-readable by design: bind-mounted RO into the rootless sandbox, whose mapped user must traverse it (same rationale as tools/workspace.go)
+		return err
+	}
+	return verifyExistingDir(path)
+}
+
+// verifyExistingDir is the ssh-style ownership/mode check: Lstat (so a
+// symlink is not followed), must be a directory we own, must not be
+// group- or world-writable.
+func verifyExistingDir(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%s is a symlink; refusing to use an untrusted merged-skills path", path)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("%s exists and is not a directory", path)
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return fmt.Errorf("%s: cannot determine owner", path)
+	}
+	if int(stat.Uid) != os.Geteuid() {
+		return fmt.Errorf("%s is owned by uid %d, not the fleet process (uid %d)", path, stat.Uid, os.Geteuid())
+	}
+	if info.Mode().Perm()&0o022 != 0 {
+		return fmt.Errorf("%s is group/world-writable (%04o); refusing to use an untrusted merged-skills path", path, info.Mode().Perm())
+	}
+	return nil
 }
 
 // syncMergedSkills rebuilds merged from its two sources. It writes into a
@@ -64,7 +135,7 @@ func syncMergedSkills(bundleSkillsDir, merged string, hidden []string) error {
 		hiddenSet[strings.TrimSpace(h)] = true
 	}
 
-	if err := os.MkdirAll(merged, 0o755); err != nil { //nolint:gosec // world-readable by design: bind-mounted RO into the rootless sandbox, whose mapped user must traverse it (same rationale as tools/workspace.go)
+	if err := ensureTrustedDir(merged); err != nil {
 		return err
 	}
 

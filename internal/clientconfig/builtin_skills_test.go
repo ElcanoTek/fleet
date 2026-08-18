@@ -150,3 +150,94 @@ func TestMergedSkills(t *testing.T) {
 		}
 	})
 }
+
+// TestMergedSkillsLivesUnderDataDir proves the merged tree is no longer the
+// predictable /tmp/fleet-skills path (#1121).
+func TestMergedSkillsLivesUnderDataDir(t *testing.T) {
+	data := t.TempDir()
+	t.Setenv("FLEET_DATA_DIR", data)
+	merged, err := materializeMergedSkills(filepath.Join(t.TempDir(), "skills"), true, nil)
+	if err != nil {
+		t.Fatalf("materialize: %v", err)
+	}
+	wantPrefix := filepath.Join(data, mergedSkillsDirName)
+	if !strings.HasPrefix(merged, wantPrefix+string(os.PathSeparator)) && merged != wantPrefix {
+		t.Fatalf("merged path %q is not under data dir %q", merged, wantPrefix)
+	}
+	if strings.Contains(merged, filepath.Join("fleet-skills", "")) && strings.HasPrefix(merged, os.TempDir()) {
+		t.Fatalf("merged path still under shared /tmp: %q", merged)
+	}
+}
+
+func TestVerifyExistingDir_RejectsUnowned(t *testing.T) {
+	dir := os.TempDir()
+	if os.Geteuid() == 0 {
+		// Root owns everything it creates and typically owns /tmp too.
+		// Chown a planted dir to nobody so the uid check has something
+		// to refuse — the pre-owned-dir case (#1121).
+		dir = t.TempDir()
+		if err := os.Chown(dir, 65534, 65534); err != nil {
+			t.Skipf("chown nobody: %v", err)
+		}
+	}
+	if err := verifyExistingDir(dir); err == nil {
+		t.Fatalf("verifyExistingDir(%q) succeeded, want refuse", dir)
+	}
+}
+
+func TestEnsureTrustedDir_RejectsWorldWritable(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	if err := ensureTrustedDir(dir); err == nil {
+		t.Fatal("expected refuse of a world-writable directory")
+	}
+}
+
+func TestEnsureTrustedDir_RejectsSymlink(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "real")
+	if err := os.Mkdir(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureTrustedDir(link); err == nil {
+		t.Fatal("expected refuse of a symlink")
+	}
+}
+
+func TestEnsureTrustedDir_RejectsFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureTrustedDir(path); err == nil {
+		t.Fatal("expected refuse of a regular file")
+	}
+}
+
+func TestMaterializeMergedSkills_DoesNotAdoptUntrustedPath(t *testing.T) {
+	data := t.TempDir()
+	t.Setenv("FLEET_DATA_DIR", data)
+	planted := filepath.Join(data, mergedSkillsDirName)
+	if err := os.MkdirAll(planted, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(planted, 0o777); err != nil {
+		t.Fatal(err)
+	}
+
+	bundle := filepath.Join(t.TempDir(), "skills")
+	got, err := materializeMergedSkills(bundle, true, nil)
+	if err == nil {
+		t.Fatal("expected error for untrusted pre-existing path")
+	}
+	if got != bundle {
+		t.Fatalf("adopted %q instead of falling back to the bundle dir %q", got, bundle)
+	}
+}

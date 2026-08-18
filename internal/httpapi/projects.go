@@ -19,6 +19,12 @@ import (
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
 
+// errNoTeamForShare is the 400 a team_shared write gets from a caller with no
+// team. It names the self-serve fix (PUT /me/team, Settings → Team) rather than
+// only "ask an admin", which was a dead end on a box whose only admin came from
+// the ADMIN_EMAILS env allowlist (#1157).
+const errNoTeamForShare = "you are not in a team yet — create one in Settings → Team (or ask an admin to add you to an existing team), then share this project"
+
 // resolveUserTeam returns the requester's team_id ("" when unset/unknown).
 func (s *Server) resolveUserTeam(r *http.Request, user string) string {
 	u, err := s.store.GetUser(r.Context(), user)
@@ -96,7 +102,7 @@ func (s *Server) projects(w http.ResponseWriter, r *http.Request) {
 		if req.TeamShared != nil && *req.TeamShared {
 			team := s.resolveUserTeam(r, user)
 			if team == "" {
-				http.Error(w, "you are not in a team; ask an admin to set one before sharing a project", http.StatusBadRequest)
+				http.Error(w, errNoTeamForShare, http.StatusBadRequest)
 				return
 			}
 			p.TeamID = team
@@ -170,7 +176,7 @@ func (s *Server) projectByID(w http.ResponseWriter, r *http.Request) {
 			if *req.TeamShared {
 				team = s.resolveUserTeam(r, user)
 				if team == "" {
-					http.Error(w, "you are not in a team; ask an admin to set one before sharing a project", http.StatusBadRequest)
+					http.Error(w, errNoTeamForShare, http.StatusBadRequest)
 					return
 				}
 			}

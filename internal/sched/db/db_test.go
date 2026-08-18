@@ -946,9 +946,9 @@ func TestClaimNextPendingTask(t *testing.T) {
 	tx1.Rollback()
 }
 
-// TestUpdateTasksModelBatch covers the bulk model re-assignment primitive (#44):
-// the from_model filter (NULL-model tasks excluded), the affected count, and the
-// fix that an empty fallback persists as NULL (not "") so scanTask reads nil.
+// TestUpdateTasksModelBatch covers the bulk model re-assignment primitive (#44)
+// and the #1120 omit-vs-clear contract: nil fallback leaves existing values,
+// empty string clears them to NULL.
 func TestUpdateTasksModelBatch(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
@@ -965,23 +965,40 @@ func TestUpdateTasksModelBatch(t *testing.T) {
 		}
 	}
 
-	// from_model filter: only the two "old/model" rows change; "" fallback → NULL.
-	n, err := db.UpdateTasksModelBatch(ctx, "new/model", "", "old/model")
+	// from_model filter + omitted fallback: model changes, fallback_model kept.
+	n, err := db.UpdateTasksModelBatch(ctx, "new/model", nil, "old/model")
 	if err != nil {
 		t.Fatalf("UpdateTasksModelBatch: %v", err)
 	}
 	if n != 2 {
 		t.Fatalf("from_model filter updated %d, want 2 (other + nil-model excluded)", n)
 	}
-	for _, id := range []uuid.UUID{old1.ID, old2.ID} {
-		got, _ := db.GetTask(ctx, id)
-		if got.Model == nil || *got.Model != "new/model" {
-			t.Errorf("task %s model = %v, want new/model", id, got.Model)
-		}
-		if got.FallbackModel != nil {
-			t.Errorf("task %s empty fallback must persist as NULL (nil), got %q", id, *got.FallbackModel)
-		}
+	got1, _ := db.GetTask(ctx, old1.ID)
+	if got1.Model == nil || *got1.Model != "new/model" {
+		t.Errorf("task %s model = %v, want new/model", old1.ID, got1.Model)
 	}
+	if got1.FallbackModel == nil || *got1.FallbackModel != "fb/old" {
+		t.Errorf("omitted fallback must leave fb/old in place, got %v", got1.FallbackModel)
+	}
+	got2, _ := db.GetTask(ctx, old2.ID)
+	if got2.FallbackModel != nil {
+		t.Errorf("task with no fallback should stay nil, got %q", *got2.FallbackModel)
+	}
+
+	// Explicit empty fallback → NULL. The first call re-pinned these rows to
+	// new/model, so filter on that — and assert the count so a filter that
+	// matches nothing cannot fake a pass.
+	n, err = db.UpdateTasksModelBatch(ctx, "new/model", sp(""), "new/model")
+	if err != nil {
+		t.Fatalf("UpdateTasksModelBatch clear: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("clear updated %d, want 2", n)
+	}
+	if got, _ := db.GetTask(ctx, old1.ID); got.FallbackModel != nil {
+		t.Errorf("explicit empty fallback must persist as NULL, got %q", *got.FallbackModel)
+	}
+
 	// Untouched rows.
 	if got, _ := db.GetTask(ctx, other.ID); got.Model == nil || *got.Model != "other/model" {
 		t.Errorf("other-model task should be untouched, got %v", got.Model)
@@ -990,8 +1007,8 @@ func TestUpdateTasksModelBatch(t *testing.T) {
 		t.Errorf("nil-model task should be untouched (nil), got %v", got.Model)
 	}
 
-	// No from_model: all scheduled tasks re-assigned.
-	all, err := db.UpdateTasksModelBatch(ctx, "final/model", "fb/final", "")
+	// No from_model + explicit fallback: all scheduled tasks re-assigned.
+	all, err := db.UpdateTasksModelBatch(ctx, "final/model", sp("fb/final"), "")
 	if err != nil {
 		t.Fatalf("UpdateTasksModelBatch (all): %v", err)
 	}

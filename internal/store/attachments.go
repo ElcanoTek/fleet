@@ -7,8 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"time"
-
-	"github.com/lib/pq"
 )
 
 // SweepAttachments deletes regular files under dir whose mtime is older
@@ -231,7 +229,7 @@ func (s *Store) ConversationStorageMetaByIDs(ctx context.Context, ids []string) 
 	}
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, title, user_email, pinned, updated_at FROM conversations WHERE deleted_at IS NULL AND id = ANY($1)`,
-		pq.Array(ids),
+		ids,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("conversation storage meta: %w", err)

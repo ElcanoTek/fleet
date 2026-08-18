@@ -150,6 +150,11 @@ var canonicalUpstream = []struct {
 	strict        bool
 	quantizations []string
 }{
+	// Google serves this family alone, so the pin is STRICT (Only, no
+	// fallbacks) and needs no serving-precision floor — there is no second
+	// upstream to degrade onto. This family carries the recommended everyday
+	// default (DefaultCoreModel), so this is the hot path for ordinary chat
+	// turns and every scheduled run.
 	{"google/", upstreamProviderGoogle, true, nil},
 	{"anthropic/", upstreamProviderAnthropic, false, nil},
 	{"openai/", upstreamProviderOpenAI, false, nil},
@@ -161,13 +166,13 @@ var canonicalUpstream = []struct {
 	// on top of losing the per-upstream prompt cache. Order (not Only) keeps
 	// graceful degradation if the first-party endpoint is unavailable.
 	//
-	// The fp8 floor is what makes that degradation graceful rather than silent.
-	// This family is the recommended everyday default (DefaultCoreModel), so the
-	// fallback path is the hot path for ordinary chat turns, and an fp4 serving
-	// of a flash-tier model degrades in a way that reads as the model being
-	// broken (token-level misspellings, topic drift, runaway output) rather than
-	// as a routing event. DeepSeek's first-party endpoint is fp8, so the floor
-	// costs nothing on the preferred route.
+	// The fp8 floor is what makes that degradation graceful rather than silent:
+	// an fp4 serving of a flash-tier model degrades in a way that reads as the
+	// model being broken (token-level misspellings, topic drift, runaway output)
+	// rather than as a routing event. DeepSeek's first-party endpoint is fp8, so
+	// the floor costs nothing on the preferred route. This family is no longer
+	// the everyday default, but the pin and the floor stay: operators still
+	// select these slugs explicitly, and they are the reason it is safe to.
 	{"deepseek/", upstreamProviderDeepSeek, false, fp8AndAbove},
 }
 

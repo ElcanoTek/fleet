@@ -56,7 +56,7 @@ const (
 
 // DefaultTitleModel is the fallback for FLEET_TITLE_MODEL / CHAT_TITLE_MODEL.
 // Mirrors the frontend's DEFAULT_MODEL (the recommended everyday pick).
-const DefaultTitleModel = "deepseek/deepseek-v4-flash-0731"
+const DefaultTitleModel = "google/gemini-3.7-flash"
 
 // DefaultFromEmail is the fallback From address for outgoing mail. Neutral by
 // default; a deployment overrides via SENDGRID_FROM_EMAIL / MAILBUX_FROM_EMAIL.
@@ -603,10 +603,11 @@ type Config struct {
 	IPDenylist []*net.IPNet
 	// TrustedProxies is parsed from FLEET_TRUSTED_PROXIES (comma-separated IPs).
 	// Only when the immediate peer (r.RemoteAddr) is one of these does Fleet read
-	// the real client IP from X-Forwarded-For. Empty (the default) means
-	// X-Forwarded-For is NEVER consulted, so an untrusted client cannot spoof an
-	// allowlisted address via the header. Operators MUST explicitly opt in by
-	// naming their reverse-proxy (e.g. Caddy) IPs.
+	// the real client IP from X-Forwarded-For, walking the chain from the right
+	// and skipping hops that are themselves trusted proxies (#1111). Empty (the
+	// default) means X-Forwarded-For is NEVER consulted, so an untrusted client
+	// cannot spoof an allowlisted address via the header. Operators MUST
+	// explicitly opt in by naming their reverse-proxy (e.g. Caddy) IPs.
 	TrustedProxies []net.IP
 
 	// ── process lifecycle ──
@@ -1618,8 +1619,8 @@ func splitLockdownModels(raw string) []string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return []string{
-			"deepseek/deepseek-v4-flash-0731", // recommended default
-			"x-ai/grok-4.6",                   // strong tier
+			"google/gemini-3.7-flash", // recommended default
+			"openai/gpt-5.6-sol",      // strong tier
 		}
 	}
 	parts := strings.Split(raw, ",")

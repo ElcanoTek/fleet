@@ -81,7 +81,7 @@ func TestStage_AutoApproveInTest(t *testing.T) {
 type sweepFakeStore struct {
 	*store.Store
 	expired      []store.Approval
-	claimOutcome map[string]bool // approval id -> whether ClaimApproval wins
+	claimOutcome map[string]bool // approval id -> whether ClaimExpiredApproval wins
 	claimedIDs   []string
 	appendedCnv  []string
 }
@@ -90,7 +90,7 @@ func (f *sweepFakeStore) ListExpiredApprovals(_ context.Context, _ int64) ([]sto
 	return f.expired, nil
 }
 
-func (f *sweepFakeStore) ClaimApproval(_ context.Context, _, approvalID, _, _ string) (bool, error) {
+func (f *sweepFakeStore) ClaimExpiredApproval(_ context.Context, _, approvalID, _, _ string) (bool, error) {
 	f.claimedIDs = append(f.claimedIDs, approvalID)
 	return f.claimOutcome[approvalID], nil
 }
@@ -102,8 +102,8 @@ func (f *sweepFakeStore) AppendHistory(_ context.Context, convID string, _ []age
 
 // TestSweepExpiredApprovals_ClaimsAndAppends checks that the sweep auto-denies
 // each expired approval it can claim, appends a tool_result for the winners
-// only, and lets a lost claim (a user resolving in the grace window) pass
-// through untouched — user action wins (#225).
+// only, and lets a lost claim (user resolved before the deadline, or a
+// concurrent sweep) pass through untouched.
 func TestSweepExpiredApprovals_ClaimsAndAppends(t *testing.T) {
 	fake := &sweepFakeStore{
 		expired: []store.Approval{

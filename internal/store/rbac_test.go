@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -149,6 +150,26 @@ func TestTeamVisibleConversations(t *testing.T) {
 		t.Error("private conversation leaked into team view")
 	}
 
+	// A public share token on the team-visible conversation must not
+	// appear in the teammate listing (#1112).
+	if err := s.SetShareToken(ctx, "alice@x.com", shared.ID, "cap-token-xyz", nil); err != nil {
+		t.Fatalf("SetShareToken: %v", err)
+	}
+	list, err = s.ListTeamConversations(ctx, "bob@x.com")
+	if err != nil {
+		t.Fatalf("ListTeamConversations after share token: %v", err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("team view after share token = %d, want 1", len(list))
+	}
+	if list[0].ShareToken != "" {
+		t.Errorf("teammate listing leaked share_token %q", list[0].ShareToken)
+	}
+	owner, err := s.Get(ctx, "alice@x.com", shared.ID)
+	if err != nil || owner == nil || owner.ShareToken != "cap-token-xyz" {
+		t.Fatalf("owner Get should still see the token: %+v %v", owner, err)
+	}
+
 	// Carol (different team) sees nothing.
 	if list, err := s.ListTeamConversations(ctx, "carol@x.com"); err != nil || len(list) != 0 {
 		t.Errorf("cross-team view = (%v, %v), want empty", list, err)
@@ -194,5 +215,74 @@ func TestSetConversationTeamVisible_OwnershipGate(t *testing.T) {
 	// And the owner's view confirms it was never shared.
 	if list, _ := s.ListTeamConversations(ctx, "intruder@x.com"); len(list) != 0 {
 		t.Errorf("intruder somehow has a team view: %v", list)
+	}
+}
+
+// TestSetOwnTeam covers the self-serve team write (#1157): creating and leaving
+// a team need no admin, but JOINING an existing trust group is refused with
+// ErrTeamExists — a shared team_id is what exposes team-visible conversations
+// and team-shared projects, so it cannot be claimable by typing a name.
+func TestSetOwnTeam(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	for _, e := range []string{"ann@x.com", "bo@x.com", "cy@x.com", "root@x.com"} {
+		if _, err := s.CreateUser(ctx, e, "password123"); err != nil {
+			t.Fatalf("CreateUser %s: %v", e, err)
+		}
+	}
+
+	// Create: the first user into a name owns it.
+	u, err := s.SetOwnTeam(ctx, "ann@x.com", " platform ", false)
+	if err != nil {
+		t.Fatalf("create team: %v", err)
+	}
+	if u.TeamID != "platform" { // trimmed
+		t.Fatalf("team_id = %q, want %q", u.TeamID, "platform")
+	}
+
+	// Idempotent: re-stating your own team is a no-op, not a "join".
+	if u, err = s.SetOwnTeam(ctx, "ann@x.com", "Platform", false); err != nil {
+		t.Fatalf("restate own team: %v", err)
+	}
+	if u.TeamID != "platform" {
+		t.Errorf("restate changed team_id to %q", u.TeamID)
+	}
+
+	// Join is refused — case-insensitively, so "Platform" cannot shadow it.
+	if _, err = s.SetOwnTeam(ctx, "bo@x.com", "PLATFORM", false); !errors.Is(err, ErrTeamExists) {
+		t.Fatalf("join existing team: got %v want ErrTeamExists", err)
+	}
+	// ...but an admin may add someone (allowExisting), the Users-tab path.
+	if u, err = s.SetOwnTeam(ctx, "bo@x.com", "platform", true); err != nil {
+		t.Fatalf("admin join: %v", err)
+	}
+	if u.TeamID != "platform" {
+		t.Errorf("admin join team_id = %q", u.TeamID)
+	}
+
+	// A team-shared project keeps its name reserved after its last member
+	// leaves, so its shared memory never becomes claimable.
+	if _, err = s.CreateProject(ctx, &Project{OwnerEmail: "ann@x.com", Name: "Infra", TeamID: "orphan"}); err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	if _, err = s.SetOwnTeam(ctx, "cy@x.com", "orphan", false); !errors.Is(err, ErrTeamExists) {
+		t.Fatalf("claim a project-only team: got %v want ErrTeamExists", err)
+	}
+
+	// Leaving always works and clears the column.
+	if u, err = s.SetOwnTeam(ctx, "bo@x.com", "  ", false); err != nil {
+		t.Fatalf("leave team: %v", err)
+	}
+	if u.TeamID != "" {
+		t.Errorf("after leaving, team_id = %q, want empty", u.TeamID)
+	}
+
+	// Guardrails: absurd names and unknown accounts.
+	if _, err = s.SetOwnTeam(ctx, "cy@x.com", strings.Repeat("x", maxTeamNameLen+1), false); err == nil {
+		t.Error("over-long team name accepted")
+	}
+	if _, err = s.SetOwnTeam(ctx, "ghost@x.com", "platform", true); !errors.Is(err, ErrUserNotFound) {
+		t.Errorf("unknown user: got %v want ErrUserNotFound", err)
 	}
 }

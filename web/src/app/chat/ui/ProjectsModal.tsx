@@ -25,6 +25,16 @@ export type Project = {
   updated_at: number;
 };
 
+// The caller's own team, from /api/me/team (#1157). "Share with my team" is
+// meaningless without one, and until this modal could say so — and offer to
+// create a team on the spot — the checkbox just produced a server error.
+type Me = {
+  email: string;
+  role: string;
+  team_id: string;
+  admin: boolean;
+};
+
 type ProjectMemory = {
   id: string;
   content: string;
@@ -54,6 +64,10 @@ export function ProjectsModal({
   const [memories, setMemories] = useState<ProjectMemory[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [me, setMe] = useState<Me | null>(null);
+  // Draft team name for the inline "create a team" affordance below the share
+  // checkbox (null = the affordance is closed).
+  const [teamDraft, setTeamDraft] = useState<string | null>(null);
 
   // Draft form state (create or edit).
   const [editing, setEditing] = useState(Boolean(initialCreate));
@@ -76,6 +90,41 @@ export function ProjectsModal({
     }
   }, []);
 
+  const loadMe = useCallback(async () => {
+    try {
+      const res = await fetch("/api/me/team", { cache: "no-store" });
+      if (!res.ok) return; // non-fatal: the modal still works, minus the team hint
+      setMe((await res.json()) as Me);
+    } catch {
+      // Offline / transient: leave `me` null and fall back to the neutral copy.
+    }
+  }, []);
+
+  // Create (or set) the caller's team from inside the modal, so "share this
+  // project" does not dead-end in Settings. Joining someone else's team is
+  // refused upstream (409) — the message says to ask an admin.
+  const createTeam = async () => {
+    const team = (teamDraft ?? "").trim();
+    if (!team || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/me/team", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ team_id: team }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      setMe((await res.json()) as Me);
+      setTeamDraft(null);
+      setTeamShared(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to set your team.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const loadMemories = useCallback(async (id: string) => {
     try {
       const res = await fetch(`/api/projects/${encodeURIComponent(id)}/memories`, { cache: "no-store" });
@@ -90,12 +139,15 @@ export function ProjectsModal({
   useEffect(() => {
     let cancelled = false;
     queueMicrotask(() => {
-      if (!cancelled) void load();
+      if (!cancelled) {
+        void load();
+        void loadMe();
+      }
     });
     return () => {
       cancelled = true;
     };
-  }, [load]);
+  }, [load, loadMe]);
 
   useEffect(() => {
     if (!selectedId) return;
@@ -219,10 +271,43 @@ export function ProjectsModal({
               value={instructions}
               onChange={(e) => setInstructions(e.target.value)}
             />
-            <label className="flex items-center gap-2 text-[0.8125rem] text-[var(--color-text-secondary)]">
-              <input type="checkbox" checked={teamShared} onChange={(e) => setTeamShared(e.target.checked)} />
-              Share with my team (members can chat in it and read/write its shared memory)
-            </label>
+            {me && !me.team_id ? (
+              // No team → the checkbox would only produce a server error, so
+              // offer the one thing that makes it work instead.
+              <div className="grid gap-1 rounded-[0.75rem] border border-dashed border-[var(--color-border-strong)] px-3 py-2">
+                <p className="m-0 text-[0.8125rem] leading-[1.5] text-[var(--color-text-secondary)]">
+                  To share a project you need a team. Name one to create it — teammates join
+                  the same name.
+                </p>
+                <div className="flex flex-wrap items-center gap-2">
+                  <input
+                    className="min-w-0 flex-1 rounded-[0.7rem] border border-[var(--color-border-strong)] bg-transparent px-2 py-1 text-[0.8125rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
+                    placeholder="Team name (e.g. platform)"
+                    aria-label="Team name"
+                    maxLength={64}
+                    value={teamDraft ?? ""}
+                    onChange={(e) => setTeamDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") void createTeam();
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="rounded-full border border-[var(--color-border-strong)] px-2.5 py-1 text-[0.72rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] disabled:opacity-40"
+                    disabled={busy || !(teamDraft ?? "").trim()}
+                    onClick={() => void createTeam()}
+                  >
+                    Create team
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <label className="flex items-center gap-2 text-[0.8125rem] text-[var(--color-text-secondary)]">
+                <input type="checkbox" checked={teamShared} onChange={(e) => setTeamShared(e.target.checked)} />
+                Share with my team{me?.team_id ? ` (${me.team_id})` : ""} — members can chat in it
+                and read/write its shared memory
+              </label>
+            )}
             <div className="flex items-center justify-end gap-2">
               <button type="button" className="rounded-full border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)]" onClick={() => setEditing(false)}>
                 Cancel

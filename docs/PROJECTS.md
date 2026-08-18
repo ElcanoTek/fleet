@@ -17,6 +17,28 @@ Reuses the #237 team RBAC trust-group — no new membership table:
 - Sharing always targets the creator's **own** team (the server resolves it —
   you cannot share into a team you don't belong to).
 
+### Getting a team (#1157, ADR-0047)
+
+Sharing needs a team, and until #1157 `users.team_id` was writable only by an
+admin — a path that was itself broken for an `ADMIN_EMAILS` bootstrap admin, so
+a fresh box had no way to create a team and every "Share with my team" failed.
+Team membership is now split by what the write grants:
+
+- **Create / leave: self-serve.** `PUT /me/team {"team_id": "platform"}` (`""`
+  leaves), surfaced as **Settings → Team** — and inline in the Projects modal,
+  which offers to create a team in place of a share checkbox that could not
+  work.
+- **Join an existing team: granted.** A name another user — or a team-shared
+  project — already holds is refused with `409` ("ask an admin to add you to
+  it"); an admin adds you from **Settings → Admin → Users**. A shared `team_id`
+  is what exposes team-shared projects and team-visible conversations, so it is
+  never claimable by typing a name.
+
+`GET /me` (and `GET /me/team`) reports `{email, role, team_id, admin}` — the UI
+reads it to name the team on the share control and to phrase the "ask an admin"
+path. Renaming a team afterwards is `POST /admin/teams/rename`, which relabels
+members and team-shared projects in one transaction.
+
 ## Inheritance (at conversation creation)
 
 `POST /conversations {project_id}` validates membership and seeds:
@@ -53,6 +75,8 @@ document — auditable without any client content entering fleet core.
 - Folder UI is unchanged — the sidebar "view over projects" refit, per-project
   scheduled tasks/triggers/eval-set/skill bindings, and model policy (allowed
   models / max cost / eval-gate-before-model-change) are follow-ons.
-- No per-project RBAC beyond the team trust-group (no roles inside a project).
+- No per-project RBAC beyond the team trust-group (no roles inside a project),
+  and no invitations: adding someone to an existing team is an admin action
+  (ADR-0047), not a request the invitee can send or accept.
 - Project deletion detaches conversations (history belongs to its users) and
   deletes shared memories (they are project state).
