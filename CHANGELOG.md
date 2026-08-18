@@ -17,6 +17,41 @@ prior versions are listed because none have shipped.
 
 ## [Unreleased]
 
+### Changed
+
+- **The recommended everyday model is now `google/gemini-3.7-flash`** (Google:
+  Gemini 3.7 Flash), replacing `deepseek/deepseek-v4-flash-0731` in every
+  default slot: `agentcore.DefaultCoreModel` (chat + scheduled runs + the
+  Operations Center form), `config.DefaultTitleModel` (and the metadata /
+  memory / recurring-task / library-prompt models that chain off it), the
+  lockdown allow-list default, and the frontend `DEFAULT_MODEL` +
+  seeded picker row.
+
+  Routing changes shape with it. DeepSeek needed a *soft* pin plus an
+  `fp8AndAbove` floor because 28 OpenRouter endpoints served that family at
+  fp4-to-fp8; Google serves this family alone, so `canonicalUpstream` already
+  pins it **strictly** (`Only`, no fallbacks) and it needs no floor — there is
+  no pool to vary precision across. The DeepSeek pin and floor stay for
+  operators who still select those slugs. A new test,
+  `TestDefaultCoreModelCannotBeServedAtArbitraryPrecision`, asserts the property
+  rather than the lab — whichever family holds the default slot must be either
+  strictly pinned or floored — so a future swap cannot quietly drop the
+  guarantee.
+
+  The static cold-start context table gains an exact-slug entry at 1,048,576.
+  It is deliberately not a `google/gemini-3` family prefix: the Nano Banana
+  image variants in that family are 65K–131K, and an over-large window is worse
+  than a missing one (a missing entry falls back to the conservative 200K and
+  merely compacts early; an over-large one feeds the upstream more than it
+  accepts and hard-errors).
+
+  **Cost note:** Gemini 3.7 Flash is priced above the model it replaces
+  ($0.375/M prompt and $1.875/M completion, versus $0.14 and $0.28), so
+  everyday spend rises unless a deployment overrides the slot. It buys a
+  multimodal default (text+image+file+audio+video in, versus text-only) at the
+  same 1M-class context window.
+
+
 ### Fixed
 
 - **Admin pipeline-metrics and first-run log archival no longer load

@@ -26,13 +26,23 @@ that constrains serving precision — was set nowhere in the repo, so the fallba
 path had no quality floor at all. The pin fixed *where* requests preferred to
 go and said nothing about *what precision* answered them.
 
-This matters more than it looks because `deepseek/deepseek-v4-flash-0731` is
-`DefaultCoreModel`, the recommended everyday default. The fallback path is
-therefore the hot path for ordinary interactive chat turns. An fp4 serving of a
-flash-tier model does not fail loudly — it degrades into token-level
-misspellings, topic drift, and runaway output, which reads as *the model is
-broken* rather than *the route changed*. And because the run threw away the
-served-upstream field, there was no way to tell those two apart after the fact.
+This mattered more than it looks because `deepseek/deepseek-v4-flash-0731` was
+`DefaultCoreModel` at the time, the recommended everyday default, so the
+fallback path was the hot path for ordinary interactive chat turns. An fp4
+serving of a flash-tier model does not fail loudly — it degrades into
+token-level misspellings, topic drift, and runaway output, which reads as *the
+model is broken* rather than *the route changed*. And because the run threw
+away the served-upstream field, there was no way to tell those two apart after
+the fact.
+
+**The default has since moved to `google/gemini-3.7-flash`**, which Google
+serves alone and which is therefore pinned *strictly* (`Only`, no fallbacks) —
+one upstream means no pool to vary precision across, so it needs no floor. The
+floor below is unchanged and still applies to the DeepSeek family: those slugs
+remain selectable, and the pin plus the floor are what make selecting them safe.
+`TestDefaultCoreModelCannotBeServedAtArbitraryPrecision` now asserts the general
+property — whichever family holds the default slot is either strictly pinned or
+carries a floor — so a future default swap cannot silently drop the guarantee.
 
 ## What shipped
 

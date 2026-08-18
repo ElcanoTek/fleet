@@ -29,7 +29,7 @@ describe("tierForModel", () => {
 
 describe("labelForModel", () => {
   it("returns the display name for pinned slots (never an alias)", () => {
-    expect(labelForModel(DEFAULT_MODEL)).toBe("DeepSeek: DeepSeek V4 Flash 0731");
+    expect(labelForModel(DEFAULT_MODEL)).toBe("Google: Gemini 3.7 Flash");
     expect(labelForModel(ADVANCED_MODEL)).toBe("SpaceXAI: Grok 4.6");
   });
 
@@ -45,7 +45,7 @@ describe("TIER_MODELS", () => {
   it("pins the recommended pick first, the strong tier second", () => {
     // The picker pins this order at the top of the dropdown; the
     // sequence is product-meaningful (everyday pick → strongest).
-    expect(TIER_MODELS.map((t) => t.label)).toEqual(["DeepSeek: DeepSeek V4 Flash 0731", "SpaceXAI: Grok 4.6"]);
+    expect(TIER_MODELS.map((t) => t.label)).toEqual(["Google: Gemini 3.7 Flash", "SpaceXAI: Grok 4.6"]);
     expect(TIER_MODELS.map((t) => t.slug)).toEqual([DEFAULT_MODEL, ADVANCED_MODEL]);
   });
 });

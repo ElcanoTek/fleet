@@ -118,7 +118,7 @@ describe("loadModels (fetch + fallback)", () => {
       }),
     );
     const models = await loadModels();
-    expect(models.some((m) => m.id === "deepseek/deepseek-v4-flash-0731")).toBe(true);
+    expect(models.some((m) => m.id === "google/gemini-3.7-flash")).toBe(true);
     expect(models.some((m) => m.id === "deepseek/deepseek-v3.2")).toBe(true);
   });
 
@@ -135,8 +135,8 @@ describe("loadModels (fetch + fallback)", () => {
             json: async () => ({
               models: [
                 {
-                  slug: "deepseek/deepseek-v4-flash-0731",
-                  name: "DeepSeek: DeepSeek V4 Flash 0731",
+                  slug: "google/gemini-3.7-flash",
+                  name: "Google: Gemini 3.7 Flash",
                   price_prompt: 0.0000004,
                   price_completion: 0.0000016,
                   context_length: 200000,
@@ -149,17 +149,17 @@ describe("loadModels (fetch + fallback)", () => {
       }),
     );
     const models = await loadModels();
-    const seeded = models.find((m) => m.id === "deepseek/deepseek-v4-flash-0731");
+    const seeded = models.find((m) => m.id === "google/gemini-3.7-flash");
     expect(seeded).toMatchObject({
       // Seed facts win: the curated name and the recommended flag survive.
-      name: "DeepSeek: DeepSeek V4 Flash 0731",
+      name: "Google: Gemini 3.7 Flash",
       recommended: true,
       pricePrompt: 0.0000004,
       priceCompletion: 0.0000016,
       contextLength: 200000,
     });
     // And the row is not duplicated by the catalog entry.
-    expect(models.filter((m) => m.id === "deepseek/deepseek-v4-flash-0731")).toHaveLength(1);
+    expect(models.filter((m) => m.id === "google/gemini-3.7-flash")).toHaveLength(1);
   });
 
   it("falls back to the seed list when the fetch fails", async () => {
@@ -190,7 +190,7 @@ describe("loadModels (fetch + fallback)", () => {
       workspace: true,
     });
     // The catalog/seed entries still follow.
-    expect(models.some((m) => m.id === "deepseek/deepseek-v4-flash-0731")).toBe(true);
+    expect(models.some((m) => m.id === "google/gemini-3.7-flash")).toBe(true);
   });
 
   it("expands a catch-all workspace provider from the catwalk catalog", async () => {

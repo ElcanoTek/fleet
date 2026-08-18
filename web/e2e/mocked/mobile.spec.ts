@@ -54,8 +54,8 @@ test("the composer toolbar keeps every control on one row", async ({ page }) => 
       json: {
         models: [
           {
-            slug: "deepseek/deepseek-v4-flash-0731",
-            name: "DeepSeek: DeepSeek V4 Flash 0731",
+            slug: "google/gemini-3.7-flash",
+            name: "Google: Gemini 3.7 Flash",
             price_prompt: 0.0000004,
             price_completion: 0.0000016,
             context_length: 200000,
@@ -72,9 +72,9 @@ test("the composer toolbar keeps every control on one row", async ({ page }) => 
 
   // Vendor prefix dropped on mobile so the model still reads in the space left
   // after the icon buttons; the full label stays available to assistive tech.
-  await expect(chip.getByTestId("composer-model-label-short")).toHaveText("DeepSeek V4 Flash 0731");
+  await expect(chip.getByTestId("composer-model-label-short")).toHaveText("Gemini 3.7 Flash");
   await expect(chip.getByTestId("composer-model-label-full")).toBeHidden();
-  await expect(chip).toHaveAccessibleName(/DeepSeek: DeepSeek V4 Flash 0731/);
+  await expect(chip).toHaveAccessibleName(/Google: Gemini 3.7 Flash/);
   // Cost glyphs are picker-only at this width.
   await expect(chip.locator(".model-cost")).toBeHidden();
 

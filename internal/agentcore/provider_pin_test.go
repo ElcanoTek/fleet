@@ -2,17 +2,20 @@ package agentcore
 
 import "testing"
 
-// Pins the canonical-upstream table: the default core tier (z-ai/glm-5.2, no
-// :nitro variant) is soft-pinned to the Z.AI upstream so OpenRouter's implicit
-// per-upstream prompt cache keeps hitting across calls, and unpinned families
-// still return nil (OpenRouter default routing).
+// Pins the canonical-upstream table. Families served by more than one upstream
+// are pinned so OpenRouter's implicit per-upstream prompt cache keeps hitting
+// across calls — softly (Order, graceful fallback) where a second upstream
+// exists, strictly (Only) where the lab serves the family alone. Unpinned
+// families still return nil (OpenRouter default routing).
 func TestUpstreamPinFor(t *testing.T) {
 	cases := []struct {
 		slug      string
 		wantOrder string // "" = expect nil pin
 		strict    bool
 	}{
-		{DefaultCoreModel, "DeepSeek", false},
+		// The everyday default: Google serves this family alone, so the pin is
+		// strict — there is no second upstream to fall back to.
+		{DefaultCoreModel, "Google", true},
 		{"z-ai/glm-5.2", "Z.AI", false},
 		{"z-ai/glm-4.6", "Z.AI", false},
 		{"~z-ai/glm-latest", "Z.AI", false}, // `~` alias inherits the pin
@@ -62,7 +65,7 @@ func TestUpstreamPinFor(t *testing.T) {
 func TestUpstreamPinQuantizationFloor(t *testing.T) {
 	belowFloor := []string{"fp4", "fp6", "int4", "int8", "unknown"}
 
-	for _, slug := range []string{DefaultCoreModel, "deepseek/deepseek-v3.1", "~deepseek/deepseek-v4"} {
+	for _, slug := range []string{"deepseek/deepseek-v4-flash-0731", "deepseek/deepseek-v3.1", "~deepseek/deepseek-v4"} {
 		p := upstreamPinFor(slug)
 		if p == nil {
 			t.Fatalf("upstreamPinFor(%q) = nil, want a pin", slug)
@@ -86,7 +89,7 @@ func TestUpstreamPinQuantizationFloor(t *testing.T) {
 	}
 
 	// Unmixed families keep no filter — the floor is targeted, not global.
-	for _, slug := range []string{"z-ai/glm-5.2", "openai/gpt-5.4", "google/gemini-3-flash-preview"} {
+	for _, slug := range []string{"z-ai/glm-5.2", "openai/gpt-5.4", "google/gemini-3-flash-preview", DefaultCoreModel} {
 		p := upstreamPinFor(slug)
 		if p == nil {
 			t.Fatalf("upstreamPinFor(%q) = nil, want a pin", slug)
@@ -97,19 +100,41 @@ func TestUpstreamPinQuantizationFloor(t *testing.T) {
 	}
 }
 
+// Whichever family holds the default slot, it must never be servable at an
+// arbitrary precision from an arbitrary upstream: that is the failure mode that
+// reads as "the model got worse" rather than as a routing event. There are
+// exactly two ways to satisfy it — a strict pin (one upstream, so there is no
+// pool to vary) or a soft pin carrying a serving-precision floor. This asserts
+// the property rather than the current lab, so swapping the default cannot
+// quietly drop the guarantee.
+func TestDefaultCoreModelCannotBeServedAtArbitraryPrecision(t *testing.T) {
+	p := upstreamPinFor(DefaultCoreModel)
+	if p == nil {
+		t.Fatalf("upstreamPinFor(%q) = nil: the default must be pinned", DefaultCoreModel)
+	}
+	strict := len(p.Only) > 0 && p.AllowFallbacks != nil && !*p.AllowFallbacks
+	if strict {
+		return // one upstream: no pool, so no precision to vary
+	}
+	if len(p.Quantizations) == 0 {
+		t.Errorf("upstreamPinFor(%q) = %+v: a soft-pinned default needs a serving-precision floor", DefaultCoreModel, p)
+	}
+}
+
 // The returned Provider must not share backing state with the table: it is
 // handed to the request builder, so a caller appending to Quantizations would
 // otherwise corrupt the floor for every later request in the process.
 func TestUpstreamPinQuantizationsNotAliased(t *testing.T) {
-	first := upstreamPinFor(DefaultCoreModel)
+	const floored = "deepseek/deepseek-v4-flash-0731" // any slug carrying a floor
+	first := upstreamPinFor(floored)
 	if first == nil || len(first.Quantizations) == 0 {
-		t.Fatal("expected a quantization floor on the default core model")
+		t.Fatalf("expected a quantization floor on %q", floored)
 	}
 	want := len(first.Quantizations)
 	first.Quantizations = append(first.Quantizations, "fp4")
 	first.Quantizations[0] = "mutated"
 
-	second := upstreamPinFor(DefaultCoreModel)
+	second := upstreamPinFor(floored)
 	if len(second.Quantizations) != want {
 		t.Fatalf("floor length = %d after a caller mutated an earlier pin, want %d", len(second.Quantizations), want)
 	}
@@ -122,7 +147,7 @@ func TestUpstreamPinQuantizationsNotAliased(t *testing.T) {
 // fallback; it must agree with upstreamPinFor on which family owns a slug.
 func TestPreferredUpstreamFor(t *testing.T) {
 	cases := map[string]string{
-		DefaultCoreModel:    "DeepSeek",
+		DefaultCoreModel:    "Google",
 		"deepseek/v3":       "DeepSeek",
 		"~z-ai/glm-latest":  "Z.AI",
 		"openai/gpt-5.4":    "OpenAI",
