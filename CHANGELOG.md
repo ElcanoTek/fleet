@@ -90,6 +90,18 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **`TaskStreamFrame` was missing five fields the task stream actually sends,
+  failing the TypeScript build.** `subagentProgressFrame`
+  (`internal/runner/task_stream.go`) forwards `success`, `tokens`,
+  `duration_ms`, `note`, and `task` on `subagent_progress` frames — emitted
+  by `childProgress.started` / `.finished` — but the client-side type
+  declared none of them, so a frame literal naming `success` was a type
+  error. `npx tsc --noEmit` already
+  reported it; `next build` did not type-check the test file that hit it, so
+  the error sat latent until Next 16.3.0 widened the build's type-check
+  scope and turned it into a red `Web lint / test / build`. The type now
+  matches the projection's key list.
+
 - **Teams are settable from the UI, so projects can actually be shared
   (#1157).** Two bugs made the shipped team/projects feature unreachable on a
   fresh box:

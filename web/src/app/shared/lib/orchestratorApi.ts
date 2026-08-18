@@ -517,6 +517,16 @@ export type TaskStreamFrame = {
   step?: number;
   is_err?: boolean;
   steps?: number;
+  // Terminal fields of the "finished" phase, plus the task preview the
+  // "started" phase carries. These are emitted by childProgress.finished /
+  // .started and forwarded verbatim by subagentProgressFrame
+  // (internal/runner/task_stream.go) — keep this list in step with that
+  // projection's key list.
+  success?: boolean;
+  tokens?: number;
+  duration_ms?: number;
+  note?: string;
+  task?: string;
   // SSE transport id, attached client-side (not part of the JSON payload).
   // Used to resume a dropped live-log connection without duplicate activity.
   _event_id?: string;
