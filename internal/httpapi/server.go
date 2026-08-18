@@ -748,6 +748,12 @@ func (s *Server) Routes() http.Handler {
 	// test, which walks only the orchestrator chi router, not this chat mux.
 	mux.Handle("/webhooks/", http.HandlerFunc(s.postWebhook))
 	mux.Handle("/auth/membership", auth(member(http.HandlerFunc(s.handleMembership))))
+	// Self-serve identity + team (#1157): /me reports the caller's own role and
+	// team; PUT /me/team creates-or-leaves a team without an admin round trip
+	// (joining an existing one stays admin-gated inside store.SetOwnTeam).
+	// mutate keeps a read-only viewer read-only here too.
+	mux.Handle("/me", auth(member(http.HandlerFunc(s.handleMe))))
+	mux.Handle("/me/team", auth(member(mutate(http.HandlerFunc(s.handleMyTeam)))))
 	mux.Handle("/auth/verify", auth(http.HandlerFunc(s.handleAuthVerify)))
 	// /auth/session-epoch is on auth alone for the same reason as /auth/verify:
 	// the Next.js mint paths call it before a session exists, and it must answer

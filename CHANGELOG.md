@@ -90,6 +90,37 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Teams are settable from the UI, so projects can actually be shared
+  (#1157).** Two bugs made the shipped team/projects feature unreachable on a
+  fresh box:
+
+  - The admin Users tab PATCHes `role` and `team_id` together, and
+    `PATCH /admin/users/{email}` refused *any* self-PATCH whose role was not
+    `admin`. An `ADMIN_EMAILS` bootstrap admin has the default
+    `users.role = 'member'`, so every attempt that admin made to set their **own**
+    team was rejected with "refusing to demote your own account" — the first
+    operator of a box could not create a team at all. The guard now fires only on
+    an actual demotion (self, new role ≠ admin, current DB role = admin, and not
+    in `ADMIN_EMAILS` — the env grant survives any column write), and the Users
+    tab sends only the fields the admin changed.
+  - With no team, "Share with my team" 400s, and the message said "ask an
+    admin" — pointing back at the broken path.
+
+  Team membership is now split by what the write grants (ADR-0047):
+  **creating a team and leaving one are self-serve** — `PUT /me/team`
+  (`{"team_id": "platform"}`, `""` leaves), plus `GET /me` for
+  `{email, role, team_id, admin}` — while **joining a team that already has
+  members** (or that owns a team-shared project) is refused with `409` and stays
+  an admin grant, because a shared `team_id` is what exposes team-shared projects
+  and team-visible conversations. The check holds a per-name advisory lock so two
+  concurrent creates of the same name cannot silently merge, and reserves names
+  held by team-shared projects so orphaned shared memory is not claimable.
+
+  New UI: **Settings → Team** (see your team, create one, leave it, and what a
+  team unlocks); the Projects modal offers an inline "create team" where the
+  unusable share checkbox used to be; the project-home settings dialog names the
+  team it shares with, or points at Settings → Team when there is none.
+
 - **Admin pipeline-metrics and first-run log archival no longer load
   every payload into memory (#1122).** `GET /admin/pipeline-metrics`
   called `GetAllLogs`, which decompressed every stored session — and

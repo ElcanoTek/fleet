@@ -56,3 +56,4 @@ reviewable, and citable. Each record names the file or test that enforces it.
 | [0044](0044-remove-in-sandbox-browser-tool.md) | Remove the in-sandbox browser tool; browser automation is a connector | Accepted |
 | [0045](0045-remove-node-name-scopes.md) | Remove node-name scopes; a principal's authority is its permission set | Accepted |
 | [0046](0046-remove-per-key-spending-caps.md) | Remove per-API-key spending caps; rolling budgets are the one spend gate | Accepted |
+| [0047](0047-self-serve-team-membership.md) | Self-serve team membership — create/leave is yours, joining is granted | Accepted |

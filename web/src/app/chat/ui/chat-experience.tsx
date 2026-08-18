@@ -2347,6 +2347,31 @@ export function ChatExperience({
       cancelled = true;
     };
   }, [loadProjects]);
+  // The caller's own team (#1157). Sharing a project requires one, so the
+  // project-home settings dialog needs to know whether the toggle can work —
+  // and, when it can, which team it shares with. undefined = not read yet
+  // (the dialog stays neutral rather than claiming "no team").
+  const [myTeam, setMyTeam] = useState<string | undefined>(undefined);
+  const loadMyTeam = useCallback(async () => {
+    try {
+      const res = await fetch("/api/me/team", { cache: "no-store" });
+      if (!res.ok) return;
+      const me = (await res.json()) as { team_id?: string };
+      setMyTeam(me.team_id ?? "");
+    } catch {
+      // Best-effort: leave it unknown.
+    }
+  }, []);
+  useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) void loadMyTeam();
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [loadMyTeam]);
+
   const projectHomeProject = projectHome
     ? (projects.find((p) => p.id === projectHome.id) ?? null)
     : null;
@@ -2354,6 +2379,9 @@ export function ChatExperience({
   const closeProjectsModal = () => {
     setProjectsModal(null);
     void loadProjects();
+    // The modal can create a team on the way to sharing a project — re-read it
+    // so the project-home dialog agrees with what just happened.
+    void loadMyTeam();
   };
 
   // Rail-action error toast: the rail's project/move mutations are
@@ -4480,6 +4508,7 @@ export function ChatExperience({
               onSaveInstructions={(instructions) =>
                 updateProject(projectHomeProject.id, { instructions })
               }
+              myTeam={myTeam}
               onUpdateSettings={(patch) =>
                 updateProject(projectHomeProject.id, patch)
               }

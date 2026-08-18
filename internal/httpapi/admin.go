@@ -8,6 +8,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"strings"
@@ -232,10 +233,28 @@ func (s *Server) handleAdminUserPatch(w http.ResponseWriter, r *http.Request, em
 			return
 		}
 	}
+	// Self-lockout guard. It fires on an ACTUAL demotion only: the Users tab
+	// PATCHes role and team together, so editing your OWN team arrives carrying
+	// your unchanged role — and for an ADMIN_EMAILS bootstrap admin that role is
+	// the column default "member". A blanket "self + role != admin" refusal
+	// therefore made an env-admin unable to set their own team at all (#1157).
+	// The write only costs you access when it clears a users.role = 'admin' that
+	// is your sole grant; the env allowlist survives any column write.
 	if body.Role != nil && *body.Role != store.RoleAdmin &&
 		strings.EqualFold(strings.TrimSpace(email), strings.TrimSpace(userFromCtx(r.Context()))) {
-		http.Error(w, "refusing to demote your own account", http.StatusBadRequest)
-		return
+		cur, err := s.store.GetUser(r.Context(), email)
+		if err != nil {
+			if errors.Is(err, store.ErrUserNotFound) {
+				http.Error(w, "user not found", http.StatusNotFound)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if cur.Role == store.RoleAdmin && !s.isAdmin(cur.Email) {
+			http.Error(w, "refusing to demote your own account", http.StatusBadRequest)
+			return
+		}
 	}
 	u, err := s.store.SetUserRoleTeam(r.Context(), email, body.Role, body.TeamID)
 	if err != nil {

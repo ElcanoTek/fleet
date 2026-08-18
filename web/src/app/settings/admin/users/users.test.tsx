@@ -191,6 +191,42 @@ describe("AdminUsersPage", () => {
     expect(screen.getAllByText("Viewer").length).toBeGreaterThan(0);
   });
 
+  // #1157: the popover used to resend the row's unchanged role alongside the
+  // team, which upstream reads as a self-demotion — an ADMIN_EMAILS bootstrap
+  // admin (users.role = "member") could then never set their own team. The
+  // PATCH now carries only the fields that actually changed.
+  it("PATCHes only the changed field when editing a team", async () => {
+    const calls: { url: string; body: string }[] = [];
+    mockFetch((url, init) => {
+      if (url === "/api/admin/users/bob%40x.com" && init?.method === "PATCH") {
+        calls.push({ url, body: String(init?.body) });
+        return new Response(
+          JSON.stringify({
+            email: "bob@x.com",
+            role: "member",
+            team_id: "platform",
+            created_at: 1,
+            updated_at: 2,
+          }),
+          { status: 200 },
+        );
+      }
+      return listImpl()(url);
+    });
+
+    render(<AdminUsersPage />);
+    await screen.findByText("bob@x.com");
+
+    openKebab("bob@x.com");
+    fireEvent.change(screen.getByLabelText("Team for bob@x.com"), {
+      target: { value: "platform" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(calls.length).toBe(1));
+    expect(JSON.parse(calls[0].body)).toEqual({ team_id: "platform" });
+  });
+
   it("closes the popover on Escape without saving", async () => {
     render(<AdminUsersPage />);
     await screen.findByText("bob@x.com");
