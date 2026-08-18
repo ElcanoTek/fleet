@@ -75,10 +75,11 @@ func TestUpdateUsage_RecordsUpstreamFallback(t *testing.T) {
 // An UNPINNED family has no canonical upstream, so no route is a "fallback".
 func TestUpdateUsage_UnpinnedFamilyNeverFlagsFallback(t *testing.T) {
 	o := newOrchestrationState(NewLogSession(), 50)
-	o.updateUsage(DefaultMaxModel, fantasy.Usage{InputTokens: 10, OutputTokens: 5}, orMetadata("xAI"))
+	const unpinned = "x-ai/grok-4.6" // no canonicalUpstream entry: xAI is its only upstream
+	o.updateUsage(unpinned, fantasy.Usage{InputTokens: 10, OutputTokens: 5}, orMetadata("xAI"))
 
 	if o.ServedFallback {
-		t.Errorf("ServedFallback = true for unpinned model %q", DefaultMaxModel)
+		t.Errorf("ServedFallback = true for unpinned model %q", unpinned)
 	}
 	if o.LastServedUpstream != "xAI" {
 		t.Errorf("LastServedUpstream = %q, want %q", o.LastServedUpstream, "xAI")

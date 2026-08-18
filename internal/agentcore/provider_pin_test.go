@@ -20,11 +20,16 @@ func TestUpstreamPinFor(t *testing.T) {
 		{"z-ai/glm-4.6", "Z.AI", false},
 		{"~z-ai/glm-latest", "Z.AI", false}, // `~` alias inherits the pin
 		{"deepseek/deepseek-v4-flash-0731", "DeepSeek", false},
-		// The strong tier has NO pin: OpenRouter serves it from xAI alone, so
-		// there is no provider spread to collapse and the prompt cache is already
-		// single-upstream. openai/ still pins for any other OpenAI slug.
-		{DefaultMaxModel, "", false},
+		// The strong tier is back in the openai/ family, which IS pinned (soft:
+		// Order, fallbacks allowed) — so the escalation path gets the same
+		// per-upstream prompt-cache locality as every other OpenAI slug. The
+		// second row keeps the family's pin covered independently of whichever
+		// slug currently holds the tier.
+		{DefaultMaxModel, "OpenAI", false},
 		{"openai/gpt-5.4", "OpenAI", false},
+		// x-ai/ has no entry: it held the strong tier for one release and was
+		// deliberately left unpinned (xAI is its only upstream).
+		{"x-ai/grok-4.6", "", false},
 		{"google/gemini-3-flash-preview", "Google", true},
 		// The whole DeepSeek family pins to the first-party upstream: OpenRouter
 		// serves it from 28 endpoints spanning 131K–1M context and fp4–fp8, so an
@@ -151,7 +156,8 @@ func TestPreferredUpstreamFor(t *testing.T) {
 		"deepseek/v3":       "DeepSeek",
 		"~z-ai/glm-latest":  "Z.AI",
 		"openai/gpt-5.4":    "OpenAI",
-		DefaultMaxModel:     "", // strong tier is unpinned
+		DefaultMaxModel:     "OpenAI", // strong tier rejoined the pinned openai/ family
+		"x-ai/grok-4.6":     "",       // xAI is unpinned: single upstream already
 		"mistralai/mixtral": "",
 	}
 	for slug, want := range cases {

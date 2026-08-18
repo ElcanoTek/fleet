@@ -517,7 +517,7 @@ func TestSplitLockdownModels_DefaultsWhenEmpty(t *testing.T) {
 	// DEFAULT_MODEL / ADVANCED_MODEL and the agentcore mirrors.
 	wantContains := []string{
 		"google/gemini-3.7-flash",
-		"x-ai/grok-4.6",
+		"openai/gpt-5.6-sol",
 	}
 	for _, w := range wantContains {
 		found := false

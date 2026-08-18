@@ -32,11 +32,12 @@ const (
 	// cache and one context length: the full 1,048,576.
 	DefaultCoreModel = "google/gemini-3.7-flash"
 	// DefaultMaxModel is the strong/fallback tier — the model escalation
-	// (suggest_advanced_model) and task fallback resolve to. Pinned, never a
-	// `~latest` alias. No canonicalUpstream entry: OpenRouter serves this one
-	// from xAI alone, so there is no provider spread to pin away and the prompt
-	// cache is already single-upstream.
-	DefaultMaxModel = "x-ai/grok-4.6"
+	// (suggest_advanced_model) and task fallback resolve to. Exact slug, never a
+	// `~latest` alias. Unlike the previous xAI occupant of this slot, this one
+	// DOES match a canonicalUpstream entry (the `openai/` soft pin), so the
+	// escalation path inherits the same per-upstream prompt-cache locality the
+	// rest of that family gets.
+	DefaultMaxModel = "openai/gpt-5.6-sol"
 	// AdvancedModelSlug is chat's name for the same strong tier. Kept in sync
 	// with DefaultMaxModel.
 	AdvancedModelSlug = DefaultMaxModel
@@ -79,12 +80,19 @@ var modelContextWindows = []struct {
 	// means compacting a 1M-window default at 128K on every cold boot.
 	{"deepseek/deepseek-v4", 1_048_576},
 	{"deepseek/", 128_000},
+	// The 5.6 family (sol / luna / terra, and their -pro variants) is 1,050,000
+	// across the board. This must stay AHEAD of the generic `openai/gpt-5` row
+	// below: that row is 400K, and this table returns the FIRST match, so
+	// without this line the strong tier — the slug users escalate to for their
+	// LARGEST problems — would cold-boot compacting at 38% of its real window.
+	{"openai/gpt-5.6", 1_050_000},
 	{"openai/gpt-4.1", 1_000_000},
 	{"openai/o1", 200_000},
 	{modelOpenAIGPT5, 400_000},
 	{"anthropic/claude", 200_000},
-	// The strong tier is 500K; the generic grok entry below is the old 131K
-	// line and still covers earlier builds. Longer prefix first, as above.
+	// 4.6 is 500K; the generic grok entry below is the old 131K line and still
+	// covers earlier builds. Longer prefix first, as above. (4.6 held the strong
+	// tier for one release; the rows stay because the slugs stay selectable.)
 	{"x-ai/grok-4.6", 500_000},
 	{"x-ai/grok", 131_072},
 }

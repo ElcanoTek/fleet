@@ -19,6 +19,42 @@ prior versions are listed because none have shipped.
 
 ### Changed
 
+- **The strong/escalation tier is back to `openai/gpt-5.6-sol`** (OpenAI: GPT-5.6
+  Sol), reverting the one-release move to `x-ai/grok-4.6` (#1040). This is what
+  `suggest_advanced_model`, the spreadsheet nudge, and the task fallback resolve
+  to. Moved in lockstep across the mirrors the contract in `modelAliases.ts`
+  names: `ADVANCED_MODEL` / `ADVANCED_MODEL_LABEL`, the picker's `SEED_MODELS`,
+  the Operations Center's `DEFAULT_FALLBACK_MODEL`, `agentcore.DefaultMaxModel`
+  (`AdvancedModelSlug` follows it), and `splitLockdownModels`' strong-tier entry.
+
+  **This restores the escalation window: 500,000 → 1,050,000.** The Grok move
+  flagged that reduction as its one real regression, on the grounds that this is
+  the tier users escalate to for the hardest — and usually largest — problems.
+  It costs more at current catalog prices: $2.50/M prompt and $15.00/M
+  completion, versus $2.00 and $6.00 (1.25x input, 2.5x output). Modality and
+  tool/reasoning support are identical (text+image+file in).
+
+  Two things the swap changes that a slug-for-slug edit would have missed:
+
+  - **The tier is pinned again.** `x-ai/` has no `canonicalUpstream` entry (xAI
+    is its only upstream, so a pin buys nothing), but `openai/` carries a soft
+    pin — so the escalation path regains per-upstream prompt-cache locality. The
+    pin and served-upstream tests that asserted "the strong tier is unpinned"
+    now assert it pins to OpenAI, and the unpinned-family case they were
+    covering moved onto an explicit `x-ai/grok-4.6` slug so it stays covered.
+  - **The static cold-start context table needed a new row.**
+    `openai/gpt-5.6-sol` prefix-matches the existing `openai/gpt-5` → 400,000
+    entry, and the table returns the FIRST match — so without a longer-prefix
+    row ahead of it, a cold boot would compact the escalation target at 38% of
+    its real window. Added `openai/gpt-5.6` → 1,050,000 (the whole 5.6 family —
+    sol/luna/terra and their `-pro` variants — is 1,050,000). This row did not
+    exist the last time `sol` held the tier, so the under-sizing is fixed rather
+    than restored. The `x-ai/grok-4.6` → 500,000 row stays: the slug remains
+    selectable.
+
+  Also adds `google/gemini-3.7-flash` to the fake-LLM catalog's model list — one
+  of the hand-synced tier mirrors that the everyday-default swap (#1154) missed.
+
 - **The recommended everyday model is now `google/gemini-3.7-flash`** (Google:
   Gemini 3.7 Flash), replacing `deepseek/deepseek-v4-flash-0731` in every
   default slot: `agentcore.DefaultCoreModel` (chat + scheduled runs + the

@@ -31,7 +31,7 @@ describe("ModelPicker", () => {
     const input = screen.getByRole("combobox");
     fireEvent.focus(input);
     await waitFor(() => {
-      expect(screen.getByText("SpaceXAI: Grok 4.6")).toBeInTheDocument();
+      expect(screen.getByText("OpenAI: GPT-5.6 Sol")).toBeInTheDocument();
     });
     expect(input).toHaveAttribute("aria-expanded", "true");
   });
@@ -40,12 +40,12 @@ describe("ModelPicker", () => {
     render(<Harness />);
     const input = screen.getByRole("combobox");
     fireEvent.focus(input);
-    await waitFor(() => screen.getByText("SpaceXAI: Grok 4.6"));
+    await waitFor(() => screen.getByText("OpenAI: GPT-5.6 Sol"));
     fireEvent.change(input, { target: { value: "gemini" } });
     await waitFor(() => {
       expect(screen.getByText("Google: Gemini 3.7 Flash")).toBeInTheDocument();
     });
-    expect(screen.queryByText("SpaceXAI: Grok 4.6")).not.toBeInTheDocument();
+    expect(screen.queryByText("OpenAI: GPT-5.6 Sol")).not.toBeInTheDocument();
   });
 
   it("commits a clicked option into the input value", async () => {
@@ -102,7 +102,7 @@ describe("ModelPicker", () => {
     render(<Harness />);
     const input = screen.getByRole("combobox");
     fireEvent.focus(input);
-    await waitFor(() => screen.getByText("SpaceXAI: Grok 4.6"));
+    await waitFor(() => screen.getByText("OpenAI: GPT-5.6 Sol"));
     fireEvent.change(input, { target: { value: "zzz-nope" } });
     await waitFor(() => {
       expect(

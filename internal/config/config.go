@@ -1620,7 +1620,7 @@ func splitLockdownModels(raw string) []string {
 	if raw == "" {
 		return []string{
 			"google/gemini-3.7-flash", // recommended default
-			"x-ai/grok-4.6",           // strong tier
+			"openai/gpt-5.6-sol",      // strong tier
 		}
 	}
 	parts := strings.Split(raw, ",")
