@@ -151,6 +151,13 @@ type Server struct {
 	activeTurns     sync.WaitGroup
 	activeTurnCount atomic.Int64
 
+	// background tracks detached work that is NOT a turn — the queue-drain
+	// re-kick, memory-graph extraction, retained-buffer eviction, approval push
+	// sends. activeTurns never covered those, so nothing waited for them and they
+	// outlived both shutdown and a test's store. See background.go. Value, not
+	// pointer: tests build Server as a struct literal and a nil field would panic.
+	background backgroundTracker
+
 	// Health-summary inputs (#301). startTime backs uptime; version is the build
 	// label; workerStats (optional) returns scheduler worker/task counts from the
 	// sched store — injected so httpapi stays sched-agnostic. nil → that section
@@ -685,7 +692,7 @@ func (s *Server) finishTurn(convID string, token uint64) {
 
 	// Evict the retained buffer after TTL. If another turn has replaced
 	// this one by then (token mismatch), leave it alone.
-	time.AfterFunc(bufferRetainTTL, func() {
+	s.background.After("httpapi.buffer_retain_evict", bufferRetainTTL, func() {
 		s.inflightMu.Lock()
 		defer s.inflightMu.Unlock()
 		if cur, ok := s.inflight[convID]; ok && cur.token == token {
@@ -2815,6 +2822,7 @@ func (s *Server) runTurnAsync(
 			convTimeoutSeconds:   conv.ApprovalTimeoutSeconds,
 			autoApproveInTest:    s.cfg.AutoApproveInTest,
 			push:                 s.push,
+			bg:                   &s.background,
 		},
 		MemoryProposer: &memoryProposer{
 			ctx:            turnCtx,

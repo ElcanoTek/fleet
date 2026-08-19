@@ -1067,6 +1067,10 @@ func performShutdown(graceful bool, grace time.Duration, cancel context.CancelFu
 			log.Printf("fleet: grace period (%s) expired; force-cancelled %d in-flight chat turn(s)", grace, chatSrv.CancelInflightTurns())
 		}
 		graceStop()
+		// After the turns, not before: a turn's completion tail can schedule a
+		// queue-drain re-kick, so background work has to settle second or the
+		// last thing shut down would be the thing that re-armed itself.
+		chatSrv.StopBackground()
 		<-poolDone // pool ran its own grace-bounded task drain in parallel
 	} else {
 		// Immediate path (SIGINT / listener error): cancel everything now.
@@ -1076,6 +1080,9 @@ func performShutdown(graceful bool, grace time.Duration, cancel context.CancelFu
 			//nolint:gosec // G706: only an int count is formatted (%d) — no request-input string is logged, so no log-line forgery.
 			log.Printf("fleet: cancelled %d in-flight chat turn(s)", n)
 		}
+		// Cancels pending timers and waits only for background work already
+		// running, so this stays an immediate path.
+		chatSrv.StopBackground()
 		<-poolDone
 	}
 

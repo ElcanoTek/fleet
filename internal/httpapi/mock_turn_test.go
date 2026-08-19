@@ -31,9 +31,7 @@ func mockServer(t *testing.T) *Server {
 		_ = st.Close()
 		t.Fatalf("truncate: %v", err)
 	}
-	t.Cleanup(func() { _ = st.Close() })
-
-	return &Server{
+	srv := &Server{
 		cfg: &config.Config{
 			SharedToken:     "tok",
 			PersonaDefault:  "generic",
@@ -46,6 +44,8 @@ func mockServer(t *testing.T) *Server {
 		inflight:    make(map[string]inflightEntry),
 		isMember:    allowAllMembers,
 	}
+	t.Cleanup(func() { stopServerFixture(t, srv, st) })
+	return srv
 }
 
 // TestMockTurn_SSEStream exercises the full mock SSE script: the frames a
