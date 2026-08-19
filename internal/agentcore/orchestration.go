@@ -37,6 +37,11 @@ type orchestrationState struct {
 	selfAuditConfirmedOnce   bool
 	lastSuccessfulAuditFP    string
 	auditTerminalFailure     bool
+	// auditSummary is the user_visible_summary from the confirm_audit that set
+	// auditTerminalFailure. It is the agent's own account of why it aborted —
+	// the single most useful sentence about the run — and before #1151 nothing
+	// downstream read it, so the task row said "Task completed successfully".
+	auditSummary string
 	pendingCriticalActions   []pendingCriticalAction
 	completedCriticalActions []string
 

@@ -270,3 +270,44 @@ func TestScheduledObserverPersistsToolCallAndErrorResult(t *testing.T) {
 		t.Fatalf("tool error result not preserved: %+v", msgs[1])
 	}
 }
+
+// A scheduled run has no user reading the transcript, so an agent that ended
+// its own run with confirm_audit(success=false) must surface as an error the
+// runner can classify — otherwise the nil agentcore returns (the enforcement
+// gate deliberately LETS an aborting agent finish) is recorded as task success.
+// That is exactly what happened to task 3d767956 (#1151).
+func TestScheduledTerminalErrorSurfacesAuditAbort(t *testing.T) {
+	const summary = "page unchanged; live version remains 259"
+	err := scheduledTerminalError(context.Background(), agentcore.Result{
+		AuditAborted: true,
+		AuditSummary: summary,
+	})
+	if !errors.Is(err, agentcore.ErrAuditAborted) {
+		t.Fatalf("aborted run returned %v, want an error wrapping ErrAuditAborted", err)
+	}
+	if !strings.Contains(err.Error(), summary) {
+		t.Errorf("error %q should carry the agent's own summary", err)
+	}
+
+	// No summary is still an abort — the verdict outranks its wording.
+	if err := scheduledTerminalError(context.Background(), agentcore.Result{AuditAborted: true}); !errors.Is(err, agentcore.ErrAuditAborted) {
+		t.Errorf("summary-less abort returned %v, want ErrAuditAborted", err)
+	}
+
+	// A clean run is still clean.
+	if err := scheduledTerminalError(context.Background(), agentcore.Result{FinalText: "done"}); err != nil {
+		t.Errorf("clean run returned %v, want nil", err)
+	}
+}
+
+// A run cancelled mid-flight never reached its own audit, so attributing the
+// interruption is more truthful than attributing an abort it never made.
+func TestCancelOutranksAuditAbort(t *testing.T) {
+	err := scheduledTerminalError(context.Background(), agentcore.Result{Cancelled: true, AuditAborted: true})
+	if !errors.Is(err, agentcore.ErrRunCancelled) {
+		t.Errorf("cancelled run returned %v, want ErrRunCancelled", err)
+	}
+	if errors.Is(err, agentcore.ErrAuditAborted) {
+		t.Error("a cancelled run must not be reported as a deliberate abort")
+	}
+}

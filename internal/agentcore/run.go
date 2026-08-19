@@ -240,6 +240,20 @@ type Result struct {
 
 	// Usage is the accumulated token + cost accounting for the whole run.
 	Usage RunUsage
+
+	// AuditAborted is true when the run's last confirm_audit declared
+	// success=false. The agent is deliberately ALLOWED to finish after that —
+	// an abort is a conclusion, not a crash — so without this field the run is
+	// indistinguishable at every layer above from one that did the work (#1151).
+	AuditAborted bool
+	// AuditSummary is the agent's own user_visible_summary from that audit: why
+	// it aborted, in its words. Empty unless AuditAborted.
+	AuditSummary string
+	// CriticalActionsExecuted counts the audit-gated (mutating) tools the run
+	// actually ran. Zero means the run changed nothing outside itself — a real
+	// and healthy outcome for a scheduled refresh whose source had nothing new,
+	// and one an operator needs to be able to see repeat.
+	CriticalActionsExecuted int
 }
 
 // ErrRunCancelled is the driver-facing classification for a run whose Result
@@ -252,6 +266,16 @@ type Result struct {
 // over the error; the sentinel exists so its Sentry gate can recognize a
 // surfaced cancel as an interruption rather than an application failure.
 var ErrRunCancelled = errors.New("run cancelled before completion")
+
+// ErrAuditAborted is the driver-facing classification for a run whose agent
+// ended it by calling confirm_audit(success=false). Like ErrRunCancelled it
+// exists because Run deliberately returns nil there — the enforcement gate lets
+// an aborting agent finish rather than trapping it in a retry loop — and a
+// headless driver has no user reading the transcript, so the nil was recorded
+// as task SUCCESS (#1151). Callers must treat it as DETERMINISTIC: the run
+// reached its own conclusion, so retrying only spends another window to reach
+// the same one.
+var ErrAuditAborted = errors.New("run aborted by its own self-audit")
 
 // RunUsage is the accumulated token + cost accounting for a run. It follows the
 // LogSession token convention: PromptTokens INCLUDES cache reads, CachedTokens
@@ -653,7 +677,7 @@ func completeRun(ctx context.Context, in runCompletion) (Result, error) {
 		)
 		if err != nil {
 			entries, _ := in.sink.snapshot()
-			return Result{
+			return withAuditVerdict(Result{
 				FinalText:         in.finalText,
 				Rounds:            in.rounds,
 				SwappedToFallback: in.swappedToFallback,
@@ -661,7 +685,7 @@ func completeRun(ctx context.Context, in runCompletion) (Result, error) {
 				Entries:           entries,
 				ModelSlug:         slugOf(in.activeModel),
 				Usage:             usageSnapshot(in.orchestration),
-			}, err
+			}, in.orchestration), err
 		}
 		in.finalText = string(outputJSON)
 	}
@@ -670,7 +694,7 @@ func completeRun(ctx context.Context, in runCompletion) (Result, error) {
 	if in.finalText != "" {
 		entries = append(entries, RunEntry{Role: roleAssistant, Type: "text", Text: in.finalText})
 	}
-	return Result{
+	return withAuditVerdict(Result{
 		FinalText:         in.finalText,
 		OutputJSON:        outputJSON,
 		Rounds:            in.rounds,
@@ -679,7 +703,16 @@ func completeRun(ctx context.Context, in runCompletion) (Result, error) {
 		Entries:           entries,
 		ModelSlug:         slugOf(in.activeModel),
 		Usage:             usageSnapshot(in.orchestration),
-	}, nil
+	}, in.orchestration), nil
+}
+
+// withAuditVerdict stamps a finished run's Result with what its own self-audit
+// concluded. Applied at every completeRun exit so the structured-output failure
+// path carries it too: a run can abort AND fail its output contract, and the
+// abort is the more informative of the two.
+func withAuditVerdict(res Result, orch *orchestrationState) Result {
+	res.AuditAborted, res.AuditSummary, res.CriticalActionsExecuted = orch.auditVerdict()
+	return res
 }
 
 func runFallbackModels(deps Deps) []fantasy.LanguageModel {
