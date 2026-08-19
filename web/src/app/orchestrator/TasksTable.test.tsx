@@ -285,6 +285,87 @@ describe("TasksTable Stop action (#1152)", () => {
   });
 });
 
+// Cancelling keeps the row, and the row keeps its NAME — which is uniquely
+// indexed — so a broken job blocked its own replacement, and could not even be
+// renamed (editing is pending/scheduled only). Deleting was the only way out
+// and fleet had it nowhere. "I can't make new ones if the old ones that don't
+// work are still there."
+describe("TasksTable Delete action", () => {
+  const brokenJob: Task = {
+    id: "aaaaaaaa-bbbb-cccc-dddd-111111111111",
+    prompt: "Comfluence daily refresh",
+    status: "error",
+    recurrence: "0 12 * * *",
+  };
+
+  function renderWithDelete(tasks: Task[], onDelete?: (t: Task) => void, onOpenLogs = () => {}) {
+    return render(
+      <TasksTable
+        tasks={tasks}
+        total={tasks.length}
+        page={1}
+        pageSize={20}
+        filters={FILTERS}
+        onFilters={() => {}}
+        onPage={() => {}}
+        onPageSize={() => {}}
+        onOpenLogs={onOpenLogs}
+        onDelete={onDelete}
+      />,
+    );
+  }
+
+  it("offers Delete on the broken job someone is trying to clear", () => {
+    const onDelete = vi.fn();
+    renderWithDelete([brokenJob], onDelete);
+    fireEvent.click(screen.getByTestId("task-delete-button"));
+    expect(onDelete).toHaveBeenCalledWith(brokenJob);
+  });
+
+  it("says what deleting buys, not just that it deletes", () => {
+    renderWithDelete([brokenJob], vi.fn());
+    expect(screen.getByTestId("task-delete-button").getAttribute("title")).toMatch(/frees its name/i);
+  });
+
+  // The server refuses a live run (the worker still holds the lease), so the
+  // affordance is hidden rather than offered and then rejected.
+  it("hides Delete on a live run", () => {
+    for (const status of ["running", "leased"]) {
+      const { unmount } = renderWithDelete([{ ...brokenJob, status }], vi.fn());
+      expect(screen.queryByTestId("task-delete-button")).toBeNull();
+      expect(screen.queryByTestId("task-delete-button-card")).toBeNull();
+      unmount();
+    }
+  });
+
+  it("offers Delete on a scheduled job that has not run yet", () => {
+    const onDelete = vi.fn();
+    renderWithDelete([{ ...brokenJob, status: "scheduled" }], onDelete);
+    fireEvent.click(screen.getByTestId("task-delete-button"));
+    expect(onDelete).toHaveBeenCalled();
+  });
+
+  it("does not open the log viewer when Delete is clicked", () => {
+    const onOpenLogs = vi.fn();
+    renderWithDelete([brokenJob], () => {}, onOpenLogs);
+    fireEvent.click(screen.getByTestId("task-delete-button"));
+    expect(onOpenLogs).not.toHaveBeenCalled();
+  });
+
+  it("omits the action entirely when the parent passes no handler", () => {
+    renderWithDelete([brokenJob]);
+    expect(screen.queryByTestId("task-delete-button")).toBeNull();
+  });
+
+  it("fires from the phone card view too", () => {
+    const onDelete = vi.fn();
+    renderWithDelete([brokenJob], onDelete);
+    const cards = screen.getByTestId("task-cards");
+    fireEvent.click(within(cards).getByTestId("task-delete-button-card"));
+    expect(onDelete).toHaveBeenCalledWith(brokenJob);
+  });
+});
+
 describe("TasksTable titles", () => {
   const base: Task = {
     id: "dddddddd-eeee-ffff-0000-111111111111",

@@ -73,9 +73,13 @@ export type LogViewerProps = {
   onEdit?: (task: Task) => void;
   // Swaps the modal to another task (the History panel's row click).
   onSelectTask?: (task: Task) => void;
+  // Permanently delete this task. The parent owns the confirm + API call and
+  // closes the modal, so this component stays presentational (same contract as
+  // onEdit). Omitted = no affordance.
+  onDelete?: (task: Task) => void;
 };
 
-export function LogViewer({ task, onClose, canStop, onResubmitted, onEdit, onSelectTask }: LogViewerProps) {
+export function LogViewer({ task, onClose, canStop, onResubmitted, onEdit, onSelectTask, onDelete }: LogViewerProps) {
   if (!task) return null;
   // Key the inner body on the task id so switching tasks remounts the fetch
   // hook — that reproduces the old "reset session to null then refetch on task
@@ -100,6 +104,7 @@ export function LogViewer({ task, onClose, canStop, onResubmitted, onEdit, onSel
       onResubmitted={onResubmitted}
       onEdit={onEdit}
       onSelectTask={onSelectTask}
+      onDelete={onDelete}
     />
   );
 }
@@ -1014,6 +1019,7 @@ function LogViewerBody({
   onResubmitted,
   onEdit,
   onSelectTask,
+  onDelete,
 }: {
   task: Task;
   onClose: () => void;
@@ -1021,6 +1027,7 @@ function LogViewerBody({
   onResubmitted?: () => void;
   onEdit?: (task: Task) => void;
   onSelectTask?: (task: Task) => void;
+  onDelete?: (task: Task) => void;
 }) {
   // The shared hook owns the cancelled-ref guard and the lone setState after
   // the await, so this component no longer needs its own one-shot load-flag
@@ -1244,6 +1251,22 @@ function LogViewerBody({
                   onClick={() => void resubmit()}
                 >
                   {resubmitting ? (hasRun ? "Resubmitting…" : "Starting…") : actionLabel}
+                </button>
+              ) : null}
+              {/* Deleting is the only way to free a task's NAME: cancelling
+                  keeps the row, and the name carries a unique index, so a
+                  broken job blocked its own replacement. This modal is where
+                  someone lands when a job has gone wrong, so it is where the
+                  way out belongs. */}
+              {onDelete ? (
+                <button
+                  type="button"
+                  className="btn btn-danger"
+                  data-testid="delete-task-button"
+                  title="Permanently delete this task and its run history"
+                  onClick={() => onDelete(task)}
+                >
+                  Delete
                 </button>
               ) : null}
               {canFireWake ? (
