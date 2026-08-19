@@ -807,6 +807,71 @@ func TestBentoDeckIsOfflineOnly(t *testing.T) {
 	}
 }
 
+// The app measures text for real and reports overflow from
+// window.bento.validate(). An agent composing a deck in a chat turn has no
+// browser, so `validate` carries a rough greedy-wrap estimate instead — the only
+// overflow check available at authoring time. A heading that wraps one line
+// further than expected collides with whatever is under it, and nothing in the
+// JSON shows it.
+//
+// The estimate is calibrated against a real Chromium measurement: the case below
+// is the one this skill's own first deck tripped, where the browser reported
+// "needs 219px but the box is 180px tall". It must fire there and stay quiet
+// when the box has room, or it is either useless or noise.
+func TestBentoValidateFlagsLikelyTextOverflow(t *testing.T) {
+	helper := bentoHelper(t)
+	dir := t.TempDir()
+	deck := "Fit.bento.html"
+
+	if _, stderr, err := runHelper(t, helper, dir, "new", deck); err != nil {
+		t.Fatalf("new: %v\n%s", err, stderr)
+	}
+	stdout, _, err := runHelper(t, helper, dir, "get", deck)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	slides, _ := doc["slides"].([]any)
+	first, _ := slides[0].(map[string]any)
+	elements, _ := first["elements"].([]any)
+	el, _ := elements[0].(map[string]any)
+
+	// Chromium measured this exact element as needing 219px.
+	el["html"] = "Q3 in three moves."
+	el["fontSize"] = 104
+	el["w"] = 1000
+	el["lineHeight"] = 1.05
+	el["h"] = 180
+	writeJSON(t, filepath.Join(dir, "doc.json"), doc)
+	if _, stderr, err := runHelper(t, helper, dir, "set", deck, "doc.json"); err != nil {
+		t.Fatalf("set: %v\n%s", err, stderr)
+	}
+	stdout, stderr, err := runHelper(t, helper, dir, "validate", deck)
+	if err != nil {
+		t.Fatalf("validate: %v\n%s", err, stderr)
+	}
+	if !strings.Contains(stdout, "may overflow its box") {
+		t.Errorf("validate missed a text element the browser measures as overflowing;\nstdout:\n%s", stdout)
+	}
+
+	// Give it the room the browser said it needs; the advisory must go quiet.
+	el["h"] = 240
+	writeJSON(t, filepath.Join(dir, "doc2.json"), doc)
+	if _, stderr, err := runHelper(t, helper, dir, "set", deck, "doc2.json"); err != nil {
+		t.Fatalf("set roomy: %v\n%s", err, stderr)
+	}
+	stdout, stderr, err = runHelper(t, helper, dir, "validate", deck)
+	if err != nil {
+		t.Fatalf("validate roomy: %v\n%s", err, stderr)
+	}
+	if strings.Contains(stdout, "may overflow its box") {
+		t.Errorf("validate flagged a box with room to spare;\nstdout:\n%s", stdout)
+	}
+}
+
 // A deck the USER brought us keeps upstream's shell byte for byte — we do not
 // rewrite someone else's file. `validate` is what surfaces the difference, so
 // the agent can tell them instead of silently editing.

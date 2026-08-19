@@ -137,3 +137,27 @@ such a deck, treat its keys as public and rotate.
 
 `scripts/bento_doc.py set` removes the block again, so any revision delivered
 through this skill ships clean.
+
+### Local behavior that is NOT network, and is left alone
+
+Two things a privacy-conscious reader should know about, both confined to the
+machine the deck is opened on. Neither is covered by `connect-src`, because
+neither is a network connection:
+
+- **Cross-tab sync.** The app always installs a `BroadcastChannel`
+  (`bento-sync-<docId>`) transport, ungated by offline mode, so two tabs of the
+  same deck in the same browser profile stay in step. The Share panel says as
+  much: *"Offline mode is on — nothing leaves this computer. Tabs on this machine
+  still sync."* Left working: it is same-profile only and useful.
+- **An in-browser backup.** The app keeps a copy of the document in
+  **indexedDB** and shows "Backed up in this browser". Deck content therefore
+  persists in the browser profile after the tab closes, which matters on a shared
+  or kiosk machine. Left working: it is the app's crash recovery.
+
+### Export
+
+The shell exports **PDF, via the browser's print dialog** ("Export PDF (print)"),
+and saves the deck itself (in place, or as a copy, optionally password-encrypted).
+There is **no PPTX/PowerPoint export** — `pptx` does not appear anywhere in the
+runtime. A deck is delivered and presented as the `.bento.html` file; PDF is the
+only hand-off format.

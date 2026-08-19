@@ -254,6 +254,79 @@ def _encode_block(doc):
     return encoded
 
 
+
+# ── text fit (an estimate, because we have no font metrics) ──────────────────
+#
+# The app measures text for real and reports `text-overflow` from
+# `window.bento.validate()`. An agent composing a deck in a chat turn has no
+# browser, so that check is unavailable exactly when it would be most useful:
+# a heading that wraps to one more line than expected collides with whatever is
+# under it, and nothing in the JSON shows it.
+#
+# This is a deliberately rough greedy wrap. It cannot be exact without the
+# font, so it is an ADVISORY and it errs toward silence: the advance ratio is
+# calibrated against real Chromium measurements of the bundled system stack, and
+# a warning needs to clear the box by a margin before it prints. The app's own
+# validate() stays authoritative.
+_AVG_ADVANCE = 0.55  # mean glyph advance as a fraction of font size, sans-serif
+_FIT_SLACK = 1.05    # only complain when the estimate clears the box by 5%
+
+_ENTITIES = (
+    ("&mdash;", "-"), ("&ndash;", "-"), ("&nbsp;", " "), ("&amp;", "&"),
+    ("&lt;", "<"), ("&gt;", ">"), ("&quot;", '"'), ("&#39;", "'"),
+)
+
+
+def _plain_lines(html):
+    """Split element html into hard lines, with tags and entities removed."""
+    text = html.replace("<br/>", "\n").replace("<br />", "\n").replace("<br>", "\n")
+    out = []
+    depth = 0
+    for ch in text:
+        if ch == "<":
+            depth += 1
+        elif ch == ">":
+            depth = max(0, depth - 1)
+        elif depth == 0:
+            out.append(ch)
+    text = "".join(out)
+    for entity, plain in _ENTITIES:
+        text = text.replace(entity, plain)
+    return text.split("\n")
+
+
+def estimate_text_height(el):
+    """Estimated rendered height in px, or None if the element is not sizable."""
+    size = el.get("fontSize")
+    width = el.get("w")
+    if not isinstance(size, (int, float)) or not isinstance(width, (int, float)):
+        return None
+    if size <= 0 or width <= 0:
+        return None
+    line_height = el.get("lineHeight")
+    if not isinstance(line_height, (int, float)) or line_height <= 0:
+        line_height = 1.2
+    per_line = max(1, int(width / (size * _AVG_ADVANCE)))
+
+    lines = 0
+    for hard in _plain_lines(str(el.get("html", ""))):
+        words = hard.split()
+        if not words:
+            lines += 1
+            continue
+        used = 0
+        count = 1
+        for word in words:
+            need = len(word) if used == 0 else len(word) + 1
+            if used + need <= per_line:
+                used += need
+            else:
+                count += 1
+                used = len(word)
+        lines += count
+    return lines * size * line_height
+
+
 # ── validation ───────────────────────────────────────────────────────────────
 
 
@@ -637,6 +710,21 @@ def cmd_validate(args):
         if not slide["notes"].strip():
             print("  note: slide %d has no speaker notes" % (i + 1))
         for j, el in enumerate(slide["elements"]):
+            if el.get("type") == "text":
+                need = estimate_text_height(el)
+                box = el.get("h")
+                if (
+                    need is not None
+                    and isinstance(box, (int, float))
+                    and need > box * _FIT_SLACK
+                ):
+                    print(
+                        "  note: slide %d element %r may overflow its box - "
+                        "about %dpx of text in %dpx. This is an estimate (no "
+                        "font metrics here); give it room, or check the exact "
+                        "number with window.bento.validate() in the browser."
+                        % (i + 1, el.get("id"), round(need), box)
+                    )
             right = el.get("x", 0) + el.get("w", 0)
             if isinstance(right, (int, float)) and right > doc["size"]["width"] - 96:
                 print(

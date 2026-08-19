@@ -77,8 +77,13 @@ python3 skills/bento-slides/scripts/bento_doc.py validate Q4_Review.bento.html
 
 `set` refuses to write anything that would not open, and leaves the previous
 version in place when it refuses, so a failure is safe — read the error and fix
-`doc.json`. `validate` also prints advisories (missing speaker notes, elements
-past the margin) that are worth acting on.
+`doc.json`. `validate` also prints advisories — missing speaker notes, elements
+past the margin, and text that looks too tall for its box — and they are worth
+acting on. **Take the overflow one seriously:** you cannot see your deck, and a
+heading that wraps one line further than you expected sits on top of whatever is
+below it. The check is an estimate (there are no font metrics here), so give
+headings room rather than tuning them to the pixel — a box 30% taller than the
+text needs costs nothing, and a collision ruins the slide.
 
 ## Step 4 — hand it to the user
 
