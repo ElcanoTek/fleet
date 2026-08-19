@@ -18,7 +18,23 @@ import (
 type FinalizeInput struct {
 	Mode      Mode
 	FinalText string
-	Messages  []fantasy.Message
+	// Messages is the conversation as it stands when the run finishes: the
+	// finishing round's INPUT plus that round's completed assistant/tool
+	// transcript (carryRoundMessages — the same carry the enforcement loop and
+	// the terminal structured-output phase use). A recovery call replays it so
+	// it sees the current user question and the tool results it is asked to
+	// write up; the round input alone lacks the tool transcript (it lives in
+	// the round's AgentResult.Steps), which left the forced summary fabricating
+	// from stale context (#1117).
+	Messages []fantasy.Message
+	// RoundToolEvents counts the tool call/result events the finishing round
+	// committed to the run sink (0 = the round produced text/reasoning only).
+	// A finalize retry that re-drives from Messages with the governed roster
+	// could re-issue calls the round already executed and repeat their side
+	// effects — the exact hazard ADR-0035's side-effect mark gate suppresses
+	// in streamRoundWithResilience — so a hook must treat any committed tool
+	// event as "no blind re-drive" and degrade to a tool-less recovery path.
+	RoundToolEvents int
 	// Tools is the already-governed final roster used by the main run. A finalize
 	// retry must reuse it rather than rebuilding raw driver tools outside policy,
 	// credential, output-screening, and panic boundaries.

@@ -47,6 +47,21 @@ effects, not on any semantic output** (`streamRoundWithResilience` +
   to that — instead of mislabeling a provider timeout as a deterministic
   failure.
 
+## Addendum (#1117): the gate also guards the finalize seam
+
+The interactive finalize hook had its own blind re-drive: a turn that ended by
+*narrating* a tool call as text (`call:...`) was re-run with the full governed
+roster from the round's input messages — no record of tool work already done —
+so the model could re-issue calls this round had already executed. The same
+mark now gates that seam: `agentcore.Run` counts the round's committed tool
+events past a round-start sink mark and hands the count to the hook as
+`FinalizeInput.RoundToolEvents`; the leaked-call retry runs only when it is
+zero, otherwise the turn degrades to the tool-less forced summary (which sees
+the round transcript via `FinalizeInput.Messages` and can narrate but not
+re-execute). Pinned by
+`TestInteractiveFinalize_LeakedCallRetrySuppressedAfterToolExecution` and, for
+the no-side-effect re-drive, `TestInteractiveFinalize_LeakedCallRetryRunsWithoutSideEffects`.
+
 ## Consequences
 
 Mid-answer provider blips are survivable again for both interactive turns and
