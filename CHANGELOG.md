@@ -17,6 +17,37 @@ prior versions are listed because none have shipped.
 
 ## [Unreleased]
 
+### Added
+
+- **Unit tests for eight thinly-covered helpers.** Test-only additions — no
+  production code changed:
+
+  - `agent.MCPLoadServers` — binds the requested servers over HTTP, is a no-op
+    when already loaded, errors on a missing config or client, and rejects an
+    unknown or disabled server (new `internal/agent/mcp_loader_test.go`).
+  - `config.ValidateEnvKnobs` — one added `TestValidateEnvKnobs_SpecificScenarios`
+    alongside the existing `TestLoad_*` cases.
+  - `sandbox.HostExecutorCompiledIn` — asserted against the
+    `hostExecutorCompiledIn` constant, which is defined in both the
+    `fleet_host_executor` and release variants, so the test compiles and holds
+    under either build tag.
+  - `agentcore.EnvPrefix.lookupFloatDefault` — table-driven edge cases
+    (new `internal/agentcore/env_test.go`).
+  - `mcpoauth.RevokeToken` (new `revoke_test.go`) and
+    `mcpoauth.IsTerminalRefreshError` (new `errors_test.go`; those cases moved
+    out of `flow_test.go` — nothing else was relocated).
+  - `clientconfig.validSkillName` — string-validation edge cases.
+  - `chattui.Resolve` — extends the existing "flags win" subtest to pin
+    whitespace trimming on the `Model` and `Persona` flags. This is a narrow
+    assertion on an already-tested function, not new coverage of persona
+    resolution as a whole.
+
+  Honest scope: these raise the advisory coverage signal and fence existing
+  behavior. They found no bugs and fixed none — treat them as regression
+  fences, not as evidence the covered paths were wrong before. Coverage is not
+  a merge gate here (see `AGENTS.md`), so the value is the pinned behavior, not
+  the percentage.
+
 ### Removed
 
 - **Dropped the Codecov upload step and `codecov.yml`.** The repo has no
