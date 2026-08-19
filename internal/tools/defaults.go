@@ -27,6 +27,7 @@ type TurnTools struct {
 var interactiveOnlyToolNames = map[string]bool{
 	"preview_email":              true,
 	ScheduleTaskToolName:         true,
+	ManageTasksToolName:          true,
 	SuggestAdvancedModelToolName: true,
 	"propose_memory":             true,
 }
@@ -69,6 +70,7 @@ func DefaultTools() []fantasy.AgentTool {
 		NewSmartSearchTool(),
 		NewPreviewEmailTool(),
 		NewScheduleTaskTool(),
+		NewManageTasksTool(),
 		NewSuggestAdvancedModelTool(),
 		NewXLSXTool(nil),
 		NewProposeMemoryTool(),
@@ -100,6 +102,7 @@ func NewTurnTools(sb *sandbox.Sandbox) TurnTools {
 			NewSmartSearchTool(),
 			NewPreviewEmailTool(),
 			NewScheduleTaskTool(),
+			NewManageTasksTool(),
 			NewSuggestAdvancedModelTool(),
 			NewXLSXTool(sb),
 			NewProposeMemoryTool(),
