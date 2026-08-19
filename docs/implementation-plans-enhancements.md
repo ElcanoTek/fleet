@@ -47,7 +47,12 @@ PPTX export; hosted collab editing; PowerPoint animation parity.
   `THIRD_PARTY_NOTICES.md` was added), and the shell carries upstream's own
   `NOTICE` comment internally so it travels with every deck.
 - [x] Works offline except model provider — the app is vendored and embedded, so
-  nothing is fetched at turn time.
+  nothing is fetched at turn time, and nothing is fetched to render a deck.
+  **Caveat, recorded rather than papered over:** upstream's shell checks
+  `bento.page` for its own updates when the *user* opens the deck (on by
+  default, signature-verified, `localStorage`-gated so it cannot be preset from
+  the file). Enumerated in `templates/NOTICE.md`; the SKILL.md tells the agent to
+  mention it when handing over the deck.
 
 ### Deviations from the approach above
 

@@ -64,3 +64,26 @@ Re-vendoring is therefore a deliberate manual act:
 5. Confirm the document block is still `<script type="application/bento+json"
    id="bento-doc">` and still appears exactly once — `scripts/bento_doc.py` and the
    test both depend on that anchor.
+
+## Network endpoints the shell contacts
+
+A deck is self-contained to *render* — nothing is fetched to open or present it,
+and nothing is fetched while the agent authors it. The shell does reach the
+network in two places, both upstream behavior we redistribute unmodified:
+
+- `https://bento.page/releases/slides/manifest.json` — an **update check on
+  launch**, `fetch` with `cache: "no-store"`. It is **on by default** (the
+  *Check for updates automatically at launch* checkbox in the app's About panel;
+  an offline mode in the same panel refuses every request). Upstream verifies the
+  manifest against a pinned P-256 key and any downloaded shell against a sha256
+  before accepting it, so the check cannot be turned into code execution by
+  whoever answers — but it is a request to a third-party host, from the user's
+  machine, on every open. Both switches live in `localStorage`, so **neither can
+  be preset from the vendored file or from a deck's document**: only the user can
+  turn them off, which is why `../SKILL.md` tells the agent to say so.
+- `wss://sync.bento.page` — the live-collaboration relay, contacted only for a
+  deck the user has explicitly shared (`collab.on`). A deck this pack produces
+  has no `collab` block at all.
+
+Neither endpoint is reachable from the sandbox and neither is used at turn time;
+they matter to the **user's** browser, after the download.

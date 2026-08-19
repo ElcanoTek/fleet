@@ -7,8 +7,13 @@ description: Build a presentation the user can actually open — a Bento deck, o
 
 A Bento deck is ONE self-contained HTML file that contains the slides, the
 viewer, and a full editor. The user downloads it and opens it in any browser —
-nothing to install, no account, no network. This skill bundles the Bento app and
-a helper that edits the deck for you.
+nothing to install, no account, no sign-in, and nothing fetched to render the
+deck. This skill bundles the Bento app and a helper that edits the deck for you.
+
+One caveat to be straight about: the bundled app checks for its own updates on
+launch (a signed manifest from `bento.page`), so an opened deck does reach the
+network once unless the user turns that off. Authoring is fully offline — the app
+is embedded in the binary and nothing is fetched during your turn.
 
 Never edit a `.bento.html` by hand. The file is a 689KB minified app around one
 JSON document block; `view_file` on it would burn your context on runtime code,
@@ -98,7 +103,11 @@ name that does not match is the one failure the user sees as a broken download
 Tell them to **download it and open it in a browser** — it will not preview in
 the chat, by design, and there is no server-side render step. Opened locally it
 boots straight into the editor with the finished deck, so they can keep editing
-it themselves.
+it themselves. Mention the launch update-check once, plainly: the deck itself is
+self-contained, but on open the app asks `bento.page` whether a newer version of
+itself exists. Both switches are in the app's About panel — *Check for updates
+automatically at launch*, and an offline mode that refuses every request. Neither
+can be preset from the file, so the user is the only one who can turn them off.
 
 Never paste the deck's HTML into your reply. It is 689KB of runtime and it tells
 the user nothing.

@@ -25,7 +25,11 @@ prior versions are listed because none have shipped.
   viewer and a full editor, with the document stored as plain JSON in a single
   `#bento-doc` script block. Ask for a deck in chat and the agent writes one into
   the workspace; the user downloads it and opens it in any browser — no Gamma, no
-  PowerPoint, no PPTX toolchain, and no network call beyond the model provider.
+  PowerPoint, no PPTX toolchain, and no network call beyond the model provider to
+  author it. (The delivered file is self-contained to render, but upstream's shell
+  does check `bento.page` for its own updates when the user opens it — on by
+  default, signature-verified, and switchable only in the browser. The SKILL.md
+  tells the agent to say so on handover; `templates/NOTICE.md` enumerates it.)
 
   The pack ships in `internal/clientconfig/builtin_skills/bento-slides/` and
   needed **no Go change**: `//go:embed all:builtin_skills` is recursive, so its
