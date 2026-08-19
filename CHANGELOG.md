@@ -510,6 +510,69 @@ prior versions are listed because none have shipped.
   round degrades the retry to the tool-less summary path, which can narrate
   the executed work but not repeat it.
 
+- **Task lifecycle recovery/edge paths: recurrence chains no longer die
+  silently, crash-loops dead-letter, lease-lost runs are cancelled, and paused
+  expiry counts from the pause (#1116).** Four fixes to the paths around the
+  (unchanged) claim/lease core:
+
+  - *Recurrence spawn is now idempotent and repairable.* The next occurrence
+    of a recurring task spawns after the terminal tx commits, and any failure
+    there — a transient DB error, or a crash in the commit→spawn window —
+    previously only logged, ending the schedule forever. The spawn now claims a
+    per-occurrence settlement flag (`recurrence_spawned`, migration 065) in the
+    same transaction that inserts the successor (and carries its task memory),
+    and a new always-on scheduler sweep (`ReconcileRecurrences`) re-drives any
+    terminal recurring row whose flag is still unclaimed — logged and counted in
+    `fleet_sched_recurrences_reconciled_total`. Chains that legitimately end
+    (recurrence_until / run budget / unparseable definition) settle the flag
+    without spawning, so the sweep never spins on them. The spawn deliberately
+    stays OUTSIDE the terminal tx: folding it in would turn a bookkeeping-insert
+    failure into a re-run of the whole occurrence's external side effects.
+    Restore-safety: a row INSERTED already success/error — `fleet import`
+    restoring terminal recurring history verbatim (#713) — lands with the flag
+    settled, so a disaster-recovery restore can never be read as a fleet of
+    lost spawns and mass-spawn duplicate successors. Dead-lettered rows stay
+    unsettled on purpose (quarantine parks the chain without spawning, and the
+    sweep never selects them), and `ReplayDeadLetteredTask` re-arms the flag,
+    so a replayed quarantined occurrence continues its chain exactly once.
+  - *Lease recovery dead-letters past the retry budget.* `RecoverExpiredLeases`
+    reset expired leases to pending and incremented `attempt_count`
+    unconditionally — the only max-retries check was the in-process failure
+    path, which a task that kills the process never reaches, so a crash-looper
+    cycled recover→claim→crash forever. Recovery now routes rows with
+    `attempt_count >= max_retries` to the dead-letter queue — exact parity with
+    the in-process retry gate, so `max_retries=R` bounds a task at R+1 total
+    executions and R=0 ("never retry") gets exactly one, with no free extra run
+    of external side effects after a crash. The quarantine writes the same
+    column shape as the runner's DLQ path, including a derived
+    `actual_duration_seconds` (replayable, listed, counted in
+    `fleet_dead_letter_queued_total` under reason `lease_recovery`).
+  - *A lease-lost run is cancelled.* When a renewal came back
+    `ErrTaskLeaseNotHeld` — recovery re-queued the task and a fresh attempt may
+    already be running — the zombie run kept executing its EXTERNAL side effects
+    (emails, MCP writes, sandbox actions) to natural completion; only its DB
+    writes were token-fenced. Two cancellation paths now bound it: the renewal
+    verdict cancels the run via its own snapshotted per-claim cancel (safe
+    unconditionally — a per-claim context can never touch a re-claimed fresh
+    run), and a re-claim by the same pool cancels the stale run it overwrites —
+    the majority ordering on a single box, where recovery and re-claim both
+    happen inside one renew interval. The cancellation carries a distinct cause
+    so the persisted transcript says "lease was lost", not "server shutdown".
+    Other renewal errors (DB unreachable) still only log: they don't prove the
+    lease is lost, and if the outage outlasts the lease window the next renewal
+    gets the definite verdict.
+  - *Paused-task expiry is measured from the pause, not the run start.*
+    `ExpirePausedTasks` filtered on `started_at < cutoff`, so a run that
+    executed 2h before calling `ask` under a 60-minute window was expired on the
+    next tick — a zero TTL, and the human never got to answer. A new `paused_at`
+    column (migration 064, backfilled from `started_at` for rows already paused)
+    is stamped by both pause transitions (`PauseTaskForQuestion`,
+    `PauseTaskForWake`) and drives the expiry window, so a question now survives
+    its full TTL regardless of how long the run executed first. `paused_at` is
+    runtime state like the wake columns: written only by the pause transitions,
+    excluded from the insert/upsert, `UpdateTaskTx`, the clone recipe, and the
+    export record.
+
 - **`TaskStreamFrame` was missing five fields the task stream actually sends,
   failing the TypeScript build.** `subagentProgressFrame`
   (`internal/runner/task_stream.go`) forwards `success`, `tokens`,

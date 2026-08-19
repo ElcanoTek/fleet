@@ -369,7 +369,7 @@ func (db *Database) rowToUser(row *sql.Row) (*models.User, error) {
 
 // Task operations
 
-const taskColumns = "id, name, prompt, model, fallback_model, max_iterations, mcp_selection, priority, instruction_self_improve, status, agent_session_id, created_at, started_at, completed_at, result, error_message, scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at, attempt_count, max_retries, allow_network, timezone, created_by_key_id, trigger_type, credential_allowlist, loop_config, worktree_config, description, tags, retry_policy, source_task_id, persona, workspace_path, allow_task_creation, allow_recurring_task_creation, created_by_task_id, dead_lettered_at, dead_letter_reason, dead_letter_attempts, run_if, skip_count, last_skip_at, last_skip_reason, expected_duration_minutes, sla_warn_multiplier, sla_fail_multiplier, sla_breached, actual_duration_seconds, effective_priority, sandbox_limits, allow_delegation, output_schema, output_json, error_analysis, artifacts, pending_question, pending_answer, carry_context, allow_event_triggers, thinking_budget_tokens, file_names, serialization_key, recurrence_until, recurrence_remaining, wake_at, wake_event_key, wake_note, wake_reason, wake_cycles, title"
+const taskColumns = "id, name, prompt, model, fallback_model, max_iterations, mcp_selection, priority, instruction_self_improve, status, agent_session_id, created_at, started_at, completed_at, result, error_message, scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at, attempt_count, max_retries, allow_network, timezone, created_by_key_id, trigger_type, credential_allowlist, loop_config, worktree_config, description, tags, retry_policy, source_task_id, persona, workspace_path, allow_task_creation, allow_recurring_task_creation, created_by_task_id, dead_lettered_at, dead_letter_reason, dead_letter_attempts, run_if, skip_count, last_skip_at, last_skip_reason, expected_duration_minutes, sla_warn_multiplier, sla_fail_multiplier, sla_breached, actual_duration_seconds, effective_priority, sandbox_limits, allow_delegation, output_schema, output_json, error_analysis, artifacts, pending_question, pending_answer, carry_context, allow_event_triggers, thinking_budget_tokens, file_names, serialization_key, recurrence_until, recurrence_remaining, wake_at, wake_event_key, wake_note, wake_reason, wake_cycles, title, paused_at"
 
 // sourceTaskIDValue maps the optional source-task lineage pointer (#270) to a
 // nullable column value: nil → SQL NULL, set → the UUID string.
@@ -388,6 +388,24 @@ func createdByTaskIDValue(id *uuid.UUID) any {
 		return nil
 	}
 	return id.String()
+}
+
+// recurrenceSpawnedInsertValue derives the recurrence spawn-settlement flag
+// (#1116, migration 065) for a freshly INSERTED row. A row born success/error
+// — restored history from `fleet import` (#713 preserves status/recurrence/
+// completed_at verbatim), or any future insert of an already-completed row —
+// must land SETTLED: its successor question was answered in the deployment it
+// came from, and an unsettled flag would make the reconciliation sweep treat
+// every restored occurrence of a recurring chain as a lost spawn and
+// mass-spawn duplicate successors. Rows born in any other status stay FALSE:
+// live rows settle through the normal spawn on their own success/error
+// transition, cancelled rows never spawn (the sweep never selects them), and
+// dead_lettered rows deliberately stay unsettled so a DLQ replay can continue
+// the chain (see ReplayDeadLetteredTask). Like effective_priority, the column
+// is insert-only here — it is excluded from the upsert/UpdateTaskTx so a
+// status write can never clobber the spawn claim.
+func recurrenceSpawnedInsertValue(t *models.Task) bool {
+	return t.Status == models.TaskStatusSuccess || t.Status == models.TaskStatusError
 }
 
 // marshalTags serializes task tags for the JSONB column, ALWAYS as a JSON array
@@ -421,8 +439,8 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 			run_if, skip_count, last_skip_at, last_skip_reason,
 			expected_duration_minutes, sla_warn_multiplier, sla_fail_multiplier,
 			sla_breached, actual_duration_seconds, effective_priority, sandbox_limits, allow_delegation, output_schema, output_json, carry_context, allow_event_triggers, thinking_budget_tokens,
-			file_names, serialization_key, recurrence_until, recurrence_remaining, title
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, $58, $59, $60, $61, $62, $63, $64, $65)
+			file_names, serialization_key, recurrence_until, recurrence_remaining, title, recurrence_spawned
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, $58, $59, $60, $61, $62, $63, $64, $65, $66)
 		ON CONFLICT (id) DO UPDATE SET
 			name = EXCLUDED.name,
 			title = EXCLUDED.title,
@@ -491,6 +509,9 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 		// once on INSERT and thereafter mutated ONLY by the anti-starvation sweep
 		// (#230). UpdateTask delegates here, so including it would let a status
 		// update carrying a stale in-memory copy silently un-promote a task.
+		// recurrence_spawned (#1116) follows the same insert-only rule: after
+		// INSERT it is owned by the guarded spawn/settle statements, and an
+		// upsert write here could clobber a claimed spawn credit.
 		// (sandbox_limits #205 IS in the upsert — it has no out-of-band mutator.
 		// output_schema #244 is immutable post-create; output_json IS written
 		// post-run via UpdateTask→here, like result — both belong in the upsert.)
@@ -559,6 +580,7 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 		task.RecurrenceUntil,
 		recurrenceRemainingValue(task.RecurrenceRemaining),
 		task.Title,
+		recurrenceSpawnedInsertValue(task),
 	)
 	return err
 }
@@ -720,7 +742,7 @@ const taskInsertColumns = `id, name, prompt, model, fallback_model, max_iteratio
 			allow_task_creation, allow_recurring_task_creation, created_by_task_id,
 			dead_lettered_at, dead_letter_reason, dead_letter_attempts,
 			run_if, skip_count, last_skip_at, last_skip_reason,
-			expected_duration_minutes, sla_warn_multiplier, sla_fail_multiplier, sla_breached, actual_duration_seconds, effective_priority, sandbox_limits, allow_delegation, output_schema, output_json, carry_context, allow_event_triggers, thinking_budget_tokens, file_names, serialization_key, recurrence_until, recurrence_remaining, title`
+			expected_duration_minutes, sla_warn_multiplier, sla_fail_multiplier, sla_breached, actual_duration_seconds, effective_priority, sandbox_limits, allow_delegation, output_schema, output_json, carry_context, allow_event_triggers, thinking_budget_tokens, file_names, serialization_key, recurrence_until, recurrence_remaining, title, recurrence_spawned`
 
 // taskInsertArgs returns the positional INSERT values for a task, in the
 // exact column order of taskInsertColumns. Shared by AddTask and AddTaskBatch so
@@ -795,6 +817,7 @@ func taskInsertArgs(t *models.Task) []any {
 		t.RecurrenceUntil,
 		recurrenceRemainingValue(t.RecurrenceRemaining),
 		t.Title,
+		recurrenceSpawnedInsertValue(t),
 	}
 }
 
@@ -804,9 +827,11 @@ func taskInsertArgs(t *models.Task) []any {
 // (#710 added file_names without bumping this, breaking every multi-row
 // AddTaskBatch INSERT — caught only once the dev lane gained a Postgres
 // service, #723. 64 = 61 + serialization_key (#709) + recurrence_until +
-// recurrence_remaining (recurrence end conditions), 65 = 64 + title.
-// TestTaskInsertColumnsCount pins the count DB-free.)
-const taskInsertColumnsCount = 65
+// recurrence_remaining (recurrence end conditions), 65 = 64 + title,
+// 66 = 65 + recurrence_spawned (#1116, derived at insert — see
+// recurrenceSpawnedInsertValue). TestTaskInsertColumnsCount pins the count
+// DB-free.)
+const taskInsertColumnsCount = 66
 
 // AddTaskBatch inserts a slice of tasks in a single parameterised INSERT (#227),
 // replacing N sequential ExecContext round-trips. It does NOT run inside an
@@ -1199,6 +1224,7 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 		wakeNote               sql.NullString
 		wakeReason             sql.NullString
 		wakeCycles             int
+		pausedAt               sql.NullTime
 	)
 
 	err := scanner.Scan(
@@ -1214,7 +1240,7 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 		&expectedDur, &slaWarnMul, &slaFailMul, &slaBreached, &actualDurSecs,
 		&effectivePriority, &sandboxLimits, &allowDelegation, &outputSchema, &outputJSON, &errorAnalysis, &artifacts,
 		&pendingQuestion, &pendingAnswer, &carryContext, &allowEventTriggers, &thinkingBudget, &fileNames, &serializationKey, &recurrenceUntil, &recurrenceRemaining,
-		&wakeAt, &wakeEventKey, &wakeNote, &wakeReason, &wakeCycles, &title,
+		&wakeAt, &wakeEventKey, &wakeNote, &wakeReason, &wakeCycles, &title, &pausedAt,
 	)
 	if err != nil {
 		return nil, err
@@ -1271,6 +1297,10 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 	if wakeAt.Valid {
 		t := wakeAt.Time
 		task.WakeAt = &t
+	}
+	if pausedAt.Valid {
+		t := pausedAt.Time
+		task.PausedAt = &t
 	}
 	task.WakeEventKey = wakeEventKey.String
 	task.WakeNote = wakeNote.String
@@ -1866,10 +1896,14 @@ func (db *Database) PromoteStarvedTasks(ctx context.Context, windowMinutes int) 
 // It moves them to the TERMINAL `error` status (not dead_lettered, which is the
 // runner's lease-guarded status by convention — a paused task holds no lease),
 // stamping completed_at + error_message and clearing the pending question so
-// the row reads as a clean terminal failure. Age is measured from started_at
-// (the run's start), the same proxy ListPausedTasks orders by — the tasks
-// table has no paused_at column, and for a minutes-to-hours TTL measuring from
-// run start is acceptably conservative.
+// the row reads as a clean terminal failure. Age is measured from paused_at
+// (#1116) — the instant PauseTaskForQuestion parked the task. It used to be
+// measured from started_at, "acceptably conservative" for short runs, but a
+// run that executed 2h before asking under a 60-minute window was expired on
+// the next tick: a zero TTL. Migration 064 backfills paused_at from started_at
+// for rows already paused at upgrade time; a paused row with NULL paused_at
+// (no in-repo writer produces one) is deliberately never expired — failing
+// open to "waits forever", the sweep's own disabled-window default.
 func (db *Database) ExpirePausedTasks(ctx context.Context, windowMinutes int) ([]*models.Task, error) {
 	if windowMinutes <= 0 {
 		return nil, nil
@@ -1887,8 +1921,8 @@ func (db *Database) ExpirePausedTasks(ctx context.Context, windowMinutes int) ([
 		UPDATE tasks
 		SET status = $1, completed_at = now(), error_message = $2, pending_question = NULL
 		WHERE status = $3
-		  AND started_at IS NOT NULL
-		  AND started_at < $4
+		  AND paused_at IS NOT NULL
+		  AND paused_at < $4
 		RETURNING `+taskColumns,
 		string(models.TaskStatusError),
 		fmt.Sprintf("expired: awaited input for more than %d minute(s) with no answer", windowMinutes),
@@ -1906,6 +1940,39 @@ func (db *Database) ExpirePausedTasks(ctx context.Context, windowMinutes int) ([
 		expired = append(expired, t)
 	}
 	return expired, rows.Err()
+}
+
+// GetUnspawnedRecurringTasks returns terminal recurring occurrences whose
+// next-occurrence spawn is still unsettled (#1116): status success/error (the
+// only statuses that spawn — cancel and dead-letter deliberately end/park the
+// chain), a non-empty recurrence, recurrence_spawned still FALSE, and
+// completed_at older than olderThan (a grace window so the sweep never races
+// the normal post-commit spawn that is usually milliseconds behind the
+// terminal commit — the guarded spawn is idempotent regardless, this just
+// avoids pointless contention). Ordered oldest-first and bounded by limit so
+// one sweep can never balloon a tick. Backed by idx_tasks_recurrence_unspawned
+// (migration 065).
+func (db *Database) GetUnspawnedRecurringTasks(ctx context.Context, olderThan time.Time, limit int) ([]*models.Task, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := db.conn.QueryContext(ctx, `
+		SELECT `+taskColumns+` FROM tasks
+		WHERE status IN ($1, $2)
+		  AND recurrence IS NOT NULL AND recurrence <> ''
+		  AND NOT recurrence_spawned
+		  AND completed_at IS NOT NULL
+		  AND completed_at < $3
+		ORDER BY completed_at ASC
+		LIMIT $4`,
+		string(models.TaskStatusSuccess),
+		string(models.TaskStatusError),
+		olderThan, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return db.rowsToTasks(rows)
 }
 
 // PendingQueueStats returns the per-effective-priority rollup of the pending
@@ -2022,9 +2089,13 @@ func (db *Database) MarkSLABreached(ctx context.Context, taskID uuid.UUID) error
 // is nulled alongside the new question: since #582 the runner clears the Q&A
 // columns only at a terminal transition, so a resumed run that pauses AGAIN
 // would otherwise leave the prior answer dangling next to the new question.
+// paused_at stamps the pause instant (#1116) — ExpirePausedTasks counts the
+// ask window from it, so a long run's question gets the full TTL instead of
+// one already eroded by execution time.
 func (db *Database) PauseTaskForQuestion(ctx context.Context, taskID, leaseOwner uuid.UUID, question string) (bool, error) {
 	res, err := db.conn.ExecContext(ctx, `
 		UPDATE tasks SET status = 'paused_awaiting_input', pending_question = $1, pending_answer = NULL,
+			paused_at = now(),
 			lease_owner = NULL, lease_expires_at = NULL
 		WHERE id = $2 AND lease_owner = $3 AND status = 'running'`,
 		question, taskID, leaseOwner)
@@ -2059,11 +2130,15 @@ func (db *Database) ResumeTask(ctx context.Context, taskID uuid.UUID, answer str
 // it belongs to the wake that has not happened yet. wake_cycles increments
 // here, under the same guarded write, so the runner's cycle cap can't be
 // raced past. Guarded on the caller's lease; returns whether it applied.
+// paused_at stamps the park instant (#1116) for one consistent "entered its
+// pause" record across both parked states; the wake expiry itself stays
+// wake_at-driven (wake_at is ALWAYS set), so paused_at joins no wake predicate.
 func (db *Database) PauseTaskForWake(ctx context.Context, taskID, leaseOwner uuid.UUID, wakeAt time.Time, eventKey, note string) (bool, error) {
 	res, err := db.conn.ExecContext(ctx, `
 		UPDATE tasks SET status = 'paused_awaiting_wake',
 			wake_at = $1, wake_event_key = NULLIF($2, ''), wake_note = $3, wake_reason = NULL,
 			wake_cycles = wake_cycles + 1,
+			paused_at = now(),
 			lease_owner = NULL, lease_expires_at = NULL
 		WHERE id = $4 AND lease_owner = $5 AND status = 'running'`,
 		wakeAt.UTC(), eventKey, note, taskID, leaseOwner)
@@ -3163,7 +3238,60 @@ func scanTaskIteration(scanner interface{ Scan(...interface{}) error }) (*models
 // RecoverExpiredLeases resets tasks with expired leases back to pending. This is
 // the crash-safe backstop: a worker that died mid-task (systemd restart) lets
 // its lease expire, and recovery re-queues the task for the next claim.
-func (db *Database) RecoverExpiredLeases(ctx context.Context, now time.Time) (int, error) {
+//
+// Recovery is attempt-bounded (#1116): a task whose attempt budget is spent is
+// routed to the dead-letter queue instead of re-queued. Without the bound, a
+// task that kills the process itself (reliably OOMs the binary, or crashes at
+// every restart) cycled recover→claim→crash forever — the only max-retries
+// check was the in-process failure path, which a crash never reaches. The
+// predicate is attempt_count >= max_retries, EXACT parity with the in-process
+// retry gate (runner: AttemptCount < MaxRetries requeues): max_retries=R
+// allows at most R+1 total executions, and R=0 ("never retry") means exactly
+// one — the crashed attempt was already the last allowed one, so recovery
+// quarantines rather than granting a free extra run of the task's external
+// side effects. (The issue text sketched a strict `>`; parity won in review.)
+//
+// The dead-letter branch mirrors DeadLetterTaskWithContext's column writes
+// (status/completed_at/dead_lettered_at/dead_letter_reason/dead_letter_attempts/
+// error_message, output_json nulled, lease cleared, actual_duration_seconds
+// derived from started_at like maybeComputeActualDuration — NULL for a leased
+// row that never started) so a recovery-quarantined row reads identically in
+// the DLQ listing and is replayable the same way. It runs FIRST so a row never
+// both dead-letters and re-queues; the two predicates are disjoint on
+// attempt_count either way.
+//
+// Returns (requeued, deadLettered): the rows reset to pending, and the rows
+// quarantined. The storage wrapper owns the telemetry for the latter.
+func (db *Database) RecoverExpiredLeases(ctx context.Context, now time.Time) (int, int, error) {
+	quarantined, err := db.conn.ExecContext(ctx, `
+		UPDATE tasks SET
+			status = $1,
+			completed_at = $4,
+			dead_lettered_at = $4,
+			dead_letter_reason = $5,
+			dead_letter_attempts = attempt_count + 1,
+			error_message = $5,
+			output_json = NULL,
+			actual_duration_seconds = COALESCE(actual_duration_seconds, CASE
+				WHEN started_at IS NOT NULL
+				THEN GREATEST(0, EXTRACT(EPOCH FROM ($4::timestamptz - started_at)))::int
+			END),
+			lease_owner = NULL,
+			lease_expires_at = NULL
+		WHERE status IN ($2, $3)
+		AND (lease_expires_at < $4 OR lease_expires_at IS NULL)
+		AND attempt_count >= max_retries`,
+		string(models.TaskStatusDeadLettered),
+		string(models.TaskStatusLeased),
+		string(models.TaskStatusRunning),
+		now,
+		"crash-loop guard: the worker's lease expired past the retry budget (the process likely crashed or stalled mid-run on every attempt)",
+	)
+	if err != nil {
+		return 0, 0, err
+	}
+	deadLettered, _ := quarantined.RowsAffected()
+
 	result, err := db.conn.ExecContext(ctx, `
 		UPDATE tasks SET
 			status = $1,
@@ -3174,17 +3302,18 @@ func (db *Database) RecoverExpiredLeases(ctx context.Context, now time.Time) (in
 			artifacts = NULL,
 			attempt_count = attempt_count + 1
 		WHERE status IN ($2, $3)
-		AND (lease_expires_at < $4 OR lease_expires_at IS NULL)`,
+		AND (lease_expires_at < $4 OR lease_expires_at IS NULL)
+		AND attempt_count < max_retries`,
 		string(models.TaskStatusPending),
 		string(models.TaskStatusLeased),
 		string(models.TaskStatusRunning),
 		now,
 	)
 	if err != nil {
-		return 0, err
+		return 0, int(deadLettered), err
 	}
 	affected, _ := result.RowsAffected()
-	return int(affected), nil
+	return int(affected), int(deadLettered), nil
 }
 
 // GetAllTasksPaginated gets tasks with pagination.

@@ -179,7 +179,10 @@ func TestRestartMidTaskRecovery(t *testing.T) {
 	}
 
 	// Advance the clock past the lease window by force-expiring the lease (the
-	// process is gone, so no renewal happens).
+	// process is gone, so no renewal happens). Grant a retry so recovery
+	// re-queues rather than dead-letters (#1116 quarantines at
+	// attempt_count >= max_retries).
+	claimed.MaxRetries = 1
 	claimed.LeaseExpiresAt = ptrTime(time.Now().UTC().Add(-time.Minute))
 	if _, err := store.UpdateTask(claimed); err != nil {
 		t.Fatalf("force-expire: %v", err)

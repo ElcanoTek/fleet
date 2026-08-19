@@ -257,6 +257,7 @@ func TestStructuredSamePoolReclaimCannotABACommitOrNotify(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	stale.MaxRetries = 1 // recovery re-queues only below the retry budget (#1116)
 	stale.LeaseExpiresAt = ptrTime(time.Now().UTC().Add(-time.Minute))
 	if _, err := store.UpdateTask(stale); err != nil {
 		t.Fatal(err)
