@@ -123,6 +123,8 @@ func runMCPTest(args []string) int {
 	// validate-config) uses. Without this, .env-only credentials are invisible
 	// here: credential-gated servers get reported as "enable gate is off" or
 	// probed with empty creds — the exact failure class this verb diagnoses.
+	// (clientconfig.Load already folded the file in for its manifest
+	// interpolation, #1123; this re-read admits the literal-named keys too.)
 	config.RegisterAllowedEnvVars(bundle.EnvVarNames()...)
 	if _, err := config.Load(os.Getenv("FLEET_ENV_FILE")); err != nil {
 		fmt.Fprintf(os.Stderr, "load config: %v\n", err)

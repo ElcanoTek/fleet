@@ -327,13 +327,15 @@ func TestInterpolateManifestUnit(t *testing.T) {
 	}
 }
 
-// TestInterpolateEnvFileOverrideOfDefaultWins pins the fleet#706 residual: on
-// the standalone path the .env file is applied AFTER the bundle loads
-// (clientconfig.Load runs before config.Load so EnvVarNames can seed the
-// allowlist), so a ${VAR:-default} key must keep its raw form through Load —
-// its name surfaced via EnvVarNames so the env-file value survives the
-// allowlist — and resolve against the LIVE env at catalog-build time, where
-// the env-file override wins over the baked default.
+// TestInterpolateEnvFileOverrideOfDefaultWins pins the fleet#706 lazy
+// contract for connector env/header values: a ${VAR:-default} key keeps its
+// raw form through Load — its name surfaced via EnvVarNames so an env-file
+// value survives the allowlist — and resolves against the LIVE env at
+// catalog-build time, where a var set after Load (the broker child's own
+// environment, an account overlay, config.Load admitting a literal-named key)
+// wins over the baked default. Since #1123 the FLEET_ENV_FILE file itself is
+// folded in BEFORE interpolation, but the lazy catalog-build resolution must
+// keep working for env changes that land after the bundle loads.
 func TestInterpolateEnvFileOverrideOfDefaultWins(t *testing.T) {
 	os.Unsetenv("PUBMATIC_OWNER_ID")
 	os.Unsetenv("DEMO_TOKEN")

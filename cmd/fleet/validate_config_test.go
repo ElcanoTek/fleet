@@ -416,9 +416,18 @@ func TestCheckManifestYmlPersonasAreNotOffered(t *testing.T) {
 	}
 }
 
-// TestCheckCredentialsEmptyCatalog: the generic bundle references no credential
-// vars, so the check is ok and non-blocking.
+// TestCheckCredentialsEmptyCatalog: the generic bundle ships no connectors, so
+// no credential is missing — EnvVarNames now inventories every manifest ${VAR}
+// reference (#1123), and the generic manifest references the
+// FLEET_SANDBOX_IMAGE / FLEET_SANDBOX_RUNTIME override knobs via "${...:-}"
+// defaults. Default-carrying knobs are reported as "manifest defaults in
+// effect", NOT as missing credentials: the check stays OK and non-blocking on
+// a pristine install.
 func TestCheckCredentialsEmptyCatalog(t *testing.T) {
+	for _, name := range []string{"FLEET_SANDBOX_IMAGE", "FLEET_SANDBOX_RUNTIME"} {
+		t.Setenv(name, "")
+		os.Unsetenv(name)
+	}
 	bundle, err := clientconfig.Load(repoConfigDefault(t))
 	if err != nil {
 		t.Fatalf("load bundle: %v", err)
@@ -426,6 +435,46 @@ func TestCheckCredentialsEmptyCatalog(t *testing.T) {
 	res := checkCredentials(bundle, nil)
 	if res.Status != statusOK || res.Blocking {
 		t.Errorf("empty catalog creds = %s blocking=%v: %s", res.Status, res.Blocking, res.Detail)
+	}
+	for _, want := range []string{"FLEET_SANDBOX_IMAGE", "FLEET_SANDBOX_RUNTIME", "manifest defaults in effect"} {
+		if !strings.Contains(res.Detail, want) {
+			t.Errorf("detail = %q, want it to name %q", res.Detail, want)
+		}
+	}
+}
+
+// TestCheckCredentialsSplitsDefaultsFromMissing: an absent bare-referenced
+// credential still warns, listed apart from absent default-carrying knobs.
+func TestCheckCredentialsSplitsDefaultsFromMissing(t *testing.T) {
+	for _, name := range []string{"FLEET_SANDBOX_IMAGE", "FLEET_SANDBOX_RUNTIME", "VC_TEST_TOKEN"} {
+		t.Setenv(name, "")
+		os.Unsetenv(name)
+	}
+	bundle, err := clientconfig.Load(mcpTestBundle(t, `mcp_servers:
+  - name: demo
+    type: stdio
+    command: /bin/true
+    optional: true
+    enabled_env: [VC_TEST_TOKEN]
+    env:
+      TOKEN: "${VC_TEST_TOKEN}"
+`))
+	if err != nil {
+		t.Fatalf("load bundle: %v", err)
+	}
+	res := checkCredentials(bundle, nil)
+	if res.Status != statusWarn || res.Blocking {
+		t.Fatalf("creds = %s blocking=%v: %s", res.Status, res.Blocking, res.Detail)
+	}
+	absent, defaults, split := strings.Cut(res.Detail, "manifest defaults in effect:")
+	if !split {
+		t.Fatalf("detail = %q, want the defaults-in-effect section", res.Detail)
+	}
+	if !strings.Contains(absent, "VC_TEST_TOKEN") || strings.Contains(defaults, "VC_TEST_TOKEN") {
+		t.Errorf("detail = %q, want VC_TEST_TOKEN listed as absent, not a default", res.Detail)
+	}
+	if !strings.Contains(defaults, "FLEET_SANDBOX_IMAGE") || strings.Contains(absent, "FLEET_SANDBOX_IMAGE") {
+		t.Errorf("detail = %q, want FLEET_SANDBOX_IMAGE listed under defaults in effect", res.Detail)
 	}
 }
 

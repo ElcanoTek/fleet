@@ -29,7 +29,8 @@ The servers key several behaviors on writable directories passed via env:
 which arms e.g. the SendGrid fail-closed recipient allowlist),
 `CUTLASS_REPORT_DIR`, `CUTLASS_INPUT_DIR`, `DEAL_SHEET_OUTPUT_DIR`. A bundle
 cannot hardcode those paths, and plain `${VAR}` interpolation can only see the
-operator's static process env.
+operator's static deployment environment (the process env plus the
+`FLEET_ENV_FILE` env file — never a per-run directory).
 
 A bundle may now write, on a **stdio** server entry:
 
@@ -133,6 +134,53 @@ sink (mirrors the risky-bash gate). Approval resolution already dispatches any
 `mcp_<server>_<tool>` name (`CallToolPrefixed`), so no UI/API change was
 needed.
 
+### 5. Bundle-load vs `.env` ordering + unresolved-`${VAR}` fail-loud (fleet#1123)
+
+`clientconfig.Load` folds the `FLEET_ENV_FILE` env file into the process env
+BEFORE the manifest interpolation pass, via `config.BootstrapEnvFile` — the
+same admission (allowlist-gated; every `${...}` reference the raw manifest
+carries is registered first) and precedence (process env wins) as
+`config.Load`, whose own later application is an idempotent re-read. Every
+interpolated field — server `url`s, `command`/`args`, `sandbox.image`,
+providers, branding — therefore resolves against the same environment the
+runtime uses, and `${VAR:?...}` validates post-`.env`. The env-file PATH comes
+only from the process env, never from the bundle, so the ordering has no
+circularity. Three deliberate edges:
+
+- MCP `env`/`headers` values and inline `http_tools` headers keep the
+  fleet#706 lazy contract unchanged: raw `${...}` text through the load,
+  resolved at catalog-build/spawn time against the live process env, where an
+  unset credential is legitimate (gate off / `optional_env` drop).
+- Outside those maps, an unresolved bare `${VAR}` now FAILS the load with an
+  error naming the manifest field and the variable — nothing ever re-resolves
+  a `url:`/`command:`/`sandbox.image`, so the literal token could never work.
+  `${VAR:-default}` with the var unset still resolves to the default quietly;
+  `$${...}` still writes an intentional literal. A bare reserved token
+  (`${FLEET_WORKSPACE}`/`${FLEET_TASK_ID}`) outside an `mcp_servers` env value
+  fails the same way — the spawn paths substitute it only there, so even in
+  the lazily-RESOLVED header maps (where `interpolate()` merely preserves it
+  verbatim) it would ship on the wire as the literal token. Likewise a
+  `${VAR:-default}` outside the lazy maps whose default body nests an
+  unescaped `${...}`: the interpolator never expands a default body, so the
+  inner reference would ship as a literal whenever the outer var is unset
+  (and its name never reaches the `.env` allowlist) — rejected as a spelling,
+  set or unset; write `$${...}` inside the default if the literal is
+  intended.
+- `fleet validate-config`'s credentials check tells the two absence classes
+  apart: a name whose EVERY manifest occurrence carries a `${VAR:-default}`
+  (`EnvVarNamesDefaultOnly`) is reported as "manifest defaults in effect",
+  not as a missing credential — a pristine generic-bundle install stays OK
+  instead of permanently warning about `"${FLEET_SANDBOX_IMAGE:-}"`.
+- The application is once per process, not per bundle load: the MCP broker
+  child's catalog reload keeps its boot env snapshot (credential rotation
+  still requires a restart), and the post-broker-boot parent scrub is never
+  undone by a later bundle re-load.
+
+`EnvVarNames()` correspondingly inventories `${VAR}` references from ALL
+interpolated fields (captured from the raw manifest, so an already-exported
+value still surfaces its name), not only env/header values — an env-file value
+for a `url:`-referenced var survives the `.env` allowlist.
+
 ## What was deliberately NOT done
 
 - **Per-conversation workdirs for shared MCP subprocesses** — impossible
@@ -168,20 +216,18 @@ needed.
   Making that the default for *every* scheduled run would mean a per-run spawn
   of the whole catalog and would have to reproduce the shared client's
   optional-server gating; it stays deferred.
-- **Full re-ordering of bundle-load vs `.env` load**: manifest interpolation
-  still runs before the `.env` file is applied. MCP `env`/`headers` values and
-  inline `http_tools` headers keep their raw `${...}` text through the load and
-  resolve at catalog-build time against the live process env (after
-  `config.Load` applies the `.env` file), so an env-file override of a
-  `${VAR:-default}` key wins there — the fleet#706 residual. Every other
-  manifest field (server `url`s, branding, providers, …) still resolves at
-  load, before the `.env` file, and `${VAR:?...}` still validates against the
-  pre-`.env` process env even inside connector values.
+- ~~**Full re-ordering of bundle-load vs `.env` load**~~ — no longer a
+  residual: fleet#1123 shipped the re-ordering plus a fail-loud check for
+  unresolvable references. See "Bundle-load vs `.env` ordering" above.
 
 ## Cross-references
 
 - Env interpolation semantics: `internal/clientconfig/clientconfig.go`
   (`interpolateManifest`, `resolveEnvMap`, `reservedWorkspaceVar`).
+- Load-order + unresolved-reference check (fleet#1123):
+  `internal/clientconfig/manifest_env.go` (`applyBootEnvFile`,
+  `scanManifestEnvRefs`, `unresolvedManifestRefs`) +
+  `internal/config/config.go` (`BootstrapEnvFile`).
 - Spawn-time substitution: `internal/agentcore/mcp_workspace.go`.
 - Variant guard + marker: `internal/agentcore/mcp_selection.go`.
 - Interactive critical gate: `internal/agentcore/interactive_gates.go`

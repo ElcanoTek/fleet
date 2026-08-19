@@ -566,6 +566,23 @@ func checkCredentials(bundle *clientconfig.Bundle, bundleErr error) checkResult 
 	}
 
 	missing := missingEnvNames(referenced)
+	// Split the absent names: one whose EVERY manifest occurrence carries a
+	// ${VAR:-default} is a config knob with its manifest default in effect,
+	// not a missing credential — EnvVarNames covers every interpolated field
+	// (#1123), so the generic bundle's "${FLEET_SANDBOX_IMAGE:-}" would
+	// otherwise warn on every pristine install forever.
+	defaultOnly := map[string]bool{}
+	for _, name := range bundle.EnvVarNamesDefaultOnly() {
+		defaultOnly[name] = true
+	}
+	var missingCreds, defaultsInEffect []string
+	for _, name := range missing {
+		if defaultOnly[name] {
+			defaultsInEffect = append(defaultsInEffect, name)
+		} else {
+			missingCreds = append(missingCreds, name)
+		}
+	}
 	// A non-optional server whose gate var(s) are unset is a blocking failure.
 	blockingMissing := requiredGateVarsMissing(bundle)
 
@@ -577,14 +594,22 @@ func checkCredentials(bundle *clientconfig.Bundle, bundleErr error) checkResult 
 			present, len(referenced), strings.Join(blockingMissing, ", "))
 		return res
 	}
-	if len(missing) > 0 {
+	if len(missingCreds) > 0 {
 		res.Blocking = false
 		res.Status = statusWarn
 		res.Detail = fmt.Sprintf("%d/%d referenced vars present; absent (optional connectors disabled): %s",
-			present, len(referenced), strings.Join(missing, ", "))
+			present, len(referenced), strings.Join(missingCreds, ", "))
+		if len(defaultsInEffect) > 0 {
+			res.Detail += "; manifest defaults in effect: " + strings.Join(defaultsInEffect, ", ")
+		}
 		return res
 	}
 	res.Status = statusOK
+	if len(defaultsInEffect) > 0 {
+		res.Detail = fmt.Sprintf("%d/%d referenced vars present; manifest defaults in effect: %s",
+			present, len(referenced), strings.Join(defaultsInEffect, ", "))
+		return res
+	}
 	res.Detail = fmt.Sprintf("all %d referenced vars present", len(referenced))
 	return res
 }
