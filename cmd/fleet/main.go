@@ -2106,7 +2106,7 @@ func taskManagerProvider(schedStorage *storage.Storage) func(context.Context, ht
 			return nil, fmt.Errorf("cannot identify %q as an orchestrator user; edit the task in the Operations Center instead", req.RequestedBy)
 		}
 
-		candidates, err := resolveManagedTasks(ctx, schedStorage, req, owner)
+		candidates, err := resolveManagedTasks(schedStorage, req, owner)
 		if err != nil {
 			return nil, err
 		}
@@ -2151,7 +2151,11 @@ func taskManagerProvider(schedStorage *storage.Storage) func(context.Context, ht
 // An explicit id list is fetched one by one so a bad id is reported as a bad id;
 // a match runs through the same filter the task list uses, bounded so a mistyped
 // filter is refused with its own match count rather than executed.
-func resolveManagedTasks(ctx context.Context, schedStorage *storage.Storage, req httpapi.TaskMutationRequest, owner *uuid.UUID) ([]*schedmodels.Task, error) {
+//
+// No context parameter: both reads it makes are the non-context storage
+// variants, and taking a ctx it cannot honor would advertise a cancellation
+// story that is not true.
+func resolveManagedTasks(schedStorage *storage.Storage, req httpapi.TaskMutationRequest, owner *uuid.UUID) ([]*schedmodels.Task, error) {
 	if len(req.TaskIDs) > 0 {
 		out := make([]*schedmodels.Task, 0, len(req.TaskIDs))
 		for _, raw := range req.TaskIDs {

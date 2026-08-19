@@ -841,21 +841,7 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 	case auditAborted:
 		p.failAuditAborted(task, session, runErr, token, start)
 	case interrupted:
-		msg := "Task interrupted: server shutdown (grace period expired)"
-		p.clearPendingQA(task, token)
-		landed := true
-		if _, err := p.reportStatusForLease(task.ID, token, models.TaskStatusError, msg); err != nil {
-			landed = false
-			log.Printf("runner: failed to report interrupt for task %s: %v", task.ID, err)
-		}
-		p.submitLog(task, session, msg)
-		log.Printf("runner: task %s interrupted after %v", task.ID, time.Since(start).Round(time.Second))
-		// Terminal failure: fire the outbound notification off-thread (#208) —
-		// only when the terminal write actually landed (#580), so a lease lost
-		// out from under us never produces a notification the DB contradicts.
-		if landed {
-			p.notifyTerminal(task, notify.StatusFailure, session, time.Since(start))
-		}
+		p.failInterrupted(task, session, token, start)
 	case runErr != nil:
 		p.handleRunFailure(task, session, runErr, token, start)
 	default:
@@ -1049,6 +1035,28 @@ func auditAbortDetail(runErr error) string {
 	detail := strings.TrimSpace(strings.TrimPrefix(runErr.Error(), agentcore.ErrAuditAborted.Error()))
 	detail = strings.TrimSpace(strings.TrimPrefix(detail, ":"))
 	return truncateRunes(detail, maxTerminalMessageRunes)
+}
+
+// failInterrupted records the terminal state for a run the shutdown grace period
+// (or a ForceCancel) killed mid-flight. Extracted from executeTask's switch to
+// keep that function under the gocyclo ceiling; the behavior is unchanged, and
+// it now reads as a sibling of the other two terminal-write helpers.
+func (p *Pool) failInterrupted(task *models.Task, session *models.LogSession, leaseOwner uuid.UUID, start time.Time) {
+	msg := "Task interrupted: server shutdown (grace period expired)"
+	p.clearPendingQA(task, leaseOwner)
+	landed := true
+	if _, err := p.reportStatusForLease(task.ID, leaseOwner, models.TaskStatusError, msg); err != nil {
+		landed = false
+		log.Printf("runner: failed to report interrupt for task %s: %v", task.ID, err)
+	}
+	p.submitLog(task, session, msg)
+	log.Printf("runner: task %s interrupted after %v", task.ID, time.Since(start).Round(time.Second))
+	// Terminal failure: fire the outbound notification off-thread (#208) — only
+	// when the terminal write actually landed (#580), so a lease lost out from
+	// under us never produces a notification the DB contradicts.
+	if landed {
+		p.notifyTerminal(task, notify.StatusFailure, session, time.Since(start))
+	}
 }
 
 // failWallTimeout records the deterministic terminal failure for a run that
