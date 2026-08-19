@@ -57,14 +57,20 @@ env file — unless it was pinned in the process environment at boot, in which c
 it is fixed until restart (and a reload attempt to change it is reported under
 `skipped`).
 
-Two behaviors deliberately **differ from a fresh boot**, both in the safe
-direction (a reload never silently snaps a running value to a default):
+One behavior deliberately **differs from a fresh boot**, in the safe direction
+(a reload never silently snaps a running value to a default):
 
 - A reloadable var that is **unset / removed** from the file keeps the current
   running value (it does NOT revert to the built-in default a fresh boot would
   use) — see below.
-- A value that **fails to parse or validate** keeps the current value (a fresh
-  boot would fall back to the default) — see below.
+
+A value that **fails to parse or validate** is rejected by BOTH paths (#1119):
+a fresh boot refuses to start, naming the variable, the offending value, and
+the expected format; a reload keeps the current value and reports the same
+parse error under `errors`. Boot, reload, and `fleet validate-config` all
+parse these knobs through one shared registry
+(`internal/config/knobs.go`), so the same environment produces the same
+accept/reject outcome on every path.
 
 A value that fails to parse or falls outside its allowed range is reported under
 `errors` and the **previous value is kept** — a bad value never poisons a running

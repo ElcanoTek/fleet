@@ -755,22 +755,22 @@ func TestGetEnvOrDefault(t *testing.T) {
 	}
 }
 
-// TestGetEnvOrDefaultInt_RejectTrailingGarbage proves the strconv-based parser
-// rejects trailing garbage (the #134 fix: "12abc" must fall back to the
-// default, not silently parse as 12 the way fmt.Sscanf did), while accepting
-// clean values with surrounding whitespace.
-func TestGetEnvOrDefaultInt_RejectTrailingGarbage(t *testing.T) {
-	t.Setenv("TEST_INT", "12abc")
-	if got := getEnvOrDefaultInt("TEST_INT", 7); got != 7 {
-		t.Errorf("trailing garbage: got %d, want default 7", got)
+// TestLoad_SandboxPidsRejectTrailingGarbage keeps the #134 regression pinned
+// through the registry parser (#1119): trailing garbage like "12abc" must be
+// REJECTED, never silently parsed as 12 the way fmt.Sscanf once did. Since
+// #1119 the rejection is LOUD — Load refuses to boot on a set-but-malformed
+// value instead of silently falling back to the default — while a clean
+// value with edge whitespace still parses.
+func TestLoad_SandboxPidsRejectTrailingGarbage(t *testing.T) {
+	isolateEnv(t)
+	chdir(t, t.TempDir())
+	t.Setenv("FLEET_SANDBOX_PIDS", "12abc")
+	if _, err := Load(""); err == nil {
+		t.Fatal("trailing garbage must fail Load, got nil error")
 	}
-	t.Setenv("TEST_INT", "  12  ")
-	if got := getEnvOrDefaultInt("TEST_INT", 7); got != 12 {
-		t.Errorf("trimmed value: got %d, want 12", got)
-	}
-	os.Unsetenv("TEST_INT")
-	if got := getEnvOrDefaultInt("TEST_INT", 7); got != 7 {
-		t.Errorf("unset: got %d, want default 7", got)
+	t.Setenv("FLEET_SANDBOX_PIDS", "  12  ")
+	if cfg, err := Load(""); err != nil || cfg.SandboxPids != 12 {
+		t.Errorf("trimmed value: want 12, got err=%v", err)
 	}
 }
 

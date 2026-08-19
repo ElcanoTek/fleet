@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -36,15 +38,37 @@ func TestParseValidateFlags(t *testing.T) {
 	}
 }
 
-// TestValidateOptionalEnvVars pins the well-formedness checks for the optional
-// numeric knobs: unset is fine, a positive value is fine, a malformed/negative
-// value is a problem.
-func TestValidateOptionalEnvVars(t *testing.T) {
+// TestValidateEnvKnobsPreflight pins the registry-driven preflight (#1119):
+// unset is fine, well-formed is fine, and a set-but-malformed or out-of-range
+// value is a problem naming the variable — for the historical three knobs AND
+// for knobs the old hand-list never covered. The checks now mirror the boot
+// path exactly (same registry), so values boot accepts — a zero cost ceiling,
+// zero concurrency ("use the runner default") — preflight clean here too.
+// clearKnobEnv blanks every FLEET_/CHAT_/CUTLASS_-prefixed variable plus the
+// registry's direct (unprefixed) keys, so ambient process env cannot leak into
+// the exact-count assertions below. A blank value counts as unset for knob
+// resolution, and t.Setenv restores the originals on teardown.
+func clearKnobEnv(t *testing.T) {
+	t.Helper()
+	for _, kv := range os.Environ() {
+		name, _, _ := strings.Cut(kv, "=")
+		if strings.HasPrefix(name, "FLEET_") || strings.HasPrefix(name, "CHAT_") || strings.HasPrefix(name, "CUTLASS_") {
+			t.Setenv(name, "")
+		}
+	}
+	for _, name := range []string{"CONVERSATION_TTL_DAYS", "CONVERSATION_UNPINNED_CAP", "LLM_MAX_TOKENS"} {
+		t.Setenv(name, "")
+	}
+}
+
+func TestValidateEnvKnobsPreflight(t *testing.T) {
+	clearKnobEnv(t)
+
 	// Unset: no problems.
 	t.Setenv("FLEET_MAX_COST_USD", "")
 	t.Setenv("FLEET_MAX_CONCURRENT_AGENTS", "")
 	t.Setenv("FLEET_INPUT_QUEUE_RETENTION_DAYS", "")
-	if p := validateOptionalEnvVars(); len(p) != 0 {
+	if p := config.ValidateEnvKnobs(); len(p) != 0 {
 		t.Errorf("unset should be clean, got %v", p)
 	}
 
@@ -52,32 +76,56 @@ func TestValidateOptionalEnvVars(t *testing.T) {
 	t.Setenv("FLEET_MAX_COST_USD", "12.5")
 	t.Setenv("FLEET_MAX_CONCURRENT_AGENTS", "8")
 	t.Setenv("FLEET_INPUT_QUEUE_RETENTION_DAYS", "30")
-	if p := validateOptionalEnvVars(); len(p) != 0 {
+	if p := config.ValidateEnvKnobs(); len(p) != 0 {
 		t.Errorf("well-formed should be clean, got %v", p)
 	}
 
-	// Malformed cost.
+	// Malformed cost flags; an explicit 0 is legal (0 = no cost ceiling,
+	// the documented agentcore budget convention) and preflights clean.
 	t.Setenv("FLEET_MAX_COST_USD", "free")
-	if p := validateOptionalEnvVars(); len(p) != 1 || !strings.Contains(p[0], "FLEET_MAX_COST_USD") {
+	if p := config.ValidateEnvKnobs(); len(p) != 1 || !strings.Contains(p[0], "FLEET_MAX_COST_USD") {
 		t.Errorf("malformed cost should flag, got %v", p)
+	}
+	t.Setenv("FLEET_MAX_COST_USD", "0")
+	if p := config.ValidateEnvKnobs(); len(p) != 0 {
+		t.Errorf("FLEET_MAX_COST_USD=0 (no cost ceiling) should preflight clean, got %v", p)
 	}
 	t.Setenv("FLEET_MAX_COST_USD", "12.5")
 
-	// Non-positive concurrency.
+	// Concurrency must be >= 1: `fleet serve` hands it to admission.New,
+	// which floors 0 to a box-wide cap of ONE turn — 0 is a misconfiguration,
+	// not "use a default", so preflight rejects it like boot does.
+	t.Setenv("FLEET_MAX_CONCURRENT_AGENTS", "-2")
+	if p := config.ValidateEnvKnobs(); len(p) != 1 || !strings.Contains(p[0], "FLEET_MAX_CONCURRENT_AGENTS") {
+		t.Errorf("negative concurrency should flag, got %v", p)
+	}
 	t.Setenv("FLEET_MAX_CONCURRENT_AGENTS", "0")
-	if p := validateOptionalEnvVars(); len(p) != 1 || !strings.Contains(p[0], "FLEET_MAX_CONCURRENT_AGENTS") {
-		t.Errorf("zero concurrency should flag, got %v", p)
+	if p := config.ValidateEnvKnobs(); len(p) != 1 || !strings.Contains(p[0], "FLEET_MAX_CONCURRENT_AGENTS") {
+		t.Errorf("zero concurrency must be rejected at preflight like at boot, got %v", p)
 	}
 	t.Setenv("FLEET_MAX_CONCURRENT_AGENTS", "8")
 
 	// Zero explicitly disables terminal queue-row retention; negative is invalid.
 	t.Setenv("FLEET_INPUT_QUEUE_RETENTION_DAYS", "0")
-	if p := validateOptionalEnvVars(); len(p) != 0 {
+	if p := config.ValidateEnvKnobs(); len(p) != 0 {
 		t.Errorf("zero input queue retention should be valid, got %v", p)
 	}
 	t.Setenv("FLEET_INPUT_QUEUE_RETENTION_DAYS", "-1")
-	if p := validateOptionalEnvVars(); len(p) != 1 || !strings.Contains(p[0], "FLEET_INPUT_QUEUE_RETENTION_DAYS") {
+	if p := config.ValidateEnvKnobs(); len(p) != 1 || !strings.Contains(p[0], "FLEET_INPUT_QUEUE_RETENTION_DAYS") {
 		t.Errorf("negative input queue retention should flag, got %v", p)
+	}
+	t.Setenv("FLEET_INPUT_QUEUE_RETENTION_DAYS", "30")
+
+	// Knobs the pre-#1119 hand-list never covered are preflighted now: the
+	// fail-open lockdown boolean and a bare-number duration.
+	t.Setenv("FLEET_LOCKDOWN_ONLY", "enabled")
+	if p := config.ValidateEnvKnobs(); len(p) != 1 || !strings.Contains(p[0], "FLEET_LOCKDOWN_ONLY") {
+		t.Errorf("malformed lockdown boolean should flag, got %v", p)
+	}
+	t.Setenv("FLEET_LOCKDOWN_ONLY", "")
+	t.Setenv("FLEET_CHAT_DB_CONNECT_TIMEOUT", "30")
+	if p := config.ValidateEnvKnobs(); len(p) != 1 || !strings.Contains(p[0], "FLEET_CHAT_DB_CONNECT_TIMEOUT") {
+		t.Errorf("bare-number duration should flag, got %v", p)
 	}
 }
 
@@ -442,6 +490,40 @@ func TestCheckEnvVarsMissingToken(t *testing.T) {
 	res := checkEnvVars(cfg, nil)
 	if res.Status != statusFail || !strings.Contains(res.Detail, "FLEET_SERVER_TOKEN") {
 		t.Errorf("missing token should fail, got %s: %s", res.Status, res.Detail)
+	}
+}
+
+// TestCheckEnvVarsKnobProblemsReportedWhenLoadFails: the registry walk needs no
+// *Config, so a malformed knob is still named when config.Load failed for an
+// unrelated reason — the operator sees every env problem in one pass.
+func TestCheckEnvVarsKnobProblemsReportedWhenLoadFails(t *testing.T) {
+	clearKnobEnv(t)
+	t.Setenv("FLEET_MAX_COST_USD", "5O")
+	res := checkEnvVars(nil, errors.New("invalid FLEET_ALLOWED_IPS entry"))
+	if res.Status != statusFail || !res.Blocking {
+		t.Fatalf("load failure must be a blocking fail, got %s (blocking=%v)", res.Status, res.Blocking)
+	}
+	for _, want := range []string{"invalid FLEET_ALLOWED_IPS entry", "FLEET_MAX_COST_USD", `"5O"`} {
+		if !strings.Contains(res.Detail, want) {
+			t.Errorf("detail should mention %q, got %q", want, res.Detail)
+		}
+	}
+}
+
+// TestCheckSandboxNilConfigWarns pins the nil-cfg guard: when config.Load fails
+// (easy to hit since #1119 made the loader refuse any malformed knob), cfg is
+// nil and checkSandbox must degrade to a non-blocking warn instead of
+// dereferencing it — env_vars already reports the blocking failure.
+func TestCheckSandboxNilConfigWarns(t *testing.T) {
+	res := checkSandbox(context.Background(), nil, nil)
+	if res.Status != statusWarn {
+		t.Errorf("status = %q, want %q", res.Status, statusWarn)
+	}
+	if res.Blocking {
+		t.Error("nil-cfg sandbox check must be non-blocking (env_vars owns the load failure)")
+	}
+	if !strings.Contains(res.Detail, "config not loaded") {
+		t.Errorf("detail should say the config was not loaded, got %q", res.Detail)
 	}
 }
 

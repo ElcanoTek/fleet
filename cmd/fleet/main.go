@@ -1586,11 +1586,16 @@ func bootstrapAdmins() []string {
 
 // envIntDefault reads an integer env var, returning def when unset or
 // unparseable. An explicit "0" is honored (e.g. to disable a rate-limit window).
+// These knobs (the FLEET_SCHED_RATE_LIMIT_* trio) are read at serve start,
+// OUTSIDE the config loader's strict envKnobs registry (#1119) — a malformed
+// value cannot refuse boot here, so it is loudly logged and the default applied.
 func envIntDefault(key string, def int) int {
 	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
 		if i, err := strconv.Atoi(v); err == nil {
 			return i
 		}
+		//nolint:gosec // G706 false positive: v is rendered with %q, which escapes any CR/LF, so it cannot forge log lines. v is also an operator-set env var, not request input.
+		log.Printf("⚠ Ignoring invalid %s=%q (expected a whole number); using default %d", key, v, def)
 	}
 	return def
 }
