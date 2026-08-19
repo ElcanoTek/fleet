@@ -46,15 +46,13 @@ func serverFixture(t *testing.T) *Server {
 		_ = st.Close()
 		t.Fatalf("truncate: %v", err)
 	}
-	t.Cleanup(func() { _ = st.Close() })
-
 	cfg := &config.Config{
 		SharedToken:     "tok",
 		PersonaDefault:  "victoria",
 		ConversationTTL: 14,
 		UnpinnedCap:     50,
 	}
-	return &Server{
+	srv := &Server{
 		cfg:         cfg,
 		store:       st,
 		sharedToken: cfg.SharedToken,
@@ -70,6 +68,8 @@ func serverFixture(t *testing.T) *Server {
 		// itself is covered by membership_test against the real store.
 		isMember: allowAllMembers,
 	}
+	t.Cleanup(func() { stopServerFixture(t, srv, st) })
+	return srv
 }
 
 // allowAllMembers is the test override for Server.isMember: every

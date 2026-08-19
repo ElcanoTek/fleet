@@ -235,7 +235,11 @@ func (s *Server) handleBusySubmit(w http.ResponseWriter, r *http.Request, user s
 // failure, race-loser un-claim). Without it those rows stall until the next
 // submission; with it the queue self-heals a few seconds later.
 func (s *Server) rekickDrainAfter(convID string, d time.Duration) {
-	time.AfterFunc(d, func() { s.maybeDrainQueue(convID) })
+	// Tracked so shutdown (and a test's fixture) can cancel a pending re-kick
+	// instead of letting it fire against a closed store — this exact timer was
+	// the one logging "input queue claim: sql: database is closed" after a test
+	// had already finished.
+	s.background.After("httpapi.queue_rekick", d, func() { s.maybeDrainQueue(convID) })
 }
 
 // markStopAll records a Stop scope=all instant for convID. Rows accepted

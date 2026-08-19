@@ -311,6 +311,53 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Detached background work outlived the request that started it, and nothing
+  waited for it.** `activeTurns` tracked detached *turns* and `DrainTurns` blocked
+  on them at shutdown, but the work that is not a turn was tracked by nothing at
+  all: the queue-drain re-kick (`time.AfterFunc`, up to 3s out, reaching
+  `ClaimNextQueuedInput`), memory-graph extraction (a `go func` that writes
+  relations on a detached context), the retained-buffer eviction timer (15 minutes
+  by default), and the approval push send. Two of those touch the store, so a
+  shutdown could return while a write was in flight, and a finished test could
+  leave a writer running against the database the next test was about to truncate.
+
+  `backgroundTracker` (`internal/httpapi/background.go`) now owns all four.
+  Pending timers are cancelled rather than waited out — waiting on the 15-minute
+  eviction timer would make every shutdown a 15-minute one — while work already
+  running is waited for, which is the case where proceeding means closing the
+  store underneath a live writer. `StopBackground` runs after `DrainTurns` in
+  `cmd/fleet`, in that order because a turn's completion tail can schedule a
+  re-kick.
+
+  The DB-backed httpapi fixtures now tear down in the same sequence the server
+  uses on SIGTERM — `BeginShutdown`, cancel, drain, stop background, then close
+  the store — instead of closing the store first and leaving goroutines writing
+  into a dead pool.
+
+  **`BeginShutdown` first is the step that does the real work**, and it is why
+  cancelling turns was not sufficient on its own. A turn's completion tail drains
+  the input queue and launches the next queued row, so in a test that leaves rows
+  queued (the depth-cap test leaves ten) a single cancellation produces a *fresh*
+  turn with a live context, and the chain re-arms itself faster than any grace
+  period outlasts it. The `shuttingDown` flag is what makes `maybeDrainQueue`
+  decline to launch — exactly why production sets it before draining.
+
+  The teardown asserts rather than tolerates: if a turn is still running 20s after
+  cancellation the test fails, naming the count, because a silent timeout there
+  would hand the next test a live writer again.
+
+  Scope, stated precisely: the leak is proven by turns outliving their tests —
+  before `BeginShutdown` was added to the teardown the package hung, with a
+  goroutine dump showing `runTurnAsync` parked in a test's gate after that test had
+  returned, and the teardown check reporting `ActiveTurns=1`. The `sql: database is
+  closed` log spray that first drew attention to this came from a CI run and does
+  **not** reproduce in a single local sequential run — baseline and fixed both
+  showed zero locally — so the log volume is a CI-timing symptom, not the
+  measurement. `internal/httpapi` goes from 15.3s to 18.3s for the added teardown
+  discipline. `backgroundTracker`'s cancel/wait/finality/panic behavior and the
+  drain-declines-while-draining property are covered by deterministic tests that
+  need no database.
+
 - **The test fixture that wipes the database deadlocked in CI, failing PRs that
   had touched nothing near it.** `store.TruncateAllForTest` issued a bare
   `TRUNCATE`, which takes `ACCESS EXCLUSIVE` on each table one at a time in list

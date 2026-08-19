@@ -85,6 +85,11 @@ type approvalStager struct {
 	// (#292), so a backgrounded tab still learns the turn is blocked on them.
 	// nil = feature off.
 	push *webpush.Service
+	// bg tracks the detached push send so shutdown waits for it rather than
+	// dropping a notification mid-flight. nil is fine (promote_task's stager, and
+	// tests that construct a stager directly): the send then runs untracked, which
+	// is the pre-existing behavior and touches no store.
+	bg *backgroundTracker
 }
 
 var _ agent.MCPScopeBinder = (*approvalStager)(nil)
@@ -343,7 +348,7 @@ func (a *approvalStager) firePushNotification(toolName string) {
 		return
 	}
 	push, email, convID := a.push, a.userEmail, a.conversationID
-	go func() {
+	send := func() {
 		// Independent of the turn context on purpose: the staged card outlives
 		// the turn, so the notification should too.
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -351,7 +356,12 @@ func (a *approvalStager) firePushNotification(toolName string) {
 		if err := push.NotifyApprovalRequired(ctx, email, toolName); err != nil {
 			log.Printf("push: approval notification (tool=%s conv=%s): %v", toolName, convID, err)
 		}
-	}()
+	}
+	if a.bg != nil {
+		a.bg.Go("httpapi.approval_push", send)
+		return
+	}
+	go send()
 }
 
 // validateEmailHasContent rejects a preview_email / send_email call
