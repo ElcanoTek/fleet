@@ -605,6 +605,38 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       return;
     }
 
+    // A notify-mode critical tool (#1153) already RAN. The card is a record, not
+    // a question: it lands already approved, carries the bundle-authored undo
+    // line as its result, and has no countdown to miss — which was the point.
+    if (event.event === "tool.action_recorded") {
+      const p = payload as {
+        approval_id: string;
+        tool: string;
+        summary: Approval["summary"];
+        undo_hint?: string;
+        mcp_server?: string;
+        mcp_account?: string;
+      };
+      patchAssistantMessage(ctx.target, ctx.assistantId, (m) => ({
+        ...m,
+        approvals: [
+          ...(m.approvals ?? []),
+          {
+            id: p.approval_id,
+            tool: p.tool,
+            summary: p.summary,
+            status: "approved" as ApprovalStatus,
+            resultText: (p.undo_hint ?? "").trim()
+              ? `Ran without asking. ${(p.undo_hint ?? "").trim()}`
+              : "Ran without asking.",
+            mcpServer: p.mcp_server,
+            mcpAccount: p.mcp_account,
+          },
+        ],
+      }));
+      return;
+    }
+
     if (event.event === "tool.approval_superseded") {
       const p = payload as { tool: string };
       setMessagesByConv((prev) => {

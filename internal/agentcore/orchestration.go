@@ -198,6 +198,21 @@ type ApprovalStager interface {
 	StageSuggestion(reason string) (approvalID, msg string, err error)
 }
 
+// ActionRecorder is the OPTIONAL half of ApprovalStager that a `notify`-mode
+// critical tool needs (#1153): post a card recording that an action ran, rather
+// than one asking whether it may. Kept as a separate, type-asserted interface so
+// every existing ApprovalStager implementation compiles unchanged.
+//
+// A sink that does not implement it makes `notify` unavailable, and the gate
+// falls back to blocking on a card. That direction is deliberate: the argument
+// for executing without asking is that the user still finds out and can undo it,
+// so a deployment that cannot tell them must not skip the question.
+type ActionRecorder interface {
+	// RecordAction posts the record card. undoHint is the bundle-authored line
+	// describing how to reverse this action; it may be empty.
+	RecordAction(toolName, toolCallID, rawInput, undoHint string) error
+}
+
 // Session pre-approval sentinels (#300): instead of a real approval ID, Stage
 // may return one of these to signal a session-scoped pre-decision the user made
 // earlier ("approve/deny all <tool> in this conversation"). They ride the normal

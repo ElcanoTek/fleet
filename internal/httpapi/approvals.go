@@ -173,6 +173,45 @@ func (a *approvalStager) expiryUnixFor(toolName string) int64 {
 	return time.Now().Unix() + int64(a.resolveTimeoutSeconds(toolName))
 }
 
+// RecordAction implements agentcore.ActionRecorder (#1153): it posts a card
+// saying an action RAN, rather than one asking whether it may.
+//
+// The row is created and resolved in the same breath — approved, with the undo
+// hint as its result text — so the record survives a page reload and sits in the
+// conversation exactly where a normal card would, but with no decision attached
+// and no countdown to miss. The undo line is bundle-authored: fleet does not
+// know any client's reversal verb and must not invent one, and "we can always
+// roll back" is only true in practice if the card says how.
+//
+// An error here is load-bearing. The caller falls back to a blocking approval
+// when this fails, because the entire justification for running without asking
+// is that the user still finds out.
+func (a *approvalStager) RecordAction(toolName, toolCallID, rawInput, undoHint string) error {
+	seat := a.seatFor(toolName)
+	// A record is not pending, so its expiry is only a column value; use the
+	// same resolution so the row shape is identical to every other approval.
+	approval, err := a.store.CreateApproval(a.ctx, a.conversationID, a.userEmail, toolName, toolCallID, rawInput, a.expiryUnixFor(toolName), seat)
+	if err != nil {
+		return err
+	}
+	result := "Ran without asking: this tool is declared notify-mode in the client bundle."
+	if hint := strings.TrimSpace(undoHint); hint != "" {
+		result += " " + hint
+	}
+	if err := a.store.ResolveApproval(a.ctx, a.userEmail, approval.ID, "approved", result); err != nil {
+		return err
+	}
+	a.sink.Emit("tool.action_recorded", map[string]any{
+		"approval_id": approval.ID,
+		"tool":        toolName,
+		"summary":     summarizeApprovalInput(toolName, rawInput, a.conversationID),
+		"undo_hint":   strings.TrimSpace(undoHint),
+		"mcp_server":  approval.MCPServer,
+		"mcp_account": approval.MCPAccount,
+	})
+	return nil
+}
+
 func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, error) {
 	// Auto-approve-in-test (#225): a CI/test escape hatch (FLEET_AUTO_APPROVE_IN_TEST,
 	// off by default) for pipelines that have no human present and run against a
