@@ -265,6 +265,45 @@ func TestRecovery_CrashAfterIntentSynthesizesUnknownOutcome(t *testing.T) {
 	}
 }
 
+// TestRecovery_MultipleUnknownOutcomesAllMarked pins the batched marker write:
+// a crash with several calls in flight must persist a reconciliation marker for
+// EVERY resultless call (they now ride one multi-row INSERT, not one statement
+// each), and re-running recovery must not duplicate them.
+func TestRecovery_MultipleUnknownOutcomesAllMarked(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	convID := seedConvAndTurn(t, s, "t1")
+	if _, err := s.CommitUserMessage(ctx, convID, "t1", userEntry(t, "fan out")); err != nil {
+		t.Fatal(err)
+	}
+	calls := []string{"call-1", "call-2", "call-3"}
+	for i, id := range calls {
+		journalIntent(t, s, "t1", int64(i+1), id, "bash", `{"cmd":"ls"}`)
+	}
+	// No results, no SSE tool.call events: all three outcomes are unknown.
+
+	assertPaired(t, recoveredHistory(t, s, convID))
+
+	markers := map[string]int{}
+	rows, err := s.LoadTurnJournal(ctx, "t1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range rows {
+		if r.Kind == TurnJournalResult && r.Synthesized {
+			markers[r.CallID]++
+		}
+	}
+	for _, id := range calls {
+		if markers[id] != 1 {
+			t.Errorf("synthesized marker count for %s = %d, want 1", id, markers[id])
+		}
+	}
+	if len(markers) != len(calls) {
+		t.Errorf("markers = %v, want one per call %v", markers, calls)
+	}
+}
+
 func TestRecovery_JournaledResultAndTextProjected(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

@@ -362,17 +362,12 @@ func (s *Store) recoverOneTurn(ctx context.Context, turnID, convID string) (Reco
 		}
 		rec.Projected = len(ids)
 		// Durable reconciliation markers for the synthesized unknown-outcome
-		// results, queryable independently of message text.
-		for _, row := range synthesized {
-			if _, err := tx.ExecContext(ctx,
-				`INSERT INTO turn_journal
-				   (turn_id, seq, kind, call_id, tool_name, content, is_err, synthesized, created_at)
-				 VALUES ($1, $2, $3, $4, $5, $6, TRUE, TRUE, $7)
-				 ON CONFLICT (turn_id, kind, call_id) DO NOTHING`,
-				turnID, row.Seq, TurnJournalResult, row.CallID, row.ToolName, row.Content, now,
-			); err != nil {
-				return rec, err
-			}
+		// results, queryable independently of message text. Written as chunked
+		// multi-row INSERTs rather than one statement per marker: a crashed
+		// turn can carry as many unknown-outcome calls as it had in flight, and
+		// recovery pays a round trip for each.
+		if err := insertSynthesizedMarkers(ctx, tx, turnID, synthesized, now); err != nil {
+			return rec, err
 		}
 	}
 
@@ -419,6 +414,37 @@ func appendSyntheticTurnEvent(ctx context.Context, tx *sql.Tx, turnID, name, pay
 		turnID, nextEventID, name, payload, now,
 	)
 	return err
+}
+
+// insertSynthesizedMarkers writes the recovery-authored synthesized=TRUE
+// journal rows inside the caller's transaction as chunked multi-row INSERTs
+// (one round trip per maxBatchRows markers instead of one per marker). The
+// ON CONFLICT clause is per-statement, so a partially-recovered turn still
+// skips markers a previous attempt already wrote.
+func insertSynthesizedMarkers(ctx context.Context, tx *sql.Tx, turnID string, rows []synthesizedResult, now int64) error {
+	const cols = 7 // is_err and synthesized are literal TRUE, not parameters
+	for start := 0; start < len(rows); start += maxBatchRows {
+		end := min(start+maxBatchRows, len(rows))
+		chunk := rows[start:end]
+		var q strings.Builder
+		q.WriteString(`INSERT INTO turn_journal
+			   (turn_id, seq, kind, call_id, tool_name, content, is_err, synthesized, created_at) VALUES `)
+		args := make([]any, 0, len(chunk)*cols)
+		for i, row := range chunk {
+			if i > 0 {
+				q.WriteString(", ")
+			}
+			base := i * cols
+			fmt.Fprintf(&q, "($%d, $%d, $%d, $%d, $%d, $%d, TRUE, TRUE, $%d)",
+				base+1, base+2, base+3, base+4, base+5, base+6, base+7)
+			args = append(args, turnID, row.Seq, TurnJournalResult, row.CallID, row.ToolName, row.Content, now)
+		}
+		q.WriteString(" ON CONFLICT (turn_id, kind, call_id) DO NOTHING")
+		if _, err := tx.ExecContext(ctx, q.String(), args...); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // synthesizedResult carries a recovery-synthesized unknown-outcome result so
