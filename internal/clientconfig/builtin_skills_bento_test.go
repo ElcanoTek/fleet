@@ -684,15 +684,14 @@ func TestBentoDeckDoesNotCallHome(t *testing.T) {
 	if runtimeAt < 0 {
 		t.Fatal("no runtime block in the shell")
 	}
-	if !(guardAt < docAt && docAt < runtimeAt) {
+	if guardAt >= docAt || docAt >= runtimeAt {
 		t.Errorf("guard must precede the document block and the runtime; got guard=%d doc=%d runtime=%d",
 			guardAt, docAt, runtimeAt)
 	}
 
 	// An edit must neither drop the guard nor add a second copy: it lives in the
 	// prefix, which `set` copies through untouched.
-	stdout, stderr, err = runHelper(t, helper, dir, "get", deck, "-o", "doc.json")
-	if err != nil {
+	if _, stderr, err = runHelper(t, helper, dir, "get", deck, "-o", "doc.json"); err != nil {
 		t.Fatalf("get: %v\n%s", err, stderr)
 	}
 	if _, stderr, err = runHelper(t, helper, dir, "set", deck, "doc.json"); err != nil {
