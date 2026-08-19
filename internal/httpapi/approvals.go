@@ -805,6 +805,8 @@ func summarizeSendEmailInput(toolName, rawInput, convID string) map[string]any {
 // larger than 4 MiB (the same per-attachment cap the email pipeline
 // enforces elsewhere) so a misbehaving agent can't blow up the
 // approval row's summary payload.
+var cidPattern = regexp.MustCompile(`(?i)cid:([^\s"'<>]+)\b`)
+
 func expandCidImagesToDataURLs(html string, args map[string]any, convID string) string {
 	atts, ok := args["inline_attachments"].([]any)
 	if !ok || len(atts) == 0 || html == "" {
@@ -815,6 +817,8 @@ func expandCidImagesToDataURLs(html string, args map[string]any, convID string) 
 		return html
 	}
 	const maxAttachmentBytes = 4 << 20
+
+	cidMap := make(map[string]string)
 
 	for _, raw := range atts {
 		entry, ok := raw.(map[string]any)
@@ -867,14 +871,26 @@ func expandCidImagesToDataURLs(html string, args map[string]any, convID string) 
 		}
 		dataURL := "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(data)
 
+		// Store the data URL mapped by the case-insensitive cid.
+		cidMap[strings.ToLower(cid)] = dataURL
+	}
+
+	if len(cidMap) > 0 {
 		// Replace every `cid:<id>` reference (single or double quotes,
 		// case-insensitive scheme). The cid value itself is treated as
 		// a literal — it's already constrained to email-safe chars
 		// (RFC 2392) so a regex special isn't a concern here, but
-		// QuoteMeta keeps us safe regardless.
-		quoted := regexp.QuoteMeta(cid)
-		re := regexp.MustCompile(`(?i)cid:` + quoted + `\b`)
-		html = re.ReplaceAllString(html, dataURL)
+		// we just extract it from the match without regex metachars.
+		html = cidPattern.ReplaceAllStringFunc(html, func(match string) string {
+			// match starts with "cid:" or "CID:"
+			if len(match) > 4 {
+				cidVal := match[4:]
+				if dataURL, ok := cidMap[strings.ToLower(cidVal)]; ok {
+					return dataURL
+				}
+			}
+			return match
+		})
 	}
 	return html
 }
