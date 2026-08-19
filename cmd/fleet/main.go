@@ -216,7 +216,11 @@ func run() error {
 	// Load the client bundle first: it supplies the MCP catalog (built into
 	// cfg.MCPServers), the supporting-doc dirs, and branding/empty-state. Its
 	// manifest also tells us which connector env-var names to admit from the
-	// .env file, so register them BEFORE config.Load reads the env.
+	// .env file, so register them BEFORE config.Load reads the env. (Load
+	// itself already folded the FLEET_ENV_FILE file into the process env for
+	// its manifest interpolation, #1123 — config.Load's application below is
+	// an idempotent re-read that additionally admits the literal-named keys
+	// registered here.)
 	bundle, err := clientconfig.Load(clientconfig.Dir())
 	if err != nil {
 		return fmt.Errorf("load client config bundle: %w", err)

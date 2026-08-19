@@ -342,6 +342,38 @@ prior versions are listed because none have shipped.
     cold-start construction, so a cancelled turn stops paying container
     spin-up (background warming keeps its own `FillCtx`).
 
+- **Bundle `${VAR}` interpolation now sees the `FLEET_ENV_FILE` env file, and
+  an unresolvable reference fails the load (#1123).** The manifest used to
+  interpolate BEFORE `config.Load` applied the env file, so a
+  `${VAR}`/`${VAR:-default}` in `url:`, `command:`/`args:`, `sandbox.image`,
+  or `providers[].base_url` silently baked the default (or shipped a literal
+  `${VAR}` token nothing ever re-resolved) whenever the value lived only in
+  the env file. `clientconfig.Load` now registers every `${...}` reference the
+  raw manifest carries with the `.env` allowlist and folds the env file into
+  the process env (same admission + process-env-wins precedence as
+  `config.Load`, once per process) before interpolating — every bundle-loading
+  entrypoint (serve, mcp-broker, `mcp test`, `validate-config`, `eval`,
+  `task run`, the admin CLI) goes through this one seam. `EnvVarNames()` now
+  inventories references from ALL interpolated fields, not just env/header
+  values, and `${VAR:?...}` validates after the env file applies. The MCP
+  `env:`/`headers:` maps keep the #706 lazy-resolution contract unchanged, and
+  hot-reload precedence is untouched (env-file values stay reloadable; process
+  winners still pin). **Compat:** a manifest that today silently ships a
+  literal `${VAR}` outside those lazy maps now refuses to load — including a
+  bare `${FLEET_WORKSPACE}`/`${FLEET_TASK_ID}` anywhere except an
+  `mcp_servers` env value (header maps only preserve the token verbatim, they
+  never substitute it), and a `${VAR:-default}` whose default body nests an
+  unescaped `${...}` (the interpolator never expands a default body, so the
+  inner reference would ship as a literal whenever the outer var is unset).
+  The error names the exact manifest field and variable (use
+  `${VAR:-default}` for an optional value, `$${...}` for a literal). A
+  manifest whose raw bytes fail to parse is now always a load error, even
+  when a substitution would repair the syntax. `fleet validate-config`'s
+  credentials check reports absent names whose every occurrence carries a
+  `${VAR:-default}` as "manifest defaults in effect" instead of missing
+  credentials, so a pristine install stays OK rather than warning forever
+  about `"${FLEET_SANDBOX_IMAGE:-}"`.
+
 - **Teams are settable from the UI, so projects can actually be shared
   (#1157).** Two bugs made the shipped team/projects feature unreachable on a
   fresh box:

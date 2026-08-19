@@ -95,6 +95,17 @@ type Bundle struct {
 	// remove that key after the broker child inherits the startup environment.
 	connectorEnvVarNames     []string
 	connectorAccountVarNames []string
+	// manifestEnvVarNames inventories every ${VAR} source name the RAW manifest
+	// references anywhere — url:, command:/args:, sandbox.image, providers, and
+	// the connector env/header maps alike — captured before interpolation can
+	// substitute an exported value out of the runtime manifest. EnvVarNames
+	// merges them so the .env allowlist admits references from ALL interpolated
+	// fields, not only env/header values (#1123). Names only, never values.
+	manifestEnvVarNames []string
+	// manifestDefaultOnlyEnvVarNames is the subset of manifestEnvVarNames
+	// whose every reference carries a ${VAR:-...} default — see
+	// EnvVarNamesDefaultOnly. Names only, never values.
+	manifestDefaultOnlyEnvVarNames []string
 	// scrubbedAlwaysOnServers preserves only the public availability rows after
 	// ScrubConnectorRuntimeDefinitions removes the credential-bearing catalog.
 	scrubbedAlwaysOnServers []AlwaysOnServer
@@ -999,6 +1010,25 @@ func Load(dir string) (*Bundle, error) {
 		return nil, fmt.Errorf("parse connector env inventory %s: %w", manifestPath, err)
 	}
 	connectorEnvVars, connectorAccountVars := connectorEnvInventory(rawConnectors.MCPServers, rawConnectors.HTTPTools)
+	// Inventory every ${...} reference in the raw manifest — url:, command:/
+	// args:, sandbox.image, providers, and the connector maps alike — and where
+	// each lives, then fold the FLEET_ENV_FILE env file into the process env
+	// BEFORE interpolating (#1123). The names are registered with config's
+	// .env allowlist first so the file's values for manifest-referenced vars
+	// are admitted; the sites drive the unresolved-reference check after the
+	// pass runs. The env-file path comes only from the process env, so there
+	// is no circularity with the bundle being loaded here. A raw parse failure
+	// fails the load HERE: the strict unmarshal below runs on the interpolated
+	// bytes, where a substituted value can repair the syntax and would silently
+	// skip the registration and the unresolved-reference check.
+	refSites, refNames, err := scanManifestEnvRefs(raw)
+	if err != nil {
+		return nil, fmt.Errorf("parse manifest %s: %w", manifestPath, err)
+	}
+	config.RegisterAllowedEnvVars(refNames...)
+	if err := applyBootEnvFile(); err != nil {
+		return nil, err
+	}
 	// Interpolate env references over the RAW bytes before YAML unmarshal so that
 	// "env-or-default" config semantics — ${VAR:-default} / ${VAR:?message} —
 	// resolve at load time. This restores the getEnvOrDefault("VAR","literal")
@@ -1007,6 +1037,15 @@ func Load(dir string) (*Bundle, error) {
 	interpolated, err := interpolateManifest(raw, manifestPath)
 	if err != nil {
 		return nil, err
+	}
+	// With the env file applied, a bare ${VAR} still unset in a field OUTSIDE
+	// the lazily-resolved connector env/header maps can never resolve — nothing
+	// re-reads those fields after load, so the literal token would ship into a
+	// url:, command:, or sandbox.image and fail confusingly at first use. Fail
+	// the load instead, naming the field and the variable.
+	if problems := unresolvedManifestRefs(refSites); len(problems) > 0 {
+		return nil, fmt.Errorf("client config manifest %s: unresolved ${VAR} references:\n  %s",
+			manifestPath, strings.Join(problems, "\n  "))
 	}
 	var m manifest
 	// Strict parse: an unknown or duplicate key FAILS the load rather than being
@@ -1018,13 +1057,13 @@ func Load(dir string) (*Bundle, error) {
 		return nil, fmt.Errorf("parse manifest %s: %w", manifestPath, err)
 	}
 	// Connector env/header values resolve against the LIVE process env at
-	// catalog-build time (resolveEnvMap) — deliberately NOT here: this load
-	// runs before config.Load applies the .env file (the allowlist is seeded
-	// from EnvVarNames below), so keeping the pass's output would bake a
-	// ${VAR:-default} literal that an env-file override was meant to beat
-	// (fleet#706) and would consume the $${ escape one pass early. Re-source
-	// those maps from the raw manifest; the pass above still fail-loads an
-	// unset ${VAR:?...} or a non-bare reserved token inside them.
+	// catalog-build time (resolveEnvMap) — deliberately NOT here: an unset
+	// credential is legitimate there (the server gates off, optional_env drops
+	// the key, and the broker child resolves against its OWN environment), and
+	// keeping the pass's output would consume the $${ escape one pass early
+	// (fleet#706). Re-source those maps from the raw manifest; the pass above
+	// still fail-loads an unset ${VAR:?...} or a non-bare reserved token
+	// inside them.
 	if len(rawConnectors.MCPServers) != len(m.MCPServers) || len(rawConnectors.HTTPTools) != len(m.HTTPTools) {
 		return nil, fmt.Errorf("client config manifest %s: env interpolation altered the connector list shape (mcp_servers %d -> %d, http_tools %d -> %d); a substituted value must not inject YAML structure",
 			manifestPath, len(rawConnectors.MCPServers), len(m.MCPServers), len(rawConnectors.HTTPTools), len(m.HTTPTools))
@@ -1038,32 +1077,34 @@ func Load(dir string) (*Bundle, error) {
 	}
 
 	b := &Bundle{
-		Dir:                      abs,
-		connectorEnvVarNames:     connectorEnvVars,
-		connectorAccountVarNames: connectorAccountVars,
-		Branding:                 m.Branding,
-		Models:                   m.Models,
-		EmptyState:               m.EmptyState,
-		TaskTemplates:            m.TaskTemplates,
-		MCPCatalog:               m.MCPServers,
-		HTTPTools:                m.HTTPTools,
-		WebhookTriggers:          m.WebhookTriggers,
-		RemoteMCPCatalog:         m.RemoteMCPs,
-		Providers:                m.Providers,
-		FallbackProviders:        m.FallbackProviders,
-		AgentPolicyConfig:        m.AgentPolicy,
-		HooksConfig:              m.Hooks,
-		Personas:                 m.Personas,
-		PricingConfig:            m.Pricing,
-		SandboxConfig:            resolveSandbox(m.Sandbox, abs),
-		sandboxDeclared:          m.Sandbox != nil,
-		SystemPromptsDir:         filepath.Join(abs, "system_prompts"),
-		PersonasDir:              filepath.Join(abs, "personas"),
-		ProtocolsDir:             filepath.Join(abs, "protocols"),
-		PromptsDir:               filepath.Join(abs, "prompts"),
-		SkillsDir:                filepath.Join(abs, "skills"),
-		MCPDir:                   filepath.Join(abs, "mcp"),
-		EvalsDir:                 filepath.Join(abs, "evals"),
+		Dir:                            abs,
+		connectorEnvVarNames:           connectorEnvVars,
+		connectorAccountVarNames:       connectorAccountVars,
+		manifestEnvVarNames:            refNames,
+		manifestDefaultOnlyEnvVarNames: defaultOnlyRefNames(refSites),
+		Branding:                       m.Branding,
+		Models:                         m.Models,
+		EmptyState:                     m.EmptyState,
+		TaskTemplates:                  m.TaskTemplates,
+		MCPCatalog:                     m.MCPServers,
+		HTTPTools:                      m.HTTPTools,
+		WebhookTriggers:                m.WebhookTriggers,
+		RemoteMCPCatalog:               m.RemoteMCPs,
+		Providers:                      m.Providers,
+		FallbackProviders:              m.FallbackProviders,
+		AgentPolicyConfig:              m.AgentPolicy,
+		HooksConfig:                    m.Hooks,
+		Personas:                       m.Personas,
+		PricingConfig:                  m.Pricing,
+		SandboxConfig:                  resolveSandbox(m.Sandbox, abs),
+		sandboxDeclared:                m.Sandbox != nil,
+		SystemPromptsDir:               filepath.Join(abs, "system_prompts"),
+		PersonasDir:                    filepath.Join(abs, "personas"),
+		ProtocolsDir:                   filepath.Join(abs, "protocols"),
+		PromptsDir:                     filepath.Join(abs, "prompts"),
+		SkillsDir:                      filepath.Join(abs, "skills"),
+		MCPDir:                         filepath.Join(abs, "mcp"),
+		EvalsDir:                       filepath.Join(abs, "evals"),
 	}
 	applyBrandingDefaults(&b.Branding)
 	if err := b.resolveBrandLogo(); err != nil {
@@ -2134,10 +2175,12 @@ func (b *Bundle) Pricing() PricingConfig {
 }
 
 // EnvVarNames returns every process-env var name the manifest references —
-// across enable gates, env interpolation, header interpolation, and account
-// vars. cmd/fleet passes these to config.RegisterAllowedEnvVars so the bundle's
-// connector credentials survive the .env-file load while fleet's static
-// allowlist stays client-agnostic.
+// across enable gates, account vars, identity_env, webhook/provider key names,
+// and every ${VAR} interpolation site anywhere in the manifest (env/header
+// values, url:, command:/args:, sandbox.image, providers, … — see
+// manifestEnvVarNames, #1123). cmd/fleet passes these to
+// config.RegisterAllowedEnvVars so the bundle's connector credentials survive
+// the .env-file load while fleet's static allowlist stays client-agnostic.
 func (b *Bundle) EnvVarNames() []string {
 	seen := map[string]bool{}
 	var out []string
@@ -2149,25 +2192,9 @@ func (b *Bundle) EnvVarNames() []string {
 		seen[name] = true
 		out = append(out, name)
 	}
+	b.literalEnvVarNames(add)
 	for i := range b.MCPCatalog {
 		s := &b.MCPCatalog[i]
-		for _, v := range s.EnabledEnv {
-			add(v)
-		}
-		for _, group := range s.EnabledGroups {
-			for _, v := range group {
-				add(v)
-			}
-		}
-		for _, v := range s.AccountVars {
-			add(v)
-		}
-		// identity_env keys must survive the .env allowlist: the variant guard
-		// reads their <VAR>_<ACCOUNT> forms from the process env (suffix
-		// admission requires the BASE name to be registered).
-		for _, v := range s.IdentityEnv {
-			add(v)
-		}
 		for _, v := range s.Env {
 			for _, name := range sourceEnvRefs(v) {
 				add(name)
@@ -2188,6 +2215,42 @@ func (b *Bundle) EnvVarNames() []string {
 			}
 		}
 	}
+	// Every ${VAR} reference anywhere else in the manifest (#1123) — url:,
+	// command:/args:, sandbox.image, providers[].base_url, … interpolate at
+	// load against the process env, so an env-file value for them must survive
+	// the allowlist exactly like an env/header reference. Captured from the
+	// raw manifest at Load (an exported value is substituted out of the parsed
+	// fields, but its NAME must still be admitted).
+	for _, name := range b.manifestEnvVarNames {
+		add(name)
+	}
+	return out
+}
+
+// literalEnvVarNames feeds add() every env-var name the manifest names
+// LITERALLY rather than via ${...} interpolation. Shared by EnvVarNames and
+// EnvVarNamesDefaultOnly so the two views can never drift.
+func (b *Bundle) literalEnvVarNames(add func(string)) {
+	for i := range b.MCPCatalog {
+		s := &b.MCPCatalog[i]
+		for _, v := range s.EnabledEnv {
+			add(v)
+		}
+		for _, group := range s.EnabledGroups {
+			for _, v := range group {
+				add(v)
+			}
+		}
+		for _, v := range s.AccountVars {
+			add(v)
+		}
+		// identity_env keys must survive the .env allowlist: the variant guard
+		// reads their <VAR>_<ACCOUNT> forms from the process env (suffix
+		// admission requires the BASE name to be registered).
+		for _, v := range s.IdentityEnv {
+			add(v)
+		}
+	}
 	// Webhook trigger signing secrets (#268) are named directly (not ${VAR}
 	// references) and are read host-side from the process env at request time, so
 	// their env-var names must survive the .env-file allowlist exactly like an MCP
@@ -2201,6 +2264,32 @@ func (b *Bundle) EnvVarNames() []string {
 	// .env-file allowlist exactly like an MCP connector credential.
 	for i := range b.Providers {
 		add(b.Providers[i].APIKeyEnv)
+	}
+}
+
+// EnvVarNamesDefaultOnly returns the subset of EnvVarNames whose EVERY
+// manifest appearance is a default-carrying ${VAR:-...} reference — config
+// knobs with a manifest fallback (e.g. the generic bundle's
+// `image: "${FLEET_SANDBOX_IMAGE:-}"`), never a credential something waits
+// on. A name that is also referenced bare or ${VAR:?}-required anywhere, or
+// named literally (enable gates, account_vars, identity_env, webhook
+// secrets, provider keys), is excluded. `fleet validate-config` uses this to
+// report an absent default-carrying name as "manifest defaults in effect"
+// instead of a missing credential (#1123 widened EnvVarNames to every
+// interpolated field, which would otherwise warn forever on a pristine
+// install). Names only, never values.
+func (b *Bundle) EnvVarNamesDefaultOnly() []string {
+	literal := map[string]bool{}
+	b.literalEnvVarNames(func(name string) {
+		if name = strings.TrimSpace(name); name != "" {
+			literal[name] = true
+		}
+	})
+	out := make([]string, 0, len(b.manifestDefaultOnlyEnvVarNames))
+	for _, name := range b.manifestDefaultOnlyEnvVarNames {
+		if !literal[name] {
+			out = append(out, name)
+		}
 	}
 	return out
 }
@@ -2373,36 +2462,17 @@ func walkSourceStrings(value reflect.Value, visit func(string)) {
 }
 
 // sourceEnvRefs extracts source variable names from ${VAR}, ${VAR:-default},
-// and ${VAR:?message} without consulting the environment. It mirrors the
-// manifest interpolator's brace and escape rules closely enough to inventory
-// exactly the variables interpolation may read.
+// and ${VAR:?message} without consulting the environment. It shares the
+// scanner with the manifest-wide reference inventory (envRefsIn), so it
+// mirrors the interpolator's brace/escape rules and expandExpr's operator
+// parse exactly.
 func sourceEnvRefs(value string) []string {
-	var out []string
-	for i := 0; i < len(value); {
-		if strings.HasPrefix(value[i:], "$${") {
-			i += 3
-			continue
+	refs := envRefsIn(value)
+	out := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		if ref.name != "" {
+			out = append(out, ref.name)
 		}
-		if !strings.HasPrefix(value[i:], "${") {
-			i++
-			continue
-		}
-		end, ok := matchBrace(value, i+1)
-		if !ok {
-			return out
-		}
-		expr := value[i+2 : end]
-		name := expr
-		if split := strings.Index(expr, ":-"); split >= 0 {
-			name = expr[:split]
-		} else if split := strings.Index(expr, ":?"); split >= 0 {
-			name = expr[:split]
-		}
-		name = strings.TrimSpace(name)
-		if name != "" {
-			out = append(out, name)
-		}
-		i = end + 1
 	}
 	return out
 }
@@ -2494,13 +2564,16 @@ func resolveEnvMap(in map[string]string, optional []string) map[string]string {
 //	${VAR}            Bare reference. If VAR is SET, substitute its value. If VAR
 //	                  is UNSET, the token is LEFT INTACT (deferred): per-MCP-server
 //	                  env/header values are resolved lazily at spawn time against
-//	                  the live process env (after the .env file is loaded), where
-//	                  an unset credential is legitimate (the server gates off or
-//	                  optional_env drops the key). The pre-unmarshal pass therefore
-//	                  must NOT hard-fail on an unset bare ${VAR} — that would make
-//	                  loading any bundle impossible unless every connector secret
-//	                  were exported up front. A value that MUST be present at load
-//	                  uses the explicit ${VAR:?message} form instead.
+//	                  the live process env, where an unset credential is
+//	                  legitimate (the server gates off or optional_env drops the
+//	                  key). The pre-unmarshal pass therefore must NOT hard-fail on
+//	                  an unset bare ${VAR} — that would make loading any bundle
+//	                  impossible unless every connector secret were exported up
+//	                  front. Load DOES fail afterwards when a deferred token sits
+//	                  in a field OUTSIDE those lazily-resolved maps (#1123):
+//	                  nothing ever re-reads a url:/command:/sandbox.image, so the
+//	                  literal token could never resolve. A value that MUST be
+//	                  present at load uses the explicit ${VAR:?message} form.
 //	${VAR:-default}   POSIX use-default. If VAR is set AND non-empty, use it; else
 //	                  use default (empty env counts as unset). This is the restored
 //	                  env-or-default form: env can override, the literal is kept.
@@ -2527,10 +2600,13 @@ func resolveEnvMap(in map[string]string, optional []string) map[string]string {
 // are special: this pass VALIDATES them — an unset ${VAR:?...} or a non-bare
 // reserved token still fails the load — but its substitutions there are
 // discarded. Load re-sources those maps from the raw manifest so they resolve
-// against the live process env at catalog-build time, after the .env file is
-// applied (see interpolate/resolveEnvMap); this pass runs before the env file
-// exists in the process env, so its output would bake defaults an env-file
-// override is meant to beat.
+// against the live process env at catalog-build time (see
+// interpolate/resolveEnvMap): an unset credential is legitimate there, the
+// broker child resolves against its own environment, and keeping this pass's
+// output would consume the $${ escape one pass early. Load folds the
+// FLEET_ENV_FILE env file into the process env BEFORE running this pass
+// (#1123), so every other field — and ${VAR:?...} validation — sees the same
+// environment the runtime uses.
 func interpolateManifest(raw []byte, manifestPath string) ([]byte, error) {
 	s := string(raw)
 	var sb strings.Builder
