@@ -311,6 +311,60 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **The test fixture that wipes the database deadlocked in CI, failing PRs that
+  had touched nothing near it.** `store.TruncateAllForTest` issued a bare
+  `TRUNCATE`, which takes `ACCESS EXCLUSIVE` on each table one at a time in list
+  order — `conversations` early, `users` several entries later. Any ordinary
+  transaction that writes `users` and then `conversations` holds those two locks
+  in the opposite order, so the pair cycles and Postgres kills one of them. The
+  observed failure was `TestMockTurn_AgentFieldUnused` dying on
+  `truncate: ERROR: deadlock detected (SQLSTATE 40P01)` in `internal/httpapi`.
+
+  The writers were real, and the comment on `newTestStore` explained why nobody
+  expected them: it asserted that serial test execution meant no cross-test
+  races. Serial execution is not an idle database. `go test` starts the next test
+  the moment the previous one returns, and a goroutine that outlived its test —
+  a turn driver still persisting events — writes straight through the next
+  fixture's wipe. That comment has been corrected.
+
+  The fixture now takes its locks defensively, in a transaction:
+
+  - A `pg_advisory_xact_lock`, acquired before any table lock, serializes
+    fixtures against each other. A waiter holds nothing, so two fixtures cannot
+    cycle, and ordinary writers never take it so it introduces no new cycle.
+  - Every table in the schema is then locked in one statement — not just the
+    `TRUNCATE` list, since `CASCADE` reaches further (`messages`, `turn_events`,
+    `chat_input_queue`, …) and an unlocked cascade target is where a wait could
+    creep back in. Locking the lot also means this step needs no maintenance as
+    tables are added.
+  - `NOWAIT` on the early attempts is what removes the deadlock rather than
+    merely retrying it: a deadlock requires waiting, so a request that refuses to
+    wait cannot sit in a cycle. This also moves who pays for contention. Left to
+    a bare `TRUNCATE`, Postgres picks a victim and it is frequently the ordinary
+    writer — a test's own background goroutine dying of a deadlock it did nothing
+    to cause. Now the fixture takes the loss and retries.
+  - Later attempts escalate to a queueing lock, because `NOWAIT` and waiting
+    starve in opposite directions: `NOWAIT` asks at one instant and loses against
+    a steady write stream, while a queued `ACCESS EXCLUSIVE` blocks the row-level
+    requests arriving behind it, so the writers drain. `lock_timeout` keeps a
+    queued attempt from hanging the suite instead of retrying.
+
+  Measured against a reproducer that runs six writers in the inverted lock order
+  while three fixtures truncate: the old code failed 17 times in a 12-second run,
+  the new code 0 times across five such runs (~2,000 truncates), and writer
+  casualties went from 19 to 13–19 — unchanged, since a write aimed at a database
+  being wiped was doomed either way. Under a deliberately unfair variant whose
+  writers never stop, failures fell from 281 to 0–7.
+
+  `TestTruncateAllForTestDoesNotDeadlockAContendingWriter` fences it by
+  reconstructing the inversion deliberately; it fails on the old implementation
+  with the exact CI error and passes on the new one. It is one-sided on purpose —
+  if the timing slips, everything succeeds and it passes — so the regression test
+  for a flake cannot become the next flake. Retries are capped rather than
+  infinite: a writer that never stops still fails the fixture, with an error
+  saying a leaked test goroutine is the likely cause, which is worth failing on
+  rather than hiding.
+
 - **A bundle could ship a skill name the skill builder would refuse to save.**
   `clientconfig.validSkillName` checked only the charset (lowercase, digits,
   hyphens), so `-`, `--`, `-research` and `research-` all passed, while
