@@ -26,9 +26,16 @@ func testDSN() string {
 //
 // Isolation strategy: TRUNCATE every app table (CASCADE picks up the
 // FK-linked messages/turn_metrics/approvals rows) before each test.
-// Tests within a package run serially by default, so there's no risk
-// of cross-test races — and this avoids the per-test CREATE DATABASE
-// overhead that would dominate a small suite.
+// This avoids the per-test CREATE DATABASE overhead that would dominate
+// a small suite.
+//
+// Serial test execution is NOT the same as an idle database, which this
+// comment used to assume. `go test` starts the next test as soon as the
+// previous one returns, and a goroutine that outlived its test — a turn
+// driver still persisting events, say — keeps writing straight through the
+// next fixture's wipe. That is what deadlocked a bare TRUNCATE in CI and
+// failed PRs with nothing near the database in their diff, so
+// TruncateAllForTest now takes its locks defensively; see its comment.
 func newTestStore(t testing.TB) *Store {
 	t.Helper()
 	dsn := testDSN()
