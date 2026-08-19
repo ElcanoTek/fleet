@@ -151,6 +151,13 @@ type Server struct {
 	activeTurns     sync.WaitGroup
 	activeTurnCount atomic.Int64
 
+	// background tracks detached work that is NOT a turn — the queue-drain
+	// re-kick, memory-graph extraction, retained-buffer eviction, approval push
+	// sends. activeTurns never covered those, so nothing waited for them and they
+	// outlived both shutdown and a test's store. See background.go. Value, not
+	// pointer: tests build Server as a struct literal and a nil field would panic.
+	background backgroundTracker
+
 	// Health-summary inputs (#301). startTime backs uptime; version is the build
 	// label; workerStats (optional) returns scheduler worker/task counts from the
 	// sched store — injected so httpapi stays sched-agnostic. nil → that section
@@ -179,6 +186,12 @@ type Server struct {
 	// and calls the storage create path. nil → schedule_task approvals report the
 	// feature is unconfigured (no task is created).
 	scheduleTask func(context.Context, TaskScheduleRequest) (*TaskScheduleResult, error)
+
+	// manageTasks updates or stops EXISTING orchestrator tasks on behalf of an
+	// approved chat manage_tasks call (#1152). Same seam discipline as
+	// scheduleTask: httpapi stays sched-agnostic and main.go supplies the
+	// adapter. nil = the capability is unconfigured and the tool reports so.
+	manageTasks func(context.Context, TaskMutationRequest) (*TaskMutationResult, error)
 
 	// opsAdmins grants/revokes/lists Operations-Center admin rows by email so
 	// the admin Users tab carries `fleet admin add`'s two-plane semantics.
@@ -210,6 +223,59 @@ type TaskScheduleRequest struct {
 	// provenance still comes from the source-chat tag (the seam does not
 	// resolve chat emails to sched users).
 	RequestedBy string
+}
+
+// TaskMutationRequest is the sched-agnostic payload the approved manage_tasks
+// path hands to the orchestrator. Exactly one of TaskIDs / Match names the
+// targets; the change fields are all "omitted = leave alone".
+type TaskMutationRequest struct {
+	// Action is "update" or "stop" (tools.ManageTasksAction*).
+	Action  string
+	TaskIDs []string
+	// Match selects by property. Only ever set for "update" — the tool refuses
+	// a filtered stop, because stopping cannot be undone from chat and a filter
+	// the human has not seen resolved is not something to approve.
+	Match *TaskMutationMatch
+
+	Prompt        string
+	Cron          string
+	Model         string
+	MaxIterations int
+	AddTags       []string
+	RemoveTags    []string
+
+	// RequestedBy is the approving chat user's email — the principal the
+	// adapter authorizes against, so chat cannot edit a task the same person
+	// could not edit through the API.
+	RequestedBy string
+}
+
+// TaskMutationMatch is the property selector behind a bulk update.
+type TaskMutationMatch struct {
+	Query string
+	Tag   string
+	Model string
+}
+
+// TaskMutationResult reports what an approved manage_tasks call actually did,
+// per task. The list is the point: a bulk edit that reports only a count is a
+// bulk edit nobody can check.
+type TaskMutationResult struct {
+	Changed []TaskMutationEntry
+	// Skipped carries targets the adapter declined, with the reason — a task
+	// that no longer exists, one the approver does not own, one already
+	// terminal. Reported rather than swallowed.
+	Skipped []TaskMutationEntry
+	// Matched is how many tasks the selector found, which can exceed
+	// len(Changed) only when something was skipped.
+	Matched int
+}
+
+// TaskMutationEntry names one affected task for the chat-visible report.
+type TaskMutationEntry struct {
+	ID     string
+	Label  string
+	Detail string
 }
 
 // TaskScheduleResult is what the scheduler seam returns after creating a task.
@@ -400,6 +466,14 @@ func WithWorkerStats(fn func(context.Context) (*WorkerStats, error)) Option {
 // approvals reporting the feature unconfigured.
 func WithTaskScheduler(fn func(context.Context, TaskScheduleRequest) (*TaskScheduleResult, error)) Option {
 	return func(s *Server) { s.scheduleTask = fn }
+}
+
+// WithTaskManager injects the orchestrator update/stop seam used to resolve an
+// approved manage_tasks call (#1152). Unset leaves the capability off: the tool
+// still stages a card, and approving it reports that the deployment has no
+// orchestrator wired rather than silently doing nothing.
+func WithTaskManager(fn func(context.Context, TaskMutationRequest) (*TaskMutationResult, error)) Option {
+	return func(s *Server) { s.manageTasks = fn }
 }
 
 // inflightEntry pairs the cancel-func for a turn with a unique token,
@@ -618,7 +692,7 @@ func (s *Server) finishTurn(convID string, token uint64) {
 
 	// Evict the retained buffer after TTL. If another turn has replaced
 	// this one by then (token mismatch), leave it alone.
-	time.AfterFunc(bufferRetainTTL, func() {
+	s.background.After("httpapi.buffer_retain_evict", bufferRetainTTL, func() {
 		s.inflightMu.Lock()
 		defer s.inflightMu.Unlock()
 		if cur, ok := s.inflight[convID]; ok && cur.token == token {
@@ -1065,6 +1139,17 @@ func (s *Server) serverConfig(w http.ResponseWriter, r *http.Request) {
 type clientConfigResponse struct {
 	Branding   clientConfigBranding   `json:"branding"`
 	EmptyState clientConfigEmptyState `json:"empty_state"`
+	// Models carries the workspace's effective model tiers (#1187) — the slug a
+	// new conversation starts on and the escalation target — resolved from the
+	// live agentcore holders the admin settings apply into. The web reads this
+	// on every shell mount, which is what makes the admin setting live without
+	// a rebuild: the compiled-in web constants remain only its fallback.
+	Models clientConfigModels `json:"models"`
+}
+
+type clientConfigModels struct {
+	DefaultModel  string `json:"default_model"`
+	AdvancedModel string `json:"advanced_model"`
 }
 
 type clientConfigBranding struct {
@@ -1112,6 +1197,10 @@ func (s *Server) clientConfigHandler(w http.ResponseWriter, r *http.Request) {
 		EmptyState: clientConfigEmptyState{
 			Cards:         []map[string]any{},
 			ProtocolPills: []map[string]any{},
+		},
+		Models: clientConfigModels{
+			DefaultModel:  agentcore.CurrentDefaultModel(),
+			AdvancedModel: agentcore.CurrentAdvancedModel(),
 		},
 	}
 	if s.clientConfig != nil {
@@ -2733,6 +2822,7 @@ func (s *Server) runTurnAsync(
 			convTimeoutSeconds:   conv.ApprovalTimeoutSeconds,
 			autoApproveInTest:    s.cfg.AutoApproveInTest,
 			push:                 s.push,
+			bg:                   &s.background,
 		},
 		MemoryProposer: &memoryProposer{
 			ctx:            turnCtx,

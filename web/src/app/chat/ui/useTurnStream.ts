@@ -21,7 +21,7 @@ import {
   type ToolCallState,
 } from "./history";
 import { parseSseChunk, stepStreamDedup, type ServerEvent } from "@/app/lib/sse";
-import { DEFAULT_MODEL } from "@/app/lib/modelAliases";
+import { currentDefaultModel } from "@/app/lib/modelAliases";
 import { PENDING_CONV_KEY } from "./workspaceHref";
 
 // One pending input in a conversation's #785 queue (wire shape of
@@ -344,7 +344,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         activeConversationIdRef.current = p.id;
         setActiveConversationId(p.id);
         setSelectedPersona(p.persona);
-        if (typeof p.model === "string") setSelectedModel(p.model || DEFAULT_MODEL);
+        if (typeof p.model === "string") setSelectedModel(p.model || currentDefaultModel());
       }
       // Optimistically insert the row into the sidebar list so the
       // streaming dot can render *during* the turn rather than racing
@@ -597,6 +597,38 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
             summary: p.summary,
             status: "pending",
             expiresAt: p.expires_at,
+            mcpServer: p.mcp_server,
+            mcpAccount: p.mcp_account,
+          },
+        ],
+      }));
+      return;
+    }
+
+    // A notify-mode critical tool (#1153) already RAN. The card is a record, not
+    // a question: it lands already approved, carries the bundle-authored undo
+    // line as its result, and has no countdown to miss — which was the point.
+    if (event.event === "tool.action_recorded") {
+      const p = payload as {
+        approval_id: string;
+        tool: string;
+        summary: Approval["summary"];
+        undo_hint?: string;
+        mcp_server?: string;
+        mcp_account?: string;
+      };
+      patchAssistantMessage(ctx.target, ctx.assistantId, (m) => ({
+        ...m,
+        approvals: [
+          ...(m.approvals ?? []),
+          {
+            id: p.approval_id,
+            tool: p.tool,
+            summary: p.summary,
+            status: "approved" as ApprovalStatus,
+            resultText: (p.undo_hint ?? "").trim()
+              ? `Ran without asking. ${(p.undo_hint ?? "").trim()}`
+              : "Ran without asking.",
             mcpServer: p.mcp_server,
             mcpAccount: p.mcp_account,
           },

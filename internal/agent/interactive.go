@@ -54,10 +54,6 @@ type TurnConfig struct {
 	// Wired into agentcore.RunConfig.MaxIterations → the stream's StopWhen.
 	MaxIterations int
 
-	// PriorHistory / TurnHistory feed the finalize hook's force-summary replay.
-	PriorHistory []HistoryEntry
-	TurnHistory  []HistoryEntry
-
 	// NativeTools are the RAW per-turn native tools (tools.NewTurnTools(sb).Tools).
 	// agentcore.Run wraps each in the InteractivePolicy gate; do NOT pre-wrap.
 	NativeTools []fantasy.AgentTool
@@ -281,8 +277,10 @@ func newInteractiveSpawnHost(tc TurnConfig, policy *agentcore.InteractivePolicy,
 // chat's two recovery paths:
 //
 //  1. leaked-tool-call retry — when the model narrated a tool call as prose
-//     (`call:...{...}`), strip it; if that empties the reply, re-run WITH tools
-//     and the leaked-call nudge so the action actually executes;
+//     (`call:...{...}`), strip it; if that empties the reply AND the round
+//     committed no tool event, re-run WITH tools and the leaked-call nudge so
+//     the action actually executes (after a committed tool event the re-drive
+//     is suppressed — ADR-0035 — and the turn degrades to path 2);
 //  2. forced final summary — when the turn ended with no user-visible text at
 //     all (a run of tool calls and nothing else), make one tool-less call with
 //     the force-summary nudge to coax out a written answer.
@@ -301,8 +299,19 @@ func buildInteractiveFinalize(tc TurnConfig) agentcore.FinalizeHook {
 		}
 
 		// No user-visible text. If the original reply was a leaked tool call,
-		// re-run WITH tools so the intended action actually executes.
-		if strings.Contains(in.FinalText, "call:") {
+		// re-run WITH tools so the intended action actually executes — but only
+		// when THIS round committed no tool event. The retry re-drives from
+		// in.Messages with the full governed roster, so after an executed call
+		// (a real MCP write) the model could re-issue it and repeat the side
+		// effect — the exact hazard ADR-0035's mark gate suppresses in
+		// streamRoundWithResilience. The finalize path honors the same gate by
+		// degrading to the tool-less summary below, which still sees the
+		// executed work (in.Messages carries the round transcript) and writes
+		// it up without being able to re-execute anything. Like ADR-0035's
+		// own mark, the count is deliberately coarse: read-only and staged
+		// (never-executed) tool events also suppress the re-drive — accepted
+		// over-suppression, cheaper than classifying event side-effect-ness.
+		if strings.Contains(in.FinalText, "call:") && in.RoundToolEvents == 0 {
 			recovered, err := streamLeakedToolCallRetry(ctx, tc, in)
 			if err == nil && recovered != "" {
 				return recovered, nil
@@ -372,13 +381,18 @@ func streamLeakedToolCallRetry(ctx context.Context, tc TurnConfig, in agentcore.
 }
 
 // streamForceFinalSummary makes one tool-less call with the force-summary nudge
-// (over the replayed prior+turn history) to coax out a written answer.
+// to coax out a written answer. The nudge is appended to in.Messages — the
+// conversation as the loop just finished it, carrying the current user message
+// AND the round's tool transcript (see agentcore.FinalizeInput.Messages) — so
+// the summary is grounded in the question asked and the results the model is
+// being told to write up. (One known gap, pre-existing: #785 mid-turn steered
+// user messages are injected per-step via PrepareStep and never enter the
+// loop's message slice, so recovery calls don't see steer text.) (An earlier PriorHistory/TurnHistory replay lived
+// here, but production never populated TurnHistory, so this recovery saw prior
+// turns only and fabricated from stale context — #1117. The loop's own message
+// slice is the single source of truth; TurnConfig no longer duplicates it.)
 func streamForceFinalSummary(ctx context.Context, tc TurnConfig, in agentcore.FinalizeInput) (string, error) {
-	convo, err := buildForceSummaryMessages(tc.PriorHistory, tc.TurnHistory)
-	if err != nil {
-		// Fall back to the loop's messages + the nudge.
-		convo = append(append([]fantasy.Message{}, in.Messages...), fantasy.NewUserMessage(interactiveForceFinalSummaryNudge))
-	}
+	convo := append(append([]fantasy.Message{}, in.Messages...), fantasy.NewUserMessage(interactiveForceFinalSummaryNudge))
 	agent := fantasy.NewAgent(tc.Model,
 		fantasy.WithSystemPrompt(in.SystemPrompt),
 		fantasy.WithPrepareStep(chainPrepareSteps(
@@ -389,7 +403,7 @@ func streamForceFinalSummary(ctx context.Context, tc TurnConfig, in agentcore.Fi
 	maxTokens := int64(tc.MaxTokens)
 	temp := tc.Temperature
 	var sb strings.Builder
-	_, err = agent.Stream(ctx, fantasy.AgentStreamCall{
+	_, err := agent.Stream(ctx, fantasy.AgentStreamCall{
 		Messages:        convo,
 		MaxOutputTokens: &maxTokens,
 		Temperature:     &temp,

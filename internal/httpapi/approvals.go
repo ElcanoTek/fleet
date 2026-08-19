@@ -85,6 +85,11 @@ type approvalStager struct {
 	// (#292), so a backgrounded tab still learns the turn is blocked on them.
 	// nil = feature off.
 	push *webpush.Service
+	// bg tracks the detached push send so shutdown waits for it rather than
+	// dropping a notification mid-flight. nil is fine (promote_task's stager, and
+	// tests that construct a stager directly): the send then runs untracked, which
+	// is the pre-existing behavior and touches no store.
+	bg *backgroundTracker
 }
 
 var _ agent.MCPScopeBinder = (*approvalStager)(nil)
@@ -171,6 +176,45 @@ func (a *approvalStager) resolveTimeoutSeconds(toolName string) int {
 // resolveTimeoutSeconds never returns a non-positive value).
 func (a *approvalStager) expiryUnixFor(toolName string) int64 {
 	return time.Now().Unix() + int64(a.resolveTimeoutSeconds(toolName))
+}
+
+// RecordAction implements agentcore.ActionRecorder (#1153): it posts a card
+// saying an action RAN, rather than one asking whether it may.
+//
+// The row is created and resolved in the same breath — approved, with the undo
+// hint as its result text — so the record survives a page reload and sits in the
+// conversation exactly where a normal card would, but with no decision attached
+// and no countdown to miss. The undo line is bundle-authored: fleet does not
+// know any client's reversal verb and must not invent one, and "we can always
+// roll back" is only true in practice if the card says how.
+//
+// An error here is load-bearing. The caller falls back to a blocking approval
+// when this fails, because the entire justification for running without asking
+// is that the user still finds out.
+func (a *approvalStager) RecordAction(toolName, toolCallID, rawInput, undoHint string) error {
+	seat := a.seatFor(toolName)
+	// A record is not pending, so its expiry is only a column value; use the
+	// same resolution so the row shape is identical to every other approval.
+	approval, err := a.store.CreateApproval(a.ctx, a.conversationID, a.userEmail, toolName, toolCallID, rawInput, a.expiryUnixFor(toolName), seat)
+	if err != nil {
+		return err
+	}
+	result := "Ran without asking: this tool is declared notify-mode in the client bundle."
+	if hint := strings.TrimSpace(undoHint); hint != "" {
+		result += " " + hint
+	}
+	if err := a.store.ResolveApproval(a.ctx, a.userEmail, approval.ID, "approved", result); err != nil {
+		return err
+	}
+	a.sink.Emit("tool.action_recorded", map[string]any{
+		"approval_id": approval.ID,
+		"tool":        toolName,
+		"summary":     summarizeApprovalInput(toolName, rawInput, a.conversationID),
+		"undo_hint":   strings.TrimSpace(undoHint),
+		"mcp_server":  approval.MCPServer,
+		"mcp_account": approval.MCPAccount,
+	})
+	return nil
 }
 
 func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, error) {
@@ -304,7 +348,7 @@ func (a *approvalStager) firePushNotification(toolName string) {
 		return
 	}
 	push, email, convID := a.push, a.userEmail, a.conversationID
-	go func() {
+	send := func() {
 		// Independent of the turn context on purpose: the staged card outlives
 		// the turn, so the notification should too.
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -312,7 +356,12 @@ func (a *approvalStager) firePushNotification(toolName string) {
 		if err := push.NotifyApprovalRequired(ctx, email, toolName); err != nil {
 			log.Printf("push: approval notification (tool=%s conv=%s): %v", toolName, convID, err)
 		}
-	}()
+	}
+	if a.bg != nil {
+		a.bg.Go("httpapi.approval_push", send)
+		return
+	}
+	go send()
 }
 
 // validateEmailHasContent rejects a preview_email / send_email call
@@ -418,7 +467,7 @@ func (a *approvalStager) StageSuggestion(reason string) (string, string, error) 
 	if err != nil {
 		return "", "", fmt.Errorf("lookup conversation: %w", err)
 	}
-	if conv != nil && conv.Model == agentcore.AdvancedModelSlug {
+	if conv != nil && conv.Model == agentcore.CurrentAdvancedModel() {
 		return "", "SUGGESTION_SUPPRESSED: this conversation is already pinned to the advanced model. Do not call suggest_advanced_model again — proceed with the user's request.", nil
 	}
 
@@ -482,7 +531,7 @@ func (a *approvalStager) StageSuggestion(reason string) (string, string, error) 
 		"summary": map[string]any{
 			"tool":            tools.SuggestAdvancedModelToolName,
 			"reason":          reason,
-			"recommend_model": agentcore.AdvancedModelSlug,
+			"recommend_model": agentcore.CurrentAdvancedModel(),
 		},
 		"expires_at": approval.ExpiresAt,
 	})
@@ -596,6 +645,9 @@ func summarizeApprovalInput(toolName, rawInput, convID string) map[string]any {
 	if toolName == tools.ScheduleTaskToolName {
 		return summarizeScheduleTaskInput(toolName, rawInput)
 	}
+	if toolName == tools.ManageTasksToolName {
+		return summarizeManageTasksInput(toolName, rawInput)
+	}
 	// preview_email uses the exact same summary shape as send_email
 	// so ApprovalCard's existing email-preview render path just works;
 	// the only difference is the `tool` field, which drives the UI
@@ -606,7 +658,8 @@ func summarizeApprovalInput(toolName, rawInput, convID string) map[string]any {
 // summarizeSuggestAdvancedInput exposes the agent's reason and the
 // recommended model slug so the UI card can render both without
 // re-parsing the args. The recommended slug is server-authoritative
-// (agentcore.AdvancedModelSlug) — the agent doesn't choose it.
+// (agentcore.CurrentAdvancedModel(), the live admin-configurable tier) —
+// the agent doesn't choose it.
 func summarizeSuggestAdvancedInput(toolName, rawInput string) map[string]any {
 	var args struct {
 		Reason string `json:"reason"`
@@ -615,7 +668,7 @@ func summarizeSuggestAdvancedInput(toolName, rawInput string) map[string]any {
 	return map[string]any{
 		"tool":            toolName,
 		"reason":          args.Reason,
-		"recommend_model": agentcore.AdvancedModelSlug,
+		"recommend_model": agentcore.CurrentAdvancedModel(),
 	}
 }
 
@@ -668,6 +721,118 @@ func summarizeScheduleTaskInput(toolName, rawInput string) map[string]any {
 		out["run_immediately"] = true
 	}
 	return out
+}
+
+// summarizeManageTasksInput builds the manage_tasks approval-card payload
+// (#1152): what is about to happen, to which tasks, and — for an update — the
+// change set as a list of "field → new value" lines.
+//
+// The card renders the SELECTOR, not a resolved list of matched tasks. Resolving
+// it here would need the sched store at staging time, and the number it produced
+// would be a snapshot that the executor's own resolution could disagree with by
+// the time the human clicked Approve. Instead the boundaries are enforced where
+// they are true: the tool refuses a filtered STOP outright, the executor caps an
+// update's blast radius, and the post-approval report names every task it
+// touched. What the card must never be is vague about the ACTION — so "stop"
+// carries its own irreversibility line.
+func summarizeManageTasksInput(toolName, rawInput string) map[string]any {
+	var p tools.ManageTasksParams
+	if err := json.Unmarshal([]byte(rawInput), &p); err != nil {
+		return map[string]any{"tool": toolName, "raw": rawInput}
+	}
+	action := strings.TrimSpace(p.Action)
+	ids := p.CleanTaskIDs()
+	out := map[string]any{
+		"tool":      toolName,
+		"action":    action,
+		"task_ids":  ids,
+		"match":     p.MatchSummary(),
+		"changes":   p.ChangeSummary(),
+		"max_tasks": tools.MaxManagedTasks,
+	}
+	if action == tools.ManageTasksActionStop {
+		out["destructive"] = true
+		out["consequence"] = "A recurring job stops recurring and will not run again. A run in progress halts at its next checkpoint and keeps its partial transcript."
+	}
+	return out
+}
+
+// runStagedManageTasks applies an approved manage_tasks call. Everything it can
+// check without storage is re-checked here rather than trusted from staging —
+// the args have been sitting in a row while a human read a card, and Validate is
+// where the stop-needs-explicit-ids and update-must-change-something rules live.
+func (s *Server) runStagedManageTasks(ctx context.Context, approval *store.Approval) (string, error) {
+	if s.manageTasks == nil {
+		return "", errors.New("managing scheduled tasks from chat is not configured on this server")
+	}
+	var p tools.ManageTasksParams
+	if err := json.Unmarshal([]byte(approval.ArgsJSON), &p); err != nil {
+		return "", fmt.Errorf("parse manage_tasks args: %w", err)
+	}
+	if err := p.Validate(); err != nil {
+		return "", err
+	}
+	req := TaskMutationRequest{
+		Action:        strings.TrimSpace(p.Action),
+		TaskIDs:       p.CleanTaskIDs(),
+		Prompt:        strings.TrimSpace(p.Prompt),
+		Cron:          strings.TrimSpace(p.Cron),
+		Model:         strings.TrimSpace(p.Model),
+		MaxIterations: p.MaxIterations,
+		AddTags:       p.AddTags,
+		RemoveTags:    p.RemoveTags,
+		RequestedBy:   approval.UserEmail,
+	}
+	if !p.Match.IsEmpty() {
+		req.Match = &TaskMutationMatch{
+			Query: strings.TrimSpace(p.Match.Query),
+			Tag:   strings.TrimSpace(p.Match.Tag),
+			Model: strings.TrimSpace(p.Match.Model),
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	res, err := s.manageTasks(ctx, req)
+	if err != nil {
+		return "", err
+	}
+	return formatTaskMutationReport(req.Action, res, s.orchestratorTaskLink()), nil
+}
+
+// formatTaskMutationReport names every task the call touched. A bulk edit that
+// reports only a count is a bulk edit nobody can check — and the operator asking
+// for this was trying to fix jobs that had drifted, so "which ones" is the whole
+// question.
+func formatTaskMutationReport(action string, res *TaskMutationResult, link string) string {
+	verb := "Updated"
+	if action == tools.ManageTasksActionStop {
+		verb = "Stopped"
+	}
+	var b strings.Builder
+	if res == nil || len(res.Changed) == 0 {
+		b.WriteString("Nothing changed: the selector matched no task you can edit.\n")
+	} else {
+		fmt.Fprintf(&b, "%s %d task(s):\n", verb, len(res.Changed))
+		for _, e := range res.Changed {
+			fmt.Fprintf(&b, "  • %s (%s)", e.Label, e.ID)
+			if e.Detail != "" {
+				fmt.Fprintf(&b, " — %s", e.Detail)
+			}
+			b.WriteString("\n")
+		}
+	}
+	if res != nil && len(res.Skipped) > 0 {
+		fmt.Fprintf(&b, "Skipped %d:\n", len(res.Skipped))
+		for _, e := range res.Skipped {
+			fmt.Fprintf(&b, "  • %s (%s) — %s\n", e.Label, e.ID, e.Detail)
+		}
+	}
+	if link != "" {
+		fmt.Fprintf(&b, "Review them in the Operations Center: %s", link)
+	}
+	return b.String()
 }
 
 // runsPerMonthCountCap bounds the cron-occurrence walk so a per-minute schedule
@@ -792,6 +957,15 @@ func summarizeSendEmailInput(toolName, rawInput, convID string) map[string]any {
 	}
 }
 
+// cidPattern matches one `cid:<id>` reference. The id runs to the first
+// character that cannot appear inside an unquoted/quoted attribute value,
+// and the trailing \b makes the match end on a word character — so a
+// reference wrapped in markup punctuation (`url(cid:logo)`) still yields
+// the bare id. Compiled once at package level: it used to be rebuilt per
+// attachment inside the substitution loop, which re-parsed the pattern and
+// re-scanned the whole document for every inline image.
+var cidPattern = regexp.MustCompile(`(?i)cid:([^\s"'<>]+)\b`)
+
 // expandCidImagesToDataURLs rewrites `src="cid:<id>"` references in
 // the supplied HTML into `src="data:image/png;base64,..."` data URLs
 // sourced from the matching inline_attachments entry. Used only for
@@ -815,6 +989,8 @@ func expandCidImagesToDataURLs(html string, args map[string]any, convID string) 
 		return html
 	}
 	const maxAttachmentBytes = 4 << 20
+
+	cidMap := make(map[string]string)
 
 	for _, raw := range atts {
 		entry, ok := raw.(map[string]any)
@@ -867,14 +1043,24 @@ func expandCidImagesToDataURLs(html string, args map[string]any, convID string) 
 		}
 		dataURL := "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(data)
 
-		// Replace every `cid:<id>` reference (single or double quotes,
-		// case-insensitive scheme). The cid value itself is treated as
-		// a literal — it's already constrained to email-safe chars
-		// (RFC 2392) so a regex special isn't a concern here, but
-		// QuoteMeta keeps us safe regardless.
-		quoted := regexp.QuoteMeta(cid)
-		re := regexp.MustCompile(`(?i)cid:` + quoted + `\b`)
-		html = re.ReplaceAllString(html, dataURL)
+		// Store the data URL mapped by the case-insensitive cid.
+		cidMap[strings.ToLower(cid)] = dataURL
+	}
+
+	if len(cidMap) > 0 {
+		// ONE pass over the document replaces every `cid:<id>` reference
+		// (single or double quotes, case-insensitive scheme) by looking the
+		// captured id up in the map, instead of one compile-and-rescan per
+		// attachment. A reference with no matching attachment is returned
+		// verbatim, so unresolvable cids survive exactly as before. The single
+		// pass also means a substituted data URL is never itself rescanned.
+		html = cidPattern.ReplaceAllStringFunc(html, func(match string) string {
+			cidVal := match[len("cid:"):] // the pattern guarantees the prefix
+			if dataURL, ok := cidMap[strings.ToLower(cidVal)]; ok {
+				return dataURL
+			}
+			return match
+		})
 	}
 	return html
 }
@@ -1092,6 +1278,8 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request, convID, 
 		toolErr error
 	)
 	switch {
+	case s.cfg.MockMode && approval.ToolName == tools.ManageTasksToolName:
+		text = "Scheduled tasks updated (mock mode — nothing persisted)."
 	case s.cfg.MockMode && approval.ToolName == tools.ScheduleTaskToolName:
 		// Playwright/mock mode has no real sched store wired; report a canned
 		// success so the approval UX is exercisable without a database.
@@ -1102,6 +1290,9 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request, convID, 
 		// schedule_task creates an orchestrator task in-process via the injected
 		// seam (#239) — not an MCP send — so it gets its own one-shot path.
 		text, toolErr = s.runStagedScheduleTask(execCtx, approval, req.Edits)
+	case approval.ToolName == tools.ManageTasksToolName:
+		// manage_tasks is the same shape for tasks that already exist (#1152).
+		text, toolErr = s.runStagedManageTasks(execCtx, approval)
 	default:
 		text, toolErr = s.runStagedTool(execCtx, approval)
 	}
@@ -1186,12 +1377,13 @@ func (s *Server) handleSuggestAdvancedApproval(w http.ResponseWriter, r *http.Re
 
 	// User accepted. Pin the conversation to the advanced model first;
 	// the resolution row is only useful if the side effect succeeds.
-	if err := s.store.SetModel(r.Context(), user, approval.ConversationID, agentcore.AdvancedModelSlug); err != nil {
+	advancedModel := agentcore.CurrentAdvancedModel()
+	if err := s.store.SetModel(r.Context(), user, approval.ConversationID, advancedModel); err != nil {
 		log.Printf("SetModel (suggest_advanced approval): %v", err)
 		http.Error(w, "could not pin conversation model: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	resultText := fmt.Sprintf("User accepted the suggestion. Conversation pinned to %s.", agentcore.AdvancedModelSlug)
+	resultText := fmt.Sprintf("User accepted the suggestion. Conversation pinned to %s.", advancedModel)
 	if err := s.store.ResolveApproval(r.Context(), user, approval.ID, "approved", resultText); err != nil {
 		log.Printf("ResolveApproval (suggest_advanced): %v", err)
 	}
@@ -1205,7 +1397,7 @@ func (s *Server) handleSuggestAdvancedApproval(w http.ResponseWriter, r *http.Re
 	writeJSON(w, map[string]any{
 		"status":      "approved",
 		"action":      action,
-		"model":       agentcore.AdvancedModelSlug,
+		"model":       advancedModel,
 		"result_text": resultText,
 	})
 }
@@ -1502,7 +1694,7 @@ func (s *Server) stagedBashLockdown(ctx context.Context, approval *store.Approva
 // sandboxTaker and agent.Manager's turnSandboxTaker.
 type stagedBashTaker interface {
 	// Take returns a warm, network-ENABLED sandbox (the interactive default).
-	Take() (*sandbox.Sandbox, func(), error)
+	Take(ctx context.Context) (*sandbox.Sandbox, func(), error)
 	// TakeContainer cold-starts a fresh sandbox with egress SEALED
 	// (--network=none) — the lockdown boundary.
 	TakeContainer(ctx context.Context) (*sandbox.Sandbox, func(), error)
@@ -1553,7 +1745,7 @@ func takeStagedBashSandbox(ctx context.Context, pool stagedBashTaker, lockdown b
 	case sandbox.NetworkModeLockdown:
 		sb, cleanup, err := pool.TakeContainer(ctx)
 		if errors.Is(err, sandbox.ErrContainerUnavailable) {
-			return pool.Take()
+			return pool.Take(ctx)
 		}
 		if err != nil {
 			return nil, nil, fmt.Errorf("take lockdown sandbox: %w", err)
@@ -1562,7 +1754,7 @@ func takeStagedBashSandbox(ctx context.Context, pool stagedBashTaker, lockdown b
 	case sandbox.NetworkModeAllowlisted:
 		sb, cleanup, err := pool.TakeContainerWithEgress(ctx, sandbox.ResourceOverride{}, allowlist)
 		if errors.Is(err, sandbox.ErrContainerUnavailable) {
-			return pool.Take()
+			return pool.Take(ctx)
 		}
 		if err != nil {
 			return nil, nil, fmt.Errorf("take allowlisted sandbox: %w", err)
@@ -1570,7 +1762,7 @@ func takeStagedBashSandbox(ctx context.Context, pool stagedBashTaker, lockdown b
 		return sb, cleanup, nil
 	}
 
-	sb, cleanup, err := pool.Take()
+	sb, cleanup, err := pool.Take(ctx)
 	if err != nil {
 		return nil, nil, fmt.Errorf("take sandbox: %w", err)
 	}
@@ -1720,10 +1912,14 @@ func rejectionMessages(toolName string) (claim, history string) {
 // actionVerb labels a failed staged action for the result_text prefix so the UI
 // reads correctly per tool kind ("schedule failed: …" vs "send failed: …").
 func actionVerb(toolName string) string {
-	if toolName == tools.ScheduleTaskToolName {
+	switch toolName {
+	case tools.ScheduleTaskToolName:
 		return "schedule"
+	case tools.ManageTasksToolName:
+		return "task change"
+	default:
+		return "send"
 	}
-	return "send"
 }
 
 // orchestratorTaskLink returns a user-facing URL to the Operations Center, or ""

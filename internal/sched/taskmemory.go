@@ -78,15 +78,20 @@ func (s *Store) UpsertTaskMemory(ctx context.Context, taskID uuid.UUID, key, val
 			"SELECT COUNT(*) FROM task_memories WHERE task_id = $1", taskID).Scan(&count); err != nil {
 			return err
 		}
-		for ; count >= maxKeys; count-- {
+		// One statement evicts the whole overflow rather than one round trip
+		// per evicted key: the ORDER BY is the same LRU order the per-row loop
+		// walked, so the set deleted is identical. Normally the overflow is a
+		// single key, but lowering maxKeys makes it arbitrarily large — the
+		// batched form keeps that a constant-cost sweep.
+		if excess := count - maxKeys + 1; excess > 0 {
 			if _, err := tx.ExecContext(ctx, `
 				DELETE FROM task_memories
-				WHERE id = (
+				WHERE id IN (
 					SELECT id FROM task_memories
 					WHERE task_id = $1
 					ORDER BY updated_at ASC, key ASC
-					LIMIT 1
-				)`, taskID); err != nil {
+					LIMIT $2
+				)`, taskID, excess); err != nil {
 				return err
 			}
 		}

@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	// Register pgx as the "pgx" database/sql driver.
@@ -29,6 +30,12 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/secretbox"
 )
+
+// maxBatchRows caps how many rows one multi-row INSERT carries in this
+// package's batched writers. With the widest batched row (well under a dozen
+// parameters) a chunk stays far below Postgres' 65535-parameter statement
+// limit, so a caller-sized list can never overflow the statement.
+const maxBatchRows = 500
 
 // Store wraps the Postgres handle. Schema is managed by the embedded
 // migrations (see migrations.go + migrations/*.sql).
@@ -254,10 +261,177 @@ func (s *Store) Close() error {
 // tests non-rerunnable (rows accumulated across suite runs). projects,
 // user_connector_prefs, and user_skills have no FK into any truncated table
 // and are named for the same reason.
+// The lock discipline below exists because a bare TRUNCATE here deadlocked in
+// CI (SQLSTATE 40P01), failing PRs whose diffs touched nothing nearby. TRUNCATE
+// takes ACCESS EXCLUSIVE on every listed table plus everything CASCADE reaches,
+// and it takes them one at a time in list order — conversations first, users
+// several entries later. An ordinary transaction that writes users and then
+// conversations holds its row locks in the opposite order, so the two form a
+// cycle and Postgres shoots one of them. The writers are real: a finished test's
+// turn goroutines can still be draining while the next test's fixture wipes the
+// database, which is exactly the window CI hit.
+//
+// Two mechanisms, because they answer different halves of the problem:
+//
+//   - The advisory lock serializes fixtures against each OTHER. It is taken
+//     before any table lock, so a waiter holds nothing and truncate-vs-truncate
+//     cannot cycle. Ordinary writers never take it, so it adds no new cycle.
+//   - The retry handles fixture-vs-WRITER cycles, which no lock ordering here
+//     can prevent — production writers are not going to coordinate with a test
+//     helper. lock_timeout keeps a truncate stuck behind a long writer from
+//     hanging the suite instead of retrying.
+//
+// This makes the fixture robust against transient contention, which is the
+// failure CI saw. It is not a cure for a permanent writer: a goroutine that
+// writes forever will still exhaust the attempts, and should — that is a leaked
+// test goroutine worth failing on rather than hiding behind an infinite retry.
 func (s *Store) TruncateAllForTest(ctx context.Context) error {
-	_, err := s.db.ExecContext(ctx,
-		`TRUNCATE TABLE conversations, memories, memory_entities, users, panic_events, remote_mcp_servers, push_subscriptions, llm_providers, workspace_settings, notify_settings, turn_metrics, projects, user_connector_prefs, user_skills RESTART IDENTITY CASCADE`)
-	return err
+	// The first several attempts refuse to wait; the rest take their place in the
+	// lock queue. See truncateAllForTestOnce.
+	const maxAttempts = 14
+	const nowaitAttempts = 6
+	backoff := 5 * time.Millisecond
+
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		lastErr = s.truncateAllForTestOnce(ctx, attempt > nowaitAttempts)
+		if lastErr == nil {
+			return nil
+		}
+		// A schema or permission error will not improve on the next try.
+		if !isRetryableLockError(lastErr) {
+			return lastErr
+		}
+		if attempt == maxAttempts {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("truncate for test: %w", errors.Join(ctx.Err(), lastErr))
+		case <-time.After(backoff):
+		}
+		if backoff < 250*time.Millisecond {
+			backoff *= 2
+		}
+	}
+	return fmt.Errorf("truncate for test: still contended after %d attempts, "+
+		"which usually means a previous test leaked a goroutine that is still "+
+		"writing: %w", maxAttempts, lastErr)
+}
+
+// truncateAllForTestOnce is one attempt, in its own transaction so a failed
+// TRUNCATE leaves nothing half-applied and drops the advisory lock on rollback.
+//
+// queue selects between the two failure modes of a lock request, which starve in
+// opposite directions. NOWAIT cannot deadlock but cannot win against a steady
+// stream of writers either — it asks at one instant and is refused. A waiting
+// request does the opposite: Postgres queues it, and because a pending ACCESS
+// EXCLUSIVE blocks the row-level requests that arrive behind it, the writers
+// drain and the truncate gets its turn — at the cost of being able to deadlock
+// again. So the fast path asks politely, and only a fixture that has already been
+// refused several times escalates to taking its place in the queue.
+func (s *Store) truncateAllForTestOnce(ctx context.Context, queue bool) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// First, and while holding no table locks. Waiting here is bounded by the
+	// holder's own lock_timeout plus its retries.
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, truncateAdvisoryLockKey); err != nil {
+		return err
+	}
+	// Bound the per-table waits so contention surfaces as a retryable 55P03
+	// rather than a hang. LOCAL: reverted when this transaction ends, so a
+	// pooled connection is handed back with the session default intact.
+	if _, err := tx.ExecContext(ctx, `SET LOCAL lock_timeout = '5s'`); err != nil {
+		return err
+	}
+	// Take every table lock up front with NOWAIT, which is what actually removes
+	// the deadlock rather than merely retrying it. A deadlock requires waiting;
+	// NOWAIT fails with 55P03 the instant a lock is held, so this transaction can
+	// never sit in a wait-for cycle. The difference is who pays for contention:
+	// left to plain TRUNCATE, Postgres picks a victim and it is often the ordinary
+	// writer, so a test's own background goroutine dies of a deadlock it did
+	// nothing to cause. Here the fixture always takes the loss and simply retries.
+	//
+	// Every table is locked, not just the TRUNCATE list, because CASCADE reaches
+	// further than that list names (messages, turn_events, chat_input_queue …) and
+	// an unlocked cascade target is exactly where a wait could still creep back in.
+	// Locking the lot also means this step needs no maintenance as tables are added.
+	tables, err := truncatableTableNames(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if len(tables) > 0 {
+		// LOCK TABLE takes no parameters, so the table list has to be interpolated.
+		// Every name came from pg_tables through format('%I') in the query above —
+		// server-quoted catalog identifiers, never caller input.
+		//nolint:gosec // G202: identifiers are catalog-sourced and server-quoted; LOCK TABLE cannot be parameterized.
+		stmt := `LOCK TABLE ` + strings.Join(tables, ", ") + ` IN ACCESS EXCLUSIVE MODE`
+		if !queue {
+			stmt += ` NOWAIT`
+		}
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.ExecContext(ctx,
+		`TRUNCATE TABLE conversations, memories, memory_entities, users, panic_events, remote_mcp_servers, push_subscriptions, llm_providers, workspace_settings, notify_settings, turn_metrics, projects, user_connector_prefs, user_skills RESTART IDENTITY CASCADE`); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// truncatableTableNames lists every base table in the current schema except the
+// migration ledger, already quoted by format('%I') so the names can be
+// concatenated into a LOCK statement. Identifiers come from the catalog, not from
+// a caller, and are server-quoted before they get here.
+func truncatableTableNames(ctx context.Context, tx *sql.Tx) ([]string, error) {
+	rows, err := tx.QueryContext(ctx,
+		`SELECT format('%I.%I', schemaname, tablename)
+		   FROM pg_tables
+		  WHERE schemaname = current_schema()
+		    AND tablename <> 'schema_migrations'
+		  ORDER BY tablename`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var names []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		names = append(names, name)
+	}
+	return names, rows.Err()
+}
+
+// truncateAdvisoryLockKey namespaces the fixture's advisory lock. Arbitrary but
+// fixed: every process running this helper against a shared test database must
+// pick the same number for the serialization to mean anything.
+const truncateAdvisoryLockKey int64 = 0x666c743174726e63 // "flt1trnc"
+
+// isRetryableLockError reports whether err is Postgres telling us to back off
+// and try the same statement again, rather than a fault in the statement:
+// 40P01 deadlock_detected, 55P03 lock_not_available (our lock_timeout firing),
+// 40001 serialization_failure. Matched on the typed pgconn error rather than the
+// message, per the convention in users.go and sched/notes.go.
+func isRetryableLockError(err error) bool {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		return false
+	}
+	switch pgErr.Code {
+	case "40P01", "55P03", "40001":
+		return true
+	default:
+		return false
+	}
 }
 
 // PanicEventRecord is the secret-safe persistence shape for one contained
@@ -1944,49 +2118,33 @@ func (s *Store) SweepExpired(ctx context.Context, ttl time.Duration, unpinnedCap
 		expired += int(n)
 	}
 
-	// 2. Per-user cap. Find user emails that have >unpinnedCap unpinned,
-	//    non-archived, live rows.
+	// 2. Per-user cap, in ONE statement. The previous shape scanned for
+	//    overflowing users and then issued a DELETE per user — a round trip
+	//    per user on a path that runs after every successful turn. ROW_NUMBER()
+	//    partitioned by user_email ranks each user's rows independently, so
+	//    `rn > cap` selects exactly what the per-user `ORDER BY updated_at DESC,
+	//    id DESC OFFSET cap` selected, for every user at once. Users at or under
+	//    the cap contribute no rows, so the HAVING pre-scan is redundant.
 	if unpinnedCap <= 0 {
 		return expired, 0, nil
 	}
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT user_email, COUNT(*) FROM conversations
-		 WHERE pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL AND share_token IS NULL AND project_id IS NULL GROUP BY user_email HAVING COUNT(*) > $1`,
+	res, err := s.db.ExecContext(ctx,
+		`DELETE FROM conversations WHERE id IN (
+		    SELECT id FROM (
+		        SELECT id, ROW_NUMBER() OVER (
+		            PARTITION BY user_email ORDER BY updated_at DESC, id DESC
+		        ) AS rn
+		        FROM conversations
+		        WHERE pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL AND share_token IS NULL AND project_id IS NULL
+		    ) ranked
+		    WHERE rn > $1
+		 )`,
 		unpinnedCap,
 	)
 	if err != nil {
-		return expired, 0, fmt.Errorf("cap scan: %w", err)
+		return expired, evicted, fmt.Errorf("cap evict: %w", err)
 	}
-	var overflowUsers []string
-	for rows.Next() {
-		var email string
-		var count int
-		if err := rows.Scan(&email, &count); err != nil {
-			_ = rows.Close()
-			return expired, 0, err
-		}
-		overflowUsers = append(overflowUsers, email)
-	}
-	_ = rows.Close()
-
-	for _, email := range overflowUsers {
-		// OFFSET without LIMIT: skip the N most-recent unpinned rows
-		// and delete everything older. Postgres accepts a bare OFFSET
-		// where SQLite required `LIMIT -1 OFFSET N`.
-		res, err := s.db.ExecContext(ctx,
-			`DELETE FROM conversations WHERE id IN (
-			    SELECT id FROM conversations
-			    WHERE user_email = $1 AND pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL AND share_token IS NULL AND project_id IS NULL
-			    ORDER BY updated_at DESC, id DESC
-			    OFFSET $2
-			 )`,
-			email, unpinnedCap,
-		)
-		if err != nil {
-			return expired, evicted, fmt.Errorf("cap evict for %s: %w", email, err)
-		}
-		n, _ := res.RowsAffected()
-		evicted += int(n)
-	}
+	n, _ := res.RowsAffected()
+	evicted += int(n)
 	return expired, evicted, nil
 }

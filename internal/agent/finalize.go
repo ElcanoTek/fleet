@@ -3,8 +3,6 @@ package agent
 import (
 	"regexp"
 	"strings"
-
-	"charm.land/fantasy"
 )
 
 // leakedToolCallRe matches a Gemini "function call narrated as plain text"
@@ -35,22 +33,9 @@ func stripLeakedToolCalls(text string) string {
 const leakedToolCallNudge = "It looks like you wrote a tool call as plain text (e.g. `call:...{...}`) instead of invoking it, so nothing ran. Tools are called through the function-call mechanism, not by typing them in your message. Make the call you intended now, then finish the task."
 
 // forceFinalSummaryNudge tells the model to turn the work it already did into
-// a written answer, without reaching for more tools.
+// a written answer, without reaching for more tools. The conversation it is
+// appended to comes from agentcore.FinalizeInput.Messages (the finishing
+// round's input plus its tool transcript) — see streamForceFinalSummary. A
+// HistoryEntry-replay builder used to live here, but its turn-history half was
+// never populated in production, so the summary saw prior turns only (#1117).
 const forceFinalSummaryNudge = "Write your complete response to my request now, using the results of the work you already did above. Do not call any tools — just give me the answer."
-
-// buildForceSummaryMessages reconstructs the conversation (prior history plus
-// this turn's tool work) and appends the forcing nudge as a final user turn.
-// Pulled out of forceFinalSummary so the prompt shape is unit-testable
-// without a live model: the result must replay all the work the model already
-// did and end with the nudge, so the follow-up call has the context it needs
-// to summarize.
-func buildForceSummaryMessages(priorHistory, turnHistory []HistoryEntry) ([]fantasy.Message, error) {
-	allEntries := make([]HistoryEntry, 0, len(priorHistory)+len(turnHistory))
-	allEntries = append(allEntries, priorHistory...)
-	allEntries = append(allEntries, turnHistory...)
-	convo, err := replayHistory(allEntries)
-	if err != nil {
-		return nil, err
-	}
-	return append(convo, fantasy.NewUserMessage(forceFinalSummaryNudge)), nil
-}

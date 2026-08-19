@@ -30,7 +30,11 @@ const (
 )
 
 // userSkillNameShape mirrors the bundle skill-name contract
-// (clientconfig.validSkillName): lowercase kebab, ≤64 chars.
+// (clientconfig.validSkillName): lowercase kebab, ≤64 chars. The shape halves are
+// held in step by TestValidSkillNameAgreesWithUserSkillShape, which compares the
+// two over a generated corpus — change this pattern and that test tells you which
+// side moved. Only the length cap lives on one side alone: the bundle loader
+// reports an over-long name separately, against clientconfig.maxSkillNameLen.
 var userSkillNameShape = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?$`)
 
 // Size caps: a skill is instructions, not a document store.

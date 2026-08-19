@@ -27,7 +27,16 @@ export function ConfirmDialog({
   if (!open) return null;
   const isAlert = !onCancel;
   return (
-    <div className="modal-overlay is-open" role="dialog" aria-modal="true" aria-label={title}>
+    // confirm-overlay stacks this ABOVE ordinary .modal-overlay peers: the
+    // dialog is the terminal decision layer and is summoned from INSIDE other
+    // modals (Stop/Delete in the task modal), where equal z-index left DOM
+    // order to decide — and the task modal, rendered later, painted over it.
+    <div
+      className="modal-overlay confirm-overlay is-open"
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
+    >
       <div className={`modal ${isAlert ? "alert-modal" : "confirm-modal"}`}>
         <div className="modal-header">
           <h3>{title}</h3>

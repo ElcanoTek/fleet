@@ -14,6 +14,7 @@ package redact
 import (
 	"regexp"
 	"strings"
+	"sync"
 )
 
 // placeholder is what every matched secret is replaced with.
@@ -32,11 +33,20 @@ type pattern struct {
 }
 
 // Redactor applies a prioritized list of patterns + registered literals to a
-// string. Safe for concurrent Redact calls after construction; AddLiteral must
-// not race with Redact (call it during setup, before first use).
+// string. Safe for concurrent use after construction: the patterns are fixed
+// at NewRedactor, and the literal set is guarded by an RWMutex so AddLiteral
+// may be called at any time — including for secrets acquired at RUNTIME (e.g.
+// a refreshed OAuth bearer, #1124) — while Redact runs on other goroutines.
 type Redactor struct {
 	patterns []pattern
-	literals []string
+
+	// mu guards literals + literalSet. literalSet mirrors literals for O(1)
+	// dedupe: runtime registration re-offers the same token on every
+	// acquisition, and appending it each time would grow the scan list
+	// unboundedly over the process lifetime.
+	mu         sync.RWMutex
+	literals   []string
+	literalSet map[string]struct{}
 }
 
 // canonicalPatterns are ordered most-specific-first so a vendor-prefixed key is
@@ -85,13 +95,26 @@ func NewRedactor(extraPatterns []string) *Redactor {
 	return &Redactor{patterns: pats}
 }
 
-// AddLiteral registers a raw value for literal redaction (a high-entropy secret
-// discovered at startup). Values shorter than minLiteralLen are ignored to avoid
-// scrubbing common short strings. Call during setup, before the first Redact.
+// AddLiteral registers a raw value for literal redaction — a high-entropy
+// secret discovered at startup OR acquired at runtime (a minted OAuth bearer,
+// a rotated refresh token; #1124). Values shorter than minLiteralLen are
+// ignored to avoid scrubbing common short strings; duplicates are ignored so
+// re-registering the same token on every acquisition cannot grow the scan
+// list. Safe to call concurrently with Redact.
 func (r *Redactor) AddLiteral(value string) {
-	if len(value) >= minLiteralLen {
-		r.literals = append(r.literals, value)
+	if len(value) < minLiteralLen {
+		return
 	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, dup := r.literalSet[value]; dup {
+		return
+	}
+	if r.literalSet == nil {
+		r.literalSet = make(map[string]struct{})
+	}
+	r.literalSet[value] = struct{}{}
+	r.literals = append(r.literals, value)
 }
 
 // Redact returns input with every matched secret replaced. Literals run first
@@ -101,11 +124,11 @@ func (r *Redactor) Redact(input string) string {
 		return input
 	}
 	out := input
+	r.mu.RLock()
 	for _, lit := range r.literals {
-		if lit != "" {
-			out = strings.ReplaceAll(out, lit, placeholder)
-		}
+		out = strings.ReplaceAll(out, lit, placeholder)
 	}
+	r.mu.RUnlock()
 	for _, p := range r.patterns {
 		out = p.re.ReplaceAllString(out, p.repl)
 	}

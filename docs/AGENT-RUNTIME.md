@@ -203,6 +203,48 @@ The wait window resolves highest-priority-first:
 3. **Global** — `FLEET_APPROVAL_TIMEOUT_SECONDS` (default **300**). A non-positive
    value is treated as "use the 300s default", never as "deny instantly".
 
+### Per-tool approval MODE (#1153)
+
+The window above answers "how long do we wait". It does not answer "should we
+have asked at all", and one global `critical_tools` list forces one policy onto
+operations with very different undo stories. A card lands whenever the agent
+reaches it — often many minutes into a run the user started and then reasonably
+stopped watching — so the thing the 300s default most reliably blocked was the
+final, wanted action of a long analysis.
+
+`agent_policy.critical_tool_modes` sets the mode per tool suffix:
+
+| Mode | Behavior |
+|---|---|
+| `approve` (default) | Stage a card and block until a human decides. What every critical tool did before modes existed. |
+| `notify` | Execute immediately and post a card **recording** what happened. No countdown, nothing to miss. |
+
+```yaml
+agent_policy:
+  critical_tools: [deploy_page, create_deal]
+  critical_tool_modes:
+    deploy_page: notify        # the store keeps immutable versions
+    create_deal: approve       # audit-gated; unchanged
+  critical_tool_undo_hints:
+    deploy_page: "Undo with mcp_pages_rollback_page(slug, version_id)."
+```
+
+Three properties keep this narrow:
+
+- **Opt-in per suffix.** A tool the bundle does not name keeps blocking, so this
+  changes nothing for a deployment that ignores it.
+- **Outbound email can never be `notify`.** The entire case for running without
+  asking is "we can always roll it back", and a sent message has no undo — the
+  card *is* the review step. A manifest that declares it is logged and pinned
+  back to `approve`.
+- **Recording is load-bearing.** If the transport cannot post the record card, or
+  fails to, the call falls back to a blocking approval. Executing unrecorded
+  would remove the only thing that makes `notify` defensible.
+
+`critical_tool_undo_hints` is bundle-authored on purpose: fleet does not know any
+client's reversal verb and must not invent one. "We can always roll back" is only
+true in practice if the card says how.
+
 `FLEET_AUTO_APPROVE_IN_TEST` (default **false**) is a CI/test escape hatch that
 auto-approves every staged critical tool instead of waiting for a human. It
 **bypasses the human-in-the-loop gate** and is intended only for pipelines with

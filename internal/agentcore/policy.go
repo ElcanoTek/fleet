@@ -71,6 +71,9 @@ func (p *InteractivePolicy) BeforeToolCall(toolName, toolCallID, rawInput string
 	if blocked, msg := p.orch.checkScheduleTaskSafety(toolName, toolCallID, rawInput); blocked {
 		return true, msg
 	}
+	if blocked, msg := p.orch.checkManageTasksSafety(toolName, toolCallID, rawInput); blocked {
+		return true, msg
+	}
 	if blocked, msg := p.orch.checkSuggestAdvancedSafety(toolName, rawInput); blocked {
 		return true, msg
 	}

@@ -20,6 +20,7 @@ import { useRouter } from "next/navigation";
 import { useCancellableFetch } from "@/app/shared/hooks/useCancellableFetch";
 import { humanizeVarName } from "@/app/shared/lib/taskTemplates";
 import { NoticeBanner } from "@/app/shared/ui/NoticeBanner";
+import { ModelPicker } from "@/app/shared/ui/ModelPicker";
 import {
   ActNote,
   ActStatus,
@@ -43,7 +44,7 @@ import { useIsAdmin } from "../../useIsAdmin";
 
 type ResolvedSetting = {
   key: string;
-  kind: "bool" | "int" | "enum" | "url";
+  kind: "bool" | "int" | "enum" | "url" | "model";
   enum?: string[];
   min?: number;
   max?: number;
@@ -157,6 +158,16 @@ const META: Record<string, SettingMeta> = {
     label: "Composer context handles",
     description: "Let users @-reference files and past conversations from the chat composer.",
   },
+  default_model: {
+    label: "Default model",
+    description:
+      "What a new conversation starts on — the first pinned, \u201Crecommended\u201D row in every model picker. Pick from the OpenRouter catalog or any workspace provider configured under Admin \u2192 Model providers (Bedrock, OpenAI-direct, \u2026 appear as provider/model), or type any slug. Applies live: the web re-reads it on every shell mount. Conversations that already picked a model keep it.",
+  },
+  advanced_model: {
+    label: "Advanced model",
+    description:
+      "The stronger escalation target — what the agent\u2019s \u201Cswitch to the advanced model\u201D suggestion and the spreadsheet nudge move a conversation to, and the second pinned picker row. Same sources as the default model. Applies live, including to suggestion cards already on screen.",
+  },
 };
 
 const PRIVACY_GROUP = "Privacy & data protection";
@@ -174,6 +185,10 @@ const GROUPS: { title: string; keys: string[] }[] = [
       "phone_a_friend_enabled",
       "subagents_enabled",
     ],
+  },
+  {
+    title: "Model tiers",
+    keys: ["default_model", "advanced_model"],
   },
   {
     title: "Workspace features",
@@ -500,6 +515,14 @@ function FeatRow({
             setDraft={setDraft}
             onSave={onSave}
           />
+        ) : setting.kind === "model" ? (
+          <ModelControl
+            setting={setting}
+            busy={busy}
+            draft={draft}
+            setDraft={setDraft}
+            onSave={onSave}
+          />
         ) : (
           <IntControl
             setting={setting}
@@ -558,6 +581,54 @@ function UrlControl({
           type="button"
           onClick={() => onSave(value)}
           disabled={busy}
+          data-testid={`save-${setting.key}`}
+          className={btnClass({ sm: true, reveal: true })}
+        >
+          Save
+        </button>
+      ) : null}
+    </>
+  );
+}
+
+// ModelControl — the provider/model combobox for KindModel settings (#1187),
+// with an explicit Save once dirty (a workspace-wide tier change shouldn't
+// fire per keystroke). The picker unions the OpenRouter catalog with the
+// admin-configured workspace providers ("<provider>/<model>" — Bedrock,
+// OpenAI-direct, … from Admin → Model providers, catch-alls expanded from the
+// catwalk model database), and any free-typed slug commits too — the server
+// only enforces the provider/model shape.
+function ModelControl({
+  setting,
+  busy,
+  draft,
+  setDraft,
+  onSave,
+}: {
+  setting: ResolvedSetting;
+  busy: boolean;
+  draft: string | undefined;
+  setDraft: (v: string) => void;
+  onSave: (value: string) => void;
+}) {
+  const value = draft ?? setting.value;
+  const dirty = draft !== undefined && draft !== setting.value;
+  return (
+    <>
+      <div className="w-full min-w-[16rem]" data-testid={`model-picker-${setting.key}`}>
+        <ModelPicker
+          id={`model-${setting.key}`}
+          value={value}
+          onChange={setDraft}
+          placeholder="provider/model"
+          aria-describedby={undefined}
+        />
+      </div>
+      {dirty ? (
+        <button
+          type="button"
+          onClick={() => onSave(value.trim())}
+          disabled={busy || value.trim() === ""}
           data-testid={`save-${setting.key}`}
           className={btnClass({ sm: true, reveal: true })}
         >

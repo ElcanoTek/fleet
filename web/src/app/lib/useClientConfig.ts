@@ -2,6 +2,12 @@
 
 import { useEffect, useState } from "react";
 import { DEFAULT_PILLS, type ProtocolPill } from "@/app/chat/ui/protocolPills";
+import {
+  currentAdvancedModel,
+  currentDefaultModel,
+  setModelTiers,
+  type ModelTiersConfig,
+} from "@/app/lib/modelAliases";
 
 // useClientConfig fetches the active client's runtime config from
 // /api/client-config (which proxies chat-server's member-gated /client-config)
@@ -45,12 +51,19 @@ export const DEFAULT_BRANDING: ClientBranding = {
 export type UseClientConfig = {
   branding: ClientBranding;
   pills: ProtocolPill[];
+  // The workspace's effective model tiers (#1187), null until a
+  // /api/client-config payload has resolved in this page's lifetime. When it
+  // lands, setModelTiers() has ALREADY installed the pair module-wide — this
+  // field exists so a consumer can react to the arrival itself (e.g. adopting
+  // the live default for a not-yet-started conversation).
+  models: { defaultModel: string; advancedModel: string } | null;
   loading: boolean;
 };
 
 type ClientConfigResponse = {
   branding?: Partial<ClientBranding>;
   empty_state?: { cards?: ProtocolPill[] };
+  models?: ModelTiersConfig;
 };
 
 // The last successful /api/client-config payload, cached at module scope.
@@ -63,7 +76,11 @@ type ClientConfigResponse = {
 // long-lived page picks up config changes. Hydration stays consistent: the
 // fetch only ever runs in a browser effect, so on the server and on any
 // initial document load the cache is empty and both sides render defaults.
-let cachedConfig: { branding: ClientBranding; pills: ProtocolPill[] } | null = null;
+let cachedConfig: {
+  branding: ClientBranding;
+  pills: ProtocolPill[];
+  models: { defaultModel: string; advancedModel: string } | null;
+} | null = null;
 
 // Module-scope reader so the useState initializers don't read a mutable
 // module binding directly from the component body (react-hooks/purity —
@@ -79,6 +96,9 @@ export function useClientConfig(enabled = true): UseClientConfig {
     () => readCachedConfig()?.branding ?? DEFAULT_BRANDING,
   );
   const [pills, setPills] = useState<ProtocolPill[]>(() => readCachedConfig()?.pills ?? DEFAULT_PILLS);
+  const [models, setModels] = useState<UseClientConfig["models"]>(
+    () => readCachedConfig()?.models ?? null,
+  );
   const [loading, setLoading] = useState(() => enabled && readCachedConfig() === null);
 
   useEffect(() => {
@@ -93,13 +113,21 @@ export function useClientConfig(enabled = true): UseClientConfig {
         if (cancelled) return;
         // Merge over neutral defaults so a partial branding block still renders.
         const cards = data.empty_state?.cards;
+        // Install the workspace tier pair module-wide BEFORE any state update,
+        // so the re-render this triggers already reads the live slugs.
+        setModelTiers(data.models);
         const next = {
           branding: { ...DEFAULT_BRANDING, ...(data.branding ?? {}) },
           pills: Array.isArray(cards) && cards.length > 0 ? cards : DEFAULT_PILLS,
+          models: {
+            defaultModel: currentDefaultModel(),
+            advancedModel: currentAdvancedModel(),
+          },
         };
         cachedConfig = next;
         setBranding(next.branding);
         setPills(next.pills);
+        setModels(next.models);
       } catch {
         // Keep whatever the state was seeded with — the cached config on a
         // remount, the neutral defaults otherwise. Never blank, never
@@ -114,5 +142,5 @@ export function useClientConfig(enabled = true): UseClientConfig {
     };
   }, [enabled]);
 
-  return { branding, pills, loading };
+  return { branding, pills, models, loading };
 }

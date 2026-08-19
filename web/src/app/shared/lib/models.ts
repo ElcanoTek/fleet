@@ -8,6 +8,7 @@
 // pins connect-src to 'self' (#590), so a direct browser fetch is blocked and
 // used to silently strand the picker on its two seed models.
 
+import { currentTierModels } from "@/app/lib/modelAliases";
 import { loadWorkspaceModels, _resetWorkspaceModelCacheForTests } from "./workspaceModels";
 
 export type PickerModel = {
@@ -30,12 +31,17 @@ export const MODEL_CATALOG_URL = "/api/model-catalog";
 const REQUEST_TIMEOUT_MS = 8000;
 export const MAX_RESULTS = 50;
 
-// Hand-picked entries shown immediately and used as a fallback when the
-// catalog fetch fails. Pinned release slugs (not floating `~` aliases).
-export const SEED_MODELS: PickerModel[] = [
-  { id: "google/gemini-3.7-flash", name: "Google: Gemini 3.7 Flash", recommended: true },
-  { id: "openai/gpt-5.6-sol", name: "OpenAI: GPT-5.6 Sol", recommended: true },
-];
+// The two tier rows shown immediately and used as a fallback when the
+// catalog fetch fails. Derived per call from the live tier pair (admin
+// setting #1187, bootstrapped by useClientConfig) rather than hand-written —
+// a fresh array each time so callers may mutate/enrich their copy.
+export function seedModels(): PickerModel[] {
+  return currentTierModels().map((tier) => ({
+    id: tier.slug,
+    name: tier.label,
+    recommended: true,
+  }));
+}
 
 type RawCatalogModel = {
   slug?: unknown;
@@ -83,7 +89,7 @@ export function dedupeAndOrder(seedList: PickerModel[], fetchedList: PickerModel
 }
 
 // enrichFromCatalog fills the catalog-only facts (prices, context length,
-// created) onto entries that carry none — the hand-written SEED_MODELS.
+// created) onto entries that carry none — the seedModels() tier rows.
 // dedupeAndOrder keeps the seed entry and drops the fetched duplicate, so
 // without this the two pinned slugs would be the only rows in the picker with
 // no cost indicator even when the catalog loaded fine.
@@ -195,8 +201,8 @@ export async function loadModels(): Promise<PickerModel[]> {
     }));
     const base =
       fetched.length > 0
-        ? dedupeAndOrder(enrichFromCatalog(SEED_MODELS, fetched), fetched)
-        : SEED_MODELS.slice();
+        ? dedupeAndOrder(enrichFromCatalog(seedModels(), fetched), fetched)
+        : seedModels();
     cachedModels = dedupeAndOrder(workspace, base);
     inflight = null;
     return cachedModels;

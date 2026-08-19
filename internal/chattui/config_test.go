@@ -33,7 +33,7 @@ func envFileFrom(files map[string]map[string]string) envValuesReader {
 func TestResolve(t *testing.T) {
 	t.Run("flags win; server normalized", func(t *testing.T) {
 		cfg, err := Resolve(
-			Flags{Server: "http://host:9000/", Email: "Me@Example.com", Model: "x/y"},
+			Flags{Server: "http://host:9000/", Email: "Me@Example.com", Model: "  x/y  ", Persona: "  my-persona  "},
 			envMap(map[string]string{"FLEET_SERVER_TOKEN": "tok"}), noFile, noEnvFile)
 		if err != nil {
 			t.Fatal(err)
@@ -46,6 +46,9 @@ func TestResolve(t *testing.T) {
 		}
 		if cfg.Token != "tok" || cfg.Model != "x/y" {
 			t.Errorf("token/model = %q/%q", cfg.Token, cfg.Model)
+		}
+		if cfg.Persona != "my-persona" {
+			t.Errorf("persona = %q, want %q", cfg.Persona, "my-persona")
 		}
 	})
 

@@ -17,7 +17,65 @@ prior versions are listed because none have shipped.
 
 ## [Unreleased]
 
+### Added
+
+- **Admin-configurable model tiers (#1187).** The default and advanced
+  ("recommended") models are now workspace settings — Settings → Admin →
+  Features → Model tiers — instead of compile-time constants, so a lab
+  refresh no longer needs a code push. `default_model` / `advanced_model`
+  join the workspace-settings registry (admin override > `FLEET_DEFAULT_MODEL`
+  / `FLEET_ADVANCED_MODEL` env > compiled-in default), apply live through
+  agentcore holders, and reach the web on every shell mount via
+  `/client-config`. The admin rows use the existing catalog picker, which
+  unions OpenRouter with admin-configured workspace providers
+  (`provider/model` — Bedrock, OpenAI-direct, …) and accepts any typed slug.
+  Admin-only, like every workspace setting. The scheduled-task default
+  (`FLEET_TASK_MODEL`) deliberately stays env-only — it is boot-bound in the
+  scheduler ([ADMIN-SETTINGS.md](docs/ADMIN-SETTINGS.md)).
+
+- **Unit tests for six thinly-covered helpers**, from the consolidated Jules
+  batch (#1188). Test-only — no production code changed:
+
+  - `agent.MCPLoadServers` — drives a real JSON-RPC handshake against an
+    `httptest` server and pins the `StopTurn` contract (true when a server
+    binds, false when nothing new loaded), the `loadedServers` bookkeeping, and
+    that a missing config, missing client, or unknown/disabled server comes back
+    as a *response* the model can read rather than a hard error.
+  - `mcpoauth.RevokeToken` — pins the RFC 7009 credential split: with a client
+    secret the request uses Basic auth and omits `client_id` from the body;
+    without one it does the reverse.
+  - `mcpoauth.IsTerminalRefreshError` — the terminal-vs-transient table, now
+    also covering wrapped errors so the classification is proven to survive
+    `fmt.Errorf("%w")` annotation on the way up.
+  - `clientconfig.validSkillName` — the accepted charset, including that a name
+    of just `"-"` is currently accepted.
+  - `agentcore.EnvPrefix.lookupFloatDefault` — unset, valid, empty, whitespace,
+    and unparseable all resolve as intended.
+  - `config.ValidateEnvKnobs` — that a problem message carries the offending
+    value and the constraint it violated, not just the key, and that a range
+    violation is reported distinctly from a parse failure.
+  - `chattui.Resolve` — whitespace trimming on the `Model` and `Persona` flags.
+
+  Honest scope: these fence existing behavior. They found no bugs in the code
+  under test and fixed none. Coverage is an advisory signal here, not a merge
+  gate, so the value is the pinned behavior rather than the percentage.
+
 ### Removed
+
+- **Dropped a tautological `HostExecutorCompiledIn` test** that arrived in the
+  same batch. It asserted `HostExecutorCompiledIn() == hostExecutorCompiledIn`
+  against the very constant the function returns — `x == x`, unfailable, and
+  tag-agnostic where the property that actually matters is tag-*dependent*: a
+  release build must report `false` so the MockMode path fails closed instead of
+  running tool calls unsandboxed on the host (#159).
+
+  A test that pinned the real invariant would have to assert `false` under
+  `!fleet_host_executor`, and every `go test` in CI runs with
+  `-tags fleet_host_executor` (the untagged lane is `go build` only), so such a
+  test would never execute as the pipeline stands. Rather than add a test that
+  silently never runs, the invariant is left to the tag wiring and the existing
+  `host_disabled.go` fail-closed path. Adding an untagged `go test` lane would
+  make it testable and is the prerequisite for trying again.
 
 - **Dropped the Codecov upload step and `codecov.yml`.** The repo has no
   `CODECOV_TOKEN` secret, so `codecov/codecov-action` could never upload: every
@@ -34,6 +92,65 @@ prior versions are listed because none have shipped.
   `docs/TESTING.md`) updated to say so instead of describing a Codecov check.
 
 ### Changed
+
+- **Restored nine transient-error cases to the `IsTerminalRefreshError` table.**
+  Moving that test into its own file (part of the batch above) had cut it from
+  eleven cases to eight, dropping `invalid_request`, `temporarily_unavailable`,
+  `http_500`, and `http_503` — precisely the "a blip must stay transient" half of
+  the contract, whose loss would let a 5xx start forcing users through a
+  reconnect. It also stopped setting `HTTPStatus`, so nothing pinned that the
+  decision keys off the OAuth error code rather than the HTTP status. A mutation
+  that marks `http_503` terminal passes the trimmed table and fails the restored
+  one. The two new wrapped-error cases from the move are kept, and the
+  explanatory comment the move had orphaned in `flow_test.go` now sits with the
+  test again.
+
+- **Trimmed the new `ValidateEnvKnobs` scenarios to what was not already
+  covered.** Three of its five cases duplicated existing tests — one used the
+  same two knobs and the same values as `TestLoad_MalformedKnobsAllReportedAtOnce`,
+  and blank-is-unset was already in `TestLoad_KnobValueNormalization`. What
+  remains asserts message content, which nothing covered before.
+
+- **Batched four per-iteration database writes that ran one round trip per
+  item.** A static review flagged five query-in-a-loop sites; four were real and
+  are now single (or chunked) statements, with identical semantics:
+
+  - `store.SweepExpired` per-user cap eviction (`internal/store/store.go`) —
+    scanned for overflowing users and then issued one `DELETE` per user. Now one
+    statement: `ROW_NUMBER() OVER (PARTITION BY user_email ORDER BY updated_at
+    DESC, id DESC)` selects exactly the rows each user's `OFFSET cap` selected,
+    for every user at once, and the `HAVING` pre-scan is gone. This path runs
+    after *every* successful turn, so it was the costliest of the five.
+  - `Store.UpsertTaskMemory` LRU eviction (`internal/sched/taskmemory.go`) —
+    deleted one key per round trip until the cap was met. Now one `DELETE` with
+    `LIMIT <overflow>` in the same oldest-first order. Usually the overflow is a
+    single key; lowering `maxKeys` made it arbitrarily large.
+  - `Store.ReplaceRelationsForMemory` (`internal/store/memorygraph.go`) — one
+    `INSERT` per extracted triple inside the transaction. Now chunked multi-row
+    `INSERT`s (the `RecordToolCalls` pattern), bounded by a new `maxBatchRows`
+    so the parameter count stays far under Postgres' 65535 cap.
+  - Crash-recovery synthesized-result markers (`internal/store/turn_journal.go`)
+    — one `INSERT … ON CONFLICT DO NOTHING` per unknown-outcome call. Now the
+    same chunked multi-row form, still idempotent across repeated recoveries.
+
+  The fifth flag, the per-row `UPDATE` in `Database.ArchiveOldLogs`
+  (`internal/sched/db/db.go`), is **not** an N+1: each row carries a different
+  payload compressed (and optionally encrypted) in Go, so there is nothing to
+  join against, and folding a page of multi-megabyte blobs into one statement
+  would trade the documented per-row commit boundary for a large memory spike.
+  Left as-is with a comment recording why. New tests pin per-user cap
+  independence, bulk LRU eviction, the relation chunk boundary (including
+  re-extraction idempotency), and multi-marker recovery.
+
+- **`expandCidImagesToDataURLs` no longer compiles a regex per inline
+  attachment.** The approval-preview substitution built `regexp.MustCompile`
+  inside the attachment loop and rescanned the whole document for every inline
+  image (O(N·M)). It now uses one package-level `cidPattern`, collects the
+  attachments into a cid→data-URL map, and rewrites the document in a single
+  `ReplaceAllStringFunc` pass — ~5.5x faster on a two-image body, and a
+  substituted data URL can no longer be rescanned by a later attachment's
+  replacement. Behavior is otherwise unchanged: same case-insensitive scheme
+  and id matching, same verbatim passthrough for a cid with no attachment.
 
 - **PRs into `dev` now actually run CI, and the fast lane gained the web
   lane it never had.** `dev-ci.yml` fired only on *push*, and `ci.yml` filters to
@@ -194,6 +311,162 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Detached background work outlived the request that started it, and nothing
+  waited for it.** `activeTurns` tracked detached *turns* and `DrainTurns` blocked
+  on them at shutdown, but the work that is not a turn was tracked by nothing at
+  all: the queue-drain re-kick (`time.AfterFunc`, up to 3s out, reaching
+  `ClaimNextQueuedInput`), memory-graph extraction (a `go func` that writes
+  relations on a detached context), the retained-buffer eviction timer (15 minutes
+  by default), and the approval push send. Two of those touch the store, so a
+  shutdown could return while a write was in flight, and a finished test could
+  leave a writer running against the database the next test was about to truncate.
+
+  `backgroundTracker` (`internal/httpapi/background.go`) now owns all four.
+  Pending timers are cancelled rather than waited out — waiting on the 15-minute
+  eviction timer would make every shutdown a 15-minute one — while work already
+  running is waited for, which is the case where proceeding means closing the
+  store underneath a live writer. `StopBackground` runs after `DrainTurns` in
+  `cmd/fleet`, in that order because a turn's completion tail can schedule a
+  re-kick.
+
+  The DB-backed httpapi fixtures now tear down in the same sequence the server
+  uses on SIGTERM — `BeginShutdown`, cancel, drain, stop background, then close
+  the store — instead of closing the store first and leaving goroutines writing
+  into a dead pool.
+
+  **`BeginShutdown` first is the step that does the real work**, and it is why
+  cancelling turns was not sufficient on its own. A turn's completion tail drains
+  the input queue and launches the next queued row, so in a test that leaves rows
+  queued (the depth-cap test leaves ten) a single cancellation produces a *fresh*
+  turn with a live context, and the chain re-arms itself faster than any grace
+  period outlasts it. The `shuttingDown` flag is what makes `maybeDrainQueue`
+  decline to launch — exactly why production sets it before draining.
+
+  The teardown asserts rather than tolerates: if a turn is still running 20s after
+  cancellation the test fails, naming the count, because a silent timeout there
+  would hand the next test a live writer again.
+
+  Scope, stated precisely: the leak is proven by turns outliving their tests —
+  before `BeginShutdown` was added to the teardown the package hung, with a
+  goroutine dump showing `runTurnAsync` parked in a test's gate after that test had
+  returned, and the teardown check reporting `ActiveTurns=1`. The `sql: database is
+  closed` log spray that first drew attention to this came from a CI run and does
+  **not** reproduce in a single local sequential run — baseline and fixed both
+  showed zero locally — so the log volume is a CI-timing symptom, not the
+  measurement. `internal/httpapi` goes from 15.3s to 18.3s for the added teardown
+  discipline. `backgroundTracker`'s cancel/wait/finality/panic behavior and the
+  drain-declines-while-draining property are covered by deterministic tests that
+  need no database.
+
+- **The test fixture that wipes the database deadlocked in CI, failing PRs that
+  had touched nothing near it.** `store.TruncateAllForTest` issued a bare
+  `TRUNCATE`, which takes `ACCESS EXCLUSIVE` on each table one at a time in list
+  order — `conversations` early, `users` several entries later. Any ordinary
+  transaction that writes `users` and then `conversations` holds those two locks
+  in the opposite order, so the pair cycles and Postgres kills one of them. The
+  observed failure was `TestMockTurn_AgentFieldUnused` dying on
+  `truncate: ERROR: deadlock detected (SQLSTATE 40P01)` in `internal/httpapi`.
+
+  The writers were real, and the comment on `newTestStore` explained why nobody
+  expected them: it asserted that serial test execution meant no cross-test
+  races. Serial execution is not an idle database. `go test` starts the next test
+  the moment the previous one returns, and a goroutine that outlived its test —
+  a turn driver still persisting events — writes straight through the next
+  fixture's wipe. That comment has been corrected.
+
+  The fixture now takes its locks defensively, in a transaction:
+
+  - A `pg_advisory_xact_lock`, acquired before any table lock, serializes
+    fixtures against each other. A waiter holds nothing, so two fixtures cannot
+    cycle, and ordinary writers never take it so it introduces no new cycle.
+  - Every table in the schema is then locked in one statement — not just the
+    `TRUNCATE` list, since `CASCADE` reaches further (`messages`, `turn_events`,
+    `chat_input_queue`, …) and an unlocked cascade target is where a wait could
+    creep back in. Locking the lot also means this step needs no maintenance as
+    tables are added.
+  - `NOWAIT` on the early attempts is what removes the deadlock rather than
+    merely retrying it: a deadlock requires waiting, so a request that refuses to
+    wait cannot sit in a cycle. This also moves who pays for contention. Left to
+    a bare `TRUNCATE`, Postgres picks a victim and it is frequently the ordinary
+    writer — a test's own background goroutine dying of a deadlock it did nothing
+    to cause. Now the fixture takes the loss and retries.
+  - Later attempts escalate to a queueing lock, because `NOWAIT` and waiting
+    starve in opposite directions: `NOWAIT` asks at one instant and loses against
+    a steady write stream, while a queued `ACCESS EXCLUSIVE` blocks the row-level
+    requests arriving behind it, so the writers drain. `lock_timeout` keeps a
+    queued attempt from hanging the suite instead of retrying.
+
+  Measured against a reproducer that runs six writers in the inverted lock order
+  while three fixtures truncate: the old code failed 17 times in a 12-second run,
+  the new code 0 times across five such runs (~2,000 truncates), and writer
+  casualties went from 19 to 13–19 — unchanged, since a write aimed at a database
+  being wiped was doomed either way. Under a deliberately unfair variant whose
+  writers never stop, failures fell from 281 to 0–7.
+
+  `TestTruncateAllForTestDoesNotDeadlockAContendingWriter` fences it by
+  reconstructing the inversion deliberately; it fails on the old implementation
+  with the exact CI error and passes on the new one. It is one-sided on purpose —
+  if the timing slips, everything succeeds and it passes — so the regression test
+  for a flake cannot become the next flake. Retries are capped rather than
+  infinite: a writer that never stops still fails the fixture, with an error
+  saying a leaked test goroutine is the likely cause, which is worth failing on
+  rather than hiding.
+
+- **A bundle could ship a skill name the skill builder would refuse to save.**
+  `clientconfig.validSkillName` checked only the charset (lowercase, digits,
+  hyphens), so `-`, `--`, `-research` and `research-` all passed, while
+  `store.userSkillNameShape` — the regex gating user-authored skills, and
+  documented as the same contract — rejects every one of them. The two had
+  drifted: the same name was legal in a bundle and illegal in the builder. The
+  charset check is now a shape check that begins and ends alphanumeric, matching
+  the regex exactly, including its tolerance for an interior `a--b`.
+
+  The contract is now enforced rather than asserted in a comment:
+  `TestValidSkillNameAgreesWithUserSkillShape` walks every short string over an
+  alphabet of the interesting character classes and fails if the two sides
+  disagree. Against the old implementation it reports 11 mismatches. The 64-char
+  cap remains the one deliberate asymmetry — the bundle loader reports length
+  separately against `maxSkillNameLen`, so an over-long name draws one message
+  about its length instead of a second, vaguer one about its charset.
+
+  Scope: this is a bundle-load *warning*, not a gate — the skill is still loaded
+  either way — so nothing that worked stops working. What changes is that an
+  ill-shaped name now gets flagged at load instead of passing silently until the
+  builder rejects the same name.
+
+- **A refused token revocation reported success.** `mcpoauth.RevokeToken` checked
+  the transport error and then returned `nil` without ever looking at the status
+  code, so an RFC 7009 §2.2.1 refusal — a 400 or a 401 from the authorization
+  server — was indistinguishable from a completed revocation. It now reads the
+  body and hands a non-2xx to `parseTokenError`, the same helper the token
+  endpoint path uses, so the caller gets an `*OAuthError` carrying the code and
+  HTTP status and `IsTerminalRefreshError` can classify it.
+
+  Revocation stays best-effort: the sole caller still discards the result and the
+  local record is deleted regardless, so no disconnect flow changes behavior.
+  Best-effort now describes the caller's posture rather than a function that
+  could not tell success from failure. A 200 for a token the server does not
+  recognize is still success, per §2.2. Reading the body before closing it also
+  lets the connection be reused.
+
+- **Chat's finalize recoveries now see the turn they are recovering, and can
+  no longer repeat its side effects (#1117).** Two flaws in the interactive
+  driver's finalize paths: (1) the forced-final-summary call replayed
+  `TurnConfig.PriorHistory`/`TurnHistory`, but production never populated
+  `TurnHistory` — so when a turn ended with tool calls and no prose (the
+  exact trigger), the recovery saw prior turns only, neither the current
+  question nor the tool results it was summarizing, and fabricated from
+  stale context. `agentcore.FinalizeInput.Messages` now carries the
+  finishing round's input plus its completed tool transcript (the same
+  `carryRoundMessages` carry the enforcement loop uses), both recoveries
+  replay that, and the never-wired history fields are gone. (2) The
+  leaked-tool-call retry re-drove the round with the full governed roster
+  and no record of tool work already done, so the model could re-issue
+  already-executed MCP calls; it now honors ADR-0035's side-effect gate via
+  the new `FinalizeInput.RoundToolEvents` — any committed tool event this
+  round degrades the retry to the tool-less summary path, which can narrate
+  the executed work but not repeat it.
+
 - **`TaskStreamFrame` was missing five fields the task stream actually sends,
   failing the TypeScript build.** `subagentProgressFrame`
   (`internal/runner/task_stream.go`) forwards `success`, `tokens`,
@@ -247,6 +520,83 @@ prior versions are listed because none have shipped.
     duplicate catalog entries; and `HTTPTransport` verifies the JSON-RPC
     response `id` against the request the way stdio does (a foreign-id JSON
     response is rejected, a foreign-id SSE event is skipped).
+
+- **Five defense-in-depth hardenings across the security-critical packages
+  (#1124).** Batched LOW findings from the 2026-08-17 audit — none broke an
+  invariant; each closes a residual hazard:
+
+  - **The egress proxy no longer tears down a CONNECT tunnel on the first
+    half-close.** The splice loop returned after *either* copy direction
+    finished, so a client that legally half-closed its write side after
+    sending its request had its response truncated by the deferred `Close`s.
+    Both directions are now awaited, and a finished direction propagates the
+    half-close to its destination via `CloseWrite` (TCP/TLS) so the peer sees
+    the FIN while the other direction keeps flowing. The surviving direction
+    is bounded by a 60s drain deadline armed when the first finishes —
+    without it, a silent peer that ignores the FIN and never responds/closes
+    would pin the tunnel's goroutines and FDs for the process lifetime.
+  - **A bundle that declares account-suffix base vars where one is an
+    underscore-prefix of a sibling is rejected at load.** The
+    `<VAR>_<ACCOUNT>` convention is purely lexical, so declaring both `FOO`
+    and `FOO_BAR` on one stdio server meant account `bar` silently overlaid
+    `FOO` with `FOO_BAR`'s value (a different credential), and `AccountsFor`
+    reported phantom accounts (`SLACK_TOKEN_URL` surfaced `url` as an
+    "account" of `SLACK_TOKEN`). The rule is scoped per server — the set one
+    overlay actually probes — and fails the load with rename instructions.
+    Out-of-repo bundles that declare such a pair will now fail to load; the
+    shipped `config/default` bundle is unaffected.
+  - **`writeEnvLines` fsyncs the temp file before the rename**, so a power
+    loss shortly after `fleet mcp account set` can no longer leave an
+    empty/truncated 0600 credentials file behind the atomic rename.
+  - **Runtime-acquired credentials join the broker's literal redactor at
+    acquisition time.** Boot-time `RegisterEnvLiterals` only knows env-file
+    secrets; per-user OAuth bearers, rotated refresh tokens, unsealed OAuth
+    client secrets, and unsealed api_key secrets used while the broker serves
+    were scrubbed by shape patterns alone. `remotemcp.Service` now offers
+    every such credential to a
+    secret observer, wired in the broker child to the new
+    `mcpbroker.RegisterSecretLiteral`; `redact.Redactor.AddLiteral` is now
+    safe to call concurrently with `Redact` (RWMutex) and dedupes, so
+    per-turn re-registration is free.
+  - **Sandbox pool latency hazards off the turn's critical path.**
+    `ensureBridge` no longer holds `c.mu` through its 100ms settle sleep;
+    `Pool.Take` reaps over-TTL warm containers asynchronously instead of
+    paying up to ~10s of podman teardown before handing out a sandbox; and
+    `Take`/`TakePersistent`/`coldStart` now thread the caller's context into
+    cold-start construction, so a cancelled turn stops paying container
+    spin-up (background warming keeps its own `FillCtx`).
+
+- **Bundle `${VAR}` interpolation now sees the `FLEET_ENV_FILE` env file, and
+  an unresolvable reference fails the load (#1123).** The manifest used to
+  interpolate BEFORE `config.Load` applied the env file, so a
+  `${VAR}`/`${VAR:-default}` in `url:`, `command:`/`args:`, `sandbox.image`,
+  or `providers[].base_url` silently baked the default (or shipped a literal
+  `${VAR}` token nothing ever re-resolved) whenever the value lived only in
+  the env file. `clientconfig.Load` now registers every `${...}` reference the
+  raw manifest carries with the `.env` allowlist and folds the env file into
+  the process env (same admission + process-env-wins precedence as
+  `config.Load`, once per process) before interpolating — every bundle-loading
+  entrypoint (serve, mcp-broker, `mcp test`, `validate-config`, `eval`,
+  `task run`, the admin CLI) goes through this one seam. `EnvVarNames()` now
+  inventories references from ALL interpolated fields, not just env/header
+  values, and `${VAR:?...}` validates after the env file applies. The MCP
+  `env:`/`headers:` maps keep the #706 lazy-resolution contract unchanged, and
+  hot-reload precedence is untouched (env-file values stay reloadable; process
+  winners still pin). **Compat:** a manifest that today silently ships a
+  literal `${VAR}` outside those lazy maps now refuses to load — including a
+  bare `${FLEET_WORKSPACE}`/`${FLEET_TASK_ID}` anywhere except an
+  `mcp_servers` env value (header maps only preserve the token verbatim, they
+  never substitute it), and a `${VAR:-default}` whose default body nests an
+  unescaped `${...}` (the interpolator never expands a default body, so the
+  inner reference would ship as a literal whenever the outer var is unset).
+  The error names the exact manifest field and variable (use
+  `${VAR:-default}` for an optional value, `$${...}` for a literal). A
+  manifest whose raw bytes fail to parse is now always a load error, even
+  when a substitution would repair the syntax. `fleet validate-config`'s
+  credentials check reports absent names whose every occurrence carries a
+  `${VAR:-default}` as "manifest defaults in effect" instead of missing
+  credentials, so a pristine install stays OK rather than warning forever
+  about `"${FLEET_SANDBOX_IMAGE:-}"`.
 
 - **Teams are settable from the UI, so projects can actually be shared
   (#1157).** Two bugs made the shipped team/projects feature unreachable on a

@@ -330,3 +330,47 @@ func TestValidateEnvKnobs_FlagsEveryRegisteredKnob(t *testing.T) {
 		t.Errorf("clean env should yield no problems, got %v", problems)
 	}
 }
+
+func TestValidateEnvKnobs_MessagesNameValueAndConstraint(t *testing.T) {
+	// TestValidateEnvKnobs_FlagsEveryRegisteredKnob already proves every knob is
+	// flagged and that each problem leads with the env var name. What it does not
+	// check is the rest of the message, so that is all this covers: an operator
+	// staring at a boot failure needs the offending value and the constraint it
+	// violated, not just the key. Range violations are also a distinct path from
+	// parse failures — "zzz" for every knob only exercises the latter.
+	cases := []struct {
+		name string
+		envs map[string]string
+		want []string
+	}{
+		{
+			name: "range violation names the bound",
+			envs: map[string]string{"FLEET_MAX_COST_USD": "-1"},
+			want: []string{"FLEET_MAX_COST_USD", ">= 0"},
+		},
+		{
+			name: "parse failure quotes the value and names the kind",
+			envs: map[string]string{"FLEET_MAX_COST_USD": "5O"}, // letter O, not zero
+			want: []string{"FLEET_MAX_COST_USD", `"5O"`, "number"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			isolateEnv(t)
+			for k, v := range tc.envs {
+				t.Setenv(k, v)
+			}
+
+			problems := ValidateEnvKnobs()
+			if len(problems) != 1 {
+				t.Fatalf("ValidateEnvKnobs() = %d problems, want 1: %q", len(problems), problems)
+			}
+			for _, w := range tc.want {
+				if !strings.Contains(problems[0], w) {
+					t.Errorf("problem should mention %q, got: %q", w, problems[0])
+				}
+			}
+		})
+	}
+}

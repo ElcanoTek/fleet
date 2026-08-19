@@ -96,6 +96,7 @@ func setupTestHandlerWithStore(t *testing.T) (*chi.Mux, *storage.Storage, func()
 		r.Post("/tasks/cleanup", h.CleanupHistory)
 		r.Post("/tasks/model", h.BulkSetTaskModel)
 		r.Delete("/tasks/{task_id}", h.CancelTask)
+		r.Delete("/tasks/{task_id}/permanent", h.DeleteTask)
 
 		r.Get("/logs/{task_id}", h.GetLogs)
 

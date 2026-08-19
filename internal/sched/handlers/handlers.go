@@ -1612,6 +1612,69 @@ func (h *Handlers) CancelTask(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, task)
 }
 
+// DeleteTask handles DELETE /tasks/{task_id}/permanent — remove the task row
+// and its transcripts for good.
+//
+// A separate route from CancelTask (DELETE /tasks/{task_id}) because they are
+// genuinely different operations and conflating them behind a query parameter
+// is how someone deletes a job they meant to pause. Cancel stops a task and
+// keeps the record; this removes it.
+//
+// The reason it has to exist: tasks.name carries a partial unique index, and a
+// cancelled row keeps its name forever. So a job that broke could not be
+// replaced under the same name — and could not be renamed either, since
+// UpdateTask only edits pending or scheduled tasks. Deleting was the missing
+// operation, and nothing in fleet had it.
+//
+// A live run is refused rather than deleted underneath itself: the runner holds
+// a lease and is still writing to the row. Stop it first, then delete — the
+// error says so.
+func (h *Handlers) DeleteTask(w http.ResponseWriter, r *http.Request) {
+	p := h.principalFromRequest(r)
+	taskIDStr := chi.URLParam(r, "task_id")
+	taskID, err := uuid.Parse(taskIDStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid task ID")
+		return
+	}
+
+	task, err := h.storage.GetTask(taskID)
+	if err != nil || task == nil {
+		writeError(w, http.StatusNotFound, "Task not found")
+		return
+	}
+
+	// Same authorization as stopping: admins and explicitly-scoped API keys may
+	// remove any task; a member may remove one they created. Deleting is more
+	// destructive than cancelling, but it is destructive to the SAME task, so a
+	// stricter rule here would only mean a job author can kill their own run and
+	// then not clean it up.
+	if !p.hasPermission(models.PermissionCancelTask) && !p.ownsTask(task) {
+		writeError(w, http.StatusForbidden, "Only the task creator or an admin can delete this task")
+		return
+	}
+
+	if task.Status == models.TaskStatusLeased || task.Status == models.TaskStatusRunning {
+		writeError(w, http.StatusConflict,
+			"This task is running. Stop it first, then delete it — deleting a live run would pull the row out from under the worker still writing to it.")
+		return
+	}
+
+	deleted, err := h.storage.DeleteTask(r.Context(), taskID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to delete task")
+		return
+	}
+	if !deleted {
+		// Someone else removed it between the read and the delete. The caller
+		// asked for it to be gone and it is gone.
+		writeError(w, http.StatusNotFound, "Task not found")
+		return
+	}
+	log.Printf("Task deleted: %s (by %s)", taskID, logSafe(p.stopLabel())) //nolint:gosec // G706: taskID is a parsed uuid.UUID; the label passes logSafe.
+	writeJSON(w, http.StatusOK, map[string]any{"deleted": true, "id": taskID.String()})
+}
+
 // stopLabel renders the cancelling principal for the who-stopped-it audit
 // trail (#508): the authenticated username, the scoped API key's name, or
 // "admin" for the bootstrap admin key.

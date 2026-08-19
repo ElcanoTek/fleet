@@ -250,16 +250,31 @@ func extractFrontmatter(data []byte) (string, bool) {
 	return rest[:idx], true
 }
 
-// validSkillName reports whether name uses only the Agent Skills naming charset
-// (lowercase letters, digits, hyphens).
+// validSkillName reports whether name has the Agent Skills kebab-case shape:
+// lowercase letters, digits, and hyphens, beginning and ending alphanumeric.
+//
+// This is the shape half of the skill-name contract that store.userSkillNameShape
+// (`^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?$`) enforces for user-authored skills, and
+// the two must agree — a name accepted here and rejected there would let a bundle
+// ship a skill that the builder refuses to save. It is deliberately kept to the
+// shape: the 64-char cap is reported separately by the caller against
+// maxSkillNameLen, so an over-long name draws one message about its length rather
+// than a second, vaguer one about its charset. An interior double hyphen
+// ("a--b") is odd but accepted, because the user-skill regex accepts it too.
 func validSkillName(name string) bool {
 	if name == "" {
 		return false
 	}
-	for _, r := range name {
-		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-':
-		default:
+	alnum := func(b byte) bool {
+		return (b >= 'a' && b <= 'z') || (b >= '0' && b <= '9')
+	}
+	// A leading or trailing hyphen — and therefore a name of just "-" — is not
+	// kebab-case, however tolerant the charset is about the interior.
+	if !alnum(name[0]) || !alnum(name[len(name)-1]) {
+		return false
+	}
+	for i := 0; i < len(name); i++ {
+		if !alnum(name[i]) && name[i] != '-' {
 			return false
 		}
 	}

@@ -843,8 +843,17 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 //     the runner's stop/pause/wake/interrupt attribution still takes
 //     precedence over the error — this only closes the no-marker path that
 //     previously fell through to success.
+//   - An agent that ended its own run with confirm_audit(success=false) wraps
+//     ErrAuditAborted and carries the agent's summary as the message (#1151).
+//     The same shape and the same reason: the enforcement gate deliberately
+//     LETS an aborting agent finish, so agentcore returns nil, and a nil here
+//     was recorded as success. A production run printed ABORTED_WITH_FLAGS,
+//     named four quality flags, published nothing, and landed as
+//     "Task completed successfully".
 //
-// Checked in this order because the budget path sets Cancelled too.
+// Checked in this order because the budget path sets Cancelled too, and because
+// a run that was cancelled mid-flight never reached its own audit — attributing
+// the interruption is more truthful than attributing an abort it never made.
 func scheduledTerminalError(ctx context.Context, res agentcore.Result) error {
 	switch {
 	case res.StoppedByBudget:
@@ -855,6 +864,11 @@ func scheduledTerminalError(ctx context.Context, res agentcore.Result) error {
 			return fmt.Errorf("%w: %w", agentcore.ErrRunCancelled, cause)
 		}
 		return agentcore.ErrRunCancelled
+	case res.AuditAborted:
+		if summary := strings.TrimSpace(res.AuditSummary); summary != "" {
+			return fmt.Errorf("%w: %s", agentcore.ErrAuditAborted, summary)
+		}
+		return agentcore.ErrAuditAborted
 	default:
 		return nil
 	}

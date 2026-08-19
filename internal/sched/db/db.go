@@ -2595,6 +2595,43 @@ const cleanupEligibleSubquery = `
 	) ranked
 	WHERE rn > $1 AND completed_at IS NOT NULL AND completed_at < $2`
 
+// DeleteTask permanently removes one task and its transcripts, in a single
+// transaction. See storage.DeleteTask for why deleting (not cancelling) is the
+// only thing that frees a task's name.
+//
+// The two log tables are deleted explicitly because they hold a bare task_id
+// with no foreign key (migrations 001 and 058); every other child table
+// declares ON DELETE CASCADE. Ordered children-first so the task row is never
+// orphaned mid-transaction.
+func (db *Database) DeleteTask(ctx context.Context, taskID uuid.UUID) (bool, error) {
+	tx, err := db.conn.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	// A rollback after a successful Commit returns sql.ErrTxDone; the error
+	// paths below already return the underlying failure.
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM run_logs WHERE task_id = $1`, taskID); err != nil {
+		return false, err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM logs WHERE task_id = $1`, taskID); err != nil {
+		return false, err
+	}
+	res, err := tx.ExecContext(ctx, `DELETE FROM tasks WHERE id = $1`, taskID)
+	if err != nil {
+		return false, err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return affected > 0, nil
+}
+
 // CleanupOldRuns prunes completed/error/cancelled task runs (and their logs)
 // older than retentionDays, ALWAYS preserving the most recent keepPerTask runs
 // per task bucket (prompt+recurrence) regardless of age (#252). retentionDays<=0
@@ -2764,6 +2801,11 @@ func (db *Database) archiveCandidatesPage(ctx context.Context, cutoff time.Time,
 // raw-minus-stored sizes; ~always positive for real log payloads). Each row is
 // committed independently: a row's archive write and its DB update are one
 // statement, so there is no window where the payload exists in neither column.
+// The per-row UPDATE inside the page loop is deliberate and is NOT an N+1 that
+// batching would fix: every row carries a DIFFERENT payload compressed (and
+// optionally encrypted) in Go, so there is nothing to join against, and folding
+// a page of multi-megabyte blobs into one statement would trade the per-row
+// commit boundary for a large memory spike.
 // Candidates are fetched in keyset pages of archiveScanChunk so first-run
 // archival of a large table stays memory-bounded (#1122).
 func (db *Database) ArchiveOldLogs(ctx context.Context, days int) (int, int64, error) {

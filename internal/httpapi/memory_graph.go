@@ -49,7 +49,10 @@ func (s *Server) maybeExtractMemoryGraph(m *store.Memory) {
 	}
 	// Snapshot primitives before detaching (the caller may reuse m).
 	memoryID, user, content := m.ID, m.UserEmail, m.Content
-	go func() {
+	// Tracked: this writes to the store on a detached context, so an untracked
+	// goroutine here could still be mid-write after shutdown returned or after a
+	// test closed its store.
+	s.background.Go("httpapi.memory_graph_extract", func() {
 		ctx, cancel := context.WithTimeout(context.Background(), memoryGraphExtractBudget)
 		defer cancel()
 		g, err := s.memoryGraphExtractor(ctx, content)
@@ -66,7 +69,7 @@ func (s *Server) maybeExtractMemoryGraph(m *store.Memory) {
 			return
 		}
 		log.Printf("memory-graph: memory %q -> %d relation(s)", memoryID, n) //nolint:gosec // G706: memoryID is a store-generated UUID and rendered with %q
-	}()
+	})
 }
 
 // toGraphExtraction maps the agent package's extraction onto the store's

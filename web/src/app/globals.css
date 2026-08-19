@@ -1568,6 +1568,17 @@ button {
 .btn-secondary:hover:not(:disabled) {
   background: var(--color-overlay-soft, rgba(255, 255, 255, 0.06));
 }
+/* Destructive text buttons (Stop / Delete in the task modal). This class was
+   referenced before it existed — .btn's transparent border made those render
+   as bare text — so it now mirrors .btn-secondary's shape on the
+   status-error palette (.btn-danger-hover's tokens). */
+.btn-danger {
+  border-color: var(--color-status-error-border);
+  color: var(--color-status-error-fg);
+}
+.btn-danger:hover:not(:disabled) {
+  background: var(--color-status-error-bg);
+}
 .btn-ghost {
   color: var(--color-text-secondary);
 }
@@ -3101,6 +3112,13 @@ tr.sla-row-fail {
 }
 .modal-overlay.is-open {
   display: flex;
+}
+/* The confirm/alert dialog is the terminal decision layer and can be summoned
+   from INSIDE another modal (Stop / Delete live in the task modal's footer).
+   Peer .modal-overlay layers tie on z-index and resolve by DOM order — the
+   task modal renders later and painted over the question it had just asked. */
+.modal-overlay.confirm-overlay {
+  z-index: 1100;
 }
 /* Every modal enters with the shared fade+rise (pop-up at the base duration);
    popovers/menus use the fast variant. The global reduced-motion block zeroes

@@ -21,6 +21,7 @@ const (
 	toolNamePreviewEmail         = "preview_email"
 	toolNameSuggestAdvancedModel = "suggest_advanced_model"
 	toolNameScheduleTask         = "schedule_task"
+	toolNameManageTasks          = "manage_tasks"
 )
 
 // stagedCriticalApproval is one critical tool call this turn parked on an
@@ -95,6 +96,28 @@ func (o *orchestrationState) checkCriticalToolApproval(toolName, toolCallID, raw
 	defer o.mu.Unlock()
 	if o.approvalSink == nil {
 		return false, ""
+	}
+	// Per-tool approval mode (#1153). `notify` runs the tool now and posts a
+	// card recording what happened, for operations whose undo is cheap and
+	// complete — a page publish against a store that keeps immutable versions,
+	// not a sent email. The window it replaces is 300 seconds beginning at an
+	// unpredictable moment many minutes into a run the user started and then
+	// reasonably stopped watching, so the thing it most reliably blocked was the
+	// final, wanted action of a long analysis.
+	//
+	// Recording is REQUIRED, not best-effort: a sink that cannot post the card,
+	// or one that fails to, falls back to blocking. The whole case for executing
+	// without asking is that the user still finds out.
+	if approvalPolicy, undoHint := ApprovalModeForTool(toolName); approvalPolicy == ApprovalModeNotify {
+		if recorder, ok := o.approvalSink.(ActionRecorder); ok {
+			if err := recorder.RecordAction(toolName, toolCallID, rawInput, undoHint); err != nil {
+				log.Printf("notify-mode record failed (%s): %v — falling back to a blocking approval", toolName, err)
+			} else {
+				return false, ""
+			}
+		} else {
+			log.Printf("notify-mode configured for %s but this transport cannot record actions — falling back to a blocking approval", toolName)
+		}
 	}
 	if pending, ok := o.pendingApprovalOnSameServer(toolName); ok {
 		return true, fmt.Sprintf(
@@ -195,6 +218,31 @@ func (o *orchestrationState) checkScheduleTaskSafety(toolName, toolCallID, rawIn
 		return true, fmt.Sprintf("APPROVAL_REQUIRED: could not stage schedule_task for user approval (%v). Ask the user what to do.", err)
 	}
 	return true, fmt.Sprintf("APPROVAL_REQUIRED: the scheduled task has been staged for explicit user approval (approval_id=%s). Do NOT retry. Summarize the task you would create (name, what it does, when it runs) and wait for the user to click Approve.", id)
+}
+
+// checkManageTasksSafety intercepts manage_tasks (#1152), the sibling of
+// schedule_task for tasks that already exist. Same shape and same reason: the
+// tool has no execution path of its own, and the card the human reads IS the
+// safety mechanism — one call can rewrite the schedule on a dozen jobs or stop
+// a recurring one for good, and neither is something to discover afterwards.
+func (o *orchestrationState) checkManageTasksSafety(toolName, toolCallID, rawInput string) (bool, string) {
+	if toolName != toolNameManageTasks {
+		return false, ""
+	}
+	if hasUnresolvedToolPlaceholder(rawInput) {
+		return true, "manage_tasks argument contains an unresolved ${tool:…} placeholder. The agent runtime does NOT substitute that syntax; paste the actual value into the tool arguments instead."
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.approvalSink == nil {
+		return true, "MANAGE_TASKS_UNAVAILABLE: changing scheduled tasks from chat requires an approval-enabled interactive session. Do NOT retry — tell the user to edit the task in the Operations Center instead."
+	}
+	id, err := o.approvalSink.Stage(toolName, toolCallID, rawInput)
+	if err != nil {
+		log.Printf("approval stage failed (manage_tasks): %v", err)
+		return true, fmt.Sprintf("APPROVAL_REQUIRED: could not stage manage_tasks for user approval (%v). Ask the user what to do.", err)
+	}
+	return true, fmt.Sprintf("APPROVAL_REQUIRED: the change has been staged for explicit user approval (approval_id=%s). Do NOT retry. Say plainly which tasks you are about to change and what changes, then wait for the user to click Approve.", id)
 }
 
 // checkSuggestAdvancedSafety intercepts suggest_advanced_model — the staged

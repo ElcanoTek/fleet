@@ -2,56 +2,13 @@ package agent
 
 import (
 	"testing"
-
-	"charm.land/fantasy"
 )
 
-func TestBuildForceSummaryMessages(t *testing.T) {
-	prior := []HistoryEntry{
-		mustEntry("user", "text", TextContent{Text: "older question"}),
-		mustEntry("assistant", "text", TextContent{Text: "older answer"}),
-	}
-	turn := []HistoryEntry{
-		mustEntry("user", "text", TextContent{Text: "pull the report"}),
-		mustEntry("assistant", "tool_call", ToolCallContent{ID: "c1", Name: "run_python", Input: "{}"}),
-		mustEntry("tool", "tool_result", ToolResultContent{ID: "c1", Name: "run_python", Text: `{"output":"spend=123"}`}),
-		// No assistant text — this is exactly the "stopped without answering" case.
-	}
-
-	msgs, err := buildForceSummaryMessages(prior, turn)
-	if err != nil {
-		t.Fatalf("buildForceSummaryMessages: %v", err)
-	}
-	if len(msgs) == 0 {
-		t.Fatal("expected messages")
-	}
-
-	// Must end with a user turn carrying the forcing nudge so the follow-up
-	// call knows to write the answer.
-	last := msgs[len(msgs)-1]
-	if last.Role != fantasy.MessageRoleUser {
-		t.Errorf("last message role = %q, want user", last.Role)
-	}
-	if !messageContainsText(last, forceFinalSummaryNudge) {
-		t.Errorf("last message does not carry the forcing nudge: %+v", last)
-	}
-
-	// The tool work the model already did must be replayed (so it has the
-	// results to summarize) and well-formed (call before result).
-	assertWellFormedToolPairs(t, msgs)
-	if got, _, ok := toolResultTextFor(t, msgs, "c1"); !ok || !contains([]byte(got), "spend=123") {
-		t.Errorf("tool result for c1 missing/empty in replayed convo: got=%q ok=%v", got, ok)
-	}
-}
-
-func messageContainsText(m fantasy.Message, want string) bool {
-	for _, part := range m.Content {
-		if tp, ok := fantasy.AsMessagePart[fantasy.TextPart](part); ok && tp.Text == want {
-			return true
-		}
-	}
-	return false
-}
+// The force-summary prompt shape is now pinned end-to-end in
+// interactive_test.go (TestInteractiveFinalize_ForceSummarySeesTurnWork): the
+// old TestBuildForceSummaryMessages exercised a PriorHistory/TurnHistory replay
+// that production never wired (#1117), which is exactly how the wrong-history
+// bug survived a green suite.
 
 func TestStripLeakedToolCalls(t *testing.T) {
 	// The exact leak observed in the wild — a download_url call narrated as

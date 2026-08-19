@@ -50,6 +50,14 @@ const (
 	// Used for operator-deployed service endpoints (never credentials — the
 	// registry stays secret-free by construction).
 	KindURL Kind = "url"
+	// KindModel is a model slug: "<provider-or-lab>/<model>", the shape both
+	// the OpenRouter catalog and admin-configured workspace providers
+	// ("<provider>/<model>", GET /llm-provider-models) route on. Free text —
+	// the catalog changes weekly and admin providers name arbitrary models, so
+	// an enum would be stale by construction. Case is preserved (slugs are
+	// case-sensitive upstream); the one shape rule is a "/" separating two
+	// non-empty halves with no whitespace, which every routable slug has.
+	KindModel Kind = "model"
 )
 
 // Spec declares one admin-configurable setting: its stable key (DB + API), its
@@ -110,6 +118,18 @@ func Registry() []Spec {
 		{Key: "subagents_enabled", Kind: KindBool,
 			EnvVar: "FLEET_SUBAGENTS_ENABLED"},
 
+		// Model tiers (#1187): the two role slots the chat UI pins — what a new
+		// conversation starts on, and the suggest_advanced_model escalation
+		// target. Live: the web re-reads them from /client-config on every
+		// shell mount, and the Go escalation path reads the agentcore holder
+		// per call. Deliberately NOT here: the scheduled-task default model
+		// (FLEET_TASK_MODEL) — the scheduler snapshots it at boot, so admitting
+		// it would violate the live-apply rule this registry is built on.
+		{Key: "default_model", Kind: KindModel,
+			EnvVar: "FLEET_DEFAULT_MODEL"},
+		{Key: "advanced_model", Kind: KindModel,
+			EnvVar: "FLEET_ADVANCED_MODEL"},
+
 		// Workspace features.
 		{Key: "memory_autoindex_enabled", Kind: KindBool,
 			EnvVar: "FLEET_MEMORY_AUTOINDEX_ENABLED"},
@@ -152,6 +172,14 @@ func Validate(spec Spec, value string) (string, error) {
 		u, err := url.Parse(v)
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 			return "", fmt.Errorf("%s: want an http(s) URL (or empty), got %q", spec.Key, value)
+		}
+		return v, nil
+	case KindModel:
+		if v == "" || len(v) > 200 || strings.ContainsAny(v, " \t\n") {
+			return "", fmt.Errorf("%s: want a model slug like provider/model, got %q", spec.Key, value)
+		}
+		if i := strings.Index(v, "/"); i <= 0 || i == len(v)-1 {
+			return "", fmt.Errorf("%s: want a model slug like provider/model (a %q separating two non-empty halves), got %q", spec.Key, "/", value)
 		}
 		return v, nil
 	case KindInt:
