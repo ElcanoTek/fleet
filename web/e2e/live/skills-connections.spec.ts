@@ -38,6 +38,11 @@ test("skills page: built-in pack renders and the builder round-trips a personal 
   await expect(profilerRow).toBeVisible();
   await expect(page.getByText("Built-in").first()).toBeVisible();
 
+  // bento-slides (#985) ships bundled templates/references alongside its
+  // SKILL.md — assert it rosters too, so a pack whose aux files broke
+  // materialization does not silently vanish from the library.
+  await expect(page.getByTestId("skill-row-bento-slides")).toBeVisible();
+
   // Read view: the full SKILL.md body loads from the merged roster.
   await profilerRow.getByRole("button", { name: "View" }).click();
   await expect(page.getByText("name: data-profiler")).toBeVisible();
