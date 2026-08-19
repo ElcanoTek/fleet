@@ -157,6 +157,14 @@ func (a *Agent) runEndOfRunVerifier(ctx context.Context, task string, records []
 	if err != nil {
 		return nil, fmt.Errorf("verifier call failed: %w", err)
 	}
+	// The verifier is a documented host-side extra layered AROUND the governed
+	// loop: its spend does not debit the run's cost/token ceilings (unchanged
+	// semantics), but it must not vanish either — record it in the session
+	// log's labeled aux-usage ledger (#1118). Recorded before parsing: the call
+	// cost money even when the verdict turns out unparseable.
+	rec := agentcore.NewAuxUsageRecord(agentcore.AuxUsageEndOfRunVerifier, a.fallbackModel.Model(), out)
+	a.logSession.AddAuxUsage(rec)
+	logAuxUsage(rec)
 	raw := strings.TrimSpace(out.Response.Content.Text())
 	if raw == "" {
 		return nil, fmt.Errorf("verifier returned empty response")

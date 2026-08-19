@@ -636,6 +636,31 @@ func hasUnresolvedToolPlaceholder(rawInput string) bool {
 // which, in the shipped default (no overrides), is the OpenRouter-returned cost,
 // i.e. byte-identical to the prior behavior.
 func (o *orchestrationState) updateUsage(modelSlug string, usage fantasy.Usage, metadata fantasy.ProviderMetadata) {
+	o.accumulateUsage(modelSlug, usage, metadata, false)
+}
+
+// updateAuxUsage records an AUXILIARY model call made on behalf of the run
+// inside its loop (#1118): the compaction summarizer and the model-calling
+// native tools (suggest_*). The call's tokens/cost accumulate into the SAME
+// totals checkCeilings / budgetState / Result.Usage read — that is the point —
+// but it must NOT touch the LastStep* fields: LastStepInputTokens /
+// LastStepPromptTokens are documented as the MAIN loop's per-call input size
+// (the context-window-fill signal checkContextPressure and the chat context
+// meter read), and an aux call's prompt is not the run's context fill. Without
+// this split, a Stop during a proactive compaction reported the summarizer's
+// prompt size as the conversation's window fill. Aux calls also skip the
+// served-upstream attribution: that signal tracks the RUN's pinned model
+// routing, and an aux call (often a different, cheaper model) would flap the
+// transition log.
+func (o *orchestrationState) updateAuxUsage(modelSlug string, usage fantasy.Usage, metadata fantasy.ProviderMetadata) {
+	o.accumulateUsage(modelSlug, usage, metadata, true)
+}
+
+// accumulateUsage is the shared body behind updateUsage (main-loop steps) and
+// updateAuxUsage (in-loop auxiliary calls). aux gates the per-STEP signals —
+// LastStep* and the served-upstream attribution — which belong to the main
+// loop only; the cumulative billing/ceiling counters accumulate for both.
+func (o *orchestrationState) accumulateUsage(modelSlug string, usage fantasy.Usage, metadata fantasy.ProviderMetadata, aux bool) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 
@@ -660,7 +685,11 @@ func (o *orchestrationState) updateUsage(modelSlug string, usage fantasy.Usage, 
 	o.PromptTokens += totalPrompt
 	// The per-STEP input size is the context-pressure / window signal, so it too
 	// counts cache reads — a cached token still occupies the context window.
-	o.LastStepInputTokens = totalPrompt
+	// MAIN-loop steps only: an aux call's prompt is not the run's context fill
+	// (see updateAuxUsage).
+	if !aux {
+		o.LastStepInputTokens = totalPrompt
+	}
 	o.CompletionTokens += int(usage.OutputTokens)
 	o.CachedTokens += int(usage.CacheReadTokens)
 	o.CacheCreationTokens += int(usage.CacheCreationTokens)
@@ -674,8 +703,10 @@ func (o *orchestrationState) updateUsage(modelSlug string, usage fantasy.Usage, 
 	// whose pool mixes serving precisions — can drop below the quantization
 	// floor's intent on any endpoint that ignores it. Logged once per transition
 	// rather than per step: the signal is the switch, and a per-step line would
-	// be noise on a long run.
-	if served := openrouterServedProvider(metadata); served != "" {
+	// be noise on a long run. MAIN-loop steps only: an aux call is often a
+	// different (cheaper) model whose routing says nothing about the run's pin
+	// and would flap the transition detection (see updateAuxUsage).
+	if served := openrouterServedProvider(metadata); !aux && served != "" {
 		if served != o.LastServedUpstream {
 			if preferred := preferredUpstreamFor(modelSlug); preferred != "" && served != preferred {
 				o.ServedFallback = true
@@ -695,8 +726,11 @@ func (o *orchestrationState) updateUsage(modelSlug string, usage fantasy.Usage, 
 		// window: it is the true size of this call's prompt (fresh + cache-read),
 		// NOT fresh + cached added onto an already-inclusive total — fantasy's
 		// InputTokens excludes cache reads (above), so this sum counts each
-		// prompt token exactly once.
-		o.logSession.LastStepPromptTokens = totalPrompt
+		// prompt token exactly once. MAIN-loop steps only, same invariant as
+		// LastStepInputTokens above (see updateAuxUsage).
+		if !aux {
+			o.logSession.LastStepPromptTokens = totalPrompt
+		}
 		o.logSession.Cost += cost
 		o.logSession.mu.Unlock()
 	}

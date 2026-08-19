@@ -1390,6 +1390,17 @@ func convertLogSession(_ *models.Task, ls *agent.LogSession) *models.LogSession 
 		// corrupted-but-schema-shaped output.
 		OutputJSON: agentcore.RedactSecrets(ls.SnapshotOutputJSON()),
 	}
+	// Aux-usage ledger (#1118): carry the run's labeled host-side model-call
+	// records (verifier / phone-a-friend) into the persisted session.
+	for _, rec := range ls.SnapshotAuxUsage() {
+		out.AuxUsage = append(out.AuxUsage, models.AuxUsageRecord{
+			Label:            rec.Label,
+			Model:            rec.Model,
+			PromptTokens:     rec.PromptTokens,
+			CompletionTokens: rec.CompletionTokens,
+			CostUSD:          rec.CostUSD,
+		})
+	}
 	for _, m := range msgs {
 		mm := models.LogMessage{
 			ID:          m.ID,

@@ -2018,6 +2018,24 @@ type LogSession struct {
 	// (#797) from the driver to the runner, redacted like every other session
 	// field before it leaves the process boundary.
 	OutputJSON string `json:"output_json,omitempty"`
+	// AuxUsage mirrors agentcore.LogSession.AuxUsage (#1118): the labeled
+	// ledger of host-side auxiliary model calls made on behalf of the run
+	// (end-of-run verifier, phone-a-friend review, loop exit-condition
+	// verifier). Deliberately NOT folded into the headline token/cost fields —
+	// iteration cost accounting (#179) and the run ceilings exclude these by
+	// design — but persisted so the spend is visible per call.
+	AuxUsage []AuxUsageRecord `json:"aux_usage,omitempty"`
+}
+
+// AuxUsageRecord is one host-side auxiliary model call's metered spend
+// (mirrors agentcore.AuxUsageRecord; #1118). PromptTokens includes cache
+// reads, matching the session-log token convention.
+type AuxUsageRecord struct {
+	Label            string  `json:"label"`
+	Model            string  `json:"model,omitempty"`
+	PromptTokens     int     `json:"prompt_tokens"`
+	CompletionTokens int     `json:"completion_tokens"`
+	CostUSD          float64 `json:"cost_usd"`
 }
 
 // RunLogMeta identifies one superseded transcript in a task's per-attempt run

@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"charm.land/fantasy"
+
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 )
 
 // "Phone a friend" super-LLM review (scheduled-only; part of #175).
@@ -149,6 +151,13 @@ func (a *Agent) runPhoneAFriendReview(ctx context.Context, reviewer fantasy.Lang
 	if err != nil {
 		return nil, fmt.Errorf("reviewer call failed: %w", err)
 	}
+	// Like the verifier, the review is a host-side extra AROUND the governed
+	// loop: off-ceiling by design, but recorded in the session log's labeled
+	// aux-usage ledger so its spend is visible (#1118). Recorded before
+	// parsing — an unparseable verdict still cost money.
+	rec := agentcore.NewAuxUsageRecord(agentcore.AuxUsagePhoneAFriend, reviewer.Model(), out)
+	a.logSession.AddAuxUsage(rec)
+	logAuxUsage(rec)
 	raw := strings.TrimSpace(out.Response.Content.Text())
 	if raw == "" {
 		return nil, fmt.Errorf("reviewer returned empty response")
