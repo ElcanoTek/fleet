@@ -86,6 +86,13 @@ func isEmailTool(toolName string) bool {
 // maxSendEmailCallsPerTask cap + duplicate-payload fingerprint guard.
 const maxAttemptsPerCriticalAction = 2
 
+// DuplicateSendSuppressedPrefix opens the response an identical,
+// already-successful send_email retry receives. Exported because the end-of-run
+// verifier's result classifier must recognize it as a satisfied action, not a
+// failed one: every other guard's block means the action has NOT happened,
+// while this one fires precisely because it HAS.
+const DuplicateSendSuppressedPrefix = "Duplicate send_email suppressed:"
+
 func matchCriticalSuffix(declared string) string {
 	needle := strings.ToLower(declared)
 	best := ""
@@ -235,7 +242,25 @@ func (o *orchestrationState) checkCriticalTool(toolName, _ string, rawInput stri
 	if isEmailTool(toolName) {
 		fp := emailDedupKey(rawInput)
 		if _, dup := o.sentEmailFingerprints[fp]; dup {
-			return true, "Safety Guard: Duplicate send_email blocked. An identical payload was already sent."
+			// This is the one guard whose block means "already done" rather
+			// than "not done": the fingerprint is recorded exclusively on a
+			// successful send, so an identical payload here has provably
+			// reached the provider. It must therefore discharge the same
+			// commitments a successful call would — a blocked call never
+			// reaches recordToolResult, and a commitment tracker that keeps
+			// demanding an action this guard exists to prevent leaves the run
+			// only two exits: abort a task whose work is done, or mutate the
+			// content until the fingerprint no longer matches (observed: a
+			// body re-rendered 110 bytes larger purely to get past this line).
+			o.markPendingCriticalDone(toolName, hashString(rawInput))
+			if len(o.pendingCriticalActions) == 0 {
+				o.selfAuditRequested = true
+			}
+			o.markCommittedExecuted(toolName, callDealID(rawInput), valuesDigestArg(rawInput))
+			if o.allCommitmentsExhausted() {
+				o.auditConfirmed = false
+			}
+			return true, DuplicateSendSuppressedPrefix + " an identical payload was already sent successfully by this run, so this send is complete and its commitment is discharged. Do NOT send it again and do NOT alter the content to make it look different; report the send as done and move on."
 		}
 	}
 

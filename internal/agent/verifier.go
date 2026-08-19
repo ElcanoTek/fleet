@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"charm.land/fantasy"
+
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 )
 
 // End-of-run verifier (scheduled-only; ported from cutlass verifier.go).
@@ -76,8 +78,15 @@ func buildToolExecSummary(session *LogSession) []toolExecRecord {
 // prefix, enforcement blocks, and {"status":"error"} JSON bodies.
 func toolResultLooksFailed(content string) bool {
 	trimmed := strings.TrimSpace(content)
-	if strings.HasPrefix(trimmed, "[tool error]") {
-		return true
+	// The duplicate-send suppression is the one block that means "already
+	// done": its fingerprint only exists because an identical send succeeded
+	// earlier in this run. Counting it failed re-demands an action the guard
+	// will never let run again — the loop it exists to end.
+	if rest, ok := strings.CutPrefix(trimmed, "[tool error]"); ok {
+		return !strings.HasPrefix(strings.TrimSpace(rest), agentcore.DuplicateSendSuppressedPrefix)
+	}
+	if strings.HasPrefix(trimmed, agentcore.DuplicateSendSuppressedPrefix) {
+		return false
 	}
 	for _, prefix := range []string{"LOOP_GUARD", "BLOCKED:", "Safety Limit:", "Safety Guard:"} {
 		if strings.HasPrefix(trimmed, prefix) {
