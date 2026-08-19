@@ -86,44 +86,263 @@ func (o *captureObs) Observe(eventType string, _ map[string]any) {
 	o.events = append(o.events, eventType)
 }
 
-// TestInteractiveFinalize_ForcesSummaryOnEmptyText verifies the finalize hook's
-// forced-final-summary path: when the turn produced no user-visible text, the
-// hook makes a tool-less follow-up call and returns the recovered answer.
-func TestInteractiveFinalize_ForcesSummaryOnEmptyText(t *testing.T) {
+// promptHasUserText reports whether any user-role message in msgs carries want
+// inside a text part.
+func promptHasUserText(msgs []fantasy.Message, want string) bool {
+	for _, m := range msgs {
+		if m.Role != fantasy.MessageRoleUser {
+			continue
+		}
+		for _, part := range m.Content {
+			if tp, ok := fantasy.AsMessagePart[fantasy.TextPart](part); ok && strings.Contains(tp.Text, want) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// TestInteractiveFinalize_ForceSummarySeesTurnWork is the #1117 regression
+// guard for the forced-final-summary recovery. It drives a full turn with the
+// TurnConfig manager.RunTurn actually builds (Messages only — there is no
+// separate turn-history field left to hand-wire, which is how the old test
+// exercised wiring production never had), makes the round execute a tool and
+// end with no prose (the exact forced-summary trigger), and asserts on what
+// the recovery call RECEIVES: the current user question and the round's tool
+// results, with no tool roster attached. The old PriorHistory/TurnHistory
+// replay handed the recovery call prior turns only (TurnHistory was never set
+// in production), so the "recovered" answer was fabricated from stale context.
+func TestInteractiveFinalize_ForceSummarySeesTurnWork(t *testing.T) {
+	broker := &interactiveRecordingBroker{}
+	var (
+		mu            sync.Mutex
+		calls         int
+		summaryPrompt []fantasy.Message
+		summarySeen   bool
+	)
 	model := &itMockModel{
-		// The force-summary follow-up streams a written answer.
-		streamFunc: func(_ context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
+		streamFunc: func(_ context.Context, call fantasy.Call) (fantasy.StreamResponse, error) {
+			mu.Lock()
+			calls++
+			n := calls
+			if len(call.Tools) == 0 {
+				// The forced-summary follow-up is the turn's only tool-less
+				// call; capture exactly what it was given to replay.
+				summaryPrompt = append([]fantasy.Message(nil), call.Prompt...)
+				summarySeen = true
+			}
+			mu.Unlock()
 			return func(yield func(fantasy.StreamPart) bool) {
-				if !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, Delta: "Here is the answer."}) {
-					return
+				switch n {
+				case 1:
+					// Round step 1: call the governed MCP tool.
+					if !yield(fantasy.StreamPart{
+						Type: fantasy.StreamPartTypeToolCall, ID: "mcp-1",
+						ToolCallName: "mcp_bundle_lookup", ToolCallInput: `{}`,
+					}) {
+						return
+					}
+					yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonToolCalls})
+				case 2:
+					// Round step 2: stop with NO prose — the forced-summary trigger.
+					yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonStop})
+				default:
+					// The forced-summary follow-up writes the answer.
+					if !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, Delta: "Spend was 123."}) {
+						return
+					}
+					yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonStop})
 				}
-				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonStop})
 			}, nil
 		},
 	}
 	tc := TurnConfig{
 		SystemPrompt: "sys",
+		Messages:     []fantasy.Message{fantasy.NewUserMessage("look it up")},
 		Model:        model,
 		MaxTokens:    1024,
-		TurnHistory: []HistoryEntry{
-			mustEntry("user", "text", TextContent{Text: "pull the report"}),
-			mustEntry("assistant", entryTypeToolCall, ToolCallContent{ID: "c1", Name: "run_python", Input: "{}"}),
-			mustEntry("tool", "tool_result", ToolResultContent{ID: "c1", Name: "run_python", Text: `{"output":"spend=123"}`}),
+		MCPBroker:    broker,
+		MCPCatalog: []mcp.ServerTool{{
+			ServerName: "bundle",
+			Tool:       mcp.Tool{Name: "lookup", Description: "lookup"},
+		}},
+	}
+	res, err := RunInteractiveTurn(context.Background(), tc, &captureObs{})
+	if err != nil {
+		t.Fatalf("RunInteractiveTurn: %v", err)
+	}
+	if res.FinalText != "Spend was 123." {
+		t.Fatalf("FinalText = %q, want the forced summary text", res.FinalText)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !summarySeen {
+		t.Fatal("forced-summary follow-up (the tool-less call) never fired")
+	}
+	// The recovery call must see the CURRENT turn, not just prior history:
+	// the user's question and the tool work it is being asked to summarize.
+	if !promptHasUserText(summaryPrompt, "look it up") {
+		t.Errorf("forced-summary prompt lacks the current user question; got %d messages", len(summaryPrompt))
+	}
+	assertWellFormedToolPairs(t, summaryPrompt)
+	if got, _, ok := toolResultTextFor(t, summaryPrompt, "mcp-1"); !ok || !contains([]byte(got), "broker-result") {
+		t.Errorf("forced-summary prompt lacks the round's tool result: got=%q ok=%v", got, ok)
+	}
+}
+
+// TestInteractiveFinalize_LeakedCallRetrySuppressedAfterToolExecution mirrors
+// ADR-0035's TestStreamRoundSuppressesRecoveryAfterToolExecution at the
+// finalize seam: a round that EXECUTED a tool (side effect committed) and then
+// narrated a leaked `call:...{...}` must not be blindly re-driven with the
+// governed roster — the model could re-issue the executed call and repeat a
+// real MCP write. The hook must degrade to the tool-less forced summary, so
+// the broker sees exactly one call.
+func TestInteractiveFinalize_LeakedCallRetrySuppressedAfterToolExecution(t *testing.T) {
+	broker := &interactiveRecordingBroker{}
+	var (
+		mu       sync.Mutex
+		calls    int
+		reIssued bool
+	)
+	model := &itMockModel{
+		streamFunc: func(_ context.Context, call fantasy.Call) (fantasy.StreamResponse, error) {
+			mu.Lock()
+			calls++
+			n := calls
+			withTools := len(call.Tools) > 0
+			reIssue := false
+			if n > 2 && withTools && !reIssued {
+				// A blind with-tools re-drive: the model rationally re-issues
+				// the call whose result it never narrated (fresh arguments, so
+				// the byte-identical repeat guard cannot mask the regression).
+				reIssued = true
+				reIssue = true
+			}
+			mu.Unlock()
+			return func(yield func(fantasy.StreamPart) bool) {
+				switch {
+				case n == 1:
+					// Round step 1: execute the governed MCP tool for real.
+					if !yield(fantasy.StreamPart{
+						Type: fantasy.StreamPartTypeToolCall, ID: "mcp-1",
+						ToolCallName: "mcp_bundle_lookup", ToolCallInput: `{}`,
+					}) {
+						return
+					}
+					yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonToolCalls})
+				case n == 2:
+					// Round step 2: narrate a leaked call and stop — strips to
+					// empty, so the finalize hook sees the leaked-call trigger.
+					if !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, Delta: "call:default_api:download_url{url:https://x/y}"}) {
+						return
+					}
+					yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonStop})
+				case reIssue:
+					if !yield(fantasy.StreamPart{
+						Type: fantasy.StreamPartTypeToolCall, ID: "mcp-2",
+						ToolCallName: "mcp_bundle_lookup", ToolCallInput: `{"q":"again"}`,
+					}) {
+						return
+					}
+					yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonToolCalls})
+				default:
+					if !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, Delta: "summary after side effects"}) {
+						return
+					}
+					yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonStop})
+				}
+			}, nil
 		},
 	}
-	hook := buildInteractiveFinalize(tc)
-	obs := &captureObs{}
-	recovered, err := hook(context.Background(), agentcore.FinalizeInput{
-		Mode:         agentcore.ModeInteractive,
-		FinalText:    "", // turn ended with no text
-		Observer:     obs,
+	tc := TurnConfig{
 		SystemPrompt: "sys",
-	})
-	if err != nil {
-		t.Fatalf("finalize hook error: %v", err)
+		Messages:     []fantasy.Message{fantasy.NewUserMessage("download it")},
+		Model:        model,
+		MaxTokens:    1024,
+		// Belt and braces: cap the steps so a regression re-driving with tools
+		// cannot loop the mock forever.
+		MaxIterations: 6,
+		MCPBroker:     broker,
+		MCPCatalog: []mcp.ServerTool{{
+			ServerName: "bundle",
+			Tool:       mcp.Tool{Name: "lookup", Description: "lookup"},
+		}},
 	}
-	if recovered != "Here is the answer." {
-		t.Errorf("recovered = %q, want forced summary text", recovered)
+	res, err := RunInteractiveTurn(context.Background(), tc, &captureObs{})
+	if err != nil {
+		t.Fatalf("RunInteractiveTurn: %v", err)
+	}
+	if broker.calls != 1 {
+		t.Fatalf("broker executed %d calls, want 1 — the finalize retry re-drove a round that had already committed a side effect (ADR-0035)", broker.calls)
+	}
+	if res.FinalText != "summary after side effects" {
+		t.Fatalf("FinalText = %q, want the degraded tool-less summary", res.FinalText)
+	}
+}
+
+// TestInteractiveFinalize_LeakedCallRetryRunsWithoutSideEffects pins the other
+// half of the gate: a round with NO committed tool event that narrated only a
+// leaked call is still re-driven WITH tools, so the intended action actually
+// executes (the pre-existing recovery, which the ADR-0035 gate must not kill).
+func TestInteractiveFinalize_LeakedCallRetryRunsWithoutSideEffects(t *testing.T) {
+	broker := &interactiveRecordingBroker{}
+	var (
+		mu    sync.Mutex
+		calls int
+	)
+	model := &itMockModel{
+		streamFunc: func(_ context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
+			mu.Lock()
+			calls++
+			n := calls
+			mu.Unlock()
+			return func(yield func(fantasy.StreamPart) bool) {
+				switch n {
+				case 1:
+					// The whole round is one leaked narration — zero tool events.
+					if !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, Delta: "call:default_api:lookup{q:x}"}) {
+						return
+					}
+					yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonStop})
+				case 2:
+					// The leaked-call retry makes the intended call for real.
+					if !yield(fantasy.StreamPart{
+						Type: fantasy.StreamPartTypeToolCall, ID: "mcp-1",
+						ToolCallName: "mcp_bundle_lookup", ToolCallInput: `{}`,
+					}) {
+						return
+					}
+					yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonToolCalls})
+				default:
+					if !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, Delta: "did the real call"}) {
+						return
+					}
+					yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonStop})
+				}
+			}, nil
+		},
+	}
+	tc := TurnConfig{
+		SystemPrompt:  "sys",
+		Messages:      []fantasy.Message{fantasy.NewUserMessage("look it up")},
+		Model:         model,
+		MaxTokens:     1024,
+		MaxIterations: 6,
+		MCPBroker:     broker,
+		MCPCatalog: []mcp.ServerTool{{
+			ServerName: "bundle",
+			Tool:       mcp.Tool{Name: "lookup", Description: "lookup"},
+		}},
+	}
+	res, err := RunInteractiveTurn(context.Background(), tc, &captureObs{})
+	if err != nil {
+		t.Fatalf("RunInteractiveTurn: %v", err)
+	}
+	if broker.calls != 1 {
+		t.Fatalf("broker executed %d calls, want 1 — the retry must still run when the round committed nothing", broker.calls)
+	}
+	if res.FinalText != "did the real call" {
+		t.Fatalf("FinalText = %q, want the retry's recovered text", res.FinalText)
 	}
 }
 

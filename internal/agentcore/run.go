@@ -495,6 +495,13 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 		messages = pressure.messages
 		pressureWarned = pressure.warned
 
+		// Mark the sink's committed tool events at the round's start so the
+		// finalize hook can tell whether THIS round executed a tool. The mark
+		// survives the resilience layer's attempt rollbacks by construction:
+		// rollbackTo only ever unwinds events past an attempt mark taken at or
+		// after this one, and a committed side effect suppresses rollback
+		// entirely (ADR-0035).
+		roundToolMark := sink.toolEventCount()
 		orch := policyOrch(deps.Policy)
 		outcome, serr := eng.streamRoundWithResilience(
 			ctx, orch, sink, maxTokens, messages, agent, activeModel, swappedToFallback, buildAgent,
@@ -531,15 +538,30 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 			// replaces the loop's text and is appended as an assistant entry so
 			// it persists.
 			if deps.Finalize != nil {
+				// The hook's recovery calls must see the conversation as it
+				// stands NOW: the round's input plus its completed tool
+				// transcript. The input slice alone lacks the round's tool
+				// calls/results (they live in finalResult.Steps), so a forced
+				// summary built from it fabricated an answer from stale context
+				// — never the tool results it was summarizing (#1117). Same
+				// carry as the enforcement loop and the terminal structured-
+				// output phase; copied so the loop's own slice stays the round
+				// input (completeRun appends the carry itself).
+				finalizeMessages := append(append([]fantasy.Message(nil), messages...), carryRoundMessages(finalResult)...)
 				finalText, err = finalizeWithPanicBoundary(ctx, deps.Finalize, FinalizeInput{
-					Mode:         mode,
-					FinalText:    finalText,
-					Messages:     messages,
-					Tools:        fantasyTools,
-					Observer:     deps.Observer,
-					SystemPrompt: systemPrompt,
-					OnToolCall:   finalizeToolCallCallback(sink, panicAttribution),
-					OnToolResult: finalizeToolResultCallback(sink, panicAttribution),
+					Mode:      mode,
+					FinalText: finalText,
+					Messages:  finalizeMessages,
+					// Any tool event committed during this round means a blind
+					// re-drive could repeat its side effects; the hook degrades
+					// to its tool-less path instead (ADR-0035's gate, extended
+					// to the finalize seam).
+					RoundToolEvents: sink.toolEventCount() - roundToolMark,
+					Tools:           fantasyTools,
+					Observer:        deps.Observer,
+					SystemPrompt:    systemPrompt,
+					OnToolCall:      finalizeToolCallCallback(sink, panicAttribution),
+					OnToolResult:    finalizeToolResultCallback(sink, panicAttribution),
 					// The retry streams under the run's own ceilings: the budget
 					// guard blocks the next paid completion once the cost/token
 					// ceiling is hit, and the step cap bounds the tool loop.

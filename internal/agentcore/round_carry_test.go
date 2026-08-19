@@ -158,3 +158,56 @@ func TestRun_EnforcementRoundCarriesTranscript(t *testing.T) {
 		t.Errorf("carried transcript (idx %d) must precede the nudge (idx %d) so the nudge reads as a follow-up", workIdx, nudgeIdx)
 	}
 }
+
+// The finalize seam rides the same carry (#1117): the hook's recovery calls
+// replay FinalizeInput.Messages, so the loop must hand the hook the finishing
+// round's input PLUS its completed tool transcript — the round input alone
+// lacks the tool calls/results the forced summary is asked to write up. The
+// loop also reports how many tool events the round committed, the datum the
+// hook's ADR-0035 gate needs to refuse a blind with-tools re-drive.
+func TestRunFinalizeInputCarriesRoundTranscriptAndToolEvents(t *testing.T) {
+	probe := fantasy.NewAgentTool("probe_tool", "returns a canned result",
+		func(context.Context, panicTestInput, fantasy.ToolCall) (fantasy.ToolResponse, error) {
+			return fantasy.NewTextResponse("spend=123"), nil
+		})
+	var got FinalizeInput
+	_, err := Run(context.Background(), ModeInteractive, RunConfig{
+		EnvPrefix:   CanonicalEnvPrefix,
+		NativeTools: []fantasy.AgentTool{probe},
+	}, Deps{
+		Input:    stubInput{system: "sys", user: "pull the report", label: "finalize-carry"},
+		Observer: &captureObserver{},
+		Policy:   passPolicy{},
+		Model:    scriptedToolModel([]scriptedToolCall{{id: "call-1", name: "probe_tool"}}),
+		Finalize: func(_ context.Context, in FinalizeInput) (string, error) {
+			got = in
+			return "", nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got.RoundToolEvents != 2 {
+		t.Errorf("RoundToolEvents = %d, want 2 (the round's committed tool call + result)", got.RoundToolEvents)
+	}
+	var sawUser, sawCall, sawResult bool
+	for _, m := range got.Messages {
+		if m.Role == fantasy.MessageRoleUser && strings.Contains(msgText(m), "pull the report") {
+			sawUser = true
+		}
+		for _, part := range m.Content {
+			if cp, ok := fantasy.AsMessagePart[fantasy.ToolCallPart](part); ok && cp.ToolCallID == "call-1" {
+				sawCall = true
+			}
+			if rp, ok := fantasy.AsMessagePart[fantasy.ToolResultPart](part); ok && rp.ToolCallID == "call-1" {
+				sawResult = true
+			}
+		}
+	}
+	if !sawUser {
+		t.Error("FinalizeInput.Messages lacks the round's user message")
+	}
+	if !sawCall || !sawResult {
+		t.Errorf("FinalizeInput.Messages lacks the round's tool transcript (call=%v result=%v) — a recovery call would fabricate from stale context", sawCall, sawResult)
+	}
+}

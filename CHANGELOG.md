@@ -194,6 +194,24 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Chat's finalize recoveries now see the turn they are recovering, and can
+  no longer repeat its side effects (#1117).** Two flaws in the interactive
+  driver's finalize paths: (1) the forced-final-summary call replayed
+  `TurnConfig.PriorHistory`/`TurnHistory`, but production never populated
+  `TurnHistory` — so when a turn ended with tool calls and no prose (the
+  exact trigger), the recovery saw prior turns only, neither the current
+  question nor the tool results it was summarizing, and fabricated from
+  stale context. `agentcore.FinalizeInput.Messages` now carries the
+  finishing round's input plus its completed tool transcript (the same
+  `carryRoundMessages` carry the enforcement loop uses), both recoveries
+  replay that, and the never-wired history fields are gone. (2) The
+  leaked-tool-call retry re-drove the round with the full governed roster
+  and no record of tool work already done, so the model could re-issue
+  already-executed MCP calls; it now honors ADR-0035's side-effect gate via
+  the new `FinalizeInput.RoundToolEvents` — any committed tool event this
+  round degrades the retry to the tool-less summary path, which can narrate
+  the executed work but not repeat it.
+
 - **`TaskStreamFrame` was missing five fields the task stream actually sends,
   failing the TypeScript build.** `subagentProgressFrame`
   (`internal/runner/task_stream.go`) forwards `success`, `tokens`,
