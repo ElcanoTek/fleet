@@ -27,7 +27,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -147,22 +146,37 @@ func runChecks(ctx context.Context, opts validateOptions) []checkResult {
 
 // checkEnvVars reuses cfg.Validate (the SAME required-field gate the server boots
 // through: OPENROUTER_API_KEY unless MockMode, FLEET_SERVER_TOKEN, the
-// conversation caps, DATABASE_URL, TLS) and then validates the optional numeric
-// knobs that the loader silently defaults on a bad value, so a typo'd
-// FLEET_MAX_COST_USD / FLEET_MAX_CONCURRENT_AGENTS is caught here rather than
-// silently ignored.
+// conversation caps, DATABASE_URL, TLS) plus config.ValidateEnvKnobs — the
+// registry-driven preflight of every numeric/bool/duration knob the config
+// loader reads (#1119; the three FLEET_SCHED_RATE_LIMIT_* knobs are read at
+// serve start outside the loader and only warn on a malformed value). The
+// registry (internal/config/knobs.go) is the same table config.Load parses
+// through, so a typo'd knob (FLEET_MAX_COST_USD=5O, FLEET_LOCKDOWN_ONLY=enabled)
+// is reported here exactly as the boot path would refuse it. Since #1119 the
+// loader itself fails loud on those, so on a successful load the walk is a
+// re-check; its real value is the FAILURE path — it needs no *Config, so knob
+// problems are still reported when Load fails for an unrelated reason (a bad
+// IP list / TLS mode) and the operator fixes everything in one pass.
 func checkEnvVars(cfg *config.Config, cfgErr error) checkResult {
 	res := checkResult{Name: "env_vars", Blocking: true}
 	if cfgErr != nil {
 		res.Status = statusFail
-		res.Detail = "config load failed: " + cfgErr.Error()
+		detail := "config load failed: " + cfgErr.Error()
+		// Walk the registry even though Load failed (see above); skip any
+		// problem the load error already names verbatim.
+		for _, p := range config.ValidateEnvKnobs() {
+			if !strings.Contains(detail, p) {
+				detail += "; " + p
+			}
+		}
+		res.Detail = detail
 		return res
 	}
 	var problems []string
 	if err := cfg.Validate(); err != nil {
 		problems = append(problems, err.Error())
 	}
-	problems = append(problems, validateOptionalEnvVars()...)
+	problems = append(problems, config.ValidateEnvKnobs()...)
 
 	if len(problems) > 0 {
 		res.Status = statusFail
@@ -172,51 +186,6 @@ func checkEnvVars(cfg *config.Config, cfgErr error) checkResult {
 	res.Status = statusOK
 	res.Detail = "required vars set; optional vars well-formed"
 	return res
-}
-
-// validateOptionalEnvVars checks the optional numeric env vars that config.Load
-// silently falls back to a default on when malformed. A SET-but-malformed value
-// is an operator error worth surfacing: the spend/concurrency bounds must be
-// positive, while the input-queue retention window is non-negative (zero
-// explicitly disables it). Unset values are fine (the default applies). It
-// reads the env directly (not cfg) so it can tell "unset" from "set to garbage
-// that fell back to the default".
-//
-// NOTE: issue #248 also lists "FLEET_DEFAULT_RUNTIME a known flavor". fleet has
-// no such process-level env var — the runtime flavor is a per-task field, not a
-// boot config knob — so there is nothing to validate here for it. Validating a
-// non-existent knob would be dishonest, so it is intentionally omitted.
-func validateOptionalEnvVars() []string {
-	var problems []string
-	if raw, ok := lookupFleetEnv("MAX_COST_USD"); ok {
-		if f, err := strconv.ParseFloat(strings.TrimSpace(raw), 64); err != nil || f <= 0 {
-			problems = append(problems, "FLEET_MAX_COST_USD must be a positive float")
-		}
-	}
-	if raw, ok := lookupFleetEnv("MAX_CONCURRENT_AGENTS"); ok {
-		if n, err := strconv.Atoi(strings.TrimSpace(raw)); err != nil || n <= 0 {
-			problems = append(problems, "FLEET_MAX_CONCURRENT_AGENTS must be a positive integer")
-		}
-	}
-	if raw, ok := lookupFleetEnv("INPUT_QUEUE_RETENTION_DAYS"); ok {
-		if n, err := strconv.Atoi(strings.TrimSpace(raw)); err != nil || n < 0 {
-			problems = append(problems, "FLEET_INPUT_QUEUE_RETENTION_DAYS must be a non-negative integer")
-		}
-	}
-	return problems
-}
-
-// lookupFleetEnv reads FLEET_<suffix> then the legacy CHAT_/CUTLASS_ prefixes,
-// mirroring config.getenvFleet*'s precedence so the check sees the same value the
-// loader would. Returns the raw value and whether any of the variants is set
-// (non-empty).
-func lookupFleetEnv(suffix string) (string, bool) {
-	for _, prefix := range []string{"FLEET_", "CHAT_", "CUTLASS_"} {
-		if v := strings.TrimSpace(os.Getenv(prefix + suffix)); v != "" {
-			return v, true
-		}
-	}
-	return "", false
 }
 
 // ── 2. manifest bundle (blocking) ──
@@ -688,6 +657,16 @@ func requiredGateVarsMissing(bundle *clientconfig.Bundle) []string {
 // fail-closed KVM preflight the boot path runs (#217).
 func checkSandbox(ctx context.Context, cfg *config.Config, bundle *clientconfig.Bundle) checkResult {
 	res := checkResult{Name: "sandbox"}
+	// A failed config load leaves cfg nil; the env_vars check already reports
+	// that as the blocking failure, so degrade here instead of dereferencing.
+	// (Reachable before #1119 only via a malformed IP list/TLS/network mode;
+	// the loader failing loud on every malformed knob made it easy to hit.)
+	if cfg == nil {
+		res.Status = statusWarn
+		res.Blocking = false
+		res.Detail = "skipped (config not loaded)"
+		return res
+	}
 	containerBacked := sandboxIsContainerBacked(cfg)
 	res.Blocking = containerBacked
 	if !containerBacked {

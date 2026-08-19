@@ -1,6 +1,7 @@
 package config
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -114,17 +115,19 @@ func TestLoad_AutoTitle(t *testing.T) {
 	}
 }
 
-func TestGetenvFleetDuration_FallbackOnBadValue(t *testing.T) {
+func TestGetenvFleetDuration_FailsLoudOnBadValue(t *testing.T) {
 	isolateEnv(t)
-	// Target a knob with a NON-ZERO default (lifetime = 5m) so the fallback is
-	// distinguishable from a parsed zero.
+	// Before #1119 an unparseable duration silently fell back to the default
+	// (5m); now a set-but-malformed value refuses to boot, naming the variable,
+	// the offending value, and the expected format.
 	t.Setenv("FLEET_CHAT_DB_MAX_CONN_LIFETIME", "not-a-duration")
-	cfg, err := Load("")
-	if err != nil {
-		t.Fatalf("Load: %v", err)
+	_, err := Load("")
+	if err == nil {
+		t.Fatal("bad duration must fail Load, got nil error")
 	}
-	// Unparseable duration falls back to the default rather than erroring.
-	if cfg.ChatDBPool.ConnMaxLifetime != 5*time.Minute {
-		t.Errorf("bad duration should fall back to default 5m, got %s", cfg.ChatDBPool.ConnMaxLifetime)
+	for _, want := range []string{"FLEET_CHAT_DB_MAX_CONN_LIFETIME", "not-a-duration", "duration"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("Load error %q should mention %q", err, want)
+		}
 	}
 }
