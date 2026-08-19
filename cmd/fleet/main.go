@@ -216,7 +216,11 @@ func run() error {
 	// Load the client bundle first: it supplies the MCP catalog (built into
 	// cfg.MCPServers), the supporting-doc dirs, and branding/empty-state. Its
 	// manifest also tells us which connector env-var names to admit from the
-	// .env file, so register them BEFORE config.Load reads the env.
+	// .env file, so register them BEFORE config.Load reads the env. (Load
+	// itself already folded the FLEET_ENV_FILE file into the process env for
+	// its manifest interpolation, #1123 — config.Load's application below is
+	// an idempotent re-read that additionally admits the literal-named keys
+	// registered here.)
 	bundle, err := clientconfig.Load(clientconfig.Dir())
 	if err != nil {
 		return fmt.Errorf("load client config bundle: %w", err)
@@ -336,6 +340,8 @@ func run() error {
 		CriticalToolSuffixes:    bundlePolicy.CriticalToolSuffixes,
 		CriticalToolSubstitutes: bundlePolicy.CriticalToolSubstitutes,
 		CriticalToolTimeouts:    bundlePolicy.CriticalToolTimeouts,
+		CriticalToolModes:       bundlePolicy.CriticalToolModes,
+		CriticalToolUndoHints:   bundlePolicy.CriticalToolUndoHints,
 	})
 
 	// Connector credentials cross exactly one process boundary at boot: the child
@@ -613,6 +619,7 @@ func run() error {
 	// seam carries the budget gate so scheduling from chat cannot bypass a
 	// budget that would refuse the same user on POST /tasks (#601 part 2).
 	chatOpts = append(chatOpts, httpapi.WithTaskScheduler(taskSchedulerProvider(schedStorage, budgetEnforcer, cfg.TaskModel)))
+	chatOpts = append(chatOpts, httpapi.WithTaskManager(taskManagerProvider(schedStorage)))
 
 	warnIfNoDefaultTaskModel(cfg.TaskModel)
 
@@ -1372,6 +1379,11 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers, r
 		r.Post("/tasks/{task_id}/rerun", h.RerunTask)
 		r.Post("/tasks/{task_id}/clone", h.CloneTask)
 		r.Delete("/tasks/{task_id}", h.CancelTask)
+		// Permanently remove a task. Deliberately NOT the same route as the
+		// cancel above: cancel stops a job and keeps the record, this destroys
+		// the record — and only this frees the task's name for reuse (#238's
+		// partial unique index outlives a cancelled row).
+		r.Delete("/tasks/{task_id}/permanent", h.DeleteTask)
 		// Self-improving memory (#516): feedback capture + versioned learned
 		// instructions (list / activate a version / deactivate).
 		r.Post("/tasks/{task_id}/feedback", h.SubmitFeedback)
@@ -2081,6 +2093,182 @@ func warnIfNoDefaultTaskModel(taskModel string) {
 	}
 	log.Printf("WARNING: no default task model configured (FLEET_TASK_MODEL, or CHAT_/CUTLASS_TASK_MODEL). " +
 		"Scheduled tasks that do not pin their own model will be refused at create time.")
+}
+
+// taskManagerProvider adapts the sched storage layer to the chat manage_tasks
+// seam (#1152): update or stop tasks that already exist.
+//
+// Chat gains no authority the same person lacks through the API. Every target
+// is resolved, then filtered to tasks the APPROVING user created — the same
+// ownership rule handlers.CancelTask applies to a non-admin stop — and anything
+// dropped is reported back by name with the reason rather than silently
+// omitted. A count without names is a bulk edit nobody can check.
+func taskManagerProvider(schedStorage *storage.Storage) func(context.Context, httpapi.TaskMutationRequest) (*httpapi.TaskMutationResult, error) {
+	return func(ctx context.Context, req httpapi.TaskMutationRequest) (*httpapi.TaskMutationResult, error) {
+		var owner *uuid.UUID
+		if email := strings.ToLower(strings.TrimSpace(req.RequestedBy)); email != "" {
+			if u, err := schedStorage.GetUserByUsernameWithContext(ctx, email); err == nil && u != nil {
+				owner = &u.ID
+			}
+		}
+		if owner == nil {
+			return nil, fmt.Errorf("cannot identify %q as an orchestrator user; edit the task in the Operations Center instead", req.RequestedBy)
+		}
+
+		candidates, err := resolveManagedTasks(schedStorage, req, owner)
+		if err != nil {
+			return nil, err
+		}
+		res := &httpapi.TaskMutationResult{Matched: len(candidates)}
+		for _, t := range candidates {
+			label := taskMutationLabel(t)
+			// Ownership is re-checked per task, not just baked into the query,
+			// so an explicit task_ids list cannot reach somebody else's job.
+			if t.CreatedBy == nil || *t.CreatedBy != *owner {
+				res.Skipped = append(res.Skipped, httpapi.TaskMutationEntry{
+					ID: t.ID.String(), Label: label,
+					Detail: "you did not create this task; an admin can change it in the Operations Center",
+				})
+				continue
+			}
+			if req.Action == tools.ManageTasksActionStop {
+				if t.Status.IsTerminal() {
+					res.Skipped = append(res.Skipped, httpapi.TaskMutationEntry{
+						ID: t.ID.String(), Label: label, Detail: "already " + string(t.Status) + "; nothing to stop",
+					})
+					continue
+				}
+				if _, err := schedStorage.CancelTaskAtomic(t.ID, "stopped from chat by "+req.RequestedBy); err != nil {
+					res.Skipped = append(res.Skipped, httpapi.TaskMutationEntry{ID: t.ID.String(), Label: label, Detail: err.Error()})
+					continue
+				}
+				res.Changed = append(res.Changed, httpapi.TaskMutationEntry{ID: t.ID.String(), Label: label, Detail: "stopped"})
+				continue
+			}
+			detail, err := applyTaskMutation(ctx, schedStorage, t, req)
+			if err != nil {
+				res.Skipped = append(res.Skipped, httpapi.TaskMutationEntry{ID: t.ID.String(), Label: label, Detail: err.Error()})
+				continue
+			}
+			res.Changed = append(res.Changed, httpapi.TaskMutationEntry{ID: t.ID.String(), Label: label, Detail: detail})
+		}
+		return res, nil
+	}
+}
+
+// resolveManagedTasks turns a mutation request's selector into concrete tasks.
+// An explicit id list is fetched one by one so a bad id is reported as a bad id;
+// a match runs through the same filter the task list uses, bounded so a mistyped
+// filter is refused with its own match count rather than executed.
+//
+// No context parameter: both reads it makes are the non-context storage
+// variants, and taking a ctx it cannot honor would advertise a cancellation
+// story that is not true.
+func resolveManagedTasks(schedStorage *storage.Storage, req httpapi.TaskMutationRequest, owner *uuid.UUID) ([]*schedmodels.Task, error) {
+	if len(req.TaskIDs) > 0 {
+		out := make([]*schedmodels.Task, 0, len(req.TaskIDs))
+		for _, raw := range req.TaskIDs {
+			id, err := uuid.Parse(strings.TrimSpace(raw))
+			if err != nil {
+				return nil, fmt.Errorf("%q is not a task id", raw)
+			}
+			t, err := schedStorage.GetTask(id)
+			if err != nil || t == nil {
+				return nil, fmt.Errorf("task %s not found", raw)
+			}
+			out = append(out, t)
+		}
+		return out, nil
+	}
+	if req.Match == nil {
+		return nil, fmt.Errorf("no tasks selected")
+	}
+	filter := scheddb.TaskFilter{VisibleToUserID: owner}
+	if q := strings.TrimSpace(req.Match.Query); q != "" {
+		filter.Query = &q
+	}
+	if tag := strings.TrimSpace(req.Match.Tag); tag != "" {
+		filter.Tags = []string{tag}
+	}
+	// One over the cap, so "you matched too many" is honest about there being
+	// more rather than reporting exactly the ceiling.
+	tasks, total, err := schedStorage.GetTasksFiltered(filter, tools.MaxManagedTasks+1, 0)
+	if err != nil {
+		return nil, err
+	}
+	if model := strings.TrimSpace(req.Match.Model); model != "" {
+		filtered := tasks[:0]
+		for _, t := range tasks {
+			if t.Model != nil && strings.EqualFold(strings.TrimSpace(*t.Model), model) {
+				filtered = append(filtered, t)
+			}
+		}
+		tasks = filtered
+		total = len(tasks)
+	}
+	if len(tasks) > tools.MaxManagedTasks {
+		return nil, fmt.Errorf("that selector matches %d tasks, above the %d-task limit for one approved change; narrow it (add a tag, or name the tasks explicitly)", total, tools.MaxManagedTasks)
+	}
+	return tasks, nil
+}
+
+// applyTaskMutation writes one task's field changes and returns a short
+// description of what actually changed, for the chat-visible report.
+func applyTaskMutation(ctx context.Context, schedStorage *storage.Storage, t *schedmodels.Task, req httpapi.TaskMutationRequest) (string, error) {
+	var changed []string
+	if req.Prompt != "" && req.Prompt != t.Prompt {
+		t.Prompt = req.Prompt
+		changed = append(changed, "prompt")
+	}
+	if req.Cron != "" && req.Cron != t.Recurrence {
+		t.Recurrence = req.Cron
+		changed = append(changed, "schedule "+req.Cron)
+	}
+	if req.Model != "" && (t.Model == nil || *t.Model != req.Model) {
+		m := req.Model
+		t.Model = &m
+		changed = append(changed, "model "+req.Model)
+	}
+	if req.MaxIterations > 0 && (t.MaxIterations == nil || *t.MaxIterations != req.MaxIterations) {
+		n := req.MaxIterations
+		t.MaxIterations = &n
+		changed = append(changed, fmt.Sprintf("max_iterations %d", n))
+	}
+	if len(changed) > 0 {
+		if _, err := schedStorage.UpdateTask(t); err != nil {
+			return "", err
+		}
+	}
+	// Tags go through their own storage path (add/remove semantics), so they are
+	// applied separately and only when asked for.
+	if len(req.AddTags) > 0 || len(req.RemoveTags) > 0 {
+		if _, err := schedStorage.UpdateTaskTags(ctx, t.ID, req.AddTags, req.RemoveTags); err != nil {
+			return "", err
+		}
+		changed = append(changed, "tags")
+	}
+	if len(changed) == 0 {
+		return "already matched the requested values", nil
+	}
+	return strings.Join(changed, ", "), nil
+}
+
+// taskMutationLabel is the human name for a task in the report: its title, then
+// its name, then the first line of its prompt. A bare UUID tells the approving
+// user nothing about what they just changed.
+func taskMutationLabel(t *schedmodels.Task) string {
+	if t == nil {
+		return "(unknown task)"
+	}
+	for _, candidate := range []string{t.Title, t.Name, strings.SplitN(t.Prompt, "\n", 2)[0]} {
+		if s := strings.TrimSpace(candidate); s != "" {
+			if r := []rune(s); len(r) > 60 {
+				return string(r[:60]) + "…"
+			}
+			return s
+		}
+	}
+	return t.ID.String()
 }
 
 func taskSchedulerProvider(schedStorage *storage.Storage, budgetGate *budget.Enforcer, defaultTaskModel string) func(context.Context, httpapi.TaskScheduleRequest) (*httpapi.TaskScheduleResult, error) {

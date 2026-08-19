@@ -35,6 +35,37 @@ prior versions are listed because none have shipped.
 
 ### Changed
 
+- **Batched four per-iteration database writes that ran one round trip per
+  item.** A static review flagged five query-in-a-loop sites; four were real and
+  are now single (or chunked) statements, with identical semantics:
+
+  - `store.SweepExpired` per-user cap eviction (`internal/store/store.go`) —
+    scanned for overflowing users and then issued one `DELETE` per user. Now one
+    statement: `ROW_NUMBER() OVER (PARTITION BY user_email ORDER BY updated_at
+    DESC, id DESC)` selects exactly the rows each user's `OFFSET cap` selected,
+    for every user at once, and the `HAVING` pre-scan is gone. This path runs
+    after *every* successful turn, so it was the costliest of the five.
+  - `Store.UpsertTaskMemory` LRU eviction (`internal/sched/taskmemory.go`) —
+    deleted one key per round trip until the cap was met. Now one `DELETE` with
+    `LIMIT <overflow>` in the same oldest-first order. Usually the overflow is a
+    single key; lowering `maxKeys` made it arbitrarily large.
+  - `Store.ReplaceRelationsForMemory` (`internal/store/memorygraph.go`) — one
+    `INSERT` per extracted triple inside the transaction. Now chunked multi-row
+    `INSERT`s (the `RecordToolCalls` pattern), bounded by a new `maxBatchRows`
+    so the parameter count stays far under Postgres' 65535 cap.
+  - Crash-recovery synthesized-result markers (`internal/store/turn_journal.go`)
+    — one `INSERT … ON CONFLICT DO NOTHING` per unknown-outcome call. Now the
+    same chunked multi-row form, still idempotent across repeated recoveries.
+
+  The fifth flag, the per-row `UPDATE` in `Database.ArchiveOldLogs`
+  (`internal/sched/db/db.go`), is **not** an N+1: each row carries a different
+  payload compressed (and optionally encrypted) in Go, so there is nothing to
+  join against, and folding a page of multi-megabyte blobs into one statement
+  would trade the documented per-row commit boundary for a large memory spike.
+  Left as-is with a comment recording why. New tests pin per-user cap
+  independence, bulk LRU eviction, the relation chunk boundary (including
+  re-extraction idempotency), and multi-marker recovery.
+
 - **`expandCidImagesToDataURLs` no longer compiles a regex per inline
   attachment.** The approval-preview substitution built `regexp.MustCompile`
   inside the attachment loop and rescanned the whole document for every inline
@@ -204,6 +235,24 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Chat's finalize recoveries now see the turn they are recovering, and can
+  no longer repeat its side effects (#1117).** Two flaws in the interactive
+  driver's finalize paths: (1) the forced-final-summary call replayed
+  `TurnConfig.PriorHistory`/`TurnHistory`, but production never populated
+  `TurnHistory` — so when a turn ended with tool calls and no prose (the
+  exact trigger), the recovery saw prior turns only, neither the current
+  question nor the tool results it was summarizing, and fabricated from
+  stale context. `agentcore.FinalizeInput.Messages` now carries the
+  finishing round's input plus its completed tool transcript (the same
+  `carryRoundMessages` carry the enforcement loop uses), both recoveries
+  replay that, and the never-wired history fields are gone. (2) The
+  leaked-tool-call retry re-drove the round with the full governed roster
+  and no record of tool work already done, so the model could re-issue
+  already-executed MCP calls; it now honors ADR-0035's side-effect gate via
+  the new `FinalizeInput.RoundToolEvents` — any committed tool event this
+  round degrades the retry to the tool-less summary path, which can narrate
+  the executed work but not repeat it.
+
 - **`TaskStreamFrame` was missing five fields the task stream actually sends,
   failing the TypeScript build.** `subagentProgressFrame`
   (`internal/runner/task_stream.go`) forwards `success`, `tokens`,
@@ -257,6 +306,83 @@ prior versions are listed because none have shipped.
     duplicate catalog entries; and `HTTPTransport` verifies the JSON-RPC
     response `id` against the request the way stdio does (a foreign-id JSON
     response is rejected, a foreign-id SSE event is skipped).
+
+- **Five defense-in-depth hardenings across the security-critical packages
+  (#1124).** Batched LOW findings from the 2026-08-17 audit — none broke an
+  invariant; each closes a residual hazard:
+
+  - **The egress proxy no longer tears down a CONNECT tunnel on the first
+    half-close.** The splice loop returned after *either* copy direction
+    finished, so a client that legally half-closed its write side after
+    sending its request had its response truncated by the deferred `Close`s.
+    Both directions are now awaited, and a finished direction propagates the
+    half-close to its destination via `CloseWrite` (TCP/TLS) so the peer sees
+    the FIN while the other direction keeps flowing. The surviving direction
+    is bounded by a 60s drain deadline armed when the first finishes —
+    without it, a silent peer that ignores the FIN and never responds/closes
+    would pin the tunnel's goroutines and FDs for the process lifetime.
+  - **A bundle that declares account-suffix base vars where one is an
+    underscore-prefix of a sibling is rejected at load.** The
+    `<VAR>_<ACCOUNT>` convention is purely lexical, so declaring both `FOO`
+    and `FOO_BAR` on one stdio server meant account `bar` silently overlaid
+    `FOO` with `FOO_BAR`'s value (a different credential), and `AccountsFor`
+    reported phantom accounts (`SLACK_TOKEN_URL` surfaced `url` as an
+    "account" of `SLACK_TOKEN`). The rule is scoped per server — the set one
+    overlay actually probes — and fails the load with rename instructions.
+    Out-of-repo bundles that declare such a pair will now fail to load; the
+    shipped `config/default` bundle is unaffected.
+  - **`writeEnvLines` fsyncs the temp file before the rename**, so a power
+    loss shortly after `fleet mcp account set` can no longer leave an
+    empty/truncated 0600 credentials file behind the atomic rename.
+  - **Runtime-acquired credentials join the broker's literal redactor at
+    acquisition time.** Boot-time `RegisterEnvLiterals` only knows env-file
+    secrets; per-user OAuth bearers, rotated refresh tokens, unsealed OAuth
+    client secrets, and unsealed api_key secrets used while the broker serves
+    were scrubbed by shape patterns alone. `remotemcp.Service` now offers
+    every such credential to a
+    secret observer, wired in the broker child to the new
+    `mcpbroker.RegisterSecretLiteral`; `redact.Redactor.AddLiteral` is now
+    safe to call concurrently with `Redact` (RWMutex) and dedupes, so
+    per-turn re-registration is free.
+  - **Sandbox pool latency hazards off the turn's critical path.**
+    `ensureBridge` no longer holds `c.mu` through its 100ms settle sleep;
+    `Pool.Take` reaps over-TTL warm containers asynchronously instead of
+    paying up to ~10s of podman teardown before handing out a sandbox; and
+    `Take`/`TakePersistent`/`coldStart` now thread the caller's context into
+    cold-start construction, so a cancelled turn stops paying container
+    spin-up (background warming keeps its own `FillCtx`).
+
+- **Bundle `${VAR}` interpolation now sees the `FLEET_ENV_FILE` env file, and
+  an unresolvable reference fails the load (#1123).** The manifest used to
+  interpolate BEFORE `config.Load` applied the env file, so a
+  `${VAR}`/`${VAR:-default}` in `url:`, `command:`/`args:`, `sandbox.image`,
+  or `providers[].base_url` silently baked the default (or shipped a literal
+  `${VAR}` token nothing ever re-resolved) whenever the value lived only in
+  the env file. `clientconfig.Load` now registers every `${...}` reference the
+  raw manifest carries with the `.env` allowlist and folds the env file into
+  the process env (same admission + process-env-wins precedence as
+  `config.Load`, once per process) before interpolating — every bundle-loading
+  entrypoint (serve, mcp-broker, `mcp test`, `validate-config`, `eval`,
+  `task run`, the admin CLI) goes through this one seam. `EnvVarNames()` now
+  inventories references from ALL interpolated fields, not just env/header
+  values, and `${VAR:?...}` validates after the env file applies. The MCP
+  `env:`/`headers:` maps keep the #706 lazy-resolution contract unchanged, and
+  hot-reload precedence is untouched (env-file values stay reloadable; process
+  winners still pin). **Compat:** a manifest that today silently ships a
+  literal `${VAR}` outside those lazy maps now refuses to load — including a
+  bare `${FLEET_WORKSPACE}`/`${FLEET_TASK_ID}` anywhere except an
+  `mcp_servers` env value (header maps only preserve the token verbatim, they
+  never substitute it), and a `${VAR:-default}` whose default body nests an
+  unescaped `${...}` (the interpolator never expands a default body, so the
+  inner reference would ship as a literal whenever the outer var is unset).
+  The error names the exact manifest field and variable (use
+  `${VAR:-default}` for an optional value, `$${...}` for a literal). A
+  manifest whose raw bytes fail to parse is now always a load error, even
+  when a substitution would repair the syntax. `fleet validate-config`'s
+  credentials check reports absent names whose every occurrence carries a
+  `${VAR:-default}` as "manifest defaults in effect" instead of missing
+  credentials, so a pristine install stays OK rather than warning forever
+  about `"${FLEET_SANDBOX_IMAGE:-}"`.
 
 - **Teams are settable from the UI, so projects can actually be shared
   (#1157).** Two bugs made the shipped team/projects feature unreachable on a

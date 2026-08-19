@@ -116,6 +116,12 @@ type Service struct {
 	store      tokenStore
 	cfg        Config
 	httpClient *http.Client // SSRF-safe; used for all control-plane OAuth requests
+
+	// observeSecret, when set (SetSecretObserver), receives every
+	// runtime-acquired credential so the host process can register it for
+	// literal redaction (#1124). Never called with an empty value; never
+	// logged here.
+	observeSecret func(secret string)
 }
 
 // NewService builds a Service. cfg is normalized; the SSRF-safe HTTP client is
@@ -124,6 +130,32 @@ type Service struct {
 func NewService(st *store.Store, cfg Config) *Service {
 	cfg.withDefaults()
 	return &Service{store: st, cfg: cfg, httpClient: mcpoauth.SafeHTTPClient(cfg.HTTPTimeout)}
+}
+
+// SetSecretObserver registers fn to receive every credential this service
+// acquires at RUNTIME — minted/refreshed OAuth bearers, rotated refresh
+// tokens, sealed api_key secrets — at the moment of acquisition, before the
+// credential is used on any request. The credential-owning broker wires it to
+// mcpbroker.RegisterSecretLiteral so a connector echoing its own token into an
+// error string is scrubbed by VALUE, like boot-time env secrets (#1124). fn
+// must be safe for concurrent use and must only register the value for
+// redaction, never log or persist it. Set during wiring, before the service
+// serves traffic (the field itself is not synchronized).
+func (s *Service) SetSecretObserver(fn func(secret string)) {
+	s.observeSecret = fn
+}
+
+// noteSecrets forwards each non-empty value to the secret observer (no-op when
+// none is registered).
+func (s *Service) noteSecrets(values ...string) {
+	if s.observeSecret == nil {
+		return
+	}
+	for _, v := range values {
+		if v != "" {
+			s.observeSecret(v)
+		}
+	}
 }
 
 // Enabled reports whether the feature can operate (encryption key + base URL).
@@ -503,13 +535,30 @@ func (s *Service) AcquireToken(ctx context.Context, server *store.RemoteMCPServe
 	if err != nil {
 		return "", err
 	}
+	// The unsealed client secret rides the same token-endpoint request as the
+	// refresh token (client authentication), so it is the same hazard class:
+	// register it for literal redaction before that request can quote it in an
+	// error (#1124 follow-up).
+	s.noteSecrets(clientSecret)
 	fc := s.flowConfig(server, clientSecret)
 	margin := int64(s.cfg.RefreshMargin / time.Second)
-	return s.store.EnsureFreshToken(ctx, server, margin, s.refreshFunc(fc))
+	bearer, err := s.store.EnsureFreshToken(ctx, server, margin, s.refreshFunc(fc))
+	if err == nil {
+		// Runtime-acquired bearer: register it for literal redaction before it
+		// is used on any request (#1124).
+		s.noteSecrets(bearer)
+	}
+	return bearer, err
 }
 
 func (s *Service) refreshFunc(fc mcpoauth.FlowConfig) store.RefreshFunc {
 	return func(ctx context.Context, current store.RemoteMCPTokens) (store.RefreshResult, error) {
+		// The stored refresh token is about to ride a token-endpoint request
+		// whose failure text could echo it; the ROTATED tokens below never
+		// leave this closure (the fresh refresh token in particular is only
+		// stored, not returned). Register all of them for literal redaction
+		// at acquisition time (#1124).
+		s.noteSecrets(current.RefreshToken)
 		rctx, cancel := context.WithTimeout(ctx, s.cfg.RefreshTimeout)
 		defer cancel()
 		tok, err := fc.Refresh(rctx, s.httpClient, current.RefreshToken)
@@ -528,6 +577,7 @@ func (s *Service) refreshFunc(fc mcpoauth.FlowConfig) store.RefreshFunc {
 			}
 			return store.RefreshResult{}, err
 		}
+		s.noteSecrets(tok.AccessToken, tok.RefreshToken)
 		return store.RefreshResult{Tokens: store.RemoteMCPTokens{
 			AccessToken:  tok.AccessToken,
 			RefreshToken: tok.RefreshToken,
@@ -549,6 +599,9 @@ func (s *Service) tryRevoke(ctx context.Context, server *store.RemoteMCPServer) 
 	if err != nil || tokens.RefreshToken == "" {
 		return
 	}
+	// Same registration as AcquireToken/refreshFunc: both secrets ride the
+	// revocation request and could be echoed by its failure text.
+	s.noteSecrets(clientSecret, tokens.RefreshToken)
 	_ = mcpoauth.RevokeToken(rctx, s.httpClient, server.RevocationEndpoint, server.ClientID, clientSecret, tokens.RefreshToken)
 }
 

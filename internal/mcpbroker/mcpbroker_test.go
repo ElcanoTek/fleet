@@ -495,6 +495,40 @@ func TestClientServer_MaskedDiscoveryAndReloadAreLogged(t *testing.T) {
 	}
 }
 
+// A token acquired at RUNTIME (a per-user OAuth bearer minted mid-serve, not a
+// boot-time env secret) must be scrubbed from a masked error's host log once
+// registered via RegisterSecretLiteral (#1124). Same bare-token fixture
+// rationale as the env-literal test above: no shape pattern catches it, so
+// only the literal registration can.
+func TestClientServer_MaskedErrorLogRedactsRuntimeToken(t *testing.T) {
+	const fixture = "not-a-real-runtime-bearer-fixture"
+	if scrubbed := redact.NewRedactor(nil).Redact(fixture); scrubbed != fixture {
+		t.Fatalf("fixture no longer proves the literal path: patterns now catch %q", fixture)
+	}
+
+	resetBrokerRedactor()
+	t.Cleanup(resetBrokerRedactor)
+	// The acquisition-time hook: what remotemcp's secret observer calls when a
+	// bearer/refresh token is minted while the broker is already serving.
+	RegisterSecretLiteral(fixture)
+
+	logged := captureLog(t)
+	fake := &fakeBroker{err: fmt.Errorf("upstream rejected bearer %s", fixture)}
+	client := loopback(t, fake)
+
+	if _, _, err := client.CallMCP(context.Background(), "pages", "list_pages", nil); err == nil {
+		t.Fatal("CallMCP should have failed")
+	}
+
+	out := logged()
+	if strings.Contains(out, fixture) {
+		t.Fatalf("runtime-acquired token reached the host log: %q", out)
+	}
+	if !strings.Contains(out, "[REDACTED]") {
+		t.Errorf("expected the scrubbed placeholder in %q", out)
+	}
+}
+
 // captureLog redirects the stdlib logger (fleet's convention, bridged into slog
 // by internal/logging) for the duration of one test.
 func captureLog(t *testing.T) func() string {

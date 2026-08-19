@@ -1181,21 +1181,14 @@ type HTTPToolConfig struct {
 	Critical     bool
 }
 
-// Load reads environment variables in this precedence order (highest wins):
-//
-//  1. Process environment (snapshotted and restored around file loads).
-//  2. envFile (e.g. .env.local) — per-operator overrides.
-//
-// Missing files are NOT an error.
-//
-// Malformed values ARE an error (#1119): a numeric/bool/duration knob that is
-// SET but does not parse (or falls outside its registered range, see knobs.go)
-// makes Load fail with an error naming every offending variable, its value,
-// and the expected format — never a silent fallback to the default. An unset
-// knob still gets its default. The hot-reload path (reload.go) and
-// `fleet validate-config` apply the same registry, so the three paths accept
-// and reject identically.
-func Load(envFile string) (*Config, error) {
+// applyEnvFile folds envFile's KEY=VALUE pairs into the process environment:
+// only allowlisted keys (static allowlist + RegisterAllowedEnvVars names +
+// prefixes + account-suffix shapes) are admitted, a pre-existing process-env
+// value WINS over the file's, quotes are stripped, and a missing file is not
+// an error. It returns the snapshot of allowlisted process-env winners taken
+// BEFORE the file was applied — Load feeds that to the reload state so a
+// hot-reload reproduces boot precedence exactly.
+func applyEnvFile(envFile string) (map[string]string, error) {
 	// Snapshot the process env so file-driven writes never clobber it. We walk
 	// os.Environ() rather than the static allowlist because allowedEnvPrefixes
 	// and the per-account suffix shape admit open-ended names. Strip quotes
@@ -1224,6 +1217,93 @@ func Load(envFile string) (*Config, error) {
 	for key, v := range existing {
 		_ = os.Setenv(key, v)
 	}
+	return existing, nil
+}
+
+// bootstrapEnvFileWritten records which allowlisted keys BootstrapEnvFile's
+// early application introduced into the process env (i.e. keys sourced from
+// the env FILE, not the operator's process env). Load subtracts them from its
+// process-winner snapshot so the reload state keeps boot precedence identical
+// to a boot without the early application: an env-file-sourced value must stay
+// re-readable from the file on hot-reload, never frozen as a process winner.
+// Guarded by registerMu (written at startup before Load, like the registered
+// allowlist).
+var bootstrapEnvFileWritten = map[string]bool{}
+
+// BootstrapEnvFile applies the env file to the process environment EARLY —
+// before the client bundle's manifest interpolation — with Load's exact
+// admission and precedence rules (process env wins; missing file is not an
+// error). clientconfig.Load calls it (once per process, gated there) so a
+// ${VAR} reference outside the lazily-resolved connector env/header maps —
+// url:, command:/args:, sandbox.image, providers[].base_url — resolves against
+// the same environment the runtime uses (#1123). Load's own application
+// afterwards is an idempotent re-read: process env wins, so it re-sets the
+// same values and restores the same winners.
+//
+// Call contract: call before Load, and never with per-request/derived paths —
+// this is a boot-time seam. Repeat calls are safe: the file-introduced-key
+// bookkeeping MERGES (it never resets), so a second application can never
+// promote an earlier application's file-sourced keys into "process winners"
+// and silently freeze them against hot-reload.
+func BootstrapEnvFile(envFile string) error {
+	before, err := applyEnvFile(envFile)
+	if err != nil {
+		return err
+	}
+	// Record the keys this application introduced (allowlisted, present now,
+	// absent from the pre-application winners): they are file-sourced, and Load
+	// must not report them to the reload state as process-env boot winners.
+	// Collected before taking registerMu — isAllowedEnvVar read-locks it.
+	var written []string
+	for _, kv := range os.Environ() {
+		eq := strings.IndexByte(kv, '=')
+		if eq <= 0 {
+			continue
+		}
+		k := kv[:eq]
+		if !isAllowedEnvVar(k) {
+			continue
+		}
+		if _, winner := before[k]; !winner {
+			written = append(written, k)
+		}
+	}
+	registerMu.Lock()
+	for _, k := range written {
+		bootstrapEnvFileWritten[k] = true
+	}
+	registerMu.Unlock()
+	return nil
+}
+
+// Load reads environment variables in this precedence order (highest wins):
+//
+//  1. Process environment (snapshotted and restored around file loads).
+//  2. envFile (e.g. .env.local) — per-operator overrides.
+//
+// Missing files are NOT an error.
+//
+// Malformed values ARE an error (#1119): a numeric/bool/duration knob that is
+// SET but does not parse (or falls outside its registered range, see knobs.go)
+// makes Load fail with an error naming every offending variable, its value,
+// and the expected format — never a silent fallback to the default. An unset
+// knob still gets its default. The hot-reload path (reload.go) and
+// `fleet validate-config` apply the same registry, so the three paths accept
+// and reject identically.
+func Load(envFile string) (*Config, error) {
+	existing, err := applyEnvFile(envFile)
+	if err != nil {
+		return nil, err
+	}
+	// Keys the BootstrapEnvFile early application wrote are in the process env
+	// by now, but they came from the env FILE — drop them from the winner
+	// snapshot so the reload state sees exactly the winners a boot without the
+	// early application would have seen.
+	registerMu.RLock()
+	for k := range bootstrapEnvFileWritten {
+		delete(existing, k)
+	}
+	registerMu.RUnlock()
 
 	// lp collects every malformed numeric/bool/duration env value so boot can
 	// refuse with ONE error naming all of them (#1119). The typed knobs parse

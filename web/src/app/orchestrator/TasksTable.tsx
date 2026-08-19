@@ -28,6 +28,27 @@ const EDITABLE_STATUSES = new Set([
 // works was the gap this closes.
 const RUNNABLE_STATUSES = EDITABLE_STATUSES;
 
+// Statuses whose tasks can be stopped/cancelled from the list. The complement
+// of EDITABLE_STATUSES: a task that has already reached a terminal state has
+// nothing left to stop, and everything else does — including pending/scheduled,
+// which is the case that mattered. Stopping a live run was reachable only from
+// inside the Live-activity modal, and a RECURRING job that had not yet fired
+// could not be stopped from anywhere in the UI at all, even though the API has
+// always supported it (#1152).
+const STOPPABLE_STATUSES = new Set([
+  "pending",
+  "scheduled",
+  "leased",
+  "running",
+  "paused_awaiting_input",
+  "paused_awaiting_wake",
+]);
+
+// Everything except a live run can be deleted. A leased/running task is refused
+// server-side — the worker holds the lease and is still writing to the row — so
+// the affordance is hidden rather than offered and then rejected. Stop it first.
+const UNDELETABLE_STATUSES = new Set(["leased", "running"]);
+
 // TasksTable — the Recent Tasks table + filter bar + pagination. React port of
 // moc dashboard.js renderTasks()/buildTaskQueryString()/pagination controls.
 // Clicking a row opens the log viewer (parent's onOpenLogs).
@@ -46,6 +67,12 @@ export type TasksTableProps = {
   // Kick this task off now. The parent owns the confirm + API call so the
   // table stays presentational (same contract as onEdit/onOpenLogs).
   onRunNow?: (task: Task) => void;
+  // Stop/cancel this task. Same presentational contract: the parent owns the
+  // confirm and the API call.
+  onStop?: (task: Task) => void;
+  // Permanently delete this task. Offered on every status EXCEPT a live run,
+  // which the server refuses anyway (the worker still holds the lease).
+  onDelete?: (task: Task) => void;
 };
 
 const STATUS_OPTIONS = [
@@ -73,6 +100,8 @@ export function TasksTable({
   onOpenLogs,
   onEdit,
   onRunNow,
+  onStop,
+  onDelete,
 }: TasksTableProps) {
   // Debounce ONLY the search box. The status/createdBy selects, the
   // scheduledOnly checkbox, and the stat-card quick filters all call onFilters
@@ -278,6 +307,40 @@ export function TasksTable({
                             <Icon name="edit" className="size-3.5" />
                           </button>
                         ) : null}
+                        {onStop && STOPPABLE_STATUSES.has(task.status ?? "") ? (
+                          <button
+                            type="button"
+                            className="icon-action task-stop-btn"
+                            aria-label={`Stop task ${task.id.slice(0, 8)}`}
+                            title={
+                              task.recurrence
+                                ? "Stop this job — it will not run again"
+                                : "Stop this task"
+                            }
+                            data-testid="task-stop-button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onStop(task);
+                            }}
+                          >
+                            <Icon name="stop" className="size-3.5" />
+                          </button>
+                        ) : null}
+                        {onDelete && !UNDELETABLE_STATUSES.has(task.status ?? "") ? (
+                          <button
+                            type="button"
+                            className="icon-action task-delete-btn"
+                            aria-label={`Delete task ${task.id.slice(0, 8)}`}
+                            title="Delete permanently — frees its name for reuse"
+                            data-testid="task-delete-button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onDelete(task);
+                            }}
+                          >
+                            <Icon name="trash" className="size-3.5" />
+                          </button>
+                        ) : null}
                       </span>
                     </td>
                   </tr>
@@ -381,6 +444,54 @@ export function TasksTable({
                         }}
                       >
                         <Icon name="edit" className="size-3.5" />
+                      </span>
+                    ) : null}
+                    {onStop && STOPPABLE_STATUSES.has(task.status ?? "") ? (
+                      <span
+                        role="button"
+                        tabIndex={0}
+                        className="icon-action task-stop-btn"
+                        aria-label={`Stop task ${task.id.slice(0, 8)}`}
+                        title={
+                          task.recurrence ? "Stop this job — it will not run again" : "Stop this task"
+                        }
+                        data-testid="task-stop-button-card"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onStop(task);
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            onStop(task);
+                          }
+                        }}
+                      >
+                        <Icon name="stop" className="size-3.5" />
+                      </span>
+                    ) : null}
+                    {onDelete && !UNDELETABLE_STATUSES.has(task.status ?? "") ? (
+                      <span
+                        role="button"
+                        tabIndex={0}
+                        className="icon-action task-delete-btn"
+                        aria-label={`Delete task ${task.id.slice(0, 8)}`}
+                        title="Delete permanently — frees its name for reuse"
+                        data-testid="task-delete-button-card"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onDelete(task);
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            onDelete(task);
+                          }
+                        }}
+                      >
+                        <Icon name="trash" className="size-3.5" />
                       </span>
                     ) : null}
                   </span>

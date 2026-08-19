@@ -32,11 +32,16 @@ type orchestrationState struct {
 	mu sync.Mutex
 
 	// ── audit gating (scheduled) ──
-	selfAuditRequested       bool
-	auditConfirmed           bool
-	selfAuditConfirmedOnce   bool
-	lastSuccessfulAuditFP    string
-	auditTerminalFailure     bool
+	selfAuditRequested     bool
+	auditConfirmed         bool
+	selfAuditConfirmedOnce bool
+	lastSuccessfulAuditFP  string
+	auditTerminalFailure   bool
+	// auditSummary is the user_visible_summary from the confirm_audit that set
+	// auditTerminalFailure. It is the agent's own account of why it aborted —
+	// the single most useful sentence about the run — and before #1151 nothing
+	// downstream read it, so the task row said "Task completed successfully".
+	auditSummary             string
 	pendingCriticalActions   []pendingCriticalAction
 	completedCriticalActions []string
 
@@ -191,6 +196,21 @@ type pendingCriticalAction struct {
 type ApprovalStager interface {
 	Stage(toolName, toolCallID, rawInput string) (approvalID string, err error)
 	StageSuggestion(reason string) (approvalID, msg string, err error)
+}
+
+// ActionRecorder is the OPTIONAL half of ApprovalStager that a `notify`-mode
+// critical tool needs (#1153): post a card recording that an action ran, rather
+// than one asking whether it may. Kept as a separate, type-asserted interface so
+// every existing ApprovalStager implementation compiles unchanged.
+//
+// A sink that does not implement it makes `notify` unavailable, and the gate
+// falls back to blocking on a card. That direction is deliberate: the argument
+// for executing without asking is that the user still finds out and can undo it,
+// so a deployment that cannot tell them must not skip the question.
+type ActionRecorder interface {
+	// RecordAction posts the record card. undoHint is the bundle-authored line
+	// describing how to reverse this action; it may be empty.
+	RecordAction(toolName, toolCallID, rawInput, undoHint string) error
 }
 
 // Session pre-approval sentinels (#300): instead of a real approval ID, Stage

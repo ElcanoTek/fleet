@@ -30,6 +30,12 @@ import (
 	"github.com/ElcanoTek/fleet/internal/secretbox"
 )
 
+// maxBatchRows caps how many rows one multi-row INSERT carries in this
+// package's batched writers. With the widest batched row (well under a dozen
+// parameters) a chunk stays far below Postgres' 65535-parameter statement
+// limit, so a caller-sized list can never overflow the statement.
+const maxBatchRows = 500
+
 // Store wraps the Postgres handle. Schema is managed by the embedded
 // migrations (see migrations.go + migrations/*.sql).
 type Store struct {
@@ -1944,49 +1950,33 @@ func (s *Store) SweepExpired(ctx context.Context, ttl time.Duration, unpinnedCap
 		expired += int(n)
 	}
 
-	// 2. Per-user cap. Find user emails that have >unpinnedCap unpinned,
-	//    non-archived, live rows.
+	// 2. Per-user cap, in ONE statement. The previous shape scanned for
+	//    overflowing users and then issued a DELETE per user — a round trip
+	//    per user on a path that runs after every successful turn. ROW_NUMBER()
+	//    partitioned by user_email ranks each user's rows independently, so
+	//    `rn > cap` selects exactly what the per-user `ORDER BY updated_at DESC,
+	//    id DESC OFFSET cap` selected, for every user at once. Users at or under
+	//    the cap contribute no rows, so the HAVING pre-scan is redundant.
 	if unpinnedCap <= 0 {
 		return expired, 0, nil
 	}
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT user_email, COUNT(*) FROM conversations
-		 WHERE pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL AND share_token IS NULL AND project_id IS NULL GROUP BY user_email HAVING COUNT(*) > $1`,
+	res, err := s.db.ExecContext(ctx,
+		`DELETE FROM conversations WHERE id IN (
+		    SELECT id FROM (
+		        SELECT id, ROW_NUMBER() OVER (
+		            PARTITION BY user_email ORDER BY updated_at DESC, id DESC
+		        ) AS rn
+		        FROM conversations
+		        WHERE pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL AND share_token IS NULL AND project_id IS NULL
+		    ) ranked
+		    WHERE rn > $1
+		 )`,
 		unpinnedCap,
 	)
 	if err != nil {
-		return expired, 0, fmt.Errorf("cap scan: %w", err)
+		return expired, evicted, fmt.Errorf("cap evict: %w", err)
 	}
-	var overflowUsers []string
-	for rows.Next() {
-		var email string
-		var count int
-		if err := rows.Scan(&email, &count); err != nil {
-			_ = rows.Close()
-			return expired, 0, err
-		}
-		overflowUsers = append(overflowUsers, email)
-	}
-	_ = rows.Close()
-
-	for _, email := range overflowUsers {
-		// OFFSET without LIMIT: skip the N most-recent unpinned rows
-		// and delete everything older. Postgres accepts a bare OFFSET
-		// where SQLite required `LIMIT -1 OFFSET N`.
-		res, err := s.db.ExecContext(ctx,
-			`DELETE FROM conversations WHERE id IN (
-			    SELECT id FROM conversations
-			    WHERE user_email = $1 AND pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL AND share_token IS NULL AND project_id IS NULL
-			    ORDER BY updated_at DESC, id DESC
-			    OFFSET $2
-			 )`,
-			email, unpinnedCap,
-		)
-		if err != nil {
-			return expired, evicted, fmt.Errorf("cap evict for %s: %w", email, err)
-		}
-		n, _ := res.RowsAffected()
-		evicted += int(n)
-	}
+	n, _ := res.RowsAffected()
+	evicted += int(n)
 	return expired, evicted, nil
 }

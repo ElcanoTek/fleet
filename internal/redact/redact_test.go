@@ -1,7 +1,9 @@
 package redact
 
 import (
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -116,5 +118,54 @@ func TestRedactor_NilAndEmpty(t *testing.T) {
 	}
 	if got := NewRedactor(nil).Redact(""); got != "" {
 		t.Errorf("empty input changed: %q", got)
+	}
+}
+
+// TestRedactor_AddLiteralDedupes pins that re-registering the same value —
+// which the runtime token-acquisition hook does on every turn (#1124) — does
+// not grow the literal scan list.
+func TestRedactor_AddLiteralDedupes(t *testing.T) {
+	r := NewRedactor(nil)
+	for i := 0; i < 100; i++ {
+		r.AddLiteral("repeat-token-abcdef12")
+	}
+	if n := len(r.literals); n != 1 {
+		t.Errorf("literals grew to %d entries for one distinct value, want 1", n)
+	}
+	if got := r.Redact("saw repeat-token-abcdef12 here"); strings.Contains(got, "repeat-token") {
+		t.Errorf("deduped literal not redacted: %q", got)
+	}
+}
+
+// TestRedactor_ConcurrentAddLiteralRedact exercises the #1124 concurrency
+// contract under -race: AddLiteral (a token acquired mid-serve) racing Redact
+// must be safe, and a literal added before a Redact call must be scrubbed by
+// that call.
+func TestRedactor_ConcurrentAddLiteralRedact(t *testing.T) {
+	r := NewRedactor(nil)
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for g := 0; g < 4; g++ {
+		wg.Add(2)
+		go func(g int) {
+			defer wg.Done()
+			<-start
+			for i := 0; i < 200; i++ {
+				r.AddLiteral(fmt.Sprintf("runtime-token-%02d-%04d", g, i))
+			}
+		}(g)
+		go func(g int) {
+			defer wg.Done()
+			<-start
+			for i := 0; i < 200; i++ {
+				_ = r.Redact(fmt.Sprintf("error for runtime-token-%02d-%04d and friends", g, i))
+			}
+		}(g)
+	}
+	close(start)
+	wg.Wait()
+	// Registration is immediately visible to later Redact calls.
+	if got := r.Redact("late check runtime-token-00-0000"); strings.Contains(got, "runtime-token-00-0000") {
+		t.Errorf("literal registered concurrently was not redacted afterwards: %q", got)
 	}
 }

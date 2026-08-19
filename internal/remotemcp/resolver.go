@@ -78,7 +78,13 @@ func (s *Service) AcquireTokenByID(ctx context.Context, email, serverID string) 
 		return "", err
 	}
 	if server.AuthKind == store.RemoteMCPAuthAPIKey {
-		return s.store.GetRemoteMCPAPIKey(ctx, server)
+		key, err := s.store.GetRemoteMCPAPIKey(ctx, server)
+		if err == nil {
+			// The unsealed key is a runtime-acquired credential exactly like a
+			// minted bearer: register it for literal redaction (#1124).
+			s.noteSecrets(key)
+		}
+		return key, err
 	}
 	if server.Issuer == "" {
 		return "", nil

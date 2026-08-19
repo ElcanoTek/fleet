@@ -3,6 +3,7 @@ package sandbox
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -31,13 +32,13 @@ func TestTakePersistent_ReusesPerConversation(t *testing.T) {
 	p := newPersistentTestPool(&now, time.Hour, 0)
 	defer p.Close()
 
-	sb1, release1, err := p.TakePersistent("conv-A")
+	sb1, release1, err := p.TakePersistent(context.Background(), "conv-A")
 	if err != nil {
 		t.Fatalf("TakePersistent A#1: %v", err)
 	}
 	release1() // turn ends; sandbox must NOT be closed (persistent)
 
-	sb2, release2, err := p.TakePersistent("conv-A")
+	sb2, release2, err := p.TakePersistent(context.Background(), "conv-A")
 	if err != nil {
 		t.Fatalf("TakePersistent A#2: %v", err)
 	}
@@ -50,7 +51,7 @@ func TestTakePersistent_ReusesPerConversation(t *testing.T) {
 		t.Fatalf("reused persistent sandbox must stay usable: %v", err)
 	}
 
-	sbB, releaseB, err := p.TakePersistent("conv-B")
+	sbB, releaseB, err := p.TakePersistent(context.Background(), "conv-B")
 	if err != nil {
 		t.Fatalf("TakePersistent B: %v", err)
 	}
@@ -64,7 +65,7 @@ func TestTakePersistent_DisabledFallsBackToPerTurn(t *testing.T) {
 	// PersistentREPL off → TakePersistent behaves like Take: the cleanup closes.
 	p := &Pool{cfg: PoolConfig{Mode: ModeHost}}
 	defer p.Close()
-	sb, cleanup, err := p.TakePersistent("conv-A")
+	sb, cleanup, err := p.TakePersistent(context.Background(), "conv-A")
 	if err != nil {
 		t.Fatalf("TakePersistent: %v", err)
 	}
@@ -73,7 +74,7 @@ func TestTakePersistent_DisabledFallsBackToPerTurn(t *testing.T) {
 		t.Errorf("per-turn fallback cleanup must close the sandbox; RunBash err = %v", err)
 	}
 	// An empty conversation ID also falls back to per-turn.
-	sb2, cleanup2, err := p.TakePersistent("")
+	sb2, cleanup2, err := p.TakePersistent(context.Background(), "")
 	if err != nil {
 		t.Fatalf("TakePersistent empty convID: %v", err)
 	}
@@ -88,7 +89,7 @@ func TestReleaseChatSession_ClosesAndRecreates(t *testing.T) {
 	p := newPersistentTestPool(&now, time.Hour, 0)
 	defer p.Close()
 
-	sb1, release1, _ := p.TakePersistent("conv-A")
+	sb1, release1, _ := p.TakePersistent(context.Background(), "conv-A")
 	release1()
 
 	p.ReleaseChatSession("conv-A")
@@ -100,7 +101,7 @@ func TestReleaseChatSession_ClosesAndRecreates(t *testing.T) {
 	}
 
 	// A subsequent take for the same conversation builds a fresh one.
-	sb2, release2, err := p.TakePersistent("conv-A")
+	sb2, release2, err := p.TakePersistent(context.Background(), "conv-A")
 	if err != nil {
 		t.Fatalf("TakePersistent after release: %v", err)
 	}
@@ -115,7 +116,7 @@ func TestReleaseChatSession_DefersCloseWhileInUse(t *testing.T) {
 	p := newPersistentTestPool(&now, time.Hour, 0)
 	defer p.Close()
 
-	sb, release, _ := p.TakePersistent("conv-A") // borrow held (inUse=1)
+	sb, release, _ := p.TakePersistent(context.Background(), "conv-A") // borrow held (inUse=1)
 
 	// Delete the conversation mid-turn: the close must be DEFERRED, not forced,
 	// so the running turn doesn't lose its sandbox out from under it.
@@ -137,16 +138,16 @@ func TestReapIdlePersistent_ClosesIdleKeepsBusyAndFresh(t *testing.T) {
 	defer p.Close()
 
 	// idle: borrowed then released long ago.
-	idleSb, idleRelease, _ := p.TakePersistent("conv-idle")
+	idleSb, idleRelease, _ := p.TakePersistent(context.Background(), "conv-idle")
 	idleRelease()
 	// busy: still borrowed (inUse=1) — must survive the reap.
-	busySb, busyRelease, _ := p.TakePersistent("conv-busy")
+	busySb, busyRelease, _ := p.TakePersistent(context.Background(), "conv-busy")
 	defer busyRelease()
 
 	// Advance the clock past the idle TTL and reap.
 	now = now.Add(2 * time.Minute)
 	// fresh: taken AFTER the clock advance, so it is within TTL.
-	freshSb, freshRelease, _ := p.TakePersistent("conv-fresh")
+	freshSb, freshRelease, _ := p.TakePersistent(context.Background(), "conv-fresh")
 	defer freshRelease()
 
 	p.reapIdlePersistent()
@@ -169,14 +170,14 @@ func TestTakePersistent_MaxSessionsLRUEviction(t *testing.T) {
 	defer p.Close()
 
 	// Create three idle sessions, each at a distinct, increasing lastUsed.
-	sbA, relA, _ := p.TakePersistent("conv-A")
+	sbA, relA, _ := p.TakePersistent(context.Background(), "conv-A")
 	relA()
 	now = now.Add(time.Second)
-	sbB, relB, _ := p.TakePersistent("conv-B")
+	sbB, relB, _ := p.TakePersistent(context.Background(), "conv-B")
 	relB()
 	now = now.Add(time.Second)
 	// Creating the third over a cap of 2 must evict the LRU idle one (conv-A).
-	sbC, relC, _ := p.TakePersistent("conv-C")
+	sbC, relC, _ := p.TakePersistent(context.Background(), "conv-C")
 	defer relC()
 
 	// Eviction Close runs async (safe.Go) — give it a moment to settle.
@@ -204,12 +205,12 @@ func TestTakePersistent_RecreatesDeadSandbox(t *testing.T) {
 	p := newPersistentTestPool(&now, time.Hour, 0)
 	defer p.Close()
 
-	sb1, rel1, _ := p.TakePersistent("conv-A")
+	sb1, rel1, _ := p.TakePersistent(context.Background(), "conv-A")
 	rel1()
 	// Simulate the container dying between turns (OOM-kill, host reap).
 	sb1.Close()
 
-	sb2, rel2, err := p.TakePersistent("conv-A")
+	sb2, rel2, err := p.TakePersistent(context.Background(), "conv-A")
 	if err != nil {
 		t.Fatalf("TakePersistent after death: %v", err)
 	}
@@ -226,9 +227,9 @@ func TestPoolClose_DrainsPersistent(t *testing.T) {
 	now := time.Unix(7_000_000, 0)
 	p := newPersistentTestPool(&now, time.Hour, 0)
 
-	sbA, relA, _ := p.TakePersistent("conv-A")
+	sbA, relA, _ := p.TakePersistent(context.Background(), "conv-A")
 	relA()
-	sbB, relB, _ := p.TakePersistent("conv-B")
+	sbB, relB, _ := p.TakePersistent(context.Background(), "conv-B")
 	relB()
 
 	p.Close()
@@ -240,4 +241,70 @@ func TestPoolClose_DrainsPersistent(t *testing.T) {
 		}
 	}
 	p.Close() // idempotent
+}
+
+// probeRecordingImpl is a healthy backend stub that records what context state
+// its runBash — the reuse-path liveness probe — observes.
+type probeRecordingImpl struct {
+	probed          atomic.Bool
+	sawCancelledCtx atomic.Bool
+	closed          atomic.Bool
+}
+
+func (p *probeRecordingImpl) runBash(ctx context.Context, _ BashRequest) (BashResult, error) {
+	p.probed.Store(true)
+	if ctx == nil || ctx.Err() != nil {
+		p.sawCancelledCtx.Store(true)
+	}
+	return BashResult{}, nil
+}
+func (p *probeRecordingImpl) runPython(context.Context, PythonRequest) (PythonResult, error) {
+	return PythonResult{Status: "success"}, nil
+}
+func (p *probeRecordingImpl) runFileOp(context.Context, FileOpRequest) (FileOpResult, error) {
+	return FileOpResult{}, nil
+}
+func (p *probeRecordingImpl) bindFileOpRoot(context.Context, string) (FileOpRootIdentity, error) {
+	return FileOpRootIdentity{Dev: 1, Ino: 1}, nil
+}
+func (p *probeRecordingImpl) resourceUsage() (ResourceUsageSummary, bool) {
+	return ResourceUsageSummary{}, false
+}
+func (p *probeRecordingImpl) poisoned() bool { return false }
+func (p *probeRecordingImpl) close()         { p.closed.Store(true) }
+
+// TestTakePersistent_LivenessProbeIgnoresCallerContext pins a deliberate #1124
+// decision: TakePersistent threads the caller's ctx into sandbox CONSTRUCTION
+// only — the reuse-path liveness probe runs under its own bounded background
+// context. A refactor that threads the caller's ctx into the probe would make
+// a cancelled turn misread a healthy conversation kernel as dead and retire it
+// (losing the conversation's python state); this test fails on both symptoms.
+func TestTakePersistent_LivenessProbeIgnoresCallerContext(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	p := newPersistentTestPool(&now, time.Hour, 0)
+	defer p.Close()
+
+	pi := &probeRecordingImpl{}
+	sb := &Sandbox{mode: ModeContainer, impl: pi}
+	p.persistent["conv-ctx"] = &persistentEntry{sb: sb, convID: "conv-ctx", lastUsed: now}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // the turn is already dead when the take happens
+	got, release, err := p.TakePersistent(ctx, "conv-ctx")
+	if err != nil {
+		t.Fatalf("TakePersistent: %v", err)
+	}
+	defer release()
+	if !pi.probed.Load() {
+		t.Fatal("liveness probe never ran on the reuse path")
+	}
+	if pi.sawCancelledCtx.Load() {
+		t.Error("liveness probe observed the caller's cancelled ctx — it must use its own bounded context so a cancelled turn cannot retire a healthy kernel")
+	}
+	if got != sb {
+		t.Errorf("healthy persistent sandbox was retired on a cancelled-turn take (got %p, want %p)", got, sb)
+	}
+	if pi.closed.Load() {
+		t.Error("healthy persistent sandbox was closed by a cancelled-turn take")
+	}
 }

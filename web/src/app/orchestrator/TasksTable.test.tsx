@@ -210,6 +210,162 @@ describe("TasksTable Run now action (#1019)", () => {
   });
 });
 
+// Stopping was reachable only from inside the Live-activity modal, so a
+// RECURRING job that had not fired yet could not be stopped from anywhere in
+// this UI — even though DELETE /tasks/{id} has always supported it. "Also you
+// can not delete a job in the operation center", 2026-08-13 (#1152).
+describe("TasksTable Stop action (#1152)", () => {
+  const scheduledJob: Task = {
+    id: "aaaaaaaa-bbbb-cccc-dddd-ffffffffffff",
+    prompt: "Comfluence daily refresh",
+    status: "scheduled",
+    recurrence: "0 12 * * *",
+  };
+
+  function renderWithStop(tasks: Task[], onStop?: (t: Task) => void, onOpenLogs = () => {}) {
+    return render(
+      <TasksTable
+        tasks={tasks}
+        total={tasks.length}
+        page={1}
+        pageSize={20}
+        filters={FILTERS}
+        onFilters={() => {}}
+        onPage={() => {}}
+        onPageSize={() => {}}
+        onOpenLogs={onOpenLogs}
+        onStop={onStop}
+      />,
+    );
+  }
+
+  it("offers Stop on a recurring job that has not run yet — the case with no other route", () => {
+    const onStop = vi.fn();
+    renderWithStop([scheduledJob], onStop);
+    fireEvent.click(screen.getByTestId("task-stop-button"));
+    expect(onStop).toHaveBeenCalledWith(scheduledJob);
+  });
+
+  it("offers Stop on a live run too, so the list is not a dead end", () => {
+    const onStop = vi.fn();
+    renderWithStop([{ ...scheduledJob, status: "running" }], onStop);
+    fireEvent.click(screen.getByTestId("task-stop-button"));
+    expect(onStop).toHaveBeenCalled();
+  });
+
+  it("hides Stop on a task that already finished — there is nothing to stop", () => {
+    renderWithStop([{ ...scheduledJob, status: "success" }], vi.fn());
+    expect(screen.queryByTestId("task-stop-button")).toBeNull();
+    expect(screen.queryByTestId("task-stop-button-card")).toBeNull();
+  });
+
+  it("says a recurring job will not run again, so the consequence is on the button", () => {
+    renderWithStop([scheduledJob], vi.fn());
+    expect(screen.getByTestId("task-stop-button").getAttribute("title")).toMatch(/not run again/i);
+  });
+
+  it("does not open the log viewer when Stop is clicked", () => {
+    const onOpenLogs = vi.fn();
+    renderWithStop([scheduledJob], () => {}, onOpenLogs);
+    fireEvent.click(screen.getByTestId("task-stop-button"));
+    expect(onOpenLogs).not.toHaveBeenCalled();
+  });
+
+  it("omits the action entirely when the parent passes no handler", () => {
+    renderWithStop([scheduledJob]);
+    expect(screen.queryByTestId("task-stop-button")).toBeNull();
+  });
+
+  it("fires from the phone card view too", () => {
+    const onStop = vi.fn();
+    renderWithStop([scheduledJob], onStop);
+    const cards = screen.getByTestId("task-cards");
+    fireEvent.click(within(cards).getByTestId("task-stop-button-card"));
+    expect(onStop).toHaveBeenCalledWith(scheduledJob);
+  });
+});
+
+// Cancelling keeps the row, and the row keeps its NAME — which is uniquely
+// indexed — so a broken job blocked its own replacement, and could not even be
+// renamed (editing is pending/scheduled only). Deleting was the only way out
+// and fleet had it nowhere. "I can't make new ones if the old ones that don't
+// work are still there."
+describe("TasksTable Delete action", () => {
+  const brokenJob: Task = {
+    id: "aaaaaaaa-bbbb-cccc-dddd-111111111111",
+    prompt: "Comfluence daily refresh",
+    status: "error",
+    recurrence: "0 12 * * *",
+  };
+
+  function renderWithDelete(tasks: Task[], onDelete?: (t: Task) => void, onOpenLogs = () => {}) {
+    return render(
+      <TasksTable
+        tasks={tasks}
+        total={tasks.length}
+        page={1}
+        pageSize={20}
+        filters={FILTERS}
+        onFilters={() => {}}
+        onPage={() => {}}
+        onPageSize={() => {}}
+        onOpenLogs={onOpenLogs}
+        onDelete={onDelete}
+      />,
+    );
+  }
+
+  it("offers Delete on the broken job someone is trying to clear", () => {
+    const onDelete = vi.fn();
+    renderWithDelete([brokenJob], onDelete);
+    fireEvent.click(screen.getByTestId("task-delete-button"));
+    expect(onDelete).toHaveBeenCalledWith(brokenJob);
+  });
+
+  it("says what deleting buys, not just that it deletes", () => {
+    renderWithDelete([brokenJob], vi.fn());
+    expect(screen.getByTestId("task-delete-button").getAttribute("title")).toMatch(/frees its name/i);
+  });
+
+  // The server refuses a live run (the worker still holds the lease), so the
+  // affordance is hidden rather than offered and then rejected.
+  it("hides Delete on a live run", () => {
+    for (const status of ["running", "leased"]) {
+      const { unmount } = renderWithDelete([{ ...brokenJob, status }], vi.fn());
+      expect(screen.queryByTestId("task-delete-button")).toBeNull();
+      expect(screen.queryByTestId("task-delete-button-card")).toBeNull();
+      unmount();
+    }
+  });
+
+  it("offers Delete on a scheduled job that has not run yet", () => {
+    const onDelete = vi.fn();
+    renderWithDelete([{ ...brokenJob, status: "scheduled" }], onDelete);
+    fireEvent.click(screen.getByTestId("task-delete-button"));
+    expect(onDelete).toHaveBeenCalled();
+  });
+
+  it("does not open the log viewer when Delete is clicked", () => {
+    const onOpenLogs = vi.fn();
+    renderWithDelete([brokenJob], () => {}, onOpenLogs);
+    fireEvent.click(screen.getByTestId("task-delete-button"));
+    expect(onOpenLogs).not.toHaveBeenCalled();
+  });
+
+  it("omits the action entirely when the parent passes no handler", () => {
+    renderWithDelete([brokenJob]);
+    expect(screen.queryByTestId("task-delete-button")).toBeNull();
+  });
+
+  it("fires from the phone card view too", () => {
+    const onDelete = vi.fn();
+    renderWithDelete([brokenJob], onDelete);
+    const cards = screen.getByTestId("task-cards");
+    fireEvent.click(within(cards).getByTestId("task-delete-button-card"));
+    expect(onDelete).toHaveBeenCalledWith(brokenJob);
+  });
+});
+
 describe("TasksTable titles", () => {
   const base: Task = {
     id: "dddddddd-eeee-ffff-0000-111111111111",

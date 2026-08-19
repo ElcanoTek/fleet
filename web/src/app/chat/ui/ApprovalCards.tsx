@@ -287,6 +287,12 @@ export function ApprovalCard({
     );
   }
 
+  if (approval.tool === "manage_tasks") {
+    return (
+      <ManageTasksCard approval={approval} submitting={submitting} onResolve={resolve} />
+    );
+  }
+
   const recipients = toRecipientList(approval.summary.to, approval.summary.cc, approval.summary.bcc);
   const subject = approval.summary.subject ?? "(no subject)";
   const from = approval.summary.from ?? "";
@@ -735,6 +741,147 @@ function ScheduleTaskCard({
               }}
             >
               {editing ? "Discard edits" : "Edit…"}
+            </button>
+            <button
+              type="button"
+              className="rounded-full border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:text-[var(--color-text-primary)] disabled:opacity-50"
+              disabled={submitting !== null}
+              onClick={() => onResolve(false)}
+            >
+              {submitting === "cancel" ? "Cancelling…" : "Cancel"}
+            </button>
+          </div>
+          <ApprovalCountdown remaining={countdown.remaining} expired={countdown.expired} />
+        </div>
+      ) : approval.resultText ? (
+        <ApprovalResult text={approval.resultText} />
+      ) : null}
+    </div>
+  );
+}
+
+// ManageTasksCard renders the approval card for a manage_tasks call (#1152):
+// changing or stopping tasks that already exist. Two things make this card
+// different from the schedule_task one, and both come from the same place —
+// this call acts on work the user already has running.
+//
+// It renders the SELECTOR rather than a resolved list. Resolving at staging time
+// would produce a snapshot that could disagree with the executor's own
+// resolution by the time the human clicks; the boundaries live where they are
+// true instead (the tool refuses a filtered stop outright, the server caps an
+// update's blast radius and refuses past it, and the post-approval result names
+// every task it touched).
+//
+// And "stop" reads as destructive, because it is: a recurring job stops
+// recurring, and there is no undo from chat.
+function ManageTasksCard({
+  approval,
+  submitting,
+  onResolve,
+}: {
+  approval: Approval;
+  submitting: "send" | "cancel" | null;
+  onResolve: (approved: boolean) => void;
+}) {
+  const countdown = useApprovalCountdown(approval.expiresAt, approval.status);
+  const s = approval.summary as {
+    action?: string;
+    task_ids?: string[];
+    match?: string[];
+    changes?: string[];
+    destructive?: boolean;
+    consequence?: string;
+    max_tasks?: number;
+  };
+  const stopping = s.action === "stop";
+  const ids = Array.isArray(s.task_ids) ? s.task_ids : [];
+  const match = Array.isArray(s.match) ? s.match : [];
+  const changes = Array.isArray(s.changes) ? s.changes : [];
+
+  const title =
+    approval.status === "pending"
+      ? stopping
+        ? "Stop scheduled tasks?"
+        : "Change scheduled tasks?"
+      : approval.status === "approved"
+        ? stopping
+          ? "Tasks stopped"
+          : "Tasks updated"
+        : approval.status === "rejected"
+          ? "Change cancelled"
+          : "Change failed";
+
+  const statusStyle =
+    approval.status === "pending"
+      ? {
+          borderColor: stopping ? "var(--color-danger, #b3261e)" : "var(--color-accent)",
+        }
+      : undefined;
+
+  return (
+    <div
+      data-approval-id={approval.id}
+      data-tool="manage_tasks"
+      data-destructive={stopping ? "true" : undefined}
+      className="rounded-[var(--radius-lg)] border bg-[color-mix(in_srgb,var(--color-overlay-soft)_55%,transparent)] px-3 py-2.5 text-[0.8125rem] leading-[1.5]"
+      style={statusStyle}
+    >
+      <div className="mb-2 flex items-center gap-2">
+        <span aria-hidden>{stopping ? "🛑" : "✏️"}</span>
+        <span className="font-medium">{title}</span>
+      </div>
+
+      <div className="grid gap-0.5 break-words text-[0.78rem] text-[var(--color-text-secondary)]">
+        {ids.length > 0 ? (
+          <div>
+            <span className="text-[var(--color-text-muted)]">
+              {ids.length === 1 ? "Task: " : `Tasks (${ids.length}): `}
+            </span>
+            <code className="text-[0.72rem]">{ids.join(", ")}</code>
+          </div>
+        ) : null}
+        {match.length > 0 ? (
+          <div>
+            <span className="text-[var(--color-text-muted)]">Applies to every task where: </span>
+            {match.join("; ")}
+            {s.max_tasks ? (
+              <span className="text-[var(--color-text-muted)]">
+                {" "}
+                (refused above {s.max_tasks} matches)
+              </span>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+
+      {changes.length > 0 ? (
+        <ul className="mt-2 grid gap-0.5 rounded-md bg-[var(--color-overlay-strong)] p-2 text-[0.75rem] text-[var(--color-text-primary)]">
+          {changes.map((line) => (
+            <li key={line}>{line}</li>
+          ))}
+        </ul>
+      ) : null}
+
+      {s.consequence ? (
+        <p className="mt-2 text-[0.75rem] text-[var(--color-text-secondary)]">{s.consequence}</p>
+      ) : null}
+
+      {approval.status === "pending" ? (
+        <div className="mt-3 flex flex-col gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              className="rounded-full bg-[var(--color-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-on-primary)] transition hover:opacity-90 disabled:opacity-50"
+              disabled={submitting !== null || countdown.expired}
+              onClick={() => onResolve(true)}
+            >
+              {submitting === "send"
+                ? stopping
+                  ? "Stopping…"
+                  : "Updating…"
+                : stopping
+                  ? "Approve & stop"
+                  : "Approve & update"}
             </button>
             <button
               type="button"

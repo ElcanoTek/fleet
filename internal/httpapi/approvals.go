@@ -173,6 +173,45 @@ func (a *approvalStager) expiryUnixFor(toolName string) int64 {
 	return time.Now().Unix() + int64(a.resolveTimeoutSeconds(toolName))
 }
 
+// RecordAction implements agentcore.ActionRecorder (#1153): it posts a card
+// saying an action RAN, rather than one asking whether it may.
+//
+// The row is created and resolved in the same breath — approved, with the undo
+// hint as its result text — so the record survives a page reload and sits in the
+// conversation exactly where a normal card would, but with no decision attached
+// and no countdown to miss. The undo line is bundle-authored: fleet does not
+// know any client's reversal verb and must not invent one, and "we can always
+// roll back" is only true in practice if the card says how.
+//
+// An error here is load-bearing. The caller falls back to a blocking approval
+// when this fails, because the entire justification for running without asking
+// is that the user still finds out.
+func (a *approvalStager) RecordAction(toolName, toolCallID, rawInput, undoHint string) error {
+	seat := a.seatFor(toolName)
+	// A record is not pending, so its expiry is only a column value; use the
+	// same resolution so the row shape is identical to every other approval.
+	approval, err := a.store.CreateApproval(a.ctx, a.conversationID, a.userEmail, toolName, toolCallID, rawInput, a.expiryUnixFor(toolName), seat)
+	if err != nil {
+		return err
+	}
+	result := "Ran without asking: this tool is declared notify-mode in the client bundle."
+	if hint := strings.TrimSpace(undoHint); hint != "" {
+		result += " " + hint
+	}
+	if err := a.store.ResolveApproval(a.ctx, a.userEmail, approval.ID, "approved", result); err != nil {
+		return err
+	}
+	a.sink.Emit("tool.action_recorded", map[string]any{
+		"approval_id": approval.ID,
+		"tool":        toolName,
+		"summary":     summarizeApprovalInput(toolName, rawInput, a.conversationID),
+		"undo_hint":   strings.TrimSpace(undoHint),
+		"mcp_server":  approval.MCPServer,
+		"mcp_account": approval.MCPAccount,
+	})
+	return nil
+}
+
 func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, error) {
 	// Auto-approve-in-test (#225): a CI/test escape hatch (FLEET_AUTO_APPROVE_IN_TEST,
 	// off by default) for pipelines that have no human present and run against a
@@ -596,6 +635,9 @@ func summarizeApprovalInput(toolName, rawInput, convID string) map[string]any {
 	if toolName == tools.ScheduleTaskToolName {
 		return summarizeScheduleTaskInput(toolName, rawInput)
 	}
+	if toolName == tools.ManageTasksToolName {
+		return summarizeManageTasksInput(toolName, rawInput)
+	}
 	// preview_email uses the exact same summary shape as send_email
 	// so ApprovalCard's existing email-preview render path just works;
 	// the only difference is the `tool` field, which drives the UI
@@ -668,6 +710,118 @@ func summarizeScheduleTaskInput(toolName, rawInput string) map[string]any {
 		out["run_immediately"] = true
 	}
 	return out
+}
+
+// summarizeManageTasksInput builds the manage_tasks approval-card payload
+// (#1152): what is about to happen, to which tasks, and — for an update — the
+// change set as a list of "field → new value" lines.
+//
+// The card renders the SELECTOR, not a resolved list of matched tasks. Resolving
+// it here would need the sched store at staging time, and the number it produced
+// would be a snapshot that the executor's own resolution could disagree with by
+// the time the human clicked Approve. Instead the boundaries are enforced where
+// they are true: the tool refuses a filtered STOP outright, the executor caps an
+// update's blast radius, and the post-approval report names every task it
+// touched. What the card must never be is vague about the ACTION — so "stop"
+// carries its own irreversibility line.
+func summarizeManageTasksInput(toolName, rawInput string) map[string]any {
+	var p tools.ManageTasksParams
+	if err := json.Unmarshal([]byte(rawInput), &p); err != nil {
+		return map[string]any{"tool": toolName, "raw": rawInput}
+	}
+	action := strings.TrimSpace(p.Action)
+	ids := p.CleanTaskIDs()
+	out := map[string]any{
+		"tool":      toolName,
+		"action":    action,
+		"task_ids":  ids,
+		"match":     p.MatchSummary(),
+		"changes":   p.ChangeSummary(),
+		"max_tasks": tools.MaxManagedTasks,
+	}
+	if action == tools.ManageTasksActionStop {
+		out["destructive"] = true
+		out["consequence"] = "A recurring job stops recurring and will not run again. A run in progress halts at its next checkpoint and keeps its partial transcript."
+	}
+	return out
+}
+
+// runStagedManageTasks applies an approved manage_tasks call. Everything it can
+// check without storage is re-checked here rather than trusted from staging —
+// the args have been sitting in a row while a human read a card, and Validate is
+// where the stop-needs-explicit-ids and update-must-change-something rules live.
+func (s *Server) runStagedManageTasks(ctx context.Context, approval *store.Approval) (string, error) {
+	if s.manageTasks == nil {
+		return "", errors.New("managing scheduled tasks from chat is not configured on this server")
+	}
+	var p tools.ManageTasksParams
+	if err := json.Unmarshal([]byte(approval.ArgsJSON), &p); err != nil {
+		return "", fmt.Errorf("parse manage_tasks args: %w", err)
+	}
+	if err := p.Validate(); err != nil {
+		return "", err
+	}
+	req := TaskMutationRequest{
+		Action:        strings.TrimSpace(p.Action),
+		TaskIDs:       p.CleanTaskIDs(),
+		Prompt:        strings.TrimSpace(p.Prompt),
+		Cron:          strings.TrimSpace(p.Cron),
+		Model:         strings.TrimSpace(p.Model),
+		MaxIterations: p.MaxIterations,
+		AddTags:       p.AddTags,
+		RemoveTags:    p.RemoveTags,
+		RequestedBy:   approval.UserEmail,
+	}
+	if !p.Match.IsEmpty() {
+		req.Match = &TaskMutationMatch{
+			Query: strings.TrimSpace(p.Match.Query),
+			Tag:   strings.TrimSpace(p.Match.Tag),
+			Model: strings.TrimSpace(p.Match.Model),
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	res, err := s.manageTasks(ctx, req)
+	if err != nil {
+		return "", err
+	}
+	return formatTaskMutationReport(req.Action, res, s.orchestratorTaskLink()), nil
+}
+
+// formatTaskMutationReport names every task the call touched. A bulk edit that
+// reports only a count is a bulk edit nobody can check — and the operator asking
+// for this was trying to fix jobs that had drifted, so "which ones" is the whole
+// question.
+func formatTaskMutationReport(action string, res *TaskMutationResult, link string) string {
+	verb := "Updated"
+	if action == tools.ManageTasksActionStop {
+		verb = "Stopped"
+	}
+	var b strings.Builder
+	if res == nil || len(res.Changed) == 0 {
+		b.WriteString("Nothing changed: the selector matched no task you can edit.\n")
+	} else {
+		fmt.Fprintf(&b, "%s %d task(s):\n", verb, len(res.Changed))
+		for _, e := range res.Changed {
+			fmt.Fprintf(&b, "  • %s (%s)", e.Label, e.ID)
+			if e.Detail != "" {
+				fmt.Fprintf(&b, " — %s", e.Detail)
+			}
+			b.WriteString("\n")
+		}
+	}
+	if res != nil && len(res.Skipped) > 0 {
+		fmt.Fprintf(&b, "Skipped %d:\n", len(res.Skipped))
+		for _, e := range res.Skipped {
+			fmt.Fprintf(&b, "  • %s (%s) — %s\n", e.Label, e.ID, e.Detail)
+		}
+	}
+	if link != "" {
+		fmt.Fprintf(&b, "Review them in the Operations Center: %s", link)
+	}
+	return b.String()
 }
 
 // runsPerMonthCountCap bounds the cron-occurrence walk so a per-minute schedule
@@ -1113,6 +1267,8 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request, convID, 
 		toolErr error
 	)
 	switch {
+	case s.cfg.MockMode && approval.ToolName == tools.ManageTasksToolName:
+		text = "Scheduled tasks updated (mock mode — nothing persisted)."
 	case s.cfg.MockMode && approval.ToolName == tools.ScheduleTaskToolName:
 		// Playwright/mock mode has no real sched store wired; report a canned
 		// success so the approval UX is exercisable without a database.
@@ -1123,6 +1279,9 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request, convID, 
 		// schedule_task creates an orchestrator task in-process via the injected
 		// seam (#239) — not an MCP send — so it gets its own one-shot path.
 		text, toolErr = s.runStagedScheduleTask(execCtx, approval, req.Edits)
+	case approval.ToolName == tools.ManageTasksToolName:
+		// manage_tasks is the same shape for tasks that already exist (#1152).
+		text, toolErr = s.runStagedManageTasks(execCtx, approval)
 	default:
 		text, toolErr = s.runStagedTool(execCtx, approval)
 	}
@@ -1523,7 +1682,7 @@ func (s *Server) stagedBashLockdown(ctx context.Context, approval *store.Approva
 // sandboxTaker and agent.Manager's turnSandboxTaker.
 type stagedBashTaker interface {
 	// Take returns a warm, network-ENABLED sandbox (the interactive default).
-	Take() (*sandbox.Sandbox, func(), error)
+	Take(ctx context.Context) (*sandbox.Sandbox, func(), error)
 	// TakeContainer cold-starts a fresh sandbox with egress SEALED
 	// (--network=none) — the lockdown boundary.
 	TakeContainer(ctx context.Context) (*sandbox.Sandbox, func(), error)
@@ -1574,7 +1733,7 @@ func takeStagedBashSandbox(ctx context.Context, pool stagedBashTaker, lockdown b
 	case sandbox.NetworkModeLockdown:
 		sb, cleanup, err := pool.TakeContainer(ctx)
 		if errors.Is(err, sandbox.ErrContainerUnavailable) {
-			return pool.Take()
+			return pool.Take(ctx)
 		}
 		if err != nil {
 			return nil, nil, fmt.Errorf("take lockdown sandbox: %w", err)
@@ -1583,7 +1742,7 @@ func takeStagedBashSandbox(ctx context.Context, pool stagedBashTaker, lockdown b
 	case sandbox.NetworkModeAllowlisted:
 		sb, cleanup, err := pool.TakeContainerWithEgress(ctx, sandbox.ResourceOverride{}, allowlist)
 		if errors.Is(err, sandbox.ErrContainerUnavailable) {
-			return pool.Take()
+			return pool.Take(ctx)
 		}
 		if err != nil {
 			return nil, nil, fmt.Errorf("take allowlisted sandbox: %w", err)
@@ -1591,7 +1750,7 @@ func takeStagedBashSandbox(ctx context.Context, pool stagedBashTaker, lockdown b
 		return sb, cleanup, nil
 	}
 
-	sb, cleanup, err := pool.Take()
+	sb, cleanup, err := pool.Take(ctx)
 	if err != nil {
 		return nil, nil, fmt.Errorf("take sandbox: %w", err)
 	}
@@ -1741,10 +1900,14 @@ func rejectionMessages(toolName string) (claim, history string) {
 // actionVerb labels a failed staged action for the result_text prefix so the UI
 // reads correctly per tool kind ("schedule failed: …" vs "send failed: …").
 func actionVerb(toolName string) string {
-	if toolName == tools.ScheduleTaskToolName {
+	switch toolName {
+	case tools.ScheduleTaskToolName:
 		return "schedule"
+	case tools.ManageTasksToolName:
+		return "task change"
+	default:
+		return "send"
 	}
-	return "send"
 }
 
 // orchestratorTaskLink returns a user-facing URL to the Operations Center, or ""

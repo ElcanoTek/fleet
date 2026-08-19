@@ -92,6 +92,20 @@ function OrchestratorInner({ magicLinkLoginEnabled }: { magicLinkLoginEnabled: b
   // guard that keeps a double-click from submitting two runs.
   const [runNowTask, setRunNowTask] = useState<Task | null>(null);
   const [runNowBusy, setRunNowBusy] = useState(false);
+  // Stop/cancel from the list (#1152). Stopping was reachable only from inside
+  // the Live-activity modal, so a RECURRING job that had not yet fired could
+  // not be stopped from anywhere in this UI — even though DELETE /tasks/{id}
+  // has always supported it. "Also you can not delete a job in the operation
+  // center", 2026-08-13.
+  const [stopTask, setStopTask] = useState<Task | null>(null);
+  const [stopBusy, setStopBusy] = useState(false);
+  // Permanent delete. Distinct from stopping, and the one that was actually
+  // missing: cancelling keeps the row, and a kept row keeps its NAME — which is
+  // uniquely indexed — so a broken job blocked its own replacement and could
+  // not even be renamed (editing is pending/scheduled only). "I can't make new
+  // ones if the old ones that don't work are still there."
+  const [deleteTask, setDeleteTask] = useState<Task | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
   const { showToast } = useToast();
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
@@ -114,6 +128,39 @@ function OrchestratorInner({ magicLinkLoginEnabled }: { magicLinkLoginEnabled: b
       );
     } finally {
       setRunNowBusy(false);
+    }
+  };
+  // stop cancels the task: a live run halts at the governed loop's next
+  // checkpoint, and a recurring job that has not fired stops recurring. The
+  // server records who stopped it (#508), so this stays auditable.
+  const stop = async (task: Task) => {
+    if (stopBusy) return;
+    setStopBusy(true);
+    try {
+      await orchestratorApi.cancelTask(task.id);
+      showToast(`Stopped ${taskRunLabel(task)}`, "success");
+      setStopTask(null);
+      void dashboard.reload();
+    } catch (err) {
+      showToast(`Stop failed: ${err instanceof Error ? err.message : "unknown error"}`, "error");
+    } finally {
+      setStopBusy(false);
+    }
+  };
+  const remove = async (task: Task) => {
+    if (deleteBusy) return;
+    setDeleteBusy(true);
+    try {
+      await orchestratorApi.deleteTask(task.id);
+      showToast(`Deleted ${taskRunLabel(task)}`, "success");
+      setDeleteTask(null);
+      // The modal may be showing the row that just stopped existing.
+      setLogTask((current) => (current?.id === task.id ? null : current));
+      void dashboard.reload();
+    } catch (err) {
+      showToast(`Delete failed: ${err instanceof Error ? err.message : "unknown error"}`, "error");
+    } finally {
+      setDeleteBusy(false);
     }
   };
   // Desktop rail collapse + ≤900px auto-collapse/overlay (shared shell).
@@ -403,6 +450,8 @@ function OrchestratorInner({ magicLinkLoginEnabled }: { magicLinkLoginEnabled: b
                   onOpenLogs={setLogTask}
                   onEdit={setEditTask}
                   onRunNow={setRunNowTask}
+                  onStop={setStopTask}
+                  onDelete={setDeleteTask}
                 />
                 </>
               )}
@@ -455,6 +504,47 @@ function OrchestratorInner({ magicLinkLoginEnabled }: { magicLinkLoginEnabled: b
           if (!runNowBusy) setRunNowTask(null);
         }}
       />
+      {/* Stopping is not undoable and, for a recurring job, ends the schedule —
+          so the copy says which of those two things is about to happen rather
+          than asking "are you sure". */}
+      <ConfirmDialog
+        open={!!stopTask}
+        title="Stop task"
+        message={
+          stopTask
+            ? stopTask.recurrence
+              ? `Stop "${taskRunLabel(stopTask)}"? This ends the schedule — it will not run again. Create a new task to resume it.`
+              : `Stop "${taskRunLabel(stopTask)}"? A run in progress halts at its next checkpoint and keeps its partial transcript.`
+            : ""
+        }
+        confirmLabel={stopBusy ? "Stopping…" : "Stop"}
+        onConfirm={() => {
+          if (stopTask) void stop(stopTask);
+        }}
+        onCancel={() => {
+          if (!stopBusy) setStopTask(null);
+        }}
+      />
+      {/* Permanent and not undoable, so the copy says what is destroyed AND
+          what it buys — freeing the name is the whole reason someone is here. */}
+      <ConfirmDialog
+        open={!!deleteTask}
+        title="Delete task"
+        message={
+          deleteTask
+            ? `Permanently delete "${taskRunLabel(deleteTask)}" and its run history? This cannot be undone.${
+                deleteTask.name ? ` The name "${deleteTask.name}" becomes available again.` : ""
+              }`
+            : ""
+        }
+        confirmLabel={deleteBusy ? "Deleting…" : "Delete"}
+        onConfirm={() => {
+          if (deleteTask) void remove(deleteTask);
+        }}
+        onCancel={() => {
+          if (!deleteBusy) setDeleteTask(null);
+        }}
+      />
       <LogViewer
         task={logTask}
         onClose={() => setLogTask(null)}
@@ -465,6 +555,7 @@ function OrchestratorInner({ magicLinkLoginEnabled }: { magicLinkLoginEnabled: b
           setEditTask(t);
         }}
         onSelectTask={setLogTask}
+        onDelete={setDeleteTask}
       />
     </div>
   );

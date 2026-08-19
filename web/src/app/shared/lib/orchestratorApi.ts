@@ -37,6 +37,12 @@ export type Task = {
   // Distinct from the server-side `name`, which is the unique import/export
   // identity key and is cleared on every copy.
   title?: string;
+  // The unique import/export identity key. NEVER render this as a task's
+  // display label — it is empty on every recurrence and every clone, so a list
+  // keyed on it shows blanks. It is surfaced for exactly one purpose: the
+  // delete confirm names the identifier that deleting frees, because a
+  // cancelled task keeps its name and blocks its own replacement.
+  name?: string;
   prompt?: string;
   description?: string;
   model?: string;
@@ -696,6 +702,16 @@ export const orchestratorApi = {
   // and the user who created the task.
   cancelTask: (taskId: string) =>
     request<Task>(`/tasks/${encodeURIComponent(taskId)}`, { method: "DELETE" }),
+  // Permanently remove a task and its transcripts. Deliberately a different
+  // route from cancelTask: cancelling stops a job and KEEPS the record, and a
+  // kept record keeps its name — which is uniquely indexed, so a broken job
+  // could not be replaced under the same name and could not be renamed either.
+  // Deleting is the only thing that frees it. Refuses with 409 on a live run.
+  deleteTask: (taskId: string) =>
+    request<{ deleted: boolean; id: string }>(
+      `/tasks/${encodeURIComponent(taskId)}/permanent`,
+      { method: "DELETE" },
+    ),
   // Attach to a task's live activity stream (#508). Resolves when the stream
   // ends (terminal frame or server close); rejects on transport errors. Abort
   // via the signal to detach.

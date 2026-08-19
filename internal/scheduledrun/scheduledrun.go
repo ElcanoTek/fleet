@@ -389,7 +389,7 @@ func (r *Runner) SystemPromptForPersona(persona string) string {
 // real podman container.
 type sandboxTaker interface {
 	// Take returns a warm, network-ENABLED sandbox (the interactive default).
-	Take() (*sandbox.Sandbox, func(), error)
+	Take(ctx context.Context) (*sandbox.Sandbox, func(), error)
 	// TakeContainer cold-starts a fresh sandbox with egress SEALED
 	// (--network=none) — the lockdown boundary.
 	TakeContainer(ctx context.Context) (*sandbox.Sandbox, func(), error)
@@ -435,14 +435,14 @@ func takeTaskSandbox(ctx context.Context, pool sandboxTaker, task *models.Task) 
 		if allowlisted {
 			sb, cleanup, err := pool.TakeContainerWithEgress(ctx, ov, allowlist)
 			if errors.Is(err, sandbox.ErrContainerUnavailable) {
-				return pool.Take()
+				return pool.Take(ctx)
 			}
 			return sb, cleanup, err
 		}
 		sb, cleanup, err := pool.TakeContainerWithOverrides(ctx, ov, !networked)
 		if errors.Is(err, sandbox.ErrContainerUnavailable) {
 			// Host/mock pool: no container to size — fall back to the host take.
-			return pool.Take()
+			return pool.Take(ctx)
 		}
 		return sb, cleanup, err
 	}
@@ -450,15 +450,15 @@ func takeTaskSandbox(ctx context.Context, pool sandboxTaker, task *models.Task) 
 		if allowlisted {
 			sb, cleanup, err := pool.TakeContainerWithEgress(ctx, sandbox.ResourceOverride{}, allowlist)
 			if errors.Is(err, sandbox.ErrContainerUnavailable) {
-				return pool.Take()
+				return pool.Take(ctx)
 			}
 			return sb, cleanup, err
 		}
-		return pool.Take()
+		return pool.Take(ctx)
 	}
 	sb, cleanup, err := pool.TakeContainer(ctx)
 	if errors.Is(err, sandbox.ErrContainerUnavailable) {
-		return pool.Take()
+		return pool.Take(ctx)
 	}
 	return sb, cleanup, err
 }
