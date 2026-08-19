@@ -99,6 +99,13 @@ function OrchestratorInner({ magicLinkLoginEnabled }: { magicLinkLoginEnabled: b
   // center", 2026-08-13.
   const [stopTask, setStopTask] = useState<Task | null>(null);
   const [stopBusy, setStopBusy] = useState(false);
+  // Permanent delete. Distinct from stopping, and the one that was actually
+  // missing: cancelling keeps the row, and a kept row keeps its NAME — which is
+  // uniquely indexed — so a broken job blocked its own replacement and could
+  // not even be renamed (editing is pending/scheduled only). "I can't make new
+  // ones if the old ones that don't work are still there."
+  const [deleteTask, setDeleteTask] = useState<Task | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
   const { showToast } = useToast();
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
@@ -138,6 +145,22 @@ function OrchestratorInner({ magicLinkLoginEnabled }: { magicLinkLoginEnabled: b
       showToast(`Stop failed: ${err instanceof Error ? err.message : "unknown error"}`, "error");
     } finally {
       setStopBusy(false);
+    }
+  };
+  const remove = async (task: Task) => {
+    if (deleteBusy) return;
+    setDeleteBusy(true);
+    try {
+      await orchestratorApi.deleteTask(task.id);
+      showToast(`Deleted ${taskRunLabel(task)}`, "success");
+      setDeleteTask(null);
+      // The modal may be showing the row that just stopped existing.
+      setLogTask((current) => (current?.id === task.id ? null : current));
+      void dashboard.reload();
+    } catch (err) {
+      showToast(`Delete failed: ${err instanceof Error ? err.message : "unknown error"}`, "error");
+    } finally {
+      setDeleteBusy(false);
     }
   };
   // Desktop rail collapse + ≤900px auto-collapse/overlay (shared shell).
@@ -428,6 +451,7 @@ function OrchestratorInner({ magicLinkLoginEnabled }: { magicLinkLoginEnabled: b
                   onEdit={setEditTask}
                   onRunNow={setRunNowTask}
                   onStop={setStopTask}
+                  onDelete={setDeleteTask}
                 />
                 </>
               )}
@@ -501,6 +525,26 @@ function OrchestratorInner({ magicLinkLoginEnabled }: { magicLinkLoginEnabled: b
           if (!stopBusy) setStopTask(null);
         }}
       />
+      {/* Permanent and not undoable, so the copy says what is destroyed AND
+          what it buys — freeing the name is the whole reason someone is here. */}
+      <ConfirmDialog
+        open={!!deleteTask}
+        title="Delete task"
+        message={
+          deleteTask
+            ? `Permanently delete "${taskRunLabel(deleteTask)}" and its run history? This cannot be undone.${
+                deleteTask.name ? ` The name "${deleteTask.name}" becomes available again.` : ""
+              }`
+            : ""
+        }
+        confirmLabel={deleteBusy ? "Deleting…" : "Delete"}
+        onConfirm={() => {
+          if (deleteTask) void remove(deleteTask);
+        }}
+        onCancel={() => {
+          if (!deleteBusy) setDeleteTask(null);
+        }}
+      />
       <LogViewer
         task={logTask}
         onClose={() => setLogTask(null)}
@@ -511,6 +555,7 @@ function OrchestratorInner({ magicLinkLoginEnabled }: { magicLinkLoginEnabled: b
           setEditTask(t);
         }}
         onSelectTask={setLogTask}
+        onDelete={setDeleteTask}
       />
     </div>
   );

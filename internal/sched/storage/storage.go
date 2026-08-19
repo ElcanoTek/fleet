@@ -679,6 +679,28 @@ func (s *Storage) GetScheduledTasks(cutoff time.Time, afterScheduledFor time.Tim
 	return s.db.GetScheduledTasks(context.Background(), cutoff, afterScheduledFor, afterID, limit)
 }
 
+// DeleteTask permanently removes a task row and its transcripts.
+//
+// Distinct from CancelTaskAtomic, which only flips the status: the ROW survives
+// a cancel, and with it the partial unique index on a non-empty name
+// (idx_tasks_name_unique). So a job that failed and was cancelled kept its name
+// forever, and creating a replacement under the same name was refused by the
+// database — with no way out, because PUT /tasks/{id} only edits pending or
+// scheduled tasks, so the dead one could not even be renamed. Deleting is the
+// only thing that frees the name.
+//
+// logs and run_logs carry a plain task_id with no foreign key (see migrations
+// 001 and 058), so they are removed explicitly and in the same transaction —
+// exactly what CleanupOldRuns does for the retention sweep. Every other child
+// (webhook triggers, loop config, task memory, feedback, learned instructions)
+// declares ON DELETE CASCADE and goes with the row.
+//
+// Returns false when no row matched, so a double-click reports "already gone"
+// rather than an error.
+func (s *Storage) DeleteTask(ctx context.Context, taskID uuid.UUID) (bool, error) {
+	return s.db.DeleteTask(ctx, taskID)
+}
+
 // CancelTaskAtomic cancels a task atomically. reason records WHO/why (#508 —
 // e.g. "stopped by admin"); stored on the task's Result so the attribution
 // survives as the terminal record. Empty keeps the legacy unattributed cancel.

@@ -1375,6 +1375,11 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers, r
 		r.Post("/tasks/{task_id}/rerun", h.RerunTask)
 		r.Post("/tasks/{task_id}/clone", h.CloneTask)
 		r.Delete("/tasks/{task_id}", h.CancelTask)
+		// Permanently remove a task. Deliberately NOT the same route as the
+		// cancel above: cancel stops a job and keeps the record, this destroys
+		// the record — and only this frees the task's name for reuse (#238's
+		// partial unique index outlives a cancelled row).
+		r.Delete("/tasks/{task_id}/permanent", h.DeleteTask)
 		// Self-improving memory (#516): feedback capture + versioned learned
 		// instructions (list / activate a version / deactivate).
 		r.Post("/tasks/{task_id}/feedback", h.SubmitFeedback)

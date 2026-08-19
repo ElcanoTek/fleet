@@ -41,6 +41,40 @@ function mockSession(session: LogSession) {
 
 afterEach(() => cleanup());
 
+// The task window is where someone lands when a job has gone wrong, so it is
+// where the way out belongs. Deleting is the only operation that frees a task's
+// NAME — cancelling keeps the row, and the name is uniquely indexed, so a
+// broken job blocked its own replacement.
+describe("LogViewer delete", () => {
+  it("offers Delete and hands the task to the parent", async () => {
+    mockSession({ id: "sess-del", messages: [] } as unknown as LogSession);
+    const onDelete = vi.fn();
+    render(<LogViewer task={TASK} onClose={() => {}} onDelete={onDelete} />);
+
+    const button = await screen.findByTestId("delete-task-button");
+    expect(button.getAttribute("title")).toMatch(/permanently delete/i);
+    fireEvent.click(button);
+    expect(onDelete).toHaveBeenCalledWith(TASK);
+  });
+
+  it("omits Delete when the parent passes no handler", async () => {
+    mockSession({ id: "sess-del-2", messages: [] } as unknown as LogSession);
+    render(<LogViewer task={TASK} onClose={() => {}} />);
+    await waitFor(() => expect(taskLogs).toHaveBeenCalled());
+    expect(screen.queryByTestId("delete-task-button")).toBeNull();
+  });
+
+  // A live run renders the streaming view, which has its own controls and no
+  // delete — the server refuses one anyway while the worker holds the lease.
+  it("does not offer Delete on a live run", () => {
+    const onDelete = vi.fn();
+    render(
+      <LogViewer task={{ ...TASK, status: "running" }} onClose={() => {}} onDelete={onDelete} />,
+    );
+    expect(screen.queryByTestId("delete-task-button")).toBeNull();
+  });
+});
+
 describe("LogViewer inline images (#271)", () => {
   it("rewrites a relative agent-image reference to the task workspace proxy", async () => {
     mockSession({

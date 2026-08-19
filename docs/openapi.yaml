@@ -988,6 +988,41 @@ paths:
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
       responses:
         "200": { description: Cancelled (attribution on the task's result). }
+  /tasks/{task_id}/permanent:
+    parameters:
+      - name: task_id
+        in: path
+        required: true
+        schema: { type: string }
+    delete:
+      summary: Permanently delete a task and its transcripts.
+      description: >-
+        Removes the task row, its run transcripts, and every cascading child
+        (webhook triggers, loop config, task memory, feedback, learned
+        instructions). Distinct from cancelling: a cancelled task keeps its row,
+        and with it its name — which carries a partial unique index, so a broken
+        job could never be replaced under the same name and could not be renamed
+        either (PUT /tasks/{task_id} only edits pending or scheduled tasks).
+        Deleting is the only operation that frees a name for reuse.
+
+        Refuses with 409 while the task is leased or running: the worker still
+        holds the lease and is writing to the row. Stop it first, then delete.
+        Same authorization as cancelling — a principal with cancel permission
+        (admin/scoped key), or a user deleting a task they personally created.
+      security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      responses:
+        "200":
+          description: Deleted.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deleted: { type: boolean }
+                  id: { type: string }
+        "403": { description: Not the task's creator and lacking cancel permission. }
+        "404": { description: No such task. }
+        "409": { description: The task is running; stop it before deleting. }
   /tasks/{task_id}/output:
     parameters:
       - name: task_id
