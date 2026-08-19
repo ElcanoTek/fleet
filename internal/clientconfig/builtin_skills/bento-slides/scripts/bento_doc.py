@@ -45,6 +45,49 @@ CLOSE_TAG = b"</script>"
 TITLE_OPEN = b"<title>"
 TITLE_CLOSE = b"</title>"
 
+# ── the no-update-check guard ────────────────────────────────────────────────
+#
+# Upstream's shell checks bento.page for a newer version of itself on every
+# launch (a signed manifest; the check is on by default and its switch lives in
+# localStorage, so nothing in the file can preset it). fleet EMBEDS and
+# sha256-pins the shell it ships, so that check can only ever report a version
+# the reader has no way to install — while telling a third party, from their
+# machine, that they opened this deck. `new` therefore plants the guard below
+# into the shell, ahead of the runtime, and refuses the call.
+#
+# What it deliberately does NOT touch: `wss://sync.bento.page`, the
+# collaboration relay. That is a connection the user opts into by sharing a
+# deck, not a background call, and it uses WebSocket rather than fetch.
+#
+# Only `new` injects. `set` preserves the shell byte for byte, so a deck the
+# USER handed us keeps upstream behavior — we do not silently rewrite someone
+# else's file. `validate` reports which kind of deck it is looking at.
+GUARD_ID = "fleet-no-update-check"
+GUARD = b"""<script id="fleet-no-update-check">
+/* Added by fleet's bento-slides skill. NOT part of upstream Bento.
+   Upstream asks bento.page for a newer app shell on every launch. fleet embeds
+   and sha256-pins the shell it ships, so that answer is unusable here, and the
+   question alone tells a third party that this deck was opened. Refused.
+   Collaboration (wss://sync.bento.page) is untouched: the user opts into that
+   by sharing a deck.
+   To restore upstream behavior, delete this entire script element. */
+(function () {
+  try { localStorage.setItem("bento-auto-check", "off"); } catch (e) {}
+  var homeward = /^https?:\/\/(?:[a-z0-9-]+\.)*bento\.page(?:[:\/]|$)/i;
+  var real = window.fetch;
+  if (typeof real !== "function") { return; }
+  window.fetch = function (input) {
+    var url = typeof input === "string" ? input : (input && input.url) || "";
+    if (homeward.test(url)) {
+      return Promise.reject(new Error("fleet: this deck does not call home"));
+    }
+    return real.apply(this, arguments);
+  };
+})();
+</script>
+    """
+
+
 # The vendored app shell, resolved relative to this script so it works from any
 # working directory. The skills tree is bind-mounted read-only, so this is a
 # read-only source: it is copied, never edited.
@@ -122,6 +165,22 @@ def _split(raw):
     if end < 0:
         raise DeckError("document block is not closed; the file is truncated")
     return raw[:start], raw[start:end], raw[end:]
+
+
+def _inject_guard(raw):
+    """Plant the guard ahead of the document block, exactly once.
+
+    The guard goes in the prefix, which every later `set` copies through
+    unchanged, so it survives editing without ever being added twice.
+    """
+    if GUARD_ID.encode() in raw:
+        return raw
+    at = raw.index(OPEN_TAG)
+    return raw[:at] + GUARD + raw[at:]
+
+
+def has_guard(raw):
+    return GUARD_ID.encode() in raw
 
 
 def _decode_block(block):
@@ -361,6 +420,10 @@ def cmd_new(args):
             "the copy or the bundled template is corrupt"
         )
 
+    # Plant the no-update-check guard before the document is spliced in, so the
+    # deck never has a state in which it would call home.
+    raw = _inject_guard(raw)
+
     title = args.title or os.path.basename(path).split(".")[0].replace("_", " ")
     doc = {
         "format": "bento/slides",
@@ -403,6 +466,7 @@ def cmd_new(args):
     validate_doc(doc)
     _splice(path, raw, doc)
     print("created %s — one title slide, ready to author" % path)
+    print("the launch update-check to bento.page is disabled in this deck")
     print("next: bento_doc.py get %s -o doc.json" % path)
     print("download link (use this EXACT text, do not rebuild it): %s" % download_link(path))
     return 0
@@ -523,6 +587,15 @@ def cmd_validate(args):
                 )
     if collab_secrets(doc):
         print("  note: this deck carries live-collaboration credentials")
+    if kind == "deck" and not has_guard(raw):
+        # A deck the user brought us, or one made before the guard existed. We
+        # do not rewrite someone else's shell, so say so rather than fix it.
+        print(
+            "  note: no fleet update-check guard in this shell, so opening it "
+            "will ask bento.page for a newer app version. Decks created by "
+            "`new` have that disabled; this one was not. Tell the user rather "
+            "than editing their shell."
+        )
     if kind == "deck":
         print(
             "download link (use this EXACT text, do not rebuild it): %s"

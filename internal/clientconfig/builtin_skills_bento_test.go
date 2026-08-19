@@ -29,6 +29,10 @@ const (
 
 	bentoHelperRel = "bento-slides/scripts/bento_doc.py"
 
+	// The id of the one element fleet adds to upstream's shell: the guard that
+	// refuses the launch update check. Kept in lockstep with bento_doc.py.
+	bentoGuardID = "fleet-no-update-check"
+
 	// The document block's opening tag. bento_doc.py splices on this exact
 	// string and requires it to be unique; a re-vendor that changed either
 	// fact would break deck authoring at runtime, so assert it here.
@@ -273,8 +277,15 @@ func TestBentoDocHelperRoundTrip(t *testing.T) {
 	if !bytes.Equal(suffixAfterBlock(t, raw), suffixAfterBlock(t, tpl)) {
 		t.Error("bytes after the document block differ from the vendored shell")
 	}
-	if !bytes.Equal(prefixAfterTitle(t, raw), prefixAfterTitle(t, tpl)) {
-		t.Error("bytes between </title> and the document block differ from the vendored shell")
+	// ... apart from the no-update-check guard, which `new` plants ahead of the
+	// document block. Strip that one element and the vendored bytes must come
+	// back exactly: the guard is the ONLY thing fleet adds to upstream's shell.
+	gotPrefix := prefixAfterTitle(t, raw)
+	if !bytes.Contains(gotPrefix, []byte(bentoGuardID)) {
+		t.Fatalf("the guard is missing from a deck made by `new`")
+	}
+	if !bytes.Equal(stripGuard(t, gotPrefix), prefixAfterTitle(t, tpl)) {
+		t.Error("bytes between </title> and the document block differ from the vendored shell by more than the guard")
 	}
 	if !bytes.Contains(raw, []byte("<title>Q4 Review & Co</title>")) {
 		t.Error("shell <title> was not synced from doc.title")
@@ -520,6 +531,26 @@ func prefixAfterTitle(t *testing.T, raw []byte) []byte {
 	return raw[titleEnd : anchor+len(bentoDocAnchor)]
 }
 
+// stripGuard removes the single no-update-check <script> element the helper
+// plants, so what remains can be compared against the pristine vendored shell.
+func stripGuard(t *testing.T, raw []byte) []byte {
+	t.Helper()
+	open := bytes.Index(raw, []byte(`<script id="`+bentoGuardID+`">`))
+	if open < 0 {
+		t.Fatal("no guard element to strip")
+	}
+	rest := raw[open:]
+	end := bytes.Index(rest, []byte("</script>"))
+	if end < 0 {
+		t.Fatal("guard element is unterminated")
+	}
+	// Also swallow the whitespace the guard carries so the shell's own
+	// indentation of the document block is restored byte for byte.
+	tail := rest[end+len("</script>"):]
+	trimmed := bytes.TrimLeft(tail, "\n\r\t ")
+	return append(append([]byte{}, raw[:open]...), trimmed...)
+}
+
 // unescapeBlock turns the block's \u003c sequences back into "<". Go's json
 // decoder already understands the escape, so this exists only to keep the
 // assertions above readable about what the file actually holds.
@@ -594,6 +625,138 @@ func TestBentoDocHelperRejectsUndownloadableNames(t *testing.T) {
 				t.Errorf("expected a diagnostic naming the problem, got %q", stderr)
 			}
 		})
+	}
+}
+
+// Upstream's shell asks bento.page for a newer version of itself on every
+// launch. fleet embeds and sha256-pins the shell it ships, so that answer is
+// unusable here, and the question alone tells a third party that the reader
+// opened the deck. `new` plants a guard that refuses it.
+//
+// These assertions are structural — they cannot prove the browser makes no
+// request. What they hold is the part that silently rots: that the guard is
+// present, that it runs BEFORE the runtime that would fire the check (an
+// element planted after it would be dead code that still looked right), that
+// editing a deck neither drops nor duplicates it, and that upstream's own
+// preference key is switched off so the app's About panel does not advertise a
+// check that will not happen.
+func TestBentoDeckDoesNotCallHome(t *testing.T) {
+	helper := bentoHelper(t)
+	dir := t.TempDir()
+	deck := "Guarded.bento.html"
+
+	stdout, stderr, err := runHelper(t, helper, dir, "new", deck)
+	if err != nil {
+		t.Fatalf("new: %v\n%s", err, stderr)
+	}
+	if !strings.Contains(stdout, "bento.page is disabled") {
+		t.Errorf("new did not report that the update check is off; stdout:\n%s", stdout)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(dir, deck))
+	if err != nil {
+		t.Fatalf("read deck: %v", err)
+	}
+
+	if n := bytes.Count(raw, []byte(bentoGuardID)); n != 1 {
+		t.Fatalf("guard id appears %d times, want exactly 1", n)
+	}
+	// The guard must switch upstream's own preference off, so the About panel
+	// reflects reality rather than showing a check that is being refused.
+	if !bytes.Contains(raw, []byte(`localStorage.setItem("bento-auto-check", "off")`)) {
+		t.Error("guard does not turn upstream's auto-check preference off")
+	}
+	// It must block the release host and nothing wider. The collaboration relay
+	// is a WebSocket the user opts into by sharing, so fetch-blocking leaves it
+	// alone by construction — assert the guard does not reach for it.
+	if !bytes.Contains(raw, []byte("bento\\.page")) {
+		t.Error("guard does not scope its refusal to bento.page")
+	}
+	if bytes.Contains(raw, []byte("WebSocket")) {
+		t.Error("guard touches WebSocket; the collab relay must keep working")
+	}
+
+	// Ordering is the assertion that matters most: a guard planted after the
+	// runtime would parse, look correct in review, and do nothing.
+	guardAt := bytes.Index(raw, []byte(bentoGuardID))
+	docAt := bytes.Index(raw, []byte(bentoDocAnchor))
+	runtimeAt := bytes.Index(raw, []byte(`id="bento-rt"`))
+	if runtimeAt < 0 {
+		t.Fatal("no runtime block in the shell")
+	}
+	if !(guardAt < docAt && docAt < runtimeAt) {
+		t.Errorf("guard must precede the document block and the runtime; got guard=%d doc=%d runtime=%d",
+			guardAt, docAt, runtimeAt)
+	}
+
+	// An edit must neither drop the guard nor add a second copy: it lives in the
+	// prefix, which `set` copies through untouched.
+	stdout, stderr, err = runHelper(t, helper, dir, "get", deck, "-o", "doc.json")
+	if err != nil {
+		t.Fatalf("get: %v\n%s", err, stderr)
+	}
+	if _, stderr, err = runHelper(t, helper, dir, "set", deck, "doc.json"); err != nil {
+		t.Fatalf("set: %v\n%s", err, stderr)
+	}
+	after, err := os.ReadFile(filepath.Join(dir, deck))
+	if err != nil {
+		t.Fatalf("re-read deck: %v", err)
+	}
+	if n := bytes.Count(after, []byte(bentoGuardID)); n != 1 {
+		t.Errorf("after an edit the guard id appears %d times, want exactly 1", n)
+	}
+}
+
+// A deck the USER brought us keeps upstream behavior: `set` preserves the shell
+// byte for byte, so we do not silently rewrite someone else's file. `validate`
+// is what surfaces the difference, so the agent can tell them instead.
+func TestBentoUnguardedDeckIsReportedNotRewritten(t *testing.T) {
+	helper := bentoHelper(t)
+	dir := t.TempDir()
+
+	tpl, err := builtinSkillsFS.ReadFile(builtinSkillsRoot + "/" + bentoTemplateRel)
+	if err != nil {
+		t.Fatalf("read embedded template: %v", err)
+	}
+	theirs := filepath.Join(dir, "Theirs.bento.html")
+	if err := os.WriteFile(theirs, tpl, 0o600); err != nil {
+		t.Fatalf("write their deck: %v", err)
+	}
+
+	// Author into it via a document lifted from a deck of our own.
+	if _, stderr, err := runHelper(t, helper, dir, "new", "Ours.bento.html"); err != nil {
+		t.Fatalf("new: %v\n%s", err, stderr)
+	}
+	if _, stderr, err := runHelper(t, helper, dir, "get", "Ours.bento.html", "-o", "doc.json"); err != nil {
+		t.Fatalf("get: %v\n%s", err, stderr)
+	}
+	if _, stderr, err := runHelper(t, helper, dir, "set", "Theirs.bento.html", "doc.json"); err != nil {
+		t.Fatalf("set on their deck: %v\n%s", err, stderr)
+	}
+
+	after, err := os.ReadFile(theirs)
+	if err != nil {
+		t.Fatalf("read their deck: %v", err)
+	}
+	if bytes.Contains(after, []byte(bentoGuardID)) {
+		t.Error("set injected the guard into a deck we did not create; the shell must be preserved")
+	}
+
+	stdout, stderr, err := runHelper(t, helper, dir, "validate", "Theirs.bento.html")
+	if err != nil {
+		t.Fatalf("validate their deck: %v\n%s", err, stderr)
+	}
+	if !strings.Contains(stdout, "no fleet update-check guard") {
+		t.Errorf("validate did not flag an unguarded shell; stdout:\n%s", stdout)
+	}
+
+	// ... and our own deck must NOT draw that advisory.
+	stdout, stderr, err = runHelper(t, helper, dir, "validate", "Ours.bento.html")
+	if err != nil {
+		t.Fatalf("validate our deck: %v\n%s", err, stderr)
+	}
+	if strings.Contains(stdout, "no fleet update-check guard") {
+		t.Errorf("validate flagged a guarded deck as unguarded; stdout:\n%s", stdout)
 	}
 }
 

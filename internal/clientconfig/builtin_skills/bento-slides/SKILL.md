@@ -10,10 +10,9 @@ viewer, and a full editor. The user downloads it and opens it in any browser —
 nothing to install, no account, no sign-in, and nothing fetched to render the
 deck. This skill bundles the Bento app and a helper that edits the deck for you.
 
-One caveat to be straight about: the bundled app checks for its own updates on
-launch (a signed manifest from `bento.page`), so an opened deck does reach the
-network once unless the user turns that off. Authoring is fully offline — the app
-is embedded in the binary and nothing is fetched during your turn.
+Upstream's app asks `bento.page` for a newer version of itself every time a deck
+is opened. `new` disables that, so a deck you create makes no network request at
+all — see "A deck you make does not call home" below.
 
 Never edit a `.bento.html` by hand. The file is a 689KB minified app around one
 JSON document block; `view_file` on it would burn your context on runtime code,
@@ -103,11 +102,7 @@ name that does not match is the one failure the user sees as a broken download
 Tell them to **download it and open it in a browser** — it will not preview in
 the chat, by design, and there is no server-side render step. Opened locally it
 boots straight into the editor with the finished deck, so they can keep editing
-it themselves. Mention the launch update-check once, plainly: the deck itself is
-self-contained, but on open the app asks `bento.page` whether a newer version of
-itself exists. Both switches are in the app's About panel — *Check for updates
-automatically at launch*, and an offline mode that refuses every request. Neither
-can be preset from the file, so the user is the only one who can turn them off.
+it themselves.
 
 Never paste the deck's HTML into your reply. It is 689KB of runtime and it tells
 the user nothing.
@@ -116,6 +111,25 @@ the user nothing.
 (`Q4_Review_v2.bento.html`). Workspace downloads are cached for 24 hours, so
 re-using the filename serves the user their old file and makes your fix look
 like it did nothing.
+
+## A deck you make does not call home
+
+`new` plants one small `<script id="fleet-no-update-check">` into the shell,
+ahead of the app runtime. Upstream checks `bento.page` for a newer app version on
+launch; fleet ships the app embedded and pinned, so that answer is unusable here
+and the question alone would tell a third party that your reader opened the deck.
+The guard refuses it and switches the app's own preference off, so the About panel
+shows the true state. Live collaboration (a WebSocket, only for a deck the user
+shares) is untouched.
+
+Do not remove it, and do not add active content of your own next to it — that
+element is reviewed, tested code, unlike anything you would write into a slide.
+
+**A deck the user gave you keeps upstream behavior.** `set` preserves a shell
+byte for byte, so it never plants the guard in someone else's file. `validate`
+prints a note when it sees an unguarded shell — pass that on to the user rather
+than editing their file. If they want a guarded copy, build a new deck with `new`
+and move the document across.
 
 ## If the deck is already shared
 

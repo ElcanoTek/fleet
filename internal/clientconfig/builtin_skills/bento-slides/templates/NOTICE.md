@@ -68,22 +68,43 @@ Re-vendoring is therefore a deliberate manual act:
 ## Network endpoints the shell contacts
 
 A deck is self-contained to *render* — nothing is fetched to open or present it,
-and nothing is fetched while the agent authors it. The shell does reach the
-network in two places, both upstream behavior we redistribute unmodified:
+and nothing is fetched while the agent authors it. The vendored shell does reach
+the network in two places:
 
 - `https://bento.page/releases/slides/manifest.json` — an **update check on
-  launch**, `fetch` with `cache: "no-store"`. It is **on by default** (the
-  *Check for updates automatically at launch* checkbox in the app's About panel;
-  an offline mode in the same panel refuses every request). Upstream verifies the
-  manifest against a pinned P-256 key and any downloaded shell against a sha256
-  before accepting it, so the check cannot be turned into code execution by
-  whoever answers — but it is a request to a third-party host, from the user's
-  machine, on every open. Both switches live in `localStorage`, so **neither can
-  be preset from the vendored file or from a deck's document**: only the user can
-  turn them off, which is why `../SKILL.md` tells the agent to say so.
+  launch**, `fetch` with `cache: "no-store"`, on by default. **fleet blocks
+  this.** `scripts/bento_doc.py new` plants one `<script
+  id="fleet-no-update-check">` element ahead of the runtime that refuses fetches
+  to `bento.page` and switches upstream's own `bento-auto-check` preference off,
+  so the About panel shows the true state. Rationale: fleet embeds and
+  sha256-pins the shell it ships, so the check can only report a version the
+  reader has no way to install, while telling a third party — from the reader's
+  machine — that they opened the deck. Upstream does verify the manifest against
+  a pinned P-256 key and any downloaded shell against a sha256, so the check was
+  never a code-execution risk; it is refused because it is useless here and not
+  the reader's choice to make.
 - `wss://sync.bento.page` — the live-collaboration relay, contacted only for a
-  deck the user has explicitly shared (`collab.on`). A deck this pack produces
-  has no `collab` block at all.
+  deck the user has explicitly shared (`collab.on`). **Deliberately left
+  working:** the user opts into it by sharing, and the guard blocks `fetch` only,
+  so a WebSocket is untouched by construction. A deck this pack produces has no
+  `collab` block at all.
 
-Neither endpoint is reachable from the sandbox and neither is used at turn time;
-they matter to the **user's** browser, after the download.
+Two boundaries on the guard, both load-bearing:
+
+- **The vendored file is still byte-identical.** The guard is added to a *deck*
+  as it is created, never to `Bento_Slides.bento.html`, so the sha256 pin above
+  and the "redistributed unmodified" claim both still hold. A produced deck is
+  upstream's shell plus that one element — a modification the MIT license
+  permits, with upstream's notice intact and travelling with the file.
+- **A deck the user brings is not rewritten.** `set` preserves a shell byte for
+  byte, so it never injects the guard into someone else's file; `validate` prints
+  an advisory instead. Covered by
+  `TestBentoUnguardedDeckIsReportedNotRewritten`.
+
+`TestBentoDeckDoesNotCallHome` pins the guard's presence, its ordering ahead of
+the runtime (an element planted after it would be dead code that still read
+correctly), and that an edit neither drops nor duplicates it. Those assertions
+are structural; the end-to-end check — loading a deck in Chromium with the
+network recorded, and seeing the request on an unguarded shell and none on a
+guarded one — was done by hand and is not automated, since CI has no browser in
+the Go lane.

@@ -25,11 +25,23 @@ prior versions are listed because none have shipped.
   viewer and a full editor, with the document stored as plain JSON in a single
   `#bento-doc` script block. Ask for a deck in chat and the agent writes one into
   the workspace; the user downloads it and opens it in any browser — no Gamma, no
-  PowerPoint, no PPTX toolchain, and no network call beyond the model provider to
-  author it. (The delivered file is self-contained to render, but upstream's shell
-  does check `bento.page` for its own updates when the user opens it — on by
-  default, signature-verified, and switchable only in the browser. The SKILL.md
-  tells the agent to say so on handover; `templates/NOTICE.md` enumerates it.)
+  PowerPoint, no PPTX toolchain, and no network call at all, either to author the
+  deck or to open it.
+
+  That last part took a deliberate fix. Upstream's shell asks `bento.page` for a
+  newer version of itself on every launch, on by default, with its switch in
+  `localStorage` where nothing in the file can preset it. fleet embeds and
+  sha256-pins the shell, so that check can only report a version the reader has
+  no way to install — while telling a third party, from the reader's machine,
+  that they opened the deck. `new` now plants one
+  `<script id="fleet-no-update-check">` element ahead of the runtime that refuses
+  `bento.page` fetches and switches upstream's own preference off so the About
+  panel shows the true state. The live-collaboration relay is a WebSocket the
+  user opts into by sharing and is deliberately left working; the vendored
+  template stays byte-identical and pinned (the guard goes into the produced
+  deck, not the template); and a deck the *user* hands the agent is never
+  rewritten — `set` preserves a shell byte for byte and `validate` reports an
+  unguarded one instead.
 
   The pack ships in `internal/clientconfig/builtin_skills/bento-slides/` and
   needed **no Go change**: `//go:embed all:builtin_skills` is recursive, so its
