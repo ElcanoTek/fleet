@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"charm.land/fantasy"
 )
 
 // Session log (lifted from cutlass session_log.go).
@@ -77,6 +79,93 @@ type LogSession struct {
 	// bytes agentcore validated — the runner commits THESE (post-redaction),
 	// never a re-parse of the redacted final message text.
 	OutputJSON string `json:"output_json,omitempty"`
+	// AuxUsage is the labeled ledger of host-side auxiliary model calls made on
+	// behalf of the run but OUTSIDE its governed loop's step accounting (#1118):
+	// the end-of-run verifier, the phone-a-friend reviewer, and the scheduled
+	// loop's llm exit-condition verifier. These records are deliberately NOT
+	// added to the headline PromptTokens/CompletionTokens/Cost totals and do
+	// NOT debit the run's cost/token ceilings — the loop verifier's accounting
+	// model (#179) explicitly excludes them from the across-iteration
+	// MaxCostUSD ceiling, and the verifier/reviewer are documented host-side
+	// extras layered AROUND the run — but they must not vanish either: this is
+	// where that spend is visible, per call, with a distinguishing label.
+	// omitempty keeps a run with no aux calls byte-identical to before.
+	AuxUsage []AuxUsageRecord `json:"aux_usage,omitempty"`
+}
+
+// Labels for the AuxUsage ledger (#1118), exported so the recording call sites
+// and any reader agree on the vocabulary.
+const (
+	// AuxUsageEndOfRunVerifier is the scheduled end-of-run completeness check
+	// (internal/agent/verifier.go).
+	AuxUsageEndOfRunVerifier = "end_of_run_verifier"
+	// AuxUsagePhoneAFriend is the optional super-LLM quality review
+	// (internal/agent/reviewer.go).
+	AuxUsagePhoneAFriend = "phone_a_friend_review"
+	// AuxUsageLoopExitVerifier is the scheduled loop's llm exit-condition
+	// YES/NO verifier (internal/scheduledrun/loop.go).
+	AuxUsageLoopExitVerifier = "loop_exit_verifier"
+	// AuxUsageErrorAnalysis is the post-failure diagnosis of one terminal task
+	// failure (#317, internal/agent/erroranalysis.go). Log-line only: it runs
+	// after the failed run's session was persisted, so there is no live ledger
+	// to append to (see docs/AUX-MODEL-CALL-METERING.md).
+	AuxUsageErrorAnalysis = "error_analysis"
+	// AuxUsageRecurringTaskSynthesis is the chat→recurring-task proposal
+	// synthesizer (#455, internal/agent/recurring_task.go). Log-line only: it
+	// is a conversation-level user action with no run session at all.
+	AuxUsageRecurringTaskSynthesis = "recurring_task_synthesis"
+)
+
+// AuxUsageRecord is one host-side auxiliary model call's metered spend. Token
+// semantics follow the LogSession convention: PromptTokens includes cache
+// reads.
+type AuxUsageRecord struct {
+	Label            string  `json:"label"`
+	Model            string  `json:"model,omitempty"`
+	PromptTokens     int     `json:"prompt_tokens"`
+	CompletionTokens int     `json:"completion_tokens"`
+	CostUSD          float64 `json:"cost_usd"`
+}
+
+// NewAuxUsageRecord prices one host-side auxiliary Generate call (a single
+// tool-less completion — the verifier/reviewer shape) into an AuxUsageRecord.
+// Cost resolves through the SAME pricing policy the run loop uses
+// (ResolveStepCost), so a per-model override (#297) applies to aux calls too;
+// with no overrides it is the OpenRouter-returned cost.
+func NewAuxUsageRecord(label, modelSlug string, res *fantasy.AgentResult) AuxUsageRecord {
+	rec := AuxUsageRecord{Label: label, Model: modelSlug}
+	if res == nil {
+		return rec
+	}
+	rec.PromptTokens = int(res.TotalUsage.InputTokens + res.TotalUsage.CacheReadTokens)
+	rec.CompletionTokens = int(res.TotalUsage.OutputTokens)
+	rec.CostUSD = ResolveStepCost(modelSlug, res.TotalUsage, openrouterCost(res.Response.ProviderMetadata))
+	return rec
+}
+
+// AddAuxUsage appends one auxiliary model call's record to the session's
+// labeled overhead ledger (#1118). See LogSession.AuxUsage for why these are
+// kept out of the headline totals.
+func (ls *LogSession) AddAuxUsage(rec AuxUsageRecord) {
+	if ls == nil {
+		return
+	}
+	ls.mu.Lock()
+	defer ls.mu.Unlock()
+	ls.AuxUsage = append(ls.AuxUsage, rec)
+	ls.UpdatedAt = time.Now().Unix()
+}
+
+// SnapshotAuxUsage returns a copy of the aux-usage ledger taken under lock.
+func (ls *LogSession) SnapshotAuxUsage() []AuxUsageRecord {
+	if ls == nil {
+		return nil
+	}
+	ls.mu.Lock()
+	defer ls.mu.Unlock()
+	out := make([]AuxUsageRecord, len(ls.AuxUsage))
+	copy(out, ls.AuxUsage)
+	return out
 }
 
 // LogToolCall represents a structured tool call in logs.

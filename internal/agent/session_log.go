@@ -75,6 +75,16 @@ func writeValidatedLogFile(path string, data []byte) error {
 	return os.WriteFile(path, data, 0o600)
 }
 
+// logAuxUsage emits the one-line host log for an auxiliary model call (#1118).
+// It is the visibility floor: ledger-backed calls (verifier/reviewer) log it in
+// addition to their session-log record, and calls whose run session is no
+// longer reachable (error analysis, recurring-task synthesis) have only this
+// line — see docs/AUX-MODEL-CALL-METERING.md.
+func logAuxUsage(rec agentcore.AuxUsageRecord) {
+	log.Printf("aux model call: label=%s model=%s prompt=%d completion=%d cost=$%.4f",
+		rec.Label, rec.Model, rec.PromptTokens, rec.CompletionTokens, rec.CostUSD)
+}
+
 // redactLogSession returns a copy of session with secrets scrubbed from text,
 // reasoning, and tool-call arguments.
 func redactLogSession(session *LogSession) *LogSession {
@@ -94,6 +104,9 @@ func redactLogSession(session *LogSession) *LogSession {
 		CreatedAt:           session.CreatedAt,
 		UpdatedAt:           session.UpdatedAt,
 		Messages:            make([]LogMessage, len(msgs)),
+		// Aux-usage ledger (#1118): carried as-is — records hold only
+		// label/model/token counts/cost, nothing redactable.
+		AuxUsage: session.SnapshotAuxUsage(),
 	}
 	for i, msg := range msgs {
 		msgCopy := msg
@@ -120,6 +133,10 @@ func truncateLogSession(session *LogSession, maxSize int) []byte {
 		return data
 	}
 
+	// Aux-usage records (#1118) survive truncation: they are tiny fixed-size
+	// accounting rows, not transcript bulk, and dropping them would silently
+	// unmeter the run's overhead exactly on the biggest (truncated) runs.
+	auxUsage := session.SnapshotAuxUsage()
 	clone := func(msgs []LogMessage) *LogSession {
 		return &LogSession{
 			ID:                  session.ID,
@@ -133,6 +150,7 @@ func truncateLogSession(session *LogSession, maxSize int) []byte {
 			CreatedAt:           session.CreatedAt,
 			UpdatedAt:           session.UpdatedAt,
 			Messages:            msgs,
+			AuxUsage:            auxUsage,
 		}
 	}
 

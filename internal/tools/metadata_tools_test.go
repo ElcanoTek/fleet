@@ -16,8 +16,9 @@ import (
 // call. Only Generate is meaningful; the other LanguageModel methods are unused
 // by fantasy.Agent.Generate for a text-only response.
 type fakeMetadataModel struct {
-	text string
-	err  error
+	text  string
+	err   error
+	usage fantasy.Usage
 }
 
 func (m *fakeMetadataModel) Generate(_ context.Context, _ fantasy.Call) (*fantasy.Response, error) {
@@ -27,6 +28,7 @@ func (m *fakeMetadataModel) Generate(_ context.Context, _ fantasy.Call) (*fantas
 	return &fantasy.Response{
 		Content:      fantasy.ResponseContent{fantasy.TextContent{Text: m.text}},
 		FinishReason: fantasy.FinishReasonStop,
+		Usage:        m.usage,
 	}, nil
 }
 
@@ -242,6 +244,41 @@ func TestSuggestBranchNameTool_HappyPath(t *testing.T) {
 	}
 	if resp.Content != "feat/add-oauth2-login" {
 		t.Errorf("got %q, want feat/add-oauth2-login", resp.Content)
+	}
+}
+
+// TestSuggestBranchNameTool_MetersUsageIntoRunRecorder pins the #1118 fix:
+// a metadata tool's own Generate call meters its tokens/cost through the
+// context-carried UsageRecorder (installed by agentcore.Run), attributed to
+// the RESOLVED model's slug so per-model price overrides apply. Without a
+// recorder on ctx (a tool exercised outside a run) it records nowhere and
+// still works — covered by the untouched happy-path tests above.
+func TestSuggestBranchNameTool_MetersUsageIntoRunRecorder(t *testing.T) {
+	model := &fakeMetadataModel{
+		text:  "feat/add-oauth2-login",
+		usage: fantasy.Usage{InputTokens: 20, OutputTokens: 7},
+	}
+	tool := NewSuggestBranchNameTool(&fakeResolver{model: model}, "fake/model")
+
+	var gotSlug string
+	var gotUsage fantasy.Usage
+	calls := 0
+	ctx := WithUsageRecorder(context.Background(), func(slug string, u fantasy.Usage, _ fantasy.ProviderMetadata) {
+		calls++
+		gotSlug, gotUsage = slug, u
+	})
+	resp, err := tool.Run(ctx, fantasy.ToolCall{ID: "tc-meter", Input: `{"context":"adds oauth2 login"}`})
+	if err != nil || resp.IsError {
+		t.Fatalf("tool.Run failed: err=%v resp=%q", err, resp.Content)
+	}
+	if calls != 1 {
+		t.Fatalf("UsageRecorder called %d times, want 1", calls)
+	}
+	if gotSlug != "fake/metadata" {
+		t.Errorf("recorded slug = %q, want the RESOLVED model's slug fake/metadata", gotSlug)
+	}
+	if gotUsage.InputTokens != 20 || gotUsage.OutputTokens != 7 {
+		t.Errorf("recorded usage = %d/%d, want 20/7", gotUsage.InputTokens, gotUsage.OutputTokens)
 	}
 }
 

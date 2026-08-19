@@ -492,6 +492,35 @@ prior versions are listed because none have shipped.
   recognize is still success, per §2.2. Reading the body before closing it also
   lets the connection be reused.
 
+- **Auxiliary model calls no longer bypass the run's cost/token ceilings and
+  usage accounting (#1118).** Several model calls made on behalf of a run
+  never reached its accounting, so `checkCeilings` and sub-agent budget
+  slices under-counted real spend. Now split by where the call fires:
+
+  - **In-loop calls count against the run's ceiling.** The compaction
+    summarizer meters through the new
+    `agentcore.CompactionSummarizeInput.RecordUsage` (and pre-checks the
+    ceiling: at/over budget it degrades to the deterministic truncation
+    placeholder instead of buying another call), and the model-invocable
+    `suggest_branch_name` / `suggest_commit_message` /
+    `suggest_pr_description` tools meter through a context-carried
+    `tools.UsageRecorder` that `agentcore.Run` installs — both land in the
+    same `orchestrationState`/`Result.Usage` the finalize retries already
+    use.
+  - **Host-side extras stay off-ceiling but become visible.** The end-of-run
+    verifier, the phone-a-friend review, and the scheduled loop's `llm`
+    exit-condition verifier record per-call `aux_usage` entries (label,
+    model, tokens, cost) in the persisted session log — carried through the
+    captain's-log file's redaction and truncation copies too — instead of
+    debiting the run; their documented accounting semantics are unchanged,
+    the spend just stops vanishing. Error analysis and the chat→recurring-
+    task synthesizer, whose run session is unreachable (or nonexistent) at
+    call time, emit the same structured `aux model call` host log line as
+    their record. Aux metering never overwrites the `LastStep*` per-call
+    input-size signals the context meter and compaction trigger read.
+    Design note:
+    [`docs/AUX-MODEL-CALL-METERING.md`](docs/AUX-MODEL-CALL-METERING.md).
+
 - **Chat's finalize recoveries now see the turn they are recovering, and can
   no longer repeat its side effects (#1117).** Two flaws in the interactive
   driver's finalize paths: (1) the forced-final-summary call replayed

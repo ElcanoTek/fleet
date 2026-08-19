@@ -10,6 +10,7 @@ import (
 	"charm.land/fantasy"
 	"github.com/google/uuid"
 
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/scorers"
@@ -207,9 +208,12 @@ func (r *Runner) evalLLMExit(ctx context.Context, lc *models.LoopConfig, session
 	user := fmt.Sprintf("%s\n\n---\nWorker's final output:\n%s", prompt, lastAssistantMessage(session))
 
 	// The verifier is a single bounded YES/NO call per iteration. Its spend is NOT
-	// separately metered into the iteration cost / the across-iteration MaxCostUSD
-	// ceiling — matching #179's accounting model, which is the (dominant) worker
-	// session.Cost. The full worker pass (the cost that matters) is always counted.
+	// metered into the iteration cost / the across-iteration MaxCostUSD ceiling —
+	// matching #179's accounting model, which is the (dominant) worker
+	// session.Cost; the full worker pass (the cost that matters) is always
+	// counted. It is however no longer invisible (#1118): the call is recorded
+	// in the worker session's labeled aux-usage ledger below, so the spend
+	// persists with the transcript without changing the ceiling semantics.
 	vctx, cancel := context.WithTimeout(ctx, llmExitTimeout)
 	defer cancel()
 	verifyAgent := fantasy.NewAgent(verifier, fantasy.WithSystemPrompt(
@@ -222,10 +226,33 @@ func (r *Runner) evalLLMExit(ctx context.Context, lc *models.LoopConfig, session
 		log.Printf("scheduled loop: llm verifier call failed: %v", err)
 		return false, "llm:error"
 	}
+	recordLoopVerifierUsage(session, verifier.Model(), out)
 	if firstWordIsYes(out.Response.Content.Text()) {
 		return true, "llm:YES"
 	}
 	return false, "llm:NO"
+}
+
+// recordLoopVerifierUsage records the llm exit-condition verifier's spend into
+// the worker session's labeled aux-usage ledger (#1118). The session is the
+// run's persisted record (the runner submits it after the loop), so the record
+// travels with the transcript; a nil session (defensive) still leaves the log
+// line. Pricing rides agentcore's shared policy so a per-model override (#297)
+// applies here too.
+func recordLoopVerifierUsage(session *models.LogSession, modelSlug string, out *fantasy.AgentResult) {
+	rec := agentcore.NewAuxUsageRecord(agentcore.AuxUsageLoopExitVerifier, modelSlug, out)
+	log.Printf("aux model call: label=%s model=%s prompt=%d completion=%d cost=$%.4f",
+		rec.Label, rec.Model, rec.PromptTokens, rec.CompletionTokens, rec.CostUSD)
+	if session == nil {
+		return
+	}
+	session.AuxUsage = append(session.AuxUsage, models.AuxUsageRecord{
+		Label:            rec.Label,
+		Model:            rec.Model,
+		PromptTokens:     rec.PromptTokens,
+		CompletionTokens: rec.CompletionTokens,
+		CostUSD:          rec.CostUSD,
+	})
 }
 
 // firstWordIsYes reports whether the verifier's reply begins with YES (ignoring

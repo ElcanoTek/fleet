@@ -9,7 +9,10 @@ package tools
 // short-lived fantasy.NewAgent call with a tight system prompt and a 20s timeout,
 // resolved through the SAME host-side ModelResolver the run already uses — so the
 // operator's key never leaves the host and the call rides the shared, governed
-// provider rather than a bare HTTP request.
+// provider rather than a bare HTTP request. Each call's tokens/cost are metered
+// into the invoking run's accounting via the context-carried UsageRecorder
+// (#1118, see usage_recorder.go), so a model that leans on these tools spends
+// against its run's ceilings, not invisibly.
 //
 // The agent can pass garbage, and a model can hallucinate bad output, so every
 // tool VALIDATES the model response before returning it, via pure functions
@@ -294,6 +297,15 @@ func generateMetadata(ctx context.Context, resolver ModelResolver, modelSlug, sy
 	})
 	if err != nil {
 		return "", err
+	}
+	// Meter the call into the surrounding run's accounting (#1118): these tools
+	// are model-invocable, so their spend must count against the run's
+	// cost/token ceilings like any other step — not vanish. The recorder is the
+	// run-context capability agentcore.Run installs; nil (unit tests, direct
+	// invocation outside a run) means there is no run to charge. Attributed to
+	// the RESOLVED model's slug so a per-model price override (#297) applies.
+	if record := UsageRecorderFromContext(ctx); record != nil {
+		record(model.Model(), result.TotalUsage, result.Response.ProviderMetadata)
 	}
 	return strings.TrimSpace(result.Response.Content.Text()), nil
 }

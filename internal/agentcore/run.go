@@ -11,6 +11,7 @@ import (
 	"charm.land/fantasy"
 
 	"github.com/ElcanoTek/fleet/internal/mcp"
+	"github.com/ElcanoTek/fleet/internal/tools"
 )
 
 // The ONE unified run loop. cutlass's outer enforcement loop is the BASE; chat's
@@ -171,7 +172,11 @@ type Deps struct {
 	// place of the dropped middle during a context-too-large force-compaction
 	// (the interactive driver wires chat's head/summary/tail compaction here).
 	// Nil falls back to the engine's deterministic placeholder summary.
-	CompactionSummarizer func(ctx context.Context, droppable []fantasy.Message) fantasy.Message
+	// The input carries the run's RecordUsage sink and ceiling probe (#1118)
+	// so a summarizer that makes its own model call meters it into the run
+	// accounting and degrades to the placeholder once the ceiling is hit —
+	// see CompactionSummarizeInput.
+	CompactionSummarizer func(ctx context.Context, in CompactionSummarizeInput) fantasy.Message
 
 	// TurnJournal, when set, is the durable side-effect journal (#798): tool
 	// intents commit before dispatch (fail closed) and governed results before
@@ -455,6 +460,26 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 	// usageOrch is the orchestration state whose usage counters accumulate
 	// across rounds (the same state the resilience layer mutates per step).
 	usageOrch := policyOrch(deps.Policy)
+	// Auxiliary model-call metering (#1118). Two seams, both capability
+	// closures over usageOrch (the state itself never escapes Run), so every
+	// model call an aux path makes on behalf of this run lands in the SAME
+	// accounting checkCeilings and Result.Usage read:
+	//   - bindRunUsage arms the compaction-summarizer seam (the engine hands
+	//     the driver's summarizer a RecordUsage sink + ceiling probe); and
+	//   - the context-carried tools.UsageRecorder meters native tools that make
+	//     their own model calls (the #191 suggest_* git-metadata tools). The
+	//     recorder rides ctx because those tools are constructed by the driver
+	//     before this run (and its policy) exists — the same context seam the
+	//     ask/notify handlers use. Tool calls inherit this ctx through the
+	//     stream, and a spawned sub-agent's own Run re-binds the key to the
+	//     child's state, so spend is always attributed to the run that paid.
+	// Both route through updateAuxUsage, not updateUsage: aux calls accumulate
+	// into the ceiling/billing totals but must not overwrite the LastStep*
+	// per-call input-size signals, which belong to the MAIN loop's steps.
+	eng.bindRunUsage(usageOrch)
+	ctx = tools.WithUsageRecorder(ctx, func(modelSlug string, u fantasy.Usage, md fantasy.ProviderMetadata) {
+		usageOrch.updateAuxUsage(modelSlug, u, md)
+	})
 
 	var finalResult *fantasy.AgentResult
 

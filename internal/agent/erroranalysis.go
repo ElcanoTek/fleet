@@ -9,6 +9,7 @@ import (
 
 	"charm.land/fantasy"
 
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/structuredoutput"
 )
 
@@ -105,6 +106,12 @@ func (m *Manager) AnalyzeTaskFailure(ctx context.Context, taskPrompt, errMsg, se
 	if err != nil {
 		return nil, fmt.Errorf("error-analysis generate: %w", err)
 	}
+	// Meter visibly (#1118): this call analyzes ONE specific failed run, but it
+	// fires AFTER that run's session log was persisted (the runner hands this
+	// method primitives, by design), so there is no live ledger to append to —
+	// the structured host log line is the record. Logged before validation: an
+	// unparseable diagnosis still cost money.
+	logAuxUsage(agentcore.NewAuxUsageRecord(agentcore.AuxUsageErrorAnalysis, model.Model(), result))
 
 	var out strings.Builder
 	for _, c := range result.Response.Content {
