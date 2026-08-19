@@ -2801,6 +2801,11 @@ func (db *Database) archiveCandidatesPage(ctx context.Context, cutoff time.Time,
 // raw-minus-stored sizes; ~always positive for real log payloads). Each row is
 // committed independently: a row's archive write and its DB update are one
 // statement, so there is no window where the payload exists in neither column.
+// The per-row UPDATE inside the page loop is deliberate and is NOT an N+1 that
+// batching would fix: every row carries a DIFFERENT payload compressed (and
+// optionally encrypted) in Go, so there is nothing to join against, and folding
+// a page of multi-megabyte blobs into one statement would trade the per-row
+// commit boundary for a large memory spike.
 // Candidates are fetched in keyset pages of archiveScanChunk so first-run
 // archival of a large table stays memory-bounded (#1122).
 func (db *Database) ArchiveOldLogs(ctx context.Context, days int) (int, int64, error) {

@@ -290,6 +290,66 @@ func TestSweep_UnpinnedCap(t *testing.T) {
 	}
 }
 
+// TestSweep_UnpinnedCapPerUser pins that the single-statement cap eviction
+// partitions by user: each user is trimmed to the cap against their OWN
+// newest-first ordering, and a user under the cap is untouched. (The previous
+// shape ran one DELETE per overflowing user, so per-user independence was
+// structural; with ROW_NUMBER() it is the partition clause's job.)
+func TestSweep_UnpinnedCapPerUser(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	// a@x.com: 5 conversations (2 over a cap of 3)
+	// b@x.com: 4 conversations (1 over)
+	// c@x.com: 2 conversations (under the cap — must survive intact)
+	counts := map[string]int{"a@x.com": 5, "b@x.com": 4, "c@x.com": 2}
+	base := time.Now().Unix()
+	kept := map[string][]string{}
+	for user, n := range counts {
+		for i := 0; i < n; i++ {
+			conv, err := s.CreateConversation(ctx, user, "", "victoria", "", false)
+			if err != nil {
+				t.Fatalf("CreateConversation: %v", err)
+			}
+			// Older rows first: index 0 is the oldest, so the last 3 created
+			// are the ones the cap keeps.
+			if _, err := s.db.ExecContext(ctx, `UPDATE conversations SET updated_at = $1 WHERE id = $2`, base-int64(60-i), conv.ID); err != nil {
+				t.Fatalf("set updated_at: %v", err)
+			}
+			if i >= n-3 {
+				kept[user] = append(kept[user], conv.ID)
+			}
+		}
+	}
+
+	_, evicted, err := s.SweepExpired(ctx, 14*24*time.Hour, 3)
+	if err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+	if evicted != 3 { // 2 from a@, 1 from b@, 0 from c@
+		t.Errorf("evicted: got %d want 3", evicted)
+	}
+
+	for user, want := range map[string]int{"a@x.com": 3, "b@x.com": 3, "c@x.com": 2} {
+		remaining, err := s.List(ctx, user, false)
+		if err != nil {
+			t.Fatalf("List(%s): %v", user, err)
+		}
+		if len(remaining) != want {
+			t.Errorf("%s remaining: got %d want %d", user, len(remaining), want)
+		}
+		survived := map[string]bool{}
+		for _, c := range remaining {
+			survived[c.ID] = true
+		}
+		for _, id := range kept[user] {
+			if !survived[id] {
+				t.Errorf("%s: newest conversation %s was evicted", user, id)
+			}
+		}
+	}
+}
+
 func TestSetPinned_WrongUser(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

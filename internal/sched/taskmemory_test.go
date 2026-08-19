@@ -188,3 +188,48 @@ func TestTaskMemory_CascadeOnTaskDelete(t *testing.T) {
 		t.Fatalf("memories should cascade-delete with the task, got count=%d err=%v", n, err)
 	}
 }
+
+// TestTaskMemory_LRUEvictionBulk pins the batched eviction: when the cap drops
+// below the key count (an operator lowering maxKeys), ONE insert must trim the
+// whole overflow at once, in the same oldest-first order the previous
+// delete-one-per-round-trip loop used.
+func TestTaskMemory_LRUEvictionBulk(t *testing.T) {
+	s, database := newSelfImproveStore(t)
+	ctx := context.Background()
+	taskID := makeTask(t, database)
+
+	keys := []string{"k1", "k2", "k3", "k4", "k5", "k6"}
+	for i, k := range keys {
+		if err := s.UpsertTaskMemory(ctx, taskID, k, "v", 10, 4096); err != nil {
+			t.Fatalf("Upsert %s: %v", k, err)
+		}
+		if _, err := database.Conn().ExecContext(ctx,
+			"UPDATE task_memories SET updated_at = $1 WHERE task_id = $2 AND key = $3",
+			int64(1000+i), taskID, k); err != nil {
+			t.Fatalf("stamp updated_at for %s: %v", k, err)
+		}
+	}
+
+	// Cap now 3: inserting k7 must leave exactly {k5, k6, k7} — the four oldest
+	// keys go in one sweep.
+	if err := s.UpsertTaskMemory(ctx, taskID, "k7", "v", 3, 4096); err != nil {
+		t.Fatalf("Upsert k7: %v", err)
+	}
+	n, err := s.CountTaskMemories(ctx, taskID)
+	if err != nil {
+		t.Fatalf("CountTaskMemories: %v", err)
+	}
+	if n != 3 {
+		t.Fatalf("expected cap of 3 keys after bulk eviction, got %d", n)
+	}
+	for _, k := range []string{"k1", "k2", "k3", "k4"} {
+		if _, err := s.GetTaskMemory(ctx, taskID, k); !errors.Is(err, ErrTaskMemoryNotFound) {
+			t.Errorf("key %s should have been evicted, got %v", k, err)
+		}
+	}
+	for _, k := range []string{"k5", "k6", "k7"} {
+		if _, err := s.GetTaskMemory(ctx, taskID, k); err != nil {
+			t.Errorf("key %s should still be present, got %v", k, err)
+		}
+	}
+}

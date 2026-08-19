@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -267,7 +268,17 @@ func (s *Store) ReplaceRelationsForMemory(ctx context.Context, userEmail, memory
 	}
 
 	now := time.Now().Unix()
-	inserted := 0
+	// Relation rows are collected first and written as chunked multi-row
+	// INSERTs (below) instead of one INSERT per triple: an extraction carries
+	// as many relations as the model found, and each was a separate round trip
+	// inside this transaction.
+	type relationRow struct {
+		subjectID   string
+		predicate   string
+		objEntityID *string
+		objValue    *string
+	}
+	pending := make([]relationRow, 0, len(g.Relations))
 	seen := map[string]bool{} // dedup identical triples within one extraction
 	for _, r := range g.Relations {
 		subjNorm := normalizeEntityName(r.Subject)
@@ -306,19 +317,37 @@ func (s *Store) ReplaceRelationsForMemory(ctx context.Context, userEmail, memory
 			continue
 		}
 		seen[key] = true
-		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO memory_relations (id, user_email, memory_id, subject_entity_id, predicate, object_entity_id, object_value, created_at)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-			uuid.NewString(), userEmail, memoryID, subjID, pred, objEntityID, objValue, now,
-		); err != nil {
+		pending = append(pending, relationRow{subjectID: subjID, predicate: pred, objEntityID: objEntityID, objValue: objValue})
+	}
+
+	// Single parameterized multi-row insert per chunk (the RecordToolCalls /
+	// AddTaskBatch pattern): only "$N" placeholders are assembled, every value
+	// rides args. Chunking keeps the parameter count far under Postgres' 65535
+	// cap no matter how many triples one extraction declares.
+	const cols = 8
+	for start := 0; start < len(pending); start += maxBatchRows {
+		end := min(start+maxBatchRows, len(pending))
+		chunk := pending[start:end]
+		var q strings.Builder
+		q.WriteString(`INSERT INTO memory_relations (id, user_email, memory_id, subject_entity_id, predicate, object_entity_id, object_value, created_at) VALUES `)
+		args := make([]any, 0, len(chunk)*cols)
+		for i, row := range chunk {
+			if i > 0 {
+				q.WriteString(", ")
+			}
+			base := i * cols
+			fmt.Fprintf(&q, "($%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d)",
+				base+1, base+2, base+3, base+4, base+5, base+6, base+7, base+8)
+			args = append(args, uuid.NewString(), userEmail, memoryID, row.subjectID, row.predicate, row.objEntityID, row.objValue, now)
+		}
+		if _, err := tx.ExecContext(ctx, q.String(), args...); err != nil {
 			return 0, err
 		}
-		inserted++
 	}
 	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
-	return inserted, nil
+	return len(pending), nil
 }
 
 // GraphAsOf returns the user's knowledge graph as of the queried coordinates:

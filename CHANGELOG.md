@@ -35,6 +35,37 @@ prior versions are listed because none have shipped.
 
 ### Changed
 
+- **Batched four per-iteration database writes that ran one round trip per
+  item.** A static review flagged five query-in-a-loop sites; four were real and
+  are now single (or chunked) statements, with identical semantics:
+
+  - `store.SweepExpired` per-user cap eviction (`internal/store/store.go`) —
+    scanned for overflowing users and then issued one `DELETE` per user. Now one
+    statement: `ROW_NUMBER() OVER (PARTITION BY user_email ORDER BY updated_at
+    DESC, id DESC)` selects exactly the rows each user's `OFFSET cap` selected,
+    for every user at once, and the `HAVING` pre-scan is gone. This path runs
+    after *every* successful turn, so it was the costliest of the five.
+  - `Store.UpsertTaskMemory` LRU eviction (`internal/sched/taskmemory.go`) —
+    deleted one key per round trip until the cap was met. Now one `DELETE` with
+    `LIMIT <overflow>` in the same oldest-first order. Usually the overflow is a
+    single key; lowering `maxKeys` made it arbitrarily large.
+  - `Store.ReplaceRelationsForMemory` (`internal/store/memorygraph.go`) — one
+    `INSERT` per extracted triple inside the transaction. Now chunked multi-row
+    `INSERT`s (the `RecordToolCalls` pattern), bounded by a new `maxBatchRows`
+    so the parameter count stays far under Postgres' 65535 cap.
+  - Crash-recovery synthesized-result markers (`internal/store/turn_journal.go`)
+    — one `INSERT … ON CONFLICT DO NOTHING` per unknown-outcome call. Now the
+    same chunked multi-row form, still idempotent across repeated recoveries.
+
+  The fifth flag, the per-row `UPDATE` in `Database.ArchiveOldLogs`
+  (`internal/sched/db/db.go`), is **not** an N+1: each row carries a different
+  payload compressed (and optionally encrypted) in Go, so there is nothing to
+  join against, and folding a page of multi-megabyte blobs into one statement
+  would trade the documented per-row commit boundary for a large memory spike.
+  Left as-is with a comment recording why. New tests pin per-user cap
+  independence, bulk LRU eviction, the relation chunk boundary (including
+  re-extraction idempotency), and multi-marker recovery.
+
 - **PRs into `dev` now actually run CI, and the fast lane gained the web
   lane it never had.** `dev-ci.yml` fired only on *push*, and `ci.yml` filters to
   `main`, so a pull request targeting `dev` was gated by nothing but CodeQL —

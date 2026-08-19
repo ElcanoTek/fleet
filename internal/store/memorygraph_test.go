@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -427,5 +428,59 @@ func TestGetMemory(t *testing.T) {
 	}
 	if _, err := s.GetMemory(ctx, "graph@x.com", "nope"); err == nil {
 		t.Error("GetMemory unknown id should error")
+	}
+}
+
+// TestReplaceRelationsForMemory_ChunkBoundary pins the batched relation write:
+// an extraction larger than one multi-row INSERT chunk must store every triple
+// exactly once, with the chunk boundary invisible to readers.
+func TestReplaceRelationsForMemory_ChunkBoundary(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	m := mustCreateMemory(t, s, "Ada has a lot of preferences")
+
+	const n = maxBatchRows + 3 // spans two chunks
+	extraction := GraphExtraction{
+		Entities: []GraphEntityInput{{Name: "Ada", Type: "person"}},
+	}
+	for i := 0; i < n; i++ {
+		extraction.Relations = append(extraction.Relations, GraphRelationInput{
+			Subject:   "Ada",
+			Predicate: fmt.Sprintf("prefers %d", i),
+			Object:    fmt.Sprintf("value %d", i),
+		})
+	}
+	if got := mustReplaceRelations(t, s, m.ID, extraction); got != n {
+		t.Fatalf("inserted %d relations, want %d", got, n)
+	}
+
+	g, err := s.GraphAsOf(ctx, graphTestUser, GraphQuery{})
+	if err != nil {
+		t.Fatalf("GraphAsOf: %v", err)
+	}
+	if len(g.Relations) != n {
+		t.Fatalf("relations = %d, want %d", len(g.Relations), n)
+	}
+	seen := map[string]bool{}
+	for _, r := range g.Relations {
+		if seen[r.Predicate] {
+			t.Fatalf("duplicate relation for predicate %q", r.Predicate)
+		}
+		seen[r.Predicate] = true
+		if r.MemoryID != m.ID {
+			t.Fatalf("relation provenance = %q, want %q", r.MemoryID, m.ID)
+		}
+	}
+
+	// Re-extraction stays idempotent across the chunk boundary.
+	if got := mustReplaceRelations(t, s, m.ID, extraction); got != n {
+		t.Fatalf("re-extraction inserted %d, want %d", got, n)
+	}
+	g2, err := s.GraphAsOf(ctx, graphTestUser, GraphQuery{})
+	if err != nil {
+		t.Fatalf("GraphAsOf after re-extraction: %v", err)
+	}
+	if len(g2.Relations) != n {
+		t.Fatalf("relations after re-extraction = %d, want %d", len(g2.Relations), n)
 	}
 }
