@@ -2,6 +2,7 @@ package mcpoauth
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -88,6 +89,45 @@ func TestRevokeToken(t *testing.T) {
 		defer ts.Close()
 
 		if err := RevokeToken(context.Background(), ts.Client(), ts.URL, "client_id", "", "test_token"); err != nil {
+			t.Errorf("expected nil error, got %v", err)
+		}
+	})
+
+	t.Run("non-2xx is reported, not swallowed", func(t *testing.T) {
+		// RFC 7009 §2.2.1 refusals arrive as an RFC 6749 §5.2 body. Revocation is
+		// best-effort, but "the AS refused" must not read as "revoked".
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":"invalid_client"}`))
+		}))
+		defer ts.Close()
+
+		err := RevokeToken(context.Background(), ts.Client(), ts.URL, "client_id", "client_secret", "test_token")
+		if err == nil {
+			t.Fatal("expected an error for a 401 revocation response, got nil")
+		}
+		var oe *OAuthError
+		if !errors.As(err, &oe) {
+			t.Fatalf("expected an *OAuthError, got %T: %v", err, err)
+		}
+		if oe.Code != "invalid_client" {
+			t.Errorf("Code = %q, want %q", oe.Code, "invalid_client")
+		}
+		if oe.HTTPStatus != http.StatusUnauthorized {
+			t.Errorf("HTTPStatus = %d, want %d", oe.HTTPStatus, http.StatusUnauthorized)
+		}
+	})
+
+	t.Run("an unknown token still counts as revoked", func(t *testing.T) {
+		// RFC 7009 §2.2: the AS answers 200 when the token was already invalid.
+		// That is a successful outcome, not a failure to report.
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer ts.Close()
+
+		if err := RevokeToken(context.Background(), ts.Client(), ts.URL, "client_id", "", "stale_token"); err != nil {
 			t.Errorf("expected nil error, got %v", err)
 		}
 	})

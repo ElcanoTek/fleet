@@ -311,6 +311,43 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **A bundle could ship a skill name the skill builder would refuse to save.**
+  `clientconfig.validSkillName` checked only the charset (lowercase, digits,
+  hyphens), so `-`, `--`, `-research` and `research-` all passed, while
+  `store.userSkillNameShape` — the regex gating user-authored skills, and
+  documented as the same contract — rejects every one of them. The two had
+  drifted: the same name was legal in a bundle and illegal in the builder. The
+  charset check is now a shape check that begins and ends alphanumeric, matching
+  the regex exactly, including its tolerance for an interior `a--b`.
+
+  The contract is now enforced rather than asserted in a comment:
+  `TestValidSkillNameAgreesWithUserSkillShape` walks every short string over an
+  alphabet of the interesting character classes and fails if the two sides
+  disagree. Against the old implementation it reports 11 mismatches. The 64-char
+  cap remains the one deliberate asymmetry — the bundle loader reports length
+  separately against `maxSkillNameLen`, so an over-long name draws one message
+  about its length instead of a second, vaguer one about its charset.
+
+  Scope: this is a bundle-load *warning*, not a gate — the skill is still loaded
+  either way — so nothing that worked stops working. What changes is that an
+  ill-shaped name now gets flagged at load instead of passing silently until the
+  builder rejects the same name.
+
+- **A refused token revocation reported success.** `mcpoauth.RevokeToken` checked
+  the transport error and then returned `nil` without ever looking at the status
+  code, so an RFC 7009 §2.2.1 refusal — a 400 or a 401 from the authorization
+  server — was indistinguishable from a completed revocation. It now reads the
+  body and hands a non-2xx to `parseTokenError`, the same helper the token
+  endpoint path uses, so the caller gets an `*OAuthError` carrying the code and
+  HTTP status and `IsTerminalRefreshError` can classify it.
+
+  Revocation stays best-effort: the sole caller still discards the result and the
+  local record is deleted regardless, so no disconnect flow changes behavior.
+  Best-effort now describes the caller's posture rather than a function that
+  could not tell success from failure. A 200 for a token the server does not
+  recognize is still success, per §2.2. Reading the body before closing it also
+  lets the connection be reused.
+
 - **Chat's finalize recoveries now see the turn they are recovering, and can
   no longer repeat its side effects (#1117).** Two flaws in the interactive
   driver's finalize paths: (1) the forced-final-summary call replayed
