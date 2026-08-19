@@ -72,6 +72,27 @@ visible per user in `/admin/stats` (`total_cached_tokens`,
 `total_cache_creation_tokens`, `cache_hit_rate_pct`). The legacy
 `CHAT_DISABLE_PROMPT_CACHE` / `CUTLASS_DISABLE_PROMPT_CACHE` aliases still work.
 
+**Value parsing rules.** Env-file values follow standard dotenv semantics: an
+`export ` prefix is tolerated; an **unquoted** value ends at the first ` #`
+(inline comment) — quote any value that must contain a literal ` #`, e.g.
+`DB_PASSWORD="p@ss #1"`; one layer of matching surrounding quotes is stripped
+and the interior kept verbatim (`fleet mcp account set` quotes such values for
+you). Quotes are also stripped from process-env values, so a
+podman/docker `--env-file` deployment that keeps quotes in place behaves the
+same. Numeric/bool/duration knobs **read by the config loader** are strict: an
+**unset** knob gets its default, but a **set, malformed, or out-of-range**
+value refuses to boot with an error naming the variable, the value, and the
+expected format (`FLEET_LOCKDOWN_ONLY=enabled` or `FLEET_MAX_COST_USD=5O` no
+longer silently fall back to defaults). Booleans take `1/0, true/false,
+yes/no, on/off`; durations take Go syntax (`30s`, `5m`, `1h30m` — a bare
+number is an error). Exception: the three scheduler rate-limit knobs
+(`FLEET_SCHED_RATE_LIMIT_PER_MINUTE`, `FLEET_SCHED_RATE_LIMIT_PER_DAY`,
+`FLEET_SCHED_RATE_LIMIT_GLOBAL_PER_MINUTE`) are read at `fleet serve` start
+outside the loader — a malformed value there logs a loud warning and the
+default applies. Run `fleet validate-config` to preflight every loader knob
+before starting the service; config hot-reload applies the same rules (see
+[CONFIG-RELOAD.md](CONFIG-RELOAD.md)).
+
 ## The client-config checkout
 
 fleet ships **no** client content; it loads a **client config bundle** from

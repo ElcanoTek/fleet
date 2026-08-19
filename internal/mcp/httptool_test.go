@@ -329,6 +329,33 @@ func TestAddHTTPToolsIdempotentAppend(t *testing.T) {
 	}
 }
 
+// TestAddHTTPTools_RepeatRegistrationDedupes: re-registering the same tool
+// name (the documented mid-session re-load) must update the catalog entry in
+// place, not append a duplicate — the spec map already overwrote the request
+// behavior, so each repeat registration handed the model another identical
+// catalog entry (#1108).
+func TestAddHTTPTools_RepeatRegistrationDedupes(t *testing.T) {
+	c := NewClient()
+	c.AddHTTPTools([]HTTPToolSpec{{Name: "a", Method: "GET", URL: "http://x/a", Description: "v1"}})
+	c.AddHTTPTools([]HTTPToolSpec{
+		{Name: "a", Method: "GET", URL: "http://x/a2", Description: "v2"},
+		{Name: "b", Method: "GET", URL: "http://x/b"},
+	})
+	tools := c.GetAllTools()
+	if len(tools) != 2 {
+		t.Fatalf("GetAllTools len = %d, want 2 (a deduped + b)", len(tools))
+	}
+	var aDesc string
+	for _, st := range tools {
+		if st.Tool.Name == "a" {
+			aDesc = st.Tool.Description
+		}
+	}
+	if aDesc != "v2" {
+		t.Errorf("catalog entry for re-registered tool = %q, want the latest registration (v2)", aDesc)
+	}
+}
+
 // A documented mid-session reload can register HTTP tools while an _http call
 // is in flight. tools/call reads the spec map under Server.mu only, so without
 // the transport's own lock this is a concurrent map read+write — a fatal

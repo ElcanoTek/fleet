@@ -91,6 +91,38 @@ prior versions are listed because none have shipped.
   "should not be edited"; this just records what the current Next emits.
 
 
+- **A malformed numeric/bool/duration env value now refuses to boot** (#1119).
+  Every typed config knob (~70: cost/token/iteration ceilings, timeouts, DB
+  pool sizes, sandbox caps, feature booleans, `FLEET_LOCKDOWN_ONLY`, …) used to
+  silently fall back to its default when set to something unparseable — fail-
+  OPEN for security knobs: `FLEET_LOCKDOWN_ONLY=enabled` left lockdown off,
+  `FLEET_MAX_COST_USD=5O` (letter O) ran with the $50 default. `config.Load`
+  now fails startup with one error naming every offending variable, its value,
+  and the expected format. **Operators with a typo'd env var will now get a
+  startup error instead of a silently-running default — that is the point.**
+  An UNSET (or blank) knob still gets its default; only set-but-malformed
+  values error. Booleans accept `1/0, true/false, yes/no, on/off`; durations
+  are Go syntax (`30s`, `5m` — a bare number now errors instead of being
+  ignored). The four hot-reloadable ceilings also enforce their reload ranges
+  at boot (`FLEET_MAX_ITERATIONS` 1–10000; `FLEET_MAX_COST_USD`,
+  `FLEET_MAX_TOTAL_TOKENS`, `FLEET_TEMPERATURE` ≥ 0), so boot and SIGUSR2
+  reload now accept/reject identically — previously a value boot silently
+  defaulted was loudly rejected on reload. All three read paths (boot, hot
+  reload, `fleet validate-config`) parse through one shared registry
+  (`internal/config/knobs.go`); `fleet validate-config` now preflights **all**
+  registered knobs instead of a hand-list of three, and a source-scan test
+  keeps the registry and the loader from drifting. `FLEET_MAX_COST_USD=0`
+  (0 = no cost ceiling) boots and preflights clean; negatives still fail.
+  `FLEET_MAX_CONCURRENT_AGENTS` now requires a value ≥ 1 everywhere: `fleet
+  serve` feeds it straight into the admission limiter, where 0 floors to a
+  box-wide concurrency of ONE (it is NOT "use a default" — only the
+  standalone runner pool treats <1 that way), so a set 0 is refused at boot
+  and preflight instead of silently strangling the box. Quote handling is unified — every
+  helper strips one layer of matching quotes, so the same quoted value
+  resolves identically wherever it is read — and the env-file inline-comment
+  rule (an unquoted value ends at ` #`; quote values containing it) is now
+  documented in `docs/OPERATORS.md`.
+
 - **The strong/escalation tier is back to `openai/gpt-5.6-sol`** (OpenAI: GPT-5.6
   Sol), reverting the one-release move to `x-ai/grok-4.6` (#1040). This is what
   `suggest_advanced_model`, the spreadsheet nudge, and the task fallback resolve
@@ -173,6 +205,48 @@ prior versions are listed because none have shipped.
   the error sat latent until Next 16.3.0 widened the build's type-check
   scope and turned it into a red `Web lint / test / build`. The type now
   matches the projection's key list.
+
+- **MCP client transports hardened against hostile or wedged servers
+  (#1108).** One pass over `internal/mcp`, three fixes plus three small ones:
+
+  - **HTTP/SSE responses are bounded at the stdio cap (64 MiB).**
+    `parseJSONResponse` decoded the body unbounded and `parseSSEResponse`
+    capped only a single SSE line (10 MB), not total accumulation — so a
+    user-supplied remote server (#443; `remotemcp.probeServer` and the
+    per-run overlay both route through `HTTPTransport`) could stream
+    gigabytes inside the 2-minute timeout and OOM the credential-owning
+    process. Both paths now read through an `io.LimitReader` at
+    `stdioResponseCaptureCap`; an oversized response fails just that call
+    with an explicit over-cap error and the transport stays usable.
+  - **The stdio write path honors its context.** `t.stdin.Write` ran bare
+    under the transport mutex, so a request larger than the 64 KiB kernel
+    pipe buffer against a subprocess that stopped reading stdin blocked
+    forever — and since `callTool` holds `Server.mu` for the whole call,
+    one wedged connector cascaded: every call to that server hung,
+    `drainAndClose` blocked, and `Reload` sat in its drain holding
+    `reloadMu`, permanently disabling hot-reload. The write now uses the
+    same goroutine-plus-select pattern as the read and poisons the
+    transport on timeout/cancel, so the existing restart path recovers and
+    a reload completes with the wedged server drained and retired.
+  - **`Client.Close` retires servers, mirroring reload's `drainAndClose`.**
+    Close only closed transports, so an in-flight `callTool` whose
+    transport died during Close matched `isTransportDeadError` and
+    `restartLocked` respawned a credentialed subprocess *after* Close, with
+    nothing left to close it (broker mode's process-group SIGKILL contained
+    it; in-process mode leaked it). Close now takes each `Server.mu`, sets
+    `retired`, and closes whatever transport the racing call left behind —
+    a restarted one included.
+  - Lows, same pass: `isTransportDeadError` no longer matches bare `"eof"`
+    as a substring (it misread messages like "whereof" and restarted
+    healthy subprocesses) — it now checks wrapped stdlib identities via
+    `errors.Is` (`io.EOF`, `syscall.EPIPE`, `os.ErrClosed`, …) plus precise
+    string forms, with EOF matched only as a standalone uppercase word (the
+    legacy `"write |1:"` substring is gone too — its real underliers are
+    matched structurally and via "broken pipe"/"file already closed");
+    `AddHTTPTools` dedupes repeat registrations instead of appending
+    duplicate catalog entries; and `HTTPTransport` verifies the JSON-RPC
+    response `id` against the request the way stdio does (a foreign-id JSON
+    response is rejected, a foreign-id SSE event is skipped).
 
 - **Teams are settable from the UI, so projects can actually be shared
   (#1157).** Two bugs made the shipped team/projects feature unreachable on a

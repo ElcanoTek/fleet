@@ -3,10 +3,14 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // mcpHTTPTestServer starts an in-process MCP-over-HTTP server advertising a
@@ -179,6 +183,75 @@ func TestReload_RetiredServerRefusesCall(t *testing.T) {
 	}
 	if _, err := old.callTool(ctx, "tool_x", nil); err == nil {
 		t.Error("callTool on a retired server must refuse, got nil error")
+	}
+}
+
+// TestReload_CompletesWhileStdinWedged verifies the ctx-aware stdin write
+// (#1108) actually breaks the wedge cascade: an in-flight callTool blocked
+// writing to a subprocess that stopped reading stdin holds Server.mu,
+// drainAndClose waits on that mutex, and Reload waits on the drain while
+// holding reloadMu — before the fix, one wedged connector disabled hot-reload
+// permanently. Now the in-flight call fails when its ctx expires, the drain
+// proceeds, and Reload completes with the wedged server removed and retired.
+func TestReload_CompletesWhileStdinWedged(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not found, skipping stdio test")
+	}
+	old := stdioCloseGrace
+	stdioCloseGrace = 200 * time.Millisecond
+	defer func() { stdioCloseGrace = old }()
+
+	// A child that never reads stdin: a request past the 64 KiB kernel pipe
+	// buffer blocks the writer.
+	tr, err := NewStdioTransport("python3", []string{"-u", "-c", "import time\nwhile True: time.sleep(60)"}, nil)
+	if err != nil {
+		t.Fatalf("start non-reading child: %v", err)
+	}
+	srv := &Server{
+		name:         "wedged",
+		transport:    tr,
+		def:          ServerDef{Name: "wedged", Command: "python3"},
+		stdioCommand: "python3",
+	}
+	c := NewClient()
+	c.servers["wedged"] = srv
+	t.Cleanup(func() { _ = c.Close() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	callDone := make(chan error, 1)
+	go func() {
+		_, err := srv.callTool(ctx, "anything", map[string]interface{}{"blob": strings.Repeat("x", 1<<20)})
+		callDone <- err
+	}()
+
+	// Let the call enter the blocked write (holding Server.mu) first.
+	time.Sleep(50 * time.Millisecond)
+
+	reloadDone := make(chan error, 1)
+	go func() {
+		sum, rerr := c.Reload(context.Background(), nil) // removes "wedged"
+		if rerr == nil && !eqStrings(sum.Removed, []string{"wedged"}) {
+			rerr = fmt.Errorf("Removed=%v want [wedged]", sum.Removed)
+		}
+		reloadDone <- rerr
+	}()
+
+	select {
+	case err := <-reloadDone:
+		if err != nil {
+			t.Fatalf("reload: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Reload wedged behind a blocked stdin write — the cascade is not broken")
+	}
+	if err := <-callDone; err == nil {
+		t.Fatal("wedged call unexpectedly succeeded")
+	}
+	// The drained server is retired: a caller still holding the pointer is
+	// refused instead of respawning the subprocess.
+	if _, err := srv.callTool(context.Background(), "anything", nil); err == nil {
+		t.Fatal("retired wedged server accepted a call")
 	}
 }
 

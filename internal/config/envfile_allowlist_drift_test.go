@@ -28,13 +28,15 @@ import (
 
 // driftDirectKeyFuncs read their first string argument as a verbatim env key.
 // os.Getenv / os.LookupEnv are matched separately (selector on the os package).
+// The typed numeric/bool names are METHODS on config's loadParser since #1119;
+// collectEnvReads matches them by name whether called as a plain function or a
+// method.
 var driftDirectKeyFuncs = map[string]bool{
-	"getenvDefault":      true, // internal/config
-	"getenvInt":          true,
-	"getenvBool":         true,
-	"getEnvOrDefault":    true,
-	"getEnvOrDefaultInt": true,
-	"envIntDefault":      true, // cmd/fleet
+	"getenvDefault":   true, // internal/config
+	"getenvInt":       true,
+	"getenvBool":      true,
+	"getEnvOrDefault": true,
+	"envIntDefault":   true, // cmd/fleet
 }
 
 // driftFleetSuffixFuncs read a FLEET_-prefixed knob by suffix; the value is
@@ -94,6 +96,19 @@ func collectEnvReads(t *testing.T, dir string) map[string]bool {
 					(fn.Sel.Name == "Getenv" || fn.Sel.Name == "LookupEnv") {
 					if key, ok := stringLitArg(call, 0); ok {
 						keys[key] = true
+					}
+				}
+				// The typed knob readers are loadParser METHODS (#1119): match
+				// lp.getenvInt / lp.getenvFleetInt / … by method name.
+				if driftDirectKeyFuncs[fn.Sel.Name] {
+					if key, ok := stringLitArg(call, 0); ok {
+						keys[key] = true
+					}
+				}
+				if idx, ok := driftFleetSuffixFuncs[fn.Sel.Name]; ok {
+					if suffix, ok := stringLitArg(call, idx); ok {
+						suffix = strings.TrimLeft(suffix, "_")
+						keys[canonicalPrefix+suffix] = true
 					}
 				}
 			case *ast.Ident:

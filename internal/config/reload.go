@@ -282,15 +282,17 @@ func (c *Config) Reload(envFile string) (ReloadResult, error) {
 
 // applyReloadableLocked re-resolves each reloadable field and applies it. The
 // caller MUST hold c.reload.mu for writing. Resolution mirrors the exact loader
-// call for each field so reload and boot agree on precedence and defaults.
+// call for each field so reload and boot agree on precedence and defaults; the
+// parse + range rules come from the shared envKnobs registry (knobs.go), so a
+// value boot would reject is exactly the value reload rejects (#1119).
 func (c *Config) applyReloadableLocked(result *ReloadResult) {
-	reloadFleetFloat(result, "MAX_COST_USD", c.MaxCostUSD, 0, func(v float64) { c.MaxCostUSD = v })
-	reloadFleetInt(result, "MAX_TOTAL_TOKENS", c.MaxTotalTokens, 0, 0, func(v int) { c.MaxTotalTokens = v })
-	reloadFleetInt(result, "MAX_ITERATIONS", c.MaxIterations, 1, 10000, func(v int) { c.MaxIterations = v })
+	reloadFleetFloat(result, "MAX_COST_USD", c.MaxCostUSD, func(v float64) { c.MaxCostUSD = v })
+	reloadFleetInt(result, "MAX_TOTAL_TOKENS", c.MaxTotalTokens, func(v int) { c.MaxTotalTokens = v })
+	reloadFleetInt(result, "MAX_ITERATIONS", c.MaxIterations, func(v int) { c.MaxIterations = v })
 	// One temperature knob covers interactive and scheduled sampling (#1079);
 	// the FLEET_/CHAT_/CUTLASS_ chain still picks up a legacy CUTLASS_TEMPERATURE
 	// spelling as the last-resort alias.
-	reloadFleetFloat(result, "TEMPERATURE", c.Temperature, 0, func(v float64) { c.Temperature = v })
+	reloadFleetFloat(result, "TEMPERATURE", c.Temperature, func(v float64) { c.Temperature = v })
 }
 
 // restoreBootSecrets re-pins every registered per-request auth-secret env var
@@ -331,57 +333,63 @@ func (c *Config) collectSkipped(result *ReloadResult) {
 	}
 }
 
-// reloadFleetFloat resolves a FLEET_/CHAT_/CUTLASS_-prefixed float setting. When
-// it is set and parses to a value >= minVal that differs from cur, it applies it
-// via set and records the change; a parse/range failure records an Error and
-// keeps cur; an unset var is a no-op (the running value is retained).
-func reloadFleetFloat(result *ReloadResult, suffix string, cur, minVal float64, set func(float64)) {
-	raw, ok := lookupFleet(suffix)
-	if !ok {
-		return
-	}
-	applyFloat(result, canonicalPrefix+suffix, raw, cur, minVal, set)
-}
-
-func applyFloat(result *ReloadResult, key, raw string, cur, minVal float64, set func(float64)) {
-	nv, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
-	if err != nil {
-		result.Errors = append(result.Errors, ReloadError{Key: key, Error: fmt.Sprintf("invalid number %q: %v", raw, err)})
-		return
-	}
-	if nv < minVal {
-		result.Errors = append(result.Errors, ReloadError{Key: key, Error: fmt.Sprintf("%g is below the minimum %g", nv, minVal)})
-		return
-	}
-	if nv != cur {
-		result.Changed = append(result.Changed, FieldChange{Key: key, Old: formatFloat(cur), New: formatFloat(nv)})
-		set(nv)
-	}
-}
-
-// reloadFleetInt resolves a FLEET_/CHAT_/CUTLASS_-prefixed int setting, bounded to
-// [minVal, maxVal] (maxVal <= 0 means unbounded above). Semantics otherwise match
-// reloadFleetFloat.
-func reloadFleetInt(result *ReloadResult, suffix string, cur, minVal, maxVal int, set func(int)) {
+// reloadFleetFloat resolves a FLEET_/CHAT_/CUTLASS_-prefixed float setting
+// through the shared envKnobs registry (#1119) — the SAME parse + range rules
+// boot enforces. When the value is set, well-formed, and differs from cur, it
+// applies it via set and records the change; a parse/range failure records an
+// Error and keeps cur; an unset (or blank) var is a no-op (the running value
+// is retained).
+func reloadFleetFloat(result *ReloadResult, suffix string, cur float64, set func(float64)) {
 	raw, ok := lookupFleet(suffix)
 	if !ok {
 		return
 	}
 	key := canonicalPrefix + suffix
-	nv, err := strconv.Atoi(strings.TrimSpace(raw))
+	k := envKnobByKey[key]
+	// Mirror loadParser.knob's split so a registry bug names its actual shape.
+	if k == nil {
+		result.Errors = append(result.Errors, ReloadError{Key: key, Error: "BUG: reloadable knob missing from the envKnobs registry; add an entry in knobs.go"})
+		return
+	}
+	if k.kind != kindFloat {
+		result.Errors = append(result.Errors, ReloadError{Key: key, Error: fmt.Sprintf("BUG: envKnobs registry kind mismatch (registry %s, reload reads float); fix the entry in knobs.go", k.kind.label())})
+		return
+	}
+	nv, isSet, err := k.parseFloat(raw)
 	if err != nil {
-		result.Errors = append(result.Errors, ReloadError{Key: key, Error: fmt.Sprintf("invalid integer %q: %v", raw, err)})
+		result.Errors = append(result.Errors, ReloadError{Key: key, Error: err.Error()})
 		return
 	}
-	if nv < minVal || (maxVal > 0 && nv > maxVal) {
-		bound := fmt.Sprintf(">= %d", minVal)
-		if maxVal > 0 {
-			bound = fmt.Sprintf("between %d and %d", minVal, maxVal)
-		}
-		result.Errors = append(result.Errors, ReloadError{Key: key, Error: fmt.Sprintf("%d is out of range (must be %s)", nv, bound)})
+	if isSet && nv != cur {
+		result.Changed = append(result.Changed, FieldChange{Key: key, Old: formatFloat(cur), New: formatFloat(nv)})
+		set(nv)
+	}
+}
+
+// reloadFleetInt resolves a FLEET_/CHAT_/CUTLASS_-prefixed int setting through
+// the shared envKnobs registry. Semantics otherwise match reloadFleetFloat.
+func reloadFleetInt(result *ReloadResult, suffix string, cur int, set func(int)) {
+	raw, ok := lookupFleet(suffix)
+	if !ok {
 		return
 	}
-	if nv != cur {
+	key := canonicalPrefix + suffix
+	k := envKnobByKey[key]
+	// Mirror loadParser.knob's split so a registry bug names its actual shape.
+	if k == nil {
+		result.Errors = append(result.Errors, ReloadError{Key: key, Error: "BUG: reloadable knob missing from the envKnobs registry; add an entry in knobs.go"})
+		return
+	}
+	if k.kind != kindInt {
+		result.Errors = append(result.Errors, ReloadError{Key: key, Error: fmt.Sprintf("BUG: envKnobs registry kind mismatch (registry %s, reload reads int); fix the entry in knobs.go", k.kind.label())})
+		return
+	}
+	nv, isSet, err := k.parseInt(raw)
+	if err != nil {
+		result.Errors = append(result.Errors, ReloadError{Key: key, Error: err.Error()})
+		return
+	}
+	if isSet && nv != cur {
 		result.Changed = append(result.Changed, FieldChange{Key: key, Old: strconv.Itoa(cur), New: strconv.Itoa(nv)})
 		set(nv)
 	}

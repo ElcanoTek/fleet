@@ -25,7 +25,6 @@ import (
 	"net/url"
 	"os"
 	"path"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -778,8 +777,10 @@ type Config struct {
 	// MaxConcurrentAgents is the configured concurrency cap (FLEET_MAX_CONCURRENT_AGENTS,
 	// default 8). It bounds simultaneous SCHEDULED tasks (the worker-pool semaphore)
 	// and sizes the sandbox warm pool; interactive chat turns are NOT gated by it —
-	// each takes a sandbox on demand, bounded only by host resources. 0 means the
-	// default applied by the runner.
+	// each takes a sandbox on demand, bounded only by host resources. A set value
+	// must be >= 1 (#1119): `fleet serve` passes it into admission.New, which
+	// floors 0 to a box-wide total of ONE turn with no interactive reserve — a
+	// chat-starving cap, not "use a default" — so boot refuses 0 instead.
 	MaxConcurrentAgents int
 
 	// ── personas ──
@@ -1186,6 +1187,14 @@ type HTTPToolConfig struct {
 //  2. envFile (e.g. .env.local) — per-operator overrides.
 //
 // Missing files are NOT an error.
+//
+// Malformed values ARE an error (#1119): a numeric/bool/duration knob that is
+// SET but does not parse (or falls outside its registered range, see knobs.go)
+// makes Load fail with an error naming every offending variable, its value,
+// and the expected format — never a silent fallback to the default. An unset
+// knob still gets its default. The hot-reload path (reload.go) and
+// `fleet validate-config` apply the same registry, so the three paths accept
+// and reject identically.
 func Load(envFile string) (*Config, error) {
 	// Snapshot the process env so file-driven writes never clobber it. We walk
 	// os.Environ() rather than the static allowlist because allowedEnvPrefixes
@@ -1216,6 +1225,13 @@ func Load(envFile string) (*Config, error) {
 		_ = os.Setenv(key, v)
 	}
 
+	// lp collects every malformed numeric/bool/duration env value so boot can
+	// refuse with ONE error naming all of them (#1119). The typed knobs parse
+	// through the envKnobs registry (knobs.go) — the same table the hot-reload
+	// path and `fleet validate-config` use — so the three paths agree on what
+	// a given environment accepts or rejects.
+	lp := &loadParser{}
+
 	cfg := &Config{
 		MCPServers: make(map[string]MCPServerConfig),
 
@@ -1234,14 +1250,14 @@ func Load(envFile string) (*Config, error) {
 
 		// ── data (interactive) ──
 		DataDir:                 getenvFleetDefault("DATA_DIR", "./data"),
-		ConversationTTL:         getenvInt("CONVERSATION_TTL_DAYS", 14),
-		UnpinnedCap:             getenvInt("CONVERSATION_UNPINNED_CAP", 50),
-		InputQueueRetentionDays: getenvFleetInt("INPUT_QUEUE_RETENTION_DAYS", 30),
-		TurnEventRetentionDays:  getenvFleetInt("TURN_EVENT_RETENTION_DAYS", 14),
-		UploadMaxBytes:          getenvFleetInt64("UPLOAD_MAX_BYTES", 1<<30),
-		AutoArchiveAfterDays:    getenvFleetInt("AUTO_ARCHIVE_AFTER_DAYS", 0),
-		SearchEnabled:           getenvBool("FLEET_SEARCH_ENABLED", true),
-		ConversationSoftDelete:  getenvBool("FLEET_CONVERSATION_SOFT_DELETE", false),
+		ConversationTTL:         lp.getenvInt("CONVERSATION_TTL_DAYS", 14),
+		UnpinnedCap:             lp.getenvInt("CONVERSATION_UNPINNED_CAP", 50),
+		InputQueueRetentionDays: lp.getenvFleetInt("INPUT_QUEUE_RETENTION_DAYS", 30),
+		TurnEventRetentionDays:  lp.getenvFleetInt("TURN_EVENT_RETENTION_DAYS", 14),
+		UploadMaxBytes:          lp.getenvFleetInt64("UPLOAD_MAX_BYTES", 1<<30),
+		AutoArchiveAfterDays:    lp.getenvFleetInt("AUTO_ARCHIVE_AFTER_DAYS", 0),
+		SearchEnabled:           lp.getenvBool("FLEET_SEARCH_ENABLED", true),
+		ConversationSoftDelete:  lp.getenvBool("FLEET_CONVERSATION_SOFT_DELETE", false),
 		DatabaseURL:             buildDatabaseURL(),
 
 		// DB connection pools (#276) — defaults reproduce the historical
@@ -1249,48 +1265,48 @@ func Load(envFile string) (*Config, error) {
 		// (0 = unlimited, matching the prior code which never called
 		// SetConnMaxIdleTime), 5m lifetime; chat pings at 5s, sched at 10s.
 		ChatDBPool: DBPoolConfig{
-			MaxOpenConns:    getenvFleetInt("CHAT_DB_MAX_CONNS", 25),
-			MaxIdleConns:    getenvFleetInt("CHAT_DB_MIN_CONNS", 5),
-			ConnMaxIdleTime: getenvFleetDuration("CHAT_DB_MAX_CONN_IDLE_TIME", 0),
-			ConnMaxLifetime: getenvFleetDuration("CHAT_DB_MAX_CONN_LIFETIME", 5*time.Minute),
-			ConnectTimeout:  getenvFleetDuration("CHAT_DB_CONNECT_TIMEOUT", 5*time.Second),
+			MaxOpenConns:    lp.getenvFleetInt("CHAT_DB_MAX_CONNS", 25),
+			MaxIdleConns:    lp.getenvFleetInt("CHAT_DB_MIN_CONNS", 5),
+			ConnMaxIdleTime: lp.getenvFleetDuration("CHAT_DB_MAX_CONN_IDLE_TIME", 0),
+			ConnMaxLifetime: lp.getenvFleetDuration("CHAT_DB_MAX_CONN_LIFETIME", 5*time.Minute),
+			ConnectTimeout:  lp.getenvFleetDuration("CHAT_DB_CONNECT_TIMEOUT", 5*time.Second),
 		},
 		SchedDBPool: DBPoolConfig{
-			MaxOpenConns:    getenvFleetInt("SCHED_DB_MAX_CONNS", 25),
-			MaxIdleConns:    getenvFleetInt("SCHED_DB_MIN_CONNS", 5),
-			ConnMaxIdleTime: getenvFleetDuration("SCHED_DB_MAX_CONN_IDLE_TIME", 0),
-			ConnMaxLifetime: getenvFleetDuration("SCHED_DB_MAX_CONN_LIFETIME", 5*time.Minute),
-			ConnectTimeout:  getenvFleetDuration("SCHED_DB_CONNECT_TIMEOUT", 10*time.Second),
+			MaxOpenConns:    lp.getenvFleetInt("SCHED_DB_MAX_CONNS", 25),
+			MaxIdleConns:    lp.getenvFleetInt("SCHED_DB_MIN_CONNS", 5),
+			ConnMaxIdleTime: lp.getenvFleetDuration("SCHED_DB_MAX_CONN_IDLE_TIME", 0),
+			ConnMaxLifetime: lp.getenvFleetDuration("SCHED_DB_MAX_CONN_LIFETIME", 5*time.Minute),
+			ConnectTimeout:  lp.getenvFleetDuration("SCHED_DB_CONNECT_TIMEOUT", 10*time.Second),
 		},
 
 		// ── LLM (shared) ──
 		OpenRouterAPIKey: stripQuotes(os.Getenv("OPENROUTER_API_KEY")),
-		MaxIterations:    getenvFleetInt("MAX_ITERATIONS", 300),
-		MaxCostUSD:       getenvFleetFloat("MAX_COST_USD", 50.0),
-		MaxTotalTokens:   getenvFleetInt("MAX_TOTAL_TOKENS", 10000000),
+		MaxIterations:    lp.getenvFleetInt("MAX_ITERATIONS", 300),
+		MaxCostUSD:       lp.getenvFleetFloat("MAX_COST_USD", 50.0),
+		MaxTotalTokens:   lp.getenvFleetInt("MAX_TOTAL_TOKENS", 10000000),
 
-		DefaultThinkingBudgetTokens: getenvFleetInt("DEFAULT_THINKING_BUDGET_TOKENS", 0),
+		DefaultThinkingBudgetTokens: lp.getenvFleetInt("DEFAULT_THINKING_BUDGET_TOKENS", 0),
 
-		ShutdownGraceSeconds: getenvFleetInt("SHUTDOWN_GRACE_SECONDS", 30),
+		ShutdownGraceSeconds: lp.getenvFleetInt("SHUTDOWN_GRACE_SECONDS", 30),
 
-		TurnTimeoutSeconds:     getenvFleetInt("TURN_TIMEOUT_SECONDS", 1800),
-		Temperature:            getenvFleetFloat("TEMPERATURE", 0.3),
-		LLMMaxTokens:           getenvInt("LLM_MAX_TOKENS", 16384),
+		TurnTimeoutSeconds:     lp.getenvFleetInt("TURN_TIMEOUT_SECONDS", 1800),
+		Temperature:            lp.getenvFleetFloat("TEMPERATURE", 0.3),
+		LLMMaxTokens:           lp.getenvInt("LLM_MAX_TOKENS", 16384),
 		TitleModel:             getenvFleetDefault("TITLE_MODEL", DefaultTitleModel),
 		MetadataModel:          getenvFleetDefault("METADATA_MODEL", getenvFleetDefault("TITLE_MODEL", DefaultTitleModel)),
 		ErrorAnalysisModel:     getenvFleetDefault("ERROR_ANALYSIS_MODEL", getenvFleetDefault("METADATA_MODEL", getenvFleetDefault("TITLE_MODEL", DefaultTitleModel))),
-		ErrorAnalysisEnabled:   getenvFleetBool("ERROR_ANALYSIS_ENABLED", true),
-		SelfImproveEnabled:     getenvFleetBool("SELF_IMPROVE_ENABLED", false),
-		AutoTitle:              getenvFleetBool("AUTO_TITLE", true),
+		ErrorAnalysisEnabled:   lp.getenvFleetBool("ERROR_ANALYSIS_ENABLED", true),
+		SelfImproveEnabled:     lp.getenvFleetBool("SELF_IMPROVE_ENABLED", false),
+		AutoTitle:              lp.getenvFleetBool("AUTO_TITLE", true),
 		MemoryModel:            getenvFleetDefault("MEMORY_MODEL", getenvFleetDefault("METADATA_MODEL", getenvFleetDefault("TITLE_MODEL", DefaultTitleModel))),
 		RecurringTaskModel:     getenvFleetDefault("RECURRING_TASK_MODEL", getenvFleetDefault("METADATA_MODEL", getenvFleetDefault("TITLE_MODEL", DefaultTitleModel))),
 		LibraryPromptModel:     getenvFleetDefault("LIBRARY_PROMPT_MODEL", getenvFleetDefault("METADATA_MODEL", getenvFleetDefault("TITLE_MODEL", DefaultTitleModel))),
-		MemoryAutoIndexEnabled: getenvFleetBool("MEMORY_AUTOINDEX_ENABLED", false),
+		MemoryAutoIndexEnabled: lp.getenvFleetBool("MEMORY_AUTOINDEX_ENABLED", false),
 		MemoryGraphModel:       getenvFleetDefault("MEMORY_GRAPH_MODEL", getenvFleetDefault("MEMORY_MODEL", getenvFleetDefault("METADATA_MODEL", getenvFleetDefault("TITLE_MODEL", DefaultTitleModel)))),
-		MemoryGraphEnabled:     getenvFleetBool("MEMORY_GRAPH_ENABLED", false),
-		ApprovalTimeoutSeconds: getenvFleetInt("APPROVAL_TIMEOUT_SECONDS", 300),
-		AutoApproveInTest:      getenvFleetBool("AUTO_APPROVE_IN_TEST", false),
-		MaxConcurrentAgents:    getenvFleetInt("MAX_CONCURRENT_AGENTS", 8),
+		MemoryGraphEnabled:     lp.getenvFleetBool("MEMORY_GRAPH_ENABLED", false),
+		ApprovalTimeoutSeconds: lp.getenvFleetInt("APPROVAL_TIMEOUT_SECONDS", 300),
+		AutoApproveInTest:      lp.getenvFleetBool("AUTO_APPROVE_IN_TEST", false),
+		MaxConcurrentAgents:    lp.getenvFleetInt("MAX_CONCURRENT_AGENTS", 8),
 
 		// ── personas ──
 		PersonaDefault: getenvFleetOrBare("PERSONA_DEFAULT", "assistant"),
@@ -1306,61 +1322,61 @@ func Load(envFile string) (*Config, error) {
 		TaskFallbackModel: getenvFleet("TASK_FALLBACK_MODEL"),
 
 		// ── phone a friend: super-LLM review (#175) ──
-		PhoneAFriendEnabled: getenvFleetBool("PHONE_A_FRIEND_ENABLED", false),
+		PhoneAFriendEnabled: lp.getenvFleetBool("PHONE_A_FRIEND_ENABLED", false),
 		PhoneAFriendModel:   getenvFleet("PHONE_A_FRIEND_MODEL"),
 
 		// ── sub-agents / delegation (#175, #264, #1043) ──
 		// Default TRUE (#1043): the parent agent decides whether to delegate;
 		// FLEET_SUBAGENTS_ENABLED=false is the fleet-wide kill switch.
-		SubagentsEnabled:        getenvFleetBool("SUBAGENTS_ENABLED", true),
-		SubagentsMaxDepth:       getenvFleetInt("SUBAGENTS_MAX_DEPTH", defaultSubagentsMaxDepth),
-		SubagentsMaxChildren:    getenvFleetInt("SUBAGENTS_MAX_CHILDREN", defaultSubagentsMaxChildren),
-		SubagentsBudgetFraction: normalizeBudgetFraction(getenvFleetFloat("SUBAGENTS_BUDGET_FRACTION", defaultSubagentsBudgetFraction)),
+		SubagentsEnabled:        lp.getenvFleetBool("SUBAGENTS_ENABLED", true),
+		SubagentsMaxDepth:       lp.getenvFleetInt("SUBAGENTS_MAX_DEPTH", defaultSubagentsMaxDepth),
+		SubagentsMaxChildren:    lp.getenvFleetInt("SUBAGENTS_MAX_CHILDREN", defaultSubagentsMaxChildren),
+		SubagentsBudgetFraction: normalizeBudgetFraction(lp.getenvFleetFloat("SUBAGENTS_BUDGET_FRACTION", defaultSubagentsBudgetFraction)),
 		SubagentsModel:          getenvFleet("SUBAGENTS_MODEL"),
 
 		// ── agent self-improvement: persistent task memory (#198, #285) ──
-		TaskMemoryMaxKeys:       getenvFleetInt("TASK_MEMORY_MAX_KEYS", 100),
-		TaskMemoryMaxValueBytes: getenvFleetInt("TASK_MEMORY_MAX_VALUE_BYTES", 4096),
+		TaskMemoryMaxKeys:       lp.getenvFleetInt("TASK_MEMORY_MAX_KEYS", 100),
+		TaskMemoryMaxValueBytes: lp.getenvFleetInt("TASK_MEMORY_MAX_VALUE_BYTES", 4096),
 
 		// ── run-history retention (#252) ──
-		RunLogRetentionDays: getenvFleetInt("RUN_LOG_RETENTION_DAYS", 90),
-		KeepRunsPerTask:     getenvFleetInt("KEEP_RUNS_PER_TASK", 10),
-		CleanupHour:         getenvFleetInt("CLEANUP_HOUR", 4),
+		RunLogRetentionDays: lp.getenvFleetInt("RUN_LOG_RETENTION_DAYS", 90),
+		KeepRunsPerTask:     lp.getenvFleetInt("KEEP_RUNS_PER_TASK", 10),
+		CleanupHour:         lp.getenvFleetInt("CLEANUP_HOUR", 4),
 
 		// ── task priority queues: anti-starvation (#230) ── default 30m; 0 = OFF.
-		TaskStarvationWindowMinutes: getenvFleetInt("TASK_STARVATION_WINDOW_MINUTES", 30),
+		TaskStarvationWindowMinutes: lp.getenvFleetInt("TASK_STARVATION_WINDOW_MINUTES", 30),
 		// Paused-task expiry (#510): default 0 = OFF (paused tasks wait forever).
-		TaskPausedExpiryMinutes: getenvFleetInt("PAUSED_TASK_EXPIRY_MINUTES", 0),
+		TaskPausedExpiryMinutes: lp.getenvFleetInt("PAUSED_TASK_EXPIRY_MINUTES", 0),
 
 		// ── process log file sink (#298) ── default OFF (LogFile empty): opt in
 		// with FLEET_LOG_FILE. The size/age/backup/compress knobs only apply once
 		// the file sink is on.
 		Log: LogConfig{
 			File:       getenvFleet("LOG_FILE"),
-			MaxSizeMB:  getenvFleetInt("LOG_MAX_SIZE_MB", 100),
-			MaxAgeDays: getenvFleetInt("LOG_MAX_AGE_DAYS", 0),
-			MaxBackups: getenvFleetInt("LOG_MAX_BACKUPS", 7),
-			Compress:   getenvFleetBool("LOG_COMPRESS", true),
+			MaxSizeMB:  lp.getenvFleetInt("LOG_MAX_SIZE_MB", 100),
+			MaxAgeDays: lp.getenvFleetInt("LOG_MAX_AGE_DAYS", 0),
+			MaxBackups: lp.getenvFleetInt("LOG_MAX_BACKUPS", 7),
+			Compress:   lp.getenvFleetBool("LOG_COMPRESS", true),
 			Format:     getenvFleetDefault("LOG_FORMAT", "json"),
 			Level:      getenvFleetDefault("LOG_LEVEL", "info"),
 		},
 
 		// ── log archival (#272) ── default OFF (0): opt in deliberately.
-		LogArchiveAfterDays:     getenvFleetInt("LOG_ARCHIVE_AFTER_DAYS", 0),
+		LogArchiveAfterDays:     lp.getenvFleetInt("LOG_ARCHIVE_AFTER_DAYS", 0),
 		LogArchiveEncryptionKey: logArchiveEncryptionKey(),
 
 		PublicBaseURL:              strings.TrimRight(strings.TrimSpace(getenvFleet("PUBLIC_BASE_URL")), "/"),
 		MCPOAuthEncryptionKey:      mcpOAuthEncryptionKey(),
-		RemoteMCPAllowInsecureHTTP: getenvFleetBool("REMOTE_MCP_ALLOW_INSECURE_HTTP", false),
+		RemoteMCPAllowInsecureHTTP: lp.getenvFleetBool("REMOTE_MCP_ALLOW_INSECURE_HTTP", false),
 
 		// ── attachments / uploads (generic infra) ──
 		EmailAttachmentDir: getenvDefault("EMAIL_ATTACHMENT_DIR", "./data/attachments"),
 
 		// ── rate limit (interactive) ──
-		RatePerMinute:       getenvInt("CHAT_RATE_PER_MIN", 40),
-		RatePerDay:          getenvInt("CHAT_RATE_PER_DAY", 2000),
-		RateLimitEnabled:    getenvBool("FLEET_CHAT_RATE_LIMIT_ENABLED", true),
-		RateLimitConcurrent: getenvInt("FLEET_CHAT_RATE_LIMIT_CONCURRENT", 5),
+		RatePerMinute:       lp.getenvInt("CHAT_RATE_PER_MIN", 40),
+		RatePerDay:          lp.getenvInt("CHAT_RATE_PER_DAY", 2000),
+		RateLimitEnabled:    lp.getenvBool("FLEET_CHAT_RATE_LIMIT_ENABLED", true),
+		RateLimitConcurrent: lp.getenvInt("FLEET_CHAT_RATE_LIMIT_CONCURRENT", 5),
 
 		// ── admin ──
 		AdminEmails: splitEmails(os.Getenv("ADMIN_EMAILS")),
@@ -1371,7 +1387,7 @@ func Load(envFile string) (*Config, error) {
 		DefaultNetworkMode: strings.ToLower(strings.TrimSpace(getenvFleet("DEFAULT_NETWORK_MODE"))),
 
 		// PII redaction (#450) — optional, default off.
-		PIIRedactionEnabled: getenvFleetBool("PII_REDACTION_ENABLED", false),
+		PIIRedactionEnabled: lp.getenvFleetBool("PII_REDACTION_ENABLED", false),
 		PIIRedactionMode:    strings.ToLower(strings.TrimSpace(getenvFleet("PII_REDACTION_MODE"))),
 		PIIRedactionEngine:  strings.ToLower(strings.TrimSpace(getenvFleet("PII_REDACTION_ENGINE"))),
 		PIIRampartURL:       strings.TrimSpace(getenvFleet("PII_RAMPART_URL")),
@@ -1380,34 +1396,46 @@ func Load(envFile string) (*Config, error) {
 		GuardrailURL:        strings.TrimSpace(getenvFleet("GUARDRAIL_URL")),
 
 		// Composer context handles (#517) — optional, default off.
-		ContextHandlesEnabled: getenvFleetBool("CONTEXT_HANDLES_ENABLED", false),
+		ContextHandlesEnabled: lp.getenvFleetBool("CONTEXT_HANDLES_ENABLED", false),
 
 		// Connector auto-recommendation (#512) — optional, default off.
-		ConnectorRecommendationsEnabled: getenvFleetBool("CONNECTOR_RECOMMENDATIONS_ENABLED", false),
+		ConnectorRecommendationsEnabled: lp.getenvFleetBool("CONNECTOR_RECOMMENDATIONS_ENABLED", false),
 		SandboxMemory:                   getenvFleet("SANDBOX_MEMORY"),
 		SandboxCPUs:                     getenvFleet("SANDBOX_CPUS"),
-		SandboxPids:                     getEnvOrDefaultInt("FLEET_SANDBOX_PIDS", 0),
-		SandboxDiskGB:                   getEnvOrDefaultInt("FLEET_SANDBOX_DISK_GB", 0),
+		SandboxPids:                     lp.getenvInt("FLEET_SANDBOX_PIDS", 0),
+		SandboxDiskGB:                   lp.getenvInt("FLEET_SANDBOX_DISK_GB", 0),
 		// Per-task override ceilings (#205).
-		SandboxMemoryMaxMB:    getenvFleetInt("SANDBOX_MEMORY_MAX_MB", 8192),
-		SandboxCPUsMax:        getenvFleetFloat("SANDBOX_CPUS_MAX", 16.0),
-		SandboxPidsMax:        getenvFleetInt("SANDBOX_PIDS_MAX", 1024),
-		SandboxWarmSize:       getenvFleetInt("SANDBOX_WARM_SIZE", 0),
-		SandboxWarmTTLSeconds: getenvFleetInt("SANDBOX_WARM_TTL", 300),
+		SandboxMemoryMaxMB:    lp.getenvFleetInt("SANDBOX_MEMORY_MAX_MB", 8192),
+		SandboxCPUsMax:        lp.getenvFleetFloat("SANDBOX_CPUS_MAX", 16.0),
+		SandboxPidsMax:        lp.getenvFleetInt("SANDBOX_PIDS_MAX", 1024),
+		SandboxWarmSize:       lp.getenvFleetInt("SANDBOX_WARM_SIZE", 0),
+		SandboxWarmTTLSeconds: lp.getenvFleetInt("SANDBOX_WARM_TTL", 300),
 
 		PythonREPLMode:           normalizePythonREPLMode(getenvFleetDefault("PYTHON_REPL_MODE", pythonREPLModePerTurn)),
-		PythonCellTimeoutSeconds: getenvFleetInt("PYTHON_CELL_TIMEOUT", 0),
-		PythonREPLIdleTTLSeconds: getenvFleetInt("PYTHON_REPL_IDLE_TTL", 1800),
-		PythonREPLMaxSessions:    getenvFleetInt("PYTHON_REPL_MAX", 32),
+		PythonCellTimeoutSeconds: lp.getenvFleetInt("PYTHON_CELL_TIMEOUT", 0),
+		PythonREPLIdleTTLSeconds: lp.getenvFleetInt("PYTHON_REPL_IDLE_TTL", 1800),
+		PythonREPLMaxSessions:    lp.getenvFleetInt("PYTHON_REPL_MAX", 32),
 
 		WorkspaceRoot:         getenvFleet("WORKSPACE_ROOT"),
-		LockdownOnly:          getenvFleetBool("LOCKDOWN_ONLY", false),
+		LockdownOnly:          lp.getenvFleetBool("LOCKDOWN_ONLY", false),
 		LockdownAllowedModels: splitLockdownModels(getenvFleet("LOCKDOWN_ALLOWED_MODELS")),
-		MockMode:              getenvFleetBool("MOCK_MODE", false),
+		MockMode:              lp.getenvFleetBool("MOCK_MODE", false),
 
 		// ── observability: Sentry error tracking (#193) ──
 		SentryDSN:   stripQuotes(os.Getenv("FLEET_SENTRY_DSN")),
 		Environment: getenvDefault("FLEET_ENVIRONMENT", "dev"),
+	}
+
+	// Fail LOUD on any malformed numeric/bool/duration value (#1119): a typo'd
+	// security knob (FLEET_LOCKDOWN_ONLY=enabled) or spend ceiling
+	// (FLEET_MAX_COST_USD=5O) must refuse to boot rather than silently run on
+	// the default — silent defaulting was fail-OPEN for lockdown. This matches
+	// the IP-list/TLS/network-mode posture below and the hot-reload path,
+	// which already rejected the same values (boot and reload now agree). An
+	// UNSET knob still gets its default; only a set-but-malformed value errors,
+	// and every problem is reported in one pass.
+	if err := lp.err(); err != nil {
+		return nil, err
 	}
 
 	// ── IP access control (#314) ──
@@ -1714,10 +1742,20 @@ func splitEmails(raw string) []string {
 	return out
 }
 
-// loadEnvFile parses a KEY=VALUE env file, respecting the allowlist. It strips
-// inline comments off unquoted values (cutlass behavior) and a single layer of
-// surrounding quotes. Always overwrites — Load snapshots/restores the
-// pre-existing process env around this call so "process env wins" holds.
+// loadEnvFile parses a KEY=VALUE env file, respecting the allowlist. Always
+// overwrites — Load snapshots/restores the pre-existing process env around
+// this call so "process env wins" holds.
+//
+// Value semantics (shared byte-for-byte with internal/creds's parser, whose
+// writer encodes values to survive this exact round-trip — #834):
+//
+//   - an `export ` prefix is tolerated;
+//   - an UNQUOTED value ends at the first ` #` or `\t#` (inline comment) — a
+//     value that must contain a literal ` #` (e.g. a password like `p@ss #1`)
+//     MUST be quoted, or it is truncated at the marker;
+//   - ONE layer of matching surrounding quotes (single or double) is stripped;
+//     the interior — including ` #`, edge whitespace, and inner quotes — is
+//     preserved verbatim.
 func loadEnvFile(path string) error {
 	return loadEnvFileFiltered(path, func(string) bool { return true })
 }
@@ -1757,7 +1795,11 @@ func loadEnvFileFiltered(path string, include func(string) bool) error {
 }
 
 // stripInlineComment trims a trailing `# comment` off an unquoted .env value.
-// Quoted values are left intact (quote handling owns those).
+// Quoted values are left intact (quote handling owns those). This is the
+// standard dotenv rule and the contract internal/creds's writer/parser rely
+// on: an unquoted value containing ` #` is DELIBERATELY truncated there —
+// quote the value to keep a literal ` #` (creds.SetEnvKey does this
+// automatically). See loadEnvFile's doc comment for the full value semantics.
 func stripInlineComment(value string) string {
 	if strings.HasPrefix(value, `"`) || strings.HasPrefix(value, `'`) {
 		return value
@@ -1788,31 +1830,18 @@ func hasKnownPromptExtension(name string) bool {
 }
 
 // ── env helpers ──
+//
+// Unified value semantics (#1119): every helper below strips ONE layer of
+// matching surrounding quotes from a set value (podman/docker --env-file keep
+// quotes in place; the env-file loader and Load's process-env snapshot already
+// strip them, so this is defense-in-depth that keeps every read path
+// consistent). Numeric/bool/duration knobs are NOT read through these string
+// helpers — they parse through the envKnobs registry (knobs.go) via Load's
+// loadParser, which fails boot loudly on a set-but-malformed value.
 
 func getenvDefault(key, def string) string {
 	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return def
-}
-
-func getenvInt(key string, def int) int {
-	if v := os.Getenv(key); v != "" {
-		if i, err := strconv.Atoi(v); err == nil {
-			return i
-		}
-	}
-	return def
-}
-
-func getenvBool(key string, def bool) bool {
-	if v := os.Getenv(key); v != "" {
-		switch strings.ToLower(v) {
-		case "1", "true", "yes", "on":
-			return true
-		case "0", "false", "no", "off":
-			return false
-		}
+		return stripQuotes(v)
 	}
 	return def
 }
@@ -1821,17 +1850,6 @@ func getenvBool(key string, def bool) bool {
 func getEnvOrDefault(key, defaultValue string) string {
 	if value := os.Getenv(key); value != "" {
 		return stripQuotes(value)
-	}
-	return defaultValue
-}
-
-func getEnvOrDefaultInt(key string, defaultValue int) int {
-	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
-		// strconv (not Sscanf) so trailing garbage like "12abc" is REJECTED and
-		// falls back to the default, rather than being silently parsed as 12.
-		if result, err := strconv.Atoi(value); err == nil {
-			return result
-		}
 	}
 	return defaultValue
 }
@@ -1864,7 +1882,9 @@ func getenvFleet(suffix string) string {
 
 func getenvFleetDefault(suffix, def string) string {
 	if v, ok := lookupFleet(suffix); ok {
-		return v
+		// Strip quotes like getenvFleet does: the same quoted value must
+		// resolve identically whichever helper reads it (#1119).
+		return stripQuotes(v)
 	}
 	return def
 }
@@ -1984,44 +2004,9 @@ func normalizePythonREPLMode(raw string) string {
 	}
 }
 
-func getenvFleetInt(suffix string, def int) int {
-	if v, ok := lookupFleet(suffix); ok {
-		if i, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
-			return i
-		}
-	}
-	return def
-}
-
-func getenvFleetInt64(suffix string, def int64) int64 {
-	if v, ok := lookupFleet(suffix); ok {
-		if i, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64); err == nil {
-			return i
-		}
-	}
-	return def
-}
-
-// getenvFleetDuration reads FLEET_<suffix> (with CHAT_/CUTLASS_ back-compat) as
-// a Go duration string (e.g. "5m", "10s"). Falls back to def on absence or parse
-// error. Used for the DB-pool timeout knobs (#276).
-func getenvFleetDuration(suffix string, def time.Duration) time.Duration {
-	if v, ok := lookupFleet(suffix); ok {
-		if d, err := time.ParseDuration(strings.TrimSpace(v)); err == nil {
-			return d
-		}
-	}
-	return def
-}
-
-func getenvFleetFloat(suffix string, def float64) float64 {
-	if v, ok := lookupFleet(suffix); ok {
-		if f, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil {
-			return f
-		}
-	}
-	return def
-}
+// The typed numeric/bool/duration readers live in knobs.go (#1119): Load
+// resolves them through loadParser + the envKnobs registry so a
+// set-but-malformed value refuses to boot instead of silently defaulting.
 
 // normalizeBudgetFraction clamps the sub-agent budget fraction (#264) into the
 // valid (0, 1] range, falling back to the package default on a nonsensical value
@@ -2036,16 +2021,4 @@ func normalizeBudgetFraction(f float64) float64 {
 		return 1.0
 	}
 	return f
-}
-
-func getenvFleetBool(suffix string, def bool) bool {
-	if v, ok := lookupFleet(suffix); ok {
-		switch strings.ToLower(strings.TrimSpace(v)) {
-		case "1", "true", "yes", "on":
-			return true
-		case "0", "false", "no", "off":
-			return false
-		}
-	}
-	return def
 }
