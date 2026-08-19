@@ -312,10 +312,6 @@ func TestRefreshNoScopeFallbackWhenNoScopesConfigured(t *testing.T) {
 	}
 }
 
-// The terminal set condemns the stored grant or client registration; everything
-// else must stay transient so a blip is retried instead of forcing the user
-// through a reconnect.
-
 // The needs-reauth detail is shown in the connections UI, so it must name the
 // real cause — and must never echo the authorization server's error_description,
 // which is attacker-influenced free text from a user-supplied server.

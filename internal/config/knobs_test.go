@@ -331,40 +331,27 @@ func TestValidateEnvKnobs_FlagsEveryRegisteredKnob(t *testing.T) {
 	}
 }
 
-func TestValidateEnvKnobs_SpecificScenarios(t *testing.T) {
+func TestValidateEnvKnobs_MessagesNameValueAndConstraint(t *testing.T) {
+	// TestValidateEnvKnobs_FlagsEveryRegisteredKnob already proves every knob is
+	// flagged and that each problem leads with the env var name. What it does not
+	// check is the rest of the message, so that is all this covers: an operator
+	// staring at a boot failure needs the offending value and the constraint it
+	// violated, not just the key. Range violations are also a distinct path from
+	// parse failures — "zzz" for every knob only exercises the latter.
 	cases := []struct {
-		name    string
-		envs    map[string]string
-		wantLen int
-		want    []string
+		name string
+		envs map[string]string
+		want []string
 	}{
 		{
-			name:    "valid configurations",
-			envs:    map[string]string{"FLEET_MAX_COST_USD": "50", "FLEET_LOCKDOWN_ONLY": "true"},
-			wantLen: 0,
+			name: "range violation names the bound",
+			envs: map[string]string{"FLEET_MAX_COST_USD": "-1"},
+			want: []string{"FLEET_MAX_COST_USD", ">= 0"},
 		},
 		{
-			name:    "out of range configurations",
-			envs:    map[string]string{"FLEET_MAX_COST_USD": "-1"},
-			wantLen: 1,
-			want:    []string{"FLEET_MAX_COST_USD", ">= 0"},
-		},
-		{
-			name:    "parse error configuration",
-			envs:    map[string]string{"FLEET_MAX_COST_USD": "5O"}, // Letter O
-			wantLen: 1,
-			want:    []string{"FLEET_MAX_COST_USD", `"5O"`, "number"},
-		},
-		{
-			name:    "multiple errors",
-			envs:    map[string]string{"FLEET_MAX_COST_USD": "5O", "FLEET_LOCKDOWN_ONLY": "enabled"},
-			wantLen: 2,
-			want:    []string{"FLEET_MAX_COST_USD", `"5O"`, "number", "FLEET_LOCKDOWN_ONLY", `"enabled"`, "boolean"},
-		},
-		{
-			name:    "unset/blank values",
-			envs:    map[string]string{"FLEET_MAX_COST_USD": "", "FLEET_LOCKDOWN_ONLY": "   "},
-			wantLen: 0,
+			name: "parse failure quotes the value and names the kind",
+			envs: map[string]string{"FLEET_MAX_COST_USD": "5O"}, // letter O, not zero
+			want: []string{"FLEET_MAX_COST_USD", `"5O"`, "number"},
 		},
 	}
 
@@ -376,15 +363,12 @@ func TestValidateEnvKnobs_SpecificScenarios(t *testing.T) {
 			}
 
 			problems := ValidateEnvKnobs()
-			if len(problems) != tc.wantLen {
-				t.Errorf("ValidateEnvKnobs() returned %d problems, want %d", len(problems), tc.wantLen)
+			if len(problems) != 1 {
+				t.Fatalf("ValidateEnvKnobs() = %d problems, want 1: %q", len(problems), problems)
 			}
-
-			// Join problems to easily check substrings
-			joinedProblems := strings.Join(problems, " | ")
 			for _, w := range tc.want {
-				if !strings.Contains(joinedProblems, w) {
-					t.Errorf("ValidateEnvKnobs() problems should mention %q, got: %q", w, joinedProblems)
+				if !strings.Contains(problems[0], w) {
+					t.Errorf("problem should mention %q, got: %q", w, problems[0])
 				}
 			}
 		})

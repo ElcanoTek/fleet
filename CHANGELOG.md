@@ -19,36 +19,49 @@ prior versions are listed because none have shipped.
 
 ### Added
 
-- **Unit tests for eight thinly-covered helpers.** Test-only additions — no
-  production code changed:
+- **Unit tests for six thinly-covered helpers**, from the consolidated Jules
+  batch (#1188). Test-only — no production code changed:
 
-  - `agent.MCPLoadServers` — binds the requested servers over HTTP, is a no-op
-    when already loaded, errors on a missing config or client, and rejects an
-    unknown or disabled server (new `internal/agent/mcp_loader_test.go`).
-  - `config.ValidateEnvKnobs` — one added `TestValidateEnvKnobs_SpecificScenarios`
-    alongside the existing `TestLoad_*` cases.
-  - `sandbox.HostExecutorCompiledIn` — asserted against the
-    `hostExecutorCompiledIn` constant, which is defined in both the
-    `fleet_host_executor` and release variants, so the test compiles and holds
-    under either build tag.
-  - `agentcore.EnvPrefix.lookupFloatDefault` — table-driven edge cases
-    (new `internal/agentcore/env_test.go`).
-  - `mcpoauth.RevokeToken` (new `revoke_test.go`) and
-    `mcpoauth.IsTerminalRefreshError` (new `errors_test.go`; those cases moved
-    out of `flow_test.go` — nothing else was relocated).
-  - `clientconfig.validSkillName` — string-validation edge cases.
-  - `chattui.Resolve` — extends the existing "flags win" subtest to pin
-    whitespace trimming on the `Model` and `Persona` flags. This is a narrow
-    assertion on an already-tested function, not new coverage of persona
-    resolution as a whole.
+  - `agent.MCPLoadServers` — drives a real JSON-RPC handshake against an
+    `httptest` server and pins the `StopTurn` contract (true when a server
+    binds, false when nothing new loaded), the `loadedServers` bookkeeping, and
+    that a missing config, missing client, or unknown/disabled server comes back
+    as a *response* the model can read rather than a hard error.
+  - `mcpoauth.RevokeToken` — pins the RFC 7009 credential split: with a client
+    secret the request uses Basic auth and omits `client_id` from the body;
+    without one it does the reverse.
+  - `mcpoauth.IsTerminalRefreshError` — the terminal-vs-transient table, now
+    also covering wrapped errors so the classification is proven to survive
+    `fmt.Errorf("%w")` annotation on the way up.
+  - `clientconfig.validSkillName` — the accepted charset, including that a name
+    of just `"-"` is currently accepted.
+  - `agentcore.EnvPrefix.lookupFloatDefault` — unset, valid, empty, whitespace,
+    and unparseable all resolve as intended.
+  - `config.ValidateEnvKnobs` — that a problem message carries the offending
+    value and the constraint it violated, not just the key, and that a range
+    violation is reported distinctly from a parse failure.
+  - `chattui.Resolve` — whitespace trimming on the `Model` and `Persona` flags.
 
-  Honest scope: these raise the advisory coverage signal and fence existing
-  behavior. They found no bugs and fixed none — treat them as regression
-  fences, not as evidence the covered paths were wrong before. Coverage is not
-  a merge gate here (see `AGENTS.md`), so the value is the pinned behavior, not
-  the percentage.
+  Honest scope: these fence existing behavior. They found no bugs in the code
+  under test and fixed none. Coverage is an advisory signal here, not a merge
+  gate, so the value is the pinned behavior rather than the percentage.
 
 ### Removed
+
+- **Dropped a tautological `HostExecutorCompiledIn` test** that arrived in the
+  same batch. It asserted `HostExecutorCompiledIn() == hostExecutorCompiledIn`
+  against the very constant the function returns — `x == x`, unfailable, and
+  tag-agnostic where the property that actually matters is tag-*dependent*: a
+  release build must report `false` so the MockMode path fails closed instead of
+  running tool calls unsandboxed on the host (#159).
+
+  A test that pinned the real invariant would have to assert `false` under
+  `!fleet_host_executor`, and every `go test` in CI runs with
+  `-tags fleet_host_executor` (the untagged lane is `go build` only), so such a
+  test would never execute as the pipeline stands. Rather than add a test that
+  silently never runs, the invariant is left to the tag wiring and the existing
+  `host_disabled.go` fail-closed path. Adding an untagged `go test` lane would
+  make it testable and is the prerequisite for trying again.
 
 - **Dropped the Codecov upload step and `codecov.yml`.** The repo has no
   `CODECOV_TOKEN` secret, so `codecov/codecov-action` could never upload: every
@@ -65,6 +78,24 @@ prior versions are listed because none have shipped.
   `docs/TESTING.md`) updated to say so instead of describing a Codecov check.
 
 ### Changed
+
+- **Restored nine transient-error cases to the `IsTerminalRefreshError` table.**
+  Moving that test into its own file (part of the batch above) had cut it from
+  eleven cases to eight, dropping `invalid_request`, `temporarily_unavailable`,
+  `http_500`, and `http_503` — precisely the "a blip must stay transient" half of
+  the contract, whose loss would let a 5xx start forcing users through a
+  reconnect. It also stopped setting `HTTPStatus`, so nothing pinned that the
+  decision keys off the OAuth error code rather than the HTTP status. A mutation
+  that marks `http_503` terminal passes the trimmed table and fails the restored
+  one. The two new wrapped-error cases from the move are kept, and the
+  explanatory comment the move had orphaned in `flow_test.go` now sits with the
+  test again.
+
+- **Trimmed the new `ValidateEnvKnobs` scenarios to what was not already
+  covered.** Three of its five cases duplicated existing tests — one used the
+  same two knobs and the same values as `TestLoad_MalformedKnobsAllReportedAtOnce`,
+  and blank-is-unset was already in `TestLoad_KnobValueNormalization`. What
+  remains asserts message content, which nothing covered before.
 
 - **Batched four per-iteration database writes that ran one round trip per
   item.** A static review flagged five query-in-a-loop sites; four were real and
