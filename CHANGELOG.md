@@ -17,7 +17,79 @@ prior versions are listed because none have shipped.
 
 ## [Unreleased]
 
+### Removed
+
+- **Dropped the Codecov upload step and `codecov.yml`.** The repo has no
+  `CODECOV_TOKEN` secret, so `codecov/codecov-action` could never upload: every
+  `go` job ended with a missing-token warning and the thresholds in `codecov.yml`
+  (project drop ≤2%, patch ≥60%) were never evaluated by anything. Nothing was
+  gating on it — `fail_ci_if_error` was already `false` — so removing the step
+  changes no merge gate, it just stops the noise and the dead config.
+
+  Coverage itself is unchanged and still collected: `go test` keeps
+  `-coverprofile=coverage.out -covermode=atomic`, `Coverage summary` prints the
+  project total and writes `coverage.html`, and `Per-package coverage summary`
+  still writes the full `go tool cover -func` table to the Actions job summary.
+  Those two steps are now the whole coverage signal. Docs (`AGENTS.md`,
+  `docs/TESTING.md`) updated to say so instead of describing a Codecov check.
+
 ### Changed
+
+- **PRs into `dev` now actually run CI, and the fast lane gained the web
+  lane it never had.** `dev-ci.yml` fired only on *push*, and `ci.yml` filters to
+  `main`, so a pull request targeting `dev` was gated by nothing but CodeQL —
+  `dev` itself was the first thing to ever build a change. Every Dependabot PR
+  merged unverified that way, and a `next` 16.3.0 bump landed a TypeScript error
+  that only surfaced at the dev→main promotion, where several changes were
+  already stacked on it. The lane now also fires on `pull_request` into `dev`.
+
+  Separately, nothing on `dev` ran `web/` **at all** — no lint, no vitest, no
+  `next build` — so all three npm Dependabot PRs reached `dev` with no build
+  behind them. Added a `Web lint / test / build (fast)` job mirroring `ci.yml`'s
+  `web` job command-for-command, and added it to the `Dev gate` aggregate.
+
+  Also fixed the migration DDL lint's base ref on the new trigger:
+  `github.event.before` is push-only, so on a PR it would have been empty and the
+  script's fallback (merge-base with `origin/main`) would have diffed in every
+  migration `dev` had accumulated since `main`, flagging files the PR never
+  touched. It now uses `github.event.pull_request.base.sha` on a PR.
+
+  `-race`, govulncheck, Grype, both Playwright suites, and CodeQL stay deferred
+  to the promotion's full gate: the split is "does it compile, lint, and pass
+  tests" on `dev`, "is it safe to ship" on the promotion. Documented as a
+  dev-vs-main table in [`docs/TESTING.md`](docs/TESTING.md).
+
+- **govulncheck: documented why it is deliberately unpinned, and added a daily
+  non-blocking scan so advisories are found on a schedule.** The lib/pq incident
+  raised the obvious question of whether to pin the gate. Both halves stay
+  floating, on purpose:
+
+  - The **database** is fetched from <https://vuln.go.dev> per run. Pinning it
+    would blind the gate to anything disclosed after the pin, which is the entire
+    point of the check. The cost — the same commit can pass today and fail
+    tomorrow — is the gate working, not flaking.
+  - The **scanner** stays `@latest`: that is upstream Go's own documented
+    invocation, and `golang/govulncheck-action` exposes no version input either.
+    A pin here could only be a hand-maintained string (Dependabot does not
+    rewrite versions inside `run:`), and the go.mod `tool` directive is worse —
+    tool dependencies share the main module's build list, so the scanner would
+    dictate the product's `x/net` version. A pin nobody bumps quietly costs
+    detection as the reachability analysis improves.
+
+  What was actually missing was discovery latency: the only thing that told this
+  project a new advisory applied to it was an unrelated PR turning red. New
+  `govulncheck-scheduled.yml` runs the same scan against `main` daily (08:00 UTC,
+  non-blocking) and reports SARIF to the Security tab, mirroring the existing
+  `grype-scheduled.yml` pattern. It makes nothing greener — the gate still blocks
+  a reachable vulnerability — it changes *when* the advisory is found. It also
+  sees strictly more: `-format sarif` reports advisories in modules the build
+  requires but never calls (SARIF level `note`), which the blocking text-mode
+  step ignores entirely.
+
+- Committed the `web/next-env.d.ts` line Next 16.3.0 regenerates, so a local
+  `next build` no longer leaves the tree dirty. The file is generated and marked
+  "should not be edited"; this just records what the current Next emits.
+
 
 - **The strong/escalation tier is back to `openai/gpt-5.6-sol`** (OpenAI: GPT-5.6
   Sol), reverting the one-release move to `x-ai/grok-4.6` (#1040). This is what

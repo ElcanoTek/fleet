@@ -247,10 +247,11 @@ jobs:
       - name: go test
         # Tagged: compiles the host-mode fixtures + MockMode tests. The release
         # binary above is built untagged; here we exercise the full suite (#159).
-        # -coverprofile / -covermode=atomic: emit coverage data for Codecov
-        # (issue #249). The race step below is intentionally NOT instrumented —
-        # `go tool cover` on this non-race profile is enough for trend tracking,
-        # and -coverprofile under -race would double the already-long race run.
+        # -coverprofile / -covermode=atomic: emit coverage data for the two
+        # coverage-summary steps below (issue #249). The race step is
+        # intentionally NOT instrumented — `go tool cover` on this non-race
+        # profile is enough for trend tracking, and -coverprofile under -race
+        # would double the already-long race run.
         run: go test -p 1 -tags fleet_host_executor -coverprofile=coverage.out -covermode=atomic ./... -count=1
 
       - name: go test -race
@@ -262,8 +263,9 @@ jobs:
 
       - name: Coverage summary
         # Print the project-total line to the log and emit an HTML report for
-        # local-style inspection / artifact download. fail_ci_if_error is off on
-        # the Codecov upload below, so this step is the durable in-log signal.
+        # local-style inspection / artifact download. There is no external
+        # coverage service in this pipeline, so this step and the per-package
+        # summary below ARE the coverage signal — in-log and in the job summary.
         run: |
           go tool cover -func=coverage.out | tail -1
           go tool cover -html=coverage.out -o coverage.html
@@ -277,23 +279,39 @@ jobs:
           go tool cover -func=coverage.out >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload coverage to Codecov
-        # Codecov posts an inline PR comment showing which lines lost coverage,
-        # adds a check to the PR, and maintains the historical trend. Thresholds
-        # live in codecov.yml at the repo root. Requires the CODECOV_TOKEN repo
-        # secret (Settings → Secrets → Actions). fail_ci_if_error is false so a
-        # transient Codecov outage can't break the merge gate.
-        uses: codecov/codecov-action@v7
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          files: coverage.out
-          flags: go
-          fail_ci_if_error: false
-
       - name: govulncheck (dependency CVEs)
         # Call-graph-aware scan of the (broad, fast-moving) dependency tree for
         # known vulnerabilities reachable from fleet's code. gosec covers SAST and
         # gitleaks covers secrets; nothing else gates on vulnerable dependencies.
+        #
+        # BOTH halves of this step are deliberately time-varying — unlike the
+        # pinned gitleaks/Grype releases above — so this is worth stating plainly
+        # rather than leaving it to look like an oversight:
+        #
+        #   * The DATABASE must be live. govulncheck fetches advisories from
+        #     https://vuln.go.dev per run (see `govulncheck -version`). Pinning it
+        #     would blind the gate to anything disclosed after the pin, which is
+        #     the entire point of the check. The cost is that this step can turn
+        #     red with no commit involved — that is the gate working, not
+        #     flaking. GO-2026-6166..6173 against lib/pq is the worked example:
+        #     nothing in the diff changed, and the correct response was to drop
+        #     the unmaintained dependency, not to quiet the scanner.
+        #
+        #   * The SCANNER stays @latest, which is upstream Go's own documented
+        #     invocation (go.dev/doc/security/vuln) and what golang/govulncheck-action
+        #     effectively does too — it exposes no govulncheck version input. A pin
+        #     here could only be a hand-maintained string (Dependabot does not
+        #     rewrite versions inside `run:`, and the go.mod `tool` directive is
+        #     worse: tool deps share the main module build list, so the scanner
+        #     would start dictating the product's x/net version). A pin nobody
+        #     bumps quietly costs detection as the reachability analysis improves
+        #     — the wrong trade for a security gate. If a bad govulncheck release
+        #     ever blocks every PR at once, pinning here is the one-line rollback.
+        #
+        # govulncheck-scheduled.yml runs the same scan against main daily and
+        # reports to the Security tab. That does not make anything greener; it
+        # changes WHEN a newly published advisory is discovered, so it is found
+        # on a schedule instead of ambushing the next unrelated PR.
         run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
   web:

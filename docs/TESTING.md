@@ -29,7 +29,7 @@ fix this doc (and the `make` targets) to match.
 | Go vet | `go` | `go vet` clean (tagged) | part of `make ci-go` |
 | Go lint | `go` | `golangci-lint` full gate (zero findings) | `make lint` |
 | Go test | `go` | Unit + integration suites + coverage profile (needs Postgres) | `make test` |
-| Go coverage | `go` | Coverage uploaded to Codecov; project drops >2% fail the check | `make test-cover` |
+| Go coverage | `go` | Coverage profile summarised in the log + job summary (advisory, no threshold) | `make test-cover` |
 | Go test -race | `go` | Race detector on the same suites | `make test-race` |
 | govulncheck | `go` | Dependency CVEs reachable from fleet | `make govulncheck` |
 | Grype (image) | `grype-scan` | CVEs in the sandbox container image (fail on a fixable CRITICAL) | see below |
@@ -40,6 +40,34 @@ fix this doc (and the `make` targets) to match.
 
 The fast PR-gate subset (everything except the browser/sandbox e2e lanes) is one
 command: `make ci-local`.
+
+## Which lanes run where — `dev` vs `main`
+
+The table above is [`ci.yml`](../.github/workflows/ci.yml), and **`ci.yml` only
+fires on `main`** (its `push` and `pull_request` triggers filter to it). Work
+normally lands on the `dev` integration branch first — Dependabot targets `dev`
+by default, see [`dependabot.yml`](../.github/dependabot.yml) — so `dev` has its
+own lane, [`dev-ci.yml`](../.github/workflows/dev-ci.yml), and the two tiers
+divide the work like this:
+
+| | `dev-ci.yml` (fast lane) | `ci.yml` (full gate) |
+| --- | --- | --- |
+| **Fires on** | PRs into `dev`, and pushes to `dev` | PRs into `main`, and pushes to `main` — in practice, the dev→main promotion PR |
+| **Runs** | Go compile / vet / lint / test (with Postgres), web lint / test / build, migration DDL lint, gitleaks | everything in the table above |
+| **Skips** | `-race`, govulncheck, Grype, both Playwright suites, CodeQL | nothing |
+| **Aggregate check** | `Dev gate` | `CI gate` |
+
+The split is "does it compile, lint, and pass tests" on `dev`; "is it safe to
+ship" on the promotion. The skipped lanes are the slow ones, and none of them is
+what a routine change breaks.
+
+> **Both triggers on the fast lane matter.** The `pull_request` trigger was added
+> after a period when PRs into `dev` were gated by nothing but CodeQL, which made
+> `dev` itself the first thing to ever build a change. Every Dependabot PR merged
+> unverified, and a `next` 16.3.0 bump landed a TypeScript error that only
+> surfaced at the promotion — where it is far more expensive to unpick, because
+> several changes are already stacked on it. The web lane was missing from this
+> file entirely for the same reason: nothing on `dev` ran `web/` at all.
 
 ## Convenience targets that mirror CI
 
@@ -201,15 +229,59 @@ PGPASSWORD=fleet psql -h localhost -U fleet -d fleet -v ON_ERROR_STOP=1 \
    go run golang.org/x/vuln/cmd/govulncheck@latest ./...   # or: make govulncheck
    ```
 
-> **Coverage (CI-only steps).** After the `go test` step CI runs three
-> coverage steps (issue #249): `Coverage summary` (prints the project total +
-> writes `coverage.html`), `Per-package coverage summary` (writes the
-> `go tool cover -func` table to `$GITHUB_STEP_SUMMARY`), and
-> `Upload coverage to Codecov` (`codecov/codecov-action@v4`). Thresholds live in
-> [`codecov.yml`](../codecov.yml): project coverage may drop at most 2% relative
-> to the base branch (`target: auto`), and new code in a PR must be 60% covered.
-> These have no local `make` equivalent beyond `make test-cover` (which produces
-> the same `coverage.out`); the Codecov upload itself is CI-side.
+   **This gate is time-varying on purpose, and that is worth understanding
+   before you treat a red run as a flake.** Both halves float, unlike the pinned
+   gitleaks and Grype releases:
+
+   - **The database is live.** govulncheck fetches advisories from
+     <https://vuln.go.dev> on every run (`govulncheck -version` prints the DB and
+     its last-updated timestamp; `-db` overrides the URL). Pinning it would blind
+     the gate to everything disclosed after the pin, which is the whole point of
+     the check — so it stays live, and the same commit can pass today and fail
+     tomorrow. That is the gate working.
+
+     The worked example: `GO-2026-6166`, `GO-2026-6168`–`GO-2026-6173` were
+     published against `github.com/lib/pq`, a dependency fleet already had. CI on
+     `main` went red with nothing in the diff to blame. All seven were
+     `Fixed in: N/A` (lib/pq is unmaintained), so no bump could clear them and
+     the correct fix was to remove the dependency — not to quiet the scanner.
+
+   - **The scanner stays `@latest`**, which is upstream Go's own documented
+     invocation and effectively what `golang/govulncheck-action` does (it exposes
+     no govulncheck version input). A pin here could only be a hand-maintained
+     string — Dependabot does not rewrite versions inside a `run:` block, and the
+     go.mod `tool` directive is worse, because tool dependencies share the main
+     module's build list and the scanner would start dictating the product's
+     `x/net` version. A pin nobody bumps quietly costs detection as the
+     reachability analysis improves, which is the wrong trade for a security
+     gate. If a bad govulncheck release ever blocks every PR at once, pinning
+     this one line is the rollback.
+
+   ### Daily scheduled scan — `.github/workflows/govulncheck-scheduled.yml`
+
+   Because the database floats, the only thing that would otherwise tell this
+   project a new advisory applies to it is an unrelated PR turning red. A
+   **non-blocking** daily scan (08:00 UTC; also `workflow_dispatch`) runs the
+   same command against the tip of `main` and reports to the Security tab
+   (category `govulncheck-scheduled`), so an advisory is found on a schedule
+   instead of ambushing the next contributor. It makes nothing greener — the
+   gate still blocks a reachable vulnerability.
+
+   It also sees strictly more than the gate does: `-format sarif` reports
+   vulnerabilities in modules the build merely *requires* but never calls, at
+   SARIF level `note`, which the blocking text-mode step ignores entirely. Those
+   notes are the leading indicator — an unmaintained dependency accumulating
+   advisories is worth knowing about before a refactor makes one reachable.
+
+> **Coverage (CI-only steps).** After the `go test` step CI runs two coverage
+> steps (issue #249): `Coverage summary` (prints the project total + writes
+> `coverage.html`) and `Per-package coverage summary` (writes the
+> `go tool cover -func` table to `$GITHUB_STEP_SUMMARY`). Both are advisory:
+> **no coverage threshold gates a merge**, and there is no external coverage
+> service — the `Upload coverage to Codecov` step and `codecov.yml` were removed
+> because the repo has no `CODECOV_TOKEN`, so the upload only ever emitted a
+> missing-token warning. Locally `make test-cover` produces the same
+> `coverage.out`; the two summary steps are CI-side presentation on top of it.
 
 > **Podman in this lane.** CI masks `podman` so the container-sandbox
 > integration tests in `internal/sandbox` cleanly self-skip (building the
