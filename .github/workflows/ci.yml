@@ -294,6 +294,35 @@ jobs:
         # Call-graph-aware scan of the (broad, fast-moving) dependency tree for
         # known vulnerabilities reachable from fleet's code. gosec covers SAST and
         # gitleaks covers secrets; nothing else gates on vulnerable dependencies.
+        #
+        # BOTH halves of this step are deliberately time-varying — unlike the
+        # pinned gitleaks/Grype releases above — so this is worth stating plainly
+        # rather than leaving it to look like an oversight:
+        #
+        #   * The DATABASE must be live. govulncheck fetches advisories from
+        #     https://vuln.go.dev per run (see `govulncheck -version`). Pinning it
+        #     would blind the gate to anything disclosed after the pin, which is
+        #     the entire point of the check. The cost is that this step can turn
+        #     red with no commit involved — that is the gate working, not
+        #     flaking. GO-2026-6166..6173 against lib/pq is the worked example:
+        #     nothing in the diff changed, and the correct response was to drop
+        #     the unmaintained dependency, not to quiet the scanner.
+        #
+        #   * The SCANNER stays @latest, which is upstream Go's own documented
+        #     invocation (go.dev/doc/security/vuln) and what golang/govulncheck-action
+        #     effectively does too — it exposes no govulncheck version input. A pin
+        #     here could only be a hand-maintained string (Dependabot does not
+        #     rewrite versions inside `run:`, and the go.mod `tool` directive is
+        #     worse: tool deps share the main module build list, so the scanner
+        #     would start dictating the product's x/net version). A pin nobody
+        #     bumps quietly costs detection as the reachability analysis improves
+        #     — the wrong trade for a security gate. If a bad govulncheck release
+        #     ever blocks every PR at once, pinning here is the one-line rollback.
+        #
+        # govulncheck-scheduled.yml runs the same scan against main daily and
+        # reports to the Security tab. That does not make anything greener; it
+        # changes WHEN a newly published advisory is discovered, so it is found
+        # on a schedule instead of ambushing the next unrelated PR.
         run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
   web:

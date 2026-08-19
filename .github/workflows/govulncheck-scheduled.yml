@@ -1,0 +1,100 @@
+# Daily Go dependency vulnerability scan (govulncheck) — NON-BLOCKING.
+#
+# The per-PR govulncheck step in ci.yml is the merge gate: it fails when fleet
+# CALLS a known-vulnerable symbol. This scheduled lane is its early-warning half,
+# and exists because of how that gate behaves in practice.
+#
+# govulncheck reads https://vuln.go.dev at run time (by design — a scanner
+# pinned to a stale advisory set is worthless), so the gate's verdict is a
+# function of the clock, not just the commit. Left to itself, the ONLY way this
+# project learns that a new advisory affects it is that some unrelated PR turns
+# red. That is what happened with GO-2026-6166..6173 against github.com/lib/pq:
+# seven advisories landed against an already-present dependency and the next run
+# on main went red with nothing in the diff to blame.
+#
+# So this job runs the same scan against the tip of main on a schedule and
+# reports to the Security tab instead of failing. It does not make CI greener —
+# the gate still blocks a reachable vulnerability, exactly as it should. It
+# changes WHEN the advisory is discovered: on a daily cadence, attributable to
+# the database rather than to whoever happened to open the next PR.
+#
+# It also sees strictly more than the gate does. `-format sarif` reports
+# vulnerabilities in modules the build merely REQUIRES but never calls, at SARIF
+# level "note"; the blocking text-mode step ignores those entirely (it only
+# counts called symbols). Those notes are the useful leading indicator — an
+# unmaintained dependency accumulating advisories is worth knowing about before
+# a refactor makes one of them reachable.
+#
+# Same shape and rationale as grype-scheduled.yml (blocking per-PR gate +
+# non-blocking scheduled SARIF feed). See docs/TESTING.md.
+name: Daily Go vulnerability scan
+
+on:
+  schedule:
+    # 08:00 UTC daily — offset from the 07:00 canary and the Monday 09:00 Grype
+    # scan so the three scheduled lanes don't contend for runners.
+    - cron: '0 8 * * *'
+  workflow_dispatch:  # Manual trigger (e.g. to confirm a fix cleared an advisory)
+
+permissions:
+  contents: read
+  security-events: write  # required to upload SARIF to the Security tab
+
+jobs:
+  govulncheck-scheduled:
+    name: Daily Go vulnerability scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: main  # always scan the tip of main, not a PR branch
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Scan (daily — report only, never fail)
+        # Deliberately mirrors ci.yml's invocation, including @latest, so this is
+        # a true preview of what the gate will do rather than a second opinion
+        # from a different scanner build.
+        #
+        # `-format sarif` is report-only: it exits 0 even when it has findings
+        # (verified), so a new advisory shows up as a Security alert instead of a
+        # red scheduled run. `|| true` is belt-and-braces for a future govulncheck
+        # that changes that, and the guard below is what actually catches a scan
+        # that died before writing anything.
+        run: |
+          set -uo pipefail
+          go run golang.org/x/vuln/cmd/govulncheck@latest \
+            -format sarif ./... > govulncheck.sarif 2> govulncheck.err || true
+          if [ ! -s govulncheck.sarif ]; then
+            echo "govulncheck produced no SARIF; stderr was:" >&2
+            cat govulncheck.err >&2 || true
+            exit 1
+          fi
+          # Summarize to the job log so the run is readable without opening the
+          # Security tab. jq ships on ubuntu-latest.
+          echo "### govulncheck (main)" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          jq -r '
+            .runs[0] as $r
+            | ($r.results // [])
+            | if length == 0 then "No advisories reported."
+              else map("[\(.level // "none")] \(.ruleId): \((.message.text // "") | split("\n")[0])")
+                   | join("\n")
+              end
+          ' govulncheck.sarif | tee -a "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload scan results
+        uses: github/codeql-action/upload-sarif@v4
+        # Skip cleanly (rather than error "file not found") if the scan step
+        # failed before govulncheck could write the SARIF.
+        if: ${{ !cancelled() && hashFiles('govulncheck.sarif') != '' }}
+        with:
+          sarif_file: 'govulncheck.sarif'
+          category: 'govulncheck-scheduled'

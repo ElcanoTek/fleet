@@ -153,8 +153,10 @@ clean:
 # before `make ci-go` / `make ci-local`; see docs/TESTING.md for the values.
 # ---------------------------------------------------------------------------
 
-# Dependency-CVE scan — the CI 'go' job's govulncheck step, verbatim. Pinned to
-# @latest exactly as CI does (CI: `go run golang.org/x/vuln/cmd/govulncheck@latest ./...`).
+# Dependency-CVE scan — the CI 'go' job's govulncheck step, verbatim. Tracks
+# @latest exactly as CI does, deliberately: both the scanner and its advisory
+# database are meant to float, so this can fail on an unchanged tree when a new
+# advisory lands. See docs/TESTING.md ("govulncheck") for why neither is pinned.
 govulncheck:
 	go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
