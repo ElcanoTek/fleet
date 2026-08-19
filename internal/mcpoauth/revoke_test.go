@@ -100,7 +100,7 @@ func TestRevokeToken(t *testing.T) {
 		}
 
 		// Use a closed test server to force an error from httpClient.Do
-		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+		ts := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {}))
 		ts.Close()
 		err = RevokeToken(context.Background(), http.DefaultClient, ts.URL, "client_id", "", "test_token")
 		if err == nil {
