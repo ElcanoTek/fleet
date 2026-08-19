@@ -1,0 +1,12 @@
+# Vendored third-party asset: the Bento single-file app shell shipped with the
+# built-in bento-slides skill (see that pack's templates/NOTICE.md for
+# provenance). It is pinned by sha256 in
+# internal/clientconfig/builtin_skills_bento_test.go, so any byte-level
+# rewrite is a test failure:
+#
+#   -text   a contributor with core.autocrlf=true must not get CRLFs rewritten
+#           into it on checkout — that would break the pinned digest.
+#   -diff   it is a 689KB minified bundle; "Binary files differ" is the honest
+#           presentation of a vendored blob in review, not a 689KB diff.
+#   -merge  never attempt a content merge; re-vendor deliberately instead.
+internal/clientconfig/builtin_skills/bento-slides/templates/*.bento.html -text -diff -merge

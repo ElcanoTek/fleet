@@ -19,6 +19,49 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **A built-in `bento-slides` skill: the agent can now produce a real,
+  downloadable presentation offline (#985).** A [Bento](https://bento.page) deck
+  is one self-contained `.bento.html` file that is simultaneously the slides, the
+  viewer and a full editor, with the document stored as plain JSON in a single
+  `#bento-doc` script block. Ask for a deck in chat and the agent writes one into
+  the workspace; the user downloads it and opens it in any browser — no Gamma, no
+  PowerPoint, no PPTX toolchain, and no network call beyond the model provider.
+
+  The pack ships in `internal/clientconfig/builtin_skills/bento-slides/` and
+  needed **no Go change**: `//go:embed all:builtin_skills` is recursive, so its
+  `templates/`, `references/` and `scripts/` materialize into the merged skills
+  dir and land on the sandbox's read-only mount exactly like
+  `data-profiler/scripts/profile.py`. It shows up in Settings → Skills with a
+  **Built-in** badge and answers to `/bento-slides`, both for free.
+
+  Two deliberate departures from the issue's sketch. The template is the
+  **upstream v1.0.18 release artifact, vendored unmodified** (689KB, MIT, ©
+  The Bento authors) rather than a "minimal" one, because a Bento shell *is* the
+  application — there is no smaller file that opens. And instead of editing the
+  minified bundle directly, the pack ships a stdlib-only `scripts/bento_doc.py`
+  (`new` / `get` / `set` / `validate`): the document block sits at byte 6322, so
+  reaching it with `view_file` would burn ~125KB of context on runtime code, and
+  the block's escaping rule for `<` is the kind of thing that corrupts a file
+  silently rather than loudly. The helper also turns two format-and-safety rules
+  into mechanisms instead of reminders — `get` keeps a shared deck's `collab`
+  live-session private keys out of the model context while `set` restores them
+  from the file untouched, and a deck's `docId` is carried across an edit rather
+  than regenerated. Every refusal leaves the deck byte-identical, and the app
+  shell outside the document block is preserved exactly.
+
+  Honest scope: discovery is **interactive chat only**. `internal/scheduledrun`
+  composes its own prompt and emits no bundle-skill roster, so scheduled tasks
+  and `fleet task run` do not see this skill (true of every bundle skill, not new
+  here — `docs/SKILLS.md` now states it plainly instead of implying otherwise).
+  Decks are always delivered as a download, never rendered inline, so the skill
+  requires a new filename per revision — workspace downloads are cached
+  `immutable` for 24 hours. No PPTX export, no hosted collaborative editing, and
+  no pixel parity with PowerPoint animations. The vendored bundle's own
+  JavaScript dependencies are watched by no CI scanner (`govulncheck` is Go-only;
+  Grype scans the sandbox image), so a sha256 pin in
+  `internal/clientconfig/builtin_skills_bento_test.go` guards the bytes and
+  re-vendoring is a documented manual act — see the pack's `templates/NOTICE.md`.
+
 - **Admin-configurable model tiers (#1187).** The default and advanced
   ("recommended") models are now workspace settings — Settings → Admin →
   Features → Model tiers — instead of compile-time constants, so a lab
