@@ -35,6 +35,16 @@ prior versions are listed because none have shipped.
 
 ### Changed
 
+- **`expandCidImagesToDataURLs` no longer compiles a regex per inline
+  attachment.** The approval-preview substitution built `regexp.MustCompile`
+  inside the attachment loop and rescanned the whole document for every inline
+  image (O(N·M)). It now uses one package-level `cidPattern`, collects the
+  attachments into a cid→data-URL map, and rewrites the document in a single
+  `ReplaceAllStringFunc` pass — ~5.5x faster on a two-image body, and a
+  substituted data URL can no longer be rescanned by a later attachment's
+  replacement. Behavior is otherwise unchanged: same case-insensitive scheme
+  and id matching, same verbatim passthrough for a cid with no attachment.
+
 - **PRs into `dev` now actually run CI, and the fast lane gained the web
   lane it never had.** `dev-ci.yml` fired only on *push*, and `ci.yml` filters to
   `main`, so a pull request targeting `dev` was gated by nothing but CodeQL —
