@@ -186,6 +186,15 @@ func writeEnvLines(path string, lines []string) error {
 		_ = tmp.Close() // discarding the temp file; original error already being returned.
 		return err
 	}
+	// fsync BEFORE the rename (#1124): the rename atomically swaps the
+	// directory entry, but without a Sync the new file's data may still be
+	// dirty page cache — a power loss shortly after `fleet mcp account set`
+	// could then leave the credentials file empty/truncated on some
+	// filesystems, which for a secrets file means locked-out connectors.
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close() // discarding the temp file; original error already being returned.
+		return err
+	}
 	if err := tmp.Close(); err != nil {
 		return err
 	}

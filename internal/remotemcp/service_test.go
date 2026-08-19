@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -28,6 +29,9 @@ type fakeStore struct {
 	shares map[string][]string
 	// prefs: email -> connector-pref map, mirroring user_connector_prefs.
 	prefs map[string]map[string]store.ConnectorPref
+	// clientSecret is what LoadServerSecrets unseals ("" = public client,
+	// the default for every test that doesn't care).
+	clientSecret string
 }
 
 func newFakeStore() *fakeStore {
@@ -93,7 +97,7 @@ func (f *fakeStore) DeleteRemoteMCPServer(_ context.Context, email, id string) e
 }
 
 func (f *fakeStore) LoadServerSecrets(_ context.Context, _ *store.RemoteMCPServer) (string, string, error) {
-	return "", "", nil
+	return f.clientSecret, "", nil
 }
 
 func (f *fakeStore) GetRemoteMCPAPIKey(_ context.Context, srv *store.RemoteMCPServer) (string, error) {
@@ -939,5 +943,81 @@ func TestServiceAcquireTokenRecoversFromNarrowedScope(t *testing.T) {
 	server, _ = svc.store.GetRemoteMCPServer(ctx, "u@x.com", server.ID)
 	if server.Status == store.RemoteMCPStatusNeedsReauth {
 		t.Error("a recoverable narrowed scope must not force a reconnect")
+	}
+}
+
+// The #1124 secret-observer contract: every runtime-acquired credential — the
+// stored refresh token about to ride a token-endpoint request, the rotated
+// access/refresh pair, the returned bearer, an unsealed api_key — is offered to
+// the observer at acquisition time, so the credential-owning broker can
+// register it for literal redaction (mcpbroker.RegisterSecretLiteral) before
+// the credential is used anywhere an error string could echo it.
+func TestServiceSecretObserverSeesRuntimeCredentials(t *testing.T) {
+	fs := newFakeStore()
+	srv := oauthTestServer(t, "rotate")
+	svc := newTestService(t, fs, srv)
+	ctx := context.Background()
+
+	var mu sync.Mutex
+	seen := map[string]bool{}
+	svc.SetSecretObserver(func(secret string) {
+		mu.Lock()
+		defer mu.Unlock()
+		if secret == "" {
+			t.Error("observer must never receive an empty value")
+		}
+		seen[secret] = true
+	})
+
+	// OAuth path: the stale access token forces a refresh through the real
+	// refreshFunc, which rotates rt-init → (at-refreshed, rt-rotated). The
+	// unsealed client secret rides the same token request, so it must be
+	// registered too.
+	fs.clientSecret = "cs-unsealed-fixture"
+	server := connectAndStale(t, svc, fs, srv)
+	bearer, err := svc.AcquireTokenByID(ctx, "u@x.com", server.ID)
+	if err != nil || bearer != "at-refreshed" {
+		t.Fatalf("AcquireTokenByID = %q, %v; want at-refreshed", bearer, err)
+	}
+	mu.Lock()
+	for _, want := range []string{"rt-init", "at-refreshed", "rt-rotated", "cs-unsealed-fixture"} {
+		if !seen[want] {
+			t.Errorf("observer never saw %q", want)
+		}
+	}
+	mu.Unlock()
+
+	// api_key path: the unsealed key is registered the same way.
+	keyed, err := fs.CreateRemoteMCPServer(ctx, store.RemoteMCPServerInput{
+		UserEmail: "u@x.com", Name: "keyed", URL: srv.URL + "/mcp", AuthKind: "api_key",
+	})
+	if err != nil {
+		t.Fatalf("create api_key server: %v", err)
+	}
+	if err := fs.SetRemoteMCPAPIKey(ctx, "u@x.com", keyed.ID, "sk-unsealed-fixture-key"); err != nil {
+		t.Fatalf("set api key: %v", err)
+	}
+	cred, err := svc.AcquireTokenByID(ctx, "u@x.com", keyed.ID)
+	if err != nil || cred != "sk-unsealed-fixture-key" {
+		t.Fatalf("AcquireTokenByID(api_key) = %q, %v", cred, err)
+	}
+	mu.Lock()
+	if !seen["sk-unsealed-fixture-key"] {
+		t.Error("observer never saw the unsealed api_key")
+	}
+	mu.Unlock()
+}
+
+// With no observer registered every acquisition path must behave exactly as
+// before — noteSecrets is a no-op, not a nil-dereference.
+func TestServiceNoSecretObserverIsHarmless(t *testing.T) {
+	fs := newFakeStore()
+	srv := oauthTestServer(t, "rotate")
+	svc := newTestService(t, fs, srv)
+
+	server := connectAndStale(t, svc, fs, srv)
+	bearer, err := svc.AcquireTokenByID(context.Background(), "u@x.com", server.ID)
+	if err != nil || bearer != "at-refreshed" {
+		t.Fatalf("AcquireTokenByID = %q, %v; want at-refreshed", bearer, err)
 	}
 }

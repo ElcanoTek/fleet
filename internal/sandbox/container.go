@@ -1254,18 +1254,41 @@ func (c *containerImpl) bridgeStderrSuffix() string {
 // Subsequent calls are a no-op as long as the exec session is still
 // healthy.
 func (c *containerImpl) ensureBridge() error {
+	started, err := c.startBridgeIfNeeded()
+	if err != nil || !started {
+		return err
+	}
+	// Match legacy timing — the bridge sets up its kernel asynchronously
+	// after we send the first request, but the stdin reader has to be
+	// up before we can write. 100ms covers the common case; if the
+	// bridge isn't ready, the first ReadBytes will just wait. The pause
+	// deliberately runs AFTER c.mu is released (#1124): holding the lock
+	// through it stalled every concurrent operation on this container
+	// (close, resource telemetry, a racing runPython) behind a fixed
+	// 100ms sleep, and the lock protects the bridge FIELDS, not this
+	// settle window — a request written before the bridge reads stdin
+	// just sits in the exec client's pipe until it does.
+	time.Sleep(100 * time.Millisecond)
+	return nil
+}
+
+// startBridgeIfNeeded starts the bridge exec session under c.mu when it is not
+// already running and healthy, reporting whether THIS call started it (so
+// ensureBridge applies the post-start settle delay only to a fresh start, and
+// outside the lock).
+func (c *containerImpl) startBridgeIfNeeded() (started bool, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	if c.bridgeStarted && c.bridgeCmd != nil && c.bridgeCmd.ProcessState == nil {
-		return nil
+		return false, nil
 	}
 
 	// Snapshot the id (close() clears the field concurrently under idMu) and
 	// refuse to start a bridge in a container that is already torn down.
 	containerID := c.currentContainerID()
 	if containerID == "" {
-		return fmt.Errorf("start bridge: %w", ErrClosed)
+		return false, fmt.Errorf("start bridge: %w", ErrClosed)
 	}
 
 	// `podman exec -i` keeps stdin open; the bridge reads JSON-per-line
@@ -1289,28 +1312,23 @@ func (c *containerImpl) ensureBridge() error {
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		return fmt.Errorf("stdin pipe: %w", err)
+		return false, fmt.Errorf("stdin pipe: %w", err)
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		_ = stdin.Close()
-		return fmt.Errorf("stdout pipe: %w", err)
+		return false, fmt.Errorf("stdout pipe: %w", err)
 	}
 	if err := cmd.Start(); err != nil {
 		_ = stdin.Close()
-		return fmt.Errorf("start bridge exec: %w", err)
+		return false, fmt.Errorf("start bridge exec: %w", err)
 	}
 	c.bridgeCmd = cmd
 	c.bridgeStdin = stdin
 	c.bridgeStdout = bufio.NewReader(stdout)
 	c.bridgeStderr = stderrBuf
 	c.bridgeStarted = true
-	// Match legacy timing — the bridge sets up its kernel asynchronously
-	// after we send the first request, but the stdin reader has to be
-	// up before we can write. 100ms covers the common case; if the
-	// bridge isn't ready, the first ReadBytes will just wait.
-	time.Sleep(100 * time.Millisecond)
-	return nil
+	return true, nil
 }
 
 func (c *containerImpl) close() {

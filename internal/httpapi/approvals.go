@@ -1661,7 +1661,7 @@ func (s *Server) stagedBashLockdown(ctx context.Context, approval *store.Approva
 // sandboxTaker and agent.Manager's turnSandboxTaker.
 type stagedBashTaker interface {
 	// Take returns a warm, network-ENABLED sandbox (the interactive default).
-	Take() (*sandbox.Sandbox, func(), error)
+	Take(ctx context.Context) (*sandbox.Sandbox, func(), error)
 	// TakeContainer cold-starts a fresh sandbox with egress SEALED
 	// (--network=none) — the lockdown boundary.
 	TakeContainer(ctx context.Context) (*sandbox.Sandbox, func(), error)
@@ -1712,7 +1712,7 @@ func takeStagedBashSandbox(ctx context.Context, pool stagedBashTaker, lockdown b
 	case sandbox.NetworkModeLockdown:
 		sb, cleanup, err := pool.TakeContainer(ctx)
 		if errors.Is(err, sandbox.ErrContainerUnavailable) {
-			return pool.Take()
+			return pool.Take(ctx)
 		}
 		if err != nil {
 			return nil, nil, fmt.Errorf("take lockdown sandbox: %w", err)
@@ -1721,7 +1721,7 @@ func takeStagedBashSandbox(ctx context.Context, pool stagedBashTaker, lockdown b
 	case sandbox.NetworkModeAllowlisted:
 		sb, cleanup, err := pool.TakeContainerWithEgress(ctx, sandbox.ResourceOverride{}, allowlist)
 		if errors.Is(err, sandbox.ErrContainerUnavailable) {
-			return pool.Take()
+			return pool.Take(ctx)
 		}
 		if err != nil {
 			return nil, nil, fmt.Errorf("take allowlisted sandbox: %w", err)
@@ -1729,7 +1729,7 @@ func takeStagedBashSandbox(ctx context.Context, pool stagedBashTaker, lockdown b
 		return sb, cleanup, nil
 	}
 
-	sb, cleanup, err := pool.Take()
+	sb, cleanup, err := pool.Take(ctx)
 	if err != nil {
 		return nil, nil, fmt.Errorf("take sandbox: %w", err)
 	}

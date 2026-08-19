@@ -1392,6 +1392,12 @@ func (b *Bundle) validate() error {
 				return fmt.Errorf("mcp_servers[%q]: identity_env var %q is not a key of the server's env map", s.Name, trimmed)
 			}
 		}
+		// The account-suffix convention is purely lexical, so its base vars
+		// must not be underscore-prefixes of one another — fail the load
+		// loudly rather than cross-wire credentials at spawn time (#1124).
+		if err := validateAccountSuffixBases(s); err != nil {
+			return err
+		}
 		// A declared probe must name a callable tool: empty is a broken
 		// declaration, and a tool outside the tools: allowlist would have the
 		// probe exercising a call the runtime itself never exposes — both fail
@@ -1426,6 +1432,65 @@ func (b *Bundle) validate() error {
 	}
 	if err := validateHooks(b.HooksConfig); err != nil {
 		return err
+	}
+	return nil
+}
+
+// validateAccountSuffixBases rejects a stdio server whose account-suffix base
+// vars contain one var that is an underscore-boundary prefix of another
+// (#1124). The base set is every key of the server's env map (each is probed
+// as <VAR>_<ACCOUNT> by creds.ApplyClientSuffix on a named-account spawn) plus
+// account_vars (scanned by creds.AccountsFor to derive the account catalog).
+// That convention is purely lexical, so declaring both FOO and FOO_BAR means:
+//
+//   - account "bar" silently overlays FOO with FOO_BAR's value — a DIFFERENT
+//     credential injected under the wrong key; and
+//   - FOO_BAR's tail surfaces as a phantom "bar" account of FOO in the
+//     account catalog.
+//
+// Both are wrong-credential hazards, so the load fails with instructions to
+// rename rather than leaving the ambiguity to spawn time. Matching is
+// case-insensitive, mirroring creds.AccountsFor. Scope is per server — the
+// set one ApplyClientSuffix/AccountsFor call actually operates over; http
+// servers reject account variants outright and are skipped.
+func validateAccountSuffixBases(s *ServerDef) error {
+	if s.Type != "stdio" {
+		return nil
+	}
+	bases := make(map[string]string, len(s.Env)+len(s.AccountVars)) // UPPER(name) → declared spelling
+	names := make([]string, 0, len(s.Env)+len(s.AccountVars))
+	collect := func(name string) {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			return
+		}
+		upper := strings.ToUpper(name)
+		if _, dup := bases[upper]; dup {
+			return
+		}
+		bases[upper] = name
+		names = append(names, upper)
+	}
+	for name := range s.Env {
+		collect(name)
+	}
+	for _, name := range s.AccountVars {
+		collect(name)
+	}
+	slices.Sort(names) // deterministic error when several pairs conflict
+	for _, upper := range names {
+		for i := 0; i < len(upper); i++ {
+			if upper[i] != '_' {
+				continue
+			}
+			prefix, ok := bases[upper[:i]]
+			if !ok {
+				continue
+			}
+			return fmt.Errorf(
+				"mcp_servers[%q]: env var %q is an underscore-prefix of sibling var %q — the account-suffix convention (<VAR>_<ACCOUNT>) would inject %s's value over %s for account %q and list %q as a credential account of %s; rename one of the vars so neither is a prefix of the other",
+				s.Name, prefix, bases[upper], bases[upper], prefix, strings.ToLower(upper[i+1:]), strings.ToLower(upper[i+1:]), prefix)
+		}
 	}
 	return nil
 }

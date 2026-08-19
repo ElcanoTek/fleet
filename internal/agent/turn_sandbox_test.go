@@ -44,12 +44,12 @@ func (f *fakeTurnTaker) TakeContainerWithEgress(_ context.Context, _ sandbox.Res
 	return nil, func() {}, nil
 }
 
-func (f *fakeTurnTaker) TakePersistent(string) (*sandbox.Sandbox, func(), error) {
+func (f *fakeTurnTaker) TakePersistent(context.Context, string) (*sandbox.Sandbox, func(), error) {
 	f.tookPersistent = true
 	return nil, func() {}, nil
 }
 
-func (f *fakeTurnTaker) Take() (*sandbox.Sandbox, func(), error) {
+func (f *fakeTurnTaker) Take(context.Context) (*sandbox.Sandbox, func(), error) {
 	f.tookWarm = true
 	return nil, func() {}, nil
 }

@@ -102,6 +102,21 @@ entry must name a key of that server's env map, and the field is rejected on
 http servers. Listed names are also registered for the `.env` allowlist so
 their suffixed forms survive the env-file load.
 
+### 3a. Base vars must not be underscore-prefixes of siblings (#1124)
+
+The `<VAR>_<ACCOUNT>` account convention is purely lexical, so a stdio server
+that declares both `FOO` and `FOO_BAR` (as env keys or `account_vars`) is
+ambiguous: selecting account `bar` would silently overlay `FOO` with
+`FOO_BAR`'s value — a *different* credential injected under the wrong key —
+and the account catalog would report `bar` as a phantom account of `FOO`
+(e.g. `SLACK_TOKEN_URL` surfacing `url` as an "account" of `SLACK_TOKEN`).
+Bundle validation now rejects such a pair at load, per server, with rename
+instructions (`validateAccountSuffixBases`). Residual, deliberately not
+enforced: the same pair split across two servers (or a base var colliding with
+an unrelated process-env var) can still cross-wire, because the process env is
+one namespace — bundle authors should keep credential var families
+prefix-free bundle-wide.
+
 ### 4. Interactive approval staging for bundle-declared critical tools
 
 `agent_policy.critical_tools` suffixes were enforced only in scheduled mode

@@ -63,7 +63,7 @@ func TestTakePersistent_PoisonedEntryIsRetiredAtRelease(t *testing.T) {
 	p.persistent["conv-poison"] = entry
 	p.persistentMu.Unlock()
 
-	sb, release, err := p.TakePersistent("conv-poison")
+	sb, release, err := p.TakePersistent(context.Background(), "conv-poison")
 	if err != nil {
 		t.Fatalf("TakePersistent: %v", err)
 	}
@@ -96,7 +96,7 @@ func TestTakePersistent_PoisonedEntryIsRetiredAtClaim(t *testing.T) {
 	p.persistent["conv-poison"] = entry
 	p.persistentMu.Unlock()
 
-	sb, release, err := p.TakePersistent("conv-poison")
+	sb, release, err := p.TakePersistent(context.Background(), "conv-poison")
 	if err != nil {
 		t.Fatalf("TakePersistent: %v", err)
 	}

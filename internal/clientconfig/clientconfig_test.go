@@ -128,6 +128,134 @@ mcp_servers:
 	})
 }
 
+// TestValidateAccountSuffixBases pins the #1124 load-time guard: within one
+// stdio server, no account-suffix base var (env key or account_vars entry) may
+// be an underscore-prefix of a sibling — the purely lexical <VAR>_<ACCOUNT>
+// convention would otherwise cross-wire them (account "bar" injects FOO_BAR's
+// value over FOO; FOO_BAR's tail shows up as a phantom account of FOO).
+func TestValidateAccountSuffixBases(t *testing.T) {
+	writeManifest := func(t *testing.T, body string) string {
+		t.Helper()
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return dir
+	}
+
+	t.Run("env key prefixing a sibling env key is rejected", func(t *testing.T) {
+		dir := writeManifest(t, `
+mcp_servers:
+  - name: demo
+    command: python3
+    args: ["mcp/demo.py"]
+    always: true
+    env:
+      FOO: "placeholder"
+      FOO_BAR: "placeholder"
+`)
+		_, err := Load(dir)
+		if err == nil || !strings.Contains(err.Error(), "underscore-prefix") {
+			t.Fatalf("want the underscore-prefix rejection, got %v", err)
+		}
+		for _, want := range []string{"FOO", "FOO_BAR", `"bar"`} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error should name %s; got %v", want, err)
+			}
+		}
+	})
+
+	t.Run("account_vars entry prefixing an env key is rejected", func(t *testing.T) {
+		dir := writeManifest(t, `
+mcp_servers:
+  - name: slack
+    command: python3
+    args: ["mcp/slack.py"]
+    always: true
+    account_vars: ["SLACK_TOKEN"]
+    env:
+      SLACK_TOKEN_URL: "https://example.test"
+`)
+		if _, err := Load(dir); err == nil || !strings.Contains(err.Error(), "underscore-prefix") {
+			t.Fatalf("want the underscore-prefix rejection, got %v", err)
+		}
+	})
+
+	t.Run("matching is case-insensitive like AccountsFor", func(t *testing.T) {
+		dir := writeManifest(t, `
+mcp_servers:
+  - name: demo
+    command: python3
+    args: ["mcp/demo.py"]
+    always: true
+    account_vars: ["foo"]
+    env:
+      FOO_BAR: "placeholder"
+`)
+		if _, err := Load(dir); err == nil || !strings.Contains(err.Error(), "underscore-prefix") {
+			t.Fatalf("want the underscore-prefix rejection, got %v", err)
+		}
+	})
+
+	t.Run("non-prefix siblings load fine", func(t *testing.T) {
+		dir := writeManifest(t, `
+mcp_servers:
+  - name: demo
+    command: python3
+    args: ["mcp/demo.py"]
+    always: true
+    account_vars: ["SLACK_XOXC_TOKEN"]
+    env:
+      SLACK_XOXC_TOKEN: "placeholder"
+      SLACK_XOXP_TOKEN: "placeholder"
+      SLACK_XOXPZ: "placeholder"
+`)
+		if _, err := Load(dir); err != nil {
+			t.Fatalf("non-prefix siblings must load: %v", err)
+		}
+	})
+
+	t.Run("scope is per server: the same pair split across servers loads", func(t *testing.T) {
+		// The lexical hazard the rule targets is within ONE server's overlay
+		// set; the same names on different servers are a residual (weaker)
+		// hazard documented on validateAccountSuffixBases, not a load error.
+		dir := writeManifest(t, `
+mcp_servers:
+  - name: a
+    command: python3
+    args: ["mcp/a.py"]
+    always: true
+    env:
+      FOO: "placeholder"
+  - name: b
+    command: python3
+    args: ["mcp/b.py"]
+    always: true
+    env:
+      FOO_BAR: "placeholder"
+`)
+		if _, err := Load(dir); err != nil {
+			t.Fatalf("cross-server names must not trip the per-server rule: %v", err)
+		}
+	})
+
+	t.Run("http servers are exempt (they reject account variants)", func(t *testing.T) {
+		dir := writeManifest(t, `
+mcp_servers:
+  - name: hosted
+    type: http
+    url: "https://hosted.test/mcp"
+    always: true
+    env:
+      FOO: "placeholder"
+      FOO_BAR: "placeholder"
+`)
+		if _, err := Load(dir); err != nil {
+			t.Fatalf("http server env is never account-overlaid; load should pass: %v", err)
+		}
+	})
+}
+
 // TestLoadRejectsUnknownManifestKey is the regression guard for strict manifest
 // parsing: a typo'd / unmodeled key must FAIL the load loudly rather than being
 // silently dropped (which could, e.g., leave a `tools:` allowlist unset and

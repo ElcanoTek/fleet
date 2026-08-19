@@ -12,8 +12,8 @@ func TestNilPoolTakeFailsClosed(t *testing.T) {
 		name string
 		take func() (*Sandbox, func(), error)
 	}{
-		{name: "turn", take: p.Take},
-		{name: "persistent", take: func() (*Sandbox, func(), error) { return p.TakePersistent("conv") }},
+		{name: "turn", take: func() (*Sandbox, func(), error) { return p.Take(context.Background()) }},
+		{name: "persistent", take: func() (*Sandbox, func(), error) { return p.TakePersistent(context.Background(), "conv") }},
 		{name: "container", take: func() (*Sandbox, func(), error) { return p.TakeContainer(context.Background()) }},
 		{name: "container overrides", take: func() (*Sandbox, func(), error) {
 			return p.TakeContainerWithOverrides(context.Background(), ResourceOverride{}, true)
@@ -50,8 +50,8 @@ func TestPoolTakeAfterCloseFailsClosed(t *testing.T) {
 		name string
 		take func() (*Sandbox, func(), error)
 	}{
-		{name: "turn", take: p.Take},
-		{name: "persistent", take: func() (*Sandbox, func(), error) { return p.TakePersistent("conv") }},
+		{name: "turn", take: func() (*Sandbox, func(), error) { return p.Take(context.Background()) }},
+		{name: "persistent", take: func() (*Sandbox, func(), error) { return p.TakePersistent(context.Background(), "conv") }},
 		{name: "container", take: func() (*Sandbox, func(), error) { return p.TakeContainer(context.Background()) }},
 		{name: "container overrides", take: func() (*Sandbox, func(), error) {
 			return p.TakeContainerWithOverrides(context.Background(), ResourceOverride{}, true)

@@ -248,6 +248,51 @@ prior versions are listed because none have shipped.
     response `id` against the request the way stdio does (a foreign-id JSON
     response is rejected, a foreign-id SSE event is skipped).
 
+- **Five defense-in-depth hardenings across the security-critical packages
+  (#1124).** Batched LOW findings from the 2026-08-17 audit — none broke an
+  invariant; each closes a residual hazard:
+
+  - **The egress proxy no longer tears down a CONNECT tunnel on the first
+    half-close.** The splice loop returned after *either* copy direction
+    finished, so a client that legally half-closed its write side after
+    sending its request had its response truncated by the deferred `Close`s.
+    Both directions are now awaited, and a finished direction propagates the
+    half-close to its destination via `CloseWrite` (TCP/TLS) so the peer sees
+    the FIN while the other direction keeps flowing. The surviving direction
+    is bounded by a 60s drain deadline armed when the first finishes —
+    without it, a silent peer that ignores the FIN and never responds/closes
+    would pin the tunnel's goroutines and FDs for the process lifetime.
+  - **A bundle that declares account-suffix base vars where one is an
+    underscore-prefix of a sibling is rejected at load.** The
+    `<VAR>_<ACCOUNT>` convention is purely lexical, so declaring both `FOO`
+    and `FOO_BAR` on one stdio server meant account `bar` silently overlaid
+    `FOO` with `FOO_BAR`'s value (a different credential), and `AccountsFor`
+    reported phantom accounts (`SLACK_TOKEN_URL` surfaced `url` as an
+    "account" of `SLACK_TOKEN`). The rule is scoped per server — the set one
+    overlay actually probes — and fails the load with rename instructions.
+    Out-of-repo bundles that declare such a pair will now fail to load; the
+    shipped `config/default` bundle is unaffected.
+  - **`writeEnvLines` fsyncs the temp file before the rename**, so a power
+    loss shortly after `fleet mcp account set` can no longer leave an
+    empty/truncated 0600 credentials file behind the atomic rename.
+  - **Runtime-acquired credentials join the broker's literal redactor at
+    acquisition time.** Boot-time `RegisterEnvLiterals` only knows env-file
+    secrets; per-user OAuth bearers, rotated refresh tokens, unsealed OAuth
+    client secrets, and unsealed api_key secrets used while the broker serves
+    were scrubbed by shape patterns alone. `remotemcp.Service` now offers
+    every such credential to a
+    secret observer, wired in the broker child to the new
+    `mcpbroker.RegisterSecretLiteral`; `redact.Redactor.AddLiteral` is now
+    safe to call concurrently with `Redact` (RWMutex) and dedupes, so
+    per-turn re-registration is free.
+  - **Sandbox pool latency hazards off the turn's critical path.**
+    `ensureBridge` no longer holds `c.mu` through its 100ms settle sleep;
+    `Pool.Take` reaps over-TTL warm containers asynchronously instead of
+    paying up to ~10s of podman teardown before handing out a sandbox; and
+    `Take`/`TakePersistent`/`coldStart` now thread the caller's context into
+    cold-start construction, so a cancelled turn stops paying container
+    spin-up (background warming keeps its own `FillCtx`).
+
 - **Teams are settable from the UI, so projects can actually be shared
   (#1157).** Two bugs made the shipped team/projects feature unreachable on a
   fresh box:
