@@ -333,6 +333,56 @@ func TestExpandCidImagesToDataURLs_SubstitutesWorkspaceFile(t *testing.T) {
 	}
 }
 
+// The substitution is one pass over the document with a package-level
+// pattern (it used to compile a per-cid regex inside the attachment loop), so
+// the cases the per-cid regex got right are pinned here: several references in
+// one document, a case-insensitive scheme AND id, an id that is a prefix of
+// another reference, a reference wrapped in CSS url() punctuation, and an
+// unmatched cid left untouched alongside matched ones.
+func TestExpandCidImagesToDataURLs_MultipleRefsSinglePass(t *testing.T) {
+	convID := "conv-cid-multi"
+	root := t.TempDir()
+	t.Setenv("CHAT_WORKSPACE_ROOT", root)
+	convDir := filepath.Join(root, convID)
+	if err := os.MkdirAll(convDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	for name, body := range map[string]string{
+		"one.png": "\x89PNGone",
+		"two.gif": "GIF89atwo",
+	} {
+		if err := os.WriteFile(filepath.Join(convDir, name), []byte(body), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	html := `<img src="cid:Logo"><img src='CID:logo'>` +
+		`<div style="background:url(cid:banner)"></div>` +
+		`<img src="cid:logo_small"><img src="cid:missing">`
+	args := map[string]any{
+		"inline_attachments": []any{
+			map[string]any{"cid": "logo", "path": "one.png"},
+			map[string]any{"cid": "banner", "path": "two.gif"},
+		},
+	}
+	out := expandCidImagesToDataURLs(html, args, convID)
+
+	if n := strings.Count(out, "data:image/png;base64,"); n != 2 {
+		t.Errorf("png data URL count = %d, want 2 (both case variants of cid:logo): %q", n, out)
+	}
+	if !strings.Contains(out, "data:image/gif;base64,") {
+		t.Errorf("url(cid:banner) not substituted: %q", out)
+	}
+	// cid:logo_small only shares a prefix with cid:logo — it must not be
+	// partially rewritten, and an entirely unknown cid must survive verbatim.
+	if !strings.Contains(out, `<img src="cid:logo_small">`) {
+		t.Errorf("prefix-colliding cid was rewritten: %q", out)
+	}
+	if !strings.Contains(out, `<img src="cid:missing">`) {
+		t.Errorf("unmatched cid was rewritten: %q", out)
+	}
+}
+
 // A cid: ref without a matching inline_attachments entry stays as-is
 // (we don't synthesize a data URL from thin air).
 func TestExpandCidImagesToDataURLs_LeavesUnmatchedCidsAlone(t *testing.T) {

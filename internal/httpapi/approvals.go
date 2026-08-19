@@ -946,6 +946,15 @@ func summarizeSendEmailInput(toolName, rawInput, convID string) map[string]any {
 	}
 }
 
+// cidPattern matches one `cid:<id>` reference. The id runs to the first
+// character that cannot appear inside an unquoted/quoted attribute value,
+// and the trailing \b makes the match end on a word character — so a
+// reference wrapped in markup punctuation (`url(cid:logo)`) still yields
+// the bare id. Compiled once at package level: it used to be rebuilt per
+// attachment inside the substitution loop, which re-parsed the pattern and
+// re-scanned the whole document for every inline image.
+var cidPattern = regexp.MustCompile(`(?i)cid:([^\s"'<>]+)\b`)
+
 // expandCidImagesToDataURLs rewrites `src="cid:<id>"` references in
 // the supplied HTML into `src="data:image/png;base64,..."` data URLs
 // sourced from the matching inline_attachments entry. Used only for
@@ -969,6 +978,8 @@ func expandCidImagesToDataURLs(html string, args map[string]any, convID string) 
 		return html
 	}
 	const maxAttachmentBytes = 4 << 20
+
+	cidMap := make(map[string]string)
 
 	for _, raw := range atts {
 		entry, ok := raw.(map[string]any)
@@ -1021,14 +1032,24 @@ func expandCidImagesToDataURLs(html string, args map[string]any, convID string) 
 		}
 		dataURL := "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(data)
 
-		// Replace every `cid:<id>` reference (single or double quotes,
-		// case-insensitive scheme). The cid value itself is treated as
-		// a literal — it's already constrained to email-safe chars
-		// (RFC 2392) so a regex special isn't a concern here, but
-		// QuoteMeta keeps us safe regardless.
-		quoted := regexp.QuoteMeta(cid)
-		re := regexp.MustCompile(`(?i)cid:` + quoted + `\b`)
-		html = re.ReplaceAllString(html, dataURL)
+		// Store the data URL mapped by the case-insensitive cid.
+		cidMap[strings.ToLower(cid)] = dataURL
+	}
+
+	if len(cidMap) > 0 {
+		// ONE pass over the document replaces every `cid:<id>` reference
+		// (single or double quotes, case-insensitive scheme) by looking the
+		// captured id up in the map, instead of one compile-and-rescan per
+		// attachment. A reference with no matching attachment is returned
+		// verbatim, so unresolvable cids survive exactly as before. The single
+		// pass also means a substituted data URL is never itself rescanned.
+		html = cidPattern.ReplaceAllStringFunc(html, func(match string) string {
+			cidVal := match[len("cid:"):] // the pattern guarantees the prefix
+			if dataURL, ok := cidMap[strings.ToLower(cidVal)]; ok {
+				return dataURL
+			}
+			return match
+		})
 	}
 	return html
 }
