@@ -175,6 +175,8 @@ func TestAdminSettingsEndToEnd(t *testing.T) {
 			defaults[key] = spec.Enum[0]
 		case settings.KindURL:
 			defaults[key] = ""
+		case settings.KindModel:
+			defaults[key] = "seed/model-tier"
 		}
 	}
 	svc, err := settings.NewService(s.concreteStore(t), defaults, hooks)

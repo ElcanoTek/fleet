@@ -5,7 +5,7 @@ import {
   loadModels,
   normaliseCatalogModel,
   scoreMatch,
-  SEED_MODELS,
+  seedModels,
   _resetModelCacheForTests,
   type PickerModel,
 } from "./models";
@@ -165,7 +165,7 @@ describe("loadModels (fetch + fallback)", () => {
   it("falls back to the seed list when the fetch fails", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network down")));
     const models = await loadModels();
-    expect(models).toEqual(SEED_MODELS);
+    expect(models).toEqual(seedModels());
   });
 
   it("puts workspace-provider models first, flagged for the badge", async () => {
@@ -246,6 +246,6 @@ describe("loadModels (fetch + fallback)", () => {
       }),
     );
     const models = await loadModels();
-    expect(models).toEqual(SEED_MODELS);
+    expect(models).toEqual(seedModels());
   });
 });

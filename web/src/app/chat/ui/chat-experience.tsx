@@ -14,10 +14,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { deriveConversationTitle } from "@/app/lib/title";
 import {
-  ADVANCED_MODEL,
-  ADVANCED_MODEL_LABEL,
-  DEFAULT_MODEL,
-  DEFAULT_MODEL_LABEL,
+  currentDefaultModel,
+  currentTierModels,
+  DEFAULT_MODEL as FALLBACK_DEFAULT_MODEL,
   labelForModel,
 } from "@/app/lib/modelAliases";
 import { computeContextUsage, type ContextUsage } from "@/app/lib/contextUsage";
@@ -533,17 +532,39 @@ export function ChatExperience({
   // Runtime client config: branding strings + the empty-state quick-start
   // cards, fetched from the member-gated /api/client-config so the UI is
   // client-agnostic. Falls back to neutral defaults on error / while loading.
-  const { branding, pills } = useClientConfig();
+  const { branding, pills, models: workspaceModelTiers } = useClientConfig();
   // selectedModel is the OpenRouter slug for the active conversation. Empty
   // means "use the server-configured primary." It can be edited mid-chat;
   // submitPrompt forwards the current value with every turn so the backend
-  // persists changes against the conversation row. The two blessed slugs
-  // (DEFAULT_MODEL = fast tier, ADVANCED_MODEL = strong tier) live in
-  // ../lib/modelAliases so other surfaces (nudge banners, tests) share a
-  // single source of truth.
+  // persists changes against the conversation row. The two tier slots
+  // (default = fast tier, advanced = strong tier) live in ../lib/modelAliases
+  // so other surfaces (nudge banners, tests) share a single source of truth;
+  // since #1187 they are admin-configurable and arrive with /api/client-config.
   const [selectedModel, setSelectedModel] = useState<string>(
-    () => restoredSession?.selectedModel ?? DEFAULT_MODEL,
+    () => restoredSession?.selectedModel ?? currentDefaultModel(),
   );
+  // The very first mount of a session races the client-config fetch: state
+  // seeds from the compiled-in fallback before the workspace's tier pair is
+  // known. When the pair lands, move ONLY a not-yet-started chat still sitting
+  // on that fallback — an open conversation keeps the model its row carries,
+  // and any other pick stays because the values differ. Picking the fallback
+  // slug itself pre-fetch was picking "recommended", which this resolves.
+  useEffect(() => {
+    if (!workspaceModelTiers || activeConversationId !== null) return;
+    // Deferred to a microtask so the adoption lands outside the effect's
+    // synchronous phase (no cascading render off the effect body); the guard
+    // cancels it if the deps change before the microtask runs.
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      setSelectedModel((cur) =>
+        cur === FALLBACK_DEFAULT_MODEL ? workspaceModelTiers.defaultModel : cur,
+      );
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [workspaceModelTiers, activeConversationId]);
   const [rankedModels, setRankedModels] = useState<RankedModel[]>([]);
   const [catalogModels, setCatalogModels] = useState<RankedModel[]>([]);
   // Admin-configured workspace-provider models (Settings → Admin → Model
@@ -1290,18 +1311,11 @@ export function ChatExperience({
         priceCompletion: hit.priceCompletion,
       };
     };
-    const defaults: RankedModel[] = [
-      {
-        slug: DEFAULT_MODEL,
-        name: DEFAULT_MODEL_LABEL,
-        ...pricesFor(DEFAULT_MODEL),
-      },
-      {
-        slug: ADVANCED_MODEL,
-        name: ADVANCED_MODEL_LABEL,
-        ...pricesFor(ADVANCED_MODEL),
-      },
-    ];
+    const defaults: RankedModel[] = currentTierModels().map((tier) => ({
+      slug: tier.slug,
+      name: tier.label,
+      ...pricesFor(tier.slug),
+    }));
 
     // Lockdown chats are pinned to the operator-configured allow-list.
     // Build a fixed list that mirrors that allow-list (default first,
@@ -1471,7 +1485,7 @@ export function ChatExperience({
   // previous error cleared so legitimate choices aren't false-positived.
   useEffect(() => {
     const slug = selectedModel.trim();
-    if (!slug || slug === DEFAULT_MODEL) {
+    if (!slug || slug === currentDefaultModel()) {
       // Default / empty slug: drop any stale over-budget error. Deferred
       // to a microtask so the clear lands outside the effect's synchronous
       // phase (no cascading render off the effect body); a guard cancels
@@ -1826,7 +1840,7 @@ export function ChatExperience({
       const conv = conversations.find((c) => c.id === conversationId);
       if (conv) {
         setSelectedPersona(conv.persona);
-        setSelectedModel(conv.model || DEFAULT_MODEL);
+        setSelectedModel(conv.model || currentDefaultModel());
       }
       setSidebarOpen(false);
       return;
@@ -1865,7 +1879,7 @@ export function ChatExperience({
       // Enter-to-open shortcut armed after the user has already landed somewhere.
       setFocusedConversationId(null);
       setSelectedPersona(data.conversation.persona);
-      setSelectedModel(data.conversation.model || DEFAULT_MODEL);
+      setSelectedModel(data.conversation.model || currentDefaultModel());
       // Reset compaction UI state so the freshly-loaded conversation
       // starts with pre-summary turns collapsed (when present) and
       // any prior error from another chat does not leak into this one.
@@ -2895,9 +2909,9 @@ export function ChatExperience({
       serverConfig.lockdownAvailable && (explicit || serverConfig.lockdownOnly);
     setPendingLockdown(lockdown);
     // Lockdown chats are pinned to the allow-list. Default both modes
-    // to DEFAULT_MODEL — for lockdown that's also the first allowed
-    // slug, and for normal chat it's the product default.
-    setSelectedModel(DEFAULT_MODEL);
+    // to the live default tier — for lockdown that's also the first
+    // allowed slug, and for normal chat it's the workspace default.
+    setSelectedModel(currentDefaultModel());
     promptRef.current?.focus();
   };
 

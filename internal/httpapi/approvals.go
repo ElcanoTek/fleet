@@ -457,7 +457,7 @@ func (a *approvalStager) StageSuggestion(reason string) (string, string, error) 
 	if err != nil {
 		return "", "", fmt.Errorf("lookup conversation: %w", err)
 	}
-	if conv != nil && conv.Model == agentcore.AdvancedModelSlug {
+	if conv != nil && conv.Model == agentcore.CurrentAdvancedModel() {
 		return "", "SUGGESTION_SUPPRESSED: this conversation is already pinned to the advanced model. Do not call suggest_advanced_model again — proceed with the user's request.", nil
 	}
 
@@ -521,7 +521,7 @@ func (a *approvalStager) StageSuggestion(reason string) (string, string, error) 
 		"summary": map[string]any{
 			"tool":            tools.SuggestAdvancedModelToolName,
 			"reason":          reason,
-			"recommend_model": agentcore.AdvancedModelSlug,
+			"recommend_model": agentcore.CurrentAdvancedModel(),
 		},
 		"expires_at": approval.ExpiresAt,
 	})
@@ -648,7 +648,8 @@ func summarizeApprovalInput(toolName, rawInput, convID string) map[string]any {
 // summarizeSuggestAdvancedInput exposes the agent's reason and the
 // recommended model slug so the UI card can render both without
 // re-parsing the args. The recommended slug is server-authoritative
-// (agentcore.AdvancedModelSlug) — the agent doesn't choose it.
+// (agentcore.CurrentAdvancedModel(), the live admin-configurable tier) —
+// the agent doesn't choose it.
 func summarizeSuggestAdvancedInput(toolName, rawInput string) map[string]any {
 	var args struct {
 		Reason string `json:"reason"`
@@ -657,7 +658,7 @@ func summarizeSuggestAdvancedInput(toolName, rawInput string) map[string]any {
 	return map[string]any{
 		"tool":            toolName,
 		"reason":          args.Reason,
-		"recommend_model": agentcore.AdvancedModelSlug,
+		"recommend_model": agentcore.CurrentAdvancedModel(),
 	}
 }
 
@@ -1366,12 +1367,13 @@ func (s *Server) handleSuggestAdvancedApproval(w http.ResponseWriter, r *http.Re
 
 	// User accepted. Pin the conversation to the advanced model first;
 	// the resolution row is only useful if the side effect succeeds.
-	if err := s.store.SetModel(r.Context(), user, approval.ConversationID, agentcore.AdvancedModelSlug); err != nil {
+	advancedModel := agentcore.CurrentAdvancedModel()
+	if err := s.store.SetModel(r.Context(), user, approval.ConversationID, advancedModel); err != nil {
 		log.Printf("SetModel (suggest_advanced approval): %v", err)
 		http.Error(w, "could not pin conversation model: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	resultText := fmt.Sprintf("User accepted the suggestion. Conversation pinned to %s.", agentcore.AdvancedModelSlug)
+	resultText := fmt.Sprintf("User accepted the suggestion. Conversation pinned to %s.", advancedModel)
 	if err := s.store.ResolveApproval(r.Context(), user, approval.ID, "approved", resultText); err != nil {
 		log.Printf("ResolveApproval (suggest_advanced): %v", err)
 	}
@@ -1385,7 +1387,7 @@ func (s *Server) handleSuggestAdvancedApproval(w http.ResponseWriter, r *http.Re
 	writeJSON(w, map[string]any{
 		"status":      "approved",
 		"action":      action,
-		"model":       agentcore.AdvancedModelSlug,
+		"model":       advancedModel,
 		"result_text": resultText,
 	})
 }

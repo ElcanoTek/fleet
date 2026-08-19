@@ -256,8 +256,13 @@ var allowedEnvVars = map[string]bool{
 	"CUTLASS_TASK_MODEL":          true,
 	"FLEET_TASK_FALLBACK_MODEL":   true,
 	"CUTLASS_TASK_FALLBACK_MODEL": true,
-	"CUTLASS_ALLOWED_DIRS":        true,
-	"GH_TOKEN":                    true,
+
+	// ── model tiers (#1187): env defaults of the default_model /
+	// advanced_model admin settings ──
+	"FLEET_DEFAULT_MODEL":  true,
+	"FLEET_ADVANCED_MODEL": true,
+	"CUTLASS_ALLOWED_DIRS": true,
+	"GH_TOKEN":             true,
 
 	// ── phone a friend: super-LLM review (#175) ──
 	"FLEET_PHONE_A_FRIEND_ENABLED": true,
@@ -791,6 +796,16 @@ type Config struct {
 	TaskFallbackModel string
 	SystemPrompt      string
 	Persona           string
+
+	// ── model tiers (#1187) ──
+	// DefaultModel / AdvancedModel seed the workspace's two role slots — what a
+	// new conversation starts on and the suggest_advanced_model escalation
+	// target — as the env-derived DEFAULTS of the default_model /
+	// advanced_model admin settings. Empty means "use the compiled-in
+	// agentcore.DefaultCoreModel / DefaultMaxModel". These are the CHAT tiers,
+	// not the scheduler's TaskModel above, which stays its own knob.
+	DefaultModel  string
+	AdvancedModel string
 
 	// ── phone a friend: super-LLM review (#175) ──
 	// PhoneAFriendEnabled turns on a one-time, host-side review of a scheduled
@@ -1400,6 +1415,10 @@ func Load(envFile string) (*Config, error) {
 		// with "no model configured" (#1015).
 		TaskModel:         getenvFleet("TASK_MODEL"),
 		TaskFallbackModel: getenvFleet("TASK_FALLBACK_MODEL"),
+
+		// ── model tiers (#1187) ──
+		DefaultModel:  getenvFleet("DEFAULT_MODEL"),
+		AdvancedModel: getenvFleet("ADVANCED_MODEL"),
 
 		// ── phone a friend: super-LLM review (#175) ──
 		PhoneAFriendEnabled: lp.getenvFleetBool("PHONE_A_FRIEND_ENABLED", false),

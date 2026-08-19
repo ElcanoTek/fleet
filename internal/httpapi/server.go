@@ -1132,6 +1132,17 @@ func (s *Server) serverConfig(w http.ResponseWriter, r *http.Request) {
 type clientConfigResponse struct {
 	Branding   clientConfigBranding   `json:"branding"`
 	EmptyState clientConfigEmptyState `json:"empty_state"`
+	// Models carries the workspace's effective model tiers (#1187) — the slug a
+	// new conversation starts on and the escalation target — resolved from the
+	// live agentcore holders the admin settings apply into. The web reads this
+	// on every shell mount, which is what makes the admin setting live without
+	// a rebuild: the compiled-in web constants remain only its fallback.
+	Models clientConfigModels `json:"models"`
+}
+
+type clientConfigModels struct {
+	DefaultModel  string `json:"default_model"`
+	AdvancedModel string `json:"advanced_model"`
 }
 
 type clientConfigBranding struct {
@@ -1179,6 +1190,10 @@ func (s *Server) clientConfigHandler(w http.ResponseWriter, r *http.Request) {
 		EmptyState: clientConfigEmptyState{
 			Cards:         []map[string]any{},
 			ProtocolPills: []map[string]any{},
+		},
+		Models: clientConfigModels{
+			DefaultModel:  agentcore.CurrentDefaultModel(),
+			AdvancedModel: agentcore.CurrentAdvancedModel(),
 		},
 	}
 	if s.clientConfig != nil {

@@ -14,7 +14,7 @@
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  ADVANCED_MODEL,
+  currentAdvancedModel,
   labelForModel,
 } from "@/app/lib/modelAliases";
 import {
@@ -942,7 +942,7 @@ function SuggestAdvancedModelCard({
   const [pending, setPending] = useState<SuggestAction | null>(null);
 
   const reason = approval.summary.reason ?? "Advanced mode would handle this better.";
-  const recommendedSlug = approval.summary.recommend_model ?? ADVANCED_MODEL;
+  const recommendedSlug = approval.summary.recommend_model ?? currentAdvancedModel();
   const recommendedLabel = labelForModel(recommendedSlug);
 
   const submit = async (action: SuggestAction) => {

@@ -59,6 +59,8 @@ func testDefaults() map[string]string {
 		"max_tool_output_bytes":             "65536",
 		"phone_a_friend_enabled":            "false",
 		"subagents_enabled":                 "true",
+		"default_model":                     "google/gemini-3.7-flash",
+		"advanced_model":                    "openai/gpt-5.6-sol",
 		"memory_autoindex_enabled":          "false",
 		"error_analysis_enabled":            "true",
 		"auto_title_enabled":                "true",
@@ -164,6 +166,17 @@ func TestValidate(t *testing.T) {
 		{"max_tool_output_bytes", "65536", "65536", false},
 		{"max_tool_output_bytes", "131072", "131072", false},
 		{"max_tool_output_bytes", "131073", "", true},
+		// KindModel: any provider/model slug, case preserved (slugs are
+		// case-sensitive upstream), whitespace trimmed but never internal.
+		{"default_model", "openai/gpt-5.6-sol", "openai/gpt-5.6-sol", false},
+		{"default_model", "  myBedrock/anthropic.claude-opus-5  ", "myBedrock/anthropic.claude-opus-5", false},
+		{"advanced_model", "google/gemini-3.7-flash", "google/gemini-3.7-flash", false},
+		{"default_model", "", "", true},                                                         // a tier always has a value
+		{"default_model", "gpt-5.6-sol", "", true},                                              // no provider half
+		{"default_model", "/gpt-5.6-sol", "", true},                                             // empty provider half
+		{"default_model", "openai/", "", true},                                                  // empty model half
+		{"default_model", "openai/gpt 5", "", true},                                             // internal whitespace
+		{"advanced_model", strings.Repeat("a", 100) + "/" + strings.Repeat("b", 101), "", true}, // over 200 chars
 	}
 	for _, c := range cases {
 		got, err := Validate(spec(c.key), c.in)
@@ -348,7 +361,7 @@ func TestRegistryShape(t *testing.T) {
 			if s.Min <= 0 || s.Max <= s.Min {
 				t.Errorf("%s: int bounds unset or inverted", s.Key)
 			}
-		case KindBool, KindURL:
+		case KindBool, KindURL, KindModel:
 		default:
 			t.Errorf("%s: unknown kind %q", s.Key, s.Kind)
 		}

@@ -4,7 +4,7 @@ import { useId, useRef, useState } from "react";
 import {
   filterModels,
   loadModels,
-  SEED_MODELS,
+  seedModels,
   type PickerModel,
 } from "@/app/shared/lib/models";
 import { useCancellableFetch } from "@/app/shared/hooks/useCancellableFetch";
@@ -40,7 +40,7 @@ export function ModelPicker({ id, value, onChange, placeholder, ...rest }: Model
 
   // The catalog loads lazily the first time the dropdown opens (gated by
   // `enabled: open`). loadModels() is module-level cached and falls back to
-  // SEED_MODELS on failure, so reopening is instant and `data` persists across
+  // the tier seeds on failure, so reopening is instant and `data` persists across
   // close/reopen. The shared hook owns the cancelled-ref guard that used to
   // live here — and with it, the one-shot load-flag setState-in-effect disable.
   const { data: models, loading } = useCancellableFetch<PickerModel[]>(
@@ -50,7 +50,7 @@ export function ModelPicker({ id, value, onChange, placeholder, ...rest }: Model
   );
 
   const query = isUserTyping ? value : "";
-  const source = models ?? SEED_MODELS;
+  const source = models ?? seedModels();
   const visible = filterModels(source, query);
 
   const commit = (slug: string) => {

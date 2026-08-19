@@ -12,6 +12,11 @@ import {
   DEFAULT_BRANDING,
   __resetClientConfigCacheForTests,
 } from "./useClientConfig";
+import {
+  _resetModelTiersForTests,
+  currentAdvancedModel,
+  currentDefaultModel,
+} from "./modelAliases";
 
 const CLIENT_BRANDING = {
   app_name: "Elcano",
@@ -40,6 +45,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   fetchMock.mockReset();
   __resetClientConfigCacheForTests();
+  _resetModelTiersForTests();
 });
 
 describe("useClientConfig module-scope cache", () => {
@@ -88,5 +94,41 @@ describe("useClientConfig module-scope cache", () => {
     const { result } = renderHook(() => useClientConfig());
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.branding).toEqual(DEFAULT_BRANDING);
+  });
+});
+
+// The models block (#1187) rides the same payload: it must install the live
+// tier pair module-wide and expose it on the hook, and an older server's
+// payload (no models field) must leave the compiled-in pair untouched.
+describe("useClientConfig model tiers", () => {
+  it("installs the workspace tier pair and returns it", async () => {
+    fetchMock.mockResolvedValue(
+      okResponse({
+        branding: CLIENT_BRANDING,
+        models: { default_model: "acme/frontier-1", advanced_model: "acme/frontier-1-pro" },
+      }),
+    );
+    const { result } = renderHook(() => useClientConfig());
+    expect(result.current.models).toBeNull();
+    await waitFor(() =>
+      expect(result.current.models).toEqual({
+        defaultModel: "acme/frontier-1",
+        advancedModel: "acme/frontier-1-pro",
+      }),
+    );
+    expect(currentDefaultModel()).toBe("acme/frontier-1");
+    expect(currentAdvancedModel()).toBe("acme/frontier-1-pro");
+  });
+
+  it("keeps the compiled-in pair when an older server sends no models block", async () => {
+    const before = { def: currentDefaultModel(), adv: currentAdvancedModel() };
+    fetchMock.mockResolvedValue(okResponse({ branding: CLIENT_BRANDING }));
+    const { result } = renderHook(() => useClientConfig());
+    await waitFor(() => expect(result.current.branding.app_name).toBe("Elcano"));
+    expect(result.current.models).toEqual({
+      defaultModel: before.def,
+      advancedModel: before.adv,
+    });
+    expect(currentDefaultModel()).toBe(before.def);
   });
 });

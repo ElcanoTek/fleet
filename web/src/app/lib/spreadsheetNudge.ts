@@ -11,7 +11,7 @@
 // The helper is pure. The composer wires its result to a banner;
 // tests assert the predicate without touching the DOM.
 
-import { ADVANCED_MODEL, DEFAULT_MODEL } from "./modelAliases";
+import { currentAdvancedModel, currentDefaultModel } from "./modelAliases";
 
 // Roughly the size of a single-sheet ad-hoc export. Anything heavier
 // is almost always a multi-sheet workbook with curated tabs — the
@@ -54,8 +54,8 @@ export type NudgeDecision = {
 };
 
 export function decideSpreadsheetNudge(args: NudgeArgs): NudgeDecision {
-  const defaultModel = args.defaultModel ?? DEFAULT_MODEL;
-  const advancedModel = args.advancedModel ?? ADVANCED_MODEL;
+  const defaultModel = args.defaultModel ?? currentDefaultModel();
+  const advancedModel = args.advancedModel ?? currentAdvancedModel();
   const decision: NudgeDecision = { show: false, recommendedModel: advancedModel };
   if (args.dismissed) return decision;
   // Only nudge from the cheap fast tier — if the user is already on

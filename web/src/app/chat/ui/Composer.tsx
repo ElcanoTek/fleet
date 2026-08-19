@@ -28,9 +28,9 @@ import {
   type PendingAttachment,
 } from "./ChatChips";
 import {
-  ADVANCED_MODEL,
-  ADVANCED_MODEL_LABEL,
-  DEFAULT_MODEL,
+  currentAdvancedModel,
+  currentAdvancedModelLabel,
+  currentDefaultModel,
   tierForModel,
 } from "@/app/lib/modelAliases";
 import { ModelCostIndicator } from "@/app/shared/ui/ModelCostIndicator";
@@ -655,7 +655,7 @@ export function Composer({
                   <span>
                     Spreadsheets analyze better on{" "}
                     <span className="font-medium text-[var(--color-text-primary)]">
-                      {ADVANCED_MODEL_LABEL}
+                      {currentAdvancedModelLabel()}
                     </span>
                     .
                   </span>
@@ -725,7 +725,7 @@ export function Composer({
                       title={
                         modelError
                           ? modelError.message
-                          : `OpenRouter model slug — e.g. ${DEFAULT_MODEL} (recommended) or ${ADVANCED_MODEL} (strongest)`
+                          : `OpenRouter model slug — e.g. ${currentDefaultModel()} (recommended) or ${currentAdvancedModel()} (strongest)`
                       }
                       className={`inline-flex h-[1.95rem] min-w-0 items-center gap-[0.25rem] rounded-[var(--radius-md)] py-[0.3rem] pl-[0.4rem] pr-[0.3rem] text-[0.78rem] font-medium transition sm:gap-[0.4rem] sm:pl-[0.6rem] sm:pr-[0.5rem] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-40 ${
                         modelError

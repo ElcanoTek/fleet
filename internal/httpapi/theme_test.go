@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 )
 
@@ -251,5 +252,33 @@ func TestClientConfig_AdvertisesLogoOnlyWhenResolved(t *testing.T) {
 	s.clientConfigHandler(w, req)
 	if strings.Contains(w.Body.String(), "logo_url") {
 		t.Errorf("body %s must omit logo_url when no file backed it", w.Body.String())
+	}
+}
+
+// /client-config carries the workspace's effective model tiers (#1187): the
+// live agentcore holders, so an admin override is visible to the next shell
+// mount without any rebuild — and the compiled-in pair before any override.
+func TestClientConfig_CarriesLiveModelTiers(t *testing.T) {
+	t.Cleanup(func() {
+		agentcore.SetDefaultModel("")
+		agentcore.SetAdvancedModel("")
+	})
+	s := newLogoServer(t, "mark.svg", []byte("<svg/>"))
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/client-config", nil)
+
+	w := httptest.NewRecorder()
+	s.clientConfigHandler(w, req)
+	want := `"models":{"default_model":"` + agentcore.DefaultCoreModel + `","advanced_model":"` + agentcore.DefaultMaxModel + `"}`
+	if !strings.Contains(w.Body.String(), want) {
+		t.Errorf("body %s must carry the compiled-in tier pair %s", w.Body.String(), want)
+	}
+
+	agentcore.SetDefaultModel("acme/frontier-1")
+	agentcore.SetAdvancedModel("acme/frontier-1-pro")
+	w = httptest.NewRecorder()
+	s.clientConfigHandler(w, req)
+	want = `"models":{"default_model":"acme/frontier-1","advanced_model":"acme/frontier-1-pro"}`
+	if !strings.Contains(w.Body.String(), want) {
+		t.Errorf("body %s must carry the overridden tier pair %s", w.Body.String(), want)
 	}
 }
