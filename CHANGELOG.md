@@ -17,6 +17,22 @@ prior versions are listed because none have shipped.
 
 ## [Unreleased]
 
+### Removed
+
+- **Dropped the Codecov upload step and `codecov.yml`.** The repo has no
+  `CODECOV_TOKEN` secret, so `codecov/codecov-action` could never upload: every
+  `go` job ended with a missing-token warning and the thresholds in `codecov.yml`
+  (project drop ≤2%, patch ≥60%) were never evaluated by anything. Nothing was
+  gating on it — `fail_ci_if_error` was already `false` — so removing the step
+  changes no merge gate, it just stops the noise and the dead config.
+
+  Coverage itself is unchanged and still collected: `go test` keeps
+  `-coverprofile=coverage.out -covermode=atomic`, `Coverage summary` prints the
+  project total and writes `coverage.html`, and `Per-package coverage summary`
+  still writes the full `go tool cover -func` table to the Actions job summary.
+  Those two steps are now the whole coverage signal. Docs (`AGENTS.md`,
+  `docs/TESTING.md`) updated to say so instead of describing a Codecov check.
+
 ### Changed
 
 - **PRs into `dev` now actually run CI, and the fast lane gained the web
