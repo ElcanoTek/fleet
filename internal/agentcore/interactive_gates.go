@@ -97,6 +97,28 @@ func (o *orchestrationState) checkCriticalToolApproval(toolName, toolCallID, raw
 	if o.approvalSink == nil {
 		return false, ""
 	}
+	// Per-tool approval mode (#1153). `notify` runs the tool now and posts a
+	// card recording what happened, for operations whose undo is cheap and
+	// complete — a page publish against a store that keeps immutable versions,
+	// not a sent email. The window it replaces is 300 seconds beginning at an
+	// unpredictable moment many minutes into a run the user started and then
+	// reasonably stopped watching, so the thing it most reliably blocked was the
+	// final, wanted action of a long analysis.
+	//
+	// Recording is REQUIRED, not best-effort: a sink that cannot post the card,
+	// or one that fails to, falls back to blocking. The whole case for executing
+	// without asking is that the user still finds out.
+	if approvalPolicy, undoHint := ApprovalModeForTool(toolName); approvalPolicy == ApprovalModeNotify {
+		if recorder, ok := o.approvalSink.(ActionRecorder); ok {
+			if err := recorder.RecordAction(toolName, toolCallID, rawInput, undoHint); err != nil {
+				log.Printf("notify-mode record failed (%s): %v — falling back to a blocking approval", toolName, err)
+			} else {
+				return false, ""
+			}
+		} else {
+			log.Printf("notify-mode configured for %s but this transport cannot record actions — falling back to a blocking approval", toolName)
+		}
+	}
 	if pending, ok := o.pendingApprovalOnSameServer(toolName); ok {
 		return true, fmt.Sprintf(
 			"APPROVAL_BLOCKED: %s already has a critical action awaiting the user's approval in this turn (%s, approval_id=%s), "+

@@ -247,6 +247,35 @@ type AgentPolicy struct {
 	//	    send_email: 600   # user reads the draft carefully
 	//	    bash: 60          # risky shell commands decide fast
 	CriticalToolTimeouts map[string]int `yaml:"critical_tool_timeouts"`
+	// CriticalToolModes is an OPTIONAL per-tool approval MODE (#1153): a map
+	// from bare tool-name suffix to "approve" (block on a card, the default and
+	// the behavior of every tool before this existed) or "notify" (execute
+	// immediately and post a card recording what happened).
+	//
+	// It exists because one global critical_tools list forces one policy onto
+	// operations with wildly different undo stories. A card lands whenever the
+	// agent reaches it — often many minutes into a run the user started and then
+	// reasonably stopped watching — and then default-denies, so a long analysis
+	// ending in a reversible page publish was routinely lost to nobody being at
+	// the keyboard.
+	//
+	// A tool is only safe as `notify` when undoing it is cheap and complete.
+	// Declare the undo in critical_tool_undo_hints so the record card can say
+	// how; fleet refuses `notify` on the base email suffixes outright, because a
+	// sent email has no undo at all.
+	//
+	//	agent_policy:
+	//	  critical_tool_modes:
+	//	    deploy_page: notify        # Pages keeps immutable versions
+	//	    create_deal: approve       # audit-gated; unchanged
+	//	  critical_tool_undo_hints:
+	//	    deploy_page: "Undo with mcp_pages_rollback_page(slug, version_id)."
+	CriticalToolModes map[string]string `yaml:"critical_tool_modes"`
+	// CriticalToolUndoHints maps the same suffixes to a one-line, bundle-authored
+	// statement of how to reverse the action, rendered on the record card. Fleet
+	// does not know any client's undo verb and must not guess one: "we can always
+	// roll back" is only true in practice if the card says how.
+	CriticalToolUndoHints map[string]string `yaml:"critical_tool_undo_hints"`
 }
 
 // PersonaToolPermissions is the per-persona tool policy declared in the
@@ -1967,6 +1996,18 @@ func (b *Bundle) AgentPolicy() AgentPolicy {
 		p.CriticalToolTimeouts = make(map[string]int, len(b.AgentPolicyConfig.CriticalToolTimeouts))
 		for k, v := range b.AgentPolicyConfig.CriticalToolTimeouts {
 			p.CriticalToolTimeouts[k] = v
+		}
+	}
+	if len(b.AgentPolicyConfig.CriticalToolModes) > 0 {
+		p.CriticalToolModes = make(map[string]string, len(b.AgentPolicyConfig.CriticalToolModes))
+		for k, v := range b.AgentPolicyConfig.CriticalToolModes {
+			p.CriticalToolModes[k] = v
+		}
+	}
+	if len(b.AgentPolicyConfig.CriticalToolUndoHints) > 0 {
+		p.CriticalToolUndoHints = make(map[string]string, len(b.AgentPolicyConfig.CriticalToolUndoHints))
+		for k, v := range b.AgentPolicyConfig.CriticalToolUndoHints {
+			p.CriticalToolUndoHints[k] = v
 		}
 	}
 	return p

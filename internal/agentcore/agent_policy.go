@@ -1,6 +1,7 @@
 package agentcore
 
 import (
+	"log"
 	"strings"
 	"sync"
 )
@@ -35,7 +36,28 @@ type AgentPolicy struct {
 	// FLEET_APPROVAL_TIMEOUT_SECONDS > hardcoded default). Empty = no per-tool
 	// overrides, so every tool falls through to the per-conversation/global value.
 	CriticalToolTimeouts map[string]int
+	// CriticalToolModes maps a bare tool-name suffix to its approval MODE
+	// (#1153): ApprovalModeApprove (default) or ApprovalModeNotify. Matched by
+	// suffix exactly like CriticalToolSuffixes, longest match wins. Empty = every
+	// critical tool blocks on a card, which is the behavior that existed before.
+	CriticalToolModes map[string]string
+	// CriticalToolUndoHints maps the same suffixes to a one-line, bundle-authored
+	// statement of how to reverse the action, rendered on a notify record card.
+	// Fleet does not know any client's undo verb and must not invent one.
+	CriticalToolUndoHints map[string]string
 }
+
+// Approval modes a bundle may declare per critical tool (#1153).
+const (
+	// ApprovalModeApprove blocks the call on a card until a human decides. The
+	// default, and what every critical tool did before modes existed.
+	ApprovalModeApprove = "approve"
+	// ApprovalModeNotify executes the call immediately and posts a card
+	// RECORDING what happened. Only legitimate when undoing the action is cheap
+	// and complete — that is the entire argument for it, and the bundle has to
+	// back it up with an undo hint the card can show.
+	ApprovalModeNotify = "notify"
+)
 
 // baseCriticalToolSuffixes are ALWAYS critical regardless of the configured
 // bundle — generic destructive / external-effect tools fleet ships behavior for.
@@ -68,7 +90,22 @@ var (
 	// overrides); ApprovalTimeoutForTool returns 0 then, and callers fall back
 	// to the per-conversation / global timeout.
 	activeCriticalTimeouts = map[string]int{}
+
+	// activeCriticalModes / activeCriticalUndoHints back the per-tool approval
+	// mode (#1153). Empty by default: every critical tool blocks on a card.
+	activeCriticalModes     = map[string]string{}
+	activeCriticalUndoHints = map[string]string{}
 )
+
+// nonReversibleSuffixes can never be declared `notify`, whatever a bundle says.
+// The whole case for executing without asking is "we can always roll it back",
+// and for outbound email that is simply false — there is no undo, and the
+// approval card IS the review step. A bundle that tries is logged and pinned
+// back to `approve` rather than quietly honored.
+var nonReversibleSuffixes = map[string]bool{
+	sendEmailToolSuffix:   true,
+	"send_template_email": true,
+}
 
 // ConfigureAgentPolicy installs the client bundle's tool-behavior policy. Call
 // once at startup (cmd/fleet) before any turn runs. The base critical suffixes
@@ -117,6 +154,64 @@ func ConfigureAgentPolicy(p AgentPolicy) {
 		}
 	}
 	activeCriticalTimeouts = timeouts
+
+	modes := make(map[string]string, len(p.CriticalToolModes))
+	for k, v := range p.CriticalToolModes {
+		k = strings.TrimSpace(k)
+		v = strings.ToLower(strings.TrimSpace(v))
+		if k == "" {
+			continue
+		}
+		if v != ApprovalModeNotify && v != ApprovalModeApprove {
+			log.Printf("agent_policy: ignoring unknown approval mode %q for %q (want %q or %q)", v, k, ApprovalModeApprove, ApprovalModeNotify)
+			continue
+		}
+		if v == ApprovalModeNotify && nonReversibleSuffixes[k] {
+			log.Printf("agent_policy: refusing mode %q for %q — a sent message cannot be undone, so its approval card is the review step; pinned to %q", ApprovalModeNotify, k, ApprovalModeApprove)
+			continue
+		}
+		modes[k] = v
+	}
+	activeCriticalModes = modes
+
+	hints := make(map[string]string, len(p.CriticalToolUndoHints))
+	for k, v := range p.CriticalToolUndoHints {
+		k, v = strings.TrimSpace(k), strings.TrimSpace(v)
+		if k != "" && v != "" {
+			hints[k] = v
+		}
+	}
+	activeCriticalUndoHints = hints
+}
+
+// ApprovalModeForTool returns the bundle-declared approval mode for toolName and
+// the one-line undo hint to render alongside it (#1153). Matching mirrors
+// ApprovalTimeoutForTool — longest matching suffix wins — and an undeclared tool
+// gets ApprovalModeApprove, so adding modes changes nothing for any bundle that
+// does not use them.
+func ApprovalModeForTool(toolName string) (mode, undoHint string) {
+	policyMu.RLock()
+	defer policyMu.RUnlock()
+	mode = ApprovalModeApprove
+	bestLen := -1
+	for suffix, m := range activeCriticalModes {
+		if toolName == suffix || strings.HasSuffix(toolName, "_"+suffix) {
+			if len(suffix) > bestLen {
+				bestLen = len(suffix)
+				mode = m
+			}
+		}
+	}
+	hintLen := -1
+	for suffix, h := range activeCriticalUndoHints {
+		if toolName == suffix || strings.HasSuffix(toolName, "_"+suffix) {
+			if len(suffix) > hintLen {
+				hintLen = len(suffix)
+				undoHint = h
+			}
+		}
+	}
+	return mode, undoHint
 }
 
 // ApprovalTimeoutForTool returns the per-tool approval default-deny window (in
