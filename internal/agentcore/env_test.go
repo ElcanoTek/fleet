@@ -18,7 +18,7 @@ func TestEnvPrefix_lookupFloatDefault(t *testing.T) {
 	}{
 		{
 			name: "unset returns default",
-			setup: func(t *testing.T) {
+			setup: func(_ *testing.T) {
 				// Explicitly unset to ensure it's not present
 				os.Unsetenv(envKey)
 			},
