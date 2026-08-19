@@ -116,8 +116,9 @@ func buildServer(ctx context.Context, def ServerDef) (*Server, error) {
 // callTool holds that mutex for the whole call, waits for any in-flight tool
 // call to finish (a graceful drain) — then marks the server retired and closes
 // its transport. The wait is bounded: every transport Call respects its context
-// (StdioTransport selects on ctx.Done; HTTPTransport uses a bounded client), so
-// an in-flight call cannot block the lock forever.
+// (StdioTransport selects on ctx.Done for both the stdin write and the response
+// read; HTTPTransport uses a bounded client), so an in-flight call cannot block
+// the lock forever.
 //
 // Doing this under Server.mu is what makes retirement race-free: a call that
 // captured this *Server before the registry swap either (a) hasn't taken the

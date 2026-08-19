@@ -95,12 +95,27 @@ func (c *Client) AddHTTPTools(specs []HTTPToolSpec) {
 			// the model is handed a valid JSON Schema.
 			schema = map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}
 		}
-		tr.tools[name] = spec
-		server.tools = append(server.tools, Tool{
+		tool := Tool{
 			Name:        name,
 			Description: spec.Description,
 			InputSchema: schema,
-		})
+		}
+		// Re-registering a name (the documented mid-session re-load) updates
+		// the catalog entry in place: the spec map already overwrote, so an
+		// unconditional append handed the model N duplicate catalog entries
+		// after N reloads (#1108).
+		if _, exists := tr.tools[name]; exists {
+			tr.tools[name] = spec
+			for i := range server.tools {
+				if server.tools[i].Name == name {
+					server.tools[i] = tool
+					break
+				}
+			}
+			continue
+		}
+		tr.tools[name] = spec
+		server.tools = append(server.tools, tool)
 	}
 }
 
