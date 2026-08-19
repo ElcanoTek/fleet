@@ -828,9 +828,18 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 	// retry-exhausted branches — a run that hit the ceiling once would hit it
 	// again, so retrying would only burn another full timeout window.
 	wallExpired := errors.Is(context.Cause(taskCtx), errTaskWallTimeout)
+	// The agent ended its own run with confirm_audit(success=false) (#1151).
+	// Classified with the wall timeout rather than with runErr because it is
+	// DETERMINISTIC in the same way: the run reached a conclusion about its own
+	// work, so a retry spends another window to reach the same one. It must also
+	// beat the transient-retry branches, which would otherwise re-queue a run
+	// that told us plainly it was done.
+	auditAborted := errors.Is(runErr, agentcore.ErrAuditAborted)
 	switch {
 	case wallExpired:
 		p.failWallTimeout(task, session, token, start)
+	case auditAborted:
+		p.failAuditAborted(task, session, runErr, token, start)
 	case interrupted:
 		msg := "Task interrupted: server shutdown (grace period expired)"
 		p.clearPendingQA(task, token)
@@ -856,7 +865,7 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 		if p.beforeSuccessCommit != nil {
 			p.beforeSuccessCommit(task, token)
 		}
-		landedTask, err := p.reportSuccess(task.ID, token, outputJSON)
+		landedTask, err := p.reportSuccess(task.ID, token, outputJSON, session)
 		if err != nil {
 			terminalFrame["status"] = "failed"
 			log.Printf("runner: failed to commit success for task %s: %v; suppressing success side effects", task.ID, err)
@@ -920,9 +929,15 @@ func runEligibleForStructuredCommit(runErr error, wasPaused, wasStopped bool, co
 // drain and wall-timeout expiry would page. A budget stop
 // (ErrCostCeilingExceeded) stays reportable, matching the structured-output
 // path that has always surfaced it as an error.
+//
+// A self-audit abort (agentcore.ErrAuditAborted, #1151) is excluded for a
+// different reason than the others: nothing malfunctioned. The agent inspected
+// its own work, decided not to publish, and said so — that is the machinery
+// working, and paging on it would train everyone to ignore the page.
 func reportableRunFailure(runErr error, wasPaused, wasStopped bool) bool {
 	return runErr != nil && !wasPaused && !wasStopped &&
-		!transientAgentFailure(runErr) && !errors.Is(runErr, agentcore.ErrRunCancelled)
+		!transientAgentFailure(runErr) && !errors.Is(runErr, agentcore.ErrRunCancelled) &&
+		!errors.Is(runErr, agentcore.ErrAuditAborted)
 }
 
 // validateStructuredRunOutput is defense in depth around TaskRunner
@@ -974,6 +989,66 @@ func (p *Pool) withWallDeadline(ctx context.Context) (context.Context, context.C
 		return ctx, func() {}
 	}
 	return context.WithTimeoutCause(ctx, p.wallTimeout, errTaskWallTimeout)
+}
+
+// failAuditAborted records the terminal outcome for a run whose agent ended it
+// with confirm_audit(success=false) (#1151).
+//
+// The production case: task 3d767956 built a complete, schema-valid 978 KB
+// payload — 846 rows added, none dropped, schema hash matched — then declined
+// to dispatch it, printed COMPLETE_WITH_FLAGS naming four quality flags, and
+// closed with ABORTED_WITH_FLAGS. The task row said status: success, result:
+// "Task completed successfully". The agent was right and said so clearly; the
+// system discarded that and reported green, which is how a client dashboard
+// froze for days with every run "succeeding".
+//
+// The agent's own summary becomes the result message, because it is the single
+// most useful sentence anyone will read about this run. Deliberately NOT
+// retried and never dead-lettered: the run reached a conclusion, and a retry
+// would only spend another window reaching the same one.
+func (p *Pool) failAuditAborted(task *models.Task, session *models.LogSession, runErr error, leaseOwner uuid.UUID, start time.Time) {
+	msg := "Task aborted by its own self-audit"
+	if detail := strings.TrimSpace(auditAbortDetail(runErr)); detail != "" {
+		msg += ": " + detail
+	}
+	p.clearPendingQA(task, leaseOwner)
+	landed := true
+	if _, err := p.reportStatusForLease(task.ID, leaseOwner, models.TaskStatusError, msg); err != nil {
+		landed = false
+		log.Printf("runner: failed to report audit abort for task %s: %v", task.ID, err)
+	}
+	p.submitLog(task, session, msg)
+	log.Printf("runner: task %s aborted by self-audit after %v", task.ID, time.Since(start).Round(time.Second))
+	if landed {
+		p.notifyTerminal(task, notify.StatusFailure, session, time.Since(start))
+	}
+}
+
+// maxTerminalMessageRunes bounds model-authored text on its way into a column
+// every task list renders. Generous enough for a real summary paragraph, short
+// enough that one run cannot make the Operations Center unreadable.
+const maxTerminalMessageRunes = 600
+
+// truncateRunes bounds by RUNES, not bytes, so a multi-byte character is never
+// cut in half into invalid UTF-8.
+func truncateRunes(s string, limit int) string {
+	r := []rune(s)
+	if len(r) <= limit {
+		return s
+	}
+	return string(r[:limit]) + "…"
+}
+
+// auditAbortDetail peels the sentinel off the driver's wrapped error, leaving
+// the agent's user_visible_summary. Bounded because it is model-authored text
+// landing in a column every task list renders.
+func auditAbortDetail(runErr error) string {
+	if runErr == nil {
+		return ""
+	}
+	detail := strings.TrimSpace(strings.TrimPrefix(runErr.Error(), agentcore.ErrAuditAborted.Error()))
+	detail = strings.TrimSpace(strings.TrimPrefix(detail, ":"))
+	return truncateRunes(detail, maxTerminalMessageRunes)
 }
 
 // failWallTimeout records the deterministic terminal failure for a run that
@@ -1235,14 +1310,41 @@ func (p *Pool) reportStatusForLease(taskID, leaseOwner uuid.UUID, status models.
 // reportSuccess atomically commits the terminal lifecycle transition together
 // with validated output_json. Storage independently validates the effective
 // value against output_schema, so success can never become visible first.
-func (p *Pool) reportSuccess(taskID, leaseOwner uuid.UUID, output json.RawMessage) (*models.Task, error) {
-	msg := "Task completed successfully"
+//
+// The message is the agent's OWN closing summary when it wrote one (#1151). The
+// constant "Task completed successfully" was written over a summary that said,
+// in detail, that the page was unchanged and why — which was the single most
+// useful field in the record, and the only one that would have told an operator
+// a dashboard had stopped refreshing while every run showed green.
+func (p *Pool) reportSuccess(taskID, leaseOwner uuid.UUID, output json.RawMessage, session *models.LogSession) (*models.Task, error) {
+	msg := successMessage(session)
 	return p.store.UpdateTaskStatusAtomicWithContext(context.Background(), taskID, leaseOwner, &models.StatusUpdate{
 		TaskID:     taskID,
 		Status:     models.TaskStatusSuccess,
 		Message:    &msg,
 		OutputJSON: output,
 	})
+}
+
+// successMessage is the agent's final answer, bounded and flattened to one
+// line, or the historical constant when the run produced no closing text (a
+// structured-output run whose final text is its JSON keeps the constant too:
+// the payload is already on the row in output_json, and repeating it as prose
+// would just make the task list unreadable).
+func successMessage(session *models.LogSession) string {
+	const fallback = "Task completed successfully"
+	summary := collapseWhitespace(finalAssistantText(session))
+	if summary == "" || strings.HasPrefix(summary, "{") || strings.HasPrefix(summary, "[") {
+		return fallback
+	}
+	return truncateRunes(summary, maxTerminalMessageRunes)
+}
+
+// collapseWhitespace folds newlines and runs of spaces into single spaces. A
+// task list renders `result` on one line; without this, a well-structured
+// multi-paragraph summary reads as a wall of run-together words.
+func collapseWhitespace(s string) string {
+	return strings.Join(strings.Fields(s), " ")
 }
 
 // reportWorkspacePath persists the per-run workspace path (#287) on the task row
