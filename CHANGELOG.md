@@ -19,6 +19,20 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **Admin-configurable model tiers (#1187).** The default and advanced
+  ("recommended") models are now workspace settings — Settings → Admin →
+  Features → Model tiers — instead of compile-time constants, so a lab
+  refresh no longer needs a code push. `default_model` / `advanced_model`
+  join the workspace-settings registry (admin override > `FLEET_DEFAULT_MODEL`
+  / `FLEET_ADVANCED_MODEL` env > compiled-in default), apply live through
+  agentcore holders, and reach the web on every shell mount via
+  `/client-config`. The admin rows use the existing catalog picker, which
+  unions OpenRouter with admin-configured workspace providers
+  (`provider/model` — Bedrock, OpenAI-direct, …) and accepts any typed slug.
+  Admin-only, like every workspace setting. The scheduled-task default
+  (`FLEET_TASK_MODEL`) deliberately stays env-only — it is boot-bound in the
+  scheduler ([ADMIN-SETTINGS.md](docs/ADMIN-SETTINGS.md)).
+
 - **Unit tests for six thinly-covered helpers**, from the consolidated Jules
   batch (#1188). Test-only — no production code changed:
 

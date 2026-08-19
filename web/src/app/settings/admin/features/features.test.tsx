@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import FeaturesAdminPage from "./page";
 
 // Settings → Admin → Features — the admin Features page. Load-bearing
@@ -21,7 +21,7 @@ vi.mock("../../useIsAdmin", () => ({
 
 type Resolved = {
   key: string;
-  kind: "bool" | "int" | "enum" | "url";
+  kind: "bool" | "int" | "enum" | "url" | "model";
   enum?: string[];
   min?: number;
   max?: number;
@@ -62,6 +62,15 @@ const THRESHOLD: Resolved = {
   value: "128",
   source: "default",
   default: "128",
+};
+
+const DEFAULT_TIER: Resolved = {
+  key: "default_model",
+  kind: "model",
+  env_var: "FLEET_DEFAULT_MODEL",
+  value: "google/gemini-3.7-flash",
+  source: "default",
+  default: "google/gemini-3.7-flash",
 };
 
 function mockFetch(
@@ -191,6 +200,39 @@ describe("FeaturesAdminPage", () => {
     await waitFor(() => expect(screen.getByText("Server default")).toBeInTheDocument());
     const del = fetchMock.mock.calls.find(([, i]) => i?.method === "DELETE");
     expect(del?.[0]).toBe("/api/admin/settings/tool_disclosure_threshold");
+  });
+
+  // Model tiers (#1187): the row renders the combobox picker, saves only on
+  // the explicit Save (a workspace-wide tier change must not fire per
+  // keystroke), and any free-typed provider/model slug commits.
+  it("saves a model tier via its picker only on explicit Save", async () => {
+    const fetchMock = mockFetch([DEFAULT_TIER], (url, init) => {
+      if (init.method === "PUT" && url.includes("default_model")) {
+        return {
+          status: 200,
+          body: { ...DEFAULT_TIER, value: "acme/frontier-1", source: "admin" },
+        };
+      }
+      return undefined;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<FeaturesAdminPage />);
+
+    expect(await screen.findByText("Model tiers")).toBeInTheDocument();
+    const wrap = await screen.findByTestId("model-picker-default_model");
+    const input = within(wrap).getByRole("combobox");
+    expect(input).toHaveValue("google/gemini-3.7-flash");
+
+    // No Save button until the value is dirty; typing alone fires no write.
+    expect(screen.queryByTestId("save-default_model")).toBeNull();
+    fireEvent.change(input, { target: { value: "acme/frontier-1" } });
+    expect(fetchMock.mock.calls.filter(([, i]) => i?.method === "PUT")).toHaveLength(0);
+    fireEvent.click(screen.getByTestId("save-default_model"));
+
+    await waitFor(() => expect(input).toHaveValue("acme/frontier-1"));
+    const put = fetchMock.mock.calls.find(([, init]) => init?.method === "PUT");
+    expect(put?.[0]).toBe("/api/admin/settings/default_model");
+    expect(JSON.parse(String(put?.[1]?.body))).toEqual({ value: "acme/frontier-1" });
   });
 
   it("surfaces a server rejection as a row error and keeps the old value", async () => {

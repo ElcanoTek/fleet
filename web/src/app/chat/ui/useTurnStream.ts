@@ -21,7 +21,7 @@ import {
   type ToolCallState,
 } from "./history";
 import { parseSseChunk, stepStreamDedup, type ServerEvent } from "@/app/lib/sse";
-import { DEFAULT_MODEL } from "@/app/lib/modelAliases";
+import { currentDefaultModel } from "@/app/lib/modelAliases";
 import { PENDING_CONV_KEY } from "./workspaceHref";
 
 // One pending input in a conversation's #785 queue (wire shape of
@@ -344,7 +344,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         activeConversationIdRef.current = p.id;
         setActiveConversationId(p.id);
         setSelectedPersona(p.persona);
-        if (typeof p.model === "string") setSelectedModel(p.model || DEFAULT_MODEL);
+        if (typeof p.model === "string") setSelectedModel(p.model || currentDefaultModel());
       }
       // Optimistically insert the row into the sidebar list so the
       // streaming dot can render *during* the turn rather than racing

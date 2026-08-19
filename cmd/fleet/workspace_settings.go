@@ -47,6 +47,8 @@ func buildWorkspaceSettings(cfg *config.Config, st *store.Store) (*settings.Serv
 		"max_tool_output_bytes":             strconv.Itoa(agentcore.EnvMaxToolOutputBytes()),
 		"phone_a_friend_enabled":            strconv.FormatBool(cfg.PhoneAFriendEnabled),
 		"subagents_enabled":                 strconv.FormatBool(cfg.SubagentsEnabled),
+		"default_model":                     defaultModelTier(cfg.DefaultModel, agentcore.DefaultCoreModel),
+		"advanced_model":                    defaultModelTier(cfg.AdvancedModel, agentcore.DefaultMaxModel),
 		"memory_autoindex_enabled":          strconv.FormatBool(cfg.MemoryAutoIndexEnabled),
 		"error_analysis_enabled":            strconv.FormatBool(cfg.ErrorAnalysisEnabled),
 		"auto_title_enabled":                strconv.FormatBool(cfg.AutoTitle),
@@ -68,8 +70,15 @@ func buildWorkspaceSettings(cfg *config.Config, st *store.Store) (*settings.Serv
 		// override the holder is CLEARED (not pinned to the boot env value), so
 		// an env-file edit + #286 reload — or any process-env change — keeps
 		// taking effect live exactly as before this feature existed.
-		"tool_disclosure_threshold":         applyEnvShadowedInt(agentcore.SetToolDisclosureThreshold, 0),
-		"max_tool_output_bytes":             applyEnvShadowedInt(agentcore.SetMaxToolOutputBytes, -1),
+		"tool_disclosure_threshold": applyEnvShadowedInt(agentcore.SetToolDisclosureThreshold, 0),
+		"max_tool_output_bytes":     applyEnvShadowedInt(agentcore.SetMaxToolOutputBytes, -1),
+		// Model tiers (#1187): the hook pushes the EFFECTIVE slug (override or
+		// env-derived default) into the agentcore holder; the setters treat ""
+		// as "revert to the compiled-in constant", so even an empty default can
+		// never blank a tier. /client-config re-reads the holders per request,
+		// which is what makes the web side live.
+		"default_model":                     applyModelTier(agentcore.SetDefaultModel),
+		"advanced_model":                    applyModelTier(agentcore.SetAdvancedModel),
 		"phone_a_friend_enabled":            applyBoolSetting(cfg.SetPhoneAFriendEnabled),
 		"subagents_enabled":                 applyBoolSetting(cfg.SetSubagentsEnabled),
 		"memory_autoindex_enabled":          applyBoolSetting(cfg.SetMemoryAutoIndexEnabled),
@@ -336,6 +345,27 @@ func (p *piiRedactorState) Probe(ctx context.Context) httpapi.PIIProbeResult {
 	res.Detail = out.Summary()
 	res.Redacted = out.Text
 	return res
+}
+
+// defaultModelTier resolves a model tier's env-derived boot default: the env
+// value when the deployment set one, else the compiled-in constant. The
+// registry validates admin WRITES against the slug shape; the default is
+// display/reset provenance and the constant always satisfies the shape.
+func defaultModelTier(envValue, builtin string) string {
+	if v := strings.TrimSpace(envValue); v != "" {
+		return v
+	}
+	return builtin
+}
+
+// applyModelTier adapts an agentcore model-tier setter to an ApplyFunc. Like
+// the config bool setters, the holder doesn't re-read the env after boot, so
+// applying the default and applying an override are the same operation.
+func applyModelTier(set func(string)) settings.ApplyFunc {
+	return func(value string, _ bool) error {
+		set(value)
+		return nil
+	}
 }
 
 // applyBoolSetting adapts a config live setter to an ApplyFunc. The value was
