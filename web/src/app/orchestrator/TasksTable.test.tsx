@@ -210,6 +210,81 @@ describe("TasksTable Run now action (#1019)", () => {
   });
 });
 
+// Stopping was reachable only from inside the Live-activity modal, so a
+// RECURRING job that had not fired yet could not be stopped from anywhere in
+// this UI — even though DELETE /tasks/{id} has always supported it. "Also you
+// can not delete a job in the operation center", 2026-08-13 (#1152).
+describe("TasksTable Stop action (#1152)", () => {
+  const scheduledJob: Task = {
+    id: "aaaaaaaa-bbbb-cccc-dddd-ffffffffffff",
+    prompt: "Comfluence daily refresh",
+    status: "scheduled",
+    recurrence: "0 12 * * *",
+  };
+
+  function renderWithStop(tasks: Task[], onStop?: (t: Task) => void, onOpenLogs = () => {}) {
+    return render(
+      <TasksTable
+        tasks={tasks}
+        total={tasks.length}
+        page={1}
+        pageSize={20}
+        filters={FILTERS}
+        onFilters={() => {}}
+        onPage={() => {}}
+        onPageSize={() => {}}
+        onOpenLogs={onOpenLogs}
+        onStop={onStop}
+      />,
+    );
+  }
+
+  it("offers Stop on a recurring job that has not run yet — the case with no other route", () => {
+    const onStop = vi.fn();
+    renderWithStop([scheduledJob], onStop);
+    fireEvent.click(screen.getByTestId("task-stop-button"));
+    expect(onStop).toHaveBeenCalledWith(scheduledJob);
+  });
+
+  it("offers Stop on a live run too, so the list is not a dead end", () => {
+    const onStop = vi.fn();
+    renderWithStop([{ ...scheduledJob, status: "running" }], onStop);
+    fireEvent.click(screen.getByTestId("task-stop-button"));
+    expect(onStop).toHaveBeenCalled();
+  });
+
+  it("hides Stop on a task that already finished — there is nothing to stop", () => {
+    renderWithStop([{ ...scheduledJob, status: "success" }], vi.fn());
+    expect(screen.queryByTestId("task-stop-button")).toBeNull();
+    expect(screen.queryByTestId("task-stop-button-card")).toBeNull();
+  });
+
+  it("says a recurring job will not run again, so the consequence is on the button", () => {
+    renderWithStop([scheduledJob], vi.fn());
+    expect(screen.getByTestId("task-stop-button").getAttribute("title")).toMatch(/not run again/i);
+  });
+
+  it("does not open the log viewer when Stop is clicked", () => {
+    const onOpenLogs = vi.fn();
+    renderWithStop([scheduledJob], () => {}, onOpenLogs);
+    fireEvent.click(screen.getByTestId("task-stop-button"));
+    expect(onOpenLogs).not.toHaveBeenCalled();
+  });
+
+  it("omits the action entirely when the parent passes no handler", () => {
+    renderWithStop([scheduledJob]);
+    expect(screen.queryByTestId("task-stop-button")).toBeNull();
+  });
+
+  it("fires from the phone card view too", () => {
+    const onStop = vi.fn();
+    renderWithStop([scheduledJob], onStop);
+    const cards = screen.getByTestId("task-cards");
+    fireEvent.click(within(cards).getByTestId("task-stop-button-card"));
+    expect(onStop).toHaveBeenCalledWith(scheduledJob);
+  });
+});
+
 describe("TasksTable titles", () => {
   const base: Task = {
     id: "dddddddd-eeee-ffff-0000-111111111111",

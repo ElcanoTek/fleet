@@ -92,6 +92,13 @@ function OrchestratorInner({ magicLinkLoginEnabled }: { magicLinkLoginEnabled: b
   // guard that keeps a double-click from submitting two runs.
   const [runNowTask, setRunNowTask] = useState<Task | null>(null);
   const [runNowBusy, setRunNowBusy] = useState(false);
+  // Stop/cancel from the list (#1152). Stopping was reachable only from inside
+  // the Live-activity modal, so a RECURRING job that had not yet fired could
+  // not be stopped from anywhere in this UI — even though DELETE /tasks/{id}
+  // has always supported it. "Also you can not delete a job in the operation
+  // center", 2026-08-13.
+  const [stopTask, setStopTask] = useState<Task | null>(null);
+  const [stopBusy, setStopBusy] = useState(false);
   const { showToast } = useToast();
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
@@ -114,6 +121,23 @@ function OrchestratorInner({ magicLinkLoginEnabled }: { magicLinkLoginEnabled: b
       );
     } finally {
       setRunNowBusy(false);
+    }
+  };
+  // stop cancels the task: a live run halts at the governed loop's next
+  // checkpoint, and a recurring job that has not fired stops recurring. The
+  // server records who stopped it (#508), so this stays auditable.
+  const stop = async (task: Task) => {
+    if (stopBusy) return;
+    setStopBusy(true);
+    try {
+      await orchestratorApi.cancelTask(task.id);
+      showToast(`Stopped ${taskRunLabel(task)}`, "success");
+      setStopTask(null);
+      void dashboard.reload();
+    } catch (err) {
+      showToast(`Stop failed: ${err instanceof Error ? err.message : "unknown error"}`, "error");
+    } finally {
+      setStopBusy(false);
     }
   };
   // Desktop rail collapse + ≤900px auto-collapse/overlay (shared shell).
@@ -403,6 +427,7 @@ function OrchestratorInner({ magicLinkLoginEnabled }: { magicLinkLoginEnabled: b
                   onOpenLogs={setLogTask}
                   onEdit={setEditTask}
                   onRunNow={setRunNowTask}
+                  onStop={setStopTask}
                 />
                 </>
               )}
@@ -453,6 +478,27 @@ function OrchestratorInner({ magicLinkLoginEnabled }: { magicLinkLoginEnabled: b
         }}
         onCancel={() => {
           if (!runNowBusy) setRunNowTask(null);
+        }}
+      />
+      {/* Stopping is not undoable and, for a recurring job, ends the schedule —
+          so the copy says which of those two things is about to happen rather
+          than asking "are you sure". */}
+      <ConfirmDialog
+        open={!!stopTask}
+        title="Stop task"
+        message={
+          stopTask
+            ? stopTask.recurrence
+              ? `Stop "${taskRunLabel(stopTask)}"? This ends the schedule — it will not run again. Create a new task to resume it.`
+              : `Stop "${taskRunLabel(stopTask)}"? A run in progress halts at its next checkpoint and keeps its partial transcript.`
+            : ""
+        }
+        confirmLabel={stopBusy ? "Stopping…" : "Stop"}
+        onConfirm={() => {
+          if (stopTask) void stop(stopTask);
+        }}
+        onCancel={() => {
+          if (!stopBusy) setStopTask(null);
         }}
       />
       <LogViewer
