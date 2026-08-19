@@ -19,6 +19,11 @@ func TestToolResultLooksFailed(t *testing.T) {
 		{"audit block", "BLOCKED: 'send_email' requires audit first.", true},
 		{"safety limit block", "Safety Limit: send_email already executed 3 times.", true},
 		{"safety guard block", "Safety Guard: Duplicate send_email blocked.", true},
+		// The duplicate-send suppression means the send already succeeded — the
+		// verifier must count the action satisfied or it re-demands a call the
+		// guard will never allow (the demand/refuse deadlock of #1153's era).
+		{"duplicate send suppressed", "Duplicate send_email suppressed: an identical payload was already sent successfully by this run, so this send is complete.", false},
+		{"duplicate send suppressed behind error prefix", "[tool error] Duplicate send_email suppressed: an identical payload was already sent successfully by this run.", false},
 		{"plain success text", "Email queued successfully", false},
 		{"status success json", `{"status":"success","message_id":"abc"}`, false},
 		{"json without status", `{"rows": 12, "summary": "ok"}`, false},
