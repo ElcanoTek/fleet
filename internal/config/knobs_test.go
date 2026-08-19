@@ -330,3 +330,63 @@ func TestValidateEnvKnobs_FlagsEveryRegisteredKnob(t *testing.T) {
 		t.Errorf("clean env should yield no problems, got %v", problems)
 	}
 }
+
+func TestValidateEnvKnobs_SpecificScenarios(t *testing.T) {
+	cases := []struct {
+		name    string
+		envs    map[string]string
+		wantLen int
+		want    []string
+	}{
+		{
+			name:    "valid configurations",
+			envs:    map[string]string{"FLEET_MAX_COST_USD": "50", "FLEET_LOCKDOWN_ONLY": "true"},
+			wantLen: 0,
+		},
+		{
+			name:    "out of range configurations",
+			envs:    map[string]string{"FLEET_MAX_COST_USD": "-1"},
+			wantLen: 1,
+			want:    []string{"FLEET_MAX_COST_USD", ">= 0"},
+		},
+		{
+			name:    "parse error configuration",
+			envs:    map[string]string{"FLEET_MAX_COST_USD": "5O"}, // Letter O
+			wantLen: 1,
+			want:    []string{"FLEET_MAX_COST_USD", `"5O"`, "number"},
+		},
+		{
+			name:    "multiple errors",
+			envs:    map[string]string{"FLEET_MAX_COST_USD": "5O", "FLEET_LOCKDOWN_ONLY": "enabled"},
+			wantLen: 2,
+			want:    []string{"FLEET_MAX_COST_USD", `"5O"`, "number", "FLEET_LOCKDOWN_ONLY", `"enabled"`, "boolean"},
+		},
+		{
+			name:    "unset/blank values",
+			envs:    map[string]string{"FLEET_MAX_COST_USD": "", "FLEET_LOCKDOWN_ONLY": "   "},
+			wantLen: 0,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			isolateEnv(t)
+			for k, v := range tc.envs {
+				t.Setenv(k, v)
+			}
+
+			problems := ValidateEnvKnobs()
+			if len(problems) != tc.wantLen {
+				t.Errorf("ValidateEnvKnobs() returned %d problems, want %d", len(problems), tc.wantLen)
+			}
+
+			// Join problems to easily check substrings
+			joinedProblems := strings.Join(problems, " | ")
+			for _, w := range tc.want {
+				if !strings.Contains(joinedProblems, w) {
+					t.Errorf("ValidateEnvKnobs() problems should mention %q, got: %q", w, joinedProblems)
+				}
+			}
+		})
+	}
+}
