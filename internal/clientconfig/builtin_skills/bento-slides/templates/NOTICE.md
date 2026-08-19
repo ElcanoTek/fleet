@@ -65,46 +65,75 @@ Re-vendoring is therefore a deliberate manual act:
    id="bento-doc">` and still appears exactly once — `scripts/bento_doc.py` and the
    test both depend on that anchor.
 
-## Network endpoints the shell contacts
+## Offline posture — what fleet disables, and how
 
-A deck is self-contained to *render* — nothing is fetched to open or present it,
-and nothing is fetched while the agent authors it. The vendored shell does reach
-the network in two places:
+fleet ships Bento as a strictly offline viewer/editor. The vendored shell has two
+behaviors that would make a delivered deck a network client, and
+`scripts/bento_doc.py new` disables both.
 
-- `https://bento.page/releases/slides/manifest.json` — an **update check on
-  launch**, `fetch` with `cache: "no-store"`, on by default. **fleet blocks
-  this.** `scripts/bento_doc.py new` plants one `<script
-  id="fleet-no-update-check">` element ahead of the runtime that refuses fetches
-  to `bento.page` and switches upstream's own `bento-auto-check` preference off,
-  so the About panel shows the true state. Rationale: fleet embeds and
-  sha256-pins the shell it ships, so the check can only report a version the
-  reader has no way to install, while telling a third party — from the reader's
-  machine — that they opened the deck. Upstream does verify the manifest against
-  a pinned P-256 key and any downloaded shell against a sha256, so the check was
-  never a code-execution risk; it is refused because it is useless here and not
-  the reader's choice to make.
-- `wss://sync.bento.page` — the live-collaboration relay, contacted only for a
-  deck the user has explicitly shared (`collab.on`). **Deliberately left
-  working:** the user opts into it by sharing, and the guard blocks `fetch` only,
-  so a WebSocket is untouched by construction. A deck this pack produces has no
-  `collab` block at all.
+| Upstream behavior | Endpoint | Trigger | Status |
+| --- | --- | --- | --- |
+| App update check | `https://bento.page/releases/slides/manifest.json` | every launch, on by default | **blocked** |
+| Live collaboration | `wss://sync.bento.page/d/<room>` | any deck whose document has a `collab` block | **blocked** |
 
-Two boundaries on the guard, both load-bearing:
+The collaboration one is the sharper of the two. `bornWithCollab = !!doc.collab`
+is the whole eligibility test, so a deck that merely *carries* a collab object
+opens a session on load with no user action and retries on failure. A file like
+that is a live, writable door into whoever opens it.
 
-- **The vendored file is still byte-identical.** The guard is added to a *deck*
-  as it is created, never to `Bento_Slides.bento.html`, so the sha256 pin above
-  and the "redistributed unmodified" claim both still hold. A produced deck is
-  upstream's shell plus that one element — a modification the MIT license
-  permits, with upstream's notice intact and travelling with the file.
-- **A deck the user brings is not rewritten.** `set` preserves a shell byte for
-  byte, so it never injects the guard into someone else's file; `validate` prints
-  an advisory instead. Covered by
-  `TestBentoUnguardedDeckIsReportedNotRewritten`.
+### Three layers, deliberately
 
-`TestBentoDeckDoesNotCallHome` pins the guard's presence, its ordering ahead of
-the runtime (an element planted after it would be dead code that still read
-correctly), and that an edit neither drops nor duplicates it. Those assertions
-are structural; the end-to-end check — loading a deck in Chromium with the
-network recorded, and seeing the request on an unguarded shell and none on a
-guarded one — was done by hand and is not automated, since CI has no browser in
-the Go lane.
+1. **A CSP `<meta>` tag** planted ahead of the runtime, with `connect-src 'none'`.
+   The **browser** enforces this, so it does not depend on the app cooperating,
+   on `localStorage`, or on our own script running. `default-src 'none'` with
+   `object-src`/`frame-src`/`base-uri`/`form-action` at `'none'` and `img-src`
+   limited to `data:`/`blob:` also make several of SKILL.md's authoring rules
+   browser-enforced rather than remembered — including remote images, which are
+   beacons that report who opened a deck and when. `script-src 'unsafe-inline'`
+   is unavoidable: the app *is* inline script.
+2. **Upstream's own offline switch** (`bento-offline=on`). The app then refuses
+   network at its own chokepoints — `fi()` for fetch, `Ry()` for WebSocket —
+   never attaches a collab transport, and strips remote asset URLs at render.
+   This makes it fail *coherently*, with its own error type and UI, instead of
+   retrying into the CSP wall. It needs `localStorage`, which some browsers deny
+   for `file://` URLs; layer 1 is what covers that case.
+3. **No `collab` block in the document.** `set` refuses to write one — it drops
+   the block whether it came from the target file or from the incoming document —
+   so a deck fleet produces has nothing for a session to attach to. Reported on
+   stderr, never silently: only the user can weigh a session they may be relying
+   on. Note this reverses #1197, which restored collab keys so redaction could
+   not destroy a live session; that treated a collab block as inert data, which
+   it is not.
+
+### Verified in Chromium, by hand
+
+The Go tests are structural — they pin presence, ordering and idempotency, which
+is what rots silently. They cannot prove wire behavior, and CI has no browser in
+the Go lane. This matrix was run by hand with every request intercepted and the
+page instrumented (`WebSocket`, `fetch`, `XMLHttpRequest`, `sendBeacon` recorded
+from an init script before any app code ran):
+
+| Deck | WebSocket | fetch | Left the process |
+| --- | --- | --- | --- |
+| upstream shell, unguarded | — | `bento.page` manifest | manifest |
+| upstream shell, unguarded, document carries `collab` | `sync.bento.page` ×5 (retrying) | `bento.page` manifest | both |
+| **fleet deck from `new`** | none | none | **none** |
+| **fleet deck, document force-fed a live `collab` block** | none | none | **none** |
+| **as above, with `localStorage` denied** (layer 2 cannot engage) | attempted, **CSP refused** | attempted, **CSP refused** | **none** |
+
+The last row is the point of the layering: the app tries both connections and the
+browser refuses both.
+
+### Known residue, not papered over
+
+The app calls `ensureCollab()` unconditionally when it attaches a document, so a
+deck **saved from the app's own UI** gets a freshly minted `collab` block —
+including a room URL and private key — written into the file, even though nothing
+ever connects. Both guard layers survive that save (verified: the CSP meta and the
+guard script are both present in `serialize()` output), so the saved deck stays
+offline. But the key material is in the file. It is inert while the guard is
+there, and the room has no other participant. If anyone ever strips the guard from
+such a deck, treat its keys as public and rotate.
+
+`scripts/bento_doc.py set` removes the block again, so any revision delivered
+through this skill ships clean.

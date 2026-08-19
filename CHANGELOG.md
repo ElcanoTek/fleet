@@ -28,20 +28,40 @@ prior versions are listed because none have shipped.
   PowerPoint, no PPTX toolchain, and no network call at all, either to author the
   deck or to open it.
 
-  That last part took a deliberate fix. Upstream's shell asks `bento.page` for a
-  newer version of itself on every launch, on by default, with its switch in
-  `localStorage` where nothing in the file can preset it. fleet embeds and
-  sha256-pins the shell, so that check can only report a version the reader has
-  no way to install — while telling a third party, from the reader's machine,
-  that they opened the deck. `new` now plants one
-  `<script id="fleet-no-update-check">` element ahead of the runtime that refuses
-  `bento.page` fetches and switches upstream's own preference off so the About
-  panel shows the true state. The live-collaboration relay is a WebSocket the
-  user opts into by sharing and is deliberately left working; the vendored
-  template stays byte-identical and pinned (the guard goes into the produced
-  deck, not the template); and a deck the *user* hands the agent is never
-  rewritten — `set` preserves a shell byte for byte and `validate` reports an
-  unguarded one instead.
+  **Decks are offline-only, by construction.** Upstream has two behaviors that
+  would make a delivered deck a network client, and both are disabled. The first
+  is an update check to `bento.page` on every launch: fleet embeds and
+  sha256-pins the shell, so it can only report a version the reader cannot
+  install, while telling a third party they opened the deck. The second matters
+  more — live collaboration. `bornWithCollab = !!doc.collab` is the entire
+  eligibility test, so a deck that merely *carries* a collab block opens a
+  `wss://sync.bento.page` session the moment it is opened, with no click, and
+  retries on failure. Such a file is a live, writable door into whoever opens it,
+  and #1197's `set` deliberately restored those keys.
+
+  `new` now plants two layers ahead of the runtime: a CSP `<meta>` with
+  `connect-src 'none'` — enforced by the browser, so it holds without the app's
+  cooperation, without `localStorage`, and even against markup a model wrote into
+  a slide — and upstream's own offline switch, so the app refuses network at its
+  own chokepoints and never attaches a session instead of retrying into the CSP.
+  The CSP also blocks iframes, plugins, form posts and remote images, making
+  several of the skill's authoring rules browser-enforced rather than remembered.
+  A third layer sits in the document: `set` now **removes** any `collab` block,
+  from the target file or the incoming document, and says so on stderr — dropping
+  keys does not retract an invitation already shared, and only the user can decide
+  to rotate.
+
+  Verified by hand in Chromium with the page instrumented and every request
+  intercepted: an unguarded shell carrying a collab block attempts the session
+  socket five times and fetches the update manifest; a fleet deck attempts
+  neither; and with `localStorage` denied so only the CSP is left, the app tries
+  both and the browser refuses both. The vendored template stays byte-identical
+  and sha256-pinned (the guard goes into the produced deck, not the template), and
+  a deck the *user* hands the agent keeps its shell — `validate` reports an
+  unguarded one rather than rewriting it. Honest residue, recorded in
+  `templates/NOTICE.md`: the app mints a collab block into files it saves through
+  its own UI, so such a deck carries inert key material even though both guard
+  layers survive the save and nothing connects.
 
   The pack ships in `internal/clientconfig/builtin_skills/bento-slides/` and
   needed **no Go change**: `//go:embed all:builtin_skills` is recursive, so its

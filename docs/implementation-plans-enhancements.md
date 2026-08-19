@@ -48,13 +48,14 @@ PPTX export; hosted collab editing; PowerPoint animation parity.
   `NOTICE` comment internally so it travels with every deck.
 - [x] Works offline except model provider — the app is vendored and embedded, so
   nothing is fetched at turn time, nothing is fetched to render a deck, and a
-  deck `new` creates makes **no** network request when opened. Upstream's shell
-  would check `bento.page` for its own updates on launch; since fleet embeds and
-  pins the shell, that answer is unusable and the question alone discloses the
-  reader, so `new` plants a guard element that refuses it. The `collab` relay is
-  left working, the vendored template stays byte-identical, and a deck the user
-  brought is reported by `validate` rather than rewritten. See
-  `templates/NOTICE.md`.
+  deck `new` creates makes **no** network request when opened — no update check
+  and no live collaboration. Multiplayer is off by construction: a CSP
+  `connect-src 'none'` meta the browser enforces, upstream's own offline switch,
+  and `set` refusing to write a `collab` block (which is not inert — carrying one
+  joins a live session on load). The vendored template stays byte-identical, and a
+  deck the user brought is reported by `validate` rather than rewritten. See
+  `templates/NOTICE.md` for the layer-by-layer rationale and the Chromium
+  verification matrix.
 
 ### Deviations from the approach above
 

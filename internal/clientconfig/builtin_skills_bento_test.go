@@ -29,9 +29,9 @@ const (
 
 	bentoHelperRel = "bento-slides/scripts/bento_doc.py"
 
-	// The id of the one element fleet adds to upstream's shell: the guard that
-	// refuses the launch update check. Kept in lockstep with bento_doc.py.
-	bentoGuardID = "fleet-no-update-check"
+	// The id of the guard fleet adds to upstream's shell to make a deck
+	// offline-only. Kept in lockstep with bento_doc.py.
+	bentoGuardID = "fleet-offline-deck"
 
 	// The document block's opening tag. bento_doc.py splices on this exact
 	// string and requires it to be unique; a re-vendor that changed either
@@ -293,8 +293,16 @@ func TestBentoDocHelperRoundTrip(t *testing.T) {
 }
 
 // get must never put live-session private keys in front of the model, and set
-// must not lose them just because get redacted them.
-func TestBentoDocHelperRedactsCollabSecrets(t *testing.T) {
+// must REMOVE the session rather than carry it across.
+//
+// #1197 deliberately restored collab keys from the file so that redaction could
+// not destroy a user's live session. That reasoning treated a collab block as
+// inert data it would be rude to drop. It is not inert: `bornWithCollab =
+// !!doc.collab` makes a deck share-eligible, so a deck carrying one joins a live
+// session the moment it is opened, with no click. fleet ships Bento offline-only,
+// so the block goes — loudly, on stderr, because only the user can weigh it and
+// because dropping the keys does not retract an invitation already handed out.
+func TestBentoDocHelperStripsCollabSession(t *testing.T) {
 	helper := bentoHelper(t)
 	dir := t.TempDir()
 	deck := "shared.bento.html"
@@ -314,11 +322,12 @@ func TestBentoDocHelperRedactsCollabSecrets(t *testing.T) {
 	// Obviously-fake, low-entropy placeholder: a realistic-looking key here
 	// would be a gitleaks finding in this very file.
 	const fakeKey = "collab-writer-priv-placeholder-not-real"
-	doc["collab"] = map[string]any{"room": "room-1", "writerPriv": fakeKey}
-	writeJSON(t, filepath.Join(dir, "doc.json"), doc)
-	if _, stderr, err := runHelper(t, helper, dir, "set", deck, "doc.json"); err != nil {
-		t.Fatalf("set with collab: %v\n%s", err, stderr)
-	}
+
+	// Plant the session by rewriting the document block directly, the way the
+	// Bento app itself would on save. It cannot be done through `set` any more —
+	// that is the behavior under test.
+	doc["collab"] = map[string]any{"room": "room-1", "key": "k", "on": true, "writerPriv": fakeKey}
+	injectDoc(t, filepath.Join(dir, deck), doc)
 
 	stdout, stderr, err := runHelper(t, helper, dir, "get", deck)
 	if err != nil {
@@ -338,31 +347,54 @@ func TestBentoDocHelperRedactsCollabSecrets(t *testing.T) {
 		t.Error("get emitted a collab block; it must be stripped")
 	}
 
-	// Writing the redacted document back must restore the keys from the file,
-	// so redaction cannot destroy the user's live session.
+	// Writing the document back must remove the session entirely — and say so,
+	// since only the user can decide what to do about an invitation already out.
 	redacted["title"] = "Revised"
 	writeJSON(t, filepath.Join(dir, "doc2.json"), redacted)
-	if _, stderr, err := runHelper(t, helper, dir, "set", deck, "doc2.json"); err != nil {
+	_, stderr, err = runHelper(t, helper, dir, "set", deck, "doc2.json")
+	if err != nil {
 		t.Fatalf("set redacted doc: %v\n%s", err, stderr)
+	}
+	if !strings.Contains(stderr, "removed this deck's live-collaboration block") {
+		t.Errorf("set removed the session without reporting it; stderr = %q", stderr)
+	}
+	if !strings.Contains(stderr, "Rotate keys") {
+		t.Errorf("set did not say that removal does not retract a shared invitation; stderr = %q", stderr)
 	}
 	raw, err := os.ReadFile(filepath.Join(dir, deck))
 	if err != nil {
 		t.Fatalf("read deck: %v", err)
 	}
-	var onDisk struct {
-		Title  string `json:"title"`
-		Collab struct {
-			WriterPriv string `json:"writerPriv"`
-		} `json:"collab"`
+	if bytes.Contains(raw, []byte(fakeKey)) {
+		t.Error("the deck still contains a collab private key after set")
+	}
+	var onDisk map[string]any
+	if err := json.Unmarshal(unescapeBlock(docBlock(t, raw)), &onDisk); err != nil {
+		t.Fatalf("parse block: %v", err)
+	}
+	if onDisk["title"] != "Revised" {
+		t.Errorf("title = %v, want the edit applied", onDisk["title"])
+	}
+	if _, ok := onDisk["collab"]; ok {
+		t.Error("set wrote a collab block; an offline-only deck must have none")
+	}
+
+	// The same must hold when the INCOMING document supplies a session of its
+	// own — a model that copied one across, or a doc lifted from a shared deck.
+	redacted["collab"] = map[string]any{"room": "room-2", "key": "k", "on": true}
+	writeJSON(t, filepath.Join(dir, "doc3.json"), redacted)
+	if _, stderr, err = runHelper(t, helper, dir, "set", deck, "doc3.json"); err != nil {
+		t.Fatalf("set doc carrying its own collab: %v\n%s", err, stderr)
+	}
+	raw, err = os.ReadFile(filepath.Join(dir, deck))
+	if err != nil {
+		t.Fatalf("re-read deck: %v", err)
 	}
 	if err := json.Unmarshal(unescapeBlock(docBlock(t, raw)), &onDisk); err != nil {
 		t.Fatalf("parse block: %v", err)
 	}
-	if onDisk.Title != "Revised" {
-		t.Errorf("title = %q, want the edit applied", onDisk.Title)
-	}
-	if onDisk.Collab.WriterPriv != fakeKey {
-		t.Error("set dropped the deck's collab keys; redaction must be non-destructive")
+	if _, ok := onDisk["collab"]; ok {
+		t.Error("set honored a collab block supplied by the incoming document")
 	}
 }
 
@@ -531,13 +563,47 @@ func prefixAfterTitle(t *testing.T, raw []byte) []byte {
 	return raw[titleEnd : anchor+len(bentoDocAnchor)]
 }
 
+// injectDoc rewrites a deck's document block with the given document, applying
+// the same "<" escaping the app and the helper both use. It exists so a test can
+// build a deck that ARRIVES in a state the helper refuses to write — a shared
+// deck carrying a live session, which is exactly how one reaches a user.
+func injectDoc(t *testing.T, path string, doc map[string]any) {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read deck: %v", err)
+	}
+	payload, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatalf("marshal doc: %v", err)
+	}
+	escaped := bytes.ReplaceAll(payload, []byte("<"), []byte(`\u003c`))
+	start := bytes.Index(raw, []byte(bentoDocAnchor))
+	if start < 0 {
+		t.Fatal("no document block in deck")
+	}
+	start += len(bentoDocAnchor)
+	end := bytes.Index(raw[start:], []byte("</script>"))
+	if end < 0 {
+		t.Fatal("unterminated document block")
+	}
+	out := append([]byte{}, raw[:start]...)
+	out = append(out, escaped...)
+	out = append(out, raw[start+end:]...)
+	if err := os.WriteFile(path, out, 0o600); err != nil {
+		t.Fatalf("write deck: %v", err)
+	}
+}
+
 // stripGuard removes the single no-update-check <script> element the helper
 // plants, so what remains can be compared against the pristine vendored shell.
 func stripGuard(t *testing.T, raw []byte) []byte {
 	t.Helper()
-	open := bytes.Index(raw, []byte(`<script id="`+bentoGuardID+`">`))
+	// The guard is a CSP <meta> followed by a <script>; strip from the meta
+	// through the script's close tag.
+	open := bytes.Index(raw, []byte(`<meta http-equiv="Content-Security-Policy"`))
 	if open < 0 {
-		t.Fatal("no guard element to strip")
+		t.Fatal("no guard CSP meta to strip")
 	}
 	rest := raw[open:]
 	end := bytes.Index(rest, []byte("</script>"))
@@ -628,19 +694,20 @@ func TestBentoDocHelperRejectsUndownloadableNames(t *testing.T) {
 	}
 }
 
-// Upstream's shell asks bento.page for a newer version of itself on every
-// launch. fleet embeds and sha256-pins the shell it ships, so that answer is
-// unusable here, and the question alone tells a third party that the reader
-// opened the deck. `new` plants a guard that refuses it.
+// fleet ships Bento as a strictly OFFLINE viewer/editor, and two upstream
+// behaviors would make a deck a network client instead: the launch update check,
+// and live collaboration. The second is the sharper one — `bornWithCollab =
+// !!doc.collab` is enough to make a deck share-eligible, so a deck that merely
+// CARRIES a collab object opens a wss://sync.bento.page session on load, with no
+// click, and retries. `new` plants a two-layer guard.
 //
-// These assertions are structural — they cannot prove the browser makes no
-// request. What they hold is the part that silently rots: that the guard is
-// present, that it runs BEFORE the runtime that would fire the check (an
-// element planted after it would be dead code that still looked right), that
-// editing a deck neither drops nor duplicates it, and that upstream's own
-// preference key is switched off so the app's About panel does not advertise a
-// check that will not happen.
-func TestBentoDeckDoesNotCallHome(t *testing.T) {
+// These assertions are structural: Go tests cannot prove what a browser does on
+// the wire. What they pin is the part that would rot silently — that both layers
+// are present, that the browser-enforced one actually names connect-src, that
+// they run ahead of the runtime they constrain, and that editing a deck neither
+// drops nor duplicates them. The wire behavior was verified by hand in Chromium;
+// see templates/NOTICE.md for what was run and what it showed.
+func TestBentoDeckIsOfflineOnly(t *testing.T) {
 	helper := bentoHelper(t)
 	dir := t.TempDir()
 	deck := "Guarded.bento.html"
@@ -649,8 +716,8 @@ func TestBentoDeckDoesNotCallHome(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new: %v\n%s", err, stderr)
 	}
-	if !strings.Contains(stdout, "bento.page is disabled") {
-		t.Errorf("new did not report that the update check is off; stdout:\n%s", stdout)
+	if !strings.Contains(stdout, "no live collaboration") {
+		t.Errorf("new did not report the deck as offline-only; stdout:\n%s", stdout)
 	}
 
 	raw, err := os.ReadFile(filepath.Join(dir, deck))
@@ -661,22 +728,53 @@ func TestBentoDeckDoesNotCallHome(t *testing.T) {
 	if n := bytes.Count(raw, []byte(bentoGuardID)); n != 1 {
 		t.Fatalf("guard id appears %d times, want exactly 1", n)
 	}
-	// The guard must switch upstream's own preference off, so the About panel
-	// reflects reality rather than showing a check that is being refused.
+
+	// Layer 1 — the browser-enforced boundary. This is the one that holds when
+	// localStorage is unavailable, so a deck without it is only as private as the
+	// app's own cooperation.
+	csp := bytes.Index(raw, []byte(`<meta http-equiv="Content-Security-Policy"`))
+	if csp < 0 {
+		t.Fatal("no CSP meta in the guard")
+	}
+	cspEnd := bytes.IndexByte(raw[csp:], '>')
+	if cspEnd < 0 {
+		t.Fatal("CSP meta is unterminated")
+	}
+	policy := string(raw[csp : csp+cspEnd])
+	// connect-src is what stops both the update check and the collab socket;
+	// the rest turn SKILL.md's "never author this" rules into browser rules.
+	for _, directive := range []string{
+		"connect-src 'none'",
+		"object-src 'none'",
+		"frame-src 'none'",
+		"base-uri 'none'",
+		"form-action 'none'",
+	} {
+		if !strings.Contains(policy, directive) {
+			t.Errorf("CSP is missing %q; policy = %s", directive, policy)
+		}
+	}
+	// A remote image is a beacon: it reports who opened the deck, and when.
+	if strings.Contains(policy, "img-src") && strings.Contains(policy, "img-src *") {
+		t.Error("CSP allows remote images, which report that the deck was opened")
+	}
+
+	// Layer 2 — upstream's own offline switch, so the app refuses network at its
+	// own chokepoints and never attaches a collab transport, rather than
+	// retrying into the CSP wall.
+	if !bytes.Contains(raw, []byte(`localStorage.setItem("bento-offline", "on")`)) {
+		t.Error("guard does not engage upstream's offline mode")
+	}
 	if !bytes.Contains(raw, []byte(`localStorage.setItem("bento-auto-check", "off")`)) {
 		t.Error("guard does not turn upstream's auto-check preference off")
 	}
-	// It must block the release host and nothing wider. The collaboration relay
-	// is a WebSocket the user opts into by sharing, so fetch-blocking leaves it
-	// alone by construction — assert the guard does not reach for it.
-	if !bytes.Contains(raw, []byte("bento\\.page")) {
-		t.Error("guard does not scope its refusal to bento.page")
-	}
-	if bytes.Contains(raw, []byte("WebSocket")) {
-		t.Error("guard touches WebSocket; the collab relay must keep working")
+	// Layer 2 must not be load-bearing on its own: a browser that refuses
+	// localStorage for file:// URLs has to leave the deck just as offline.
+	if !bytes.Contains(raw, []byte("catch (e)")) {
+		t.Error("guard's storage write is not guarded against a browser that refuses localStorage")
 	}
 
-	// Ordering is the assertion that matters most: a guard planted after the
+	// Ordering is the assertion that matters most: either layer planted after the
 	// runtime would parse, look correct in review, and do nothing.
 	guardAt := bytes.Index(raw, []byte(bentoGuardID))
 	docAt := bytes.Index(raw, []byte(bentoDocAnchor))
@@ -684,9 +782,9 @@ func TestBentoDeckDoesNotCallHome(t *testing.T) {
 	if runtimeAt < 0 {
 		t.Fatal("no runtime block in the shell")
 	}
-	if guardAt >= docAt || docAt >= runtimeAt {
-		t.Errorf("guard must precede the document block and the runtime; got guard=%d doc=%d runtime=%d",
-			guardAt, docAt, runtimeAt)
+	if csp >= docAt || guardAt >= docAt || docAt >= runtimeAt {
+		t.Errorf("both guard layers must precede the document block and the runtime; got csp=%d guard=%d doc=%d runtime=%d",
+			csp, guardAt, docAt, runtimeAt)
 	}
 
 	// An edit must neither drop the guard nor add a second copy: it lives in the
@@ -704,12 +802,15 @@ func TestBentoDeckDoesNotCallHome(t *testing.T) {
 	if n := bytes.Count(after, []byte(bentoGuardID)); n != 1 {
 		t.Errorf("after an edit the guard id appears %d times, want exactly 1", n)
 	}
+	if n := bytes.Count(after, []byte("Content-Security-Policy")); n != 1 {
+		t.Errorf("after an edit the CSP meta appears %d times, want exactly 1", n)
+	}
 }
 
-// A deck the USER brought us keeps upstream behavior: `set` preserves the shell
-// byte for byte, so we do not silently rewrite someone else's file. `validate`
-// is what surfaces the difference, so the agent can tell them instead.
-func TestBentoUnguardedDeckIsReportedNotRewritten(t *testing.T) {
+// A deck the USER brought us keeps upstream's shell byte for byte — we do not
+// rewrite someone else's file. `validate` is what surfaces the difference, so
+// the agent can tell them instead of silently editing.
+func TestBentoUnguardedShellIsReportedNotRewritten(t *testing.T) {
 	helper := bentoHelper(t)
 	dir := t.TempDir()
 
@@ -717,12 +818,10 @@ func TestBentoUnguardedDeckIsReportedNotRewritten(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read embedded template: %v", err)
 	}
-	theirs := filepath.Join(dir, "Theirs.bento.html")
-	if err := os.WriteFile(theirs, tpl, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "Theirs.bento.html"), tpl, 0o600); err != nil {
 		t.Fatalf("write their deck: %v", err)
 	}
 
-	// Author into it via a document lifted from a deck of our own.
 	if _, stderr, err := runHelper(t, helper, dir, "new", "Ours.bento.html"); err != nil {
 		t.Fatalf("new: %v\n%s", err, stderr)
 	}
@@ -733,7 +832,7 @@ func TestBentoUnguardedDeckIsReportedNotRewritten(t *testing.T) {
 		t.Fatalf("set on their deck: %v\n%s", err, stderr)
 	}
 
-	after, err := os.ReadFile(theirs)
+	after, err := os.ReadFile(filepath.Join(dir, "Theirs.bento.html"))
 	if err != nil {
 		t.Fatalf("read their deck: %v", err)
 	}
@@ -745,16 +844,15 @@ func TestBentoUnguardedDeckIsReportedNotRewritten(t *testing.T) {
 	if err != nil {
 		t.Fatalf("validate their deck: %v\n%s", err, stderr)
 	}
-	if !strings.Contains(stdout, "no fleet update-check guard") {
+	if !strings.Contains(stdout, "no fleet offline guard") {
 		t.Errorf("validate did not flag an unguarded shell; stdout:\n%s", stdout)
 	}
 
-	// ... and our own deck must NOT draw that advisory.
 	stdout, stderr, err = runHelper(t, helper, dir, "validate", "Ours.bento.html")
 	if err != nil {
 		t.Fatalf("validate our deck: %v\n%s", err, stderr)
 	}
-	if strings.Contains(stdout, "no fleet update-check guard") {
+	if strings.Contains(stdout, "no fleet offline guard") {
 		t.Errorf("validate flagged a guarded deck as unguarded; stdout:\n%s", stdout)
 	}
 }

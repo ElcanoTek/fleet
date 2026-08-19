@@ -45,47 +45,75 @@ CLOSE_TAG = b"</script>"
 TITLE_OPEN = b"<title>"
 TITLE_CLOSE = b"</title>"
 
-# ── the no-update-check guard ────────────────────────────────────────────────
+# ── the offline-deck guard ───────────────────────────────────────────────────
 #
-# Upstream's shell checks bento.page for a newer version of itself on every
-# launch (a signed manifest; the check is on by default and its switch lives in
-# localStorage, so nothing in the file can preset it). fleet EMBEDS and
-# sha256-pins the shell it ships, so that check can only ever report a version
-# the reader has no way to install — while telling a third party, from their
-# machine, that they opened this deck. `new` therefore plants the guard below
-# into the shell, ahead of the runtime, and refuses the call.
+# fleet ships Bento as a strictly OFFLINE viewer/editor. A deck is a document the
+# user opens on their own machine; it is not a client for anything. Two upstream
+# behaviors would make it one, and `new` plants the guard below to stop both:
 #
-# What it deliberately does NOT touch: `wss://sync.bento.page`, the
-# collaboration relay. That is a connection the user opts into by sharing a
-# deck, not a background call, and it uses WebSocket rather than fetch.
+#   * A launch update check (`fetch` to bento.page). fleet embeds and sha256-pins
+#     the shell, so it can only report a version the reader cannot install, while
+#     telling a third party that they opened the deck.
+#   * Live collaboration. `bornWithCollab = !!doc.collab` is enough to make a deck
+#     share-eligible, so a deck that merely CARRIES a collab object opens a
+#     `wss://sync.bento.page` session on load — no click, and it retries. Hand
+#     someone such a file and opening it streams their edits to whoever holds the
+#     room key.
 #
-# Only `new` injects. `set` preserves the shell byte for byte, so a deck the
-# USER handed us keeps upstream behavior — we do not silently rewrite someone
-# else's file. `validate` reports which kind of deck it is looking at.
-GUARD_ID = "fleet-no-update-check"
-GUARD = b"""<script id="fleet-no-update-check">
+# The guard is two independent layers, because one of them is only as good as the
+# browser's localStorage:
+#
+#   1. A CSP meta tag. `connect-src 'none'` is enforced by the BROWSER, so no
+#      script in the page — upstream's, ours, or anything a model wrote into a
+#      slide — can open a socket or a fetch. The other directives turn several of
+#      SKILL.md's "never author this" rules into rules the browser keeps:
+#      no plugins, no iframes, no form posts, no <base> hijack, no remote images
+#      (a remote image is a beacon that reports who opened the deck and when).
+#      `script-src 'unsafe-inline'` is unavoidable: the app IS inline script.
+#   2. Upstream's own offline switch. With `bento-offline=on` the app refuses
+#      network at its own chokepoints (`fi` for fetch, `Ry` for WebSocket), never
+#      attaches a collab transport, and strips remote asset URLs at render. That
+#      makes it fail COHERENTLY — its own error type, its own UI — instead of
+#      retrying into a CSP wall.
+#
+# Layer 3 is not in this file at all: `set` refuses to write a `collab` block, so
+# a deck fleet produces has nothing for a session to attach to in the first place.
+GUARD_ID = "fleet-offline-deck"
+GUARD = b"""<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' blob:; style-src 'unsafe-inline'; img-src data: blob:; media-src data: blob:; font-src data:; connect-src 'none'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'">
+    <script id="fleet-offline-deck">
 /* Added by fleet's bento-slides skill. NOT part of upstream Bento.
-   Upstream asks bento.page for a newer app shell on every launch. fleet embeds
-   and sha256-pins the shell it ships, so that answer is unusable here, and the
-   question alone tells a third party that this deck was opened. Refused.
-   Collaboration (wss://sync.bento.page) is untouched: the user opts into that
-   by sharing a deck.
-   To restore upstream behavior, delete this entire script element. */
+   fleet ships Bento as an offline viewer/editor: a deck is a document, not a
+   network client. The CSP above is the boundary the browser enforces; this turns
+   on upstream's own offline mode so the app refuses network at its own
+   chokepoints and never joins a live session, rather than retrying into the CSP.
+   To restore upstream behavior, delete this element AND the meta tag above it. */
 (function () {
-  try { localStorage.setItem("bento-auto-check", "off"); } catch (e) {}
-  var homeward = /^https?:\/\/(?:[a-z0-9-]+\.)*bento\.page(?:[:\/]|$)/i;
-  var real = window.fetch;
-  if (typeof real !== "function") { return; }
-  window.fetch = function (input) {
-    var url = typeof input === "string" ? input : (input && input.url) || "";
-    if (homeward.test(url)) {
-      return Promise.reject(new Error("fleet: this deck does not call home"));
-    }
-    return real.apply(this, arguments);
-  };
+  try {
+    localStorage.setItem("bento-offline", "on");
+    localStorage.setItem("bento-auto-check", "off");
+  } catch (e) {
+    /* No localStorage (some browsers refuse it for file:// URLs). The CSP above
+       still holds - it does not depend on storage, or on this script running. */
+  }
 })();
 </script>
     """
+
+
+def _inject_guard(raw):
+    """Plant the guard ahead of the document block, exactly once.
+
+    The guard goes in the prefix, which every later `set` copies through
+    unchanged, so it survives editing without ever being added twice.
+    """
+    if GUARD_ID.encode() in raw:
+        return raw
+    at = raw.index(OPEN_TAG)
+    return raw[:at] + GUARD + raw[at:]
+
+
+def has_guard(raw):
+    return GUARD_ID.encode() in raw
 
 
 # The vendored app shell, resolved relative to this script so it works from any
@@ -466,7 +494,7 @@ def cmd_new(args):
     validate_doc(doc)
     _splice(path, raw, doc)
     print("created %s — one title slide, ready to author" % path)
-    print("the launch update-check to bento.page is disabled in this deck")
+    print("offline-only deck: no update check, no live collaboration, no network")
     print("next: bento_doc.py get %s -o doc.json" % path)
     print("download link (use this EXACT text, do not rebuild it): %s" % download_link(path))
     return 0
@@ -476,21 +504,28 @@ def cmd_get(args):
     doc = _decode_block(_split(_read(args.deck))[1])
 
     secrets = collab_secrets(doc)
+    had_collab = "collab" in doc
     if "collab" in doc:
         # Strip collab whatever it holds, so the shape of what reaches the
         # caller does not depend on whether keys happened to be present. `set`
         # puts the original back, so nothing is lost by redacting here.
         del doc["collab"]
-    if secrets:
+    # Warn on ANY collab block, not just one holding private keys: room + key is
+    # already a joinable session, and a reader-role or v1 block has no priv keys
+    # at all. Keying the warning on secrets alone would stay silent on a deck
+    # that still joins a room the moment it is opened.
+    if had_collab:
         sys.stderr.write(
             "WARNING: this deck carries live-collaboration credentials "
-            "(collab.%s). They have been withheld from this output and are "
-            "unchanged in the file.\n"
+            "(%s). Any private keys are withheld from this output and are "
+            "unchanged in this file for now.\n"
             "This deck is a live-session invitation: anyone who receives the "
-            "file can join and write to it. Tell the user before you go "
-            "further — only they can decide. Removing the keys later does not "
-            "retract them; the remedy is Share -> Rotate keys.\n"
-            % ", ".join(secrets)
+            "file can join and write to it, and opening it joins that session "
+            "with no click. `set` will REMOVE the session block, because fleet "
+            "ships Bento as an offline editor. Tell the user before you go "
+            "further - removing the keys does not retract an invitation already "
+            "shared; the remedy for that is Share -> Rotate keys.\n"
+            % (", ".join("collab." + k for k in secrets) if secrets else "collab.room + collab.key")
         )
 
     payload = json.dumps(doc, ensure_ascii=False, indent=2) + "\n"
@@ -526,21 +561,44 @@ def cmd_set(args):
         raise DeckError("%s must contain a JSON object" % args.doc)
     validate_doc(incoming)
 
-    # Carry the target's identity and live-session state across the edit:
-    # docId must never be regenerated, and collab must survive `get`'s
-    # redaction. An incoming doc that explicitly supplies either one wins.
-    # An empty block (a bare app shell) has nothing to carry; a non-empty one
-    # that will not parse is a real problem and is reported, not ignored.
+    # Carry the target's identity across the edit: docId must never be
+    # regenerated. An incoming doc that supplies its own wins. An empty block (a
+    # bare app shell) has nothing to carry; a non-empty one that will not parse
+    # is a real problem and is reported, not ignored.
     current = {} if not block.strip() else _decode_block(block)
-    for key in ("docId", "collab"):
-        if key not in incoming and key in current:
-            incoming[key] = current[key]
+    if "docId" not in incoming and "docId" in current:
+        incoming["docId"] = current["docId"]
+
+    # collab is deliberately NOT carried, and is dropped if the incoming doc
+    # supplies one. fleet ships Bento as an offline editor, and a collab block is
+    # not inert data: `bornWithCollab = !!doc.collab` makes a deck share-eligible,
+    # so merely carrying one opens a live session on load, with no click, and
+    # retries. A deck written here has nothing for a session to attach to.
+    #
+    # This is reported rather than done silently, because it is the user's
+    # session and only they can weigh it — and because removing the keys does not
+    # retract an invitation already handed out (the remedy is Share -> Rotate
+    # keys in the app).
+    dropped = sorted(set(collab_secrets(current)) | set(collab_secrets(incoming)))
+    had_collab = "collab" in current or "collab" in incoming
+    incoming.pop("collab", None)
 
     _splice(args.deck, raw, incoming)
     print(
         "updated %s — %d slide(s), %d bytes of document"
         % (args.deck, len(incoming["slides"]), len(_encode_block(incoming)))
     )
+    if had_collab:
+        sys.stderr.write(
+            "NOTE: removed this deck's live-collaboration block%s. fleet ships "
+            "Bento as an offline editor, and a deck that merely carries one "
+            "joins a live session the moment it is opened. The deck now edits "
+            "locally only.\n"
+            "TELL THE USER: this does not retract an invitation already shared "
+            "- anyone holding an earlier copy can still join that room. The "
+            "remedy for that is Share -> Rotate keys in the app.\n"
+            % (" (including live-session keys: %s)" % ", ".join(dropped) if dropped else "")
+        )
     print("download link (use this EXACT text, do not rebuild it): %s" % download_link(args.deck))
     return 0
 
@@ -585,16 +643,23 @@ def cmd_validate(args):
                     "  note: slide %d element %d extends past the 96px right "
                     "margin (x+w=%s)" % (i + 1, j + 1, right)
                 )
-    if collab_secrets(doc):
-        print("  note: this deck carries live-collaboration credentials")
+    if "collab" in doc:
+        secrets = collab_secrets(doc)
+        print(
+            "  WARNING: this deck carries a live-collaboration block%s. Opening "
+            "it joins that session with no click. Re-write it with `set` to "
+            "remove the block and make the deck offline-only."
+            % (" including live-session keys (%s)" % ", ".join(secrets) if secrets else "")
+        )
     if kind == "deck" and not has_guard(raw):
         # A deck the user brought us, or one made before the guard existed. We
         # do not rewrite someone else's shell, so say so rather than fix it.
         print(
-            "  note: no fleet update-check guard in this shell, so opening it "
-            "will ask bento.page for a newer app version. Decks created by "
-            "`new` have that disabled; this one was not. Tell the user rather "
-            "than editing their shell."
+            "  note: this shell has no fleet offline guard, so opening it can "
+            "reach the network (an update check, and a live session if the "
+            "document carries one). Decks created by `new` cannot. We do not "
+            "rewrite someone else's shell - tell the user, and offer to move "
+            "the document into a fresh `new` deck if they want it locked down."
         )
     if kind == "deck":
         print(

@@ -1,6 +1,6 @@
 ---
 name: bento-slides
-description: Build a presentation the user can actually open — a Bento deck, one self-contained .bento.html file that is its own viewer and editor, authored offline with no Gamma, PowerPoint, or external API. Use it whenever someone asks for a slide deck, presentation, pitch, readout, or "slides" from material you have, and prefer charts, tables, and morph transitions over walls of bullet text.
+description: Build a presentation the user can actually open — a Bento deck, one self-contained .bento.html file that is its own viewer and editor, authored offline with no Gamma, PowerPoint, or external API, and delivered as an offline-only file with no update check and no live collaboration. Use it whenever someone asks for a slide deck, presentation, pitch, readout, or "slides" from material you have, and prefer charts, tables, and morph transitions over walls of bullet text.
 ---
 
 # Bento decks
@@ -10,9 +10,9 @@ viewer, and a full editor. The user downloads it and opens it in any browser —
 nothing to install, no account, no sign-in, and nothing fetched to render the
 deck. This skill bundles the Bento app and a helper that edits the deck for you.
 
-Upstream's app asks `bento.page` for a newer version of itself every time a deck
-is opened. `new` disables that, so a deck you create makes no network request at
-all — see "A deck you make does not call home" below.
+A deck you create is **offline-only**: no update check, no live collaboration, no
+network of any kind. That is not upstream's default — see "An offline deck, not a
+network client" below for what `new` does and why.
 
 Never edit a `.bento.html` by hand. The file is a 689KB minified app around one
 JSON document block; `view_file` on it would burn your context on runtime code,
@@ -112,33 +112,54 @@ the user nothing.
 re-using the filename serves the user their old file and makes your fix look
 like it did nothing.
 
-## A deck you make does not call home
+## An offline deck, not a network client
 
-`new` plants one small `<script id="fleet-no-update-check">` into the shell,
-ahead of the app runtime. Upstream checks `bento.page` for a newer app version on
-launch; fleet ships the app embedded and pinned, so that answer is unusable here
-and the question alone would tell a third party that your reader opened the deck.
-The guard refuses it and switches the app's own preference off, so the About panel
-shows the true state. Live collaboration (a WebSocket, only for a deck the user
-shares) is untouched.
+fleet ships Bento as a presentation tool, not a client for anything. Upstream has
+two behaviors that would make a delivered deck reach the network, and `new`
+disables both:
 
-Do not remove it, and do not add active content of your own next to it — that
-element is reviewed, tested code, unlike anything you would write into a slide.
+- an **update check** on every launch (`fetch` to `bento.page`) — fleet embeds and
+  pins the app, so it can only report a version your reader cannot install, while
+  telling a third party that they opened the deck;
+- **live collaboration.** This is the one that matters. Merely *carrying* a
+  `collab` block makes a deck share-eligible, so such a deck opens a
+  `wss://sync.bento.page` session the moment it is opened — no click, and it keeps
+  retrying. A file like that is a live door into whoever opens it.
 
-**A deck the user gave you keeps upstream behavior.** `set` preserves a shell
-byte for byte, so it never plants the guard in someone else's file. `validate`
-prints a note when it sees an unguarded shell — pass that on to the user rather
-than editing their file. If they want a guarded copy, build a new deck with `new`
-and move the document across.
+`new` plants two layers ahead of the app runtime, and you should understand why
+there are two:
 
-## If the deck is already shared
+1. A **CSP `<meta>` tag** with `connect-src 'none'`. The *browser* enforces this,
+   so no script in the page can open a socket or a fetch — not upstream's, not
+   one you wrote into a slide. It also blocks iframes, plugins, form posts and
+   remote images, which turns several rules below into rules the browser keeps
+   rather than rules you must remember.
+2. **Upstream's own offline mode**, so the app refuses network at its own
+   chokepoints and never attaches a session, failing cleanly instead of retrying
+   into the CSP. This one needs `localStorage`; layer 1 does not, which is exactly
+   why layer 1 exists.
 
-`get` warns you when a deck carries live-collaboration credentials. That deck is
-a live invitation: whoever holds the file can join the session and write to it.
-Stop and tell the user before you go further — only they can decide, and they
-may not know it is shared. The helper keeps those keys out of your context and
-leaves them untouched in the file; deleting them after the fact does not
-retract them, so the real remedy is *Share -> Rotate keys* in the app.
+Never remove either, and never add active content of your own beside them: those
+elements are reviewed, tested code, unlike anything you would write into a slide.
+
+**A deck the user gave you keeps upstream's shell.** `set` preserves a shell byte
+for byte, so it never plants the guard in someone else's file. `validate` says so
+when it sees an unguarded shell — pass that on rather than editing their file. If
+they want it locked down, make a fresh deck with `new` and move the document
+across.
+
+## If the deck arrives shared
+
+`get` warns you when a deck carries a live-collaboration block, and keeps any
+private keys out of your context. Understand what that deck is: opening it joins
+a live session with no click, and anyone holding a copy can join and write.
+
+**`set` removes the session block.** A deck this skill writes is offline-only, so
+the revision you hand back edits locally and nothing else. Tell the user you did
+it, and tell them the part that is easy to miss: **removing the keys does not
+retract an invitation already shared.** Anyone who already has an earlier copy can
+still join that room. The only remedy for that is *Share -> Rotate keys* in the
+app, and only they can decide to do it.
 
 Two other things the helper protects, so do not work around them: never invent
 or change a deck's `docId` (it is the document's identity), and never
