@@ -89,6 +89,9 @@ func TestStructuredSuccessRejectsStaleOutputAndRecoveryClearsIt(t *testing.T) {
 		Status:       models.TaskStatusPending,
 		CreatedAt:    time.Now().UTC(),
 		OutputSchema: json.RawMessage(storageOutputSchema),
+		// MaxRetries 1 so recovery re-queues (it dead-letters at
+		// attempt_count >= max_retries, #1116).
+		MaxRetries: 1,
 	}
 	if _, err := store.AddTask(task); err != nil {
 		t.Fatal(err)

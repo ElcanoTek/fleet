@@ -85,6 +85,13 @@ const (
 // apart from a shutdown/ForceCancel cancellation of the same context.
 var errTaskWallTimeout = errors.New("task wall-clock timeout exceeded")
 
+// errTaskLeaseLost is the cancellation cause installed when this run's lease
+// is discovered lost (#1116): a renewal came back ErrTaskLeaseNotHeld, or the
+// task was re-claimed by this same pool while the stale run was still
+// executing. It lets executeTask log/persist the honest "lease lost" outcome
+// instead of misattributing the cancel to a server shutdown.
+var errTaskLeaseLost = errors.New("task lease lost; run cancelled to stop duplicate side effects")
+
 // TaskRunner executes one claimed task in-process. The production impl
 // constructs an agent.Agent (Mode=Scheduled) from config + the task's
 // mcp_selection + the sandbox pool and calls Execute; tests inject a fake. It
@@ -454,9 +461,17 @@ func (p *Pool) drainWithGrace(grace time.Duration) bool {
 
 // activeRun is one in-flight task's bookkeeping: the per-claim lease token
 // (terminal-write fencing) and the per-task cancel (#508 operator stop).
+// cancel and cancelCause end the SAME per-claim context: cancel with the
+// plain context.Canceled cause (stop/ask/wake and the exit-path release),
+// cancelCause with an explicit cause — the lease-lost paths (#1116) pass
+// errTaskLeaseLost so executeTask can attribute the cancellation honestly.
+// Because the context is per-claim, holding a snapshot of these funcs stays
+// safe after the map entry is overwritten by a re-claim: cancelling the OLD
+// claim's context can never touch the new claim's run.
 type activeRun struct {
-	token  uuid.UUID
-	cancel context.CancelFunc
+	token       uuid.UUID
+	cancel      context.CancelFunc
+	cancelCause context.CancelCauseFunc
 }
 
 // StopTask requests an operator stop of one running task (#508): it records
@@ -539,11 +554,30 @@ func (p *Pool) tryClaim(ctx, taskCtx context.Context) {
 		// the persisted lease owner.
 		// Per-task cancellable context derived from the pool-wide taskCtx: a
 		// shutdown still cancels every task, and StopTask (#508) can now cancel
-		// exactly one without touching its neighbors.
-		runTaskCtx, cancelTask := context.WithCancel(taskCtx)
+		// exactly one without touching its neighbors. WithCancelCause so the
+		// lease-lost paths (#1116) can attribute their cancellation; the plain
+		// cancel wrapper keeps the historical context.Canceled cause for
+		// stop/ask/wake and the exit-path release.
+		runTaskCtx, cancelTaskCause := context.WithCancelCause(taskCtx)
+		cancelTask := func() { cancelTaskCause(nil) }
 		p.mu.Lock()
-		p.active[task.ID] = activeRun{token: token, cancel: cancelTask}
+		prev, hadPrev := p.active[task.ID]
+		p.active[task.ID] = activeRun{token: token, cancel: cancelTask, cancelCause: cancelTaskCause}
 		p.mu.Unlock()
+		if hadPrev {
+			// This claim overwrote a live entry: the previous claim's lease is
+			// definitively gone (this claim just persisted a new owner), so its
+			// run — if still executing — is a zombie whose external side effects
+			// must stop NOW (#1116). This is the majority lease-loss ordering on
+			// a single box: recovery re-queues and the same pool re-claims within
+			// a poll tick, before the zombie's next renewal would get the
+			// not-held verdict. Cancelling here closes that window to zero; the
+			// cause-cancel is an idempotent no-op when the previous run already
+			// ended (ask/wake/stop cancelled it themselves and its exit-path
+			// cleanup simply hasn't deleted the entry yet).
+			log.Printf("runner: task %s re-claimed while a previous run's bookkeeping was still active; cancelling the stale run (lease lost)", task.ID)
+			prev.cancelCause(errTaskLeaseLost)
+		}
 
 		p.taskWG.Add(1)
 		go func(task *models.Task, token uuid.UUID, release func()) {
@@ -741,15 +775,7 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 	// Fail closed until the success transaction actually returns a landed row.
 	// This also keeps a panic in terminal bookkeeping from emitting false success
 	// while deferred cleanup seals the stream.
-	termStatus := "failed"
-	switch {
-	case wasWakeParked:
-		termStatus = "sleeping"
-	case wasPaused:
-		termStatus = "paused"
-	case wasStopped:
-		termStatus = "stopped"
-	}
+	termStatus := terminalStreamStatus(wasWakeParked, wasPaused, wasStopped)
 	var costUSD float64
 	if session != nil {
 		costUSD = session.Cost
@@ -813,8 +839,11 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 	}
 
 	// Interrupted when the task context was cancelled — with the decoupled
-	// per-task ctx that happens ONLY when the shutdown grace period expired (or
-	// ForceCancel fired); the operator-stop case returned above. runErr is NOT
+	// per-task ctx that happens ONLY when the shutdown grace period expired,
+	// ForceCancel fired, or the lease-lost cancel (#1116) fired; the
+	// operator-stop case returned above, and the lease-lost cause is peeled
+	// off into its own branch below, so what reaches the generic interrupted
+	// branch really is a shutdown/ForceCancel. runErr is NOT
 	// required: the ctx check keeps the interruption attribution even if a
 	// driver drops the cancel (the scheduled driver now surfaces it as
 	// ErrRunCancelled, #1105, but this branch must not depend on that), and it
@@ -822,6 +851,15 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 	// the grace expired — recording as interrupted; re-running a completed task
 	// is safer than trusting a possibly-truncated "success".
 	interrupted := taskCtx.Err() != nil
+	// Lease lost (#1116): renewActiveLeases (or a re-claim overwrite in
+	// tryClaim, though that ordering usually fails stillOwns above) cancelled
+	// this run because the row no longer carries its token — recovery
+	// re-queued the task and a fresh attempt may already be running. Persist
+	// the honest reason into the transcript (submitLog is lease-free) and stop:
+	// no terminal status write (the lease is definitively gone, the write
+	// could only bounce off the fence), no retry/dead-letter/notify/analysis —
+	// the task's outcome now belongs to the fresh attempt.
+	leaseLost := errors.Is(context.Cause(taskCtx), errTaskLeaseLost)
 	// Wall-clock ceiling expiry (#724) is a DETERMINISTIC terminal failure: it
 	// must be classified BEFORE the interrupted/retry cases (its cancellation
 	// also sets taskCtx.Err()) and it never enters the transient-retry or
@@ -838,6 +876,13 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 	switch {
 	case wallExpired:
 		p.failWallTimeout(task, session, token, start)
+	case leaseLost:
+		// Beats auditAborted: whatever the zombie run concluded about its
+		// own work, the task's outcome now belongs to the fresh attempt,
+		// and any terminal write here could only bounce off the fence.
+		msg := "Task run cancelled: this run's lease was lost (recovery re-queued the task; a fresh attempt owns it now)"
+		p.submitLog(task, session, msg)
+		log.Printf("runner: task %s run cancelled after lease loss, %v after start", task.ID, time.Since(start).Round(time.Second))
 	case auditAborted:
 		p.failAuditAborted(task, session, runErr, token, start)
 	case interrupted:
@@ -902,6 +947,22 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 			p.maybeReplyToEmailEvent(task, session)
 		}
 	}
+}
+
+// terminalStreamStatus picks the terminal lifecycle frame's status label from
+// the run's park/stop markers (extracted to keep executeTask under gocyclo).
+// Fail closed to "failed": the success path overwrites it only after the
+// success transaction returns a landed row.
+func terminalStreamStatus(wasWakeParked, wasPaused, wasStopped bool) string {
+	switch {
+	case wasWakeParked:
+		return "sleeping"
+	case wasPaused:
+		return "paused"
+	case wasStopped:
+		return "stopped"
+	}
+	return "failed"
 }
 
 func runEligibleForStructuredCommit(runErr error, wasPaused, wasStopped bool, contextErr error) bool {
@@ -1565,24 +1626,57 @@ func (p *Pool) stillOwns(taskID, token uuid.UUID) bool {
 // renewActiveLeases re-asserts running for every in-flight task so the
 // orchestrator doesn't expire their leases mid-run. Replaces gig's
 // heartbeat-driven renewActiveTaskLease.
+//
+// A renewal rejected with ErrTaskLeaseNotHeld means the row no longer carries
+// this claim's token: the lease expired and recovery re-queued the task (a
+// fresh attempt may already be running), or a lease-clearing transition
+// (operator cancel, ask/wake park) landed. The local run's DB writes were
+// already token-fenced, but its EXTERNAL side effects (emails, MCP writes,
+// sandbox actions) would otherwise keep executing in parallel with the fresh
+// attempt until natural completion — so cancel the run's context (#1116),
+// shrinking the double-execution window to one renew interval. The cancel is
+// the SNAPSHOTTED claim's own cancelCause, called unconditionally on the
+// verdict: each run's context is per-claim, so cancelling the old claim's
+// context can never touch a run this same pool re-claimed in the meantime —
+// which is precisely why a live active-map lookup must NOT guard it (tryClaim
+// overwrites the entry on a re-claim, and a guard keyed on the live map would
+// skip the zombie in exactly the ordering that matters most on one box;
+// tryClaim also cancels the overwritten entry itself, so this path is the
+// backstop for the not-yet-re-claimed orderings). For the already-parked/
+// stopped cases the cancel is an idempotent no-op — their handlers cancelled
+// the context themselves.
+//
+// Any OTHER renewal error (DB unreachable, timeout) is deliberately only
+// logged: it does not prove the lease is lost, and cancelling on a transient
+// DB blip would kill healthy long runs. If the outage outlasts the lease
+// window, recovery re-queues the task and the NEXT renewal gets the definite
+// ErrTaskLeaseNotHeld above.
 func (p *Pool) renewActiveLeases() {
 	p.mu.Lock()
-	claims := make(map[uuid.UUID]uuid.UUID, len(p.active))
+	claims := make(map[uuid.UUID]activeRun, len(p.active))
 	for id, run := range p.active {
-		claims[id] = run.token
+		claims[id] = run
 	}
 	p.mu.Unlock()
 
-	for id, leaseOwner := range claims {
-		if _, err := p.reportStatusForLease(id, leaseOwner, models.TaskStatusRunning, ""); err != nil {
-			log.Printf("runner: lease renewal failed for task %s: %v", id, err)
+	for id, claim := range claims {
+		_, err := p.reportStatusForLease(id, claim.token, models.TaskStatusRunning, "")
+		if err == nil {
+			continue
 		}
+		if errors.Is(err, storage.ErrTaskLeaseNotHeld) {
+			log.Printf("runner: lease for task %s is no longer held by this run; cancelling it so its external side effects stop", id)
+			claim.cancelCause(errTaskLeaseLost)
+			continue
+		}
+		log.Printf("runner: lease renewal failed for task %s: %v", id, err)
 	}
 }
 
-// RecoverExpiredLeases re-queues tasks whose lease expired (crash recovery). The
-// scheduler ticker also calls this; the pool exposes it for tests and for
-// startup recovery.
+// RecoverExpiredLeases re-queues tasks whose lease expired (crash recovery);
+// tasks already past their retry budget are dead-lettered instead (#1116) and
+// not counted in the return. The scheduler ticker also calls this; the pool
+// exposes it for tests and for startup recovery.
 func (p *Pool) RecoverExpiredLeases() (int, error) {
 	return p.store.RecoverExpiredLeases()
 }

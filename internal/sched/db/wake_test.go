@@ -58,6 +58,11 @@ func TestTaskWakeTimerLifecycle(t *testing.T) {
 	if got.WakeAt == nil || got.WakeNote != "resume step 3: re-check the feed" || got.WakeCycles != 1 {
 		t.Fatalf("wake state not stored: at=%v note=%q cycles=%d", got.WakeAt, got.WakeNote, got.WakeCycles)
 	}
+	// paused_at (#1116) records the park instant for the wake pause too, so
+	// both parked states carry one consistent "entered its pause" timestamp.
+	if got.PausedAt == nil {
+		t.Fatal("paused_at must be stamped by PauseTaskForWake")
+	}
 	if got.LeaseOwner != nil || got.LeaseExpiresAt != nil {
 		t.Fatal("parked task must hold NO lease (no sandbox)")
 	}

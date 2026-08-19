@@ -1108,7 +1108,17 @@ type Task struct {
 	WakeNote     string     `json:"wake_note,omitempty"`
 	WakeReason   string     `json:"wake_reason,omitempty"`
 	WakeCycles   int        `json:"wake_cycles,omitempty"`
-	Priority     int        `json:"priority"`
+	// PausedAt is when the task last entered a paused state (#1116), stamped by
+	// the dedicated pause transitions (PauseTaskForQuestion #510,
+	// PauseTaskForWake docs/SELF-WAKE.md). The paused-expiry sweep counts the
+	// ask window from it — previously it measured from StartedAt, which gave a
+	// long-running run's question a near-zero TTL. Runtime state like the wake
+	// columns: written only by the guarded pause writers, excluded from the
+	// task insert/upsert, UpdateTaskTx, the TaskToCreate clone recipe, and the
+	// export record. Not cleared on resume — it is only meaningful (and only
+	// read) while Status is a paused state, and the next pause re-stamps it.
+	PausedAt *time.Time `json:"paused_at,omitempty"`
+	Priority int        `json:"priority"`
 	// EffectivePriority is the value the scheduler actually orders the pending
 	// queue by (#230). Equal to Priority at creation; only the anti-starvation
 	// sweep lowers it (never Priority) so a long-waiting task is eventually
@@ -1824,8 +1834,8 @@ func TaskToExportRecord(t *Task) TaskExportRecord {
 // miss the overlay.
 //
 // Only DEFINITION fields are written. Execution state — id, status, lease,
-// attempt_count, started_at/completed_at, result/error, skip/wake/dead-letter
-// state, created_by/lineage — is never copied from the record: a
+// attempt_count, started_at/completed_at, result/error, skip/pause/wake/
+// dead-letter state, created_by/lineage — is never copied from the record: a
 // TaskExportRecord cannot even express it, and the caller re-derives
 // status/scheduled_for with DeriveDispatchState after the overlay.
 // Normalizations mirror NewTask exactly (priority, timezone, trigger type,
