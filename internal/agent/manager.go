@@ -861,8 +861,8 @@ type turnSandboxTaker interface {
 	EgressDefault() (mode string, allowlist []string)
 	TakeContainer(ctx context.Context) (*sandbox.Sandbox, func(), error)
 	TakeContainerWithEgress(ctx context.Context, ov sandbox.ResourceOverride, allowlist []string) (*sandbox.Sandbox, func(), error)
-	TakePersistent(convID string) (*sandbox.Sandbox, func(), error)
-	Take() (*sandbox.Sandbox, func(), error)
+	TakePersistent(ctx context.Context, convID string) (*sandbox.Sandbox, func(), error)
+	Take(ctx context.Context) (*sandbox.Sandbox, func(), error)
 }
 
 // turnSandboxPosture is the per-turn decision inputs for the interactive
@@ -889,7 +889,7 @@ func takeTurnSandboxFrom(ctx context.Context, taker turnSandboxTaker, p turnSand
 		if errors.Is(err, sandbox.ErrContainerUnavailable) {
 			// Host/mock pool (no container backend): nothing to seal — fall back
 			// to the host take, matching takeTaskSandbox's degrade.
-			return taker.Take()
+			return taker.Take(ctx)
 		}
 		if err != nil {
 			return nil, nil, fmt.Errorf("take lockdown sandbox: %w", err)
@@ -903,7 +903,7 @@ func takeTurnSandboxFrom(ctx context.Context, taker turnSandboxTaker, p turnSand
 	if mode == sandbox.NetworkModeAllowlisted {
 		sb, cleanup, err := taker.TakeContainerWithEgress(ctx, sandbox.ResourceOverride{}, allowlist)
 		if errors.Is(err, sandbox.ErrContainerUnavailable) {
-			return taker.Take()
+			return taker.Take(ctx)
 		}
 		if err != nil {
 			return nil, nil, fmt.Errorf("take allowlisted sandbox: %w", err)
@@ -916,13 +916,13 @@ func takeTurnSandboxFrom(ctx context.Context, taker turnSandboxTaker, p turnSand
 		// pulling a warm container for the first turn). It degrades to a per-turn
 		// Take internally if persistence is disabled in the pool, so this is
 		// always safe to call.
-		sb, cleanup, err := taker.TakePersistent(p.convID)
+		sb, cleanup, err := taker.TakePersistent(ctx, p.convID)
 		if err != nil {
 			return nil, nil, fmt.Errorf("take persistent sandbox: %w", err)
 		}
 		return sb, cleanup, nil
 	}
-	sb, cleanup, err := taker.Take()
+	sb, cleanup, err := taker.Take(ctx)
 	if err != nil {
 		return nil, nil, fmt.Errorf("take sandbox: %w", err)
 	}

@@ -378,11 +378,14 @@ func (p *Pool) TakeContainerWithEgress(ctx context.Context, ov ResourceOverride,
 
 // Take pulls a warm sandbox or constructs a fresh one if none are
 // ready. Returns (sandbox, cleanup) — call cleanup when the turn ends.
+// ctx bounds only the cold-start construction (#1124): a cancelled turn
+// stops paying container spin-up instead of building a sandbox nobody
+// will use. A warm handout never blocks on ctx.
 //
 // Implementation note: the cleanup is just sandbox.Close, surfaced as a
 // separate value to mirror the legacy KernelPool API and to make it
 // harder to forget.
-func (p *Pool) Take() (*Sandbox, func(), error) {
+func (p *Pool) Take(ctx context.Context) (*Sandbox, func(), error) {
 	if p == nil {
 		return nil, func() {}, ErrContainerUnavailable
 	}
@@ -390,7 +393,7 @@ func (p *Pool) Take() (*Sandbox, func(), error) {
 		return nil, func() {}, ErrClosed
 	}
 	if p.cfg.Size <= 0 || p.slots == nil {
-		return p.coldStart()
+		return p.coldStart(ctx)
 	}
 	for {
 		select {
@@ -408,9 +411,11 @@ func (p *Pool) Take() (*Sandbox, func(), error) {
 			// pool returns to depth.
 			safe.Go("sandbox.pool.fill", p.fill)
 			if p.stale(ps) {
-				// Over-TTL: this warm container may be dead. Reap it and try the
-				// next parked one rather than hand out a likely-broken sandbox.
-				ps.sb.Close()
+				// Over-TTL: this warm container may be dead. Reap it
+				// ASYNCHRONOUSLY — the podman teardown can take seconds and this
+				// is the turn's critical path (#1124) — and try the next parked
+				// one rather than hand out a likely-broken sandbox.
+				safe.Go("sandbox.pool.reapStaleTake", ps.sb.Close)
 				continue
 			}
 			if p.isClosed() {
@@ -420,21 +425,27 @@ func (p *Pool) Take() (*Sandbox, func(), error) {
 			return ps.sb, ps.sb.Close, nil
 		default:
 			// Pool empty (or only-stale just drained) — cold-start.
-			return p.coldStart()
+			return p.coldStart(ctx)
 		}
 	}
 }
 
-// coldStart constructs a fresh sandbox on the caller's goroutine (the no-warm-slot
-// path of Take).
-func (p *Pool) coldStart() (*Sandbox, func(), error) {
+// coldStart constructs a fresh sandbox on the caller's goroutine (the
+// no-warm-slot path of Take), under the CALLER's ctx (#1124) — background
+// warming keeps using FillCtx in fill(), but a turn's own cold start must die
+// with the turn so a cancelled request stops paying up to the full container
+// start timeout.
+func (p *Pool) coldStart(ctx context.Context) (*Sandbox, func(), error) {
 	if p == nil {
 		return nil, func() {}, ErrContainerUnavailable
 	}
 	if p.isClosed() {
 		return nil, func() {}, ErrClosed
 	}
-	sb, err := p.newSandbox(p.cfg.FillCtx)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	sb, err := p.newSandbox(ctx)
 	if err != nil {
 		return nil, func() {}, err
 	}

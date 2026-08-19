@@ -53,9 +53,26 @@ type EgressProxy struct {
 	dial        func(ctx context.Context, host, port string) (net.Conn, error)
 	requirePort string
 
+	// drainTimeout bounds how long the SECOND copy direction of a tunnel may
+	// keep running after the first finished (#1124 follow-up). Waiting for
+	// both directions is what preserves half-close semantics, but with no
+	// bound a silent peer that ignores the propagated FIN and never
+	// responds/closes would park the remaining io.Copy in Read forever —
+	// pinning the tunnel's goroutines and both FDs for the process lifetime
+	// (the old first-EOF teardown never leaked, it just truncated). A field
+	// only as a test seam (like dial); zero means defaultTunnelDrainTimeout.
+	drainTimeout time.Duration
+
 	mu     sync.RWMutex
 	tokens map[string][]string // token -> allowlist (lowercased domain patterns)
 }
+
+// defaultTunnelDrainTimeout is how long the surviving copy direction may keep
+// running after the other finished. Generous on purpose: a cooperating peer
+// that received the FIN finishes its response well inside it, and 60s is the
+// same order as the dial/read timeouts elsewhere in this file; the point is
+// only that a silent peer cannot pin the tunnel forever.
+const defaultTunnelDrainTimeout = 60 * time.Second
 
 // NewEgressProxy returns a not-yet-listening proxy. Call Start to bind + serve.
 func NewEgressProxy() *EgressProxy {
@@ -64,6 +81,14 @@ func NewEgressProxy() *EgressProxy {
 		dial:        dialPublic,
 		requirePort: "443",
 	}
+}
+
+// tunnelDrainTimeout resolves the drain-deadline seam (zero → default).
+func (p *EgressProxy) tunnelDrainTimeout() time.Duration {
+	if p.drainTimeout > 0 {
+		return p.drainTimeout
+	}
+	return defaultTunnelDrainTimeout
 }
 
 // Start binds the proxy to 127.0.0.1 on an ephemeral port and serves in a
@@ -242,10 +267,52 @@ func (p *EgressProxy) handle(w http.ResponseWriter, r *http.Request) {
 	if _, err := client.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n")); err != nil {
 		return
 	}
-	done := make(chan struct{}, 2)
-	go func() { _, _ = io.Copy(upstream, client); done <- struct{}{} }()
-	go func() { _, _ = io.Copy(client, upstream); done <- struct{}{} }()
-	<-done // first half-close tears down the tunnel; deferred Closes free the other
+	// Splice both directions and wait for BOTH to finish (#1124). Returning on
+	// the first EOF used to let the deferred Closes tear down the whole tunnel,
+	// truncating the response of a client that legally half-closes its write
+	// side after sending its request. Instead, each finished copy direction
+	// propagates the half-close to its destination (closeWrite), so the peer
+	// sees the FIN while the opposite direction keeps flowing; the deferred
+	// Closes then only reap fully-drained conns. An abrupt failure (RST, dead
+	// upstream) still unblocks both copies: each ends when its source errors or
+	// its destination refuses the write.
+	//
+	// The surviving direction is BOUNDED: when one direction finishes, a drain
+	// deadline is armed on both conns (read+write — the survivor may be parked
+	// in either; only the survivor is affected, the finisher is done). Without
+	// it, a peer that ignores the propagated FIN and never responds/closes
+	// (e.g. an LB-held keep-alive) would park the remaining Read forever,
+	// pinning this handler's goroutines and both FDs for the process lifetime
+	// — container teardown closes only the CLIENT side, which ends the
+	// client-read direction but not an upstream-read parked against a silent
+	// upstream. Cooperating peers are unaffected (they finish well inside the
+	// window); a silent one is reaped when the deadline fires and its blocked
+	// Read/Write returns.
+	armDrainDeadline := func() {
+		dl := time.Now().Add(p.tunnelDrainTimeout())
+		_ = client.SetDeadline(dl)
+		_ = upstream.SetDeadline(dl)
+	}
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); _, _ = io.Copy(upstream, client); closeWrite(upstream); armDrainDeadline() }()
+	go func() { defer wg.Done(); _, _ = io.Copy(client, upstream); closeWrite(client); armDrainDeadline() }()
+	wg.Wait()
+}
+
+// closeWrite half-closes conn's write side when the concrete type supports it —
+// *net.TCPConn (both tunnel ends in production) and *tls.Conn expose
+// CloseWrite() error — so the peer of a finished copy direction sees EOF
+// without the other direction being torn down. A conn type with no CloseWrite
+// cannot represent a half-close, and leaving its peer waiting for an EOF that
+// never comes would hang the tunnel, so it is fully closed instead (the
+// pre-#1124 teardown semantics for that end).
+func closeWrite(conn net.Conn) {
+	if cw, ok := conn.(interface{ CloseWrite() error }); ok {
+		_ = cw.CloseWrite()
+		return
+	}
+	_ = conn.Close()
 }
 
 // proxyAuthToken extracts the token (the basic-auth username) from a

@@ -585,7 +585,7 @@ func (rt *recordingTaker) EgressDefault() (string, []string) {
 	return rt.egressMode, rt.egressAllowlist
 }
 
-func (rt *recordingTaker) Take() (*sandbox.Sandbox, func(), error) {
+func (rt *recordingTaker) Take(context.Context) (*sandbox.Sandbox, func(), error) {
 	rt.tookWarm = true
 	return nil, func() {}, nil
 }

@@ -36,9 +36,14 @@ import (
 // When persistent mode is disabled (or convID is empty, or the pool is shutting
 // down) it degrades to the per-turn Take: a fresh sandbox whose cleanup closes
 // it. That lets callers route through TakePersistent unconditionally.
-func (p *Pool) TakePersistent(convID string) (*Sandbox, func(), error) {
+//
+// ctx bounds only sandbox CONSTRUCTION on the create path (#1124, threaded to
+// Take): a cancelled turn stops paying container spin-up. It deliberately does
+// NOT govern the liveness probe of an existing entry — a cancelled ctx there
+// would misread a healthy conversation kernel as dead and retire it.
+func (p *Pool) TakePersistent(ctx context.Context, convID string) (*Sandbox, func(), error) {
 	if p == nil || !p.cfg.PersistentREPL || convID == "" {
-		return p.Take()
+		return p.Take(ctx)
 	}
 
 	// Reuse path: claim an existing entry, then verify it's still alive. The
@@ -48,7 +53,7 @@ func (p *Pool) TakePersistent(convID string) (*Sandbox, func(), error) {
 		p.persistentMu.Lock()
 		if p.persistentClosed {
 			p.persistentMu.Unlock()
-			return p.Take()
+			return p.Take(ctx)
 		}
 		e, ok := p.persistent[convID]
 		if !ok || e.closeRequested {
@@ -80,7 +85,7 @@ func (p *Pool) TakePersistent(convID string) (*Sandbox, func(), error) {
 	// Create path: pull a (warm, if available) sandbox via Take and adopt it as
 	// this conversation's persistent sandbox. Take's own cleanup is sb.Close,
 	// which we intentionally drop — ownership transfers to the persistent map.
-	sb, _, err := p.Take()
+	sb, _, err := p.Take(ctx)
 	if err != nil {
 		return nil, func() {}, err
 	}
@@ -89,7 +94,7 @@ func (p *Pool) TakePersistent(convID string) (*Sandbox, func(), error) {
 	if p.persistentClosed {
 		p.persistentMu.Unlock()
 		sb.Close()
-		return p.Take()
+		return p.Take(ctx)
 	}
 	// A concurrent TakePersistent for the same conversation may have won the
 	// race while we were constructing; prefer the already-registered one.

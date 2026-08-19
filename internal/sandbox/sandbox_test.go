@@ -114,13 +114,13 @@ func TestPoolHostMode(t *testing.T) {
 
 	// Host-mode sandboxes are cheap to construct, so even without
 	// waiting for the warm goroutine we should always get one.
-	sb1, cleanup1, err := p.Take()
+	sb1, cleanup1, err := p.Take(context.Background())
 	if err != nil {
 		t.Fatalf("Take 1: %v", err)
 	}
 	defer cleanup1()
 
-	sb2, cleanup2, err := p.Take()
+	sb2, cleanup2, err := p.Take(context.Background())
 	if err != nil {
 		t.Fatalf("Take 2: %v", err)
 	}
@@ -143,7 +143,7 @@ func TestPoolDisabledFallsThroughToColdStart(t *testing.T) {
 	p := NewPool(PoolConfig{Size: 0, Mode: ModeHost})
 	defer p.Close()
 
-	sb, cleanup, err := p.Take()
+	sb, cleanup, err := p.Take(context.Background())
 	if err != nil {
 		t.Fatalf("Take: %v", err)
 	}
@@ -294,7 +294,7 @@ func TestPoolContainerFailureSurfacesToCaller(t *testing.T) {
 
 	// Every Take must return an error — no degradation, no fallback.
 	for i := 0; i < 5; i++ {
-		_, _, err := p.Take()
+		_, _, err := p.Take(context.Background())
 		if err == nil {
 			t.Fatalf("Take attempt %d: expected container error, got nil — host-mode fallback was removed and should not return", i+1)
 		}
@@ -330,7 +330,7 @@ func TestPoolContainerMode(t *testing.T) {
 	defer p.Close()
 
 	// First Take: stash kernel state in this turn's sandbox.
-	sb1, cleanup1, err := p.Take()
+	sb1, cleanup1, err := p.Take(context.Background())
 	if err != nil {
 		t.Fatalf("Take 1: %v", err)
 	}
@@ -353,7 +353,7 @@ func TestPoolContainerMode(t *testing.T) {
 	// in scope — that's the per-turn isolation guarantee. The OpenAI
 	// 2024 cross-conversation file leak was exactly this property
 	// breaking; we test for it explicitly.
-	sb2, cleanup2, err := p.Take()
+	sb2, cleanup2, err := p.Take(context.Background())
 	if err != nil {
 		t.Fatalf("Take 2: %v", err)
 	}

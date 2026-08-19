@@ -84,8 +84,8 @@ func run() int {
 	defer pool.Close()
 
 	exit := 0
-	if !runPass(rootCtx, "NORMAL", docsCheckFile, func(_ context.Context) (*sandbox.Sandbox, func(), error) {
-		return pool.Take()
+	if !runPass(rootCtx, "NORMAL", docsCheckFile, func(ctx context.Context) (*sandbox.Sandbox, func(), error) {
+		return pool.Take(ctx)
 	}) {
 		exit = 3
 	}
@@ -208,7 +208,7 @@ func runPass(ctx context.Context, label, docsCheckFile string, take func(context
 // scheduled agent actually relies on) so the smoke doesn't depend on
 // bash↔python cwd being identical.
 func runScheduledSmoke(ctx context.Context, pool *sandbox.Pool) bool {
-	sb, cleanup, err := pool.Take()
+	sb, cleanup, err := pool.Take(ctx)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "SCHEDULED Take: %v\n", err)
 		return false

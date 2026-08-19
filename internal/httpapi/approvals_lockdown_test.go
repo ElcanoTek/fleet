@@ -36,7 +36,7 @@ type recordingBashTaker struct {
 	takeEgressErr error
 }
 
-func (r *recordingBashTaker) Take() (*sandbox.Sandbox, func(), error) {
+func (r *recordingBashTaker) Take(context.Context) (*sandbox.Sandbox, func(), error) {
 	r.took = append(r.took, "Take")
 	return nil, func() {}, nil
 }
