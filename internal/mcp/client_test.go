@@ -5,12 +5,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -162,6 +165,97 @@ func TestStdioCall_CancelPoisonsTransport(t *testing.T) {
 	}
 	if !isTransportDeadError(errTransportDesynced) {
 		t.Fatal("desync sentinel must route through the dead-transport restart path")
+	}
+}
+
+// TestStdioWrite_WedgedStdinHonorsCtx is the regression guard for the
+// ctx-unaware stdin write (#1108): a subprocess that stops reading stdin
+// leaves the pipe (64 KiB kernel buffer) full, and a request larger than the
+// buffer blocks the writer forever. Before the fix t.stdin.Write ran bare
+// under t.mu, so Call ignored its context — and because Server.callTool holds
+// Server.mu for the whole call, one wedged connector cascaded into
+// drainAndClose → Reload → reloadMu, permanently disabling hot-reload. The
+// write must observe ctx, and the timed-out transport must be poisoned so the
+// existing restart path recovers.
+func TestStdioWrite_WedgedStdinHonorsCtx(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not found, skipping stdio test")
+	}
+	old := stdioCloseGrace
+	stdioCloseGrace = 200 * time.Millisecond
+	defer func() { stdioCloseGrace = old }()
+
+	// A child that never reads stdin: the pipe fills and every later write
+	// byte blocks in the kernel.
+	tr, err := NewStdioTransport("python3", []string{"-u", "-c", "import time\nwhile True: time.sleep(60)"}, nil)
+	if err != nil {
+		t.Fatalf("start non-reading child: %v", err)
+	}
+	t.Cleanup(func() { _ = tr.Close() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		// 1 MiB of arguments — model-authored args exceed the 64 KiB kernel
+		// pipe buffer easily, so the write cannot complete.
+		_, err := tr.Call(ctx, "tools/call", map[string]any{"blob": strings.Repeat("x", 1<<20)})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("Call = %v, want a ctx deadline error", err)
+		}
+		if !isRequestNotDeliveredError(err) {
+			t.Errorf("wedged-write error %q must read as not-delivered — the server never received a full request line", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Call ignored ctx while writing to a wedged subprocess — the write path is not context-aware")
+	}
+
+	// The transport is poisoned: the next call fails fast with the desync
+	// sentinel so Server.callTool routes through the restart path.
+	if _, err := tr.Call(context.Background(), "echo", map[string]any{}); !errors.Is(err, errTransportDesynced) {
+		t.Fatalf("post-wedge call = %v, want errTransportDesynced", err)
+	}
+}
+
+// TestStdioNotify_WedgedStdinHonorsCtx: Notify shares writeLocked with Call,
+// but it previously discarded its ctx outright (`_ context.Context`) — pin
+// the behavior change directly rather than only through Call.
+func TestStdioNotify_WedgedStdinHonorsCtx(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not found, skipping stdio test")
+	}
+	old := stdioCloseGrace
+	stdioCloseGrace = 200 * time.Millisecond
+	defer func() { stdioCloseGrace = old }()
+
+	tr, err := NewStdioTransport("python3", []string{"-u", "-c", "import time\nwhile True: time.sleep(60)"}, nil)
+	if err != nil {
+		t.Fatalf("start non-reading child: %v", err)
+	}
+	t.Cleanup(func() { _ = tr.Close() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- tr.Notify(ctx, "notifications/progress", map[string]any{"blob": strings.Repeat("x", 1<<20)})
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("Notify = %v, want a ctx deadline error", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Notify ignored ctx while writing to a wedged subprocess")
+	}
+
+	// Poisoned like a wedged Call: framing can't be trusted mid-write.
+	if _, err := tr.Call(context.Background(), "echo", map[string]any{}); !errors.Is(err, errTransportDesynced) {
+		t.Fatalf("post-wedge call = %v, want errTransportDesynced", err)
 	}
 }
 
@@ -498,6 +592,90 @@ func TestClient_Close(t *testing.T) {
 	}
 }
 
+// blockingDeadTransport blocks Call until released, then fails with a
+// dead-transport-shaped error — simulating a transport whose connection dies
+// while Client.Close runs.
+type blockingDeadTransport struct {
+	entered chan struct{} // closed when Call is in flight (under Server.mu)
+	release chan struct{} // Call returns its error once this closes
+}
+
+func (b *blockingDeadTransport) Call(context.Context, string, interface{}) (json.RawMessage, error) {
+	close(b.entered)
+	<-b.release
+	return nil, fmt.Errorf("write |1: broken pipe")
+}
+
+func (b *blockingDeadTransport) Notify(context.Context, string, interface{}) error { return nil }
+
+func (b *blockingDeadTransport) Close() error { return nil }
+
+// TestClose_RetiresServers_NoPostCloseRespawn is the #1108 regression guard
+// for the Close/restart race: an in-flight callTool whose transport died
+// while Client.Close ran matched isTransportDeadError, and restartLocked
+// respawned a credentialed stdio subprocess AFTER Close returned — with
+// nothing left to ever close it. Close must retire each server under its own
+// mutex, mirroring reload's drainAndClose: the drain waits out the racing
+// call, closes whatever transport it left behind (a respawned one included),
+// and `retired` refuses every later call.
+func TestClose_RetiresServers_NoPostCloseRespawn(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not found, skipping stdio respawn test")
+	}
+	bt := &blockingDeadTransport{entered: make(chan struct{}), release: make(chan struct{})}
+	c := NewClient()
+	srv := &Server{
+		name:      "racy",
+		transport: bt,
+		// A real, restartable stdio command: without the retire fix the
+		// dead-transport path respawns this as a live post-Close subprocess.
+		stdioCommand: "python3",
+		stdioArgs:    []string{"-u", "-c", fakeServerScript},
+	}
+	c.servers["racy"] = srv
+
+	callDone := make(chan error, 1)
+	go func() {
+		_, err := srv.callTool(context.Background(), "echo", nil)
+		callDone <- err
+	}()
+	<-bt.entered // the call is in flight, holding Server.mu
+
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- c.Close() }()
+
+	// Give Close time to reach the drain: on the fixed code it now blocks on
+	// Server.mu; on the old code it has already returned without retiring
+	// anything. Then let the in-flight call fail with its dead transport.
+	time.Sleep(100 * time.Millisecond)
+	close(bt.release)
+
+	select {
+	case <-closeDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Close did not return")
+	}
+	callErr := <-callDone
+
+	// Whatever the racing call did, no live subprocess may survive Close.
+	srv.mu.Lock()
+	tr := srv.transport
+	srv.mu.Unlock()
+	if st, ok := tr.(*StdioTransport); ok {
+		// ProcessState is only set once Wait has collected the child — i.e.
+		// only if Close reaped whatever the racing call respawned.
+		if st.cmd.ProcessState == nil {
+			_ = st.Close() // don't leak the orphan out of the test
+			t.Fatalf("credentialed subprocess survived Close (racing call returned: %v) — Close does not retire servers", callErr)
+		}
+	}
+
+	// And the retired server refuses any later call instead of respawning.
+	if _, err := srv.callTool(context.Background(), "echo", nil); err == nil {
+		t.Fatal("post-Close call was accepted — server not retired")
+	}
+}
+
 func TestCallToolNotFound(t *testing.T) {
 	client := NewClient()
 	_, err := client.CallTool(context.Background(), "nonexistent", nil)
@@ -824,8 +1002,10 @@ func TestParseSSEResponse(t *testing.T) {
 			wantResult: true,
 		},
 		{
+			// A numeric id echoed back as a string (the string-ID variant)
+			// still matches the request id.
 			name:       "data only (no event line)",
-			input:      "data: {\"jsonrpc\":\"2.0\",\"id\":\"abc\",\"result\":{}}\n\n",
+			input:      "data: {\"jsonrpc\":\"2.0\",\"id\":\"1\",\"result\":{}}\n\n",
 			wantResult: true,
 		},
 		{
@@ -848,7 +1028,7 @@ func TestParseSSEResponse(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			reader := strings.NewReader(tt.input)
-			result, err := transport.parseSSEResponse(reader)
+			result, err := transport.parseSSEResponse(reader, 1)
 
 			if tt.wantErr {
 				if err == nil {
@@ -1185,7 +1365,7 @@ func TestParseSSEResponseLargePayload(t *testing.T) {
 	payload := `{"jsonrpc":"2.0","id":1,"result":{"data":"` + largeValue + `"}}`
 	sseInput := "event: message\ndata: " + payload + "\n\n"
 
-	result, err := transport.parseSSEResponse(strings.NewReader(sseInput))
+	result, err := transport.parseSSEResponse(strings.NewReader(sseInput), 1)
 	if err != nil {
 		t.Fatalf("parseSSEResponse failed on large payload: %v", err)
 	}
@@ -1198,6 +1378,184 @@ func TestParseSSEResponseLargePayload(t *testing.T) {
 	if parsed["data"] != largeValue {
 		t.Errorf("Expected %d bytes of data, got %d", len(largeValue), len(parsed["data"]))
 	}
+}
+
+// TestHTTPParse_ResponseBoundedAtCap is the #1108 regression guard for the
+// unbounded HTTP response read: both the JSON and the SSE parse paths must
+// stop at httpResponseCaptureCap (the stdio ceiling) and fail that call with
+// a clean over-cap error instead of buffering the body whole — before the
+// fix parseJSONResponse decoded unbounded and parseSSEResponse capped only a
+// single line, not total accumulation. The cap is lowered here so the test
+// doesn't allocate 64 MiB.
+func TestHTTPParse_ResponseBoundedAtCap(t *testing.T) {
+	old := httpResponseCaptureCap
+	httpResponseCaptureCap = 4 * 1024
+	defer func() { httpResponseCaptureCap = old }()
+
+	tr := &HTTPTransport{}
+
+	t.Run("json over cap fails cleanly", func(t *testing.T) {
+		big := `{"jsonrpc":"2.0","id":1,"result":{"data":"` + strings.Repeat("x", 8*1024) + `"}}`
+		_, err := tr.parseJSONResponse(strings.NewReader(big), 1)
+		if err == nil || !strings.Contains(err.Error(), "exceeded") {
+			t.Fatalf("parseJSONResponse = %v, want an over-cap error", err)
+		}
+	})
+
+	t.Run("json under cap parses", func(t *testing.T) {
+		ok := `{"jsonrpc":"2.0","id":1,"result":{"data":"` + strings.Repeat("x", 1024) + `"}}`
+		res, err := tr.parseJSONResponse(strings.NewReader(ok), 1)
+		if err != nil {
+			t.Fatalf("parseJSONResponse under cap: %v", err)
+		}
+		if !strings.Contains(string(res), "data") {
+			t.Fatalf("unexpected result: %s", res)
+		}
+	})
+
+	t.Run("sse over cap fails cleanly", func(t *testing.T) {
+		// Each data line is well under the 10MB per-line scanner cap; the
+		// TOTAL accumulation is what must trip the ceiling.
+		var sb strings.Builder
+		for sb.Len() < 8*1024 {
+			sb.WriteString("data: " + strings.Repeat("y", 512) + "\n")
+		}
+		_, err := tr.parseSSEResponse(strings.NewReader(sb.String()), 1)
+		if err == nil || !strings.Contains(err.Error(), "exceeded") {
+			t.Fatalf("parseSSEResponse = %v, want an over-cap error", err)
+		}
+	})
+
+	t.Run("sse under cap parses", func(t *testing.T) {
+		in := "event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"ok\":true}}\n\n"
+		res, err := tr.parseSSEResponse(strings.NewReader(in), 1)
+		if err != nil {
+			t.Fatalf("parseSSEResponse under cap: %v", err)
+		}
+		if !strings.Contains(string(res), "ok") {
+			t.Fatalf("unexpected result: %s", res)
+		}
+	})
+}
+
+// TestHTTPTransport_OversizedResponseIsPerCallError drives the cap end to end
+// through HTTPTransport.Call — the same path remotemcp.probeServer and the
+// per-run remote overlay use — and proves an oversized response fails only
+// that call: the transport stays usable for the next, normal-sized one.
+func TestHTTPTransport_OversizedResponseIsPerCallError(t *testing.T) {
+	old := httpResponseCaptureCap
+	httpResponseCaptureCap = 4 * 1024
+	defer func() { httpResponseCaptureCap = old }()
+
+	requests := 0
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		var req struct {
+			ID int `json:"id"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if requests == 1 {
+			// First response: a single JSON body far past the cap, streamed
+			// in chunks so the test server never builds a giant string.
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%d,"result":{"data":"`, req.ID)
+			chunk := strings.Repeat("z", 1024)
+			for i := 0; i < 16; i++ {
+				_, _ = io.WriteString(w, chunk)
+			}
+			_, _ = io.WriteString(w, `"}}`)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"jsonrpc": "2.0", "id": req.ID,
+			"result": map[string]any{"ok": true},
+		})
+	})
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	transport := NewHTTPTransport(server.URL)
+	ctx := context.Background()
+
+	if _, err := transport.Call(ctx, "tools/call", map[string]any{}); err == nil || !strings.Contains(err.Error(), "exceeded") {
+		t.Fatalf("oversized Call = %v, want an over-cap error", err)
+	}
+	res, err := transport.Call(ctx, "tools/call", map[string]any{})
+	if err != nil {
+		t.Fatalf("call after oversized response: %v — the cap must be a per-call error", err)
+	}
+	if !strings.Contains(string(res), "ok") {
+		t.Fatalf("unexpected result after oversized response: %s", res)
+	}
+}
+
+// TestHTTPTransport_RejectsMismatchedResponseID: the HTTP transport must
+// verify the JSON-RPC response id against the request id the way stdio does
+// (#1108) — a JSON response with a foreign id is rejected, and an SSE stream
+// skips interleaved foreign-id responses until this call's answer arrives.
+func TestHTTPTransport_RejectsMismatchedResponseID(t *testing.T) {
+	t.Run("json wrong id rejected", func(t *testing.T) {
+		handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"jsonrpc": "2.0", "id": 999999,
+				"result": map[string]any{"stale": true},
+			})
+		})
+		server := httptest.NewServer(handler)
+		defer server.Close()
+
+		transport := NewHTTPTransport(server.URL)
+		_, err := transport.Call(context.Background(), "initialize", map[string]any{})
+		if err == nil || !strings.Contains(err.Error(), "does not match request id") {
+			t.Fatalf("Call = %v, want an id-mismatch error", err)
+		}
+	})
+
+	t.Run("json id null with error keeps the server's diagnostic", func(t *testing.T) {
+		// A server that cannot attribute the request answers id:null with
+		// an error member — the call must still fail on the id check, but
+		// the message has to carry the server's own complaint.
+		handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"cannot attribute request"}}`))
+		})
+		server := httptest.NewServer(handler)
+		defer server.Close()
+
+		transport := NewHTTPTransport(server.URL)
+		_, err := transport.Call(context.Background(), "initialize", map[string]any{})
+		if err == nil || !strings.Contains(err.Error(), "does not match request id") {
+			t.Fatalf("Call = %v, want an id-mismatch error", err)
+		}
+		if !strings.Contains(err.Error(), "cannot attribute request") {
+			t.Fatalf("id-mismatch error hides the server's diagnostic: %v", err)
+		}
+	})
+
+	t.Run("sse skips foreign-id response, returns matching one", func(t *testing.T) {
+		tr := &HTTPTransport{}
+		in := "data: {\"jsonrpc\":\"2.0\",\"id\":999999,\"result\":{\"stale\":true}}\n\n" +
+			"data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"fresh\":true}}\n\n"
+		res, err := tr.parseSSEResponse(strings.NewReader(in), 1)
+		if err != nil {
+			t.Fatalf("parseSSEResponse: %v", err)
+		}
+		if strings.Contains(string(res), "stale") || !strings.Contains(string(res), "fresh") {
+			t.Fatalf("foreign-id SSE response misattributed to this call: %s", res)
+		}
+	})
+
+	t.Run("sse with only a foreign-id response errors", func(t *testing.T) {
+		tr := &HTTPTransport{}
+		in := "data: {\"jsonrpc\":\"2.0\",\"id\":999999,\"error\":{\"code\":-32000,\"message\":\"someone else's failure\"}}\n\n"
+		_, err := tr.parseSSEResponse(strings.NewReader(in), 1)
+		if err == nil {
+			t.Fatal("expected an error for a stream with no matching response")
+		}
+		var rpcErr *RPCError
+		if errors.As(err, &rpcErr) {
+			t.Fatalf("foreign-id RPC error attributed to this call: %v", err)
+		}
+	})
 }
 
 func TestIsTransportDeadError(t *testing.T) {
@@ -1213,6 +1571,20 @@ func TestIsTransportDeadError(t *testing.T) {
 		{fmt.Errorf("os: process already finished"), true},
 		{fmt.Errorf("file already closed"), true},
 		{errors.New(errStdioTransportDead), true},
+		// Wrapped stdlib identities — what the exec pipes actually produce —
+		// must match via errors.Is even when the message alone wouldn't.
+		{fmt.Errorf("read: %w", io.EOF), true},
+		{fmt.Errorf("read: %w", io.ErrUnexpectedEOF), true},
+		{fmt.Errorf("write: %w", syscall.EPIPE), true},
+		{fmt.Errorf("write: %w", os.ErrClosed), true},
+		// Full-word EOF forms from flattened chains still match.
+		{fmt.Errorf("unexpected EOF"), true},
+		// The old bare "eof" substring match misclassified these as a dead
+		// transport and restarted a healthy subprocess (#1108): "EOF" glued
+		// into a larger word, or the letters buried inside another word.
+		{fmt.Errorf("EOFError: bad tool output"), false},
+		{fmt.Errorf("whereof the parser complained"), false},
+		{fmt.Errorf("stream ended: eof"), false}, // stdlib renders EOF uppercase; lowercase is app text
 	}
 	for _, tt := range tests {
 		if got := isTransportDeadError(tt.err); got != tt.want {

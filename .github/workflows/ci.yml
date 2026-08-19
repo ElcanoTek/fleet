@@ -247,10 +247,11 @@ jobs:
       - name: go test
         # Tagged: compiles the host-mode fixtures + MockMode tests. The release
         # binary above is built untagged; here we exercise the full suite (#159).
-        # -coverprofile / -covermode=atomic: emit coverage data for Codecov
-        # (issue #249). The race step below is intentionally NOT instrumented —
-        # `go tool cover` on this non-race profile is enough for trend tracking,
-        # and -coverprofile under -race would double the already-long race run.
+        # -coverprofile / -covermode=atomic: emit coverage data for the two
+        # coverage-summary steps below (issue #249). The race step is
+        # intentionally NOT instrumented — `go tool cover` on this non-race
+        # profile is enough for trend tracking, and -coverprofile under -race
+        # would double the already-long race run.
         run: go test -p 1 -tags fleet_host_executor -coverprofile=coverage.out -covermode=atomic ./... -count=1
 
       - name: go test -race
@@ -262,8 +263,9 @@ jobs:
 
       - name: Coverage summary
         # Print the project-total line to the log and emit an HTML report for
-        # local-style inspection / artifact download. fail_ci_if_error is off on
-        # the Codecov upload below, so this step is the durable in-log signal.
+        # local-style inspection / artifact download. There is no external
+        # coverage service in this pipeline, so this step and the per-package
+        # summary below ARE the coverage signal — in-log and in the job summary.
         run: |
           go tool cover -func=coverage.out | tail -1
           go tool cover -html=coverage.out -o coverage.html
@@ -276,19 +278,6 @@ jobs:
           echo '```' >> "$GITHUB_STEP_SUMMARY"
           go tool cover -func=coverage.out >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Upload coverage to Codecov
-        # Codecov posts an inline PR comment showing which lines lost coverage,
-        # adds a check to the PR, and maintains the historical trend. Thresholds
-        # live in codecov.yml at the repo root. Requires the CODECOV_TOKEN repo
-        # secret (Settings → Secrets → Actions). fail_ci_if_error is false so a
-        # transient Codecov outage can't break the merge gate.
-        uses: codecov/codecov-action@v7
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          files: coverage.out
-          flags: go
-          fail_ci_if_error: false
 
       - name: govulncheck (dependency CVEs)
         # Call-graph-aware scan of the (broad, fast-moving) dependency tree for

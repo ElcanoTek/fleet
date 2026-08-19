@@ -29,7 +29,7 @@ fix this doc (and the `make` targets) to match.
 | Go vet | `go` | `go vet` clean (tagged) | part of `make ci-go` |
 | Go lint | `go` | `golangci-lint` full gate (zero findings) | `make lint` |
 | Go test | `go` | Unit + integration suites + coverage profile (needs Postgres) | `make test` |
-| Go coverage | `go` | Coverage uploaded to Codecov; project drops >2% fail the check | `make test-cover` |
+| Go coverage | `go` | Coverage profile summarised in the log + job summary (advisory, no threshold) | `make test-cover` |
 | Go test -race | `go` | Race detector on the same suites | `make test-race` |
 | govulncheck | `go` | Dependency CVEs reachable from fleet | `make govulncheck` |
 | Grype (image) | `grype-scan` | CVEs in the sandbox container image (fail on a fixable CRITICAL) | see below |
@@ -273,15 +273,15 @@ PGPASSWORD=fleet psql -h localhost -U fleet -d fleet -v ON_ERROR_STOP=1 \
    notes are the leading indicator — an unmaintained dependency accumulating
    advisories is worth knowing about before a refactor makes one reachable.
 
-> **Coverage (CI-only steps).** After the `go test` step CI runs three
-> coverage steps (issue #249): `Coverage summary` (prints the project total +
-> writes `coverage.html`), `Per-package coverage summary` (writes the
-> `go tool cover -func` table to `$GITHUB_STEP_SUMMARY`), and
-> `Upload coverage to Codecov` (`codecov/codecov-action@v4`). Thresholds live in
-> [`codecov.yml`](../codecov.yml): project coverage may drop at most 2% relative
-> to the base branch (`target: auto`), and new code in a PR must be 60% covered.
-> These have no local `make` equivalent beyond `make test-cover` (which produces
-> the same `coverage.out`); the Codecov upload itself is CI-side.
+> **Coverage (CI-only steps).** After the `go test` step CI runs two coverage
+> steps (issue #249): `Coverage summary` (prints the project total + writes
+> `coverage.html`) and `Per-package coverage summary` (writes the
+> `go tool cover -func` table to `$GITHUB_STEP_SUMMARY`). Both are advisory:
+> **no coverage threshold gates a merge**, and there is no external coverage
+> service — the `Upload coverage to Codecov` step and `codecov.yml` were removed
+> because the repo has no `CODECOV_TOKEN`, so the upload only ever emitted a
+> missing-token warning. Locally `make test-cover` produces the same
+> `coverage.out`; the two summary steps are CI-side presentation on top of it.
 
 > **Podman in this lane.** CI masks `podman` so the container-sandbox
 > integration tests in `internal/sandbox` cleanly self-skip (building the
