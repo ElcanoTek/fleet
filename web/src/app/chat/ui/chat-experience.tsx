@@ -450,6 +450,7 @@ export function ChatExperience({
     currentTurnIdByConvRef,
     reattachInFlightRef,
     streamPulseRef,
+    serverHeartbeatMsRef,
     supersededStreamsRef,
     livenessInFlightRef,
     promoteStreamKey,
@@ -3256,6 +3257,7 @@ export function ChatExperience({
     currentTurnIdByConvRef,
     reattachInFlightRef,
     streamPulseRef,
+    serverHeartbeatMsRef,
     supersededStreamsRef,
     livenessInFlightRef,
     promoteStreamKey,
@@ -3264,7 +3266,7 @@ export function ChatExperience({
   } satisfies TurnStreamDeps;
   const {
     reattachToConv,
-    checkStreamLiveness,
+    sweepStreamLiveness,
     submitPrompt,
     regenerateLastAssistant,
     resendUserMessage,
@@ -3286,13 +3288,13 @@ export function ChatExperience({
   // suppression. Reading a ref *inside an effect or event handler* (never
   // during render) is the supported pattern.
   const reattachToConvRef = useRef(reattachToConv);
-  const checkStreamLivenessRef = useRef(checkStreamLiveness);
+  const sweepStreamLivenessRef = useRef(sweepStreamLiveness);
   const loadConversationRef = useRef(loadConversation);
   const refreshConversationsRef = useRef(refreshConversations);
   const loadMcpServerCatalogPreviewRef = useRef(loadMcpServerCatalogPreview);
   useEffect(() => {
     reattachToConvRef.current = reattachToConv;
-    checkStreamLivenessRef.current = checkStreamLiveness;
+    sweepStreamLivenessRef.current = sweepStreamLiveness;
     loadConversationRef.current = loadConversation;
     refreshConversationsRef.current = refreshConversations;
     loadMcpServerCatalogPreviewRef.current = loadMcpServerCatalogPreview;
@@ -3371,20 +3373,17 @@ export function ChatExperience({
       if (document.visibilityState !== "visible") return;
       const convId = activeConversationIdRef.current;
       if (!convId) return;
-      if (attachedConvIdsRef.current.has(convId)) {
-        // "Attached" is not the same as "alive". A phone that locks mid-turn
-        // leaves a zombie socket: the reader never delivers another chunk and
-        // never rejects, so the conversation keeps looking attached while the
-        // turn carries on server-side. Returning here unconditionally is why
-        // coming back to a long-running task showed a stuck thinking
-        // indicator — and then, once the idle timeout finally fired, a bubble
-        // claiming the assistant never replied. Check instead: adopt the
-        // persisted transcript if the turn finished, reconnect the live
-        // stream if it is still generating. force: an explicit tab return is
-        // always worth a probe, unlike the periodic watchdog below.
-        await checkStreamLivenessRef.current(convId, { force: true });
-        return;
-      }
+      // "Attached" is not the same as "alive". A phone that locks mid-turn
+      // leaves a zombie socket: the reader never delivers another chunk and
+      // never rejects, so the conversation keeps looking attached while the
+      // turn carries on server-side. Bailing out on "attached" is why coming
+      // back to a long-running task showed a stuck thinking indicator — and
+      // then, once the idle timeout finally fired, a bubble claiming the
+      // assistant never replied. Check instead, across EVERY attached
+      // conversation: adopt the persisted transcript where the turn finished,
+      // reconnect the live stream where it is still generating.
+      await sweepStreamLivenessRef.current({ force: true });
+      if (attachedConvIdsRef.current.has(convId)) return;
 
       // First try to reattach to any in-flight turn so the user sees
       // live tokens resume. If nothing's in-flight, fall back to a
@@ -3453,24 +3452,20 @@ export function ChatExperience({
   // stays open and visible is only noticed when the multi-minute idle timeout
   // trips.
   //
-  // checkStreamLiveness carries its own silence gate, so a healthy stream (the
-  // server heartbeats every 15s by default) costs nothing here: the tick reads
-  // a ref and returns. A probe is only spent once the socket has actually gone
-  // quiet. It is also self-guarded against overlapping runs, so a tick landing
-  // on top of a tab return is a no-op.
+  // The sweep covers every attached conversation (chats stream in parallel)
+  // and no-ops while the tab is hidden. It is nearly free on a healthy
+  // stream: each conversation is behind a silence gate derived from the
+  // cadence the server advertises, so a socket that has produced bytes within
+  // one keepalive interval costs a ref read and no request. Overlapping runs
+  // are self-guarded, so a tick landing on top of a tab return is a no-op.
   useEffect(() => {
     const tick = () => {
-      if (typeof document === "undefined") return;
-      if (document.visibilityState !== "visible") return;
-      const convId = activeConversationIdRef.current;
-      if (!convId) return;
-      if (!attachedConvIdsRef.current.has(convId)) return;
-      void checkStreamLivenessRef.current(convId);
+      void sweepStreamLivenessRef.current();
     };
     const id = window.setInterval(tick, STREAM_WATCHDOG_INTERVAL_MS);
     return () => window.clearInterval(id);
-    // Mount-once: the tick reads everything it needs through stable refs.
-  }, [attachedConvIdsRef, activeConversationIdRef]);
+    // Mount-once: the sweep reads everything it needs through stable refs.
+  }, []);
 
   // Initial load: session, conversations, most-recent conversation.
   //

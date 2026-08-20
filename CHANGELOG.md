@@ -19,6 +19,47 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **A chat socket that dies while the agent is *thinking* is now caught in
+  about a minute, and every parallel chat is watched, not just the one on
+  screen.** These were the two limitations left open by #1211's stream
+  recovery; both are closed.
+
+  **Silence is now evidence.** Detection previously needed the server to have
+  emitted events the client never received — which never happens while the
+  agent sits in a long tool call, because the server has nothing to emit. A
+  socket dying in that stretch stayed invisible until the five-minute idle
+  timeout. The keepalive doesn't care what the turn is doing: an attached
+  stream writes at least one byte every interval, so missing several in a row
+  proves the connection is gone.
+
+  Using that required the client to know the cadence, so **the server now
+  advertises it** — `X-Fleet-Heartbeat-Interval-Ms` on the stream response and
+  `heartbeat_ms` on the `fleet.capabilities` frame, the two halves of the
+  existing discovery surface. Guessing would have been wrong in both
+  directions: too short kills healthy streams on a slow deployment, too long
+  leaves the blind spot open. Keepalives disabled is advertised honestly as
+  `0`, and the client then treats silence as proving nothing rather than
+  assuming a cadence it will never be sent. The threshold is four intervals —
+  a full minute at the default — because a few keepalives can be lost to a GC
+  pause without the socket being dead, and the confirming grace window still
+  has to agree before anything is torn down.
+
+  **Background conversations are covered.** Chats stream in parallel and the
+  sidebar paints a working dot for each, but the liveness check only ever
+  looked at the active conversation — a background chat's socket died the same
+  way with nobody watching. The check now sweeps every attached conversation,
+  with per-conversation failures contained so one bad chat cannot abort the
+  sweep. Both the sweep and the watchdog stay no-ops while the tab is hidden,
+  where timers are throttled and sockets may be legitimately frozen.
+
+  Net effect: on a visible tab with default settings, a dead socket is found in
+  roughly a minute instead of five — or inside the 2.5s grace window if you're
+  returning to the tab — for any chat, whether or not the agent is mid-tool-
+  call. Detection latency, and the one case that still falls through to the
+  idle timeout, are in
+  [`docs/CHAT-STREAM-RECOVERY.md`](docs/CHAT-STREAM-RECOVERY.md).
+
+
 - **A long-running chat turn that is *still working* when you come back now
   resumes streaming immediately, instead of showing a thinking indicator that
   never moves.** This completes the walk-away recovery of #1208 (the entry

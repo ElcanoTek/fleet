@@ -48,6 +48,7 @@ database. Refreshing worked precisely because a reload reads Postgres.
 | `reconcileFromPersisted` | Programmatically does what the refresh does: adopt the canonical transcript. |
 | `settleStreamedSlot` | The single finalizer every path now calls instead of stamping `done`. |
 | `checkStreamLiveness` | Is the attached socket actually alive? Adopt, reconnect, or leave alone. |
+| `sweepStreamLiveness` | Run that check across every attached conversation, not just the visible one. |
 | `supersedeStream` | Retire a dead socket in favour of a replacement without its teardown ending the turn. |
 
 ### `persistedAnswersLocalTurn` — the guard that makes adoption safe
@@ -119,26 +120,52 @@ returns `"idle" | "healthy" | "recovered" | "reconnected"`.
 
 The whole difficulty is telling a **dead** socket from a merely **quiet** one.
 Guessing wrong in the timid direction leaves the user stuck; guessing wrong in
-the eager direction tears down a working stream. The proof used here is
-two-part, and deliberately does not depend on the heartbeat (it is
-operator-configurable via `FLEET_SSE_HEARTBEAT_INTERVAL` and could be off):
+the eager direction tears down a working stream.
 
-1. **The server has emitted past us.** `/inflight` reports `last_event_id`;
-   compare it against the client's applied `lastEventIdByConvRef`. If the
-   server is not ahead, nothing has been missed and there is nothing to prove —
-   a genuinely stalled turn (a long tool call) looks exactly like this and is
-   left alone.
-2. **Our socket then produces nothing.** Wait `streamLivenessGraceMs` (2.5s)
-   and check the stream's *pulse*. A socket that was merely frozen — a
-   backgrounded tab, a suspended process — flushes its buffered bytes as soon
-   as the page thaws, well inside that window. A severed one delivers nothing,
-   ever.
+Suspicion comes from either of two independent kinds of evidence. Confirmation
+always comes from the same grace window.
+
+**Evidence A — the server has emitted past us.** `/inflight` reports
+`last_event_id`; compare it against the client's applied
+`lastEventIdByConvRef`. If the server is ahead, events exist that we are not
+receiving.
+
+**Evidence B — the promised keepalives stopped arriving.** Evidence A alone has
+a blind spot, and it is a big one: while the agent sits in a long tool call the
+server emits *nothing*, so it can never get ahead of us, and a socket that dies
+in that stretch is invisible. The keepalive does not care what the turn is
+doing — an attached stream writes at least one byte every
+`FLEET_SSE_HEARTBEAT_INTERVAL` (a real event resets the timer, otherwise a
+`: keepalive` comment fires). Miss several in a row and the connection is gone,
+whatever the turn is doing.
+
+The client knows the cadence because **the server advertises it**, on both
+halves of the existing discovery surface: the
+`X-Fleet-Heartbeat-Interval-Ms` response header (what a `fetch` client reads)
+and a `heartbeat_ms` field on the synthetic first `fleet.capabilities` frame
+(what a header-blind `EventSource` would get). Guessing a cadence would be
+wrong in both directions — too short and every healthy stream on a slow
+deployment gets killed, too long and the blind spot stays open. **Keepalives
+disabled is advertised as `0`, and the client then treats silence as proving
+nothing** and falls back to Evidence A alone; assuming a cadence that will
+never arrive would eventually declare every healthy stream dead.
+
+The threshold is four intervals (a full minute at the 15s default),
+deliberately generous: three consecutive keepalives can be lost to a GC pause
+or a slow paint without the socket being dead, and being late costs the user a
+few seconds while being early costs a needless reconnect.
+
+**Confirmation — our socket then produces nothing.** Wait
+`streamLivenessGraceMs` (2.5s) and check the stream's *pulse*. A socket that
+was merely frozen — a backgrounded tab, a suspended process — flushes its
+buffered bytes as soon as the page thaws, well inside that window. A severed
+one delivers nothing, ever.
 
 The pulse (`streamPulseRef`) is stamped by the stream pump on **every** chunk,
-including a heartbeat comment: a heartbeat carries no event but does prove the
-connection is alive. It records both a timestamp (used by the silence gate
-below) and a monotonic counter (used for the grace-window comparison, so a
-socket that delivers and then goes quiet again still counts as alive).
+including a heartbeat comment. It records both a timestamp (used by the
+silence gate below, and by Evidence B) and a monotonic counter (used for the
+grace-window comparison, so a socket that delivers and then goes quiet again
+still counts as alive).
 
 **A false positive is cheap by construction.** The replacement attaches with
 `Last-Event-ID` set to what we already applied, the server replays from there,
@@ -165,22 +192,39 @@ replacement now. It then waits (bounded) for the retiring stream's
 `reattachInFlightRef` guard to clear, or the replacement would refuse to
 attach and the conversation would end up with no stream at all.
 
-### When the check runs
+### When the check runs, and over what
+
+`sweepStreamLiveness` runs `checkStreamLiveness` over **every attached
+conversation**, not just the one on screen. Chats stream in parallel — the
+sidebar paints a working dot per busy chat — and a background conversation's
+socket dies exactly the same way the foreground one's does; it just has nobody
+watching it. The attached set is snapshotted first (a reconnect mutates it) and
+per-conversation failures are contained, so one bad conversation cannot abort
+the sweep.
+
+It is driven from two places:
 
 - **Tab return** (`visibilitychange` / `focus` / `online`) with `force: true` —
   an explicit return is always worth a probe.
-- **A watchdog interval** (`STREAM_WATCHDOG_INTERVAL_MS`, 10s) while the tab is
-  visible and the active conversation is attached. A phone that unlocks
-  straight back into the chat may produce exactly one visibility event, before
-  the turn it was watching has finished; without a recurring check, a socket
-  that dies while the tab stays open is only noticed by the idle timeout.
+- **A watchdog interval** (`STREAM_WATCHDOG_INTERVAL_MS`, 10s). A phone that
+  unlocks straight back into the chat may produce exactly one visibility event,
+  before the turn it was watching has finished; without a recurring check, a
+  socket that dies while the tab stays open is only noticed by the idle
+  timeout.
 
-The watchdog is nearly free on a healthy stream: `checkStreamLiveness` carries
-a **silence gate** (`streamSilenceProbeMs`, 20s — comfortably above the default
-15s heartbeat), so an unforced tick on a stream that has produced bytes
-recently reads a ref and returns without spending a request. Only genuine
-silence buys a probe. Overlapping runs are self-guarded, so a tick landing on
-top of a tab return is a no-op.
+Both no-op while the tab is hidden: a hidden tab's timers are throttled and its
+sockets may be legitimately frozen, so probing then would be unreliable and
+pointless. The tab-return listener covers the wake-up.
+
+The sweep is nearly free on a healthy stream. `checkStreamLiveness` carries a
+**silence gate** sized from the advertised cadence (two intervals, floor 5s;
+20s when no cadence is advertised), so an unforced tick on a stream that has
+produced bytes within one keepalive reads a ref and returns without spending a
+request. Only genuine silence buys a probe. A *forced* call still skips a
+socket that delivered inside the grace window it would otherwise sit through —
+on desktop `focus` fires often, and those probes could only ever conclude
+"healthy". Overlapping runs are self-guarded per conversation, so a tick
+landing on top of a tab return is a no-op.
 
 ## Replay gaps
 
@@ -216,27 +260,41 @@ the source of truth, and the reconcile path is the one that always works.
   cancelled/failed marker from the retired stream).
 
   Each guard was mutation-checked: removing the superseded marker from either
-  teardown path, the grace-window check, the server-ahead precondition, or the
-  silence gate each fails exactly one test.
+  teardown path, the grace-window check, either evidence test, the silence
+  gate, the retire identity check, the disabled-keepalive fallback, the sweep's
+  visibility gate, its error containment, or its coverage of background
+  conversations each fails exactly one test. The harness deps object is typed
+  as `TurnStreamDeps` rather than cast through `unknown`, so adding a
+  dependency is a compile error there instead of an `undefined` at runtime.
+
+- Go: `capabilities_test.go` covers the advertised cadence in both the header
+  and the `fleet.capabilities` frame, and that keepalives-off advertises `0`.
+
+## Detection latency
+
+With the default 15s keepalive, a dead socket on a visible tab is caught within
+roughly **a minute**: four missed keepalives (60s) plus the 2.5s grace window,
+found by a watchdog tick at most 10s later. A dead socket discovered on tab
+return is caught in the 2.5s grace window alone. Both replace the five-minute
+`streamIdleTimeoutMs`, which is now only a backstop.
 
 ## Honest scope
 
 - **The idle timeout is unchanged** (`streamIdleTimeoutMs`, 5 minutes). It is
-  no longer the primary recovery path — the watchdog gets there first — but it
-  is kept as the backstop for the cases liveness detection deliberately does
-  not cover.
-- **A stalled turn is not distinguishable from a dead socket, and is left
-  alone.** If the server is *not* ahead of our applied event id, no reconnect
-  happens, however long the silence. That is the correct call (a long tool
-  call produces exactly this shape and nothing has been missed), but it does
-  mean a socket that dies during a long quiet stretch is only caught once the
-  server emits again — or by the idle timeout. With the default 15s heartbeat
-  the window is small, since the turn's own events resume the moment the tool
-  returns.
-- **Detection is per-conversation and foreground-only.** The watchdog checks
-  the *active* conversation while the tab is visible. A background
-  conversation streaming in parallel is not watched; it still recovers via its
-  own stream's error path or the idle timeout.
-- **No server-side change.** The buffer, the retain window, the heartbeat and
-  the persistence ledger are untouched; the server was already correct. This is
-  entirely about what the client concludes when it stops hearing from it.
+  no longer the primary recovery path but is kept as the backstop for the one
+  case liveness detection deliberately cannot cover.
+- **With keepalives disabled** (`FLEET_SSE_HEARTBEAT_INTERVAL=0`), Evidence B
+  is unavailable by construction and detection falls back to Evidence A alone.
+  A socket that dies during a quiet stretch on such a deployment is caught by
+  the idle timeout, as before. This is a deliberate consequence of not
+  assuming a cadence the server has told us it will not send — the fix, if a
+  deployment wants it, is to leave keepalives on.
+- **Detection is foreground-only.** Both the watchdog and the tab-return sweep
+  no-op while the tab is hidden, because a hidden tab's timers are throttled
+  and its sockets may be legitimately frozen. Backgrounded *conversations* are
+  covered (see the sweep); a backgrounded *tab* is not, and does not need to
+  be — nothing is on screen to be wrong, and the wake-up is handled on return.
+- **Server-side change is limited to discovery.** The buffer, the retain
+  window, the keepalive itself and the persistence ledger are untouched; the
+  only addition is advertising the keepalive cadence the server was already
+  sending, so the client can reason about silence instead of guessing.

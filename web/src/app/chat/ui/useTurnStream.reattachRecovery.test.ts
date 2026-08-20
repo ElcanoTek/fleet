@@ -103,8 +103,16 @@ const makeHarness = (opts: {
   // Consumed in order; the last entry is reused for any further probe.
   inflight: InflightInfo[];
   onLoaded?: () => void;
+  // Advertised keepalive cadence, in ms. Omit to send no header at all.
+  heartbeatMs?: number;
+  // Extra conversations the client already has sockets attached to, for the
+  // sweep. Keyed by conv id; each gets its own mid-flight transcript.
+  extraConvs?: string[];
 }): Harness => {
   const store: Store = { [CONV]: opts.initial };
+  for (const extra of opts.extraConvs ?? []) {
+    store[extra] = midTurnTranscript();
+  }
   const messagesByConvRef = { current: store };
   const loadConversationCalls: string[] = [];
   const streamRequests: Array<{ url: string; lastEventId: string | null }> = [];
@@ -143,6 +151,17 @@ const makeHarness = (opts: {
 
   const nth = <T,>(list: T[], i: number): T => list[Math.min(i, list.length - 1)];
 
+  // The server advertises its keepalive cadence on every attached stream
+  // (X-Fleet-Heartbeat-Interval-Ms). undefined = the header is absent, which
+  // must read as "no promised cadence" rather than as a default.
+  const streamHeaders = (): Record<string, string> => {
+    const h: Record<string, string> = { "content-type": "text/event-stream" };
+    if (opts.heartbeatMs !== undefined) {
+      h["X-Fleet-Heartbeat-Interval-Ms"] = String(opts.heartbeatMs);
+    }
+    return h;
+  };
+
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -161,7 +180,7 @@ const makeHarness = (opts: {
         streamRequests.push({ url, lastEventId: null });
         return new Response(body(init?.signal ?? undefined), {
           status: 200,
-          headers: { "content-type": "text/event-stream" },
+          headers: streamHeaders(),
         });
       }
       if (url.includes("/stream")) {
@@ -173,10 +192,10 @@ const makeHarness = (opts: {
         });
         return new Response(body(init?.signal ?? undefined), {
           status: 200,
-          headers: { "content-type": "text/event-stream" },
+          headers: streamHeaders(),
         });
       }
-      if (url.includes(`/api/conversations/${CONV}`)) {
+      if (url.includes("/api/conversations/")) {
         return new Response(JSON.stringify({ history: opts.persisted }), {
           status: 200,
           headers: { "content-type": "application/json" },
@@ -189,7 +208,11 @@ const makeHarness = (opts: {
   const noop = () => {};
   const asyncNoop = async () => {};
 
-  const deps = {
+  // Typed as TurnStreamDeps, NOT cast through `unknown`: an `as unknown as`
+  // here silently handed the hook `undefined` for a newly-added ref, and every
+  // test in the file failed on `.current`. The annotation makes adding a dep a
+  // compile error in this harness instead.
+  const deps: TurnStreamDeps = {
     setConvMessages,
     getConvMessages: (convId: string) => store[convId] ?? [],
     renameConvKey: noop,
@@ -236,12 +259,13 @@ const makeHarness = (opts: {
     currentTurnIdByConvRef: { current: {} },
     reattachInFlightRef: { current: new Set<string>() },
     streamPulseRef: { current: {} },
+    serverHeartbeatMsRef: { current: 0 },
     supersededStreamsRef: { current: new WeakSet<AbortController>() },
     livenessInFlightRef: { current: new Set<string>() },
     promoteStreamKey: noop,
     streamingConvsRef: { current: new Set<string>() },
     isStreaming: false,
-  } as unknown as TurnStreamDeps;
+  };
 
   return {
     deps,
@@ -693,4 +717,194 @@ describe("checkStreamLiveness over a live POST /chat stream", () => {
     expect(h.store[CONV].some((m) => m.failed)).toBe(false);
     expect(h.loadConversationCalls).toEqual([]);
   }, 20000);
+});
+
+describe("checkStreamLiveness — silence during a quiet stretch", () => {
+  // The gap the advertised keepalive cadence closes. While the agent sits in a
+  // long tool call the server emits NO events, so "the server is ahead of us"
+  // can never become true — the socket can die and the event-based test will
+  // never notice. The keepalive does not care what the turn is doing: an
+  // attached stream writes a byte every interval, so missing several in a row
+  // is proof on its own.
+  const HEARTBEAT = 15000;
+
+  it("declares a socket dead on missed keepalives alone, with the server not ahead", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({
+      initial: midTurnTranscript(),
+      persisted: unansweredHistory(),
+      heartbeatMs: HEARTBEAT,
+      streamBodies: [
+        (signal) =>
+          zombieStream(signal, 5, [
+            sse(1, "turn.started", { turn_id: "t1" }),
+            sse(2, "tool.call", { id: "c1", name: "bash", input: "{}" }),
+          ]),
+        () =>
+          truncatedStream([
+            sse(3, "text.delta", { text: "tool finished, here is the answer" }),
+            sse(4, "turn.completed", { cost_usd: 0.01, duration_ms: 10 }),
+          ]),
+      ],
+      inflight: [
+        { inflight: true, turn_id: "t1" },
+        // The turn is alive and mid-tool-call: nothing emitted past what we
+        // applied. Only the missed keepalives give the socket away.
+        { inflight: true, turn_id: "t1", last_event_id: 2 },
+        { inflight: true, turn_id: "t1", last_event_id: 2 },
+      ],
+    });
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    const zombie = result.current.reattachToConv(CONV);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(h.deps.lastEventIdByConvRef.current[CONV]).toBe(2);
+
+    // Four keepalives' worth of silence with nothing to fall behind on.
+    await vi.advanceTimersByTimeAsync(4 * HEARTBEAT + 1000);
+    const check = result.current.checkStreamLiveness(CONV);
+    await vi.advanceTimersByTimeAsync(5000);
+    await expect(check).resolves.toBe("reconnected");
+    await zombie;
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(h.attachCount()).toBe(2);
+    expect(h.streamRequests[1].lastEventId).toBe("2");
+    expect(lastOf(h).content).toBe("tool finished, here is the answer");
+    expect(h.store[CONV].some((m) => m.failed)).toBe(false);
+  }, 30000);
+
+  it("does not declare it dead before the promised keepalives are actually missed", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({
+      initial: midTurnTranscript(),
+      persisted: unansweredHistory(),
+      heartbeatMs: HEARTBEAT,
+      streamBodies: [(signal) => zombieStream(signal, 5, [sse(1, "turn.started", { turn_id: "t1" })])],
+      inflight: [
+        { inflight: true, turn_id: "t1" },
+        { inflight: true, turn_id: "t1", last_event_id: 1 },
+      ],
+    });
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    const live = result.current.reattachToConv(CONV);
+    await vi.advanceTimersByTimeAsync(10);
+
+    // Two intervals of quiet: well within what a healthy stream may do.
+    await vi.advanceTimersByTimeAsync(2 * HEARTBEAT + 1000);
+    const check = result.current.checkStreamLiveness(CONV);
+    await vi.advanceTimersByTimeAsync(5000);
+    await expect(check).resolves.toBe("healthy");
+    expect(h.attachCount()).toBe(1);
+
+    h.deps.abortControllersRef.current[CONV]?.abort();
+    await live.catch(() => {});
+  }, 30000);
+
+  it("never treats silence as proof when the server reports keepalives disabled", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({
+      initial: midTurnTranscript(),
+      persisted: unansweredHistory(),
+      // The operator turned keepalives off: there is no cadence to miss, so
+      // assuming one would eventually kill every healthy stream.
+      heartbeatMs: 0,
+      streamBodies: [(signal) => zombieStream(signal, 5, [sse(1, "turn.started", { turn_id: "t1" })])],
+      inflight: [
+        { inflight: true, turn_id: "t1" },
+        { inflight: true, turn_id: "t1", last_event_id: 1 },
+      ],
+    });
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    const live = result.current.reattachToConv(CONV);
+    await vi.advanceTimersByTimeAsync(10);
+
+    // Four minutes of silence still is not evidence without a promised
+    // cadence. (Kept under the 5-minute read idle timeout, which is a
+    // separate backstop and would end the stream on its own.)
+    await vi.advanceTimersByTimeAsync(240_000);
+    const check = result.current.checkStreamLiveness(CONV);
+    await vi.advanceTimersByTimeAsync(5000);
+    await expect(check).resolves.toBe("healthy");
+    expect(h.attachCount()).toBe(1);
+
+    h.deps.abortControllersRef.current[CONV]?.abort();
+    await live.catch(() => {});
+  }, 30000);
+});
+
+describe("sweepStreamLiveness", () => {
+  const OTHER = "conv-2";
+
+  it("recovers a BACKGROUND conversation, not just the one on screen", async () => {
+    const h = makeHarness({
+      initial: midTurnTranscript(),
+      persisted: answeredHistory(),
+      streamBodies: [() => truncatedStream([])],
+      inflight: [{ inflight: false }],
+      extraConvs: [OTHER],
+    });
+    // Both chats are streaming in parallel; the user is looking at CONV.
+    h.deps.attachedConvIdsRef.current.add(CONV);
+    h.deps.attachedConvIdsRef.current.add(OTHER);
+    h.streaming.add(CONV);
+    h.streaming.add(OTHER);
+    h.deps.activeConversationIdRef.current = CONV;
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    await result.current.sweepStreamLiveness({ force: true });
+
+    // The background chat's finished answer landed too — it is not left
+    // spinning until the user happens to click into it.
+    expect(h.loadConversationCalls.sort()).toEqual([CONV, OTHER]);
+    expect(h.deps.attachedConvIdsRef.current.has(OTHER)).toBe(false);
+    expect(h.streaming.has(OTHER)).toBe(false);
+    expect(lastOf(h).content).toBe("Done — here are the results.");
+    expect(h.store[OTHER][h.store[OTHER].length - 1].content).toBe(
+      "Done — here are the results.",
+    );
+  });
+
+  it("does nothing while the tab is hidden", async () => {
+    const h = makeHarness({
+      initial: midTurnTranscript(),
+      persisted: answeredHistory(),
+      streamBodies: [() => truncatedStream([])],
+      inflight: [{ inflight: false }],
+    });
+    h.deps.attachedConvIdsRef.current.add(CONV);
+    const spy = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    await result.current.sweepStreamLiveness({ force: true });
+
+    expect(h.inflightProbes).toBe(0);
+    expect(h.loadConversationCalls).toEqual([]);
+    spy.mockRestore();
+  });
+
+  it("keeps going when one conversation's check throws", async () => {
+    const h = makeHarness({
+      initial: midTurnTranscript(),
+      persisted: answeredHistory(),
+      streamBodies: [() => truncatedStream([])],
+      inflight: [{ inflight: false }],
+      extraConvs: [OTHER],
+    });
+    h.deps.attachedConvIdsRef.current.add(CONV);
+    h.deps.attachedConvIdsRef.current.add(OTHER);
+    // CONV's transcript is corrupt in a way that makes its check throw.
+    Object.defineProperty(h.store, CONV, {
+      get() {
+        throw new Error("boom");
+      },
+      configurable: true,
+    });
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    await expect(result.current.sweepStreamLiveness({ force: true })).resolves.toBeUndefined();
+    expect(h.loadConversationCalls).toEqual([OTHER]);
+  });
 });

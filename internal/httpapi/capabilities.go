@@ -21,6 +21,7 @@ package httpapi
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 )
 
@@ -73,6 +74,7 @@ var capabilityForEvent = map[string]SSECapability{
 const (
 	clientCapabilitiesHeaderName    = "X-Fleet-Capabilities"
 	supportedCapabilitiesHeaderName = "X-Fleet-Supported-Capabilities"
+	heartbeatIntervalHeaderName     = "X-Fleet-Heartbeat-Interval-Ms"
 	capabilitiesEventName           = "fleet.capabilities"
 )
 
@@ -118,8 +120,30 @@ func supportedCapabilitiesJSON() string {
 	return string(b)
 }
 
-// setSupportedCapabilitiesHeader advertises the server's full capability set.
-// Must be called before the response WriteHeader.
+// setSupportedCapabilitiesHeader advertises the server's full capability set
+// and its idle-keepalive cadence. Must be called before the response WriteHeader.
 func setSupportedCapabilitiesHeader(w http.ResponseWriter) {
 	w.Header().Set(supportedCapabilitiesHeaderName, supportedCapabilitiesJSON())
+	w.Header().Set(heartbeatIntervalHeaderName, strconv.FormatInt(heartbeatIntervalMs(), 10))
+}
+
+// heartbeatIntervalMs is the keepalive cadence an attached stream is promised,
+// in milliseconds; 0 means keepalives are disabled.
+//
+// Advertising it is what lets a client reason about SILENCE. An attached
+// stream writes at least one byte every interval — a real event resets the
+// timer, otherwise a `: keepalive` comment fires — so with the interval known,
+// a browser can conclude that a socket which has produced nothing for several
+// intervals is dead, and reconnect, instead of waiting out a blunt
+// client-side timeout. Without it the client can only detect a dead socket
+// once the server emits an EVENT it never receives, which never happens while
+// the agent sits in a long tool call (see docs/CHAT-STREAM-RECOVERY.md).
+//
+// 0 (keepalives off) is honest rather than hidden: the client falls back to
+// its event-based evidence instead of assuming a cadence it will not get.
+func heartbeatIntervalMs() int64 {
+	if sseHeartbeatInterval <= 0 {
+		return 0
+	}
+	return sseHeartbeatInterval.Milliseconds()
 }
