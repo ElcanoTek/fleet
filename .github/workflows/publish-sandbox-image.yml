@@ -13,6 +13,27 @@ name: Publish sandbox image (reusable)
 # workflow_call (client repos) and a manual workflow_dispatch for ad-hoc
 # publishes of the generic bundle.
 #
+# WHY THE ACTIONS PAGE SHOWS THIS WORKFLOW RED, AND WHY IT LOOKS ABANDONED
+#
+# Both have the same one-sentence answer: the last six runs are from June 2026,
+# when this file still had a `push: branches: [main]` trigger and pushed
+# ghcr.io/elcanotek/sandbox on every merge. Those runs all died at
+# `podman push` with `denied: permission_denied: write_package` — the repo's
+# GITHUB_TOKEN had no write access to that org-level package (an org package is
+# not writable by a repo token until it is linked to the repo, or the org's
+# package-creation policy allows it). The push trigger was then removed when
+# #195/#705 turned this into a reusable per-client publisher, so nothing has
+# fired since, and GitHub keeps showing the last recorded conclusion. The red is
+# a 2026-06-23 tombstone, not a currently-broken pipeline: no fleet gate depends
+# on this workflow, and core CI builds the sandbox locally. A successful manual
+# dispatch (see below — pass update_manifest: false) is what clears the badge.
+#
+# So the perms requirement is on the CALLER, and it is not optional: publish to
+# an image name under the caller repo's OWN owner (hence the
+# ghcr.io/${{ github.repository_owner }}/... form in the contract below), and
+# link the package to that repo the first time. A caller pushing into someone
+# else's namespace gets the same permission_denied the June runs got.
+#
 # Caller contract (in a client config repo):
 #
 #   name: Publish sandbox image
@@ -70,19 +91,44 @@ on:
         type: string
         required: false
         default: "config/default"
+      update_manifest:
+        # Declared here, and defaulting to false, on purpose. Undeclared inputs
+        # read as null, and `null != false` is TRUE — so before this existed a
+        # manual dispatch took the manifest-update path and opened a PR pinning
+        # `sandbox.image` in fleet's OWN config/default/manifest.yaml. That
+        # bundle is the build-on-box default (`image: "${FLEET_SANDBOX_IMAGE:-}"`)
+        # and must stay unpinned; a manual dispatch is for getting an image into
+        # GHCR, never for editing this repo.
+        description: >-
+          Open a PR pinning sandbox.image to the pushed {sha} tag. Leave false
+          for an ad-hoc publish of the generic bundle — config/default must stay
+          build-on-box.
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: write
   packages: write
   pull-requests: write
 
+# Two publishes of the same image must not overlap: they both move the mutable
+# :latest tag, and the loser of the race decides what it ends up pointing at.
+# Serialize per image name rather than per repo, so two different client bundles
+# in the same repo can still publish concurrently.
+concurrency:
+  group: publish-sandbox-image-${{ inputs.image_name }}
+  cancel-in-progress: false
+
 jobs:
   publish:
     name: Build + push ${{ inputs.image_name }}
     runs-on: ubuntu-latest
     env:
-      BUNDLE_DIR: ${{ inputs.bundle_dir || 'config/default' }}
+      BUNDLE_DIR: ${{ inputs.bundle_dir }}
       IMAGE: ${{ inputs.image_name }}
+      # The immutable tag, hoisted so no `run:` body has to interpolate it.
+      SHA: ${{ github.sha }}
     steps:
       - name: Checkout caller repo
         uses: actions/checkout@v7
@@ -107,30 +153,39 @@ jobs:
           podman --version
 
       - name: Log in to GHCR
+        env:
+          # Passed as env, not interpolated into the script: a ${{ }} expression
+          # is spliced into the run body before the shell runs, which puts the
+          # token on a command line and lets any metacharacter in a value be
+          # executed. Reading "$GHCR_TOKEN" keeps it a value.
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
         run: |
-          echo "${{ secrets.GITHUB_TOKEN }}" \
-            | podman login ghcr.io --username "${{ github.actor }}" --password-stdin
+          printf '%s' "$GHCR_TOKEN" \
+            | podman login ghcr.io --username "$GHCR_USER" --password-stdin
 
       - name: Build sandbox image (:${{ github.sha }})
         run: |
           FLEET_CLIENT_CONFIG_DIR="$GITHUB_WORKSPACE/$BUNDLE_DIR" \
           IMAGE_NAME="$IMAGE" \
-            bash .fleet-core/scripts/build-sandbox-image.sh "${{ github.sha }}"
+            bash .fleet-core/scripts/build-sandbox-image.sh "$SHA"
 
       - name: Tag :latest and push both tags
         run: |
-          podman tag "$IMAGE:${{ github.sha }}" "$IMAGE:latest"
-          podman push "$IMAGE:${{ github.sha }}"
+          podman tag "$IMAGE:$SHA" "$IMAGE:latest"
+          podman push "$IMAGE:$SHA"
           podman push "$IMAGE:latest"
           echo "Published:"
-          echo "  $IMAGE:${{ github.sha }}   (immutable — what the manifest pins)"
+          echo "  $IMAGE:$SHA   (immutable — what the manifest pins)"
           echo "  $IMAGE:latest"
 
       - name: Update manifest sandbox.image
-        if: ${{ inputs.update_manifest != false }}
+        # Both triggers declare update_manifest now, so a plain truth test is
+        # enough — no `!= false` reading of a null.
+        if: ${{ inputs.update_manifest }}
         run: |
           manifest="$BUNDLE_DIR/manifest.yaml"
-          image_ref="$IMAGE:${{ github.sha }}"
+          image_ref="$IMAGE:$SHA"
           # Rewrite the image: line under the sandbox: block only (same block
           # scoping as build-sandbox-image.sh's reader, but writing).
           python3 - "$manifest" "$image_ref" <<'PY'
@@ -156,7 +211,7 @@ jobs:
           git diff -- "$manifest"
 
       - name: Open PR with manifest update
-        if: ${{ inputs.update_manifest != false }}
+        if: ${{ inputs.update_manifest }}
         uses: peter-evans/create-pull-request@v8
         with:
           commit-message: "chore(sandbox): pin sandbox.image → ${{ github.sha }}"

@@ -124,3 +124,28 @@ func TestRecentRuns_ZeroLimitHoldsNothing(t *testing.T) {
 		t.Fatalf("limit 0 kept %d", len(items))
 	}
 }
+
+// The limit reaches NewRecentRuns from a request parameter, so the constructor
+// bounds it itself rather than trusting the handler's clamp: a huge ?runs= must
+// buy the requester MaxRecentRuns of memory, not the number they asked for.
+func TestRecentRuns_ClampsLimitToMax(t *testing.T) {
+	r := NewRecentRuns(1 << 40)
+	for i := 0; i < MaxRecentRuns+10; i++ {
+		r.Add(RunPipelineMetrics{TaskID: "t", CreatedAt: int64(i)})
+	}
+	if got := len(r.Items()); got != MaxRecentRuns {
+		t.Fatalf("kept %d, want %d", got, MaxRecentRuns)
+	}
+	if got := cap(r.items); got > 2*MaxRecentRuns {
+		t.Errorf("capacity %d far exceeds the %d bound", got, MaxRecentRuns)
+	}
+}
+
+// A negative limit is a caller bug, not an invitation to panic in make().
+func TestRecentRuns_NegativeLimitHoldsNothing(t *testing.T) {
+	r := NewRecentRuns(-5)
+	r.Add(RunPipelineMetrics{TaskID: "x", CreatedAt: 1})
+	if items := r.Items(); len(items) != 0 {
+		t.Fatalf("negative limit kept %d", len(items))
+	}
+}

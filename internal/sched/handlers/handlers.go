@@ -2683,6 +2683,8 @@ func (h *Handlers) populateCreatedByUsernames(ctx context.Context, tasks []*mode
 // payloads at a time, a running aggregate, and only the most recent ?runs=
 // summaries retained (default 100, max 500). The aggregate still covers
 // every stored log; peak memory is O(page + runs limit), not O(table) (#1122).
+// The 500 ceiling is models.MaxRecentRuns, which NewRecentRuns also enforces on
+// its own — this clamp keeps the reported limit honest, it is not the only guard.
 // Admin-gated by the route group.
 func (h *Handlers) PipelineMetrics(w http.ResponseWriter, r *http.Request) {
 	limit := 100
@@ -2691,8 +2693,8 @@ func (h *Handlers) PipelineMetrics(w http.ResponseWriter, r *http.Request) {
 			limit = n
 		}
 	}
-	if limit > 500 {
-		limit = 500
+	if limit > models.MaxRecentRuns {
+		limit = models.MaxRecentRuns
 	}
 	acc := models.NewPipelineMetricsAccumulator()
 	recent := models.NewRecentRuns(limit)
