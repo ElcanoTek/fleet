@@ -317,19 +317,36 @@ func (m *Manager) activeMCPToolNames(enabledOptIns []string) []string {
 	}
 	out := make([]string, 0, len(roster))
 	for _, name := range roster {
-		optionalServer := ""
-		for server := range optionalServers {
-			if strings.HasPrefix(name, "mcp_"+server+"_") {
-				optionalServer = server
-				break
-			}
-		}
-		if optionalServer != "" && !enabled[optionalServer] {
+		if optionalServer := longestOptionalServerFor(name, optionalServers); optionalServer != "" && !enabled[optionalServer] {
 			continue
 		}
 		out = append(out, name)
 	}
 	return out
+}
+
+// longestOptionalServerFor resolves which Optional server a prefixed
+// `mcp_<server>_<tool>` roster name belongs to, or "" when none matches.
+// Server names can extend each other — the `<server>_<account>` variant
+// convention makes overlaps like "jira" / "jira_prod" real — and the previous
+// first-match break over a map range made the winner a per-iteration coin
+// flip, so whether a tool appeared in the system prompt could differ run to
+// run, silently busting the byte-stable prefix the prompt cache requires
+// (docs/PROMPT-CACHE-CONTRACT.md). The LONGEST matching server name wins:
+// deterministic (two same-length prefixes of one name at the same offset are
+// the same string), and it attributes a variant's tools to the variant's own
+// toggle rather than its shorter base name. This duplicates the longest-key
+// treatment of agentcore's mcpAllowlist.toolsFor (unexported across the
+// package boundary, and matching registered server names rather than
+// `mcp_`-prefixed roster names) — keep the two in step.
+func longestOptionalServerFor(name string, optionalServers mcpOptionalSet) string {
+	best := ""
+	for server := range optionalServers {
+		if len(server) > len(best) && strings.HasPrefix(name, "mcp_"+server+"_") {
+			best = server
+		}
+	}
+	return best
 }
 
 // ListPersonas returns available persona names (derived from *.yaml filenames).

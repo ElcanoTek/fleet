@@ -25,6 +25,11 @@ func (passPolicy) BeforeToolCall(string, string, string) (bool, string) { return
 func (passPolicy) RecordToolResult(string, string, string, bool)        {}
 func (passPolicy) CanFinish(int) (bool, []string)                       { return true, nil }
 
+// orchestration satisfies Run's fail-loud accounting assertion (#1125). A
+// fresh state per call is fine here: Run resolves it exactly once, and this
+// double never reads usage back.
+func (passPolicy) orchestration() *orchestrationState { return newOrchestrationState(nil, 0) }
+
 type recordedPolicyResult struct {
 	name      string
 	input     string

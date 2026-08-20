@@ -72,12 +72,12 @@ func TestEvictOldToolInputs_StopsAtTarget(t *testing.T) {
 	}
 	messages := []fantasy.Message{mkMsg("a"), mkMsg("b"), mkMsg("c")}
 	// Impossible target: everything evictable must be evicted.
-	if n := evictOldToolInputs(messages, modelContextPrefixBudget{}, 0); n != 3 {
+	if n, _ := evictOldToolInputs(messages, estimateBudgetMessagesTokens(messages, modelContextPrefixBudget{}), 0); n != 3 {
 		t.Fatalf("evicted %d, want all 3", n)
 	}
 	// Generous target: nothing should be touched.
 	messages = []fantasy.Message{mkMsg("a")}
-	if n := evictOldToolInputs(messages, modelContextPrefixBudget{}, 1<<30); n != 0 {
+	if n, _ := evictOldToolInputs(messages, estimateBudgetMessagesTokens(messages, modelContextPrefixBudget{}), 1<<30); n != 0 {
 		t.Fatalf("evicted %d under a generous target, want 0", n)
 	}
 }

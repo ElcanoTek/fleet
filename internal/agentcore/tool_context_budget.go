@@ -149,16 +149,19 @@ func modelContextBudgetStep(prefix modelContextPrefixBudget, maxCompletionTokens
 		messageTokens := estimateBudgetMessagesTokens(messages, prefix)
 
 		if messageTokens > accounting.messageTarget {
-			reduction.resultPreviews += compactOldToolResults(messages, toolNames, prefix, accounting.messageTarget, innerResultPreviewBytes)
-			messageTokens = estimateBudgetMessagesTokens(messages, prefix)
+			var n int
+			n, messageTokens = compactOldToolResults(messages, toolNames, messageTokens, accounting.messageTarget, innerResultPreviewBytes)
+			reduction.resultPreviews += n
 		}
 		if messageTokens > accounting.messageTarget {
-			reduction.inputEvicts += evictOldToolInputs(messages, prefix, accounting.messageTarget)
-			messageTokens = estimateBudgetMessagesTokens(messages, prefix)
+			var n int
+			n, messageTokens = evictOldToolInputs(messages, messageTokens, accounting.messageTarget)
+			reduction.inputEvicts += n
 		}
 		if messageTokens > accounting.messageTarget {
-			reduction.resultEvicts += compactOldToolResults(messages, toolNames, prefix, accounting.messageTarget, innerResultEvictedBytes)
-			messageTokens = estimateBudgetMessagesTokens(messages, prefix)
+			var n int
+			n, messageTokens = compactOldToolResults(messages, toolNames, messageTokens, accounting.messageTarget, innerResultEvictedBytes)
+			reduction.resultEvicts += n
 		}
 
 		afterTotal := messageTokens + accounting.reservedTokens()
@@ -368,12 +371,21 @@ func reduceHistoricalPayloadsToHardCap(messages []fantasy.Message, toolNames map
 	return reduced
 }
 
-func compactOldToolResults(messages []fantasy.Message, toolNames map[string]string, prefix modelContextPrefixBudget, targetTokens, maxBytes int) int {
+// compactOldToolResults reduces oversized tool-result payloads oldest-first
+// until currentTokens (the caller's live estimateBudgetMessagesTokens for
+// messages) drops to targetTokens. The estimate is a per-part linear sum, so
+// instead of re-walking the full history for every candidate part — an
+// O(N²·parts) string walk on every provider step already slow enough to be
+// over target (#1125) — it keeps a running total, subtracting exactly the
+// per-part term the estimator would recompute. Returns the number of parts
+// reduced and the updated total, which stays equal to a fresh estimate of the
+// reduced history (pinned by TestInnerReducerRunningTotalMatchesFreshEstimate).
+func compactOldToolResults(messages []fantasy.Message, toolNames map[string]string, currentTokens, targetTokens, maxBytes int) (int, int) {
 	count := 0
 	for mi := range messages {
 		for pi, part := range messages[mi].Content {
-			if estimateBudgetMessagesTokens(messages, prefix) <= targetTokens {
-				return count
+			if currentTokens <= targetTokens {
+				return count, currentTokens
 			}
 			p, ok := fantasy.AsMessagePart[fantasy.ToolResultPart](part)
 			if !ok {
@@ -387,31 +399,37 @@ func compactOldToolResults(messages []fantasy.Message, toolNames map[string]stri
 			if len(replacement) >= len(text) {
 				continue
 			}
+			before := estimateToolResultTokens(p.Output)
 			p.Output = replaceToolResultOutput(p.Output, replacement)
 			messages[mi].Content[pi] = p
+			currentTokens -= before - estimateToolResultTokens(p.Output)
 			count++
 		}
 	}
-	return count
+	return count, currentTokens
 }
 
-func evictOldToolInputs(messages []fantasy.Message, prefix modelContextPrefixBudget, targetTokens int) int {
+// evictOldToolInputs is compactOldToolResults' sibling for oversized
+// tool-call INPUTS, with the same running-total accounting contract.
+func evictOldToolInputs(messages []fantasy.Message, currentTokens, targetTokens int) (int, int) {
 	count := 0
 	for mi := range messages {
 		for pi, part := range messages[mi].Content {
-			if estimateBudgetMessagesTokens(messages, prefix) <= targetTokens {
-				return count
+			if currentTokens <= targetTokens {
+				return count, currentTokens
 			}
 			p, ok := fantasy.AsMessagePart[fantasy.ToolCallPart](part)
 			if !ok || len(p.Input) <= innerInputEvictedBytes {
 				continue
 			}
+			before := estimatedTokensForBytes(len(p.ToolCallID) + len(p.ToolName) + len(p.Input))
 			p.Input = aggregateInputEnvelope(p.ToolName, len(p.Input), innerInputEvictedBytes)
 			messages[mi].Content[pi] = p //nolint:gosec // G602 false positive: mi/pi are range indices of these exact slices
+			currentTokens -= before - estimatedTokensForBytes(len(p.ToolCallID)+len(p.ToolName)+len(p.Input))
 			count++
 		}
 	}
-	return count
+	return count, currentTokens
 }
 
 func toolResultOutputText(output fantasy.ToolResultOutputContent) (text string, ok bool) {
