@@ -483,6 +483,35 @@ prior versions are listed because none have shipped.
 
 ### Changed
 
+- **The tool-call governance framing is now one shared sequence instead of two
+  hand-kept copies (#1127).** `policyGuardedTool.Run` (native/loader/bridge
+  tools) and `mcpTool.Run` (MCP tools) each carried a full copy of the
+  gate→journal→execute→govern→bound→record sequence, including duplicated
+  post_tool_use appending — an ordering bug fixed in one copy would have been
+  invisible in the other. The sequence now lives once in
+  `runGovernedToolCall` (`internal/agentcore/tool_call_framing.go`); the two
+  wrappers inject only their genuine differences through explicit seams: the
+  MCP argument parse (which deliberately sits between the policy gate and the
+  intent journal, so an unparseable call never journals) and the per-type
+  execute step. The two deliberate divergences are preserved and documented
+  at the seam — a native failure returns a non-nil Go error
+  (`boundedModelToolError`) while an MCP failure is always an error response
+  with a nil Go error, per the MCP spec. No behavior change; the one cleanup
+  is that the native error path no longer runs the model-output boundary
+  twice — a no-op for all realistic inputs, and in the one adversarial
+  re-detection corner (an over-cap error text whose head/tail preview cut
+  manufactures a binary-looking run the full content lacked) the single-pass
+  journal/audit bytes are the more consistent choice: they match MCP's
+  long-standing single-bound behavior, and the model-visible bytes converge
+  at the outer boundary either way. The load-bearing MCP gate ordering
+  (arg-parse before the intent journal) and the refusal paths'
+  journal-nothing property are now pinned by tests
+  (`TestTurnJournal_InvalidMCPArgsJournalNothing`,
+  `TestTurnJournal_GateRefusalsJournalNothing`). Same batch:
+  `buildConfirmAuditPolicyTool` now resolves its orchestration through
+  `policyOrchestration` (the one Policy→orchestrationState unwrap walk,
+  #1125) instead of a third hand-rolled copy of the loop.
+
 - **The seven hand-maintained task-row column enumerations are now one
   table-driven registry (#1126).** `taskColumnRegistry`
   (`internal/sched/db/task_columns.go`) is the single source of truth for the
