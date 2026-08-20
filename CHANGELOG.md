@@ -156,6 +156,30 @@ prior versions are listed because none have shipped.
 
 ### Removed
 
+- **The sandbox publisher no longer rewrites its caller's manifest or opens a
+  pin PR (`publish-sandbox-image.yml`).** That half of the workflow never worked
+  once: across 8 recorded runs in 6 repos between 2026-06 and 2026-08 it created
+  zero pull requests. The two runs that reached it — reklaim-config 2026-07-29,
+  elcano-config 2026-08-06 — both built and pushed their image successfully and
+  then died on `GitHub Actions is not permitted to create or approve pull
+  requests`, an org Actions setting no workflow can fix. It was redundant
+  anyway: every bundle README already documents adoption as setting
+  `FLEET_SANDBOX_IMAGE` per box, and fleet's own `config/default` must stay
+  unpinned. Gone with it: the `update_manifest` input, the
+  `peter-evans/create-pull-request` dependency, and the `contents: write` +
+  `pull-requests: write` permissions those steps required — the publisher now
+  asks only for `contents: read` + `packages: write` and cannot write to a
+  caller repo at all. The build-and-push half, which is the half that
+  demonstrably works and the only half a Kubernetes deployment can use, is
+  unchanged and now exposes `image_ref` / `image_digest` as workflow outputs
+  plus a run summary carrying the ref to adopt. Caller workflows in the five
+  client bundles were updated to match and now publish under
+  `ghcr.io/${{ github.repository_owner }}/…` as the documented contract always
+  said; `omnicom-config` was additionally publishing to
+  `fleet-sandbox-example`, a copy-paste from its example-config fork that would
+  have overwritten the template's `:latest` with Omnicom's bundle image the
+  first time it fired.
+
 - **Dropped a tautological `HostExecutorCompiledIn` test** that arrived in the
   same batch. It asserted `HostExecutorCompiledIn() == hostExecutorCompiledIn`
   against the very constant the function returns — `x == x`, unfailable, and
