@@ -55,6 +55,34 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **A reusable sandbox build canary (`build-sandbox-image.yml`) — build only, no
+  push.** Every bundle's sandbox image derives from exactly two inputs: the
+  `FROM` base and the Containerfile's own `RUN` lines. `build-sandbox-image.sh`
+  sets the build context to the Containerfile's own directory, and no shipped
+  Containerfile has a single `COPY` or `ADD`, so nothing outside
+  `<bundle>/sandbox/**` can change the image — which is why the publisher's
+  trigger is `paths: ["sandbox/**"]` rather than every push. But every shipped
+  Containerfile tracks `fedora-minimal:latest` unpinned, so image content drifts
+  with *time* rather than with commits: if Fedora renames or drops a package one
+  of those `RUN` lines installs, the build breaks. That build is not optional —
+  `fleet bootstrap` / `fleet update` runs the same script on the box, which is
+  what every deployment does by default, since every bundle ships
+  `image: "${FLEET_SANDBOX_IMAGE:-}"`. No client bundle's CI had ever built its
+  Containerfile (gitleaks + ruff + pytest only, and three of the five had no CI
+  at all), so the breakage would have surfaced on a customer's box at deploy
+  time. Callers get a weekly `schedule:` plus a `pull_request` trigger on
+  `sandbox/**` — the latter matters as much, because the publisher fires only on
+  push to `main`, so a Containerfile edit was previously never built until after
+  it merged. fleet's own `config/default` deliberately does not call this: the CI
+  gate builds that sandbox on every PR via the live Playwright job, and
+  `grype-scheduled.yml` rebuilds and scans it every Monday. This is
+  build-only on purpose — a weekly ~1.3 GB push per bundle to GHCR would have no
+  consumer today, since nothing pins `sandbox.image` and so nothing pulls;
+  scheduled *publishing* is worth adding to a bundle at the point it gains a real
+  puller (a Kubernetes deployment, or a box setting `FLEET_SANDBOX_IMAGE`), when
+  a stale digest becomes a live exposure. It therefore requests only
+  `contents: read` — no registry login, no `packages: write`, no repo writes.
+
 - **A built-in `bento-slides` skill: the agent can now produce a real,
   downloadable presentation offline (#985).** A [Bento](https://bento.page) deck
   is one self-contained `.bento.html` file that is simultaneously the slides, the
