@@ -17,6 +17,42 @@ prior versions are listed because none have shipped.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Walking away from a long-running chat turn no longer comes back as "the
+  assistant finished without a written reply".** Lock your phone mid-turn and
+  the OS severs the TCP socket while fleet keeps generating; the turn finishes,
+  the transcript lands in Postgres, and the browser hears none of it. That part
+  was always fine. What wasn't: every finalizer in the chat turn loop settled
+  the orphaned assistant message by stamping `state: "done"` in place, turning
+  *"we don't know how this ended"* into a terminal success with no content. The
+  transcript then told the user the assistant had said nothing — while the full
+  answer sat in the database, which is why refreshing the page always fixed it.
+
+  A finalizer may now only claim an outcome it actually observed. Everything
+  else reconciles against Postgres first — programmatically doing what the
+  user's manual refresh did — and adopts the canonical transcript when it
+  already answers the turn being held open. A guard on user-turn coverage keeps
+  that from adopting a *stale* transcript whose last reply belongs to the
+  previous turn. Only a turn the database has no answer for is settled locally,
+  and then honestly: any partial answer is kept, the message is marked failed,
+  and Retry is offered. A slot waiting on a pending approval or memory proposal
+  is left alone — it's blocked on the user, not the network.
+
+  Two supporting fixes. On tab return, a conversation that merely *looks*
+  attached is no longer skipped: a phone that locked leaves a zombie socket
+  that never delivers another byte and never errors, so the old early-out meant
+  a completed task showed a stuck thinking indicator until the multi-minute
+  idle timeout fired. It now probes, and adopts the persisted answer as soon as
+  the turn is provably over. And a turn whose events outran the server's
+  sliding replay window no longer reports "No response returned." on an empty
+  slot — a replay gap means the answer was missed, not absent, so it is
+  reconciled too.
+
+  A turn still *generating* when you return is unchanged: it shows a truthful
+  thinking indicator and resumes as before. Design note and honest scope:
+  [`docs/CHAT-STREAM-RECOVERY.md`](docs/CHAT-STREAM-RECOVERY.md).
+
 ### Added
 
 - **A built-in `bento-slides` skill: the agent can now produce a real,
