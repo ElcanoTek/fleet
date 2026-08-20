@@ -25,7 +25,58 @@ prior versions are listed because none have shipped.
   viewer and a full editor, with the document stored as plain JSON in a single
   `#bento-doc` script block. Ask for a deck in chat and the agent writes one into
   the workspace; the user downloads it and opens it in any browser — no Gamma, no
-  PowerPoint, no PPTX toolchain, and no network call beyond the model provider.
+  PowerPoint, no PPTX toolchain, and no network call at all, either to author the
+  deck or to open it.
+
+  **Decks are offline-only, by construction.** Upstream has two behaviors that
+  would make a delivered deck a network client, and both are disabled. The first
+  is an update check to `bento.page` on every launch: fleet embeds and
+  sha256-pins the shell, so it can only report a version the reader cannot
+  install, while telling a third party they opened the deck. The second matters
+  more — live collaboration. `bornWithCollab = !!doc.collab` is the entire
+  eligibility test, so a deck that merely *carries* a collab block opens a
+  `wss://sync.bento.page` session the moment it is opened, with no click, and
+  retries on failure. Such a file is a live, writable door into whoever opens it,
+  and #1197's `set` deliberately restored those keys.
+
+  `new` now plants two layers ahead of the runtime: a CSP `<meta>` with
+  `connect-src 'none'` — enforced by the browser, so it holds without the app's
+  cooperation, without `localStorage`, and even against markup a model wrote into
+  a slide — and upstream's own offline switch, so the app refuses network at its
+  own chokepoints and never attaches a session instead of retrying into the CSP.
+  The CSP also blocks iframes, plugins, form posts and remote images, making
+  several of the skill's authoring rules browser-enforced rather than remembered.
+  A third layer sits in the document: `set` now **removes** any `collab` block,
+  from the target file or the incoming document, and says so on stderr — dropping
+  keys does not retract an invitation already shared, and only the user can decide
+  to rotate.
+
+  **Hand-off is the deck plus a one-click PDF.** The skill now always tells the
+  user how to get one, naming the button (*Export PDF (print)*), because most
+  people need a PDF to email or print and the deck makes an excellent one — the
+  same renderer they are looking at, so it matches exactly, with selectable text
+  and embedded font subsets (measured: five pages, 46KB, `/ToUnicode` present).
+  The agent cannot produce it — that needs a browser, and the sandbox has none —
+  so the guidance is a click, never a promise to attach a file. There is no
+  PowerPoint export and the skill says so plainly rather than implying a
+  conversion exists; hand-rolling one would mean a second renderer for seven
+  element types, six shape kinds, connectors, gradients, the motion effects,
+  morph, state slides and layouts, and a deck that is almost right is worse than
+  an honest PDF. A test inflates the vendored runtime and checks both claims
+  against the app's own strings, so a re-vendor that renames the button or adds a
+  PPTX path fails CI instead of leaving the instructions quietly wrong.
+
+  Verified by hand in Chromium with the page instrumented and every request
+  intercepted: an unguarded shell carrying a collab block attempts the session
+  socket five times and fetches the update manifest; a fleet deck attempts
+  neither; and with `localStorage` denied so only the CSP is left, the app tries
+  both and the browser refuses both. The vendored template stays byte-identical
+  and sha256-pinned (the guard goes into the produced deck, not the template), and
+  a deck the *user* hands the agent keeps its shell — `validate` reports an
+  unguarded one rather than rewriting it. Honest residue, recorded in
+  `templates/NOTICE.md`: the app mints a collab block into files it saves through
+  its own UI, so such a deck carries inert key material even though both guard
+  layers survive the save and nothing connects.
 
   The pack ships in `internal/clientconfig/builtin_skills/bento-slides/` and
   needed **no Go change**: `//go:embed all:builtin_skills` is recursive, so its

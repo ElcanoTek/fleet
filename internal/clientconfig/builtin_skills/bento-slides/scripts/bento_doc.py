@@ -45,6 +45,77 @@ CLOSE_TAG = b"</script>"
 TITLE_OPEN = b"<title>"
 TITLE_CLOSE = b"</title>"
 
+# ── the offline-deck guard ───────────────────────────────────────────────────
+#
+# fleet ships Bento as a strictly OFFLINE viewer/editor. A deck is a document the
+# user opens on their own machine; it is not a client for anything. Two upstream
+# behaviors would make it one, and `new` plants the guard below to stop both:
+#
+#   * A launch update check (`fetch` to bento.page). fleet embeds and sha256-pins
+#     the shell, so it can only report a version the reader cannot install, while
+#     telling a third party that they opened the deck.
+#   * Live collaboration. `bornWithCollab = !!doc.collab` is enough to make a deck
+#     share-eligible, so a deck that merely CARRIES a collab object opens a
+#     `wss://sync.bento.page` session on load — no click, and it retries. Hand
+#     someone such a file and opening it streams their edits to whoever holds the
+#     room key.
+#
+# The guard is two independent layers, because one of them is only as good as the
+# browser's localStorage:
+#
+#   1. A CSP meta tag. `connect-src 'none'` is enforced by the BROWSER, so no
+#      script in the page — upstream's, ours, or anything a model wrote into a
+#      slide — can open a socket or a fetch. The other directives turn several of
+#      SKILL.md's "never author this" rules into rules the browser keeps:
+#      no plugins, no iframes, no form posts, no <base> hijack, no remote images
+#      (a remote image is a beacon that reports who opened the deck and when).
+#      `script-src 'unsafe-inline'` is unavoidable: the app IS inline script.
+#   2. Upstream's own offline switch. With `bento-offline=on` the app refuses
+#      network at its own chokepoints (`fi` for fetch, `Ry` for WebSocket), never
+#      attaches a collab transport, and strips remote asset URLs at render. That
+#      makes it fail COHERENTLY — its own error type, its own UI — instead of
+#      retrying into a CSP wall.
+#
+# Layer 3 is not in this file at all: `set` refuses to write a `collab` block, so
+# a deck fleet produces has nothing for a session to attach to in the first place.
+GUARD_ID = "fleet-offline-deck"
+GUARD = b"""<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' blob:; style-src 'unsafe-inline'; img-src data: blob:; media-src data: blob:; font-src data:; connect-src 'none'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'">
+    <script id="fleet-offline-deck">
+/* Added by fleet's bento-slides skill. NOT part of upstream Bento.
+   fleet ships Bento as an offline viewer/editor: a deck is a document, not a
+   network client. The CSP above is the boundary the browser enforces; this turns
+   on upstream's own offline mode so the app refuses network at its own
+   chokepoints and never joins a live session, rather than retrying into the CSP.
+   To restore upstream behavior, delete this element AND the meta tag above it. */
+(function () {
+  try {
+    localStorage.setItem("bento-offline", "on");
+    localStorage.setItem("bento-auto-check", "off");
+  } catch (e) {
+    /* No localStorage (some browsers refuse it for file:// URLs). The CSP above
+       still holds - it does not depend on storage, or on this script running. */
+  }
+})();
+</script>
+    """
+
+
+def _inject_guard(raw):
+    """Plant the guard ahead of the document block, exactly once.
+
+    The guard goes in the prefix, which every later `set` copies through
+    unchanged, so it survives editing without ever being added twice.
+    """
+    if GUARD_ID.encode() in raw:
+        return raw
+    at = raw.index(OPEN_TAG)
+    return raw[:at] + GUARD + raw[at:]
+
+
+def has_guard(raw):
+    return GUARD_ID.encode() in raw
+
+
 # The vendored app shell, resolved relative to this script so it works from any
 # working directory. The skills tree is bind-mounted read-only, so this is a
 # read-only source: it is copied, never edited.
@@ -124,6 +195,22 @@ def _split(raw):
     return raw[:start], raw[start:end], raw[end:]
 
 
+def _inject_guard(raw):
+    """Plant the guard ahead of the document block, exactly once.
+
+    The guard goes in the prefix, which every later `set` copies through
+    unchanged, so it survives editing without ever being added twice.
+    """
+    if GUARD_ID.encode() in raw:
+        return raw
+    at = raw.index(OPEN_TAG)
+    return raw[:at] + GUARD + raw[at:]
+
+
+def has_guard(raw):
+    return GUARD_ID.encode() in raw
+
+
 def _decode_block(block):
     """Parse a document block's bytes into a dict.
 
@@ -165,6 +252,79 @@ def _encode_block(doc):
         # future edit to this function cannot silently corrupt a file.
         raise DeckError("internal error: escaped payload still contains </script>")
     return encoded
+
+
+
+# ── text fit (an estimate, because we have no font metrics) ──────────────────
+#
+# The app measures text for real and reports `text-overflow` from
+# `window.bento.validate()`. An agent composing a deck in a chat turn has no
+# browser, so that check is unavailable exactly when it would be most useful:
+# a heading that wraps to one more line than expected collides with whatever is
+# under it, and nothing in the JSON shows it.
+#
+# This is a deliberately rough greedy wrap. It cannot be exact without the
+# font, so it is an ADVISORY and it errs toward silence: the advance ratio is
+# calibrated against real Chromium measurements of the bundled system stack, and
+# a warning needs to clear the box by a margin before it prints. The app's own
+# validate() stays authoritative.
+_AVG_ADVANCE = 0.55  # mean glyph advance as a fraction of font size, sans-serif
+_FIT_SLACK = 1.05    # only complain when the estimate clears the box by 5%
+
+_ENTITIES = (
+    ("&mdash;", "-"), ("&ndash;", "-"), ("&nbsp;", " "), ("&amp;", "&"),
+    ("&lt;", "<"), ("&gt;", ">"), ("&quot;", '"'), ("&#39;", "'"),
+)
+
+
+def _plain_lines(html):
+    """Split element html into hard lines, with tags and entities removed."""
+    text = html.replace("<br/>", "\n").replace("<br />", "\n").replace("<br>", "\n")
+    out = []
+    depth = 0
+    for ch in text:
+        if ch == "<":
+            depth += 1
+        elif ch == ">":
+            depth = max(0, depth - 1)
+        elif depth == 0:
+            out.append(ch)
+    text = "".join(out)
+    for entity, plain in _ENTITIES:
+        text = text.replace(entity, plain)
+    return text.split("\n")
+
+
+def estimate_text_height(el):
+    """Estimated rendered height in px, or None if the element is not sizable."""
+    size = el.get("fontSize")
+    width = el.get("w")
+    if not isinstance(size, (int, float)) or not isinstance(width, (int, float)):
+        return None
+    if size <= 0 or width <= 0:
+        return None
+    line_height = el.get("lineHeight")
+    if not isinstance(line_height, (int, float)) or line_height <= 0:
+        line_height = 1.2
+    per_line = max(1, int(width / (size * _AVG_ADVANCE)))
+
+    lines = 0
+    for hard in _plain_lines(str(el.get("html", ""))):
+        words = hard.split()
+        if not words:
+            lines += 1
+            continue
+        used = 0
+        count = 1
+        for word in words:
+            need = len(word) if used == 0 else len(word) + 1
+            if used + need <= per_line:
+                used += need
+            else:
+                count += 1
+                used = len(word)
+        lines += count
+    return lines * size * line_height
 
 
 # ── validation ───────────────────────────────────────────────────────────────
@@ -361,6 +521,10 @@ def cmd_new(args):
             "the copy or the bundled template is corrupt"
         )
 
+    # Plant the no-update-check guard before the document is spliced in, so the
+    # deck never has a state in which it would call home.
+    raw = _inject_guard(raw)
+
     title = args.title or os.path.basename(path).split(".")[0].replace("_", " ")
     doc = {
         "format": "bento/slides",
@@ -403,6 +567,7 @@ def cmd_new(args):
     validate_doc(doc)
     _splice(path, raw, doc)
     print("created %s — one title slide, ready to author" % path)
+    print("offline-only deck: no update check, no live collaboration, no network")
     print("next: bento_doc.py get %s -o doc.json" % path)
     print("download link (use this EXACT text, do not rebuild it): %s" % download_link(path))
     return 0
@@ -412,21 +577,28 @@ def cmd_get(args):
     doc = _decode_block(_split(_read(args.deck))[1])
 
     secrets = collab_secrets(doc)
+    had_collab = "collab" in doc
     if "collab" in doc:
         # Strip collab whatever it holds, so the shape of what reaches the
         # caller does not depend on whether keys happened to be present. `set`
         # puts the original back, so nothing is lost by redacting here.
         del doc["collab"]
-    if secrets:
+    # Warn on ANY collab block, not just one holding private keys: room + key is
+    # already a joinable session, and a reader-role or v1 block has no priv keys
+    # at all. Keying the warning on secrets alone would stay silent on a deck
+    # that still joins a room the moment it is opened.
+    if had_collab:
         sys.stderr.write(
             "WARNING: this deck carries live-collaboration credentials "
-            "(collab.%s). They have been withheld from this output and are "
-            "unchanged in the file.\n"
+            "(%s). Any private keys are withheld from this output and are "
+            "unchanged in this file for now.\n"
             "This deck is a live-session invitation: anyone who receives the "
-            "file can join and write to it. Tell the user before you go "
-            "further — only they can decide. Removing the keys later does not "
-            "retract them; the remedy is Share -> Rotate keys.\n"
-            % ", ".join(secrets)
+            "file can join and write to it, and opening it joins that session "
+            "with no click. `set` will REMOVE the session block, because fleet "
+            "ships Bento as an offline editor. Tell the user before you go "
+            "further - removing the keys does not retract an invitation already "
+            "shared; the remedy for that is Share -> Rotate keys.\n"
+            % (", ".join("collab." + k for k in secrets) if secrets else "collab.room + collab.key")
         )
 
     payload = json.dumps(doc, ensure_ascii=False, indent=2) + "\n"
@@ -462,21 +634,44 @@ def cmd_set(args):
         raise DeckError("%s must contain a JSON object" % args.doc)
     validate_doc(incoming)
 
-    # Carry the target's identity and live-session state across the edit:
-    # docId must never be regenerated, and collab must survive `get`'s
-    # redaction. An incoming doc that explicitly supplies either one wins.
-    # An empty block (a bare app shell) has nothing to carry; a non-empty one
-    # that will not parse is a real problem and is reported, not ignored.
+    # Carry the target's identity across the edit: docId must never be
+    # regenerated. An incoming doc that supplies its own wins. An empty block (a
+    # bare app shell) has nothing to carry; a non-empty one that will not parse
+    # is a real problem and is reported, not ignored.
     current = {} if not block.strip() else _decode_block(block)
-    for key in ("docId", "collab"):
-        if key not in incoming and key in current:
-            incoming[key] = current[key]
+    if "docId" not in incoming and "docId" in current:
+        incoming["docId"] = current["docId"]
+
+    # collab is deliberately NOT carried, and is dropped if the incoming doc
+    # supplies one. fleet ships Bento as an offline editor, and a collab block is
+    # not inert data: `bornWithCollab = !!doc.collab` makes a deck share-eligible,
+    # so merely carrying one opens a live session on load, with no click, and
+    # retries. A deck written here has nothing for a session to attach to.
+    #
+    # This is reported rather than done silently, because it is the user's
+    # session and only they can weigh it — and because removing the keys does not
+    # retract an invitation already handed out (the remedy is Share -> Rotate
+    # keys in the app).
+    dropped = sorted(set(collab_secrets(current)) | set(collab_secrets(incoming)))
+    had_collab = "collab" in current or "collab" in incoming
+    incoming.pop("collab", None)
 
     _splice(args.deck, raw, incoming)
     print(
         "updated %s — %d slide(s), %d bytes of document"
         % (args.deck, len(incoming["slides"]), len(_encode_block(incoming)))
     )
+    if had_collab:
+        sys.stderr.write(
+            "NOTE: removed this deck's live-collaboration block%s. fleet ships "
+            "Bento as an offline editor, and a deck that merely carries one "
+            "joins a live session the moment it is opened. The deck now edits "
+            "locally only.\n"
+            "TELL THE USER: this does not retract an invitation already shared "
+            "- anyone holding an earlier copy can still join that room. The "
+            "remedy for that is Share -> Rotate keys in the app.\n"
+            % (" (including live-session keys: %s)" % ", ".join(dropped) if dropped else "")
+        )
     print("download link (use this EXACT text, do not rebuild it): %s" % download_link(args.deck))
     return 0
 
@@ -515,14 +710,45 @@ def cmd_validate(args):
         if not slide["notes"].strip():
             print("  note: slide %d has no speaker notes" % (i + 1))
         for j, el in enumerate(slide["elements"]):
+            if el.get("type") == "text":
+                need = estimate_text_height(el)
+                box = el.get("h")
+                if (
+                    need is not None
+                    and isinstance(box, (int, float))
+                    and need > box * _FIT_SLACK
+                ):
+                    print(
+                        "  note: slide %d element %r may overflow its box - "
+                        "about %dpx of text in %dpx. This is an estimate (no "
+                        "font metrics here); give it room, or check the exact "
+                        "number with window.bento.validate() in the browser."
+                        % (i + 1, el.get("id"), round(need), box)
+                    )
             right = el.get("x", 0) + el.get("w", 0)
             if isinstance(right, (int, float)) and right > doc["size"]["width"] - 96:
                 print(
                     "  note: slide %d element %d extends past the 96px right "
                     "margin (x+w=%s)" % (i + 1, j + 1, right)
                 )
-    if collab_secrets(doc):
-        print("  note: this deck carries live-collaboration credentials")
+    if "collab" in doc:
+        secrets = collab_secrets(doc)
+        print(
+            "  WARNING: this deck carries a live-collaboration block%s. Opening "
+            "it joins that session with no click. Re-write it with `set` to "
+            "remove the block and make the deck offline-only."
+            % (" including live-session keys (%s)" % ", ".join(secrets) if secrets else "")
+        )
+    if kind == "deck" and not has_guard(raw):
+        # A deck the user brought us, or one made before the guard existed. We
+        # do not rewrite someone else's shell, so say so rather than fix it.
+        print(
+            "  note: this shell has no fleet offline guard, so opening it can "
+            "reach the network (an update check, and a live session if the "
+            "document carries one). Decks created by `new` cannot. We do not "
+            "rewrite someone else's shell - tell the user, and offer to move "
+            "the document into a fresh `new` deck if they want it locked down."
+        )
     if kind == "deck":
         print(
             "download link (use this EXACT text, do not rebuild it): %s"
