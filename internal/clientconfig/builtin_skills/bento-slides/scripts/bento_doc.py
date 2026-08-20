@@ -126,10 +126,16 @@ TEMPLATE = os.path.join(
     "Bento_Slides.bento.html",
 )
 
-# collab keys that are secrets rather than metadata. Their presence means the
-# file is a live-session invitation, so `get` refuses to put them in front of a
-# model and tells the caller to raise it with the user instead.
-COLLAB_SECRET_KEYS = ("ownerPriv", "writerPriv", "invite")
+# Names of the collab fields whose VALUES are credentials (private keys and an
+# invite token) rather than metadata. Their presence means the file is a
+# live-session invitation, so `get` refuses to put them in front of a model and
+# tells the caller to raise it with the user instead.
+#
+# This tuple, and everything derived from it below, holds field NAMES only. No
+# code path in this script reads a value out of collab -- not to print, not to
+# log, not to return. Keep it that way: the names are what an operator needs to
+# act on, and a value here would be a cleartext credential leak.
+COLLAB_CREDENTIAL_FIELDS = ("ownerPriv", "writerPriv", "invite")
 
 # Slide-space defaults from the format spec: a 16:9 canvas in pixels.
 DEFAULT_SIZE = {"width": 1280, "height": 720}
@@ -454,12 +460,27 @@ def validate_doc(doc):
     return doc
 
 
-def collab_secrets(doc):
-    """Return the names of live-session secret keys present in doc.collab."""
+def collab_field_label(names):
+    """Render collab field names for an operator warning.
+
+    Takes the output of collab_credential_fields() -- names -- and prefixes each
+    with "collab." so the reader knows where to look in the file. Nothing here
+    touches the values those names point at.
+    """
+    return ", ".join("collab." + name for name in names)
+
+
+def collab_credential_fields(doc):
+    """Return the NAMES of the credential-bearing collab fields present in doc.
+
+    Names only, and only ones drawn from the COLLAB_CREDENTIAL_FIELDS constant:
+    the value behind each is a private key or an invite token, and every caller
+    of this prints its result for the operator to read.
+    """
     collab = doc.get("collab")
     if not isinstance(collab, dict):
         return []
-    return [k for k in COLLAB_SECRET_KEYS if collab.get(k)]
+    return [name for name in COLLAB_CREDENTIAL_FIELDS if collab.get(name)]
 
 
 # ── file I/O ─────────────────────────────────────────────────────────────────
@@ -616,7 +637,7 @@ def cmd_new(args):
 def cmd_get(args):
     doc = _decode_block(_split(_read(args.deck))[1])
 
-    secrets = collab_secrets(doc)
+    credential_fields = collab_credential_fields(doc)
     had_collab = "collab" in doc
     if "collab" in doc:
         # Strip collab whatever it holds, so the shape of what reaches the
@@ -625,8 +646,8 @@ def cmd_get(args):
         del doc["collab"]
     # Warn on ANY collab block, not just one holding private keys: room + key is
     # already a joinable session, and a reader-role or v1 block has no priv keys
-    # at all. Keying the warning on secrets alone would stay silent on a deck
-    # that still joins a room the moment it is opened.
+    # at all. Keying the warning on the credential fields alone would stay
+    # silent on a deck that still joins a room the moment it is opened.
     if had_collab:
         sys.stderr.write(
             "WARNING: this deck carries live-collaboration credentials "
@@ -638,7 +659,11 @@ def cmd_get(args):
             "ships Bento as an offline editor. Tell the user before you go "
             "further - removing the keys does not retract an invitation already "
             "shared; the remedy for that is Share -> Rotate keys.\n"
-            % (", ".join("collab." + k for k in secrets) if secrets else "collab.room + collab.key")
+            % (
+                collab_field_label(credential_fields)
+                if credential_fields
+                else "collab.room + collab.key"
+            )
         )
 
     payload = json.dumps(doc, ensure_ascii=False, indent=2) + "\n"
@@ -692,7 +717,9 @@ def cmd_set(args):
     # session and only they can weigh it — and because removing the keys does not
     # retract an invitation already handed out (the remedy is Share -> Rotate
     # keys in the app).
-    dropped = sorted(set(collab_secrets(current)) | set(collab_secrets(incoming)))
+    dropped_fields = sorted(
+        set(collab_credential_fields(current)) | set(collab_credential_fields(incoming))
+    )
     had_collab = "collab" in current or "collab" in incoming
     incoming.pop("collab", None)
 
@@ -710,7 +737,11 @@ def cmd_set(args):
             "TELL THE USER: this does not retract an invitation already shared "
             "- anyone holding an earlier copy can still join that room. The "
             "remedy for that is Share -> Rotate keys in the app.\n"
-            % (" (including live-session keys: %s)" % ", ".join(dropped) if dropped else "")
+            % (
+                " (including credential fields: %s)" % collab_field_label(dropped_fields)
+                if dropped_fields
+                else ""
+            )
         )
     print("download link (use this EXACT text, do not rebuild it): %s" % download_link(args.deck))
     return 0
@@ -772,12 +803,16 @@ def cmd_validate(args):
                     "margin (x+w=%s)" % (i + 1, j + 1, right)
                 )
     if "collab" in doc:
-        secrets = collab_secrets(doc)
+        credential_fields = collab_credential_fields(doc)
         print(
             "  WARNING: this deck carries a live-collaboration block%s. Opening "
             "it joins that session with no click. Re-write it with `set` to "
             "remove the block and make the deck offline-only."
-            % (" including live-session keys (%s)" % ", ".join(secrets) if secrets else "")
+            % (
+                " including credential fields (%s)" % collab_field_label(credential_fields)
+                if credential_fields
+                else ""
+            )
         )
     if kind == "deck" and not has_guard(raw):
         # A deck the user brought us, or one made before the guard existed. We
