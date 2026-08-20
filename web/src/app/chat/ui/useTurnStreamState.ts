@@ -16,6 +16,10 @@ import { useRef, useState } from "react";
 // before, unchanged, so behavior is preserved.
 import type { RefObject } from "react";
 
+// One conversation's SSE liveness pulse. `at` is a wall-clock ms stamp of the
+// last chunk read off the socket; `seq` counts those reads.
+export type StreamPulse = { at: number; seq: number };
+
 export type TurnStreamState = {
   // streamingConvs tracks every conversation slot that currently has a turn
   // in flight (sidebar "working" dots read it). Mirrored into a ref so
@@ -40,6 +44,23 @@ export type TurnStreamState = {
   currentTurnIdByConvRef: RefObject<Record<string, string>>;
   // Guard against concurrent reattach attempts for the same conv.
   reattachInFlightRef: RefObject<Set<string>>;
+  // Per-conv liveness pulse for the attached SSE socket: `at` is the wall
+  // clock of the last byte received (any byte — a heartbeat comment counts),
+  // `seq` a monotonic counter of those reads. Together they are how a DEAD
+  // socket is told apart from a QUIET one: silence gates the liveness probe,
+  // and the counter proves whether the socket produced anything while the
+  // probe was in flight. See checkStreamLiveness.
+  streamPulseRef: RefObject<Record<string, StreamPulse>>;
+  // Controllers this client aborted ITSELF in order to replace a dead socket
+  // (checkStreamLiveness), as opposed to the user pressing Stop. Membership
+  // means "a newer stream owns this conversation now": the aborted stream's
+  // teardown must not mark the turn cancelled, settle its slot, or release
+  // the attach/streaming handles the replacement just took. A WeakSet keyed
+  // on the controller object needs no rename migration and cannot leak.
+  supersededStreamsRef: RefObject<WeakSet<AbortController>>;
+  // Guard against concurrent liveness checks for the same conv (the tab-return
+  // listener and the watchdog interval can fire together).
+  livenessInFlightRef: RefObject<Set<string>>;
   // Promote a pending key onto the real conv id across the streaming set,
   // the attached set, and the abort-controller map in one synchronous step.
   // Mirrors promoteComposerKey; the conversation-event handler calls both
@@ -107,6 +128,11 @@ export function useTurnStreamState(currentConvKey: string): TurnStreamState {
   // visibilitychange events (unlock + focus) would open two /stream sockets
   // and render every event twice.
   const reattachInFlightRef = useRef<Set<string>>(new Set());
+  // Liveness bookkeeping for the attached socket (see the type above). Updated
+  // by the stream pump on every chunk; read by checkStreamLiveness.
+  const streamPulseRef = useRef<Record<string, StreamPulse>>({});
+  const supersededStreamsRef = useRef<WeakSet<AbortController>>(new WeakSet());
+  const livenessInFlightRef = useRef<Set<string>>(new Set());
 
   // promoteStreamKey migrates every pending-keyed handle onto the real conv
   // id once the "conversation" SSE event lands, so subsequent reads (Stop
@@ -124,6 +150,11 @@ export function useTurnStreamState(currentConvKey: string): TurnStreamState {
       delete abortControllersRef.current[oldKey];
       abortControllersRef.current[newKey] = pendingController;
     }
+    const pendingPulse = streamPulseRef.current[oldKey];
+    if (pendingPulse) {
+      delete streamPulseRef.current[oldKey];
+      streamPulseRef.current[newKey] = pendingPulse;
+    }
     renameStreamingKey(oldKey, newKey);
   };
 
@@ -139,6 +170,9 @@ export function useTurnStreamState(currentConvKey: string): TurnStreamState {
     lastEventIdByConvRef,
     currentTurnIdByConvRef,
     reattachInFlightRef,
+    streamPulseRef,
+    supersededStreamsRef,
+    livenessInFlightRef,
     promoteStreamKey,
   };
 }
