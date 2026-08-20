@@ -24,6 +24,7 @@ Usage:
     python3 bento_doc.py get      DECK.bento.html [-o DOC.json]
     python3 bento_doc.py set      DECK.bento.html DOC.json
     python3 bento_doc.py validate DECK.bento.html | DOC.json
+    python3 bento_doc.py pdf      DECK.bento.html [-o OUT.pdf]
 """
 
 import argparse
@@ -211,6 +212,39 @@ def check_deck_path(path):
             "%r should end in '.bento.html' so it is recognizable as a Bento "
             "deck." % parts[-1]
         )
+    return parts
+
+
+def check_pdf_path(path):
+    """Validate a path the `pdf` command is about to write.
+
+    Same rules as a deck path, and for the same reason: the PDF is delivered as
+    a workspace download, so a space or a '#' anywhere in it breaks the markdown
+    link even though the file itself is fine. Only the extension differs.
+    """
+    if os.path.isabs(path):
+        raise DeckError(
+            "%s is an absolute path; the PDF must be written relative to the "
+            "workspace, or the user will not be able to download it." % path
+        )
+    parts = _relative_parts(path)
+    if not parts:
+        raise DeckError("no output path given")
+    if ".." in parts:
+        raise DeckError(
+            "%r walks outside the workspace with '..'. Write the PDF into the "
+            "workspace so the user can download and attach it." % path
+        )
+    for seg in parts:
+        bad = sorted({c for c in seg if c not in SAFE_NAME})
+        if bad:
+            raise DeckError(
+                "%r contains %s, which break the markdown download link. Use "
+                "only letters, digits, '.', '_' and '-'."
+                % (seg, " ".join(repr(c) for c in bad))
+            )
+    if not parts[-1].endswith(".pdf"):
+        raise DeckError("%r should end in '.pdf'" % parts[-1])
     return parts
 
 
@@ -832,6 +866,97 @@ def cmd_validate(args):
     return 0
 
 
+def _pdf_output_path(deck, requested):
+    """Where the PDF goes: alongside the deck unless the caller says otherwise."""
+    if requested:
+        return requested
+    parts = _relative_parts(deck)
+    name = parts[-1] if parts else deck
+    for suffix in (".bento.html", ".html"):
+        if name.endswith(suffix):
+            name = name[: -len(suffix)]
+            break
+    return "/".join(parts[:-1] + [name + ".pdf"])
+
+
+def cmd_pdf(args):
+    """Render a deck's slides to a PDF the agent can attach to something.
+
+    The deck is the deliverable a reader opens and edits; a PDF is what gets
+    mailed, printed, or filed. Producing it here — from the same document JSON,
+    with no browser and nothing added to the sandbox — is what lets one turn end
+    with "here is the deck AND the PDF" instead of asking the user to export it
+    themselves before they can send it on.
+
+    The deck itself is never touched: this reads the document block and writes a
+    separate file.
+    """
+    # bento_pdf.py lives beside this file. Imported here rather than at module
+    # scope so every other subcommand keeps working if a skills tree was copied
+    # without it.
+    try:
+        import bento_pdf
+    except ImportError as exc:  # pragma: no cover - a broken skills tree
+        raise DeckError(
+            "the PDF renderer (bento_pdf.py) is missing from the skill's "
+            "scripts/ directory: %s" % exc
+        ) from exc
+
+    raw = _read(args.deck)
+    if OPEN_TAG in raw:
+        doc = _decode_block(_split(raw)[1])
+    else:
+        try:
+            doc = json.loads(raw.decode("utf-8"))
+        except ValueError as exc:
+            raise DeckError(
+                "%s is neither a deck nor valid JSON: %s" % (args.deck, exc)
+            ) from exc
+    if not isinstance(doc, dict):
+        raise DeckError("%s does not contain a Bento document" % args.deck)
+    validate_doc(doc)
+
+    out = _pdf_output_path(args.deck, args.output)
+    check_pdf_path(out)
+    try:
+        data, warnings = bento_pdf.render_document(doc)
+    except bento_pdf.PdfError as exc:
+        raise DeckError("cannot render %s: %s" % (args.deck, exc)) from exc
+    try:
+        _write_atomic(out, data)
+    except OSError as exc:
+        # Most often a subdirectory that does not exist yet. Say so plainly —
+        # a traceback here reads like the renderer broke.
+        raise DeckError(
+            "cannot write %s: %s. Create the directory first, or drop the "
+            "PDF in the workspace root." % (out, exc.strerror or exc)
+        ) from exc
+
+    pages = len(bento_pdf.visible_slides(doc))
+    skipped = len(doc["slides"]) - pages
+    print(
+        "%s: %d page(s), %.0f KB%s"
+        % (
+            out,
+            pages,
+            len(data) / 1024.0,
+            "" if not skipped
+            else " (%d hidden/state slide(s) left out, as in the app's own "
+                 "export)" % skipped,
+        )
+    )
+    for warning in warnings:
+        # Fidelity notes, not failures. They exist so the agent can tell the
+        # user what this export could not reproduce instead of quietly handing
+        # over a page that differs from the deck.
+        print("  note: %s" % warning)
+    print(
+        "download link (use this EXACT text, do not rebuild it): %s"
+        % download_link(out)
+    )
+    return 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(
         prog="bento_doc.py", description="Create and edit single-file Bento decks."
@@ -856,6 +981,11 @@ def main(argv=None):
     p_val = sub.add_parser("validate", help="check a deck or document for format errors")
     p_val.add_argument("path")
     p_val.set_defaults(func=cmd_validate)
+
+    p_pdf = sub.add_parser("pdf", help="render a deck's slides to a PDF you can attach")
+    p_pdf.add_argument("deck")
+    p_pdf.add_argument("-o", "--output", help="PDF path (default: the deck's name + .pdf)")
+    p_pdf.set_defaults(func=cmd_pdf)
 
     args = parser.parse_args(argv)
     try:

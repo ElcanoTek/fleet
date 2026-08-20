@@ -115,8 +115,9 @@ warrant its own ADR.
 
 Fleet embeds six generally-useful skills in the binary
 (`internal/clientconfig/builtin_skills/`): `data-profiler` (stdlib-only
-profiler script), `bento-slides` (vendored single-file Bento deck app + a
-document splice helper), `web-research-brief`, `code-review-checklist`,
+profiler script), `bento-slides` (vendored single-file Bento deck app, a
+document splice helper, and a browserless PDF export —
+[BENTO-PDF-EXPORT.md](BENTO-PDF-EXPORT.md)), `web-research-brief`, `code-review-checklist`,
 `release-notes`, `executive-report`. Every bundle inherits them by default —
 the skills analogue of the built-in MCP directory.
 
