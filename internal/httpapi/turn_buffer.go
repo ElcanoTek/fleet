@@ -636,12 +636,15 @@ func writeHeartbeat(w http.ResponseWriter, flusher http.Flusher) error {
 }
 
 // writeCapabilitiesFrame emits the synthetic fleet.capabilities event (#194)
-// advertising the server's supported SSE capability set. Like writeReconnectFrame
-// it omits the id line, so it never advances the client's Last-Event-ID (real
-// event ids start at 1) and is not persisted to turn_events.
+// advertising the server's supported SSE capability set and its keepalive
+// cadence (`heartbeat_ms`, 0 = disabled — see heartbeatIntervalMs for why a
+// client needs it). Like writeReconnectFrame it omits the id line, so it never
+// advances the client's Last-Event-ID (real event ids start at 1) and is not
+// persisted to turn_events.
 func writeCapabilitiesFrame(w http.ResponseWriter, flusher http.Flusher) error {
-	if _, err := fmt.Fprintf(w, "event: %s\ndata: {\"type\":%q,\"supported\":%s}\n\n",
-		capabilitiesEventName, capabilitiesEventName, supportedCapabilitiesJSON()); err != nil {
+	if _, err := fmt.Fprintf(w, "event: %s\ndata: {\"type\":%q,\"supported\":%s,\"heartbeat_ms\":%d}\n\n",
+		capabilitiesEventName, capabilitiesEventName, supportedCapabilitiesJSON(),
+		heartbeatIntervalMs()); err != nil {
 		return err
 	}
 	flusher.Flush()

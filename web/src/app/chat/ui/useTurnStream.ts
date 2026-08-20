@@ -85,9 +85,31 @@ const streamIdleTimeoutMs = 300000;
 // while our socket produces nothing.
 
 // How long an attached stream must have produced no bytes before the watchdog
-// spends an /inflight probe on it. Comfortably above the default heartbeat so
-// a healthy stream is never probed. Explicit tab returns bypass this.
-const streamSilenceProbeMs = 20000;
+// spends an /inflight probe on it. Derived from the cadence the server
+// advertises (X-Fleet-Heartbeat-Interval-Ms) so it tracks the deployment
+// rather than a hard-coded guess: an attached stream writes at least one byte
+// per interval, so a stream still inside one interval is demonstrably alive
+// and not worth a request. Explicit tab returns bypass this.
+const streamSilenceProbeMs = (heartbeatMs: number): number =>
+  heartbeatMs > 0 ? Math.max(2 * heartbeatMs, 5000) : 20000;
+
+// How long a stream may be silent before silence ALONE is proof it is dead.
+//
+// This is the difference between a socket that stops mid-answer and one that
+// stops while the agent is thinking. Event-based evidence — "the server has
+// emitted past what we applied" — never materializes during a long tool call,
+// because the server has nothing to emit. The keepalive does: every interval,
+// on an attached stream, unconditionally. Miss several in a row while the tab
+// is awake and the connection is gone, whatever the turn is doing.
+//
+// Four intervals (a full minute at the 15s default) is deliberately generous:
+// three consecutive keepalives can be lost to a GC pause or a slow paint
+// without the socket being dead, and being late costs the user a few seconds
+// while being early costs a needless reconnect. Returns Infinity when the
+// server reports keepalives disabled — with no promised cadence, silence
+// proves nothing and only event-based evidence counts.
+const streamDeadSilenceMs = (heartbeatMs: number): number =>
+  heartbeatMs > 0 ? Math.max(4 * heartbeatMs, 15000) : Number.POSITIVE_INFINITY;
 
 // After the probe says "the turn is alive and has emitted past you", how long
 // to let the socket prove itself before declaring it dead. A socket that was
@@ -232,6 +254,7 @@ export interface TurnStreamDeps {
   currentTurnIdByConvRef: TurnStreamState["currentTurnIdByConvRef"];
   reattachInFlightRef: TurnStreamState["reattachInFlightRef"];
   streamPulseRef: TurnStreamState["streamPulseRef"];
+  serverHeartbeatMsRef: TurnStreamState["serverHeartbeatMsRef"];
   supersededStreamsRef: TurnStreamState["supersededStreamsRef"];
   livenessInFlightRef: TurnStreamState["livenessInFlightRef"];
   promoteStreamKey: TurnStreamState["promoteStreamKey"];
@@ -252,6 +275,9 @@ export interface UseTurnStream {
     convId: string,
     opts?: { force?: boolean },
   ) => Promise<"idle" | "healthy" | "recovered" | "reconnected">;
+  // checkStreamLiveness across every attached conversation, not just the
+  // active one. No-op while the tab is hidden.
+  sweepStreamLiveness: (opts?: { force?: boolean }) => Promise<void>;
   submitPrompt: (submittedPrompt: string) => Promise<void>;
   regenerateLastAssistant: () => Promise<void>;
   resendUserMessage: (userMessageId: number, editedContent: string) => Promise<void>;
@@ -313,6 +339,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     currentTurnIdByConvRef,
     reattachInFlightRef,
     streamPulseRef,
+    serverHeartbeatMsRef,
     supersededStreamsRef,
     livenessInFlightRef,
     promoteStreamKey,
@@ -1012,6 +1039,18 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     const decoder = new TextDecoder();
     let buffer = "";
 
+    // The cadence this stream promises. An attached stream writes at least one
+    // byte per interval (a real event resets the timer, otherwise a `:
+    // keepalive` comment fires), which is what lets checkStreamLiveness treat
+    // prolonged silence as proof of death rather than merely as grounds for
+    // suspicion. Absent or 0 → keepalives are off and silence proves nothing.
+    const advertisedHeartbeat = Number(
+      response.headers.get("X-Fleet-Heartbeat-Interval-Ms") ?? "",
+    );
+    serverHeartbeatMsRef.current = Number.isFinite(advertisedHeartbeat)
+      ? Math.max(0, advertisedHeartbeat)
+      : 0;
+
     // Liveness pulse. Every byte off the socket counts — including a heartbeat
     // comment, which carries no event but does prove the connection is alive.
     // Seeded at attach so silence is measured from when this stream started,
@@ -1404,6 +1443,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     if (!last || last.role !== "assistant") return "idle";
     if (last.state !== "thinking" && last.state !== "streaming") return "idle";
 
+    const heartbeatMs = serverHeartbeatMsRef.current;
     const pulseBefore = streamPulseRef.current[convId];
     const silentMs = nowMs() - (pulseBefore?.at ?? 0);
     // Bytes arrived recently — the socket is demonstrably alive, so there is
@@ -1412,7 +1452,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // produced bytes within the grace window it would otherwise sit through:
     // on an actively streaming conversation, `focus` fires often and every
     // one of those probes could only ever conclude "healthy".
-    if (silentMs < (opts.force ? streamLivenessGraceMs : streamSilenceProbeMs)) {
+    if (silentMs < (opts.force ? streamLivenessGraceMs : streamSilenceProbeMs(heartbeatMs))) {
       return "healthy";
     }
 
@@ -1457,14 +1497,26 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         return "recovered";
       }
 
-      // Still generating. Has the server moved past us? If not, nothing has
-      // been missed and there is nothing to prove — a genuinely stalled turn
-      // (a long tool call) looks exactly like this and must be left alone.
+      // Still generating. Two independent kinds of evidence that our socket is
+      // not carrying it:
+      //
+      //   - the server has emitted PAST what we applied, so events exist that
+      //     we are not receiving; or
+      //   - the stream has been silent for longer than the keepalive cadence
+      //     it promised us. This is the one that covers a turn sitting in a
+      //     long tool call: the server emits nothing to fall behind on, so the
+      //     first test can never fire, but the keepalive still should have.
+      //
+      // Neither alone is conclusive — hence the grace window below — but
+      // without the second, a socket that dies during a quiet stretch is
+      // invisible until the turn resumes emitting.
       const applied = lastEventIdByConvRef.current[convId] ?? 0;
-      if (serverLastEventId <= applied) return "healthy";
+      const serverAhead = serverLastEventId > applied;
+      const missedKeepalives = silentMs >= streamDeadSilenceMs(heartbeatMs);
+      if (!serverAhead && !missedKeepalives) return "healthy";
 
-      // The server is ahead of us. Give the socket its chance: a frozen-but-
-      // alive connection flushes as soon as the page thaws.
+      // Give the socket its chance: a frozen-but-alive connection flushes as
+      // soon as the page thaws.
       await delay(streamLivenessGraceMs);
       const pulseAfter = streamPulseRef.current[convId];
       if ((pulseAfter?.seq ?? 0) !== (pulseBefore?.seq ?? 0)) return "healthy";
@@ -1490,6 +1542,30 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     } finally {
       livenessInFlightRef.current.delete(convId);
     }
+  };
+
+  // sweepStreamLiveness checks EVERY conversation this client has a socket
+  // attached to, not just the one on screen. Chats stream in parallel (the
+  // sidebar paints a working dot per busy chat), and a background
+  // conversation's socket dies exactly the same way the foreground one's does
+  // — it just has nobody watching it. Snapshotted because checkStreamLiveness
+  // mutates the attached set when it reconnects, and per-conversation failures
+  // are contained so one bad conv cannot abort the sweep.
+  //
+  // Only while the tab is visible: a hidden tab's timers are throttled and its
+  // sockets may be legitimately frozen, so probing then would be both
+  // unreliable and pointless. The tab-return listener covers the wake-up.
+  const sweepStreamLiveness = async (
+    opts: { force?: boolean } = {},
+  ): Promise<void> => {
+    if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+    const attached = Array.from(attachedConvIdsRef.current);
+    if (attached.length === 0) return;
+    await Promise.all(
+      attached.map((convId) =>
+        checkStreamLiveness(convId, opts).catch(() => "idle" as const),
+      ),
+    );
   };
 
   const streamTurn = async (
@@ -1990,6 +2066,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   return {
     reattachToConv,
     checkStreamLiveness,
+    sweepStreamLiveness,
     submitPrompt,
     regenerateLastAssistant,
     resendUserMessage,
