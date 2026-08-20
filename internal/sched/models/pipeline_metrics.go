@@ -151,6 +151,13 @@ func (a *PipelineMetricsAccumulator) Result() PipelineMetricsAggregate {
 	return agg
 }
 
+// MaxRecentRuns caps how many run summaries a single listing can retain. The
+// bound lives here, next to the buffer it bounds, rather than only in the HTTP
+// handler that parses ?runs=: NewRecentRuns is the thing that promises O(limit)
+// memory, so it enforces its own promise instead of trusting every caller to
+// have clamped first.
+const MaxRecentRuns = 500
+
 // RecentRuns keeps the most recent N RunPipelineMetrics (by CreatedAt)
 // in O(limit) memory so the admin listing does not retain every run (#1122).
 type RecentRuns struct {
@@ -158,11 +165,23 @@ type RecentRuns struct {
 	items []RunPipelineMetrics
 }
 
+// NewRecentRuns returns a buffer holding at most limit runs, clamped to
+// [0, MaxRecentRuns].
+//
+// The buffer is grown by append rather than preallocated to limit: the caller's
+// limit traces back to a request parameter, and sizing an allocation directly
+// from request-controlled input is how a single request turns into a large
+// allocation. Growth is amortized O(1) and Add never exceeds limit, so the
+// O(limit) bound the type promises still holds — without an allocation whose
+// size is chosen by the requester.
 func NewRecentRuns(limit int) *RecentRuns {
 	if limit < 0 {
 		limit = 0
 	}
-	return &RecentRuns{limit: limit, items: make([]RunPipelineMetrics, 0, limit)}
+	if limit > MaxRecentRuns {
+		limit = MaxRecentRuns
+	}
+	return &RecentRuns{limit: limit}
 }
 
 func (r *RecentRuns) Add(m RunPipelineMetrics) {

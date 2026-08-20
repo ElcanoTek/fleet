@@ -403,7 +403,102 @@ prior versions are listed because none have shipped.
   same 1M-class context window.
 
 
+### Security
+
+- **Cleared the three open code-scanning alerts on `dev`, two of which were
+  taking the CodeQL check red.** All three were true reports of a
+  misleading-looking pattern rather than of an exploitable bug, and each is
+  fixed by making the code say what it actually does instead of by suppressing
+  the query:
+
+  - **`bento_doc.py` looked like it logged live-session credentials in clear
+    text (CodeQL `py/clear-text-logging-sensitive-data`, two High alerts).**
+    `collab_secrets()` returned the *names* of the credential-bearing fields
+    present in a deck's `collab` block — `ownerPriv`, `writerPriv`, `invite` —
+    filtered from a module-level constant tuple of those literals. No value was
+    ever read out of `collab`, let alone printed; the three warnings tell an
+    operator *which fields to go look at*, which is the whole point of the
+    warning. But a function called `collab_secrets` whose result is written to
+    stderr is indistinguishable, to a name-driven taint analysis, from one that
+    prints the keys — and, more to the point, from a future edit that starts to.
+    The constant is now `COLLAB_CREDENTIAL_FIELDS`, the accessor is
+    `collab_credential_fields()` with a docstring that says names-only and why,
+    and the three warning sites share one `collab_field_label()` formatter so
+    the names-only rule lives in a single place instead of being re-derived per
+    print site. Behavior is unchanged: the warnings carry the same field names,
+    prefixed `collab.` for the reader. The alerts were the naming, and the
+    naming was genuinely wrong — a list of field names is not a list of secrets.
+
+  - **`NewRecentRuns` sized an allocation from a request parameter (CodeQL
+    `go/slice-memory-allocation-with-excessive-size-value`, High).** The
+    `?runs=` value on `GET /admin/pipeline-metrics` reached
+    `make([]RunPipelineMetrics, 0, limit)` as a capacity hint. The handler did
+    clamp to 500 first, so this was not exploitable — but the clamp lived in the
+    caller while the O(limit) memory promise lived in the constructor, so
+    nothing stopped the next caller from skipping it. The bound now lives with
+    the buffer it bounds: `models.MaxRecentRuns` is exported, `NewRecentRuns`
+    clamps to `[0, MaxRecentRuns]` itself, the handler clamps against the same
+    constant instead of a duplicated `500`, and the slice grows by `append`
+    rather than preallocating a requester-chosen capacity. `Add` never exceeds
+    `limit`, so the O(limit) bound still holds. Two tests cover it: a huge
+    `?runs=` keeps exactly `MaxRecentRuns` with capacity in the same order, and a
+    negative limit holds nothing rather than panicking in `make`.
+
+- **Recorded the disposition of GO-2026-5932 (`golang.org/x/crypto/openpgp` is
+  unmaintained and unsafe by design) rather than leaving it to be re-triaged.**
+  There is nothing to fix and nothing to bump: the advisory has no fixed
+  version — the package is deprecated by design, not broken in a release — and
+  fleet does not import it. `go mod why golang.org/x/crypto/openpgp` reports
+  *"main module does not need package golang.org/x/crypto/openpgp"*; the only
+  `x/crypto` packages in the build are `bcrypt` (password hashing in
+  `internal/store`, `internal/sched`) and `acme/autocert` (`cmd/fleet/tls.go`).
+  `x/crypto` is already at v0.55.0, the latest. The govulncheck gate agrees and
+  stays green — it is call-graph aware, and reports the advisory as
+  *"1 vulnerability in modules you require, but your code doesn't appear to call
+  these"*, which is not a failure. The alert reaches the Security tab from the
+  module-level dependency graph, which cannot see reachability. Correct response
+  is to dismiss it as not-affected; it will return on any `x/crypto` bump, since
+  no bump can clear an advisory with no fix.
+
 ### Fixed
+
+- **`publish-sandbox-image.yml`: a manual dispatch would have opened a PR
+  pinning `sandbox.image` in fleet's *own* `config/default` bundle.**
+  `update_manifest` was declared only for the `workflow_call` trigger, so on a
+  `workflow_dispatch` the guard `if: ${{ inputs.update_manifest != false }}`
+  compared a *null* against `false` — which is true. An ad-hoc publish of the
+  generic bundle, whose entire purpose is to get an image into GHCR, would
+  therefore have rewritten `config/default/manifest.yaml` (where `image` must
+  stay `"${FLEET_SANDBOX_IMAGE:-}"`, the build-on-box default) and opened a PR
+  against this repo. `update_manifest` is now declared for `workflow_dispatch`
+  too, defaulting to `false`, and both guards are a plain truth test.
+
+  Three further hardening changes to the same workflow, none behavioral for a
+  correctly-invoked caller:
+
+  - `secrets.GITHUB_TOKEN` and `github.actor` are passed to the GHCR-login step
+    as `env` instead of being interpolated into the `run:` body. A `${{ }}`
+    expression is spliced into the script before the shell sees it, which puts
+    the token on a command line and makes any shell metacharacter in a value
+    executable; `"$GHCR_TOKEN"` keeps it a value. `github.sha` is likewise
+    hoisted to a job-level `SHA`, so no `run:` body interpolates at all.
+  - A `concurrency` group keyed on `inputs.image_name` serializes publishes of
+    the same image. Two overlapping runs both move the mutable `:latest` tag,
+    and the loser of the race decided what it pointed at. Keyed per image name,
+    not per repo, so two bundles in one repo still publish concurrently.
+  - The header now records why the Actions page shows this workflow red and why
+    it has not run since 2026-06-23 — the same answer for both. Its last six
+    runs predate #195/#705, when the file still had a `push: branches: [main]`
+    trigger and pushed `ghcr.io/elcanotek/sandbox` on every merge; all six died
+    at `podman push` with `denied: permission_denied: write_package`, because a
+    repo `GITHUB_TOKEN` cannot write an org-level package that is not linked to
+    the repo. Converting the file to a reusable per-client publisher removed the
+    push trigger, so nothing has fired since and GitHub still displays the last
+    recorded conclusion. No fleet gate depends on this workflow — core CI builds
+    the sandbox locally (24ce69f) — so the red is a tombstone, not a broken
+    pipeline. The note also states the caller-side requirement that the June
+    runs violated: publish under the caller repo's own owner, and link the
+    package to that repo once.
 
 - **Detached background work outlived the request that started it, and nothing
   waited for it.** `activeTurns` tracked detached *turns* and `DrainTurns` blocked
