@@ -116,10 +116,92 @@ func TestTurnJournal_MCPToolJournalsUnderRealName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if journal.intents["c9"] != `{"q":1}` {
-		t.Fatalf("mcp intent missing: %+v", journal.intents)
+	if len(journal.intents) != 1 || journal.intents["c9"] != `{"q":1}` {
+		t.Fatalf("want exactly one intent under the real call ID, got: %+v", journal.intents)
 	}
 	if journal.outcomes["c9"] != resp.Content {
 		t.Fatalf("mcp journaled outcome diverges from model-visible bytes")
 	}
+}
+
+// TestTurnJournal_InvalidMCPArgsJournalNothing pins the load-bearing position
+// of the MCP argument parse BETWEEN the policy gate and the intent barrier
+// (#798, #1127): an unparseable call is refused without journaling an intent
+// that could never dispatch. If the validate seam ever slid below
+// journalToolIntent, a crash-free refusal would still leave intents that
+// startup recovery must pair with phantom unknown-outcome results.
+func TestTurnJournal_InvalidMCPArgsJournalNothing(t *testing.T) {
+	journal := newRecordingJournal()
+	broker := &recordingBroker{}
+	tool := newTestMCPTool(broker, nil)
+	tool.journal = journal
+	resp, err := tool.Run(context.Background(), fantasy.ToolCall{ID: "bad1", Input: "not-json"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resp.IsError || !strings.Contains(resp.Content, "invalid arguments") {
+		t.Fatalf("resp = (content=%q, isError=%v), want an 'invalid arguments' error response", resp.Content, resp.IsError)
+	}
+	if broker.calls != 0 {
+		t.Fatalf("broker called %d times on invalid args, want 0", broker.calls)
+	}
+	if len(journal.intents) != 0 || len(journal.outcomes) != 0 {
+		t.Fatalf("journal = {intents:%v outcomes:%v}, want nothing journaled for a call that never dispatched",
+			journal.intents, journal.outcomes)
+	}
+}
+
+// TestTurnJournal_GateRefusalsJournalNothing: a call the Policy gate refuses
+// journals neither an intent nor an outcome — the tool never ran, so there is
+// nothing for startup recovery to pair (#798). Covers both wrappers, since
+// both take the shared governedToolRefusal exit (#1127).
+func TestTurnJournal_GateRefusalsJournalNothing(t *testing.T) {
+	t.Run("native", func(t *testing.T) {
+		journal := newRecordingJournal()
+		var executed bool
+		inner := fantasy.NewAgentTool("gated", "d",
+			func(context.Context, struct{}, fantasy.ToolCall) (fantasy.ToolResponse, error) {
+				executed = true
+				return fantasy.NewTextResponse("ran"), nil
+			})
+		guarded := &policyGuardedTool{
+			inner:   inner,
+			policy:  &gatePolicy{block: true, blockMsg: "denied by policy"},
+			journal: journal,
+		}
+		resp, err := guarded.Run(context.Background(), fantasy.ToolCall{ID: "g1", Input: `{}`})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if executed {
+			t.Fatal("tool executed despite the policy block")
+		}
+		if !resp.IsError || resp.Content != "denied by policy" {
+			t.Fatalf("resp = (content=%q, isError=%v), want the block message", resp.Content, resp.IsError)
+		}
+		if len(journal.intents) != 0 || len(journal.outcomes) != 0 {
+			t.Fatalf("journal = {intents:%v outcomes:%v}, want nothing journaled for a refused call",
+				journal.intents, journal.outcomes)
+		}
+	})
+	t.Run("mcp", func(t *testing.T) {
+		journal := newRecordingJournal()
+		broker := &recordingBroker{}
+		tool := newTestMCPTool(broker, &gatePolicy{block: true, blockMsg: "denied by policy"})
+		tool.journal = journal
+		resp, err := tool.Run(context.Background(), fantasy.ToolCall{ID: "g2", Input: `{}`})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if broker.calls != 0 {
+			t.Fatalf("broker called %d times despite the policy block, want 0", broker.calls)
+		}
+		if !resp.IsError || resp.Content != "denied by policy" {
+			t.Fatalf("resp = (content=%q, isError=%v), want the block message", resp.Content, resp.IsError)
+		}
+		if len(journal.intents) != 0 || len(journal.outcomes) != 0 {
+			t.Fatalf("journal = {intents:%v outcomes:%v}, want nothing journaled for a refused call",
+				journal.intents, journal.outcomes)
+		}
+	})
 }
