@@ -43,6 +43,7 @@ import {
 import {
   historyToMessages,
   type Approval,
+  type ApprovalStatus,
   type HistoryEntry,
   type MemoryProposal,
   type Message,
@@ -1875,6 +1876,18 @@ export function ChatExperience({
           expires_at?: number;
           mcp_server?: string;
           mcp_account?: string;
+          tool_call_id?: string;
+        }>;
+        resolved_approvals?: Array<{
+          approval_id: string;
+          tool: string;
+          summary: Approval["summary"];
+          status: ApprovalStatus;
+          result_text?: string;
+          mcp_server?: string;
+          mcp_account?: string;
+          tool_call_id?: string;
+          recorded?: boolean;
         }>;
         pending_memory_proposals?: Array<{
           proposal_id: string;
@@ -1902,23 +1915,48 @@ export function ChatExperience({
       void loadMcpServerCatalog(data.conversation.id);
       const next = historyToMessages(data.history ?? []);
 
-      // Re-attach any pending approvals + memory proposals onto the last
-      // assistant message so a page reload (or the visibilitychange/focus
-      // auto-refetch) during an open flow still shows the card. If there's
-      // no assistant message yet, create a placeholder one so the card has
-      // somewhere to live.
+      // Re-attach approval cards + memory proposals so a page reload (or the
+      // visibilitychange/focus auto-refetch) keeps the transcript's live
+      // shape. Resolved approvals re-hydrate too — the "Email sent ✓"
+      // outcome, a timed-out card, and notify-mode "ran without asking"
+      // records whose undo hint has no other durable delivery (#1153). Each
+      // card anchors to the message holding its tool_call; cards with no
+      // matching call (older rows, mock turns, promote cards) fall back to
+      // the last assistant message, the previous behavior.
       const pendingApprovals = data.pending_approvals ?? [];
+      const resolvedApprovals = data.resolved_approvals ?? [];
       const pendingMemoryProposals = data.pending_memory_proposals ?? [];
-      if (pendingApprovals.length > 0 || pendingMemoryProposals.length > 0) {
-        const approvalCards: Approval[] = pendingApprovals.map((p) => ({
-          id: p.approval_id,
-          tool: p.tool,
-          summary: p.summary,
-          status: "pending",
-          expiresAt: p.expires_at,
-          mcpServer: p.mcp_server,
-          mcpAccount: p.mcp_account,
-        }));
+      if (
+        pendingApprovals.length > 0 ||
+        resolvedApprovals.length > 0 ||
+        pendingMemoryProposals.length > 0
+      ) {
+        // Server order is oldest-first per list, and resolutions precede
+        // anything still pending, so resolved-then-pending keeps cards in
+        // rough chronological order within a message.
+        const approvalCards: Approval[] = [
+          ...resolvedApprovals.map((p): Approval => ({
+            id: p.approval_id,
+            tool: p.tool,
+            summary: p.summary,
+            status: p.status,
+            resultText: p.result_text,
+            recorded: p.recorded,
+            mcpServer: p.mcp_server,
+            mcpAccount: p.mcp_account,
+            toolCallId: p.tool_call_id,
+          })),
+          ...pendingApprovals.map((p): Approval => ({
+            id: p.approval_id,
+            tool: p.tool,
+            summary: p.summary,
+            status: "pending",
+            expiresAt: p.expires_at,
+            mcpServer: p.mcp_server,
+            mcpAccount: p.mcp_account,
+            toolCallId: p.tool_call_id,
+          })),
+        ];
         const memoryCards: MemoryProposal[] = pendingMemoryProposals.map(
           (p) => ({
             id: p.proposal_id,
@@ -1934,26 +1972,47 @@ export function ChatExperience({
           }
           return -1;
         })();
-        if (lastAssistantIdx >= 0) {
+        // toolCallId → message index, so each card lands where its call ran.
+        const messageForCall = new Map<string, number>();
+        next.forEach((m, idx) => {
+          for (const tc of m.toolCalls ?? []) messageForCall.set(tc.id, idx);
+        });
+        const attachAt = new Map<number, Approval[]>();
+        let orphaned: Approval[] = [];
+        for (const card of approvalCards) {
+          const idx = card.toolCallId ? messageForCall.get(card.toolCallId) : undefined;
+          const target = idx ?? (lastAssistantIdx >= 0 ? lastAssistantIdx : -1);
+          if (target >= 0) {
+            attachAt.set(target, [...(attachAt.get(target) ?? []), card]);
+          } else {
+            orphaned = [...orphaned, card];
+          }
+        }
+        for (const [idx, cards] of attachAt) {
+          next[idx] = {
+            ...next[idx],
+            approvals: [...(next[idx].approvals ?? []), ...cards],
+          };
+        }
+        if (memoryCards.length > 0 && lastAssistantIdx >= 0) {
           next[lastAssistantIdx] = {
             ...next[lastAssistantIdx],
-            approvals: [
-              ...(next[lastAssistantIdx].approvals ?? []),
-              ...approvalCards,
-            ],
             memoryProposals: [
               ...(next[lastAssistantIdx].memoryProposals ?? []),
               ...memoryCards,
             ],
           };
-        } else {
+        }
+        if (orphaned.length > 0 || (memoryCards.length > 0 && lastAssistantIdx < 0)) {
+          // No assistant message exists yet — park the cards on a
+          // placeholder so they still have somewhere to live.
           next.push({
             id: Date.now(),
             role: "assistant",
             content: "",
             state: "done",
-            approvals: approvalCards,
-            memoryProposals: memoryCards,
+            approvals: orphaned,
+            memoryProposals: lastAssistantIdx < 0 ? memoryCards : [],
           });
         }
       }

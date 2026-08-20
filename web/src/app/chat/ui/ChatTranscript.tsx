@@ -23,7 +23,7 @@ import { getPill, type ProtocolPill } from "./protocolPills";
 import { Icon } from "./Icon";
 import { PythonOutput, ToolChip, taskTrackerDisplayForMessage } from "./ToolChips";
 import { CopyButton, SummaryBanner, TurnSummaryChip } from "./ChatChips";
-import { ApprovalCard, MemoryProposalCard } from "./ApprovalCards";
+import { ApprovalCard, MemoryProposalCard, askAgainPrompt } from "./ApprovalCards";
 import { MessageMinimap, MINIMAP_MAX, type MinimapEntry } from "./MessageMinimap";
 // The assistant markdown pipeline (react-markdown + micromark, ~43 KiB
 // transfer) is lazy-loaded: nothing renders it until a transcript message is
@@ -948,6 +948,7 @@ export function ChatTranscript({
                                       }}
                                       onModelSwitched={(model) => setSelectedModel(model)}
                                       onSwitchAndRetry={() => retryLastUserMessage()}
+                                      onAskAgain={(timedOut) => void submitPrompt(askAgainPrompt(timedOut))}
                                     />
                                   ))}
                                 </div>

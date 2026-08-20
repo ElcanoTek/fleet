@@ -25,6 +25,16 @@ func (c *Config) liveBool(read func() bool) bool {
 	return read()
 }
 
+// liveInt reads an int field under the runtime read lock.
+func (c *Config) liveInt(read func() int) int {
+	if c.reload == nil {
+		return read()
+	}
+	c.reload.mu.RLock()
+	defer c.reload.mu.RUnlock()
+	return read()
+}
+
 // setLive mutates Config under the runtime write lock. A Config built directly
 // in a test (nil reload state) mutates unguarded — such a Config is never
 // concurrently served.
@@ -103,6 +113,21 @@ func (c *Config) LiveConnectorRecommendationsEnabled() bool {
 // recommendations.
 func (c *Config) SetConnectorRecommendationsEnabled(v bool) {
 	c.setLive(func() { c.ConnectorRecommendationsEnabled = v })
+}
+
+// LiveApprovalTimeoutSeconds reports the global approval default-deny window
+// (#225), admin-override-aware. Read at stager construction — once per turn —
+// so an admin edit governs the next staged card without a restart. Non-positive
+// values keep their boot semantics: "use the hardcoded default", resolved by
+// the stager, never here.
+func (c *Config) LiveApprovalTimeoutSeconds() int {
+	return c.liveInt(func() int { return c.ApprovalTimeoutSeconds })
+}
+
+// SetApprovalTimeoutSeconds applies the admin override for the approval
+// default-deny window.
+func (c *Config) SetApprovalTimeoutSeconds(v int) {
+	c.setLive(func() { c.ApprovalTimeoutSeconds = v })
 }
 
 // LiveContextHandlesEnabled reports whether composer context handles (#517)

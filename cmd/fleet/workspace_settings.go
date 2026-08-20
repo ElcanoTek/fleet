@@ -45,6 +45,7 @@ func buildWorkspaceSettings(cfg *config.Config, st *store.Store) (*settings.Serv
 		"guardrail_mode":                    defaultGuardrailMode(cfg),
 		"tool_disclosure_threshold":         strconv.Itoa(agentcore.EnvToolDisclosureThreshold()),
 		"max_tool_output_bytes":             strconv.Itoa(agentcore.EnvMaxToolOutputBytes()),
+		"approval_timeout_seconds":          strconv.Itoa(cfg.ApprovalTimeoutSeconds),
 		"phone_a_friend_enabled":            strconv.FormatBool(cfg.PhoneAFriendEnabled),
 		"subagents_enabled":                 strconv.FormatBool(cfg.SubagentsEnabled),
 		"default_model":                     defaultModelTier(cfg.DefaultModel, agentcore.DefaultCoreModel),
@@ -79,6 +80,7 @@ func buildWorkspaceSettings(cfg *config.Config, st *store.Store) (*settings.Serv
 		// which is what makes the web side live.
 		"default_model":                     applyModelTier(agentcore.SetDefaultModel),
 		"advanced_model":                    applyModelTier(agentcore.SetAdvancedModel),
+		"approval_timeout_seconds":          applyIntSetting(cfg.SetApprovalTimeoutSeconds),
 		"phone_a_friend_enabled":            applyBoolSetting(cfg.SetPhoneAFriendEnabled),
 		"subagents_enabled":                 applyBoolSetting(cfg.SetSubagentsEnabled),
 		"memory_autoindex_enabled":          applyBoolSetting(cfg.SetMemoryAutoIndexEnabled),
@@ -379,6 +381,23 @@ func applyBoolSetting(set func(bool)) settings.ApplyFunc {
 			return fmt.Errorf("not a boolean: %q", value)
 		}
 		set(b)
+		return nil
+	}
+}
+
+// applyIntSetting adapts a config live int setter to an ApplyFunc. Like the
+// bool setters, config fields don't re-read the env after boot, so applying
+// the default and applying an override are the same operation. A non-integer
+// default can only reach here if the env default was kept verbatim despite
+// being out of the admin bounds — still guaranteed parseable, since cmd/fleet
+// derives it from a typed Config int.
+func applyIntSetting(set func(int)) settings.ApplyFunc {
+	return func(value string, _ bool) error {
+		n, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("not an integer: %q", value)
+		}
+		set(n)
 		return nil
 	}
 }

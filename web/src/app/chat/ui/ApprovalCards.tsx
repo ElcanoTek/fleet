@@ -84,7 +84,13 @@ function formatCountdown(totalSeconds: number): string {
 // server reopens that turn's {server, account} seat to execute it — so when the
 // turn was on a named account, the user is told which one BEFORE they click
 // Send. The default seat renders nothing: there is no ambiguity to resolve.
-function ApprovalSeatBadge({ server, account }: { server?: string; account?: string }) {
+// The verb defaults to the email card's "Sending as"; the generic action card
+// passes "Runs as" since not every critical tool sends anything.
+function ApprovalSeatBadge({ server, account, verb = "Sending as" }: {
+  server?: string;
+  account?: string;
+  verb?: string;
+}) {
   if (!server || !account) return null;
   return (
     <div
@@ -93,9 +99,67 @@ function ApprovalSeatBadge({ server, account }: { server?: string; account?: str
       style={{ color: "var(--color-text-muted)" }}
     >
       <span>
-        Sending as <span className="font-mono">{account}</span> on{" "}
+        {verb} <span className="font-mono">{account}</span> on{" "}
         <span className="font-mono">{server}</span>
       </span>
+    </div>
+  );
+}
+
+// isEmailApprovalTool gates the email-shaped card. It used to be the implicit
+// FALLBACK for every tool without a tailored card, so a bundle-declared pages
+// deploy rendered as "Send this email?" / "Email sent ✓" — exactly the wrong
+// copy on the one card class whose job is saying what is about to happen.
+// Non-email tools now get GenericActionCard below.
+function isEmailApprovalTool(tool: string): boolean {
+  return tool === "preview_email" || tool === "send_email" || tool.endsWith("_send_email");
+}
+
+// isTimedOutApproval recognizes an auto-denied card by the server's stable
+// "Approval timed out" result prefix (shared with the expiry sweep and the
+// expired-click resolution) so the card can offer Ask again.
+function isTimedOutApproval(approval: Approval): boolean {
+  return approval.status === "rejected" && (approval.resultText ?? "").startsWith("Approval timed out");
+}
+
+// actionLabel splits an mcp_<server>_<tool> name into a humanized action
+// ("Deploy page") and its server ("pages") for the generic card's header.
+// Native tools have no server half and humanize whole.
+function actionLabel(tool: string): { action: string; server?: string } {
+  const m = /^mcp_([^_]+)_(.+)$/.exec(tool);
+  const raw = m ? m[2] : tool;
+  const spaced = raw.replace(/_/g, " ").trim();
+  const action = spaced ? spaced.charAt(0).toUpperCase() + spaced.slice(1) : tool;
+  return m ? { action, server: m[1] } : { action };
+}
+
+// askAgainPrompt is the canned user turn the Ask-again affordance submits: a
+// timed-out approval's only recovery used to be composing "please try that
+// again" by hand — the agent must re-stage (the old card's claim is spent and
+// its args may be stale), so one click asks it to.
+export function askAgainPrompt(approval: Approval): string {
+  const { action, server } = actionLabel(approval.tool);
+  const what = server ? `${action.toLowerCase()} (${approval.tool})` : action.toLowerCase();
+  return `The approval card for ${what} timed out before I could act on it. Please stage it again — I'm ready to review it now.`;
+}
+
+// AskAgainButton renders the one-click recovery on a timed-out card. Kept a
+// quiet secondary control: the card already explains what happened.
+function AskAgainButton({ approval, onAskAgain }: {
+  approval: Approval;
+  onAskAgain?: (approval: Approval) => void;
+}) {
+  if (!onAskAgain) return null;
+  return (
+    <div className="mt-2">
+      <button
+        type="button"
+        data-testid="approval-ask-again"
+        className="rounded-full border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:text-[var(--color-text-primary)]"
+        onClick={() => onAskAgain(approval)}
+      >
+        Ask again
+      </button>
     </div>
   );
 }
@@ -177,6 +241,7 @@ export function ApprovalCard({
   onResolved,
   onModelSwitched,
   onSwitchAndRetry,
+  onAskAgain,
 }: {
   approval: Approval;
   conversationId: string;
@@ -189,6 +254,9 @@ export function ApprovalCard({
   // picked "Switch & retry". The caller is expected to re-submit the
   // prior user turn under the newly-pinned model.
   onSwitchAndRetry?: () => void | Promise<void>;
+  // Fired when the user clicks Ask again on a timed-out card. The caller
+  // submits askAgainPrompt(approval) as a user turn so the agent re-stages.
+  onAskAgain?: (approval: Approval) => void;
 }) {
   const [submitting, setSubmitting] = useState<"send" | "cancel" | null>(null);
   // Both card kinds auto-expand: preview because seeing the render IS
@@ -261,6 +329,7 @@ export function ApprovalCard({
         approval={approval}
         submitting={submitting}
         onResolve={resolve}
+        onAskAgain={onAskAgain}
       />
     );
   }
@@ -283,13 +352,37 @@ export function ApprovalCard({
         approval={approval}
         submitting={submitting}
         onResolve={resolve}
+        onAskAgain={onAskAgain}
       />
     );
   }
 
   if (approval.tool === "manage_tasks") {
     return (
-      <ManageTasksCard approval={approval} submitting={submitting} onResolve={resolve} />
+      <ManageTasksCard
+        approval={approval}
+        submitting={submitting}
+        onResolve={resolve}
+        onAskAgain={onAskAgain}
+      />
+    );
+  }
+
+  // Anything that is not an email tool gets the generic critical-action card:
+  // honest verbs, the tool's own arguments, and — for a notify-mode record —
+  // "ran without asking" instead of a fabricated approval story. Before this,
+  // a pages deploy fell through to the email chrome below and resolved as
+  // "Email sent ✓".
+  if (!isEmailApprovalTool(approval.tool)) {
+    return (
+      <GenericActionCard
+        approval={approval}
+        submitting={submitting}
+        onResolve={resolve}
+        applyAll={applyAll}
+        onApplyAllChange={setApplyAll}
+        onAskAgain={onAskAgain}
+      />
     );
   }
 
@@ -444,7 +537,7 @@ export function ApprovalCard({
               <button
                 type="button"
                 className="rounded-full border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:text-[var(--color-text-primary)] disabled:opacity-50"
-                disabled={submitting !== null}
+                disabled={submitting !== null || countdown.expired}
                 onClick={() => void resolve(false)}
               >
                 {submitting === "cancel" ? "Cancelling…" : applyAll ? "Deny + block all" : "Cancel"}
@@ -452,6 +545,7 @@ export function ApprovalCard({
             </div>
             <ApprovalSeatBadge server={approval.mcpServer} account={approval.mcpAccount} />
             <ApprovalCountdown remaining={countdown.remaining} expired={countdown.expired} />
+            {countdown.expired ? <AskAgainButton approval={approval} onAskAgain={onAskAgain} /> : null}
             {/* Batch approval (#300): pre-approve/deny the rest of this tool's
                 calls for the conversation so the agent isn't gated per call. */}
             <label className="flex items-center gap-1.5 text-[0.72rem] text-[var(--color-text-muted)]">
@@ -467,16 +561,163 @@ export function ApprovalCard({
             </label>
           </div>
         )
-      ) : approval.resultText ? (
-        isPreviewOnly ? (
-          <ApprovalResult text={approval.resultText} />
-        ) : (
-          <EmailApprovalOutcome
-            text={approval.resultText}
-            failed={approval.status === "failed"}
-          />
-        )
+      ) : (
+        <>
+          {approval.resultText ? (
+            isPreviewOnly ? (
+              <ApprovalResult text={approval.resultText} />
+            ) : (
+              <EmailApprovalOutcome
+                text={approval.resultText}
+                failed={approval.status === "failed"}
+              />
+            )
+          ) : null}
+          {isTimedOutApproval(approval) ? (
+            <AskAgainButton approval={approval} onAskAgain={onAskAgain} />
+          ) : null}
+        </>
+      )}
+    </div>
+  );
+}
+
+// GenericActionCard renders any critical tool fleet has no tailored card for —
+// bundle-declared suffixes like a pages deploy or a deal write. Two jobs:
+// say honestly what is about to happen (the humanized action, its server, its
+// arguments verbatim), and resolve honestly (Approve & run / Cancel — never
+// "Send", never "Email sent ✓"). A notify-mode record (#1153) renders on the
+// same chrome in its informational form: the tool already ran, the title says
+// so, and the result carries the bundle-authored undo hint.
+function GenericActionCard({
+  approval,
+  submitting,
+  onResolve,
+  applyAll,
+  onApplyAllChange,
+  onAskAgain,
+}: {
+  approval: Approval;
+  submitting: "send" | "cancel" | null;
+  onResolve: (approved: boolean) => void;
+  applyAll: boolean;
+  onApplyAllChange: (v: boolean) => void;
+  onAskAgain?: (approval: Approval) => void;
+}) {
+  const countdown = useApprovalCountdown(approval.expiresAt, approval.status);
+  const { action, server } = actionLabel(approval.tool);
+  const args = Array.isArray(approval.summary.args) ? approval.summary.args : [];
+  const rawArgs = approval.summary.raw ?? "";
+  const recorded = approval.recorded === true;
+  const timedOut = isTimedOutApproval(approval);
+
+  const title =
+    approval.status === "pending"
+      ? `ACTION REQUIRED · Run "${action}"?`
+      : approval.status === "approved"
+        ? recorded
+          ? `${action} · ran without asking`
+          : `${action} · completed ✓`
+        : approval.status === "rejected"
+          ? timedOut
+            ? `${action} · timed out`
+            : `${action} · cancelled`
+          : `${action} · failed`;
+
+  // A record is information, not a past decision — muted chrome, like the
+  // dismissed-preview state, so it never masquerades as an approval.
+  const statusStyle: React.CSSProperties =
+    approval.status === "approved"
+      ? recorded
+        ? { borderColor: "var(--color-border-strong)", color: "var(--color-text-secondary)" }
+        : { borderColor: "var(--color-success-border)", color: "var(--color-success)" }
+      : approval.status === "rejected"
+        ? { borderColor: "var(--color-border-strong)", color: "var(--color-text-muted)" }
+        : approval.status === "failed"
+          ? { borderColor: "var(--color-danger-border)", color: "var(--color-danger)" }
+          : { borderColor: "var(--color-accent)", color: "var(--color-text-primary)" };
+
+  return (
+    <div
+      data-approval-id={approval.id}
+      data-tool={approval.tool}
+      data-testid="generic-action-card"
+      className="rounded-[var(--radius-lg)] border bg-[color-mix(in_srgb,var(--color-overlay-soft)_55%,transparent)] px-3 py-2.5 text-[0.8125rem] leading-[1.5]"
+      style={statusStyle}
+    >
+      <div className="mb-2 flex items-center gap-2">
+        <span aria-hidden>{recorded ? "📓" : "🛠️"}</span>
+        <span className="font-medium">{title}</span>
+      </div>
+
+      {server ? (
+        <div className="mb-1 text-[0.72rem] text-[var(--color-text-muted)]">
+          via <span className="font-mono">{server}</span>
+          <span className="mx-1">·</span>
+          <span className="font-mono">{approval.tool}</span>
+        </div>
       ) : null}
+
+      {args.length > 0 ? (
+        <div className="grid gap-0.5 break-words text-[0.78rem] text-[var(--color-text-secondary)]">
+          {args.map((row) => (
+            <div key={row.key} className="min-w-0">
+              <span className="text-[var(--color-text-muted)]">{row.key}: </span>
+              <span className="break-all">{row.value}</span>
+            </div>
+          ))}
+        </div>
+      ) : rawArgs ? (
+        <pre
+          className="max-h-40 min-w-0 max-w-full overflow-auto whitespace-pre-wrap break-all rounded-md bg-[var(--color-overlay-strong)] p-2 text-[0.75rem] text-[var(--color-text-primary)]"
+          style={{ fontFamily: "var(--font-code)" }}
+        >
+          {rawArgs}
+        </pre>
+      ) : null}
+
+      {approval.status === "pending" ? (
+        <div className="mt-3 flex flex-col gap-2">
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              className="rounded-full bg-[var(--color-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-on-primary)] transition hover:opacity-90 disabled:opacity-50"
+              disabled={submitting !== null || countdown.expired}
+              onClick={() => onResolve(true)}
+            >
+              {submitting === "send" ? "Running…" : applyAll ? "Approve + allow all" : "Approve & run"}
+            </button>
+            <button
+              type="button"
+              className="rounded-full border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:text-[var(--color-text-primary)] disabled:opacity-50"
+              disabled={submitting !== null || countdown.expired}
+              onClick={() => onResolve(false)}
+            >
+              {submitting === "cancel" ? "Cancelling…" : applyAll ? "Deny + block all" : "Cancel"}
+            </button>
+          </div>
+          <ApprovalSeatBadge server={approval.mcpServer} account={approval.mcpAccount} verb="Runs as" />
+          <ApprovalCountdown remaining={countdown.remaining} expired={countdown.expired} />
+          {countdown.expired ? <AskAgainButton approval={approval} onAskAgain={onAskAgain} /> : null}
+          {/* Batch approval (#300), same contract as the email card. */}
+          <label className="flex items-center gap-1.5 text-[0.72rem] text-[var(--color-text-muted)]">
+            <input
+              type="checkbox"
+              data-testid="approval-apply-all"
+              checked={applyAll}
+              disabled={submitting !== null}
+              onChange={(e) => onApplyAllChange(e.target.checked)}
+              className="size-3.5 accent-[var(--color-primary)]"
+            />
+            Apply my choice to all {approval.tool.replace(/^mcp_[^_]+_/, "")} calls in this chat
+          </label>
+        </div>
+      ) : (
+        <>
+          {approval.resultText ? <ApprovalResult text={approval.resultText} /> : null}
+          {timedOut ? <AskAgainButton approval={approval} onAskAgain={onAskAgain} /> : null}
+        </>
+      )}
     </div>
   );
 }
@@ -485,10 +726,12 @@ function BashApprovalCard({
   approval,
   submitting,
   onResolve,
+  onAskAgain,
 }: {
   approval: Approval;
   submitting: "send" | "cancel" | null;
   onResolve: (approved: boolean) => void;
+  onAskAgain?: (approval: Approval) => void;
 }) {
   const command = approval.summary.command ?? approval.summary.preview ?? "";
   const workingDir = approval.summary.working_dir ?? "";
@@ -547,17 +790,23 @@ function BashApprovalCard({
             <button
               type="button"
               className="rounded-full border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:text-[var(--color-text-primary)] disabled:opacity-50"
-              disabled={submitting !== null}
+              disabled={submitting !== null || countdown.expired}
               onClick={() => onResolve(false)}
             >
               {submitting === "cancel" ? "Cancelling…" : "Cancel"}
             </button>
           </div>
           <ApprovalCountdown remaining={countdown.remaining} expired={countdown.expired} />
+          {countdown.expired ? <AskAgainButton approval={approval} onAskAgain={onAskAgain} /> : null}
         </div>
-      ) : approval.resultText ? (
-        <ApprovalResult text={approval.resultText} />
-      ) : null}
+      ) : (
+        <>
+          {approval.resultText ? <ApprovalResult text={approval.resultText} /> : null}
+          {isTimedOutApproval(approval) ? (
+            <AskAgainButton approval={approval} onAskAgain={onAskAgain} />
+          ) : null}
+        </>
+      )}
     </div>
   );
 }
@@ -572,10 +821,12 @@ function ScheduleTaskCard({
   approval,
   submitting,
   onResolve,
+  onAskAgain,
 }: {
   approval: Approval;
   submitting: "send" | "cancel" | null;
   onResolve: (approved: boolean, edits?: { name?: string; prompt?: string; cron?: string }) => void;
+  onAskAgain?: (approval: Approval) => void;
 }) {
   const countdown = useApprovalCountdown(approval.expiresAt, approval.status);
   const s = approval.summary;
@@ -727,7 +978,7 @@ function ScheduleTaskCard({
             <button
               type="button"
               className="rounded-full border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:text-[var(--color-text-primary)] disabled:opacity-50"
-              disabled={submitting !== null}
+              disabled={submitting !== null || countdown.expired}
               onClick={() => {
                 setEditing((was) => {
                   if (was) {
@@ -745,17 +996,23 @@ function ScheduleTaskCard({
             <button
               type="button"
               className="rounded-full border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:text-[var(--color-text-primary)] disabled:opacity-50"
-              disabled={submitting !== null}
+              disabled={submitting !== null || countdown.expired}
               onClick={() => onResolve(false)}
             >
               {submitting === "cancel" ? "Cancelling…" : "Cancel"}
             </button>
           </div>
           <ApprovalCountdown remaining={countdown.remaining} expired={countdown.expired} />
+          {countdown.expired ? <AskAgainButton approval={approval} onAskAgain={onAskAgain} /> : null}
         </div>
-      ) : approval.resultText ? (
-        <ApprovalResult text={approval.resultText} />
-      ) : null}
+      ) : (
+        <>
+          {approval.resultText ? <ApprovalResult text={approval.resultText} /> : null}
+          {isTimedOutApproval(approval) ? (
+            <AskAgainButton approval={approval} onAskAgain={onAskAgain} />
+          ) : null}
+        </>
+      )}
     </div>
   );
 }
@@ -778,10 +1035,12 @@ function ManageTasksCard({
   approval,
   submitting,
   onResolve,
+  onAskAgain,
 }: {
   approval: Approval;
   submitting: "send" | "cancel" | null;
   onResolve: (approved: boolean) => void;
+  onAskAgain?: (approval: Approval) => void;
 }) {
   const countdown = useApprovalCountdown(approval.expiresAt, approval.status);
   const s = approval.summary as {
@@ -886,17 +1145,23 @@ function ManageTasksCard({
             <button
               type="button"
               className="rounded-full border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:text-[var(--color-text-primary)] disabled:opacity-50"
-              disabled={submitting !== null}
+              disabled={submitting !== null || countdown.expired}
               onClick={() => onResolve(false)}
             >
               {submitting === "cancel" ? "Cancelling…" : "Cancel"}
             </button>
           </div>
           <ApprovalCountdown remaining={countdown.remaining} expired={countdown.expired} />
+          {countdown.expired ? <AskAgainButton approval={approval} onAskAgain={onAskAgain} /> : null}
         </div>
-      ) : approval.resultText ? (
-        <ApprovalResult text={approval.resultText} />
-      ) : null}
+      ) : (
+        <>
+          {approval.resultText ? <ApprovalResult text={approval.resultText} /> : null}
+          {isTimedOutApproval(approval) ? (
+            <AskAgainButton approval={approval} onAskAgain={onAskAgain} />
+          ) : null}
+        </>
+      )}
     </div>
   );
 }
