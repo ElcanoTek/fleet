@@ -226,6 +226,12 @@ const MEMORY_KINDS = [
 // `promptRef`.
 const MAX_COMPOSER_HEIGHT_PX = 180;
 
+// How often the stream watchdog looks at the attached conversation. The check
+// itself is nearly free on a healthy stream (a ref read behind a silence
+// gate), so this is chosen to bound how long a dead socket can go unnoticed
+// while the tab sits open and visible, not to pace network traffic.
+const STREAM_WATCHDOG_INTERVAL_MS = 10000;
+
 // shortcutHelpGroups is the single source of truth for the "?" help overlay
 // (#306). It documents only the shortcuts the shell actually wires through
 // useKeyboardShortcuts below — keep the two in step. Chips render
@@ -443,6 +449,9 @@ export function ChatExperience({
     lastEventIdByConvRef,
     currentTurnIdByConvRef,
     reattachInFlightRef,
+    streamPulseRef,
+    supersededStreamsRef,
+    livenessInFlightRef,
     promoteStreamKey,
   } = useTurnStreamState(currentConvKey);
   // Per-conversation composer state — drafts, queued attachments, attachment
@@ -3246,13 +3255,16 @@ export function ChatExperience({
     lastEventIdByConvRef,
     currentTurnIdByConvRef,
     reattachInFlightRef,
+    streamPulseRef,
+    supersededStreamsRef,
+    livenessInFlightRef,
     promoteStreamKey,
     streamingConvsRef,
     isStreaming,
   } satisfies TurnStreamDeps;
   const {
     reattachToConv,
-    reconcileStaleConv,
+    checkStreamLiveness,
     submitPrompt,
     regenerateLastAssistant,
     resendUserMessage,
@@ -3274,13 +3286,13 @@ export function ChatExperience({
   // suppression. Reading a ref *inside an effect or event handler* (never
   // during render) is the supported pattern.
   const reattachToConvRef = useRef(reattachToConv);
-  const reconcileStaleConvRef = useRef(reconcileStaleConv);
+  const checkStreamLivenessRef = useRef(checkStreamLiveness);
   const loadConversationRef = useRef(loadConversation);
   const refreshConversationsRef = useRef(refreshConversations);
   const loadMcpServerCatalogPreviewRef = useRef(loadMcpServerCatalogPreview);
   useEffect(() => {
     reattachToConvRef.current = reattachToConv;
-    reconcileStaleConvRef.current = reconcileStaleConv;
+    checkStreamLivenessRef.current = checkStreamLiveness;
     loadConversationRef.current = loadConversation;
     refreshConversationsRef.current = refreshConversations;
     loadMcpServerCatalogPreviewRef.current = loadMcpServerCatalogPreview;
@@ -3363,12 +3375,14 @@ export function ChatExperience({
         // "Attached" is not the same as "alive". A phone that locks mid-turn
         // leaves a zombie socket: the reader never delivers another chunk and
         // never rejects, so the conversation keeps looking attached while the
-        // turn quietly finishes server-side. Returning here unconditionally
-        // is why coming back to a completed long-running task showed a stuck
-        // thinking indicator — and then, once the idle timeout finally fired,
-        // a bubble claiming the assistant never replied. Probe instead, and
-        // adopt the persisted transcript when the turn is provably over.
-        await reconcileStaleConvRef.current(convId);
+        // turn carries on server-side. Returning here unconditionally is why
+        // coming back to a long-running task showed a stuck thinking
+        // indicator — and then, once the idle timeout finally fired, a bubble
+        // claiming the assistant never replied. Check instead: adopt the
+        // persisted transcript if the turn finished, reconnect the live
+        // stream if it is still generating. force: an explicit tab return is
+        // always worth a probe, unlike the periodic watchdog below.
+        await checkStreamLivenessRef.current(convId, { force: true });
         return;
       }
 
@@ -3431,6 +3445,32 @@ export function ChatExperience({
     // attachedConvIdsRef is a stable ref from useTurnStreamState — listing
     // it keeps exhaustive-deps honest without changing the mount-once run.
   }, [attachedConvIdsRef]);
+
+  // Stream watchdog. The tab-return listener above only fires on a visibility
+  // /focus/online transition, and a phone that unlocks straight back into the
+  // chat may produce exactly one of those — before the turn it was watching
+  // has finished. Without a recurring check, a socket that dies while the tab
+  // stays open and visible is only noticed when the multi-minute idle timeout
+  // trips.
+  //
+  // checkStreamLiveness carries its own silence gate, so a healthy stream (the
+  // server heartbeats every 15s by default) costs nothing here: the tick reads
+  // a ref and returns. A probe is only spent once the socket has actually gone
+  // quiet. It is also self-guarded against overlapping runs, so a tick landing
+  // on top of a tab return is a no-op.
+  useEffect(() => {
+    const tick = () => {
+      if (typeof document === "undefined") return;
+      if (document.visibilityState !== "visible") return;
+      const convId = activeConversationIdRef.current;
+      if (!convId) return;
+      if (!attachedConvIdsRef.current.has(convId)) return;
+      void checkStreamLivenessRef.current(convId);
+    };
+    const id = window.setInterval(tick, STREAM_WATCHDOG_INTERVAL_MS);
+    return () => window.clearInterval(id);
+    // Mount-once: the tick reads everything it needs through stable refs.
+  }, [attachedConvIdsRef, activeConversationIdRef]);
 
   // Initial load: session, conversations, most-recent conversation.
   //

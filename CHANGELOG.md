@@ -19,6 +19,48 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **A long-running chat turn that is *still working* when you come back now
+  resumes streaming immediately, instead of showing a thinking indicator that
+  never moves.** This completes the walk-away recovery of #1208 (the entry
+  below), which fixed the case where the turn had already finished but
+  deliberately left the still-generating case to the five-minute idle timeout.
+
+  The problem in both cases is that **"attached" is not the same as "alive"**:
+  a phone that locks mid-turn leaves a socket whose reader neither delivers
+  another chunk nor rejects, so the conversation goes on looking attached long
+  after its connection is gone — and every recovery path that short-circuits
+  on "already attached" does nothing.
+
+  A liveness check now runs on tab return and on a 10s watchdog while the tab
+  is visible. When the turn has finished it adopts the persisted transcript, as
+  before. When the turn is **still generating** it replaces the dead socket and
+  resumes the stream from the last event the client actually applied, so the
+  partial answer already on screen is kept, nothing is replayed twice, and
+  tokens start landing again.
+
+  Telling a dead socket from a merely quiet one is the whole difficulty, and
+  the proof deliberately does not depend on the (operator-configurable)
+  heartbeat: the server must report having emitted *past* the client's last
+  applied event id, **and** the socket must then produce no bytes at all during
+  a 2.5s grace window. A socket that was only frozen flushes as soon as the
+  page thaws; a severed one never does. A genuinely stalled turn — a long tool
+  call — fails the first condition and is left alone. Being wrong is cheap by
+  construction: the replacement resumes from the applied event id, so the cost
+  of a false positive is one reconnect, never a lost or duplicated token.
+
+  Retiring the old socket needed care, because both stream owners treat an
+  ending socket as an ending turn: `submitPrompt` reads an abort as the user
+  pressing Stop, and both teardown paths release the conversation's handles and
+  settle its assistant slot. A superseded-stream marker now tells them a
+  replacement owns the conversation, so the abort lands as a handover rather
+  than a cancellation or a "connection dropped" failure.
+
+  The watchdog is nearly free on a healthy stream: a silence gate means an
+  unforced tick on a socket that has produced bytes recently reads a ref and
+  returns without spending a request. The five-minute idle timeout is kept as
+  the backstop. Design note and honest scope:
+  [`docs/CHAT-STREAM-RECOVERY.md`](docs/CHAT-STREAM-RECOVERY.md).
+
 - **Walking away from a long-running chat turn no longer comes back as "the
   assistant finished without a written reply".** Lock your phone mid-turn and
   the OS severs the TCP socket while fleet keeps generating; the turn finishes,

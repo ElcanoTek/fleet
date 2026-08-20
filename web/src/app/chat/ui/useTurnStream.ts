@@ -75,6 +75,35 @@ const nowMs = (): number => Date.now();
 const minimumThinkingMs = 250;
 const streamIdleTimeoutMs = 300000;
 
+// ── Liveness thresholds (checkStreamLiveness) ───────────────────────────────
+//
+// The server heartbeats an attached stream every FLEET_SSE_HEARTBEAT_INTERVAL
+// (15s by default), so a healthy socket is almost never silent for long. But
+// the heartbeat is operator-configurable and could be off entirely, so nothing
+// below TREATS silence as proof of death — silence only decides whether it is
+// worth spending a probe. Death is proven by the server having moved past us
+// while our socket produces nothing.
+
+// How long an attached stream must have produced no bytes before the watchdog
+// spends an /inflight probe on it. Comfortably above the default heartbeat so
+// a healthy stream is never probed. Explicit tab returns bypass this.
+const streamSilenceProbeMs = 20000;
+
+// After the probe says "the turn is alive and has emitted past you", how long
+// to let the socket prove itself before declaring it dead. A socket that was
+// merely frozen (backgrounded tab, suspended process) delivers its buffered
+// bytes well inside this window; a severed one delivers nothing, ever.
+const streamLivenessGraceMs = 2500;
+
+// Ceiling on waiting for a superseded stream's own teardown to unwind before
+// the replacement attaches. Bounded so a wedged unwind degrades to "no
+// reconnect this round" (the watchdog retries) instead of hanging.
+const supersedeUnwindTimeoutMs = 2000;
+
+// Small awaited delay. Isolated like nowMs so the async stream handlers keep
+// clear of the React Compiler's purity rules.
+const delay = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms));
+
 // Classifies the /api/chat response to a mode:"queue" submission (#824).
 // The server only honors queueing while a turn is actually RUNNING; if our
 // busy flag was stale (the turn finished between our check and the server's),
@@ -202,6 +231,9 @@ export interface TurnStreamDeps {
   lastEventIdByConvRef: TurnStreamState["lastEventIdByConvRef"];
   currentTurnIdByConvRef: TurnStreamState["currentTurnIdByConvRef"];
   reattachInFlightRef: TurnStreamState["reattachInFlightRef"];
+  streamPulseRef: TurnStreamState["streamPulseRef"];
+  supersededStreamsRef: TurnStreamState["supersededStreamsRef"];
+  livenessInFlightRef: TurnStreamState["livenessInFlightRef"];
   promoteStreamKey: TurnStreamState["promoteStreamKey"];
   streamingConvsRef: TurnStreamState["streamingConvsRef"];
   isStreaming: boolean;
@@ -212,10 +244,14 @@ export interface TurnStreamDeps {
 // to the loop and intentionally not returned.
 export interface UseTurnStream {
   reattachToConv: (convId: string) => Promise<void>;
-  // Tab-return recovery: drop a socket that died while the device slept and
-  // adopt the persisted transcript when the turn has since finished.
-  // Returns true when the canonical copy was adopted.
-  reconcileStaleConv: (convId: string) => Promise<boolean>;
+  // Tab-return / watchdog recovery for a socket that died while the device
+  // slept: adopt the persisted transcript when the turn has since finished,
+  // or reconnect the live stream when it is still generating. `force` skips
+  // the silence gate (use it for explicit tab returns, not periodic ticks).
+  checkStreamLiveness: (
+    convId: string,
+    opts?: { force?: boolean },
+  ) => Promise<"idle" | "healthy" | "recovered" | "reconnected">;
   submitPrompt: (submittedPrompt: string) => Promise<void>;
   regenerateLastAssistant: () => Promise<void>;
   resendUserMessage: (userMessageId: number, editedContent: string) => Promise<void>;
@@ -276,6 +312,9 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     lastEventIdByConvRef,
     currentTurnIdByConvRef,
     reattachInFlightRef,
+    streamPulseRef,
+    supersededStreamsRef,
+    livenessInFlightRef,
     promoteStreamKey,
     streamingConvsRef,
     isStreaming,
@@ -416,48 +455,6 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           }
         : m,
     );
-  };
-
-  // reconcileStaleConv is the tab-return recovery the visibility listener
-  // calls. A phone that locks mid-turn leaves a ZOMBIE socket: the fetch
-  // reader neither delivers another chunk nor rejects, so the conversation
-  // still looks attached and every other recovery path bails out — the user
-  // stares at a thinking indicator until the multi-minute idle timeout fires.
-  // Meanwhile the turn has usually finished and Postgres has the whole
-  // answer. Probe the server; when the turn is provably over, drop the dead
-  // socket and adopt the canonical transcript.
-  const reconcileStaleConv = async (convId: string): Promise<boolean> => {
-    if (isPendingKey(convId)) return false;
-    const local = messagesByConvRef.current[convId] ?? [];
-    const last = local[local.length - 1];
-    if (!last || last.role !== "assistant") return false;
-    if (last.state !== "thinking" && last.state !== "streaming") return false;
-    try {
-      const probe = await fetch(
-        `/api/conversations/${encodeURIComponent(convId)}/inflight`,
-        { cache: "no-store" },
-      );
-      if (!probe.ok) return false;
-      const info = (await probe.json()) as { inflight?: boolean };
-      // Still generating — leave it alone. The live socket (or the reattach
-      // the caller runs next) owns this turn.
-      if (info?.inflight) return false;
-    } catch {
-      return false;
-    }
-    if (!(await reconcileFromPersisted(convId))) return false;
-    // The transcript on screen is now the server's. Tear down the socket we
-    // were reading so it cannot resurrect the slot we just replaced, and let
-    // the composer go idle. The abort surfaces in the owning stream's
-    // catch/finally, where the slot it names no longer exists (persisted
-    // messages are renumbered), so both settle to no-ops.
-    const controller = abortControllersRef.current[convId];
-    if (controller) {
-      delete abortControllersRef.current[convId];
-      controller.abort();
-    }
-    markConvIdle(convId);
-    return true;
   };
 
   const applyStreamEvent = async (
@@ -1015,6 +1012,19 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     const decoder = new TextDecoder();
     let buffer = "";
 
+    // Liveness pulse. Every byte off the socket counts — including a heartbeat
+    // comment, which carries no event but does prove the connection is alive.
+    // Seeded at attach so silence is measured from when this stream started,
+    // not from the epoch.
+    const beat = () => {
+      const prev = streamPulseRef.current[ctx.target];
+      streamPulseRef.current[ctx.target] = {
+        at: nowMs(),
+        seq: (prev?.seq ?? 0) + 1,
+      };
+    };
+    beat();
+
     const readChunk = async () =>
       await new Promise<ReadableStreamReadResult<Uint8Array>>((resolve, reject) => {
         let timeoutId: number | null = null;
@@ -1064,6 +1074,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     while (true) {
       const { done, value: chunk } = await readChunk();
       if (done) break;
+      beat();
       buffer += decoder.decode(chunk, { stream: true });
       const parsed = parseSseChunk(buffer);
       buffer = parsed.remainder;
@@ -1103,6 +1114,9 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     if (attachedConvIdsRef.current.has(convId)) return;
     if (reattachInFlightRef.current.has(convId)) return;
     reattachInFlightRef.current.add(convId);
+    // Hoisted so the outer catch can ask the same "was this socket superseded
+    // on purpose?" question the inner finally does.
+    let abortController: AbortController | null = null;
     try {
       const probe = await fetch(`/api/conversations/${convId}/inflight`, { cache: "no-store" });
       if (!probe.ok) return;
@@ -1182,15 +1196,16 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       // Registered like a live turn's controller so unmount cleanup closes
       // this socket too — without it every /chat visit during a long turn
       // opened another reader that outlived the tree it patched.
-      const abortController = new AbortController();
+      abortController = new AbortController();
       abortControllersRef.current[convId] = abortController;
+      const ourController = abortController;
       let response: Response;
       try {
         response = await fetch(`/api/conversations/${convId}/stream${qs}`, {
           method: "GET",
           cache: "no-store",
           headers: { "Last-Event-ID": String(lastSeen) },
-          signal: abortController.signal,
+          signal: ourController.signal,
         });
         if (!response.ok) {
           // A failed reattach (server restart, expired retain buffer) must
@@ -1238,7 +1253,16 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           // force the slot to done or mark the conversation idle — it isn't.
           // Detach and reattach with Last-Event-ID to resume the stream.
           attachedConvIdsRef.current.delete(convId);
-          if (abortControllersRef.current[convId] === abortController) {
+          if (abortControllersRef.current[convId] === ourController) {
+            delete abortControllersRef.current[convId];
+          }
+        } else if (supersededStreamsRef.current.has(ourController)) {
+          // We aborted this socket ourselves because it was dead and a
+          // replacement stream now owns the conversation (checkStreamLiveness).
+          // Touch nothing: the attach/streaming handles and the assistant slot
+          // belong to the newer stream, and settling here would tear down a
+          // turn that is very much still running.
+          if (abortControllersRef.current[convId] === ourController) {
             delete abortControllersRef.current[convId];
           }
         } else {
@@ -1249,7 +1273,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
             attachedConvIdsRef.current.delete(convId);
             markConvIdle(convId);
           }
-          if (abortControllersRef.current[convId] === abortController) {
+          if (abortControllersRef.current[convId] === ourController) {
             delete abortControllersRef.current[convId];
           }
           // The replay ended — cleanly, or because the socket died under a
@@ -1269,13 +1293,202 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         setTimeout(() => void reattachToConv(convId), 150);
       }
     } catch {
-      // Silent — reattach is best-effort.
-      if (attachedConvIdsRef.current.has(convId)) {
+      // Silent — reattach is best-effort. A stream we superseded on purpose is
+      // not a failure and no longer owns these handles; leave them to the
+      // replacement.
+      if (
+        !(abortController && supersededStreamsRef.current.has(abortController)) &&
+        attachedConvIdsRef.current.has(convId)
+      ) {
         attachedConvIdsRef.current.delete(convId);
         markConvIdle(convId);
       }
     } finally {
       reattachInFlightRef.current.delete(convId);
+    }
+  };
+
+  // ── Telling a DEAD socket apart from a QUIET one ────────────────────────
+  //
+  // A phone that locks mid-turn leaves a ZOMBIE socket: the fetch reader
+  // neither delivers another chunk nor rejects, so the conversation goes on
+  // looking attached long after its connection is gone. Every other recovery
+  // path bails out on "already attached", so nothing notices until the
+  // multi-minute idle timeout fires.
+  //
+  // Two different things can be true behind that silence, and they need
+  // opposite responses:
+  //   - the turn FINISHED while we were away → adopt the persisted transcript
+  //     (reconcileFromPersisted); the answer is already in Postgres.
+  //   - the turn is STILL GENERATING → there is nothing to adopt yet. Replace
+  //     the dead socket and resume the live stream from our last applied
+  //     event id, so tokens start landing again instead of the user watching
+  //     a thinking indicator that will never move.
+  //
+  // The hard part is proving deadness without false-positiving a healthy but
+  // quiet stream. The proof used here is two-part and does not depend on the
+  // (operator-configurable) heartbeat: the server reports it has emitted PAST
+  // our last applied event id, and our socket then produces no bytes at all
+  // during a grace window. A frozen-but-alive socket delivers its buffered
+  // bytes as soon as the page thaws, well inside that window; a severed one
+  // delivers nothing, ever.
+  //
+  // A false positive is cheap by construction — the replacement attaches with
+  // Last-Event-ID set to what we already applied, the server replays from
+  // there, and stepStreamDedup drops anything we have seen. The cost is one
+  // reconnect, never a duplicated or lost token.
+
+  // supersedeStream retires the socket currently attached to convId in favor
+  // of a replacement. The marker is what keeps the retiring stream's own
+  // teardown from tearing down the turn (see the supersededStreamsRef checks
+  // in reattachToConv and submitPrompt): without it the abort would land as a
+  // user Stop, or settle a still-running turn as a dropped connection.
+  // Resolves once the old stream has unwound far enough for a reattach to be
+  // able to claim the conversation.
+  // retireStream marks `doomed` superseded and aborts it — but only if it is
+  // still the controller registered for this conversation. The identity check
+  // is what keeps a slow await earlier in the caller from retiring a stream
+  // that arrived in the meantime: aborting someone else's live socket while
+  // flagging it "superseded" would silently strand the turn it was reading.
+  // Reports whether it actually retired anything.
+  const retireStream = (convId: string, doomed: AbortController | null): boolean => {
+    if (!doomed) return false;
+    if (abortControllersRef.current[convId] !== doomed) return false;
+    supersededStreamsRef.current.add(doomed);
+    delete abortControllersRef.current[convId];
+    doomed.abort();
+    return true;
+  };
+
+  // supersedeStream retires the dead socket and waits until a replacement can
+  // actually claim the conversation.
+  const supersedeStream = async (
+    convId: string,
+    doomed: AbortController | null,
+  ): Promise<void> => {
+    retireStream(convId, doomed);
+    // Hand the slot back so the replacement's own guards let it through. The
+    // retiring stream will not do this for us — that is the whole point of
+    // the marker.
+    attachedConvIdsRef.current.delete(convId);
+    // Wait for the retiring stream's in-flight guard to clear, or reattach
+    // would refuse ("a reattach is already running for this conv") and we
+    // would end up with no stream at all. Bounded: a wedged unwind degrades
+    // to no reconnect this round, and the watchdog tries again.
+    const deadline = nowMs() + supersedeUnwindTimeoutMs;
+    while (reattachInFlightRef.current.has(convId) && nowMs() < deadline) {
+      await delay(50);
+    }
+  };
+
+  // checkStreamLiveness is the single entry point for the tab-return listener
+  // and the watchdog interval. `force` skips the silence gate: an explicit
+  // return to the tab is always worth a probe, whereas the periodic watchdog
+  // only spends one on a stream that has actually gone quiet (a healthy
+  // stream heartbeats, so it is never probed).
+  //
+  // Returns what it did, for tests and for the caller's logging:
+  //   "idle"        — nothing attached / nothing mid-flight here
+  //   "healthy"     — the socket is fine (or too fresh to suspect)
+  //   "recovered"   — the turn had finished; the persisted transcript is in
+  //   "reconnected" — the turn is alive; a fresh socket now owns it
+  const checkStreamLiveness = async (
+    convId: string,
+    opts: { force?: boolean } = {},
+  ): Promise<"idle" | "healthy" | "recovered" | "reconnected"> => {
+    if (isPendingKey(convId)) return "idle";
+    if (!attachedConvIdsRef.current.has(convId)) return "idle";
+    if (livenessInFlightRef.current.has(convId)) return "idle";
+    const local = messagesByConvRef.current[convId] ?? [];
+    const last = local[local.length - 1];
+    if (!last || last.role !== "assistant") return "idle";
+    if (last.state !== "thinking" && last.state !== "streaming") return "idle";
+
+    const pulseBefore = streamPulseRef.current[convId];
+    const silentMs = nowMs() - (pulseBefore?.at ?? 0);
+    // Bytes arrived recently — the socket is demonstrably alive, so there is
+    // nothing to probe. The watchdog uses the wide gate (this is its common
+    // case, and it costs nothing). A forced call still skips a stream that
+    // produced bytes within the grace window it would otherwise sit through:
+    // on an actively streaming conversation, `focus` fires often and every
+    // one of those probes could only ever conclude "healthy".
+    if (silentMs < (opts.force ? streamLivenessGraceMs : streamSilenceProbeMs)) {
+      return "healthy";
+    }
+
+    // Captured before the first await: every retire below checks that this is
+    // still the conversation's registered controller.
+    const doomed = abortControllersRef.current[convId] ?? null;
+    livenessInFlightRef.current.add(convId);
+    try {
+      let inflight = false;
+      let serverLastEventId = 0;
+      try {
+        const probe = await fetch(
+          `/api/conversations/${encodeURIComponent(convId)}/inflight`,
+          { cache: "no-store" },
+        );
+        if (!probe.ok) return "healthy";
+        const info = (await probe.json()) as {
+          inflight?: boolean;
+          last_event_id?: number;
+        };
+        inflight = Boolean(info?.inflight);
+        serverLastEventId = info?.last_event_id ?? 0;
+      } catch {
+        // The probe itself failed (offline, server bounce). Assume nothing.
+        return "healthy";
+      }
+
+      if (!inflight) {
+        // The turn is over. Postgres is authoritative; adopt it and retire the
+        // socket. reconcileFromPersisted releases the attach handle itself.
+        if (!(await reconcileFromPersisted(convId))) return "healthy";
+        // If something else has claimed the conversation since we started
+        // (loadConversation ends by re-probing for an in-flight turn), that
+        // stream owns the streaming flag — leave it be. Otherwise the turn is
+        // over and the composer should be free. Note this is about a
+        // DIFFERENT controller having appeared, not about `doomed` existing:
+        // an attach handle with no registered controller still needs idling.
+        const current = abortControllersRef.current[convId];
+        const claimedByOther = Boolean(current) && current !== doomed;
+        retireStream(convId, doomed);
+        if (!claimedByOther) markConvIdle(convId);
+        return "recovered";
+      }
+
+      // Still generating. Has the server moved past us? If not, nothing has
+      // been missed and there is nothing to prove — a genuinely stalled turn
+      // (a long tool call) looks exactly like this and must be left alone.
+      const applied = lastEventIdByConvRef.current[convId] ?? 0;
+      if (serverLastEventId <= applied) return "healthy";
+
+      // The server is ahead of us. Give the socket its chance: a frozen-but-
+      // alive connection flushes as soon as the page thaws.
+      await delay(streamLivenessGraceMs);
+      const pulseAfter = streamPulseRef.current[convId];
+      if ((pulseAfter?.seq ?? 0) !== (pulseBefore?.seq ?? 0)) return "healthy";
+      // Re-check the preconditions: the grace window is long enough for the
+      // turn to have ended, or for another path to have settled the slot.
+      if (!attachedConvIdsRef.current.has(convId)) return "idle";
+      const stillLocal = messagesByConvRef.current[convId] ?? [];
+      const stillLast = stillLocal[stillLocal.length - 1];
+      if (
+        !stillLast ||
+        stillLast.role !== "assistant" ||
+        (stillLast.state !== "thinking" && stillLast.state !== "streaming")
+      ) {
+        return "idle";
+      }
+
+      // Dead. Retire it and resume the turn on a fresh socket; reattachToConv
+      // reuses the mid-flight slot and replays from our last applied event id,
+      // so the partial answer on screen is kept and nothing is rendered twice.
+      await supersedeStream(convId, doomed);
+      await reattachToConv(convId);
+      return "reconnected";
+    } finally {
+      livenessInFlightRef.current.delete(convId);
     }
   };
 
@@ -1631,6 +1844,15 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       void loadMemories();
     } catch (error) {
       const target = resolveTarget();
+      if (supersededStreamsRef.current.has(abortController)) {
+        // We aborted this POST ourselves because its socket was dead and a
+        // replacement stream has taken over the conversation
+        // (checkStreamLiveness). This is NOT a user Stop and NOT a failure:
+        // the turn is still running and someone else is reading it now.
+        // Leave the slot, the attach handle and the streaming flag alone —
+        // the `finally` below makes the same check.
+        return;
+      }
       if (abortController.signal.aborted) {
         // User clicked Stop. Mark the turn cancelled — the server's
         // turn.cancelled event may or may not reach us before the socket
@@ -1745,23 +1967,29 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       if (abortControllersRef.current[finalTarget] === abortController) {
         delete abortControllersRef.current[finalTarget];
       }
-      attachedConvIdsRef.current.delete(finalTarget);
-      markConvIdle(finalTarget);
-      // Last resort: if every path above missed this slot it is still
-      // mid-flight, and the indicator would hang until the user refreshed.
-      // Settle it — but settle it the same way the rest of the loop does,
-      // by asking Postgres first. The old version stamped a bare
-      // `state: "done"` here, which turned an unknown outcome into a
-      // *silent empty success*: the transcript claimed the assistant
-      // finished without a written reply while the DB held the full answer.
-      // Any already-terminal slot (done/failed/cancelled) is left alone.
-      await settleStreamedSlot(finalTarget, assistantId, false);
+      // Superseded: a replacement stream owns this conversation's handles and
+      // its assistant slot. Releasing them here would idle a composer for a
+      // turn that is still generating and detach the socket that just took
+      // over. Everything else below is this stream's own cleanup.
+      if (!supersededStreamsRef.current.has(abortController)) {
+        attachedConvIdsRef.current.delete(finalTarget);
+        markConvIdle(finalTarget);
+        // Last resort: if every path above missed this slot it is still
+        // mid-flight, and the indicator would hang until the user refreshed.
+        // Settle it — but settle it the same way the rest of the loop does,
+        // by asking Postgres first. The old version stamped a bare
+        // `state: "done"` here, which turned an unknown outcome into a
+        // *silent empty success*: the transcript claimed the assistant
+        // finished without a written reply while the DB held the full answer.
+        // Any already-terminal slot (done/failed/cancelled) is left alone.
+        await settleStreamedSlot(finalTarget, assistantId, false);
+      }
     }
   };
 
   return {
     reattachToConv,
-    reconcileStaleConv,
+    checkStreamLiveness,
     submitPrompt,
     regenerateLastAssistant,
     resendUserMessage,
