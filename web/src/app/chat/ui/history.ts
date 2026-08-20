@@ -258,6 +258,9 @@ export type Approval = {
   id: string;
   tool: string;
   summary: {
+    /** The staged tool's name; every server summarizer echoes it. */
+    tool?: string;
+
     // email
     to?: string | string[];
     cc?: string | string[];
@@ -308,9 +311,26 @@ export type Approval = {
     allow_network?: boolean;
     /** Task tags. */
     tags?: string[];
+
+    // generic critical tools (anything without a tailored card, e.g. a
+    // bundle-declared pages deploy): top-level arguments as display rows,
+    // pre-truncated server-side. `raw` is the unparseable-args fallback.
+    args?: Array<{ key: string; value: string }>;
+    raw?: string;
   };
   status: ApprovalStatus;
   resultText?: string;
+  /**
+   * True for a notify-mode record (#1153): the tool already RAN and this card
+   * records that fact (plus the bundle-authored undo hint in resultText) —
+   * it never asked and nothing was approved by a human.
+   */
+  recorded?: boolean;
+  /**
+   * The staged tool_call's id. Reload uses it to re-attach the card to the
+   * message holding that call, so the transcript keeps its live shape.
+   */
+  toolCallId?: string;
   /**
    * Unix-seconds default-deny deadline (#225). When > 0 the card renders a
    * countdown and transitions to a timed-out state at this instant; the

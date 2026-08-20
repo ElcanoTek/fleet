@@ -203,7 +203,17 @@ from never silently lingers as an executable action. A background sweep
 (every 30s) flips expired pending approvals to *rejected* and writes the outcome
 into the conversation so the next turn knows the action was not taken. A human
 who clicks Send in the brief grace window before the sweep still wins the race
-(the atomic claim decides), so a late decision is honored rather than lost.
+(the atomic claim decides), so a late decision is honored rather than lost. A
+click that lands *after* the deadline resolves the row as timed out right then
+(the same claim primitive the sweep uses), so the card settles deterministically
+instead of echoing a still-pending state back at the user. A timed-out card
+offers a one-click **Ask again**, which submits a user turn asking the agent to
+re-stage the action.
+
+Two exceptions by design: `preview_email` stages with **no deadline** — the
+card is display-only (Dismiss is its only action), so there is nothing for
+default-deny to protect against — and notify-mode records (#1153, below) are
+created already resolved.
 
 The wait window resolves highest-priority-first:
 
@@ -211,8 +221,16 @@ The wait window resolves highest-priority-first:
    manifest (keyed by the same bare tool-name suffix as `critical_tools`).
 2. **Per-conversation** — `POST /conversations/{id}/approval-timeout` with
    `{"approval_timeout_seconds": N}` (or `null` to clear).
-3. **Global** — `FLEET_APPROVAL_TIMEOUT_SECONDS` (default **300**). A non-positive
-   value is treated as "use the 300s default", never as "deny instantly".
+3. **Admin override** — the `approval_timeout_seconds` row in Settings → Admin →
+   Features (60–86400s, applies live to the next staged card;
+   [ADMIN-SETTINGS.md](ADMIN-SETTINGS.md)).
+4. **Global** — `FLEET_APPROVAL_TIMEOUT_SECONDS` (default **3600**). A
+   non-positive value is treated as "use the 3600s default", never as "deny
+   instantly". The default was 300s until the cards rework: the card lands
+   whenever the agent reaches it — often minutes into a run the user started
+   and then reasonably stopped watching — so five minutes mostly denied the
+   final, wanted action of a long run (the same observation that motivated
+   notify mode).
 
 ### Per-tool approval MODE (#1153)
 
@@ -255,6 +273,14 @@ Three properties keep this narrow:
 `critical_tool_undo_hints` is bundle-authored on purpose: fleet does not know any
 client's reversal verb and must not invent one. "We can always roll back" is only
 true in practice if the card says how.
+
+The record **survives a page reload**: resolved approvals (records included) are
+re-hydrated into the transcript by the conversation GET and anchored to the
+message holding their tool call, so the user who was away — notify mode's entire
+audience — still finds the "ran without asking" card and its undo hint when they
+come back, not just a raw tool chip. See
+[APPROVAL-CARDS.md](APPROVAL-CARDS.md) for the card UX as a whole (the generic
+critical-action card, honest per-tool copy, timed-out recovery).
 
 `FLEET_AUTO_APPROVE_IN_TEST` (default **false**) is a CI/test escape hatch that
 auto-approves every staged critical tool instead of waiting for a human. It

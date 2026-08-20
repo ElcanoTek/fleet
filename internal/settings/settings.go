@@ -113,6 +113,13 @@ func Registry() []Spec {
 		// value honest about what the runtime enforces.
 		{Key: "max_tool_output_bytes", Kind: KindInt, Min: 1024, Max: 128 * 1024, MinZeroOK: true,
 			EnvVar: "FLEET_MAX_TOOL_OUTPUT_BYTES"},
+		// The approval default-deny window (#225). Bounds mirror the
+		// per-conversation override's: at least a minute (a shorter window is a
+		// deny in disguise) and at most 24h (a typo must not leave cards
+		// effectively un-expiring). The stager reads the live value once per
+		// turn, so an edit governs the next staged card without a restart.
+		{Key: "approval_timeout_seconds", Kind: KindInt, Min: 60, Max: 86400,
+			EnvVar: "FLEET_APPROVAL_TIMEOUT_SECONDS"},
 		{Key: "phone_a_friend_enabled", Kind: KindBool,
 			EnvVar: "FLEET_PHONE_A_FRIEND_ENABLED"},
 		{Key: "subagents_enabled", Kind: KindBool,
