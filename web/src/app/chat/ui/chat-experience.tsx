@@ -3252,6 +3252,7 @@ export function ChatExperience({
   } satisfies TurnStreamDeps;
   const {
     reattachToConv,
+    reconcileStaleConv,
     submitPrompt,
     regenerateLastAssistant,
     resendUserMessage,
@@ -3273,11 +3274,13 @@ export function ChatExperience({
   // suppression. Reading a ref *inside an effect or event handler* (never
   // during render) is the supported pattern.
   const reattachToConvRef = useRef(reattachToConv);
+  const reconcileStaleConvRef = useRef(reconcileStaleConv);
   const loadConversationRef = useRef(loadConversation);
   const refreshConversationsRef = useRef(refreshConversations);
   const loadMcpServerCatalogPreviewRef = useRef(loadMcpServerCatalogPreview);
   useEffect(() => {
     reattachToConvRef.current = reattachToConv;
+    reconcileStaleConvRef.current = reconcileStaleConv;
     loadConversationRef.current = loadConversation;
     refreshConversationsRef.current = refreshConversations;
     loadMcpServerCatalogPreviewRef.current = loadMcpServerCatalogPreview;
@@ -3356,7 +3359,18 @@ export function ChatExperience({
       if (document.visibilityState !== "visible") return;
       const convId = activeConversationIdRef.current;
       if (!convId) return;
-      if (attachedConvIdsRef.current.has(convId)) return;
+      if (attachedConvIdsRef.current.has(convId)) {
+        // "Attached" is not the same as "alive". A phone that locks mid-turn
+        // leaves a zombie socket: the reader never delivers another chunk and
+        // never rejects, so the conversation keeps looking attached while the
+        // turn quietly finishes server-side. Returning here unconditionally
+        // is why coming back to a completed long-running task showed a stuck
+        // thinking indicator — and then, once the idle timeout finally fired,
+        // a bubble claiming the assistant never replied. Probe instead, and
+        // adopt the persisted transcript when the turn is provably over.
+        await reconcileStaleConvRef.current(convId);
+        return;
+      }
 
       // First try to reattach to any in-flight turn so the user sees
       // live tokens resume. If nothing's in-flight, fall back to a

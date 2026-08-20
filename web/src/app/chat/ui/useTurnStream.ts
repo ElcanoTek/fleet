@@ -95,6 +95,37 @@ export function classifyQueueSubmitResponse(res: {
   return contentType.toLowerCase().includes("text/event-stream") ? "stream" : "queued";
 }
 
+// persistedAnswersLocalTurn reports whether the CANONICAL (Postgres) copy of a
+// conversation already contains a finished assistant reply for the turn the
+// client is still holding open — i.e. whether hitting refresh right now would
+// show the answer.
+//
+// Two conditions, both load-bearing:
+//   - the persisted transcript ends in a completed, non-failed assistant
+//     message (the reply landed and the turn was sealed), and
+//   - it covers at least as many user turns as our in-memory copy.
+//
+// The second guard is what keeps this from adopting a STALE transcript. A
+// conversation whose previous turn completed also "ends in an assistant
+// reply"; without the user-turn count we would happily swap the live turn's
+// prompt out of the transcript and call it a recovery. Counting user messages
+// (not entries) is the comparison that survives historyToMessages' grouping:
+// it merges an assistant's text/tool_call/tool_result rows into one message
+// but never merges user rows.
+export function persistedAnswersLocalTurn(
+  history: HistoryEntry[] | null | undefined,
+  localMessages: Message[],
+): boolean {
+  const persisted = historyToMessages(history ?? []);
+  const last = persisted[persisted.length - 1];
+  if (!last || last.role !== "assistant" || last.state !== "done" || last.failed) {
+    return false;
+  }
+  const userTurns = (messages: Message[]) =>
+    messages.reduce((n, m) => n + (m.role === "user" ? 1 : 0), 0);
+  return userTurns(persisted) >= userTurns(localMessages);
+}
+
 // Server-trusted attachment metadata returned by POST /api/attachments and
 // forwarded in the /api/chat body. Local to the turn loop.
 type UploadedAttachmentMeta = {
@@ -126,7 +157,7 @@ export interface TurnStreamDeps {
   refreshConversations: () => Promise<void>;
   loadConversation: (
     conversationId: string,
-    options?: { preserveScroll?: boolean },
+    options?: { preserveScroll?: boolean; background?: boolean; restore?: boolean },
   ) => Promise<void>;
   loadMemories: () => Promise<void>;
   loadRankedModels: () => Promise<void>;
@@ -181,6 +212,10 @@ export interface TurnStreamDeps {
 // to the loop and intentionally not returned.
 export interface UseTurnStream {
   reattachToConv: (convId: string) => Promise<void>;
+  // Tab-return recovery: drop a socket that died while the device slept and
+  // adopt the persisted transcript when the turn has since finished.
+  // Returns true when the canonical copy was adopted.
+  reconcileStaleConv: (convId: string) => Promise<boolean>;
   submitPrompt: (submittedPrompt: string) => Promise<void>;
   regenerateLastAssistant: () => Promise<void>;
   resendUserMessage: (userMessageId: number, editedContent: string) => Promise<void>;
@@ -280,6 +315,151 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     }
   };
 
+  // ── Losing the socket is not the same as losing the turn ────────────────
+  //
+  // Every path below used to settle an orphaned assistant slot by stamping
+  // `state: "done"` on the spot. That invents a terminal state we never
+  // observed: the bubble renders as "The assistant finished without a
+  // written reply." (or the literal "No response returned.") even though the
+  // turn completed fine and Postgres holds the entire answer. That is the
+  // walk-away-and-come-back report — a phone locks mid-turn, the OS severs
+  // the socket, the user reopens the tab and is told the assistant said
+  // nothing, and a manual refresh immediately shows the full reply.
+  //
+  // The fix is to make "we lost the stream" mean "ask the server", not
+  // "declare the turn empty". Postgres is the canonical record; refreshing
+  // works precisely because it reads from there. These helpers do the same
+  // read automatically.
+
+  // reconcileFromPersisted adopts the canonical transcript when it already
+  // answers the turn we are holding open — programmatically what the user's
+  // manual refresh does. Returns true when the swap happened.
+  const reconcileFromPersisted = async (convId: string): Promise<boolean> => {
+    if (isPendingKey(convId)) return false;
+    try {
+      const res = await fetch(`/api/conversations/${encodeURIComponent(convId)}`, {
+        cache: "no-store",
+      });
+      if (!res.ok) return false;
+      const data = (await res.json()) as { history?: HistoryEntry[] | null };
+      const local = messagesByConvRef.current[convId] ?? [];
+      if (!persistedAnswersLocalTurn(data.history, local)) return false;
+      // Release the attach handle first: loadConversation deliberately
+      // short-circuits for a conversation it believes is still streaming
+      // (the in-memory copy is newer than the DB in that case). Here the
+      // opposite is true — the DB is the newer copy.
+      attachedConvIdsRef.current.delete(convId);
+      await loadConversation(convId, {
+        preserveScroll: true,
+        background: true,
+        restore: true,
+      });
+      return true;
+    } catch {
+      // Best-effort: the caller falls back to an honest failure marker.
+      return false;
+    }
+  };
+
+  // settleStreamedSlot finalizes the assistant slot a drained/severed stream
+  // was writing to. Two slots need help:
+  //   - one still mid-flight (`thinking`/`streaming`): the socket ended
+  //     without a terminal event, so we never learned the outcome; and
+  //   - one already `done` but empty after a replay GAP (see the `reconnect`
+  //     handler): the terminal event arrived, the answer did not.
+  // Both ask Postgres first. Only when the DB has nothing better do we settle
+  // the slot ourselves, and then honestly — a retryable dropped-connection
+  // notice, never a silent empty success.
+  const settleStreamedSlot = async (
+    convId: string,
+    assistantId: number,
+    gap: boolean,
+  ): Promise<void> => {
+    const slot = (messagesByConvRef.current[convId] ?? []).find((m) => m.id === assistantId);
+    if (!slot) return;
+    const midFlight = slot.state === "thinking" || slot.state === "streaming";
+    const emptyAfterGap =
+      gap &&
+      slot.state === "done" &&
+      !slot.cancelled &&
+      !slot.failed &&
+      !slot.modelRequired &&
+      !slot.content.trim() &&
+      !(slot.toolCalls && slot.toolCalls.length > 0);
+    if (!midFlight && !emptyAfterGap) return;
+    if (await reconcileFromPersisted(convId)) return;
+    if (!midFlight) return;
+    // A slot holding a pending approval or memory proposal is waiting on the
+    // USER, not on the network: resolving the card resumes the turn. Settle
+    // it quietly — a "Turn failed / Retry" banner over a live action card
+    // would tell the reader to throw away the very decision we're asking for.
+    // (ChatTranscript already suppresses the empty-reply notice here.)
+    const awaitingUser =
+      (slot.approvals ?? []).some((a) => a.status === "pending") ||
+      (slot.memoryProposals ?? []).some((mp) => mp.status === "pending");
+    if (awaitingUser) {
+      patchAssistantMessage(convId, assistantId, (m) =>
+        m.state === "thinking" || m.state === "streaming" ? { ...m, state: "done" } : m,
+      );
+      return;
+    }
+    patchAssistantMessage(convId, assistantId, (m) =>
+      m.state === "thinking" || m.state === "streaming"
+        ? {
+            ...m,
+            // Keep whatever partial answer did arrive; say plainly that the
+            // rest was lost, and offer Retry. Anything already streamed is
+            // more useful to the reader than a blanket error string.
+            content: m.content || "The connection dropped before the response finished.",
+            state: "done",
+            failed: true,
+          }
+        : m,
+    );
+  };
+
+  // reconcileStaleConv is the tab-return recovery the visibility listener
+  // calls. A phone that locks mid-turn leaves a ZOMBIE socket: the fetch
+  // reader neither delivers another chunk nor rejects, so the conversation
+  // still looks attached and every other recovery path bails out — the user
+  // stares at a thinking indicator until the multi-minute idle timeout fires.
+  // Meanwhile the turn has usually finished and Postgres has the whole
+  // answer. Probe the server; when the turn is provably over, drop the dead
+  // socket and adopt the canonical transcript.
+  const reconcileStaleConv = async (convId: string): Promise<boolean> => {
+    if (isPendingKey(convId)) return false;
+    const local = messagesByConvRef.current[convId] ?? [];
+    const last = local[local.length - 1];
+    if (!last || last.role !== "assistant") return false;
+    if (last.state !== "thinking" && last.state !== "streaming") return false;
+    try {
+      const probe = await fetch(
+        `/api/conversations/${encodeURIComponent(convId)}/inflight`,
+        { cache: "no-store" },
+      );
+      if (!probe.ok) return false;
+      const info = (await probe.json()) as { inflight?: boolean };
+      // Still generating — leave it alone. The live socket (or the reattach
+      // the caller runs next) owns this turn.
+      if (info?.inflight) return false;
+    } catch {
+      return false;
+    }
+    if (!(await reconcileFromPersisted(convId))) return false;
+    // The transcript on screen is now the server's. Tear down the socket we
+    // were reading so it cannot resurrect the slot we just replaced, and let
+    // the composer go idle. The abort surfaces in the owning stream's
+    // catch/finally, where the slot it names no longer exists (persisted
+    // messages are renumbered), so both settle to no-ops.
+    const controller = abortControllersRef.current[convId];
+    if (controller) {
+      delete abortControllersRef.current[convId];
+      controller.abort();
+    }
+    markConvIdle(convId);
+    return true;
+  };
+
   const applyStreamEvent = async (
     event: ServerEvent,
     payload: unknown,
@@ -291,6 +471,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       isReattach: boolean;
       sawTerminal: boolean;
       evicted: boolean;
+      gap: boolean;
     },
   ) => {
     if (event.event === "reconnect") {
@@ -298,8 +479,16 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       // dropped for falling behind while the turn kept running — the stream
       // is about to end with a clean EOF that must NOT be read as
       // turn-complete; the pump's caller reattaches instead.
-      const p = payload as { type?: string };
+      //
+      // A `missed_events` count means the server's sliding window dropped
+      // events we never saw (a long, chatty turn can outrun the per-turn
+      // byte cap). Record it: a turn that then completes with an empty
+      // assistant slot has NOT necessarily produced no answer — we just
+      // didn't receive it — so the finalizers below reconcile against
+      // Postgres instead of stamping "No response returned."
+      const p = payload as { type?: string; missed_events?: number };
       if (p.type === "evicted") ctx.evicted = true;
+      if ((p.missed_events ?? 0) > 0) ctx.gap = true;
       return;
     }
 
@@ -785,7 +974,11 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       };
       patchAssistantMessage(ctx.target, ctx.assistantId, (m) => ({
         ...clearRetryNotice(m),
-        content: m.content || (m.reasoning ? "" : "No response returned."),
+        // ctx.gap: the replay skipped events we never received, so an empty
+        // slot means "we missed the answer", not "there was no answer".
+        // Leave it empty and let settleStreamedSlot pull the real one from
+        // Postgres once the stream has drained.
+        content: m.content || (m.reasoning || ctx.gap ? "" : "No response returned."),
         state: "done",
         summary: {
           costUsd: p.cost_usd ?? 0,
@@ -812,6 +1005,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       isReattach: boolean;
       sawTerminal: boolean;
       evicted: boolean;
+      gap: boolean;
     },
   ) => {
     if (!response.body) {
@@ -1023,6 +1217,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         isReattach: true,
         sawTerminal: false,
         evicted: false,
+        gap: false,
       };
       try {
         await pumpStreamResponse(response, ctx);
@@ -1047,14 +1242,9 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
             delete abortControllersRef.current[convId];
           }
         } else {
-          patchAssistantMessage(convId, ctx.assistantId, (m) =>
-            m.state === "thinking" || m.state === "streaming"
-              ? { ...m, state: "done", content: m.content || (m.reasoning ? "" : m.content) }
-              : m,
-          );
-          // After reattach ends (turn finished or server hung up), the
-          // canonical record is in Postgres; refresh so any server-side
-          // state we missed (new title, updated metrics sidebar) shows.
+          // Release our handles BEFORE settling: settleStreamedSlot may pull
+          // the canonical transcript, and loadConversation short-circuits
+          // while the conversation still looks attached.
           if (attachedConvIdsRef.current.has(convId)) {
             attachedConvIdsRef.current.delete(convId);
             markConvIdle(convId);
@@ -1062,6 +1252,14 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           if (abortControllersRef.current[convId] === abortController) {
             delete abortControllersRef.current[convId];
           }
+          // The replay ended — cleanly, or because the socket died under a
+          // locked phone. Either way the canonical record is in Postgres.
+          // Reconcile against it rather than stamping a terminal state we
+          // never observed; only a turn the DB has no answer for is settled
+          // locally, and then as a retryable dropped connection.
+          await settleStreamedSlot(convId, ctx.assistantId, ctx.gap);
+          // Refresh so any server-side state we missed (new title, updated
+          // metrics sidebar) shows.
           void refreshConversations();
         }
       }
@@ -1135,6 +1333,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       isReattach: false,
       sawTerminal: false,
       evicted: false,
+      gap: false,
     };
     await pumpStreamResponse(response, ctx);
     target = ctx.target;
@@ -1156,9 +1355,12 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
 
     patchAssistantMessage(target, assistantId, (m) => ({
       ...m,
-      content: m.content || (m.reasoning ? "" : "No response returned."),
+      content: m.content || (m.reasoning || ctx.gap ? "" : "No response returned."),
       state: "done",
     }));
+    // A replay gap (server-side sliding-window eviction on a long, chatty
+    // turn) can leave the slot terminal but empty. Postgres has the answer.
+    await settleStreamedSlot(target, assistantId, ctx.gap);
   };
 
   const regenerateLastAssistant = async () => {
@@ -1479,19 +1681,13 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           // it; the finally below will only reset state we still own.
           attachedConvIdsRef.current.delete(target);
           await reattachToConv(target);
-          // Defensive reconcile against the probe/reattach race: if
-          // the turn completed between our /inflight probe and
-          // reattach's own probe, reattach short-circuits without
-          // attaching and the slot is left marked "streaming". Reload
-          // from the DB to surface the canonical final state.
-          const slot = messagesByConvRef.current[target]?.find((m) => m.id === assistantId);
-          if (slot && (slot.state === "streaming" || slot.state === "thinking")) {
-            // Either mid-flight state means reattach short-circuited
-            // (e.g. the retain buffer was already evicted) without
-            // delivering a terminal event. Postgres has the canonical
-            // shape — pull it.
-            await loadConversation(target);
-          }
+          // Defensive reconcile against the probe/reattach race: if the turn
+          // completed between our /inflight probe and reattach's own probe,
+          // reattach short-circuits without attaching and the slot is left
+          // mid-flight. Postgres has the canonical shape — pull it (and, if
+          // it doesn't, leave an honest retryable marker instead of a blank
+          // bubble that reads as "the assistant said nothing").
+          await settleStreamedSlot(target, assistantId, false);
         } else {
           // Guard against the two-recovery-path race. When a phone
           // unlocks, the visibilitychange/focus reattach and this catch
@@ -1509,36 +1705,15 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           } else {
             // The probe found nothing in-flight and no retained buffer. For a
             // LONG job that finished while the phone was locked, the turn has
-            // already been persisted to Postgres and its short retain buffer
-            // (server.go:bufferRetainTTL, ~2m) has since expired — so
-            // /inflight legitimately reports nothing even though the full
-            // answer exists in the DB. That's the "looks failed until I
-            // refresh" report: a manual refresh recovers it because it reads
-            // Postgres. Do the same here BEFORE declaring failure — only
-            // stamp "failed" when the DB confirms there's no completed answer.
-            let recovered = false;
-            if (!isPendingKey(target)) {
-              try {
-                const r = await fetch(`/api/conversations/${target}`, { cache: "no-store" });
-                if (r.ok) {
-                  const data = (await r.json()) as { history?: HistoryEntry[] | null };
-                  const persisted = historyToMessages(data.history ?? []);
-                  const last = persisted[persisted.length - 1];
-                  recovered = Boolean(
-                    last && last.role === "assistant" && last.state === "done" && !last.failed,
-                  );
-                }
-              } catch {
-                /* DB probe failed — fall through to the failed marker */
-              }
-            }
-            if (recovered) {
-              // Release our attach handle so loadConversation doesn't
-              // short-circuit, then reload the canonical state from Postgres
-              // — identical to a manual page refresh, but automatic.
-              attachedConvIdsRef.current.delete(target);
-              await loadConversation(target);
-            } else {
+            // already been persisted to Postgres and its retain buffer
+            // (server.go:bufferRetainTTL) has since expired — so /inflight
+            // legitimately reports nothing even though the full answer exists
+            // in the DB. That's the "looks failed until I refresh" report: a
+            // manual refresh recovers it because it reads Postgres. Do the
+            // same here BEFORE declaring failure — only stamp "failed" when
+            // the DB confirms there's no completed answer for THIS turn.
+            const recovered = await reconcileFromPersisted(target);
+            if (!recovered) {
               // The premature-EOF sentinel is an internal signal, never a
               // user-facing string — only reachable when the turn is genuinely
               // gone (not inflight, no buffer, nothing completed in the DB).
@@ -1572,24 +1747,21 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       }
       attachedConvIdsRef.current.delete(finalTarget);
       markConvIdle(finalTarget);
-      // Belt-and-suspenders: if any path missed transitioning the slot
-      // out of a mid-flight state, do it here. The success path
-      // already patches `state: "done"` after pumpStreamResponse
-      // returns; the failure path patches `failed: true` or
-      // hands off to reattach. This catches the gap where neither
-      // fired — historically observed as the indicator hanging until
-      // the user refreshed the page. Stamping done is safe: any
-      // already-terminal state (done/failed/cancelled) is left alone.
-      patchAssistantMessage(finalTarget, assistantId, (m) =>
-        m.state === "thinking" || m.state === "streaming"
-          ? { ...m, state: "done" }
-          : m,
-      );
+      // Last resort: if every path above missed this slot it is still
+      // mid-flight, and the indicator would hang until the user refreshed.
+      // Settle it — but settle it the same way the rest of the loop does,
+      // by asking Postgres first. The old version stamped a bare
+      // `state: "done"` here, which turned an unknown outcome into a
+      // *silent empty success*: the transcript claimed the assistant
+      // finished without a written reply while the DB held the full answer.
+      // Any already-terminal slot (done/failed/cancelled) is left alone.
+      await settleStreamedSlot(finalTarget, assistantId, false);
     }
   };
 
   return {
     reattachToConv,
+    reconcileStaleConv,
     submitPrompt,
     regenerateLastAssistant,
     resendUserMessage,
