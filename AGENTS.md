@@ -124,12 +124,17 @@ same PR.
 - Run tests in the **foreground**. Do not background `go test`, and do not
   `pkill -f 'go test'` (it can kill the shell). Prefer `make test` (it sets
   `-p 1`, which the suite expects).
-- **New task fields thread one way.** A new per-task column follows the
-  `allow_network` pattern: a migration, then `taskColumns`/`scanTask`/`AddTask`/
-  `taskInsert*` (+ `UpdateTaskTx` when mutable) and the export/import record.
-  Result-like columns written after the terminal transition (e.g.
-  `error_analysis`) are excluded from the insert/upsert so a status write can
-  never clobber them.
+- **New task fields thread one way.** A new per-task column is one migration
+  plus one row in `taskColumnRegistry`
+  (`internal/sched/db/task_columns.go`, #1126) plus the `models.Task` field —
+  and, for a `read` column, its `taskScanBuf` field (the compiler enforces
+  that one). The registry derives the SELECT/scan, insert, upsert and
+  `UpdateTaskTx` statements from per-row flags; flag `export` (and add the
+  matching `models.TaskExportRecord` field) when the column belongs to the
+  portable definition. Result-like columns written after the terminal transition
+  (e.g. `error_analysis`) stay excluded from the insert/upsert so a status
+  write can never clobber them — every exclusion needs a reason string on
+  its row, and the `sched/db` registry tests fail on schema↔registry drift.
 - **Ship features with honest scope.** Every feature lands with a design note
   recording what shipped, what deviated from the issue, and what was deliberately
   deferred — in a dedicated `docs/<FEATURE>.md` (plus an ADR when an invariant is
