@@ -59,6 +59,34 @@ prior versions are listed because none have shipped.
   idle timeout, are in
   [`docs/CHAT-STREAM-RECOVERY.md`](docs/CHAT-STREAM-RECOVERY.md).
 
+- **The sandbox publisher derives its own destination, and lowercases it.**
+  `image_name` was a required input, so a manual dispatch meant typing a full
+  image ref and every client bundle hand-wrote one. It did not need to be:
+  the bundle already names itself in `sandbox.tag`
+  (`localhost/fleet-sandbox-<client>:latest`). That tag is a *local* podman tag
+  and so not itself pushable, and the manifest's other ref, `sandbox.image`, is
+  the *consume* side and must stay empty (that emptiness is the build-on-box
+  default) — which is why a destination had to come from somewhere. But its
+  basename is the one client-specific token needed, so the destination is now
+  derived as `ghcr.io/<owner>/<basename of sandbox.tag>`, verified
+  byte-identical to what all five bundles used to pass by hand. Two real bugs
+  stop being expressible: `omnicom-config` published to `fleet-sandbox-example`
+  purely because the string was hand-copied from its example-config fork, and
+  the recommended `ghcr.io/${{ github.repository_owner }}/...` form is an
+  **invalid OCI reference** for an owner with capitals — `github.repository_owner`
+  preserves account casing (`ElcanoTek`), and OCI repository names must be
+  lowercase, so podman rejects it before the registry is ever contacted. The
+  callers only worked because they hardcoded a lowercase owner; the derived name
+  is normalized with `tr`, and an explicit override is normalized too. The
+  resolver reads inputs from env rather than interpolating them into the script
+  body, and fails closed on an empty derivation, a name carrying a tag (which
+  would collide with the `{sha}`/`:latest` this workflow adds), or any character
+  outside a plausible tagless ref. `image_name` remains as an optional override
+  for a non-GHCR registry, e.g. the ECR ref in `docs/EKS-DEPLOYMENT.md`. The
+  concurrency group moves from `image_name` to repo + `bundle_dir`, because an
+  omitted `image_name` would otherwise collapse every publish into one group;
+  the derived name is a function of exactly those two things, so two bundles in
+  one repo still publish concurrently while two pushes of one bundle serialize.
 
 - **A long-running chat turn that is *still working* when you come back now
   resumes streaming immediately, instead of showing a thinking indicator that
