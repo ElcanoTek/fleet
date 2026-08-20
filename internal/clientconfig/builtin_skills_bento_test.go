@@ -3,6 +3,7 @@ package clientconfig
 import (
 	"bytes"
 	"compress/flate"
+	"compress/zlib"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -1062,4 +1063,330 @@ func TestBentoSkillExamplePathsAgree(t *testing.T) {
 				created[1], m[1])
 		}
 	}
+}
+
+// ── bento_doc.py pdf: the attachable export ──────────────────────────────────
+//
+// The deck is what a reader opens; the PDF is what gets emailed. `pdf` renders
+// the document statically (scripts/bento_pdf.py) so the agent can finish the
+// job — build the deck AND hand back something attachable — without a browser
+// in the sandbox. These tests pin the properties that make it trustworthy: the
+// page set matches the app's own export, the deck is never touched, a failure
+// writes nothing, and the assumptions the port copies out of the vendored app
+// are still true of the vendored app.
+
+// pdfPageCount counts page objects without a PDF library: the renderer writes
+// one `/Type /Page` object per slide.
+func pdfPageCount(raw []byte) int {
+	return bytes.Count(raw, []byte("/Type /Page "))
+}
+
+// pdfText inflates every content stream and reassembles the shown strings, so a
+// test can assert on what a reader would actually see. Each word is its own
+// `(...) Tj` (that is how the renderer positions a laid-out line), so the
+// literals are joined with spaces to make a phrase searchable.
+func pdfText(t *testing.T, raw []byte) string {
+	t.Helper()
+	var out bytes.Buffer
+	rest := raw
+	for {
+		at := bytes.Index(rest, []byte("stream\n"))
+		if at < 0 {
+			break
+		}
+		rest = rest[at+len("stream\n"):]
+		end := bytes.Index(rest, []byte("\nendstream"))
+		if end < 0 {
+			break
+		}
+		body := rest[:end]
+		// Step PAST the terminator: "endstream\n" itself contains "stream\n",
+		// so leaving it in place makes the next search land inside it and skip a
+		// real stream.
+		rest = rest[end+len("\nendstream"):]
+		reader, err := zlib.NewReader(bytes.NewReader(body))
+		if err != nil {
+			continue // an image XObject, not a deflated content stream
+		}
+		inflated, err := io.ReadAll(reader)
+		_ = reader.Close()
+		if err != nil && len(inflated) == 0 {
+			continue
+		}
+		out.Write(inflated)
+	}
+	shown := regexp.MustCompile(`\((.*?)\) Tj`).FindAllStringSubmatch(out.String(), -1)
+	words := make([]string, 0, len(shown))
+	for _, match := range shown {
+		words = append(words, match[1])
+	}
+	return strings.Join(words, " ")
+}
+
+// The pdf export must choose exactly the slides the app's own export chooses,
+// leave the deck byte-identical, and produce a standard 16:9 slide page.
+func TestBentoPdfExportMatchesTheAppsPageSelection(t *testing.T) {
+	helper := bentoHelper(t)
+	dir := t.TempDir()
+	deck := "Q4_Review.bento.html"
+
+	if _, stderr, err := runHelper(t, helper, dir, "new", deck); err != nil {
+		t.Fatalf("new: %v\n%s", err, stderr)
+	}
+	doc := map[string]any{
+		"format":  "bento/slides",
+		"version": 1,
+		"title":   "Q4 Review",
+		"size":    map[string]any{"width": 1280, "height": 720},
+		"theme": map[string]any{
+			"background": "#101418", "color": "#F2F0EA",
+			"accent": "#FF9E8A", "fontFamily": "system-ui, sans-serif",
+		},
+		"slides": []any{
+			bentoTextSlide("s1", "Opening headline"),
+			bentoTextSlide("s2", "Second slide"),
+			// Neither of these is printable: the app's export filters on
+			// `!slide.stateOf && !slide.hidden`.
+			withKey(bentoTextSlide("s3", "Appendix material"), "hidden", true),
+			withKey(bentoTextSlide("s4", "A drill-down state"), "stateOf", "s1"),
+		},
+	}
+	injectDoc(t, filepath.Join(dir, deck), doc)
+
+	before, err := os.ReadFile(filepath.Join(dir, deck))
+	if err != nil {
+		t.Fatalf("read deck: %v", err)
+	}
+
+	stdout, stderr, err := runHelper(t, helper, dir, "pdf", deck)
+	if err != nil {
+		t.Fatalf("pdf: %v\n%s%s", err, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "2 page(s)") {
+		t.Errorf("pdf reported %q; want 2 pages (4 slides, 2 of them hidden/state)", stdout)
+	}
+	if !strings.Contains(stdout, "hidden/state slide(s) left out") {
+		t.Errorf("pdf did not say which slides it left out:\n%s", stdout)
+	}
+	wantLink := "download link (use this EXACT text, do not rebuild it): [Q4_Review.pdf](Q4_Review.pdf)"
+	if !strings.Contains(stdout, wantLink) {
+		t.Errorf("pdf did not print the exact download link.\ngot:\n%s\nwant line: %s", stdout, wantLink)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(dir, "Q4_Review.pdf"))
+	if err != nil {
+		t.Fatalf("read pdf: %v", err)
+	}
+	if !bytes.HasPrefix(raw, []byte("%PDF-")) {
+		t.Fatal("output is not a PDF")
+	}
+	if !bytes.Contains(raw, []byte("%%EOF")) {
+		t.Error("PDF has no end-of-file trailer")
+	}
+	if got := pdfPageCount(raw); got != 2 {
+		t.Errorf("PDF has %d page objects; want 2", got)
+	}
+	// 960x540pt is the standard 16:9 slide page (13.333in x 7.5in), so the file
+	// prints one landscape sheet per slide instead of being scaled to letter.
+	if !bytes.Contains(raw, []byte("/MediaBox [0 0 960 540]")) {
+		t.Error("PDF page is not the 960x540pt 16:9 slide page")
+	}
+
+	text := pdfText(t, raw)
+	for _, want := range []string{"Opening headline", "Second slide"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("PDF content streams do not contain %q; the slide text is missing "+
+				"or is not selectable", want)
+		}
+	}
+	for _, unwanted := range []string{"Appendix material", "A drill-down state"} {
+		if strings.Contains(text, unwanted) {
+			t.Errorf("PDF contains %q, but hidden and state slides must be left out "+
+				"exactly as the app's own export leaves them out", unwanted)
+		}
+	}
+
+	after, err := os.ReadFile(filepath.Join(dir, deck))
+	if err != nil {
+		t.Fatalf("re-read deck: %v", err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Error("pdf modified the deck; it must only read it")
+	}
+}
+
+// Every refusal must leave the workspace as it was: no half-written PDF for the
+// agent to hand over, and no traceback for it to relay as an error message.
+func TestBentoPdfExportFailsClosed(t *testing.T) {
+	helper := bentoHelper(t)
+	dir := t.TempDir()
+	deck := "Deck.bento.html"
+	if _, stderr, err := runHelper(t, helper, dir, "new", deck); err != nil {
+		t.Fatalf("new: %v\n%s", err, stderr)
+	}
+	base := map[string]any{
+		"format": "bento/slides", "version": 1, "title": "Deck",
+		"size": map[string]any{"width": 1280, "height": 720},
+		"theme": map[string]any{
+			"background": "#fff", "color": "#111", "accent": "#f00",
+			"fontFamily": "system-ui, sans-serif",
+		},
+		"slides": []any{bentoTextSlide("s1", "Only slide")},
+	}
+	injectDoc(t, filepath.Join(dir, deck), base)
+
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"a path outside the workspace", []string{"pdf", deck, "-o", "../out.pdf"}, ".."},
+		{"an absolute path", []string{"pdf", deck, "-o", "/tmp/out.pdf"}, "absolute"},
+		{"a name that breaks the download link", []string{"pdf", deck, "-o", "my out.pdf"}, "download link"},
+		{"a non-pdf extension", []string{"pdf", deck, "-o", "out.txt"}, ".pdf"},
+		{"a directory that does not exist", []string{"pdf", deck, "-o", "nope/out.pdf"}, "cannot write"},
+		{"a file that is not a deck", []string{"pdf", "missing.bento.html"}, "no such file"},
+	} {
+		stdout, stderr, err := runHelper(t, helper, dir, tc.args...)
+		if err == nil {
+			t.Errorf("%s: pdf succeeded; want a refusal\n%s", tc.name, stdout)
+			continue
+		}
+		if !strings.Contains(strings.ToLower(stderr), strings.ToLower(tc.want)) {
+			t.Errorf("%s: error did not mention %q:\n%s", tc.name, tc.want, stderr)
+		}
+		if strings.Contains(stderr, "Traceback") {
+			t.Errorf("%s: refusal surfaced a traceback rather than an error message:\n%s",
+				tc.name, stderr)
+		}
+	}
+
+	// A deck with nothing printable is a refusal, not an empty PDF.
+	empty := map[string]any{}
+	for key, value := range base {
+		empty[key] = value
+	}
+	empty["slides"] = []any{withKey(bentoTextSlide("h1", "Hidden only"), "hidden", true)}
+	injectDoc(t, filepath.Join(dir, deck), empty)
+	if _, stderr, err := runHelper(t, helper, dir, "pdf", deck); err == nil {
+		t.Error("pdf produced a file for a deck with no printable slides")
+	} else if !strings.Contains(stderr, "no printable slides") {
+		t.Errorf("unhelpful error for an all-hidden deck: %s", stderr)
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read dir: %v", err)
+	}
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".pdf") {
+			t.Errorf("a refused export left %s behind", entry.Name())
+		}
+		if strings.HasPrefix(entry.Name(), ".bento-") {
+			t.Errorf("a refused export left the temp file %s behind", entry.Name())
+		}
+	}
+}
+
+// The renderer is a SECOND renderer for the static form of a document, and the
+// honest cost of that is drift: it copies a handful of facts out of the vendored
+// app. Pin them against the app itself, so a re-vendor that changes one fails
+// here instead of quietly producing PDFs that no longer match the deck.
+func TestBentoPdfAssumptionsStillHoldInTheApp(t *testing.T) {
+	tpl, err := builtinSkillsFS.ReadFile(builtinSkillsRoot + "/" + bentoTemplateRel)
+	if err != nil {
+		t.Fatalf("read embedded template: %v", err)
+	}
+	runtime := inflateBentoRuntime(t, tpl)
+
+	renderer, err := builtinSkillsFS.ReadFile(
+		builtinSkillsRoot + "/bento-slides/scripts/bento_pdf.py")
+	if err != nil {
+		t.Fatalf("read bento_pdf.py: %v", err)
+	}
+
+	// 1. Page selection. The app's export filters `!slide.stateOf && !slide.hidden`
+	//    (minified, so the parameter name is whatever the bundler chose).
+	filter := regexp.MustCompile(`!\w+\.stateOf&&!\w+\.hidden`)
+	if !filter.Match(runtime) {
+		t.Error("the app no longer selects print pages with `!stateOf && !hidden`; " +
+			"bento_pdf.py's visible_slides() now disagrees with the app's own export")
+	}
+
+	// 2. The print path itself: one .bp-page per printable slide inside
+	//    #bento-print. If this changes, the comparison the docs make is stale.
+	for _, marker := range []string{"bento-print", "bp-page"} {
+		if !bytes.Contains(runtime, []byte(marker)) {
+			t.Errorf("the app's PDF export no longer builds %q", marker)
+		}
+	}
+
+	// 3. The charts-lite default palette, which the port reproduces so a chart
+	//    keeps its colours in the PDF.
+	palette := []string{"#5470c6", "#91cc75", "#fac858", "#ee6666",
+		"#73c0de", "#3ba272", "#fc8452", "#9a60b4"}
+	appPalette := `["` + strings.Join(palette, `","`) + `"]`
+	if !bytes.Contains(runtime, []byte(appPalette)) {
+		t.Errorf("the app's default chart palette changed; bento_pdf.py's CHART_COLORS "+
+			"no longer matches it (looked for %s)", appPalette)
+	}
+	for _, colour := range palette {
+		if !bytes.Contains(renderer, []byte(colour)) {
+			t.Errorf("bento_pdf.py does not carry the app's chart colour %s", colour)
+		}
+	}
+
+	// 4. The axis/label greys the port copies, so a chart's furniture matches.
+	for _, marker := range []string{"#6B7280", "rgba(110,120,135,0.45)",
+		"rgba(110,120,135,0.15)"} {
+		if !bytes.Contains(runtime, []byte(marker)) {
+			t.Errorf("the app's chart axis default %q changed; bento_pdf.py copies it", marker)
+		}
+	}
+}
+
+// The whole point of rendering in-process is that the sandbox image gains
+// nothing: no browser, no new package. A third-party import here would be a
+// silent new dependency for every deployment, so make it a test failure.
+func TestBentoPdfRendererIsStandardLibraryOnly(t *testing.T) {
+	renderer, err := builtinSkillsFS.ReadFile(
+		builtinSkillsRoot + "/bento-slides/scripts/bento_pdf.py")
+	if err != nil {
+		t.Fatalf("read bento_pdf.py: %v", err)
+	}
+	allowed := map[string]bool{
+		"base64": true, "binascii": true, "html": true, "math": true,
+		"re": true, "struct": true, "textwrap": true, "time": true,
+		"zlib": true, "urllib.parse": true,
+	}
+	importRe := regexp.MustCompile(`(?m)^\s*(?:import|from)\s+([A-Za-z0-9_.]+)`)
+	for _, match := range importRe.FindAllSubmatch(renderer, -1) {
+		module := string(match[1])
+		if !allowed[module] {
+			t.Errorf("bento_pdf.py imports %q, which is not in the standard-library "+
+				"allowlist; the PDF export must not add a dependency to the sandbox image",
+				module)
+		}
+	}
+}
+
+// bentoTextSlide is a minimal printable slide carrying one text element, so a
+// test can assert on words it expects to find (or not find) in the PDF.
+func bentoTextSlide(id, text string) map[string]any {
+	return map[string]any{
+		"id": id, "background": "#101418", "transition": "none",
+		"notes": "speaker notes",
+		"elements": []any{map[string]any{
+			"id": id + "-t", "type": "text", "x": 96, "y": 260, "w": 1088, "h": 160,
+			"rotation": 0, "opacity": 1, "html": text,
+			"fontSize": 64, "fontFamily": "system-ui, sans-serif",
+			"fontWeight": 800, "color": "#F2F0EA",
+			"align": "left", "valign": "top", "lineHeight": 1.1,
+		}},
+	}
+}
+
+func withKey(slide map[string]any, key string, value any) map[string]any {
+	slide[key] = value
+	return slide
 }

@@ -17,7 +17,113 @@ prior versions are listed because none have shipped.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A long-running chat turn that is *still working* when you come back now
+  resumes streaming immediately, instead of showing a thinking indicator that
+  never moves.** This completes the walk-away recovery of #1208 (the entry
+  below), which fixed the case where the turn had already finished but
+  deliberately left the still-generating case to the five-minute idle timeout.
+
+  The problem in both cases is that **"attached" is not the same as "alive"**:
+  a phone that locks mid-turn leaves a socket whose reader neither delivers
+  another chunk nor rejects, so the conversation goes on looking attached long
+  after its connection is gone — and every recovery path that short-circuits
+  on "already attached" does nothing.
+
+  A liveness check now runs on tab return and on a 10s watchdog while the tab
+  is visible. When the turn has finished it adopts the persisted transcript, as
+  before. When the turn is **still generating** it replaces the dead socket and
+  resumes the stream from the last event the client actually applied, so the
+  partial answer already on screen is kept, nothing is replayed twice, and
+  tokens start landing again.
+
+  Telling a dead socket from a merely quiet one is the whole difficulty, and
+  the proof deliberately does not depend on the (operator-configurable)
+  heartbeat: the server must report having emitted *past* the client's last
+  applied event id, **and** the socket must then produce no bytes at all during
+  a 2.5s grace window. A socket that was only frozen flushes as soon as the
+  page thaws; a severed one never does. A genuinely stalled turn — a long tool
+  call — fails the first condition and is left alone. Being wrong is cheap by
+  construction: the replacement resumes from the applied event id, so the cost
+  of a false positive is one reconnect, never a lost or duplicated token.
+
+  Retiring the old socket needed care, because both stream owners treat an
+  ending socket as an ending turn: `submitPrompt` reads an abort as the user
+  pressing Stop, and both teardown paths release the conversation's handles and
+  settle its assistant slot. A superseded-stream marker now tells them a
+  replacement owns the conversation, so the abort lands as a handover rather
+  than a cancellation or a "connection dropped" failure.
+
+  The watchdog is nearly free on a healthy stream: a silence gate means an
+  unforced tick on a socket that has produced bytes recently reads a ref and
+  returns without spending a request. The five-minute idle timeout is kept as
+  the backstop. Design note and honest scope:
+  [`docs/CHAT-STREAM-RECOVERY.md`](docs/CHAT-STREAM-RECOVERY.md).
+
+- **Walking away from a long-running chat turn no longer comes back as "the
+  assistant finished without a written reply".** Lock your phone mid-turn and
+  the OS severs the TCP socket while fleet keeps generating; the turn finishes,
+  the transcript lands in Postgres, and the browser hears none of it. That part
+  was always fine. What wasn't: every finalizer in the chat turn loop settled
+  the orphaned assistant message by stamping `state: "done"` in place, turning
+  *"we don't know how this ended"* into a terminal success with no content. The
+  transcript then told the user the assistant had said nothing — while the full
+  answer sat in the database, which is why refreshing the page always fixed it.
+
+  A finalizer may now only claim an outcome it actually observed. Everything
+  else reconciles against Postgres first — programmatically doing what the
+  user's manual refresh did — and adopts the canonical transcript when it
+  already answers the turn being held open. A guard on user-turn coverage keeps
+  that from adopting a *stale* transcript whose last reply belongs to the
+  previous turn. Only a turn the database has no answer for is settled locally,
+  and then honestly: any partial answer is kept, the message is marked failed,
+  and Retry is offered. A slot waiting on a pending approval or memory proposal
+  is left alone — it's blocked on the user, not the network.
+
+  Two supporting fixes. On tab return, a conversation that merely *looks*
+  attached is no longer skipped: a phone that locked leaves a zombie socket
+  that never delivers another byte and never errors, so the old early-out meant
+  a completed task showed a stuck thinking indicator until the multi-minute
+  idle timeout fired. It now probes, and adopts the persisted answer as soon as
+  the turn is provably over. And a turn whose events outran the server's
+  sliding replay window no longer reports "No response returned." on an empty
+  slot — a replay gap means the answer was missed, not absent, so it is
+  reconciled too.
+
+  A turn still *generating* when you return is unchanged: it shows a truthful
+  thinking indicator and resumes as before. Design note and honest scope:
+  [`docs/CHAT-STREAM-RECOVERY.md`](docs/CHAT-STREAM-RECOVERY.md).
+
 ### Added
+
+- **A reusable sandbox build canary (`build-sandbox-image.yml`) — build only, no
+  push.** Every bundle's sandbox image derives from exactly two inputs: the
+  `FROM` base and the Containerfile's own `RUN` lines. `build-sandbox-image.sh`
+  sets the build context to the Containerfile's own directory, and no shipped
+  Containerfile has a single `COPY` or `ADD`, so nothing outside
+  `<bundle>/sandbox/**` can change the image — which is why the publisher's
+  trigger is `paths: ["sandbox/**"]` rather than every push. But every shipped
+  Containerfile tracks `fedora-minimal:latest` unpinned, so image content drifts
+  with *time* rather than with commits: if Fedora renames or drops a package one
+  of those `RUN` lines installs, the build breaks. That build is not optional —
+  `fleet bootstrap` / `fleet update` runs the same script on the box, which is
+  what every deployment does by default, since every bundle ships
+  `image: "${FLEET_SANDBOX_IMAGE:-}"`. No client bundle's CI had ever built its
+  Containerfile (gitleaks + ruff + pytest only, and three of the five had no CI
+  at all), so the breakage would have surfaced on a customer's box at deploy
+  time. Callers get a weekly `schedule:` plus a `pull_request` trigger on
+  `sandbox/**` — the latter matters as much, because the publisher fires only on
+  push to `main`, so a Containerfile edit was previously never built until after
+  it merged. fleet's own `config/default` deliberately does not call this: the CI
+  gate builds that sandbox on every PR via the live Playwright job, and
+  `grype-scheduled.yml` rebuilds and scans it every Monday. This is
+  build-only on purpose — a weekly ~1.3 GB push per bundle to GHCR would have no
+  consumer today, since nothing pins `sandbox.image` and so nothing pulls;
+  scheduled *publishing* is worth adding to a bundle at the point it gains a real
+  puller (a Kubernetes deployment, or a box setting `FLEET_SANDBOX_IMAGE`), when
+  a stale digest becomes a live exposure. It therefore requests only
+  `contents: read` — no registry login, no `packages: write`, no repo writes.
 
 - **A built-in `bento-slides` skill: the agent can now produce a real,
   downloadable presentation offline (#985).** A [Bento](https://bento.page) deck
@@ -51,13 +157,13 @@ prior versions are listed because none have shipped.
   keys does not retract an invitation already shared, and only the user can decide
   to rotate.
 
-  **Hand-off is the deck plus a one-click PDF.** The skill now always tells the
-  user how to get one, naming the button (*Export PDF (print)*), because most
-  people need a PDF to email or print and the deck makes an excellent one — the
-  same renderer they are looking at, so it matches exactly, with selectable text
-  and embedded font subsets (measured: five pages, 46KB, `/ToUnicode` present).
-  The agent cannot produce it — that needs a browser, and the sandbox has none —
-  so the guidance is a click, never a promise to attach a file. There is no
+  **Hand-off is the deck plus a PDF.** The deck's own *Export PDF (print)* button
+  is the pixel-exact route — the same renderer the reader is looking at, with
+  selectable text and embedded font subsets (measured: five pages, 46KB,
+  `/ToUnicode` present) — and the skill names it whenever a page has to match
+  exactly. The agent can now also produce a PDF itself, without a browser, so it
+  can attach one in the same turn; see the `bento_doc.py pdf` entry below. There
+  is no
   PowerPoint export and the skill says so plainly rather than implying a
   conversion exists; hand-rolling one would mean a second renderer for seven
   element types, six shape kinds, connectors, gradients, the motion effects,
@@ -112,6 +218,77 @@ prior versions are listed because none have shipped.
   Grype scans the sandbox image), so a sha256 pin in
   `internal/clientconfig/builtin_skills_bento_test.go` guards the bytes and
   re-vendoring is a documented manual act — see the pack's `templates/NOTICE.md`.
+
+- **`bento_doc.py pdf`: the agent can now export a deck to PDF and attach it.**
+  Building a deck and *sending* one used to be two different jobs: the deck is a
+  `.bento.html` the reader opens, so "email these slides to the board" ended with
+  the agent telling the user to open the deck and click the printer icon
+  themselves. `bento_doc.py pdf Q4_Review.bento.html` now writes
+  `Q4_Review.pdf` beside the deck — one page per visible slide, on the standard
+  960x540pt 16:9 slide page — so a turn can end with the deck AND an attachable
+  file. The deck is only read, never touched.
+
+  **Nothing was added to the sandbox image.** The renderer
+  (`scripts/bento_pdf.py`) is standard-library-only: no browser, no reportlab, no
+  new RPM. That was the deciding constraint. Reusing Bento's own export is not
+  possible — `exportPdf()` builds a print DOM and calls `window.print()`, so the
+  export *is* Chromium — and putting a browser in the sandbox would add ~400MB,
+  a hand-rolled CDP driver (there is no Node in the sandbox), a large new parser
+  surface where model-authored code runs, and chromium under the
+  `check-grype-policy.sh` fixable-CRITICAL RPM gate, which would block every
+  merge in the repo rather than just Bento work.
+
+  So this is a second renderer for the **static** form of a document — and static
+  is what a Bento PDF already is: the app's own export renders each slide through
+  the same static renderer it uses for thumbnails, so morph, count-up, entrances
+  and ken-burns are absent from both. The geometry is ported from the vendored
+  runtime rather than re-imagined: the app's `!stateOf && !hidden` page filter
+  (so `{{page}}`/`{{pages}}` agree between exports), the CSS line box and wrap
+  behaviour, `pd(angle)` gradients including per-stop alpha via a luminosity soft
+  mask (which is what makes the documented photo + scrim recipe fade instead of
+  going black), tables, PNG/JPEG images, and the charts-lite engine function for
+  function — palette, grid insets, tick algorithm, number formatting,
+  bar/line/pie/scatter, dual axes, area fills, pie leader lines, legend.
+
+  **Measured against the real thing**, by driving Chromium, clicking the app's
+  own *Export PDF (print)*, and diffing the two PDFs: identical page counts and
+  identical words on every page (140/140 across a five-slide deck with charts, a
+  table, a hero image, gradients and dynamic fields); on a deck whose font both
+  sides share, **all 150 words in the same position** (mean Δx 0.03%, max 0.44%
+  of page width) with every wrap point identical and baselines within 3.3px on a
+  720px canvas; charts visually indistinguishable across bar, dual-axis
+  bar+line, smooth line with area, scatter on a numeric axis, negative values
+  with a pinned axis and formatter, donut, `label:false` pie, 18-category
+  three-series, single-datum and empty-series cases. Every generated PDF parses
+  and renders clean under MuPDF — an independent implementation — with selectable,
+  searchable text. Where the two differ it is the substituted typeface, not the
+  layout: headless Chromium resolves `system-ui` to DejaVu Sans.
+
+  **Honest scope**, and the skill prints a `note:` for each when a deck hits it:
+  fonts are the PDF core 14 mapped from the CSS stack, so a deck that *embeds* a
+  woff2 face renders in the fallback (embedding it would need a brotli decoder
+  and a TrueType subsetter — not in the standard library); text is WinAnsi, so
+  CJK, Greek, Hebrew, Arabic and emoji come out as `?` and need the in-app
+  export; `svg` elements, KaTeX math, blur, shadow and blend modes are skipped;
+  media becomes the same poster block the app's print path draws; remote image
+  URLs are left out because a PDF has no network. The deck's own button remains
+  the authority and the skill says so rather than overselling this one. No
+  `.pptx` (unchanged), no speaker-notes layout, and no mail integration — the
+  PDF is an ordinary workspace file, and sending it is whatever tool a
+  deployment's bundle provides.
+
+  The cost of a second renderer is drift, so four tests make it loud:
+  `TestBentoPdfAssumptionsStillHoldInTheApp` inflates the vendored runtime and
+  pins the facts the port copied (print filter, `#bento-print`/`.bp-page` print
+  DOM, chart palette in both directions, axis greys), so a re-vendor that changes
+  one fails CI; `TestBentoPdfExportMatchesTheAppsPageSelection` pins the page
+  set, page size, selectable text and that the deck stays byte-identical;
+  `TestBentoPdfExportFailsClosed` pins every refusal path (no `..`, no absolute
+  or link-breaking names, `.pdf` only, nothing printable, missing directory) and
+  that no partial or temp file survives; and
+  `TestBentoPdfRendererIsStandardLibraryOnly` allowlists the renderer's imports
+  so the "adds nothing to the image" claim cannot rot. Full design note:
+  [docs/BENTO-PDF-EXPORT.md](docs/BENTO-PDF-EXPORT.md).
 
 - **Admin-configurable model tiers (#1187).** The default and advanced
   ("recommended") models are now workspace settings — Settings → Admin →

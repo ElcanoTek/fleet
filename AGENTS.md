@@ -165,6 +165,9 @@ same PR.
   discovery + deprecation contract): [`docs/api-versioning.md`](docs/api-versioning.md)
 - **Database migrations** (the two runners, safe-DDL patterns, the migration DDL
   linter, `fleet migrate status`, rollback scope): [`docs/MIGRATIONS.md`](docs/MIGRATIONS.md)
+- **Chat stream recovery** (why a lost SSE socket reconciles against Postgres
+  instead of stamping a terminal state — the walk-away-and-come-back case):
+  [`docs/CHAT-STREAM-RECOVERY.md`](docs/CHAT-STREAM-RECOVERY.md)
 - **Task titles** (the operator-facing display label, and why it is NOT the
   unique import/export `name` column): [`docs/TASK-TITLES.md`](docs/TASK-TITLES.md)
 - **MCP server hot-reload** (add/remove/update MCP servers without a restart via

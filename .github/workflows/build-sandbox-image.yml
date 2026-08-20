@@ -1,0 +1,157 @@
+name: Build sandbox image (reusable, no push)
+
+# Sandbox build CANARY (reusable). A client config repo calls this to prove its
+# bundle's sandbox/Containerfile still builds — nothing is pushed anywhere, and
+# no registry is involved. For publishing, see publish-sandbox-image.yml; this
+# file exists precisely because the useful part of a periodic sandbox build is
+# the BUILD, not the push.
+#
+# WHY A PERIODIC BUILD IS WORTH A WORKFLOW AT ALL
+#
+# Every bundle's sandbox image derives from exactly two inputs: the `FROM` base
+# and the Containerfile's own RUN lines. build-sandbox-image.sh sets the build
+# context to the Containerfile's own directory, and no shipped Containerfile has
+# a single COPY or ADD — so nothing outside <bundle>/sandbox/** can change the
+# image. That is why the publisher's trigger is `paths: ["sandbox/**"]` and not
+# every push: a commit elsewhere cannot alter the image.
+#
+# But every shipped Containerfile tracks `fedora-minimal:latest` unpinned, so the
+# image content drifts with TIME rather than with commits. Rebuild the same
+# Containerfile a month later and the RPMs differ. If Fedora renames or drops a
+# package one of those RUN lines installs, the build breaks — and the build is
+# not some optional path: `fleet bootstrap` / `fleet update` builds on the box,
+# which is what every deployment does by default (every bundle ships
+# `image: "${FLEET_SANDBOX_IMAGE:-}"`, i.e. unpinned). Without this workflow the
+# breakage surfaces on a customer's box at deploy time.
+#
+# fleet's own config/default does NOT need to call this: the CI gate builds that
+# sandbox on every PR (the live Playwright job), and grype-scheduled.yml rebuilds
+# and scans it every Monday. The five client bundles had no such coverage — none
+# of their CI ever built a Containerfile — which is the gap this closes.
+#
+# Deliberately NOT a publish. A weekly push of ~1.3 GB per bundle to GHCR would
+# have no consumer today: nothing pins sandbox.image, so nothing pulls. Scheduled
+# PUBLISHING is worth adding to a bundle at the point it gains a real puller (a
+# Kubernetes deployment, or a box setting FLEET_SANDBOX_IMAGE) — then a stale
+# digest is a live exposure. Until then this stays build-only, and needs no
+# packages: write and no GHCR login.
+#
+# Caller contract (in a client config repo):
+#
+#   name: Sandbox build canary
+#   on:
+#     schedule:
+#       - cron: "0 10 * * 1"     # after fleet's Monday 09:00 Grype scan
+#     pull_request:
+#       paths: ["sandbox/**"]
+#     workflow_dispatch:
+#   permissions:
+#     contents: read             # checkout only — nothing is pushed
+#   jobs:
+#     build:
+#       uses: ElcanoTek/fleet/.github/workflows/build-sandbox-image.yml@main
+#
+# The pull_request trigger matters as much as the schedule: the publisher fires
+# only on push to main, so before this a Containerfile edit was never built
+# until after it merged.
+
+on:
+  workflow_call:
+    inputs:
+      bundle_dir:
+        description: >-
+          Client bundle directory relative to the caller repo root (the dir
+          holding manifest.yaml). Client config repos are the bundle, so the
+          default is the repo root.
+        type: string
+        required: false
+        default: "."
+      fleet_ref:
+        description: "fleet ref to take scripts/build-sandbox-image.sh from"
+        type: string
+        required: false
+        default: "main"
+  workflow_dispatch:
+    inputs:
+      bundle_dir:
+        description: "Bundle dir relative to repo root"
+        type: string
+        required: false
+        default: "config/default"
+
+# Checkout only. This workflow builds and throws the image away: no registry
+# login, no push, no repo writes. Keep it that way — the moment it needs
+# packages: write it has become the publisher, which already exists.
+permissions:
+  contents: read
+
+# One build per bundle at a time; a queued duplicate teaches nothing.
+concurrency:
+  group: build-sandbox-image-${{ github.repository }}-${{ inputs.bundle_dir }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build sandbox (no push)
+    runs-on: ubuntu-latest
+    env:
+      BUNDLE_DIR: ${{ inputs.bundle_dir }}
+    steps:
+      - name: Checkout caller repo
+        uses: actions/checkout@v7
+
+      # The build script lives in fleet core; a client-config caller doesn't
+      # have it. Checking it out into a subdir keeps ONE canonical builder
+      # (same manifest parsing, same flags) instead of a drifting copy per repo.
+      - name: Checkout fleet (build script)
+        uses: actions/checkout@v7
+        with:
+          repository: ElcanoTek/fleet
+          ref: ${{ inputs.fleet_ref || 'main' }}
+          path: .fleet-core
+          sparse-checkout: |
+            scripts/build-sandbox-image.sh
+          sparse-checkout-cone-mode: false
+
+      - name: Ensure podman
+        run: |
+          command -v podman >/dev/null 2>&1 \
+            || (sudo apt-get update -qq && sudo apt-get install -y -qq podman)
+          podman --version
+
+      # No IMAGE_NAME override: the script derives the tag from the bundle
+      # manifest's sandbox.tag, so this also proves the manifest's sandbox block
+      # still parses — the same path `fleet bootstrap` takes on a box.
+      - name: Build the bundle's sandbox image
+        id: build
+        run: |
+          FLEET_CLIENT_CONFIG_DIR="$GITHUB_WORKSPACE/$BUNDLE_DIR" \
+            bash .fleet-core/scripts/build-sandbox-image.sh
+
+      - name: Report what was built
+        if: ${{ always() && steps.build.outcome != 'skipped' }}
+        run: |
+          tag="$(FLEET_CLIENT_CONFIG_DIR="$GITHUB_WORKSPACE/$BUNDLE_DIR" \
+            bash .fleet-core/scripts/build-sandbox-image.sh --print-tag 2>/dev/null || true)"
+          if [ "${{ steps.build.outcome }}" = "success" ]; then
+            {
+              echo "### Sandbox builds clean"
+              echo
+              echo "\`${tag:-(tag unavailable)}\` built from \`$BUNDLE_DIR/sandbox/Containerfile\`."
+              echo
+              echo "Nothing was pushed — this is a build canary. The base tracks"
+              echo "\`fedora-minimal:latest\`, so this is the check that a Fedora"
+              echo "package change has not broken the on-box build path."
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              echo "### Sandbox build FAILED"
+              echo
+              echo "\`$BUNDLE_DIR/sandbox/Containerfile\` no longer builds."
+              echo
+              echo "On-box deploys (\`fleet bootstrap\` / \`fleet update\`) run this"
+              echo "same script, so this breaks real deployments — it is not just a"
+              echo "CI problem. The usual cause is a package renamed or dropped in"
+              echo "\`fedora-minimal:latest\`; check the RUN lines against current Fedora."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
