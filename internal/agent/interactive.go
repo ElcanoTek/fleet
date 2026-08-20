@@ -441,9 +441,9 @@ const interactiveForceFinalSummaryNudge = forceFinalSummaryNudge
 // prompt as too large, agentcore drops the middle and inserts this summary —
 // here a single tool-less model call condensing the droppable middle into a
 // brief, tagged so the cache layer treats it as a stable boundary.
-func buildInteractiveCompactionSummarizer(tc TurnConfig) func(context.Context, []fantasy.Message) fantasy.Message {
-	return func(ctx context.Context, droppable []fantasy.Message) fantasy.Message {
-		summary := summarizeDroppedMiddle(ctx, tc, droppable)
+func buildInteractiveCompactionSummarizer(tc TurnConfig) func(context.Context, agentcore.CompactionSummarizeInput) fantasy.Message {
+	return func(ctx context.Context, in agentcore.CompactionSummarizeInput) fantasy.Message {
+		summary := summarizeDroppedMiddle(ctx, tc, in)
 		// Tag with the compaction prefix so promptCachingStep's optional
 		// compaction-summary breakpoint can find it.
 		return fantasy.NewUserMessage(compactionSummaryPrefix + "] " + summary)
@@ -457,8 +457,24 @@ const compactionSummaryPrefix = "[context compaction"
 // summarizeDroppedMiddle runs one tool-less call to condense the dropped middle.
 // On any failure it returns a deterministic placeholder so compaction always
 // produces a structurally-sound summary (matching agentcore's fallback).
-func summarizeDroppedMiddle(ctx context.Context, tc TurnConfig, droppable []fantasy.Message) string {
+//
+// The summarizer fires exactly when a run is already huge/expensive, so it is
+// governed like the finalize recovery calls (#1118):
+//   - ceiling pre-check: when the run's cost/token ceiling is already met
+//     (in.OverCeiling), it degrades to the deterministic placeholder — the
+//     existing truncation path — instead of buying another model call.
+//     Aborting the summary is safe here: compaction still drops the middle and
+//     inserts a structurally-sound placeholder, so the pressure is relieved
+//     either way; only the summary's quality degrades.
+//   - metering: a successful call's tokens/cost are recorded into the SAME run
+//     accounting the main loop uses (in.RecordUsage), so the cost chip and the
+//     ceilings see the summarizer's spend.
+func summarizeDroppedMiddle(ctx context.Context, tc TurnConfig, in agentcore.CompactionSummarizeInput) string {
+	droppable := in.Droppable
 	if tc.Model == nil || len(droppable) == 0 {
+		return placeholderCompactionSummary(len(droppable))
+	}
+	if in.OverCeiling != nil && in.OverCeiling() {
 		return placeholderCompactionSummary(len(droppable))
 	}
 	agent := fantasy.NewAgent(tc.Model,
@@ -473,6 +489,11 @@ func summarizeDroppedMiddle(ctx context.Context, tc TurnConfig, droppable []fant
 	})
 	if err != nil {
 		return placeholderCompactionSummary(len(droppable))
+	}
+	// Meter the summarizer's call into the run accounting so its tokens/cost
+	// are not invisible to the cost chip or the ceilings (#1118). Nil-safe.
+	if in.RecordUsage != nil {
+		in.RecordUsage(out.TotalUsage, out.Response.ProviderMetadata)
 	}
 	text := strings.TrimSpace(out.Response.Content.Text())
 	if text == "" {

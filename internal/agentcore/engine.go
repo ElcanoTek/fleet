@@ -61,7 +61,16 @@ type engine struct {
 
 	// compactionSummarizer, when set, produces the summary message for a
 	// force-compaction. When nil a deterministic placeholder is used.
-	compactionSummarizer func(ctx context.Context, droppable []fantasy.Message) fantasy.Message
+	compactionSummarizer func(ctx context.Context, in CompactionSummarizeInput) fantasy.Message
+
+	// runOrch is the run's orchestration state — the SAME accounting
+	// checkCeilings and Result.Usage read — bound once by Run (bindRunUsage)
+	// before the first round. The compaction seam closes over it so a driver
+	// summarizer's own model call is metered into the run and can pre-check the
+	// run's ceilings (#1118). nil (engines built directly by tests) hands the
+	// summarizer a zero CompactionSummarizeInput capability set: no metering, no
+	// ceiling information — the pre-#1118 behavior.
+	runOrch *orchestrationState
 
 	// consecutiveCompactions counts CONSECUTIVE ROUNDS that needed a
 	// force-compaction. It increments (at most once per round) when
@@ -196,6 +205,62 @@ func snapCutBackward(messages []fantasy.Message, idx int) int {
 	return idx
 }
 
+// CompactionSummarizeInput is what the engine hands the driver's compaction
+// summarizer (Deps.CompactionSummarizer). Beyond the droppable middle it
+// carries the run-scoped metering capabilities (#1118): the summarizer makes
+// its own model call, and before this seam existed that call was invisible to
+// the run's accounting — it fired with no RecordUsage and no ceiling check,
+// exactly when a run was already huge/expensive.
+type CompactionSummarizeInput struct {
+	// Droppable is the middle slice being summarized away.
+	Droppable []fantasy.Message
+	// RecordUsage meters the summarizer's own model call into the SAME run
+	// accounting the main loop uses (the counters checkCeilings and
+	// Result.Usage read) — the same capability-closure contract as
+	// FinalizeInput.RecordUsage: the orchestration state never escapes Run.
+	// Nil when the engine has no bound run state (direct-engine tests).
+	RecordUsage UsageSink
+	// OverCeiling reports whether the run's cost/token ceiling is already met.
+	// A driver summarizer MUST degrade to its deterministic placeholder (the
+	// truncation path) instead of buying another model call when it returns
+	// true: aborting the summary is safe — compaction still inserts a
+	// structurally-sound placeholder — whereas an unmetered call past the
+	// ceiling is exactly the leak #1118 closes. Nil means "no ceiling
+	// information" (direct-engine tests): call freely.
+	OverCeiling func() bool
+}
+
+// bindRunUsage gives the engine the run's orchestration state so the
+// compaction-summarizer seam can meter the summarizer's model call into the
+// SAME run accounting and pre-check the same ceilings (#1118). Called once by
+// Run before the first round; engines built directly (tests) leave it nil and
+// get the zero-capability CompactionSummarizeInput.
+func (e *engine) bindRunUsage(orch *orchestrationState) { e.runOrch = orch }
+
+// compactionSummarizeInput assembles the summarizer seam input for droppable,
+// closing over the bound run state when present. The usage is attributed to
+// the engine's primary model slug — the model the interactive summarizer
+// calls (tc.Model) — which is what selects a per-model price override (#297).
+func (e *engine) compactionSummarizeInput(droppable []fantasy.Message) CompactionSummarizeInput {
+	in := CompactionSummarizeInput{Droppable: droppable}
+	orch := e.runOrch
+	if orch == nil {
+		return in
+	}
+	modelSlug := slugOf(e.model)
+	// updateAuxUsage, not updateUsage: the summarizer's spend counts toward the
+	// ceilings/totals but its prompt size is not the run's context fill, so the
+	// LastStep* signals (context pressure, chat context meter) stay untouched.
+	in.RecordUsage = func(u fantasy.Usage, md fantasy.ProviderMetadata) {
+		orch.updateAuxUsage(modelSlug, u, md)
+	}
+	in.OverCeiling = func() bool {
+		blocked, _ := orch.checkCeilings()
+		return blocked
+	}
+	return in
+}
+
 // forceCompactMessageHistory runs a head/summary/tail compaction unconditionally
 // (the context-too-large recovery path: the provider already rejected the size).
 // Uses the engine's compactionSummarizer when set, else a deterministic
@@ -226,7 +291,7 @@ func (e *engine) forceCompactMessageHistory(ctx context.Context, messages []fant
 
 	var summary fantasy.Message
 	if e.compactionSummarizer != nil {
-		summary = e.compactionSummarizer(ctx, middle)
+		summary = e.compactionSummarizer(ctx, e.compactionSummarizeInput(middle))
 	} else {
 		summary = fantasy.NewUserMessage(fmt.Sprintf(
 			"%s] %d earlier messages were dropped to fit the model's context window after the provider rejected the prompt size.",
@@ -286,7 +351,7 @@ func (e *engine) proactiveCompact(ctx context.Context, messages []fantasy.Messag
 
 	var summary fantasy.Message
 	if e.compactionSummarizer != nil {
-		summary = e.compactionSummarizer(ctx, droppable)
+		summary = e.compactionSummarizer(ctx, e.compactionSummarizeInput(droppable))
 	} else {
 		summary = fantasy.NewUserMessage(fmt.Sprintf(
 			"%s] %d earlier messages were summarized to relieve context-window pressure before the prompt overflowed.",

@@ -1108,7 +1108,17 @@ type Task struct {
 	WakeNote     string     `json:"wake_note,omitempty"`
 	WakeReason   string     `json:"wake_reason,omitempty"`
 	WakeCycles   int        `json:"wake_cycles,omitempty"`
-	Priority     int        `json:"priority"`
+	// PausedAt is when the task last entered a paused state (#1116), stamped by
+	// the dedicated pause transitions (PauseTaskForQuestion #510,
+	// PauseTaskForWake docs/SELF-WAKE.md). The paused-expiry sweep counts the
+	// ask window from it — previously it measured from StartedAt, which gave a
+	// long-running run's question a near-zero TTL. Runtime state like the wake
+	// columns: written only by the guarded pause writers, excluded from the
+	// task insert/upsert, UpdateTaskTx, the TaskToCreate clone recipe, and the
+	// export record. Not cleared on resume — it is only meaningful (and only
+	// read) while Status is a paused state, and the next pause re-stamps it.
+	PausedAt *time.Time `json:"paused_at,omitempty"`
+	Priority int        `json:"priority"`
 	// EffectivePriority is the value the scheduler actually orders the pending
 	// queue by (#230). Equal to Priority at creation; only the anti-starvation
 	// sweep lowers it (never Priority) so a long-waiting task is eventually
@@ -1824,8 +1834,8 @@ func TaskToExportRecord(t *Task) TaskExportRecord {
 // miss the overlay.
 //
 // Only DEFINITION fields are written. Execution state — id, status, lease,
-// attempt_count, started_at/completed_at, result/error, skip/wake/dead-letter
-// state, created_by/lineage — is never copied from the record: a
+// attempt_count, started_at/completed_at, result/error, skip/pause/wake/
+// dead-letter state, created_by/lineage — is never copied from the record: a
 // TaskExportRecord cannot even express it, and the caller re-derives
 // status/scheduled_for with DeriveDispatchState after the overlay.
 // Normalizations mirror NewTask exactly (priority, timezone, trigger type,
@@ -2008,6 +2018,24 @@ type LogSession struct {
 	// (#797) from the driver to the runner, redacted like every other session
 	// field before it leaves the process boundary.
 	OutputJSON string `json:"output_json,omitempty"`
+	// AuxUsage mirrors agentcore.LogSession.AuxUsage (#1118): the labeled
+	// ledger of host-side auxiliary model calls made on behalf of the run
+	// (end-of-run verifier, phone-a-friend review, loop exit-condition
+	// verifier). Deliberately NOT folded into the headline token/cost fields —
+	// iteration cost accounting (#179) and the run ceilings exclude these by
+	// design — but persisted so the spend is visible per call.
+	AuxUsage []AuxUsageRecord `json:"aux_usage,omitempty"`
+}
+
+// AuxUsageRecord is one host-side auxiliary model call's metered spend
+// (mirrors agentcore.AuxUsageRecord; #1118). PromptTokens includes cache
+// reads, matching the session-log token convention.
+type AuxUsageRecord struct {
+	Label            string  `json:"label"`
+	Model            string  `json:"model,omitempty"`
+	PromptTokens     int     `json:"prompt_tokens"`
+	CompletionTokens int     `json:"completion_tokens"`
+	CostUSD          float64 `json:"cost_usd"`
 }
 
 // RunLogMeta identifies one superseded transcript in a task's per-attempt run

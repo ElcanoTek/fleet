@@ -187,7 +187,7 @@ func TestProactiveCompact_TooSmallIsNoop(t *testing.T) {
 
 func TestProactiveCompact_UsesSummarizerWhenSet(t *testing.T) {
 	e := newMockEngine(t, &mockModel{})
-	e.compactionSummarizer = func(_ context.Context, _ []fantasy.Message) fantasy.Message {
+	e.compactionSummarizer = func(_ context.Context, _ CompactionSummarizeInput) fantasy.Message {
 		return fantasy.NewUserMessage("LLM-SUMMARY")
 	}
 	msgs := fillerMessages(6, 8)

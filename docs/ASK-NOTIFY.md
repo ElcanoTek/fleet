@@ -41,9 +41,10 @@ starts clean with the answer injected.
   (>0) opts into an auto-expire sweep: the scheduler fails a task that has
   awaited input longer than the window (terminal `error`, stamped with an
   "expired" message), mirroring the anti-starvation sweep (#230). Age is
-  measured from the run's start (the tasks table has no paused-at column), so
-  the window is conservative — fine for a minutes-to-hours TTL. Default 0 = OFF
-  (wait forever), preserving prior behavior.
+  measured from `paused_at` — the instant the pause transition parked the task
+  (#1116; it was previously measured from the run's start, which gave a
+  long-running run's question a near-zero TTL). Default 0 = OFF (wait forever),
+  preserving prior behavior.
 - **Audience/permission**: resuming requires the operator (cancel) permission;
   a per-owner/project-scoped "who may answer" model is a follow-on (coordinates
   with #509 projects + #292 notifications).

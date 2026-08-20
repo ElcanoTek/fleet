@@ -60,7 +60,8 @@ func TestTaskLeasing(t *testing.T) {
 	}
 
 	// 3. Multiple tasks per owner
-	task2 := &models.Task{ID: uuid.New(), Prompt: "task 2", Status: models.TaskStatusPending, CreatedAt: time.Now().UTC()}
+	// MaxRetries 1 so recovery re-queues (it dead-letters at attempt_count >= max_retries, #1116).
+	task2 := &models.Task{ID: uuid.New(), Prompt: "task 2", Status: models.TaskStatusPending, CreatedAt: time.Now().UTC(), MaxRetries: 1}
 	store.AddTask(task2)
 	assignedTask2, err := store.leaseTaskToOwner(task2.ID, owner)
 	if err != nil {
@@ -117,7 +118,8 @@ func TestRecoveredTaskRejectsOldNode(t *testing.T) {
 	ownerA := uuid.New()
 	ownerB := uuid.New()
 
-	task := &models.Task{ID: uuid.New(), Prompt: "race condition test", Status: models.TaskStatusPending, Priority: 10, CreatedAt: time.Now().UTC()}
+	// MaxRetries 1 so recovery re-queues (it dead-letters at attempt_count >= max_retries, #1116).
+	task := &models.Task{ID: uuid.New(), Prompt: "race condition test", Status: models.TaskStatusPending, Priority: 10, CreatedAt: time.Now().UTC(), MaxRetries: 1}
 	if _, err := store.AddTask(task); err != nil {
 		t.Fatalf("Failed to add task: %v", err)
 	}
@@ -226,6 +228,9 @@ func TestRecoverExpiredLeasesSelectivity(t *testing.T) {
 			Priority:       1,
 			CreatedAt:      time.Now().UTC(),
 			LeaseExpiresAt: tc.leaseExpires,
+			// Within the retry budget, so the recovered rows re-queue rather
+			// than dead-letter (#1116 quarantines at attempt_count >= max_retries).
+			MaxRetries: 1,
 		}
 		if tc.leaseExpires != nil {
 			o := owner

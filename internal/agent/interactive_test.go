@@ -42,7 +42,8 @@ func (m *itMockModel) Generate(_ context.Context, _ fantasy.Call) (*fantasy.Resp
 func TestCompactionSummarizerRefusesOversizedInputBeforeProvider(t *testing.T) {
 	model := &itMockModel{generateText: "must not run"}
 	droppable := []fantasy.Message{fantasy.NewUserMessage(strings.Repeat("ordinary historical prose ", 50_000))}
-	summary := summarizeDroppedMiddle(context.Background(), TurnConfig{Model: model}, droppable)
+	summary := summarizeDroppedMiddle(context.Background(), TurnConfig{Model: model},
+		agentcore.CompactionSummarizeInput{Droppable: droppable})
 	if !strings.Contains(summary, "messages compacted") {
 		t.Fatalf("oversized summarizer did not use deterministic placeholder: %q", summary)
 	}
@@ -383,7 +384,7 @@ func TestInteractiveCompactionSummarizer_TagsSummary(t *testing.T) {
 		fantasy.NewUserMessage("old turn 1"),
 		fantasy.NewUserMessage("old turn 2"),
 	}
-	msg := summarizer(context.Background(), droppable)
+	msg := summarizer(context.Background(), agentcore.CompactionSummarizeInput{Droppable: droppable})
 	text := ""
 	for _, part := range msg.Content {
 		if tp, ok := fantasy.AsMessagePart[fantasy.TextPart](part); ok {

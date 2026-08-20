@@ -8,7 +8,7 @@ Working notes for implementers. Prefer the linked issue comment/body when presen
 | #988 | [issue body](https://github.com/ElcanoTek/fleet/issues/988) |
 | #987 | [comment](https://github.com/ElcanoTek/fleet/issues/987#issuecomment-5198925257) |
 | #986 | [issue body](https://github.com/ElcanoTek/fleet/issues/986) |
-| #985 | Full plan below (pending issue comment) |
+| #985 | Full plan below — **shipped**; see `internal/clientconfig/builtin_skills/bento-slides/`, `docs/SKILLS.md`, `docs/FEATURE-NOTES.md` |
 | #984 | Full plan below (pending issue comment) |
 | #167 | Full plan below — **all three residuals resolved**; see `docs/MCP-BROKER-SCOPES.md`, ADR-0042, `SECURITY.md` |
 
@@ -32,13 +32,56 @@ Working notes for implementers. Prefer the linked issue comment/body when presen
 
 PPTX export; hosted collab editing; PowerPoint animation parity.
 
-### Acceptance
+### Acceptance — met
 
-- [ ] Skill shows in Settings → Skills as Built-in
-- [ ] `/bento-slides` loads instructions
-- [ ] Agent produces openable `.bento.html`
-- [ ] License/attribution settled
-- [ ] Works offline except model provider
+- [x] Skill shows in Settings → Skills as Built-in — no code change needed;
+  `httpapi.skillSource` derives `builtin` from absence in the bundle dir. Asserted
+  in `web/e2e/live/skills-connections.spec.ts`.
+- [x] `/bento-slides` loads instructions — `matchSkillInvocation` resolves any
+  roster name, so this came for free.
+- [x] Agent produces openable `.bento.html` — via the bundled
+  `scripts/bento_doc.py`; round-trip, escaping and shell byte-identity are
+  covered by `internal/clientconfig/builtin_skills_bento_test.go`.
+- [x] License/attribution settled — Bento is MIT (© 2026 The Bento authors).
+  Recorded in `templates/NOTICE.md` (pack-local; **no** root
+  `THIRD_PARTY_NOTICES.md` was added), and the shell carries upstream's own
+  `NOTICE` comment internally so it travels with every deck.
+- [x] Works offline except model provider — the app is vendored and embedded, so
+  nothing is fetched at turn time, nothing is fetched to render a deck, and a
+  deck `new` creates makes **no** network request when opened — no update check
+  and no live collaboration. Multiplayer is off by construction: a CSP
+  `connect-src 'none'` meta the browser enforces, upstream's own offline switch,
+  and `set` refusing to write a `collab` block (which is not inert — carrying one
+  joins a live session on load). The vendored template stays byte-identical, and a
+  deck the user brought is reported by `validate` rather than rewritten. See
+  `templates/NOTICE.md` for the layer-by-layer rationale and the Chromium
+  verification matrix.
+
+### Deviations from the approach above
+
+1. **`templates/starter.bento.html` → `templates/Bento_Slides.bento.html`, the
+   full upstream v1.0.18 release artifact vendored unmodified (689KB, sha256
+   pinned).** There is no "minimal legal template": a Bento deck's shell *is* the
+   application, so anything smaller would not open.
+2. **The agent does not edit the HTML with file tools.** It uses a bundled
+   stdlib-only `scripts/bento_doc.py` (`new`/`get`/`set`/`validate`). The document
+   block sits at byte 6322 of a minified bundle, so `view_file` would spend ~125KB
+   of context reaching it; and the block's `<`-escaping rule fails silently rather
+   than loudly. The helper also makes `collab` private-key redaction and `docId`
+   preservation mechanical instead of instructions the model must remember.
+3. **`ValidateSkills` does not cover this pack** — it reads
+   `Bundle.BundleSkillsDir`, i.e. the bundle's own skills, not the embedded pack.
+   The real gate is `TestBuiltinSkillsPackWellFormed` plus the new bento tests.
+4. **No eval case.** Evals do not run in CI, need a live model plus podman, and
+   `evals.Case` has no skill field — the Go tests are the honest gate instead.
+
+### Scope discovered while shipping
+
+Bundle skills are **interactive-chat-only**: `internal/scheduledrun` emits no
+bundle-skill roster, so scheduled tasks and `fleet task run` cannot discover this
+(or any) bundle skill, even though the merged dir is bind-mounted for them.
+`docs/SKILLS.md` previously implied taskrun picked the pack up unchanged; that
+claim is now corrected there.
 
 ---
 

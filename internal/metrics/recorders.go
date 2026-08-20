@@ -20,6 +20,7 @@ const (
 	nameIPBlocked             = "fleet_ip_blocked_total"
 	nameDeadLettered          = "fleet_dead_letter_queued_total"
 	nameTasksSkipped          = "fleet_tasks_skipped_total"
+	nameRecurrenceRepaired    = "fleet_sched_recurrences_reconciled_total"
 	nameWebhookTrig           = "fleet_webhook_triggers_total"
 	nameToolOutputTruncations = "fleet_tool_output_truncations_total"
 	nameToolOutputArtifacts   = "fleet_tool_output_artifacts_total"
@@ -206,6 +207,19 @@ func RecordRunsPruned(n int) {
 		return
 	}
 	incCounter(nameRunsPruned, "Total scheduled task runs deleted by the retention sweep.", nil, nil, float64(n))
+}
+
+// RecordRecurrencesReconciled counts recurring schedules repaired by the
+// scheduler's reconciliation sweep (#1116): terminal recurring occurrences
+// whose post-completion successor spawn failed or was lost to a crash, now
+// re-spawned. Every increment is a schedule that would previously have died
+// silently, so a non-zero rate is worth an operator's glance (it means spawns
+// are failing at completion time) even though the sweep itself healed them.
+func RecordRecurrencesReconciled(n int) {
+	if n <= 0 {
+		return
+	}
+	incCounter(nameRecurrenceRepaired, "Total recurring schedules repaired by the recurrence reconciliation sweep.", nil, nil, float64(n))
 }
 
 // RecordLogsArchived records one log-archival sweep result (#272). On result

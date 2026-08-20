@@ -168,6 +168,17 @@ stopping at its **sliced** ceiling is the exception by design: the slice is the
 parent's leash, so the child returns its partial answer and spend to the parent
 rather than failing the run.
 
+**Auxiliary model calls are metered too (#1118).** Model calls fleet makes on
+a run's behalf but outside the main step loop follow one rule — visible or
+counted, never invisible: the compaction summarizer and the model-invocable
+`suggest_*` git-metadata tools meter into the **same run accounting** the
+ceilings read (the summarizer additionally pre-checks the ceiling and
+degrades to a deterministic truncation summary once it is met), while the
+host-side extras (end-of-run verifier, phone-a-friend review, loop
+exit-condition verifier) stay off-ceiling by their documented semantics but
+record labeled `aux_usage` entries in the session log. See
+[`docs/AUX-MODEL-CALL-METERING.md`](AUX-MODEL-CALL-METERING.md).
+
 Scheduled runs additionally carry a **per-task wall-clock timeout** (#724):
 `FLEET_TASK_WALL_TIMEOUT` (a Go duration; default **4h**, `0` disables) bounds
 one run's total elapsed time, enforced by the worker pool around the run
@@ -282,6 +293,13 @@ operator sets `FLEET_SCHEDULED_AUTO_COMPACT=1`. The summary uses the driver's
 placeholder — the same hook the reactive `context_length_exceeded` recovery path
 already uses, so a proactive compaction does not count toward the consecutive-
 compaction cap that guards against compaction loops.
+
+**The summary call is governed (#1118).** The summarizer fires exactly when a
+run is already large, so its own model call meters into the run's usage/cost
+accounting (the same counters the ceilings and the chat cost chip read), and
+it pre-checks the run's cost/token ceiling first: at or over budget it skips
+the model entirely and inserts the deterministic placeholder — truncation
+instead of an unmetered paid summary.
 
 ---
 
@@ -681,6 +699,11 @@ governance — per-tool policy, audit, finish enforcement, MCP credential
 brokering, note staging, usage/cost, **and the end-of-run verifier** — applies to
 every scheduled run; a run never silently finishes unverified.
 
+The verifier's own spend does not debit the run's cost/token ceilings (it is a
+host-side extra around the loop), but it is recorded per call in the session
+log's labeled `aux_usage` ledger (#1118) — see
+[`docs/AUX-MODEL-CALL-METERING.md`](AUX-MODEL-CALL-METERING.md).
+
 ### Iterative verification loops
 
 A scheduled task with a `loop_config` (#179) runs as a bounded
@@ -695,7 +718,13 @@ The exit condition (each iteration is judged by exactly one):
 - `shell:<cmd>` — run `<cmd>` in the worker's sandbox; exit 0 = pass.
 - `regex:<pattern>` — match `<pattern>` against the worker's last assistant message.
 - `llm` — ask `verifier_model` (defaults to the task's fallback model) the
-  `verifier_prompt`; a reply beginning with `YES` = pass.
+  `verifier_prompt`; a reply beginning with `YES` = pass. Its spend is not
+  counted toward the iteration cost / `max_cost_usd` (the worker session is
+  the accounting unit), but each call is recorded in the worker session's
+  `aux_usage` ledger (#1118). One caveat: for a multi-iteration loop only
+  the surviving (last) worker session persists — pre-existing session
+  handling — so earlier iterations' verifier records survive as host log
+  lines only.
 
 Two ceilings stop a runaway loop, **checked before each iteration** so
 already-accrued cost counts: `max_cost_usd` (accumulated across iterations) and
@@ -732,7 +761,9 @@ What it is and is **not**, stated plainly (honesty in docs):
   it in the sandboxed tool roster — keeping governance one core.
 - It runs **at most once per run** and **fails open**: a reviewer error, an empty
   reply, or an unparseable verdict logs a skip and allows the run to finish, so a
-  flaky reviewer never blocks otherwise-complete work.
+  flaky reviewer never blocks otherwise-complete work. Like the verifier, its
+  spend stays off the run's ceilings but is recorded in the session log's
+  `aux_usage` ledger (#1118).
 - It is **scheduled-only** and gated: with the flag off (the default), the review
   never runs and behaviour is identical to before. The reviewer model slug comes
   from `FLEET_PHONE_A_FRIEND_MODEL` and **falls back to the run's fallback model**

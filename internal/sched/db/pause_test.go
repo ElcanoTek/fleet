@@ -46,6 +46,13 @@ func TestTaskPauseResumeLifecycle(t *testing.T) {
 	if got.PendingQuestion != "which currency?" {
 		t.Fatalf("question not stored: %q", got.PendingQuestion)
 	}
+	// paused_at (#1116) stamps the pause instant — the expiry sweep counts the
+	// ask window from it, so it must be "now", not the run's start.
+	if got.PausedAt == nil {
+		t.Fatal("paused_at must be stamped by PauseTaskForQuestion")
+	} else if since := time.Since(*got.PausedAt); since < 0 || since > time.Minute {
+		t.Fatalf("paused_at = %v, want ~now", *got.PausedAt)
+	}
 	if got.LeaseOwner != nil || got.LeaseExpiresAt != nil {
 		t.Fatalf("paused task must hold NO lease (no sandbox): owner=%v exp=%v", got.LeaseOwner, got.LeaseExpiresAt)
 	}
@@ -86,14 +93,19 @@ func TestTaskPauseResumeLifecycle(t *testing.T) {
 	}
 }
 
-// TestExpirePausedTasks (#510): a task awaiting input past the window is failed
-// terminally; a fresh one and a disabled window are left alone.
+// TestExpirePausedTasks (#510/#1116): a task awaiting input past the window —
+// measured from paused_at, the pause instant — is failed terminally; a freshly
+// paused one (however long its run executed beforehand) and a disabled window
+// are left alone.
 func TestExpirePausedTasks(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 	ctx := context.Background()
 
-	pause := func(prompt string, startedAgo time.Duration) *models.Task {
+	// pause parks a task that STARTED startedAgo ago and PAUSED pausedAgo ago.
+	// PauseTaskForQuestion stamps paused_at = now(), so the backdate is applied
+	// directly afterwards, the same way the started_at backdate seeds the row.
+	pause := func(prompt string, startedAgo, pausedAgo time.Duration) *models.Task {
 		t.Helper()
 		owner := uuid.New()
 		ownerStr := owner.String()
@@ -113,11 +125,20 @@ func TestExpirePausedTasks(t *testing.T) {
 		if ok, err := db.PauseTaskForQuestion(ctx, task.ID, owner, "which currency?"); err != nil || !ok {
 			t.Fatalf("pause: ok=%v err=%v", ok, err)
 		}
+		if pausedAgo > 0 {
+			pausedAt := time.Now().Add(-pausedAgo).UTC()
+			if _, err := db.Conn().ExecContext(ctx, `UPDATE tasks SET paused_at = $1 WHERE id = $2`, pausedAt, task.ID); err != nil {
+				t.Fatalf("backdate paused_at: %v", err)
+			}
+		}
 		return task
 	}
 
-	old := pause("stale question", 2*time.Hour)     // started 120m ago
-	fresh := pause("fresh question", 1*time.Minute) // started 1m ago
+	old := pause("stale question", 2*time.Hour, 2*time.Hour) // paused 120m ago
+	// The #1116 regression case: a run that executed for 3h and asked its
+	// question 1m ago. Under the old started_at filter this was expired on the
+	// first sweep — a zero TTL for any long run's question.
+	fresh := pause("fresh question on a long run", 3*time.Hour, time.Minute)
 
 	// Disabled window is a no-op.
 	if got, err := db.ExpirePausedTasks(ctx, 0); err != nil || len(got) != 0 {
@@ -130,7 +151,7 @@ func TestExpirePausedTasks(t *testing.T) {
 		t.Fatalf("ExpirePausedTasks: %v", err)
 	}
 	if len(expired) != 1 {
-		t.Fatalf("expired %d, want 1 (only the 2h-old paused task)", len(expired))
+		t.Fatalf("expired %d, want 1 (only the task PAUSED 2h ago — pause age, not run age, drives expiry)", len(expired))
 	}
 	if expired[0].ID != old.ID {
 		t.Fatalf("expired the wrong task: got %s, want %s", expired[0].ID, old.ID)

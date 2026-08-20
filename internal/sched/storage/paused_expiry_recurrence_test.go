@@ -11,7 +11,8 @@ import (
 )
 
 // pauseTaskPastWindow adds a task, drives it running → paused_awaiting_input with
-// started_at backdated so ExpirePausedTasks' window catches it. Returns the task.
+// paused_at backdated so ExpirePausedTasks' window catches it (#1116: expiry is
+// measured from the pause instant, not started_at). Returns the task.
 func pauseTaskPastWindow(t *testing.T, store *Storage, recurrence string) *models.Task {
 	t.Helper()
 	ctx := context.Background()
@@ -42,6 +43,12 @@ func pauseTaskPastWindow(t *testing.T, store *Storage, recurrence string) *model
 	}
 	if ok, err := database.PauseTaskForQuestion(ctx, task.ID, owner, "which currency?"); err != nil || !ok {
 		t.Fatalf("PauseTaskForQuestion: ok=%v err=%v", ok, err)
+	}
+	// PauseTaskForQuestion stamped paused_at = now(); backdate it past the
+	// sweep window, the same way started_at is backdated above.
+	pausedAt := time.Now().Add(-2 * time.Hour).UTC()
+	if _, err := database.Conn().ExecContext(ctx, `UPDATE tasks SET paused_at = $1 WHERE id = $2`, pausedAt, task.ID); err != nil {
+		t.Fatalf("backdate paused_at: %v", err)
 	}
 	return task
 }

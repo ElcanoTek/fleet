@@ -19,6 +19,100 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **A built-in `bento-slides` skill: the agent can now produce a real,
+  downloadable presentation offline (#985).** A [Bento](https://bento.page) deck
+  is one self-contained `.bento.html` file that is simultaneously the slides, the
+  viewer and a full editor, with the document stored as plain JSON in a single
+  `#bento-doc` script block. Ask for a deck in chat and the agent writes one into
+  the workspace; the user downloads it and opens it in any browser — no Gamma, no
+  PowerPoint, no PPTX toolchain, and no network call at all, either to author the
+  deck or to open it.
+
+  **Decks are offline-only, by construction.** Upstream has two behaviors that
+  would make a delivered deck a network client, and both are disabled. The first
+  is an update check to `bento.page` on every launch: fleet embeds and
+  sha256-pins the shell, so it can only report a version the reader cannot
+  install, while telling a third party they opened the deck. The second matters
+  more — live collaboration. `bornWithCollab = !!doc.collab` is the entire
+  eligibility test, so a deck that merely *carries* a collab block opens a
+  `wss://sync.bento.page` session the moment it is opened, with no click, and
+  retries on failure. Such a file is a live, writable door into whoever opens it,
+  and #1197's `set` deliberately restored those keys.
+
+  `new` now plants two layers ahead of the runtime: a CSP `<meta>` with
+  `connect-src 'none'` — enforced by the browser, so it holds without the app's
+  cooperation, without `localStorage`, and even against markup a model wrote into
+  a slide — and upstream's own offline switch, so the app refuses network at its
+  own chokepoints and never attaches a session instead of retrying into the CSP.
+  The CSP also blocks iframes, plugins, form posts and remote images, making
+  several of the skill's authoring rules browser-enforced rather than remembered.
+  A third layer sits in the document: `set` now **removes** any `collab` block,
+  from the target file or the incoming document, and says so on stderr — dropping
+  keys does not retract an invitation already shared, and only the user can decide
+  to rotate.
+
+  **Hand-off is the deck plus a one-click PDF.** The skill now always tells the
+  user how to get one, naming the button (*Export PDF (print)*), because most
+  people need a PDF to email or print and the deck makes an excellent one — the
+  same renderer they are looking at, so it matches exactly, with selectable text
+  and embedded font subsets (measured: five pages, 46KB, `/ToUnicode` present).
+  The agent cannot produce it — that needs a browser, and the sandbox has none —
+  so the guidance is a click, never a promise to attach a file. There is no
+  PowerPoint export and the skill says so plainly rather than implying a
+  conversion exists; hand-rolling one would mean a second renderer for seven
+  element types, six shape kinds, connectors, gradients, the motion effects,
+  morph, state slides and layouts, and a deck that is almost right is worse than
+  an honest PDF. A test inflates the vendored runtime and checks both claims
+  against the app's own strings, so a re-vendor that renames the button or adds a
+  PPTX path fails CI instead of leaving the instructions quietly wrong.
+
+  Verified by hand in Chromium with the page instrumented and every request
+  intercepted: an unguarded shell carrying a collab block attempts the session
+  socket five times and fetches the update manifest; a fleet deck attempts
+  neither; and with `localStorage` denied so only the CSP is left, the app tries
+  both and the browser refuses both. The vendored template stays byte-identical
+  and sha256-pinned (the guard goes into the produced deck, not the template), and
+  a deck the *user* hands the agent keeps its shell — `validate` reports an
+  unguarded one rather than rewriting it. Honest residue, recorded in
+  `templates/NOTICE.md`: the app mints a collab block into files it saves through
+  its own UI, so such a deck carries inert key material even though both guard
+  layers survive the save and nothing connects.
+
+  The pack ships in `internal/clientconfig/builtin_skills/bento-slides/` and
+  needed **no Go change**: `//go:embed all:builtin_skills` is recursive, so its
+  `templates/`, `references/` and `scripts/` materialize into the merged skills
+  dir and land on the sandbox's read-only mount exactly like
+  `data-profiler/scripts/profile.py`. It shows up in Settings → Skills with a
+  **Built-in** badge and answers to `/bento-slides`, both for free.
+
+  Two deliberate departures from the issue's sketch. The template is the
+  **upstream v1.0.18 release artifact, vendored unmodified** (689KB, MIT, ©
+  The Bento authors) rather than a "minimal" one, because a Bento shell *is* the
+  application — there is no smaller file that opens. And instead of editing the
+  minified bundle directly, the pack ships a stdlib-only `scripts/bento_doc.py`
+  (`new` / `get` / `set` / `validate`): the document block sits at byte 6322, so
+  reaching it with `view_file` would burn ~125KB of context on runtime code, and
+  the block's escaping rule for `<` is the kind of thing that corrupts a file
+  silently rather than loudly. The helper also turns two format-and-safety rules
+  into mechanisms instead of reminders — `get` keeps a shared deck's `collab`
+  live-session private keys out of the model context while `set` restores them
+  from the file untouched, and a deck's `docId` is carried across an edit rather
+  than regenerated. Every refusal leaves the deck byte-identical, and the app
+  shell outside the document block is preserved exactly.
+
+  Honest scope: discovery is **interactive chat only**. `internal/scheduledrun`
+  composes its own prompt and emits no bundle-skill roster, so scheduled tasks
+  and `fleet task run` do not see this skill (true of every bundle skill, not new
+  here — `docs/SKILLS.md` now states it plainly instead of implying otherwise).
+  Decks are always delivered as a download, never rendered inline, so the skill
+  requires a new filename per revision — workspace downloads are cached
+  `immutable` for 24 hours. No PPTX export, no hosted collaborative editing, and
+  no pixel parity with PowerPoint animations. The vendored bundle's own
+  JavaScript dependencies are watched by no CI scanner (`govulncheck` is Go-only;
+  Grype scans the sandbox image), so a sha256 pin in
+  `internal/clientconfig/builtin_skills_bento_test.go` guards the bytes and
+  re-vendoring is a documented manual act — see the pack's `templates/NOTICE.md`.
+
 - **Admin-configurable model tiers (#1187).** The default and advanced
   ("recommended") models are now workspace settings — Settings → Admin →
   Features → Model tiers — instead of compile-time constants, so a lab
@@ -449,6 +543,35 @@ prior versions are listed because none have shipped.
   recognize is still success, per §2.2. Reading the body before closing it also
   lets the connection be reused.
 
+- **Auxiliary model calls no longer bypass the run's cost/token ceilings and
+  usage accounting (#1118).** Several model calls made on behalf of a run
+  never reached its accounting, so `checkCeilings` and sub-agent budget
+  slices under-counted real spend. Now split by where the call fires:
+
+  - **In-loop calls count against the run's ceiling.** The compaction
+    summarizer meters through the new
+    `agentcore.CompactionSummarizeInput.RecordUsage` (and pre-checks the
+    ceiling: at/over budget it degrades to the deterministic truncation
+    placeholder instead of buying another call), and the model-invocable
+    `suggest_branch_name` / `suggest_commit_message` /
+    `suggest_pr_description` tools meter through a context-carried
+    `tools.UsageRecorder` that `agentcore.Run` installs — both land in the
+    same `orchestrationState`/`Result.Usage` the finalize retries already
+    use.
+  - **Host-side extras stay off-ceiling but become visible.** The end-of-run
+    verifier, the phone-a-friend review, and the scheduled loop's `llm`
+    exit-condition verifier record per-call `aux_usage` entries (label,
+    model, tokens, cost) in the persisted session log — carried through the
+    captain's-log file's redaction and truncation copies too — instead of
+    debiting the run; their documented accounting semantics are unchanged,
+    the spend just stops vanishing. Error analysis and the chat→recurring-
+    task synthesizer, whose run session is unreachable (or nonexistent) at
+    call time, emit the same structured `aux model call` host log line as
+    their record. Aux metering never overwrites the `LastStep*` per-call
+    input-size signals the context meter and compaction trigger read.
+    Design note:
+    [`docs/AUX-MODEL-CALL-METERING.md`](docs/AUX-MODEL-CALL-METERING.md).
+
 - **Chat's finalize recoveries now see the turn they are recovering, and can
   no longer repeat its side effects (#1117).** Two flaws in the interactive
   driver's finalize paths: (1) the forced-final-summary call replayed
@@ -466,6 +589,69 @@ prior versions are listed because none have shipped.
   the new `FinalizeInput.RoundToolEvents` — any committed tool event this
   round degrades the retry to the tool-less summary path, which can narrate
   the executed work but not repeat it.
+
+- **Task lifecycle recovery/edge paths: recurrence chains no longer die
+  silently, crash-loops dead-letter, lease-lost runs are cancelled, and paused
+  expiry counts from the pause (#1116).** Four fixes to the paths around the
+  (unchanged) claim/lease core:
+
+  - *Recurrence spawn is now idempotent and repairable.* The next occurrence
+    of a recurring task spawns after the terminal tx commits, and any failure
+    there — a transient DB error, or a crash in the commit→spawn window —
+    previously only logged, ending the schedule forever. The spawn now claims a
+    per-occurrence settlement flag (`recurrence_spawned`, migration 065) in the
+    same transaction that inserts the successor (and carries its task memory),
+    and a new always-on scheduler sweep (`ReconcileRecurrences`) re-drives any
+    terminal recurring row whose flag is still unclaimed — logged and counted in
+    `fleet_sched_recurrences_reconciled_total`. Chains that legitimately end
+    (recurrence_until / run budget / unparseable definition) settle the flag
+    without spawning, so the sweep never spins on them. The spawn deliberately
+    stays OUTSIDE the terminal tx: folding it in would turn a bookkeeping-insert
+    failure into a re-run of the whole occurrence's external side effects.
+    Restore-safety: a row INSERTED already success/error — `fleet import`
+    restoring terminal recurring history verbatim (#713) — lands with the flag
+    settled, so a disaster-recovery restore can never be read as a fleet of
+    lost spawns and mass-spawn duplicate successors. Dead-lettered rows stay
+    unsettled on purpose (quarantine parks the chain without spawning, and the
+    sweep never selects them), and `ReplayDeadLetteredTask` re-arms the flag,
+    so a replayed quarantined occurrence continues its chain exactly once.
+  - *Lease recovery dead-letters past the retry budget.* `RecoverExpiredLeases`
+    reset expired leases to pending and incremented `attempt_count`
+    unconditionally — the only max-retries check was the in-process failure
+    path, which a task that kills the process never reaches, so a crash-looper
+    cycled recover→claim→crash forever. Recovery now routes rows with
+    `attempt_count >= max_retries` to the dead-letter queue — exact parity with
+    the in-process retry gate, so `max_retries=R` bounds a task at R+1 total
+    executions and R=0 ("never retry") gets exactly one, with no free extra run
+    of external side effects after a crash. The quarantine writes the same
+    column shape as the runner's DLQ path, including a derived
+    `actual_duration_seconds` (replayable, listed, counted in
+    `fleet_dead_letter_queued_total` under reason `lease_recovery`).
+  - *A lease-lost run is cancelled.* When a renewal came back
+    `ErrTaskLeaseNotHeld` — recovery re-queued the task and a fresh attempt may
+    already be running — the zombie run kept executing its EXTERNAL side effects
+    (emails, MCP writes, sandbox actions) to natural completion; only its DB
+    writes were token-fenced. Two cancellation paths now bound it: the renewal
+    verdict cancels the run via its own snapshotted per-claim cancel (safe
+    unconditionally — a per-claim context can never touch a re-claimed fresh
+    run), and a re-claim by the same pool cancels the stale run it overwrites —
+    the majority ordering on a single box, where recovery and re-claim both
+    happen inside one renew interval. The cancellation carries a distinct cause
+    so the persisted transcript says "lease was lost", not "server shutdown".
+    Other renewal errors (DB unreachable) still only log: they don't prove the
+    lease is lost, and if the outage outlasts the lease window the next renewal
+    gets the definite verdict.
+  - *Paused-task expiry is measured from the pause, not the run start.*
+    `ExpirePausedTasks` filtered on `started_at < cutoff`, so a run that
+    executed 2h before calling `ask` under a 60-minute window was expired on the
+    next tick — a zero TTL, and the human never got to answer. A new `paused_at`
+    column (migration 064, backfilled from `started_at` for rows already paused)
+    is stamped by both pause transitions (`PauseTaskForQuestion`,
+    `PauseTaskForWake`) and drives the expiry window, so a question now survives
+    its full TTL regardless of how long the run executed first. `paused_at` is
+    runtime state like the wake columns: written only by the pause transitions,
+    excluded from the insert/upsert, `UpdateTaskTx`, the clone recipe, and the
+    export record.
 
 - **`TaskStreamFrame` was missing five fields the task stream actually sends,
   failing the TypeScript build.** `subagentProgressFrame`

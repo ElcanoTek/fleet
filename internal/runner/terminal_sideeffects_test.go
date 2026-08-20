@@ -222,6 +222,7 @@ func TestStaleGoroutineCleanupPreservesFreshClaim(t *testing.T) {
 		return false
 	})
 	task, _ := store.GetTask(taskID)
+	task.MaxRetries = 1 // recovery re-queues only below the retry budget (#1116)
 	task.LeaseExpiresAt = ptrTime(time.Now().UTC().Add(-time.Minute))
 	if _, err := store.UpdateTask(task); err != nil {
 		t.Fatalf("force-expire: %v", err)

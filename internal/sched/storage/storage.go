@@ -21,6 +21,7 @@ import (
 	"github.com/robfig/cron/v3"
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/ElcanoTek/fleet/internal/metrics"
 	"github.com/ElcanoTek/fleet/internal/sched/db"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/structuredoutput"
@@ -420,11 +421,13 @@ func (s *Storage) PromoteStarvedTasks(ctx context.Context, windowMinutes int) (i
 // daily task no longer silently kills the whole schedule. Returns the count
 // expired.
 //
-// The recurrence spawn is post-commit + best-effort, matching
+// The recurrence spawn is post-commit, matching
 // UpdateTaskStatusAtomicWithContext (the normal terminal-transition path also
-// spawns scheduleNextRecurrence after its tx commits). scheduleNextRecurrence
-// inserts a fresh pending row via AddTask and needs no lease — a paused task
-// holds none — so spawning from the sweep is safe.
+// spawns scheduleNextRecurrence after its tx commits) — and since #1116 it is
+// idempotent + repairable rather than best-effort: a failed or crashed spawn
+// leaves the row's spawn credit unclaimed and ReconcileRecurrences re-drives
+// it. scheduleNextRecurrence inserts a fresh pending row and needs no lease —
+// a paused task holds none — so spawning from the sweep is safe.
 //
 // Known gap (unchanged by this fix): the expiry sweep does not fire the
 // task-completion notification the runner sends on a normal terminal failure —
@@ -456,9 +459,24 @@ func (s *Storage) RecoverExpiredLeases() (int, error) {
 }
 
 // RecoverExpiredLeasesWithContext resets tasks with expired leases with context.
+// Returns the count re-queued to pending. Rows already past their retry budget
+// are dead-lettered instead (#1116, the crash-loop bound — see
+// db.RecoverExpiredLeases); those are logged and counted into the DLQ metric
+// here rather than returned, so the "recovered N tasks" logs the callers emit
+// stay honest about what was actually re-queued.
 func (s *Storage) RecoverExpiredLeasesWithContext(ctx context.Context) (int, error) {
 	now := time.Now().UTC()
-	return s.db.RecoverExpiredLeases(ctx, now)
+	requeued, deadLettered, err := s.db.RecoverExpiredLeases(ctx, now)
+	if err != nil {
+		return requeued, err
+	}
+	if deadLettered > 0 {
+		log.Printf("Lease recovery dead-lettered %d crash-looping task(s) past their retry budget", deadLettered)
+		for i := 0; i < deadLettered; i++ {
+			metrics.RecordDeadLetterQueued("lease_recovery")
+		}
+	}
+	return requeued, nil
 }
 
 // GetRunningTasks gets all currently running tasks.
@@ -1240,6 +1258,11 @@ func (s *Storage) UpdateTaskStatusAtomicWithContext(ctx context.Context, taskID 
 		return nil, fmt.Errorf("%w: %w", ErrTaskCommitOutcomeUnknown, err)
 	}
 
+	// Post-commit on purpose: folding the spawn into the terminal tx above would
+	// make a transient successor-insert failure abort the terminal write and
+	// re-run the whole occurrence's external side effects. A failure or crash
+	// here leaves the row's spawn credit unclaimed and the scheduler tick's
+	// ReconcileRecurrences repairs the chain (#1116).
 	if (update.Status == models.TaskStatusSuccess || update.Status == models.TaskStatusError) && task.Recurrence != "" {
 		s.scheduleNextRecurrence(context.Background(), task)
 	}
@@ -1506,7 +1529,15 @@ func (s *Storage) ReplayDeadLetteredTask(ctx context.Context, taskID uuid.UUID) 
 	// (#317) so the re-run doesn't carry a stale diagnosis. UpdateTaskTx omits
 	// error_analysis (it's write-once against status updates), so clear it
 	// explicitly in the same tx rather than through the task struct.
-	if _, err := tx.ExecContext(ctx, `UPDATE tasks SET error_analysis = NULL WHERE id = $1`, taskID); err != nil {
+	// recurrence_spawned is re-armed the same way (#1116): dead-lettering parks
+	// a recurring chain WITHOUT spawning, and the replay is how it continues —
+	// the replayed run's own success/error transition must be able to claim the
+	// spawn credit. Organically dead-lettered rows are already FALSE (only a
+	// success/error transition ever claims the credit, and those states never
+	// become dead_lettered), but a row restored by import lands settled
+	// (born-terminal insert), so reset explicitly: exactly one continuation,
+	// never a silent end.
+	if _, err := tx.ExecContext(ctx, `UPDATE tasks SET error_analysis = NULL, recurrence_spawned = FALSE WHERE id = $1`, taskID); err != nil {
 		return nil, err
 	}
 	task.ErrorAnalysis = nil
@@ -1517,11 +1548,38 @@ func (s *Storage) ReplayDeadLetteredTask(ctx context.Context, taskID uuid.UUID) 
 }
 
 // scheduleNextRecurrence creates the next occurrence of a recurring task.
-func (s *Storage) scheduleNextRecurrence(ctx context.Context, task *models.Task) {
+//
+// The spawn is IDEMPOTENT and REPAIRABLE (#1116). It runs in its own
+// transaction that (a) claims the completing occurrence's one spawn credit —
+// `SET recurrence_spawned = TRUE ... AND NOT recurrence_spawned` (migration
+// 065) — and (b) inserts the successor + carries its task memory, so exactly
+// one spawner can ever win and a duplicate successor is structurally
+// impossible. On ANY failure the credit stays unclaimed and the scheduler
+// tick's reconciliation sweep (ReconcileRecurrences) re-drives the spawn — so
+// a transient AddTask error, or a crash in the terminal-commit→spawn window,
+// no longer silently ends the schedule forever (it previously only logged).
+//
+// The spawn stays OUTSIDE the caller's terminal transaction on purpose: folding
+// it in would make a transient successor-insert failure abort the terminal
+// write itself, stranding the run `running` until lease expiry re-queues it —
+// re-executing the whole task's EXTERNAL side effects to repair a bookkeeping
+// insert. Settle-flag + sweep repairs the spawn without ever re-running the
+// occurrence.
+//
+// Chain-end conditions (recurrence_until passed / run budget exhausted) and an
+// unparseable recurrence (permanent: the expression is validated at creation,
+// so a parse failure here means a corrupted definition that no retry can fix)
+// SETTLE the credit without spawning, so the sweep never spins on a chain that
+// must not continue.
+//
+// Returns whether a successor was actually spawned (the reconciliation sweep
+// counts repairs by it; the post-terminal callers ignore it).
+func (s *Storage) scheduleNextRecurrence(ctx context.Context, task *models.Task) bool {
 	schedule, err := cron.ParseStandard(task.Recurrence)
 	if err != nil {
-		log.Printf("Error parsing recurrence for task %s: %v", task.ID, err)
-		return
+		log.Printf("Error parsing recurrence for task %s: %v; settling the chain — a parse error is permanent, so retrying the spawn cannot fix it", task.ID, err)
+		s.settleRecurrenceSpawn(ctx, task.ID)
+		return false
 	}
 
 	// Evaluate the cron expression in the task's own timezone so a "9am" task
@@ -1546,11 +1604,13 @@ func (s *Storage) scheduleNextRecurrence(ctx context.Context, task *models.Task)
 	if task.RecurrenceUntil != nil && nextTime.After(*task.RecurrenceUntil) {
 		log.Printf("Recurrence for task %s ended: next occurrence %s is past recurrence_until %s",
 			task.ID, nextTime.Format(time.RFC3339), task.RecurrenceUntil.Format(time.RFC3339))
-		return
+		s.settleRecurrenceSpawn(ctx, task.ID)
+		return false
 	}
 	if task.RecurrenceRemaining != nil && *task.RecurrenceRemaining <= 1 {
 		log.Printf("Recurrence for task %s ended: run budget exhausted", task.ID)
-		return
+		s.settleRecurrenceSpawn(ctx, task.ID)
+		return false
 	}
 
 	// Build the next occurrence from the FULL definition of the completing task
@@ -1582,28 +1642,116 @@ func (s *Storage) scheduleNextRecurrence(ctx context.Context, task *models.Task)
 	// Carry the originating API key forward so recurring task cost keeps counting
 	// against the key's usage bucket (and any scope=key budget).
 	newTask.CreatedByKeyID = task.CreatedByKeyID
-
-	if _, err := s.AddTaskWithContext(ctx, newTask); err != nil {
-		log.Printf("Error creating next recurring task for %s: %v", task.ID, err)
-		return
+	// Mirror AddTaskWithContext's stored-contract validation (the pre-#1116 spawn
+	// went through it): the insert below is the tx-scoped db.AddTaskTx, which
+	// does not validate.
+	if err := validateStoredOutputContract(newTask); err != nil {
+		// Permanent like a parse error (the definition itself is invalid), so
+		// settle rather than let the sweep spin on it.
+		log.Printf("Error creating next recurring task for %s: %v; settling the chain — the carried definition is invalid, so retrying the spawn cannot fix it", task.ID, err)
+		s.settleRecurrenceSpawn(ctx, task.ID)
+		return false
 	}
-	log.Printf("Scheduled next recurrence for task %s at %s", task.ID, nextTime)
 
+	// Claim the spawn credit + insert the successor + carry its memory in ONE
+	// transaction. The guarded credit flip is what makes the spawn idempotent:
+	// the post-terminal caller and the reconciliation sweep can both attempt it
+	// and exactly one commits a successor.
+	tx, err := s.db.BeginTx(ctx)
+	if err != nil {
+		log.Printf("Error creating next recurring task for %s: %v (the reconciliation sweep will retry)", task.ID, err)
+		return false
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	res, err := tx.ExecContext(ctx,
+		`UPDATE tasks SET recurrence_spawned = TRUE WHERE id = $1 AND NOT recurrence_spawned`, task.ID)
+	if err != nil {
+		log.Printf("Error creating next recurring task for %s: %v (the reconciliation sweep will retry)", task.ID, err)
+		return false
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		// Another spawner already settled this occurrence (the normal
+		// post-terminal spawn racing the reconciliation sweep) — nothing to do.
+		return false
+	}
+	if err := s.db.AddTaskTx(ctx, tx, newTask); err != nil {
+		log.Printf("Error creating next recurring task for %s: %v (the reconciliation sweep will retry)", task.ID, err)
+		return false
+	}
 	// Carry the completing occurrence's persistent memory (#198/#285) forward to
 	// the new occurrence. Memory is keyed by task_id and each recurrence is a NEW
 	// task row, so WITHOUT this copy a recurring Captain's Log task would start
 	// cold every time — defeating the feature (e.g. "alert only if the price
-	// changed since last week"). Best-effort + parameterized; the canonical
-	// task_memories data layer is internal/sched/taskmemory.go. The FK is
-	// satisfied because newTask was just inserted above.
-	if _, cerr := s.db.Conn().ExecContext(ctx, `
+	// changed since last week"). Parameterized; the canonical task_memories data
+	// layer is internal/sched/taskmemory.go. In the spawn tx (rather than the
+	// old post-insert best-effort write) so the FK is satisfied and a successor
+	// can never exist without its carried memory — a copy failure rolls the
+	// spawn back and the reconciliation sweep re-drives the whole thing.
+	if _, cerr := tx.ExecContext(ctx, `
 		INSERT INTO task_memories (id, task_id, key, value, created_at, updated_at)
 		SELECT gen_random_uuid(), $1, key, value, created_at, updated_at
 		FROM task_memories WHERE task_id = $2`,
 		newTask.ID, task.ID); cerr != nil {
-		log.Printf("recurring task %s: failed to carry persistent memory forward to %s: %v", task.ID, newTask.ID, cerr)
+		log.Printf("recurring task %s: failed to carry persistent memory forward to %s: %v (the reconciliation sweep will retry)", task.ID, newTask.ID, cerr)
+		return false
+	}
+	if err := tx.Commit(); err != nil {
+		log.Printf("Error creating next recurring task for %s: %v (the reconciliation sweep will retry)", task.ID, err)
+		return false
+	}
+	log.Printf("Scheduled next recurrence for task %s at %s", task.ID, nextTime)
+	return true
+}
+
+// settleRecurrenceSpawn marks a completing occurrence's successor question
+// resolved WITHOUT spawning (#1116): the chain legitimately ended, or its
+// definition is permanently unspawnable. Keeps the reconciliation sweep from
+// re-driving a spawn that must never (or can never) happen. Best-effort: on a
+// write failure the flag stays FALSE and the sweep simply re-evaluates the same
+// end condition next tick — idempotent either way.
+func (s *Storage) settleRecurrenceSpawn(ctx context.Context, taskID uuid.UUID) {
+	if _, err := s.db.Conn().ExecContext(ctx,
+		`UPDATE tasks SET recurrence_spawned = TRUE WHERE id = $1`, taskID); err != nil {
+		log.Printf("Failed to settle recurrence spawn for task %s: %v", taskID, err)
 	}
 }
+
+// ReconcileRecurrences is the recurrence-chain repair sweep (#1116), run every
+// scheduler tick. It re-drives scheduleNextRecurrence for terminal recurring
+// occurrences whose spawn credit is still unclaimed — a transient DB error at
+// spawn time, or a crash in the terminal-commit→spawn window, previously ended
+// the schedule forever with nothing but a log line. The guarded credit flip
+// inside scheduleNextRecurrence makes re-driving safe: a chain is repaired at
+// most once, and chains that legitimately ended are settled (not counted).
+// Returns how many chains were actually repaired with a fresh successor.
+func (s *Storage) ReconcileRecurrences(ctx context.Context) (int, error) {
+	cutoff := time.Now().UTC().Add(-recurrenceReconcileGrace)
+	tasks, err := s.db.GetUnspawnedRecurringTasks(ctx, cutoff, recurrenceReconcileBatch)
+	if err != nil {
+		return 0, err
+	}
+	repaired := 0
+	for _, task := range tasks {
+		if s.scheduleNextRecurrence(ctx, task) {
+			log.Printf("Reconciled recurrence for task %s: its post-completion spawn never landed; a successor has been scheduled", task.ID)
+			repaired++
+		}
+	}
+	return repaired, nil
+}
+
+// recurrenceReconcileGrace is how old a terminal recurring row must be before
+// the reconciliation sweep re-drives its spawn. The normal post-terminal spawn
+// follows its commit within milliseconds; the grace keeps the 30s-tick sweep
+// from ever contending with it (correctness never depends on this — the spawn
+// credit is claim-guarded — it only avoids pointless lock traffic).
+const recurrenceReconcileGrace = 2 * time.Minute
+
+// recurrenceReconcileBatch bounds one reconciliation sweep so a pathological
+// backlog can never balloon a scheduler tick; the remainder heals on
+// subsequent ticks.
+const recurrenceReconcileBatch = 50
 
 // ComputeNextRun evaluates a task's cron recurrence in its own timezone and
 // returns the next occurrence as an absolute UTC instant. Used by the

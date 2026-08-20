@@ -10,6 +10,7 @@ import (
 
 	"charm.land/fantasy"
 
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/structuredoutput"
 )
 
@@ -100,6 +101,10 @@ func (m *Manager) SuggestRecurringTask(ctx context.Context, transcript string, e
 	if err != nil {
 		return nil, fmt.Errorf("recurring-task synthesis: %w", err)
 	}
+	// Meter visibly (#1118): a conversation-level user action with no run
+	// session at all, so the structured host log line is the record. Logged
+	// before validation: a non-conforming proposal still cost money.
+	logAuxUsage(agentcore.NewAuxUsageRecord(agentcore.AuxUsageRecurringTaskSynthesis, model.Model(), result))
 
 	var out strings.Builder
 	for _, c := range result.Response.Content {

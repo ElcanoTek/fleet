@@ -113,9 +113,10 @@ warrant its own ADR.
 
 ## Built-in skills pack + library UI
 
-Fleet embeds five generally-useful skills in the binary
+Fleet embeds six generally-useful skills in the binary
 (`internal/clientconfig/builtin_skills/`): `data-profiler` (stdlib-only
-profiler script), `web-research-brief`, `code-review-checklist`,
+profiler script), `bento-slides` (vendored single-file Bento deck app + a
+document splice helper), `web-research-brief`, `code-review-checklist`,
 `release-notes`, `executive-report`. Every bundle inherits them by default —
 the skills analogue of the built-in MCP directory.
 
@@ -125,12 +126,26 @@ embedded pack into a merged on-disk dir (under `$FLEET_DATA_DIR/skills-merged/`,
 keyed by bundle path, never world-writable `/tmp`; bundle wins a name
 collision, loudly) and points
 `Bundle.SkillsDir` at it. Every consumer — prompt roster, sandbox mounts,
-workspace symlinks, `/skills`, taskrun, evals — picks the pack up unchanged.
+workspace symlinks, `/skills`, taskrun (mount only, see below), evals — picks
+the pack up unchanged.
 `Skills()` resyncs from sources on read, preserving the edit-a-skill-in-place
 live-reload contract; `ValidateSkills` runs against the bundle's own dir
 (`Bundle.BundleSkillsDir`). Workspace symlinks honor the registered dirs
 (`tools.SetSupportingDocDirs`, wired at boot) rather than only the legacy
 `$CWD/<name>` convention.
+
+**Where the roster is actually surfaced.** Bundle and built-in skills are
+discoverable in **interactive chat turns** and in eval replays, which build their
+prompt through `internal/agent/prompt.go` (section 5b). Scheduled runs and
+`fleet task run` compose their prompt in `internal/scheduledrun` instead, which
+emits the owner's *user-authored* skills but **no bundle-skill roster** — so a
+scheduled task will not discover a built-in skill on its own. The merged dir is
+still bind-mounted into those runs, but the relative `skills/<name>/…` path does
+not resolve there either: the workspace `skills` symlink is planted by
+`EnsureWorkspaceDir` (per-conversation) and a forced working dir has no
+supporting-doc read exception. Treat bundle skills as an interactive-chat
+capability; a scheduled task that needs one should inline the instructions in its
+prompt.
 
 Manifest knobs (mirroring the MCP directory):
 

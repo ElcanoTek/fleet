@@ -293,7 +293,7 @@ func (s *Scheduler) runLoop() {
 			// Recover per tick so a panic in task promotion or lease recovery
 			// fails only that tick — it must never kill the loop or the process.
 			//
-			// Order matters: the four cheap DB sweeps run BEFORE task promotion,
+			// Order matters: the five cheap DB sweeps run BEFORE task promotion,
 			// with lease recovery first — it is the crash-recovery backstop, and
 			// promotion is the one tick phase whose cost scales with operator
 			// config (run_if gates; bounded + async, but defense in depth says a
@@ -305,6 +305,7 @@ func (s *Scheduler) runLoop() {
 				s.runStarvationPromotion()
 				s.runPausedExpiry()
 				s.runWakeSweep()
+				s.runRecurrenceReconciliation()
 				s.ProcessScheduledTasks()
 			}()
 		case <-cleanupC:
@@ -374,6 +375,26 @@ func (s *Scheduler) runWakeSweep() {
 	}
 }
 
+// runRecurrenceReconciliation performs one recurrence-chain repair sweep
+// (#1116): it re-spawns the successor of any terminal recurring occurrence
+// whose post-completion spawn failed or was lost to a crash — the failure mode
+// that used to end a schedule forever with nothing but a log line. Always on —
+// like the wake sweep, chain continuity is core task lifecycle, not a tunable
+// policy — and data-driven: with no orphaned chains it is one cheap indexed
+// probe (idx_tasks_recurrence_unspawned). Logs + counts only when it repairs
+// something; a failure is logged but never fatal — the next tick retries.
+func (s *Scheduler) runRecurrenceReconciliation() {
+	n, err := s.storage.ReconcileRecurrences(context.Background())
+	if err != nil {
+		log.Printf("scheduler: recurrence reconciliation failed: %v", err)
+		return
+	}
+	if n > 0 {
+		log.Printf("scheduler: reconciled %d recurring schedule(s) whose post-completion spawn never landed", n)
+		metrics.RecordRecurrencesReconciled(n)
+	}
+}
+
 // runCleanup performs one retention sweep, logging + counting what it pruned.
 func (s *Scheduler) runCleanup() {
 	n, err := s.storage.CleanupOldRuns(context.Background(), s.retentionDays, s.keepPerTask)
@@ -419,6 +440,8 @@ func durationUntilHour(now time.Time, hour int) time.Duration {
 }
 
 // RecoverExpiredLeases re-queues tasks whose lease expired (crash recovery).
+// Tasks already past their retry budget are dead-lettered by the storage layer
+// instead (#1116, the crash-loop bound) and are not in the count logged here.
 func (s *Scheduler) RecoverExpiredLeases() {
 	count, err := s.storage.RecoverExpiredLeases()
 	if err != nil {
