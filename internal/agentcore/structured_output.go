@@ -260,16 +260,17 @@ func boundTerminalPrompt(model fantasy.LanguageModel, systemPrompt string, messa
 	msgs := cloneFantasyMessages(messages)
 	toolNames := toolNamesByCallID(msgs)
 	reduceHistoricalPayloadsToHardCap(msgs, toolNames)
-	if estimateBudgetMessagesTokens(msgs, prefix) > accounting.messageTarget {
-		compactOldToolResults(msgs, toolNames, prefix, accounting.messageTarget, innerResultPreviewBytes)
+	tokens := estimateBudgetMessagesTokens(msgs, prefix)
+	if tokens > accounting.messageTarget {
+		_, tokens = compactOldToolResults(msgs, toolNames, tokens, accounting.messageTarget, innerResultPreviewBytes)
 	}
-	if estimateBudgetMessagesTokens(msgs, prefix) > accounting.messageTarget {
-		evictOldToolInputs(msgs, prefix, accounting.messageTarget)
+	if tokens > accounting.messageTarget {
+		_, tokens = evictOldToolInputs(msgs, tokens, accounting.messageTarget)
 	}
-	if estimateBudgetMessagesTokens(msgs, prefix) > accounting.messageTarget {
-		compactOldToolResults(msgs, toolNames, prefix, accounting.messageTarget, innerResultEvictedBytes)
+	if tokens > accounting.messageTarget {
+		_, tokens = compactOldToolResults(msgs, toolNames, tokens, accounting.messageTarget, innerResultEvictedBytes)
 	}
-	if tokens := estimateBudgetMessagesTokens(msgs, prefix); tokens > accounting.messageTarget {
+	if tokens > accounting.messageTarget {
 		return nil, fmt.Errorf("%w: irreducible terminal prompt exceeds reserved target (messages=%d target=%d window=%d)",
 			ErrInnerContextBudgetExceeded, tokens, accounting.messageTarget, window)
 	}

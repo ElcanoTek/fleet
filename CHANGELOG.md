@@ -530,6 +530,56 @@ prior versions are listed because none have shipped.
     runs violated: publish under the caller repo's own owner, and link the
     package to that repo once.
 
+- **Agent-runtime LOW batch (#1125): six small correctness/accounting fixes in
+  `internal/agentcore` + `internal/agent`, one cleanup pass.**
+
+  - *Prompt roster nondeterminism (prompt-cache hazard).* The interactive
+    system prompt's MCP tool roster attributed each `mcp_<server>_<tool>` name
+    to the FIRST Optional server a map range happened to match, so with
+    overlapping server names (real under the `<server>_<account>` variant
+    convention, e.g. `jira` / `jira_prod`) a variant's tools appeared in or
+    vanished from the prompt per turn at random — silently busting the
+    byte-stable cacheable prefix (`docs/PROMPT-CACHE-CONTRACT.md`). The filter
+    now resolves the longest matching server name (`internal/agent/prompt.go`),
+    the same deterministic variant treatment `mcpAllowlist.toolsFor` applies.
+  - *Steering re-injection dedupe was positional.* `steeringStep`'s
+    already-present probe checked only the recorded position ±1; a compaction
+    or budget-step reduction that shifted history by more than one slot made
+    re-application insert the same steered user message twice into the
+    provider input. The probe keeps its fast path and falls back to a
+    content scan with per-steer claim tracking, so identical-text steers each
+    keep exactly one copy (`internal/agentcore/steer.go`).
+  - *A non-conforming Policy silently zeroed usage accounting.* `Run` used to
+    mint a throwaway orchestration state per round when a Policy exposed no
+    `orchestration()`, so such a run proceeded with `Result.Usage` stuck at
+    zero and ceilings that never fired. Run now refuses the Policy up front
+    (every production Policy conforms), and the redundant per-round
+    `policyOrch` lookup collapsed onto the single run-wide `usageOrch` that
+    #1118's aux-metering seams already bind.
+  - *`parseTaskTrackerSnapshot` parsed less than its comment claimed.* The
+    comment promised JSON *or* the human `Summary:` line; only JSON was
+    parsed, and the recorded result legitimately stops being one clean JSON
+    document (a post-tool hook fragment is appended after it; an oversized
+    result becomes a truncation envelope quoting a preview) — those shapes
+    returned `Seen=false` and silently disarmed the pending-work finish gate.
+    The Summary-line fallback is now implemented, and new tests build their
+    inputs from the real `task_tracker` tool so an output-format change breaks
+    the test instead of the gate.
+  - *Round-cap exhaustion discarded accumulated usage/entries.* Exhausting the
+    20 enforcement rounds returned `Result{Label}` with the error, dropping
+    the whole paid transcript and token/cost accounting. The RETURNED `Result`
+    now carries the accumulated `Usage`/`Entries`/`Rounds` alongside the
+    error, matching the `ErrCommittedSideEffects` partial-result contract.
+    Honest scope: the scheduled driver (the only mode that can reach this cap)
+    still discards the Result on its error paths today, so persisting this
+    carry there is a follow-up — the fix makes the accounting *available*, not
+    yet *surfaced*.
+  - *O(N²·parts) re-estimation in the inner context reducer.*
+    `compactOldToolResults`/`evictOldToolInputs` re-ran the full-history token
+    estimate inside their per-part loops on every over-target provider step.
+    They now keep a running total (the estimate is a per-part linear sum) that
+    a test pins equal to a fresh re-estimate; what gets reduced is unchanged.
+
 - **Detached background work outlived the request that started it, and nothing
   waited for it.** `activeTurns` tracked detached *turns* and `DrainTurns` blocked
   on them at shutdown, but the work that is not a turn was tracked by nothing at

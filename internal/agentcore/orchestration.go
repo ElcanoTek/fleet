@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -910,9 +912,19 @@ func (o *orchestrationState) recordToolResult(toolName, rawInput, resultText str
 const maxSendEmailCallsPerTask = 3
 
 // parseTaskTrackerSnapshot parses task_tracker output into a snapshot. Minimal
-// form sufficient for the unified runtime: structured JSON or the human
-// "Summary: N total (a todo, b in progress, c done)" line. The P3 native tool
-// owns the richer line-level checkpoint summary.
+// form sufficient for the unified runtime: the tool's structured JSON, falling
+// back to the human "Summary: N total (a todo, b in progress, c done)" line.
+// The fallback is not decorative: the resultText recorded here is the GOVERNED
+// model-visible bytes, which can legitimately stop being one clean JSON
+// document — a post_tool_use hook appends its context fragment after the JSON
+// (appendHookContext), and an oversized result is rewritten into a truncation
+// envelope that only quotes the original's head/tail as a preview. Returning
+// Seen=false on those shapes silently disabled the pending-work finish gate
+// (checkFinishEnforcement), letting a run finish with open tasks. The Summary
+// line survives all of them verbatim — it contains no JSON-escaped characters,
+// and the tool renders it near the head of its output field — so scanning for
+// it keeps the gate coupled to what the tool actually said (#1125). The P3
+// native tool owns the richer line-level checkpoint summary.
 func parseTaskTrackerSnapshot(result string) taskTrackerSnapshot {
 	result = strings.TrimSpace(result)
 	if result == "" {
@@ -943,5 +955,38 @@ func parseTaskTrackerSnapshot(result string) taskTrackerSnapshot {
 			}
 		}
 	}
-	return taskTrackerSnapshot{}
+	return parseTaskTrackerSummaryLine(result)
+}
+
+// taskTrackerSummaryLine matches the tracker tool's human summary rendering
+// (internal/tools/task_tracker.go, viewTasks): the exact format is pinned by
+// TestParseTaskTrackerSnapshot_RealToolOutputShapes, which builds its inputs
+// from the real tool, so a format change there breaks the test instead of
+// silently disabling the finish gate.
+var taskTrackerSummaryLine = regexp.MustCompile(`Summary: (\d+) total \((\d+) todo, (\d+) in progress, (\d+) done\)`)
+
+// parseTaskTrackerSummaryLine is parseTaskTrackerSnapshot's fallback for
+// result shapes that are no longer one clean JSON document. Only called on
+// task_tracker output, so a match is the tool's own summary, not user text.
+func parseTaskTrackerSummaryLine(result string) taskTrackerSnapshot {
+	m := taskTrackerSummaryLine.FindStringSubmatch(result)
+	if m == nil {
+		return taskTrackerSnapshot{}
+	}
+	total, err := strconv.Atoi(m[1])
+	if err != nil || total <= 0 {
+		// Zero tasks renders no Summary line today; keep the JSON path's
+		// total>0 contract regardless so both parsers agree on Seen.
+		return taskTrackerSnapshot{}
+	}
+	todo, _ := strconv.Atoi(m[2])
+	inProgress, _ := strconv.Atoi(m[3])
+	done, _ := strconv.Atoi(m[4])
+	return taskTrackerSnapshot{
+		Seen:       true,
+		Total:      total,
+		Todo:       todo,
+		InProgress: inProgress,
+		Done:       done,
+	}
 }

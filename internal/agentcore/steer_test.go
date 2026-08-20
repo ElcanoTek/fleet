@@ -215,6 +215,180 @@ func TestSteeringStep_RollbackReRecordsTranscriptEntry(t *testing.T) {
 	}
 }
 
+// steerAssistant / countSteerTexts are shared helpers for the #1125 dedupe
+// tests below.
+func steerAssistant(text string) fantasy.Message {
+	return fantasy.Message{Role: fantasy.MessageRoleAssistant, Content: []fantasy.MessagePart{fantasy.TextPart{Text: text}}}
+}
+
+func countSteerTexts(messages []fantasy.Message, text string) int {
+	count := 0
+	for _, m := range messages {
+		if m.Role != fantasy.MessageRoleUser {
+			continue
+		}
+		for _, part := range m.Content {
+			if p, ok := fantasy.AsMessagePart[fantasy.TextPart](part); ok && p.Text == text {
+				count++
+			}
+		}
+	}
+	return count
+}
+
+// TestSteeringStep_ShiftedHistoryDoesNotDoubleInject pins the #1125 dedupe
+// fix: a shortened rebuild can move an already-present injected message MORE
+// than one slot from its recorded position (while staying at/after the
+// injection floor, where injected steers live), and the old pos/pos-1-only
+// probe then re-inserted the same text as a duplicate user message in the
+// provider input.
+func TestSteeringStep_ShiftedHistoryDoesNotDoubleInject(t *testing.T) {
+	source := &fakeSteerSource{}
+	state := &steerState{}
+	step := steeringStep(source, state, nil)
+
+	// First invocation fixes the injection floor at 2 (the seed history);
+	// nothing is queued yet, so nothing is accepted.
+	base := []fantasy.Message{fantasy.NewUserMessage("ask"), steerAssistant("working")}
+	if _, _, err := step(context.Background(), steerOpts(base)); err != nil {
+		t.Fatal(err)
+	}
+
+	// The steer arrives mid-stream and is accepted at the tail of a GROWN
+	// entry slice: recorded pos = 5.
+	source.mu.Lock()
+	source.pending = append(source.pending, SteerMessage{ID: "in-1", Text: "steered guidance"})
+	source.mu.Unlock()
+	grown := append(append([]fantasy.Message{}, base...), steerAssistant("a1"), steerAssistant("a2"), steerAssistant("a3"))
+	if _, _, err := step(context.Background(), steerOpts(grown)); err != nil {
+		t.Fatal(err)
+	}
+
+	// A shortened rebuild kept the injected message but moved it THREE slots
+	// below its recorded position, still at/after the floor — exactly the
+	// shape the positional probe alone misses.
+	shifted := []fantasy.Message{
+		base[0],
+		base[1],
+		fantasy.NewUserMessage("steered guidance"),
+		steerAssistant("tail-1"),
+	}
+	_, res, err := step(context.Background(), steerOpts(shifted))
+	if err != nil {
+		t.Fatal(err)
+	}
+	final := shifted
+	if res.Messages != nil {
+		final = res.Messages
+	}
+	if got := countSteerTexts(final, "steered guidance"); got != 1 {
+		t.Fatalf("steer message appears %d times after a >1-slot shift, want exactly 1 (no duplicate injection)", got)
+	}
+}
+
+// TestSteeringStep_PriorHistoryByteCollisionStillInjects pins the injection
+// floor: a steer whose text byte-equals a PRIOR-history user message (the
+// user's last turn was "continue"; they steer "continue" mid-run) must still
+// be re-injected on every step. Without the floor, the content scan claims
+// the historical message and permanently suppresses the steer — the model
+// never sees it again after the accepting step.
+func TestSteeringStep_PriorHistoryByteCollisionStillInjects(t *testing.T) {
+	source := &fakeSteerSource{pending: []SteerMessage{{ID: "in-1", Text: "continue"}}}
+	state := &steerState{}
+	step := steeringStep(source, state, nil)
+
+	// Seed history already carries a byte-identical user message.
+	base := []fantasy.Message{fantasy.NewUserMessage("continue"), steerAssistant("done so far")}
+	if _, _, err := step(context.Background(), steerOpts(base)); err != nil {
+		t.Fatal(err)
+	}
+
+	// Next step: fantasy rebuilt the entry without the injection; the only
+	// "continue" present is the prior-history one, BELOW the floor. It must
+	// not satisfy the dedupe.
+	rebuilt := append(append([]fantasy.Message{}, base...), steerAssistant("more work"))
+	_, res, err := step(context.Background(), steerOpts(rebuilt))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Messages == nil {
+		t.Fatal("steer suppressed by a prior-history byte collision: expected re-injection")
+	}
+	if got := countSteerTexts(res.Messages, "continue"); got != 2 {
+		t.Fatalf("%d copies of the text present, want 2 (the prior-history message AND the injected steer)", got)
+	}
+}
+
+// TestSteeringStep_IdenticalTextSteersEachKeepTheirCopy guards the claim
+// tracking inside the content-scan fallback: two accepted steers with
+// byte-identical text must each account for their own copy — one present copy
+// satisfies only one of them, so the other is restored rather than deduped
+// away, and two present copies are never tripled.
+func TestSteeringStep_IdenticalTextSteersEachKeepTheirCopy(t *testing.T) {
+	source := &fakeSteerSource{pending: []SteerMessage{
+		{ID: "in-1", Text: "keep going"},
+		{ID: "in-2", Text: "keep going"},
+	}}
+	state := &steerState{}
+	step := steeringStep(source, state, nil)
+
+	countSteers := func(messages []fantasy.Message) int {
+		count := 0
+		for _, m := range messages {
+			if m.Role != fantasy.MessageRoleUser {
+				continue
+			}
+			for _, part := range m.Content {
+				if p, ok := fantasy.AsMessagePart[fantasy.TextPart](part); ok && p.Text == "keep going" {
+					count++
+				}
+			}
+		}
+		return count
+	}
+
+	base := []fantasy.Message{fantasy.NewUserMessage("ask")}
+	// Step 1 accepts in-1; step 2 re-applies in-1 and accepts in-2.
+	if _, _, err := step(context.Background(), steerOpts(base)); err != nil {
+		t.Fatal(err)
+	}
+	_, res2, err := step(context.Background(), steerOpts(base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := countSteers(res2.Messages); got != 2 {
+		t.Fatalf("after accepting two identical steers, %d copies present, want 2", got)
+	}
+
+	// A rebuilt slice already carrying BOTH copies gains nothing.
+	_, res3, err := step(context.Background(), steerOpts(res2.Messages))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res3.Messages != nil {
+		if got := countSteers(res3.Messages); got != 2 {
+			t.Fatalf("both copies present, re-application produced %d copies, want 2", got)
+		}
+	}
+
+	// A rebuilt slice carrying only ONE copy gets the second restored — the
+	// single copy satisfies one accepted steer, not both.
+	oneCopy := []fantasy.Message{
+		fantasy.NewUserMessage("ask"),
+		fantasy.NewUserMessage("keep going"),
+	}
+	_, res4, err := step(context.Background(), steerOpts(oneCopy))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res4.Messages == nil {
+		t.Fatal("expected the missing second copy to be re-applied")
+	}
+	if got := countSteers(res4.Messages); got != 2 {
+		t.Fatalf("one copy present, re-application produced %d copies, want 2", got)
+	}
+}
+
 func TestSteeringStep_ReapplyNeverSplitsToolExchange(t *testing.T) {
 	source := &fakeSteerSource{pending: []SteerMessage{{ID: "in-1", Text: "steered guidance"}}}
 	state := &steerState{}

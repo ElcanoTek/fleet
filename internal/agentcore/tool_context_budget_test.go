@@ -434,3 +434,59 @@ func toolResultForCall(t *testing.T, messages []fantasy.Message, id string) stri
 	t.Fatalf("tool result %s not found", id)
 	return ""
 }
+
+// TestInnerReducerRunningTotalMatchesFreshEstimate pins the #1125 accounting
+// change: compactOldToolResults / evictOldToolInputs keep a RUNNING token
+// total (the estimate is a per-part linear sum, so each reduction subtracts
+// exactly the term the estimator would recompute) instead of re-walking the
+// full history for every candidate part — which was O(N²·parts) on the very
+// steps that were already over target. Property: the returned total equals a
+// fresh estimate of the same reduced history, including when a mid-range
+// target stops the ladder mid-history.
+func TestInnerReducerRunningTotalMatchesFreshEstimate(t *testing.T) {
+	prefix := modelContextPrefixBudget{}
+	const exchanges = 8
+	msgs := []fantasy.Message{fantasy.NewSystemMessage("sys"), fantasy.NewUserMessage("ask")}
+	for i := 0; i < exchanges; i++ {
+		id := fmt.Sprintf("c%d", i)
+		msgs = append(msgs,
+			fantasy.Message{Role: fantasy.MessageRoleAssistant, Content: []fantasy.MessagePart{
+				fantasy.ToolCallPart{ToolCallID: id, ToolName: "bash", Input: `{"script":"` + strings.Repeat("x", 4096) + `"}`},
+			}},
+			fantasy.Message{Role: fantasy.MessageRoleTool, Content: []fantasy.MessagePart{
+				fantasy.ToolResultPart{ToolCallID: id, Output: fantasy.ToolResultOutputContentText{Text: strings.Repeat("y", 16*1024)}},
+			}},
+		)
+	}
+	toolNames := toolNamesByCallID(msgs)
+	start := estimateBudgetMessagesTokens(msgs, prefix)
+
+	// Partial reduction: the halfway target must stop the ladder mid-history —
+	// the case where a drifted running total would misplace the stop.
+	target := start / 2
+	n, remaining := compactOldToolResults(msgs, toolNames, start, target, innerResultPreviewBytes)
+	if fresh := estimateBudgetMessagesTokens(msgs, prefix); remaining != fresh {
+		t.Fatalf("compactOldToolResults running total %d != fresh estimate %d (after %d reductions)", remaining, fresh, n)
+	}
+	if n == 0 || n == exchanges {
+		t.Fatalf("test shape broken: %d of %d results reduced; sizes must land the target mid-history", n, exchanges)
+	}
+	if remaining > target {
+		t.Fatalf("reduction stopped above target: remaining=%d target=%d", remaining, target)
+	}
+
+	// Exhaustive input eviction from the carried-forward total.
+	n, remaining = evictOldToolInputs(msgs, remaining, 0)
+	if fresh := estimateBudgetMessagesTokens(msgs, prefix); remaining != fresh {
+		t.Fatalf("evictOldToolInputs running total %d != fresh estimate %d (after %d evictions)", remaining, fresh, n)
+	}
+	if n != exchanges {
+		t.Fatalf("evicted %d inputs under an impossible target, want all %d", n, exchanges)
+	}
+
+	// Already under target: a no-op pass must not drift the total either.
+	n, unchanged := compactOldToolResults(msgs, toolNames, remaining, remaining+1, innerResultEvictedBytes)
+	if n != 0 || unchanged != remaining {
+		t.Fatalf("no-op pass drifted the total: n=%d total %d -> %d", n, remaining, unchanged)
+	}
+}
