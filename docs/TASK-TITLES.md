@@ -88,12 +88,13 @@ Migration `060_add_task_title` adds `title TEXT NOT NULL DEFAULT ''`, and no
 index: the search matches with a leading-wildcard `title ILIKE '%q%'`, which no
 btree can serve, and the trigram alternative would require a `CREATE EXTENSION`
 of every deployment. The same query already scans `prompt` the same way. The
-column threads the standard route for a new per-task field: `taskColumns` / `scanTask` / `AddTask` /
-`taskInsertColumns` + `taskInsertArgs` + `taskInsertColumnsCount` /
-`taskInsertOnConflict` / `UpdateTaskTx`, plus `TaskExportRecord` so a definition
-keeps its title when it moves between deployments.
+column threads the standard route for a new per-task field — since #1126 that
+is one row in `taskColumnRegistry` (`internal/sched/db/task_columns.go`), from
+which the read/insert/upsert/`UpdateTaskTx` statements derive — plus
+`TaskExportRecord` so a definition keeps its title when it moves between
+deployments.
 
-Each of those write paths has its own hand-maintained column list, so each has
-its own round-trip test (`internal/sched/db/title_test.go`) — the multi-row
-`AddTaskBatch` path especially, since that is the one a forgotten
-`taskInsertColumnsCount` bump silently broke once before (#710).
+Each write path still has its own round-trip test
+(`internal/sched/db/title_test.go`) — the multi-row `AddTaskBatch` path
+especially, since that is the one a forgotten manual column-count bump (retired
+by #1126) silently broke once before (#710).

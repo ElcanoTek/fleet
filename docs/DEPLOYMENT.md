@@ -219,12 +219,20 @@ each piece yourself):
    workflow** — `.github/workflows/publish-sandbox-image.yml` (`workflow_call`).
    A client config repo adds a small caller workflow (the contract is documented
    at the top of the reusable file) that fires on `sandbox/**` changes: it
-   builds the bundle's image with the same `scripts/build-sandbox-image.sh`,
+   builds the bundle's image with the same `scripts/build-sandbox-image.sh` and
    pushes an immutable `{git-sha}` tag plus `:latest` to GHCR with the caller's
-   `GITHUB_TOKEN`, and opens a PR in the client repo pinning
-   `sandbox.image` to the sha tag. Fleet core CI deliberately does NOT publish
-   the generic bundle's image (the coupling removed in 24ce69f stays removed);
-   a manual `workflow_dispatch` exists for ad-hoc publishes.
+   `GITHUB_TOKEN`. It exposes `image_ref` and `image_digest` as workflow outputs
+   and prints them in the run summary. Fleet core CI deliberately does NOT
+   publish the generic bundle's image (the coupling removed in 24ce69f stays
+   removed); a manual `workflow_dispatch` exists for ad-hoc publishes.
+
+   **Adoption is deliberate and deployment-side**: the workflow publishes, it
+   does not pin. Set `FLEET_SANDBOX_IMAGE` (or the bundle's `sandbox.image`) to
+   the printed ref on each box. Until 2026-08-20 the workflow also tried to open
+   a PR pinning `sandbox.image` in the caller repo; that step never once
+   succeeded (`GitHub Actions is not permitted to create or approve pull
+   requests` — an org Actions setting) and was removed along with the
+   `update_manifest` input and the repo-write permissions it needed.
 
 3. **systemd** — run the single binary under `deploy/fleet.service` (it
    `EnvironmentFile`s the 0600 env file, `Restart=always`, drains the worker

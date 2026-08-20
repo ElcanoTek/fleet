@@ -47,3 +47,44 @@ func TestActiveMCPToolNamesFiltersDisabledOptionalServers(t *testing.T) {
 		}
 	}
 }
+
+// TestActiveMCPToolNamesOverlappingOptionalServersLongestPrefix pins the
+// prompt-cache byte-stability fix (#1125): with OVERLAPPING Optional server
+// names — real under the `<server>_<account>` variant convention ("jira",
+// "jira_prod") — the roster filter must attribute each `mcp_<server>_<tool>`
+// name to the LONGEST matching server, never to whichever overlapping key a
+// map range happened to visit first. The old first-match break made a
+// variant's tool appear in (or vanish from) the system prompt per-turn at
+// random, silently busting the cacheable prefix
+// (docs/PROMPT-CACHE-CONTRACT.md). The loop count flushes out map-order
+// dependence: Go randomizes range order on every iteration, so a regression
+// to first-match fails within a few passes.
+func TestActiveMCPToolNamesOverlappingOptionalServersLongestPrefix(t *testing.T) {
+	m := &Manager{
+		mcpToolRoster: []string{
+			"mcp_jira_search",
+			"mcp_jira_prod_search",
+		},
+		optionalServers: mcpOptionalSet{
+			"jira":      true,
+			"jira_prod": true,
+		},
+	}
+	// Only the SHORT name is opted in: mcp_jira_prod_search belongs to
+	// "jira_prod" (the longest prefix), which is NOT enabled, so it must be
+	// filtered on every evaluation; mcp_jira_search matches only "jira" and
+	// stays.
+	for i := 0; i < 200; i++ {
+		got := m.activeMCPToolNames([]string{"jira"})
+		if len(got) != 1 || got[0] != "mcp_jira_search" {
+			t.Fatalf("iteration %d: activeMCPToolNames = %v, want [mcp_jira_search] (longest-prefix, map-order-independent)", i, got)
+		}
+	}
+	// The inverse opt-in keeps only the variant's tool.
+	for i := 0; i < 200; i++ {
+		got := m.activeMCPToolNames([]string{"jira_prod"})
+		if len(got) != 1 || got[0] != "mcp_jira_prod_search" {
+			t.Fatalf("iteration %d: activeMCPToolNames = %v, want [mcp_jira_prod_search]", i, got)
+		}
+	}
+}

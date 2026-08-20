@@ -156,6 +156,30 @@ prior versions are listed because none have shipped.
 
 ### Removed
 
+- **The sandbox publisher no longer rewrites its caller's manifest or opens a
+  pin PR (`publish-sandbox-image.yml`).** That half of the workflow never worked
+  once: across 8 recorded runs in 6 repos between 2026-06 and 2026-08 it created
+  zero pull requests. The two runs that reached it — reklaim-config 2026-07-29,
+  elcano-config 2026-08-06 — both built and pushed their image successfully and
+  then died on `GitHub Actions is not permitted to create or approve pull
+  requests`, an org Actions setting no workflow can fix. It was redundant
+  anyway: every bundle README already documents adoption as setting
+  `FLEET_SANDBOX_IMAGE` per box, and fleet's own `config/default` must stay
+  unpinned. Gone with it: the `update_manifest` input, the
+  `peter-evans/create-pull-request` dependency, and the `contents: write` +
+  `pull-requests: write` permissions those steps required — the publisher now
+  asks only for `contents: read` + `packages: write` and cannot write to a
+  caller repo at all. The build-and-push half, which is the half that
+  demonstrably works and the only half a Kubernetes deployment can use, is
+  unchanged and now exposes `image_ref` / `image_digest` as workflow outputs
+  plus a run summary carrying the ref to adopt. Caller workflows in the five
+  client bundles were updated to match and now publish under
+  `ghcr.io/${{ github.repository_owner }}/…` as the documented contract always
+  said; `omnicom-config` was additionally publishing to
+  `fleet-sandbox-example`, a copy-paste from its example-config fork that would
+  have overwritten the template's `:latest` with Omnicom's bundle image the
+  first time it fired.
+
 - **Dropped a tautological `HostExecutorCompiledIn` test** that arrived in the
   same batch. It asserted `HostExecutorCompiledIn() == hostExecutorCompiledIn`
   against the very constant the function returns — `x == x`, unfailable, and
@@ -186,6 +210,36 @@ prior versions are listed because none have shipped.
   `docs/TESTING.md`) updated to say so instead of describing a Codecov check.
 
 ### Changed
+
+- **The seven hand-maintained task-row column enumerations are now one
+  table-driven registry (#1126).** `taskColumnRegistry`
+  (`internal/sched/db/task_columns.go`) is the single source of truth for the
+  76-column tasks row: the SELECT list + `scanTask`'s positional scan, the
+  INSERT column list and its placeholder count, the `ON CONFLICT` upsert
+  clause, and `UpdateTaskTx`'s UPDATE all derive from per-row
+  `read`/`insert`/`upsert`/`txUpdate` flags at package init (hot paths keep
+  their once-built statements; per-row work is unchanged). The manual
+  `taskInsertColumnsCount` — whose drift broke every batch insert in #710 —
+  is retired: statement and arguments now come from the same slice, so that
+  drift class is structurally impossible. The excluded-column doctrine
+  (result-like/pause/wake columns, `effective_priority`,
+  `recurrence_spawned` are deliberately absent from the generic writes) is
+  machine-checked: every exclusion carries a required per-column reason, and
+  the round-trip test proves the doctrine in SQL in both directions — values
+  seeded into excluded columns' Task fields do not persist through the
+  insert, and non-NULL values seeded directly into those columns survive
+  both a repeat upsert and an `UpdateTaskTx` whose in-memory task carries
+  zeroes for them, so flipping an exclusion flag turns the suite red. The
+  `export` flag pins the portable-definition set against
+  `models.TaskExportRecord` by JSON tag, chaining into the #1104
+  completeness tests so export→overlay drift stays impossible; a new
+  schema↔registry test diffs `information_schema` against the registry, so a
+  migration without a registry row (or vice versa) fails loudly. Pure
+  structural refactor — no behavior change; every existing sched/db,
+  storage, handlers, models, scheduler, admincli and export/import test
+  passes unchanged. A new task column is now one migration + one registry
+  row (+ the model field); the AGENTS.md "New task fields thread one way"
+  bullet describes the new flow.
 
 - **Restored nine transient-error cases to the `IsTerminalRefreshError` table.**
   Moving that test into its own file (part of the batch above) had cut it from
@@ -499,6 +553,56 @@ prior versions are listed because none have shipped.
     pipeline. The note also states the caller-side requirement that the June
     runs violated: publish under the caller repo's own owner, and link the
     package to that repo once.
+
+- **Agent-runtime LOW batch (#1125): six small correctness/accounting fixes in
+  `internal/agentcore` + `internal/agent`, one cleanup pass.**
+
+  - *Prompt roster nondeterminism (prompt-cache hazard).* The interactive
+    system prompt's MCP tool roster attributed each `mcp_<server>_<tool>` name
+    to the FIRST Optional server a map range happened to match, so with
+    overlapping server names (real under the `<server>_<account>` variant
+    convention, e.g. `jira` / `jira_prod`) a variant's tools appeared in or
+    vanished from the prompt per turn at random — silently busting the
+    byte-stable cacheable prefix (`docs/PROMPT-CACHE-CONTRACT.md`). The filter
+    now resolves the longest matching server name (`internal/agent/prompt.go`),
+    the same deterministic variant treatment `mcpAllowlist.toolsFor` applies.
+  - *Steering re-injection dedupe was positional.* `steeringStep`'s
+    already-present probe checked only the recorded position ±1; a compaction
+    or budget-step reduction that shifted history by more than one slot made
+    re-application insert the same steered user message twice into the
+    provider input. The probe keeps its fast path and falls back to a
+    content scan with per-steer claim tracking, so identical-text steers each
+    keep exactly one copy (`internal/agentcore/steer.go`).
+  - *A non-conforming Policy silently zeroed usage accounting.* `Run` used to
+    mint a throwaway orchestration state per round when a Policy exposed no
+    `orchestration()`, so such a run proceeded with `Result.Usage` stuck at
+    zero and ceilings that never fired. Run now refuses the Policy up front
+    (every production Policy conforms), and the redundant per-round
+    `policyOrch` lookup collapsed onto the single run-wide `usageOrch` that
+    #1118's aux-metering seams already bind.
+  - *`parseTaskTrackerSnapshot` parsed less than its comment claimed.* The
+    comment promised JSON *or* the human `Summary:` line; only JSON was
+    parsed, and the recorded result legitimately stops being one clean JSON
+    document (a post-tool hook fragment is appended after it; an oversized
+    result becomes a truncation envelope quoting a preview) — those shapes
+    returned `Seen=false` and silently disarmed the pending-work finish gate.
+    The Summary-line fallback is now implemented, and new tests build their
+    inputs from the real `task_tracker` tool so an output-format change breaks
+    the test instead of the gate.
+  - *Round-cap exhaustion discarded accumulated usage/entries.* Exhausting the
+    20 enforcement rounds returned `Result{Label}` with the error, dropping
+    the whole paid transcript and token/cost accounting. The RETURNED `Result`
+    now carries the accumulated `Usage`/`Entries`/`Rounds` alongside the
+    error, matching the `ErrCommittedSideEffects` partial-result contract.
+    Honest scope: the scheduled driver (the only mode that can reach this cap)
+    still discards the Result on its error paths today, so persisting this
+    carry there is a follow-up — the fix makes the accounting *available*, not
+    yet *surfaced*.
+  - *O(N²·parts) re-estimation in the inner context reducer.*
+    `compactOldToolResults`/`evictOldToolInputs` re-ran the full-history token
+    estimate inside their per-part loops on every over-target provider step.
+    They now keep a running total (the estimate is a per-part linear sum) that
+    a test pins equal to a fresh re-estimate; what gets reduced is unchanged.
 
 - **Detached background work outlived the request that started it, and nothing
   waited for it.** `activeTurns` tracked detached *turns* and `DrainTurns` blocked

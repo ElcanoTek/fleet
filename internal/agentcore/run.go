@@ -312,6 +312,19 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 	if deps.Input == nil || deps.Policy == nil {
 		return Result{}, fmt.Errorf("run requires an InputSource and a Policy")
 	}
+	// usageOrch is the run's single orchestration state: the resilience layer's
+	// per-step usage accounting, the ceiling checks, the confirm_audit binding,
+	// and the final Result.Usage snapshot all read the SAME counters. Every
+	// production Policy embeds one (InteractivePolicy/ScheduledPolicy, or a
+	// wrapper exposing them via Unwrap). A Policy that exposes none is a
+	// programming error refused up front — the old fallback silently minted a
+	// fresh throwaway state per round, so the run proceeded while its usage
+	// accumulated into objects nobody read: Result.Usage reported zero and the
+	// cost/token ceilings never fired (#1125).
+	usageOrch, ok := policyOrchestration(deps.Policy)
+	if !ok {
+		return Result{}, fmt.Errorf("policy %T does not expose an orchestration state (embed InteractivePolicy/ScheduledPolicy or expose the inner policy via Unwrap)", deps.Policy)
+	}
 	// Fail before the first provider/tool side effect if a direct caller or a
 	// legacy database row bypassed the enqueue-time schema gate.
 	if err := validateDeclaredOutputSchema(cfg.OutputSchema); err != nil {
@@ -356,16 +369,10 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 	// the cached prefix.
 	messages = appendRuntimeDateMessage(messages, runtimeNow())
 
-	maxTokens := int64(DefaultMaxCompletionTokens)
-	if cfg.MaxCompletionTokens > 0 {
-		maxTokens = int64(cfg.MaxCompletionTokens)
-	}
+	maxTokens := runMaxCompletionTokens(cfg)
 
 	optIn := cfg.Selection.OptInSet()
-	hints := cfg.RemediationHints
-	if hints == (RemediationHints{}) {
-		hints = DefaultRemediationHints
-	}
+	hints := runRemediationHints(cfg)
 	toolCfg := toolBuildConfig{
 		includeConfirmAudit: cfg.IncludeConfirmAudit,
 		loaderTools:         cfg.LoaderTools,
@@ -457,9 +464,6 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 	// events to the Observer and accumulates the run history. Shared across
 	// rounds so a multi-round scheduled run builds one coherent transcript.
 	sink := newStreamSink(deps.Observer, panicAttribution)
-	// usageOrch is the orchestration state whose usage counters accumulate
-	// across rounds (the same state the resilience layer mutates per step).
-	usageOrch := policyOrch(deps.Policy)
 	// Auxiliary model-call metering (#1118). Two seams, both capability
 	// closures over usageOrch (the state itself never escapes Run), so every
 	// model call an aux path makes on behalf of this run lands in the SAME
@@ -527,9 +531,8 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 		// after this one, and a committed side effect suppresses rollback
 		// entirely (ADR-0035).
 		roundToolMark := sink.toolEventCount()
-		orch := policyOrch(deps.Policy)
 		outcome, serr := eng.streamRoundWithResilience(
-			ctx, orch, sink, maxTokens, messages, agent, activeModel, swappedToFallback, buildAgent,
+			ctx, usageOrch, sink, maxTokens, messages, agent, activeModel, swappedToFallback, buildAgent,
 		)
 		// Fantasy waits for its coordinator + all parallel tool goroutines before
 		// streamRoundWithResilience returns. Only now convert an observer panic to
@@ -650,7 +653,17 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 		}
 	}
 
-	return Result{Label: label}, fmt.Errorf("max enforcement rounds (%d) exceeded without task completion", maxEnforcementRounds)
+	// Round-cap exhaustion is a hard error, but the rounds it burned are paid
+	// for: return the accumulated transcript + usage ALONGSIDE the error (the
+	// same partial-result-with-error contract as the ErrCommittedSideEffects
+	// path above) instead of an empty Result that dropped up to 20 rounds of
+	// billed work from every layer above (#1125). Note: the scheduled driver
+	// (the only mode that can reach this cap) currently discards the Result on
+	// any error before its persistence block — surfacing this carry there is a
+	// follow-up candidate.
+	res := cancelledResult(sink, usageOrch, label, activeModel, swappedToFallback, maxEnforcementRounds)
+	res.Cancelled = false
+	return res, fmt.Errorf("max enforcement rounds (%d) exceeded without task completion", maxEnforcementRounds)
 }
 
 // runCompletion carries the last ordinary round into the single terminal
@@ -769,6 +782,24 @@ func runFallbackModels(deps Deps) []fantasy.LanguageModel {
 	return append([]fantasy.LanguageModel(nil), deps.FallbackModels...)
 }
 
+// runMaxCompletionTokens resolves the per-completion output cap: the
+// configured value, or DefaultMaxCompletionTokens when unset.
+func runMaxCompletionTokens(cfg RunConfig) int64 {
+	if cfg.MaxCompletionTokens > 0 {
+		return int64(cfg.MaxCompletionTokens)
+	}
+	return int64(DefaultMaxCompletionTokens)
+}
+
+// runRemediationHints resolves the fast.io guard hints: the configured value,
+// or DefaultRemediationHints (both remediation paths) when unset.
+func runRemediationHints(cfg RunConfig) RemediationHints {
+	if cfg.RemediationHints == (RemediationHints{}) {
+		return DefaultRemediationHints
+	}
+	return cfg.RemediationHints
+}
+
 func newRunEngine(cfg RunConfig, deps Deps, logSession *LogSession) *engine {
 	fallbackModels := runFallbackModels(deps)
 	eng := &engine{
@@ -839,16 +870,18 @@ func slugOf(m fantasy.LanguageModel) string {
 	return m.Model()
 }
 
-// policyOrch extracts the orchestrationState a Policy embeds (so the resilience
-// layer's usage accounting flows into the same state). A driver may WRAP a
-// built-in Policy (e.g. the scheduled driver layers an end-of-run verifier onto
-// ScheduledPolicy); such a wrapper exposes the inner policy via Unwrap so the
-// orchestration is still found. Returns a throwaway when none is exposed.
-func policyOrch(p Policy) *orchestrationState {
+// policyOrchestration extracts the orchestrationState a Policy embeds (so the
+// resilience layer's usage accounting flows into the same state). A driver may
+// WRAP a built-in Policy (e.g. the scheduled driver layers an end-of-run
+// verifier onto ScheduledPolicy); such a wrapper exposes the inner policy via
+// Unwrap so the orchestration is still found. ok=false when nothing in the
+// chain exposes one — Run refuses that up front rather than minting a
+// throwaway state whose accounting nobody would ever read (#1125).
+func policyOrchestration(p Policy) (*orchestrationState, bool) {
 	for p != nil {
 		if op, ok := p.(interface{ orchestration() *orchestrationState }); ok {
 			if o := op.orchestration(); o != nil {
-				return o
+				return o, true
 			}
 		}
 		w, ok := p.(PolicyUnwrapper)
@@ -857,7 +890,7 @@ func policyOrch(p Policy) *orchestrationState {
 		}
 		p = w.Unwrap()
 	}
-	return newOrchestrationState(nil, 0)
+	return nil, false
 }
 
 // PolicyUnwrapper is implemented by a wrapping Policy that delegates to an inner

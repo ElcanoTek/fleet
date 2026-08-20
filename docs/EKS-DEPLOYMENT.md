@@ -178,9 +178,15 @@ Unchanged from the single-host path: the Containerfile is a **bundle** artifact
 (`<bundle>/sandbox/Containerfile`), and fleet **never builds it at startup**.
 Build and push it in CI — the repo already ships the reusable workflow
 `.github/workflows/publish-sandbox-image.yml` (`workflow_call`) for exactly this,
-which builds with `scripts/build-sandbox-image.sh`, pushes an immutable
-`{git-sha}` tag, and opens a PR pinning `sandbox.image` in the client repo.
-Point it at ECR instead of GHCR, or mirror the GHCR tag into ECR.
+which builds with `scripts/build-sandbox-image.sh` and pushes an immutable
+`{git-sha}` tag. It exposes the pushed `image_ref` and `image_digest` as workflow
+outputs, so a deploy job can consume the exact digest this section wants without
+re-deriving it. Point it at ECR instead of GHCR, or mirror the GHCR tag into ECR.
+
+The workflow publishes but does **not** pin: adoption is the explicit step
+below. (It used to open a PR pinning `sandbox.image` in the client repo; that
+step never once succeeded and was removed on 2026-08-20 — see the reusable
+workflow's header.)
 
 Then set `sandbox.image` in the bundle's `manifest.yaml` to the immutable ref, or
 override it per deployment with `FLEET_SANDBOX_IMAGE`
