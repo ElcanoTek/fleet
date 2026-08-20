@@ -51,6 +51,12 @@ export type TurnStreamState = {
   // and the counter proves whether the socket produced anything while the
   // probe was in flight. See checkStreamLiveness.
   streamPulseRef: RefObject<Record<string, StreamPulse>>;
+  // The keepalive cadence the server advertises on an attached stream
+  // (X-Fleet-Heartbeat-Interval-Ms), in ms; 0 = keepalives disabled. Server-
+  // global rather than per-conversation, so the last stream to attach sets it.
+  // Knowing it is what lets the client treat prolonged silence as proof a
+  // socket is dead — see checkStreamLiveness.
+  serverHeartbeatMsRef: RefObject<number>;
   // Controllers this client aborted ITSELF in order to replace a dead socket
   // (checkStreamLiveness), as opposed to the user pressing Stop. Membership
   // means "a newer stream owns this conversation now": the aborted stream's
@@ -131,6 +137,10 @@ export function useTurnStreamState(currentConvKey: string): TurnStreamState {
   // Liveness bookkeeping for the attached socket (see the type above). Updated
   // by the stream pump on every chunk; read by checkStreamLiveness.
   const streamPulseRef = useRef<Record<string, StreamPulse>>({});
+  // 0 until a stream reports otherwise: assume no promised cadence rather than
+  // a cadence that may never arrive, so silence only becomes evidence once the
+  // server has actually claimed it keepalives.
+  const serverHeartbeatMsRef = useRef<number>(0);
   const supersededStreamsRef = useRef<WeakSet<AbortController>>(new WeakSet());
   const livenessInFlightRef = useRef<Set<string>>(new Set());
 
@@ -171,6 +181,7 @@ export function useTurnStreamState(currentConvKey: string): TurnStreamState {
     currentTurnIdByConvRef,
     reattachInFlightRef,
     streamPulseRef,
+    serverHeartbeatMsRef,
     supersededStreamsRef,
     livenessInFlightRef,
     promoteStreamKey,

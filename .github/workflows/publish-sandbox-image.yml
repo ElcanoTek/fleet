@@ -60,8 +60,39 @@ name: Publish sandbox image (reusable)
 #   jobs:
 #     publish:
 #       uses: ElcanoTek/fleet/.github/workflows/publish-sandbox-image.yml@main
-#       with:
-#         image_name: ghcr.io/${{ github.repository_owner }}/fleet-sandbox-<client>
+#
+# NO image_name NEEDED. It is derived from the bundle itself — see "WHERE THE
+# IMAGE NAME COMES FROM" below. Pass it only to publish somewhere other than
+# GHCR under the caller's own owner (e.g. an ECR ref, per docs/EKS-DEPLOYMENT.md).
+#
+# WHERE THE IMAGE NAME COMES FROM
+#
+# The bundle has no registry destination in it, which is why this used to demand
+# one. It carries two sandbox refs and neither is pushable:
+#
+#   sandbox.tag    localhost/fleet-sandbox-<client>:latest — a LOCAL podman tag;
+#                  `podman push localhost/...` is not a thing.
+#   sandbox.image  "${FLEET_SANDBOX_IMAGE:-}" — the CONSUME ref, deliberately
+#                  empty. That emptiness IS the build-on-box default, and
+#                  config/default must stay that way.
+#
+# But the one client-specific token is right there in sandbox.tag, so the
+# destination is derivable: basename of the manifest tag, minus its :tag, under
+# the caller's own owner. Verified byte-identical to what all five client
+# bundles used to hand-write.
+#
+# Deriving it is not just less typing. The hand-written string is exactly how
+# omnicom-config came to publish to `fleet-sandbox-example` — a copy-paste from
+# the example-config fork that would have overwritten the public template's
+# :latest with Omnicom's image the first time it fired. A derived name cannot
+# express that bug.
+#
+# The name is also lowercased. OCI repository names must be lowercase, and
+# `github.repository_owner` preserves the account's own casing (ElcanoTek), so
+# an un-normalized ghcr.io/${{ github.repository_owner }}/... is an INVALID
+# reference that podman rejects before it ever reaches the registry. The
+# contract above recommended exactly that expression, and the callers only
+# worked because they happened to hardcode a lowercase owner.
 #
 # The image is tagged twice: an immutable {git-sha} tag (what a deployment
 # should consume) and a mutable :latest for convenience. Both the sha tag and
@@ -80,9 +111,13 @@ on:
         required: false
         default: "."
       image_name:
-        description: "Full image name WITHOUT tag (e.g. ghcr.io/acme/fleet-sandbox-acme)"
+        description: >-
+          Override the publish destination, WITHOUT a tag (e.g.
+          <acct>.dkr.ecr.<region>.amazonaws.com/fleet-sandbox-acme). Leave unset
+          to derive ghcr.io/<owner>/<basename of the manifest's sandbox.tag>.
         type: string
-        required: true
+        required: false
+        default: ""
       fleet_ref:
         description: "fleet ref to take scripts/build-sandbox-image.sh from"
         type: string
@@ -98,9 +133,13 @@ on:
   workflow_dispatch:
     inputs:
       image_name:
-        description: "Full image name WITHOUT tag (e.g. ghcr.io/elcanotek/fleet-sandbox)"
+        description: >-
+          Override the publish destination, WITHOUT a tag. Leave blank to derive
+          ghcr.io/<owner>/<basename of the manifest's sandbox.tag> — for the
+          default bundle_dir that is ghcr.io/<owner>/fleet-sandbox.
         type: string
-        required: true
+        required: false
+        default: ""
       bundle_dir:
         description: "Bundle dir relative to repo root"
         type: string
@@ -117,22 +156,26 @@ permissions:
 
 # Two publishes of the same image must not overlap: they both move the mutable
 # :latest tag, and the loser of the race decides what it ends up pointing at.
-# Serialize per image name rather than per repo, so two different client bundles
-# in the same repo can still publish concurrently.
+# Keyed on repo + bundle_dir rather than image_name, because image_name is now
+# optional and an empty one would collapse every publish into a single group.
+# This preserves the original intent — the derived name is a function of exactly
+# these two things, so two different bundles in the same repo still publish
+# concurrently while two pushes of the same bundle serialize.
 concurrency:
-  group: publish-sandbox-image-${{ inputs.image_name }}
+  group: publish-sandbox-image-${{ github.repository }}-${{ inputs.bundle_dir }}
   cancel-in-progress: false
 
 jobs:
   publish:
-    name: Build + push ${{ inputs.image_name }}
+    name: Build + push sandbox image
     runs-on: ubuntu-latest
     outputs:
       image_ref: ${{ steps.push.outputs.image_ref }}
       image_digest: ${{ steps.push.outputs.image_digest }}
     env:
       BUNDLE_DIR: ${{ inputs.bundle_dir }}
-      IMAGE: ${{ inputs.image_name }}
+      # IMAGE is exported by the "Resolve the publish destination" step below,
+      # since it may be derived from the bundle rather than passed in.
       # The immutable tag, hoisted so no `run:` body has to interpolate it.
       SHA: ${{ github.sha }}
     steps:
@@ -157,6 +200,53 @@ jobs:
           command -v podman >/dev/null 2>&1 \
             || (sudo apt-get update -qq && sudo apt-get install -y -qq podman)
           podman --version
+
+      # Inputs are read from env, never interpolated into the script body: a
+      # ${{ }} expression is spliced in before the shell runs, so a value
+      # containing shell metacharacters would execute.
+      - name: Resolve the publish destination
+        env:
+          INPUT_IMAGE_NAME: ${{ inputs.image_name }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          name="${INPUT_IMAGE_NAME:-}"
+          if [ -z "$name" ]; then
+            # --print-tag reads the manifest only (no podman, no build) and
+            # yields the bundle's LOCAL tag, e.g.
+            # localhost/fleet-sandbox-elcano:latest. Its basename is the one
+            # client-specific token we need.
+            tag="$(FLEET_CLIENT_CONFIG_DIR="$GITHUB_WORKSPACE/$BUNDLE_DIR" \
+              bash .fleet-core/scripts/build-sandbox-image.sh --print-tag)"
+            base="${tag##*/}"   # drop any registry / namespace prefix
+            base="${base%:*}"   # drop the :tag
+            if [ -z "$base" ]; then
+              echo "::error::cannot derive an image name: manifest sandbox.tag is '$tag'"
+              exit 1
+            fi
+            name="ghcr.io/$OWNER/$base"
+            echo "Derived from $BUNDLE_DIR/manifest.yaml sandbox.tag ($tag)."
+          else
+            echo "Using the caller's explicit image_name override."
+          fi
+
+          # OCI repository names must be lowercase. github.repository_owner keeps
+          # the account's own casing, so an owner like "ElcanoTek" yields an
+          # invalid reference that podman rejects before the registry sees it.
+          name="$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]')"
+
+          # Fail closed on anything that is not a plausible tagless ref, rather
+          # than discovering it at `podman push`. A ':' here means someone
+          # included a tag, which would collide with the {sha}/:latest we add.
+          case "$name" in
+            ""|*[!a-z0-9./_-]*|*:*)
+              echo "::error::implausible image name '$name' (expected a tagless ref)"
+              exit 1
+              ;;
+          esac
+
+          echo "IMAGE=$name" >> "$GITHUB_ENV"
+          echo "Publishing to: $name"
 
       - name: Log in to GHCR
         env:

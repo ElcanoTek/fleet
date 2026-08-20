@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -154,5 +155,59 @@ func TestAttach_NilCapsEmitsEverything(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("nil caps should emit %q in:\n%s", want, body)
 		}
+	}
+}
+
+// The heartbeat cadence is part of the stream's discovery surface, in BOTH
+// places the capability set is advertised: the response header (what a
+// fetch-based client reads) and the synthetic first frame (what a header-blind
+// EventSource gets). A browser needs it to tell a dead socket apart from a
+// quiet one — an attached stream writes at least one byte per interval, so
+// silence past a few intervals is proof of death even while the agent sits in
+// a long tool call emitting no events. See docs/CHAT-STREAM-RECOVERY.md.
+func TestAttach_AdvertisesHeartbeatInterval(t *testing.T) {
+	buf := newTurnBuffer("conv-hb", "turn-hb")
+	buf.Emit("turn.started", map[string]any{})
+	buf.Finish()
+
+	rw := newRecorder()
+	if err := buf.Attach(context.Background(), 0, rw, nil); err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+
+	want := strconv.FormatInt(sseHeartbeatInterval.Milliseconds(), 10)
+	if got := rw.Header().Get(heartbeatIntervalHeaderName); got != want {
+		t.Errorf("%s header = %q, want %q", heartbeatIntervalHeaderName, got, want)
+	}
+	if body := rw.Body(); !strings.Contains(body, `"heartbeat_ms":`+want) {
+		t.Errorf("fleet.capabilities frame missing heartbeat_ms=%s:\n%s", want, body)
+	}
+}
+
+// Keepalives off must be advertised as 0 rather than omitted or faked: a
+// client that assumed a cadence it will never be sent would eventually
+// declare every healthy stream dead. 0 tells it to fall back to its
+// event-based evidence instead.
+func TestHeartbeatInterval_DisabledAdvertisesZero(t *testing.T) {
+	prev := sseHeartbeatInterval
+	sseHeartbeatInterval = 0
+	t.Cleanup(func() { sseHeartbeatInterval = prev })
+
+	if got := heartbeatIntervalMs(); got != 0 {
+		t.Errorf("heartbeatIntervalMs() = %d, want 0", got)
+	}
+
+	buf := newTurnBuffer("conv-hb0", "turn-hb0")
+	buf.Emit("turn.started", map[string]any{})
+	buf.Finish()
+	rw := newRecorder()
+	if err := buf.Attach(context.Background(), 0, rw, nil); err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+	if got := rw.Header().Get(heartbeatIntervalHeaderName); got != "0" {
+		t.Errorf("%s header = %q, want \"0\"", heartbeatIntervalHeaderName, got)
+	}
+	if body := rw.Body(); !strings.Contains(body, `"heartbeat_ms":0`) {
+		t.Errorf("frame missing heartbeat_ms=0:\n%s", body)
 	}
 }

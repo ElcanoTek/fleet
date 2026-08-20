@@ -19,6 +19,75 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **A chat socket that dies while the agent is *thinking* is now caught in
+  about a minute, and every parallel chat is watched, not just the one on
+  screen.** These were the two limitations left open by #1211's stream
+  recovery; both are closed.
+
+  **Silence is now evidence.** Detection previously needed the server to have
+  emitted events the client never received — which never happens while the
+  agent sits in a long tool call, because the server has nothing to emit. A
+  socket dying in that stretch stayed invisible until the five-minute idle
+  timeout. The keepalive doesn't care what the turn is doing: an attached
+  stream writes at least one byte every interval, so missing several in a row
+  proves the connection is gone.
+
+  Using that required the client to know the cadence, so **the server now
+  advertises it** — `X-Fleet-Heartbeat-Interval-Ms` on the stream response and
+  `heartbeat_ms` on the `fleet.capabilities` frame, the two halves of the
+  existing discovery surface. Guessing would have been wrong in both
+  directions: too short kills healthy streams on a slow deployment, too long
+  leaves the blind spot open. Keepalives disabled is advertised honestly as
+  `0`, and the client then treats silence as proving nothing rather than
+  assuming a cadence it will never be sent. The threshold is four intervals —
+  a full minute at the default — because a few keepalives can be lost to a GC
+  pause without the socket being dead, and the confirming grace window still
+  has to agree before anything is torn down.
+
+  **Background conversations are covered.** Chats stream in parallel and the
+  sidebar paints a working dot for each, but the liveness check only ever
+  looked at the active conversation — a background chat's socket died the same
+  way with nobody watching. The check now sweeps every attached conversation,
+  with per-conversation failures contained so one bad chat cannot abort the
+  sweep. Both the sweep and the watchdog stay no-ops while the tab is hidden,
+  where timers are throttled and sockets may be legitimately frozen.
+
+  Net effect: on a visible tab with default settings, a dead socket is found in
+  roughly a minute instead of five — or inside the 2.5s grace window if you're
+  returning to the tab — for any chat, whether or not the agent is mid-tool-
+  call. Detection latency, and the one case that still falls through to the
+  idle timeout, are in
+  [`docs/CHAT-STREAM-RECOVERY.md`](docs/CHAT-STREAM-RECOVERY.md).
+
+- **The sandbox publisher derives its own destination, and lowercases it.**
+  `image_name` was a required input, so a manual dispatch meant typing a full
+  image ref and every client bundle hand-wrote one. It did not need to be:
+  the bundle already names itself in `sandbox.tag`
+  (`localhost/fleet-sandbox-<client>:latest`). That tag is a *local* podman tag
+  and so not itself pushable, and the manifest's other ref, `sandbox.image`, is
+  the *consume* side and must stay empty (that emptiness is the build-on-box
+  default) — which is why a destination had to come from somewhere. But its
+  basename is the one client-specific token needed, so the destination is now
+  derived as `ghcr.io/<owner>/<basename of sandbox.tag>`, verified
+  byte-identical to what all five bundles used to pass by hand. Two real bugs
+  stop being expressible: `omnicom-config` published to `fleet-sandbox-example`
+  purely because the string was hand-copied from its example-config fork, and
+  the recommended `ghcr.io/${{ github.repository_owner }}/...` form is an
+  **invalid OCI reference** for an owner with capitals — `github.repository_owner`
+  preserves account casing (`ElcanoTek`), and OCI repository names must be
+  lowercase, so podman rejects it before the registry is ever contacted. The
+  callers only worked because they hardcoded a lowercase owner; the derived name
+  is normalized with `tr`, and an explicit override is normalized too. The
+  resolver reads inputs from env rather than interpolating them into the script
+  body, and fails closed on an empty derivation, a name carrying a tag (which
+  would collide with the `{sha}`/`:latest` this workflow adds), or any character
+  outside a plausible tagless ref. `image_name` remains as an optional override
+  for a non-GHCR registry, e.g. the ECR ref in `docs/EKS-DEPLOYMENT.md`. The
+  concurrency group moves from `image_name` to repo + `bundle_dir`, because an
+  omitted `image_name` would otherwise collapse every publish into one group;
+  the derived name is a function of exactly those two things, so two bundles in
+  one repo still publish concurrently while two pushes of one bundle serialize.
+
 - **A long-running chat turn that is *still working* when you come back now
   resumes streaming immediately, instead of showing a thinking indicator that
   never moves.** This completes the walk-away recovery of #1208 (the entry
