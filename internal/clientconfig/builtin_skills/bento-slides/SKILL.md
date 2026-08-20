@@ -112,6 +112,24 @@ it themselves.
 Never paste the deck's HTML into your reply. It is 689KB of runtime and it tells
 the user nothing.
 
+**Always tell them how to get a PDF.** Most people need one to email, print, or
+attach, and the deck makes an excellent one — it is produced by the same renderer
+they are looking at, so it matches exactly, with selectable text and embedded
+fonts. Say it in one line, naming the button:
+
+> To send it as a PDF: open the deck and click the printer icon in the toolbar
+> (*Export PDF (print)*), then choose "Save as PDF" — one page per slide.
+
+There is **no PowerPoint export**, and there is no way for you to make one from a
+deck. If the user needs a `.pptx` specifically, say so plainly and offer the PDF
+instead of implying a conversion exists. Do not try to build a `.pptx` by hand
+from the document: charts, morph, count-up and the motion effects have no
+PowerPoint equivalent, and a deck that is almost right is worse than an honest
+PDF.
+
+You cannot produce the PDF yourself — it needs a browser, and there is none in
+the sandbox. The one click is the whole path; do not promise to attach a PDF.
+
 **Revising a deck: always deliver the revision under a NEW filename**
 (`Q4_Review_v2.bento.html`). Workspace downloads are cached for 24 hours, so
 re-using the filename serves the user their old file and makes your fix look

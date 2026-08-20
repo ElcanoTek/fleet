@@ -2,9 +2,12 @@ package clientconfig
 
 import (
 	"bytes"
+	"compress/flate"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -870,6 +873,73 @@ func TestBentoValidateFlagsLikelyTextOverflow(t *testing.T) {
 	if strings.Contains(stdout, "may overflow its box") {
 		t.Errorf("validate flagged a box with room to spare;\nstdout:\n%s", stdout)
 	}
+}
+
+// The SKILL.md tells the agent to hand over a PDF by naming a specific button in
+// the vendored app, and to say that no PowerPoint export exists. Both claims are
+// about UPSTREAM's UI, so both can rot on a re-vendor without anyone noticing —
+// the prose would keep reading fine while pointing at a button that is gone.
+//
+// This inflates the shell's compressed runtime and checks the claims against it.
+func TestBentoSkillPdfHandoverMatchesTheApp(t *testing.T) {
+	tpl, err := builtinSkillsFS.ReadFile(builtinSkillsRoot + "/" + bentoTemplateRel)
+	if err != nil {
+		t.Fatalf("read embedded template: %v", err)
+	}
+	runtime := inflateBentoRuntime(t, tpl)
+
+	skill, err := builtinSkillsFS.ReadFile(builtinSkillsRoot + "/bento-slides/SKILL.md")
+	if err != nil {
+		t.Fatalf("read SKILL.md: %v", err)
+	}
+
+	// The button the handover instruction names must exist in the app.
+	const pdfButton = "Export PDF (print)"
+	if !bytes.Contains(runtime, []byte(pdfButton)) {
+		t.Errorf("the app no longer has a %q button; SKILL.md's PDF handover instruction now points at nothing", pdfButton)
+	}
+	if !bytes.Contains(skill, []byte(pdfButton)) {
+		t.Errorf("SKILL.md does not name the %q button, so the agent cannot tell the user where to click", pdfButton)
+	}
+
+	// ... and the claim that there is no PowerPoint export must stay true. If a
+	// future Bento gains one, this fails and the guidance gets revisited rather
+	// than quietly understating what the app can do.
+	for _, marker := range []string{"pptx", "openxmlformats-officedocument.presentationml"} {
+		if bytes.Contains(bytes.ToLower(runtime), []byte(marker)) {
+			t.Errorf("the vendored app appears to export PowerPoint (%q found); SKILL.md says it cannot", marker)
+		}
+	}
+}
+
+// inflateBentoRuntime pulls the shell's DEFLATE-compressed runtime out of its
+// base64 script block and inflates it, so a test can assert against the app's
+// real strings rather than against the 689KB wrapper.
+func inflateBentoRuntime(t *testing.T, shell []byte) []byte {
+	t.Helper()
+	// The exact tag, so the sibling `id="bento-rt-css"` block cannot match.
+	const anchor = `<script id="bento-rt" type="bento/deflate-b64">`
+	start := bytes.Index(shell, []byte(anchor))
+	if start < 0 {
+		t.Fatal("no runtime block in the shell")
+	}
+	start += len(anchor)
+	end := bytes.Index(shell[start:], []byte("</script>"))
+	if end < 0 {
+		t.Fatal("runtime block is unterminated")
+	}
+	raw, err := base64.StdEncoding.DecodeString(string(bytes.TrimSpace(shell[start : start+end])))
+	if err != nil {
+		t.Fatalf("runtime block is not base64: %v", err)
+	}
+	out, err := io.ReadAll(flate.NewReader(bytes.NewReader(raw)))
+	if err != nil && len(out) == 0 {
+		t.Fatalf("inflate runtime: %v", err)
+	}
+	if len(out) < 500_000 {
+		t.Fatalf("inflated runtime is only %d bytes; the extraction is probably wrong", len(out))
+	}
+	return out
 }
 
 // A deck the USER brought us keeps upstream's shell byte for byte — we do not

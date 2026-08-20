@@ -51,6 +51,21 @@ prior versions are listed because none have shipped.
   keys does not retract an invitation already shared, and only the user can decide
   to rotate.
 
+  **Hand-off is the deck plus a one-click PDF.** The skill now always tells the
+  user how to get one, naming the button (*Export PDF (print)*), because most
+  people need a PDF to email or print and the deck makes an excellent one — the
+  same renderer they are looking at, so it matches exactly, with selectable text
+  and embedded font subsets (measured: five pages, 46KB, `/ToUnicode` present).
+  The agent cannot produce it — that needs a browser, and the sandbox has none —
+  so the guidance is a click, never a promise to attach a file. There is no
+  PowerPoint export and the skill says so plainly rather than implying a
+  conversion exists; hand-rolling one would mean a second renderer for seven
+  element types, six shape kinds, connectors, gradients, the motion effects,
+  morph, state slides and layouts, and a deck that is almost right is worse than
+  an honest PDF. A test inflates the vendored runtime and checks both claims
+  against the app's own strings, so a re-vendor that renames the button or adds a
+  PPTX path fails CI instead of leaving the instructions quietly wrong.
+
   Verified by hand in Chromium with the page instrumented and every request
   intercepted: an unguarded shell carrying a collab block attempts the session
   socket five times and fetches the update manifest; a fleet deck attempts
