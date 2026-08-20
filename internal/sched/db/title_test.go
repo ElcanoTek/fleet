@@ -9,10 +9,11 @@ import (
 
 // The title must survive every write path a task row goes through: the
 // single-row INSERT (AddTask), the multi-row one (AddTaskBatch — the path #710
-// broke by adding a column without bumping taskInsertColumnsCount), and the
-// UPDATE the edit flow persists through (UpdateTaskTx — the path the
-// carry_context regression went missing from). Each has its own hand-maintained
-// column list, so each needs its own proof.
+// broke by adding a column without bumping the since-retired manual column
+// count), and the UPDATE the edit flow persists through (UpdateTaskTx — the
+// path the carry_context regression went missing from). The column lists now
+// derive from taskColumnRegistry (#1126), but each write path still gets its
+// own end-to-end proof.
 func TestTitleRoundTripsThroughEveryWritePath(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()

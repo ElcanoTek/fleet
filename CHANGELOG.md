@@ -187,6 +187,36 @@ prior versions are listed because none have shipped.
 
 ### Changed
 
+- **The seven hand-maintained task-row column enumerations are now one
+  table-driven registry (#1126).** `taskColumnRegistry`
+  (`internal/sched/db/task_columns.go`) is the single source of truth for the
+  76-column tasks row: the SELECT list + `scanTask`'s positional scan, the
+  INSERT column list and its placeholder count, the `ON CONFLICT` upsert
+  clause, and `UpdateTaskTx`'s UPDATE all derive from per-row
+  `read`/`insert`/`upsert`/`txUpdate` flags at package init (hot paths keep
+  their once-built statements; per-row work is unchanged). The manual
+  `taskInsertColumnsCount` — whose drift broke every batch insert in #710 —
+  is retired: statement and arguments now come from the same slice, so that
+  drift class is structurally impossible. The excluded-column doctrine
+  (result-like/pause/wake columns, `effective_priority`,
+  `recurrence_spawned` are deliberately absent from the generic writes) is
+  machine-checked: every exclusion carries a required per-column reason, and
+  the round-trip test proves the doctrine in SQL in both directions — values
+  seeded into excluded columns' Task fields do not persist through the
+  insert, and non-NULL values seeded directly into those columns survive
+  both a repeat upsert and an `UpdateTaskTx` whose in-memory task carries
+  zeroes for them, so flipping an exclusion flag turns the suite red. The
+  `export` flag pins the portable-definition set against
+  `models.TaskExportRecord` by JSON tag, chaining into the #1104
+  completeness tests so export→overlay drift stays impossible; a new
+  schema↔registry test diffs `information_schema` against the registry, so a
+  migration without a registry row (or vice versa) fails loudly. Pure
+  structural refactor — no behavior change; every existing sched/db,
+  storage, handlers, models, scheduler, admincli and export/import test
+  passes unchanged. A new task column is now one migration + one registry
+  row (+ the model field); the AGENTS.md "New task fields thread one way"
+  bullet describes the new flow.
+
 - **Restored nine transient-error cases to the `IsTerminalRefreshError` table.**
   Moving that test into its own file (part of the batch above) had cut it from
   eleven cases to eight, dropping `invalid_request`, `temporarily_unavailable`,

@@ -367,9 +367,12 @@ func (db *Database) rowToUser(row *sql.Row) (*models.User, error) {
 	return user, nil
 }
 
-// Task operations
-
-const taskColumns = "id, name, prompt, model, fallback_model, max_iterations, mcp_selection, priority, instruction_self_improve, status, agent_session_id, created_at, started_at, completed_at, result, error_message, scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at, attempt_count, max_retries, allow_network, timezone, created_by_key_id, trigger_type, credential_allowlist, loop_config, worktree_config, description, tags, retry_policy, source_task_id, persona, workspace_path, allow_task_creation, allow_recurring_task_creation, created_by_task_id, dead_lettered_at, dead_letter_reason, dead_letter_attempts, run_if, skip_count, last_skip_at, last_skip_reason, expected_duration_minutes, sla_warn_multiplier, sla_fail_multiplier, sla_breached, actual_duration_seconds, effective_priority, sandbox_limits, allow_delegation, output_schema, output_json, error_analysis, artifacts, pending_question, pending_answer, carry_context, allow_event_triggers, thinking_budget_tokens, file_names, serialization_key, recurrence_until, recurrence_remaining, wake_at, wake_event_key, wake_note, wake_reason, wake_cycles, title, paused_at"
+// Task operations.
+//
+// The tasks-table column lists (taskColumns, taskInsertColumns,
+// taskInsertOnConflict, the UPDATE statement) and scanTask's positional scan
+// all derive from taskColumnRegistry — see task_columns.go (#1126). A new
+// task column is one migration + one registry row (+ the models.Task field).
 
 // sourceTaskIDValue maps the optional source-task lineage pointer (#270) to a
 // nullable column value: nil → SQL NULL, set → the UUID string.
@@ -418,170 +421,19 @@ func marshalTags(tags []string) string {
 	return marshalJSON(tags)
 }
 
-// AddTask adds or updates a task.
+// AddTask adds or updates a task via the registry-derived single-row upsert
+// (taskInsertStatement, task_columns.go). The columns deliberately absent
+// from the insert or its ON CONFLICT clause — effective_priority,
+// recurrence_spawned, the result-like/pause/wake columns — are declared,
+// with per-column reasons, on their taskColumnRegistry rows.
+//
+// taskInsertArgs populates actual_duration_seconds (#274) whenever a
+// completion timestamp is present alongside a start, so EVERY write path
+// that persists a completed_at also persists the derived actual, without
+// each storage call site having to remember it. Idempotent: a pre-set value
+// (e.g. a test seed) is left untouched.
 func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
-	// Populate actual_duration_seconds (#274) whenever a completion timestamp
-	// is present alongside a start. Done here (and in UpdateTaskTx) so EVERY
-	// write path that persists a completed_at also persists the derived actual,
-	// without each storage call site having to remember it. Idempotent: a
-	// pre-set value (e.g. a test seed) is left untouched.
-	maybeComputeActualDuration(task)
-	_, err := db.conn.ExecContext(ctx, `
-		INSERT INTO tasks (
-			id, name, prompt, model, fallback_model, max_iterations, mcp_selection,
-			priority, instruction_self_improve, status, agent_session_id,
-			created_at, started_at, completed_at, result, error_message,
-			scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at,
-			attempt_count, max_retries, allow_network, timezone, created_by_key_id,
-			trigger_type, credential_allowlist, loop_config, worktree_config, description, tags, retry_policy, source_task_id, persona, workspace_path,
-			allow_task_creation, allow_recurring_task_creation, created_by_task_id,
-			dead_lettered_at, dead_letter_reason, dead_letter_attempts,
-			run_if, skip_count, last_skip_at, last_skip_reason,
-			expected_duration_minutes, sla_warn_multiplier, sla_fail_multiplier,
-			sla_breached, actual_duration_seconds, effective_priority, sandbox_limits, allow_delegation, output_schema, output_json, carry_context, allow_event_triggers, thinking_budget_tokens,
-			file_names, serialization_key, recurrence_until, recurrence_remaining, title, recurrence_spawned
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, $58, $59, $60, $61, $62, $63, $64, $65, $66)
-		ON CONFLICT (id) DO UPDATE SET
-			name = EXCLUDED.name,
-			title = EXCLUDED.title,
-			prompt = EXCLUDED.prompt,
-			model = EXCLUDED.model,
-			fallback_model = EXCLUDED.fallback_model,
-			max_iterations = EXCLUDED.max_iterations,
-			mcp_selection = EXCLUDED.mcp_selection,
-			priority = EXCLUDED.priority,
-			instruction_self_improve = EXCLUDED.instruction_self_improve,
-			status = EXCLUDED.status,
-			agent_session_id = EXCLUDED.agent_session_id,
-			created_at = EXCLUDED.created_at,
-			started_at = EXCLUDED.started_at,
-			completed_at = EXCLUDED.completed_at,
-			result = EXCLUDED.result,
-			error_message = EXCLUDED.error_message,
-			scheduled_for = EXCLUDED.scheduled_for,
-			recurrence = EXCLUDED.recurrence,
-			created_by = EXCLUDED.created_by,
-			files = EXCLUDED.files,
-			lease_owner = EXCLUDED.lease_owner,
-			lease_expires_at = EXCLUDED.lease_expires_at,
-			attempt_count = EXCLUDED.attempt_count,
-			max_retries = EXCLUDED.max_retries,
-			allow_network = EXCLUDED.allow_network,
-			timezone = EXCLUDED.timezone,
-			created_by_key_id = EXCLUDED.created_by_key_id,
-			trigger_type = EXCLUDED.trigger_type,
-			credential_allowlist = EXCLUDED.credential_allowlist,
-			loop_config = EXCLUDED.loop_config,
-			worktree_config = EXCLUDED.worktree_config,
-			description = EXCLUDED.description,
-			tags = EXCLUDED.tags,
-			retry_policy = EXCLUDED.retry_policy,
-			source_task_id = EXCLUDED.source_task_id,
-			persona = EXCLUDED.persona,
-			workspace_path = EXCLUDED.workspace_path,
-			allow_task_creation = EXCLUDED.allow_task_creation,
-			allow_recurring_task_creation = EXCLUDED.allow_recurring_task_creation,
-			created_by_task_id = EXCLUDED.created_by_task_id,
-			dead_lettered_at = EXCLUDED.dead_lettered_at,
-			dead_letter_reason = EXCLUDED.dead_letter_reason,
-			dead_letter_attempts = EXCLUDED.dead_letter_attempts,
-			run_if = EXCLUDED.run_if,
-			skip_count = EXCLUDED.skip_count,
-			last_skip_at = EXCLUDED.last_skip_at,
-			last_skip_reason = EXCLUDED.last_skip_reason,
-			expected_duration_minutes = EXCLUDED.expected_duration_minutes,
-			sla_warn_multiplier = EXCLUDED.sla_warn_multiplier,
-			sla_fail_multiplier = EXCLUDED.sla_fail_multiplier,
-			sla_breached = EXCLUDED.sla_breached,
-			actual_duration_seconds = EXCLUDED.actual_duration_seconds,
-			sandbox_limits = EXCLUDED.sandbox_limits,
-			allow_delegation = EXCLUDED.allow_delegation,
-			output_schema = EXCLUDED.output_schema,
-			output_json = EXCLUDED.output_json,
-			carry_context = EXCLUDED.carry_context,
-			allow_event_triggers = EXCLUDED.allow_event_triggers,
-			thinking_budget_tokens = EXCLUDED.thinking_budget_tokens,
-			file_names = EXCLUDED.file_names,
-			serialization_key = EXCLUDED.serialization_key,
-			recurrence_until = EXCLUDED.recurrence_until,
-			recurrence_remaining = EXCLUDED.recurrence_remaining`,
-		// effective_priority is deliberately OMITTED from the upsert: it is set
-		// once on INSERT and thereafter mutated ONLY by the anti-starvation sweep
-		// (#230). UpdateTask delegates here, so including it would let a status
-		// update carrying a stale in-memory copy silently un-promote a task.
-		// recurrence_spawned (#1116) follows the same insert-only rule: after
-		// INSERT it is owned by the guarded spawn/settle statements, and an
-		// upsert write here could clobber a claimed spawn credit.
-		// (sandbox_limits #205 IS in the upsert — it has no out-of-band mutator.
-		// output_schema #244 is immutable post-create; output_json IS written
-		// post-run via UpdateTask→here, like result — both belong in the upsert.)
-		task.ID,
-		task.Name,
-		task.Prompt,
-		task.Model,
-		task.FallbackModel,
-		task.MaxIterations,
-		marshalJSON(mcpSelectionOrEmpty(task.MCPSelection)),
-		task.Priority,
-		task.InstructionSelfImprove,
-		string(task.Status),
-		task.AgentSessionID,
-		task.CreatedAt,
-		task.StartedAt,
-		task.CompletedAt,
-		task.Result,
-		task.ErrorMessage,
-		task.ScheduledFor,
-		nullableString(task.Recurrence),
-		task.CreatedBy,
-		marshalJSON(task.Files),
-		task.LeaseOwner,
-		task.LeaseExpiresAt,
-		task.AttemptCount,
-		task.MaxRetries,
-		task.AllowNetwork,
-		taskTimezoneOrUTC(task.Timezone),
-		task.CreatedByKeyID,
-		triggerTypeOrCron(task.TriggerType),
-		marshalCredentialAllowlist(task.CredentialAllowlist),
-		marshalLoopConfig(task.LoopConfig),
-		marshalWorktreeConfig(task.WorktreeConfig),
-		nullableString(task.Description),
-		marshalTags(task.Tags),
-		marshalRetryPolicy(task.RetryPolicy),
-		sourceTaskIDValue(task.SourceTaskID),
-		nullableString(task.Persona),
-		workspacePathValue(task.WorkspacePath),
-		task.AllowTaskCreation,
-		task.AllowRecurringTaskCreation,
-		createdByTaskIDValue(task.CreatedByTaskID),
-		task.DeadLetteredAt,
-		nullableString(deref(task.DeadLetterReason)),
-		deadLetterAttemptsValue(task.DeadLetterAttempts),
-		marshalRunIf(task.RunIf),
-		task.SkipCount,
-		task.LastSkipAt,
-		nullableString(deref(task.LastSkipReason)),
-		expectedDurationValue(task.ExpectedDurationMinutes),
-		slaMultiplierValue(task.SLAWarnMultiplier, models.DefaultSLAWarnMultiplier),
-		slaMultiplierValue(task.SLAFailMultiplier, models.DefaultSLAFailMultiplier),
-		task.SLABreached,
-		task.ActualDurationSeconds,
-		effectivePriorityValue(task),
-		marshalSandboxLimits(task.SandboxLimits),
-		task.AllowDelegation,
-		marshalRawJSON(task.OutputSchema),
-		marshalRawJSON(task.OutputJSON),
-		task.CarryContext,
-		task.AllowEventTriggers,
-		thinkingBudgetValue(task.ThinkingBudgetTokens),
-		marshalJSON(task.FileNames),
-		serializationKeyValue(task.SerializationKey),
-		task.RecurrenceUntil,
-		recurrenceRemainingValue(task.RecurrenceRemaining),
-		task.Title,
-		recurrenceSpawnedInsertValue(task),
-	)
+	_, err := db.conn.ExecContext(ctx, taskInsertStatement, taskInsertArgs(task)...)
 	return err
 }
 
@@ -659,188 +511,16 @@ func maybeComputeActualDuration(task *models.Task) {
 	task.ActualDurationSeconds = &secs
 }
 
-// taskInsertOnConflict is the static ON CONFLICT (id) DO UPDATE clause appended
-// to every tasks INSERT. Kept in sync with AddTask's upsert. Extracted so the
-// single-row, multi-row, and in-tx paths can never disagree. effective_priority
-// is intentionally NOT in this clause — it is write-once at INSERT and changed
-// only by the anti-starvation sweep (#230), so an UpdateTask (which routes
-// through this upsert) can never clobber a promotion with a stale in-memory value.
-const taskInsertOnConflict = ` ON CONFLICT (id) DO UPDATE SET
-			name = EXCLUDED.name,
-			title = EXCLUDED.title,
-			prompt = EXCLUDED.prompt,
-			model = EXCLUDED.model,
-			fallback_model = EXCLUDED.fallback_model,
-			max_iterations = EXCLUDED.max_iterations,
-			mcp_selection = EXCLUDED.mcp_selection,
-			priority = EXCLUDED.priority,
-			instruction_self_improve = EXCLUDED.instruction_self_improve,
-			status = EXCLUDED.status,
-			agent_session_id = EXCLUDED.agent_session_id,
-			created_at = EXCLUDED.created_at,
-			started_at = EXCLUDED.started_at,
-			completed_at = EXCLUDED.completed_at,
-			result = EXCLUDED.result,
-			error_message = EXCLUDED.error_message,
-			scheduled_for = EXCLUDED.scheduled_for,
-			recurrence = EXCLUDED.recurrence,
-			created_by = EXCLUDED.created_by,
-			files = EXCLUDED.files,
-			lease_owner = EXCLUDED.lease_owner,
-			lease_expires_at = EXCLUDED.lease_expires_at,
-			attempt_count = EXCLUDED.attempt_count,
-			max_retries = EXCLUDED.max_retries,
-			allow_network = EXCLUDED.allow_network,
-			timezone = EXCLUDED.timezone,
-			created_by_key_id = EXCLUDED.created_by_key_id,
-			trigger_type = EXCLUDED.trigger_type,
-			credential_allowlist = EXCLUDED.credential_allowlist,
-			loop_config = EXCLUDED.loop_config,
-			worktree_config = EXCLUDED.worktree_config,
-			description = EXCLUDED.description,
-			tags = EXCLUDED.tags,
-			retry_policy = EXCLUDED.retry_policy,
-			source_task_id = EXCLUDED.source_task_id,
-			persona = EXCLUDED.persona,
-			workspace_path = EXCLUDED.workspace_path,
-			allow_task_creation = EXCLUDED.allow_task_creation,
-			allow_recurring_task_creation = EXCLUDED.allow_recurring_task_creation,
-			created_by_task_id = EXCLUDED.created_by_task_id,
-			dead_lettered_at = EXCLUDED.dead_lettered_at,
-			dead_letter_reason = EXCLUDED.dead_letter_reason,
-			dead_letter_attempts = EXCLUDED.dead_letter_attempts,
-			run_if = EXCLUDED.run_if,
-			skip_count = EXCLUDED.skip_count,
-			last_skip_at = EXCLUDED.last_skip_at,
-			last_skip_reason = EXCLUDED.last_skip_reason,
-			expected_duration_minutes = EXCLUDED.expected_duration_minutes,
-			sla_warn_multiplier = EXCLUDED.sla_warn_multiplier,
-			sla_fail_multiplier = EXCLUDED.sla_fail_multiplier,
-			sla_breached = EXCLUDED.sla_breached,
-			actual_duration_seconds = EXCLUDED.actual_duration_seconds,
-			sandbox_limits = EXCLUDED.sandbox_limits,
-			allow_delegation = EXCLUDED.allow_delegation,
-			output_schema = EXCLUDED.output_schema,
-			output_json = EXCLUDED.output_json,
-			carry_context = EXCLUDED.carry_context,
-			allow_event_triggers = EXCLUDED.allow_event_triggers,
-			thinking_budget_tokens = EXCLUDED.thinking_budget_tokens,
-			file_names = EXCLUDED.file_names,
-			serialization_key = EXCLUDED.serialization_key,
-			recurrence_until = EXCLUDED.recurrence_until,
-			recurrence_remaining = EXCLUDED.recurrence_remaining`
-
-// taskInsertColumns is the ordered column list for the tasks INSERT, kept in
-// sync with AddTask / AddTaskBatch / AddTaskTx. Extracted as a constant so the
-// single-row and multi-row builders never drift.
-const taskInsertColumns = `id, name, prompt, model, fallback_model, max_iterations, mcp_selection,
-			priority, instruction_self_improve, status, agent_session_id,
-			created_at, started_at, completed_at, result, error_message,
-			scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at,
-			attempt_count, max_retries, allow_network, timezone, created_by_key_id,
-			trigger_type, credential_allowlist, loop_config, worktree_config, description, tags, retry_policy, source_task_id, persona, workspace_path,
-			allow_task_creation, allow_recurring_task_creation, created_by_task_id,
-			dead_lettered_at, dead_letter_reason, dead_letter_attempts,
-			run_if, skip_count, last_skip_at, last_skip_reason,
-			expected_duration_minutes, sla_warn_multiplier, sla_fail_multiplier, sla_breached, actual_duration_seconds, effective_priority, sandbox_limits, allow_delegation, output_schema, output_json, carry_context, allow_event_triggers, thinking_budget_tokens, file_names, serialization_key, recurrence_until, recurrence_remaining, title, recurrence_spawned`
-
-// taskInsertArgs returns the positional INSERT values for a task, in the
-// exact column order of taskInsertColumns. Shared by AddTask and AddTaskBatch so
-// the single-row and multi-row paths can never disagree on argument ordering.
-// It derives actual_duration_seconds (#274) up front so the batch/tx paths
-// persist it identically to the single-row AddTask path.
-func taskInsertArgs(t *models.Task) []any {
-	maybeComputeActualDuration(t)
-	return []any{
-		t.ID,
-		t.Name,
-		t.Prompt,
-		t.Model,
-		t.FallbackModel,
-		t.MaxIterations,
-		marshalJSON(mcpSelectionOrEmpty(t.MCPSelection)),
-		t.Priority,
-		t.InstructionSelfImprove,
-		string(t.Status),
-		t.AgentSessionID,
-		t.CreatedAt,
-		t.StartedAt,
-		t.CompletedAt,
-		t.Result,
-		t.ErrorMessage,
-		t.ScheduledFor,
-		nullableString(t.Recurrence),
-		t.CreatedBy,
-		marshalJSON(t.Files),
-		t.LeaseOwner,
-		t.LeaseExpiresAt,
-		t.AttemptCount,
-		t.MaxRetries,
-		t.AllowNetwork,
-		taskTimezoneOrUTC(t.Timezone),
-		t.CreatedByKeyID,
-		triggerTypeOrCron(t.TriggerType),
-		marshalCredentialAllowlist(t.CredentialAllowlist),
-		marshalLoopConfig(t.LoopConfig),
-		marshalWorktreeConfig(t.WorktreeConfig),
-		nullableString(t.Description),
-		marshalTags(t.Tags),
-		marshalRetryPolicy(t.RetryPolicy),
-		sourceTaskIDValue(t.SourceTaskID),
-		nullableString(t.Persona),
-		workspacePathValue(t.WorkspacePath),
-		t.AllowTaskCreation,
-		t.AllowRecurringTaskCreation,
-		createdByTaskIDValue(t.CreatedByTaskID),
-		t.DeadLetteredAt,
-		nullableString(deref(t.DeadLetterReason)),
-		deadLetterAttemptsValue(t.DeadLetterAttempts),
-		marshalRunIf(t.RunIf),
-		t.SkipCount,
-		t.LastSkipAt,
-		nullableString(deref(t.LastSkipReason)),
-		expectedDurationValue(t.ExpectedDurationMinutes),
-		slaMultiplierValue(t.SLAWarnMultiplier, models.DefaultSLAWarnMultiplier),
-		slaMultiplierValue(t.SLAFailMultiplier, models.DefaultSLAFailMultiplier),
-		t.SLABreached,
-		t.ActualDurationSeconds,
-		effectivePriorityValue(t),
-		marshalSandboxLimits(t.SandboxLimits),
-		t.AllowDelegation,
-		marshalRawJSON(t.OutputSchema),
-		marshalRawJSON(t.OutputJSON),
-		t.CarryContext,
-		t.AllowEventTriggers,
-		thinkingBudgetValue(t.ThinkingBudgetTokens),
-		marshalJSON(t.FileNames),
-		serializationKeyValue(t.SerializationKey),
-		t.RecurrenceUntil,
-		recurrenceRemainingValue(t.RecurrenceRemaining),
-		t.Title,
-		recurrenceSpawnedInsertValue(t),
-	}
-}
-
-// taskInsertColumnsCount is the number of columns in taskInsertColumns. Kept as
-// a named const so the multi-row placeholder builder is self-documenting and
-// a future schema migration that adds a column forces a single touch point.
-// (#710 added file_names without bumping this, breaking every multi-row
-// AddTaskBatch INSERT — caught only once the dev lane gained a Postgres
-// service, #723. 64 = 61 + serialization_key (#709) + recurrence_until +
-// recurrence_remaining (recurrence end conditions), 65 = 64 + title,
-// 66 = 65 + recurrence_spawned (#1116, derived at insert — see
-// recurrenceSpawnedInsertValue). TestTaskInsertColumnsCount pins the count
-// DB-free.)
-const taskInsertColumnsCount = 66
-
 // AddTaskBatch inserts a slice of tasks in a single parameterised INSERT (#227),
 // replacing N sequential ExecContext round-trips. It does NOT run inside an
 // explicit transaction — callers that need atomicity wrap the call in BeginTx /
 // Commit (see Storage.AddTaskBatch). An empty slice is a no-op.
 //
-// Each row carries the SAME taskInsertColumnsCount columns as AddTask (via the
+// Each row carries the SAME registry-derived columns as AddTask (via the
 // shared taskInsertArgs helper), so a row inserted through the batch path is
-// byte-identical to one inserted through the single-row path.
+// byte-identical to one inserted through the single-row path. The placeholder
+// count is len(taskInsertSet) — derived, never hand-maintained (#710's drift
+// class is structurally gone).
 func (db *Database) AddTaskBatch(ctx context.Context, tasks []*models.Task) error {
 	return db.AddTaskBatchTx(ctx, nil, tasks)
 }
@@ -853,7 +533,7 @@ func (db *Database) AddTaskBatchTx(ctx context.Context, tx *sql.Tx, tasks []*mod
 		return nil
 	}
 
-	const cols = taskInsertColumnsCount
+	cols := len(taskInsertSet)
 	args := make([]any, 0, len(tasks)*cols)
 	placeholders := make([]string, 0, len(tasks))
 	var b strings.Builder
@@ -890,18 +570,9 @@ func (db *Database) AddTaskBatchTx(ctx context.Context, tx *sql.Tx, tasks []*mod
 
 // AddTaskTx inserts a single task within an existing transaction. The atomic
 // batch path (#227) uses this so a multi-row insert lands in the caller's tx.
+// It executes the same registry-derived taskInsertStatement as AddTask.
 func (db *Database) AddTaskTx(ctx context.Context, tx *sql.Tx, task *models.Task) error {
-	args := taskInsertArgs(task)
-	var q strings.Builder
-	q.WriteString("INSERT INTO tasks (")
-	q.WriteString(taskInsertColumns)
-	q.WriteString(") VALUES ($1")
-	for i := 2; i <= taskInsertColumnsCount; i++ {
-		fmt.Fprintf(&q, ",$%d", i)
-	}
-	q.WriteByte(')')
-	q.WriteString(taskInsertOnConflict)
-	_, err := tx.ExecContext(ctx, q.String(), args...)
+	_, err := tx.ExecContext(ctx, taskInsertStatement, taskInsertArgs(task)...)
 	return err
 }
 
@@ -1148,278 +819,24 @@ func nullableString(s string) *string {
 	return &s
 }
 
-func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*models.Task, error) { //nolint:gocyclo // one ordered SQL row scanner; splitting risks column drift.
-	var (
-		id                     uuid.UUID
-		name                   string
-		title                  string
-		prompt                 string
-		model                  sql.NullString
-		fallbackModel          sql.NullString
-		maxIterations          sql.NullInt64
-		mcpSelection           sql.NullString
-		priority               int
-		instructionSelfImprove bool
-		status                 string
-		agentSessionID         sql.NullString
-		createdAt              time.Time
-		startedAt              sql.NullTime
-		completedAt            sql.NullTime
-		result                 sql.NullString
-		errorMessage           sql.NullString
-		scheduledFor           sql.NullTime
-		recurrence             sql.NullString
-		createdBy              *uuid.UUID
-		files                  sql.NullString
-		leaseOwner             sql.NullString
-		leaseExpiresAt         sql.NullTime
-		attemptCount           int
-		maxRetries             int
-		allowNetwork           bool
-		timezone               sql.NullString
-		createdByKeyID         sql.NullString
-		triggerType            sql.NullString
-		credentialAllowlist    sql.NullString
-		loopConfig             sql.NullString
-		worktreeConfig         sql.NullString
-		description            sql.NullString
-		tags                   sql.NullString
-		retryPolicy            sql.NullString
-		sourceTaskID           sql.NullString
-		persona                sql.NullString
-		workspacePath          sql.NullString
-		allowTaskCreation      bool
-		allowRecurringTaskCre  bool
-		createdByTaskID        sql.NullString
-		deadLetteredAt         sql.NullTime
-		deadLetterReason       sql.NullString
-		deadLetterAttempts     sql.NullInt64
-		runIf                  sql.NullString
-		skipCount              int
-		lastSkipAt             sql.NullTime
-		lastSkipReason         sql.NullString
-		expectedDur            sql.NullInt64
-		slaWarnMul             sql.NullFloat64
-		slaFailMul             sql.NullFloat64
-		slaBreached            bool
-		actualDurSecs          sql.NullInt64
-		effectivePriority      int
-		sandboxLimits          sql.NullString
-		allowDelegation        bool
-		thinkingBudget         sql.NullInt64
-		outputSchema           sql.NullString
-		outputJSON             sql.NullString
-		pendingQuestion        sql.NullString
-		pendingAnswer          sql.NullString
-		carryContext           bool
-		allowEventTriggers     bool
-		errorAnalysis          sql.NullString
-		artifacts              sql.NullString
-		fileNames              sql.NullString
-		serializationKey       sql.NullString
-		recurrenceUntil        sql.NullTime
-		recurrenceRemaining    sql.NullInt64
-		wakeAt                 sql.NullTime
-		wakeEventKey           sql.NullString
-		wakeNote               sql.NullString
-		wakeReason             sql.NullString
-		wakeCycles             int
-		pausedAt               sql.NullTime
-	)
-
-	err := scanner.Scan(
-		&id, &name, &prompt, &model, &fallbackModel, &maxIterations, &mcpSelection,
-		&priority, &instructionSelfImprove, &status, &agentSessionID,
-		&createdAt, &startedAt, &completedAt, &result, &errorMessage,
-		&scheduledFor, &recurrence, &createdBy, &files, &leaseOwner, &leaseExpiresAt,
-		&attemptCount, &maxRetries, &allowNetwork, &timezone, &createdByKeyID,
-		&triggerType, &credentialAllowlist, &loopConfig, &worktreeConfig, &description, &tags, &retryPolicy, &sourceTaskID, &persona, &workspacePath,
-		&allowTaskCreation, &allowRecurringTaskCre, &createdByTaskID,
-		&deadLetteredAt, &deadLetterReason, &deadLetterAttempts,
-		&runIf, &skipCount, &lastSkipAt, &lastSkipReason,
-		&expectedDur, &slaWarnMul, &slaFailMul, &slaBreached, &actualDurSecs,
-		&effectivePriority, &sandboxLimits, &allowDelegation, &outputSchema, &outputJSON, &errorAnalysis, &artifacts,
-		&pendingQuestion, &pendingAnswer, &carryContext, &allowEventTriggers, &thinkingBudget, &fileNames, &serializationKey, &recurrenceUntil, &recurrenceRemaining,
-		&wakeAt, &wakeEventKey, &wakeNote, &wakeReason, &wakeCycles, &title, &pausedAt,
-	)
-	if err != nil {
+// scanTask scans one tasks row into a models.Task. The scan destinations and
+// the per-column conversions both come from taskColumnRegistry's read set —
+// the SAME ordered slice taskColumns is joined from — so the SELECT list and
+// the positional scan agree by construction (no manual ordering to drift).
+// Hot path: per row it fills one destination slice and runs the assign
+// functions; all statement text was built once at package init.
+func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*models.Task, error) {
+	var buf taskScanBuf
+	dests := make([]any, len(taskReadSet))
+	for i, c := range taskReadSet {
+		dests[i] = c.dest(&buf)
+	}
+	if err := scanner.Scan(dests...); err != nil {
 		return nil, err
 	}
-
-	task := &models.Task{
-		ID:                     id,
-		Name:                   name,
-		Title:                  title,
-		Prompt:                 prompt,
-		Priority:               priority,
-		EffectivePriority:      effectivePriority,
-		InstructionSelfImprove: instructionSelfImprove,
-		Status:                 models.TaskStatus(status),
-		CreatedAt:              createdAt,
-		CreatedBy:              createdBy,
-		AttemptCount:           attemptCount,
-		MaxRetries:             maxRetries,
-		AllowNetwork:           allowNetwork,
-		AllowDelegation:        allowDelegation,
-		Timezone:               taskTimezoneOrUTC(timezone.String),
-		TriggerType:            models.TriggerType(triggerTypeOrCronStr(triggerType.String)),
-	}
-	if model.Valid {
-		task.Model = &model.String
-	}
-	if fallbackModel.Valid {
-		task.FallbackModel = &fallbackModel.String
-	}
-	if maxIterations.Valid {
-		value := int(maxIterations.Int64)
-		task.MaxIterations = &value
-	}
-	if mcpSelection.Valid {
-		task.MCPSelection = unmarshalMCPSelection(mcpSelection.String)
-	} else {
-		task.MCPSelection = models.MCPSelection{}
-	}
-	// NULL → nil (inherit global); "[]" → non-nil empty (deny all). The
-	// distinction is load-bearing for Gate-3, so do NOT coerce nil to empty.
-	task.CredentialAllowlist = unmarshalCredentialAllowlist(credentialAllowlist)
-	task.LoopConfig = unmarshalLoopConfig(loopConfig)
-	task.WorktreeConfig = unmarshalWorktreeConfig(worktreeConfig)
-	task.SandboxLimits = unmarshalSandboxLimits(sandboxLimits)
-	task.OutputSchema = unmarshalRawJSON(outputSchema)
-	task.OutputJSON = unmarshalRawJSON(outputJSON)
-	task.ErrorAnalysis = unmarshalRawJSON(errorAnalysis)
-	if pendingQuestion.Valid {
-		task.PendingQuestion = pendingQuestion.String
-	}
-	if pendingAnswer.Valid {
-		task.PendingAnswer = pendingAnswer.String
-	}
-	if wakeAt.Valid {
-		t := wakeAt.Time
-		task.WakeAt = &t
-	}
-	if pausedAt.Valid {
-		t := pausedAt.Time
-		task.PausedAt = &t
-	}
-	task.WakeEventKey = wakeEventKey.String
-	task.WakeNote = wakeNote.String
-	task.WakeReason = wakeReason.String
-	task.WakeCycles = wakeCycles
-	task.CarryContext = carryContext
-	task.AllowEventTriggers = allowEventTriggers
-	task.Artifacts = unmarshalRawJSON(artifacts)
-	task.RetryPolicy = unmarshalRetryPolicy(retryPolicy)
-	task.Persona = persona.String
-	if sourceTaskID.Valid && sourceTaskID.String != "" {
-		if sid, perr := uuid.Parse(sourceTaskID.String); perr == nil {
-			task.SourceTaskID = &sid
-		} else {
-			log.Printf("Warning: invalid source_task_id %q: %v", sourceTaskID.String, perr)
-		}
-	}
-	task.AllowTaskCreation = allowTaskCreation
-	task.AllowRecurringTaskCreation = allowRecurringTaskCre
-	if createdByTaskID.Valid && createdByTaskID.String != "" {
-		if cid, perr := uuid.Parse(createdByTaskID.String); perr == nil {
-			task.CreatedByTaskID = &cid
-		} else {
-			log.Printf("Warning: invalid created_by_task_id %q: %v", createdByTaskID.String, perr)
-		}
-	}
-	task.Description = description.String
-	if agentSessionID.Valid {
-		task.AgentSessionID = &agentSessionID.String
-	}
-	if startedAt.Valid {
-		task.StartedAt = &startedAt.Time
-	}
-	if completedAt.Valid {
-		task.CompletedAt = &completedAt.Time
-	}
-	if result.Valid {
-		task.Result = &result.String
-	}
-	if errorMessage.Valid {
-		task.ErrorMessage = &errorMessage.String
-	}
-	if scheduledFor.Valid {
-		task.ScheduledFor = &scheduledFor.Time
-	}
-	if recurrence.Valid {
-		task.Recurrence = recurrence.String
-	}
-	if files.Valid {
-		task.Files = unmarshalStringSlice(files.String)
-	}
-	if fileNames.Valid {
-		task.FileNames = unmarshalStringSlice(fileNames.String)
-	}
-	// serialization_key (#709): NULL = unserialized. The write path normalizes
-	// ""/whitespace to NULL (serializationKeyValue), so a Valid value is always
-	// a real key.
-	if serializationKey.Valid {
-		task.SerializationKey = &serializationKey.String
-	}
-	if recurrenceUntil.Valid {
-		t := recurrenceUntil.Time
-		task.RecurrenceUntil = &t
-	}
-	if recurrenceRemaining.Valid {
-		v := int(recurrenceRemaining.Int64)
-		task.RecurrenceRemaining = &v
-	}
-	// tags is NOT NULL DEFAULT '[]', so it's always present; assign independently
-	// of files (unmarshalStringSlice maps ""/"null" → empty slice safely).
-	task.Tags = unmarshalStringSlice(tags.String)
-	if leaseOwner.Valid {
-		task.LeaseOwner = &leaseOwner.String
-	}
-	if leaseExpiresAt.Valid {
-		task.LeaseExpiresAt = &leaseExpiresAt.Time
-	}
-	if createdByKeyID.Valid {
-		task.CreatedByKeyID = &createdByKeyID.String
-	}
-	if workspacePath.Valid && workspacePath.String != "" {
-		task.WorkspacePath = &workspacePath.String
-	}
-	if deadLetteredAt.Valid {
-		task.DeadLetteredAt = &deadLetteredAt.Time
-	}
-	if deadLetterReason.Valid {
-		task.DeadLetterReason = &deadLetterReason.String
-	}
-	if deadLetterAttempts.Valid {
-		task.DeadLetterAttempts = int(deadLetterAttempts.Int64)
-	}
-	task.RunIf = unmarshalRunIf(runIf)
-	task.SkipCount = skipCount
-	if lastSkipAt.Valid {
-		task.LastSkipAt = &lastSkipAt.Time
-	}
-	if lastSkipReason.Valid {
-		task.LastSkipReason = &lastSkipReason.String
-	}
-	// SLA columns (#274). expected_duration_minutes / actual_duration_seconds
-	// are NULLable (NULL = no SLA / not-yet-terminal); the multipliers are NOT
-	// NULL DEFAULT so they are always present — normalize a stray zero to the
-	// default so a downstream monitor / report never divides by zero.
-	if expectedDur.Valid {
-		v := int(expectedDur.Int64)
-		task.ExpectedDurationMinutes = &v
-	}
-	// Per-task thinking override (#220): NULL = inherit the global default.
-	if thinkingBudget.Valid {
-		v := int(thinkingBudget.Int64)
-		task.ThinkingBudgetTokens = &v
-	}
-	task.SLAWarnMultiplier = slaMultiplierValue(slaWarnMul.Float64, models.DefaultSLAWarnMultiplier)
-	task.SLAFailMultiplier = slaMultiplierValue(slaFailMul.Float64, models.DefaultSLAFailMultiplier)
-	task.SLABreached = slaBreached
-	if actualDurSecs.Valid {
-		v := int(actualDurSecs.Int64)
-		task.ActualDurationSeconds = &v
+	task := &models.Task{}
+	for _, c := range taskReadSet {
+		c.assign(&buf, task)
 	}
 	return task, nil
 }
@@ -2943,153 +2360,24 @@ func (db *Database) GetTaskForUpdate(ctx context.Context, tx *sql.Tx, taskID uui
 	return db.scanTask(row)
 }
 
-// UpdateTaskTx updates a task within a transaction.
+// UpdateTaskTx updates a task within a transaction, via the registry-derived
+// UPDATE statement (taskUpdateStatement, task_columns.go): id is the WHERE
+// key, the txUpdate-flagged columns are SET in registry order. The columns
+// deliberately absent (effective_priority, created_by_key_id, the wake/pause
+// clocks, error_analysis, recurrence_spawned) are declared — with reasons —
+// on their taskColumnRegistry rows. name, trigger_type, allow_event_triggers
+// and serialization_key are in the set for import conflict=replace (#1104),
+// the only tx write path that changes them: every other UpdateTaskTx caller
+// writes back the values it scanned under the same row lock
+// (GetTaskForUpdate / ClaimNextPendingTask), so for them these are no-op
+// write-backs.
 func (db *Database) UpdateTaskTx(ctx context.Context, tx *sql.Tx, task *models.Task) error {
 	// Populate actual_duration_seconds (#274) on the same write that persists a
 	// completed_at — mirrors AddTask so the storage call sites that go through
 	// UpdateTaskTx (the terminal-status transitions) record the derived actual
 	// without each one having to remember it.
 	maybeComputeActualDuration(task)
-	_, err := tx.ExecContext(ctx, `
-		UPDATE tasks SET
-			prompt = $2,
-			mcp_selection = $3,
-			priority = $4,
-			instruction_self_improve = $5,
-			status = $6,
-			agent_session_id = $7,
-			created_at = $8,
-			started_at = $9,
-			completed_at = $10,
-			result = $11,
-			error_message = $12,
-			scheduled_for = $13,
-			recurrence = $14,
-			created_by = $15,
-			files = $16,
-			lease_owner = $17,
-			lease_expires_at = $18,
-			model = $19,
-			fallback_model = $20,
-			max_iterations = $21,
-			attempt_count = $22,
-			max_retries = $23,
-			allow_network = $24,
-			timezone = $25,
-			credential_allowlist = $26,
-			loop_config = $27,
-			worktree_config = $28,
-			description = $29,
-			tags = $30,
-			retry_policy = $31,
-			source_task_id = $32,
-			persona = $33,
-			workspace_path = $34,
-			allow_task_creation = $35,
-			allow_recurring_task_creation = $36,
-			created_by_task_id = $37,
-			dead_lettered_at = $38,
-			dead_letter_reason = $39,
-			dead_letter_attempts = $40,
-			run_if = $41,
-			skip_count = $42,
-			last_skip_at = $43,
-			last_skip_reason = $44,
-			expected_duration_minutes = $45,
-			sla_warn_multiplier = $46,
-			sla_fail_multiplier = $47,
-			sla_breached = $48,
-			actual_duration_seconds = $49,
-			sandbox_limits = $50,
-			allow_delegation = $51,
-			output_schema = $52,
-			output_json = $53,
-			artifacts = $54,
-			thinking_budget_tokens = $55,
-			file_names = $56,
-			pending_question = $57,
-			pending_answer = $58,
-			carry_context = $59,
-			recurrence_until = $60,
-			recurrence_remaining = $61,
-			title = $62,
-			name = $63,
-			trigger_type = $64,
-			allow_event_triggers = $65,
-			serialization_key = $66
-		WHERE id = $1`,
-		task.ID,
-		task.Prompt,
-		marshalJSON(mcpSelectionOrEmpty(task.MCPSelection)),
-		task.Priority,
-		task.InstructionSelfImprove,
-		string(task.Status),
-		task.AgentSessionID,
-		task.CreatedAt,
-		task.StartedAt,
-		task.CompletedAt,
-		task.Result,
-		task.ErrorMessage,
-		task.ScheduledFor,
-		nullableString(task.Recurrence),
-		task.CreatedBy,
-		marshalJSON(task.Files),
-		task.LeaseOwner,
-		task.LeaseExpiresAt,
-		task.Model,
-		task.FallbackModel,
-		task.MaxIterations,
-		task.AttemptCount,
-		task.MaxRetries,
-		task.AllowNetwork,
-		taskTimezoneOrUTC(task.Timezone),
-		marshalCredentialAllowlist(task.CredentialAllowlist),
-		marshalLoopConfig(task.LoopConfig),
-		marshalWorktreeConfig(task.WorktreeConfig),
-		nullableString(task.Description),
-		marshalTags(task.Tags),
-		marshalRetryPolicy(task.RetryPolicy),
-		sourceTaskIDValue(task.SourceTaskID),
-		nullableString(task.Persona),
-		workspacePathValue(task.WorkspacePath),
-		task.AllowTaskCreation,
-		task.AllowRecurringTaskCreation,
-		createdByTaskIDValue(task.CreatedByTaskID),
-		task.DeadLetteredAt,
-		nullableString(deref(task.DeadLetterReason)),
-		deadLetterAttemptsValue(task.DeadLetterAttempts),
-		marshalRunIf(task.RunIf),
-		task.SkipCount,
-		task.LastSkipAt,
-		nullableString(deref(task.LastSkipReason)),
-		expectedDurationValue(task.ExpectedDurationMinutes),
-		slaMultiplierValue(task.SLAWarnMultiplier, models.DefaultSLAWarnMultiplier),
-		slaMultiplierValue(task.SLAFailMultiplier, models.DefaultSLAFailMultiplier),
-		task.SLABreached,
-		task.ActualDurationSeconds,
-		marshalSandboxLimits(task.SandboxLimits),
-		task.AllowDelegation,
-		marshalRawJSON(task.OutputSchema),
-		marshalRawJSON(task.OutputJSON),
-		marshalRawJSON(task.Artifacts),
-		thinkingBudgetValue(task.ThinkingBudgetTokens),
-		marshalJSON(task.FileNames),
-		nullableString(task.PendingQuestion),
-		nullableString(task.PendingAnswer),
-		task.CarryContext,
-		task.RecurrenceUntil,
-		recurrenceRemainingValue(task.RecurrenceRemaining),
-		task.Title,
-		// name, trigger_type, allow_event_triggers, serialization_key joined the
-		// UPDATE for import conflict=replace (#1104), which is the only tx write
-		// path that changes them: every other UpdateTaskTx caller writes back the
-		// values it scanned under the same row lock (GetTaskForUpdate /
-		// ClaimNextPendingTask), so for them these are no-op write-backs.
-		task.Name,
-		triggerTypeOrCron(task.TriggerType),
-		task.AllowEventTriggers,
-		serializationKeyValue(task.SerializationKey),
-	)
+	_, err := tx.ExecContext(ctx, taskUpdateStatement, updateTaskArgs(task)...)
 	return err
 }
 
