@@ -321,6 +321,13 @@ var allowedEnvVars = map[string]bool{
 	// ── web search ──
 	"TAVILY_API_KEY": true,
 
+	// ── hosted browser automation (#987) ──
+	// Mints Browserbase live-view URLs host-side (internal/tools/browserbase_live_view.go).
+	// Deliberately separate from the browserbase MCP connector's own per-user key,
+	// which is sealed in remote_mcp_servers.api_key_enc and brokered — see
+	// docs/BROWSERBASE.md for why the two are not shared.
+	"BROWSERBASE_API_KEY": true,
+
 	// NOTE: client-specific MCP connector credentials (DSPs, fast.io, gamma,
 	// etc.) are NOT enumerated here. The MCP catalog lives in the client
 	// bundle's manifest (internal/clientconfig), and cmd/fleet admits the

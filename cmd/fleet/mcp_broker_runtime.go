@@ -408,7 +408,7 @@ func parentOwnedRuntimeEnvNames(bundle *clientconfig.Bundle) []string {
 		"FLEET_ENV_FILE", clientconfig.EnvDir,
 		"OPENROUTER_API_KEY", "FLEET_SERVER_TOKEN", "ADMIN_API_KEY",
 		"DATABASE_URL", "FLEET_CHAT_DATABASE_URL", "FLEET_SCHED_DATABASE_URL", "DB_PASSWORD",
-		"TAVILY_API_KEY", "FLEET_SMTP_PASSWORD", "FLEET_WEBHOOK_SECRET", "FLEET_VAPID_PRIVATE_KEY",
+		"TAVILY_API_KEY", "BROWSERBASE_API_KEY", "FLEET_SMTP_PASSWORD", "FLEET_WEBHOOK_SECRET", "FLEET_VAPID_PRIVATE_KEY",
 		"FLEET_MCP_OAUTH_ENCRYPTION_KEY", "FLEET_LOG_ARCHIVE_ENCRYPTION_KEY",
 		// Scheduled-task inputs the boot loader reads verbatim under their
 		// legacy names (exact os.Getenv, outside the alias machinery).

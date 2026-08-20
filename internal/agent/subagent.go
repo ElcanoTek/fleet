@@ -230,6 +230,12 @@ var exploreDeniedNativeTools = map[string]bool{
 	"remember":                    true,
 	"propose_note":                true,
 	"propose_skill":               true,
+	// browserbase_live_view mints a password-less URL that grants control of a
+	// logged-in browser — an outward-facing capability grant, the same class as
+	// publish_artifact above. An explore child also has no human to hand a link
+	// to, so the tool's own protocol ("post the link, END YOUR TURN") is dead
+	// advice that would burn a turn.
+	"browserbase_live_view": true,
 }
 
 // filterExploreDeniedTools returns the roster minus the explore strip set.
