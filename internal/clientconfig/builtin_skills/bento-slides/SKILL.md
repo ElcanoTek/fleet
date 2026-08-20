@@ -1,6 +1,6 @@
 ---
 name: bento-slides
-description: Build a presentation the user can actually open — a Bento deck, one self-contained .bento.html file that is its own viewer and editor, authored offline with no Gamma, PowerPoint, or external API, and delivered as an offline-only file with no update check and no live collaboration. Use it whenever someone asks for a slide deck, presentation, pitch, readout, or "slides" from material you have, and prefer charts, tables, and morph transitions over walls of bullet text.
+description: Build a presentation the user can actually open — a Bento deck, one self-contained .bento.html file that is its own viewer and editor, authored offline with no Gamma, PowerPoint, or external API, and delivered as an offline-only file with no update check and no live collaboration, and exported to a PDF you can attach to an email without the user rendering anything. Use it whenever someone asks for a slide deck, presentation, pitch, readout, or "slides" from material you have — including when they want the slides sent, emailed, printed, or attached as a PDF — and prefer charts, tables, and morph transitions over walls of bullet text.
 ---
 
 # Bento decks
@@ -112,13 +112,67 @@ it themselves.
 Never paste the deck's HTML into your reply. It is 689KB of runtime and it tells
 the user nothing.
 
-**Always tell them how to get a PDF.** Most people need one to email, print, or
-attach, and the deck makes an excellent one — it is produced by the same renderer
-they are looking at, so it matches exactly, with selectable text and embedded
-fonts. Say it in one line, naming the button:
+## Step 5 — export a PDF when it has to be sent
 
-> To send it as a PDF: open the deck and click the printer icon in the toolbar
+The deck is what a reader opens and edits. A **PDF** is what gets emailed,
+printed, filed, or attached to a ticket — and you can produce it yourself, in
+the same turn, without the user exporting anything:
+
+```bash
+python3 skills/bento-slides/scripts/bento_doc.py pdf Q4_Review.bento.html
+```
+
+That writes `Q4_Review.pdf` beside the deck (`-o` overrides the path), one page
+per slide at 960x540pt — the standard 16:9 slide page, so it prints one landscape
+sheet per slide. Hidden and state slides are left out, exactly as the app's own
+export leaves them out, so page numbers agree between the two. The deck itself is
+never touched.
+
+**Do it whenever the PDF is the point**: "email this to the team", "attach it to
+the ticket", "put it in the folder", "I need something to print". The PDF is an
+ordinary workspace file, so anything that takes a file path can take it — a mail
+tool's attachment, a file upload, a datastore write. Hand over both links when
+the user may want to keep editing:
+
+```
+Deck: [Q4_Review.bento.html](Q4_Review.bento.html) · PDF: [Q4_Review.pdf](Q4_Review.pdf)
+```
+
+If you have no way to send mail, say so and give them the PDF link rather than
+claiming it was sent.
+
+**Read the notes it prints and pass on the ones that matter.** The export is a
+static renderer, not a browser, and it prints a `note:` line for anything in the
+deck it could not reproduce. What it does faithfully: the element box model,
+text wrapping and alignment, tables, shapes, gradients (including transparent
+scrims), PNG/JPEG images, and charts. What it cannot:
+
+- **Fonts are the PDF core 14** (Helvetica/Times/Courier, chosen from the CSS
+  stack). A deck naming a system stack looks right; a deck that *embeds* a woff2
+  face renders in the mapped fallback, so the shape is right and the typeface is
+  not.
+- **Text is Western European (WinAnsi).** Common symbols are transliterated;
+  CJK, Greek, Hebrew, Arabic and emoji come out as `?` and are counted in a
+  warning. A deck in those scripts needs the in-app export.
+- `svg` elements, KaTeX math, blur, drop shadow and blend modes are skipped, and
+  video/audio become the same neutral poster block the app's own print path
+  draws. Animation is not a limitation: morph, count-up, entrances and
+  ken-burns have no meaning on a static page, and the app's export drops them
+  too.
+
+**The deck's own export stays the authority.** When a page has to be
+pixel-exact — an embedded typeface, a slide with `svg` artwork, a non-Latin
+script — point at the button instead, in one line:
+
+> For a pixel-exact PDF: open the deck and click the printer icon in the toolbar
 > (*Export PDF (print)*), then choose "Save as PDF" — one page per slide.
+
+Never describe the built-in export as the deck's own renderer, and never claim a
+PDF you did not write. If `pdf` fails it says why and writes nothing — read the
+error, fix the document, and run it again.
+
+A PDF is a **revision** like the deck is: give the new one a new filename
+(`Q4_Review_v2.pdf`) for the same 24-hour cache reason below.
 
 There is **no PowerPoint export**, and there is no way for you to make one from a
 deck. If the user needs a `.pptx` specifically, say so plainly and offer the PDF
@@ -126,9 +180,6 @@ instead of implying a conversion exists. Do not try to build a `.pptx` by hand
 from the document: charts, morph, count-up and the motion effects have no
 PowerPoint equivalent, and a deck that is almost right is worse than an honest
 PDF.
-
-You cannot produce the PDF yourself — it needs a browser, and there is none in
-the sandbox. The one click is the whole path; do not promise to attach a PDF.
 
 **Revising a deck: always deliver the revision under a NEW filename**
 (`Q4_Review_v2.bento.html`). Workspace downloads are cached for 24 hours, so
