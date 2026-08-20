@@ -226,6 +226,25 @@ each piece yourself):
    publish the generic bundle's image (the coupling removed in 24ce69f stays
    removed); a manual `workflow_dispatch` exists for ad-hoc publishes.
 
+   **Package visibility follows the publishing repo** (measured 2026-08-20, in
+   this org): `ghcr.io/elcanotek/fleet-sandbox` and `…/fleet-sandbox-example`
+   are anonymously pullable because `fleet` and `example-config` are public,
+   while `…/fleet-sandbox-elcano` and `…/fleet-sandbox-reklaim` are private
+   because those bundle repos are. Note that GitHub's docs describe a different
+   default (private, with permissions but *not* visibility inherited), so an
+   org-level setting may be in play — **check a new package's visibility after
+   its first publish rather than assuming**. A public image needs no pull
+   credentials; a private one means the box (or cluster) authenticates to GHCR.
+   Nothing sensitive is in any of these images either way — no shipped
+   Containerfile has a `COPY` or `ADD`, so they are Fedora plus RPMs; what a
+   public package discloses is its *name*, and a public
+   `fleet-sandbox-<client>` names a customer.
+
+   A first publish of a **new** image name needs no manual package setup — the
+   pushing repo creates and links it. The `permission_denied: write_package`
+   failures in fleet's June 2026 runs were a different case: a *pre-existing*
+   org package (`ghcr.io/elcanotek/sandbox`) that was not linked to the repo.
+
    **Adoption is deliberate and deployment-side**: the workflow publishes, it
    does not pin. Set `FLEET_SANDBOX_IMAGE` (or the bundle's `sandbox.image`) to
    the printed ref on each box. Until 2026-08-20 the workflow also tried to open

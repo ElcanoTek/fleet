@@ -38,12 +38,47 @@ name: Publish sandbox image (reusable)
 # are all gone. What remains is the half that demonstrably works.
 #
 # The earlier six fleet-repo runs (all 2026-06, all red) failed further upstream
-# still, at `podman push`, with `denied: permission_denied: write_package`: they
-# pushed to an org-level package the repo's GITHUB_TOKEN could not write. That
-# is why the caller contract below publishes under the CALLER's own owner via
-# ghcr.io/${{ github.repository_owner }}/... and why the first publish of a new
-# image name needs the resulting package linked to its repo once, by hand, in
-# the package settings.
+# still, at `podman push`, with `denied: permission_denied: write_package`. They
+# targeted ghcr.io/elcanotek/sandbox — a package that already existed at the org
+# level and was NOT linked to the fleet repo, so the repo's GITHUB_TOKEN could
+# not write it. (That package is still there and still publicly readable, which
+# is how this was finally diagnosed.) That is why the caller contract below
+# publishes under the CALLER's own owner.
+#
+# A BRAND-NEW image name does NOT need any manual setup: the pushing repo
+# creates the package and it is linked automatically. Verified 2026-08-20 —
+# ghcr.io/elcanotek/fleet-sandbox (from this repo) and
+# ghcr.io/elcanotek/fleet-sandbox-example (from example-config) were both
+# first-ever pushes of those names and both succeeded with no package settings
+# touched. An earlier revision of this comment claimed the opposite; it was
+# generalising from the June failures, which are the *pre-existing unlinked
+# package* case, not the new-name case.
+#
+# PACKAGE VISIBILITY — measured, because the docs describe something else
+#
+# In this org, a package published here takes the VISIBILITY of the repo that
+# published it:
+#
+#   ghcr.io/elcanotek/fleet-sandbox          public  (fleet is public)
+#   ghcr.io/elcanotek/fleet-sandbox-example  public  (example-config is public)
+#   ghcr.io/elcanotek/fleet-sandbox-elcano   private (elcano-config is private)
+#   ghcr.io/elcanotek/fleet-sandbox-reklaim  private (reklaim-config is private)
+#
+# fleet-sandbox-example is the controlled case: a first-ever push of that name,
+# anonymously pullable minutes later with nobody having opened the package
+# settings. GitHub's own docs say the default visibility is private and that a
+# linked package "inherits the access permissions (but not the visibility)" of
+# its repository — that is NOT what these four packages did. An org-level
+# setting may be responsible, so treat the above as observed behaviour in this
+# org rather than a portable guarantee: after a first publish of a new name,
+# CHECK the package's visibility instead of assuming either way.
+#
+# What this means in practice. The image contents carry nothing sensitive — no
+# shipped Containerfile has a COPY or ADD, so every one of these is Fedora plus
+# RPMs. What a public package would disclose is its NAME: a public
+# fleet-sandbox-<client> tells the world that client is a customer. Private
+# bundle repo -> private package handles that without anyone configuring it, but
+# it is worth verifying for a new bundle rather than trusted blindly.
 #
 # Caller contract (in a client config repo):
 #

@@ -19,6 +19,32 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Corrected what the sandbox publisher's docs said about GHCR package linking
+  and visibility.** Two claims were wrong and both are now measured rather than
+  reasoned. *Linking*: the workflow header and all five caller workflows said a
+  first publish of a new image name needs its package linked to the repo by hand
+  or the push is denied. It does not — the pushing repo creates and links a new
+  package automatically, verified by two first-ever pushes on 2026-08-20
+  (`ghcr.io/elcanotek/fleet-sandbox` from this repo, `…/fleet-sandbox-example`
+  from example-config), both clean with no package settings touched. That claim
+  was over-generalised from fleet's six red June runs, which are a *different*
+  case: they targeted `ghcr.io/elcanotek/sandbox`, a package that already existed
+  at the org level and was not linked to the repo, hence
+  `denied: permission_denied: write_package`. *Visibility*: a package published
+  here takes the visibility of the repo that published it — the images from the
+  public `fleet` and `example-config` repos are anonymously pullable, those from
+  the private `elcano-config` and `reklaim-config` are not. GitHub's own docs
+  describe the opposite (private by default, with access permissions "but not
+  the visibility" inherited), so an org-level setting may be responsible and the
+  docs now record this as observed behaviour in this org with an explicit
+  instruction to check a new package's visibility rather than assume it. The
+  deployment docs carry the operational consequence: a public image needs no
+  pull credentials, a private one means the box or cluster authenticates to
+  GHCR. None of these images carries anything sensitive regardless — no shipped
+  Containerfile has a `COPY` or `ADD` — but a public `fleet-sandbox-<client>`
+  package name discloses that client as a customer, which is the reason the
+  private-repo default matters.
+
 - **A chat socket that dies while the agent is *thinking* is now caught in
   about a minute, and every parallel chat is watched, not just the one on
   screen.** These were the two limitations left open by #1211's stream
