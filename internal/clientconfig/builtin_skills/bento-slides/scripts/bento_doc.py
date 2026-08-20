@@ -154,6 +154,60 @@ class DeckError(Exception):
 SAFE_NAME = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
 
 
+def _relative_parts(path):
+    """Split a path into its meaningful segments, "/"-style.
+
+    Drops empty and "." segments so "./decks//Q4.bento.html" and
+    "decks/Q4.bento.html" agree. Keeps ".." so a caller can reject it.
+    """
+    return [seg for seg in path.replace(os.sep, "/").split("/") if seg not in ("", ".")]
+
+
+def check_deck_path(path):
+    """Validate a path `new` is about to create, and return its segments.
+
+    EVERY segment is checked, not just the filename. Two reasons:
+
+      * ".." would walk out of the workspace. The deck is meant to land where
+        the user can download it; a path that escapes writes somewhere they
+        cannot reach, over something they did not name.
+      * a directory containing a space, "#", "(" or "?" breaks the markdown
+        download link just as surely as a filename does, and the link is built
+        from the whole relative path. Checking only the basename left that hole.
+    """
+    if os.path.isabs(path):
+        raise DeckError(
+            "%s is an absolute path; a deck must be created at a path relative "
+            "to the workspace, or the user will not be able to download it "
+            "(the chat client only rewrites relative links)." % path
+        )
+    parts = _relative_parts(path)
+    if not parts:
+        raise DeckError("no deck path given")
+    if ".." in parts:
+        raise DeckError(
+            "%r walks outside the workspace with '..'. Create the deck in the "
+            "workspace (ideally its root) — a file written outside it is one "
+            "the user cannot download." % path
+        )
+    for seg in parts:
+        bad = sorted({c for c in seg if c not in SAFE_NAME})
+        if bad:
+            raise DeckError(
+                "%r contains %s, which break the markdown download link (the "
+                "href gets truncated or misparsed, so the deck 404s even though "
+                "the file exists). Use only letters, digits, '.', '_' and '-' in "
+                "every part of the path — e.g. %r."
+                % (seg, " ".join(repr(c) for c in bad), "Q4_Review.bento.html")
+            )
+    if not parts[-1].endswith(".bento.html"):
+        raise DeckError(
+            "%r should end in '.bento.html' so it is recognizable as a Bento "
+            "deck." % parts[-1]
+        )
+    return parts
+
+
 def download_link(path):
     """The exact markdown link that resolves to this deck.
 
@@ -164,8 +218,13 @@ def download_link(path):
     produces a deck the user cannot download, so the helper prints the answer
     rather than leaving it to be reconstructed.
     """
-    rel = path.replace(os.sep, "/").lstrip("./")
-    return "[%s](%s)" % (os.path.basename(rel), rel)
+    parts = _relative_parts(path)
+    if not parts:
+        return "[%s](%s)" % (path, path)
+    # lstrip("./") would eat leading dots of a name like ".hidden.bento.html";
+    # splitting into segments cannot.
+    rel = "/".join(parts)
+    return "[%s](%s)" % (parts[-1], rel)
 
 
 # ── the document block ────────────────────────────────────────────────────────
@@ -473,26 +532,7 @@ def _splice(path, raw, doc):
 
 def cmd_new(args):
     path = args.deck
-    if os.path.isabs(path):
-        raise DeckError(
-            "%s is an absolute path; a deck must be created at a path relative "
-            "to the workspace, or the user will not be able to download it "
-            "(the chat client only rewrites relative links)." % path
-        )
-    base = os.path.basename(path)
-    bad = sorted({c for c in base if c not in SAFE_NAME})
-    if bad:
-        raise DeckError(
-            "%r contains %s, which break the markdown download link (the href "
-            "gets truncated or misparsed, so the deck 404s even though the file "
-            "exists). Use only letters, digits, '.', '_' and '-' — e.g. %r."
-            % (base, " ".join(repr(c) for c in bad), "Q4_Review.bento.html")
-        )
-    if not base.endswith(".bento.html"):
-        raise DeckError(
-            "%r should end in '.bento.html' so it is recognizable as a Bento "
-            "deck." % base
-        )
+    check_deck_path(path)
     if os.path.exists(path):
         raise DeckError(
             "%s already exists; refusing to overwrite it. Pick another name "

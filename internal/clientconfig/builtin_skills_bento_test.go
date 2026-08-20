@@ -684,6 +684,16 @@ func TestBentoDocHelperRejectsUndownloadableNames(t *testing.T) {
 		{"question mark", "What?.bento.html"},
 		{"wrong extension", "deck.html"},
 		{"absolute path", "/tmp/deck.bento.html"},
+		// Path traversal: the deck is meant to land where the user can download
+		// it, so a path that escapes the workspace writes somewhere they cannot
+		// reach, over something they never named.
+		{"parent escape", "../escape.bento.html"},
+		{"buried parent escape", "decks/../../escape.bento.html"},
+		// The link is built from the WHOLE relative path, so a directory with a
+		// link-breaking character is just as fatal as a filename with one. The
+		// old check only looked at the basename and let these through.
+		{"space in a directory", "my decks/Q4.bento.html"},
+		{"fragment in a directory", "a#b/Q4.bento.html"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, stderr, err := runHelper(t, helper, dir, "new", tc.deck)
@@ -694,6 +704,36 @@ func TestBentoDocHelperRejectsUndownloadableNames(t *testing.T) {
 				t.Errorf("expected a diagnostic naming the problem, got %q", stderr)
 			}
 		})
+	}
+}
+
+// A name that begins with a dot must keep it in the download link. The link was
+// built with lstrip("./"), which strips CHARACTERS, not a prefix — so
+// ".hidden.bento.html" was advertised as "hidden.bento.html" and 404'd.
+func TestBentoDownloadLinkKeepsLeadingDot(t *testing.T) {
+	helper := bentoHelper(t)
+	dir := t.TempDir()
+	stdout, stderr, err := runHelper(t, helper, dir, "new", ".hidden.bento.html")
+	if err != nil {
+		t.Fatalf("new: %v\n%s", err, stderr)
+	}
+	if !strings.Contains(stdout, "(.hidden.bento.html)") {
+		t.Errorf("download link dropped the leading dot; stdout:\n%s", stdout)
+	}
+}
+
+// A deck in a subdirectory must be linked by its full relative path, not its
+// basename — linking the bare name is the failure the user sees as a broken
+// download on a deck that was written perfectly.
+func TestBentoDownloadLinkUsesFullRelativePath(t *testing.T) {
+	helper := bentoHelper(t)
+	dir := t.TempDir()
+	stdout, stderr, err := runHelper(t, helper, dir, "new", "./decks/Q4_v2.bento.html")
+	if err != nil {
+		t.Fatalf("new: %v\n%s", err, stderr)
+	}
+	if !strings.Contains(stdout, "(decks/Q4_v2.bento.html)") {
+		t.Errorf("link is not the deck's relative path; stdout:\n%s", stdout)
 	}
 }
 
