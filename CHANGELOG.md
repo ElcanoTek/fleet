@@ -19,6 +19,32 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Corrected what the sandbox publisher's docs said about GHCR package linking
+  and visibility.** Two claims were wrong and both are now measured rather than
+  reasoned. *Linking*: the workflow header and all five caller workflows said a
+  first publish of a new image name needs its package linked to the repo by hand
+  or the push is denied. It does not — the pushing repo creates and links a new
+  package automatically, verified by two first-ever pushes on 2026-08-20
+  (`ghcr.io/elcanotek/fleet-sandbox` from this repo, `…/fleet-sandbox-example`
+  from example-config), both clean with no package settings touched. That claim
+  was over-generalised from fleet's six red June runs, which are a *different*
+  case: they targeted `ghcr.io/elcanotek/sandbox`, a package that already existed
+  at the org level and was not linked to the repo, hence
+  `denied: permission_denied: write_package`. *Visibility*: a package published
+  here takes the visibility of the repo that published it — the images from the
+  public `fleet` and `example-config` repos are anonymously pullable, those from
+  the private `elcano-config` and `reklaim-config` are not. GitHub's own docs
+  describe the opposite (private by default, with access permissions "but not
+  the visibility" inherited), so an org-level setting may be responsible and the
+  docs now record this as observed behaviour in this org with an explicit
+  instruction to check a new package's visibility rather than assume it. The
+  deployment docs carry the operational consequence: a public image needs no
+  pull credentials, a private one means the box or cluster authenticates to
+  GHCR. None of these images carries anything sensitive regardless — no shipped
+  Containerfile has a `COPY` or `ADD` — but a public `fleet-sandbox-<client>`
+  package name discloses that client as a customer, which is the reason the
+  private-repo default matters.
+
 - **A chat socket that dies while the agent is *thinking* is now caught in
   about a minute, and every parallel chat is watched, not just the one on
   screen.** These were the two limitations left open by #1211's stream
@@ -456,6 +482,35 @@ prior versions are listed because none have shipped.
   `docs/TESTING.md`) updated to say so instead of describing a Codecov check.
 
 ### Changed
+
+- **The tool-call governance framing is now one shared sequence instead of two
+  hand-kept copies (#1127).** `policyGuardedTool.Run` (native/loader/bridge
+  tools) and `mcpTool.Run` (MCP tools) each carried a full copy of the
+  gate→journal→execute→govern→bound→record sequence, including duplicated
+  post_tool_use appending — an ordering bug fixed in one copy would have been
+  invisible in the other. The sequence now lives once in
+  `runGovernedToolCall` (`internal/agentcore/tool_call_framing.go`); the two
+  wrappers inject only their genuine differences through explicit seams: the
+  MCP argument parse (which deliberately sits between the policy gate and the
+  intent journal, so an unparseable call never journals) and the per-type
+  execute step. The two deliberate divergences are preserved and documented
+  at the seam — a native failure returns a non-nil Go error
+  (`boundedModelToolError`) while an MCP failure is always an error response
+  with a nil Go error, per the MCP spec. No behavior change; the one cleanup
+  is that the native error path no longer runs the model-output boundary
+  twice — a no-op for all realistic inputs, and in the one adversarial
+  re-detection corner (an over-cap error text whose head/tail preview cut
+  manufactures a binary-looking run the full content lacked) the single-pass
+  journal/audit bytes are the more consistent choice: they match MCP's
+  long-standing single-bound behavior, and the model-visible bytes converge
+  at the outer boundary either way. The load-bearing MCP gate ordering
+  (arg-parse before the intent journal) and the refusal paths'
+  journal-nothing property are now pinned by tests
+  (`TestTurnJournal_InvalidMCPArgsJournalNothing`,
+  `TestTurnJournal_GateRefusalsJournalNothing`). Same batch:
+  `buildConfirmAuditPolicyTool` now resolves its orchestration through
+  `policyOrchestration` (the one Policy→orchestrationState unwrap walk,
+  #1125) instead of a third hand-rolled copy of the loop.
 
 - **The seven hand-maintained task-row column enumerations are now one
   table-driven registry (#1126).** `taskColumnRegistry`

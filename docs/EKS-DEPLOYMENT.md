@@ -183,6 +183,14 @@ which builds with `scripts/build-sandbox-image.sh` and pushes an immutable
 outputs, so a deploy job can consume the exact digest this section wants without
 re-deriving it. Point it at ECR instead of GHCR, or mirror the GHCR tag into ECR.
 
+**Pull credentials depend on the package's visibility**, which in this org
+follows the publishing repo (measured 2026-08-20): the images from the public
+`fleet` and `example-config` repos are anonymously pullable, so a cluster needs
+no `imagePullSecret` for them; the client-bundle images come from private repos
+and do. GitHub's docs describe a private-by-default that these packages did not
+follow, so verify a new package's visibility rather than assuming — an image you
+expect to pull anonymously failing with a 403 at pod start is the symptom.
+
 The workflow publishes but does **not** pin: adoption is the explicit step
 below. (It used to open a PR pinning `sandbox.image` in the client repo; that
 step never once succeeded and was removed on 2026-08-20 — see the reusable
