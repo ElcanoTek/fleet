@@ -95,33 +95,58 @@ image); run them via the `npm` scripts documented below.
   `GOTOOLCHAIN=auto`, so the
   pinned toolchain is downloaded on demand. 1.21 is the floor only because
   that is when `GOTOOLCHAIN` — and therefore the ability to fetch — landed.
-- **TypeScript stays on 6.x, and the blocker is eslint — not the compiler.**
-  Worth stating precisely, because "TypeScript 7 doesn't work" is the wrong
-  summary. On TS 7: `npm ci` succeeds (npm warns `ERESOLVE overriding peer
-  dependency` and proceeds), `tsc --noEmit` is **clean**, and `npm run build`
-  **succeeds**. Only `npm run lint` fails, with an explicit refusal —
-  *"typescript-eslint does not support TS 7.0"*.
+- **TypeScript 7 and oxlint, not TypeScript 6 and ESLint.** The web tier runs
+  TypeScript 7 — the native Go compiler — everywhere: `npm run typecheck`, the
+  `next build` type pass, and editors. Nothing keeps a TS 6 around.
 
-  That refusal is deliberate. TS 7 is the **native Go rewrite**: a ~3.6 MB shim
-  around a platform binary, shipping `tsc` but no `tsserver`, so the JS
-  compiler API typescript-eslint is built on isn't there. typescript-eslint is
-  targeting **TS >= 7.1**, skipping 7.0 entirely
-  ([typescript-eslint#10940](https://github.com/typescript-eslint/typescript-eslint/issues/10940)),
-  and it reaches this repo only through `eslint-config-next`'s
-  `typescript-eslint ^8.46.0` — so it is not something a version bump here can
-  route around.
+  That required replacing ESLint, and it is worth recording why, because
+  "just upgrade TypeScript" does not work. On TS 7 `npm ci` succeeds,
+  `tsc --noEmit` is clean and `next build` succeeds — only ESLint failed, with
+  an explicit refusal: *"typescript-eslint does not support TS 7.0"*. TS 7 is
+  the native Go rewrite (a ~3.6 MB shim around a platform binary, shipping
+  `tsc` but no `tsserver`), so the JS compiler API typescript-eslint is built
+  on is not there. typescript-eslint targets TS >= 7.1, skipping 7.0
+  ([#10940](https://github.com/typescript-eslint/typescript-eslint/issues/10940)),
+  and reached this repo only via `eslint-config-next`. The documented
+  workaround — keep TS 6 for the linter, add TS 7 under an alias for
+  compilation — was rejected: two TypeScripts can disagree about the same code.
 
-  A side-by-side setup does work today, and is what the upstream error links
-  to: keep `typescript` at 6 for eslint and editors, add TS 7 under an npm
-  alias (`"typescript-7": "npm:typescript@^7"`) for compilation. Verified in
-  this repo — eslint green, native typecheck clean, and **~3.7× faster**
-  (3011 ms → 824 ms). It is deliberately **not** adopted: CI has no separate
-  `tsc` step (typechecking happens inside `next build`, which would still
-  resolve TS 6), so the speedup would apply to nothing CI runs, while adding a
-  second TypeScript that can disagree with the first about the same code. When
-  typescript-eslint ships >= 7.1 support this becomes an ordinary major bump;
-  the `ignore` in [`.github/dependabot.yml`](../.github/dependabot.yml) exists
-  only so Dependabot stops re-proposing it weekly until then.
+  [oxlint](https://oxc.rs) has no such coupling: it is a Rust linter with its
+  own TS parser, so the TypeScript version is irrelevant to it. Coverage was
+  compared rule by rule before switching, not assumed:
+
+  | plugin | eslint-config-next | oxlint |
+  | --- | --- | --- |
+  | nextjs | 22 | 21 |
+  | typescript | 20 | 39 |
+  | react (incl. hooks) | 33 | 42 |
+  | jsx-a11y | 6 | 35 |
+  | import | 1 | 8 |
+
+  The **one** rule lost is `@next/next/no-location-assign-relative-destination`
+  (using `window.location` for internal navigation). Its 17 findings were
+  long-standing warnings, and oxlint's `nextjs/no-html-link-for-pages` — which
+  it enforces more aggressively than ESLint's config did, catching 8 real cases
+  ESLint reported none of — covers the adjacent `<a href>` form of the same
+  mistake. Net coverage is up, and that single gap is the honest cost.
+
+  Two consequences to know:
+
+  - **`npm run lint` is no longer type-aware.** oxlint works on TS 7 precisely
+    because it does not use the type checker, so the type rules
+    `@typescript-eslint` used to contribute now come from `npm run typecheck`,
+    which is its own CI step ahead of the build. Types are still gated, just
+    by the compiler instead of the linter.
+  - **The `warn`-severity rules in `.oxlintrc.json` are a burn-down list, not
+    policy.** oxlint's a11y and Next coverage is far wider than the old gate's,
+    and turning it all on at `error` would have failed the build on ~121
+    pre-existing findings. They are set to `warn` so they are visible without
+    conflating "adopt TS 7" with "fix every a11y issue". Fixing them and
+    promoting each to `error` is follow-up work.
+
+  Measured on this app: lint **30,418 ms → 607 ms** (~50×), and the typecheck
+  step costs ~2 s.
+
 - **golangci-lint `v2.12.2`** — CI pins this exact binary version; a different
   version may flag or miss findings. [`.golangci.yml`](../.golangci.yml) no
   longer sets `run.go`: golangci-lint's documented default is the go.mod Go

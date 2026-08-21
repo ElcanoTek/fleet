@@ -19,6 +19,38 @@ prior versions are listed because none have shipped.
 
 ### Changed
 
+- **TypeScript 7 all the way down; ESLint replaced by oxlint** — the web tier now
+  runs TypeScript 7, the native Go compiler, everywhere: `npm run typecheck`,
+  the `next build` type pass, and editors. No TypeScript 6 is kept anywhere.
+  The blocker was never the compiler — on TS 7, `npm ci` succeeds,
+  `tsc --noEmit` is clean and `next build` succeeds; only ESLint failed, with an
+  explicit *"typescript-eslint does not support TS 7.0"*. TS 7 is the native
+  rewrite (a ~3.6 MB shim around a platform binary, `tsc` but no `tsserver`), so
+  the JS compiler API typescript-eslint is built on is absent; it targets
+  TS >= 7.1, skipping 7.0, and reached this repo only via `eslint-config-next`.
+  The documented side-by-side workaround (TS 6 for the linter, TS 7 aliased for
+  compilation) was rejected: two TypeScripts can disagree about the same code.
+  **oxlint** has no such coupling — a Rust linter with its own TS parser, so the
+  TypeScript version is irrelevant to it. Coverage was compared rule by rule
+  before switching: nextjs 22→21, typescript 20→39, react incl. hooks 33→42,
+  jsx-a11y 6→35, import 1→8. Exactly **one** rule is lost,
+  `no-location-assign-relative-destination`, whose 17 findings were
+  long-standing warnings — and oxlint's `no-html-link-for-pages` enforces the
+  adjacent `<a href>` mistake more aggressively, catching 8 real cases ESLint
+  reported none of. `npm run lint` is no longer type-aware (that is *why* it
+  works on TS 7), so the type rules `@typescript-eslint` used to contribute now
+  come from a dedicated **`npm run typecheck`** step that runs in CI ahead of
+  the build — types are still gated, by the compiler rather than the linter.
+  The `warn`-severity rules in `.oxlintrc.json` are an explicit burn-down list,
+  not policy: oxlint's a11y coverage is far wider than the old gate's and
+  erroring on all of it would have failed on ~121 pre-existing findings, so they
+  are visible without conflating "adopt TS 7" with "fix every a11y issue".
+  Measured: lint **30,418 ms → 607 ms (~50×)**, typecheck ~2 s, 1080/1080 tests.
+  **Both Dependabot `ignore` entries are gone** — the eslint-major and
+  typescript-major holds existed for the same reason (eslint-config-next pinning
+  plugins to peer `eslint <=9`, typescript-eslint refusing TS 7), so removing
+  ESLint removed the cause and both are ordinary updates again. There are now no
+  `ignore` entries anywhere in `.github/dependabot.yml`.
 - **Deleted the dead `web/scripts/` tree; Go to 1.26.7; Dependabot cadence** —
   three loose ends from the version audit. `web/scripts/` was an unreferenced
   8-file legacy deployment stack (its own `bootstrap.sh`, `update.sh`,
