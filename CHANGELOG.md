@@ -19,9 +19,61 @@ prior versions are listed because none have shipped.
 
 ### Changed
 
+- **Version-pin audit: one declaration point per tool, and it is now enforced by
+  a test** — a fan-out audit of the change above found the same pathology
+  everywhere else, plus real bugs in the node work itself.
+  *Consolidated:* Go was pinned `1.26.6` in **eight** functional places; the five
+  `go-version:` literals now read `go-version-file: go.mod` (two workflows
+  already did), and `.golangci.yml`'s `run.go` pin is deleted because
+  golangci-lint's documented default is already the go.mod version. `@types/node`
+  was `^26` against a node-24 runtime — its major tracks the runtime, so the app
+  was type-checked against API surface it does not have.
+  *Enforced:* new `scripts/check_versions_test.go` (runs in `make test`, same
+  idiom as the migration/grype linters) asserts `web/.nvmrc` agrees with both
+  `engines.node` blocks, `@types/node`, and the rampart Containerfile; that no
+  workflow carries a literal `node-version:`/`go-version:`; and that
+  twice-declared tool pins (Grype version+SHA, gitleaks, golangci-lint) match
+  across workflows. Each assertion was mutation-tested.
+  *Bugs fixed in the node change before it shipped:* the web build ran on
+  whatever `node` PATH resolved to — npm's shebang is `#!/usr/bin/env node` — so
+  bootstrap/update printed "will run node 24" and built on 22; `bootstrap.sh`
+  asked for the unversioned `npm` package, dragging the old stream back onto the
+  box, and `doctor.sh` did the same via `npm) pkg=nodejs`; the shim was installed
+  *after* the build, so a failed build on a fresh box left the unit pointing at a
+  non-existent ExecStart (a permanent 203/EXEC loop under `Restart=always`);
+  `upsert_web_env` corrupted any env file lacking a trailing newline, destroying
+  `NODE_ENV` and never setting the key; it rewrote only the *first* duplicate of
+  a key while systemd's `EnvironmentFile` is last-wins, so the check passed
+  forever while the box used a stale value; `resolve_node_bin` claimed to find
+  the "newest" node but matched only the exact major, refusing to deploy on a box
+  with a *newer* one; an unreadable `.nvmrc` silently defaulted to a hardcoded
+  `24`; and `update.sh` aborted with "nothing was changed" after already
+  rebuilding and installing binaries — that gate now runs before the first side
+  effect. The three copies of the resolver are now one
+  `scripts/lib/node-version.sh`. bootstrap and update now assert the **resolved**
+  `ExecStart` before reporting success, since neither installs a drifted unit.
+  *Dependabot:* three genuinely uncovered manifests are now watched —
+  `scripts/rampart-service/package.json` (two `^` ranges, no lockfile, and an
+  unpinned `npm install` at image build time) and both `Containerfile`s. Podman's
+  `Containerfile` name **is** supported (dependabot-core matches
+  `/dockerfile|containerfile/i`), contrary to most published advice. Added a
+  `typescript` major-ignore mirroring eslint's — `typescript-eslint`'s peer range
+  is `>=4.8.4 <6.1.0`, so a TS 7 PR is unmergeable and would have been reproposed
+  weekly. `semver-major-days` cut from 14 to 7: majors are never auto-merged, so
+  the cooldown delayed visibility without protecting anything.
+  *EOL and stale:* Grype `0.115.0` → `0.117.0` (checksum taken from the release's
+  own checksums file and verified against the downloaded artifact — a CVE scanner
+  should not be the stalest tool in the pipeline); `fedora:41` (EOL 2025-12-15) →
+  `44`, `nginx:1.27-alpine` (EOL 2025-06-24) → `1.30-alpine`, and
+  `grafana/grafana:11` (EOL 2026-06-25) → `13` in operator-pasteable docs; the
+  obsolete `sharp` override is dropped (Next's own `^0.35.3` is *stricter*, so
+  ours could only ever loosen it — verified by resolving to the same 0.35.3
+  without it) while the `postcss` override stays, re-documented, because it is
+  what unpins Next's exact `8.5.23`. Three contributor docs still said "Node.js
+  22" — one of them promising it matched CI — and now point at `web/.nvmrc`.
 - **node 24 everywhere, declared once** — the repo targeted three different node
-  versions at the same time: CI pinned `'22'` as a literal in **six** workflow
-  files, `scripts/doctor.sh`'s floor said `20`, and the box ran whatever
+  versions at the same time: CI pinned `'22'` as a literal across **six jobs in
+  four** workflow files, `scripts/doctor.sh`'s floor said `20`, and the box ran whatever
   `dnf install nodejs` happened to mean. Nothing reconciled them, and Dependabot
   could never have caught it (it updates action *refs*, not the inputs passed to
   them, and nothing it watches covers an OS package — `.github/dependabot.yml`

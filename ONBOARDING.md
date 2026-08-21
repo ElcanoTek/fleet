@@ -31,9 +31,9 @@ them so a local run agrees with the gate.
 
 | Tool | Version | Why |
 | --- | --- | --- |
-| **Go** | **1.21 or newer** — you do *not* need the pinned patch release (currently **1.26.6**) | the backend; CI uses `go-version: 1.26.6`. The Makefile exports `GOTOOLCHAIN=auto`, so `make build` fetches the pinned toolchain itself — a distro Go that lags `go.mod` is fine, it just needs to be new enough (1.21+) to do the fetch |
-| **Node.js** | **22** + npm | the `web/` Next.js app; CI uses `node-version: 22` |
-| **golangci-lint** | **v2.12.2** | the lint gate (`.golangci.yml` is the v2 schema and is tuned to this version — keep them in sync) |
+| **Go** | **1.21 or newer** — you do *not* need the pinned patch release (currently **1.26.6**) | the backend; CI reads `go-version-file: go.mod`, so `go.mod` is the one declaration. The Makefile exports `GOTOOLCHAIN=auto`, so `make build` fetches the pinned toolchain itself — a distro Go that lags `go.mod` is fine, it just needs to be new enough (1.21+) to do the fetch |
+| **Node.js** | the major in [`web/.nvmrc`](web/.nvmrc) (currently **24**) + npm | the `web/` Next.js app. CI reads that same file via `node-version-file`, so there is one declaration and nothing to keep in sync by hand |
+| **golangci-lint** | **v2.12.2** | the lint gate. `.golangci.yml` no longer pins `run.go` — golangci-lint defaults to the go.mod version — so only the binary version is pinned, in CI |
 | **Podman** (rootless) | recent | the execution sandbox; needed for the sandbox-backed tests / first chat turn. Most unit tests self-skip when podman is absent. |
 | **PostgreSQL** | a local cluster you can create DBs on | the chat/scheduler store suites |
 | **python3** | system | host-side Python MCP + the sandbox build |

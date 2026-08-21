@@ -160,7 +160,7 @@ services:
       - "9090:9090"
 
   grafana:
-    image: grafana/grafana:11
+    image: grafana/grafana:13
     environment:
       GF_AUTH_ANONYMOUS_ENABLED: "true"
       GF_AUTH_ANONYMOUS_ORG_ROLE: Admin

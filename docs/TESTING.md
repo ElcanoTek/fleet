@@ -91,13 +91,16 @@ image); run them via the `npm` scripts documented below.
 ## Prerequisites
 
 - **Go** — 1.21 or newer. You do not need the exact patch release pinned in
-  `go.mod` (CI uses `1.26.6`): the Makefile exports `GOTOOLCHAIN=auto`, so the
+  `go.mod` (CI reads `go-version-file: go.mod`): the Makefile exports
+  `GOTOOLCHAIN=auto`, so the
   pinned toolchain is downloaded on demand. 1.21 is the floor only because
   that is when `GOTOOLCHAIN` — and therefore the ability to fetch — landed.
-- **golangci-lint `v2.12.2`** — CI pins this exact version (it matches
-  `run.go` in [`.golangci.yml`](../.golangci.yml)); a different version may flag
-  or miss findings.
-- **Node.js 22** and npm for the `web/` lanes.
+- **golangci-lint `v2.12.2`** — CI pins this exact binary version; a different
+  version may flag or miss findings. [`.golangci.yml`](../.golangci.yml) no
+  longer sets `run.go`: golangci-lint's documented default is the go.mod Go
+  version, so that stays a single declaration too.
+- **Node.js** — the major in [`web/.nvmrc`](../web/.nvmrc) (currently 24) — and npm, for the
+  `web/` lanes. CI reads the same file via `node-version-file`.
 - **PostgreSQL 18** for the Go suites that touch the chat/scheduler stores. CI
   uses the `postgres:18` service container.
 - **Podman (rootless) + pasta** for the live e2e and sandbox-invariant tests.

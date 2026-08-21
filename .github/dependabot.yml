@@ -25,13 +25,23 @@ version: 2
 # The node RUNTIME major is not a dependency any of the three surfaces below can
 # see, so Dependabot never proposed the 22 → 24 move and never will:
 #
-#   * `github-actions` updates ACTION REFS (actions/setup-node@v6 → @v7). The
-#     `node-version:` value passed TO an action is a workflow input, not a
-#     dependency — so six workflow files sat pinned at '22' with nothing
-#     watching them. They now read `node-version-file: web/.nvmrc` instead, so
-#     the major is declared in exactly one reviewable place.
-#   * `npm` updates packages in web/package.json. The node interpreter is not
-#     one of them, and `engines.node` is a constraint Dependabot does not bump.
+#   * `github-actions` updates ACTION REFS (actions/setup-node@v6 → @v7) and
+#     reusable-workflow refs. Anything passed as an INPUT to an action is a
+#     workflow value, not a dependency: dependabot-core's github_actions parser
+#     collects `uses:` strings and reads nothing else — not `with:`, not
+#     `services.*.image`, not `env:`. That blind spot is a CLASS, not one bug:
+#     `node-version:` sat pinned at '22' in six jobs across four files,
+#     `go-version:` in five,
+#     and `postgres:18` / the gitleaks + grype / golangci-lint binary pins are
+#     in it today. The only defence is a single declaration point — node reads
+#     web/.nvmrc, Go reads go.mod. Add new pins the same way.
+#   * `npm` updates packages in a package.json. The node interpreter is not one
+#     of them, and `engines.node` is a constraint Dependabot does not bump. The
+#     Go equivalent: the `go` directive in go.mod is not updated either
+#     (dependabot-core#9527), so the toolchain version is ours to move.
+#     One exception now exists: the `docker` entry below DOES see the node base
+#     image in scripts/rampart-service/Containerfile, so a node major CAN be
+#     proposed — for that container only, not for the web tier or the box.
 #   * Nothing covers the box's `nodejs` RPM — that is dnf's business, and
 #     scripts/bootstrap.sh + scripts/doctor.sh now install the versioned
 #     `nodejs<major>` package read from the same web/.nvmrc.
@@ -56,7 +66,12 @@ updates:
     # tightest gate because auto-merge-dependabot.yml auto-merges patch bumps.
     cooldown:
       default-days: 7
-      semver-major-days: 14
+      # 7, not 14: the supply-chain argument in the header is about the
+      # AUTO-MERGE path, and auto-merge-dependabot.yml merges patch only —
+      # a major is never auto-merged, so delaying it protects nothing and
+      # costs up to 14 days of visibility (cooldown + the weekly interval)
+      # before anyone even learns the major exists.
+      semver-major-days: 7
       semver-minor-days: 7
       semver-patch-days: 3
     commit-message:
@@ -81,7 +96,12 @@ updates:
     # Same supply-chain cooldown as gomod (see header).
     cooldown:
       default-days: 7
-      semver-major-days: 14
+      # 7, not 14: the supply-chain argument in the header is about the
+      # AUTO-MERGE path, and auto-merge-dependabot.yml merges patch only —
+      # a major is never auto-merged, so delaying it protects nothing and
+      # costs up to 14 days of visibility (cooldown + the weekly interval)
+      # before anyone even learns the major exists.
+      semver-major-days: 7
       semver-minor-days: 7
       semver-patch-days: 3
     commit-message:
@@ -99,6 +119,80 @@ updates:
       # support, then drop this ignore and take the major deliberately.
       - dependency-name: "eslint"
         update-types: ["version-update:semver-major"]
+      # typescript 7 is blocked UPSTREAM by the same package as eslint 10:
+      # eslint-config-next (Next 16) depends on typescript-eslint ^8.x, whose
+      # peer range is `typescript >=4.8.4 <6.1.0` — verified against the
+      # installed tree and the latest 8.x, so it excludes not just 7.x but even
+      # 6.1. Without this ignore Dependabot re-proposes an unmergeable TS 7
+      # major every week. Drop it when typescript-eslint widens the peer range.
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
+
+  # Reference Rampart PII service (scripts/rampart-service/package.json).
+  # This was the one genuinely unwatched manifest in the repo: two `^` ranges
+  # and NO lockfile, while its Containerfile runs an unpinned
+  # `npm install --omit=dev` at build time — so the manifest is the only pin
+  # the service has, and nothing was looking at it.
+  #
+  # Know what a green build means here: no CI job exercises this service, and
+  # `@nationaldesignstudio/rampart` is pre-1.0 (^0.1.3), where a MINOR bump is
+  # allowed to break. Auto-merge cannot touch these (it gates on patch only),
+  # so they land in human review — which is the right outcome, not a gap.
+  - package-ecosystem: npm
+    directory: "/scripts/rampart-service"
+    schedule:
+      interval: weekly
+    target-branch: dev
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
+      semver-major-days: 7
+      semver-minor-days: 7
+      semver-patch-days: 3
+    commit-message:
+      prefix: "deps(rampart)"
+    groups:
+      rampart-minor-patch:
+        update-types:
+          - minor
+          - patch
+
+  # Container base images.
+  #
+  # Podman-native `Containerfile` IS supported, despite a lot of stale advice
+  # to the contrary: dependabot-core's docker file fetcher matches
+  # DOCKER_REGEXP = /dockerfile|containerfile/i (verified against
+  # dependabot-core main; the "support Containerfile" issue #6067 is closed).
+  #
+  # `directories` (not `directory`) because only the plural form takes a list.
+  # Docker supports cooldown `default-days` only — the semver-*-days keys are
+  # not supported for this ecosystem, so they are deliberately absent.
+  #
+  # Honest expectations for the two files covered:
+  #   * scripts/rampart-service/Containerfile — node:24-slim. Comparable tag, so
+  #     this WILL open PRs, including a node:25-slim major when 25 ships. 25 is
+  #     odd = Current, which this repo does not run (see the LTS rule below), so
+  #     the intended handling is to read that PR as the notification it is and
+  #     close it. No `ignore` is configured: the docker ignore syntax wants the
+  #     registry-stripped repository name, and shipping an unverified guess that
+  #     silently matches nothing would be worse than closing one PR a year.
+  #   * config/default/sandbox/Containerfile — fedora-minimal:latest. A
+  #     non-comparable tag short-circuits the update checker
+  #     (`return true unless version_tag.comparable?`), so this will produce NO
+  #     PRs at all. It is listed anyway so coverage already exists the day
+  #     someone pins a digest, as that file's own header contemplates.
+  - package-ecosystem: docker
+    directories:
+      - "/config/default/sandbox"
+      - "/scripts/rampart-service"
+    schedule:
+      interval: weekly
+    target-branch: dev
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: "deps(image)"
 
   # GitHub Actions referenced by .github/workflows/*.
   - package-ecosystem: github-actions

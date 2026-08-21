@@ -31,8 +31,7 @@
   },
   "overrides": {
     "next": {
-      "postcss": "^8.5.18",
-      "sharp": "^0.35.0"
+      "postcss": "^8.5.18"
     }
   },
   "devDependencies": {
@@ -41,7 +40,7 @@
     "@testing-library/jest-dom": "^7.0.0",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.3",
-    "@types/node": "^26",
+    "@types/node": "^24",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@types/react-syntax-highlighter": "^15.5.13",

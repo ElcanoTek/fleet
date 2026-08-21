@@ -216,7 +216,7 @@ RUN go mod download
 COPY . .
 RUN make build            # → ./fleet and ./fleet-admin
 
-FROM fedora:41
+FROM fedora:44
 # podman + the rootless stack fleet actually invokes; curl for the exec probes (§7).
 # Install BOTH rootless network helpers: passt/pasta is podman >= 5.0's default
 # (normal turns), and slirp4netns is required by the allowlisted-egress posture —
@@ -793,7 +793,7 @@ Operator) or your scrape config at port 9090:
 
 ```yaml
         - name: metrics-proxy
-          image: nginx:1.27-alpine
+          image: nginx:1.30-alpine
           ports: [{ name: metrics, containerPort: 9090 }]
           # nginx.conf (mount from a ConfigMap):
           #   server { listen 9090;

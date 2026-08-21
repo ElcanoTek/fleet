@@ -250,7 +250,8 @@ The major is declared **once**, in `web/.nvmrc`:
 | `scripts/update.sh` | refuses to build the web tier on an older node; refreshes the shim + `FLEET_NODE_BIN` |
 | `web/package.json` | `engines.node` |
 
-Before this, CI pinned `'22'` as a literal in six workflow files while
+Before this, CI pinned `'22'` as a literal in six jobs across four workflow
+files while
 `doctor.sh`'s floor said `20` and the box ran whatever `dnf install nodejs`
 meant; nothing reconciled the three. Dependabot could never have caught that
 drift — it updates action *refs*, not the inputs passed to them, and nothing it

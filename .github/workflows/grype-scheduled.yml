@@ -40,8 +40,8 @@ jobs:
         # Pinned + checksum-verified, exactly like the per-PR gate in ci.yml.
         # Keep GRYPE_VERSION + GRYPE_SHA256 in sync with that job.
         env:
-          GRYPE_VERSION: '0.115.0'
-          GRYPE_SHA256: '3fad92940650e514c0aa2dad83526942a055e210cec09a8a59d9c024adc2b90e'
+          GRYPE_VERSION: '0.117.0'
+          GRYPE_SHA256: '38525dab1e06f162ebaa02f94d82d1f807076b011a44180cf2777edf1a7b9c26'
         run: |
           set -euo pipefail
           tarball="grype_${GRYPE_VERSION}_linux_amd64.tar.gz"

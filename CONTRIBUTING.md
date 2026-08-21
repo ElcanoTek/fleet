@@ -29,7 +29,7 @@ removed.)
 ## Prerequisites
 
 - **Go** — the version pinned in `go.mod` (currently 1.26.x).
-- **Node.js 22** and npm for the `web/` app.
+- **Node.js** — the major in [`web/.nvmrc`](web/.nvmrc) (currently 24) — and npm, for the `web/` app.
 - **Podman** (rootless) for the execution sandbox — only needed to run the
   sandbox-backed tests/e2e locally; most unit tests self-skip when podman is
   absent.
