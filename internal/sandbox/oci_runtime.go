@@ -369,6 +369,23 @@ func kataOverheadMB() int {
 	return DefaultKataOverheadMB
 }
 
+// ParseMemoryLimitBytes parses a Podman/Docker --memory string into bytes. It
+// is the exported face of parseMemoryToBytes for callers outside this package
+// that need to reason about the configured limit — e.g. the boot-time check
+// that PersistentMaxSessions x MemoryLimit does not oversubscribe host RAM.
+// Exported as a wrapper rather than by renaming so the Kata sizing path keeps
+// its unexported, package-local call.
+func ParseMemoryLimitBytes(s string) (uint64, error) {
+	n, err := parseMemoryToBytes(s)
+	if err != nil {
+		return 0, err
+	}
+	if n < 0 {
+		return 0, fmt.Errorf("negative memory value %q", s)
+	}
+	return uint64(n), nil
+}
+
 // parseMemoryToBytes parses a Podman/Docker --memory string into bytes. Two
 // traps this gets right:
 //

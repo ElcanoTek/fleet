@@ -519,8 +519,8 @@ func (r *Runner) Run(ctx context.Context, task *models.Task) (*models.LogSession
 	// minutes), and arming the delay timer up-front would let a delay shorter than
 	// the run delete the worktree out from under the live agent. With the defer,
 	// cleanup_delay_seconds is the post-run inspection window the docs promise.
-	// (A process crash before this defer leaves an orphan, reclaimed by
-	// `fleet-admin worktree prune`.)
+	// (A process crash before this defer leaves an orphan, reclaimed by the
+	// server's maintenance loop or `fleet worktree prune`.)
 	if wc := task.WorktreeConfig; wc != nil && wc.Enabled && wc.AutoCleanup {
 		defer func() {
 			if wc.CleanupDelaySeconds > 0 {

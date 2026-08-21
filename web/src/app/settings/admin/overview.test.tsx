@@ -34,6 +34,15 @@ const SUMMARY = {
   ],
   conversations_active: 2,
   sandbox_pool: { size: 3, available: 1 },
+  disk: {
+    available: true,
+    path: "/var/lib/fleet",
+    total_bytes: 107374182400,
+    free_bytes: 64424509440,
+    free_percent: 60,
+    min_free_percent: 5,
+    shedding: false,
+  },
   memory_mb: 256,
   goroutines: 73,
 };
@@ -96,6 +105,51 @@ describe("AdminOverviewPage system health", () => {
     expect(panel).toHaveTextContent("1/3"); // sandbox pool available/size
     expect(panel).toHaveTextContent("256 MB");
     expect(panel).toHaveTextContent("73 goroutines");
+    expect(panel).toHaveTextContent("60.0% free"); // disk headroom
+  });
+
+  it("spells out that a shedding disk has paused scheduled tasks", async () => {
+    // The one disk state a percentage alone would not communicate: the box has
+    // already stopped claiming scheduled work, and because chat keeps serving,
+    // nothing else on this page would say so.
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({
+        summary: {
+          ...SUMMARY,
+          disk: { ...SUMMARY.disk, free_percent: 2, shedding: true },
+        },
+      }),
+    );
+    render(<AdminOverviewPage />);
+
+    const panel = await screen.findByTestId("health-panel");
+    expect(panel).toHaveTextContent("2.0% free");
+    expect(panel).toHaveTextContent("below the 5% floor — scheduled tasks paused");
+  });
+
+  it("reports an unmeasurable disk without claiming a number", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({
+        summary: {
+          ...SUMMARY,
+          disk: { ...SUMMARY.disk, available: false, shedding: false, error: "statfs: permission denied" },
+        },
+      }),
+    );
+    render(<AdminOverviewPage />);
+
+    const panel = await screen.findByTestId("health-panel");
+    expect(panel).toHaveTextContent("statfs: permission denied");
+  });
+
+  it("omits the disk card when no guard is wired", async () => {
+    vi.stubGlobal("fetch", mockFetch({ summary: { ...SUMMARY, disk: null } }));
+    render(<AdminOverviewPage />);
+
+    const panel = await screen.findByTestId("health-panel");
+    expect(panel).not.toHaveTextContent("% free");
   });
 
   it("falls back to a single unavailable Tasks card when workers is null", async () => {

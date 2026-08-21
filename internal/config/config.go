@@ -199,12 +199,17 @@ var allowedEnvVars = map[string]bool{
 	"FLEET_MAX_CONCURRENT_AGENTS":          true,
 	"FLEET_TASK_WALL_TIMEOUT":              true,
 	"FLEET_RUN_LOG_RETENTION_DAYS":         true,
-	"FLEET_KEEP_RUNS_PER_TASK":             true,
-	"FLEET_TASK_MEMORY_MAX_KEYS":           true,
-	"FLEET_TASK_MEMORY_MAX_VALUE_BYTES":    true,
-	"FLEET_CLEANUP_HOUR":                   true,
-	"LLM_MAX_TOKENS":                       true,
-	"FLEET_MAX_TOOL_OUTPUT_BYTES":          true,
+	"FLEET_WORKTREE_PRUNE_AGE":             true,
+	"FLEET_DISK_MIN_FREE_PERCENT":          true,
+	// Read by internal/httpapi directly (not the loader), but listed so an
+	// operator can set it in FLEET_ENV_FILE like every other knob.
+	"FLEET_MAINTENANCE_MIN_INTERVAL":    true,
+	"FLEET_KEEP_RUNS_PER_TASK":          true,
+	"FLEET_TASK_MEMORY_MAX_KEYS":        true,
+	"FLEET_TASK_MEMORY_MAX_VALUE_BYTES": true,
+	"FLEET_CLEANUP_HOUR":                true,
+	"LLM_MAX_TOKENS":                    true,
+	"FLEET_MAX_TOOL_OUTPUT_BYTES":       true,
 
 	// ── process log file sink (#298) — opt-in rotating file, default OFF ──
 	"FLEET_LOG_FILE":         true,
@@ -880,6 +885,28 @@ type Config struct {
 	// CleanupHour is the UTC hour (0–23) the daily retention sweep runs. Default 4.
 	CleanupHour int
 
+	// ── host reclamation + disk backpressure ──
+	// WorktreePruneAge is how old an orphaned per-run git worktree directory
+	// must be before the maintenance loop reclaims it
+	// (FLEET_WORKTREE_PRUNE_AGE, default 24h; 0 disables the sweep).
+	//
+	// Age is the only signal available — a worktree belonging to a running task
+	// is indistinguishable from one a crash abandoned — so the default is
+	// deliberately longer than the default task wall-clock ceiling (4h). Lower
+	// it only on a box whose tasks are known to be short.
+	WorktreePruneAge time.Duration
+	// DiskMinFreePercent is the free-space floor, as a percentage of the
+	// filesystem holding the data dir, below which the box sheds BACKGROUND
+	// load: scheduled tasks stop being claimed and /healthz reports degraded,
+	// while interactive chat keeps working (FLEET_DISK_MIN_FREE_PERCENT,
+	// default 5; 0 disables the check).
+	//
+	// Shedding scheduled work rather than everything is the point: a full disk
+	// is usually produced by unattended runs, and stopping them is what gives
+	// an operator room to intervene through the very chat interface they would
+	// otherwise have lost.
+	DiskMinFreePercent int
+
 	// ── task priority queues: anti-starvation (#230) ──
 	// TaskStarvationWindowMinutes promotes a pending task that has waited longer
 	// than this (and is still less urgent than the High floor) up to High, so a
@@ -1442,6 +1469,10 @@ func Load(envFile string) (*Config, error) {
 		// ── agent self-improvement: persistent task memory (#198, #285) ──
 		TaskMemoryMaxKeys:       lp.getenvFleetInt("TASK_MEMORY_MAX_KEYS", 100),
 		TaskMemoryMaxValueBytes: lp.getenvFleetInt("TASK_MEMORY_MAX_VALUE_BYTES", 4096),
+
+		// ── host reclamation + disk backpressure ──
+		WorktreePruneAge:   lp.getenvFleetDuration("WORKTREE_PRUNE_AGE", 24*time.Hour),
+		DiskMinFreePercent: lp.getenvFleetInt("DISK_MIN_FREE_PERCENT", 5),
 
 		// ── run-history retention (#252) ──
 		RunLogRetentionDays: lp.getenvFleetInt("RUN_LOG_RETENTION_DAYS", 90),

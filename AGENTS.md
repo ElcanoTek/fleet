@@ -189,6 +189,10 @@ same PR.
 - **Task notifications** (email/webhook channels, the admin Notifications
   panel with sealed write-only secrets + test sends, env precedence):
   [`docs/NOTIFICATIONS.md`](docs/NOTIFICATIONS.md)
+- **Reclamation, disk backpressure & stuck-task backstops** (the one hourly
+  maintenance loop, the daily `fleet-maintenance.timer`, the free-space floor
+  that sheds scheduled work while chat keeps serving, and the terminal backstop
+  for every way a task can stall): [`docs/MAINTENANCE.md`](docs/MAINTENANCE.md)
 - **Load testing & benchmarks** (`fleet-bench` HTTP chat load via the fake-LLM
   seam + subsystem throughput benchmarks): [`docs/LOAD-TESTING.md`](docs/LOAD-TESTING.md)
 - **Prompt-cache prefix-stability contract** (what must stay byte-stable in the

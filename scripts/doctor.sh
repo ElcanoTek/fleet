@@ -47,6 +47,8 @@ WEB_ENV_FILE="/etc/fleet/fleet-web.env"
 # internal/boxdoctor probes the same two.
 BACKUP_SERVICE="fleet-backup.service"
 BACKUP_TIMER="fleet-backup.timer"
+MAINT_SERVICE="fleet-maintenance.service"
+MAINT_TIMER="fleet-maintenance.timer"
 
 # Node floor: Next.js 16 (web/) requires Node >= 20; Fedora's repo nodejs
 # satisfies it. Doctor upgrades via dnf only — fleet does not use NodeSource.
@@ -75,9 +77,10 @@ fleet-critical package currency (podman/crun/passt/conmon/...), the rootless-
 podman prerequisites of the fleet service user (subuid/subgid, /var/lib/fleet
 ownership, containers.conf, stale pause namespaces), systemd unit drift vs
 deploy/, the 0600 env files, service health (postgresql, fleet, fleet-web,
-caddy), the /healthz + /readyz probes, the scheduled-backup timer, and a
-sandbox smoke (podman run as the fleet user). Reports when the source checkout
-is behind upstream but never pulls or rebuilds — that stays `fleet update`.
+caddy), the /healthz + /readyz probes, the scheduled-backup and host-maintenance
+timers, free disk on the data dir + image store, and a sandbox smoke (podman run
+as the fleet user). Reports when the source checkout is behind upstream but never
+pulls or rebuilds — that stays `fleet update`.
 
 `fleet status` is the quick read-only in-process report; doctor is the deep
 box-level pass with repairs.
@@ -140,10 +143,10 @@ if [[ "$DRY_RUN" == "1" ]]; then
   info "[dry-run] 1/9 Toolchain: node >= ${NODE_FLOOR} (dnf upgrade nodejs), go/git/curl/jq/podman/psql/npm present (dnf install)"
   info "[dry-run] 2/9 Package currency: disable broken dnf repos; dnf upgrade fleet-critical packages (podman crun passt conmon containers-common golang nodejs caddy)"
   info "[dry-run] 3/9 Rootless podman: ${SERVICE_USER} user + subuid/subgid ranges, ${SERVICE_HOME} + ~/.config/containers ownership, containers.conf (cgroupfs), /run/${SERVICE_USER}, podman system migrate, podman info as ${SERVICE_USER}"
-  info "[dry-run] 4/9 Installed artifacts: ${SERVICE_NAME}.service + fleet-web.service + the fleet-backup service/timer functional drift vs ${SRC_DIR}/deploy (reinstall + daemon-reload), /usr/local/bin/fleet symlink → ${INSTALL_DIR}/fleet, binaries present"
+  info "[dry-run] 4/9 Installed artifacts: ${SERVICE_NAME}.service + fleet-web.service + the fleet-backup and fleet-maintenance service/timer pairs' functional drift vs ${SRC_DIR}/deploy (reinstall + daemon-reload), /usr/local/bin/fleet symlink → ${INSTALL_DIR}/fleet, binaries present"
   info "[dry-run] 5/9 Configuration: ${ENV_FILE} exists root-owned 0600 with OPENROUTER_API_KEY + DB DSNs; ${WEB_ENV_FILE} 0600 when fleet-web is installed"
   info "[dry-run] 6/9 Services: ${SERVICE_NAME} active; postgresql/fleet-web/caddy active when enabled (systemctl start), then /healthz + /readyz respond"
-  info "[dry-run] 7/9 Scheduled backups: ${BACKUP_TIMER} installed + enabled + active (advisory when absent), and ${BACKUP_SERVICE}'s last run succeeded"
+  info "[dry-run] 7/9 Scheduled maintenance: ${BACKUP_TIMER} installed + enabled + active (advisory when absent) and ${BACKUP_SERVICE}'s last run succeeded; ${MAINT_TIMER} likewise; free space on the data dir + the podman image store above the disk floor"
   info "[dry-run] 8/9 Sandbox smoke: podman run --rm --network=none <sandbox image> true as ${SERVICE_USER}"
   info "[dry-run] 9/9 Source freshness: report commits behind upstream (fix stays 'fleet update' — doctor never pulls or rebuilds)"
   info "[dry-run] would restart ${SERVICE_NAME} + fleet-web after a toolchain/package upgrade or an app-unit reinstall above — a reinstalled fleet-backup unit does not bounce the app (unless --no-restart)"
@@ -387,7 +390,7 @@ units_changed=0
 if ! command -v systemctl >/dev/null 2>&1; then
   advise "no systemd on this host — skipping unit checks"
 else
-  for unit in "${SERVICE_NAME}.service" fleet-web.service "$BACKUP_SERVICE" "$BACKUP_TIMER"; do
+  for unit in "${SERVICE_NAME}.service" fleet-web.service "$BACKUP_SERVICE" "$BACKUP_TIMER" "$MAINT_SERVICE" "$MAINT_TIMER"; do
     src="$SRC_DIR/deploy/$unit"
     # The generic service name is fleet; a renamed unit has no shipped file.
     [[ "$unit" == "${SERVICE_NAME}.service" && ! -f "$src" ]] && src="$SRC_DIR/deploy/fleet.service"
@@ -403,7 +406,7 @@ else
       # (with the "you may back up at the volume layer" caveat), so saying it
       # here as well would double-count one gap as two advisories.
       case "$unit" in
-        "$BACKUP_SERVICE"|"$BACKUP_TIMER") ;;
+        "$BACKUP_SERVICE"|"$BACKUP_TIMER"|"$MAINT_SERVICE"|"$MAINT_TIMER") ;;
         *) advise "$unit not installed (scripts/bootstrap.sh --enable-service installs it)" ;;
       esac
       continue
@@ -418,11 +421,11 @@ else
       install -m 0644 "$src" "$dst"
       fixed "$unit reinstalled from deploy/"
       # Only the app units want a process restart, which is user-visible chat
-      # downtime. Neither backup unit touches the running server: the oneshot
-      # runs only when the timer fires it, and the daemon-reload after this loop
+      # downtime. None of the timer units touch the running server: each oneshot
+      # runs only when its timer fires it, and the daemon-reload after this loop
       # is all systemd needs to pick up a rewritten timer's schedule.
       case "$unit" in
-        "$BACKUP_SERVICE"|"$BACKUP_TIMER") ;;
+        "$BACKUP_SERVICE"|"$BACKUP_TIMER"|"$MAINT_SERVICE"|"$MAINT_TIMER") ;;
         *) restart_needed=1 ;;
       esac
       units_changed=1
@@ -569,8 +572,8 @@ for probe in healthz readyz; do
   fi
 done
 
-# ── 7. scheduled backups ─────────────────────────────────────────────────────
-step "7/9  Scheduled backups"
+# ── 7. scheduled maintenance + disk headroom ─────────────────────────────────
+step "7/9  Scheduled maintenance + disk headroom"
 
 # An ABSENT timer is an advisory, never a failure, and doctor does not install
 # it: a same-host pg_dump protects against logical loss, but an operator who
@@ -609,6 +612,61 @@ else
     pass "${BACKUP_TIMER} enabled and active, no failed run recorded"
   fi
 fi
+
+# The host-maintenance pair: same posture as the backup timer above — absent is
+# an advisory (an operator may prune their container store another way), a
+# FAILED last run is a genuine fault, because the thing it prunes (dangling
+# sandbox image layers, ~1.3 GB per rebuild) accumulates silently until the disk
+# check below starts failing.
+if command -v systemctl >/dev/null 2>&1; then
+  if ! systemctl cat "$MAINT_TIMER" >/dev/null 2>&1; then
+    advise "no ${MAINT_TIMER} + ${MAINT_SERVICE} pair installed — nothing prunes stale podman image layers on this box; install it with: install -m 0644 -t /etc/systemd/system ${SRC_DIR}/deploy/fleet-maintenance.{service,timer} && systemctl daemon-reload && systemctl enable --now ${MAINT_TIMER} (ignore this if you prune the container store yourself)"
+  elif ! systemctl is-enabled --quiet "$MAINT_TIMER" 2>/dev/null; then
+    advise "${MAINT_TIMER} is installed but NOT enabled — it will not fire: systemctl enable --now ${MAINT_TIMER}"
+  elif ! systemctl is-active --quiet "$MAINT_TIMER" 2>/dev/null; then
+    advise "${MAINT_TIMER} is enabled but not active — it will not fire until it is started: systemctl start ${MAINT_TIMER}"
+  else
+    maint_result="$(systemctl show -p Result --value "$MAINT_SERVICE" 2>/dev/null || true)"
+    if [[ -n "$maint_result" && "$maint_result" != "success" ]]; then
+      fail "${MAINT_SERVICE} last run FAILED (Result=${maint_result}) — stale image layers are accumulating: journalctl -u ${MAINT_SERVICE%.service} -n 50"
+    else
+      pass "${MAINT_TIMER} enabled and active, no failed run recorded"
+    fi
+  fi
+fi
+
+# Disk headroom. Thresholds mirror internal/boxdoctor's checkDisk (85% warn /
+# 95% fail) so the box-level pass and the in-process /admin/doctor report reach
+# the same verdict, and both name the same remedy. Measured on the two trees
+# that actually fill: the data dir (databases, uploads, workspaces) and the
+# service user's rootless image store.
+disk_floor="$(env_get FLEET_DISK_MIN_FREE_PERCENT)"
+disk_floor="${disk_floor:-5}"
+check_disk_headroom() {
+  local label="$1" path="$2" used avail
+  [[ -d "$path" ]] || return 0
+  # df -P keeps the POSIX single-line format regardless of long device names.
+  used="$(df -P "$path" 2>/dev/null | awk 'NR==2 {gsub(/%/,"",$5); print $5}')"
+  avail="$(df -Ph "$path" 2>/dev/null | awk 'NR==2 {print $4}')"
+  [[ -n "$used" ]] || { advise "could not measure free space on ${path}"; return 0; }
+  if   (( used >= 95 )); then
+    fail "${label} (${path}) is ${used}% full, ${avail} free — run: sudo fleet cleanup, and check 'systemctl status ${MAINT_TIMER}'"
+  elif (( used >= 85 )); then
+    advise "${label} (${path}) is ${used}% full, ${avail} free — consider: sudo fleet cleanup"
+  else
+    pass "${label} (${path}) ${used}% full, ${avail} free"
+  fi
+  # Below the CONFIGURED floor the running process stops claiming scheduled
+  # tasks (FLEET_DISK_MIN_FREE_PERCENT), which is a different and more urgent
+  # statement than "the disk is getting full" — say it explicitly.
+  if [[ "$disk_floor" =~ ^[0-9]+$ ]] && (( disk_floor > 0 && 100 - used < disk_floor )); then
+    fail "${label} is below the configured ${disk_floor}% free floor — fleet is HOLDING BACK scheduled tasks until space is reclaimed (FLEET_DISK_MIN_FREE_PERCENT)"
+  fi
+}
+data_dir="$(env_get FLEET_DATA_DIR)"
+[[ -z "$data_dir" ]] && data_dir="$SERVICE_HOME/data"
+check_disk_headroom "data dir" "$data_dir"
+check_disk_headroom "podman image store" "$SERVICE_HOME/.local/share/containers"
 
 # ── 8. sandbox smoke ─────────────────────────────────────────────────────────
 step "8/9  Sandbox smoke"

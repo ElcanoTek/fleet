@@ -27,6 +27,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/apiversion"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/diskguard"
 	"github.com/ElcanoTek/fleet/internal/hoststats"
 	"github.com/ElcanoTek/fleet/internal/metrics"
 	"github.com/ElcanoTek/fleet/internal/otelsetup"
@@ -173,6 +174,18 @@ type Server struct {
 	// throwaway sandbox container, and N admins clicking "run checks" at once
 	// must not stampede podman.
 	doctorMu sync.Mutex
+
+	// diskGuard measures free space on the data dir's filesystem and decides
+	// whether the box should shed scheduled work. Read-only here: the guard is
+	// consulted for /healthz and the admin health summary, and it is the
+	// SCHEDULER (internal/runner) that acts on the decision. nil = unwired.
+	diskGuard *diskguard.Guard
+
+	// lastMaintenance is the UnixNano instant the reclamation pass last ran,
+	// from EITHER driver (cmd/fleet's ticker via NoteMaintenanceRun, or a
+	// post-turn pass). The post-turn path compare-and-swaps it so concurrent
+	// turns cannot stampede the global sweeps. Zero = never. See maintenance.go.
+	lastMaintenance atomic.Int64
 
 	// memoryGraphExtractor mines a memory for knowledge-graph triples (#523).
 	// Injected via WithMemoryGraphExtractor so httpapi depends on the seam, not
@@ -451,6 +464,18 @@ func WithStartTime(t time.Time) Option {
 // WithVersion sets the build label reported by the health summary (#301).
 func WithVersion(v string) Option {
 	return func(s *Server) { s.version = v }
+}
+
+// WithDiskGuard injects the host disk headroom guard (internal/diskguard) so
+// /healthz can report a box that has started shedding scheduled work and the
+// admin health summary can show the numbers behind that decision.
+//
+// Interactive chat is deliberately NOT gated on it — a full disk is nearly
+// always produced by unattended runs, and chat is the interface an operator
+// uses to fix it. /healthz reports degraded so a monitor pages someone; it does
+// not stop serving. nil leaves the disk section absent and /healthz unchanged.
+func WithDiskGuard(g *diskguard.Guard) Option {
+	return func(s *Server) { s.diskGuard = g }
 }
 
 // WithWorkerStats injects a provider for scheduler worker/task counts (from the
@@ -956,6 +981,14 @@ func (s *Server) healthz(w http.ResponseWriter, _ *http.Request) {
 			}
 		}
 	}
+	// Disk backpressure is deliberately NOT reported here. /healthz is the
+	// load-balancer gate — a 503 drains chat traffic off this box — and a
+	// shedding box is one whose CHAT is fine and whose scheduled queue has
+	// paused. Draining it would remove the very interface an operator needs to
+	// reclaim the space, which is the opposite of what the guard is for. The
+	// signal lives where a non-critical degradation belongs: /readyz reports
+	// `disk` degraded (207, not 503), fleet_disk_shedding is the alert, and the
+	// admin health summary carries the numbers. See internal/diskguard.
 	_, _ = w.Write([]byte("ok"))
 }
 
@@ -2987,30 +3020,13 @@ func (s *Server) runTurnAsync(
 		}
 	}
 
-	// Sweep expired conversations, terminal input-queue rows, and aged-out
-	// turn ledgers after every turn. Pending/running/injected queue work and
-	// running turns are never retention-eligible.
-	s.sweepRetention(persistCtx)
-
-	// Attachment sweep — see comment in cmd/chat-server/main.go.
-	if removed, err := store.SweepAttachments(s.cfg.EmailAttachmentDir,
-		time.Duration(s.cfg.ConversationTTL)*24*time.Hour); err != nil {
-		log.Printf("post-turn attachment sweep error: %v", err)
-	} else if removed > 0 {
-		log.Printf("attachment sweep: %d files removed", removed)
-	}
-
-	// Orphan-workspace sweep: per-conversation workspace dirs whose
-	// conversation row is gone (TTL, cap-evict, or user-account delete
-	// cascade) get removed here. Anything the agent downloaded via
-	// mcp_email_download_attachment into <root>/<convID>/ goes with
-	// them.
-	if removed, err := s.store.SweepOrphanWorkspaces(persistCtx,
-		tools.WorkspaceDirForConversation("")); err != nil {
-		log.Printf("post-turn workspace sweep error: %v", err)
-	} else if removed > 0 {
-		log.Printf("workspace sweep: %d orphan dirs removed", removed)
-	}
+	// Reclaim expired conversations, terminal input-queue rows, aged-out turn
+	// ledgers, attachment files and orphaned workspace dirs. Rate-gated (see
+	// maintenance.go): this is the prompt-cleanup optimization, and cmd/fleet's
+	// maintenance ticker is the guarantee that it happens on an idle box too.
+	// Pending/running/injected queue work and running turns are never
+	// retention-eligible.
+	s.runPostTurnMaintenance(persistCtx)
 
 	// Conversation memory auto-indexing (#234): when enabled, mine the completed
 	// turn for durable facts and surface each NEW one as a memory PROPOSAL — the

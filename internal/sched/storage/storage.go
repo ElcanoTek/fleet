@@ -447,6 +447,24 @@ func (s *Storage) ExpirePausedTasks(ctx context.Context, windowMinutes int) (int
 	return int64(len(expired)), nil
 }
 
+// ExpireStrandedWakeTasks fails tasks parked in paused_awaiting_wake that no
+// wake can ever reach (see db.ExpireStrandedWakeTasks for which rows qualify),
+// preserving the recurrence chain exactly as ExpirePausedTasks does: a stranded
+// occurrence of a recurring task must not silently end the whole schedule.
+// Returns the count expired.
+func (s *Storage) ExpireStrandedWakeTasks(ctx context.Context, grace time.Duration) (int64, error) {
+	expired, err := s.db.ExpireStrandedWakeTasks(ctx, grace)
+	if err != nil {
+		return 0, err
+	}
+	for _, task := range expired {
+		if strings.TrimSpace(task.Recurrence) != "" {
+			s.scheduleNextRecurrence(ctx, task)
+		}
+	}
+	return int64(len(expired)), nil
+}
+
 // PendingQueueStats returns the per-effective-priority rollup of the pending
 // queue for GET /admin/queue (#230).
 func (s *Storage) PendingQueueStats(ctx context.Context) ([]models.QueuePriorityBucket, error) {

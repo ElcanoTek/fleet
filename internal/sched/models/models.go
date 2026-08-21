@@ -264,8 +264,10 @@ type WorktreeConfig struct {
 	// DefaultWorktreeBranchPrefix.
 	BranchPrefix string `json:"branch_prefix,omitempty"`
 	// AutoCleanup removes the worktree (and its branch) after the run. When
-	// false the worktree is left in place for inspection / manual push, to be
-	// reclaimed later by `fleet-admin worktree prune`.
+	// false the worktree is left in place for inspection / manual push. The
+	// maintenance loop reclaims it once it ages past the prune window
+	// (FLEET_WORKTREE_PRUNE_AGE, default 24h), so "keep for inspection" is a
+	// window, not forever; `fleet worktree prune` reclaims it on demand.
 	AutoCleanup bool `json:"auto_cleanup"`
 	// CleanupDelaySeconds delays the post-run `git worktree remove` by this many
 	// seconds (0 = remove immediately). Only consulted when AutoCleanup is set.

@@ -44,7 +44,72 @@ prior versions are listed because none have shipped.
   one-click **"Ask again"** that submits a user turn asking the agent to
   re-stage.
 
+### Added
+
+- **One maintenance loop, and a disk guard that acts on what it measures**
+  ([`docs/MAINTENANCE.md`](docs/MAINTENANCE.md)). Reclamation used to be a side
+  effect of chat traffic: the database retention sweeps, the attachment sweep
+  and the orphan-workspace sweep ran only at the tail of a completed chat turn.
+  An idle box — a scheduler-only deployment, or any box whose chat went quiet —
+  therefore grew its turn ledgers, expired conversations, terminal input-queue
+  rows and orphaned workspace dirs without bound, while a busy box ran the same
+  global sweeps once per turn, inline on the turn goroutine. Now an hourly
+  in-process loop runs the pass (plus the orchestrator temp-upload cleanup, the
+  remote-MCP OAuth flow sweep, and the git-worktree reclaimer), and the
+  post-turn path is the same pass behind a compare-and-swap rate gate
+  (`FLEET_MAINTENANCE_MIN_INTERVAL`, default 5m) so concurrent turns cannot
+  stampede it. Two reclaimers that previously had no automatic caller at all —
+  `fleet worktree prune` and `fleet cleanup` — are now driven: the worktree
+  sweep from the loop (`FLEET_WORKTREE_PRUNE_AGE`, default 24h), and the podman
+  image prune from a new `fleet-maintenance.timer` that `bootstrap.sh
+  --enable-service` installs by default (`--no-maintenance-timer` opts out;
+  image pruning stays out of the serving process on purpose).
+- **Disk backpressure** (`internal/diskguard`, `FLEET_DISK_MIN_FREE_PERCENT`,
+  default 5). Below the floor the scheduler stops *claiming* tasks and `/readyz`
+  reports the `disk` check degraded (207, never a 503 — `/healthz` stays 200
+  because draining the box would remove the chat interface an operator needs to
+  reclaim the space); interactive chat is never gated and running tasks
+  are untouched — a full disk is nearly always made by unattended runs, and chat
+  is how an operator fixes it. Fails OPEN (an unmeasurable filesystem never
+  sheds) and has a 2-point recovery margin so it cannot flap. Exposed as
+  `fleet_disk_{total,free}_bytes`, `fleet_disk_free_ratio` and
+  `fleet_disk_shedding`, charted in a new **Host resources** row on the Grafana
+  dashboard, and checked by `fleet doctor` alongside the new maintenance timer.
+- **Go runtime gauges** `fleet_goroutines`, `fleet_memory_heap_bytes` and
+  `fleet_memory_sys_bytes`. Both numbers already existed in the admin health
+  JSON, where the shape that actually matters — a count climbing across a day —
+  is invisible. `GOMEMLIMIT` guidance added to `deploy/fleet.service`.
+
 ### Fixed
+
+- **`paused_awaiting_wake` had no terminal backstop.** `WakeDueTasks` filters on
+  `wake_at IS NOT NULL`, so a row without one could never wake, and
+  `ExpirePausedTasks` covers `paused_awaiting_input` only — such a task waited
+  forever with no terminal record and no operator signal. `ExpireStrandedWakeTasks`
+  now fails rows that are unreachable (NULL `wake_at`) or more than 24h past
+  their deadline, anchored on `paused_at` so a legitimate 30-day sleep is never
+  touched, and running after the wake sweep so a merely-due row is woken rather
+  than expired. Preserves the recurrence chain, like the awaiting-input expiry.
+- **The persistent-sandbox session cap is now enforced by the idle reaper**, not
+  only on the create path. Eviction skips sessions with a turn in flight, so a
+  burst that overshot the cap while every other session was busy stayed
+  overshot until the idle TTL expired or another create happened to arrive —
+  and that cap is what bounds the box's container memory. It remains a soft cap
+  (a busy session is never evicted) but an overshoot now self-corrects on the
+  next tick. fleet also warns at boot when `FLEET_PYTHON_REPL_MAX` ×
+  `FLEET_SANDBOX_MEMORY` claims more than two thirds of host RAM — the defaults
+  multiply out to 16 GiB.
+- **The remote-MCP OAuth flow sweep outlived shutdown.** It was a
+  `for range ticker.C` goroutine using `context.Background()` per sweep, so it
+  was unreachable by the shutdown context and could touch a closing store. Folded
+  into the maintenance loop, which is ctx-bound.
+- **`/admin/storage` walked the workspace tree twice and ignored cancellation.**
+  The panel sized the tree once for the total and again, directory by directory,
+  for the largest-workspaces rows; both walks ran to completion even after the
+  client gave up. Now one pass yields both, and the walks check `ctx`.
+- **Three copies of the same `statfs`** (`hoststats`, `admin_storage`,
+  `boxdoctor`) could drift. `diskguard.Usage` is now the single implementation,
+  so what is charted, what is reported and what is enforced always agree.
 
 - **Corrected what the sandbox publisher's docs said about GHCR package linking
   and visibility.** Two claims were wrong and both are now measured rather than

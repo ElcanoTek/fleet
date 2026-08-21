@@ -256,7 +256,7 @@ func multipartBody(t *testing.T, files map[string][]byte) (*bytes.Buffer, string
 
 func countUploadedFiles(t *testing.T, s *Server) int {
 	t.Helper()
-	return duTree(filepath.Join(s.cfg.EmailAttachmentDir, "uploads")).Files
+	return duTree(context.Background(), filepath.Join(s.cfg.EmailAttachmentDir, "uploads")).Files
 }
 
 func TestPostAttachments_SavesFilesUnderLimit(t *testing.T) {

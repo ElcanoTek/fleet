@@ -1538,6 +1538,78 @@ func (db *Database) ResumeTask(ctx context.Context, taskID uuid.UUID, answer str
 	return n > 0, nil
 }
 
+// StrandedWakeGrace is how far past its wake deadline a parked task must be
+// before ExpireStrandedWakeTasks fails it terminally.
+//
+// This is a BACKSTOP for a broken row, not a policy knob, which is why it is a
+// constant. Every in-repo writer of paused_awaiting_wake sets wake_at, and
+// WakeDueTasks re-queues a due row on the very next scheduler tick (~30s), so
+// under normal operation nothing is ever a day past its deadline. A row that
+// is — or a row with wake_at NULL, which WakeDueTasks filters out and therefore
+// can NEVER wake — is stranded, and the pre-existing behaviour was to leave it
+// parked forever with no terminal record and no operator signal.
+//
+// A day is far longer than any legitimate lateness while still bounded, and it
+// is measured from paused_at (never from wake_at alone) so a task legitimately
+// sleeping 30 days out is never touched.
+const StrandedWakeGrace = 24 * time.Hour
+
+// ExpireStrandedWakeTasks fails tasks parked in paused_awaiting_wake that no
+// wake can ever reach, closing the one gap the #510 expiry sweep left open:
+// that sweep covers paused_awaiting_input only, so the OTHER parked state had
+// no terminal backstop at all.
+//
+// Two shapes qualify, both anchored on paused_at so a freshly parked task is
+// never a candidate:
+//
+//  1. wake_at IS NULL. WakeDueTasks requires `wake_at IS NOT NULL`, so such a
+//     row is unreachable by the wake sweep by construction — it waits forever.
+//     No in-repo writer produces one (PauseTaskForWake always sets wake_at),
+//     which is exactly why nothing would ever notice if one appeared.
+//  2. wake_at more than `grace` in the past. The wake sweep runs every tick, so
+//     a row this far overdue means the sweep is not reaching it.
+//
+// Like ExpirePausedTasks it moves rows to the terminal `error` status (a parked
+// task holds no lease, so dead_lettered — the runner's lease-guarded status —
+// would be wrong), and RETURNS them so the caller can preserve the recurrence
+// chain. A non-positive grace is a no-op.
+func (db *Database) ExpireStrandedWakeTasks(ctx context.Context, grace time.Duration) ([]*models.Task, error) {
+	if grace <= 0 {
+		return nil, nil
+	}
+	cutoff := time.Now().UTC().Add(-grace)
+	// UPDATE ... RETURNING for the same reason ExpirePausedTasks uses it: the
+	// transition and the capture of which rows transitioned happen under one
+	// lock, so a concurrent WakeDueTasks / WakeTaskByEvent either commits first
+	// (this WHERE then excludes the row) or wakes to find status='error'. A row
+	// is never both woken and expired.
+	rows, err := db.conn.QueryContext(ctx, `
+		UPDATE tasks
+		SET status = $1, completed_at = now(), error_message = $2,
+		    wake_at = NULL, wake_event_key = NULL
+		WHERE status = $3
+		  AND paused_at IS NOT NULL
+		  AND paused_at < $4
+		  AND (wake_at IS NULL OR wake_at < $4)
+		RETURNING `+taskColumns,
+		string(models.TaskStatusError),
+		fmt.Sprintf("expired: parked awaiting a wake that can no longer arrive (no wake fired within %s of the deadline)", grace),
+		string(models.TaskStatusPausedAwaitingWake), cutoff)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var expired []*models.Task
+	for rows.Next() {
+		t, serr := db.scanTask(rows)
+		if serr != nil {
+			return nil, serr
+		}
+		expired = append(expired, t)
+	}
+	return expired, rows.Err()
+}
+
 // PauseTaskForWake parks a RUNNING task in paused_awaiting_wake (self-wake,
 // docs/SELF-WAKE.md), clearing the lease so the parked task holds no
 // sandbox/container — the exact shape of PauseTaskForQuestion, keyed on a

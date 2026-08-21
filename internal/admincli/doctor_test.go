@@ -13,7 +13,8 @@ import (
 // TestDoctorDryRunSmoke — `doctor.sh --dry-run` must succeed on any host (no
 // root, no dnf, no systemd) and its checklist must name the load-bearing
 // passes: package currency, the rootless-podman prerequisites, unit drift,
-// the env files, the health probes, and the sandbox smoke.
+// the env files, the health probes, the scheduled timers + disk headroom, and
+// the sandbox smoke.
 func TestDoctorDryRunSmoke(t *testing.T) {
 	out := runScriptDryRun(t, "doctor.sh", "--dry-run")
 	for _, want := range []string{
@@ -24,7 +25,13 @@ func TestDoctorDryRunSmoke(t *testing.T) {
 		"functional drift",
 		"OPENROUTER_API_KEY",
 		"/healthz + /readyz",
-		"Scheduled backups",
+		"Scheduled maintenance",
+		"fleet-backup.timer",
+		// The maintenance timer is what keeps stale sandbox image layers from
+		// filling the disk, and the disk check is what notices when nothing
+		// has. Both are new enough that a silent regression is plausible.
+		"fleet-maintenance.timer",
+		"free space on the data dir",
 		"Sandbox smoke",
 		"Source freshness",
 	} {
@@ -103,11 +110,20 @@ func TestDoctorLoadBearingStrings(t *testing.T) {
 		// is-enabled reads the install symlink only: an enabled-but-stopped
 		// timer fires nothing while its service's Result still says "success".
 		`systemctl is-active --quiet "$BACKUP_TIMER"`,
-		// The pair must ride the same unit-drift check as fleet.service.
-		`for unit in "${SERVICE_NAME}.service" fleet-web.service "$BACKUP_SERVICE" "$BACKUP_TIMER"; do`,
+		// Both timer pairs must ride the same unit-drift check as fleet.service.
+		`for unit in "${SERVICE_NAME}.service" fleet-web.service "$BACKUP_SERVICE" "$BACKUP_TIMER" "$MAINT_SERVICE" "$MAINT_TIMER"; do`,
 		// …with the restart it can trigger scoped to the app units: reinstalling
 		// a backup unit must not bounce the chat service.
 		`*) restart_needed=1 ;;`,
+		// Host maintenance: same advisory-if-absent / fail-if-last-run-failed
+		// posture as backups, because the layers it prunes accumulate silently.
+		`advise "no ${MAINT_TIMER} + ${MAINT_SERVICE} pair installed`,
+		`fail "${MAINT_SERVICE} last run FAILED`,
+		// Disk headroom must name the configured floor, not just "getting
+		// full": below the floor the process has already stopped claiming
+		// scheduled work, which is a different statement to an operator.
+		"FLEET_DISK_MIN_FREE_PERCENT",
+		"HOLDING BACK scheduled tasks",
 	} {
 		if !strings.Contains(script, want) {
 			t.Errorf("doctor.sh must contain %q", want)

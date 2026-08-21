@@ -21,6 +21,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"io/fs"
 	"log"
@@ -28,9 +29,9 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"syscall"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/diskguard"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
@@ -86,13 +87,16 @@ func (s *Server) handleAdminStorage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ctx := r.Context()
 	resp := storageResponse{DefaultDays: storageCleanupDefaultDays}
-	resp.Uploads = duTree(filepath.Join(s.cfg.EmailAttachmentDir, "uploads"))
-	resp.TempUploads = duTree(filepath.Join(s.cfg.DataDir, "temp_uploads"))
+	resp.Uploads = duTree(ctx, filepath.Join(s.cfg.EmailAttachmentDir, "uploads"))
+	resp.TempUploads = duTree(ctx, filepath.Join(s.cfg.DataDir, "temp_uploads"))
 
+	// One walk of the workspace tree, not two: the total and the per-conversation
+	// rows come from the same pass, so opening the panel no longer sizes every
+	// workspace twice.
 	workspaceRoot := tools.WorkspaceDirForConversation("")
-	resp.Workspaces = duTree(workspaceRoot)
-	resp.LargestWorkspaces = s.largestWorkspaces(r, workspaceRoot, 10)
+	resp.Workspaces, resp.LargestWorkspaces = s.workspaceUsage(r, workspaceRoot, 10)
 
 	if total, avail, err := diskUsage(s.cfg.DataDir); err == nil {
 		resp.DiskTotalBytes = total
@@ -155,10 +159,11 @@ func (s *Server) handleAdminStorageCleanup(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	ctx := r.Context()
 	uploadsDir := filepath.Join(s.cfg.EmailAttachmentDir, "uploads")
 	tempDir := filepath.Join(s.cfg.DataDir, "temp_uploads")
 	workspaceRoot := tools.WorkspaceDirForConversation("")
-	before := duTree(uploadsDir).Bytes + duTree(tempDir).Bytes + duTree(workspaceRoot).Bytes
+	before := duTree(ctx, uploadsDir).Bytes + duTree(ctx, tempDir).Bytes + duTree(ctx, workspaceRoot).Bytes
 
 	var resp storageCleanupResponse
 	age := time.Duration(req.OlderThanDays) * 24 * time.Hour
@@ -188,9 +193,9 @@ func (s *Server) handleAdminStorageCleanup(w http.ResponseWriter, r *http.Reques
 		resp.RemovedTempFiles = sweepTempUploads(tempDir, age)
 	}
 
-	resp.RemainingUploadsBytes = duTree(uploadsDir).Bytes
-	resp.RemainingTempBytes = duTree(tempDir).Bytes
-	resp.RemainingWorkspaceByte = duTree(workspaceRoot).Bytes
+	resp.RemainingUploadsBytes = duTree(ctx, uploadsDir).Bytes
+	resp.RemainingTempBytes = duTree(ctx, tempDir).Bytes
+	resp.RemainingWorkspaceByte = duTree(ctx, workspaceRoot).Bytes
 	if freed := before - (resp.RemainingUploadsBytes + resp.RemainingTempBytes + resp.RemainingWorkspaceByte); freed > 0 {
 		resp.BytesFreed = freed
 	}
@@ -200,24 +205,41 @@ func (s *Server) handleAdminStorageCleanup(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, resp)
 }
 
-// largestWorkspaces sizes each per-conversation workspace dir and returns
-// the top n by bytes, enriched with conversation title/owner/pinned so the
-// operator knows what they're looking at before cleaning up.
-func (s *Server) largestWorkspaces(r *http.Request, root string, n int) []storageWorkspaceRow {
+// workspaceUsage sizes the per-conversation workspace tree in ONE pass and
+// returns both the whole-tree total and the top n directories by bytes,
+// enriched with conversation title/owner/pinned so the operator knows what they
+// are looking at before cleaning up.
+//
+// Returning both from one walk is the point: the panel previously walked the
+// tree once for the total and then again, directory by directory, for the rows.
+func (s *Server) workspaceUsage(r *http.Request, root string, n int) (storageTreeStats, []storageWorkspaceRow) {
+	ctx := r.Context()
+	total := storageTreeStats{Path: root}
 	entries, err := os.ReadDir(root)
 	if err != nil {
-		return nil
+		return total, nil
 	}
 	rows := make([]storageWorkspaceRow, 0, len(entries))
 	for _, e := range entries {
+		if ctx.Err() != nil {
+			break
+		}
 		if !e.IsDir() {
+			// Loose files at the root still count toward the tree total even
+			// though they are not a conversation workspace.
+			if info, statErr := e.Info(); statErr == nil && info.Mode().IsRegular() {
+				total.Bytes += info.Size()
+				total.Files++
+			}
 			continue
 		}
-		size := duTree(filepath.Join(root, e.Name())).Bytes
-		if size == 0 {
+		sub := duTree(ctx, filepath.Join(root, e.Name()))
+		total.Bytes += sub.Bytes
+		total.Files += sub.Files
+		if sub.Bytes == 0 {
 			continue
 		}
-		rows = append(rows, storageWorkspaceRow{ConversationID: e.Name(), Bytes: size})
+		rows = append(rows, storageWorkspaceRow{ConversationID: e.Name(), Bytes: sub.Bytes})
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].Bytes > rows[j].Bytes })
 	if len(rows) > n {
@@ -228,10 +250,10 @@ func (s *Server) largestWorkspaces(r *http.Request, root string, n int) []storag
 	for i := range rows {
 		ids[i] = rows[i].ConversationID
 	}
-	meta, err := s.store.ConversationStorageMetaByIDs(r.Context(), ids)
+	meta, err := s.store.ConversationStorageMetaByIDs(ctx, ids)
 	if err != nil {
 		log.Printf("admin storage: workspace meta: %v", err)
-		return rows
+		return total, rows
 	}
 	for i := range rows {
 		if m, ok := meta[rows[i].ConversationID]; ok {
@@ -243,27 +265,43 @@ func (s *Server) largestWorkspaces(r *http.Request, root string, n int) []storag
 			rows[i].Orphaned = true
 		}
 	}
-	return rows
+	return total, rows
 }
 
 // diskUsage returns total/available bytes for the filesystem holding path.
-// Mirrors hoststats.readDisk (unexported there) — a statfs on the data dir
-// rather than "/" so the numbers reflect the mount the uploads actually
-// fill.
+// Delegates to diskguard.Usage so the admin panel, the Prometheus gauges and
+// the backpressure decision all read the same number the same way — three
+// copies of this statfs used to live in three packages, free to drift.
+//
+// A statfs on the DATA DIR, not "/", so the numbers reflect the mount the
+// uploads actually fill.
 func diskUsage(path string) (total, available int64, err error) {
-	var st syscall.Statfs_t
-	if err := syscall.Statfs(path, &st); err != nil {
+	t, a, err := diskguard.Usage(path)
+	if err != nil {
 		return 0, 0, err
 	}
-	blockSize := uint64(st.Bsize)                                          // #nosec G115 -- kernel block sizes are non-negative and bounded.
-	return int64(st.Blocks * blockSize), int64(st.Bavail * blockSize), nil //nolint:gosec // G115: single-box disk sizes fit int64
+	return int64(t), int64(a), nil //nolint:gosec // G115: single-box disk sizes fit int64
 }
 
 // duTree walks a directory tree summing regular-file sizes. Missing dirs
 // are zero, not errors — fresh boxes haven't created these trees yet.
-func duTree(dir string) storageTreeStats {
+//
+// ctx-aware: these walks run inside an HTTP handler over trees that can hold
+// tens of thousands of files, so a client that has already given up (or a
+// shutdown) must stop the walk rather than pin a request goroutine to the end
+// of it. A cancelled walk returns the partial total, which is the right answer
+// for a display that is about to be discarded anyway.
+func duTree(ctx context.Context, dir string) storageTreeStats {
 	out := storageTreeStats{Path: dir}
+	// Checking ctx on every entry would cost an atomic load per file; every
+	// few hundred entries bounds the overrun to microseconds of work.
+	const ctxCheckEvery = 256
+	seen := 0
 	_ = filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
+		seen++
+		if seen%ctxCheckEvery == 0 && ctx.Err() != nil {
+			return filepath.SkipAll
+		}
 		if err != nil {
 			return nil //nolint:nilerr // per-entry errors (vanished file, perms) must not abort the accounting walk
 		}

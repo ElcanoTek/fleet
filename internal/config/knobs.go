@@ -156,6 +156,14 @@ var envKnobs = []envKnob{
 	{key: "FLEET_TASK_STARVATION_WINDOW_MINUTES", fleet: true, kind: kindInt},
 	{key: "FLEET_PAUSED_TASK_EXPIRY_MINUTES", fleet: true, kind: kindInt},
 
+	// ── host reclamation + disk backpressure ──
+	// The prune age is floored at zero (which disables the sweep) rather than
+	// allowed negative, and the free-space floor is a percentage, so it is
+	// bounded to [0, 100] — a typo like 500 would otherwise shed all scheduled
+	// work forever.
+	{key: "FLEET_WORKTREE_PRUNE_AGE", fleet: true, kind: kindDuration, min: bound(0)},
+	{key: "FLEET_DISK_MIN_FREE_PERCENT", fleet: true, kind: kindInt, min: bound(0), max: bound(100)},
+
 	// ── process log file sink (#298) + log archival (#272) ──
 	{key: "FLEET_LOG_MAX_SIZE_MB", fleet: true, kind: kindInt},
 	{key: "FLEET_LOG_MAX_AGE_DAYS", fleet: true, kind: kindInt},
