@@ -628,6 +628,76 @@ func TestUpdateFailedSandboxBuildRefusesRestart(t *testing.T) {
 	}
 }
 
+// TestUpdateSandboxFreshnessBackstop — the rebuild gate must ALSO fire on age:
+// a bundle whose Containerfile and tag never change used to mean the deployed
+// image was never rebuilt at all, serving weeks-old base layers and unpatched
+// package CVEs on boxes that ran `fleet update` regularly (the Grype CI gate
+// scans a fresh build — only a rebuild brings a deployed box up to what CI
+// vouched for). The age path needs a real image in a real store, so this pins
+// the load-bearing lines plus the dry-run plan text.
+func TestUpdateSandboxFreshnessBackstop(t *testing.T) {
+	root := repoRootFromTest(t)
+	body, err := os.ReadFile(filepath.Join(root, "scripts", "update.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(body)
+	for _, want := range []string{
+		// The knob with its default, and the age probe (creation time read from
+		// the SERVICE user's store via sandbox_podman, like every other probe).
+		`SANDBOX_MAX_AGE_DAYS="${FLEET_SANDBOX_MAX_AGE_DAYS:-7}"`,
+		`sandbox_image_age_days() {`,
+		`sandbox_podman image inspect --format '{{.Created.Unix}}'`,
+		// Only a readable creation time triggers — empty means unknown, and an
+		// unanswerable probe must not burn a multi-GB rebuild.
+		`[[ -n "$image_age_days" ]] && (( image_age_days >= SANDBOX_MAX_AGE_DAYS ))`,
+		// An age-triggered rebuild must bypass the layer cache: a cached build
+		// against an unmoved base reproduces the SAME image with the same old
+		// creation date, so the backstop would re-fire forever refreshing nothing.
+		`sandbox_build_no_cache=1`,
+		`FLEET_SANDBOX_BUILD_NO_CACHE="$sandbox_build_no_cache"`,
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("update.sh must contain %q", want)
+		}
+	}
+
+	// Every build (any trigger) must re-check the registry for a fresher base:
+	// without --pull=newer, podman reuses whatever stale base sits in the local
+	// store and the generic Containerfile's "base tracks latest for security
+	// patches" intent never actually happens.
+	builder, err := os.ReadFile(filepath.Join(root, "scripts", "build-sandbox-image.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`BUILD_ARGS=(--pull=newer)`,
+		`NO_CACHE="${FLEET_SANDBOX_BUILD_NO_CACHE:-0}"`,
+		`BUILD_ARGS+=(--no-cache)`,
+	} {
+		if !strings.Contains(string(builder), want) {
+			t.Errorf("build-sandbox-image.sh must contain %q", want)
+		}
+	}
+
+	// The dry-run plan must surface the backstop with the effective threshold —
+	// --sandbox-max-age overrides the default.
+	out := runScriptDryRun(t, "update.sh", "--dry-run", "--no-pull", "--sandbox-max-age", "3")
+	if !strings.Contains(out, "installed image is 3+ days old") {
+		t.Errorf("update --dry-run plan missing the freshness backstop with the flag's threshold\n--- output ---\n%s", out)
+	}
+
+	// A non-numeric threshold gates a multi-GB rebuild, so it must die up front
+	// rather than silently disabling the backstop.
+	out, err = runScript(t, nil, "update.sh", "--dry-run", "--no-pull", "--sandbox-max-age", "weekly")
+	if err == nil {
+		t.Fatalf("update accepted a non-numeric --sandbox-max-age\n--- output ---\n%s", out)
+	}
+	if !strings.Contains(out, "must be a non-negative integer") {
+		t.Errorf("expected the max-age validation error, got:\n%s", out)
+	}
+}
+
 // TestUpdateAdoptsBackupUnits — the unit-adoption loop must cover the shipped
 // fleet-backup pair (a timer fix otherwise reaches provisioned boxes only via
 // doctor, not the update path operators actually run on release), and its
