@@ -36,6 +36,16 @@ type HealthSummary = {
   mcp_servers: Array<{ name: string; enabled: boolean }>;
   conversations_active: number;
   sandbox_pool: { size: number; available: number } | null;
+  disk: {
+    available: boolean;
+    path: string;
+    total_bytes: number;
+    free_bytes: number;
+    free_percent: number;
+    min_free_percent: number;
+    shedding: boolean;
+    error?: string;
+  } | null;
   memory_mb: number;
   goroutines: number;
 };
@@ -91,6 +101,20 @@ function healthItems(d: HealthSummary): AdminStat[] {
     },
     { title: "Runtime", value: `${d.memory_mb} MB`, sub: `${d.goroutines} goroutines` },
   );
+  // Disk. `shedding` is the one state worth spelling out rather than showing a
+  // number for: the box has already stopped claiming scheduled tasks, and
+  // because chat keeps working, nothing else on this page would say so.
+  if (d.disk) {
+    items.push({
+      title: "Disk",
+      value: d.disk.available ? `${d.disk.free_percent.toFixed(1)}% free` : "—",
+      sub: !d.disk.available
+        ? (d.disk.error ?? "not measurable")
+        : d.disk.shedding
+          ? `below the ${d.disk.min_free_percent}% floor — scheduled tasks paused`
+          : `${d.disk.path} · floor ${d.disk.min_free_percent}%`,
+    });
+  }
   return items;
 }
 

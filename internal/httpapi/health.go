@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"math"
 	"net/http"
 	"runtime"
 	"time"
@@ -51,6 +52,20 @@ type healthIPFilter struct {
 	TrustedProxies []string `json:"trusted_proxies"`
 }
 
+// healthDisk is the host disk headroom behind the backpressure decision (see
+// internal/diskguard). Present only when a guard is wired; Shedding=true means
+// the scheduler has already stopped claiming work.
+type healthDisk struct {
+	Available      bool    `json:"available"`
+	Path           string  `json:"path"`
+	TotalBytes     uint64  `json:"total_bytes"`
+	FreeBytes      uint64  `json:"free_bytes"`
+	FreePercent    float64 `json:"free_percent"`
+	MinFreePercent int     `json:"min_free_percent"`
+	Shedding       bool    `json:"shedding"`
+	Error          string  `json:"error,omitempty"`
+}
+
 type healthSummary struct {
 	FleetVersion        string         `json:"fleet_version"`
 	UptimeSeconds       int64          `json:"uptime_seconds"`
@@ -60,6 +75,7 @@ type healthSummary struct {
 	MCPServers          []healthMCP    `json:"mcp_servers"`
 	ConversationsActive int            `json:"conversations_active"`
 	Sandbox             *healthSandbox `json:"sandbox_pool"`
+	Disk                *healthDisk    `json:"disk"`
 	IPFilter            healthIPFilter `json:"ip_filter"`
 	MemoryMB            uint64         `json:"memory_mb"`
 	Goroutines          int            `json:"goroutines"`
@@ -128,6 +144,21 @@ func (s *Server) handleHealthSummary(w http.ResponseWriter, r *http.Request) {
 		if pool := s.agent.SandboxPool(); pool != nil {
 			size, avail := pool.Stats()
 			out.Sandbox = &healthSandbox{Size: size, Available: avail}
+		}
+	}
+
+	// Host disk headroom + the backpressure decision derived from it. Absent
+	// when no guard is wired (an embedder that manages its own disk policy).
+	if st := s.diskGuard.Status(); !st.SampledAt.IsZero() {
+		out.Disk = &healthDisk{
+			Available:      st.Available,
+			Path:           st.Path,
+			TotalBytes:     st.TotalBytes,
+			FreeBytes:      st.FreeBytes,
+			FreePercent:    math.Round(st.FreePercent*10) / 10,
+			MinFreePercent: st.MinFreePercent,
+			Shedding:       st.Shedding,
+			Error:          st.Err,
 		}
 	}
 

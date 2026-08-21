@@ -21,10 +21,33 @@ authoritative list lives in
 | `fleet_sandbox_pool_size` | gauge | — | Warm Podman sandbox containers parked in the pool (sampled at scrape). |
 | `fleet_turn_timeouts_total` | counter | `kind` (`interactive`/`scheduled`) | Turns that hit their wall-clock deadline. |
 | `fleet_sched_runs_pruned_total` | counter | — | Scheduled task runs deleted by the retention sweep. |
+| `fleet_disk_total_bytes` | gauge | — | Capacity of the filesystem holding the data dir. Unpublished when statfs fails. |
+| `fleet_disk_free_bytes` | gauge | — | Unprivileged-writable free bytes on that filesystem (statfs `Bavail`). |
+| `fleet_disk_free_ratio` | gauge | — | Free space as a fraction 0–1. Prefer this for alerts: it survives a disk resize. |
+| `fleet_disk_shedding` | gauge | — | `1` when free disk is below `FLEET_DISK_MIN_FREE_PERCENT` and the scheduler has stopped claiming tasks. |
+| `fleet_goroutines` | gauge | — | Live goroutines in the fleet process. |
+| `fleet_memory_heap_bytes` | gauge | — | Bytes of allocated heap objects. |
+| `fleet_memory_sys_bytes` | gauge | — | Total bytes obtained from the OS. |
 
 That is the complete set. fleet's exporter is hand-rolled and **does not** ship
 the default Go/process collectors, so there are no `go_*` or `process_*` series
-to chart — and the dashboard does not pretend otherwise.
+to chart. The three `fleet_goroutines` / `fleet_memory_*` gauges are a
+deliberate, minimal stand-in for the handful of runtime numbers worth trending
+on a single-box service — not a re-implementation of the Go collector.
+
+### What to alert on
+
+`fleet_disk_shedding == 1` is the highest-signal series on the dashboard. It is
+not a prediction that the disk *might* fill: it is the box reporting that it has
+**already** stopped claiming scheduled tasks to protect the space it has left.
+Interactive chat is deliberately never gated on it, so the symptom an operator
+notices unaided is "the queue stopped draining" with no error anywhere — which
+is exactly the case an alert should cover.
+
+Pair it with a slope alert on `fleet_disk_free_ratio` (for example,
+`predict_linear(fleet_disk_free_ratio[6h], 24*3600) < 0.05`) so you hear about
+the trend hours before the floor is crossed. See
+[`docs/MAINTENANCE.md`](../../docs/MAINTENANCE.md) for what reclaims what.
 
 ### Panel conventions
 

@@ -7,10 +7,10 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"syscall"
-	"time"
+
+	"github.com/ElcanoTek/fleet/internal/worktree"
 )
 
 // fleet-admin worktree — operator hygiene for the per-run git worktrees that
@@ -64,15 +64,14 @@ func worktreeList(argv []string) int {
 	return 0
 }
 
-// worktreePrune reclaims orphaned worktrees in two complementary steps that
-// target DIFFERENT things: `git worktree prune` cleans git-side admin records
-// for worktrees whose directory is already gone, while the filesystem sweep
-// removes stale <workspace>/.fleet-worktrees/* DIRECTORIES (from a task that
-// crashed before its cleanup) older than --older-than.
+// worktreePrune reclaims orphaned worktrees. The sweep itself lives in
+// internal/worktree so the server's maintenance loop runs the SAME reclamation
+// unattended; this command is the operator-facing surface over it (flags,
+// human-readable output, an exit code).
 func worktreePrune(argv []string) int {
 	fs := flag.NewFlagSet("worktree prune", flag.ContinueOnError)
 	ws := fs.String("workspace", "", "workspace repo root (default: $FLEET_WORKSPACE_ROOT, else ./workspace)")
-	olderThan := fs.Duration("older-than", 24*time.Hour, "only remove worktree dirs older than this (e.g. 24h; Go has no day unit — use hours)")
+	olderThan := fs.Duration("older-than", worktree.DefaultPruneAge, "only remove worktree dirs older than this (e.g. 24h; Go has no day unit — use hours)")
 	dryRun := fs.Bool("dry-run", false, "list what would be removed without removing it")
 	if err := fs.Parse(argv); err != nil {
 		return 1
@@ -82,84 +81,30 @@ func worktreePrune(argv []string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// Step 1: git-side record prune (skipped on a dry run since it only removes
-	// already-orphaned admin metadata, nothing the operator would want to inspect).
-	if !*dryRun {
-		if out, err := gitOutput(ctx, root, "worktree", "prune"); err != nil {
-			// Non-fatal: the directory sweep below is the part that frees disk.
-			fmt.Fprintf(os.Stderr, "warning: git worktree prune (workspace %s): %v\n%s\n", root, err, out)
-		}
+	res, err := worktree.PruneStale(ctx, root, *olderThan, *dryRun)
+	for _, w := range res.Warnings {
+		fmt.Fprintf(os.Stderr, "warning: %s\n", w)
 	}
-
-	// Step 2: filesystem sweep of stale per-run worktree dirs.
-	parent := filepath.Join(root, ".fleet-worktrees")
-	entries, err := os.ReadDir(parent)
 	if err != nil {
-		if os.IsNotExist(err) {
-			fmt.Printf("no worktree directory at %s; nothing to prune\n", parent)
-			return 0
-		}
-		return errf(5, "read %s: %v", parent, err)
+		return errf(5, "worktree prune: %v", err)
 	}
 
-	cutoff := time.Now().Add(-*olderThan)
-	removed, kept := 0, 0
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		path := filepath.Join(parent, e.Name())
-		info, statErr := e.Info()
-		if statErr != nil {
-			fmt.Fprintf(os.Stderr, "warning: stat %s: %v\n", path, statErr)
-			continue
-		}
-		if info.ModTime().After(cutoff) {
-			kept++
-			continue
-		}
-		if *dryRun {
-			fmt.Printf("would remove %s (mtime %s)\n", path, info.ModTime().Format(time.RFC3339))
-			removed++
-			continue
-		}
-		// Try a clean `git worktree remove --force` first so git's admin records
-		// are updated too; fall back to a raw RemoveAll for a dir git no longer
-		// knows about.
-		if out, gErr := gitOutput(ctx, root, "worktree", "remove", "--force", path); gErr != nil {
-			if rmErr := os.RemoveAll(path); rmErr != nil {
-				fmt.Fprintf(os.Stderr, "warning: remove %s: git: %v (%s); rmdir: %v\n", path, gErr, strings.TrimSpace(out), rmErr)
-				continue
-			}
-		}
-		fmt.Printf("removed %s\n", path)
-		removed++
-	}
 	verb := "removed"
 	if *dryRun {
 		verb = "would remove"
 	}
-	fmt.Printf("%s %d worktree dir(s); kept %d newer than %s\n", verb, removed, kept, olderThan.String())
+	for _, path := range res.Removed {
+		fmt.Printf("%s %s\n", verb, path)
+	}
+	fmt.Printf("%s %d worktree dir(s); kept %d newer than %s\n", verb, res.Count(), res.Kept, olderThan.String())
 	return 0
 }
 
-// resolveWorkspaceRoot mirrors how the running server resolves the workspace
-// root (internal/agent/manager.go): an explicit flag wins, else
-// FLEET_WORKSPACE_ROOT (legacy CHAT_WORKSPACE_ROOT), else ./workspace.
+// resolveWorkspaceRoot resolves the --workspace flag the way the running server
+// resolves its workspace root, so the CLI and the server's in-process sweep can
+// never disagree about which tree they are reclaiming.
 func resolveWorkspaceRoot(flagVal string) string {
-	if v := strings.TrimSpace(flagVal); v != "" {
-		return v
-	}
-	if v := os.Getenv("FLEET_WORKSPACE_ROOT"); v != "" {
-		return v
-	}
-	if v := os.Getenv("CHAT_WORKSPACE_ROOT"); v != "" {
-		return v
-	}
-	if abs, err := filepath.Abs("workspace"); err == nil {
-		return abs
-	}
-	return "workspace"
+	return worktree.ResolveWorkspaceRoot(flagVal)
 }
 
 // gitOutput runs host git in dir and returns combined stdout+stderr.

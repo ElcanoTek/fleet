@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os/exec"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/diskguard"
 	"github.com/ElcanoTek/fleet/internal/health"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
 	scheddb "github.com/ElcanoTek/fleet/internal/sched/db"
@@ -35,12 +37,16 @@ var (
 // pools are CRITICAL — if either is down the box can't serve, so /readyz returns
 // 503. The sandbox runtime is non-critical (a missing runtime degrades to 207
 // but the process can still answer DB-only requests and surface the problem).
+// Disk headroom is non-critical for the same reason and a stronger one: a box
+// shedding scheduled work on low disk still serves chat perfectly, and chat is
+// how an operator reclaims the space — marking it critical would 503 /readyz,
+// drain the box, and remove the remedy along with the symptom.
 //
 // llm_api and per-server mcp_servers probes are intentionally NOT included here
 // yet (documented follow-ups): a live LLM completion probe needs the authed
 // client + cost-aware caching, and MCP liveness needs a real broker round-trip —
 // reporting either without actually probing would violate the honesty invariant.
-func buildReadinessChecks(cfg *config.Config, chatDB, schedDB dbPinger) []health.Check {
+func buildReadinessChecks(cfg *config.Config, chatDB, schedDB dbPinger, guard *diskguard.Guard) []health.Check {
 	// Probe a best-effort guess at the runtime binary: an empty runtime means
 	// the podman default, else the OCI runtime's conventional binary name
 	// ("kata" → "kata-runtime", "krun" → "krun"). Mapping via RuntimeBinary keeps
@@ -61,6 +67,36 @@ func buildReadinessChecks(cfg *config.Config, chatDB, schedDB dbPinger) []health
 		{Name: "chat_db", Critical: true, Probe: pingProbe(chatDB)},
 		{Name: "sched_db", Critical: true, Probe: pingProbe(schedDB)},
 		{Name: "sandbox", Critical: false, Probe: (&cachedSandboxProbe{runtimeBin: runtimeBin, ttl: sandboxProbeTTL}).probe},
+		{Name: "disk", Critical: false, Probe: diskProbe(guard)},
+	}
+}
+
+// diskProbe reports host disk headroom on /readyz. The guard caches its statfs,
+// so this unauthenticated endpoint costs no syscall per hit.
+//
+// Three outcomes, and the mapping matters:
+//   - shedding → degraded (207). The box is up and serving chat; only the
+//     scheduled queue has paused. Never an error, which would 503 and drain it.
+//   - unmeasurable → ok, with the reason in the detail. The guard fails open, so
+//     the probe must not claim a degradation the guard itself does not act on.
+//   - otherwise → ok, with the free percentage for an operator reading the body.
+func diskProbe(guard *diskguard.Guard) func(context.Context) health.Result {
+	return func(context.Context) health.Result {
+		st := guard.Status()
+		switch {
+		case st.SampledAt.IsZero():
+			return health.Result{Status: health.StatusOK, Detail: "disk guard not wired"}
+		case !st.Available:
+			return health.Result{Status: health.StatusOK, Detail: "not measurable: " + st.Err}
+		case st.Shedding:
+			return health.Result{
+				Status: health.StatusDegraded,
+				Detail: fmt.Sprintf("%.1f%% free on %s is below the %d%% floor; scheduled task claims are paused (chat unaffected)",
+					st.FreePercent, st.Path, st.MinFreePercent),
+			}
+		default:
+			return health.Result{Status: health.StatusOK, Detail: fmt.Sprintf("%.1f%% free on %s", st.FreePercent, st.Path)}
+		}
 	}
 }
 

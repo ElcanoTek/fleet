@@ -1,0 +1,29 @@
+# deploy/fleet-maintenance.timer — schedules deploy/fleet-maintenance.service daily.
+#
+# Enable THIS unit (the service it triggers has no [Install] section):
+#   systemctl daemon-reload && systemctl enable --now fleet-maintenance.timer
+#   systemctl list-timers fleet-maintenance.timer   # next + last fire
+#   systemctl start fleet-maintenance.service       # run one pass now
+#
+# scripts/bootstrap.sh --enable-service installs and enables it by default;
+# --no-maintenance-timer opts out for operators who prune their container
+# store some other way.
+
+[Unit]
+Description=Daily fleet host maintenance (podman layer + build cache prune)
+Documentation=https://github.com/ElcanoTek/fleet/blob/main/docs/MAINTENANCE.md
+
+[Timer]
+# 03:30 — after the 02:00 backup has finished (a prune competing with pg_dump
+# for I/O helps nobody) and before the scheduler's 04:00 UTC retention sweep.
+OnCalendar=*-*-* 03:30:00
+# Spread the start across a few minutes so a fleet of boxes sharing a registry
+# or a storage backend does not prune in lockstep.
+RandomizedDelaySec=15m
+# Persistent: a box that was powered off at 03:30 runs the missed pass shortly
+# after boot instead of silently skipping the day. Disk pressure is cumulative,
+# so a skipped day matters.
+Persistent=true
+
+[Install]
+WantedBy=timers.target
