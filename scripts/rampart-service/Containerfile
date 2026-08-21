@@ -4,7 +4,7 @@
 # node 24 = Active LTS (22 is maintenance-only). The repo's node major is
 # declared in web/.nvmrc; this service is independent of the web tier but is
 # kept on the same LTS line so there is one node story on the box.
-FROM docker.io/library/node:24-slim
+FROM docker.io/library/node:26-slim
 
 WORKDIR /app
 COPY package.json ./
