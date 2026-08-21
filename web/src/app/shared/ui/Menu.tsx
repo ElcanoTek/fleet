@@ -410,7 +410,11 @@ export function MenuItem({
 }
 
 export function MenuSeparator() {
-  return <div role="separator" className="my-1 h-px bg-[var(--color-border)]" />;
+  // <hr> is the native separator: it carries the implicit `separator` role that
+  // the ARIA menu pattern expects between groups of menuitems, so the divider
+  // stays exposed to assistive tech without a hand-written role. border-0
+  // cancels the UA/preflight rule so the 1px line is the h-px background only.
+  return <hr className="my-1 h-px border-0 bg-[var(--color-border)]" />;
 }
 
 export function MenuSectionLabel({ children }: { children: ReactNode }) {

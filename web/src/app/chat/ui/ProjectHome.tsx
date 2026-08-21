@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import type { ConversationSummary } from "./chat-experience";
 import type { Project } from "./ProjectsModal";
 import { Icon } from "./Icon";
@@ -108,6 +108,10 @@ export function ProjectHome({
   // Settings dialog draft — same render-time reset when the saved values
   // change (e.g. after a successful PATCH refreshes the projects list).
   const [nameDraft, setNameDraft] = useState(project.name);
+  // Stable, collision-free id so the visible "Name" caption is a real
+  // <label htmlFor> for the name field (clicking it focuses the input)
+  // instead of unassociated text sitting above it.
+  const projectNameInputId = useId();
   const [sharedDraft, setSharedDraft] = useState(Boolean(project.team_id));
   const [savingSettings, setSavingSettings] = useState(false);
   const settingsKey = `${project.name}\u0000${project.team_id ?? ""}`;
@@ -419,13 +423,22 @@ export function ProjectHome({
             <h2 className="mb-4 text-[1rem] font-semibold text-[var(--color-text-primary)]">
               Project settings
             </h2>
-            <label className="mb-1 block text-[0.75rem] font-medium text-[var(--color-text-secondary)]">
+            <label
+              htmlFor={projectNameInputId}
+              className="mb-1 block text-[0.75rem] font-medium text-[var(--color-text-secondary)]"
+            >
               Name
             </label>
             <input
+              id={projectNameInputId}
               value={nameDraft}
               onChange={(e) => setNameDraft(e.target.value)}
               maxLength={128}
+              // aria-label is kept deliberately: inside a dialog already titled
+              // "Settings for <project>", "Project name" is the unambiguous
+              // accessible name (and the one the e2e specs query by), while the
+              // htmlFor/id pair above supplies the missing click-to-focus
+              // association the bare <label> never had.
               aria-label="Project name"
               className="mb-4 w-full rounded-md border border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-2.5 py-2 text-[0.875rem] text-[var(--color-text-primary)] outline-none focus-visible:border-[var(--color-border-strong)]"
             />

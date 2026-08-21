@@ -69,8 +69,8 @@ fleet_resolve_node_bin() {
 }
 
 # fleet_node_build_path NODE_BIN
-#   Echo a PATH with NODE_BIN's directory in front, so `npm`/`npx` in a build
-#   subshell run under THAT interpreter.
+#   Echo a PATH under which the bare name `node` resolves to NODE_BIN, so
+#   `npm`/`npx` in a build subshell run under THAT interpreter.
 #
 #   This is not cosmetic. npm's shebang is `#!/usr/bin/env node`, so a build
 #   invoked as plain `npm ci && npm run build` runs under whatever `node` PATH
@@ -78,8 +78,46 @@ fleet_resolve_node_bin() {
 #   would print "web tier will run node 24" and then build the app on node 22,
 #   which is the exact "reported a thing that did not happen" failure the whole
 #   change set is about.
+#
+#   Prefixing NODE_BIN's DIRECTORY is not enough, and on Fedora it is exactly
+#   wrong: the streams are parallel-installable INTO THE SAME DIRECTORY, so
+#   /usr/bin holds both `node-24` and the default stream's `node`. Putting
+#   /usr/bin in front still resolves `node` to the old major — measured, not
+#   assumed — so this function's promise was false on precisely the layout it
+#   was written for. When the directory does not already resolve `node` to
+#   NODE_BIN, a private shim directory holding a single `node` symlink goes in
+#   front instead.
+#
+#   The shim is mktemp'd rather than given a predictable name. A fixed path
+#   under /tmp would be a world-writable directory placed at the FRONT of root's
+#   PATH for a build — an attacker who pre-creates it owns the build. mktemp -d
+#   is 0700 and unpredictable. The caller is responsible for removing it; both
+#   in-repo callers do, in the subshell that uses it.
 fleet_node_build_path() {
-  local node_bin="$1" dir
+  local node_bin="$1" dir shim
   dir="$(cd "$(dirname "$node_bin")" && pwd)" || { printf '%s' "$PATH"; return 1; }
-  printf '%s:%s' "$dir" "$PATH"
+  if [[ "${dir}/node" -ef "$node_bin" ]]; then
+    printf '%s:%s' "$dir" "$PATH"
+    return 0
+  fi
+  shim="$(mktemp -d 2>/dev/null)" || { printf '%s:%s' "$dir" "$PATH"; return 1; }
+  if ! ln -s "$node_bin" "$shim/node" 2>/dev/null; then
+    rm -rf "$shim"
+    printf '%s:%s' "$dir" "$PATH"
+    return 1
+  fi
+  printf '%s:%s:%s' "$shim" "$dir" "$PATH"
+}
+
+# fleet_node_build_path_cleanup PATH_STRING NODE_BIN
+#   Remove the shim directory fleet_node_build_path may have created, given the
+#   PATH it returned. A no-op when no shim was needed. Never removes a directory
+#   that is not a shim: it checks the entry holds exactly the expected symlink.
+fleet_node_build_path_cleanup() {
+  local path_str="$1" node_bin="$2" first
+  first="${path_str%%:*}"
+  [[ -n "$first" && -d "$first" && -L "$first/node" ]] || return 0
+  [[ "$first/node" -ef "$node_bin" ]] || return 0
+  [[ "$(cd "$first" && ls -A)" == "node" ]] || return 0
+  rm -rf "$first"
 }

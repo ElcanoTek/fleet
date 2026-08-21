@@ -68,9 +68,13 @@ export function formatFileSize(bytes: number, decimals = 2): string {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + " " + sizes[i];
 }
 
-// ESC control char as a unicode escape so the no-control-regex lint rule
-// (which only flags *literal* control chars in a regex literal) stays quiet.
-const ANSI_ESCAPE = new RegExp("\\u001b\\[[0-9;]*m", "g");
+// Matching the ESC control char (U+001B) is the whole point of an ANSI
+// sanitizer, so no-control-regex has nothing to warn us about here. The
+// Unicode escape the rule's help suggests is already what we use — oxlint
+// flags the escape too — so the rule is suppressed with the intent stated
+// rather than turned off repo-wide.
+// eslint-disable-next-line no-control-regex -- ESC (U+001B) is the SGR-sequence introducer this sanitizer exists to strip; matching it is the point.
+const ANSI_ESCAPE = /\u001b\[[0-9;]*m/g;
 
 export function stripAnsiCodes(text: string | null | undefined): string {
   if (!text) return text ?? "";

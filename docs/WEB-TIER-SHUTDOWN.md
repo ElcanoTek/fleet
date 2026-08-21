@@ -246,8 +246,8 @@ The major is declared **once**, in `web/.nvmrc`:
 | --- | --- |
 | CI (6 workflow jobs) | `actions/setup-node` `node-version-file: web/.nvmrc` |
 | `scripts/bootstrap.sh` | installs `nodejs<major>`, stamps `FLEET_NODE_BIN` |
-| `scripts/doctor.sh` | `NODE_FLOOR` from `.nvmrc`; installs the versioned package; asserts the *resolved* `FLEET_NODE_BIN` |
-| `scripts/update.sh` | refuses to build the web tier on an older node; refreshes the shim + `FLEET_NODE_BIN` |
+| `scripts/doctor.sh` | `NODE_FLOOR` from `.nvmrc`; installs the versioned package; asserts the *resolved* `FLEET_NODE_BIN`. `--node` runs just those blocks, which is the seam `update.sh` calls |
+| `scripts/update.sh` | resolves the interpreter before the sandbox rebuild; hands a shortfall to `doctor.sh --node` and **re-resolves**; refreshes the shim + `FLEET_NODE_BIN` |
 | `web/package.json` | `engines.node` |
 
 Before this, CI pinned `'22'` as a literal in six jobs across four workflow
@@ -290,6 +290,13 @@ so all three had to learn about the drop-in:
 | `sudo fleet update` (on a TTY) | prompts; `y` adopts the unit *and* the drop-in |
 | `sudo fleet update` (`--yes` / non-interactive) | no — warns with a copy-paste hint |
 | `scripts/bootstrap.sh --enable-service` | yes, on every run |
+
+The node *interpreter* has a parallel table, and it used to have a hole: only
+two of the three paths installed one, so an existing box a major behind hit
+`update.sh`'s refusal and had to be repaired by a different verb first. That
+handoff — and the ordering trap underneath it, where a doctor run *before* the
+pull reads the old floor out of the un-pulled checkout — is written up in
+[`NODE-TOOLCHAIN-HANDOFF.md`](NODE-TOOLCHAIN-HANDOFF.md).
 
 That bootstrap row used to read "only when `fleet-web.service` was absent",
 which inverted the intent: bootstrap is re-runnable, and a box provisioned

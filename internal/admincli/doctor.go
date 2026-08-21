@@ -13,8 +13,8 @@ import (
 )
 
 // cmdDoctor wraps scripts/doctor.sh — the box-level diagnose-AND-REPAIR pass.
-// It forwards every flag verbatim (--check / --no-restart / --dry-run) to the
-// shell script, which owns the repairs: toolchain floors + fleet-critical
+// It forwards every flag verbatim (--check / --no-restart / --node / --dry-run)
+// to the shell script, which owns the repairs: toolchain floors + fleet-critical
 // package currency, the service user's rootless-podman prerequisites
 // (subuid/subgid, dir ownership, containers.conf, stale pause namespaces),
 // systemd unit drift vs deploy/, env-file shape/permissions, service health +

@@ -137,12 +137,32 @@ image); run them via the `npm` scripts documented below.
     `@typescript-eslint` used to contribute now come from `npm run typecheck`,
     which is its own CI step ahead of the build. Types are still gated, just
     by the compiler instead of the linter.
-  - **The `warn`-severity rules in `.oxlintrc.json` are a burn-down list, not
-    policy.** oxlint's a11y and Next coverage is far wider than the old gate's,
-    and turning it all on at `error` would have failed the build on ~121
-    pre-existing findings. They are set to `warn` so they are visible without
-    conflating "adopt TS 7" with "fix every a11y issue". Fixing them and
-    promoting each to `error` is follow-up work.
+  - **The burn-down is finished — there are no `warn` rules left.** oxlint's
+    a11y and Next coverage is far wider than the old gate's, so turning it all
+    on at `error` at adoption time would have failed the build on ~121
+    pre-existing findings. Eleven rules were set to `warn` instead, covering 55
+    findings, so they stayed visible without conflating "adopt TS 7" with "fix
+    every a11y issue". All 55 have since been fixed and every one of those rules
+    is now `error`; `npm run lint` runs `oxlint --deny-warnings`, so a rule
+    re-introduced at `warn` fails the build rather than quietly re-opening the
+    backlog. See the `## [Unreleased]` entry in
+    [`CHANGELOG.md`](../CHANGELOG.md) for what the fixes actually changed.
+
+    Two things worth knowing when reading `.oxlintrc.json`:
+
+    - **It is parsed as JSONC.** `//` comments are accepted and the config is
+      still fully applied (verified by running a commented copy through
+      `oxlint --config` and confirming a promoted rule still errors), which is
+      why the reasoning for each decision lives in the file itself.
+    - **`nextjs/no-html-link-for-pages` is scoped off for `*.test.*`**, via an
+      `overrides` entry that argues the case on its merits. oxlint's port of the
+      rule does not resolve hrefs against the route tree the way upstream
+      `@next/next` does — measured, it flags a nonexistent route, an `/api`
+      route handler and a `/files/*.pdf` document alike — so in this codebase it
+      is a syntactic check on root-relative `<a href>`. That is useful in app
+      code and meaningless inside a `vi.mock` factory, which is where the two
+      test-file findings were. The override is narrow: in a `.test.tsx` every
+      a11y rule still errors and only this one rule drops out.
 
   Measured on this app: lint **30,418 ms → 607 ms** (~50×), and the typecheck
   step costs ~2 s.

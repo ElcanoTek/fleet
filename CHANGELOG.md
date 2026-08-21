@@ -19,6 +19,95 @@ prior versions are listed because none have shipped.
 
 ### Changed
 
+- **The installer's node handoff: `fleet update` now repairs a node shortfall
+  instead of refusing** — on a box a node major behind the checkout, the
+  documented sequence (`bootstrap → update → status/doctor`) hard-failed on the
+  second step, and the fix lived in a verb that comes later in that line.
+  Running doctor *first* would not have helped either: both scripts read the
+  floor from the checkout's `web/.nvmrc` and doctor never pulls, so on a box
+  provisioned before `.nvmrc` existed a pre-update doctor run reads the old
+  hardcoded floor, sees node 22 and passes. New `scripts/doctor.sh --node`
+  performs just the node repair (install `nodejs<major>` + `-npm`, stamp
+  `FLEET_NODE_BIN`, assert the resolved value) and `update.sh` hands the
+  shortfall to it, then **re-resolves** rather than trusting its exit code —
+  the box repairs in place with no re-run and no prior knowledge of the order.
+  Scoped to `--node` on purpose: a full doctor pass adopts drifted units, a
+  write `fleet update` performs only behind `--adopt-units`. `--no-node-repair`
+  (`FLEET_UPDATE_NODE_REPAIR=0`) restores the refusal for boxes whose node comes
+  from nvm/NodeSource. The gate also **moved** to after the pulls and before the
+  sandbox rebuild: it used to fire after a 2-3 minute image build and a layer
+  prune while printing "nothing has been built or installed yet".
+  `update --dry-run` now runs the resolver for real (it printed
+  "would resolve node" without ever calling it, then closed with a green
+  "fleet rebuilt at <sha>" banner and exit 0 on a box the real run refuses), and
+  `fleet update --check` reports node readiness and exits non-zero rather than
+  recommending a command that cannot succeed. `doctor.sh` and `update.sh` now
+  assert `FLEET_NODE_BIN` by reading it back through the same last-wins reader
+  systemd uses, instead of trusting the writer's return code. `doctor.sh --node`
+  also installs the versioned `nodejs<major>-npm` (the old stream's npm
+  satisfies `command -v npm`, so the missing-tool loop never fired on the box
+  this is for), advises the `fleet-web` restart a scoped run cannot perform
+  itself, and no longer reports a false shortfall when run unprivileged against
+  a 0600 `fleet-web.env` it cannot read. Design note:
+  [`docs/NODE-TOOLCHAIN-HANDOFF.md`](docs/NODE-TOOLCHAIN-HANDOFF.md).
+- **The build now really runs under the interpreter the gate resolved** —
+  `fleet_node_build_path` prefixed PATH with the resolved binary's *directory*,
+  which does not work on the layout it was written for: Fedora's node streams
+  are parallel-installable **into the same directory**, so putting `/usr/bin` in
+  front still resolves the bare name `node` to the default stream. Measured — a
+  build "on /usr/bin/node-24" ran npm's `#!/usr/bin/env node` shebang under node
+  22. It now puts a private shim directory holding a single `node` symlink in
+  front (mktemp'd, not a predictable /tmp path — that would be a world-writable
+  directory at the head of root's PATH during a build), and both callers remove
+  it. `update.sh` also reports the version the build actually ran under, read
+  back from the build PATH, rather than the one the gate intended.
+- **`scripts/fleet-upgrade.sh` brings the web tier back up** —
+  `deploy/fleet-web.service` carries `BindsTo=fleet.service`, so the script's
+  `systemctl restart fleet` stopped fleet-web and nothing restarted it; the run
+  then printed `✓ fleet upgraded + healthy`, a claim its readiness gate (which
+  polls only the Go backend's `/readyz`) never covered. It now restarts
+  fleet-web on both the upgrade and rollback paths, asserts `systemctl
+  is-active`, and the banner reports what it measured — including on the
+  no-systemd and no-curl paths, where the readiness gate is skipped entirely and
+  the banner now says health was **not** verified instead of asserting a
+  `/readyz` 2xx that was never polled. It remains deliberately
+  node-unaware: it never builds the web tier, so the node major is not its
+  business.
+- **`--help` no longer truncates or leaks shell** — bootstrap, update and
+  fleet-upgrade each rendered help with a hardcoded `sed -n '2,Np'` range that
+  rots as the header grows. `fleet-upgrade.sh --help` was printing raw script
+  body; `update.sh` and `bootstrap.sh` were silently dropping their last
+  paragraphs. All three now derive the header block and stop at the first
+  non-comment line, guarded by a test that fails on either truncation or leak.
+  `doctor.sh --help` also stated a stale `Node >= 20` floor while the resolved
+  floor was 24.
+- **The oxlint burn-down is finished: every rule is `error`, zero findings** —
+  `web/.oxlintrc.json` carried 11 rules at `warn` covering 55 real findings
+  (documented as a burn-down list, not policy). All 55 are fixed and every rule
+  is promoted to `error`; `npm run lint` runs with `--deny-warnings` so a rule
+  re-introduced at `warn` fails the build. These were real accessibility
+  repairs, not lint appeasement: three connections dialogs gained Escape,
+  focus-on-open and focus-return (they had no keyboard dismissal at all — the
+  users popover already closed on Escape and gained the focus handling); six
+  `autoFocus` attributes became effects tied to the user action that opens the
+  field, so focus no longer moves on an unrelated remount, and a seventh was
+  removed outright because `Menu` already moves focus into a surface it opens,
+  so the attribute was being overridden anyway; four
+  task-modal switches got a real name/description split instead of a paragraph
+  of prose as their accessible name; the toast gained a labelled dismiss button
+  (it was mouse-only); the cost estimate became a real `<button>` (its
+  `tabIndex={0}` was the only keyboard route to the breakdown); `MenuSeparator`
+  became an `<hr>`; and internal `<a href>` navigation became `<Link>` where the
+  target is genuinely a page. **Behavior change:** a toast is no longer
+  dismissed by clicking anywhere on it — the dismiss target is the new × button
+  (auto-expiry is unchanged). That is a deliberate trade: the toast is a
+  `role="alert"` live region, so making the whole thing a control both
+  mis-labels the announcement and puts a self-destructing element in the tab
+  order. One rule is scoped off for `*.test.*` —
+  `nextjs/no-html-link-for-pages` on a `vi.mock` factory — argued in the config
+  on the merits: the defect it prevents is a runtime navigation that a module
+  stub cannot perform, and the alternative rewrite would make the stub diverge
+  from the DOM the component under test actually queries.
 - **TypeScript 7 all the way down; ESLint replaced by oxlint** — the web tier now
   runs TypeScript 7, the native Go compiler, everywhere: `npm run typecheck`,
   the `next build` type pass, and editors. No TypeScript 6 is kept anywhere.
@@ -151,9 +240,11 @@ prior versions are listed because none have shipped.
   the interpreter and **`exec`s** — the cgroup still holds exactly one process
   (verified: same pid, SIGTERM → `exit(143)` in 15 ms), so this is not the npm
   wrapper returning; npm's fault was *lingering* as a supervisor. bootstrap,
-  doctor and update install the shim, install the versioned `nodejs<major>`
-  package, and stamp/assert `FLEET_NODE_BIN` so the tier runs the node that was
-  installed rather than whichever one the distro defaults to. `rampart-service`
+  doctor and update install the shim and stamp/assert `FLEET_NODE_BIN` so the
+  tier runs the node that was installed rather than whichever one the distro
+  defaults to. Installing the versioned `nodejs<major>` package is bootstrap's
+  and doctor's job — update is an updater, not a provisioner, so it hands a
+  shortfall to `doctor.sh --node` and re-resolves (see below). `rampart-service`
   and the EKS deployment examples move to `node:24-slim` too. Verified on node
   24.19.0: `npm ci` clean, lint 0 errors, build clean, 1080/1080 web tests
   (identical with and without this change), and five start→SIGTERM cycles all

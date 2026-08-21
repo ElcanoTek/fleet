@@ -38,15 +38,30 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   return (
     <ToastContext.Provider value={{ showToast }}>
       {children}
+      {/* The toast itself stays a non-interactive live region (role="alert"):
+          dismissal lives on a real <button> inside it, not on the container.
+          The container used to carry the onClick, which made dismissal
+          mouse-only — a keyboard or switch user had no way to clear a toast at
+          all. Giving the container a key handler instead would have meant
+          putting an auto-expiring element into the tab order and re-labelling a
+          status message as a widget; a dedicated close button is the standard
+          accessible toast shape and keeps the announcement semantics intact. */}
       <div className="toast-container" aria-live="polite" aria-atomic="true">
         {toasts.map((t) => (
           <div
             key={t.id}
-            className={`toast toast--${t.type}`}
+            className={`toast toast--${t.type} flex items-start gap-2`}
             role="alert"
-            onClick={() => dismiss(t.id)}
           >
-            {t.message}
+            <span className="min-w-0 flex-1">{t.message}</span>
+            <button
+              type="button"
+              aria-label="Dismiss notification"
+              className="shrink-0 cursor-pointer border-0 bg-transparent p-0 text-current opacity-60 transition hover:opacity-100"
+              onClick={() => dismiss(t.id)}
+            >
+              <span aria-hidden="true">&times;</span>
+            </button>
           </div>
         ))}
       </div>

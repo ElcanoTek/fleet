@@ -25,8 +25,9 @@ import (
 // self-migrate on restart).
 //
 // `--check` short-circuits to a READ-ONLY report (how many commits the local
-// checkout is behind its upstream) and mutates nothing — handy on a dev box to
-// see whether an update is even needed before running the real thing.
+// checkout is behind its upstream, plus whether this box can actually build the
+// web tier) and mutates nothing — handy on a dev box to see whether an update is
+// even needed before running the real thing.
 func cmdUpdate(argv []string) int {
 	for _, a := range argv {
 		if a == "--check" {
@@ -93,9 +94,42 @@ func updateCheck() int {
 	n, _ := strconv.Atoi(behind)
 	if n == 0 {
 		fmt.Printf("fleet is up to date (%s, even with upstream).\n", branch)
+	} else {
+		fmt.Printf("fleet is %d commit(s) behind upstream on %s — run `fleet update` to upgrade.\n", n, branch)
+	}
+	return nodeReadiness()
+}
+
+// nodeReadiness runs the read-only node probe and returns 0 when this box can
+// build the web tier, 5 when it cannot.
+//
+// Counting commits used to be the whole of `--check`, which made it possible for
+// the command an operator runs to ask "is an update needed, and will it work?"
+// to print "run `fleet update` to upgrade" and exit 0 on a box where that update
+// refuses to build the web tier. Recommending a command that cannot succeed is
+// the same class of fault as a plan describing work it never does.
+//
+// It delegates to `doctor.sh --node --check` rather than re-deriving the floor
+// in Go: scripts/lib/node-version.sh is deliberately the ONE implementation of
+// "which node?", and a copy here would be a fourth call site to keep in
+// lockstep — exactly what that file exists to prevent. --node --check installs
+// nothing and needs no root. A packaged install with no checkout has no script
+// to run and no web tier to build, so the absence is not a failure.
+func nodeReadiness() int {
+	script := findScript("doctor.sh")
+	if script == "" {
 		return 0
 	}
-	fmt.Printf("fleet is %d commit(s) behind upstream on %s — run `fleet update` to upgrade.\n", n, branch)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	//nolint:gosec // G204: fixed "bash" binary; args are the repo-local script path plus literal flags, never request input.
+	cmd := exec.CommandContext(ctx, "bash", script, "--node", "--check")
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		fmt.Fprintln(os.Stderr, "fleet update --check: this box cannot build the web tier yet — `sudo fleet update` repairs the node toolchain in place (or run `sudo fleet doctor --node` first).")
+		return 5
+	}
 	return 0
 }
 
