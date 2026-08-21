@@ -433,8 +433,13 @@ else
   done
   # fleet-web's companion drop-in (deploy/fleet-web.service.d/) restates
   # TimeoutStopFailureMode=kill at the precedence level that beats Fedora's
-  # global service.d abort drop-in — without it the SIGABRT-on-overrun dump
-  # bug returns. A drop-in swap needs no app restart; daemon-reload suffices.
+  # global service.d abort drop-in. What it buys: a stop that overruns its
+  # deadline is SIGKILLed rather than SIGABRTed. It is NOT what keeps the core
+  # dump away — the unit's LimitCORE=0 does that on its own, for every signal
+  # (systemd-coredump stores a dump only when the process's RLIMIT_CORE is
+  # sufficient). So a missing drop-in is a correctness/hygiene gap, not a
+  # return of the 130 MB-per-restart dump pile.
+  # A drop-in swap needs no app restart; daemon-reload suffices.
   web_dropin_src="$SRC_DIR/deploy/fleet-web.service.d/10-timeout-kill.conf"
   web_dropin_dst="/etc/systemd/system/fleet-web.service.d/10-timeout-kill.conf"
   if [[ -f "$web_dropin_src" && -f /etc/systemd/system/fleet-web.service ]]; then
@@ -449,6 +454,37 @@ else
     fi
   fi
   [[ "$units_changed" == "1" ]] && systemctl daemon-reload
+
+  # Now that any reload has happened, check what systemd ACTUALLY resolved —
+  # not what we wrote. Every earlier check here compares FILES, which is a
+  # proxy: the whole reason this drop-in exists is that a unit body can say
+  # `kill` while systemd resolves `abort` (a global /usr/lib service.d drop-in
+  # wins over a unit body, and that shipped undetected once already). File
+  # equality also cannot see a stale checkout that made the block above skip
+  # silently, a drop-in installed to the wrong directory, or a later-sorting
+  # drop-in in the same directory overriding ours. The resolved value can see
+  # all of them, so it is the thing worth asserting.
+  if [[ -f /etc/systemd/system/fleet-web.service ]]; then
+    effective_tsfm="$(systemctl show -p TimeoutStopFailureMode --value fleet-web.service 2>/dev/null || true)"
+    case "$effective_tsfm" in
+      kill)
+        pass "fleet-web TimeoutStopFailureMode resolves to kill (an overrun stop is SIGKILLed, not SIGABRTed)"
+        ;;
+      "")
+        # Pre-246 systemd has no such property; nothing to verify or fix.
+        advise "this systemd does not expose TimeoutStopFailureMode — an overrun fleet-web stop uses the distro default"
+        ;;
+      *)
+        # Name the resolved value rather than guessing its consequence: `abort`
+        # dumps core, `terminate` (systemd's own default) just re-sends SIGTERM
+        # and can leave a wedged process behind. Neither is what we ship.
+        fail "fleet-web TimeoutStopFailureMode resolves to '${effective_tsfm}', not kill — an overrun stop will not be SIGKILLed"
+        advise "  the shipped drop-in is not winning; inspect the full picture: systemctl cat fleet-web"
+        advise "  (a global /usr/lib/systemd/system/service.d/ drop-in, or a later-sorting file in"
+        advise "   /etc/systemd/system/fleet-web.service.d/, overrides the unit body)"
+        ;;
+    esac
+  fi
 fi
 
 if [[ -x "$INSTALL_DIR/fleet" ]]; then

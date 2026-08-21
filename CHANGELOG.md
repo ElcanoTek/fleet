@@ -19,6 +19,29 @@ prior versions are listed because none have shipped.
 
 ### Changed
 
+- **`fleet-web` shutdown: verify the resolved directive, not the file** — a
+  follow-up to the two fixes above, which had a shared weakness: each one
+  asserted a systemd directive and never checked what systemd actually
+  resolved. That is how `TimeoutStopFailureMode=kill` shipped inert on Fedora
+  in the first place, and comparing *files* (the first guard) cannot see a
+  stale checkout, a drop-in installed to the wrong directory, a later-sorting
+  drop-in in the same directory, or a missing `daemon-reload`. `scripts/doctor.sh`
+  now asserts `systemctl show -p TimeoutStopFailureMode --value fleet-web` is
+  `kill` after any reload, failing with a pointer to `systemctl cat fleet-web`
+  when it is not (empty = pre-246 systemd, an advisory rather than a failure).
+  Two install-path bugs fixed alongside it: `bootstrap.sh` installed the drop-in
+  only when `fleet-web.service` was **absent**, so a re-run on a box
+  provisioned before the drop-in shipped — the exact case that needs it — never
+  got it; and `update.sh`'s drop-in check compared bytes where the unit path
+  deliberately compares functional lines via `unit_functional_body()`, so
+  editing the drop-in's header (11 of its 13 lines are comments) would have
+  claimed Fedora's `abort` drop-in was overriding us on a box where it was not.
+  Also corrects an overclaim in `doctor.sh` and `docs/WEB-TIER-SHUTDOWN.md`: a
+  missing drop-in does **not** bring back the 130 MB-per-restart dump pile —
+  `LimitCORE=0` suppresses dumps for every signal on its own, since
+  systemd-coredump stores one only when the process's `RLIMIT_CORE` is
+  sufficient. The drop-in decides how an overrun stop dies (SIGKILL, not
+  SIGABRT), which is a correctness and hygiene matter, not a disk one.
 - **`fleet-web` no longer dumps core on nearly every restart** — see
   [docs/WEB-TIER-SHUTDOWN.md](docs/WEB-TIER-SHUTDOWN.md). ~793 MB of `node-22`
   SIGSEGV dumps had accumulated in `/var/lib/systemd/coredump`, one or two per

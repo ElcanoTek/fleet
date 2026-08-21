@@ -76,6 +76,16 @@ unit's own line (verified on Fedora 44 — `systemctl show fleet-web` reported
 `deploy/fleet-web.service.d/10-timeout-kill.conf`, a per-unit drop-in that
 restates `kill` at the precedence level that wins. Install both files.
 
+**What the drop-in is and is not worth.** It decides *how* an overrun stop
+dies — SIGKILL rather than SIGABRT. It is **not** what keeps the core dump
+away: `LimitCORE=0` does that on its own, for every signal, because
+systemd-coredump stores a dump only "when the related process resource limits
+(`RLIMIT_CORE`) are sufficient" (systemd-coredump(8)) — and the kernel's
+pipe-handler exception does not change that, since systemd-coredump re-checks
+the limit itself. So a box missing the drop-in has a correctness and hygiene
+gap, not a returning 130 MB-per-restart dump pile. Earlier revisions of this
+note and of `doctor.sh` said otherwise; that was wrong.
+
 A stop that overran its deadline is a hang to diagnose from the journal, not a
 crash to dissect from a memory image. SIGKILL reports the same timeout and
 writes no dump. (`TimeoutStopFailureMode` needs systemd ≥ 246; older systemd
@@ -175,7 +185,7 @@ Consequences, which is why this section exists:
 | Fault | Status | Change |
 | --- | --- | --- |
 | npm `uv_kill` segfault, every stop | **fixed** | `ExecStart` runs node directly; `FLEET_WEB_HOST` default moved into the unit |
-| SIGABRT on an overrun stop | **dump eliminated** | `TimeoutStopFailureMode=kill` — unit body **plus** the `fleet-web.service.d/10-timeout-kill.conf` drop-in Fedora's global `abort` drop-in requires (cause of the overrun still unknown) |
+| SIGABRT on an overrun stop | **fixed** | `TimeoutStopFailureMode=kill` — unit body **plus** the `fleet-web.service.d/10-timeout-kill.conf` drop-in Fedora's global `abort` drop-in requires, and `doctor.sh` now asserts the *resolved* value (cause of the overrun still unknown) |
 | next-server teardown segfault | **not fixable here** | no upstream fix in 16.3.1/16.3.2; lead is the node build — operator action |
 | ~793 MB of dumps, secrets in each | **fixed** | `LimitCORE=0`, with the failure still logged |
 | Clean stops logged as failures | **fixed** | `SuccessExitStatus=143` names Next's deliberate SIGTERM exit code; crash signals still fail |
@@ -187,6 +197,52 @@ the journal, tier back to Ready in ~150ms and serving. The residual teardown
 segfault (fault 3) did not fire on this stop; whether removing the npm relay
 also eliminates it in practice, or it recurs on some stops, is now visible in
 the journal without the dump pile.
+
+## Verifying it, rather than assuming it
+
+The through-line of every fault above is the same mistake: **a directive was
+written and never checked against what systemd resolved.** The original
+`TimeoutStopFailureMode=kill` sat in the unit body looking correct and did
+nothing on Fedora for a full release. The first attempt to guard it compared
+*files* — which cannot see a stale checkout, a drop-in installed to the wrong
+directory, a later-sorting drop-in in the same directory, or a forgotten
+`daemon-reload`.
+
+So `scripts/doctor.sh` asserts the resolved value instead:
+
+```sh
+systemctl show -p TimeoutStopFailureMode --value fleet-web.service   # must print: kill
+```
+
+`kill` passes; anything else fails with a pointer to `systemctl cat fleet-web`
+(which shows the unit plus every drop-in in application order, so the winner is
+visible). An empty result means pre-246 systemd, which has no such property —
+reported as an advisory, not a failure. Run that one command by hand after any
+deploy that touches the unit; it is the only output that proves the fix is live.
+
+Installation is spread across three places, each with a different consent rule,
+so all three had to learn about the drop-in:
+
+| path | installs the drop-in? |
+| --- | --- |
+| `sudo fleet doctor` | **yes**, by default (it is the repair path; `--check` only reports) |
+| `sudo fleet update --adopt-units` | yes |
+| `sudo fleet update` (on a TTY) | prompts; `y` adopts the unit *and* the drop-in |
+| `sudo fleet update` (`--yes` / non-interactive) | no — warns with a copy-paste hint |
+| `scripts/bootstrap.sh --enable-service` | yes, on every run |
+
+That bootstrap row used to read "only when `fleet-web.service` was absent",
+which inverted the intent: bootstrap is re-runnable, and a box provisioned
+before the drop-in shipped *already has* the unit — so the one case that needed
+the drop-in was the one case that never got it. The install is now separate
+from the unit's "if absent" branch. Overwriting it is safe because it carries a
+single directive and no operator-tunable content; unit drift itself stays
+`doctor.sh` / `update.sh`'s business.
+
+Note also that `doctor.sh` does **not** pull, so it reconciles against whatever
+`deploy/` the box's checkout holds. On a stale checkout the shipped file does
+not exist and the file-level step skips silently — which is exactly why the
+resolved-value assertion above runs regardless.
 
 The changed unit reaches a running box the usual way — `sudo fleet doctor`
 (step 4 reinstalls a unit that drifted from `deploy/`) or `sudo fleet update` —

@@ -955,7 +955,24 @@ if command -v systemctl >/dev/null 2>&1; then
   # --adopt-units, else hint. A drop-in install needs no app restart.
   dropin_shipped="$SRC_DIR/deploy/fleet-web.service.d/10-timeout-kill.conf"
   dropin_installed="/etc/systemd/system/fleet-web.service.d/10-timeout-kill.conf"
-  if [[ -f /etc/systemd/system/fleet-web.service && -f "$dropin_shipped" ]] && ! cmp -s "$dropin_shipped" "$dropin_installed" 2>/dev/null; then
+  # Comment-only churn must not nag, same rule the unit loop above applies via
+  # unit_functional_body(): byte-identical → nothing to say; identical once
+  # comments are stripped → the directive is already in effect, so say nothing;
+  # only a real functional difference is worth a warning. Without this, editing
+  # the drop-in's header (11 of its 13 lines are comments) would claim Fedora's
+  # abort drop-in is overriding us on a box where it is not.
+  dropin_needs_work=0
+  if [[ -f /etc/systemd/system/fleet-web.service && -f "$dropin_shipped" ]] \
+     && ! cmp -s "$dropin_shipped" "$dropin_installed" 2>/dev/null; then
+    if [[ -f "$dropin_installed" ]] && [[ -z "$(diff \
+          <(unit_functional_body "$dropin_installed") \
+          <(unit_functional_body "$dropin_shipped") 2>/dev/null || true)" ]]; then
+      info "fleet-web.service.d/10-timeout-kill.conf differs from deploy/ only in comments/whitespace — no functional change, leaving as-is."
+    else
+      dropin_needs_work=1
+    fi
+  fi
+  if [[ "$dropin_needs_work" == "1" ]]; then
     if [[ "$ADOPT_UNITS" == "1" ]]; then
       if install -D -m 0644 "$dropin_shipped" "$dropin_installed" 2>/dev/null; then
         ok "installed fleet-web.service.d/10-timeout-kill.conf"
