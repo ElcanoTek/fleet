@@ -95,6 +95,33 @@ image); run them via the `npm` scripts documented below.
   `GOTOOLCHAIN=auto`, so the
   pinned toolchain is downloaded on demand. 1.21 is the floor only because
   that is when `GOTOOLCHAIN` — and therefore the ability to fetch — landed.
+- **TypeScript stays on 6.x, and the blocker is eslint — not the compiler.**
+  Worth stating precisely, because "TypeScript 7 doesn't work" is the wrong
+  summary. On TS 7: `npm ci` succeeds (npm warns `ERESOLVE overriding peer
+  dependency` and proceeds), `tsc --noEmit` is **clean**, and `npm run build`
+  **succeeds**. Only `npm run lint` fails, with an explicit refusal —
+  *"typescript-eslint does not support TS 7.0"*.
+
+  That refusal is deliberate. TS 7 is the **native Go rewrite**: a ~3.6 MB shim
+  around a platform binary, shipping `tsc` but no `tsserver`, so the JS
+  compiler API typescript-eslint is built on isn't there. typescript-eslint is
+  targeting **TS >= 7.1**, skipping 7.0 entirely
+  ([typescript-eslint#10940](https://github.com/typescript-eslint/typescript-eslint/issues/10940)),
+  and it reaches this repo only through `eslint-config-next`'s
+  `typescript-eslint ^8.46.0` — so it is not something a version bump here can
+  route around.
+
+  A side-by-side setup does work today, and is what the upstream error links
+  to: keep `typescript` at 6 for eslint and editors, add TS 7 under an npm
+  alias (`"typescript-7": "npm:typescript@^7"`) for compilation. Verified in
+  this repo — eslint green, native typecheck clean, and **~3.7× faster**
+  (3011 ms → 824 ms). It is deliberately **not** adopted: CI has no separate
+  `tsc` step (typechecking happens inside `next build`, which would still
+  resolve TS 6), so the speedup would apply to nothing CI runs, while adding a
+  second TypeScript that can disagree with the first about the same code. When
+  typescript-eslint ships >= 7.1 support this becomes an ordinary major bump;
+  the `ignore` in [`.github/dependabot.yml`](../.github/dependabot.yml) exists
+  only so Dependabot stops re-proposing it weekly until then.
 - **golangci-lint `v2.12.2`** — CI pins this exact binary version; a different
   version may flag or miss findings. [`.golangci.yml`](../.golangci.yml) no
   longer sets `run.go`: golangci-lint's documented default is the go.mod Go

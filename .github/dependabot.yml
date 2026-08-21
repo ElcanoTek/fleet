@@ -143,12 +143,28 @@ updates:
       # support, then drop this ignore and take the major deliberately.
       - dependency-name: "eslint"
         update-types: ["version-update:semver-major"]
-      # typescript 7 is blocked UPSTREAM by the same package as eslint 10:
-      # eslint-config-next (Next 16) depends on typescript-eslint ^8.x, whose
-      # peer range is `typescript >=4.8.4 <6.1.0` — verified against the
-      # installed tree and the latest 8.x, so it excludes not just 7.x but even
-      # 6.1. Without this ignore Dependabot re-proposes an unmergeable TS 7
-      # major every week. Drop it when typescript-eslint widens the peer range.
+      # typescript 7 is held for ONE reason: eslint. Measured, not assumed —
+      # `npm ci` succeeds (npm only warns "ERESOLVE overriding peer
+      # dependency"), `tsc --noEmit` is CLEAN on TS 7, and `next build`
+      # succeeds. What fails is `npm run lint`, with an explicit refusal:
+      # "typescript-eslint does not support TS 7.0".
+      #
+      # That is deliberate upstream, not a semver accident. TS 7 is the native
+      # Go rewrite — a ~3.6 MB shim around a platform binary, shipping `tsc`
+      # but no `tsserver` — so the JS compiler API typescript-eslint is built on
+      # is not there. typescript-eslint is targeting TS >= 7.1, skipping 7.0
+      # (typescript-eslint#10940), and it reaches us only via
+      # eslint-config-next's `typescript-eslint ^8.46.0`.
+      #
+      # There IS a working path today, which the error message itself links:
+      # keep `typescript` at 6 for eslint/editors and add TS 7 under an npm
+      # alias for compilation. Verified working here — eslint green, native
+      # typecheck clean, ~3.7x faster (3011ms -> 824ms on this app).
+      # It is NOT adopted because CI has no separate `tsc` step: typechecking
+      # happens inside `next build`, which would still resolve TS 6, so the
+      # speedup would apply to nothing CI runs — while adding a second
+      # TypeScript that can disagree with the first. Revisit when
+      # typescript-eslint ships >= 7.1 support and this becomes a plain bump.
       - dependency-name: "typescript"
         update-types: ["version-update:semver-major"]
 

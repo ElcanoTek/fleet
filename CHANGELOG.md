@@ -81,9 +81,13 @@ prior versions are listed because none have shipped.
   unpinned `npm install` at image build time) and both `Containerfile`s. Podman's
   `Containerfile` name **is** supported (dependabot-core matches
   `/dockerfile|containerfile/i`), contrary to most published advice. Added a
-  `typescript` major-ignore mirroring eslint's — `typescript-eslint`'s peer range
-  is `>=4.8.4 <6.1.0`, so a TS 7 PR is unmergeable and would have been reproposed
-  weekly. `semver-major-days` cut from 14 to 7: majors are never auto-merged, so
+  `typescript` major-ignore mirroring eslint's, for a narrower reason than first
+  recorded: on TS 7 `npm ci` succeeds, `tsc --noEmit` is clean and `next build`
+  succeeds — only `npm run lint` fails, because typescript-eslint explicitly
+  refuses TS 7.0 (it is the native Go rewrite, with no JS compiler API to drive)
+  and is targeting >= 7.1. Documented in docs/TESTING.md along with the
+  side-by-side workaround that does work (~3.7x faster) and why it is not
+  adopted: CI has no separate `tsc` step, so nothing CI runs would get faster. `semver-major-days` cut from 14 to 7: majors are never auto-merged, so
   the cooldown delayed visibility without protecting anything.
   *EOL and stale:* Grype `0.115.0` → `0.117.0` (checksum taken from the release's
   own checksums file and verified against the downloaded artifact — a CVE scanner
