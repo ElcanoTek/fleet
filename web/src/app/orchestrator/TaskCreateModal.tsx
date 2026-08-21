@@ -1205,12 +1205,37 @@ export function TaskCreateModal({
 
   return (
     <div
+      // The scrim is presentational: it carries no semantics of its own (the
+      // panel below is the role="dialog"), and every behavior hung on it is a
+      // pointer convenience with a full keyboard equivalent — Escape closes
+      // via useDialogA11y, and the header ✕ / footer Cancel are the real close
+      // controls. role="presentation" states that, rather than pretending the
+      // backdrop is a widget a keyboard user could operate.
       className="modal-overlay is-open"
+      role="presentation"
       onMouseDown={(e) => {
         overlayMouseDownOnSelf.current = e.target === e.currentTarget;
       }}
       onClick={(e) => {
         if (overlayMouseDownOnSelf.current && e.target === e.currentTarget) requestClose();
+      }}
+      // Attachment drag/drop is delegated here rather than sitting on the
+      // role="dialog" panel (a dialog is not a mouse/keyboard target). The
+      // containment test keeps the effective drop zone exactly what it was —
+      // the dialog panel — because drag events bubble up from it. Drag-drop is
+      // pointer-only by nature; the keyboard path to the same action is the
+      // Tools section's file picker.
+      onDragOver={(e) => {
+        if (!modalRef.current?.contains(e.target as Node)) return;
+        if (e.dataTransfer?.types?.includes("Files")) e.preventDefault();
+      }}
+      onDrop={(e) => {
+        if (!modalRef.current?.contains(e.target as Node)) return;
+        if (e.dataTransfer?.files?.length) {
+          e.preventDefault();
+          setToolsOpen(true);
+          fileHandle.current?.addFiles(e.dataTransfer.files);
+        }
       }}
     >
       <div
@@ -1220,17 +1245,6 @@ export function TaskCreateModal({
         aria-label={editing ? "Edit Task" : "Create New Task"}
         ref={modalRef}
         tabIndex={-1}
-        onDragOver={(e) => {
-          // The whole dialog is the drop target for attachments.
-          if (e.dataTransfer?.types?.includes("Files")) e.preventDefault();
-        }}
-        onDrop={(e) => {
-          if (e.dataTransfer?.files?.length) {
-            e.preventDefault();
-            setToolsOpen(true);
-            fileHandle.current?.addFiles(e.dataTransfer.files);
-          }
-        }}
       >
         <div
           className={`modal-header${scrolledTop ? " is-scrolled" : ""}${submitting ? " is-dimmed" : ""}`}
@@ -1855,17 +1869,28 @@ export function TaskCreateModal({
               </section>
 
               {/* ── Email results ──────────────────────────────────────── */}
-              <section className="task-group">
+              {/* The group boundary lives on the section — it wraps the field's
+                  label AND its chips, which is what a screen-reader user is
+                  actually being told to treat as one thing. It used to sit on
+                  the chip box below, which forced that box to be both a group
+                  and a click target; a group is not a widget, so the handler
+                  had no keyboard equivalent to offer. */}
+              <section className="task-group" role="group" aria-label="Email recipients">
                 <div className="task-label-row">
                   <label className="task-label" htmlFor="emailChipInput">
                     Email results
                   </label>
                 </div>
+                {/* The chip box is a painted surrogate for the text field
+                    (cursor: text, focus ring via :focus-within) — presentational,
+                    with the real control being the input inside it. Its click
+                    handler only forwards a click on the box's padding to that
+                    input, which a keyboard user reaches by Tab anyway, so there
+                    is no keyboard behavior missing here to add. */}
                 <div
                   className={`task-chipfield${emailError ? " has-error" : ""}`}
                   onClick={() => emailInputRef.current?.focus()}
-                  role="group"
-                  aria-label="Email recipients"
+                  role="presentation"
                 >
                   {emails.map((e) => (
                     <span key={e} className="task-chip" data-email={e}>
@@ -2148,63 +2173,88 @@ export function TaskCreateModal({
 
                   <div className="task-subcluster">
                     <div className="task-eyebrow">Behavior</div>
+                    {/* Each switch names itself from its TITLE line and takes the
+                        paragraph under it as a description. Without that split the
+                        wrapping <label> hands the checkbox one accessible name made
+                        of the title AND the whole explanation run together, so a
+                        screen-reader user has to sit through a paragraph before
+                        learning what the switch is called. htmlFor/id makes the
+                        association explicit rather than relying on the wrapper. */}
                     <div className="task-switch-list">
-                      <label className="switch-row">
+                      <label className="switch-row" htmlFor="taskCaptainsLog">
                         <input
+                          id="taskCaptainsLog"
                           type="checkbox"
                           className="ui-switch"
+                          aria-labelledby="taskCaptainsLog-title"
+                          aria-describedby="taskCaptainsLog-desc"
                           checked={captainsLog}
                           onChange={(e) => setCaptainsLog(e.target.checked)}
                         />
                         <span className="switch-row-text">
-                          <span className="switch-row-title">
+                          <span className="switch-row-title" id="taskCaptainsLog-title">
                             Persistent memory · Captain&apos;s Log
                           </span>
-                          <span className="switch-row-desc">
+                          <span className="switch-row-desc" id="taskCaptainsLog-desc">
                             Saves facts with <code>remember</code> and reloads them at the start of
                             every run. Scoped to this task.
                           </span>
                         </span>
                       </label>
-                      <label className="switch-row">
+                      <label className="switch-row" htmlFor="taskAllowNetwork">
                         <input
+                          id="taskAllowNetwork"
                           type="checkbox"
                           className="ui-switch"
+                          aria-labelledby="taskAllowNetwork-title"
+                          aria-describedby="taskAllowNetwork-desc"
                           checked={allowNetwork}
                           onChange={(e) => setAllowNetwork(e.target.checked)}
                         />
                         <span className="switch-row-text">
-                          <span className="switch-row-title">Allow network egress</span>
-                          <span className="switch-row-desc">
+                          <span className="switch-row-title" id="taskAllowNetwork-title">
+                            Allow network egress
+                          </span>
+                          <span className="switch-row-desc" id="taskAllowNetwork-desc">
                             Off = sealed — the sandbox has no internet access.
                           </span>
                         </span>
                       </label>
-                      <label className="switch-row">
+                      <label className="switch-row" htmlFor="taskAllowDelegation">
                         <input
+                          id="taskAllowDelegation"
                           type="checkbox"
                           className="ui-switch"
+                          aria-labelledby="taskAllowDelegation-title"
+                          aria-describedby="taskAllowDelegation-desc"
                           checked={allowDelegation}
                           onChange={(e) => setAllowDelegation(e.target.checked)}
                         />
                         <span className="switch-row-text">
-                          <span className="switch-row-title">Allow sub-agent delegation</span>
-                          <span className="switch-row-desc">
+                          <span className="switch-row-title" id="taskAllowDelegation-title">
+                            Allow sub-agent delegation
+                          </span>
+                          <span className="switch-row-desc" id="taskAllowDelegation-desc">
                             The agent may fan work out to governed child agents (capped at 5,
                             each ≤10% of the remaining budget). Off = this task never delegates.
                           </span>
                         </span>
                       </label>
-                      <label className="switch-row">
+                      <label className="switch-row" htmlFor="taskCarryContext">
                         <input
+                          id="taskCarryContext"
                           type="checkbox"
                           className="ui-switch"
+                          aria-labelledby="taskCarryContext-title"
+                          aria-describedby="taskCarryContext-desc"
                           checked={carryContext}
                           onChange={(e) => setCarryContext(e.target.checked)}
                         />
                         <span className="switch-row-text">
-                          <span className="switch-row-title">Carry context across runs</span>
-                          <span className="switch-row-desc">
+                          <span className="switch-row-title" id="taskCarryContext-title">
+                            Carry context across runs
+                          </span>
+                          <span className="switch-row-desc" id="taskCarryContext-desc">
                             Each run starts with a bounded summary of the previous run&apos;s
                             output. Recurring tasks only.
                           </span>
@@ -2303,7 +2353,20 @@ export function TaskCreateModal({
               </span>
             ) : forecast ? (
               <span className={`task-estimate-result${estimateStale ? " is-stale" : ""}`}>
-                <span className="task-estimate-value" tabIndex={0}>
+                {/* The inline figure reveals the full forecast on hover AND
+                    on focus (:focus-within), so it has always needed to be
+                    focusable — but a bare tabIndex on a <span> puts a stop in
+                    the tab order that announces as nothing. It is a real
+                    control (its whole job is "show me the breakdown"), so it
+                    is a real <button>; aria-describedby then hands that
+                    breakdown to a screen reader directly, which the CSS-only
+                    reveal never could. type="button" is explicit even though
+                    the footer sits outside #createTaskForm. */}
+                <button
+                  type="button"
+                  className="task-estimate-value"
+                  aria-describedby="task-estimate-detail"
+                >
                   {forecast.pricing_known && forecast.estimated_total_cost_usd != null
                     ? `≈ $${forecast.estimated_total_cost_usd.toFixed(2)} per run`
                     : "Cost unknown for this model"}
@@ -2313,8 +2376,8 @@ export function TaskCreateModal({
                       · may hit the ${forecast.max_cost_ceiling_usd.toFixed(2)} ceiling
                     </span>
                   ) : null}
-                </span>
-                <span className="task-estimate-popover">
+                </button>
+                <span className="task-estimate-popover" id="task-estimate-detail">
                   <CostForecastPanel forecast={forecast} />
                   {estimateStale ? (
                     <p className="task-estimate-stale-note">

@@ -237,6 +237,45 @@ describe("AdminUsersPage", () => {
     expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
   });
 
+  // The popover used to keep itself open by swallowing every click with an
+  // onClick on its <div> — a handler on an element with no role. It now
+  // renders as a labelled dialog that takes focus, and the document-level
+  // close decides "outside" by containment instead.
+  it("opens the row-edit popover as a focused dialog and keeps it open on inside clicks", async () => {
+    render(<AdminUsersPage />);
+    await screen.findByText("bob@x.com");
+
+    openKebab("bob@x.com");
+    const pop = screen.getByRole("dialog", { name: "Edit bob@x.com" });
+    expect(document.activeElement).toBe(pop);
+
+    // A click on a control inside the popover must not close it.
+    fireEvent.click(within(pop).getByLabelText("Team for bob@x.com"));
+    expect(screen.getByRole("button", { name: "Save" })).toBeInTheDocument();
+
+    // A click anywhere outside still closes it — and focus goes back to the
+    // kebab that opened it, not to the top of the document.
+    fireEvent.click(document.body);
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "Edit bob@x.com" }),
+    );
+  });
+
+  it("moves focus into the team-rename field when the rename opens", async () => {
+    render(<AdminUsersPage />);
+    await screen.findByText("alice@x.com");
+
+    // The rename control only appears once a single team is filtered to.
+    fireEvent.change(screen.getByLabelText("Filter by team"), {
+      target: { value: "blue" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Rename team" }));
+    expect(document.activeElement).toBe(
+      screen.getByLabelText("New name for team blue"),
+    );
+  });
+
   it("surfaces a 403 as an admin-only message", async () => {
     mockFetch(() => new Response("forbidden", { status: 403 }));
     render(<AdminUsersPage />);

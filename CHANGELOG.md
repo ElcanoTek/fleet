@@ -62,6 +62,25 @@ prior versions are listed because none have shipped.
   non-comment line, guarded by a test that fails on either truncation or leak.
   `doctor.sh --help` also stated a stale `Node >= 20` floor while the resolved
   floor was 24.
+- **The oxlint burn-down is finished: every rule is `error`, zero findings** —
+  `web/.oxlintrc.json` carried 11 rules at `warn` covering 55 real findings
+  (documented as a burn-down list, not policy). All 55 are fixed and every rule
+  is promoted to `error`; `npm run lint` runs with `--deny-warnings` so a rule
+  re-introduced at `warn` fails the build. These were real accessibility
+  repairs, not lint appeasement: three connections dialogs and a users popover
+  gained Escape, focus-on-open and focus-return (none had a keyboard dismissal
+  before); seven `autoFocus` attributes became effects tied to the user action
+  that opens the field, so focus no longer moves on an unrelated remount; four
+  task-modal switches got a real name/description split instead of a paragraph
+  of prose as their accessible name; the toast gained a labelled dismiss button
+  (it was mouse-only); the cost estimate became a real `<button>` (its
+  `tabIndex={0}` was the only keyboard route to the breakdown); `MenuSeparator`
+  became an `<hr>`; and internal `<a href>` navigation became `<Link>` where the
+  target is genuinely a page. One rule is scoped off for `*.test.*` —
+  `nextjs/no-html-link-for-pages` on a `vi.mock` factory — argued in the config
+  on the merits: the defect it prevents is a runtime navigation that a module
+  stub cannot perform, and the alternative rewrite would make the stub diverge
+  from the DOM the component under test actually queries.
 - **TypeScript 7 all the way down; ESLint replaced by oxlint** — the web tier now
   runs TypeScript 7, the native Go compiler, everywhere: `npm run typecheck`,
   the `next build` type pass, and editors. No TypeScript 6 is kept anywhere.

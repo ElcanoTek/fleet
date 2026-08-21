@@ -697,3 +697,96 @@ describe("TaskCreateModal — sub-agent delegation", () => {
     ).toBeChecked();
   });
 });
+
+// ── Accessibility of the dialog shell ────────────────────────────────────────
+// These pin the behavior that the jsx-a11y pass moved around, so a later
+// "silence the linter" edit can't quietly take it away again: the scrim is
+// presentational but still closes on click, the drop zone is still the dialog
+// PANEL (its handlers now live on the scrim and are scoped by containment),
+// every switch is named by its title line rather than by title+paragraph, and
+// the cost figure is a real focusable control with the breakdown attached.
+
+function dropFiles(node: Element, files: File[]) {
+  fireEvent.drop(node, {
+    dataTransfer: { files, types: ["Files"], items: [] },
+  });
+}
+
+describe("TaskCreateModal — dialog shell a11y", () => {
+  it("closes a clean form on Escape and on a backdrop click", () => {
+    const { onClose } = renderModal();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(onClose).toHaveBeenCalledTimes(1);
+
+    const overlay = screen.getByRole("dialog").parentElement as HTMLElement;
+    // The scrim carries no semantics of its own — the panel is the dialog.
+    expect(overlay).toHaveAttribute("role", "presentation");
+    fireEvent.mouseDown(overlay);
+    fireEvent.click(overlay);
+    expect(onClose).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the dialog panel as the attachment drop zone, not the whole scrim", () => {
+    renderModal();
+    const tools = () => screen.getByRole("button", { name: /Tools & files/ });
+    const panel = screen.getByRole("dialog");
+    const overlay = panel.parentElement as HTMLElement;
+    expect(tools()).toHaveAttribute("aria-expanded", "false");
+
+    // Dropping on the backdrop is outside the panel: nothing happens.
+    dropFiles(overlay, [new File(["x"], "ignored.txt", { type: "text/plain" })]);
+    expect(tools()).toHaveAttribute("aria-expanded", "false");
+
+    // Dropping on the panel reveals Tools & files, exactly as before.
+    dropFiles(panel, [new File(["x"], "notes.txt", { type: "text/plain" })]);
+    expect(tools()).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("names each Advanced switch by its title, with the paragraph as a description", () => {
+    renderModal();
+    fireEvent.click(screen.getByRole("button", { name: /Advanced/ }));
+    // Exact-name lookups: before the fix the accessible name was the title AND
+    // the whole explanatory paragraph run together.
+    const network = screen.getByRole("checkbox", { name: "Allow network egress" });
+    expect(network).toHaveAccessibleName("Allow network egress");
+    expect(network).toHaveAccessibleDescription(
+      "Off = sealed — the sandbox has no internet access.",
+    );
+    for (const name of [
+      "Persistent memory · Captain's Log",
+      "Allow sub-agent delegation",
+      "Carry context across runs",
+    ]) {
+      expect(screen.getByRole("checkbox", { name })).toHaveAccessibleName(name);
+    }
+  });
+
+  it("exposes the cost figure as a focusable button describing the full forecast", async () => {
+    estimateTask.mockResolvedValue({
+      model: "test/model",
+      estimated_prompt_tokens: 1200,
+      system_prompt_tokens: 800,
+      tool_definitions_tokens: 400,
+      avg_output_tokens: 500,
+      max_iterations: 12,
+      pricing_known: true,
+      per_iteration_cost_usd: 0.01,
+      estimated_total_cost_usd: 0.12,
+      estimated_total_cost_range: { min: 0.08, max: 0.2 },
+      max_cost_ceiling_usd: 5,
+      would_hit_ceiling: false,
+      note: "",
+    });
+    renderModal();
+    fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Do the thing" } });
+    fireEvent.click(screen.getByRole("button", { name: "Estimate cost" }));
+
+    const figure = await screen.findByRole("button", { name: /per run/ });
+    expect(figure).toHaveAttribute("type", "button");
+    // Focusable as a real control rather than via a tabIndex on a <span>…
+    figure.focus();
+    expect(figure).toHaveFocus();
+    // …and the hover-only breakdown is reachable without hovering.
+    expect(figure).toHaveAccessibleDescription(/Estimated prompt/);
+  });
+});

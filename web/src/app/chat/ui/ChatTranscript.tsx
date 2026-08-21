@@ -393,8 +393,12 @@ export function ChatTranscript({
   return (
           <section
             ref={conversationRef}
+            // An aria-labelled <section> already exposes the implicit `region`
+            // role (ARIA in HTML: section maps to region when it has an
+            // accessible name), so `role="region"` was redundant. Removing it
+            // keeps getByRole("region", { name: "Conversation" }) — used by the
+            // mocked/live/canary Playwright specs — resolving to this element.
             aria-label="Conversation"
-            role="region"
             // overflow-x-hidden: belt-and-suspenders against a stray wide
             // child (long unbreakable token, syntax-highlighted long line)
             // creating a horizontal scroll inside the chat column on mobile.

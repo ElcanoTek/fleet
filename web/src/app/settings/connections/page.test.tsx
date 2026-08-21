@@ -5,6 +5,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import ConnectionsPage from "./page";
 
@@ -35,6 +36,30 @@ const BROWSERBASE = {
   trust: "third_party",
 };
 
+// A community-provenance entry: adding it is gated on the consent dialog,
+// which is where this page's modal chrome (backdrop, panel, Escape) lives.
+const ACME = {
+  name: "acme_notes",
+  display_name: "Acme Notes",
+  description: "Community-run notes server.",
+  url: "https://mcp.acme.example/mcp",
+  vendor: "Acme Collective",
+  category: "productivity",
+  provenance: "community",
+  trust: "third_party",
+};
+
+// One optional bundled connector, on by operator default: its availability
+// row is the switch + clickable state-text pair.
+const BUNDLED_IMG = {
+  name: "image_generation",
+  display_name: "Image generation",
+  description: "Bundled image tools.",
+  tool_count: 2,
+  optional: true,
+  enabled_by_default: true,
+};
+
 const CATALOG = {
   bundled: [],
   third_party: [BROWSERBASE],
@@ -45,6 +70,7 @@ const CATALOG = {
 // remote-server POST returns.
 function mockFetch(
   onAdd?: (body: Record<string, unknown>) => { status: number; body: unknown },
+  catalog: unknown = CATALOG,
 ) {
   return vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
     const method = init?.method ?? "GET";
@@ -69,7 +95,7 @@ function mockFetch(
       };
     }
     if (url.startsWith("/api/mcp-catalog")) {
-      return { ok: true, status: 200, json: async () => CATALOG };
+      return { ok: true, status: 200, json: async () => catalog };
     }
     if (url.startsWith("/api/connector-prefs")) {
       return { ok: true, status: 200, json: async () => ({ prefs: [] }) };
@@ -178,6 +204,101 @@ describe("ConnectionsPage guided api_key add", () => {
     await waitFor(() => {
       expect(screen.getByTestId("dir-form-browserbase")).toBeTruthy();
       expect(key.value).toBe("bb_bad_key");
+    });
+  });
+});
+
+// Accessibility contracts for the page's overlay chrome and its switch rows.
+// The dialogs used to hang `role="dialog"` on the full-screen backdrop and
+// close it from an onClick on that <div>: a mouse-only dismissal, with focus
+// left behind on the page. These lock in the keyboard paths that replaced it.
+describe("ConnectionsPage consent dialog", () => {
+  const catalogWithConsent = { ...CATALOG, third_party: [BROWSERBASE, ACME] };
+
+  it("takes focus as a labelled dialog and closes on Escape without adding", async () => {
+    let posted = false;
+    vi.stubGlobal(
+      "fetch",
+      mockFetch(() => {
+        posted = true;
+        return { status: 200, body: { id: "srv1" } };
+      }, catalogWithConsent),
+    );
+    visit("");
+
+    // Activate the way a keyboard user does — focus on the trigger, then
+    // fire it — so the focus hand-back below is exercised. (fireEvent.click
+    // alone does not move focus in jsdom the way a real pointer click does.)
+    const addButton = await screen.findByTestId("dir-add-acme_notes");
+    addButton.focus();
+    fireEvent.click(addButton);
+    const dialog = await screen.findByRole("dialog", {
+      name: "Connect Acme Notes?",
+    });
+    // The panel — not the backdrop — is the dialog, and focus moves into it.
+    expect(document.activeElement).toBe(dialog);
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(posted).toBe(false);
+    // Dismissing hands focus back to the control that opened the dialog.
+    expect(document.activeElement).toBe(addButton);
+  });
+
+  it("exposes the click-outside dismissal as a named control", async () => {
+    vi.stubGlobal("fetch", mockFetch(undefined, catalogWithConsent));
+    visit("");
+
+    fireEvent.click(await screen.findByTestId("dir-add-acme_notes"));
+    await screen.findByRole("dialog", { name: "Connect Acme Notes?" });
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Dismiss the Acme Notes connect dialog",
+      }),
+    );
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+});
+
+describe("ConnectionsPage availability toggle", () => {
+  it("announces one control (the switch) but keeps the state text clickable", async () => {
+    const calls: { url: string; init?: RequestInit }[] = [];
+    const base = mockFetch(undefined, { ...CATALOG, bundled: [BUNDLED_IMG] });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        calls.push({ url, init });
+        return base(url, init);
+      }),
+    );
+    visit("");
+
+    const card = await screen.findByTestId("bundled-card-image_generation");
+    expect(
+      within(card).getByRole("switch", { name: "Enable Image generation for me" }),
+    ).toBeInTheDocument();
+    // The state text duplicates that switch, so it is deliberately absent
+    // from the accessibility tree instead of being a second, unexplained
+    // control next to it…
+    expect(
+      within(card).queryByRole("button", { name: "Enabled for me" }),
+    ).toBeNull();
+    // …while remaining the pointer hit target it always was.
+    fireEvent.click(within(card).getByText("Enabled for me"));
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (c) => c.url === "/api/connector-prefs" && c.init?.method === "PUT",
+        ),
+      ).toBe(true),
+    );
+    const put = calls.find(
+      (c) => c.url === "/api/connector-prefs" && c.init?.method === "PUT",
+    );
+    expect(JSON.parse(String(put?.init?.body))).toMatchObject({
+      kind: "bundled",
+      connector_id: "image_generation",
+      enabled: false,
     });
   });
 });
