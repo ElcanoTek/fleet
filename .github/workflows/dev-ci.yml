@@ -147,7 +147,8 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v7
         with:
-          node-version: '22'
+          # Read from web/.nvmrc so the deployed node major is declared once.
+          node-version-file: web/.nvmrc
           cache: npm
           cache-dependency-path: web/package-lock.json
 

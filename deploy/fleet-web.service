@@ -19,6 +19,8 @@
 #                                        # node_modules is REQUIRED: ExecStart runs
 #                                        # node_modules/next/dist/bin/next directly.
 #   chown -R fleet-web:fleet-web /opt/fleet/web/.next   # the only path next writes at runtime
+#   install -D -m 0755 deploy/fleet-web-start.sh /usr/local/bin/fleet-web-start.sh
+#                                        # ^ ExecStart; resolves the node interpreter
 #   install -D -m 0644 deploy/fleet-web.service /etc/systemd/system/fleet-web.service
 #   install -D -m 0644 deploy/fleet-web.service.d/10-timeout-kill.conf \
 #     /etc/systemd/system/fleet-web.service.d/10-timeout-kill.conf
@@ -37,6 +39,9 @@
 #   APP_SESSION_SECRET=...                         # signs the web session cookie (rotating logs everyone out)
 #   PORT=3000                                      # the port `next start` binds (Caddy proxies to it)
 #   NODE_ENV=production
+#   FLEET_NODE_BIN=/usr/bin/node-24                # the node to run (bootstrap/doctor
+#                                                  # write this; see fleet-web-start.sh).
+#                                                  # Unset falls back to `node` on PATH.
 #   # plus whatever auth env the web app needs (e.g. the elcano_auth public key).
 #
 # Optional:
@@ -69,25 +74,35 @@ WorkingDirectory=/opt/fleet/web
 # ExecStart runs next directly.
 Environment=FLEET_WEB_HOST=127.0.0.1
 EnvironmentFile=/etc/fleet/fleet-web.env
-# Run next DIRECTLY — no `npm run start` wrapper. npm buys nothing here (it
-# only re-reads package.json to exec this same command) and it cost us a crash
-# on every single stop: with npm in the middle, `systemctl stop` SIGTERMs the
-# whole control group, npm's child exits first, and npm then forwards the
-# signal to a process it has already reaped — segfaulting inside uv_kill →
-# node::Kill → ProcessWrap::OnExit. That wrote a core dump per restart for a
-# process whose only remaining job was to exit. One less process in the cgroup
-# also means SIGTERM reaches next-server directly, with nothing to relay it.
+# There is NO `npm run start` wrapper here, and there must not be. npm's crash
+# on every single stop was the original bug: with npm in the middle,
+# `systemctl stop` SIGTERMs the whole control group, npm's child exits first,
+# and npm then forwards the signal to a process it has already reaped —
+# segfaulting inside uv_kill → node::Kill → ProcessWrap::OnExit, writing a core
+# dump per restart for a process whose only remaining job was to exit.
 #
-# -H keeps the bind loopback-only, so the topology diagram above is enforced
-# rather than merely documented (`next start` with no -H binds 0.0.0.0 and
-# would expose :3000 past Caddy). FLEET_WEB_HOST is defaulted by the
-# Environment= line above and may be overridden in the env file; do not remove
-# that default — an empty value here would hand next an argument-less -H.
-# The port still comes from PORT in the env file, exactly as before.
+# What ExecStart points at instead is a shim that `exec`s, which is a different
+# thing entirely: after the exec the shell is REPLACED by node, so the cgroup
+# holds exactly one process (verified: same pid, `next-server`) and SIGTERM
+# reaches node with nothing left to relay it. A supervisor that lingers is the
+# hazard; a shim that becomes the program is not.
 #
-# node lives at /usr/bin/node on Fedora/RHEL and Debian/Ubuntu packages alike;
-# override with a drop-in if yours is elsewhere (e.g. an nvm install).
-ExecStart=/usr/bin/node node_modules/next/dist/bin/next start -H ${FLEET_WEB_HOST}
+# It exists because the interpreter cannot be named statically. Fedora's node
+# packages are parallel-installable: nodejs24 provides /usr/bin/node-24 while
+# /usr/bin/node stays on whatever stream the release designated default, so a
+# hardcoded /usr/bin/node would silently keep serving the old major. systemd
+# cannot paper over that either — it does not expand a variable used as the
+# executable (`ExecStart=${FLEET_NODE_BIN} …` is taken as a literal path;
+# verified with systemd-analyze), so the resolution has to happen inside a
+# fixed program. bootstrap/doctor write FLEET_NODE_BIN into the env file; the
+# shim honours it and falls back to `node` on PATH. See
+# deploy/fleet-web-start.sh and docs/WEB-TIER-SHUTDOWN.md.
+#
+# The shim also applies -H (loopback-only, so the topology diagram above is
+# enforced and not merely documented — `next start` with no -H binds 0.0.0.0
+# and would expose :3000 past Caddy) and leaves PORT to `next start`, exactly
+# as before.
+ExecStart=/usr/local/bin/fleet-web-start.sh
 Restart=always
 RestartSec=5s
 KillSignal=SIGTERM

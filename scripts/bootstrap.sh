@@ -513,6 +513,19 @@ deploy_web_tier() {
   [[ -d "$web_src" ]] || { warn "no web/ in the checkout — skipping web tier."; return; }
   command -v npm >/dev/null 2>&1 || { warn "npm not found — skipping web tier (install nodejs)."; return; }
 
+  # Resolve the interpreter the unit will run BEFORE building, and fail loudly
+  # rather than building against one node and serving with another.
+  local node_bin node_ver
+  if node_bin="$(resolve_node_bin "${NODE_MAJOR:-24}")"; then
+    node_ver="$("$node_bin" -v 2>/dev/null || echo unknown)"
+    ok "web tier will run ${node_bin} (${node_ver})"
+  else
+    warn "no node >= ${NODE_MAJOR:-24} found (web/.nvmrc) — the web tier needs one."
+    warn "  install it: sudo dnf install nodejs${NODE_MAJOR:-24}   (then re-run, or: sudo fleet doctor)"
+    warn "  skipping the web tier rather than building it against an unsupported node."
+    return
+  fi
+
   # Shared secrets the web↔backend link needs; generate-if-absent then load them
   # into the already-started backend.
   step "Web tier: ensuring shared secrets in ${ENV_FILE} + reloading backend"
@@ -534,6 +547,16 @@ deploy_web_tier() {
   fi
 
   install -d "$web_dst" && cp -a "$web_src/." "$web_dst/" && ok "deployed web app → ${web_dst}"
+
+  # ExecStart points at this shim (it resolves the node interpreter and execs
+  # next — see deploy/fleet-web-start.sh). Installed unconditionally: it is
+  # shipped content with no operator-tunable parts, and a stale copy would send
+  # the tier to the wrong node.
+  if [[ -f "$REPO_ROOT/deploy/fleet-web-start.sh" ]]; then
+    install -D -m 0755 "$REPO_ROOT/deploy/fleet-web-start.sh" /usr/local/bin/fleet-web-start.sh \
+      && ok "installed /usr/local/bin/fleet-web-start.sh" \
+      || warn "could not install fleet-web-start.sh — fleet-web will not start without it"
+  fi
 
   # fleet-web.service runs as the dedicated unprivileged fleet-web user (it is
   # the public-facing process). Create the user idempotently and hand it the
@@ -578,6 +601,10 @@ deploy_web_tier() {
   upsert_env_file "$web_env" APP_SESSION_SECRET        "$app_secret"
   upsert_env_file "$web_env" PORT                      "3000"
   upsert_env_file "$web_env" NODE_ENV                  "production"
+  # The interpreter resolved above, pinned explicitly. Without this the shim
+  # falls back to `node` on PATH, which on Fedora is the DEFAULT stream — i.e.
+  # possibly an older major than the one just installed.
+  upsert_env_file "$web_env" FLEET_NODE_BIN            "$node_bin"
   upsert_env_file "$web_env" NEXT_PUBLIC_PUBLIC_ORIGIN "$origin"
   upsert_env_file "$web_env" NEXT_PUBLIC_APP_NAME      "$app_name"
   upsert_env_file "$web_env" NEXT_PUBLIC_BUILD_ID      "$build_id"
@@ -714,13 +741,51 @@ fi
 # (fleet now preflights that at boot and fails closed — see ADR-0012). Cheap
 # to install unconditionally so the mode is available if an operator picks it.
 step "Installing system dependencies (build + runtime + sandbox toolchain)"
-FLEET_DEPS=(git curl jq golang nodejs python3 python3-pip gcc podman slirp4netns)
+# The node major is declared ONCE, in web/.nvmrc, and read here. CI reads the
+# same file via actions/setup-node's node-version-file, so the version the box
+# runs and the version CI tests cannot drift apart silently — which is exactly
+# what happened before: CI pinned '22' in six workflow files while the box took
+# whatever `dnf install nodejs` happened to mean.
+NODE_MAJOR="$(tr -d '[:space:]' < "$REPO_ROOT/web/.nvmrc" 2>/dev/null || true)"
+[[ "$NODE_MAJOR" =~ ^[0-9]+$ ]] || NODE_MAJOR=24
+# Ask for the VERSIONED package (nodejs24), not the unversioned `nodejs`.
+# Fedora's node streams are parallel-installable and `nodejs` resolves to
+# whichever the release designated default — so `dnf install nodejs` on F44
+# gives 22 and can never reach 24, however many times it is re-run.
+FLEET_DEPS=(git curl jq golang "nodejs${NODE_MAJOR}" npm python3 python3-pip gcc podman slirp4netns)
 if command -v dnf >/dev/null 2>&1; then
-  run dnf install -y "${FLEET_DEPS[@]}"
+  if ! run dnf install -y "${FLEET_DEPS[@]}"; then
+    # A distro without a versioned stream (or one that names it differently)
+    # should still get a working box; the floor is then doctor.sh's to report.
+    warn "installing nodejs${NODE_MAJOR} failed — falling back to the unversioned nodejs package."
+    warn "  the web tier needs node >= ${NODE_MAJOR}; \`sudo fleet doctor\` will report the shortfall."
+    FLEET_DEPS=(git curl jq golang nodejs npm python3 python3-pip gcc podman slirp4netns)
+    run dnf install -y "${FLEET_DEPS[@]}" || warn "dependency install failed — install these by hand: ${FLEET_DEPS[*]}"
+  fi
   [[ "$DRY_RUN" == "1" ]] || ok "system dependencies present (${FLEET_DEPS[*]})"
 else
   warn "dnf not found — skipping dependency install. Ensure these are present before continuing: ${FLEET_DEPS[*]}"
+  warn "  the web tier needs node >= ${NODE_MAJOR} (declared in web/.nvmrc)."
 fi
+
+# resolve_node_bin — echo the newest node binary satisfying $NODE_MAJOR, or "".
+#
+# Checks the VERSIONED path first because that is the one that means what it
+# says. On Fedora, /usr/bin/node-24 is unambiguous while /usr/bin/node is a
+# symlink owned by whichever stream is default — so preferring the unversioned
+# name is how a box ends up running an old major with the new one installed.
+resolve_node_bin() {
+  local want="$1" cand major
+  for cand in "/usr/bin/node-${want}" "/usr/local/bin/node-${want}"; do
+    [[ -x "$cand" ]] && { printf '%s' "$cand"; return 0; }
+  done
+  cand="$(command -v node 2>/dev/null || true)"
+  if [[ -n "$cand" ]]; then
+    major="$("$cand" -v 2>/dev/null | sed 's/^v//' | cut -d. -f1)"
+    [[ "${major:-0}" -ge "$want" ]] && { printf '%s' "$cand"; return 0; }
+  fi
+  return 1
+}
 
 # ── dedicated service user + rootless-Podman setup (--enable-service path) ──
 # Done early (before the sandbox build) because the image is built INTO this

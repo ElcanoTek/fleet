@@ -21,6 +21,25 @@
 #   https://docs.github.com/code-security/reference/supply-chain-security/dependabot-options-reference#cooldown--
 version: 2
 
+# ── What Dependabot does NOT cover here (learned the hard way) ───────────────
+# The node RUNTIME major is not a dependency any of the three surfaces below can
+# see, so Dependabot never proposed the 22 → 24 move and never will:
+#
+#   * `github-actions` updates ACTION REFS (actions/setup-node@v6 → @v7). The
+#     `node-version:` value passed TO an action is a workflow input, not a
+#     dependency — so six workflow files sat pinned at '22' with nothing
+#     watching them. They now read `node-version-file: web/.nvmrc` instead, so
+#     the major is declared in exactly one reviewable place.
+#   * `npm` updates packages in web/package.json. The node interpreter is not
+#     one of them, and `engines.node` is a constraint Dependabot does not bump.
+#   * Nothing covers the box's `nodejs` RPM — that is dnf's business, and
+#     scripts/bootstrap.sh + scripts/doctor.sh now install the versioned
+#     `nodejs<major>` package read from the same web/.nvmrc.
+#
+# So bumping node is a deliberate, human-initiated change: edit web/.nvmrc,
+# and CI + bootstrap + doctor + update all follow. Check the release line first
+# — production should track Active or Maintenance LTS, never Current.
+
 updates:
   # Go module (go.mod / go.sum at the repo root).
   - package-ecosystem: gomod

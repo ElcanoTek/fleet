@@ -19,6 +19,35 @@ prior versions are listed because none have shipped.
 
 ### Changed
 
+- **node 24 everywhere, declared once** — the repo targeted three different node
+  versions at the same time: CI pinned `'22'` as a literal in **six** workflow
+  files, `scripts/doctor.sh`'s floor said `20`, and the box ran whatever
+  `dnf install nodejs` happened to mean. Nothing reconciled them, and Dependabot
+  could never have caught it (it updates action *refs*, not the inputs passed to
+  them, and nothing it watches covers an OS package — `.github/dependabot.yml`
+  now records that where someone would look). The major is now declared once in
+  **`web/.nvmrc`** and read by CI (`node-version-file`), `bootstrap.sh`,
+  `doctor.sh`, `update.sh` and `web/package.json`'s `engines`. Raised to **24**,
+  the Active LTS line (22 is maintenance-only). Two traps handled along the way:
+  Fedora's node packages are **parallel-installable**, so `dnf upgrade nodejs`
+  can never cross a major — the reason a box sat on 22 through repeated doctor
+  runs — and installing `nodejs24` leaves `/usr/bin/node` pointing at the older
+  default stream, so a hardcoded `ExecStart=/usr/bin/node` would keep serving
+  the old major. systemd cannot fix that either: it does not expand a variable
+  used as the executable (`ExecStart=${FLEET_NODE_BIN} …` is a literal path).
+  `ExecStart` therefore names `deploy/fleet-web-start.sh`, a shim that resolves
+  the interpreter and **`exec`s** — the cgroup still holds exactly one process
+  (verified: same pid, SIGTERM → `exit(143)` in 15 ms), so this is not the npm
+  wrapper returning; npm's fault was *lingering* as a supervisor. bootstrap,
+  doctor and update install the shim, install the versioned `nodejs<major>`
+  package, and stamp/assert `FLEET_NODE_BIN` so the tier runs the node that was
+  installed rather than whichever one the distro defaults to. `rampart-service`
+  and the EKS deployment examples move to `node:24-slim` too. Verified on node
+  24.19.0: `npm ci` clean, lint 0 errors, build clean, 1080/1080 web tests
+  (identical with and without this change), and five start→SIGTERM cycles all
+  `exit(143)` with no segfault. **Not** verified: that node 24 fixes the
+  residual teardown segfault — that fault does not reproduce off the affected
+  box, so it stays an open operator experiment.
 - **`boxdoctor` can now see a crash loop and a directive that did not take** —
   the admin-facing doctor (Settings → Admin → Doctor, `/admin/doctor`) probed
   units with `is-active` only, and both app units run `Restart=always`, so a

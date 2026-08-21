@@ -276,13 +276,13 @@ Notes that matter:
 ### 3c. web image
 
 ```dockerfile
-FROM node:22 AS build
+FROM node:24 AS build
 WORKDIR /app
 COPY web/package*.json ./
 RUN npm ci
 COPY web/ .
 RUN npm run build
-FROM node:22-slim
+FROM node:24-slim
 WORKDIR /app
 COPY --from=build /app ./
 ENV NODE_ENV=production PORT=3000

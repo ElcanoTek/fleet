@@ -28,15 +28,24 @@ reaped, and crashes inside `uv_kill` → `node::Kill`, called from
 `ProcessWrap::OnExit`. A core dump per restart, from a process whose only
 remaining job was to exit.
 
-**Fix:** run next directly, no wrapper.
+**Fix:** get the supervisor out of the cgroup.
 
 ```ini
-ExecStart=/usr/bin/node node_modules/next/dist/bin/next start -H ${FLEET_WEB_HOST}
+ExecStart=/usr/local/bin/fleet-web-start.sh
 ```
 
 npm bought nothing here — it only re-read `package.json` to exec this same
 command. Removing it deletes this crash outright and lets SIGTERM reach
 next-server with nothing in between to relay it.
+
+That `ExecStart` first named node directly
+(`/usr/bin/node node_modules/next/dist/bin/next start -H ${FLEET_WEB_HOST}`) and
+now names a shim, for a reason unrelated to this crash — *which* node runs; see
+[Choosing the interpreter](#choosing-the-interpreter). **The shim is not the
+wrapper coming back.** npm's fault was *staying alive* as a supervisor and
+relaying a signal to a child it had already reaped; the shim `exec`s, so the
+shell is replaced by node and the cgroup holds exactly one process. Verified:
+same pid, `next-server`, SIGTERM → `exit(143)` in 15 ms.
 
 Two details the wrapper had been carrying, now carried explicitly:
 
@@ -113,8 +122,17 @@ What we checked, so the next person doesn't repeat it:
   dump). The box that crashes runs **node 22.23.1** (`nodejs22-22.23.1-2.fc44`).
   That is suggestive, not conclusive — the two environments differ in more than
   node — but it is the strongest lead, and it makes the remedy an **operator**
-  action, not a code change: pin an earlier 22.x, or move to 24.x, and see
-  whether the teardown dump stops.
+  action rather than a code fix: run a different node build and see whether the
+  teardown dump stops.
+
+  The repo now targets **node 24** (Active LTS; 22 is maintenance-only), which
+  is the forward version of that experiment — see
+  [Choosing the interpreter](#choosing-the-interpreter). Be clear about what
+  that is and is not: node 24.19.0 was verified here to build the web tier,
+  pass its suite, and survive five start→SIGTERM cycles cleanly
+  (`exit(143)`, no segfault). It is **not** verified to fix fault 3, because
+  fault 3 does not reproduce off the affected box — 22.22.2 exits cleanly here
+  too. Confirming it needs a run on a box that actually crashes.
 
 Until then the dump's *cost* is bounded rather than its cause fixed — see
 `LimitCORE=0` below.
@@ -184,7 +202,7 @@ Consequences, which is why this section exists:
 
 | Fault | Status | Change |
 | --- | --- | --- |
-| npm `uv_kill` segfault, every stop | **fixed** | `ExecStart` runs node directly; `FLEET_WEB_HOST` default moved into the unit |
+| npm `uv_kill` segfault, every stop | **fixed** | no supervisor left in the cgroup: `ExecStart` is an `exec`ing shim; `FLEET_WEB_HOST` default moved into the unit |
 | SIGABRT on an overrun stop | **fixed** | `TimeoutStopFailureMode=kill` — unit body **plus** the `fleet-web.service.d/10-timeout-kill.conf` drop-in Fedora's global `abort` drop-in requires, and `doctor.sh` now asserts the *resolved* value (cause of the overrun still unknown) |
 | next-server teardown segfault | **not fixable here** | no upstream fix in 16.3.1/16.3.2; lead is the node build — operator action |
 | ~793 MB of dumps, secrets in each | **fixed** | `LimitCORE=0`, with the failure still logged |
@@ -197,6 +215,47 @@ the journal, tier back to Ready in ~150ms and serving. The residual teardown
 segfault (fault 3) did not fire on this stop; whether removing the npm relay
 also eliminates it in practice, or it recurs on some stops, is now visible in
 the journal without the dump pile.
+
+## Choosing the interpreter
+
+Fault 3 pointed at the node build, which made "run a different node" an
+operational requirement — and that turned out to carry its own trap.
+
+Fedora's node packages are **parallel-installable**. `dnf install nodejs24`
+gives you `/usr/bin/node-24`, while `/usr/bin/node` keeps pointing at whichever
+stream the release designated default (22 on F44). Two consequences:
+
+- `dnf upgrade nodejs` can **never** cross a major. A box can be told to
+  upgrade node indefinitely and stay on 22 — which is what happened here.
+- A hardcoded `ExecStart=/usr/bin/node` would keep serving the old major even
+  with the new one installed. Installing 24 and still running 22 is the same
+  shape of failure as a systemd directive that never takes effect.
+
+systemd cannot resolve this itself: it does **not** expand a variable used as
+the executable — `ExecStart=${FLEET_NODE_BIN} …` is taken as a literal path
+(verified with `systemd-analyze verify`). So the resolution happens inside a
+fixed program, `deploy/fleet-web-start.sh`. It prefers `$FLEET_NODE_BIN`
+(written by bootstrap/doctor/update), falls back to `node` on PATH for distros
+shipping a single unversioned interpreter, and logs the interpreter and version
+it chose — so "what node is actually serving?" is a `journalctl` grep instead of
+an investigation. That question was hard to answer while diagnosing fault 3.
+
+The major is declared **once**, in `web/.nvmrc`:
+
+| consumer | how it reads the major |
+| --- | --- |
+| CI (6 workflow jobs) | `actions/setup-node` `node-version-file: web/.nvmrc` |
+| `scripts/bootstrap.sh` | installs `nodejs<major>`, stamps `FLEET_NODE_BIN` |
+| `scripts/doctor.sh` | `NODE_FLOOR` from `.nvmrc`; installs the versioned package; asserts the *resolved* `FLEET_NODE_BIN` |
+| `scripts/update.sh` | refuses to build the web tier on an older node; refreshes the shim + `FLEET_NODE_BIN` |
+| `web/package.json` | `engines.node` |
+
+Before this, CI pinned `'22'` as a literal in six workflow files while
+`doctor.sh`'s floor said `20` and the box ran whatever `dnf install nodejs`
+meant; nothing reconciled the three. Dependabot could never have caught that
+drift — it updates action *refs*, not the inputs passed to them, and nothing it
+watches covers an OS package. `.github/dependabot.yml` records that at the top
+so the next person does not go looking for a bot that was never watching.
 
 ## Verifying it, rather than assuming it
 
