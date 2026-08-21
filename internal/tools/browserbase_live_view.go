@@ -100,8 +100,7 @@ type BrowserbaseLiveViewParams struct {
 
 // browserbaseSession is the subset of GET /v1/sessions this tool consumes.
 type browserbaseSession struct {
-	ID        string `json:"id"`
-	CreatedAt string `json:"createdAt"`
+	ID string `json:"id"`
 }
 
 // BrowserbaseKeyFunc unseals the Browserbase connector credential belonging to
@@ -244,7 +243,9 @@ func browserbaseResolveRunningSession(ctx context.Context, client *http.Client, 
 		return "", "BROWSERBASE_NO_RUNNING_SESSION: there is no running Browserbase session to show. " +
 			"Call the connector's _start tool (then _navigate somewhere) and try again."
 	case 1:
-		return live[0].ID, ""
+		// The trimmed form is what passed the pattern filter above; returning the
+		// raw id would fail the caller's re-check and send it looping.
+		return strings.TrimSpace(live[0].ID), ""
 	default:
 		// Deliberately NOT listing the ids. An explicit session_id is accepted
 		// with no ownership check, so printing them would hand over exactly what
@@ -267,6 +268,10 @@ func runBrowserbaseLiveView(ctx context.Context, keyFn BrowserbaseKeyFunc, param
 	}
 
 	client := browserbaseHTTPClient()
+	// The client (and its Transport) is per-call; without this the kept-alive TLS
+	// connection and its read/write goroutines outlive the call indefinitely
+	// (a custom Transport has IdleConnTimeout 0 = never expire).
+	defer client.CloseIdleConnections()
 
 	sessionID := strings.TrimSpace(params.SessionID)
 	if sessionID == "" && !fromConnector {
@@ -303,7 +308,7 @@ func runBrowserbaseLiveView(ctx context.Context, keyFn BrowserbaseKeyFunc, param
 		return "BROWSERBASE_UNAVAILABLE: could not reach the Browserbase API. Do NOT retry more than once — " +
 			"report that the live view could not be minted and offer the dashboard fallback at https://www.browserbase.com/sessions.", true
 	}
-	if msg, bad := browserbaseStatusError(status, sessionID); bad {
+	if msg, bad := browserbaseStatusError(status, sessionID, fromConnector); bad {
 		return msg, true
 	}
 	var decoded browserbaseDebugResponse
@@ -358,15 +363,26 @@ func runBrowserbaseLiveView(ctx context.Context, keyFn BrowserbaseKeyFunc, param
 }
 
 // browserbaseStatusError maps an HTTP status to an actionable message. The
-// 401/403/404 case is the one worth spelling out: because the connector and this
-// tool authenticate with DIFFERENT credentials, a live session can be invisible
-// here simply because the two keys belong to different Browserbase projects —
-// which otherwise looks identical to "the session ended".
-func browserbaseStatusError(status int, sessionID string) (string, bool) {
+// 401/403/404 case is the one worth spelling out, and it depends on which key
+// authenticated the request (fromConnector). With the box-wide env key, the
+// connector and this tool authenticate with DIFFERENT credentials, so a live
+// session can be invisible here simply because the two keys belong to different
+// Browserbase projects — which otherwise looks identical to "the session ended".
+// With the user's own connector key there is only ONE credential in play, and
+// blaming a key mismatch would send the user hunting for a second key that may
+// not even exist.
+func browserbaseStatusError(status int, sessionID string, fromConnector bool) (string, bool) {
 	switch status {
 	case http.StatusOK:
 		return "", false
 	case http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound:
+		if fromConnector {
+			return fmt.Sprintf("BROWSERBASE_SESSION_NOT_VISIBLE: Browserbase has no session %q under the user's connector key (HTTP %d). "+
+				"The session most likely already ended — start a new one with the connector's _start tool. If it is visibly still running "+
+				"in the dashboard, it belongs to a different Browserbase project than the key on the user's connection under "+
+				"Settings → Connections. Do NOT retry with the same id; the dashboard fallback is https://www.browserbase.com/sessions.",
+				sessionID, status), true
+		}
 		return fmt.Sprintf("BROWSERBASE_SESSION_NOT_VISIBLE: Browserbase has no session %q under the API key this server holds (HTTP %d). "+
 			"Either the session already ended, or this server's BROWSERBASE_API_KEY belongs to a different Browserbase project than the "+
 			"connector's key. Do NOT retry — tell the user to check that both keys come from the same Browserbase project, and offer the "+
