@@ -19,8 +19,8 @@ func TestBuiltinSkillsPackWellFormed(t *testing.T) {
 	if len(problems) > 0 {
 		t.Fatalf("builtin pack has malformed skills: %v", problems)
 	}
-	if len(skills) < 6 {
-		t.Fatalf("builtin pack should ship at least 6 skills, got %d", len(skills))
+	if len(skills) < 7 {
+		t.Fatalf("builtin pack should ship at least 7 skills, got %d", len(skills))
 	}
 	for _, sk := range skills {
 		if len(sk.Description) < 40 {
@@ -81,6 +81,9 @@ func TestMergedSkills(t *testing.T) {
 		}
 		if _, ok := got["bento-slides"]; !ok {
 			t.Error("builtin skill with bundled templates/references missing from merged roster")
+		}
+		if _, ok := got["browserbase"]; !ok {
+			t.Error("builtin skill pairing with a hosted MCP connector missing from merged roster")
 		}
 		if !strings.Contains(got["data-profiler"], "bundle's own profiler") {
 			t.Errorf("bundle must win the name collision, got %q", got["data-profiler"])

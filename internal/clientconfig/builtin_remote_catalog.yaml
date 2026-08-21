@@ -1241,7 +1241,18 @@ servers:
     description: >-
       Cloud browser automation via Stagehand — navigate, act, extract, and take
       screenshots in a hosted browser session.
-    url: "https://mcp.browserbase.com/mcp"
+    # keepAlive=true is what lets a session outlive one fleet turn, which the
+    # browserbase SKILL.md's human handoff depends on: the agent posts a
+    # live-view link, the turn ends, and the user logs in before replying.
+    # Upstream says a session ends when the transport closes without it, though
+    # in testing a connection predating this flag survived anyway — kept as
+    # belt-and-braces, not a proven dependency. The
+    # hosted endpoint takes this as a query parameter, and the API key is added
+    # per-request on top (internal/mcp/queryauth.go does q.Set, so it does not
+    # clobber this one). NOTE: keep-alive is a paid Browserbase feature, and an
+    # existing connection keeps its stored URL — re-add it only if handoffs
+    # actually lose the session. See docs/BROWSERBASE.md.
+    url: "https://mcp.browserbase.com/mcp?keepAlive=true"
     vendor: Browserbase, Inc.
     docs_url: "https://docs.browserbase.com/integrations/mcp/setup"
     repo_url: "https://github.com/browserbase/mcp-server-browserbase"

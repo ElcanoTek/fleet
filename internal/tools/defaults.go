@@ -89,26 +89,33 @@ func DefaultTools() []fantasy.AgentTool {
 // per-task MCP selection is narrow), not the interactive chat turn — which runs
 // near the 128-tool ceiling once per-user MCP servers (#449) load — via
 // [MetadataTools]. See internal/scheduledrun.
-func NewTurnTools(sb *sandbox.Sandbox) TurnTools {
+// browserbaseKey unseals the running user's Browserbase connector credential and
+// is nil unless one is genuinely reachable for this turn; a non-nil value is what
+// registers browserbase_live_view, with the host env key as the fallback.
+func NewTurnTools(sb *sandbox.Sandbox, browserbaseKey BrowserbaseKeyFunc) TurnTools {
+	turn := []fantasy.AgentTool{
+		NewBashTool(sb),
+		NewViewFileTool(sb),
+		NewWriteFileTool(sb),
+		NewEditFileTool(sb),
+		NewTaskTrackerTool(),
+		NewWebFetchTool(),
+		NewDownloadURLTool(sb),
+		NewSmartSearchTool(),
+		NewPreviewEmailTool(),
+		NewScheduleTaskTool(),
+		NewManageTasksTool(),
+		NewSuggestAdvancedModelTool(),
+		NewXLSXTool(sb),
+		NewProposeMemoryTool(),
+		NewRunPythonTool(sb),
+		NewGenerateImageTool(sb),
+	}
+	if t := NewBrowserbaseLiveViewTool(browserbaseKey); t != nil {
+		turn = append(turn, t)
+	}
 	return TurnTools{
-		Tools: []fantasy.AgentTool{
-			NewBashTool(sb),
-			NewViewFileTool(sb),
-			NewWriteFileTool(sb),
-			NewEditFileTool(sb),
-			NewTaskTrackerTool(),
-			NewWebFetchTool(),
-			NewDownloadURLTool(sb),
-			NewSmartSearchTool(),
-			NewPreviewEmailTool(),
-			NewScheduleTaskTool(),
-			NewManageTasksTool(),
-			NewSuggestAdvancedModelTool(),
-			NewXLSXTool(sb),
-			NewProposeMemoryTool(),
-			NewRunPythonTool(sb),
-			NewGenerateImageTool(sb),
-		},
+		Tools:   turn,
 		Cleanup: sb.Close,
 	}
 }

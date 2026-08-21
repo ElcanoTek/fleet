@@ -390,6 +390,61 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **The agent can hand you a real browser when a page needs a human (#987).** Ask it to
+  do something on a site with no API and it drives a hosted Browserbase session; when it
+  hits a login form, a captcha or a 2FA prompt it posts a **live-view link**, stops, and
+  waits. You open the link, take over the very same browser, finish the sign-in, and
+  reply — the agent picks up in that session and carries on.
+
+  Two pieces ship: the `browserbase` built-in skill (the seventh in the pack) and a
+  host-side `browserbase_live_view` tool. The tool exists because the hosted MCP's
+  `start` returns only a session id — the viewer URL comes from an authenticated
+  Browserbase API call, and credentials never enter the sandbox or the model context, so
+  minting it has to happen host-side. It joins the "host network / brokered fetch"
+  exception class ADR-0036 already enumerates, alongside `web_fetch` and `download_url`;
+  it drives no browser, so ADR-0044's "browser automation is a connector" still holds.
+  This is the follow-on that ADR named when it removed the in-sandbox browser tool.
+
+  **One key, in one place:** add Browserbase under Settings → Connections and enable
+  it in a chat's Tools picker. The link-minting tool resolves the running user's own
+  connector credential host-side, so the same key that drives the browser mints the
+  link — and the capability is scoped to that user rather than the whole box. A
+  box-wide `BROWSERBASE_API_KEY` remains as a fallback for paths with no per-user
+  connection (scheduled runs), installed with the new guided writer
+  `sudo fleet config set-browserbase-key` beside `set-openrouter-key`. The tool is registered
+  per turn **only when a credential is actually reachable** — you have a Browserbase
+  connection and this chat has it switched on, or the operator set the box-wide key — so
+  everyone else sees no new tool at all, and the credential stays inside the same
+  per-conversation gate the connector's own tools obey. Where it is absent the skill falls
+  back to telling you to open the session from the Browserbase dashboard, which uses your
+  own login and needs nothing from fleet.
+
+  Two safety details worth knowing. With no `session_id` the tool resolves your running
+  session itself — but only when the key came from **your own** connection; a shared
+  box-wide key can see every session in a shared project, so it demands an explicit id
+  rather than risk minting a control link to someone else's logged-in browser. And
+  `BROWSERBASE_API_KEY` is now a parent-owned env name, so a client bundle declaring the
+  same key for its own MCP connector will **fail server boot** with a clear overlap error
+  instead of having the value silently scrubbed — deliberate, but a behaviour change for
+  such a bundle.
+
+  One thing to know before you rely on it: **the live-view link is a capability.** It
+  needs no password, so anyone holding it can drive that browser until the session ends,
+  and fleet cannot revoke it — the skill says so and tells the agent not to forward it.
+  The connector's catalog URL also gained `?keepAlive=true`, which upstream documents as
+  what keeps a session alive across a disconnect; in testing a connection predating that
+  flag survived the handoff anyway, so it is belt-and-braces rather than a proven
+  dependency, and an existing connection only needs re-adding if handoffs actually lose
+  the session.
+
+  Honest scope: the skill is discoverable in interactive chat only (bundle skills are not
+  in the scheduled-run roster, so the tool's own description carries the protocol for
+  headless runs); the handoff is two turns by construction, because interactive chat
+  cannot block on a human; there is no embedded viewer, since the web proxy's CSP forbids
+  framing; and only a manual run with a real key exercises the live API call. Full design
+  note, including why the key is separate from the connector's own credential, in
+  `docs/BROWSERBASE.md`.
+
 - **A reusable sandbox build canary (`build-sandbox-image.yml`) — build only, no
   push.** Every bundle's sandbox image derives from exactly two inputs: the
   `FROM` base and the Containerfile's own `RUN` lines. `build-sandbox-image.sh`
