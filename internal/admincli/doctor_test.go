@@ -105,6 +105,11 @@ func TestDoctorLoadBearingStrings(t *testing.T) {
 	// when the timer's last run did not succeed.
 	for _, want := range []string{
 		`advise "no ${BACKUP_TIMER} + ${BACKUP_SERVICE} pair installed`,
+		// The absent-pair advisories hand the operator the one-command verb
+		// (which installs from deploy/, reloads and enables), not a copy-paste
+		// install/daemon-reload/enable chain.
+		"sudo fleet timers install --backup",
+		"sudo fleet timers install --maintenance",
 		`fail "${BACKUP_SERVICE} last run FAILED`,
 		`systemctl show -p Result --value "$BACKUP_SERVICE"`,
 		// is-enabled reads the install symlink only: an enabled-but-stopped

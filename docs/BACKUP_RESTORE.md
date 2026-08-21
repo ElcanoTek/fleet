@@ -169,7 +169,17 @@ volume or the hypervisor, or ship dumps offsite with your own tooling.
 The units live in the repo at [`deploy/fleet-backup.service`](../deploy/fleet-backup.service)
 and [`deploy/fleet-backup.timer`](../deploy/fleet-backup.timer), so they are
 version-controlled and covered by doctor's unit-drift check like `fleet.service`
-and `fleet-web.service`. To install them by hand:
+and `fleet-web.service`. On an already-provisioned box, install + enable the
+pair in one command (it also creates the backup directory; see
+[docs/TIMERS.md](TIMERS.md)):
+
+```sh
+sudo fleet timers install --backup
+```
+
+`fleet update` also offers the install interactively when the pair is missing
+(`--no-timers` silences the offer for boxes that back up another way). The
+equivalent by hand:
 
 ```sh
 install -D -m 0644 deploy/fleet-backup.service /etc/systemd/system/fleet-backup.service
@@ -199,7 +209,7 @@ a production deployment five days in). Both halves of doctor
 
 | State | Verdict |
 |---|---|
-| the `fleet-backup` timer + service pair not installed (either half missing) | **advisory** — backing up at the volume/hypervisor layer is a valid answer, so this never fails the box, and doctor never installs the timer for you |
+| the `fleet-backup` timer + service pair not installed (either half missing) | **advisory** — backing up at the volume/hypervisor layer is a valid answer, so this never fails the box, and doctor never installs the timer for you (its hint names the opt-in: `sudo fleet timers install --backup`) |
 | installed but not enabled | **advisory** — it will never fire; `systemctl enable --now fleet-backup.timer` |
 | enabled but not active | **advisory** — `is-enabled` only reads the install symlink, so a stopped timer fires nothing while the service's `Result` still says `success`; `systemctl start fleet-backup.timer` |
 | enabled + active, last run failed | **failure** — the dump did not complete; `journalctl -u fleet-backup -n 50` |

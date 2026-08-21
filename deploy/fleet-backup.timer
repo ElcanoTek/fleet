@@ -7,7 +7,7 @@
 #
 # scripts/bootstrap.sh --enable-service installs and enables it by default;
 # --no-backup-timer opts out for operators who back up at the volume or
-# hypervisor layer.
+# hypervisor layer. On an existing box: sudo fleet timers install --backup.
 
 [Unit]
 Description=Daily fleet database backup

@@ -100,6 +100,11 @@ func TestBackupVerdict(t *testing.T) {
 	if c := backupVerdict(false, false, false, ""); c.Status != StatusWarn || c.Fix == "" {
 		t.Errorf("no timer: got %s fix=%q, want warn with a fix", c.Status, c.Fix)
 	}
+	// The absent-pair fix must name the one-command install verb, not a
+	// copy-paste install/daemon-reload/enable chain.
+	if c := backupVerdict(false, false, false, ""); !strings.Contains(c.Fix, "fleet timers install") {
+		t.Errorf("no timer fix %q should name `fleet timers install`", c.Fix)
+	}
 	if c := backupVerdict(true, false, false, ""); c.Status != StatusWarn || c.Fix == "" {
 		t.Errorf("timer installed but disabled: got %s fix=%q, want warn with a fix", c.Status, c.Fix)
 	}

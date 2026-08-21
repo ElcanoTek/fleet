@@ -592,7 +592,7 @@ elif ! systemctl cat "$BACKUP_TIMER" >/dev/null 2>&1 || ! systemctl cat "$BACKUP
   # The hint installs just this pair rather than re-bootstrapping: on an
   # already-provisioned box, bootstrap also rebuilds binaries and re-provisions
   # Postgres, which is not what "I want a backup timer" should cost.
-  advise "no ${BACKUP_TIMER} + ${BACKUP_SERVICE} pair installed — nothing on this box dumps the databases; install it with: install -m 0644 -t /etc/systemd/system ${SRC_DIR}/deploy/fleet-backup.{service,timer} && systemctl daemon-reload && systemctl enable --now ${BACKUP_TIMER} (ignore this if you back up at the volume/hypervisor layer)"
+  advise "no ${BACKUP_TIMER} + ${BACKUP_SERVICE} pair installed — nothing on this box dumps the databases; install + enable it with: sudo fleet timers install --backup (ignore this if you back up at the volume/hypervisor layer)"
 elif ! systemctl is-enabled --quiet "$BACKUP_TIMER" 2>/dev/null; then
   advise "${BACKUP_TIMER} installed but not enabled — it will never fire: systemctl enable --now ${BACKUP_TIMER}"
 elif ! systemctl is-active --quiet "$BACKUP_TIMER" 2>/dev/null; then
@@ -620,7 +620,7 @@ fi
 # check below starts failing.
 if command -v systemctl >/dev/null 2>&1; then
   if ! systemctl cat "$MAINT_TIMER" >/dev/null 2>&1; then
-    advise "no ${MAINT_TIMER} + ${MAINT_SERVICE} pair installed — nothing prunes stale podman image layers on this box; install it with: install -m 0644 -t /etc/systemd/system ${SRC_DIR}/deploy/fleet-maintenance.{service,timer} && systemctl daemon-reload && systemctl enable --now ${MAINT_TIMER} (ignore this if you prune the container store yourself)"
+    advise "no ${MAINT_TIMER} + ${MAINT_SERVICE} pair installed — nothing prunes stale podman image layers on this box; install + enable it with: sudo fleet timers install --maintenance (ignore this if you prune the container store yourself)"
   elif ! systemctl is-enabled --quiet "$MAINT_TIMER" 2>/dev/null; then
     advise "${MAINT_TIMER} is installed but NOT enabled — it will not fire: systemctl enable --now ${MAINT_TIMER}"
   elif ! systemctl is-active --quiet "$MAINT_TIMER" 2>/dev/null; then
