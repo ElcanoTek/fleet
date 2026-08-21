@@ -95,7 +95,7 @@ while [[ $# -gt 0 ]]; do
     --no-rollback)     NO_ROLLBACK=1 ;;
     --yes|-y)          ASSUME_YES=1 ;;
     --dry-run)         DRY_RUN=1 ;;
-    -h|--help)         sed -n '2,71p' "$0"; exit 0 ;;
+    -h|--help)         awk 'NR>1 && /^#/ { sub(/^# ?/, ""); print; next } NR>1 { exit }' "$0"; exit 0 ;;
     *) echo "error: unknown argument: $1" >&2; exit 2 ;;
   esac
   shift
@@ -258,6 +258,52 @@ restart_service() {
   systemctl restart "$SERVICE_NAME"
 }
 
+# restart_web_tier — bring fleet-web back after a backend restart, and assert it.
+#
+# deploy/fleet-web.service carries `BindsTo=fleet.service`, so `systemctl
+# restart fleet` STOPS the web tier and systemd does not start it again on its
+# own. scripts/update.sh has restarted it explicitly for exactly this reason
+# since #654; this script did not — it restarted the backend, gated on the
+# BACKEND's /readyz, and then printed "fleet upgraded + healthy" while the web
+# tier was down. The readiness gate never covered fleet-web and still does not,
+# so the claim has to come from the unit's own resolved state.
+#
+# WEB_TIER_UP records what was actually observed, so the final banner can say
+# what it verified instead of asserting a health it never measured. A missing
+# unit is not a failure: plenty of boxes run the backend alone.
+# What this run actually OBSERVED, so the banner can report that and nothing
+# more. Both start at "not established": the readiness gate and the web-tier
+# restart each have skip branches (no systemd, no curl) that reach the banner
+# without measuring anything, and the first version of this banner printed
+# "backend /readyz 2xx; no fleet-web unit on this box" on exactly those paths —
+# two specific measurements, neither taken, one line under a message saying the
+# gate had been skipped. That is the fault this script was being audited for.
+HEALTH_VERIFIED="skipped"
+WEB_TIER_UP="unknown"
+restart_web_tier() {
+  command -v systemctl >/dev/null 2>&1 || return 0   # leaves WEB_TIER_UP unknown
+  if ! systemctl cat fleet-web.service >/dev/null 2>&1; then
+    WEB_TIER_UP="absent"   # no web unit on this box — nothing to bring back
+    return 0
+  fi
+  if ! systemctl restart fleet-web 2>/dev/null; then
+    WEB_TIER_UP="no"
+    warn "could not restart fleet-web (BindsTo=${SERVICE_NAME}.service stopped it) — check: journalctl -u fleet-web -n 50"
+    return 0
+  fi
+  # Read the resolved state back rather than trusting the restart's exit code —
+  # a unit can accept the restart and then fail its ExecStart.
+  local i
+  for i in 1 2 3 4 5 6 7 8; do
+    if [[ "$(systemctl is-active fleet-web 2>/dev/null || true)" == "active" ]]; then
+      WEB_TIER_UP="yes"; ok "fleet-web is active again (systemctl is-active)"; return 0
+    fi
+    sleep 1
+  done
+  WEB_TIER_UP="no"
+  warn "fleet-web did not come back active within 8s — check: journalctl -u fleet-web -n 50"
+}
+
 # ── rollback helper: restore the backup binaries + restart ───────────────────
 rollback() {
   if [[ "$NO_ROLLBACK" == "1" ]]; then
@@ -279,6 +325,7 @@ rollback() {
   fi
   if restart_service; then
     ok "restarted ${SERVICE_NAME} on the previous binary"
+    restart_web_tier   # the rollback restart stopped the BindsTo'd web tier too
   else
     warn "rollback restart failed — journalctl -u ${SERVICE_NAME} -n 50"
   fi
@@ -307,6 +354,7 @@ fi
 step "5/5  Gating on readiness (${HEALTH_URL}, up to ${HEALTH_TIMEOUT}s)"
 if [[ "$DRY_RUN" == "1" ]]; then
   info "[dry-run] would poll ${HEALTH_URL} until 2xx (≤ ${HEALTH_TIMEOUT}s), else roll back."
+  info "[dry-run] would then restart fleet-web (BindsTo=${SERVICE_NAME}.service stops it) and assert systemctl is-active"
 elif ! command -v systemctl >/dev/null 2>&1; then
   info "no systemd — skipping the readiness gate (nothing was restarted by this script)."
 elif ! command -v curl >/dev/null 2>&1; then
@@ -328,6 +376,8 @@ else
   done
   if [[ "$healthy" == "1" ]]; then
     ok "new process is ready (${HEALTH_URL} → 2xx)"
+    HEALTH_VERIFIED="yes"
+    restart_web_tier
   else
     warn "new process did NOT pass ${HEALTH_URL} within ${HEALTH_TIMEOUT}s"
     rollback
@@ -336,13 +386,30 @@ else
 fi
 
 say
-printf '%s═══════════════════════════════════════════════%s\n' "$c_green" "$c_reset"
+# Green is itself a claim, so it is earned rather than assumed.
+_banner_c="$c_green"
+if [[ "$DRY_RUN" != "1" ]] && { [[ "$HEALTH_VERIFIED" != "yes" ]] || [[ "$WEB_TIER_UP" == "no" ]]; }; then
+  _banner_c="$c_yellow"
+fi
+printf '%s═══════════════════════════════════════════════%s\n' "$_banner_c" "$c_reset"
 if [[ "$DRY_RUN" == "1" ]]; then
   printf '%s ✓ fleet upgrade plan printed (dry-run — nothing changed)%s\n' "$c_bold" "$c_reset"
+elif [[ "$HEALTH_VERIFIED" != "yes" ]]; then
+  # The gate never ran (no systemd, or no curl). The binaries were swapped and
+  # nothing about this box's health was established — so claim nothing.
+  printf '%s » fleet binaries installed — health NOT verified (the readiness gate was skipped above)%s\n' "$c_bold" "$c_reset"
 else
-  printf '%s ✓ fleet upgraded + healthy%s\n' "$c_bold" "$c_reset"
+  case "$WEB_TIER_UP" in
+    yes)    printf '%s ✓ fleet upgraded + healthy (backend /readyz 2xx, fleet-web active)%s\n' "$c_bold" "$c_reset" ;;
+    absent) printf '%s ✓ fleet upgraded + healthy (backend /readyz 2xx; no fleet-web unit on this box)%s\n' "$c_bold" "$c_reset" ;;
+    # Not "healthy": the backend passed its gate and the web tier did not come
+    # back. Saying otherwise is the exact fault this script's own readiness gate
+    # exists to prevent, one tier over.
+    no)     printf '%s ! fleet backend upgraded + healthy, but fleet-web is NOT active — see the warning above%s\n' "$c_bold" "$c_reset" ;;
+    *)      printf '%s ✓ fleet backend upgraded + healthy (backend /readyz 2xx; fleet-web not examined)%s\n' "$c_bold" "$c_reset" ;;
+  esac
 fi
-printf '%s═══════════════════════════════════════════════%s\n' "$c_green" "$c_reset"
+printf '%s═══════════════════════════════════════════════%s\n' "$_banner_c" "$c_reset"
 say
 say "  Health:    ${c_dim}fleet-admin status${c_reset}"
 say "  Logs:      ${c_dim}journalctl -u ${SERVICE_NAME} -n 50${c_reset}"

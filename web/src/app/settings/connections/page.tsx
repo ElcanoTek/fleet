@@ -222,14 +222,25 @@ function ToggleForMe({
         label={ariaLabel}
         disabled={disabled}
       />
-      <span
-        className="cursor-pointer select-none text-[0.74rem] font-medium text-[var(--color-text-secondary)]"
+      {/* The state text is a convenience hit target for pointer users only:
+          it duplicates the switch beside it, which already carries the name,
+          the role and the checked state. So it is a real <button> (keyboard
+          activation and a click both fire onToggle, no synthetic key handling
+          on a <span>) that is kept out of the tab order and out of the
+          accessibility tree — an assistive-technology user meets exactly one
+          control here instead of a switch followed by a mystery button that
+          does the same thing. */}
+      <button
+        type="button"
+        tabIndex={-1}
+        aria-hidden="true"
+        className="cursor-pointer select-none border-none bg-transparent p-0 text-[0.74rem] font-medium text-[var(--color-text-secondary)]"
         onClick={() => {
           if (!disabled) onToggle();
         }}
       >
         {on ? onLabel : offLabel}
-      </span>
+      </button>
     </span>
   );
 }
@@ -421,8 +432,19 @@ function DirectoryCard({
   );
   const [values, setValues] = useState<Record<string, string>>({});
   const [apiKey, setApiKey] = useState("");
+  // ?connector= deep link: put the cursor in the key field the moment the
+  // guided form opens — the whole point of the link is "just paste". Done as
+  // an explicit focus() rather than autoFocus so the move is tied to the form
+  // actually opening (and re-opening), which is the event a screen-reader user
+  // can follow, instead of to whenever React happens to mount the input.
+  const apiKeyRef = useRef<HTMLInputElement | null>(null);
   const [clientId, setClientId] = useState("");
   const [clientSecret, setClientSecret] = useState("");
+
+  const focusKeyField = (autoOpenForm ?? false) && formOpen && !added;
+  useEffect(() => {
+    if (focusKeyField) apiKeyRef.current?.focus();
+  }, [focusKeyField]);
 
   const filledURL = fillPlaceholders(entry.url, values);
   const ready =
@@ -588,12 +610,10 @@ function DirectoryCard({
             <label className="grid gap-1 text-[0.72rem] text-[var(--color-text-secondary)]">
               <span className="font-medium">API key</span>
               <input
+                ref={apiKeyRef}
                 className={SETTINGS_INPUT}
                 type="password"
                 autoComplete="off"
-                // Deep-linked arrivals land with the cursor already in the
-                // field — the whole point of ?connector= is "just paste".
-                autoFocus={autoOpenForm ?? false}
                 value={apiKey}
                 onChange={(e) => setApiKey(e.target.value)}
                 placeholder="paste your key (stored encrypted, never shown again)"
@@ -676,6 +696,79 @@ function DirectoryCard({
   );
 }
 
+// ModalShell — the overlay chrome shared by this page's three dialogs (the
+// guided manual-OAuth setup form, the post-add sign-in prompt, and the
+// third-party consent step).
+//
+// The dialog semantics live on the PANEL, not on the backdrop: the panel is
+// what a screen reader should enter, and `role="dialog"` on the full-screen
+// wrapper made the wrapper (a non-interactive element) carry the
+// dismiss-on-click handler. The backdrop is now a real <button> whose
+// accessible name is the close action — the pattern
+// shared/ui/KeyboardShortcutsOverlay already uses — so "click outside to
+// dismiss" is reachable by keyboard instead of being mouse-only. Because that
+// button is a SIBLING of the panel rather than its ancestor, clicks inside the
+// panel can never reach it and the old stopPropagation shim is gone. Escape
+// closes as well, and focus moves into the panel on open so a keyboard user
+// lands in the dialog instead of tabbing on through the page behind it.
+function ModalShell({
+  label,
+  closeLabel,
+  onClose,
+  children,
+}: {
+  label: string;
+  closeLabel: string;
+  onClose: () => void;
+  children: React.ReactNode;
+}) {
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      // Only the top-most dialog reacts: the consent step can open on top of
+      // the guided setup form, and one Escape should dismiss one layer.
+      const dialogs = document.querySelectorAll('[role="dialog"]');
+      if (dialogs.length && dialogs[dialogs.length - 1] !== panelRef.current) {
+        return;
+      }
+      onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  // Mount-only: the dialog takes focus when it opens and hands it back to
+  // whatever opened it when it closes, so a keyboard user resumes where they
+  // were instead of at the top of the page. (A trigger that the add removed
+  // or disabled simply cannot take it back — the browser falls back to the
+  // document, which is the same place focus used to sit the whole time.)
+  useEffect(() => {
+    const opener = document.activeElement as HTMLElement | null;
+    panelRef.current?.focus();
+    return () => opener?.focus?.();
+  }, []);
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
+      <button
+        type="button"
+        aria-label={closeLabel}
+        onClick={onClose}
+        className="absolute inset-0 bg-[var(--color-overlay-strong)]"
+      />
+      <div
+        ref={panelRef}
+        tabIndex={-1}
+        role="dialog"
+        aria-modal="true"
+        aria-label={label}
+        className="relative z-10 w-full max-w-md rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-1)] p-5 shadow-[var(--shadow-lg)] focus:outline-none"
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
+
 // FormShell hosts a directory card's guided add form either inline (the card
 // grows downward — placeholders, API keys) or, for manual OAuth client
 // registration, as a dialog overlay: those forms carry a setup detour (create
@@ -703,41 +796,34 @@ function FormShell({
   if (!modal) return body;
   const guide = setupLink(entry);
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label={`Set up ${entry.display_name}`}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--color-overlay-strong)] px-4"
-      onClick={onClose}
+    <ModalShell
+      label={`Set up ${entry.display_name}`}
+      closeLabel={`Close the ${entry.display_name} setup dialog`}
+      onClose={onClose}
     >
-      <div
-        className="w-full max-w-md rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-1)] p-5 shadow-[var(--shadow-lg)]"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <h3 className="mb-2 text-[0.9375rem] font-semibold">
-          Set up {entry.display_name}
-        </h3>
-        {entry.setup_hint ? (
-          <p className="mb-3 text-[0.8125rem] text-[var(--color-text-secondary)]">
-            {entry.setup_hint}
-            {guide ? (
-              <>
-                {" "}
-                <a
-                  href={guide}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="underline underline-offset-2"
-                >
-                  Setup guide
-                </a>
-              </>
-            ) : null}
-          </p>
-        ) : null}
-        {body}
-      </div>
-    </div>
+      <h3 className="mb-2 text-[0.9375rem] font-semibold">
+        Set up {entry.display_name}
+      </h3>
+      {entry.setup_hint ? (
+        <p className="mb-3 text-[0.8125rem] text-[var(--color-text-secondary)]">
+          {entry.setup_hint}
+          {guide ? (
+            <>
+              {" "}
+              <a
+                href={guide}
+                target="_blank"
+                rel="noreferrer"
+                className="underline underline-offset-2"
+              >
+                Setup guide
+              </a>
+            </>
+          ) : null}
+        </p>
+      ) : null}
+      {body}
+    </ModalShell>
   );
 }
 
@@ -1897,140 +1983,125 @@ function ConnectionsPageInner() {
           login to finish connecting. Offer it here so the user doesn't have
           to scroll up to the "Your connections" row to click Connect. */}
       {connectPromptFor ? (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-label={`Sign in to ${connectPromptFor.name}?`}
-          className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--color-overlay-strong)] px-4"
-          onClick={() => setConnectPromptFor(null)}
+        <ModalShell
+          label={`Sign in to ${connectPromptFor.name}?`}
+          closeLabel={`Dismiss the ${connectPromptFor.name} sign-in prompt`}
+          onClose={() => setConnectPromptFor(null)}
         >
-          <div
-            className="w-full max-w-md rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-1)] p-5 shadow-[var(--shadow-lg)]"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h3 className="mb-2 text-[0.9375rem] font-semibold">
-              {connectPromptFor.name} added — sign in now?
-            </h3>
-            <p className="mb-4 text-[0.8125rem] text-[var(--color-text-secondary)]">
-              One step left: sign in so its tools become available to you. You
-              can also do it later from the Connect button under Your
-              connections.
-            </p>
-            <div className="flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setConnectPromptFor(null)}
-                className={btnClass({ reveal: true })}
-              >
-                Later
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  const id = connectPromptFor.id;
-                  setConnectPromptFor(null);
-                  connect(id);
-                }}
-                disabled={busy}
-                className={btnClass({ variant: "primary" })}
-              >
-                Sign in
-              </button>
-            </div>
+          <h3 className="mb-2 text-[0.9375rem] font-semibold">
+            {connectPromptFor.name} added — sign in now?
+          </h3>
+          <p className="mb-4 text-[0.8125rem] text-[var(--color-text-secondary)]">
+            One step left: sign in so its tools become available to you. You can
+            also do it later from the Connect button under Your connections.
+          </p>
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setConnectPromptFor(null)}
+              className={btnClass({ reveal: true })}
+            >
+              Later
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                const id = connectPromptFor.id;
+                setConnectPromptFor(null);
+                connect(id);
+              }}
+              disabled={busy}
+              className={btnClass({ variant: "primary" })}
+            >
+              Sign in
+            </button>
           </div>
-        </div>
+        </ModalShell>
       ) : null}
       {consentFor ? (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-label={`Connect ${consentFor.entry.display_name}?`}
-          className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--color-overlay-strong)] px-4"
-          onClick={() => setConsentFor(null)}
+        <ModalShell
+          label={`Connect ${consentFor.entry.display_name}?`}
+          closeLabel={`Dismiss the ${consentFor.entry.display_name} connect dialog`}
+          onClose={() => setConsentFor(null)}
         >
-          <div
-            className="w-full max-w-md rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-1)] p-5 shadow-[var(--shadow-lg)]"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="mb-2 flex items-center gap-2">
-              <h3 className="text-[0.9375rem] font-semibold">
-                Connect {consentFor.entry.display_name}?
-              </h3>
-              <ConnBadge
-                variant={provenanceVariant(consentFor.entry.provenance)}
-              >
-                {provenanceBadge(consentFor.entry.provenance).label}
-              </ConnBadge>
-            </div>
-            <p className="mb-3 text-[0.8125rem] text-[var(--color-text-secondary)]">
-              This endpoint is operated by{" "}
-              <strong className="text-[var(--color-text-primary)]">
-                {consentFor.entry.vendor || "an unnamed operator"}
-              </strong>
-              {provenanceBadge(consentFor.entry.provenance).label ===
-              "Aggregator"
-                ? " — a platform that hosts access to other vendors' services, not the services themselves."
-                : " — not the vendor of the underlying service, and not your workspace."}{" "}
-              Once connected, it receives your tool calls (which can include
-              parts of your conversations)
-              {consentFor.entry.auth === "oauth"
-                ? " and holds the access token you grant during sign-in"
-                : ""}
-              {consentFor.overrides?.apiKey
-                ? " and holds the API key you provide"
-                : ""}
-              .
-            </p>
-            <p className="mb-4 text-[0.75rem] text-[var(--color-text-muted)]">
-              Vet it first:{" "}
-              {consentFor.entry.docs_url ? (
-                <a
-                  href={consentFor.entry.docs_url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="underline underline-offset-2"
-                >
-                  documentation
-                </a>
-              ) : null}
-              {consentFor.entry.docs_url && consentFor.entry.repo_url
-                ? " · "
-                : null}
-              {consentFor.entry.repo_url ? (
-                <a
-                  href={consentFor.entry.repo_url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="underline underline-offset-2"
-                >
-                  source code
-                </a>
-              ) : null}
-              {!consentFor.entry.docs_url && !consentFor.entry.repo_url
-                ? "no docs or source were provided for this entry."
-                : null}
-            </p>
-            <div className="flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setConsentFor(null)}
-                className={btnClass({ reveal: true })}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={() =>
-                  void addFromCatalog(consentFor.entry, consentFor.overrides)
-                }
-                disabled={busy}
-                className={btnClass({ variant: "primary" })}
-              >
-                I trust this operator — add
-              </button>
-            </div>
+          <div className="mb-2 flex items-center gap-2">
+            <h3 className="text-[0.9375rem] font-semibold">
+              Connect {consentFor.entry.display_name}?
+            </h3>
+            <ConnBadge
+              variant={provenanceVariant(consentFor.entry.provenance)}
+            >
+              {provenanceBadge(consentFor.entry.provenance).label}
+            </ConnBadge>
           </div>
-        </div>
+          <p className="mb-3 text-[0.8125rem] text-[var(--color-text-secondary)]">
+            This endpoint is operated by{" "}
+            <strong className="text-[var(--color-text-primary)]">
+              {consentFor.entry.vendor || "an unnamed operator"}
+            </strong>
+            {provenanceBadge(consentFor.entry.provenance).label ===
+            "Aggregator"
+              ? " — a platform that hosts access to other vendors' services, not the services themselves."
+              : " — not the vendor of the underlying service, and not your workspace."}{" "}
+            Once connected, it receives your tool calls (which can include
+            parts of your conversations)
+            {consentFor.entry.auth === "oauth"
+              ? " and holds the access token you grant during sign-in"
+              : ""}
+            {consentFor.overrides?.apiKey
+              ? " and holds the API key you provide"
+              : ""}
+            .
+          </p>
+          <p className="mb-4 text-[0.75rem] text-[var(--color-text-muted)]">
+            Vet it first:{" "}
+            {consentFor.entry.docs_url ? (
+              <a
+                href={consentFor.entry.docs_url}
+                target="_blank"
+                rel="noreferrer"
+                className="underline underline-offset-2"
+              >
+                documentation
+              </a>
+            ) : null}
+            {consentFor.entry.docs_url && consentFor.entry.repo_url
+              ? " · "
+              : null}
+            {consentFor.entry.repo_url ? (
+              <a
+                href={consentFor.entry.repo_url}
+                target="_blank"
+                rel="noreferrer"
+                className="underline underline-offset-2"
+              >
+                source code
+              </a>
+            ) : null}
+            {!consentFor.entry.docs_url && !consentFor.entry.repo_url
+              ? "no docs or source were provided for this entry."
+              : null}
+          </p>
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setConsentFor(null)}
+              className={btnClass({ reveal: true })}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                void addFromCatalog(consentFor.entry, consentFor.overrides)
+              }
+              disabled={busy}
+              className={btnClass({ variant: "primary" })}
+            >
+              I trust this operator — add
+            </button>
+          </div>
+        </ModalShell>
       ) : null}
     </SetSection>
   );

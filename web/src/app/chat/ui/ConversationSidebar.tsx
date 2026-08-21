@@ -458,8 +458,14 @@ function LabelsPanel({
           ))}
         </div>
       ) : null}
+      {/* No autoFocus, and no replacement effect: this panel only ever renders
+          inside a <Menu> surface, and Menu already moves focus to the first
+          focusable item of a menu/flyout it opens. The attribute was fighting
+          that — it ran at commit and Menu's effect ran after it, so with any
+          existing chips the browser landed on the first chip's Remove button
+          anyway. Removing it changes nothing a user sees; the covering test
+          asserts the field is still focused when the panel opens. */}
       <input
-        autoFocus
         className="rounded-[0.4rem] border border-[var(--color-accent)] bg-[var(--color-surface-1)] px-2 py-1.5 text-[0.8125rem] text-[var(--color-text-primary)] outline-none disabled:cursor-not-allowed disabled:opacity-60"
         placeholder={atMax ? `Max ${MAX_LABELS} labels` : "Add a label…"}
         maxLength={MAX_LABEL_LEN}
@@ -825,6 +831,16 @@ function ConvRow({
   const labels = conversation.labels ?? [];
   const shown = labels.slice(0, 2);
   const extra = labels.length - shown.length;
+  // Rename starts from the kebab, so the field has to take focus itself or the
+  // rename is unusable — dropping autoFocus without a replacement would be a
+  // real regression, not a lint win. Gated on `editing` (the field only renders
+  // then, so this is exactly the old mount-time behavior with an explicit
+  // cause). onFocus still selects the text, so focusing programmatically
+  // preserves the select-all.
+  const renameInputRef = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    if (editing) renameInputRef.current?.focus();
+  }, [editing]);
 
   return (
     <div
@@ -846,8 +862,9 @@ function ConvRow({
         <input
           // Uncontrolled: remounts each time editing starts (it only renders
           // while editing), so defaultValue tracks the live title without a
-          // sync effect. autoFocus + select-on-focus mirror the prior behavior.
-          autoFocus
+          // sync effect. The focus effect above + select-on-focus mirror the
+          // prior behavior.
+          ref={renameInputRef}
           aria-label={`Rename ${conversation.title}`}
           className="mx-[0.4rem] my-[0.32rem] w-[calc(100%-0.8rem)] rounded-[0.4rem] border border-[var(--color-accent)] bg-[var(--color-surface-1)] px-2 py-1 text-[0.875rem] text-[var(--color-text-primary)] outline-none"
           defaultValue={conversation.title}
@@ -1167,6 +1184,14 @@ export function ConversationSidebar({
   const [renamingProjectId, setRenamingProjectId] = useState<string | null>(
     null,
   );
+  // Same story as the chat rows' rename field: it opens from the project kebab
+  // and must take focus, but it is rendered inside a .map() so the focus lives
+  // here, keyed on which project is being renamed. Only one renames at a time,
+  // so one ref is enough.
+  const projectRenameInputRef = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    if (renamingProjectId !== null) projectRenameInputRef.current?.focus();
+  }, [renamingProjectId]);
   // Unified search (#308 merged into the rail): alongside the client-side
   // title filter, the same query hits GET /api/search (Postgres full-text
   // over message content, 300ms debounce). null = no query / search
@@ -1437,7 +1462,7 @@ export function ConversationSidebar({
                     // Uncontrolled like the chat rows' rename input: mounts
                     // only while renaming, so defaultValue tracks the live
                     // name without a sync effect.
-                    autoFocus
+                    ref={projectRenameInputRef}
                     aria-label={`Rename project ${project.name}`}
                     className="mx-[0.4rem] my-[0.32rem] w-[calc(100%-0.8rem)] rounded-[0.4rem] border border-[var(--color-accent)] bg-[var(--color-surface-1)] px-2 py-1 text-[0.875rem] text-[var(--color-text-primary)] outline-none"
                     defaultValue={project.name}

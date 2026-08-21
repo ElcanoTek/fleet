@@ -173,37 +173,47 @@ export function NavRail({
   const collapseToggleRef = useRef<HTMLButtonElement | null>(null);
   const asideRef = useRef<HTMLElement | null>(null);
 
-  // Escape dismisses the narrow overlay and returns focus to the toggle
-  // (open menus stop the event before it reaches this window listener).
+  // Modal-drawer keyboard behavior while the narrow overlay is up, on ONE
+  // window listener:
+  //   - Escape dismisses the overlay and returns focus to the toggle.
+  //   - Tab cycles within the rail's own controls (the Tab trap).
+  // Both live here rather than as an onKeyDown on the <aside> below. <aside> is
+  // a `complementary` landmark — a non-interactive element — and hanging key
+  // handlers on one is what jsx-a11y/no-noninteractive-element-interactions
+  // objects to; the honest fix is to move the handler off it, not to paint on a
+  // widget role the element does not have. Behavior is unchanged: an open menu
+  // stops the event before it reaches window (React's stopPropagation also
+  // stops the native event, and React's listener sits on the root container
+  // below window), and the trap still only acts when the focused element is the
+  // rail's own first/last focusable, which is exactly when the aside-scoped
+  // handler used to act. Portaled menus manage their own trap and are not in
+  // the aside's DOM subtree, so overlayFocusables never sees them.
   useEffect(() => {
     if (!overlay) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      setCollapsed(true);
-      collapseToggleRef.current?.focus();
+      if (e.key === "Escape") {
+        setCollapsed(true);
+        collapseToggleRef.current?.focus();
+        return;
+      }
+      if (e.key !== "Tab") return;
+      const aside = asideRef.current;
+      if (!aside) return;
+      const items = overlayFocusables(aside);
+      if (items.length === 0) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [overlay, setCollapsed]);
-
-  // Tab trap while the overlay is up — it behaves as a modal drawer. Portaled
-  // menus manage their own trap, so this only cycles the rail's own controls.
-  const onAsideKeyDown = (e: React.KeyboardEvent<HTMLElement>) => {
-    if (!overlay || e.key !== "Tab") return;
-    const aside = asideRef.current;
-    if (!aside) return;
-    const items = overlayFocusables(aside);
-    if (items.length === 0) return;
-    const first = items[0];
-    const last = items[items.length - 1];
-    if (e.shiftKey && document.activeElement === first) {
-      e.preventDefault();
-      last.focus();
-    } else if (!e.shiftKey && document.activeElement === last) {
-      e.preventDefault();
-      first.focus();
-    }
-  };
 
   return (
     <>
@@ -232,7 +242,6 @@ export function NavRail({
       <aside
         ref={asideRef}
         aria-label="Primary navigation"
-        onKeyDown={onAsideKeyDown}
         className={[
           // <sm: the off-canvas drawer (full rail content, translate toggled).
           // --sidebar-surface is a gradient, so it must land in

@@ -16,7 +16,8 @@
 // /settings); authorization stays server-side — every endpoint here
 // independently 403s non-admins, and fetchUsers surfaces that below.
 
-import { useEffect, useState, type MouseEvent } from "react";
+import { useEffect, useRef, useState, type MouseEvent } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 
 import { fetchStats, formatAgo, formatUSD, type UserStat } from "../lib";
@@ -205,6 +206,33 @@ export default function AdminUsersPage() {
   // shared projects) server-side in one transaction.
   const [renameDraft, setRenameDraft] = useState<string | null>(null);
   const [renameStatus, setRenameStatus] = useState<string | null>(null);
+  // "Rename team" swaps the button for an input; focus follows to it so the
+  // flow is usable without a mouse. An explicit focus() (not autoFocus) ties
+  // the move to the moment the user opened the rename — a state change a
+  // screen reader announces — instead of to React mounting the node.
+  const renameInputRef = useRef<HTMLInputElement | null>(null);
+  const renameOpen = renameDraft !== null;
+  useEffect(() => {
+    if (renameOpen) renameInputRef.current?.focus();
+  }, [renameOpen]);
+  // The row-edit popover: focus enters it on open (it renders after the whole
+  // table in the DOM, so without this a keyboard user would have to tab past
+  // every remaining row to reach the controls they just opened), and the
+  // outside-click close below tests containment against this ref rather than
+  // having the popover swallow clicks with an onClick on a plain <div>.
+  const popRef = useRef<HTMLDivElement | null>(null);
+  // The kebab that opened the popover, so focus can be handed back when it
+  // closes rather than dropped on the document.
+  const menuTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const menuEmail = menu?.email ?? null;
+  useEffect(() => {
+    if (menuEmail) {
+      popRef.current?.focus();
+      return;
+    }
+    menuTriggerRef.current?.focus();
+    menuTriggerRef.current = null;
+  }, [menuEmail]);
 
   useEffect(() => {
     if (admin === "member") router.replace("/settings");
@@ -241,10 +269,32 @@ export default function AdminUsersPage() {
   }, [admin]);
 
   // The popover closes on any outside click or Escape (the design's
-  // document-level listeners); clicks inside stop propagation below.
+  // document-level listeners). "Outside" is decided here, by containment
+  // against the popover element — the popover itself no longer carries a
+  // stopPropagation onClick handler it had no accessible role for.
   useEffect(() => {
     if (!menu) return;
-    const close = () => setMenu(null);
+    const close = (e: globalThis.MouseEvent) => {
+      const target = e.target as Node | null;
+      if (target && popRef.current?.contains(target)) return;
+      // Returning focus to the kebab is right for Escape, for an action taken
+      // inside the popover, and for a click on dead space — in each case the
+      // user dismissed the popover without saying where focus should go, and
+      // dropping it to <body> would lose a keyboard user's place. It is WRONG
+      // when the click landed on another CONTROL: that click already chose the
+      // focus target, and pulling it back to the kebab yanks focus out of the
+      // thing the user just clicked. So the restore is skipped only in that
+      // case, by dropping the stored trigger before the close.
+      if (
+        target instanceof Element &&
+        target.closest(
+          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        )
+      ) {
+        menuTriggerRef.current = null;
+      }
+      setMenu(null);
+    };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") setMenu(null);
     };
@@ -258,6 +308,7 @@ export default function AdminUsersPage() {
 
   const openMenu = (u: AdminUser, e: MouseEvent<HTMLButtonElement>) => {
     e.stopPropagation();
+    menuTriggerRef.current = e.currentTarget;
     // Fixed positioning, ported from the design's openMenu math: clamp x into
     // the viewport, open below the kebab, flip above when it would overflow.
     const rect = e.currentTarget.getBoundingClientRect();
@@ -505,8 +556,9 @@ export default function AdminUsersPage() {
           View usage and manage roles of everyone in the workspace. Numbers here
           are all-time interactive-chat activity per account; for windowed spend
           across chat + scheduled tasks and the per-user adoption audit, open
-          the <a href="/orchestrator?tab=usage">Operations Center → Usage</a>{" "}
-          and <a href="/orchestrator?tab=adoption">Adoption</a> views.
+          the{" "}
+          <Link href="/orchestrator?tab=usage">Operations Center → Usage</Link>{" "}
+          and <Link href="/orchestrator?tab=adoption">Adoption</Link> views.
         </>
       }
     >
@@ -518,7 +570,11 @@ export default function AdminUsersPage() {
               input on the page (free text still allowed for new teams). */}
           <datalist id="admin-users-teams">
             {teams.map((t) => (
-              <option key={t} value={t} />
+              // aria-label, not child text: a datalist suggestion has no
+              // rendered label of its own for AT to read, and giving the
+              // <option> children would make browsers that show label AND
+              // value (Chrome) print the team name twice in the dropdown.
+              <option key={t} value={t} aria-label={t} />
             ))}
           </datalist>
           {/* ── discovery toolbar: search on its own bar, filters sharing one
@@ -589,9 +645,9 @@ export default function AdminUsersPage() {
                 ) : (
                   <span className="inline-flex items-center gap-[0.35rem]">
                     <input
+                      ref={renameInputRef}
                       aria-label={`New name for team ${filterTeam}`}
                       value={renameDraft}
-                      autoFocus
                       onChange={(e) => setRenameDraft(e.target.value)}
                       onKeyDown={(e) => {
                         if (
@@ -658,7 +714,12 @@ export default function AdminUsersPage() {
                   >
                     Chat spend
                   </th>
-                  <th className={`${TH} w-[2.4rem] text-right`} />
+                  {/* The kebab column. A blank header leaves the row-edit
+                      buttons announced with no column name at all, so the
+                      name is given visually-hidden rather than dropped. */}
+                  <th className={`${TH} w-[2.4rem] text-right`}>
+                    <span className="sr-only">Actions</span>
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -793,9 +854,12 @@ export default function AdminUsersPage() {
           {/* ── row-edit popover (the design's .user-pop) ── */}
           {menu && menuAccount ? (
             <div
+              ref={popRef}
+              tabIndex={-1}
+              role="dialog"
+              aria-label={`Edit ${menu.email}`}
               style={{ left: menu.x, top: menu.y }}
-              onClick={(e) => e.stopPropagation()}
-              className="fixed z-[400] grid w-[22rem] gap-[0.7rem] rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-surface-2)] px-[0.85rem] py-[0.8rem] shadow-[var(--shadow-md)] motion-safe:animate-set-fade"
+              className="fixed z-[400] grid w-[22rem] gap-[0.7rem] rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-surface-2)] px-[0.85rem] py-[0.8rem] shadow-[var(--shadow-md)] focus:outline-none motion-safe:animate-set-fade"
             >
               <div className="text-[0.76rem] font-semibold text-[var(--color-text-primary)] [overflow-wrap:anywhere]">
                 {menu.email}

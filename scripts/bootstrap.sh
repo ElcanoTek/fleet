@@ -218,7 +218,11 @@ while [[ $# -gt 0 ]]; do
     --force-caddy)       FORCE_CADDY=1 ;;
     --dry-run)           DRY_RUN=1 ;;
     -h|--help)
-      sed -n '2,141p' "$0"; exit 0 ;;
+      # Derived, not a hardcoded range: print the header comment block and stop
+      # at the first non-`#` line. A fixed range silently truncates the help the
+      # moment the header grows — which had already dropped the last 6 lines
+      # here, and shipped raw shell code out of fleet-upgrade.sh's --help.
+      awk 'NR>1 && /^#/ { sub(/^# ?/, ""); print; next } NR>1 { exit }' "$0"; exit 0 ;;
     *) echo "error: unknown argument: $1" >&2; exit 1 ;;
   esac
   shift
@@ -554,17 +558,23 @@ deploy_web_tier() {
   systemctl try-restart "$SERVICE_NAME" >/dev/null 2>&1 || true
 
   step "Web tier: building the Next.js app (origin=${origin}, node=${node_ver})"
-  # PATH is prefixed with the resolved interpreter's directory so `npm` runs
-  # UNDER it. Without this the build silently used whatever `node` PATH
-  # resolved to — npm's shebang is `#!/usr/bin/env node` — which on Fedora is
-  # the DEFAULT stream. The tier would then be built on 22 and served on 24
-  # while this function printed that it would run 24: exactly the
-  # claimed-but-not-done failure this whole change set exists to remove.
-  if ( cd "$web_src" && PATH="$(fleet_node_build_path "$node_bin")" \
+  # PATH is set so the bare name `node` resolves to the interpreter we picked,
+  # because npm's shebang is `#!/usr/bin/env node`. Without it the build
+  # silently used whatever `node` PATH resolved to — on Fedora the DEFAULT
+  # stream — so the tier was built on 22 and served on 24 while this function
+  # printed that it would run 24: exactly the claimed-but-not-done failure this
+  # change set exists to remove. Resolved ONCE and reused, so the version this
+  # reports is the one the build actually ran under, and so the shim directory
+  # it may create is removed rather than leaked on every provision.
+  local build_path
+  build_path="$(fleet_node_build_path "$node_bin")"
+  if ( cd "$web_src" && PATH="$build_path" \
         NEXT_PUBLIC_PUBLIC_ORIGIN="$origin" NEXT_PUBLIC_APP_NAME="$app_name" \
         NEXT_PUBLIC_BUILD_ID="$build_id" sh -c 'npm ci && npm run build' ); then
-    ok "web app built on $(PATH="$(fleet_node_build_path "$node_bin")" node -v 2>/dev/null || echo unknown)"
+    ok "web app built on $(PATH="$build_path" node -v 2>/dev/null || echo unknown)"
+    fleet_node_build_path_cleanup "$build_path" "$node_bin"
   else
+    fleet_node_build_path_cleanup "$build_path" "$node_bin"
     warn "web build failed — skipping the rest of the web tier."; return
   fi
 
