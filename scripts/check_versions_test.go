@@ -187,3 +187,48 @@ func TestDuplicatedToolPinsAgree(t *testing.T) {
 		}
 	}
 }
+
+// TestPostgresMajorAgreesAcrossCI: the Postgres major appears as a service
+// image in several workflows AND as the pg_dump client major that ci.yml
+// installs. Those two MUST match — pg_dump refuses to dump a newer server —
+// and the failure mode is the dangerous kind: ci.yml's own comment says the
+// backup/restore round-trip test "is written to skip, never fail, when client
+// and server majors disagree". So bumping the service image and forgetting the
+// client does not go red; it silently switches the round-trip test OFF behind a
+// green check. Assert it instead of trusting a comment.
+func TestPostgresMajorAgreesAcrossCI(t *testing.T) {
+	root := repoRoot(t)
+	imageRe := regexp.MustCompile(`image:\s*postgres:(\d+)`)
+	clientRe := regexp.MustCompile(`postgresql-client-(\d+)`)
+
+	majors := map[string][]string{} // major -> where it was seen
+	note := func(major, where string) { majors[major] = append(majors[major], where) }
+
+	dir := filepath.Join(root, ".github", "workflows")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read workflows: %v", err)
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".yml") {
+			continue
+		}
+		body := readFile(t, root, filepath.Join(".github", "workflows", e.Name()))
+		for _, m := range imageRe.FindAllStringSubmatch(body, -1) {
+			note(m[1], e.Name()+" (service image)")
+		}
+		for _, m := range clientRe.FindAllStringSubmatch(body, -1) {
+			note(m[1], e.Name()+" (pg_dump client)")
+		}
+	}
+
+	if len(majors) == 0 {
+		t.Skip("no postgres pins found in workflows")
+	}
+	if len(majors) > 1 {
+		for major, where := range majors {
+			t.Errorf("postgres major %s appears in: %s", major, strings.Join(where, ", "))
+		}
+		t.Error("postgres majors disagree across CI — a server/client mismatch makes the backup/restore round-trip test SKIP rather than fail, so this would ship as a green check with the test silently off")
+	}
+}
