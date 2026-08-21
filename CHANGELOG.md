@@ -19,6 +19,20 @@ prior versions are listed because none have shipped.
 
 ### Changed
 
+- **`internal/sched/db/db.go` split by domain (#1127)** — the 2,882-line god
+  file is now thirteen domain files in the same package: connection lifecycle,
+  the cross-domain (un)marshal helpers, and transaction support stay in
+  `db.go`; the rest moved to `users.go`, `tasks.go` (CRUD core),
+  `task_values.go` (per-column value mapping + JSONB codecs), `task_queries.go`
+  (listings/filters/rollups), `claim.go` (claim/lease/serialization gate/lease
+  recovery), `scheduling.go` (gate settlement, skip recording, batch status,
+  recurrence-spawn sweep), `pause.go`, `wake.go`, `sla.go`, `logs.go`,
+  `cleanup.go` (retention + log-archival sweeps), and `task_iterations.go` —
+  matching the granularity of the existing `budgets.go`/`datasets.go` siblings.
+  Pure structural move with zero behavior change: every declaration and its
+  comments relocated byte-identically (verified declaration-by-declaration
+  against a hash inventory of the old file), no visibility changes, no renames,
+  and the `task_columns.go` registry (#1126) untouched.
 - **The installer's node handoff: `fleet update` now repairs a node shortfall
   instead of refusing** — on a box a node major behind the checkout, the
   documented sequence (`bootstrap → update → status/doctor`) hard-failed on the
