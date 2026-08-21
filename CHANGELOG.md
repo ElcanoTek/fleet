@@ -66,6 +66,27 @@ prior versions are listed because none have shipped.
   Bundles that pin a prebuilt `sandbox.image` still skip the on-box build
   entirely — registry freshness stays the publisher pipeline's job.
 
+  Two follow-up fixes close the paths on which that backstop reported success
+  without running (same design note). (1) **The self-update re-exec now
+  forwards flag state.** When an update changes `update.sh` itself, the script
+  re-execs the freshly pulled copy — with no argv, so every flag-settable
+  value has to be restated as an env var on that line. `--sandbox-max-age` was
+  not, so it was silently downgraded to the default `7` on exactly the run
+  that pulled the fix; `--adopt-units` and `--no-timers` were dropped the same
+  way. All three are forwarded now, the deliberate non-forwards are documented
+  at the call site, and a new test derives the flag-settable variables from the
+  arg parser so a *new* flag fails until it is forwarded or exempted with a
+  reason. (2) **An unresolvable sandbox tag no longer reports "up to date".**
+  Both store-aware gates need a resolved ref, so an empty one used to fall out
+  of the gate's if/elif chain with no build reason and print
+  `sandbox image up to date (…, tag unresolved)` — a pass for an image nothing
+  had looked at. It now warns, naming what was skipped (the presence check and
+  the n-day backstop), how to diagnose the tag, and the by-hand rebuild; an
+  inconclusive store probe reports through that same single path instead of a
+  warning followed by a reassuring `ok`; and `--print-tag`'s stderr is kept so
+  the warning can name the cause. Neither case is fatal — the fail-closed
+  `die` stays on a failed *build* whose ref is not known to exist.
+
 - **`fleet timers install` — one-command setup for the scheduled-maintenance
   timers** ([docs/TIMERS.md](docs/TIMERS.md)). A box provisioned before the
   `fleet-backup` / `fleet-maintenance` timer pairs shipped had no path to them
