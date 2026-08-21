@@ -917,6 +917,17 @@ if command -v systemctl >/dev/null 2>&1; then
       if install -m 0644 "$shipped" "$installed" 2>/dev/null; then
         ok "adopted $shipped → $installed"
         NEED_DAEMON_RELOAD=1
+        # fleet-web's drop-in is part of the shipped unit's shutdown behavior
+        # (it beats Fedora's global abort-on-timeout drop-in); adopt it with
+        # the unit. No restart implication beyond the unit adoption itself.
+        if [[ "$unit" == "fleet-web.service" && -f "$SRC_DIR/deploy/fleet-web.service.d/10-timeout-kill.conf" ]]; then
+          if install -D -m 0644 "$SRC_DIR/deploy/fleet-web.service.d/10-timeout-kill.conf" \
+            /etc/systemd/system/fleet-web.service.d/10-timeout-kill.conf 2>/dev/null; then
+            ok "installed fleet-web.service.d/10-timeout-kill.conf"
+          else
+            warn "could not install the fleet-web drop-in (need root?) — Fedora's global abort drop-in still overrides TimeoutStopFailureMode"
+          fi
+        fi
       else
         die "could not install $shipped → $installed (need root? re-run with sudo, or adopt manually) — live unit left in place"
       fi
@@ -937,6 +948,27 @@ if command -v systemctl >/dev/null 2>&1; then
       fi
     fi
   done
+  # The fleet-web drop-in can be missing even when the unit itself matches
+  # (box adopted the unit before the drop-in shipped). Without it, Fedora's
+  # global abort-on-timeout drop-in overrides the unit's
+  # TimeoutStopFailureMode=kill. Same consent rule as units: adopt only under
+  # --adopt-units, else hint. A drop-in install needs no app restart.
+  dropin_shipped="$SRC_DIR/deploy/fleet-web.service.d/10-timeout-kill.conf"
+  dropin_installed="/etc/systemd/system/fleet-web.service.d/10-timeout-kill.conf"
+  if [[ -f /etc/systemd/system/fleet-web.service && -f "$dropin_shipped" ]] && ! cmp -s "$dropin_shipped" "$dropin_installed" 2>/dev/null; then
+    if [[ "$ADOPT_UNITS" == "1" ]]; then
+      if install -D -m 0644 "$dropin_shipped" "$dropin_installed" 2>/dev/null; then
+        ok "installed fleet-web.service.d/10-timeout-kill.conf"
+        NEED_DAEMON_RELOAD=1
+      else
+        warn "could not install the fleet-web drop-in (need root?)"
+      fi
+    else
+      warn "fleet-web.service.d/10-timeout-kill.conf missing or drifted — Fedora's global abort drop-in overrides the unit's TimeoutStopFailureMode=kill."
+      warn "  adopt:  install -D -m 0644 $dropin_shipped $dropin_installed && systemctl daemon-reload"
+      warn "  or re-run: fleet update --adopt-units"
+    fi
+  fi
 fi
 
 # ── offer to install missing scheduled-maintenance timer pairs ──────────────

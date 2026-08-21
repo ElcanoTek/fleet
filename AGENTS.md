@@ -165,6 +165,10 @@ same PR.
   discovery + deprecation contract): [`docs/api-versioning.md`](docs/api-versioning.md)
 - **Database migrations** (the two runners, safe-DDL patterns, the migration DDL
   linter, `fleet migrate status`, rollback scope): [`docs/MIGRATIONS.md`](docs/MIGRATIONS.md)
+- **Web-tier shutdown** (why `fleet-web` dumped core on nearly every restart:
+  the npm wrapper's `uv_kill` segfault, Fedora's abort-on-timeout, the residual
+  upstream teardown crash, and `LimitCORE=0` — plus the drain theory that
+  measurement refuted): [`docs/WEB-TIER-SHUTDOWN.md`](docs/WEB-TIER-SHUTDOWN.md)
 - **Chat stream recovery** (why a lost SSE socket reconciles against Postgres
   instead of stamping a terminal state — the walk-away-and-come-back case):
   [`docs/CHAT-STREAM-RECOVERY.md`](docs/CHAT-STREAM-RECOVERY.md)
