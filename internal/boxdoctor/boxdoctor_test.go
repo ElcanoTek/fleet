@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -211,4 +212,107 @@ func currentUsername(t *testing.T) string {
 		t.Skipf("current user unresolved: %v", err)
 	}
 	return u.Username
+}
+
+func TestRestartChurnVerdict(t *testing.T) {
+	// The healthy case. NRestarts is cleared by any manual restart, so 0 is
+	// what a freshly deployed, steadily serving unit reports.
+	if c := restartChurnVerdict("fleet-web", "0", "success"); c.Status != StatusOK {
+		t.Errorf("no restarts: got %s (%s), want ok", c.Status, c.Detail)
+	}
+	// A stale Result from before the last manual start must not by itself
+	// demote a unit that is no longer restarting — but it should still be
+	// visible in the detail, because it says what went wrong.
+	c := restartChurnVerdict("fleet-web", "0", "core-dump")
+	if c.Status != StatusOK {
+		t.Errorf("no restarts with a stale bad Result: got %s, want ok", c.Status)
+	}
+	if !strings.Contains(c.Detail, "core-dump") {
+		t.Errorf("detail %q should still surface the last Result", c.Detail)
+	}
+	// A couple of self-inflicted restarts: worth flagging, not yet a failure.
+	c = restartChurnVerdict("fleet-web", "2", "signal")
+	if c.Status != StatusWarn || c.Fix == "" {
+		t.Errorf("2 restarts: got %s fix=%q, want warn with a fix", c.Status, c.Fix)
+	}
+	if !strings.Contains(c.Fix, "journalctl -u fleet-web") {
+		t.Errorf("fix %q should point at the unit's journal", c.Fix)
+	}
+	// Crash-loop territory. This is the case checkUnits cannot see at all:
+	// Restart=always keeps is-active reporting "active" throughout.
+	c = restartChurnVerdict("fleet-web", "17", "core-dump")
+	if c.Status != StatusFail || c.Fix == "" {
+		t.Fatalf("17 restarts: got %s fix=%q, want fail with a fix", c.Status, c.Fix)
+	}
+	if !strings.Contains(c.Detail, "17") {
+		t.Errorf("detail %q should name the restart count", c.Detail)
+	}
+	// The threshold boundary, both sides.
+	if got := restartChurnVerdict("f", strconv.Itoa(crashLoopThreshold-1), "").Status; got != StatusWarn {
+		t.Errorf("just below the threshold: got %s, want warn", got)
+	}
+	if got := restartChurnVerdict("f", strconv.Itoa(crashLoopThreshold), "").Status; got != StatusFail {
+		t.Errorf("at the threshold: got %s, want fail", got)
+	}
+	// Unavailable or non-numeric property → skip, never a guessed verdict.
+	for _, bad := range []string{"", "n/a", "[not set]"} {
+		if got := restartChurnVerdict("f", bad, "").Status; got != StatusSkip {
+			t.Errorf("NRestarts=%q: got %s, want skip", bad, got)
+		}
+	}
+}
+
+func TestWebStopPolicyVerdict(t *testing.T) {
+	if c := webStopPolicyVerdict("kill"); c.Status != StatusOK {
+		t.Errorf("kill: got %s (%s), want ok", c.Status, c.Detail)
+	}
+	// The regression this check exists for: the unit body said kill for a full
+	// release while Fedora's global drop-in resolved abort, and every
+	// file-comparing check passed. A warn with a fix is the point.
+	c := webStopPolicyVerdict("abort")
+	if c.Status != StatusWarn || c.Fix == "" {
+		t.Fatalf("abort: got %s fix=%q, want warn with a fix", c.Status, c.Fix)
+	}
+	if !strings.Contains(c.Detail, "abort") {
+		t.Errorf("detail %q should name the resolved value", c.Detail)
+	}
+	if !strings.Contains(c.Fix, "fleet doctor") {
+		t.Errorf("fix %q should name the repair command", c.Fix)
+	}
+	// systemd's own default is no better than the distro's abort here.
+	if got := webStopPolicyVerdict("terminate").Status; got != StatusWarn {
+		t.Errorf("terminate: got %s, want warn", got)
+	}
+	// Pre-246 systemd: no such property, nothing to assert, no fix to offer.
+	c = webStopPolicyVerdict("")
+	if c.Status != StatusSkip {
+		t.Errorf("unsupported systemd: got %s, want skip", c.Status)
+	}
+	if c.Fix != "" {
+		t.Errorf("unsupported systemd should offer no fix, got %q", c.Fix)
+	}
+}
+
+func TestRunIncludesShutdownChecks(t *testing.T) {
+	r := Run(context.Background(), Options{DataDir: t.TempDir()})
+	want := map[string]bool{"fleet-web stop policy": false}
+	churn := 0
+	for _, c := range r.Checks {
+		if _, ok := want[c.Name]; ok {
+			want[c.Name] = true
+		}
+		if strings.HasPrefix(c.Name, "restarts: ") {
+			churn++
+		}
+	}
+	for name, found := range want {
+		if !found {
+			t.Errorf("report has no %q check", name)
+		}
+	}
+	// One per app unit (the configured service + fleet-web), or a single
+	// systemctl-missing skip on a host without systemd — as in CI.
+	if churn == 0 {
+		t.Error("report has no restart-churn check")
+	}
 }

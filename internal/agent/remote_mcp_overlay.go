@@ -5,11 +5,13 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/mcp"
+	"github.com/ElcanoTek/fleet/internal/tools"
 )
 
 // Per-user remote (hosted) MCP overlay (#443), shared by BOTH the interactive
@@ -278,4 +280,78 @@ func (b *compositeBroker) CallMCP(ctx context.Context, server, tool string, args
 		return b.overlay.CallMCP(ctx, server, tool, args)
 	}
 	return b.base.CallMCP(ctx, server, tool, args)
+}
+
+// browserbaseHost is the vendor host of the Browserbase hosted MCP endpoint.
+// The connector is matched on its URL rather than its registration name because
+// the name is whatever the user typed when they added it ("bb", "Browserbase",
+// anything) — the URL is what actually identifies the vendor.
+const browserbaseHost = "browserbase.com"
+
+// browserbaseKeyFunc returns a resolver for THIS user's Browserbase connector
+// credential, or nil when one is not genuinely reachable for this turn.
+//
+// Returning nil matters twice over, because a non-nil func is what registers
+// browserbase_live_view:
+//
+//   - It keeps a permanently-failing tool away from the majority of users, who
+//     have no Browserbase connection at all.
+//   - It keeps the credential, and the session enumeration it enables, inside the
+//     per-conversation connector gate. openRemoteOverlay restricts remote servers
+//     to the conversation's opt-in set; a key resolver that ignored that set would
+//     let a chat with Browserbase switched OFF still unseal the key and list every
+//     running session in the account.
+//
+// The cost is one extra ConnectedServersForUser read per turn (the overlay does
+// its own later). That is a store read, not a decrypt: the key itself is unsealed
+// only if the tool is actually called.
+func (m *Manager) browserbaseKeyFunc(ctx context.Context, email string, enabledOptional []string) tools.BrowserbaseKeyFunc {
+	if m.remoteMCP == nil || strings.TrimSpace(email) == "" {
+		return nil
+	}
+	conns, err := m.remoteMCP.ConnectedServersForUser(ctx, email)
+	if err != nil {
+		return nil
+	}
+	// Same opt-in semantics as openRemoteOverlay: nil and empty both mean "no
+	// connectors on" (RunTurnInput.OptionalMCPServersEnabled documents exactly
+	// that, and openRemoteOverlay builds its filter map unconditionally). This
+	// function's only caller is the interactive turn — scheduled runs pass a nil
+	// key func straight to NewTurnTools — so there is no "unfiltered" caller,
+	// and treating nil as unfiltered would unseal the key in a conversation the
+	// overlay wires no connectors into (e.g. one whose opt-in list was never
+	// seeded).
+	enabled := make(map[string]bool, len(enabledOptional))
+	for _, n := range enabledOptional {
+		if n = strings.TrimSpace(n); n != "" {
+			enabled[n] = true
+			enabled[strings.ToLower(n)] = true
+		}
+	}
+	for _, c := range conns {
+		if !isBrowserbaseURL(c.URL) {
+			continue
+		}
+		if !enabled[c.Name] && !enabled[strings.ToLower(c.Name)] {
+			continue // connector switched off for this conversation
+		}
+		id := c.ID
+		return func(ctx context.Context) (string, error) {
+			// Own connections and ones shared with this user both work: the
+			// credential is the owner's, applied host-side, exactly as it is for
+			// the connector's own tool calls.
+			return m.remoteMCP.AcquireTokenByID(ctx, email, id)
+		}
+	}
+	return nil
+}
+
+// isBrowserbaseURL reports whether a connection's URL points at Browserbase.
+func isBrowserbaseURL(raw string) bool {
+	host := strings.ToLower(strings.TrimSpace(raw))
+	// Hostname(), not Host: an explicit port (":443") must not defeat the match.
+	if u, err := url.Parse(raw); err == nil && u.Hostname() != "" {
+		host = strings.ToLower(u.Hostname())
+	}
+	return host == browserbaseHost || strings.HasSuffix(host, "."+browserbaseHost)
 }

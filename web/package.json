@@ -2,11 +2,14 @@
   "name": "fleet-web",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start -H ${FLEET_WEB_HOST:-127.0.0.1}",
-    "lint": "eslint",
+    "lint": "oxlint",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
@@ -14,7 +17,8 @@
     "test:e2e:live": "E2E_LIVE=1 playwright test --project=live",
     "test:e2e:canary": "E2E_CANARY=1 playwright test --project=canary",
     "test:e2e:screenshots": "E2E_SCREENSHOTS=1 playwright test --project=screenshots",
-    "test:all": "npm run test && npm run test:e2e"
+    "test:all": "npm run test && npm run test:e2e",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@tanstack/react-virtual": "^3.14.9",
@@ -28,8 +32,7 @@
   },
   "overrides": {
     "next": {
-      "postcss": "^8.5.18",
-      "sharp": "^0.35.0"
+      "postcss": "^8.5.18"
     }
   },
   "devDependencies": {
@@ -38,16 +41,15 @@
     "@testing-library/jest-dom": "^7.0.0",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.3",
-    "@types/node": "^26",
+    "@types/node": "^24",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@types/react-syntax-highlighter": "^15.5.13",
     "@vitejs/plugin-react": "^6.0.5",
-    "eslint": "^9",
-    "eslint-config-next": "16.3.0",
     "jsdom": "^30.0.1",
+    "oxlint": "^1.79.0",
     "tailwindcss": "^4",
-    "typescript": "^6",
+    "typescript": "^7",
     "vitest": "^4.1.10"
   }
 }

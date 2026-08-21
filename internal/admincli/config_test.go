@@ -171,3 +171,60 @@ func TestEnvFileResolvers(t *testing.T) {
 		t.Errorf("serverEnvFile(env) = %q", got)
 	}
 }
+
+// The Browserbase key is an operator credential, so it must land in the 0600
+// server env file through the same guided writer as the OpenRouter key rather
+// than by hand-editing — that is the whole reason `fleet config set-*` exists.
+// Rotation must UPSERT: a second write that appended instead of replacing would
+// leave two lines, and whichever systemd read last would win silently.
+func TestSetBrowserbaseKeyWritesEnvFile(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, "fleet.env")
+
+	if code := configSetBrowserbaseKey([]string{"--key", "bb-first-not-real", "--env-file", envPath}); code != 0 {
+		t.Fatalf("configSetBrowserbaseKey exit = %d, want 0", code)
+	}
+	content := readEnvFile(t, envPath)
+	if !strings.Contains(content, "BROWSERBASE_API_KEY=bb-first-not-real") {
+		t.Errorf("env file missing the key line; got:\n%s", content)
+	}
+	// 0600: this file holds operator credentials. Stat first — dereferencing a nil
+	// FileInfo to build the message would panic instead of reporting the failure.
+	fi, err := os.Stat(envPath)
+	if err != nil {
+		t.Fatalf("stat env file: %v", err)
+	}
+	if perm := fi.Mode().Perm(); perm != 0o600 {
+		t.Errorf("env file mode = %v; want 0600", perm)
+	}
+
+	// Rotation replaces rather than appends.
+	if code := configSetBrowserbaseKey([]string{"--key", "bb-second-not-real", "--env-file", envPath}); code != 0 {
+		t.Fatalf("rotation exit = %d, want 0", code)
+	}
+	content = readEnvFile(t, envPath)
+	if n := strings.Count(content, "BROWSERBASE_API_KEY="); n != 1 {
+		t.Errorf("found %d BROWSERBASE_API_KEY lines after rotation, want 1; got:\n%s", n, content)
+	}
+	if !strings.Contains(content, "bb-second-not-real") || strings.Contains(content, "bb-first-not-real") {
+		t.Errorf("rotation did not replace the old value; got:\n%s", content)
+	}
+
+	// An empty key must be refused without touching the file.
+	before := content
+	if code := configSetBrowserbaseKey([]string{"--key", "   ", "--env-file", envPath}); code == 0 {
+		t.Fatal("want non-zero exit for an empty key")
+	}
+	if readEnvFile(t, envPath) != before {
+		t.Error("env file changed by a rejected key")
+	}
+}
+
+func readEnvFile(t *testing.T, path string) string {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read env file: %v", err)
+	}
+	return string(b)
+}

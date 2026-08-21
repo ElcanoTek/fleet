@@ -564,11 +564,18 @@ func run() error {
 		NoteProposer:         notesProvider, // same adapter; wires propose_note for every interactive turn
 		PersonaPolicies:      personaPolicies,
 		OpenRemoteMCPOverlay: openRemoteMCPOverlay,
-		MCPBroker:            mcpRuntime.client,
-		MCPCatalog:           mcpRuntime.catalog,
-		MCPAccounts:          mcpRuntime.accounts,
-		OpenMCPScope:         mcpRuntime.openInteractiveScope,
-		ReloadMCP:            mcpRuntime.reload,
+		// The overlay opener above still owns per-turn MCP binding in its
+		// credential-owning child; this resolver is the READ side the parent
+		// needs to unseal one connector's api_key for a host-side outbound call
+		// (browserbase_live_view, #987) — the same thing the parent already does
+		// for the add-time probe. openRemoteMCPOverlay takes precedence for the
+		// overlay itself, so wiring both changes no MCP behavior.
+		RemoteMCP:    remoteMCPResolver(remoteMCPSvc),
+		MCPBroker:    mcpRuntime.client,
+		MCPCatalog:   mcpRuntime.catalog,
+		MCPAccounts:  mcpRuntime.accounts,
+		OpenMCPScope: mcpRuntime.openInteractiveScope,
+		ReloadMCP:    mcpRuntime.reload,
 	}, bundleProviders, chatStore, cfg.OpenRouterAPIKey)
 	if err != nil {
 		return fmt.Errorf("build interactive engine: %w", err)
@@ -2528,13 +2535,29 @@ func installStoreCipher(cfg *config.Config, chatStore *store.Store) {
 	chatStore.SetTokenCipher(cipher)
 }
 
+// remoteMCPResolver adapts the service to the agent-side resolver interface,
+// returning a TRUE nil interface when the feature is off. setupRemoteMCP returns
+// a typed nil *Service in that case, and assigning that straight into the
+// interface field would make `opts.RemoteMCP != nil` true while every method
+// call nil-derefs.
+func remoteMCPResolver(svc *remotemcp.Service) agent.RemoteMCPResolver {
+	if svc == nil {
+		return nil
+	}
+	return svc
+}
+
 // setupRemoteMCP wires the per-user remote-MCP + OAuth feature (#443). It is
 // enabled only when an encryption key AND a public base URL are configured;
 // otherwise it fails closed (returns nil) and the endpoints report the
 // feature off. On enable it installs the token cipher on the chat store (secrets
 // encrypted at rest) and starts an hourly sweep of abandoned OAuth-flow rows.
 // The returned Service backs explicit HTTP control-plane operations. Agent runs
-// use the child-owned broker scope and never receive this credential resolver.
+// bind their MCP tools through the child-owned broker scope, which is where the
+// credentialed MCP client lives; the Service is additionally handed to the agent
+// manager as a READ-side resolver so the parent can unseal one connector's
+// api_key for a host-side outbound call (browserbase_live_view, #987) — the same
+// thing the parent already does for the add-time probe.
 func setupRemoteMCP(cfg *config.Config, chatStore *store.Store) *remotemcp.Service {
 	if len(cfg.MCPOAuthEncryptionKey) == 0 || cfg.PublicBaseURL == "" {
 		log.Printf("remote MCP OAuth: disabled (set FLEET_MCP_OAUTH_ENCRYPTION_KEY + FLEET_PUBLIC_BASE_URL to enable)")

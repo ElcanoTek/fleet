@@ -12,21 +12,23 @@ import (
 	"github.com/ElcanoTek/fleet/internal/creds"
 )
 
-// cmdConfig dispatches `fleet config set-openrouter-key|set-auth-pubkey` — the
-// operator-friendly writers for the two credentials every deployment needs
-// beyond what bootstrap generates itself: the OpenRouter API key (server env)
-// and the Elcano SSO verification key (web env). Both exist so nobody has to
-// hand-edit a 0600 env file; bootstrap's interactive prompts call the same
-// underlying writes.
+// cmdConfig dispatches the operator-friendly credential writers — the keys a
+// deployment needs beyond what bootstrap generates itself: the OpenRouter API
+// key (server env), the Elcano SSO verification key (web env), and the
+// Browserbase API key that mints hosted-browser live views (server env, #987).
+// They exist so nobody has to hand-edit a 0600 env file; bootstrap's
+// interactive prompts call the same underlying writes.
 func cmdConfig(argv []string) int {
 	if len(argv) < 1 {
-		return errf(1, "usage: fleet config set-openrouter-key | set-auth-pubkey")
+		return errf(1, "usage: fleet config set-openrouter-key | set-auth-pubkey | set-browserbase-key")
 	}
 	switch argv[0] {
 	case "set-openrouter-key":
 		return configSetOpenRouterKey(argv[1:])
 	case "set-auth-pubkey":
 		return configSetAuthPubkey(argv[1:])
+	case "set-browserbase-key":
+		return configSetBrowserbaseKey(argv[1:])
 	default:
 		return errf(1, "unknown config subcommand %q", argv[0])
 	}
@@ -110,6 +112,44 @@ func configSetOpenRouterKey(argv []string) int {
 	}
 	fmt.Printf("set OPENROUTER_API_KEY in %s\n", path)
 	fmt.Println("apply with: fleet restart   (systemctl restart fleet)")
+	return 0
+}
+
+// configSetBrowserbaseKey upserts BROWSERBASE_API_KEY into the server env file.
+// This is the key the host-side browserbase_live_view tool uses to turn a hosted
+// session id into a live-view URL for a human (#987, docs/BROWSERBASE.md) — it is
+// deliberately SEPARATE from the per-user Browserbase MCP connector credential,
+// which the user pastes in Settings → Connections and which is sealed in the
+// database rather than the env file.
+//
+// Same hidden-prompt handling as the OpenRouter writer, so the key never lands on
+// argv or in shell history. A restart is required because the tool is registered
+// only when the key is present at startup.
+func configSetBrowserbaseKey(argv []string) int {
+	fs := flag.NewFlagSet("config set-browserbase-key", flag.ContinueOnError)
+	envFile := fs.String("env-file", "", "server env file (default FLEET_ENV_FILE, /etc/fleet/fleet.env when present, else .env.local)")
+	key := fs.String("key", "", `API key ("-" reads from stdin; omit to prompt hidden)`)
+	_, flagArgs := splitPositionalValueFlags(argv)
+	if err := fs.Parse(flagArgs); err != nil {
+		return 1
+	}
+	val, err := resolveSecret(*key, "Browserbase API key: ", false)
+	if err != nil {
+		return errf(1, "%v", err)
+	}
+	val = strings.TrimSpace(val)
+	if val == "" {
+		return errf(1, "empty key")
+	}
+	path := serverEnvFile(*envFile)
+	if err := creds.SetEnvKey(path, "BROWSERBASE_API_KEY", val); err != nil {
+		return errf(5, "write %s: %v", path, err)
+	}
+	fmt.Printf("set BROWSERBASE_API_KEY in %s\n", path)
+	fmt.Println("apply with: fleet restart   (systemctl restart fleet)")
+	fmt.Println("note: this key mints live-view links. Each user ALSO adds Browserbase")
+	fmt.Println("      in Settings -> Connections to drive the browser — use a key from")
+	fmt.Println("      the SAME Browserbase project, or minting fails for live sessions.")
 	return 0
 }
 

@@ -9,8 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"charm.land/fantasy"
-
 	"github.com/ElcanoTek/fleet/internal/admission"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
@@ -101,10 +99,6 @@ type Manager struct {
 	// under resolverMu — mirroring the MCP gating hot-reload pattern above.
 	resolverMu sync.RWMutex
 	resolver   *agentcore.ModelResolver
-
-	// native is the per-process native-tool template (DefaultTools); each turn
-	// rebuilds a sandbox-bound variant via tools.NewTurnTools.
-	native []fantasy.AgentTool
 
 	// sandboxPool is the per-turn container warm pool. RunTurn Take()s one per
 	// turn; SandboxPool() exposes it for the out-of-band approved-bash path.

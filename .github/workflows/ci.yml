@@ -168,7 +168,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
-          go-version: '1.26.6'
+          # Read from go.mod so the toolchain is declared once.
+          go-version-file: go.mod
           check-latest: true
 
       - name: Install postgresql-client-18 (so pg_dump matches the server major)
@@ -232,11 +233,12 @@ jobs:
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v9
         with:
-          # Repo .golangci.yml is the v2 schema (version: "2") and pins
-          # run.go: "1.26.6". Pin the binary to the SAME version the repo config
-          # is tuned against (see the header note in .golangci.yml) so CI and a
-          # local `golangci-lint run` agree and the full gate never flaps on a
-          # version bump.
+          # Repo .golangci.yml is the v2 schema (version: "2"). It no longer
+          # pins run.go: golangci-lint's documented default is "use Go version
+          # from the go.mod file", so go.mod is the single declaration and the
+          # linter follows it automatically. The BINARY version still needs a
+          # pin so CI and a local `golangci-lint run` agree and the full gate
+          # never flaps on a release.
           version: v2.12.2
           # FULL GATE: the lint backlog has been burned down to zero, so this
           # fails on ANY finding (not just new-vs-merge-base). only-new-issues is
@@ -331,7 +333,8 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v7
         with:
-          node-version: '22'
+          # Read from web/.nvmrc so the deployed node major is declared once.
+          node-version-file: web/.nvmrc
           cache: npm
           cache-dependency-path: web/package-lock.json
 
@@ -340,6 +343,15 @@ jobs:
 
       - name: Lint
         run: npm run lint
+
+      # Explicit type gate. `next build` also type-checks, but it runs LAST and
+      # after the bundle work — so a plain type error used to surface minutes
+      # into the job. oxlint is a syntax/semantic linter with no type awareness
+      # (that is why it works on TS 7 at all), so the types need their own step
+      # rather than riding along with lint as they did under
+      # @typescript-eslint. On the native TS 7 compiler this costs ~2s.
+      - name: Typecheck (tsc --noEmit)
+        run: npm run typecheck
 
       - name: Unit tests (vitest)
         run: npx vitest run
@@ -382,7 +394,8 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v7
         with:
-          node-version: '22'
+          # Read from web/.nvmrc so the deployed node major is declared once.
+          node-version-file: web/.nvmrc
           cache: npm
           cache-dependency-path: web/package-lock.json
 
@@ -452,13 +465,15 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
-          go-version: '1.26.6'
+          # Read from go.mod so the toolchain is declared once.
+          go-version-file: go.mod
           check-latest: true
 
       - name: Set up Node
         uses: actions/setup-node@v7
         with:
-          node-version: '22'
+          # Read from web/.nvmrc so the deployed node major is declared once.
+          node-version-file: web/.nvmrc
           cache: npm
           cache-dependency-path: web/package-lock.json
 
@@ -623,8 +638,8 @@ jobs:
         # gate. Grype matches the image's RPM AND Python packages against NVD/GHSA,
         # so it actually covers this image. See docs/TESTING.md for the rationale.
         env:
-          GRYPE_VERSION: '0.115.0'
-          GRYPE_SHA256: '3fad92940650e514c0aa2dad83526942a055e210cec09a8a59d9c024adc2b90e'
+          GRYPE_VERSION: '0.117.0'
+          GRYPE_SHA256: '38525dab1e06f162ebaa02f94d82d1f807076b011a44180cf2777edf1a7b9c26'
         run: |
           set -euo pipefail
           tarball="grype_${GRYPE_VERSION}_linux_amd64.tar.gz"

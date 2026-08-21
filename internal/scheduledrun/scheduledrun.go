@@ -682,7 +682,11 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 		log.Printf("scheduled task %s: git worktree isolation active; tool calls scoped to %s", task.ID, toolRoot)
 	}
 
-	turnTools := tools.NewTurnTools(sb)
+	// nil Browserbase resolver: a scheduled run has no per-user connector key
+	// wired here, so browserbase_live_view falls back to the host env
+	// BROWSERBASE_API_KEY (docs/BROWSERBASE.md). Wiring the task owner's
+	// connection through is a follow-on, not a silent gap.
+	turnTools := tools.NewTurnTools(sb, nil)
 
 	// Drop the interactive staging-card tools (preview_email, schedule_task,
 	// suggest_advanced_model, propose_memory). Only the interactive

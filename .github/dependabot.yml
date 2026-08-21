@@ -21,12 +21,65 @@
 #   https://docs.github.com/code-security/reference/supply-chain-security/dependabot-options-reference#cooldown--
 version: 2
 
+# ── Two things that decide whether you actually SEE an update ────────────────
+#
+# 1. THIS FILE IS READ FROM THE DEFAULT BRANCH (main), not from the branch it
+#    lives on. Edits here do nothing until they are promoted to main — so a
+#    change to coverage or cadence lands only after the usual dev → main PR.
+#
+# 2. `target-branch: dev` on every entry has a consequence GitHub documents but
+#    that is easy to miss: options defined for an ecosystem "no longer apply to
+#    security updates", because security updates always target the DEFAULT
+#    branch. So Dependabot SECURITY PRs land on main ignoring everything below
+#    — ungrouped, unprefixed, and not subject to the `ignore` rules (an eslint
+#    or typescript CVE can therefore still propose a major we know is
+#    unmergeable). The flip side: no VERSION update ever targets main directly,
+#    so if the dev → main promotion stalls, main quietly stops receiving them.
+#    Both are accepted trade-offs of soaking version bumps on dev — but they are
+#    trade-offs, not free.
+#
+# Cadence: `interval: daily` with the cooldown below. Cooldown, not the polling
+# interval, is what protects against a compromised fresh release; polling weekly
+# on top of a 7-day cooldown just added up to another week before anyone LEARNED
+# an update existed. Daily plus grouping means the routine minor/patch traffic
+# stays one PR per ecosystem that Dependabot updates in place, while a major
+# shows up the day it becomes eligible instead of whenever the weekly run lands.
+
+# ── What Dependabot does NOT cover here (learned the hard way) ───────────────
+# The node RUNTIME major is not a dependency any of the three surfaces below can
+# see, so Dependabot never proposed the 22 → 24 move and never will:
+#
+#   * `github-actions` updates ACTION REFS (actions/setup-node@v6 → @v7) and
+#     reusable-workflow refs. Anything passed as an INPUT to an action is a
+#     workflow value, not a dependency: dependabot-core's github_actions parser
+#     collects `uses:` strings and reads nothing else — not `with:`, not
+#     `services.*.image`, not `env:`. That blind spot is a CLASS, not one bug:
+#     `node-version:` sat pinned at '22' in six jobs across four files,
+#     `go-version:` in five,
+#     and `postgres:18` / the gitleaks + grype / golangci-lint binary pins are
+#     in it today. The only defence is a single declaration point — node reads
+#     web/.nvmrc, Go reads go.mod. Add new pins the same way.
+#   * `npm` updates packages in a package.json. The node interpreter is not one
+#     of them, and `engines.node` is a constraint Dependabot does not bump. The
+#     Go equivalent: the `go` directive in go.mod is not updated either
+#     (dependabot-core#9527), so the toolchain version is ours to move.
+#     One exception now exists: the `docker` entry below DOES see the node base
+#     image in scripts/rampart-service/Containerfile, so a node major CAN be
+#     proposed — for that container only, not for the web tier or the box.
+#   * Nothing covers the box's `nodejs` RPM — that is dnf's business, and
+#     scripts/bootstrap.sh + scripts/doctor.sh now install the versioned
+#     `nodejs<major>` package read from the same web/.nvmrc.
+#
+# So bumping node is a deliberate, human-initiated change: edit web/.nvmrc,
+# and CI + bootstrap + doctor + update all follow. Check the release line first
+# — production should track Active or Maintenance LTS, never Current.
+
 updates:
   # Go module (go.mod / go.sum at the repo root).
   - package-ecosystem: gomod
     directory: "/"
     schedule:
-      interval: weekly
+      interval: daily
     # Version updates land on the dev integration branch (fast-lane CI; they
     # soak there and ride the dev→main PR through the full gate). Dependabot
     # SECURITY updates ignore target-branch and still go straight to main, so
@@ -37,7 +90,12 @@ updates:
     # tightest gate because auto-merge-dependabot.yml auto-merges patch bumps.
     cooldown:
       default-days: 7
-      semver-major-days: 14
+      # 7, not 14: the supply-chain argument in the header is about the
+      # AUTO-MERGE path, and auto-merge-dependabot.yml merges patch only —
+      # a major is never auto-merged, so delaying it protects nothing and
+      # costs up to 14 days of visibility (cooldown + the weekly interval)
+      # before anyone even learns the major exists.
+      semver-major-days: 7
       semver-minor-days: 7
       semver-patch-days: 3
     commit-message:
@@ -49,10 +107,19 @@ updates:
           - patch
 
   # Next.js web app (web/package.json + web/package-lock.json).
+  #
+  # There are deliberately NO `ignore` entries here any more. Both of the ones
+  # that used to live in this block — eslint majors and typescript majors —
+  # existed for the same reason: eslint-config-next pinned eslint plugins to
+  # peer `eslint <=9`, and typescript-eslint refused TypeScript 7. Replacing
+  # eslint with oxlint (a Rust linter with its own parser, no TypeScript API
+  # dependency) removed the cause, so both bumps are now ordinary updates
+  # Dependabot is free to propose. If a future ignore is added here, say which
+  # upstream constraint forces it and what would let it be dropped.
   - package-ecosystem: npm
     directory: "/web"
     schedule:
-      interval: weekly
+      interval: daily
     # Version updates land on the dev integration branch (fast-lane CI; they
     # soak there and ride the dev→main PR through the full gate). Dependabot
     # SECURITY updates ignore target-branch and still go straight to main, so
@@ -62,7 +129,12 @@ updates:
     # Same supply-chain cooldown as gomod (see header).
     cooldown:
       default-days: 7
-      semver-major-days: 14
+      # 7, not 14: the supply-chain argument in the header is about the
+      # AUTO-MERGE path, and auto-merge-dependabot.yml merges patch only —
+      # a major is never auto-merged, so delaying it protects nothing and
+      # costs up to 14 days of visibility (cooldown + the weekly interval)
+      # before anyone even learns the major exists.
+      semver-major-days: 7
       semver-minor-days: 7
       semver-patch-days: 3
     commit-message:
@@ -72,26 +144,84 @@ updates:
         update-types:
           - minor
           - patch
-    ignore:
-      # eslint 10+ is blocked UPSTREAM, not by us: eslint-config-next (Next 16)
-      # pins eslint-plugin-import / eslint-plugin-jsx-a11y to peer eslint "<=9",
-      # so adopting eslint 10 breaks `npm ci` / the lint job. Hold at 9.x (minor +
-      # patch still flow) until the Next.js eslint plugins declare eslint >=10
-      # support, then drop this ignore and take the major deliberately.
-      - dependency-name: "eslint"
-        update-types: ["version-update:semver-major"]
+
+  # Reference Rampart PII service (scripts/rampart-service/package.json).
+  # This was the one genuinely unwatched manifest in the repo: two `^` ranges
+  # and NO lockfile, while its Containerfile runs an unpinned
+  # `npm install --omit=dev` at build time — so the manifest is the only pin
+  # the service has, and nothing was looking at it.
+  #
+  # Know what a green build means here: no CI job exercises this service, and
+  # `@nationaldesignstudio/rampart` is pre-1.0 (^0.1.3), where a MINOR bump is
+  # allowed to break. Auto-merge cannot touch these (it gates on patch only),
+  # so they land in human review — which is the right outcome, not a gap.
+  - package-ecosystem: npm
+    directory: "/scripts/rampart-service"
+    schedule:
+      interval: daily
+    target-branch: dev
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
+      semver-major-days: 7
+      semver-minor-days: 7
+      semver-patch-days: 3
+    commit-message:
+      prefix: "deps(rampart)"
+    groups:
+      rampart-minor-patch:
+        update-types:
+          - minor
+          - patch
+
+  # Container base images.
+  #
+  # Podman-native `Containerfile` IS supported, despite a lot of stale advice
+  # to the contrary: dependabot-core's docker file fetcher matches
+  # DOCKER_REGEXP = /dockerfile|containerfile/i (verified against
+  # dependabot-core main; the "support Containerfile" issue #6067 is closed).
+  #
+  # `directories` (not `directory`) because only the plural form takes a list.
+  # Docker supports cooldown `default-days` only — the semver-*-days keys are
+  # not supported for this ecosystem, so they are deliberately absent.
+  #
+  # Honest expectations for the two files covered:
+  #   * scripts/rampart-service/Containerfile — node:24-slim. Comparable tag, so
+  #     this WILL open PRs, including a node:25-slim major when 25 ships. 25 is
+  #     odd = Current, which this repo does not run (see the LTS rule below), so
+  #     the intended handling is to read that PR as the notification it is and
+  #     close it. No `ignore` is configured: the docker ignore syntax wants the
+  #     registry-stripped repository name, and shipping an unverified guess that
+  #     silently matches nothing would be worse than closing one PR a year.
+  #   * config/default/sandbox/Containerfile — fedora-minimal:latest. A
+  #     non-comparable tag short-circuits the update checker
+  #     (`return true unless version_tag.comparable?`), so this will produce NO
+  #     PRs at all. It is listed anyway so coverage already exists the day
+  #     someone pins a digest, as that file's own header contemplates.
+  - package-ecosystem: docker
+    directories:
+      - "/config/default/sandbox"
+      - "/scripts/rampart-service"
+    schedule:
+      interval: daily
+    target-branch: dev
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: "deps(image)"
 
   # GitHub Actions referenced by .github/workflows/*.
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
-      interval: weekly
+      interval: daily
     # Version updates land on the dev integration branch (fast-lane CI; they
     # soak there and ride the dev→main PR through the full gate). Dependabot
     # SECURITY updates ignore target-branch and still go straight to main, so
     # CVE fixes are never delayed behind dev.
     target-branch: dev
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 10
     commit-message:
       prefix: "deps(actions)"
     groups:

@@ -19,6 +19,187 @@ prior versions are listed because none have shipped.
 
 ### Changed
 
+- **TypeScript 7 all the way down; ESLint replaced by oxlint** — the web tier now
+  runs TypeScript 7, the native Go compiler, everywhere: `npm run typecheck`,
+  the `next build` type pass, and editors. No TypeScript 6 is kept anywhere.
+  The blocker was never the compiler — on TS 7, `npm ci` succeeds,
+  `tsc --noEmit` is clean and `next build` succeeds; only ESLint failed, with an
+  explicit *"typescript-eslint does not support TS 7.0"*. TS 7 is the native
+  rewrite (a ~3.6 MB shim around a platform binary, `tsc` but no `tsserver`), so
+  the JS compiler API typescript-eslint is built on is absent; it targets
+  TS >= 7.1, skipping 7.0, and reached this repo only via `eslint-config-next`.
+  The documented side-by-side workaround (TS 6 for the linter, TS 7 aliased for
+  compilation) was rejected: two TypeScripts can disagree about the same code.
+  **oxlint** has no such coupling — a Rust linter with its own TS parser, so the
+  TypeScript version is irrelevant to it. Coverage was compared rule by rule
+  before switching: nextjs 22→21, typescript 20→39, react incl. hooks 33→42,
+  jsx-a11y 6→35, import 1→8. Exactly **one** rule is lost,
+  `no-location-assign-relative-destination`, whose 17 findings were
+  long-standing warnings — and oxlint's `no-html-link-for-pages` enforces the
+  adjacent `<a href>` mistake more aggressively, catching 8 real cases ESLint
+  reported none of. `npm run lint` is no longer type-aware (that is *why* it
+  works on TS 7), so the type rules `@typescript-eslint` used to contribute now
+  come from a dedicated **`npm run typecheck`** step that runs in CI ahead of
+  the build — types are still gated, by the compiler rather than the linter.
+  The `warn`-severity rules in `.oxlintrc.json` are an explicit burn-down list,
+  not policy: oxlint's a11y coverage is far wider than the old gate's and
+  erroring on all of it would have failed on ~121 pre-existing findings, so they
+  are visible without conflating "adopt TS 7" with "fix every a11y issue".
+  Measured: lint **30,418 ms → 607 ms (~50×)**, typecheck ~2 s, 1080/1080 tests.
+  **Both Dependabot `ignore` entries are gone** — the eslint-major and
+  typescript-major holds existed for the same reason (eslint-config-next pinning
+  plugins to peer `eslint <=9`, typescript-eslint refusing TS 7), so removing
+  ESLint removed the cause and both are ordinary updates again. There are now no
+  `ignore` entries anywhere in `.github/dependabot.yml`.
+- **Deleted the dead `web/scripts/` tree; Go to 1.26.7; Dependabot cadence** —
+  three loose ends from the version audit. `web/scripts/` was an unreferenced
+  8-file legacy deployment stack (its own `bootstrap.sh`, `update.sh`,
+  `provision.sh`, `e2e-boot-server.sh`, …, three of them shadowing live
+  `scripts/` equivalents), untouched since July, still calling the product
+  "Elcano Chat", and installing **Node 20 — EOL 2026-04-30 — via NodeSource**,
+  which `scripts/doctor.sh` explicitly forbids ("fleet does not use
+  NodeSource"). It was the largest concentration of version rot in the repo and
+  nothing could break, because nothing referenced it. Go moves `1.26.6` →
+  `1.26.7`, the patch on its own supported line, where Go's security fixes land
+  — now a one-line change rather than the eight it would have been before the
+  consolidation; `web/go.mod` drops its patch pin entirely (major.minor only)
+  since that sentinel module has no packages and the patch was just a second
+  copy to keep in sync. `ONBOARDING.md` stops restating the patch number.
+  Dependabot's `interval` goes **weekly → daily** on all five entries: cooldown,
+  not the polling interval, is what guards against a compromised fresh release,
+  so polling weekly *on top of* a 7-day cooldown added up to another week before
+  anyone learned an update existed — daily plus the existing grouping keeps
+  routine minor/patch traffic to one in-place PR per ecosystem while a major
+  appears the day it becomes eligible. Also recorded in that file: it is read
+  from the **default branch**, so config changes are inert until promoted to
+  `main`; and `target-branch: dev` means security updates bypass every option
+  here (ungrouped, unprefixed, `ignore` rules do not apply) while no version
+  update ever targets `main` directly.
+- **Version-pin audit: one declaration point per tool, and it is now enforced by
+  a test** — a fan-out audit of the change above found the same pathology
+  everywhere else, plus real bugs in the node work itself.
+  *Consolidated:* Go was pinned `1.26.6` in **eight** functional places; the five
+  `go-version:` literals now read `go-version-file: go.mod` (two workflows
+  already did), and `.golangci.yml`'s `run.go` pin is deleted because
+  golangci-lint's documented default is already the go.mod version. `@types/node`
+  was `^26` against a node-24 runtime — its major tracks the runtime, so the app
+  was type-checked against API surface it does not have.
+  *Enforced:* new `scripts/check_versions_test.go` (runs in `make test`, same
+  idiom as the migration/grype linters) asserts `web/.nvmrc` agrees with both
+  `engines.node` blocks, `@types/node`, and the rampart Containerfile; that no
+  workflow carries a literal `node-version:`/`go-version:`; and that
+  twice-declared tool pins (Grype version+SHA, gitleaks, golangci-lint) match
+  across workflows. Each assertion was mutation-tested.
+  *Bugs fixed in the node change before it shipped:* the web build ran on
+  whatever `node` PATH resolved to — npm's shebang is `#!/usr/bin/env node` — so
+  bootstrap/update printed "will run node 24" and built on 22; `bootstrap.sh`
+  asked for the unversioned `npm` package, dragging the old stream back onto the
+  box, and `doctor.sh` did the same via `npm) pkg=nodejs`; the shim was installed
+  *after* the build, so a failed build on a fresh box left the unit pointing at a
+  non-existent ExecStart (a permanent 203/EXEC loop under `Restart=always`);
+  `upsert_web_env` corrupted any env file lacking a trailing newline, destroying
+  `NODE_ENV` and never setting the key; it rewrote only the *first* duplicate of
+  a key while systemd's `EnvironmentFile` is last-wins, so the check passed
+  forever while the box used a stale value; `resolve_node_bin` claimed to find
+  the "newest" node but matched only the exact major, refusing to deploy on a box
+  with a *newer* one; an unreadable `.nvmrc` silently defaulted to a hardcoded
+  `24`; and `update.sh` aborted with "nothing was changed" after already
+  rebuilding and installing binaries — that gate now runs before the first side
+  effect. The three copies of the resolver are now one
+  `scripts/lib/node-version.sh`. bootstrap and update now assert the **resolved**
+  `ExecStart` before reporting success, since neither installs a drifted unit.
+  *Dependabot:* three genuinely uncovered manifests are now watched —
+  `scripts/rampart-service/package.json` (two `^` ranges, no lockfile, and an
+  unpinned `npm install` at image build time) and both `Containerfile`s. Podman's
+  `Containerfile` name **is** supported (dependabot-core matches
+  `/dockerfile|containerfile/i`), contrary to most published advice. Added a
+  `typescript` major-ignore mirroring eslint's, for a narrower reason than first
+  recorded: on TS 7 `npm ci` succeeds, `tsc --noEmit` is clean and `next build`
+  succeeds — only `npm run lint` fails, because typescript-eslint explicitly
+  refuses TS 7.0 (it is the native Go rewrite, with no JS compiler API to drive)
+  and is targeting >= 7.1. Documented in docs/TESTING.md along with the
+  side-by-side workaround that does work (~3.7x faster) and why it is not
+  adopted: CI has no separate `tsc` step, so nothing CI runs would get faster. `semver-major-days` cut from 14 to 7: majors are never auto-merged, so
+  the cooldown delayed visibility without protecting anything.
+  *EOL and stale:* Grype `0.115.0` → `0.117.0` (checksum taken from the release's
+  own checksums file and verified against the downloaded artifact — a CVE scanner
+  should not be the stalest tool in the pipeline); `fedora:41` (EOL 2025-12-15) →
+  `44`, `nginx:1.27-alpine` (EOL 2025-06-24) → `1.30-alpine`, and
+  `grafana/grafana:11` (EOL 2026-06-25) → `13` in operator-pasteable docs; the
+  obsolete `sharp` override is dropped (Next's own `^0.35.3` is *stricter*, so
+  ours could only ever loosen it — verified by resolving to the same 0.35.3
+  without it) while the `postcss` override stays, re-documented, because it is
+  what unpins Next's exact `8.5.23`. Three contributor docs still said "Node.js
+  22" — one of them promising it matched CI — and now point at `web/.nvmrc`.
+- **node 24 everywhere, declared once** — the repo targeted three different node
+  versions at the same time: CI pinned `'22'` as a literal across **six jobs in
+  four** workflow files, `scripts/doctor.sh`'s floor said `20`, and the box ran whatever
+  `dnf install nodejs` happened to mean. Nothing reconciled them, and Dependabot
+  could never have caught it (it updates action *refs*, not the inputs passed to
+  them, and nothing it watches covers an OS package — `.github/dependabot.yml`
+  now records that where someone would look). The major is now declared once in
+  **`web/.nvmrc`** and read by CI (`node-version-file`), `bootstrap.sh`,
+  `doctor.sh`, `update.sh` and `web/package.json`'s `engines`. Raised to **24**,
+  the Active LTS line (22 is maintenance-only). Two traps handled along the way:
+  Fedora's node packages are **parallel-installable**, so `dnf upgrade nodejs`
+  can never cross a major — the reason a box sat on 22 through repeated doctor
+  runs — and installing `nodejs24` leaves `/usr/bin/node` pointing at the older
+  default stream, so a hardcoded `ExecStart=/usr/bin/node` would keep serving
+  the old major. systemd cannot fix that either: it does not expand a variable
+  used as the executable (`ExecStart=${FLEET_NODE_BIN} …` is a literal path).
+  `ExecStart` therefore names `deploy/fleet-web-start.sh`, a shim that resolves
+  the interpreter and **`exec`s** — the cgroup still holds exactly one process
+  (verified: same pid, SIGTERM → `exit(143)` in 15 ms), so this is not the npm
+  wrapper returning; npm's fault was *lingering* as a supervisor. bootstrap,
+  doctor and update install the shim, install the versioned `nodejs<major>`
+  package, and stamp/assert `FLEET_NODE_BIN` so the tier runs the node that was
+  installed rather than whichever one the distro defaults to. `rampart-service`
+  and the EKS deployment examples move to `node:24-slim` too. Verified on node
+  24.19.0: `npm ci` clean, lint 0 errors, build clean, 1080/1080 web tests
+  (identical with and without this change), and five start→SIGTERM cycles all
+  `exit(143)` with no segfault. **Not** verified: that node 24 fixes the
+  residual teardown segfault — that fault does not reproduce off the affected
+  box, so it stays an open operator experiment.
+- **`boxdoctor` can now see a crash loop and a directive that did not take** —
+  the admin-facing doctor (Settings → Admin → Doctor, `/admin/doctor`) probed
+  units with `is-active` only, and both app units run `Restart=always`, so a
+  unit segfaulting in a loop is `active` again ~5s later and the panel stayed
+  green throughout. That blind spot is why the `fleet-web` shutdown crashes went
+  unnoticed for three days. Two checks added: `restarts: <unit>` reads
+  `NRestarts` for the app units (0 ok / 1–4 advisory / ≥5 failure) — the right
+  property because it counts only `Restart=`-driven restarts and a manual
+  `systemctl restart` clears it, so deploys raise no false alarm; and
+  `fleet-web stop policy` asserts the value systemd *resolved* for
+  `TimeoutStopFailureMode`, the check that would have caught a directive sitting
+  inert in the unit body for a release. Stated honestly in `docs/DOCTOR.md`:
+  restart churn would **not** have caught the fleet-web crashes themselves,
+  since those happened on operator-initiated stops that reset `NRestarts` — the
+  stop-policy check is the one that covers that fault. Both are read-only and
+  unprivileged, and the non-`kill` verdict is a warn here where `doctor.sh`
+  fails, because only `doctor.sh` attempted a repair first.
+- **`fleet-web` shutdown: verify the resolved directive, not the file** — a
+  follow-up to the two fixes above, which had a shared weakness: each one
+  asserted a systemd directive and never checked what systemd actually
+  resolved. That is how `TimeoutStopFailureMode=kill` shipped inert on Fedora
+  in the first place, and comparing *files* (the first guard) cannot see a
+  stale checkout, a drop-in installed to the wrong directory, a later-sorting
+  drop-in in the same directory, or a missing `daemon-reload`. `scripts/doctor.sh`
+  now asserts `systemctl show -p TimeoutStopFailureMode --value fleet-web` is
+  `kill` after any reload, failing with a pointer to `systemctl cat fleet-web`
+  when it is not (empty = pre-246 systemd, an advisory rather than a failure).
+  Two install-path bugs fixed alongside it: `bootstrap.sh` installed the drop-in
+  only when `fleet-web.service` was **absent**, so a re-run on a box
+  provisioned before the drop-in shipped — the exact case that needs it — never
+  got it; and `update.sh`'s drop-in check compared bytes where the unit path
+  deliberately compares functional lines via `unit_functional_body()`, so
+  editing the drop-in's header (11 of its 13 lines are comments) would have
+  claimed Fedora's `abort` drop-in was overriding us on a box where it was not.
+  Also corrects an overclaim in `doctor.sh` and `docs/WEB-TIER-SHUTDOWN.md`: a
+  missing drop-in does **not** bring back the 130 MB-per-restart dump pile —
+  `LimitCORE=0` suppresses dumps for every signal on its own, since
+  systemd-coredump stores one only when the process's `RLIMIT_CORE` is
+  sufficient. The drop-in decides how an overrun stop dies (SIGKILL, not
+  SIGABRT), which is a correctness and hygiene matter, not a disk one.
 - **`fleet-web` no longer dumps core on nearly every restart** — see
   [docs/WEB-TIER-SHUTDOWN.md](docs/WEB-TIER-SHUTDOWN.md). ~793 MB of `node-22`
   SIGSEGV dumps had accumulated in `/var/lib/systemd/coredump`, one or two per
@@ -94,6 +275,15 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **A `?connector=<name>` deep link into Settings → Connections**, and a
+  Featured-shelf spot for the Browserbase card. `/settings/connections?connector=browserbase`
+  opens the connector directory filtered to that entry with its guided API-key
+  form already open and focused — one paste and Add away from connected — then
+  strips the one-shot param like the OAuth callback params. Works for any
+  directory entry by name; the built-in `browserbase` skill hands users the link
+  when a chat has no connector, and `docs/BROWSERBASE.md` documents it. Covered
+  by page unit tests (the first for the connections page) and a mocked
+  Playwright spec asserting the POST carries `api_key_query`.
 - **Sandbox image freshness: a max-age rebuild backstop in `fleet update`**
   ([`docs/SANDBOX-IMAGE-FRESHNESS.md`](docs/SANDBOX-IMAGE-FRESHNESS.md)). The
   update gate only ever detected *change* (Containerfile hash, resolved tag,
@@ -188,6 +378,24 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **The guided api_key connector add was broken for query-auth servers:**
+  `GET /mcp-catalog` dropped `api_key_query` on the wire (the projection in
+  `internal/httpapi/mcp_catalog.go` never copied it), so the directory card's
+  paste-a-key form sent the key as a bearer header and the add-time probe
+  failed against servers — Browserbase among them — that take the key as a
+  query parameter. The field now survives to the wire, pinned field-by-field
+  by a projection test.
+- **Browserbase live-view hardening after #1220's merge review.** The key
+  resolver treated a nil per-conversation opt-in list as "no filtering" while
+  the overlay treats the same nil as "no connectors on", so a conversation
+  whose opt-in list was never seeded could register `browserbase_live_view`
+  and unseal the connector key with every connector switched off — nil now
+  gates exactly like empty. Also: the connector URL match survives an explicit
+  `:443` (compare `Hostname()`, not `Host`); a 401/403/404 on the debug
+  endpoint no longer blames a two-key project mismatch when the user's own
+  connector key made the request; session auto-resolution returns the trimmed
+  id it validated; and the per-call HTTP client closes its idle connections
+  instead of leaking one TLS connection per mint.
 - **`paused_awaiting_wake` had no terminal backstop.** `WakeDueTasks` filters on
   `wake_at IS NOT NULL`, so a row without one could never wake, and
   `ExpirePausedTasks` covers `paused_awaiting_input` only — such a task waited
@@ -389,6 +597,61 @@ prior versions are listed because none have shipped.
   [`docs/CHAT-STREAM-RECOVERY.md`](docs/CHAT-STREAM-RECOVERY.md).
 
 ### Added
+
+- **The agent can hand you a real browser when a page needs a human (#987).** Ask it to
+  do something on a site with no API and it drives a hosted Browserbase session; when it
+  hits a login form, a captcha or a 2FA prompt it posts a **live-view link**, stops, and
+  waits. You open the link, take over the very same browser, finish the sign-in, and
+  reply — the agent picks up in that session and carries on.
+
+  Two pieces ship: the `browserbase` built-in skill (the seventh in the pack) and a
+  host-side `browserbase_live_view` tool. The tool exists because the hosted MCP's
+  `start` returns only a session id — the viewer URL comes from an authenticated
+  Browserbase API call, and credentials never enter the sandbox or the model context, so
+  minting it has to happen host-side. It joins the "host network / brokered fetch"
+  exception class ADR-0036 already enumerates, alongside `web_fetch` and `download_url`;
+  it drives no browser, so ADR-0044's "browser automation is a connector" still holds.
+  This is the follow-on that ADR named when it removed the in-sandbox browser tool.
+
+  **One key, in one place:** add Browserbase under Settings → Connections and enable
+  it in a chat's Tools picker. The link-minting tool resolves the running user's own
+  connector credential host-side, so the same key that drives the browser mints the
+  link — and the capability is scoped to that user rather than the whole box. A
+  box-wide `BROWSERBASE_API_KEY` remains as a fallback for paths with no per-user
+  connection (scheduled runs), installed with the new guided writer
+  `sudo fleet config set-browserbase-key` beside `set-openrouter-key`. The tool is registered
+  per turn **only when a credential is actually reachable** — you have a Browserbase
+  connection and this chat has it switched on, or the operator set the box-wide key — so
+  everyone else sees no new tool at all, and the credential stays inside the same
+  per-conversation gate the connector's own tools obey. Where it is absent the skill falls
+  back to telling you to open the session from the Browserbase dashboard, which uses your
+  own login and needs nothing from fleet.
+
+  Two safety details worth knowing. With no `session_id` the tool resolves your running
+  session itself — but only when the key came from **your own** connection; a shared
+  box-wide key can see every session in a shared project, so it demands an explicit id
+  rather than risk minting a control link to someone else's logged-in browser. And
+  `BROWSERBASE_API_KEY` is now a parent-owned env name, so a client bundle declaring the
+  same key for its own MCP connector will **fail server boot** with a clear overlap error
+  instead of having the value silently scrubbed — deliberate, but a behaviour change for
+  such a bundle.
+
+  One thing to know before you rely on it: **the live-view link is a capability.** It
+  needs no password, so anyone holding it can drive that browser until the session ends,
+  and fleet cannot revoke it — the skill says so and tells the agent not to forward it.
+  The connector's catalog URL also gained `?keepAlive=true`, which upstream documents as
+  what keeps a session alive across a disconnect; in testing a connection predating that
+  flag survived the handoff anyway, so it is belt-and-braces rather than a proven
+  dependency, and an existing connection only needs re-adding if handoffs actually lose
+  the session.
+
+  Honest scope: the skill is discoverable in interactive chat only (bundle skills are not
+  in the scheduled-run roster, so the tool's own description carries the protocol for
+  headless runs); the handoff is two turns by construction, because interactive chat
+  cannot block on a human; there is no embedded viewer, since the web proxy's CSP forbids
+  framing; and only a manual run with a real key exercises the live API call. Full design
+  note, including why the key is separate from the connector's own credential, in
+  `docs/BROWSERBASE.md`.
 
 - **A reusable sandbox build canary (`build-sandbox-image.yml`) — build only, no
   push.** Every bundle's sandbox image derives from exactly two inputs: the

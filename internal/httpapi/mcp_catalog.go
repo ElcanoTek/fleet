@@ -145,6 +145,7 @@ func thirdPartyCatalogEntry(e clientconfig.RemoteMCPCatalogEntry) mcpCatalogThir
 		SetupHint:          strings.TrimSpace(e.SetupHint),
 		SetupURL:           strings.TrimSpace(e.SetupURL),
 		APIKeyHeader:       strings.TrimSpace(e.APIKeyHeader),
+		APIKeyQuery:        strings.TrimSpace(e.APIKeyQuery),
 		ClientRegistration: strings.TrimSpace(e.ClientRegistration),
 		Featured:           e.Featured,
 		Trust:              "third_party",

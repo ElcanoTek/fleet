@@ -76,6 +76,8 @@ set -euo pipefail
 
 # ── locate this script + its repo root (default SRC_DIR) ──
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/node-version.sh
+. "$SCRIPT_DIR/lib/node-version.sh"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 SRC_DIR="${SRC_DIR:-$REPO_ROOT}"
@@ -740,10 +742,30 @@ fi
 if [[ "$DRY_RUN" == "1" ]]; then
   info "[dry-run] would run: (cd ${SRC_DIR} && make build)  → ${SRC_DIR}/fleet + fleet-admin"
   info "[dry-run] would install fleet + fleet-admin → ${INSTALL_DIR:-<unit ExecStart dir, else /opt/fleet>}"
+  info "[dry-run] would resolve node >= web/.nvmrc, refresh /usr/local/bin/fleet-web-start.sh, and set FLEET_NODE_BIN in /etc/fleet/fleet-web.env"
   info "[dry-run] would run: (cd ${SRC_DIR}/web && npm ci && npm run build) with the NEXT_PUBLIC_* stamps from /etc/fleet/fleet-web.env"
   info "[dry-run] would deploy the web build → the fleet-web unit's WorkingDirectory (else /opt/fleet/web)"
 else
   require_go_toolchain
+  # Resolve the node interpreter BEFORE anything is built or installed. The
+  # first version of this check ran after `make build` and after the new
+  # binaries were installed, then died with "nothing was changed" — which was
+  # false: the checkout had been fast-forwarded and the binaries replaced. A
+  # gate that can abort must run before the first side effect, or it is not a
+  # gate. Skipped when there is no web/ to build.
+  node_bin_resolved=""
+  if [[ -f "$SRC_DIR/web/package.json" ]]; then
+    node_major_want="$(fleet_node_major_want "$SRC_DIR" || true)"
+    [[ -n "$node_major_want" ]] \
+      || die "cannot read the node major from ${SRC_DIR}/web/.nvmrc — expected something like '24' (nothing has been built or installed yet)"
+    if ! node_bin_resolved="$(fleet_resolve_node_bin "$node_major_want")"; then
+      warn "no node >= ${node_major_want} (web/.nvmrc) — have $(node -v 2>/dev/null || echo none)."
+      warn "  install it:  sudo dnf install nodejs${node_major_want}    (or: sudo fleet doctor)"
+      die "refusing to build the web tier on an unsupported node — nothing has been built or installed yet"
+    fi
+    ok "web tier will build+run on ${node_bin_resolved} ($("$node_bin_resolved" -v))"
+  fi
+
   ( cd "$SRC_DIR" && make build ) || die "make build failed — live binary left in place"
   [[ -x "$SRC_DIR/fleet" && -x "$SRC_DIR/fleet-admin" ]] \
     || die "make build did not emit ${SRC_DIR}/fleet + ${SRC_DIR}/fleet-admin"
@@ -781,13 +803,44 @@ else
   fi
 
   if [[ -f "$SRC_DIR/web/package.json" ]]; then
+
+    # ExecStart points at this shim; a stale copy would send the tier to the
+    # wrong interpreter. Shipped content with no operator-tunable parts, so it
+    # is refreshed unconditionally rather than gated behind --adopt-units.
+    if [[ -f "$SRC_DIR/deploy/fleet-web-start.sh" ]]; then
+      if install -D -m 0755 "$SRC_DIR/deploy/fleet-web-start.sh" /usr/local/bin/fleet-web-start.sh 2>/dev/null; then
+        ok "refreshed /usr/local/bin/fleet-web-start.sh"
+      else
+        warn "could not refresh /usr/local/bin/fleet-web-start.sh (need root?) — fleet-web may not start"
+      fi
+    fi
+    # Point the tier at the resolved interpreter. Unset means the shim falls
+    # back to `node` on PATH — Fedora's default stream, i.e. possibly the old
+    # major — so this is the line that makes the upgrade actually take effect.
+    if [[ -f /etc/fleet/fleet-web.env ]]; then
+      # tail -n1 + quote strip: systemd's EnvironmentFile is last-wins, and a
+      # hand-written FLEET_NODE_BIN="/usr/bin/node-24" must not read as drift.
+      _cur_nb="$(grep -E '^FLEET_NODE_BIN=' /etc/fleet/fleet-web.env 2>/dev/null | tail -n1 | cut -d= -f2- | sed -e 's/^["'"'"']//' -e 's/["'"'"']$//')"
+      if [[ "$_cur_nb" != "$node_bin_resolved" ]]; then
+        upsert_env_file /etc/fleet/fleet-web.env FLEET_NODE_BIN "$node_bin_resolved" \
+          && ok "pointed fleet-web at ${node_bin_resolved}" \
+          || warn "could not set FLEET_NODE_BIN in /etc/fleet/fleet-web.env"
+      fi
+    fi
+
     # Rebuild with the same NEXT_PUBLIC_* stamps bootstrap baked in (Next
     # inlines them into the browser bundle at build time — a bare rebuild
     # silently drops the public origin + app name). They are client-visible
     # by definition, so grepping just those keys from the 0600 web env file
     # leaks no secret — the file is still never sourced. The build id needs
     # no stamp: next.config.ts derives it from the checkout's git SHA.
+    # PATH is prefixed with the resolved interpreter's directory so `npm` runs
+    # UNDER it: npm's shebang is `#!/usr/bin/env node`, so a bare `npm ci` uses
+    # whatever `node` PATH resolves to — the DEFAULT stream on Fedora. Without
+    # this the tier was built on the old major while this script reported the
+    # new one.
     ( cd "$SRC_DIR/web" \
+        && export PATH="$(fleet_node_build_path "$node_bin_resolved")" \
         && export NEXT_PUBLIC_PUBLIC_ORIGIN="$web_origin" NEXT_PUBLIC_APP_NAME="$web_app_name" \
         && npm ci && npm run build ) || die "web build failed"
     ok "web app built (origin=${web_origin:-<default>}, app=${web_app_name:-<default>})"
@@ -955,7 +1008,24 @@ if command -v systemctl >/dev/null 2>&1; then
   # --adopt-units, else hint. A drop-in install needs no app restart.
   dropin_shipped="$SRC_DIR/deploy/fleet-web.service.d/10-timeout-kill.conf"
   dropin_installed="/etc/systemd/system/fleet-web.service.d/10-timeout-kill.conf"
-  if [[ -f /etc/systemd/system/fleet-web.service && -f "$dropin_shipped" ]] && ! cmp -s "$dropin_shipped" "$dropin_installed" 2>/dev/null; then
+  # Comment-only churn must not nag, same rule the unit loop above applies via
+  # unit_functional_body(): byte-identical → nothing to say; identical once
+  # comments are stripped → the directive is already in effect, so say nothing;
+  # only a real functional difference is worth a warning. Without this, editing
+  # the drop-in's header (11 of its 13 lines are comments) would claim Fedora's
+  # abort drop-in is overriding us on a box where it is not.
+  dropin_needs_work=0
+  if [[ -f /etc/systemd/system/fleet-web.service && -f "$dropin_shipped" ]] \
+     && ! cmp -s "$dropin_shipped" "$dropin_installed" 2>/dev/null; then
+    if [[ -f "$dropin_installed" ]] && [[ -z "$(diff \
+          <(unit_functional_body "$dropin_installed") \
+          <(unit_functional_body "$dropin_shipped") 2>/dev/null || true)" ]]; then
+      info "fleet-web.service.d/10-timeout-kill.conf differs from deploy/ only in comments/whitespace — no functional change, leaving as-is."
+    else
+      dropin_needs_work=1
+    fi
+  fi
+  if [[ "$dropin_needs_work" == "1" ]]; then
     if [[ "$ADOPT_UNITS" == "1" ]]; then
       if install -D -m 0644 "$dropin_shipped" "$dropin_installed" 2>/dev/null; then
         ok "installed fleet-web.service.d/10-timeout-kill.conf"
@@ -968,6 +1038,24 @@ if command -v systemctl >/dev/null 2>&1; then
       warn "  adopt:  install -D -m 0644 $dropin_shipped $dropin_installed && systemctl daemon-reload"
       warn "  or re-run: fleet update --adopt-units"
     fi
+  fi
+
+  # Assert the RESOLVED ExecStart. Everything above can succeed — shim
+  # refreshed, FLEET_NODE_BIN stamped, build done on the right node — while the
+  # live unit still points at the old /usr/bin/node ExecStart, because adopting
+  # a drifted unit needs --adopt-units or an interactive yes. Saying nothing
+  # there would report a node upgrade that the serving process never got.
+  if [[ -f /etc/systemd/system/fleet-web.service ]]; then
+    _live_exec="$(systemctl show -p ExecStart --value fleet-web.service 2>/dev/null || true)"
+    case "$_live_exec" in
+      *fleet-web-start.sh*) : ;;
+      "") : ;;   # unit unknown to systemd (never enabled) — not our claim to make
+      *)
+        warn "fleet-web's live ExecStart is not the shipped shim — the node work above is NOT in effect for the running tier."
+        warn "  live: ${_live_exec}"
+        warn "  adopt it: sudo fleet update --adopt-units   (or: sudo fleet doctor)"
+        ;;
+    esac
   fi
 fi
 
