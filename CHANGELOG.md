@@ -46,12 +46,27 @@ prior versions are listed because none have shipped.
   image, and this process holds `CHAT_SERVER_TOKEN`,
   `ORCHESTRATOR_SERVER_TOKEN`, `APP_SESSION_SECRET` and every in-flight user's
   session, so persisting one per crash wrote down exactly what the credential
-  invariant says must never reach disk. The failure is still logged — no
-  `SuccessExitStatus=` papering — only the image is declined. Also recorded in
+  invariant says must never reach disk. The failure is still logged — only the
+  image is declined. Also recorded in
   the design note: the obvious **graceful-drain theory was measured and refuted**
   (Next 16.3.0 exits in ~105 ms with an open-ended SSE response in flight), so
   no application-side stream-abort machinery was added for a hang that does not
   exist.
+- **`fleet-web` shutdown fix completed on live verification** — two gaps found
+  when the unit above met a real Fedora 44 box: (1) Fedora's
+  `TimeoutStopFailureMode=abort` lives in the **global**
+  `/usr/lib/systemd/system/service.d/` drop-in directory, and drop-ins are read
+  after the unit body, so it overrode the unit's own
+  `TimeoutStopFailureMode=kill` — the fix now also ships
+  `deploy/fleet-web.service.d/10-timeout-kill.conf`, a per-unit drop-in at the
+  precedence level that wins, and `bootstrap.sh`, `update.sh` (`--adopt-units`)
+  and `doctor.sh` all install/reconcile it; (2) Next handles SIGTERM and exits
+  with code **143** rather than dying by the signal, so systemd logged every
+  clean stop as "Failed with result 'exit-code'" — the unit now declares
+  `SuccessExitStatus=143`, which names Next's deliberate clean-stop code only
+  (crash signals still fail loudly). Verified live on fleetdev: `systemctl
+  restart fleet-web` now stops with "Deactivated successfully", no core dump,
+  no segfault, and the tier is Ready again in ~150 ms.
 - **Approval cards reworked end to end** — see
   [docs/APPROVAL-CARDS.md](docs/APPROVAL-CARDS.md) for the full design note.
   The pieces: (1) non-email critical tools (a pages deploy, a deal write) get a

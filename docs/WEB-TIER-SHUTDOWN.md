@@ -61,12 +61,20 @@ stop overruns `TimeoutStopSec=30s` systemd **aborts** the process — which dump
 core — instead of killing it.
 
 **Fix:** state the escalation in the unit rather than inheriting the distro's
-choice.
+choice — at the precedence level that actually wins.
 
 ```ini
 TimeoutStopSec=30s
 TimeoutStopFailureMode=kill
 ```
+
+The unit body says this, but it is **not sufficient on Fedora**: the distro's
+`abort` lives in the global `/usr/lib/systemd/system/service.d/` drop-in
+directory, and drop-ins are read *after* the unit body, so it overrides the
+unit's own line (verified on Fedora 44 — `systemctl show fleet-web` reported
+`abort` with the unit line present). The fix therefore also ships
+`deploy/fleet-web.service.d/10-timeout-kill.conf`, a per-unit drop-in that
+restates `kill` at the precedence level that wins. Install both files.
 
 A stop that overran its deadline is a hang to diagnose from the journal, not a
 crash to dissect from a memory image. SIGKILL reports the same timeout and
@@ -118,9 +126,13 @@ each.
 
 This **does not mask the failure.** systemd still logs the signal and the unit
 still records the failed stop, so `systemctl status fleet-web` and `journalctl
--u fleet-web` show it exactly as before. Only the memory image is declined.
-`SuccessExitStatus=`-style papering — which *would* have hidden it — was
-deliberately not used. To capture a dump deliberately while debugging:
+-u fleet-web` show it exactly as before. Only the memory image is declined. No
+crash signal is papered over: `SuccessExitStatus=143` (added after live
+verification) names only Next's *deliberate* exit code — Next catches SIGTERM
+and calls `exit(143)` instead of dying by the signal, which systemd's default
+clean set does not cover, so every clean stop was logged as a failed one.
+SIGSEGV/SIGABRT exits still fail loudly. To capture a dump deliberately while
+debugging:
 
 ```sh
 systemctl edit fleet-web     # [Service] / LimitCORE=infinity
@@ -163,9 +175,18 @@ Consequences, which is why this section exists:
 | Fault | Status | Change |
 | --- | --- | --- |
 | npm `uv_kill` segfault, every stop | **fixed** | `ExecStart` runs node directly; `FLEET_WEB_HOST` default moved into the unit |
-| SIGABRT on an overrun stop | **dump eliminated** | `TimeoutStopFailureMode=kill` (cause of the overrun still unknown) |
+| SIGABRT on an overrun stop | **dump eliminated** | `TimeoutStopFailureMode=kill` — unit body **plus** the `fleet-web.service.d/10-timeout-kill.conf` drop-in Fedora's global `abort` drop-in requires (cause of the overrun still unknown) |
 | next-server teardown segfault | **not fixable here** | no upstream fix in 16.3.1/16.3.2; lead is the node build — operator action |
 | ~793 MB of dumps, secrets in each | **fixed** | `LimitCORE=0`, with the failure still logged |
+| Clean stops logged as failures | **fixed** | `SuccessExitStatus=143` names Next's deliberate SIGTERM exit code; crash signals still fail |
+
+**Live verification (fleetdev, Fedora 44, node 22.23.1, Next 16.3.0):** with
+the new unit + drop-in installed, `systemctl restart fleet-web` produced a
+fully clean stop — "Deactivated successfully", no core dump, no segfault in
+the journal, tier back to Ready in ~150ms and serving. The residual teardown
+segfault (fault 3) did not fire on this stop; whether removing the npm relay
+also eliminates it in practice, or it recurs on some stops, is now visible in
+the journal without the dump pile.
 
 The changed unit reaches a running box the usual way — `sudo fleet doctor`
 (step 4 reinstalls a unit that drifted from `deploy/`) or `sudo fleet update` —
