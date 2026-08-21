@@ -2,9 +2,13 @@
 # scripts/update.sh — in-place update for an existing fleet install.
 #
 # Pulls the fleet checkout AND the client-config bundle checkout, rebuilds the
-# sandbox image when the bundle's Containerfile or resolved image tag changed
-# (or the tag is missing from the service user's image store; skipped entirely
-# when the bundle resolves sandbox.image to a prebuilt ref), rebuilds the
+# sandbox image when the bundle's Containerfile or resolved image tag changed,
+# the tag is missing from the service user's image store, OR the installed
+# image is older than FLEET_SANDBOX_MAX_AGE_DAYS (default 7; 0 disables) — the
+# freshness backstop that keeps an unchanged bundle from serving a weeks-old
+# image full of unpatched base/package CVEs (skipped entirely when the bundle
+# resolves sandbox.image to a prebuilt ref: registry freshness is the
+# publisher's pipeline's job, not this box's), rebuilds the
 # fleet binary + the Next web app and deploys the web build into the fleet-web
 # unit's WorkingDirectory (a build left only in the checkout never reaches the
 # browser), then restarts the systemd units (fleet, then fleet-web when
@@ -42,6 +46,11 @@
 #                          FLEET_CLIENT_CONFIG_VERIFY=1 to verify-tag/-commit the
 #                          ref (fail-closed) when a signing key is configured.
 #   --no-pull              skip git fetch/ff; just rebuild the current checkout(s)
+#   --sandbox-max-age <d>  rebuild the sandbox image when the installed one is
+#                          <d> or more days old, even if nothing else changed
+#                          (env FLEET_SANDBOX_MAX_AGE_DAYS, default 7; 0 disables).
+#                          An age-triggered rebuild runs with --no-cache so the
+#                          base image AND the package layers actually refresh.
 #   --branch <name>        override the branch fast-forwarded in SRC_DIR (env FLEET_UPDATE_BRANCH)
 #   --adopt-units          adopt a shipped deploy/*.service that differs
 #                          functionally from the installed unit, WITHOUT the
@@ -53,7 +62,9 @@
 # Re-run safe (idempotent): when nothing changed it exits early; the web/binary
 # builds are deterministic from the checkout; the sandbox rebuild is gated on the
 # Containerfile hash + resolved image tag (and the tag's presence in the service
-# user's store) so the ~2-3min image build is skipped when unchanged.
+# user's store) so the ~2-3min image build is skipped when unchanged — except
+# the max-age freshness backstop above, which deliberately re-fires once the
+# installed image ages past the threshold.
 
 set -euo pipefail
 
@@ -105,6 +116,16 @@ CLIENT_CONFIG_VERIFY="${FLEET_CLIENT_CONFIG_VERIFY:-}"
 # (it only skips the commit-range confirm) so an unattended update can't silently
 # clobber an operator's hand-edited unit.
 ADOPT_UNITS="${FLEET_UPDATE_ADOPT_UNITS:-0}"
+# Sandbox image freshness backstop: rebuild the on-box sandbox image when the
+# one in the service user's store is this many days old or older, even when the
+# Containerfile and tag are unchanged. Without it a box whose bundle goes quiet
+# serves the same image for months — stale base layers, unpatched package CVEs
+# (the Grype CI gate scans a FRESH build; only a rebuild brings a deployed box
+# up to what CI vouched for). 0 disables the backstop. Age-triggered rebuilds
+# pass --no-cache through to build-sandbox-image.sh so every layer re-runs —
+# a cached rebuild against an unmoved base would produce the same image with
+# the same old creation date and the gate would spin forever doing nothing.
+SANDBOX_MAX_AGE_DAYS="${FLEET_SANDBOX_MAX_AGE_DAYS:-7}"
 DRY_RUN=0
 
 while [[ $# -gt 0 ]]; do
@@ -121,11 +142,13 @@ while [[ $# -gt 0 ]]; do
     --branch=*)       BRANCH_OVERRIDE="${1#*=}" ;;
     --pin)            shift; [[ $# -gt 0 ]] || { echo "error: --pin needs a sha-or-tag" >&2; exit 1; }; CLIENT_CONFIG_PIN="$1" ;;
     --pin=*)          CLIENT_CONFIG_PIN="${1#*=}" ;;
+    --sandbox-max-age)   shift; [[ $# -gt 0 ]] || { echo "error: --sandbox-max-age needs a day count" >&2; exit 1; }; SANDBOX_MAX_AGE_DAYS="$1" ;;
+    --sandbox-max-age=*) SANDBOX_MAX_AGE_DAYS="${1#*=}" ;;
     --no-pull)        NO_PULL=1 ;;
     --yes|-y)         ASSUME_YES=1 ;;
     --dry-run)        DRY_RUN=1 ;;
     --adopt-units)    ADOPT_UNITS=1 ;;
-    -h|--help)        sed -n '2,45p' "$0"; exit 0 ;;
+    -h|--help)        sed -n '2,60p' "$0"; exit 0 ;;
     *) echo "error: unknown argument: $1" >&2; exit 1 ;;
   esac
   shift
@@ -160,6 +183,11 @@ warn() { printf '%s! %s%s\n' "$c_yellow" "$*" "$c_reset" >&2; }
 info() { printf '%s» %s%s\n' "$c_dim" "$*" "$c_reset"; }
 die()  { printf '%s✗ %s%s\n' "$c_red" "$*" "$c_reset" >&2; exit 1; }
 run()  { if [[ "$DRY_RUN" == "1" ]]; then info "[dry-run] $*"; else "$@"; fi; }
+
+# Validate up front: the value gates a multi-GB rebuild, so a typo must die
+# here, not silently disable the backstop (or arithmetic-error mid-update).
+[[ "$SANDBOX_MAX_AGE_DAYS" =~ ^[0-9]+$ ]] \
+  || die "--sandbox-max-age / FLEET_SANDBOX_MAX_AGE_DAYS must be a non-negative integer day count (0 disables), got: ${SANDBOX_MAX_AGE_DAYS}"
 
 # require_go_toolchain — fail the build step with an actionable message rather
 # than an opaque one.
@@ -505,8 +533,22 @@ sandbox_image_state() {
   esac
 }
 
+# sandbox_image_age_days REF — print the whole days since the image was built,
+# or nothing when the creation time can't be read (missing image, template
+# unsupported, store unreachable). Callers treat empty as "unknown" and skip
+# the age gate — an unanswerable probe must not trigger a rebuild, the same
+# only-act-on-a-positive-answer rule sandbox_image_state applies.
+sandbox_image_age_days() {
+  local created now
+  created="$(sandbox_podman image inspect --format '{{.Created.Unix}}' "$1" 2>/dev/null | tr -d '[:space:]')"
+  [[ "$created" =~ ^[0-9]+$ ]] || return 0
+  now="$(date +%s)"
+  (( now >= created )) || { printf '0'; return 0; }
+  printf '%s' $(( (now - created) / 86400 ))
+}
+
 # ── 3. rebuild the sandbox image when its gate inputs changed ───────────────
-step "3/5  Rebuilding the sandbox image (when the Containerfile or tag changed)"
+step "3/5  Rebuilding the sandbox image (when the Containerfile/tag changed or the image went stale)"
 if [[ -n "$sandbox_image_ref" ]]; then
   # image wins over tag (internal/clientconfig): the service pulls/uses the
   # prebuilt ref and never reads an on-box build, so gating on sandbox.tag
@@ -516,13 +558,19 @@ if [[ -n "$sandbox_image_ref" ]]; then
 elif [[ "$cf_now" == "absent" ]]; then
   info "no ${sandbox_cf} — bundle ships no sandbox Containerfile; skipping (set sandbox.image or add one)."
 elif [[ "$DRY_RUN" == "1" ]]; then
-  info "[dry-run] would rebuild if the Containerfile hash or resolved tag (${ref_now:-unresolved}) changed, or the tag is missing from the service user's store"
-  info "[dry-run] would run: FLEET_CLIENT_CONFIG_DIR=${CLIENT_DIR} scripts/build-sandbox-image.sh"
+  info "[dry-run] would rebuild if the Containerfile hash or resolved tag (${ref_now:-unresolved}) changed, the tag is missing from the service user's store, or the installed image is ${SANDBOX_MAX_AGE_DAYS}+ days old (FLEET_SANDBOX_MAX_AGE_DAYS; 0 disables the freshness backstop)"
+  info "[dry-run] would run: FLEET_CLIENT_CONFIG_DIR=${CLIENT_DIR} scripts/build-sandbox-image.sh (--no-cache when age-triggered)"
   info "[dry-run] would record the new Containerfile hash + tag under ${STATE_DIR}"
 elif ! command -v podman >/dev/null 2>&1; then
   warn "podman not found — skipping sandbox build (install podman, then run scripts/build-sandbox-image.sh)."
 else
   build_reason=""
+  # Age-triggered rebuilds run --no-cache (via FLEET_SANDBOX_BUILD_NO_CACHE):
+  # with a cached build against an unmoved base, podman would emit the SAME
+  # image with the same old creation date and the backstop would re-fire every
+  # update while refreshing nothing. Every other reason keeps the layer cache —
+  # there the trigger itself guarantees a real change.
+  sandbox_build_no_cache=0
   if [[ "$NO_PULL" == "1" ]]; then
     build_reason="rebuild-only mode"
   elif [[ "$cf_prev" == "absent" ]]; then
@@ -542,13 +590,27 @@ else
     case "$(sandbox_image_state "$ref_now")" in
       absent) build_reason="${ref_now} missing from the sandbox image store" ;;
       error)  warn "could not probe the sandbox image store for ${ref_now} (podman failed as ${service_user:-$(id -un)}) — leaving the image as-is; check with: fleet doctor" ;;
+      present)
+        # Freshness backstop: an unchanged bundle must not mean a frozen
+        # image — the base layers and packages inside it keep aging (and
+        # accumulating published CVEs) no matter how stable the Containerfile
+        # is. Only a readable creation time triggers (empty = unknown = skip).
+        if (( SANDBOX_MAX_AGE_DAYS > 0 )); then
+          image_age_days="$(sandbox_image_age_days "$ref_now")"
+          if [[ -n "$image_age_days" ]] && (( image_age_days >= SANDBOX_MAX_AGE_DAYS )); then
+            build_reason="${ref_now} was built ${image_age_days} days ago (max age ${SANDBOX_MAX_AGE_DAYS}d) — refreshing the base image + package layers"
+            sandbox_build_no_cache=1
+          fi
+        fi
+        ;;
     esac
   fi
   if [[ -z "$build_reason" ]]; then
     ok "sandbox image up to date (Containerfile ${cf_now:0:12}, ${ref_now:-tag unresolved}) — skipping the image build."
   else
     info "${build_reason} — building the sandbox image."
-    if FLEET_CLIENT_CONFIG_DIR="$CLIENT_DIR" FLEET_SERVICE_NAME="$SERVICE_NAME" "$SCRIPT_DIR/build-sandbox-image.sh"; then
+    if FLEET_CLIENT_CONFIG_DIR="$CLIENT_DIR" FLEET_SERVICE_NAME="$SERVICE_NAME" \
+       FLEET_SANDBOX_BUILD_NO_CACHE="$sandbox_build_no_cache" "$SCRIPT_DIR/build-sandbox-image.sh"; then
       mkdir -p "$STATE_DIR"
       printf '%s\n' "$cf_now" > "$STAMP_FILE"
       [[ -n "$ref_now" ]] && printf '%s\n' "$ref_now" > "$REF_FILE"

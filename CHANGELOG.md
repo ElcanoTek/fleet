@@ -46,6 +46,26 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **Sandbox image freshness: a max-age rebuild backstop in `fleet update`**
+  ([`docs/SANDBOX-IMAGE-FRESHNESS.md`](docs/SANDBOX-IMAGE-FRESHNESS.md)). The
+  update gate only ever detected *change* (Containerfile hash, resolved tag,
+  tag missing from the store), so a healthy box with a stable bundle served
+  the same sandbox image for months — weeks-old base layers and unpatched
+  package CVEs on boxes that updated regularly. `fleet update` now also
+  rebuilds when the installed image is `FLEET_SANDBOX_MAX_AGE_DAYS` (default
+  7; `--sandbox-max-age <d>` per run; `0` disables) or more days old, and an
+  age-triggered rebuild runs `--no-cache` so the package layers actually
+  refresh instead of replaying the stale cache into an identical image. Every
+  sandbox build (`build-sandbox-image.sh`, and `bootstrap.sh`'s inline
+  systemd-path build) now passes `--pull=newer`, so an unpinned base like the
+  generic bundle's `fedora-minimal:latest` is re-checked against the registry
+  on each build instead of silently reusing the stale local copy (offline-safe:
+  podman suppresses the pull error when a local base exists; digest-pinned
+  bases are unaffected). `build-sandbox-image.sh --no-cache` /
+  `FLEET_SANDBOX_BUILD_NO_CACHE=1` is available for manual full refreshes.
+  Bundles that pin a prebuilt `sandbox.image` still skip the on-box build
+  entirely — registry freshness stays the publisher pipeline's job.
+
 - **One maintenance loop, and a disk guard that acts on what it measures**
   ([`docs/MAINTENANCE.md`](docs/MAINTENANCE.md)). Reclamation used to be a side
   effect of chat traffic: the database retention sweeps, the attachment sweep
