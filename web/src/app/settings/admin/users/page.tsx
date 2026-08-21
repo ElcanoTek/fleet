@@ -277,6 +277,22 @@ export default function AdminUsersPage() {
     const close = (e: globalThis.MouseEvent) => {
       const target = e.target as Node | null;
       if (target && popRef.current?.contains(target)) return;
+      // Returning focus to the kebab is right for Escape, for an action taken
+      // inside the popover, and for a click on dead space — in each case the
+      // user dismissed the popover without saying where focus should go, and
+      // dropping it to <body> would lose a keyboard user's place. It is WRONG
+      // when the click landed on another CONTROL: that click already chose the
+      // focus target, and pulling it back to the kebab yanks focus out of the
+      // thing the user just clicked. So the restore is skipped only in that
+      // case, by dropping the stored trigger before the close.
+      if (
+        target instanceof Element &&
+        target.closest(
+          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        )
+      ) {
+        menuTriggerRef.current = null;
+      }
       setMenu(null);
     };
     const onKey = (e: KeyboardEvent) => {

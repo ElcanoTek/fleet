@@ -86,16 +86,24 @@ prior versions are listed because none have shipped.
   (documented as a burn-down list, not policy). All 55 are fixed and every rule
   is promoted to `error`; `npm run lint` runs with `--deny-warnings` so a rule
   re-introduced at `warn` fails the build. These were real accessibility
-  repairs, not lint appeasement: three connections dialogs and a users popover
-  gained Escape, focus-on-open and focus-return (none had a keyboard dismissal
-  before); seven `autoFocus` attributes became effects tied to the user action
-  that opens the field, so focus no longer moves on an unrelated remount; four
+  repairs, not lint appeasement: three connections dialogs gained Escape,
+  focus-on-open and focus-return (they had no keyboard dismissal at all — the
+  users popover already closed on Escape and gained the focus handling); six
+  `autoFocus` attributes became effects tied to the user action that opens the
+  field, so focus no longer moves on an unrelated remount, and a seventh was
+  removed outright because `Menu` already moves focus into a surface it opens,
+  so the attribute was being overridden anyway; four
   task-modal switches got a real name/description split instead of a paragraph
   of prose as their accessible name; the toast gained a labelled dismiss button
   (it was mouse-only); the cost estimate became a real `<button>` (its
   `tabIndex={0}` was the only keyboard route to the breakdown); `MenuSeparator`
   became an `<hr>`; and internal `<a href>` navigation became `<Link>` where the
-  target is genuinely a page. One rule is scoped off for `*.test.*` —
+  target is genuinely a page. **Behavior change:** a toast is no longer
+  dismissed by clicking anywhere on it — the dismiss target is the new × button
+  (auto-expiry is unchanged). That is a deliberate trade: the toast is a
+  `role="alert"` live region, so making the whole thing a control both
+  mis-labels the announcement and puts a self-destructing element in the tab
+  order. One rule is scoped off for `*.test.*` —
   `nextjs/no-html-link-for-pages` on a `vi.mock` factory — argued in the config
   on the merits: the defect it prevents is a runtime navigation that a module
   stub cannot perform, and the alternative rewrite would make the stub diverge

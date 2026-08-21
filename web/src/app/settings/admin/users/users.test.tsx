@@ -262,6 +262,24 @@ describe("AdminUsersPage", () => {
     );
   });
 
+  // Regression guard: the focus-return effect fired on EVERY close, so
+  // dismissing the popover by clicking another control pulled focus back out of
+  // that control. Dead-space dismissal (the case above) must still restore.
+  it("leaves focus on the control that dismissed the popover", async () => {
+    render(<AdminUsersPage />);
+    await screen.findByText("bob@x.com");
+
+    openKebab("bob@x.com");
+    expect(screen.getByRole("dialog", { name: "Edit bob@x.com" })).toBeInTheDocument();
+
+    const search = screen.getByPlaceholderText(/search/i);
+    search.focus();
+    fireEvent.click(search);
+
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+    expect(document.activeElement).toBe(search);
+  });
+
   it("moves focus into the team-rename field when the rename opens", async () => {
     render(<AdminUsersPage />);
     await screen.findByText("alice@x.com");
