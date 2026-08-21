@@ -517,6 +517,18 @@ export function ChatExperience({
     null,
   );
   const [isSavingTitle, setIsSavingTitle] = useState(false);
+  // Focus the rename input when (and only when) the click-to-edit opens.
+  // autoFocus was removed: as a JSX attribute it fires on every mount React
+  // performs, which is exactly the "focus moved without the user asking"
+  // failure mode jsx-a11y/no-autofocus guards against. Driving focus from the
+  // renaming/not-renaming transition keeps the intended UX — the user clicked
+  // the title, so moving focus there is user-initiated — while leaving focus
+  // alone for any other remount of the header.
+  const renameTitleInputRef = useRef<HTMLInputElement | null>(null);
+  const isRenamingTitle = renamingTitleDraft !== null;
+  useEffect(() => {
+    if (isRenamingTitle) renameTitleInputRef.current?.focus();
+  }, [isRenamingTitle]);
   const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
   const [confirmSummarize, setConfirmSummarize] = useState(false);
   // Multi-select bulk operations (#279). selectedIds is the set of checked
@@ -4553,7 +4565,7 @@ export function ChatExperience({
             <div className="flex min-w-0 items-center gap-2 px-4 pt-3 sm:px-6">
               {renamingTitleDraft !== null ? (
                 <input
-                  autoFocus
+                  ref={renameTitleInputRef}
                   aria-label="Rename chat"
                   disabled={isSavingTitle}
                   value={renamingTitleDraft}

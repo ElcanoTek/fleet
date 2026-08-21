@@ -217,7 +217,11 @@ const RAMPART_ACTIONS_SEARCH_TEXT =
 async function fetchSettings(): Promise<ResolvedSetting[] | null> {
   const response = await fetch("/api/admin/settings", { cache: "no-store" });
   if (response.status === 401) {
-    window.location.href = "/login";
+    // location.assign() rather than a location.href write: identical navigation
+    // (full document load, one history entry), stated as a call instead of a
+    // mutation of a global — the same form used in write() below, whose comment
+    // says it mirrors this one.
+    window.location.assign("/login");
     return null;
   }
   if (response.status === 403) {
@@ -274,7 +278,7 @@ function FeaturesAdmin() {
       if (response.status === 401) {
         // Session expired mid-edit: re-authenticate instead of surfacing a raw
         // 401 body as a row error (mirrors fetchSettings).
-        window.location.href = "/login";
+        window.location.assign("/login");
         return;
       }
       if (!response.ok) {

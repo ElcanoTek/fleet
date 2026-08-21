@@ -134,9 +134,22 @@ export default function LoginCard({
 
             {/* Secondary sign-in(s): hand off to an external identity flow. Kept
                 visually subordinate to the primary password action above, per the
-                flag design system's primary-semantics rule. */}
+                flag design system's primary-semantics rule.
+
+                Both targets are route HANDLERS (app/api/auth/oidc/start/route.ts,
+                app/api/auth/elcano-login/route.ts), not pages: each answers with a
+                303 to a third-party identity provider, and /oidc/start also has to
+                SET the state/nonce/PKCE cookies on that response. A next/link
+                soft-navigation would fetch an RSC payload that does not exist and
+                would never perform the cross-origin document navigation the flow
+                depends on, so a plain <a> is the correct element here — the full
+                page load is the handoff. oxlint's port of no-html-link-for-pages
+                flags every root-relative href without resolving it against the
+                route tree (upstream @next/next resolves the pages dir and would
+                not fire here), hence the two suppressions below. */}
             <div className="grid gap-3">
               {oidcEnabled ? (
+                // eslint-disable-next-line @next/next/no-html-link-for-pages -- /api/auth/oidc/start is a route handler that 303s to the IdP and sets PKCE cookies, not a Next page.
                 <a
                   href="/api/auth/oidc/start"
                   className="flex items-center justify-center rounded-xl border border-[var(--color-border)] px-4 py-2.5 text-sm font-medium text-[var(--color-text-primary)] transition hover:bg-[var(--color-overlay-soft)] focus-visible:outline-none focus-visible:[box-shadow:var(--focus-ring)]"
@@ -145,6 +158,7 @@ export default function LoginCard({
                 </a>
               ) : null}
               {magicLinkLoginEnabled ? (
+                // eslint-disable-next-line @next/next/no-html-link-for-pages -- /api/auth/elcano-login is a route handler that 303s to the auth service, not a Next page.
                 <a
                   href="/api/auth/elcano-login"
                   className="flex items-center justify-center rounded-xl border border-[var(--color-border)] px-4 py-2.5 text-sm font-medium text-[var(--color-text-primary)] transition hover:bg-[var(--color-overlay-soft)] focus-visible:outline-none focus-visible:[box-shadow:var(--focus-ring)]"

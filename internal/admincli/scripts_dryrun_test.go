@@ -903,3 +903,263 @@ func TestUpdateUnresolvedSandboxTagIsNotUpToDate(t *testing.T) {
 		t.Error(`update.sh still reports "tag unresolved" as an up-to-date sandbox image`)
 	}
 }
+
+// ── the node handoff ────────────────────────────────────────────────────────
+
+// nodeStubDir writes a `node` shim reporting the given version and returns its
+// directory, for prepending to PATH. fleet_resolve_node_bin prefers a versioned
+// /usr/bin/node-NN and falls back to `node` on PATH, so a stub claiming a very
+// high major forces the "resolved" branch on ANY box — including one that has no
+// qualifying interpreter at all. That is what makes the pass-path assertions
+// below deterministic rather than a function of the runner's node version.
+func nodeStubDir(t *testing.T, version string) string {
+	t.Helper()
+	dir := t.TempDir()
+	// A very high major so it outranks anything the runner already has, in the
+	// PATH-fallback branch of fleet_resolve_node_bin.
+	shim := "#!/bin/sh\n[ \"$1\" = \"-v\" ] && { echo " + version + "; exit 0; }\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(dir, "node"), []byte(shim), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// fakeSrcDir builds the minimum a script needs to accept a --src/SRC_DIR: a
+// go.mod (so the "is this a fleet checkout?" guard passes) and a web/.nvmrc
+// declaring the node major. It is the only deterministic lever on the *refusal*
+// path — a runner that already has node 24 cannot be made to lack it, but it can
+// be pointed at a checkout demanding node 99.
+func fakeSrcDir(t *testing.T, nvmrc string) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "web"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{
+		"go.mod":           "module example.test\n",
+		"web/.nvmrc":       nvmrc + "\n",
+		"web/package.json": "{}\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, filepath.FromSlash(name)), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+// hermeticNodeEnv points doctor.sh at a throwaway checkout AND a nonexistent
+// fleet-web.env, so a --node run depends on nothing but the node interpreters
+// actually installed. Without the second half these tests read this box's real
+// /etc/fleet/fleet-web.env: a stale stamp there (pointing at an interpreter that
+// has since been removed) fails them for a reason unrelated to the code, which
+// is exactly what happened while this suite was being written.
+func hermeticNodeEnv(t *testing.T, nvmrc string) []string {
+	t.Helper()
+	return []string{
+		"SRC_DIR=" + fakeSrcDir(t, nvmrc),
+		"FLEET_WEB_ENV_FILE=" + filepath.Join(t.TempDir(), "absent-fleet-web.env"),
+	}
+}
+
+// TestUpdateDryRunResolvesNodeRatherThanClaimingTo — `update --dry-run` is the
+// command an operator runs to ask "will this work on my box?", and the node gate
+// is what aborts the real run. The plan used to print
+// "would resolve node >= web/.nvmrc" WITHOUT ever calling the resolver, so on a
+// box the real run refuses it printed a clean checklist, a green
+// "fleet rebuilt at <sha>" banner, and exit 0.
+//
+// The pass path is forced with a node stub so this holds on any runner.
+func TestUpdateDryRunResolvesNodeRatherThanClaimingTo(t *testing.T) {
+	env := []string{"PATH=" + nodeStubDir(t, "v999.0.0") + string(os.PathListSeparator) + os.Getenv("PATH")}
+	out, err := runScript(t, env, "update.sh", "--dry-run", "--no-pull")
+	if err != nil {
+		t.Fatalf("update --dry-run exited non-zero: %v\n--- output ---\n%s", err, out)
+	}
+	if !strings.Contains(out, "node gate PASSES") {
+		t.Fatalf("a v999 node on PATH must satisfy the gate\n--- output ---\n%s", out)
+	}
+	// The resolved-value rule: the pass must name what it resolved, not what it
+	// wanted, and must not fall back to the old un-backed phrasing.
+	// Deliberately NOT asserting "v999.0.0": fleet_resolve_node_bin prefers a
+	// versioned /usr/bin/node-NN over `node` on PATH, so on a runner that has one
+	// the stub is outranked. The stub's job is only to guarantee that SOMETHING
+	// qualifies; what is asserted is that the pass names what it resolved.
+	if !strings.Contains(out, "resolved on this box, not assumed") {
+		t.Errorf("a passing node gate must report the RESOLVED interpreter\n--- output ---\n%s", out)
+	}
+	if strings.Contains(out, "would resolve node") {
+		t.Errorf("the plan still claims it \"would resolve node\" instead of resolving it\n--- output ---\n%s", out)
+	}
+	// A dry run built nothing, so it must not sign off with the real run's banner.
+	for _, bad := range []string{"fleet rebuilt at", "fleet updated "} {
+		if strings.Contains(out, bad) {
+			t.Errorf("dry-run banner claims %q — nothing was built\n--- output ---\n%s", bad, out)
+		}
+	}
+	if !strings.Contains(out, "dry run:") {
+		t.Errorf("dry-run must close with a banner saying so\n--- output ---\n%s", out)
+	}
+}
+
+// TestUpdateNodeGatePrecedesSandboxRebuild — the gate has to run before the first
+// expensive, destructive step. It used to sit inside step 4, i.e. AFTER step 3
+// could spend 2-3 minutes rebuilding the sandbox image and then prune the
+// superseded layers — while still telling the operator nothing had been built.
+// It cannot move above step 1 either: the floor is declared in the CHECKOUT's
+// web/.nvmrc, so a pre-pull gate would read the OLD major.
+func TestUpdateNodeGatePrecedesSandboxRebuild(t *testing.T) {
+	out := runScriptDryRun(t, "update.sh", "--dry-run", "--no-pull")
+	gateAt := strings.Index(out, "Node gate")
+	sandboxAt := strings.Index(out, "Rebuilding the sandbox image")
+	if gateAt < 0 || sandboxAt < 0 {
+		t.Fatalf("plan missing the node gate (%d) or sandbox (%d) step header\n--- output ---\n%s", gateAt, sandboxAt, out)
+	}
+	if gateAt > sandboxAt {
+		t.Errorf("the node gate (at %d) must run before the sandbox rebuild (at %d) — an abort after a multi-GB build is not a gate\n--- output ---\n%s", gateAt, sandboxAt, out)
+	}
+}
+
+// TestDoctorNodeOnlyIsScoped — `doctor.sh --node` exists so update.sh can hand a
+// node shortfall to the ONE implementation of the node install without invoking
+// a full doctor pass. A full pass adopts drifted units, a write `fleet update`
+// only performs behind explicit consent (--adopt-units) — so --node reaching the
+// other steps would launder a consent-gated write through the node repair.
+//
+// Both the plan AND a real (--check) run are asserted: the dry-run branch exits
+// early, so testing it alone would leave the scoping of the executing path
+// unguarded.
+func TestDoctorNodeOnlyIsScoped(t *testing.T) {
+	outOfScope := []string{"Rootless podman", "Sandbox smoke", "functional drift", "Package currency", "Source freshness"}
+
+	plan := runScriptDryRun(t, "doctor.sh", "--node", "--dry-run")
+	for _, want := range []string{"nodejs", "FLEET_NODE_BIN"} {
+		if !strings.Contains(plan, want) {
+			t.Errorf("--node plan must name %q\n--- output ---\n%s", want, plan)
+		}
+	}
+	for _, bad := range outOfScope {
+		if strings.Contains(plan, bad) {
+			t.Errorf("--node plan reaches out-of-scope step %q\n--- output ---\n%s", bad, plan)
+		}
+	}
+
+	// The executing path. --check so it installs nothing; SRC_DIR points at a
+	// checkout demanding node 1, so it passes on any runner and the run reaches
+	// its scoped exit rather than dying early.
+	run, err := runScript(t, hermeticNodeEnv(t, "1"), "doctor.sh", "--node", "--check")
+	if err != nil {
+		t.Fatalf("--node --check against a node-1 floor must succeed: %v\n--- output ---\n%s", err, run)
+	}
+	for _, bad := range outOfScope {
+		if strings.Contains(run, bad) {
+			t.Errorf("--node --check executed out-of-scope step %q — it must exit after the node blocks\n--- output ---\n%s", bad, run)
+		}
+	}
+}
+
+// TestDoctorNodeCheckIsUnprivilegedAndDecisive — `fleet update --check` shells out
+// to exactly this, and that command is documented as a dev-box probe needing no
+// root. It must run without the root refusal, and its exit code must track
+// whether a qualifying interpreter actually resolves — not merely whether the
+// script reached the end. Both outcomes are forced, so this holds on a runner
+// with node 24 and on one without.
+func TestDoctorNodeCheckIsUnprivilegedAndDecisive(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		nvmrc   string
+		wantErr bool
+	}{
+		{"floor this box always meets", "1", false},
+		{"floor no box can meet", "99", true},
+	} {
+		out, err := runScript(t, hermeticNodeEnv(t, tc.nvmrc), "doctor.sh", "--node", "--check")
+		// Note: this arm is only meaningful when the suite runs unprivileged (the
+		// usual case; CI runners are not root). Under uid 0 the root gate cannot
+		// fire either way, so the decisive-exit assertion below is what carries
+		// this test there.
+		if strings.Contains(out, "run as root") {
+			t.Fatalf("%s: --node --check must not demand root\n--- output ---\n%s", tc.name, out)
+		}
+		if !strings.Contains(out, "node only") {
+			t.Fatalf("%s: --node --check did not run the scoped toolchain step\n--- output ---\n%s", tc.name, out)
+		}
+		if (err != nil) != tc.wantErr {
+			t.Errorf("%s: wantErr=%v, got err=%v\n--- output ---\n%s", tc.name, tc.wantErr, err, out)
+		}
+	}
+}
+
+// TestScriptHelpPrintsTheWholeHeaderAndNoShell — bootstrap/update/fleet-upgrade
+// all rendered --help with a HARDCODED `sed -n '2,Np'` range, which rots the
+// moment the header grows: update.sh silently dropped its last paragraph and
+// fleet-upgrade.sh printed raw shell out of its own help. FEATURE-NOTES records
+// fixing this once already. The help is now derived from the header block, and
+// this pins both ends of the derivation.
+func TestScriptHelpPrintsTheWholeHeaderAndNoShell(t *testing.T) {
+	root := repoRootFromTest(t)
+	for _, script := range []string{"bootstrap.sh", "update.sh", "fleet-upgrade.sh"} {
+		out, err := runScript(t, nil, script, "--help")
+		if err != nil {
+			t.Fatalf("%s --help exited non-zero: %v\n--- output ---\n%s", script, err, out)
+		}
+		// No shell may leak past the end of the header comment block.
+		for _, shell := range []string{"set -euo pipefail", "SCRIPT_DIR=", "#!/usr/bin/env"} {
+			if strings.Contains(out, shell) {
+				t.Errorf("%s --help leaks script body (%q) — the header range over-reaches\n--- output ---\n%s", script, shell, out)
+			}
+		}
+		// And the whole block must be there: the LAST header line must appear.
+		body, readErr := os.ReadFile(filepath.Join(root, "scripts", script))
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		var last string
+		for _, line := range strings.Split(string(body), "\n")[1:] {
+			if !strings.HasPrefix(line, "#") {
+				break
+			}
+			if trimmed := strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(line, "#"), " ")); trimmed != "" {
+				last = trimmed
+			}
+		}
+		if last == "" {
+			t.Fatalf("%s has no header comment block to render", script)
+		}
+		if !strings.Contains(out, last) {
+			t.Errorf("%s --help is truncated: it omits the final header line %q\n--- output ---\n%s", script, last, out)
+		}
+	}
+}
+
+// TestFleetUpgradeRestartsTheWebTier — deploy/fleet-web.service carries
+// BindsTo=fleet.service, so `systemctl restart fleet` STOPS the web tier and
+// systemd does not bring it back. update.sh has restarted it explicitly for
+// exactly this reason; fleet-upgrade.sh did not, and then printed
+// "fleet upgraded + healthy" with the web tier down.
+func TestFleetUpgradeRestartsTheWebTier(t *testing.T) {
+	out := runScriptDryRun(t, "fleet-upgrade.sh", "--dry-run")
+	if !strings.Contains(out, "restart fleet-web") {
+		t.Errorf("fleet-upgrade plan never restarts the BindsTo'd web tier\n--- output ---\n%s", out)
+	}
+	if !strings.Contains(out, "is-active") {
+		t.Errorf("the fleet-web restart must be backed by a resolved-state read, not the restart's exit code\n--- output ---\n%s", out)
+	}
+
+	// The plan text above is one literal info line; deleting the actual call
+	// would leave it green. There is no systemd here to exercise the real path,
+	// so pin the invocation statically instead — on BOTH paths, because a
+	// rollback restart stops the BindsTo'd web tier just as the upgrade one does.
+	root := repoRootFromTest(t)
+	body, err := os.ReadFile(filepath.Join(root, "scripts", "fleet-upgrade.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(body)
+	if n := strings.Count(script, "\n    restart_web_tier"); n < 2 {
+		t.Errorf("restart_web_tier is invoked on %d path(s); expected both the readiness-gate and rollback paths", n)
+	}
+	// And the banner must not claim health the run never measured.
+	if !strings.Contains(script, `HEALTH_VERIFIED="skipped"`) || !strings.Contains(script, "health NOT verified") {
+		t.Errorf("fleet-upgrade must track whether the readiness gate actually ran, and say so when it did not")
+	}
+}

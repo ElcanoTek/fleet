@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { useRef, useState } from "react";
-import { Menu, MenuItem } from "./Menu";
+import { Menu, MenuItem, MenuSeparator } from "./Menu";
 
 afterEach(() => cleanup());
 
@@ -97,5 +97,28 @@ describe("Menu", () => {
 
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("menu", { name: "Test" })).toBeNull();
+  });
+});
+
+// MenuSeparator a11y contract (cohort-3 a11y pass). It used to be a
+// <div role="separator">; it is now a native <hr>, which carries the same role
+// implicitly. This guards the swap: the ARIA menu pattern expects the divider
+// between groups of menuitems to stay exposed to assistive tech, and the
+// styling must still be the 1px background line, not a UA/preflight border.
+describe("MenuSeparator", () => {
+  it("exposes the separator role without a hand-written role attribute", () => {
+    render(<MenuSeparator />);
+    const separator = screen.getByRole("separator");
+    expect(separator.tagName).toBe("HR");
+    expect(separator).not.toHaveAttribute("role");
+  });
+
+  it("keeps the 1px divider styling and cancels the UA/preflight border", () => {
+    render(<MenuSeparator />);
+    const separator = screen.getByRole("separator");
+    expect(separator.className).toContain("my-1");
+    expect(separator.className).toContain("h-px");
+    expect(separator.className).toContain("border-0");
+    expect(separator.className).toContain("bg-[var(--color-border)]");
   });
 });

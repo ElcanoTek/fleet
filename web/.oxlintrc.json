@@ -16,12 +16,19 @@
     "restriction": "off",
     "nursery": "off"
   },
+  // Every rule below is "error". There are deliberately NO "warn" entries: a
+  // warn severity here was a burn-down list (adopting TS 7 was not going to
+  // become "fix every a11y issue in one PR"), and the burn-down is finished —
+  // all 55 findings were fixed, not silenced. `npm run lint` passes
+  // --deny-warnings so a rule re-introduced at warn fails the build instead of
+  // quietly re-opening the backlog.
   "rules": {
+    // Next injects React; the classic in-scope requirement does not apply.
     "react/react-in-jsx-scope": "off",
     "react/exhaustive-deps": "error",
     "react/hooks": "error",
     "typescript/no-unused-vars": [
-      "warn",
+      "error",
       {
         "argsIgnorePattern": "^_",
         "varsIgnorePattern": "^_",
@@ -31,18 +38,56 @@
       }
     ],
     "jsx-a11y/prefer-tag-over-role": "off",
-    "jsx-a11y/click-events-have-key-events": "warn",
-    "jsx-a11y/no-static-element-interactions": "warn",
-    "jsx-a11y/no-noninteractive-element-interactions": "warn",
-    "jsx-a11y/no-autofocus": "warn",
-    "jsx-a11y/label-has-associated-control": "warn",
-    "jsx-a11y/control-has-associated-label": "warn",
-    "jsx-a11y/no-redundant-roles": "warn",
-    "jsx-a11y/no-noninteractive-tabindex": "warn",
-    "nextjs/no-html-link-for-pages": "warn",
-    "react/immutability": "warn",
-    "eslint/no-control-regex": "warn"
+
+    // Promoted from warn once the findings were fixed. These are the a11y
+    // guarantees the app now holds: a click handler has a keyboard path, an
+    // element carrying behavior says what it is, every control has a name,
+    // focus is moved by an effect tied to a user action rather than by
+    // autoFocus firing on any mount, and internal navigation goes through the
+    // client router instead of reloading the document.
+    "jsx-a11y/click-events-have-key-events": "error",
+    "jsx-a11y/no-static-element-interactions": "error",
+    "jsx-a11y/no-noninteractive-element-interactions": "error",
+    "jsx-a11y/no-autofocus": "error",
+    "jsx-a11y/label-has-associated-control": "error",
+    "jsx-a11y/control-has-associated-label": "error",
+    "jsx-a11y/no-redundant-roles": "error",
+    "jsx-a11y/no-noninteractive-tabindex": "error",
+    "nextjs/no-html-link-for-pages": "error",
+    "react/immutability": "error",
+    "eslint/no-control-regex": "error"
   },
+  "overrides": [
+    {
+      // nextjs/no-html-link-for-pages is scoped OUT of test files, and this is
+      // an argument about the rule's applicability, not about noise.
+      //
+      // The defect the rule exists to prevent is a RUNTIME one: a user clicks
+      // an <a href="/page"> and the browser performs a document navigation,
+      // discarding the client router's state. A test file has no router, no
+      // browser navigation and no user. The two findings that prompted this
+      // are inside a `vi.mock("./CrossViewNav")` factory in NavRail.test.tsx —
+      // a module stub that never reaches a real navigation.
+      //
+      // Rewriting the stub to satisfy the rule would make the test WORSE, not
+      // better. The real CrossViewNav renders next/link, which emits <a href>,
+      // and NavRail's own focus trap (NavRail.tsx:136) selects focusables with
+      // '..., [href], ...'. An href-less stub would silently change the
+      // focusable set the component under test sees, so the test would be
+      // exercising a DOM shape the app never produces.
+      //
+      // Worth knowing when reading this: oxlint's port of the rule does NOT
+      // resolve hrefs against the route tree the way upstream @next/next does
+      // — measured, it flags a nonexistent route, an /api route handler and a
+      // /files/*.pdf document alike. So in this codebase the rule is a
+      // syntactic check on root-relative <a href>, which is useful in app code
+      // and meaningless in a mock factory.
+      "files": ["**/*.test.ts", "**/*.test.tsx"],
+      "rules": {
+        "nextjs/no-html-link-for-pages": "off"
+      }
+    }
+  ],
   "ignorePatterns": [
     "node_modules/**",
     ".next/**",

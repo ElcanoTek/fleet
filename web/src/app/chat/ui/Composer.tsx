@@ -376,6 +376,18 @@ export function Composer({
     return () => window.clearTimeout(timer);
   }, [showCodeNudge]);
 
+  // The model picker's search field must take focus the moment the picker
+  // opens — that is the whole point of the popover (type to search, Esc to
+  // leave). It used to get there via autoFocus, which is a mount-time
+  // side effect with no stated cause: it fires whenever the node happens to
+  // mount, and a screen-reader user gets moved without having asked. Driving
+  // it from `modelPickerOpen` instead ties the focus move to the user's own
+  // action of opening the picker, and keeps the field unfocused in every other
+  // case. Same UX, explicit cause.
+  useEffect(() => {
+    if (modelPickerOpen && !isStreaming) modelInputRef.current?.focus();
+  }, [modelPickerOpen, isStreaming, modelInputRef]);
+
   return (
     <>
             <form
@@ -390,6 +402,15 @@ export function Composer({
                     ? "border-[color-mix(in_srgb,var(--color-accent)_45%,var(--color-border))]"
                     : "border-[var(--color-border)]"
               }`}
+              // The form carries no accessible name, so it is not exposed as a
+              // form landmark anyway; role="presentation" (explicitly allowed on
+              // <form> by ARIA in HTML) says so, and lets the drop-zone handlers
+              // below sit on the element the user actually drags onto without
+              // claiming the composer is a widget a keyboard user can operate.
+              // Drag-and-drop is pointer-only by nature; the keyboard/AT path to
+              // the same action is the "Attach files" button in the toolbar.
+              // Submission behavior is untouched — role never changes it.
+              role="presentation"
               suppressHydrationWarning
               onSubmit={(event) => {
                 event.preventDefault();
@@ -706,8 +727,15 @@ export function Composer({
                       search field at the top of the popover preserves the
                       old inline input's type-to-search-the-catalog and free
                       slug entry; Esc closes and returns focus to the chip. */}
+                  {/* The wrapper is a CSS positioning anchor and nothing else —
+                      role="presentation" states that rather than inventing a
+                      widget role for it. Escape is delegated here on purpose:
+                      the trigger button, the search field and the listbox rows
+                      are all real controls inside it, and a composite widget's
+                      Escape has to work from whichever one holds focus. */}
                   <div
                     ref={modelPickerRef}
+                    role="presentation"
                     className="relative inline-flex min-w-0"
                     onKeyDown={(event) => {
                       if (event.key === "Escape" && modelPickerOpen) {
@@ -783,7 +811,6 @@ export function Composer({
                         <input
                           ref={modelInputRef}
                           type="text"
-                          autoFocus
                           spellCheck={false}
                           autoCapitalize="off"
                           autoCorrect="off"
@@ -928,8 +955,12 @@ export function Composer({
                     const formatPersona = (p: string) =>
                       p.charAt(0).toUpperCase() + p.slice(1);
                     return (
+                      // Positioning anchor only (see the model picker above):
+                      // presentational wrapper, Escape delegated so it works from
+                      // the trigger button or from any row of the open popover.
                       <div
                         ref={personaPickerRef}
+                        role="presentation"
                         className="relative inline-flex"
                         onKeyDown={(event) => {
                           if (event.key === "Escape" && personaPickerOpen) {
@@ -1000,8 +1031,12 @@ export function Composer({
                     <Icon name="paperclip" className="size-3.5" />
                   </button>
                   {mcpServers.length > 0 ? (
+                    // Positioning anchor only (see the model picker above):
+                    // presentational wrapper, Escape delegated so it works from
+                    // the trigger button or from any row of the open popover.
                     <div
                       ref={mcpPickerRef}
+                      role="presentation"
                       className="relative inline-flex"
                       onKeyDown={(event) => {
                         if (event.key === "Escape" && mcpPickerOpen) {

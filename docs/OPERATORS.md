@@ -32,6 +32,16 @@ fleet bootstrap   →   fleet update   →   fleet status / fleet doctor
   (provision a box)   (roll a new version)   (check health / repair drift)
 ```
 
+> **You do not have to get the order right.** This used to matter: an existing
+> box a node major behind the checkout would hit `fleet update`'s refusal, and
+> the fix lived in a verb that comes *later* in the line above. `fleet update`
+> now repairs a node shortfall in place by handing it to
+> `sudo fleet doctor --node` mid-run and re-resolving, so the documented
+> sequence works on a box that is behind. `fleet update --dry-run` and
+> `fleet update --check` both resolve the interpreter for real and say so
+> before you commit to anything. See
+> [`NODE-TOOLCHAIN-HANDOFF.md`](NODE-TOOLCHAIN-HANDOFF.md).
+
 > **`bootstrap` and `update` operate on a fleet *source checkout*.** They run
 > `make build` (and, on update, `git pull`) against the checkout and install the
 > resulting `fleet` + `fleet-admin` binaries to `FLEET_INSTALL_DIR` (default
@@ -141,7 +151,9 @@ generated when unset; set `CHAT_DB_PASSWORD`/`SCHED_DB_PASSWORD` to pin them.
 fleet update              # pull → build → conditional sandbox rebuild → restart
 fleet update --no-pull    # rebuild the current checkout(s) only
 fleet update --dry-run    # print the plan
-fleet update --check      # read-only "commits behind" report; touch nothing
+fleet update --check      # read-only: "commits behind" + can this box build the
+                          # web tier? touches nothing; non-zero if it cannot
+fleet update --no-node-repair   # never install node; refuse instead (nvm/NodeSource boxes)
 ```
 
 `update` (ported from the `moc`/`gig` pattern) `git pull`s **both** the fleet
@@ -163,6 +175,17 @@ build now passes `--pull=newer` so an unpinned base (the generic bundle's
 silently reusing the stale local copy. Services self-migrate on restart, so
 `update` runs no migrations; it finishes with `systemctl restart fleet` and a
 unit health check.
+
+Before any of that — after both pulls, before the sandbox rebuild — it runs the
+**node gate**: it resolves the interpreter `web/.nvmrc` calls for and, if the
+box is short, hands the shortfall to `scripts/doctor.sh --node` (the one
+implementation of the node install), then **re-resolves** rather than trusting
+that repair's exit code. `--no-node-repair` (`FLEET_UPDATE_NODE_REPAIR=0`)
+refuses instead, for boxes whose node is managed outside dnf. The gate sits
+where it does on purpose: it cannot run before the pull, because the major it
+enforces is declared in the checkout being pulled, and it must not run after
+the sandbox rebuild, because an abort that follows a multi-GB build is not a
+gate.
 If the pull changed `update.sh` itself, the script **re-execs the fresh copy** in
 rebuild-only mode (bash holds the pre-pull inode open, so the fix would otherwise
 only land on the *next* update). On a build failure the live binary/image is left
@@ -238,6 +261,8 @@ DSN passwords are redacted in the output.
 
 ```
 sudo fleet doctor              # diagnose + fix + restart services if needed
+sudo fleet doctor --node       # repair ONLY the node toolchain, then exit
+fleet doctor --node --check    # read-only node readiness probe (no root needed)
 sudo fleet doctor --check      # diagnose only, change nothing; exit 1 if anything is off
 sudo fleet doctor --no-restart # fix but never restart services
 fleet doctor --dry-run         # print the checklist; touch nothing (no root needed)
