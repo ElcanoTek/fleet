@@ -71,6 +71,55 @@ func TestMCPCatalogTrustLabeledClasses(t *testing.T) {
 	}
 }
 
+// Every onboarding field an api_key entry declares must survive to the wire —
+// the guided add form is built from this response, nothing else. api_key_query
+// is the load-bearing one: the manifest may name a query parameter the key must
+// be sent as (Browserbase's browserbaseApiKey), and when the projection drops
+// it the form falls back to header auth and the add-time probe fails against a
+// server that only accepts query auth. That exact omission shipped once; this
+// pins the projection field-by-field so it cannot ship again.
+func TestMCPCatalogProjectsAPIKeyOnboardingFields(t *testing.T) {
+	s := &Server{
+		clientConfig: &clientconfig.Bundle{
+			RemoteMCPCatalog: []clientconfig.RemoteMCPCatalogEntry{
+				{
+					Name:        "browserbase",
+					DisplayName: "Browserbase",
+					Description: "Hosted browser sessions.",
+					URL:         "https://mcp.browserbase.com/mcp?keepAlive=true",
+					Provenance:  "official",
+					Auth:        "api_key",
+					APIKeyQuery: " browserbaseApiKey ", // trimmed at the edge like every field
+					SetupHint:   "Copy the API key from the dashboard.",
+					SetupURL:    "https://www.browserbase.com/overview",
+					Featured:    true,
+				},
+			},
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/mcp-catalog", nil)
+	w := httptest.NewRecorder()
+	s.mcpCatalog(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d, want 200", w.Code)
+	}
+	var resp mcpCatalogResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("bad json: %v", err)
+	}
+	if len(resp.ThirdParty) != 1 {
+		t.Fatalf("want 1 third-party entry, got %d", len(resp.ThirdParty))
+	}
+	tp := resp.ThirdParty[0]
+	if tp.APIKeyQuery != "browserbaseApiKey" {
+		t.Errorf("api_key_query = %q, want browserbaseApiKey (trimmed) — without it the guided add sends the key as a bearer header", tp.APIKeyQuery)
+	}
+	if tp.Auth != "api_key" || tp.SetupHint == "" || tp.SetupURL == "" || !tp.Featured {
+		t.Errorf("onboarding fields dropped from the wire: %+v", tp)
+	}
+}
+
 // A non-GET is refused; a Server with no bundle and no agent still answers an
 // empty, well-formed directory (the generic no-config boot must not 500).
 func TestMCPCatalogMethodAndEmpty(t *testing.T) {

@@ -7,6 +7,7 @@ import {
   authHint,
   categoriesOf,
   categoryIcon,
+  connectorParamOf,
   consentRequired,
   FEATURED_SLUG,
   effectiveAutoEnable,
@@ -154,6 +155,14 @@ function granteeLabel(g: string): string {
 
 function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : "Something went wrong.";
+}
+
+// readConnectorSpotlight reads the one-shot ?connector=<name> deep link — the
+// "take me straight to pasting my key" entry point (docs and the browserbase
+// skill link it). Lazy-read during render like readCallbackBanner; SSR-guarded.
+function readConnectorSpotlight(): string | null {
+  if (typeof window === "undefined") return null;
+  return connectorParamOf(window.location.search);
 }
 
 // readCallbackBanner derives the one-shot notice/error from the OAuth callback's
@@ -384,6 +393,7 @@ function DirectoryCard({
   remoteEnabled,
   redirectUri,
   onAdd,
+  autoOpenForm,
 }: {
   entry: CatalogThirdParty;
   added: boolean;
@@ -394,6 +404,10 @@ function DirectoryCard({
   // false keeps the guided form — and whatever the user typed — open so a
   // rejected key or mistyped tenant value can be corrected in place.
   onAdd: (overrides?: AddOverrides) => Promise<boolean>;
+  // ?connector= deep link: mount with the guided form already open (and the
+  // key field focused), so the linked user lands one paste from connected.
+  // Initial state only — an already-added entry has no form to open.
+  autoOpenForm?: boolean;
 }) {
   const hint = authHint(entry);
   const guide = setupLink(entry);
@@ -402,7 +416,9 @@ function DirectoryCard({
     entry.client_registration === "manual" && entry.auth !== "api_key";
   const needsForm =
     placeholders.length > 0 || entry.auth === "api_key" || manualClient;
-  const [formOpen, setFormOpen] = useState(false);
+  const [formOpen, setFormOpen] = useState(
+    (autoOpenForm ?? false) && needsForm && !added,
+  );
   const [values, setValues] = useState<Record<string, string>>({});
   const [apiKey, setApiKey] = useState("");
   const [clientId, setClientId] = useState("");
@@ -575,6 +591,9 @@ function DirectoryCard({
                 className={SETTINGS_INPUT}
                 type="password"
                 autoComplete="off"
+                // Deep-linked arrivals land with the cursor already in the
+                // field — the whole point of ?connector= is "just paste".
+                autoFocus={autoOpenForm ?? false}
                 value={apiKey}
                 onChange={(e) => setApiKey(e.target.value)}
                 placeholder="paste your key (stored encrypted, never shown again)"
@@ -749,10 +768,17 @@ function ConnectionsPageInner() {
   // an entry means the operator default.
   const [prefs, setPrefs] = useState<ConnectorPref[]>([]);
   const [catalog, setCatalog] = useState<CatalogResponse | null>(null);
+  // The ?connector=<name> deep link: filter the directory to that entry and
+  // open its guided form, so "add your Browserbase key" is one click + one
+  // paste from anywhere that can mint a URL. One-shot, like the OAuth banner.
+  const [spotlight] = useState(readConnectorSpotlight);
   // The directory is the page's main discovery surface — open by default,
   // collapsible for users who only manage existing connections.
   const [catalogOpen, setCatalogOpen] = useState(true);
-  const [catalogQuery, setCatalogQuery] = useState("");
+  // Seeding the search from the spotlight is what filters the directory to the
+  // linked entry — search spans every category, so this works wherever the
+  // entry is grouped, and clearing the box restores the full directory.
+  const [catalogQuery, setCatalogQuery] = useState(spotlight ?? "");
   const [catalogCategory, setCatalogCategory] = useState("");
   // Consent modal state: the non-official (aggregator/community) entry
   // awaiting the user's explicit, operator-named consent, plus whatever the
@@ -848,11 +874,16 @@ function ConnectionsPageInner() {
         if (!stale && data) setPrefs(data.prefs ?? []);
       })
       .catch(() => {});
-    // Strip the one-shot ?connected / ?error params from the URL (the banner was
-    // already derived from them during render). replaceState is not setState, so
-    // this stays clear of react-hooks/set-state-in-effect.
+    // Strip the one-shot ?connected / ?error / ?connector params from the URL
+    // (banner and spotlight were already derived from them during render).
+    // replaceState is not setState, so this stays clear of
+    // react-hooks/set-state-in-effect.
     const params = new URLSearchParams(window.location.search);
-    if (params.get("connected") || params.get("error")) {
+    if (
+      params.get("connected") ||
+      params.get("error") ||
+      params.get("connector")
+    ) {
       window.history.replaceState({}, "", "/settings/connections");
     }
     return () => {
@@ -1223,8 +1254,19 @@ function ConnectionsPageInner() {
       remoteEnabled={catalog?.remote_mcp_enabled ?? false}
       redirectUri={catalog?.oauth_redirect_uri}
       onAdd={(overrides) => requestAddFromCatalog(tp, overrides)}
+      autoOpenForm={spotlight === tp.name}
     />
   );
+
+  // Once the directory has loaded, bring the deep-linked card into view. The
+  // spotlight card is usually the only hit (the search box was seeded with its
+  // name), but scroll anyway: the page has three groups above the directory.
+  useEffect(() => {
+    if (!spotlight || !catalog) return;
+    document
+      .querySelector(`[data-testid="dir-card-${CSS.escape(spotlight)}"]`)
+      ?.scrollIntoView({ behavior: "auto", block: "center" });
+  }, [spotlight, catalog]);
 
   const scrollDirectoryResults = () => {
     const el = directoryResultsRef.current;

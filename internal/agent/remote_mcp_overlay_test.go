@@ -348,6 +348,11 @@ func TestBrowserbaseKeyFuncReturnsNilWhenUnreachable(t *testing.T) {
 		}, "user@example.test", []string{"notion"}},
 		{"connector switched off for this chat", &fakeResolver{conns: bb}, "user@example.test", []string{"notion"}},
 		{"nothing enabled in this chat", &fakeResolver{conns: bb}, "user@example.test", []string{}},
+		// nil must gate exactly like empty: RunTurnInput.OptionalMCPServersEnabled
+		// documents "nil/empty means no optional servers", and openRemoteOverlay
+		// wires zero remote servers for a nil list. A key func here would register
+		// the tool and unseal the credential in a chat with every connector off.
+		{"opt-in list never seeded (nil)", &fakeResolver{conns: bb}, "user@example.test", nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m := &Manager{remoteMCP: tc.resolver}
@@ -358,13 +363,15 @@ func TestBrowserbaseKeyFuncReturnsNilWhenUnreachable(t *testing.T) {
 	}
 }
 
-// A nil opt-in set means "no per-conversation filtering" — the scheduled default.
-func TestBrowserbaseKeyFuncNilOptInMeansUnfiltered(t *testing.T) {
+// The URL match must survive an explicit port: url.URL.Host keeps ":443", so the
+// resolver compares Hostname(). A silent non-match here unregisters the tool with
+// no diagnostic despite a fully working connector.
+func TestBrowserbaseKeyFuncMatchesURLWithExplicitPort(t *testing.T) {
 	m := &Manager{remoteMCP: &fakeResolver{
-		conns:  []RemoteMCPConn{{ID: "bb", Name: "browserbase", URL: "https://mcp.browserbase.com/mcp"}},
+		conns:  []RemoteMCPConn{{ID: "bb", Name: "browserbase", URL: "https://mcp.browserbase.com:443/mcp"}},
 		tokens: map[string]string{"bb": "k"},
 	}}
-	if fn := m.browserbaseKeyFunc(context.Background(), "user@example.test", nil); fn == nil {
-		t.Error("a nil opt-in set must not filter the connection out")
+	if fn := m.browserbaseKeyFunc(context.Background(), "user@example.test", []string{"browserbase"}); fn == nil {
+		t.Error("an explicit :443 must not defeat the vendor-host match")
 	}
 }

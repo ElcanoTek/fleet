@@ -456,7 +456,6 @@ func New(opts ManagerOptions) (*Manager, error) {
 		mcpAccounts:          accounts,
 		allowlist:            allow,
 		resolver:             resolver,
-		native:               tools.DefaultTools(),
 		sandboxPool:          pool,
 		notesProvider:        opts.NotesProvider,
 		noteProposer:         opts.NoteProposer,

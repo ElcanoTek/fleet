@@ -313,23 +313,26 @@ func (m *Manager) browserbaseKeyFunc(ctx context.Context, email string, enabledO
 	if err != nil {
 		return nil
 	}
-	// Same opt-in semantics as the overlay: a nil set means "no per-conversation
-	// filtering" (the scheduled default), an empty non-nil set means "none on".
-	var enabled map[string]bool
-	if enabledOptional != nil {
-		enabled = make(map[string]bool, len(enabledOptional))
-		for _, n := range enabledOptional {
-			if n = strings.TrimSpace(n); n != "" {
-				enabled[n] = true
-				enabled[strings.ToLower(n)] = true
-			}
+	// Same opt-in semantics as openRemoteOverlay: nil and empty both mean "no
+	// connectors on" (RunTurnInput.OptionalMCPServersEnabled documents exactly
+	// that, and openRemoteOverlay builds its filter map unconditionally). This
+	// function's only caller is the interactive turn — scheduled runs pass a nil
+	// key func straight to NewTurnTools — so there is no "unfiltered" caller,
+	// and treating nil as unfiltered would unseal the key in a conversation the
+	// overlay wires no connectors into (e.g. one whose opt-in list was never
+	// seeded).
+	enabled := make(map[string]bool, len(enabledOptional))
+	for _, n := range enabledOptional {
+		if n = strings.TrimSpace(n); n != "" {
+			enabled[n] = true
+			enabled[strings.ToLower(n)] = true
 		}
 	}
 	for _, c := range conns {
 		if !isBrowserbaseURL(c.URL) {
 			continue
 		}
-		if enabled != nil && !enabled[c.Name] && !enabled[strings.ToLower(c.Name)] {
+		if !enabled[c.Name] && !enabled[strings.ToLower(c.Name)] {
 			continue // connector switched off for this conversation
 		}
 		id := c.ID
@@ -346,8 +349,9 @@ func (m *Manager) browserbaseKeyFunc(ctx context.Context, email string, enabledO
 // isBrowserbaseURL reports whether a connection's URL points at Browserbase.
 func isBrowserbaseURL(raw string) bool {
 	host := strings.ToLower(strings.TrimSpace(raw))
-	if u, err := url.Parse(raw); err == nil && u.Host != "" {
-		host = strings.ToLower(u.Host)
+	// Hostname(), not Host: an explicit port (":443") must not defeat the match.
+	if u, err := url.Parse(raw); err == nil && u.Hostname() != "" {
+		host = strings.ToLower(u.Hostname())
 	}
 	return host == browserbaseHost || strings.HasSuffix(host, "."+browserbaseHost)
 }
