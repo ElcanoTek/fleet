@@ -19,6 +19,30 @@ prior versions are listed because none have shipped.
 
 ### Changed
 
+- **Deleted the dead `web/scripts/` tree; Go to 1.26.7; Dependabot cadence** —
+  three loose ends from the version audit. `web/scripts/` was an unreferenced
+  8-file legacy deployment stack (its own `bootstrap.sh`, `update.sh`,
+  `provision.sh`, `e2e-boot-server.sh`, …, three of them shadowing live
+  `scripts/` equivalents), untouched since July, still calling the product
+  "Elcano Chat", and installing **Node 20 — EOL 2026-04-30 — via NodeSource**,
+  which `scripts/doctor.sh` explicitly forbids ("fleet does not use
+  NodeSource"). It was the largest concentration of version rot in the repo and
+  nothing could break, because nothing referenced it. Go moves `1.26.6` →
+  `1.26.7`, the patch on its own supported line, where Go's security fixes land
+  — now a one-line change rather than the eight it would have been before the
+  consolidation; `web/go.mod` drops its patch pin entirely (major.minor only)
+  since that sentinel module has no packages and the patch was just a second
+  copy to keep in sync. `ONBOARDING.md` stops restating the patch number.
+  Dependabot's `interval` goes **weekly → daily** on all five entries: cooldown,
+  not the polling interval, is what guards against a compromised fresh release,
+  so polling weekly *on top of* a 7-day cooldown added up to another week before
+  anyone learned an update existed — daily plus the existing grouping keeps
+  routine minor/patch traffic to one in-place PR per ecosystem while a major
+  appears the day it becomes eligible. Also recorded in that file: it is read
+  from the **default branch**, so config changes are inert until promoted to
+  `main`; and `target-branch: dev` means security updates bypass every option
+  here (ungrouped, unprefixed, `ignore` rules do not apply) while no version
+  update ever targets `main` directly.
 - **Version-pin audit: one declaration point per tool, and it is now enforced by
   a test** — a fan-out audit of the change above found the same pathology
   everywhere else, plus real bugs in the node work itself.

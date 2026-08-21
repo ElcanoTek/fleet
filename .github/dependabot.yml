@@ -21,6 +21,30 @@
 #   https://docs.github.com/code-security/reference/supply-chain-security/dependabot-options-reference#cooldown--
 version: 2
 
+# ── Two things that decide whether you actually SEE an update ────────────────
+#
+# 1. THIS FILE IS READ FROM THE DEFAULT BRANCH (main), not from the branch it
+#    lives on. Edits here do nothing until they are promoted to main — so a
+#    change to coverage or cadence lands only after the usual dev → main PR.
+#
+# 2. `target-branch: dev` on every entry has a consequence GitHub documents but
+#    that is easy to miss: options defined for an ecosystem "no longer apply to
+#    security updates", because security updates always target the DEFAULT
+#    branch. So Dependabot SECURITY PRs land on main ignoring everything below
+#    — ungrouped, unprefixed, and not subject to the `ignore` rules (an eslint
+#    or typescript CVE can therefore still propose a major we know is
+#    unmergeable). The flip side: no VERSION update ever targets main directly,
+#    so if the dev → main promotion stalls, main quietly stops receiving them.
+#    Both are accepted trade-offs of soaking version bumps on dev — but they are
+#    trade-offs, not free.
+#
+# Cadence: `interval: daily` with the cooldown below. Cooldown, not the polling
+# interval, is what protects against a compromised fresh release; polling weekly
+# on top of a 7-day cooldown just added up to another week before anyone LEARNED
+# an update existed. Daily plus grouping means the routine minor/patch traffic
+# stays one PR per ecosystem that Dependabot updates in place, while a major
+# shows up the day it becomes eligible instead of whenever the weekly run lands.
+
 # ── What Dependabot does NOT cover here (learned the hard way) ───────────────
 # The node RUNTIME major is not a dependency any of the three surfaces below can
 # see, so Dependabot never proposed the 22 → 24 move and never will:
@@ -55,7 +79,7 @@ updates:
   - package-ecosystem: gomod
     directory: "/"
     schedule:
-      interval: weekly
+      interval: daily
     # Version updates land on the dev integration branch (fast-lane CI; they
     # soak there and ride the dev→main PR through the full gate). Dependabot
     # SECURITY updates ignore target-branch and still go straight to main, so
@@ -86,7 +110,7 @@ updates:
   - package-ecosystem: npm
     directory: "/web"
     schedule:
-      interval: weekly
+      interval: daily
     # Version updates land on the dev integration branch (fast-lane CI; they
     # soak there and ride the dev→main PR through the full gate). Dependabot
     # SECURITY updates ignore target-branch and still go straight to main, so
@@ -141,7 +165,7 @@ updates:
   - package-ecosystem: npm
     directory: "/scripts/rampart-service"
     schedule:
-      interval: weekly
+      interval: daily
     target-branch: dev
     open-pull-requests-limit: 5
     cooldown:
@@ -186,7 +210,7 @@ updates:
       - "/config/default/sandbox"
       - "/scripts/rampart-service"
     schedule:
-      interval: weekly
+      interval: daily
     target-branch: dev
     open-pull-requests-limit: 5
     cooldown:
@@ -198,13 +222,13 @@ updates:
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
-      interval: weekly
+      interval: daily
     # Version updates land on the dev integration branch (fast-lane CI; they
     # soak there and ride the dev→main PR through the full gate). Dependabot
     # SECURITY updates ignore target-branch and still go straight to main, so
     # CVE fixes are never delayed behind dev.
     target-branch: dev
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 10
     commit-message:
       prefix: "deps(actions)"
     groups:
