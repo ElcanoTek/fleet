@@ -32,19 +32,37 @@
 # the User=fleet unit can never see. FLEET_SERVICE_NAME selects the unit
 # (default fleet); without systemd/the unit the invoking user's store is used.
 #
+# Every build runs with --pull=newer so an unpinned base (the generic bundle's
+# fedora-minimal:latest) is re-checked against the registry and refreshed when
+# upstream published a newer one — without it, podman quietly reuses whatever
+# stale base is already in the local store and the Containerfile's "tracks
+# latest for security patches" intent never actually happens. Offline-safe:
+# podman suppresses the pull error when a local copy of the base exists.
+# --no-cache (or FLEET_SANDBOX_BUILD_NO_CACHE=1) additionally re-runs every
+# layer, so dnf/pip package installs pick up current versions even when the
+# base digest did not move — update.sh sets it for its max-age freshness
+# rebuilds (see FLEET_SANDBOX_MAX_AGE_DAYS there).
+#
 # Usage:
 #   scripts/build-sandbox-image.sh                 # → manifest sandbox.tag (default localhost/fleet-sandbox:latest)
 #   scripts/build-sandbox-image.sh v1              # → <image-name>:v1
 #   scripts/build-sandbox-image.sh --print-tag     # print the resolved <image-name>:<tag>; no build, no podman
+#   scripts/build-sandbox-image.sh --no-cache      # full refresh: re-run every layer (env FLEET_SANDBOX_BUILD_NO_CACHE=1)
 #   IMAGE_NAME=ghcr.io/your-org/sandbox scripts/build-sandbox-image.sh   # tag for a client's own registry
 #   FLEET_CLIENT_CONFIG_DIR=/opt/fleet/client scripts/build-sandbox-image.sh   # build a client bundle's sandbox
 set -euo pipefail
 
 PRINT_TAG=0
-if [[ "${1:-}" == "--print-tag" ]]; then
-    PRINT_TAG=1
+NO_CACHE="${FLEET_SANDBOX_BUILD_NO_CACHE:-0}"
+POSITIONAL_TAG=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --print-tag) PRINT_TAG=1 ;;
+        --no-cache)  NO_CACHE=1 ;;
+        *)           POSITIONAL_TAG="$1" ;;
+    esac
     shift
-fi
+done
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUNDLE_DIR="${FLEET_CLIENT_CONFIG_DIR:-$REPO_ROOT/config/default}"
@@ -83,10 +101,10 @@ MANIFEST_TAG="$(manifest_value tag "$MANIFEST")"
 MANIFEST_TAG="${MANIFEST_TAG:-localhost/fleet-sandbox:latest}"
 if [[ -n "${IMAGE_NAME:-}" ]]; then
     IMAGE_NAME="$IMAGE_NAME"
-    TAG="${1:-latest}"
+    TAG="${POSITIONAL_TAG:-latest}"
 else
     IMAGE_NAME="${MANIFEST_TAG%:*}"
-    TAG="${1:-${MANIFEST_TAG##*:}}"
+    TAG="${POSITIONAL_TAG:-${MANIFEST_TAG##*:}}"
 fi
 
 # Machine-readable resolution for callers that gate on the tag (update.sh's
@@ -108,6 +126,17 @@ if ! command -v podman >/dev/null 2>&1; then
 fi
 
 BUILD_CONTEXT="$(dirname "$CONTAINERFILE")"
+
+# --pull=newer on every build: refresh an unpinned base from the registry when
+# upstream published a newer one (a digest-pinned FROM is naturally unaffected).
+# Pull errors are suppressed by podman when a local copy of the base exists, so
+# an offline box still rebuilds from what it has instead of failing.
+BUILD_ARGS=(--pull=newer)
+if [[ "$NO_CACHE" == "1" ]]; then
+    # Full refresh: re-run every RUN layer so unpinned dnf/pip installs pick up
+    # current package versions even when the base digest did not move.
+    BUILD_ARGS+=(--no-cache)
+fi
 
 # A root build must not land in root's rootful store: deploy/fleet.service runs
 # the process as its User=, and that rootless account's image store under
@@ -131,11 +160,11 @@ if [[ -n "$BUILD_USER" && "$BUILD_USER" != "root" ]] && id -u "$BUILD_USER" >/de
     (
         cd "$BUILD_HOME" 2>/dev/null || cd /
         runuser -u "$BUILD_USER" -- env HOME="$BUILD_HOME" XDG_RUNTIME_DIR="/run/${BUILD_USER}" \
-            podman build -t "${IMAGE_NAME}:${TAG}" -f "$CONTAINERFILE" "$BUILD_CONTEXT"
+            podman build "${BUILD_ARGS[@]}" -t "${IMAGE_NAME}:${TAG}" -f "$CONTAINERFILE" "$BUILD_CONTEXT"
     )
 else
     echo "Building ${IMAGE_NAME}:${TAG} from ${CONTAINERFILE} ..."
-    podman build -t "${IMAGE_NAME}:${TAG}" -f "$CONTAINERFILE" "$BUILD_CONTEXT"
+    podman build "${BUILD_ARGS[@]}" -t "${IMAGE_NAME}:${TAG}" -f "$CONTAINERFILE" "$BUILD_CONTEXT"
 fi
 echo "Built ${IMAGE_NAME}:${TAG}."
 echo "Resolved by the fleet process from the bundle (sandbox.tag); FLEET_SANDBOX_IMAGE still overrides."

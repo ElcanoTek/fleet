@@ -20,7 +20,8 @@
 # held by its warm sandbox containers and survive.
 #
 # scripts/bootstrap.sh --enable-service installs and enables the pair by
-# default (--no-maintenance-timer opts out). Install by hand with:
+# default (--no-maintenance-timer opts out). Install in one command with
+# `sudo fleet timers install --maintenance`, or by hand with:
 #   install -D -m 0644 deploy/fleet-maintenance.service /etc/systemd/system/fleet-maintenance.service
 #   install -D -m 0644 deploy/fleet-maintenance.timer   /etc/systemd/system/fleet-maintenance.timer
 #   systemctl daemon-reload && systemctl enable --now fleet-maintenance.timer

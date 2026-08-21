@@ -15,11 +15,14 @@ import (
 
 // cmdUpdate wraps scripts/update.sh. It forwards every flag verbatim
 // (--no-pull / --dry-run / --client-config / --service / --branch / --yes /
-// ...) to the shell script, which owns the in-place update: pull the fleet +
-// client-config checkouts, rebuild the binary + web app, rebuild the sandbox
-// image when its Containerfile or resolved tag changed (or the tag is missing
-// from the service user's image store), and restart the service. Like
-// bootstrap, the CLI runs NO migrations (services self-migrate on restart).
+// --sandbox-max-age / ...) to the shell script, which owns the in-place
+// update: pull the fleet + client-config checkouts, rebuild the binary + web
+// app, rebuild the sandbox image when its Containerfile or resolved tag
+// changed, the tag is missing from the service user's image store, or the
+// installed image aged past FLEET_SANDBOX_MAX_AGE_DAYS (the freshness
+// backstop: an unchanged bundle must not mean an unpatched image), and
+// restart the service. Like bootstrap, the CLI runs NO migrations (services
+// self-migrate on restart).
 //
 // `--check` short-circuits to a READ-ONLY report (how many commits the local
 // checkout is behind its upstream) and mutates nothing — handy on a dev box to

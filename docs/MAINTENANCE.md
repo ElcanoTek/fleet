@@ -72,9 +72,14 @@ the serving process. It runs from `deploy/fleet-maintenance.timer` instead,
 daily at 03:30, as `fleet cleanup`.
 
 `scripts/bootstrap.sh --enable-service` installs and enables that timer by
-default; `--no-maintenance-timer` opts out. `fleet doctor` checks that it is
-installed, enabled, active, and that its last run succeeded — the same posture
-it applies to the backup timer.
+default; `--no-maintenance-timer` opts out. On a box provisioned before the
+timer shipped (or after an opt-out you've changed your mind about), install it
+in one command with `sudo fleet timers install --maintenance` — `fleet update`
+also offers it interactively when the pair is missing, and `--no-timers`
+silences that offer for boxes that deliberately run without it (see
+[docs/TIMERS.md](TIMERS.md)). `fleet doctor` checks that it is installed,
+enabled, active, and that its last run succeeded — the same posture it applies
+to the backup timer.
 
 `fleet cleanup --deep` additionally prunes unused *named* images and is
 deliberately left to a human: on a stopped box it can remove the sandbox image

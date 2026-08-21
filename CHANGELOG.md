@@ -46,6 +46,64 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **Sandbox image freshness: a max-age rebuild backstop in `fleet update`**
+  ([`docs/SANDBOX-IMAGE-FRESHNESS.md`](docs/SANDBOX-IMAGE-FRESHNESS.md)). The
+  update gate only ever detected *change* (Containerfile hash, resolved tag,
+  tag missing from the store), so a healthy box with a stable bundle served
+  the same sandbox image for months — weeks-old base layers and unpatched
+  package CVEs on boxes that updated regularly. `fleet update` now also
+  rebuilds when the installed image is `FLEET_SANDBOX_MAX_AGE_DAYS` (default
+  7; `--sandbox-max-age <d>` per run; `0` disables) or more days old, and an
+  age-triggered rebuild runs `--no-cache` so the package layers actually
+  refresh instead of replaying the stale cache into an identical image. Every
+  sandbox build (`build-sandbox-image.sh`, and `bootstrap.sh`'s inline
+  systemd-path build) now passes `--pull=newer`, so an unpinned base like the
+  generic bundle's `fedora-minimal:latest` is re-checked against the registry
+  on each build instead of silently reusing the stale local copy (offline-safe:
+  podman suppresses the pull error when a local base exists; digest-pinned
+  bases are unaffected). `build-sandbox-image.sh --no-cache` /
+  `FLEET_SANDBOX_BUILD_NO_CACHE=1` is available for manual full refreshes.
+  Bundles that pin a prebuilt `sandbox.image` still skip the on-box build
+  entirely — registry freshness stays the publisher pipeline's job.
+
+  Two follow-up fixes close the paths on which that backstop reported success
+  without running (same design note). (1) **The self-update re-exec now
+  forwards flag state.** When an update changes `update.sh` itself, the script
+  re-execs the freshly pulled copy — with no argv, so every flag-settable
+  value has to be restated as an env var on that line. `--sandbox-max-age` was
+  not, so it was silently downgraded to the default `7` on exactly the run
+  that pulled the fix; `--adopt-units` and `--no-timers` were dropped the same
+  way. All three are forwarded now, the deliberate non-forwards are documented
+  at the call site, and a new test derives the flag-settable variables from the
+  arg parser so a *new* flag fails until it is forwarded or exempted with a
+  reason. (2) **An unresolvable sandbox tag no longer reports "up to date".**
+  Both store-aware gates need a resolved ref, so an empty one used to fall out
+  of the gate's if/elif chain with no build reason and print
+  `sandbox image up to date (…, tag unresolved)` — a pass for an image nothing
+  had looked at. It now warns, naming what was skipped (the presence check and
+  the n-day backstop), how to diagnose the tag, and the by-hand rebuild; an
+  inconclusive store probe reports through that same single path instead of a
+  warning followed by a reassuring `ok`; and `--print-tag`'s stderr is kept so
+  the warning can name the cause. Neither case is fatal — the fail-closed
+  `die` stays on a failed *build* whose ref is not known to exist.
+
+- **`fleet timers install` — one-command setup for the scheduled-maintenance
+  timers** ([docs/TIMERS.md](docs/TIMERS.md)). A box provisioned before the
+  `fleet-backup` / `fleet-maintenance` timer pairs shipped had no path to them
+  except copy-pasting a four-command hint out of `fleet doctor`. The new verb
+  installs the missing units from `deploy/`, creates the 0700 backup
+  directory, daemon-reloads and `enable --now`s the timers — idempotently, and
+  without ever overwriting an already-installed unit (drift stays
+  `doctor`/`update --adopt-units` territory). Doctor's absent-pair advisories
+  (script and in-process) now hand the operator that one command; an
+  interactive `fleet update` offers the install when a pair is fully missing
+  (default No; `--no-timers` / `FLEET_UPDATE_OFFER_TIMERS=0` silences the
+  offer for boxes that deliberately run without them), and update's
+  unit-drift adoption now covers the `fleet-maintenance` pair too. On a host
+  without systemd (a container platform, Kubernetes) the verb explains what
+  to schedule instead — daily `fleet backup --db=all --prune` and `fleet
+  cleanup` — and exits non-zero rather than pretending.
+
 - **One maintenance loop, and a disk guard that acts on what it measures**
   ([`docs/MAINTENANCE.md`](docs/MAINTENANCE.md)). Reclamation used to be a side
   effect of chat traffic: the database retention sweeps, the attachment sweep

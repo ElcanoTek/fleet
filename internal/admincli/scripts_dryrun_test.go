@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -628,14 +629,84 @@ func TestUpdateFailedSandboxBuildRefusesRestart(t *testing.T) {
 	}
 }
 
+// TestUpdateSandboxFreshnessBackstop — the rebuild gate must ALSO fire on age:
+// a bundle whose Containerfile and tag never change used to mean the deployed
+// image was never rebuilt at all, serving weeks-old base layers and unpatched
+// package CVEs on boxes that ran `fleet update` regularly (the Grype CI gate
+// scans a fresh build — only a rebuild brings a deployed box up to what CI
+// vouched for). The age path needs a real image in a real store, so this pins
+// the load-bearing lines plus the dry-run plan text.
+func TestUpdateSandboxFreshnessBackstop(t *testing.T) {
+	root := repoRootFromTest(t)
+	body, err := os.ReadFile(filepath.Join(root, "scripts", "update.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(body)
+	for _, want := range []string{
+		// The knob with its default, and the age probe (creation time read from
+		// the SERVICE user's store via sandbox_podman, like every other probe).
+		`SANDBOX_MAX_AGE_DAYS="${FLEET_SANDBOX_MAX_AGE_DAYS:-7}"`,
+		`sandbox_image_age_days() {`,
+		`sandbox_podman image inspect --format '{{.Created.Unix}}'`,
+		// Only a readable creation time triggers — empty means unknown, and an
+		// unanswerable probe must not burn a multi-GB rebuild.
+		`[[ -n "$image_age_days" ]] && (( image_age_days >= SANDBOX_MAX_AGE_DAYS ))`,
+		// An age-triggered rebuild must bypass the layer cache: a cached build
+		// against an unmoved base reproduces the SAME image with the same old
+		// creation date, so the backstop would re-fire forever refreshing nothing.
+		`sandbox_build_no_cache=1`,
+		`FLEET_SANDBOX_BUILD_NO_CACHE="$sandbox_build_no_cache"`,
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("update.sh must contain %q", want)
+		}
+	}
+
+	// Every build (any trigger) must re-check the registry for a fresher base:
+	// without --pull=newer, podman reuses whatever stale base sits in the local
+	// store and the generic Containerfile's "base tracks latest for security
+	// patches" intent never actually happens.
+	builder, err := os.ReadFile(filepath.Join(root, "scripts", "build-sandbox-image.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`BUILD_ARGS=(--pull=newer)`,
+		`NO_CACHE="${FLEET_SANDBOX_BUILD_NO_CACHE:-0}"`,
+		`BUILD_ARGS+=(--no-cache)`,
+	} {
+		if !strings.Contains(string(builder), want) {
+			t.Errorf("build-sandbox-image.sh must contain %q", want)
+		}
+	}
+
+	// The dry-run plan must surface the backstop with the effective threshold —
+	// --sandbox-max-age overrides the default.
+	out := runScriptDryRun(t, "update.sh", "--dry-run", "--no-pull", "--sandbox-max-age", "3")
+	if !strings.Contains(out, "installed image is 3+ days old") {
+		t.Errorf("update --dry-run plan missing the freshness backstop with the flag's threshold\n--- output ---\n%s", out)
+	}
+
+	// A non-numeric threshold gates a multi-GB rebuild, so it must die up front
+	// rather than silently disabling the backstop.
+	out, err = runScript(t, nil, "update.sh", "--dry-run", "--no-pull", "--sandbox-max-age", "weekly")
+	if err == nil {
+		t.Fatalf("update accepted a non-numeric --sandbox-max-age\n--- output ---\n%s", out)
+	}
+	if !strings.Contains(out, "must be a non-negative integer") {
+		t.Errorf("expected the max-age validation error, got:\n%s", out)
+	}
+}
+
 // TestUpdateAdoptsBackupUnits — the unit-adoption loop must cover the shipped
-// fleet-backup pair (a timer fix otherwise reaches provisioned boxes only via
-// doctor, not the update path operators actually run on release), and its
-// backup-unit hint must NOT say restart: the daemon-reload alone re-arms a
-// rewritten timer, and restarting the oneshot would run a backup immediately —
-// the same no-bounce rule doctor.sh applies. Absent units are skipped by the
-// loop's both-files-exist check, so a box that declined backups is never
-// force-installed.
+// fleet-backup AND fleet-maintenance pairs (a timer fix otherwise reaches
+// provisioned boxes only via doctor, not the update path operators actually
+// run on release), and its timer-unit hint must NOT say restart: the
+// daemon-reload alone re-arms a rewritten timer, and restarting the backup
+// oneshot would run a backup immediately — the same no-bounce rule doctor.sh
+// applies. Absent units are skipped by the loop's both-files-exist check, so a
+// box that declined a timer is never force-installed by the drift pass.
 func TestUpdateAdoptsBackupUnits(t *testing.T) {
 	root := repoRootFromTest(t)
 	body, err := os.ReadFile(filepath.Join(root, "scripts", "update.sh"))
@@ -644,10 +715,41 @@ func TestUpdateAdoptsBackupUnits(t *testing.T) {
 	}
 	script := string(body)
 	for _, want := range []string{
-		`for unit in fleet.service fleet-web.service fleet-backup.service fleet-backup.timer; do`,
-		`case "$unit" in fleet-backup.service|fleet-backup.timer) is_backup_unit=1 ;; esac`,
-		// The backup adopt hint ends at daemon-reload — no restart clause.
+		`for unit in fleet.service fleet-web.service fleet-backup.service fleet-backup.timer fleet-maintenance.service fleet-maintenance.timer; do`,
+		`case "$unit" in fleet-backup.*|fleet-maintenance.*) is_timer_unit=1 ;; esac`,
+		// The timer-unit adopt hint ends at daemon-reload — no restart clause.
 		`warn "  adopt:  install -m 0644 $shipped $installed && systemctl daemon-reload"`,
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("update.sh must contain %q", want)
+		}
+	}
+}
+
+// TestUpdateOffersMissingTimers — after the drift loop, an update must OFFER a
+// fully-missing fleet-backup / fleet-maintenance pair (interactive y/N,
+// default No) instead of silently leaving the box unprotected until someone
+// reads doctor's output. Load-bearing rules pinned as strings (the prompt
+// itself needs a TTY + a box with systemd and a missing pair, which CI is
+// not): the offer is gated on --no-timers / FLEET_UPDATE_OFFER_TIMERS so a
+// deliberate decline never nags, only a FULLY missing pair is offered (a
+// half-installed one already got the drift loop's treatment), and a yes
+// delegates to `fleet timers install` — one implementation, not a second
+// inline copy of the install.
+func TestUpdateOffersMissingTimers(t *testing.T) {
+	root := repoRootFromTest(t)
+	body, err := os.ReadFile(filepath.Join(root, "scripts", "update.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(body)
+	for _, want := range []string{
+		`--no-timers)      OFFER_TIMERS=0 ;;`,
+		`OFFER_TIMERS="${FLEET_UPDATE_OFFER_TIMERS:-1}"`,
+		`[[ "$OFFER_TIMERS" != "0" ]]`,
+		`if systemctl cat "fleet-${_name}.service" >/dev/null 2>&1 || systemctl cat "fleet-${_name}.timer" >/dev/null 2>&1; then`,
+		`"$fleet_bin" timers install "--${_name}" --src "$SRC_DIR"`,
+		`(y/N)`,
 	} {
 		if !strings.Contains(script, want) {
 			t.Errorf("update.sh must contain %q", want)
@@ -677,5 +779,127 @@ func TestFleetUpgradeDryRunSmoke(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("fleet-upgrade --dry-run plan missing %q\n--- output ---\n%s", want, out)
 		}
+	}
+}
+
+// sliceBetween returns the part of s between the first occurrence of start and
+// the first occurrence of end after it, failing the test when either marker is
+// missing — a moved marker must surface as a loud test failure rather than a
+// silently empty region that asserts nothing.
+func sliceBetween(t *testing.T, s, start, end string) string {
+	t.Helper()
+	i := strings.Index(s, start)
+	if i < 0 {
+		t.Fatalf("marker %q not found", start)
+	}
+	rest := s[i+len(start):]
+	j := strings.Index(rest, end)
+	if j < 0 {
+		t.Fatalf("marker %q not found after %q", end, start)
+	}
+	return rest[:j]
+}
+
+// TestUpdateReexecForwardsFlagState — the self-update re-exec (update.sh
+// re-running the copy the pull just installed) passes NO argv, so every
+// setting a command-line flag can change must be restated as its env
+// equivalent on the `exec env` line. A flag missed there is silently
+// downgraded to its default on exactly the run that pulled the fix — the
+// hardest run to notice it on, and one the operator only gets once. That is
+// how --sandbox-max-age, --adopt-units and --no-timers were all dropped.
+//
+// So this derives the flag-settable variables from the arg parser itself
+// rather than hardcoding a list: a NEW flag fails this test until it is either
+// forwarded or given a documented reason not to be.
+func TestUpdateReexecForwardsFlagState(t *testing.T) {
+	root := repoRootFromTest(t)
+	body, err := os.ReadFile(filepath.Join(root, "scripts", "update.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(body)
+
+	// Deliberate non-forwards, each with the reason it is safe to omit.
+	exempt := map[string]string{
+		"SRC_DIR":    "re-derives from the script path the exec names",
+		"NO_PULL":    "forwarding it would skip the client-bundle pull the re-exec exists to preserve",
+		"DRY_RUN":    "a dry run never fast-forwards, so it never reaches the re-exec",
+		"ASSUME_YES": "hardcoded to 1 on the exec line: the operator already confirmed this commit range",
+	}
+
+	parser := sliceBetween(t, script, "while [[ $# -gt 0 ]]; do", "\ndone\n")
+	reexec := sliceBetween(t, script, "exec env FLEET_UPDATE_REEXEC=1", `bash "$SRC_DIR/scripts/update.sh"`)
+
+	assigned := regexp.MustCompile(`\b([A-Z][A-Z0-9_]{2,})=(?:"|[0-9])`)
+	seen := map[string]bool{}
+	for _, m := range assigned.FindAllStringSubmatch(parser, -1) {
+		v := m[1]
+		if seen[v] {
+			continue
+		}
+		seen[v] = true
+		if _, ok := exempt[v]; ok {
+			continue
+		}
+		if !strings.Contains(reexec, `="$`+v+`"`) {
+			t.Errorf("--flag sets %s but the self-update re-exec does not forward it: add FLEET_…=%q to the `exec env` line, or add %s to the exempt map with the reason it is safe to drop", v, "$"+v, v)
+		}
+	}
+	if len(seen) < 8 {
+		t.Fatalf("only %d flag-settable variables found in the arg parser — the parser markers likely moved and this test is asserting nothing", len(seen))
+	}
+	// The three that were missing, pinned by name so a future rewrite of the
+	// exec line cannot quietly drop them again.
+	for _, want := range []string{
+		`FLEET_SANDBOX_MAX_AGE_DAYS="$SANDBOX_MAX_AGE_DAYS"`,
+		`FLEET_UPDATE_ADOPT_UNITS="$ADOPT_UNITS"`,
+		`FLEET_UPDATE_OFFER_TIMERS="$OFFER_TIMERS"`,
+	} {
+		if !strings.Contains(reexec, want) {
+			t.Errorf("the self-update re-exec must forward %s", want)
+		}
+	}
+}
+
+// TestUpdateUnresolvedSandboxTagIsNotUpToDate — when the resolved sandbox tag
+// comes back empty, BOTH store-aware gates go blind: the presence probe and the
+// max-age freshness backstop each need a ref. That case used to fall out of the
+// gate's if/elif chain with no build reason set and print
+// `sandbox image up to date (…, tag unresolved)` — a clean bill of health for
+// an image nothing had looked at, which is how a weeks-old sandbox sits on a
+// box that updates cleanly every day. It must warn instead, and say what was
+// skipped.
+func TestUpdateUnresolvedSandboxTagIsNotUpToDate(t *testing.T) {
+	root := repoRootFromTest(t)
+	body, err := os.ReadFile(filepath.Join(root, "scripts", "update.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(body)
+	for _, want := range []string{
+		// The blind-spot flag, and the two ways a gate fails to reach an answer.
+		`sandbox_unverified=""`,
+		`sandbox_unverified="the image tag could not be resolved`,
+		`sandbox_unverified="podman could not read the image store for ${ref_now}`,
+		// Reported as a warning, never as "up to date", with what was skipped
+		// and the by-hand recovery.
+		`warn "sandbox image NOT verified and NOT rebuilt`,
+		"neither the store-presence check nor the ${SANDBOX_MAX_AGE_DAYS}-day freshness backstop reached an answer",
+		`diagnose the tag: FLEET_CLIENT_CONFIG_DIR=${CLIENT_DIR} ${SCRIPT_DIR}/build-sandbox-image.sh --print-tag`,
+		// The resolver's stderr is kept, so the warning can name the cause
+		// (--print-tag always prints a name:tag when it runs at all, so an
+		// empty answer means the script itself could not run).
+		`--print-tag 2>"$ref_err_file"`,
+		`ref_err="$(head -n 1 "$ref_err_file"`,
+		// The success line only fires with a ref in hand.
+		"${cf_now:0:12}, ${ref_now}) — skipping the image build.",
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("update.sh must contain %q", want)
+		}
+	}
+	// The old reassuring fallback must be gone, not merely supplemented.
+	if strings.Contains(script, "tag unresolved") {
+		t.Error(`update.sh still reports "tag unresolved" as an up-to-date sandbox image`)
 	}
 }

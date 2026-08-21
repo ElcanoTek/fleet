@@ -2,9 +2,15 @@
 # scripts/update.sh — in-place update for an existing fleet install.
 #
 # Pulls the fleet checkout AND the client-config bundle checkout, rebuilds the
-# sandbox image when the bundle's Containerfile or resolved image tag changed
-# (or the tag is missing from the service user's image store; skipped entirely
-# when the bundle resolves sandbox.image to a prebuilt ref), rebuilds the
+# sandbox image when the bundle's Containerfile or resolved image tag changed,
+# the tag is missing from the service user's image store, OR the installed
+# image is older than FLEET_SANDBOX_MAX_AGE_DAYS (default 7; 0 disables) — the
+# freshness backstop that keeps an unchanged bundle from serving a weeks-old
+# image full of unpatched base/package CVEs (skipped entirely when the bundle
+# resolves sandbox.image to a prebuilt ref: registry freshness is the
+# publisher's pipeline's job, not this box's). When the tag cannot be resolved
+# at all, the presence and freshness gates both go blind and the step says so
+# loudly instead of reporting the image up to date. It then rebuilds the
 # fleet binary + the Next web app and deploys the web build into the fleet-web
 # unit's WorkingDirectory (a build left only in the checkout never reaches the
 # browser), then restarts the systemd units (fleet, then fleet-web when
@@ -42,18 +48,29 @@
 #                          FLEET_CLIENT_CONFIG_VERIFY=1 to verify-tag/-commit the
 #                          ref (fail-closed) when a signing key is configured.
 #   --no-pull              skip git fetch/ff; just rebuild the current checkout(s)
+#   --sandbox-max-age <d>  rebuild the sandbox image when the installed one is
+#                          <d> or more days old, even if nothing else changed
+#                          (env FLEET_SANDBOX_MAX_AGE_DAYS, default 7; 0 disables).
+#                          An age-triggered rebuild runs with --no-cache so the
+#                          base image AND the package layers actually refresh.
 #   --branch <name>        override the branch fast-forwarded in SRC_DIR (env FLEET_UPDATE_BRANCH)
 #   --adopt-units          adopt a shipped deploy/*.service that differs
 #                          functionally from the installed unit, WITHOUT the
 #                          interactive prompt (env FLEET_UPDATE_ADOPT_UNITS=1)
 #   --yes / -y             skip the confirm prompt (env FLEET_UPDATE_YES=1)
+#   --no-timers            don't offer to install a missing fleet-backup /
+#                          fleet-maintenance timer pair, and don't hint about
+#                          it (env FLEET_UPDATE_OFFER_TIMERS=0) — for boxes
+#                          that deliberately run without them
 #   --dry-run              print the plan; build/restart nothing
 #   -h | --help            this help
 #
 # Re-run safe (idempotent): when nothing changed it exits early; the web/binary
 # builds are deterministic from the checkout; the sandbox rebuild is gated on the
 # Containerfile hash + resolved image tag (and the tag's presence in the service
-# user's store) so the ~2-3min image build is skipped when unchanged.
+# user's store) so the ~2-3min image build is skipped when unchanged — except
+# the max-age freshness backstop above, which deliberately re-fires once the
+# installed image ages past the threshold.
 
 set -euo pipefail
 
@@ -105,6 +122,22 @@ CLIENT_CONFIG_VERIFY="${FLEET_CLIENT_CONFIG_VERIFY:-}"
 # (it only skips the commit-range confirm) so an unattended update can't silently
 # clobber an operator's hand-edited unit.
 ADOPT_UNITS="${FLEET_UPDATE_ADOPT_UNITS:-0}"
+# Offer to install a MISSING fleet-backup / fleet-maintenance timer pair after
+# the drift check (interactive y/N; see below). --no-timers / the env var
+# silences the offer AND the non-interactive hint for boxes that deliberately
+# run without them (volume-layer backups, an external prune) so a declined
+# timer doesn't nag on every update.
+OFFER_TIMERS="${FLEET_UPDATE_OFFER_TIMERS:-1}"
+# Sandbox image freshness backstop: rebuild the on-box sandbox image when the
+# one in the service user's store is this many days old or older, even when the
+# Containerfile and tag are unchanged. Without it a box whose bundle goes quiet
+# serves the same image for months — stale base layers, unpatched package CVEs
+# (the Grype CI gate scans a FRESH build; only a rebuild brings a deployed box
+# up to what CI vouched for). 0 disables the backstop. Age-triggered rebuilds
+# pass --no-cache through to build-sandbox-image.sh so every layer re-runs —
+# a cached rebuild against an unmoved base would produce the same image with
+# the same old creation date and the gate would spin forever doing nothing.
+SANDBOX_MAX_AGE_DAYS="${FLEET_SANDBOX_MAX_AGE_DAYS:-7}"
 DRY_RUN=0
 
 while [[ $# -gt 0 ]]; do
@@ -121,11 +154,14 @@ while [[ $# -gt 0 ]]; do
     --branch=*)       BRANCH_OVERRIDE="${1#*=}" ;;
     --pin)            shift; [[ $# -gt 0 ]] || { echo "error: --pin needs a sha-or-tag" >&2; exit 1; }; CLIENT_CONFIG_PIN="$1" ;;
     --pin=*)          CLIENT_CONFIG_PIN="${1#*=}" ;;
+    --sandbox-max-age)   shift; [[ $# -gt 0 ]] || { echo "error: --sandbox-max-age needs a day count" >&2; exit 1; }; SANDBOX_MAX_AGE_DAYS="$1" ;;
+    --sandbox-max-age=*) SANDBOX_MAX_AGE_DAYS="${1#*=}" ;;
     --no-pull)        NO_PULL=1 ;;
     --yes|-y)         ASSUME_YES=1 ;;
     --dry-run)        DRY_RUN=1 ;;
     --adopt-units)    ADOPT_UNITS=1 ;;
-    -h|--help)        sed -n '2,45p' "$0"; exit 0 ;;
+    --no-timers)      OFFER_TIMERS=0 ;;
+    -h|--help)        sed -n '2,66p' "$0"; exit 0 ;;
     *) echo "error: unknown argument: $1" >&2; exit 1 ;;
   esac
   shift
@@ -160,6 +196,11 @@ warn() { printf '%s! %s%s\n' "$c_yellow" "$*" "$c_reset" >&2; }
 info() { printf '%s» %s%s\n' "$c_dim" "$*" "$c_reset"; }
 die()  { printf '%s✗ %s%s\n' "$c_red" "$*" "$c_reset" >&2; exit 1; }
 run()  { if [[ "$DRY_RUN" == "1" ]]; then info "[dry-run] $*"; else "$@"; fi; }
+
+# Validate up front: the value gates a multi-GB rebuild, so a typo must die
+# here, not silently disable the backstop (or arithmetic-error mid-update).
+[[ "$SANDBOX_MAX_AGE_DAYS" =~ ^[0-9]+$ ]] \
+  || die "--sandbox-max-age / FLEET_SANDBOX_MAX_AGE_DAYS must be a non-negative integer day count (0 disables), got: ${SANDBOX_MAX_AGE_DAYS}"
 
 # require_go_toolchain — fail the build step with an actionable message rather
 # than an opaque one.
@@ -309,6 +350,17 @@ else
       # fetch + self-update detection (no loop) and then runs the rest of the
       # update normally — crucially still pulling the client-config bundle
       # (NOT set to NO_PULL, which would skip it).
+      #
+      # The re-exec passes NO argv, so EVERY setting a command-line flag can
+      # change must be restated here as its env equivalent. A flag left out of
+      # this list is silently downgraded to its default on exactly the run that
+      # pulled the fix — the hardest run to notice it on, and one an operator
+      # only gets once. (Flags whose absence is intentional: --no-pull, which
+      # would skip the bundle pull the re-exec exists to preserve, and
+      # --dry-run, which never reaches here because it skips the fast-forward.
+      # --src needs no forwarding: SRC_DIR re-derives from the script path the
+      # exec below names. Env-only knobs — FLEET_ENV_FILE, FLEET_STATE_DIR —
+      # are inherited by `env` without being named.)
       if ! git diff --quiet "$before_sha" "$after_sha" -- scripts/update.sh; then
         warn "update.sh changed in this update — re-executing the new version"
         exec env FLEET_UPDATE_REEXEC=1 FLEET_UPDATE_YES=1 \
@@ -319,6 +371,9 @@ else
           FLEET_SERVICE_NAME="$SERVICE_NAME" \
           FLEET_INSTALL_DIR="$INSTALL_DIR" \
           FLEET_UPDATE_BRANCH="$BRANCH_OVERRIDE" \
+          FLEET_SANDBOX_MAX_AGE_DAYS="$SANDBOX_MAX_AGE_DAYS" \
+          FLEET_UPDATE_ADOPT_UNITS="$ADOPT_UNITS" \
+          FLEET_UPDATE_OFFER_TIMERS="$OFFER_TIMERS" \
           bash "$SRC_DIR/scripts/update.sh"
       fi
     fi
@@ -421,7 +476,21 @@ REF_FILE="$STATE_DIR/sandbox-image.ref"
 cf_now="$(hash_file "$sandbox_cf")"
 cf_prev="absent"
 [[ -f "$STAMP_FILE" ]] && cf_prev="$(cat "$STAMP_FILE")"
-ref_now="$(FLEET_CLIENT_CONFIG_DIR="$CLIENT_DIR" "$SCRIPT_DIR/build-sandbox-image.sh" --print-tag 2>/dev/null || true)"
+# Keep the resolver's stderr instead of discarding it. --print-tag ALWAYS
+# prints a name:tag when it runs at all (it falls back to
+# localhost/fleet-sandbox:latest when the manifest names no sandbox.tag), so an
+# EMPTY answer means the script itself could not run — missing, not executable,
+# unreadable bundle path. That blinds both store-aware gates in step 3, so the
+# operator needs the reason, not just the symptom.
+# (/dev/null fallback: a box that cannot mktemp still resolves the tag — the
+# reason string is a nicety, never a reason to abort an update.)
+ref_err_file="$(mktemp 2>/dev/null || printf '/dev/null')"
+ref_now="$(FLEET_CLIENT_CONFIG_DIR="$CLIENT_DIR" "$SCRIPT_DIR/build-sandbox-image.sh" --print-tag 2>"$ref_err_file" || true)"
+ref_err=""
+if [[ "$ref_err_file" != "/dev/null" ]]; then
+  ref_err="$(head -n 1 "$ref_err_file" 2>/dev/null || true)"
+  rm -f "$ref_err_file"
+fi
 ref_prev=""
 [[ -f "$REF_FILE" ]] && ref_prev="$(tr -d '[:space:]' < "$REF_FILE")"
 
@@ -505,8 +574,22 @@ sandbox_image_state() {
   esac
 }
 
+# sandbox_image_age_days REF — print the whole days since the image was built,
+# or nothing when the creation time can't be read (missing image, template
+# unsupported, store unreachable). Callers treat empty as "unknown" and skip
+# the age gate — an unanswerable probe must not trigger a rebuild, the same
+# only-act-on-a-positive-answer rule sandbox_image_state applies.
+sandbox_image_age_days() {
+  local created now
+  created="$(sandbox_podman image inspect --format '{{.Created.Unix}}' "$1" 2>/dev/null | tr -d '[:space:]')"
+  [[ "$created" =~ ^[0-9]+$ ]] || return 0
+  now="$(date +%s)"
+  (( now >= created )) || { printf '0'; return 0; }
+  printf '%s' $(( (now - created) / 86400 ))
+}
+
 # ── 3. rebuild the sandbox image when its gate inputs changed ───────────────
-step "3/5  Rebuilding the sandbox image (when the Containerfile or tag changed)"
+step "3/5  Rebuilding the sandbox image (when the Containerfile/tag changed or the image went stale)"
 if [[ -n "$sandbox_image_ref" ]]; then
   # image wins over tag (internal/clientconfig): the service pulls/uses the
   # prebuilt ref and never reads an on-box build, so gating on sandbox.tag
@@ -516,13 +599,24 @@ if [[ -n "$sandbox_image_ref" ]]; then
 elif [[ "$cf_now" == "absent" ]]; then
   info "no ${sandbox_cf} — bundle ships no sandbox Containerfile; skipping (set sandbox.image or add one)."
 elif [[ "$DRY_RUN" == "1" ]]; then
-  info "[dry-run] would rebuild if the Containerfile hash or resolved tag (${ref_now:-unresolved}) changed, or the tag is missing from the service user's store"
-  info "[dry-run] would run: FLEET_CLIENT_CONFIG_DIR=${CLIENT_DIR} scripts/build-sandbox-image.sh"
+  info "[dry-run] would rebuild if the Containerfile hash or resolved tag (${ref_now:-unresolved}) changed, the tag is missing from the service user's store, or the installed image is ${SANDBOX_MAX_AGE_DAYS}+ days old (FLEET_SANDBOX_MAX_AGE_DAYS; 0 disables the freshness backstop)"
+  info "[dry-run] would run: FLEET_CLIENT_CONFIG_DIR=${CLIENT_DIR} scripts/build-sandbox-image.sh (--no-cache when age-triggered)"
   info "[dry-run] would record the new Containerfile hash + tag under ${STATE_DIR}"
 elif ! command -v podman >/dev/null 2>&1; then
   warn "podman not found — skipping sandbox build (install podman, then run scripts/build-sandbox-image.sh)."
 else
   build_reason=""
+  # Age-triggered rebuilds run --no-cache (via FLEET_SANDBOX_BUILD_NO_CACHE):
+  # with a cached build against an unmoved base, podman would emit the SAME
+  # image with the same old creation date and the backstop would re-fire every
+  # update while refreshing nothing. Every other reason keeps the layer cache —
+  # there the trigger itself guarantees a real change.
+  sandbox_build_no_cache=0
+  # Set when a gate could not reach an answer (as opposed to answering "no
+  # rebuild needed"). It must never read as "up to date" at the end of this
+  # step: nothing here learned whether the service's image exists, or how old
+  # it is.
+  sandbox_unverified=""
   if [[ "$NO_PULL" == "1" ]]; then
     build_reason="rebuild-only mode"
   elif [[ "$cf_prev" == "absent" ]]; then
@@ -541,14 +635,51 @@ else
     # spurious full rebuild.
     case "$(sandbox_image_state "$ref_now")" in
       absent) build_reason="${ref_now} missing from the sandbox image store" ;;
-      error)  warn "could not probe the sandbox image store for ${ref_now} (podman failed as ${service_user:-$(id -un)}) — leaving the image as-is; check with: fleet doctor" ;;
+      error)
+        # Reported once, below: an inconclusive probe is the same blind spot as
+        # an unresolvable tag, and it must not be followed by an "up to date".
+        sandbox_unverified="podman could not read the image store for ${ref_now} as ${service_user:-$(id -un)}"
+        ;;
+      present)
+        # Freshness backstop: an unchanged bundle must not mean a frozen
+        # image — the base layers and packages inside it keep aging (and
+        # accumulating published CVEs) no matter how stable the Containerfile
+        # is. Only a readable creation time triggers (empty = unknown = skip).
+        if (( SANDBOX_MAX_AGE_DAYS > 0 )); then
+          image_age_days="$(sandbox_image_age_days "$ref_now")"
+          if [[ -n "$image_age_days" ]] && (( image_age_days >= SANDBOX_MAX_AGE_DAYS )); then
+            build_reason="${ref_now} was built ${image_age_days} days ago (max age ${SANDBOX_MAX_AGE_DAYS}d) — refreshing the base image + package layers"
+            sandbox_build_no_cache=1
+          fi
+        fi
+        ;;
     esac
+  else
+    # ref_now empty: the resolver never produced a tag, so the two gates that
+    # need one — the store-presence probe and the max-age freshness backstop —
+    # were both unreachable. This used to fall out of the chain with no reason
+    # set and print a reassuring "up to date" line that showed the tag as
+    # unresolved right there in the same breath, which is how a weeks-old image
+    # sits on a box that updates cleanly every day. Not fatal: an unresolvable
+    # tag is no evidence the running image is broken, and dying here would
+    # strand an otherwise good update.
+    sandbox_unverified="the image tag could not be resolved${ref_err:+ (${ref_err})}"
   fi
   if [[ -z "$build_reason" ]]; then
-    ok "sandbox image up to date (Containerfile ${cf_now:0:12}, ${ref_now:-tag unresolved}) — skipping the image build."
+    if [[ -n "$sandbox_unverified" ]]; then
+      warn "sandbox image NOT verified and NOT rebuilt — ${sandbox_unverified}."
+      warn "  neither the store-presence check nor the ${SANDBOX_MAX_AGE_DAYS}-day freshness backstop reached an answer, so the ${SERVICE_NAME} service keeps whatever image its store already holds, of unknown age."
+      if [[ -z "$ref_now" ]]; then
+        warn "  diagnose the tag: FLEET_CLIENT_CONFIG_DIR=${CLIENT_DIR} ${SCRIPT_DIR}/build-sandbox-image.sh --print-tag"
+      fi
+      warn "  check the box: fleet doctor   —   rebuild by hand: sudo FLEET_CLIENT_CONFIG_DIR=${CLIENT_DIR} FLEET_SERVICE_NAME=${SERVICE_NAME} ${SCRIPT_DIR}/build-sandbox-image.sh"
+    else
+      ok "sandbox image up to date (Containerfile ${cf_now:0:12}, ${ref_now}) — skipping the image build."
+    fi
   else
     info "${build_reason} — building the sandbox image."
-    if FLEET_CLIENT_CONFIG_DIR="$CLIENT_DIR" FLEET_SERVICE_NAME="$SERVICE_NAME" "$SCRIPT_DIR/build-sandbox-image.sh"; then
+    if FLEET_CLIENT_CONFIG_DIR="$CLIENT_DIR" FLEET_SERVICE_NAME="$SERVICE_NAME" \
+       FLEET_SANDBOX_BUILD_NO_CACHE="$sandbox_build_no_cache" "$SCRIPT_DIR/build-sandbox-image.sh"; then
       mkdir -p "$STATE_DIR"
       printf '%s\n' "$cf_now" > "$STAMP_FILE"
       [[ -n "$ref_now" ]] && printf '%s\n' "$ref_now" > "$REF_FILE"
@@ -703,21 +834,23 @@ fi
 # --adopt-units is set. Overwriting is always gated on explicit consent (a y/N
 # answer, or --adopt-units) so an update can never silently clobber an operator
 # hand-edit. Drop-ins under /etc/systemd/system/<unit>.d/ survive either path.
-# The backup pair adopts the same way but needs NO restart (see below); a box
-# without it installed — bootstrap --no-backup-timer, or volume-layer backups —
-# is skipped by the both-files-exist check, never force-installed.
+# The backup + maintenance timer pairs adopt the same way but need NO restart
+# (see below); a box without one installed — bootstrap's --no-backup-timer /
+# --no-maintenance-timer, or volume-layer backups — is skipped by the
+# both-files-exist check, never force-installed (a MISSING pair gets an
+# explicit install offer after this loop instead).
 NEED_DAEMON_RELOAD=0
 if command -v systemctl >/dev/null 2>&1; then
-  for unit in fleet.service fleet-web.service fleet-backup.service fleet-backup.timer; do
+  for unit in fleet.service fleet-web.service fleet-backup.service fleet-backup.timer fleet-maintenance.service fleet-maintenance.timer; do
     installed="/etc/systemd/system/$unit"
     shipped="$SRC_DIR/deploy/$unit"
     [[ -f "$installed" && -f "$shipped" ]] || continue
-    # Adopting a backup unit must not add any restart: the oneshot runs only
-    # when the timer fires it, and the step-5 daemon-reload is all systemd
+    # Adopting a timer-pair unit must not add any restart: each oneshot runs
+    # only when its timer fires it, and the step-5 daemon-reload is all systemd
     # needs to re-arm a rewritten timer's schedule — the same rule doctor.sh
-    # applies. (Restarting the oneshot would even run a backup right now.)
-    is_backup_unit=0
-    case "$unit" in fleet-backup.service|fleet-backup.timer) is_backup_unit=1 ;; esac
+    # applies. (Restarting the backup oneshot would even run a backup right now.)
+    is_timer_unit=0
+    case "$unit" in fleet-backup.*|fleet-maintenance.*) is_timer_unit=1 ;; esac
     # Byte-identical → nothing to do.
     cmp -s "$shipped" "$installed" && continue
     # Empty functional diff → only comments/whitespace changed; note it and move
@@ -759,8 +892,8 @@ if command -v systemctl >/dev/null 2>&1; then
       _extra=""; [[ "$web_needs_user" == "1" ]] && _extra=" + create the fleet-web user"
       _then="restart in step 5"
       case "$unit" in
-        fleet-backup.timer)   _then="no restart — the reload re-arms the timer" ;;
-        fleet-backup.service) _then="no restart — the next timer fire uses the new definition" ;;
+        fleet-backup.timer|fleet-maintenance.timer)     _then="no restart — the reload re-arms the timer" ;;
+        fleet-backup.service|fleet-maintenance.service) _then="no restart — the next timer fire uses the new definition" ;;
       esac
       printf '%s?%s Adopt the shipped %s%s%s? %s(install%s, daemon-reload, %s) (y/N)%s ' \
         "$c_cyan" "$c_reset" "$c_bold" "$unit" "$c_reset" "$c_dim" "$_extra" "$_then" "$c_reset"
@@ -791,9 +924,9 @@ if command -v systemctl >/dev/null 2>&1; then
       # Declined, non-interactive, or --yes: keep the actionable manual hint so
       # nothing is lost and the operator can adopt out of band.
       warn "  review: diff $installed $shipped"
-      if [[ "$is_backup_unit" == "1" ]]; then
+      if [[ "$is_timer_unit" == "1" ]]; then
         # No restart in this hint: the reload alone re-arms the timer, and
-        # restarting the oneshot would run a backup immediately.
+        # restarting the backup oneshot would run a backup immediately.
         warn "  adopt:  install -m 0644 $shipped $installed && systemctl daemon-reload"
       else
         warn "  adopt:  install -m 0644 $shipped $installed && systemctl daemon-reload && systemctl restart ${unit%.service}"
@@ -802,6 +935,55 @@ if command -v systemctl >/dev/null 2>&1; then
       if [[ "$web_needs_user" == "1" ]]; then
         warn "  first (fleet-web runs as a non-root user now): useradd --system --home-dir /var/lib/fleet-web --shell /usr/sbin/nologin --no-create-home fleet-web && chown -R fleet-web:fleet-web ${web_dst}/.next"
       fi
+    fi
+  done
+fi
+
+# ── offer to install missing scheduled-maintenance timer pairs ──────────────
+# The drift loop above reconciles only units that are ALREADY installed; a box
+# provisioned before the timers shipped (or with bootstrap's --no-*-timer
+# opt-outs) has none, and until now the only path to them was copy-pasting the
+# install hint out of `fleet doctor`. An interactive update asks once per
+# missing pair, defaulting to No — an operator who backs up at the volume layer
+# or prunes the container store another way is not misconfigured — and a
+# non-interactive run just prints the one-liner. --no-timers (env
+# FLEET_UPDATE_OFFER_TIMERS=0) silences both so a deliberate decline never
+# nags. The install itself is `fleet timers install` — the binary this update
+# just installed — so there is ONE install implementation, shared with the
+# doctor hint, not a second copy here.
+if command -v systemctl >/dev/null 2>&1 && [[ "$OFFER_TIMERS" != "0" ]]; then
+  # The freshly installed binary; on an in-place dev box INSTALL_DIR == SRC_DIR
+  # so this still resolves. PATH fallback covers the dry-run path (INSTALL_DIR
+  # may be unresolved there) — dry-run never executes it anyway.
+  fleet_bin="${INSTALL_DIR:-/opt/fleet}/fleet"
+  [[ -x "$fleet_bin" ]] || fleet_bin="fleet"
+  for _pair in \
+    "backup|daily database dumps at 02:00|skip if you back up at the volume/hypervisor layer" \
+    "maintenance|daily podman layer + build-cache prune at 03:30|skip if you prune the container store yourself"; do
+    IFS='|' read -r _name _what _skip <<<"$_pair"
+    # Only a fully-missing pair is offered: a half-installed or drifted pair
+    # was already handled (or hinted about) by the drift loop above.
+    if systemctl cat "fleet-${_name}.service" >/dev/null 2>&1 || systemctl cat "fleet-${_name}.timer" >/dev/null 2>&1; then
+      continue
+    fi
+    if [[ "$DRY_RUN" == "1" ]]; then
+      info "[dry-run] would offer to install + enable the fleet-${_name} service/timer pair (${_what}) via: fleet timers install --${_name}"
+    elif [[ -t 0 && "$ASSUME_YES" != "1" ]]; then
+      printf '%s?%s Install + enable %sfleet-%s.timer%s? %s(%s; %s) (y/N)%s ' \
+        "$c_cyan" "$c_reset" "$c_bold" "$_name" "$c_reset" "$c_dim" "$_what" "$_skip" "$c_reset"
+      read -r answer
+      case "${answer,,}" in
+        y|yes)
+          if "$fleet_bin" timers install "--${_name}" --src "$SRC_DIR"; then
+            ok "fleet-${_name}.timer installed + enabled (${_what})"
+          else
+            warn "could not install the fleet-${_name} pair — try by hand: sudo fleet timers install --${_name}"
+          fi
+          ;;
+        *) info "skipped — install later with: sudo fleet timers install --${_name} (or silence this offer: fleet update --no-timers)" ;;
+      esac
+    else
+      info "no fleet-${_name}.timer on this box (${_what}) — install with: sudo fleet timers install --${_name} (${_skip}; --no-timers silences this)"
     fi
   done
 fi

@@ -430,8 +430,9 @@ func backupVerdict(installed, enabled, active bool, lastResult string) Check {
 		c.Status = StatusWarn
 		c.Detail = "no " + backupTimerUnit + " + " + backupServiceUnit + " pair installed — nothing on this box dumps the databases"
 		// Installing just this pair, not a re-bootstrap: on a provisioned box
-		// bootstrap also rebuilds binaries and re-provisions Postgres.
-		c.Fix = "run on the box, from the fleet checkout: sudo install -m 0644 -t /etc/systemd/system deploy/fleet-backup.{service,timer} && sudo systemctl daemon-reload && sudo systemctl enable --now " + backupTimerUnit + " (skip if you back up at the volume/hypervisor layer)"
+		// bootstrap also rebuilds binaries and re-provisions Postgres. `fleet
+		// timers install` is that one-pair install as a single idempotent verb.
+		c.Fix = "run on the box: sudo fleet timers install --backup (skip if you back up at the volume/hypervisor layer)"
 	case !enabled:
 		c.Status = StatusWarn
 		c.Detail = backupTimerUnit + " installed but not enabled — it will never fire"

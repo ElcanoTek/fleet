@@ -7,7 +7,8 @@
 #
 # scripts/bootstrap.sh --enable-service installs and enables the pair by default
 # (--no-backup-timer opts out), and `fleet doctor` advises when no timer is
-# present and FAILS when the last run did not succeed. Install by hand with:
+# present and FAILS when the last run did not succeed. Install in one command
+# with `sudo fleet timers install --backup`, or by hand with:
 #   install -D -m 0644 deploy/fleet-backup.service /etc/systemd/system/fleet-backup.service
 #   install -D -m 0644 deploy/fleet-backup.timer   /etc/systemd/system/fleet-backup.timer
 #   install -d -m 0700 -o root -g root /var/backups/fleet
