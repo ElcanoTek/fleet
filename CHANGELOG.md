@@ -19,6 +19,54 @@ prior versions are listed because none have shipped.
 
 ### Changed
 
+- **`fleet-web` no longer dumps core on nearly every restart** — see
+  [docs/WEB-TIER-SHUTDOWN.md](docs/WEB-TIER-SHUTDOWN.md). ~793 MB of `node-22`
+  SIGSEGV dumps had accumulated in `/var/lib/systemd/coredump`, one or two per
+  deploy, all at service *stop* — never mid-request — so `Restart=always` kept
+  the tier serving and disk was the only symptom. Three separate faults:
+  (1) `ExecStart` was `/usr/bin/npm run start`, putting **two** processes in the
+  cgroup, and on stop npm forwarded SIGTERM to a child it had already reaped —
+  segfaulting in `uv_kill` → `node::Kill` → `ProcessWrap::OnExit`. The unit now
+  runs `node node_modules/next/dist/bin/next start` directly, which deletes that
+  crash and lets SIGTERM reach next-server unrelayed; the loopback-bind default
+  that lived in `web/package.json`'s shell `${FLEET_WEB_HOST:-127.0.0.1}` moves
+  into the unit as `Environment=FLEET_WEB_HOST=127.0.0.1`, placed before
+  `EnvironmentFile=` so the env file can still override it (`next start` with no
+  `-H` binds `0.0.0.0` and would expose :3000 past Caddy). (2) A stop that
+  overran `TimeoutStopSec=30s` was **SIGABRT**ed, because Fedora's
+  `systemd-system.conf` drop-in sets `TimeoutStopFailureMode=abort`; the unit now
+  states `TimeoutStopFailureMode=kill`, so an overrun is a journal entry instead
+  of a memory image (the rare overrun's own cause remains unknown). (3) The
+  residual dump — `next-server` SIGSEGV at `0x0` in V8/libuv **teardown**, after
+  it has stopped serving — is not fixable here: Next 16.3.1/16.3.2 contain no
+  shutdown fix, so `next` deliberately stays at 16.3.0 rather than implying one,
+  and the lead is the node build (the same Next build exits cleanly under node
+  22.22.2; the crashing box runs 22.23.1), making it an operator action.
+  Separately, the unit now sets **`LimitCORE=0`**: a core dump is a full memory
+  image, and this process holds `CHAT_SERVER_TOKEN`,
+  `ORCHESTRATOR_SERVER_TOKEN`, `APP_SESSION_SECRET` and every in-flight user's
+  session, so persisting one per crash wrote down exactly what the credential
+  invariant says must never reach disk. The failure is still logged — only the
+  image is declined. Also recorded in
+  the design note: the obvious **graceful-drain theory was measured and refuted**
+  (Next 16.3.0 exits in ~105 ms with an open-ended SSE response in flight), so
+  no application-side stream-abort machinery was added for a hang that does not
+  exist.
+- **`fleet-web` shutdown fix completed on live verification** — two gaps found
+  when the unit above met a real Fedora 44 box: (1) Fedora's
+  `TimeoutStopFailureMode=abort` lives in the **global**
+  `/usr/lib/systemd/system/service.d/` drop-in directory, and drop-ins are read
+  after the unit body, so it overrode the unit's own
+  `TimeoutStopFailureMode=kill` — the fix now also ships
+  `deploy/fleet-web.service.d/10-timeout-kill.conf`, a per-unit drop-in at the
+  precedence level that wins, and `bootstrap.sh`, `update.sh` (`--adopt-units`)
+  and `doctor.sh` all install/reconcile it; (2) Next handles SIGTERM and exits
+  with code **143** rather than dying by the signal, so systemd logged every
+  clean stop as "Failed with result 'exit-code'" — the unit now declares
+  `SuccessExitStatus=143`, which names Next's deliberate clean-stop code only
+  (crash signals still fail loudly). Verified live on fleetdev: `systemctl
+  restart fleet-web` now stops with "Deactivated successfully", no core dump,
+  no segfault, and the tier is Ready again in ~150 ms.
 - **Approval cards reworked end to end** — see
   [docs/APPROVAL-CARDS.md](docs/APPROVAL-CARDS.md) for the full design note.
   The pieces: (1) non-email critical tools (a pages deploy, a deal write) get a
