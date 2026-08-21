@@ -16,6 +16,8 @@
 #     --no-create-home fleet-web              # the unit's unprivileged user (see below)
 #   install -d /opt/fleet/web
 #   cp -a web/. /opt/fleet/web/          # the built Next app (incl. .next/ + node_modules or run npm ci on the box)
+#                                        # node_modules is REQUIRED: ExecStart runs
+#                                        # node_modules/next/dist/bin/next directly.
 #   chown -R fleet-web:fleet-web /opt/fleet/web/.next   # the only path next writes at runtime
 #   install -D -m 0644 deploy/fleet-web.service /etc/systemd/system/fleet-web.service
 #   install -D -m 0600 /dev/null /etc/fleet/fleet-web.env   # then fill it in (see below)
@@ -34,11 +36,15 @@
 #
 # Optional:
 #   FLEET_WEB_HOST=0.0.0.0    # the address `next start` binds. Defaults to
-#                             # 127.0.0.1 (web/package.json's start script):
+#                             # 127.0.0.1 (the Environment= line in [Service]):
 #                             # only Caddy on this box should reach :3000,
 #                             # because the web tier trusts x-forwarded-* from
 #                             # its proxy. Widen ONLY when TLS terminates on
 #                             # another host.
+#
+# Shutdown note: this unit stops the web tier with SIGTERM, allows
+# TimeoutStopSec=30s, then escalates with SIGKILL — never SIGABRT. See the
+# TimeoutStopFailureMode comment below and docs/WEB-TIER-SHUTDOWN.md.
 
 [Unit]
 Description=fleet web tier (Next.js app — public origin, proxies to loopback backends)
@@ -51,25 +57,59 @@ BindsTo=fleet.service
 [Service]
 Type=simple
 WorkingDirectory=/opt/fleet/web
+# Default the bind address BEFORE the env file is read, so /etc/fleet/fleet-web.env
+# can still override it (EnvironmentFile wins over an earlier Environment=).
+# This replaces the `${FLEET_WEB_HOST:-127.0.0.1}` shell default that lived in
+# web/package.json's start script, which is no longer on the path now that
+# ExecStart runs next directly.
+Environment=FLEET_WEB_HOST=127.0.0.1
 EnvironmentFile=/etc/fleet/fleet-web.env
-# `npm run start` → `next start -H ${FLEET_WEB_HOST:-127.0.0.1}` — loopback by
-# default, so the topology diagram above is enforced, not just documented
-# (`next start` alone binds 0.0.0.0 and would expose :3000 past Caddy). Use an
-# absolute npm if PATH under the unit is minimal (e.g. ExecStart=/usr/bin/npm
-# run start).
-ExecStart=/usr/bin/npm run start
+# Run next DIRECTLY — no `npm run start` wrapper. npm buys nothing here (it
+# only re-reads package.json to exec this same command) and it cost us a crash
+# on every single stop: with npm in the middle, `systemctl stop` SIGTERMs the
+# whole control group, npm's child exits first, and npm then forwards the
+# signal to a process it has already reaped — segfaulting inside uv_kill →
+# node::Kill → ProcessWrap::OnExit. That wrote a core dump per restart for a
+# process whose only remaining job was to exit. One less process in the cgroup
+# also means SIGTERM reaches next-server directly, with nothing to relay it.
+#
+# -H keeps the bind loopback-only, so the topology diagram above is enforced
+# rather than merely documented (`next start` with no -H binds 0.0.0.0 and
+# would expose :3000 past Caddy). FLEET_WEB_HOST is defaulted by the
+# Environment= line above and may be overridden in the env file; do not remove
+# that default — an empty value here would hand next an argument-less -H.
+# The port still comes from PORT in the env file, exactly as before.
+#
+# node lives at /usr/bin/node on Fedora/RHEL and Debian/Ubuntu packages alike;
+# override with a drop-in if yours is elsewhere (e.g. an nvm install).
+ExecStart=/usr/bin/node node_modules/next/dist/bin/next start -H ${FLEET_WEB_HOST}
 Restart=always
 RestartSec=5s
 KillSignal=SIGTERM
+# 30s sits inside the 10-30s window the Next.js self-hosting guide asks
+# platforms to allow for a graceful stop. In practice this server exits in
+# well under a second — measured at ~105ms even with an open-ended SSE
+# response in flight (docs/WEB-TIER-SHUTDOWN.md) — so the budget is headroom,
+# not an expected wait.
 TimeoutStopSec=30s
+# If a stop DOES overrun that budget, escalate with SIGKILL, not SIGABRT. This is not cosmetic: Fedora ships a systemd-system.conf drop-in
+# setting TimeoutStopFailureMode=abort, so a web tier that overran the drain
+# was SIGABRT'd and dumped ~130 MB of core every time. A stop that overran its
+# deadline is a hang to fix, not a crash to dissect — SIGKILL reports the same
+# timeout in the journal and writes no dump. Setting it here overrides the
+# system-wide default regardless of what the distro chose. (systemd >= 246;
+# older systemd logs an unknown-key warning and keeps its default.)
+TimeoutStopFailureMode=kill
 
 # ── Service identity ──
 # This is the ONLY public-facing process, so it runs as a dedicated
 # unprivileged fixed system user — never root. Unlike fleet.service it drives
 # no rootless Podman, so it needs no subuid ranges; a plain nologin system
 # user is enough (bootstrap creates it; the header shows the manual useradd).
-# StateDirectory provides a writable HOME (/var/lib/fleet-web) for npm's
-# cache/config, which ProtectHome would otherwise mask.
+# StateDirectory provides a writable HOME (/var/lib/fleet-web), which
+# ProtectHome would otherwise mask. npm no longer runs under this unit, but
+# node and next still expect a writable HOME for their config/telemetry
+# directory, and a read-only HOME surfaces as startup noise.
 User=fleet-web
 Group=fleet-web
 StateDirectory=fleet-web
@@ -84,6 +124,27 @@ ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
 ReadWritePaths=/opt/fleet/web/.next
+
+# ── No core dumps ──
+# Two independent reasons, and the security one
+# is the reason it is not merely disk hygiene:
+#
+#  1. A core dump is a full memory image, and this process holds the
+#     deployment's shared secrets — CHAT_SERVER_TOKEN, ORCHESTRATOR_SERVER_TOKEN,
+#     APP_SESSION_SECRET — plus every in-flight user's session and request body.
+#     Writing that to /var/lib/systemd/coredump on every crash persists exactly
+#     what fleet's credential invariant says must never reach logs or disk.
+#  2. next-server currently segfaults during V8/libuv TEARDOWN on some node
+#     builds (see docs/WEB-TIER-SHUTDOWN.md) — after it has stopped serving, so
+#     the dump describes an exit path, not a serving fault. Each one cost
+#     ~130 MB; days of deploys had filled the coredump directory.
+#
+# This does NOT hide the crash: systemd still logs the signal and the unit
+# still records the failed stop, so `systemctl status` / journalctl show it.
+# It only declines to keep the memory image. To collect one deliberately while
+# debugging, drop it in for one boot and remove it after:
+#   systemctl edit fleet-web   →   [Service] / LimitCORE=infinity
+LimitCORE=0
 
 [Install]
 WantedBy=multi-user.target

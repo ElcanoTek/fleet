@@ -359,7 +359,9 @@ each piece yourself):
    > previously it was not. It is one indexed lookup by email per request.
 
    Run the Next web app as its own supervised unit (`deploy/fleet-web.service` —
-   it `npm run start`s the built app on port 3000), wiring
+   it runs the built app's `next start` on port 3000, invoking node directly
+   rather than through `npm run start`; see [`WEB-TIER-SHUTDOWN.md`](WEB-TIER-SHUTDOWN.md)
+   for why the wrapper was removed), wiring
    `CHAT_SERVER_URL`/`ORCHESTRATOR_SERVER_URL` to the loopback backends and
    `CHAT_SERVER_TOKEN` to the binary's `FLEET_SERVER_TOKEN` in its 0600
    `/etc/fleet/fleet-web.env`:
