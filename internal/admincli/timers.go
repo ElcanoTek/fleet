@@ -331,7 +331,7 @@ func findDeployDir(flagSrc string) string {
 		}
 	}
 	for _, c := range candidates {
-		if _, err := os.Stat(filepath.Join(c, "fleet-backup.timer")); err == nil {
+		if _, err := os.Stat(filepath.Join(c, "fleet-backup.timer")); err == nil { //nolint:gosec // G703: candidate paths are operator-controlled (--src flag, FLEET_ROOT env, the literal "deploy", the binary's own dir), never request or LLM input — same rule as findScript.
 			return c
 		}
 	}
