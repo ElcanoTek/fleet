@@ -94,6 +94,15 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **A `?connector=<name>` deep link into Settings → Connections**, and a
+  Featured-shelf spot for the Browserbase card. `/settings/connections?connector=browserbase`
+  opens the connector directory filtered to that entry with its guided API-key
+  form already open and focused — one paste and Add away from connected — then
+  strips the one-shot param like the OAuth callback params. Works for any
+  directory entry by name; the built-in `browserbase` skill hands users the link
+  when a chat has no connector, and `docs/BROWSERBASE.md` documents it. Covered
+  by page unit tests (the first for the connections page) and a mocked
+  Playwright spec asserting the POST carries `api_key_query`.
 - **Sandbox image freshness: a max-age rebuild backstop in `fleet update`**
   ([`docs/SANDBOX-IMAGE-FRESHNESS.md`](docs/SANDBOX-IMAGE-FRESHNESS.md)). The
   update gate only ever detected *change* (Containerfile hash, resolved tag,
@@ -188,6 +197,24 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **The guided api_key connector add was broken for query-auth servers:**
+  `GET /mcp-catalog` dropped `api_key_query` on the wire (the projection in
+  `internal/httpapi/mcp_catalog.go` never copied it), so the directory card's
+  paste-a-key form sent the key as a bearer header and the add-time probe
+  failed against servers — Browserbase among them — that take the key as a
+  query parameter. The field now survives to the wire, pinned field-by-field
+  by a projection test.
+- **Browserbase live-view hardening after #1220's merge review.** The key
+  resolver treated a nil per-conversation opt-in list as "no filtering" while
+  the overlay treats the same nil as "no connectors on", so a conversation
+  whose opt-in list was never seeded could register `browserbase_live_view`
+  and unseal the connector key with every connector switched off — nil now
+  gates exactly like empty. Also: the connector URL match survives an explicit
+  `:443` (compare `Hostname()`, not `Host`); a 401/403/404 on the debug
+  endpoint no longer blames a two-key project mismatch when the user's own
+  connector key made the request; session auto-resolution returns the trimmed
+  id it validated; and the per-call HTTP client closes its idle connections
+  instead of leaking one TLS connection per mint.
 - **`paused_awaiting_wake` had no terminal backstop.** `WakeDueTasks` filters on
   `wake_at IS NOT NULL`, so a row without one could never wake, and
   `ExpirePausedTasks` covers `paused_awaiting_input` only — such a task waited

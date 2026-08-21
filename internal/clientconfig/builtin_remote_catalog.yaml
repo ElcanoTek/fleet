@@ -1263,9 +1263,14 @@ servers:
     api_key_query: browserbaseApiKey
     setup_hint: >-
       In the Browserbase dashboard (Overview page), copy your API key and
-      paste it here. The key authenticates the hosted server's browser
-      sessions against your Browserbase project.
+      paste it here. One key does everything: it drives the hosted browser
+      and lets the agent hand you a live-view link when a page needs a human
+      — a login, a one-time code, a captcha.
     setup_url: "https://www.browserbase.com/overview"
+    # Featured: fleet has no in-sandbox browser (ADR-0044) — this connector IS
+    # the browser story, and the built-in browserbase skill's human handoff
+    # (docs/BROWSERBASE.md) depends on it being findable.
+    featured: true
   - name: exa
     display_name: Exa
     description: >-

@@ -125,6 +125,13 @@ with your API key, then enable it in the chat's **Tools picker**. Connector sele
 per-conversation, so a chat started before the connection was added will not have it.
 That one key both drives the browser and mints the live-view links.
 
+Getting there is one click: `/settings/connections?connector=browserbase` opens the
+connector directory filtered to the Browserbase card with its key form open and focused
+— paste, Add, done. The deep link works for any directory entry by name (the built-in
+`browserbase` skill hands it to users whose chat has no connector), the entry is on the
+directory's Featured shelf, and the add is validated against the vendor before the key
+is stored, so a bad paste fails loudly with the form still open.
+
 **Optional box-wide fallback** (for scheduled runs, or an operator who wants minting to
 work without each user connecting). Use the guided writer rather than editing the env
 file by hand — it prompts hidden, so the key never reaches argv or shell history, and it

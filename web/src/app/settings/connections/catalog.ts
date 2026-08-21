@@ -348,3 +348,14 @@ export function effectiveAutoEnable(
   if (p) return p.enabled && (p.auto_enable ?? false);
   return operatorDefault ?? false;
 }
+
+// connectorParamOf parses the ?connector=<name> deep link (from docs, the
+// browserbase skill's "add it under Settings → Connections" fallback, or
+// anywhere else that wants to land a user one paste away from connecting a
+// specific directory entry). The value is a catalog entry NAME — trimmed and
+// lowercased to match the directory's canonical lowercase names — never a URL.
+export function connectorParamOf(search: string): string | null {
+  const raw = new URLSearchParams(search).get("connector");
+  const name = (raw ?? "").trim().toLowerCase();
+  return name === "" ? null : name;
+}

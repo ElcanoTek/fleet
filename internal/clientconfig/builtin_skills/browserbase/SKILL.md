@@ -37,7 +37,10 @@ Then handle what is actually absent:
 - **No connector tools.** Say so in one turn and stop. The user needs to add
   Browserbase under **Settings → Connections** *and* switch it on in **this
   chat's** Tools picker — a chat started before the connection was added
-  will not have it. Do not try an `mcp_*` call to find out; it will not resolve.
+  will not have it. Give them the deep link
+  [Settings → Connections](/settings/connections?connector=browserbase) — it
+  opens the directory with the Browserbase key form ready to paste into. Do
+  not try an `mcp_*` call to find out; it will not resolve.
 - **Connector present, no `browserbase_live_view`.** You can still drive the
   browser, but you cannot mint a link. For a login or captcha, tell the user
   to open <https://www.browserbase.com/sessions>, click the running session,
