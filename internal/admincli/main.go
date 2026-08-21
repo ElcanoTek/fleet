@@ -12,7 +12,7 @@
 //	fleet bootstrap [--postgres=local|external] [--client-config <url|path>] [--enable-service] [--dry-run]
 //	fleet update    [--no-pull] [--client-config <dir>] [--service <name>] [--yes] [--dry-run]
 //	fleet status    [--service <name>] [--no-sandbox]
-//	fleet doctor    [--check] [--no-restart] [--dry-run]
+//	fleet doctor    [--check] [--no-restart] [--node] [--dry-run]
 //	fleet diagnose  [--output <file>] [--service <name>] [--no-sandbox]
 //	fleet start|restart|stop [--service <name>]
 //	fleet logs      [--service <name>] [-n 50] [-f]   (a.k.a. tail)
@@ -146,14 +146,18 @@ Chat with the agent (TUI, #457):
 
 Operator lifecycle (bootstrap → update → status/doctor):
   fleet bootstrap [--postgres=local|external] [--client-config <url|path>] [--enable-service] [--dry-run]
-  fleet update    [--check] [--no-pull] [--client-config <dir>] [--service <name>] [--branch <name>] [--adopt-units] [--yes] [--dry-run]
-                                                             (--check: read-only "N commits behind upstream", mutates nothing;
-                                                              --adopt-units: adopt shipped systemd units that drifted, without the prompt)
+  fleet update    [--check] [--no-pull] [--client-config <dir>] [--service <name>] [--branch <name>] [--adopt-units] [--no-node-repair] [--yes] [--dry-run]
+                                                             (--check: read-only "N commits behind upstream" + can this box build the
+                                                              web tier; mutates nothing, non-zero when the node floor is unmet;
+                                                              --adopt-units: adopt shipped systemd units that drifted, without the prompt;
+                                                              --no-node-repair: refuse instead of repairing a node shortfall in place)
   fleet cleanup   [--dry-run] [--deep]                 (reclaim build cruft: dangling podman layers + Go caches)
   fleet status    [--service <name>] [--no-sandbox]    (quick read-only health report; non-zero exit if unhealthy)
-  fleet doctor    [--check] [--no-restart] [--dry-run]  (deep box pass: diagnose AND repair drift — packages, rootless
+  fleet doctor    [--check] [--no-restart] [--node] [--dry-run]  (deep box pass: diagnose AND repair drift — packages, rootless
                                                              podman prereqs, unit drift, env files, services, sandbox smoke.
-                                                             Needs root; --check only diagnoses; --dry-run prints the checklist)
+                                                             Needs root; --check only diagnoses; --dry-run prints the checklist;
+                                                             --node repairs ONLY the node toolchain and exits, and
+                                                             --node --check is a read-only probe that needs no root)
   fleet diagnose  [--output <file>] [--service <name>] [--no-sandbox]
                                                              (redacted support bundle: status + config names + DB versions + sandbox image → .tar.gz)
   fleet start     [--service <name>]                   (systemctl start; needs root/sudo — distinct from "fleet serve", which runs the daemon in the foreground)

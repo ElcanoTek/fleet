@@ -62,6 +62,10 @@
 #                          fleet-maintenance timer pair, and don't hint about
 #                          it (env FLEET_UPDATE_OFFER_TIMERS=0) — for boxes
 #                          that deliberately run without them
+#   --no-node-repair       don't hand a node shortfall to `doctor.sh --node`;
+#                          fail with the repair command instead (env
+#                          FLEET_UPDATE_NODE_REPAIR=0) — for boxes whose node
+#                          is managed outside dnf (nvm, nodesource, an image)
 #   --dry-run              print the plan; build/restart nothing
 #   -h | --help            this help
 #
@@ -130,6 +134,16 @@ ADOPT_UNITS="${FLEET_UPDATE_ADOPT_UNITS:-0}"
 # run without them (volume-layer backups, an external prune) so a declined
 # timer doesn't nag on every update.
 OFFER_TIMERS="${FLEET_UPDATE_OFFER_TIMERS:-1}"
+
+# Hand a node shortfall to the repair path (scripts/doctor.sh --node) instead of
+# dying. ON by default, and that is a deliberate asymmetry with --adopt-units:
+# adopting a unit OVERWRITES an operator's hand-edit, so it needs consent, while
+# this only adds a parallel-installable interpreter package and stamps
+# FLEET_NODE_BIN — a value this script already rewrites unconditionally further
+# down (the "pointed fleet-web at ..." block). Refusing to install the
+# interpreter it is about to point the tier at would be incoherent. Boxes whose
+# node comes from nvm/nodesource/an image opt out with --no-node-repair.
+NODE_REPAIR="${FLEET_UPDATE_NODE_REPAIR:-1}"
 # Sandbox image freshness backstop: rebuild the on-box sandbox image when the
 # one in the service user's store is this many days old or older, even when the
 # Containerfile and tag are unchanged. Without it a box whose bundle goes quiet
@@ -163,7 +177,8 @@ while [[ $# -gt 0 ]]; do
     --dry-run)        DRY_RUN=1 ;;
     --adopt-units)    ADOPT_UNITS=1 ;;
     --no-timers)      OFFER_TIMERS=0 ;;
-    -h|--help)        sed -n '2,66p' "$0"; exit 0 ;;
+    --no-node-repair) NODE_REPAIR=0 ;;
+    -h|--help)        awk 'NR>1 && /^#/ { sub(/^# ?/, ""); print; next } NR>1 { exit }' "$0"; exit 0 ;;
     *) echo "error: unknown argument: $1" >&2; exit 1 ;;
   esac
   shift
@@ -198,6 +213,30 @@ warn() { printf '%s! %s%s\n' "$c_yellow" "$*" "$c_reset" >&2; }
 info() { printf '%s» %s%s\n' "$c_dim" "$*" "$c_reset"; }
 die()  { printf '%s✗ %s%s\n' "$c_red" "$*" "$c_reset" >&2; exit 1; }
 run()  { if [[ "$DRY_RUN" == "1" ]]; then info "[dry-run] $*"; else "$@"; fi; }
+
+# Set by the node gate below; declared here so the later FLEET_NODE_BIN stamp
+# and build-PATH prefix are safe under `set -u` on a checkout with no web/.
+node_bin_resolved=""
+node_major_want=""
+DRY_RUN_BLOCKED=0
+
+# node_probe — resolve the interpreter THIS checkout's web tier needs, and set
+# node_major_want + node_bin_resolved from what was actually found on the box.
+#
+# Read-only and side-effect free, so the plan printer (--dry-run) and the real
+# run share one implementation: the whole point of scripts/lib/node-version.sh
+# is that "which node?" is answered in exactly one place, and a dry run that
+# answered it differently from the run it previews would be worse than not
+# answering at all.
+#
+# Returns: 0 resolved · 1 nothing on this box qualifies · 2 web/.nvmrc unreadable.
+node_probe() {
+  node_bin_resolved=""
+  node_major_want="$(fleet_node_major_want "$SRC_DIR" || true)"
+  [[ -n "$node_major_want" ]] || return 2
+  node_bin_resolved="$(fleet_resolve_node_bin "$node_major_want")" || { node_bin_resolved=""; return 1; }
+  return 0
+}
 
 # Validate up front: the value gates a multi-GB rebuild, so a typo must die
 # here, not silently disable the backstop (or arithmetic-error mid-update).
@@ -376,6 +415,7 @@ else
           FLEET_SANDBOX_MAX_AGE_DAYS="$SANDBOX_MAX_AGE_DAYS" \
           FLEET_UPDATE_ADOPT_UNITS="$ADOPT_UNITS" \
           FLEET_UPDATE_OFFER_TIMERS="$OFFER_TIMERS" \
+          FLEET_UPDATE_NODE_REPAIR="$NODE_REPAIR" \
           bash "$SRC_DIR/scripts/update.sh"
       fi
     fi
@@ -590,6 +630,113 @@ sandbox_image_age_days() {
   printf '%s' $(( (now - created) / 86400 ))
 }
 
+# ── the node gate ───────────────────────────────────────────────────────────
+# Placed HERE — after both pulls, before the first EXPENSIVE and destructive
+# step — for two reasons that pull in opposite directions:
+#
+#   * It cannot run any earlier. The major is declared in the CHECKOUT's
+#     web/.nvmrc, so a pre-pull gate reads the OLD floor. On a box provisioned
+#     before .nvmrc existed that is not a rounding error: the old floor was a
+#     hardcoded 20, node 22 satisfies it, and every pre-pull check says the box
+#     is fine. Post-pull is the earliest point at which "which node does this
+#     release need?" is even a well-posed question.
+#   * It must not run any later. It used to sit inside step 4, i.e. AFTER
+#     step 3 had potentially spent 2-3 minutes rebuilding the sandbox image and
+#     then pruned the superseded layers — and it still printed "nothing has been
+#     built or installed yet". This script already states the standard it was
+#     violating: a gate that can abort must run before the first side effect,
+#     or it is not a gate.
+#
+# The checkout fast-forward in step 1 is unavoidably already done by now, so the
+# refusal messages below say that rather than claiming an untouched box.
+if [[ -f "$SRC_DIR/web/package.json" ]]; then
+  step "Node gate (the web tier's interpreter)"
+  _np_rc=0; node_probe || _np_rc=$?
+  # What a refusal below can honestly claim about this box. Step 1 fast-forwards
+  # the checkout — unless --no-pull, in which case nothing has been touched at
+  # all. Saying "the checkout was fast-forwarded" on a --no-pull run would be
+  # the same species of untrue status line this gate exists to stop printing.
+  if [[ "$NO_PULL" == "1" ]]; then
+    _state="nothing has been pulled, built, installed or restarted"
+  else
+    _state="the checkout was fast-forwarded; nothing was built, installed or restarted"
+  fi
+
+  if [[ "$DRY_RUN" == "1" ]]; then
+    # Do NOT merely claim "would resolve node" — resolve it. `--dry-run` is the
+    # one command an operator runs to ask "will this work on my box?", and the
+    # node gate is what aborts the run. The previous plan printed
+    # "would resolve node >= web/.nvmrc" without ever calling the resolver, so
+    # on a box the real run refuses to touch it printed a clean checklist, a
+    # green banner and exit 0 — the same "reported a thing that did not happen"
+    # fault the rest of this change set exists to kill. node_probe is pure and
+    # root-free, so the plan can afford to answer the question for real.
+    if (( _np_rc == 0 )); then
+      ok "[dry-run] node gate PASSES: ${node_bin_resolved} ($("$node_bin_resolved" -v)) >= ${node_major_want} (web/.nvmrc) — resolved on this box, not assumed"
+    elif (( _np_rc == 2 )); then
+      warn "[dry-run] BLOCKER: cannot read the node major from ${SRC_DIR}/web/.nvmrc — the real run stops here"
+      DRY_RUN_BLOCKED=1
+    else
+      warn "[dry-run] BLOCKER: no node >= ${node_major_want} (web/.nvmrc) — have $(node -v 2>/dev/null || echo none)"
+      if [[ "$NODE_REPAIR" != "1" ]]; then
+        info "[dry-run] --no-node-repair is set, so the real run stops here — fix it with: sudo fleet doctor --node"
+      elif [[ $EUID -ne 0 ]]; then
+        info "[dry-run] the real run would repair it via scripts/doctor.sh --node, but that needs root and this is uid ${EUID}"
+      else
+        info "[dry-run] the real run would repair it first: scripts/doctor.sh --node, then re-resolve and refuse if it is still short"
+      fi
+      DRY_RUN_BLOCKED=1
+    fi
+  else
+    (( _np_rc != 2 )) \
+      || die "cannot read the node major from ${SRC_DIR}/web/.nvmrc — expected something like '24' (${_state})"
+
+    if (( _np_rc != 0 )); then
+      # The box is a major behind. Dying here was the old behavior, and it made
+      # the documented order load-bearing: `fleet update` stopped, and the
+      # operator had to already know the fix lived in a different verb — a verb
+      # that, run FIRST on a box provisioned before web/.nvmrc existed, is a
+      # no-op, because it too reads the floor from the un-pulled checkout.
+      #
+      # update.sh is an updater, not a provisioner, so it does NOT grow its own
+      # `dnf install`: it hands the shortfall to the ONE place that owns the
+      # node install (scripts/doctor.sh --node) and then re-resolves. Scoped to
+      # --node deliberately — a full doctor run would adopt drifted units, a
+      # write this script only ever performs behind explicit consent
+      # (--adopt-units), and laundering that through the node repair would be a
+      # consent bypass.
+      warn "no node >= ${node_major_want} (web/.nvmrc) — have $(node -v 2>/dev/null || echo none)."
+      _doctor="$SCRIPT_DIR/doctor.sh"
+      if [[ "$NODE_REPAIR" != "1" ]]; then
+        warn "  --no-node-repair is set, so this run will not install it."
+        warn "  fix it:  sudo fleet doctor --node    (then re-run this update)"
+        die "refusing to build the web tier on an unsupported node — ${_state}"
+      elif [[ ! -r "$_doctor" ]]; then
+        warn "  the repair path ${_doctor} is missing from this checkout."
+        warn "  fix it:  sudo dnf install nodejs${node_major_want} nodejs${node_major_want}-npm"
+        die "refusing to build the web tier on an unsupported node — ${_state}"
+      elif [[ $EUID -ne 0 ]]; then
+        warn "  repairing it needs root, and this update is running as uid ${EUID}."
+        warn "  fix it:  sudo fleet doctor --node    (then re-run this update)"
+        die "refusing to build the web tier on an unsupported node — ${_state}"
+      fi
+
+      info "repairing the node toolchain first: scripts/doctor.sh --node (${_state})"
+      SRC_DIR="$SRC_DIR" bash "$_doctor" --node || true
+      hash -r   # a just-installed /usr/bin/node-NN must be visible to this shell
+
+      # Re-RESOLVE. doctor's exit code is not the claim being made here — the
+      # claim is "this box can now build the web tier", and only re-running the
+      # resolver against the box proves that. Same rule as the resolved
+      # ExecStart and resolved TimeoutStopFailureMode assertions.
+      node_probe \
+        || die "still no node >= ${node_major_want} after scripts/doctor.sh --node — inspect 'dnf list nodejs*' / 'dnf repolist'; ${_state}"
+      ok "node toolchain repaired in place — no re-run needed"
+    fi
+    ok "web tier will build+run on ${node_bin_resolved} ($("$node_bin_resolved" -v))"
+  fi
+fi
+
 # ── 3. rebuild the sandbox image when its gate inputs changed ───────────────
 step "3/5  Rebuilding the sandbox image (when the Containerfile/tag changed or the image went stale)"
 if [[ -n "$sandbox_image_ref" ]]; then
@@ -742,29 +889,11 @@ fi
 if [[ "$DRY_RUN" == "1" ]]; then
   info "[dry-run] would run: (cd ${SRC_DIR} && make build)  → ${SRC_DIR}/fleet + fleet-admin"
   info "[dry-run] would install fleet + fleet-admin → ${INSTALL_DIR:-<unit ExecStart dir, else /opt/fleet>}"
-  info "[dry-run] would resolve node >= web/.nvmrc, refresh /usr/local/bin/fleet-web-start.sh, and set FLEET_NODE_BIN in /etc/fleet/fleet-web.env"
+  info "[dry-run] would refresh /usr/local/bin/fleet-web-start.sh and set FLEET_NODE_BIN in /etc/fleet/fleet-web.env"
   info "[dry-run] would run: (cd ${SRC_DIR}/web && npm ci && npm run build) with the NEXT_PUBLIC_* stamps from /etc/fleet/fleet-web.env"
   info "[dry-run] would deploy the web build → the fleet-web unit's WorkingDirectory (else /opt/fleet/web)"
 else
   require_go_toolchain
-  # Resolve the node interpreter BEFORE anything is built or installed. The
-  # first version of this check ran after `make build` and after the new
-  # binaries were installed, then died with "nothing was changed" — which was
-  # false: the checkout had been fast-forwarded and the binaries replaced. A
-  # gate that can abort must run before the first side effect, or it is not a
-  # gate. Skipped when there is no web/ to build.
-  node_bin_resolved=""
-  if [[ -f "$SRC_DIR/web/package.json" ]]; then
-    node_major_want="$(fleet_node_major_want "$SRC_DIR" || true)"
-    [[ -n "$node_major_want" ]] \
-      || die "cannot read the node major from ${SRC_DIR}/web/.nvmrc — expected something like '24' (nothing has been built or installed yet)"
-    if ! node_bin_resolved="$(fleet_resolve_node_bin "$node_major_want")"; then
-      warn "no node >= ${node_major_want} (web/.nvmrc) — have $(node -v 2>/dev/null || echo none)."
-      warn "  install it:  sudo dnf install nodejs${node_major_want}    (or: sudo fleet doctor)"
-      die "refusing to build the web tier on an unsupported node — nothing has been built or installed yet"
-    fi
-    ok "web tier will build+run on ${node_bin_resolved} ($("$node_bin_resolved" -v))"
-  fi
 
   ( cd "$SRC_DIR" && make build ) || die "make build failed — live binary left in place"
   [[ -x "$SRC_DIR/fleet" && -x "$SRC_DIR/fleet-admin" ]] \
@@ -1159,6 +1288,23 @@ else
 fi
 
 say
+# A dry run must not sign off with the same green "rebuilt/updated" banner a
+# real run prints — it built nothing, and on a box the node gate would stop it
+# reported a blocker three steps ago. Saying so here is the difference between
+# a plan and a claim.
+if [[ "$DRY_RUN" == "1" ]]; then
+  if [[ "$DRY_RUN_BLOCKED" == "1" ]]; then
+    printf '%s═══════════════════════════════════════════════%s\n' "$c_yellow" "$c_reset"
+    printf '%s ! dry run: plan printed, and a BLOCKER above would stop the real run%s\n' "$c_bold" "$c_reset"
+    printf '%s═══════════════════════════════════════════════%s\n' "$c_yellow" "$c_reset"
+  else
+    printf '%s═══════════════════════════════════════════════%s\n' "$c_dim" "$c_reset"
+    printf '%s » dry run: plan only — nothing was built, installed or restarted%s\n' "$c_bold" "$c_reset"
+    printf '%s═══════════════════════════════════════════════%s\n' "$c_dim" "$c_reset"
+  fi
+  say
+  exit 0
+fi
 printf '%s═══════════════════════════════════════════════%s\n' "$c_green" "$c_reset"
 if [[ "$before_sha" == "$after_sha" ]]; then
   printf '%s ✓ fleet rebuilt at %s%s\n' "$c_bold" "${after_sha:0:12}" "$c_reset"

@@ -19,6 +19,49 @@ prior versions are listed because none have shipped.
 
 ### Changed
 
+- **The installer's node handoff: `fleet update` now repairs a node shortfall
+  instead of refusing** — on a box a node major behind the checkout, the
+  documented sequence (`bootstrap → update → status/doctor`) hard-failed on the
+  second step, and the fix lived in a verb that comes later in that line.
+  Running doctor *first* would not have helped either: both scripts read the
+  floor from the checkout's `web/.nvmrc` and doctor never pulls, so on a box
+  provisioned before `.nvmrc` existed a pre-update doctor run reads the old
+  hardcoded floor, sees node 22 and passes. New `scripts/doctor.sh --node`
+  performs just the node repair (install `nodejs<major>` + `-npm`, stamp
+  `FLEET_NODE_BIN`, assert the resolved value) and `update.sh` hands the
+  shortfall to it, then **re-resolves** rather than trusting its exit code —
+  the box repairs in place with no re-run and no prior knowledge of the order.
+  Scoped to `--node` on purpose: a full doctor pass adopts drifted units, a
+  write `fleet update` performs only behind `--adopt-units`. `--no-node-repair`
+  (`FLEET_UPDATE_NODE_REPAIR=0`) restores the refusal for boxes whose node comes
+  from nvm/NodeSource. The gate also **moved** to after the pulls and before the
+  sandbox rebuild: it used to fire after a 2-3 minute image build and a layer
+  prune while printing "nothing has been built or installed yet".
+  `update --dry-run` now runs the resolver for real (it printed
+  "would resolve node" without ever calling it, then closed with a green
+  "fleet rebuilt at <sha>" banner and exit 0 on a box the real run refuses), and
+  `fleet update --check` reports node readiness and exits non-zero rather than
+  recommending a command that cannot succeed. `doctor.sh` now asserts
+  `FLEET_NODE_BIN` by reading it back through the same last-wins reader systemd
+  uses, instead of trusting the writer's return code. Design note:
+  [`docs/NODE-TOOLCHAIN-HANDOFF.md`](docs/NODE-TOOLCHAIN-HANDOFF.md).
+- **`scripts/fleet-upgrade.sh` brings the web tier back up** —
+  `deploy/fleet-web.service` carries `BindsTo=fleet.service`, so the script's
+  `systemctl restart fleet` stopped fleet-web and nothing restarted it; the run
+  then printed `✓ fleet upgraded + healthy`, a claim its readiness gate (which
+  polls only the Go backend's `/readyz`) never covered. It now restarts
+  fleet-web on both the upgrade and rollback paths, asserts `systemctl
+  is-active`, and the banner reports what it measured. It remains deliberately
+  node-unaware: it never builds the web tier, so the node major is not its
+  business.
+- **`--help` no longer truncates or leaks shell** — bootstrap, update and
+  fleet-upgrade each rendered help with a hardcoded `sed -n '2,Np'` range that
+  rots as the header grows. `fleet-upgrade.sh --help` was printing raw script
+  body; `update.sh` and `bootstrap.sh` were silently dropping their last
+  paragraphs. All three now derive the header block and stop at the first
+  non-comment line, guarded by a test that fails on either truncation or leak.
+  `doctor.sh --help` also stated a stale `Node >= 20` floor while the resolved
+  floor was 24.
 - **TypeScript 7 all the way down; ESLint replaced by oxlint** — the web tier now
   runs TypeScript 7, the native Go compiler, everywhere: `npm run typecheck`,
   the `next build` type pass, and editors. No TypeScript 6 is kept anywhere.
@@ -151,9 +194,11 @@ prior versions are listed because none have shipped.
   the interpreter and **`exec`s** — the cgroup still holds exactly one process
   (verified: same pid, SIGTERM → `exit(143)` in 15 ms), so this is not the npm
   wrapper returning; npm's fault was *lingering* as a supervisor. bootstrap,
-  doctor and update install the shim, install the versioned `nodejs<major>`
-  package, and stamp/assert `FLEET_NODE_BIN` so the tier runs the node that was
-  installed rather than whichever one the distro defaults to. `rampart-service`
+  doctor and update install the shim and stamp/assert `FLEET_NODE_BIN` so the
+  tier runs the node that was installed rather than whichever one the distro
+  defaults to. Installing the versioned `nodejs<major>` package is bootstrap's
+  and doctor's job — update is an updater, not a provisioner, so it hands a
+  shortfall to `doctor.sh --node` and re-resolves (see below). `rampart-service`
   and the EKS deployment examples move to `node:24-slim` too. Verified on node
   24.19.0: `npm ci` clean, lint 0 errors, build clean, 1080/1080 web tests
   (identical with and without this change), and five start→SIGTERM cycles all

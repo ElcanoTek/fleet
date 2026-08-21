@@ -38,9 +38,23 @@ Division of labor across the three health verbs:
 |---|---|---|---|
 | `fleet status` | none | never | quick in-process checks (bundle, env, DBs, sandbox, unit) |
 | `fleet doctor` | root (except `--check`/`--dry-run`) | **repairs** | everything status checks **plus** packages, podman prereqs, unit drift, env files — and fixes them |
+| `fleet doctor --node` | root (none for `--node --check`) | **repairs** | the node toolchain ONLY: install `nodejs<major>` + `-npm` per `web/.nvmrc`, stamp `FLEET_NODE_BIN`, assert the resolved value, exit |
 | `/admin/doctor` (UI) | admin session | never | doctor's *diagnosable-from-the-process* subset, with fix hints |
 
 ## Design decisions
+
+- **`--node` is a seam, not a convenience flag.** `scripts/update.sh` is an
+  updater, not a provisioner, so it must not grow its own `dnf install nodejs`;
+  but an update that dies because the box is a node major behind sends the
+  operator away to find the repair command. `--node` lets update call *this*
+  code path — the one implementation of the node install — and then re-resolve.
+  It is scoped to the node blocks deliberately: a full doctor pass adopts
+  drifted units, a write `fleet update` performs only behind explicit consent
+  (`--adopt-units`), so invoking one from inside update would launder a
+  consent-gated write. `--node --check` drops the root requirement because it
+  installs nothing and `fleet update --check` (a documented no-root dev-box
+  probe) calls it. Full story:
+  [`NODE-TOOLCHAIN-HANDOFF.md`](NODE-TOOLCHAIN-HANDOFF.md).
 
 - **Repairs are shell, diagnosis is Go.** The repair pass needs root and is
   genuinely shell-shaped (dnf, useradd, install, systemctl), so it lives in

@@ -218,7 +218,11 @@ while [[ $# -gt 0 ]]; do
     --force-caddy)       FORCE_CADDY=1 ;;
     --dry-run)           DRY_RUN=1 ;;
     -h|--help)
-      sed -n '2,141p' "$0"; exit 0 ;;
+      # Derived, not a hardcoded range: print the header comment block and stop
+      # at the first non-`#` line. A fixed range silently truncates the help the
+      # moment the header grows — which had already dropped the last 6 lines
+      # here, and shipped raw shell code out of fleet-upgrade.sh's --help.
+      awk 'NR>1 && /^#/ { sub(/^# ?/, ""); print; next } NR>1 { exit }' "$0"; exit 0 ;;
     *) echo "error: unknown argument: $1" >&2; exit 1 ;;
   esac
   shift
