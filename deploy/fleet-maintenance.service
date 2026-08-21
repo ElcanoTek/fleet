@@ -1,0 +1,66 @@
+# deploy/fleet-maintenance.service — one `fleet cleanup` pass.
+#
+# This is the HOST-side half of fleet's reclamation. The fleet process already
+# runs an hourly in-process maintenance loop (chat retention sweeps, attachment
+# and temp-upload files, orphaned per-conversation workspaces, stale git
+# worktrees — see docs/MAINTENANCE.md), but there is one thing that loop
+# deliberately cannot do: prune podman's image store.
+#
+# Every sandbox Containerfile change leaves the previous ~1.3 GB image's layers
+# dangling in the service user's rootless overlay store. A box that updates
+# regularly fills its disk with nothing but stale layers, and the in-process
+# loop must not reclaim them — pruning images is a whole-store operation whose
+# blast radius (a concurrent build, another instance's images) belongs to an
+# operator-scheduled maintenance window, not to a background goroutine inside
+# the serving process. Hence a systemd timer, like the backup.
+#
+# What it does NOT do: touch databases, conversation workspaces, the
+# client-config checkout, or node_modules. `fleet cleanup` is a cache sweep;
+# data loss is out of scope. Named images the running service references are
+# held by its warm sandbox containers and survive.
+#
+# scripts/bootstrap.sh --enable-service installs and enables the pair by
+# default (--no-maintenance-timer opts out). Install by hand with:
+#   install -D -m 0644 deploy/fleet-maintenance.service /etc/systemd/system/fleet-maintenance.service
+#   install -D -m 0644 deploy/fleet-maintenance.timer   /etc/systemd/system/fleet-maintenance.timer
+#   systemctl daemon-reload && systemctl enable --now fleet-maintenance.timer
+#
+# Runs as the fleet SERVICE USER, not root: the image store being pruned is that
+# user's rootless store (~/.local/share/containers under the StateDirectory), so
+# a root run would prune root's store and leave the service's untouched.
+
+[Unit]
+Description=fleet host maintenance (prune dangling podman layers + build caches)
+Documentation=https://github.com/ElcanoTek/fleet/blob/main/docs/MAINTENANCE.md
+# Ordering only. A maintenance pass on a box whose service is down is harmless
+# and still useful (it is the one time --deep could reclaim the sandbox image),
+# so nothing here pulls the service up or requires it.
+After=network-online.target fleet.service
+
+[Service]
+Type=oneshot
+User=fleet
+Group=fleet
+# The rootless image store lives under the service user's HOME, which is the
+# systemd StateDirectory the main unit uses. Without these, podman looks in the
+# wrong place and the prune silently reclaims nothing.
+Environment=HOME=/var/lib/fleet
+Environment=XDG_RUNTIME_DIR=/run/fleet
+WorkingDirectory=/var/lib/fleet
+EnvironmentFile=-/etc/fleet/fleet.env
+# Plain (not --deep): dangling layers only, so an image any tag still
+# references is untouched. --deep additionally prunes unused NAMED images and
+# is deliberately left to a human — on a stopped box it can remove the sandbox
+# image itself and force a rebuild on the next deploy.
+ExecStart=/usr/local/bin/fleet cleanup
+# A prune that cannot run is not a failure worth alerting on — the next timer
+# fire retries, and the in-process loop is still reclaiming everything else.
+SuccessExitStatus=0
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=yes
+ReadWritePaths=/var/lib/fleet
+
+# No [Install] section on purpose: this unit is triggered by
+# fleet-maintenance.timer. Enable the TIMER, not the service.

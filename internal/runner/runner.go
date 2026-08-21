@@ -30,6 +30,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/getsentry/sentry-go"
@@ -152,6 +153,19 @@ type Config struct {
 	// disables reply-back — the fire path is a cheap no-op. Fired from a detached,
 	// time-bounded goroutine; its errors NEVER affect task status (mirrors Notifier).
 	EmailReplier EmailReplier
+	// AdmitScheduled, when set, is consulted before each claim: returning false
+	// leaves pending work pending for this tick. It is the seam the disk
+	// backpressure guard uses to shed BACKGROUND load while interactive chat
+	// keeps running (see internal/diskguard) — the pool stays up, the queue
+	// simply stops draining until the condition clears.
+	//
+	// nil (the default) always admits, so nothing changes for embedders that do
+	// not wire a gate. The reason string is for the log line only; it must be
+	// operator-facing text with no request-derived content.
+	//
+	// MUST be cheap and non-blocking: it runs on the claim path. The guard
+	// caches its measurement precisely so this stays a mutex and a comparison.
+	AdmitScheduled func() (ok bool, reason string)
 	// WallClockTimeout bounds one scheduled run's total wall-clock time (#724):
 	// on expiry the run's context is cancelled and the task fails with a clear,
 	// DETERMINISTIC timeout error (never retried, never dead-letter-replayed as
@@ -267,6 +281,12 @@ type Pool struct {
 	// wallTimeout is the resolved per-run wall-clock ceiling (#724). 0 = disabled
 	// (no per-run deadline). See Config.WallClockTimeout.
 	wallTimeout time.Duration
+
+	// admitScheduled gates the claim path (see Config.AdmitScheduled). nil =
+	// always admit. shedLogged de-duplicates the "holding back" log line so a
+	// box shedding for an hour writes one line, not one per poll tick.
+	admitScheduled func() (bool, string)
+	shedLogged     atomic.Bool
 }
 
 // defaultDrainGrace bounds the shutdown wait for in-flight tasks when Config
@@ -326,6 +346,7 @@ func NewPool(store *storage.Storage, runner TaskRunner, cfg Config) *Pool {
 		errorAnalyzer:      cfg.ErrorAnalyzer,
 		emailReplier:       cfg.EmailReplier,
 		wallTimeout:        wall,
+		admitScheduled:     cfg.AdmitScheduled,
 	}
 }
 
@@ -519,12 +540,40 @@ func (p *Pool) ActiveTasks() int {
 	return len(p.active)
 }
 
+// admitClaims consults the optional backpressure gate. It logs the transition in
+// each direction exactly once, so an operator sees WHEN the box started and
+// stopped holding work back without a poll-rate flood in between.
+func (p *Pool) admitClaims() bool {
+	if p.admitScheduled == nil {
+		return true
+	}
+	ok, reason := p.admitScheduled()
+	if ok {
+		if p.shedLogged.CompareAndSwap(true, false) {
+			log.Print("runner: resuming scheduled task claims (backpressure cleared)")
+		}
+		return true
+	}
+	if p.shedLogged.CompareAndSwap(false, true) {
+		// reason is operator-facing text from the gate itself (see
+		// Config.AdmitScheduled), never request input — no log-forgery risk.
+		log.Printf("runner: holding back scheduled task claims: %s", reason)
+	}
+	return false
+}
+
 // tryClaim acquires a scheduler slot from the shared limiter (non-blocking) and,
 // if one is free, claims and runs one pending task. The limiter is THE cap: when
 // the scheduler sub-cap is reached (or the box is full of interactive turns),
 // this poll is a no-op and the extra work stays pending. The drain-loop keeps
 // claiming while slots free up, so a single tick can launch up to the sub-cap.
 func (p *Pool) tryClaim(ctx, taskCtx context.Context) {
+	// Backpressure gate (disk headroom today) — checked BEFORE the limiter so a
+	// shedding box does not even take a slot. Work already in flight is left
+	// alone: shedding stops the queue from draining, it never kills a run.
+	if !p.admitClaims() {
+		return
+	}
 	for {
 		release, ok := p.limiter.TryAcquireScheduled() // acquire BEFORE claiming (non-blocking)
 		if !ok {

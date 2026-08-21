@@ -1,6 +1,9 @@
 package metrics
 
-import "strings"
+import (
+	"runtime"
+	"strings"
+)
 
 // Named metric families (#176) + thin record helpers. Kept separate from the
 // registry mechanics so call sites read intent, not plumbing.
@@ -50,6 +53,20 @@ const (
 	nameSandboxIOBytes      = "fleet_sandbox_io_bytes"
 	nameSandboxPidsPeak     = "fleet_sandbox_pids_peak"
 	nameSandboxRunsObserved = "fleet_sandbox_runs_observed_total"
+
+	// Host disk + Go runtime health. Both were previously visible ONLY in the
+	// admin JSON panels (/admin/host-stats, /admin/health), which means nothing
+	// could chart them and nothing could alert on them — a disk filling over a
+	// week or a goroutine leak growing over a day were invisible until they
+	// became an outage. Single-box service, so no path/instance label is
+	// needed: one fleet process guards one data directory.
+	nameDiskTotalBytes = "fleet_disk_total_bytes"
+	nameDiskFreeBytes  = "fleet_disk_free_bytes"
+	nameDiskFreeRatio  = "fleet_disk_free_ratio"
+	nameDiskShedding   = "fleet_disk_shedding"
+	nameGoroutines     = "fleet_goroutines"
+	nameHeapBytes      = "fleet_memory_heap_bytes"
+	nameSysBytes       = "fleet_memory_sys_bytes"
 )
 
 // RecordToolOutputTruncation counts one result reduced by the final
@@ -286,6 +303,83 @@ func RegisterActiveAgents(interactive, scheduled func() int) {
 			{Labels: []string{"interactive"}, Value: float64(interactive())},
 			{Labels: []string{"scheduled"}, Value: float64(scheduled())},
 		}
+	})
+}
+
+// DiskSample is one filesystem measurement for the disk gauges, supplied by the
+// caller so internal/metrics stays free of syscalls and of a dependency on the
+// guard that produces it.
+type DiskSample struct {
+	// Available is false when the filesystem could not be measured; the gauges
+	// are then left unpublished rather than reporting a misleading zero.
+	Available  bool
+	TotalBytes uint64
+	FreeBytes  uint64
+	// Shedding mirrors the guard's decision to hold back scheduled work.
+	Shedding bool
+}
+
+// RegisterDiskGauges wires the pull-at-scrape gauges for host disk headroom and
+// the backpressure decision derived from it. sample is evaluated each scrape.
+//
+// fleet_disk_shedding is the one to alert on: it is the box telling you it has
+// already stopped claiming scheduled work. free_ratio is the one to chart —
+// a ratio survives a disk resize where an absolute byte threshold would not.
+func RegisterDiskGauges(sample func() DiskSample) {
+	RegisterGauge(nameDiskTotalBytes, "Capacity in bytes of the filesystem holding the fleet data directory.", nil, func() []GaugeSample {
+		s := sample()
+		if !s.Available {
+			return nil
+		}
+		return []GaugeSample{{Value: float64(s.TotalBytes)}}
+	})
+	RegisterGauge(nameDiskFreeBytes, "Unprivileged-writable free bytes on the filesystem holding the fleet data directory.", nil, func() []GaugeSample {
+		s := sample()
+		if !s.Available {
+			return nil
+		}
+		return []GaugeSample{{Value: float64(s.FreeBytes)}}
+	})
+	RegisterGauge(nameDiskFreeRatio, "Free space as a fraction (0-1) of the filesystem holding the fleet data directory.", nil, func() []GaugeSample {
+		s := sample()
+		if !s.Available || s.TotalBytes == 0 {
+			return nil
+		}
+		return []GaugeSample{{Value: float64(s.FreeBytes) / float64(s.TotalBytes)}}
+	})
+	// Published even when the sample failed: "not shedding" is the honest,
+	// fail-open state, and an alert on this series must not go stale silently
+	// just because one statfs errored.
+	RegisterGauge(nameDiskShedding, "1 when free disk has fallen below the floor and scheduled work is being held back; 0 otherwise.", nil, func() []GaugeSample {
+		v := 0.0
+		if sample().Shedding {
+			v = 1
+		}
+		return []GaugeSample{{Value: v}}
+	})
+}
+
+// RegisterRuntimeGauges wires the Go runtime gauges — live goroutines and heap
+// / total-reserved memory. Cheap enough to evaluate per scrape: NumGoroutine is
+// a load of a counter, and ReadMemStats on a modern Go runtime does not
+// stop-the-world for these fields.
+//
+// The point is trend, not instant value: a goroutine count that climbs
+// monotonically across a day is a leak, and that shape is invisible in a
+// point-in-time admin panel.
+func RegisterRuntimeGauges() {
+	RegisterGauge(nameGoroutines, "Goroutines currently running in the fleet process.", nil, func() []GaugeSample {
+		return []GaugeSample{{Value: float64(runtime.NumGoroutine())}}
+	})
+	RegisterGauge(nameHeapBytes, "Bytes of allocated heap objects in the fleet process.", nil, func() []GaugeSample {
+		var ms runtime.MemStats
+		runtime.ReadMemStats(&ms)
+		return []GaugeSample{{Value: float64(ms.HeapAlloc)}}
+	})
+	RegisterGauge(nameSysBytes, "Total bytes of memory obtained from the OS by the fleet process.", nil, func() []GaugeSample {
+		var ms runtime.MemStats
+		runtime.ReadMemStats(&ms)
+		return []GaugeSample{{Value: float64(ms.Sys)}}
 	})
 }
 

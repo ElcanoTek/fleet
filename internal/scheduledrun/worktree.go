@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/sched/models"
+	"github.com/ElcanoTek/fleet/internal/worktree"
 )
 
 // Git worktree isolation for scheduled runs (#180).
@@ -40,8 +41,10 @@ import (
 const (
 	// worktreeSubdir is the directory under the workspace root that holds per-run
 	// worktrees. Kept out of the main working tree's `git status` via
-	// .git/info/exclude (see ensureWorktreeExcluded).
-	worktreeSubdir = ".fleet-worktrees"
+	// .git/info/exclude (see ensureWorktreeExcluded). Shared with the reclaimer
+	// in internal/worktree so the creator and the sweeper can never disagree
+	// about where these live.
+	worktreeSubdir = worktree.Subdir
 	// gitCmdTimeout bounds a single host git invocation. `git worktree add` can
 	// take a few seconds on a large repo; this is generous without being
 	// unbounded if git wedges.
@@ -108,7 +111,7 @@ func prepareWorktree(ctx context.Context, workspaceRoot string, task *models.Tas
 		if out, rErr := runGit(cctx, workspaceRoot, "worktree", "remove", "--force", wtPath); rErr != nil {
 			log.Printf("scheduled worktree: remove %s failed: %v\n%s", wtPath, rErr, out)
 			// Fall through to branch deletion anyway; a leftover dir is reclaimed
-			// later by `fleet-admin worktree prune`.
+			// later by the server's maintenance loop (or `fleet worktree prune`).
 		}
 		// Delete the per-run branch too: an enabled+auto_cleanup task throws the
 		// run away, so leaving one branch per run would accumulate ref litter.

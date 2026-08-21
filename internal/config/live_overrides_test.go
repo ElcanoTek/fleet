@@ -14,7 +14,7 @@ func TestLiveOverrideSettersRoundTrip(t *testing.T) {
 	isolateEnv(t)
 	dir := t.TempDir()
 	envPath := filepath.Join(dir, ".env")
-	writeEnv(t, envPath, "FLEET_PHONE_A_FRIEND_ENABLED=false\nFLEET_AUTO_TITLE=true\n")
+	writeEnv(t, envPath, "FLEET_PHONE_A_FRIEND_ENABLED=false\nFLEET_AUTO_TITLE=true\nFLEET_APPROVAL_TIMEOUT_SECONDS=900\n")
 
 	cfg, err := Load(envPath)
 	if err != nil {
@@ -26,6 +26,9 @@ func TestLiveOverrideSettersRoundTrip(t *testing.T) {
 	if !cfg.LiveAutoTitle() {
 		t.Fatal("env default should be true")
 	}
+	if got := cfg.LiveApprovalTimeoutSeconds(); got != 900 {
+		t.Fatalf("env default approval timeout = %d, want 900", got)
+	}
 
 	cfg.SetPhoneAFriendEnabled(true)
 	cfg.SetAutoTitle(false)
@@ -34,6 +37,10 @@ func TestLiveOverrideSettersRoundTrip(t *testing.T) {
 	cfg.SetErrorAnalysisEnabled(false)
 	cfg.SetConnectorRecommendationsEnabled(true)
 	cfg.SetContextHandlesEnabled(true)
+	cfg.SetApprovalTimeoutSeconds(7200)
+	if got := cfg.LiveApprovalTimeoutSeconds(); got != 7200 {
+		t.Errorf("approval_timeout: got %d want 7200", got)
+	}
 
 	checks := []struct {
 		name string

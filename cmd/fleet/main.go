@@ -52,6 +52,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/datasets"
+	"github.com/ElcanoTek/fleet/internal/diskguard"
 	"github.com/ElcanoTek/fleet/internal/guardrail"
 	"github.com/ElcanoTek/fleet/internal/httpapi"
 	"github.com/ElcanoTek/fleet/internal/logging"
@@ -81,6 +82,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/tools"
 	"github.com/ElcanoTek/fleet/internal/version"
 	"github.com/ElcanoTek/fleet/internal/webpush"
+	"github.com/ElcanoTek/fleet/internal/worktree"
 )
 
 // approvalExpirySweepInterval is how often the background sweep auto-denies
@@ -88,11 +90,21 @@ import (
 // approval card's expectation that a stale request closes within a minute.
 const approvalExpirySweepInterval = 30 * time.Second
 
-// diskSweepInterval is how often the background disk sweep reclaims expired
-// chat attachment uploads and orchestrator temp_uploads files. Hourly is
-// plenty: the TTLs are measured in days, the sweep exists so an idle server
-// (no chat turns, which used to be the only trigger) still frees disk.
-const diskSweepInterval = time.Hour
+// maintenanceInterval is how often the background maintenance loop runs the
+// box's reclamation pass — the chat plane's database retention sweeps plus the
+// attachment, temp-upload, workspace and git-worktree reclaimers. Hourly is
+// plenty: every TTL involved is measured in days, and the loop exists so an
+// idle server (no chat turns, which used to be the only trigger for most of
+// this) still frees disk and database rows.
+const maintenanceInterval = httpapi.DefaultMaintenanceInterval
+
+// maintenancePassTimeout bounds ONE maintenance iteration. The pass walks
+// filesystem trees and runs host git, either of which can be slow on a large,
+// slow-storage box; without a ceiling one pathological iteration would wedge
+// the loop and silently stop every later one. Generously longer than a healthy
+// pass, which is seconds. An overrun aborts the remaining steps and the next
+// tick retries them.
+const maintenancePassTimeout = 15 * time.Minute
 
 func main() {
 	// `fleet` is the ONE unified binary (#461). It dispatches three families:
@@ -563,11 +575,20 @@ func run() error {
 	}
 	defer mgr.Close()
 
+	// Host disk headroom guard: measures the filesystem holding the data dir and
+	// decides whether the box should shed BACKGROUND load. One guard, three
+	// consumers — the Prometheus gauges, /healthz + the admin health summary,
+	// and the scheduler's claim gate — so what is charted, what is reported and
+	// what is enforced can never disagree.
+	diskGuard := diskguard.New(cfg.DataDir, cfg.DiskMinFreePercent)
+	logDiskGuard(diskGuard, cfg)
+
 	// Health summary (#301): uptime + an injected scheduler worker/task provider
 	// (adapts the sched store's dashboard stats) so the chat-side endpoint can
 	// report a single-pane view without httpapi importing the sched packages.
 	chatOpts := []httpapi.Option{
 		httpapi.WithClientConfig(bundle),
+		httpapi.WithDiskGuard(diskGuard),
 		httpapi.WithStartTime(startTime),
 		httpapi.WithVersion(version.String()),
 		httpapi.WithWorkerStats(workerStatsProvider(schedStorage)),
@@ -860,6 +881,11 @@ func run() error {
 		ErrorAnalyzer: errorAnalyzerFor(cfg, mgr),
 		// Email reply-back (#511): nil unless SMTP is configured for sending.
 		EmailReplier: emailReplierFor(taskNotifier),
+		// Disk backpressure: stop CLAIMING scheduled work while the data dir's
+		// filesystem is below the free-space floor. Running tasks are untouched
+		// and interactive chat is never gated — a full disk is usually made by
+		// unattended runs, and chat is how an operator fixes it.
+		AdmitScheduled: diskAdmissionGate(diskGuard),
 	})
 	log.Printf("worker pool: scheduled cap=%d (shared box-wide limiter)", pool.Cap())
 
@@ -893,7 +919,7 @@ func run() error {
 	// Metrics gauges (#176): live in-flight turn counts + warm sandbox depth,
 	// evaluated at each /metrics scrape. Extracted to keep run() within the
 	// cyclomatic budget.
-	registerRuntimeMetrics(chatSrv.ActiveTurns, pool.ActiveTasks, mgr.SandboxPool())
+	registerRuntimeMetrics(chatSrv.ActiveTurns, pool.ActiveTasks, mgr.SandboxPool(), diskGuard)
 
 	// ── boot listeners ──
 	// Last-resort fallback only — config.Load already defaults Addr to
@@ -905,7 +931,7 @@ func run() error {
 	// Liveness + readiness probes (#215) on BOTH ports, sharing one check set
 	// and one drain signal (chatSrv.BeginShutdown is the single graceful-drain
 	// trigger, so both ports report not_ready while draining).
-	readinessChecks := buildReadinessChecks(cfg, chatStore, schedStorage.DB())
+	readinessChecks := buildReadinessChecks(cfg, chatStore, schedStorage.DB(), diskGuard)
 	// apiversion.Router (#321) makes both servers reachable under a /v1 prefix
 	// (X-Fleet-API-Version on those responses) while the legacy bare paths keep
 	// working with a Deprecation signal. It wraps INSIDE the health-probe layer so
@@ -1001,7 +1027,10 @@ func run() error {
 			}
 		}
 	}()
-	startDiskSweep(ctx, cfg, h)
+	// One maintenance loop drives every periodic reclaimer on the box (chat
+	// retention sweeps, attachment + temp-upload files, orphan workspaces,
+	// stale git worktrees). See startMaintenanceLoop.
+	startMaintenanceLoop(ctx, cfg, h, chatSrv, chatStore)
 
 	// Listeners are bound; tell a systemd-aware supervisor we are ready (no-op
 	// when NOTIFY_SOCKET is unset, i.e. non-systemd / dev / tests).
@@ -1953,14 +1982,69 @@ func resolveSandboxRuntimeInto(cfg *config.Config, bundle *clientconfig.Bundle) 
 }
 
 // registerRuntimeMetrics wires the pull-at-scrape gauges (#176): in-flight turn
-// counts (interactive/scheduled) and warm sandbox depth. Extracted from run() to
-// keep it within the cyclomatic budget.
-func registerRuntimeMetrics(activeTurns, activeTasks func() int, sandboxPool *sandbox.Pool) {
+// counts (interactive/scheduled), warm sandbox depth, host disk headroom, and
+// the Go runtime's goroutine/heap counters. Extracted from run() to keep it
+// within the cyclomatic budget.
+func registerRuntimeMetrics(activeTurns, activeTasks func() int, sandboxPool *sandbox.Pool, guard *diskguard.Guard) {
 	metrics.RegisterActiveAgents(activeTurns, activeTasks)
 	if sandboxPool != nil {
 		// Parked-and-ready containers (operationally interesting "how warm now"),
 		// not the configured target size.
 		metrics.RegisterSandboxPoolSize(func() int { _, avail := sandboxPool.Stats(); return avail })
+	}
+	// Disk headroom + the shed decision derived from it. The guard caches its
+	// statfs, so a scrape does not mean a syscall.
+	metrics.RegisterDiskGauges(func() metrics.DiskSample {
+		st := guard.Status()
+		return metrics.DiskSample{
+			Available:  st.Available,
+			TotalBytes: st.TotalBytes,
+			FreeBytes:  st.FreeBytes,
+			Shedding:   st.Shedding,
+		}
+	})
+	// Goroutines + heap. Previously visible only as a point-in-time number in
+	// the admin health JSON, where the shape that actually matters — a count
+	// climbing steadily across a day — is invisible.
+	metrics.RegisterRuntimeGauges()
+}
+
+// diskAdmissionGate adapts the disk guard to the runner's AdmitScheduled seam.
+// Returns nil when the guard is disabled so the claim path keeps its original
+// zero-overhead shape on a box that has opted out.
+func diskAdmissionGate(guard *diskguard.Guard) func() (bool, string) {
+	if !guard.Enabled() {
+		return nil
+	}
+	return func() (bool, string) {
+		st := guard.Status()
+		if !st.Shedding {
+			return true, ""
+		}
+		return false, fmt.Sprintf("%s (%.1f%% free on %s, floor %d%%)",
+			st.Reason(), st.FreePercent, st.Path, st.MinFreePercent)
+	}
+}
+
+// logDiskGuard states the disk-backpressure posture at boot, and warns straight
+// away if the box is ALREADY below the floor — an operator restarting a wedged
+// box needs to know that before wondering why nothing is being claimed.
+func logDiskGuard(guard *diskguard.Guard, cfg *config.Config) {
+	if !guard.Enabled() {
+		log.Printf("disk backpressure: OFF (FLEET_DISK_MIN_FREE_PERCENT=0)")
+		return
+	}
+	st := guard.Sample()
+	//nolint:gosec // G706: an operator-configured path and integers — no request input.
+	log.Printf("disk backpressure: ON (floor %d%% free on %s; scheduled work pauses below it, chat is never gated)",
+		cfg.DiskMinFreePercent, cfg.DataDir)
+	switch {
+	case !st.Available:
+		//nolint:gosec // G706: the statfs error text and an operator-configured path.
+		log.Printf("⚠ disk backpressure: cannot measure %s (%s) — failing OPEN, scheduled work will not be held back", cfg.DataDir, st.Err)
+	case st.Shedding:
+		//nolint:gosec // G706: numbers and an operator-configured path.
+		log.Printf("⚠ disk backpressure: only %.1f%% free on %s at boot — scheduled tasks are held back until space is reclaimed", st.FreePercent, cfg.DataDir)
 	}
 }
 
@@ -2468,19 +2552,12 @@ func setupRemoteMCP(cfg *config.Config, chatStore *store.Store) *remotemcp.Servi
 		PublicBaseURL:     cfg.PublicBaseURL,
 		AllowInsecureHTTP: cfg.RemoteMCPAllowInsecureHTTP,
 	})
-	// Sweep abandoned OAuth flow rows hourly (single-use + expiry already guard
-	// correctness; this just reclaims rows). A process-lifetime daemon.
-	safe.Go("remote-mcp.flow-sweep", func() {
-		ticker := time.NewTicker(time.Hour)
-		defer ticker.Stop()
-		for range ticker.C {
-			swCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			if _, err := chatStore.SweepExpiredOAuthFlows(swCtx); err != nil {
-				log.Printf("remote-mcp: oauth flow sweep: %v", err)
-			}
-			cancel()
-		}
-	})
+	// Abandoned OAuth flow rows are reclaimed by the maintenance loop (see
+	// runMaintenancePass), not by a daemon of their own. This used to be a
+	// `for range ticker.C` goroutine with a context.Background() per sweep —
+	// unreachable by the shutdown context, so it outlived the drain and could
+	// touch a closing store. Folding it into the one loop that already runs
+	// hourly fixed that and removed a redundant ticker.
 	//nolint:gosec // G706: PublicBaseURL is operator-set config (env var), not request input — it can't forge a log line.
 	log.Printf("remote MCP OAuth: ENABLED (per-user hosted servers; redirect %s/api/oauth/mcp/callback)", cfg.PublicBaseURL)
 	return svc
@@ -2497,32 +2574,112 @@ func productionRemoteMCPOverlayOpener(svc *remotemcp.Service, runtime *productio
 // into the orchestrator handlers when the feature is on. A nil service (feature
 // disabled) is a no-op, so the bundle catalog is served unchanged. Kept separate
 // from run() so the nil-guard branch stays out of run()'s cyclomatic budget.
-// startDiskSweep reclaims expired chat attachment uploads and orchestrator
-// temp_uploads files on a timer. SweepAttachments otherwise only runs when
-// a chat turn completes, and CleanupTempFiles previously had no caller at
-// all — an idle server never freed upload disk. Bound to ctx so it stops
-// on shutdown; a panic is contained so the sweep can't crash the process.
-func startDiskSweep(ctx context.Context, cfg *config.Config, h *handlers.Handlers) {
-	go func() {
-		defer safe.Recover("cmd.disk-sweep", nil)
-		ticker := time.NewTicker(diskSweepInterval)
+// startMaintenanceLoop is the box's single reclamation driver: on a timer it
+// runs the chat plane's full pass (database retention sweeps + attachment files
+// + orphaned per-conversation workspaces), the orchestrator's temp-upload
+// cleanup, and the git-worktree reclaimer.
+//
+// The loop exists because ALL of that used to be a side effect of chat traffic.
+// The database sweeps and the workspace sweep ran only at the tail of a
+// completed chat turn, so a scheduler-only box — or any box whose chat went
+// quiet — grew its turn ledgers, expired conversations, terminal input-queue
+// rows and orphan workspace dirs without bound, while a busy box ran the same
+// global sweeps once per turn. The worktree reclaimer had no automatic caller
+// at all: it was reachable only by an operator typing `fleet worktree prune`.
+// Now the timer is the guarantee and the post-turn path (rate-gated, see
+// internal/httpapi/maintenance.go) is the promptness optimization on top.
+//
+// chatSrv may be nil in configurations that run no chat plane; the loop then
+// still drives the orchestrator-side reclaimers. Bound to ctx so it stops on
+// shutdown; a panic is contained so maintenance can't crash the process.
+func startMaintenanceLoop(ctx context.Context, cfg *config.Config, h *handlers.Handlers, chatSrv *httpapi.Server, chatStore *store.Store) {
+	safe.Go("cmd.maintenance-loop", func() {
+		ticker := time.NewTicker(maintenanceInterval)
 		defer ticker.Stop()
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				ttl := time.Duration(cfg.ConversationTTL) * 24 * time.Hour
-				if n, err := store.SweepAttachments(cfg.EmailAttachmentDir, ttl); err != nil {
-					log.Printf("disk sweep: attachments: %v", err)
-				} else if n > 0 {
-					//nolint:gosec // G706: only an integer count is formatted (%d).
-					log.Printf("disk sweep: removed %d expired attachment file(s)", n)
-				}
-				h.CleanupTempFiles(ttl)
+				runMaintenancePass(ctx, cfg, h, chatSrv, chatStore)
 			}
 		}
-	}()
+	})
+}
+
+// pruneStaleWorktrees reclaims per-run git worktrees that no run will clean up:
+// a process crash between `git worktree add` and its deferred removal, a task
+// with auto_cleanup off, or a `git worktree remove` that failed. Each is a full
+// checkout of the workspace repository, so on a box that uses worktree
+// isolation this is usually the largest single reclaimer in the pass.
+//
+// Disabled by FLEET_WORKTREE_PRUNE_AGE=0. The sweep is a no-op (not an error)
+// on the majority of boxes, which never enable worktree isolation and so have
+// no .fleet-worktrees directory at all.
+func pruneStaleWorktrees(ctx context.Context, cfg *config.Config) {
+	if cfg.WorktreePruneAge <= 0 {
+		return
+	}
+	root := worktree.ResolveWorkspaceRoot(cfg.WorkspaceRoot)
+	res, err := worktree.PruneStale(ctx, root, cfg.WorktreePruneAge, false)
+	for _, w := range res.Warnings {
+		log.Printf("maintenance: worktree prune: %s", w)
+	}
+	if err != nil {
+		log.Printf("maintenance: worktree prune: %v", err)
+		return
+	}
+	if n := res.Count(); n > 0 {
+		//nolint:gosec // G706: an integer count and a Go duration — no request input.
+		log.Printf("maintenance: reclaimed %d stale worktree dir(s) older than %s", n, cfg.WorktreePruneAge)
+	}
+}
+
+// runMaintenancePass is one iteration of the maintenance loop, factored out so
+// it is directly testable and so each step's failure is visibly independent of
+// the others. Every step is best-effort: one erroring must never skip the rest.
+func runMaintenancePass(ctx context.Context, cfg *config.Config, h *handlers.Handlers, chatSrv *httpapi.Server, chatStore *store.Store) {
+	// The whole pass is bounded so a pathological filesystem (a huge attachment
+	// tree on slow storage) cannot wedge the loop and silently stop every later
+	// iteration. Exceeding it aborts the remaining steps, which the next tick
+	// retries.
+	passCtx, cancel := context.WithTimeout(ctx, maintenancePassTimeout)
+	defer cancel()
+
+	ttl := time.Duration(cfg.ConversationTTL) * 24 * time.Hour
+
+	if chatSrv != nil {
+		chatSrv.RunMaintenance(passCtx)
+		// Tell the post-turn gate this pass happened so the two drivers don't
+		// each keep their own idea of "recently swept" and double the work.
+		chatSrv.NoteMaintenanceRun(time.Now())
+	} else if n, err := store.SweepAttachments(cfg.EmailAttachmentDir, ttl); err != nil {
+		// No chat plane to run the full pass: the attachment tree is still
+		// shared with the orchestrator upload path, so sweep it directly.
+		log.Printf("maintenance: attachments: %v", err)
+	} else if n > 0 {
+		//nolint:gosec // G706: only an integer count is formatted (%d).
+		log.Printf("maintenance: removed %d expired attachment file(s)", n)
+	}
+
+	// Orchestrator temp_uploads — the sched plane's own upload staging area,
+	// which the chat plane's sweeps do not cover.
+	h.CleanupTempFiles(ttl)
+
+	// Abandoned per-user remote-MCP OAuth flow rows. Correctness is already
+	// guaranteed by their single-use + expiry checks; this only reclaims the
+	// rows so the table does not grow forever on a box with many connectors.
+	if chatStore != nil {
+		if _, err := chatStore.SweepExpiredOAuthFlows(passCtx); err != nil {
+			log.Printf("maintenance: remote-mcp oauth flow sweep: %v", err)
+		}
+	}
+
+	// Git worktrees orphaned by a crash, by a task with auto_cleanup off, or by
+	// a `git worktree remove` that failed after the run. The age bound is
+	// generous on purpose: a worktree younger than it may belong to a task
+	// still running.
+	pruneStaleWorktrees(passCtx, cfg)
 }
 
 func wireRemoteMCPCatalog(h *handlers.Handlers, svc *remotemcp.Service) {

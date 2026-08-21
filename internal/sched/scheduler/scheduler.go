@@ -22,6 +22,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/metrics"
 	"github.com/ElcanoTek/fleet/internal/safe"
+	"github.com/ElcanoTek/fleet/internal/sched/db"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
 )
@@ -305,6 +306,11 @@ func (s *Scheduler) runLoop() {
 				s.runStarvationPromotion()
 				s.runPausedExpiry()
 				s.runWakeSweep()
+				// AFTER the wake sweep, deliberately: a row that is merely due
+				// gets woken on this same tick and is therefore never a
+				// candidate here. Only rows the wake sweep could not reach
+				// survive to be expired.
+				s.runStrandedWakeExpiry()
 				s.runRecurrenceReconciliation()
 				s.ProcessScheduledTasks()
 			}()
@@ -356,6 +362,23 @@ func (s *Scheduler) runPausedExpiry() {
 	}
 	if n > 0 {
 		log.Printf("scheduler: expired %d paused task(s) awaiting input > %dm", n, s.pausedExpiryMin)
+	}
+}
+
+// runStrandedWakeExpiry fails tasks parked in paused_awaiting_wake that no wake
+// can ever reach. Unlike runPausedExpiry this has NO disable knob and is always
+// on: an unreachable parked row is a broken row, not an operator policy choice,
+// and the alternative is a task that waits forever with no terminal record.
+// Logs only when it expires something; a failure is logged but never fatal —
+// the next tick retries.
+func (s *Scheduler) runStrandedWakeExpiry() {
+	n, err := s.storage.ExpireStrandedWakeTasks(context.Background(), db.StrandedWakeGrace)
+	if err != nil {
+		log.Printf("scheduler: stranded-wake expiry failed: %v", err)
+		return
+	}
+	if n > 0 {
+		log.Printf("scheduler: expired %d task(s) parked awaiting a wake that can no longer arrive (> %s past the deadline)", n, db.StrandedWakeGrace)
 	}
 }
 

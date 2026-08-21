@@ -42,6 +42,17 @@
 #   #                                             # Operations Center admins at boot, so they reach it
 #   #                                             # seamlessly via the chat session cookie (#458)
 #   # FLEET_TIMEZONE=UTC / FLEET_DATA_DIR=/var/lib/fleet
+#   # Reclamation + disk backpressure (docs/MAINTENANCE.md). All have working
+#   # defaults; set them only to change the posture:
+#   # FLEET_DISK_MIN_FREE_PERCENT=5     # below this much free space on the data
+#   #                                   # dir, SCHEDULED tasks stop being claimed
+#   #                                   # and /healthz reports degraded. Chat is
+#   #                                   # never gated. 0 disables the check.
+#   # FLEET_WORKTREE_PRUNE_AGE=24h      # reclaim orphaned per-run git worktrees
+#   #                                   # older than this. 0 disables.
+#   # FLEET_MAINTENANCE_MIN_INTERVAL=5m # rate limit for the OPPORTUNISTIC
+#   #                                   # post-turn sweep. The hourly maintenance
+#   #                                   # loop is unaffected. 0 = sweep every turn.
 #   # FLEET_SHUTDOWN_GRACE_SECONDS=30            # drain budget on SIGTERM (keep < TimeoutStopSec)
 #   # Process log file sink (#298) — OPT-IN, default OFF. Under this unit the
 #   # process log goes to stderr → journald, which already rotates it, so leave
@@ -92,6 +103,16 @@ After=network-online.target postgresql.service
 Wants=network-online.target postgresql.service
 
 [Service]
+# GOMEMLIMIT is a soft ceiling that makes the Go GC work harder as the heap
+# approaches it, rather than a hard cap — so it turns "the OOM killer takes the
+# whole process, and every user's in-flight turn with it" into "GC runs more
+# often". Worth setting on a box where fleet shares RAM with Postgres and the
+# sandbox containers, which is every single-box deployment. Leave headroom: the
+# sandbox containers' memory is NOT part of this process's heap, so size it
+# against fleet's share, not total RAM. Commented out because the right value is
+# box-specific and a wrong one causes constant GC.
+# Environment=GOMEMLIMIT=2GiB
+#
 # Type=notify: fleet emits sd_notify READY=1 once both listeners are bound (so
 # systemd — and anything ordered After=fleet — only sees it "started" when it can
 # actually serve) and READY=0/STOPPING=1 when it begins draining on SIGTERM. The

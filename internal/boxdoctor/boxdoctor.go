@@ -30,10 +30,11 @@ import (
 	"os/exec"
 	"os/user"
 	"strings"
-	"syscall"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
+
+	"github.com/ElcanoTek/fleet/internal/diskguard"
 )
 
 // Status is a check verdict. warn does not fail the box; fail does; skip
@@ -216,29 +217,26 @@ func checkDisk(name, path string) Check {
 		c.Status, c.Detail = StatusSkip, "path unresolved"
 		return c
 	}
-	var st syscall.Statfs_t
-	if err := syscall.Statfs(path, &st); err != nil {
+	// One statfs implementation for the whole process (internal/diskguard):
+	// this check, the Prometheus gauges, the admin storage panel and the
+	// backpressure decision all measure the same way, so a box can never be
+	// "95% used" here and "fine" there.
+	total, avail, err := diskguard.Usage(path)
+	if err != nil {
 		c.Status, c.Detail = StatusSkip, fmt.Sprintf("statfs %s: %v", path, err)
 		return c
 	}
-	if st.Bsize <= 0 {
-		c.Status, c.Detail = StatusSkip, "statfs reported a non-positive block size"
-		return c
-	}
-	bsize := uint64(st.Bsize)
-	total := st.Blocks * bsize
 	if total == 0 {
 		c.Status, c.Detail = StatusSkip, "statfs reported zero size"
 		return c
 	}
-	avail := st.Bavail * bsize
 	usedPct := 100 - float64(avail)*100/float64(total)
 	detail := fmt.Sprintf("%s: %.1f%% used, %s free", path, usedPct, humanBytes(avail))
 	switch {
 	case usedPct >= 95:
-		c.Status, c.Detail, c.Fix = StatusFail, detail, "run on the box: sudo fleet cleanup (reclaims dangling podman layers + build caches)"
+		c.Status, c.Detail, c.Fix = StatusFail, detail, "run on the box: sudo fleet cleanup (reclaims dangling podman layers + build caches); check `systemctl status fleet-maintenance.timer` — the hourly in-process sweep and this daily timer should be keeping ahead of this"
 	case usedPct >= 85:
-		c.Status, c.Detail, c.Fix = StatusWarn, detail, "consider: sudo fleet cleanup"
+		c.Status, c.Detail, c.Fix = StatusWarn, detail, "consider: sudo fleet cleanup (and confirm fleet-maintenance.timer is enabled)"
 	default:
 		c.Status, c.Detail = StatusOK, detail
 	}

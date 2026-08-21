@@ -33,6 +33,7 @@
 #   scripts/bootstrap.sh --client-config <git-url[#<sha-or-tag>]|path>   # check out / point at a client bundle
 #   scripts/bootstrap.sh --enable-service            # systemctl enable --now fleet at the end
 #   scripts/bootstrap.sh --enable-service --no-backup-timer  # ...without the daily database-backup timer
+#   scripts/bootstrap.sh --enable-service --no-maintenance-timer  # ...without the daily host-maintenance timer
 #   scripts/bootstrap.sh --enable-web [--domain fleet.example.com]  # build + serve the web tier (TLS via Caddy with --domain)
 #
 # Explicit flags always win — each prompt is asked only when its flag was not
@@ -42,8 +43,8 @@
 # in place (--client-config) → build the sandbox image from the bundle → provision
 # both chat+sched roles/databases (local) or validate DSNs (external) → write the
 # resolved DSNs + FLEET_CLIENT_CONFIG_DIR into the env file → optionally enable +
-# start the systemd unit → install + enable the daily database-backup timer
-# (--no-backup-timer opts out).
+# start the systemd unit → install + enable the daily database-backup and
+# host-maintenance timers (--no-backup-timer / --no-maintenance-timer opt out).
 #
 # Branch A (local):  install + init a local cluster, create the two owner roles
 #                    and two databases idempotently via psql \gexec, sslmode=disable.
@@ -94,6 +95,11 @@
 #                              export → import (docs/LEGACY-IMPORT.md).
 #   --adopt-existing-sched-db  same, for the sched database
 #                              (FLEET_SCHED_DATABASE_URL).
+#   --no-maintenance-timer     do NOT install/enable the daily host-maintenance
+#                              timer (deploy/fleet-maintenance.service + .timer),
+#                              which prunes dangling podman image layers and the
+#                              Go build caches. The fleet process's own hourly
+#                              in-process sweep runs regardless.
 #   --no-backup-timer          do NOT install/enable the daily database-backup
 #                              timer (deploy/fleet-backup.service + .timer) on an
 #                              --enable-service run. It is installed by default
@@ -172,6 +178,10 @@ ADOPT_SCHED_DB=0
 # --no-backup-timer is the opt-out for boxes backed up at the volume/hypervisor
 # layer or by the operator's own tooling.
 ENABLE_BACKUP_TIMER=1
+# --no-maintenance-timer is the opt-out for boxes that prune their container
+# store some other way. Default ON: a box nobody told about maintenance is
+# exactly the box that fills its disk with stale sandbox image layers.
+ENABLE_MAINTENANCE_TIMER=1
 FORCE_CADDY=0
 CHAT_DB_NAME_ARG=""
 CHAT_DB_USER_ARG=""
@@ -204,6 +214,7 @@ while [[ $# -gt 0 ]]; do
     --adopt-existing-chat-db)  ADOPT_CHAT_DB=1 ;;
     --adopt-existing-sched-db) ADOPT_SCHED_DB=1 ;;
     --no-backup-timer)   ENABLE_BACKUP_TIMER=0 ;;
+    --no-maintenance-timer) ENABLE_MAINTENANCE_TIMER=0 ;;
     --force-caddy)       FORCE_CADDY=1 ;;
     --dry-run)           DRY_RUN=1 ;;
     -h|--help)
@@ -1371,6 +1382,39 @@ if [[ "$ENABLE_SERVICE" == "1" && "$ENABLE_BACKUP_TIMER" == "1" ]]; then
   fi
 elif [[ "$ENABLE_SERVICE" == "1" ]]; then
   info "--no-backup-timer: no scheduled backup on this box. Back up at the volume/hypervisor layer, or schedule 'fleet backup --db=all --prune' yourself (docs/BACKUP_RESTORE.md). 'fleet doctor' will keep advising that no timer is installed."
+fi
+
+# ── host maintenance (systemd timer; --no-maintenance-timer opts out) ────────
+# The fleet process reclaims its own data (chat retention, attachments,
+# workspaces, worktrees) on an hourly in-process loop. The ONE thing that loop
+# deliberately leaves alone is podman's image store: every sandbox rebuild
+# strands the previous ~1.3 GB image's layers, and a whole-store prune belongs
+# to an operator-scheduled window, not to a goroutine inside the serving
+# process. Same install discipline as the backup timer above — version-
+# controlled units in deploy/, idempotent install, doctor owns drift.
+if [[ "$ENABLE_SERVICE" == "1" && "$ENABLE_MAINTENANCE_TIMER" == "1" ]]; then
+  step "Host maintenance (daily fleet-maintenance.timer → podman layer + build cache prune)"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    info "[dry-run] would install deploy/fleet-maintenance.service + deploy/fleet-maintenance.timer → /etc/systemd/system"
+    info "[dry-run] would run: systemctl enable --now fleet-maintenance.timer (daily 03:30; --no-maintenance-timer opts out)"
+  elif ! command -v systemctl >/dev/null 2>&1; then
+    warn "systemctl not found — skipping the maintenance timer (schedule 'fleet cleanup' with cron instead)."
+  else
+    for unit in fleet-maintenance.service fleet-maintenance.timer; do
+      if [[ -f "$REPO_ROOT/deploy/$unit" ]] && ! systemctl cat "$unit" >/dev/null 2>&1; then
+        install -D -m 0644 "$REPO_ROOT/deploy/$unit" "/etc/systemd/system/$unit"
+        info "installed /etc/systemd/system/$unit"
+      fi
+    done
+    systemctl daemon-reload || warn "systemctl daemon-reload failed"
+    if systemctl enable --now fleet-maintenance.timer >/dev/null 2>&1; then
+      ok "fleet-maintenance.timer enabled (daily 03:30 — prunes dangling podman layers + Go build caches)"
+    else
+      warn "could not enable fleet-maintenance.timer — check: systemctl status fleet-maintenance.timer"
+    fi
+  fi
+elif [[ "$ENABLE_SERVICE" == "1" ]]; then
+  info "--no-maintenance-timer: no scheduled host maintenance on this box. Stale sandbox image layers will accumulate — run 'sudo fleet cleanup' periodically (docs/MAINTENANCE.md). The process's own hourly data sweep still runs."
 fi
 
 # ── web tier + Caddy TLS (opt-in via --enable-web / --domain) ──

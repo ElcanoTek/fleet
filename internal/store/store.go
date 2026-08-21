@@ -1611,6 +1611,55 @@ func (s *Store) ListPendingApprovals(ctx context.Context, userEmail, convID stri
 	return out, rows.Err()
 }
 
+// MaxResolvedApprovalsPerConversation caps how many resolved approvals the
+// conversation GET re-hydrates as transcript cards. Approvals are one row per
+// human-gated action, so a conversation rarely accumulates more than a
+// handful; the cap only bounds a pathological chat's payload. Newest-first is
+// applied in SQL so the cap keeps the RECENT cards, then callers re-sort.
+const MaxResolvedApprovalsPerConversation = 100
+
+// ListResolvedApprovals returns the most recent non-pending approvals for a
+// conversation, oldest first (capped at MaxResolvedApprovalsPerConversation).
+// Used on page reload so resolved approval cards — the "Email sent ✓" outcome,
+// a notify-mode "ran without asking" record and its undo hint, a timed-out
+// card — survive a reload instead of the transcript silently changing shape
+// the first time the user leaves and comes back (#1153's record contract).
+func (s *Store) ListResolvedApprovals(ctx context.Context, userEmail, convID string) ([]Approval, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, conversation_id, user_email, tool_name, args_json, status,
+		        COALESCE(result_text, ''), created_at, COALESCE(resolved_at, 0),
+		        COALESCE(tool_call_id, ''), COALESCE(expires_at, 0),
+		        COALESCE(mcp_server, ''), COALESCE(mcp_account, '')
+		 FROM approvals
+		 WHERE conversation_id = $1 AND user_email = $2 AND status <> 'pending'
+		 ORDER BY created_at DESC
+		 LIMIT $3`,
+		convID, userEmail, MaxResolvedApprovalsPerConversation,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Approval
+	for rows.Next() {
+		var a Approval
+		if err := rows.Scan(&a.ID, &a.ConversationID, &a.UserEmail, &a.ToolName,
+			&a.ArgsJSON, &a.Status, &a.ResultText, &a.CreatedAt, &a.ResolvedAt, &a.ToolCallID, &a.ExpiresAt,
+			&a.MCPServer, &a.MCPAccount); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// Oldest first for display, matching ListPendingApprovals.
+	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+		out[i], out[j] = out[j], out[i]
+	}
+	return out, nil
+}
+
 // CreateApproval stages a pending approval and returns the row.
 // toolCallID is the agent-assigned id of the tool_call event being
 // staged; empty is allowed (older code paths) but populating it lets

@@ -193,9 +193,17 @@ func (p *Pool) ReleaseChatSession(convID string) {
 
 // evictOverCapLocked enforces PersistentMaxSessions by closing the
 // least-recently-used IDLE entries until back under the cap. Called under
-// persistentMu with the just-created entry passed as protect so it is never the
-// one evicted. The slow Close runs in a goroutine so we don't hold the lock
-// across a podman teardown.
+// persistentMu from two places: the create path, which passes the just-created
+// entry as protect so it is never the one evicted, and the idle reaper, which
+// passes nil (nothing to spare) so an overshoot the create path could not
+// resolve — because every other entry was mid-turn — is corrected on a later
+// tick. The slow Close runs in a goroutine so we don't hold the lock across a
+// podman teardown.
+//
+// Still a SOFT cap by design: an entry with a turn in flight is never evicted,
+// because pulling a sandbox out from under a running turn would destroy work.
+// The live count can therefore exceed the limit while those turns run — it just
+// no longer stays over it afterwards.
 func (p *Pool) evictOverCapLocked(protect *persistentEntry) {
 	limit := p.cfg.PersistentMaxSessions
 	if limit <= 0 || len(p.persistent) <= limit {
@@ -243,26 +251,40 @@ func (p *Pool) persistentKeeper(done chan struct{}) {
 	}
 }
 
-// reapIdlePersistent closes persistent sandboxes idle past PersistentIdleTTL.
+// reapIdlePersistent closes persistent sandboxes idle past PersistentIdleTTL,
+// then enforces PersistentMaxSessions.
+//
 // The recheck (inUse==0 && idle>ttl) and the map removal happen together under
 // the lock; the Close happens AFTER removal and outside the lock. That ordering
 // is what guarantees a TakePersistent racing the reaper can never be handed a
 // sandbox that is mid-Close — it either finds the entry (and the reaper skips
 // it because inUse>0) or doesn't (and creates a fresh one).
+//
+// The cap pass matters because eviction used to run on the CREATE path only,
+// and it skips entries with a turn in flight. A burst that overshot the cap
+// therefore stayed overshot — every entry busy at create time was skipped, and
+// nothing revisited the decision — for as long as it took the idle TTL to
+// expire or another create to arrive. Since the cap is what bounds the box's
+// container memory (PersistentMaxSessions x the per-container --memory limit),
+// "eventually, if someone starts another conversation" is not a bound. Running
+// it here means an overshoot self-corrects on the next tick, once the turns
+// that caused it finish.
 func (p *Pool) reapIdlePersistent() {
 	ttl := p.cfg.PersistentIdleTTL
-	if ttl <= 0 {
-		return
-	}
 	now := p.now()
 	var toClose []*Sandbox
 	p.persistentMu.Lock()
-	for k, e := range p.persistent {
-		if e.inUse == 0 && !e.closeRequested && now.Sub(e.lastUsed) > ttl {
-			delete(p.persistent, k)
-			toClose = append(toClose, e.sb)
+	if ttl > 0 {
+		for k, e := range p.persistent {
+			if e.inUse == 0 && !e.closeRequested && now.Sub(e.lastUsed) > ttl {
+				delete(p.persistent, k)
+				toClose = append(toClose, e.sb)
+			}
 		}
 	}
+	// protect=nil: unlike the create path there is no just-created entry to
+	// spare, so every idle entry is a candidate.
+	p.evictOverCapLocked(nil)
 	p.persistentMu.Unlock()
 	for _, sb := range toClose {
 		sb.Close()

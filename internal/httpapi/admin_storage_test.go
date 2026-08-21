@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -20,7 +21,7 @@ func TestDuTree_SumsRegularFilesRecursively(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got := duTree(dir)
+	got := duTree(context.Background(), dir)
 	if got.Bytes != 150 {
 		t.Errorf("Bytes = %d, want 150", got.Bytes)
 	}
@@ -30,7 +31,7 @@ func TestDuTree_SumsRegularFilesRecursively(t *testing.T) {
 }
 
 func TestDuTree_MissingDirIsZeroNotError(t *testing.T) {
-	got := duTree(filepath.Join(t.TempDir(), "does-not-exist"))
+	got := duTree(context.Background(), filepath.Join(t.TempDir(), "does-not-exist"))
 	if got.Bytes != 0 || got.Files != 0 {
 		t.Errorf("missing dir should account as empty, got %+v", got)
 	}

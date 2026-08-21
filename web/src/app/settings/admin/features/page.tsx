@@ -125,6 +125,12 @@ const META: Record<string, SettingMeta> = {
       "Cap any single tool result before it enters the context window. Oversized structured output stays valid and points to governed workspace recovery when available; binary is never inlined.",
     unitHint: "bytes — 0 uses 64 KiB; hard max 128 KiB",
   },
+  approval_timeout_seconds: {
+    label: "Approval timeout",
+    description:
+      "How long a pending approval card (send email, risky bash, scheduled-task changes, bundle-declared critical tools) waits for a human before it is auto-denied. The card shows a live countdown; a card that times out is safely denied and the agent is told the action was not taken. Set it once for the workspace — a per-conversation override and per-tool bundle windows still win when set. Email previews never expire (there is nothing to deny).",
+    unitHint: "seconds — 60 to 86400 (24h); default 3600 (1h)",
+  },
   phone_a_friend_enabled: {
     label: "Phone-a-friend review",
     description:
@@ -182,6 +188,7 @@ const GROUPS: { title: string; keys: string[] }[] = [
     keys: [
       "tool_disclosure_threshold",
       "max_tool_output_bytes",
+      "approval_timeout_seconds",
       "phone_a_friend_enabled",
       "subagents_enabled",
     ],

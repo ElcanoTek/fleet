@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -603,6 +604,7 @@ func buildSandboxPool(cfg *config.Config, personasDir, protocolsDir, systemPromp
 	if poolCfg.PersistentREPL {
 		log.Printf("sandbox: run_python REPL mode=persistent — one kernel per conversation survives across turns (idle TTL %s, max %d sessions)",
 			poolCfg.PersistentIdleTTL, cfg.PythonREPLMaxSessions)
+		warnPersistentMemoryBudget(poolCfg.PersistentMaxSessions, poolCfg.Container.MemoryLimit)
 	} else {
 		log.Printf("sandbox: run_python REPL mode=per-turn — kernel is fresh each turn (the default)")
 	}
@@ -1496,3 +1498,67 @@ const mcpScopeCloseTimeout = 5 * time.Second
 // surfaces its message as a turn.error so the user sees a clean "try again in a
 // moment" rather than a hung spinner. The user-facing text is the error itself.
 var ErrAtCapacity = fmt.Errorf("the workspace is at capacity right now — please resend your message in a moment")
+
+// warnPersistentMemoryBudget flags a persistent-REPL configuration whose worst
+// case oversubscribes host RAM.
+//
+// The ceiling is arithmetic, not a guess: PersistentMaxSessions conversations
+// may each hold a container capped at MemoryLimit, so the pool's worst case is
+// their product — and the DEFAULTS multiply out to 32 x 512 MiB = 16 GiB before
+// the fleet process, Postgres, or the warm pool have taken a byte. On a smaller
+// box that is an OOM waiting for a busy afternoon, and nothing said so: the cap
+// was reported as a session count, which reads as harmless.
+//
+// Advisory only. It never clamps the operator's configuration — a box may
+// legitimately be sized for it, and containers rarely reach their cap — it just
+// makes the number visible at boot instead of at 3am.
+func warnPersistentMemoryBudget(maxSessions int, memoryLimit string) {
+	if maxSessions <= 0 || memoryLimit == "" {
+		return
+	}
+	perSession, err := sandbox.ParseMemoryLimitBytes(memoryLimit)
+	if err != nil || perSession <= 0 {
+		return // unparseable limits are podman's problem to report, not ours
+	}
+	worstCase := uint64(maxSessions) * perSession
+	total, err := hostMemoryBytes()
+	if err != nil || total == 0 {
+		return // no /proc/meminfo (non-Linux, restricted container): stay quiet
+	}
+	// Two thirds: the fleet process, Postgres, the warm sandbox pool and the OS
+	// all need headroom, so "the persistent pool alone could claim most of RAM"
+	// is already the warning-worthy case — waiting for it to exceed 100% would
+	// warn only after the box was certain to OOM.
+	if worstCase*3 <= total*2 {
+		return
+	}
+	log.Printf("⚠ sandbox: persistent REPL worst case is %d sessions x %s = %.1f GiB, against %.1f GiB of host RAM — "+
+		"lower FLEET_PYTHON_REPL_MAX or FLEET_SANDBOX_MEMORY, or expect OOM kills under load",
+		maxSessions, memoryLimit, float64(worstCase)/(1<<30), float64(total)/(1<<30))
+}
+
+// hostMemoryBytes reads MemTotal from /proc/meminfo. Returns an error on any
+// platform or sandbox where that is unavailable; callers treat that as "do not
+// warn" rather than as a fault.
+func hostMemoryBytes() (uint64, error) {
+	raw, err := os.ReadFile("/proc/meminfo")
+	if err != nil {
+		return 0, err
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		rest, ok := strings.CutPrefix(line, "MemTotal:")
+		if !ok {
+			continue
+		}
+		fields := strings.Fields(rest)
+		if len(fields) < 1 {
+			return 0, fmt.Errorf("malformed MemTotal line")
+		}
+		kb, perr := strconv.ParseUint(fields[0], 10, 64)
+		if perr != nil {
+			return 0, perr
+		}
+		return kb * 1024, nil
+	}
+	return 0, fmt.Errorf("MemTotal not found in /proc/meminfo")
+}
