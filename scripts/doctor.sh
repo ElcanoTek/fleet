@@ -56,7 +56,12 @@ WEB_USER="fleet-web"
 SERVICE_NAME="${FLEET_SERVICE_NAME:-fleet}"
 INSTALL_DIR="${FLEET_INSTALL_DIR:-/opt/fleet}"
 ENV_FILE="${FLEET_ENV_FILE:-/etc/fleet/fleet.env}"
-WEB_ENV_FILE="/etc/fleet/fleet-web.env"
+# Overridable so the script's own tests can point the stamp check at a scratch
+# file instead of this box's real one. Without that the node checks read machine
+# GLOBAL state, and a stale /etc/fleet/fleet-web.env makes them pass or fail for
+# reasons that have nothing to do with the code under test. It grants a caller
+# nothing: every path that writes it already requires root.
+WEB_ENV_FILE="${FLEET_WEB_ENV_FILE:-/etc/fleet/fleet-web.env}"
 # The scheduled-backup pair shipped in deploy/ and installed by
 # scripts/bootstrap.sh --enable-service. Fixed names (unlike the fleet unit,
 # which FLEET_SERVICE_NAME renames) because bootstrap installs exactly these —
@@ -214,7 +219,13 @@ run_as_fleet() {
 # is also the CI seam: the Go smoke test asserts the plan's load-bearing steps.
 if [[ "$DRY_RUN" == "1" && "$NODE_ONLY" == "1" ]]; then
   step "fleet doctor --node --dry-run (src=${SRC_DIR})"
-  info "[dry-run] node >= ${NODE_FLOOR:-<web/.nvmrc>}: dnf install nodejs${NODE_FLOOR} nodejs${NODE_FLOOR}-npm (the VERSIONED stream; \`dnf upgrade nodejs\` cannot cross a major), then point fleet-web at it via FLEET_NODE_BIN in ${WEB_ENV_FILE} and assert the RESOLVED interpreter"
+  if [[ -n "$NODE_FLOOR" ]]; then
+    info "[dry-run] node >= ${NODE_FLOOR}: dnf install nodejs${NODE_FLOOR} nodejs${NODE_FLOOR}-npm (the VERSIONED stream; \`dnf upgrade nodejs\` cannot cross a major), then point fleet-web at it via FLEET_NODE_BIN in ${WEB_ENV_FILE} and assert the RESOLVED interpreter"
+  else
+    # Naming "nodejs-npm" and calling it the versioned stream would be a lie in
+    # exactly the case where nothing can be resolved.
+    info "[dry-run] node: cannot read the major from ${SRC_DIR}/web/.nvmrc, so there is no versioned package to name — the real run reports that and changes nothing"
+  fi
   info "[dry-run] nothing else — --node is scoped to the node toolchain; a full \`sudo fleet doctor\` walks all 9 steps"
   exit 0
 fi
@@ -276,7 +287,16 @@ else
   # stream — it keeps you on whatever `nodejs` resolves to, which is precisely
   # why a box sat on 22 through repeated doctor runs. Streams are
   # parallel-installable, so this adds the new major without removing the old.
-  "${DNF[@]}" install -y --quiet "nodejs${NODE_FLOOR}" >/dev/null 2>&1 || true
+  # Both packages, always. On Fedora `nodejs<major>` does NOT pull npm, and the
+  # tool loop below only installs it when `command -v npm` FAILS — which it does
+  # not on the target box, because the OLD stream's npm is already on PATH and
+  # satisfies the check while belonging to the wrong interpreter. That is the
+  # same parallel-stream trap the versioned node install exists to dodge, and it
+  # left `--node` installing only half of what its own plan line, the header,
+  # DOCTOR.md and the CHANGELOG all said it installed. bootstrap.sh has asked
+  # for both since it learned about the versioned stream.
+  "${DNF[@]}" install -y --quiet "nodejs${NODE_FLOOR}" "nodejs${NODE_FLOOR}-npm" >/dev/null 2>&1 \
+    || "${DNF[@]}" install -y --quiet "nodejs${NODE_FLOOR}" >/dev/null 2>&1 || true
   hash -r
   node_bin="$(fleet_resolve_node_bin "$NODE_FLOOR" || true)"
   if [[ -n "$node_bin" ]]; then
@@ -307,7 +327,17 @@ fi
 # shim falls back to PATH, i.e. Fedora's default stream, when it is unset). So
 # assert the effective value, not merely that a good node is installed
 # somewhere — the same resolved-value rule the stop-policy check follows below.
-if [[ -n "$node_bin" && -f "$WEB_ENV_FILE" ]]; then
+if [[ -n "$node_bin" && -f "$WEB_ENV_FILE" && ! -r "$WEB_ENV_FILE" ]]; then
+  # The file is there but this process cannot read it — the unprivileged
+  # `--node --check` path (which `fleet update --check` calls). env_get returns
+  # empty for an unreadable file, which is indistinguishable from "unset", so
+  # without this branch a correctly-stamped box reports
+  # "FLEET_NODE_BIN is unset ... the tier would serve on the wrong major" and
+  # `fleet update --check` turns that into a non-zero exit. Reporting a fault
+  # you could not observe is the same error as reporting a success you could
+  # not observe.
+  advise "cannot read ${WEB_ENV_FILE} as uid ${EUID} (it is 0600 root-owned) — re-run with sudo to check the FLEET_NODE_BIN stamp"
+elif [[ -n "$node_bin" && -f "$WEB_ENV_FILE" ]]; then
   # env_get, not grep -m1: it takes the LAST assignment (matching systemd's
   # EnvironmentFile precedence) and strips surrounding quotes, so a hand-written
   # FLEET_NODE_BIN="/usr/bin/node-24" is not reported as a broken config.
@@ -394,6 +424,16 @@ if [[ "$NODE_ONLY" == "1" ]]; then
     printf '%s✗ doctor --node: node %s at %s, but %d problem(s) remain above%s\n' \
       "$c_red" "$("$_final_bin" -v)" "$_final_bin" "$n_fail" "$c_reset"
     exit 1
+  fi
+  # A scoped run exits before the restart block a full pass would reach, so it
+  # has to say so itself. Swapping the interpreter under a RUNNING fleet-web
+  # changes nothing until the unit restarts, and this exit line is what
+  # update.sh and the docs send operators to — reporting "repaired" while the
+  # live tier still serves on the old major would be a fix that is not in
+  # effect. update.sh's own restart (step 5) covers the in-update path, so the
+  # advice is only for a standalone run.
+  if [[ "$restart_needed" == "1" && "$CHECK_ONLY" != "1" ]]; then
+    advise "fleet-web is still running the old interpreter — apply it: sudo systemctl restart fleet-web  (a full \`sudo fleet doctor\` restarts for you; \`sudo fleet update\` restarts at step 5)"
   fi
   printf '%s✓ doctor --node: node %s at %s (>= %s, per web/.nvmrc), %d fixed%s\n' \
     "$c_green" "$("$_final_bin" -v)" "$_final_bin" "$NODE_FLOOR" "$n_fixed" "$c_reset"

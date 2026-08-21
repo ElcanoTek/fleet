@@ -271,10 +271,21 @@ restart_service() {
 # WEB_TIER_UP records what was actually observed, so the final banner can say
 # what it verified instead of asserting a health it never measured. A missing
 # unit is not a failure: plenty of boxes run the backend alone.
-WEB_TIER_UP="n/a"
+# What this run actually OBSERVED, so the banner can report that and nothing
+# more. Both start at "not established": the readiness gate and the web-tier
+# restart each have skip branches (no systemd, no curl) that reach the banner
+# without measuring anything, and the first version of this banner printed
+# "backend /readyz 2xx; no fleet-web unit on this box" on exactly those paths —
+# two specific measurements, neither taken, one line under a message saying the
+# gate had been skipped. That is the fault this script was being audited for.
+HEALTH_VERIFIED="skipped"
+WEB_TIER_UP="unknown"
 restart_web_tier() {
-  command -v systemctl >/dev/null 2>&1 || return 0
-  systemctl cat fleet-web.service >/dev/null 2>&1 || return 0
+  command -v systemctl >/dev/null 2>&1 || return 0   # leaves WEB_TIER_UP unknown
+  if ! systemctl cat fleet-web.service >/dev/null 2>&1; then
+    WEB_TIER_UP="absent"   # no web unit on this box — nothing to bring back
+    return 0
+  fi
   if ! systemctl restart fleet-web 2>/dev/null; then
     WEB_TIER_UP="no"
     warn "could not restart fleet-web (BindsTo=${SERVICE_NAME}.service stopped it) — check: journalctl -u fleet-web -n 50"
@@ -365,6 +376,7 @@ else
   done
   if [[ "$healthy" == "1" ]]; then
     ok "new process is ready (${HEALTH_URL} → 2xx)"
+    HEALTH_VERIFIED="yes"
     restart_web_tier
   else
     warn "new process did NOT pass ${HEALTH_URL} within ${HEALTH_TIMEOUT}s"
@@ -374,20 +386,30 @@ else
 fi
 
 say
-printf '%s═══════════════════════════════════════════════%s\n' "$c_green" "$c_reset"
+# Green is itself a claim, so it is earned rather than assumed.
+_banner_c="$c_green"
+if [[ "$DRY_RUN" != "1" ]] && { [[ "$HEALTH_VERIFIED" != "yes" ]] || [[ "$WEB_TIER_UP" == "no" ]]; }; then
+  _banner_c="$c_yellow"
+fi
+printf '%s═══════════════════════════════════════════════%s\n' "$_banner_c" "$c_reset"
 if [[ "$DRY_RUN" == "1" ]]; then
   printf '%s ✓ fleet upgrade plan printed (dry-run — nothing changed)%s\n' "$c_bold" "$c_reset"
+elif [[ "$HEALTH_VERIFIED" != "yes" ]]; then
+  # The gate never ran (no systemd, or no curl). The binaries were swapped and
+  # nothing about this box's health was established — so claim nothing.
+  printf '%s » fleet binaries installed — health NOT verified (the readiness gate was skipped above)%s\n' "$c_bold" "$c_reset"
 else
   case "$WEB_TIER_UP" in
-    yes) printf '%s ✓ fleet upgraded + healthy (backend /readyz 2xx, fleet-web active)%s\n' "$c_bold" "$c_reset" ;;
-    n/a) printf '%s ✓ fleet upgraded + healthy (backend /readyz 2xx; no fleet-web unit on this box)%s\n' "$c_bold" "$c_reset" ;;
+    yes)    printf '%s ✓ fleet upgraded + healthy (backend /readyz 2xx, fleet-web active)%s\n' "$c_bold" "$c_reset" ;;
+    absent) printf '%s ✓ fleet upgraded + healthy (backend /readyz 2xx; no fleet-web unit on this box)%s\n' "$c_bold" "$c_reset" ;;
     # Not "healthy": the backend passed its gate and the web tier did not come
     # back. Saying otherwise is the exact fault this script's own readiness gate
     # exists to prevent, one tier over.
-    *)   printf '%s ! fleet backend upgraded + healthy, but fleet-web is NOT active — see the warning above%s\n' "$c_bold" "$c_reset" ;;
+    no)     printf '%s ! fleet backend upgraded + healthy, but fleet-web is NOT active — see the warning above%s\n' "$c_bold" "$c_reset" ;;
+    *)      printf '%s ✓ fleet backend upgraded + healthy (backend /readyz 2xx; fleet-web not examined)%s\n' "$c_bold" "$c_reset" ;;
   esac
 fi
-printf '%s═══════════════════════════════════════════════%s\n' "$c_green" "$c_reset"
+printf '%s═══════════════════════════════════════════════%s\n' "$_banner_c" "$c_reset"
 say
 say "  Health:    ${c_dim}fleet-admin status${c_reset}"
 say "  Logs:      ${c_dim}journalctl -u ${SERVICE_NAME} -n 50${c_reset}"

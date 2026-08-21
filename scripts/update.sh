@@ -66,7 +66,11 @@
 #                          fail with the repair command instead (env
 #                          FLEET_UPDATE_NODE_REPAIR=0) — for boxes whose node
 #                          is managed outside dnf (nvm, nodesource, an image)
-#   --dry-run              print the plan; build/restart nothing
+#   --dry-run              print the plan; build/restart nothing. Always exits 0
+#                          — it reports whether the plan is BLOCKED (e.g. the
+#                          node floor is unmet) in the plan itself, the same
+#                          contract bootstrap/doctor/fleet-upgrade follow. Use
+#                          --check when you want that answer as an exit code.
 #   -h | --help            this help
 #
 # Re-run safe (idempotent): when nothing changed it exits early; the web/binary
@@ -659,7 +663,7 @@ if [[ -f "$SRC_DIR/web/package.json" ]]; then
   if [[ "$NO_PULL" == "1" ]]; then
     _state="nothing has been pulled, built, installed or restarted"
   else
-    _state="the checkout was fast-forwarded; nothing was built, installed or restarted"
+    _state="the fleet + client-bundle checkouts were fast-forwarded; nothing was built, installed or restarted"
   fi
 
   if [[ "$DRY_RUN" == "1" ]]; then
@@ -685,6 +689,7 @@ if [[ -f "$SRC_DIR/web/package.json" ]]; then
       else
         info "[dry-run] the real run would repair it first: scripts/doctor.sh --node, then re-resolve and refuse if it is still short"
       fi
+      info "[dry-run] for a scriptable answer use: fleet update --check   (exits non-zero on this)"
       DRY_RUN_BLOCKED=1
     fi
   else
@@ -949,11 +954,30 @@ else
     if [[ -f /etc/fleet/fleet-web.env ]]; then
       # tail -n1 + quote strip: systemd's EnvironmentFile is last-wins, and a
       # hand-written FLEET_NODE_BIN="/usr/bin/node-24" must not read as drift.
-      _cur_nb="$(grep -E '^FLEET_NODE_BIN=' /etc/fleet/fleet-web.env 2>/dev/null | tail -n1 | cut -d= -f2- | sed -e 's/^["'"'"']//' -e 's/["'"'"']$//')"
+      # Read the CURRENT value with the same last-wins + quote-strip rule
+      # systemd's EnvironmentFile uses, so a hand-written
+      # FLEET_NODE_BIN="/usr/bin/node-24" does not read as drift.
+      _read_nb() {
+        grep -E '^FLEET_NODE_BIN=' /etc/fleet/fleet-web.env 2>/dev/null \
+          | tail -n1 | cut -d= -f2- | sed -e 's/^["'"'"']//' -e 's/["'"'"']$//'
+      }
+      _cur_nb="$(_read_nb)"
       if [[ "$_cur_nb" != "$node_bin_resolved" ]]; then
-        upsert_env_file /etc/fleet/fleet-web.env FLEET_NODE_BIN "$node_bin_resolved" \
-          && ok "pointed fleet-web at ${node_bin_resolved}" \
-          || warn "could not set FLEET_NODE_BIN in /etc/fleet/fleet-web.env"
+        if ! upsert_env_file /etc/fleet/fleet-web.env FLEET_NODE_BIN "$node_bin_resolved"; then
+          warn "could not set FLEET_NODE_BIN in /etc/fleet/fleet-web.env"
+        # Read it BACK rather than trusting the writer's exit code. upsert
+        # returning 0 proves a file was written; it does not prove the tier now
+        # resolves to this interpreter (a later duplicate line wins under
+        # systemd's last-wins rule, and a value that is not executable resolves
+        # to nothing). doctor.sh asserts this the same way — and this is the
+        # very line doctor's comment points at, so leaving it on the writer's
+        # return code would have made the design note's "every new success claim
+        # is a read-back" untrue in the one place it named.
+        elif [[ "$(_read_nb)" == "$node_bin_resolved" && -x "$node_bin_resolved" ]]; then
+          ok "pointed fleet-web at ${node_bin_resolved} — read back from /etc/fleet/fleet-web.env"
+        else
+          warn "wrote FLEET_NODE_BIN=${node_bin_resolved} but /etc/fleet/fleet-web.env reads back $(_read_nb) — inspect it by hand"
+        fi
       fi
     fi
 
@@ -963,16 +987,25 @@ else
     # by definition, so grepping just those keys from the 0600 web env file
     # leaks no secret — the file is still never sourced. The build id needs
     # no stamp: next.config.ts derives it from the checkout's git SHA.
-    # PATH is prefixed with the resolved interpreter's directory so `npm` runs
-    # UNDER it: npm's shebang is `#!/usr/bin/env node`, so a bare `npm ci` uses
+    # PATH is set so the bare name `node` resolves to the interpreter the gate
+    # picked: npm's shebang is `#!/usr/bin/env node`, so a bare `npm ci` uses
     # whatever `node` PATH resolves to — the DEFAULT stream on Fedora. Without
     # this the tier was built on the old major while this script reported the
-    # new one.
-    ( cd "$SRC_DIR/web" \
-        && export PATH="$(fleet_node_build_path "$node_bin_resolved")" \
+    # new one. Resolved once so the shim directory it may create is removed
+    # rather than leaked on every update, including on the failure path.
+    _build_path="$(fleet_node_build_path "$node_bin_resolved")"
+    _build_node="$(PATH="$_build_path" node -v 2>/dev/null || echo unknown)"
+    if ! ( cd "$SRC_DIR/web" \
+        && export PATH="$_build_path" \
         && export NEXT_PUBLIC_PUBLIC_ORIGIN="$web_origin" NEXT_PUBLIC_APP_NAME="$web_app_name" \
-        && npm ci && npm run build ) || die "web build failed"
-    ok "web app built (origin=${web_origin:-<default>}, app=${web_app_name:-<default>})"
+        && npm ci && npm run build ); then
+      fleet_node_build_path_cleanup "$_build_path" "$node_bin_resolved"
+      die "web build failed"
+    fi
+    fleet_node_build_path_cleanup "$_build_path" "$node_bin_resolved"
+    # Name the interpreter the build ACTUALLY ran under, read back from the
+    # build PATH, rather than the one the gate intended it to run under.
+    ok "web app built on ${_build_node} (origin=${web_origin:-<default>}, app=${web_app_name:-<default>})"
 
     # Deploy the build to where fleet-web actually serves from (bootstrap's
     # deploy_web_tier copies to the unit's WorkingDirectory, /opt/fleet/web by

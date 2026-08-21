@@ -88,6 +88,21 @@ dry run with the real run's success banner. `fleet update --check` shells out to
 `doctor.sh --node --check` and exits non-zero when the box cannot build the web
 tier.
 
+**`scripts/lib/node-version.sh`** — the gate resolves an interpreter and then
+says the web tier "will build+run" on it. The build half of that was not true on
+the layout the whole design targets. `fleet_node_build_path` prefixed PATH with
+the resolved binary's *directory*, on the reasoning that this makes npm's
+`#!/usr/bin/env node` shebang pick it up. Fedora's streams are
+parallel-installable **into the same directory**, so `/usr/bin` holds both
+`node-24` and the default stream's `node` — and prefixing `/usr/bin` still
+resolves the bare name to the old major. Measured with a stand-in of that exact
+layout: a build "on node-24" ran under node 22. It now puts a private shim
+directory holding a single `node` symlink in front. The shim is `mktemp -d`,
+never a predictable `/tmp` name: a fixed world-writable path at the head of
+root's PATH during a build is a hijack, not a convenience. Both callers remove
+it, on the failure path too, and `update.sh` now reports the version the build
+*actually* ran under, read back from the build PATH.
+
 **`scripts/fleet-upgrade.sh`** — audited as the same class of problem, and it
 was worse: it never hits the node wall because it never builds the web tier at
 all, but `deploy/fleet-web.service` carries `BindsTo=fleet.service`, so its
@@ -96,6 +111,37 @@ after which it printed `✓ fleet upgraded + healthy`. Its readiness gate polls
 the Go backend's `/readyz` and says nothing about the web tier. It now restarts
 `fleet-web` on both the upgrade and rollback paths, asserts `systemctl
 is-active`, and the final banner reports what it measured.
+
+## What an adversarial pass over the finished diff found
+
+Worth recording, because three of the findings were in the *new* code and one of
+them was this change set committing the exact fault it was written to remove.
+
+- **The new `fleet-upgrade.sh` banner over-claimed.** It reported "backend
+  /readyz 2xx" from a variable that only tracked the web tier, so on the
+  no-systemd and no-curl paths — where the gate is skipped — it printed two
+  specific measurements, neither taken, one line under a message saying the gate
+  had been skipped. The run now tracks whether the gate actually ran and says
+  "health NOT verified" when it did not.
+- **`doctor.sh --node --check` reported a false failure when unprivileged.**
+  Relaxing the root requirement was correct; not distinguishing "the 0600 env
+  file is unreadable" from "the stamp is unset" was not. A healthy, correctly
+  stamped box reported *"FLEET_NODE_BIN is unset — the tier would serve on the
+  wrong major"*, and `fleet update --check` turned that into a non-zero exit on
+  every production box where the operator did not `sudo`. Reporting a fault you
+  could not observe is the same error as reporting a success you could not.
+- **`--node` installed only half of what it advertised.** Four documents and its
+  own plan line said it installs `nodejs<major>` **and** `nodejs<major>-npm`; the
+  versioned npm only ever came from the missing-tool loop, which is skipped when
+  `command -v npm` succeeds — and it does succeed on the target box, because the
+  OLD stream's npm is on PATH. Same parallel-stream trap, one package over.
+- **A scoped `--node` run exited before the restart a full pass would do**, so it
+  printed "repaired" while the live `fleet-web` still served on the old
+  interpreter. It now advises the restart it cannot perform itself.
+- **The tests read machine-global state.** They probed this box's real
+  `/etc/fleet/fleet-web.env`, so a stale stamp there failed them for reasons
+  unrelated to the code — which is exactly what happened. `WEB_ENV_FILE` is now
+  overridable and the tests point it at a path that does not exist.
 
 ## Judgment calls
 
@@ -115,6 +161,15 @@ interpreter it is about to point the tier at would be incoherent. Boxes whose
 node comes from nvm, NodeSource or a base image opt out with
 `--no-node-repair` (`FLEET_UPDATE_NODE_REPAIR=0`), which restores the old
 refusal — now with the exact one-command fix in the message.
+
+**`--dry-run` still exits 0, even when it reports a blocker.** The repo's three
+other scripts all treat `--dry-run` as a plan printer that succeeds if the plan
+printed, and `--check` as the diagnostic exit code — `doctor.sh --check` already
+exits 1 on problems. Making `update.sh --dry-run` the one exception would be a
+surprise, so the blocker is unmissable in the plan and the plan points at
+`fleet update --check`, which does exit non-zero. A reviewer could reasonably
+want the opposite; this is a consistency call, not a claim that exit 0 is more
+informative.
 
 **Every new success claim is a read-back.** `doctor.sh` reported "pointed
 fleet-web at X" on `upsert_web_env` returning 0, which proves a file was
@@ -136,7 +191,21 @@ that installs a versioned `node-24` stub: the gate detects the shortfall, hands
 off, the versioned stream installs, `FLEET_NODE_BIN` is stamped and read back,
 and the update continues without a re-run.
 
-**Not verified:** a real Fedora `dnf install nodejs24` (this box has no dnf), and
-anything requiring systemd as PID 1 — unit adoption, the `BindsTo` stop, and the
+Every new assertion was then broken on purpose to check it fails: a repair path
+that reports success while installing nothing is caught by the re-resolve; a
+writer that stores the wrong `FLEET_NODE_BIN` is caught by the read-back; a
+focus effect that fires on every close is caught by the new users-page test; and
+removing either `restart_web_tier` call fails the fleet-upgrade guard. One
+assertion — `--node`'s decisive exit — survives neutralising the re-resolve
+alone, because the failure rollup covers it independently; it fails when both
+are neutralised, which is the honest statement of what that guard is worth.
+
+**Not verified:** a real Fedora `dnf` transaction (this box has no dnf), so the
+exact file layout of `nodejs<major>` / `nodejs<major>-npm` is taken from
+`bootstrap.sh`'s long-standing package list rather than observed; and anything
+requiring systemd as PID 1 — unit adoption, the `BindsTo` stop, and the
 `fleet-upgrade.sh` web-tier restart are code changes backed by the unit file and
-by the equivalent, long-standing logic in `update.sh`, not by a live run.
+by the equivalent, long-standing logic in `update.sh`, plus a fake-`systemctl`
+harness, not by a live run. `go test` caches results and does not track the shell
+scripts these tests exec, so any mutation check on a script needs `-count=1` —
+one of ours silently passed from cache before that was noticed.

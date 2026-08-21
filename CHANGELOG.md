@@ -41,17 +41,36 @@ prior versions are listed because none have shipped.
   "would resolve node" without ever calling it, then closed with a green
   "fleet rebuilt at <sha>" banner and exit 0 on a box the real run refuses), and
   `fleet update --check` reports node readiness and exits non-zero rather than
-  recommending a command that cannot succeed. `doctor.sh` now asserts
-  `FLEET_NODE_BIN` by reading it back through the same last-wins reader systemd
-  uses, instead of trusting the writer's return code. Design note:
+  recommending a command that cannot succeed. `doctor.sh` and `update.sh` now
+  assert `FLEET_NODE_BIN` by reading it back through the same last-wins reader
+  systemd uses, instead of trusting the writer's return code. `doctor.sh --node`
+  also installs the versioned `nodejs<major>-npm` (the old stream's npm
+  satisfies `command -v npm`, so the missing-tool loop never fired on the box
+  this is for), advises the `fleet-web` restart a scoped run cannot perform
+  itself, and no longer reports a false shortfall when run unprivileged against
+  a 0600 `fleet-web.env` it cannot read. Design note:
   [`docs/NODE-TOOLCHAIN-HANDOFF.md`](docs/NODE-TOOLCHAIN-HANDOFF.md).
+- **The build now really runs under the interpreter the gate resolved** —
+  `fleet_node_build_path` prefixed PATH with the resolved binary's *directory*,
+  which does not work on the layout it was written for: Fedora's node streams
+  are parallel-installable **into the same directory**, so putting `/usr/bin` in
+  front still resolves the bare name `node` to the default stream. Measured — a
+  build "on /usr/bin/node-24" ran npm's `#!/usr/bin/env node` shebang under node
+  22. It now puts a private shim directory holding a single `node` symlink in
+  front (mktemp'd, not a predictable /tmp path — that would be a world-writable
+  directory at the head of root's PATH during a build), and both callers remove
+  it. `update.sh` also reports the version the build actually ran under, read
+  back from the build PATH, rather than the one the gate intended.
 - **`scripts/fleet-upgrade.sh` brings the web tier back up** —
   `deploy/fleet-web.service` carries `BindsTo=fleet.service`, so the script's
   `systemctl restart fleet` stopped fleet-web and nothing restarted it; the run
   then printed `✓ fleet upgraded + healthy`, a claim its readiness gate (which
   polls only the Go backend's `/readyz`) never covered. It now restarts
   fleet-web on both the upgrade and rollback paths, asserts `systemctl
-  is-active`, and the banner reports what it measured. It remains deliberately
+  is-active`, and the banner reports what it measured — including on the
+  no-systemd and no-curl paths, where the readiness gate is skipped entirely and
+  the banner now says health was **not** verified instead of asserting a
+  `/readyz` 2xx that was never polled. It remains deliberately
   node-unaware: it never builds the web tier, so the node major is not its
   business.
 - **`--help` no longer truncates or leaks shell** — bootstrap, update and

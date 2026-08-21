@@ -915,8 +915,10 @@ func TestUpdateUnresolvedSandboxTagIsNotUpToDate(t *testing.T) {
 func nodeStubDir(t *testing.T, version string) string {
 	t.Helper()
 	dir := t.TempDir()
+	// A very high major so it outranks anything the runner already has, in the
+	// PATH-fallback branch of fleet_resolve_node_bin.
 	shim := "#!/bin/sh\n[ \"$1\" = \"-v\" ] && { echo " + version + "; exit 0; }\nexit 0\n"
-	if err := os.WriteFile(filepath.Join(dir, "node"), []byte(strings.ReplaceAll(shim, "\\n", "\n")), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "node"), []byte(shim), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	return dir
@@ -945,6 +947,20 @@ func fakeSrcDir(t *testing.T, nvmrc string) string {
 	return dir
 }
 
+// hermeticNodeEnv points doctor.sh at a throwaway checkout AND a nonexistent
+// fleet-web.env, so a --node run depends on nothing but the node interpreters
+// actually installed. Without the second half these tests read this box's real
+// /etc/fleet/fleet-web.env: a stale stamp there (pointing at an interpreter that
+// has since been removed) fails them for a reason unrelated to the code, which
+// is exactly what happened while this suite was being written.
+func hermeticNodeEnv(t *testing.T, nvmrc string) []string {
+	t.Helper()
+	return []string{
+		"SRC_DIR=" + fakeSrcDir(t, nvmrc),
+		"FLEET_WEB_ENV_FILE=" + filepath.Join(t.TempDir(), "absent-fleet-web.env"),
+	}
+}
+
 // TestUpdateDryRunResolvesNodeRatherThanClaimingTo — `update --dry-run` is the
 // command an operator runs to ask "will this work on my box?", and the node gate
 // is what aborts the real run. The plan used to print
@@ -964,8 +980,12 @@ func TestUpdateDryRunResolvesNodeRatherThanClaimingTo(t *testing.T) {
 	}
 	// The resolved-value rule: the pass must name what it resolved, not what it
 	// wanted, and must not fall back to the old un-backed phrasing.
-	if !strings.Contains(out, "resolved on this box, not assumed") || !strings.Contains(out, "v999.0.0") {
-		t.Errorf("a passing node gate must report the RESOLVED interpreter and its version\n--- output ---\n%s", out)
+	// Deliberately NOT asserting "v999.0.0": fleet_resolve_node_bin prefers a
+	// versioned /usr/bin/node-NN over `node` on PATH, so on a runner that has one
+	// the stub is outranked. The stub's job is only to guarantee that SOMETHING
+	// qualifies; what is asserted is that the pass names what it resolved.
+	if !strings.Contains(out, "resolved on this box, not assumed") {
+		t.Errorf("a passing node gate must report the RESOLVED interpreter\n--- output ---\n%s", out)
 	}
 	if strings.Contains(out, "would resolve node") {
 		t.Errorf("the plan still claims it \"would resolve node\" instead of resolving it\n--- output ---\n%s", out)
@@ -1026,7 +1046,7 @@ func TestDoctorNodeOnlyIsScoped(t *testing.T) {
 	// The executing path. --check so it installs nothing; SRC_DIR points at a
 	// checkout demanding node 1, so it passes on any runner and the run reaches
 	// its scoped exit rather than dying early.
-	run, err := runScript(t, []string{"SRC_DIR=" + fakeSrcDir(t, "1")}, "doctor.sh", "--node", "--check")
+	run, err := runScript(t, hermeticNodeEnv(t, "1"), "doctor.sh", "--node", "--check")
 	if err != nil {
 		t.Fatalf("--node --check against a node-1 floor must succeed: %v\n--- output ---\n%s", err, run)
 	}
@@ -1052,7 +1072,11 @@ func TestDoctorNodeCheckIsUnprivilegedAndDecisive(t *testing.T) {
 		{"floor this box always meets", "1", false},
 		{"floor no box can meet", "99", true},
 	} {
-		out, err := runScript(t, []string{"SRC_DIR=" + fakeSrcDir(t, tc.nvmrc)}, "doctor.sh", "--node", "--check")
+		out, err := runScript(t, hermeticNodeEnv(t, tc.nvmrc), "doctor.sh", "--node", "--check")
+		// Note: this arm is only meaningful when the suite runs unprivileged (the
+		// usual case; CI runners are not root). Under uid 0 the root gate cannot
+		// fire either way, so the decisive-exit assertion below is what carries
+		// this test there.
 		if strings.Contains(out, "run as root") {
 			t.Fatalf("%s: --node --check must not demand root\n--- output ---\n%s", tc.name, out)
 		}
@@ -1119,5 +1143,23 @@ func TestFleetUpgradeRestartsTheWebTier(t *testing.T) {
 	}
 	if !strings.Contains(out, "is-active") {
 		t.Errorf("the fleet-web restart must be backed by a resolved-state read, not the restart's exit code\n--- output ---\n%s", out)
+	}
+
+	// The plan text above is one literal info line; deleting the actual call
+	// would leave it green. There is no systemd here to exercise the real path,
+	// so pin the invocation statically instead — on BOTH paths, because a
+	// rollback restart stops the BindsTo'd web tier just as the upgrade one does.
+	root := repoRootFromTest(t)
+	body, err := os.ReadFile(filepath.Join(root, "scripts", "fleet-upgrade.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(body)
+	if n := strings.Count(script, "\n    restart_web_tier"); n < 2 {
+		t.Errorf("restart_web_tier is invoked on %d path(s); expected both the readiness-gate and rollback paths", n)
+	}
+	// And the banner must not claim health the run never measured.
+	if !strings.Contains(script, `HEALTH_VERIFIED="skipped"`) || !strings.Contains(script, "health NOT verified") {
+		t.Errorf("fleet-upgrade must track whether the readiness gate actually ran, and say so when it did not")
 	}
 }

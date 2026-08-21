@@ -37,8 +37,8 @@ Division of labor across the three health verbs:
 | Verb | Privilege | Mutates? | Scope |
 |---|---|---|---|
 | `fleet status` | none | never | quick in-process checks (bundle, env, DBs, sandbox, unit) |
-| `fleet doctor` | root (except `--check`/`--dry-run`) | **repairs** | everything status checks **plus** packages, podman prereqs, unit drift, env files — and fixes them |
-| `fleet doctor --node` | root (none for `--node --check`) | **repairs** | the node toolchain ONLY: install `nodejs<major>` + `-npm` per `web/.nvmrc`, stamp `FLEET_NODE_BIN`, assert the resolved value, exit |
+| `fleet doctor` | root — `--dry-run` needs none, but **`--check` still does** (it probes the service user's rootless podman and reads 0600 env files) | **repairs** | everything status checks **plus** packages, podman prereqs, unit drift, env files — and fixes them |
+| `fleet doctor --node` | root — **except `--node --check`**, the one read-only path needing none (it is what `fleet update --check` calls) | **repairs** | the node toolchain ONLY: install `nodejs<major>` + `-npm` per `web/.nvmrc`, stamp `FLEET_NODE_BIN`, assert the resolved value, exit |
 | `/admin/doctor` (UI) | admin session | never | doctor's *diagnosable-from-the-process* subset, with fix hints |
 
 ## Design decisions
