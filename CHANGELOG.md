@@ -19,6 +19,23 @@ prior versions are listed because none have shipped.
 
 ### Changed
 
+- **`boxdoctor` can now see a crash loop and a directive that did not take** —
+  the admin-facing doctor (Settings → Admin → Doctor, `/admin/doctor`) probed
+  units with `is-active` only, and both app units run `Restart=always`, so a
+  unit segfaulting in a loop is `active` again ~5s later and the panel stayed
+  green throughout. That blind spot is why the `fleet-web` shutdown crashes went
+  unnoticed for three days. Two checks added: `restarts: <unit>` reads
+  `NRestarts` for the app units (0 ok / 1–4 advisory / ≥5 failure) — the right
+  property because it counts only `Restart=`-driven restarts and a manual
+  `systemctl restart` clears it, so deploys raise no false alarm; and
+  `fleet-web stop policy` asserts the value systemd *resolved* for
+  `TimeoutStopFailureMode`, the check that would have caught a directive sitting
+  inert in the unit body for a release. Stated honestly in `docs/DOCTOR.md`:
+  restart churn would **not** have caught the fleet-web crashes themselves,
+  since those happened on operator-initiated stops that reset `NRestarts` — the
+  stop-policy check is the one that covers that fault. Both are read-only and
+  unprivileged, and the non-`kill` verdict is a warn here where `doctor.sh`
+  fails, because only `doctor.sh` attempted a repair first.
 - **`fleet-web` shutdown: verify the resolved directive, not the file** — a
   follow-up to the two fixes above, which had a shared weakness: each one
   asserted a systemd directive and never checked what systemd actually
