@@ -147,7 +147,8 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v7
         with:
-          node-version: '22'
+          # Read from web/.nvmrc so the deployed node major is declared once.
+          node-version-file: web/.nvmrc
           cache: npm
           cache-dependency-path: web/package-lock.json
 
@@ -156,6 +157,15 @@ jobs:
 
       - name: Lint
         run: npm run lint
+
+      # Explicit type gate. `next build` also type-checks, but it runs LAST and
+      # after the bundle work — so a plain type error used to surface minutes
+      # into the job. oxlint is a syntax/semantic linter with no type awareness
+      # (that is why it works on TS 7 at all), so the types need their own step
+      # rather than riding along with lint as they did under
+      # @typescript-eslint. On the native TS 7 compiler this costs ~2s.
+      - name: Typecheck (tsc --noEmit)
+        run: npm run typecheck
 
       - name: Unit tests (vitest)
         run: npx vitest run

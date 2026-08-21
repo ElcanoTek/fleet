@@ -50,9 +50,21 @@ BACKUP_TIMER="fleet-backup.timer"
 MAINT_SERVICE="fleet-maintenance.service"
 MAINT_TIMER="fleet-maintenance.timer"
 
-# Node floor: Next.js 16 (web/) requires Node >= 20; Fedora's repo nodejs
-# satisfies it. Doctor upgrades via dnf only — fleet does not use NodeSource.
-NODE_FLOOR=20
+# Node floor: read from web/.nvmrc, the ONE place the target major is declared
+# (CI reads the same file via actions/setup-node's node-version-file). Hardcoding
+# it here is what let CI test '22' while this script's floor said 20 and the box
+# ran whatever `dnf install nodejs` meant. Doctor installs via dnf only — fleet
+# does not use NodeSource.
+# shellcheck source=lib/node-version.sh
+. "$SCRIPT_DIR/lib/node-version.sh"
+NODE_FLOOR="$(fleet_node_major_want "$SRC_DIR" || true)"
+if [[ -z "$NODE_FLOOR" ]]; then
+  # No silent default. A hardcoded fallback would point at whatever major was
+  # current when this line was written — i.e. it would rot into targeting the
+  # OLD node exactly when .nvmrc cannot be read. Better to say so: every node
+  # check below is skipped rather than run against a guess.
+  NODE_FLOOR=""
+fi
 
 CHECK_ONLY=0
 NO_RESTART=0
@@ -119,6 +131,47 @@ env_get() {
   grep -E "^${key}=" "$file" 2>/dev/null | tail -n1 | cut -d= -f2- | sed -e 's/^["'\'']//' -e 's/["'\'']$//' || true
 }
 
+# upsert_web_env KEY VALUE — set one key in /etc/fleet/fleet-web.env in place.
+#
+# Rewrites every occurrence of the key (not just the first) and appends it if
+# absent, and NEVER truncates the file: it carries operator-added keys
+# (AUTH_SIGNING_PUBKEY, AUTH_LOGIN_URL, …) that a wholesale rewrite silently
+# dropped once already in bootstrap. mktemp next to the target + mv is a
+# same-filesystem atomic rename, so a crash mid-write cannot leave the web tier
+# with a half-written env file. Mode is forced to 0600: this file holds the
+# backend tokens, and the shipped posture is 0600 root-owned.
+#
+# ONE awk pass handles both the replace and the append cases, via END. The
+# earlier two-branch version used `cat` + `printf` to append, which corrupted
+# any file whose last line lacked a trailing newline — the new key was glued
+# onto it, destroying that line's value AND failing to set the key
+# (`NODE_ENV=productionFLEET_NODE_BIN=…`). awk's print supplies ORS, so this
+# normalizes a missing final newline instead of tripping over it. The sibling
+# helpers in bootstrap.sh and update.sh already did it this way.
+#
+# ALL occurrences are collapsed because systemd's EnvironmentFile is LAST-WINS.
+# Rewriting only the first left a stale later duplicate in charge, while the
+# next read (below, via env_get, which takes the last) would report the value
+# we just wrote — a check that passes forever while the box does the wrong thing.
+upsert_web_env() {
+  local key="$1" val="$2" file="$WEB_ENV_FILE" tmp
+  [[ -f "$file" ]] || return 1
+  tmp="$(mktemp "${file}.XXXXXX")" || return 1
+  chmod 0600 "$tmp" || { rm -f "$tmp"; return 1; }
+  # Key and value arrive via ENVIRON, not -v: awk performs ESCAPE PROCESSING on
+  # -v assignments, so `-v v='a\1b'` silently loses the \1. ENVIRON does not.
+  if ! _uwe_key="$key" _uwe_val="$val" awk '
+        BEGIN { FS = "="; k = ENVIRON["_uwe_key"]; v = ENVIRON["_uwe_val"]; seen = 0 }
+        $1 == k { if (!seen) { print k "=" v; seen = 1 } ; next }   # collapse duplicates
+        { print }
+        END { if (!seen) print k "=" v }
+      ' "$file" > "$tmp"; then
+    rm -f "$tmp"; return 1
+  fi
+  mv -f "$tmp" "$file" || { rm -f "$tmp"; return 1; }
+  return 0
+}
+
 # run_as_fleet CMD... — run a command as the service user with the SAME
 # HOME/XDG_RUNTIME_DIR deploy/fleet.service sets, so doctor probes the exact
 # rootless-podman environment the daemon uses (not root's). It also cd's to
@@ -140,10 +193,10 @@ run_as_fleet() {
 # is also the CI seam: the Go smoke test asserts the plan's load-bearing steps.
 if [[ "$DRY_RUN" == "1" ]]; then
   step "fleet doctor --dry-run (src=${SRC_DIR}, service=${SERVICE_NAME}, install=${INSTALL_DIR})"
-  info "[dry-run] 1/9 Toolchain: node >= ${NODE_FLOOR} (dnf upgrade nodejs), go/git/curl/jq/podman/psql/npm present (dnf install)"
-  info "[dry-run] 2/9 Package currency: disable broken dnf repos; dnf upgrade fleet-critical packages (podman crun passt conmon containers-common golang nodejs caddy)"
+  info "[dry-run] 1/9 Toolchain: node >= ${NODE_FLOOR:-<web/.nvmrc>} (dnf install nodejs${NODE_FLOOR} — the VERSIONED stream; \`dnf upgrade nodejs\` cannot cross a major), then point fleet-web at it via FLEET_NODE_BIN in ${WEB_ENV_FILE}; go/git/curl/jq/podman/psql/npm present (dnf install)"
+  info "[dry-run] 2/9 Package currency: disable broken dnf repos; dnf upgrade fleet-critical packages (podman crun passt conmon containers-common golang nodejs nodejs${NODE_FLOOR} caddy)"
   info "[dry-run] 3/9 Rootless podman: ${SERVICE_USER} user + subuid/subgid ranges, ${SERVICE_HOME} + ~/.config/containers ownership, containers.conf (cgroupfs), /run/${SERVICE_USER}, podman system migrate, podman info as ${SERVICE_USER}"
-  info "[dry-run] 4/9 Installed artifacts: ${SERVICE_NAME}.service + fleet-web.service + the fleet-backup and fleet-maintenance service/timer pairs' functional drift vs ${SRC_DIR}/deploy (reinstall + daemon-reload), /usr/local/bin/fleet symlink → ${INSTALL_DIR}/fleet, binaries present"
+  info "[dry-run] 4/9 Installed artifacts: ${SERVICE_NAME}.service + fleet-web.service + the fleet-backup and fleet-maintenance service/timer pairs' functional drift vs ${SRC_DIR}/deploy (reinstall + daemon-reload), /usr/local/bin/fleet-web-start.sh (fleet-web's ExecStart shim) and fleet-web.service.d/10-timeout-kill.conf, then assert the RESOLVED TimeoutStopFailureMode, /usr/local/bin/fleet symlink → ${INSTALL_DIR}/fleet, binaries present"
   info "[dry-run] 5/9 Configuration: ${ENV_FILE} exists root-owned 0600 with OPENROUTER_API_KEY + DB DSNs; ${WEB_ENV_FILE} 0600 when fleet-web is installed"
   info "[dry-run] 6/9 Services: ${SERVICE_NAME} active; postgresql/fleet-web/caddy active when enabled (systemctl start), then /healthz + /readyz respond"
   info "[dry-run] 7/9 Scheduled maintenance: ${BACKUP_TIMER} installed + enabled + active (advisory when absent) and ${BACKUP_SERVICE}'s last run succeeded; ${MAINT_TIMER} likewise; free space on the data dir + the podman image store above the disk floor"
@@ -170,27 +223,70 @@ DNF=(dnf --setopt='*.skip_if_unavailable=1')
 # ── 1. toolchain ─────────────────────────────────────────────────────────────
 step "1/9  Toolchain"
 
-node_major="$(node -v 2>/dev/null | cut -dv -f2 | cut -d. -f1 || true)"
-if [[ "${node_major:-0}" -ge "$NODE_FLOOR" ]]; then
-  pass "node $(node -v)"
-elif [[ "$CHECK_ONLY" == "1" || "$HAVE_DNF" == "0" ]]; then
-  fail "node $(node -v 2>/dev/null || echo missing) — need >= $NODE_FLOOR for the web tier (Next.js 16)"
+if [[ -z "$NODE_FLOOR" ]]; then
+  advise "cannot read the node major from ${SRC_DIR}/web/.nvmrc — skipping the node checks (no guessed default)"
+  node_bin=""
 else
-  # `dnf upgrade`, NOT `dnf install`: dnf5 treats install of an installed
-  # package as "nothing to do" (exit 0) instead of upgrading — exactly the
-  # silent drift doctor exists to catch, so the result is re-verified.
-  if rpm -q nodejs >/dev/null 2>&1; then
-    "${DNF[@]}" upgrade -y --quiet nodejs >/dev/null 2>&1 || true
-  else
-    "${DNF[@]}" install -y --quiet nodejs >/dev/null 2>&1 || true
-  fi
+node_bin="$(fleet_resolve_node_bin "$NODE_FLOOR" || true)"
+if [[ -n "$node_bin" ]]; then
+  pass "node $("$node_bin" -v) at ${node_bin} (>= $NODE_FLOOR, per web/.nvmrc)"
+elif [[ "$CHECK_ONLY" == "1" || "$HAVE_DNF" == "0" ]]; then
+  fail "no node >= $NODE_FLOOR (web/.nvmrc) — have $(node -v 2>/dev/null || echo none); the web tier needs it"
+else
+  # Install the VERSIONED package. `dnf upgrade nodejs` cannot cross a major
+  # stream — it keeps you on whatever `nodejs` resolves to, which is precisely
+  # why a box sat on 22 through repeated doctor runs. Streams are
+  # parallel-installable, so this adds the new major without removing the old.
+  "${DNF[@]}" install -y --quiet "nodejs${NODE_FLOOR}" >/dev/null 2>&1 || true
   hash -r
-  node_major="$(node -v 2>/dev/null | cut -dv -f2 | cut -d. -f1 || true)"
-  if [[ "${node_major:-0}" -ge "$NODE_FLOOR" ]]; then
-    fixed "node upgraded to $(node -v)"
+  node_bin="$(fleet_resolve_node_bin "$NODE_FLOOR" || true)"
+  if [[ -n "$node_bin" ]]; then
+    fixed "installed node $("$node_bin" -v) at ${node_bin}"
     restart_needed=1
   else
-    fail "node is still $(node -v 2>/dev/null || echo missing) after dnf upgrade — inspect 'dnf repolist'"
+    # Fall back to the unversioned package before giving up: a distro that does
+    # not carry a versioned stream may still ship a new enough default.
+    if rpm -q nodejs >/dev/null 2>&1; then
+      "${DNF[@]}" upgrade -y --quiet nodejs >/dev/null 2>&1 || true
+    else
+      "${DNF[@]}" install -y --quiet nodejs >/dev/null 2>&1 || true
+    fi
+    hash -r
+    node_bin="$(fleet_resolve_node_bin "$NODE_FLOOR" || true)"
+    if [[ -n "$node_bin" ]]; then
+      fixed "installed node $("$node_bin" -v) at ${node_bin}"
+      restart_needed=1
+    else
+      fail "no node >= $NODE_FLOOR after installing nodejs${NODE_FLOOR} and nodejs — inspect 'dnf repolist' / 'dnf list nodejs*'"
+    fi
+  fi
+fi
+
+fi
+
+# Whatever node exists, the tier only USES the one FLEET_NODE_BIN names (the
+# shim falls back to PATH, i.e. Fedora's default stream, when it is unset). So
+# assert the effective value, not merely that a good node is installed
+# somewhere — the same resolved-value rule the stop-policy check follows below.
+if [[ -n "$node_bin" && -f "$WEB_ENV_FILE" ]]; then
+  # env_get, not grep -m1: it takes the LAST assignment (matching systemd's
+  # EnvironmentFile precedence) and strips surrounding quotes, so a hand-written
+  # FLEET_NODE_BIN="/usr/bin/node-24" is not reported as a broken config.
+  cur_node_bin="$(env_get FLEET_NODE_BIN "$WEB_ENV_FILE")"
+  cur_major=""
+  [[ -n "$cur_node_bin" && -x "$cur_node_bin" ]] && \
+    cur_major="$("$cur_node_bin" -v 2>/dev/null | sed 's/^v//' | cut -d. -f1)"
+  if [[ "${cur_major:-0}" -ge "$NODE_FLOOR" ]]; then
+    pass "fleet-web runs ${cur_node_bin} ($("$cur_node_bin" -v))"
+  elif [[ "$CHECK_ONLY" == "1" ]]; then
+    fail "fleet-web's FLEET_NODE_BIN is ${cur_node_bin:-unset} — not node >= $NODE_FLOOR; the tier would serve on the wrong major"
+  else
+    if upsert_web_env FLEET_NODE_BIN "$node_bin"; then
+      fixed "pointed fleet-web at ${node_bin} (FLEET_NODE_BIN in ${WEB_ENV_FILE})"
+      restart_needed=1
+    else
+      fail "could not set FLEET_NODE_BIN in ${WEB_ENV_FILE} — add: FLEET_NODE_BIN=${node_bin}"
+    fi
   fi
 fi
 
@@ -205,7 +301,10 @@ for tool in go git curl jq podman psql npm python3; do
     case "$tool" in
       go)   pkg=golang ;;
       psql) pkg=postgresql ;;
-      npm)  pkg=nodejs ;;
+      # NOT plain `nodejs`: that is the DEFAULT stream, so installing it to
+      # satisfy a missing npm drags the older interpreter back onto the box and
+      # re-points /usr/bin/node at it — undoing the versioned install above.
+      npm)  pkg="nodejs${NODE_FLOOR}-npm" ;;
     esac
     if "${DNF[@]}" install -y --quiet "$pkg" >/dev/null 2>&1; then
       fixed "$tool installed (dnf $pkg)"
@@ -262,7 +361,10 @@ else
   # debugging per-box combinations, hold the whole fleet at each box's
   # repo-latest. golang/nodejs ride along because update.sh builds with the
   # box's toolchain.
-  CRITICAL_PKGS=(podman crun passt conmon containers-common golang nodejs caddy)
+  # nodejs${NODE_FLOOR} rides along with plain nodejs: on Fedora they are
+  # SEPARATE parallel-installable packages, so keeping `nodejs` current does
+  # nothing for the versioned stream the web tier actually runs.
+  CRITICAL_PKGS=(podman crun passt conmon containers-common golang nodejs "nodejs${NODE_FLOOR}" caddy)
   installed_pkgs=()
   for p in "${CRITICAL_PKGS[@]}"; do
     rpm -q "$p" >/dev/null 2>&1 && installed_pkgs+=("$p")
@@ -431,6 +533,23 @@ else
       units_changed=1
     fi
   done
+  # fleet-web's ExecStart shim. Shipped content with no operator-tunable parts,
+  # and the unit will not start without it, so it is installed/refreshed rather
+  # than merely reported. A stale copy is worse than a missing one: it would
+  # resolve the node interpreter by older rules than the release intends.
+  web_shim_src="$SRC_DIR/deploy/fleet-web-start.sh"
+  web_shim_dst="/usr/local/bin/fleet-web-start.sh"
+  if [[ -f "$web_shim_src" && -f /etc/systemd/system/fleet-web.service ]]; then
+    if [[ -x "$web_shim_dst" ]] && cmp -s "$web_shim_src" "$web_shim_dst"; then
+      pass "fleet-web-start.sh matches deploy/"
+    elif [[ "$CHECK_ONLY" == "1" ]]; then
+      fail "${web_shim_dst} missing or drifted — fleet-web's ExecStart points at it (diff: $web_shim_dst $web_shim_src)"
+    else
+      install -D -m 0755 "$web_shim_src" "$web_shim_dst" \
+        && { fixed "installed ${web_shim_dst} from deploy/"; restart_needed=1; } \
+        || fail "could not install ${web_shim_dst}"
+    fi
+  fi
   # fleet-web's companion drop-in (deploy/fleet-web.service.d/) restates
   # TimeoutStopFailureMode=kill at the precedence level that beats Fedora's
   # global service.d abort drop-in. What it buys: a stop that overruns its

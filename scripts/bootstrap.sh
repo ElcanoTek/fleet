@@ -513,6 +513,34 @@ deploy_web_tier() {
   [[ -d "$web_src" ]] || { warn "no web/ in the checkout — skipping web tier."; return; }
   command -v npm >/dev/null 2>&1 || { warn "npm not found — skipping web tier (install nodejs)."; return; }
 
+  # ExecStart points at this shim (it resolves the node interpreter and execs
+  # next — see deploy/fleet-web-start.sh). Installed FIRST, before any of the
+  # early `return`s below: on a fresh box the unit is written unconditionally
+  # later in this script, so if the build fails and we bail before installing
+  # the shim, systemd is left with an ExecStart that does not exist — and with
+  # Restart=always/RestartSec=5s that is a permanent 203/EXEC restart loop.
+  # The old ExecStart (/usr/bin/node) could not fail this way because the path
+  # always existed. Shipped content, no operator-tunable parts, so overwriting
+  # is safe and unconditional.
+  if [[ -f "$REPO_ROOT/deploy/fleet-web-start.sh" ]]; then
+    install -D -m 0755 "$REPO_ROOT/deploy/fleet-web-start.sh" /usr/local/bin/fleet-web-start.sh \
+      && ok "installed /usr/local/bin/fleet-web-start.sh" \
+      || warn "could not install fleet-web-start.sh — fleet-web will not start without it"
+  fi
+
+  # Resolve the interpreter the unit will run BEFORE building, and fail loudly
+  # rather than building against one node and serving with another.
+  local node_bin node_ver
+  if node_bin="$(fleet_resolve_node_bin "$NODE_MAJOR")"; then
+    node_ver="$("$node_bin" -v 2>/dev/null || echo unknown)"
+    ok "web tier will run ${node_bin} (${node_ver})"
+  else
+    warn "no node >= $NODE_MAJOR found (web/.nvmrc) — the web tier needs one."
+    warn "  install it: sudo dnf install nodejs$NODE_MAJOR   (then re-run, or: sudo fleet doctor)"
+    warn "  skipping the web tier rather than building it against an unsupported node."
+    return
+  fi
+
   # Shared secrets the web↔backend link needs; generate-if-absent then load them
   # into the already-started backend.
   step "Web tier: ensuring shared secrets in ${ENV_FILE} + reloading backend"
@@ -525,15 +553,23 @@ deploy_web_tier() {
   ensure_env_b64_key FLEET_MCP_OAUTH_ENCRYPTION_KEY 32
   systemctl try-restart "$SERVICE_NAME" >/dev/null 2>&1 || true
 
-  step "Web tier: building the Next.js app (origin=${origin})"
-  if ( cd "$web_src" && NEXT_PUBLIC_PUBLIC_ORIGIN="$origin" NEXT_PUBLIC_APP_NAME="$app_name" \
+  step "Web tier: building the Next.js app (origin=${origin}, node=${node_ver})"
+  # PATH is prefixed with the resolved interpreter's directory so `npm` runs
+  # UNDER it. Without this the build silently used whatever `node` PATH
+  # resolved to — npm's shebang is `#!/usr/bin/env node` — which on Fedora is
+  # the DEFAULT stream. The tier would then be built on 22 and served on 24
+  # while this function printed that it would run 24: exactly the
+  # claimed-but-not-done failure this whole change set exists to remove.
+  if ( cd "$web_src" && PATH="$(fleet_node_build_path "$node_bin")" \
+        NEXT_PUBLIC_PUBLIC_ORIGIN="$origin" NEXT_PUBLIC_APP_NAME="$app_name" \
         NEXT_PUBLIC_BUILD_ID="$build_id" sh -c 'npm ci && npm run build' ); then
-    ok "web app built"
+    ok "web app built on $(PATH="$(fleet_node_build_path "$node_bin")" node -v 2>/dev/null || echo unknown)"
   else
     warn "web build failed — skipping the rest of the web tier."; return
   fi
 
   install -d "$web_dst" && cp -a "$web_src/." "$web_dst/" && ok "deployed web app → ${web_dst}"
+
 
   # fleet-web.service runs as the dedicated unprivileged fleet-web user (it is
   # the public-facing process). Create the user idempotently and hand it the
@@ -578,6 +614,10 @@ deploy_web_tier() {
   upsert_env_file "$web_env" APP_SESSION_SECRET        "$app_secret"
   upsert_env_file "$web_env" PORT                      "3000"
   upsert_env_file "$web_env" NODE_ENV                  "production"
+  # The interpreter resolved above, pinned explicitly. Without this the shim
+  # falls back to `node` on PATH, which on Fedora is the DEFAULT stream — i.e.
+  # possibly an older major than the one just installed.
+  upsert_env_file "$web_env" FLEET_NODE_BIN            "$node_bin"
   upsert_env_file "$web_env" NEXT_PUBLIC_PUBLIC_ORIGIN "$origin"
   upsert_env_file "$web_env" NEXT_PUBLIC_APP_NAME      "$app_name"
   upsert_env_file "$web_env" NEXT_PUBLIC_BUILD_ID      "$build_id"
@@ -714,12 +754,39 @@ fi
 # (fleet now preflights that at boot and fails closed — see ADR-0012). Cheap
 # to install unconditionally so the mode is available if an operator picks it.
 step "Installing system dependencies (build + runtime + sandbox toolchain)"
-FLEET_DEPS=(git curl jq golang nodejs python3 python3-pip gcc podman slirp4netns)
+# The node major is declared ONCE, in web/.nvmrc, and read here. CI reads the
+# same file via actions/setup-node's node-version-file, so the version the box
+# runs and the version CI tests cannot drift apart silently — which is exactly
+# what happened before: CI pinned '22' across six jobs in four workflow files
+# while the box took whatever `dnf install nodejs` happened to mean.
+# shellcheck source=lib/node-version.sh
+. "$SCRIPT_DIR/lib/node-version.sh"
+NODE_MAJOR="$(fleet_node_major_want "$REPO_ROOT" || true)"
+# No hardcoded fallback: .nvmrc can legitimately hold `lts/*` or `20.11.0`,
+# which actions/setup-node understands and a naive integer check does not — and
+# silently defaulting is how CI and the box diverge in the first place.
+[[ -n "$NODE_MAJOR" ]] || die "cannot read the node major from ${REPO_ROOT}/web/.nvmrc — expected something like '24'"
+# Ask for the VERSIONED package (nodejs24), not the unversioned `nodejs`.
+# Fedora's node streams are parallel-installable and `nodejs` resolves to
+# whichever the release designated default — so `dnf install nodejs` on F44
+# gives 22 and can never reach 24, however many times it is re-run.
+# nodejs${NODE_MAJOR}-npm, NOT bare `npm`: the unversioned npm package belongs
+# to the DEFAULT stream, so asking for it drags the older interpreter onto the
+# box and lets it own /usr/bin/npm — which is what would then build the app.
+FLEET_DEPS=(git curl jq golang "nodejs${NODE_MAJOR}" "nodejs${NODE_MAJOR}-npm" python3 python3-pip gcc podman slirp4netns)
 if command -v dnf >/dev/null 2>&1; then
-  run dnf install -y "${FLEET_DEPS[@]}"
+  if ! run dnf install -y "${FLEET_DEPS[@]}"; then
+    # A distro without a versioned stream (or one that names it differently)
+    # should still get a working box; the floor is then doctor.sh's to report.
+    warn "installing nodejs${NODE_MAJOR} failed — falling back to the unversioned nodejs package."
+    warn "  the web tier needs node >= ${NODE_MAJOR}; \`sudo fleet doctor\` will report the shortfall."
+    FLEET_DEPS=(git curl jq golang nodejs npm python3 python3-pip gcc podman slirp4netns)  # unversioned fallback
+    run dnf install -y "${FLEET_DEPS[@]}" || warn "dependency install failed — install these by hand: ${FLEET_DEPS[*]}"
+  fi
   [[ "$DRY_RUN" == "1" ]] || ok "system dependencies present (${FLEET_DEPS[*]})"
 else
   warn "dnf not found — skipping dependency install. Ensure these are present before continuing: ${FLEET_DEPS[*]}"
+  warn "  the web tier needs node >= ${NODE_MAJOR} (declared in web/.nvmrc)."
 fi
 
 # ── dedicated service user + rootless-Podman setup (--enable-service path) ──
@@ -1337,6 +1404,25 @@ if [[ "$ENABLE_SERVICE" == "1" ]]; then
     #    additionally needs the built Next app at /opt/fleet/web + its 0600
     #    env file, so we install it but leave enabling it to the operator.
     systemctl daemon-reload || warn "systemctl daemon-reload failed"
+    # Assert the RESOLVED ExecStart, not the file we may or may not have just
+    # written. The loop above installs a unit only when one is ABSENT (unit
+    # drift is doctor.sh / update.sh's job, deliberately), so on an
+    # already-provisioned box every piece of the node work above can land — the
+    # shim, FLEET_NODE_BIN, the versioned interpreter — while fleet-web still
+    # runs the OLD ExecStart pointing straight at /usr/bin/node. Reporting
+    # "enabled + started" there would be the same lie this change set exists to
+    # remove: a thing configured, reported, and not in effect.
+    if systemctl cat fleet-web.service >/dev/null 2>&1; then
+      _live_exec="$(systemctl show -p ExecStart --value fleet-web.service 2>/dev/null || true)"
+      case "$_live_exec" in
+        *fleet-web-start.sh*) : ;;   # shipped ExecStart is live
+        *)
+          warn "fleet-web's live ExecStart is not the shipped shim — the node work above is NOT in effect for the running tier."
+          warn "  live: ${_live_exec:-<unknown>}"
+          warn "  adopt the shipped unit: sudo fleet doctor   (or: sudo fleet update --adopt-units)"
+          ;;
+      esac
+    fi
     if systemctl enable --now "${SERVICE_NAME}" >/dev/null 2>&1; then
       ok "${SERVICE_NAME} enabled + started (services self-migrate on start)"
     else
