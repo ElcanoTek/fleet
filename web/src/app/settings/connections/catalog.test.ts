@@ -5,6 +5,7 @@ import {
   categoriesOf,
   categoryIcon,
   categoryLabel,
+  connectorParamOf,
   consentRequired,
   FEATURED_SLUG,
   fillPlaceholders,
@@ -226,5 +227,23 @@ describe("setupLink", () => {
       "https://vendor.test/docs",
     );
     expect(setupLink(entry({}))).toBeNull();
+  });
+});
+
+describe("connectorParamOf", () => {
+  it("parses the ?connector= deep link, normalized to the catalog's lowercase names", () => {
+    expect(connectorParamOf("?connector=browserbase")).toBe("browserbase");
+    expect(connectorParamOf("?connector=Browserbase")).toBe("browserbase");
+    expect(connectorParamOf("?connector=%20browserbase%20")).toBe(
+      "browserbase",
+    );
+    expect(connectorParamOf("?foo=1&connector=exa")).toBe("exa");
+  });
+
+  it("returns null when absent or empty", () => {
+    expect(connectorParamOf("")).toBeNull();
+    expect(connectorParamOf("?connected=1")).toBeNull();
+    expect(connectorParamOf("?connector=")).toBeNull();
+    expect(connectorParamOf("?connector=%20")).toBeNull();
   });
 });

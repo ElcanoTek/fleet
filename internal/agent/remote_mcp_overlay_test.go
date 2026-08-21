@@ -297,3 +297,81 @@ func TestManagerOpenRemoteOverlayPrefersInjectedOpener(t *testing.T) {
 		t.Fatalf("compatibility resolver was called %d time(s)", resolver.listed)
 	}
 }
+
+// browserbaseKeyFunc is what makes "paste the key once, in Settings →
+// Connections" true: it unseals the running user's own Browserbase connector
+// credential for the host-side live-view tool (#987). It must find the connection
+// by URL host, because the registration name is whatever the user typed.
+func TestBrowserbaseKeyFuncResolvesByURLHost(t *testing.T) {
+	res := &fakeResolver{
+		conns: []RemoteMCPConn{
+			{ID: "other", Name: "browserbase", URL: "https://mcp.example.test/mcp"},
+			// Named nothing like the vendor, but it IS the vendor.
+			{ID: "bb", Name: "bb", URL: "https://mcp.browserbase.com/mcp?keepAlive=true"},
+		},
+		tokens: map[string]string{"bb": "bb-connector-key"},
+	}
+	m := &Manager{remoteMCP: res}
+
+	fn := m.browserbaseKeyFunc(context.Background(), "user@example.test", []string{"bb"})
+	if fn == nil {
+		t.Fatal("a wired resolver + a user + an enabled connection must yield a key func")
+	}
+	got, err := fn(context.Background())
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if got != "bb-connector-key" {
+		t.Errorf("key = %q, want the browserbase connection's key", got)
+	}
+	if len(res.asked) != 1 || res.asked[0] != "bb" {
+		t.Errorf("asked for %v; must unseal only the Browserbase connection", res.asked)
+	}
+}
+
+// A nil func is what keeps browserbase_live_view unregistered, so every case that
+// cannot reach a key must return nil rather than a func that fails later. The
+// opt-in case is the security-relevant one: a chat with Browserbase switched OFF
+// must not be able to unseal the key or enumerate the account's sessions.
+func TestBrowserbaseKeyFuncReturnsNilWhenUnreachable(t *testing.T) {
+	bb := []RemoteMCPConn{{ID: "bb", Name: "browserbase", URL: "https://mcp.browserbase.com/mcp"}}
+	for _, tc := range []struct {
+		name     string
+		resolver RemoteMCPResolver
+		email    string
+		enabled  []string
+	}{
+		{"no resolver wired", nil, "user@example.test", []string{"browserbase"}},
+		{"no user on the run", &fakeResolver{conns: bb}, "", []string{"browserbase"}},
+		{"user has no browserbase connection", &fakeResolver{
+			conns: []RemoteMCPConn{{ID: "n", Name: "notion", URL: "https://mcp.notion.test/mcp"}},
+		}, "user@example.test", []string{"notion"}},
+		{"connector switched off for this chat", &fakeResolver{conns: bb}, "user@example.test", []string{"notion"}},
+		{"nothing enabled in this chat", &fakeResolver{conns: bb}, "user@example.test", []string{}},
+		// nil must gate exactly like empty: RunTurnInput.OptionalMCPServersEnabled
+		// documents "nil/empty means no optional servers", and openRemoteOverlay
+		// wires zero remote servers for a nil list. A key func here would register
+		// the tool and unseal the credential in a chat with every connector off.
+		{"opt-in list never seeded (nil)", &fakeResolver{conns: bb}, "user@example.test", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := &Manager{remoteMCP: tc.resolver}
+			if fn := m.browserbaseKeyFunc(context.Background(), tc.email, tc.enabled); fn != nil {
+				t.Error("expected nil so the tool stays unregistered and the key stays sealed")
+			}
+		})
+	}
+}
+
+// The URL match must survive an explicit port: url.URL.Host keeps ":443", so the
+// resolver compares Hostname(). A silent non-match here unregisters the tool with
+// no diagnostic despite a fully working connector.
+func TestBrowserbaseKeyFuncMatchesURLWithExplicitPort(t *testing.T) {
+	m := &Manager{remoteMCP: &fakeResolver{
+		conns:  []RemoteMCPConn{{ID: "bb", Name: "browserbase", URL: "https://mcp.browserbase.com:443/mcp"}},
+		tokens: map[string]string{"bb": "k"},
+	}}
+	if fn := m.browserbaseKeyFunc(context.Background(), "user@example.test", []string{"browserbase"}); fn == nil {
+		t.Error("an explicit :443 must not defeat the vendor-host match")
+	}
+}

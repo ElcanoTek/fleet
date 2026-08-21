@@ -19,7 +19,7 @@
 //	fleet timers install [--backup] [--maintenance] [--src <dir>] [--dry-run]
 //	fleet chat                                        (interactive agent TUI, #457; --message for one-shot)
 //	fleet admin add|list|rm                           (one-step full admin across both user planes)
-//	fleet config set-openrouter-key|set-auth-pubkey   (guided credential/env-file writes)
+//	fleet config set-openrouter-key|set-auth-pubkey|set-browserbase-key   (guided credential/env-file writes)
 //	fleet chat user add|update|role|del|list
 //	fleet sched user add|update|set-role|rename|del|list
 //	fleet sched apikey create|list|revoke|rotate|delete
@@ -172,6 +172,8 @@ Users, credentials, notes:
   fleet admin list                                    (every chat login + whether it's an Operations Center admin)
   fleet admin rm <email>                              (remove from both planes)
   fleet config set-openrouter-key                     (hidden prompt; or --key -; upserts OPENROUTER_API_KEY into the server env file)
+  fleet config set-browserbase-key                    (hidden prompt; or --key -; upserts BROWSERBASE_API_KEY into the server env file —
+                                                       mints hosted-browser live views; see docs/BROWSERBASE.md)
   fleet config set-auth-pubkey [<key>|--from <file>]  (enable Elcano SSO: validates + writes AUTH_SIGNING_PUBKEY into the web env file;
                                                        accepts the "auth pubkey" output line verbatim; --login-url/--cookie-domain optional)
   fleet chat user add <email>    --password -

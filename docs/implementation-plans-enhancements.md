@@ -6,7 +6,7 @@ Working notes for implementers. Prefer the linked issue comment/body when presen
 | --- | --- |
 | #989 | [comment](https://github.com/ElcanoTek/fleet/issues/989#issuecomment-5198861451) |
 | #988 | [issue body](https://github.com/ElcanoTek/fleet/issues/988) |
-| #987 | [comment](https://github.com/ElcanoTek/fleet/issues/987#issuecomment-5198925257) |
+| #987 | [comment](https://github.com/ElcanoTek/fleet/issues/987#issuecomment-5198925257) — **shipped**; see `internal/clientconfig/builtin_skills/browserbase/`, `internal/tools/browserbase_live_view.go`, `docs/BROWSERBASE.md` |
 | #986 | [issue body](https://github.com/ElcanoTek/fleet/issues/986) |
 | #985 | Full plan below — **shipped**; see `internal/clientconfig/builtin_skills/bento-slides/`, `docs/SKILLS.md`, `docs/FEATURE-NOTES.md` |
 | #984 | Full plan below (pending issue comment) |

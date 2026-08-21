@@ -83,6 +83,39 @@ Division of labor across the three health verbs:
   halves check `is-active` as well as `is-enabled`: `is-enabled` reads only the
   install symlink, so an enabled-but-stopped timer fires nothing while its
   service's `Result` still reads `success` — a false clean.
+- **`is-active` cannot see a crash loop, so restart churn is its own check.**
+  Both app units run `Restart=always`, so a unit that dies is active again ~5s
+  later and `is-active` reports `active` the whole time — a unit can
+  crash-loop indefinitely while every other unit check stays green. The
+  `restarts: <unit>` checks read `NRestarts`, which is the right property and
+  not just a convenient one: it counts only restarts driven by `Restart=`, and
+  a **manual `systemctl restart` resets it to zero**, so an ordinary deploy
+  cannot raise a false alarm while a self-inflicted restart accumulates a count
+  that only human intervention clears. 0 is ok, 1–4 an advisory, ≥5 a failure.
+  A non-numeric or absent property is a skip, never a guessed verdict.
+  `Result` enriches the detail but never drives the verdict alone: it describes
+  the *last* run, so on a unit that was restarted after an incident it still
+  names the old failure, and a check that nags about a resolved event forever
+  gets ignored.
+- **What restart churn does *not* catch**, stated because it is the
+  neighbouring bug: a process that segfaults during a **manual** stop — the
+  `fleet-web` teardown crash in
+  [`WEB-TIER-SHUTDOWN.md`](WEB-TIER-SHUTDOWN.md) — is restarted by operator
+  action, so `NRestarts` stays 0. That fault is a configuration matter, which
+  the next check covers.
+- **`fleet-web stop policy` asserts a resolved directive, not a file.** It
+  reads what systemd resolved for `TimeoutStopFailureMode` and expects `kill`.
+  A config check earns its place among health checks here because this exact
+  directive sat in the unit body doing nothing for a full release: a
+  distro-global `/usr/lib/systemd/system/service.d/` drop-in overrides a unit
+  body (Fedora sets `abort` there), so the unit file said the right thing and
+  every file-comparing check passed. Only the resolved value distinguishes the
+  two. It is a **warn** here while the same assertion in `doctor.sh` is a
+  **fail** — deliberately: `doctor.sh` installs the drop-in and *then* checks,
+  so a wrong value there means a repair did not hold, whereas this endpoint
+  cannot repair anything and the consequence is hygiene rather than downtime
+  (`LimitCORE=0` keeps the memory image off disk either way). Don't harmonise
+  them without that changing.
 
 ## Deviations / deliberately deferred
 

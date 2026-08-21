@@ -3,4 +3,7 @@
 // in web/; the frontend remains managed by package.json/package-lock.json.
 module github.com/ElcanoTek/fleet/web
 
-go 1.26.6
+// Major.minor only, deliberately: this module has no packages, so pinning a
+// PATCH here just created a second copy of the root go.mod's version that had
+// to be bumped in lockstep for no benefit.
+go 1.26

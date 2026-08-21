@@ -76,9 +76,15 @@ host-brokered credentials/network that by invariant never enter the sandbox:
 
 - **Host network / brokered fetch**: `web_fetch`, `web_search`,
   `tavily_search`, `smart_search`, `download_url` (HTTP fetch),
-  `generate_image` (provider API), `fastio_upload` / Fast.io find. These use
-  host-side credentials and the egress-proxy/allowlist posture; running them in
-  the sandbox would either leak credentials in or lose the host broker.
+  `generate_image` (provider API), `fastio_upload` / Fast.io find,
+  `browserbase_live_view` (#987 — one authenticated GET to a fixed public
+  vendor host that converts a hosted browser session id into a live-view URL
+  for a HUMAN; it drives no browser, so ADR-0044's "browser automation is a
+  connector" stands. Registered per turn only when a credential is actually
+  reachable — the running user's own Browserbase connector key, or a box-wide
+  `BROWSERBASE_API_KEY`; see `docs/BROWSERBASE.md`). These use host-side
+  credentials and the egress-proxy/allowlist posture; running them in the sandbox would either leak
+  credentials in or lose the host broker.
 - **Host workspace staging** (path-validated legacy exceptions):
   `fastio_upload` reads bytes for an outbound upload; `publish_artifact` stats
   a confined path and records a pointer rather than opening arbitrary content.

@@ -91,13 +91,68 @@ image); run them via the `npm` scripts documented below.
 ## Prerequisites
 
 - **Go** — 1.21 or newer. You do not need the exact patch release pinned in
-  `go.mod` (CI uses `1.26.6`): the Makefile exports `GOTOOLCHAIN=auto`, so the
+  `go.mod` (CI reads `go-version-file: go.mod`): the Makefile exports
+  `GOTOOLCHAIN=auto`, so the
   pinned toolchain is downloaded on demand. 1.21 is the floor only because
   that is when `GOTOOLCHAIN` — and therefore the ability to fetch — landed.
-- **golangci-lint `v2.12.2`** — CI pins this exact version (it matches
-  `run.go` in [`.golangci.yml`](../.golangci.yml)); a different version may flag
-  or miss findings.
-- **Node.js 22** and npm for the `web/` lanes.
+- **TypeScript 7 and oxlint, not TypeScript 6 and ESLint.** The web tier runs
+  TypeScript 7 — the native Go compiler — everywhere: `npm run typecheck`, the
+  `next build` type pass, and editors. Nothing keeps a TS 6 around.
+
+  That required replacing ESLint, and it is worth recording why, because
+  "just upgrade TypeScript" does not work. On TS 7 `npm ci` succeeds,
+  `tsc --noEmit` is clean and `next build` succeeds — only ESLint failed, with
+  an explicit refusal: *"typescript-eslint does not support TS 7.0"*. TS 7 is
+  the native Go rewrite (a ~3.6 MB shim around a platform binary, shipping
+  `tsc` but no `tsserver`), so the JS compiler API typescript-eslint is built
+  on is not there. typescript-eslint targets TS >= 7.1, skipping 7.0
+  ([#10940](https://github.com/typescript-eslint/typescript-eslint/issues/10940)),
+  and reached this repo only via `eslint-config-next`. The documented
+  workaround — keep TS 6 for the linter, add TS 7 under an alias for
+  compilation — was rejected: two TypeScripts can disagree about the same code.
+
+  [oxlint](https://oxc.rs) has no such coupling: it is a Rust linter with its
+  own TS parser, so the TypeScript version is irrelevant to it. Coverage was
+  compared rule by rule before switching, not assumed:
+
+  | plugin | eslint-config-next | oxlint |
+  | --- | --- | --- |
+  | nextjs | 22 | 21 |
+  | typescript | 20 | 39 |
+  | react (incl. hooks) | 33 | 42 |
+  | jsx-a11y | 6 | 35 |
+  | import | 1 | 8 |
+
+  The **one** rule lost is `@next/next/no-location-assign-relative-destination`
+  (using `window.location` for internal navigation). Its 17 findings were
+  long-standing warnings, and oxlint's `nextjs/no-html-link-for-pages` — which
+  it enforces more aggressively than ESLint's config did, catching 8 real cases
+  ESLint reported none of — covers the adjacent `<a href>` form of the same
+  mistake. Net coverage is up, and that single gap is the honest cost.
+
+  Two consequences to know:
+
+  - **`npm run lint` is no longer type-aware.** oxlint works on TS 7 precisely
+    because it does not use the type checker, so the type rules
+    `@typescript-eslint` used to contribute now come from `npm run typecheck`,
+    which is its own CI step ahead of the build. Types are still gated, just
+    by the compiler instead of the linter.
+  - **The `warn`-severity rules in `.oxlintrc.json` are a burn-down list, not
+    policy.** oxlint's a11y and Next coverage is far wider than the old gate's,
+    and turning it all on at `error` would have failed the build on ~121
+    pre-existing findings. They are set to `warn` so they are visible without
+    conflating "adopt TS 7" with "fix every a11y issue". Fixing them and
+    promoting each to `error` is follow-up work.
+
+  Measured on this app: lint **30,418 ms → 607 ms** (~50×), and the typecheck
+  step costs ~2 s.
+
+- **golangci-lint `v2.12.2`** — CI pins this exact binary version; a different
+  version may flag or miss findings. [`.golangci.yml`](../.golangci.yml) no
+  longer sets `run.go`: golangci-lint's documented default is the go.mod Go
+  version, so that stays a single declaration too.
+- **Node.js** — the major in [`web/.nvmrc`](../web/.nvmrc) (currently 24) — and npm, for the
+  `web/` lanes. CI reads the same file via `node-version-file`.
 - **PostgreSQL 18** for the Go suites that touch the chat/scheduler stores. CI
   uses the `postgres:18` service container.
 - **Podman (rootless) + pasta** for the live e2e and sandbox-invariant tests.

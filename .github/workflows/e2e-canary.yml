@@ -81,13 +81,15 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
-          go-version: '1.26.6'
+          # Read from go.mod so the toolchain is declared once.
+          go-version-file: go.mod
           check-latest: true
 
       - name: Set up Node
         uses: actions/setup-node@v7
         with:
-          node-version: '22'
+          # Read from web/.nvmrc so the deployed node major is declared once.
+          node-version-file: web/.nvmrc
           cache: npm
           cache-dependency-path: web/package-lock.json
 
