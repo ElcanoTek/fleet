@@ -431,6 +431,23 @@ else
       units_changed=1
     fi
   done
+  # fleet-web's companion drop-in (deploy/fleet-web.service.d/) restates
+  # TimeoutStopFailureMode=kill at the precedence level that beats Fedora's
+  # global service.d abort drop-in — without it the SIGABRT-on-overrun dump
+  # bug returns. A drop-in swap needs no app restart; daemon-reload suffices.
+  web_dropin_src="$SRC_DIR/deploy/fleet-web.service.d/10-timeout-kill.conf"
+  web_dropin_dst="/etc/systemd/system/fleet-web.service.d/10-timeout-kill.conf"
+  if [[ -f "$web_dropin_src" && -f /etc/systemd/system/fleet-web.service ]]; then
+    if [[ -f "$web_dropin_dst" ]] && diff -q <(grep -vE '^[[:space:]]*(#|$)' "$web_dropin_src") <(grep -vE '^[[:space:]]*(#|$)' "$web_dropin_dst") >/dev/null 2>&1; then
+      pass "fleet-web.service.d/10-timeout-kill.conf matches deploy/"
+    elif [[ "$CHECK_ONLY" == "1" ]]; then
+      fail "fleet-web.service.d/10-timeout-kill.conf missing or drifted — review: diff $web_dropin_dst $web_dropin_src"
+    else
+      install -D -m 0644 "$web_dropin_src" "$web_dropin_dst"
+      fixed "fleet-web.service.d/10-timeout-kill.conf installed from deploy/"
+      units_changed=1
+    fi
+  fi
   [[ "$units_changed" == "1" ]] && systemctl daemon-reload
 fi
 

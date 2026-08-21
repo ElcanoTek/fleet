@@ -1317,6 +1317,13 @@ if [[ "$ENABLE_SERVICE" == "1" ]]; then
       if [[ -f "$REPO_ROOT/deploy/$unit" ]] && ! systemctl cat "$unit" >/dev/null 2>&1; then
         install -D -m 0644 "$REPO_ROOT/deploy/$unit" "/etc/systemd/system/$unit"
         info "installed /etc/systemd/system/$unit"
+        # fleet-web's drop-in is part of the unit's shutdown behavior (beats
+        # Fedora's global abort-on-timeout drop-in); install it with the unit.
+        if [[ "$unit" == "fleet-web.service" && -f "$REPO_ROOT/deploy/fleet-web.service.d/10-timeout-kill.conf" ]]; then
+          install -D -m 0644 "$REPO_ROOT/deploy/fleet-web.service.d/10-timeout-kill.conf" \
+            /etc/systemd/system/fleet-web.service.d/10-timeout-kill.conf
+          info "installed /etc/systemd/system/fleet-web.service.d/10-timeout-kill.conf"
+        fi
       fi
     done
     # 3. daemon-reload + enable the backend unit. The web unit (fleet-web)

@@ -20,6 +20,11 @@
 #                                        # node_modules/next/dist/bin/next directly.
 #   chown -R fleet-web:fleet-web /opt/fleet/web/.next   # the only path next writes at runtime
 #   install -D -m 0644 deploy/fleet-web.service /etc/systemd/system/fleet-web.service
+#   install -D -m 0644 deploy/fleet-web.service.d/10-timeout-kill.conf \
+#     /etc/systemd/system/fleet-web.service.d/10-timeout-kill.conf
+#                                        # ^ REQUIRED on Fedora and any distro
+#                                        # shipping a global service.d drop-in
+#                                        # (see TimeoutStopFailureMode below).
 #   install -D -m 0600 /dev/null /etc/fleet/fleet-web.env   # then fill it in (see below)
 #   systemctl daemon-reload && systemctl enable --now fleet-web
 #
@@ -96,10 +101,26 @@ TimeoutStopSec=30s
 # setting TimeoutStopFailureMode=abort, so a web tier that overran the drain
 # was SIGABRT'd and dumped ~130 MB of core every time. A stop that overran its
 # deadline is a hang to fix, not a crash to dissect — SIGKILL reports the same
-# timeout in the journal and writes no dump. Setting it here overrides the
-# system-wide default regardless of what the distro chose. (systemd >= 246;
-# older systemd logs an unknown-key warning and keeps its default.)
+# timeout in the journal and writes no dump. (systemd >= 246; older systemd
+# logs an unknown-key warning and keeps its default.)
+#
+# PRECEDENCE CAVEAT: Fedora's drop-in lives in the GLOBAL
+# /usr/lib/systemd/system/service.d/ directory, and drop-ins are read AFTER
+# the unit body — so the distro's `abort` beats the line below no matter what
+# this file says (verified on Fedora 44: `systemctl show` reported `abort`
+# with this line present). The per-unit drop-in
+# deploy/fleet-web.service.d/10-timeout-kill.conf restates `kill` at the
+# precedence level that actually wins; install both. The line below stays as
+# the correct value for distros without the global drop-in.
 TimeoutStopFailureMode=kill
+# Next handles SIGTERM and exits with code 143 (128+SIGTERM) rather than being
+# killed by the signal outright. systemd's default clean set only covers a
+# process KILLED by SIGTERM, so Next's exit(143) was logged as a failed stop
+# ("Failed with result 'exit-code'") on every otherwise-clean shutdown.
+# Declaring 143 names Next's clean-stop code; it does not paper over crashes —
+# SIGSEGV/SIGABRT exits still fail and are still logged, and LimitCORE=0 (below)
+# still applies to them.
+SuccessExitStatus=143
 
 # ── Service identity ──
 # This is the ONLY public-facing process, so it runs as a dedicated
