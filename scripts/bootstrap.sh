@@ -926,7 +926,11 @@ elif [[ "$ENABLE_SERVICE" == "1" ]] && id "$SERVICE_USER" >/dev/null 2>&1; then
   # User=fleet unit finds the image (root's rootful store is a separate namespace).
   SANDBOX_TAG="$(sandbox_manifest_tag "${CLIENT_CONFIG_DIR}/manifest.yaml")"
   info "building as ${SERVICE_USER} (rootless) → ${SANDBOX_TAG}"
-  if runuser -u "$SERVICE_USER" -- sh -c "cd '${SERVICE_HOME}' && HOME='${SERVICE_HOME}' XDG_RUNTIME_DIR='/run/${SERVICE_USER}' podman build -t '${SANDBOX_TAG}' -f '${SANDBOX_CONTAINERFILE}' '${CLIENT_CONFIG_DIR}/sandbox'"; then
+  # --pull=newer matches build-sandbox-image.sh: refresh an unpinned base from
+  # the registry when upstream published a newer one, instead of silently
+  # reusing whatever stale copy is already in the store (offline-safe — podman
+  # suppresses the pull error when a local copy of the base exists).
+  if runuser -u "$SERVICE_USER" -- sh -c "cd '${SERVICE_HOME}' && HOME='${SERVICE_HOME}' XDG_RUNTIME_DIR='/run/${SERVICE_USER}' podman build --pull=newer -t '${SANDBOX_TAG}' -f '${SANDBOX_CONTAINERFILE}' '${CLIENT_CONFIG_DIR}/sandbox'"; then
     ok "sandbox image ${SANDBOX_TAG} built into ${SERVICE_USER}'s rootless store"
   else
     warn "rootless sandbox build (as ${SERVICE_USER}) failed — fleet will have no runnable sandbox image."

@@ -146,12 +146,21 @@ fleet update --check      # read-only "commits behind" report; touch nothing
 
 `update` (ported from the `moc`/`gig` pattern) `git pull`s **both** the fleet
 checkout and the client-config checkout, runs `make build` (fleet binary) and
-`cd web && npm ci && npm run build`, then **rebuilds the sandbox image only when
-the bundle's `sandbox/Containerfile` or resolved image tag changed, or the tag
-is missing from the service user's image store** — it stores a SHA-256 of the
-Containerfile and the resolved tag under `.fleet-state/` and compares, skipping
-the ~2-3 min image build when unchanged (a bundle that pins a prebuilt
-`sandbox.image` skips the build entirely). Services self-migrate on restart, so
+`cd web && npm ci && npm run build`, then **rebuilds the sandbox image when
+the bundle's `sandbox/Containerfile` or resolved image tag changed, the tag
+is missing from the service user's image store, or the installed image is
+older than `FLEET_SANDBOX_MAX_AGE_DAYS`** (default 7; `--sandbox-max-age <d>`
+per run, `0` disables) — it stores a SHA-256 of the Containerfile and the
+resolved tag under `.fleet-state/` and compares, skipping the ~2-3 min image
+build when unchanged and still fresh (a bundle that pins a prebuilt
+`sandbox.image` skips the build entirely). The **max-age freshness backstop**
+is what keeps a stable bundle from serving a weeks-old image: an unchanged
+Containerfile does not stop the base layers and packages *inside* the image
+from aging and accumulating published CVEs, so an age-triggered rebuild runs
+with `--no-cache` (every layer re-runs, packages refresh), and every sandbox
+build now passes `--pull=newer` so an unpinned base (the generic bundle's
+`fedora-minimal:latest`) is re-checked against the registry instead of
+silently reusing the stale local copy. Services self-migrate on restart, so
 `update` runs no migrations; it finishes with `systemctl restart fleet` and a
 unit health check.
 If the pull changed `update.sh` itself, the script **re-execs the fresh copy** in
@@ -411,8 +420,11 @@ The execution sandbox is a **per-client bundle artifact**: each bundle ships its
 own `sandbox/Containerfile` (base tracks `fedora-minimal:latest`; pin a digest
 for reproducibility). `bootstrap` builds it on the
 box by default (auditable supply chain); `update` rebuilds it when the
-Containerfile or the manifest's `sandbox.tag` changed, or the tag is missing
-from the service user's image store; `status` verifies the resolved image runs.
+Containerfile or the manifest's `sandbox.tag` changed, the tag is missing
+from the service user's image store, or the installed image aged past
+`FLEET_SANDBOX_MAX_AGE_DAYS` (default 7 — see
+[`docs/SANDBOX-IMAGE-FRESHNESS.md`](SANDBOX-IMAGE-FRESHNESS.md)); `status`
+verifies the resolved image runs.
 Registry
 publish stays opt-in — set `sandbox.image` in the bundle manifest to a prebuilt
 ref and all three steps consume that instead of building.
