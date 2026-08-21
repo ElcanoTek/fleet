@@ -8,7 +8,9 @@
 # freshness backstop that keeps an unchanged bundle from serving a weeks-old
 # image full of unpatched base/package CVEs (skipped entirely when the bundle
 # resolves sandbox.image to a prebuilt ref: registry freshness is the
-# publisher's pipeline's job, not this box's), rebuilds the
+# publisher's pipeline's job, not this box's). When the tag cannot be resolved
+# at all, the presence and freshness gates both go blind and the step says so
+# loudly instead of reporting the image up to date. It then rebuilds the
 # fleet binary + the Next web app and deploys the web build into the fleet-web
 # unit's WorkingDirectory (a build left only in the checkout never reaches the
 # browser), then restarts the systemd units (fleet, then fleet-web when
@@ -159,7 +161,7 @@ while [[ $# -gt 0 ]]; do
     --dry-run)        DRY_RUN=1 ;;
     --adopt-units)    ADOPT_UNITS=1 ;;
     --no-timers)      OFFER_TIMERS=0 ;;
-    -h|--help)        sed -n '2,64p' "$0"; exit 0 ;;
+    -h|--help)        sed -n '2,66p' "$0"; exit 0 ;;
     *) echo "error: unknown argument: $1" >&2; exit 1 ;;
   esac
   shift
@@ -348,6 +350,17 @@ else
       # fetch + self-update detection (no loop) and then runs the rest of the
       # update normally — crucially still pulling the client-config bundle
       # (NOT set to NO_PULL, which would skip it).
+      #
+      # The re-exec passes NO argv, so EVERY setting a command-line flag can
+      # change must be restated here as its env equivalent. A flag left out of
+      # this list is silently downgraded to its default on exactly the run that
+      # pulled the fix — the hardest run to notice it on, and one an operator
+      # only gets once. (Flags whose absence is intentional: --no-pull, which
+      # would skip the bundle pull the re-exec exists to preserve, and
+      # --dry-run, which never reaches here because it skips the fast-forward.
+      # --src needs no forwarding: SRC_DIR re-derives from the script path the
+      # exec below names. Env-only knobs — FLEET_ENV_FILE, FLEET_STATE_DIR —
+      # are inherited by `env` without being named.)
       if ! git diff --quiet "$before_sha" "$after_sha" -- scripts/update.sh; then
         warn "update.sh changed in this update — re-executing the new version"
         exec env FLEET_UPDATE_REEXEC=1 FLEET_UPDATE_YES=1 \
@@ -358,6 +371,9 @@ else
           FLEET_SERVICE_NAME="$SERVICE_NAME" \
           FLEET_INSTALL_DIR="$INSTALL_DIR" \
           FLEET_UPDATE_BRANCH="$BRANCH_OVERRIDE" \
+          FLEET_SANDBOX_MAX_AGE_DAYS="$SANDBOX_MAX_AGE_DAYS" \
+          FLEET_UPDATE_ADOPT_UNITS="$ADOPT_UNITS" \
+          FLEET_UPDATE_OFFER_TIMERS="$OFFER_TIMERS" \
           bash "$SRC_DIR/scripts/update.sh"
       fi
     fi
@@ -460,7 +476,21 @@ REF_FILE="$STATE_DIR/sandbox-image.ref"
 cf_now="$(hash_file "$sandbox_cf")"
 cf_prev="absent"
 [[ -f "$STAMP_FILE" ]] && cf_prev="$(cat "$STAMP_FILE")"
-ref_now="$(FLEET_CLIENT_CONFIG_DIR="$CLIENT_DIR" "$SCRIPT_DIR/build-sandbox-image.sh" --print-tag 2>/dev/null || true)"
+# Keep the resolver's stderr instead of discarding it. --print-tag ALWAYS
+# prints a name:tag when it runs at all (it falls back to
+# localhost/fleet-sandbox:latest when the manifest names no sandbox.tag), so an
+# EMPTY answer means the script itself could not run — missing, not executable,
+# unreadable bundle path. That blinds both store-aware gates in step 3, so the
+# operator needs the reason, not just the symptom.
+# (/dev/null fallback: a box that cannot mktemp still resolves the tag — the
+# reason string is a nicety, never a reason to abort an update.)
+ref_err_file="$(mktemp 2>/dev/null || printf '/dev/null')"
+ref_now="$(FLEET_CLIENT_CONFIG_DIR="$CLIENT_DIR" "$SCRIPT_DIR/build-sandbox-image.sh" --print-tag 2>"$ref_err_file" || true)"
+ref_err=""
+if [[ "$ref_err_file" != "/dev/null" ]]; then
+  ref_err="$(head -n 1 "$ref_err_file" 2>/dev/null || true)"
+  rm -f "$ref_err_file"
+fi
 ref_prev=""
 [[ -f "$REF_FILE" ]] && ref_prev="$(tr -d '[:space:]' < "$REF_FILE")"
 
@@ -582,6 +612,11 @@ else
   # update while refreshing nothing. Every other reason keeps the layer cache —
   # there the trigger itself guarantees a real change.
   sandbox_build_no_cache=0
+  # Set when a gate could not reach an answer (as opposed to answering "no
+  # rebuild needed"). It must never read as "up to date" at the end of this
+  # step: nothing here learned whether the service's image exists, or how old
+  # it is.
+  sandbox_unverified=""
   if [[ "$NO_PULL" == "1" ]]; then
     build_reason="rebuild-only mode"
   elif [[ "$cf_prev" == "absent" ]]; then
@@ -600,7 +635,11 @@ else
     # spurious full rebuild.
     case "$(sandbox_image_state "$ref_now")" in
       absent) build_reason="${ref_now} missing from the sandbox image store" ;;
-      error)  warn "could not probe the sandbox image store for ${ref_now} (podman failed as ${service_user:-$(id -un)}) — leaving the image as-is; check with: fleet doctor" ;;
+      error)
+        # Reported once, below: an inconclusive probe is the same blind spot as
+        # an unresolvable tag, and it must not be followed by an "up to date".
+        sandbox_unverified="podman could not read the image store for ${ref_now} as ${service_user:-$(id -un)}"
+        ;;
       present)
         # Freshness backstop: an unchanged bundle must not mean a frozen
         # image — the base layers and packages inside it keep aging (and
@@ -615,9 +654,28 @@ else
         fi
         ;;
     esac
+  else
+    # ref_now empty: the resolver never produced a tag, so the two gates that
+    # need one — the store-presence probe and the max-age freshness backstop —
+    # were both unreachable. This used to fall out of the chain with no reason
+    # set and print a reassuring "up to date" line that showed the tag as
+    # unresolved right there in the same breath, which is how a weeks-old image
+    # sits on a box that updates cleanly every day. Not fatal: an unresolvable
+    # tag is no evidence the running image is broken, and dying here would
+    # strand an otherwise good update.
+    sandbox_unverified="the image tag could not be resolved${ref_err:+ (${ref_err})}"
   fi
   if [[ -z "$build_reason" ]]; then
-    ok "sandbox image up to date (Containerfile ${cf_now:0:12}, ${ref_now:-tag unresolved}) — skipping the image build."
+    if [[ -n "$sandbox_unverified" ]]; then
+      warn "sandbox image NOT verified and NOT rebuilt — ${sandbox_unverified}."
+      warn "  neither the store-presence check nor the ${SANDBOX_MAX_AGE_DAYS}-day freshness backstop reached an answer, so the ${SERVICE_NAME} service keeps whatever image its store already holds, of unknown age."
+      if [[ -z "$ref_now" ]]; then
+        warn "  diagnose the tag: FLEET_CLIENT_CONFIG_DIR=${CLIENT_DIR} ${SCRIPT_DIR}/build-sandbox-image.sh --print-tag"
+      fi
+      warn "  check the box: fleet doctor   —   rebuild by hand: sudo FLEET_CLIENT_CONFIG_DIR=${CLIENT_DIR} FLEET_SERVICE_NAME=${SERVICE_NAME} ${SCRIPT_DIR}/build-sandbox-image.sh"
+    else
+      ok "sandbox image up to date (Containerfile ${cf_now:0:12}, ${ref_now}) — skipping the image build."
+    fi
   else
     info "${build_reason} — building the sandbox image."
     if FLEET_CLIENT_CONFIG_DIR="$CLIENT_DIR" FLEET_SERVICE_NAME="$SERVICE_NAME" \
