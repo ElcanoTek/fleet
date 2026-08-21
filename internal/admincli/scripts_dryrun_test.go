@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -778,5 +779,127 @@ func TestFleetUpgradeDryRunSmoke(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("fleet-upgrade --dry-run plan missing %q\n--- output ---\n%s", want, out)
 		}
+	}
+}
+
+// sliceBetween returns the part of s between the first occurrence of start and
+// the first occurrence of end after it, failing the test when either marker is
+// missing — a moved marker must surface as a loud test failure rather than a
+// silently empty region that asserts nothing.
+func sliceBetween(t *testing.T, s, start, end string) string {
+	t.Helper()
+	i := strings.Index(s, start)
+	if i < 0 {
+		t.Fatalf("marker %q not found", start)
+	}
+	rest := s[i+len(start):]
+	j := strings.Index(rest, end)
+	if j < 0 {
+		t.Fatalf("marker %q not found after %q", end, start)
+	}
+	return rest[:j]
+}
+
+// TestUpdateReexecForwardsFlagState — the self-update re-exec (update.sh
+// re-running the copy the pull just installed) passes NO argv, so every
+// setting a command-line flag can change must be restated as its env
+// equivalent on the `exec env` line. A flag missed there is silently
+// downgraded to its default on exactly the run that pulled the fix — the
+// hardest run to notice it on, and one the operator only gets once. That is
+// how --sandbox-max-age, --adopt-units and --no-timers were all dropped.
+//
+// So this derives the flag-settable variables from the arg parser itself
+// rather than hardcoding a list: a NEW flag fails this test until it is either
+// forwarded or given a documented reason not to be.
+func TestUpdateReexecForwardsFlagState(t *testing.T) {
+	root := repoRootFromTest(t)
+	body, err := os.ReadFile(filepath.Join(root, "scripts", "update.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(body)
+
+	// Deliberate non-forwards, each with the reason it is safe to omit.
+	exempt := map[string]string{
+		"SRC_DIR":    "re-derives from the script path the exec names",
+		"NO_PULL":    "forwarding it would skip the client-bundle pull the re-exec exists to preserve",
+		"DRY_RUN":    "a dry run never fast-forwards, so it never reaches the re-exec",
+		"ASSUME_YES": "hardcoded to 1 on the exec line: the operator already confirmed this commit range",
+	}
+
+	parser := sliceBetween(t, script, "while [[ $# -gt 0 ]]; do", "\ndone\n")
+	reexec := sliceBetween(t, script, "exec env FLEET_UPDATE_REEXEC=1", `bash "$SRC_DIR/scripts/update.sh"`)
+
+	assigned := regexp.MustCompile(`\b([A-Z][A-Z0-9_]{2,})=(?:"|[0-9])`)
+	seen := map[string]bool{}
+	for _, m := range assigned.FindAllStringSubmatch(parser, -1) {
+		v := m[1]
+		if seen[v] {
+			continue
+		}
+		seen[v] = true
+		if _, ok := exempt[v]; ok {
+			continue
+		}
+		if !strings.Contains(reexec, `="$`+v+`"`) {
+			t.Errorf("--flag sets %s but the self-update re-exec does not forward it: add FLEET_…=%q to the `exec env` line, or add %s to the exempt map with the reason it is safe to drop", v, "$"+v, v)
+		}
+	}
+	if len(seen) < 8 {
+		t.Fatalf("only %d flag-settable variables found in the arg parser — the parser markers likely moved and this test is asserting nothing", len(seen))
+	}
+	// The three that were missing, pinned by name so a future rewrite of the
+	// exec line cannot quietly drop them again.
+	for _, want := range []string{
+		`FLEET_SANDBOX_MAX_AGE_DAYS="$SANDBOX_MAX_AGE_DAYS"`,
+		`FLEET_UPDATE_ADOPT_UNITS="$ADOPT_UNITS"`,
+		`FLEET_UPDATE_OFFER_TIMERS="$OFFER_TIMERS"`,
+	} {
+		if !strings.Contains(reexec, want) {
+			t.Errorf("the self-update re-exec must forward %s", want)
+		}
+	}
+}
+
+// TestUpdateUnresolvedSandboxTagIsNotUpToDate — when the resolved sandbox tag
+// comes back empty, BOTH store-aware gates go blind: the presence probe and the
+// max-age freshness backstop each need a ref. That case used to fall out of the
+// gate's if/elif chain with no build reason set and print
+// `sandbox image up to date (…, tag unresolved)` — a clean bill of health for
+// an image nothing had looked at, which is how a weeks-old sandbox sits on a
+// box that updates cleanly every day. It must warn instead, and say what was
+// skipped.
+func TestUpdateUnresolvedSandboxTagIsNotUpToDate(t *testing.T) {
+	root := repoRootFromTest(t)
+	body, err := os.ReadFile(filepath.Join(root, "scripts", "update.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(body)
+	for _, want := range []string{
+		// The blind-spot flag, and the two ways a gate fails to reach an answer.
+		`sandbox_unverified=""`,
+		`sandbox_unverified="the image tag could not be resolved`,
+		`sandbox_unverified="podman could not read the image store for ${ref_now}`,
+		// Reported as a warning, never as "up to date", with what was skipped
+		// and the by-hand recovery.
+		`warn "sandbox image NOT verified and NOT rebuilt`,
+		"neither the store-presence check nor the ${SANDBOX_MAX_AGE_DAYS}-day freshness backstop reached an answer",
+		`diagnose the tag: FLEET_CLIENT_CONFIG_DIR=${CLIENT_DIR} ${SCRIPT_DIR}/build-sandbox-image.sh --print-tag`,
+		// The resolver's stderr is kept, so the warning can name the cause
+		// (--print-tag always prints a name:tag when it runs at all, so an
+		// empty answer means the script itself could not run).
+		`--print-tag 2>"$ref_err_file"`,
+		`ref_err="$(head -n 1 "$ref_err_file"`,
+		// The success line only fires with a ref in hand.
+		"${cf_now:0:12}, ${ref_now}) — skipping the image build.",
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("update.sh must contain %q", want)
+		}
+	}
+	// The old reassuring fallback must be gone, not merely supplemented.
+	if strings.Contains(script, "tag unresolved") {
+		t.Error(`update.sh still reports "tag unresolved" as an up-to-date sandbox image`)
 	}
 }

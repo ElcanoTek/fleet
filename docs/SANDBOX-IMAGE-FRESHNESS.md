@@ -68,6 +68,72 @@ bundles make) is naturally unaffected. `build-sandbox-image.sh` also grew
 for its age-triggered rebuilds and operators can use directly for a manual
 full refresh.
 
+## Follow-up: two ways the backstop could silently not run
+
+Shipping the backstop exposed two paths on which it reported success without
+ever having run. Both are closed:
+
+### The self-update re-exec dropped flag state
+
+`update.sh` re-execs the copy the pull just installed when the update changed
+`update.sh` itself (bash holds the pre-update inode, so a fix to the updater
+would otherwise only take effect one update later). That re-exec passes **no
+argv** — every setting a flag can change has to be restated as its env
+equivalent on the `exec env` line — and `--sandbox-max-age` was not on it, so
+it was silently downgraded to the default `7` on exactly the run that pulled
+the fix: the one run an operator gets only once. `--adopt-units` and
+`--no-timers` were dropped the same way.
+
+All three are forwarded now (`FLEET_SANDBOX_MAX_AGE_DAYS`,
+`FLEET_UPDATE_ADOPT_UNITS`, `FLEET_UPDATE_OFFER_TIMERS`). The deliberate
+non-forwards are documented at the call site: `--no-pull` (forwarding it would
+skip the client-bundle pull the re-exec exists to preserve), `--dry-run` (never
+reaches the re-exec — it skips the fast-forward), `--src` (re-derives from the
+script path the exec names) and `--yes` (hardcoded to 1: the operator already
+confirmed this commit range). `TestUpdateReexecForwardsFlagState` derives the
+flag-settable variables from the arg parser itself, so a NEW flag fails the
+test until it is either forwarded or exempted with a reason.
+
+### An unresolvable tag read as a clean bill of health
+
+Both store-aware gates need a resolved ref: the presence probe and the age
+backstop. When `build-sandbox-image.sh --print-tag` returned nothing, the empty
+ref fell out of the gate's if/elif chain with no build reason set, and the step
+printed `sandbox image up to date (…, tag unresolved)` — a pass for an image
+nothing had looked at. That is exactly how a weeks-old sandbox survives on a
+box that updates cleanly every day.
+
+The empty-ref case is now its own branch. It sets a `sandbox_unverified`
+reason, and the step reports that as a **warning** naming what was skipped (the
+presence check *and* the n-day backstop), how to diagnose the tag, and the
+by-hand rebuild — never as "up to date". An inconclusive store probe (podman
+exit 125) reports through the same single path instead of a warning followed by
+a reassuring `ok`. `--print-tag`'s stderr is captured rather than discarded so
+the warning can name the cause: since `--print-tag` always prints a `name:tag`
+when it runs at all (falling back to `localhost/fleet-sandbox:latest` when the
+manifest names no `sandbox.tag`), an empty answer means the resolver script
+itself could not run.
+
+Neither case is fatal. An unresolvable tag is no evidence the running image is
+broken, and dying there would strand an otherwise good update — the fail-closed
+`die` stays where it belongs, on a *failed build* whose ref is not known to
+exist in the service user's store.
+
+### Related: `podman images` as root is the wrong store
+
+Not a bug, but the reason a working rebuild can look like it did nothing.
+`build-sandbox-image.sh` builds as the unit's `User=` (rootless), and every
+probe here — presence, age — reads that account's store. `sudo podman images`
+shows **root's** store, which on a box provisioned before that change can still
+hold stale `localhost/fleet-sandbox*` images that `fleet update` will never
+touch again. Read the store that matters:
+
+```sh
+sudo install -d -o fleet -g fleet -m 0700 /run/fleet
+sudo runuser -u fleet -- env HOME="$(getent passwd fleet | cut -d: -f6)" \
+  XDG_RUNTIME_DIR=/run/fleet podman images
+```
+
 ## What deliberately did NOT ship
 
 - **No rebuild-on-every-update.** Rebuilding unconditionally would either be a
