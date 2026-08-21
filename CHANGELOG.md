@@ -46,6 +46,23 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **`fleet timers install` — one-command setup for the scheduled-maintenance
+  timers** ([docs/TIMERS.md](docs/TIMERS.md)). A box provisioned before the
+  `fleet-backup` / `fleet-maintenance` timer pairs shipped had no path to them
+  except copy-pasting a four-command hint out of `fleet doctor`. The new verb
+  installs the missing units from `deploy/`, creates the 0700 backup
+  directory, daemon-reloads and `enable --now`s the timers — idempotently, and
+  without ever overwriting an already-installed unit (drift stays
+  `doctor`/`update --adopt-units` territory). Doctor's absent-pair advisories
+  (script and in-process) now hand the operator that one command; an
+  interactive `fleet update` offers the install when a pair is fully missing
+  (default No; `--no-timers` / `FLEET_UPDATE_OFFER_TIMERS=0` silences the
+  offer for boxes that deliberately run without them), and update's
+  unit-drift adoption now covers the `fleet-maintenance` pair too. On a host
+  without systemd (a container platform, Kubernetes) the verb explains what
+  to schedule instead — daily `fleet backup --db=all --prune` and `fleet
+  cleanup` — and exits non-zero rather than pretending.
+
 - **One maintenance loop, and a disk guard that acts on what it measures**
   ([`docs/MAINTENANCE.md`](docs/MAINTENANCE.md)). Reclamation used to be a side
   effect of chat traffic: the database retention sweeps, the attachment sweep

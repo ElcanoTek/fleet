@@ -16,6 +16,7 @@
 //	fleet diagnose  [--output <file>] [--service <name>] [--no-sandbox]
 //	fleet start|restart|stop [--service <name>]
 //	fleet logs      [--service <name>] [-n 50] [-f]   (a.k.a. tail)
+//	fleet timers install [--backup] [--maintenance] [--src <dir>] [--dry-run]
 //	fleet chat                                        (interactive agent TUI, #457; --message for one-shot)
 //	fleet admin add|list|rm                           (one-step full admin across both user planes)
 //	fleet config set-openrouter-key|set-auth-pubkey   (guided credential/env-file writes)
@@ -92,6 +93,8 @@ func Run(argv []string) int {
 		return cmdStop(argv[1:])
 	case "logs", "tail":
 		return cmdLogs(argv[1:])
+	case "timers":
+		return cmdTimers(argv[1:])
 	case "motd":
 		return cmdMOTD(argv[1:])
 	case "chat":
@@ -157,6 +160,11 @@ Operator lifecycle (bootstrap → update → status/doctor):
   fleet restart   [--service <name>]                   (systemctl restart; needs root/sudo)
   fleet stop      [--service <name>]                   (systemctl stop; needs root/sudo)
   fleet logs      [--service <name>] [-n 50] [-f]      (journalctl tail; -f follows; a.k.a. tail)
+  fleet timers install [--backup] [--maintenance] [--dry-run]
+                                                        (install + enable the daily fleet-backup / fleet-maintenance
+                                                         systemd timers from deploy/; idempotent, never overwrites an
+                                                         installed unit. Needs root except --dry-run; on a box without
+                                                         systemd it says what to schedule instead)
   fleet motd      [--service <name>] [--no-color]      (login banner: version + service state + commands; no secrets)
 
 Users, credentials, notes:

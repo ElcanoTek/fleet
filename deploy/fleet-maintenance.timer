@@ -7,7 +7,7 @@
 #
 # scripts/bootstrap.sh --enable-service installs and enables it by default;
 # --no-maintenance-timer opts out for operators who prune their container
-# store some other way.
+# store some other way. On an existing box: sudo fleet timers install --maintenance.
 
 [Unit]
 Description=Daily fleet host maintenance (podman layer + build cache prune)

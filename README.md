@@ -333,6 +333,7 @@ self-migrates on start.
 | `fleet restart` · `stop` · `logs` | service lifecycle |
 | `fleet chat [--email you@org]` | terminal TUI for the agent (token auto-read on-box) |
 | `fleet backup` / `fleet restore` | disaster recovery ([`docs/BACKUP_RESTORE.md`](docs/BACKUP_RESTORE.md)) |
+| `fleet timers install` | install + enable the daily backup/maintenance systemd timers on an existing box ([`docs/TIMERS.md`](docs/TIMERS.md)) |
 
 **→ Full operator runbook** — the env file, the client-config checkout, every
 verb in detail, process logs, and backup/restore:

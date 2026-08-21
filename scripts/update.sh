@@ -47,6 +47,10 @@
 #                          functionally from the installed unit, WITHOUT the
 #                          interactive prompt (env FLEET_UPDATE_ADOPT_UNITS=1)
 #   --yes / -y             skip the confirm prompt (env FLEET_UPDATE_YES=1)
+#   --no-timers            don't offer to install a missing fleet-backup /
+#                          fleet-maintenance timer pair, and don't hint about
+#                          it (env FLEET_UPDATE_OFFER_TIMERS=0) — for boxes
+#                          that deliberately run without them
 #   --dry-run              print the plan; build/restart nothing
 #   -h | --help            this help
 #
@@ -105,6 +109,12 @@ CLIENT_CONFIG_VERIFY="${FLEET_CLIENT_CONFIG_VERIFY:-}"
 # (it only skips the commit-range confirm) so an unattended update can't silently
 # clobber an operator's hand-edited unit.
 ADOPT_UNITS="${FLEET_UPDATE_ADOPT_UNITS:-0}"
+# Offer to install a MISSING fleet-backup / fleet-maintenance timer pair after
+# the drift check (interactive y/N; see below). --no-timers / the env var
+# silences the offer AND the non-interactive hint for boxes that deliberately
+# run without them (volume-layer backups, an external prune) so a declined
+# timer doesn't nag on every update.
+OFFER_TIMERS="${FLEET_UPDATE_OFFER_TIMERS:-1}"
 DRY_RUN=0
 
 while [[ $# -gt 0 ]]; do
@@ -125,7 +135,8 @@ while [[ $# -gt 0 ]]; do
     --yes|-y)         ASSUME_YES=1 ;;
     --dry-run)        DRY_RUN=1 ;;
     --adopt-units)    ADOPT_UNITS=1 ;;
-    -h|--help)        sed -n '2,45p' "$0"; exit 0 ;;
+    --no-timers)      OFFER_TIMERS=0 ;;
+    -h|--help)        sed -n '2,55p' "$0"; exit 0 ;;
     *) echo "error: unknown argument: $1" >&2; exit 1 ;;
   esac
   shift
@@ -703,21 +714,23 @@ fi
 # --adopt-units is set. Overwriting is always gated on explicit consent (a y/N
 # answer, or --adopt-units) so an update can never silently clobber an operator
 # hand-edit. Drop-ins under /etc/systemd/system/<unit>.d/ survive either path.
-# The backup pair adopts the same way but needs NO restart (see below); a box
-# without it installed — bootstrap --no-backup-timer, or volume-layer backups —
-# is skipped by the both-files-exist check, never force-installed.
+# The backup + maintenance timer pairs adopt the same way but need NO restart
+# (see below); a box without one installed — bootstrap's --no-backup-timer /
+# --no-maintenance-timer, or volume-layer backups — is skipped by the
+# both-files-exist check, never force-installed (a MISSING pair gets an
+# explicit install offer after this loop instead).
 NEED_DAEMON_RELOAD=0
 if command -v systemctl >/dev/null 2>&1; then
-  for unit in fleet.service fleet-web.service fleet-backup.service fleet-backup.timer; do
+  for unit in fleet.service fleet-web.service fleet-backup.service fleet-backup.timer fleet-maintenance.service fleet-maintenance.timer; do
     installed="/etc/systemd/system/$unit"
     shipped="$SRC_DIR/deploy/$unit"
     [[ -f "$installed" && -f "$shipped" ]] || continue
-    # Adopting a backup unit must not add any restart: the oneshot runs only
-    # when the timer fires it, and the step-5 daemon-reload is all systemd
+    # Adopting a timer-pair unit must not add any restart: each oneshot runs
+    # only when its timer fires it, and the step-5 daemon-reload is all systemd
     # needs to re-arm a rewritten timer's schedule — the same rule doctor.sh
-    # applies. (Restarting the oneshot would even run a backup right now.)
-    is_backup_unit=0
-    case "$unit" in fleet-backup.service|fleet-backup.timer) is_backup_unit=1 ;; esac
+    # applies. (Restarting the backup oneshot would even run a backup right now.)
+    is_timer_unit=0
+    case "$unit" in fleet-backup.*|fleet-maintenance.*) is_timer_unit=1 ;; esac
     # Byte-identical → nothing to do.
     cmp -s "$shipped" "$installed" && continue
     # Empty functional diff → only comments/whitespace changed; note it and move
@@ -759,8 +772,8 @@ if command -v systemctl >/dev/null 2>&1; then
       _extra=""; [[ "$web_needs_user" == "1" ]] && _extra=" + create the fleet-web user"
       _then="restart in step 5"
       case "$unit" in
-        fleet-backup.timer)   _then="no restart — the reload re-arms the timer" ;;
-        fleet-backup.service) _then="no restart — the next timer fire uses the new definition" ;;
+        fleet-backup.timer|fleet-maintenance.timer)     _then="no restart — the reload re-arms the timer" ;;
+        fleet-backup.service|fleet-maintenance.service) _then="no restart — the next timer fire uses the new definition" ;;
       esac
       printf '%s?%s Adopt the shipped %s%s%s? %s(install%s, daemon-reload, %s) (y/N)%s ' \
         "$c_cyan" "$c_reset" "$c_bold" "$unit" "$c_reset" "$c_dim" "$_extra" "$_then" "$c_reset"
@@ -791,9 +804,9 @@ if command -v systemctl >/dev/null 2>&1; then
       # Declined, non-interactive, or --yes: keep the actionable manual hint so
       # nothing is lost and the operator can adopt out of band.
       warn "  review: diff $installed $shipped"
-      if [[ "$is_backup_unit" == "1" ]]; then
+      if [[ "$is_timer_unit" == "1" ]]; then
         # No restart in this hint: the reload alone re-arms the timer, and
-        # restarting the oneshot would run a backup immediately.
+        # restarting the backup oneshot would run a backup immediately.
         warn "  adopt:  install -m 0644 $shipped $installed && systemctl daemon-reload"
       else
         warn "  adopt:  install -m 0644 $shipped $installed && systemctl daemon-reload && systemctl restart ${unit%.service}"
@@ -802,6 +815,55 @@ if command -v systemctl >/dev/null 2>&1; then
       if [[ "$web_needs_user" == "1" ]]; then
         warn "  first (fleet-web runs as a non-root user now): useradd --system --home-dir /var/lib/fleet-web --shell /usr/sbin/nologin --no-create-home fleet-web && chown -R fleet-web:fleet-web ${web_dst}/.next"
       fi
+    fi
+  done
+fi
+
+# ── offer to install missing scheduled-maintenance timer pairs ──────────────
+# The drift loop above reconciles only units that are ALREADY installed; a box
+# provisioned before the timers shipped (or with bootstrap's --no-*-timer
+# opt-outs) has none, and until now the only path to them was copy-pasting the
+# install hint out of `fleet doctor`. An interactive update asks once per
+# missing pair, defaulting to No — an operator who backs up at the volume layer
+# or prunes the container store another way is not misconfigured — and a
+# non-interactive run just prints the one-liner. --no-timers (env
+# FLEET_UPDATE_OFFER_TIMERS=0) silences both so a deliberate decline never
+# nags. The install itself is `fleet timers install` — the binary this update
+# just installed — so there is ONE install implementation, shared with the
+# doctor hint, not a second copy here.
+if command -v systemctl >/dev/null 2>&1 && [[ "$OFFER_TIMERS" != "0" ]]; then
+  # The freshly installed binary; on an in-place dev box INSTALL_DIR == SRC_DIR
+  # so this still resolves. PATH fallback covers the dry-run path (INSTALL_DIR
+  # may be unresolved there) — dry-run never executes it anyway.
+  fleet_bin="${INSTALL_DIR:-/opt/fleet}/fleet"
+  [[ -x "$fleet_bin" ]] || fleet_bin="fleet"
+  for _pair in \
+    "backup|daily database dumps at 02:00|skip if you back up at the volume/hypervisor layer" \
+    "maintenance|daily podman layer + build-cache prune at 03:30|skip if you prune the container store yourself"; do
+    IFS='|' read -r _name _what _skip <<<"$_pair"
+    # Only a fully-missing pair is offered: a half-installed or drifted pair
+    # was already handled (or hinted about) by the drift loop above.
+    if systemctl cat "fleet-${_name}.service" >/dev/null 2>&1 || systemctl cat "fleet-${_name}.timer" >/dev/null 2>&1; then
+      continue
+    fi
+    if [[ "$DRY_RUN" == "1" ]]; then
+      info "[dry-run] would offer to install + enable the fleet-${_name} service/timer pair (${_what}) via: fleet timers install --${_name}"
+    elif [[ -t 0 && "$ASSUME_YES" != "1" ]]; then
+      printf '%s?%s Install + enable %sfleet-%s.timer%s? %s(%s; %s) (y/N)%s ' \
+        "$c_cyan" "$c_reset" "$c_bold" "$_name" "$c_reset" "$c_dim" "$_what" "$_skip" "$c_reset"
+      read -r answer
+      case "${answer,,}" in
+        y|yes)
+          if "$fleet_bin" timers install "--${_name}" --src "$SRC_DIR"; then
+            ok "fleet-${_name}.timer installed + enabled (${_what})"
+          else
+            warn "could not install the fleet-${_name} pair — try by hand: sudo fleet timers install --${_name}"
+          fi
+          ;;
+        *) info "skipped — install later with: sudo fleet timers install --${_name} (or silence this offer: fleet update --no-timers)" ;;
+      esac
+    else
+      info "no fleet-${_name}.timer on this box (${_what}) — install with: sudo fleet timers install --${_name} (${_skip}; --no-timers silences this)"
     fi
   done
 fi

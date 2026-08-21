@@ -629,13 +629,13 @@ func TestUpdateFailedSandboxBuildRefusesRestart(t *testing.T) {
 }
 
 // TestUpdateAdoptsBackupUnits — the unit-adoption loop must cover the shipped
-// fleet-backup pair (a timer fix otherwise reaches provisioned boxes only via
-// doctor, not the update path operators actually run on release), and its
-// backup-unit hint must NOT say restart: the daemon-reload alone re-arms a
-// rewritten timer, and restarting the oneshot would run a backup immediately —
-// the same no-bounce rule doctor.sh applies. Absent units are skipped by the
-// loop's both-files-exist check, so a box that declined backups is never
-// force-installed.
+// fleet-backup AND fleet-maintenance pairs (a timer fix otherwise reaches
+// provisioned boxes only via doctor, not the update path operators actually
+// run on release), and its timer-unit hint must NOT say restart: the
+// daemon-reload alone re-arms a rewritten timer, and restarting the backup
+// oneshot would run a backup immediately — the same no-bounce rule doctor.sh
+// applies. Absent units are skipped by the loop's both-files-exist check, so a
+// box that declined a timer is never force-installed by the drift pass.
 func TestUpdateAdoptsBackupUnits(t *testing.T) {
 	root := repoRootFromTest(t)
 	body, err := os.ReadFile(filepath.Join(root, "scripts", "update.sh"))
@@ -644,10 +644,41 @@ func TestUpdateAdoptsBackupUnits(t *testing.T) {
 	}
 	script := string(body)
 	for _, want := range []string{
-		`for unit in fleet.service fleet-web.service fleet-backup.service fleet-backup.timer; do`,
-		`case "$unit" in fleet-backup.service|fleet-backup.timer) is_backup_unit=1 ;; esac`,
-		// The backup adopt hint ends at daemon-reload — no restart clause.
+		`for unit in fleet.service fleet-web.service fleet-backup.service fleet-backup.timer fleet-maintenance.service fleet-maintenance.timer; do`,
+		`case "$unit" in fleet-backup.*|fleet-maintenance.*) is_timer_unit=1 ;; esac`,
+		// The timer-unit adopt hint ends at daemon-reload — no restart clause.
 		`warn "  adopt:  install -m 0644 $shipped $installed && systemctl daemon-reload"`,
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("update.sh must contain %q", want)
+		}
+	}
+}
+
+// TestUpdateOffersMissingTimers — after the drift loop, an update must OFFER a
+// fully-missing fleet-backup / fleet-maintenance pair (interactive y/N,
+// default No) instead of silently leaving the box unprotected until someone
+// reads doctor's output. Load-bearing rules pinned as strings (the prompt
+// itself needs a TTY + a box with systemd and a missing pair, which CI is
+// not): the offer is gated on --no-timers / FLEET_UPDATE_OFFER_TIMERS so a
+// deliberate decline never nags, only a FULLY missing pair is offered (a
+// half-installed one already got the drift loop's treatment), and a yes
+// delegates to `fleet timers install` — one implementation, not a second
+// inline copy of the install.
+func TestUpdateOffersMissingTimers(t *testing.T) {
+	root := repoRootFromTest(t)
+	body, err := os.ReadFile(filepath.Join(root, "scripts", "update.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(body)
+	for _, want := range []string{
+		`--no-timers)      OFFER_TIMERS=0 ;;`,
+		`OFFER_TIMERS="${FLEET_UPDATE_OFFER_TIMERS:-1}"`,
+		`[[ "$OFFER_TIMERS" != "0" ]]`,
+		`if systemctl cat "fleet-${_name}.service" >/dev/null 2>&1 || systemctl cat "fleet-${_name}.timer" >/dev/null 2>&1; then`,
+		`"$fleet_bin" timers install "--${_name}" --src "$SRC_DIR"`,
+		`(y/N)`,
 	} {
 		if !strings.Contains(script, want) {
 			t.Errorf("update.sh must contain %q", want)

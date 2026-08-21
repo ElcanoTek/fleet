@@ -254,7 +254,8 @@ production-only bug. The pass covers, in order:
    `/run/fleet`, a `podman system migrate` (clears stale pause namespaces),
    and a `podman info` probe **as the service user**.
 4. **Installed artifacts** — functional drift of `fleet.service` /
-   `fleet-web.service` / the `fleet-backup` service + timer vs `deploy/`
+   `fleet-web.service` / the `fleet-backup` and `fleet-maintenance` service +
+   timer pairs vs `deploy/`
    (reinstall + `daemon-reload`), and the `/usr/local/bin/fleet` symlink (a
    stale *copy* there shadows every update).
 5. **Configuration** — `/etc/fleet/fleet.env` exists, root-owned `0600`, with
@@ -264,7 +265,9 @@ production-only bug. The pass covers, in order:
 7. **Scheduled backups** — `fleet-backup.timer` installed, enabled *and
    active*, and its last run succeeded. A missing timer is an *advisory*, never
    a failure (an operator who backs up at the volume or hypervisor layer is not
-   misconfigured) and doctor never installs it for you; a timer whose last run
+   misconfigured) and doctor never installs it for you — its hint names the
+   opt-in, `sudo fleet timers install --backup`
+   ([docs/TIMERS.md](TIMERS.md)); a timer whose last run
    **failed** is a failure, because a box that looks covered and is not is the
    worse state. See [`docs/BACKUP_RESTORE.md`](BACKUP_RESTORE.md).
 8. **Sandbox smoke** — `podman run --rm --network=none <image> true` **as the
@@ -393,8 +396,10 @@ to the child processes through the environment, never argv.
 
 A **daily timer** (`deploy/fleet-backup.timer`, dumping both DBs to
 `/var/backups/fleet` with a 30-day prune) is installed and enabled by
-`bootstrap --enable-service` unless you pass `--no-backup-timer`, and `fleet
-doctor` advises when no timer is present. A same-host dump protects against
+`bootstrap --enable-service` unless you pass `--no-backup-timer`, `fleet
+doctor` advises when no timer is present, and `sudo fleet timers install
+--backup` sets it up on an existing box in one command
+([docs/TIMERS.md](TIMERS.md)). A same-host dump protects against
 logical loss — a bad migration, an accidental delete — **not** against losing
 this host or volume, and it does not capture attachment/upload files. See
 **[`docs/BACKUP_RESTORE.md`](BACKUP_RESTORE.md)** for the full recovery runbook,
