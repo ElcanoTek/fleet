@@ -1756,6 +1756,36 @@ func (s *Server) conversationByID(w http.ResponseWriter, r *http.Request) {
 				// means the default bundle seat and renders no badge.
 				"mcp_server":  a.MCPServer,
 				"mcp_account": a.MCPAccount,
+				// Anchors the card to the message holding this tool_call so a
+				// reload places it where the live stream did (last-assistant
+				// fallback when empty — older rows, promote cards).
+				"tool_call_id": a.ToolCallID,
+			})
+		}
+		// Resolved approvals re-hydrate too, so the transcript keeps the shape
+		// it had live: the "Email sent ✓" outcome card, a timed-out card, and —
+		// load-bearing for notify mode (#1153) — the "ran without asking" record
+		// with its undo hint, whose only other delivery is an SSE stream the
+		// away-from-page user (notify's entire audience) was not watching.
+		resolved, err := s.store.ListResolvedApprovals(r.Context(), user, id)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		resolvedCards := make([]map[string]any, 0, len(resolved))
+		for _, a := range resolved {
+			resolvedCards = append(resolvedCards, map[string]any{
+				"approval_id":  a.ID,
+				"tool":         a.ToolName,
+				"summary":      summarizeApprovalInput(a.ToolName, a.ArgsJSON, id),
+				"status":       a.Status,
+				"result_text":  a.ResultText,
+				"mcp_server":   a.MCPServer,
+				"mcp_account":  a.MCPAccount,
+				"tool_call_id": a.ToolCallID,
+				// True for a notify-mode record (#1153): the card says the tool
+				// already ran without asking, not that the user approved it.
+				"recorded": isNotifyRecordResult(a.ResultText),
 			})
 		}
 		// Pending memory proposals — same pattern as approvals. Without
@@ -1803,6 +1833,7 @@ func (s *Server) conversationByID(w http.ResponseWriter, r *http.Request) {
 			"conversation":             conv,
 			"history":                  history,
 			"pending_approvals":        approvals,
+			"resolved_approvals":       resolvedCards,
 			"pending_memory_proposals": memProposals,
 		})
 	case sub == "" && r.Method == http.MethodDelete:
@@ -1970,7 +2001,7 @@ func (s *Server) conversationByID(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, map[string]any{
 			"approval_timeout_seconds": conv.ApprovalTimeoutSeconds,
-			"default_seconds":          s.cfg.ApprovalTimeoutSeconds,
+			"default_seconds":          s.cfg.LiveApprovalTimeoutSeconds(),
 		})
 	case sub == "approval-timeout" && r.Method == http.MethodPost:
 		// Set or clear the per-conversation override (#225). A null/omitted
@@ -2843,15 +2874,17 @@ func (s *Server) runTurnAsync(
 		ImageAttachments:          imageAttachments,
 		ThinkingConfig:            resolveThinkingConfig(conv.ThinkingConfig, s.cfg.DefaultThinkingBudgetTokens),
 		ApprovalStager: &approvalStager{
-			ctx:                  turnCtx,
-			store:                s.store,
-			conversationID:       conv.ID,
-			userEmail:            user,
-			sink:                 buf,
-			mcpBroker:            s.agent.MCPBroker(),
-			mcpCatalog:           s.agent.MCPCatalog(),
-			sessionRegistry:      s.sessionApprovals,
-			globalTimeoutSeconds: s.cfg.ApprovalTimeoutSeconds,
+			ctx:             turnCtx,
+			store:           s.store,
+			conversationID:  conv.ID,
+			userEmail:       user,
+			sink:            buf,
+			mcpBroker:       s.agent.MCPBroker(),
+			mcpCatalog:      s.agent.MCPCatalog(),
+			sessionRegistry: s.sessionApprovals,
+			// Live (admin Features panel > env, #225): read per turn at stager
+			// construction so an edit governs the next staged card, no restart.
+			globalTimeoutSeconds: s.cfg.LiveApprovalTimeoutSeconds(),
 			convTimeoutSeconds:   conv.ApprovalTimeoutSeconds,
 			autoApproveInTest:    s.cfg.AutoApproveInTest,
 			push:                 s.push,

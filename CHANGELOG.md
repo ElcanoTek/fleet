@@ -17,6 +17,33 @@ prior versions are listed because none have shipped.
 
 ## [Unreleased]
 
+### Changed
+
+- **Approval cards reworked end to end** — see
+  [docs/APPROVAL-CARDS.md](docs/APPROVAL-CARDS.md) for the full design note.
+  The pieces: (1) non-email critical tools (a pages deploy, a deal write) get a
+  **generic action card** — honest verbs, the tool's own arguments, "ran
+  without asking" chrome for notify-mode records — instead of falling through
+  to the email card ("Send this email?" / "Email sent ✓" for a page publish);
+  their decline history now names the tool instead of claiming an email was
+  involved. (2) **Resolved cards survive reload**: the conversation GET returns
+  `resolved_approvals` and the client re-anchors each card to the message that
+  staged it, which also makes notify mode (#1153) keep its own promise — the
+  "ran without asking" record and its bundle-authored undo hint now reach the
+  away-from-page user it exists for, not just a live SSE stream nobody was
+  watching. (3) **`preview_email` no longer expires** (display-only; nothing to
+  deny) — previews used to auto-deny after the window and tell the model "the
+  action was not taken" about an action that never existed. (4) The **approval
+  timeout default is now 3600s** (was 300s — measured from whenever the agent
+  staged the card, five minutes mostly denied the final, wanted action of a run
+  the user had stopped watching) and is **admin-settable live** from Settings →
+  Admin → Features (`approval_timeout_seconds`, 60s–24h; per-tool bundle
+  windows and the per-conversation override still win). (5) A click on an
+  **expired card resolves it as timed out immediately** instead of silently
+  resetting to pending until the next sweep tick, and timed-out cards offer a
+  one-click **"Ask again"** that submits a user turn asking the agent to
+  re-stage.
+
 ### Added
 
 - **One maintenance loop, and a disk guard that acts on what it measures**

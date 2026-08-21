@@ -57,6 +57,7 @@ func testDefaults() map[string]string {
 		"guardrail_mode":                    "off",
 		"tool_disclosure_threshold":         "128",
 		"max_tool_output_bytes":             "65536",
+		"approval_timeout_seconds":          "3600",
 		"phone_a_friend_enabled":            "false",
 		"subagents_enabled":                 "true",
 		"default_model":                     "google/gemini-3.7-flash",

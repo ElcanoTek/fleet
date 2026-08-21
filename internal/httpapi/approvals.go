@@ -26,6 +26,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -143,6 +144,23 @@ func (a *approvalStager) seatFor(toolName string) store.ApprovalSeat {
 	return store.ApprovalSeat{Server: server}
 }
 
+// previewEmailToolName mirrors the agentcore gate's constant: the display-only
+// preview tool whose card has a Dismiss button and nothing to approve.
+const previewEmailToolName = "preview_email"
+
+// notifyRecordResultPrefix opens every notify-mode record's result text
+// (#1153). It doubles as the marker the reload path uses to tag the row
+// `recorded` (the approvals table has no mode column — the prefix is the one
+// durable trace of HOW the row resolved), so RecordAction and
+// isNotifyRecordResult must stay in lockstep.
+const notifyRecordResultPrefix = "Ran without asking"
+
+// isNotifyRecordResult reports whether a resolved approval row is a
+// notify-mode record rather than a human decision.
+func isNotifyRecordResult(resultText string) bool {
+	return strings.HasPrefix(resultText, notifyRecordResultPrefix)
+}
+
 // maxApprovalTimeoutSeconds bounds a per-conversation approval-timeout override
 // to a sane ceiling (24h). The POST /conversations/{id}/approval-timeout handler
 // rejects anything larger so a typo can't leave a card effectively un-expiring.
@@ -152,8 +170,12 @@ const maxApprovalTimeoutSeconds = 86400
 // resolution chain — used when neither a per-tool, per-conversation, nor a
 // positive global value applies. Treating a non-positive global as "use this
 // default" (rather than "deny instantly") is the safe reading of a
-// mis-set/empty FLEET_APPROVAL_TIMEOUT_SECONDS (#225).
-const defaultApprovalTimeoutSeconds = 300
+// mis-set/empty FLEET_APPROVAL_TIMEOUT_SECONDS (#225). An hour, not the
+// original 300s: the card lands whenever the agent reaches it — often minutes
+// into a run the user stopped watching — so five minutes mostly denied the
+// final, wanted action (the observation behind notify mode, #1153). Matches
+// the promote card's deliberate 1h window and the config env default.
+const defaultApprovalTimeoutSeconds = 3600
 
 // resolveTimeoutSeconds applies the #225 resolution chain for toolName, highest
 // priority first: per-tool manifest override → per-conversation override →
@@ -175,6 +197,15 @@ func (a *approvalStager) resolveTimeoutSeconds(toolName string) int {
 // unix-seconds deadline to persist on the approval row (always > 0 here, since
 // resolveTimeoutSeconds never returns a non-positive value).
 func (a *approvalStager) expiryUnixFor(toolName string) int64 {
+	// preview_email never expires: the card is display-only (Dismiss is its
+	// only action), so there is no action for default-deny to protect against.
+	// Before this, the sweep "auto-denied" previews after the window and wrote
+	// "the action was not taken" into history — misleading for the model (the
+	// preview WAS displayed) and for the user, whose rendered draft flipped to
+	// a timeout notice while they might literally be reading it.
+	if toolName == previewEmailToolName {
+		return 0
+	}
 	return time.Now().Unix() + int64(a.resolveTimeoutSeconds(toolName))
 }
 
@@ -199,7 +230,7 @@ func (a *approvalStager) RecordAction(toolName, toolCallID, rawInput, undoHint s
 	if err != nil {
 		return err
 	}
-	result := "Ran without asking: this tool is declared notify-mode in the client bundle."
+	result := notifyRecordResultPrefix + ": this tool is declared notify-mode in the client bundle."
 	if hint := strings.TrimSpace(undoHint); hint != "" {
 		result += " " + hint
 	}
@@ -211,6 +242,9 @@ func (a *approvalStager) RecordAction(toolName, toolCallID, rawInput, undoHint s
 		"tool":        toolName,
 		"summary":     summarizeApprovalInput(toolName, rawInput, a.conversationID),
 		"undo_hint":   strings.TrimSpace(undoHint),
+		// The exact persisted record text, so the live card and the reloaded
+		// card read identically (the client used to synthesize its own).
+		"result_text": result,
 		"mcp_server":  approval.MCPServer,
 		"mcp_account": approval.MCPAccount,
 	})
@@ -652,7 +686,70 @@ func summarizeApprovalInput(toolName, rawInput, convID string) map[string]any {
 	// so ApprovalCard's existing email-preview render path just works;
 	// the only difference is the `tool` field, which drives the UI
 	// branch that swaps Send for Dismiss.
-	return summarizeSendEmailInput(toolName, rawInput, convID)
+	if tools.IsEmailToolName(toolName) {
+		return summarizeSendEmailInput(toolName, rawInput, convID)
+	}
+	// Everything else — bundle-declared critical tools like a pages deploy or
+	// a deal write — gets a tool-shaped summary. These used to fall through to
+	// the email summary and render on the email card ("Send this email?",
+	// "Email sent ✓" — for a page publish), which is exactly the wrong copy on
+	// the one card class whose entire job is telling the user what is about to
+	// happen.
+	return summarizeGenericToolInput(toolName, rawInput)
+}
+
+// genericArgValueMax bounds each rendered argument value; the full args stay on
+// the approval row for execution, this is display only.
+const genericArgValueMax = 300
+
+// summarizeGenericToolInput builds the card payload for a critical tool fleet
+// has no tailored card for: the tool name plus its top-level arguments as
+// display strings (sorted keys — JSON maps have no order), with nested values
+// compacted and everything truncated to card-friendly sizes. Fleet cannot know
+// what a bundle tool's arguments mean, so it shows them verbatim rather than
+// guessing at a friendlier shape — the honest floor for a human review step.
+func summarizeGenericToolInput(toolName, rawInput string) map[string]any {
+	var args map[string]any
+	if err := json.Unmarshal([]byte(rawInput), &args); err != nil || args == nil {
+		return map[string]any{"tool": toolName, "raw": rawInput}
+	}
+	keys := make([]string, 0, len(args))
+	for k := range args {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	rows := make([]map[string]string, 0, len(keys))
+	for _, k := range keys {
+		rows = append(rows, map[string]string{"key": k, "value": displayArgValue(args[k])})
+	}
+	return map[string]any{
+		"tool": toolName,
+		"args": rows,
+	}
+}
+
+// displayArgValue renders one argument value for the generic card: scalars as
+// themselves, nested structures as compact JSON, all truncated by RUNES so a
+// multibyte payload can't be cut mid-character.
+func displayArgValue(v any) string {
+	var s string
+	switch t := v.(type) {
+	case string:
+		s = t
+	case nil:
+		s = "null"
+	default:
+		b, err := json.Marshal(t)
+		if err != nil {
+			s = fmt.Sprintf("%v", t)
+		} else {
+			s = string(b)
+		}
+	}
+	if r := []rune(s); len(r) > genericArgValueMax {
+		s = string(r[:genericArgValueMax]) + "…"
+	}
+	return s
 }
 
 // summarizeSuggestAdvancedInput exposes the agent's reason and the
@@ -1218,6 +1315,30 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request, convID, 
 		return
 	}
 
+	// A click that lands after the default-deny deadline but before the sweep's
+	// next tick resolves the row as timed out RIGHT NOW instead of losing the
+	// claim and echoing "pending" back — which the card rendered as a silent
+	// reset the user could click forever (#225 follow-up). Same claim primitive
+	// as the sweep, so a concurrent sweep tick can't double-resolve; if we lose
+	// that race the writeResolvedApprovalState fallback below reports whatever
+	// state won. Default-deny stays authoritative either way: nothing executes.
+	if approval.ExpiresAt > 0 && approval.ExpiresAt <= time.Now().Unix() {
+		resultText := timeoutResultTextFor(approval.ToolName)
+		claimed, err := s.store.ClaimExpiredApproval(r.Context(), user, approvalID, "rejected", resultText)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if claimed {
+			appendToolResultToHistory(r.Context(), s.store, convID, approval.ToolName,
+				resolutionCallID(approval), resultText, false)
+			writeJSON(w, map[string]any{"status": "rejected", "result_text": resultText})
+			return
+		}
+		s.writeResolvedApprovalState(w, r, user, approvalID)
+		return
+	}
+
 	// suggest_advanced_model has its own resolution shape (three actions
 	// instead of approve/reject) and a side effect that's pure metadata
 	// — flipping conversations.model — rather than firing an MCP tool.
@@ -1422,7 +1543,23 @@ func resolutionCallID(a *store.Approval) string {
 // approvalTimeoutResultText is the canned result recorded when an approval is
 // auto-denied for exceeding its default-deny window (#225). Mirrors the manual
 // "User declined" path so the next turn's model sees the action was not taken.
+// The UI matches on the "Approval timed out" prefix to offer its ask-again
+// affordance — keep the prefix stable if the wording changes.
 const approvalTimeoutResultText = "Approval timed out — auto-denied. The action was not taken."
+
+// previewExpiredResultText is the honest wording for a LEGACY pending
+// preview_email row swept past a deadline (new previews stage with no expiry).
+// A preview is display-only, so "auto-denied / the action was not taken" would
+// tell the model an action was refused when none ever existed.
+const previewExpiredResultText = "Preview closed. It was display-only; nothing was sent."
+
+// timeoutResultTextFor picks the sweep's result wording for a tool.
+func timeoutResultTextFor(toolName string) string {
+	if toolName == previewEmailToolName {
+		return previewExpiredResultText
+	}
+	return approvalTimeoutResultText
+}
 
 // SweepExpiredApprovals enforces the default-DENY-on-timeout contract for the
 // web approval path (#225): every pending approval whose expires_at deadline has
@@ -1464,7 +1601,8 @@ func (s *Server) SweepExpiredApprovals(ctx context.Context) (int, error) {
 			break
 		}
 		a := expired[i]
-		claimed, err := s.store.ClaimExpiredApproval(ctx, a.UserEmail, a.ID, "rejected", approvalTimeoutResultText)
+		resultText := timeoutResultTextFor(a.ToolName)
+		claimed, err := s.store.ClaimExpiredApproval(ctx, a.UserEmail, a.ID, "rejected", resultText)
 		if err != nil {
 			log.Printf("approval expiry sweep: claim %s: %v", a.ID, err)
 			continue
@@ -1474,7 +1612,7 @@ func (s *Server) SweepExpiredApprovals(ctx context.Context) (int, error) {
 			continue
 		}
 		appendToolResultToHistory(ctx, s.store, a.ConversationID, a.ToolName,
-			resolutionCallID(&a), approvalTimeoutResultText, false)
+			resolutionCallID(&a), resultText, false)
 		denied++
 	}
 	return denied, nil
@@ -1497,7 +1635,7 @@ func (s *Server) runStagedTool(ctx context.Context, approval *store.Approval) (s
 	// preview_email is preview-only by design: there is no send path.
 	// When the user clicks Dismiss, we just mark it resolved with a
 	// canned acknowledgment so the history reflects "user saw it".
-	if approval.ToolName == "preview_email" {
+	if approval.ToolName == previewEmailToolName {
 		return "Preview dismissed by user. No email was sent.", nil
 	}
 	// Our internal naming convention is mcp_<server>_<tool>. Route by the
@@ -1899,26 +2037,38 @@ func (s *Server) runStagedScheduleTask(ctx context.Context, approval *store.Appr
 
 // rejectionMessages returns the (claim, history) result strings to record when a
 // user declines a staged approval, worded for the tool kind so the transcript
-// reads honestly (schedule_task is not a "send"). Falls back to the historical
-// email wording for the send/preview tools.
+// reads honestly. The email wording is reserved for the tools that actually
+// send email — a declined generic critical tool (a pages deploy, a deal write)
+// used to be recorded as "User declined to send this email", which misread in
+// the transcript and misinformed the next turn's model.
 func rejectionMessages(toolName string) (claim, history string) {
-	if toolName == tools.ScheduleTaskToolName {
+	switch {
+	case toolName == tools.ScheduleTaskToolName:
 		return "User declined to create the scheduled task.",
 			"User declined to create the scheduled task. No task was created."
+	case toolName == tools.ManageTasksToolName:
+		return "User declined the task change.",
+			"User declined the task change. No tasks were modified."
+	case tools.IsEmailToolName(toolName):
+		return "User declined to send.", "User declined to send this email."
+	default:
+		return "User declined this action.",
+			fmt.Sprintf("User declined the %s call. The action was not taken.", toolName)
 	}
-	return "User declined to send.", "User declined to send this email."
 }
 
 // actionVerb labels a failed staged action for the result_text prefix so the UI
 // reads correctly per tool kind ("schedule failed: …" vs "send failed: …").
 func actionVerb(toolName string) string {
-	switch toolName {
-	case tools.ScheduleTaskToolName:
+	switch {
+	case toolName == tools.ScheduleTaskToolName:
 		return "schedule"
-	case tools.ManageTasksToolName:
+	case toolName == tools.ManageTasksToolName:
 		return "task change"
-	default:
+	case tools.IsEmailToolName(toolName):
 		return "send"
+	default:
+		return "action"
 	}
 }
 

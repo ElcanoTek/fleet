@@ -65,6 +65,7 @@ needs a restart, ever.
 | `guardrail_url` | http(s) URL (or empty) | `FLEET_GUARDRAIL_URL` | Prompt-injection detector endpoint |
 | `tool_disclosure_threshold` | int 1–100000 | `FLEET_TOOL_DISCLOSURE_THRESHOLD` | Roster size that triggers BM25 tool disclosure ([TOOL-DISCLOSURE.md](TOOL-DISCLOSURE.md)) |
 | `max_tool_output_bytes` | int 1024–128 KiB, or 0 = 64 KiB default | `FLEET_MAX_TOOL_OUTPUT_BYTES` | Operational per-tool result cap inside the non-disableable 128 KiB model-visible boundary ([TOOL-OUTPUT-BOUNDARY.md](TOOL-OUTPUT-BOUNDARY.md)) |
+| `approval_timeout_seconds` | int 60–86400 | `FLEET_APPROVAL_TIMEOUT_SECONDS` | Default-deny window for pending approval cards; read at stager construction, so an edit governs the next staged card ([AGENT-RUNTIME.md](AGENT-RUNTIME.md), [APPROVAL-CARDS.md](APPROVAL-CARDS.md)) |
 | `phone_a_friend_enabled` | bool | `FLEET_PHONE_A_FRIEND_ENABLED` | One-time super-LLM review of scheduled runs ([AGENT-RUNTIME.md](AGENT-RUNTIME.md)) |
 | `subagents_enabled` | bool | `FLEET_SUBAGENTS_ENABLED` | Fleet-wide **kill switch** for sub-agent delegation — default **on** (#1043); composes AND with per-task `allow_delegation` ([SUBAGENTS.md](SUBAGENTS.md)) |
 | `default_model` | model slug (`provider/model`) | `FLEET_DEFAULT_MODEL` | What a new conversation starts on — the first pinned "recommended" picker row (#1187). Falls back to the compiled-in `agentcore.DefaultCoreModel` |

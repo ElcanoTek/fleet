@@ -769,11 +769,17 @@ type Config struct {
 
 	// ApprovalTimeoutSeconds is the global default-deny window (in seconds) for
 	// critical-tool approval cards on the web path (#225). FLEET_APPROVAL_TIMEOUT_SECONDS,
-	// default 300. A still-pending approval older than this is auto-denied by the
-	// server-side expiry sweep. It is the lowest-priority layer of the resolution
-	// chain (per-tool manifest > per-conversation > this global > the hardcoded
-	// 300s fallback). A value <= 0 is treated as "use the hardcoded default" at
-	// resolution time, never as "deny instantly".
+	// default 3600. The original 300s default reliably denied the final, wanted
+	// action of any run the user started and then stopped watching (the same
+	// observation that motivated notify mode, #1153); an hour matches the promote
+	// card's window — approvals are a human review step, and humans step away.
+	// A still-pending approval older than this is auto-denied by the server-side
+	// expiry sweep. It is the lowest-priority env layer of the resolution chain
+	// (per-tool manifest > per-conversation > admin override > this global > the
+	// hardcoded fallback); the admin Features panel can override it live
+	// (approval_timeout_seconds — read through LiveApprovalTimeoutSeconds).
+	// A value <= 0 is treated as "use the hardcoded default" at resolution time,
+	// never as "deny instantly".
 	ApprovalTimeoutSeconds int
 
 	// AutoApproveInTest, when true, makes the approval stager auto-approve every
@@ -1426,7 +1432,7 @@ func Load(envFile string) (*Config, error) {
 		MemoryAutoIndexEnabled: lp.getenvFleetBool("MEMORY_AUTOINDEX_ENABLED", false),
 		MemoryGraphModel:       getenvFleetDefault("MEMORY_GRAPH_MODEL", getenvFleetDefault("MEMORY_MODEL", getenvFleetDefault("METADATA_MODEL", getenvFleetDefault("TITLE_MODEL", DefaultTitleModel)))),
 		MemoryGraphEnabled:     lp.getenvFleetBool("MEMORY_GRAPH_ENABLED", false),
-		ApprovalTimeoutSeconds: lp.getenvFleetInt("APPROVAL_TIMEOUT_SECONDS", 300),
+		ApprovalTimeoutSeconds: lp.getenvFleetInt("APPROVAL_TIMEOUT_SECONDS", 3600),
 		AutoApproveInTest:      lp.getenvFleetBool("AUTO_APPROVE_IN_TEST", false),
 		MaxConcurrentAgents:    lp.getenvFleetInt("MAX_CONCURRENT_AGENTS", 8),
 

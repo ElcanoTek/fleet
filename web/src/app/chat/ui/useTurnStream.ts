@@ -827,9 +827,16 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         tool: string;
         summary: Approval["summary"];
         undo_hint?: string;
+        result_text?: string;
         mcp_server?: string;
         mcp_account?: string;
       };
+      // Prefer the server's persisted record text so the live card reads
+      // byte-identically to the reloaded one; the undo-hint synthesis stays
+      // as the fallback for a server one release behind this client.
+      const fallback = (p.undo_hint ?? "").trim()
+        ? `Ran without asking. ${(p.undo_hint ?? "").trim()}`
+        : "Ran without asking.";
       patchAssistantMessage(ctx.target, ctx.assistantId, (m) => ({
         ...m,
         approvals: [
@@ -839,9 +846,8 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
             tool: p.tool,
             summary: p.summary,
             status: "approved" as ApprovalStatus,
-            resultText: (p.undo_hint ?? "").trim()
-              ? `Ran without asking. ${(p.undo_hint ?? "").trim()}`
-              : "Ran without asking.",
+            resultText: (p.result_text ?? "").trim() || fallback,
+            recorded: true,
             mcpServer: p.mcp_server,
             mcpAccount: p.mcp_account,
           },
