@@ -239,6 +239,16 @@ from the unit's "if absent" branch. Overwriting it is safe because it carries a
 single directive and no operator-tunable content; unit drift itself stays
 `doctor.sh` / `update.sh`'s business.
 
+The same resolved-value assertion also runs in-process, so it reaches the admin
+UI rather than only a root shell: `internal/boxdoctor` reports it as
+`fleet-web stop policy` in Settings → Admin → Doctor, alongside new
+`restarts: <unit>` checks that catch a unit systemd is restarting *by itself*
+(`is-active` cannot — `Restart=always` makes a crash-looping unit read as
+`active`). Note that restart churn would **not** have caught the crashes in
+this document: they happened on operator-initiated stops, and a manual
+`systemctl restart` resets `NRestarts` to zero. The stop-policy check is the
+one that covers this fault; see [`DOCTOR.md`](DOCTOR.md).
+
 Note also that `doctor.sh` does **not** pull, so it reconciles against whatever
 `deploy/` the box's checkout holds. On a stale checkout the shipped file does
 not exist and the file-level step skips silently — which is exactly why the

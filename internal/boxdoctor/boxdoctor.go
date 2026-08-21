@@ -29,6 +29,7 @@ import (
 	"os"
 	"os/exec"
 	"os/user"
+	"strconv"
 	"strings"
 	"time"
 
@@ -127,6 +128,10 @@ func Run(ctx context.Context, opts Options) *Report {
 	for _, c := range checkUnits(ctx, serviceName(opts.ServiceName)) {
 		add(c)
 	}
+	for _, c := range checkRestartChurn(ctx, serviceName(opts.ServiceName)) {
+		add(c)
+	}
+	add(checkWebStopPolicy(ctx))
 	add(checkBackups(ctx))
 
 	for _, c := range r.Checks {
@@ -448,6 +453,161 @@ func backupVerdict(installed, enabled, active bool, lastResult string) Check {
 	default:
 		c.Status = StatusOK
 		c.Detail = backupTimerUnit + " enabled and active, no failed run recorded"
+	}
+	return c
+}
+
+// The app units whose churn is worth reporting. Timers, Postgres and Caddy are
+// deliberately excluded: a oneshot's outcome is already covered by
+// checkBackups, and the other two are not ours to diagnose beyond is-active.
+func churnUnits(service string) []string {
+	return []string{service + ".service", "fleet-web.service"}
+}
+
+// checkRestartChurn reports units systemd has been RESTARTING BY ITSELF.
+//
+// This closes a real blind spot in checkUnits: both app units run
+// Restart=always, so a unit that dies is active again ~5s later and is-active
+// reports "active" the whole time. A unit can therefore crash-loop
+// indefinitely while every existing check here stays green — the operator's
+// only hint is load, or disk filling with core dumps.
+//
+// NRestarts is the right property for this and not merely a convenient one: it
+// counts only restarts driven by the Restart= policy, and a MANUAL
+// `systemctl restart` resets it to zero. So an ordinary deploy leaves no trace
+// and cannot produce a false alarm, while a unit failing on its own
+// accumulates a count that only a human intervention clears.
+//
+// Being precise about what this does NOT catch, since it is the neighbouring
+// bug: a process that segfaults during a manual stop (the fleet-web teardown
+// crash — see docs/WEB-TIER-SHUTDOWN.md) restarts by operator action, so
+// NRestarts stays 0. That fault is a configuration matter, which
+// checkWebStopPolicy asserts instead.
+func checkRestartChurn(ctx context.Context, service string) []Check {
+	if _, err := exec.LookPath("systemctl"); err != nil {
+		return []Check{{Name: "restart churn", Status: StatusSkip, Detail: "systemctl not on PATH (no systemd)"}}
+	}
+	out := make([]Check, 0, 2)
+	for _, unit := range churnUnits(service) {
+		short := strings.TrimSuffix(unit, ".service")
+		uctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		//nolint:gosec // G204: fixed "systemctl" binary; unit names are the configured service name + a compile-time constant.
+		if err := exec.CommandContext(uctx, "systemctl", "cat", unit).Run(); err != nil {
+			cancel()
+			out = append(out, Check{
+				Name:   "restarts: " + short,
+				Status: StatusSkip,
+				Detail: unit + " not installed",
+			})
+			continue
+		}
+		//nolint:gosec // G204: fixed "systemctl" binary; unit names as above.
+		nRaw, _ := exec.CommandContext(uctx, "systemctl", "show", "-p", "NRestarts", "--value", unit).Output()
+		//nolint:gosec // G204: fixed "systemctl" binary; unit names as above.
+		rRaw, _ := exec.CommandContext(uctx, "systemctl", "show", "-p", "Result", "--value", unit).Output()
+		cancel()
+		out = append(out, restartChurnVerdict(short, strings.TrimSpace(string(nRaw)), strings.TrimSpace(string(rRaw))))
+	}
+	return out
+}
+
+// crashLoopThreshold is where "it restarted a couple of times" becomes "this is
+// looping". Deliberately low: NRestarts only counts self-inflicted restarts and
+// is cleared by any manual restart, so even a handful is abnormal.
+const crashLoopThreshold = 5
+
+// restartChurnVerdict maps one unit's NRestarts + Result onto a verdict; split
+// out so the matrix is testable on a host without systemd.
+//
+// A non-numeric or empty NRestarts means the property was unavailable (an old
+// systemd, a unit systemd does not know) — reported as a skip rather than a
+// guess. Result enriches the detail but does not drive the verdict on its own:
+// it describes the LAST run, which on a healthy unit that was restarted after
+// an incident still names the old failure, and nagging about a resolved event
+// forever is how a check gets ignored.
+func restartChurnVerdict(short, nRestarts, result string) Check {
+	c := Check{Name: "restarts: " + short}
+	n, err := strconv.Atoi(nRestarts)
+	if nRestarts == "" || err != nil {
+		c.Status, c.Detail = StatusSkip, "systemd did not report NRestarts for this unit"
+		return c
+	}
+	lastRun := ""
+	if result != "" && result != "success" {
+		lastRun = fmt.Sprintf("; last run ended with Result=%s", result)
+	}
+	switch {
+	case n == 0:
+		c.Status = StatusOK
+		c.Detail = "no automatic restarts since the last manual start" + lastRun
+	case n >= crashLoopThreshold:
+		c.Status = StatusFail
+		c.Detail = fmt.Sprintf("%s has restarted itself %d times — it is crash-looping, not serving steadily%s", short, n, lastRun)
+		c.Fix = fmt.Sprintf("run on the box: journalctl -u %s -n 100 (the restarts are self-inflicted; is-active stays \"active\" throughout)", short)
+	default:
+		c.Status = StatusWarn
+		c.Detail = fmt.Sprintf("%s has restarted itself %d time(s) since the last manual start%s", short, n, lastRun)
+		c.Fix = fmt.Sprintf("run on the box: journalctl -u %s -n 100", short)
+	}
+	return c
+}
+
+// checkWebStopPolicy asserts the value systemd RESOLVED for fleet-web's
+// TimeoutStopFailureMode, mirroring the same assertion in scripts/doctor.sh.
+//
+// Why a config check earns a place among health checks: this exact directive
+// shipped in the unit body and did nothing for a full release, because a
+// distro-global /usr/lib/systemd/system/service.d/ drop-in overrides a unit
+// body (Fedora sets abort there). Nothing observed that — the unit file said
+// the right thing, so every file-comparing check passed. Only the resolved
+// value can tell the difference, and it is exactly the kind of silent drift a
+// doctor exists to surface.
+//
+// Read-only and unprivileged: `systemctl show` answers property queries over
+// D-Bus without privilege, the same way checkBackups reads Result.
+func checkWebStopPolicy(ctx context.Context) Check {
+	c := Check{Name: "fleet-web stop policy"}
+	if _, err := exec.LookPath("systemctl"); err != nil {
+		c.Status, c.Detail = StatusSkip, "systemctl not on PATH (no systemd)"
+		return c
+	}
+	sctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := exec.CommandContext(sctx, "systemctl", "cat", "fleet-web.service").Run(); err != nil {
+		c.Status, c.Detail = StatusSkip, "fleet-web.service not installed (optional tier)"
+		return c
+	}
+	out, _ := exec.CommandContext(sctx, "systemctl", "show", "-p", "TimeoutStopFailureMode", "--value", "fleet-web.service").Output()
+	return webStopPolicyVerdict(strings.TrimSpace(string(out)))
+}
+
+// webStopPolicyVerdict maps the resolved TimeoutStopFailureMode onto a verdict;
+// split out so it is testable without systemd.
+func webStopPolicyVerdict(resolved string) Check {
+	c := Check{Name: "fleet-web stop policy"}
+	switch resolved {
+	case "kill":
+		c.Status = StatusOK
+		c.Detail = "TimeoutStopFailureMode resolves to kill — an overrun stop is SIGKILLed"
+	case "":
+		// Pre-246 systemd has no such property. Nothing to assert, and no fix.
+		c.Status = StatusSkip
+		c.Detail = "this systemd does not expose TimeoutStopFailureMode"
+	default:
+		// Name the resolved value rather than its consequence: abort dumps a
+		// full memory image, terminate just re-sends SIGTERM and can leave a
+		// wedged process. Neither is what the unit ships.
+		// Warn, not fail — and deliberately a weaker verdict than the same
+		// assertion in scripts/doctor.sh, which fails. The difference is what
+		// each one can claim: doctor.sh INSTALLS the drop-in and then checks,
+		// so a wrong value there means a repair was attempted and did not
+		// hold. This check cannot repair anything, and the consequence is
+		// hygiene rather than downtime — an overrun stop dies the wrong way;
+		// LimitCORE=0 already keeps the memory image off disk either way. Do
+		// not "harmonise" these two into fail without that changing.
+		c.Status = StatusWarn
+		c.Detail = fmt.Sprintf("TimeoutStopFailureMode resolves to %q, not kill — the shipped drop-in is not winning", resolved)
+		c.Fix = "run on the box: sudo fleet doctor (installs deploy/fleet-web.service.d/10-timeout-kill.conf); inspect with: systemctl cat fleet-web"
 	}
 	return c
 }
