@@ -56,10 +56,15 @@ prior versions are listed because none have shipped.
     the patched lines. Registry flake = skip with a notice, never a verdict.
     Mutation-tested in both directions.
 
-  - **A red scheduled scan files an issue** (all four lanes: CodeQL, Semgrep,
-    govulncheck, grype; deduped by title, re-failures comment). A cron failure
-    has no PR to surface it — the rot pattern that let the CodeQL toolchain
-    break sit red for weeks.
+  - **A red scheduled scan files an issue** (all four lanes; deduped by title,
+    re-failures comment). A cron failure has no PR to surface it — the rot
+    pattern that let the CodeQL toolchain break sit red for weeks. For the two
+    reusable workflows the alarm lives in `scan-cron-alarm.yml`, a
+    `workflow_run` watcher, because a called workflow may not request
+    permissions its caller did not grant — the check fires at PLAN time, before
+    any `if:` can skip the job, and the first attempt (an `issues: write` job
+    inside codeql.yml/semgrep.yml) startup-failed the entire calling Dev CI
+    run. Verified fixed on the next run.
 
   - **Semgrep rule vendoring investigated and rejected on license grounds**:
     the Semgrep Rules License v1.0 permits internal use only and states "This

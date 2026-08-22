@@ -262,7 +262,13 @@ Stated rather than left for rediscovery:
   The binary version is pinned; the rules are not, so a registry-side rule
   addition can turn CI red with no commit to blame — named here so a mystery
   red Semgrep run has a first suspect.
-- **A red scheduled scan now files an issue** (all four scheduled lanes:
-  CodeQL, Semgrep, govulncheck, grype) — a cron failure has no PR to surface
-  it, which is the rot pattern that let the CodeQL toolchain break sit red for
-  weeks. Deduped by title; re-failures comment on the same issue.
+- **A red scheduled scan now files an issue** (all four scheduled lanes) — a
+  cron failure has no PR to surface it, which is the rot pattern that let the
+  CodeQL toolchain break sit red for weeks. Deduped by title; re-failures
+  comment on the same issue. Mechanism differs by necessity: govulncheck and
+  grype carry an in-job step, while CodeQL and Semgrep are watched by
+  `scan-cron-alarm.yml` (a `workflow_run` watcher) — because a CALLED workflow
+  may not request permissions its caller did not grant, and the check fires at
+  plan time before any `if:` can skip the job. Learned by breaking it: an
+  `issues: write` alarm job inside the called workflows startup-failed the
+  entire calling Dev CI run.
