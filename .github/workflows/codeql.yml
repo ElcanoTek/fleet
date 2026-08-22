@@ -234,10 +234,12 @@ jobs:
                 | if ($res | length) == 0 then "No findings."
                   else
                     ( $res
-                      | group_by(.ruleId)
-                      | sort_by(-length)
-                      | map("\(length | tostring)  [\(.[0].level // "note")]  \(.[0].ruleId)")
-                      | join("\n")
+                      | map(
+                          "[\(.level // "note")]  \(.ruleId)  "
+                          + ((.locations[0].physicalLocation // {}) as $l
+                             | "\($l.artifactLocation.uri // "?"):\($l.region.startLine // "?")")
+                        )
+                      | sort | join("\n")
                     ) + "\n--\ntotal findings: \($res | length)"
                   end
               ' "${files[@]}"

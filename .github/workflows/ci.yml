@@ -426,7 +426,9 @@ jobs:
         # this FAILS with removal instructions — an override left behind after
         # upstream fixes itself silently pins Dependabot's updates down. A
         # registry flake skips with a notice (the audit above is the CVE gate).
-        run: scripts/check-npm-overrides.sh
+        # Absolute path: this job's default working-directory is web/, which is
+        # exactly how run 32579378165 caught the repo-relative form (exit 127).
+        run: "$GITHUB_WORKSPACE/scripts/check-npm-overrides.sh"
 
       - name: Install dependencies
         run: npm ci
