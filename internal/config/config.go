@@ -1733,15 +1733,23 @@ func (c *Config) validateTLS() error {
 }
 
 // ValidateScheduled checks the one-shot scheduled (cutlass) required values and
-// returns an error describing all problems found. Called at startup to fail
-// fast for the scheduled driver.
+// returns an error describing all problems found.
+//
+// No production caller: `fleet task run` (the folded cutlass harness) validates
+// through Validate/validate_config.go instead. This is exercised only by
+// config_test.go and is kept as the scheduled-driver contract, so do not add a
+// value to any message here — see the next comment.
 func (c *Config) ValidateScheduled() error {
 	var errs []string
 
 	if c.OpenRouterAPIKey == "" {
 		errs = append(errs, "OPENROUTER_API_KEY is required")
 	} else if !strings.HasPrefix(c.OpenRouterAPIKey, "sk-or-") {
-		errs = append(errs, "OPENROUTER_API_KEY should start with 'sk-or-' (got '"+c.OpenRouterAPIKey[:min(6, len(c.OpenRouterAPIKey))]+"...')")
+		// Name the expected prefix, never echo the key. This previously
+		// interpolated the key's first 6 bytes into the error, which was the
+		// one place in the tree where secret material reached an error string —
+		// and validation errors are logged and surfaced to operators.
+		errs = append(errs, "OPENROUTER_API_KEY should start with 'sk-or-'")
 	}
 
 	if c.MaxIterations < 1 || c.MaxIterations > 10000 {

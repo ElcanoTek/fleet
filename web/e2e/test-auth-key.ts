@@ -48,8 +48,22 @@ export function generateTestAuthKey(): TestAuthKeyMaterial {
   };
   // Atomic write so a worker reading concurrently never sees a half-written
   // file: write to a temp sibling, then rename.
-  const tmp = `${KEY_FILE}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(material), { encoding: "utf8" });
+  //
+  // The sibling name carries random bytes, and the write is `wx` (O_CREAT|O_EXCL)
+  // at mode 0600. os.tmpdir() is world-writable and the old name was
+  // `${KEY_FILE}.${pid}.tmp` — fully predictable, so a local user could
+  // pre-create it as a symlink and turn this into an arbitrary-file write as the
+  // test user, and the default 0644 left the private half world-readable.
+  // O_EXCL refuses to follow or clobber a pre-planted path; rename(2) acts on the
+  // link itself, so a hostile KEY_FILE symlink is replaced rather than written
+  // through. The key is throwaway and protects nothing real — this is hygiene on
+  // a private-key write, not a fix for a reachable compromise.
+  const tmp = `${KEY_FILE}.${process.pid}.${crypto.randomBytes(6).toString("hex")}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(material), {
+    encoding: "utf8",
+    mode: 0o600,
+    flag: "wx",
+  });
   fs.renameSync(tmp, KEY_FILE);
   return material;
 }

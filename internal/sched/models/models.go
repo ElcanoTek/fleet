@@ -297,6 +297,25 @@ func (wc *WorktreeConfig) Validate() error {
 		strings.Contains(wc.BranchPrefix, ".lock") {
 		return fmt.Errorf("branch_prefix is not a valid git ref-name fragment")
 	}
+	// BaseBranch is the trailing positional of `git worktree add -b <branch>
+	// <path> <base>`, and that invocation carries no "--" end-of-options
+	// separator, so a value beginning with "-" would be parsed by git as an
+	// option rather than a commit-ish. Reject that shape here — worktree_config
+	// is settable by any task creator (unlike run_if, which is admin-only), so
+	// this is the boundary. The ref-name checks mirror BranchPrefix above; git
+	// still makes the authoritative check at run time.
+	if base := strings.TrimSpace(wc.BaseBranch); base != "" {
+		if strings.HasPrefix(base, "-") {
+			return fmt.Errorf("base_branch may not begin with '-'")
+		}
+		if strings.ContainsAny(base, " ~^:?*[\\") ||
+			strings.Contains(base, "@{") ||
+			strings.Contains(base, "..") ||
+			strings.Contains(base, "//") ||
+			strings.Contains(base, ".lock") {
+			return fmt.Errorf("base_branch is not a valid git ref-name fragment")
+		}
+	}
 	return nil
 }
 

@@ -60,3 +60,27 @@ func visibleTasks(p principal, tasks []*models.Task) []*models.Task {
 	}
 	return out
 }
+
+// taskWritableByPrincipal reports whether the principal may MUTATE the given
+// task's definition (edit, retag). The mutating permission (PermissionCreateTask,
+// checked by the caller) admits it to the surface; this decides WHICH task.
+//
+// Same own-rows model as taskVisibleToPrincipal, and deliberately the same
+// helper pair: a write surface must be no looser than the read surface guarding
+// the same row. Before this existed, PUT /tasks/{id} and POST /tasks/{id}/tags
+// authorized on PermissionCreateTask alone, so any client-role user or scoped
+// task key could rewrite ANY task on the box — prompt, model, mcp_selection and
+// credential_allowlist included — while the read path had already been narrowed
+// to own rows by #1082. That asymmetry was the hole.
+//
+// Note this is NOT principal.ownsTask, which resolves ownership through
+// ownerID() and therefore returns false for every API-key principal. Using it
+// here would deny a scoped intake-app key the right to edit the task it just
+// created. taskCreatedByPrincipal matches a creating user OR a creating key
+// (task.CreatedByKeyID), which is the model #980/#1082 established.
+func taskWritableByPrincipal(p principal, task *models.Task) bool {
+	if p.fleetWideTaskVisibility() {
+		return true
+	}
+	return taskCreatedByPrincipal(p, task)
+}

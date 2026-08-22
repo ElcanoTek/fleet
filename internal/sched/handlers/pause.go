@@ -116,6 +116,12 @@ func (h *Handlers) ListPausedTasks(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "Failed to list paused tasks")
 		return
 	}
+	// Own-rows visibility (#1082): ListPausedTasks selects by status alone, with
+	// no principal predicate in SQL, and the projection carries each task's
+	// prompt — so it has to be scoped here like GET /tasks, /tasks/export and
+	// /tasks/upcoming. Without this a `client`-role principal read every
+	// principal's paused prompts, and learned their task UUIDs besides.
+	tasks = visibleTasks(p, tasks)
 	if tasks == nil {
 		tasks = []*models.Task{}
 	}

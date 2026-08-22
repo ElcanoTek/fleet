@@ -332,6 +332,20 @@ func replayHistory(entries []HistoryEntry) ([]fantasy.Message, error) {
 // carry no media type (uploads have historically been PNG-normalized).
 const defaultImageMediaType = "image/png"
 
+// CALLER CONTRACT — read before adding a producer of TurnInput.ImageAttachments.
+// This function performs NO path containment of its own. Every a.Path it reads
+// must already have been confined to the uploads root by the producer; today the
+// sole producer is httpapi's validateAttachments (attachments.go), which rebuilds
+// each path as Join(root, rel) after a filepath.Rel + filepath.IsLocal guard and
+// stores only that. A future producer — a scheduled path, taskrun, an MCP-driven
+// path — that skips that guard turns the os.ReadFile below into an arbitrary
+// host-file read straight into the model context.
+//
+// This is a documented contract, not an enforced boundary, and it is stated that
+// way deliberately: the uploads root lives on the config used by buildSandboxPool
+// and is not currently threaded to this call site, so a local check here could
+// only re-assert part of the guard while looking like all of it. Thread the root
+// in and re-assert Rel+IsLocal+Join here if a second producer ever appears.
 func loadImageAttachments(atts []ImageAttachment) ([]fantasy.FilePart, []ImageRefMeta) {
 	const (
 		maxImages       = 8
@@ -344,7 +358,12 @@ func loadImageAttachments(atts []ImageAttachment) ([]fantasy.FilePart, []ImageRe
 	refs := make([]ImageRefMeta, 0, len(atts))
 	for _, a := range atts {
 		if len(parts) >= maxImages {
-			log.Printf("loadImageAttachments: skipping %s (over %d cap)", a.Name, maxImages)
+			// %q on a.Name: unlike a.Path (rebuilt server-side as
+			// Join(root, rel) by validateAttachments), Name is the client's
+			// echoed chatAttachment field and is never sanitized —
+			// sanitizeFilename runs at upload time, but /chat re-accepts the
+			// client's own JSON and re-validates only Path. %q escapes CR/LF.
+			log.Printf("loadImageAttachments: skipping %q (over %d cap)", a.Name, maxImages)
 			continue
 		}
 		info, err := os.Stat(a.Path)

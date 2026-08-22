@@ -572,8 +572,13 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 		// entry here would mislabel every ask-pause and operator stop.
 		if retErr != nil && !errors.Is(retErr, agentcore.ErrRunCancelled) {
 			t := "error"
-			a.logSession.AddMessageWithMetadata(roleUser, "[fatal] "+retErr.Error(), nil, nil, &t, nil, nil, "")
-			log.Printf("Execute returning error: %v", retErr)
+			// Scrub before both sinks. RedactSecrets already guards tool output,
+			// the stream sink, hooks and the session log; run-error strings were
+			// the one path that skipped it, and the transcript write below is
+			// persisted and operator-visible, so it is the larger half.
+			msg := agentcore.RedactSecrets(retErr.Error())
+			a.logSession.AddMessageWithMetadata(roleUser, "[fatal] "+msg, nil, nil, &t, nil, nil, "")
+			log.Printf("Execute returning error: %v", msg)
 		}
 	}()
 
