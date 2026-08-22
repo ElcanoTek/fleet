@@ -19,6 +19,90 @@ prior versions are listed because none have shipped.
 
 ### Changed
 
+- **Go 1.27 (`go.mod` 1.26.7 → 1.27.0)** — the pin had gone stale: Go 1.27.0
+  shipped 2026-08-18 and nothing in the repo tracks upstream Go, because
+  Dependabot does not update the `go` directive (dependabot-core#9527), so
+  `fleet update` kept fetching a 1.26 toolchain. The bump moved four things
+  that had to move with it:
+  - **The two silent copies of the version are now asserted, not remembered.**
+    `web/go.mod` (a no-package boundary module, so a stale `go` line compiles
+    fine forever) and the `FROM golang:<minor>` stage in
+    `docs/EKS-DEPLOYMENT.md` (which an operator copies verbatim) both drifted
+    unnoticed. New `TestGoMinorAgreesEverywhere` in `scripts/check_versions_test.go`
+    fails on either, the same way `TestNodeMajorAgreesEverywhere` already
+    guards the node major.
+  - **golangci-lint v2.12.2 → v2.13.1**, because the lint gate cannot lag the
+    toolchain: golangci-lint refuses to run when the Go it was built with is
+    older than the version go.mod targets. Upstream ships the supporting
+    release days after a Go lands (v2.13.0 on 2026-08-19, one day after Go
+    1.27.0), and that coupling is now written down in `.golangci.yml` next to
+    the pin.
+  - **`make govulncheck` builds the scanner with go.mod's toolchain.**
+    `go run <tool>@latest` resolves its toolchain from the TOOL's go.mod, and
+    GOTOOLCHAIN=auto never upgrades past that, so on the configuration this
+    repo explicitly supports — a distro Go lagging go.mod — the scanner got
+    built with 1.26 and then refused the tree ("package requires newer Go
+    version go1.27"). A deliberate `GOTOOLCHAIN=local` or version is still
+    passed through untouched.
+  - **Two staticcheck deprecations v2.13.1 surfaced**, both fixed by deleting
+    dead code rather than migrating: `zip.FileHeader.ModifiedTime/ModifiedDate`
+    in `internal/httpapi/xlsx_sanitize.go` were fed values `archive/zip`
+    immediately recomputes from `Modified`, and `SendDefaultPII: false` in
+    `internal/observability/sentry.go` was already the zero value. The Sentry
+    one is deliberately NOT migrated to the replacement `DataCollection` field:
+    a hand-written `DataCollection` cannot reach the unexported
+    `sensitiveTerms` deny list and re-defaults `UserInfo` to true, so
+    "modernizing" it would have loosened PII scrubbing (verified: omitting the
+    field resolves to `UserInfo:false, HTTPBodies:[], sensitiveTerms:[forwarded
+    -ip remote- via -user]`, identical to before).
+- **Tool-output format classification no longer copies the whole result
+  (`internal/agentcore`)** — `json.Valid([]byte(content))` picked the
+  truncation envelope's `format` label, and through Go 1.26 the compiler elided
+  that conversion, so validating a 64MiB tool result allocated ~600 bytes. Go
+  1.27 no longer elides it: the same line allocated the full 64MiB and tripped
+  `TestBoundModelVisibleToolResponse_LargeInputHasBoundedAllocation`. Relying
+  on that elision was always the wrong shape for a file whose other paths are
+  careful never to materialize an attacker-sized string, so `looksLikeJSONDocument`
+  now validates exactly (unchanged `json.Valid` semantics) up to 1MiB and falls
+  back to a structural first/last-byte sniff above it. `format` is metadata that
+  only selects between two bounded, self-describing envelopes — neither re-emits
+  the original content — so the one behavioral consequence is that a
+  multi-megabyte brace-wrapped-but-invalid blob is labelled `json` instead of
+  `text`. Both tiers are pinned by `TestLooksLikeJSONDocument_TieredClassification`,
+  including that the exact tier still agrees with `json.Valid` case for case.
+- **`internal/sched/db/db.go` split by domain (#1127)** — the 2,882-line god
+  file is now thirteen domain files in the same package: connection lifecycle,
+  the cross-domain (un)marshal helpers, and transaction support stay in
+  `db.go`; the rest moved to `users.go`, `tasks.go` (CRUD core),
+  `task_values.go` (per-column value mapping + JSONB codecs), `task_queries.go`
+  (listings/filters/rollups), `claim.go` (claim/lease/serialization gate/lease
+  recovery), `scheduling.go` (gate settlement, skip recording, batch status,
+  recurrence-spawn sweep), `pause.go`, `wake.go`, `sla.go`, `logs.go`,
+  `cleanup.go` (retention + log-archival sweeps), and `task_iterations.go` —
+  matching the granularity of the existing `budgets.go`/`datasets.go` siblings.
+  Pure structural move with zero behavior change: every declaration and its
+  comments relocated byte-identically (verified declaration-by-declaration
+  against a hash inventory of the old file), no visibility changes, no renames,
+  and the `task_columns.go` registry (#1126) untouched.
+
+- **`internal/httpapi/server.go` split by resource (#1127)**: the 3,626-line
+  file now keeps only the Server struct and options, the inflight-turn
+  registry, `/healthz`, and shared helpers; route registration + top-level
+  middleware, memories, the config reads (personas / server-config /
+  client-config), the MCP-server catalog surfaces, the conversations
+  collection + sub-route dispatcher, the chat turn path, SSE stream reattach,
+  turn-event pages, workspace files, and the audit read each moved to their
+  own file, byte-intact. Two intentional changes beyond the move, both
+  behavior-preserving: the ~630-line `conversationByID` switch (which carried
+  a `//nolint:gocyclo`, now retired) became a flat `(sub, method)` dispatch
+  table over extracted per-action methods, and the per-branch ownership-check
+  and JSON-decode boilerplate deduplicated into `withOwnedConversation` +
+  `decodeJSONBody`. Divergences among the old branches are preserved verbatim
+  and now explicit: the 404 body is "not found" or "conversation not found"
+  per historical branch (and `http.NotFound` with its conditional check on the
+  model route), and the two lenient decodes (cancel scope, legacy bare
+  DELETE /conversations) keep their inline decode. No route, method,
+  middleware-order, or response change.
 - **The installer's node handoff: `fleet update` now repairs a node shortfall
   instead of refusing** — on a box a node major behind the checkout, the
   documented sequence (`bootstrap → update → status/doctor`) hard-failed on the

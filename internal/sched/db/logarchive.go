@@ -5,7 +5,7 @@ package db
 // JSONB) is nulled and the bytes move into session_data_gz (BYTEA), with
 // session_compression naming the codec so GetLog can transparently inflate them
 // on read. This file holds the pure (DB-free) encode/decode helpers; the sweep
-// and the read paths live in db.go.
+// lives in cleanup.go and the read paths in logs.go.
 //
 // The optional encryption key is held host-side on the Database (SetLogArchiveKey)
 // and is NEVER logged or returned in errors — consistent with the project's

@@ -106,7 +106,7 @@ same PR.
 
 ## Conventions
 
-- Single Go module `github.com/ElcanoTek/fleet`, Go 1.26. Keep it `go vet`- and
+- Single Go module `github.com/ElcanoTek/fleet`, Go 1.27. Keep it `go vet`- and
   `golangci-lint`-clean — lint failures block CI.
 - **Coverage (advisory, not a merge gate)**: CI runs the plain `go test` step
   with `-coverprofile=coverage.out -covermode=atomic`, then prints the project

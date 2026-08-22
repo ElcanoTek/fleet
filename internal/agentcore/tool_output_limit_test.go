@@ -274,3 +274,69 @@ func TestModelOutputBoundary_BoundsReturnedGoError(t *testing.T) {
 		t.Fatalf("bounded Go error has dishonest metadata: %+v", envelope)
 	}
 }
+
+// TestLooksLikeJSONDocument_TieredClassification pins both halves of the
+// format classifier. The exact tier must keep answering precisely what
+// json.Valid answered before the cap existed — that is the tier every
+// realistically-sized tool result lands in, so a regression there would
+// silently relabel ordinary output. The sniff tier only has to be structural,
+// and must NOT fall back to a full parse, which is what the companion
+// allocation test guards.
+func TestLooksLikeJSONDocument_TieredClassification(t *testing.T) {
+	for name, tc := range map[string]struct {
+		content string
+		want    bool
+	}{
+		"empty":                   {"", false},
+		"whitespace only":         {"   \n\t ", false},
+		"object":                  {`{"a":1}`, true},
+		"object with surrounding": {"\n  {\"a\":1}\t\n", true},
+		"array":                   {`[1,2,3]`, true},
+		"bare string":             {`"hello"`, true},
+		"bare number":             {`42`, true},
+		"bare null":               {`null`, true},
+		"plain prose":             {"ordinary row value", false},
+		"truncated object":        {`{"a":1`, false},
+		"trailing garbage":        {`{"a":1} trailing`, false},
+		"brace-wrapped non-json":  {`{not json at all}`, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if len(tc.content) > maxExactJSONValidationBytes {
+				t.Fatalf("case is meant to exercise the exact tier but is %d bytes", len(tc.content))
+			}
+			if got := looksLikeJSONDocument(tc.content); got != tc.want {
+				t.Errorf("looksLikeJSONDocument(%q) = %v, want %v", tc.content, got, tc.want)
+			}
+			// The exact tier must agree with the pre-cap implementation.
+			exact := json.Valid([]byte(strings.TrimSpace(tc.content)))
+			if got := looksLikeJSONDocument(tc.content); got != exact {
+				t.Errorf("exact tier diverged from json.Valid for %q: got %v, json.Valid %v", tc.content, got, exact)
+			}
+		})
+	}
+
+	// Above the cap the classifier switches to a structural sniff.
+	filler := strings.Repeat("ordinary row value ", (maxExactJSONValidationBytes/19)+64)
+	for name, tc := range map[string]struct {
+		content string
+		want    bool
+	}{
+		"huge object":       {`{"rows":"` + filler + `"}`, true},
+		"huge array":        {`["` + filler + `"]`, true},
+		"huge bare string":  {`"` + filler + `"`, true},
+		"huge plain text":   {filler, false},
+		"huge unterminated": {`{"rows":"` + filler, false},
+		// The documented cost of the trade: brace-wrapped but invalid content
+		// is labelled json above the cap where json.Valid would have said text.
+		"huge brace-wrapped junk": {"{" + filler + "}", true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if len(tc.content) <= maxExactJSONValidationBytes {
+				t.Fatalf("case is meant to exercise the sniff tier but is only %d bytes", len(tc.content))
+			}
+			if got := looksLikeJSONDocument(tc.content); got != tc.want {
+				t.Errorf("looksLikeJSONDocument(<%d bytes>) = %v, want %v", len(tc.content), got, tc.want)
+			}
+		})
+	}
+}

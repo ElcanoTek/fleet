@@ -301,7 +301,7 @@ func boundModelVisibleToolResponse(ctx context.Context, toolName, toolCallID str
 	}
 
 	format := "text"
-	if json.Valid([]byte(strings.TrimSpace(content))) {
+	if looksLikeJSONDocument(content) {
 		format = "json"
 	}
 	artifactPath := ""
@@ -360,6 +360,67 @@ func boundedToolName(name string) string {
 		name = name[:96]
 	}
 	return strings.ToValidUTF8(name, "?")
+}
+
+// maxExactJSONValidationBytes caps how much output is handed to json.Valid.
+//
+// json.Valid takes a []byte, so validating a string costs a full copy of it.
+// That copy used to be invisible: through Go 1.26 the compiler elided the
+// conversion in `json.Valid([]byte(s))` because the slice provably did not
+// escape, so validating a 64MiB result allocated ~600 bytes. Go 1.27 no longer
+// elides it — the same call allocates the whole 64MiB — which turned this one
+// line into the single largest allocation in the bounding path and tripped
+// TestBoundModelVisibleToolResponse_LargeInputHasBoundedAllocation.
+//
+// Relying on that elision was always the wrong shape for this file: everything
+// else here is careful never to materialize an attacker-sized string (see
+// renderJSONEnvelope, which starts from an already-bounded preview for exactly
+// this reason). A cap restores that property against any toolchain, rather
+// than depending on an optimization we do not control.
+//
+// 1MiB is far above any real tool result whose FORMAT LABEL matters — the
+// content is about to be replaced by a preview of `limit` bytes (a few KB) no
+// matter how this resolves — and far below the point where the copy is worth
+// noticing.
+const maxExactJSONValidationBytes = 1 << 20
+
+// looksLikeJSONDocument reports whether content should be labelled format
+// "json" in the truncation envelope.
+//
+// Up to maxExactJSONValidationBytes this is exactly the old json.Valid check,
+// so every realistically-sized tool result classifies precisely as before.
+// Above it, a full parse is deliberately traded for a structural sniff of the
+// first and last significant bytes.
+//
+// That trade is sound because `format` is METADATA, not a boundary: it selects
+// renderJSONEnvelope over renderTextEnvelope, and both emit a safe, bounded,
+// self-describing envelope around a head/tail preview. Neither one re-emits
+// the original content, so a multi-megabyte blob that is brace-wrapped but not
+// strictly valid JSON gets the JSON-shaped envelope instead of the text one —
+// a slightly different label on the same bounded output, which is the whole
+// consequence. Nothing downstream parses the original as JSON on the strength
+// of this field.
+func looksLikeJSONDocument(content string) bool {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return false
+	}
+	if len(trimmed) <= maxExactJSONValidationBytes {
+		return json.Valid([]byte(trimmed))
+	}
+	// Structural sniff: a JSON document this large is an object, an array, or a
+	// single enormous string literal. Numbers and the true/false/null literals
+	// cannot reach this size, so they are correctly left as "text".
+	switch trimmed[0] {
+	case '{':
+		return trimmed[len(trimmed)-1] == '}'
+	case '[':
+		return trimmed[len(trimmed)-1] == ']'
+	case '"':
+		return trimmed[len(trimmed)-1] == '"'
+	default:
+		return false
+	}
 }
 
 func renderJSONEnvelope(env toolOutputEnvelope, content string, limit int) string {

@@ -8,7 +8,7 @@
 # CVEs against whatever toolchain built the code. Distro Go packages lag that by
 # days-to-weeks, and Fedora's `golang` additionally ships `GOTOOLCHAIN=local` in
 # its go.env — which turns the lag into a hard build failure ("go.mod requires
-# go >= 1.26.6 (running go 1.26.2; GOTOOLCHAIN=local)") instead of the download
+# go >= 1.27.0 (running go 1.26.2; GOTOOLCHAIN=local)") instead of the download
 # Go would otherwise do on its own.
 #
 # The env var takes precedence over that go.env default, so setting it here is
@@ -20,7 +20,7 @@
 # fine and then fail every upgrade.)
 #
 # `?=` so an operator who has deliberately chosen a value — an air-gapped host
-# pinned to `local`, or a specific `go1.26.6` — keeps it.
+# pinned to `local`, or a specific `go1.27.0` — keeps it.
 GOTOOLCHAIN ?= auto
 export GOTOOLCHAIN
 
@@ -153,12 +153,40 @@ clean:
 # before `make ci-go` / `make ci-local`; see docs/TESTING.md for the values.
 # ---------------------------------------------------------------------------
 
-# Dependency-CVE scan — the CI 'go' job's govulncheck step, verbatim. Tracks
-# @latest exactly as CI does, deliberately: both the scanner and its advisory
-# database are meant to float, so this can fail on an unchanged tree when a new
-# advisory lands. See docs/TESTING.md ("govulncheck") for why neither is pinned.
+# GO_PINNED is go.mod's exact toolchain (e.g. "go1.27.0"), derived from the pin
+# rather than copied, so it cannot drift from it.
+GO_PINNED := go$(shell awk '/^go /{print $$2; exit}' go.mod)
+
+# GOVULN_TOOLCHAIN — which toolchain BUILDS the scanner (not the code).
+#
+# `go run <tool>@latest` resolves its toolchain from the TOOL's go.mod, and
+# GOTOOLCHAIN=auto only upgrades past the local Go, never past what the tool
+# asks for. govulncheck's module tracks latest-1, so on the configuration this
+# repo explicitly supports — a distro Go that lags go.mod, with GOTOOLCHAIN
+# fetching the pin — the scanner gets BUILT with the older Go and then refuses
+# the tree it was pointed at:
+#
+#   package requires newer Go version go1.27 (application built with go1.26)
+#
+# Naming go.mod's toolchain fixes that, and is a no-op in CI, where setup-go
+# installs `go-version-file: go.mod` so the local Go already IS the pin. This
+# is the same coupling that forces the golangci-lint pin to move with go.mod
+# (see .golangci.yml): a Go-analysing tool must be built with a Go at least as
+# new as the code it reads.
+#
+# `$(origin ...)` keeps the deliberate-operator escape hatch that GOTOOLCHAIN's
+# `?=` above promises: "file" means our own default won, so we may substitute;
+# anything else (environment, command line) is a choice — an air-gapped host
+# pinned to `local` — and is passed through untouched rather than turned into a
+# download.
+GOVULN_TOOLCHAIN := $(if $(filter file,$(origin GOTOOLCHAIN)),$(GO_PINNED),$(GOTOOLCHAIN))
+
+# Dependency-CVE scan — the CI 'go' job's govulncheck step. Tracks @latest
+# exactly as CI does, deliberately: both the scanner and its advisory database
+# are meant to float, so this can fail on an unchanged tree when a new advisory
+# lands. See docs/TESTING.md ("govulncheck") for why neither is pinned.
 govulncheck:
-	go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+	GOTOOLCHAIN=$(GOVULN_TOOLCHAIN) go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
 # The full Go CI job, in CI's order: build (release config, host executor NOT
 # compiled in) → vet (tagged) → lint → test → test-race → govulncheck. Each step
