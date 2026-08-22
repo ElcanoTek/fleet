@@ -28,10 +28,32 @@
 # What this restores. Default setup ran two analyses per event:
 #   - security      — go, python, javascript-typescript, actions
 #   - code quality  — go, python, javascript-typescript   (no `actions`)
-# Both are reproduced below. `analysis-kinds` on init takes a list, so the three
-# languages in both sets build ONE database and run both query suites over it,
-# rather than extracting the same code twice as default setup did. `actions` gets
-# code-scanning only, matching what default setup covered.
+#
+# The security half is reproduced exactly. The code-quality half is reproduced as
+# far as advanced setup is permitted to: `code-quality` as a distinct ANALYSIS
+# KIND is GitHub-internal and closed to custom workflows. Passing
+# `analysis-kinds: code-scanning,code-quality` was tried first and the action
+# rejected it — while still exiting 0, which is why this was caught by reading
+# the log rather than the check mark:
+#
+#     The `analysis-kinds` input is experimental and for GitHub-internal use
+#     only. [...] An analysis kind other than `code-scanning` was specified in a
+#     custom workflow. This is not supported and will become a fatal error in a
+#     future version of the CodeQL Action. If your intention is to use quality
+#     queries outside of Code Quality, use the `queries` input with
+#     `code-quality` instead.
+#     [...] Specifying multiple values as input is no longer supported.
+#     Continuing with only `analysis-kinds: code-scanning`.
+#
+# So `queries: code-quality` is used instead, exactly as that message directs: the
+# quality QUERY SUITE runs on the same three languages, added to the default
+# security suite over one shared database. The difference from default setup is
+# presentational, not coverage — the quality findings arrive as ordinary
+# code-scanning alerts instead of populating the separate Code Quality
+# experience, which no custom workflow can feed. See docs/CODEQL.md.
+#
+# `actions` gets no `queries` value, matching default setup, which ran `actions`
+# in its security analysis only.
 #
 # Not touched by this file: the three independent `upload-sarif` calls (ci.yml's
 # Grype step, govulncheck-scheduled.yml, grype-scheduled.yml). Those push their
@@ -97,18 +119,19 @@ jobs:
           # has to be right rather than skipped.
           - language: go
             build-mode: autobuild
-            analysis-kinds: code-scanning,code-quality
+            queries: code-quality
           - language: python
             build-mode: none
-            analysis-kinds: code-scanning,code-quality
+            queries: code-quality
           - language: javascript-typescript
             build-mode: none
-            analysis-kinds: code-scanning,code-quality
+            queries: code-quality
           # `actions` was in default setup's security analysis only, not its code
-          # quality one. Matched rather than widened.
+          # quality one. Matched rather than widened: no `queries` value, so only
+          # the default security suite runs.
           - language: actions
             build-mode: none
-            analysis-kinds: code-scanning
+            queries: ''
 
     steps:
       - name: Checkout
@@ -129,11 +152,24 @@ jobs:
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
-          analysis-kinds: ${{ matrix.analysis-kinds }}
+          # Empty for `actions` (security suite only), `code-quality` elsewhere.
+          # Added to the default security suite, not a replacement for it.
+          queries: ${{ matrix.queries }}
 
       - name: Autobuild
         if: matrix.build-mode == 'autobuild'
         uses: github/codeql-action/autobuild@v4
+        env:
+          # Same build tag ci.yml and dev-ci.yml pass to `go vet` and `go test`,
+          # and for the same reason: internal/sandbox/host.go — the UNSANDBOXED
+          # host executor — is fenced behind `//go:build fleet_host_executor`, so
+          # without the tag it is not in the default build and the extractor never
+          # sees it. Measured on the first run of this workflow: 426 of the 427
+          # non-test .go files were extracted, and the one missing file was
+          # exactly host.go. Leaving the most security-sensitive file in the tree
+          # as the single hole in Go coverage is not a defensible default, so the
+          # tag is passed here to match the lanes that already vet it.
+          GOFLAGS: -tags=fleet_host_executor
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v4
