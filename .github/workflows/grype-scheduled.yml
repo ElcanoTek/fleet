@@ -22,6 +22,7 @@ on:
 permissions:
   contents: read
   security-events: write  # required to upload SARIF to the Security tab
+  issues: write  # the failure-alarm step files an issue when a scheduled run breaks
 
 jobs:
   grype-scheduled:
@@ -32,7 +33,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main  # always scan the tip of main, not a PR branch
 
@@ -79,10 +80,38 @@ jobs:
             --output sarif=grype-results.sarif
 
       - name: Upload weekly scan results
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@4c0873ef8656cb3c50b3f42fb63bc1ade0cfa827 # v4 (4.37.8)
         # Skip cleanly (rather than error "file not found") if an earlier step
         # failed before grype could write the SARIF.
         if: ${{ !cancelled() && hashFiles('grype-results.sarif') != '' }}
         with:
           sarif_file: 'grype-results.sarif'
           category: 'grype-scheduled'
+
+      - name: File an issue so a red cron cannot rot silently
+        # A scheduled failure has no PR attached, so nothing surfaces it — the
+        # exact rot pattern that let the CodeQL toolchain break sit red for
+        # weeks. Files one issue per breakage (deduped by title), comments on
+        # re-failures. schedule-only: a red manual dispatch has a human watching.
+        # This step body is duplicated across the four scheduled scan lanes
+        # (codeql, semgrep, govulncheck, grype) — keep them in sync.
+        if: ${{ failure() && github.event_name == 'schedule' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_NAME: ${{ github.workflow }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          title="Scheduled ${WORKFLOW_NAME} run failed"
+          num="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+            --search "\"$title\" in:title" --json number --jq '.[0].number // empty' || true)"
+          if [ -n "$num" ]; then
+            gh issue comment "$num" --repo "$GITHUB_REPOSITORY" \
+              --body "Still failing: $RUN_URL"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" \
+              --body "The scheduled $WORKFLOW_NAME lane went red: $RUN_URL
+
+          A failing cron has no PR to make it visible, so this issue is the
+          alarm. Close it when the lane is green again."
+          fi

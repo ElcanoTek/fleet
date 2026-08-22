@@ -144,7 +144,7 @@ def profile_delimited(path, delimiter, max_rows, top):
             if len(row) != len(cols):
                 malformed.append(reader.line_num)
                 continue
-            for stats, cell in zip(cols, row):
+            for stats, cell in zip(cols, row, strict=True):
                 stats.add(cell)
     kind = "tsv" if delimiter == "\t" else "csv"
     report(path, kind, total, cols, malformed, top)

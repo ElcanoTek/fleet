@@ -96,6 +96,7 @@ function decorate(res: NextResponse, pathname: string): NextResponse {
   res.headers.set(BUILD_ID_HEADER, currentBuildId());
   res.headers.set("Cache-Control", "no-store, must-revalidate");
   res.headers.set("Content-Security-Policy", contentSecurityPolicy(pathname));
+  // nosemgrep: javascript.express.security.x-frame-options-misconfiguration.x-frame-options-misconfiguration -- the value is the literal string "DENY". No user input reaches this header; the rule fires on the shape of the call, not on a real taint path.
   res.headers.set("X-Frame-Options", "DENY");
   res.headers.set("X-Content-Type-Options", "nosniff");
   res.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");

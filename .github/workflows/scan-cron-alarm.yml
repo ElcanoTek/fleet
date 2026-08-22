@@ -1,0 +1,65 @@
+# Scan cron alarm — files an issue when a SCHEDULED CodeQL or Semgrep run fails.
+#
+# WHY THIS IS ITS OWN WORKFLOW rather than a job inside codeql.yml/semgrep.yml:
+# those two are REUSABLE workflows called by ci.yml and dev-ci.yml, and a called
+# workflow may not request token permissions its caller did not grant — the
+# check happens at PLAN time, before any `if:` can skip the job. Verified the
+# hard way: adding an `issues: write` alarm job inside them failed the entire
+# calling Dev CI run with `startup_failure` (run 32578976517), which meant NO
+# scanning ran on that head at all. A `workflow_run` watcher has no caller, so
+# it can hold `issues: write` without widening any gate's token.
+#
+# govulncheck-scheduled.yml and grype-scheduled.yml keep their in-job alarm
+# steps: they are standalone workflows with no callers, so the constraint above
+# does not apply to them.
+#
+# Why an alarm exists at all: a scheduled failure has no PR attached, so nothing
+# surfaces it — the exact rot pattern that let the CodeQL toolchain break sit
+# red for weeks. One issue per breakage (deduped by title); re-failures comment
+# on the same issue.
+#
+# workflow_run only fires from this file's copy on the DEFAULT branch, so the
+# alarm arms once this merges to main — which is also when the crons themselves
+# start mattering.
+name: Scan cron alarm
+
+on:
+  workflow_run:
+    workflows: [CodeQL, Semgrep]
+    types: [completed]
+
+permissions:
+  issues: write
+
+jobs:
+  alarm:
+    name: File an issue so a red cron cannot rot silently
+    # Scheduled failures only: a red workflow_call run already reddens the
+    # calling gate on a PR, and a red manual dispatch has a human watching it.
+    if: >-
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.event == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - name: File or update the alarm issue
+        # Body mirrors the in-job alarm steps in govulncheck-scheduled.yml and
+        # grype-scheduled.yml — keep the three in sync.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          set -euo pipefail
+          title="Scheduled ${WORKFLOW_NAME} run failed"
+          num="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+            --search "\"$title\" in:title" --json number --jq '.[0].number // empty' || true)"
+          if [ -n "$num" ]; then
+            gh issue comment "$num" --repo "$GITHUB_REPOSITORY" \
+              --body "Still failing: $RUN_URL"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" \
+              --body "The scheduled $WORKFLOW_NAME lane went red: $RUN_URL
+
+          A failing cron has no PR to make it visible, so this issue is the
+          alarm. Close it when the lane is green again."
+          fi

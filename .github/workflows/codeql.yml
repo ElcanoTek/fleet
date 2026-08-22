@@ -1,0 +1,327 @@
+# CodeQL — ADVANCED setup.
+#
+# This file replaces GitHub's zero-config "default setup", which was switched off
+# because its Go analysis could not be fixed from anywhere. Default setup
+# installed the Go toolchain its extractor was built with (1.26.6) and pinned
+# `GOTOOLCHAIN=local`, so on a `go.mod` that requires 1.27 it could neither build
+# that toolchain nor download it:
+#
+#     go: go.mod requires go >= 1.27.0 (running go 1.26.6; GOTOOLCHAIN=local)
+#     Failed to run `go mod tidy -e` in .
+#     Extraction failed for all discovered Go projects.
+#     CodeQL job status was configuration error.
+#
+# Every main-targeting PR had that failure from the Go 1.27 bump (#1240, promoted
+# in #1242) onward, so the repo had no CodeQL coverage of its Go code for that
+# whole stretch. Default setup exposes no knobs — there is no place to set a Go
+# version or an env var — hence advanced setup, where `actions/setup-go` reads
+# `go-version-file: go.mod` like every other lane in this repo.
+#
+# The literal-version rule applies here too: `scripts/check_versions_test.go`'s
+# TestWorkflowsDeclareVersionsByFile scans EVERY .github/workflows/*.yml for a
+# literal `go-version:`/`node-version:` and fails on it. That assertion is
+# directory-wide, so this file was covered by it the moment it was added — no
+# change to the test was needed. Do not replace the version-file input with a
+# hardcoded 1.27; that is the exact bug class #1240 and #1241 already fixed twice
+# for node, and pinning it here would go stale silently the next time go.mod moves.
+#
+# SCOPE: security queries only. Default setup ran two analyses per event —
+# security over go/python/javascript-typescript/actions, and code quality over
+# the first three. This file restores the SECURITY half and deliberately drops
+# the code-quality half. That is a considered narrowing, not an oversight, and
+# the measurements behind it are recorded in docs/CODEQL.md. In short:
+#
+#   - The quality suite was enabled first and measured. It produced 32 findings,
+#     every one of them note-level, and ZERO security findings across the whole
+#     tree. So nothing was being caught that mattered at severity.
+#   - For Go and the web tier it duplicates linters that already run AND ALREADY
+#     BLOCK via `ci-gate`: golangci-lint (gosec, staticcheck, revive, unparam,
+#     gocritic, …) and oxlint. `go/useless-assignment-to-field` is squarely
+#     inside golangci-lint's remit.
+#   - 28 of the 32 were Python, which was the one real gap — Python had no
+#     linter at all. That gap is now closed by ruff (see ruff.toml), which finds
+#     the same class of thing in under a second, with autofix, and blocks. A
+#     ~40s CodeQL job with no autofix is the wrong instrument for it.
+#   - 3 of the 32 were false positives on correct code (the idiomatic NaN test
+#     `value != value`, flagged as comparison-of-identical-expressions).
+#
+# Note for anyone tempted to re-add it: `analysis-kinds: code-scanning,code-quality`
+# does NOT work in a custom workflow. The action logs two ##[error] lines and
+# still exits 0, silently analyzing security only:
+#
+#     The `analysis-kinds` input is experimental and for GitHub-internal use
+#     only. [...] An analysis kind other than `code-scanning` was specified in a
+#     custom workflow. This is not supported and will become a fatal error in a
+#     future version of the CodeQL Action. If your intention is to use quality
+#     queries outside of Code Quality, use the `queries` input with
+#     `code-quality` instead.
+#     [...] Specifying multiple values as input is no longer supported.
+#
+# `queries: code-quality` is the working form. It is simply not wanted here.
+#
+# Not touched by this file: the three independent `upload-sarif` calls (ci.yml's
+# Grype step, govulncheck-scheduled.yml, grype-scheduled.yml). Those push their
+# own SARIF to the Security tab and never depended on CodeQL being configured.
+#
+# Merge gating, in two parts — both now closed:
+#
+#   1. Does a finding turn the CHECK red? YES. The `Fail on findings` step below
+#      fails the job on any finding. Without it the analyze step exits 0 whether
+#      it found nothing or a hundred alerts, so a red check could only ever mean
+#      "the scanner broke".
+#   2. Does a red check BLOCK a merge? YES, through the EXISTING required check.
+#      This is a REUSABLE workflow (`on: workflow_call`): ci.yml and dev-ci.yml
+#      each call it as a job, and a job that calls a reusable workflow can sit in
+#      a gate job's `needs` like any other job — which routes a CodeQL failure
+#      into `CI gate` / `Dev gate` with no branch-protection change at all. The
+#      earlier design note saying this required a repo-settings click was wrong:
+#      `needs` cannot cross workflow FILES, but a workflow_call brings the jobs
+#      into the caller's file.
+#
+# They cannot be part of `CI gate`: a job's `needs` cannot reach across workflow
+# files. So this file carries its own aggregate `CodeQL gate` job at the bottom,
+# for the same reason ci.yml and dev-ci.yml carry theirs — it is the ONE check to
+# name in branch protection if CodeQL should ever become blocking, instead of
+# four per-language checks that would have to be re-pointed by hand every time
+# the matrix changes. Adding it here does not make it required; that is a
+# repo-settings decision, deliberately not expressible from this file.
+# See docs/CODEQL.md ("Merge gating").
+name: CodeQL
+
+on:
+  # No push/pull_request triggers of its own: per-change runs come from ci.yml
+  # (push/PR on main) and dev-ci.yml (push/PR on dev) calling this workflow, so
+  # every branch event is covered exactly once and the result feeds the gates.
+  # Scanning dev PRs at all is the one place this exceeds old default setup,
+  # which never ran on them (verified: zero CodeQL runs recorded on dev PRs).
+  workflow_call:
+  workflow_dispatch:  # manual re-run (e.g. after dismissing an alert)
+  schedule:
+    # Monday 10:00 UTC, weekly. Offset from the 07:00 canary, the 08:00 daily
+    # govulncheck and the Monday 09:00 Grype scan, following the same
+    # don't-contend-for-runners reasoning those files state.
+    #
+    # A cron matters for CodeQL specifically because a run's verdict is a
+    # function of the query pack as well as the commit: new queries ship
+    # continuously, and without a schedule the only way this repo learns that a
+    # newly published query flags existing code is that some unrelated PR turns
+    # red. Same argument govulncheck-scheduled.yml makes about vuln.go.dev.
+    - cron: '0 10 * * 1'
+
+permissions:
+  contents: read
+  security-events: write  # required to upload CodeQL results to the Security tab
+  # The `actions` analysis reads workflow definitions; `packages: read` is not
+  # needed because no analysis here pulls a private CodeQL pack.
+  actions: read
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Go is the reason this file exists. `build-mode: none` is NOT
+          # supported for Go — only `autobuild` or `manual` — so the toolchain
+          # has to be right rather than skipped.
+          # security-extended everywhere: the broader security suite (more
+          # queries, lower average precision than the default). Measured before
+          # adoption like every other gate here — the run's own findings
+          # summary is the measurement, and the Fail-on-findings step means
+          # anything it surfaces must be fixed or reasoned away, not accrued.
+          - language: go
+            build-mode: autobuild
+            queries: security-extended
+          - language: python
+            build-mode: none
+            queries: security-extended
+          - language: javascript-typescript
+            build-mode: none
+            queries: security-extended
+          - language: actions
+            build-mode: none
+            queries: security-extended
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # THE FIX. Runs before init so the interpreter is already on PATH when the
+      # Go extractor and autobuild shell out to `go`. go-version-file makes go.mod
+      # the single declaration point, so this cannot drift from the module.
+      - name: Set up Go
+        if: matrix.language == 'go'
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@4c0873ef8656cb3c50b3f42fb63bc1ade0cfa827 # v4 (4.37.8)
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          queries: ${{ matrix.queries }}
+          # security-extended (see the matrix note). The SCOPE note in the
+          # header still applies to `code-quality` — do not re-add that one.
+
+      - name: Autobuild
+        if: matrix.build-mode == 'autobuild'
+        uses: github/codeql-action/autobuild@4c0873ef8656cb3c50b3f42fb63bc1ade0cfa827 # v4 (4.37.8)
+        env:
+          # Same build tag ci.yml and dev-ci.yml pass to `go vet` and `go test`,
+          # and for the same reason: internal/sandbox/host.go — the UNSANDBOXED
+          # host executor — is fenced behind `//go:build fleet_host_executor`, so
+          # without the tag it is not in the default build and the extractor never
+          # sees it. Measured on the first run of this workflow: 426 of the 427
+          # non-test .go files were extracted, and the one missing file was
+          # exactly host.go. Leaving the most security-sensitive file in the tree
+          # as the single hole in Go coverage is not a defensible default, so the
+          # tag is passed here to match the lanes that already vet it.
+          GOFLAGS: -tags=fleet_host_executor
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@4c0873ef8656cb3c50b3f42fb63bc1ade0cfa827 # v4 (4.37.8)
+        with:
+          category: /language:${{ matrix.language }}
+          # Also write the SARIF to disk so the step below can summarize it. The
+          # results are still uploaded to code scanning (`upload` defaults true);
+          # this only adds a local copy.
+          output: ${{ runner.temp }}/codeql-sarif
+
+      - name: Summarize findings to the job log
+        # WHY THIS EXISTS: a CodeQL run reports nothing about what it FOUND to
+        # its own log. It writes SARIF, uploads it, and exits 0 — with findings
+        # or without them. So the only way to see results was to open the
+        # Security tab, which means a run's outcome is invisible to anyone
+        # reading CI output, to `gh run view`, and to any automation that has
+        # the log but not the code-scanning API.
+        #
+        # This mirrors what govulncheck-scheduled.yml already does for its own
+        # SARIF: jq a per-rule count into the job log AND the step summary, so
+        # the run is readable without leaving Actions. It is reporting only and
+        # never fails the job — gating on findings is code scanning merge
+        # protection's job (see docs/CODEQL.md), not this step's.
+        if: ${{ !cancelled() }}
+        env:
+          SARIF_DIR: ${{ runner.temp }}/codeql-sarif
+          LANGUAGE: ${{ matrix.language }}
+          # The database directory is named after the EXTRACTOR, which is not
+          # always the matrix language: javascript-typescript -> javascript.
+          CODEQL_DB: ${{ matrix.language == 'javascript-typescript' && 'javascript' || matrix.language }}
+        run: |
+          set -uo pipefail
+          shopt -s nullglob
+          files=("$SARIF_DIR"/*.sarif)
+          {
+            echo "### CodeQL findings — $LANGUAGE"
+            if [ ${#files[@]} -eq 0 ]; then
+              # Not a failure: the analyze step is what fails on a broken run.
+              # Say it plainly rather than printing "No findings." for a scan
+              # that never produced a file — reporting a clean result you did
+              # not observe is the error this repo keeps writing down.
+              echo 'No SARIF file was written — nothing to summarize (see the analyze step).'
+            else
+              echo '```'
+              # `-s` slurps every SARIF doc into one array, so a language that
+              # emits more than one file is still counted once, in total.
+              jq -rs '
+                [ .[] | .runs[]? | .results[]? ] as $res
+                | if ($res | length) == 0 then "No findings."
+                  else
+                    ( $res
+                      | map(
+                          "[\(.level // "note")]  \(.ruleId)  "
+                          + ((.locations[0].physicalLocation // {}) as $l
+                             | "\($l.artifactLocation.uri // "?"):\($l.region.startLine // "?")")
+                        )
+                      | sort | join("\n")
+                    ) + "\n--\ntotal findings: \($res | length)"
+                  end
+              ' "${files[@]}"
+              echo '```'
+              # COVERAGE, not just the verdict: "No findings." alone cannot be
+              # told apart from "analyzed nothing", which is the exact
+              # green-but-vacuous outcome this workflow exists to rule out.
+              # The source archive is the file set the database was built from.
+              # RUNNER_TEMP (the env var), not ${{ runner.temp }}: interpolating a
+              # GitHub expression straight into a run: block is the shape
+              # semgrep's gha-curl-pipe-shell / curl-eval rules flag, and it also
+              # breaks their bash sub-parser — which silently costs coverage on
+              # this very file. The env var is equivalent and parses.
+              src="$RUNNER_TEMP/codeql_databases/$CODEQL_DB/src.zip"
+              if [ -f "$src" ]; then
+                echo "files in the $LANGUAGE database: $(unzip -Z1 "$src" 2>/dev/null | grep -vc '/$' || echo '?')"
+              fi
+            fi
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Fail on findings
+        # THIS is what makes CodeQL a gate rather than a report. The analyze step
+        # exits 0 whether it found nothing or a hundred alerts — job success only
+        # means extraction and query evaluation worked. Without this step a red
+        # `Analyze (…)` check can only ever mean "the scanner broke", never "the
+        # code has a problem", which is precisely how the Go toolchain break sat
+        # unnoticed behind a red-but-not-required check for weeks.
+        #
+        # Threshold is ANY finding, deliberately. The security suite currently
+        # reports ZERO across go/python/javascript-typescript/actions, so there
+        # is no backlog to grandfather and no severity line to argue about — a
+        # finding here is new. Switching a gate on over an existing backlog is
+        # how a gate becomes something people route around.
+        #
+        # Runs after the summary so the log leads with WHAT was found.
+        #
+        # NOTE ON SCOPE: this makes the CHECK red. Whether a red check BLOCKS a
+        # merge is branch protection's call — `CodeQL gate` has to be a required
+        # status check for that, which is a repo-settings action a workflow file
+        # cannot perform. See docs/CODEQL.md ("Merge gating").
+        if: ${{ !cancelled() }}
+        env:
+          SARIF_DIR: ${{ runner.temp }}/codeql-sarif
+          LANGUAGE: ${{ matrix.language }}
+        run: |
+          set -uo pipefail
+          shopt -s nullglob
+          files=("$SARIF_DIR"/*.sarif)
+          if [ ${#files[@]} -eq 0 ]; then
+            # No SARIF means the analysis did not produce results to judge. Fail
+            # loudly rather than reporting a clean scan that never happened.
+            echo "::error::No SARIF written for $LANGUAGE — cannot conclude the scan was clean."
+            exit 1
+          fi
+          count=$(jq -rs '[ .[] | .runs[]? | .results[]? ] | length' "${files[@]}")
+          if [ "$count" != "0" ]; then
+            echo "::error::CodeQL found ${count} finding(s) for ${LANGUAGE} — see the summary above."
+            echo "Fix it, or if it is a false positive dismiss the alert in the"
+            echo "Security tab with a reason, or add a query filter with a comment"
+            echo "saying why. Silently raising the threshold is not one of the options."
+            exit 1
+          fi
+          echo "CodeQL ($LANGUAGE): 0 findings."
+
+  codeql-gate:
+    name: CodeQL gate
+    # Aggregate of the matrix. In the workflow_call path the caller's
+    # `needs: codeql` already rolls up every job here, so this exists for the
+    # standalone schedule/dispatch runs — one legible verdict per weekly re-scan
+    # instead of four boxes — and as a stable single check name.
+    #
+    # `needs: [analyze]` on a matrix job collapses to one aggregate result:
+    # success only when every leg succeeded. With `fail-fast: false` above,
+    # every language still runs and reports before this evaluates them.
+    if: always()
+    needs: [analyze]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail if any CodeQL analysis did not succeed
+        run: |
+          results='${{ join(needs.*.result, ' ') }}'
+          echo "job results: $results"
+          for r in $results; do
+            [ "$r" = "success" ] || { echo "a CodeQL analysis did not succeed"; exit 1; }
+          done

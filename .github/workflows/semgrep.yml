@@ -1,0 +1,215 @@
+# Semgrep — the fast, log-readable scan lane.
+#
+# WHY A SECOND SCANNER AT ALL. CodeQL is the deep one: interprocedural taint,
+# which is what actually checks this project's headline invariants (a credential
+# must not reach a log sink, the model context, or the sandbox). It is also slow
+# to build a database and reports nothing about what it found to its own log.
+# Semgrep is the opposite trade — seconds, no build, findings straight to stdout,
+# and rules that are cheap to write. It complements CodeQL; it does not replace
+# it, and it must not be treated as a substitute for the taint analysis.
+#
+# RULESET SCOPE IS EVIDENCE-BASED. The broad registry packs (p/golang,
+# p/javascript, p/python) plus p/github-actions were run over this tree and every
+# finding was triaged by hand. Result: 51 real findings and 6 false positives.
+#
+# The 51 were all one rule — `github-actions-mutable-action-tag`: actions pinned
+# to a MUTABLE tag (`actions/checkout@v7`) rather than an immutable commit SHA. A
+# moved tag runs attacker-controlled code with this repo's token. Every one is
+# now FIXED: all 53 action references across every workflow are pinned to a
+# 40-hex commit SHA with the version in a trailing comment (which is also the
+# form Dependabot updates).
+#
+# The 6 false positives are suppressed at the line with a `nosemgrep:` comment
+# naming the specific rule and the reason. They are worth knowing about, because
+# three of them were ALREADY formally triaged and suppressed for gosec (which
+# runs inside golangci-lint and already blocks), and one of them is actively
+# wrong:
+#
+#   open-redirect                    cmd/fleet/tls.go
+#     HTTP->HTTPS upgrade to the SAME host. Already //nolint:gosec G710.
+#   math-random-used                 internal/runner/runner.go
+#     math/rand/v2, used once, for +/-10% jitter on a retry interval.
+#   cookie-missing-secure            internal/sched/handlers/elcano.go
+#     A DELETION cookie (Value="", MaxAge=-1), no secret. Already //nolint G124.
+#   unsafe-deserialization-interface internal/mcp/httptool.go
+#     json.Unmarshal into interface{} is REQUIRED — the value feeds a jq program
+#     over arbitrary JSON. A concrete struct is not expressible.
+#   x-frame-options-misconfiguration web/src/proxy.ts
+#     The header value is the literal string "DENY". No user input reaches it.
+#   insecure-file-permissions        internal/sandbox/fileops.py
+#     Advises 0o644 — WORLD-READABLE — for a sandbox directory. Following it
+#     would be a security REGRESSION. 0750 is the file-tool contract.
+#
+# Each suppression was mutation-tested: removing it makes the finding reappear,
+# so a green scan means the waivers are doing the work rather than the rules
+# having silently stopped matching.
+#
+# THIS LANE BLOCKS. `--error` makes semgrep exit non-zero on any finding, and
+# there is no `continue-on-error`, so a NEW finding fails the job. That is only
+# defensible because the tree is currently at ZERO unsuppressed findings across
+# all four packs — verified locally before this was turned on. A gate switched on
+# over an unfixed backlog is a gate people learn to ignore.
+#
+# Adding a suppression is therefore a reviewable act: it shows up in the diff
+# next to a reason, which is the property this whole lane exists to have.
+#
+# RULE PINNING — investigated and REJECTED, on license grounds, not neglect.
+# The packs are fetched from the registry at scan time, so a registry-side rule
+# addition can turn this gate red with no commit to blame (named in
+# docs/SCANNING.md as the first suspect for a mystery red run). Vendoring the
+# rule files would fix that, but the Semgrep Rules License v1.0
+# (https://semgrep.dev/legal/rules-license) grants use for "your own internal
+# business purposes" only and states outright: "This license does not allow you
+# to distribute the rules". Committing them into this public MIT repo would be
+# redistribution. The semgrep BINARY version is pinned; the rules deliberately
+# are not, with the failure mode documented instead of hidden.
+name: Semgrep
+
+on:
+  # No push/pull_request triggers of its own: this is a REUSABLE workflow.
+  # ci.yml and dev-ci.yml call it as a job, which puts it inside `CI gate` /
+  # `Dev gate` via `needs` — a finding blocks the merge through the existing
+  # required check, with no branch-protection change. Only the weekly re-scan
+  # and a manual trigger live here.
+  workflow_call:
+  workflow_dispatch:
+  schedule:
+    # Monday 11:00 UTC — one hour after CodeQL's weekly, and clear of the 07:00
+    # canary / 08:00 govulncheck / 09:00 Grype lanes, following the same
+    # don't-contend-for-runners note those files carry. Rules ship continuously,
+    # so like CodeQL this is worth re-running against unchanged code.
+    - cron: '0 11 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  semgrep:
+    name: Semgrep scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install semgrep
+        # No actions/setup-python step on purpose: ubuntu-latest already ships a
+        # python3, and this repo pins no setup-python version anywhere else, so
+        # adding one would be inventing an unverified action pin for nothing.
+        #
+        # The semgrep version IS pinned, like every other tool this repo installs
+        # in CI (gitleaks, grype, golangci-lint), so an upstream release cannot
+        # change the findings under us without a visible diff.
+        env:
+          SEMGREP_VERSION: '1.174.0'
+        run: |
+          set -euo pipefail
+          python3 -m pip install --user --quiet "semgrep==${SEMGREP_VERSION}"
+          # GITHUB_PATH only affects LATER steps, so export for this one too.
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.local/bin:$PATH"
+          semgrep --version
+
+      - name: Scan
+        run: |
+          set -uo pipefail
+          # --metrics=off: never phone home from CI.
+          # --error: exit non-zero on any finding. THIS is what makes the lane a
+          #   gate. The tree is at zero unsuppressed findings, so a failure here
+          #   means a new one arrived.
+          # The JSON is written first and the exit status captured, so the
+          # summary step below still runs and still says WHAT failed — a gate
+          # that fails without printing the finding is a gate nobody can act on.
+          semgrep scan \
+            --config p/github-actions \
+            --config p/golang \
+            --config p/javascript \
+            --config p/python \
+            --metrics=off --error --json -o semgrep.json --quiet
+          status=$?
+          if [ ! -s semgrep.json ]; then
+            echo "semgrep produced no JSON — treating as a scan failure" >&2
+            exit 1
+          fi
+          echo "semgrep exit status: $status"
+          # Defer the failure to the gate step so the summary prints first.
+          echo "$status" > semgrep.status
+
+      - name: Summarize findings to the job log
+        # Same reasoning as codeql.yml's summary step: a findings report that
+        # only exists behind a web UI is unreadable to `gh run view` and to any
+        # agent holding the log. Print it.
+        if: ${{ !cancelled() }}
+        run: |
+          set -uo pipefail
+          {
+            echo '### Semgrep findings'
+            echo '```'
+            jq -r '
+              (.results // []) as $r
+              | if ($r | length) == 0 then "No findings."
+                else
+                  ( $r
+                    | group_by(.check_id)
+                    | sort_by(-length)
+                    | map("\(length | tostring)  [\(.[0].extra.severity // "INFO")]  \(.[0].check_id | split(".") | last)")
+                    | join("\n")
+                  ) + "\n--\ntotal findings: \($r | length)"
+                end
+            ' semgrep.json
+            echo '```'
+            # COVERAGE, not just the verdict. "No findings." on its own is
+            # indistinguishable from "scanned nothing" — the exact
+            # green-but-vacuous failure this whole stack exists to rule out. So
+            # print what was actually looked at, and the per-language breakdown
+            # that shows every pack really applied.
+            echo ''
+            echo "files scanned: $(jq '(.paths.scanned // []) | length' semgrep.json)"
+            echo "files skipped: $(jq '(.paths.skipped // []) | length' semgrep.json)"
+            echo 'by extension:'
+            jq -r '
+              (.paths.scanned // [])
+              | map(split(".") | last)
+              | group_by(.) | map({e: .[0], n: length})
+              | sort_by(-.n) | .[:8][]
+              | "  .\(.e): \(.n)"
+            ' semgrep.json
+            # Scan errors are not findings but they do mean a rule or file did
+            # not fully parse, so they get their own line rather than vanishing.
+            errs=$(jq '(.errors // []) | length' semgrep.json)
+            if [ "$errs" != "0" ]; then
+              echo ''
+              echo "parse/scan errors (a rule or file that did not fully run): $errs"
+              jq -r '(.errors // [])[] | "  [\(.level)] \(.path // "?")"' semgrep.json | sort -u
+            fi
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Fail on findings
+        # Separate from the scan step purely for ordering: the summary above has
+        # already printed the per-rule breakdown by the time this fails, so the
+        # job log leads with WHAT is wrong instead of just that something is.
+        if: ${{ !cancelled() }}
+        run: |
+          set -uo pipefail
+          status=$(cat semgrep.status 2>/dev/null || echo 1)
+          count=$(jq '(.results // []) | length' semgrep.json 2>/dev/null || echo '?')
+          if [ "$status" != "0" ]; then
+            echo "::error::Semgrep found ${count} unsuppressed finding(s) — see the summary above."
+            echo "Fix the finding, or, if it is a false positive, add a line-level"
+            echo "\`nosemgrep: <rule-id>\` comment stating WHY. Both are reviewable in the diff."
+            exit 1
+          fi
+          echo "Semgrep: 0 unsuppressed findings."
+
+      - name: Upload findings as an artifact
+        # The repo is public and the results are not sensitive, so the raw JSON
+        # is kept for a fixing agent (or a human) to consume without re-running
+        # the scan.
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: semgrep-findings
+          path: semgrep.json
+          if-no-files-found: warn
+          retention-days: 14

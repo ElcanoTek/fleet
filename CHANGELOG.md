@@ -19,6 +19,241 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Every remaining scanner follow-up closed: rule families widened and fixed,
+  CodeQL at `security-extended`, grype tightened, override canary, cron alarms,
+  and one reasoned rejection.**
+
+  - **ruff `B`/`SIM`/`S` (bandit) enabled after fixing all 21 measured
+    findings.** Both `zip()` sites got `strict=True` — each provably
+    equal-length (one appends to both lists in lockstep; the other sits behind
+    an explicit `len(row) != len(cols)` guard) — so a future desync fails loud
+    instead of silently truncating. The unclosed `NamedTemporaryFile` in
+    bento_doc.py moved inside its `with`. Fourteen deliberate best-effort
+    `try/except-pass` sites (kernel cleanup, duck-typed pandas/numpy probes,
+    unlink-on-failure paths) became explicit `contextlib.suppress` with the
+    intent stated at each. The one `subprocess.Popen` carries a reasoned
+    `# noqa: S603` (argv is `sys.executable` plus internal literals;
+    mutation-tested — stripping the noqa re-fires the rule). Full Go suite
+    green on the result; the sandbox fileops and bridge behavior is covered by
+    its tests.
+
+  - **CodeQL widened to the `security-extended` suite** on all four languages,
+    adopted the same way everything else was: the default suite measured zero,
+    so the broader set starts from a clean baseline and its findings on this
+    PR's own run are the measurement. That measurement found exactly one thing
+    — and it was real: `actions/untrusted-checkout/medium` on
+    `build-sandbox-image.yml`'s `fleet_ref`-fed checkout. Fixed, not waived
+    (the `actions` language has no `AlertSuppression.ql`, so a comment waiver
+    does not even exist): the workflow now **refuses `refs/pull/*` refs before
+    checkout** — a fork-PR ref would put fork-controlled code into a workflow
+    that executes the checked-out build script — and the identical hardening
+    went into `publish-sandbox-image.yml`, the *unflagged* twin that holds
+    `packages: write` and escaped the name-heuristic query only because its
+    ref plumbing was named differently. Extended suite then verified clean in
+    CI on all four languages (Dev CI run 525). The CodeQL/Semgrep log summaries
+    also now print **`file:line` per finding** (plus a database file count as
+    the coverage line), and the override canary is invoked via
+    `$GITHUB_WORKSPACE` so it survives the job's `working-directory: web`.
+
+  - **Grype gate tightened to fixable CRITICAL + HIGH**, after measuring: the
+    published sandbox image carries zero fixable Critical/High RPM findings
+    (its only fixable findings are two Medium openssh advisories, which the
+    next routine image rebuild picks up). Policy change mutation-tested in
+    three directions: real scan passes, injected fixable High fails, injected
+    fixable Medium still passes.
+
+  - **`scripts/check-npm-overrides.sh`**: the rampart sharp/adm-zip overrides
+    are forks of upstream's intent, correct only while upstream is broken — so
+    both CI lanes now fail with removal instructions the day
+    `@huggingface/transformers` / `onnxruntime-node` publish ranges reaching
+    the patched lines. Registry flake = skip with a notice, never a verdict.
+    Mutation-tested in both directions.
+
+  - **A red scheduled scan files an issue** (all four lanes; deduped by title,
+    re-failures comment). A cron failure has no PR to surface it — the rot
+    pattern that let the CodeQL toolchain break sit red for weeks. For the two
+    reusable workflows the alarm lives in `scan-cron-alarm.yml`, a
+    `workflow_run` watcher, because a called workflow may not request
+    permissions its caller did not grant — the check fires at PLAN time, before
+    any `if:` can skip the job, and the first attempt (an `issues: write` job
+    inside codeql.yml/semgrep.yml) startup-failed the entire calling Dev CI
+    run. Verified fixed on the next run.
+
+  - **Semgrep rule vendoring investigated and rejected on license grounds**:
+    the Semgrep Rules License v1.0 permits internal use only and states "This
+    license does not allow you to distribute the rules" — committing them to
+    this public MIT repo would be redistribution. The binary stays pinned; the
+    rules stay registry-fetched with the failure mode documented.
+
+- **The scanners gate through `ci-gate`/`Dev gate` themselves, npm dependencies
+  are audited, and the whole Python tree is ruff-formatted — with every finding
+  fixed, none deferred.**
+
+  - **Gate wiring, corrected.** The previous entry said making CodeQL/Semgrep
+    merge-blocking needed a branch-protection click, reasoning from "`needs`
+    cannot cross workflow files". Incomplete: `codeql.yml` and `semgrep.yml` are
+    now **reusable workflows** (`on: workflow_call`) that ci.yml and dev-ci.yml
+    call as jobs, and those jobs sit in `ci-gate`'s / `Dev gate`'s `needs` — so a
+    scanner finding blocks a merge through the one existing required check, no
+    settings change anywhere. Their own push/pull_request triggers are removed
+    (nothing runs twice); the weekly re-scan crons and a workflow_dispatch stay.
+
+  - **`npm audit` is a new blocking gate** for both npm trees, lockfile-only and
+    failing on any severity — the npm counterpart of the govulncheck gate.
+    `web/` was already clean. `scripts/rampart-service` **had no lockfile at
+    all**, and generating one exposed **5 high-severity vulnerabilities** it had
+    been hiding: `sharp <0.35.0` (four libvips CVEs) and `adm-zip <0.6.0`
+    (GHSA-xcpc-8h2w-3j85) via `onnxruntime-node`. No upstream release fixes
+    either — latest `@huggingface/transformers` still pins `sharp ^0.34.5`, and
+    npm's suggested "fix" was a breaking transformers downgrade — so the
+    package now carries `overrides` to `sharp ^0.35.3` and `adm-zip ^0.6.0`,
+    each the release immediately after the vulnerable line. The overridden
+    stack was installed and load-tested, not just resolved: sharp renders a PNG
+    through the new libvips, transformers loads on it, rampart exports its API,
+    adm-zip round-trips a zip. Both trees now audit at 0.
+
+  - **`ruff format` applied and gated.** 9 of 13 Python files reformatted
+    (~3.7k lines), `ruff format --check` now blocks in both CI lanes and in
+    `make lint`. Validated by the full Go suite (the bento/fileops golden tests
+    exercise the reformatted scripts), byte-compilation of every file, and a
+    re-scan showing the fileops `nosemgrep` waiver survived the reformat.
+
+  - **All three semgrep parse errors fixed**, so no file is partially covered:
+    `${{ steps.build.outcome }}` interpolated into a `run:` script in
+    build-sandbox-image.yml (moved to `env:` — also the injection-safe form), a
+    `${tag:-(…)}` expansion default whose bare paren choked the bash sub-parser
+    (hoisted to a plain assignment), and an inline `import("@playwright/test")`
+    type in fixtures.ts (now a named `import type`; web lint, tsc and all 1104
+    vitest tests pass on it). The scanners' coverage lines now read
+    **0 parse/scan errors** alongside 0 findings.
+
+- **The scanners now block, and the repo passes them.** Turning a gate on over an
+  unfixed backlog is how a gate becomes something people route around, so
+  everything they reported was fixed or adjudicated first.
+
+  - **All 53 action references pinned to commit SHAs.** Semgrep's
+    `github-actions-mutable-action-tag` found 51 instances of actions referenced
+    by a mutable tag (`actions/checkout@v7`); if a tag moves,
+    attacker-controlled code runs with this repo's `GITHUB_TOKEN`. Every `uses:`
+    across all 12 workflows is now `@<40-hex-sha> # <version>` — the form
+    Dependabot updates, and `.github/dependabot.yml` already watches the
+    `github-actions` ecosystem. Each SHA is the commit the previously-used tag
+    resolved to at pin time, so the pin does not smuggle in a version bump.
+
+  - **Semgrep blocks over all four packs** (`p/github-actions`, `p/golang`,
+    `p/javascript`, `p/python`) with `--error` and no `continue-on-error`. The 6
+    false positives are suppressed at the line with `nosemgrep: <rule-id>` plus a
+    reason — three of them were *already* triaged and suppressed for gosec, and
+    one (`0o644` for a sandbox directory) would have been a security regression
+    if followed. Every suppression was mutation-tested: removing it makes the
+    finding reappear, so a green scan means the waivers work rather than the
+    rules having silently stopped matching.
+
+  - **CodeQL fails on findings.** Previously the analyze step exited 0 whether it
+    found nothing or a hundred alerts, so a red check could only ever mean "the
+    scanner broke" — which is exactly how the Go toolchain break hid for weeks.
+    Threshold is any finding, safe because the security suite reports zero across
+    all four languages.
+
+  Both scanners report as their own checks (`CodeQL gate`, `Semgrep scan`) rather
+  than through `ci-gate`, because a job's `needs` cannot reach across workflow
+  files. **Making a red check actually block a merge still requires adding those
+  two checks to the branch ruleset** — a workflow file cannot make itself
+  required.
+
+  Two knock-on fixes found while doing this: SHA pinning broke two regexes in
+  `scripts/check_versions_test.go` that matched `golangci-lint-action@v\d+`, and
+  they fail *open* by skipping — so they were widened to tolerate a pinned ref
+  plus its trailing version comment, and mutation-tested to confirm they still
+  bite. And a standalone `nosemgrep` comment inside a Go import block breaks
+  `goimports`, so that one waiver is a trailing comment instead.
+
+- **Python had no linter, and two scanners were pointed at ground already
+  covered.** Reshaped the scanning stack so each tool owns one job
+  ([`docs/SCANNING.md`](docs/SCANNING.md)):
+
+  - **ruff is new, and it blocks.** fleet ships 13 Python files — the sandbox
+    FileOp helper, the python bridge, the bento-slides and data-profiler skill
+    scripts, MCP test servers — and *nothing* linted any of them. Go had
+    golangci-lint, the web tier had oxlint, Python had neither. Rule selection is
+    narrow on purpose and `ruff.toml` records why: the default rules find 3
+    findings on this tree, a broad selection finds 333, of which 176 are
+    `%`-format style and 43 are magic values. Three real findings were fixed to
+    make the gate clean on day one — an unused import, a lambda assignment, and a
+    **byte-identical duplicate `has_guard` definition** in `bento_doc.py` where
+    the second copy silently shadowed the first. `ruff format` is reported but
+    not gated (the tree has never been ruff-formatted).
+
+  - **CodeQL narrowed to security queries only.** Its code-quality suite was
+    enabled, measured, and dropped: 32 findings, every one note-level, zero
+    security findings. For Go and the web tier it duplicated golangci-lint and
+    oxlint, which already block; 28 of the 32 were Python, now ruff's job; and 3
+    were false positives on correct code (`value != value`, the idiomatic NaN
+    test). CodeQL keeps the thing nothing else here can do — interprocedural
+    taint, which is the actual shape of "a credential must not reach a log sink".
+
+  - **Semgrep is new, scoped, and advisory.** The obvious move — point it at
+    `p/golang`/`p/javascript`/`p/python` — was measured and rejected: 6 of 6
+    non-Actions findings were false positives, three of them *already* triaged
+    and suppressed for gosec, and one (`0o644` for a sandbox directory) would
+    have been a security regression if followed. What ships is
+    `p/github-actions`, which found 51 instances of one real issue nothing else
+    checks: actions pinned to mutable tags rather than commit SHAs. Advisory
+    because all 51 are real and repinning is its own PR, not because they are
+    doubted.
+
+  - **Both scanners now print findings to the job log** and the step summary, and
+    Semgrep uploads raw JSON as an artifact. A CodeQL run otherwise reports
+    nothing about what it found to its own log — it writes SARIF, uploads it, and
+    exits 0 either way — which made outcomes invisible to `gh run view` and to
+    any agent holding the log but not the code-scanning API.
+
+  Also added: an aggregate `CodeQL gate` job, so making CodeQL blocking later is
+  one required check rather than four per-language checks needing manual
+  re-pointing whenever the matrix changes. Nothing here is wired into `ci-gate`
+  beyond ruff; CodeQL and Semgrep stay advisory.
+
+- **CodeQL had stopped analyzing the repo's Go code, and then stopped analyzing
+  anything.** Default setup's Go analysis failed on every main-targeting PR from
+  the Go 1.27 bump (#1240, promoted in #1242) onward — it installed the Go its
+  extractor was built with and pinned `GOTOOLCHAIN=local`, so against a `go.mod`
+  requiring 1.27 it could neither use nor fetch a workable toolchain:
+
+  ```
+  go: go.mod requires go >= 1.27.0 (running go 1.26.6; GOTOOLCHAIN=local)
+  Extraction failed for all discovered Go projects.
+  CodeQL job status was configuration error.
+  ```
+
+  The failure was red but never blocking (`ci-gate` is the only required check on
+  main), so it was annotated in promote commit messages and lived on. Default
+  setup is zero-config, with no Go version input and no env, so there was nothing
+  to fix in place; switching it off to replace it left the repo scanning nothing
+  at all in the interim.
+
+  Replaced with an advanced-setup workflow, `.github/workflows/codeql.yml`, which
+  restores security analysis over go, python, javascript-typescript and actions
+  plus the code-quality query suite over the first three, and resolves Go's
+  interpreter from `go.mod` via `actions/setup-go` — never a literal version, the
+  bug class #1240 and #1241 already fixed twice for node.
+
+  Two things the first cut got wrong, both of which ran **green**: `analysis-kinds`
+  turns out to be GitHub-internal and unusable in a custom workflow (it logged
+  `##[error]` and silently continued with security only), and Go extraction
+  missed exactly one file — `internal/sandbox/host.go`, the unsandboxed host
+  executor, invisible to the default build behind `//go:build
+  fleet_host_executor`. Fixed with `queries: code-quality` and
+  `GOFLAGS: -tags=fleet_host_executor`, the same tag `ci.yml` and `dev-ci.yml`
+  already pass to `go vet` and `go test`.
+
+  Verified from the extractor's own output rather than the check mark:
+  `extraction succeeded for all 2 discovered project(s)`, 916 packages, 426 `.go`
+  files including `host.go`, and distinct queries evaluated rising from 72→116
+  (go), 90→292 (python) and 178→374 (javascript-typescript) as the quality suite
+  came in, with `actions` unchanged at 36 by design. CodeQL remains advisory —
+  these jobs are deliberately not wired into `ci-gate`. See
+  [`docs/CODEQL.md`](docs/CODEQL.md).
+
 - **`fleet update` built the web tier on the node it had just refused.** Every
   update on a Fedora box printed `✓ web tier will build+run on /usr/bin/node-24
   (v24.x)` and then, a few lines later, npm's own rejection of that claim:

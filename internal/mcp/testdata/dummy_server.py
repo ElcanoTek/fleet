@@ -1,9 +1,9 @@
 import sys
 import json
-import os
 
 # Ensure unbuffered output
 sys.stdout.reconfigure(line_buffering=True)
+
 
 def main():
     while True:
@@ -26,7 +26,7 @@ def main():
                 response["result"] = {
                     "protocolVersion": "2024-11-05",
                     "serverInfo": {"name": "dummy", "version": "1.0"},
-                    "capabilities": {}
+                    "capabilities": {},
                 }
             elif method == "tools/list":
                 response["result"] = {
@@ -36,10 +36,8 @@ def main():
                             "description": "Echoes input",
                             "inputSchema": {
                                 "type": "object",
-                                "properties": {
-                                    "message": {"type": "string"}
-                                }
-                            }
+                                "properties": {"message": {"type": "string"}},
+                            },
                         }
                     ]
                 }
@@ -50,10 +48,7 @@ def main():
                 if tool_name == "echo":
                     response["result"] = {
                         "content": [
-                            {
-                                "type": "text",
-                                "text": f"Echo: {args.get('message')}"
-                            }
+                            {"type": "text", "text": f"Echo: {args.get('message')}"}
                         ]
                     }
                 else:
@@ -66,6 +61,7 @@ def main():
             # Write error to stderr for debugging
             sys.stderr.write(str(e) + "\n")
             break
+
 
 if __name__ == "__main__":
     main()
