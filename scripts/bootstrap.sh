@@ -534,7 +534,7 @@ deploy_web_tier() {
 
   # Resolve the interpreter the unit will run BEFORE building, and fail loudly
   # rather than building against one node and serving with another.
-  local node_bin node_ver
+  local node_bin node_ver npm_cli
   if node_bin="$(fleet_resolve_node_bin "$NODE_MAJOR")"; then
     node_ver="$("$node_bin" -v 2>/dev/null || echo unknown)"
     ok "web tier will run ${node_bin} (${node_ver})"
@@ -543,6 +543,26 @@ deploy_web_tier() {
     warn "  install it: sudo dnf install nodejs$NODE_MAJOR   (then re-run, or: sudo fleet doctor)"
     warn "  skipping the web tier rather than building it against an unsupported node."
     return
+  fi
+  # And the npm that belongs to it, separately: on Fedora npm is its own package
+  # and its shebang names its interpreter ABSOLUTELY, so a resolved node 24 says
+  # nothing about which node `npm ci` will run under. FLEET_DEPS asks for
+  # nodejs${NODE_MAJOR}-npm, so a miss here means that install did not take.
+  #
+  # A miss is fatal only for a VERSIONED interpreter — the parallel-stream case,
+  # where the bare `npm` provably belongs to another one and the missing package
+  # has a name. On a single-node layout the same miss just means npm ships in a
+  # shape the probe cannot read, and there the `node` pin below is enough; the
+  # read-back still reports what npm ran under either way.
+  if npm_cli="$(fleet_resolve_npm_cli "$node_bin")"; then
+    ok "web tier will build with ${npm_cli} — pinned to ${node_bin}, not to PATH"
+  elif [[ "${node_bin##*/}" =~ ^node-[0-9]+$ ]]; then
+    warn "no npm belongs to ${node_bin} — the bare \`npm\` on this box is the default stream's and its shebang pins it there."
+    warn "  install it: sudo dnf install nodejs${NODE_MAJOR}-npm   (then re-run, or: sudo fleet doctor --node)"
+    warn "  skipping the web tier rather than building it with an npm pinned to an unsupported node."
+    return
+  else
+    info "no npm-cli.js resolvable for ${node_bin} — the build will use \`npm\` from PATH under a pinned \`node\`"
   fi
 
   # Shared secrets the web↔backend link needs; generate-if-absent then load them
@@ -558,20 +578,34 @@ deploy_web_tier() {
   systemctl try-restart "$SERVICE_NAME" >/dev/null 2>&1 || true
 
   step "Web tier: building the Next.js app (origin=${origin}, node=${node_ver})"
-  # PATH is set so the bare name `node` resolves to the interpreter we picked,
-  # because npm's shebang is `#!/usr/bin/env node`. Without it the build
-  # silently used whatever `node` PATH resolved to — on Fedora the DEFAULT
-  # stream — so the tier was built on 22 and served on 24 while this function
-  # printed that it would run 24: exactly the claimed-but-not-done failure this
-  # change set exists to remove. Resolved ONCE and reused, so the version this
-  # reports is the one the build actually ran under, and so the shim directory
-  # it may create is removed rather than leaked on every provision.
-  local build_path
+  # PATH is set so `node`, `npm` and `npx` all resolve to the interpreter we
+  # picked. A `node` symlink alone was not enough: npm's shebang is an ABSOLUTE
+  # `#!/usr/bin/node-<major>` on Fedora, so `npm ci` kept using the DEFAULT
+  # stream and the tier was built on 22 and served on 24 while this function
+  # printed that it would run 24 — exactly the claimed-but-not-done failure this
+  # code exists to remove. Resolved ONCE and reused, so the shim directory it
+  # may create is removed rather than leaked on every provision.
+  local build_path build_node
   build_path="$(fleet_node_build_path "$node_bin")"
+  # Read the interpreter back from npm, not from `node -v` under the same PATH:
+  # that symlink is ours, so it could only ever confirm the half that already
+  # worked. Below the floor is a refusal, not a warning — building the tier on
+  # the old major is the bug, and npm says so itself with EBADENGINE.
+  build_node="$(fleet_npm_node_version "$build_path" "$web_src" || true)"
+  if [[ -z "$build_node" ]]; then
+    warn "could not read the node version npm runs under — building anyway, but the interpreter is UNVERIFIED"
+    build_node="unverified"
+  elif [[ "$(fleet_node_version_major "$build_node" || echo 0)" -lt "$NODE_MAJOR" ]]; then
+    fleet_node_build_path_cleanup "$build_path" "$node_bin"
+    warn "npm would build the web tier on ${build_node}, below the ${NODE_MAJOR} declared in web/.nvmrc."
+    warn "  install it: sudo dnf install nodejs${NODE_MAJOR}-npm   (then re-run, or: sudo fleet doctor --node)"
+    warn "  skipping the web tier rather than building it with an npm pinned to an unsupported node."
+    return
+  fi
   if ( cd "$web_src" && PATH="$build_path" \
         NEXT_PUBLIC_PUBLIC_ORIGIN="$origin" NEXT_PUBLIC_APP_NAME="$app_name" \
         NEXT_PUBLIC_BUILD_ID="$build_id" sh -c 'npm ci && npm run build' ); then
-    ok "web app built on $(PATH="$build_path" node -v 2>/dev/null || echo unknown)"
+    ok "web app built on ${build_node}"
     fleet_node_build_path_cleanup "$build_path" "$node_bin"
   else
     fleet_node_build_path_cleanup "$build_path" "$node_bin"

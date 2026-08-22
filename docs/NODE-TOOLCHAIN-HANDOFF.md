@@ -7,6 +7,11 @@ Companion reading: [`WEB-TIER-SHUTDOWN.md`](WEB-TIER-SHUTDOWN.md) ("Choosing the
 interpreter" — why the major is declared once in `web/.nvmrc`, and why
 `ExecStart` is a shim) and [`DOCTOR.md`](DOCTOR.md).
 
+The last section, **"The npm interpreter pin"**, is a follow-up: the change
+below pinned `node` for the build and not `npm`, and the "Not verified" note it
+closes with named the exact gap that left. Read it for the current behaviour of
+the build gate.
+
 ## What was broken
 
 The web tier moved to node 24. `web/.nvmrc` is the one declaration point, and
@@ -209,3 +214,186 @@ by the equivalent, long-standing logic in `update.sh`, plus a fake-`systemctl`
 harness, not by a live run. `go test` caches results and does not track the shell
 scripts these tests exec, so any mutation check on a script needs `-count=1` —
 one of ours silently passed from cache before that was noticed.
+
+## The npm interpreter pin (follow-up, 2026-08-22)
+
+The change above ends with a "Not verified" note that turned out to name the
+exact hole it left: *"a real Fedora `dnf` transaction (this box has no dnf), so
+the exact file layout of `nodejs<major>` / `nodejs<major>-npm` is taken from
+`bootstrap.sh`'s long-standing package list rather than observed."* The layout
+matters, and the guess was wrong.
+
+### What was broken
+
+Every `fleet update` on the target box printed the gate's success and then npm's
+contradiction of it, a few lines apart in the same run:
+
+```
+✓ web tier will build+run on /usr/bin/node-24 (v24.x)
+...
+✓ refreshed /usr/local/bin/fleet-web-start.sh
+npm warn EBADENGINE Unsupported engine {
+npm warn EBADENGINE   package: 'fleet-web@0.1.0',
+npm warn EBADENGINE   required: { node: '>=24' },
+npm warn EBADENGINE   current: { node: 'v22.23.1', npm: '10.9.8' }
+npm warn EBADENGINE }
+```
+
+The update was otherwise green: the warning is the *only* symptom, and it is a
+warning, so a build that engine-check-failed the whole point of the node bump
+completed and deployed.
+
+`fleet_node_build_path` put a private shim directory holding a single `node`
+symlink at the head of PATH, and its docstring justified that with "npm's
+shebang is `#!/usr/bin/env node`". On Fedora it is not. From
+[`nodejs22.spec`](https://src.fedoraproject.org/rpms/nodejs22/blob/rawhide/f/nodejs22.spec)
+(`%install`, "Adjust npm scripts to use the renamed interpreter"):
+
+```
+readonly SHEBANG_ERE='^#!/usr/bin/(env\s+)?node\b'
+readonly SHEBANG_FIX='#!%{_bindir}/node-%{node_version_major}'
+```
+
+It *has* to be absolute. The streams are parallel-installable, so a relative
+`env node` shebang would make `npm-22` run under whichever stream happens to be
+the default — npm and its interpreter must be welded together for either stream
+to be usable at all. The consequence for us is that `/usr/bin/npm` →
+`npm-22` → `.../npm-cli.js` begins `#!/usr/bin/node-22` and runs on node 22
+**no matter what PATH says**. A `node` symlink at the head of PATH moves `next`
+and every other `env node` shebang onto the resolved interpreter and cannot move
+npm itself.
+
+So the tier was built on 22 and served on 24 — the same shape as the two bugs
+this document already records (a PATH edit that looks like it pins the
+interpreter and does not), one link further down. Three smaller faults fell out
+of the same root:
+
+1. **The read-back measured the half that already worked.** `update.sh` reported
+   the build interpreter as `PATH="$_build_path" node -v` — i.e. it asked the
+   symlink it had just created. That is not a measurement of anything; it could
+   only ever agree. The component that decided the build was never asked.
+2. **npm was never gated.** The gate resolved *node* and then claimed the tier
+   "will build+run" on it. On Fedora npm is a separate package
+   (`nodejs<major>-npm`) with its own interpreter binding, so "a node 24 is
+   installed" does not imply "npm will build on node 24" — and `doctor.sh`'s
+   `command -v npm` probe cannot see the difference, because the old stream's
+   npm satisfies it. This document already recorded that trap for the
+   *install*; the *build* had it too.
+3. **`next` was one npm behaviour away from the same fate.** npm launches
+   lifecycle scripts with the package's `node_modules/.bin` dirs and its
+   node-gyp shim prepended to the *inherited* PATH (`@npmcli/run-script`'s
+   `set-path.js`) and does **not** inject node's own directory, so the shim
+   survives into `next build`. Verified by reading the installed npm rather
+   than assumed, because if npm did prepend `dirname(process.execPath)` the
+   `node` symlink would be defeated for every child process too.
+
+### What shipped
+
+**`scripts/lib/node-version.sh`** gained the pin and the measurement:
+
+- `fleet_resolve_npm_cli NODE_BIN` — the `npm-cli.js` belonging to `NODE_BIN`.
+  For a versioned interpreter it looks only for the stream's own `npm-<major>`
+  and **refuses** rather than falling back to the unversioned `npm`: that is
+  the default stream's npm, i.e. precisely the wrong answer. A box with
+  `nodejs24` and no `nodejs24-npm` is a real, repairable state, so it gets a
+  refusal naming the one missing package instead of a silent downgrade.
+- `fleet_node_build_path` now writes `npm` and `npx` wrappers into the shim
+  alongside the `node` symlink, each `exec`ing the resolved interpreter against
+  the matching CLI js — the one form of the answer no shebang can override. It
+  also builds a shim **unconditionally**, where it used to return early when
+  the interpreter's directory already resolved `node` to it: that early return
+  answered the node question and left the npm one to PATH, which on a box with
+  two streams in one directory is the bug above.
+- `fleet_npm_node_version BUILD_PATH [CWD]` — the read-back, asked of npm
+  (`npm version --json`, which is read-only with no version argument) rather
+  than of PATH.
+- `fleet_node_build_path_cleanup` is marker-gated (`.fleet-node-shim`) now that
+  the shim holds more than one file, and still refuses to remove a directory
+  holding anything it did not write.
+
+**`scripts/update.sh`** — `node_probe` resolves npm separately and returns a
+distinct code (`3`) for "a *versioned* node qualifies, its npm does not", so the
+gate can hand *that* to the same `doctor.sh --node` repair (which installs both
+packages) and say which half was short. Versioned only: that is the
+parallel-stream layout, where the bare `npm` provably belongs to a different
+interpreter and the missing package has a name. On a single-node layout
+(Debian/nodesource/nvm) the same miss means npm ships in a shape the probe
+cannot read, and there the `node` pin is genuinely sufficient because npm's
+shebang really is the relative `env node` — refusing that box would be inventing
+a blocker out of an unread file. It says so and builds, and the read-back is
+what reports the outcome. The build step reads the interpreter back from npm and
+**refuses** below the `web/.nvmrc` floor rather than warning:
+
+```
+✓ web tier will build+run on /usr/bin/node-24 (v24.x)
+✓ web tier will build with /usr/lib/node_modules_24/npm/bin/npm-cli.js — pinned to that interpreter, not to PATH
+...
+✓ web app built on v24.x (origin=…, app=…)
+```
+
+**`scripts/doctor.sh`** checks and repairs the pairing in step 1, so
+`fleet doctor`, `fleet doctor --node` and `fleet update --check` all fail on it
+— the last of those being the command `fleet update` tells operators to run.
+Installing the versioned npm deliberately does **not** set `restart_needed`: the
+unit runs `next start` under `FLEET_NODE_BIN` and never invokes npm, so the
+repair changes the next *build*, not the running tier.
+
+**`scripts/bootstrap.sh`** gates on the same pair before building and reports
+the version the build actually ran under.
+
+### Judgment calls
+
+**Refuse, rather than build with a warning.** npm already warns (EBADENGINE) and
+that warning is exactly what nobody acted on for as long as this bug lived.
+`web/package.json` declares `"node": ">=24"`; building anyway produces a bundle
+whose engine constraint was violated, and the failure mode is a runtime surprise
+in the served app rather than a red build. The refusal names the one `dnf`
+command that fixes it and leaves the previous web deployment untouched.
+
+**Pin, rather than ask the operator to fix their `alternatives`.** Switching the
+box's default stream would fix `npm` for us and change the interpreter for every
+other consumer of `node` on that machine. The build pins what the build needs and
+touches nothing global — the same reasoning as the `node` shim.
+
+**Blocker only where the diagnosis is nameable.** The refusal above fires for a
+versioned interpreter and nowhere else, for the same reason `doctor.sh` advises
+rather than fails on a single-node layout: "I could not resolve an npm-cli.js" is
+an observation about a file this code cannot read, not evidence that the build
+would use the wrong interpreter. Turning every unread layout into a blocked
+update would be the mirror image of the bug — a claim the box cannot support,
+pointed the other way.
+
+**A read-back that cannot be asked is a warning, not a refusal.** If
+`npm version --json` yields nothing, the build proceeds and says the interpreter
+is UNVERIFIED. Reporting a fault you could not observe is the same error as
+reporting a success you could not — a rule this document already states, applied
+in the other direction.
+
+### What was verified, and what was not
+
+The parallel-stream layout is now **reproduced** rather than assumed, in
+`internal/admincli/scripts_node_npm_test.go`: a fixture bindir holding
+`node-22`, `node-24`, `npm-22`, `npm-24`, unversioned `node`/`npm` pointing at
+the default stream, and fake `npm-cli.js` files carrying absolute shebangs. The
+regression test first asserts that the **old** mechanism still fails on that
+fixture (a bindir prefix lands on 22), so a fixture that quietly stopped
+reproducing the layout cannot make the test vacuous, then asserts the new build
+PATH lands on 24. Both new assertions were broken on purpose and observed to
+fail: dropping the `npm` wrapper, and letting `fleet_resolve_npm_cli` fall back
+to the unversioned `npm`.
+
+Exercised end to end against a stand-in `/usr/bin/node-24` + `/usr/bin/npm-24`
+on a node-22 box: the passing two-line gate, the `no npm belongs to it —
+install nodejs24-npm` blocker, `doctor --node --check`'s new pass line, and — the
+decisive one — an `npm-cli.js` whose shebang names a nonexistent interpreter,
+which cannot be executed directly (`cannot execute: required file not found`)
+and runs fine through the pin. The read-back was checked against a wrapper that
+*lies* about its version (a fake `node-24` that execs node 22): it reported
+`v22.22.2`, the version npm actually ran under, which is the property the old
+`node -v` probe did not have.
+
+**Not verified:** a real `dnf install nodejs24-npm` (this box still has no dnf),
+and a real `npm ci && npm run build` under two genuinely different node majors —
+this container has one interpreter, so the pin is proven by shebang override and
+by the read-back, not by two successful builds. The Fedora shebang rewrite is
+quoted from the packaging source rather than observed on a live box.
