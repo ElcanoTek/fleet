@@ -142,6 +142,28 @@ jobs:
           # 55 findings. Do not re-derive a tree-wide claim from a PR run; the
           # full-tree numbers come from push/schedule runs. See
           # docs/adr/0048-codeql-severity-gating.md.
+          # Go additionally runs the standard pack's AlertSuppression query so
+          # an in-source `// codeql[rule-id]` comment is honored end-to-end:
+          # the analyze step stamps the SARIF result's `suppressions` array,
+          # the gate below classifies it into the ACCEPTED tier, and code
+          # scanning closes the Security-tab alert — the one waiver mechanism
+          # that keeps CI, the SARIF, and the Security tab telling the same
+          # story (an accepted-findings.json entry, by contrast, is invisible
+          # to the Security tab). The pack is resolved from the bundled
+          # standard library — no network pull, no `packages: read`.
+          # NOTE on in-source `// codeql[rule-id]` suppressions: they do NOT
+          # work with this pipeline, and this was measured, not assumed. Three
+          # forms were tried on PR #1249 (the `packs:` input, `packs:` with
+          # the documented "+" additive prefix, and an inline `config:` block
+          # combining security-extended with codeql/go-queries'
+          # AlertSuppression.ql) — in every case the uploaded SARIF carried no
+          # `suppressions` on the annotated result, the gate below kept
+          # classifying the waiver from the register, and the Security-tab
+          # alert stayed open. The analyze action's interpret step is not
+          # configurable enough to change that, so the accepted-findings
+          # register stays the ONE waiver mechanism for the CI gate, and a
+          # deliberately-waived alert is closed in the Security tab by a
+          # one-time human dismissal there (which persists across analyses).
           - language: go
             build-mode: autobuild
             queries: security-extended

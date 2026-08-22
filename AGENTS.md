@@ -237,6 +237,12 @@ same PR.
 - **Installing the backup/maintenance timers on an existing box**
   (`fleet timers install`, the `fleet update` offer + `--no-timers` opt-out,
   the non-systemd/Kubernetes posture): [`docs/TIMERS.md`](docs/TIMERS.md)
+- **Kubernetes as a first-class deployment** (the `deploy/helm/fleet` chart,
+  the pluggable sandbox backend — `FLEET_SANDBOX_BACKEND=podman|kubernetes`,
+  sandboxes as ephemeral pods, the fail-closed cluster preflight, and the
+  honest deviations from the podman backend):
+  [`docs/DEPLOYMENT-KUBERNETES.md`](docs/DEPLOYMENT-KUBERNETES.md) +
+  [ADR-0049](docs/adr/0049-kubernetes-backend-split-control-plane.md)
 - **Load testing & benchmarks** (`fleet-bench` HTTP chat load via the fake-LLM
   seam + subsystem throughput benchmarks): [`docs/LOAD-TESTING.md`](docs/LOAD-TESTING.md)
 - **Prompt-cache prefix-stability contract** (what must stay byte-stable in the

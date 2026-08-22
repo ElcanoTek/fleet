@@ -1,6 +1,10 @@
 # ADR-0004: Single-box, VM-native deployment (no Kubernetes)
 
-- **Status:** Accepted
+- **Status:** Accepted; amended by [ADR-0049](0049-kubernetes-backend-split-control-plane.md)
+  (the single-box default install stands; the "no k8s manifest, Helm chart, or
+  operator in the tree" enforcement clause and the cluster-work-is-out-of-scope
+  consequence are superseded — `deploy/helm/fleet` and the kubernetes sandbox
+  backend are the sanctioned enterprise path)
 - **Date:** 2026-06-28 (documents a decision that predates this record)
 - **Deciders:** fleet maintainers
 

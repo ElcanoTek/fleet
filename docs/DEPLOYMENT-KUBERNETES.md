@@ -1,0 +1,336 @@
+# Deploying fleet on Kubernetes
+
+> The first-class Kubernetes path (issue #989 /
+> [ADR-0049](adr/0049-kubernetes-backend-split-control-plane.md)): the fleet
+> control plane as a single-replica Deployment, with agent sandboxes running as
+> **ephemeral pods** via the pluggable sandbox backend
+> (`FLEET_SANDBOX_BACKEND=kubernetes`). The single-box podman install
+> ([`DEPLOYMENT.md`](DEPLOYMENT.md)) remains the default and an equally
+> supported path; come here when Kubernetes is your platform standard.
+
+## The model
+
+Same agent loop, same security model, one backend switch:
+
+| Piece | Where it runs |
+| --- | --- |
+| fleet control plane (chat + orchestrator + MCP broker) | one Deployment replica — **never more**; the scheduler leases and worker semaphore are single-owner |
+| Agent sandboxes (bash, run_python, file ops) | **ephemeral pods**, one per turn / sealed run / persistent-REPL conversation, created and exec'd by the control plane over the apiserver |
+| MCP credentials | the control-plane process, always (ADR-0003) — sandbox pods carry no env, no secrets, no service-account token |
+| Workspace | one **ReadWriteMany** PVC mounted at the *same absolute path* in the control plane and every sandbox pod |
+
+```
+            browser ──TLS──▶ Ingress ──▶ web (optional) ──▶ fleet Service
+                                                             │ chat :8080
+                                                             │ orchestrator :8000
+        ┌────────────────────────────────────────────────────┴──────────┐
+        │  fleet control plane pod (1 replica, Recreate)                │
+        │  agent loop · scheduler · MCP broker (credentials stay here)  │
+        └───────┬──────────────────────────────┬────────────────────────┘
+                │ pods/exec (WebSocket)        │ Postgres (managed, or the
+                ▼                              ▼  chart's eval StatefulSet)
+   fleet-sandbox-<hex> pods (ephemeral)    chat + sched databases
+   read-only rootfs · non-root · no caps
+   no ServiceAccount token · egress by label
+                │
+                └── workspace PVC (RWX) — same path as the control plane
+```
+
+The backend is selected by `FLEET_SANDBOX_BACKEND` (`podman`, the default, or
+`kubernetes`), overriding the bundle manifest's `sandbox.backend` — exactly the
+precedence `FLEET_SANDBOX_RUNTIME` / `sandbox.runtime` uses
+([SANDBOX-RUNTIMES.md](SANDBOX-RUNTIMES.md)). An unrecognized value refuses to
+boot; there is no silent fallback.
+
+**Fail-closed preflight.** With `kubernetes` selected, fleet refuses to start
+unless, at boot: the apiserver is reachable with valid credentials; RBAC grants
+`create/get/list/delete pods` and `create pods/exec` in the sandbox namespace;
+the workspace claim exists; the sealed-egress NetworkPolicy object exists; and
+the RuntimeClass exists when one is configured. `fleet validate-config` runs
+the same checks.
+
+## Build the two images
+
+fleet publishes no images — you build both and push them to a registry your
+nodes can pull from (ECR, GAR, ACR, GHCR, …). A `localhost/` build-on-box tag
+cannot work outside a single-node kind cluster.
+
+**Sandbox image** — the bundle artifact the sandboxes run, unchanged from the
+single-box install:
+
+```sh
+scripts/build-sandbox-image.sh
+podman tag localhost/fleet-sandbox:latest REGISTRY/fleet-sandbox:v1
+podman push REGISTRY/fleet-sandbox:v1
+```
+
+(Or let CI publish it — see `.github/workflows/publish-sandbox-image.yml`.)
+
+**Control-plane image** — the `fleet` binary plus your client bundle. A
+reproducible multi-stage Containerfile (build it from the repo root; the
+builder stage's Go minor is pinned to `go.mod` by
+`scripts/check_versions_test.go`, so a stale copy of this stage fails CI):
+
+```dockerfile
+# ── build stage ──
+FROM docker.io/library/golang:1.27 AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -ldflags "-X github.com/ElcanoTek/fleet/internal/version.version=$(cat VERSION)" -o /out/fleet ./cmd/fleet
+
+# ── runtime stage ──
+FROM registry.fedoraproject.org/fedora-minimal:latest
+RUN microdnf install -y git ca-certificates tzdata && microdnf clean all
+COPY --from=build /out/fleet /usr/local/bin/fleet
+# Bake the client bundle in (the generic one here; substitute your own).
+COPY config/default /opt/fleet/client
+ENV FLEET_CLIENT_CONFIG_DIR=/opt/fleet/client
+RUN mkdir -p /var/lib/fleet && chown 1000:1000 /var/lib/fleet
+USER 1000
+ENTRYPOINT ["/usr/local/bin/fleet"]
+```
+
+An out-of-repo client bundle can be baked into your image the same way, or
+mounted from a ConfigMap/volume at `FLEET_CLIENT_CONFIG_DIR` — either satisfies
+the engine/bundle split (ADR-0006).
+
+**Web image** (optional) — build `web/` with its own `next build` stage and set
+`web.image` in the chart; the chart wires `CHAT_SERVER_URL` /
+`ORCHESTRATOR_URL` at the fleet Service automatically.
+
+## 15-minute path (kind)
+
+Prereqs: `kind`, `kubectl`, `helm`, `podman` or `docker` to build images, and
+an OpenRouter API key.
+
+```sh
+# 1. A cluster.
+kind create cluster --name fleet
+
+# 2. Build both images and load them into kind. Save the control-plane
+#    Containerfile from "Build the two images" above as Containerfile.fleet.
+scripts/build-sandbox-image.sh
+podman save localhost/fleet-sandbox:latest -o /tmp/sandbox.tar
+kind load image-archive /tmp/sandbox.tar --name fleet
+podman build -t localhost/fleet:dev -f Containerfile.fleet .
+podman save localhost/fleet:dev -o /tmp/fleet.tar
+kind load image-archive /tmp/fleet.tar --name fleet
+
+# 3. Secrets (the API key; DB URLs come from the chart's eval Postgres).
+kubectl create namespace fleet
+kubectl -n fleet create secret generic fleet-secrets \
+  --from-literal=OPENROUTER_API_KEY=sk-or-...
+
+# 4. Install. kind is single-node, so the default (ReadWriteOnce) storage
+#    class works for the shared workspace — every pod lands on the one node.
+helm install fleet deploy/helm/fleet --namespace fleet \
+  --set image.repository=localhost/fleet --set image.tag=dev \
+  --set image.pullPolicy=Never \
+  --set sandbox.image=localhost/fleet-sandbox:latest \
+  --set 'workspace.accessModes={ReadWriteOnce}' \
+  --set postgres.enabled=true \
+  --set config.existingSecret=fleet-secrets
+
+# 5. Watch boot — the sandbox preflight logs its verdict before serving.
+kubectl -n fleet logs deploy/fleet -f | grep -E 'sandbox|preflight'
+
+# 6. Talk to it, and watch a sandbox pod appear for the turn.
+kubectl -n fleet port-forward svc/fleet 8080:8080 &
+kubectl -n fleet get pods -l app.kubernetes.io/name=fleet-sandbox -w
+```
+
+A chat turn that runs bash or python creates a `fleet-sandbox-<hex>` pod,
+execs into it, and deletes it when the turn ends. Cancelling a turn deletes
+the pod immediately (zero grace) — the same poison-and-retire containment the
+podman backend guarantees (#796).
+
+## Production checklist
+
+1. **Storage: the workspace claim must be ReadWriteMany** (EFS, NFS, CephFS,
+   Azure Files). A ReadWriteOnce class only works when every pod shares one
+   node (kind). Verify:
+   `kubectl -n fleet get pvc fleet-workspace -o jsonpath='{.spec.accessModes}'`.
+2. **Database: managed Postgres.** Put `FLEET_CHAT_DATABASE_URL` and
+   `FLEET_SCHED_DATABASE_URL` in your `config.existingSecret` and leave
+   `postgres.enabled=false`. The chart's Postgres is an evaluation
+   convenience: one replica, one PVC, no backups.
+3. **NetworkPolicy enforcement is your CNI's job.** fleet verifies the
+   deny-all policy *object* exists; only a CNI that implements NetworkPolicy
+   (Calico, Cilium, the EKS VPC CNI's network-policy agent, GKE Dataplane V2,
+   Azure CNI with policy) makes it real. Verify from a sealed sandbox:
+   ```sh
+   kubectl -n fleet run seal-test --restart=Never --rm -it \
+     --labels=app.kubernetes.io/name=fleet-sandbox,fleet.elcanotek.com/egress=none \
+     --image=busybox -- wget -T 5 -q -O- https://example.com && echo "NOT SEALED"
+   ```
+   A CNI that enforces the policy times that request out.
+4. **Shape open-sandbox egress.** Non-lockdown sandboxes are labeled
+   `egress=open` and unrestricted by default (they need PyPI etc.). Set
+   `networkPolicies.openEgress.create=true` with your cluster/node CIDRs in
+   `blockedCIDRs` so an open sandbox can reach the internet but not your
+   Services.
+5. **Registry, not build-on-box.** Both images in a registry the nodes pull
+   from; set `sandbox.kubernetes.imagePullSecret` for private registries (on
+   EKS, node-role ECR access covers sandbox pulls without a secret).
+6. **Hypervisor isolation** (optional): install Kata Containers on the sandbox
+   nodes, create a `kata` RuntimeClass, set
+   `sandbox.kubernetes.runtimeClass=kata`. Preflighted fail-closed, mirroring
+   `FLEET_SANDBOX_RUNTIME` (ADR-0010). Note `FLEET_SANDBOX_RUNTIME` itself is
+   a podman knob and is **refused** under this backend.
+7. **One replica.** Do not add an HPA or `replicas: 2` for the control plane.
+   Scale work by raising `FLEET_MAX_CONCURRENT_AGENTS` and giving the sandbox
+   namespace more node capacity; scale the control plane vertically
+   (`resources` in values). Size for peak: the control plane runs the agent
+   loop + brokers; the sandboxes' cost lives in their own pods, so warm-pool
+   pods hold their requests while parked — size `FLEET_SANDBOX_WARM_SIZE`
+   accordingly.
+8. **Give runners their own node pool.** Label (and usually taint) a dedicated
+   pool, then set `sandbox.kubernetes.nodeSelector` + `.tolerations` in the
+   chart — sandbox pods pin there and autoscale the pool, while the control
+   plane stays on your general nodes. This is the horizontal scaling story:
+   more runner capacity is a bigger pool, never a second fleet.
+9. **Run `fleet validate-config`** (`kubectl -n fleet exec deploy/fleet --
+   fleet validate-config`) after any config change: it runs the same
+   fail-closed preflight boot does, plus everything else the verb checks.
+
+## Day-2 operations
+
+The systemd timers and host scripts (`bootstrap.sh`, `fleet update`,
+`scripts/doctor.sh`, `fleet timers install`) are single-box tooling and do not
+apply here ([TIMERS.md](TIMERS.md)). Their cluster equivalents:
+
+| Single-box | Kubernetes |
+| --- | --- |
+| `fleet update` | build + push a new control-plane image, `helm upgrade` (strategy Recreate = a brief restart; in-flight turns drain per `FLEET_SHUTDOWN_GRACE_SECONDS`) |
+| `fleet-backup.timer` | a CronJob running `fleet backup --db=all --prune` — or skip it entirely by using managed-database backups (RDS/Cloud SQL snapshots), the recommended posture |
+| `fleet-maintenance.timer` | a CronJob running `fleet cleanup` daily |
+| journald | `kubectl logs` / your log stack; set `FLEET_LOG_FILE` only if you also mount somewhere rotatable |
+| Grafana node dashboards | scrape the control plane's `/metrics` (orchestrator port). NOTE it is **admin-API-key gated** (`X-API-Key`) — cost/token data must not be public — and stock Prometheus cannot send custom headers, so use a scraper that can (Grafana Alloy, vmagent) or a small header-injecting sidecar. Sandbox pods are ordinary pods your cluster metrics already see |
+
+Minimal backup CronJob (only needed when you run the eval Postgres or want
+`fleet backup`'s application-level dumps next to managed snapshots):
+
+```yaml
+apiVersion: batch/v1
+kind: CronJob
+metadata: {name: fleet-backup, namespace: fleet}
+spec:
+  schedule: "0 2 * * *"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: backup
+              image: REGISTRY/fleet:v1        # the control-plane image
+              args: ["backup", "--db=all", "--prune"]
+              envFrom: [{secretRef: {name: fleet-secrets}}]
+              volumeMounts: [{name: data, mountPath: /var/lib/fleet}]
+          volumes:
+            - name: data
+              persistentVolumeClaim: {claimName: fleet-data}
+```
+
+## Provider notes
+
+- **EKS**: EFS (via the EFS CSI driver) is the standard RWX workspace class;
+  ECR for both images (node-role pull, no secret needed); enable the VPC CNI
+  network-policy agent or run Calico/Cilium so the deny-all policy is
+  enforced; ALB via the AWS Load Balancer Controller for `ingress`. RDS for
+  Postgres. Kata needs a bare-metal (`*.metal`) node group for `/dev/kvm`.
+- **GKE**: Filestore CSI for RWX; Dataplane V2 enforces NetworkPolicy natively;
+  Artifact Registry with Workload Identity; Cloud SQL.
+- **AKS**: Azure Files (NFS) for RWX; enable Azure Network Policy or Cilium;
+  ACR with the kubelet identity; Azure Database for PostgreSQL.
+- **Bare metal / on-prem**: any NFS/CephFS class for RWX; Calico or Cilium for
+  policy; your own registry.
+
+## Configuration reference
+
+Every knob can come from env (the chart sets these) or the bundle manifest's
+`sandbox:` block (env wins, field by field):
+
+| Env | Manifest | Meaning |
+| --- | --- | --- |
+| `FLEET_SANDBOX_BACKEND` | `sandbox.backend` | `podman` (default) or `kubernetes` |
+| `FLEET_SANDBOX_K8S_NAMESPACE` | `sandbox.kubernetes.namespace` | sandbox pod namespace (default: the control plane's own, else `fleet-sandboxes`) |
+| `FLEET_SANDBOX_K8S_WORKSPACE_CLAIM` | `…workspace_claim` | **required** — the shared RWX PVC name |
+| `FLEET_SANDBOX_K8S_SERVICE_ACCOUNT` | `…service_account` | identity stamped on sandbox pods (no token is mounted) |
+| `FLEET_SANDBOX_K8S_IMAGE_PULL_SECRET` | `…image_pull_secret` | pull secret for the sandbox image |
+| `FLEET_SANDBOX_K8S_RUNTIME_CLASS` | `…runtime_class` | hypervisor isolation (kata); preflighted |
+| `FLEET_SANDBOX_K8S_SECCOMP_PROFILE` | `…seccomp_profile` | node-local Localhost seccomp profile; empty = RuntimeDefault |
+| `FLEET_SANDBOX_K8S_KUBECONFIG` | `…kubeconfig` | out-of-cluster auth (token / client-cert kubeconfigs only); empty = in-cluster |
+| `FLEET_SANDBOX_K8S_NETWORK_POLICY` | `…network_policy` | deny-all policy name the preflight requires (default `fleet-sandbox-deny-all`) |
+| `FLEET_SANDBOX_K8S_NODE_SELECTOR` | `…node_selector` | pin sandbox pods to a dedicated runner pool — env form `"pool=sandboxes,arch=amd64"`, manifest form a map; a malformed value refuses to boot |
+| `FLEET_SANDBOX_K8S_TOLERATIONS` | `…tolerations` | tolerations for a tainted runner pool — env form a JSON array of `{key,operator,value,effect}`, manifest form a YAML list |
+
+The shared sandbox knobs apply to both backends: `FLEET_SANDBOX_IMAGE`,
+`FLEET_SANDBOX_MEMORY` / `_CPUS` (converted to pod resource limits),
+`FLEET_SANDBOX_DISK_GB` (the pod's ephemeral-storage limit),
+`FLEET_SANDBOX_WARM_SIZE` / `_WARM_TTL` (the warm pool holds pre-started
+pods), and the python REPL knobs.
+
+## Troubleshooting
+
+- **Boot fails with "kubernetes sandbox preflight"** — the message names the
+  exact missing piece (RBAC verb, claim, NetworkPolicy, RuntimeClass). The
+  chart's `fleet-runner` Role carries every needed verb; if you wrote your own
+  RBAC, diff it against `deploy/helm/fleet/templates/rbac.yaml`.
+- **First turn fails with `ErrImagePull` / `ImagePullBackOff`** — the sandbox
+  image ref isn't pullable *from the nodes* (fleet fails the pod fast with the
+  kubelet's reason instead of burning the start timeout). Check the ref and
+  `sandbox.kubernetes.imagePullSecret`.
+- **`sandbox pod … not ready before start timeout`** — usually scheduling
+  (no node fits the sandbox requests) or a slow first pull; `kubectl describe
+  pod fleet-sandbox-…` shows which.
+- **Workspace files owned by the wrong uid** — the claim's storage class must
+  honor `fsGroup` (1000) or be provisioned world-writable at the root; both
+  the control plane and sandbox pods run uid/gid 1000.
+- **A sealed turn can still reach the network** — your CNI is not enforcing
+  NetworkPolicy (checklist item 3). The policy *object* existing is not
+  enforcement.
+- **Turn cancelled but you want proof nothing survived** — cancellation
+  deletes the pod with zero grace; `kubectl get pods -l
+  app.kubernetes.io/name=fleet-sandbox` should not show the pod after the
+  cancel completes. A pod that lingers past a crash is reclaimed by the
+  boot-time orphan sweep on the next control-plane start.
+
+## Honest scope — what the kubernetes backend does differently
+
+Recorded here so nobody discovers them in production:
+
+- **Egress sealing is delegated.** Podman's `--network=none` is a kernel
+  namespace with no interface; the k8s equivalent is a label
+  (`fleet.elcanotek.com/egress=none`) matched by a deny-all NetworkPolicy.
+  fleet verifies the object exists — it cannot verify the CNI enforces it.
+- **`FLEET_DEFAULT_NETWORK_MODE=allowlisted` is refused** at boot: the
+  host-side egress proxy (ADR-0012) is unreachable from pods. Use `lockdown`
+  or `open` + NetworkPolicy shaping.
+- **No per-pod pids limit.** `FLEET_SANDBOX_PIDS` has no Pod-spec equivalent;
+  runaway process counts are bounded by pod memory/CPU limits and node
+  `podPidsLimit` if you configure the kubelet.
+- **No per-sandbox resource telemetry (#263).** `podman stats` has no
+  in-process counterpart here; task resource summaries are absent. Use your
+  cluster's metrics stack on the `fleet-sandbox` pods.
+- **The bundled seccomp profile does not apply.** Pods run `RuntimeDefault`,
+  or a profile you install on the nodes yourself via
+  `FLEET_SANDBOX_K8S_SECCOMP_PROFILE`. Setting the podman
+  `FLEET_SANDBOX_SECCOMP_PROFILE` under this backend refuses to boot rather
+  than being silently ignored.
+- **Supporting-doc bind mounts don't apply.** The podman backend bind-mounts
+  persona/protocol dirs same-path into containers; a pod only mounts the
+  workspace claim. In-sandbox reads of those host paths degrade exactly like
+  the podman missing-dir case.
+- **Disk quota is per-pod ephemeral storage**, which caps the writable layer
+  and scratch emptyDirs — a *stronger* cap than podman's per-file ulimit — but
+  the workspace claim is still unbounded by it, same as the bind mount is
+  under podman: many files still add up.
+- **Warm-pool pods hold cluster resources while parked.** Requests equal
+  limits; size `FLEET_SANDBOX_WARM_SIZE` accordingly.
+- **kind e2e is a documented walkthrough, not a CI job.** CI lints and
+  template-renders the chart (`helm` job) and unit-tests the backend against a
+  fake apiserver (including exec streaming and the poison path); it does not
+  stand up a cluster.

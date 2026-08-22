@@ -324,6 +324,14 @@ sudo bash /opt/fleet/src/scripts/bootstrap.sh --postgres=local --enable-service 
 **→ Full deployment guide** — host sizing, the one-command web + Caddy/TLS stack,
 the env file, and every option: **[`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)**.
 
+**Kubernetes shop?** fleet also ships a first-class cluster path
+([ADR-0049](docs/adr/0049-kubernetes-backend-split-control-plane.md)): a Helm
+chart (`deploy/helm/fleet`) for the single-replica control plane, with agent
+sandboxes running as **ephemeral pods** via
+`FLEET_SANDBOX_BACKEND=kubernetes` — same loop, same security model, one
+backend switch. See
+**[`docs/DEPLOYMENT-KUBERNETES.md`](docs/DEPLOYMENT-KUBERNETES.md)**.
+
 ## Operating fleet
 
 The operator lifecycle is **bootstrap → update → status**, one box. The server
@@ -354,6 +362,7 @@ Deep references live in [`docs/`](docs/) so this README stays an orientation, no
 | Doc | What it covers |
 |---|---|
 | [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) | Full deployment guide — host sizing, the one-command web + Caddy/TLS stack, options |
+| [`docs/DEPLOYMENT-KUBERNETES.md`](docs/DEPLOYMENT-KUBERNETES.md) | Kubernetes as a first-class path — the Helm chart, the `kubernetes` sandbox backend (agent sandboxes as ephemeral pods), kind walkthrough + production checklist |
 | [`docs/OPERATORS.md`](docs/OPERATORS.md) | Operator runbook — the env file, the client-config checkout, every lifecycle verb |
 | [`docs/AGENT-RUNTIME.md`](docs/AGENT-RUNTIME.md) | Agent runtime mechanics — per-turn sandbox, ceilings, compaction, verifier, artifacts |
 | [`docs/SANDBOX-RUNTIMES.md`](docs/SANDBOX-RUNTIMES.md) | Sandbox OCI runtimes — `runc` / Kata / libkrun isolation tiers |

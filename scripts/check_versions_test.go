@@ -255,8 +255,9 @@ func goMinor(spec string) (string, bool) {
 //
 //   - web/go.mod — a no-package boundary module, so nothing compiles against it
 //     and a stale `go` line there is completely silent.
-//   - docs/EKS-DEPLOYMENT.md — a `FROM golang:<minor>` build stage an operator
-//     copies verbatim. Too old and their image cannot build the module at all.
+//   - docs/DEPLOYMENT-KUBERNETES.md — a `FROM golang:<minor>` build stage an
+//     operator copies verbatim (the control-plane image). Too old and their
+//     image cannot build the module at all.
 //
 // This is the same blind spot the node major had, and it bit the same way: the
 // pin sat at 1.26 after 1.27 shipped, with nothing to say so. Dependabot cannot
@@ -284,19 +285,22 @@ func TestGoMinorAgreesEverywhere(t *testing.T) {
 		t.Errorf("web/go.mod says go %s but go.mod says %s — bump them together (web/go.mod is major.minor only by design, but the minor still has to agree)", got, want)
 	}
 
-	const eksDoc = "docs/EKS-DEPLOYMENT.md"
-	img := regexp.MustCompile(`FROM golang:(\S+?)(?:\s|$)`).FindAllStringSubmatch(readFile(t, root, eksDoc), -1)
+	const k8sDoc = "docs/DEPLOYMENT-KUBERNETES.md"
+	img := regexp.MustCompile(`FROM (?:docker\.io/library/)?golang:(\S+?)(?:\s|$)`).FindAllStringSubmatch(readFile(t, root, k8sDoc), -1)
 	if len(img) == 0 {
-		t.Logf("%s has no `FROM golang:` stage — nothing to check", eksDoc)
+		// The stage existing is part of what this test pins: the doc's build
+		// recipe is the copy operators consume, so silently losing it would
+		// reopen the drift blind spot.
+		t.Errorf("%s has no `FROM golang:` stage — the control-plane image recipe should declare one", k8sDoc)
 	}
 	for _, m := range img {
 		got, ok := goMinor(m[1])
 		if !ok {
-			t.Errorf("%s has `FROM golang:%s` — cannot read a major.minor from it", eksDoc, m[1])
+			t.Errorf("%s has `FROM golang:%s` — cannot read a major.minor from it", k8sDoc, m[1])
 			continue
 		}
 		if got != want {
-			t.Errorf("%s builds on `golang:%s` but go.mod says %s — an operator copying that stage gets an image too old to build the module", eksDoc, m[1], want)
+			t.Errorf("%s builds on `golang:%s` but go.mod says %s — an operator copying that stage gets an image too old to build the module", k8sDoc, m[1], want)
 		}
 	}
 }

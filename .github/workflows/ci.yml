@@ -132,6 +132,39 @@ jobs:
         # allowlist in .gitleaks.toml is just local-run robustness.
         run: gitleaks dir . --redact --exit-code 1
 
+  helm:
+    # Lint + render the fleet Helm chart (#989) so a values/template drift
+    # fails here, not at an operator's install. Fast (<15s) and not gated on
+    # the docs-only classifier — chart files are product, not prose. helm
+    # ships preinstalled on the ubuntu-latest runner image.
+    name: Helm chart lint (#989)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Lint and render the fleet chart
+        run: |
+          set -euo pipefail
+          helm version --short
+          helm lint deploy/helm/fleet \
+            --set image.repository=registry.invalid/fleet --set image.tag=ci \
+            --set sandbox.image=registry.invalid/fleet-sandbox:ci
+          # Minimal render (the defaults every install starts from) …
+          helm template ci deploy/helm/fleet --namespace fleet \
+            --set image.repository=registry.invalid/fleet --set image.tag=ci \
+            --set sandbox.image=registry.invalid/fleet-sandbox:ci >/dev/null
+          # … and the everything-on render so every optional template compiles.
+          helm template ci deploy/helm/fleet --namespace fleet \
+            --set image.repository=registry.invalid/fleet --set image.tag=ci \
+            --set sandbox.image=registry.invalid/fleet-sandbox:ci \
+            --set postgres.enabled=true \
+            --set web.enabled=true --set web.image=registry.invalid/fleet-web:ci \
+            --set ingress.enabled=true --set ingress.host=fleet.example.com \
+            --set networkPolicies.openEgress.create=true \
+            --set 'networkPolicies.openEgress.blockedCIDRs={10.0.0.0/8}' \
+            --set sandbox.kubernetes.runtimeClass=kata >/dev/null
+
   migrations:
     name: Migration DDL lint (#256)
     runs-on: ubuntu-latest
@@ -834,7 +867,7 @@ jobs:
     # allowed (docs-only), but any failure or cancellation fails the gate.
     name: CI gate
     if: ${{ always() }}
-    needs: [changes, gitleaks, migrations, go, python, codeql, semgrep, web, playwright, e2e-live, grype-scan]
+    needs: [changes, gitleaks, migrations, helm, go, python, codeql, semgrep, web, playwright, e2e-live, grype-scan]
     runs-on: ubuntu-latest
     steps:
       - name: Require all upstream jobs to have succeeded or been skipped

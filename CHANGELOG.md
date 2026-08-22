@@ -17,6 +17,81 @@ prior versions are listed because none have shipped.
 
 ## [Unreleased]
 
+### Added
+
+- **Kubernetes as a first-class deployment (#989 / ADR-0049):** the fleet
+  control plane can now run in a cluster with agent sandboxes as **ephemeral
+  pods**, selected by one knob — `FLEET_SANDBOX_BACKEND=podman|kubernetes`
+  (env overrides the bundle manifest's `sandbox.backend`, mirroring
+  `sandbox.runtime`'s precedence; an unrecognized value refuses to boot).
+  What landed, in one pass per the issue's plan:
+
+  - **A third sandbox backend** in `internal/sandbox` (`k8sImpl`) behind the
+    same internal interface as the podman and host executors: one pod per
+    sandbox (`sleep infinity` + exec over the apiserver's WebSocket channel
+    protocol), bash as one-shot execs, the python bridge as a held exec
+    session, and file ops running the same embedded `fileops.py`. Pods are
+    read-only-rootfs, non-root (uid 1000), all capabilities dropped, seccomp
+    RuntimeDefault (or an operator-installed Localhost profile),
+    `automountServiceAccountToken=false` — and the workspace is a shared
+    ReadWriteMany PVC mounted at the **same absolute path** as the control
+    plane, preserving the same-path invariant. The #796 poison-and-retire
+    containment carries over: a cancelled/timed-out call deletes the pod with
+    zero grace and retires the sandbox. A boot-time orphan-pod sweep mirrors
+    the podman container prune. No client-go: a minimal hand-rolled REST +
+    WebSocket-exec client (gorilla/websocket was already in the tree — zero
+    new modules), with kubeconfig support deliberately narrow (token /
+    client-cert; exec plugins and `insecure-skip-tls-verify` refused).
+  - **Fail-closed preflight** when the backend is selected, at boot and in
+    `fleet validate-config`: apiserver reachability + credentials, the exact
+    RBAC verbs (pods create/get/list/delete, pods/exec create), the workspace
+    claim, the sealed-egress NetworkPolicy object, and the RuntimeClass when
+    configured. Podman-only knobs are refused rather than silently ignored
+    (`FLEET_SANDBOX_RUNTIME` → use `FLEET_SANDBOX_K8S_RUNTIME_CLASS`;
+    `FLEET_SANDBOX_SECCOMP_PROFILE` → `FLEET_SANDBOX_K8S_SECCOMP_PROFILE`;
+    `FLEET_DEFAULT_NETWORK_MODE=allowlisted` is unsupported — the host egress
+    proxy is unreachable from pods).
+  - **Dedicated runner pools**: sandbox pods can be pinned to their own node
+    pool with `FLEET_SANDBOX_K8S_NODE_SELECTOR` ("k=v,k=v") and
+    `FLEET_SANDBOX_K8S_TOLERATIONS` (a JSON array), or the manifest's
+    structured `sandbox.kubernetes.node_selector` / `.tolerations` — fleet's
+    horizontal scaling story made concrete (more runner capacity = a bigger
+    pool, never more fleet replicas). Malformed values refuse to boot. Sandbox
+    pods also pin `imagePullPolicy: IfNotPresent` explicitly (the API's
+    `Always`-for-`:latest` default breaks side-loaded kind images and re-pulls
+    a mutable tag mid-run).
+  - **A Helm chart** (`deploy/helm/fleet`): single-replica control-plane
+    Deployment (strategy Recreate, deliberately no replica knob — the
+    scheduler is single-owner), the runner RBAC Role/Binding, workspace/data
+    PVCs, the `fleet-sandbox-deny-all` NetworkPolicy (selecting pods labeled
+    `fleet.elcanotek.com/egress=none`), optional egress shaping for open
+    pods, optional evaluation Postgres, optional web tier + Ingress. Linted
+    and template-rendered in CI (new `helm` job inside both gates).
+  - **Docs**: `docs/DEPLOYMENT-KUBERNETES.md` — the one Kubernetes reference:
+    15-minute kind path, the two image builds (the control-plane
+    Containerfile's `FROM golang:` stage is now pinned to go.mod by
+    `scripts/check_versions_test.go`), production checklist, provider notes
+    (EKS/GKE/AKS), day-2 operations (the CronJob equivalents of the systemd
+    timers), troubleshooting, and an explicit honest-deviations list
+    (NetworkPolicy enforcement belongs to the CNI, no per-pod pids limit, no
+    #263 resource telemetry, no bundled-seccomp/supporting-doc mounts). Plus
+    updates to `DEPLOYMENT.md` and `SANDBOX-RUNTIMES.md`
+    (`FLEET_SANDBOX_BACKEND` documented next to `FLEET_SANDBOX_RUNTIME`).
+    [ADR-0049](docs/adr/0049-kubernetes-backend-split-control-plane.md)
+    amends ADR-0004: the single-box podman install **stays the default and is
+    unchanged**; only the no-k8s-artifacts enforcement clause is superseded.
+
+### Removed
+
+- **`docs/EKS-DEPLOYMENT.md`** — the hand-verified recipe for running the
+  whole single-box model (rootless Podman included) inside one privileged pod
+  on one large EKS node. Retired in favor of the first-class path above
+  rather than kept as a parallel track: an unmaintained privileged-pod recipe
+  beside a supported unprivileged one would imply support it never had (it
+  was explicitly "hand-verified, not CI-exercised"). Its durable content —
+  EFS/RWX storage, ECR/IRSA, NetworkPolicy-enforcement caveats, the backup
+  CronJob, day-2 mappings — was folded into `docs/DEPLOYMENT-KUBERNETES.md`.
+
 ### Fixed
 
 - **Three own-rows authorization holes on the task surface.** The read path for

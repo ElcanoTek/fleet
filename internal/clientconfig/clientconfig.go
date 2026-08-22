@@ -416,6 +416,64 @@ type Sandbox struct {
 	// manifest sandbox.network_allowlist. Empty in allowlisted mode = deny all
 	// egress (best-effort — see ADR-0012).
 	NetworkAllowlist []string
+
+	// Backend selects WHERE sandboxes run (#989 / ADR-0049): "" or "podman"
+	// for the co-located rootless-Podman backend (the single-box default), or
+	// "kubernetes" for ephemeral pods in a cluster (the split
+	// control-plane/runner enterprise path). Stored VERBATIM; the consuming
+	// layer (cmd/fleet) validates fail-closed and an explicit
+	// FLEET_SANDBOX_BACKEND env var wins, mirroring sandbox.runtime.
+	Backend string
+
+	// Kubernetes carries the kubernetes-backend settings (manifest
+	// sandbox.kubernetes). Meaningful only when the resolved backend is
+	// "kubernetes"; each FLEET_SANDBOX_K8S_* env var overrides its field.
+	Kubernetes KubernetesSandbox
+}
+
+// KubernetesSandbox is the resolved sandbox.kubernetes block: where sandbox
+// pods run and what they mount. All fields are trusted operator config, same
+// authority tier as sandbox.image / sandbox.runtime.
+type KubernetesSandbox struct {
+	// Namespace for sandbox pods (default applied at consume time:
+	// "fleet-sandboxes" — kept separate from the control plane's namespace so
+	// RBAC and the deny-all NetworkPolicy stay narrowly scoped).
+	Namespace string `yaml:"namespace"`
+	// WorkspaceClaim is the ReadWriteMany PVC (in Namespace) holding the
+	// workspace root, mounted into every sandbox pod at the same absolute
+	// path the control plane mounts it. Required for the kubernetes backend.
+	WorkspaceClaim string `yaml:"workspace_claim"`
+	// ServiceAccount stamped on sandbox pods (identity only — the token is
+	// never mounted).
+	ServiceAccount string `yaml:"service_account"`
+	// ImagePullSecret for private sandbox-image registries.
+	ImagePullSecret string `yaml:"image_pull_secret"`
+	// RuntimeClass selects hypervisor isolation (e.g. kata) — the kubernetes
+	// counterpart of sandbox.runtime, preflighted fail-closed (ADR-0010).
+	RuntimeClass string `yaml:"runtime_class"`
+	// SeccompProfile is a node-local Localhost seccomp profile path (relative
+	// to the kubelet seccomp root); empty = RuntimeDefault.
+	SeccompProfile string `yaml:"seccomp_profile"`
+	// Kubeconfig selects out-of-cluster auth; empty = in-cluster.
+	Kubeconfig string `yaml:"kubeconfig"`
+	// NetworkPolicy is the deny-all NetworkPolicy name the boot preflight
+	// requires to exist (default "fleet-sandbox-deny-all").
+	NetworkPolicy string `yaml:"network_policy"`
+	// NodeSelector pins sandbox pods to labeled nodes (a dedicated runner
+	// pool). FLEET_SANDBOX_K8S_NODE_SELECTOR ("k=v,k=v") overrides it.
+	NodeSelector map[string]string `yaml:"node_selector"`
+	// Tolerations let sandbox pods schedule onto a tainted runner pool.
+	// FLEET_SANDBOX_K8S_TOLERATIONS (a JSON array) overrides it.
+	Tolerations []KubernetesToleration `yaml:"tolerations"`
+}
+
+// KubernetesToleration is the manifest shape of one sandbox-pod toleration
+// (the four core/v1 fields fleet forwards).
+type KubernetesToleration struct {
+	Key      string `yaml:"key" json:"key,omitempty"`
+	Operator string `yaml:"operator" json:"operator,omitempty"`
+	Value    string `yaml:"value" json:"value,omitempty"`
+	Effect   string `yaml:"effect" json:"effect,omitempty"`
 }
 
 // ResolvedImageRef returns the image reference the fleet process should consume:
@@ -429,11 +487,13 @@ func (s Sandbox) ResolvedImageRef() string {
 
 // sandboxManifest is the on-disk YAML shape of the manifest's sandbox: block.
 type sandboxManifest struct {
-	Containerfile    string   `yaml:"containerfile"`
-	Tag              string   `yaml:"tag"`
-	Image            string   `yaml:"image"`
-	Runtime          string   `yaml:"runtime"`
-	NetworkAllowlist []string `yaml:"network_allowlist"`
+	Containerfile    string             `yaml:"containerfile"`
+	Tag              string             `yaml:"tag"`
+	Image            string             `yaml:"image"`
+	Runtime          string             `yaml:"runtime"`
+	NetworkAllowlist []string           `yaml:"network_allowlist"`
+	Backend          string             `yaml:"backend"`
+	Kubernetes       *KubernetesSandbox `yaml:"kubernetes"`
 }
 
 // Branding carries the white-label strings surfaced in the web UI + login.
@@ -1345,12 +1405,18 @@ func resolveSandbox(sm *sandboxManifest, bundleDir string) Sandbox {
 			allowlist = append(allowlist, d)
 		}
 	}
+	var k8s KubernetesSandbox
+	if raw.Kubernetes != nil {
+		k8s = *raw.Kubernetes
+	}
 	return Sandbox{
 		ContainerfileAbsPath: filepath.Join(bundleDir, cf),
 		Tag:                  tag,
 		Image:                strings.TrimSpace(raw.Image),
 		Runtime:              strings.TrimSpace(raw.Runtime),
 		NetworkAllowlist:     allowlist,
+		Backend:              strings.ToLower(strings.TrimSpace(raw.Backend)),
+		Kubernetes:           k8s,
 	}
 }
 

@@ -321,21 +321,11 @@ func run() error {
 	// MCP catalog. Empty in the generic bundle.
 	cfg.HTTPTools = bundle.HTTPToolConfigs()
 
-	// The sandbox image is a per-client bundle artifact: resolve it from the
-	// bundle manifest (sandbox.image when set — the opt-in prebuilt/registry
-	// path — else sandbox.tag, the build-on-box default). An explicit
-	// FLEET_SANDBOX_IMAGE / CHAT_SANDBOX_IMAGE in the process env still wins
-	// (config.Load already populated cfg.SandboxImage from it). fleet does NOT
-	// build the image here — bootstrap / scripts/build-sandbox-image.sh does;
-	// this only feeds the resolved ref to the consuming sandbox pool.
-	if strings.TrimSpace(cfg.SandboxImage) == "" {
-		if ref := bundle.Sandbox().ResolvedImageRef(); ref != "" {
-			cfg.SandboxImage = ref
-			log.Printf("sandbox: image resolved from bundle = %s", ref)
-		}
+	// Resolve the sandbox image, OCI runtime, and backend from env + bundle
+	// (env wins). Fail-closed on an unrecognized backend value (#989).
+	if err := resolveSandboxInto(cfg, bundle); err != nil {
+		return err
 	}
-
-	resolveSandboxRuntimeInto(cfg, bundle)
 	// Sandbox egress allowlist (#211): the bundle manifest supplies the default
 	// allowed domains for allowlisted network mode (operator-authored deployment
 	// config, like the runtime + image). FLEET_DEFAULT_NETWORK_MODE selects the
@@ -858,13 +848,7 @@ func run() error {
 	// skips containers carrying this process's own instance label in every
 	// state — otherwise a warm container caught in "created" state would be
 	// force-removed by its own process. See sandbox.PruneOrphanedContainers.
-	pruneCtx, pruneCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	if n, err := sandbox.PruneOrphanedContainers(pruneCtx, "podman"); err != nil {
-		log.Printf("startup: prune orphaned sandbox containers: %v", err)
-	} else if n > 0 {
-		log.Printf("startup: pruned %d orphaned sandbox container(s) from a prior run", n)
-	}
-	pruneCancel()
+	pruneOrphanedSandboxes(mgr.SandboxPool())
 
 	// Share the process shutdown grace with the pool so its in-flight-task drain
 	// uses the same budget as the chat-turn drain (#278). A non-positive grace
@@ -1986,6 +1970,121 @@ func resolveSandboxRuntimeInto(cfg *config.Config, bundle *clientconfig.Bundle) 
 	// Always write back the normalized value so cfg carries the canonical name
 	// (also collapses whitespace-padded env values the loader didn't trim).
 	cfg.SandboxRuntime = resolved
+}
+
+// pruneOrphanedSandboxes reclaims sandboxes orphaned by a PRIOR crash,
+// routed by the active backend: pods under the kubernetes backend (#989),
+// podman containers otherwise. Best-effort — log and continue. Extracted from
+// run() to keep it within the cyclomatic budget; see the call site's comment
+// for why this must run only AFTER the manager (and thus the pool) exists.
+func pruneOrphanedSandboxes(pool *sandbox.Pool) {
+	pruneCtx, pruneCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer pruneCancel()
+	if kb := pool.KubernetesBackend(); kb != nil {
+		// Kubernetes backend (#989): orphans are pods, not podman containers.
+		if n, err := kb.PruneOrphanedPods(pruneCtx); err != nil {
+			log.Printf("startup: prune orphaned sandbox pods: %v", err)
+		} else if n > 0 {
+			//nolint:gosec // G706: n is an integer count of deleted pods — no attacker-controllable text reaches the log.
+			log.Printf("startup: pruned %d orphaned sandbox pod(s) from a prior run", n)
+		}
+		return
+	}
+	if n, err := sandbox.PruneOrphanedContainers(pruneCtx, "podman"); err != nil {
+		log.Printf("startup: prune orphaned sandbox containers: %v", err)
+	} else if n > 0 {
+		log.Printf("startup: pruned %d orphaned sandbox container(s) from a prior run", n)
+	}
+}
+
+// resolveSandboxInto resolves the sandbox image, OCI runtime, and backend
+// from env + bundle, in that order. Extracted from run() to keep it within
+// the cyclomatic budget.
+//
+// The image is a per-client bundle artifact: the bundle manifest's
+// sandbox.image (the opt-in prebuilt/registry path — else sandbox.tag, the
+// build-on-box default) fills it when no explicit FLEET_SANDBOX_IMAGE /
+// CHAT_SANDBOX_IMAGE env is set (config.Load already populated
+// cfg.SandboxImage from those). fleet does NOT build the image here —
+// bootstrap / scripts/build-sandbox-image.sh does; this only feeds the
+// resolved ref to the consuming sandbox pool.
+func resolveSandboxInto(cfg *config.Config, bundle *clientconfig.Bundle) error {
+	if strings.TrimSpace(cfg.SandboxImage) == "" {
+		if ref := bundle.Sandbox().ResolvedImageRef(); ref != "" {
+			cfg.SandboxImage = ref
+			log.Printf("sandbox: image resolved from bundle = %s", ref)
+		}
+	}
+	resolveSandboxRuntimeInto(cfg, bundle)
+	return resolveSandboxBackendInto(cfg, bundle)
+}
+
+// resolveSandboxBackendInto resolves the sandbox backend (#989) into
+// cfg.SandboxBackend with the SAME env-wins-else-bundle precedence as the
+// image and runtime (sandbox.ResolveBackend is the one shared resolver, so
+// boot and validate-config cannot drift), then fills each kubernetes setting
+// from the bundle's sandbox.kubernetes block when the corresponding
+// FLEET_SANDBOX_K8S_* env var is empty. An unrecognized backend value is a
+// boot error, never a silent fallback to podman.
+func resolveSandboxBackendInto(cfg *config.Config, bundle *clientconfig.Bundle) error {
+	sb := bundle.Sandbox()
+	resolved, err := sandbox.ResolveBackend(cfg.SandboxBackend, sb.Backend)
+	if err != nil {
+		return err
+	}
+	cfg.SandboxBackend = resolved
+	if resolved != sandbox.BackendKubernetes {
+		return nil
+	}
+	fill := func(dst *string, bundleVal string) {
+		if strings.TrimSpace(*dst) == "" {
+			*dst = strings.TrimSpace(bundleVal)
+		}
+	}
+	k := sb.Kubernetes
+	fill(&cfg.SandboxK8sNamespace, k.Namespace)
+	fill(&cfg.SandboxK8sWorkspaceClaim, k.WorkspaceClaim)
+	fill(&cfg.SandboxK8sServiceAccount, k.ServiceAccount)
+	fill(&cfg.SandboxK8sImagePullSecret, k.ImagePullSecret)
+	fill(&cfg.SandboxK8sRuntimeClass, k.RuntimeClass)
+	fill(&cfg.SandboxK8sSeccompProfile, k.SeccompProfile)
+	fill(&cfg.SandboxK8sKubeconfig, k.Kubeconfig)
+	fill(&cfg.SandboxK8sNetworkPolicy, k.NetworkPolicy)
+	// The scheduling knobs are structured in the manifest; canonicalize them
+	// into the same string forms the env vars use so the pool build has ONE
+	// source to parse (env wins, like every other field).
+	if strings.TrimSpace(cfg.SandboxK8sNodeSelector) == "" && len(k.NodeSelector) > 0 {
+		keys := make([]string, 0, len(k.NodeSelector))
+		for key := range k.NodeSelector {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		pairs := make([]string, 0, len(keys))
+		for _, key := range keys {
+			pairs = append(pairs, key+"="+k.NodeSelector[key])
+		}
+		cfg.SandboxK8sNodeSelector = strings.Join(pairs, ",")
+	}
+	if strings.TrimSpace(cfg.SandboxK8sTolerations) == "" && len(k.Tolerations) > 0 {
+		raw, err := json.Marshal(k.Tolerations)
+		if err != nil {
+			return fmt.Errorf("encode sandbox.kubernetes.tolerations: %w", err)
+		}
+		cfg.SandboxK8sTolerations = string(raw)
+	}
+	//nolint:gosec // G706: backend + namespace are operator config (FLEET_SANDBOX_* / bundle manifest), quoted with %q — not request input.
+	log.Printf("sandbox: backend resolved to %q (control plane and runners split — pods in namespace %q)",
+		resolved, defaultString(cfg.SandboxK8sNamespace, "fleet-sandboxes"))
+	return nil
+}
+
+// defaultString returns v, or fallback when v is empty — a log-formatting
+// helper for resolveSandboxBackendInto.
+func defaultString(v, fallback string) string {
+	if strings.TrimSpace(v) == "" {
+		return fallback
+	}
+	return v
 }
 
 // registerRuntimeMetrics wires the pull-at-scrape gauges (#176): in-flight turn

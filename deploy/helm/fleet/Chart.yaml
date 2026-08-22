@@ -1,0 +1,17 @@
+apiVersion: v2
+name: fleet
+description: >-
+  fleet control plane on Kubernetes with pluggable sandbox runners (issue
+  #989 / ADR-0049): a single-replica control-plane Deployment plus RBAC,
+  workspace storage, and NetworkPolicies for the kubernetes sandbox backend
+  (FLEET_SANDBOX_BACKEND=kubernetes). The single-box podman install remains
+  the default fleet deployment; this chart is the enterprise split path.
+type: application
+# Chart version tracks chart changes; appVersion is informational — operators
+# build and pin their own fleet images (no public fleet image is published).
+version: 0.1.0
+appVersion: "unreleased"
+kubeVersion: ">=1.29.0-0"
+home: https://github.com/ElcanoTek/fleet
+sources:
+  - https://github.com/ElcanoTek/fleet

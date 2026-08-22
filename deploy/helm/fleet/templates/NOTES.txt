@@ -1,0 +1,22 @@
+fleet {{ .Chart.Version }} installed as {{ .Release.Name }} in {{ .Release.Namespace }}.
+
+Control plane : one replica (by design — single-owner scheduler; do not scale it)
+Sandbox pods  : namespace {{ include "fleet.sandboxNamespace" . }}, image {{ .Values.sandbox.image }}
+Workspace     : PVC {{ .Values.workspace.claimName }} mounted at {{ .Values.workspaceRoot }} (control plane + every sandbox pod)
+
+Check boot (the kubernetes sandbox preflight runs before serving; a missing
+RBAC grant, workspace claim, or NetworkPolicy aborts start with the reason):
+
+  kubectl -n {{ .Release.Namespace }} logs deploy/{{ include "fleet.fullname" . }} | grep -E 'sandbox|preflight'
+
+Reach the chat API:
+
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "fleet.fullname" . }} 8080:8080
+  curl -s localhost:8080/healthz
+
+Verify a turn executes in a sandbox pod:
+
+  kubectl -n {{ include "fleet.sandboxNamespace" . }} get pods -l app.kubernetes.io/name=fleet-sandbox -w
+
+Full guide (15-minute kind path + production checklist):
+  docs/DEPLOYMENT-KUBERNETES.md in the fleet repository.

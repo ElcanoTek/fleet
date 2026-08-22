@@ -21,6 +21,17 @@ through to `podman run --runtime=<value>`; fleet adds a fail-closed boot
 preflight and, for Kata, a guest-memory adjustment. See
 [ADR-0010](adr/0010-microvm-sandbox-runtimes.md) for the design rationale.
 
+> **Sibling knob — `FLEET_SANDBOX_BACKEND`** (manifest `sandbox.backend`,
+> same env-wins precedence): while the *runtime* picks the isolation posture
+> of a podman sandbox, the *backend* picks WHERE sandboxes run at all —
+> `podman` (this page's co-located default) or `kubernetes` (each sandbox an
+> ephemeral pod; the split enterprise deployment,
+> [ADR-0049](adr/0049-kubernetes-backend-split-control-plane.md)). Everything
+> below applies to the podman backend; under the kubernetes backend
+> `FLEET_SANDBOX_RUNTIME` is refused (use a cluster RuntimeClass via
+> `FLEET_SANDBOX_K8S_RUNTIME_CLASS` instead) — see
+> [DEPLOYMENT-KUBERNETES.md](DEPLOYMENT-KUBERNETES.md).
+
 ## The three tiers
 
 | | **runc / crun** (default) | **Kata Containers** | **libkrun** |
