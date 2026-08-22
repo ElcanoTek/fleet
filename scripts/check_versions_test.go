@@ -299,3 +299,41 @@ func TestGoMinorAgreesEverywhere(t *testing.T) {
 		}
 	}
 }
+
+// TestGolangciLintPinAgreesWithDocs: the golangci-lint binary version is
+// declared in ci.yml (TestDuplicatedToolPinsAgree already holds dev-ci.yml to
+// it) and then RESTATED in prose in two docs that tell a contributor which
+// version to install. Those copies are invisible to every other check, and they
+// drift exactly the way you would expect: the v2.12.2 -> v2.13.1 bump that Go
+// 1.27 forced updated ONBOARDING.md and missed docs/TESTING.md, which went on
+// telling contributors to install the version that cannot lint the tree.
+//
+// Asserting them is the same rule this file already applies to the node major
+// and the Go minor: one declaration point, and anything that must agree with it
+// is a test failure rather than something to remember.
+func TestGolangciLintPinAgreesWithDocs(t *testing.T) {
+	root := repoRoot(t)
+
+	pin := regexp.MustCompile(`golangci-lint-action@v\d+\s+with:\s+(?:#[^\n]*\n\s+)*version:\s*(v[\d.]+)`).
+		FindStringSubmatch(readFile(t, root, ".github/workflows/ci.yml"))
+	if pin == nil {
+		t.Fatal("ci.yml: could not find the golangci-lint-action version pin")
+	}
+	want := pin[1]
+
+	// Each doc names the version in prose. Match any golangci-lint-adjacent
+	// vN.N.N so a stale copy is caught rather than skipped for not matching.
+	for _, rel := range []string{"ONBOARDING.md", "docs/TESTING.md"} {
+		body := readFile(t, root, rel)
+		found := regexp.MustCompile(`golangci-lint\D{0,40}?(v\d+\.\d+\.\d+)`).FindAllStringSubmatch(body, -1)
+		if len(found) == 0 {
+			t.Errorf("%s names no golangci-lint version; ci.yml pins %s — keep the doc honest or drop the mention", rel, want)
+			continue
+		}
+		for _, m := range found {
+			if m[1] != want {
+				t.Errorf("%s says golangci-lint %s but ci.yml pins %s — a contributor following the doc installs a binary that cannot lint the tree", rel, m[1], want)
+			}
+		}
+	}
+}
