@@ -17,9 +17,14 @@
 #
 # Still deliberately deferred to the dev→main PR's full ci.yml gate, because each
 # is slow and none of them is what a routine change breaks: the -race lane,
-# govulncheck, the Grype image scan, both Playwright suites, and CodeQL. The
-# division of labour is "does it compile, lint, and pass tests" here; "is it safe
-# to ship" there.
+# govulncheck, the Grype image scan, and both Playwright suites. The division of
+# labour is "does it compile, lint, and pass tests" here; "is it safe to ship"
+# there.
+#
+# CodeQL used to be on that deferred list and no longer is. It does not run in
+# this file — it has its own workflow, .github/workflows/codeql.yml, whose
+# `pull_request` trigger covers dev as well as main. So a PR into dev IS
+# CodeQL-scanned; it just is not scanned by this lane. See docs/CODEQL.md.
 #
 # `Dev gate` is the single aggregate job (same pattern as ci.yml's `CI gate`):
 # when the dev branch is protected, require just that one check.

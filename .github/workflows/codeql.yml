@@ -1,0 +1,141 @@
+# CodeQL — ADVANCED setup.
+#
+# This file replaces GitHub's zero-config "default setup", which was switched off
+# because its Go analysis could not be fixed from anywhere. Default setup
+# installed the Go toolchain its extractor was built with (1.26.6) and pinned
+# `GOTOOLCHAIN=local`, so on a `go.mod` that requires 1.27 it could neither build
+# that toolchain nor download it:
+#
+#     go: go.mod requires go >= 1.27.0 (running go 1.26.6; GOTOOLCHAIN=local)
+#     Failed to run `go mod tidy -e` in .
+#     Extraction failed for all discovered Go projects.
+#     CodeQL job status was configuration error.
+#
+# Every main-targeting PR had that failure from the Go 1.27 bump (#1240, promoted
+# in #1242) onward, so the repo had no CodeQL coverage of its Go code for that
+# whole stretch. Default setup exposes no knobs — there is no place to set a Go
+# version or an env var — hence advanced setup, where `actions/setup-go` reads
+# `go-version-file: go.mod` like every other lane in this repo.
+#
+# The literal-version rule applies here too: `scripts/check_versions_test.go`'s
+# TestWorkflowsDeclareVersionsByFile scans EVERY .github/workflows/*.yml for a
+# literal `go-version:`/`node-version:` and fails on it. That assertion is
+# directory-wide, so this file was covered by it the moment it was added — no
+# change to the test was needed. Do not replace the version-file input with a
+# hardcoded 1.27; that is the exact bug class #1240 and #1241 already fixed twice
+# for node, and pinning it here would go stale silently the next time go.mod moves.
+#
+# What this restores. Default setup ran two analyses per event:
+#   - security      — go, python, javascript-typescript, actions
+#   - code quality  — go, python, javascript-typescript   (no `actions`)
+# Both are reproduced below. `analysis-kinds` on init takes a list, so the three
+# languages in both sets build ONE database and run both query suites over it,
+# rather than extracting the same code twice as default setup did. `actions` gets
+# code-scanning only, matching what default setup covered.
+#
+# Not touched by this file: the three independent `upload-sarif` calls (ci.yml's
+# Grype step, govulncheck-scheduled.yml, grype-scheduled.yml). Those push their
+# own SARIF to the Security tab and never depended on CodeQL being configured.
+#
+# Merge gating: these jobs are NOT part of ci.yml's `CI gate`, which is the single
+# required status check on main (see .github/CODEOWNERS). CodeQL findings are
+# therefore advisory today, exactly as they were under default setup. Wiring them
+# into the gate is a branch-protection decision, not a workflow one — see
+# docs/CODEQL.md.
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    # main mirrors ci.yml. dev is DELIBERATELY added, and is the one place this
+    # file covers more than default setup did (verified: zero CodeQL runs ever
+    # recorded on a dev-targeting PR — see docs/CODEQL.md). Every change lands on
+    # dev first; main only ever receives a promote merge. Scanning main alone
+    # means a finding surfaces for the first time on a squashed promote commit,
+    # which is the same "the integration branch is where it is first attempted"
+    # complaint dev-ci.yml already makes about compilation.
+    branches: [main, dev]
+  schedule:
+    # Monday 10:00 UTC, weekly. Offset from the 07:00 canary, the 08:00 daily
+    # govulncheck and the Monday 09:00 Grype scan, following the same
+    # don't-contend-for-runners reasoning those files state.
+    #
+    # A cron matters for CodeQL specifically because a run's verdict is a
+    # function of the query pack as well as the commit: new queries ship
+    # continuously, and without a schedule the only way this repo learns that a
+    # newly published query flags existing code is that some unrelated PR turns
+    # red. Same argument govulncheck-scheduled.yml makes about vuln.go.dev.
+    - cron: '0 10 * * 1'
+
+permissions:
+  contents: read
+  security-events: write  # required to upload CodeQL results to the Security tab
+  # The `actions` analysis reads workflow definitions; `packages: read` is not
+  # needed because no analysis here pulls a private CodeQL pack.
+  actions: read
+
+concurrency:
+  group: codeql-${{ github.event_name }}-${{ github.ref }}
+  # Cancel superseded PR runs, but never a push-on-main or scheduled run: those
+  # produce the alert set of record for the default branch, and a cancelled run
+  # leaves the previous, staler alerts standing.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Go is the reason this file exists. `build-mode: none` is NOT
+          # supported for Go — only `autobuild` or `manual` — so the toolchain
+          # has to be right rather than skipped.
+          - language: go
+            build-mode: autobuild
+            analysis-kinds: code-scanning,code-quality
+          - language: python
+            build-mode: none
+            analysis-kinds: code-scanning,code-quality
+          - language: javascript-typescript
+            build-mode: none
+            analysis-kinds: code-scanning,code-quality
+          # `actions` was in default setup's security analysis only, not its code
+          # quality one. Matched rather than widened.
+          - language: actions
+            build-mode: none
+            analysis-kinds: code-scanning
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # THE FIX. Runs before init so the interpreter is already on PATH when the
+      # Go extractor and autobuild shell out to `go`. go-version-file makes go.mod
+      # the single declaration point, so this cannot drift from the module.
+      - name: Set up Go
+        if: matrix.language == 'go'
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          analysis-kinds: ${{ matrix.analysis-kinds }}
+
+      - name: Autobuild
+        if: matrix.build-mode == 'autobuild'
+        uses: github/codeql-action/autobuild@v4
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:${{ matrix.language }}
