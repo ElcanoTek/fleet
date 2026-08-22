@@ -216,9 +216,10 @@ func (s *k8sExecSession) writeStdin(p []byte) error {
 		if n > k8sStdinChunk {
 			n = k8sStdinChunk
 		}
-		frame := make([]byte, 1+n)
-		frame[0] = k8sChannelStdin
-		copy(frame[1:], p[:n])
+		// No manual size arithmetic (`1+n` trips CodeQL's
+		// allocation-size-overflow check, exactly like podmanArgs' old
+		// `len(rest)+1`); append sizes the backing array itself.
+		frame := append([]byte{k8sChannelStdin}, p[:n]...)
 		if err := s.conn.WriteMessage(websocket.BinaryMessage, frame); err != nil {
 			return fmt.Errorf("write pod exec stdin: %w", err)
 		}
