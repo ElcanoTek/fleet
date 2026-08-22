@@ -105,10 +105,11 @@ func (c *k8sClient) execPod(ctx context.Context, namespace, pod, container strin
 	if err != nil {
 		if resp != nil {
 			// The upgrade response body carries the apiserver's status message
-			// (RBAC denial, container not found) — surface it, bounded.
+			// (RBAC denial, container not found) — surface it, bounded and
+			// newline-sanitized (cluster-derived text ends up in logs).
 			body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
 			_ = resp.Body.Close()
-			return nil, fmt.Errorf("pod exec dial: %w (HTTP %d: %.500s)", err, resp.StatusCode, string(body))
+			return nil, fmt.Errorf("pod exec dial: %w (HTTP %d: %.500s)", err, resp.StatusCode, sanitizeClusterText(string(body)))
 		}
 		return nil, fmt.Errorf("pod exec dial: %w", err)
 	}
@@ -170,7 +171,10 @@ func parseExecStatus(status []byte, sawStatus bool, readErr error) (int, error) 
 			// close, so this cannot mask them.
 			return 0, nil
 		}
-		return -1, fmt.Errorf("pod exec ended without a status frame: %w", readErr)
+		// %s of the sanitized text, not %w: a close error's reason text is
+		// server-supplied (remote), and nothing upstream matches on the
+		// wrapped type — losing the chain costs nothing here.
+		return -1, fmt.Errorf("pod exec ended without a status frame: %s", sanitizeClusterText(readErr.Error()))
 	}
 	var st struct {
 		Status  string `json:"status"`
@@ -184,8 +188,10 @@ func parseExecStatus(status []byte, sawStatus bool, readErr error) (int, error) 
 		} `json:"details"`
 	}
 	if err := json.Unmarshal(status, &st); err != nil {
-		return -1, fmt.Errorf("parse pod exec status: %w (raw: %.200s)", err, string(status))
+		return -1, fmt.Errorf("parse pod exec status: %w (raw: %.200s)", err, sanitizeClusterText(string(status)))
 	}
+	// Every message below is cluster-derived text that ends up in logged
+	// errors — sanitized like everything else that leaves this package.
 	switch {
 	case st.Status == "Success":
 		return 0, nil
@@ -194,16 +200,16 @@ func parseExecStatus(status []byte, sawStatus bool, readErr error) (int, error) 
 			if cause.Reason == "ExitCode" {
 				code, err := strconv.Atoi(cause.Message)
 				if err != nil {
-					return -1, fmt.Errorf("parse pod exec exit code %q: %w", cause.Message, err)
+					return -1, fmt.Errorf("parse pod exec exit code %q: %w", sanitizeClusterText(cause.Message), err)
 				}
 				return code, nil
 			}
 		}
-		return -1, fmt.Errorf("pod exec reported NonZeroExitCode without an ExitCode cause: %s", st.Message)
+		return -1, fmt.Errorf("pod exec reported NonZeroExitCode without an ExitCode cause: %s", sanitizeClusterText(st.Message))
 	default:
 		// A failure that is not an exit code: the exec itself failed (command
 		// not found in a way the shell couldn't report, container gone, …).
-		return -1, fmt.Errorf("pod exec failed: %s", st.Message)
+		return -1, fmt.Errorf("pod exec failed: %s", sanitizeClusterText(st.Message))
 	}
 }
 

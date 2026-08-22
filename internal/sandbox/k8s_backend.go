@@ -575,15 +575,17 @@ func (k *k8sImpl) waitForRunning(ctx context.Context, name string) error {
 					}
 				}
 			case "Failed", "Succeeded":
-				return fmt.Errorf("sandbox pod %s entered terminal phase %s before becoming ready: %s", name, pod.Status.Phase, pod.Status.Message)
+				// Status text is cluster-derived — sanitized before it enters
+				// an error that upstream code logs (go/log-injection).
+				return fmt.Errorf("sandbox pod %s entered terminal phase %s before becoming ready: %s", name, sanitizeClusterText(pod.Status.Phase), sanitizeClusterText(pod.Status.Message))
 			}
 			for _, cs := range pod.Status.ContainerStatuses {
 				if cs.State.Waiting != nil {
-					lastState = cs.State.Waiting.Reason
+					lastState = sanitizeClusterText(cs.State.Waiting.Reason)
 					// Pull failures never self-heal within a start timeout —
 					// fail fast with the reason instead of burning the window.
 					if lastState == "ErrImagePull" || lastState == "ImagePullBackOff" || lastState == "InvalidImageName" {
-						return fmt.Errorf("sandbox pod %s cannot pull image %s (%s): %s", name, k.cfg.Image, lastState, cs.State.Waiting.Message)
+						return fmt.Errorf("sandbox pod %s cannot pull image %s (%s): %s", name, k.cfg.Image, lastState, sanitizeClusterText(cs.State.Waiting.Message))
 					}
 				}
 			}
@@ -617,9 +619,10 @@ func (k *k8sImpl) uploadFile(ctx context.Context, path string, data []byte) erro
 		return fmt.Errorf("upload %s: %w", path, err)
 	}
 	if code != 0 {
-		return fmt.Errorf("upload %s: exit %d (%.200s)", path, code, stderr.String())
+		// stderr is pod output — sanitized like all cluster-derived text.
+		return fmt.Errorf("upload %s: exit %d (%.200s)", path, code, sanitizeClusterText(stderr.String()))
 	}
-	if got := strings.TrimSpace(stdout.String()); got != strconv.Itoa(len(data)) {
+	if got := sanitizeClusterText(strings.TrimSpace(stdout.String())); got != strconv.Itoa(len(data)) {
 		return fmt.Errorf("upload %s: wrote %s of %d bytes", path, got, len(data))
 	}
 	return nil
@@ -762,10 +765,10 @@ func (k *k8sImpl) executeFileOp(ctx context.Context, req FileOpRequest, anchor s
 			_ = k.deletePodNow(podName)
 			return FileOpResult{}, fmt.Errorf("fileop %s interrupted (%w); sandbox retired: %w", req.Op, cmdCtx.Err(), ErrPoisoned)
 		}
-		return FileOpResult{}, fmt.Errorf("fileop %s exec: %w (%.200s)", req.Op, execErr, stderr.String())
+		return FileOpResult{}, fmt.Errorf("fileop %s exec: %w (%.200s)", req.Op, execErr, sanitizeClusterText(stderr.String()))
 	}
 	if code != 0 {
-		return FileOpResult{}, fmt.Errorf("fileop %s: helper exit %d (%.200s)", req.Op, code, stderr.String())
+		return FileOpResult{}, fmt.Errorf("fileop %s: helper exit %d (%.200s)", req.Op, code, sanitizeClusterText(stderr.String()))
 	}
 	return decodeFileOpResponse(stdout.Bytes())
 }
@@ -968,7 +971,9 @@ func (k *k8sImpl) bridgeStderrSuffix() string {
 	if k.bridgeStderr == nil {
 		return ""
 	}
-	stderr := strings.TrimSpace(k.bridgeStderr.Snapshot())
+	// Pod output — sanitized like all cluster-derived text before it joins an
+	// error string that upstream code logs.
+	stderr := sanitizeClusterText(strings.TrimSpace(k.bridgeStderr.Snapshot()))
 	if stderr == "" {
 		return ""
 	}
@@ -1037,7 +1042,9 @@ func (b *KubernetesBackend) PruneOrphanedPods(ctx context.Context) (int, error) 
 			if isK8sNotFound(err) {
 				continue
 			}
-			return removed, fmt.Errorf("remove orphaned sandbox pod %s: %w", pod.Metadata.Name, err)
+			// The name came back from the API list — sanitized like all
+			// cluster-derived text before it enters a logged error.
+			return removed, fmt.Errorf("remove orphaned sandbox pod %s: %w", sanitizeClusterText(pod.Metadata.Name), err)
 		}
 		removed++
 	}

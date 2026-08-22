@@ -202,6 +202,19 @@ func TestK8sSchedulingKnobs(t *testing.T) {
 	}
 }
 
+func TestK8sSanitizeClusterText(t *testing.T) {
+	// Cluster/pod-derived text is newline-stripped before it can enter a
+	// logged error — a pod printing "\nFAKE LOG LINE" to stderr must not be
+	// able to forge journal entries (go/log-injection).
+	got := sanitizeClusterText("line one\r\nFAKE LOG LINE\ntail")
+	if strings.ContainsAny(got, "\r\n") {
+		t.Errorf("sanitizeClusterText left line breaks in %q", got)
+	}
+	if got != "line one  FAKE LOG LINE tail" {
+		t.Errorf("sanitizeClusterText = %q", got)
+	}
+}
+
 func TestK8sQuantityConversions(t *testing.T) {
 	if _, err := k8sQuantityFromPodmanMemory("512x"); err == nil {
 		t.Error("bad memory suffix must error")

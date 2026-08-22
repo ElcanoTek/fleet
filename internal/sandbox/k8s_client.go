@@ -148,6 +148,19 @@ func inClusterNamespace() string {
 	return strings.TrimSpace(string(raw))
 }
 
+// sanitizeClusterText strips newlines from text that originated in the
+// cluster API or a pod (status messages, exec status, stderr snippets) before
+// it is embedded in an error or log line. Everything remote-derived leaves
+// this package through error strings that end up in log.Printf sites all over
+// the codebase, and a forged newline in that text is a log-injection vector
+// (CodeQL go/log-injection): without this, a pod that prints a crafted line
+// to stderr could fabricate whole log entries in the operator's journal.
+func sanitizeClusterText(s string) string {
+	s = strings.ReplaceAll(s, "\r", " ")
+	s = strings.ReplaceAll(s, "\n", " ")
+	return s
+}
+
 // k8sStatusError is a non-2xx API response, carrying enough of the
 // metav1.Status body to be actionable in logs and boot errors.
 type k8sStatusError struct {
@@ -217,7 +230,13 @@ func (c *k8sClient) do(ctx context.Context, method, apiPath string, query url.Va
 			Message string `json:"message"`
 		}
 		_ = json.Unmarshal(data, &status)
-		return nil, &k8sStatusError{Code: resp.StatusCode, Reason: status.Reason, Message: status.Message}
+		// Sanitized at construction so every path that logs this error —
+		// boot preflights, pool fill, the prune sweep — is covered at once.
+		return nil, &k8sStatusError{
+			Code:    resp.StatusCode,
+			Reason:  sanitizeClusterText(status.Reason),
+			Message: sanitizeClusterText(status.Message),
+		}
 	}
 	return data, nil
 }
@@ -470,5 +489,5 @@ func (c *k8sClient) serverVersion(ctx context.Context) (string, error) {
 	if err := json.Unmarshal(data, &v); err != nil {
 		return "", fmt.Errorf("decode /version: %w", err)
 	}
-	return v.GitVersion, nil
+	return sanitizeClusterText(v.GitVersion), nil
 }

@@ -81,8 +81,15 @@ func (h *hostImpl) runBash(ctx context.Context, req BashRequest) (BashResult, er
 	cmdCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	// Running the caller's shell IS this component's contract: it is the
+	// unsandboxed TEST/DEV-ONLY executor behind the fleet_host_executor build
+	// tag (#159) — a release build gets the fail-closed stub in
+	// host_disabled.go, so this sink cannot ship (ADR-0002 enforcement). The
+	// codeql suppression below is the in-source counterpart of that reasoning
+	// (the CodeQL workflow deliberately compiles this file into the database
+	// so it is scanned rather than being a coverage hole).
 	//nolint:gosec // shell execution is the purpose of this tool
-	cmd := exec.CommandContext(cmdCtx, "bash", "-c", req.Command)
+	cmd := exec.CommandContext(cmdCtx, "bash", "-c", req.Command) // codeql[go/command-injection]
 	if req.WorkingDir != "" {
 		cmd.Dir = req.WorkingDir
 	}
