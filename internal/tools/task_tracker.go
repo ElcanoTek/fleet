@@ -185,7 +185,6 @@ func (t *taskTracker) validateTasks(tasks []Task) error {
 
 	// Check for duplicate IDs
 	seenIDs := make(map[string]bool)
-	inProgressCount := 0
 
 	for i, task := range tasks {
 		if task.ID == "" {
@@ -207,18 +206,13 @@ func (t *taskTracker) validateTasks(tasks []Task) error {
 			return fmt.Errorf("duplicate task ID: %s", task.ID)
 		}
 		seenIDs[task.ID] = true
-
-		// Count in_progress tasks
-		if task.Status == StatusInProgress {
-			inProgressCount++
-		}
 	}
 
-	// Warn if multiple tasks are in_progress (but don't error)
-	// if inProgressCount > 1 {
-	// 	// This is just a warning in the description, not enforced
-	// }
-
+	// Deliberately no "more than one in_progress" check: the tool description
+	// asks for one in-progress task at a time, but it is guidance, not a
+	// validation rule, and rejecting the call would strand a model mid-plan.
+	// A counter and a commented-out `if` used to sit here saying so; the comment
+	// is the whole content, so it is a comment.
 	return nil
 }
 

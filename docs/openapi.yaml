@@ -2716,7 +2716,7 @@ paths:
         equalized HMAC work) to prevent slug enumeration. A leaked secret lets a
         caller inject the spawned run's prompt under the template's seat
         (network/MCP/files); the sandbox remains the execution boundary. Rotate
-        with `fleet-admin sched trigger rotate`.
+        with `fleet sched trigger rotate`.
       security: []
       requestBody:
         content:

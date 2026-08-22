@@ -57,10 +57,6 @@ const (
 // Mirrors the frontend's DEFAULT_MODEL (the recommended everyday pick).
 const DefaultTitleModel = "google/gemini-3.7-flash"
 
-// DefaultFromEmail is the fallback From address for outgoing mail. Neutral by
-// default; a deployment overrides via SENDGRID_FROM_EMAIL / MAILBUX_FROM_EMAIL.
-const DefaultFromEmail = "noreply@example.com"
-
 // Sub-agent caps (#175, tightened for delegation #264): deliberately SMALL
 // defaults. Depth bounds recursion; fan-out bounds how many children one parent
 // may spawn; the budget fraction bounds each child's slice of the parent's

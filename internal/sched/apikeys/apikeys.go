@@ -782,11 +782,6 @@ func (m *Manager) SetMaxPriority(keyID string, ceiling *int) error {
 	return m.save()
 }
 
-// LogAction logs an action performed with an API key.
-func (m *Manager) LogAction(keyID, action, resourceType string, resourceID *string, details map[string]interface{}, ipAddress, userAgent *string, success bool, errorMessage *string) {
-	m.logAudit(AuditLogEntry{KeyID: keyID, Action: action, ResourceType: resourceType, ResourceID: resourceID, Details: details, IPAddress: ipAddress, UserAgent: userAgent, Success: success, ErrorMessage: errorMessage})
-}
-
 // GetKey gets a key by ID.
 func (m *Manager) GetKey(keyID string) *APIKey {
 	m.mu.RLock()

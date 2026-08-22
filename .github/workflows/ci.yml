@@ -7,9 +7,13 @@ on:
     branches: [main]
 
 permissions:
+  # Least privilege at the workflow level, so nothing is granted to a job that
+  # did not ask. `pull-requests: read` used to sit here for
+  # golangci-lint-action's only-new-issues — which is now explicitly `false`
+  # (see the note at that step), so the scope had no consumer while still
+  # reaching every job that does not override it, including web / playwright /
+  # e2e-live, which npm-install and run thousands of third-party packages.
   contents: read
-  # Required by golangci-lint-action's only-new-issues option (reads the PR diff).
-  pull-requests: read
 
 jobs:
   changes:

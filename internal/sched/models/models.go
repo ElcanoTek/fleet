@@ -1968,22 +1968,6 @@ type TaskArtifact struct {
 	Size        int64  `json:"size"`                  // bytes at publish time
 }
 
-// TaskAssignment is the task assignment carried to the worker.
-type TaskAssignment struct {
-	TaskID                 uuid.UUID           `json:"task_id"`
-	Prompt                 string              `json:"prompt"`
-	Model                  *string             `json:"model,omitempty"`
-	FallbackModel          *string             `json:"fallback_model,omitempty"`
-	MaxIterations          *int                `json:"max_iterations,omitempty"`
-	MCPSelection           MCPSelection        `json:"mcp_selection,omitempty"`
-	CredentialAllowlist    CredentialAllowlist `json:"credential_allowlist"`
-	InstructionSelfImprove bool                `json:"instruction_self_improve,omitempty"`
-	OrchestratorURL        string              `json:"orchestrator_url"`
-	Files                  []string            `json:"files,omitempty"`
-	FileNames              []string            `json:"file_names,omitempty"`
-	FileChecksums          []string            `json:"file_checksums,omitempty"`
-}
-
 // DashboardStats contains statistics for the dashboard.
 type DashboardStats struct {
 	PendingTasks        int `json:"pending_tasks"`
@@ -2082,15 +2066,6 @@ func (ls LogSession) MarshalJSON() ([]byte, error) {
 		Messages: messages,
 	})
 }
-
-// LogSubmission is a log submission for a task.
-type LogSubmission struct {
-	TaskID  uuid.UUID  `json:"task_id"`
-	Session LogSession `json:"session"`
-}
-
-// MaxLogSubmissionSize is the maximum size of a log submission in bytes (24MB).
-const MaxLogSubmissionSize = 24 * 1024 * 1024
 
 // APIKeyCreate is the request model for creating an API key.
 type APIKeyCreate struct {

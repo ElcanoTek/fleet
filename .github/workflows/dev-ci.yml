@@ -313,8 +313,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Fail if any fast-lane job failed
+        # RESULTS via env, not interpolated into the run: block. The values are
+        # drawn from {success, failure, cancelled, skipped} so nothing
+        # attacker-controlled reaches the shell — but this is the exact shape the
+        # two sites fixed in #1246 were fixed away FROM, and it breaks semgrep's
+        # bash sub-parser, which silently costs coverage on this very file.
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
         run: |
-          results='${{ join(needs.*.result, ' ') }}'
+          results="$RESULTS"
           echo "job results: $results"
           for r in $results; do
             [ "$r" = "success" ] || { echo "a fast-lane job did not succeed"; exit 1; }

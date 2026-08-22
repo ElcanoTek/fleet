@@ -111,8 +111,11 @@ linters:
           # noctx: httptest.NewRequest (vs NewRequestWithContext) is idiomatic
           # in tests — these are synthetic requests with no cancellation
           # semantics, so threading a context through every one is pure churn.
-          # The one production noctx (cmd/fleet-admin bootstrap) is fixed in
-          # code via exec.CommandContext.
+          # Production call sites use exec.CommandContext rather than
+          # exec.Command — cmd/fleet/{mcp_broker_runtime,health,validate_config}.go
+          # and internal/admincli/backup.go. (This note used to name
+          # cmd/fleet-admin, which has held no exec call since the CLI was
+          # unified in #461.)
           - noctx
       # Exclude shadow checking for err variables (common pattern)
       - text: 'shadow: declaration of "err"'

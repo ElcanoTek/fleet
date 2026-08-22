@@ -5,8 +5,20 @@ Usage:    python3 scripts/generate-icons.py
 Requires: pip install cairosvg pillow
 
 Master:   web/public/logos/fleet-mark.svg  (single flattened path, 512 viewBox)
-Outputs:  web/src/app/            favicon.ico, icon.svg, apple-icon.png
+Outputs:  web/src/app/            icon.svg, apple-icon.png
           web/public/app-icons/   favicon-16/32, icon-192/512, maskable-icon-512
+
+Every output above IS committed, so this script only needs running when the
+master mark changes — regenerate, then commit the diff alongside it. Nothing
+calls it from CI or the Makefile on purpose: the icons are assets, not build
+products, and a generator in the build path would make every CI run depend on
+cairosvg.
+
+It used to also write web/src/app/favicon.ico, which was never committed and is
+not gitignored either — an output that existed only on whoever last ran this. The
+App Router serves icon.svg (crisp at any DPI) and apple-icon.png, with
+favicon-16/32.png under public/ for anything that wants a raster, so the .ico
+had no consumer. Dropped rather than left as drift.
 """
 
 import io
@@ -48,14 +60,6 @@ render(512, scale=0.82, bg=PLUM).save(PUB / "maskable-icon-512.png")
 # --- classic favicons --------------------------------------------------------
 render(16).save(PUB / "favicon-16.png")
 render(32).save(PUB / "favicon-32.png")
-ico = [render(s) for s in (48, 32, 16)]
-ico[0].save(
-    APP / "favicon.ico",
-    format="ICO",
-    append_images=ico[1:],
-    sizes=[(48, 48), (32, 32), (16, 16)],
-)
-
 # --- apple touch icon (iOS Add to Home Screen) -------------------------------
 # Must be opaque: iOS fills transparency with black. iOS applies its own
 # corner mask, so this is a full-bleed square with the glyph inset.
