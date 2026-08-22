@@ -151,10 +151,16 @@ jobs:
           # story (an accepted-findings.json entry, by contrast, is invisible
           # to the Security tab). The pack is resolved from the bundled
           # standard library — no network pull, no `packages: read`.
+          # The leading "+" is load-bearing: without it the action treats the
+          # packs input as a REPLACEMENT set that the queries input then
+          # overrides, and the suppression query silently does not run
+          # (verified: rule-metadata count stayed at 35 and the gate showed
+          # the waiver coming from the register, not "(in-source
+          # suppression)"). "+" makes it additive to the queries input.
           - language: go
             build-mode: autobuild
             queries: security-extended
-            packs: codeql/go-queries:AlertSuppression.ql
+            packs: +codeql/go-queries:AlertSuppression.ql
           - language: python
             build-mode: none
             queries: security-extended
