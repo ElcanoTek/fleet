@@ -391,6 +391,23 @@ func streamLeakedToolCallRetry(ctx context.Context, tc TurnConfig, in agentcore.
 // here, but production never populated TurnHistory, so this recovery saw prior
 // turns only and fabricated from stale context — #1117. The loop's own message
 // slice is the single source of truth; TurnConfig no longer duplicates it.)
+// NO in.GuardStep HERE, AND THAT IS DELIBERATE — unlike
+// streamLeakedToolCallRetry above, which needs it. Recording the reasoning
+// because the asymmetry looks like an oversight and was flagged as one during
+// the enterprise security audit:
+//
+//   - The retry runs WITH tools and can therefore buy an unbounded number of
+//     paid completions, so it has to be held to the run's ceilings.
+//   - This one is a SINGLE tool-less completion, bounded by tc.MaxTokens, and it
+//     is still metered (RecordUsage), so it lands in the ledger like any other
+//     call. It also only runs on the canFinish path: a run stopped by
+//     ErrCostCeilingExceeded never reaches Finalize (agentcore/run.go), so this
+//     cannot be reached after a ceiling has already tripped mid-run.
+//
+// The worst case is therefore one bounded, accounted completion of overshoot
+// when a ceiling is reached on the final step — which is the price of returning
+// a usable answer instead of a truncated one. If this ever grows tools or a
+// loop, it needs the guard.
 func streamForceFinalSummary(ctx context.Context, tc TurnConfig, in agentcore.FinalizeInput) (string, error) {
 	convo := append(append([]fantasy.Message{}, in.Messages...), fantasy.NewUserMessage(interactiveForceFinalSummaryNudge))
 	agent := fantasy.NewAgent(tc.Model,
