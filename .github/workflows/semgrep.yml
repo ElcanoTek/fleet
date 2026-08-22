@@ -55,10 +55,13 @@
 name: Semgrep
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main, dev]
+  # No push/pull_request triggers of its own: this is a REUSABLE workflow.
+  # ci.yml and dev-ci.yml call it as a job, which puts it inside `CI gate` /
+  # `Dev gate` via `needs` — a finding blocks the merge through the existing
+  # required check, with no branch-protection change. Only the weekly re-scan
+  # and a manual trigger live here.
+  workflow_call:
+  workflow_dispatch:
   schedule:
     # Monday 11:00 UTC — one hour after CodeQL's weekly, and clear of the 07:00
     # canary / 08:00 govulncheck / 09:00 Grype lanes, following the same
@@ -68,10 +71,6 @@ on:
 
 permissions:
   contents: read
-
-concurrency:
-  group: semgrep-${{ github.event_name }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   semgrep:

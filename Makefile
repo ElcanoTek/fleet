@@ -136,7 +136,7 @@ lint-go:
 # post-mortems about.
 lint-python:
 	@if command -v ruff >/dev/null 2>&1; then \
-		ruff check . ; \
+		ruff check . && ruff format --check . ; \
 	else \
 		echo "ruff not installed — SKIPPING the Python lint (CI still enforces it)."; \
 		echo "  install: python3 -m pip install --user 'ruff==0.15.8'"; \

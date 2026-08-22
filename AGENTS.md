@@ -26,7 +26,7 @@ make compile      # go build ./...   (compile-check only; no artifacts)
 make test         # go test -p 1 ./...   — run in the FOREGROUND
 make test-race    # go test -race -p 1 ./...   (use when touching concurrency)
 make test-cover   # run Go tests with coverage profiling (writes coverage.out)
-make lint         # golangci-lint + ruff (Python) + migration DDL lint — must pass clean
+make lint         # golangci-lint + ruff check/format (Python) + migration DDL lint — must pass clean
 make fmt          # gofmt -w .
 make tidy         # go mod tidy
 ```
@@ -34,7 +34,7 @@ make tidy         # go mod tidy
 When you touch `web/` (the Next.js app):
 
 ```sh
-cd web && npm ci && npm run lint && npm run typecheck && npm run test && npm run build
+cd web && npm audit --audit-level=low && npm ci && npm run lint && npm run typecheck && npm run test && npm run build
 cd web && npx playwright test --project=mocked     # mocked e2e
 ```
 
@@ -47,10 +47,12 @@ deterministic without a live model: use the fake-LLM seam (`internal/fakellm`
 via `OPENROUTER_BASE_URL`), never a real key.
 
 CodeQL (security queries) and Semgrep (Go/JS/Python SAST + Actions supply chain)
-also run per PR and **fail on any finding**. They are not part of `ci-gate` —
-`needs` cannot cross workflow files — so they report as their own checks
-(`CodeQL gate`, `Semgrep scan`). Both are at zero findings today; keeping them
-there is the point. See [`docs/SCANNING.md`](docs/SCANNING.md).
+also run per PR, **fail on any finding**, and are **inside `ci-gate` and
+`Dev gate`** — both are reusable workflows that ci.yml/dev-ci.yml call as jobs,
+so a finding blocks the merge through the existing required check. `npm audit`
+gates the web and rampart-service dependency trees the same way. Everything is
+at zero findings today; keeping it there is the point. See
+[`docs/SCANNING.md`](docs/SCANNING.md).
 
 ## Repository map
 

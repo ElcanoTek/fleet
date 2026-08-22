@@ -130,14 +130,26 @@ jobs:
 
       - name: Report what was built
         if: ${{ always() && steps.build.outcome != 'skipped' }}
+        env:
+          # The step outcome comes in through env, not interpolated into the
+          # script: a ${{ }} expression expanded inside a run: block is the
+          # script-injection shape semgrep's github-actions rules flag, and the
+          # inline form also broke their bash sub-parser, silently costing this
+          # file rule coverage (same fix as codeql.yml's $RUNNER_TEMP).
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
         run: |
           tag="$(FLEET_CLIENT_CONFIG_DIR="$GITHUB_WORKSPACE/$BUNDLE_DIR" \
             bash .fleet-core/scripts/build-sandbox-image.sh --print-tag 2>/dev/null || true)"
-          if [ "${{ steps.build.outcome }}" = "success" ]; then
+          # Plain assignment instead of a ${tag:-(…)} expansion default: the
+          # parenthesis inside the default value is valid bash but chokes
+          # semgrep's bash sub-parser, which partial-parsed this file and
+          # silently dropped two rules' coverage of it.
+          if [ -z "$tag" ]; then tag="(tag unavailable)"; fi
+          if [ "$BUILD_OUTCOME" = "success" ]; then
             {
               echo "### Sandbox builds clean"
               echo
-              echo "\`${tag:-(tag unavailable)}\` built from \`$BUNDLE_DIR/sandbox/Containerfile\`."
+              echo "\`$tag\` built from \`$BUNDLE_DIR/sandbox/Containerfile\`."
               echo
               echo "Nothing was pushed — this is a build canary. The base tracks"
               echo "\`fedora-minimal:latest\`, so this is the check that a Fedora"

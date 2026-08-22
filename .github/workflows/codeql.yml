@@ -63,17 +63,20 @@
 # Grype step, govulncheck-scheduled.yml, grype-scheduled.yml). Those push their
 # own SARIF to the Security tab and never depended on CodeQL being configured.
 #
-# Merge gating, in two parts — they are different things and conflating them is
-# how "we gate on CodeQL" ends up meaning nothing:
+# Merge gating, in two parts — both now closed:
 #
 #   1. Does a finding turn the CHECK red? YES. The `Fail on findings` step below
 #      fails the job on any finding. Without it the analyze step exits 0 whether
 #      it found nothing or a hundred alerts, so a red check could only ever mean
 #      "the scanner broke".
-#   2. Does a red check BLOCK a merge? NOT YET. `ci-gate` is still the only
-#      required status check on main (see .github/CODEOWNERS). Requiring a check
-#      is a repo-settings action that a workflow file cannot perform — add
-#      `CodeQL gate` to the ruleset to close this half.
+#   2. Does a red check BLOCK a merge? YES, through the EXISTING required check.
+#      This is a REUSABLE workflow (`on: workflow_call`): ci.yml and dev-ci.yml
+#      each call it as a job, and a job that calls a reusable workflow can sit in
+#      a gate job's `needs` like any other job — which routes a CodeQL failure
+#      into `CI gate` / `Dev gate` with no branch-protection change at all. The
+#      earlier design note saying this required a repo-settings click was wrong:
+#      `needs` cannot cross workflow FILES, but a workflow_call brings the jobs
+#      into the caller's file.
 #
 # They cannot be part of `CI gate`: a job's `needs` cannot reach across workflow
 # files. So this file carries its own aggregate `CodeQL gate` job at the bottom,
@@ -86,17 +89,13 @@
 name: CodeQL
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-    # main mirrors ci.yml. dev is DELIBERATELY added, and is the one place this
-    # file covers more than default setup did (verified: zero CodeQL runs ever
-    # recorded on a dev-targeting PR — see docs/CODEQL.md). Every change lands on
-    # dev first; main only ever receives a promote merge. Scanning main alone
-    # means a finding surfaces for the first time on a squashed promote commit,
-    # which is the same "the integration branch is where it is first attempted"
-    # complaint dev-ci.yml already makes about compilation.
-    branches: [main, dev]
+  # No push/pull_request triggers of its own: per-change runs come from ci.yml
+  # (push/PR on main) and dev-ci.yml (push/PR on dev) calling this workflow, so
+  # every branch event is covered exactly once and the result feeds the gates.
+  # Scanning dev PRs at all is the one place this exceeds old default setup,
+  # which never ran on them (verified: zero CodeQL runs recorded on dev PRs).
+  workflow_call:
+  workflow_dispatch:  # manual re-run (e.g. after dismissing an alert)
   schedule:
     # Monday 10:00 UTC, weekly. Offset from the 07:00 canary, the 08:00 daily
     # govulncheck and the Monday 09:00 Grype scan, following the same
@@ -115,13 +114,6 @@ permissions:
   # The `actions` analysis reads workflow definitions; `packages: read` is not
   # needed because no analysis here pulls a private CodeQL pack.
   actions: read
-
-concurrency:
-  group: codeql-${{ github.event_name }}-${{ github.ref }}
-  # Cancel superseded PR runs, but never a push-on-main or scheduled run: those
-  # produce the alert set of record for the default branch, and a cancelled run
-  # leaves the previous, staler alerts standing.
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   analyze:
@@ -302,16 +294,10 @@ jobs:
 
   codeql-gate:
     name: CodeQL gate
-    # Aggregate check for branch protection, same pattern and rationale as
-    # ci.yml's `CI gate` and dev-ci.yml's `Dev gate`: require this ONE check
-    # rather than naming each `Analyze (<language>)` leg individually, so adding
-    # or removing a language from the matrix above does not silently leave a
-    # required check that never reports again.
-    #
-    # This job existing does NOT make CodeQL blocking. `ci-gate` is still the
-    # only required status check on main; this is the single lever to flip if
-    # that changes, and it deliberately cannot be flipped from this file. See
-    # docs/CODEQL.md ("Merge gating").
+    # Aggregate of the matrix. In the workflow_call path the caller's
+    # `needs: codeql` already rolls up every job here, so this exists for the
+    # standalone schedule/dispatch runs — one legible verdict per weekly re-scan
+    # instead of four boxes — and as a stable single check name.
     #
     # `needs: [analyze]` on a matrix job collapses to one aggregate result:
     # success only when every leg succeeded. With `fail-fast: false` above,

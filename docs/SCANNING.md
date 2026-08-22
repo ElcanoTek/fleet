@@ -15,8 +15,9 @@ security queries only) and [`TESTING.md`](TESTING.md) (the rest of the ladder).
 | `govulncheck` | Go dependency CVEs (called symbols) | ~30s | **blocks** (`ci-gate`) | job log + Security tab |
 | `grype` | sandbox image CVEs (fixable CRITICAL) | ~1m | **blocks** (`ci-gate`) | job log + Security tab |
 | `gitleaks` | secrets, every branch | ~10s | **blocks** (`ci-gate`) | job log |
-| CodeQL | **interprocedural taint / security** | ~2m | **fails on findings** (check red; see below) | job log + Security tab |
-| **Semgrep** | **Go/JS/Python SAST + Actions supply chain** | ~40s | **fails on findings** | job log + artifact |
+| **`npm audit`** | npm dependency CVEs (web + rampart-service) | ~5s | **blocks** (`ci-gate`) | job log |
+| CodeQL | **interprocedural taint / security** | ~2m | **blocks** (`ci-gate`/`Dev gate` via workflow_call) | job log + Security tab |
+| **Semgrep** | **Go/JS/Python SAST + Actions supply chain** | ~40s | **blocks** (`ci-gate`/`Dev gate` via workflow_call) | job log + artifact |
 
 Two things were added here (**ruff**, **Semgrep**) and one was narrowed
 (**CodeQL**, to security queries only).
@@ -54,9 +55,10 @@ violation is a regression rather than noise in a backlog:
   the only finding here that was arguably a latent bug.
 - `bento_pdf.py` — a lambda assigned to a name (`E731`), rewritten as a `def`.
 
-`ruff format` is reported but **not** gated: the tree has never been
-ruff-formatted, so failing on it would block every PR on a reformat nobody
-scheduled. The advisory output keeps the size of that decision visible.
+`ruff format --check` is **also gated** (CI and `make lint`): the whole tree
+was ruff-formatted in one dedicated commit (9 files, ~3.7k lines, validated
+against the full Go suite — the bento/fileops golden tests exercise these
+scripts), so the gate started clean and a failure means one new file.
 
 ### CodeQL owns interprocedural taint (narrowed, fails on findings)
 
@@ -136,6 +138,37 @@ Python `#`, TypeScript `//`), including the one waiver that had to become a
 *trailing* comment because a standalone comment inside a Go import block breaks
 `goimports`.
 
+### npm audit owns dependency CVEs for the two npm trees (new, blocking)
+
+`govulncheck` is Go-only and `grype` scans the sandbox *image*, so the web
+tier's dependency tree — and `scripts/rampart-service`'s — had no CVE gate at
+all. `npm audit --audit-level=low` now runs in the `web` job of both CI lanes,
+lockfile-only (no install needed), before the expensive `npm ci`, and fails on
+**any** severity. Like govulncheck, its verdict is a function of the clock as
+well as the commit: a new advisory can redden an unchanged tree, and that is
+the point.
+
+Turning it on surfaced a real backlog immediately:
+
+- `web/` was already clean — 0 vulnerabilities — thanks to the steady stream of
+  merged Dependabot PRs.
+- `scripts/rampart-service` **had no `package-lock.json` at all**, which meant
+  no reproducible installs and nothing for an auditor to read. Generating one
+  exposed **5 high-severity vulnerabilities** the missing lockfile had been
+  hiding: `sharp <0.35.0` (libvips CVE-2026-33327/-33328/-35590/-35591) and,
+  one layer down, `adm-zip <0.6.0` (GHSA-xcpc-8h2w-3j85, crafted-ZIP 4 GB
+  allocation) via `onnxruntime-node`.
+
+No upstream release fixes either — the latest `@huggingface/transformers`
+still pins `sharp ^0.34.5`, and npm's own suggested "fix" was a breaking
+*downgrade* of transformers — so `package.json` carries two `overrides`
+(`sharp ^0.35.3`, `adm-zip ^0.6.0`, each the release immediately after the
+vulnerable line). The overridden stack was **installed and load-tested**, not
+just resolved: sharp renders a PNG through the new libvips, transformers loads
+on it, rampart exports its API, and adm-zip 0.6 round-trips a zip. Audit result
+after: 0 vulnerabilities in both trees. When upstream ships fixed ranges, the
+overrides can be dropped.
+
 ## Findings are readable from the job log, on purpose
 
 Both scanners print a per-rule summary into the job log **and** the step summary:
@@ -158,51 +191,54 @@ Semgrep additionally uploads its raw JSON as an artifact (`semgrep-findings`,
 re-running the scan. The repo is public and these results are not sensitive;
 withholding them buys nothing.
 
-## What gates, and what a required check actually means
+The parse/scan-error line in that summary is at **zero**, and keeping it there
+matters: a partial parse silently drops rules from a file. The three errors it
+started with were all fixed for real — `${{ steps.build.outcome }}` interpolated
+into a `run:` script in `build-sandbox-image.yml` (moved to `env:`, which is
+also the injection-safe form), a `${tag:-(…)}` expansion default whose bare
+paren choked the bash sub-parser (hoisted to a plain assignment), and an inline
+`import("@playwright/test")` type in `fixtures.ts` (a named `import type`,
+validated by `tsc`).
 
-The lint/test/build lanes reach `main`'s single required status check through
-**`ci-gate`**. ruff is inside it. The two scanners are not — they cannot be, since
-a job's `needs` cannot reach across workflow files — so each carries its own
-aggregate gate job (`CodeQL gate`) or fails directly (Semgrep).
+## What gates — everything, through the gates that already exist
 
-**Both scanners now fail their job on any finding.** That is what makes them
-gates rather than reports, and it is only defensible because the tree is at zero
-unsuppressed findings in both — verified before switching either on. A gate
-turned on over an existing backlog is a gate people route around.
+Every lane in the table reaches the branch's aggregate gate:
 
-**One half is still yours to close:** a failing check only *blocks a merge* if it
-is a required status check. Add **`CodeQL gate`** and **`Semgrep scan`** to the
-"Main" ruleset to finish it. A workflow file cannot make itself required.
+- `ci-gate` (the single required status check on `main`) `needs` the lint, test
+  and build jobs — **and the two scanners**.
+- `Dev gate` does the same on `dev`.
 
-The distinction that matters for anyone tightening this later:
+The scanners get there because `codeql.yml` and `semgrep.yml` are **reusable
+workflows** (`on: workflow_call`): `ci.yml` and `dev-ci.yml` each call them as a
+job, and a job that calls a reusable workflow sits in a gate's `needs` like any
+other job. A scanner finding therefore blocks a merge through the existing
+required check — **no branch-protection change, no new required check.**
 
-| block a merge when… | mechanism |
-| --- | --- |
-| an analysis **failed or did not run** | required status check (`CodeQL gate`) |
-| a scanner **found alerts** at/above a severity | **code scanning merge protection** (ruleset → Code scanning rule) |
+Worth recording as a correction: an earlier revision of this document claimed
+gating the scanners required a repo-settings click, reasoning from "`needs`
+cannot cross workflow files". True but incomplete — a `workflow_call` brings the
+called jobs *into* the caller's file, which is the standard mechanism and what
+ships now. The scanners' own `push`/`pull_request` triggers were removed so
+nothing runs twice; each keeps its weekly `schedule` (new queries/rules against
+unchanged code) and a `workflow_dispatch`.
 
-**A CodeQL job with a hundred open alerts still exits 0 and reports green.** Job
-success only says extraction and evaluation worked. That is both why the Go
-toolchain break survived weeks behind a red-but-not-required check, and why a
-green check is not evidence of a clean tree. See
-[`CODEQL.md`](CODEQL.md#two-different-things-can-gate-and-they-are-not-the-same-lever).
+**Both scanners fail their job on any finding.** That is what makes a green
+check mean "clean tree" rather than "the scanner ran" — the analyze step alone
+exits 0 whether it found nothing or a hundred alerts, which is how the Go
+toolchain break survived weeks behind a red-but-not-required check. Failing on
+*any* finding is only defensible because the tree is at zero unsuppressed
+findings everywhere — verified before the switch was flipped. A gate turned on
+over an existing backlog is a gate people route around.
+
+(Code scanning merge protection — the ruleset's alert-severity rule — remains
+available on top as a belt-and-braces option, but nothing depends on it now.)
 
 ## Known gaps, deliberately not closed here
 
 Stated rather than left for rediscovery:
 
-- **No CVE scanning of the web tier's npm tree.** `govulncheck` is Go-only;
-  `grype` scans the sandbox *image*. A Next.js app with ~437 TS/JS files has no
-  dependency CVE gate. Dependabot opens npm PRs, but Dependabot alerts do not
-  block anything. This is the largest remaining hole in the stack — arguably
-  larger than anything CodeQL gating would fix.
 - **`_test.go` files are outside CodeQL's database** (621 files) — `autobuild`
   builds packages, not tests. Unchanged from default setup.
-- **`ruff format` is not enforced.** The tree has never been ruff-formatted:
-  9 of 13 files differ, a **3725-line** diff. That is cosmetics, not a finding,
-  and landing it inside a security change would bury the security change. One
-  command (`ruff format .`) plus flipping the advisory step to a gate, whenever
-  someone wants it.
 - **ruff's rule set is narrow**, so some real bug classes go unreported.
   Measured: `--select B,SIM,S` adds **21** findings, of which the genuinely
   interesting ones are 2 × `B905` (`zip()` without `strict=` — silent

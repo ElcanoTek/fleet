@@ -352,19 +352,34 @@ jobs:
         # so a local `ruff check .` and this gate cannot disagree.
         run: ruff check --output-format github .
 
-      - name: Formatting check (report only)
-        # NOT a gate. The tree has never been ruff-formatted, so failing on it
-        # would block every PR on a whole-tree reformat nobody has scheduled.
-        # Reported so the size of that decision stays visible instead of unknown.
-        if: ${{ !cancelled() }}
-        run: |
-          set -uo pipefail
-          {
-            echo '### ruff format (advisory — not a gate)'
-            echo '```'
-            ruff format --check --diff . 2>&1 | tail -40 || true
-            echo '```'
-          } | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Formatting check
+        # A gate, and safe to be one: the whole tree was ruff-formatted in the
+        # change that flipped this, so a failure here is a NEW unformatted file,
+        # fixable with one `ruff format .`.
+        run: ruff format --check .
+
+  codeql:
+    # Reusable-workflow call: brings codeql.yml's jobs into THIS workflow's
+    # graph so `CI gate` (the single required check on main) blocks on them.
+    # Its `Fail on findings` step means a finding — not just a broken scanner —
+    # fails this job and therefore the gate.
+    needs: changes
+    # Docs-only changes cannot touch Go/JS/Python/workflow code (the allowlist
+    # is *.md, docs/, LICENSE); the gate treats the skip as a pass.
+    if: ${{ needs.changes.outputs.docs_only != 'true' }}
+    permissions:
+      contents: read
+      security-events: write  # the called workflow uploads SARIF to code scanning
+      actions: read
+    uses: ./.github/workflows/codeql.yml
+
+  semgrep:
+    # Same mechanism as codeql above: called here so `CI gate` blocks on it.
+    needs: changes
+    if: ${{ needs.changes.outputs.docs_only != 'true' }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/semgrep.yml
 
   web:
     name: Web lint / test / build
@@ -387,6 +402,23 @@ jobs:
           node-version-file: web/.nvmrc
           cache: npm
           cache-dependency-path: web/package-lock.json
+
+      - name: Audit dependencies for known CVEs
+        # The npm counterpart of the Go job's govulncheck gate: reads
+        # package-lock.json against the npm advisory DB and fails on ANY
+        # severity. Like govulncheck, the verdict is a function of the clock as
+        # well as the commit — a new advisory can redden an unchanged tree, and
+        # that is the point. Needs no node_modules (lockfile-only), so it runs
+        # before the expensive install and fails fast.
+        run: npm audit --audit-level=low
+
+      - name: Audit rampart-service dependencies for known CVEs
+        # Separate tree, same gate. Its lockfile pins `overrides` forcing
+        # sharp >=0.35 (libvips CVEs) and adm-zip >=0.6 (GHSA-xcpc-8h2w-3j85)
+        # because no release of @huggingface/transformers/onnxruntime-node has
+        # picked the fixes up yet — see scripts/rampart-service/package.json.
+        working-directory: scripts/rampart-service
+        run: npm audit --audit-level=low
 
       - name: Install dependencies
         run: npm ci
@@ -765,7 +797,7 @@ jobs:
     # allowed (docs-only), but any failure or cancellation fails the gate.
     name: CI gate
     if: ${{ always() }}
-    needs: [changes, gitleaks, migrations, go, python, web, playwright, e2e-live, grype-scan]
+    needs: [changes, gitleaks, migrations, go, python, codeql, semgrep, web, playwright, e2e-live, grype-scan]
     runs-on: ubuntu-latest
     steps:
       - name: Require all upstream jobs to have succeeded or been skipped

@@ -22,10 +22,10 @@
 # labour is "does it compile, lint, and pass tests" here; "is it safe to ship"
 # there.
 #
-# CodeQL used to be on that deferred list and no longer is. It does not run in
-# this file — it has its own workflow, .github/workflows/codeql.yml, whose
-# `pull_request` trigger covers dev as well as main. So a PR into dev IS
-# CodeQL-scanned; it just is not scanned by this lane. See docs/CODEQL.md.
+# CodeQL and Semgrep used to be on that deferred list and no longer are: both
+# run IN this lane, as reusable-workflow calls wired into `Dev gate`, so a
+# scanner finding blocks dev the same way a compile error does. See
+# docs/SCANNING.md.
 #
 # `Dev gate` is the single aggregate job (same pattern as ci.yml's `CI gate`):
 # when the dev branch is protected, require just that one check.
@@ -162,6 +162,30 @@ jobs:
       - name: Lint
         run: ruff check --output-format github .
 
+      - name: Formatting check
+        # Mirrors ci.yml's gate; the tree is ruff-formatted, so a failure here
+        # is a new unformatted file.
+        run: ruff format --check .
+
+  codeql:
+    # Reusable-workflow call (see codeql.yml's header): puts the CodeQL jobs in
+    # THIS graph so `Dev gate` blocks on them. A finding fails the gate — the
+    # `Fail on findings` step inside makes green mean "clean", not just "ran".
+    # Unconditional (no docs-only detection in the fast lane, and Dev gate
+    # demands strict success, so a skip would fail it); running on dev pushes
+    # too also covers any direct push that bypassed a PR.
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    uses: ./.github/workflows/codeql.yml
+
+  semgrep:
+    # Same mechanism: called here so `Dev gate` blocks on it.
+    permissions:
+      contents: read
+    uses: ./.github/workflows/semgrep.yml
+
   web:
     name: Web lint / test / build (fast)
     runs-on: ubuntu-latest
@@ -184,6 +208,15 @@ jobs:
           node-version-file: web/.nvmrc
           cache: npm
           cache-dependency-path: web/package-lock.json
+
+      - name: Audit dependencies for known CVEs
+        # Mirrors ci.yml's web job: lockfile-only, fails on any severity, runs
+        # before the install so a vulnerable lockfile fails fast.
+        run: npm audit --audit-level=low
+
+      - name: Audit rampart-service dependencies for known CVEs
+        working-directory: scripts/rampart-service
+        run: npm audit --audit-level=low
 
       - name: Install dependencies
         run: npm ci
@@ -262,7 +295,7 @@ jobs:
     # Aggregate check for branch protection: passes only when every fast-lane
     # job succeeded (mirrors ci.yml's `CI gate`).
     if: always()
-    needs: [go, python, web, migrations, gitleaks]
+    needs: [go, python, codeql, semgrep, web, migrations, gitleaks]
     runs-on: ubuntu-latest
     steps:
       - name: Fail if any fast-lane job failed

@@ -391,10 +391,14 @@ Without that step the analyze step exits 0 whether it found nothing or a hundred
 alerts, so a red check could only ever mean "the scanner broke" — which is
 exactly how the toolchain break hid for weeks.
 
-**A red check does not yet block a merge.** `ci-gate` remains the single required
-status check on `main` (see [`.github/CODEOWNERS`](../.github/CODEOWNERS)).
-Closing that half means adding `CodeQL gate` to the ruleset, which a workflow
-file cannot do for itself.
+**A red check now blocks the merge too**, and through the *existing* required
+check rather than a new one: `codeql.yml` is a reusable workflow
+(`on: workflow_call`) that `ci.yml` and `dev-ci.yml` call as a job, and that
+calling job sits in `ci-gate`'s / `Dev gate`'s `needs`. A correction worth
+keeping: an earlier revision claimed this half needed a repo-settings click,
+reasoning from "`needs` cannot cross workflow files" — true, but a
+`workflow_call` brings the jobs into the caller's file, which is the standard
+mechanism and what ships.
 
 It *cannot* be folded into `ci-gate`: a job's `needs` cannot reach across
 workflow files. So `codeql.yml` carries its own aggregate **`CodeQL gate`** job,
@@ -412,13 +416,12 @@ changes nothing on its own:
   direction: a required check that never reports again blocks every PR, or a
   removed one silently stops gating. One aggregate check has neither problem.
 
-**To make CodeQL blocking** (owner action, not done here): Settings → Rules → the
-"Main" ruleset → "Require status checks to pass" → add **`CodeQL gate`**. That
-single entry covers every language in the matrix, now and after future matrix
-changes.
+No ruleset action is required for any of this: the gate wiring above is entirely
+in the workflow files. (`CodeQL gate` still exists as the aggregate job — the
+weekly scheduled run's single verdict — and could additionally be named in the
+ruleset as belt-and-braces, but nothing depends on that.)
 
-**Recommendation on the ruleset half: add it once you have seen a few green
-promotions.** Not out of
+**On sequencing:** Not out of
 caution for its own sake — because of this specific incident. The analysis spent
 weeks red for a toolchain reason unrelated to any diff, and a required check in
 that state blocks *every* merge, including the promote PR that would carry the

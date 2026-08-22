@@ -38,6 +38,12 @@
 # fixed to get here (an unused import, a byte-identical duplicate function
 # definition, and a lambda assignment), so a NEW default-rule violation is a
 # real regression rather than noise in a backlog.
+#
+# FORMATTING IS ALSO GATED (`ruff format --check`, in CI and `make lint`). The
+# whole tree was ruff-formatted in one commit — a 9-file, ~3.7k-line diff kept
+# separate from any behavioural change — and validated against the full Go test
+# suite (the bento/fileops golden tests exercise these scripts). From here a
+# format failure means one new file, fixed by running `ruff format .`.
 
 # Match the lowest Python the sandbox image and the skill scripts must run on.
 # Declared here so the rules that are version-sensitive (pyupgrade et al, if

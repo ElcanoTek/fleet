@@ -19,6 +19,48 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **The scanners gate through `ci-gate`/`Dev gate` themselves, npm dependencies
+  are audited, and the whole Python tree is ruff-formatted — with every finding
+  fixed, none deferred.**
+
+  - **Gate wiring, corrected.** The previous entry said making CodeQL/Semgrep
+    merge-blocking needed a branch-protection click, reasoning from "`needs`
+    cannot cross workflow files". Incomplete: `codeql.yml` and `semgrep.yml` are
+    now **reusable workflows** (`on: workflow_call`) that ci.yml and dev-ci.yml
+    call as jobs, and those jobs sit in `ci-gate`'s / `Dev gate`'s `needs` — so a
+    scanner finding blocks a merge through the one existing required check, no
+    settings change anywhere. Their own push/pull_request triggers are removed
+    (nothing runs twice); the weekly re-scan crons and a workflow_dispatch stay.
+
+  - **`npm audit` is a new blocking gate** for both npm trees, lockfile-only and
+    failing on any severity — the npm counterpart of the govulncheck gate.
+    `web/` was already clean. `scripts/rampart-service` **had no lockfile at
+    all**, and generating one exposed **5 high-severity vulnerabilities** it had
+    been hiding: `sharp <0.35.0` (four libvips CVEs) and `adm-zip <0.6.0`
+    (GHSA-xcpc-8h2w-3j85) via `onnxruntime-node`. No upstream release fixes
+    either — latest `@huggingface/transformers` still pins `sharp ^0.34.5`, and
+    npm's suggested "fix" was a breaking transformers downgrade — so the
+    package now carries `overrides` to `sharp ^0.35.3` and `adm-zip ^0.6.0`,
+    each the release immediately after the vulnerable line. The overridden
+    stack was installed and load-tested, not just resolved: sharp renders a PNG
+    through the new libvips, transformers loads on it, rampart exports its API,
+    adm-zip round-trips a zip. Both trees now audit at 0.
+
+  - **`ruff format` applied and gated.** 9 of 13 Python files reformatted
+    (~3.7k lines), `ruff format --check` now blocks in both CI lanes and in
+    `make lint`. Validated by the full Go suite (the bento/fileops golden tests
+    exercise the reformatted scripts), byte-compilation of every file, and a
+    re-scan showing the fileops `nosemgrep` waiver survived the reformat.
+
+  - **All three semgrep parse errors fixed**, so no file is partially covered:
+    `${{ steps.build.outcome }}` interpolated into a `run:` script in
+    build-sandbox-image.yml (moved to `env:` — also the injection-safe form), a
+    `${tag:-(…)}` expansion default whose bare paren choked the bash sub-parser
+    (hoisted to a plain assignment), and an inline `import("@playwright/test")`
+    type in fixtures.ts (now a named `import type`; web lint, tsc and all 1104
+    vitest tests pass on it). The scanners' coverage lines now read
+    **0 parse/scan errors** alongside 0 findings.
+
 - **The scanners now block, and the repo passes them.** Turning a gate on over an
   unfixed backlog is how a gate becomes something people route around, so
   everything they reported was fixed or adjudicated first.
