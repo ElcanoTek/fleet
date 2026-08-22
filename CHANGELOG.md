@@ -58,17 +58,32 @@ prior versions are listed because none have shipped.
     `fleet.elcanotek.com/egress=none`), optional egress shaping for open
     pods, optional evaluation Postgres, optional web tier + Ingress. Linted
     and template-rendered in CI (new `helm` job inside both gates).
-  - **Docs**: `docs/DEPLOYMENT-KUBERNETES.md` (15-minute kind path +
-    production checklist + an explicit honest-deviations list: NetworkPolicy
-    enforcement belongs to the CNI, no per-pod pids limit, no #263 resource
-    telemetry, no bundled-seccomp/supporting-doc mounts), updates to
-    `DEPLOYMENT.md`, `SANDBOX-RUNTIMES.md` (`FLEET_SANDBOX_BACKEND` documented
-    next to `FLEET_SANDBOX_RUNTIME`), and `EKS-DEPLOYMENT.md` — whose
-    "no Helm chart or in-tree manifests" framing this change retracts; that
-    recipe remains as the co-located workaround, no longer the only answer.
+  - **Docs**: `docs/DEPLOYMENT-KUBERNETES.md` — the one Kubernetes reference:
+    15-minute kind path, the two image builds (the control-plane
+    Containerfile's `FROM golang:` stage is now pinned to go.mod by
+    `scripts/check_versions_test.go`), production checklist, provider notes
+    (EKS/GKE/AKS), day-2 operations (the CronJob equivalents of the systemd
+    timers), troubleshooting, and an explicit honest-deviations list
+    (NetworkPolicy enforcement belongs to the CNI, no per-pod pids limit, no
+    #263 resource telemetry, no bundled-seccomp/supporting-doc mounts). Plus
+    updates to `DEPLOYMENT.md` and `SANDBOX-RUNTIMES.md`
+    (`FLEET_SANDBOX_BACKEND` documented next to `FLEET_SANDBOX_RUNTIME`).
     [ADR-0049](docs/adr/0049-kubernetes-backend-split-control-plane.md)
     amends ADR-0004: the single-box podman install **stays the default and is
     unchanged**; only the no-k8s-artifacts enforcement clause is superseded.
+
+### Removed
+
+- **`docs/EKS-DEPLOYMENT.md`** — the hand-verified recipe for running the
+  whole single-box model (rootless Podman included) inside one privileged pod
+  on one large EKS node. Retired in favor of the first-class path above
+  rather than kept as a parallel track: an unmaintained privileged-pod recipe
+  beside a supported unprivileged one would imply support it never had (it
+  was explicitly "hand-verified, not CI-exercised"). Its durable content —
+  EFS/RWX storage, ECR/IRSA, NetworkPolicy-enforcement caveats, the backup
+  CronJob, day-2 mappings — was folded into `docs/DEPLOYMENT-KUBERNETES.md`,
+  which also carries a migration note for deployments built from the old
+  recipe.
 
 ### Fixed
 

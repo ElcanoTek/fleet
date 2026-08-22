@@ -15,8 +15,9 @@ co-located with the process. That remains the right default install for
 individuals and small teams. But Kubernetes-native organizations were left
 with no supported path (issue #989): `deploy/` shipped only systemd units, the
 sandbox was **always** co-located with the fleet process, and the only k8s
-document was a hand-verified EKS recipe that ran rootless Podman inside a
-privileged pod — an operator workaround, not a product.
+document was a hand-verified EKS recipe (`docs/EKS-DEPLOYMENT.md`, since
+removed) that ran rootless Podman inside a privileged pod — an operator
+workaround, not a product.
 
 The owner decision on #989: ship the **enterprise path in one pass** — the
 fleet control plane separate from execution runners, with a pluggable sandbox
@@ -87,7 +88,10 @@ privileged node" packaging track as a stepping stone.
 ## Explicit non-goals (v1)
 
 - Co-located "fleet + Podman in a privileged pod" as the supported enterprise
-  story (the EKS recipe remains a hand-verified operator document).
+  story. The EKS recipe that documented it is **removed** rather than kept as
+  a parallel path — an unmaintained privileged-pod recipe beside a first-class
+  unprivileged one would imply support it does not have; the k8s guide carries
+  a migration note for anyone who deployed from it.
 - Multi-replica / active-active fleet; a Kubernetes operator or CRDs.
 - The **allowlisted** egress mode under the kubernetes backend: the host-side
   egress proxy is unreachable from pods, so the mode is refused at boot
@@ -102,7 +106,7 @@ privileged node" packaging track as a stepping stone.
 
 - Kubernetes-native organizations get a supported, preflighted, CI-linted
   path: `helm install` + two images they build. The EKS privileged-pod recipe
-  stops being the only answer.
+  is retired in its favor.
 - `deploy/` now contains cluster artifacts, so ADR-0004's enforcement clause
   ("no k8s manifest, Helm chart, or operator in the tree") is superseded; its
   index row and status note point here.

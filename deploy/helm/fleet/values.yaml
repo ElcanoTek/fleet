@@ -39,7 +39,8 @@ sandbox:
   # pull from — a localhost/ build-on-box tag cannot work here.
   image: ""
   # Backend is what this chart exists for; podman-in-a-pod is NOT a supported
-  # chart topology (see docs/EKS-DEPLOYMENT.md for that hand-run recipe).
+  # chart topology (the podman backend's supported home is a VM —
+  # docs/DEPLOYMENT.md).
   backend: kubernetes
   kubernetes:
     # Namespace for sandbox pods. Empty = the release namespace (the default,

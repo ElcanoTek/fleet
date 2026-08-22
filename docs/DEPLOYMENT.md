@@ -23,10 +23,10 @@ app with TLS; the backends stay loopback-only.
 > chart (`deploy/helm/fleet`) runs the control plane as a single-replica
 > Deployment, and `FLEET_SANDBOX_BACKEND=kubernetes` runs every agent sandbox
 > as an ephemeral pod — no Podman on the node, no privileged pod. See
-> [`docs/DEPLOYMENT-KUBERNETES.md`](DEPLOYMENT-KUBERNETES.md) (15-minute kind
-> path + production checklist). The older co-located recipe in
-> [`docs/EKS-DEPLOYMENT.md`](EKS-DEPLOYMENT.md) — Podman running *inside* one
-> privileged pod — remains available but is the workaround, not the path.
+> [`docs/DEPLOYMENT-KUBERNETES.md`](DEPLOYMENT-KUBERNETES.md): a 15-minute
+> kind path, the production checklist, provider notes (EKS/GKE/AKS), and
+> day-2 operations. (It replaced the old hand-verified EKS recipe that ran
+> Podman inside one privileged pod; a migration note is included.)
 
 > **Single-host by design.** Scheduled-task crash recovery uses single-owner
 > database leases and the worker-pool concurrency cap is a per-process semaphore —

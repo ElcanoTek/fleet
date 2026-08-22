@@ -98,7 +98,7 @@ name: Publish sandbox image (reusable)
 #
 # NO image_name NEEDED. It is derived from the bundle itself — see "WHERE THE
 # IMAGE NAME COMES FROM" below. Pass it only to publish somewhere other than
-# GHCR under the caller's own owner (e.g. an ECR ref, per docs/EKS-DEPLOYMENT.md).
+# GHCR under the caller's own owner (e.g. an ECR ref, per docs/DEPLOYMENT-KUBERNETES.md).
 #
 # WHERE THE IMAGE NAME COMES FROM
 #
