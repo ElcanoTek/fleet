@@ -3,6 +3,7 @@
 Advertises one auth-status tool. Set AUTH_FAIL=1 in the env to make the
 tools/call result carry isError=true (a failed upstream credential check).
 """
+
 import json
 import os
 import sys
@@ -41,12 +42,16 @@ def main():
         elif method == "tools/call":
             if FAIL:
                 resp["result"] = {
-                    "content": [{"type": "text", "text": "401 Unauthorized: key revoked"}],
+                    "content": [
+                        {"type": "text", "text": "401 Unauthorized: key revoked"}
+                    ],
                     "isError": True,
                 }
             else:
                 resp["result"] = {
-                    "content": [{"type": "text", "text": "authenticated: seat 12345 ok"}],
+                    "content": [
+                        {"type": "text", "text": "authenticated: seat 12345 ok"}
+                    ],
                     "isError": False,
                 }
         else:

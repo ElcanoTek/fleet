@@ -349,7 +349,6 @@ def _encode_block(doc):
     return encoded
 
 
-
 # ── text fit (an estimate, because we have no font metrics) ──────────────────
 #
 # The app measures text for real and reports `text-overflow` from
@@ -364,11 +363,17 @@ def _encode_block(doc):
 # a warning needs to clear the box by a margin before it prints. The app's own
 # validate() stays authoritative.
 _AVG_ADVANCE = 0.55  # mean glyph advance as a fraction of font size, sans-serif
-_FIT_SLACK = 1.05    # only complain when the estimate clears the box by 5%
+_FIT_SLACK = 1.05  # only complain when the estimate clears the box by 5%
 
 _ENTITIES = (
-    ("&mdash;", "-"), ("&ndash;", "-"), ("&nbsp;", " "), ("&amp;", "&"),
-    ("&lt;", "<"), ("&gt;", ">"), ("&quot;", '"'), ("&#39;", "'"),
+    ("&mdash;", "-"),
+    ("&ndash;", "-"),
+    ("&nbsp;", " "),
+    ("&amp;", "&"),
+    ("&lt;", "<"),
+    ("&gt;", ">"),
+    ("&quot;", '"'),
+    ("&#39;", "'"),
 )
 
 
@@ -430,7 +435,8 @@ def _require(doc, key, kind, where):
         raise DeckError("%s: missing required field %r" % (where, key))
     if not isinstance(doc[key], kind):
         raise DeckError(
-            "%s: field %r has the wrong type (%s)" % (where, key, type(doc[key]).__name__)
+            "%s: field %r has the wrong type (%s)"
+            % (where, key, type(doc[key]).__name__)
         )
     return doc[key]
 
@@ -660,7 +666,10 @@ def cmd_new(args):
     print("created %s — one title slide, ready to author" % path)
     print("offline-only deck: no update check, no live collaboration, no network")
     print("next: bento_doc.py get %s -o doc.json" % path)
-    print("download link (use this EXACT text, do not rebuild it): %s" % download_link(path))
+    print(
+        "download link (use this EXACT text, do not rebuild it): %s"
+        % download_link(path)
+    )
     return 0
 
 
@@ -768,12 +777,16 @@ def cmd_set(args):
             "- anyone holding an earlier copy can still join that room. The "
             "remedy for that is Share -> Rotate keys in the app.\n"
             % (
-                " (including credential fields: %s)" % collab_field_label(dropped_fields)
+                " (including credential fields: %s)"
+                % collab_field_label(dropped_fields)
                 if dropped_fields
                 else ""
             )
         )
-    print("download link (use this EXACT text, do not rebuild it): %s" % download_link(args.deck))
+    print(
+        "download link (use this EXACT text, do not rebuild it): %s"
+        % download_link(args.deck)
+    )
     return 0
 
 
@@ -786,7 +799,9 @@ def cmd_validate(args):
         try:
             doc = json.loads(raw.decode("utf-8"))
         except ValueError as exc:
-            raise DeckError("%s is neither a deck nor valid JSON: %s" % (args.path, exc)) from exc
+            raise DeckError(
+                "%s is neither a deck nor valid JSON: %s" % (args.path, exc)
+            ) from exc
         if not isinstance(doc, dict):
             raise DeckError("%s must contain a JSON object" % args.path)
         kind = "document"
@@ -839,7 +854,8 @@ def cmd_validate(args):
             "it joins that session with no click. Re-write it with `set` to "
             "remove the block and make the deck offline-only."
             % (
-                " including credential fields (%s)" % collab_field_label(credential_fields)
+                " including credential fields (%s)"
+                % collab_field_label(credential_fields)
                 if credential_fields
                 else ""
             )
@@ -936,9 +952,10 @@ def cmd_pdf(args):
             out,
             pages,
             len(data) / 1024.0,
-            "" if not skipped
+            ""
+            if not skipped
             else " (%d hidden/state slide(s) left out, as in the app's own "
-                 "export)" % skipped,
+            "export)" % skipped,
         )
     )
     for warning in warnings:
@@ -961,7 +978,9 @@ def main(argv=None):
 
     p_new = sub.add_parser("new", help="start a deck from the bundled Bento app")
     p_new.add_argument("deck", help="path to create, e.g. decks/Q4_Review.bento.html")
-    p_new.add_argument("--title", help="deck title (default: derived from the filename)")
+    p_new.add_argument(
+        "--title", help="deck title (default: derived from the filename)"
+    )
     p_new.set_defaults(func=cmd_new)
 
     p_get = sub.add_parser("get", help="extract a deck's document JSON")
@@ -974,13 +993,17 @@ def main(argv=None):
     p_set.add_argument("doc", help="the document JSON to splice in")
     p_set.set_defaults(func=cmd_set)
 
-    p_val = sub.add_parser("validate", help="check a deck or document for format errors")
+    p_val = sub.add_parser(
+        "validate", help="check a deck or document for format errors"
+    )
     p_val.add_argument("path")
     p_val.set_defaults(func=cmd_validate)
 
     p_pdf = sub.add_parser("pdf", help="render a deck's slides to a PDF you can attach")
     p_pdf.add_argument("deck")
-    p_pdf.add_argument("-o", "--output", help="PDF path (default: the deck's name + .pdf)")
+    p_pdf.add_argument(
+        "-o", "--output", help="PDF path (default: the deck's name + .pdf)"
+    )
     p_pdf.set_defaults(func=cmd_pdf)
 
     args = parser.parse_args(argv)

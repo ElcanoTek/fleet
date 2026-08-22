@@ -8,6 +8,7 @@ Master:   web/public/logos/fleet-mark.svg  (single flattened path, 512 viewBox)
 Outputs:  web/src/app/            favicon.ico, icon.svg, apple-icon.png
           web/public/app-icons/   favicon-16/32, icon-192/512, maskable-icon-512
 """
+
 import io
 from pathlib import Path
 

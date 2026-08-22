@@ -90,7 +90,9 @@ def write_figures(images, base_dir):
         try:
             # O_EXCL | O_NOFOLLOW: refuse to follow or overwrite a name a prior
             # cell's code might have pre-planted in the (writable) workspace.
-            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            fd = os.open(
+                path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600
+            )
             try:
                 os.write(fd, raw)
             finally:
@@ -162,7 +164,9 @@ def start_kernel():
     # tempfile.mkstemp creates a unique empty file and returns (fd, path).
     # We close the fd immediately since ipykernel will overwrite the
     # content — we only needed the unique name.
-    fd, connection_file = tempfile.mkstemp(prefix=f"kernel-{os.getpid()}-", suffix=".json")
+    fd, connection_file = tempfile.mkstemp(
+        prefix=f"kernel-{os.getpid()}-", suffix=".json"
+    )
     os.close(fd)
     # ipykernel creates the file itself with its own content. Our mkstemp
     # empty placeholder would make the while-loop below think the file
@@ -174,18 +178,14 @@ def start_kernel():
         pass
 
     # Start the kernel
-    cmd = [
-        sys.executable,
-        "-m", "ipykernel_launcher",
-        "-f", connection_file
-    ]
+    cmd = [sys.executable, "-m", "ipykernel_launcher", "-f", connection_file]
 
     # Start process detached to avoid signal interference
     kernel_process = subprocess.Popen(
         cmd,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
-        start_new_session=True
+        start_new_session=True,
     )
 
     # Wait for connection file to exist
@@ -197,6 +197,7 @@ def start_kernel():
         retries -= 1
 
     return connection_file
+
 
 def cleanup():
     """Kills the kernel and deletes the connection file."""
@@ -305,45 +306,51 @@ def run_code_on_kernel(code, client, timeout_seconds=None):
     while time.time() < deadline:
         if not shell_reply_seen:
             try:
-                shell_msg = client.get_shell_msg(timeout=min(0.05, remaining_time(deadline)))
+                shell_msg = client.get_shell_msg(
+                    timeout=min(0.05, remaining_time(deadline))
+                )
                 if shell_msg["parent_header"].get("msg_id") == msg_id:
                     shell_reply_seen = True
                     shell_content = shell_msg.get("content", {})
                     if shell_content.get("status") == "error":
                         traceback = shell_content.get("traceback", [])
-                        error_content = strip_ansi("\n".join(traceback)) or error_content
+                        error_content = (
+                            strip_ansi("\n".join(traceback)) or error_content
+                        )
                         status = "error"
             except queue.Empty:
                 pass
 
         try:
             # Get IOPub messages (streams, display_data, etc)
-            msg = client.get_iopub_msg(timeout=min(IOPUB_POLL_SECONDS, remaining_time(deadline)))
-            msg_type = msg['header']['msg_type']
-            content = msg['content']
+            msg = client.get_iopub_msg(
+                timeout=min(IOPUB_POLL_SECONDS, remaining_time(deadline))
+            )
+            msg_type = msg["header"]["msg_type"]
+            content = msg["content"]
 
-            if msg['parent_header'].get('msg_id') != msg_id:
+            if msg["parent_header"].get("msg_id") != msg_id:
                 continue
 
-            if msg_type == 'stream':
-                if content['name'] == 'stdout':
-                    stdout_content.append(content['text'])
-                elif content['name'] == 'stderr':
-                    stderr_content.append(content['text'])
-            elif msg_type == 'execute_result':
-                data = content.get('data', {})
-                result_content.append(data.get('text/plain', ''))
+            if msg_type == "stream":
+                if content["name"] == "stdout":
+                    stdout_content.append(content["text"])
+                elif content["name"] == "stderr":
+                    stderr_content.append(content["text"])
+            elif msg_type == "execute_result":
+                data = content.get("data", {})
+                result_content.append(data.get("text/plain", ""))
                 collect_image(data, images)
-            elif msg_type == 'display_data':
-                data = content.get('data', {})
-                result_content.append(data.get('text/plain', ''))
+            elif msg_type == "display_data":
+                data = content.get("data", {})
+                result_content.append(data.get("text/plain", ""))
                 collect_image(data, images)
-            elif msg_type == 'error':
-                traceback = content.get('traceback', [])
-                error_content = strip_ansi('\n'.join(traceback))
+            elif msg_type == "error":
+                traceback = content.get("traceback", [])
+                error_content = strip_ansi("\n".join(traceback))
                 status = "error"
-            elif msg_type == 'status':
-                if content['execution_state'] == 'idle':
+            elif msg_type == "status":
+                if content["execution_state"] == "idle":
                     idle_seen = True
 
         except queue.Empty:
@@ -378,6 +385,7 @@ def run_code_on_kernel(code, client, timeout_seconds=None):
         "images": images,
     }
 
+
 # Patterns that indicate agent confusion about MCP tools
 MCP_IMPORT_PATTERNS = [
     "from mcp",
@@ -391,6 +399,7 @@ MCP_IMPORT_PATTERNS = [
     "from internal.tools",
     "import internal.tools",
 ]
+
 
 def check_mcp_confusion(code):
     """Check if code appears to be trying to import MCP tools incorrectly."""
@@ -466,7 +475,9 @@ def dump_json_line(value):
 _kernel_cwd = None  # last cwd applied inside the kernel process
 
 
-def execute_code(code, return_vars=None, timeout_seconds=None, workspace_dir=None, reset_kernel=False):
+def execute_code(
+    code, return_vars=None, timeout_seconds=None, workspace_dir=None, reset_kernel=False
+):
     """Executes code on the kernel and returns the result."""
     global client, _kernel_cwd
 
@@ -492,7 +503,7 @@ def execute_code(code, return_vars=None, timeout_seconds=None, workspace_dir=Non
             return {
                 "status": "error",
                 "output": f"Failed to start kernel: {str(e)}",
-                "error": str(e)
+                "error": str(e),
             }
 
     # Apply per-conversation workspace cwd INSIDE the kernel process.
@@ -502,10 +513,7 @@ def execute_code(code, return_vars=None, timeout_seconds=None, workspace_dir=Non
     if workspace_dir and workspace_dir != _kernel_cwd:
         try:
             escaped = workspace_dir.replace("\\", "\\\\").replace("'", "\\'")
-            chdir_code = (
-                "import os as _os\n"
-                f"_os.chdir('{escaped}')\n"
-            )
+            chdir_code = f"import os as _os\n_os.chdir('{escaped}')\n"
             chdir_res = run_code_on_kernel(chdir_code, client)
             if chdir_res["status"] == "success":
                 _kernel_cwd = workspace_dir
@@ -629,7 +637,7 @@ def execute_code(code, return_vars=None, timeout_seconds=None, workspace_dir=Non
 
         return {
             "status": res["status"],
-            "output": final_output.strip(), # Legacy field
+            "output": final_output.strip(),  # Legacy field
             "stdout": stdout_with_warning,
             "stderr": res["stderr"],
             "vars": normalize_json_value(vars_data),
@@ -642,8 +650,9 @@ def execute_code(code, return_vars=None, timeout_seconds=None, workspace_dir=Non
         return {
             "status": "error",
             "output": f"Execution error: {str(e)}",
-            "error": str(e)
+            "error": str(e),
         }
+
 
 def main():
     # Cleanup on SIGTERM/SIGINT (Go side's terminateBridge) AND on normal
@@ -681,18 +690,28 @@ def main():
                     except OSError as e:
                         sys.stderr.write(f"workspace_dir chdir failed: {e}\n")
 
-                result = execute_code(code, return_vars, timeout_seconds=timeout_seconds, workspace_dir=workspace_dir, reset_kernel=reset_kernel)
+                result = execute_code(
+                    code,
+                    return_vars,
+                    timeout_seconds=timeout_seconds,
+                    workspace_dir=workspace_dir,
+                    reset_kernel=reset_kernel,
+                )
 
                 # Print result as JSON on one line
                 print(dump_json_line(result), flush=True)
 
             except json.JSONDecodeError:
-                print(dump_json_line({"status": "error", "output": "Invalid JSON input"}), flush=True)
+                print(
+                    dump_json_line({"status": "error", "output": "Invalid JSON input"}),
+                    flush=True,
+                )
 
     except KeyboardInterrupt:
         pass
     finally:
         cleanup()
+
 
 if __name__ == "__main__":
     main()
