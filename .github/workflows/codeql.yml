@@ -151,37 +151,31 @@ jobs:
           # story (an accepted-findings.json entry, by contrast, is invisible
           # to the Security tab). The pack is resolved from the bundled
           # standard library — no network pull, no `packages: read`.
-          # The per-language configuration is an INLINE CONFIG, not the
-          # `queries:` input: go combines the security-extended suite with the
-          # standard pack's AlertSuppression query, and an inline config is
-          # the one form where a suite and an extra pack have documented
-          # combine semantics (the separate `queries:`/`packs:` inputs
-          # override one another — verified on this repo: with both inputs,
-          # with and without the documented "+" prefix, the suppression query
-          # never ran and the gate showed the register waiver instead of
-          # "(in-source suppression)").
+          # NOTE on in-source `// codeql[rule-id]` suppressions: they do NOT
+          # work with this pipeline, and this was measured, not assumed. Three
+          # forms were tried on PR #1249 (the `packs:` input, `packs:` with
+          # the documented "+" additive prefix, and an inline `config:` block
+          # combining security-extended with codeql/go-queries'
+          # AlertSuppression.ql) — in every case the uploaded SARIF carried no
+          # `suppressions` on the annotated result, the gate below kept
+          # classifying the waiver from the register, and the Security-tab
+          # alert stayed open. The analyze action's interpret step is not
+          # configurable enough to change that, so the accepted-findings
+          # register stays the ONE waiver mechanism for the CI gate, and a
+          # deliberately-waived alert is closed in the Security tab by a
+          # one-time human dismissal there (which persists across analyses).
           - language: go
             build-mode: autobuild
-            config: |
-              queries:
-                - uses: security-extended
-              packs:
-                - codeql/go-queries:AlertSuppression.ql
+            queries: security-extended
           - language: python
             build-mode: none
-            config: |
-              queries:
-                - uses: security-extended
+            queries: security-extended
           - language: javascript-typescript
             build-mode: none
-            config: |
-              queries:
-                - uses: security-extended
+            queries: security-extended
           - language: actions
             build-mode: none
-            config: |
-              queries:
-                - uses: security-extended
+            queries: security-extended
 
     steps:
       - name: Checkout
@@ -202,12 +196,9 @@ jobs:
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
-          # Inline config per language (see the matrix note): every language
-          # runs security-extended; go additionally runs AlertSuppression so
-          # in-source `// codeql[rule-id]` comments are honored. The SCOPE
-          # note in the header still applies to `code-quality` — do not
-          # re-add that one.
-          config: ${{ matrix.config }}
+          queries: ${{ matrix.queries }}
+          # security-extended (see the matrix note). The SCOPE note in the
+          # header still applies to `code-quality` — do not re-add that one.
 
       - name: Autobuild
         if: matrix.build-mode == 'autobuild'
