@@ -15,8 +15,8 @@ security queries only) and [`TESTING.md`](TESTING.md) (the rest of the ladder).
 | `govulncheck` | Go dependency CVEs (called symbols) | ~30s | **blocks** (`ci-gate`) | job log + Security tab |
 | `grype` | sandbox image CVEs (fixable CRITICAL) | ~1m | **blocks** (`ci-gate`) | job log + Security tab |
 | `gitleaks` | secrets, every branch | ~10s | **blocks** (`ci-gate`) | job log |
-| CodeQL | **interprocedural taint / security** | ~2m | advisory | job log + Security tab |
-| **Semgrep** | **GitHub Actions supply chain** | ~20s | advisory | job log + artifact |
+| CodeQL | **interprocedural taint / security** | ~2m | **fails on findings** (check red; see below) | job log + Security tab |
+| **Semgrep** | **Go/JS/Python SAST + Actions supply chain** | ~40s | **fails on findings** | job log + artifact |
 
 Two things were added here (**ruff**, **Semgrep**) and one was narrowed
 (**CodeQL**, to security queries only).
@@ -58,7 +58,7 @@ violation is a regression rather than noise in a backlog:
 ruff-formatted, so failing on it would block every PR on a reformat nobody
 scheduled. The advisory output keeps the size of that decision visible.
 
-### CodeQL owns interprocedural taint (narrowed, advisory)
+### CodeQL owns interprocedural taint (narrowed, fails on findings)
 
 CodeQL is the only tool in this stack that does cross-function dataflow, and that
 is exactly the shape of fleet's headline invariants: *a credential must not reach
@@ -69,49 +69,72 @@ So CodeQL keeps its security queries and gives up everything else — the qualit
 suite duplicated `golangci-lint`/`oxlint` for Go and JS, and ruff is a better fit
 for Python. Full reasoning and measurements in [`CODEQL.md`](CODEQL.md).
 
-Its security suite currently reports **zero findings** on this tree.
+Its security suite currently reports **zero findings** on this tree, which is
+what makes it safe to gate: a `Fail on findings` step now fails the job on any
+finding, so a red `Analyze (…)` check means the *code* has a problem rather than
+just "the scanner broke". That distinction is the whole reason the Go toolchain
+break sat unnoticed for weeks.
 
-### Semgrep owns GitHub Actions supply chain (new, advisory)
+### Semgrep owns fast multi-language SAST + Actions supply chain (new, blocking)
 
 Semgrep is the opposite trade from CodeQL: seconds instead of minutes, no
 database build, findings straight to stdout, rules cheap to write. That makes it
-the natural fit for an agent-driven loop — and it is why the obvious move is to
-point it at everything.
+the right fit for an agent-driven loop.
 
-**That move was measured and rejected.** The broad registry packs (`p/golang`,
-`p/javascript`, `p/python`) produced 55 findings on this tree, and **all 6
-non-Actions findings were false positives:**
+All four packs run — `p/github-actions`, `p/golang`, `p/javascript`, `p/python` —
+and the lane **blocks** (`--error`, no `continue-on-error`). Getting there meant
+fixing every real finding and adjudicating every false one.
+
+**The 51 real findings: mutable action tags. All fixed.**
+
+`p/github-actions` found one issue class nothing else in this repo checks —
+actions referenced by a **mutable tag** (`actions/checkout@v7`) instead of an
+immutable commit SHA. If a tag moves, attacker-controlled code runs with this
+repo's `GITHUB_TOKEN`. Every one of the **53** action references across all 12
+workflows is now pinned:
+
+```yaml
+uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+```
+
+Each SHA is the commit the previously-used tag resolved to at pin time, so the
+pin is behaviourally identical to the runs already verified green — a pin should
+not smuggle in a version bump. The trailing version comment is also the form
+Dependabot reads and updates, and `.github/dependabot.yml` already watches the
+`github-actions` ecosystem, so these stay current without hand-editing.
+
+Two `uses:` lines are deliberately left on `@main`: both are inside **comments**
+in `build-sandbox-image.yml` / `publish-sandbox-image.yml`, documenting how a
+downstream bundle repo calls fleet's reusable workflows. `@main` is the right
+guidance for a consumer tracking fleet, and Semgrep does not flag them (a YAML
+comment is not a `uses:` key).
+
+**The 6 false positives: suppressed at the line, with reasons.**
+
+Worth reading, because three were **already formally triaged and suppressed for
+`gosec`** — which runs inside `golangci-lint` and already blocks — and one is
+actively wrong:
 
 | finding | why it is wrong |
 | --- | --- |
-| `open-redirect` — `cmd/fleet/tls.go:109` | Standard HTTP→HTTPS upgrade to the **same** host. Already carries `//nolint:gosec G710` saying so. |
-| `math-random-used` — `internal/runner/runner.go:28` | `math/rand/v2`, used once, for ±10% jitter on a retry interval. |
-| `cookie-missing-secure` — `internal/sched/handlers/elcano.go:155` | A **deletion** cookie (`Value=""`, `MaxAge=-1`), no secret; `Secure` is conditional so logout works over plain-HTTP dev. Already `//nolint:gosec G124`. |
-| `unsafe-deserialization-interface` — `internal/mcp/httptool.go:254` | `json.Unmarshal` into `interface{}` is **required** — the value feeds a jq program over arbitrary JSON. A concrete struct is not expressible. |
-| `x-frame-options-misconfiguration` — `web/src/proxy.ts:99` | The header value is the literal string `"DENY"`. No user input reaches it. |
-| `insecure-file-permissions` — `internal/sandbox/fileops.py:77` | Advises `0o644` for a **sandbox directory**, i.e. world-readable. Taking that advice would be a security **regression**; `0750` is the file-tool contract. |
+| `open-redirect` — `cmd/fleet/tls.go` | Standard HTTP→HTTPS upgrade to the **same** host. Already `//nolint:gosec G710`. |
+| `math-random-used` — `internal/runner/runner.go` | `math/rand/v2`, used once, for ±10% jitter on a retry interval. |
+| `cookie-missing-secure` — `internal/sched/handlers/elcano.go` | A **deletion** cookie (`Value=""`, `MaxAge=-1`), no secret; `Secure` is conditional so logout works over plain-HTTP dev. Already `//nolint:gosec G124`. |
+| `unsafe-deserialization-interface` — `internal/mcp/httptool.go` | `json.Unmarshal` into `interface{}` is **required** — the value feeds a jq program over arbitrary JSON. A concrete struct cannot express "whatever shape the response had". |
+| `x-frame-options-misconfiguration` — `web/src/proxy.ts` | The header value is the literal string `"DENY"`. No user input reaches it. |
+| `insecure-file-permissions` — `internal/sandbox/fileops.py` | Advises `0o644` — **world-readable** — for a sandbox directory. Following it would be a security **regression**; `0750` is the file-tool contract. |
 
-Three of those six were **already formally triaged and suppressed for `gosec`**,
-which runs inside `golangci-lint` and already blocks. A scanner that re-reports
-adjudicated findings is how you teach a team to ignore it, so those packs are not
-enabled. Run them locally for a one-off audit if you want them.
+Each carries a line-level `nosemgrep: <rule-id>` naming the specific rule and the
+reason. Scoped to the rule, so a *different* rule firing on the same line still
+reports.
 
-What Semgrep *does* own is the pack that earned it. `p/github-actions` found
-**51 instances of one real issue nothing else in this repo checks**: actions
-pinned to a **mutable tag** (`actions/checkout@v7`) rather than an immutable
-commit SHA. A moved tag runs attacker-controlled code with this repo's token.
-
-```
-51  [WARNING]  github-actions-mutable-action-tag
-```
-
-Spread across every workflow (18 in `ci.yml`, 7 in `dev-ci.yml`, …).
-
-**It is advisory, and the reason is honesty about scheduling, not doubt about the
-findings.** All 51 are real. `--error` here would mean a red gate until every
-action in every workflow is repinned to a SHA — a worthwhile change, and its own
-PR. Failing CI for a backlog nobody has scheduled just teaches people to ignore
-the lane. Flip `continue-on-error` off in the same PR that does the repinning.
+**Every suppression was mutation-tested.** Removing it makes the finding
+reappear; with it, the finding is gone. That matters because "0 findings" has two
+explanations — the waivers work, or the rules silently stopped matching — and
+only one of them is safety. Checked across all three comment syntaxes (Go `//`,
+Python `#`, TypeScript `//`), including the one waiver that had to become a
+*trailing* comment because a standalone comment inside a Go import block breaks
+`goimports`.
 
 ## Findings are readable from the job log, on purpose
 
@@ -137,8 +160,19 @@ withholding them buys nothing.
 
 ## What gates, and what a required check actually means
 
-Everything in the "blocks" column above is reached through **`ci-gate`**, the
-single required status check on `main`. The two scanners are outside it.
+The lint/test/build lanes reach `main`'s single required status check through
+**`ci-gate`**. ruff is inside it. The two scanners are not — they cannot be, since
+a job's `needs` cannot reach across workflow files — so each carries its own
+aggregate gate job (`CodeQL gate`) or fails directly (Semgrep).
+
+**Both scanners now fail their job on any finding.** That is what makes them
+gates rather than reports, and it is only defensible because the tree is at zero
+unsuppressed findings in both — verified before switching either on. A gate
+turned on over an existing backlog is a gate people route around.
+
+**One half is still yours to close:** a failing check only *blocks a merge* if it
+is a required status check. Add **`CodeQL gate`** and **`Semgrep scan`** to the
+"Main" ruleset to finish it. A workflow file cannot make itself required.
 
 The distinction that matters for anyone tightening this later:
 
@@ -162,12 +196,23 @@ Stated rather than left for rediscovery:
   dependency CVE gate. Dependabot opens npm PRs, but Dependabot alerts do not
   block anything. This is the largest remaining hole in the stack — arguably
   larger than anything CodeQL gating would fix.
-- **Actions are pinned to mutable tags.** 51 instances, per above. Semgrep now
-  reports it; nothing yet fixes it.
 - **`_test.go` files are outside CodeQL's database** (621 files) — `autobuild`
   builds packages, not tests. Unchanged from default setup.
-- **`ruff format` is not enforced**, per above.
+- **`ruff format` is not enforced.** The tree has never been ruff-formatted:
+  9 of 13 files differ, a **3725-line** diff. That is cosmetics, not a finding,
+  and landing it inside a security change would bury the security change. One
+  command (`ruff format .`) plus flipping the advisory step to a gate, whenever
+  someone wants it.
+- **ruff's rule set is narrow**, so some real bug classes go unreported.
+  Measured: `--select B,SIM,S` adds **21** findings, of which the genuinely
+  interesting ones are 2 × `B905` (`zip()` without `strict=` — silent
+  truncation) and 1 × `SIM115` (file opened without a context manager). The
+  other 18 are `try`/`except`/`pass` in deliberate best-effort cleanup paths.
+  Worth a focused pass; not folded in here.
 - **Semgrep's own rule packs are network-fetched** from the registry at scan
   time. The semgrep *version* is pinned; the *rules* are not, so a registry
-  change can move findings without a diff here. Acceptable for an advisory lane;
-  it would need a vendored ruleset before this could block.
+  change can move findings without a diff here. This matters more now the lane
+  blocks: a registry-side rule addition can turn CI red with no commit to blame,
+  the same class of surprise `govulncheck-scheduled.yml` was created to absorb.
+  Vendoring the rules would fix it at the cost of never getting new ones. Left
+  as-is deliberately, and named here so a mystery red build has a first suspect.

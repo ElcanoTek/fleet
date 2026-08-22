@@ -106,6 +106,7 @@ func startRedirectServer(addr string, m *autocert.Manager) {
 func redirectToHTTPS(w http.ResponseWriter, r *http.Request) {
 	target := "https://" + stripPort(r.Host) + r.URL.RequestURI()
 	//nolint:gosec // G710: standard HTTP→HTTPS upgrade to the SAME Host (scheme-only); not an open redirect to an arbitrary origin.
+	// nosemgrep: go.lang.security.injection.open-redirect.open-redirect -- same reasoning as the G710 waiver above: the target is built from r.Host with the scheme forced to https, so it can only ever point back at the host the client already asked for. Not attacker-chosen.
 	http.Redirect(w, r, target, http.StatusMovedPermanently)
 }
 

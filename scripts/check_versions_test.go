@@ -173,7 +173,7 @@ func TestDuplicatedToolPinsAgree(t *testing.T) {
 		{"GRYPE_SHA256", ".github/workflows/grype-scheduled.yml", regexp.MustCompile(`GRYPE_SHA256:\s*'([^']+)'`)},
 		{"GITLEAKS_VERSION", ".github/workflows/dev-ci.yml", regexp.MustCompile(`GITLEAKS_VERSION:\s*'([^']+)'`)},
 		{"RUFF_VERSION", ".github/workflows/dev-ci.yml", regexp.MustCompile(`RUFF_VERSION:\s*'([^']+)'`)},
-		{"golangci-lint version", ".github/workflows/dev-ci.yml", regexp.MustCompile(`golangci-lint-action@v\d+\s+with:\s+(?:#[^\n]*\n\s+)*version:\s*(v[\d.]+)`)},
+		{"golangci-lint version", ".github/workflows/dev-ci.yml", regexp.MustCompile(`golangci-lint-action@\S+[^\n]*\n\s*with:\s+(?:#[^\n]*\n\s+)*version:\s*(v[\d.]+)`)},
 	} {
 		a := tc.re.FindStringSubmatch(ci)
 		b := tc.re.FindStringSubmatch(readFile(t, root, tc.other))
@@ -315,7 +315,7 @@ func TestGoMinorAgreesEverywhere(t *testing.T) {
 func TestGolangciLintPinAgreesWithDocs(t *testing.T) {
 	root := repoRoot(t)
 
-	pin := regexp.MustCompile(`golangci-lint-action@v\d+\s+with:\s+(?:#[^\n]*\n\s+)*version:\s*(v[\d.]+)`).
+	pin := regexp.MustCompile(`golangci-lint-action@\S+[^\n]*\n\s*with:\s+(?:#[^\n]*\n\s+)*version:\s*(v[\d.]+)`).
 		FindStringSubmatch(readFile(t, root, ".github/workflows/ci.yml"))
 	if pin == nil {
 		t.Fatal("ci.yml: could not find the golangci-lint-action version pin")

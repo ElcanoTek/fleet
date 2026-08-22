@@ -46,8 +46,11 @@ gitleaks secret scan. **Every job must be green before merge.** Tests are
 deterministic without a live model: use the fake-LLM seam (`internal/fakellm`
 via `OPENROUTER_BASE_URL`), never a real key.
 
-CodeQL (security queries) and Semgrep (Actions supply chain) also run per PR but
-are **advisory**, not part of `ci-gate` — see [`docs/SCANNING.md`](docs/SCANNING.md).
+CodeQL (security queries) and Semgrep (Go/JS/Python SAST + Actions supply chain)
+also run per PR and **fail on any finding**. They are not part of `ci-gate` —
+`needs` cannot cross workflow files — so they report as their own checks
+(`CodeQL gate`, `Semgrep scan`). Both are at zero findings today; keeping them
+there is the point. See [`docs/SCANNING.md`](docs/SCANNING.md).
 
 ## Repository map
 

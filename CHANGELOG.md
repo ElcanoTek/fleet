@@ -19,6 +19,47 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **The scanners now block, and the repo passes them.** Turning a gate on over an
+  unfixed backlog is how a gate becomes something people route around, so
+  everything they reported was fixed or adjudicated first.
+
+  - **All 53 action references pinned to commit SHAs.** Semgrep's
+    `github-actions-mutable-action-tag` found 51 instances of actions referenced
+    by a mutable tag (`actions/checkout@v7`); if a tag moves,
+    attacker-controlled code runs with this repo's `GITHUB_TOKEN`. Every `uses:`
+    across all 12 workflows is now `@<40-hex-sha> # <version>` — the form
+    Dependabot updates, and `.github/dependabot.yml` already watches the
+    `github-actions` ecosystem. Each SHA is the commit the previously-used tag
+    resolved to at pin time, so the pin does not smuggle in a version bump.
+
+  - **Semgrep blocks over all four packs** (`p/github-actions`, `p/golang`,
+    `p/javascript`, `p/python`) with `--error` and no `continue-on-error`. The 6
+    false positives are suppressed at the line with `nosemgrep: <rule-id>` plus a
+    reason — three of them were *already* triaged and suppressed for gosec, and
+    one (`0o644` for a sandbox directory) would have been a security regression
+    if followed. Every suppression was mutation-tested: removing it makes the
+    finding reappear, so a green scan means the waivers work rather than the
+    rules having silently stopped matching.
+
+  - **CodeQL fails on findings.** Previously the analyze step exited 0 whether it
+    found nothing or a hundred alerts, so a red check could only ever mean "the
+    scanner broke" — which is exactly how the Go toolchain break hid for weeks.
+    Threshold is any finding, safe because the security suite reports zero across
+    all four languages.
+
+  Both scanners report as their own checks (`CodeQL gate`, `Semgrep scan`) rather
+  than through `ci-gate`, because a job's `needs` cannot reach across workflow
+  files. **Making a red check actually block a merge still requires adding those
+  two checks to the branch ruleset** — a workflow file cannot make itself
+  required.
+
+  Two knock-on fixes found while doing this: SHA pinning broke two regexes in
+  `scripts/check_versions_test.go` that matched `golangci-lint-action@v\d+`, and
+  they fail *open* by skipping — so they were widened to tolerate a pinned ref
+  plus its trailing version comment, and mutation-tested to confirm they still
+  bite. And a standalone `nosemgrep` comment inside a Go import block breaks
+  `goimports`, so that one waiver is a trailing comment instead.
+
 - **Python had no linter, and two scanners were pointed at ground already
   covered.** Reshaped the scanning stack so each tool owns one job
   ([`docs/SCANNING.md`](docs/SCANNING.md)):

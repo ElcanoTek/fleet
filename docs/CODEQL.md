@@ -384,9 +384,17 @@ inheriting a backlog.
 
 ## Merge gating today — unchanged, with the lever put within reach
 
-CodeQL is **not** blocking. `ci-gate` remains the single required status check on
-`main` (see [`.github/CODEOWNERS`](../.github/CODEOWNERS)), so a red CodeQL job
-does not stop a merge — exactly as under default setup.
+**A finding now turns the check red.** A `Fail on findings` step fails the job on
+any finding, at a threshold of *any* — safe to set because the security suite
+currently reports zero on this tree, so there is no backlog to grandfather.
+Without that step the analyze step exits 0 whether it found nothing or a hundred
+alerts, so a red check could only ever mean "the scanner broke" — which is
+exactly how the toolchain break hid for weeks.
+
+**A red check does not yet block a merge.** `ci-gate` remains the single required
+status check on `main` (see [`.github/CODEOWNERS`](../.github/CODEOWNERS)).
+Closing that half means adding `CodeQL gate` to the ruleset, which a workflow
+file cannot do for itself.
 
 It *cannot* be folded into `ci-gate`: a job's `needs` cannot reach across
 workflow files. So `codeql.yml` carries its own aggregate **`CodeQL gate`** job,
@@ -409,7 +417,8 @@ changes nothing on its own:
 single entry covers every language in the matrix, now and after future matrix
 changes.
 
-**Recommendation: leave it advisory for a short while first.** Not out of
+**Recommendation on the ruleset half: add it once you have seen a few green
+promotions.** Not out of
 caution for its own sake — because of this specific incident. The analysis spent
 weeks red for a toolchain reason unrelated to any diff, and a required check in
 that state blocks *every* merge, including the promote PR that would carry the

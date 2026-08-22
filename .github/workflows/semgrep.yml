@@ -8,43 +8,50 @@
 # and rules that are cheap to write. It complements CodeQL; it does not replace
 # it, and it must not be treated as a substitute for the taint analysis.
 #
-# RULESET SCOPE IS EVIDENCE-BASED, and the evidence is unflattering to the
-# obvious choice. Running the broad registry packs (p/golang, p/javascript,
-# p/python) over this tree produced 55 findings, and every one of the 6
-# non-Actions findings was a FALSE POSITIVE:
+# RULESET SCOPE IS EVIDENCE-BASED. The broad registry packs (p/golang,
+# p/javascript, p/python) plus p/github-actions were run over this tree and every
+# finding was triaged by hand. Result: 51 real findings and 6 false positives.
 #
-#   go.lang.security.injection.open-redirect       cmd/fleet/tls.go:109
-#     Standard HTTP->HTTPS upgrade to the SAME host. Already carries a
-#     //nolint:gosec G710 with exactly this reasoning.
-#   go.lang.security.audit.crypto.math_random      internal/runner/runner.go:28
+# The 51 were all one rule — `github-actions-mutable-action-tag`: actions pinned
+# to a MUTABLE tag (`actions/checkout@v7`) rather than an immutable commit SHA. A
+# moved tag runs attacker-controlled code with this repo's token. Every one is
+# now FIXED: all 53 action references across every workflow are pinned to a
+# 40-hex commit SHA with the version in a trailing comment (which is also the
+# form Dependabot updates).
+#
+# The 6 false positives are suppressed at the line with a `nosemgrep:` comment
+# naming the specific rule and the reason. They are worth knowing about, because
+# three of them were ALREADY formally triaged and suppressed for gosec (which
+# runs inside golangci-lint and already blocks), and one of them is actively
+# wrong:
+#
+#   open-redirect                    cmd/fleet/tls.go
+#     HTTP->HTTPS upgrade to the SAME host. Already //nolint:gosec G710.
+#   math-random-used                 internal/runner/runner.go
 #     math/rand/v2, used once, for +/-10% jitter on a retry interval.
-#   go...cookie-missing-secure                     internal/sched/handlers/elcano.go:155
-#     A DELETION cookie (Value="", MaxAge=-1) carrying no secret; Secure is
-#     conditional so logout works over plain-HTTP dev. Already //nolint:gosec G124.
-#   go...unsafe-deserialization-interface          internal/mcp/httptool.go:254
+#   cookie-missing-secure            internal/sched/handlers/elcano.go
+#     A DELETION cookie (Value="", MaxAge=-1), no secret. Already //nolint G124.
+#   unsafe-deserialization-interface internal/mcp/httptool.go
 #     json.Unmarshal into interface{} is REQUIRED — the value feeds a jq program
 #     over arbitrary JSON. A concrete struct is not expressible.
-#   javascript...x-frame-options-misconfiguration  web/src/proxy.ts:99
+#   x-frame-options-misconfiguration web/src/proxy.ts
 #     The header value is the literal string "DENY". No user input reaches it.
-#   python...insecure-file-permissions             internal/sandbox/fileops.py:77
-#     Advises 0o644 for a SANDBOX DIRECTORY, i.e. world-readable. Taking that
-#     advice would be a security regression; 0750 is the file-tool contract.
+#   insecure-file-permissions        internal/sandbox/fileops.py
+#     Advises 0o644 — WORLD-READABLE — for a sandbox directory. Following it
+#     would be a security REGRESSION. 0750 is the file-tool contract.
 #
-# Three of those six were already formally triaged and suppressed for gosec,
-# which runs inside golangci-lint and already blocks. Re-reporting adjudicated
-# findings is how a scanner trains people to ignore it, so those packs are NOT
-# enabled here. If you want them, run them locally for a one-off audit.
+# Each suppression was mutation-tested: removing it makes the finding reappear,
+# so a green scan means the waivers are doing the work rather than the rules
+# having silently stopped matching.
 #
-# What IS enabled is the one pack that earned it: p/github-actions found 49
-# instances of a real class of issue nothing else in this repo checks — actions
-# pinned to a MUTABLE tag (`actions/checkout@v7`) instead of an immutable commit
-# SHA. A moved tag executes attacker-controlled code with this repo's token.
+# THIS LANE BLOCKS. `--error` makes semgrep exit non-zero on any finding, and
+# there is no `continue-on-error`, so a NEW finding fails the job. That is only
+# defensible because the tree is currently at ZERO unsuppressed findings across
+# all four packs — verified locally before this was turned on. A gate switched on
+# over an unfixed backlog is a gate people learn to ignore.
 #
-# ADVISORY, NOT BLOCKING, and deliberately so: those 49 findings are all real,
-# so `--error` here would mean a red gate until every action in every workflow
-# is repinned to a SHA. That is a worthwhile change and its own PR; failing CI
-# for a backlog nobody has scheduled just teaches people to ignore the lane.
-# Flip `continue-on-error` off in the same PR that does the repinning.
+# Adding a suppression is therefore a reviewable act: it shows up in the diff
+# next to a reason, which is the property this whole lane exists to have.
 name: Semgrep
 
 on:
@@ -71,14 +78,10 @@ jobs:
     name: Semgrep scan
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # See the header: the enabled pack's findings are real but unactioned, so
-    # this lane reports and never blocks. It is NOT here because the findings
-    # are doubted.
-    continue-on-error: true
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install semgrep
         # No actions/setup-python step on purpose: ubuntu-latest already ships a
@@ -99,20 +102,29 @@ jobs:
           semgrep --version
 
       - name: Scan
-        env:
-          # p/github-actions only — see the header for the measured reason the
-          # broad language packs are excluded.
-          SEMGREP_RULES: p/github-actions
         run: |
           set -uo pipefail
           # --metrics=off: never phone home from CI.
-          # No --error: this lane reports, it does not gate (see header).
-          semgrep scan --config "$SEMGREP_RULES" --metrics=off \
-            --json -o semgrep.json --quiet || true
+          # --error: exit non-zero on any finding. THIS is what makes the lane a
+          #   gate. The tree is at zero unsuppressed findings, so a failure here
+          #   means a new one arrived.
+          # The JSON is written first and the exit status captured, so the
+          # summary step below still runs and still says WHAT failed — a gate
+          # that fails without printing the finding is a gate nobody can act on.
+          semgrep scan \
+            --config p/github-actions \
+            --config p/golang \
+            --config p/javascript \
+            --config p/python \
+            --metrics=off --error --json -o semgrep.json --quiet
+          status=$?
           if [ ! -s semgrep.json ]; then
             echo "semgrep produced no JSON — treating as a scan failure" >&2
             exit 1
           fi
+          echo "semgrep exit status: $status"
+          # Defer the failure to the gate step so the summary prints first.
+          echo "$status" > semgrep.status
 
       - name: Summarize findings to the job log
         # Same reasoning as codeql.yml's summary step: a findings report that
@@ -146,12 +158,29 @@ jobs:
             fi
           } | tee -a "$GITHUB_STEP_SUMMARY"
 
+      - name: Fail on findings
+        # Separate from the scan step purely for ordering: the summary above has
+        # already printed the per-rule breakdown by the time this fails, so the
+        # job log leads with WHAT is wrong instead of just that something is.
+        if: ${{ !cancelled() }}
+        run: |
+          set -uo pipefail
+          status=$(cat semgrep.status 2>/dev/null || echo 1)
+          count=$(jq '(.results // []) | length' semgrep.json 2>/dev/null || echo '?')
+          if [ "$status" != "0" ]; then
+            echo "::error::Semgrep found ${count} unsuppressed finding(s) — see the summary above."
+            echo "Fix the finding, or, if it is a false positive, add a line-level"
+            echo "\`nosemgrep: <rule-id>\` comment stating WHY. Both are reviewable in the diff."
+            exit 1
+          fi
+          echo "Semgrep: 0 unsuppressed findings."
+
       - name: Upload findings as an artifact
         # The repo is public and the results are not sensitive, so the raw JSON
         # is kept for a fixing agent (or a human) to consume without re-running
         # the scan.
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: semgrep-findings
           path: semgrep.json

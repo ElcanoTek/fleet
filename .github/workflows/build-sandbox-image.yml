@@ -98,13 +98,13 @@ jobs:
       BUNDLE_DIR: ${{ inputs.bundle_dir }}
     steps:
       - name: Checkout caller repo
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # The build script lives in fleet core; a client-config caller doesn't
       # have it. Checking it out into a subdir keeps ONE canonical builder
       # (same manifest parsing, same flags) instead of a drifting copy per repo.
       - name: Checkout fleet (build script)
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ElcanoTek/fleet
           ref: ${{ inputs.fleet_ref || 'main' }}

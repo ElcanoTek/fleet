@@ -74,6 +74,7 @@ def _open_dir_at(parent_fd, name, create):
             fd = os.open(name, flags, dir_fd=parent_fd)
             if created:
                 # mkdir is umask-filtered; the file-tool contract is exact 0750.
+                # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- the rule advises 0o644, i.e. WORLD-READABLE, for a sandbox directory. Following it would be a security regression. 0750 is the file-tool contract and is deliberately tighter than the suggestion.
                 os.fchmod(fd, 0o750)
             return fd
         except OSError as exc:

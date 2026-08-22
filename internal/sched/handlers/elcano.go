@@ -152,6 +152,7 @@ func (h *Handlers) ElcanoLogout(w http.ResponseWriter, r *http.Request) {
 	// attributes must mirror how auth originally set the cookie for the browser
 	// to actually clear it — forcing Secure here unconditionally would prevent
 	// logout from clearing the cookie over plain HTTP.
+	// nosemgrep: go.lang.security.audit.net.cookie-missing-secure.cookie-missing-secure -- same reasoning as the G124 waiver: this is a DELETION cookie (Value="", MaxAge=-1) carrying no secret, and its attributes must mirror how auth set it or the browser will not clear it. Forcing Secure unconditionally would break logout over plain-HTTP dev.
 	http.SetCookie(w, &http.Cookie{ //nolint:gosec // G124: deletion cookie (no secret); Secure is conditional on HTTPS so logout works over plain-HTTP dev, mirroring how the cookie was set — see comment above.
 		Name:     h.config.ElcanoCookieName,
 		Value:    "",

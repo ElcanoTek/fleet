@@ -63,9 +63,17 @@
 # Grype step, govulncheck-scheduled.yml, grype-scheduled.yml). Those push their
 # own SARIF to the Security tab and never depended on CodeQL being configured.
 #
-# Merge gating: these jobs are NOT part of ci.yml's `CI gate`, which is the single
-# required status check on main (see .github/CODEOWNERS). CodeQL findings are
-# therefore advisory today, exactly as they were under default setup.
+# Merge gating, in two parts — they are different things and conflating them is
+# how "we gate on CodeQL" ends up meaning nothing:
+#
+#   1. Does a finding turn the CHECK red? YES. The `Fail on findings` step below
+#      fails the job on any finding. Without it the analyze step exits 0 whether
+#      it found nothing or a hundred alerts, so a red check could only ever mean
+#      "the scanner broke".
+#   2. Does a red check BLOCK a merge? NOT YET. `ci-gate` is still the only
+#      required status check on main (see .github/CODEOWNERS). Requiring a check
+#      is a repo-settings action that a workflow file cannot perform — add
+#      `CodeQL gate` to the ruleset to close this half.
 #
 # They cannot be part of `CI gate`: a job's `needs` cannot reach across workflow
 # files. So this file carries its own aggregate `CodeQL gate` job at the bottom,
@@ -139,20 +147,20 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # THE FIX. Runs before init so the interpreter is already on PATH when the
       # Go extractor and autobuild shell out to `go`. go-version-file makes go.mod
       # the single declaration point, so this cannot drift from the module.
       - name: Set up Go
         if: matrix.language == 'go'
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: true
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v4
+        uses: github/codeql-action/init@4c0873ef8656cb3c50b3f42fb63bc1ade0cfa827 # v4 (4.37.8)
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
@@ -161,7 +169,7 @@ jobs:
 
       - name: Autobuild
         if: matrix.build-mode == 'autobuild'
-        uses: github/codeql-action/autobuild@v4
+        uses: github/codeql-action/autobuild@4c0873ef8656cb3c50b3f42fb63bc1ade0cfa827 # v4 (4.37.8)
         env:
           # Same build tag ci.yml and dev-ci.yml pass to `go vet` and `go test`,
           # and for the same reason: internal/sandbox/host.go — the UNSANDBOXED
@@ -175,7 +183,7 @@ jobs:
           GOFLAGS: -tags=fleet_host_executor
 
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v4
+        uses: github/codeql-action/analyze@4c0873ef8656cb3c50b3f42fb63bc1ade0cfa827 # v4 (4.37.8)
         with:
           category: /language:${{ matrix.language }}
           # Also write the SARIF to disk so the step below can summarize it. The
@@ -231,6 +239,50 @@ jobs:
               echo '```'
             fi
           } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Fail on findings
+        # THIS is what makes CodeQL a gate rather than a report. The analyze step
+        # exits 0 whether it found nothing or a hundred alerts — job success only
+        # means extraction and query evaluation worked. Without this step a red
+        # `Analyze (…)` check can only ever mean "the scanner broke", never "the
+        # code has a problem", which is precisely how the Go toolchain break sat
+        # unnoticed behind a red-but-not-required check for weeks.
+        #
+        # Threshold is ANY finding, deliberately. The security suite currently
+        # reports ZERO across go/python/javascript-typescript/actions, so there
+        # is no backlog to grandfather and no severity line to argue about — a
+        # finding here is new. Switching a gate on over an existing backlog is
+        # how a gate becomes something people route around.
+        #
+        # Runs after the summary so the log leads with WHAT was found.
+        #
+        # NOTE ON SCOPE: this makes the CHECK red. Whether a red check BLOCKS a
+        # merge is branch protection's call — `CodeQL gate` has to be a required
+        # status check for that, which is a repo-settings action a workflow file
+        # cannot perform. See docs/CODEQL.md ("Merge gating").
+        if: ${{ !cancelled() }}
+        env:
+          SARIF_DIR: ${{ runner.temp }}/codeql-sarif
+          LANGUAGE: ${{ matrix.language }}
+        run: |
+          set -uo pipefail
+          shopt -s nullglob
+          files=("$SARIF_DIR"/*.sarif)
+          if [ ${#files[@]} -eq 0 ]; then
+            # No SARIF means the analysis did not produce results to judge. Fail
+            # loudly rather than reporting a clean scan that never happened.
+            echo "::error::No SARIF written for $LANGUAGE — cannot conclude the scan was clean."
+            exit 1
+          fi
+          count=$(jq -rs '[ .[] | .runs[]? | .results[]? ] | length' "${files[@]}")
+          if [ "$count" != "0" ]; then
+            echo "::error::CodeQL found ${count} finding(s) for ${LANGUAGE} — see the summary above."
+            echo "Fix it, or if it is a false positive dismiss the alert in the"
+            echo "Security tab with a reason, or add a query filter with a comment"
+            echo "saying why. Silently raising the threshold is not one of the options."
+            exit 1
+          fi
+          echo "CodeQL ($LANGUAGE): 0 findings."
 
   codeql-gate:
     name: CodeQL gate
