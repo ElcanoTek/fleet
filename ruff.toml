@@ -15,8 +15,13 @@
 # RULE SELECTION IS DELIBERATELY NARROW, and the numbers behind that are worth
 # recording so nobody widens it by accident. Measured on this tree:
 #
-#   default (E4,E7,E9,F)                   ->   3 findings   <- what we gate on
+#   default (E4,E7,E9,F)                   ->   3 findings
+#   + B,SIM,S (bandit)                     ->  21 more, all fixed  <- the gate today
 #   E,F,W,I,UP,B,SIM,ISC,PLR,PLW,S         -> 333 findings
+#
+# What we gate on is the [lint] `select` at the bottom of this file:
+# E4, E7, E9, F, B, SIM, S. The middle line is the current gate; the third line
+# is the measurement that keeps the style tiers out.
 #
 # The 330-finding difference is almost entirely style churn, not defects:
 # 176 UP031 (%-format vs f-string), 43 PLR2004 (magic values), 35 E501 (line
@@ -69,8 +74,13 @@ exclude = [
 [lint]
 # The default rule set: pycodestyle errors (E4 imports, E7 statements,
 # E9 syntax/IO) plus Pyflakes (F — undefined names, unused imports, redefined
-# names, unused locals). This is the "is it actually broken" tier; see the
-# header for why the style tiers are not enabled.
+# names, unused locals). This is the "is it actually broken" tier.
+#
+# Plus three families that were measured, fixed, and then ENABLED rather than
+# left as a documented backlog (see the header): B (flake8-bugbear), SIM
+# (flake8-simplify) and S (bandit — the security tier, which is why an S finding
+# on a new line is a real question to answer rather than pre-existing noise).
+# The style tiers (E501, UP, PLR, …) stay out; the header records why.
 select = ["E4", "E7", "E9", "F", "B", "SIM", "S"]
 
 [lint.per-file-ignores]

@@ -547,7 +547,6 @@ func (h *Handlers) CreateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	//nolint:gosec // G706: untrusted fields are sanitized via logSafe (strips CR/LF); gosec's taint tracker cannot see through the helper. task.ID is a uuid.UUID.
 	log.Printf("Task created: %s (prompt: %.50s...)", task.ID, logSafe(task.Prompt))
 	localizeTask(task)
 	writeJSON(w, http.StatusOK, task)
@@ -2365,7 +2364,6 @@ func (h *Handlers) CreateAPIKey(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	//nolint:gosec // G706: key.Name is unvalidated body text sanitized via logSafe (strips CR/LF), matching the sibling key handlers; key.KeyID is server-minted.
 	log.Printf("Created API key: %s (%s)", key.KeyID, logSafe(key.Name))
 
 	resp := key.ToResponse()

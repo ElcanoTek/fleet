@@ -1,4 +1,4 @@
-.PHONY: all build compile bins fleet-bench install test test-race test-cover lint lint-go lint-migrations fmt tidy clean help \
+.PHONY: all build compile bins fleet-bench install test test-race test-cover lint lint-go lint-python lint-migrations fmt tidy clean help \
 	govulncheck ci-go ci-web ci-e2e-mocked ci-local
 
 # GOTOOLCHAIN=auto — the operator does NOT have to hand-install the pinned Go.
@@ -35,7 +35,9 @@ help:
 	@echo "  make test        run the Go test suite"
 	@echo "  make test-race   run the Go test suite with the race detector"
 	@echo "  make test-cover  run the Go test suite with coverage (writes coverage.out)"
-	@echo "  make lint        run golangci-lint + the migration DDL linter"
+	@echo "  make lint        run golangci-lint + ruff (check & format) + the migration DDL linter"
+	@echo "  make lint-go     golangci-lint only"
+	@echo "  make lint-python ruff check + ruff format --check (skips loudly if ruff is absent)"
 	@echo "  make lint-migrations  reject dangerous DDL in changed migration files (#256)"
 	@echo "  make fleet-bench build the load-testing tool (cmd/fleet-bench, #296)"
 	@echo "  make fmt         gofmt the tree"

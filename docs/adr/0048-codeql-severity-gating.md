@@ -139,7 +139,8 @@ not stop them; it will appear in the advisory tier and in the Security tab. This
 is a deliberate trade: the alternative, as demonstrated above, is a gate that
 blocks every push and therefore gets routed around or switched off. `gosec`'s
 G706 covers the same log-injection class in `golangci-lint`, which **does** block
-via `ci-gate`, and carries 77 reviewed per-site annotations — so this class is
+via `ci-gate`, and carries 81 reviewed per-site `//nolint:gosec // G706`
+annotations at the time of writing — so this class is
 not unguarded, it is guarded by the instrument that was already there.
 
 **What is now load-bearing.** Widening the register is a security decision that
@@ -147,7 +148,7 @@ shows up in a PR diff, and reviewers are expected to check the reason against th
 code rather than the reason's existence. That is a process control, and process
 controls decay; the tests above are what make the decay visible.
 
-**Known limitation, stated rather than fixed.** The 621 `_test.go` files remain
+**Known limitation, stated rather than fixed.** The 625 `_test.go` files remain
 outside the Go database (autobuild builds packages, not tests) — unchanged from
 default setup and from #1246. And the register keys on `(rule, file)` rather than
 `(rule, file, line)` deliberately: line numbers churn on every edit, and a

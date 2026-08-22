@@ -54,8 +54,9 @@ func TestAggregateGateNeedsEveryJob(t *testing.T) {
 		}
 		jobsBlock := text[jobsAt:]
 
-		var jobs []string
-		for _, m := range jobKeyRe.FindAllStringSubmatch(jobsBlock, -1) {
+		matches := jobKeyRe.FindAllStringSubmatch(jobsBlock, -1)
+		jobs := make([]string, 0, len(matches))
+		for _, m := range matches {
 			jobs = append(jobs, m[1])
 		}
 		if len(jobs) < 2 {
