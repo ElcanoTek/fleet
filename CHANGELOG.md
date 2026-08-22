@@ -84,6 +84,25 @@ prior versions are listed because none have shipped.
   comments relocated byte-identically (verified declaration-by-declaration
   against a hash inventory of the old file), no visibility changes, no renames,
   and the `task_columns.go` registry (#1126) untouched.
+
+- **`internal/httpapi/server.go` split by resource (#1127)**: the 3,626-line
+  file now keeps only the Server struct and options, the inflight-turn
+  registry, `/healthz`, and shared helpers; route registration + top-level
+  middleware, memories, the config reads (personas / server-config /
+  client-config), the MCP-server catalog surfaces, the conversations
+  collection + sub-route dispatcher, the chat turn path, SSE stream reattach,
+  turn-event pages, workspace files, and the audit read each moved to their
+  own file, byte-intact. Two intentional changes beyond the move, both
+  behavior-preserving: the ~630-line `conversationByID` switch (which carried
+  a `//nolint:gocyclo`, now retired) became a flat `(sub, method)` dispatch
+  table over extracted per-action methods, and the per-branch ownership-check
+  and JSON-decode boilerplate deduplicated into `withOwnedConversation` +
+  `decodeJSONBody`. Divergences among the old branches are preserved verbatim
+  and now explicit: the 404 body is "not found" or "conversation not found"
+  per historical branch (and `http.NotFound` with its conditional check on the
+  model route), and the two lenient decodes (cancel scope, legacy bare
+  DELETE /conversations) keep their inline decode. No route, method,
+  middleware-order, or response change.
 - **The installer's node handoff: `fleet update` now repairs a node shortfall
   instead of refusing** — on a box a node major behind the checkout, the
   documented sequence (`bootstrap → update → status/doctor`) hard-failed on the
