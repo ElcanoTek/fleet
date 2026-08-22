@@ -306,7 +306,34 @@ with go1.25.1 and cannot lint the tree.
   own SARIF independently of CodeQL configuration; breaking them would silently
   drop CVE findings from the Security tab.
 
-## Merge gating — unchanged, with the lever put within reach
+## Two different things can gate, and they are not the same lever
+
+This distinction is the one most worth internalizing, because a status check on
+the CodeQL job does **not** gate on findings:
+
+| you want to block a merge when… | the mechanism | where it lives |
+| --- | --- | --- |
+| the analysis **failed or did not run** | a required status check on `CodeQL gate` | branch protection / ruleset |
+| CodeQL **found alerts** at/above a severity | **code scanning merge protection** | ruleset → "Code scanning" rule |
+
+The second is the one people mean by "gate on CodeQL", and the first does not
+give it to you. **A CodeQL job with a hundred open alerts still exits 0 and
+reports green** — the job's success only says extraction and query evaluation
+worked. That is exactly why the toolchain break was able to hide for weeks behind
+a red-but-not-required check, and equally why a green check is not evidence of a
+clean codebase.
+
+fleet is a **public** repository, so code scanning merge protection is available
+at no cost (on private repos it requires GitHub Advanced Security). To turn it
+on: Settings → Rules → the "Main" ruleset → add the **Code scanning** rule →
+add tool **CodeQL** → set the alert thresholds. Two independent knobs there:
+*Security alerts* (the CWE/security queries) and *Alerts* (everything else,
+which is where the code-quality suite lands). Sensible starting point given that
+the quality queries have never run against this codebase: security threshold
+**High or higher**, alerts threshold **None**, then tighten once the quality
+backlog is known and burned down.
+
+## Merge gating today — unchanged, with the lever put within reach
 
 CodeQL is **not** blocking. `ci-gate` remains the single required status check on
 `main` (see [`.github/CODEOWNERS`](../.github/CODEOWNERS)), so a red CodeQL job
@@ -352,11 +379,37 @@ which is another reason to sequence it that way.
 No repo-settings or API change to code-scanning configuration was attempted as
 part of this change.
 
-## Where findings appear
+## Where findings appear — and why the job log now says
+
+A CodeQL run reports **nothing about what it found** to its own log. It writes
+SARIF, uploads it, exits 0, and the only lines resembling a result are
+`Exporting results to SARIF...` and `Successfully uploaded results` — which say a
+file moved, not what was in it. Verified by grepping a full run's log archive for
+any alert or result count: there is none.
+
+That makes a run's actual outcome invisible to anyone reading CI output, to
+`gh run view`, and to any automation holding the log but not the code-scanning
+API. So the analyze step now also writes SARIF locally (`output:`) and a
+following step jq-summarizes it into both the job log and the step summary — the
+same thing `govulncheck-scheduled.yml` already does with its SARIF:
+
+```
+### CodeQL findings — go
+2  [error]    go/clear-text-logging
+1  [warning]  go/incomplete-hostname-regexp
+1  [note]     go/redundant-assignment
+--
+total findings: 4
+```
+
+It is reporting only and never fails the job; blocking on findings is merge
+protection's job, above. When no SARIF was written it says so explicitly rather
+than printing "No findings." — reporting a clean result you did not observe is
+the error this repo keeps having to write down.
 
 `security-events: write` plus the analyze step's upload is the code-scanning
-ingestion path, so results land in the repo's **Security → Code scanning**. From
-the run log:
+ingestion path, so results also land in the repo's **Security → Code scanning**.
+From the run log:
 
 ```
 Adding fingerprints to SARIF file. See ... sarif-support-for-code-scanning ...

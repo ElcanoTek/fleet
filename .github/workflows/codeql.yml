@@ -182,6 +182,59 @@ jobs:
         uses: github/codeql-action/analyze@v4
         with:
           category: /language:${{ matrix.language }}
+          # Also write the SARIF to disk so the step below can summarize it. The
+          # results are still uploaded to code scanning (`upload` defaults true);
+          # this only adds a local copy.
+          output: ${{ runner.temp }}/codeql-sarif
+
+      - name: Summarize findings to the job log
+        # WHY THIS EXISTS: a CodeQL run reports nothing about what it FOUND to
+        # its own log. It writes SARIF, uploads it, and exits 0 — with findings
+        # or without them. So the only way to see results was to open the
+        # Security tab, which means a run's outcome is invisible to anyone
+        # reading CI output, to `gh run view`, and to any automation that has
+        # the log but not the code-scanning API.
+        #
+        # This mirrors what govulncheck-scheduled.yml already does for its own
+        # SARIF: jq a per-rule count into the job log AND the step summary, so
+        # the run is readable without leaving Actions. It is reporting only and
+        # never fails the job — gating on findings is code scanning merge
+        # protection's job (see docs/CODEQL.md), not this step's.
+        if: ${{ !cancelled() }}
+        env:
+          SARIF_DIR: ${{ runner.temp }}/codeql-sarif
+          LANGUAGE: ${{ matrix.language }}
+        run: |
+          set -uo pipefail
+          shopt -s nullglob
+          files=("$SARIF_DIR"/*.sarif)
+          {
+            echo "### CodeQL findings — $LANGUAGE"
+            if [ ${#files[@]} -eq 0 ]; then
+              # Not a failure: the analyze step is what fails on a broken run.
+              # Say it plainly rather than printing "No findings." for a scan
+              # that never produced a file — reporting a clean result you did
+              # not observe is the error this repo keeps writing down.
+              echo 'No SARIF file was written — nothing to summarize (see the analyze step).'
+            else
+              echo '```'
+              # `-s` slurps every SARIF doc into one array, so a language that
+              # emits more than one file is still counted once, in total.
+              jq -rs '
+                [ .[] | .runs[]? | .results[]? ] as $res
+                | if ($res | length) == 0 then "No findings."
+                  else
+                    ( $res
+                      | group_by(.ruleId)
+                      | sort_by(-length)
+                      | map("\(length | tostring)  [\(.[0].level // "note")]  \(.[0].ruleId)")
+                      | join("\n")
+                    ) + "\n--\ntotal findings: \($res | length)"
+                  end
+              ' "${files[@]}"
+              echo '```'
+            fi
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
   codeql-gate:
     name: CodeQL gate
