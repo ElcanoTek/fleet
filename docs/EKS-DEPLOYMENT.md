@@ -8,12 +8,23 @@
 
 ## Read this first (scope, honesty, and what is not shipped)
 
-- **fleet's shipped deployment target is a single VM under systemd**
-  ([ADR-0004](adr/0004-single-box-vm-native-deployment.md)). That ADR stands.
-  There is no Helm chart, no operator, and no k8s manifest in this repo, and
-  **CI does not exercise this path** — the CI matrix builds and tests the
-  systemd/single-host model. Everything below is a hand-verified recipe you own
-  and must validate on your own cluster.
+- **Check the first-class Kubernetes path first.** Since
+  [ADR-0049](adr/0049-kubernetes-backend-split-control-plane.md) fleet ships a
+  Helm chart (`deploy/helm/fleet`) and a kubernetes sandbox backend
+  (`FLEET_SANDBOX_BACKEND=kubernetes`) that runs sandboxes as ephemeral pods —
+  no Podman on the node, no privileged pod. That path, documented in
+  [`DEPLOYMENT-KUBERNETES.md`](DEPLOYMENT-KUBERNETES.md), supersedes this
+  recipe for most clusters. **This guide remains** for the co-located
+  topology it describes — one pod on one big node with rootless Podman
+  *inside* it, the podman backend unchanged — which some operators still want
+  (e.g. to keep the bundled seccomp profile, per-sandbox telemetry, and the
+  allowlisted egress proxy, none of which the kubernetes backend provides).
+- **fleet's shipped default deployment stays a single VM under systemd**
+  ([ADR-0004](adr/0004-single-box-vm-native-deployment.md)); the single-box
+  decision stands. This co-located-EKS recipe is hand-verified, **not
+  CI-exercised** (CI lints the Helm chart and unit-tests the kubernetes
+  backend, but stands up no cluster) — everything below you own and must
+  validate on your own cluster.
 - **No fleet container image ships either.** `deploy/` contains systemd units, not
   images. You build two images yourself (§3): the fleet runtime image (Go binary
   **+ Podman inside it**) and the Next.js web image. The sandbox image stays what
@@ -23,15 +34,17 @@
   semaphore. Two fleet pods against one pair of databases is a **correctness
   bug**, not a capacity increase. No `Deployment` with rolling updates, no HPA,
   no `replicas: 2`.
-- **The sandbox stays local to the process.** Every agent tool call's data plane
-  runs in a rootless-Podman container that `agentcore` starts and `podman exec`s
-  into on the same host as the run loop
+- **In this recipe, the sandbox stays local to the process.** Every agent tool
+  call's data plane runs in a rootless-Podman container that `agentcore` starts
+  and `podman exec`s into on the same host as the run loop
   ([ADR-0002](adr/0002-mandatory-rootless-podman-sandbox.md)); the remote worker
   registry was deliberately removed
-  ([ADR-0011](adr/0011-remove-worker-node-registry.md)). There is no seam that
-  dispatches a sandbox to another node, so "put the runners on their own node
-  group" is not a configuration — it would be a rewrite. This guide runs Podman
-  **inside the fleet pod**, which is why the pod needs the privileges in §2.
+  ([ADR-0011](adr/0011-remove-worker-node-registry.md)). "Put the runners on
+  their own node group" IS now a configuration — but it is the
+  `FLEET_SANDBOX_BACKEND=kubernetes` path in
+  [`DEPLOYMENT-KUBERNETES.md`](DEPLOYMENT-KUBERNETES.md), not this one. This
+  guide keeps the podman backend and runs Podman **inside the fleet pod**,
+  which is why the pod needs the privileges in §2.
 - **What you gain** by doing this at all: your existing ECR/IRSA/ALB/Secrets
   Manager/observability plumbing, one node group to patch, and node-failure
   rescheduling. **What you give up** versus the systemd path: `bootstrap.sh`,
@@ -45,7 +58,7 @@ that implements it.
 
 | "This isn't Kubernetes-native because…" | Answer |
 |---|---|
-| "…there's no Helm chart / it's not GitOps" | Package the §7 manifests as Kustomize or a thin Helm chart and sync with Argo CD or Flux — [§7 GitOps](#packaging-these-manifests-for-gitops). Two Argo-specific gotchas are called out there. |
+| "…there's no Helm chart / it's not GitOps" | There is one now — `deploy/helm/fleet` — but it installs the **split control-plane/runner** topology ([`DEPLOYMENT-KUBERNETES.md`](DEPLOYMENT-KUBERNETES.md)), not this co-located one. If you specifically want this recipe, package the §7 manifests as Kustomize or a thin chart and sync with Argo CD or Flux — [§7 GitOps](#packaging-these-manifests-for-gitops). Two Argo-specific gotchas are called out there. |
 | "…a privileged pod will never pass admission" | It won't under `restricted`/`baseline` Pod Security Standards. You need a labelled namespace and a scoped policy exception — [§7 admission control](#namespace-admission-control-and-identity). If your org forbids privileged pods outright, [§2](#if-your-policy-forbids-privileged-pods) is the unprivileged variant and its costs. |
 | "…one replica isn't highly available" | Correct, and it cannot be: single-owner task leases + a per-process semaphore. HA here means fast, *graceful* recovery, not zero downtime — [§6 availability](#az-pinning-node-loss-and-what-ha-means-here) states the RTO/RPO plainly. |
 | "…we can't autoscale it" | Scale vertically: raise `FLEET_MAX_CONCURRENT_AGENTS` and the pod resources together ([§6](#resource-requests-count-the-sandboxes)). HPA and VPA are both actively harmful here ([§8](#cluster-integration-gotchas)). |

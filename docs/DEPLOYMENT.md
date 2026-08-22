@@ -15,13 +15,18 @@ proxies, server-side over loopback, to the two Go backends the single process
 boots (chat on `127.0.0.1:8080`, orchestrator on `127.0.0.1:8000`). Caddy fronts the web
 app with TLS; the backends stay loopback-only.
 
-> **Your platform standard is Kubernetes?** fleet's shipped target is this
-> single-VM/systemd model ([ADR-0004](adr/0004-single-box-vm-native-deployment.md)),
-> and no chart or manifest lives in the tree. For an operator recipe that keeps
-> the one-process/one-node model intact inside EKS — one pod on one big node,
-> Podman running *inside* it, nothing split across worker nodes — see
-> [`docs/EKS-DEPLOYMENT.md`](EKS-DEPLOYMENT.md). It is hand-verified, not
-> CI-exercised.
+> **Your platform standard is Kubernetes?** fleet's default install remains
+> this single-VM/systemd model
+> ([ADR-0004](adr/0004-single-box-vm-native-deployment.md)), but Kubernetes is
+> now a first-class path
+> ([ADR-0049](adr/0049-kubernetes-backend-split-control-plane.md)): a Helm
+> chart (`deploy/helm/fleet`) runs the control plane as a single-replica
+> Deployment, and `FLEET_SANDBOX_BACKEND=kubernetes` runs every agent sandbox
+> as an ephemeral pod — no Podman on the node, no privileged pod. See
+> [`docs/DEPLOYMENT-KUBERNETES.md`](DEPLOYMENT-KUBERNETES.md) (15-minute kind
+> path + production checklist). The older co-located recipe in
+> [`docs/EKS-DEPLOYMENT.md`](EKS-DEPLOYMENT.md) — Podman running *inside* one
+> privileged pod — remains available but is the workaround, not the path.
 
 > **Single-host by design.** Scheduled-task crash recovery uses single-owner
 > database leases and the worker-pool concurrency cap is a per-process semaphore —

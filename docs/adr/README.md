@@ -29,7 +29,7 @@ reviewable, and citable. Each record names the file or test that enforces it.
 | [0001](0001-one-governed-run-loop.md) | One governed agent run loop | Accepted |
 | [0002](0002-mandatory-rootless-podman-sandbox.md) | Mandatory rootless-Podman sandbox; host executor never ships | Accepted |
 | [0003](0003-host-side-mcp-credential-brokering.md) | Host-side MCP credential brokering | Accepted |
-| [0004](0004-single-box-vm-native-deployment.md) | Single-box, VM-native deployment (no Kubernetes) | Accepted |
+| [0004](0004-single-box-vm-native-deployment.md) | Single-box, VM-native deployment (no Kubernetes) | Accepted; amended by ADR-0049 |
 | [0005](0005-separate-chat-and-sched-databases.md) | Separate Postgres databases for chat and sched | Accepted |
 | [0006](0006-external-client-config-bundle.md) | Client content lives in an external config bundle | Accepted |
 | [0007](0007-governed-sub-agents.md) | Governed sub-agents spawn only through the one run loop | Accepted |
@@ -57,3 +57,4 @@ reviewable, and citable. Each record names the file or test that enforces it.
 | [0045](0045-remove-node-name-scopes.md) | Remove node-name scopes; a principal's authority is its permission set | Accepted |
 | [0046](0046-remove-per-key-spending-caps.md) | Remove per-API-key spending caps; rolling budgets are the one spend gate | Accepted |
 | [0047](0047-self-serve-team-membership.md) | Self-serve team membership — create/leave is yours, joining is granted | Accepted |
+| [0049](0049-kubernetes-backend-split-control-plane.md) | Kubernetes as a first-class deployment — split control plane, pluggable sandbox backend | Accepted |

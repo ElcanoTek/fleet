@@ -88,6 +88,12 @@ const (
 	// Podman container with --read-only / dropped caps. Network egress
 	// is per-turn (ContainerConfig.NoNetwork) — see container.go.
 	ModeContainer
+
+	// ModeKubernetes runs bash and the python bridge inside an ephemeral
+	// Kubernetes Pod, exec'd over the apiserver (#989) — the enterprise
+	// split-control-plane backend. Selected by FLEET_SANDBOX_BACKEND;
+	// see k8s_backend.go.
+	ModeKubernetes
 )
 
 // BashRequest is the per-call input the sandbox sees for a bash
@@ -237,8 +243,10 @@ func (s *Sandbox) SetDefaultWorkingDir(dir string) {
 	s.mu.Unlock()
 }
 
-// impl is the backend interface. Two concrete implementations live in
-// host.go and container.go.
+// impl is the backend interface. Three concrete implementations live in
+// container.go (rootless Podman, the single-box production backend),
+// k8s_backend.go (Kubernetes pods, the enterprise split backend, #989), and
+// host.go (the test-only fixture behind the fleet_host_executor build tag).
 type impl interface {
 	runBash(ctx context.Context, req BashRequest) (BashResult, error)
 	runPython(ctx context.Context, req PythonRequest) (PythonResult, error)
@@ -281,6 +289,8 @@ func (s *Sandbox) ModeName() string {
 		return "host"
 	case ModeContainer:
 		return "container"
+	case ModeKubernetes:
+		return "kubernetes"
 	default:
 		return "unknown"
 	}

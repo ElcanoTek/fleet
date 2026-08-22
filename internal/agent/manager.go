@@ -581,6 +581,13 @@ func buildSandboxPool(cfg *config.Config, personasDir, protocolsDir, systemPromp
 		BridgeDir:        filepath.Join(filepath.Dir(workspaceRoot), "data", "sandbox-bridge"),
 		ReadOnlyMounts:   absSupportingDocs(personasDir, protocolsDir, systemPromptsDir, skillsDir, uploadsRoot),
 	}
+	// Kubernetes backend (#989): sandboxes are ephemeral pods in a cluster
+	// instead of co-located podman containers. All podman-specific boot work
+	// below (bridge-file prune, OCI-runtime preflight, egress proxy) is
+	// replaced by the backend's own fail-closed cluster preflight.
+	if cfg.SandboxBackend == sandbox.BackendKubernetes {
+		return buildKubernetesSandboxPool(cfg, poolCfg, sandboxRuntime)
+	}
 	// Reclaim bridge-script/seccomp temp files orphaned by a PRIOR crash: only
 	// the graceful close path removes them, so without this sweep every
 	// non-graceful exit leaks them into BridgeDir permanently. Age-bounded and
@@ -642,6 +649,78 @@ func buildSandboxPool(cfg *config.Config, personasDir, protocolsDir, systemPromp
 		}
 	case sandbox.NetworkModeLockdown:
 		log.Printf("sandbox: network mode=lockdown — scheduled-task, interactive chat, AND approved-bash egress sealed regardless of per-task AllowNetwork.")
+	}
+	return sandbox.NewPool(poolCfg), nil
+}
+
+// buildKubernetesSandboxPool finishes pool construction for the kubernetes
+// backend (#989): it refuses podman-only knobs that would otherwise be
+// silently ignored (a configured-but-inert security knob is the failure mode
+// ADR-0010's no-degrade rule exists for), builds the backend handle, and runs
+// the fail-closed cluster preflight before the warm pool spawns its first pod.
+func buildKubernetesSandboxPool(cfg *config.Config, poolCfg sandbox.PoolConfig, sandboxRuntime string) (*sandbox.Pool, error) {
+	if sandboxRuntime != "" {
+		return nil, fmt.Errorf(
+			"FLEET_SANDBOX_RUNTIME=%q is a podman OCI-runtime knob and has no effect under FLEET_SANDBOX_BACKEND=kubernetes; "+
+				"select hypervisor isolation with FLEET_SANDBOX_K8S_RUNTIME_CLASS (a cluster RuntimeClass, e.g. kata) instead (fail-closed)", sandboxRuntime)
+	}
+	if v := strings.TrimSpace(os.Getenv("FLEET_SANDBOX_SECCOMP_PROFILE")); v != "" {
+		return nil, fmt.Errorf(
+			"FLEET_SANDBOX_SECCOMP_PROFILE=%q is a podman knob and has no effect under FLEET_SANDBOX_BACKEND=kubernetes; "+
+				"install the profile on the sandbox nodes and set FLEET_SANDBOX_K8S_SECCOMP_PROFILE (a kubelet-relative Localhost profile) instead (fail-closed)", v)
+	}
+	if cfg.DefaultNetworkMode == sandbox.NetworkModeAllowlisted {
+		return nil, fmt.Errorf(
+			"FLEET_DEFAULT_NETWORK_MODE=allowlisted is not supported under FLEET_SANDBOX_BACKEND=kubernetes: the host-side egress proxy " +
+				"is unreachable from sandbox pods. Use lockdown (sealed by the deny-all NetworkPolicy) or open, and shape egress with cluster NetworkPolicies (fail-closed)")
+	}
+	// Supporting-doc mounts are same-path HOST bind mounts; a pod has no host
+	// filesystem to bind them from, and leaving them in the config would make
+	// the fileop anchor logic trust paths that are not actually mounted.
+	// Bundles relying on in-sandbox persona/protocol reads degrade exactly
+	// like the podman missing-dir case (skipped; host-path view_file still
+	// works via the workspace when the bundle lives under it).
+	if len(poolCfg.Container.ReadOnlyMounts) > 0 {
+		log.Printf("sandbox: kubernetes backend — supporting-doc bind mounts do not apply (pods mount only the workspace claim); in-sandbox reads of %d host dir(s) will not resolve", len(poolCfg.Container.ReadOnlyMounts))
+		poolCfg.Container.ReadOnlyMounts = nil
+	}
+	poolCfg.Container.Runtime = ""
+
+	backend, err := sandbox.NewKubernetesBackend(sandbox.KubernetesConfig{
+		Namespace:               cfg.SandboxK8sNamespace,
+		WorkspaceClaim:          cfg.SandboxK8sWorkspaceClaim,
+		ServiceAccount:          cfg.SandboxK8sServiceAccount,
+		ImagePullSecret:         cfg.SandboxK8sImagePullSecret,
+		RuntimeClassName:        cfg.SandboxK8sRuntimeClass,
+		SeccompLocalhostProfile: cfg.SandboxK8sSeccompProfile,
+		KubeconfigPath:          cfg.SandboxK8sKubeconfig,
+		NetworkPolicyName:       cfg.SandboxK8sNetworkPolicy,
+	})
+	if err != nil {
+		return nil, err
+	}
+	// Fail closed BEFORE the warm pool spawns its first pod: a cluster that
+	// cannot run sandboxes (unreachable apiserver, missing RBAC, absent
+	// workspace claim or sealed-egress policy) must abort boot, never
+	// silently fall back to podman or host execution.
+	if err := backend.Preflight(context.Background()); err != nil {
+		return nil, fmt.Errorf("kubernetes sandbox preflight failed (fail-closed): %w", err)
+	}
+	poolCfg.Mode = sandbox.ModeKubernetes
+	poolCfg.KubernetesBackend = backend
+
+	poolCfg.DefaultNetworkMode = cfg.DefaultNetworkMode
+	poolCfg.DefaultEgressAllowlist = nil
+	log.Printf("sandbox: kubernetes backend — image=%s, pool=%d, workspace=%s, namespace=%s, runtime_class=%s",
+		poolCfg.Container.Image, poolCfg.Size, poolCfg.Container.WorkspaceHostDir, backend.Namespace(), defaultIfEmpty(cfg.SandboxK8sRuntimeClass, "cluster default"))
+	if poolCfg.PersistentREPL {
+		log.Printf("sandbox: run_python REPL mode=persistent — one kernel per conversation survives across turns (idle TTL %s, max %d sessions)",
+			poolCfg.PersistentIdleTTL, cfg.PythonREPLMaxSessions)
+	} else {
+		log.Printf("sandbox: run_python REPL mode=per-turn — kernel is fresh each turn (the default)")
+	}
+	if cfg.DefaultNetworkMode == sandbox.NetworkModeLockdown {
+		log.Printf("sandbox: network mode=lockdown — every sandbox pod is labeled %s=none for the deny-all NetworkPolicy (enforcement is the cluster CNI's job — see docs/DEPLOYMENT-KUBERNETES.md)", "fleet.elcanotek.com/egress")
 	}
 	return sandbox.NewPool(poolCfg), nil
 }

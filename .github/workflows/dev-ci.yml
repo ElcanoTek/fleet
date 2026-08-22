@@ -255,6 +255,35 @@ jobs:
         # dependency bump breaking the app.
         run: npm run build
 
+  helm:
+    # Same chart lint as ci.yml (#989): lint + minimal and everything-on
+    # renders. helm is preinstalled on the runner image.
+    name: Helm chart lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Lint and render the fleet chart
+        run: |
+          set -euo pipefail
+          helm version --short
+          helm lint deploy/helm/fleet \
+            --set image.repository=registry.invalid/fleet --set image.tag=ci \
+            --set sandbox.image=registry.invalid/fleet-sandbox:ci
+          helm template ci deploy/helm/fleet --namespace fleet \
+            --set image.repository=registry.invalid/fleet --set image.tag=ci \
+            --set sandbox.image=registry.invalid/fleet-sandbox:ci >/dev/null
+          helm template ci deploy/helm/fleet --namespace fleet \
+            --set image.repository=registry.invalid/fleet --set image.tag=ci \
+            --set sandbox.image=registry.invalid/fleet-sandbox:ci \
+            --set postgres.enabled=true \
+            --set web.enabled=true --set web.image=registry.invalid/fleet-web:ci \
+            --set ingress.enabled=true --set ingress.host=fleet.example.com \
+            --set networkPolicies.openEgress.create=true \
+            --set 'networkPolicies.openEgress.blockedCIDRs={10.0.0.0/8}' \
+            --set sandbox.kubernetes.runtimeClass=kata >/dev/null
+
   migrations:
     name: Migration DDL lint
     runs-on: ubuntu-latest
@@ -309,7 +338,7 @@ jobs:
     # Aggregate check for branch protection: passes only when every fast-lane
     # job succeeded (mirrors ci.yml's `CI gate`).
     if: always()
-    needs: [go, python, codeql, semgrep, web, migrations, gitleaks]
+    needs: [go, python, codeql, semgrep, web, migrations, gitleaks, helm]
     runs-on: ubuntu-latest
     steps:
       - name: Fail if any fast-lane job failed
