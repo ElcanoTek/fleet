@@ -169,11 +169,15 @@ jobs:
 
   codeql:
     # Reusable-workflow call (see codeql.yml's header): puts the CodeQL jobs in
-    # THIS graph so `Dev gate` blocks on them. A finding fails the gate — the
-    # `Fail on findings` step inside makes green mean "clean", not just "ran".
+    # THIS graph so `Dev gate` blocks on them. A finding in the blocking band
+    # fails the gate, so green means "no unwaived High-and-above finding", not
+    # just "ran" — and on a `pull_request` event it means that of the DIFF only,
+    # because CodeQL is diff-informed there (docs/adr/0048-codeql-severity-gating.md).
+    # The tree-wide verdict comes from the push runs.
     # Unconditional (no docs-only detection in the fast lane, and Dev gate
     # demands strict success, so a skip would fail it); running on dev pushes
-    # too also covers any direct push that bypassed a PR.
+    # too also covers any direct push that bypassed a PR — and is the only event
+    # shape that scans the whole tree.
     permissions:
       contents: read
       security-events: write

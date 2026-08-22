@@ -1,0 +1,90 @@
+{
+  "$schema-note": [
+    "Register of CodeQL findings that are accepted as false positives in fleet's",
+    "threat model. Consumed by .github/workflows/codeql.yml's `Fail on findings`",
+    "step: a finding whose (rule, file) pair appears here does not block the",
+    "build. Everything else at level error/warning, or security-severity >= 7.0,",
+    "does.",
+    "",
+    "WHY A REGISTER AND NOT query-filters OR AN IGNORED PATH:",
+    "a query-filter `exclude` switches the rule off for the whole repository, so",
+    "a genuine future instance of go/request-forgery (security-severity 9.1)",
+    "would never be reported again. An entry here waives ONE rule in ONE file and",
+    "leaves the query live everywhere else — including elsewhere in the same",
+    "package. The findings still upload to the Security tab either way; this only",
+    "governs whether CI blocks.",
+    "",
+    "RULES FOR EDITING:",
+    "  - One entry per (rule, file). `reason` is mandatory and must say why the",
+    "    finding cannot be exploited HERE, not that the rule is noisy.",
+    "  - Widening this file is a security decision. It belongs in the PR diff and",
+    "    the reviewer is expected to check the reason against the code.",
+    "  - An entry is not a permanent waiver. The weekly scheduled scan reports",
+    "    entries that no longer match any finding so a stale waiver gets removed",
+    "    rather than quietly widening coverage loss.",
+    "  - Fixing the code is always preferred to adding an entry.",
+    "",
+    "PROVENANCE: every reason below was derived by reading the flagged code during",
+    "the audit recorded in docs/adr/0048-codeql-severity-gating.md. The 55",
+    "findings that the first full-tree scan surfaced (Dev CI run 527) were triaged",
+    "individually; the four that were reachable were FIXED in code, not accepted."
+  ],
+
+  "accepted": [
+    {
+      "rule": "go/request-forgery",
+      "file": "internal/tools/web_fetch.go",
+      "reason": "FetchURLForContext is the deliberate @url composer-handle fetch — a user-requested outbound GET is the feature, so the taint is by design. It dials through newSSRFGuardedDialer(), whose net.Dialer.Control hook runs after DNS resolution on EVERY dial and refuses netguard.IsBlockedIP: loopback, RFC1918, ULA, link-local (incl. 169.254.169.254), multicast, unspecified, RFC 6598 CGNAT (the Alibaba/Oracle 100.100.100.x metadata range), TEST-NET, RFC 2544 and 240.0.0.0/4. IPv4-mapped IPv6 is normalized first and a nil IP fails closed. Because the check is per-dial rather than per-save, DNS rebinding is closed too, and redirect hops re-dial through the same hook. http.Transport refuses any scheme but http/https, Go's 10-redirect cap applies, and the body is capped at 5 MiB. internal/netguard is the single source of truth with a 24-case regression matrix in netguard_test.go."
+    },
+    {
+      "rule": "go/request-forgery",
+      "file": "internal/mcpoauth/discovery.go",
+      "reason": "These two URLs are an operator-typed MCP server URL and the remote-derived pointers reached from it (a WWW-Authenticate resource_metadata= parameter, a PRM-declared issuer). Every request uses mcpoauth.SafeHTTPClient (wired at remotemcp/service.go), whose safeDialContext resolves, rejects blocked IPs, then dials the exact validated IP — closing the resolve-to-connect TOCTOU — and whose CheckRedirect hard-fails so a 30x can never relay a bearer to a new origin. CanonicalResourceURI rejects a non-http(s) scheme, embedded userinfo, or a hostless URL before this point, fetchJSON now refuses a non-http(s) scheme by name, and maxMetadataBytes caps the body at 1 MiB. Mix-up defenses are downstream: verifyAuthServer rejects a missing or mismatched issuer and refuses a non-S256 PKCE downgrade, and Discover adopts a PRM-declared resource only when sameOrigin."
+    },
+    {
+      "rule": "go/path-injection",
+      "file": "internal/agent/session.go",
+      "reason": "The value is sanitized one frame up and CodeQL loses the sanitizer across a struct-field and package boundary (chatAttachment -> agent.ImageAttachment -> TurnInput). httpapi/chat.go calls validateAttachments, which filepath.Abs+Clean's the client path, takes filepath.Rel(root, abs), rejects it unless filepath.IsLocal(rel), and then REBUILDS the path as filepath.Join(root, rel), storing only that. attachments.go is the only construction site of agent.ImageAttachment in the tree, so no unvalidated path can reach these os.Stat/os.ReadFile calls. The caller contract is documented at loadImageAttachments because the guard lives in the producer, not here."
+    },
+    {
+      "rule": "go/weak-sensitive-data-hashing",
+      "file": "internal/sched/apikeys/apikeys.go",
+      "reason": "SHA-256 is a lookup INDEX over a full-entropy random token, not a password hash. generateKey mints the key from 32 crypto/rand bytes (\"sk-\" + base64url), so there is no guessable preimage to iterate and a KDF would add per-request cost without adding security. This is the standard construction for bearer-token storage."
+    },
+    {
+      "rule": "go/weak-sensitive-data-hashing",
+      "file": "internal/sched/handlers/handlers.go",
+      "reason": "Both call sites hash only to equalize length before subtle.ConstantTimeCompare — the digests are compared in memory and never stored. That is the standard defense against deducing secret length from comparison timing, and the handler already fails closed when AdminAPIKey is unset."
+    },
+    {
+      "rule": "go/weak-sensitive-data-hashing",
+      "file": "internal/store/users.go",
+      "reason": "The digest is taken over the BCRYPT HASH, not the password, to derive an 8-byte session-revocation epoch. The password is bcrypt'd elsewhere; this input already carries bcrypt's 128-bit random salt, and the epoch is a generation counter that /auth/verify would never accept as a credential. The reasoning is written out at the call site and sessionEpochExpr pins the SQL twin."
+    },
+    {
+      "rule": "go/clear-text-logging",
+      "file": "cmd/fleet/main.go",
+      "reason": "Field-insensitive taint through ProviderConfig, the same misattribution already recorded in the //nolint:gosec at main.go:1276. All three sinks log only a wrapped boot error. The plausible flow (a decrypted admin-managed ProviderConfig.APIKey reaching resolver.go's fmt.Errorf) is unreachable: anthropic.New and openai.New in charm.land/fantasy always return a nil error, so the only errors that arm can produce are buildProvider's own literal strings. The MCP-broker and reload sinks return only clientconfig/store errors, whose bundle-config messages quote variable NAMES, never values, per the manifest doctrine in AGENTS.md."
+    },
+    {
+      "rule": "go/clear-text-logging",
+      "file": "internal/admincli/import.go",
+      "reason": "Field-insensitive taint through the legacy-export struct, which happens to carry a password_hash field. stats.warnings is populated by ten warnf call sites and not one touches a secret — they carry conversation IDs, MCP server names, persona names, roles, timezones and recurrence strings. u.PasswordHash is read at exactly one place, which prints only u.Username and u.ID. The sink is the operator's own terminal."
+    },
+    {
+      "rule": "go/clear-text-logging",
+      "file": "internal/agent/scheduled.go",
+      "reason": "Logs an internal run error, and agentcore's boundary errors are deliberately opaque — containedBoundaryError surfaces only the incident ID, never the recovered value or a stack. The string is additionally passed through agentcore.RedactSecrets before both this log and the persisted transcript."
+    },
+    {
+      "rule": "js/remote-property-injection",
+      "file": "web/src/app/chat/ui/useTurnStream.ts",
+      "reason": "Two independent reasons, either sufficient. (1) Every flagged sink is keyed by a conversation slot id (ctx.target or convId) and by nothing else; no model-authored payload field ever reaches a key position. That id space is server-minted uuid.NewString() from store.CreateConversation — a client-supplied conversation_id is never inserted, it must resolve to an existing row owned by the caller or the request 404s — so neither a client nor the model can choose the key. (2) The sink shapes cannot reach Object.prototype anyway: an object-literal computed key performs CreateDataPropertyOrThrow, producing an OWN \"__proto__\" property and leaving the prototype untouched, and bracket assignment rebinds at most the one local record object. Worst achievable impact, given an operator-imported hostile id via the admin-CLI import path, is self-inflicted state confusion in one browser tab."
+    },
+    {
+      "rule": "js/insecure-temporary-file",
+      "file": "web/e2e/test-auth-key.ts",
+      "reason": "Test-only, and the reported defect is fixed as far as it can be without changing the cross-process rendezvous contract: the write is now O_EXCL (flag \"wx\") at mode 0600 with crypto random bytes in the sibling name, so it cannot follow or clobber a pre-planted symlink and does not leave the private half world-readable. The query recognizes only mkdtemp as safe, but the fixed path is a deliberate rendezvous — playwright.config.ts is loaded in the main process AND re-imported in every worker, which must all read the same throwaway keypair. The key is generated per run, protects nothing real, and is never committed."
+    }
+  ]
+}
