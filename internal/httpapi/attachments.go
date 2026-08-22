@@ -309,13 +309,17 @@ func (s *Server) validateAttachments(atts []chatAttachment) []chatAttachment {
 		// !IsRegular.
 		rel, relErr := filepath.Rel(root, abs)
 		if relErr != nil || !filepath.IsLocal(rel) {
-			log.Printf("attachment rejected (outside uploads root): %s", a.Path)
+			// %q, not %s: a.Path here is the RAW client-supplied string on the
+			// branch where containment just FAILED, so it is hostile by
+			// construction. %q escapes CR/LF and cannot forge a log entry.
+			log.Printf("attachment rejected (outside uploads root): %q", a.Path)
 			continue
 		}
 		abs = filepath.Join(root, rel)
 		info, err := os.Stat(abs)
 		if err != nil || !info.Mode().IsRegular() {
-			log.Printf("attachment rejected (stat): %s: %v", a.Path, err)
+			// %q for the same reason as above: still the pre-validation client string.
+			log.Printf("attachment rejected (stat): %q: %v", a.Path, err)
 			continue
 		}
 		a.Path = filepath.ToSlash(abs)

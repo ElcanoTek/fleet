@@ -46,13 +46,29 @@ gitleaks secret scan. **Every job must be green before merge.** Tests are
 deterministic without a live model: use the fake-LLM seam (`internal/fakellm`
 via `OPENROUTER_BASE_URL`), never a real key.
 
-CodeQL (security queries) and Semgrep (Go/JS/Python SAST + Actions supply chain)
-also run per PR, **fail on any finding**, and are **inside `ci-gate` and
-`Dev gate`** — both are reusable workflows that ci.yml/dev-ci.yml call as jobs,
-so a finding blocks the merge through the existing required check. `npm audit`
-gates the web and rampart-service dependency trees the same way. Everything is
-at zero findings today; keeping it there is the point. See
-[`docs/SCANNING.md`](docs/SCANNING.md).
+CodeQL (security queries, `security-extended`) and Semgrep (Go/JS/Python SAST +
+Actions supply chain) also run per PR and are **inside `ci-gate` and `Dev gate`**
+— both are reusable workflows that ci.yml/dev-ci.yml call as jobs. `npm audit`
+(both npm trees, lockfile-only, any severity) and ruff (`check` **and**
+`format --check`) gate the same way.
+
+Their thresholds differ, and the difference is load-bearing:
+
+- **Semgrep, ruff and `npm audit`: zero findings, gating on any finding.**
+- **CodeQL: zero *blocking* findings.** It gates on the **High band**
+  (`security-severity >= 7.0`, or level `error`/`warning` for a rule publishing
+  no security-severity), minus a reviewed register of accepted `(rule, file)`
+  pairs in `.github/codeql-accepted-findings.json` — each with a written reason.
+  Below the band is **advisory**: printed in the job log and uploaded to the
+  Security tab, not blocking. So "CodeQL is green" means "no unwaived High-band
+  finding", not "no findings". The reasoning is [ADR-0048](docs/adr/0048-codeql-severity-gating.md).
+
+Two facts an agent must not get wrong here. **A `pull_request` CodeQL run is
+diff-informed** — it evaluates every query over the full database, then reports
+only results inside the PR's diff — so it certifies a *diff*, never a tree; only
+push and scheduled runs give a tree-wide verdict. And **`Dev gate` is not a
+required check on `dev`**, so on that branch a scanner failure is a red X beside a
+mergeable PR. See [`docs/SCANNING.md`](docs/SCANNING.md) ("Known gaps").
 
 ## Repository map
 
@@ -124,8 +140,10 @@ same PR.
   `codecov.yml` were removed because the repo has no `CODECOV_TOKEN`, so the
   upload only ever produced a missing-token warning. Treat coverage as a quality
   signal, not a gate: add tests that catch real behavior, not to chase a
-  number. (The merge gates are build/vet/lint, the test suites, the
-  `-race` lane, govulncheck, Grype, the migration linter, and gitleaks.)
+  number. (The merge gates are build/vet/lint, ruff — `check` and
+  `format --check` — the test suites, the `-race` lane, govulncheck, Grype,
+  `npm audit` + `scripts/check-npm-overrides.sh`, CodeQL, Semgrep, the migration
+  linter, and gitleaks.)
 - **Match the surrounding code:** naming, idioms, and comment density. The
   `internal/agentcore` package comments explain *why* each governance invariant
   holds — preserve that level of explanation when you extend it.
@@ -170,13 +188,16 @@ same PR.
 - **Testing strategy** (unit / fake-LLM / mocked + live Playwright / canary):
   [`docs/TESTING.md`](docs/TESTING.md)
 - **The scanning stack** (who checks what, why ruff owns Python lint, why
-  Semgrep is scoped to Actions supply chain after its broad packs scored 0/6,
-  what blocks vs what reports, and the known gaps):
+  Semgrep runs all four registry packs — `p/github-actions`, `p/golang`,
+  `p/javascript`, `p/python` — and blocks with 6 false positives waived at the
+  line, what blocks vs what only reports, and the known gaps, chief among them
+  that the `dev` ruleset requires no status checks):
   [`docs/SCANNING.md`](docs/SCANNING.md)
 - **CodeQL** (why default setup was replaced by an advanced-setup workflow, how
-  the Go toolchain is resolved, why it runs security queries only, and the
-  difference between a required status check and code scanning merge protection):
-  [`docs/CODEQL.md`](docs/CODEQL.md)
+  the Go toolchain is resolved, why it runs security queries only, why a
+  `pull_request` run certifies a diff and not a tree, and the High-band threshold
+  plus accepted-findings register): [`docs/CODEQL.md`](docs/CODEQL.md) +
+  [ADR-0048](docs/adr/0048-codeql-severity-gating.md)
 - **HTTP API versioning** (the `/v1` prefix + `X-Fleet-API-Version` + `/api-info`
   discovery + deprecation contract): [`docs/api-versioning.md`](docs/api-versioning.md)
 - **Database migrations** (the two runners, safe-DDL patterns, the migration DDL

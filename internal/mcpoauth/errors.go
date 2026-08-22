@@ -41,18 +41,6 @@ func IsInvalidTarget(err error) bool {
 	return errors.As(err, &oe) && oe.Code == "invalid_target"
 }
 
-// IsInvalidClient reports whether err is an OAuthError with code invalid_client
-// — the authorization server no longer recognizes our client credentials. For a
-// DCR-registered client this usually means the registration was pruned or
-// expired server-side; for a BYO client it means the id/secret is wrong or was
-// rotated. Either way the stored registration is unusable, so this is terminal
-// for refresh (see IsTerminalRefreshError): the connection is marked needs-reauth
-// and reconnecting re-runs registration through the normal connect flow.
-func IsInvalidClient(err error) bool {
-	var oe *OAuthError
-	return errors.As(err, &oe) && oe.Code == "invalid_client"
-}
-
 // IsInvalidScope reports whether err is an OAuthError with code invalid_scope —
 // the authorization server rejected the requested scope. On refresh this is
 // recoverable: RFC 6749 §6 makes `scope` OPTIONAL and defines its omission as

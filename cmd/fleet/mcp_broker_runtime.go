@@ -465,6 +465,20 @@ func scrubParentConnectorState(bundle *clientconfig.Bundle, cfg *config.Config, 
 	keys := bundle.ConnectorEnvironmentKeys(os.Environ())
 	var errs []error
 	for _, key := range keys {
+		// Hand the VALUE to the tool-output scrubber before it becomes
+		// unreachable. agentcore's redactor snapshots os.Environ() lazily, on the
+		// first tool output, which is long after this loop — so without this the
+		// literal set held no connector secret at all, and a connector echoing
+		// its own credential back in a tool result was caught only if the value
+		// happened to match one of internal/redact's shape patterns. A novel bare
+		// token would have reached the model context, the SSE stream and the
+		// session log.
+		//
+		// This does not weaken the divestment below or re-expose anything: the
+		// value is kept solely as a redaction target and is never emitted. It is
+		// the backstop for what comes BACK across the broker boundary, which the
+		// boundary itself cannot police.
+		agentcore.RegisterSecretLiteral(os.Getenv(key))
 		if err := os.Unsetenv(key); err != nil {
 			errs = append(errs, fmt.Errorf("unset connector environment %s: %w", key, err))
 		}

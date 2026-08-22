@@ -98,18 +98,49 @@ each runs, and the `make` targets that mirror them locally (`make ci-go`,
 Every pull request must be green before merge. CI runs:
 
 - **Go** — `go build`, `go vet`, `golangci-lint` (full gate — fails on any
-  finding), and `go test`.
-- **Web** — `npm run lint`, vitest, and `npm run build`.
+  finding), `go test`, and a `-race` lane.
+- **Python** — `ruff check` **and** `ruff format --check` over the tree's Python
+  files (`make lint-python` runs both, and skips loudly if ruff is not installed).
+- **Web** — `npm run lint` (oxlint), `npm run typecheck` (`tsc --noEmit`), vitest,
+  and `npm run build`.
 - **Playwright** — the mocked suite, plus a live suite against a real backend
   with a stubbed LLM (no OpenRouter spend).
 - **Secret scan (gitleaks)** — fails the build on any new, un-ignored secret.
-- **Container image scan (Grype)** — fails the build on a fixable CRITICAL or HIGH CVE in
-  the sandbox image built from `config/default/sandbox/Containerfile` (HIGH and
-  below are reported, not blocking). Findings upload to GitHub Security → Code
-  scanning. A separate weekly scheduled scan (non-blocking) catches new CVEs
-  against the existing image between PRs. (Grype, not Trivy: the image's
+- **SAST (CodeQL and Semgrep)** — both are reusable workflows called by `ci.yml`
+  and `dev-ci.yml`, so they sit inside the aggregate gate. **Semgrep** fails on
+  any unsuppressed finding across `p/github-actions`, `p/golang`, `p/javascript`
+  and `p/python`; a false positive is waived at the line with
+  `nosemgrep: <rule-id>` plus a reason. **CodeQL** (`security-extended` over go /
+  python / javascript-typescript / actions) fails on an unwaived finding in the
+  **High band** — `security-severity >= 7.0`, or level `error`/`warning` for a
+  rule that publishes no security-severity — with lower-severity findings
+  reported as advisory. A false positive is waived either by an in-source
+  `// codeql[rule-id]` comment or by an entry in
+  `.github/codeql-accepted-findings.json` **with a written reason**; both are
+  reviewable in the diff, and fixing the code is always preferred. See
+  [`docs/SCANNING.md`](docs/SCANNING.md), [`docs/CODEQL.md`](docs/CODEQL.md) and
+  [ADR-0048](docs/adr/0048-codeql-severity-gating.md).
+- **Dependency CVEs** — `govulncheck` for the Go module, and
+  `npm audit --audit-level=low` (lockfile-only, **any** severity) for both
+  `web/` and `scripts/rampart-service`, alongside
+  `scripts/check-npm-overrides.sh`, which fails once upstream ships fixes that
+  make the pinned security `overrides` droppable.
+- **Container image scan (Grype)** — fails the build on a fixable **CRITICAL or
+  HIGH** CVE in an **RPM** of the sandbox image built from
+  `config/default/sandbox/Containerfile`. MEDIUM and below are reported, not
+  blocking, and the Python `dist-info` records Grype catalogs alongside the RPMs
+  never block whatever their severity (they are uploaded to SARIF — the rationale
+  is in [`docs/TESTING.md`](docs/TESTING.md)). Findings upload to GitHub Security
+  → Code scanning. A separate weekly scheduled scan (non-blocking) catches new
+  CVEs against the existing image between PRs. (Grype, not Trivy: the image's
   `fedora-minimal` base has no Trivy advisory feed, so Trivy would scan none of
   its packages; Grype matches its RPM + Python packages against NVD/GHSA.)
+
+One qualifier on "must be green", because it differs by branch: `CI gate` is a
+**required** status check on `main`, so a red lane genuinely blocks the merge
+there. The `dev` ruleset requires no status checks, so on `dev` a red `Dev gate`
+is a signal rather than a block — please treat it as one anyway. See
+[`docs/SCANNING.md`](docs/SCANNING.md) ("Known gaps").
 
 If golangci-lint flags something, either fix it or add a `//nolint` with a
 reason (the `nolintlint` linter requires the reason). The lint backlog is at

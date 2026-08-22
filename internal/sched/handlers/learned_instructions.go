@@ -54,6 +54,15 @@ func (h *Handlers) SubmitFeedback(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// taskFromPath is lookup only (see its doc) — the authorization decision is
+	// the caller's. Own-rows: without this any `client`-role principal could
+	// down-vote a teammate's task with an attacker-authored critique, which
+	// maybeDistill then feeds — together with the victim's prompt — into an LLM
+	// to mint a proposal on their task, at unmetered model spend.
+	if !taskVisibleToPrincipal(p, task) {
+		writeError(w, http.StatusNotFound, "Task not found")
+		return
+	}
 	var req feedbackRequest
 	if err := readJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
@@ -134,6 +143,14 @@ func (h *Handlers) LearnedInstructions(w http.ResponseWriter, r *http.Request) {
 	}
 	task, ok := h.taskFromPath(w, r)
 	if !ok {
+		return
+	}
+	// Own-rows, same reason as SubmitFeedback: the GET branch below discloses
+	// another principal's learned instructions, which are distilled from their
+	// task's prompt and critiques. 404 rather than 403 so the surface does not
+	// confirm that an unowned task id exists.
+	if !taskVisibleToPrincipal(p, task) {
+		writeError(w, http.StatusNotFound, "Task not found")
 		return
 	}
 

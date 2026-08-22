@@ -4,9 +4,18 @@
 -- unchanged. A non-null (possibly empty) array enforces least-privilege: an MCP
 -- call to a pair not on the list is denied before it executes.
 --
--- TODO(security): credential_allowlist stores (server, account) pair NAMES only,
--- not credential values. The values themselves never enter the database (they
--- live in the process env file; see internal/creds). If account names are
--- themselves sensitive, encrypt this column with the AES-256-GCM pattern used
--- for project secrets (cf. Suna's apps/api/src/projects/secrets.ts).
+-- SECURITY NOTE, and an open question that is deliberately NOT settled here:
+-- credential_allowlist stores (server, account) pair NAMES only, never
+-- credential values. The values do not enter the database at all — they live in
+-- the process env file and are brokered host-side (internal/creds, ADR-0003,
+-- ADR-0042). So this column is not a secret store.
+--
+-- What is unsettled is whether ACCOUNT NAMES are themselves in scope. If a
+-- deployment treats them as sensitive, this column wants encryption at rest.
+-- That is a threat-model decision for the repo owner, not something a migration
+-- can decide, and it is recorded in SECURITY.md rather than here: a migration is
+-- applied history, so a question parked in one is a question nobody can close in
+-- place. (An earlier version of this note was an untracked security to-do that
+-- pointed at a source file in an unrelated external codebase; the pointer was
+-- dangling and nothing tracked the item.)
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS credential_allowlist JSONB;

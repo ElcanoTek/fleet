@@ -7,9 +7,13 @@ on:
     branches: [main]
 
 permissions:
+  # Least privilege at the workflow level, so nothing is granted to a job that
+  # did not ask. `pull-requests: read` used to sit here for
+  # golangci-lint-action's only-new-issues — which is now explicitly `false`
+  # (see the note at that step), so the scope had no consumer while still
+  # reaching every job that does not override it, including web / playwright /
+  # e2e-live, which npm-install and run thousands of third-party packages.
   contents: read
-  # Required by golangci-lint-action's only-new-issues option (reads the PR diff).
-  pull-requests: read
 
 jobs:
   changes:
@@ -64,8 +68,31 @@ jobs:
           while IFS= read -r f; do
             [ -z "$f" ] && continue
             # `*` in a shell case pattern spans '/', so these match at any depth.
+            #
+            # This list is deliberately an ALLOW-LIST of prose, and deliberately
+            # NOT a bare `*.md` or `docs/*`. Both of those were wrong, and both
+            # made `CI gate` report green over a suite that never ran:
+            #
+            #   - `*.md` matched at any depth, so it swallowed 15 markdown files
+            #     that are COMPILED PRODUCT CONTENT — every
+            #     internal/clientconfig/builtin_skills/*/SKILL.md (pulled in by
+            #     `//go:embed all:builtin_skills` and asserted by
+            #     builtin_skills_browserbase_test.go, clientconfig_test.go and
+            #     validate_config_test.go), plus config/default/system_prompts/
+            #     {default,chat}.md, which ARE the shipped system prompts that
+            #     docs/PROMPT-CACHE-CONTRACT.md exists to protect.
+            #   - `docs/*` swallowed docs/openapi.yaml, which
+            #     cmd/fleet/openapi_drift_test.go asserts against the Go models,
+            #     and docs/scripts/*.py + docs/img/*.py, which are inside the
+            #     ruff, Semgrep p/python and CodeQL python scopes.
+            #
+            # So a PR touching only a shipped prompt or the OpenAPI spec skipped
+            # the very tests that validate it. Keep this list prose-only; when in
+            # doubt, leave a path OFF it and run the full suite.
             case "$f" in
-              *.md|docs/*|LICENSE) : ;;        # documentation: no compiled/runtime signal
+              docs/*.md|LICENSE) : ;;
+              README.md|CHANGELOG.md|CONTRIBUTING.md|SECURITY.md) : ;;
+              CODE_OF_CONDUCT.md|AGENTS.md|CLAUDE.md|ONBOARDING.md) : ;;
               *) docs_only=false ;;
             esac
           done <<< "$files"
@@ -231,7 +258,7 @@ jobs:
         run: go vet -tags fleet_host_executor ./...
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@db9de0fc1a667e1a49d2291a1a042dff081d78f6 # v9
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           # Repo .golangci.yml is the v2 schema (version: "2"). It no longer
           # pins run.go: golangci-lint's documented default is "use Go version
@@ -791,7 +818,7 @@ jobs:
         # affected packages, and fix versions rather than only a red CI job. The
         # hashFiles guard skips this step (instead of erroring "file not found")
         # when an EARLIER step failed before grype could write the SARIF.
-        uses: github/codeql-action/upload-sarif@4c0873ef8656cb3c50b3f42fb63bc1ade0cfa827 # v4 (4.37.8)
+        uses: github/codeql-action/upload-sarif@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8
         if: ${{ !cancelled() && hashFiles('grype-results.sarif') != '' }}
         with:
           sarif_file: 'grype-results.sarif'
@@ -814,12 +841,29 @@ jobs:
         env:
           # needs.*.result is one of: success | failure | cancelled | skipped.
           RESULTS: ${{ join(needs.*.result, ',') }}
+          DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}
         run: |
           set -euo pipefail
           echo "Upstream job results: ${RESULTS}"
+          echo "docs_only: ${DOCS_ONLY}"
           case ",${RESULTS}," in
             *,failure,*|*,cancelled,*)
               echo "::error::A required upstream CI job failed or was cancelled."
               exit 1 ;;
           esac
+          # A `skipped` job passes this gate only because the docs-only
+          # classifier above is allowed to skip the suite. If nothing was
+          # classified docs-only, a skip means a required job did not run and
+          # this gate would otherwise report green over it — the
+          # red-but-not-required rot pattern with the colours inverted. So trust
+          # the classifier for the one case it exists for, and refuse a skip in
+          # every other case rather than assuming the `if:` that produced it was
+          # correct.
+          if [ "${DOCS_ONLY}" != "true" ]; then
+            case ",${RESULTS}," in
+              *,skipped,*)
+                echo "::error::A required upstream job was SKIPPED on a change that is not docs-only. CI gate does not pass over a suite that did not run."
+                exit 1 ;;
+            esac
+          fi
           echo "All required CI jobs passed (or were cleanly skipped for a docs-only change)."

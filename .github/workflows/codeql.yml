@@ -63,12 +63,14 @@
 # Grype step, govulncheck-scheduled.yml, grype-scheduled.yml). Those push their
 # own SARIF to the Security tab and never depended on CodeQL being configured.
 #
-# Merge gating, in two parts — both now closed:
+# Merge gating, in two parts — both closed:
 #
-#   1. Does a finding turn the CHECK red? YES. The `Fail on findings` step below
-#      fails the job on any finding. Without it the analyze step exits 0 whether
-#      it found nothing or a hundred alerts, so a red check could only ever mean
-#      "the scanner broke".
+#   1. Does a finding turn the CHECK red? YES, for a finding in the blocking
+#      band — see the `Fail on findings` step for the threshold and
+#      docs/adr/0048-codeql-severity-gating.md for why it is that band and not
+#      "any finding". Without that step the analyze step exits 0 whether it found
+#      nothing or a hundred alerts, so a red check could only ever mean "the
+#      scanner broke".
 #   2. Does a red check BLOCK a merge? YES, through the EXISTING required check.
 #      This is a REUSABLE workflow (`on: workflow_call`): ci.yml and dev-ci.yml
 #      each call it as a job, and a job that calls a reusable workflow can sit in
@@ -78,13 +80,17 @@
 #      `needs` cannot cross workflow FILES, but a workflow_call brings the jobs
 #      into the caller's file.
 #
-# They cannot be part of `CI gate`: a job's `needs` cannot reach across workflow
-# files. So this file carries its own aggregate `CodeQL gate` job at the bottom,
-# for the same reason ci.yml and dev-ci.yml carry theirs — it is the ONE check to
-# name in branch protection if CodeQL should ever become blocking, instead of
-# four per-language checks that would have to be re-pointed by hand every time
-# the matrix changes. Adding it here does not make it required; that is a
-# repo-settings decision, deliberately not expressible from this file.
+#      CAVEAT, and it is load-bearing: that routing only blocks a merge where the
+#      aggregate gate is a REQUIRED status check. On `main` it is (`CI gate`).
+#      On `dev` the ruleset requires no status checks at all, so `Dev gate` is
+#      red-but-not-required there — see docs/SCANNING.md ("Known gaps").
+#
+# The per-language `analyze` legs cannot be named directly in `CI gate`'s
+# `needs` — a job's `needs` cannot reach across workflow files — but the CALLING
+# job can be, and is. So the aggregate `CodeQL gate` job at the bottom of this
+# file exists for the standalone schedule/dispatch runs (one legible verdict per
+# weekly re-scan instead of four boxes) and as a stable single check name to put
+# in a ruleset, not because the workflow_call path needs it.
 # See docs/CODEQL.md ("Merge gating").
 name: CodeQL
 
@@ -129,10 +135,13 @@ jobs:
           # supported for Go — only `autobuild` or `manual` — so the toolchain
           # has to be right rather than skipped.
           # security-extended everywhere: the broader security suite (more
-          # queries, lower average precision than the default). Measured before
-          # adoption like every other gate here — the run's own findings
-          # summary is the measurement, and the Fail-on-findings step means
-          # anything it surfaces must be fixed or reasoned away, not accrued.
+          # queries, lower average precision than the default). The adoption
+          # measurement was taken on a `pull_request` run, where CodeQL is
+          # DIFF-INFORMED and reports only results inside the PR's diff — so it
+          # measured the diff, not the tree, and read as zero when the tree held
+          # 55 findings. Do not re-derive a tree-wide claim from a PR run; the
+          # full-tree numbers come from push/schedule runs. See
+          # docs/adr/0048-codeql-severity-gating.md.
           - language: go
             build-mode: autobuild
             queries: security-extended
@@ -161,7 +170,7 @@ jobs:
           cache: true
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@4c0873ef8656cb3c50b3f42fb63bc1ade0cfa827 # v4 (4.37.8)
+        uses: github/codeql-action/init@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
@@ -171,7 +180,7 @@ jobs:
 
       - name: Autobuild
         if: matrix.build-mode == 'autobuild'
-        uses: github/codeql-action/autobuild@4c0873ef8656cb3c50b3f42fb63bc1ade0cfa827 # v4 (4.37.8)
+        uses: github/codeql-action/autobuild@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8
         env:
           # Same build tag ci.yml and dev-ci.yml pass to `go vet` and `go test`,
           # and for the same reason: internal/sandbox/host.go — the UNSANDBOXED
@@ -185,13 +194,61 @@ jobs:
           GOFLAGS: -tags=fleet_host_executor
 
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@4c0873ef8656cb3c50b3f42fb63bc1ade0cfa827 # v4 (4.37.8)
+        uses: github/codeql-action/analyze@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8
         with:
           category: /language:${{ matrix.language }}
           # Also write the SARIF to disk so the step below can summarize it. The
           # results are still uploaded to code scanning (`upload` defaults true);
           # this only adds a local copy.
           output: ${{ runner.temp }}/codeql-sarif
+
+      - name: Classify findings (shared filter)
+        # ONE classifier, in .github/codeql-gate.jq, consumed by both the summary
+        # and the gate below. Two copies of a SARIF filter is two copies that can
+        # disagree about what "blocking" means, and the report disagreeing with
+        # the gate is worse than either being wrong alone. Keeping it in a file
+        # also means it can be exercised against fixture SARIF locally with the
+        # exact bytes CI runs.
+        if: ${{ !cancelled() }}
+        env:
+          SARIF_DIR: ${{ runner.temp }}/codeql-sarif
+          LANGUAGE: ${{ matrix.language }}
+          ACCEPTED_FILE: ${{ github.workspace }}/.github/codeql-accepted-findings.json
+          GATE_FILTER: ${{ github.workspace }}/.github/codeql-gate.jq
+          CLASSIFIED: ${{ runner.temp }}/codeql-classified.json
+        run: |
+          set -uo pipefail
+          shopt -s nullglob
+          files=("$SARIF_DIR"/*.sarif)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::error::No SARIF written for $LANGUAGE — cannot conclude the scan was clean."
+            exit 1
+          fi
+          for f in "$ACCEPTED_FILE" "$GATE_FILTER"; do
+            if [ ! -f "$f" ]; then
+              echo "::error::$f is missing — refusing to gate without it."
+              exit 1
+            fi
+          done
+          if ! jq -rs --slurpfile reg "$ACCEPTED_FILE" -f "$GATE_FILTER" \
+                 "${files[@]}" > "$CLASSIFIED"; then
+            echo "::error::could not classify the SARIF for $LANGUAGE — refusing to report it clean."
+            exit 1
+          fi
+          total=$(jq -r '.total' "$CLASSIFIED")
+          meta=$(jq -r '.ruleMetaCount' "$CLASSIFIED")
+          echo "$LANGUAGE: $total finding(s), $meta rule metadata entr(ies)"
+          # VACUITY CHECK. Severity banding depends on resolving each result's
+          # rule metadata, and CodeQL puts that in tool.extensions[].rules[] —
+          # not tool.driver.rules[]. A first cut of the filter read only the
+          # driver, resolved nothing, scored every finding at security-severity 0
+          # and reported "0 blocking" over a tree holding 30 findings. The check
+          # below is what would have caught that: findings but no rule metadata
+          # means the lookup is broken and the gate is not evaluating anything.
+          if [ "$total" != "0" ] && [ "$meta" = "0" ]; then
+            echo "::error::$LANGUAGE: $total finding(s) but ZERO rule metadata resolved — severity banding is inoperative, so this gate would pass vacuously. Fix the rule lookup in .github/codeql-gate.jq."
+            exit 1
+          fi
 
       - name: Summarize findings to the job log
         # WHY THIS EXISTS: a CodeQL run reports nothing about what it FOUND to
@@ -201,62 +258,50 @@ jobs:
         # reading CI output, to `gh run view`, and to any automation that has
         # the log but not the code-scanning API.
         #
-        # This mirrors what govulncheck-scheduled.yml already does for its own
-        # SARIF: jq a per-rule count into the job log AND the step summary, so
-        # the run is readable without leaving Actions. It is reporting only and
-        # never fails the job — gating on findings is code scanning merge
-        # protection's job (see docs/CODEQL.md), not this step's.
+        # The listing is split into the SAME three tiers the gate uses, from the
+        # same classifier, and prints the ACCEPTED tier BY NAME — a waiver that
+        # is invisible in CI output is a waiver nobody re-reads.
         if: ${{ !cancelled() }}
         env:
-          SARIF_DIR: ${{ runner.temp }}/codeql-sarif
           LANGUAGE: ${{ matrix.language }}
+          CLASSIFIED: ${{ runner.temp }}/codeql-classified.json
           # The database directory is named after the EXTRACTOR, which is not
           # always the matrix language: javascript-typescript -> javascript.
           CODEQL_DB: ${{ matrix.language == 'javascript-typescript' && 'javascript' || matrix.language }}
         run: |
           set -uo pipefail
-          shopt -s nullglob
-          files=("$SARIF_DIR"/*.sarif)
           {
             echo "### CodeQL findings — $LANGUAGE"
-            if [ ${#files[@]} -eq 0 ]; then
-              # Not a failure: the analyze step is what fails on a broken run.
-              # Say it plainly rather than printing "No findings." for a scan
-              # that never produced a file — reporting a clean result you did
-              # not observe is the error this repo keeps writing down.
-              echo 'No SARIF file was written — nothing to summarize (see the analyze step).'
-            else
-              echo '```'
-              # `-s` slurps every SARIF doc into one array, so a language that
-              # emits more than one file is still counted once, in total.
-              jq -rs '
-                [ .[] | .runs[]? | .results[]? ] as $res
-                | if ($res | length) == 0 then "No findings."
-                  else
-                    ( $res
-                      | map(
-                          "[\(.level // "note")]  \(.ruleId)  "
-                          + ((.locations[0].physicalLocation // {}) as $l
-                             | "\($l.artifactLocation.uri // "?"):\($l.region.startLine // "?")")
-                        )
-                      | sort | join("\n")
-                    ) + "\n--\ntotal findings: \($res | length)"
-                  end
-              ' "${files[@]}"
-              echo '```'
-              # COVERAGE, not just the verdict: "No findings." alone cannot be
-              # told apart from "analyzed nothing", which is the exact
-              # green-but-vacuous outcome this workflow exists to rule out.
-              # The source archive is the file set the database was built from.
-              # RUNNER_TEMP (the env var), not ${{ runner.temp }}: interpolating a
-              # GitHub expression straight into a run: block is the shape
-              # semgrep's gha-curl-pipe-shell / curl-eval rules flag, and it also
-              # breaks their bash sub-parser — which silently costs coverage on
-              # this very file. The env var is equivalent and parses.
-              src="$RUNNER_TEMP/codeql_databases/$CODEQL_DB/src.zip"
-              if [ -f "$src" ]; then
-                echo "files in the $LANGUAGE database: $(unzip -Z1 "$src" 2>/dev/null | grep -vc '/$' || echo '?')"
-              fi
+            echo '```'
+            jq -r '
+              def fmt: "  [\(.level)] sec-sev=\(if .hasSev then .sev else "n/a" end)  \(.rule)  \(.file):\(.line)"
+                       + (if .suppressed then "   (in-source suppression)" else "" end);
+              def tier($label; $rows):
+                "\($label) (\($rows | length)):",
+                (if ($rows | length) == 0 then "  none"
+                 else ($rows | sort_by(.rule, .file, .line) | .[] | fmt) end);
+              tier("BLOCKING — High band (security-severity >= 7.0), not waived"; .blocking),
+              "",
+              tier("ACCEPTED — High band, waived in codeql-accepted-findings.json or in-source"; .accepted),
+              "",
+              tier("ADVISORY — below the High band; triage in the Security tab"; .advisory),
+              "",
+              "totals: \(.total) finding(s) — \(.blocking | length) blocking, \(.accepted | length) accepted, \(.advisory | length) advisory",
+              "rule metadata resolved: \(.ruleMetaCount)"
+            ' "$CLASSIFIED"
+            echo '```'
+            # COVERAGE, not just the verdict: "No findings." alone cannot be
+            # told apart from "analyzed nothing", which is the exact
+            # green-but-vacuous outcome this workflow exists to rule out.
+            # The source archive is the file set the database was built from.
+            # RUNNER_TEMP (the env var), not ${{ runner.temp }}: interpolating a
+            # GitHub expression straight into a run: block is the shape
+            # semgrep's gha-curl-pipe-shell / curl-eval rules flag, and it also
+            # breaks their bash sub-parser — which silently costs coverage on
+            # this very file. The env var is equivalent and parses.
+            src="$RUNNER_TEMP/codeql_databases/$CODEQL_DB/src.zip"
+            if [ -f "$src" ]; then
+              echo "files in the $LANGUAGE database: $(unzip -Z1 "$src" 2>/dev/null | grep -vc '/$' || echo '?')"
             fi
           } | tee -a "$GITHUB_STEP_SUMMARY"
 
@@ -268,41 +313,48 @@ jobs:
         # code has a problem", which is precisely how the Go toolchain break sat
         # unnoticed behind a red-but-not-required check for weeks.
         #
-        # Threshold is ANY finding, deliberately. The security suite currently
-        # reports ZERO across go/python/javascript-typescript/actions, so there
-        # is no backlog to grandfather and no severity line to argue about — a
-        # finding here is new. Switching a gate on over an existing backlog is
-        # how a gate becomes something people route around.
+        # THRESHOLD (see .github/codeql-gate.jq for the mechanics):
+        #   - security-severity >= 7.0 blocks. That is CodeQL's own High/Critical
+        #     cut and what GitHub's code-scanning merge protection bands on.
+        #     `level` / @problem.severity is NOT used for a rule that publishes a
+        #     security-severity: nearly every security query is `error`,
+        #     go/log-injection at 6.1 included, so banding on it would block all
+        #     23 log-injection findings and reproduce the deadlock this replaced.
+        #   - a rule with no security-severity falls back to level error/warning.
+        #   - a (rule, file) pair in .github/codeql-accepted-findings.json, or an
+        #     in-source `// codeql[rule-id]` comment, moves a High-band finding
+        #     to ACCEPTED. The register is per-FILE, so the rule stays live
+        #     everywhere else.
         #
-        # Runs after the summary so the log leads with WHAT was found.
-        #
-        # NOTE ON SCOPE: this makes the CHECK red. Whether a red check BLOCKS a
-        # merge is branch protection's call — `CodeQL gate` has to be a required
-        # status check for that, which is a repo-settings action a workflow file
-        # cannot perform. See docs/CODEQL.md ("Merge gating").
+        # WHY NOT "any finding" — that was tried in #1246 and it deadlocked the
+        # repo. See docs/adr/0048-codeql-severity-gating.md: the zero it was armed
+        # on came from a `pull_request` run, where CodeQL is DIFF-INFORMED and
+        # reports only results inside the PR's diff, so it measured the diff and
+        # not the tree.
         if: ${{ !cancelled() }}
         env:
-          SARIF_DIR: ${{ runner.temp }}/codeql-sarif
           LANGUAGE: ${{ matrix.language }}
+          CLASSIFIED: ${{ runner.temp }}/codeql-classified.json
         run: |
           set -uo pipefail
-          shopt -s nullglob
-          files=("$SARIF_DIR"/*.sarif)
-          if [ ${#files[@]} -eq 0 ]; then
-            # No SARIF means the analysis did not produce results to judge. Fail
-            # loudly rather than reporting a clean scan that never happened.
-            echo "::error::No SARIF written for $LANGUAGE — cannot conclude the scan was clean."
+          count=$(jq -r '.blocking | length' "$CLASSIFIED")
+          if [ -z "$count" ]; then
+            echo "::error::could not read the classification for $LANGUAGE — refusing to report it clean."
             exit 1
           fi
-          count=$(jq -rs '[ .[] | .runs[]? | .results[]? ] | length' "${files[@]}")
           if [ "$count" != "0" ]; then
-            echo "::error::CodeQL found ${count} finding(s) for ${LANGUAGE} — see the summary above."
-            echo "Fix it, or if it is a false positive dismiss the alert in the"
-            echo "Security tab with a reason, or add a query filter with a comment"
-            echo "saying why. Silently raising the threshold is not one of the options."
+            echo "::error::CodeQL found ${count} blocking finding(s) for ${LANGUAGE} — see the summary above."
+            jq -r '.blocking[] | "  \(.rule)  \(.file):\(.line)  (security-severity \(.sev))"' "$CLASSIFIED"
+            echo ""
+            echo "Fix it. If it is a false positive the honest options are a code"
+            echo "change that removes the sink, an in-source // codeql[rule-id]"
+            echo "comment, or an entry in .github/codeql-accepted-findings.json"
+            echo "with a written reason. Note that dismissing the alert in the"
+            echo "Security tab will NOT turn this check green: this step reads the"
+            echo "run's own SARIF and never consults the code-scanning API."
             exit 1
           fi
-          echo "CodeQL ($LANGUAGE): 0 findings."
+          echo "CodeQL ($LANGUAGE): 0 blocking findings."
 
   codeql-gate:
     name: CodeQL gate
@@ -319,8 +371,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Fail if any CodeQL analysis did not succeed
+        # RESULTS via env, not interpolated into the run: block. The values are
+        # drawn from {success, failure, cancelled, skipped} so nothing
+        # attacker-controlled reaches the shell — but this is the exact shape the
+        # two sites fixed in #1246 were fixed away FROM, and it breaks semgrep's
+        # bash sub-parser, which silently costs coverage on this very file.
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
         run: |
-          results='${{ join(needs.*.result, ' ') }}'
+          results="$RESULTS"
           echo "job results: $results"
           for r in $results; do
             [ "$r" = "success" ] || { echo "a CodeQL analysis did not succeed"; exit 1; }

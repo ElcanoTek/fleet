@@ -9,13 +9,23 @@ delegate to the same commands the workflows run, so "make it green locally" and
 "make CI green" are the same act. The source of truth is, and remains, the
 workflow files themselves:
 
-- [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) — the PR gates
-  (every job must be green to merge).
+- [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) — the full gate on
+  `main` (every job must be green to merge; `CI gate` is the required check).
+- [`.github/workflows/dev-ci.yml`](../.github/workflows/dev-ci.yml) — the fast
+  lane on `dev`. Same shape, fewer lanes — and its aggregate `Dev gate` is **not**
+  a required check, see "Which lanes run where" below.
+- [`.github/workflows/codeql.yml`](../.github/workflows/codeql.yml) and
+  [`.github/workflows/semgrep.yml`](../.github/workflows/semgrep.yml) — the two
+  SAST lanes. Both are **reusable** workflows (`on: workflow_call`) with no
+  push/PR triggers of their own: `ci.yml` and `dev-ci.yml` call them as jobs, so
+  they land in the caller's gate. Each also keeps a weekly `schedule`.
 - [`.github/workflows/e2e-canary.yml`](../.github/workflows/e2e-canary.yml) —
   the nightly real-model canary (never a PR gate).
 - [`.github/workflows/grype-scheduled.yml`](../.github/workflows/grype-scheduled.yml)
-  — a weekly, non-blocking container-image vulnerability scan (never a PR
-  gate).
+  and
+  [`.github/workflows/govulncheck-scheduled.yml`](../.github/workflows/govulncheck-scheduled.yml)
+  — scheduled, non-blocking re-scans of unchanged code (never PR gates), because
+  a CVE/advisory verdict is a function of the clock as well as the commit.
 
 If a command here ever disagrees with those files, the workflow wins — please
 fix this doc (and the `make` targets) to match.
@@ -27,13 +37,17 @@ fix this doc (and the `make` targets) to match.
 | Secret scan | `gitleaks` | No secrets committed | `gitleaks dir . --redact --exit-code 1` |
 | Go build | `go` | Release binary compiles (host executor fenced out) | `make compile` |
 | Go vet | `go` | `go vet` clean (tagged) | part of `make ci-go` |
-| Go lint | `go` | `golangci-lint` full gate (zero findings) | `make lint` |
+| Go lint | `go` | `golangci-lint` full gate (zero findings) | `make lint-go` |
+| Python lint | `python` | `ruff check` **and** `ruff format --check` over the 13 Python files | `make lint-python` |
 | Go test | `go` | Unit + integration suites + coverage profile (needs Postgres) | `make test` |
 | Go coverage | `go` | Coverage profile summarised in the log + job summary (advisory, no threshold) | `make test-cover` |
 | Go test -race | `go` | Race detector on the same suites | `make test-race` |
 | govulncheck | `go` | Dependency CVEs reachable from fleet | `make govulncheck` |
-| Grype (image) | `grype-scan` | CVEs in the sandbox container image (fail on a fixable CRITICAL or HIGH) | see below |
-| Web lint/test/build | `web` | ESLint + vitest + `next build` | `make ci-web` |
+| Grype (image) | `grype-scan` | CVEs in the sandbox container image (fail on a fixable CRITICAL or HIGH **Fedora RPM**) | see below |
+| CodeQL | `codeql` (called workflow) | `security-extended` taint analysis over go / python / javascript-typescript / actions; fails on an unwaived **High-band** finding | not wrapped (see [`CODEQL.md`](CODEQL.md)) |
+| Semgrep | `semgrep` (called workflow) | `p/github-actions` + `p/golang` + `p/javascript` + `p/python`; fails on **any** unsuppressed finding | `semgrep scan --config …` (see [`SCANNING.md`](SCANNING.md)) |
+| npm CVE audit | `web` | `npm audit --audit-level=low`, lockfile-only, over `web/` **and** `scripts/rampart-service` — fails on any severity; plus `scripts/check-npm-overrides.sh` | `npm audit --audit-level=low` in each tree |
+| Web lint/test/build | `web` | oxlint + `tsc --noEmit` + vitest + `next build` | `make ci-web` |
 | Playwright (mocked) | `playwright` | Deterministic browser e2e, no backend | `make ci-e2e-mocked` |
 | Playwright (live) | `e2e-live` | Real stack + rootless-Podman sandbox, fake LLM | `npm run test:e2e:live` |
 | Playwright (canary) | `canary` (nightly) | Real cheap OpenRouter model, drift detection | `npm run test:e2e:canary` |
@@ -53,13 +67,44 @@ divide the work like this:
 | | `dev-ci.yml` (fast lane) | `ci.yml` (full gate) |
 | --- | --- | --- |
 | **Fires on** | PRs into `dev`, and pushes to `dev` | PRs into `main`, and pushes to `main` — in practice, the dev→main promotion PR |
-| **Runs** | Go compile / vet / lint / test (with Postgres), web lint / test / build, migration DDL lint, gitleaks | everything in the table above |
-| **Skips** | `-race`, govulncheck, Grype, both Playwright suites, CodeQL | nothing |
+| **Runs** | Go compile / vet / lint / test (with Postgres), Python lint (ruff check + format), **CodeQL**, **Semgrep**, web lint / typecheck / test / build **plus the npm CVE audit and the override canary**, migration DDL lint, gitleaks | everything in the table above |
+| **Skips** | `-race`, govulncheck, the Grype image scan, both Playwright suites | nothing |
 | **Aggregate check** | `Dev gate` | `CI gate` |
+| **Is that aggregate a *required* check?** | **No** — see the caveat below | Yes |
 
-The split is "does it compile, lint, and pass tests" on `dev`; "is it safe to
-ship" on the promotion. The skipped lanes are the slow ones, and none of them is
-what a routine change breaks.
+The split is "does it compile, lint, pass tests, and pass the SAST scanners" on
+`dev`; "is it safe to ship" on the promotion. The skipped lanes are the slow ones,
+and none of them is what a routine change breaks.
+
+**CodeQL and Semgrep used to be on that skipped list. They are not any more** —
+both are reusable workflows that `dev-ci.yml` calls as jobs, so they sit in
+`Dev gate`'s `needs` and run on every push to `dev` and every PR into it. An
+earlier revision of this table said the fast lane skipped CodeQL, which was the
+opposite of what shipped.
+
+> **The caveat that qualifies this whole section: `Dev gate` is not a required
+> status check.** The `dev` ruleset's only rules are `deletion` and
+> `non_fast_forward` — there is no `pull_request` rule and no
+> `required_status_checks` — so every job in `dev-ci.yml`, the two scanners
+> included, is *red-but-not-required* on `dev`. A failing fast lane produces a red
+> X beside a mergeable PR. `main` is the branch that genuinely gates, on
+> `CI gate`. Making `Dev gate` required is a repo-settings action that no pull
+> request can perform; it is tracked as an open item in
+> [`SCANNING.md`](SCANNING.md) ("Known gaps").
+
+**One more thing worth knowing about `ci.yml`, because it decides whether the
+suite runs at all:** a `changes` job classifies each push/PR as docs-only, and the
+heavy jobs (`go`, `python`, `codeql`, `semgrep`, `web`, both Playwright lanes,
+`grype-scan`) skip when it says yes. That classifier used to match `*.md` at any
+depth plus all of `docs/*`, which swallowed compiled product content — the
+`go:embed`'d `builtin_skills/*/SKILL.md` files, the shipped
+`config/default/system_prompts/*.md`, and `docs/openapi.yaml` (asserted by
+`cmd/fleet/openapi_drift_test.go`) — so a PR touching only a shipped system
+prompt or the OpenAPI spec skipped the very tests that validate it while
+`CI gate` reported green. It is now an explicit prose allow-list, and `ci-gate`
+additionally **refuses to pass over a `skipped` job unless the classifier
+actually said docs-only**, so a skip produced by any other cause fails the gate
+instead of passing silently.
 
 > **Both triggers on the fast lane matter.** The `pull_request` trigger was added
 > after a period when PRs into `dev` were gated by nothing but CodeQL, which made
@@ -443,14 +488,25 @@ supply chain matters as much as what it scans.
 
 The per-PR scan collects and uploads **all** findings, including unfixed and
 non-blocking language-package records. A separate repository-owned policy
-(`scripts/check-grype-policy.sh`) fails only on a **CRITICAL Fedora RPM** with a
-non-empty fix version. This distinction is intentional: Fedora RPMs sometimes
-also expose Python `dist-info`, which Grype catalogs as a second PyPI artifact;
-an upstream PyPI fix does not mean Fedora has published an installable RPM. The
-generic image follows Fedora latest, so an actionable failure should be fixed by
-rebuilding/updating the RPM rather than by layering a pip wheel over files owned
-by the distro. The weekly scan uses the same complete reporting model (see
-below). Narrow, reviewed suppressions live in [`.grype.yaml`](../.grype.yaml)
+(`scripts/check-grype-policy.sh`) fails on a **CRITICAL *or* HIGH Fedora RPM**
+with a non-empty fix version — that is, `severity in {critical, high}` **and**
+`.artifact.type == "rpm"` **and** a non-empty `fix.versions`. MEDIUM and below are
+reported, not blocking, and a non-RPM record never blocks whatever its severity.
+
+Both halves of that filter are deliberate. HIGH was added to the gate *after*
+measuring rather than before: the published image at the time carried zero fixable
+Critical or High RPM findings (its only fixable findings were two Medium openssh
+advisories), so the tightened gate started clean instead of arming over a backlog.
+And the RPM restriction is there because Fedora RPMs also ship Python
+`dist-info`, which Grype catalogs as a second, independent PyPI artifact using
+upstream versions and advisories — so such a record can claim a fix exists when
+Fedora has already backported it or has not published an RPM update yet. Treating
+those language records as a merge gate previously led to hand-maintained pip
+replacements layered over a coherent distro package set. They are still uploaded
+to SARIF; they just do not gate. The generic image follows Fedora latest, so an
+actionable failure should be fixed by rebuilding/updating the RPM rather than by
+layering a pip wheel over files owned by the distro. The weekly scan uses the same
+complete reporting model (see below). Narrow, reviewed suppressions live in [`.grype.yaml`](../.grype.yaml)
 (one `ignore:` entry per CVE, with a rationale comment); Grype auto-reads it from
 the repository root.
 
@@ -468,10 +524,15 @@ SARIF. Reproduce locally (needs podman + the Grype binary):
 # Build the same image the job scans, and export it to a docker-archive tarball.
 IMAGE_NAME=localhost/fleet-sandbox scripts/build-sandbox-image.sh latest
 podman save --format docker-archive -o sandbox-image.tar localhost/fleet-sandbox:latest
-# Install grype first (see .github/workflows/ci.yml for the pinned version+sha),
-# then scan exactly as the gate does:
-grype docker-archive:sandbox-image.tar --only-fixed --fail-on critical \
-  --output table --output sarif=grype-results.sarif
+# Install grype first (see .github/workflows/ci.yml for the pinned version+sha).
+# The CI job scans with NO --fail-on and NO --only-fixed: it reports everything,
+# then hands the JSON to the policy script, which is where the gate lives.
+grype docker-archive:sandbox-image.tar \
+  --output table \
+  --output json=grype-results.json \
+  --output sarif=grype-results.sarif
+# The gate itself — fixable CRITICAL/HIGH Fedora RPMs only:
+scripts/check-grype-policy.sh grype-results.json
 ```
 
 There is no `make` target for this lane because it boots a podman image build;
