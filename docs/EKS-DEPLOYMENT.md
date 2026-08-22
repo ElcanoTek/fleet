@@ -209,7 +209,7 @@ Podman lives in this image. A Fedora base keeps you on the same `crun`/
 
 ```dockerfile
 # Containerfile.fleet — build with: podman build -f Containerfile.fleet -t <ecr>/fleet:<sha> .
-FROM golang:1.26 AS build
+FROM golang:1.27 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download

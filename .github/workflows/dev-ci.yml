@@ -105,7 +105,7 @@ jobs:
         with:
           # Keep pinned in lockstep with ci.yml + .golangci.yml (see the note
           # there) so the fast lane and the full gate never disagree.
-          version: v2.12.2
+          version: v2.13.1
           only-new-issues: false
 
       - name: Disable podman so container sandbox tests self-skip

@@ -239,7 +239,7 @@ jobs:
           # linter follows it automatically. The BINARY version still needs a
           # pin so CI and a local `golangci-lint run` agree and the full gate
           # never flaps on a release.
-          version: v2.12.2
+          version: v2.13.1
           # FULL GATE: the lint backlog has been burned down to zero, so this
           # fails on ANY finding (not just new-vs-merge-base). only-new-issues is
           # intentionally removed/false. To keep it clean: fix the finding, or

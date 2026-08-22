@@ -167,7 +167,7 @@ image); run them via the `npm` scripts documented below.
   Measured on this app: lint **30,418 ms → 607 ms** (~50×), and the typecheck
   step costs ~2 s.
 
-- **golangci-lint `v2.12.2`** — CI pins this exact binary version; a different
+- **golangci-lint `v2.13.1`** — CI pins this exact binary version; a different
   version may flag or miss findings. [`.golangci.yml`](../.golangci.yml) no
   longer sets `run.go`: golangci-lint's documented default is the go.mod Go
   version, so that stays a single declaration too.

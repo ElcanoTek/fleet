@@ -90,12 +90,17 @@ func copyXLSXPart(w *zip.Writer, f *zip.File, budget *int64) error {
 		data = stripWorkbookMetadata(data)
 	}
 
+	// ModifiedTime/ModifiedDate are deliberately NOT copied. They are the
+	// deprecated MS-DOS timestamp pair, and archive/zip's writer recomputes
+	// both from Modified whenever Modified is non-zero
+	// (writer.go: "If Modified is set, this takes precedence over MS-DOS
+	// timestamp fields"). The Modified fallback below guarantees it is never
+	// zero, so copying the pair only fed values the writer immediately
+	// overwrote — dropping them is byte-for-byte identical output.
 	hdr := &zip.FileHeader{
 		Name:           f.Name,
 		Method:         f.Method,
 		Modified:       f.Modified,
-		ModifiedTime:   f.ModifiedTime,
-		ModifiedDate:   f.ModifiedDate,
 		NonUTF8:        f.NonUTF8,
 		CreatorVersion: f.CreatorVersion,
 		ReaderVersion:  f.ReaderVersion,
