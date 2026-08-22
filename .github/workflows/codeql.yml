@@ -244,7 +244,12 @@ jobs:
               # told apart from "analyzed nothing", which is the exact
               # green-but-vacuous outcome this workflow exists to rule out.
               # The source archive is the file set the database was built from.
-              src="${{ runner.temp }}/codeql_databases/$CODEQL_DB/src.zip"
+              # RUNNER_TEMP (the env var), not ${{ runner.temp }}: interpolating a
+              # GitHub expression straight into a run: block is the shape
+              # semgrep's gha-curl-pipe-shell / curl-eval rules flag, and it also
+              # breaks their bash sub-parser — which silently costs coverage on
+              # this very file. The env var is equivalent and parses.
+              src="$RUNNER_TEMP/codeql_databases/$CODEQL_DB/src.zip"
               if [ -f "$src" ]; then
                 echo "files in the $LANGUAGE database: $(unzip -Z1 "$src" 2>/dev/null | grep -vc '/$' || echo '?')"
               fi
