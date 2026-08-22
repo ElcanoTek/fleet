@@ -1,89 +1,29 @@
-# Implementation plans for open enhancements
+# Implementation plan: #984 — Fleet ↔ Buzz bridge
 
-Working notes for implementers. Prefer the linked issue comment/body when present.
+**Status: NOT SHIPPED.** This is a forward-looking design note for one open
+enhancement. Read it as a proposal, not as a description of fleet's behavior, and
+in particular do not read the acceptance checklist below as a list of open
+security findings — the unchecked boxes are criteria this feature must MEET
+BEFORE it ships, on code that does not exist yet.
 
-| Issue | Plan location |
+Everything else that used to live in this file has been removed because it had
+shipped, and a shipped plan sitting next to the authoritative record is the worse
+of the two copies:
+
+| was | now recorded in |
 | --- | --- |
-| #989 | [comment](https://github.com/ElcanoTek/fleet/issues/989#issuecomment-5198861451) |
-| #988 | [issue body](https://github.com/ElcanoTek/fleet/issues/988) |
-| #987 | [comment](https://github.com/ElcanoTek/fleet/issues/987#issuecomment-5198925257) — **shipped**; see `internal/clientconfig/builtin_skills/browserbase/`, `internal/tools/browserbase_live_view.go`, `docs/BROWSERBASE.md` |
-| #986 | [issue body](https://github.com/ElcanoTek/fleet/issues/986) |
-| #985 | Full plan below — **shipped**; see `internal/clientconfig/builtin_skills/bento-slides/`, `docs/SKILLS.md`, `docs/FEATURE-NOTES.md` |
-| #984 | Full plan below (pending issue comment) |
-| #167 | Full plan below — **all three residuals resolved**; see `docs/MCP-BROKER-SCOPES.md`, ADR-0042, `SECURITY.md` |
+| #987 Browserbase skill | `internal/clientconfig/builtin_skills/browserbase/`, `internal/tools/browserbase_live_view.go`, `docs/BROWSERBASE.md` |
+| #985 Bento built-in skill | `internal/clientconfig/builtin_skills/bento-slides/`, `docs/SKILLS.md`, `docs/FEATURE-NOTES.md` |
+| #167 three residual decisions | `docs/MCP-BROKER-SCOPES.md`, [ADR-0042](adr/0042-child-side-mcp-scope-authorization.md), [ADR-0040](adr/0040-child-owned-remote-mcp-runtime.md), `SECURITY.md` |
 
----
+The #167 entry mattered most: it carried a section headed "OAuth control-plane
+tokens parent-readable" whose resolution ("accepted for v1, threat model
+documented — parent compromise implies stored remote-MCP tokens; agent runs stay
+child-side") was already written down in `SECURITY.md` and
+`docs/MCP-BROKER-SCOPES.md`. A second copy phrased as an open decision, in an
+unlinked file, read like an unresolved gap. It is not one.
 
-## #985 — Bento built-in skill (good first issue, size S)
-
-[Bento](https://github.com/nyblnet/bento) decks are a **single HTML file** (viewer + editor + slides). Agent edits HTML in workspace → downloadable deck **without Gamma or any external API**.
-
-### Approach
-
-1. **Built-in skill** in `internal/clientconfig/builtin_skills/`:
-   - `bento-slides/SKILL.md` — when to use; copy template; structure slides; what not to break.
-   - `bento-slides/templates/starter.bento.html` — minimal legal template.
-2. **Agent workflow:** copy template → `workspace/decks/<name>.bento.html` → edit via file tools → user downloads and opens in browser.
-3. **License / attribution:** confirm redistribution allowed; attribute in skill + NOTICE.
-4. **Validation:** `ValidateSkills` frontmatter; optional eval "Create a 5-slide deck about X".
-5. **Docs:** one line in `docs/SKILLS.md`. No new HTTP APIs.
-
-### Non-goals
-
-PPTX export; hosted collab editing; PowerPoint animation parity.
-
-### Acceptance — met
-
-- [x] Skill shows in Settings → Skills as Built-in — no code change needed;
-  `httpapi.skillSource` derives `builtin` from absence in the bundle dir. Asserted
-  in `web/e2e/live/skills-connections.spec.ts`.
-- [x] `/bento-slides` loads instructions — `matchSkillInvocation` resolves any
-  roster name, so this came for free.
-- [x] Agent produces openable `.bento.html` — via the bundled
-  `scripts/bento_doc.py`; round-trip, escaping and shell byte-identity are
-  covered by `internal/clientconfig/builtin_skills_bento_test.go`.
-- [x] License/attribution settled — Bento is MIT (© 2026 The Bento authors).
-  Recorded in `templates/NOTICE.md` (pack-local; **no** root
-  `THIRD_PARTY_NOTICES.md` was added), and the shell carries upstream's own
-  `NOTICE` comment internally so it travels with every deck.
-- [x] Works offline except model provider — the app is vendored and embedded, so
-  nothing is fetched at turn time, nothing is fetched to render a deck, and a
-  deck `new` creates makes **no** network request when opened — no update check
-  and no live collaboration. Multiplayer is off by construction: a CSP
-  `connect-src 'none'` meta the browser enforces, upstream's own offline switch,
-  and `set` refusing to write a `collab` block (which is not inert — carrying one
-  joins a live session on load). The vendored template stays byte-identical, and a
-  deck the user brought is reported by `validate` rather than rewritten. See
-  `templates/NOTICE.md` for the layer-by-layer rationale and the Chromium
-  verification matrix.
-
-### Deviations from the approach above
-
-1. **`templates/starter.bento.html` → `templates/Bento_Slides.bento.html`, the
-   full upstream v1.0.18 release artifact vendored unmodified (689KB, sha256
-   pinned).** There is no "minimal legal template": a Bento deck's shell *is* the
-   application, so anything smaller would not open.
-2. **The agent does not edit the HTML with file tools.** It uses a bundled
-   stdlib-only `scripts/bento_doc.py` (`new`/`get`/`set`/`validate`). The document
-   block sits at byte 6322 of a minified bundle, so `view_file` would spend ~125KB
-   of context reaching it; and the block's `<`-escaping rule fails silently rather
-   than loudly. The helper also makes `collab` private-key redaction and `docId`
-   preservation mechanical instead of instructions the model must remember.
-3. **`ValidateSkills` does not cover this pack** — it reads
-   `Bundle.BundleSkillsDir`, i.e. the bundle's own skills, not the embedded pack.
-   The real gate is `TestBuiltinSkillsPackWellFormed` plus the new bento tests.
-4. **No eval case.** Evals do not run in CI, need a live model plus podman, and
-   `evals.Case` has no skill field — the Go tests are the honest gate instead.
-
-### Scope discovered while shipping
-
-Bundle skills are **interactive-chat-only**: `internal/scheduledrun` emits no
-bundle-skill roster, so scheduled tasks and `fleet task run` cannot discover this
-(or any) bundle skill, even though the merged dir is bind-mounted for them.
-`docs/SKILLS.md` previously implied taskrun picked the pack up unchanged; that
-claim is now corrected there.
-
----
+For the current plan-of-record on anything else, prefer the GitHub issue.
 
 ## #984 — Fleet ↔ Buzz bridge
 
@@ -127,29 +67,3 @@ Fleet hosting Buzz relay; full tool UI parity; every Buzz user → fleet user ma
 - [ ] Bot token not logged; secrets in env only
 
 Size: **M** if ACP external command is clean; **L** if deep Buzz harness embed needed.
-
----
-
-## #167 — Three residual decisions
-
-Delivered broker work (can't-read) is solid. Explicit decisions:
-
-### 1. Child-side authorization → **Implement**
-
-Parent-only gating is insufficient (Gate-2 proof). On `OpenScope`, pass policy snapshot; child enforces allowlists on every CallTool/discovery; restrict unscoped shared client for agent paths; tests for refused disallowed tools. Update `docs/MCP-BROKER-SCOPES.md`.
-
-### 2. Approval execution seat → **Persist staged scope**
-
-Preserve `{server, account}` at staging; reopen scope on approve; fail closed if account revoked; show account in UI. Unblocks #988. Tests: stage with B, approve later, assert B used.
-
-### 3. OAuth control-plane tokens parent-readable → **Accept v1 + document**
-
-Accept connect/callback/CRUD parent-side for v1; document threat model (parent compromise ⇒ remote MCP tokens). Agent runs stay child-side (ADR-0040). Optional v2: full control-plane behind child as separate issue.
-
-### Closing criteria — resolved
-
-| Residual | Resolution |
-| --- | --- |
-| 1 Child auth | **Implemented.** `cmd/fleet/mcp_broker_authz.go`; bundle-derived Gate-2 floor, `ScopeSpec.Policy` narrowing, child-side Gate-3, filtered scope catalogs, restricted unscoped client. ADR-0042; tests in `cmd/fleet/mcp_broker_authz_test.go`. |
-| 2 Approval seat | **Implemented.** Migration 048 (`approvals.mcp_server` / `mcp_account`), `BindTurnMCPScope` at staging, `OpenApprovalMCPScope` at execution, fail-closed on a revoked seat, account badge on the card. Tests in `internal/httpapi/approvals_seat_test.go`, `internal/store/approval_seat_test.go`, `web/.../ApprovalCards.seat.test.tsx`. |
-| 3 OAuth parent-readable | **Accepted + documented** (2026-08-14). `SECURITY.md` and `docs/MCP-BROKER-SCOPES.md` state the threat model: parent compromise ⇒ stored remote-MCP tokens. Agent runs stay child-side (ADR-0040). Full control-plane isolation would be a separate change. |
