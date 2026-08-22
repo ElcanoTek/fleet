@@ -134,13 +134,16 @@ postgres:
   # Optional in-cluster PostgreSQL (single replica, one PVC) for evaluation
   # and small installs. Production should point config at a managed database
   # (RDS, Cloud SQL) via the existingSecret DB URLs instead.
+  #
+  # The database password is NOT a values entry: the chart auto-generates a
+  # random one into the <release>-postgres Secret on first install and reuses
+  # it on upgrades (helm lookup). To pick your own, pre-create that Secret
+  # with a `password` key before installing. Rotating it is your job — this
+  # is the evaluation path.
   enabled: false
   image: docker.io/library/postgres:17
   size: 10Gi
   storageClassName: ""
-  # Password for the chat/sched roles; auto-generated into a Secret when
-  # empty. Rotating it is your job — this is the evaluation path.
-  password: ""
 
 web:
   # Optional Next.js web tier (you build web/ into an image yourself).
