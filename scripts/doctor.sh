@@ -373,6 +373,43 @@ elif [[ -n "$node_bin" && -f "$WEB_ENV_FILE" ]]; then
   fi
 fi
 
+# The npm that BELONGS to node_bin, checked separately from the `command -v npm`
+# probe in the tool loop below. That probe only asks whether SOME npm exists, and
+# on a box with parallel streams the one on PATH belongs to the OLD interpreter
+# — Fedora rewrites npm's shebang to an absolute `#!/usr/bin/node-<major>`, so it
+# stays on that major whatever PATH says. That is what built the web tier on
+# node 22 through an update whose own gate had resolved node 24, and it surfaced
+# only as npm's EBADENGINE warning mid-build. Same parallel-stream trap as the
+# versioned node install, one package over — and the tool loop cannot see it.
+if [[ -n "$node_bin" ]]; then
+  npm_cli="$(fleet_resolve_npm_cli "$node_bin" || true)"
+  # Only a VERSIONED interpreter lets us name the exact package that is short.
+  # On a single-node layout (Debian/nodesource/nvm) an unresolvable npm-cli.js
+  # means npm is shipped in a shape this check cannot read, which is an
+  # observation, not a diagnosis — so it advises rather than failing.
+  node_bin_is_versioned=0
+  [[ "${node_bin##*/}" =~ ^node-[0-9]+$ ]] && node_bin_is_versioned=1
+  if [[ -n "$npm_cli" ]]; then
+    pass "npm for ${node_bin}: ${npm_cli} (the build pins this pair, not PATH)"
+  elif [[ "$node_bin_is_versioned" == "0" ]]; then
+    advise "cannot resolve an npm-cli.js for ${node_bin} — the web tier build will use \`npm\` from PATH ($(command -v npm 2>/dev/null || echo none))"
+  elif [[ "$CHECK_ONLY" == "1" || "$HAVE_DNF" == "0" ]]; then
+    fail "no npm belongs to ${node_bin} — install nodejs${NODE_FLOOR}-npm; until then the web tier builds on $(node -v 2>/dev/null || echo 'the default stream')"
+  else
+    "${DNF[@]}" install -y --quiet "nodejs${NODE_FLOOR}-npm" >/dev/null 2>&1 || true
+    hash -r
+    npm_cli="$(fleet_resolve_npm_cli "$node_bin" || true)"
+    # No restart_needed=1: the unit runs `next start` under FLEET_NODE_BIN and
+    # never invokes npm, so this repair changes the next BUILD, not the running
+    # tier. Claiming a restart would apply it would be the wrong claim.
+    if [[ -n "$npm_cli" ]]; then
+      fixed "installed the npm that belongs to ${node_bin} (${npm_cli})"
+    else
+      fail "no npm belongs to ${node_bin} after installing nodejs${NODE_FLOOR}-npm — inspect 'dnf list nodejs*'"
+    fi
+  fi
+fi
+
 doctor_tools=(go git curl jq podman psql npm python3)
 # --node covers the node TOOLCHAIN, and on Fedora npm is a separate package
 # (nodejs<major>-npm) — an update that resolves node 24 and then cannot run
@@ -423,6 +460,17 @@ if [[ "$NODE_ONLY" == "1" ]]; then
   if [[ "$n_fail" -gt 0 ]]; then
     printf '%s✗ doctor --node: node %s at %s, but %d problem(s) remain above%s\n' \
       "$c_red" "$("$_final_bin" -v)" "$_final_bin" "$n_fail" "$c_reset"
+    exit 1
+  fi
+  # Re-resolved from scratch for the same reason the interpreter is: `--node`
+  # advertises node AND its npm, `fleet update --check` turns this exit code
+  # into its own, and an npm that does not belong to _final_bin means the next
+  # update builds the tier on the old major. A versioned interpreter is the only
+  # case where the missing package is nameable; elsewhere the tool loop's plain
+  # `npm present` check is all this can honestly stand on.
+  if [[ "${_final_bin##*/}" =~ ^node-[0-9]+$ ]] && ! fleet_resolve_npm_cli "$_final_bin" >/dev/null 2>&1; then
+    printf '%s✗ doctor --node: node %s at %s, but no npm belongs to it (install nodejs%s-npm)%s\n' \
+      "$c_red" "$("$_final_bin" -v)" "$_final_bin" "$NODE_FLOOR" "$c_reset"
     exit 1
   fi
   # A scoped run exits before the restart block a full pass would reach, so it
