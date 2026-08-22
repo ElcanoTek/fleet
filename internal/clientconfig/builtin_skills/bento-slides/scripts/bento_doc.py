@@ -306,10 +306,6 @@ def _inject_guard(raw):
     return raw[:at] + GUARD + raw[at:]
 
 
-def has_guard(raw):
-    return GUARD_ID.encode() in raw
-
-
 def _decode_block(block):
     """Parse a document block's bytes into a dict.
 

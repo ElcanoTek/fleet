@@ -19,6 +19,51 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Python had no linter, and two scanners were pointed at ground already
+  covered.** Reshaped the scanning stack so each tool owns one job
+  ([`docs/SCANNING.md`](docs/SCANNING.md)):
+
+  - **ruff is new, and it blocks.** fleet ships 13 Python files — the sandbox
+    FileOp helper, the python bridge, the bento-slides and data-profiler skill
+    scripts, MCP test servers — and *nothing* linted any of them. Go had
+    golangci-lint, the web tier had oxlint, Python had neither. Rule selection is
+    narrow on purpose and `ruff.toml` records why: the default rules find 3
+    findings on this tree, a broad selection finds 333, of which 176 are
+    `%`-format style and 43 are magic values. Three real findings were fixed to
+    make the gate clean on day one — an unused import, a lambda assignment, and a
+    **byte-identical duplicate `has_guard` definition** in `bento_doc.py` where
+    the second copy silently shadowed the first. `ruff format` is reported but
+    not gated (the tree has never been ruff-formatted).
+
+  - **CodeQL narrowed to security queries only.** Its code-quality suite was
+    enabled, measured, and dropped: 32 findings, every one note-level, zero
+    security findings. For Go and the web tier it duplicated golangci-lint and
+    oxlint, which already block; 28 of the 32 were Python, now ruff's job; and 3
+    were false positives on correct code (`value != value`, the idiomatic NaN
+    test). CodeQL keeps the thing nothing else here can do — interprocedural
+    taint, which is the actual shape of "a credential must not reach a log sink".
+
+  - **Semgrep is new, scoped, and advisory.** The obvious move — point it at
+    `p/golang`/`p/javascript`/`p/python` — was measured and rejected: 6 of 6
+    non-Actions findings were false positives, three of them *already* triaged
+    and suppressed for gosec, and one (`0o644` for a sandbox directory) would
+    have been a security regression if followed. What ships is
+    `p/github-actions`, which found 51 instances of one real issue nothing else
+    checks: actions pinned to mutable tags rather than commit SHAs. Advisory
+    because all 51 are real and repinning is its own PR, not because they are
+    doubted.
+
+  - **Both scanners now print findings to the job log** and the step summary, and
+    Semgrep uploads raw JSON as an artifact. A CodeQL run otherwise reports
+    nothing about what it found to its own log — it writes SARIF, uploads it, and
+    exits 0 either way — which made outcomes invisible to `gh run view` and to
+    any agent holding the log but not the code-scanning API.
+
+  Also added: an aggregate `CodeQL gate` job, so making CodeQL blocking later is
+  one required check rather than four per-language checks needing manual
+  re-pointing whenever the matrix changes. Nothing here is wired into `ci-gate`
+  beyond ruff; CodeQL and Semgrep stay advisory.
+
 - **CodeQL had stopped analyzing the repo's Go code, and then stopped analyzing
   anything.** Default setup's Go analysis failed on every main-targeting PR from
   the Go 1.27 bump (#1240, promoted in #1242) onward — it installed the Go its

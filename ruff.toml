@@ -1,0 +1,67 @@
+# ruff — the Python lane of the lint gate.
+#
+# WHY THIS EXISTS: fleet has 13 Python files (the sandbox FileOp helper, the
+# python bridge, the bento-slides and data-profiler skill scripts, MCP test
+# servers, icon/doc generators) and until now NOTHING linted them. Go had
+# golangci-lint and the web tier had oxlint; Python had nothing, so its only
+# coverage was whatever CodeQL's code-quality suite happened to notice.
+#
+# That is the wrong tool for the job in both directions. CodeQL took ~40s to
+# report 28 note-level Python issues with no autofix, while ruff finds the same
+# class of thing in well under a second and fixes much of it. So the Python
+# quality lane is ruff's, and CodeQL keeps only its security queries (see
+# docs/CODEQL.md).
+#
+# RULE SELECTION IS DELIBERATELY NARROW, and the numbers behind that are worth
+# recording so nobody widens it by accident. Measured on this tree:
+#
+#   default (E4,E7,E9,F)                   ->   3 findings   <- what we gate on
+#   E,F,W,I,UP,B,SIM,ISC,PLR,PLW,S         -> 333 findings
+#
+# The 330-finding difference is almost entirely style churn, not defects:
+# 176 UP031 (%-format vs f-string), 43 PLR2004 (magic values), 35 E501 (line
+# length). Gating on that would mean a 300-commit reformat for no correctness
+# gain, so it is out of scope here rather than silently enabled.
+#
+# Two rules were considered and deliberately REJECTED, both because their only
+# findings in this tree are correct code:
+#
+#   PLR0124 (name compared with itself) — its 3 hits in bento_pdf.py are the
+#     idiomatic NaN test (`value != value` is true only for NaN). CodeQL's
+#     py/comparison-of-identical-expressions flagged the same 3. Enabling it
+#     would mean three `# noqa` comments on correct code.
+#   S110 / SIM105 (try-except-pass) — 14 hits, mostly in python_bridge.py's
+#     best-effort cleanup paths where swallowing is the intent. Worth a separate
+#     review pass, not a gate that has to be suppressed 14 times on day one.
+#
+# The gate is therefore "clean today, and stays clean": three real findings were
+# fixed to get here (an unused import, a byte-identical duplicate function
+# definition, and a lambda assignment), so a NEW default-rule violation is a
+# real regression rather than noise in a backlog.
+
+# Match the lowest Python the sandbox image and the skill scripts must run on.
+# Declared here so the rules that are version-sensitive (pyupgrade et al, if
+# ever enabled) have one declaration point rather than a guess.
+target-version = "py311"
+
+line-length = 88
+
+exclude = [
+    "node_modules",
+    "web/.next",
+    ".git",
+]
+
+[lint]
+# The default rule set: pycodestyle errors (E4 imports, E7 statements,
+# E9 syntax/IO) plus Pyflakes (F — undefined names, unused imports, redefined
+# names, unused locals). This is the "is it actually broken" tier; see the
+# header for why the style tiers are not enabled.
+select = ["E4", "E7", "E9", "F"]
+
+[lint.per-file-ignores]
+# MCP test servers and testdata fixtures are deliberately minimal stand-ins —
+# they exist to be spawned and to misbehave in specific ways, so an unused
+# import or an odd construct there can be the point of the fixture.
+"internal/mcp/testdata/*.py" = ["F401"]
+"cmd/fleet/testdata/*.py" = ["F401"]

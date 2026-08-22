@@ -25,16 +25,29 @@
 # hardcoded 1.27; that is the exact bug class #1240 and #1241 already fixed twice
 # for node, and pinning it here would go stale silently the next time go.mod moves.
 #
-# What this restores. Default setup ran two analyses per event:
-#   - security      — go, python, javascript-typescript, actions
-#   - code quality  — go, python, javascript-typescript   (no `actions`)
+# SCOPE: security queries only. Default setup ran two analyses per event —
+# security over go/python/javascript-typescript/actions, and code quality over
+# the first three. This file restores the SECURITY half and deliberately drops
+# the code-quality half. That is a considered narrowing, not an oversight, and
+# the measurements behind it are recorded in docs/CODEQL.md. In short:
 #
-# The security half is reproduced exactly. The code-quality half is reproduced as
-# far as advanced setup is permitted to: `code-quality` as a distinct ANALYSIS
-# KIND is GitHub-internal and closed to custom workflows. Passing
-# `analysis-kinds: code-scanning,code-quality` was tried first and the action
-# rejected it — while still exiting 0, which is why this was caught by reading
-# the log rather than the check mark:
+#   - The quality suite was enabled first and measured. It produced 32 findings,
+#     every one of them note-level, and ZERO security findings across the whole
+#     tree. So nothing was being caught that mattered at severity.
+#   - For Go and the web tier it duplicates linters that already run AND ALREADY
+#     BLOCK via `ci-gate`: golangci-lint (gosec, staticcheck, revive, unparam,
+#     gocritic, …) and oxlint. `go/useless-assignment-to-field` is squarely
+#     inside golangci-lint's remit.
+#   - 28 of the 32 were Python, which was the one real gap — Python had no
+#     linter at all. That gap is now closed by ruff (see ruff.toml), which finds
+#     the same class of thing in under a second, with autofix, and blocks. A
+#     ~40s CodeQL job with no autofix is the wrong instrument for it.
+#   - 3 of the 32 were false positives on correct code (the idiomatic NaN test
+#     `value != value`, flagged as comparison-of-identical-expressions).
+#
+# Note for anyone tempted to re-add it: `analysis-kinds: code-scanning,code-quality`
+# does NOT work in a custom workflow. The action logs two ##[error] lines and
+# still exits 0, silently analyzing security only:
 #
 #     The `analysis-kinds` input is experimental and for GitHub-internal use
 #     only. [...] An analysis kind other than `code-scanning` was specified in a
@@ -43,17 +56,8 @@
 #     queries outside of Code Quality, use the `queries` input with
 #     `code-quality` instead.
 #     [...] Specifying multiple values as input is no longer supported.
-#     Continuing with only `analysis-kinds: code-scanning`.
 #
-# So `queries: code-quality` is used instead, exactly as that message directs: the
-# quality QUERY SUITE runs on the same three languages, added to the default
-# security suite over one shared database. The difference from default setup is
-# presentational, not coverage — the quality findings arrive as ordinary
-# code-scanning alerts instead of populating the separate Code Quality
-# experience, which no custom workflow can feed. See docs/CODEQL.md.
-#
-# `actions` gets no `queries` value, matching default setup, which ran `actions`
-# in its security analysis only.
+# `queries: code-quality` is the working form. It is simply not wanted here.
 #
 # Not touched by this file: the three independent `upload-sarif` calls (ci.yml's
 # Grype step, govulncheck-scheduled.yml, grype-scheduled.yml). Those push their
@@ -126,19 +130,12 @@ jobs:
           # has to be right rather than skipped.
           - language: go
             build-mode: autobuild
-            queries: code-quality
           - language: python
             build-mode: none
-            queries: code-quality
           - language: javascript-typescript
             build-mode: none
-            queries: code-quality
-          # `actions` was in default setup's security analysis only, not its code
-          # quality one. Matched rather than widened: no `queries` value, so only
-          # the default security suite runs.
           - language: actions
             build-mode: none
-            queries: ''
 
     steps:
       - name: Checkout
@@ -159,9 +156,8 @@ jobs:
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
-          # Empty for `actions` (security suite only), `code-quality` elsewhere.
-          # Added to the default security suite, not a replacement for it.
-          queries: ${{ matrix.queries }}
+          # No `queries:` — the default (security) suite only. See the SCOPE note
+          # in the header before adding `code-quality` back.
 
       - name: Autobuild
         if: matrix.build-mode == 'autobuild'

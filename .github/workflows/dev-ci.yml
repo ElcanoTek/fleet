@@ -11,9 +11,10 @@
 #
 # What runs here: Go compile+vet+lint+test WITH a Postgres service (#723 — so the
 # DB-gated suites, including the entire `fleet import` suite, are exercised on dev
-# instead of first firing at the dev→main promotion; no -race lane), the web
-# lint/test/build lane, the migration DDL lint, and the gitleaks secret scan (the
-# no-secrets invariant is never weakened, on any branch).
+# instead of first firing at the dev→main promotion; no -race lane), the Python
+# lint (ruff), the web lint/test/build lane, the migration DDL lint, and the
+# gitleaks secret scan (the no-secrets invariant is never weakened, on any
+# branch).
 #
 # Still deliberately deferred to the dev→main PR's full ci.yml gate, because each
 # is slow and none of them is what a routine change breaks: the -race lane,
@@ -134,6 +135,33 @@ jobs:
         # compile with it.
         run: go test -p 1 -tags fleet_host_executor ./...
 
+  python:
+    name: Python lint (ruff)
+    runs-on: ubuntu-latest
+    # Mirrors ci.yml's `python` job exactly, for the same reason the web lane was
+    # added to this file: a change should not first be checked at the dev->main
+    # promotion. ruff takes about a second, so there is no speed argument for
+    # deferring it.
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install ruff
+        env:
+          # Keep pinned in lockstep with ci.yml (asserted by
+          # scripts/check_versions_test.go) so the fast lane and the full gate
+          # cannot disagree.
+          RUFF_VERSION: '0.15.8'
+        run: |
+          set -euo pipefail
+          python3 -m pip install --user --quiet "ruff==${RUFF_VERSION}"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.local/bin:$PATH"
+          ruff --version
+
+      - name: Lint
+        run: ruff check --output-format github .
+
   web:
     name: Web lint / test / build (fast)
     runs-on: ubuntu-latest
@@ -234,7 +262,7 @@ jobs:
     # Aggregate check for branch protection: passes only when every fast-lane
     # job succeeded (mirrors ci.yml's `CI gate`).
     if: always()
-    needs: [go, web, migrations, gitleaks]
+    needs: [go, python, web, migrations, gitleaks]
     runs-on: ubuntu-latest
     steps:
       - name: Fail if any fast-lane job failed

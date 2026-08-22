@@ -78,12 +78,15 @@ enough", not "unset the pin". Neither `env: GOTOOLCHAIN: auto` nor
 
 `.github/workflows/codeql.yml`, one `analyze` job over a four-entry matrix.
 
-| language | build mode | quality queries |
+| language | build mode | queries |
 | --- | --- | --- |
-| `go` | `autobuild` | yes |
-| `python` | `none` | yes |
-| `javascript-typescript` | `none` | yes |
-| `actions` | `none` | no |
+| `go` | `autobuild` | security (default suite) |
+| `python` | `none` | security (default suite) |
+| `javascript-typescript` | `none` | security (default suite) |
+| `actions` | `none` | security (default suite) |
+
+**Security queries only.** The code-quality suite was enabled, measured, and then
+deliberately removed — see "Why code quality was dropped" below.
 
 `build-mode: none` is [not supported for
 Go](https://docs.github.com/en/code-security/reference/code-scanning/codeql/build-options-for-compiled-languages)
@@ -174,15 +177,14 @@ loaded only `codeql/go-queries`, evaluated 72 distinct queries, and uploaded a
 single `go.sarif`. The code-quality half of the coverage this change claims to
 restore was not running at all.
 
-Fixed by using `queries: code-quality`, exactly as the message directs.
+Fixed at the time by using `queries: code-quality`, exactly as the message
+directs. That is the working form, and it is worth recording for anyone who tries
+`analysis-kinds` again and sees a green check: the input is accepted, two errors
+are logged, and only security runs.
 
-**This is a real deviation from default setup, not a like-for-like restoration.**
-Default setup ran code quality as a separate *analysis kind*, producing a second
-analysis that feeds GitHub's Code Quality experience. That kind is
-GitHub-internal and closed to custom workflows — no advanced-setup workflow can
-feed it. What is restored is the code-quality **query suite**, added to the
-default security suite over one shared database, with findings arriving as
-ordinary code-scanning alerts. The queries all run; the presentation differs.
+Code quality was then measured and dropped — see the next section. The lasting
+point from this defect is the one about evidence: the run was **green** with the
+requested analysis silently not happening.
 
 ### 2. Go extraction had one hole, and it was the worst file in the tree
 
@@ -218,6 +220,51 @@ Note also that the extractor still logs `Build flags: ''`. `GOFLAGS` reaches the
 plumbing, so the log line that looks like it should confirm the fix does not.
 `host.go` appearing in the extracted list is what confirms it.
 
+## Why code quality was dropped
+
+The quality suite shipped first, ran, and was then removed on the evidence it
+produced. Worth writing down, because "more queries" reads as strictly better
+until you look at what they found.
+
+**What it found: 32 findings, every one note-level, and zero security findings.**
+
+| language | findings | what they were |
+| --- | --- | --- |
+| `go` | 2 | `go/useless-assignment-to-field` |
+| `python` | 28 | `py/empty-except` (12), `py/implicit-string-concatenation-in-list` (9), `py/comparison-of-identical-expressions` (3), unused local/global/import (4) |
+| `javascript-typescript` | 2 | `js/trivial-conditional`, `js/useless-assignment-to-local` |
+| `actions` | 0 | — |
+
+Three reasons that adds up to "wrong tool", not "clean codebase":
+
+1. **For Go and the web tier it duplicates gates that already block.**
+   `golangci-lint` runs `gosec`, `staticcheck`, `revive`, `unparam`, `gocritic`
+   and more, and it is inside `ci-gate`; oxlint covers the web tier.
+   `go/useless-assignment-to-field` is squarely inside that remit. Paying ~40s of
+   CodeQL for a second opinion on it buys nothing.
+
+2. **28 of 32 were Python — a real gap, but ruff is the right instrument.**
+   Python genuinely had no linter (see `ruff.toml`), so those findings were the
+   suite's only unique contribution. ruff finds the same class of thing in well
+   under a second, with autofix, and now blocks. A slow job with no autofix is
+   the wrong shape for lint, especially for an agent expected to fix and re-push.
+
+3. **Three of the 32 were false positives on correct code.**
+   `py/comparison-of-identical-expressions` flagged `value != value` three times
+   in `bento_pdf.py` — the idiomatic NaN test, which is true only for NaN.
+   Enabling the equivalent ruff rule (`PLR0124`) was rejected for the same
+   reason.
+
+So the security queries stay (they are what nothing else here can do — see the
+Semgrep comparison in `.github/workflows/semgrep.yml`), and quality moves to the
+linters that were already gating.
+
+**What this costs, stated plainly:** the four Go/JS quality findings above are no
+longer reported by anything, because `golangci-lint` and oxlint did not
+independently flag them. That is a real, small loss of coverage accepted in
+exchange for not running a second slow analyzer over ground three other tools
+already cover.
+
 ## What was verified
 
 Measured on run 2 (`7731615`, run `32571297663`), by downloading the run's log
@@ -237,15 +284,16 @@ Success: extraction succeeded for all 2 discovered project(s).
 non-test files by exactly `host_disabled.go`, per the build-tag trade above.
 
 **Every language produced a database, ran queries, and uploaded results.**
-Distinct queries evaluated, run 1 vs run 2 — the delta is the code-quality suite
-arriving:
+Distinct queries evaluated. The middle column is the security suite alone, which
+is what ships; the right column is what adding `queries: code-quality` did, kept
+here because it is the measurement the drop decision rests on:
 
-| language | run 1 | run 2 | delta | SARIF |
-| --- | --- | --- | --- | --- |
-| `go` | 72 | 116 | +44 | `go.sarif` |
-| `python` | 90 | 292 | +202 | `python.sarif` |
-| `javascript-typescript` | 178 | 374 | +196 | `javascript.sarif` |
-| `actions` | 36 | 36 | +0 | `actions.sarif` |
+| language | security only (ships) | with code-quality (dropped) | SARIF |
+| --- | --- | --- | --- |
+| `go` | 72 | 116 (+44) | `go.sarif` |
+| `python` | 90 | 292 (+202) | `python.sarif` |
+| `javascript-typescript` | 178 | 374 (+196) | `javascript.sarif` |
+| `actions` | 36 | 36 (+0) | `actions.sarif` |
 
 `actions` is unchanged **by design** — default setup ran it in the security
 analysis only, and that was matched rather than widened. The new Go query
@@ -292,11 +340,12 @@ with go1.25.1 and cannot lint the tree.
   evaluates, but CodeQL does not print the number to the job log; it lands in a
   `.bqrs`. File and package counts are what was actually observed, so they are
   what is reported here. No line count is claimed.
-- **Alert counts are not claimed.** This change restores *scanning*; what the
-  new quality queries find on this codebase is a separate question, and PR-run
-  file-coverage information is suppressed by CodeQL anyway ("To speed up pull
-  request analysis, file coverage information is only enabled when analyzing the
-  default branch and protected branches").
+- **Alert counts on `main` are not claimed.** The zero-security-findings result
+  above was measured on a PR run of this branch. PR-run file-coverage detail is
+  suppressed by CodeQL ("To speed up pull request analysis, file coverage
+  information is only enabled when analyzing the default branch and protected
+  branches"), so the default-branch alert set is not established until this
+  merges and a promote lands on `main`.
 - **`build-mode: manual` was not built.** `autobuild` works, so the more
   complex option was not needed. If `autobuild` regresses, manual mode plus the
   repo's own `go build ./...` is the fallback — and it is also the route to
@@ -327,11 +376,11 @@ fleet is a **public** repository, so code scanning merge protection is available
 at no cost (on private repos it requires GitHub Advanced Security). To turn it
 on: Settings → Rules → the "Main" ruleset → add the **Code scanning** rule →
 add tool **CodeQL** → set the alert thresholds. Two independent knobs there:
-*Security alerts* (the CWE/security queries) and *Alerts* (everything else,
-which is where the code-quality suite lands). Sensible starting point given that
-the quality queries have never run against this codebase: security threshold
-**High or higher**, alerts threshold **None**, then tighten once the quality
-backlog is known and burned down.
+*Security alerts* (the CWE/security queries — the only ones this workflow runs)
+and *Alerts* (everything else, which would be where a code-quality suite landed
+if one were enabled; it is not). Since the security suite currently reports zero
+findings on this tree, a **High or higher** security threshold can go on without
+inheriting a backlog.
 
 ## Merge gating today — unchanged, with the lever put within reach
 
@@ -369,12 +418,12 @@ posture than that lane's stated "does it compile, lint, and pass tests" job. The
 sequence with the least chance of self-inflicted deadlock is: merge this, watch a
 few promotions go green, then add `CodeQL gate` to the ruleset.
 
-One more thing to know before requiring it: the newly-enabled quality queries
-(+44 Go, +202 Python, +196 JavaScript) have **never run against this codebase
-before**. If any of them fire, they become alerts the moment this merges — and
-if `CodeQL gate` were required on day one, a pre-existing quality finding would
-block merges. Findings are advisory only for as long as the gate stays optional,
-which is another reason to sequence it that way.
+What makes that sequencing *safer than it was*: with code quality dropped, the
+security suite is all that runs, and it currently reports **zero findings** on
+this tree (see "Why code quality was dropped"). So there is no pre-existing
+backlog for a required gate to trip over — which is the usual reason turning one
+on hurts. The remaining risk is the one this whole document is about: a toolchain
+or extractor regression going red for reasons unrelated to any diff.
 
 No repo-settings or API change to code-scanning configuration was attempted as
 part of this change.

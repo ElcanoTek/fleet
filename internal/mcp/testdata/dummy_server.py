@@ -1,6 +1,5 @@
 import sys
 import json
-import os
 
 # Ensure unbuffered output
 sys.stdout.reconfigure(line_buffering=True)

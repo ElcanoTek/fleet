@@ -26,7 +26,7 @@ make compile      # go build ./...   (compile-check only; no artifacts)
 make test         # go test -p 1 ./...   — run in the FOREGROUND
 make test-race    # go test -race -p 1 ./...   (use when touching concurrency)
 make test-cover   # run Go tests with coverage profiling (writes coverage.out)
-make lint         # golangci-lint + migration DDL lint — must pass clean
+make lint         # golangci-lint + ruff (Python) + migration DDL lint — must pass clean
 make fmt          # gofmt -w .
 make tidy         # go mod tidy
 ```
@@ -40,11 +40,14 @@ cd web && npx playwright test --project=mocked     # mocked e2e
 
 CI mirrors all of this — Go build/vet/lint/test (including a `-race` lane) plus a
 `govulncheck` dependency-CVE scan, a Grype container-image CVE scan (fail on a
-fixable CRITICAL) of the sandbox image, web lint (oxlint) / typecheck (TS 7) / test / build, Playwright (mocked
+fixable CRITICAL) of the sandbox image, a Python lint (ruff), web lint (oxlint) / typecheck (TS 7) / test / build, Playwright (mocked
 **and** live, against a real backend + sandbox), a migration DDL lint, and a
 gitleaks secret scan. **Every job must be green before merge.** Tests are
 deterministic without a live model: use the fake-LLM seam (`internal/fakellm`
 via `OPENROUTER_BASE_URL`), never a real key.
+
+CodeQL (security queries) and Semgrep (Actions supply chain) also run per PR but
+are **advisory**, not part of `ci-gate` — see [`docs/SCANNING.md`](docs/SCANNING.md).
 
 ## Repository map
 
@@ -161,9 +164,13 @@ same PR.
 - **Contributor workflow + CI gates:** [`CONTRIBUTING.md`](CONTRIBUTING.md)
 - **Testing strategy** (unit / fake-LLM / mocked + live Playwright / canary):
   [`docs/TESTING.md`](docs/TESTING.md)
+- **The scanning stack** (who checks what, why ruff owns Python lint, why
+  Semgrep is scoped to Actions supply chain after its broad packs scored 0/6,
+  what blocks vs what reports, and the known gaps):
+  [`docs/SCANNING.md`](docs/SCANNING.md)
 - **CodeQL** (why default setup was replaced by an advanced-setup workflow, how
-  the Go toolchain is resolved, why `code-quality` is a query suite here rather
-  than an analysis kind, and why CodeQL is advisory rather than in `ci-gate`):
+  the Go toolchain is resolved, why it runs security queries only, and the
+  difference between a required status check and code scanning merge protection):
   [`docs/CODEQL.md`](docs/CODEQL.md)
 - **HTTP API versioning** (the `/v1` prefix + `X-Fleet-API-Version` + `/api-info`
   discovery + deprecation contract): [`docs/api-versioning.md`](docs/api-versioning.md)

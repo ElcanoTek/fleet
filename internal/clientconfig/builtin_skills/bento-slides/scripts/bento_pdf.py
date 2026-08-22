@@ -1918,7 +1918,9 @@ class ShapeMixin:
         color = parse_color(element.get("fill"))
         if not is_visible(color):
             return
-        tip = lambda kind: width * 2.6 if kind and kind != "none" else 0.0
+        def tip(kind):
+            return width * 2.6 if kind and kind != "none" else 0.0
+
         start = tip(element.get("lineStart"))
         end = tip(element.get("lineEnd"))
         mid = y + h / 2.0
