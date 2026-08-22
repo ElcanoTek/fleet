@@ -222,6 +222,7 @@ run()  { if [[ "$DRY_RUN" == "1" ]]; then info "[dry-run] $*"; else "$@"; fi; }
 # and build-PATH prefix are safe under `set -u` on a checkout with no web/.
 node_bin_resolved=""
 node_major_want=""
+npm_cli_resolved=""
 DRY_RUN_BLOCKED=0
 
 # node_probe — resolve the interpreter THIS checkout's web tier needs, and set
@@ -233,12 +234,31 @@ DRY_RUN_BLOCKED=0
 # answered it differently from the run it previews would be worse than not
 # answering at all.
 #
-# Returns: 0 resolved · 1 nothing on this box qualifies · 2 web/.nvmrc unreadable.
+# npm is probed too, and separately, because on Fedora it is a separate package
+# (nodejs<major>-npm) whose shebang names its interpreter ABSOLUTELY — so
+# "a node 24 is installed" does not imply "npm will build on node 24", and the
+# gate's promise is about the build. See fleet_resolve_npm_cli.
+#
+# An unresolvable npm is a BLOCKER only for a versioned interpreter. That is the
+# parallel-stream layout, where the bare `npm` provably belongs to a different
+# interpreter and the missing package has a name. On a single-node layout
+# (Debian/nodesource/nvm) the same miss means npm ships in a shape this probe
+# cannot read — and there the `node` pin in the build PATH is enough, because
+# npm's shebang on those distros really is the relative `env node`. Refusing
+# that box would be inventing a blocker out of an unread file.
+#
+# Returns: 0 resolved · 1 nothing on this box qualifies · 2 web/.nvmrc unreadable
+#          · 3 a versioned node resolved but its npm did not.
 node_probe() {
   node_bin_resolved=""
+  npm_cli_resolved=""
   node_major_want="$(fleet_node_major_want "$SRC_DIR" || true)"
   [[ -n "$node_major_want" ]] || return 2
   node_bin_resolved="$(fleet_resolve_node_bin "$node_major_want")" || { node_bin_resolved=""; return 1; }
+  npm_cli_resolved="$(fleet_resolve_npm_cli "$node_bin_resolved")" || npm_cli_resolved=""
+  if [[ -z "$npm_cli_resolved" && "${node_bin_resolved##*/}" =~ ^node-[0-9]+$ ]]; then
+    return 3
+  fi
   return 0
 }
 
@@ -677,9 +697,21 @@ if [[ -f "$SRC_DIR/web/package.json" ]]; then
     # root-free, so the plan can afford to answer the question for real.
     if (( _np_rc == 0 )); then
       ok "[dry-run] node gate PASSES: ${node_bin_resolved} ($("$node_bin_resolved" -v)) >= ${node_major_want} (web/.nvmrc) — resolved on this box, not assumed"
+      if [[ -n "$npm_cli_resolved" ]]; then
+        ok "[dry-run] npm gate PASSES: the build would run ${npm_cli_resolved} on ${node_bin_resolved} — resolved on this box, not assumed"
+      else
+        info "[dry-run] npm gate: no npm-cli.js resolvable for ${node_bin_resolved} (a single-node layout), so the build would use \`npm\` from PATH ($(command -v npm 2>/dev/null || echo none)) under a pinned \`node\`"
+      fi
     elif (( _np_rc == 2 )); then
       warn "[dry-run] BLOCKER: cannot read the node major from ${SRC_DIR}/web/.nvmrc — the real run stops here"
       DRY_RUN_BLOCKED=1
+    elif (( _np_rc == 3 )); then
+      # A blocker in its own right: bare `npm` on this box belongs to the
+      # DEFAULT stream and its shebang pins it there, so the build would run on
+      # the old major however the node question was answered.
+      warn "[dry-run] BLOCKER: node ${node_bin_resolved} qualifies but no npm belongs to it — install nodejs${node_major_want}-npm"
+      DRY_RUN_BLOCKED=1
+      info "[dry-run] for a scriptable answer use: fleet update --check   (exits non-zero on this)"
     else
       warn "[dry-run] BLOCKER: no node >= ${node_major_want} (web/.nvmrc) — have $(node -v 2>/dev/null || echo none)"
       if [[ "$NODE_REPAIR" != "1" ]]; then
@@ -697,7 +729,8 @@ if [[ -f "$SRC_DIR/web/package.json" ]]; then
       || die "cannot read the node major from ${SRC_DIR}/web/.nvmrc — expected something like '24' (${_state})"
 
     if (( _np_rc != 0 )); then
-      # The box is a major behind. Dying here was the old behavior, and it made
+      # The box is a major behind (or has the interpreter and not its npm).
+      # Dying here was the old behavior, and it made
       # the documented order load-bearing: `fleet update` stopped, and the
       # operator had to already know the fix lived in a different verb — a verb
       # that, run FIRST on a box provisioned before web/.nvmrc existed, is a
@@ -710,7 +743,15 @@ if [[ -f "$SRC_DIR/web/package.json" ]]; then
       # write this script only ever performs behind explicit consent
       # (--adopt-units), and laundering that through the node repair would be a
       # consent bypass.
-      warn "no node >= ${node_major_want} (web/.nvmrc) — have $(node -v 2>/dev/null || echo none)."
+      if (( _np_rc == 3 )); then
+        # Same repair, different missing package: doctor --node installs
+        # nodejs<major> AND nodejs<major>-npm, which is exactly what is short
+        # here. Saying "no node" in this case would send the operator looking
+        # for a problem they do not have.
+        warn "node ${node_bin_resolved} ($("$node_bin_resolved" -v)) qualifies, but no npm belongs to it — the bare \`npm\` on this box is the default stream's and its shebang pins it there."
+      else
+        warn "no node >= ${node_major_want} (web/.nvmrc) — have $(node -v 2>/dev/null || echo none)."
+      fi
       _doctor="$SCRIPT_DIR/doctor.sh"
       if [[ "$NODE_REPAIR" != "1" ]]; then
         warn "  --no-node-repair is set, so this run will not install it."
@@ -718,7 +759,7 @@ if [[ -f "$SRC_DIR/web/package.json" ]]; then
         die "refusing to build the web tier on an unsupported node — ${_state}"
       elif [[ ! -r "$_doctor" ]]; then
         warn "  the repair path ${_doctor} is missing from this checkout."
-        warn "  fix it:  sudo dnf install nodejs${node_major_want} nodejs${node_major_want}-npm"
+        warn "  fix it:  sudo dnf install nodejs${node_major_want} nodejs${node_major_want}-npm"  # both: node and its npm are separate packages
         die "refusing to build the web tier on an unsupported node — ${_state}"
       elif [[ $EUID -ne 0 ]]; then
         warn "  repairing it needs root, and this update is running as uid ${EUID}."
@@ -735,10 +776,18 @@ if [[ -f "$SRC_DIR/web/package.json" ]]; then
       # resolver against the box proves that. Same rule as the resolved
       # ExecStart and resolved TimeoutStopFailureMode assertions.
       node_probe \
-        || die "still no node >= ${node_major_want} after scripts/doctor.sh --node — inspect 'dnf list nodejs*' / 'dnf repolist'; ${_state}"
+        || die "still no node >= ${node_major_want} with a matching npm after scripts/doctor.sh --node — inspect 'dnf list nodejs*' / 'dnf repolist'; ${_state}"
       ok "node toolchain repaired in place — no re-run needed"
     fi
     ok "web tier will build+run on ${node_bin_resolved} ($("$node_bin_resolved" -v))"
+    # Named separately from the interpreter because it is a separate claim, and
+    # the one that was silently false: the gate resolved node 24, the build ran
+    # npm 22 (absolute shebang), and npm rejected the engine it was handed.
+    if [[ -n "$npm_cli_resolved" ]]; then
+      ok "web tier will build with ${npm_cli_resolved} — pinned to that interpreter, not to PATH"
+    else
+      info "no npm-cli.js resolvable for ${node_bin_resolved} — the build will use \`npm\` from PATH under a pinned \`node\`; the read-back below reports which interpreter it actually used"
+    fi
   fi
 fi
 
@@ -895,7 +944,7 @@ if [[ "$DRY_RUN" == "1" ]]; then
   info "[dry-run] would run: (cd ${SRC_DIR} && make build)  → ${SRC_DIR}/fleet + fleet-admin"
   info "[dry-run] would install fleet + fleet-admin → ${INSTALL_DIR:-<unit ExecStart dir, else /opt/fleet>}"
   info "[dry-run] would refresh /usr/local/bin/fleet-web-start.sh and set FLEET_NODE_BIN in /etc/fleet/fleet-web.env"
-  info "[dry-run] would run: (cd ${SRC_DIR}/web && npm ci && npm run build) with the NEXT_PUBLIC_* stamps from /etc/fleet/fleet-web.env"
+  info "[dry-run] would run: (cd ${SRC_DIR}/web && npm ci && npm run build) with the NEXT_PUBLIC_* stamps from /etc/fleet/fleet-web.env, on the node+npm the gate resolved above"
   info "[dry-run] would deploy the web build → the fleet-web unit's WorkingDirectory (else /opt/fleet/web)"
 else
   require_go_toolchain
@@ -987,14 +1036,32 @@ else
     # by definition, so grepping just those keys from the 0600 web env file
     # leaks no secret — the file is still never sourced. The build id needs
     # no stamp: next.config.ts derives it from the checkout's git SHA.
-    # PATH is set so the bare name `node` resolves to the interpreter the gate
-    # picked: npm's shebang is `#!/usr/bin/env node`, so a bare `npm ci` uses
-    # whatever `node` PATH resolves to — the DEFAULT stream on Fedora. Without
-    # this the tier was built on the old major while this script reported the
-    # new one. Resolved once so the shim directory it may create is removed
-    # rather than leaked on every update, including on the failure path.
+    # PATH is set so `node`, `npm` and `npx` all resolve to the interpreter the
+    # gate picked. The bare-`npm` build used whatever its own shebang named — on
+    # Fedora the DEFAULT stream, absolutely pathed — so the tier was built on the
+    # old major while this script reported the new one, and npm printed
+    # EBADENGINE against web/package.json's `"node": ">=24"` in the middle of an
+    # otherwise green update. Resolved once so the shim directory it may create
+    # is removed rather than leaked on every update, including on the failure
+    # path. See scripts/lib/node-version.sh.
     _build_path="$(fleet_node_build_path "$node_bin_resolved")"
-    _build_node="$(PATH="$_build_path" node -v 2>/dev/null || echo unknown)"
+    # Ask npm which interpreter it is actually running under, rather than
+    # inferring it from the PATH we just built. The pin is a claim about a
+    # subprocess's shebang resolution; only npm's own answer settles it, and
+    # `node -v` under the same PATH — what this used to read — cannot: it is the
+    # symlink we made, so it reported success for the one component that was
+    # already correct while the broken one went unmeasured.
+    _build_node="$(fleet_npm_node_version "$_build_path" "$SRC_DIR/web" || true)"
+    _build_major="$(fleet_node_version_major "${_build_node:-}" || true)"
+    if [[ -z "$_build_node" ]]; then
+      warn "could not read the node version npm runs under (\`npm version --json\` gave nothing) — building anyway, but the interpreter is UNVERIFIED"
+      _build_node="unverified"
+    elif [[ -n "$_build_major" ]] && (( _build_major < node_major_want )); then
+      fleet_node_build_path_cleanup "$_build_path" "$node_bin_resolved"
+      warn "npm would build the web tier on ${_build_node}, below the ${node_major_want} declared in web/.nvmrc."
+      warn "  fix it:  sudo dnf install nodejs${node_major_want}-npm    (then re-run this update)"
+      die "refusing to build the web tier with an npm pinned to an unsupported node — binaries are installed, the web tier is untouched"
+    fi
     if ! ( cd "$SRC_DIR/web" \
         && export PATH="$_build_path" \
         && export NEXT_PUBLIC_PUBLIC_ORIGIN="$web_origin" NEXT_PUBLIC_APP_NAME="$web_app_name" \
@@ -1003,8 +1070,8 @@ else
       die "web build failed"
     fi
     fleet_node_build_path_cleanup "$_build_path" "$node_bin_resolved"
-    # Name the interpreter the build ACTUALLY ran under, read back from the
-    # build PATH, rather than the one the gate intended it to run under.
+    # Name the interpreter the build ACTUALLY ran under, read back from npm
+    # itself, rather than the one the gate intended it to run under.
     ok "web app built on ${_build_node} (origin=${web_origin:-<default>}, app=${web_app_name:-<default>})"
 
     # Deploy the build to where fleet-web actually serves from (bootstrap's

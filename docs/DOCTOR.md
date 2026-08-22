@@ -38,7 +38,7 @@ Division of labor across the three health verbs:
 |---|---|---|---|
 | `fleet status` | none | never | quick in-process checks (bundle, env, DBs, sandbox, unit) |
 | `fleet doctor` | root — `--dry-run` needs none, but **`--check` still does** (it probes the service user's rootless podman and reads 0600 env files) | **repairs** | everything status checks **plus** packages, podman prereqs, unit drift, env files — and fixes them |
-| `fleet doctor --node` | root — **except `--node --check`**, the one read-only path needing none (it is what `fleet update --check` calls) | **repairs** | the node toolchain ONLY: install `nodejs<major>` + `-npm` per `web/.nvmrc`, stamp `FLEET_NODE_BIN`, assert the resolved value, exit |
+| `fleet doctor --node` | root — **except `--node --check`**, the one read-only path needing none (it is what `fleet update --check` calls) | **repairs** | the node toolchain ONLY: install `nodejs<major>` + `-npm` per `web/.nvmrc`, stamp `FLEET_NODE_BIN`, assert the resolved interpreter **and that an npm belongs to it**, exit |
 | `/admin/doctor` (UI) | admin session | never | doctor's *diagnosable-from-the-process* subset, with fix hints |
 
 ## Design decisions
@@ -51,7 +51,12 @@ Division of labor across the three health verbs:
   It is scoped to the node blocks deliberately: a full doctor pass adopts
   drifted units, a write `fleet update` performs only behind explicit consent
   (`--adopt-units`), so invoking one from inside update would launder a
-  consent-gated write. `--node --check` drops the root requirement because it
+  consent-gated write. It asserts the interpreter **and its npm** separately,
+  because on Fedora npm is its own package whose shebang names its interpreter
+  absolutely: a box can have node 24 while `npm` still builds on 22, which is
+  how the web tier was built on the old major through green updates (see
+  [`NODE-TOOLCHAIN-HANDOFF.md`](NODE-TOOLCHAIN-HANDOFF.md), "The npm
+  interpreter pin"). `--node --check` drops the root requirement because it
   installs nothing and `fleet update --check` (a documented no-root dev-box
   probe) calls it. Full story:
   [`NODE-TOOLCHAIN-HANDOFF.md`](NODE-TOOLCHAIN-HANDOFF.md).
