@@ -232,3 +232,70 @@ func TestPostgresMajorAgreesAcrossCI(t *testing.T) {
 		t.Error("postgres majors disagree across CI — a server/client mismatch makes the backup/restore round-trip test SKIP rather than fail, so this would ship as a green check with the test silently off")
 	}
 }
+
+// goMinor pulls "1.27" out of a go.mod `go` directive or a `golang:1.27` image
+// tag, discarding any patch component. Comparing at major.minor is deliberate:
+// web/go.mod says in its own comment that pinning a PATCH there just created a
+// second copy of the root pin to bump in lockstep, and the golang base image
+// has no patch tag worth chasing either. The MINOR is the part that has to
+// agree.
+func goMinor(spec string) (string, bool) {
+	m := regexp.MustCompile(`(\d+)\.(\d+)`).FindStringSubmatch(spec)
+	if m == nil {
+		return "", false
+	}
+	return m[1] + "." + m[2], true
+}
+
+// TestGoMinorAgreesEverywhere: go.mod is the declaration point for the Go
+// toolchain — CI reads it via `go-version-file`, and the Makefile's
+// GOTOOLCHAIN=auto makes every build path fetch exactly what it names. But two
+// copies of that version exist outside it, and NOTHING reconciled them:
+//
+//   - web/go.mod — a no-package boundary module, so nothing compiles against it
+//     and a stale `go` line there is completely silent.
+//   - docs/EKS-DEPLOYMENT.md — a `FROM golang:<minor>` build stage an operator
+//     copies verbatim. Too old and their image cannot build the module at all.
+//
+// This is the same blind spot the node major had, and it bit the same way: the
+// pin sat at 1.26 after 1.27 shipped, with nothing to say so. Dependabot cannot
+// help — it does not update the `go` directive (dependabot-core#9527), so the
+// toolchain version is ours to move, which makes moving all of it at once a
+// thing to assert rather than remember.
+func TestGoMinorAgreesEverywhere(t *testing.T) {
+	root := repoRoot(t)
+
+	rootSpec := regexp.MustCompile(`(?m)^go\s+(\S+)`).FindStringSubmatch(readFile(t, root, "go.mod"))
+	if rootSpec == nil {
+		t.Fatal("go.mod has no `go` directive")
+	}
+	want, ok := goMinor(rootSpec[1])
+	if !ok {
+		t.Fatalf("go.mod `go %s` — cannot read a major.minor from it", rootSpec[1])
+	}
+
+	webSpec := regexp.MustCompile(`(?m)^go\s+(\S+)`).FindStringSubmatch(readFile(t, root, "web/go.mod"))
+	if webSpec == nil {
+		t.Error("web/go.mod has no `go` directive")
+	} else if got, ok := goMinor(webSpec[1]); !ok {
+		t.Errorf("web/go.mod `go %s` — cannot read a major.minor from it", webSpec[1])
+	} else if got != want {
+		t.Errorf("web/go.mod says go %s but go.mod says %s — bump them together (web/go.mod is major.minor only by design, but the minor still has to agree)", got, want)
+	}
+
+	const eksDoc = "docs/EKS-DEPLOYMENT.md"
+	img := regexp.MustCompile(`FROM golang:(\S+?)(?:\s|$)`).FindAllStringSubmatch(readFile(t, root, eksDoc), -1)
+	if len(img) == 0 {
+		t.Logf("%s has no `FROM golang:` stage — nothing to check", eksDoc)
+	}
+	for _, m := range img {
+		got, ok := goMinor(m[1])
+		if !ok {
+			t.Errorf("%s has `FROM golang:%s` — cannot read a major.minor from it", eksDoc, m[1])
+			continue
+		}
+		if got != want {
+			t.Errorf("%s builds on `golang:%s` but go.mod says %s — an operator copying that stage gets an image too old to build the module", eksDoc, m[1], want)
+		}
+	}
+}

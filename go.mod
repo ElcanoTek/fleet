@@ -1,6 +1,6 @@
 module github.com/ElcanoTek/fleet
 
-go 1.26.7
+go 1.27.0
 
 require (
 	charm.land/bubbles/v2 v2.1.1

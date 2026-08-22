@@ -76,11 +76,26 @@ func Init(opts Options) bool {
 	if env == "" {
 		env = "dev"
 	}
+	// No SendDefaultPII / DataCollection field is set, and that is deliberate.
+	// Leaving both at their zero values is what selects the SDK's STRICTEST
+	// posture: sentry-go resolves a nil DataCollection with SendDefaultPII
+	// false through legacyDataCollection(false), which turns UserInfo off,
+	// collects no HTTP bodies, drops cookies entirely, deny-lists request and
+	// response headers plus query params, AND installs extendedSensitiveTerms
+	// (forwarded, -ip, remote-, via, -user) as an extra scrubbing deny list.
+	//
+	// Do NOT "modernize" this by populating DataCollection instead. That field
+	// is the documented replacement for the now-deprecated SendDefaultPII, but
+	// it CANNOT express what we get here: extendedSensitiveTerms is set through
+	// the unexported DataCollection.sensitiveTerms, unreachable from outside the
+	// package, and resolveDataCollection defaults UserInfo back to TRUE. So a
+	// hand-written DataCollection would silently loosen PII scrubbing — the
+	// opposite of the intent — which is why the explicit `SendDefaultPII: false`
+	// was dropped rather than migrated when staticcheck flagged it deprecated.
 	if err := sentry.Init(sentry.ClientOptions{
 		Dsn:              opts.DSN,
 		Environment:      env,
 		Release:          opts.Release,
-		SendDefaultPII:   false,
 		BeforeSend:       RedactEvent,
 		AttachStacktrace: true,
 	}); err != nil {
