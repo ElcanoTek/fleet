@@ -17,6 +17,44 @@ prior versions are listed because none have shipped.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`fleet update` built the web tier on the node it had just refused.** Every
+  update on a Fedora box printed `✓ web tier will build+run on /usr/bin/node-24
+  (v24.x)` and then, a few lines later, npm's own rejection of that claim:
+
+  ```
+  npm warn EBADENGINE Unsupported engine {
+  npm warn EBADENGINE   package: 'fleet-web@0.1.0',
+  npm warn EBADENGINE   required: { node: '>=24' },
+  npm warn EBADENGINE   current: { node: 'v22.23.1', npm: '10.9.8' }
+  ```
+
+  `fleet_node_build_path` pinned the bare name `node` with a private shim
+  directory at the head of PATH, on the documented reasoning that npm's shebang
+  is `#!/usr/bin/env node`. On Fedora it is not: because the node streams are
+  parallel-installable, the spec rewrites npm's shebang to the **absolute**
+  `#!/usr/bin/node-<major>`, so `npm ci && npm run build` stayed on the default
+  stream no matter what PATH said — and `next`, launched by npm, inherited it.
+  The tier was built on node 22 and served on node 24, which is the same
+  claimed-but-not-done fault the shim was introduced to remove, one link
+  further down.
+
+  The shim now also carries `npm` and `npx` wrappers that exec the resolved
+  interpreter against the matching `npm-cli.js` / `npx-cli.js` — the one form of
+  the answer no shebang can override. Around that: `node_probe` resolves npm
+  **separately** from node (Fedora ships it as its own `nodejs<major>-npm`
+  package, so "node 24 is installed" never implied "npm builds on node 24") and
+  the gate hands a missing one to the same `doctor.sh --node` repair — for a
+  *versioned* interpreter only, since a single-node layout's unreadable npm is
+  not evidence of a wrong interpreter; the build
+  step reads the interpreter back **from npm** instead of from the symlink it
+  just made, and refuses below the `web/.nvmrc` floor; `doctor.sh` checks and
+  repairs the pairing, so `fleet doctor --node` and `fleet update --check` fail
+  on it too; and `bootstrap.sh` reports the version the build actually ran under.
+  Design note: [`docs/NODE-TOOLCHAIN-HANDOFF.md`](docs/NODE-TOOLCHAIN-HANDOFF.md)
+  ("The npm interpreter pin").
+
 ### Changed
 
 - **Go 1.27 (`go.mod` 1.26.7 → 1.27.0)** — the pin had gone stale: Go 1.27.0
