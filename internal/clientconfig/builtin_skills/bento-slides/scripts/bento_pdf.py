@@ -1601,7 +1601,7 @@ class Renderer:
             pages.append(self.writer.reserve())
         resources = self.res.dictionary()
         tree = self.writer.reserve()
-        for number_, content in zip(pages, contents):
+        for number_, content in zip(pages, contents, strict=True):
             self.writer.put(
                 number_,
                 "<< /Type /Page /Parent %d 0 R /MediaBox "
@@ -2418,7 +2418,7 @@ class TableMixin:
             if not is_header and style.get("zebra") and body_index % 2 == 1:
                 zebra = style.get("zebra")
             left = x
-            for column_index, (cell, lines, bold) in enumerate(laid):
+            for column_index, (cell, lines, _bold) in enumerate(laid):
                 width = widths[column_index]
                 height = heights[row_index]
                 background = cell.get("bg") or (

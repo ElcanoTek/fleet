@@ -52,6 +52,17 @@
 #
 # Adding a suppression is therefore a reviewable act: it shows up in the diff
 # next to a reason, which is the property this whole lane exists to have.
+#
+# RULE PINNING — investigated and REJECTED, on license grounds, not neglect.
+# The packs are fetched from the registry at scan time, so a registry-side rule
+# addition can turn this gate red with no commit to blame (named in
+# docs/SCANNING.md as the first suspect for a mystery red run). Vendoring the
+# rule files would fix that, but the Semgrep Rules License v1.0
+# (https://semgrep.dev/legal/rules-license) grants use for "your own internal
+# business purposes" only and states outright: "This license does not allow you
+# to distribute the rules". Committing them into this public MIT repo would be
+# redistribution. The semgrep BINARY version is pinned; the rules deliberately
+# are not, with the failure mode documented instead of hidden.
 name: Semgrep
 
 on:
@@ -202,3 +213,38 @@ jobs:
           path: semgrep.json
           if-no-files-found: warn
           retention-days: 14
+
+  cron-failure-alarm:
+    name: File an issue so a red cron cannot rot silently
+    # Only exists for the standalone weekly run: in the workflow_call path the
+    # caller's gate (`CI gate` / `Dev gate`) is the alarm, and this job's
+    # schedule-only condition keeps it skipped there (a skip which also means
+    # the caller never needs to grant issues: write — called-workflow
+    # permissions intersect with the caller's grant).
+    # Body duplicated across the four scheduled scan lanes — keep in sync.
+    if: ${{ failure() && github.event_name == 'schedule' }}
+    needs: [semgrep]
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: File or update the alarm issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_NAME: ${{ github.workflow }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          title="Scheduled ${WORKFLOW_NAME} run failed"
+          num="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+            --search "\"$title\" in:title" --json number --jq '.[0].number // empty' || true)"
+          if [ -n "$num" ]; then
+            gh issue comment "$num" --repo "$GITHUB_REPOSITORY" \
+              --body "Still failing: $RUN_URL"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" \
+              --body "The scheduled $WORKFLOW_NAME lane went red: $RUN_URL
+
+          A failing cron has no PR to make it visible, so this issue is the
+          alarm. Close it when the lane is green again."
+          fi

@@ -85,8 +85,11 @@ enough", not "unset the pin". Neither `env: GOTOOLCHAIN: auto` nor
 | `javascript-typescript` | `none` | security (default suite) |
 | `actions` | `none` | security (default suite) |
 
-**Security queries only.** The code-quality suite was enabled, measured, and then
-deliberately removed — see "Why code quality was dropped" below.
+**Security queries only — at the `security-extended` tier.** The code-quality
+suite was enabled, measured, and deliberately removed (see "Why code quality
+was dropped" below); the *security* side was then widened from the default
+suite to `security-extended` once the default measured clean, so the broader
+set also started from a zero baseline.
 
 `build-mode: none` is [not supported for
 Go](https://docs.github.com/en/code-security/reference/code-scanning/codeql/build-options-for-compiled-languages)

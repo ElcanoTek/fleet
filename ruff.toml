@@ -23,16 +23,24 @@
 # length). Gating on that would mean a 300-commit reformat for no correctness
 # gain, so it is out of scope here rather than silently enabled.
 #
-# Two rules were considered and deliberately REJECTED, both because their only
-# findings in this tree are correct code:
+# One rule was considered and deliberately REJECTED, because its only findings
+# in this tree are correct code:
 #
 #   PLR0124 (name compared with itself) — its 3 hits in bento_pdf.py are the
 #     idiomatic NaN test (`value != value` is true only for NaN). CodeQL's
 #     py/comparison-of-identical-expressions flagged the same 3. Enabling it
 #     would mean three `# noqa` comments on correct code.
-#   S110 / SIM105 (try-except-pass) — 14 hits, mostly in python_bridge.py's
-#     best-effort cleanup paths where swallowing is the intent. Worth a separate
-#     review pass, not a gate that has to be suppressed 14 times on day one.
+#
+# B, SIM and S started here as measured-but-deferred (21 findings) and were then
+# fixed and ENABLED rather than left as a documented backlog: the two zip()
+# sites got strict=True (both provably equal-length — one appends to both lists
+# in lockstep, the other is behind an explicit len(row) != len(cols) guard), the
+# unclosed NamedTemporaryFile was restructured into its with-block, the
+# deliberate best-effort try/except-pass sites became explicit
+# contextlib.suppress with the intent stated at each, and the one subprocess
+# call carries a reasoned `# noqa: S603` (argv is sys.executable plus internal
+# literals; nothing model- or user-controlled). The bandit tier (S) firing on a
+# NEW line is therefore a real question to answer, not pre-existing noise.
 #
 # The gate is therefore "clean today, and stays clean": three real findings were
 # fixed to get here (an unused import, a byte-identical duplicate function
@@ -63,7 +71,7 @@ exclude = [
 # E9 syntax/IO) plus Pyflakes (F — undefined names, unused imports, redefined
 # names, unused locals). This is the "is it actually broken" tier; see the
 # header for why the style tiers are not enabled.
-select = ["E4", "E7", "E9", "F"]
+select = ["E4", "E7", "E9", "F", "B", "SIM", "S"]
 
 [lint.per-file-ignores]
 # MCP test servers and testdata fixtures are deliberately minimal stand-ins —

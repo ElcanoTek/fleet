@@ -14,7 +14,7 @@ serving sandbox images built 6–7 weeks earlier, on top of an equally old
 That matters because a container image is frozen at build time. An unchanged
 Containerfile does not stop the base layers and packages *inside* the built
 image from aging and accumulating **published, already-fixed CVEs**. CI's
-Grype gate (fail on a fixable CRITICAL) scans a **fresh** build of the
+Grype gate (fail on a fixable CRITICAL or HIGH) scans a **fresh** build of the
 Containerfile — only an on-box rebuild ever brings a deployed box up to what
 CI vouched for.
 

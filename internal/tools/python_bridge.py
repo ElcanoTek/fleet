@@ -1,5 +1,6 @@
 import atexit
 import base64
+import contextlib
 import binascii
 import datetime
 import json
@@ -138,10 +139,8 @@ def reap_stale_kernels():
         except OSError:
             continue
         if b"ipykernel_launcher" in cmdline:
-            try:
+            with contextlib.suppress(OSError):
                 os.kill(pid, signal.SIGKILL)
-            except OSError:
-                pass
 
 
 def start_kernel():
@@ -172,16 +171,18 @@ def start_kernel():
     # empty placeholder would make the while-loop below think the file
     # "exists" before the kernel has actually written to it, so we remove
     # our placeholder and let ipykernel create it fresh.
-    try:
+    with contextlib.suppress(OSError):
         os.unlink(connection_file)
-    except OSError:
-        pass
 
     # Start the kernel
     cmd = [sys.executable, "-m", "ipykernel_launcher", "-f", connection_file]
 
     # Start process detached to avoid signal interference
-    kernel_process = subprocess.Popen(
+    # S603 waived on the Popen below: every element of cmd is internal —
+    # sys.executable, literal flags, and a connection-file path this process
+    # just created with mkstemp in the OS temp dir. Nothing model- or
+    # user-controlled reaches the argv.
+    kernel_process = subprocess.Popen(  # noqa: S603
         cmd,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -203,16 +204,15 @@ def cleanup():
     """Kills the kernel and deletes the connection file."""
     global kernel_process, connection_file
     if kernel_process:
-        try:
+        # Broad on purpose: the process group may already be gone (ProcessLookup),
+        # unkillable (Permission), or getpgid itself can fail on a reaped pid —
+        # cleanup must never raise past atexit.
+        with contextlib.suppress(Exception):
             os.killpg(os.getpgid(kernel_process.pid), signal.SIGTERM)
-        except Exception:
-            pass
         kernel_process = None
     if connection_file:
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(connection_file)
-        except OSError:
-            pass
         connection_file = None
 
 
@@ -337,11 +337,7 @@ def run_code_on_kernel(code, client, timeout_seconds=None):
                     stdout_content.append(content["text"])
                 elif content["name"] == "stderr":
                     stderr_content.append(content["text"])
-            elif msg_type == "execute_result":
-                data = content.get("data", {})
-                result_content.append(data.get("text/plain", ""))
-                collect_image(data, images)
-            elif msg_type == "display_data":
+            elif msg_type in ("execute_result", "display_data"):
                 data = content.get("data", {})
                 result_content.append(data.get("text/plain", ""))
                 collect_image(data, images)
@@ -349,9 +345,8 @@ def run_code_on_kernel(code, client, timeout_seconds=None):
                 traceback = content.get("traceback", [])
                 error_content = strip_ansi("\n".join(traceback))
                 status = "error"
-            elif msg_type == "status":
-                if content["execution_state"] == "idle":
-                    idle_seen = True
+            elif msg_type == "status" and content["execution_state"] == "idle":
+                idle_seen = True
 
         except queue.Empty:
             pass
@@ -438,32 +433,27 @@ def normalize_json_value(value):
         return None
     if str(value) in {"<NA>", "NaT"}:
         return None
+    # Duck-typed pandas/numpy interop below: each probe is best-effort and a
+    # third-party accessor can raise anything, so the suppressions are broad on
+    # purpose — a failed probe falls through to the next representation.
     to_python = getattr(value, "to_pydatetime", None)
     if callable(to_python):
-        try:
+        with contextlib.suppress(Exception):
             return normalize_json_value(to_python())
-        except Exception:
-            pass
     item = getattr(value, "item", None)
     if callable(item):
-        try:
+        with contextlib.suppress(Exception):
             extracted = item()
             if extracted is not value:
                 return normalize_json_value(extracted)
-        except Exception:
-            pass
     to_list = getattr(value, "tolist", None)
     if callable(to_list):
-        try:
+        with contextlib.suppress(Exception):
             return normalize_json_value(to_list())
-        except Exception:
-            pass
     isoformat = getattr(value, "isoformat", None)
     if callable(isoformat):
-        try:
+        with contextlib.suppress(Exception):
             return isoformat()
-        except Exception:
-            pass
     return value
 
 
@@ -602,16 +592,15 @@ def execute_code(
 
                 var_res = run_code_on_kernel(extract_script, client)
                 if var_res["status"] == "success":
-                    try:
-                        with open(tmp_vars_file, "r", encoding="utf-8") as f:
-                            vars_data = json.load(f)
-                    except Exception:
-                        pass  # malformed/missing file → keep vars_data empty
+                    # malformed/missing file → keep vars_data empty
+                    with (
+                        contextlib.suppress(Exception),
+                        open(tmp_vars_file, "r", encoding="utf-8") as f,
+                    ):
+                        vars_data = json.load(f)
             finally:
-                try:
+                with contextlib.suppress(OSError):
                     os.unlink(tmp_vars_file)
-                except OSError:
-                    pass
 
         # Consolidate legacy output field for backward compatibility
         final_output = ""

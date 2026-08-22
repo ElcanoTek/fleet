@@ -12,6 +12,7 @@
 # full-file hashes, optional expected_sha256, no-op rejection, and a bounded
 # unified diff. Those semantics must never regress the #784 confinement.
 import base64
+import contextlib
 import difflib
 import errno
 import hashlib
@@ -284,16 +285,14 @@ def _atomic_write(parent_fd, name, data, expected=None, expected_digest=None):
         if owner is not None:
             current_owner = os.fstat(fd)
             if (current_owner.st_uid, current_owner.st_gid) != owner:
-                try:
+                # Best effort: preserving the destination's ownership on an
+                # overwrite is a nicety, not a safety property. The executor
+                # runs unprivileged and cannot chown to a foreign uid (e.g.
+                # a host-seeded workspace file mapping to container-root), so
+                # keep the executor-owned replacement rather than aborting a
+                # legitimate edit.
+                with contextlib.suppress(PermissionError):
                     os.fchown(fd, owner[0], owner[1])
-                except PermissionError:
-                    # Best effort: preserving the destination's ownership on an
-                    # overwrite is a nicety, not a safety property. The executor
-                    # runs unprivileged and cannot chown to a foreign uid (e.g.
-                    # a host-seeded workspace file mapping to container-root),
-                    # so keep the executor-owned replacement rather than
-                    # aborting a legitimate edit.
-                    pass
         os.fchmod(fd, mode)
         os.fsync(fd)
         os.close(fd)
@@ -316,10 +315,8 @@ def _atomic_write(parent_fd, name, data, expected=None, expected_digest=None):
     except BaseException:
         if fd >= 0:
             os.close(fd)
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(tmp, dir_fd=parent_fd)
-        except OSError:
-            pass
         raise
 
 

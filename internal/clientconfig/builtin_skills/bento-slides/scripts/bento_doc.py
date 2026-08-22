@@ -28,6 +28,7 @@ Usage:
 """
 
 import argparse
+import contextlib
 import json
 import os
 import shutil
@@ -541,21 +542,20 @@ def _write_atomic(path, data):
     leaves the original file exactly as it was.
     """
     directory = os.path.dirname(os.path.abspath(path))
-    fh = tempfile.NamedTemporaryFile(
-        dir=directory, prefix=".bento-", suffix=".tmp", delete=False
-    )
-    tmp = fh.name
+    tmp = None
     try:
-        with fh:
+        with tempfile.NamedTemporaryFile(
+            dir=directory, prefix=".bento-", suffix=".tmp", delete=False
+        ) as fh:
+            tmp = fh.name
             fh.write(data)
             fh.flush()
             os.fsync(fh.fileno())
         os.replace(tmp, path)
     except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
+        if tmp is not None:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp)
         raise
 
 

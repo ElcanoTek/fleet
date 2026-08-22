@@ -19,6 +19,54 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Every remaining scanner follow-up closed: rule families widened and fixed,
+  CodeQL at `security-extended`, grype tightened, override canary, cron alarms,
+  and one reasoned rejection.**
+
+  - **ruff `B`/`SIM`/`S` (bandit) enabled after fixing all 21 measured
+    findings.** Both `zip()` sites got `strict=True` — each provably
+    equal-length (one appends to both lists in lockstep; the other sits behind
+    an explicit `len(row) != len(cols)` guard) — so a future desync fails loud
+    instead of silently truncating. The unclosed `NamedTemporaryFile` in
+    bento_doc.py moved inside its `with`. Fourteen deliberate best-effort
+    `try/except-pass` sites (kernel cleanup, duck-typed pandas/numpy probes,
+    unlink-on-failure paths) became explicit `contextlib.suppress` with the
+    intent stated at each. The one `subprocess.Popen` carries a reasoned
+    `# noqa: S603` (argv is `sys.executable` plus internal literals;
+    mutation-tested — stripping the noqa re-fires the rule). Full Go suite
+    green on the result; the sandbox fileops and bridge behavior is covered by
+    its tests.
+
+  - **CodeQL widened to the `security-extended` suite** on all four languages,
+    adopted the same way everything else was: the default suite measured zero,
+    so the broader set starts from a clean baseline and its findings on this
+    PR's own run are the measurement.
+
+  - **Grype gate tightened to fixable CRITICAL + HIGH**, after measuring: the
+    published sandbox image carries zero fixable Critical/High RPM findings
+    (its only fixable findings are two Medium openssh advisories, which the
+    next routine image rebuild picks up). Policy change mutation-tested in
+    three directions: real scan passes, injected fixable High fails, injected
+    fixable Medium still passes.
+
+  - **`scripts/check-npm-overrides.sh`**: the rampart sharp/adm-zip overrides
+    are forks of upstream's intent, correct only while upstream is broken — so
+    both CI lanes now fail with removal instructions the day
+    `@huggingface/transformers` / `onnxruntime-node` publish ranges reaching
+    the patched lines. Registry flake = skip with a notice, never a verdict.
+    Mutation-tested in both directions.
+
+  - **A red scheduled scan files an issue** (all four lanes: CodeQL, Semgrep,
+    govulncheck, grype; deduped by title, re-failures comment). A cron failure
+    has no PR to surface it — the rot pattern that let the CodeQL toolchain
+    break sit red for weeks.
+
+  - **Semgrep rule vendoring investigated and rejected on license grounds**:
+    the Semgrep Rules License v1.0 permits internal use only and states "This
+    license does not allow you to distribute the rules" — committing them to
+    this public MIT repo would be redistribution. The binary stays pinned; the
+    rules stay registry-fetched with the failure mode documented.
+
 - **The scanners gate through `ci-gate`/`Dev gate` themselves, npm dependencies
   are audited, and the whole Python tree is ruff-formatted — with every finding
   fixed, none deferred.**

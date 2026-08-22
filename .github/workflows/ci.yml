@@ -420,6 +420,14 @@ jobs:
         working-directory: scripts/rampart-service
         run: npm audit --audit-level=low
 
+      - name: Check whether the rampart security overrides are droppable
+        # scripts/rampart-service/package.json force-patches sharp and adm-zip
+        # because their parents have not released fixes. The day upstream does,
+        # this FAILS with removal instructions — an override left behind after
+        # upstream fixes itself silently pins Dependabot's updates down. A
+        # registry flake skips with a notice (the audit above is the CVE gate).
+        run: scripts/check-npm-overrides.sh
+
       - name: Install dependencies
         run: npm ci
 
@@ -776,7 +784,7 @@ jobs:
 
       - name: Upload Grype SARIF results to the GitHub Security tab
         # Upload whenever the scan produced a SARIF — including when the policy
-        # step rejects a fixable CRITICAL RPM — so
+        # step rejects a fixable CRITICAL/HIGH RPM — so
         # findings reach GitHub Security → Code scanning with full CVE details,
         # affected packages, and fix versions rather than only a red CI job. The
         # hashFiles guard skips this step (instead of erroring "file not found")

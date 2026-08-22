@@ -40,7 +40,7 @@ cd web && npx playwright test --project=mocked     # mocked e2e
 
 CI mirrors all of this — Go build/vet/lint/test (including a `-race` lane) plus a
 `govulncheck` dependency-CVE scan, a Grype container-image CVE scan (fail on a
-fixable CRITICAL) of the sandbox image, a Python lint (ruff), web lint (oxlint) / typecheck (TS 7) / test / build, Playwright (mocked
+fixable CRITICAL/HIGH) of the sandbox image, a Python lint (ruff), web lint (oxlint) / typecheck (TS 7) / test / build, Playwright (mocked
 **and** live, against a real backend + sandbox), a migration DDL lint, and a
 gitleaks secret scan. **Every job must be green before merge.** Tests are
 deterministic without a live model: use the fake-LLM seam (`internal/fakellm`

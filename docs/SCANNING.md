@@ -13,10 +13,10 @@ security queries only) and [`TESTING.md`](TESTING.md) (the rest of the ladder).
 | `oxlint` + `tsc` | web tier lint + types | ~5s | **blocks** (`ci-gate`) | job log |
 | **`ruff`** | **Python lint** | **~1s** | **blocks** (`ci-gate`) | job log |
 | `govulncheck` | Go dependency CVEs (called symbols) | ~30s | **blocks** (`ci-gate`) | job log + Security tab |
-| `grype` | sandbox image CVEs (fixable CRITICAL) | ~1m | **blocks** (`ci-gate`) | job log + Security tab |
+| `grype` | sandbox image CVEs (fixable **CRITICAL + HIGH**) | ~1m | **blocks** (`ci-gate`) | job log + Security tab |
 | `gitleaks` | secrets, every branch | ~10s | **blocks** (`ci-gate`) | job log |
 | **`npm audit`** | npm dependency CVEs (web + rampart-service) | ~5s | **blocks** (`ci-gate`) | job log |
-| CodeQL | **interprocedural taint / security** | ~2m | **blocks** (`ci-gate`/`Dev gate` via workflow_call) | job log + Security tab |
+| CodeQL | **interprocedural taint / `security-extended`** | ~2m | **blocks** (`ci-gate`/`Dev gate` via workflow_call) | job log + Security tab |
 | **Semgrep** | **Go/JS/Python SAST + Actions supply chain** | ~40s | **blocks** (`ci-gate`/`Dev gate` via workflow_call) | job log + artifact |
 
 Two things were added here (**ruff**, **Semgrep**) and one was narrowed
@@ -41,10 +41,17 @@ That gap was real: CodeQL's quality suite found 28 Python issues, its single
 largest contribution anywhere. ruff finds the same class in under a second, with
 autofix, and now blocks.
 
-The rule selection is deliberately narrow, and `ruff.toml` records the numbers:
-default rules find **3** findings on this tree; a broad selection finds **333**,
-of which 176 are `%`-format style, 43 magic values and 35 line length. Gating on
-that would mean a whole-tree reformat for no correctness gain.
+The rule selection is measured, and `ruff.toml` records the numbers. The
+default rules (`E4,E7,E9,F`) found 3 real findings, fixed on day one. The
+**`B`, `SIM` and `S` (bandit) families were then measured (21 findings), all 21
+fixed, and the families enabled**: both `zip()` sites got `strict=True` (each
+provably equal-length), the unclosed `NamedTemporaryFile` moved into its
+`with`, the deliberate best-effort `try/except-pass` sites became explicit
+`contextlib.suppress` with the intent stated at each, and the one subprocess
+launch carries a reasoned `# noqa: S603` (argv is `sys.executable` plus
+internal literals — mutation-tested: stripping the noqa re-fires the rule).
+The pure-style tiers stay off: they are ~330 findings of `%`-format and
+line-length churn with no correctness content.
 
 Three real findings were fixed to make the gate clean on day one, so a new
 violation is a regression rather than noise in a backlog:
@@ -71,7 +78,9 @@ So CodeQL keeps its security queries and gives up everything else — the qualit
 suite duplicated `golangci-lint`/`oxlint` for Go and JS, and ruff is a better fit
 for Python. Full reasoning and measurements in [`CODEQL.md`](CODEQL.md).
 
-Its security suite currently reports **zero findings** on this tree, which is
+It runs the **`security-extended`** suite — the broader security set, adopted
+after the default suite measured clean — and currently reports **zero
+findings** on this tree, which is
 what makes it safe to gate: a `Fail on findings` step now fails the job on any
 finding, so a red `Analyze (…)` check means the *code* has a problem rather than
 just "the scanner broke". That distinction is the whole reason the Go toolchain
@@ -166,8 +175,14 @@ still pins `sharp ^0.34.5`, and npm's own suggested "fix" was a breaking
 vulnerable line). The overridden stack was **installed and load-tested**, not
 just resolved: sharp renders a PNG through the new libvips, transformers loads
 on it, rampart exports its API, and adm-zip 0.6 round-trips a zip. Audit result
-after: 0 vulnerabilities in both trees. When upstream ships fixed ranges, the
-overrides can be dropped.
+after: 0 vulnerabilities in both trees.
+
+An override is a fork of upstream's intent, correct only while upstream is
+broken — so `scripts/check-npm-overrides.sh` runs beside the audit in both
+lanes and **fails the build the day upstream's own ranges reach the patched
+lines**, with removal instructions. The reminder to drop the override is a red
+build with a two-line fix, not stale-pin archaeology later. (Registry flake =
+skip with a notice, never a verdict; mutation-tested in both directions.)
 
 ## Findings are readable from the job log, on purpose
 
@@ -239,16 +254,15 @@ Stated rather than left for rediscovery:
 
 - **`_test.go` files are outside CodeQL's database** (621 files) — `autobuild`
   builds packages, not tests. Unchanged from default setup.
-- **ruff's rule set is narrow**, so some real bug classes go unreported.
-  Measured: `--select B,SIM,S` adds **21** findings, of which the genuinely
-  interesting ones are 2 × `B905` (`zip()` without `strict=` — silent
-  truncation) and 1 × `SIM115` (file opened without a context manager). The
-  other 18 are `try`/`except`/`pass` in deliberate best-effort cleanup paths.
-  Worth a focused pass; not folded in here.
-- **Semgrep's own rule packs are network-fetched** from the registry at scan
-  time. The semgrep *version* is pinned; the *rules* are not, so a registry
-  change can move findings without a diff here. This matters more now the lane
-  blocks: a registry-side rule addition can turn CI red with no commit to blame,
-  the same class of surprise `govulncheck-scheduled.yml` was created to absorb.
-  Vendoring the rules would fix it at the cost of never getting new ones. Left
-  as-is deliberately, and named here so a mystery red build has a first suspect.
+- **Semgrep's rule packs are registry-fetched and cannot be pinned by
+  vendoring** — investigated and rejected on license grounds, not neglect. The
+  Semgrep Rules License v1.0 grants use for "your own internal business
+  purposes" and states: *"This license does not allow you to distribute the
+  rules."* Committing them to this public MIT repo would be redistribution.
+  The binary version is pinned; the rules are not, so a registry-side rule
+  addition can turn CI red with no commit to blame — named here so a mystery
+  red Semgrep run has a first suspect.
+- **A red scheduled scan now files an issue** (all four scheduled lanes:
+  CodeQL, Semgrep, govulncheck, grype) — a cron failure has no PR to surface
+  it, which is the rot pattern that let the CodeQL toolchain break sit red for
+  weeks. Deduped by title; re-failures comment on the same issue.

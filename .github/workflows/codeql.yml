@@ -128,14 +128,23 @@ jobs:
           # Go is the reason this file exists. `build-mode: none` is NOT
           # supported for Go — only `autobuild` or `manual` — so the toolchain
           # has to be right rather than skipped.
+          # security-extended everywhere: the broader security suite (more
+          # queries, lower average precision than the default). Measured before
+          # adoption like every other gate here — the run's own findings
+          # summary is the measurement, and the Fail-on-findings step means
+          # anything it surfaces must be fixed or reasoned away, not accrued.
           - language: go
             build-mode: autobuild
+            queries: security-extended
           - language: python
             build-mode: none
+            queries: security-extended
           - language: javascript-typescript
             build-mode: none
+            queries: security-extended
           - language: actions
             build-mode: none
+            queries: security-extended
 
     steps:
       - name: Checkout
@@ -156,8 +165,9 @@ jobs:
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
-          # No `queries:` — the default (security) suite only. See the SCOPE note
-          # in the header before adding `code-quality` back.
+          queries: ${{ matrix.queries }}
+          # security-extended (see the matrix note). The SCOPE note in the
+          # header still applies to `code-quality` — do not re-add that one.
 
       - name: Autobuild
         if: matrix.build-mode == 'autobuild'
@@ -313,3 +323,38 @@ jobs:
           for r in $results; do
             [ "$r" = "success" ] || { echo "a CodeQL analysis did not succeed"; exit 1; }
           done
+
+  cron-failure-alarm:
+    name: File an issue so a red cron cannot rot silently
+    # Only exists for the standalone weekly run: in the workflow_call path the
+    # caller's gate (`CI gate` / `Dev gate`) is the alarm, and this job's
+    # schedule-only condition keeps it skipped there (a skip which also means
+    # the caller never needs to grant issues: write — called-workflow
+    # permissions intersect with the caller's grant).
+    # Body duplicated across the four scheduled scan lanes — keep in sync.
+    if: ${{ failure() && github.event_name == 'schedule' }}
+    needs: [analyze]
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: File or update the alarm issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_NAME: ${{ github.workflow }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          title="Scheduled ${WORKFLOW_NAME} run failed"
+          num="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+            --search "\"$title\" in:title" --json number --jq '.[0].number // empty' || true)"
+          if [ -n "$num" ]; then
+            gh issue comment "$num" --repo "$GITHUB_REPOSITORY" \
+              --body "Still failing: $RUN_URL"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" \
+              --body "The scheduled $WORKFLOW_NAME lane went red: $RUN_URL
+
+          A failing cron has no PR to make it visible, so this issue is the
+          alarm. Close it when the lane is green again."
+          fi
