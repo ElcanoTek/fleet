@@ -79,12 +79,23 @@ suite duplicated `golangci-lint`/`oxlint` for Go and JS, and ruff is a better fi
 for Python. Full reasoning and measurements in [`CODEQL.md`](CODEQL.md).
 
 It runs the **`security-extended`** suite — the broader security set, adopted
-after the default suite measured clean — and currently reports **zero
-findings** on this tree, which is
+after the default suite measured clean — and reports **zero findings** on this
+tree (verified in CI across all four languages on Dev CI run 525), which is
 what makes it safe to gate: a `Fail on findings` step now fails the job on any
 finding, so a red `Analyze (…)` check means the *code* has a problem rather than
 just "the scanner broke". That distinction is the whole reason the Go toolchain
 break sat unnoticed for weeks.
+
+Getting the extended suite to zero was itself a fix, not a rubber stamp: its
+one finding across all four languages was `actions/untrusted-checkout/medium`
+on `build-sandbox-image.yml`'s `fleet_ref`-fed checkout. Rather than waive it
+(the `actions` language has no `AlertSuppression.ql`, so there is no in-code
+waiver anyway), the workflow now **refuses `refs/pull/*` refs** before checking
+out — a fork-PR ref would put fork-controlled code into a workflow that runs
+the checked-out build script — and the identical hardening went into
+`publish-sandbox-image.yml`, the *unflagged* twin that holds `packages: write`
+and only escaped the (name-heuristic) query because its plumbing was named
+differently. Details in [`CODEQL.md`](CODEQL.md).
 
 ### Semgrep owns fast multi-language SAST + Actions supply chain (new, blocking)
 
@@ -182,18 +193,28 @@ broken — so `scripts/check-npm-overrides.sh` runs beside the audit in both
 lanes and **fails the build the day upstream's own ranges reach the patched
 lines**, with removal instructions. The reminder to drop the override is a red
 build with a two-line fix, not stale-pin archaeology later. (Registry flake =
-skip with a notice, never a verdict; mutation-tested in both directions.)
+skip with a notice, never a verdict; mutation-tested in both directions. The
+step invokes it as `"$GITHUB_WORKSPACE/scripts/check-npm-overrides.sh"` — the
+job runs under `working-directory: web`, where a repo-relative path resolves
+wrong; exit 127 on the first CI run taught that one.)
 
 ## Findings are readable from the job log, on purpose
 
 Both scanners print a per-rule summary into the job log **and** the step summary:
 
 ```
-### CodeQL findings — go
-2  [note]  go/useless-assignment-to-field
+### CodeQL findings — actions
+[warning]  actions/untrusted-checkout/medium  .github/workflows/build-sandbox-image.yml:106
 --
-total findings: 2
+total findings: 1
+files in the actions database: 13
 ```
+
+Each line carries the **`file:line`** of the finding — an agent reading the log
+can go straight to the site — and the `files in the … database` count is the
+coverage line: "No findings." over an empty database is the green-but-vacuous
+outcome this workflow exists to rule out, and the two are indistinguishable
+without it.
 
 This exists because a CodeQL run reports **nothing** about what it found to its
 own log — it writes SARIF, uploads it, exits 0, findings or not. Verified by

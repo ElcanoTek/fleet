@@ -40,7 +40,20 @@ prior versions are listed because none have shipped.
   - **CodeQL widened to the `security-extended` suite** on all four languages,
     adopted the same way everything else was: the default suite measured zero,
     so the broader set starts from a clean baseline and its findings on this
-    PR's own run are the measurement.
+    PR's own run are the measurement. That measurement found exactly one thing
+    — and it was real: `actions/untrusted-checkout/medium` on
+    `build-sandbox-image.yml`'s `fleet_ref`-fed checkout. Fixed, not waived
+    (the `actions` language has no `AlertSuppression.ql`, so a comment waiver
+    does not even exist): the workflow now **refuses `refs/pull/*` refs before
+    checkout** — a fork-PR ref would put fork-controlled code into a workflow
+    that executes the checked-out build script — and the identical hardening
+    went into `publish-sandbox-image.yml`, the *unflagged* twin that holds
+    `packages: write` and escaped the name-heuristic query only because its
+    ref plumbing was named differently. Extended suite then verified clean in
+    CI on all four languages (Dev CI run 525). The CodeQL/Semgrep log summaries
+    also now print **`file:line` per finding** (plus a database file count as
+    the coverage line), and the override canary is invoked via
+    `$GITHUB_WORKSPACE` so it survives the job's `working-directory: web`.
 
   - **Grype gate tightened to fixable CRITICAL + HIGH**, after measuring: the
     published sandbox image carries zero fixable Critical/High RPM findings

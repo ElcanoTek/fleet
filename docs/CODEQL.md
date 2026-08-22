@@ -80,16 +80,38 @@ enough", not "unset the pin". Neither `env: GOTOOLCHAIN: auto` nor
 
 | language | build mode | queries |
 | --- | --- | --- |
-| `go` | `autobuild` | security (default suite) |
-| `python` | `none` | security (default suite) |
-| `javascript-typescript` | `none` | security (default suite) |
-| `actions` | `none` | security (default suite) |
+| `go` | `autobuild` | `security-extended` |
+| `python` | `none` | `security-extended` |
+| `javascript-typescript` | `none` | `security-extended` |
+| `actions` | `none` | `security-extended` |
 
 **Security queries only — at the `security-extended` tier.** The code-quality
 suite was enabled, measured, and deliberately removed (see "Why code quality
 was dropped" below); the *security* side was then widened from the default
 suite to `security-extended` once the default measured clean, so the broader
 set also started from a zero baseline.
+
+Adopting the extended suite was a measurement, and it produced exactly **one
+finding across all four languages**: `actions/untrusted-checkout/medium` on the
+`workflow_call` checkout in `build-sandbox-image.yml`, whose `ref:` is fed by
+the `fleet_ref` input. The query is a **name heuristic** — it flags any
+checkout whose ref traces to a field matching `.*(head|branch|ref).*` —
+reproduced locally with the CodeQL 2.26.3 bundle to confirm the trigger before
+touching anything. Two honest responses existed and the in-code dismissal was
+not one of them: the `actions` language ships **no `AlertSuppression.ql`**, so
+there is no comment-waiver path at all. The finding was fixed for real instead:
+a `pin` step now refuses `refs/pull/*` / `pull/*` refs (a fork PR ref would
+carry fork-controlled code into a workflow that *executes the checked-out build
+script*), and the checkout consumes that step's neutrally-named output. The
+same hardening went into `publish-sandbox-image.yml` — the **unflagged twin**
+that is strictly more dangerous (it holds `packages: write`) but escaped the
+query because its ref plumbing was named differently. A heuristic query's
+silence is not evidence of safety; the flagged file just pointed at the class.
+
+The extended suite then verified **clean in CI on all four languages** — Dev CI
+run 525 (`32580031374`), the same run that exercises the hardened `actions`
+lane — so the fail-on-findings gate holds at the extended tier, not just the
+default one.
 
 `build-mode: none` is [not supported for
 Go](https://docs.github.com/en/code-security/reference/code-scanning/codeql/build-options-for-compiled-languages)
