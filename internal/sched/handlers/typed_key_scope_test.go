@@ -19,11 +19,21 @@ import (
 
 func mustCreateTypedKey(t *testing.T, keyMgr *apikeys.Manager, kt apikeys.KeyType, slugs []string) string {
 	t.Helper()
-	_, raw, err := keyMgr.CreateTypedKey("test-"+string(kt), kt, slugs, 0, nil, "")
+	_, raw := mustCreateTypedKeyWithID(t, keyMgr, kt, slugs)
+	return raw
+}
+
+// mustCreateTypedKeyWithID also returns the KeyID, so a test can attribute a
+// fixture task to the key that will act on it (task.CreatedByKeyID). Mutating a
+// task is own-rows (taskWritableByPrincipal), so an UNATTRIBUTED fixture now
+// exercises the ownership check rather than whatever the test meant to assert.
+func mustCreateTypedKeyWithID(t *testing.T, keyMgr *apikeys.Manager, kt apikeys.KeyType, slugs []string) (string, string) {
+	t.Helper()
+	key, raw, err := keyMgr.CreateTypedKey("test-"+string(kt), kt, slugs, 0, nil, "")
 	if err != nil {
 		t.Fatalf("create typed key: %v", err)
 	}
-	return raw
+	return key.KeyID, raw
 }
 
 // TestTypedKeyRouteScope verifies the #190 middleware type-scope gate on the
@@ -33,11 +43,15 @@ func TestTypedKeyRouteScope(t *testing.T) {
 	store, keyMgr, r, cleanup := setupAuthzHandler(t)
 	defer cleanup()
 
-	taskA := addTask(t, store, "task A")
-
 	readonlyKey := mustCreateTypedKey(t, keyMgr, apikeys.KeyTypeReadonly, nil)
 	webhookKey := mustCreateTypedKey(t, keyMgr, apikeys.KeyTypeWebhook, []string{"pr-review"})
-	taskKey := mustCreateTypedKey(t, keyMgr, apikeys.KeyTypeTask, nil)
+	taskKeyID, taskKey := mustCreateTypedKeyWithID(t, keyMgr, apikeys.KeyTypeTask, nil)
+
+	// Attributed to the task key: this test is about the #190 type-scope gate,
+	// not about ownership, so the fixture is the realistic shape (a task the
+	// acting key created) rather than an unattributed row that would additionally
+	// trip the own-rows edit check.
+	taskA := addTaskCreatedByKey(t, store, "task A", taskKeyID)
 
 	t.Run("readonly key may GET tasks", func(t *testing.T) {
 		req := httptest.NewRequest("GET", "/tasks", nil)
