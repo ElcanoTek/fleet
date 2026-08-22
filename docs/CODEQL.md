@@ -306,21 +306,76 @@ with go1.25.1 and cannot lint the tree.
   own SARIF independently of CodeQL configuration; breaking them would silently
   drop CVE findings from the Security tab.
 
-## Merge gating — unchanged, and a decision left open
+## Merge gating — unchanged, with the lever put within reach
 
-These jobs are **not** wired into `ci-gate`, which is the single required status
-check on `main` (see [`.github/CODEOWNERS`](../.github/CODEOWNERS)). CodeQL
-findings are therefore advisory, exactly as they were under default setup: a red
-CodeQL job does not block a merge.
+CodeQL is **not** blocking. `ci-gate` remains the single required status check on
+`main` (see [`.github/CODEOWNERS`](../.github/CODEOWNERS)), so a red CodeQL job
+does not stop a merge — exactly as under default setup.
 
-That is stated as the status quo, not a recommendation. Making CodeQL blocking is
-a branch-protection change — a repo-settings click, not a workflow edit — and it
-has a real cost worth weighing before anyone makes it: the analysis is advisory
-today partly *because* it spent weeks red for a toolchain reason unrelated to any
-diff, and a required check in that state blocks every merge. Wiring it into
-`ci-gate` would also make `dev`-PR CodeQL failures block `dev`, which is a
-heavier posture than that lane's stated "does it compile, lint, and pass tests"
-job.
+It *cannot* be folded into `ci-gate`: a job's `needs` cannot reach across
+workflow files. So `codeql.yml` carries its own aggregate **`CodeQL gate`** job,
+mirroring `ci.yml`'s `CI gate` and `dev-ci.yml`'s `Dev gate`. That job is the one
+deliberate piece of forward work here, and it is worth being clear that it
+changes nothing on its own:
+
+- It does **not** make CodeQL required. Requiring a check is a repo-settings
+  action, deliberately not expressible from a workflow file.
+- What it buys is that **flipping the switch later is one check, not four.**
+  Naming `Analyze (go)`, `Analyze (python)`, `Analyze (javascript-typescript)`
+  and `Analyze (actions)` individually in branch protection would mean
+  re-pointing branch protection by hand every time the matrix gains or loses a
+  language — and the failure mode of getting that wrong is the dangerous
+  direction: a required check that never reports again blocks every PR, or a
+  removed one silently stops gating. One aggregate check has neither problem.
+
+**To make CodeQL blocking** (owner action, not done here): Settings → Rules → the
+"Main" ruleset → "Require status checks to pass" → add **`CodeQL gate`**. That
+single entry covers every language in the matrix, now and after future matrix
+changes.
+
+**Recommendation: leave it advisory for a short while first.** Not out of
+caution for its own sake — because of this specific incident. The analysis spent
+weeks red for a toolchain reason unrelated to any diff, and a required check in
+that state blocks *every* merge, including the promote PR that would carry the
+fix. Requiring it also means a `dev`-PR CodeQL failure blocks `dev`, a heavier
+posture than that lane's stated "does it compile, lint, and pass tests" job. The
+sequence with the least chance of self-inflicted deadlock is: merge this, watch a
+few promotions go green, then add `CodeQL gate` to the ruleset.
+
+One more thing to know before requiring it: the newly-enabled quality queries
+(+44 Go, +202 Python, +196 JavaScript) have **never run against this codebase
+before**. If any of them fire, they become alerts the moment this merges — and
+if `CodeQL gate` were required on day one, a pre-existing quality finding would
+block merges. Findings are advisory only for as long as the gate stays optional,
+which is another reason to sequence it that way.
 
 No repo-settings or API change to code-scanning configuration was attempted as
 part of this change.
+
+## Where findings appear
+
+`security-events: write` plus the analyze step's upload is the code-scanning
+ingestion path, so results land in the repo's **Security → Code scanning**. From
+the run log:
+
+```
+Adding fingerprints to SARIF file. See ... sarif-support-for-code-scanning ...
+##[group]Uploading code scanning results
+Uploading results
+Successfully uploaded results
+Analysis upload status is complete.
+```
+
+Two practical consequences worth stating, because they explain an empty-looking
+Security tab rather than a broken one:
+
+- **The Security tab's alert list is the DEFAULT BRANCH's.** This workflow's only
+  `push` trigger is `main`, so that list refreshes when a promote merge lands on
+  `main` — not when a PR is scanned.
+- **PR runs report on the PR**, not into the default-branch alert list, and
+  CodeQL additionally suppresses file-coverage detail there: *"To speed up pull
+  request analysis, file coverage information is only enabled when analyzing the
+  default branch and protected branches."*
+
+So after this merges to `dev`, expect findings on subsequent PRs; expect the
+Security tab's `main` list to repopulate at the next dev→main promotion.

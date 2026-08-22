@@ -61,9 +61,16 @@
 #
 # Merge gating: these jobs are NOT part of ci.yml's `CI gate`, which is the single
 # required status check on main (see .github/CODEOWNERS). CodeQL findings are
-# therefore advisory today, exactly as they were under default setup. Wiring them
-# into the gate is a branch-protection decision, not a workflow one — see
-# docs/CODEQL.md.
+# therefore advisory today, exactly as they were under default setup.
+#
+# They cannot be part of `CI gate`: a job's `needs` cannot reach across workflow
+# files. So this file carries its own aggregate `CodeQL gate` job at the bottom,
+# for the same reason ci.yml and dev-ci.yml carry theirs — it is the ONE check to
+# name in branch protection if CodeQL should ever become blocking, instead of
+# four per-language checks that would have to be re-pointed by hand every time
+# the matrix changes. Adding it here does not make it required; that is a
+# repo-settings decision, deliberately not expressible from this file.
+# See docs/CODEQL.md ("Merge gating").
 name: CodeQL
 
 on:
@@ -175,3 +182,31 @@ jobs:
         uses: github/codeql-action/analyze@v4
         with:
           category: /language:${{ matrix.language }}
+
+  codeql-gate:
+    name: CodeQL gate
+    # Aggregate check for branch protection, same pattern and rationale as
+    # ci.yml's `CI gate` and dev-ci.yml's `Dev gate`: require this ONE check
+    # rather than naming each `Analyze (<language>)` leg individually, so adding
+    # or removing a language from the matrix above does not silently leave a
+    # required check that never reports again.
+    #
+    # This job existing does NOT make CodeQL blocking. `ci-gate` is still the
+    # only required status check on main; this is the single lever to flip if
+    # that changes, and it deliberately cannot be flipped from this file. See
+    # docs/CODEQL.md ("Merge gating").
+    #
+    # `needs: [analyze]` on a matrix job collapses to one aggregate result:
+    # success only when every leg succeeded. With `fail-fast: false` above,
+    # every language still runs and reports before this evaluates them.
+    if: always()
+    needs: [analyze]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail if any CodeQL analysis did not succeed
+        run: |
+          results='${{ join(needs.*.result, ' ') }}'
+          echo "job results: $results"
+          for r in $results; do
+            [ "$r" = "success" ] || { echo "a CodeQL analysis did not succeed"; exit 1; }
+          done
