@@ -282,6 +282,7 @@ type k8sSeccompProfile struct {
 type k8sContainer struct {
 	Name            string              `json:"name"`
 	Image           string              `json:"image"`
+	ImagePullPolicy string              `json:"imagePullPolicy,omitempty"`
 	Command         []string            `json:"command,omitempty"`
 	WorkingDir      string              `json:"workingDir,omitempty"`
 	SecurityContext *k8sContainerSecCtx `json:"securityContext,omitempty"`

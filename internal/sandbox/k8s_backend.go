@@ -132,9 +132,68 @@ type KubernetesConfig struct {
 	// enforcement is the CNI's job and the docs say so plainly.
 	NetworkPolicyName string
 
+	// NodeSelector pins sandbox pods to labeled nodes — the standard way to
+	// give runners a DEDICATED node pool, which is the issue's scaling story
+	// (more runner capacity = a bigger pool, never more fleet replicas).
+	NodeSelector map[string]string
+
+	// Tolerations let sandbox pods schedule onto a tainted runner pool, the
+	// usual companion to NodeSelector for a pool nothing else may land on.
+	Tolerations []K8sToleration
+
 	// StartTimeout caps pod schedule+pull+start. Zero defaults to 2 minutes
 	// (image pulls make the podman default of 30s unrealistic).
 	StartTimeout time.Duration
+}
+
+// K8sToleration mirrors the four core/v1 Toleration fields sandbox pods need
+// (tolerationSeconds is a drain concern that does not apply to pods fleet
+// deletes itself).
+type K8sToleration struct {
+	Key      string `json:"key,omitempty"`
+	Operator string `json:"operator,omitempty"`
+	Value    string `json:"value,omitempty"`
+	Effect   string `json:"effect,omitempty"`
+}
+
+// ParseK8sNodeSelector parses the FLEET_SANDBOX_K8S_NODE_SELECTOR form —
+// comma-separated key=value pairs ("pool=fleet-sandboxes,arch=amd64") — into
+// the map the pod spec takes. Empty input is a nil map; a malformed pair is
+// an error so a typo'd selector refuses to boot instead of silently
+// scheduling sandboxes onto the wrong nodes.
+func ParseK8sNodeSelector(s string) (map[string]string, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil, nil
+	}
+	out := make(map[string]string)
+	for _, pair := range strings.Split(s, ",") {
+		k, v, ok := strings.Cut(strings.TrimSpace(pair), "=")
+		k, v = strings.TrimSpace(k), strings.TrimSpace(v)
+		if !ok || k == "" || v == "" {
+			return nil, fmt.Errorf("invalid node selector pair %q (want key=value, comma-separated)", pair)
+		}
+		out[k] = v
+	}
+	return out, nil
+}
+
+// ParseK8sTolerations parses the FLEET_SANDBOX_K8S_TOLERATIONS form — a JSON
+// array of {key, operator, value, effect} objects. Empty input is nil;
+// malformed JSON or an unknown field is an error (fail-closed, strict
+// decoding, matching the additive-first schema posture).
+func ParseK8sTolerations(s string) ([]K8sToleration, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil, nil
+	}
+	dec := json.NewDecoder(strings.NewReader(s))
+	dec.DisallowUnknownFields()
+	var out []K8sToleration
+	if err := dec.Decode(&out); err != nil {
+		return nil, fmt.Errorf("invalid tolerations JSON (want an array of {key,operator,value,effect}): %w", err)
+	}
+	return out, nil
 }
 
 // defaultK8sNamespace / defaultK8sNetworkPolicy are the conventions the Helm
@@ -417,6 +476,11 @@ func buildSandboxPod(cfg ContainerConfig, kcfg KubernetesConfig, name string) (*
 		Containers: []k8sContainer{{
 			Name:  sandboxContainerName,
 			Image: cfg.Image,
+			// Explicit IfNotPresent: the API default for a :latest tag is
+			// Always, which breaks side-loaded images (kind) and re-pulls a
+			// mutable tag mid-fleet-run — sandbox image freshness is a deploy
+			// concern, not a per-pod one.
+			ImagePullPolicy: "IfNotPresent",
 			// PID 1: a do-nothing process to keep the pod alive; every real
 			// operation execs into it — same shape as the podman backend.
 			Command:    []string{"sleep", "infinity"},
@@ -437,6 +501,13 @@ func buildSandboxPod(cfg ContainerConfig, kcfg KubernetesConfig, name string) (*
 	}
 	if kcfg.ImagePullSecret != "" {
 		spec.ImagePullSecrets = []k8sLocalObjRef{{Name: kcfg.ImagePullSecret}}
+	}
+	// Dedicated runner pool: selector + taints, when configured.
+	if len(kcfg.NodeSelector) > 0 {
+		spec.NodeSelector = kcfg.NodeSelector
+	}
+	for _, tol := range kcfg.Tolerations {
+		spec.Tolerations = append(spec.Tolerations, k8sToleration(tol))
 	}
 
 	return &k8sPod{

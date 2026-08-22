@@ -51,6 +51,15 @@ prior versions are listed because none have shipped.
     `FLEET_SANDBOX_SECCOMP_PROFILE` → `FLEET_SANDBOX_K8S_SECCOMP_PROFILE`;
     `FLEET_DEFAULT_NETWORK_MODE=allowlisted` is unsupported — the host egress
     proxy is unreachable from pods).
+  - **Dedicated runner pools**: sandbox pods can be pinned to their own node
+    pool with `FLEET_SANDBOX_K8S_NODE_SELECTOR` ("k=v,k=v") and
+    `FLEET_SANDBOX_K8S_TOLERATIONS` (a JSON array), or the manifest's
+    structured `sandbox.kubernetes.node_selector` / `.tolerations` — fleet's
+    horizontal scaling story made concrete (more runner capacity = a bigger
+    pool, never more fleet replicas). Malformed values refuse to boot. Sandbox
+    pods also pin `imagePullPolicy: IfNotPresent` explicitly (the API's
+    `Always`-for-`:latest` default breaks side-loaded kind images and re-pulls
+    a mutable tag mid-run).
   - **A Helm chart** (`deploy/helm/fleet`): single-replica control-plane
     Deployment (strategy Recreate, deliberately no replica knob — the
     scheduler is single-owner), the runner RBAC Role/Binding, workspace/data
@@ -81,9 +90,7 @@ prior versions are listed because none have shipped.
   beside a supported unprivileged one would imply support it never had (it
   was explicitly "hand-verified, not CI-exercised"). Its durable content —
   EFS/RWX storage, ECR/IRSA, NetworkPolicy-enforcement caveats, the backup
-  CronJob, day-2 mappings — was folded into `docs/DEPLOYMENT-KUBERNETES.md`,
-  which also carries a migration note for deployments built from the old
-  recipe.
+  CronJob, day-2 mappings — was folded into `docs/DEPLOYMENT-KUBERNETES.md`.
 
 ### Fixed
 

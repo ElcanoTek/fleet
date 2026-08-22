@@ -686,6 +686,17 @@ func buildKubernetesSandboxPool(cfg *config.Config, poolCfg sandbox.PoolConfig, 
 	}
 	poolCfg.Container.Runtime = ""
 
+	// Scheduling knobs fail closed on a malformed value: a typo'd selector
+	// must not silently schedule sandboxes onto the wrong (untainted,
+	// unlabeled) nodes.
+	nodeSelector, err := sandbox.ParseK8sNodeSelector(cfg.SandboxK8sNodeSelector)
+	if err != nil {
+		return nil, fmt.Errorf("FLEET_SANDBOX_K8S_NODE_SELECTOR / sandbox.kubernetes.node_selector: %w", err)
+	}
+	tolerations, err := sandbox.ParseK8sTolerations(cfg.SandboxK8sTolerations)
+	if err != nil {
+		return nil, fmt.Errorf("FLEET_SANDBOX_K8S_TOLERATIONS / sandbox.kubernetes.tolerations: %w", err)
+	}
 	backend, err := sandbox.NewKubernetesBackend(sandbox.KubernetesConfig{
 		Namespace:               cfg.SandboxK8sNamespace,
 		WorkspaceClaim:          cfg.SandboxK8sWorkspaceClaim,
@@ -695,6 +706,8 @@ func buildKubernetesSandboxPool(cfg *config.Config, poolCfg sandbox.PoolConfig, 
 		SeccompLocalhostProfile: cfg.SandboxK8sSeccompProfile,
 		KubeconfigPath:          cfg.SandboxK8sKubeconfig,
 		NetworkPolicyName:       cfg.SandboxK8sNetworkPolicy,
+		NodeSelector:            nodeSelector,
+		Tolerations:             tolerations,
 	})
 	if err != nil {
 		return nil, err

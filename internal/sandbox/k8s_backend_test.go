@@ -161,6 +161,47 @@ func TestK8sPodSpecVariants(t *testing.T) {
 	}
 }
 
+func TestK8sSchedulingKnobs(t *testing.T) {
+	// Parse helpers fail closed on malformed input.
+	if _, err := ParseK8sNodeSelector("pool"); err == nil {
+		t.Error("bare key without =value must error")
+	}
+	if _, err := ParseK8sNodeSelector("=v"); err == nil {
+		t.Error("empty key must error")
+	}
+	sel, err := ParseK8sNodeSelector(" pool=sandboxes, arch=amd64 ")
+	if err != nil || sel["pool"] != "sandboxes" || sel["arch"] != "amd64" {
+		t.Errorf("ParseK8sNodeSelector = %v, %v", sel, err)
+	}
+	if _, err := ParseK8sTolerations(`[{"unknown":"field"}]`); err == nil {
+		t.Error("unknown toleration field must error (strict decoding)")
+	}
+	tols, err := ParseK8sTolerations(`[{"key":"fleet.elcanotek.com/sandbox","operator":"Exists","effect":"NoSchedule"}]`)
+	if err != nil || len(tols) != 1 || tols[0].Key != "fleet.elcanotek.com/sandbox" {
+		t.Errorf("ParseK8sTolerations = %+v, %v", tols, err)
+	}
+
+	// They reach the pod spec, and the pull policy is explicit (the API
+	// default for a :latest tag is Always, which breaks side-loaded images).
+	cfg := applyContainerDefaults(testContainerConfig(t))
+	pod, err := buildSandboxPod(cfg, KubernetesConfig{
+		Namespace: "ns", WorkspaceClaim: "ws",
+		NodeSelector: sel, Tolerations: tols,
+	}, "fleet-sandbox-sched")
+	if err != nil {
+		t.Fatalf("buildSandboxPod: %v", err)
+	}
+	if pod.Spec.NodeSelector["pool"] != "sandboxes" {
+		t.Errorf("nodeSelector not carried: %v", pod.Spec.NodeSelector)
+	}
+	if len(pod.Spec.Tolerations) != 1 || pod.Spec.Tolerations[0].Effect != "NoSchedule" {
+		t.Errorf("tolerations not carried: %+v", pod.Spec.Tolerations)
+	}
+	if got := pod.Spec.Containers[0].ImagePullPolicy; got != "IfNotPresent" {
+		t.Errorf("imagePullPolicy = %q, want explicit IfNotPresent", got)
+	}
+}
+
 func TestK8sQuantityConversions(t *testing.T) {
 	if _, err := k8sQuantityFromPodmanMemory("512x"); err == nil {
 		t.Error("bad memory suffix must error")

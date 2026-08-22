@@ -392,6 +392,8 @@ var allowedEnvVars = map[string]bool{
 	"FLEET_SANDBOX_K8S_SECCOMP_PROFILE":       true,
 	"FLEET_SANDBOX_K8S_KUBECONFIG":            true,
 	"FLEET_SANDBOX_K8S_NETWORK_POLICY":        true,
+	"FLEET_SANDBOX_K8S_NODE_SELECTOR":         true,
+	"FLEET_SANDBOX_K8S_TOLERATIONS":           true,
 	"FLEET_DEFAULT_NETWORK_MODE":              true,
 	"FLEET_PII_REDACTION_ENABLED":             true,
 	"FLEET_PII_REDACTION_MODE":                true,
@@ -1039,6 +1041,8 @@ type Config struct {
 	SandboxK8sSeccompProfile  string // FLEET_SANDBOX_K8S_SECCOMP_PROFILE — node-local Localhost profile; empty = RuntimeDefault
 	SandboxK8sKubeconfig      string // FLEET_SANDBOX_K8S_KUBECONFIG — out-of-cluster auth; empty = in-cluster
 	SandboxK8sNetworkPolicy   string // FLEET_SANDBOX_K8S_NETWORK_POLICY — deny-all policy the preflight requires; default "fleet-sandbox-deny-all"
+	SandboxK8sNodeSelector    string // FLEET_SANDBOX_K8S_NODE_SELECTOR — "key=value,key=value" pinning sandbox pods to a runner pool
+	SandboxK8sTolerations     string // FLEET_SANDBOX_K8S_TOLERATIONS — JSON array of {key,operator,value,effect} for a tainted runner pool
 	// PIIRedactionEnabled gates the OPTIONAL PII redaction pass (#450) applied to
 	// tool output before it enters the model context. FLEET_PII_REDACTION_ENABLED,
 	// default false (byte-for-byte unchanged when off). Provider-neutral; the
@@ -1562,6 +1566,8 @@ func Load(envFile string) (*Config, error) {
 		SandboxK8sSeccompProfile:  strings.TrimSpace(getenvFleet("SANDBOX_K8S_SECCOMP_PROFILE")),
 		SandboxK8sKubeconfig:      strings.TrimSpace(getenvFleet("SANDBOX_K8S_KUBECONFIG")),
 		SandboxK8sNetworkPolicy:   strings.TrimSpace(getenvFleet("SANDBOX_K8S_NETWORK_POLICY")),
+		SandboxK8sNodeSelector:    strings.TrimSpace(getenvFleet("SANDBOX_K8S_NODE_SELECTOR")),
+		SandboxK8sTolerations:     strings.TrimSpace(getenvFleet("SANDBOX_K8S_TOLERATIONS")),
 		DefaultNetworkMode:        strings.ToLower(strings.TrimSpace(getenvFleet("DEFAULT_NETWORK_MODE"))),
 
 		// PII redaction (#450) — optional, default off.

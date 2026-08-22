@@ -5,11 +5,8 @@
 > control plane as a single-replica Deployment, with agent sandboxes running as
 > **ephemeral pods** via the pluggable sandbox backend
 > (`FLEET_SANDBOX_BACKEND=kubernetes`). The single-box podman install
-> ([`DEPLOYMENT.md`](DEPLOYMENT.md)) remains the default; come here when
-> Kubernetes is your platform standard. This guide replaced the earlier
-> hand-verified EKS recipe that ran rootless Podman inside one privileged pod —
-> if you deployed from that recipe, see
-> [Migrating from the old privileged-pod recipe](#migrating-from-the-old-privileged-pod-recipe).
+> ([`DEPLOYMENT.md`](DEPLOYMENT.md)) remains the default and an equally
+> supported path; come here when Kubernetes is your platform standard.
 
 ## The model
 
@@ -189,7 +186,12 @@ podman backend guarantees (#796).
    loop + brokers; the sandboxes' cost lives in their own pods, so warm-pool
    pods hold their requests while parked — size `FLEET_SANDBOX_WARM_SIZE`
    accordingly.
-8. **Run `fleet validate-config`** (`kubectl -n fleet exec deploy/fleet --
+8. **Give runners their own node pool.** Label (and usually taint) a dedicated
+   pool, then set `sandbox.kubernetes.nodeSelector` + `.tolerations` in the
+   chart — sandbox pods pin there and autoscale the pool, while the control
+   plane stays on your general nodes. This is the horizontal scaling story:
+   more runner capacity is a bigger pool, never a second fleet.
+9. **Run `fleet validate-config`** (`kubectl -n fleet exec deploy/fleet --
    fleet validate-config`) after any config change: it runs the same
    fail-closed preflight boot does, plus everything else the verb checks.
 
@@ -205,7 +207,7 @@ apply here ([TIMERS.md](TIMERS.md)). Their cluster equivalents:
 | `fleet-backup.timer` | a CronJob running `fleet backup --db=all --prune` — or skip it entirely by using managed-database backups (RDS/Cloud SQL snapshots), the recommended posture |
 | `fleet-maintenance.timer` | a CronJob running `fleet cleanup` daily |
 | journald | `kubectl logs` / your log stack; set `FLEET_LOG_FILE` only if you also mount somewhere rotatable |
-| Grafana node dashboards | scrape the control plane's `/metrics` (orchestrator port) with your Prometheus stack; sandbox pods are visible to cluster metrics as ordinary pods |
+| Grafana node dashboards | scrape the control plane's `/metrics` (orchestrator port). NOTE it is **admin-API-key gated** (`X-API-Key`) — cost/token data must not be public — and stock Prometheus cannot send custom headers, so use a scraper that can (Grafana Alloy, vmagent) or a small header-injecting sidecar. Sandbox pods are ordinary pods your cluster metrics already see |
 
 Minimal backup CronJob (only needed when you run the eval Postgres or want
 `fleet backup`'s application-level dumps next to managed snapshots):
@@ -262,6 +264,8 @@ Every knob can come from env (the chart sets these) or the bundle manifest's
 | `FLEET_SANDBOX_K8S_SECCOMP_PROFILE` | `…seccomp_profile` | node-local Localhost seccomp profile; empty = RuntimeDefault |
 | `FLEET_SANDBOX_K8S_KUBECONFIG` | `…kubeconfig` | out-of-cluster auth (token / client-cert kubeconfigs only); empty = in-cluster |
 | `FLEET_SANDBOX_K8S_NETWORK_POLICY` | `…network_policy` | deny-all policy name the preflight requires (default `fleet-sandbox-deny-all`) |
+| `FLEET_SANDBOX_K8S_NODE_SELECTOR` | `…node_selector` | pin sandbox pods to a dedicated runner pool — env form `"pool=sandboxes,arch=amd64"`, manifest form a map; a malformed value refuses to boot |
+| `FLEET_SANDBOX_K8S_TOLERATIONS` | `…tolerations` | tolerations for a tainted runner pool — env form a JSON array of `{key,operator,value,effect}`, manifest form a YAML list |
 
 The shared sandbox knobs apply to both backends: `FLEET_SANDBOX_IMAGE`,
 `FLEET_SANDBOX_MEMORY` / `_CPUS` (converted to pod resource limits),
@@ -293,21 +297,6 @@ pods), and the python REPL knobs.
   app.kubernetes.io/name=fleet-sandbox` should not show the pod after the
   cancel completes. A pod that lingers past a crash is reclaimed by the
   boot-time orphan sweep on the next control-plane start.
-
-## Migrating from the old privileged-pod recipe
-
-Earlier revisions of this repo documented an EKS recipe (`EKS-DEPLOYMENT.md`,
-removed) that ran the whole single-box model — rootless Podman included —
-inside one privileged pod on one large node. This path replaces it: no
-privileged pod, no Podman on the node, no admission-policy exception. To
-migrate: keep your databases (they are unchanged), rebuild the control-plane
-image **without** Podman inside it, move the workspace onto an RWX claim,
-install the chart, and set `FLEET_SANDBOX_BACKEND=kubernetes`. What you give
-up relative to that recipe is the podman backend's extras (the bundled seccomp
-profile, per-sandbox `podman stats` telemetry, the allowlisted egress proxy) —
-listed honestly below. If you specifically need those, the supported home for
-the podman backend remains a VM ([DEPLOYMENT.md](DEPLOYMENT.md)), not a
-privileged pod.
 
 ## Honest scope — what the kubernetes backend does differently
 

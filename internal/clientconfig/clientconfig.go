@@ -459,6 +459,21 @@ type KubernetesSandbox struct {
 	// NetworkPolicy is the deny-all NetworkPolicy name the boot preflight
 	// requires to exist (default "fleet-sandbox-deny-all").
 	NetworkPolicy string `yaml:"network_policy"`
+	// NodeSelector pins sandbox pods to labeled nodes (a dedicated runner
+	// pool). FLEET_SANDBOX_K8S_NODE_SELECTOR ("k=v,k=v") overrides it.
+	NodeSelector map[string]string `yaml:"node_selector"`
+	// Tolerations let sandbox pods schedule onto a tainted runner pool.
+	// FLEET_SANDBOX_K8S_TOLERATIONS (a JSON array) overrides it.
+	Tolerations []KubernetesToleration `yaml:"tolerations"`
+}
+
+// KubernetesToleration is the manifest shape of one sandbox-pod toleration
+// (the four core/v1 fields fleet forwards).
+type KubernetesToleration struct {
+	Key      string `yaml:"key" json:"key,omitempty"`
+	Operator string `yaml:"operator" json:"operator,omitempty"`
+	Value    string `yaml:"value" json:"value,omitempty"`
+	Effect   string `yaml:"effect" json:"effect,omitempty"`
 }
 
 // ResolvedImageRef returns the image reference the fleet process should consume:

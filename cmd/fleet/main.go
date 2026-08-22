@@ -2050,6 +2050,28 @@ func resolveSandboxBackendInto(cfg *config.Config, bundle *clientconfig.Bundle) 
 	fill(&cfg.SandboxK8sSeccompProfile, k.SeccompProfile)
 	fill(&cfg.SandboxK8sKubeconfig, k.Kubeconfig)
 	fill(&cfg.SandboxK8sNetworkPolicy, k.NetworkPolicy)
+	// The scheduling knobs are structured in the manifest; canonicalize them
+	// into the same string forms the env vars use so the pool build has ONE
+	// source to parse (env wins, like every other field).
+	if strings.TrimSpace(cfg.SandboxK8sNodeSelector) == "" && len(k.NodeSelector) > 0 {
+		keys := make([]string, 0, len(k.NodeSelector))
+		for key := range k.NodeSelector {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		pairs := make([]string, 0, len(keys))
+		for _, key := range keys {
+			pairs = append(pairs, key+"="+k.NodeSelector[key])
+		}
+		cfg.SandboxK8sNodeSelector = strings.Join(pairs, ",")
+	}
+	if strings.TrimSpace(cfg.SandboxK8sTolerations) == "" && len(k.Tolerations) > 0 {
+		raw, err := json.Marshal(k.Tolerations)
+		if err != nil {
+			return fmt.Errorf("encode sandbox.kubernetes.tolerations: %w", err)
+		}
+		cfg.SandboxK8sTolerations = string(raw)
+	}
 	//nolint:gosec // G706: backend + namespace are operator config (FLEET_SANDBOX_* / bundle manifest), quoted with %q — not request input.
 	log.Printf("sandbox: backend resolved to %q (control plane and runners split — pods in namespace %q)",
 		resolved, defaultString(cfg.SandboxK8sNamespace, "fleet-sandboxes"))

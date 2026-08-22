@@ -44,6 +44,8 @@ sandbox:
   #   seccomp_profile: ""        # node-local Localhost profile; empty = RuntimeDefault
   #   kubeconfig: ""             # out-of-cluster auth; empty = in-cluster
   #   network_policy: fleet-sandbox-deny-all
+  #   node_selector: {}          # pin sandbox pods to a dedicated runner pool
+  #   tolerations: []            # [{key,operator,value,effect}] for a tainted pool
 
 branding:
   app_name: "Fleet"

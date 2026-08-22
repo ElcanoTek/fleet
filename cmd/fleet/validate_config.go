@@ -817,7 +817,33 @@ func checkKubernetesSandbox(ctx context.Context, res checkResult, cfg *config.Co
 		res.Detail = "no sandbox image resolved (set FLEET_SANDBOX_IMAGE or the bundle manifest's sandbox.image — kubernetes nodes cannot consume a build-on-box tag)"
 		return res
 	}
+	// Same env-wins-else-bundle resolution and fail-closed parse as the boot
+	// path: an env value is parsed from its string form; with no env value
+	// the bundle's structured knobs apply directly.
 	k8s := bundle.Sandbox().Kubernetes
+	nodeSelector := k8s.NodeSelector
+	if strings.TrimSpace(cfg.SandboxK8sNodeSelector) != "" {
+		parsed, err := sandbox.ParseK8sNodeSelector(cfg.SandboxK8sNodeSelector)
+		if err != nil {
+			res.Status = statusFail
+			res.Detail = "FLEET_SANDBOX_K8S_NODE_SELECTOR: " + err.Error()
+			return res
+		}
+		nodeSelector = parsed
+	}
+	var tolerations []sandbox.K8sToleration
+	for _, tol := range k8s.Tolerations {
+		tolerations = append(tolerations, sandbox.K8sToleration(tol))
+	}
+	if strings.TrimSpace(cfg.SandboxK8sTolerations) != "" {
+		parsed, err := sandbox.ParseK8sTolerations(cfg.SandboxK8sTolerations)
+		if err != nil {
+			res.Status = statusFail
+			res.Detail = "FLEET_SANDBOX_K8S_TOLERATIONS: " + err.Error()
+			return res
+		}
+		tolerations = parsed
+	}
 	fill := func(env, bundleVal string) string {
 		if strings.TrimSpace(env) != "" {
 			return strings.TrimSpace(env)
@@ -833,6 +859,8 @@ func checkKubernetesSandbox(ctx context.Context, res checkResult, cfg *config.Co
 		SeccompLocalhostProfile: fill(cfg.SandboxK8sSeccompProfile, k8s.SeccompProfile),
 		KubeconfigPath:          fill(cfg.SandboxK8sKubeconfig, k8s.Kubeconfig),
 		NetworkPolicyName:       fill(cfg.SandboxK8sNetworkPolicy, k8s.NetworkPolicy),
+		NodeSelector:            nodeSelector,
+		Tolerations:             tolerations,
 	})
 	if err != nil {
 		res.Status = statusFail

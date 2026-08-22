@@ -90,8 +90,7 @@ privileged node" packaging track as a stepping stone.
 - Co-located "fleet + Podman in a privileged pod" as the supported enterprise
   story. The EKS recipe that documented it is **removed** rather than kept as
   a parallel path — an unmaintained privileged-pod recipe beside a first-class
-  unprivileged one would imply support it does not have; the k8s guide carries
-  a migration note for anyone who deployed from it.
+  unprivileged one would imply support it does not have.
 - Multi-replica / active-active fleet; a Kubernetes operator or CRDs.
 - The **allowlisted** egress mode under the kubernetes backend: the host-side
   egress proxy is unreachable from pods, so the mode is refused at boot

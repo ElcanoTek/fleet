@@ -61,6 +61,16 @@ sandbox:
     # Node-local seccomp profile applied as a Localhost profile (path
     # relative to the kubelet seccomp root). Empty = RuntimeDefault.
     seccompProfile: ""
+    # Pin sandbox pods to a DEDICATED runner node pool: label the pool and
+    # select it here; taint it and add the matching toleration so nothing
+    # else lands on it. This is fleet's horizontal scaling story — more
+    # runner capacity is a bigger pool, never more fleet replicas.
+    nodeSelector: {}
+    #  fleet.elcanotek.com/pool: sandboxes
+    tolerations: []
+    #  - key: fleet.elcanotek.com/sandbox
+    #    operator: Exists
+    #    effect: NoSchedule
   # Per-sandbox ceilings, podman-flag format (converted by fleet):
   memory: "512m"
   cpus: "1.0"
