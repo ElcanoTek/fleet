@@ -19,6 +19,47 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **CodeQL had stopped analyzing the repo's Go code, and then stopped analyzing
+  anything.** Default setup's Go analysis failed on every main-targeting PR from
+  the Go 1.27 bump (#1240, promoted in #1242) onward — it installed the Go its
+  extractor was built with and pinned `GOTOOLCHAIN=local`, so against a `go.mod`
+  requiring 1.27 it could neither use nor fetch a workable toolchain:
+
+  ```
+  go: go.mod requires go >= 1.27.0 (running go 1.26.6; GOTOOLCHAIN=local)
+  Extraction failed for all discovered Go projects.
+  CodeQL job status was configuration error.
+  ```
+
+  The failure was red but never blocking (`ci-gate` is the only required check on
+  main), so it was annotated in promote commit messages and lived on. Default
+  setup is zero-config, with no Go version input and no env, so there was nothing
+  to fix in place; switching it off to replace it left the repo scanning nothing
+  at all in the interim.
+
+  Replaced with an advanced-setup workflow, `.github/workflows/codeql.yml`, which
+  restores security analysis over go, python, javascript-typescript and actions
+  plus the code-quality query suite over the first three, and resolves Go's
+  interpreter from `go.mod` via `actions/setup-go` — never a literal version, the
+  bug class #1240 and #1241 already fixed twice for node.
+
+  Two things the first cut got wrong, both of which ran **green**: `analysis-kinds`
+  turns out to be GitHub-internal and unusable in a custom workflow (it logged
+  `##[error]` and silently continued with security only), and Go extraction
+  missed exactly one file — `internal/sandbox/host.go`, the unsandboxed host
+  executor, invisible to the default build behind `//go:build
+  fleet_host_executor`. Fixed with `queries: code-quality` and
+  `GOFLAGS: -tags=fleet_host_executor`, the same tag `ci.yml` and `dev-ci.yml`
+  already pass to `go vet` and `go test`.
+
+  Verified from the extractor's own output rather than the check mark:
+  `extraction succeeded for all 2 discovered project(s)`, 916 packages, 426 `.go`
+  files including `host.go`, and distinct queries evaluated rising from 72→116
+  (go), 90→292 (python) and 178→374 (javascript-typescript) as the quality suite
+  came in, with `actions` unchanged at 36 by design. CodeQL remains advisory —
+  these jobs are deliberately not wired into `ci-gate`. See
+  [`docs/CODEQL.md`](docs/CODEQL.md).
+
 - **`fleet update` built the web tier on the node it had just refused.** Every
   update on a Fedora box printed `✓ web tier will build+run on /usr/bin/node-24
   (v24.x)` and then, a few lines later, npm's own rejection of that claim:

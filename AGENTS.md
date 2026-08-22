@@ -161,6 +161,10 @@ same PR.
 - **Contributor workflow + CI gates:** [`CONTRIBUTING.md`](CONTRIBUTING.md)
 - **Testing strategy** (unit / fake-LLM / mocked + live Playwright / canary):
   [`docs/TESTING.md`](docs/TESTING.md)
+- **CodeQL** (why default setup was replaced by an advanced-setup workflow, how
+  the Go toolchain is resolved, why `code-quality` is a query suite here rather
+  than an analysis kind, and why CodeQL is advisory rather than in `ci-gate`):
+  [`docs/CODEQL.md`](docs/CODEQL.md)
 - **HTTP API versioning** (the `/v1` prefix + `X-Fleet-API-Version` + `/api-info`
   discovery + deprecation contract): [`docs/api-versioning.md`](docs/api-versioning.md)
 - **Database migrations** (the two runners, safe-DDL patterns, the migration DDL
