@@ -151,25 +151,37 @@ jobs:
           # story (an accepted-findings.json entry, by contrast, is invisible
           # to the Security tab). The pack is resolved from the bundled
           # standard library — no network pull, no `packages: read`.
-          # The leading "+" is load-bearing: without it the action treats the
-          # packs input as a REPLACEMENT set that the queries input then
-          # overrides, and the suppression query silently does not run
-          # (verified: rule-metadata count stayed at 35 and the gate showed
-          # the waiver coming from the register, not "(in-source
-          # suppression)"). "+" makes it additive to the queries input.
+          # The per-language configuration is an INLINE CONFIG, not the
+          # `queries:` input: go combines the security-extended suite with the
+          # standard pack's AlertSuppression query, and an inline config is
+          # the one form where a suite and an extra pack have documented
+          # combine semantics (the separate `queries:`/`packs:` inputs
+          # override one another — verified on this repo: with both inputs,
+          # with and without the documented "+" prefix, the suppression query
+          # never ran and the gate showed the register waiver instead of
+          # "(in-source suppression)").
           - language: go
             build-mode: autobuild
-            queries: security-extended
-            packs: +codeql/go-queries:AlertSuppression.ql
+            config: |
+              queries:
+                - uses: security-extended
+              packs:
+                - codeql/go-queries:AlertSuppression.ql
           - language: python
             build-mode: none
-            queries: security-extended
+            config: |
+              queries:
+                - uses: security-extended
           - language: javascript-typescript
             build-mode: none
-            queries: security-extended
+            config: |
+              queries:
+                - uses: security-extended
           - language: actions
             build-mode: none
-            queries: security-extended
+            config: |
+              queries:
+                - uses: security-extended
 
     steps:
       - name: Checkout
@@ -190,12 +202,12 @@ jobs:
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
-          queries: ${{ matrix.queries }}
-          # Empty for every language but go (see the matrix note on
-          # AlertSuppression); an empty value means "no extra packs".
-          packs: ${{ matrix.packs }}
-          # security-extended (see the matrix note). The SCOPE note in the
-          # header still applies to `code-quality` — do not re-add that one.
+          # Inline config per language (see the matrix note): every language
+          # runs security-extended; go additionally runs AlertSuppression so
+          # in-source `// codeql[rule-id]` comments are honored. The SCOPE
+          # note in the header still applies to `code-quality` — do not
+          # re-add that one.
+          config: ${{ matrix.config }}
 
       - name: Autobuild
         if: matrix.build-mode == 'autobuild'
