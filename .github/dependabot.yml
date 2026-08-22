@@ -73,6 +73,33 @@ version: 2
 # So bumping node is a deliberate, human-initiated change: edit web/.nvmrc,
 # and CI + bootstrap + doctor + update all follow. Check the release line first
 # — production should track Active or Maintenance LTS, never Current.
+#
+# WHY "never Current", concretely — the rule reads like plain conservatism, and
+# then someone points out that the major on offer becomes LTS in a few weeks and
+# argues to go early. Two things answer that:
+#
+#   * ODD majors never become LTS AT ALL. nodejs/Release's schedule.json gives
+#     v24 lts=2025-10-28 and v26 lts=2026-10-28, but v25 and v27 have no `lts`
+#     key whatsoever. v25 lived from 2025-10-15 to 2026-06-01 — seven and a half
+#     months, total. The `docker` entry above CAN propose one of those (it sees
+#     the node base image in scripts/rampart-service/Containerfile), and it will
+#     look exactly as green as an even-major bump. "Never Current" is what makes
+#     that categorically unmergeable instead of a judgement call in review.
+#   * For an EVEN major, Current is a waiting room, and waiting is nearly free
+#     here, because dnf enforces the same delay anyway. bootstrap.sh installs
+#     the VERSIONED stream (nodejs<major>, nodejs<major>-npm), and the distro
+#     packages those on roughly the LTS cadence: while node 26 was Current,
+#     Fedora 44 carried nodejs24 and no nodejs26 at all. Moving web/.nvmrc ahead
+#     of the RPM does not get you node 26 — it drops every fresh box onto
+#     bootstrap's unversioned-`nodejs` fallback and its warning. So confirm the
+#     `nodejs<major>` package actually exists before touching .nvmrc.
+#
+# Deliberately NOT expressed as an `ignore` rule for major node bumps. Silencing
+# them would remove the only signal that a new line exists, which is precisely
+# how the go.mod toolchain pin sat at 1.26.7 after 1.27.0 shipped (Dependabot
+# does not touch the `go` directive either — see above). A red PR that fails
+# scripts/check_versions_test.go is an annoying but working reminder; silence is
+# not. Close such a PR with the reason, and let the next one arrive.
 
 updates:
   # Go module (go.mod / go.sum at the repo root).
