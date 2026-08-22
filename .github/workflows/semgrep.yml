@@ -149,12 +149,29 @@ jobs:
                 end
             ' semgrep.json
             echo '```'
-            # Scan errors are not findings but they do mean coverage was lost,
-            # so they get their own line rather than being dropped silently.
+            # COVERAGE, not just the verdict. "No findings." on its own is
+            # indistinguishable from "scanned nothing" — the exact
+            # green-but-vacuous failure this whole stack exists to rule out. So
+            # print what was actually looked at, and the per-language breakdown
+            # that shows every pack really applied.
+            echo ''
+            echo "files scanned: $(jq '(.paths.scanned // []) | length' semgrep.json)"
+            echo "files skipped: $(jq '(.paths.skipped // []) | length' semgrep.json)"
+            echo 'by extension:'
+            jq -r '
+              (.paths.scanned // [])
+              | map(split(".") | last)
+              | group_by(.) | map({e: .[0], n: length})
+              | sort_by(-.n) | .[:8][]
+              | "  .\(.e): \(.n)"
+            ' semgrep.json
+            # Scan errors are not findings but they do mean a rule or file did
+            # not fully parse, so they get their own line rather than vanishing.
             errs=$(jq '(.errors // []) | length' semgrep.json)
             if [ "$errs" != "0" ]; then
               echo ''
-              echo "parse/scan errors (files or rules that did not fully run): $errs"
+              echo "parse/scan errors (a rule or file that did not fully run): $errs"
+              jq -r '(.errors // [])[] | "  [\(.level)] \(.path // "?")"' semgrep.json | sort -u
             fi
           } | tee -a "$GITHUB_STEP_SUMMARY"
 

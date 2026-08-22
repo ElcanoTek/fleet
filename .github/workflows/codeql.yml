@@ -208,6 +208,9 @@ jobs:
         env:
           SARIF_DIR: ${{ runner.temp }}/codeql-sarif
           LANGUAGE: ${{ matrix.language }}
+          # The database directory is named after the EXTRACTOR, which is not
+          # always the matrix language: javascript-typescript -> javascript.
+          CODEQL_DB: ${{ matrix.language == 'javascript-typescript' && 'javascript' || matrix.language }}
         run: |
           set -uo pipefail
           shopt -s nullglob
@@ -237,6 +240,14 @@ jobs:
                   end
               ' "${files[@]}"
               echo '```'
+              # COVERAGE, not just the verdict: "No findings." alone cannot be
+              # told apart from "analyzed nothing", which is the exact
+              # green-but-vacuous outcome this workflow exists to rule out.
+              # The source archive is the file set the database was built from.
+              src="${{ runner.temp }}/codeql_databases/$CODEQL_DB/src.zip"
+              if [ -f "$src" ]; then
+                echo "files in the $LANGUAGE database: $(unzip -Z1 "$src" 2>/dev/null | grep -vc '/$' || echo '?')"
+              fi
             fi
           } | tee -a "$GITHUB_STEP_SUMMARY"
 
