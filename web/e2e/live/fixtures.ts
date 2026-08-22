@@ -1,4 +1,5 @@
 import { test as base, expect, request } from "@playwright/test";
+import type { BrowserContext } from "@playwright/test";
 
 export { expect, request };
 
@@ -17,7 +18,7 @@ const SCHED_USERNAME = process.env.E2E_SCHED_USERNAME ?? "e2e";
 
 export const creds = { email: TEST_EMAIL, password: TEST_PASSWORD, schedUsername: SCHED_USERNAME };
 
-type AuthCookies = Parameters<import("@playwright/test").BrowserContext["addCookies"]>[0];
+type AuthCookies = Parameters<BrowserContext["addCookies"]>[0];
 
 // wipeConversations deletes every conversation for the logged-in user via the
 // real DELETE endpoint, so each test starts from a clean slate (conversations

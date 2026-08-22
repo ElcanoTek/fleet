@@ -2575,6 +2575,14 @@ func setupRemoteMCP(cfg *config.Config, chatStore *store.Store) *remotemcp.Servi
 		PublicBaseURL:     cfg.PublicBaseURL,
 		AllowInsecureHTTP: cfg.RemoteMCPAllowInsecureHTTP,
 	})
+	// Same wiring the credential-owning child does (see mcp_broker.go, #1124),
+	// for this process's own redactor. The parent's control-plane service
+	// unseals per-user api_key secrets and mints/refreshes OAuth bearers —
+	// e.g. for browserbase_live_view — and those are acquired at RUNTIME, so
+	// the boot-time env snapshot cannot know them. Without this the parent's
+	// literal set never learned them, and a connector echoing its own bare
+	// token back was scrubbed only if it happened to match a shape pattern.
+	svc.SetSecretObserver(agentcore.RegisterSecretLiteral)
 	// Abandoned OAuth flow rows are reclaimed by the maintenance loop (see
 	// runMaintenancePass), not by a daemon of their own. This used to be a
 	// `for range ticker.C` goroutine with a context.Background() per sweep —

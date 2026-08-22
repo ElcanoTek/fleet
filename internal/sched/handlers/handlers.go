@@ -547,7 +547,7 @@ func (h *Handlers) CreateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("Task created: %s (prompt: %.50s...)", task.ID, task.Prompt)
+	log.Printf("Task created: %s (prompt: %.50s...)", task.ID, logSafe(task.Prompt))
 	localizeTask(task)
 	writeJSON(w, http.StatusOK, task)
 }
@@ -1720,6 +1720,18 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Own-rows authorization (#1082 model): PermissionCreateTask above admits
+	// the principal to the surface; this decides WHICH task. Without it any
+	// client-role principal could rewrite a teammate's pending run — prompt,
+	// model, mcp_selection and credential_allowlist included — even though the
+	// read path guarding the same row was narrowed to own rows. GetTask is
+	// unscoped by design (the read surfaces filter above it), so the check
+	// belongs here.
+	if !taskWritableByPrincipal(p, task) {
+		writeError(w, http.StatusForbidden, "Only the task creator or an admin can edit this task")
+		return
+	}
+
 	// Only allow editing tasks that haven't started
 	if task.Status != models.TaskStatusPending && task.Status != models.TaskStatusScheduled {
 		writeError(w, http.StatusBadRequest, "Only pending or scheduled tasks can be edited")
@@ -1952,6 +1964,13 @@ func (h *Handlers) UpdateTaskTags(w http.ResponseWriter, r *http.Request) {
 	task, err := h.storage.GetTask(taskID)
 	if err != nil || task == nil {
 		writeError(w, http.StatusNotFound, "Task not found")
+		return
+	}
+	// Own-rows authorization, same helper and same reason as UpdateTask. Tags
+	// drive filtering and routing, so retagging a teammate's task is a write to
+	// their work, not a cosmetic change.
+	if !taskWritableByPrincipal(p, task) {
+		writeError(w, http.StatusForbidden, "Only the task creator or an admin can retag this task")
 		return
 	}
 	var body tagMutation
@@ -2345,7 +2364,7 @@ func (h *Handlers) CreateAPIKey(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	log.Printf("Created API key: %s (%s)", key.KeyID, key.Name)
+	log.Printf("Created API key: %s (%s)", key.KeyID, logSafe(key.Name))
 
 	resp := key.ToResponse()
 	writeJSON(w, http.StatusOK, models.APIKeyCreated{

@@ -84,12 +84,45 @@ func setupAuthzHandler(t *testing.T) (*storage.Storage, *apikeys.Manager, *chi.M
 
 func mustCreateRoleKey(t *testing.T, keyMgr *apikeys.Manager, role string) string {
 	t.Helper()
+	_, raw := mustCreateRoleKeyWithID(t, keyMgr, role)
+	return raw
+}
+
+// mustCreateRoleKeyWithID also returns the key's KeyID, so a test can attribute
+// a task to the key (task.CreatedByKeyID) and exercise own-rows authorization
+// on an API-key principal rather than only on a user principal.
+func mustCreateRoleKeyWithID(t *testing.T, keyMgr *apikeys.Manager, role string) (string, string) {
+	t.Helper()
 	r := role
-	_, raw, err := keyMgr.CreateKey("test-"+role, nil, &r, 0, nil, "")
+	key, raw, err := keyMgr.CreateKey("test-"+role+"-"+uuid.NewString(), nil, &r, 0, nil, "")
 	if err != nil {
 		t.Fatalf("create key: %v", err)
 	}
-	return raw
+	return key.KeyID, raw
+}
+
+// addTaskCreatedByKey inserts a task attributed to the given API key. The
+// column is written on insert (taskColumnRegistry), so it is set before AddTask.
+func addTaskCreatedByKey(t *testing.T, store *storage.Storage, prompt, keyID string) *models.Task {
+	t.Helper()
+	return addTaskCreatedByKeyWithStatus(t, store, prompt, keyID, models.TaskStatusPending)
+}
+
+// addTaskCreatedByKeyWithStatus is the same, at a chosen status — the paused
+// queue selects on status alone, so its tests need rows already paused.
+func addTaskCreatedByKeyWithStatus(t *testing.T, store *storage.Storage, prompt, keyID string, status models.TaskStatus) *models.Task {
+	t.Helper()
+	task := &models.Task{
+		ID:             uuid.New(),
+		Prompt:         prompt,
+		Status:         status,
+		CreatedAt:      time.Now().UTC(),
+		CreatedByKeyID: &keyID,
+	}
+	if _, err := store.AddTask(task); err != nil {
+		t.Fatalf("add task: %v", err)
+	}
+	return task
 }
 
 func addTask(t *testing.T, store *storage.Storage, prompt string) *models.Task {
@@ -160,20 +193,46 @@ func TestScopedAPIKeyAuthorization(t *testing.T) {
 		}
 	})
 
-	t.Run("client key can edit an editable task", func(t *testing.T) {
-		// The client role carries create_task (which gates editing) but not
-		// cancel_task, so editing is the right op to test mutating authorization
-		// on a call a scoped key is actually permitted to make.
-		clientKey := mustCreateRoleKey(t, keyMgr, "client")
+	// Editing is own-rows, not merely permission-gated (taskWritableByPrincipal).
+	// The client role carries create_task (which admits it to the edit surface)
+	// but not cancel_task, so it is the right role to test WHICH task a scoped
+	// key may mutate.
+	t.Run("client key can edit a task it created", func(t *testing.T) {
+		keyID, clientKey := mustCreateRoleKeyWithID(t, keyMgr, "client")
+
+		// Attributed to this key — the scoped-intake-app case that must keep working.
+		own := addTaskCreatedByKey(t, store, "a task this key created", keyID)
 
 		body, _ := json.Marshal(models.TaskCreate{Prompt: "edited prompt that is sufficiently long"})
-		req := httptest.NewRequest("PUT", "/tasks/"+taskA.ID.String(), bytes.NewReader(body))
+		req := httptest.NewRequest("PUT", "/tasks/"+own.ID.String(), bytes.NewReader(body))
 		req.Header.Set("X-API-Key", clientKey)
 		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, req)
 		if w.Code != http.StatusOK {
-			t.Fatalf("client key edit should be 200, got %d: %s", w.Code, w.Body.String())
+			t.Fatalf("client key editing its OWN task should be 200, got %d: %s", w.Code, w.Body.String())
+		}
+	})
+
+	// The regression this pair exists for: PUT /tasks/{id} authorized on
+	// PermissionCreateTask alone, so a scoped key could rewrite a task it did
+	// not create — prompt, model, mcp_selection, credential_allowlist — while
+	// the READ path for the same row was already narrowed to own rows (#1082).
+	t.Run("client key cannot edit a task it did not create", func(t *testing.T) {
+		clientKey := mustCreateRoleKey(t, keyMgr, "client")
+
+		body, _ := json.Marshal(models.TaskCreate{Prompt: "hijacked prompt that is long enough"})
+		req := httptest.NewRequest("PUT", "/tasks/"+taskA.ID.String(), bytes.NewReader(body))
+		req.Header.Set("X-API-Key", clientKey)
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("client key must not edit an unowned task; got %d: %s", w.Code, w.Body.String())
+		}
+		after, _ := store.GetTask(taskA.ID)
+		if after == nil || after.Prompt != "task A" {
+			t.Fatalf("a refused edit must leave the prompt alone, got %q", after.Prompt)
 		}
 	})
 }

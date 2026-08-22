@@ -195,6 +195,11 @@ and status codes remain documentary.
 
 ## Repository layout
 
+Abridged — the load-bearing directories, not every package. `internal/` alone
+holds roughly forty packages; `cmd/` also carries the test/bench helpers
+(`fake-llm`, `fleet-bench`), and `scripts/` and `.github/` hold the operator
+scripts and the CI definition.
+
 ```
 cmd/
   fleet/          the one unified binary — server (`fleet serve`: chat HTTP/SSE + orchestrator HTTP + scheduler + worker pool) AND operator CLI (every other verb)
@@ -214,6 +219,9 @@ internal/
   sched/          orchestrator/scheduler (was moc) + its migrations
   httpapi/        chat HTTP/SSE/auth layer
   config/         unified configuration (env loading; the MCP catalog comes from the bundle)
+  ...             (~30 more: agentcore's neighbours, netguard, mcpoauth, observability, ...)
+scripts/          bootstrap / update / doctor, the sandbox image build, and the CI policy checks
+.github/          workflows (the CI + SAST gates), CODEOWNERS, dependabot, the CodeQL gate filter
 web/              one Next.js app: /chat and /orchestrator
 config/default/   the GENERIC client bundle baked into the repo (runs bare),
                   including config/default/sandbox/Containerfile — the sandbox
@@ -353,6 +361,8 @@ Deep references live in [`docs/`](docs/) so this README stays an orientation, no
 | [`docs/SERVER-STATS.md`](docs/SERVER-STATS.md) | Admin Server tab — lightweight CPU, memory, disk, network, and uptime status |
 | [`docs/BACKUP_RESTORE.md`](docs/BACKUP_RESTORE.md) | Disaster recovery — backup + restore of both databases |
 | [`docs/WEBHOOK-SIGNING.md`](docs/WEBHOOK-SIGNING.md) · [`docs/TESTING.md`](docs/TESTING.md) | Webhook HMAC signing · the test suite + fake-LLM seam |
+| [`docs/SCANNING.md`](docs/SCANNING.md) | The scanning stack — which of golangci-lint / ruff / govulncheck / Grype / gitleaks / npm audit / CodeQL / Semgrep owns what, what actually blocks a merge, and the known gaps |
+| [`docs/CODEQL.md`](docs/CODEQL.md) | CodeQL specifics — advanced setup, the four-language matrix, the High-band gate + accepted-findings register, and why a PR-event run certifies a diff rather than a tree |
 | [`docs/BUILDING-ON-FLEET.md`](docs/BUILDING-ON-FLEET.md) | The HTTP API as an automation substrate — keys, kicking off jobs, consuming structured output |
 | [`docs/MCP-CATALOG.md`](docs/MCP-CATALOG.md) | The connector catalog — bundled vs third-party trust classes |
 | [`docs/adr/`](docs/adr/) | Architecture Decision Records — the *why* behind the non-negotiable invariants |
@@ -417,7 +427,9 @@ standards. Our thanks to the teams and communities behind them:
   Python data stack installed as **signed Fedora RPMs** instead of `pip` at
   runtime — one audited supply chain, not a thousand PyPI tarballs. fleet
   deliberately tracks the rolling tag so every on-box rebuild picks up the
-  current patches, and per-PR + weekly Grype scans keep the claim honest.
+  current patches, and Grype scans keep the claim honest — on every main-targeting
+  PR that is not docs-only, plus a weekly scheduled re-scan of the existing image
+  (PRs into `dev` get no image scan; it runs at the dev→main promotion).
 - **[Model Context Protocol](https://modelcontextprotocol.io)** and its SDKs —
   the open standard fleet speaks (stdio + HTTP) to reach tools and data through a
   credential-brokered MCP catalog.

@@ -12,6 +12,7 @@
 # full-file hashes, optional expected_sha256, no-op rejection, and a bounded
 # unified diff. Those semantics must never regress the #784 confinement.
 import base64
+import contextlib
 import difflib
 import errno
 import hashlib
@@ -35,8 +36,14 @@ class StaleContent(Exception):
 
 
 def fail(kind, msg, **extra):
-    response = {"ok": False, "err_kind": kind, "err": msg,
-                "data_b64": "", "size": 0, "count": 0}
+    response = {
+        "ok": False,
+        "err_kind": kind,
+        "err": msg,
+        "data_b64": "",
+        "size": 0,
+        "count": 0,
+    }
     response.update(extra)
     return response
 
@@ -74,17 +81,18 @@ def _open_dir_at(parent_fd, name, create):
             fd = os.open(name, flags, dir_fd=parent_fd)
             if created:
                 # mkdir is umask-filtered; the file-tool contract is exact 0750.
+                # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- the rule advises 0o644, i.e. WORLD-READABLE, for a sandbox directory. Following it would be a security regression. 0750 is the file-tool contract and is deliberately tighter than the suggestion.
                 os.fchmod(fd, 0o750)
             return fd
         except OSError as exc:
             if exc.errno in (errno.ELOOP, errno.ENOTDIR):
-                raise UnsafePath(
-                    "directory component changed or is a symlink") from exc
+                raise UnsafePath("directory component changed or is a symlink") from exc
             raise
     except OSError as exc:
         if exc.errno in (errno.ELOOP, errno.ENOTDIR):
             raise UnsafePath(
-                "directory component is a symlink or not a directory") from exc
+                "directory component is a symlink or not a directory"
+            ) from exc
         raise
 
 
@@ -150,9 +158,16 @@ def do_bind_root(req):
     try:
         root_fd = _open_root(req)
         info = os.fstat(root_fd)
-        return {"ok": True, "err_kind": "", "err": "", "data_b64": "",
-                "size": 0, "count": 0, "dev": info.st_dev,
-                "ino": info.st_ino}
+        return {
+            "ok": True,
+            "err_kind": "",
+            "err": "",
+            "data_b64": "",
+            "size": 0,
+            "count": 0,
+            "dev": info.st_dev,
+            "ino": info.st_ino,
+        }
     except UnsafePath as exc:
         return fail("unsafe_path", str(exc))
     except OSError as exc:
@@ -168,12 +183,18 @@ def _test_pause(req, parent_fd):
     if pause_ms <= 0:
         return
     name = req.get("test_ready_name", "")
-    if (not isinstance(name, str) or
-            not name.startswith(".fleet-fileop-test-") or
-            os.path.basename(name) != name):
+    if (
+        not isinstance(name, str)
+        or not name.startswith(".fleet-fileop-test-")
+        or os.path.basename(name) != name
+    ):
         raise UnsafePath("invalid test rendezvous name")
-    fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL |
-                 os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=parent_fd)
+    fd = os.open(
+        name,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+        0o600,
+        dir_fd=parent_fd,
+    )
     os.close(fd)
     os.fsync(parent_fd)
     time.sleep(min(pause_ms, 10000) / 1000.0)
@@ -181,8 +202,7 @@ def _test_pause(req, parent_fd):
 
 def _open_file(parent_fd, name):
     try:
-        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
-                     dir_fd=parent_fd)
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=parent_fd)
     except FileNotFoundError:
         raise
     except IsADirectoryError:
@@ -211,8 +231,11 @@ def _lstat_at(parent_fd, name):
 
 
 def _same_file(left, right):
-    return (left is not None and right is not None and
-            (left.st_dev, left.st_ino) == (right.st_dev, right.st_ino))
+    return (
+        left is not None
+        and right is not None
+        and (left.st_dev, left.st_ino) == (right.st_dev, right.st_ino)
+    )
 
 
 def _sha256_open_at(parent_fd, name):
@@ -226,9 +249,12 @@ def _sha256_open_at(parent_fd, name):
                 break
             digest.update(chunk)
         after = os.fstat(fd)
-        if ((info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns) !=
-                (after.st_dev, after.st_ino, after.st_size,
-                 after.st_mtime_ns)):
+        if (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns) != (
+            after.st_dev,
+            after.st_ino,
+            after.st_size,
+            after.st_mtime_ns,
+        ):
             raise StaleContent("file changed while its hash was computed")
         return digest.hexdigest()
     finally:
@@ -236,8 +262,7 @@ def _sha256_open_at(parent_fd, name):
             os.close(fd)
 
 
-def _atomic_write(parent_fd, name, data, expected=None,
-                  expected_digest=None):
+def _atomic_write(parent_fd, name, data, expected=None, expected_digest=None):
     before = _lstat_at(parent_fd, name)
     if expected is not None and not _same_file(before, expected):
         raise UnsafePath("file changed while it was being edited")
@@ -247,8 +272,12 @@ def _atomic_write(parent_fd, name, data, expected=None,
     tmp = ".fleet-fileop-%s" % secrets.token_hex(12)
     fd = -1
     try:
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL |
-                     os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=parent_fd)
+        fd = os.open(
+            tmp,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+            0o600,
+            dir_fd=parent_fd,
+        )
         view = memoryview(data)
         while view:
             written = os.write(fd, view)
@@ -256,16 +285,14 @@ def _atomic_write(parent_fd, name, data, expected=None,
         if owner is not None:
             current_owner = os.fstat(fd)
             if (current_owner.st_uid, current_owner.st_gid) != owner:
-                try:
+                # Best effort: preserving the destination's ownership on an
+                # overwrite is a nicety, not a safety property. The executor
+                # runs unprivileged and cannot chown to a foreign uid (e.g.
+                # a host-seeded workspace file mapping to container-root), so
+                # keep the executor-owned replacement rather than aborting a
+                # legitimate edit.
+                with contextlib.suppress(PermissionError):
                     os.fchown(fd, owner[0], owner[1])
-                except PermissionError:
-                    # Best effort: preserving the destination's ownership on an
-                    # overwrite is a nicety, not a safety property. The executor
-                    # runs unprivileged and cannot chown to a foreign uid (e.g.
-                    # a host-seeded workspace file mapping to container-root),
-                    # so keep the executor-owned replacement rather than
-                    # aborting a legitimate edit.
-                    pass
         os.fchmod(fd, mode)
         os.fsync(fd)
         os.close(fd)
@@ -282,17 +309,14 @@ def _atomic_write(parent_fd, name, data, expected=None,
         if expected_digest is not None:
             current_digest = _sha256_open_at(parent_fd, name)
             if current_digest != expected_digest:
-                raise StaleContent(
-                    "file content changed before the edit was committed")
+                raise StaleContent("file content changed before the edit was committed")
         os.replace(tmp, name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
         os.fsync(parent_fd)
     except BaseException:
         if fd >= 0:
             os.close(fd)
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(tmp, dir_fd=parent_fd)
-        except OSError:
-            pass
         raise
 
 
@@ -312,7 +336,7 @@ def _hash_and_window(fd, offset, limit):
         wanted_start = max(position, offset)
         wanted_end = chunk_end if end is None else min(chunk_end, end)
         if wanted_start < wanted_end:
-            chunks.append(chunk[wanted_start - position:wanted_end - position])
+            chunks.append(chunk[wanted_start - position : wanted_end - position])
         position = chunk_end
     return digest.hexdigest(), b"".join(chunks)
 
@@ -328,14 +352,22 @@ def do_read(req):
         limit = int(req.get("limit", 0) or 0)
         digest, data = _hash_and_window(fd, offset, limit)
         after = os.fstat(fd)
-        if ((before.st_dev, before.st_ino, before.st_size,
-             before.st_mtime_ns) !=
-                (after.st_dev, after.st_ino, after.st_size,
-                 after.st_mtime_ns)):
+        if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
+            after.st_dev,
+            after.st_ino,
+            after.st_size,
+            after.st_mtime_ns,
+        ):
             raise StaleContent("file changed while it was being read")
-        return {"ok": True, "err_kind": "", "err": "",
-                "data_b64": base64.b64encode(data).decode("ascii"),
-                "size": before.st_size, "count": 0, "sha256": digest}
+        return {
+            "ok": True,
+            "err_kind": "",
+            "err": "",
+            "data_b64": base64.b64encode(data).decode("ascii"),
+            "size": before.st_size,
+            "count": 0,
+            "sha256": digest,
+        }
     except FileNotFoundError:
         return fail("not_found", "file not found")
     except IsADirectoryError:
@@ -360,9 +392,15 @@ def do_write(req):
         _test_pause(req, parent_fd)
         data = base64.b64decode(req.get("data_b64", ""))
         _atomic_write(parent_fd, name, data)
-        return {"ok": True, "err_kind": "", "err": "", "data_b64": "",
-                "size": len(data), "count": 0,
-                "sha256": hashlib.sha256(data).hexdigest()}
+        return {
+            "ok": True,
+            "err_kind": "",
+            "err": "",
+            "data_b64": "",
+            "size": len(data),
+            "count": 0,
+            "sha256": hashlib.sha256(data).hexdigest(),
+        }
     except IsADirectoryError:
         return fail("is_dir", "path is a directory")
     except UnsafePath as exc:
@@ -378,13 +416,21 @@ def _bounded_diff(path, before, after):
     old_lines = before.decode("utf-8", "replace").splitlines(keepends=True)
     new_lines = after.decode("utf-8", "replace").splitlines(keepends=True)
     name = os.path.basename(path)
-    lines = list(difflib.unified_diff(
-        old_lines, new_lines, fromfile=name + " (before)",
-        tofile=name + " (after)", n=3))
-    added = sum(1 for line in lines
-                if line.startswith("+") and not line.startswith("+++"))
-    removed = sum(1 for line in lines
-                  if line.startswith("-") and not line.startswith("---"))
+    lines = list(
+        difflib.unified_diff(
+            old_lines,
+            new_lines,
+            fromfile=name + " (before)",
+            tofile=name + " (after)",
+            n=3,
+        )
+    )
+    added = sum(
+        1 for line in lines if line.startswith("+") and not line.startswith("+++")
+    )
+    removed = sum(
+        1 for line in lines if line.startswith("-") and not line.startswith("---")
+    )
     text = "".join(lines)
     encoded = text.encode("utf-8")
     if len(encoded) > DIFF_MAX_BYTES:
@@ -395,9 +441,11 @@ def _bounded_diff(path, before, after):
 
 def _stale(expected, current):
     return fail(
-        "stale", "file content has changed since it was last read "
-        "(expected sha256 %s, current %s); re-read the file and retry" %
-        (expected, current))
+        "stale",
+        "file content has changed since it was last read "
+        "(expected sha256 %s, current %s); re-read the file and retry"
+        % (expected, current),
+    )
 
 
 def do_edit(req):
@@ -414,7 +462,7 @@ def do_edit(req):
         old_digest = hashlib.sha256(content).hexdigest()
         expected = (req.get("expected_sha256") or "").strip().lower()
         if expected.startswith("sha256:"):
-            expected = expected[len("sha256:"):]
+            expected = expected[len("sha256:") :]
         if expected and expected != old_digest:
             return _stale(expected, old_digest)
 
@@ -423,20 +471,25 @@ def do_edit(req):
         count = content.count(old)
         if count == 0:
             response = fail("old_absent", "old_text not found in file")
-            if (b"\r\n" in content and old and
-                    old.replace(b"\r\n", b"\n") in
-                    content.replace(b"\r\n", b"\n")):
+            if (
+                b"\r\n" in content
+                and old
+                and old.replace(b"\r\n", b"\n") in content.replace(b"\r\n", b"\n")
+            ):
                 response["hint"] = (
                     "the file uses CRLF line endings — include \\r\\n in "
                     "old_text exactly as view_file returned it, or re-read "
-                    "the file")
+                    "the file"
+                )
             return response
         if count > 1 and not req.get("replace_all"):
             return fail(
-                "ambiguous", "old_text matches %d locations; edit_file "
+                "ambiguous",
+                "old_text matches %d locations; edit_file "
                 "replaces exactly one — add surrounding context to make the "
                 "match unique, or set replace_all=true" % count,
-                match_count=count)
+                match_count=count,
+            )
 
         if req.get("replace_all"):
             updated = content.replace(old, new)
@@ -445,12 +498,18 @@ def do_edit(req):
             count = 1
         if updated == content:
             return fail(
-                "noop", "edit is a no-op (old_text and new_text produce "
-                "identical content)")
+                "noop",
+                "edit is a no-op (old_text and new_text produce identical content)",
+            )
 
         try:
-            _atomic_write(parent_fd, name, updated, expected=info,
-                          expected_digest=old_digest if expected else None)
+            _atomic_write(
+                parent_fd,
+                name,
+                updated,
+                expected=info,
+                expected_digest=old_digest if expected else None,
+            )
         except StaleContent:
             try:
                 current = _sha256_open_at(parent_fd, name)
@@ -459,11 +518,20 @@ def do_edit(req):
             return _stale(expected, current)
 
         diff, added, removed = _bounded_diff(req["path"], content, updated)
-        return {"ok": True, "err_kind": "", "err": "", "data_b64": "",
-                "size": len(updated), "count": count,
-                "sha256": hashlib.sha256(updated).hexdigest(),
-                "old_sha256": old_digest, "match_count": count,
-                "added": added, "removed": removed, "diff": diff}
+        return {
+            "ok": True,
+            "err_kind": "",
+            "err": "",
+            "data_b64": "",
+            "size": len(updated),
+            "count": count,
+            "sha256": hashlib.sha256(updated).hexdigest(),
+            "old_sha256": old_digest,
+            "match_count": count,
+            "added": added,
+            "removed": removed,
+            "diff": diff,
+        }
     except FileNotFoundError:
         return fail("not_found", "file not found")
     except IsADirectoryError:
@@ -485,8 +553,12 @@ def main():
     except Exception as exc:
         print(json.dumps(fail("", "bad request: %s" % exc)))
         return
-    handler = {"read": do_read, "write": do_write, "edit": do_edit,
-               "bind_root": do_bind_root}.get(req.get("op"))
+    handler = {
+        "read": do_read,
+        "write": do_write,
+        "edit": do_edit,
+        "bind_root": do_bind_root,
+    }.get(req.get("op"))
     if handler is None:
         print(json.dumps(fail("", "unknown op: %r" % req.get("op"))))
         return

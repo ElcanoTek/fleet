@@ -28,8 +28,21 @@ concurrency:
   group: screenshots-${{ github.ref }}
   cancel-in-progress: true
 
+# Read-only, deliberately. This workflow has ONE job, and that job npm-installs
+# and runs Playwright — thousands of third-party packages — so `contents: write`
+# here was a repo-writable token handed to third-party code on every run.
+#
+# It bought nothing: the push it existed for cannot succeed. The `main` ruleset
+# carries a pull_request rule with current_user_can_bypass: never and no bypass
+# actors, so a direct push to main is refused regardless of token scope. The push
+# step is already written to warn rather than fail, so dropping the scope changes
+# the warning's wording and nothing else.
+#
+# If refreshing screenshots from CI is ever wanted for real, the shape is a
+# second job that needs: [screenshots], holds `contents: write` alone, runs no
+# third-party code, and opens a PR — not a direct push.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   screenshots:
@@ -50,10 +63,10 @@ jobs:
       ORCHESTRATOR_SERVER_URL: http://127.0.0.1:18000
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Node
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           # Read from web/.nvmrc so the deployed node major is declared once.
           node-version-file: web/.nvmrc
@@ -75,7 +88,7 @@ jobs:
         run: npm run test:e2e:screenshots || echo "::warning::GUI screenshot capture failed; keeping the existing images"
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           # Read from go.mod so the toolchain is declared once.
           go-version-file: go.mod
@@ -97,6 +110,14 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add docs/screenshots
           git commit -m "docs(screenshots): refresh GUI + TUI screenshots [skip ci]"
-          # main may require PRs; a rejected push warns rather than failing the run.
+          # The `main` ruleset carries a pull_request rule with
+          # current_user_can_bypass: never and no bypass actors, so a direct push
+          # to main CANNOT succeed — this is a permanent no-op, not an
+          # occasional one, and the [skip ci] in the commit message above means
+          # anything it did land would bypass CI on main. The workflow token is
+          # also read-only now (see the permissions note at the top), so this
+          # fails on scope first. Kept as a warning rather than an error so the
+          # capture half stays useful; do not "fix" it by widening either the
+          # ruleset or the token — refresh via a PR instead.
           git push origin HEAD:main \
-            || echo "::warning::could not push refreshed screenshots (is main protected against direct pushes? allow the github-actions bot, or refresh via PR). The committed baseline still serves."
+            || echo "::warning::could not push refreshed screenshots — the main ruleset requires a pull request, so this push is expected to fail. Refresh via PR; the committed baseline still serves."

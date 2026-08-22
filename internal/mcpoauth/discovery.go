@@ -6,8 +6,26 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 )
+
+// requireHTTPScheme refuses any URL that is not http:// or https:// before it
+// reaches an outbound request. Remote-derived discovery URLs land here (see
+// fetchJSON), and a file://, gopher:// or data:// pointer from a hostile server
+// should be rejected by name rather than left to the transport to decline.
+func requireHTTPScheme(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("parse discovery URL: %w", err)
+	}
+	switch u.Scheme {
+	case "http", "https":
+		return nil
+	default:
+		return fmt.Errorf("refusing discovery URL with scheme %q (only http/https)", u.Scheme)
+	}
+}
 
 // maxMetadataBytes caps a metadata/JSON response so a hostile server can't OOM
 // the host by streaming an unbounded body.
@@ -226,7 +244,18 @@ func verifyAuthServer(expectedIssuer string, as *AuthServerMetadata) error {
 }
 
 // fetchJSON GETs url and decodes a (size-limited) JSON body into out.
+//
+// The URLs reaching here are REMOTE-DERIVED — a WWW-Authenticate
+// `resource_metadata=` pointer, or a candidate built from a PRM-declared
+// `issuer` — so they are untrusted even though the operator typed the server
+// URL that led to them. SSRF is contained by SafeHTTPClient's resolve-then-dial
+// guard and its no-redirect policy, and http.Transport would refuse a non-HTTP
+// scheme anyway; the explicit check below is one line and makes that argument
+// airtight rather than dependent on the transport's behavior.
 func fetchJSON(ctx context.Context, httpClient *http.Client, url string, out any) error {
+	if err := requireHTTPScheme(url); err != nil {
+		return err
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err

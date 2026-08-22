@@ -140,7 +140,7 @@ is a no-op when SMTP isn't configured.
 # The template task must exist first (create it with trigger_type=webhook so the
 # cron engine never runs it; set allow_event_triggers=true to let event runs use
 # its connectors).
-fleet-admin sched trigger create \
+fleet sched trigger create \
   --task <template-task-uuid> \
   --slug weekly-deploy \
   --kind email \
@@ -150,9 +150,9 @@ fleet-admin sched trigger create \
   --max-attachments 3 --max-attachment-bytes 1048576 \
   [--template prompt.tmpl]     # optional Go text/template over {{.From}} {{.Subject}} {{.Text}} {{.HTML}} {{.To}}
 
-fleet-admin sched trigger list         # shows id, kind, slug, task
-fleet-admin sched trigger rotate <id>  # rotate the HMAC secret
-fleet-admin sched trigger delete <id>
+fleet sched trigger list         # shows id, kind, slug, task
+fleet sched trigger rotate <id>  # rotate the HMAC secret
+fleet sched trigger delete <id>
 ```
 
 The rendered prompt is what the spawned run receives. With no `--template`, a

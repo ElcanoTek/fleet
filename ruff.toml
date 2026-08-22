@@ -1,0 +1,91 @@
+# ruff — the Python lane of the lint gate.
+#
+# WHY THIS EXISTS: fleet has 13 Python files (the sandbox FileOp helper, the
+# python bridge, the bento-slides and data-profiler skill scripts, MCP test
+# servers, icon/doc generators) and until now NOTHING linted them. Go had
+# golangci-lint and the web tier had oxlint; Python had nothing, so its only
+# coverage was whatever CodeQL's code-quality suite happened to notice.
+#
+# That is the wrong tool for the job in both directions. CodeQL took ~40s to
+# report 28 note-level Python issues with no autofix, while ruff finds the same
+# class of thing in well under a second and fixes much of it. So the Python
+# quality lane is ruff's, and CodeQL keeps only its security queries (see
+# docs/CODEQL.md).
+#
+# RULE SELECTION IS DELIBERATELY NARROW, and the numbers behind that are worth
+# recording so nobody widens it by accident. Measured on this tree:
+#
+#   default (E4,E7,E9,F)                   ->   3 findings
+#   + B,SIM,S (bandit)                     ->  21 more, all fixed  <- the gate today
+#   E,F,W,I,UP,B,SIM,ISC,PLR,PLW,S         -> 333 findings
+#
+# What we gate on is the [lint] `select` at the bottom of this file:
+# E4, E7, E9, F, B, SIM, S. The middle line is the current gate; the third line
+# is the measurement that keeps the style tiers out.
+#
+# The 330-finding difference is almost entirely style churn, not defects:
+# 176 UP031 (%-format vs f-string), 43 PLR2004 (magic values), 35 E501 (line
+# length). Gating on that would mean a 300-commit reformat for no correctness
+# gain, so it is out of scope here rather than silently enabled.
+#
+# One rule was considered and deliberately REJECTED, because its only findings
+# in this tree are correct code:
+#
+#   PLR0124 (name compared with itself) — its 3 hits in bento_pdf.py are the
+#     idiomatic NaN test (`value != value` is true only for NaN). CodeQL's
+#     py/comparison-of-identical-expressions flagged the same 3. Enabling it
+#     would mean three `# noqa` comments on correct code.
+#
+# B, SIM and S started here as measured-but-deferred (21 findings) and were then
+# fixed and ENABLED rather than left as a documented backlog: the two zip()
+# sites got strict=True (both provably equal-length — one appends to both lists
+# in lockstep, the other is behind an explicit len(row) != len(cols) guard), the
+# unclosed NamedTemporaryFile was restructured into its with-block, the
+# deliberate best-effort try/except-pass sites became explicit
+# contextlib.suppress with the intent stated at each, and the one subprocess
+# call carries a reasoned `# noqa: S603` (argv is sys.executable plus internal
+# literals; nothing model- or user-controlled). The bandit tier (S) firing on a
+# NEW line is therefore a real question to answer, not pre-existing noise.
+#
+# The gate is therefore "clean today, and stays clean": three real findings were
+# fixed to get here (an unused import, a byte-identical duplicate function
+# definition, and a lambda assignment), so a NEW default-rule violation is a
+# real regression rather than noise in a backlog.
+#
+# FORMATTING IS ALSO GATED (`ruff format --check`, in CI and `make lint`). The
+# whole tree was ruff-formatted in one commit — a 9-file, ~3.7k-line diff kept
+# separate from any behavioural change — and validated against the full Go test
+# suite (the bento/fileops golden tests exercise these scripts). From here a
+# format failure means one new file, fixed by running `ruff format .`.
+
+# Match the lowest Python the sandbox image and the skill scripts must run on.
+# Declared here so the rules that are version-sensitive (pyupgrade et al, if
+# ever enabled) have one declaration point rather than a guess.
+target-version = "py311"
+
+line-length = 88
+
+exclude = [
+    "node_modules",
+    "web/.next",
+    ".git",
+]
+
+[lint]
+# The default rule set: pycodestyle errors (E4 imports, E7 statements,
+# E9 syntax/IO) plus Pyflakes (F — undefined names, unused imports, redefined
+# names, unused locals). This is the "is it actually broken" tier.
+#
+# Plus three families that were measured, fixed, and then ENABLED rather than
+# left as a documented backlog (see the header): B (flake8-bugbear), SIM
+# (flake8-simplify) and S (bandit — the security tier, which is why an S finding
+# on a new line is a real question to answer rather than pre-existing noise).
+# The style tiers (E501, UP, PLR, …) stay out; the header records why.
+select = ["E4", "E7", "E9", "F", "B", "SIM", "S"]
+
+[lint.per-file-ignores]
+# MCP test servers and testdata fixtures are deliberately minimal stand-ins —
+# they exist to be spawned and to misbehave in specific ways, so an unused
+# import or an odd construct there can be the point of the fixture.
+"internal/mcp/testdata/*.py" = ["F401"]
+"cmd/fleet/testdata/*.py" = ["F401"]

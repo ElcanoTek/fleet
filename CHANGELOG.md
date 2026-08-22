@@ -19,6 +19,423 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Three own-rows authorization holes on the task surface.** The read path for
+  task rows was narrowed to own rows in #1082 and run logs in #980; three
+  surfaces never got the same treatment and authorized on a *permission* alone,
+  so any client-role principal reached every principal's rows:
+
+  - `GET /tasks/paused` — `ListPausedTasks` selects on status alone with no
+    principal predicate in SQL, and the projection carries each task's prompt.
+    Its siblings (`/tasks/export`, `/tasks/upcoming`) both call `visibleTasks`;
+    this one did not. It leaked other principals' paused prompts and their task
+    UUIDs.
+  - `PUT /tasks/{id}` and `POST /tasks/{id}/tags` — loaded the task with the
+    unscoped `GetTask` and never checked ownership, so a client-role principal
+    could rewrite a teammate's pending run: `prompt`, `model`, `mcp_selection`
+    and `credential_allowlist` included. Only `run_if` was gated (admin-only).
+  - `POST /tasks/{id}/feedback` and `GET /tasks/{id}/learned-instructions` —
+    `taskFromPath` is lookup-only by contract ("a handler that needs an
+    authorization decision makes it on the returned task") and neither caller
+    made one. A down-vote with an attacker-authored critique fed `maybeDistill`,
+    which mints a proposal from the victim's prompt at unmetered model spend;
+    the GET disclosed their learned instructions.
+
+  The write gate is a new `taskWritableByPrincipal`, deliberately **not**
+  `principal.ownsTask`: `ownsTask` resolves through `ownerID()`, which is nil for
+  every API-key principal, so it would deny a scoped intake-app key the right to
+  edit the task it just created. `taskCreatedByPrincipal` matches a creating user
+  **or** a creating key (`CreatedByKeyID`) — the model #980/#1082 established. A
+  write surface must be no looser than the read surface guarding the same row.
+  `TestScopedAPIKeyAuthorization` previously asserted "client key can edit an
+  editable task" against an unattributed row, which *was* the vulnerable
+  behaviour; it is split into the owned case (must keep working — the intake-app
+  path) and the unowned case (must 403). Every fix is mutation-tested: stripped,
+  the tests fail with the exploit visible.
+
+- **Secret material and untrusted text reaching error strings, logs and the
+  persisted transcript**, from the same audit sweep:
+
+  - `internal/config/config.go`: `ValidateScheduled` interpolated the first 6
+    bytes of `OPENROUTER_API_KEY` into a validation error — the only place in the
+    tree where secret material reached an error string. Removed. Its doc comment
+    also claimed "Called at startup" and has no production caller; corrected.
+  - `internal/agent/scheduled.go`: run-error strings now pass through
+    `agentcore.RedactSecrets` before both the log and the **persisted
+    transcript**. Tool output, the stream sink, hooks and the session log were
+    already scrubbed; run errors were the one path that skipped it, and the
+    transcript is the larger surface.
+  - Log-injection sinks carrying genuinely untrusted text are now `logSafe`/`%q`,
+    matching each line's already-sanitized sibling: the task-create log
+    (`task.Prompt`), the pre-validation client attachment path on the reject
+    branches, the client-echoed attachment `Name`, the upload filename, and the
+    API-key name.
+  - `web/e2e/test-auth-key.ts`: the Ed25519 private key was written to a fully
+    predictable path in the world-writable temp dir at default `0644`. Now
+    `O_EXCL` at `0600` with random bytes in the sibling name.
+
+- **Two input-validation gaps with a shell/URL surface.**
+  `internal/mcpoauth/discovery.go` now refuses a non-`http(s)` scheme on the
+  remote-derived discovery URLs (a `WWW-Authenticate` `resource_metadata`
+  pointer, a PRM-declared issuer) *before* the request — already contained by
+  `SafeHTTPClient` and the transport, so this makes the argument explicit rather
+  than dependent on transport behaviour. And `internal/sched/models/models.go`
+  validates `WorktreeConfig.BaseBranch`: it is the trailing positional of
+  `git worktree add -b <b> <path> <base>` with no `--` separator, so a
+  leading-dash value was parsed by git as an option — and `worktree_config` is
+  settable by any task creator, unlike `run_if`.
+
+- **Two stale claims that an auditor would have read as capabilities.**
+  `models.MaxLogSubmissionSize` declared a 24 MB body cap that **nothing
+  enforced** — the cap actually applied is `MaxJSONBodySize` (1 MB, wired through
+  `BodySizeLimitMiddleware`), so the real posture was 24× stricter than the
+  constant claimed. `config.DefaultFromEmail`'s doc comment called it "the
+  fallback From address for outgoing mail" with no code path consuming it. Both
+  deleted rather than left standing, along with four other exported-but-unreached
+  identifiers (`mcpoauth.IsInvalidClient`, `apikeys.Manager.LogAction` — worth
+  naming because it reads as API-key *audit* surface — and the two halves of the
+  retired v1 remote-worker protocol, `TaskAssignment`/`LogSubmission`) and the
+  tree's only commented-out code block. `golangci-lint`'s `unused` already makes
+  unexported dead code structurally zero, which is why every deletion here is an
+  exported identifier in `internal/` — the class `unused` deliberately does not
+  report. Confirmed with `deadcode -test -tags fleet_host_executor ./...`.
+
+- **CI permission gaps and an alarm that ignored the failure it was built for.**
+  `scan-cron-alarm.yml` only fired on `conclusion == 'failure'`, which ignores
+  `startup_failure` — the exact failure its own header describes as the
+  motivating incident, and the one where *no scanning ran at all* — and
+  `timed_out`, which matters given codeql.yml caps at 30 minutes and semgrep.yml
+  at 15. It now alarms on any conclusion that is not `success` or `skipped`, and
+  the daily real-model canary joins the watched list (it had no alarm at all).
+  Noted in the file: the watcher matches on workflow **display name**, so
+  renaming `name:` disarms it. Separately, `ci.yml` carried `pull-requests: read`
+  at *workflow* level for golangci-lint-action's `only-new-issues`, which is
+  explicitly `false` — a scope with no consumer that nonetheless reached every
+  job not overriding it, including `web`, `playwright` and `e2e-live`, which
+  npm-install and run thousands of third-party packages.
+- **The CodeQL gate was armed on a measurement that could not mean what it was
+  read to mean, and it deadlocked `dev`.** The `Fail on findings` step shipped
+  with a threshold of *any finding at any severity*, justified by the security
+  suite reporting zero across all four languages. That zero was real and it was
+  measured — on **Dev CI run 525, a `pull_request` event**. On PR events the
+  CodeQL action runs **diff-informed**: it builds the full database, evaluates
+  every query, and then reports only results whose location falls inside the PR's
+  diff. Run 525's own log says both halves (`Persisted 204 diff range(s) across
+  43 file(s)`; `file coverage information is only enabled when analyzing the
+  default branch and protected branches`). It measured the **diff**, not the tree.
+
+  The first full-tree evaluation was therefore the **push** that merged that work:
+  **Dev CI run 527**, which reported **38 Go and 17 javascript-typescript
+  findings** and turned `Dev gate` red — with no PR-shaped way out, since a PR
+  into `dev` is scanned diff-informed and comes back green while `dev` itself
+  stays red. The generalisable rule, now written into the docs: **a PR-event
+  CodeQL run certifies a diff, not a tree.**
+
+  All 55 were triaged individually against the code. **Four were reachable and are
+  fixed in code, not waived:**
+
+  - `internal/sched/handlers/handlers.go` logged `task.Prompt` unsanitized on the
+    task-**create** path while the **update** path's twin line was already wrapped
+    in `logSafe`. `POST /tasks` is reachable with a scoped `create_task` key, so
+    this was genuine log forgery.
+  - `internal/httpapi/attachments.go` logged the raw, pre-validation client
+    attachment path with `%s` on the two branches where the containment guard had
+    just *failed* — precisely where the value is hostile by construction.
+  - `internal/agent/session.go` logged the client-echoed attachment `Name`, which,
+    unlike `Path`, is never re-sanitized on the `/chat` path.
+  - `web/e2e/test-auth-key.ts` wrote an Ed25519 private key to a fully predictable
+    path in the world-writable temp dir at default `0644`.
+
+  **The gate was then redesigned rather than switched off**
+  ([ADR-0048](docs/adr/0048-codeql-severity-gating.md)). A finding blocks when it
+  is unwaived and either its rule publishes `security-severity >= 7.0` (CodeQL's
+  own High/Critical cut) or, for a rule publishing no security-severity, its SARIF
+  level is `error`/`warning`. Level is deliberately **not** used for rules that do
+  publish a security-severity: nearly every CodeQL security query is
+  `@problem.severity error` — `go/log-injection` at 6.1 included — so banding on
+  level would block on all 23 log-injection findings and reproduce the deadlock.
+  Below the band is **advisory**: printed and uploaded to the Security tab, not
+  blocking.
+
+  The remaining 51 findings live in `.github/codeql-accepted-findings.json`, a
+  register of accepted `(rule, file)` pairs each with a mandatory written reason.
+  Per-**file** is the point: a `query-filters` exclude would switch a
+  security-severity 9.1 query (`go/request-forgery`) off repo-wide, while a
+  register entry leaves it live everywhere else. Severity alone does not separate
+  the true from the false positives here — that 9.1 fires on the deliberate `@url`
+  fetch tool behind `internal/netguard`'s resolve-then-dial SSRF guard, and a 7.5
+  `go/weak-sensitive-data-hashing` fires on SHA-256 used as a lookup index over a
+  32-byte `crypto/rand` token — which is exactly why the band ships *with* a
+  reviewed register rather than instead of one. An in-source `// codeql[rule-id]`
+  comment waives too.
+
+  One classifier, `.github/codeql-gate.jq`, is consumed by **both** the summary
+  and the gate, so the report and the block can never disagree about what
+  "blocking" means; the job log prints three tiers (BLOCKING / ACCEPTED by name /
+  ADVISORY). It **fails closed** on a missing register, a missing filter file,
+  unparseable SARIF, and — a vacuity check — findings present with **zero rule
+  metadata resolved**. That last one is not hypothetical: CodeQL writes query
+  metadata to `tool.extensions[].rules[]`, not `tool.driver.rules[]`, and a first
+  cut of the filter read only the driver, resolved nothing, scored every finding
+  at severity 0 and reported "0 blocking" over a tree that was not clean.
+  `scripts/check_codeql_register_test.go` keeps the register honest in `make test`.
+
+- **Two action pins were the annotated tag object of a mutable major tag, not a
+  commit.** `git ls-remote` returns the *tag object's* SHA for `refs/tags/v4` on a
+  repository that publishes annotated tags — for `github/codeql-action` that is
+  `4c0873ef…`, while the commit (`refs/tags/v4^{}`) is `db488dde…`. A pin taken
+  from the unpeeled form is a 40-hex string that passes every "is it a SHA" check
+  and still resolves to a **moving major tag**, which is the exact defect the
+  pinning exercise existed to remove. Two distinct pins were in that state across
+  7 usages; both are repinned to the peeled commits with exact `# vX.Y.Z`
+  comments, and `scripts/check_action_pins_test.go` now asserts the shape so the
+  next pin cannot be taken from the wrong ref. Count for the record: **13**
+  workflow files, 12 of which reference an action, **53** third-party action
+  references, all SHA-pinned.
+
+- **`ci.yml`'s docs-only classifier skipped the suite over compiled product
+  content, and `CI gate` reported green over it.** The classifier matched `*.md`
+  at any depth plus all of `docs/*`. `*` spans `/` in a shell `case` pattern, so
+  that swallowed the `go:embed`'d `internal/clientconfig/builtin_skills/*/SKILL.md`
+  files (asserted by three test files), the shipped
+  `config/default/system_prompts/{default,chat}.md` — which *are* the system
+  prompts `docs/PROMPT-CACHE-CONTRACT.md` exists to protect — and
+  `docs/openapi.yaml`, which `cmd/fleet/openapi_drift_test.go` asserts against the
+  Go models, plus `docs/scripts/*.py` and `docs/img/*.py`, which are inside the
+  ruff, Semgrep `p/python` and CodeQL python scopes. A PR touching only a shipped
+  prompt or the OpenAPI spec therefore skipped the tests that validate it while
+  the gate went green. Narrowed to an explicit prose allow-list, and **`ci-gate`
+  now refuses to pass over a `skipped` job unless the classifier actually said
+  docs-only** — previously a skip from any cause was read as the docs-only case.
+
+- **Dependabot could rewrite CI on a branch with no required checks.**
+  `.github/dependabot.yml` targets `dev` for the `github-actions` ecosystem daily
+  with **no `cooldown`** (Dependabot supports `cooldown` for gomod and npm only),
+  `auto-merge-dependabot.yml` auto-merged patch bumps, and a `github-actions`
+  bump *is a rewrite of `.github/workflows/*`*. Since `gh pr merge --auto` only
+  holds a merge for checks that are **required**, and the `dev` ruleset requires
+  none, a same-day third-party action patch could land on `dev` with no CI and no
+  review. Mitigated on the workflow side: the `github_actions` ecosystem is now
+  **excluded from auto-merge at any bump level**, the workflow carries an explicit
+  `branches: [main, dev]` filter so its central assumption cannot silently stop
+  holding, and its write scopes moved to the job. **The remaining fix is a
+  repo-settings action nobody can perform from a PR** — adding `Dev gate` to the
+  `dev` ruleset's required status checks — and it is now documented as an open
+  item in [`docs/SCANNING.md`](docs/SCANNING.md) ("Known gaps") rather than
+  implied away.
+
+- **`fleet_ref` is validated against an allow-list shape before checkout** in
+  `build-sandbox-image.yml` and `publish-sandbox-image.yml`. The `pin` step
+  refuses an empty value, any character outside `[A-Za-z0-9._/-]` (so a newline
+  cannot smuggle a second step-output line), an implausible ref name,
+  `refs/pull/*` / `pull/*`, and a raw commit SHA — fork PR commits are reachable
+  by SHA from this repository, so only named refs are accepted. Both workflows
+  execute the checked-out build script and one of them holds `packages: write`.
+
+- **Documentation corrected against the shipped workflows** for an
+  enterprise-security review. The scanner docs had accumulated claims that were
+  true of an intermediate state and false of the merged one: CodeQL "fails on any
+  finding" and "zero findings across all four languages"; `docs/CODEQL.md`'s
+  entire Triggers section (it documented `push`/`pull_request` triggers the
+  workflow does not have, and justified the missing `push` on `dev` with the
+  reasoning that the PR run analyzes "identical content" — the very trap that
+  broke `dev`); `docs/TESTING.md` claiming the fast lane *skips* CodeQL when it in
+  fact runs both scanners; the Grype threshold in three places; "12 workflows";
+  and `ruff.toml`'s own gate marker contradicting its `select`. `SECURITY.md`
+  gained the SAST section it had never had, plus the npm CVE gate it had omitted,
+  and the `dev`-ruleset gap is now stated wherever a doc claims something
+  "blocks".
+
+- **Scanner follow-ups from the same effort: rule families widened and fixed,
+  CodeQL at `security-extended`, grype tightened, override canary, cron alarms,
+  and one reasoned rejection.**
+
+  - **ruff `B`/`SIM`/`S` (bandit) enabled after fixing all 21 measured
+    findings.** Both `zip()` sites got `strict=True` — each provably
+    equal-length (one appends to both lists in lockstep; the other sits behind
+    an explicit `len(row) != len(cols)` guard) — so a future desync fails loud
+    instead of silently truncating. The unclosed `NamedTemporaryFile` in
+    bento_doc.py moved inside its `with`. Fourteen deliberate best-effort
+    `try/except-pass` sites (kernel cleanup, duck-typed pandas/numpy probes,
+    unlink-on-failure paths) became explicit `contextlib.suppress` with the
+    intent stated at each. The one `subprocess.Popen` carries a reasoned
+    `# noqa: S603` (argv is `sys.executable` plus internal literals;
+    mutation-tested — stripping the noqa re-fires the rule). Full Go suite
+    green on the result.
+
+  - **CodeQL widened to the `security-extended` suite** on all four languages.
+    Its one `actions`-language finding was real:
+    `actions/untrusted-checkout/medium` on `build-sandbox-image.yml`'s
+    `fleet_ref`-fed checkout. Fixed, not waived (the `actions` language has no
+    `AlertSuppression.ql`, so a comment waiver does not even exist) — see the
+    `fleet_ref` entry above, and note that the identical hardening went into
+    `publish-sandbox-image.yml`, the *unflagged* twin that holds `packages: write`
+    and escaped the name-heuristic query only because its ref plumbing was named
+    differently. The suite's no-findings result in CI (Dev CI run 525) was a
+    `pull_request` run and is therefore a statement about that diff, not the tree
+    — see the first entry above for what the tree actually held. The
+    CodeQL/Semgrep log summaries also now print **`file:line` per finding** plus a
+    database file count as the coverage line, and the override canary is invoked
+    via `$GITHUB_WORKSPACE` so it survives the job's `working-directory: web`.
+
+  - **Grype gate tightened to fixable CRITICAL + HIGH**, after measuring: the
+    published sandbox image carries zero fixable Critical/High RPM findings (its
+    only fixable findings are two Medium openssh advisories, which the next
+    routine image rebuild picks up). The policy stays **RPM-only**
+    (`.artifact.type == "rpm"`), because the Python `dist-info` Grype catalogs
+    alongside Fedora's RPMs carries upstream versions and advisories — gating on
+    it produced pip wheels layered over distro-owned files. Those records still
+    upload to SARIF. Policy change mutation-tested in three directions: real scan
+    passes, injected fixable High fails, injected fixable Medium still passes.
+
+  - **`scripts/check-npm-overrides.sh`**: the rampart sharp/adm-zip overrides
+    are forks of upstream's intent, correct only while upstream is broken — so
+    both CI lanes now fail with removal instructions the day
+    `@huggingface/transformers` / `onnxruntime-node` publish ranges reaching
+    the patched lines. Registry flake = skip with a notice, never a verdict.
+    Mutation-tested in both directions.
+
+  - **A red scheduled scan files an issue** (all four lanes; deduped by title,
+    re-failures comment). A cron failure has no PR to surface it — the rot
+    pattern that let the CodeQL toolchain break sit red for weeks. For the two
+    reusable workflows the alarm lives in `scan-cron-alarm.yml`, a
+    `workflow_run` watcher, because a called workflow may not request
+    permissions its caller did not grant — the check fires at PLAN time, before
+    any `if:` can skip the job, and the first attempt (an `issues: write` job
+    inside codeql.yml/semgrep.yml) startup-failed the entire calling Dev CI
+    run. Verified fixed on the next run.
+
+  - **Semgrep rule vendoring investigated and rejected on license grounds**:
+    the Semgrep Rules License v1.0 permits internal use only and states "This
+    license does not allow you to distribute the rules" — committing them to
+    this public MIT repo would be redistribution. The binary stays pinned; the
+    rules stay registry-fetched with the failure mode documented.
+
+- **The scanning stack, as shipped.** This entry supersedes four earlier ones that
+  described intermediate states of the same work and contradicted each other on
+  every threshold that matters — whether the scanners gate through `ci-gate` or
+  stay advisory, whether `ruff format` gates, whether Semgrep ships one pack or
+  four, and whether CodeQL's code-quality suite was restored or dropped. The
+  shipped end state, stated once:
+
+  - **Python had no linter at all, and ruff is now a blocking gate.** Go had
+    golangci-lint and the web tier had oxlint; the tree's 13 Python files — the
+    sandbox FileOp helper, the python bridge, the bento-slides and data-profiler
+    skill scripts, MCP test servers, icon/doc generators — had nothing. Rule
+    selection is narrow on purpose and `ruff.toml` records the numbers:
+    `E4,E7,E9,F` found 3 real findings (an unused import, a lambda assignment, and
+    a **byte-identical duplicate `has_guard` definition** in `bento_doc.py` where
+    the second copy silently shadowed the first); `B`/`SIM`/`S` found 21 more, all
+    fixed and those families then enabled; a broad selection finds 333, of which
+    176 are `%`-format style and 43 are magic values, so the style tiers stay out.
+    **`ruff format --check` also gates** — the whole tree was ruff-formatted in one
+    dedicated commit (9 of the 13 files, ~3.7k lines, validated by the full Go
+    suite, since the bento/fileops golden tests exercise these scripts). `F401` is
+    waived for `internal/mcp/testdata/*.py` and `cmd/fleet/testdata/*.py`, where an
+    unused import can be the point of the fixture.
+
+  - **CodeQL narrowed to security queries only — the code-quality suite was
+    enabled, measured, and dropped.** It produced 32 findings, every one
+    note-level: for Go and the web tier it duplicated golangci-lint and oxlint,
+    which already block; 28 of the 32 were Python, now ruff's job at a fraction of
+    the runtime and with autofix; and 3 were false positives on correct code
+    (`value != value`, the idiomatic NaN test). CodeQL keeps the thing nothing else
+    here can do — interprocedural taint, which is the actual shape of "a credential
+    must not reach a log sink".
+
+  - **Semgrep runs all four packs and blocks** — `p/github-actions`, `p/golang`,
+    `p/javascript`, `p/python`, with `--error` and no `continue-on-error`. The 6
+    non-Actions findings are false positives, suppressed at the line with
+    `nosemgrep: <rule-id>` plus a reason: three were *already* triaged and
+    suppressed for gosec, and one (`0o644` for a sandbox directory) would have been
+    a security regression if followed. Every suppression was mutation-tested —
+    removing it makes the finding reappear, so a green scan means the waivers work
+    rather than the rules having silently stopped matching. `p/github-actions` also
+    found the one real class nothing else here checks: **51 actions referenced by a
+    mutable tag**, all now SHA-pinned (see the pin correction above).
+
+  - **`npm audit` is a blocking gate** for both npm trees, lockfile-only and
+    failing on any severity — the npm counterpart of the govulncheck gate. `web/`
+    was already clean. `scripts/rampart-service` **had no lockfile at all**, and
+    generating one exposed **5 high-severity vulnerabilities** it had been hiding:
+    `sharp <0.35.0` (four libvips CVEs) and `adm-zip <0.6.0`
+    (GHSA-xcpc-8h2w-3j85) via `onnxruntime-node`. No upstream release fixes either
+    — latest `@huggingface/transformers` still pins `sharp ^0.34.5`, and npm's
+    suggested "fix" was a breaking transformers downgrade — so the package carries
+    `overrides` to `sharp ^0.35.3` and `adm-zip ^0.6.0`, each the release
+    immediately after the vulnerable line. The overridden stack was installed and
+    load-tested, not just resolved: sharp renders a PNG through the new libvips,
+    transformers loads on it, rampart exports its API, adm-zip round-trips a zip.
+    Both trees now audit at 0.
+
+  - **Gate wiring.** `codeql.yml` and `semgrep.yml` are **reusable workflows**
+    (`on: workflow_call`) that ci.yml and dev-ci.yml call as jobs, and those jobs
+    sit in `ci-gate`'s / `Dev gate`'s `needs` — so a scanner finding reaches the
+    aggregate check with no settings change. Their own push/pull_request triggers
+    are removed (nothing runs twice); the weekly re-scan crons and a
+    `workflow_dispatch` stay. An earlier entry here claimed this needed a
+    branch-protection click, reasoning from "`needs` cannot cross workflow files":
+    true of a job's `needs`, but a `workflow_call` brings the called jobs into the
+    caller's file. **Whether that red check blocks a merge is a separate,
+    branch-dependent fact** — `CI gate` is required on `main`; the `dev` ruleset
+    requires no status checks at all.
+
+  - **All three semgrep parse errors fixed**, so no file is partially covered:
+    `${{ steps.build.outcome }}` interpolated into a `run:` script in
+    build-sandbox-image.yml (moved to `env:` — also the injection-safe form), a
+    `${tag:-(…)}` expansion default whose bare paren choked the bash sub-parser
+    (hoisted to a plain assignment), and an inline `import("@playwright/test")`
+    type in fixtures.ts (now a named `import type`; web lint, tsc and all 1104
+    vitest tests pass on it). The scanners' coverage lines read **0 parse/scan
+    errors**.
+
+  - Two knock-on fixes found while doing this: SHA pinning broke two regexes in
+    `scripts/check_versions_test.go` that matched `golangci-lint-action@v\d+`, and
+    they fail *open* by skipping — so they were widened to tolerate a pinned ref
+    plus its trailing version comment, and mutation-tested to confirm they still
+    bite. And a standalone `nosemgrep` comment inside a Go import block breaks
+    `goimports`, so that one waiver is a trailing comment instead.
+
+- **CodeQL had stopped analyzing the repo's Go code, and then stopped analyzing
+  anything.** Default setup's Go analysis failed on every main-targeting PR from
+  the Go 1.27 bump (#1240, promoted in #1242) onward — it installed the Go its
+  extractor was built with and pinned `GOTOOLCHAIN=local`, so against a `go.mod`
+  requiring 1.27 it could neither use nor fetch a workable toolchain:
+
+  ```
+  go: go.mod requires go >= 1.27.0 (running go 1.26.6; GOTOOLCHAIN=local)
+  Extraction failed for all discovered Go projects.
+  CodeQL job status was configuration error.
+  ```
+
+  The failure was red but never blocking (`ci-gate` is the only required check on
+  main), so it was annotated in promote commit messages and lived on. Default
+  setup is zero-config, with no Go version input and no env, so there was nothing
+  to fix in place; switching it off to replace it left the repo scanning nothing
+  at all in the interim.
+
+  Replaced with an advanced-setup workflow, `.github/workflows/codeql.yml`, which
+  restores security analysis over go, python, javascript-typescript and actions,
+  and resolves Go's interpreter from `go.mod` via `actions/setup-go` — never a
+  literal version, the bug class #1240 and #1241 already fixed twice for node.
+  (The code-quality suite was also restored at this point, then measured and
+  dropped — see "The scanning stack, as shipped" above for where that landed.)
+
+  Two things the first cut got wrong, both of which ran **green**:
+  `analysis-kinds` turns out to be GitHub-internal and unusable in a custom
+  workflow (it logged `##[error]` and silently continued with security only), and
+  Go extraction missed exactly one file — `internal/sandbox/host.go`, the
+  unsandboxed host executor, invisible to the default build behind
+  `//go:build fleet_host_executor`. Fixed with `queries: code-quality` (at the
+  time) and `GOFLAGS: -tags=fleet_host_executor`, the same tag `ci.yml` and
+  `dev-ci.yml` already pass to `go vet` and `go test`.
+
+  Verified from the extractor's own output rather than the check mark:
+  `extraction succeeded for all 2 discovered project(s)`, 916 packages, 426 `.go`
+  files including `host.go`, and distinct queries evaluated rising from 72→116
+  (go), 90→292 (python) and 178→374 (javascript-typescript) as the quality suite
+  came in, with `actions` unchanged at 36 by design. See
+  [`docs/CODEQL.md`](docs/CODEQL.md).
+
 - **`fleet update` built the web tier on the node it had just refused.** Every
   update on a Fedora box printed `✓ web tier will build+run on /usr/bin/node-24
   (v24.x)` and then, a few lines later, npm's own rejection of that claim:

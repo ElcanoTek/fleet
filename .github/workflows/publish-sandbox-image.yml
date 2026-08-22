@@ -215,16 +215,65 @@ jobs:
       SHA: ${{ github.sha }}
     steps:
       - name: Checkout caller repo
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # The build script lives in fleet core; a client-config caller doesn't
       # have it. Checking it out into a subdir keeps ONE canonical builder
       # (same manifest parsing, same flags) instead of a drifting copy per repo.
+      # fleet_ref chooses which ref of ElcanoTek/fleet the BUILD SCRIPT below is
+      # taken from — and that script is then EXECUTED. Every ref in this repo is
+      # collaborator-written except refs/pull/* (fork PRs), so those are exactly
+      # the refs that would let non-collaborator code run here; refuse them
+      # before the checkout. The checkout then consumes this step's validated
+      # output rather than the raw input. (Found via CodeQL
+      # actions/untrusted-checkout under security-extended; the same pattern in
+      # build-sandbox-image.yml was flagged; this file escaped both query
+      # variants despite holding packages: write — the MORE dangerous twin.)
+      - name: Pin fleet_ref to collaborator-controlled refs
+        id: pin
+        env:
+          REQUESTED: ${{ inputs.fleet_ref || 'main' }}
+        run: |
+          set -euo pipefail
+          # ALLOW-LIST, not a deny-list. The previous deny-list (`refs/pull/*|pull/*|-*`)
+          # had two holes, both of which this closes by construction:
+          #
+          #  1. GITHUB_OUTPUT newline injection. A workflow_call string input may contain
+          #     newlines, and `printf 'resolved=%s\n'` wrote it unsanitized, so
+          #     `fleet_ref: "main\nresolved=refs/pull/1/head"` matched no deny pattern
+          #     (the string starts "main"), exited 0, and emitted TWO `resolved=` lines —
+          #     last-wins gave the attacker the ref. The same primitive could forge any
+          #     step output. The character class below admits no newline, so the value
+          #     cannot carry a second assignment.
+          #  2. A raw commit SHA. "Every ref in this repo is collaborator-written except
+          #     refs/pull/*" is true of NAMED REFS and false of reachable COMMITS: GitHub
+          #     keeps fork-PR commits in the base repo's object store and
+          #     actions/checkout will happily fetch a bare SHA. So a bare hex SHA is
+          #     refused too — pass a branch or tag name, which only a collaborator can
+          #     create.
+          case "$REQUESTED" in
+            "")
+              echo "::error::fleet_ref is empty"; exit 1 ;;
+            *[!a-zA-Z0-9._/-]*)
+              echo "::error::fleet_ref contains a character outside [A-Za-z0-9._/-] (newline, space or shell metacharacter). Refused before checkout."; exit 1 ;;
+            -*|*..*|*//*)
+              echo "::error::fleet_ref '$REQUESTED' is not a plausible ref name"; exit 1 ;;
+            refs/pull/*|pull/*)
+              echo "::error::fleet_ref '$REQUESTED' is refused: pull-request refs carry fork-controlled code, and this workflow executes the checked-out build script."; exit 1 ;;
+          esac
+          # Refuse a bare commit SHA (see 2 above). A ref name that happens to be all-hex
+          # and >=7 chars must be given in its refs/heads/ or refs/tags/ form.
+          if [ -z "$(printf '%s' "$REQUESTED" | tr -d '0-9a-fA-F')" ] && [ "${#REQUESTED}" -ge 7 ]; then
+            echo "::error::fleet_ref '$REQUESTED' looks like a raw commit SHA. Fork pull-request commits are reachable by SHA from this repository, so only named refs are accepted (e.g. main, refs/heads/x, v1.2.3)."
+            exit 1
+          fi
+          printf 'resolved=%s\n' "$REQUESTED" >> "$GITHUB_OUTPUT"
+
       - name: Checkout fleet (build script)
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ElcanoTek/fleet
-          ref: ${{ inputs.fleet_ref || 'main' }}
+          ref: ${{ steps.pin.outputs.resolved }}
           path: .fleet-core
           sparse-checkout: |
             scripts/build-sandbox-image.sh

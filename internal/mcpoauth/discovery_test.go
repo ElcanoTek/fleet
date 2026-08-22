@@ -227,3 +227,40 @@ func TestRegisterDCR(t *testing.T) {
 		t.Error("Register accepted an empty registration endpoint")
 	}
 }
+
+// TestFetchJSONRefusesNonHTTPScheme pins the scheme guard on the remote-derived
+// discovery URLs. A hostile MCP server controls the WWW-Authenticate
+// `resource_metadata=` pointer and the PRM-declared `issuer`, so it chooses the
+// string that reaches fetchJSON. SafeHTTPClient's dialer and http.Transport both
+// already decline a non-HTTP scheme; this asserts we refuse it by name first, so
+// the containment argument does not rest on transport behavior.
+func TestFetchJSONRefusesNonHTTPScheme(t *testing.T) {
+	for _, raw := range []string{
+		"file:///etc/passwd",
+		"gopher://127.0.0.1:70/x",
+		"data:application/json,{}",
+		"ftp://example.com/meta.json",
+	} {
+		var out map[string]any
+		err := fetchJSON(context.Background(), http.DefaultClient, raw, &out)
+		if err == nil {
+			t.Fatalf("fetchJSON(%q) = nil error, want refusal", raw)
+		}
+		if !strings.Contains(err.Error(), "only http/https") {
+			t.Fatalf("fetchJSON(%q) error = %v, want a scheme refusal", raw, err)
+		}
+	}
+}
+
+// TestRequireHTTPSchemeAcceptsHTTPAndHTTPS is the negative half: the guard must
+// not reject the two schemes discovery legitimately uses.
+func TestRequireHTTPSchemeAcceptsHTTPAndHTTPS(t *testing.T) {
+	for _, raw := range []string{
+		"http://localhost:8080/.well-known/oauth-protected-resource",
+		"https://example.com/.well-known/openid-configuration",
+	} {
+		if err := requireHTTPScheme(raw); err != nil {
+			t.Fatalf("requireHTTPScheme(%q) = %v, want nil", raw, err)
+		}
+	}
+}

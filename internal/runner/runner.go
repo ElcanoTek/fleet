@@ -25,7 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"math/rand/v2"
+	"math/rand/v2" // nosemgrep: go.lang.security.audit.crypto.math_random.math-random-used -- used once, for +/-10% jitter on a retry interval (see rand.Int64N below). Nothing here is a secret, a token, or an identity; crypto/rand would only make backoff slower.
 	"os"
 	"strconv"
 	"strings"

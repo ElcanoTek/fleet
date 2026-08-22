@@ -154,19 +154,25 @@ func TestCreateTaskRunIfRequiresAdminPermission(t *testing.T) {
 func TestUpdateTaskRunIfPersistsAndNormalizes(t *testing.T) {
 	r, keyMgr, store := setupRunIfAuthz(t)
 
-	clientKey := mustCreateRoleKey(t, keyMgr, "client")
+	clientKeyID, clientKey := mustCreateRoleKeyWithID(t, keyMgr, "client")
 
 	// The gated tasks are seeded SCHEDULED: that is where a gate normally lives
 	// (models.RunIf's enforcement contract parks every gated task on the
 	// scheduler path), and gate changes on a pending task are refused outright
 	// — the pending refusal has its own subtests below.
+	//
+	// They are also seeded ATTRIBUTED to clientKey. Editing a task is own-rows
+	// (taskWritableByPrincipal), so an unattributed fixture would be refused by
+	// the ownership check before reaching the run_if logic this test is about.
 	addGatedWithStatus := func(t *testing.T, status models.TaskStatus) *models.Task {
 		t.Helper()
 		future := time.Now().UTC().Add(time.Hour)
+		keyID := clientKeyID
 		task := &models.Task{
 			ID: uuid.New(), Prompt: "a gated task prompt that is long enough",
 			Status: status, CreatedAt: time.Now().UTC(), ScheduledFor: &future,
-			RunIf: &models.RunIf{Command: "test -f /tmp/ready", ExitCodeIs: 2, TimeoutSeconds: 30},
+			CreatedByKeyID: &keyID,
+			RunIf:          &models.RunIf{Command: "test -f /tmp/ready", ExitCodeIs: 2, TimeoutSeconds: 30},
 		}
 		if _, err := store.AddTask(task); err != nil {
 			t.Fatalf("add task: %v", err)
@@ -353,7 +359,10 @@ func TestUpdateTaskRunIfPersistsAndNormalizes(t *testing.T) {
 func TestUpdateTaskKeepsGatedTaskOnSchedulerPath(t *testing.T) {
 	r, keyMgr, store := setupRunIfAuthz(t)
 
-	clientKey := mustCreateRoleKey(t, keyMgr, "client")
+	// Attributed fixtures throughout: editing is own-rows
+	// (taskWritableByPrincipal), and this test is about the dispatch-state
+	// recompute, not about ownership.
+	clientKeyID, clientKey := mustCreateRoleKeyWithID(t, keyMgr, "client")
 	put := func(taskID uuid.UUID, tc models.TaskCreate) *httptest.ResponseRecorder {
 		body, _ := json.Marshal(tc)
 		req := httptest.NewRequest("PUT", "/tasks/"+taskID.String(), bytes.NewReader(body))
@@ -373,10 +382,11 @@ func TestUpdateTaskKeepsGatedTaskOnSchedulerPath(t *testing.T) {
 		// Seeded the way NewTask parks an immediate gated create: scheduled,
 		// with the parked timestamp in the past by the time the edit lands.
 		past := time.Now().UTC().Add(-time.Minute)
+		keyID := clientKeyID
 		task := &models.Task{
 			ID: uuid.New(), Prompt: "a gated task prompt that is long enough",
 			Status: models.TaskStatusScheduled, CreatedAt: time.Now().UTC(),
-			ScheduledFor: &past, RunIf: gate,
+			ScheduledFor: &past, RunIf: gate, CreatedByKeyID: &keyID,
 		}
 		if _, err := store.AddTask(task); err != nil {
 			t.Fatalf("add task: %v", err)
@@ -411,6 +421,8 @@ func TestUpdateTaskKeepsGatedTaskOnSchedulerPath(t *testing.T) {
 			TriggerType: models.TriggerTypeWebhook,
 			RunIf:       gate,
 		})
+		keyID := clientKeyID
+		template.CreatedByKeyID = &keyID
 		if _, err := store.AddTask(template); err != nil {
 			t.Fatalf("add template: %v", err)
 		}

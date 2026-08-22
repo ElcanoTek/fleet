@@ -1,4 +1,4 @@
-.PHONY: all build compile bins fleet-bench install test test-race test-cover lint lint-go lint-migrations fmt tidy clean help \
+.PHONY: all build compile bins fleet-bench install test test-race test-cover lint lint-go lint-python lint-migrations fmt tidy clean help \
 	govulncheck ci-go ci-web ci-e2e-mocked ci-local
 
 # GOTOOLCHAIN=auto — the operator does NOT have to hand-install the pinned Go.
@@ -35,7 +35,9 @@ help:
 	@echo "  make test        run the Go test suite"
 	@echo "  make test-race   run the Go test suite with the race detector"
 	@echo "  make test-cover  run the Go test suite with coverage (writes coverage.out)"
-	@echo "  make lint        run golangci-lint + the migration DDL linter"
+	@echo "  make lint        run golangci-lint + ruff (check & format) + the migration DDL linter"
+	@echo "  make lint-go     golangci-lint only"
+	@echo "  make lint-python ruff check + ruff format --check (skips loudly if ruff is absent)"
 	@echo "  make lint-migrations  reject dangerous DDL in changed migration files (#256)"
 	@echo "  make fleet-bench build the load-testing tool (cmd/fleet-bench, #296)"
 	@echo "  make fmt         gofmt the tree"
@@ -120,10 +122,27 @@ test-cover:
 	go test -coverprofile=coverage.out -covermode=atomic -p 1 -tags fleet_host_executor ./...
 	@go tool cover -func=coverage.out | tail -1
 
-lint: lint-go lint-migrations
+lint: lint-go lint-python lint-migrations
 
 lint-go:
 	golangci-lint run
+
+# lint-python: ruff over the 13 Python files (sandbox FileOp helper, python
+# bridge, skill scripts, MCP test servers). Rule selection lives in ruff.toml so
+# this and the CI job cannot disagree.
+#
+# Skips LOUDLY when ruff is absent rather than failing: not every contributor has
+# it, and CI enforces the gate regardless (ci.yml + dev-ci.yml `python` job). The
+# message names the install command so a local skip is a choice, not a surprise —
+# a check that quietly does nothing is the failure mode this repo keeps writing
+# post-mortems about.
+lint-python:
+	@if command -v ruff >/dev/null 2>&1; then \
+		ruff check . && ruff format --check . ; \
+	else \
+		echo "ruff not installed — SKIPPING the Python lint (CI still enforces it)."; \
+		echo "  install: python3 -m pip install --user 'ruff==0.15.8'"; \
+	fi
 
 # lint-migrations: reject dangerous DDL in NEW/CHANGED migration files (#256).
 # Diff-scoped (vs the merge-base with origin/main), so the existing corpus is

@@ -34,9 +34,11 @@ rejected:
 
 - **~400MB** added to an image built on `fedora-minimal`.
 - **The Grype gate.** `scripts/check-grype-policy.sh` fails CI on any fixable
-  CRITICAL Fedora RPM in the sandbox image. Chromium is the most CVE-heavy RPM in
-  any distro, so this would become a recurring gate that blocks every merge in
-  the repository, not just Bento work.
+  CRITICAL **or HIGH** Fedora RPM in the sandbox image. Chromium is the most
+  CVE-heavy RPM in any distro, so this would become a recurring gate that blocks
+  every merge in the repository, not just Bento work — and at the HIGH threshold
+  the argument is stronger than it was when this was written against CRITICAL
+  alone.
 - **A driver.** `--print-to-pdf` prints the page, not the app's print DOM, so
   driving the real export needs CDP. There is no Node in the sandbox, so that
   means a hand-rolled WebSocket/CDP client — more moving parts than the renderer

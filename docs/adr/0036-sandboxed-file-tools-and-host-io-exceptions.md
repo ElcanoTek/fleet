@@ -76,8 +76,7 @@ host-brokered credentials/network that by invariant never enter the sandbox:
 
 - **Host network / brokered fetch**: `web_fetch`, `web_search`,
   `tavily_search`, `smart_search`, `download_url` (HTTP fetch),
-  `generate_image` (provider API), `fastio_upload` / Fast.io find,
-  `browserbase_live_view` (#987 — one authenticated GET to a fixed public
+  `generate_image` (provider API), `browserbase_live_view` (#987 — one authenticated GET to a fixed public
   vendor host that converts a hosted browser session id into a live-view URL
   for a HUMAN; it drives no browser, so ADR-0044's "browser automation is a
   connector" stands. Registered per turn only when a credential is actually
@@ -85,11 +84,10 @@ host-brokered credentials/network that by invariant never enter the sandbox:
   `BROWSERBASE_API_KEY`; see `docs/BROWSERBASE.md`). These use host-side
   credentials and the egress-proxy/allowlist posture; running them in the sandbox would either leak
   credentials in or lose the host broker.
-- **Host workspace staging** (path-validated legacy exceptions):
-  `fastio_upload` reads bytes for an outbound upload; `publish_artifact` stats
-  a confined path and records a pointer rather than opening arbitrary content.
-  Neither invokes a shell, dynamic import, or template executor; all
-  model-selected paths pass the workspace/pathsec allowlist. This class
+- **Host workspace staging** (path-validated legacy exception):
+  `publish_artifact` stats a confined path and records a pointer rather than
+  opening arbitrary content. It invokes no shell, dynamic import, or template
+  executor; every model-selected path passes the workspace/pathsec allowlist. This class
   originally also covered `download_url` (writing fetched bytes),
   `generate_image` (reading reference images, writing provider output), and
   `xlsx` (a host zip read/rewrite) — those three were migrated in #1083: they
@@ -120,6 +118,41 @@ host-brokered credentials/network that by invariant never enter the sandbox:
   remain host control-plane state. The former bash/run_python/web_fetch temp
   spills and agent-history overflow breadcrumbs are removed; governed recovery
   bytes are written only through the bound sandbox FileOp capability.
+
+**Amended 2026-08-22 (enterprise security audit).** Three corrections to the
+enumeration above, because it presents itself as exhaustive and an auditor will
+read it that way:
+
+- **`fastio_upload` is gone from both lists.** There is no native Go
+  `fastio_upload` tool any more — Fast.io is an MCP server, gated by
+  `internal/agentcore/mcp_fastio_guard.go` and reached through the broker like
+  any other connector. Leaving it enumerated as a host-read exception claimed a
+  hole that does not exist, which is its own kind of inaccuracy. (The "Deferred"
+  section still names it as a migration candidate; that entry is historical.)
+
+- **Host `git` worktree management** was not enumerated and should have been.
+  `internal/scheduledrun/worktree.go` and `internal/worktree/worktree.go` run
+  `git worktree add/remove` and `git branch -D` on the host via
+  `exec.CommandContext`. This is not model-authored: the argv is
+  fleet-constructed, no shell is involved, and the only externally-influenced
+  component is `WorktreeConfig.BranchPrefix`/`BaseBranch`, both of which are now
+  validated as git ref-name fragments with a leading-dash refusal
+  (`models.WorktreeConfig.Validate`) — `BaseBranch` reaches `git worktree add` as
+  a trailing positional with no `--` separator, so a leading dash would
+  otherwise have been parsed as an option. It belongs in the control-plane class,
+  named rather than implicit.
+
+- **Admin-triggered host `podman` build/run** was not enumerated either.
+  `internal/rampartinstall/installer.go` shells out to `podman` with fixed
+  arguments behind `POST /admin/pii-redaction/install`, which is admin-gated
+  (`internal/httpapi/routes.go`) and not model-callable. Same reasoning: fixed
+  argv, no shell, operator-initiated — a control-plane operation, but one this
+  ADR should have listed.
+
+Neither addition weakens the invariant: the sandbox is still mandatory for every
+agent tool call's data-plane execution, and neither of these is an agent tool.
+What changes is that the enumeration is now actually complete, so "is this
+exception in the ADR?" is a question with a reliable answer.
 
 ## Consequences
 

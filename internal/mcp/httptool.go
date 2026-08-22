@@ -251,6 +251,7 @@ func executeHTTPTool(ctx context.Context, client *http.Client, spec HTTPToolSpec
 // Multiple jq outputs are newline-joined; scalars/objects are rendered as compact
 // JSON.
 func applyResponseJQ(program string, body []byte) (out string, ok bool, err error) {
+	// nosemgrep: go.lang.security.deserialization.unsafe-deserialization-interface.go-unsafe-deserialization-interface -- interface{} is REQUIRED here, not a shortcut: the value is handed straight to a jq program, which operates on arbitrary JSON by definition. A concrete struct cannot express "whatever shape the response had".
 	var input interface{}
 	if jsonErr := json.Unmarshal(body, &input); jsonErr != nil {
 		//nolint:nilerr // intentional: a non-JSON body is not an error — ok=false signals "pass the raw body through unfiltered" (response_jq applies only to JSON, per the issue spec).

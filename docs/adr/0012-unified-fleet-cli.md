@@ -30,9 +30,26 @@ There is **one `fleet` binary** (`cmd/fleet`) with subcommand dispatch
 - Every other verb (`update`, `status`, `bootstrap`, `chat`, `sched`, `task`,
   `mcp`, `notes`, `worktree`, `backup`, `restore`, `motd`, …) routes to
   `internal/admincli.Run`.
-- `cmd/fleet-admin` is reduced to a **deprecation shim** for ONE release: it
-  prints a one-line notice and forwards to the same `admincli.Run`, so existing
-  scripts and the in-place upgrade path keep working. It is removed next release.
+- `cmd/fleet-admin` is reduced to a **deprecation shim**: it prints a one-line
+  notice and forwards to the same `admincli.Run`, so existing scripts and the
+  in-place upgrade path keep working.
+
+  **Amended 2026-08-22 (enterprise security audit).** This originally said "for
+  ONE release ... removed next release". That clock never started: `git tag`
+  returns nothing, `VERSION` is `0.0.0`, and `CHANGELOG.md` has only an
+  `[Unreleased]` heading — there has never been a release, so "next release" is
+  not a date and "one release" is not a window. The shim also turns out to be
+  load-bearing rather than vestigial: `Makefile` (`bins`, `install`),
+  `scripts/bootstrap.sh`, `scripts/update.sh` and `scripts/fleet-upgrade.sh` all
+  build or install it, the last two *hard-fail* if the binary is missing, and
+  `internal/admincli/scripts_dryrun_test.go` asserts the "would install fleet +
+  fleet-admin" string. So removal is a coordinated change across four scripts and
+  two test assertions, not a deletion.
+
+  The concrete trigger, replacing the unanchored one: **the shim is removed in
+  the first release after 1.0.0.** Until then it stays, and it is 20 lines that
+  fork no logic — it shares `internal/admincli.Run` with `fleet`, so it adds no
+  second governance path.
 
 `make install` puts `fleet` (and the shim) on `PATH` — the actual fix for "isn't
 installed" on a dev box. The systemd unit is **not** force-migrated to
@@ -51,11 +68,12 @@ installed" on a dev box. The systemd unit is **not** force-migrated to
 ## Consequences
 
 - Operators get the unified `fleet` they asked for; muscle memory (`fleet-admin
-  <verb>`) still works for one release with a deprecation warning.
+  <verb>`) still works, with a deprecation warning, until the removal trigger
+  above.
 - The daemon artifact stays named `fleet`, so the highest-blast-radius references
   (systemd unit + bootstrap on a *running* box) barely move.
-- Two binaries still build for one release (the shim), so the existing
-  build/upgrade scripts that expect both `fleet` and `fleet-admin` are unchanged.
+- Two binaries still build (the shim), so the existing build/upgrade scripts
+  that expect both `fleet` and `fleet-admin` are unchanged.
 - A future release deletes the shim and may flip bare `fleet` to print help
   (requiring explicit `serve`); by then every deployed unit says `fleet serve`.
 

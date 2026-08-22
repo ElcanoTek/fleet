@@ -11,15 +11,21 @@
 #
 # What runs here: Go compile+vet+lint+test WITH a Postgres service (#723 — so the
 # DB-gated suites, including the entire `fleet import` suite, are exercised on dev
-# instead of first firing at the dev→main promotion; no -race lane), the web
-# lint/test/build lane, the migration DDL lint, and the gitleaks secret scan (the
-# no-secrets invariant is never weakened, on any branch).
+# instead of first firing at the dev→main promotion; no -race lane), the Python
+# lint (ruff), the web lint/test/build lane, the migration DDL lint, and the
+# gitleaks secret scan (the no-secrets invariant is never weakened, on any
+# branch).
 #
 # Still deliberately deferred to the dev→main PR's full ci.yml gate, because each
 # is slow and none of them is what a routine change breaks: the -race lane,
-# govulncheck, the Grype image scan, both Playwright suites, and CodeQL. The
-# division of labour is "does it compile, lint, and pass tests" here; "is it safe
-# to ship" there.
+# govulncheck, the Grype image scan, and both Playwright suites. The division of
+# labour is "does it compile, lint, and pass tests" here; "is it safe to ship"
+# there.
+#
+# CodeQL and Semgrep used to be on that deferred list and no longer are: both
+# run IN this lane, as reusable-workflow calls wired into `Dev gate`, so a
+# scanner finding blocks dev the same way a compile error does. See
+# docs/SCANNING.md.
 #
 # `Dev gate` is the single aggregate job (same pattern as ci.yml's `CI gate`):
 # when the dev branch is protected, require just that one check.
@@ -78,10 +84,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: true
@@ -101,7 +107,7 @@ jobs:
         run: go vet -tags fleet_host_executor ./...
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v9
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           # Keep pinned in lockstep with ci.yml + .golangci.yml (see the note
           # there) so the fast lane and the full gate never disagree.
@@ -129,6 +135,61 @@ jobs:
         # compile with it.
         run: go test -p 1 -tags fleet_host_executor ./...
 
+  python:
+    name: Python lint (ruff)
+    runs-on: ubuntu-latest
+    # Mirrors ci.yml's `python` job exactly, for the same reason the web lane was
+    # added to this file: a change should not first be checked at the dev->main
+    # promotion. ruff takes about a second, so there is no speed argument for
+    # deferring it.
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install ruff
+        env:
+          # Keep pinned in lockstep with ci.yml (asserted by
+          # scripts/check_versions_test.go) so the fast lane and the full gate
+          # cannot disagree.
+          RUFF_VERSION: '0.15.8'
+        run: |
+          set -euo pipefail
+          python3 -m pip install --user --quiet "ruff==${RUFF_VERSION}"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.local/bin:$PATH"
+          ruff --version
+
+      - name: Lint
+        run: ruff check --output-format github .
+
+      - name: Formatting check
+        # Mirrors ci.yml's gate; the tree is ruff-formatted, so a failure here
+        # is a new unformatted file.
+        run: ruff format --check .
+
+  codeql:
+    # Reusable-workflow call (see codeql.yml's header): puts the CodeQL jobs in
+    # THIS graph so `Dev gate` blocks on them. A finding in the blocking band
+    # fails the gate, so green means "no unwaived High-and-above finding", not
+    # just "ran" — and on a `pull_request` event it means that of the DIFF only,
+    # because CodeQL is diff-informed there (docs/adr/0048-codeql-severity-gating.md).
+    # The tree-wide verdict comes from the push runs.
+    # Unconditional (no docs-only detection in the fast lane, and Dev gate
+    # demands strict success, so a skip would fail it); running on dev pushes
+    # too also covers any direct push that bypassed a PR — and is the only event
+    # shape that scans the whole tree.
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    uses: ./.github/workflows/codeql.yml
+
+  semgrep:
+    # Same mechanism: called here so `Dev gate` blocks on it.
+    permissions:
+      contents: read
+    uses: ./.github/workflows/semgrep.yml
+
   web:
     name: Web lint / test / build (fast)
     runs-on: ubuntu-latest
@@ -142,15 +203,34 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Node
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           # Read from web/.nvmrc so the deployed node major is declared once.
           node-version-file: web/.nvmrc
           cache: npm
           cache-dependency-path: web/package-lock.json
+
+      - name: Audit dependencies for known CVEs
+        # Mirrors ci.yml's web job: lockfile-only, fails on any severity, runs
+        # before the install so a vulnerable lockfile fails fast.
+        run: npm audit --audit-level=low
+
+      - name: Audit rampart-service dependencies for known CVEs
+        working-directory: scripts/rampart-service
+        run: npm audit --audit-level=low
+
+      - name: Check whether the rampart security overrides are droppable
+        # scripts/rampart-service/package.json force-patches sharp and adm-zip
+        # because their parents have not released fixes. The day upstream does,
+        # this FAILS with removal instructions — an override left behind after
+        # upstream fixes itself silently pins Dependabot's updates down. A
+        # registry flake skips with a notice (the audit above is the CVE gate).
+        # Absolute path: this job's default working-directory is web/, which is
+        # exactly how run 32579378165 caught the repo-relative form (exit 127).
+        run: "$GITHUB_WORKSPACE/scripts/check-npm-overrides.sh"
 
       - name: Install dependencies
         run: npm ci
@@ -180,7 +260,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Full history so the merge-base with origin/main resolves and the
           # linter can diff the branch's new/changed migration files.
@@ -203,7 +283,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install gitleaks
         # Same pinned release + checksum as ci.yml — reproducible, can't be
@@ -229,12 +309,19 @@ jobs:
     # Aggregate check for branch protection: passes only when every fast-lane
     # job succeeded (mirrors ci.yml's `CI gate`).
     if: always()
-    needs: [go, web, migrations, gitleaks]
+    needs: [go, python, codeql, semgrep, web, migrations, gitleaks]
     runs-on: ubuntu-latest
     steps:
       - name: Fail if any fast-lane job failed
+        # RESULTS via env, not interpolated into the run: block. The values are
+        # drawn from {success, failure, cancelled, skipped} so nothing
+        # attacker-controlled reaches the shell — but this is the exact shape the
+        # two sites fixed in #1246 were fixed away FROM, and it breaks semgrep's
+        # bash sub-parser, which silently costs coverage on this very file.
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
         run: |
-          results='${{ join(needs.*.result, ' ') }}'
+          results="$RESULTS"
           echo "job results: $results"
           for r in $results; do
             [ "$r" = "success" ] || { echo "a fast-lane job did not succeed"; exit 1; }

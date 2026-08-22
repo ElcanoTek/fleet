@@ -297,6 +297,25 @@ func (wc *WorktreeConfig) Validate() error {
 		strings.Contains(wc.BranchPrefix, ".lock") {
 		return fmt.Errorf("branch_prefix is not a valid git ref-name fragment")
 	}
+	// BaseBranch is the trailing positional of `git worktree add -b <branch>
+	// <path> <base>`, and that invocation carries no "--" end-of-options
+	// separator, so a value beginning with "-" would be parsed by git as an
+	// option rather than a commit-ish. Reject that shape here — worktree_config
+	// is settable by any task creator (unlike run_if, which is admin-only), so
+	// this is the boundary. The ref-name checks mirror BranchPrefix above; git
+	// still makes the authoritative check at run time.
+	if base := strings.TrimSpace(wc.BaseBranch); base != "" {
+		if strings.HasPrefix(base, "-") {
+			return fmt.Errorf("base_branch may not begin with '-'")
+		}
+		if strings.ContainsAny(base, " ~^:?*[\\") ||
+			strings.Contains(base, "@{") ||
+			strings.Contains(base, "..") ||
+			strings.Contains(base, "//") ||
+			strings.Contains(base, ".lock") {
+			return fmt.Errorf("base_branch is not a valid git ref-name fragment")
+		}
+	}
 	return nil
 }
 
@@ -1949,22 +1968,6 @@ type TaskArtifact struct {
 	Size        int64  `json:"size"`                  // bytes at publish time
 }
 
-// TaskAssignment is the task assignment carried to the worker.
-type TaskAssignment struct {
-	TaskID                 uuid.UUID           `json:"task_id"`
-	Prompt                 string              `json:"prompt"`
-	Model                  *string             `json:"model,omitempty"`
-	FallbackModel          *string             `json:"fallback_model,omitempty"`
-	MaxIterations          *int                `json:"max_iterations,omitempty"`
-	MCPSelection           MCPSelection        `json:"mcp_selection,omitempty"`
-	CredentialAllowlist    CredentialAllowlist `json:"credential_allowlist"`
-	InstructionSelfImprove bool                `json:"instruction_self_improve,omitempty"`
-	OrchestratorURL        string              `json:"orchestrator_url"`
-	Files                  []string            `json:"files,omitempty"`
-	FileNames              []string            `json:"file_names,omitempty"`
-	FileChecksums          []string            `json:"file_checksums,omitempty"`
-}
-
 // DashboardStats contains statistics for the dashboard.
 type DashboardStats struct {
 	PendingTasks        int `json:"pending_tasks"`
@@ -2063,15 +2066,6 @@ func (ls LogSession) MarshalJSON() ([]byte, error) {
 		Messages: messages,
 	})
 }
-
-// LogSubmission is a log submission for a task.
-type LogSubmission struct {
-	TaskID  uuid.UUID  `json:"task_id"`
-	Session LogSession `json:"session"`
-}
-
-// MaxLogSubmissionSize is the maximum size of a log submission in bytes (24MB).
-const MaxLogSubmissionSize = 24 * 1024 * 1024
 
 // APIKeyCreate is the request model for creating an API key.
 type APIKeyCreate struct {

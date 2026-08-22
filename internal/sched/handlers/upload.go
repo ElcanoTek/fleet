@@ -194,10 +194,10 @@ func (h *Handlers) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	checksumPath := filepath.Join(tempDir, ".checksums", filename+".sha256")
 	if err := os.WriteFile(checksumPath, []byte(checksum), 0600); err != nil {
 		// Non-critical error, just log it
-		log.Printf("Failed to save checksum sidecar for %s: %v", filename, err)
+		log.Printf("Failed to save checksum sidecar for %s: %v", logSafe(filename), err)
 	}
 
-	log.Printf("File uploaded: %s (size: %d, checksum: %s)", filename, size, checksum)
+	log.Printf("File uploaded: %s (size: %d, checksum: %s)", logSafe(filename), size, checksum)
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"filename":      filename,
