@@ -464,7 +464,9 @@ func (f *fakeKube) runFakeBridge(_ string, e *execConn) {
 			// loop issues a single pipe Write for it, the response reader stops
 			// at the first newline, and the remainder of that one Write has
 			// nobody left to consume it.
-			frame := append(resp, '\n')
+			frame := make([]byte, 0, len(resp)+1+len(f.bridgeTrailingStdout))
+			frame = append(frame, resp...)
+			frame = append(frame, '\n')
 			frame = append(frame, f.bridgeTrailingStdout...)
 			e.send(k8sChannelStdout, frame)
 			pending = *bytes.NewBuffer(append([]byte(nil), rest...))
