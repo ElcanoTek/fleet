@@ -16,6 +16,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/admission"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/creds"
 	"github.com/ElcanoTek/fleet/internal/mcp"
@@ -581,6 +582,14 @@ func buildSandboxPool(cfg *config.Config, personasDir, protocolsDir, systemPromp
 		BridgeDir:        filepath.Join(filepath.Dir(workspaceRoot), "data", "sandbox-bridge"),
 		ReadOnlyMounts:   absSupportingDocs(personasDir, protocolsDir, systemPromptsDir, skillsDir, uploadsRoot),
 	}
+	// Kubernetes backend (#989): sandboxes are ephemeral pods in a cluster
+	// instead of co-located podman containers. All podman-specific boot work
+	// below (bridge-file prune, OCI-runtime preflight, egress proxy) is
+	// replaced by the backend's own fail-closed cluster preflight.
+	if cfg.SandboxBackend == sandbox.BackendKubernetes {
+		return buildKubernetesSandboxPool(cfg, poolCfg, sandboxRuntime,
+			absSupportingDocs(personasDir, protocolsDir, systemPromptsDir, skillsDir))
+	}
 	// Reclaim bridge-script/seccomp temp files orphaned by a PRIOR crash: only
 	// the graceful close path removes them, so without this sweep every
 	// non-graceful exit leaks them into BridgeDir permanently. Age-bounded and
@@ -644,6 +653,156 @@ func buildSandboxPool(cfg *config.Config, personasDir, protocolsDir, systemPromp
 		log.Printf("sandbox: network mode=lockdown — scheduled-task, interactive chat, AND approved-bash egress sealed regardless of per-task AllowNetwork.")
 	}
 	return sandbox.NewPool(poolCfg), nil
+}
+
+// buildKubernetesSandboxPool finishes pool construction for the kubernetes
+// backend (#989): it refuses podman-only knobs that would otherwise be
+// silently ignored (a configured-but-inert security knob is the failure mode
+// ADR-0010's no-degrade rule exists for), builds the backend handle, and runs
+// the fail-closed cluster preflight before the warm pool spawns its first pod.
+//
+// bundleDocDirs are the bundle's own supporting-doc roots (personas,
+// protocols, system_prompts, skills) — the subset of
+// poolCfg.Container.ReadOnlyMounts a sandbox IMAGE could plausibly carry, and
+// therefore the only ones bundle_docs_in_image can vouch for.
+func buildKubernetesSandboxPool(cfg *config.Config, poolCfg sandbox.PoolConfig, sandboxRuntime string, bundleDocDirs []string) (*sandbox.Pool, error) {
+	if sandboxRuntime != "" {
+		return nil, fmt.Errorf(
+			"FLEET_SANDBOX_RUNTIME=%q is a podman OCI-runtime knob and has no effect under FLEET_SANDBOX_BACKEND=kubernetes; "+
+				"select hypervisor isolation with FLEET_SANDBOX_K8S_RUNTIME_CLASS (a cluster RuntimeClass, e.g. kata) instead (fail-closed)", sandboxRuntime)
+	}
+	if v := strings.TrimSpace(os.Getenv("FLEET_SANDBOX_SECCOMP_PROFILE")); v != "" {
+		return nil, fmt.Errorf(
+			"FLEET_SANDBOX_SECCOMP_PROFILE=%q is a podman knob and has no effect under FLEET_SANDBOX_BACKEND=kubernetes; "+
+				"install the profile on the sandbox nodes and set FLEET_SANDBOX_K8S_SECCOMP_PROFILE (a kubelet-relative Localhost profile) instead (fail-closed)", v)
+	}
+	if cfg.DefaultNetworkMode == sandbox.NetworkModeAllowlisted {
+		return nil, fmt.Errorf(
+			"FLEET_DEFAULT_NETWORK_MODE=allowlisted is not supported under FLEET_SANDBOX_BACKEND=kubernetes: the host-side egress proxy " +
+				"is unreachable from sandbox pods. Use lockdown (sealed by the deny-all NetworkPolicy) or open, and shape egress with cluster NetworkPolicies (fail-closed)")
+	}
+	// Supporting-doc mounts are same-path HOST bind mounts, and a pod has no
+	// host filesystem to bind them from — so by default they are dropped, and
+	// the fileop anchor then refuses those roots rather than trusting paths
+	// nothing mounted. A sandbox IMAGE can still carry the bundle's doc dirs
+	// at the same absolute paths (that is how bash/run_python keep resolving
+	// `protocols/…` through the workspace symlinks); an operator who built
+	// such an image declares it with bundle_docs_in_image, and the anchors for
+	// those roots stay valid so the FILE TOOLS work too.
+	//
+	// The declaration cannot be probed — fleet does not inspect image
+	// contents — but it cannot widen anything either: it only re-admits
+	// read-only anchors for operator-configured bundle paths, and the reads
+	// still execute inside the sandbox. A wrong declaration surfaces as a
+	// not-found read, which is the podman missing-dir behavior.
+	docsInImage, err := sandbox.ParseK8sBundleDocsInImage(cfg.SandboxK8sBundleDocsInImage)
+	if err != nil {
+		return nil, fmt.Errorf("FLEET_SANDBOX_K8S_BUNDLE_DOCS_IN_IMAGE / sandbox.kubernetes.bundle_docs_in_image: %w", err)
+	}
+	kept, dropped := k8sDocMounts(poolCfg.Container.ReadOnlyMounts, bundleDocDirs, docsInImage)
+	poolCfg.Container.ReadOnlyMounts = kept
+	if len(kept) > 0 {
+		log.Printf("sandbox: kubernetes backend — bundle_docs_in_image declared: keeping fileop read anchors for %d bundle doc root(s) %v; the SANDBOX IMAGE must carry them at these exact paths or reads fail not-found", len(kept), kept)
+	}
+	for _, d := range dropped {
+		switch {
+		case clientconfig.IsMaterializedSkillsDir(d):
+			log.Printf("sandbox: kubernetes backend — skills dir %q is the merged built-in+bundle tree under the control plane's data dir, which no sandbox image can carry; in-sandbox skill reads will not resolve. Set skills_builtin: false in the bundle manifest to make skills/ the bundle's own (bake-able) dir", d)
+		case docsInImage:
+			log.Printf("sandbox: kubernetes backend — %q is not a bundle doc dir, so bundle_docs_in_image does not vouch for it; in-sandbox reads there will not resolve", d)
+		}
+	}
+	if !docsInImage && len(dropped) > 0 {
+		log.Printf("sandbox: kubernetes backend — supporting-doc bind mounts do not apply (pods mount only the workspace claim); in-sandbox reads of %d host dir(s) will not resolve. If your sandbox image carries the bundle's doc dirs at the same paths, set sandbox.kubernetes.bundle_docs_in_image (FLEET_SANDBOX_K8S_BUNDLE_DOCS_IN_IMAGE=true)", len(dropped))
+	}
+	poolCfg.Container.Runtime = ""
+
+	// Scheduling knobs fail closed on a malformed value: a typo'd selector
+	// must not silently schedule sandboxes onto the wrong (untainted,
+	// unlabeled) nodes.
+	nodeSelector, err := sandbox.ParseK8sNodeSelector(cfg.SandboxK8sNodeSelector)
+	if err != nil {
+		return nil, fmt.Errorf("FLEET_SANDBOX_K8S_NODE_SELECTOR / sandbox.kubernetes.node_selector: %w", err)
+	}
+	tolerations, err := sandbox.ParseK8sTolerations(cfg.SandboxK8sTolerations)
+	if err != nil {
+		return nil, fmt.Errorf("FLEET_SANDBOX_K8S_TOLERATIONS / sandbox.kubernetes.tolerations: %w", err)
+	}
+	backend, err := sandbox.NewKubernetesBackend(sandbox.KubernetesConfig{
+		Namespace:               cfg.SandboxK8sNamespace,
+		WorkspaceClaim:          cfg.SandboxK8sWorkspaceClaim,
+		ServiceAccount:          cfg.SandboxK8sServiceAccount,
+		ImagePullSecret:         cfg.SandboxK8sImagePullSecret,
+		RuntimeClassName:        cfg.SandboxK8sRuntimeClass,
+		SeccompLocalhostProfile: cfg.SandboxK8sSeccompProfile,
+		KubeconfigPath:          cfg.SandboxK8sKubeconfig,
+		NetworkPolicyName:       cfg.SandboxK8sNetworkPolicy,
+		NodeSelector:            nodeSelector,
+		Tolerations:             tolerations,
+	})
+	if err != nil {
+		return nil, err
+	}
+	// Fail closed BEFORE the warm pool spawns its first pod: a cluster that
+	// cannot run sandboxes (unreachable apiserver, missing RBAC, absent
+	// workspace claim or sealed-egress policy) must abort boot, never
+	// silently fall back to podman or host execution.
+	if err := backend.Preflight(context.Background()); err != nil {
+		return nil, fmt.Errorf("kubernetes sandbox preflight failed (fail-closed): %w", err)
+	}
+	poolCfg.Mode = sandbox.ModeKubernetes
+	poolCfg.KubernetesBackend = backend
+
+	poolCfg.DefaultNetworkMode = cfg.DefaultNetworkMode
+	poolCfg.DefaultEgressAllowlist = nil
+	log.Printf("sandbox: kubernetes backend — image=%s, pool=%d, workspace=%s, namespace=%s, runtime_class=%s",
+		poolCfg.Container.Image, poolCfg.Size, poolCfg.Container.WorkspaceHostDir, backend.Namespace(), defaultIfEmpty(cfg.SandboxK8sRuntimeClass, "cluster default"))
+	if poolCfg.PersistentREPL {
+		log.Printf("sandbox: run_python REPL mode=persistent — one kernel per conversation survives across turns (idle TTL %s, max %d sessions)",
+			poolCfg.PersistentIdleTTL, cfg.PythonREPLMaxSessions)
+	} else {
+		log.Printf("sandbox: run_python REPL mode=per-turn — kernel is fresh each turn (the default)")
+	}
+	if cfg.DefaultNetworkMode == sandbox.NetworkModeLockdown {
+		log.Printf("sandbox: network mode=lockdown — every sandbox pod is labeled %s=none for the deny-all NetworkPolicy (enforcement is the cluster CNI's job — see docs/DEPLOYMENT-KUBERNETES.md)", "fleet.elcanotek.com/egress")
+	}
+	return sandbox.NewPool(poolCfg), nil
+}
+
+// k8sDocMounts splits the supporting-doc mount list into the roots whose
+// fileop anchors survive under the kubernetes backend and the roots that are
+// dropped, given the operator's bundle_docs_in_image declaration.
+//
+// Pure and total so the policy is pinned by tests rather than read out of the
+// boot log. Three rules, in order:
+//
+//   - Without the declaration, nothing survives: a pod mounts only the
+//     workspace claim, so every host path is a path the anchor must not trust.
+//   - With it, only the BUNDLE's own doc dirs survive. Everything else in the
+//     list (the uploads root) lives in control-plane state a sandbox image
+//     cannot contain, and the declaration says nothing about it.
+//   - A materialized (merged built-in + bundle) skills tree never survives:
+//     it lives under the data dir with a path derived from the bundle path, so
+//     no image can carry it. See clientconfig.IsMaterializedSkillsDir.
+func k8sDocMounts(mounts, bundleDocDirs []string, docsInImage bool) (kept, dropped []string) {
+	bundle := make(map[string]bool, len(bundleDocDirs))
+	for _, d := range bundleDocDirs {
+		if d != "" {
+			bundle[filepath.Clean(d)] = true
+		}
+	}
+	for _, m := range mounts {
+		if m == "" {
+			continue
+		}
+		clean := filepath.Clean(m)
+		if docsInImage && bundle[clean] && !clientconfig.IsMaterializedSkillsDir(clean) {
+			kept = append(kept, m)
+			continue
+		}
+		dropped = append(dropped, m)
+	}
+	return kept, dropped
 }
 
 // absSupportingDocs absolutizes the persona/protocol/skill/system-prompt dirs

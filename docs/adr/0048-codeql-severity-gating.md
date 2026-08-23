@@ -88,17 +88,26 @@ block both.
 
 ## Decision
 
-**CodeQL blocks on a finding that is (a) at SARIF level `error`/`warning`, or has
-security-severity >= 7.0, and (b) is not waived.** Findings below that band are
+**CodeQL blocks on a finding that is (a) in the High band and (b) is not
+waived.** A finding is in the High band when its rule publishes a
+`security-severity >= 7.0`; **only for a rule that publishes no
+security-severity** does the band fall back to SARIF level `error`/`warning`.
+The fallback is not an OR: level is deliberately *not* consulted for a rule that
+does publish a security-severity, because nearly every CodeQL security query is
+`@problem.severity error` — `go/log-injection` is `error` at 6.1 — so an OR
+would block on all 23 log-injection findings and reproduce the deadlock this
+ADR exists to undo. Findings below that band are
 printed and uploaded to the Security tab as advisory. Waivers come from two
-places:
+place:
 
 1. `.github/codeql-accepted-findings.json` — a register of accepted
    `(rule, file)` pairs, each with a mandatory written reason.
-2. An in-source `// codeql[rule-id]` comment, which CodeQL emits as a
-   `suppressions` array on the result. (Both `go` and `javascript` ship an
-   `AlertSuppression.ql`; the comment must sit on its own line and covers the
-   line immediately below it.)
+
+An in-source `// codeql[rule-id]` comment — the mechanism CodeQL documents, and
+which an earlier revision of this ADR listed as a second route — does **not**
+work with this pipeline. It was measured on PR #1249: three forms were tried (the `packs:` input, `packs:` with the additive `+` prefix, and an inline `config:` combining security-extended with codeql/go-queries' `AlertSuppression.ql`) and in every case the uploaded SARIF carried no `suppressions` on the annotated result. The register is therefore the sole
+waiver route for the gate; a deliberately-waived alert is closed in the Security
+tab by a one-time human dismissal.
 
 The register is **per-file, not per-rule**, and that is the whole point of
 preferring it to a `query-filters` exclude. A `query-filters: exclude: {id:

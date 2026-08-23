@@ -700,6 +700,20 @@ func checkSandbox(ctx context.Context, cfg *config.Config, bundle *clientconfig.
 		return res
 	}
 
+	// Kubernetes backend (#989): none of the podman checks apply — validate
+	// the backend selection and run the same fail-closed cluster preflight the
+	// boot path runs (apiserver reachability, RBAC, workspace claim, the
+	// sealed-egress NetworkPolicy, the RuntimeClass when one is configured).
+	backend, err := resolveValidateSandboxBackend(cfg, bundle)
+	if err != nil {
+		res.Status = statusFail
+		res.Detail = err.Error()
+		return res
+	}
+	if backend == sandbox.BackendKubernetes {
+		return checkKubernetesSandbox(ctx, res, cfg, bundle)
+	}
+
 	const podmanBin = "podman"
 	if _, err := exec.LookPath(podmanBin); err != nil {
 		res.Status = statusFail
@@ -763,6 +777,119 @@ func checkSandbox(ctx context.Context, cfg *config.Config, bundle *clientconfig.
 	}
 	res.Status = statusOK
 	res.Detail = fmt.Sprintf("podman ok; image %q present%s", image, networkHelperNote)
+	return res
+}
+
+// resolveValidateSandboxBackend resolves the sandbox backend the same way the
+// boot path does (sandbox.ResolveBackend: env FLEET_SANDBOX_BACKEND wins, else
+// the bundle manifest's sandbox.backend, else podman; unrecognized = error).
+func resolveValidateSandboxBackend(cfg *config.Config, bundle *clientconfig.Bundle) (string, error) {
+	envBackend := ""
+	if cfg != nil {
+		envBackend = cfg.SandboxBackend
+	}
+	bundleBackend := ""
+	if bundle != nil {
+		bundleBackend = bundle.Sandbox().Backend
+	}
+	return sandbox.ResolveBackend(envBackend, bundleBackend)
+}
+
+// checkKubernetesSandbox validates the kubernetes sandbox backend: the image
+// ref resolves, the podman-only knobs are unset, and the boot preflight's
+// cluster checks pass. Image PRESENCE is not checked — pulls happen on the
+// sandbox nodes' kubelets, which this process cannot see; a bad ref fails
+// fast at the first pod start instead.
+func checkKubernetesSandbox(ctx context.Context, res checkResult, cfg *config.Config, bundle *clientconfig.Bundle) checkResult {
+	if rt := resolveSandboxRuntime(cfg, bundle); rt != "" {
+		res.Status = statusFail
+		res.Detail = fmt.Sprintf("FLEET_SANDBOX_RUNTIME=%q has no effect under the kubernetes backend — use FLEET_SANDBOX_K8S_RUNTIME_CLASS", rt)
+		return res
+	}
+	if cfg.DefaultNetworkMode == sandbox.NetworkModeAllowlisted {
+		res.Status = statusFail
+		res.Detail = "FLEET_DEFAULT_NETWORK_MODE=allowlisted is not supported under the kubernetes backend (the host egress proxy is unreachable from pods) — use lockdown or open"
+		return res
+	}
+	image := resolveSandboxImage(cfg, bundle)
+	if image == "" {
+		res.Status = statusFail
+		res.Detail = "no sandbox image resolved (set FLEET_SANDBOX_IMAGE or the bundle manifest's sandbox.image — kubernetes nodes cannot consume a build-on-box tag)"
+		return res
+	}
+	// Same env-wins-else-bundle resolution and fail-closed parse as the boot
+	// path: an env value is parsed from its string form; with no env value
+	// the bundle's structured knobs apply directly.
+	k8s := bundle.Sandbox().Kubernetes
+	nodeSelector := k8s.NodeSelector
+	if strings.TrimSpace(cfg.SandboxK8sNodeSelector) != "" {
+		parsed, err := sandbox.ParseK8sNodeSelector(cfg.SandboxK8sNodeSelector)
+		if err != nil {
+			res.Status = statusFail
+			res.Detail = "FLEET_SANDBOX_K8S_NODE_SELECTOR: " + err.Error()
+			return res
+		}
+		nodeSelector = parsed
+	}
+	var tolerations []sandbox.K8sToleration
+	for _, tol := range k8s.Tolerations {
+		tolerations = append(tolerations, sandbox.K8sToleration(tol))
+	}
+	if strings.TrimSpace(cfg.SandboxK8sTolerations) != "" {
+		parsed, err := sandbox.ParseK8sTolerations(cfg.SandboxK8sTolerations)
+		if err != nil {
+			res.Status = statusFail
+			res.Detail = "FLEET_SANDBOX_K8S_TOLERATIONS: " + err.Error()
+			return res
+		}
+		tolerations = parsed
+	}
+	docsInImage := k8s.BundleDocsInImage
+	if strings.TrimSpace(cfg.SandboxK8sBundleDocsInImage) != "" {
+		parsed, err := sandbox.ParseK8sBundleDocsInImage(cfg.SandboxK8sBundleDocsInImage)
+		if err != nil {
+			res.Status = statusFail
+			res.Detail = "FLEET_SANDBOX_K8S_BUNDLE_DOCS_IN_IMAGE: " + err.Error()
+			return res
+		}
+		docsInImage = parsed
+	}
+	fill := func(env, bundleVal string) string {
+		if strings.TrimSpace(env) != "" {
+			return strings.TrimSpace(env)
+		}
+		return strings.TrimSpace(bundleVal)
+	}
+	backend, err := sandbox.NewKubernetesBackend(sandbox.KubernetesConfig{
+		Namespace:               fill(cfg.SandboxK8sNamespace, k8s.Namespace),
+		WorkspaceClaim:          fill(cfg.SandboxK8sWorkspaceClaim, k8s.WorkspaceClaim),
+		ServiceAccount:          fill(cfg.SandboxK8sServiceAccount, k8s.ServiceAccount),
+		ImagePullSecret:         fill(cfg.SandboxK8sImagePullSecret, k8s.ImagePullSecret),
+		RuntimeClassName:        fill(cfg.SandboxK8sRuntimeClass, k8s.RuntimeClass),
+		SeccompLocalhostProfile: fill(cfg.SandboxK8sSeccompProfile, k8s.SeccompProfile),
+		KubeconfigPath:          fill(cfg.SandboxK8sKubeconfig, k8s.Kubeconfig),
+		NetworkPolicyName:       fill(cfg.SandboxK8sNetworkPolicy, k8s.NetworkPolicy),
+		NodeSelector:            nodeSelector,
+		Tolerations:             tolerations,
+	})
+	if err != nil {
+		res.Status = statusFail
+		res.Detail = err.Error()
+		return res
+	}
+	if err := backend.Preflight(ctx); err != nil {
+		res.Status = statusFail
+		res.Detail = err.Error()
+		return res
+	}
+	res.Status = statusOK
+	// bundle-doc reads are the one behavior an operator cannot infer from the
+	// cluster state this check just proved, so it is reported either way.
+	docs := "bundle docs NOT in the sandbox image — in-sandbox protocol/skill reads will not resolve"
+	if docsInImage {
+		docs = "bundle docs declared present in the sandbox image (unverifiable here — a wrong declaration reads as not-found)"
+	}
+	res.Detail = fmt.Sprintf("kubernetes backend ok; image %q, sandbox namespace %q (image pullability is checked at first pod start); %s", image, backend.Namespace(), docs)
 	return res
 }
 

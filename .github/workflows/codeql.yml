@@ -142,6 +142,19 @@ jobs:
           # 55 findings. Do not re-derive a tree-wide claim from a PR run; the
           # full-tree numbers come from push/schedule runs. See
           # docs/adr/0048-codeql-severity-gating.md.
+          # NOTE on in-source `// codeql[rule-id]` suppressions: they do NOT
+          # work with this pipeline, and this was measured, not assumed. Three
+          # forms were tried on PR #1249 (the `packs:` input, `packs:` with
+          # the documented "+" additive prefix, and an inline `config:` block
+          # combining security-extended with codeql/go-queries'
+          # AlertSuppression.ql) — in every case the uploaded SARIF carried no
+          # `suppressions` on the annotated result, the gate below kept
+          # classifying the waiver from the register, and the Security-tab
+          # alert stayed open. The analyze action's interpret step is not
+          # configurable enough to change that, so the accepted-findings
+          # register stays the ONE waiver mechanism for the CI gate, and a
+          # deliberately-waived alert is closed in the Security tab by a
+          # one-time human dismissal there (which persists across analyses).
           - language: go
             build-mode: autobuild
             queries: security-extended
@@ -282,7 +295,7 @@ jobs:
                  else ($rows | sort_by(.rule, .file, .line) | .[] | fmt) end);
               tier("BLOCKING — High band (security-severity >= 7.0), not waived"; .blocking),
               "",
-              tier("ACCEPTED — High band, waived in codeql-accepted-findings.json or in-source"; .accepted),
+              tier("ACCEPTED — High band, waived in codeql-accepted-findings.json"; .accepted),
               "",
               tier("ADVISORY — below the High band; triage in the Security tab"; .advisory),
               "",
@@ -321,10 +334,11 @@ jobs:
         #     go/log-injection at 6.1 included, so banding on it would block all
         #     23 log-injection findings and reproduce the deadlock this replaced.
         #   - a rule with no security-severity falls back to level error/warning.
-        #   - a (rule, file) pair in .github/codeql-accepted-findings.json, or an
-        #     in-source `// codeql[rule-id]` comment, moves a High-band finding
-        #     to ACCEPTED. The register is per-FILE, so the rule stays live
-        #     everywhere else.
+        #   - a (rule, file) pair in .github/codeql-accepted-findings.json moves
+        #     a High-band finding to ACCEPTED. The register is per-FILE, so the
+        #     rule stays live everywhere else. It is the ONLY waiver route: the
+        #     in-source `// codeql[rule-id]` form does not work here (see the
+        #     measured note by the matrix above).
         #
         # WHY NOT "any finding" — that was tried in #1246 and it deadlocked the
         # repo. See docs/adr/0048-codeql-severity-gating.md: the zero it was armed
@@ -347,9 +361,11 @@ jobs:
             jq -r '.blocking[] | "  \(.rule)  \(.file):\(.line)  (security-severity \(.sev))"' "$CLASSIFIED"
             echo ""
             echo "Fix it. If it is a false positive the honest options are a code"
-            echo "change that removes the sink, an in-source // codeql[rule-id]"
-            echo "comment, or an entry in .github/codeql-accepted-findings.json"
-            echo "with a written reason. Note that dismissing the alert in the"
+            echo "change that removes the sink, or an entry in"
+            echo ".github/codeql-accepted-findings.json with a written reason."
+            echo "An in-source // codeql[rule-id] comment does NOT work with this"
+            echo "pipeline — measured on #1249; see the note by the matrix above."
+            echo "Note that dismissing the alert in the"
             echo "Security tab will NOT turn this check green: this step reads the"
             echo "run's own SARIF and never consults the code-scanning API."
             exit 1
@@ -369,6 +385,7 @@ jobs:
     if: always()
     needs: [analyze]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Fail if any CodeQL analysis did not succeed
         # RESULTS via env, not interpolated into the run: block. The values are
@@ -379,6 +396,9 @@ jobs:
         env:
           RESULTS: ${{ join(needs.*.result, ' ') }}
         run: |
+          # RESULTS is supplied by the `env:` block above; shellcheck cannot see
+          # that and reads the all-caps name as a typo for the local `results`.
+          # shellcheck disable=SC2153
           results="$RESULTS"
           echo "job results: $results"
           for r in $results; do

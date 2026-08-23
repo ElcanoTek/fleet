@@ -9,12 +9,11 @@
 # release. This is a deliberate defense against fast typosquat / account-takeover
 # attacks, where a compromised version is published and then yanked once the
 # ecosystem flags it — by the time Dependabot proposes the bump, that window has
-# usually closed. It matters most for patch bumps, which the auto-merge workflow
-# (`.github/workflows/auto-merge-dependabot.yml`) merges on its own once CI is
-# green: the cooldown keeps a minutes-old patch from being proposed (and thus
-# auto-merged) before the ecosystem has had a chance to scrutinize it. Cooldown
-# applies to version updates only, never to Dependabot security updates, so
-# urgent CVE fixes are not delayed.
+# usually closed. Every bump here is merged by a human (this repository has no
+# auto-merge), so the cooldown is not load-bearing on its own; what it buys is
+# that a reviewer is never looking at a release the ecosystem has not yet had a
+# chance to scrutinize. Cooldown applies to version updates only, never to
+# Dependabot security updates, so urgent CVE fixes are not delayed.
 #
 # Schema (key `cooldown`, integer `*-days` sub-keys; supported for gomod and npm;
 # applies to version updates only):
@@ -113,15 +112,12 @@ updates:
     # CVE fixes are never delayed behind dev.
     target-branch: dev
     open-pull-requests-limit: 10
-    # Wait before proposing freshly published releases (see header). Patch is the
-    # tightest gate because auto-merge-dependabot.yml auto-merges patch bumps.
+    # Wait before proposing freshly published releases (see header).
     cooldown:
       default-days: 7
-      # 7, not 14: the supply-chain argument in the header is about the
-      # AUTO-MERGE path, and auto-merge-dependabot.yml merges patch only —
-      # a major is never auto-merged, so delaying it protects nothing and
-      # costs up to 14 days of visibility (cooldown + the weekly interval)
-      # before anyone even learns the major exists.
+      # 7, not 14 for a major: a long delay protects nothing here — a major is
+      # reviewed by a human either way — and costs up to 14 days of visibility
+      # (cooldown + the weekly interval) before anyone even learns it exists.
       semver-major-days: 7
       semver-minor-days: 7
       semver-patch-days: 3
@@ -156,11 +152,9 @@ updates:
     # Same supply-chain cooldown as gomod (see header).
     cooldown:
       default-days: 7
-      # 7, not 14: the supply-chain argument in the header is about the
-      # AUTO-MERGE path, and auto-merge-dependabot.yml merges patch only —
-      # a major is never auto-merged, so delaying it protects nothing and
-      # costs up to 14 days of visibility (cooldown + the weekly interval)
-      # before anyone even learns the major exists.
+      # 7, not 14 for a major: a long delay protects nothing here — a major is
+      # reviewed by a human either way — and costs up to 14 days of visibility
+      # (cooldown + the weekly interval) before anyone even learns it exists.
       semver-major-days: 7
       semver-minor-days: 7
       semver-patch-days: 3
@@ -180,8 +174,7 @@ updates:
   #
   # Know what a green build means here: no CI job exercises this service, and
   # `@nationaldesignstudio/rampart` is pre-1.0 (^0.1.3), where a MINOR bump is
-  # allowed to break. Auto-merge cannot touch these (it gates on patch only),
-  # so they land in human review — which is the right outcome, not a gap.
+  # allowed to break. Like every other bump here, these land in human review.
   - package-ecosystem: npm
     directory: "/scripts/rampart-service"
     schedule:

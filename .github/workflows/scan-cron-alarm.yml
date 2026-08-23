@@ -55,6 +55,7 @@ jobs:
       github.event.workflow_run.conclusion != 'success' &&
       github.event.workflow_run.conclusion != 'skipped'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: File or update the alarm issue
         # Body mirrors the in-job alarm steps in govulncheck-scheduled.yml and

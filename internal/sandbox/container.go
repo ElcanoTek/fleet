@@ -1011,13 +1011,20 @@ func (c *containerImpl) executeFileOp(ctx context.Context, req FileOpRequest, an
 // it using directory descriptors. A model-controlled Root can therefore never
 // turn the shared workspace mount into authority over a sibling conversation.
 func (c *containerImpl) fileOpAnchor(root string) (anchor string, readOnly bool, err error) {
+	return fileOpAnchorFor(c.cfg.WorkspaceHostDir, c.cfg.ReadOnlyMounts, root)
+}
+
+// fileOpAnchorFor is the backend-shared anchor resolution (see fileOpAnchor's
+// doc): the kubernetes backend applies the identical policy over its own
+// mount set, so anchor semantics cannot drift between backends.
+func fileOpAnchorFor(workspaceDir string, readOnlyMounts []string, root string) (anchor string, readOnly bool, err error) {
 	type mount struct {
 		path     string
 		readOnly bool
 	}
-	candidates := make([]mount, 0, len(c.cfg.ReadOnlyMounts)+1)
-	candidates = append(candidates, mount{path: c.cfg.WorkspaceHostDir})
-	for _, path := range c.cfg.ReadOnlyMounts {
+	candidates := make([]mount, 0, len(readOnlyMounts)+1)
+	candidates = append(candidates, mount{path: workspaceDir})
+	for _, path := range readOnlyMounts {
 		candidates = append(candidates, mount{path: path, readOnly: true})
 	}
 	best := ""

@@ -98,7 +98,7 @@ name: Publish sandbox image (reusable)
 #
 # NO image_name NEEDED. It is derived from the bundle itself — see "WHERE THE
 # IMAGE NAME COMES FROM" below. Pass it only to publish somewhere other than
-# GHCR under the caller's own owner (e.g. an ECR ref, per docs/EKS-DEPLOYMENT.md).
+# GHCR under the caller's own owner (e.g. an ECR ref, per docs/DEPLOYMENT-KUBERNETES.md).
 #
 # WHERE THE IMAGE NAME COMES FROM
 #
@@ -204,6 +204,7 @@ jobs:
   publish:
     name: Build + push sandbox image
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     outputs:
       image_ref: ${{ steps.push.outputs.image_ref }}
       image_digest: ${{ steps.push.outputs.image_digest }}
@@ -216,6 +217,11 @@ jobs:
     steps:
       - name: Checkout caller repo
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # This job holds a write scope. Nothing in it pushes or does an
+          # authenticated fetch, so do not leave the token in .git/config while
+          # a PR-controlled Containerfile goes through `podman build`.
+          persist-credentials: false
 
       # The build script lives in fleet core; a client-config caller doesn't
       # have it. Checking it out into a subdir keeps ONE canonical builder
@@ -229,6 +235,31 @@ jobs:
       # actions/untrusted-checkout under security-extended; the same pattern in
       # build-sandbox-image.yml was flagged; this file escaped both query
       # variants despite holding packages: write — the MORE dangerous twin.)
+      - name: Validate bundle_dir
+        # `fleet_ref`, which reaches the SAME build-script invocation, got a
+        # character allow-list, a bare-SHA refusal and a GITHUB_OUTPUT-newline
+        # fix. `bundle_dir` got nothing, and the asymmetry is the whole reason
+        # this exists — there is no shell injection here (it goes through `env:`
+        # and is quoted at every use), but nothing stopped `../../.fleet-core`
+        # or an absolute path from silently repointing the build at a different
+        # manifest. The reusable workflow runs in the CALLER's context with the
+        # caller's token, so the blast radius is a client repo misbuilding its
+        # own image; this is defence in depth and consistency, not a live hole.
+        env:
+          REQUESTED: ${{ inputs.bundle_dir }}
+        run: |
+          set -euo pipefail
+          case "$REQUESTED" in
+            ""|.) ;;
+            /*)
+              echo "::error::bundle_dir must be relative to the caller repo, not absolute."; exit 1 ;;
+            *..*)
+              echo "::error::bundle_dir must not contain '..' — it may only name a path inside the caller repo."; exit 1 ;;
+            *[!a-zA-Z0-9._/-]*)
+              echo "::error::bundle_dir contains a character outside [A-Za-z0-9._/-]. Refused before the build."; exit 1 ;;
+          esac
+          echo "bundle_dir accepted: '${REQUESTED:-.}'"
+
       - name: Pin fleet_ref to collaborator-controlled refs
         id: pin
         env:

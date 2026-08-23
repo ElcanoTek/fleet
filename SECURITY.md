@@ -202,10 +202,7 @@ compromised or fresh-and-unvetted release from reaching `main`:
   Dependabot waits a few days (3 for patch, 7 for minor, 14 for major) before
   proposing a freshly published release. This blunts fast typosquat /
   account-takeover attacks, where a malicious version is published and then yanked
-  once the ecosystem flags it. It matters most for **patch** bumps, which
-  `.github/workflows/auto-merge-dependabot.yml` auto-merges once the CI gate is
-  green: without a cooldown a minutes-old patch could be proposed and auto-merged
-  before any scrutiny. Cooldown applies to version updates only — Dependabot
+  once the ecosystem flags it. Cooldown applies to version updates only — Dependabot
   **security** updates are never delayed, so urgent CVE fixes still flow
   immediately.
 
@@ -214,18 +211,17 @@ compromised or fresh-and-unvetted release from reaching `main`:
   only, so the one ecosystem whose "dependency" is *the CI definition itself* —
   a `github-actions` bump rewrites `.github/workflows/*` and therefore changes
   what CI executes — cannot be made to wait, and it is configured daily against
-  `dev`. Because `dev` additionally has no required status checks (see "Static
-  analysis" above), that combination is not something to auto-merge, so
-  `auto-merge-dependabot.yml` **excludes `github_actions` at any bump level** and
-  those PRs take a human. The workflow also carries an explicit
-  `branches: [main, dev]` filter, so it can never silently begin applying to some
-  other branch, and declares its write scopes on the job rather than the workflow.
+  `dev`, which additionally has no required status checks (see "Static analysis"
+  above). What contains that combination now is simply that **every** Dependabot
+  PR takes a human: automatic merging was removed from this repository, so no
+  dependency bump of any ecosystem or bump level reaches a branch without someone
+  looking at it.
 
 The cooldown reduces the window for a fast attack but is **not** a guarantee:
 a patient attacker who waits out the cooldown, or a compromise the ecosystem
 never flags, would still slip through. The committed `go.sum` + checksum DB,
 `govulncheck` and `npm audit` are the stronger, always-on controls; the cooldown
-is defense-in-depth on top of the auto-merge path, and it does not cover
+is defense-in-depth on top of human review, and it does not cover
 `github-actions` at all.
 
 ## CSRF protection (cookie-authenticated routes)

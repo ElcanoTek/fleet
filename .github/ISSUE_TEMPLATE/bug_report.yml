@@ -1,0 +1,44 @@
+name: Bug report
+description: Something in fleet does not behave as documented.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For a **security vulnerability**, stop and read
+        [SECURITY.md](https://github.com/ElcanoTek/fleet/blob/main/SECURITY.md)
+        instead — do not file it here.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you observed, and what you expected instead.
+    validations: {required: true}
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: The smallest sequence that shows the problem.
+      placeholder: |
+        1. fleet serve with ...
+        2. ...
+        3. Observed: ...
+    validations: {required: true}
+  - type: textarea
+    id: version
+    attributes:
+      label: Version and environment
+      description: >-
+        Output of `fleet version` (or the commit you built from), your OS, and
+        whether Podman is running rootless. `fleet doctor` output is ideal.
+      render: shell
+    validations: {required: true}
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: >-
+        Redact before pasting. fleet brokers credentials host-side precisely so
+        they never reach a log, but check anyway.
+      render: shell
+    validations: {required: false}

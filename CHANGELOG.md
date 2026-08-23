@@ -17,6 +17,217 @@ prior versions are listed because none have shipped.
 
 ## [Unreleased]
 
+### Added
+
+- **A workflow + shell lint gate (`actionlint`, `shellcheck`):** nothing checked
+  the ~3.1k lines of workflow YAML that decide what every other gate runs, and
+  nothing checked the ~6.2k lines of bash that *are* the deploy path
+  (`update.sh` / `bootstrap.sh` / `doctor.sh`). Both now block in `ci.yml` and
+  `dev-ci.yml` and run from `make lint` via `lint-actions`, pinned and
+  checksum-verified like `gitleaks` and `grype`. `actionlint` covers what
+  Semgrep's `p/github-actions` pack and CodeQL's `actions` language do not —
+  `${{ }}` expression syntax and types, undefined contexts, invalid
+  `needs:`/`runs-on:`/cron — plus shellcheck over every `run:` block.
+  Both start at **zero findings**, measured: the 5 actionlint and 3 shellcheck
+  items were fixed or annotated with reasons in the same change, so a failure is
+  a regression rather than a backlog.
+- **Two new CI invariant tests**, in the spirit of the existing pin/gate tests:
+  every workflow must declare a top-level `permissions:` block (without one it
+  silently inherits the repository default), and the `actionlint`
+  version/checksum must agree across both lanes.
+- **PR and issue templates.** The PR template prompts for what/why, how it was
+  verified, and scope-and-deviations, plus the obligations that were previously
+  a reviewer's job to remember (CHANGELOG entry, `docs/<FEATURE>.md` note, an
+  ADR in the *same* PR when an invariant moves). `ISSUE_TEMPLATE/config.yml`
+  disables blank issues so the private security-disclosure link is unmissable —
+  `SECURITY.md` says "do not open a public issue for a vulnerability" and the
+  New Issue button was offering a blank box with no such warning.
+
+### Changed
+
+- **Automatic merging removed.** `auto-merge-dependabot.yml` is deleted and every
+  reference to it across `SECURITY.md`, `dependabot.yml`, `CODEOWNERS` and
+  `docs/SCANNING.md` is gone. Its own header had argued the case against it: it
+  explained that `gh pr merge --auto` holds a merge only on *required* checks,
+  named `dev` as a branch that requires none, and then listed `dev` in its own
+  `branches:` filter — so the mitigation the docs credited was in fact the
+  delivery mechanism for same-day patch bumps landing unattended. Every
+  dependency bump now waits for a human.
+- **DCO sign-off is no longer requested.** The requirement was documented in
+  `CONTRIBUTING.md` and enforced nowhere; rather than add a gate for it, the
+  requirement was dropped.
+- **`ci.yml` gained a `concurrency:` group** (the expensive lane had none, so
+  stacked pushes ran full suites to completion). Cancellation is scoped to
+  `pull_request` — a push to `main` is the only tree-wide CodeQL verdict and must
+  not be cancelled. **`timeout-minutes` is now set on every job** (it was present
+  in 2 of 13 workflows).
+- **`issues: write` no longer sits at workflow scope** in the two scheduled scan
+  lanes, where it was live for every step of a long job running
+  `govulncheck@latest` and a podman build pulling ~400 RPMs. It moved to a
+  dedicated alarm job that checks out nothing — the shape `scan-cron-alarm.yml`
+  already used. `persist-credentials: false` added to the write-scoped checkouts.
+- **`make ci-web` now mirrors the real web job.** It ran 4 of its 8 steps,
+  dropping both `npm audit` gates, the override canary and the explicit
+  `npm run typecheck` — a clean local run and a red PR.
+
+### Fixed
+
+- **`AGENTS.md` reconciled with the tree it describes.** The Kubernetes backend
+  (ADR-0049) landed an index row and nothing else, so the headline paragraph and
+  the "sandbox is mandatory" invariant still called the sandbox
+  *rootless-Podman* — an agent reading only that file would treat
+  `FLEET_SANDBOX_BACKEND=kubernetes` as an invariant violation rather than a
+  supported backend. Both now say pluggable-backend/mandatory-sandbox, and the
+  invariant additionally names the mechanism it had left implicit: the
+  `fleet_host_executor` build-tag fence (#159) and the kubernetes backend's
+  fail-closed preflight. Also corrected: the `make test`/`test-race`/`test-cover`
+  lines omitted `-tags fleet_host_executor` (a bare `go test ./...` builds a
+  different tree than CI); the web block was a stale copy of the CI job that
+  dropped the second npm tree (`scripts/rampart-service`) and the override
+  canary, where `make ci-web` now runs all eight steps; `make govulncheck`,
+  `ci-go`, `ci-web` and `ci-local` were missing from the target list; CI was
+  described as one lane when `ci.yml` fires on `main` only and `dev-ci.yml` is
+  `dev`'s only signal (so the promotion PR is the first full-gate run); the
+  merge-gate enumeration omitted actionlint/shellcheck, the Helm lint and the
+  Playwright suites; and the repository map omitted `deploy/`, the harness
+  binaries under `cmd/`, and the `/settings` + `/admin` web routes.
+
+- **Two green-but-vacuous holes in `ci.yml`.** The `postgresql-client-18` install
+  was best-effort (`|| echo`), so an unreachable PGDG left client 16 in place and
+  `backup_test.go`'s major-mismatch `t.Skipf` turned the *only* coverage of
+  `fleet backup` / `fleet restore` off behind the single required check on
+  `main`; it now asserts the major. And the docs-only classifier initialised
+  `docs_only=true` and only ever cleared it inside its loop, so an **empty** diff
+  classified as docs-only and skipped the suite — which `ci-gate` then waved
+  through, because an empty diff is the absence of evidence, not evidence that
+  only prose changed.
+- **`dev-ci.yml`'s `go test` could report cached results.** It lacked the
+  `-count=1` that `ci.yml` passes on all three of its invocations; `setup-go`
+  restores the build cache, which holds test *results*, and Go's cache key cannot
+  see a Postgres service container.
+- **Semgrep's deferred-failure path was unreachable.** `set -uo pipefail` does not
+  clear the `-e` the runner supplies, so the step aborted on the `semgrep` line
+  and `status=$?` never ran. The outcome was still correct; the documented design
+  was not what executed.
+- **The docs advertised a CodeQL waiver route that does not work.** Five places —
+  `SCANNING.md`, `CODEQL.md`, ADR-0048, `CONTRIBUTING.md` and the gate's own
+  runtime advice — offered an in-source `// codeql[rule-id]` comment, while
+  `codeql.yml` recorded that all three forms were tried on #1249 and none
+  produced a `suppressions` array. `codeql.yml` carried *both* claims, the stale
+  one directly above the note refuting it. The accepted-findings register is the
+  only route that works.
+- **ADR-0048's normative Decision stated the gate threshold as an OR** where
+  `codeql-gate.jq` implements a fallback; read literally it blocks on
+  `go/log-injection` (`error` at security-severity 6.1) — the exact deadlock the
+  ADR exists to undo.
+- Assorted doc drift: `CONTRIBUTING.md` named Go 1.26.x (`go.mod` says 1.27.0);
+  `CODEOWNERS` enumerated 7 of `ci-gate`'s 13 `needs`; `semgrep.yml` claimed its
+  `pip install` had the same checksum guarantee as the `gitleaks`/`grype`
+  downloads, which it does not.
+
+- **Kubernetes as a first-class deployment (#989 / ADR-0049):** the fleet
+  control plane can now run in a cluster with agent sandboxes as **ephemeral
+  pods**, selected by one knob — `FLEET_SANDBOX_BACKEND=podman|kubernetes`
+  (env overrides the bundle manifest's `sandbox.backend`, mirroring
+  `sandbox.runtime`'s precedence; an unrecognized value refuses to boot).
+  What landed, in one pass per the issue's plan:
+
+  - **A third sandbox backend** in `internal/sandbox` (`k8sImpl`) behind the
+    same internal interface as the podman and host executors: one pod per
+    sandbox (`sleep infinity` + exec over the apiserver's WebSocket channel
+    protocol), bash as one-shot execs, the python bridge as a held exec
+    session, and file ops running the same embedded `fileops.py`. Pods are
+    read-only-rootfs, non-root (uid 1000), all capabilities dropped, seccomp
+    RuntimeDefault (or an operator-installed Localhost profile),
+    `automountServiceAccountToken=false` — and the workspace is a shared
+    ReadWriteMany PVC mounted at the **same absolute path** as the control
+    plane, preserving the same-path invariant. The #796 poison-and-retire
+    containment carries over: a cancelled/timed-out call deletes the pod with
+    zero grace and retires the sandbox. A boot-time orphan-pod sweep mirrors
+    the podman container prune. No client-go: a minimal hand-rolled REST +
+    WebSocket-exec client (gorilla/websocket was already in the tree — zero
+    new modules), with kubeconfig support deliberately narrow (token /
+    client-cert; exec plugins and `insecure-skip-tls-verify` refused).
+  - **Fail-closed preflight** when the backend is selected, at boot and in
+    `fleet validate-config`: apiserver reachability + credentials, the exact
+    RBAC verbs (pods create/get/list/delete, pods/exec create), the workspace
+    claim, the sealed-egress NetworkPolicy object, and the RuntimeClass when
+    configured. Podman-only knobs are refused rather than silently ignored
+    (`FLEET_SANDBOX_RUNTIME` → use `FLEET_SANDBOX_K8S_RUNTIME_CLASS`;
+    `FLEET_SANDBOX_SECCOMP_PROFILE` → `FLEET_SANDBOX_K8S_SECCOMP_PROFILE`;
+    `FLEET_DEFAULT_NETWORK_MODE=allowlisted` is unsupported — the host egress
+    proxy is unreachable from pods).
+  - **Dedicated runner pools**: sandbox pods can be pinned to their own node
+    pool with `FLEET_SANDBOX_K8S_NODE_SELECTOR` ("k=v,k=v") and
+    `FLEET_SANDBOX_K8S_TOLERATIONS` (a JSON array), or the manifest's
+    structured `sandbox.kubernetes.node_selector` / `.tolerations` — fleet's
+    horizontal scaling story made concrete (more runner capacity = a bigger
+    pool, never more fleet replicas). Malformed values refuse to boot. Sandbox
+    pods also pin `imagePullPolicy: IfNotPresent` explicitly (the API's
+    `Always`-for-`:latest` default breaks side-loaded kind images and re-pulls
+    a mutable tag mid-run).
+  - **A Helm chart** (`deploy/helm/fleet`): single-replica control-plane
+    Deployment (strategy Recreate, deliberately no replica knob — the
+    scheduler is single-owner), the runner RBAC Role/Binding, workspace/data
+    PVCs, the `fleet-sandbox-deny-all` NetworkPolicy (selecting pods labeled
+    `fleet.elcanotek.com/egress=none`), optional egress shaping for open
+    pods, optional evaluation Postgres, optional web tier + Ingress. Linted
+    and template-rendered in CI (new `helm` job inside both gates).
+  - **Docs**: `docs/DEPLOYMENT-KUBERNETES.md` — the one Kubernetes reference:
+    15-minute kind path, the two image builds (the control-plane
+    Containerfile's `FROM golang:` stage is now pinned to go.mod by
+    `scripts/check_versions_test.go`), production checklist, provider notes
+    (EKS/GKE/AKS), day-2 operations (the CronJob equivalents of the systemd
+    timers), troubleshooting, and an explicit honest-deviations list
+    (NetworkPolicy enforcement belongs to the CNI, no per-pod pids limit, no
+    #263 resource telemetry, no bundled-seccomp/supporting-doc mounts). Plus
+    updates to `DEPLOYMENT.md` and `SANDBOX-RUNTIMES.md`
+    (`FLEET_SANDBOX_BACKEND` documented next to `FLEET_SANDBOX_RUNTIME`).
+    [ADR-0049](docs/adr/0049-kubernetes-backend-split-control-plane.md)
+    amends ADR-0004: the single-box podman install **stays the default and is
+    unchanged**; only the no-k8s-artifacts enforcement clause is superseded.
+
+- **Kubernetes: bundle docs can serve the file tools again
+  (`sandbox.kubernetes.bundle_docs_in_image` /
+  `FLEET_SANDBOX_K8S_BUNDLE_DOCS_IN_IMAGE`).** A sandbox pod mounts only the
+  workspace claim, so the supporting-doc bind mounts (`protocols/`,
+  `personas/`, `system_prompts/`, skills) do not apply — and because the
+  fileop path anchor only trusts roots that are actually mounted, dropping
+  them made `view_file protocols/foo.yaml` a *refusal*
+  (`fileop root is not inside a sandbox bind mount`), not a miss. For a
+  protocol-driven bundle that is most of the product. An operator whose
+  sandbox image carries the bundle's doc dirs at the **same absolute paths**
+  the control plane reads them from can now declare it, and those roots keep
+  their read anchors inside a pod, so the file tools work exactly as they do
+  under podman.
+
+  The declaration cannot widen anything: it re-admits *read-only* anchors for
+  roots the operator already configured, the read still executes inside the
+  sandbox, and fleet cannot inspect an image — so a wrong declaration surfaces
+  as a not-found read (the podman missing-dir behavior), never as a boundary
+  change. It covers only the bundle's own doc dirs; other entries in the mount
+  list (the uploads root) stay dropped, each with a log line. A malformed
+  value refuses to boot, at boot and in `fleet validate-config`, which also
+  now reports which way it resolved.
+
+  One case no declaration can fix, now stated plainly in the docs: a bundle
+  that inherits fleet's built-in skills pack resolves `SkillsDir` to a merged
+  tree under the control plane's data dir, which no sandbox image can carry —
+  so in-sandbox skill reads need the bundle's `skills_builtin: false`, and
+  there is no configuration that yields both the built-in pack and working
+  in-sandbox skill files.
+
+### Removed
+
+- **`docs/EKS-DEPLOYMENT.md`** — the hand-verified recipe for running the
+  whole single-box model (rootless Podman included) inside one privileged pod
+  on one large EKS node. Retired in favor of the first-class path above
+  rather than kept as a parallel track: an unmaintained privileged-pod recipe
+  beside a supported unprivileged one would imply support it never had (it
+  was explicitly "hand-verified, not CI-exercised"). Its durable content —
+  EFS/RWX storage, ECR/IRSA, NetworkPolicy-enforcement caveats, the backup
+  CronJob, day-2 mappings — was folded into `docs/DEPLOYMENT-KUBERNETES.md`.
+
 ### Fixed
 
 - **Three own-rows authorization holes on the task surface.** The read path for

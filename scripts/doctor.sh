@@ -52,6 +52,9 @@ SRC_DIR="${SRC_DIR:-$REPO_ROOT}"
 # scripts/bootstrap.sh (SERVICE_USER/SERVICE_HOME there).
 SERVICE_USER="${FLEET_SERVICE_USER:-fleet}"
 SERVICE_HOME="${FLEET_SERVICE_HOME:-/var/lib/fleet}"
+# shellcheck disable=SC2034  # unread here on purpose: this block documents the
+# service-account contract that deploy/fleet-web.service and bootstrap.sh must
+# match, and dropping the name would remove the anchor the comment above names.
 WEB_USER="fleet-web"
 SERVICE_NAME="${FLEET_SERVICE_NAME:-fleet}"
 INSTALL_DIR="${FLEET_INSTALL_DIR:-/opt/fleet}"

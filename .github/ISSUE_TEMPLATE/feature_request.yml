@@ -1,0 +1,39 @@
+name: Feature request
+description: Propose a capability or a change to how fleet behaves.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: >-
+        What are you trying to do that fleet makes hard or impossible? Describe
+        the situation rather than the solution you have in mind.
+    validations: {required: true}
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like fleet to do
+    validations: {required: true}
+  - type: dropdown
+    id: invariant
+    attributes:
+      label: Does this touch one of the invariants in AGENTS.md?
+      description: >-
+        The mandatory sandbox, host-side credentials, the single governed loop,
+        no secrets in the repo, honest docs, or client content living in an
+        out-of-repo bundle. If yes, it needs an ADR — say so here and we can
+        work out the shape before anyone writes code.
+      options:
+        - "No — this is additive and does not touch an invariant"
+        - "Yes — or I am not sure"
+    validations: {required: true}
+  - type: textarea
+    id: bundle
+    attributes:
+      label: Could this ship as a client-config bundle instead?
+      description: >-
+        fleet is an engine; per-customer MCP servers, personas, protocols and
+        prompts belong in a bundle rather than in this repo. If you think this
+        genuinely needs an engine change, say why the bundle cannot express it.
+    validations: {required: false}

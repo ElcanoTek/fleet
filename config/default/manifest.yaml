@@ -28,6 +28,32 @@ sandbox:
   # fail-closed boot preflight.
   # See docs/SANDBOX-RUNTIMES.md. FLEET_SANDBOX_RUNTIME overrides this.
   runtime: "${FLEET_SANDBOX_RUNTIME:-}"
+  # WHERE sandboxes run (#989 / ADR-0049): "podman" (default — co-located
+  # rootless containers) or "kubernetes" (each sandbox an ephemeral pod; the
+  # split control-plane/runner enterprise path — see
+  # docs/DEPLOYMENT-KUBERNETES.md). FLEET_SANDBOX_BACKEND overrides this, and
+  # each sandbox.kubernetes.* field below is overridden by the matching
+  # FLEET_SANDBOX_K8S_* env var. Uncomment to opt a bundle in:
+  # backend: kubernetes
+  # kubernetes:
+  #   namespace: ""              # default: the control plane's own namespace
+  #   workspace_claim: fleet-workspace   # required: shared RWX PVC
+  #   service_account: fleet-sandbox
+  #   image_pull_secret: ""
+  #   runtime_class: ""          # e.g. kata (preflighted fail-closed)
+  #   seccomp_profile: ""        # node-local Localhost profile; empty = RuntimeDefault
+  #   kubeconfig: ""             # out-of-cluster auth; empty = in-cluster
+  #   network_policy: fleet-sandbox-deny-all
+  #   node_selector: {}          # pin sandbox pods to a dedicated runner pool
+  #   tolerations: []            # [{key,operator,value,effect}] for a tainted pool
+  #   # Declare that the SANDBOX IMAGE carries this bundle's protocols/,
+  #   # personas/, system_prompts/ and skills/ at the same absolute paths the
+  #   # control plane reads them from (a pod mounts only the workspace claim,
+  #   # so that is the only way it can see them). Off = fleet drops those
+  #   # fileop anchors and view_file on `protocols/…` is refused; on = the
+  #   # file tools work again. Unverifiable by fleet — a wrong declaration
+  #   # reads as not-found, never as a wider boundary.
+  #   bundle_docs_in_image: false
 
 branding:
   app_name: "Fleet"
