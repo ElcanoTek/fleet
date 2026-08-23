@@ -844,6 +844,16 @@ func checkKubernetesSandbox(ctx context.Context, res checkResult, cfg *config.Co
 		}
 		tolerations = parsed
 	}
+	docsInImage := k8s.BundleDocsInImage
+	if strings.TrimSpace(cfg.SandboxK8sBundleDocsInImage) != "" {
+		parsed, err := sandbox.ParseK8sBundleDocsInImage(cfg.SandboxK8sBundleDocsInImage)
+		if err != nil {
+			res.Status = statusFail
+			res.Detail = "FLEET_SANDBOX_K8S_BUNDLE_DOCS_IN_IMAGE: " + err.Error()
+			return res
+		}
+		docsInImage = parsed
+	}
 	fill := func(env, bundleVal string) string {
 		if strings.TrimSpace(env) != "" {
 			return strings.TrimSpace(env)
@@ -873,7 +883,13 @@ func checkKubernetesSandbox(ctx context.Context, res checkResult, cfg *config.Co
 		return res
 	}
 	res.Status = statusOK
-	res.Detail = fmt.Sprintf("kubernetes backend ok; image %q, sandbox namespace %q (image pullability is checked at first pod start)", image, backend.Namespace())
+	// bundle-doc reads are the one behavior an operator cannot infer from the
+	// cluster state this check just proved, so it is reported either way.
+	docs := "bundle docs NOT in the sandbox image — in-sandbox protocol/skill reads will not resolve"
+	if docsInImage {
+		docs = "bundle docs declared present in the sandbox image (unverifiable here — a wrong declaration reads as not-found)"
+	}
+	res.Detail = fmt.Sprintf("kubernetes backend ok; image %q, sandbox namespace %q (image pullability is checked at first pod start); %s", image, backend.Namespace(), docs)
 	return res
 }
 

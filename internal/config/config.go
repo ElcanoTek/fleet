@@ -392,6 +392,7 @@ var allowedEnvVars = map[string]bool{
 	"FLEET_SANDBOX_K8S_SECCOMP_PROFILE":       true,
 	"FLEET_SANDBOX_K8S_KUBECONFIG":            true,
 	"FLEET_SANDBOX_K8S_NETWORK_POLICY":        true,
+	"FLEET_SANDBOX_K8S_BUNDLE_DOCS_IN_IMAGE":  true,
 	"FLEET_SANDBOX_K8S_NODE_SELECTOR":         true,
 	"FLEET_SANDBOX_K8S_TOLERATIONS":           true,
 	"FLEET_DEFAULT_NETWORK_MODE":              true,
@@ -1041,8 +1042,14 @@ type Config struct {
 	SandboxK8sSeccompProfile  string // FLEET_SANDBOX_K8S_SECCOMP_PROFILE — node-local Localhost profile; empty = RuntimeDefault
 	SandboxK8sKubeconfig      string // FLEET_SANDBOX_K8S_KUBECONFIG — out-of-cluster auth; empty = in-cluster
 	SandboxK8sNetworkPolicy   string // FLEET_SANDBOX_K8S_NETWORK_POLICY — deny-all policy the preflight requires; default "fleet-sandbox-deny-all"
-	SandboxK8sNodeSelector    string // FLEET_SANDBOX_K8S_NODE_SELECTOR — "key=value,key=value" pinning sandbox pods to a runner pool
-	SandboxK8sTolerations     string // FLEET_SANDBOX_K8S_TOLERATIONS — JSON array of {key,operator,value,effect} for a tainted runner pool
+	// SandboxK8sBundleDocsInImage declares that the sandbox IMAGE carries the
+	// bundle's supporting-doc dirs at the same absolute paths the control plane
+	// reads them from, keeping the fileop anchors for those roots valid inside
+	// a pod. Raw string, parsed fail-closed where it is consumed (like the
+	// selector/toleration knobs): empty = false.
+	SandboxK8sBundleDocsInImage string // FLEET_SANDBOX_K8S_BUNDLE_DOCS_IN_IMAGE
+	SandboxK8sNodeSelector      string // FLEET_SANDBOX_K8S_NODE_SELECTOR — "key=value,key=value" pinning sandbox pods to a runner pool
+	SandboxK8sTolerations       string // FLEET_SANDBOX_K8S_TOLERATIONS — JSON array of {key,operator,value,effect} for a tainted runner pool
 	// PIIRedactionEnabled gates the OPTIONAL PII redaction pass (#450) applied to
 	// tool output before it enters the model context. FLEET_PII_REDACTION_ENABLED,
 	// default false (byte-for-byte unchanged when off). Provider-neutral; the
@@ -1557,18 +1564,19 @@ func Load(envFile string) (*Config, error) {
 		SandboxRuntime: getenvFleet("SANDBOX_RUNTIME"),
 		// Sandbox backend (#989). Lower-cased here; validated fail-closed at
 		// boot (resolveSandboxBackend in cmd/fleet) against the bundle value.
-		SandboxBackend:            strings.ToLower(strings.TrimSpace(getenvFleet("SANDBOX_BACKEND"))),
-		SandboxK8sNamespace:       strings.TrimSpace(getenvFleet("SANDBOX_K8S_NAMESPACE")),
-		SandboxK8sWorkspaceClaim:  strings.TrimSpace(getenvFleet("SANDBOX_K8S_WORKSPACE_CLAIM")),
-		SandboxK8sServiceAccount:  strings.TrimSpace(getenvFleet("SANDBOX_K8S_SERVICE_ACCOUNT")),
-		SandboxK8sImagePullSecret: strings.TrimSpace(getenvFleet("SANDBOX_K8S_IMAGE_PULL_SECRET")),
-		SandboxK8sRuntimeClass:    strings.TrimSpace(getenvFleet("SANDBOX_K8S_RUNTIME_CLASS")),
-		SandboxK8sSeccompProfile:  strings.TrimSpace(getenvFleet("SANDBOX_K8S_SECCOMP_PROFILE")),
-		SandboxK8sKubeconfig:      strings.TrimSpace(getenvFleet("SANDBOX_K8S_KUBECONFIG")),
-		SandboxK8sNetworkPolicy:   strings.TrimSpace(getenvFleet("SANDBOX_K8S_NETWORK_POLICY")),
-		SandboxK8sNodeSelector:    strings.TrimSpace(getenvFleet("SANDBOX_K8S_NODE_SELECTOR")),
-		SandboxK8sTolerations:     strings.TrimSpace(getenvFleet("SANDBOX_K8S_TOLERATIONS")),
-		DefaultNetworkMode:        strings.ToLower(strings.TrimSpace(getenvFleet("DEFAULT_NETWORK_MODE"))),
+		SandboxBackend:              strings.ToLower(strings.TrimSpace(getenvFleet("SANDBOX_BACKEND"))),
+		SandboxK8sNamespace:         strings.TrimSpace(getenvFleet("SANDBOX_K8S_NAMESPACE")),
+		SandboxK8sWorkspaceClaim:    strings.TrimSpace(getenvFleet("SANDBOX_K8S_WORKSPACE_CLAIM")),
+		SandboxK8sServiceAccount:    strings.TrimSpace(getenvFleet("SANDBOX_K8S_SERVICE_ACCOUNT")),
+		SandboxK8sImagePullSecret:   strings.TrimSpace(getenvFleet("SANDBOX_K8S_IMAGE_PULL_SECRET")),
+		SandboxK8sRuntimeClass:      strings.TrimSpace(getenvFleet("SANDBOX_K8S_RUNTIME_CLASS")),
+		SandboxK8sSeccompProfile:    strings.TrimSpace(getenvFleet("SANDBOX_K8S_SECCOMP_PROFILE")),
+		SandboxK8sKubeconfig:        strings.TrimSpace(getenvFleet("SANDBOX_K8S_KUBECONFIG")),
+		SandboxK8sNetworkPolicy:     strings.TrimSpace(getenvFleet("SANDBOX_K8S_NETWORK_POLICY")),
+		SandboxK8sBundleDocsInImage: strings.TrimSpace(getenvFleet("SANDBOX_K8S_BUNDLE_DOCS_IN_IMAGE")),
+		SandboxK8sNodeSelector:      strings.TrimSpace(getenvFleet("SANDBOX_K8S_NODE_SELECTOR")),
+		SandboxK8sTolerations:       strings.TrimSpace(getenvFleet("SANDBOX_K8S_TOLERATIONS")),
+		DefaultNetworkMode:          strings.ToLower(strings.TrimSpace(getenvFleet("DEFAULT_NETWORK_MODE"))),
 
 		// PII redaction (#450) — optional, default off.
 		PIIRedactionEnabled: lp.getenvFleetBool("PII_REDACTION_ENABLED", false),

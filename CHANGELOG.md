@@ -81,6 +81,36 @@ prior versions are listed because none have shipped.
     amends ADR-0004: the single-box podman install **stays the default and is
     unchanged**; only the no-k8s-artifacts enforcement clause is superseded.
 
+- **Kubernetes: bundle docs can serve the file tools again
+  (`sandbox.kubernetes.bundle_docs_in_image` /
+  `FLEET_SANDBOX_K8S_BUNDLE_DOCS_IN_IMAGE`).** A sandbox pod mounts only the
+  workspace claim, so the supporting-doc bind mounts (`protocols/`,
+  `personas/`, `system_prompts/`, skills) do not apply — and because the
+  fileop path anchor only trusts roots that are actually mounted, dropping
+  them made `view_file protocols/foo.yaml` a *refusal*
+  (`fileop root is not inside a sandbox bind mount`), not a miss. For a
+  protocol-driven bundle that is most of the product. An operator whose
+  sandbox image carries the bundle's doc dirs at the **same absolute paths**
+  the control plane reads them from can now declare it, and those roots keep
+  their read anchors inside a pod, so the file tools work exactly as they do
+  under podman.
+
+  The declaration cannot widen anything: it re-admits *read-only* anchors for
+  roots the operator already configured, the read still executes inside the
+  sandbox, and fleet cannot inspect an image — so a wrong declaration surfaces
+  as a not-found read (the podman missing-dir behavior), never as a boundary
+  change. It covers only the bundle's own doc dirs; other entries in the mount
+  list (the uploads root) stay dropped, each with a log line. A malformed
+  value refuses to boot, at boot and in `fleet validate-config`, which also
+  now reports which way it resolved.
+
+  One case no declaration can fix, now stated plainly in the docs: a bundle
+  that inherits fleet's built-in skills pack resolves `SkillsDir` to a merged
+  tree under the control plane's data dir, which no sandbox image can carry —
+  so in-sandbox skill reads need the bundle's `skills_builtin: false`, and
+  there is no configuration that yields both the built-in pack and working
+  in-sandbox skill files.
+
 ### Removed
 
 - **`docs/EKS-DEPLOYMENT.md`** — the hand-verified recipe for running the

@@ -97,9 +97,20 @@ privileged node" packaging track as a stepping stone.
   (fail-closed) instead of silently granting open egress. Cluster-side egress
   shaping via NetworkPolicy is the replacement.
 - Per-pod pids limits (not expressible in a Pod spec), the bundled seccomp
-  JSON (nodes take a Localhost profile instead), `podman stats` resource
-  telemetry (#263), and same-path supporting-doc bind mounts — each recorded
-  as an honest deviation in `docs/DEPLOYMENT-KUBERNETES.md`.
+  JSON (nodes take a Localhost profile instead), and `podman stats` resource
+  telemetry (#263) — each recorded as an honest deviation in
+  `docs/DEPLOYMENT-KUBERNETES.md`.
+- Same-path supporting-doc bind mounts: a pod has no host filesystem to bind
+  from. fleet does not synthesize them (no ConfigMap projection, no
+  control-plane push into the workspace claim — both would put bundle content
+  on a writable, agent-reachable surface). Instead the sandbox IMAGE may carry
+  the bundle's doc dirs at the same absolute paths, and
+  `sandbox.kubernetes.bundle_docs_in_image` declares that, which keeps those
+  roots' **read-only** fileop anchors valid inside a pod. A declaration, not a
+  probe: fleet cannot inspect an image, so it is trusted the way
+  `sandbox.image` and `runtime_class` are — and it can only re-admit reads of
+  operator-configured paths, executed inside the sandbox, so a wrong
+  declaration degrades to not-found rather than widening any boundary.
 
 ## Consequences
 

@@ -459,6 +459,18 @@ type KubernetesSandbox struct {
 	// NetworkPolicy is the deny-all NetworkPolicy name the boot preflight
 	// requires to exist (default "fleet-sandbox-deny-all").
 	NetworkPolicy string `yaml:"network_policy"`
+	// BundleDocsInImage declares that the sandbox IMAGE carries this bundle's
+	// supporting-doc dirs (protocols/, personas/, system_prompts/, skills/) at
+	// the SAME absolute paths the control plane reads them from — the only way
+	// a pod can see them, since it mounts just the workspace claim. Set it and
+	// the fileop path anchors for those roots stay valid inside a pod, so
+	// view_file works on `protocols/…` again; leave it false (the default) and
+	// the anchors are dropped, which is what refuses those reads. A
+	// declaration, not a probe: fleet cannot inspect an image's contents, so a
+	// wrong declaration surfaces as a not-found read, never as a widened
+	// boundary (reads only, still read-only, still inside the sandbox).
+	// FLEET_SANDBOX_K8S_BUNDLE_DOCS_IN_IMAGE overrides it.
+	BundleDocsInImage bool `yaml:"bundle_docs_in_image"`
 	// NodeSelector pins sandbox pods to labeled nodes (a dedicated runner
 	// pool). FLEET_SANDBOX_K8S_NODE_SELECTOR ("k=v,k=v") overrides it.
 	NodeSelector map[string]string `yaml:"node_selector"`

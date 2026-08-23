@@ -397,6 +397,66 @@ func TestK8sFileOpsThroughRealExecutor(t *testing.T) {
 	}
 }
 
+// End to end through the fake apiserver + the real fileops.py: when the
+// operator declares the bundle's doc dirs are in the sandbox image (the agent
+// layer then keeps them in ReadOnlyMounts), a read of one resolves and a write
+// beneath it is refused. This is the whole point of
+// bundle_docs_in_image — view_file on `protocols/…` working in a pod — and it
+// must not come with a write path.
+func TestK8sFileOpsReadBundleDocsWhenDeclaredInImage(t *testing.T) {
+	if !pythonAvailable() {
+		t.Skip("python3 not available on the test host")
+	}
+	// Stands in for the path the sandbox image carries the bundle doc dir at;
+	// the fake execs on the host, so the same path must exist here.
+	docs := filepath.Join(t.TempDir(), "client", "protocols")
+	if err := os.MkdirAll(docs, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	protocol := filepath.Join(docs, "deal-creation.yaml")
+	if err := os.WriteFile(protocol, []byte("steps: [prepare, confirm, create]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	fake := newFakeKube(t)
+	backend := fake.backend(t, KubernetesConfig{Namespace: "fleet-sandboxes"})
+	cfg := testContainerConfig(t)
+	cfg.BridgeScript = []byte("# unused\n")
+	cfg.ReadOnlyMounts = []string{docs}
+	sb, err := backend.newSandbox(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("newSandbox: %v", err)
+	}
+	defer sb.Close()
+
+	res, err := sb.RunFileOp(context.Background(), FileOpRequest{Op: FileOpRead, Path: protocol, Root: docs, Limit: 1024})
+	if err != nil {
+		t.Fatalf("read declared bundle doc: %v", err)
+	}
+	if !strings.Contains(string(res.Data), "prepare") {
+		t.Errorf("read back %q", res.Data)
+	}
+	// Read-only means read-only: the declaration re-admits reads, never writes.
+	if _, err := sb.RunFileOp(context.Background(), FileOpRequest{Op: FileOpWrite, Path: protocol, Root: docs, Data: []byte("tampered\n")}); !errors.Is(err, ErrFileOpUnsafePath) {
+		t.Errorf("write beneath a declared doc root err = %v, want ErrFileOpUnsafePath", err)
+	}
+	if err := sb.BindFileOpRoot(context.Background(), docs); !errors.Is(err, ErrFileOpUnsafePath) {
+		t.Errorf("binding a declared doc root as writable err = %v, want ErrFileOpUnsafePath", err)
+	}
+	// Without the declaration the agent layer passes no mounts, and the same
+	// read is refused by the anchor before any exec.
+	bare := testContainerConfig(t)
+	bare.BridgeScript = []byte("# unused\n")
+	sb2, err := backend.newSandbox(context.Background(), bare)
+	if err != nil {
+		t.Fatalf("newSandbox (no mounts): %v", err)
+	}
+	defer sb2.Close()
+	if _, err := sb2.RunFileOp(context.Background(), FileOpRequest{Op: FileOpRead, Path: protocol, Root: docs, Limit: 1024}); !errors.Is(err, ErrFileOpUnsafePath) {
+		t.Errorf("undeclared doc read err = %v, want ErrFileOpUnsafePath", err)
+	}
+}
+
 func TestK8sPoolRouting(t *testing.T) {
 	fake := newFakeKube(t)
 	fake.bashBehaviors["echo pool"] = func(_ string, stdout, _ io.Writer, _ *websocket.Conn) int {
@@ -558,5 +618,60 @@ func TestK8sBridgeUploadVerified(t *testing.T) {
 	}
 	if got := fake.files[podName+":"+k8sFileOpsPath]; len(got) == 0 || !strings.Contains(string(got), "fileops.py") {
 		t.Errorf("fileops upload missing or wrong (%d bytes)", len(got))
+	}
+}
+
+// TestParseK8sBundleDocsInImage pins the fail-closed boolean: unset is false
+// (fleet assumes nothing about a sandbox image's contents), and a typo must
+// refuse to boot rather than read as "keep the anchors".
+func TestParseK8sBundleDocsInImage(t *testing.T) {
+	for _, raw := range []string{"", "   "} {
+		v, err := ParseK8sBundleDocsInImage(raw)
+		if err != nil || v {
+			t.Errorf("ParseK8sBundleDocsInImage(%q) = %v, %v; want false, nil", raw, v, err)
+		}
+	}
+	for _, raw := range []string{"true", "TRUE", "1", " true "} {
+		v, err := ParseK8sBundleDocsInImage(raw)
+		if err != nil || !v {
+			t.Errorf("ParseK8sBundleDocsInImage(%q) = %v, %v; want true, nil", raw, v, err)
+		}
+	}
+	for _, raw := range []string{"false", "0"} {
+		v, err := ParseK8sBundleDocsInImage(raw)
+		if err != nil || v {
+			t.Errorf("ParseK8sBundleDocsInImage(%q) = %v, %v; want false, nil", raw, v, err)
+		}
+	}
+	for _, raw := range []string{"ture", "yes-please", "on"} {
+		if _, err := ParseK8sBundleDocsInImage(raw); err == nil {
+			t.Errorf("ParseK8sBundleDocsInImage(%q) must error (fail closed)", raw)
+		}
+	}
+}
+
+// TestFileOpAnchorSupportingDocsByBackend pins the behavior the
+// bundle_docs_in_image declaration exists for: with the supporting-doc mounts
+// retained, a bundle doc root anchors a READ-ONLY fileop; with them dropped
+// (the kubernetes default, where a pod mounts only the workspace claim), the
+// same root is refused before the file is looked for.
+func TestFileOpAnchorSupportingDocsByBackend(t *testing.T) {
+	const ws = "/var/lib/fleet/workspace"
+	docs := []string{"/opt/fleet/client/protocols", "/opt/fleet/client/skills"}
+
+	for _, root := range docs {
+		anchor, readOnly, err := fileOpAnchorFor(ws, docs, root)
+		if err != nil || anchor != root || !readOnly {
+			t.Errorf("mounts retained: fileOpAnchorFor(%q) = %q, ro=%v, %v; want the root itself, read-only, nil", root, anchor, readOnly, err)
+		}
+		if _, _, err := fileOpAnchorFor(ws, nil, root); !errors.Is(err, ErrFileOpUnsafePath) {
+			t.Errorf("mounts dropped: fileOpAnchorFor(%q) err = %v; want ErrFileOpUnsafePath", root, err)
+		}
+	}
+
+	// The workspace claim itself is unaffected either way — it is the one
+	// mount a sandbox pod always has.
+	if anchor, readOnly, err := fileOpAnchorFor(ws, nil, ws+"/conv-1"); err != nil || anchor != ws || readOnly {
+		t.Errorf("workspace anchor = %q, ro=%v, %v; want %q, writable, nil", anchor, readOnly, err, ws)
 	}
 }
