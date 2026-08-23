@@ -508,10 +508,14 @@ Per-**file** is the whole point of preferring it to a `query-filters` exclude. A
 `exclude: {id: go/request-forgery}` switches a security-severity 9.1 query off
 for the entire repository; a register entry waives it in
 `internal/tools/web_fetch.go` and `internal/mcpoauth/discovery.go` and leaves the
-query live everywhere else, including elsewhere in those same packages. An
-in-source `// codeql[rule-id]` comment is the second waiver route — CodeQL emits
-it as a `suppressions` array on the result; the comment must sit on its own line
-and covers the line immediately below it.
+query live everywhere else, including elsewhere in those same packages.
+
+The register is also the **only** waiver route. An in-source `// codeql[rule-id]`
+comment is the mechanism CodeQL documents, and it does **not** work with this
+pipeline — measured on PR #1249: three forms were tried (the `packs:` input, `packs:` with the additive `+` prefix, and an inline `config:` combining security-extended with codeql/go-queries' `AlertSuppression.ql`) and in every case the uploaded SARIF carried no `suppressions` on the annotated result, the gate kept classifying the waiver from the register,
+and the Security-tab alert stayed open. The analyze action's interpret step is
+not configurable enough to change that. A deliberately-waived alert is closed in
+the Security tab by a one-time human dismissal, which persists across analyses.
 
 Of the 55 findings run 527 surfaced, **four were reachable and were fixed in
 code**: an unsanitized `task.Prompt` in the task-create log (its update-path twin
@@ -567,8 +571,8 @@ exits 0 and reports green"**, and that is no longer true. It was true of the
 The step reads the run's **own SARIF** and never consults the code-scanning API,
 which has one consequence worth stating plainly: **dismissing an alert in the
 Security tab does not turn this check green.** The honest routes are a code
-change, an in-source `// codeql[rule-id]` comment, or a register entry with a
-reason.
+change or a register entry with a reason — an in-source `// codeql[rule-id]`
+comment is not one of them here (see above).
 
 The second row remains available and nothing depends on it. fleet is a **public**
 repository, so code scanning merge protection is free (on private repos it needs
@@ -645,7 +649,7 @@ What is fixed is the format:
 BLOCKING — High band (security-severity >= 7.0), not waived (<n>):
   none
 
-ACCEPTED — High band, waived in codeql-accepted-findings.json or in-source (<n>):
+ACCEPTED — High band, waived in codeql-accepted-findings.json (<n>):
   [error] sec-sev=9.1  go/request-forgery  internal/tools/web_fetch.go:<line>
   [error] sec-sev=7.5  go/clear-text-logging  cmd/fleet/main.go:<line>
   ...

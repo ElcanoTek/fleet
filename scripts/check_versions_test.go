@@ -173,6 +173,8 @@ func TestDuplicatedToolPinsAgree(t *testing.T) {
 		{"GRYPE_SHA256", ".github/workflows/grype-scheduled.yml", regexp.MustCompile(`GRYPE_SHA256:\s*'([^']+)'`)},
 		{"GITLEAKS_VERSION", ".github/workflows/dev-ci.yml", regexp.MustCompile(`GITLEAKS_VERSION:\s*'([^']+)'`)},
 		{"RUFF_VERSION", ".github/workflows/dev-ci.yml", regexp.MustCompile(`RUFF_VERSION:\s*'([^']+)'`)},
+		{"ACTIONLINT_VERSION", ".github/workflows/dev-ci.yml", regexp.MustCompile(`ACTIONLINT_VERSION:\s*'([^']+)'`)},
+		{"ACTIONLINT_SHA256", ".github/workflows/dev-ci.yml", regexp.MustCompile(`ACTIONLINT_SHA256:\s*'([^']+)'`)},
 		{"golangci-lint version", ".github/workflows/dev-ci.yml", regexp.MustCompile(`golangci-lint-action@\S+[^\n]*\n\s*with:\s+(?:#[^\n]*\n\s+)*version:\s*(v[\d.]+)`)},
 	} {
 		a := tc.re.FindStringSubmatch(ci)

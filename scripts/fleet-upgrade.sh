@@ -293,8 +293,7 @@ restart_web_tier() {
   fi
   # Read the resolved state back rather than trusting the restart's exit code —
   # a unit can accept the restart and then fail its ExecStart.
-  local i
-  for i in 1 2 3 4 5 6 7 8; do
+  for _ in 1 2 3 4 5 6 7 8; do
     if [[ "$(systemctl is-active fleet-web 2>/dev/null || true)" == "active" ]]; then
       WEB_TIER_UP="yes"; ok "fleet-web is active again (systemctl is-active)"; return 0
     fi

@@ -1,0 +1,13 @@
+# Blank issues are disabled so the security contact link below is unmissable.
+# SECURITY.md and CODE_OF_CONDUCT.md both say "do not open a public issue for a
+# vulnerability", and until now the New Issue button offered a blank box with no
+# such warning — the one moment a reporter is most likely to get it wrong.
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability (private)
+    url: https://github.com/ElcanoTek/fleet/blob/main/SECURITY.md
+    about: Please do NOT open a public issue. SECURITY.md has the private
+      disclosure process and the response SLA.
+  - name: Contributing guide
+    url: https://github.com/ElcanoTek/fleet/blob/main/CONTRIBUTING.md
+    about: Build, test and lint commands, the CI gates, and PR conventions.

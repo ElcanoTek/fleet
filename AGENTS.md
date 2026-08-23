@@ -26,7 +26,8 @@ make compile      # go build ./...   (compile-check only; no artifacts)
 make test         # go test -p 1 ./...   — run in the FOREGROUND
 make test-race    # go test -race -p 1 ./...   (use when touching concurrency)
 make test-cover   # run Go tests with coverage profiling (writes coverage.out)
-make lint         # golangci-lint + ruff check/format (Python) + migration DDL lint — must pass clean
+make lint         # golangci-lint + ruff check/format (Python) + migration DDL lint
+                  #   + actionlint & shellcheck (workflows + shell) — must pass clean
 make fmt          # gofmt -w .
 make tidy         # go mod tidy
 ```
@@ -40,9 +41,10 @@ cd web && npx playwright test --project=mocked     # mocked e2e
 
 CI mirrors all of this — Go build/vet/lint/test (including a `-race` lane) plus a
 `govulncheck` dependency-CVE scan, a Grype container-image CVE scan (fail on a
-fixable CRITICAL/HIGH) of the sandbox image, a Python lint (ruff), web lint (oxlint) / typecheck (TS 7) / test / build, Playwright (mocked
-**and** live, against a real backend + sandbox), a migration DDL lint, and a
-gitleaks secret scan. **Every job must be green before merge.** Tests are
+fixable CRITICAL/HIGH) of the sandbox image, a Python lint (ruff), a workflow +
+shell lint (actionlint & shellcheck), web lint (oxlint) / typecheck (TS 7) / test / build, Playwright (mocked
+**and** live, against a real backend + sandbox), a Helm chart lint, a migration
+DDL lint, and a gitleaks secret scan. **Every job must be green before merge.** Tests are
 deterministic without a live model: use the fake-LLM seam (`internal/fakellm`
 via `OPENROUTER_BASE_URL`), never a real key.
 
@@ -168,8 +170,7 @@ same PR.
   to this file — that is how it grew past 300 lines once already; the historical
   notes now live in [`docs/FEATURE-NOTES.md`](docs/FEATURE-NOTES.md).
 - One focused branch + PR per change; keep diffs scoped. Don't refactor unrelated
-  code in a feature PR. See `CONTRIBUTING.md` for branch/PR conventions and DCO
-  sign-off.
+  code in a feature PR. See `CONTRIBUTING.md` for branch/PR conventions.
 
 ## Where to look
 

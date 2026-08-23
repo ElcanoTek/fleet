@@ -53,6 +53,7 @@ jobs:
   go:
     name: Go compile / vet / lint / test (fast)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     # Postgres service mirroring ci.yml's full-lane Go job (#723), so the
     # DB-gated suites — internal/store, internal/httpapi, internal/sched/*,
@@ -133,11 +134,18 @@ jobs:
       - name: Test (no -race; DB suites run against the Postgres service, #723)
         # Same tag as make test / ci.yml — internal/sandbox's host tests only
         # compile with it.
-        run: go test -p 1 -tags fleet_host_executor ./...
+        # -count=1 defeats the build cache, matching ci.yml's three
+        # invocations. setup-go restores ~/.cache/go-build, which stores test
+        # RESULTS, and Go's cache key covers the binary, argv, env and files
+        # opened — it cannot see the Postgres SERVICE CONTAINER these suites talk
+        # to. Without it a DB-backed suite can print "ok (cached)" against a
+        # server it never contacted, which is a green check over an unrun test.
+        run: go test -p 1 -tags fleet_host_executor ./... -count=1
 
   python:
     name: Python lint (ruff)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     # Mirrors ci.yml's `python` job exactly, for the same reason the web lane was
     # added to this file: a change should not first be checked at the dev->main
     # promotion. ruff takes about a second, so there is no speed argument for
@@ -193,6 +201,7 @@ jobs:
   web:
     name: Web lint / test / build (fast)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     # The lane dev was missing entirely. Nothing here ran web/ at all, so a
     # web-only change — every one of the npm Dependabot PRs — reached dev with no
     # build behind it. Commands mirror ci.yml's `web` job exactly so the fast lane
@@ -230,7 +239,7 @@ jobs:
         # registry flake skips with a notice (the audit above is the CVE gate).
         # Absolute path: this job's default working-directory is web/, which is
         # exactly how run 32579378165 caught the repo-relative form (exit 127).
-        run: "$GITHUB_WORKSPACE/scripts/check-npm-overrides.sh"
+        run: '"$GITHUB_WORKSPACE/scripts/check-npm-overrides.sh"'
 
       - name: Install dependencies
         run: npm ci
@@ -260,6 +269,7 @@ jobs:
     # renders. helm is preinstalled on the runner image.
     name: Helm chart lint
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -287,6 +297,7 @@ jobs:
   migrations:
     name: Migration DDL lint
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -310,6 +321,7 @@ jobs:
   gitleaks:
     name: Secret scan (gitleaks)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -333,13 +345,103 @@ jobs:
       - name: Run gitleaks
         run: gitleaks dir . --redact --exit-code 1
 
+  actions:
+    # Lint the workflow files THEMSELVES. This repo carries ~3.1k lines of
+    # workflow YAML that decide what every other gate on this list even runs,
+    # and until now nothing checked them. The overlap with what already runs is
+    # narrow and worth stating: Semgrep's `p/github-actions` pack meets this on
+    # exactly ONE axis (actions referenced by a mutable tag) and CodeQL's
+    # `actions` language on taint into a checkout. Neither parses `${{ }}`
+    # expressions and neither shellchecks a `run:` block, which is where
+    # actionlint earns its place — expression syntax and type errors, undefined
+    # contexts, invalid `needs:` / `runs-on:` / cron, deprecated syntax, plus
+    # shellcheck over the bash in every `run:`.
+    #
+    # The tree was at ZERO findings when this gate went in, so a failure here is
+    # a regression rather than a backlog to wade through. Getting there took two
+    # real fixes and one waiver: `run: "$GITHUB_WORKSPACE/..."` in both lanes
+    # passed the path to the shell UNQUOTED (the YAML quotes are consumed by the
+    # YAML parser, so the shell never saw them, despite the comment above the
+    # line showing quoting was intended), and the SC2153 on `RESULTS` is an
+    # `env:`-supplied name shellcheck cannot see, waived in-line with a reason.
+    #
+    # Deliberately NOT gated on the docs-only classifier. A change under
+    # .github/workflows/ can never be docs-only by that allowlist anyway, but a
+    # broken workflow is the one failure that can disarm every OTHER gate here,
+    # so it runs unconditionally rather than depending on a classifier to let it.
+    name: Workflow + shell lint (actionlint, shellcheck)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install actionlint
+        # Pinned release + checksum, the same contract as the gitleaks step
+        # above: an upstream re-tag cannot silently change what this gate
+        # enforces. Checksum verified against the release's own
+        # actionlint_1.7.7_checksums.txt.
+        env:
+          ACTIONLINT_VERSION: '1.7.7'
+          ACTIONLINT_SHA256: '023070a287cd8cccd71515fedc843f1985bf96c436b7effaecce67290e7e0757'
+        run: |
+          set -euo pipefail
+          tarball="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -sSL -o "$tarball" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${tarball}"
+          echo "${ACTIONLINT_SHA256}  ${tarball}" | sha256sum -c -
+          tar -xzf "$tarball" actionlint
+          sudo install -m 0755 actionlint /usr/local/bin/actionlint
+          actionlint --version
+
+      - name: Run actionlint
+        # shellcheck ships preinstalled on the ubuntu-latest image, so actionlint
+        # finds it and the `run:` blocks get checked too. ASSERT that rather than
+        # assume it: a silently absent shellcheck drops half this job's coverage
+        # while the job still reports green — the green-but-vacuous outcome this
+        # repo keeps writing post-mortems about (see docs/SCANNING.md).
+        run: |
+          set -euo pipefail
+          command -v shellcheck >/dev/null || {
+            echo "::error::shellcheck is missing from the runner image; actionlint would silently skip every run: block."
+            exit 1
+          }
+          shellcheck --version | head -2
+          actionlint -color
+
+      - name: Lint shell scripts (shellcheck)
+        # The 18 tracked *.sh files are ~6.2k lines, and they are the DEPLOY
+        # PATH, not helpers: scripts/update.sh, bootstrap.sh and doctor.sh are
+        # what `fleet update` / `fleet bootstrap` actually run on an operator's
+        # box. Go has golangci-lint, the web tier has oxlint + tsc, Python has
+        # ruff — bash had nothing, which is the same gap docs/SCANNING.md used to
+        # justify adding ruff, one language over. Several scripts already carry
+        # hand-written `# shellcheck` directives, so it was being run by hand;
+        # nothing made that reproducible.
+        #
+        # -S warning, and the tree is CLEAN at that level: the backlog was three
+        # findings total (two SC2034, one SC2148), all fixed or annotated with a
+        # reason in the same change that added this gate. Gating over an unfixed
+        # backlog is how a gate becomes something people learn to ignore, so the
+        # level was chosen by measuring, not by taste. The info tier (11 findings,
+        # mostly style) stays off.
+        run: |
+          set -euo pipefail
+          mapfile -t sh_files < <(git ls-files '*.sh')
+          printf 'shellchecking %d files\n' "${#sh_files[@]}"
+          # A vacuous pass is the failure mode this repo keeps writing up: if the
+          # glob ever matches nothing, say so instead of reporting green.
+          [ "${#sh_files[@]}" -gt 0 ] || { echo "::error::no shell scripts matched"; exit 1; }
+          shellcheck -S warning "${sh_files[@]}"
+
   dev-gate:
     name: Dev gate
     # Aggregate check for branch protection: passes only when every fast-lane
     # job succeeded (mirrors ci.yml's `CI gate`).
     if: always()
-    needs: [go, python, codeql, semgrep, web, migrations, gitleaks, helm]
+    needs: [go, python, codeql, semgrep, web, migrations, gitleaks, helm, actions]
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Fail if any fast-lane job failed
         # RESULTS via env, not interpolated into the run: block. The values are
@@ -350,6 +452,9 @@ jobs:
         env:
           RESULTS: ${{ join(needs.*.result, ' ') }}
         run: |
+          # RESULTS is supplied by the `env:` block above; shellcheck cannot see
+          # that and reads the all-caps name as a typo for the local `results`.
+          # shellcheck disable=SC2153
           results="$RESULTS"
           echo "job results: $results"
           for r in $results; do

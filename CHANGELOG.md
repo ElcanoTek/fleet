@@ -19,6 +19,92 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **A workflow + shell lint gate (`actionlint`, `shellcheck`):** nothing checked
+  the ~3.1k lines of workflow YAML that decide what every other gate runs, and
+  nothing checked the ~6.2k lines of bash that *are* the deploy path
+  (`update.sh` / `bootstrap.sh` / `doctor.sh`). Both now block in `ci.yml` and
+  `dev-ci.yml` and run from `make lint` via `lint-actions`, pinned and
+  checksum-verified like `gitleaks` and `grype`. `actionlint` covers what
+  Semgrep's `p/github-actions` pack and CodeQL's `actions` language do not —
+  `${{ }}` expression syntax and types, undefined contexts, invalid
+  `needs:`/`runs-on:`/cron — plus shellcheck over every `run:` block.
+  Both start at **zero findings**, measured: the 5 actionlint and 3 shellcheck
+  items were fixed or annotated with reasons in the same change, so a failure is
+  a regression rather than a backlog.
+- **Two new CI invariant tests**, in the spirit of the existing pin/gate tests:
+  every workflow must declare a top-level `permissions:` block (without one it
+  silently inherits the repository default), and the `actionlint`
+  version/checksum must agree across both lanes.
+- **PR and issue templates.** The PR template prompts for what/why, how it was
+  verified, and scope-and-deviations, plus the obligations that were previously
+  a reviewer's job to remember (CHANGELOG entry, `docs/<FEATURE>.md` note, an
+  ADR in the *same* PR when an invariant moves). `ISSUE_TEMPLATE/config.yml`
+  disables blank issues so the private security-disclosure link is unmissable —
+  `SECURITY.md` says "do not open a public issue for a vulnerability" and the
+  New Issue button was offering a blank box with no such warning.
+
+### Changed
+
+- **Automatic merging removed.** `auto-merge-dependabot.yml` is deleted and every
+  reference to it across `SECURITY.md`, `dependabot.yml`, `CODEOWNERS` and
+  `docs/SCANNING.md` is gone. Its own header had argued the case against it: it
+  explained that `gh pr merge --auto` holds a merge only on *required* checks,
+  named `dev` as a branch that requires none, and then listed `dev` in its own
+  `branches:` filter — so the mitigation the docs credited was in fact the
+  delivery mechanism for same-day patch bumps landing unattended. Every
+  dependency bump now waits for a human.
+- **DCO sign-off is no longer requested.** The requirement was documented in
+  `CONTRIBUTING.md` and enforced nowhere; rather than add a gate for it, the
+  requirement was dropped.
+- **`ci.yml` gained a `concurrency:` group** (the expensive lane had none, so
+  stacked pushes ran full suites to completion). Cancellation is scoped to
+  `pull_request` — a push to `main` is the only tree-wide CodeQL verdict and must
+  not be cancelled. **`timeout-minutes` is now set on every job** (it was present
+  in 2 of 13 workflows).
+- **`issues: write` no longer sits at workflow scope** in the two scheduled scan
+  lanes, where it was live for every step of a long job running
+  `govulncheck@latest` and a podman build pulling ~400 RPMs. It moved to a
+  dedicated alarm job that checks out nothing — the shape `scan-cron-alarm.yml`
+  already used. `persist-credentials: false` added to the write-scoped checkouts.
+- **`make ci-web` now mirrors the real web job.** It ran 4 of its 8 steps,
+  dropping both `npm audit` gates, the override canary and the explicit
+  `npm run typecheck` — a clean local run and a red PR.
+
+### Fixed
+
+- **Two green-but-vacuous holes in `ci.yml`.** The `postgresql-client-18` install
+  was best-effort (`|| echo`), so an unreachable PGDG left client 16 in place and
+  `backup_test.go`'s major-mismatch `t.Skipf` turned the *only* coverage of
+  `fleet backup` / `fleet restore` off behind the single required check on
+  `main`; it now asserts the major. And the docs-only classifier initialised
+  `docs_only=true` and only ever cleared it inside its loop, so an **empty** diff
+  classified as docs-only and skipped the suite — which `ci-gate` then waved
+  through, because an empty diff is the absence of evidence, not evidence that
+  only prose changed.
+- **`dev-ci.yml`'s `go test` could report cached results.** It lacked the
+  `-count=1` that `ci.yml` passes on all three of its invocations; `setup-go`
+  restores the build cache, which holds test *results*, and Go's cache key cannot
+  see a Postgres service container.
+- **Semgrep's deferred-failure path was unreachable.** `set -uo pipefail` does not
+  clear the `-e` the runner supplies, so the step aborted on the `semgrep` line
+  and `status=$?` never ran. The outcome was still correct; the documented design
+  was not what executed.
+- **The docs advertised a CodeQL waiver route that does not work.** Five places —
+  `SCANNING.md`, `CODEQL.md`, ADR-0048, `CONTRIBUTING.md` and the gate's own
+  runtime advice — offered an in-source `// codeql[rule-id]` comment, while
+  `codeql.yml` recorded that all three forms were tried on #1249 and none
+  produced a `suppressions` array. `codeql.yml` carried *both* claims, the stale
+  one directly above the note refuting it. The accepted-findings register is the
+  only route that works.
+- **ADR-0048's normative Decision stated the gate threshold as an OR** where
+  `codeql-gate.jq` implements a fallback; read literally it blocks on
+  `go/log-injection` (`error` at security-severity 6.1) — the exact deadlock the
+  ADR exists to undo.
+- Assorted doc drift: `CONTRIBUTING.md` named Go 1.26.x (`go.mod` says 1.27.0);
+  `CODEOWNERS` enumerated 7 of `ci-gate`'s 13 `needs`; `semgrep.yml` claimed its
+  `pip install` had the same checksum guarantee as the `gitleaks`/`grype`
+  downloads, which it does not.
+
 - **Kubernetes as a first-class deployment (#989 / ADR-0049):** the fleet
   control plane can now run in a cluster with agent sandboxes as **ephemeral
   pods**, selected by one knob — `FLEET_SANDBOX_BACKEND=podman|kubernetes`

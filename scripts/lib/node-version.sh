@@ -1,3 +1,6 @@
+# shellcheck shell=bash
+# ^ no shebang: this file is only ever sourced, never executed. The directive
+#   tells shellcheck which dialect to check it as (see the bash note below).
 # scripts/lib/node-version.sh — the ONE implementation of "which node?".
 #
 # Sourced by scripts/bootstrap.sh, scripts/doctor.sh and scripts/update.sh. It
