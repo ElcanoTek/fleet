@@ -143,9 +143,10 @@ per-**file**, not per-rule, and that is the whole point of preferring it to a
 `query-filters` exclude: excluding `go/request-forgery` would switch a
 security-severity 9.1 query off for the entire repository, whereas a register
 entry waives it in the two files that were read and leaves the query live
-everywhere else. An in-source `// codeql[rule-id]` comment waives too (CodeQL
-emits it as a `suppressions` array on the result; the comment must sit on its own
-line and covers the line below it). Widening the register is a security decision
+everywhere else. The register is the **only** waiver route that works here: an
+in-source `// codeql[rule-id]` comment does **not** waive with this pipeline —
+measured on PR #1249: three forms were tried (the `packs:` input, `packs:` with the additive `+` prefix, and an inline `config:` combining security-extended with codeql/go-queries' `AlertSuppression.ql`) and in every case the uploaded SARIF carried no `suppressions` on the annotated result. A deliberately-waived Security-tab alert is closed by a one-time
+human dismissal there. Widening the register is a security decision
 that appears in the PR diff, and `scripts/check_codeql_register_test.go` fails
 `make test` on an entry naming a file that does not exist, a missing reason, or a
 register that `codeql.yml` has stopped referencing.
@@ -302,7 +303,7 @@ move with every commit; what is fixed is the format:
 ### CodeQL findings — go
 BLOCKING — High band (security-severity >= 7.0), not waived (<n>):
   none
-ACCEPTED — High band, waived in codeql-accepted-findings.json or in-source (<n>):
+ACCEPTED — High band, waived in codeql-accepted-findings.json (<n>):
   [error] sec-sev=9.1  go/request-forgery  internal/tools/web_fetch.go:<line>
   [error] sec-sev=7.5  go/clear-text-logging  cmd/fleet/main.go:<line>
   ...

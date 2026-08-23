@@ -26,11 +26,16 @@
 #   - Require a pull request before merging (no direct pushes to `main`).
 #   - Require status checks to pass, with "branches up to date" (strict) ON. The
 #     SINGLE required check is the `CI gate` job in .github/workflows/ci.yml: it
-#     `needs` every other CI job (Go build / vet / lint / test — which also runs
-#     vet, the -race lane and govulncheck; Web lint / test / build; Playwright
-#     mocked; Playwright live; the gitleaks secret scan; and the Grype
-#     container-image CVE scan) and fails unless each
-#     one succeeded or was cleanly skipped. Requiring that one aggregate check
+#     `needs` EVERY other job in that file — the docs-only classifier; the
+#     gitleaks secret scan; the actionlint workflow lint; the migration DDL
+#     lint; the Helm chart lint; Go build / vet / lint / test (which also runs
+#     the -race lane and govulncheck); the ruff Python lint; CodeQL and Semgrep
+#     (called as reusable workflows); Web lint / typecheck / test / build with
+#     both npm audits; Playwright mocked; Playwright live; and the Grype
+#     container-image CVE scan — and fails unless each
+#     one succeeded or was cleanly skipped.
+#     Do not maintain this list by hand alone: scripts/check_gate_needs_test.go
+#     fails `make test` if any job in ci.yml is missing from `ci-gate`'s needs. Requiring that one aggregate check
 #     rather than each job by name is what lets a docs-only PR skip the heavy jobs
 #     without being left blocked on a required check that never reported.
 #   - Block force-pushes (non-fast-forward) and branch deletion.

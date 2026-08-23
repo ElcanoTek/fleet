@@ -121,13 +121,20 @@ jobs:
           # The JSON is written first and the exit status captured, so the
           # summary step below still runs and still says WHAT failed — a gate
           # that fails without printing the finding is a gate nobody can act on.
-          semgrep scan \
+          #
+          # The `if` is load-bearing. `set -uo pipefail` does NOT clear the `-e`
+          # the runner supplies (GitHub's default shell for a `run:` block is
+          # `bash -e {0}`), so a bare `semgrep ...` followed by `status=$?`
+          # aborts the step ON the semgrep line and never reaches the capture —
+          # the deferral this block describes never actually happened. Capturing
+          # through an `if` is exempt from `-e` and makes the comment true.
+          if semgrep scan \
             --config p/github-actions \
             --config p/golang \
             --config p/javascript \
             --config p/python \
             --metrics=off --error --json -o semgrep.json --quiet
-          status=$?
+          then status=0; else status=$?; fi
           if [ ! -s semgrep.json ]; then
             echo "semgrep produced no JSON — treating as a scan failure" >&2
             exit 1

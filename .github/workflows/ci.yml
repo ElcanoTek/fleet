@@ -15,6 +15,27 @@ permissions:
   # e2e-live, which npm-install and run thousands of third-party packages.
   contents: read
 
+# Rapid successive pushes to the SAME pull request cancel the previous run.
+# `dev-ci.yml` has had this since it was written; this lane — the expensive one,
+# carrying mocked Playwright, the live e2e against a real backend + rootless
+# sandbox, and the Grype image scan — did not, so a branch pushed three times in
+# a minute queued three full suites and the two stale ones still had to finish
+# before the interesting one started.
+#
+# `cancel-in-progress` is deliberately NOT blanket-true: a push to `main` is a
+# merge that already happened, and its run is the tree-wide verdict the
+# diff-informed PR runs cannot give (see docs/SCANNING.md on why a
+# `pull_request` CodeQL run certifies a diff, not a tree). Cancelling that to
+# make room for the next merge would throw away the only full-tree result. So
+# cancellation is scoped to `pull_request`, where the superseding run covers
+# strictly newer code.
+concurrency:
+  # github.ref already differs between a PR (refs/pull/N/merge) and a push to
+  # main (refs/heads/main); event_name is included so the two can never share a
+  # group and cancel each other.
+  group: ci-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   changes:
     # Classify the PR (or push) as docs-only or not. The heavy jobs below gate on
@@ -26,6 +47,7 @@ jobs:
     # pasted into a markdown file, so it runs on every change.
     name: Detect docs-only changes
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       docs_only: ${{ steps.detect.outputs.docs_only }}
     steps:
@@ -63,6 +85,18 @@ jobs:
           files="$(git diff --name-only "$range")"
           echo "Changed files in ${range}:"
           printf '%s\n' "$files"
+
+          # FAIL-SAFE on an empty diff. docs_only is initialised true and only
+          # ever cleared inside the loop below, so an empty $files would classify
+          # as docs-only and skip the whole suite — and `ci-gate` trusts exactly
+          # that value when it decides a `skipped` job is acceptable. An empty
+          # range is not evidence that only prose changed; it is the absence of
+          # evidence (a force-push can collapse the three-dot range), so run
+          # everything.
+          if [ -z "$(printf '%s' "$files" | tr -d '[:space:]')" ]; then
+            echo "empty diff for ${range}; refusing to classify as docs-only."
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
 
           docs_only=true
           while IFS= read -r f; do
@@ -103,6 +137,7 @@ jobs:
   gitleaks:
     name: Secret scan (gitleaks)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -132,6 +167,95 @@ jobs:
         # allowlist in .gitleaks.toml is just local-run robustness.
         run: gitleaks dir . --redact --exit-code 1
 
+  actions:
+    # Lint the workflow files THEMSELVES. This repo carries ~3.1k lines of
+    # workflow YAML that decide what every other gate on this list even runs,
+    # and until now nothing checked them. The overlap with what already runs is
+    # narrow and worth stating: Semgrep's `p/github-actions` pack meets this on
+    # exactly ONE axis (actions referenced by a mutable tag) and CodeQL's
+    # `actions` language on taint into a checkout. Neither parses `${{ }}`
+    # expressions and neither shellchecks a `run:` block, which is where
+    # actionlint earns its place — expression syntax and type errors, undefined
+    # contexts, invalid `needs:` / `runs-on:` / cron, deprecated syntax, plus
+    # shellcheck over the bash in every `run:`.
+    #
+    # The tree was at ZERO findings when this gate went in, so a failure here is
+    # a regression rather than a backlog to wade through. Getting there took two
+    # real fixes and one waiver: `run: "$GITHUB_WORKSPACE/..."` in both lanes
+    # passed the path to the shell UNQUOTED (the YAML quotes are consumed by the
+    # YAML parser, so the shell never saw them, despite the comment above the
+    # line showing quoting was intended), and the SC2153 on `RESULTS` is an
+    # `env:`-supplied name shellcheck cannot see, waived in-line with a reason.
+    #
+    # Deliberately NOT gated on the docs-only classifier. A change under
+    # .github/workflows/ can never be docs-only by that allowlist anyway, but a
+    # broken workflow is the one failure that can disarm every OTHER gate here,
+    # so it runs unconditionally rather than depending on a classifier to let it.
+    name: Workflow + shell lint (actionlint, shellcheck)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install actionlint
+        # Pinned release + checksum, the same contract as the gitleaks step
+        # above: an upstream re-tag cannot silently change what this gate
+        # enforces. Checksum verified against the release's own
+        # actionlint_1.7.7_checksums.txt.
+        env:
+          ACTIONLINT_VERSION: '1.7.7'
+          ACTIONLINT_SHA256: '023070a287cd8cccd71515fedc843f1985bf96c436b7effaecce67290e7e0757'
+        run: |
+          set -euo pipefail
+          tarball="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -sSL -o "$tarball" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${tarball}"
+          echo "${ACTIONLINT_SHA256}  ${tarball}" | sha256sum -c -
+          tar -xzf "$tarball" actionlint
+          sudo install -m 0755 actionlint /usr/local/bin/actionlint
+          actionlint --version
+
+      - name: Run actionlint
+        # shellcheck ships preinstalled on the ubuntu-latest image, so actionlint
+        # finds it and the `run:` blocks get checked too. ASSERT that rather than
+        # assume it: a silently absent shellcheck drops half this job's coverage
+        # while the job still reports green — the green-but-vacuous outcome this
+        # repo keeps writing post-mortems about (see docs/SCANNING.md).
+        run: |
+          set -euo pipefail
+          command -v shellcheck >/dev/null || {
+            echo "::error::shellcheck is missing from the runner image; actionlint would silently skip every run: block."
+            exit 1
+          }
+          shellcheck --version | head -2
+          actionlint -color
+
+      - name: Lint shell scripts (shellcheck)
+        # The 18 tracked *.sh files are ~6.2k lines, and they are the DEPLOY
+        # PATH, not helpers: scripts/update.sh, bootstrap.sh and doctor.sh are
+        # what `fleet update` / `fleet bootstrap` actually run on an operator's
+        # box. Go has golangci-lint, the web tier has oxlint + tsc, Python has
+        # ruff — bash had nothing, which is the same gap docs/SCANNING.md used to
+        # justify adding ruff, one language over. Several scripts already carry
+        # hand-written `# shellcheck` directives, so it was being run by hand;
+        # nothing made that reproducible.
+        #
+        # -S warning, and the tree is CLEAN at that level: the backlog was three
+        # findings total (two SC2034, one SC2148), all fixed or annotated with a
+        # reason in the same change that added this gate. Gating over an unfixed
+        # backlog is how a gate becomes something people learn to ignore, so the
+        # level was chosen by measuring, not by taste. The info tier (11 findings,
+        # mostly style) stays off.
+        run: |
+          set -euo pipefail
+          mapfile -t sh_files < <(git ls-files '*.sh')
+          printf 'shellchecking %d files\n' "${#sh_files[@]}"
+          # A vacuous pass is the failure mode this repo keeps writing up: if the
+          # glob ever matches nothing, say so instead of reporting green.
+          [ "${#sh_files[@]}" -gt 0 ] || { echo "::error::no shell scripts matched"; exit 1; }
+          shellcheck -S warning "${sh_files[@]}"
+
   helm:
     # Lint + render the fleet Helm chart (#989) so a values/template drift
     # fails here, not at an operator's install. Fast (<15s) and not gated on
@@ -139,6 +263,7 @@ jobs:
     # ships preinstalled on the ubuntu-latest runner image.
     name: Helm chart lint (#989)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -168,6 +293,7 @@ jobs:
   migrations:
     name: Migration DDL lint (#256)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -189,6 +315,7 @@ jobs:
   go:
     name: Go build / vet / lint / test
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     needs: changes
     # Skipped for a docs-only change; the `CI gate` job treats a skip as a pass.
     if: ${{ needs.changes.outputs.docs_only != 'true' }}
@@ -236,20 +363,35 @@ jobs:
         # The runner ships client 16; the postgres service is server 18, and
         # pg_dump refuses to dump a newer server ("server version mismatch"). Pull
         # the matching client from PGDG so the backup/restore round-trip test
-        # (cmd/fleet-admin) runs for real. Best-effort: if the repo is unreachable
-        # the step still succeeds and the test skips on the version mismatch (it is
-        # written to skip, never fail, when client and server majors disagree).
+        # (cmd/fleet-admin) runs for real.
+        #
+        # NOT best-effort, and that is a deliberate change. This step used to end
+        # in `|| echo "... will skip on version mismatch"`, which meant an
+        # unreachable PGDG left the runner's client 16 in place, and
+        # backup_test.go's `t.Skipf("pg_dump major %d != server major %d")`
+        # (internal/admincli/backup_test.go:155) turned the ONLY coverage of
+        # `fleet backup` / `fleet restore` off — behind a green `CI gate`, the
+        # single required check on main. That is the same green-but-vacuous shape
+        # this repo keeps writing post-mortems about, and the same one `e2e-live`
+        # already refuses by grepping its own log for `--- SKIP`. A PGDG outage
+        # is now a red build with an obvious cause rather than a silent hole.
         run: |
-          set -x
-          (sudo install -d /usr/share/postgresql-common/pgdg \
-            && sudo curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
-                 -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
-            && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
-                 | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null \
-            && sudo apt-get update -qq \
-            && sudo apt-get install -y -qq postgresql-client-18) \
-            || echo "could not install postgresql-client-18; round-trip test will skip on version mismatch"
-          pg_dump --version || true
+          set -euxo pipefail
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+            -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client-18
+          # Assert the major, don't just print it: the test self-skips on a
+          # mismatch, so an install that "succeeded" with the wrong major is
+          # exactly as invisible as one that failed.
+          got="$(pg_dump --version | grep -oE '[0-9]+' | head -1)"
+          [ "$got" = "18" ] || {
+            echo "::error::pg_dump major ${got} != server major 18 — the backup/restore round-trip test would self-skip."
+            exit 1
+          }
 
       - name: Create test databases
         run: |
@@ -336,10 +478,12 @@ jobs:
         # Write the per-package (and per-function) coverage table to the Actions
         # job summary, visible in the UI without downloading any artifact (#249).
         run: |
-          echo "## Go coverage by package" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          go tool cover -func=coverage.out >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "## Go coverage by package"
+            echo '```'
+            go tool cover -func=coverage.out
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: govulncheck (dependency CVEs)
         # Call-graph-aware scan of the (broad, fast-moving) dependency tree for
@@ -379,6 +523,7 @@ jobs:
   python:
     name: Python lint (ruff)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     needs: changes
     # Skipped for a docs-only change; the `CI gate` job treats a skip as a pass.
     if: ${{ needs.changes.outputs.docs_only != 'true' }}
@@ -444,6 +589,7 @@ jobs:
   web:
     name: Web lint / test / build
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     needs: changes
     # Skipped for a docs-only change; the `CI gate` job treats a skip as a pass.
     if: ${{ needs.changes.outputs.docs_only != 'true' }}
@@ -488,7 +634,7 @@ jobs:
         # registry flake skips with a notice (the audit above is the CVE gate).
         # Absolute path: this job's default working-directory is web/, which is
         # exactly how run 32579378165 caught the repo-relative form (exit 127).
-        run: "$GITHUB_WORKSPACE/scripts/check-npm-overrides.sh"
+        run: '"$GITHUB_WORKSPACE/scripts/check-npm-overrides.sh"'
 
       - name: Install dependencies
         run: npm ci
@@ -514,6 +660,7 @@ jobs:
   playwright:
     name: Web e2e (Playwright, mocked)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: changes
     # Skipped for a docs-only change; the `CI gate` job treats a skip as a pass.
     if: ${{ needs.changes.outputs.docs_only != 'true' }}
@@ -576,6 +723,7 @@ jobs:
   e2e-live:
     name: Web e2e (Playwright, live — real backend + sandbox)
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     needs: changes
     # Skipped for a docs-only change; the `CI gate` job treats a skip as a pass.
     if: ${{ needs.changes.outputs.docs_only != 'true' }}
@@ -760,6 +908,7 @@ jobs:
   grype-scan:
     name: Container image vulnerability scan (Grype)
     runs-on: ubuntu-latest
+    timeout-minutes: 35
     needs: [e2e-live]  # runs after e2e-live succeeds (which already builds the image)
     # When e2e-live is skipped for a docs-only change, this job is skipped too
     # (a job that `needs` a skipped job is itself skipped); the `CI gate` job
@@ -774,6 +923,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # This job holds a write scope. Nothing in it pushes or does an
+          # authenticated fetch, so do not leave the token in .git/config while
+          # a PR-controlled Containerfile goes through `podman build`.
+          persist-credentials: false
 
       - name: Install Grype
         # Pin a specific Grype release and verify its checksum, exactly as the
@@ -867,8 +1021,9 @@ jobs:
     # allowed (docs-only), but any failure or cancellation fails the gate.
     name: CI gate
     if: ${{ always() }}
-    needs: [changes, gitleaks, migrations, helm, go, python, codeql, semgrep, web, playwright, e2e-live, grype-scan]
+    needs: [changes, gitleaks, actions, migrations, helm, go, python, codeql, semgrep, web, playwright, e2e-live, grype-scan]
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Require all upstream jobs to have succeeded or been skipped
         env:

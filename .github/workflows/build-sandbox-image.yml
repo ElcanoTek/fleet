@@ -94,6 +94,7 @@ jobs:
   build:
     name: Build sandbox (no push)
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     env:
       BUNDLE_DIR: ${{ inputs.bundle_dir }}
     steps:

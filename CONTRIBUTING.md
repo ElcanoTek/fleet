@@ -28,7 +28,7 @@ removed.)
 
 ## Prerequisites
 
-- **Go** — the version pinned in `go.mod` (currently 1.26.x).
+- **Go** — the version pinned in `go.mod` (currently 1.27.x).
 - **Node.js** — the major in [`web/.nvmrc`](web/.nvmrc) (currently 24) — and npm, for the `web/` app.
 - **Podman** (rootless) for the execution sandbox — only needed to run the
   sandbox-backed tests/e2e locally; most unit tests self-skip when podman is
@@ -114,10 +114,11 @@ Every pull request must be green before merge. CI runs:
   python / javascript-typescript / actions) fails on an unwaived finding in the
   **High band** — `security-severity >= 7.0`, or level `error`/`warning` for a
   rule that publishes no security-severity — with lower-severity findings
-  reported as advisory. A false positive is waived either by an in-source
-  `// codeql[rule-id]` comment or by an entry in
-  `.github/codeql-accepted-findings.json` **with a written reason**; both are
-  reviewable in the diff, and fixing the code is always preferred. See
+  reported as advisory. A false positive is waived by an entry in
+  `.github/codeql-accepted-findings.json` **with a written reason** — that is the
+  only waiver route that works here; an in-source `// codeql[rule-id]` comment
+  does not (measured on #1249). The register entry is reviewable in the diff, and
+  fixing the code is always preferred. See
   [`docs/SCANNING.md`](docs/SCANNING.md), [`docs/CODEQL.md`](docs/CODEQL.md) and
   [ADR-0048](docs/adr/0048-codeql-severity-gating.md).
 - **Dependency CVEs** — `govulncheck` for the Go module, and

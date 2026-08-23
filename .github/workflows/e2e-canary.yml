@@ -31,6 +31,7 @@ jobs:
   guard:
     name: Check for OPENROUTER_API_KEY secret
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     outputs:
       has_key: ${{ steps.check.outputs.has_key }}
     steps:
@@ -51,6 +52,7 @@ jobs:
     needs: guard
     if: ${{ needs.guard.outputs.has_key == 'true' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     services:
       postgres:
