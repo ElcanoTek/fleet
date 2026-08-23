@@ -17,8 +17,114 @@ prior versions are listed because none have shipped.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Kubernetes: the sandbox backend could not execute a single tool call on a
+  cluster that enforces RBAC.** fleet streams exec over a WebSocket upgrade —
+  an HTTP GET — so the apiserver authorizes `get pods/exec`, but both the chart
+  Role and the boot preflight only ever asked for `create`. The preflight
+  passed, readiness went green, and the first `bash`/`run_python`/file-tool
+  call 403'd, leaving a churn of created-then-deleted sandbox pods and an
+  operator debugging the CNI. The Role now grants both verbs and the preflight
+  checks both, so a short Role fails at boot where it is visible.
+- **Kubernetes: a crashed control plane leaked its sandbox pods.** The orphan
+  sweep reused podman's "is the owner pid still alive?" test, which is
+  meaningless across containers: the labelled pid came from a namespace that no
+  longer exists, fleet is pid 1 in its own container, and the 120s start
+  tolerance meant a fast restart concluded the previous owner was still running
+  and skipped every pod. Those pods are Guaranteed QoS, so each held its full
+  CPU/memory reservation with nothing left to reclaim it. Ownership is now
+  identity, not liveness: the pod UID names the incarnation and the release
+  name marks the owner, both via the downward API. The same change stops a
+  second fleet release sharing the namespace from deleting a live neighbour's
+  sandboxes. Out of cluster, where there is no such identity, the pid heuristic
+  remains.
+- **Kubernetes: `Sandbox.Close()` could block forever and never delete the
+  pod.** The bridge's stdout crosses an `io.Pipe` whose writer is the exec
+  demux loop and whose only reader stops at the first newline; anything the pod
+  wrote past that line parked the loop in `pw.Write`. Teardown then joined on a
+  channel that only the parked loop could close — under the sandbox mutex, so
+  the pod delete was never reached and `Pool.Close` hung behind it. Teardown
+  now closes the read half first, and the join is bounded.
+- **Kubernetes: the web tier was unreachable and wired to env names the app
+  does not read.** `npm start` binds `${FLEET_WEB_HOST:-127.0.0.1}`, so the
+  Service could never reach the pod; the chart set `ORCHESTRATOR_URL` where the
+  app reads `ORCHESTRATOR_SERVER_URL` (silently falling back to a loopback
+  address, killing the whole Orchestrator tab); and `web.port` never reached
+  Next, so any non-3000 value 502'd.
+- **Kubernetes: boot failed before the sandbox preflight on a stock image.**
+  `EMAIL_ATTACHMENT_DIR` defaults CWD-relative and nothing derives it from
+  `FLEET_DATA_DIR`, so with no `WORKDIR` the control plane died trying to
+  create `/data/attachments/uploads`. The chart now sets it from `dataDir`.
+- **`fleet validate-config` reported OK on a config that refuses to boot.** It
+  checked the runtime and network-mode knobs the kubernetes backend rejects but
+  not `FLEET_SANDBOX_SECCOMP_PROFILE`. That variable was also missing from the
+  `FLEET_ENV_FILE` allowlist — its kubernetes counterpart was already there —
+  so a value set only in an env file was dropped.
+- **`fleet cleanup` was recommended as a Kubernetes maintenance CronJob.** It
+  prunes podman image layers and Go build caches; a control-plane pod has
+  neither. Corrected in `DEPLOYMENT-KUBERNETES.md` and `TIMERS.md`.
+
 ### Added
 
+- **A `values.schema.json` for the chart.** Helm renders nothing for a key the
+  templates do not read, so a misspelled value passed `helm lint`, passed
+  `helm template`, and surfaced only as missing behaviour in production —
+  `sandbox.kubernetes.bundleDocsInImage` being the sharpest case, where the
+  symptom is `view_file` refusals on a live cluster. Objects with a known key
+  set are now closed; free-form maps stay open.
+- **The Helm CI job schema-validates instead of rendering to `/dev/null`.**
+  Both lanes now run `helm lint --strict` and pipe every render through
+  `kubeconform -strict`, so a manifest the apiserver would reject fails the
+  gate. The previous step proved only that the template executed.
+- **A `startupProbe` and a `terminationGracePeriodSeconds` on the control
+  plane.** Boot order is migrations → sandbox preflight → listener, so liveness
+  used to start counting during migrations and kill a slow first boot at ~t+120s,
+  forever. And with no pod grace period the kubelet SIGKILLed at its own 30s
+  default — the same value as `FLEET_SHUTDOWN_GRACE_SECONDS`, so the documented
+  drain had no slack and raising the fleet knob alone did nothing.
+- **Honest-scope entries for the parity gaps that were not written down**: an
+  open sandbox pod is a full citizen of the cluster network (including the
+  node's metadata endpoint, now in the chart's default `blockedCIDRs`);
+  `RuntimeDefault` is a weaker syscall filter than fleet's bundled profile;
+  there is no PID-1 reaper; the workspace has no per-file cap where podman's
+  `ulimit fsize` reaches its bind mount; a sealed sandbox's network calls hang
+  rather than failing fast; the NetworkPolicy is verified by name only; the pod
+  start budget is a fixed, unconfigurable 2 minutes; and a bundle's Python MCP
+  servers run in the control-plane pod, which therefore needs their runtime.
+
+### Changed
+
+- **The web tier no longer receives the control plane's secret.**
+  `config.existingSecret` carries `OPENROUTER_API_KEY` and both database DSNs
+  and was mounted wholesale into the Next.js pod, which reads none of them and
+  is the one component behind the Ingress. The web tier now takes its own
+  `web.existingSecret` with just what it needs.
+- **The web and Postgres pods satisfy a `restricted` Pod Security Standard.**
+  Both lacked a container `securityContext`; Postgres lacked `runAsNonRoot`;
+  the web pod set `runAsNonRoot` with no numeric uid, which fails
+  `CreateContainerConfigError` against an image using a named `USER`.
+- **`podServiceAccount.create=false` no longer names a ServiceAccount that does
+  not exist** — a new `external` flag distinguishes "I provision it myself"
+  from "don't use one", instead of failing every pod create after a green
+  preflight.
+
+### Added
+
+- **The fast lane got the Postgres client the full gate had, and a test that
+  keeps both lanes honest.** `dev-ci.yml`'s Go job runs the same
+  `go test ./...` against the same server-18 service as `ci.yml`, but installed
+  no matching client — so `TestBackupRestoreRoundTrip` hit its
+  client/server-major `t.Skipf` and the **only** coverage of `fleet backup` /
+  `fleet restore` ran as a SKIP on every dev push. It also left `ci.yml` as the
+  sole home of that step, which is why a broken version of it could not surface
+  until a dev→main promotion PR. Both lanes now install
+  `postgresql-client-18`, put its versioned bin dir on `$GITHUB_PATH`, and
+  assert the major twice (install by absolute path, PATH resolution in the next
+  step). `TestGoSuiteLanesInstallMatchingPgClient` asserts both halves for both
+  lanes — the install and the `$GITHUB_PATH` append — because each has failed
+  once already, invisibly, one per lane. Measured, not assumed: the round-trip
+  test **passes** (not skips) once the majors agree.
 - **A workflow + shell lint gate (`actionlint`, `shellcheck`):** nothing checked
   the ~3.1k lines of workflow YAML that decide what every other gate runs, and
   nothing checked the ~6.2k lines of bash that *are* the deploy path
@@ -96,7 +202,18 @@ prior versions are listed because none have shipped.
   was best-effort (`|| echo`), so an unreachable PGDG left client 16 in place and
   `backup_test.go`'s major-mismatch `t.Skipf` turned the *only* coverage of
   `fleet backup` / `fleet restore` off behind the single required check on
-  `main`; it now asserts the major. And the docs-only classifier initialised
+  `main`; it now asserts the major — and asserts it twice, because the first
+  version of that assertion could not pass: installing `postgresql-client-18`
+  does not change what `pg_dump` resolves to. `/usr/bin/pg_dump` is
+  postgresql-common's `pg_wrapper`, which dispatches on the version/cluster in
+  `~/.postgresqlrc` or `/etc/postgresql-common/user_clusters` rather than on the
+  newest client present, so on a runner carrying a PostgreSQL 16 cluster the
+  wrapper kept selecting 16 and the step failed with `got=16` over a successful
+  install. The versioned bin dir now goes first on `$GITHUB_PATH` — which is
+  what the round-trip test needs anyway, since it execs `pg_dump` off PATH — and
+  the install is asserted by absolute path in that step, PATH resolution in the
+  next one (`$GITHUB_PATH` only applies from the following step on). And the
+  docs-only classifier initialised
   `docs_only=true` and only ever cleared it inside its loop, so an **empty** diff
   classified as docs-only and skipped the suite — which `ci-gate` then waved
   through, because an empty diff is the absence of evidence, not evidence that

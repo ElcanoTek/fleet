@@ -135,10 +135,23 @@ describe("ConnectionsPage ?connector= deep link", () => {
     ) as HTMLInputElement;
     expect(search.value).toBe("browserbase");
     // One paste away: the key field already holds focus.
+    //
+    // Asserted through waitFor, not inline. The focus is applied by a passive
+    // effect (the card's apiKeyRef focus, page.tsx), and the state update that
+    // opens the form comes from the catalog fetch resolving OUTSIDE act — so
+    // React schedules that effect on a macrotask. findByTestId above resolves
+    // the moment the form NODE appears, which is a commit earlier. There is a
+    // genuine window in which the form is in the DOM and focus has not landed
+    // yet; on an unloaded machine the flush wins that race every time, and on a
+    // loaded CI runner it does not. Sampling document.activeElement at one
+    // arbitrary instant is what made this test flaky (it failed once on a
+    // docs-only PR, reporting activeElement as <body>). Retrying the assertion
+    // tests the same guarantee — focus ends up in the key field — without
+    // depending on which tick it lands in.
     const key = screen.getByPlaceholderText(
       "paste your key (stored encrypted, never shown again)",
     ) as HTMLInputElement;
-    expect(document.activeElement).toBe(key);
+    await waitFor(() => expect(document.activeElement).toBe(key));
     // The one-shot param is stripped, like the OAuth callback params.
     expect(window.location.search).toBe("");
   });
@@ -236,13 +249,18 @@ describe("ConnectionsPage consent dialog", () => {
       name: "Connect Acme Notes?",
     });
     // The panel — not the backdrop — is the dialog, and focus moves into it.
-    expect(document.activeElement).toBe(dialog);
+    // waitFor for the same reason as the deep-link test above: findByRole
+    // resolves when the dialog node appears, and the panel's focus() is a
+    // passive effect that may not have run in that tick.
+    await waitFor(() => expect(document.activeElement).toBe(dialog));
 
     fireEvent.keyDown(document, { key: "Escape" });
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(posted).toBe(false);
-    // Dismissing hands focus back to the control that opened the dialog.
-    expect(document.activeElement).toBe(addButton);
+    // Dismissing hands focus back to the control that opened the dialog. The
+    // hand-back runs on unmount, one tick after the dialog leaves the DOM that
+    // the waitFor above is watching for — so this one waits too.
+    await waitFor(() => expect(document.activeElement).toBe(addButton));
   });
 
   it("exposes the click-outside dismissal as a named control", async () => {

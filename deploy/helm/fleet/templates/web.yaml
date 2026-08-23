@@ -24,30 +24,70 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
+        # An explicit numeric uid, not just runAsNonRoot: the canonical Next.js
+        # image declares a NAMED user (`USER nextjs`), which the kubelet cannot
+        # prove is non-root — the container then fails CreateContainerConfigError
+        # instead of starting.
+        runAsUser: {{ .Values.web.runAsUser }}
+        runAsGroup: {{ .Values.web.runAsUser }}
         seccompProfile:
           type: RuntimeDefault
       containers:
         - name: web
-          image: {{ required "web.image is required when web.enabled" .Values.web.image }}
+          image: {{ required "web.image is required when web.enabled" .Values.web.image | quote }}
+          # Required by a `restricted` Pod Security Standard namespace, which is
+          # the norm on the clusters this chart targets.
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           ports:
             - name: http
               containerPort: {{ .Values.web.port }}
           env:
             - name: CHAT_SERVER_URL
               value: "http://{{ include "fleet.fullname" . }}:8080"
-            - name: ORCHESTRATOR_URL
+            # ORCHESTRATOR_SERVER_URL, not ORCHESTRATOR_URL: the app reads the
+            # former (web/src/app/lib/orchestratorServer.ts). The wrong spelling
+            # is not an error — it falls back to http://127.0.0.1:8000 inside
+            # this pod, so every /api/orchestrator/* route quietly ECONNREFUSEs
+            # and the whole Orchestrator tab is dead.
+            - name: ORCHESTRATOR_SERVER_URL
               value: "http://{{ include "fleet.fullname" . }}:8000"
+            # `npm start` is `next start -H ${FLEET_WEB_HOST:-127.0.0.1}`, so
+            # without this the server binds loopback and the Service can never
+            # reach it — the web tier is unreachable however healthy it looks.
+            - name: FLEET_WEB_HOST
+              value: "0.0.0.0"
+            # Next honors PORT; without it a web.port other than 3000 changes
+            # only the containerPort and the Service, and every request 502s.
+            - name: PORT
+              value: {{ .Values.web.port | quote }}
             {{- range $k, $v := .Values.web.env }}
             - name: {{ $k }}
               value: {{ $v | quote }}
             {{- end }}
-          {{- with .Values.config.existingSecret }}
+          {{- with .Values.web.existingSecret }}
           envFrom:
+            # Deliberately NOT config.existingSecret. That one carries
+            # OPENROUTER_API_KEY and both database DSNs, none of which the web
+            # tier reads — and this is the pod behind the Ingress running a
+            # large JS dependency tree. Keep the model key and DB credentials
+            # in the control plane.
             - secretRef:
                 name: {{ . }}
           {{- end }}
+          readinessProbe:
+            httpGet:
+              path: /login
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.web.resources | nindent 12 }}
 ---
 apiVersion: v1
 kind: Service

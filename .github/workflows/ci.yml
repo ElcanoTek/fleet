@@ -272,23 +272,53 @@ jobs:
         run: |
           set -euo pipefail
           helm version --short
-          helm lint deploy/helm/fleet \
+          # --strict so a chart-level warning is a failure, not a note.
+          helm lint --strict deploy/helm/fleet \
             --set image.repository=registry.invalid/fleet --set image.tag=ci \
             --set sandbox.image=registry.invalid/fleet-sandbox:ci
-          # Minimal render (the defaults every install starts from) …
-          helm template ci deploy/helm/fleet --namespace fleet \
-            --set image.repository=registry.invalid/fleet --set image.tag=ci \
-            --set sandbox.image=registry.invalid/fleet-sandbox:ci >/dev/null
-          # … and the everything-on render so every optional template compiles.
-          helm template ci deploy/helm/fleet --namespace fleet \
-            --set image.repository=registry.invalid/fleet --set image.tag=ci \
-            --set sandbox.image=registry.invalid/fleet-sandbox:ci \
+
+      - name: Install kubeconform
+        # Pinned + checksum-verified, same discipline as the gitleaks gate.
+        env:
+          KUBECONFORM_VERSION: '0.6.7'
+          KUBECONFORM_SHA256: '95f14e87aa28c09d5941f11bd024c1d02fdc0303ccaa23f61cef67bc92619d73'
+        run: |
+          set -euo pipefail
+          tarball="kubeconform-linux-amd64.tar.gz"
+          curl -sSL -o "$tarball" \
+            "https://github.com/yannh/kubeconform/releases/download/v${KUBECONFORM_VERSION}/${tarball}"
+          echo "${KUBECONFORM_SHA256}  ${tarball}" | sha256sum -c -
+          tar -xzf "$tarball" kubeconform
+          sudo install -m 0755 kubeconform /usr/local/bin/kubeconform
+          kubeconform -v
+
+      - name: Render and schema-validate every shape
+        # The renders used to go to /dev/null, which proved only that the
+        # TEMPLATE executes — not that it produces a manifest the apiserver
+        # would accept. That is a green-but-vacuous gate: a NetworkPolicy whose
+        # ipBlock `except` crosses address families, a probe with a bad field,
+        # or a selector typo all rendered "fine". kubeconform checks the
+        # rendered objects against the real Kubernetes schemas instead.
+        run: |
+          set -euo pipefail
+          common=(--set image.repository=registry.invalid/fleet --set image.tag=ci
+                  --set sandbox.image=registry.invalid/fleet-sandbox:ci)
+          validate() {
+            helm template ci deploy/helm/fleet --namespace fleet "${common[@]}" "$@" \
+              | kubeconform -strict -kubernetes-version 1.30.0 -summary
+          }
+          # Minimal (the defaults every install starts from) …
+          validate
+          # … and everything-on, so every optional template compiles AND validates.
+          validate \
             --set postgres.enabled=true \
             --set web.enabled=true --set web.image=registry.invalid/fleet-web:ci \
+            --set web.existingSecret=fleet-web-secrets \
+            --set config.existingSecret=fleet-secrets \
             --set ingress.enabled=true --set ingress.host=fleet.example.com \
             --set networkPolicies.openEgress.create=true \
-            --set 'networkPolicies.openEgress.blockedCIDRs={10.0.0.0/8}' \
-            --set sandbox.kubernetes.runtimeClass=kata >/dev/null
+            --set 'networkPolicies.openEgress.blockedCIDRs={169.254.0.0/16,10.0.0.0/8}' \
+            --set sandbox.kubernetes.runtimeClass=kata
 
   migrations:
     name: Migration DDL lint (#256)
@@ -384,12 +414,43 @@ jobs:
             | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
           sudo apt-get update -qq
           sudo apt-get install -y -qq postgresql-client-18
+          # Installing the package does NOT change what `pg_dump` resolves to,
+          # and that is what made this step's first outing fail with `got=16`
+          # over an install that had plainly succeeded. /usr/bin/pg_dump is a
+          # symlink to postgresql-common's pg_wrapper, and the wrapper's own
+          # header states the rule: it calls the client "with the version,
+          # cluster and default database specified in ~/.postgresqlrc or
+          # /etc/postgresql-common/user_clusters". That is cluster
+          # configuration, NOT "the newest client installed" — so on a runner
+          # image carrying a PostgreSQL 16 cluster, adding a 16-agnostic client
+          # package changes nothing about the dispatch. Put the versioned bin
+          # dir first on PATH instead, which is what the Go test needs anyway:
+          # it execs `pg_dump` off PATH (internal/admincli/backup.go), with no
+          # versioned path of its own.
+          echo "/usr/lib/postgresql/18/bin" >> "$GITHUB_PATH"
           # Assert the major, don't just print it: the test self-skips on a
           # mismatch, so an install that "succeeded" with the wrong major is
-          # exactly as invisible as one that failed.
+          # exactly as invisible as one that failed. Absolute path here because
+          # $GITHUB_PATH only takes effect in LATER steps — PATH resolution is
+          # asserted in the next step, where it has.
+          got="$(/usr/lib/postgresql/18/bin/pg_dump --version | grep -oE '[0-9]+' | head -1)"
+          [ "$got" = "18" ] || {
+            echo "::error::installed pg_dump major ${got} != server major 18 — the backup/restore round-trip test would self-skip."
+            exit 1
+          }
+
+      - name: Assert pg_dump on PATH is the server major
+        # A separate step because $GITHUB_PATH applies from the next step on,
+        # and PATH resolution is the half that actually broke: the package
+        # installed correctly and `pg_dump` still meant 16. This asserts the
+        # exact lookup the round-trip test performs, so the two cannot drift
+        # again without going red.
+        run: |
+          set -euo pipefail
+          command -v pg_dump
           got="$(pg_dump --version | grep -oE '[0-9]+' | head -1)"
           [ "$got" = "18" ] || {
-            echo "::error::pg_dump major ${got} != server major 18 — the backup/restore round-trip test would self-skip."
+            echo "::error::pg_dump on PATH is major ${got}, not server major 18 — the backup/restore round-trip test would self-skip."
             exit 1
           }
 

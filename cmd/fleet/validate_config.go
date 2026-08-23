@@ -806,6 +806,15 @@ func checkKubernetesSandbox(ctx context.Context, res checkResult, cfg *config.Co
 		res.Detail = fmt.Sprintf("FLEET_SANDBOX_RUNTIME=%q has no effect under the kubernetes backend — use FLEET_SANDBOX_K8S_RUNTIME_CLASS", rt)
 		return res
 	}
+	// Boot refuses this knob too (internal/agent/manager.go, buildKubernetesSandboxPool).
+	// It is read straight from the environment there — there is no config field for
+	// the podman profile — so mirror that rather than inventing one, otherwise
+	// validate-config reports OK on a config that cannot start.
+	if v := strings.TrimSpace(os.Getenv("FLEET_SANDBOX_SECCOMP_PROFILE")); v != "" {
+		res.Status = statusFail
+		res.Detail = fmt.Sprintf("FLEET_SANDBOX_SECCOMP_PROFILE=%q has no effect under the kubernetes backend — install the profile on the sandbox nodes and use FLEET_SANDBOX_K8S_SECCOMP_PROFILE", v)
+		return res
+	}
 	if cfg.DefaultNetworkMode == sandbox.NetworkModeAllowlisted {
 		res.Status = statusFail
 		res.Detail = "FLEET_DEFAULT_NETWORK_MODE=allowlisted is not supported under the kubernetes backend (the host egress proxy is unreachable from pods) — use lockdown or open"

@@ -675,3 +675,47 @@ func TestFileOpAnchorSupportingDocsByBackend(t *testing.T) {
 		t.Errorf("workspace anchor = %q, ro=%v, %v; want %q, writable, nil", anchor, readOnly, err, ws)
 	}
 }
+
+// TestK8sCloseIsBoundedWithUnreadBridgeStdout pins the teardown deadlock fixed
+// alongside this test.
+//
+// The bridge's stdout reaches fleet through an io.Pipe whose writer is the exec
+// demux loop and whose only reader stops at the first newline of a response.
+// Anything the pod writes past that line leaves the loop parked in pw.Write —
+// io.Pipe is unbuffered, so the write blocks until someone reads. Teardown then
+// deadlocked: terminateBridgeLocked joined on session.done, which only fires
+// when the loop exits, which it could not do. It ran under the sandbox mutex,
+// so the pod was never deleted and Pool.Close hung behind it.
+func TestK8sCloseIsBoundedWithUnreadBridgeStdout(t *testing.T) {
+	fake := newFakeKube(t)
+	// Comfortably more than the pipe can hand off with nobody reading.
+	fake.bridgeTrailingStdout = []byte(strings.Repeat("noise on fd 1\n", 512))
+	backend := fake.backend(t, KubernetesConfig{Namespace: "fleet-sandboxes"})
+
+	sb, err := backend.newSandbox(context.Background(), testContainerConfig(t))
+	if err != nil {
+		t.Fatalf("newSandbox: %v", err)
+	}
+	if _, err := sb.RunPython(context.Background(), PythonRequest{Code: "1+1"}); err != nil {
+		t.Fatalf("RunPython: %v", err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		sb.Close()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("Sandbox.Close() blocked on the unread bridge pipe — the demux loop is parked in pw.Write and nothing closes the read half")
+	}
+
+	// Teardown must also have actually deleted the pod; the old deadlock
+	// stalled before reaching the delete.
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if len(fake.deleted) == 0 {
+		t.Error("Close() returned but deleted no pod")
+	}
+}
