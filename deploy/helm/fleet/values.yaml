@@ -53,6 +53,12 @@ sandbox:
     podServiceAccount:
       create: true
       name: fleet-sandbox
+      # Set true when YOU provision this ServiceAccount (create: false, but it
+      # does exist). With create:false and external:false the name is not passed
+      # to fleet at all, so sandbox pods fall back to the namespace default
+      # rather than naming an SA that isn't there — which used to fail every
+      # pod create after a preflight that never checks it.
+      external: false
     # Pull secret for the sandbox image, when the registry is private.
     imagePullSecret: ""
     # RuntimeClass for hypervisor-isolated sandboxes (e.g. kata). Preflighted
@@ -104,9 +110,27 @@ networkPolicies:
   # so an open sandbox can reach PyPI but not your Services. Off by default
   # because the CIDRs are cluster-specific.
   openEgress:
+    # Sandbox pods in `open` egress mode (the DEFAULT network mode) are selected
+    # by nothing unless you turn this on — an open sandbox then has unrestricted
+    # pod-network reach. That is a real difference from podman, where an open
+    # sandbox is rootless pasta/slirp4netns: outbound-only, and deliberately
+    # WITHOUT host-loopback, so it cannot reach fleet's own listeners. On a flat
+    # pod network it can reach the fleet Service, the in-cluster Postgres, and
+    # the apiserver. Turn this on unless you have equivalent cluster policy.
     create: false
-    # CIDRs an open sandbox must NOT reach (cluster Pod/Service/node ranges).
-    blockedCIDRs: []
+    # CIDRs an open sandbox must NOT reach. The metadata range is not optional
+    # and is not a cluster range: 169.254.169.254 hands out the NODE's IAM /
+    # instance credentials to anything that can reach it, and an open sandbox
+    # runs model-authored, prompt-injectable code. Add your own Pod/Service/node
+    # ranges beneath it.
+    # IPv4 only: these render as `except` entries inside a single
+    # ipBlock: 0.0.0.0/0 rule, and Kubernetes requires every `except` to sit
+    # INSIDE that cidr and share its address family — an IPv6 entry here makes
+    # the apiserver reject the whole policy. A dual-stack cluster needs a
+    # second, IPv6 ipBlock rule (::/0 excepting fd00:ec2::254/128); add it as
+    # your own policy alongside this one.
+    blockedCIDRs:
+      - 169.254.0.0/16      # cloud instance metadata (IMDS), link-local
     #  - 10.0.0.0/8
     #  - 172.16.0.0/12
     #  - 192.168.0.0/16
@@ -141,19 +165,30 @@ workspaceRoot: /var/lib/fleet/workspace
 dataDir: /var/lib/fleet
 
 config:
-  # Name of an EXISTING Secret carrying the sensitive env (recommended):
+  # Name of an EXISTING Secret carrying the CONTROL PLANE's sensitive env:
   #   OPENROUTER_API_KEY, FLEET_CHAT_DATABASE_URL, FLEET_SCHED_DATABASE_URL,
-  #   FLEET_SERVER_TOKEN, and any SMTP/webhook secrets.
+  #   CHAT_SERVER_TOKEN (the shared chat token — the binary also accepts the
+  #   FLEET_SERVER_TOKEN spelling, but the WEB tier reads only CHAT_SERVER_TOKEN,
+  #   so prefer that one name in both places), and any SMTP/webhook secrets.
+  # This Secret is deliberately NOT mounted into the web pod — see web.existingSecret.
   # When postgres.enabled=true the DB URLs are wired automatically and may be
-  # omitted from the secret.
+  # omitted from the secret. NOTE that in that case they are set as `env`, which
+  # OVERRIDES anything of the same name here (Kubernetes env beats envFrom), so
+  # pointing at a managed database means postgres.enabled=false.
   existingSecret: ""
   # Extra non-secret env for the control plane, verbatim.
+  # ALWAYS quote the values: this is YAML 1.1, so an unquoted no/off/yes/on
+  # becomes "false"/"true" and 1.10 becomes "1.1".
   env: {}
   #  FLEET_MAX_CONCURRENT_AGENTS: "8"
   #  FLEET_DEFAULT_NETWORK_MODE: "lockdown"
   #  FLEET_TIMEZONE: "UTC"
 
 postgres:
+  # Resource requests/limits for the eval database. A namespace with a
+  # ResourceQuota on requests.cpu/requests.memory rejects a pod that declares
+  # neither.
+  resources: {}
   # Optional in-cluster PostgreSQL (single replica, one PVC) for evaluation
   # and small installs. Production should point config at a managed database
   # (RDS, Cloud SQL) via the existingSecret DB URLs instead.
@@ -169,10 +204,24 @@ postgres:
   storageClassName: ""
 
 web:
-  # Optional Next.js web tier (you build web/ into an image yourself).
+  # Optional Next.js web tier (you build web/ into an image yourself). This is
+  # the ONLY browser UI — the fleet binary serves an API. Leave it disabled and
+  # the cluster has no /chat, /orchestrator, /settings or /admin surface.
   enabled: false
   image: ""
   port: 3000
+  # uid the web image runs as. Numeric on purpose: the kubelet cannot verify a
+  # NAMED user against runAsNonRoot, and the canonical Next.js Dockerfile uses
+  # `USER nextjs`, which then fails CreateContainerConfigError.
+  runAsUser: 1000
+  # A SEPARATE Secret for the web tier, carrying exactly what it reads:
+  # CHAT_SERVER_TOKEN, APP_SESSION_SECRET, and any FLEET_OIDC_* values. Both of
+  # the first two are REQUIRED — the app throws on startup without them.
+  # Do not reuse config.existingSecret: that one holds OPENROUTER_API_KEY and
+  # both database DSNs, which this tier never reads, and this is the pod behind
+  # the Ingress.
+  existingSecret: ""
+  resources: {}
   env: {}
 
 service:
@@ -201,3 +250,13 @@ affinity: {}
 
 podAnnotations: {}
 podLabels: {}
+
+# Pod-level shutdown budget for the control plane. Must exceed
+# FLEET_SHUTDOWN_GRACE_SECONDS (default 30) with headroom for pool and DB
+# teardown; raise both together for long turns.
+terminationGracePeriodSeconds: 90
+
+# startupProbe budget, in 10s periods, before liveness takes over. 60 = 10
+# minutes, sized for a first boot that has to run migrations against an
+# existing database.
+startupProbeFailureThreshold: 60

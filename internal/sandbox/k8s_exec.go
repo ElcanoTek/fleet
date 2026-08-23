@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"path"
@@ -251,10 +252,18 @@ func (s *k8sExecSession) wait(ctx context.Context) (int, error) {
 	}
 }
 
-// close tears the connection down and waits for the read loop to exit.
+// close tears the connection down and waits, boundedly, for the read loop to
+// exit. Bounded for the same reason the podman backend bounds its own bridge
+// reap: the wait runs under the sandbox mutex on paths that must not stall
+// (Pool.Close drains parked sandboxes serially), so a wedged loop should cost
+// a leaked goroutine, never a hung shutdown.
 func (s *k8sExecSession) close() {
 	_ = s.conn.Close()
-	<-s.done
+	select {
+	case <-s.done:
+	case <-time.After(bridgeReapTimeout):
+		log.Printf("sandbox: exec read loop did not exit within %s of connection close — abandoning the join to keep teardown bounded", bridgeReapTimeout)
+	}
 }
 
 // runOneShotExec execs command in the pod, optionally feeding stdin, and

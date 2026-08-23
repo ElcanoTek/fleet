@@ -247,17 +247,69 @@ const (
 	k8sLabelName       = "app.kubernetes.io/name"
 	k8sLabelManagedBy  = "app.kubernetes.io/managed-by"
 	k8sLabelInstance   = "fleet.elcanotek.com/instance"
+	k8sLabelOwner      = "fleet.elcanotek.com/owner"
 	k8sLabelEgress     = "fleet.elcanotek.com/egress"
 	k8sLabelNameValue  = "fleet-sandbox"
 	k8sLabelManagedVal = "fleet"
 )
 
-// k8sInstanceLabel is thisInstanceLabel ("<pid>@<start>") re-encoded to the
-// label-safe form "p<pid>-t<start>" ('@' is not a legal label character).
+// k8sControlPlaneUID and k8sControlPlaneOwner are the control plane's own
+// cluster identity, supplied by the chart through the downward API:
+//
+//	FLEET_POD_UID   ← metadata.uid                              (this incarnation)
+//	FLEET_OWNER_ID  ← metadata.labels['app.kubernetes.io/instance'] (this release)
+//
+// Both are empty when fleet talks to a cluster from outside it (a kubeconfig
+// dev box), which is why every consumer keeps a fallback.
+var (
+	k8sControlPlaneUID   = sanitizeK8sLabelValue(os.Getenv("FLEET_POD_UID"))
+	k8sControlPlaneOwner = sanitizeK8sLabelValue(os.Getenv("FLEET_OWNER_ID"))
+)
+
+// k8sInstanceLabel identifies the control-plane incarnation that owns a
+// sandbox pod.
+//
+// It prefers the pod UID, because the pid-based form this used to carry is
+// meaningless across containers: the label's pid was allocated in a pid
+// namespace that no longer exists, and the fleet process is pid 1 in its own
+// container — so after a restart the orphan sweep was effectively asking
+// whether IT was running, concluding "yes", and skipping every pod a crashed
+// incarnation left behind. A pod UID is unique per incarnation and is what the
+// cluster itself uses to tell one pod from another.
+//
+// The pid form stays as the out-of-cluster fallback, where it is still true.
 var k8sInstanceLabel = func() string {
+	if k8sControlPlaneUID != "" {
+		return "u" + k8sControlPlaneUID
+	}
 	pid, start, _ := instanceLabelOwner(thisInstanceLabel)
 	return fmt.Sprintf("p%d-t%d", pid, start)
 }()
+
+// sanitizeK8sLabelValue reduces a value to something legal as a label value
+// (alphanumeric, '-', '_', '.', at most 63 chars, must start and end
+// alphanumeric). A value that cannot be made legal comes back empty, and the
+// caller falls back rather than emitting a pod spec the apiserver rejects.
+func sanitizeK8sLabelValue(v string) string {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return ""
+	}
+	var b strings.Builder
+	for _, r := range v {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_', r == '.':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('-')
+		}
+	}
+	out := strings.Trim(b.String(), "-_.")
+	if len(out) > 63 {
+		out = strings.Trim(out[:63], "-_.")
+	}
+	return out
+}
 
 // parseK8sInstanceLabel inverts k8sInstanceLabel's encoding. ok is false for
 // anything unparseable — callers treat that as "ownership unknown".
@@ -377,11 +429,14 @@ type k8sImpl struct {
 	podMu   sync.Mutex
 	podName string
 
-	mu            sync.Mutex
-	bridge        *k8sExecSession
-	bridgeStdout  *bufio.Reader
-	bridgeStderr  *syncBuffer
-	bridgeStarted bool
+	mu           sync.Mutex
+	bridge       *k8sExecSession
+	bridgeStdout *bufio.Reader
+	// bridgeStdoutPipe is the READ half behind bridgeStdout. Held so teardown
+	// can unblock a demux loop parked in pw.Write — see terminateBridgeLocked.
+	bridgeStdoutPipe *io.PipeReader
+	bridgeStderr     *syncBuffer
+	bridgeStarted    bool
 
 	execPoisoned atomic.Bool
 }
@@ -530,16 +585,26 @@ func buildSandboxPod(cfg ContainerConfig, kcfg KubernetesConfig, name string) (*
 		spec.Tolerations = append(spec.Tolerations, k8sToleration(tol))
 	}
 
+	labels := map[string]string{
+		k8sLabelName:      k8sLabelNameValue,
+		k8sLabelManagedBy: k8sLabelManagedVal,
+		k8sLabelInstance:  k8sInstanceLabel,
+		k8sLabelEgress:    egress,
+	}
+	// The owning RELEASE, distinct from the owning incarnation above. Two fleet
+	// installs may legitimately share one sandbox namespace, and without this
+	// the orphan sweep cannot tell "a pod my predecessor left behind" from "a
+	// pod my neighbour is using right now" — it would delete the neighbour's
+	// sandboxes mid-turn.
+	if k8sControlPlaneOwner != "" {
+		labels[k8sLabelOwner] = k8sControlPlaneOwner
+	}
+
 	return &k8sPod{
 		Metadata: k8sObjectMeta{
 			Name:      name,
 			Namespace: kcfg.Namespace,
-			Labels: map[string]string{
-				k8sLabelName:      k8sLabelNameValue,
-				k8sLabelManagedBy: k8sLabelManagedVal,
-				k8sLabelInstance:  k8sInstanceLabel,
-				k8sLabelEgress:    egress,
-			},
+			Labels:    labels,
 		},
 		Spec: spec,
 	}, nil
@@ -968,6 +1033,7 @@ func (k *k8sImpl) startBridgeIfNeeded() (started bool, err error) {
 	}()
 	k.bridge = session
 	k.bridgeStdout = bufio.NewReader(pr)
+	k.bridgeStdoutPipe = pr
 	k.bridgeStderr = stderrBuf
 	k.bridgeStarted = true
 	return true, nil
@@ -979,11 +1045,26 @@ func (k *k8sImpl) startBridgeIfNeeded() (started bool, err error) {
 // still-live pod is reaped by the next bridge start (reap_stale_kernels in
 // python_bridge.py), the same recovery story as the podman backend.
 func (k *k8sImpl) terminateBridgeLocked() {
+	// Order matters, and getting it wrong deadlocks teardown under k.mu.
+	//
+	// The demux loop is the pipe's WRITER; the only reader is the short-lived
+	// goroutine inside a runPython call, which stops at the first newline. Any
+	// pod-side stdout past that response line leaves the loop parked in
+	// pw.Write, because io.Pipe is unbuffered and hands off byte-for-byte. The
+	// goroutine that closes the writer waits on session.done — which is the
+	// very thing the parked loop cannot reach. So close the READ half first:
+	// that fails the pending Write with ErrClosedPipe, the loop exits, done
+	// fires, and the join below returns. Without it, close() blocked forever
+	// holding k.mu and the sandbox pod was never deleted.
+	if k.bridgeStdoutPipe != nil {
+		_ = k.bridgeStdoutPipe.CloseWithError(io.EOF)
+	}
 	if k.bridge != nil {
 		k.bridge.close()
 	}
 	k.bridge = nil
 	k.bridgeStdout = nil
+	k.bridgeStdoutPipe = nil
 	k.bridgeStarted = false
 }
 
@@ -1033,12 +1114,29 @@ func (k *k8sImpl) close() {
 
 // PruneOrphanedPods removes leftover sandbox pods from a prior fleet process
 // (a crash never runs close(), so in-flight + warm pods outlive it). The
-// kubernetes counterpart of PruneOrphanedContainers, with the same ownership
-// discipline: pods carrying THIS process's instance label are never touched
-// (the warm pool is already filling when the sweep runs); other instances'
-// pods are removed only when their labeled owner pid is provably not running
-// here anymore — and since a restarted control plane is a fresh process (in
-// k8s, usually a fresh container), a prior incarnation's pods always qualify.
+// kubernetes counterpart of PruneOrphanedContainers, but the ownership test is
+// deliberately NOT podman's.
+//
+// Podman asks "is the labeled owner pid still alive in my pid namespace?".
+// That question is meaningless across containers, and answering it here was a
+// bug with two edges. The label's pid came from a namespace that no longer
+// exists; the fleet process is pid 1 in its own container; and
+// labeledOwnerStillRunning also allows a 120s start-time tolerance. So a
+// control plane that restarted quickly — every crashloop, every rolling
+// update — asked whether pid 1 was running, found itself, and skipped every
+// pod its predecessor leaked. Those pods are Guaranteed-QoS, so each one holds
+// its full CPU and memory reservation until something else reclaims it, and
+// nothing else does: there are no ownerReferences and no periodic sweep.
+// The other edge cut the opposite way: a second fleet release sharing the
+// namespace could look like a dead owner and have its live sandboxes deleted.
+//
+// In-cluster the test is now identity, not liveness: the pod UID names the
+// incarnation and the release name marks the owner, both from the downward
+// API. A pod belonging to my release but not to my incarnation is by
+// definition my predecessor's, because the chart runs a single-replica
+// Recreate Deployment. A pod belonging to another release is never touched.
+// Out of cluster there is no such identity, so the pid heuristic stays — it is
+// still true there.
 func (b *KubernetesBackend) PruneOrphanedPods(ctx context.Context) (int, error) {
 	selector := k8sLabelName + "=" + k8sLabelNameValue + "," + k8sLabelManagedBy + "=" + k8sLabelManagedVal
 	list, err := b.client.listPods(ctx, b.cfg.Namespace, selector)
@@ -1046,27 +1144,38 @@ func (b *KubernetesBackend) PruneOrphanedPods(ctx context.Context) (int, error) 
 		return 0, fmt.Errorf("list orphaned sandbox pods: %w", err)
 	}
 	removed := 0
+	var errs []error
 	for _, pod := range list.Items {
 		label := pod.Metadata.Labels[k8sLabelInstance]
 		if label == k8sInstanceLabel {
 			continue
 		}
-		pid, startedAt, ok := parseK8sInstanceLabel(label)
-		if ok && labeledOwnerStillRunning(pid, startedAt) {
-			// A live process in THIS pid namespace owns it (a sibling fleet
-			// process sharing the namespace) — leave it alone. Leaking a pod is
-			// recoverable; deleting a live sibling's sandbox mid-turn is not.
-			continue
+		if k8sControlPlaneOwner != "" {
+			// Another release's pod: never ours to reclaim, however dead its
+			// owner looks. Leaking a pod is recoverable; deleting a live
+			// neighbour's sandbox mid-turn is not.
+			if pod.Metadata.Labels[k8sLabelOwner] != k8sControlPlaneOwner {
+				continue
+			}
+		} else {
+			pid, startedAt, ok := parseK8sInstanceLabel(label)
+			if ok && labeledOwnerStillRunning(pid, startedAt) {
+				continue
+			}
 		}
 		if err := b.client.deletePod(ctx, b.cfg.Namespace, pod.Metadata.Name); err != nil {
 			if isK8sNotFound(err) {
 				continue
 			}
+			// Accumulate rather than abort: one pod stuck terminating (a
+			// finalizer, a NotReady node) used to leave every later orphan in
+			// the list un-swept until the next boot.
 			// The name came back from the API list — sanitized like all
 			// cluster-derived text before it enters a logged error.
-			return removed, fmt.Errorf("remove orphaned sandbox pod %s: %w", sanitizeClusterText(pod.Metadata.Name), err)
+			errs = append(errs, fmt.Errorf("remove orphaned sandbox pod %s: %w", sanitizeClusterText(pod.Metadata.Name), err))
+			continue
 		}
 		removed++
 	}
-	return removed, nil
+	return removed, errors.Join(errs...)
 }
