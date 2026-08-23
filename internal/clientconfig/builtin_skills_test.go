@@ -247,3 +247,37 @@ func TestMaterializeMergedSkills_DoesNotAdoptUntrustedPath(t *testing.T) {
 		t.Fatalf("adopted %q instead of falling back to the bundle dir %q", got, bundle)
 	}
 }
+
+// IsMaterializedSkillsDir tells a merged tree apart from a bundle's own
+// skills/ — the distinction the kubernetes sandbox backend needs, because only
+// a bundle-path skills dir can be baked into a sandbox image. Pinned against
+// the real materialized path so the shape check cannot drift from the builder.
+func TestIsMaterializedSkillsDir(t *testing.T) {
+	data := t.TempDir()
+	t.Setenv("FLEET_DATA_DIR", data)
+	bundleSkills := filepath.Join(t.TempDir(), "skills")
+	merged, err := materializeMergedSkills(bundleSkills, true, nil)
+	if err != nil {
+		t.Fatalf("materialize: %v", err)
+	}
+	if !IsMaterializedSkillsDir(merged) {
+		t.Errorf("IsMaterializedSkillsDir(%q) = false; the path materializeMergedSkills built must be recognized", merged)
+	}
+	if IsMaterializedSkillsDir(bundleSkills) {
+		t.Errorf("IsMaterializedSkillsDir(%q) = true; a bundle's own skills/ is bake-able", bundleSkills)
+	}
+	// Opting out of the built-in pack returns the bundle dir itself, which is
+	// exactly the case an operator reaches for on the kubernetes backend.
+	own, err := materializeMergedSkills(bundleSkills, false, nil)
+	if err != nil {
+		t.Fatalf("materialize (builtins off): %v", err)
+	}
+	if IsMaterializedSkillsDir(own) {
+		t.Errorf("with skills_builtin: false the resolved dir %q must not read as materialized", own)
+	}
+	for _, in := range []string{"", "   ", "/opt/fleet/client/skills", "/var/lib/fleet/skills-merged"} {
+		if IsMaterializedSkillsDir(in) {
+			t.Errorf("IsMaterializedSkillsDir(%q) = true; want false", in)
+		}
+	}
+}

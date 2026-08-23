@@ -196,6 +196,26 @@ func ParseK8sTolerations(s string) ([]K8sToleration, error) {
 	return out, nil
 }
 
+// ParseK8sBundleDocsInImage parses the
+// FLEET_SANDBOX_K8S_BUNDLE_DOCS_IN_IMAGE form — a boolean declaring that the
+// sandbox IMAGE carries the bundle's supporting-doc dirs at the same absolute
+// paths the control plane reads them from, so the fileop path anchors for
+// those roots stay valid inside a pod (see the ReadOnlyMounts handling in
+// internal/agent). Empty input is false (the safe default: fleet assumes
+// nothing about a sandbox image's contents). A malformed value is an error —
+// a typo'd "ture" must not read as "keep the anchors".
+func ParseK8sBundleDocsInImage(s string) (bool, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return false, nil
+	}
+	v, err := strconv.ParseBool(s)
+	if err != nil {
+		return false, fmt.Errorf("invalid boolean %q (want true or false)", s)
+	}
+	return v, nil
+}
+
 // defaultK8sNamespace / defaultK8sNetworkPolicy are the conventions the Helm
 // chart ships; the backend defaults match so a chart install needs no extra
 // wiring.

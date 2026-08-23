@@ -151,6 +151,18 @@ supporting-doc read exception. Treat bundle skills as an interactive-chat
 capability; a scheduled task that needs one should inline the instructions in its
 prompt.
 
+**On the kubernetes sandbox backend, inheriting the built-in pack costs
+in-sandbox skill files.** `SkillsDir` is then the merged tree under the control
+plane's data dir, which sandbox pods do not mount and no sandbox image can
+carry (its name is derived from the bundle path, and it is rebuilt at boot) — so
+`skills/<name>/SKILL.md` resolves for neither the file tools nor bash, and the
+roster degrades to name + description. `skills_builtin: false` makes `SkillsDir`
+the bundle's own `skills/`, which an operator CAN bake into the sandbox image
+and declare with `sandbox.kubernetes.bundle_docs_in_image`
+([DEPLOYMENT-KUBERNETES.md](DEPLOYMENT-KUBERNETES.md#bundle-docs-inside-a-sandbox-pod)).
+There is no setting that gives you both the built-in pack and working
+in-sandbox skill files on that backend.
+
 Manifest knobs (mirroring the MCP directory):
 
 ```yaml

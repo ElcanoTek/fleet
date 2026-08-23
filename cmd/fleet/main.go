@@ -2050,6 +2050,13 @@ func resolveSandboxBackendInto(cfg *config.Config, bundle *clientconfig.Bundle) 
 	fill(&cfg.SandboxK8sSeccompProfile, k.SeccompProfile)
 	fill(&cfg.SandboxK8sKubeconfig, k.Kubeconfig)
 	fill(&cfg.SandboxK8sNetworkPolicy, k.NetworkPolicy)
+	// bundle_docs_in_image is a manifest bool and an env string; canonicalize
+	// to the env form so the pool build parses one source. Only a manifest
+	// TRUE needs carrying: false is already the empty-string default, and
+	// writing "false" here would make an unset env look explicitly disabled.
+	if strings.TrimSpace(cfg.SandboxK8sBundleDocsInImage) == "" && k.BundleDocsInImage {
+		cfg.SandboxK8sBundleDocsInImage = "true"
+	}
 	// The scheduling knobs are structured in the manifest; canonicalize them
 	// into the same string forms the env vars use so the pool build has ONE
 	// source to parse (env wins, like every other field).

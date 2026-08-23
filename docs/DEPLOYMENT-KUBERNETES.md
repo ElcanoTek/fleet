@@ -234,6 +234,61 @@ spec:
               persistentVolumeClaim: {claimName: fleet-data}
 ```
 
+## Bundle docs inside a sandbox pod
+
+A bundle's `protocols/`, `personas/`, `system_prompts/` and `skills/` are how a
+protocol-driven deployment works at all: the system prompt lists them by
+relative path and the agent reads them on demand. Under podman fleet
+bind-mounts each read-only at its own absolute path and symlinks them into the
+per-conversation workspace, so `protocols/foo.yaml` resolves for `view_file`,
+`bash` and `run_python` alike.
+
+A sandbox pod mounts only the workspace claim. There is no host filesystem to
+bind from, so by default fleet drops those roots — and because the fileop path
+anchor only trusts roots that are actually mounted, `view_file
+protocols/foo.yaml` is *refused* (`fileop root is not inside a sandbox bind
+mount`) rather than attempted. The workspace symlinks still point at the
+bundle's absolute paths, so `bash`/`run_python` reads fail too, as not-found.
+
+The fix is the sandbox image. Build it with the bundle's doc dirs baked in at
+the **same absolute paths** the control plane uses (`FLEET_CLIENT_CONFIG_DIR`),
+then declare it:
+
+```yaml
+sandbox:
+  kubernetes:
+    bundleDocsInImage: true      # chart values → FLEET_SANDBOX_K8S_BUNDLE_DOCS_IN_IMAGE
+```
+
+```dockerfile
+# derived sandbox image; same paths as the control plane's bundle
+FROM REGISTRY/fleet-sandbox:v1
+USER root
+COPY protocols/ personas/ system_prompts/ skills/ /opt/fleet/client/...
+RUN chown -R 0:0 /opt/fleet/client && chmod -R a-w,a+rX /opt/fleet/client
+USER 1000
+```
+
+With the declaration, the anchors for those roots stay valid, so the file tools
+read them out of the pod's image layer and the symlinked relative paths work
+for bash and python. Four things to be honest about:
+
+- **It is a declaration, not a probe.** fleet cannot inspect an image's
+  contents. It also cannot widen anything: the flag only re-admits *read-only*
+  anchors for roots the operator already configured, and the read still runs
+  inside the sandbox. A wrong declaration surfaces as a not-found read.
+- **Only the bundle's own doc dirs are covered.** Other entries in the mount
+  list (the uploads root) live in control-plane state no image can contain;
+  they stay dropped, with a log line each.
+- **The merged skills tree is never covered** — see the honest-scope list.
+- **The baked copy is a snapshot.** Build and roll the control-plane and
+  sandbox images from the same bundle commit, or the agent reads one release's
+  protocols while the control plane runs another's. Nothing enforces this.
+
+Boot logs which roots survived and which were dropped, and why. `kubectl logs
+deploy/fleet | grep 'bundle_docs_in_image\|supporting-doc'` is the fastest way
+to see what a running deployment decided.
+
 ## Provider notes
 
 - **EKS**: EFS (via the EFS CSI driver) is the standard RWX workspace class;
@@ -264,6 +319,7 @@ Every knob can come from env (the chart sets these) or the bundle manifest's
 | `FLEET_SANDBOX_K8S_SECCOMP_PROFILE` | `…seccomp_profile` | node-local Localhost seccomp profile; empty = RuntimeDefault |
 | `FLEET_SANDBOX_K8S_KUBECONFIG` | `…kubeconfig` | out-of-cluster auth (token / client-cert kubeconfigs only); empty = in-cluster |
 | `FLEET_SANDBOX_K8S_NETWORK_POLICY` | `…network_policy` | deny-all policy name the preflight requires (default `fleet-sandbox-deny-all`) |
+| `FLEET_SANDBOX_K8S_BUNDLE_DOCS_IN_IMAGE` | `…bundle_docs_in_image` | the sandbox image carries the bundle's doc dirs at the same absolute paths — keeps their fileop read anchors valid in a pod ([above](#bundle-docs-inside-a-sandbox-pod)); a non-boolean refuses to boot |
 | `FLEET_SANDBOX_K8S_NODE_SELECTOR` | `…node_selector` | pin sandbox pods to a dedicated runner pool — env form `"pool=sandboxes,arch=amd64"`, manifest form a map; a malformed value refuses to boot |
 | `FLEET_SANDBOX_K8S_TOLERATIONS` | `…tolerations` | tolerations for a tainted runner pool — env form a JSON array of `{key,operator,value,effect}`, manifest form a YAML list |
 
@@ -320,10 +376,18 @@ Recorded here so nobody discovers them in production:
   `FLEET_SANDBOX_K8S_SECCOMP_PROFILE`. Setting the podman
   `FLEET_SANDBOX_SECCOMP_PROFILE` under this backend refuses to boot rather
   than being silently ignored.
-- **Supporting-doc bind mounts don't apply.** The podman backend bind-mounts
+- **Supporting-doc bind mounts don't apply** — the podman backend bind-mounts
   persona/protocol dirs same-path into containers; a pod only mounts the
-  workspace claim. In-sandbox reads of those host paths degrade exactly like
-  the podman missing-dir case.
+  workspace claim. Bake them into the sandbox image and declare it
+  (`sandbox.kubernetes.bundle_docs_in_image`) to get the reads back; see
+  [Bundle docs inside a sandbox pod](#bundle-docs-inside-a-sandbox-pod).
+  Undeclared, in-sandbox reads of those paths do not resolve at all.
+- **A bundle inheriting fleet's built-in skills pack cannot serve in-sandbox
+  skill reads**, declaration or not: the merged tree is materialized under the
+  control plane's data dir, so no sandbox image can carry it. `skills_builtin:
+  false` in the bundle manifest makes `skills/` the bundle's own (bake-able)
+  dir at the cost of the built-in pack. There is no setting that gives you
+  both.
 - **Disk quota is per-pod ephemeral storage**, which caps the writable layer
   and scratch emptyDirs — a *stronger* cap than podman's per-file ulimit — but
   the workspace claim is still unbounded by it, same as the bind mount is

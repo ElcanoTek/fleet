@@ -95,6 +95,10 @@ spec:
             - name: FLEET_SANDBOX_K8S_SECCOMP_PROFILE
               value: {{ . | quote }}
             {{- end }}
+            {{- if .Values.sandbox.kubernetes.bundleDocsInImage }}
+            - name: FLEET_SANDBOX_K8S_BUNDLE_DOCS_IN_IMAGE
+              value: "true"
+            {{- end }}
             {{- with .Values.sandbox.kubernetes.nodeSelector }}
             - name: FLEET_SANDBOX_K8S_NODE_SELECTOR
               value: {{ $pairs := list }}{{- range $k, $v := . }}{{- $pairs = append $pairs (printf "%s=%s" $k $v) }}{{- end }}{{ join "," $pairs | quote }}
