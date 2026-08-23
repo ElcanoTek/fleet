@@ -11,48 +11,96 @@ this file is the agent-facing distillation, not a replacement for them.
 ## What fleet is (one paragraph)
 
 fleet is a self-hosted, general-purpose agent platform. **One** Go process runs
-interactive chat *and* a scheduling engine on one box, driven by **one** unified
-agent runtime (`internal/agentcore`). Model-authored local execution — bash,
-Python, and file I/O — runs inside a rootless-Podman sandbox; fixed host-side
-brokers handle MCP credentials/network and the small control-plane exception
-set enumerated in ADR-0036. See
-the README "Architecture at a glance" for the full picture.
+interactive chat *and* a scheduling engine, driven by **one** unified agent
+runtime (`internal/agentcore`). Model-authored local execution — bash, Python,
+and file I/O — runs inside a mandatory sandbox; fixed host-side brokers handle
+MCP credentials/network and the small control-plane exception set enumerated in
+ADR-0036. The sandbox **backend** is pluggable (ADR-0049):
+`FLEET_SANDBOX_BACKEND=podman` — the default, rootless Podman co-located with
+the process, which is the single-box install — or `kubernetes`, one ephemeral
+pod per sandbox exec'd over the apiserver, for the split control-plane
+deployment. "On one box" is the default shape, not the only one, so do not write
+code (or docs) that assumes podman is the only executor. See the README
+"Architecture at a glance" for the full picture.
 
 ## Build · test · lint (run before opening any PR)
 
 ```sh
 make build        # compile-check ./... AND emit ./fleet + ./fleet-admin
-make compile      # go build ./...   (compile-check only; no artifacts)
-make test         # go test -p 1 ./...   — run in the FOREGROUND
-make test-race    # go test -race -p 1 ./...   (use when touching concurrency)
-make test-cover   # run Go tests with coverage profiling (writes coverage.out)
+make compile      # go build ./...   (release config — see the build tag below)
+make test         # go test -p 1 -tags fleet_host_executor ./...   — run in the FOREGROUND
+make test-race    # the same, with -race   (use when touching concurrency)
+make test-cover   # the same, with -coverprofile/-covermode=atomic (writes coverage.out)
 make lint         # golangci-lint + ruff check/format (Python) + migration DDL lint
                   #   + actionlint & shellcheck (workflows + shell) — must pass clean
+make govulncheck  # call-graph-aware CVE scan of the dependency tree
 make fmt          # gofmt -w .
 make tidy         # go mod tidy
+make ci-go        # the whole Go gate locally: compile, vet, lint, test, -race, govulncheck
+make ci-web       # the Web CI job verbatim (see below)
+make ci-local     # ci-go + ci-web — the fast PR gates, locally
 ```
+
+**`-tags fleet_host_executor` is load-bearing, not decoration.** The unsandboxed
+host executor is fenced behind that build tag (#159) so it is *not* compiled into
+a release binary: `make compile` deliberately omits it, and `host_disabled.go`
+then stubs `newHostSandbox` out and rejects MockMode at boot. Tests opt in — every
+`go test`/`go vet` target above carries the tag, and `.golangci.yml` sets
+`build-tags` so the linter agrees — so a bare `go test ./...` builds a *different*
+tree than CI does (`host.go` unvetted, untested). Use the Makefile targets.
+
+`make lint`'s `lint-python` (ruff) and `lint-actions` (actionlint/shellcheck)
+**skip loudly when the tool is missing**, printing the install command. So a green
+local `make lint` is not proof — read the output, and remember CI enforces both
+regardless.
 
 When you touch `web/` (the Next.js app):
 
 ```sh
-cd web && npm audit --audit-level=low && npm ci && npm run lint && npm run typecheck && npm run test && npm run build
+make ci-web                                        # the Web CI job, verbatim — prefer this
+cd web && npm ci && npm run lint && npm run typecheck && npm run test && npm run build
 cd web && npx playwright test --project=mocked     # mocked e2e
 ```
 
-CI mirrors all of this — Go build/vet/lint/test (including a `-race` lane) plus a
-`govulncheck` dependency-CVE scan, a Grype container-image CVE scan (fail on a
-fixable CRITICAL/HIGH) of the sandbox image, a Python lint (ruff), a workflow +
-shell lint (actionlint & shellcheck), web lint (oxlint) / typecheck (TS 7) / test / build, Playwright (mocked
-**and** live, against a real backend + sandbox), a Helm chart lint, a migration
-DDL lint, and a gitleaks secret scan. **Every job must be green before merge.** Tests are
-deterministic without a live model: use the fake-LLM seam (`internal/fakellm`
-via `OPENROUTER_BASE_URL`), never a real key.
+There are **two** npm trees — `web/` and `scripts/rampart-service/` — and CI
+audits both (`npm audit --audit-level=low`, lockfile-only) plus
+`scripts/check-npm-overrides.sh`, the override canary. `make ci-web` runs all
+eight steps; the hand-rolled line above skips the audits and the canary, which is
+how a clean local run turns into a red PR.
+
+CI mirrors all of this across **two lanes**, and which one you get depends on the
+branch you target:
+
+- **`CI` (`ci.yml`) — `main` only** (pushes to `main` and PRs targeting it). The
+  full gate: Go build/vet/lint/test (including a `-race` lane) plus a
+  `govulncheck` dependency-CVE scan, a Grype container-image CVE scan (fail on a
+  fixable CRITICAL/HIGH) of the sandbox image, a Python lint (ruff), a workflow +
+  shell lint (actionlint & shellcheck), web lint (oxlint) / typecheck (TS 7) /
+  test / build, Playwright (mocked **and** live, against a real backend +
+  sandbox), a Helm chart lint, a migration DDL lint, and a gitleaks secret scan.
+  `CI gate` is the **single required status check** on `main`: it `needs` every
+  other job and always reports, so a docs-only PR (heavy jobs skipped by the
+  `changes` classifier) still merges, while a code PR cannot go green over a skip.
+- **`Dev CI (fast lane)` (`dev-ci.yml`) — `dev` only** (pushes to `dev` and PRs
+  targeting it). Compile/vet/lint/test against a Postgres service, ruff, the web
+  lane, the migration DDL lint, gitleaks, actionlint/shellcheck, the Helm lint,
+  CodeQL and Semgrep. Deliberately deferred to the promotion PR: the `-race`
+  lane, govulncheck, the Grype image scan, and both Playwright suites. There is
+  no docs-only classifier here — the fast lane runs on every change.
+
+`ci.yml` does not fire on `dev` at all, so **the dev→main promotion PR is the
+first time the full gate ever sees that code**; expect it to surface things dev
+never told you about. **Every job must be green before merge**, and nothing
+merges itself — auto-merge was removed, so every PR, dependency bumps included,
+waits for a human. Tests are deterministic without a live model: use the fake-LLM
+seam (`internal/fakellm` via `OPENROUTER_BASE_URL`), never a real key.
 
 CodeQL (security queries, `security-extended`) and Semgrep (Go/JS/Python SAST +
-Actions supply chain) also run per PR and are **inside `ci-gate` and `Dev gate`**
-— both are reusable workflows that ci.yml/dev-ci.yml call as jobs. `npm audit`
-(both npm trees, lockfile-only, any severity) and ruff (`check` **and**
-`format --check`) gate the same way.
+Actions supply chain) run per PR in **both** lanes: `codeql.yml` and `semgrep.yml`
+are reusable workflows that ci.yml/dev-ci.yml call as jobs, so their results roll
+up into `CI gate` / `Dev gate` like any other job. `npm audit` (both npm trees,
+lockfile-only, any severity) and ruff (`check` **and** `format --check`) gate the
+same way.
 
 Their thresholds differ, and the difference is load-bearing:
 
@@ -77,10 +125,13 @@ mergeable PR. See [`docs/SCANNING.md`](docs/SCANNING.md) ("Known gaps").
 See the README "Repository layout" for the annotated tree. In short: `cmd/` (the
 one unified `fleet` binary — `fleet serve` runs the server, every other verb is the
 operator CLI; `fleet-admin` is a transitional deprecation shim that still works for
-one release), `internal/` (`agentcore` the one run loop, `sandbox`,
+one release; plus the `fleet-bench`, `fake-llm` and `sandbox-probe` harness
+binaries), `internal/` (`agentcore` the one run loop, `sandbox`,
 `mcp`, `creds`, `clientconfig`, `store`, `sched`, `httpapi`, …), `web/` (one
-Next.js app: `/chat` + `/orchestrator`), and `config/default/` (the generic
-client bundle baked in so fleet runs bare).
+Next.js app: `/chat`, `/orchestrator`, `/settings`, `/admin`), `deploy/` (the
+systemd units + Caddyfile for the single-box install and the
+`deploy/helm/fleet` chart for the Kubernetes one), and `config/default/` (the
+generic client bundle baked in so fleet runs bare).
 
 ## Non-negotiable invariants — do NOT weaken these
 
@@ -90,11 +141,21 @@ recorded as Architecture Decision Records in [`docs/adr/`](docs/adr/) — a chan
 that adds, weakens, or reverses an invariant must add or supersede an ADR in the
 same PR.
 
-- **The sandbox is mandatory.** The agent loop runs in the fleet process, but
-  every agent tool call's data-plane execution — bash, Python, **and file I/O
+- **The sandbox is mandatory** — the *backend* is pluggable, the sandbox is not.
+  The agent loop runs in the fleet process, but every agent tool call's data-plane
+  execution — bash, Python, **and file I/O
   (`view_file`/`write_file`/`edit_file`, via the sandbox FileOp seam, #784)** —
-  runs inside the rootless-Podman sandbox; there is **no** fast path that skips
-  it and no host-execution fallback (they fail closed without a sandbox). The
+  runs inside the sandbox (rootless Podman by default; an ephemeral Kubernetes pod
+  under `FLEET_SANDBOX_BACKEND=kubernetes`, ADR-0049); there is **no** fast path
+  that skips it and no host-execution fallback (they fail closed without a
+  sandbox). The unsandboxed host executor is compiled in **only** behind the
+  `fleet_host_executor` build tag (#159), which is what makes "it cannot ship
+  enabled in a production build" a property of the artifact rather than a runtime
+  flag — do not widen that fence, and do not add a path that reaches `host.go`
+  from an untagged build. Selecting the kubernetes backend runs a fail-closed boot
+  preflight (apiserver + credentials, the exact RBAC verbs, the workspace claim,
+  the sealed-egress NetworkPolicy object) and refuses podman-only knobs rather
+  than ignoring them: no degrade to podman, none to host execution. The
   loop holds no privileged local executor of its own: each tool call is handed
   to the sandbox under host policy. A small set of native tools are host-side
   **control-plane / broker** operations by design (host network fetch, brokered
@@ -143,9 +204,10 @@ same PR.
   upload only ever produced a missing-token warning. Treat coverage as a quality
   signal, not a gate: add tests that catch real behavior, not to chase a
   number. (The merge gates are build/vet/lint, ruff — `check` and
-  `format --check` — the test suites, the `-race` lane, govulncheck, Grype,
-  `npm audit` + `scripts/check-npm-overrides.sh`, CodeQL, Semgrep, the migration
-  linter, and gitleaks.)
+  `format --check` — actionlint + shellcheck, the test suites, the `-race` lane,
+  govulncheck, Grype, `npm audit` + `scripts/check-npm-overrides.sh`, CodeQL,
+  Semgrep, the Helm chart lint, both Playwright suites, the migration
+  linter, and gitleaks — all rolled up into the one required `CI gate` check.)
 - **Match the surrounding code:** naming, idioms, and comment density. The
   `internal/agentcore` package comments explain *why* each governance invariant
   holds — preserve that level of explanation when you extend it.
@@ -170,7 +232,10 @@ same PR.
   to this file — that is how it grew past 300 lines once already; the historical
   notes now live in [`docs/FEATURE-NOTES.md`](docs/FEATURE-NOTES.md).
 - One focused branch + PR per change; keep diffs scoped. Don't refactor unrelated
-  code in a feature PR. See `CONTRIBUTING.md` for branch/PR conventions.
+  code in a feature PR. `.github/PULL_REQUEST_TEMPLATE.md` asks for exactly the
+  three things above — what/why, what you actually ran to verify it, and
+  scope-and-deviations — so fill it in rather than deleting it. See
+  `CONTRIBUTING.md` for branch/PR conventions.
 
 ## Where to look
 
