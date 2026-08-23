@@ -10,6 +10,11 @@
 Full walkthrough — a 15-minute kind path and the production checklist — lives
 in [`docs/DEPLOYMENT-KUBERNETES.md`](../../../docs/DEPLOYMENT-KUBERNETES.md).
 
+This chart renders a control plane; it does not supply the *bundle* that plane
+loads. For a worked one — both Containerfiles, a documented values overlay for
+this chart, and an empty-cluster-to-working-fleet guide — fork
+[`ElcanoTek/example-kubernetes-config`](https://github.com/ElcanoTek/example-kubernetes-config).
+
 ## What it installs
 
 | Piece | Object | Notes |
