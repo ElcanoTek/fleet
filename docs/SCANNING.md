@@ -12,15 +12,32 @@ security queries only) and [`TESTING.md`](TESTING.md) (the rest of the ladder).
 | `golangci-lint` (incl. `gosec`) | Go lint + Go SAST patterns | ~30s | **blocks** (`ci-gate`) | job log |
 | `oxlint` + `tsc` | web tier lint + types | ~5s | **blocks** (`ci-gate`) | job log |
 | **`ruff`** | **Python lint** | **~1s** | **blocks** (`ci-gate`) | job log |
+| **`actionlint`** | **workflow YAML: `${{ }}` expressions, contexts, `needs`/`runs-on`/cron, + shellcheck over every `run:`** | **~2s** | **blocks** (`ci-gate`) | job log |
+| **`shellcheck`** | **the 18 tracked `*.sh` files (~6.2k lines) — the deploy path** | **~2s** | **blocks** (`ci-gate`) | job log |
 | `govulncheck` | Go dependency CVEs (called symbols) | ~30s | **blocks** (`ci-gate`) | job log + Security tab |
 | `grype` | sandbox image CVEs (fixable **CRITICAL + HIGH**, **RPMs only**) | ~1m | **blocks** (`ci-gate`) | job log + Security tab |
-| `gitleaks` | secrets, every branch | ~10s | **blocks** (`ci-gate`) | job log |
+| `gitleaks` | secrets (on `main` and `dev` — the two branches with a CI lane) | ~10s | **blocks** (`ci-gate`) | job log |
 | **`npm audit`** | npm dependency CVEs (web + rampart-service) | ~5s | **blocks** (`ci-gate`) | job log |
 | CodeQL | **interprocedural taint / `security-extended`** | ~2m | **blocks** on an unwaived High-band finding (`ci-gate`/`Dev gate` via workflow_call) | job log + Security tab |
 | **Semgrep** | **Go/JS/Python SAST + Actions supply chain** | ~40s | **blocks** on any unsuppressed finding (`ci-gate`/`Dev gate` via workflow_call) | job log + artifact |
 
-Two things were added here (**ruff**, **Semgrep**) and one was narrowed
-(**CodeQL**, to security queries only).
+Four things were added here (**ruff**, **Semgrep**, then **actionlint** and
+**shellcheck**) and one was narrowed (**CodeQL**, to security queries only).
+
+**Why actionlint and shellcheck, given Semgrep already runs `p/github-actions`.**
+The overlap is one axis wide: Semgrep's Actions pack is a *security* rule set —
+mutable action tags, template injection, `pull_request_target` misuse — and
+CodeQL's `actions` language is likewise security-query-only. Neither parses
+`${{ }}` expressions and neither shellchecks a `run:` block. That mattered here
+concretely: the census below found `run: "$GITHUB_WORKSPACE/scripts/..."` in both
+CI lanes passing its path to the shell **unquoted**, because the YAML parser
+consumes the quotes — a bug the comment directly above the line showed the author
+believed they had avoided. And bash was the only language in the repo with no
+linter at all, while being the language `fleet update` and `fleet bootstrap`
+actually execute on an operator's box. Both gates started at **zero findings**;
+the 5 actionlint and 3 shellcheck items were fixed or annotated with reasons
+before the gate went in, because a gate switched on over a backlog is a gate
+people learn to scroll past.
 
 **Read "blocks" with one caveat, and it is a big one.** Every lane above reaches
 its branch's aggregate gate job — but a gate job only *blocks a merge* where it
@@ -171,12 +188,30 @@ Getting the extended suite adopted was itself a fix, not a rubber stamp: the one
 `actions`-language finding was `actions/untrusted-checkout/medium` on
 `build-sandbox-image.yml`'s `fleet_ref`-fed checkout. Rather than waive it (the
 `actions` language has no `AlertSuppression.ql`, so there is no in-code waiver
-anyway), the workflow now **refuses `refs/pull/*` refs** before checking out — a
-fork-PR ref would put fork-controlled code into a workflow that runs the
-checked-out build script — and the identical hardening went into
+anyway), the workflow now validates `fleet_ref` before checking out — a fork-PR
+ref would put fork-controlled code into a workflow that runs the checked-out
+build script — and the identical hardening went into
 `publish-sandbox-image.yml`, the *unflagged* twin that holds `packages: write`
 and only escaped the (name-heuristic) query because its plumbing was named
-differently. Details in [`CODEQL.md`](CODEQL.md).
+differently.
+
+**It is an ALLOW-LIST, and an earlier revision of this document described the
+deny-list it replaced.** Worth correcting rather than quietly updating, because
+the deny-list (`refs/pull/*|pull/*|-*`) had two holes that a reader
+re-implementing "refuse `refs/pull/*`" elsewhere would inherit:
+
+1. **`GITHUB_OUTPUT` newline injection.** A `workflow_call` string input may
+   contain newlines, so `fleet_ref: "main\nresolved=refs/pull/1/head"` matched no
+   deny pattern (it starts `main`), exited 0, and emitted **two** `resolved=`
+   lines — last-wins handed the attacker the ref. The same primitive forges any
+   step output.
+2. **A bare commit SHA.** "Every ref in this repo is collaborator-written except
+   `refs/pull/*`" is true of *named refs* and false of reachable *commits*:
+   GitHub keeps fork-PR commits in the base repo's object store and
+   `actions/checkout` will fetch a bare SHA happily.
+
+The shipped form admits only `[A-Za-z0-9._/-]` (so no newline can carry a second
+assignment), then refuses `-*`, `*..*`, `*//*`, `refs/pull/*` and a bare hex SHA. Details in [`CODEQL.md`](CODEQL.md).
 
 ### Semgrep owns fast multi-language SAST + Actions supply chain (new, blocking)
 
@@ -359,12 +394,37 @@ validated by `tsc`).
 
 Every lane in the table reaches the branch's aggregate gate:
 
-- `ci-gate` (the single required status check on `main`) `needs` the lint, test
-  and build jobs — **and the two scanners**.
-- `Dev gate` `needs` the same set on `dev` — but nothing in the `dev` ruleset
-  requires `Dev gate` to be green, so on that branch it is a red check rather
-  than a closed gate. That gap is the first item under "Known gaps" and it is
-  the single most important qualifier on this whole document.
+- `ci-gate` (the single required status check on `main`) `needs` **every other
+  job in `ci.yml`** — the docs-only classifier, gitleaks, the actionlint/shellcheck
+  workflow+shell lint, the migration DDL lint, the Helm chart lint, Go, ruff,
+  CodeQL, Semgrep, web, both Playwright lanes and Grype.
+- `Dev gate` `needs` the same set that exists on `dev` — but nothing in the `dev`
+  ruleset requires `Dev gate` to be green, so on that branch it is a red check
+  rather than a closed gate. That gap is the first item under "Known gaps" and it
+  is the single most important qualifier on this whole document.
+
+**That "every other job" is a test, not a habit — and it is the strongest
+anti-rot control here, so it should not stay invisible the way it did until
+now.** `scripts/check_gate_needs_test.go` parses both workflow files and fails
+`make test` if any job is missing from its gate's `needs`. Adding a job and
+forgetting to extend `needs` is otherwise a silent one-line regression that
+produces a red-but-not-required lane — exactly how the CodeQL Go extraction
+break sat unnoticed for weeks. Two sibling tests hold the neighbouring
+invariants: `check_action_pins_test.go` (every `uses:` is a 40-hex commit SHA
+with an exact version comment) and `check_permissions_test.go` (every workflow
+declares a top-level `permissions:` block, so none silently inherits the
+repository default).
+
+Two lanes in `ci-gate`'s list are not in the table above because they are not
+scanners: **`helm`** lints and renders the Helm chart so a values/template drift
+fails here rather than at an operator's install, and **`migrations`** rejects
+dangerous DDL in new or changed migration files.
+
+One qualifier on "every lane reaches the gate": on a **docs-only** change the
+`changes` job skips the heavy lanes, and `ci-gate` passes over those skips. That
+is deliberate and narrowly bounded — the classifier is a prose allow-list, and
+`ci-gate` refuses a skip whenever the classifier did *not* say docs-only, so a
+skip from any other cause fails the gate.
 
 The scanners get there because `codeql.yml` and `semgrep.yml` are **reusable
 workflows** (`on: workflow_call`): `ci.yml` and `dev-ci.yml` each call them as a
@@ -483,8 +543,11 @@ Stated rather than left for rediscovery:
   CodeQL toolchain break sit red for weeks. Deduped by title; re-failures
   comment on the same issue. Mechanism differs by necessity: govulncheck and
   grype carry an in-job step, while CodeQL and Semgrep are watched by
-  `scan-cron-alarm.yml` (a `workflow_run` watcher) — because a CALLED workflow
-  may not request permissions its caller did not grant, and the check fires at
-  plan time before any `if:` can skip the job. Learned by breaking it: an
+  `scan-cron-alarm.yml` (a `workflow_run` watcher, which also covers the
+  `E2E canary (real model)` lane — three workflows, not two) — because a CALLED
+  workflow may not request permissions its caller did not grant, and the check
+  fires at plan time before any `if:` can skip the job. In `govulncheck` and
+  `grype` the alarm is a separate JOB rather than a step, holding `issues: write`
+  on its own so the scan itself does not run beside that scope. Learned by breaking it: an
   `issues: write` alarm job inside the called workflows startup-failed the
   entire calling Dev CI run.

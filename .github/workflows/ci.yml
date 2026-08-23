@@ -993,9 +993,11 @@ jobs:
             --output sarif=grype-results.sarif
 
       - name: Enforce actionable Fedora RPM policy
-        # The generic image follows Fedora latest. Block only when a CRITICAL
-        # RPM finding has a packaged fix; report upstream language records but
-        # do not force hand-maintained overlay pins over distro-owned packages.
+        # The generic image follows Fedora latest. Block when a CRITICAL **or
+        # HIGH** RPM finding has a packaged fix (scripts/check-grype-policy.sh
+        # selects both severities — this comment said CRITICAL only, which
+        # understated the gate); report upstream language records but do not
+        # force hand-maintained overlay pins over distro-owned packages.
         run: scripts/check-grype-policy.sh grype-results.json
 
       - name: Upload Grype SARIF results to the GitHub Security tab

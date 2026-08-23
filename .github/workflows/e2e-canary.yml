@@ -131,12 +131,25 @@ jobs:
         run: npx playwright test --project=canary --reporter=list
 
       - name: Upload canary report on failure
+        # Playwright report ONLY — deliberately not `.e2e-run/logs/`.
+        #
+        # This is the one job in the repo that boots fleet with the REAL
+        # OPENROUTER_API_KEY, and scripts/e2e-boot-server.sh redirects the
+        # server's stdout/stderr into that log directory. The repo is public, so
+        # an artifact here is world-downloadable. Nothing in the Go tree logs the
+        # key today (internal/agentcore/openrouter_models.go notes explicitly
+        # that it never enters that path), so this is residual rather than a
+        # known leak — it would take an upstream HTTP error string echoing an
+        # Authorization header. But the report is what a failure is actually
+        # diagnosed from, and the logs are not worth that tail risk.
+        #
+        # ci.yml's e2e-live job still uploads its logs, correctly: it runs
+        # against the fake LLM (cmd/fake-llm) with a throwaway key, so there is
+        # nothing there to leak.
         if: ${{ failure() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: canary-report
-          path: |
-            web/playwright-report/
-            .e2e-run/logs/
+          path: web/playwright-report/
           retention-days: 14
           if-no-files-found: ignore

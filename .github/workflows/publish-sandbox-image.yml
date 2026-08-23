@@ -235,6 +235,31 @@ jobs:
       # actions/untrusted-checkout under security-extended; the same pattern in
       # build-sandbox-image.yml was flagged; this file escaped both query
       # variants despite holding packages: write — the MORE dangerous twin.)
+      - name: Validate bundle_dir
+        # `fleet_ref`, which reaches the SAME build-script invocation, got a
+        # character allow-list, a bare-SHA refusal and a GITHUB_OUTPUT-newline
+        # fix. `bundle_dir` got nothing, and the asymmetry is the whole reason
+        # this exists — there is no shell injection here (it goes through `env:`
+        # and is quoted at every use), but nothing stopped `../../.fleet-core`
+        # or an absolute path from silently repointing the build at a different
+        # manifest. The reusable workflow runs in the CALLER's context with the
+        # caller's token, so the blast radius is a client repo misbuilding its
+        # own image; this is defence in depth and consistency, not a live hole.
+        env:
+          REQUESTED: ${{ inputs.bundle_dir }}
+        run: |
+          set -euo pipefail
+          case "$REQUESTED" in
+            ""|.) ;;
+            /*)
+              echo "::error::bundle_dir must be relative to the caller repo, not absolute."; exit 1 ;;
+            *..*)
+              echo "::error::bundle_dir must not contain '..' — it may only name a path inside the caller repo."; exit 1 ;;
+            *[!a-zA-Z0-9._/-]*)
+              echo "::error::bundle_dir contains a character outside [A-Za-z0-9._/-]. Refused before the build."; exit 1 ;;
+          esac
+          echo "bundle_dir accepted: '${REQUESTED:-.}'"
+
       - name: Pin fleet_ref to collaborator-controlled refs
         id: pin
         env:
