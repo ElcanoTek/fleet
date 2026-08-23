@@ -384,12 +384,43 @@ jobs:
             | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
           sudo apt-get update -qq
           sudo apt-get install -y -qq postgresql-client-18
+          # Installing the package does NOT change what `pg_dump` resolves to,
+          # and that is what made this step's first outing fail with `got=16`
+          # over an install that had plainly succeeded. /usr/bin/pg_dump is a
+          # symlink to postgresql-common's pg_wrapper, and the wrapper's own
+          # header states the rule: it calls the client "with the version,
+          # cluster and default database specified in ~/.postgresqlrc or
+          # /etc/postgresql-common/user_clusters". That is cluster
+          # configuration, NOT "the newest client installed" — so on a runner
+          # image carrying a PostgreSQL 16 cluster, adding a 16-agnostic client
+          # package changes nothing about the dispatch. Put the versioned bin
+          # dir first on PATH instead, which is what the Go test needs anyway:
+          # it execs `pg_dump` off PATH (internal/admincli/backup.go), with no
+          # versioned path of its own.
+          echo "/usr/lib/postgresql/18/bin" >> "$GITHUB_PATH"
           # Assert the major, don't just print it: the test self-skips on a
           # mismatch, so an install that "succeeded" with the wrong major is
-          # exactly as invisible as one that failed.
+          # exactly as invisible as one that failed. Absolute path here because
+          # $GITHUB_PATH only takes effect in LATER steps — PATH resolution is
+          # asserted in the next step, where it has.
+          got="$(/usr/lib/postgresql/18/bin/pg_dump --version | grep -oE '[0-9]+' | head -1)"
+          [ "$got" = "18" ] || {
+            echo "::error::installed pg_dump major ${got} != server major 18 — the backup/restore round-trip test would self-skip."
+            exit 1
+          }
+
+      - name: Assert pg_dump on PATH is the server major
+        # A separate step because $GITHUB_PATH applies from the next step on,
+        # and PATH resolution is the half that actually broke: the package
+        # installed correctly and `pg_dump` still meant 16. This asserts the
+        # exact lookup the round-trip test performs, so the two cannot drift
+        # again without going red.
+        run: |
+          set -euo pipefail
+          command -v pg_dump
           got="$(pg_dump --version | grep -oE '[0-9]+' | head -1)"
           [ "$got" = "18" ] || {
-            echo "::error::pg_dump major ${got} != server major 18 — the backup/restore round-trip test would self-skip."
+            echo "::error::pg_dump on PATH is major ${got}, not server major 18 — the backup/restore round-trip test would self-skip."
             exit 1
           }
 
