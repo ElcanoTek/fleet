@@ -308,7 +308,11 @@ same PR.
   sandboxes as ephemeral pods, the fail-closed cluster preflight, and the
   honest deviations from the podman backend):
   [`docs/DEPLOYMENT-KUBERNETES.md`](docs/DEPLOYMENT-KUBERNETES.md) +
-  [ADR-0049](docs/adr/0049-kubernetes-backend-split-control-plane.md)
+  [ADR-0049](docs/adr/0049-kubernetes-backend-split-control-plane.md). The
+  bundle side of that path is
+  [`ElcanoTek/example-kubernetes-config`](https://github.com/ElcanoTek/example-kubernetes-config),
+  the Kubernetes peer of `example-config` — out-of-repo client content, per the
+  coupling doctrine below, so fleet links to it rather than vendoring it.
 - **Load testing & benchmarks** (`fleet-bench` HTTP chat load via the fake-LLM
   seam + subsystem throughput benchmarks): [`docs/LOAD-TESTING.md`](docs/LOAD-TESTING.md)
 - **Prompt-cache prefix-stability contract** (what must stay byte-stable in the

@@ -246,7 +246,10 @@ defaults, the connector catalog, and tool policy; `system_prompts/`,
 
 Three ways in: **run bare** (the in-repo generic bundle — good for a first
 look), **fork the public template**
-([`ElcanoTek/example-config`](https://github.com/ElcanoTek/example-config)), or
+([`ElcanoTek/example-config`](https://github.com/ElcanoTek/example-config) for
+the single-box podman install,
+[`ElcanoTek/example-kubernetes-config`](https://github.com/ElcanoTek/example-kubernetes-config)
+for the Kubernetes one — they are peers, not parent and child), or
 **point at your own private repo** (the box needs a read-only fine-grained PAT
 to clone it). `bootstrap --client-config <git-url[#sha-or-tag]|path>` sets it
 up; **pin the ref in production** — the bundle runs host-side under the service
@@ -273,9 +276,10 @@ outright, rather than trusting a vendor's roadmap to stay clear of your market.
 Versioned, under your control, over an open protocol ([MCP](#standards)): your
 agent setup travels with you — fork it per team, share it across orgs, or point
 it at another MCP-capable platform. Moving off fleet doesn't mean starting
-over, which keeps adoption low-risk. The public template
-([`ElcanoTek/example-config`](https://github.com/ElcanoTek/example-config))
-shows the full layout.
+over, which keeps adoption low-risk. The public templates show the full
+layout — [`example-config`](https://github.com/ElcanoTek/example-config) for a
+single box, [`example-kubernetes-config`](https://github.com/ElcanoTek/example-kubernetes-config)
+for a cluster.
 
 ## Development
 
