@@ -702,16 +702,13 @@ func buildKubernetesSandboxPool(cfg *config.Config, poolCfg sandbox.PoolConfig, 
 	kept, dropped := k8sDocMounts(poolCfg.Container.ReadOnlyMounts, bundleDocDirs, docsInImage)
 	poolCfg.Container.ReadOnlyMounts = kept
 	if len(kept) > 0 {
-		//nolint:gosec // G706: operator-configured bundle paths from the manifest/env, not request input.
 		log.Printf("sandbox: kubernetes backend — bundle_docs_in_image declared: keeping fileop read anchors for %d bundle doc root(s) %v; the SANDBOX IMAGE must carry them at these exact paths or reads fail not-found", len(kept), kept)
 	}
 	for _, d := range dropped {
 		switch {
 		case clientconfig.IsMaterializedSkillsDir(d):
-			//nolint:gosec // G706: as above — a boot-resolved bundle path.
 			log.Printf("sandbox: kubernetes backend — skills dir %q is the merged built-in+bundle tree under the control plane's data dir, which no sandbox image can carry; in-sandbox skill reads will not resolve. Set skills_builtin: false in the bundle manifest to make skills/ the bundle's own (bake-able) dir", d)
 		case docsInImage:
-			//nolint:gosec // G706: as above.
 			log.Printf("sandbox: kubernetes backend — %q is not a bundle doc dir, so bundle_docs_in_image does not vouch for it; in-sandbox reads there will not resolve", d)
 		}
 	}
