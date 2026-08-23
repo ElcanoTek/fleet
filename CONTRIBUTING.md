@@ -147,6 +147,30 @@ If golangci-lint flags something, either fix it or add a `//nolint` with a
 reason (the `nolintlint` linter requires the reason). The lint backlog is at
 zero — please keep it there.
 
+### If CI is red and you don't recognise the failure
+
+Three lanes here depend on **live external data**, so they can go red on a diff
+that did not cause it — including a one-line documentation change. This is by
+design (a new advisory *should* redden an unchanged tree), but it means a red
+check is not automatically yours:
+
+- **`govulncheck`** queries the Go vulnerability database on every run.
+- **`npm audit`** runs over both npm trees at `--audit-level=low` and fails on
+  any severity.
+- **Semgrep** fetches its rule packs from the registry. They cannot be pinned by
+  vendoring — the Semgrep Rules License forbids redistribution — so a
+  registry-side rule addition can turn CI red with no commit to blame.
+
+If the failure names a package, advisory or rule you did not touch, say so in the
+PR rather than trying to fix it; a maintainer will confirm and handle it.
+
+Two other things that surprise first-time contributors, neither of them a problem
+with your change: a first PR waits for a maintainer to approve the workflow run
+before CI starts at all, and the full `main` suite is around a dozen jobs
+including a ~1.3&nbsp;GB sandbox image build, so it is thorough rather than fast.
+`make lint && make test && make ci-web` locally will catch nearly everything
+first.
+
 ## Branch and pull-request conventions
 
 - Branch off the latest `main`. Use a short, descriptive prefix, e.g.

@@ -98,9 +98,21 @@ jobs:
         # python3, and this repo pins no setup-python version anywhere else, so
         # adding one would be inventing an unverified action pin for nothing.
         #
-        # The semgrep version IS pinned, like every other tool this repo installs
-        # in CI (gitleaks, grype, golangci-lint), so an upstream release cannot
-        # change the findings under us without a visible diff.
+        # The semgrep version IS pinned, so an upstream release cannot change the
+        # findings under us without a visible diff.
+        #
+        # It is NOT the same guarantee gitleaks and grype get, and this comment
+        # used to claim it was. Those two are downloaded at a pinned version AND
+        # sha256-verified; `pip install semgrep==X` pins semgrep and resolves its
+        # ~40-package dependency closure (attrs, click, glom, requests, rich,
+        # ruamel.yaml, urllib3, …) to whatever is latest that day, unverified —
+        # inside a job that sits in both merge gates. The mitigating fact, which
+        # is why this is a caveat and not an incident: PyPI forbids re-uploading
+        # an existing version, so the exposure is a NEW malicious release of a
+        # transitive dep, not silent mutation of a pinned one — materially weaker
+        # than the mutable-GitHub-release-asset case the pinning exercise fixed.
+        # Closing it properly means a `--require-hashes` requirements file
+        # regenerated on every semgrep bump; tracked, not done here.
         env:
           SEMGREP_VERSION: '1.174.0'
         run: |
