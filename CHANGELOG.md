@@ -72,6 +72,26 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **`AGENTS.md` reconciled with the tree it describes.** The Kubernetes backend
+  (ADR-0049) landed an index row and nothing else, so the headline paragraph and
+  the "sandbox is mandatory" invariant still called the sandbox
+  *rootless-Podman* — an agent reading only that file would treat
+  `FLEET_SANDBOX_BACKEND=kubernetes` as an invariant violation rather than a
+  supported backend. Both now say pluggable-backend/mandatory-sandbox, and the
+  invariant additionally names the mechanism it had left implicit: the
+  `fleet_host_executor` build-tag fence (#159) and the kubernetes backend's
+  fail-closed preflight. Also corrected: the `make test`/`test-race`/`test-cover`
+  lines omitted `-tags fleet_host_executor` (a bare `go test ./...` builds a
+  different tree than CI); the web block was a stale copy of the CI job that
+  dropped the second npm tree (`scripts/rampart-service`) and the override
+  canary, where `make ci-web` now runs all eight steps; `make govulncheck`,
+  `ci-go`, `ci-web` and `ci-local` were missing from the target list; CI was
+  described as one lane when `ci.yml` fires on `main` only and `dev-ci.yml` is
+  `dev`'s only signal (so the promotion PR is the first full-gate run); the
+  merge-gate enumeration omitted actionlint/shellcheck, the Helm lint and the
+  Playwright suites; and the repository map omitted `deploy/`, the harness
+  binaries under `cmd/`, and the `/settings` + `/admin` web routes.
+
 - **Two green-but-vacuous holes in `ci.yml`.** The `postgresql-client-18` install
   was best-effort (`|| echo`), so an unreachable PGDG left client 16 in place and
   `backup_test.go`'s major-mismatch `t.Skipf` turned the *only* coverage of
