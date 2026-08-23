@@ -168,8 +168,7 @@ same PR.
   to this file — that is how it grew past 300 lines once already; the historical
   notes now live in [`docs/FEATURE-NOTES.md`](docs/FEATURE-NOTES.md).
 - One focused branch + PR per change; keep diffs scoped. Don't refactor unrelated
-  code in a feature PR. See `CONTRIBUTING.md` for branch/PR conventions and DCO
-  sign-off.
+  code in a feature PR. See `CONTRIBUTING.md` for branch/PR conventions.
 
 ## Where to look
 

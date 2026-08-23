@@ -10,4 +10,4 @@ contact_links:
       disclosure process and the response SLA.
   - name: Contributing guide
     url: https://github.com/ElcanoTek/fleet/blob/main/CONTRIBUTING.md
-    about: Build, test and lint commands, the CI gates, and DCO sign-off.
+    about: Build, test and lint commands, the CI gates, and PR conventions.

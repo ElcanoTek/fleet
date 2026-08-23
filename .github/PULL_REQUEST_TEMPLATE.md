@@ -26,7 +26,6 @@ sentence, not a wasted one.
 
 ---
 
-- [ ] Commits are signed off (`git commit -s`) — see CONTRIBUTING.md
 - [ ] `CHANGELOG.md` updated, if this is a user-visible change
 - [ ] A design note (`docs/<FEATURE>.md`) added, if this ships a feature
 - [ ] An ADR added or superseded in `docs/adr/`, if this adds, weakens or

@@ -193,9 +193,12 @@ fixing every real finding and adjudicating every false one.
 `p/github-actions` found one issue class nothing else in this repo checks —
 actions referenced by a **mutable tag** (`actions/checkout@v7`) instead of an
 immutable commit SHA. If a tag moves, attacker-controlled code runs with this
-repo's `GITHUB_TOKEN`. There are **13** workflow files, **12** of which reference
+repo's `GITHUB_TOKEN`. There are **12** workflow files, **11** of which reference
 an action at all (`scan-cron-alarm.yml` has no `uses:`), and every one of the
-**53** third-party action references across them is now pinned:
+**56** third-party action references across them is pinned. (The counts move with
+every workflow added or removed — they were 13/12/53 when this was written, and
+`scripts/check_action_pins_test.go`, not this paragraph, is what actually holds
+the invariant.)
 
 ```yaml
 uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -430,14 +433,20 @@ Stated rather than left for rediscovery:
   2. A `github-actions` bump **is a rewrite of `.github/workflows/*`**: it
      changes what CI executes.
 
-  So the pre-existing shape was: a same-day patch bump to a third-party action,
-  auto-merged into a branch with no required checks, rewriting the workflows that
-  are supposed to check it. Three workflow-side mitigations ship alongside this
-  document — `auto-merge-dependabot.yml` now **excludes the `github_actions`
-  ecosystem** whatever the bump level, carries an explicit
-  `branches: [main, dev]` filter so it can never silently start applying to an
-  unprotected branch, and declares its write scopes on the job rather than the
-  workflow. Those narrow the blast radius; they do not make `Dev gate` required.
+  So the shape to avoid is: a same-day patch bump to a third-party action landing
+  unattended on a branch with no required checks, rewriting the workflows that are
+  supposed to check it.
+
+  **What removes it is that this repository no longer merges anything
+  automatically.** `auto-merge-dependabot.yml` was deleted. Its header had argued
+  the case against itself — it explained that `gh pr merge --auto` holds a merge
+  only on *required* checks, named `dev` as a branch with none, and then listed
+  `dev` in its own `branches:` filter, so the mitigation the previous revision of
+  this document credited was in fact the delivery mechanism. Every dependency
+  bump, every ecosystem, every bump level now waits for a human.
+
+  That closes the compounding risk but **not** the underlying gap: a hand-merged
+  PR into `dev` still merges over a red `Dev gate`, because nothing requires it.
 
   **The remaining fix is a repo-settings action and belongs to the owner:** add
   `Dev gate` to the `dev` ruleset's required status checks. Nothing in a workflow

@@ -181,18 +181,11 @@ first.
 - Make sure the full local suite (Go + web + mocked Playwright) is green before
   you push.
 
-## Commit messages and sign-off
+## Commit messages
 
 - Write clear, imperative commit subjects ("Add X", not "Added X").
-- Sign off your commits with the Developer Certificate of Origin
-  (<https://developercertificate.org/>) by adding a `Signed-off-by` trailer:
-
-  ```bash
-  git commit -s -m "Your message"
-  ```
-
-  By signing off you certify that you wrote the patch (or otherwise have the
-  right to submit it) under the project's MIT license.
+- Explain *why* in the body when the change is not self-evident. The diff
+  already says what changed.
 
 ## Reporting bugs and proposing features
 

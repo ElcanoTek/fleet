@@ -42,14 +42,12 @@
 # Deliberately NOT enabled — a CI-only gate so the sole maintainer can self-merge
 # a green PR — are required approvals and Code Owner review (see the note above).
 #
-# Dependabot auto-merge interaction: .github/workflows/auto-merge-dependabot.yml
-# enables `gh pr merge --auto` on PATCH-level bumps only, and the required `CI
-# gate` check holds that merge until CI is green. Because Code Owner review is
-# NOT currently required, such a patch PR auto-merges on green CI with no human
-# approval — INCLUDING a github-actions patch bump that touches a CODEOWNERS-
-# matched path like .github/workflows/. To force a human gate on those sensitive
-# paths, turn on Code Owner review in the ruleset; minor and major bumps already
-# wait for a human regardless.
+# Dependabot interaction: there is no auto-merge in this repository. Every
+# dependency bump — every ecosystem, every bump level — is merged by a human, so
+# a github-actions bump touching a CODEOWNERS-matched path like
+# .github/workflows/ cannot land unattended. Turning on Code Owner review in the
+# ruleset would additionally force review by the owner named below rather than
+# any maintainer.
 # ---------------------------------------------------------------------------
 
 # Catch-all: every file has an owner so nothing is silently unowned. Specific
@@ -86,7 +84,7 @@
 /internal/sched/db/migrations/          @bradflaugher
 
 # CI gates and dependency/agent automation — these workflows ARE the merge
-# guarantees, including the Dependabot auto-merge path.
+# guarantees.
 /.github/workflows/                     @bradflaugher
 /.github/dependabot.yml                 @bradflaugher
 /.github/CODEOWNERS                     @bradflaugher
