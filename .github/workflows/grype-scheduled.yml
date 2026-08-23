@@ -19,15 +19,23 @@ on:
     - cron: '0 9 * * 1'  # Every Monday at 09:00 UTC
   workflow_dispatch:       # Allow a manual trigger (e.g. after a base-image bump)
 
+# NOTE: `issues: write` deliberately does NOT live at workflow scope. These
+# lanes have one long job that runs third-party code with a full,
+# default-branch token — `govulncheck@latest` resolved at run time, and a
+# `podman build` pulling ~400 RPMs from Fedora mirrors. A workflow-level scope
+# is live for every step of that job, so the scan ran next to a token that
+# could open issues and write code-scanning alerts. The alarm needs no source
+# tree and no scan output, so it is its own job holding `issues: write` alone —
+# the same shape scan-cron-alarm.yml already uses for CodeQL and Semgrep.
 permissions:
   contents: read
   security-events: write  # required to upload SARIF to the Security tab
-  issues: write  # the failure-alarm step files an issue when a scheduled run breaks
 
 jobs:
   grype-scheduled:
     name: Weekly container vulnerability scan
     runs-on: ubuntu-latest
+    timeout-minutes: 35
     env:
       SANDBOX_IMAGE_LOCAL: localhost/fleet-sandbox:latest
 
@@ -35,6 +43,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # Nothing here pushes or does an authenticated fetch, so do not leave
+          # the job's token in .git/config for the third-party code below.
+          persist-credentials: false
           ref: main  # always scan the tip of main, not a PR branch
 
       - name: Install Grype
@@ -88,6 +99,19 @@ jobs:
           sarif_file: 'grype-results.sarif'
           category: 'grype-scheduled'
 
+
+  alarm:
+    # Split out of the scan job above so `issues: write` is the ONLY scope in
+    # play here, and it is held by a job that checks out nothing and runs no
+    # third-party code — it only calls `gh`.
+    name: File an issue so a red cron cannot rot silently
+    needs: [grype-scheduled]
+    if: ${{ failure() && github.event_name == 'schedule' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
       - name: File an issue so a red cron cannot rot silently
         # A scheduled failure has no PR attached, so nothing surfaces it — the
         # exact rot pattern that let the CodeQL toolchain break sit red for
@@ -95,7 +119,6 @@ jobs:
         # re-failures. schedule-only: a red manual dispatch has a human watching.
         # This step body is duplicated across the four scheduled scan lanes
         # (codeql, semgrep, govulncheck, grype) — keep them in sync.
-        if: ${{ failure() && github.event_name == 'schedule' }}
         env:
           GH_TOKEN: ${{ github.token }}
           WORKFLOW_NAME: ${{ github.workflow }}

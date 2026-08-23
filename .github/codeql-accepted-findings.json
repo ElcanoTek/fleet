@@ -85,6 +85,11 @@
       "rule": "js/insecure-temporary-file",
       "file": "web/e2e/test-auth-key.ts",
       "reason": "Test-only, and the reported defect is fixed as far as it can be without changing the cross-process rendezvous contract: the write is now O_EXCL (flag \"wx\") at mode 0600 with crypto random bytes in the sibling name, so it cannot follow or clobber a pre-planted symlink and does not leave the private half world-readable. The query recognizes only mkdtemp as safe, but the fixed path is a deliberate rendezvous — playwright.config.ts is loaded in the main process AND re-imported in every worker, which must all read the same throwaway keypair. The key is generated per run, protects nothing real, and is never committed."
+    },
+    {
+      "rule": "go/command-injection",
+      "file": "internal/sandbox/host.go",
+      "reason": "hostImpl.runBash executing caller-supplied shell (`bash -c req.Command`) IS the component's contract: it is the unsandboxed TEST/DEV-ONLY executor, compiled solely behind the fleet_host_executor build tag (#159) — a release `go build ./...` contains the fail-closed stub in host_disabled.go and MockMode refuses to boot without the tag, so this sink cannot ship in a production binary (ADR-0002's enforcement). Every production tool call runs through the container or kubernetes backend instead. The same line already carries the equivalent gosec waiver ('shell execution is the purpose of this tool'). The finding surfaced on #1249 because the diff-informed PR run intersected the flow's path (sandbox.go/pool.go edits), not because a new source reached the sink."
     }
   ]
 }

@@ -421,8 +421,18 @@ make ci-go
 
 ## Web lint / test / build — CI job `web`
 
-Runs from `web/`. The job is: `npm ci` → `npm run lint` (ESLint) →
-`npx vitest run` (unit tests) → `npm run build` (`next build`).
+Runs from `web/`. The job is: `npm audit --audit-level=low` (web) →
+`npm audit --audit-level=low` (`scripts/rampart-service`) →
+`scripts/check-npm-overrides.sh` → `npm ci` → `npm run lint` (**oxlint**, not
+ESLint — see the TypeScript 7 section above, which explains why ESLint was
+replaced) → `npm run typecheck` (`tsc --noEmit`) → `npx vitest run` (unit tests)
+→ `npm run build` (`next build`).
+
+The two audits and the override canary run **before** `npm ci`, deliberately:
+they are lockfile-only, so they cost seconds and fail before the expensive
+install. The explicit typecheck is not redundant with `next build` — the build
+type-checks too, but it runs last, so without this step a one-line type error
+surfaces minutes in.
 
 ```sh
 cd web

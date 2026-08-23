@@ -1,4 +1,4 @@
-.PHONY: all build compile bins fleet-bench install test test-race test-cover lint lint-go lint-python lint-migrations fmt tidy clean help \
+.PHONY: all build compile bins fleet-bench install test test-race test-cover lint lint-go lint-python lint-migrations lint-actions fmt tidy clean help \
 	govulncheck ci-go ci-web ci-e2e-mocked ci-local
 
 # GOTOOLCHAIN=auto — the operator does NOT have to hand-install the pinned Go.
@@ -122,7 +122,7 @@ test-cover:
 	go test -coverprofile=coverage.out -covermode=atomic -p 1 -tags fleet_host_executor ./...
 	@go tool cover -func=coverage.out | tail -1
 
-lint: lint-go lint-python lint-migrations
+lint: lint-go lint-python lint-migrations lint-actions
 
 lint-go:
 	golangci-lint run
@@ -149,6 +149,33 @@ lint-python:
 # untouched; a no-op when no migration files changed or no base ref resolves.
 lint-migrations:
 	scripts/check-migrations.sh
+
+# lint-actions: actionlint over .github/workflows/*.yml — the ~3.1k lines of
+# workflow YAML that decide what every other gate on this list even runs.
+#
+# It is the one checker here whose subject is CI itself, and it covers ground
+# no other lane does: expression syntax and type errors inside ${{ }}, unknown
+# contexts, invalid `needs:`/`runs-on:`/cron, deprecated action syntax, and —
+# via shellcheck — the bash inside every `run:` block. Semgrep's
+# p/github-actions pack overlaps on ONE axis only (mutable action tags); it
+# does not parse expressions and does not shellcheck run blocks.
+#
+# Skips LOUDLY when actionlint is absent, same contract as lint-python: CI
+# enforces the gate regardless (ci.yml + dev-ci.yml `actions` job), so a local
+# skip is a choice, not a surprise.
+lint-actions:
+	@if command -v actionlint >/dev/null 2>&1; then \
+		actionlint; \
+	else \
+		echo "actionlint not installed — SKIPPING the workflow lint (CI still enforces it)."; \
+		echo "  install: go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7"; \
+	fi
+	@if command -v shellcheck >/dev/null 2>&1; then \
+		git ls-files '*.sh' | xargs shellcheck -S warning; \
+	else \
+		echo "shellcheck not installed — SKIPPING the shell lint (CI still enforces it)."; \
+		echo "  install: dnf install ShellCheck   # or: apt-get install shellcheck"; \
+	fi
 
 fmt:
 	gofmt -w .
@@ -219,9 +246,19 @@ ci-go: compile
 	$(MAKE) test-race
 	$(MAKE) govulncheck
 
-# The Web CI job, verbatim, run from web/: npm ci → lint → vitest → build.
+# The Web CI job, verbatim: both npm audits → the override canary → npm ci →
+# lint → typecheck → vitest → build. It said "verbatim" while running four of
+# those eight, which is the wrong half of a CI==local promise: the two
+# `npm audit` CVE gates, scripts/check-npm-overrides.sh, and the explicit
+# `npm run typecheck` were all missing, so a contributor could go green locally
+# and red on the PR. The typecheck matters most of the four — `next build`
+# type-checks too, but it runs LAST, so dropping the explicit gate is what turns
+# a one-line type error into a multi-minute discovery.
 ci-web:
-	cd web && npm ci && npm run lint && npx vitest run && npm run build
+	cd web && npm audit --audit-level=low
+	cd scripts/rampart-service && npm audit --audit-level=low
+	scripts/check-npm-overrides.sh
+	cd web && npm ci && npm run lint && npm run typecheck && npx vitest run && npm run build
 
 # The mocked Playwright CI job, run from web/. Assumes browsers are installed
 # (`cd web && npx playwright install --with-deps chromium`); CI installs them in

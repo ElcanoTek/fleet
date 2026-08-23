@@ -139,8 +139,14 @@ type PoolConfig struct {
 	BridgeScript []byte
 
 	// Container holds the per-sandbox container settings (image, mounts,
-	// caps). Required when Mode == ModeContainer.
+	// caps). Required when Mode == ModeContainer, and the source of the
+	// backend-shared knobs (image, workspace path, limits, network posture)
+	// when Mode == ModeKubernetes.
 	Container ContainerConfig
+
+	// KubernetesBackend is the boot-built handle for the kubernetes sandbox
+	// backend (#989). Required when Mode == ModeKubernetes; nil otherwise.
+	KubernetesBackend *KubernetesBackend
 
 	// EgressProxy, when non-nil, is the host-side allowlist proxy (#211) used by
 	// TakeContainerWithEgress for "allowlisted" network mode. nil means
@@ -301,7 +307,6 @@ func (p *Pool) TakeContainerWithOverrides(ctx context.Context, ov ResourceOverri
 	}
 	cfg := p.cfg.Container
 	cfg.BridgeScript = p.cfg.BridgeScript
-	cfg.StorageOptSupported = p.storageOptSupported(ctx)
 	// Network sealing is enforced HERE rather than upstream so the lockdown
 	// contract is impossible to bypass via a bad caller.
 	cfg.NoNetwork = noNetwork
@@ -311,9 +316,9 @@ func (p *Pool) TakeContainerWithOverrides(ctx context.Context, ov ResourceOverri
 	cfg = ov.applyTo(cfg)
 	// See newSandbox below for why we resolve the start timeout here
 	// rather than reading it raw from cfg.
-	startCtx, cancel := context.WithTimeout(ctx, resolveStartTimeout(cfg)+5*time.Second)
+	startCtx, cancel := context.WithTimeout(ctx, p.startTimeoutFor(cfg)+5*time.Second)
 	defer cancel()
-	sb, err := NewContainer(startCtx, cfg)
+	sb, err := p.newBackendSandbox(startCtx, cfg)
 	if err != nil {
 		return nil, func() {}, err
 	}
@@ -321,8 +326,43 @@ func (p *Pool) TakeContainerWithOverrides(ctx context.Context, ov ResourceOverri
 		sb.Close()
 		return nil, func() {}, ErrClosed
 	}
-	sb.SetPythonCellTimeout(p.cfg.PythonCellTimeout)
 	return sb, sb.Close, nil
+}
+
+// startTimeoutFor resolves the outer construction budget for the active
+// backend: the kubernetes backend's pod start ceiling (schedule + pull) when
+// it is selected, else the podman container start timeout.
+func (p *Pool) startTimeoutFor(cfg ContainerConfig) time.Duration {
+	if p.cfg.Mode == ModeKubernetes && p.cfg.KubernetesBackend != nil {
+		return p.cfg.KubernetesBackend.StartTimeout()
+	}
+	return resolveStartTimeout(cfg)
+}
+
+// newBackendSandbox constructs one sandbox from a fully-resolved per-call
+// cfg, routing to the active container backend (#989): a Kubernetes pod when
+// ModeKubernetes, else a rootless-Podman container. The podman path pays the
+// storage-opt probe here; kubernetes has no analogue (its disk cap is the
+// pod's ephemeral-storage limit, applied unconditionally in the pod spec).
+func (p *Pool) newBackendSandbox(ctx context.Context, cfg ContainerConfig) (*Sandbox, error) {
+	var (
+		sb  *Sandbox
+		err error
+	)
+	if p.cfg.Mode == ModeKubernetes {
+		if p.cfg.KubernetesBackend == nil {
+			return nil, errors.New("sandbox: kubernetes backend selected but not constructed (fail-closed)")
+		}
+		sb, err = p.cfg.KubernetesBackend.newSandbox(ctx, cfg)
+	} else {
+		cfg.StorageOptSupported = p.storageOptSupported(ctx)
+		sb, err = NewContainer(ctx, cfg)
+	}
+	if err != nil {
+		return nil, err
+	}
+	sb.SetPythonCellTimeout(p.cfg.PythonCellTimeout)
+	return sb, nil
 }
 
 // TakeContainerWithEgress cold-starts a fresh container in "allowlisted" network
@@ -344,6 +384,13 @@ func (p *Pool) TakeContainerWithEgress(ctx context.Context, ov ResourceOverride,
 	}
 	if p.cfg.Container.Image == "" {
 		return nil, func() {}, ErrContainerUnavailable
+	}
+	if p.cfg.Mode == ModeKubernetes {
+		// The egress proxy binds to the control-plane host's loopback; a pod on
+		// another node cannot reach it. Refuse rather than grant open egress
+		// under an "allowlisted" banner. buildSandboxPool refuses the mode at
+		// boot too; this is the can't-bypass-it backstop.
+		return nil, func() {}, errors.New("allowlisted network mode is not supported by the kubernetes sandbox backend (fail-closed)")
 	}
 	if p.cfg.EgressProxy == nil {
 		return nil, func() {}, errors.New("allowlisted network mode requested but no egress proxy is configured (fail-closed)")
@@ -500,6 +547,16 @@ func (p *Pool) EgressDefault() (mode string, allowlist []string) {
 		return "", nil
 	}
 	return p.cfg.DefaultNetworkMode, p.cfg.DefaultEgressAllowlist
+}
+
+// KubernetesBackend exposes the kubernetes backend handle when that backend
+// is active (nil under podman/host). Used by boot-time maintenance (the
+// orphan-pod prune in cmd/fleet) and diagnostics.
+func (p *Pool) KubernetesBackend() *KubernetesBackend {
+	if p == nil {
+		return nil
+	}
+	return p.cfg.KubernetesBackend
 }
 
 func (p *Pool) Close() {
@@ -766,12 +823,11 @@ func (p *Pool) storageOptSupported(ctx context.Context) bool {
 
 func (p *Pool) newSandbox(ctx context.Context) (*Sandbox, error) {
 	switch p.cfg.Mode {
-	case ModeContainer:
+	case ModeContainer, ModeKubernetes:
 		cfg := p.cfg.Container
 		cfg.BridgeScript = p.cfg.BridgeScript
-		cfg.StorageOptSupported = p.storageOptSupported(ctx)
-		// resolveStartTimeout applies the same default NewContainer would
-		// apply internally. Without this, the OUTER context timeout is
+		// startTimeoutFor applies the same default the backend constructor
+		// would apply internally. Without this, the OUTER context timeout is
 		// `0+5s = 5s` when StartTimeout isn't set explicitly, which
 		// cancels podman before its first-run idmapped-layer chown
 		// finishes — that chown takes ~12s on a fresh sandbox image
@@ -780,14 +836,9 @@ func (p *Pool) newSandbox(ctx context.Context) (*Sandbox, error) {
 		// "first message after deploy fails, second works fine"
 		// (because by the time the second message lands, the warm pool
 		// has finished filling against the now-cached chowned layer).
-		startCtx, cancel := context.WithTimeout(ctx, resolveStartTimeout(cfg)+5*time.Second)
+		startCtx, cancel := context.WithTimeout(ctx, p.startTimeoutFor(cfg)+5*time.Second)
 		defer cancel()
-		sb, err := NewContainer(startCtx, cfg)
-		if err != nil {
-			return nil, err
-		}
-		sb.SetPythonCellTimeout(p.cfg.PythonCellTimeout)
-		return sb, nil
+		return p.newBackendSandbox(startCtx, cfg)
 	case ModeHost:
 		// Test-only fixture path. agent.go forbids ModeHost in
 		// production; this branch only fires when sandbox_test.go

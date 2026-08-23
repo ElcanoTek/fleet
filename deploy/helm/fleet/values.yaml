@@ -1,0 +1,203 @@
+# Default values for the fleet chart (issue #989 / ADR-0049).
+#
+# READ FIRST — the two invariants this chart encodes:
+#
+#   1. ONE control-plane replica, forever. fleet's scheduler leases and worker
+#      semaphore are single-owner; two replicas against one database pair is a
+#      correctness bug, not a capacity increase. The Deployment pins
+#      replicas: 1 with strategy Recreate and exposes no replica knob.
+#      Horizontal scale of WORK = more sandbox pods (bigger node pool), never
+#      more fleet processes.
+#   2. Sandboxes never hold credentials. Sandbox pods are created by the
+#      control plane with automountServiceAccountToken=false, no env, no
+#      secret mounts — only the shared workspace claim. MCP credentials stay
+#      in the control-plane process (ADR-0003).
+#
+# You build the images yourself — fleet does not publish images:
+#   control plane:  a container image with the `fleet` binary + the client
+#                   bundle (see docs/DEPLOYMENT-KUBERNETES.md §images)
+#   sandbox:        scripts/build-sandbox-image.sh, pushed to your registry
+
+image:
+  # REQUIRED: your fleet control-plane image (binary + bundle baked in or
+  # mounted). Example: 123456789.dkr.ecr.us-east-1.amazonaws.com/fleet:v42
+  repository: ""
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+#  - name: regcred
+
+serviceAccount:
+  # Control-plane ServiceAccount (holds the RBAC grant for sandbox pods).
+  create: true
+  name: ""
+
+sandbox:
+  # REQUIRED: the sandbox image sandbox pods run
+  # (FLEET_SANDBOX_IMAGE). Must live in a registry the sandbox nodes can
+  # pull from — a localhost/ build-on-box tag cannot work here.
+  image: ""
+  # Backend is what this chart exists for; podman-in-a-pod is NOT a supported
+  # chart topology (the podman backend's supported home is a VM —
+  # docs/DEPLOYMENT.md).
+  backend: kubernetes
+  kubernetes:
+    # Namespace for sandbox pods. Empty = the release namespace (the default,
+    # because the shared workspace PVC cannot be mounted across namespaces —
+    # use a separate namespace only with storage that supports two PVs on one
+    # export, e.g. static NFS/EFS PVs).
+    namespace: ""
+    # ServiceAccount stamped on sandbox pods (identity for admission
+    # policies; no token is ever mounted). Created when create=true.
+    podServiceAccount:
+      create: true
+      name: fleet-sandbox
+    # Pull secret for the sandbox image, when the registry is private.
+    imagePullSecret: ""
+    # RuntimeClass for hypervisor-isolated sandboxes (e.g. kata). Preflighted
+    # fail-closed at boot when set.
+    runtimeClass: ""
+    # Node-local seccomp profile applied as a Localhost profile (path
+    # relative to the kubelet seccomp root). Empty = RuntimeDefault.
+    seccompProfile: ""
+    # Declare that your SANDBOX IMAGE carries the client bundle's doc dirs
+    # (protocols/, personas/, system_prompts/, skills/) at the SAME absolute
+    # paths the control plane reads them from — i.e. you built the sandbox
+    # image with the bundle baked in. A pod mounts only the workspace claim,
+    # so without this fleet drops those roots and view_file on `protocols/…`
+    # is refused; with it the file tools work again. fleet cannot verify an
+    # image's contents: a wrong declaration shows up as a not-found read.
+    # Bundles that inherit fleet's built-in skills pack cannot serve
+    # in-sandbox skill reads either way (the merged tree lives on the
+    # control-plane data PVC) — set skills_builtin: false in the bundle to
+    # make skills/ bake-able. See docs/DEPLOYMENT-KUBERNETES.md.
+    bundleDocsInImage: false
+    # Pin sandbox pods to a DEDICATED runner node pool: label the pool and
+    # select it here; taint it and add the matching toleration so nothing
+    # else lands on it. This is fleet's horizontal scaling story — more
+    # runner capacity is a bigger pool, never more fleet replicas.
+    nodeSelector: {}
+    #  fleet.elcanotek.com/pool: sandboxes
+    tolerations: []
+    #  - key: fleet.elcanotek.com/sandbox
+    #    operator: Exists
+    #    effect: NoSchedule
+  # Per-sandbox ceilings, podman-flag format (converted by fleet):
+  memory: "512m"
+  cpus: "1.0"
+  diskGB: 5
+  # Warm pool depth (FLEET_SANDBOX_WARM_SIZE; 0 = derive from
+  # FLEET_MAX_CONCURRENT_AGENTS).
+  warmSize: 0
+
+networkPolicies:
+  # Ship the deny-all egress policy for sandbox pods labeled
+  # fleet.elcanotek.com/egress=none. The boot preflight REQUIRES this object
+  # to exist; disable only if you manage an equivalent policy yourself (and
+  # then set its name below so the preflight finds it).
+  denyAll:
+    create: true
+    name: fleet-sandbox-deny-all
+  # Optional egress shaping for OPEN sandbox pods (egress=open): allow DNS +
+  # anything except the listed CIDRs (typically your cluster + node CIDRs),
+  # so an open sandbox can reach PyPI but not your Services. Off by default
+  # because the CIDRs are cluster-specific.
+  openEgress:
+    create: false
+    # CIDRs an open sandbox must NOT reach (cluster Pod/Service/node ranges).
+    blockedCIDRs: []
+    #  - 10.0.0.0/8
+    #  - 172.16.0.0/12
+    #  - 192.168.0.0/16
+
+workspace:
+  # The shared workspace claim: mounted by the control plane AND every
+  # sandbox pod at the same absolute path (workspaceRoot below).
+  create: true
+  claimName: fleet-workspace
+  size: 20Gi
+  # MUST be a ReadWriteMany-capable class in production (EFS, NFS, CephFS).
+  # On a single-node cluster (kind), a ReadWriteOnce class works because
+  # every pod lands on the one node — fine for evaluation, not production.
+  storageClassName: ""
+  accessModes:
+    - ReadWriteMany
+
+data:
+  # The fleet data dir (FLEET_DATA_DIR): journals, logs, caches. Control
+  # plane only — sandbox pods never mount it.
+  create: true
+  claimName: fleet-data
+  size: 10Gi
+  storageClassName: ""
+  accessModes:
+    - ReadWriteOnce
+
+# Absolute path the workspace claim is mounted at in BOTH the control plane
+# and every sandbox pod. Same-path mounting is what keeps absolute workspace
+# paths meaningful across the control plane, MCP brokers, and sandboxes.
+workspaceRoot: /var/lib/fleet/workspace
+dataDir: /var/lib/fleet
+
+config:
+  # Name of an EXISTING Secret carrying the sensitive env (recommended):
+  #   OPENROUTER_API_KEY, FLEET_CHAT_DATABASE_URL, FLEET_SCHED_DATABASE_URL,
+  #   FLEET_SERVER_TOKEN, and any SMTP/webhook secrets.
+  # When postgres.enabled=true the DB URLs are wired automatically and may be
+  # omitted from the secret.
+  existingSecret: ""
+  # Extra non-secret env for the control plane, verbatim.
+  env: {}
+  #  FLEET_MAX_CONCURRENT_AGENTS: "8"
+  #  FLEET_DEFAULT_NETWORK_MODE: "lockdown"
+  #  FLEET_TIMEZONE: "UTC"
+
+postgres:
+  # Optional in-cluster PostgreSQL (single replica, one PVC) for evaluation
+  # and small installs. Production should point config at a managed database
+  # (RDS, Cloud SQL) via the existingSecret DB URLs instead.
+  #
+  # The database password is NOT a values entry: the chart auto-generates a
+  # random one into the <release>-postgres Secret on first install and reuses
+  # it on upgrades (helm lookup). To pick your own, pre-create that Secret
+  # with a `password` key before installing. Rotating it is your job — this
+  # is the evaluation path.
+  enabled: false
+  image: docker.io/library/postgres:17
+  size: 10Gi
+  storageClassName: ""
+
+web:
+  # Optional Next.js web tier (you build web/ into an image yourself).
+  enabled: false
+  image: ""
+  port: 3000
+  env: {}
+
+service:
+  # ClusterIP service exposing chat (8080) and orchestrator (8000).
+  type: ClusterIP
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  host: ""
+  tls: []
+
+resources:
+  # Control-plane resources. Size for your FLEET_MAX_CONCURRENT_AGENTS — the
+  # sandboxes themselves run as separate pods with their own limits.
+  requests:
+    cpu: "1"
+    memory: 2Gi
+  limits:
+    memory: 4Gi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+podAnnotations: {}
+podLabels: {}

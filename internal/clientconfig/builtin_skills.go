@@ -98,6 +98,27 @@ func ensureTrustedDir(path string) error {
 	return verifyExistingDir(path)
 }
 
+// IsMaterializedSkillsDir reports whether dir is a merged tree this package
+// materialized (`<data|cache>/skills-merged/<hash>`) rather than a bundle's
+// own `skills/`. It exists for one caller: the kubernetes sandbox backend,
+// where a supporting-doc dir is only readable in a sandbox if the sandbox
+// IMAGE carries it at the same absolute path — and a merged tree lives under
+// the control plane's data dir, which no sandbox image can plausibly reproduce
+// (its hash is derived from the bundle path, and the tree is rebuilt at boot).
+// So a bundle inheriting the built-in pack can never serve in-sandbox skill
+// reads on that backend; the caller drops the mount and says so, and the fix
+// is the bundle's `skills_builtin: false`.
+//
+// Shape-based on purpose: the layout is this package's own convention, so the
+// check belongs here, next to the code that builds the path.
+func IsMaterializedSkillsDir(dir string) bool {
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
+		return false
+	}
+	return filepath.Base(filepath.Dir(filepath.Clean(dir))) == mergedSkillsDirName
+}
+
 // verifyExistingDir is the ssh-style ownership/mode check: Lstat (so a
 // symlink is not followed), must be a directory we own, must not be
 // group- or world-writable.

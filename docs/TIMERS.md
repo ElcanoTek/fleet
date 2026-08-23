@@ -66,7 +66,9 @@ the command does not pretend: it explains that the equivalent jobs belong to
 the platform's scheduler — daily `fleet backup --db=all --prune` and daily
 `fleet cleanup` (cron, a Kubernetes CronJob) — and exits non-zero. `fleet
 update`'s offer and doctor's advisories are likewise skipped entirely where
-there is no systemd.
+there is no systemd. For the first-class Kubernetes deployment, the CronJob
+equivalents are part of the production checklist in
+[`DEPLOYMENT-KUBERNETES.md`](DEPLOYMENT-KUBERNETES.md).
 
 ## Honest scope / deliberately not done
 

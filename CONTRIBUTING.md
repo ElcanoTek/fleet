@@ -28,7 +28,7 @@ removed.)
 
 ## Prerequisites
 
-- **Go** — the version pinned in `go.mod` (currently 1.26.x).
+- **Go** — the version pinned in `go.mod` (currently 1.27.x).
 - **Node.js** — the major in [`web/.nvmrc`](web/.nvmrc) (currently 24) — and npm, for the `web/` app.
 - **Podman** (rootless) for the execution sandbox — only needed to run the
   sandbox-backed tests/e2e locally; most unit tests self-skip when podman is
@@ -114,10 +114,11 @@ Every pull request must be green before merge. CI runs:
   python / javascript-typescript / actions) fails on an unwaived finding in the
   **High band** — `security-severity >= 7.0`, or level `error`/`warning` for a
   rule that publishes no security-severity — with lower-severity findings
-  reported as advisory. A false positive is waived either by an in-source
-  `// codeql[rule-id]` comment or by an entry in
-  `.github/codeql-accepted-findings.json` **with a written reason**; both are
-  reviewable in the diff, and fixing the code is always preferred. See
+  reported as advisory. A false positive is waived by an entry in
+  `.github/codeql-accepted-findings.json` **with a written reason** — that is the
+  only waiver route that works here; an in-source `// codeql[rule-id]` comment
+  does not (measured on #1249). The register entry is reviewable in the diff, and
+  fixing the code is always preferred. See
   [`docs/SCANNING.md`](docs/SCANNING.md), [`docs/CODEQL.md`](docs/CODEQL.md) and
   [ADR-0048](docs/adr/0048-codeql-severity-gating.md).
 - **Dependency CVEs** — `govulncheck` for the Go module, and
@@ -146,6 +147,30 @@ If golangci-lint flags something, either fix it or add a `//nolint` with a
 reason (the `nolintlint` linter requires the reason). The lint backlog is at
 zero — please keep it there.
 
+### If CI is red and you don't recognise the failure
+
+Three lanes here depend on **live external data**, so they can go red on a diff
+that did not cause it — including a one-line documentation change. This is by
+design (a new advisory *should* redden an unchanged tree), but it means a red
+check is not automatically yours:
+
+- **`govulncheck`** queries the Go vulnerability database on every run.
+- **`npm audit`** runs over both npm trees at `--audit-level=low` and fails on
+  any severity.
+- **Semgrep** fetches its rule packs from the registry. They cannot be pinned by
+  vendoring — the Semgrep Rules License forbids redistribution — so a
+  registry-side rule addition can turn CI red with no commit to blame.
+
+If the failure names a package, advisory or rule you did not touch, say so in the
+PR rather than trying to fix it; a maintainer will confirm and handle it.
+
+Two other things that surprise first-time contributors, neither of them a problem
+with your change: a first PR waits for a maintainer to approve the workflow run
+before CI starts at all, and the full `main` suite is around a dozen jobs
+including a ~1.3&nbsp;GB sandbox image build, so it is thorough rather than fast.
+`make lint && make test && make ci-web` locally will catch nearly everything
+first.
+
 ## Branch and pull-request conventions
 
 - Branch off the latest `main`. Use a short, descriptive prefix, e.g.
@@ -156,18 +181,11 @@ zero — please keep it there.
 - Make sure the full local suite (Go + web + mocked Playwright) is green before
   you push.
 
-## Commit messages and sign-off
+## Commit messages
 
 - Write clear, imperative commit subjects ("Add X", not "Added X").
-- Sign off your commits with the Developer Certificate of Origin
-  (<https://developercertificate.org/>) by adding a `Signed-off-by` trailer:
-
-  ```bash
-  git commit -s -m "Your message"
-  ```
-
-  By signing off you certify that you wrote the patch (or otherwise have the
-  right to submit it) under the project's MIT license.
+- Explain *why* in the body when the change is not self-evident. The diff
+  already says what changed.
 
 ## Reporting bugs and proposing features
 

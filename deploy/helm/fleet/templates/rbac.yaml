@@ -1,0 +1,70 @@
+# RBAC for the kubernetes sandbox backend: exactly the verbs the backend's
+# boot preflight checks (internal/sandbox/k8s_preflight.go) — pod lifecycle +
+# exec in the sandbox namespace, plus read access to the two objects the
+# preflight verifies (the workspace claim and the deny-all NetworkPolicy).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "fleet.fullname" . }}-runner
+  namespace: {{ include "fleet.sandboxNamespace" . }}
+  labels:
+    {{- include "fleet.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["create", "get", "list", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "fleet.fullname" . }}-runner
+  namespace: {{ include "fleet.sandboxNamespace" . }}
+  labels:
+    {{- include "fleet.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "fleet.fullname" . }}-runner
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "fleet.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- if .Values.sandbox.kubernetes.runtimeClass }}
+---
+# RuntimeClass objects are cluster-scoped; the preflight GETs the configured
+# one to fail closed when it does not exist (ADR-0010 posture).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "fleet.fullname" . }}-runtimeclass-reader
+  labels:
+    {{- include "fleet.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["node.k8s.io"]
+    resources: ["runtimeclasses"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "fleet.fullname" . }}-runtimeclass-reader
+  labels:
+    {{- include "fleet.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "fleet.fullname" . }}-runtimeclass-reader
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "fleet.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

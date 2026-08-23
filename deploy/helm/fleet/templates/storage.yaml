@@ -1,0 +1,50 @@
+{{- if .Values.workspace.create }}
+{{- if ne (include "fleet.sandboxNamespace" .) .Release.Namespace }}
+{{- fail "workspace.create=true only supports sandbox pods in the release namespace: a PVC cannot be mounted across namespaces. For a separate sandbox namespace, set workspace.create=false and provision a claim with the same name in EACH namespace, both bound to the same ReadWriteMany export (static NFS/EFS PVs)." }}
+{{- end }}
+# The shared workspace claim: mounted by the control plane AND every sandbox
+# pod at {{ .Values.workspaceRoot }}. ReadWriteMany in production (EFS, NFS,
+# CephFS); ReadWriteOnce only works on a single-node cluster (kind).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Values.workspace.claimName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "fleet.labels" . | nindent 4 }}
+  annotations:
+    # Keep the workspace when the release is deleted/pruned — it holds user
+    # data (conversation files, task outputs).
+    helm.sh/resource-policy: keep
+spec:
+  accessModes:
+    {{- toYaml .Values.workspace.accessModes | nindent 4 }}
+  {{- with .Values.workspace.storageClassName }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.workspace.size }}
+{{- end }}
+{{- if .Values.data.create }}
+---
+# The fleet data dir (journals, logs, caches). Control plane only.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Values.data.claimName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "fleet.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes:
+    {{- toYaml .Values.data.accessModes | nindent 4 }}
+  {{- with .Values.data.storageClassName }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.data.size }}
+{{- end }}
