@@ -19,6 +19,20 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **The fast lane got the Postgres client the full gate had, and a test that
+  keeps both lanes honest.** `dev-ci.yml`'s Go job runs the same
+  `go test ./...` against the same server-18 service as `ci.yml`, but installed
+  no matching client — so `TestBackupRestoreRoundTrip` hit its
+  client/server-major `t.Skipf` and the **only** coverage of `fleet backup` /
+  `fleet restore` ran as a SKIP on every dev push. It also left `ci.yml` as the
+  sole home of that step, which is why a broken version of it could not surface
+  until a dev→main promotion PR. Both lanes now install
+  `postgresql-client-18`, put its versioned bin dir on `$GITHUB_PATH`, and
+  assert the major twice (install by absolute path, PATH resolution in the next
+  step). `TestGoSuiteLanesInstallMatchingPgClient` asserts both halves for both
+  lanes — the install and the `$GITHUB_PATH` append — because each has failed
+  once already, invisibly, one per lane. Measured, not assumed: the round-trip
+  test **passes** (not skips) once the majors agree.
 - **A workflow + shell lint gate (`actionlint`, `shellcheck`):** nothing checked
   the ~3.1k lines of workflow YAML that decide what every other gate runs, and
   nothing checked the ~6.2k lines of bash that *are* the deploy path

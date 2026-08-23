@@ -236,6 +236,62 @@ func TestPostgresMajorAgreesAcrossCI(t *testing.T) {
 	}
 }
 
+// TestGoSuiteLanesInstallMatchingPgClient: the two lanes that run the full
+// `go test ./...` suite against a Postgres service — ci.yml's `go` job and
+// dev-ci.yml's — must each install a matching postgresql-client AND put that
+// client's versioned bin dir on PATH. Both halves have failed in production,
+// one per lane, and both failures were invisible:
+//
+//   - dev-ci.yml had no client install at all. The runner ships client 16
+//     against a server-18 service, and TestBackupRestoreRoundTrip self-skips on
+//     a major mismatch, so the ONLY coverage of `fleet backup` / `fleet restore`
+//     ran as a SKIP on every dev push. It also meant ci.yml's copy of this step
+//     was the only copy, so a broken version of it could not surface until a
+//     dev→main promotion PR.
+//   - ci.yml installed the client and asserted the major, and the assertion
+//     could not pass: /usr/bin/pg_dump is a symlink to postgresql-common's
+//     pg_wrapper, which dispatches on the version/cluster in ~/.postgresqlrc or
+//     /etc/postgresql-common/user_clusters rather than on the newest client
+//     installed. On a runner carrying a PostgreSQL 16 cluster the wrapper kept
+//     selecting 16 over a successful client-18 install.
+//
+// The service major itself is covered by TestPostgresMajorAgreesAcrossCI, which
+// requires every postgres major named anywhere in .github/workflows to agree —
+// so this test asserts only the two things that broke.
+//
+// Scoped to these two files by name rather than derived: benchmark.yml,
+// e2e-canary.yml and ci.yml's own e2e-live job also declare a Postgres service
+// but never run the Go suite, so requiring a pg_dump client of them would be
+// noise, and pretending to infer "the lanes that run go test ./... with a
+// service" from YAML would be a worse lie than naming them.
+func TestGoSuiteLanesInstallMatchingPgClient(t *testing.T) {
+	root := repoRoot(t)
+	clientRe := regexp.MustCompile(`postgresql-client-(\d+)`)
+
+	for _, wf := range []string{
+		".github/workflows/ci.yml",
+		".github/workflows/dev-ci.yml",
+	} {
+		body := readFile(t, root, wf)
+
+		client := clientRe.FindStringSubmatch(body)
+		if client == nil {
+			t.Errorf("%s runs `go test ./...` against a Postgres service but installs no postgresql-client-N: TestBackupRestoreRoundTrip self-skips on a client/server major mismatch, so `fleet backup` / `fleet restore` coverage silently drops to zero behind a green check", wf)
+			continue
+		}
+		major := client[1]
+
+		// The package alone does not decide what `pg_dump` resolves to — the
+		// wrapper does. Only a $GITHUB_PATH append makes the versioned client
+		// the one every later step, and the Go test's exec.LookPath, resolves.
+		want := `echo "/usr/lib/postgresql/` + major + `/bin" >> "$GITHUB_PATH"`
+		if !strings.Contains(body, want) {
+			t.Errorf("%s installs postgresql-client-%s but never appends /usr/lib/postgresql/%s/bin to $GITHUB_PATH (want the line %s) — without it /usr/bin/pg_dump stays postgresql-common's pg_wrapper, which dispatches on the configured cluster rather than the newest client installed, and `pg_dump` keeps resolving to the runner's own major",
+				wf, major, major, want)
+		}
+	}
+}
+
 // goMinor pulls "1.27" out of a go.mod `go` directive or a `golang:1.27` image
 // tag, discarding any patch component. Comparing at major.minor is deliberate:
 // web/go.mod says in its own comment that pinning a PATCH there just created a
