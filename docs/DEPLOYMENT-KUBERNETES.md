@@ -7,6 +7,16 @@
 > (`FLEET_SANDBOX_BACKEND=kubernetes`). The single-box podman install
 > ([`DEPLOYMENT.md`](DEPLOYMENT.md)) remains the default and an equally
 > supported path; come here when Kubernetes is your platform standard.
+>
+> **This page is the engine side.** For a complete client bundle already shaped
+> for this path — the two Containerfiles, a documented values overlay, and an
+> empty-cluster-to-working-fleet walkthrough — fork
+> [`ElcanoTek/example-kubernetes-config`](https://github.com/ElcanoTek/example-kubernetes-config).
+> It is the Kubernetes sibling of
+> [`ElcanoTek/example-config`](https://github.com/ElcanoTek/example-config),
+> which targets the single-box podman install. Reading both together is the
+> fastest way to see which parts of a bundle are deployment-shaped and which
+> are not.
 
 ## The model
 
