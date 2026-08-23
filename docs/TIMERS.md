@@ -63,8 +63,11 @@ What one run does, idempotently:
 
 These timers are a systemd-deployment concern. On a host without `systemctl`
 the command does not pretend: it explains that the equivalent jobs belong to
-the platform's scheduler — daily `fleet backup --db=all --prune` and daily
-`fleet cleanup` (cron, a Kubernetes CronJob) — and exits non-zero. `fleet
+the platform's scheduler — daily `fleet backup --db=all --prune` (cron, a
+Kubernetes CronJob) — and exits non-zero. Note that `fleet cleanup` has no
+useful container equivalent: it prunes dangling *podman* image layers and Go
+build caches, neither of which a control-plane container has. Scheduling it on
+a cluster is a no-op; node-local image GC belongs to the kubelet. `fleet
 update`'s offer and doctor's advisories are likewise skipped entirely where
 there is no systemd. For the first-class Kubernetes deployment, the CronJob
 equivalents are part of the production checklist in

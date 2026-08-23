@@ -41,6 +41,21 @@ func TestK8sPreflightFailClosed(t *testing.T) {
 			t.Errorf("want create pods/exec denial, got %v", err)
 		}
 	})
+	t.Run("websocket exec verb is checked", func(t *testing.T) {
+		// The regression this guards: the exec stream is a WebSocket upgrade,
+		// i.e. an HTTP GET, so the apiserver authorizes `get pods/exec` — but
+		// the preflight only ever asked for `create pods/exec`. A Role granting
+		// just `create` sailed through boot and then 403'd on the very first
+		// bash/run_python/fileop call, long after the operator was told the
+		// cluster checked out.
+		fake := newFakeKube(t)
+		fake.denied["get pods/exec"] = true
+		backend := fake.backend(t, KubernetesConfig{})
+		err := backend.Preflight(context.Background())
+		if err == nil || !strings.Contains(err.Error(), "get pods/exec") {
+			t.Errorf("want get pods/exec denial, got %v", err)
+		}
+	})
 	t.Run("missing pvc", func(t *testing.T) {
 		fake := newFakeKube(t)
 		fake.noPVC = true

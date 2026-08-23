@@ -1,0 +1,173 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "fleet chart values",
+  "description": "Typo guard. Helm silently renders nothing for a key the templates do not read, so a misspelled value passes helm lint, passes helm template, and surfaces only as behaviour missing in production — sandbox.kubernetes.bundleDocsInImage being the sharpest case, where the symptom is view_file refusals on a running cluster. Objects whose keys are a fixed, known set are closed with additionalProperties:false; free-form maps (env, labels, annotations, selectors) stay open.",
+  "type": "object",
+  "properties": {
+    "nameOverride": { "type": "string" },
+    "fullnameOverride": { "type": "string" },
+    "dataDir": { "type": "string", "minLength": 1 },
+    "workspaceRoot": { "type": "string", "minLength": 1 },
+    "terminationGracePeriodSeconds": { "type": "integer", "minimum": 1 },
+    "startupProbeFailureThreshold": { "type": "integer", "minimum": 1 },
+    "podAnnotations": { "type": "object" },
+    "podLabels": { "type": "object" },
+    "nodeSelector": { "type": "object" },
+    "affinity": { "type": "object" },
+    "tolerations": { "type": "array" },
+    "imagePullSecrets": { "type": "array" },
+    "resources": { "type": "object" },
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repository": { "type": "string" },
+        "tag": { "type": "string" },
+        "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
+      }
+    },
+    "serviceAccount": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "create": { "type": "boolean" },
+        "name": { "type": "string" },
+        "annotations": { "type": "object" }
+      }
+    },
+    "sandbox": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "backend": { "type": "string", "enum": ["podman", "kubernetes"] },
+        "image": { "type": "string" },
+        "memory": { "type": "string" },
+        "cpus": { "type": ["string", "number"] },
+        "diskGB": { "type": "integer" },
+        "warmSize": { "type": "integer", "minimum": 0 },
+        "kubernetes": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "namespace": { "type": "string" },
+            "workspaceClaim": { "type": "string" },
+            "serviceAccount": { "type": "string" },
+            "imagePullSecret": { "type": "string" },
+            "runtimeClass": { "type": "string" },
+            "seccompProfile": { "type": "string" },
+            "networkPolicy": { "type": "string" },
+            "bundleDocsInImage": { "type": "boolean" },
+            "nodeSelector": { "type": "object" },
+            "tolerations": { "type": "array" },
+            "podServiceAccount": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "create": { "type": "boolean" },
+                "external": { "type": "boolean" },
+                "name": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "networkPolicies": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "denyAll": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "create": { "type": "boolean" },
+            "name": { "type": "string" }
+          }
+        },
+        "openEgress": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "create": { "type": "boolean" },
+            "name": { "type": "string" },
+            "blockedCIDRs": { "type": "array", "items": { "type": "string" } }
+          }
+        }
+      }
+    },
+    "workspace": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "create": { "type": "boolean" },
+        "claimName": { "type": "string" },
+        "size": { "type": "string" },
+        "storageClassName": { "type": "string" },
+        "accessModes": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "data": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "create": { "type": "boolean" },
+        "claimName": { "type": "string" },
+        "size": { "type": "string" },
+        "storageClassName": { "type": "string" },
+        "accessModes": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "config": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "existingSecret": { "type": "string" },
+        "env": { "type": "object" }
+      }
+    },
+    "postgres": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "image": { "type": "string" },
+        "password": { "type": "string" },
+        "storageClassName": { "type": "string" },
+        "size": { "type": "string" },
+        "resources": { "type": "object" }
+      }
+    },
+    "web": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "image": { "type": "string" },
+        "port": { "type": "integer" },
+        "runAsUser": { "type": "integer" },
+        "existingSecret": { "type": "string" },
+        "resources": { "type": "object" },
+        "env": { "type": "object" }
+      }
+    },
+    "service": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": { "type": "string", "enum": ["ClusterIP", "NodePort", "LoadBalancer"] },
+        "annotations": { "type": "object" }
+      }
+    },
+    "ingress": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "className": { "type": "string" },
+        "annotations": { "type": "object" },
+        "host": { "type": "string" },
+        "tls": { "type": "array" }
+      }
+    }
+  }
+}

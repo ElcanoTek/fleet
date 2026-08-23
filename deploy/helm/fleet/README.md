@@ -23,13 +23,22 @@ in [`docs/DEPLOYMENT-KUBERNETES.md`](../../../docs/DEPLOYMENT-KUBERNETES.md).
 
 ## Minimum install
 
+The Secret has to exist before the install, not alongside it: the Deployment
+mounts it with `envFrom`, so a pod created ahead of it sits in
+`CreateContainerConfigError`. That means the namespace comes first too — which
+is why this is three commands and not one with `--create-namespace`.
+
 ```sh
+kubectl create namespace fleet
+kubectl -n fleet create secret generic fleet-secrets \
+  --from-literal=OPENROUTER_API_KEY=sk-or-...
+
 helm install fleet deploy/helm/fleet \
-  --namespace fleet --create-namespace \
+  --namespace fleet \
   --set image.repository=REGISTRY/fleet --set image.tag=v1 \
   --set sandbox.image=REGISTRY/fleet-sandbox:v1 \
   --set postgres.enabled=true \
-  --set config.existingSecret=fleet-secrets   # OPENROUTER_API_KEY etc.
+  --set config.existingSecret=fleet-secrets
 ```
 
 You build both images yourself — fleet publishes none. See the deployment

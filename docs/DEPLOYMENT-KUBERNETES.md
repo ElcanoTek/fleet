@@ -44,10 +44,23 @@ boot; there is no silent fallback.
 
 **Fail-closed preflight.** With `kubernetes` selected, fleet refuses to start
 unless, at boot: the apiserver is reachable with valid credentials; RBAC grants
-`create/get/list/delete pods` and `create pods/exec` in the sandbox namespace;
-the workspace claim exists; the sealed-egress NetworkPolicy object exists; and
-the RuntimeClass exists when one is configured. `fleet validate-config` runs
-the same checks.
+`create/get/list/delete pods` and **both** `create` and `get` on `pods/exec` in
+the sandbox namespace; the workspace claim exists; the sealed-egress
+NetworkPolicy object exists; and the RuntimeClass exists when one is configured.
+`fleet validate-config` runs the same cluster checks.
+
+`get pods/exec` is the one people get wrong when hand-writing a Role. fleet
+streams exec over a WebSocket upgrade, which is an HTTP **GET**, and the
+apiserver derives the RBAC verb from the method — so `get` is what every
+`bash` / `run_python` / file-tool call is actually authorized against. A Role
+granting only `create` passes the rest of the preflight and then 403s on the
+first tool call. The preflight now checks both verbs, so this fails at boot
+where you can see it.
+
+Beyond the verbs above the preflight also GETs three objects directly, so the
+Role needs `get` on `persistentvolumeclaims` and `networkpolicies` in that
+namespace, plus cluster-scoped `get runtimeclasses` when a RuntimeClass is
+configured. The chart grants all of these; a hand-written Role must too.
 
 ## Build the two images
 
@@ -203,14 +216,30 @@ apply here ([TIMERS.md](TIMERS.md)). Their cluster equivalents:
 
 | Single-box | Kubernetes |
 | --- | --- |
-| `fleet update` | build + push a new control-plane image, `helm upgrade` (strategy Recreate = a brief restart; in-flight turns drain per `FLEET_SHUTDOWN_GRACE_SECONDS`) |
+| `fleet update` | build + push a new control-plane image, `helm upgrade` (strategy Recreate = a brief restart; in-flight turns drain per `FLEET_SHUTDOWN_GRACE_SECONDS`, **bounded by the pod's `terminationGracePeriodSeconds`** — the chart sets 90s; raise both together for long turns, because raising only the fleet knob does nothing) |
 | `fleet-backup.timer` | a CronJob running `fleet backup --db=all --prune` — or skip it entirely by using managed-database backups (RDS/Cloud SQL snapshots), the recommended posture |
-| `fleet-maintenance.timer` | a CronJob running `fleet cleanup` daily |
+| `fleet-maintenance.timer` | **nothing to schedule.** `fleet cleanup` prunes dangling *podman* image layers and Go build caches; a control-plane pod has neither, so the job would print two disk lines and exit. Node-local image GC is the kubelet's job. fleet's own hourly maintenance loop (reclamation, disk backpressure, stuck-task backstops — [MAINTENANCE.md](MAINTENANCE.md)) runs **inside** the control plane on both paths |
 | journald | `kubectl logs` / your log stack; set `FLEET_LOG_FILE` only if you also mount somewhere rotatable |
 | Grafana node dashboards | scrape the control plane's `/metrics` (orchestrator port). NOTE it is **admin-API-key gated** (`X-API-Key`) — cost/token data must not be public — and stock Prometheus cannot send custom headers, so use a scraper that can (Grafana Alloy, vmagent) or a small header-injecting sidecar. Sandbox pods are ordinary pods your cluster metrics already see |
 
-Minimal backup CronJob (only needed when you run the eval Postgres or want
-`fleet backup`'s application-level dumps next to managed snapshots):
+Backup CronJob, only needed when you want `fleet backup`'s application-level
+dumps alongside (or instead of) managed-database snapshots. Three things about
+it are easy to get wrong, and all three are in the manifest below:
+
+- **`pg_dump` must be in the image.** `fleet backup` shells out to `pg_dump -Fc`
+  and verifies with `pg_restore --list`; the control-plane image built earlier
+  in this guide installs neither. Add `postgresql` to it, or run this job from
+  an image that has the client.
+- **`--out` defaults to `FLEET_BACKUP_DIR`, else the working directory.** With
+  no `WORKDIR` that is `/`, not the PVC this job mounts — the dumps land in the
+  container's writable layer and vanish with the pod. Set it explicitly.
+- **Point `secretRef` at the Secret that actually holds the DSNs.** With
+  `postgres.enabled=true` they live in the chart-generated
+  `<release>-postgres` Secret, not in your `fleet-secrets`.
+
+Note also that `fleet-data` is ReadWriteOnce and already mounted by the
+Deployment, so on most CSI drivers this job only schedules onto the same node.
+Give it its own RWX claim, or use managed snapshots — the recommended posture.
 
 ```yaml
 apiVersion: batch/v1
@@ -225,13 +254,20 @@ spec:
           restartPolicy: Never
           containers:
             - name: backup
-              image: REGISTRY/fleet:v1        # the control-plane image
+              # The control-plane image PLUS the postgres client — see above.
+              image: REGISTRY/fleet-backup:v1
               args: ["backup", "--db=all", "--prune"]
-              envFrom: [{secretRef: {name: fleet-secrets}}]
+              env:
+                - name: FLEET_BACKUP_DIR
+                  value: /var/lib/fleet/backups
+              envFrom:
+                # Where the DB URLs really are when postgres.enabled=true.
+                - secretRef: {name: fleet-postgres}
+                - secretRef: {name: fleet-secrets}
               volumeMounts: [{name: data, mountPath: /var/lib/fleet}]
           volumes:
             - name: data
-              persistentVolumeClaim: {claimName: fleet-data}
+              persistentVolumeClaim: {claimName: fleet-backups}
 ```
 
 ## Bundle docs inside a sandbox pod
@@ -261,10 +297,18 @@ sandbox:
 ```
 
 ```dockerfile
-# derived sandbox image; same paths as the control plane's bundle
+# derived sandbox image; the bundle's doc dirs at the SAME absolute paths the
+# control plane reads them from (its FLEET_CLIENT_CONFIG_DIR).
 FROM REGISTRY/fleet-sandbox:v1
 USER root
-COPY protocols/ personas/ system_prompts/ skills/ /opt/fleet/client/...
+# One COPY per directory, on purpose: a multi-source COPY copies each source's
+# CONTENTS into the destination, which would merge all four into one flat dir —
+# and the paths have to match the control plane's exactly for the anchors to
+# resolve.
+COPY protocols/       /opt/fleet/client/protocols/
+COPY personas/        /opt/fleet/client/personas/
+COPY system_prompts/  /opt/fleet/client/system_prompts/
+COPY skills/          /opt/fleet/client/skills/
 RUN chown -R 0:0 /opt/fleet/client && chmod -R a-w,a+rX /opt/fleet/client
 USER 1000
 ```
@@ -285,9 +329,12 @@ for bash and python. Four things to be honest about:
   sandbox images from the same bundle commit, or the agent reads one release's
   protocols while the control plane runs another's. Nothing enforces this.
 
-Boot logs which roots survived and which were dropped, and why. `kubectl logs
-deploy/fleet | grep 'bundle_docs_in_image\|supporting-doc'` is the fastest way
-to see what a running deployment decided.
+Boot logs the drop/keep decision for these roots: with the declaration it names
+each root it kept and each it will not vouch for; undeclared it logs a count,
+plus — always, declared or not — the merged-skills-tree case by name.
+`kubectl logs deploy/fleet | grep 'kubernetes backend'` catches all of those
+lines; narrower greps miss the skills one, which is the case most likely to
+surprise you.
 
 ## Provider notes
 
@@ -368,12 +415,23 @@ Recorded here so nobody discovers them in production:
 - **No per-pod pids limit.** `FLEET_SANDBOX_PIDS` has no Pod-spec equivalent;
   runaway process counts are bounded by pod memory/CPU limits and node
   `podPidsLimit` if you configure the kubelet.
+- **A bundle's Python MCP servers run in the control-plane pod.** The broker
+  spawns them host-side, which on this path means inside the control plane — so
+  that image needs `python3` and your bundle's `mcp/requirements.txt`. The
+  generic bundle ships no servers, so the walkthrough's image works until you
+  substitute a real bundle, and then the servers fail at spawn with a
+  per-server error in the log rather than a boot failure.
 - **No per-sandbox resource telemetry (#263).** `podman stats` has no
   in-process counterpart here; task resource summaries are absent. Use your
   cluster's metrics stack on the `fleet-sandbox` pods.
-- **The bundled seccomp profile does not apply.** Pods run `RuntimeDefault`,
-  or a profile you install on the nodes yourself via
-  `FLEET_SANDBOX_K8S_SECCOMP_PROFILE`. Setting the podman
+- **The bundled seccomp profile does not apply, and `RuntimeDefault` is
+  weaker.** fleet's bundled profile is a default-*deny* allowlist that blocks
+  `ptrace`, `process_vm_readv`, `io_uring_setup`, `userfaultfd`,
+  `perf_event_open`, `keyctl`, `bpf`, `personality` and `unshare` (#219).
+  `RuntimeDefault` is a default-*allow* denylist that permits several of those.
+  To match podman's posture, install `internal/sandbox/seccomp-default.json` on
+  the sandbox nodes' kubelet seccomp root and point
+  `FLEET_SANDBOX_K8S_SECCOMP_PROFILE` at it. Setting the podman
   `FLEET_SANDBOX_SECCOMP_PROFILE` under this backend refuses to boot rather
   than being silently ignored.
 - **Supporting-doc bind mounts don't apply** — the podman backend bind-mounts
@@ -389,11 +447,69 @@ Recorded here so nobody discovers them in production:
   dir at the cost of the built-in pack. There is no setting that gives you
   both.
 - **Disk quota is per-pod ephemeral storage**, which caps the writable layer
-  and scratch emptyDirs — a *stronger* cap than podman's per-file ulimit — but
-  the workspace claim is still unbounded by it, same as the bind mount is
-  under podman: many files still add up.
-- **Warm-pool pods hold cluster resources while parked.** Requests equal
-  limits; size `FLEET_SANDBOX_WARM_SIZE` accordingly.
+  and the scratch emptyDirs. The workspace claim sits outside it — and unlike
+  podman there is *no* per-file cap either: podman always applies
+  `--ulimit fsize`, and that reaches its workspace bind mount, where a pod has
+  no equivalent. One runaway write can fill the shared RWX volume. Size the
+  claim and monitor it. Note too that exceeding the ephemeral-storage limit
+  **evicts the pod** mid-turn, where podman would return `ENOSPC` to the
+  process.
+- **Warm-pool pods hold cluster resources while parked.** Sandbox pods set
+  requests *equal to* limits (Guaranteed QoS), so a parked warm pod reserves
+  its full CPU, memory and ephemeral-storage allocation before any turn runs.
+  Do the arithmetic: the reservation is
+  `warmSize × (sandbox.cpus, sandbox.memory, sandbox.diskGB)`, and it must be
+  schedulable on the runner pool on top of peak concurrency. Note that
+  `FLEET_SANDBOX_WARM_SIZE=0` does **not** mean "no warm pool" — unset, fleet
+  derives the depth from `FLEET_MAX_CONCURRENT_AGENTS`, clamped to 2..8, so
+  eight concurrent agents parks eight pods. Set it explicitly.
+
+- **An open sandbox pod is a full citizen of the cluster network.** Podman's
+  non-lockdown default is rootless pasta/slirp4netns with no host-loopback:
+  outbound-only, and structurally unable to reach the fleet process itself. A
+  pod has no such limit. With `networkPolicies.openEgress.create=false` (the
+  default) nothing selects an `egress=open` sandbox, so model-authored code can
+  reach the fleet Service, the in-cluster Postgres, the apiserver, and the
+  node's cloud metadata endpoint at `169.254.169.254` — which hands out the
+  node's IAM credentials. Treat the open-egress policy as **required**, not
+  optional; the chart's default `blockedCIDRs` starts with the metadata range,
+  and you should add your Pod/Service/node ranges to it.
+
+- **A sealed sandbox's network calls hang rather than failing fast.** Podman
+  lockdown is `--network=none`: no interface, so a connect fails instantly with
+  `ENETUNREACH`. A deny-all NetworkPolicy *drops* packets instead, so a DNS
+  lookup or TCP connect in a sealed turn blocks until it times out, spending
+  the turn's budget instead of erroring immediately.
+
+- **No PID-1 reaper.** Podman runs the sandbox under `--init` so that a
+  SIGKILLed python kernel's zombie is reaped (#213). A pod's PID 1 is
+  `sleep infinity`, which reaps nothing, so a long persistent-REPL conversation
+  accumulates zombies for the pod's lifetime — bounded only by the node's
+  `podPidsLimit`, not by fleet.
+
+- **`FLEET_SANDBOX_PIDS` is ignored, not refused.** The podman fork-bomb
+  containment (default 128) has no pod-spec equivalent wired up, so the pod
+  inherits the node's `podPidsLimit`, which most distros leave unset. Unlike
+  the seccomp and runtime knobs, this one does not fail the boot — set
+  `podPidsLimit` on the sandbox nodes if you need the ceiling.
+
+- **The sealed-egress NetworkPolicy is verified by name only.** The preflight
+  proves an object with that name exists in the namespace; it does not yet
+  decode it to confirm the selector matches sandbox pods, that `policyTypes`
+  includes `Egress`, or that the rule list is empty. A policy with the right
+  name and the wrong shape passes boot. Use the chart's policy, or diff yours
+  against `deploy/helm/fleet/templates/networkpolicy.yaml`.
+
+- **The pod start budget is a fixed 2 minutes** and has no knob. A cold node
+  pulling a ~1.3 GB sandbox image can exceed it; pre-pull onto runner nodes
+  rather than letting the first turn pay for it.
+
+- **The bridge and file-op helper scripts live in a sandbox-writable
+  `emptyDir`.** Podman passes the file-op helper inline and bind-mounts the
+  bridge read-only, so neither can be altered by the code they contain. Here a
+  `bash` call can rewrite them and change what later file-tool calls report
+  upward. It grants no access `bash` lacks — the workspace claim is already
+  mounted — but it does mean file-tool *results* are not tamper-evident.
 - **kind e2e is a documented walkthrough, not a CI job.** CI lints and
   template-renders the chart (`helm` job) and unit-tests the backend against a
   fake apiserver (including exec streaming and the poison path); it does not

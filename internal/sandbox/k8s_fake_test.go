@@ -47,6 +47,10 @@ type fakeKube struct {
 	noNetpol       bool
 	noRuntimeClass bool
 
+	// bridgeTrailingStdout, when set, is written to the bridge's stdout AFTER
+	// each response line — the pod-side output nothing on the fleet side reads.
+	bridgeTrailingStdout []byte
+
 	// bashBehaviors maps a bash command string to its fake process. The
 	// handler receives the parsed workdir ("" when the call carried none).
 	bashBehaviors map[string]func(workdir string, stdout, stderr io.Writer, conn *websocket.Conn) int
@@ -454,7 +458,17 @@ func (f *fakeKube) runFakeBridge(_ string, e *execConn) {
 				continue
 			}
 			resp, _ := json.Marshal(bridgeResponse{Status: "ok", Result: "ran: " + req.Code})
-			e.send(k8sChannelStdout, append(resp, '\n'))
+			// Optionally append stray stdout AFTER the response newline, in the
+			// SAME frame. A real pod does this whenever anything writes to the
+			// bridge's fd 1, and one frame is the deterministic case: the demux
+			// loop issues a single pipe Write for it, the response reader stops
+			// at the first newline, and the remainder of that one Write has
+			// nobody left to consume it.
+			frame := make([]byte, 0, len(resp)+1+len(f.bridgeTrailingStdout))
+			frame = append(frame, resp...)
+			frame = append(frame, '\n')
+			frame = append(frame, f.bridgeTrailingStdout...)
+			e.send(k8sChannelStdout, frame)
 			pending = *bytes.NewBuffer(append([]byte(nil), rest...))
 		}
 	}

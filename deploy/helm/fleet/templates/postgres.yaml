@@ -56,13 +56,27 @@ spec:
         app.kubernetes.io/name: {{ include "fleet.name" . }}-postgres
         app.kubernetes.io/instance: {{ .Release.Name }}
     spec:
+      automountServiceAccountToken: false
+      # runAsNonRoot/runAsUser and the container context below are what a
+      # `restricted` Pod Security Standard namespace requires — the norm on the
+      # clusters this chart targets, and without them this pod is rejected
+      # outright at admission. 999 is the postgres uid in the official image.
       securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
         fsGroup: 999
         seccompProfile:
           type: RuntimeDefault
       containers:
         - name: postgres
-          image: {{ .Values.postgres.image }}
+          image: {{ .Values.postgres.image | quote }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            {{- toYaml .Values.postgres.resources | nindent 12 }}
           env:
             - name: POSTGRES_USER
               value: fleet

@@ -32,6 +32,11 @@ spec:
       {{- end }}
     spec:
       serviceAccountName: {{ include "fleet.serviceAccountName" . }}
+      # Must exceed FLEET_SHUTDOWN_GRACE_SECONDS (default 30) with headroom for
+      # pool and DB teardown. Without it the kubelet SIGKILLs at its own 30s
+      # default — the same number — so the documented drain had no slack and
+      # raising the fleet knob for long turns silently did nothing.
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -66,6 +71,27 @@ spec:
               value: "0.0.0.0:8000"
             - name: FLEET_DATA_DIR
               value: {{ .Values.dataDir | quote }}
+            # fleet defaults EMAIL_ATTACHMENT_DIR to ./data/attachments —
+            # CWD-relative, and nothing derives it from FLEET_DATA_DIR. The
+            # image has no WORKDIR, so cwd is /, and boot fails creating
+            # /data/attachments/uploads as uid 1000 BEFORE the sandbox
+            # preflight ever runs. deploy/fleet.service solves the same trap by
+            # anchoring the CWD; a pod spec says it directly.
+            - name: EMAIL_ATTACHMENT_DIR
+              value: "{{ .Values.dataDir }}/attachments"
+            # Cluster identity for the sandbox-pod orphan sweep. The UID names
+            # this incarnation and the release name marks the owner, so a
+            # restarted control plane can tell its predecessor's leaked pods
+            # from a co-tenant release's live ones. Without these fleet falls
+            # back to a pid heuristic that is meaningless across containers.
+            - name: FLEET_POD_UID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.uid
+            - name: FLEET_OWNER_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['app.kubernetes.io/instance']
             - name: FLEET_WORKSPACE_ROOT
               value: {{ .Values.workspaceRoot | quote }}
             # ── sandbox backend (#989) ──
@@ -79,9 +105,14 @@ spec:
               value: {{ .Values.workspace.claimName | quote }}
             - name: FLEET_SANDBOX_K8S_NETWORK_POLICY
               value: {{ .Values.networkPolicies.denyAll.name | quote }}
-            {{- if .Values.sandbox.kubernetes.podServiceAccount.name }}
+            {{- $podSA := .Values.sandbox.kubernetes.podServiceAccount }}
+            {{- if and $podSA.name (or $podSA.create $podSA.external) }}
+            # Only stamped when the SA will actually exist. create=false without
+            # external=true used to still set this, and every pod create then
+            # failed with `serviceaccount "fleet-sandbox" not found` — after a
+            # green preflight, which never checks the SA.
             - name: FLEET_SANDBOX_K8S_SERVICE_ACCOUNT
-              value: {{ .Values.sandbox.kubernetes.podServiceAccount.name | quote }}
+              value: {{ $podSA.name | quote }}
             {{- end }}
             {{- with .Values.sandbox.kubernetes.imagePullSecret }}
             - name: FLEET_SANDBOX_K8S_IMAGE_PULL_SECRET
@@ -143,17 +174,28 @@ spec:
               mountPath: {{ .Values.workspaceRoot }}
             - name: data
               mountPath: {{ .Values.dataDir }}
+          # Boot order is: chat DB connect+migrate → sched DB connect+migrate →
+          # sandbox preflight (up to 30s) → listeners. The listener comes up
+          # LAST, so without a startupProbe liveness starts counting during
+          # migrations and kills the pod at ~t+120s. A large migrated database
+          # then never finishes: every restart re-runs the migration from the
+          # start and is killed again, and each kill risks leaving the migrator
+          # dirty.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: chat
+            periodSeconds: 10
+            failureThreshold: {{ .Values.startupProbeFailureThreshold }}
           readinessProbe:
             httpGet:
               path: /healthz
               port: chat
-            initialDelaySeconds: 5
             periodSeconds: 10
           livenessProbe:
             httpGet:
               path: /healthz
               port: chat
-            initialDelaySeconds: 30
             periodSeconds: 30
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
