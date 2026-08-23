@@ -338,21 +338,53 @@ jobs:
         run: |
           set -euo pipefail
           helm version --short
-          helm lint deploy/helm/fleet \
+          # --strict so a chart-level warning is a failure, not a note.
+          helm lint --strict deploy/helm/fleet \
             --set image.repository=registry.invalid/fleet --set image.tag=ci \
             --set sandbox.image=registry.invalid/fleet-sandbox:ci
-          helm template ci deploy/helm/fleet --namespace fleet \
-            --set image.repository=registry.invalid/fleet --set image.tag=ci \
-            --set sandbox.image=registry.invalid/fleet-sandbox:ci >/dev/null
-          helm template ci deploy/helm/fleet --namespace fleet \
-            --set image.repository=registry.invalid/fleet --set image.tag=ci \
-            --set sandbox.image=registry.invalid/fleet-sandbox:ci \
+
+      - name: Install kubeconform
+        # Pinned + checksum-verified, same discipline as the gitleaks gate.
+        env:
+          KUBECONFORM_VERSION: '0.6.7'
+          KUBECONFORM_SHA256: '95f14e87aa28c09d5941f11bd024c1d02fdc0303ccaa23f61cef67bc92619d73'
+        run: |
+          set -euo pipefail
+          tarball="kubeconform-linux-amd64.tar.gz"
+          curl -sSL -o "$tarball" \
+            "https://github.com/yannh/kubeconform/releases/download/v${KUBECONFORM_VERSION}/${tarball}"
+          echo "${KUBECONFORM_SHA256}  ${tarball}" | sha256sum -c -
+          tar -xzf "$tarball" kubeconform
+          sudo install -m 0755 kubeconform /usr/local/bin/kubeconform
+          kubeconform -v
+
+      - name: Render and schema-validate every shape
+        # The renders used to go to /dev/null, which proved only that the
+        # TEMPLATE executes — not that it produces a manifest the apiserver
+        # would accept. That is a green-but-vacuous gate: a NetworkPolicy whose
+        # ipBlock `except` crosses address families, a probe with a bad field,
+        # or a selector typo all rendered "fine". kubeconform checks the
+        # rendered objects against the real Kubernetes schemas instead.
+        run: |
+          set -euo pipefail
+          common=(--set image.repository=registry.invalid/fleet --set image.tag=ci
+                  --set sandbox.image=registry.invalid/fleet-sandbox:ci)
+          validate() {
+            helm template ci deploy/helm/fleet --namespace fleet "${common[@]}" "$@" \
+              | kubeconform -strict -kubernetes-version 1.30.0 -summary
+          }
+          # Minimal (the defaults every install starts from) …
+          validate
+          # … and everything-on, so every optional template compiles AND validates.
+          validate \
             --set postgres.enabled=true \
             --set web.enabled=true --set web.image=registry.invalid/fleet-web:ci \
+            --set web.existingSecret=fleet-web-secrets \
+            --set config.existingSecret=fleet-secrets \
             --set ingress.enabled=true --set ingress.host=fleet.example.com \
             --set networkPolicies.openEgress.create=true \
-            --set 'networkPolicies.openEgress.blockedCIDRs={10.0.0.0/8}' \
-            --set sandbox.kubernetes.runtimeClass=kata >/dev/null
+            --set 'networkPolicies.openEgress.blockedCIDRs={169.254.0.0/16,10.0.0.0/8}' \
+            --set sandbox.kubernetes.runtimeClass=kata
 
   migrations:
     name: Migration DDL lint

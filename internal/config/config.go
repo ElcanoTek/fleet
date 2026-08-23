@@ -378,11 +378,16 @@ var allowedEnvVars = map[string]bool{
 	"FLEET_PUSH_ON_APPROVAL_REQUEST": true,
 
 	// ── sandbox ──
-	"CHAT_SANDBOX_IMAGE":                      true,
-	"CHAT_SANDBOX_RUNTIME":                    true,
-	"CHAT_WORKSPACE_ROOT":                     true,
-	"FLEET_SANDBOX_IMAGE":                     true,
-	"FLEET_SANDBOX_RUNTIME":                   true,
+	"CHAT_SANDBOX_IMAGE":    true,
+	"CHAT_SANDBOX_RUNTIME":  true,
+	"CHAT_WORKSPACE_ROOT":   true,
+	"FLEET_SANDBOX_IMAGE":   true,
+	"FLEET_SANDBOX_RUNTIME": true,
+	// The podman seccomp knob. Its kubernetes counterpart below has always been
+	// here; this one was not, so a value set only in FLEET_ENV_FILE was dropped
+	// and neither the podman profile override nor the kubernetes backend's
+	// fail-closed refusal of it ever saw the operator's value.
+	"FLEET_SANDBOX_SECCOMP_PROFILE":           true,
 	"FLEET_SANDBOX_BACKEND":                   true,
 	"FLEET_SANDBOX_K8S_NAMESPACE":             true,
 	"FLEET_SANDBOX_K8S_WORKSPACE_CLAIM":       true,

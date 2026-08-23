@@ -15,7 +15,11 @@ rules:
     verbs: ["create", "get", "list", "delete"]
   - apiGroups: [""]
     resources: ["pods/exec"]
-    verbs: ["create"]
+    # `get` is the load-bearing one: the backend streams exec over a WebSocket
+    # upgrade (internal/sandbox/k8s_exec.go), an HTTP GET, and the apiserver
+    # authorizes by method. `create` keeps a SPDY/POST client — kubectl exec,
+    # for debugging — working against the same Role.
+    verbs: ["create", "get"]
   - apiGroups: [""]
     resources: ["persistentvolumeclaims"]
     verbs: ["get"]

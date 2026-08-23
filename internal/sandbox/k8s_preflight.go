@@ -46,6 +46,13 @@ var k8sRBACChecks = []struct {
 	{"list", "pods", ""},
 	{"delete", "pods", ""},
 	{"create", "pods", "exec"},
+	// The exec stream is a WebSocket upgrade, which gorilla/websocket issues as
+	// an HTTP GET (client.go: Method: http.MethodGet). The apiserver derives the
+	// RBAC verb from the method, so `get` — not `create` — is what every
+	// bash/run_python/fileop call is actually authorized against. Checking only
+	// `create` let a Role that grants just that pass preflight and then 403 on
+	// the first tool call, with boot having reported the cluster fine.
+	{"get", "pods", "exec"},
 }
 
 // Preflight verifies, fail-closed, that the cluster can deliver what the
