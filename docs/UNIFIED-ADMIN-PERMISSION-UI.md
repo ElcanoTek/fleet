@@ -6,7 +6,7 @@ Settings → Admin → Users presents three permission sections when editing an
 account:
 
 - **Admin** — one Admin option that grants admin on both planes.
-- **Chat** — Member or Viewer.
+- **Chat** — Viewer or Member.
 - **Ops Center** — None, Viewer, or Operator.
 
 Admin appears first so the broadest, cross-plane grant is visually distinct

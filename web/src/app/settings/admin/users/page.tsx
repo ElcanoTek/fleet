@@ -49,8 +49,8 @@ const ROLES = ["member", "viewer", "admin"] as const;
 type Role = (typeof ROLES)[number];
 
 const CHAT_ROLE_OPTIONS = [
-  { value: "member", label: "Member" },
   { value: "viewer", label: "Viewer" },
+  { value: "member", label: "Member" },
 ] as const satisfies readonly { value: Role; label: string }[];
 
 // Operations Center roles (the sched plane). "client" is presented as
