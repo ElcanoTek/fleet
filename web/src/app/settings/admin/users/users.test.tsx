@@ -367,7 +367,10 @@ describe("AdminUsersPage", () => {
     ]);
     expect(
       within(chat).getAllByRole("button").map((button) => button.textContent),
-    ).toEqual(["Viewer", "Member"]);
+    ).toEqual(["Viewer", "Contributor"]);
+    expect(
+      within(ops).getAllByRole("button").map((button) => button.textContent),
+    ).toEqual(["None", "Viewer", "Contributor"]);
     expect(within(chat).queryByRole("button", { name: "Admin" })).toBeNull();
     expect(within(ops).queryByRole("button", { name: "Admin" })).toBeNull();
     expect(within(admin).getAllByRole("button")).toHaveLength(1);

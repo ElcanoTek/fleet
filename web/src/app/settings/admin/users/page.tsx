@@ -47,20 +47,25 @@ export type AdminUser = {
 
 const ROLES = ["member", "viewer", "admin"] as const;
 type Role = (typeof ROLES)[number];
+const CHAT_ROLE_LABELS = {
+  member: "Contributor",
+  viewer: "Viewer",
+  admin: "Admin",
+} as const satisfies Record<Role, string>;
 
 const CHAT_ROLE_OPTIONS = [
-  { value: "viewer", label: "Viewer" },
-  { value: "member", label: "Member" },
+  { value: "viewer", label: CHAT_ROLE_LABELS.viewer },
+  { value: "member", label: CHAT_ROLE_LABELS.member },
 ] as const satisfies readonly { value: Role; label: string }[];
 
 // Operations Center roles (the sched plane). "client" is presented as
-// "Operator" — it can create and run tasks; "readonly" watches.
+// "Contributor" — it can create and run tasks; "readonly" watches.
 const OPS_ROLES = ["none", "readonly", "client", "admin"] as const;
 type OpsRole = (typeof OPS_ROLES)[number];
 const OPS_ROLE_OPTIONS = [
   { value: "none", label: "None" },
   { value: "readonly", label: "Viewer" },
-  { value: "client", label: "Operator" },
+  { value: "client", label: "Contributor" },
 ] as const satisfies readonly { value: OpsRole; label: string }[];
 const ADMIN_OPTIONS = [{ value: "admin", label: "Admin" }] as const;
 const opsRoleOf = (u: AdminUser): OpsRole =>
@@ -597,7 +602,7 @@ export default function AdminUsersPage() {
                 <option value="all">Chat: all</option>
                 {ROLES.map((r) => (
                   <option key={r} value={r}>
-                    Chat: {r}
+                    Chat: {CHAT_ROLE_LABELS[r].toLowerCase()}
                   </option>
                 ))}
               </select>
@@ -762,7 +767,7 @@ export default function AdminUsersPage() {
                                 title={`Operations Center ${
                                   {
                                     admin: "admin",
-                                    client: "operator (creates tasks)",
+                                    client: "contributor (creates tasks)",
                                     readonly: "viewer (read-only)",
                                   }[
                                     opsRoleOf(account) as
@@ -773,7 +778,7 @@ export default function AdminUsersPage() {
                                 {`ops: ${
                                   {
                                     admin: "admin",
-                                    client: "operator",
+                                    client: "contributor",
                                     readonly: "viewer",
                                   }[
                                     opsRoleOf(account) as
@@ -901,7 +906,7 @@ export default function AdminUsersPage() {
                       ...menu,
                       role,
                       // Leaving unified Admin revokes its implied Ops Admin
-                      // grant. The operator can then choose a narrower Ops role.
+                      // grant. The administrator can then choose a narrower Ops role.
                       opsRole: menu.role === "admin" ? "none" : menu.opsRole,
                     })
                   }
@@ -912,7 +917,7 @@ export default function AdminUsersPage() {
               <div className="grid justify-items-start gap-[0.3rem]">
                 <span
                   className="text-[0.64rem] font-bold uppercase tracking-[0.07em] text-[var(--color-text-muted)]"
-                  title="Ops Center permissions: Viewer sees tasks and logs; Operator also creates tasks."
+                  title="Ops Center permissions: Viewer sees tasks and logs; Contributor also creates tasks."
                 >
                   Ops Center
                 </span>
@@ -923,7 +928,7 @@ export default function AdminUsersPage() {
                     setMenu({
                       ...menu,
                       // Choosing a narrower Ops role leaves unified Admin. A
-                      // member is the least-privileged chat role to fall back to.
+                      // member API role is the Chat Contributor fallback.
                       role: menu.role === "admin" ? "member" : menu.role,
                       opsRole,
                     })
@@ -1041,7 +1046,7 @@ export default function AdminUsersPage() {
                     >
                       {ROLES.map((r) => (
                         <option key={r} value={r}>
-                          {r}
+                          {CHAT_ROLE_LABELS[r].toLowerCase()}
                         </option>
                       ))}
                     </select>
@@ -1076,9 +1081,9 @@ export default function AdminUsersPage() {
             ) : null}
             <p className="mt-2 text-[0.75rem] text-[var(--color-text-muted)]">
               Chat and Ops Center permissions are separate: chat Viewer is
-              read-only, while Ops Center Viewer watches and Operator creates
-              tasks. Admin is one unified grant across both. CLI equivalent for
-              the admin case:{" "}
+              read-only, while Contributor can actively use Chat or create Ops
+              Center tasks. Admin is one unified grant across both. CLI
+              equivalent for the admin case:{" "}
               <code className="font-[family-name:var(--font-code)]">
                 fleet admin add
               </code>

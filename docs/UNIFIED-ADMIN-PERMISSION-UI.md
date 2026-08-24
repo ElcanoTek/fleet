@@ -6,8 +6,8 @@ Settings → Admin → Users presents three permission sections when editing an
 account:
 
 - **Admin** — one Admin option that grants admin on both planes.
-- **Chat** — Viewer or Member.
-- **Ops Center** — None, Viewer, or Operator.
+- **Chat** — Viewer or Contributor.
+- **Ops Center** — None, Viewer, or Contributor.
 
 Admin appears first so the broadest, cross-plane grant is visually distinct
 before the two narrower per-plane role selectors.
@@ -20,8 +20,8 @@ in the user table rather than a second `ops: admin` badge.
 
 Choosing a narrower Chat or Ops Center permission while editing a unified admin
 leaves unified-admin mode. The other plane falls back to its least-privileged
-state (Chat Member or no Ops access), after which either narrower role can be
-selected explicitly before saving.
+state (Chat Contributor or no Ops access), after which either narrower role can
+be selected explicitly before saving.
 
 ## Deliberate scope
 
