@@ -371,32 +371,36 @@ describe("AdminUsersPage", () => {
     expect(
       within(ops).getAllByRole("button").map((button) => button.textContent),
     ).toEqual(["None", "Viewer", "Contributor"]);
-    expect(within(admin).getByRole("button", { name: "Admin" })).toHaveAttribute(
-      "title",
+    const expectTooltip = (button: HTMLElement, description: string) => {
+      expect(button).not.toHaveAttribute("title");
+      const tooltipId = button.getAttribute("aria-describedby");
+      expect(tooltipId).toBeTruthy();
+      expect(document.getElementById(tooltipId ?? "")).toHaveTextContent(
+        description,
+      );
+    };
+    expectTooltip(
+      within(admin).getByRole("button", { name: "Admin" }),
       "Full permissions in both Chat and the Ops Center.",
     );
-    expect(within(chat).getByRole("button", { name: "Viewer" })).toHaveAttribute(
-      "title",
+    expectTooltip(
+      within(chat).getByRole("button", { name: "Viewer" }),
       "Read-only Chat access: can view but cannot create or change content.",
     );
-    expect(
+    expectTooltip(
       within(chat).getByRole("button", { name: "Contributor" }),
-    ).toHaveAttribute(
-      "title",
       "Can actively use Chat, including creating and updating content.",
     );
-    expect(within(ops).getByRole("button", { name: "None" })).toHaveAttribute(
-      "title",
+    expectTooltip(
+      within(ops).getByRole("button", { name: "None" }),
       "No access to the Ops Center.",
     );
-    expect(within(ops).getByRole("button", { name: "Viewer" })).toHaveAttribute(
-      "title",
+    expectTooltip(
+      within(ops).getByRole("button", { name: "Viewer" }),
       "Can view Ops Center tasks and logs but cannot change them.",
     );
-    expect(
+    expectTooltip(
       within(ops).getByRole("button", { name: "Contributor" }),
-    ).toHaveAttribute(
-      "title",
       "Can view, create, and run Ops Center tasks.",
     );
     expect(within(chat).queryByRole("button", { name: "Admin" })).toBeNull();

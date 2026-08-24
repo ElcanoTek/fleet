@@ -6,7 +6,7 @@
 // Tailwind idiom the rest of the app uses, with the design's exact metrics.
 // Every color rides a semantic token so client theming keeps working.
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { Icon } from "@/app/shared/ui/Icon";
 
 /* ── Buttons (.btn / .btn-primary / .btn-ghost / .btn-sm / .conn-reveal) ── */
@@ -226,33 +226,51 @@ export function Segmented<T extends string>({
    *  options where the boundaries otherwise blur together. */
   dividers?: boolean;
 }) {
+  const tooltipBaseId = useId();
   return (
     <span
       role="group"
       aria-label={label}
       className={[
-        "inline-flex shrink-0 overflow-hidden rounded-[var(--radius-pill)] border border-[var(--color-border)]",
+        "inline-flex shrink-0 rounded-[var(--radius-pill)] border border-[var(--color-border)]",
         dividers ? "divide-x divide-[var(--color-border-subtle)]" : "",
       ].join(" ")}
     >
-      {options.map((o) => (
-        <button
-          key={o.value}
-          type="button"
-          aria-pressed={value === o.value}
-          title={o.description}
-          disabled={disabled}
-          onClick={() => onChange(o.value)}
-          className={[
-            "px-[0.6rem] py-[0.18rem] text-[0.72rem] font-medium transition focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50",
-            value === o.value
-              ? "bg-[var(--color-primary)] text-[var(--color-on-primary)]"
-              : "text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] focus-visible:bg-[var(--color-overlay-soft)]",
-          ].join(" ")}
-        >
-          {o.label}
-        </button>
-      ))}
+      {options.map((o, index) => {
+        const tooltipId = o.description
+          ? `${tooltipBaseId}-option-${index}`
+          : undefined;
+        return (
+          <span key={o.value} className="group/seg-option relative inline-flex">
+            <button
+              type="button"
+              aria-pressed={value === o.value}
+              aria-describedby={tooltipId}
+              disabled={disabled}
+              onClick={() => onChange(o.value)}
+              className={[
+                "px-[0.6rem] py-[0.18rem] text-[0.72rem] font-medium transition focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50",
+                index === 0 ? "rounded-l-full" : "",
+                index === options.length - 1 ? "rounded-r-full" : "",
+                value === o.value
+                  ? "bg-[var(--color-primary)] text-[var(--color-on-primary)]"
+                  : "text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] focus-visible:bg-[var(--color-overlay-soft)]",
+              ].join(" ")}
+            >
+              {o.label}
+            </button>
+            {o.description ? (
+              <span
+                id={tooltipId}
+                role="tooltip"
+                className="pointer-events-none absolute left-1/2 top-[calc(100%+0.4rem)] z-[500] w-max max-w-[min(16rem,calc(100vw-1rem))] -translate-x-1/2 rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] px-[0.55rem] py-[0.4rem] text-center text-[0.7rem] font-normal leading-snug text-[var(--color-text-secondary)] opacity-0 shadow-[var(--shadow-md)] transition-opacity duration-75 group-hover/seg-option:opacity-100 group-focus-within/seg-option:opacity-100"
+              >
+                {o.description}
+              </span>
+            ) : null}
+          </span>
+        );
+      })}
     </span>
   );
 }

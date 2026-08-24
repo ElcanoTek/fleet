@@ -73,8 +73,8 @@ prior versions are listed because none have shipped.
   roles, matching the server's existing two-plane admin semantics without two
   misleading Admin choices or duplicate badges. The Add user form now presents
   the same Admin, Chat, Ops Center, and Team fields, allowing the complete role
-  assignment at account creation. Every role choice includes a hover description
-  of the access it grants.
+  assignment at account creation. Every role choice includes an immediate hover
+  and keyboard-focus description of the access it grants.
 - **A `values.schema.json` for the chart.** Helm renders nothing for a key the
   templates do not read, so a misspelled value passed `helm lint`, passed
   `helm template`, and surfaced only as missing behaviour in production —
