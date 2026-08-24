@@ -310,12 +310,127 @@ describe("AdminUsersPage", () => {
     ).toBeInTheDocument();
   });
 
-  it("shows the ops badge for Operations Center admins", async () => {
-    mockFetch(listImpl([{ ...USERS[0], ops_center_admin: true }, USERS[1]]));
+  it("shows one badge for unified admins and an ops badge for an ops-only admin", async () => {
+    mockFetch(
+      listImpl([
+        { ...USERS[0], ops_center_admin: true, ops_center_role: "admin" },
+        { ...USERS[1], ops_center_admin: true, ops_center_role: "admin" },
+      ]),
+    );
     render(<AdminUsersPage />);
     await screen.findByText("alice@x.com");
-    expect(screen.getByTitle("Operations Center admin")).toBeInTheDocument();
-    expect(screen.getByText("ops: admin")).toBeInTheDocument();
+    const aliceRow = screen
+      .getByText("alice@x.com")
+      .closest("tr") as HTMLElement;
+    expect(within(aliceRow).getAllByText("Admin")).toHaveLength(1);
+    expect(within(aliceRow).queryByText("ops: admin")).toBeNull();
+
+    const bobRow = screen.getByText("bob@x.com").closest("tr") as HTMLElement;
+    expect(
+      within(bobRow).getByTitle("Operations Center admin"),
+    ).toBeInTheDocument();
+    expect(within(bobRow).getByText("ops: admin")).toBeInTheDocument();
+  });
+
+  it("presents Admin once and grants both permission planes", async () => {
+    const calls: { body: string }[] = [];
+    mockFetch((url, init) => {
+      if (url === "/api/admin/users/bob%40x.com" && init?.method === "PATCH") {
+        calls.push({ body: String(init.body) });
+        return new Response(
+          JSON.stringify({
+            ...USERS[1],
+            role: "admin",
+            ops_center_admin: true,
+            ops_center_role: "admin",
+          }),
+          { status: 200 },
+        );
+      }
+      return listImpl()(url);
+    });
+
+    render(<AdminUsersPage />);
+    await screen.findByText("bob@x.com");
+    openKebab("bob@x.com");
+
+    const chat = screen.getByRole("group", { name: "Chat permissions" });
+    const ops = screen.getByRole("group", { name: "Ops Center permissions" });
+    const admin = screen.getByRole("group", { name: "Admin permissions" });
+    expect(within(chat).queryByRole("button", { name: "Admin" })).toBeNull();
+    expect(within(ops).queryByRole("button", { name: "Admin" })).toBeNull();
+    expect(within(admin).getAllByRole("button")).toHaveLength(1);
+
+    fireEvent.click(within(admin).getByRole("button", { name: "Admin" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(calls).toHaveLength(1));
+    expect(JSON.parse(calls[0].body)).toEqual({
+      role: "admin",
+      ops_role: "admin",
+    });
+    const bobRow = screen.getByText("bob@x.com").closest("tr") as HTMLElement;
+    await waitFor(() =>
+      expect(within(bobRow).getAllByText("Admin")).toHaveLength(1),
+    );
+    expect(within(bobRow).queryByText("ops: admin")).toBeNull();
+  });
+
+  it("leaves unified Admin safely when a narrower Chat role is selected", async () => {
+    const adminUser = {
+      ...USERS[0],
+      ops_center_admin: true,
+      ops_center_role: "admin",
+    };
+    const calls: { body: string }[] = [];
+    mockFetch((url, init) => {
+      if (url === "/api/admin/users/alice%40x.com" && init?.method === "PATCH") {
+        calls.push({ body: String(init.body) });
+        return new Response(
+          JSON.stringify({
+            ...adminUser,
+            role: "viewer",
+            ops_center_admin: false,
+            ops_center_role: "",
+          }),
+          { status: 200 },
+        );
+      }
+      return listImpl([adminUser, USERS[1]])(url);
+    });
+
+    render(<AdminUsersPage />);
+    await screen.findByText("alice@x.com");
+    openKebab("alice@x.com");
+
+    const admin = screen.getByRole("group", { name: "Admin permissions" });
+    expect(within(admin).getByRole("button", { name: "Admin" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    fireEvent.click(
+      within(screen.getByRole("group", { name: "Chat permissions" })).getByRole(
+        "button",
+        { name: "Viewer" },
+      ),
+    );
+    expect(within(admin).getByRole("button", { name: "Admin" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+    expect(
+      within(screen.getByRole("group", { name: "Ops Center permissions" })).getByRole(
+        "button",
+        { name: "None" },
+      ),
+    ).toHaveAttribute("aria-pressed", "true");
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(calls).toHaveLength(1));
+    expect(JSON.parse(calls[0].body)).toEqual({
+      role: "viewer",
+      ops_role: "none",
+    });
   });
 
   it("creates a user via the add form and shows the password once", async () => {

@@ -7,10 +7,10 @@
 // manage accounts end-to-end — create, reassign role/team, reset passwords,
 // delete — so user management no longer requires CLI access to the box
 // (`fleet admin add` / `fleet chat user …` remain the scriptable equivalents).
-// Roles gate access on the chat server (viewer = read-only, admin = full +
-// these pages); granting admin also grants the Operations Center admin row
-// server-side, surfaced here via the ops badge. Row edits live in the
-// kebab-opened popover (the design's .user-pop).
+// Roles gate access on the chat server (viewer = read-only) while Operations
+// Center roles gate the scheduler. Admin is presented separately because it is
+// one unified grant: selecting it grants admin on both planes. Row edits live
+// in the kebab-opened popover (the design's .user-pop).
 //
 // Gating: useIsAdmin is VISIBILITY only (members are bounced back to
 // /settings); authorization stays server-side — every endpoint here
@@ -48,10 +48,9 @@ export type AdminUser = {
 const ROLES = ["member", "viewer", "admin"] as const;
 type Role = (typeof ROLES)[number];
 
-const ROLE_OPTIONS = [
+const CHAT_ROLE_OPTIONS = [
   { value: "member", label: "Member" },
   { value: "viewer", label: "Viewer" },
-  { value: "admin", label: "Admin" },
 ] as const satisfies readonly { value: Role; label: string }[];
 
 // Operations Center roles (the sched plane). "client" is presented as
@@ -62,8 +61,8 @@ const OPS_ROLE_OPTIONS = [
   { value: "none", label: "None" },
   { value: "readonly", label: "Viewer" },
   { value: "client", label: "Operator" },
-  { value: "admin", label: "Admin" },
 ] as const satisfies readonly { value: OpsRole; label: string }[];
+const ADMIN_OPTIONS = [{ value: "admin", label: "Admin" }] as const;
 const opsRoleOf = (u: AdminUser): OpsRole =>
   (OPS_ROLES as readonly string[]).includes(u.ops_center_role ?? "")
     ? ((u.ops_center_role || "none") as OpsRole)
@@ -180,8 +179,8 @@ type Menu = {
   opsRole: OpsRole;
 };
 
-const MENU_WIDTH_PX = 352; // 22rem — four-segment Ops row needs the room
-const MENU_EST_HEIGHT_PX = 330; // flip-above threshold (labels sit above controls now)
+const MENU_WIDTH_PX = 352; // 22rem — the three permission sections need room
+const MENU_EST_HEIGHT_PX = 375; // flip-above threshold (three permission sections + team)
 
 export default function AdminUsersPage() {
   const router = useRouter();
@@ -751,7 +750,14 @@ export default function AdminUsersPage() {
                             {account?.role === "viewer" ? (
                               <RoleBadge>Viewer</RoleBadge>
                             ) : null}
-                            {account && opsRoleOf(account) !== "none" ? (
+                            {account &&
+                            opsRoleOf(account) !== "none" &&
+                            // A unified admin already has the accent Admin badge;
+                            // repeating "ops: admin" would present one grant as two.
+                            !(
+                              account.role === "admin" &&
+                              opsRoleOf(account) === "admin"
+                            ) ? (
                               <RoleBadge
                                 title={`Operations Center ${
                                   {
@@ -867,14 +873,22 @@ export default function AdminUsersPage() {
               <div className="grid justify-items-start gap-[0.3rem]">
                 <span
                   className="text-[0.64rem] font-bold uppercase tracking-[0.07em] text-[var(--color-text-muted)]"
-                  title="Chat permissions: what this account can do in chat. Viewer is read-only; Admin includes these settings pages."
+                  title="Chat permissions: what this account can do in chat. Viewer is read-only."
                 >
                   Chat
                 </span>
                 <Segmented
                   value={menu.role}
-                  options={ROLE_OPTIONS}
-                  onChange={(role) => setMenu({ ...menu, role })}
+                  options={CHAT_ROLE_OPTIONS}
+                  onChange={(role) =>
+                    setMenu({
+                      ...menu,
+                      role,
+                      // Leaving unified Admin revokes its implied Ops Admin
+                      // grant. The operator can then choose a narrower Ops role.
+                      opsRole: menu.role === "admin" ? "none" : menu.opsRole,
+                    })
+                  }
                   label="Chat permissions"
                   dividers
                 />
@@ -882,16 +896,40 @@ export default function AdminUsersPage() {
               <div className="grid justify-items-start gap-[0.3rem]">
                 <span
                   className="text-[0.64rem] font-bold uppercase tracking-[0.07em] text-[var(--color-text-muted)]"
-                  title="Ops Center permissions: Viewer sees tasks and logs; Operator also creates tasks; Admin controls the ops plane. Chat Admin implies Ops Admin."
+                  title="Ops Center permissions: Viewer sees tasks and logs; Operator also creates tasks."
                 >
                   Ops Center
                 </span>
                 <Segmented
                   value={menu.opsRole}
                   options={OPS_ROLE_OPTIONS}
-                  onChange={(opsRole) => setMenu({ ...menu, opsRole })}
+                  onChange={(opsRole) =>
+                    setMenu({
+                      ...menu,
+                      // Choosing a narrower Ops role leaves unified Admin. A
+                      // member is the least-privileged chat role to fall back to.
+                      role: menu.role === "admin" ? "member" : menu.role,
+                      opsRole,
+                    })
+                  }
                   label="Ops Center permissions"
                   dividers
+                />
+              </div>
+              <div className="grid justify-items-start gap-[0.3rem]">
+                <span
+                  className="text-[0.64rem] font-bold uppercase tracking-[0.07em] text-[var(--color-text-muted)]"
+                  title="Admin grants full permissions in both Chat and the Ops Center."
+                >
+                  Admin
+                </span>
+                <Segmented
+                  value={menu.role === "admin" ? "admin" : ""}
+                  options={ADMIN_OPTIONS}
+                  onChange={() =>
+                    setMenu({ ...menu, role: "admin", opsRole: "admin" })
+                  }
+                  label="Admin permissions"
                 />
               </div>
               <div className="grid gap-[0.3rem]">
@@ -1037,12 +1075,10 @@ export default function AdminUsersPage() {
               </p>
             ) : null}
             <p className="mt-2 text-[0.75rem] text-[var(--color-text-muted)]">
-              Chat and Ops Center permissions are separate: chat roles gate this
-              app, Ops Center roles gate the task scheduler (Viewer watches,
-              Operator creates tasks). Granting chat{" "}
-              <span className="uppercase">admin</span> also grants Ops Center
-              admin; explicit Ops grants survive chat-role changes. CLI
-              equivalent for the admin case:{" "}
+              Chat and Ops Center permissions are separate: chat Viewer is
+              read-only, while Ops Center Viewer watches and Operator creates
+              tasks. Admin is one unified grant across both. CLI equivalent for
+              the admin case:{" "}
               <code className="font-[family-name:var(--font-code)]">
                 fleet admin add
               </code>

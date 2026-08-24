@@ -67,6 +67,11 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **One unified Admin permission in user management.** The Users popover now
+  keeps ordinary Chat and Ops Center roles separate while presenting Admin once
+  in its own section. Selecting it grants both the chat-admin and scheduler-admin
+  roles, matching the server's existing two-plane admin semantics without two
+  misleading Admin choices or duplicate badges.
 - **A `values.schema.json` for the chart.** Helm renders nothing for a key the
   templates do not read, so a misspelled value passed `helm lint`, passed
   `helm template`, and surfaced only as missing behaviour in production —
