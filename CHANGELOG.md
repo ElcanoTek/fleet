@@ -93,6 +93,31 @@ prior versions are listed because none have shipped.
   start budget is a fixed, unconfigurable 2 minutes; and a bundle's Python MCP
   servers run in the control-plane pod, which therefore needs their runtime.
 
+### Added
+
+- **Task-lifecycle transition table (#1127)** — the task state machine now
+  exists as a tested constant: `internal/sched/models/task_lifecycle.go`
+  enumerates every guarded status edge (from → to, with its one authoritative
+  writer; the two verbatim-upsert import paths that bypass the guards are
+  documented on the table as out-of-model restore surgery)
+  plus the derived status sets (terminal, active, claimable, paused,
+  cleanup-eligible, recurrence-spawning, worker-reportable, retired), with the
+  full lifecycle narrative as its doc comment. Deliberately NOT a runtime
+  framework: every claim/recovery/pause/wake/settle query keeps its own
+  guarded SQL; the only runtime derivation is `claim.go`'s already-named
+  `taskActiveStatuses`, which now reads `models.ActiveTaskStatuses` (same
+  `{leased, running}` it always was). Drift fails loudly instead of silently:
+  behavioral per-writer matrices in `sched/db` and `sched/storage` seed a row
+  in every status, drive each db/storage transition writer, and assert the
+  outcomes match the table exactly; an SQL-literal source scan (the #1126 drift-test
+  treatment) rejects any tasks-table status literal the table doesn't know
+  (including the retired `analyzing`, rewritten away by migration 063); and
+  init-time validation makes a status added without lifecycle rows unreachable
+  and therefore a boot/test failure. Zero behavior change — surprising
+  existing edges (e.g. cancel's terminal-refusal list omits `dead_lettered`,
+  so a DLQ row can be cancelled) are encoded and flagged as current reality,
+  not fixed.
+
 ### Changed
 
 - **The web tier no longer receives the control plane's secret.**
