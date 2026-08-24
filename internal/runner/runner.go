@@ -742,46 +742,7 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 	// human's answer when the resumed run failed retryably, because the retry
 	// is a fresh claim that re-reads pending_answer (#582).
 
-	// Install the workspace-path reporter (#287): the scheduled runner invokes it
-	// once it has resolved this run's effective workspace directory (a per-run
-	// worktree subdir, or the shared workspace root), and we persist that path to
-	// the task row under our held lease so the file-browser endpoints can later
-	// list + stream the artifacts the agent produced. Reporting failure is
-	// non-fatal — it only disables the after-the-fact browser for this run.
-	runCtx := agentcore.WithStreamObserver(taskCtx, buf)
-	runCtx = scheduledrun.WithWorkspaceReporter(runCtx, func(_ context.Context, path string) {
-		p.reportWorkspacePathForLease(task.ID, token, path)
-	})
-	// Collect the named artifacts the agent publishes via publish_artifact (#204);
-	// persisted on the success path below, before the terminal transition clears
-	// the lease.
-	artifactColl := scheduledrun.NewArtifactCollector()
-	runCtx = scheduledrun.WithArtifactCollector(runCtx, artifactColl)
-	// ask/notify (#510): the ask handler records the question + cancels THIS
-	// task's run so it ends and releases the sandbox/lease; executeTask then
-	// parks the task in paused_awaiting_input. notify fires an out-of-band
-	// progress update and returns immediately (the run continues).
-	runCtx = tools.WithAskHandler(runCtx, func(question string) error {
-		p.mu.Lock()
-		p.pauseRequested[task.ID] = question
-		cancel := p.activeCancel(task.ID)
-		p.mu.Unlock()
-		if cancel != nil {
-			cancel()
-		}
-		return nil
-	})
-	runCtx = tools.WithNotifyHandler(runCtx, func(message string) {
-		p.notifyProgress(task, message)
-	})
-	// self-wake (docs/SELF-WAKE.md): the wake handler mirrors ask — record the
-	// spec + cancel THIS run so it ends and releases the sandbox/lease;
-	// executeTask then parks the task in paused_awaiting_wake.
-	runCtx = tools.WithWakeHandler(runCtx, p.wakeHandlerFor(task))
-	// Recurring context carry (#504): for a carry_context recurring task, install
-	// a bounded handoff from the prior run so scheduledrun injects a
-	// "## Previous Run" section (extracted to keep executeTask under gocyclo).
-	runCtx = p.withPriorRunContext(runCtx, task)
+	runCtx, artifactColl := p.buildTaskRunContext(taskCtx, task, token, buf)
 
 	session, runErr := p.runner.Run(runCtx, task)
 
@@ -809,14 +770,7 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 	}
 
 	if reportableRunFailure(runErr, parked, wasStopped) {
-		observability.CaptureException(taskCtx, runErr, func(s *sentry.Scope) {
-			s.SetTag("task_id", task.ID.String())
-			s.SetTag("model", model)
-			s.SetTag("flavor", "native-inprocess")
-			s.SetContext("task", sentry.Context{
-				"attempt": task.AttemptCount,
-			})
-		})
+		captureRunFailure(taskCtx, task, model, runErr)
 	}
 
 	// Emit a terminal lifecycle status (the always-last frame). The deferred release
@@ -848,34 +802,12 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 	}
 
 	if wasPaused {
-		// ask (#510): park the task awaiting a human answer. The partial
-		// transcript persists FIRST (submitLog is lease-free), THEN the
-		// lease-guarded pause clears the lease — so the moment the task is
-		// visibly paused_awaiting_input its logs are already readable (a UI
-		// opening a just-paused task never sees an empty transcript, and the
-		// stoptask test's paused→logs assertion is race-free). An out-of-band
-		// notification tells the human a task needs them. NOT a failure — no
-		// retry/dead-letter/error-analysis.
-		p.submitLog(task, session, "Paused awaiting human input: "+pauseQuestion)
-		if ok, err := p.store.PauseTaskForQuestion(context.Background(), task.ID, token, pauseQuestion); err != nil {
-			log.Printf("runner: task %s pause write failed: %v", task.ID, err)
-		} else if !ok {
-			log.Printf("runner: task %s pause did not apply (lease lost or not running)", task.ID)
-		}
-		p.notifyProgress(task, "Task is paused and needs your answer: "+pauseQuestion)
-		log.Printf("runner: task %s paused awaiting input after %v", task.ID, time.Since(start).Round(time.Second))
+		p.parkForQuestion(task, session, pauseQuestion, token, start)
 		return
 	}
 
 	if wasStopped {
-		// The cancel handler already flipped the row to cancelled (with the
-		// "stopped by <who>" attribution) and cleared the lease, so there is no
-		// terminal status write here — just persist the partial transcript
-		// (submitLog is lease-free) and skip retry/dead-letter/notify/analysis:
-		// a deliberate operator stop is not a failure to diagnose.
-		msg := "Task stopped by " + stoppedBy
-		p.submitLog(task, session, msg)
-		log.Printf("runner: task %s stopped by %s after %v", task.ID, logSafeRunner(stoppedBy), time.Since(start).Round(time.Second))
+		p.finishStopped(task, session, stoppedBy, start)
 		return
 	}
 
@@ -929,9 +861,7 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 		// Beats auditAborted: whatever the zombie run concluded about its
 		// own work, the task's outcome now belongs to the fresh attempt,
 		// and any terminal write here could only bounce off the fence.
-		msg := "Task run cancelled: this run's lease was lost (recovery re-queued the task; a fresh attempt owns it now)"
-		p.submitLog(task, session, msg)
-		log.Printf("runner: task %s run cancelled after lease loss, %v after start", task.ID, time.Since(start).Round(time.Second))
+		p.finishLeaseLost(task, session, start)
 	case auditAborted:
 		p.failAuditAborted(task, session, runErr, token, start)
 	case interrupted:
@@ -939,62 +869,174 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 	case runErr != nil:
 		p.handleRunFailure(task, session, runErr, token, start)
 	default:
-		// Persist the published-artifact manifest (#204) under the held lease,
-		// before the terminal success clears it. No-op when nothing was published.
-		p.recordArtifactsForLease(task.ID, token, artifactColl.Marshal())
-		if p.beforeSuccessCommit != nil {
-			p.beforeSuccessCommit(task, token)
+		p.finishSuccess(task, session, outputJSON, artifactColl, token, start, terminalFrame)
+	}
+}
+
+// buildTaskRunContext derives one claimed task's run context from the decoupled
+// per-task context, installing every run-scoped seam the drivers and tools
+// read, and returns it with the artifact collector the success path
+// (finishSuccess) persists from.
+func (p *Pool) buildTaskRunContext(taskCtx context.Context, task *models.Task, token uuid.UUID, buf *taskStreamBuffer) (context.Context, *scheduledrun.ArtifactCollector) {
+	// Install the workspace-path reporter (#287): the scheduled runner invokes it
+	// once it has resolved this run's effective workspace directory (a per-run
+	// worktree subdir, or the shared workspace root), and we persist that path to
+	// the task row under our held lease so the file-browser endpoints can later
+	// list + stream the artifacts the agent produced. Reporting failure is
+	// non-fatal — it only disables the after-the-fact browser for this run.
+	runCtx := agentcore.WithStreamObserver(taskCtx, buf)
+	runCtx = scheduledrun.WithWorkspaceReporter(runCtx, func(_ context.Context, path string) {
+		p.reportWorkspacePathForLease(task.ID, token, path)
+	})
+	// Collect the named artifacts the agent publishes via publish_artifact (#204);
+	// persisted on the success path (finishSuccess), before the terminal
+	// transition clears the lease.
+	artifactColl := scheduledrun.NewArtifactCollector()
+	runCtx = scheduledrun.WithArtifactCollector(runCtx, artifactColl)
+	// ask/notify (#510): the ask handler records the question + cancels THIS
+	// task's run so it ends and releases the sandbox/lease; executeTask then
+	// parks the task in paused_awaiting_input. notify fires an out-of-band
+	// progress update and returns immediately (the run continues).
+	runCtx = tools.WithAskHandler(runCtx, func(question string) error {
+		p.mu.Lock()
+		p.pauseRequested[task.ID] = question
+		cancel := p.activeCancel(task.ID)
+		p.mu.Unlock()
+		if cancel != nil {
+			cancel()
 		}
-		landedTask, err := p.reportSuccess(task.ID, token, outputJSON, session)
-		if err != nil {
-			terminalFrame["status"] = "failed"
-			log.Printf("runner: failed to commit success for task %s: %v; suppressing success side effects", task.ID, err)
-			// Never borrow a success row to justify this run's notification/session
-			// side effects. A Commit error is genuinely outcome-unknown: only a
-			// reread that still shows this exact claim's token on a nonterminal row
-			// proves the success did not land and permits the normal persistence-
-			// failure path. Every terminal, differently owned, or unreadable state
-			// remains ambiguous and suppresses all side effects.
-			if errors.Is(err, storage.ErrTaskLeaseNotHeld) {
-				return
-			}
-			current, readErr := p.store.GetTask(task.ID)
-			currentClaim := readErr == nil && current != nil && current.AttemptCount == task.AttemptCount &&
-				current.LeaseOwner != nil && *current.LeaseOwner == token.String()
-			if !currentClaim || current.Status.IsTerminal() {
-				return
-			}
-			// Only a declared structured contract gives this write failure the
-			// structured-output persistence class. Preserve the historical
-			// free-form behavior: a failed terminal status write suppresses
-			// success side effects but is not reclassified as an output failure.
-			if len(task.OutputSchema) == 0 {
-				p.submitLog(task, session, err.Error())
-				return
-			}
-			persistErr := fmt.Errorf("%w: commit validated output and success under lease: %w", agentcore.ErrStructuredOutputPersistence, err)
-			p.submitLog(task, session, persistErr.Error())
-			p.handleRunFailure(task, session, persistErr, token, start)
+		return nil
+	})
+	runCtx = tools.WithNotifyHandler(runCtx, func(message string) {
+		p.notifyProgress(task, message)
+	})
+	// self-wake (docs/SELF-WAKE.md): the wake handler mirrors ask — record the
+	// spec + cancel THIS run so it ends and releases the sandbox/lease;
+	// executeTask then parks the task in paused_awaiting_wake.
+	runCtx = tools.WithWakeHandler(runCtx, p.wakeHandlerFor(task))
+	// Recurring context carry (#504): for a carry_context recurring task, install
+	// a bounded handoff from the prior run so scheduledrun injects a
+	// "## Previous Run" section (extracted to keep executeTask under gocyclo).
+	runCtx = p.withPriorRunContext(runCtx, task)
+	return runCtx, artifactColl
+}
+
+// captureRunFailure ships a reportable run failure to Sentry with the same
+// task_id/model/flavor tags as the panic path in tryClaim. The caller gates it
+// on reportableRunFailure.
+func captureRunFailure(ctx context.Context, task *models.Task, model string, runErr error) {
+	observability.CaptureException(ctx, runErr, func(s *sentry.Scope) {
+		s.SetTag("task_id", task.ID.String())
+		s.SetTag("model", model)
+		s.SetTag("flavor", "native-inprocess")
+		s.SetContext("task", sentry.Context{
+			"attempt": task.AttemptCount,
+		})
+	})
+}
+
+// parkForQuestion parks a run whose agent called ask (#510): the task awaits a
+// human answer. The partial transcript persists FIRST (submitLog is
+// lease-free), THEN the lease-guarded pause clears the lease — so the moment
+// the task is visibly paused_awaiting_input its logs are already readable (a
+// UI opening a just-paused task never sees an empty transcript, and the
+// stoptask test's paused→logs assertion is race-free). An out-of-band
+// notification tells the human a task needs them. NOT a failure — no
+// retry/dead-letter/error-analysis.
+func (p *Pool) parkForQuestion(task *models.Task, session *models.LogSession, pauseQuestion string, token uuid.UUID, start time.Time) {
+	p.submitLog(task, session, "Paused awaiting human input: "+pauseQuestion)
+	if ok, err := p.store.PauseTaskForQuestion(context.Background(), task.ID, token, pauseQuestion); err != nil {
+		log.Printf("runner: task %s pause write failed: %v", task.ID, err)
+	} else if !ok {
+		log.Printf("runner: task %s pause did not apply (lease lost or not running)", task.ID)
+	}
+	p.notifyProgress(task, "Task is paused and needs your answer: "+pauseQuestion)
+	log.Printf("runner: task %s paused awaiting input after %v", task.ID, time.Since(start).Round(time.Second))
+}
+
+// finishStopped records a deliberate operator stop (#508). The cancel handler
+// already flipped the row to cancelled (with the "stopped by <who>"
+// attribution) and cleared the lease, so there is no terminal status write
+// here — just persist the partial transcript (submitLog is lease-free) and
+// skip retry/dead-letter/notify/analysis: a deliberate operator stop is not a
+// failure to diagnose.
+func (p *Pool) finishStopped(task *models.Task, session *models.LogSession, stoppedBy string, start time.Time) {
+	msg := "Task stopped by " + stoppedBy
+	p.submitLog(task, session, msg)
+	log.Printf("runner: task %s stopped by %s after %v", task.ID, logSafeRunner(stoppedBy), time.Since(start).Round(time.Second))
+}
+
+// finishLeaseLost records the honest outcome of a run cancelled by lease loss
+// (#1116): transcript only — see the leaseLost classification in executeTask
+// for why there is no terminal status write and no retry/notify/analysis.
+func (p *Pool) finishLeaseLost(task *models.Task, session *models.LogSession, start time.Time) {
+	msg := "Task run cancelled: this run's lease was lost (recovery re-queued the task; a fresh attempt owns it now)"
+	p.submitLog(task, session, msg)
+	log.Printf("runner: task %s run cancelled after lease loss, %v after start", task.ID, time.Since(start).Round(time.Second))
+}
+
+// finishSuccess commits the successful terminal transition: it persists the
+// published-artifact manifest under the held lease, atomically commits
+// output_json + success, and fires the success side effects ONLY when the
+// terminal write actually landed (#580). terminalFrame is executeTask's
+// deferred terminal SSE frame — it is flipped to "succeeded" only after the
+// success transaction returns a landed row (fail closed).
+func (p *Pool) finishSuccess(task *models.Task, session *models.LogSession, outputJSON json.RawMessage, artifactColl *scheduledrun.ArtifactCollector, token uuid.UUID, start time.Time, terminalFrame map[string]any) {
+	// Persist the published-artifact manifest (#204) under the held lease,
+	// before the terminal success clears it. No-op when nothing was published.
+	p.recordArtifactsForLease(task.ID, token, artifactColl.Marshal())
+	if p.beforeSuccessCommit != nil {
+		p.beforeSuccessCommit(task, token)
+	}
+	landedTask, err := p.reportSuccess(task.ID, token, outputJSON, session)
+	if err != nil {
+		terminalFrame["status"] = "failed"
+		log.Printf("runner: failed to commit success for task %s: %v; suppressing success side effects", task.ID, err)
+		// Never borrow a success row to justify this run's notification/session
+		// side effects. A Commit error is genuinely outcome-unknown: only a
+		// reread that still shows this exact claim's token on a nonterminal row
+		// proves the success did not land and permits the normal persistence-
+		// failure path. Every terminal, differently owned, or unreadable state
+		// remains ambiguous and suppresses all side effects.
+		if errors.Is(err, storage.ErrTaskLeaseNotHeld) {
 			return
 		}
-		if landedTask != nil {
-			terminalFrame["status"] = "succeeded"
+		current, readErr := p.store.GetTask(task.ID)
+		currentClaim := readErr == nil && current != nil && current.AttemptCount == task.AttemptCount &&
+			current.LeaseOwner != nil && *current.LeaseOwner == token.String()
+		if !currentClaim || current.Status.IsTerminal() {
+			return
 		}
-		p.submitLog(task, session, "")
-		log.Printf("runner: task %s completed in %v", task.ID, time.Since(start).Round(time.Second))
-		// Terminal success side effects fire ONLY when the terminal write landed
-		// (#580): if the lease was lost (operator cancel racing the finish, or a
-		// recovery re-queue), the DB does not record this run as a success — a
-		// "success" notification or an external email reply would be spurious,
-		// and the re-queued run's own reply would make it a duplicate.
-		if landedTask != nil {
-			task = landedTask
-			// Terminal success: fire the outbound notification off-thread (#208).
-			p.notifyTerminal(task, notify.StatusSuccess, session, time.Since(start))
-			// If this run answered an inbound email (#511), reply to the sender with
-			// the result. Off-thread, no-op unless the run came from an email trigger.
-			p.maybeReplyToEmailEvent(task, session)
+		// Only a declared structured contract gives this write failure the
+		// structured-output persistence class. Preserve the historical
+		// free-form behavior: a failed terminal status write suppresses
+		// success side effects but is not reclassified as an output failure.
+		if len(task.OutputSchema) == 0 {
+			p.submitLog(task, session, err.Error())
+			return
 		}
+		persistErr := fmt.Errorf("%w: commit validated output and success under lease: %w", agentcore.ErrStructuredOutputPersistence, err)
+		p.submitLog(task, session, persistErr.Error())
+		p.handleRunFailure(task, session, persistErr, token, start)
+		return
+	}
+	if landedTask != nil {
+		terminalFrame["status"] = "succeeded"
+	}
+	p.submitLog(task, session, "")
+	log.Printf("runner: task %s completed in %v", task.ID, time.Since(start).Round(time.Second))
+	// Terminal success side effects fire ONLY when the terminal write landed
+	// (#580): if the lease was lost (operator cancel racing the finish, or a
+	// recovery re-queue), the DB does not record this run as a success — a
+	// "success" notification or an external email reply would be spurious,
+	// and the re-queued run's own reply would make it a duplicate.
+	if landedTask != nil {
+		task = landedTask
+		// Terminal success: fire the outbound notification off-thread (#208).
+		p.notifyTerminal(task, notify.StatusSuccess, session, time.Since(start))
+		// If this run answered an inbound email (#511), reply to the sender with
+		// the result. Off-thread, no-op unless the run came from an email trigger.
+		p.maybeReplyToEmailEvent(task, session)
 	}
 }
 

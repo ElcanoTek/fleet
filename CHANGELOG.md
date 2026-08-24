@@ -853,6 +853,25 @@ prior versions are listed because none have shipped.
   multi-megabyte brace-wrapped-but-invalid blob is labelled `json` instead of
   `text`. Both tiers are pinned by `TestLooksLikeJSONDocument_TieredClassification`,
   including that the exact tier still agrees with `json.Valid` case for case.
+
+- **`agent.RunTurn` and `runner.executeTask` extracted into named phase
+  helpers (#1127)** — the two ~300-line functions the audit flagged (the
+  confirmed bugs #1105/#1117 partly stemmed from how much state they juggle)
+  now read as a narrative of phases. `RunTurn` delegates to
+  `admitInteractiveTurn`, `composeTurnSystemPrompt`, `assembleTurnMessages`,
+  `interactiveRunSelection`, and `openTurnRemoteOverlay`, and its three
+  outcomes to `failedTurnResult` / `cancelledTurnResult` (pre-existing) /
+  `completedTurnResult`; `executeTask` delegates to `buildTaskRunContext`,
+  `captureRunFailure`, and one named helper per terminal outcome —
+  `parkForQuestion`, `finishStopped`, `finishLeaseLost`, `finishSuccess` —
+  joining the existing `parkForWake`/`failWallTimeout`/`failAuditAborted`/
+  `failInterrupted`/`handleRunFailure` family. Pure extraction with zero
+  behavior change: every extracted body is line-identical to its original span
+  modulo parameter threading (verified span-by-span against HEAD; all other
+  declarations in both files verified byte-identical via a hash inventory),
+  and every function-exit defer (limiter release, sandbox/workspace/MCP-scope
+  cleanup, overlay close; wall-deadline cancel, stream seal, terminal SSE
+  frame) stays registered in the parent so its firing scope is unchanged.
 - **`internal/sched/db/db.go` split by domain (#1127)** — the 2,882-line god
   file is now thirteen domain files in the same package: connection lifecycle,
   the cross-domain (un)marshal helpers, and transaction support stay in
