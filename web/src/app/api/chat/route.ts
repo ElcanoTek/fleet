@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "@/app/lib/auth";
 import { chatServerFetch } from "@/app/lib/chatServer";
 import { verifyOrigin } from "@/app/lib/csrf";
-import { MODELS_PAGE_URL } from "@/app/lib/openrouterModels";
 
 export const runtime = "nodejs";
 
@@ -63,7 +62,3 @@ export async function POST(request: NextRequest) {
     },
   });
 }
-
-// Re-exported so other routes / tests can reference the same link without
-// hardcoding it in multiple places.
-export { MODELS_PAGE_URL };

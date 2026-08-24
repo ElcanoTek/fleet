@@ -11,19 +11,18 @@
 #   adm-zip ^0.6.0   — onnxruntime-node pins adm-zip ^0.5.16, which carries
 #                      GHSA-xcpc-8h2w-3j85 (crafted-ZIP 4 GB allocation).
 #
-# An override is a fork of upstream's intent: correct while upstream is broken,
-# and pure drift the day upstream fixes itself — at which point Dependabot's
-# normal updates are silently pinned down by us instead. Nothing else notices
-# that day. This check does: it asks the registry what floor each PARENT now
-# declares, and FAILS with removal instructions once the parent's own range
-# reaches the patched line. So the reminder to drop the override is a red build
-# with a two-line fix, not a stale-pin archaeology session years later.
-#
-# Registry unreachable / output unparsable is a SKIP with a notice, never a
-# failure: this check's job is "tell me when the override is droppable", and a
-# network flake is not evidence of that. The vulnerability gate itself is
-# `npm audit` in the same CI job, which does fail closed on its own findings.
+# An override is a fork of upstream's intent: correct while the dependency tree
+# is broken, and pure drift once every locked parent accepts the patched line.
+# This check reads the exact parent versions in package-lock.json and FAILS with
+# removal instructions only when all locked instances have reached that line.
+# Looking at PARENT@latest is unsafe: a transitive consumer may still pin an
+# older parent (as transformers 4.2.0 does with onnxruntime-node 1.24.3), so the
+# latest release can be fixed while removing the override would reintroduce the
+# vulnerable dependency. npm audit remains the vulnerability gate itself.
 set -uo pipefail
+
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+lockfile="$script_dir/rampart-service/package-lock.json"
 
 # floor RANGE -> x.y.z: the minimum version of a caret/tilde/plain range.
 # The parents' published ranges are simple ("^0.34.5"); anything fancier
@@ -48,29 +47,71 @@ ge() {
   return 0
 }
 
-# check PARENT DEP PATCHED_FLOOR — fail if PARENT's declared range for DEP now
-# starts at or above PATCHED_FLOOR (the override is then droppable).
+# locked_ranges PARENT DEP prints VERSION<TAB>RANGE for every distinct locked
+# instance of PARENT. package-lock v3 records the parent's original dependency
+# range even when an override changes the resolved child, which is exactly the
+# evidence this canary needs.
+locked_ranges() {
+  local parent="$1" dep="$2"
+  node - "$lockfile" "$parent" "$dep" <<'NODE'
+const fs = require("node:fs");
+const [lockPath, parent, dep] = process.argv.slice(2);
+const lock = JSON.parse(fs.readFileSync(lockPath, "utf8"));
+const suffix = `node_modules/${parent}`;
+const seen = new Set();
+for (const [path, pkg] of Object.entries(lock.packages ?? {})) {
+  if (path !== suffix && !path.endsWith(`/${suffix}`)) continue;
+  const version = pkg.version ?? "";
+  const range = pkg.dependencies?.[dep] ?? "";
+  const row = `${version}\t${range}`;
+  if (!seen.has(row)) {
+    seen.add(row);
+    process.stdout.write(`${row}\n`);
+  }
+}
+NODE
+}
+
+# check PARENT DEP PATCHED_FLOOR — fail only if every locked PARENT instance's
+# declared range for DEP starts at or above PATCHED_FLOOR.
 stale=0
 check() {
-  local parent="$1" dep="$2" patched="$3" range f
-  range="$(npm view "$parent@latest" "dependencies.$dep" 2>/dev/null || true)"
-  if [ -z "$range" ]; then
-    echo "notice: could not read $parent's $dep range from the registry — skipping (not a verdict)."
+  local parent="$1" dep="$2" patched="$3" version range f
+  local -a entries=()
+  mapfile -t entries < <(locked_ranges "$parent" "$dep" 2>/dev/null || true)
+  if (( ${#entries[@]} == 0 )); then
+    echo "notice: could not find locked $parent instances — skipping (not a verdict)."
     return 0
   fi
-  f="$(floor "$range")"
-  if [ "$f" = "unknown" ]; then
-    echo "notice: $parent declares $dep '$range' — cannot parse a floor, skipping."
-    return 0
-  fi
-  if ge "$f" "$patched"; then
-    echo "::error::$parent@latest now declares $dep '$range' (floor $f >= $patched):"
+
+  local all_fixed=1
+  for entry in "${entries[@]}"; do
+    IFS=$'\t' read -r version range <<<"$entry"
+    if [ -z "$version" ] || [ -z "$range" ]; then
+      echo "notice: locked $parent has no readable version/$dep range — skipping that instance."
+      all_fixed=0
+      continue
+    fi
+    f="$(floor "$range")"
+    if [ "$f" = "unknown" ]; then
+      echo "notice: locked $parent@$version declares $dep '$range' — cannot parse a floor."
+      all_fixed=0
+      continue
+    fi
+    if ge "$f" "$patched"; then
+      echo "locked $parent@$version accepts $dep '$range' (floor $f >= $patched)."
+    else
+      echo "override for $dep still required: locked $parent@$version pins '$range' (floor $f < $patched)."
+      all_fixed=0
+    fi
+  done
+
+  if (( all_fixed )); then
+    echo "::error::Every locked $parent instance now accepts $dep >= $patched:"
     echo "  the '$dep' override in scripts/rampart-service/package.json is DROPPABLE."
     echo "  Remove it, regenerate package-lock.json (npm install --package-lock-only),"
     echo "  and re-run npm audit — upstream now ships the patched line itself."
     stale=1
-  else
-    echo "override for $dep still required: $parent@latest pins '$range' (floor $f < $patched)."
   fi
 }
 

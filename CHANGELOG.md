@@ -19,6 +19,16 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **The npm override canary demanded an unsafe `adm-zip` override removal.** It
+  checked `onnxruntime-node@latest`, which now accepts the patched dependency,
+  while Fleet's locked Transformers release still pins `onnxruntime-node 1.24.3`
+  and its vulnerable `adm-zip ^0.5.16` range. The canary now evaluates every
+  parent version actually present in the lockfile and fails only when all of
+  them accept the patched line.
+- **The web typecheck rejected the Chat API route.** It re-exported the shared
+  `MODELS_PAGE_URL` constant even though Next.js route modules may only expose
+  recognized handlers and route configuration. Consumers already import the
+  constant from `lib/openrouterModels`, so the invalid route export is gone.
 - **Kubernetes: the sandbox backend could not execute a single tool call on a
   cluster that enforces RBAC.** fleet streams exec over a WebSocket upgrade —
   an HTTP GET — so the apiserver authorizes `get pods/exec`, but both the chart
@@ -650,10 +660,9 @@ prior versions are listed because none have shipped.
 
   - **`scripts/check-npm-overrides.sh`**: the rampart sharp/adm-zip overrides
     are forks of upstream's intent, correct only while upstream is broken — so
-    both CI lanes now fail with removal instructions the day
-    `@huggingface/transformers` / `onnxruntime-node` publish ranges reaching
-    the patched lines. Registry flake = skip with a notice, never a verdict.
-    Mutation-tested in both directions.
+    both CI lanes fail with removal instructions once every locked
+    `@huggingface/transformers` / `onnxruntime-node` instance accepts the
+    patched lines. Mutation-tested in both directions.
 
   - **A red scheduled scan files an issue** (all four lanes; deduped by title,
     re-failures comment). A cron failure has no PR to surface it — the rot
