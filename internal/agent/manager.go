@@ -1207,6 +1207,106 @@ func (o turnSink) Observe(eventType string, payload map[string]any) {
 	o.sink.Emit(eventType, payload)
 }
 
+// admitInteractiveTurn is RunTurn's admission control: an interactive turn
+// holds one slot in the shared box-wide concurrency limiter for its whole
+// duration, so chat counts against the same cap as scheduled tasks (and draws
+// on the reserve that keeps chat ahead of background work). Wait only briefly —
+// a human is watching — then surface ErrAtCapacity so the UI shows a clean "at
+// capacity, retry" instead of a hung turn or an over-subscribed box. The caller
+// defers the returned release so the slot is held for the whole turn; without a
+// limiter the release is a no-op.
+func (m *Manager) admitInteractiveTurn(ctx context.Context) (func(), error) {
+	if m.limiter != nil {
+		admitCtx, cancel := context.WithTimeout(ctx, interactiveAdmitWait)
+		release, admitted := m.limiter.AcquireInteractive(admitCtx.Done())
+		cancel()
+		if !admitted {
+			if ctx.Err() != nil {
+				return nil, ctx.Err() // the caller (user) abandoned the turn while waiting
+			}
+			return nil, ErrAtCapacity
+		}
+		return release, nil
+	}
+	return func() {}, nil
+}
+
+// composeTurnSystemPrompt builds the per-turn system prompt, first fetching the
+// admin-curated knowledge base (best-effort: a notes failure runs the turn
+// without the section rather than failing it).
+func (m *Manager) composeTurnSystemPrompt(ctx context.Context, in TurnInput, persona string) (string, error) {
+	var notes []agentcore.Note
+	if m.notesProvider != nil {
+		if got, err := m.notesProvider.PublishedNotes(ctx); err != nil {
+			log.Printf("agent notes unavailable; running without notes section: %v", err)
+		} else {
+			notes = got
+		}
+	}
+	systemPrompt, err := m.buildSystemPrompt(persona, in.ConversationID, in.Memories, in.ProjectInstructions, notes, in.OptionalMCPServersEnabled, in.UserSkills)
+	if err != nil {
+		return "", fmt.Errorf("compose system prompt: %w", err)
+	}
+	return systemPrompt, nil
+}
+
+// assembleTurnMessages replays the persisted history and appends this turn's
+// user message (with any image attachments) as the outgoing model messages. It
+// also returns the user HistoryEntry: the new user message + its image refs
+// are persisted as the first entry of the turn; the run loop's accumulated
+// entries follow.
+func assembleTurnMessages(in TurnInput) ([]fantasy.Message, HistoryEntry, error) {
+	history, err := replayHistory(in.History)
+	if err != nil {
+		return nil, HistoryEntry{}, fmt.Errorf("replay history: %w", err)
+	}
+	imageParts, imageRefs := loadImageAttachments(in.ImageAttachments)
+	messages := make([]fantasy.Message, 0, len(history)+1)
+	messages = append(messages, history...)
+	messages = append(messages, fantasy.NewUserMessage(in.UserMessage, imageParts...))
+	userEntry := mustEntry("user", "text", TextContent{Text: in.UserMessage, Images: imageRefs})
+	return messages, userEntry, nil
+}
+
+// interactiveRunSelection maps the conversation's opt-in list to the per-run
+// MCP selection (default account). agentcore.buildFantasyTools registers the
+// opted-in servers' tools through the InteractivePolicy gate.
+func interactiveRunSelection(enabled []string, accountDefaults map[string]string) agentcore.MCPSelection {
+	selection := make(agentcore.MCPSelection, 0, len(enabled))
+	for _, name := range enabled {
+		if n := strings.TrimSpace(name); n != "" {
+			// The user's default seat (connections page) rides along; a chat
+			// turn is supervised, so the per-user default is the right seat —
+			// scheduled tasks pin their own {server, account} explicitly.
+			selection = append(selection, agentcore.MCPChoice{Server: n, Account: accountDefaults[n]})
+		}
+	}
+	return selection
+}
+
+// openTurnRemoteOverlay opens the per-user remote (hosted) MCP overlay (#443):
+// a short-lived client of the user's OAuth-connected servers (fresh bearer,
+// SSRF-safe transport) that composes with the shared catalog. Best-effort: a
+// server that needs re-auth is skipped, and an overlay failure logs and returns
+// nil, never failing the turn. The caller closes a non-nil overlay when the
+// turn ends.
+func (m *Manager) openTurnRemoteOverlay(ctx context.Context, in TurnInput, turnCatalog []mcp.ServerTool) *RemoteMCPOverlay {
+	var overlay *RemoteMCPOverlay
+	if in.UserEmail != "" && (m.openRemoteMCPOverlay != nil || m.remoteMCP != nil) {
+		ov, oerr := m.openRemoteOverlay(ctx, in.UserEmail, turnCatalog, in.OptionalMCPServersEnabled)
+		if oerr != nil {
+			log.Printf("RunTurn: remote-mcp overlay unavailable for %s: %v", in.UserEmail, oerr)
+		} else if ov != nil {
+			overlay = ov
+			if len(ov.Skipped) > 0 {
+				// Interactive: the user can see+fix these on the Connections page.
+				log.Printf("RunTurn: remote MCP server(s) need re-auth for %s: %v", in.UserEmail, ov.Skipped)
+			}
+		}
+	}
+	return overlay
+}
+
 // RunTurn executes one interactive turn: it builds the per-turn system prompt +
 // sandbox + tools, resolves the model, drives RunInteractiveTurn (which streams
 // through the sink), then maps the accumulated transcript to history + usage.
@@ -1223,39 +1323,15 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 		return nil, fmt.Errorf("model %q not allowed in lockdown mode", in.Model)
 	}
 
-	// Admission control: an interactive turn holds one slot in the shared box-wide
-	// concurrency limiter for its whole duration, so chat counts against the same
-	// cap as scheduled tasks (and draws on the reserve that keeps chat ahead of
-	// background work). Wait only briefly — a human is watching — then surface
-	// ErrAtCapacity so the UI shows a clean "at capacity, retry" instead of a hung
-	// turn or an over-subscribed box. The slot is released when the turn returns.
-	if m.limiter != nil {
-		admitCtx, cancel := context.WithTimeout(ctx, interactiveAdmitWait)
-		release, admitted := m.limiter.AcquireInteractive(admitCtx.Done())
-		cancel()
-		if !admitted {
-			if ctx.Err() != nil {
-				return nil, ctx.Err() // the caller (user) abandoned the turn while waiting
-			}
-			return nil, ErrAtCapacity
-		}
-		defer release()
-	}
-
-	// Admin-curated knowledge base (best-effort: a notes failure runs the turn
-	// without the section rather than failing it).
-	var notes []agentcore.Note
-	if m.notesProvider != nil {
-		if got, err := m.notesProvider.PublishedNotes(ctx); err != nil {
-			log.Printf("agent notes unavailable; running without notes section: %v", err)
-		} else {
-			notes = got
-		}
-	}
-
-	systemPrompt, err := m.buildSystemPrompt(persona, in.ConversationID, in.Memories, in.ProjectInstructions, notes, in.OptionalMCPServersEnabled, in.UserSkills)
+	release, err := m.admitInteractiveTurn(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("compose system prompt: %w", err)
+		return nil, err
+	}
+	defer release()
+
+	systemPrompt, err := m.composeTurnSystemPrompt(ctx, in, persona)
+	if err != nil {
+		return nil, err
 	}
 
 	sb, sbCleanup, err := m.takeTurnSandbox(ctx, in.Lockdown, in.ConversationID)
@@ -1302,18 +1378,10 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 	}
 	modelSlug := model.Model()
 
-	history, err := replayHistory(in.History)
+	messages, userEntry, err := assembleTurnMessages(in)
 	if err != nil {
-		return nil, fmt.Errorf("replay history: %w", err)
+		return nil, err
 	}
-	imageParts, imageRefs := loadImageAttachments(in.ImageAttachments)
-	messages := make([]fantasy.Message, 0, len(history)+1)
-	messages = append(messages, history...)
-	messages = append(messages, fantasy.NewUserMessage(in.UserMessage, imageParts...))
-
-	// The new user message + its image refs are persisted as the first entry of
-	// the turn; the run loop's accumulated entries follow.
-	userEntry := mustEntry("user", "text", TextContent{Text: in.UserMessage, Images: imageRefs})
 
 	// Durable-before-execution (#798): the user message commits to canonical
 	// history before the first provider or tool call. A store failure fails
@@ -1332,36 +1400,11 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 		maxTokens = 16384
 	}
 
-	// The conversation's opt-in list becomes the per-run MCP selection
-	// (default account). agentcore.buildFantasyTools registers the opted-in
-	// servers' tools through the InteractivePolicy gate.
-	selection := make(agentcore.MCPSelection, 0, len(in.OptionalMCPServersEnabled))
-	for _, name := range in.OptionalMCPServersEnabled {
-		if n := strings.TrimSpace(name); n != "" {
-			// The user's default seat (connections page) rides along; a chat
-			// turn is supervised, so the per-user default is the right seat —
-			// scheduled tasks pin their own {server, account} explicitly.
-			selection = append(selection, agentcore.MCPChoice{Server: n, Account: in.MCPAccountDefaults[n]})
-		}
-	}
+	selection := interactiveRunSelection(in.OptionalMCPServersEnabled, in.MCPAccountDefaults)
 
-	// Per-user remote (hosted) MCP overlay (#443). Builds a short-lived client of
-	// the user's OAuth-connected servers (fresh bearer, SSRF-safe transport) that
-	// composes with the shared catalog. Best-effort: a server that needs re-auth
-	// is skipped, never failing the turn. The overlay is closed when the turn ends.
-	var overlay *RemoteMCPOverlay
-	if in.UserEmail != "" && (m.openRemoteMCPOverlay != nil || m.remoteMCP != nil) {
-		ov, oerr := m.openRemoteOverlay(ctx, in.UserEmail, turnCatalog, in.OptionalMCPServersEnabled)
-		if oerr != nil {
-			log.Printf("RunTurn: remote-mcp overlay unavailable for %s: %v", in.UserEmail, oerr)
-		} else if ov != nil {
-			overlay = ov
-			defer overlay.Close()
-			if len(ov.Skipped) > 0 {
-				// Interactive: the user can see+fix these on the Connections page.
-				log.Printf("RunTurn: remote MCP server(s) need re-auth for %s: %v", in.UserEmail, ov.Skipped)
-			}
-		}
+	overlay := m.openTurnRemoteOverlay(ctx, in, turnCatalog)
+	if overlay != nil {
+		defer overlay.Close()
 	}
 
 	tc := TurnConfig{
@@ -1414,77 +1457,12 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 	res, runErr := RunInteractiveTurn(ctx, tc, turnSink{sink: sink})
 
 	if runErr != nil {
-		// Distinguish caller-cancelled (handled below via res.Cancelled when the
-		// loop returns a partial result) from a genuine stream failure that the
-		// user can fix by choosing another model.
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return m.cancelledTurnResult(res, userEntry, modelSlug, startedAt, ctxErr, sink, in.CommitTerminal)
-		}
-		if errors.Is(runErr, agentcore.ErrGuardrailBlocked) {
-			sink.Emit("turn.policy_blocked", map[string]any{"policy": "prompt-injection"})
-			return nil, runErr
-		}
-		commitPartialSideEffects(runErr, res, in.CommitTerminal)
-		reason, status, _ := agentcore.ClassifyStreamErrorReason(runErr)
-		log.Printf("RunTurn stream failed (reason=%s model=%s status=%d): %v", reason, modelSlug, status, runErr)
-		emitModelSelectionRequired(sink, reason, modelSlug, status, runErr)
-		return nil, fmt.Errorf("%w: %w", ErrModelSelectionRequired, runErr)
+		return m.failedTurnResult(ctx, runErr, res, userEntry, modelSlug, startedAt, sink, in.CommitTerminal)
 	}
-
 	if res.Cancelled {
 		return m.cancelledTurnResult(res, userEntry, modelSlug, startedAt, ctx.Err(), sink, in.CommitTerminal)
 	}
-
-	newHistory := make([]HistoryEntry, 0, len(res.Entries)+2)
-	newHistory = append(newHistory, userEntry)
-	newHistory = append(newHistory, mapRunEntries(res.Entries)...)
-
-	finalText := res.FinalText
-	usage := res.Usage
-	summary := TurnSummaryContent{
-		CostUSD:              usage.CostUSD,
-		PromptTokens:         usage.PromptTokens,
-		PromptTokensLastStep: usage.LastStepInputTokens,
-		CompletionTokens:     usage.CompletionTokens,
-		CachedTokens:         usage.CachedTokens,
-		CacheCreationTokens:  usage.CacheCreationTokens,
-		DurationMs:           int(time.Since(startedAt).Milliseconds()),
-		Model:                modelSlug,
-	}
-	newHistory = append(newHistory, mustEntry("assistant", "turn_summary", summary))
-
-	// Terminal gate (#798): canonical history commits BEFORE turn.completed is
-	// advertised. The user entry (newHistory[0]) was committed up-front and is
-	// excluded. On failure the turn errors visibly — the SSE ledger and the
-	// journal keep the evidence, and startup recovery does not re-project a
-	// turn that ended alive (the driver records a terminal error state).
-	if in.CommitTerminal != nil {
-		if err := in.CommitTerminal(newHistory[1:], false); err != nil {
-			return nil, fmt.Errorf("%w: %w", ErrHistoryCommitFailed, err)
-		}
-	}
-
-	sink.Emit("turn.completed", map[string]any{
-		"cost_usd":                usage.CostUSD,
-		"prompt_tokens":           usage.PromptTokens,
-		"prompt_tokens_last_step": usage.LastStepInputTokens,
-		"completion_tokens":       usage.CompletionTokens,
-		"cached_tokens":           usage.CachedTokens,
-		"cache_creation_tokens":   usage.CacheCreationTokens,
-		"duration_ms":             summary.DurationMs,
-		"model":                   modelSlug,
-	})
-
-	return &TurnResult{
-		FinalText:           finalText,
-		NewHistory:          newHistory,
-		PromptTokens:        usage.PromptTokens,
-		CompletionTokens:    usage.CompletionTokens,
-		CachedTokens:        usage.CachedTokens,
-		CacheCreationTokens: usage.CacheCreationTokens,
-		CostUSD:             usage.CostUSD,
-		Model:               modelSlug,
-	}, nil
+	return m.completedTurnResult(res, userEntry, modelSlug, startedAt, sink, in.CommitTerminal)
 }
 
 // cancelledTurnResult builds the partial TurnResult for a cancelled turn,
@@ -1561,6 +1539,85 @@ func (m *Manager) cancelledTurnResult(res agentcore.Result, userEntry HistoryEnt
 		CostUSD:             usage.CostUSD,
 		Model:               modelSlug,
 		Cancelled:           true,
+	}, nil
+}
+
+// failedTurnResult classifies a RunInteractiveTurn error. Caller-cancelled
+// (distinguished from a genuine stream failure via ctx.Err(); the loop returned
+// a partial result) finalizes as a cancelled turn. A guardrail block surfaces
+// as-is after emitting turn.policy_blocked. Everything else is a stream failure
+// the user can fix by choosing another model: committed side effects persist
+// first (ADR-0035), then ErrModelSelectionRequired wraps the cause so the HTTP
+// layer suppresses its generic turn.error in favor of turn.model_required.
+func (m *Manager) failedTurnResult(ctx context.Context, runErr error, res agentcore.Result, userEntry HistoryEntry, modelSlug string, startedAt time.Time, sink EventSink, commitTerminal func([]HistoryEntry, bool) error) (*TurnResult, error) {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return m.cancelledTurnResult(res, userEntry, modelSlug, startedAt, ctxErr, sink, commitTerminal)
+	}
+	if errors.Is(runErr, agentcore.ErrGuardrailBlocked) {
+		sink.Emit("turn.policy_blocked", map[string]any{"policy": "prompt-injection"})
+		return nil, runErr
+	}
+	commitPartialSideEffects(runErr, res, commitTerminal)
+	reason, status, _ := agentcore.ClassifyStreamErrorReason(runErr)
+	log.Printf("RunTurn stream failed (reason=%s model=%s status=%d): %v", reason, modelSlug, status, runErr)
+	emitModelSelectionRequired(sink, reason, modelSlug, status, runErr)
+	return nil, fmt.Errorf("%w: %w", ErrModelSelectionRequired, runErr)
+}
+
+// completedTurnResult finalizes a turn that ran to completion: it maps the
+// accumulated transcript to history entries, appends the turn_summary, commits
+// canonical history behind the terminal gate, emits turn.completed, and builds
+// the TurnResult. Mirrors cancelledTurnResult for the completed path.
+func (m *Manager) completedTurnResult(res agentcore.Result, userEntry HistoryEntry, modelSlug string, startedAt time.Time, sink EventSink, commitTerminal func([]HistoryEntry, bool) error) (*TurnResult, error) {
+	newHistory := make([]HistoryEntry, 0, len(res.Entries)+2)
+	newHistory = append(newHistory, userEntry)
+	newHistory = append(newHistory, mapRunEntries(res.Entries)...)
+
+	finalText := res.FinalText
+	usage := res.Usage
+	summary := TurnSummaryContent{
+		CostUSD:              usage.CostUSD,
+		PromptTokens:         usage.PromptTokens,
+		PromptTokensLastStep: usage.LastStepInputTokens,
+		CompletionTokens:     usage.CompletionTokens,
+		CachedTokens:         usage.CachedTokens,
+		CacheCreationTokens:  usage.CacheCreationTokens,
+		DurationMs:           int(time.Since(startedAt).Milliseconds()),
+		Model:                modelSlug,
+	}
+	newHistory = append(newHistory, mustEntry("assistant", "turn_summary", summary))
+
+	// Terminal gate (#798): canonical history commits BEFORE turn.completed is
+	// advertised. The user entry (newHistory[0]) was committed up-front and is
+	// excluded. On failure the turn errors visibly — the SSE ledger and the
+	// journal keep the evidence, and startup recovery does not re-project a
+	// turn that ended alive (the driver records a terminal error state).
+	if commitTerminal != nil {
+		if err := commitTerminal(newHistory[1:], false); err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrHistoryCommitFailed, err)
+		}
+	}
+
+	sink.Emit("turn.completed", map[string]any{
+		"cost_usd":                usage.CostUSD,
+		"prompt_tokens":           usage.PromptTokens,
+		"prompt_tokens_last_step": usage.LastStepInputTokens,
+		"completion_tokens":       usage.CompletionTokens,
+		"cached_tokens":           usage.CachedTokens,
+		"cache_creation_tokens":   usage.CacheCreationTokens,
+		"duration_ms":             summary.DurationMs,
+		"model":                   modelSlug,
+	})
+
+	return &TurnResult{
+		FinalText:           finalText,
+		NewHistory:          newHistory,
+		PromptTokens:        usage.PromptTokens,
+		CompletionTokens:    usage.CompletionTokens,
+		CachedTokens:        usage.CachedTokens,
+		CacheCreationTokens: usage.CacheCreationTokens,
+		CostUSD:             usage.CostUSD,
+		Model:               modelSlug,
 	}, nil
 }
 
