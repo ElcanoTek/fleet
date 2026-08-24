@@ -12,6 +12,10 @@ account:
 Admin appears first so the broadest, cross-plane grant is visually distinct
 before the two narrower per-plane role selectors.
 
+The Add user form uses the same permission sections and Team field as the edit
+popover, so an account can receive its complete Chat, Ops Center, and team
+assignment when it is created.
+
 The Admin control sets both `role: "admin"` and `ops_role: "admin"` in the
 pending edit; the PATCH sends whichever fields changed. This is a UI expression
 of the existing server contract: promoting a chat account to admin also ensures
@@ -25,7 +29,8 @@ be selected explicitly before saving.
 
 ## Deliberate scope
 
-The HTTP API continues to accept `ops_role: "admin"` independently for backward
-compatibility and operator automation. An existing ops-only admin is displayed
-accurately, but the Users UI no longer offers two separate ways to grant admin.
-No database schema or authorization middleware changed.
+The HTTP API accepts `ops_role` on both create and update, including
+`ops_role: "admin"` independently for backward compatibility and operator
+automation. An existing ops-only admin is displayed accurately, but the Users
+UI no longer offers two separate ways to grant admin. No database schema or
+authorization middleware changed.

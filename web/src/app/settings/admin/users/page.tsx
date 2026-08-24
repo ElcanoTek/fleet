@@ -75,6 +75,81 @@ const opsRoleOf = (u: AdminUser): OpsRole =>
       ? "admin"
       : "none";
 
+function PermissionFields({
+  role,
+  opsRole,
+  onChange,
+  labelPrefix = "",
+}: {
+  role: Role;
+  opsRole: OpsRole;
+  onChange: (next: { role: Role; opsRole: OpsRole }) => void;
+  labelPrefix?: string;
+}) {
+  const ariaPrefix = labelPrefix ? `${labelPrefix} ` : "";
+  return (
+    <>
+      <div className="grid justify-items-start gap-[0.3rem]">
+        <span
+          className="text-[0.64rem] font-bold uppercase tracking-[0.07em] text-[var(--color-text-muted)]"
+          title="Admin grants full permissions in both Chat and the Ops Center."
+        >
+          Admin
+        </span>
+        <Segmented
+          value={role === "admin" ? "admin" : ""}
+          options={ADMIN_OPTIONS}
+          onChange={() => onChange({ role: "admin", opsRole: "admin" })}
+          label={`${ariaPrefix}Admin permissions`}
+        />
+      </div>
+      <div className="grid justify-items-start gap-[0.3rem]">
+        <span
+          className="text-[0.64rem] font-bold uppercase tracking-[0.07em] text-[var(--color-text-muted)]"
+          title="Chat permissions: what this account can do in chat. Viewer is read-only."
+        >
+          Chat
+        </span>
+        <Segmented
+          value={role}
+          options={CHAT_ROLE_OPTIONS}
+          onChange={(nextRole) =>
+            onChange({
+              role: nextRole,
+              // Leaving unified Admin revokes its implied Ops Admin grant.
+              opsRole: role === "admin" ? "none" : opsRole,
+            })
+          }
+          label={`${ariaPrefix}Chat permissions`}
+          dividers
+        />
+      </div>
+      <div className="grid justify-items-start gap-[0.3rem]">
+        <span
+          className="text-[0.64rem] font-bold uppercase tracking-[0.07em] text-[var(--color-text-muted)]"
+          title="Ops Center permissions: Viewer sees tasks and logs; Contributor also creates tasks."
+        >
+          Ops Center
+        </span>
+        <Segmented
+          value={opsRole}
+          options={OPS_ROLE_OPTIONS}
+          onChange={(nextOpsRole) =>
+            onChange({
+              // The member API role is the Chat Contributor fallback when a
+              // narrower Ops role replaces unified Admin.
+              role: role === "admin" ? "member" : role,
+              opsRole: nextOpsRole,
+            })
+          }
+          label={`${ariaPrefix}Ops Center permissions`}
+          dividers
+        />
+      </div>
+    </>
+  );
+}
+
 // generatePassword returns a random 16-char password from an unambiguous
 // alphabet (no 0/O/1/l/I). crypto.getRandomValues + rejection sampling keeps
 // the distribution uniform; 16 chars over 55 symbols ≈ 92 bits.
@@ -441,6 +516,8 @@ export default function AdminUsersPage() {
   const [newEmail, setNewEmail] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [newRole, setNewRole] = useState<Role>("member");
+  const [newOpsRole, setNewOpsRole] = useState<OpsRole>("none");
+  const [newTeam, setNewTeam] = useState("");
   const [addStatus, setAddStatus] = useState<string | null>(null);
   const [addedPassword, setAddedPassword] = useState<{
     email: string;
@@ -458,6 +535,8 @@ export default function AdminUsersPage() {
           email: newEmail.trim(),
           password: newPassword,
           role: newRole,
+          ops_role: newOpsRole,
+          team_id: newTeam.trim(),
         }),
       });
       if (!res.ok) {
@@ -475,6 +554,8 @@ export default function AdminUsersPage() {
       setNewEmail("");
       setNewPassword("");
       setNewRole("member");
+      setNewOpsRole("none");
+      setNewTeam("");
       setAddStatus(null);
       setAddOpen(false);
     } catch (err) {
@@ -875,68 +956,13 @@ export default function AdminUsersPage() {
               <div className="text-[0.76rem] font-semibold text-[var(--color-text-primary)] [overflow-wrap:anywhere]">
                 {menu.email}
               </div>
-              <div className="grid justify-items-start gap-[0.3rem]">
-                <span
-                  className="text-[0.64rem] font-bold uppercase tracking-[0.07em] text-[var(--color-text-muted)]"
-                  title="Admin grants full permissions in both Chat and the Ops Center."
-                >
-                  Admin
-                </span>
-                <Segmented
-                  value={menu.role === "admin" ? "admin" : ""}
-                  options={ADMIN_OPTIONS}
-                  onChange={() =>
-                    setMenu({ ...menu, role: "admin", opsRole: "admin" })
-                  }
-                  label="Admin permissions"
-                />
-              </div>
-              <div className="grid justify-items-start gap-[0.3rem]">
-                <span
-                  className="text-[0.64rem] font-bold uppercase tracking-[0.07em] text-[var(--color-text-muted)]"
-                  title="Chat permissions: what this account can do in chat. Viewer is read-only."
-                >
-                  Chat
-                </span>
-                <Segmented
-                  value={menu.role}
-                  options={CHAT_ROLE_OPTIONS}
-                  onChange={(role) =>
-                    setMenu({
-                      ...menu,
-                      role,
-                      // Leaving unified Admin revokes its implied Ops Admin
-                      // grant. The administrator can then choose a narrower Ops role.
-                      opsRole: menu.role === "admin" ? "none" : menu.opsRole,
-                    })
-                  }
-                  label="Chat permissions"
-                  dividers
-                />
-              </div>
-              <div className="grid justify-items-start gap-[0.3rem]">
-                <span
-                  className="text-[0.64rem] font-bold uppercase tracking-[0.07em] text-[var(--color-text-muted)]"
-                  title="Ops Center permissions: Viewer sees tasks and logs; Contributor also creates tasks."
-                >
-                  Ops Center
-                </span>
-                <Segmented
-                  value={menu.opsRole}
-                  options={OPS_ROLE_OPTIONS}
-                  onChange={(opsRole) =>
-                    setMenu({
-                      ...menu,
-                      // Choosing a narrower Ops role leaves unified Admin. A
-                      // member API role is the Chat Contributor fallback.
-                      role: menu.role === "admin" ? "member" : menu.role,
-                      opsRole,
-                    })
-                  }
-                  label="Ops Center permissions"
-                  dividers
-                />
-              </div>
+              <PermissionFields
+                role={menu.role}
+                opsRole={menu.opsRole}
+                onChange={({ role, opsRole }) =>
+                  setMenu({ ...menu, role, opsRole })
+                }
+              />
               <div className="grid gap-[0.3rem]">
                 <span className="text-[0.64rem] font-bold uppercase tracking-[0.07em] text-[var(--color-text-muted)]">
                   Team
@@ -1035,22 +1061,26 @@ export default function AdminUsersPage() {
                     </button>
                   </div>
                 </ConnField>
-                <ConnField label="Role">
-                  {/* .select-wrap: hide the native chevron and draw the design's. */}
-                  <span className="relative block after:pointer-events-none after:absolute after:right-[0.7rem] after:top-1/2 after:size-2 after:-translate-y-[65%] after:rotate-45 after:border-b-[1.5px] after:border-r-[1.5px] after:border-[var(--color-text-muted)] after:content-['']">
-                    <select
-                      aria-label="New user role"
-                      value={newRole}
-                      onChange={(e) => setNewRole(e.target.value as Role)}
-                      className={`${SETTINGS_INPUT} appearance-none pr-8!`}
-                    >
-                      {ROLES.map((r) => (
-                        <option key={r} value={r}>
-                          {CHAT_ROLE_LABELS[r].toLowerCase()}
-                        </option>
-                      ))}
-                    </select>
-                  </span>
+                <div className="grid w-full gap-[0.7rem] rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] p-[0.7rem]">
+                  <PermissionFields
+                    role={newRole}
+                    opsRole={newOpsRole}
+                    labelPrefix="New user"
+                    onChange={({ role, opsRole }) => {
+                      setNewRole(role);
+                      setNewOpsRole(opsRole);
+                    }}
+                  />
+                </div>
+                <ConnField label="Team" grow>
+                  <input
+                    aria-label="New user team"
+                    value={newTeam}
+                    placeholder="—"
+                    list="admin-users-teams"
+                    onChange={(e) => setNewTeam(e.target.value)}
+                    className={SETTINGS_INPUT}
+                  />
                 </ConnField>
                 <button
                   type="button"

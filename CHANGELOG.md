@@ -71,7 +71,9 @@ prior versions are listed because none have shipped.
   keeps ordinary Chat and Ops Center roles separate while presenting Admin once
   in its own section. Selecting it grants both the chat-admin and scheduler-admin
   roles, matching the server's existing two-plane admin semantics without two
-  misleading Admin choices or duplicate badges.
+  misleading Admin choices or duplicate badges. The Add user form now presents
+  the same Admin, Chat, Ops Center, and Team fields, allowing the complete role
+  assignment at account creation.
 - **A `values.schema.json` for the chart.** Helm renders nothing for a key the
   templates do not read, so a misspelled value passed `helm lint`, passed
   `helm template`, and surfaced only as missing behaviour in production —

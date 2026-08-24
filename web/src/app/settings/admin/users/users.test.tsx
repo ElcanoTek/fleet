@@ -447,7 +447,7 @@ describe("AdminUsersPage", () => {
     });
   });
 
-  it("creates a user via the add form and shows the password once", async () => {
+  it("creates a user with Chat, Ops Center, and team assignments", async () => {
     const calls: { body: string }[] = [];
     mockFetch((url, init) => {
       if (url === "/api/admin/users" && init?.method === "POST") {
@@ -455,10 +455,11 @@ describe("AdminUsersPage", () => {
         return new Response(
           JSON.stringify({
             email: "carol@x.com",
-            role: "member",
-            team_id: "",
+            role: "viewer",
+            team_id: "platform",
             created_at: 3,
             updated_at: 3,
+            ops_center_role: "client",
           }),
           { status: 201 },
         );
@@ -481,6 +482,27 @@ describe("AdminUsersPage", () => {
     fireEvent.change(screen.getByLabelText("New user password"), {
       target: { value: "carol-pw-123" },
     });
+    const admin = screen.getByRole("group", {
+      name: "New user Admin permissions",
+    });
+    const chat = screen.getByRole("group", {
+      name: "New user Chat permissions",
+    });
+    const ops = screen.getByRole("group", {
+      name: "New user Ops Center permissions",
+    });
+    expect(within(admin).getAllByRole("button")).toHaveLength(1);
+    expect(
+      within(chat).getAllByRole("button").map((button) => button.textContent),
+    ).toEqual(["Viewer", "Contributor"]);
+    expect(
+      within(ops).getAllByRole("button").map((button) => button.textContent),
+    ).toEqual(["None", "Viewer", "Contributor"]);
+    fireEvent.click(within(chat).getByRole("button", { name: "Viewer" }));
+    fireEvent.click(within(ops).getByRole("button", { name: "Contributor" }));
+    fireEvent.change(screen.getByLabelText("New user team"), {
+      target: { value: "platform" },
+    });
     expect(addButton).toBeEnabled();
     fireEvent.click(addButton);
 
@@ -488,7 +510,9 @@ describe("AdminUsersPage", () => {
     expect(JSON.parse(calls[0].body)).toEqual({
       email: "carol@x.com",
       password: "carol-pw-123",
-      role: "member",
+      role: "viewer",
+      ops_role: "client",
+      team_id: "platform",
     });
     // New row appears (the email also shows in the "created" footer, so expect
     // both) and the password is shown once.
@@ -496,6 +520,53 @@ describe("AdminUsersPage", () => {
       (await screen.findAllByText("carol@x.com")).length,
     ).toBeGreaterThanOrEqual(2);
     expect(screen.getByText("carol-pw-123")).toBeInTheDocument();
+  });
+
+  it("creates a unified admin from the Add user permission fields", async () => {
+    const calls: { body: string }[] = [];
+    mockFetch((url, init) => {
+      if (url === "/api/admin/users" && init?.method === "POST") {
+        calls.push({ body: String(init.body) });
+        return new Response(
+          JSON.stringify({
+            email: "dana@x.com",
+            role: "admin",
+            team_id: "",
+            created_at: 3,
+            updated_at: 3,
+            ops_center_admin: true,
+            ops_center_role: "admin",
+          }),
+          { status: 201 },
+        );
+      }
+      return listImpl()(url);
+    });
+
+    render(<AdminUsersPage />);
+    await screen.findByText("alice@x.com");
+    fireEvent.click(screen.getByRole("button", { name: /add user/i }));
+    fireEvent.change(screen.getByLabelText("New user email"), {
+      target: { value: "dana@x.com" },
+    });
+    fireEvent.change(screen.getByLabelText("New user password"), {
+      target: { value: "dana-pw-123" },
+    });
+    fireEvent.click(
+      within(
+        screen.getByRole("group", { name: "New user Admin permissions" }),
+      ).getByRole("button", { name: "Admin" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /^add user$/i }));
+
+    await waitFor(() => expect(calls).toHaveLength(1));
+    expect(JSON.parse(calls[0].body)).toEqual({
+      email: "dana@x.com",
+      password: "dana-pw-123",
+      role: "admin",
+      ops_role: "admin",
+      team_id: "",
+    });
   });
 
   it("requires a second click to delete, then removes the row", async () => {
