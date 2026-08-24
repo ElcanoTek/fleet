@@ -16,6 +16,9 @@ The Add user form uses the same permission sections and Team field as the edit
 popover, so an account can receive its complete Chat, Ops Center, and team
 assignment when it is created.
 
+Every role option has a hover description that explains its effective access.
+The descriptions are shared by the edit and account-creation controls.
+
 The Admin control sets both `role: "admin"` and `ops_role: "admin"` in the
 pending edit; the PATCH sends whichever fields changed. This is a UI expression
 of the existing server contract: promoting a chat account to admin also ensures

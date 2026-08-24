@@ -54,20 +54,54 @@ const CHAT_ROLE_LABELS = {
 } as const satisfies Record<Role, string>;
 
 const CHAT_ROLE_OPTIONS = [
-  { value: "viewer", label: CHAT_ROLE_LABELS.viewer },
-  { value: "member", label: CHAT_ROLE_LABELS.member },
-] as const satisfies readonly { value: Role; label: string }[];
+  {
+    value: "viewer",
+    label: CHAT_ROLE_LABELS.viewer,
+    description: "Read-only Chat access: can view but cannot create or change content.",
+  },
+  {
+    value: "member",
+    label: CHAT_ROLE_LABELS.member,
+    description: "Can actively use Chat, including creating and updating content.",
+  },
+] as const satisfies readonly {
+  value: Role;
+  label: string;
+  description: string;
+}[];
 
 // Operations Center roles (the sched plane). "client" is presented as
 // "Contributor" — it can create and run tasks; "readonly" watches.
 const OPS_ROLES = ["none", "readonly", "client", "admin"] as const;
 type OpsRole = (typeof OPS_ROLES)[number];
 const OPS_ROLE_OPTIONS = [
-  { value: "none", label: "None" },
-  { value: "readonly", label: "Viewer" },
-  { value: "client", label: "Contributor" },
-] as const satisfies readonly { value: OpsRole; label: string }[];
-const ADMIN_OPTIONS = [{ value: "admin", label: "Admin" }] as const;
+  {
+    value: "none",
+    label: "None",
+    description: "No access to the Ops Center.",
+  },
+  {
+    value: "readonly",
+    label: "Viewer",
+    description: "Can view Ops Center tasks and logs but cannot change them.",
+  },
+  {
+    value: "client",
+    label: "Contributor",
+    description: "Can view, create, and run Ops Center tasks.",
+  },
+] as const satisfies readonly {
+  value: OpsRole;
+  label: string;
+  description: string;
+}[];
+const ADMIN_OPTIONS = [
+  {
+    value: "admin",
+    label: "Admin",
+    description: "Full permissions in both Chat and the Ops Center.",
+  },
+] as const;
 const opsRoleOf = (u: AdminUser): OpsRole =>
   (OPS_ROLES as readonly string[]).includes(u.ops_center_role ?? "")
     ? ((u.ops_center_role || "none") as OpsRole)

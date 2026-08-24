@@ -371,6 +371,34 @@ describe("AdminUsersPage", () => {
     expect(
       within(ops).getAllByRole("button").map((button) => button.textContent),
     ).toEqual(["None", "Viewer", "Contributor"]);
+    expect(within(admin).getByRole("button", { name: "Admin" })).toHaveAttribute(
+      "title",
+      "Full permissions in both Chat and the Ops Center.",
+    );
+    expect(within(chat).getByRole("button", { name: "Viewer" })).toHaveAttribute(
+      "title",
+      "Read-only Chat access: can view but cannot create or change content.",
+    );
+    expect(
+      within(chat).getByRole("button", { name: "Contributor" }),
+    ).toHaveAttribute(
+      "title",
+      "Can actively use Chat, including creating and updating content.",
+    );
+    expect(within(ops).getByRole("button", { name: "None" })).toHaveAttribute(
+      "title",
+      "No access to the Ops Center.",
+    );
+    expect(within(ops).getByRole("button", { name: "Viewer" })).toHaveAttribute(
+      "title",
+      "Can view Ops Center tasks and logs but cannot change them.",
+    );
+    expect(
+      within(ops).getByRole("button", { name: "Contributor" }),
+    ).toHaveAttribute(
+      "title",
+      "Can view, create, and run Ops Center tasks.",
+    );
     expect(within(chat).queryByRole("button", { name: "Admin" })).toBeNull();
     expect(within(ops).queryByRole("button", { name: "Admin" })).toBeNull();
     expect(within(admin).getAllByRole("button")).toHaveLength(1);

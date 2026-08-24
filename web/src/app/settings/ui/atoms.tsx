@@ -218,7 +218,7 @@ export function Segmented<T extends string>({
   dividers,
 }: {
   value: T;
-  options: readonly { value: T; label: string }[];
+  options: readonly { value: T; label: string; description?: string }[];
   onChange: (next: T) => void;
   label: string;
   disabled?: boolean;
@@ -240,6 +240,7 @@ export function Segmented<T extends string>({
           key={o.value}
           type="button"
           aria-pressed={value === o.value}
+          title={o.description}
           disabled={disabled}
           onClick={() => onChange(o.value)}
           className={[
