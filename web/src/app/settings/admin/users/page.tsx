@@ -873,6 +873,22 @@ export default function AdminUsersPage() {
               <div className="grid justify-items-start gap-[0.3rem]">
                 <span
                   className="text-[0.64rem] font-bold uppercase tracking-[0.07em] text-[var(--color-text-muted)]"
+                  title="Admin grants full permissions in both Chat and the Ops Center."
+                >
+                  Admin
+                </span>
+                <Segmented
+                  value={menu.role === "admin" ? "admin" : ""}
+                  options={ADMIN_OPTIONS}
+                  onChange={() =>
+                    setMenu({ ...menu, role: "admin", opsRole: "admin" })
+                  }
+                  label="Admin permissions"
+                />
+              </div>
+              <div className="grid justify-items-start gap-[0.3rem]">
+                <span
+                  className="text-[0.64rem] font-bold uppercase tracking-[0.07em] text-[var(--color-text-muted)]"
                   title="Chat permissions: what this account can do in chat. Viewer is read-only."
                 >
                   Chat
@@ -914,22 +930,6 @@ export default function AdminUsersPage() {
                   }
                   label="Ops Center permissions"
                   dividers
-                />
-              </div>
-              <div className="grid justify-items-start gap-[0.3rem]">
-                <span
-                  className="text-[0.64rem] font-bold uppercase tracking-[0.07em] text-[var(--color-text-muted)]"
-                  title="Admin grants full permissions in both Chat and the Ops Center."
-                >
-                  Admin
-                </span>
-                <Segmented
-                  value={menu.role === "admin" ? "admin" : ""}
-                  options={ADMIN_OPTIONS}
-                  onChange={() =>
-                    setMenu({ ...menu, role: "admin", opsRole: "admin" })
-                  }
-                  label="Admin permissions"
                 />
               </div>
               <div className="grid gap-[0.3rem]">

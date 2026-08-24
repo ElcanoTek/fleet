@@ -357,6 +357,14 @@ describe("AdminUsersPage", () => {
     const chat = screen.getByRole("group", { name: "Chat permissions" });
     const ops = screen.getByRole("group", { name: "Ops Center permissions" });
     const admin = screen.getByRole("group", { name: "Admin permissions" });
+    const permissionGroups = within(
+      screen.getByRole("dialog", { name: "Edit bob@x.com" }),
+    ).getAllByRole("group");
+    expect(permissionGroups.map((group) => group.getAttribute("aria-label"))).toEqual([
+      "Admin permissions",
+      "Chat permissions",
+      "Ops Center permissions",
+    ]);
     expect(within(chat).queryByRole("button", { name: "Admin" })).toBeNull();
     expect(within(ops).queryByRole("button", { name: "Admin" })).toBeNull();
     expect(within(admin).getAllByRole("button")).toHaveLength(1);

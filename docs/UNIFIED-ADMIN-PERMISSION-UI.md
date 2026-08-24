@@ -5,9 +5,12 @@
 Settings → Admin → Users presents three permission sections when editing an
 account:
 
+- **Admin** — one Admin option that grants admin on both planes.
 - **Chat** — Member or Viewer.
 - **Ops Center** — None, Viewer, or Operator.
-- **Admin** — one Admin option that grants admin on both planes.
+
+Admin appears first so the broadest, cross-plane grant is visually distinct
+before the two narrower per-plane role selectors.
 
 The Admin control sets both `role: "admin"` and `ops_role: "admin"` in the
 pending edit; the PATCH sends whichever fields changed. This is a UI expression
