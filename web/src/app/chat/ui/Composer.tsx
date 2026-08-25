@@ -222,6 +222,13 @@ export type ComposerProps = {
   isLoadingMcpServers: boolean;
   loadMcpServerCatalog: (conversationId: string) => void | Promise<void>;
   toggleMcpServer: (conversationId: string | null, name: string) => void | Promise<void>;
+  // Credential-seat override for one server in this conversation (#988);
+  // "" = back to the user's default seat.
+  setMcpServerAccount: (
+    conversationId: string | null,
+    name: string,
+    account: string,
+  ) => void | Promise<void>;
 
   // Context ring / compaction
   activeConversationId: string | null;
@@ -287,6 +294,7 @@ export function Composer({
   isLoadingMcpServers,
   loadMcpServerCatalog,
   toggleMcpServer,
+  setMcpServerAccount,
   activeConversationId,
   messages,
   contextUsage,
@@ -1092,39 +1100,83 @@ export function Composer({
                             {isLoadingMcpServers ? (
                               <div className="px-[0.6rem] py-[0.45rem] text-[0.74rem] text-[var(--color-text-muted)]">Loading...</div>
                             ) : (
-                              mcpServers.map((server) => (
-                                <button
-                                  key={server.name}
-                                  type="button"
-                                  aria-pressed={server.enabled}
-                                  title={(server.tools ?? []).join(", ")}
-                                  className={POP_ROW_TIGHT}
-                                  onClick={() => {
-                                    void toggleMcpServer(activeConversationId, server.name);
-                                  }}
-                                >
-                                  <span className="grid min-w-0 gap-[0.1rem]">
-                                    <span className="flex items-center gap-1.5">
-                                      <span className={POP_TITLE}>{server.display_name || server.name}</span>
-                                      {server.beta ? (
-                                        <span
-                                          className="rounded-sm border border-[var(--color-border-strong)] px-1 py-px text-[0.55rem] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]"
-                                          title="This connector is in beta — it works but still has rough edges."
-                                        >
-                                          beta
-                                        </span>
+                              mcpServers.map((server) => {
+                                const seats = server.accounts ?? [];
+                                const row = (
+                                  <button
+                                    key={server.name}
+                                    type="button"
+                                    aria-pressed={server.enabled}
+                                    title={(server.tools ?? []).join(", ")}
+                                    className={POP_ROW_TIGHT}
+                                    onClick={() => {
+                                      void toggleMcpServer(activeConversationId, server.name);
+                                    }}
+                                  >
+                                    <span className="grid min-w-0 gap-[0.1rem]">
+                                      <span className="flex items-center gap-1.5">
+                                        <span className={POP_TITLE}>{server.display_name || server.name}</span>
+                                        {server.beta ? (
+                                          <span
+                                            className="rounded-sm border border-[var(--color-border-strong)] px-1 py-px text-[0.55rem] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]"
+                                            title="This connector is in beta — it works but still has rough edges."
+                                          >
+                                            beta
+                                          </span>
+                                        ) : null}
+                                      </span>
+                                      {server.description ? (
+                                        <span className={`${POP_DESC} leading-snug`}>{server.description}</span>
                                       ) : null}
+                                      <span className="text-[0.65rem] text-[var(--color-text-muted)]">
+                                        {server.tool_count} tool{server.tool_count === 1 ? "" : "s"}
+                                      </span>
                                     </span>
-                                    {server.description ? (
-                                      <span className={`${POP_DESC} leading-snug`}>{server.description}</span>
-                                    ) : null}
-                                    <span className="text-[0.65rem] text-[var(--color-text-muted)]">
-                                      {server.tool_count} tool{server.tool_count === 1 ? "" : "s"}
-                                    </span>
-                                  </span>
-                                  <MiniSwitch on={server.enabled} />
-                                </button>
-                              ))
+                                    <MiniSwitch on={server.enabled} />
+                                  </button>
+                                );
+                                if (seats.length === 0) return row;
+                                // Seat picker (#988): which login this server
+                                // uses in THIS conversation. Rendered as a
+                                // sibling under the toggle row — a <select>
+                                // nested inside the row <button> would be
+                                // invalid interactive content that browsers
+                                // handle inconsistently — and shielded with
+                                // stopPropagation so picking a seat never
+                                // flips the toggle or closes the popover.
+                                return (
+                                  <div key={server.name} className="grid">
+                                    {row}
+                                    <label className="flex items-center gap-1.5 px-[0.6rem] pb-[0.35rem] text-[0.65rem] text-[var(--color-text-muted)]">
+                                      <span>Account</span>
+                                      <select
+                                        className="min-w-0 max-w-[10rem] flex-1 truncate rounded-sm border border-[var(--color-border)] bg-transparent px-1 py-px text-[0.68rem] text-[var(--color-text-secondary)] outline-none focus-visible:border-[var(--color-border-strong)]"
+                                        value={server.account ?? ""}
+                                        aria-label={`Account for ${server.display_name || server.name}`}
+                                        data-testid={`mcp-seat-${server.name}`}
+                                        onClick={(event) => event.stopPropagation()}
+                                        onChange={(event) => {
+                                          event.stopPropagation();
+                                          void setMcpServerAccount(
+                                            activeConversationId,
+                                            server.name,
+                                            event.target.value,
+                                          );
+                                        }}
+                                      >
+                                        <option value="">
+                                          Default{server.default_account ? ` (${server.default_account})` : ""}
+                                        </option>
+                                        {seats.map((seat) => (
+                                          <option key={seat} value={seat}>
+                                            {seat}
+                                          </option>
+                                        ))}
+                                      </select>
+                                    </label>
+                                  </div>
+                                );
+                              })
                             )}
                           </div>
                         </div>

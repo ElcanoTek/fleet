@@ -76,6 +76,12 @@ type RemoteServer = {
   // servers get Connect/Reconnect; api_key servers get Update key; open
   // servers need neither). Absent on pre-migration rows ⇒ treated as oauth.
   auth_kind?: string;
+  // Multi-login (#988): one row per seat (login) under a connection name.
+  // `account` is the seat's label — "" is the unlabeled seat every
+  // pre-existing connection is, rendered "primary". `is_default` marks the
+  // seat chats and tasks mount when nothing picks another.
+  account: string;
+  is_default: boolean;
   created_at: number;
   updated_at: number;
 };
@@ -155,6 +161,26 @@ function granteeLabel(g: string): string {
 
 function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : "Something went wrong.";
+}
+
+// seatLabel renders a seat's account label; the unlabeled seat is "primary".
+function seatLabel(s: { account?: string }): string {
+  return s.account || "primary";
+}
+
+// groupSeats buckets the caller's own rows by connection name, first
+// appearance order, so several logins to one server render as one visual
+// group (one row per seat) instead of N look-alike rows.
+function groupSeats(
+  servers: RemoteServer[],
+): { name: string; seats: RemoteServer[] }[] {
+  const out: { name: string; seats: RemoteServer[] }[] = [];
+  for (const s of servers) {
+    const g = out.find((x) => x.name === s.name);
+    if (g) g.seats.push(s);
+    else out.push({ name: s.name, seats: [s] });
+  }
+  return out;
 }
 
 // readConnectorSpotlight reads the one-shot ?connector=<name> deep link — the
@@ -379,6 +405,9 @@ type AddOverrides = {
   apiKey?: string;
   clientId?: string;
   clientSecret?: string;
+  // Seat label for "Add another account" (#988) — required by the backend
+  // for any second login under a name.
+  account?: string;
 };
 
 // dirAddButtonClass — the pill Add/Set up button on a directory card.
@@ -432,6 +461,11 @@ function DirectoryCard({
   );
   const [values, setValues] = useState<Record<string, string>>({});
   const [apiKey, setApiKey] = useState("");
+  // "Add another account" (#988): an already-added entry can take a second
+  // login. The same guided form opens, plus a REQUIRED seat label — the
+  // backend rejects an unlabeled second seat.
+  const [account, setAccount] = useState("");
+  const anotherAccount = added;
   // ?connector= deep link: put the cursor in the key field the moment the
   // guided form opens — the whole point of the link is "just paste". Done as
   // an explicit focus() rather than autoFocus so the move is tied to the form
@@ -450,11 +484,13 @@ function DirectoryCard({
   const ready =
     placeholders.every((ph) => placeholderValueOK(values[ph] ?? "")) &&
     (entry.auth !== "api_key" || apiKey.trim() !== "") &&
-    (!manualClient || clientId.trim() !== "");
+    (!manualClient || clientId.trim() !== "") &&
+    (!anotherAccount || account.trim() !== "");
 
   const submit = async () => {
     const ok = await onAdd({
       ...(placeholders.length > 0 ? { url: filledURL } : {}),
+      ...(anotherAccount ? { account: account.trim() } : {}),
       ...(entry.auth === "api_key" ? { apiKey: apiKey.trim() } : {}),
       ...(manualClient
         ? {
@@ -470,6 +506,7 @@ function DirectoryCard({
     // Drop the secrets from component state the moment the add succeeds.
     setApiKey("");
     setClientSecret("");
+    setAccount("");
   };
 
   const linkClass =
@@ -558,6 +595,18 @@ function DirectoryCard({
             {hint ? (
               <span className="shrink-0 whitespace-nowrap">{hint}</span>
             ) : null}
+            {added ? (
+              <button
+                type="button"
+                data-testid={`dir-add-account-${entry.name}`}
+                aria-expanded={formOpen}
+                onClick={() => setFormOpen((o) => !o)}
+                disabled={busy}
+                className={dirAddButtonClass(false)}
+              >
+                {formOpen ? "Cancel" : "Add another account"}
+              </button>
+            ) : null}
             <button
               type="button"
               data-testid={`dir-add-${entry.name}`}
@@ -579,12 +628,28 @@ function DirectoryCard({
           </>
         ) : null}
       </div>
-      {remoteEnabled && needsForm && formOpen && !added ? (
+      {remoteEnabled && (needsForm || anotherAccount) && formOpen ? (
         <FormShell
           entry={entry}
           modal={manualClient}
           onClose={() => setFormOpen(false)}
         >
+          {anotherAccount ? (
+            <label className="grid gap-1 text-[0.72rem] text-[var(--color-text-secondary)]">
+              <span className="font-medium">Account label</span>
+              <input
+                className={SETTINGS_INPUT}
+                value={account}
+                onChange={(e) => setAccount(e.target.value)}
+                placeholder="work, personal…"
+                data-testid={`dir-form-account-${entry.name}`}
+              />
+              <span className="text-[0.68rem] text-[var(--color-text-muted)]">
+                Tells the seats apart in the Tools picker. Letters, digits and
+                underscores.
+              </span>
+            </label>
+          ) : null}
           {placeholders.map((ph) => (
             <label
               key={ph}
@@ -850,6 +915,15 @@ function ConnectionsPageInner() {
   // (write-only; cleared the moment it is submitted).
   const [keyOpenFor, setKeyOpenFor] = useState<string | null>(null);
   const [keyValue, setKeyValue] = useState("");
+  // Multi-login (#988): which seat has its rename form open (+ the pending
+  // label), and which connection NAME has its "Add another account" form
+  // open (+ the pending label and, for api_key servers, the pending key —
+  // write-only, cleared on submit).
+  const [renameOpenFor, setRenameOpenFor] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [addSeatFor, setAddSeatFor] = useState<string | null>(null);
+  const [addSeatLabel, setAddSeatLabel] = useState("");
+  const [addSeatKey, setAddSeatKey] = useState("");
   // Explicit per-user availability choices (unified connector UX); absence of
   // an entry means the operator default.
   const [prefs, setPrefs] = useState<ConnectorPref[]>([]);
@@ -899,6 +973,9 @@ function ConnectionsPageInner() {
   const [addServerOpen, setAddServerOpen] = useState(false);
   const [name, setName] = useState("");
   const [url, setUrl] = useState("");
+  // Optional seat label for the manual add form (#988); "" = the unlabeled
+  // "primary" seat, exactly like before.
+  const [accountLabel, setAccountLabel] = useState("");
   // The MCP server catalog (names + credential-account names, never secrets)
   // feeds the credential-accounts panel, same as the old General page did.
   const { servers: mcpServers, reload: reloadMcpServers } = useMcpServers(true);
@@ -996,7 +1073,11 @@ function ConnectionsPageInner() {
     fetch("/api/remote-mcp-servers", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: name.trim(), url: url.trim() }),
+      body: JSON.stringify({
+        name: name.trim(),
+        url: url.trim(),
+        ...(accountLabel.trim() ? { account: accountLabel.trim() } : {}),
+      }),
     })
       .then(async (res) => {
         if (!res.ok) {
@@ -1005,6 +1086,7 @@ function ConnectionsPageInner() {
         const data = (await res.json()) as { id?: string; name?: string };
         setName("");
         setUrl("");
+        setAccountLabel("");
         setAddServerOpen(false);
         setNotice("Server added. Click Connect to log in.");
         if (data.id)
@@ -1091,6 +1173,106 @@ function ConnectionsPageInner() {
       .finally(() => setBusy(false));
   };
 
+  // Multi-login (#988). Make one seat the default among the caller's seats
+  // with the same name: chats and tasks mount it unless a conversation or
+  // task picks another.
+  const setDefaultSeat = (id: string) => {
+    setError(null);
+    setBusy(true);
+    fetch(`/api/remote-mcp-servers/${encodeURIComponent(id)}/default`, {
+      method: "POST",
+    })
+      .then(async (res) => {
+        if (!res.ok && res.status !== 204) {
+          throw new Error(
+            (await res.text()) || `Set default failed: ${res.status}`,
+          );
+        }
+        setNotice("Default account updated.");
+        refresh();
+      })
+      .catch((err: unknown) => setError(errMessage(err)))
+      .finally(() => setBusy(false));
+  };
+
+  // Rename a seat's account label. The backend canonicalizes (lowercase,
+  // spaces/hyphens → _) and rejects duplicates with a message shown verbatim.
+  const renameSeat = (id: string) => {
+    setError(null);
+    setBusy(true);
+    fetch(`/api/remote-mcp-servers/${encodeURIComponent(id)}/account`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ account: renameValue.trim() }),
+    })
+      .then(async (res) => {
+        if (!res.ok && res.status !== 204) {
+          throw new Error((await res.text()) || `Rename failed: ${res.status}`);
+        }
+        setRenameOpenFor(null);
+        setRenameValue("");
+        refresh();
+      })
+      .catch((err: unknown) => setError(errMessage(err)))
+      .finally(() => setBusy(false));
+  };
+
+  // Add another login under an existing connection name: same POST as any
+  // add, with the URL/auth copied from the group's first seat, the REQUIRED
+  // label, and — for api_key servers — the new key plus the directory entry's
+  // header/query name (a key-in-query server like Browserbase fails its
+  // validation probe without it). OAuth seats land in login_required and get
+  // the same "sign in now?" prompt a fresh directory add does.
+  const addSeat = (group: { name: string; seats: RemoteServer[] }) => {
+    const template = group.seats[0];
+    if (!template) return;
+    const label = addSeatLabel.trim();
+    if (!label) return;
+    const authKind = template.auth_kind || "oauth";
+    const dir = (catalog?.third_party ?? []).find(
+      (e) => e.name === group.name,
+    );
+    setError(null);
+    setNotice(null);
+    setBusy(true);
+    fetch("/api/remote-mcp-servers", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: group.name,
+        url: template.url,
+        ...(authKind === "oauth" ? {} : { auth: authKind }),
+        account: label,
+        ...(authKind === "api_key"
+          ? {
+              api_key: addSeatKey.trim(),
+              api_key_header: dir?.api_key_header,
+              api_key_query: dir?.api_key_query,
+            }
+          : {}),
+      }),
+    })
+      .then(async (res) => {
+        if (!res.ok) {
+          throw new Error((await res.text()) || `Add failed: ${res.status}`);
+        }
+        const data = (await res.json()) as { id?: string; tool_count?: number };
+        const shown = `${group.name} (${label})`;
+        setAddSeatFor(null);
+        setAddSeatLabel("");
+        setAddSeatKey("");
+        if (authKind === "oauth") {
+          setNotice(`${shown} added. Click Connect to sign in.`);
+          if (data.id) setConnectPromptFor({ id: data.id, name: shown });
+        } else {
+          setNotice(`${shown} connected${toolCountSuffix(data.tool_count)}.`);
+        }
+        refresh();
+      })
+      .catch((err: unknown) => setError(errMessage(err)))
+      .finally(() => setBusy(false));
+  };
+
   // Add from the directory: same POST as the manual form, prefilled from the
   // curated entry plus whatever the card's guided form collected (a tenant URL
   // with its placeholders filled, a pasted API key). OAuth entries land in
@@ -1134,6 +1316,7 @@ function ConnectionsPageInner() {
         // user has supplied their URL the add goes through the default OAuth
         // discovery path.
         auth: entry.auth === "tenant" ? undefined : entry.auth,
+        ...(overrides?.account ? { account: overrides.account } : {}),
         ...(overrides?.apiKey
           ? {
               api_key: overrides.apiKey,
@@ -1154,16 +1337,16 @@ function ConnectionsPageInner() {
           throw new Error((await res.text()) || `Add failed: ${res.status}`);
         }
         const data = (await res.json()) as { id?: string; tool_count?: number };
+        const shown = overrides?.account
+          ? `${entry.display_name} (${overrides.account})`
+          : entry.display_name;
         if (entry.auth === "open" || entry.auth === "api_key") {
-          setNotice(
-            `${entry.display_name} connected${toolCountSuffix(data.tool_count)}.`,
-          );
+          setNotice(`${shown} connected${toolCountSuffix(data.tool_count)}.`);
         } else {
-          setNotice(`${entry.display_name} added. Click Connect to sign in.`);
+          setNotice(`${shown} added. Click Connect to sign in.`);
           // OAuth adds land in login_required — offer the sign-in right here
           // instead of making the user find the row in "Your connections".
-          if (data.id)
-            setConnectPromptFor({ id: data.id, name: entry.display_name });
+          if (data.id) setConnectPromptFor({ id: data.id, name: shown });
         }
         refresh();
         return true;
@@ -1516,6 +1699,15 @@ function ConnectionsPageInner() {
                     required
                   />
                 </ConnField>
+                <ConnField label="Account label (optional)">
+                  <input
+                    className={SETTINGS_INPUT}
+                    value={accountLabel}
+                    onChange={(e) => setAccountLabel(e.target.value)}
+                    placeholder="work"
+                    aria-label="Account label (optional)"
+                  />
+                </ConnField>
                 <button
                   type="submit"
                   disabled={busy || !name.trim() || !url.trim()}
@@ -1531,209 +1723,371 @@ function ConnectionsPageInner() {
               Loading…
             </p>
           ) : servers && servers.length > 0 ? (
-            <ConnRows>
-              {servers.map((s) => {
-                const enabledForMe = effectiveEnabled(prefs, "remote", s.id);
-                const shareCount = shares[s.id]?.length ?? 0;
+            <div className="grid">
+              {/* One visual group per connection name; one row per seat
+                  (login) inside it (#988). A single-seat group looks like the
+                  old flat list plus its account badge. */}
+              {groupSeats(servers).map((group) => {
+                const multi = group.seats.length > 1;
+                const template = group.seats[0];
+                const groupAuth = template?.auth_kind || "oauth";
                 return (
-                  <ConnRow
-                    key={s.id}
-                    name={
-                      <span className="inline-flex flex-wrap items-center gap-[0.55rem]">
-                        {s.name}
-                        <ConnBadge variant={statusVariant(s.status)}>
-                          {STATUS_LABEL[s.status] ?? s.status}
-                        </ConnBadge>
-                      </span>
-                    }
-                    sub={s.url}
-                    actions={
-                      <>
-                        <span className="mr-[0.25rem]">
-                          <ToggleForMe
-                            on={enabledForMe}
-                            onLabel="On for me"
-                            offLabel="Off for me"
-                            ariaLabel={`Enable ${s.name} for me`}
-                            onToggle={() =>
-                              setConnectorPref({
-                                kind: "remote",
-                                connector_id: s.id,
-                                enabled: !enabledForMe,
-                              })
+                  <div
+                    key={group.name}
+                    data-testid={`remote-group-${group.name}`}
+                    className="border-b border-[var(--color-border-subtle)] last:border-b-0"
+                  >
+                    <ConnRows>
+                    {group.seats.map((s) => {
+                      const enabledForMe = effectiveEnabled(prefs, "remote", s.id);
+                      const shareCount = shares[s.id]?.length ?? 0;
+                      return (
+                        <ConnRow
+                          key={s.id}
+                          name={
+                            <span className="inline-flex flex-wrap items-center gap-[0.55rem]">
+                              {s.name}
+                              <ConnBadge title="Account label for this login">
+                                {seatLabel(s)}
+                              </ConnBadge>
+                              {s.is_default ? (
+                                <ConnBadge
+                                  variant="overridden"
+                                  title="Chats and tasks use this login unless a conversation or task picks another."
+                                >
+                                  Default
+                                </ConnBadge>
+                              ) : null}
+                              <ConnBadge variant={statusVariant(s.status)}>
+                                {STATUS_LABEL[s.status] ?? s.status}
+                              </ConnBadge>
+                            </span>
+                          }
+                          sub={s.url}
+                          actions={
+                            <>
+                              <span className="mr-[0.25rem]">
+                                <ToggleForMe
+                                  on={enabledForMe}
+                                  onLabel="On for me"
+                                  offLabel="Off for me"
+                                  ariaLabel={`Enable ${s.name} (${seatLabel(s)}) for me`}
+                                  onToggle={() =>
+                                    setConnectorPref({
+                                      kind: "remote",
+                                      connector_id: s.id,
+                                      enabled: !enabledForMe,
+                                    })
+                                  }
+                                  disabled={busy}
+                                  title="Off hides this connection from your own chats and tasks; people you share with are unaffected."
+                                />
+                              </span>
+                              {s.auth_kind === "api_key" ? (
+                                <button
+                                  type="button"
+                                  aria-expanded={keyOpenFor === s.id}
+                                  onClick={() => {
+                                    setKeyValue("");
+                                    setShareOpenFor(null);
+                                    setRenameOpenFor(null);
+                                    setKeyOpenFor((cur) =>
+                                      cur === s.id ? null : s.id,
+                                    );
+                                  }}
+                                  disabled={busy}
+                                  className={btnClass({ sm: true, reveal: true })}
+                                >
+                                  Update key
+                                </button>
+                              ) : s.auth_kind === "open" ? null : (
+                                <button
+                                  type="button"
+                                  onClick={() => connect(s.id)}
+                                  disabled={busy}
+                                  className={btnClass({ sm: true, reveal: true })}
+                                >
+                                  {s.status === "connected" ? "Reconnect" : "Connect"}
+                                </button>
+                              )}
+                              {s.auth_kind !== "api_key" &&
+                              s.auth_kind !== "open" &&
+                              s.status === "connected" ? (
+                                <button
+                                  type="button"
+                                  onClick={() => signOut(s.id)}
+                                  disabled={busy}
+                                  title="Ends the authorization but keeps the connection and its OAuth client — Connect signs back in without re-entering credentials."
+                                  className={btnClass({ sm: true, reveal: true })}
+                                >
+                                  Sign out
+                                </button>
+                              ) : null}
+                              {multi && !s.is_default ? (
+                                <button
+                                  type="button"
+                                  onClick={() => setDefaultSeat(s.id)}
+                                  disabled={busy}
+                                  title="Chats and tasks mount this login unless a conversation or task picks another."
+                                  className={btnClass({ sm: true, reveal: true })}
+                                >
+                                  Set default
+                                </button>
+                              ) : null}
+                              <button
+                                type="button"
+                                aria-expanded={renameOpenFor === s.id}
+                                onClick={() => {
+                                  setRenameValue(s.account ?? "");
+                                  setKeyOpenFor(null);
+                                  setShareOpenFor(null);
+                                  setRenameOpenFor((cur) =>
+                                    cur === s.id ? null : s.id,
+                                  );
+                                }}
+                                disabled={busy}
+                                className={btnClass({ sm: true, reveal: true })}
+                              >
+                                Rename
+                              </button>
+                              <button
+                                type="button"
+                                aria-expanded={shareOpenFor === s.id}
+                                onClick={() => {
+                                  setShareGrantee("");
+                                  setKeyOpenFor(null);
+                                  setRenameOpenFor(null);
+                                  setShareOpenFor((cur) =>
+                                    cur === s.id ? null : s.id,
+                                  );
+                                }}
+                                disabled={busy}
+                                className={btnClass({ sm: true, reveal: true })}
+                              >
+                                Share{shareCount > 0 ? ` (${shareCount})` : ""}
+                              </button>
+                              <InlineConfirmButton
+                                label="Remove"
+                                confirmLabel="Confirm remove"
+                                onConfirm={() => disconnect(s.id)}
+                                disabled={busy}
+                              />
+                            </>
+                          }
+                          detail={
+                            renameOpenFor === s.id ? (
+                              <div className="mt-2 flex flex-wrap items-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-overlay-soft)] px-3 py-2.5">
+                                <input
+                                  value={renameValue}
+                                  onChange={(e) => setRenameValue(e.target.value)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter") {
+                                      e.preventDefault();
+                                      renameSeat(s.id);
+                                    }
+                                  }}
+                                  placeholder="account label — e.g. work"
+                                  aria-label={`New account label for ${s.name} (${seatLabel(s)})`}
+                                  className="min-w-0 flex-1 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1.5 text-[0.8125rem] text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-muted)] focus-visible:border-[var(--color-border-strong)] focus-visible:shadow-[var(--focus-ring)]"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => renameSeat(s.id)}
+                                  disabled={
+                              busy || renameValue.trim() === (s.account ?? "")
                             }
-                            disabled={busy}
-                            title="Off hides this connection from your own chats and tasks; people you share with are unaffected."
-                          />
+                                  className={btnClass({ sm: true, reveal: true })}
+                                >
+                                  Save label
+                                </button>
+                              </div>
+                            ) : keyOpenFor === s.id ? (
+                              <div className="mt-2 flex flex-wrap items-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-overlay-soft)] px-3 py-2.5">
+                                <input
+                                  value={keyValue}
+                                  onChange={(e) => setKeyValue(e.target.value)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter" && keyValue.trim()) {
+                                      e.preventDefault();
+                                      updateKey(s.id);
+                                    }
+                                  }}
+                                  placeholder="paste the new API key (never shown again)"
+                                  type="password"
+                                  autoComplete="off"
+                                  className="min-w-0 flex-1 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1.5 text-[0.8125rem] text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-muted)] focus-visible:border-[var(--color-border-strong)] focus-visible:shadow-[var(--focus-ring)]"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => updateKey(s.id)}
+                                  disabled={busy || !keyValue.trim()}
+                                  className={btnClass({ sm: true, reveal: true })}
+                                >
+                                  Save key
+                                </button>
+                              </div>
+                            ) : shareOpenFor === s.id ? (
+                              <div className="mt-2 rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-overlay-soft)] px-3 py-2.5">
+                                <p className="mb-2 mt-0 text-[0.75rem] leading-[1.5] text-[var(--color-text-muted)]">
+                                  People you share with can use this connection in
+                                  their chats and scheduled tasks. Their tool calls
+                                  run under{" "}
+                                  <strong className="text-[var(--color-text-secondary)]">
+                                    your
+                                  </strong>{" "}
+                                  login, brokered server-side — they never see the
+                                  credential, and removing a share revokes access
+                                  immediately.
+                                </p>
+                                {(shares[s.id] ?? []).length > 0 ? (
+                                  <ul className="mb-2 flex flex-wrap gap-1.5">
+                                    {(shares[s.id] ?? []).map((g) => (
+                                      <li
+                                        key={g}
+                                        className="flex items-center gap-1.5 rounded-[var(--radius-pill)] border border-[var(--color-border-strong)] px-2.5 py-0.5 text-[0.75rem] text-[var(--color-text-secondary)]"
+                                      >
+                                        {granteeLabel(g)}
+                                        <button
+                                          type="button"
+                                          onClick={() => unshare(s.id, g)}
+                                          disabled={busy}
+                                          aria-label={`Stop sharing with ${granteeLabel(g)}`}
+                                          className="text-[var(--color-text-muted)] transition hover:text-[var(--color-text-primary)] disabled:opacity-50"
+                                        >
+                                          ×
+                                        </button>
+                                      </li>
+                                    ))}
+                                  </ul>
+                                ) : null}
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <input
+                                    value={shareGrantee}
+                                    onChange={(e) => setShareGrantee(e.target.value)}
+                                    onKeyDown={(e) => {
+                                      if (e.key === "Enter") {
+                                        e.preventDefault();
+                                        share(s.id, shareGrantee);
+                                      }
+                                    }}
+                                    placeholder="teammate@example.com"
+                                    type="email"
+                                    className="min-w-0 flex-1 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1.5 text-[0.8125rem] text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-muted)] focus-visible:border-[var(--color-border-strong)] focus-visible:shadow-[var(--focus-ring)]"
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => share(s.id, shareGrantee)}
+                                    disabled={busy || !shareGrantee.trim()}
+                                    className={btnClass({ sm: true, reveal: true })}
+                                  >
+                                    Share
+                                  </button>
+                                  {(shares[s.id] ?? []).includes("*") ? null : (
+                                    <button
+                                      type="button"
+                                      onClick={() => share(s.id, "*")}
+                                      disabled={busy}
+                                      className={btnClass({ sm: true })}
+                                    >
+                                      Share with everyone
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            ) : null
+                          }
+                        >
+                          {s.status_detail ? (
+                            <span className="text-[0.72rem] text-[var(--color-warning)] [overflow-wrap:anywhere]">
+                              {s.status_detail}
+                            </span>
+                          ) : null}
+                        </ConnRow>
+                      );
+                    })}
+                    </ConnRows>
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 py-[0.45rem]">
+                      <button
+                        type="button"
+                        data-testid={`add-seat-${group.name}`}
+                        aria-expanded={addSeatFor === group.name}
+                        onClick={() => {
+                          setAddSeatLabel("");
+                          setAddSeatKey("");
+                          setAddSeatFor((cur) =>
+                            cur === group.name ? null : group.name,
+                          );
+                        }}
+                        disabled={busy}
+                        className={btnClass({ sm: true })}
+                      >
+                        {addSeatFor === group.name
+                          ? "Cancel"
+                          : "Add another account"}
+                      </button>
+                      {multi ? (
+                        <span className="text-[0.72rem] text-[var(--color-text-muted)]">
+                          Chats use the default login unless a conversation or
+                          task picks another.
                         </span>
-                        {s.auth_kind === "api_key" ? (
-                          <button
-                            type="button"
-                            aria-expanded={keyOpenFor === s.id}
-                            onClick={() => {
-                              setKeyValue("");
-                              setShareOpenFor(null);
-                              setKeyOpenFor((cur) =>
-                                cur === s.id ? null : s.id,
-                              );
-                            }}
-                            disabled={busy}
-                            className={btnClass({ sm: true, reveal: true })}
-                          >
-                            Update key
-                          </button>
-                        ) : s.auth_kind === "open" ? null : (
-                          <button
-                            type="button"
-                            onClick={() => connect(s.id)}
-                            disabled={busy}
-                            className={btnClass({ sm: true, reveal: true })}
-                          >
-                            {s.status === "connected" ? "Reconnect" : "Connect"}
-                          </button>
-                        )}
-                        {s.auth_kind !== "api_key" &&
-                        s.auth_kind !== "open" &&
-                        s.status === "connected" ? (
-                          <button
-                            type="button"
-                            onClick={() => signOut(s.id)}
-                            disabled={busy}
-                            title="Ends the authorization but keeps the connection and its OAuth client — Connect signs back in without re-entering credentials."
-                            className={btnClass({ sm: true, reveal: true })}
-                          >
-                            Sign out
-                          </button>
+                      ) : null}
+                    </div>
+                    {addSeatFor === group.name ? (
+                      <div
+                        data-testid={`add-seat-form-${group.name}`}
+                        className="mb-[0.55rem] flex flex-wrap items-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-overlay-soft)] px-3 py-2.5"
+                      >
+                        <input
+                          value={addSeatLabel}
+                          onChange={(e) => setAddSeatLabel(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (
+                              e.key === "Enter" &&
+                              addSeatLabel.trim() &&
+                              (groupAuth !== "api_key" || addSeatKey.trim())
+                            ) {
+                              e.preventDefault();
+                              addSeat(group);
+                            }
+                          }}
+                          placeholder="account label — e.g. work"
+                          aria-label={`Account label for the new ${group.name} login`}
+                          className="min-w-0 flex-1 basis-[10rem] rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1.5 text-[0.8125rem] text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-muted)] focus-visible:border-[var(--color-border-strong)] focus-visible:shadow-[var(--focus-ring)]"
+                        />
+                        {groupAuth === "api_key" ? (
+                          <input
+                            value={addSeatKey}
+                            onChange={(e) => setAddSeatKey(e.target.value)}
+                            placeholder="API key for this account (never shown again)"
+                            aria-label={`API key for the new ${group.name} login`}
+                            type="password"
+                            autoComplete="off"
+                            className="min-w-0 flex-1 basis-[14rem] rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1.5 text-[0.8125rem] text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-muted)] focus-visible:border-[var(--color-border-strong)] focus-visible:shadow-[var(--focus-ring)]"
+                          />
                         ) : null}
                         <button
                           type="button"
-                          aria-expanded={shareOpenFor === s.id}
-                          onClick={() => {
-                            setShareGrantee("");
-                            setKeyOpenFor(null);
-                            setShareOpenFor((cur) =>
-                              cur === s.id ? null : s.id,
-                            );
-                          }}
-                          disabled={busy}
+                          data-testid={`add-seat-submit-${group.name}`}
+                          onClick={() => addSeat(group)}
+                          disabled={
+                            busy ||
+                            !addSeatLabel.trim() ||
+                            (groupAuth === "api_key" && !addSeatKey.trim())
+                          }
                           className={btnClass({ sm: true, reveal: true })}
                         >
-                          Share{shareCount > 0 ? ` (${shareCount})` : ""}
+                          {groupAuth === "oauth" ? "Add and sign in" : "Add"}
                         </button>
-                        <InlineConfirmButton
-                          label="Remove"
-                          confirmLabel="Confirm remove"
-                          onConfirm={() => disconnect(s.id)}
-                          disabled={busy}
-                        />
-                      </>
-                    }
-                    detail={
-                      keyOpenFor === s.id ? (
-                        <div className="mt-2 flex flex-wrap items-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-overlay-soft)] px-3 py-2.5">
-                          <input
-                            value={keyValue}
-                            onChange={(e) => setKeyValue(e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter" && keyValue.trim()) {
-                                e.preventDefault();
-                                updateKey(s.id);
-                              }
-                            }}
-                            placeholder="paste the new API key (never shown again)"
-                            type="password"
-                            autoComplete="off"
-                            className="min-w-0 flex-1 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1.5 text-[0.8125rem] text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-muted)] focus-visible:border-[var(--color-border-strong)] focus-visible:shadow-[var(--focus-ring)]"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => updateKey(s.id)}
-                            disabled={busy || !keyValue.trim()}
-                            className={btnClass({ sm: true, reveal: true })}
-                          >
-                            Save key
-                          </button>
-                        </div>
-                      ) : shareOpenFor === s.id ? (
-                        <div className="mt-2 rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-overlay-soft)] px-3 py-2.5">
-                          <p className="mb-2 mt-0 text-[0.75rem] leading-[1.5] text-[var(--color-text-muted)]">
-                            People you share with can use this connection in
-                            their chats and scheduled tasks. Their tool calls
-                            run under{" "}
-                            <strong className="text-[var(--color-text-secondary)]">
-                              your
-                            </strong>{" "}
-                            login, brokered server-side — they never see the
-                            credential, and removing a share revokes access
-                            immediately.
-                          </p>
-                          {(shares[s.id] ?? []).length > 0 ? (
-                            <ul className="mb-2 flex flex-wrap gap-1.5">
-                              {(shares[s.id] ?? []).map((g) => (
-                                <li
-                                  key={g}
-                                  className="flex items-center gap-1.5 rounded-[var(--radius-pill)] border border-[var(--color-border-strong)] px-2.5 py-0.5 text-[0.75rem] text-[var(--color-text-secondary)]"
-                                >
-                                  {granteeLabel(g)}
-                                  <button
-                                    type="button"
-                                    onClick={() => unshare(s.id, g)}
-                                    disabled={busy}
-                                    aria-label={`Stop sharing with ${granteeLabel(g)}`}
-                                    className="text-[var(--color-text-muted)] transition hover:text-[var(--color-text-primary)] disabled:opacity-50"
-                                  >
-                                    ×
-                                  </button>
-                                </li>
-                              ))}
-                            </ul>
-                          ) : null}
-                          <div className="flex flex-wrap items-center gap-2">
-                            <input
-                              value={shareGrantee}
-                              onChange={(e) => setShareGrantee(e.target.value)}
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter") {
-                                  e.preventDefault();
-                                  share(s.id, shareGrantee);
-                                }
-                              }}
-                              placeholder="teammate@example.com"
-                              type="email"
-                              className="min-w-0 flex-1 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1.5 text-[0.8125rem] text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-muted)] focus-visible:border-[var(--color-border-strong)] focus-visible:shadow-[var(--focus-ring)]"
-                            />
-                            <button
-                              type="button"
-                              onClick={() => share(s.id, shareGrantee)}
-                              disabled={busy || !shareGrantee.trim()}
-                              className={btnClass({ sm: true, reveal: true })}
-                            >
-                              Share
-                            </button>
-                            {(shares[s.id] ?? []).includes("*") ? null : (
-                              <button
-                                type="button"
-                                onClick={() => share(s.id, "*")}
-                                disabled={busy}
-                                className={btnClass({ sm: true })}
-                              >
-                                Share with everyone
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                      ) : null
-                    }
-                  >
-                    {s.status_detail ? (
-                      <span className="text-[0.72rem] text-[var(--color-warning)] [overflow-wrap:anywhere]">
-                        {s.status_detail}
-                      </span>
+                        <span className="basis-full text-[0.7rem] text-[var(--color-text-muted)]">
+                          A label is required for a second login — it tells the
+                          seats apart in the Tools picker.
+                        </span>
+                      </div>
                     ) : null}
-                  </ConnRow>
+                  </div>
                 );
               })}
-            </ConnRows>
+            </div>
           ) : (
             <ConnEmpty>
               No remote servers yet — pick one from the directory below, or add
@@ -1759,6 +2113,9 @@ function ConnectionsPageInner() {
                     name={
                       <span className="inline-flex flex-wrap items-center gap-[0.55rem]">
                         {s.name}
+                        <ConnBadge title="The owner's account label for this login">
+                          {seatLabel(s)}
+                        </ConnBadge>
                         <ConnBadge variant={statusVariant(s.status)}>
                           {STATUS_LABEL[s.status] ?? s.status}
                         </ConnBadge>
@@ -1775,7 +2132,7 @@ function ConnectionsPageInner() {
                             on={on}
                             onLabel="On for me"
                             offLabel="Off for me"
-                            ariaLabel={`Enable ${s.name} for me`}
+                            ariaLabel={`Enable ${s.name} (${seatLabel(s)}) for me`}
                             onToggle={() =>
                               setConnectorPref({
                                 kind: "remote",

@@ -1157,22 +1157,13 @@ func (m *Manager) openTurnMCPScope(ctx context.Context, selection agentcore.MCPS
 	return scope.Broker, cloneMCPCatalog(scope.Catalog), cleanup, nil
 }
 
-func (m *Manager) openRemoteOverlay(ctx context.Context, email string, baseCatalog []mcp.ServerTool, enabledNames []string) (*RemoteMCPOverlay, error) {
+func (m *Manager) openRemoteOverlay(ctx context.Context, email string, baseCatalog []mcp.ServerTool, sel RemoteMCPSelection) (*RemoteMCPOverlay, error) {
 	shadowed := make(map[string]bool, len(baseCatalog))
 	for _, st := range baseCatalog {
 		shadowed[st.ServerName] = true
 	}
-	// A remote server participates in an interactive turn only when the
-	// conversation opted in. New conversations seed this list from discovery,
-	// so newly connected servers remain on by default but toggleable.
-	enabled := make(map[string]bool, len(enabledNames))
-	for _, name := range enabledNames {
-		if n := strings.TrimSpace(name); n != "" {
-			enabled[n] = true
-		}
-	}
 	if m.openRemoteMCPOverlay != nil {
-		overlay, err := m.openRemoteMCPOverlay(ctx, email, shadowed, enabled)
+		overlay, err := m.openRemoteMCPOverlay(ctx, email, shadowed, sel)
 		if err != nil {
 			return nil, err
 		}
@@ -1182,7 +1173,37 @@ func (m *Manager) openRemoteOverlay(ctx context.Context, email string, baseCatal
 		}
 		return overlay, nil
 	}
-	return BuildRemoteMCPOverlay(ctx, m.remoteMCP, email, shadowed, enabled)
+	return BuildRemoteMCPOverlay(ctx, m.remoteMCP, email, shadowed, sel)
+}
+
+// OpenApprovalRemoteMCPScope reopens the hosted-connection seat a staged
+// approval recorded (#988, the remote half of #167 residual 2): a short-lived
+// overlay mounting exactly {server, account} — Exact, so "" means the
+// unlabeled seat and a default that has since moved is never substituted. It
+// returns (nil, nil) when remote MCP is not wired into this Manager. A seat
+// that no longer resolves (disconnected, needs re-auth, removed) yields an
+// error naming it, so the approval fails closed rather than running as a
+// different account. The caller owns the returned overlay and MUST Close it.
+func (m *Manager) OpenApprovalRemoteMCPScope(ctx context.Context, email, server, account string) (*RemoteMCPOverlay, error) {
+	if m.openRemoteMCPOverlay == nil && m.remoteMCP == nil {
+		return nil, nil
+	}
+	sel := RemoteMCPSelection{
+		Filter:   true,
+		Enabled:  map[string]bool{server: true},
+		Accounts: map[string]string{server: account},
+		Exact:    true,
+	}
+	overlay, err := m.openRemoteOverlay(ctx, email, m.mcpCatalogSnapshot(), sel)
+	if err != nil {
+		return nil, err
+	}
+	want := agentcore.RegisteredMCPName(server, account)
+	if overlay == nil || !overlay.Servers[want] {
+		overlay.Close()
+		return nil, fmt.Errorf("hosted connection %q is not connected for %s (skipped: %v)", want, email, overlay.skippedNames())
+	}
+	return overlay, nil
 }
 
 // turnSink adapts the httpapi EventSink to an agentcore.Observer, forwarding the
@@ -1293,7 +1314,10 @@ func interactiveRunSelection(enabled []string, accountDefaults map[string]string
 func (m *Manager) openTurnRemoteOverlay(ctx context.Context, in TurnInput, turnCatalog []mcp.ServerTool) *RemoteMCPOverlay {
 	var overlay *RemoteMCPOverlay
 	if in.UserEmail != "" && (m.openRemoteMCPOverlay != nil || m.remoteMCP != nil) {
-		ov, oerr := m.openRemoteOverlay(ctx, in.UserEmail, turnCatalog, in.OptionalMCPServersEnabled)
+		// The conversation's seat overrides (and, for bundled names, the user's
+		// connections-page default) ride in MCPAccountDefaults; a remote name
+		// without an entry mounts its default seat (#988).
+		ov, oerr := m.openRemoteOverlay(ctx, in.UserEmail, turnCatalog, RemoteMCPEnabledOnly(in.OptionalMCPServersEnabled, in.MCPAccountDefaults))
 		if oerr != nil {
 			log.Printf("RunTurn: remote-mcp overlay unavailable for %s: %v", in.UserEmail, oerr)
 		} else if ov != nil {
@@ -1405,6 +1429,20 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 	overlay := m.openTurnRemoteOverlay(ctx, in, turnCatalog)
 	if overlay != nil {
 		defer overlay.Close()
+	}
+	// Rebind the stager once the hosted overlay is up (#988): a remote tool
+	// must resolve against the composite the loop dispatches on, and its
+	// staged card must record the {connection, account} seat that was
+	// actually mounted — the seat approval execution reopens verbatim.
+	if overlay.Active() {
+		if binder, ok := in.ApprovalStager.(MCPScopeBinder); ok && binder != nil {
+			broker, catalog := overlay.ComposeWith(turnBroker, turnCatalog)
+			binder.BindTurnMCPScope(TurnMCPScope{
+				Broker:    broker,
+				Catalog:   catalog,
+				Selection: append(append(agentcore.MCPSelection(nil), turnSelection...), overlay.SeatSelection()...),
+			})
+		}
 	}
 
 	tc := TurnConfig{

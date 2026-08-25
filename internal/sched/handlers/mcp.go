@@ -22,10 +22,15 @@ type MCPServerCatalogEntry struct {
 	Accounts    []string `json:"accounts"`
 	// Remote marks a per-user remote (hosted) MCP server the caller connected via
 	// OAuth (#443/#466), as opposed to a bundle Optional server. Remote servers
-	// carry no credential seats (their auth is the brokered per-user token) and are
-	// auto-applied to ALL the owner's scheduled runs by the run overlay, so the UI
-	// surfaces them as connected/auto-available rather than a per-task toggle.
+	// are auto-applied to ALL the owner's scheduled runs by the run overlay, so
+	// the UI surfaces them as connected/auto-available rather than a per-task
+	// toggle; with several logins under one name (#988) Accounts lists the
+	// labeled seats a task may pin via mcp_selection {server, account}.
 	Remote bool `json:"remote,omitempty"`
+	// DefaultAccount is the seat a run mounts for a remote connection when the
+	// task pins none (#988): a label from Accounts, or "" for the unlabeled
+	// seat. Bundled entries leave it empty (their default is the bare env seat).
+	DefaultAccount string `json:"default_account,omitempty"`
 }
 
 // MCPAccountEntry is one (server, account) credential seat — names only, never

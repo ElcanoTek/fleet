@@ -125,11 +125,18 @@ type ScopePolicy struct {
 // explicit because nil and empty Enabled have different semantics: false means
 // all connected servers (scheduled runs), while true with an empty slice means
 // none (an interactive conversation with every remote server toggled off).
+//
+// Accounts pins the seat a connection name mounts (#988): public label per
+// name, never a credential. A name without an entry mounts its default seat.
+// Exact makes the labels literal ("" = the unlabeled seat) so approval
+// re-execution reopens the very seat a card recorded.
 type RemoteScopeSpec struct {
-	UserEmail     string   `json:"userEmail"`
-	FilterEnabled bool     `json:"filterEnabled,omitempty"`
-	Enabled       []string `json:"enabled,omitempty"`
-	Shadowed      []string `json:"shadowed,omitempty"`
+	UserEmail     string            `json:"userEmail"`
+	FilterEnabled bool              `json:"filterEnabled,omitempty"`
+	Enabled       []string          `json:"enabled,omitempty"`
+	Shadowed      []string          `json:"shadowed,omitempty"`
+	Accounts      map[string]string `json:"accounts,omitempty"`
+	Exact         bool              `json:"exact,omitempty"`
 }
 
 // ReloadSummary is the public, transport-neutral shape of an MCP catalog

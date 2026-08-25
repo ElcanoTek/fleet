@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -17,6 +19,13 @@ import (
 // another's connection. OAuth tokens, the DCR client secret, and the RFC 7592
 // registration access token are encrypted at rest via the Store's tokenCipher,
 // with the AEAD AAD bound to (user_email, canonical url) — see internal/secretbox.
+//
+// Seats (#988): a user may hold several rows under one name, one per login
+// ("account"), each with its own sealed credential and share grants. The AAD
+// deliberately stays (owner, url) rather than growing the label: labels are
+// renamable, and two seats of one user at one vendor are the same trust
+// domain (transplanting a ciphertext between them needs DB write access, which
+// already lets an attacker flip is_default or the grants).
 
 // Remote-MCP connection status values.
 const (
@@ -58,6 +67,12 @@ var (
 	// ErrRemoteMCPNeedsReauth is returned by EnsureFreshToken when the stored
 	// refresh token is dead (the connection must be re-authorized by the user).
 	ErrRemoteMCPNeedsReauth = errors.New("remote mcp server needs re-authorization")
+	// ErrRemoteMCPAccountInvalid is returned for a seat label that does not
+	// canonicalize to the public account shape (see CanonicalRemoteMCPAccount).
+	ErrRemoteMCPAccountInvalid = errors.New("invalid remote mcp account label")
+	// ErrRemoteMCPSeatExists is returned when a (user, name, account) seat
+	// already exists — adding a second login under a name requires a label.
+	ErrRemoteMCPSeatExists = errors.New("remote mcp seat already exists")
 	// ErrOAuthFlowNotFound is returned when a callback state is unknown/expired/used.
 	ErrOAuthFlowNotFound = errors.New("oauth flow state not found or expired")
 )
@@ -66,9 +81,18 @@ var (
 // discovery + DCR result but NOT the secrets (those decrypt only via the
 // dedicated token methods).
 type RemoteMCPServer struct {
-	ID                    string `json:"id"`
-	UserEmail             string `json:"-"`
-	Name                  string `json:"name"`
+	ID        string `json:"id"`
+	UserEmail string `json:"-"`
+	Name      string `json:"name"`
+	// Account is this seat's public label under Name (#988): "" is the
+	// unlabeled seat every pre-#988 connection is; "work"/"personal" name a
+	// further login. Several rows may share a Name, one per seat, each with
+	// its own sealed credential. Registered in a run as
+	// agentcore.RegisteredMCPName(Name, Account) — the bundle seat formula.
+	Account string `json:"account"`
+	// IsDefault marks the seat a user's chats mount for Name when neither the
+	// conversation nor a task pins another. Exactly one per (user, name).
+	IsDefault             bool   `json:"is_default"`
 	URL                   string `json:"url"`
 	Transport             string `json:"transport"`
 	Status                string `json:"status"`
@@ -92,6 +116,7 @@ type RemoteMCPServer struct {
 type RemoteMCPServerInput struct {
 	UserEmail             string
 	Name                  string
+	Account               string // seat label (#988); canonicalized; "" = the unlabeled seat
 	URL                   string // canonical
 	Transport             string
 	Issuer                string
@@ -145,8 +170,37 @@ func (s *Store) openSecret(ciphertext []byte, purpose, email, url string) (strin
 	return string(pt), nil
 }
 
+// remoteMCPAccountRE is the canonical public shape of a seat label: the same
+// character class the env-seat convention produces after CanonicalAccount
+// (lowercased here so "Work" and "work" cannot become two seats), bounded so
+// it stays a readable tool-name segment (mcp_<name>_<account>_<tool>).
+var remoteMCPAccountRE = regexp.MustCompile(`^[a-z0-9_]{1,32}$`)
+
+// remoteMCPAccountFolder mirrors creds.CanonicalAccount's separator folding
+// (the store cannot import creds without a cycle).
+var remoteMCPAccountFolder = strings.NewReplacer("-", "_", " ", "_")
+
+// CanonicalRemoteMCPAccount normalizes a seat label the way the run path will
+// key on it: trimmed, lowercased, hyphens/spaces folded to underscore. "" (the
+// unlabeled seat) passes through. Anything that does not then match
+// [a-z0-9_]{1,32} is rejected with ErrRemoteMCPAccountInvalid so a label can
+// never break the mcp_<name>_<account>_<tool> identity or collide with a
+// differently-cased twin.
+func CanonicalRemoteMCPAccount(label string) (string, error) {
+	acct := strings.ToLower(remoteMCPAccountFolder.Replace(strings.TrimSpace(label)))
+	if acct == "" {
+		return "", nil
+	}
+	if !remoteMCPAccountRE.MatchString(acct) {
+		return "", fmt.Errorf("%w: %q (use 1-32 letters, digits, or underscores, e.g. work or personal)", ErrRemoteMCPAccountInvalid, label)
+	}
+	return acct, nil
+}
+
 // CreateRemoteMCPServer inserts a discovered server in status login_required.
-// Fails with a unique-violation-friendly error if (user, name) already exists.
+// Fails with ErrRemoteMCPSeatExists if the (user, name, account) seat already
+// exists. The first seat under a name becomes the default (#988); a further
+// seat never displaces it.
 func (s *Store) CreateRemoteMCPServer(ctx context.Context, in RemoteMCPServerInput) (*RemoteMCPServer, error) {
 	if s.tokenCipher == nil {
 		return nil, secretbox.ErrNoCipher
@@ -154,6 +208,10 @@ func (s *Store) CreateRemoteMCPServer(ctx context.Context, in RemoteMCPServerInp
 	email := normalizeEmail(in.UserEmail)
 	if email == "" || in.Name == "" || in.URL == "" {
 		return nil, errors.New("user email, name, and url are required")
+	}
+	account, err := CanonicalRemoteMCPAccount(in.Account)
+	if err != nil {
+		return nil, err
 	}
 	secretEnc, err := s.sealSecret(in.ClientSecret, aadPurposeClientSe, email, in.URL)
 	if err != nil {
@@ -177,21 +235,32 @@ func (s *Store) CreateRemoteMCPServer(ctx context.Context, in RemoteMCPServerInp
 	if authKind == "" {
 		authKind = RemoteMCPAuthOAuth
 	}
+	// is_default is decided in the same statement that inserts the row: the
+	// seat is the default iff no other seat of this name already holds it. The
+	// partial unique index makes a concurrent double-insert fail loudly rather
+	// than yield two defaults.
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO remote_mcp_servers (
 			id, user_email, name, url, transport, status, status_detail,
 			issuer, authorization_endpoint, token_endpoint, registration_endpoint, revocation_endpoint,
 			scopes, auth_methods, client_id, client_secret_enc, registration_access_token_enc,
 			auth_kind, api_key_header, api_key_query, api_key_enc,
+			account, is_default,
 			created_at, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,'',$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$21)`,
+		VALUES ($1,$2,$3,$4,$5,$6,'',$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
+			$22,
+			NOT EXISTS (SELECT 1 FROM remote_mcp_servers d WHERE d.user_email = $2 AND d.name = $3 AND d.is_default),
+			$21,$21)`,
 		id, email, in.Name, in.URL, in.Transport, status,
 		in.Issuer, in.AuthorizationEndpoint, in.TokenEndpoint, in.RegistrationEndpoint, in.RevocationEndpoint,
 		in.Scopes, in.AuthMethods, in.ClientID, secretEnc, regEnc,
-		authKind, in.APIKeyHeader, in.APIKeyQuery, apiKeyEnc, now)
+		authKind, in.APIKeyHeader, in.APIKeyQuery, apiKeyEnc, now, account)
 	if err != nil {
 		if pgUniqueViolation(err) {
-			return nil, fmt.Errorf("a remote MCP server named %q already exists", in.Name)
+			if account == "" {
+				return nil, fmt.Errorf("%w: a connection named %q already exists — give this login an account label (e.g. work or personal) to add it as another account", ErrRemoteMCPSeatExists, in.Name)
+			}
+			return nil, fmt.Errorf("%w: a connection named %q with account %q already exists", ErrRemoteMCPSeatExists, in.Name, account)
 		}
 		return nil, err
 	}
@@ -200,13 +269,13 @@ func (s *Store) CreateRemoteMCPServer(ctx context.Context, in RemoteMCPServerInp
 
 const remoteMCPColumns = `id, user_email, name, url, transport, status, status_detail,
 	issuer, authorization_endpoint, token_endpoint, registration_endpoint, revocation_endpoint,
-	scopes, auth_methods, client_id, auth_kind, api_key_header, api_key_query, created_at, updated_at`
+	scopes, auth_methods, client_id, auth_kind, api_key_header, api_key_query, account, is_default, created_at, updated_at`
 
 func scanRemoteMCPServer(row interface{ Scan(...any) error }) (*RemoteMCPServer, error) {
 	var m RemoteMCPServer
 	if err := row.Scan(&m.ID, &m.UserEmail, &m.Name, &m.URL, &m.Transport, &m.Status, &m.StatusDetail,
 		&m.Issuer, &m.AuthorizationEndpoint, &m.TokenEndpoint, &m.RegistrationEndpoint, &m.RevocationEndpoint,
-		&m.Scopes, &m.AuthMethods, &m.ClientID, &m.AuthKind, &m.APIKeyHeader, &m.APIKeyQuery, &m.CreatedAt, &m.UpdatedAt); err != nil {
+		&m.Scopes, &m.AuthMethods, &m.ClientID, &m.AuthKind, &m.APIKeyHeader, &m.APIKeyQuery, &m.Account, &m.IsDefault, &m.CreatedAt, &m.UpdatedAt); err != nil {
 		return nil, err
 	}
 	return &m, nil
@@ -245,11 +314,96 @@ func (s *Store) ListRemoteMCPServers(ctx context.Context, userEmail string) ([]R
 }
 
 // DeleteRemoteMCPServer removes a server (cascading its oauth + flow rows).
+// Removing the default seat of a name promotes another seat of that name
+// (the unlabeled one first, else the oldest) so the name never has no
+// default while it still has seats (#988).
 func (s *Store) DeleteRemoteMCPServer(ctx context.Context, userEmail, id string) error {
-	res, err := s.db.ExecContext(ctx,
-		`DELETE FROM remote_mcp_servers WHERE user_email = $1 AND id = $2`,
-		normalizeEmail(userEmail), id)
+	email := normalizeEmail(userEmail)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var name string
+	var wasDefault bool
+	err = tx.QueryRowContext(ctx,
+		`DELETE FROM remote_mcp_servers WHERE user_email = $1 AND id = $2 RETURNING name, is_default`,
+		email, id).Scan(&name, &wasDefault)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrRemoteMCPNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if wasDefault {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE remote_mcp_servers SET is_default = TRUE, updated_at = $3
+			WHERE id = (
+				SELECT id FROM remote_mcp_servers
+				WHERE user_email = $1 AND name = $2
+				ORDER BY (account = '') DESC, created_at ASC, id ASC
+				LIMIT 1)`,
+			email, name, time.Now().Unix()); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// SetRemoteMCPDefaultSeat makes the seat id the default among the owner's
+// seats of the same name (#988). Owner-only; a foreign or unknown id is
+// ErrRemoteMCPNotFound. Idempotent.
+func (s *Store) SetRemoteMCPDefaultSeat(ctx context.Context, userEmail, id string) error {
+	email := normalizeEmail(userEmail)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var name string
+	err = tx.QueryRowContext(ctx,
+		`SELECT name FROM remote_mcp_servers WHERE user_email = $1 AND id = $2 FOR UPDATE`,
+		email, id).Scan(&name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrRemoteMCPNotFound
+	}
+	if err != nil {
+		return err
+	}
+	now := time.Now().Unix()
+	// Clear first, then set: the partial unique index would reject the
+	// transient two-defaults state of the opposite order.
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE remote_mcp_servers SET is_default = FALSE, updated_at = $3 WHERE user_email = $1 AND name = $2 AND is_default AND id <> $4`,
+		email, name, now, id); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE remote_mcp_servers SET is_default = TRUE, updated_at = $3 WHERE user_email = $1 AND id = $2 AND NOT is_default`,
+		email, id, now); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// RenameRemoteMCPAccount changes a seat's public label (#988). Secrets are
+// unaffected: their AAD binds (owner, url), not the label. The new label must
+// be free under the same name (ErrRemoteMCPSeatExists otherwise).
+func (s *Store) RenameRemoteMCPAccount(ctx context.Context, userEmail, id, label string) error {
+	account, err := CanonicalRemoteMCPAccount(label)
+	if err != nil {
+		return err
+	}
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE remote_mcp_servers SET account = $3, updated_at = $4 WHERE user_email = $1 AND id = $2`,
+		normalizeEmail(userEmail), id, account, time.Now().Unix())
+	if err != nil {
+		if pgUniqueViolation(err) {
+			if account == "" {
+				return fmt.Errorf("%w: this connection already has an unlabeled seat", ErrRemoteMCPSeatExists)
+			}
+			return fmt.Errorf("%w: a seat labeled %q already exists for this connection", ErrRemoteMCPSeatExists, account)
+		}
 		return err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {

@@ -8,11 +8,14 @@ package httpapi
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 
+	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -69,25 +72,120 @@ func (s *Server) listMCPServerCatalog(w http.ResponseWriter, r *http.Request) {
 	if s.remoteMCP != nil && s.remoteMCP.Enabled() {
 		user := userFromCtx(r.Context())
 		if conns, err := s.remoteMCP.ConnectedServersForUser(r.Context(), user); err == nil {
-			for _, c := range conns {
-				servers = append(servers, map[string]any{
-					"name":               c.Name,
-					"display_name":       c.Name,
-					"description":        "Remote MCP server you connected (" + c.URL + ").",
-					"tools":              []string{},
-					"tool_count":         0,
-					"enabled":            true,
-					"beta":               false,
-					"enabled_by_default": true,
-					"accounts":           []string{},
-					"remote":             true,
-				})
+			for _, g := range agent.GroupRemoteMCPSeats(conns) {
+				servers = append(servers, remoteCatalogEntry(g, true, ""))
 			}
 		} else {
 			log.Printf("mcp catalog: remote server lookup failed for %s: %v", user, err)
 		}
 	}
 	writeJSON(w, map[string]any{"servers": servers})
+}
+
+// remoteCatalogEntry renders one hosted connection NAME for the Tools picker
+// (#988): its labeled seats, the default seat, and — on the per-conversation
+// route — this conversation's override. Seats carry labels only, never
+// credentials.
+func remoteCatalogEntry(g agent.RemoteMCPSeatGroup, enabled bool, account string) map[string]any {
+	return map[string]any{
+		"name":               g.Name,
+		"display_name":       g.Name,
+		"description":        "Remote MCP server you connected (" + g.URL + ").",
+		"tools":              []string{},
+		"tool_count":         0,
+		"enabled":            enabled,
+		"beta":               false,
+		"enabled_by_default": true,
+		"accounts":           g.Accounts,
+		"default_account":    g.DefaultAccount,
+		"account":            account,
+		"remote":             true,
+	}
+}
+
+// remoteSeatCatalog is the seat universe a conversation may pin for hosted
+// connections: every seat the user owns or was shared, regardless of status
+// or prefs — mirroring optionalServerWhitelist, a needs_reauth seat must stay
+// pinnable so a full-set POST during re-authorization does not silently drop
+// the pin. Keyed by lowercased connection name → set of labels (plus "" for
+// an unlabeled seat).
+func (s *Server) remoteSeatCatalog(ctx context.Context, user string) map[string]map[string]bool {
+	out := map[string]map[string]bool{}
+	if s.remoteMCP == nil || !s.remoteMCP.Enabled() || user == "" {
+		return out
+	}
+	add := func(srv store.RemoteMCPServer) {
+		key := strings.ToLower(srv.Name)
+		if out[key] == nil {
+			out[key] = map[string]bool{}
+		}
+		out[key][srv.Account] = true
+	}
+	if own, err := s.remoteMCP.ListServers(ctx, user); err == nil {
+		for _, srv := range own {
+			add(srv)
+		}
+	} else {
+		log.Printf("mcp seats: remote server lookup failed for %s: %v", user, err)
+	}
+	if shared, err := s.remoteMCP.SharedWithMe(ctx, user); err == nil {
+		for _, srv := range shared {
+			add(srv)
+		}
+	} else {
+		log.Printf("mcp seats: shared remote server lookup failed for %s: %v", user, err)
+	}
+	return out
+}
+
+// cleanMCPAccounts validates a per-conversation seat map (#988): each key must
+// be an optional connector the user can pick (bundled catalog or their hosted
+// connections, matched lowercased like the opt-in list) and each value a seat
+// that connector actually has — a bundled connector's provisioned account, or a
+// hosted connection's labeled seat. Empty values are dropped (they mean "the
+// default"). Unlike the opt-in list, an unknown seat is an ERROR, not a silent
+// drop: a user who believes they picked "personal" must not quietly run as
+// "work".
+func (s *Server) cleanMCPAccounts(ctx context.Context, user string, accounts map[string]string) (map[string]string, error) {
+	clean := map[string]string{}
+	if len(accounts) == 0 {
+		return clean, nil
+	}
+	bundled := map[string]agent.OptionalServerInfo{}
+	for _, info := range s.agent.MCPServerCatalog() {
+		bundled[strings.ToLower(info.Name)] = info
+	}
+	var remote map[string]map[string]bool
+	for rawName, rawAcct := range accounts {
+		name := strings.ToLower(strings.TrimSpace(rawName))
+		acct := strings.TrimSpace(rawAcct)
+		if name == "" || acct == "" {
+			continue
+		}
+		if info, ok := bundled[name]; ok {
+			if !slices.Contains(info.Accounts, acct) {
+				return nil, fmt.Errorf("unknown account %q for connector %q", rawAcct, rawName)
+			}
+			clean[info.Name] = acct
+			continue
+		}
+		if remote == nil {
+			remote = s.remoteSeatCatalog(ctx, user)
+		}
+		seats, ok := remote[name]
+		if !ok {
+			return nil, fmt.Errorf("unknown connector %q", rawName)
+		}
+		label, err := store.CanonicalRemoteMCPAccount(acct)
+		if err != nil {
+			return nil, err
+		}
+		if label == "" || !seats[label] {
+			return nil, fmt.Errorf("unknown account %q for connection %q", rawAcct, rawName)
+		}
+		clean[name] = label
+	}
+	return clean, nil
 }
 
 // optionalServerWhitelist returns the set of server names a conversation may
@@ -173,6 +271,10 @@ func (s *Server) handleConversationMCPServersGet(w http.ResponseWriter, r *http.
 			// Separate group so adding this longer key doesn't re-align
 			// the block above.
 			"enabled_by_default": info.EnabledByDefault,
+			// Seat pick (#988): provisioned seats + this conversation's
+			// override ("" = the user's connections-page default).
+			"accounts": info.Accounts,
+			"account":  conv.MCPAccounts[info.Name],
 		})
 	}
 	// Per-user remote (hosted) MCP servers (#443): merge the caller's
@@ -182,21 +284,12 @@ func (s *Server) handleConversationMCPServersGet(w http.ResponseWriter, r *http.
 	// conversation had no way to enable a remote server at all. Enabled
 	// state is looked up lowercased: the persisted opt-in list is
 	// canonical lowercase while remote names keep the case the user
-	// typed. Best-effort — a lookup error never breaks the catalog.
+	// typed. One entry per connection NAME with its seats (#988). Best-effort
+	// — a lookup error never breaks the catalog.
 	if s.remoteMCP != nil && s.remoteMCP.Enabled() {
 		if conns, err := s.remoteMCP.ConnectedServersForUser(r.Context(), user); err == nil {
-			for _, c := range conns {
-				servers = append(servers, map[string]any{
-					"name":               c.Name,
-					"display_name":       c.Name,
-					"description":        "Remote MCP server you connected (" + c.URL + ").",
-					"tools":              []string{},
-					"tool_count":         0,
-					"enabled":            enabled[strings.ToLower(c.Name)],
-					"beta":               false,
-					"enabled_by_default": true,
-					"remote":             true,
-				})
+			for _, g := range agent.GroupRemoteMCPSeats(conns) {
+				servers = append(servers, remoteCatalogEntry(g, enabled[strings.ToLower(g.Name)], conv.MCPAccounts[strings.ToLower(g.Name)]))
 			}
 		} else {
 			log.Printf("mcp catalog: remote server lookup failed for %s: %v", user, err)
@@ -207,15 +300,25 @@ func (s *Server) handleConversationMCPServersGet(w http.ResponseWriter, r *http.
 
 // handleConversationMCPServersSet serves POST /conversations/{id}/mcp-servers.
 //
-// Body: { "enabled_optional": ["gamma", ...] } — full set,
-// replacing the previous opt-in list. Unknown / non-optional
-// server names are dropped silently; the server's catalog is
-// the authoritative whitelist.
+// Body: { "enabled_optional": ["gamma", ...], "accounts": {"gamma": "work"} }
+// — both full sets, replacing the previous opt-in list and the previous seat
+// overrides (#988). Unknown / non-optional server names are dropped
+// silently; the server's catalog is the authoritative whitelist. An unknown
+// SEAT, by contrast, is a 400: silently running as a different account is
+// the failure this feature exists to prevent. "accounts" omitted = clear
+// every override (a client that never sends it keeps pre-#988 behaviour:
+// the user's defaults).
 func (s *Server) handleConversationMCPServersSet(w http.ResponseWriter, r *http.Request, user, id string) {
 	var req struct {
-		EnabledOptional []string `json:"enabled_optional"`
+		EnabledOptional []string          `json:"enabled_optional"`
+		Accounts        map[string]string `json:"accounts"`
 	}
 	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+	accounts, err := s.cleanMCPAccounts(r.Context(), user, req.Accounts)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	// Intersect with the known-optional whitelist (bundle catalog +
@@ -237,5 +340,9 @@ func (s *Server) handleConversationMCPServersSet(w http.ResponseWriter, r *http.
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, map[string]any{"enabled_optional": clean})
+	if err := s.store.SetConversationMCPAccounts(r.Context(), user, id, accounts); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{"enabled_optional": clean, "accounts": accounts})
 }

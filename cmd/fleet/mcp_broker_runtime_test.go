@@ -162,7 +162,7 @@ func assertProductionRemoteOverlay(t *testing.T, runtime *productionMCPRuntime) 
 		context.Background(),
 		"user@example.com",
 		map[string]bool{"demo": true, "ignored": false, "base": true},
-		map[string]bool{"zeta": true, "off": false, "alpha": true},
+		agent.RemoteMCPSelection{Filter: true, Enabled: map[string]bool{"zeta": true, "off": false, "alpha": true}},
 	)
 	if err != nil {
 		t.Fatalf("open remote overlay: %v", err)
@@ -184,7 +184,7 @@ func assertProductionRemoteOverlay(t *testing.T, runtime *productionMCPRuntime) 
 		context.Background(),
 		"scheduled@example.com",
 		map[string]bool{"demo": true},
-		nil,
+		agent.RemoteMCPAllConnected,
 	)
 	if err != nil {
 		t.Fatalf("open scheduled remote overlay: %v", err)

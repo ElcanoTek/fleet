@@ -45,6 +45,11 @@ type chatRequest struct {
 	// ConversationID is provided. Unknown / non-optional names are
 	// dropped silently (same rules as POST /mcp-servers).
 	EnabledOptional []string `json:"enabled_optional,omitempty"`
+	// MCPAccounts seeds the per-conversation credential-seat overrides
+	// (#988; server name → account label) alongside EnabledOptional, so a
+	// seat picked before the first message sticks. Same rules as POST
+	// /conversations/{id}/mcp-servers: an unknown seat fails the request.
+	MCPAccounts map[string]string `json:"mcp_accounts,omitempty"`
 	// Lockdown mirrors createConversationRequest.Lockdown — honored
 	// only when no ConversationID is provided (lockdown is set once
 	// at conversation creation and immutable thereafter).
@@ -216,32 +221,11 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		// Seed the optional MCP server opt-in list from the chat request
-		// so pre-chat Tools picker selections take effect on this first
-		// turn. Intersect with the whitelist (bundle catalog + the caller's
-		// remote servers — the picker lists both as toggleable) so a bad
-		// frontend can't persist garbage (mirrors POST
-		// /conversations/{id}/mcp-servers).
-		if len(req.EnabledOptional) > 0 {
-			valid := s.optionalServerWhitelist(r.Context(), user)
-			seen := make(map[string]bool, len(req.EnabledOptional))
-			clean := make([]string, 0, len(req.EnabledOptional))
-			for _, n := range req.EnabledOptional {
-				n = strings.ToLower(strings.TrimSpace(n))
-				if n == "" || !valid[n] || seen[n] {
-					continue
-				}
-				seen[n] = true
-				clean = append(clean, n)
-			}
-			sort.Strings(clean)
-			if len(clean) > 0 {
-				if err := s.store.SetOptionalMCPServers(r.Context(), user, conv.ID, clean); err != nil {
-					http.Error(w, err.Error(), http.StatusInternalServerError)
-					return
-				}
-				conv.OptionalMCPServersEnabled = clean
-			}
+		// Seed the optional MCP server opt-in list (and seat overrides, #988)
+		// from the chat request so pre-chat Tools picker selections take
+		// effect on this first turn.
+		if !s.seedConversationMCP(w, r, user, conv, req.EnabledOptional, req.MCPAccounts) {
+			return
 		}
 	}
 
@@ -506,6 +490,52 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	return true
 }
 
+// seedConversationMCP persists a brand-new conversation's pre-chat Tools
+// picker state: the optional-server opt-in list and the per-connector seat
+// overrides (#988). The opt-in list is intersected with the whitelist (bundle
+// catalog + the caller's remote servers — the picker lists both as
+// toggleable) so a bad frontend can't persist garbage (mirrors POST
+// /conversations/{id}/mcp-servers); a seat the user does not hold is a 400
+// rather than a silent drop. Returns false after writing an error response.
+func (s *Server) seedConversationMCP(w http.ResponseWriter, r *http.Request, user string, conv *store.Conversation, enabledOptional []string, mcpAccounts map[string]string) bool {
+	if len(enabledOptional) > 0 {
+		valid := s.optionalServerWhitelist(r.Context(), user)
+		seen := make(map[string]bool, len(enabledOptional))
+		clean := make([]string, 0, len(enabledOptional))
+		for _, n := range enabledOptional {
+			n = strings.ToLower(strings.TrimSpace(n))
+			if n == "" || !valid[n] || seen[n] {
+				continue
+			}
+			seen[n] = true
+			clean = append(clean, n)
+		}
+		sort.Strings(clean)
+		if len(clean) > 0 {
+			if err := s.store.SetOptionalMCPServers(r.Context(), user, conv.ID, clean); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return false
+			}
+			conv.OptionalMCPServersEnabled = clean
+		}
+	}
+	if len(mcpAccounts) > 0 {
+		accounts, verr := s.cleanMCPAccounts(r.Context(), user, mcpAccounts)
+		if verr != nil {
+			http.Error(w, verr.Error(), http.StatusBadRequest)
+			return false
+		}
+		if len(accounts) > 0 {
+			if err := s.store.SetConversationMCPAccounts(r.Context(), user, conv.ID, accounts); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return false
+			}
+			conv.MCPAccounts = accounts
+		}
+	}
+	return true
+}
+
 // runTurnAsync executes the agent turn, persists the result, emits the
 // optional title_updated event, and then finishes the buffer. Lives in
 // its own goroutine so the HTTP POST can disconnect without killing
@@ -556,7 +586,7 @@ func (s *Server) runTurnAsync(
 	// Availability layer (unified connector UX): drop opted-in servers the
 	// user has since disabled on the connections page, and carry their default
 	// credential-account seats into the turn.
-	optionalEnabled, accountDefaults := s.applyConnectorPrefs(turnCtx, user, conv.OptionalMCPServersEnabled)
+	optionalEnabled, accountDefaults := s.applyConnectorPrefs(turnCtx, user, conv.OptionalMCPServersEnabled, conv.MCPAccounts)
 
 	// User-authored skills (docs/SKILLS.md phase 2): sync the caller's active
 	// skills into this conversation's workspace and hand the roster to the

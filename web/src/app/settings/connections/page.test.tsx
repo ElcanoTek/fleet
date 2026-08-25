@@ -66,14 +66,46 @@ const CATALOG = {
   remote_mcp_enabled: true,
 };
 
+// Multi-login seats (#988): two logins under one connection name, the
+// unlabeled one default; plus an api_key connection matching the Browserbase
+// directory entry.
+const GAMMA_PRIMARY = {
+  id: "g1",
+  name: "gamma",
+  url: "https://mcp.gamma.app/mcp",
+  transport: "http",
+  status: "connected",
+  auth_kind: "oauth",
+  account: "",
+  is_default: true,
+  created_at: 1,
+  updated_at: 1,
+};
+const GAMMA_WORK = { ...GAMMA_PRIMARY, id: "g2", account: "work", is_default: false };
+const BB_PRIMARY = {
+  ...GAMMA_PRIMARY,
+  id: "b1",
+  name: "browserbase",
+  url: BROWSERBASE.url,
+  auth_kind: "api_key",
+};
+
+const EMPTY_LIST = { servers: [], shares: {}, shared_with_me: [] };
+
 // Stubs every endpoint the page touches on mount; `onAdd` decides what the
-// remote-server POST returns.
+// remote-server POST returns; `list` is what GET /api/remote-mcp-servers
+// returns (own seats, shares, shared-with-me).
 function mockFetch(
   onAdd?: (body: Record<string, unknown>) => { status: number; body: unknown },
   catalog: unknown = CATALOG,
+  list: unknown = EMPTY_LIST,
 ) {
   return vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
     const method = init?.method ?? "GET";
+    // Per-seat actions (set default / rename / sign out / rotate key): 204.
+    if (/^\/api\/remote-mcp-servers\/[^/]+\/(default|account|signout|key)$/.test(url)) {
+      return { ok: true, status: 204, json: async () => null, text: async () => "" };
+    }
     if (url.startsWith("/api/remote-mcp-servers") && method === "POST") {
       const parsed = JSON.parse(String(init?.body ?? "{}")) as Record<
         string,
@@ -88,11 +120,7 @@ function mockFetch(
       };
     }
     if (url.startsWith("/api/remote-mcp-servers")) {
-      return {
-        ok: true,
-        status: 200,
-        json: async () => ({ servers: [], shares: {}, shared_with_me: [] }),
-      };
+      return { ok: true, status: 200, json: async () => list };
     }
     if (url.startsWith("/api/mcp-catalog")) {
       return { ok: true, status: 200, json: async () => catalog };
@@ -318,5 +346,231 @@ describe("ConnectionsPage availability toggle", () => {
       connector_id: "image_generation",
       enabled: false,
     });
+  });
+});
+
+// Multiple logins per connection (#988). One visual group per name, one row
+// per seat with its account badge; the default seat is marked; "Set default"
+// only appears on non-default seats of a multi-seat group; adding a second
+// login REQUIRES a label (the backend rejects an unlabeled second seat) and
+// the add carries the label plus, for api_key servers, the manifest's key
+// transport.
+describe("ConnectionsPage multi-login seats", () => {
+  // Records every fetch call while delegating to mockFetch.
+  function recording(
+    onAdd?: (body: Record<string, unknown>) => { status: number; body: unknown },
+    list?: unknown,
+  ) {
+    const calls: { url: string; init?: RequestInit }[] = [];
+    const base = mockFetch(onAdd, CATALOG, list);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        calls.push({ url, init });
+        return base(url, init);
+      }),
+    );
+    return calls;
+  }
+
+  it("groups seats under one name, badges each login, and marks the default", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch(undefined, CATALOG, { ...EMPTY_LIST, servers: [GAMMA_PRIMARY, GAMMA_WORK] }),
+    );
+    visit("");
+
+    const group = await screen.findByTestId("remote-group-gamma");
+    expect(within(group).getByText("primary")).toBeInTheDocument();
+    expect(within(group).getByText("work")).toBeInTheDocument();
+    // Exactly one seat is the default, and only the OTHER one offers to
+    // become it.
+    expect(within(group).getAllByText("Default")).toHaveLength(1);
+    expect(within(group).getAllByRole("button", { name: "Set default" })).toHaveLength(1);
+    // Every seat can be renamed.
+    expect(within(group).getAllByRole("button", { name: "Rename" })).toHaveLength(2);
+    // The seat semantics are explained once, under the multi-seat group.
+    expect(within(group).getByText(/Chats use the default login/)).toBeInTheDocument();
+  });
+
+  it("does not offer Set default on a single-seat group", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch(undefined, CATALOG, { ...EMPTY_LIST, servers: [GAMMA_PRIMARY] }),
+    );
+    visit("");
+    const group = await screen.findByTestId("remote-group-gamma");
+    expect(within(group).getByText("primary")).toBeInTheDocument();
+    expect(within(group).queryByRole("button", { name: "Set default" })).toBeNull();
+    expect(within(group).getByRole("button", { name: "Add another account" })).toBeInTheDocument();
+  });
+
+  it("Set default POSTs to /{id}/default and reloads the list", async () => {
+    const calls = recording(undefined, { ...EMPTY_LIST, servers: [GAMMA_PRIMARY, GAMMA_WORK] });
+    visit("");
+
+    const group = await screen.findByTestId("remote-group-gamma");
+    const listGets = () =>
+      calls.filter((c) => c.url === "/api/remote-mcp-servers" && (c.init?.method ?? "GET") === "GET")
+        .length;
+    const before = listGets();
+    fireEvent.click(within(group).getByRole("button", { name: "Set default" }));
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (c) => c.url === "/api/remote-mcp-servers/g2/default" && c.init?.method === "POST",
+        ),
+      ).toBe(true),
+    );
+    await waitFor(() => expect(listGets()).toBeGreaterThan(before));
+  });
+
+  it("Rename PUTs the new label to /{id}/account", async () => {
+    const calls = recording(undefined, { ...EMPTY_LIST, servers: [GAMMA_PRIMARY, GAMMA_WORK] });
+    visit("");
+
+    const group = await screen.findByTestId("remote-group-gamma");
+    fireEvent.click(within(group).getAllByRole("button", { name: "Rename" })[1]);
+    const input = within(group).getByLabelText("New account label for gamma (work)");
+    fireEvent.change(input, { target: { value: "Client B" } });
+    fireEvent.click(within(group).getByRole("button", { name: "Save label" }));
+    await waitFor(() => {
+      const put = calls.find(
+        (c) => c.url === "/api/remote-mcp-servers/g2/account" && c.init?.method === "PUT",
+      );
+      expect(put).toBeTruthy();
+      expect(JSON.parse(String(put?.init?.body))).toEqual({ account: "Client B" });
+    });
+  });
+
+  it("Add another account requires a label and POSTs it (OAuth: no auth key, sign-in prompt)", async () => {
+    let posted: Record<string, unknown> | null = null;
+    recording(
+      (body) => {
+        posted = body;
+        return { status: 200, body: { id: "g3", name: "gamma", account: "personal" } };
+      },
+      { ...EMPTY_LIST, servers: [GAMMA_PRIMARY] },
+    );
+    visit("");
+
+    const group = await screen.findByTestId("remote-group-gamma");
+    fireEvent.click(within(group).getByTestId("add-seat-gamma"));
+    const submit = within(group).getByTestId("add-seat-submit-gamma") as HTMLButtonElement;
+    // No label, no add.
+    expect(submit.disabled).toBe(true);
+    fireEvent.change(within(group).getByLabelText("Account label for the new gamma login"), {
+      target: { value: "personal" },
+    });
+    expect(submit.disabled).toBe(false);
+    fireEvent.click(submit);
+
+    await waitFor(() => expect(posted).not.toBeNull());
+    expect(posted).toMatchObject({
+      name: "gamma",
+      url: "https://mcp.gamma.app/mcp",
+      account: "personal",
+    });
+    // OAuth seats omit `auth` (the backend's discovery default) and get the
+    // post-add sign-in prompt so the login can start right away.
+    expect(posted).not.toHaveProperty("auth");
+    expect(posted).not.toHaveProperty("api_key");
+    expect(
+      await screen.findByRole("dialog", { name: "Sign in to gamma (personal)?" }),
+    ).toBeInTheDocument();
+  });
+
+  it("Add another account for an api_key connection also takes the key and reuses the manifest's key transport", async () => {
+    let posted: Record<string, unknown> | null = null;
+    recording(
+      (body) => {
+        posted = body;
+        return { status: 200, body: { id: "b2", tool_count: 6 } };
+      },
+      { ...EMPTY_LIST, servers: [BB_PRIMARY] },
+    );
+    visit("");
+
+    const group = await screen.findByTestId("remote-group-browserbase");
+    fireEvent.click(within(group).getByTestId("add-seat-browserbase"));
+    const submit = within(group).getByTestId("add-seat-submit-browserbase") as HTMLButtonElement;
+    fireEvent.change(within(group).getByLabelText("Account label for the new browserbase login"), {
+      target: { value: "work" },
+    });
+    // A label alone is not enough for an api_key seat — the key is required too.
+    expect(submit.disabled).toBe(true);
+    fireEvent.change(within(group).getByLabelText("API key for the new browserbase login"), {
+      target: { value: "bb_second_key" },
+    });
+    fireEvent.click(submit);
+
+    await waitFor(() => expect(posted).not.toBeNull());
+    expect(posted).toMatchObject({
+      name: "browserbase",
+      url: BROWSERBASE.url,
+      auth: "api_key",
+      account: "work",
+      api_key: "bb_second_key",
+      api_key_query: "browserbaseApiKey",
+    });
+  });
+
+  it("an added directory entry offers Add another account through its guided form", async () => {
+    let posted: Record<string, unknown> | null = null;
+    recording(
+      (body) => {
+        posted = body;
+        return { status: 200, body: { id: "b2", tool_count: 6 } };
+      },
+      { ...EMPTY_LIST, servers: [BB_PRIMARY] },
+    );
+    visit("");
+
+    // Browserbase is featured, so the unfiltered directory renders its card
+    // twice (Featured shelf + category group); either copy will do.
+    const card = (await screen.findAllByTestId("dir-card-browserbase"))[0];
+    // The primary Add is spent ("Added"); the second affordance opens the form.
+    expect((within(card).getByTestId("dir-add-browserbase") as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(within(card).getByTestId("dir-add-account-browserbase"));
+    await within(card).findByTestId("dir-form-browserbase");
+    const add = within(card).getByTestId("dir-form-add-browserbase") as HTMLButtonElement;
+    fireEvent.change(
+      within(card).getByPlaceholderText("paste your key (stored encrypted, never shown again)"),
+      { target: { value: "bb_third_key" } },
+    );
+    // Key alone is not enough: the second login needs its label.
+    expect(add.disabled).toBe(true);
+    fireEvent.change(within(card).getByTestId("dir-form-account-browserbase"), {
+      target: { value: "personal" },
+    });
+    expect(add.disabled).toBe(false);
+    fireEvent.click(add);
+
+    await waitFor(() => expect(posted).not.toBeNull());
+    expect(posted).toMatchObject({
+      name: "browserbase",
+      auth: "api_key",
+      account: "personal",
+      api_key: "bb_third_key",
+      api_key_query: "browserbaseApiKey",
+    });
+  });
+
+  it("shows the owner's account label on shared rows, without Set default", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch(undefined, CATALOG, {
+        ...EMPTY_LIST,
+        shared_with_me: [
+          { ...GAMMA_WORK, id: "s1", owner: "ann@example.com" },
+          { ...GAMMA_WORK, id: "s2", account: "", owner: "bob@example.com" },
+        ],
+      }),
+    );
+    visit("");
+    await screen.findByText("shared by ann@example.com");
+    expect(screen.getByText("work")).toBeInTheDocument();
+    expect(screen.getByText("primary")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Set default" })).toBeNull();
   });
 });

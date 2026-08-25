@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -48,8 +49,23 @@ func (f *fakeStore) RemoteMCPEncryptionEnabled() bool { return true }
 func (f *fakeStore) CreateRemoteMCPServer(_ context.Context, in store.RemoteMCPServerInput) (*store.RemoteMCPServer, error) {
 	f.nextID++
 	id := "srv-" + string(rune('a'+f.nextID))
+	account, err := store.CanonicalRemoteMCPAccount(in.Account)
+	if err != nil {
+		return nil, err
+	}
+	isDefault := true
+	for _, other := range f.servers {
+		if other.UserEmail == strings.ToLower(in.UserEmail) && other.Name == in.Name {
+			if other.Account == account {
+				return nil, store.ErrRemoteMCPSeatExists
+			}
+			if other.IsDefault {
+				isDefault = false
+			}
+		}
+	}
 	srv := &store.RemoteMCPServer{
-		ID: id, UserEmail: strings.ToLower(in.UserEmail), Name: in.Name, URL: in.URL,
+		ID: id, UserEmail: strings.ToLower(in.UserEmail), Name: in.Name, Account: account, IsDefault: isDefault, URL: in.URL,
 		Transport: in.Transport, Status: in.Status,
 		Issuer: in.Issuer, AuthorizationEndpoint: in.AuthorizationEndpoint, TokenEndpoint: in.TokenEndpoint,
 		RegistrationEndpoint: in.RegistrationEndpoint, RevocationEndpoint: in.RevocationEndpoint,
@@ -105,6 +121,32 @@ func (f *fakeStore) GetRemoteMCPAPIKey(_ context.Context, srv *store.RemoteMCPSe
 		return "", store.ErrRemoteMCPNotFound
 	}
 	return f.apiKeys[srv.ID], nil
+}
+
+func (f *fakeStore) SetRemoteMCPDefaultSeat(_ context.Context, email, id string) error {
+	srv, ok := f.servers[id]
+	if !ok || srv.UserEmail != email {
+		return store.ErrRemoteMCPNotFound
+	}
+	for _, other := range f.servers {
+		if other.UserEmail == email && other.Name == srv.Name {
+			other.IsDefault = other.ID == id
+		}
+	}
+	return nil
+}
+
+func (f *fakeStore) RenameRemoteMCPAccount(_ context.Context, email, id, label string) error {
+	srv, ok := f.servers[id]
+	if !ok || srv.UserEmail != email {
+		return store.ErrRemoteMCPNotFound
+	}
+	account, err := store.CanonicalRemoteMCPAccount(label)
+	if err != nil {
+		return err
+	}
+	srv.Account = account
+	return nil
 }
 
 func (f *fakeStore) SetRemoteMCPAPIKey(_ context.Context, email, id, apiKey string) error {
@@ -699,6 +741,93 @@ func TestResolverIncludesSharedServers(t *testing.T) {
 	conns, _ = svc.ConnectedServersForUser(ctx, "mate@x.com")
 	if len(conns) != 1 || conns[0].ID != mates.ID || conns[0].Owner != "" {
 		t.Fatalf("own server must win the name collision, got %+v", conns)
+	}
+}
+
+// Seats (#988): the resolver returns every connected seat under a name with
+// its label and default flag, and shadows a shared seat only by its exact
+// (name, account) registration — a shared "acme/work" coexists with the
+// grantee's own unlabeled "acme".
+func TestResolverReturnsSeatsAndShadowsBySeat(t *testing.T) {
+	fs := newFakeStore()
+	srv := oauthTestServer(t, "rotate")
+	svc := newTestService(t, fs, srv)
+	ctx := context.Background()
+	complete := func(email string, id string) {
+		t.Helper()
+		if _, err := svc.Authorize(ctx, email, id); err != nil {
+			t.Fatalf("authorize: %v", err)
+		}
+		var state string
+		for k := range fs.flows {
+			state = k
+		}
+		if _, err := svc.Complete(ctx, email, state, "c"); err != nil {
+			t.Fatalf("complete: %v", err)
+		}
+	}
+
+	plain, _, err := svc.AddServer(ctx, AddServerInput{Email: "u@x.com", Name: "acme", URL: srv.URL + "/mcp"})
+	if err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	work, _, err := svc.AddServer(ctx, AddServerInput{Email: "u@x.com", Name: "acme", Account: "Work", URL: srv.URL + "/mcp"})
+	if err != nil {
+		t.Fatalf("add labeled: %v", err)
+	}
+	if _, _, err := svc.AddServer(ctx, AddServerInput{Email: "u@x.com", Name: "acme", Account: "no spaces?", URL: srv.URL + "/mcp"}); !errors.Is(err, store.ErrRemoteMCPAccountInvalid) {
+		t.Fatalf("bad label err = %v", err)
+	}
+	complete("u@x.com", plain.ID)
+	complete("u@x.com", work.ID)
+
+	conns, err := svc.ConnectedServersForUser(ctx, "u@x.com")
+	if err != nil || len(conns) != 2 {
+		t.Fatalf("connected = %+v, err %v", conns, err)
+	}
+	byID := map[string]agent.RemoteMCPConn{}
+	for _, c := range conns {
+		byID[c.ID] = c
+	}
+	if c := byID[plain.ID]; c.Account != "" || !c.Default {
+		t.Fatalf("unlabeled seat = %+v, want default", c)
+	}
+	if c := byID[work.ID]; c.Account != "work" || c.Default {
+		t.Fatalf("labeled seat = %+v, want work non-default", c)
+	}
+	if err := svc.SetDefaultSeat(ctx, "u@x.com", work.ID); err != nil {
+		t.Fatalf("set default: %v", err)
+	}
+	conns, _ = svc.ConnectedServersForUser(ctx, "u@x.com")
+	for _, c := range conns {
+		if (c.ID == work.ID) != c.Default {
+			t.Fatalf("default did not move to work: %+v", conns)
+		}
+	}
+
+	// Owner shares only the work seat with mate, who owns an unlabeled acme.
+	if err := svc.ShareServer(ctx, "u@x.com", work.ID, "mate@x.com"); err != nil {
+		t.Fatalf("share: %v", err)
+	}
+	mine, _, _ := svc.AddServer(ctx, AddServerInput{Email: "mate@x.com", Name: "acme", URL: srv.URL + "/mcp"})
+	complete("mate@x.com", mine.ID)
+	conns, _ = svc.ConnectedServersForUser(ctx, "mate@x.com")
+	if len(conns) != 2 {
+		t.Fatalf("mate should see own acme + shared acme/work, got %+v", conns)
+	}
+	for _, c := range conns {
+		switch c.ID {
+		case mine.ID:
+			if c.Owner != "" || !c.Default {
+				t.Fatalf("mate's own seat = %+v, want own default", c)
+			}
+		case work.ID:
+			if c.Owner != "u@x.com" || c.Default {
+				t.Fatalf("shared seat = %+v, want owner-attributed and NOT default under a name mate owns", c)
+			}
+		default:
+			t.Fatalf("unexpected conn %+v", c)
+		}
 	}
 }
 

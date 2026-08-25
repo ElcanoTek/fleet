@@ -100,6 +100,10 @@ func (f *fakeEngine) SuggestLibraryPrompt(context.Context, string) (*agent.Libra
 }
 func (f *fakeEngine) MCPBroker() agentcore.MCPBroker { return nil }
 func (f *fakeEngine) MCPCatalog() []mcp.ServerTool   { return nil }
+func (f *fakeEngine) OpenApprovalRemoteMCPScope(context.Context, string, string, string) (*agent.RemoteMCPOverlay, error) {
+	return nil, nil
+}
+
 func (f *fakeEngine) OpenApprovalMCPScope(context.Context, agentcore.MCPSelection, string) (*agent.MCPScope, error) {
 	return nil, nil
 }
@@ -289,6 +293,10 @@ func (s *fakeChatStore) SetModel(_ context.Context, _, convID, model string) err
 	return nil
 }
 func (s *fakeChatStore) SetRuntime(context.Context, string, string, string) error { return nil }
+func (s *fakeChatStore) SetConversationMCPAccounts(context.Context, string, string, map[string]string) error {
+	return nil
+}
+
 func (s *fakeChatStore) SetOptionalMCPServers(context.Context, string, string, []string) error {
 	return nil
 }

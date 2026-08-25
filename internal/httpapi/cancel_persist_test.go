@@ -84,6 +84,10 @@ func (f *fakeTurnEngine) SuggestLibraryPrompt(context.Context, string) (*agent.L
 }
 func (f *fakeTurnEngine) MCPBroker() agentcore.MCPBroker { return nil }
 func (f *fakeTurnEngine) MCPCatalog() []mcp.ServerTool   { return nil }
+func (f *fakeTurnEngine) OpenApprovalRemoteMCPScope(context.Context, string, string, string) (*agent.RemoteMCPOverlay, error) {
+	return nil, nil
+}
+
 func (f *fakeTurnEngine) OpenApprovalMCPScope(context.Context, agentcore.MCPSelection, string) (*agent.MCPScope, error) {
 	return nil, nil
 }

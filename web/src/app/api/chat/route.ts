@@ -13,7 +13,10 @@ export const runtime = "nodejs";
  * headers, and pipe the SSE body straight back to the browser.
  *
  * The request body matches chat-server's contract:
- *   { conversation_id?, message, persona?, model?, title?, enabled_optional? }
+ *   { conversation_id?, message, persona?, model?, title?, enabled_optional?,
+ *     mcp_accounts? }
+ * The body is forwarded verbatim — `mcp_accounts` (server → seat label, #988)
+ * needs no handling here.
  *
  * The response is an SSE stream with event types:
  *   conversation, reasoning.start/delta/end, text.delta, tool.call,
