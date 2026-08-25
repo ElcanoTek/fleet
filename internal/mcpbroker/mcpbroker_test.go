@@ -710,6 +710,8 @@ func TestClientServer_RemoteScopeMetadata(t *testing.T) {
 		FilterEnabled: true,
 		Enabled:       []string{}, // filter bit preserves "none" when JSON omits it
 		Shadowed:      []string{"bundle"},
+		Accounts:      map[string]string{"github": "work"}, // seat pins are public labels (#988)
+		Exact:         true,
 	}}
 
 	scope, err := client.OpenScope(context.Background(), spec)
@@ -727,6 +729,9 @@ func TestClientServer_RemoteScopeMetadata(t *testing.T) {
 	}
 	if len(got.Remote.Shadowed) != 1 || got.Remote.Shadowed[0] != "bundle" {
 		t.Fatalf("remote shadowed = %v", got.Remote.Shadowed)
+	}
+	if got.Remote.Accounts["github"] != "work" || !got.Remote.Exact {
+		t.Fatalf("remote seat pins did not cross the boundary: %+v", got.Remote)
 	}
 	skipped := scope.Skipped()
 	if len(skipped) != 1 || skipped[0] != "linear" {
@@ -758,6 +763,16 @@ func TestClientServer_RemoteScopeValidation(t *testing.T) {
 			name: "ambiguous enabled list",
 			spec: ScopeSpec{Remote: &RemoteScopeSpec{UserEmail: "u@example.com", Enabled: []string{"github"}}},
 			want: "remote enabled names require filterEnabled",
+		},
+		{
+			name: "account pin without a server name",
+			spec: ScopeSpec{Remote: &RemoteScopeSpec{UserEmail: "u@example.com", Accounts: map[string]string{" ": "work"}}},
+			want: "remote account pins require a server name",
+		},
+		{
+			name: "exact without pins",
+			spec: ScopeSpec{Remote: &RemoteScopeSpec{UserEmail: "u@example.com", FilterEnabled: true, Exact: true}},
+			want: "exact remote seats require account pins",
 		},
 	}
 	for _, tt := range tests {

@@ -63,16 +63,16 @@ func (f *fakeResolver) SafeHTTPClient() *http.Client { return http.DefaultClient
 func TestBuildRemoteMCPOverlayGuards(t *testing.T) {
 	ctx := context.Background()
 	// nil resolver → nil overlay.
-	if ov, err := BuildRemoteMCPOverlay(ctx, nil, "u@x.com", nil, nil); err != nil || ov.Active() {
+	if ov, err := BuildRemoteMCPOverlay(ctx, nil, "u@x.com", nil, RemoteMCPAllConnected); err != nil || ov.Active() {
 		t.Errorf("nil resolver: ov=%v err=%v", ov, err)
 	}
 	// empty email → nil overlay.
 	r := &fakeResolver{conns: []RemoteMCPConn{{ID: "1", Name: "s", URL: "https://s"}}}
-	if ov, err := BuildRemoteMCPOverlay(ctx, r, "", nil, nil); err != nil || ov.Active() {
+	if ov, err := BuildRemoteMCPOverlay(ctx, r, "", nil, RemoteMCPAllConnected); err != nil || ov.Active() {
 		t.Errorf("empty email: ov=%v err=%v", ov, err)
 	}
 	// no connected servers → nil overlay.
-	if ov, err := BuildRemoteMCPOverlay(ctx, &fakeResolver{}, "u@x.com", nil, nil); err != nil || ov.Active() {
+	if ov, err := BuildRemoteMCPOverlay(ctx, &fakeResolver{}, "u@x.com", nil, RemoteMCPAllConnected); err != nil || ov.Active() {
 		t.Errorf("no servers: ov=%v err=%v", ov, err)
 	}
 }
@@ -89,7 +89,7 @@ func TestBuildRemoteMCPOverlaySkipsAndReportsNeedsReauth(t *testing.T) {
 		conns:    []RemoteMCPConn{{ID: "1", Name: "dead", URL: "https://dead.example.com"}},
 		tokenErr: map[string]error{"1": reauth},
 	}
-	ov, err := BuildRemoteMCPOverlay(ctx, r, "u@x.com", nil, nil)
+	ov, err := BuildRemoteMCPOverlay(ctx, r, "u@x.com", nil, RemoteMCPAllConnected)
 	if err != nil {
 		t.Fatalf("BuildRemoteMCPOverlay: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestBuildRemoteMCPOverlayOptInFilter(t *testing.T) {
 		},
 		tokenErr: map[string]error{"1": errors.New("x"), "2": errors.New("x")},
 	}
-	ov, err := BuildRemoteMCPOverlay(ctx, r, "u@x.com", nil, map[string]bool{"s2": true})
+	ov, err := BuildRemoteMCPOverlay(ctx, r, "u@x.com", nil, RemoteMCPEnabledOnly([]string{"s2"}, nil))
 	if err != nil {
 		t.Fatalf("BuildRemoteMCPOverlay: %v", err)
 	}
@@ -135,7 +135,7 @@ func TestBuildRemoteMCPOverlayOptInMatchesLowercased(t *testing.T) {
 		conns:    []RemoteMCPConn{{ID: "1", Name: "GitHub", URL: "https://gh.example.com"}},
 		tokenErr: map[string]error{"1": errors.New("x")},
 	}
-	ov, err := BuildRemoteMCPOverlay(ctx, r, "u@x.com", nil, map[string]bool{"github": true})
+	ov, err := BuildRemoteMCPOverlay(ctx, r, "u@x.com", nil, RemoteMCPEnabledOnly([]string{"github"}, nil))
 	if err != nil {
 		t.Fatalf("BuildRemoteMCPOverlay: %v", err)
 	}
@@ -148,7 +148,7 @@ func TestBuildRemoteMCPOverlayOptInMatchesLowercased(t *testing.T) {
 		conns:    []RemoteMCPConn{{ID: "1", Name: "GitHub", URL: "https://gh.example.com"}},
 		tokenErr: map[string]error{"1": errors.New("x")},
 	}
-	ov2, err := BuildRemoteMCPOverlay(ctx, r2, "u@x.com", nil, map[string]bool{"other": true})
+	ov2, err := BuildRemoteMCPOverlay(ctx, r2, "u@x.com", nil, RemoteMCPEnabledOnly([]string{"other"}, nil))
 	if err != nil {
 		t.Fatalf("BuildRemoteMCPOverlay: %v", err)
 	}
@@ -274,19 +274,22 @@ func TestManagerOpenRemoteOverlayPrefersInjectedOpener(t *testing.T) {
 	var gotEmail string
 	manager := &Manager{
 		remoteMCP: resolver,
-		openRemoteMCPOverlay: func(_ context.Context, email string, shadowed, enabled map[string]bool) (*RemoteMCPOverlay, error) {
+		openRemoteMCPOverlay: func(_ context.Context, email string, shadowed map[string]bool, sel RemoteMCPSelection) (*RemoteMCPOverlay, error) {
 			gotEmail = email
 			if !shadowed["bundle"] || len(shadowed) != 1 {
 				t.Fatalf("shadowed = %v, want bundle only", shadowed)
 			}
-			if !enabled["remote"] || len(enabled) != 1 {
-				t.Fatalf("enabled = %v, want remote only", enabled)
+			if !sel.Filter || !sel.Enabled["remote"] || len(sel.Enabled) != 1 {
+				t.Fatalf("selection = %+v, want remote only", sel)
+			}
+			if sel.Accounts["remote"] != "work" {
+				t.Fatalf("accounts = %v, want remote→work", sel.Accounts)
 			}
 			return &RemoteMCPOverlay{}, nil
 		},
 	}
 
-	_, err := manager.openRemoteOverlay(context.Background(), "user@example.com", []mcp.ServerTool{{ServerName: "bundle"}}, []string{" ", "remote"})
+	_, err := manager.openRemoteOverlay(context.Background(), "user@example.com", []mcp.ServerTool{{ServerName: "bundle"}}, RemoteMCPEnabledOnly([]string{" ", "remote"}, map[string]string{"remote": "work"}))
 	if err != nil {
 		t.Fatalf("openRemoteOverlay: %v", err)
 	}

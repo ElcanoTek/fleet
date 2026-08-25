@@ -33,6 +33,14 @@ before backend dispatch. A successful response may include public names for
 selected servers that could not be connected, exposed through `Scope.Skipped()`
 as a defensive copy alongside the defensive tool-catalog copy.
 
+A remote request may also carry `accounts` — public seat labels per connection
+name (#988) — and an `exact` bit. The child mounts exactly one seat per name:
+the pinned label, else the seat the owner flagged default; a pinned seat that is
+not connected is reported as skipped (by its registered name) rather than
+replaced by another account. `exact` makes the labels literal (`""` = the
+unlabeled seat), which approval re-execution uses to reopen the very seat a card
+recorded. Labels cross the boundary; the rows and credentials they select do not.
+
 The `fleet mcp-broker` backend implements that interface. It resolves account
 suffixes, identity-routing refusal, `${FLEET_TASK_ID}`, and
 `${FLEET_WORKSPACE}` inside the child; owns one MCP client per opaque scope; and

@@ -49,6 +49,7 @@ import {
   type Message,
 } from "./history";
 import { type ModelPrices } from "@/app/shared/lib/modelCost";
+import { mcpAccountOverrides } from "./mcpAccounts";
 import { classifyBootstrapFailure } from "./bootstrapFailure";
 import { PENDING_CONV_KEY } from "./workspaceHref";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
@@ -185,6 +186,19 @@ export type MCPServerInfo = {
    *  off). Used to seed the empty-state toggle when resetting to a fresh
    *  conversation. */
   enabled_by_default?: boolean;
+  /** Labeled credential seats the user can pick for this server (#988):
+   *  remote connections list their extra logins, bundled connectors their
+   *  provisioned account names. Empty/absent = nothing to pick. */
+  accounts?: string[];
+  /** Label of the seat used when no override is chosen ("" = the unlabeled
+   *  "primary" login). Rendered inside the "Default" option. */
+  default_account?: string;
+  /** This conversation's explicit seat override ("" / absent = default).
+   *  Pre-chat it lives only in local state and rides on the first POST
+   *  /api/chat as `mcp_accounts`. */
+  account?: string;
+  /** A per-user remote (hosted) connection rather than a bundled connector. */
+  remote?: boolean;
 };
 
 // NEW_MODEL_WINDOW_DAYS + isNewlyReleased moved into ./Composer alongside
@@ -1626,6 +1640,10 @@ export function ChatExperience({
   // conversationId === null is the pre-chat case: no row exists yet, so
   // we skip the POST and keep the toggles in local state. They get
   // flushed to the server as part of the first POST /chat body.
+  //
+  // The body is the FULL per-conversation MCP state — `enabled_optional` AND
+  // the `accounts` seat overrides (#988) — because the backend replaces both
+  // wholesale; sending only the toggles would wipe every seat choice.
   const toggleMcpServer = async (
     conversationId: string | null,
     name: string,
@@ -1636,16 +1654,43 @@ export function ChatExperience({
     );
     setMcpServers(nextServers);
     if (!conversationId) return;
-    const enabledOptional = nextServers
-      .filter((s) => s.enabled)
-      .map((s) => s.name);
+    await postMcpServerState(conversationId, nextServers, prev);
+  };
+
+  // setMcpServerAccount records which credential seat (login) a server
+  // should use in this conversation ("" = the user's default seat). Same
+  // optimistic-update + full-state POST + revert-on-failure shape as the
+  // toggle above; pre-chat the choice stays local and rides on the first
+  // POST /chat body as `mcp_accounts`.
+  const setMcpServerAccount = async (
+    conversationId: string | null,
+    name: string,
+    account: string,
+  ) => {
+    const prev = mcpServers;
+    const nextServers = prev.map((s) =>
+      s.name === name ? { ...s, account } : s,
+    );
+    setMcpServers(nextServers);
+    if (!conversationId) return;
+    await postMcpServerState(conversationId, nextServers, prev);
+  };
+
+  const postMcpServerState = async (
+    conversationId: string,
+    next: MCPServerInfo[],
+    prev: MCPServerInfo[],
+  ) => {
     try {
       const response = await fetch(
         `/api/conversations/${encodeURIComponent(conversationId)}/mcp-servers`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ enabled_optional: enabledOptional }),
+          body: JSON.stringify({
+            enabled_optional: next.filter((s) => s.enabled).map((s) => s.name),
+            accounts: mcpAccountOverrides(next),
+          }),
         },
       );
       if (!response.ok) {
@@ -2975,7 +3020,7 @@ export function ChatExperience({
     // Then refresh the preview in the background so prefs changed since
     // startup are picked up.
     setMcpServers((prev) =>
-      prev.map((s) => ({ ...s, enabled: seedServerEnabled(s) })),
+      prev.map((s) => ({ ...s, enabled: seedServerEnabled(s), account: "" })),
     );
     void loadMcpServerCatalogPreviewRef.current();
     // Lockdown is set per-conversation. New regular chat clears it;
@@ -4826,6 +4871,7 @@ export function ChatExperience({
                 isLoadingMcpServers={isLoadingMcpServers}
                 loadMcpServerCatalog={loadMcpServerCatalog}
                 toggleMcpServer={toggleMcpServer}
+                setMcpServerAccount={setMcpServerAccount}
                 activeConversationId={activeConversationId}
                 messages={messages}
                 contextUsage={contextUsage}

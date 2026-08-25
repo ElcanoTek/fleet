@@ -31,6 +31,9 @@ type addRemoteMCPRequest struct {
 	Name     string `json:"name"`
 	URL      string `json:"url"`
 	AuthMode string `json:"auth,omitempty"`
+	// Account is the seat label for a further login under an existing name
+	// (#988); empty adds the unlabeled seat.
+	Account string `json:"account,omitempty"`
 	// Optional manual client credentials for an AS without dynamic registration.
 	ClientID     string `json:"client_id,omitempty"`
 	ClientSecret string `json:"client_secret,omitempty"`
@@ -88,6 +91,7 @@ func (s *Server) remoteMCPServers(w http.ResponseWriter, r *http.Request) {
 		server, toolCount, err := s.remoteMCP.AddServer(r.Context(), remotemcp.AddServerInput{
 			Email:        user,
 			Name:         req.Name,
+			Account:      req.Account,
 			URL:          req.URL,
 			AuthMode:     req.AuthMode,
 			ClientID:     req.ClientID,
@@ -116,8 +120,9 @@ func (s *Server) remoteMCPServers(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// remoteMCPServerByID handles DELETE /remote-mcp-servers/{id} and
-// POST /remote-mcp-servers/{id}/authorize.
+// remoteMCPServerByID handles DELETE /remote-mcp-servers/{id},
+// POST /remote-mcp-servers/{id}/authorize, POST .../{id}/default and
+// PUT .../{id}/account (#988 seats), plus the share/key/signout sub-routes.
 func (s *Server) remoteMCPServerByID(w http.ResponseWriter, r *http.Request) {
 	if !s.remoteMCPReady(w) {
 		return
@@ -176,6 +181,28 @@ func (s *Server) remoteMCPServerByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, map[string]any{"ok": true, "tool_count": toolCount})
+	case sub == "default" && r.Method == http.MethodPost:
+		// Make this seat the default among the caller's seats of the same
+		// connection name (#988). Owner-only; idempotent.
+		if err := s.remoteMCP.SetDefaultSeat(r.Context(), user, id); err != nil {
+			s.remoteMCPError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	case sub == "account" && r.Method == http.MethodPut:
+		// Rename a seat's public label (#988). The credential is untouched.
+		var req struct {
+			Account string `json:"account"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := s.remoteMCP.RenameSeat(r.Context(), user, id, req.Account); err != nil {
+			s.remoteMCPError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	case sub == "signout" && r.Method == http.MethodPost:
 		if err := s.remoteMCP.SignOut(r.Context(), user, id); err != nil {
 			s.remoteMCPError(w, err)
@@ -271,6 +298,10 @@ func (s *Server) remoteMCPError(w http.ResponseWriter, err error) {
 		http.Error(w, "authorization session expired or already used — start the connection again", http.StatusConflict)
 	case errors.Is(err, store.ErrRemoteMCPNeedsReauth):
 		http.Error(w, "this connection needs to be re-authorized", http.StatusConflict)
+	case errors.Is(err, store.ErrRemoteMCPSeatExists):
+		http.Error(w, err.Error(), http.StatusConflict)
+	case errors.Is(err, store.ErrRemoteMCPAccountInvalid):
+		http.Error(w, err.Error(), http.StatusBadRequest)
 	case errors.Is(err, remotemcp.ErrManualClientRequired):
 		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
 	case errors.Is(err, remotemcp.ErrDisabled):

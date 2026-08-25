@@ -17,6 +17,23 @@ prior versions are listed because none have shipped.
 
 ## [Unreleased]
 
+### Added
+
+- **Multiple logins for hosted (official) MCP connections** (#988). A user can
+  hold several seats under one connection name — a work and a personal GitHub,
+  two Gamma workspaces — each with its own sealed token and its own share
+  grants, and pick which one a chat or a scheduled task uses. Settings →
+  Connections groups seats per name with "Set default", "Rename" and "Add
+  another account"; the chat Tools picker gains a per-conversation seat
+  override (bundled connectors too — `conversations.mcp_accounts`); the task
+  modal pins a hosted seat via `mcp_selection {server, account}`. A run mounts
+  exactly one seat per name, registered under the bundle seat formula
+  (`mcp_<name>_<account>_*`), and a pinned seat that is not connected is
+  skipped — never replaced by another account. Approval execution against a
+  hosted connection reopens the exact seat the card recorded. Migrations 051
+  (`remote_mcp_servers.account`/`is_default`, uniqueness per seat) and 052.
+  Design note: `docs/REMOTE-MCP-MULTI-LOGIN.md`; ADR-0050.
+
 ### Fixed
 
 - **Scheduled runs could not stage files where their own sandbox could read

@@ -77,5 +77,9 @@ endpoint refuses an unknown seat up front.
 - The task modal's pickable set is not filtered by the task author's prefs —
   orchestrator identity is not guaranteed to map to a chat user, and tasks are
   an operator surface; revisit if the identities unify.
-- The chat Tools picker offers no per-conversation seat override yet; the seat
-  comes from the availability default (tasks can pin any seat).
+- The chat Tools picker can override the seat per conversation (#988,
+  `conversations.mcp_accounts`, `POST /conversations/{id}/mcp-servers
+  {accounts}`); without an override the seat comes from the availability
+  default (tasks pin their own). Hosted connections use the same picker: their
+  default is the seat flagged default on the connections page — see
+  `docs/REMOTE-MCP-MULTI-LOGIN.md`.

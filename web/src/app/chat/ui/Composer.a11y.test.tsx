@@ -18,7 +18,12 @@ const MODELS = [
 
 // A minimal host that owns the state Composer normally gets from
 // ChatExperience — enough for the model picker to open, focus and close.
-function Host() {
+// `overrides` lets a test hand in a tools roster and spy handlers.
+function Host({
+  overrides,
+}: {
+  overrides?: Partial<Parameters<typeof Composer>[0]>;
+}) {
   const [prompt, setPrompt] = useState("");
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [modelSearchQuery, setModelSearchQuery] = useState("");
@@ -85,6 +90,7 @@ function Host() {
     isLoadingMcpServers: false,
     loadMcpServerCatalog: noop,
     toggleMcpServer: noop,
+    setMcpServerAccount: noop,
     activeConversationId: null,
     messages: [],
     contextUsage: null,
@@ -95,7 +101,7 @@ function Host() {
     abortControllersRef,
     isPendingKey: () => false,
   } as unknown as Parameters<typeof Composer>[0];
-  return <Composer {...props} />;
+  return <Composer {...props} {...overrides} />;
 }
 
 afterEach(() => {
@@ -121,5 +127,63 @@ describe("Composer — model picker focus and Escape", () => {
       expect(screen.queryByRole("combobox", { name: "Model" })).not.toBeInTheDocument(),
     );
     expect(chip).toHaveFocus();
+  });
+});
+
+// Multi-login seats in the tools popover (#988): a server with labeled seats
+// gets a compact Account select beneath its toggle row. Changing it must reach
+// setMcpServerAccount and must NOT flip the row (the select is a sibling of
+// the row button and stops propagation), while the row itself still toggles.
+describe("Composer — tools popover seat picker", () => {
+  it("changing the seat calls setMcpServerAccount without toggling the row", async () => {
+    const toggleMcpServer = vi.fn();
+    const setMcpServerAccount = vi.fn();
+    render(
+      <Host
+        overrides={{
+          mcpServers: [
+            {
+              name: "gamma",
+              display_name: "Gamma",
+              description: "Decks and docs.",
+              tools: ["create_deck"],
+              tool_count: 1,
+              enabled: true,
+              accounts: ["personal", "work"],
+              default_account: "work",
+              remote: true,
+            },
+            {
+              name: "solo",
+              description: "No seats.",
+              tools: [],
+              tool_count: 2,
+              enabled: false,
+            },
+          ],
+          toggleMcpServer,
+          setMcpServerAccount,
+        }}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Optional tools" }));
+    const select = (await screen.findByTestId("mcp-seat-gamma")) as HTMLSelectElement;
+    // Only the server with seats gets a picker; the Default option names the
+    // default seat.
+    expect(screen.queryByTestId("mcp-seat-solo")).not.toBeInTheDocument();
+    expect(Array.from(select.options).map((o) => o.textContent)).toEqual([
+      "Default (work)",
+      "personal",
+      "work",
+    ]);
+
+    fireEvent.click(select);
+    fireEvent.change(select, { target: { value: "personal" } });
+    expect(setMcpServerAccount).toHaveBeenCalledWith(null, "gamma", "personal");
+    expect(toggleMcpServer).not.toHaveBeenCalled();
+
+    // The row is still the toggle it always was.
+    fireEvent.click(screen.getByRole("button", { name: /Decks and docs/ }));
+    expect(toggleMcpServer).toHaveBeenCalledWith(null, "gamma");
   });
 });
