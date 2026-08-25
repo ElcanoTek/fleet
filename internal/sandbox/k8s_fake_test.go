@@ -285,7 +285,24 @@ var (
 	fileOpsRe = regexp.MustCompile(`^head -c (\d+) \| python3 (\S+)$`)
 )
 
-var execUpgrader = websocket.Upgrader{Subprotocols: []string{k8sExecProtocolV4}}
+// The channel-protocol constants moved out of production code when exec went
+// through client-go (the executor owns the framing); the fake still speaks the
+// raw protocol because it IS the emulated server side.
+const (
+	// client-go's executor speaks v5 only (v4 + a stream-close signal); a
+	// modern kubelet offers it, so the fake does too.
+	k8sExecProtocolV5 = "v5.channel.k8s.io"
+
+	k8sChannelStdin  = 0
+	k8sChannelStdout = 1
+	k8sChannelStderr = 2
+	k8sChannelError  = 3
+
+	// k8sStreamClose is v5's half-close: a two-byte message [255, streamID].
+	k8sStreamClose = 255
+)
+
+var execUpgrader = websocket.Upgrader{Subprotocols: []string{k8sExecProtocolV5}}
 
 // execConn wraps the server side of one exec connection.
 type execConn struct {
@@ -313,12 +330,17 @@ func (e *execConn) finish(exitCode int) {
 	_ = e.conn.Close()
 }
 
-// readStdin reads stdin frames until n bytes have arrived (or the conn ends).
+// readStdin reads stdin frames until n bytes have arrived, the client
+// half-closes stdin (the v5 [255, 0] signal — how a real kubelet learns the
+// payload is complete), or the conn ends.
 func (e *execConn) readStdin(n int) []byte {
 	var buf bytes.Buffer
 	for buf.Len() < n {
 		_, data, err := e.conn.ReadMessage()
 		if err != nil {
+			break
+		}
+		if len(data) == 2 && data[0] == k8sStreamClose && data[1] == k8sChannelStdin {
 			break
 		}
 		if len(data) > 0 && data[0] == k8sChannelStdin {

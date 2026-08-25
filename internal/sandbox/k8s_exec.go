@@ -4,58 +4,78 @@
 package sandbox
 
 // k8s_exec.go streams pod exec sessions for the kubernetes sandbox backend
-// over the apiserver's WebSocket channel protocol (v4.channel.k8s.io): each
-// binary frame's first byte names a channel — 0 stdin (client→server),
-// 1 stdout, 2 stderr, 3 error/status (server→client) — and the server closes
-// the connection when the exec'd process exits, after publishing a
-// metav1.Status on channel 3 carrying the exit code.
+// through client-go's remotecommand WebSocket executor — the same transport
+// kubectl uses.
 //
-// v4 is the oldest protocol every supported apiserver speaks; it cannot
-// half-close stdin, so an exec whose process reads stdin TO EOF must bound
-// the read itself — the backend wraps such commands in `head -c <n>` (see
-// k8s_backend.go) rather than depending on the newer v5 close channel.
+// It used to hand-roll the v4.channel.k8s.io protocol over gorilla/websocket.
+// That client was unit-tested against a fake apiserver and never against a
+// real one, and the first real cluster (the bundle's own kind rehearsal,
+// issue #1264) showed it losing exec stdin NONDETERMINISTICALLY for payloads
+// beyond a few KB: the 28KB bridge upload wedged until its deadline on ~4 of
+// 5 attempts, every warm pod churned on a two-minute cycle, and no tool call
+// could run. The identical uploads through client-go's executor succeeded 5
+// of 5 on the same cluster, pod and payloads — as did kubectl at 7MB — so the
+// defect was in our client, not the cluster.
+//
+// ADR-0049 chose the hand-rolled client to keep the dependency tree small and
+// recorded a revisit trigger. Demonstrated unreliability of exec streaming —
+// the one operation every bash/python/file tool call rides on — is that
+// trigger; the ADR is amended in the same change. Scope of the adoption is
+// deliberately narrow: client-go is a TRANSPORT for exec only. Pod CRUD and
+// the preflight stay on the hand-rolled REST client (five plain verbs that
+// demonstrably work), and the kubeconfig posture is unchanged — fleet's own
+// strict parser still refuses exec plugins and insecure-skip-tls-verify, and
+// the rest.Config handed to client-go is built from that already-validated
+// material, never by clientcmd.
+//
+// The executor speaks v5.channel.k8s.io ONLY (client-go's default: v4 has no
+// stdin half-close, and v5 is served by every Kubernetes version fleet
+// supports). Stdin EOF is therefore signalled for real on the wire; the
+// `head -c <len>` bounding in k8s_backend.go stays as belt-and-braces so the
+// commands do not depend on the close frame arriving.
+//
+// The in-package session API (execPod / runOneShotExec / writeStdin / wait /
+// close) is preserved so the backend's lifecycle choreography — in particular
+// the teardown ordering that closes the bridge stdout pipe before joining the
+// session (#1257) — is untouched.
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
-	"net/http"
 	"net/url"
 	"path"
 	"strconv"
 	"sync"
 	"time"
 
-	"github.com/gorilla/websocket"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/remotecommand"
+	utilexec "k8s.io/client-go/util/exec"
 )
 
-const (
-	k8sExecProtocolV4 = "v4.channel.k8s.io"
+// k8sExecStartGrace is how long execPod watches a fresh stream for an
+// immediate failure (upgrade rejection, RBAC denial) before handing the
+// session to the caller. client-go has no separate dial phase — the whole
+// exec is one call — so an early exit of the stream is the failure signal.
+const k8sExecStartGrace = 200 * time.Millisecond
 
-	k8sChannelStdin  = 0
-	k8sChannelStdout = 1
-	k8sChannelStderr = 2
-	k8sChannelError  = 3
+// k8sExecCloseGrace is how long close waits for a session to end by itself
+// after stdin is half-closed, before falling back to cancellation. A clean
+// exit (the bridge's `for line in sys.stdin` loop returning on EOF) takes
+// milliseconds; the grace only elapses in full for a process that ignores
+// stdin EOF, and the cancel backstop below still bounds those.
+const k8sExecCloseGrace = 2 * time.Second
 
-	// k8sExecHandshakeTimeout bounds the WebSocket dial+upgrade.
-	k8sExecHandshakeTimeout = 15 * time.Second
-
-	// k8sStdinChunk bounds a single stdin frame. Large writes (a bridge
-	// request embedding a big code cell, a fileop write payload) are split so
-	// no single frame approaches server message-size limits.
-	k8sStdinChunk = 512 * 1024
-)
-
-// k8sExecSession is one live exec connection. Writes go to the process's
-// stdin; the background read loop demultiplexes stdout/stderr/status frames
-// into the sinks given at dial time. done is closed when the read loop ends;
-// result() then reports the exec's outcome.
+// k8sExecSession is one live exec. writeStdin feeds the process's stdin
+// through a pipe the executor drains; stdout/stderr are demultiplexed by
+// client-go into the sinks given at start. done closes when the exec ends;
+// result() then reports the outcome.
 type k8sExecSession struct {
-	conn *websocket.Conn
-
-	writeMu sync.Mutex
+	stdinW *io.PipeWriter // nil when the exec was started without stdin
+	cancel context.CancelFunc
 
 	done chan struct{}
 
@@ -64,11 +84,40 @@ type k8sExecSession struct {
 	execErr  error
 }
 
-// execPod dials the exec subresource for the named pod and starts the
-// background demux loop. stdout/stderr sinks must be goroutine-safe or owned
-// solely by the loop. withStdin controls whether the server keeps a stdin
-// channel open (a stdin-less exec gives the process an immediately-EOF stdin,
-// matching the podman backend's unset cmd.Stdin).
+// restConfigForExec derives a client-go rest.Config from the client's
+// already-validated credentials. Deliberately NOT clientcmd: fleet's
+// kubeconfig parser is what refuses exec plugins and
+// insecure-skip-tls-verify, and loading the file again here would silently
+// re-admit both.
+func (c *k8sClient) restConfigForExec() *rest.Config {
+	cfg := &rest.Config{
+		Host: c.baseURL.String(),
+		TLSClientConfig: rest.TLSClientConfig{
+			CAData:   c.caPEM,
+			CertData: c.certPEM,
+			KeyData:  c.keyPEM,
+		},
+	}
+	switch {
+	case c.tokenFile != "":
+		// client-go re-reads the file per request, so rotated bound tokens
+		// keep working exactly as they did with the hand-rolled reader.
+		cfg.BearerTokenFile = c.tokenFile
+	case c.staticToken != "":
+		cfg.BearerToken = c.staticToken
+	}
+	return cfg
+}
+
+// execPod starts an exec in the pod. stdout/stderr sinks must be
+// goroutine-safe or owned solely by the stream. withStdin controls whether
+// the server keeps a stdin channel open (a stdin-less exec gives the process
+// an immediately-EOF stdin, matching the podman backend's unset cmd.Stdin).
+//
+// ctx bounds only the START of the exec; the session then runs on its own
+// cancellable context, because the bridge session deliberately outlives any
+// single request context and is torn down via close(). Callers that want the
+// whole exec bounded do so through wait(ctx), as before.
 func (c *k8sClient) execPod(ctx context.Context, namespace, pod, container string, command []string, withStdin bool, stdout, stderr io.Writer) (*k8sExecSession, error) {
 	q := url.Values{}
 	q.Set("container", container)
@@ -80,196 +129,158 @@ func (c *k8sClient) execPod(ctx context.Context, namespace, pod, container strin
 		q.Add("command", arg)
 	}
 	u := *c.baseURL
-	switch u.Scheme {
-	case "https":
-		u.Scheme = "wss"
-	case "http":
-		u.Scheme = "ws"
-	}
 	u.Path = path.Join(u.Path, "/api/v1/namespaces/"+namespace+"/pods/"+pod+"/exec")
 	u.RawQuery = q.Encode()
 
-	header := http.Header{}
-	token, err := c.bearerToken()
+	executor, err := remotecommand.NewWebSocketExecutor(c.restConfigForExec(), "GET", u.String())
 	if err != nil {
-		return nil, err
-	}
-	if token != "" {
-		header.Set("Authorization", "Bearer "+token)
-	}
-	dialer := &websocket.Dialer{
-		TLSClientConfig:  c.tlsConfig,
-		Subprotocols:     []string{k8sExecProtocolV4},
-		HandshakeTimeout: k8sExecHandshakeTimeout,
-	}
-	conn, resp, err := dialer.DialContext(ctx, u.String(), header)
-	if err != nil {
-		if resp != nil {
-			// The upgrade response body carries the apiserver's status message
-			// (RBAC denial, container not found) — surface it, bounded and
-			// newline-sanitized (cluster-derived text ends up in logs).
-			body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-			_ = resp.Body.Close()
-			return nil, fmt.Errorf("pod exec dial: %w (HTTP %d: %.500s)", err, resp.StatusCode, sanitizeClusterText(string(body)))
-		}
-		return nil, fmt.Errorf("pod exec dial: %w", err)
+		return nil, fmt.Errorf("pod exec executor: %w", err)
 	}
 
-	s := &k8sExecSession{conn: conn, done: make(chan struct{}), exitCode: -1}
-	go s.readLoop(stdout, stderr)
-	return s, nil
-}
+	sessCtx, cancel := context.WithCancel(context.Background())
+	s := &k8sExecSession{cancel: cancel, done: make(chan struct{}), exitCode: -1}
 
-// readLoop demultiplexes server frames until the connection ends, then
-// records the outcome. A clean close after a Success status yields exit 0; a
-// NonZeroExitCode status yields the process's code; a connection that ends
-// without any status is an error (the process outcome is unknown).
-func (s *k8sExecSession) readLoop(stdout, stderr io.Writer) {
-	defer close(s.done)
-	var status []byte
-	sawStatus := false
-	for {
-		msgType, data, err := s.conn.ReadMessage()
-		if err != nil {
-			code, execErr := parseExecStatus(status, sawStatus, err)
-			s.mu.Lock()
-			s.exitCode, s.execErr = code, execErr
-			s.mu.Unlock()
-			return
+	var stdin io.Reader
+	if withStdin {
+		pr, pw := io.Pipe()
+		s.stdinW = pw
+		stdin = pr
+	}
+
+	go func() {
+		defer close(s.done)
+		streamErr := executor.StreamWithContext(sessCtx, remotecommand.StreamOptions{
+			Stdin:  stdin,
+			Stdout: stdout,
+			Stderr: stderr,
+		})
+		code, execErr := execOutcome(streamErr)
+		s.mu.Lock()
+		s.exitCode, s.execErr = code, execErr
+		s.mu.Unlock()
+		if s.stdinW != nil {
+			// Unblock any writeStdin parked on the pipe once the exec is over.
+			_ = s.stdinW.CloseWithError(io.ErrClosedPipe)
 		}
-		if msgType != websocket.BinaryMessage && msgType != websocket.TextMessage {
-			continue
+	}()
+
+	// Watch a fresh stream briefly so an upgrade/RBAC failure surfaces as the
+	// dial error callers expect, instead of a session whose first wait fails.
+	grace := time.NewTimer(k8sExecStartGrace)
+	defer grace.Stop()
+	select {
+	case <-s.done:
+		// The stream ended already. An instant failure is a dial error; an
+		// exec that legitimately completed this fast is a valid session whose
+		// result is ready.
+		if _, resErr := s.result(); resErr != nil {
+			cancel()
+			return nil, fmt.Errorf("pod exec dial: %w", resErr)
 		}
-		if len(data) == 0 {
-			continue
-		}
-		payload := data[1:]
-		switch data[0] {
-		case k8sChannelStdout:
-			if stdout != nil && len(payload) > 0 {
-				_, _ = stdout.Write(payload)
-			}
-		case k8sChannelStderr:
-			if stderr != nil && len(payload) > 0 {
-				_, _ = stderr.Write(payload)
-			}
-		case k8sChannelError:
-			sawStatus = true
-			status = append(status, payload...)
-		}
+		return s, nil
+	case <-ctx.Done():
+		cancel()
+		<-s.done
+		return nil, fmt.Errorf("pod exec dial: %w", ctx.Err())
+	case <-grace.C:
+		return s, nil
 	}
 }
 
-// parseExecStatus turns the channel-3 metav1.Status (if any) plus the read
-// error that ended the loop into (exitCode, err). Only a normal-closure /
-// EOF-family end with a parsed status is a trustworthy outcome.
-func parseExecStatus(status []byte, sawStatus bool, readErr error) (int, error) {
-	if !sawStatus {
-		if websocket.IsCloseError(readErr, websocket.CloseNormalClosure) {
-			// Some proxies drop the status frame on a zero-exit process; treat a
-			// clean close without status as success — the failure directions
-			// (non-zero exit, kill, RBAC) all DO produce a status or an abnormal
-			// close, so this cannot mask them.
-			return 0, nil
-		}
-		// %s of the sanitized text, not %w: a close error's reason text is
-		// server-supplied (remote), and nothing upstream matches on the
-		// wrapped type — losing the chain costs nothing here.
-		return -1, fmt.Errorf("pod exec ended without a status frame: %s", sanitizeClusterText(readErr.Error()))
-	}
-	var st struct {
-		Status  string `json:"status"`
-		Reason  string `json:"reason"`
-		Message string `json:"message"`
-		Details struct {
-			Causes []struct {
-				Reason  string `json:"reason"`
-				Message string `json:"message"`
-			} `json:"causes"`
-		} `json:"details"`
-	}
-	if err := json.Unmarshal(status, &st); err != nil {
-		return -1, fmt.Errorf("parse pod exec status: %w (raw: %.200s)", err, sanitizeClusterText(string(status)))
-	}
-	// Every message below is cluster-derived text that ends up in logged
-	// errors — sanitized like everything else that leaves this package.
-	switch {
-	case st.Status == "Success":
+// execOutcome maps client-go's stream error to (exitCode, execErr): nil is
+// exit 0; a CodeExitError is the process's own non-zero exit (not a transport
+// failure); anything else means the outcome is unknown and is surfaced as an
+// error with cluster-derived text sanitized (it ends up in logs).
+func execOutcome(streamErr error) (int, error) {
+	if streamErr == nil {
 		return 0, nil
-	case st.Reason == "NonZeroExitCode":
-		for _, cause := range st.Details.Causes {
-			if cause.Reason == "ExitCode" {
-				code, err := strconv.Atoi(cause.Message)
-				if err != nil {
-					return -1, fmt.Errorf("parse pod exec exit code %q: %w", sanitizeClusterText(cause.Message), err)
-				}
-				return code, nil
-			}
-		}
-		return -1, fmt.Errorf("pod exec reported NonZeroExitCode without an ExitCode cause: %s", sanitizeClusterText(st.Message))
-	default:
-		// A failure that is not an exit code: the exec itself failed (command
-		// not found in a way the shell couldn't report, container gone, …).
-		return -1, fmt.Errorf("pod exec failed: %s", sanitizeClusterText(st.Message))
 	}
+	var codeErr utilexec.CodeExitError
+	if errors.As(streamErr, &codeErr) {
+		return codeErr.Code, nil
+	}
+	if errors.Is(streamErr, context.Canceled) || errors.Is(streamErr, context.DeadlineExceeded) {
+		return -1, streamErr
+	}
+	return -1, fmt.Errorf("pod exec: %s", sanitizeClusterText(streamErr.Error()))
 }
 
-// writeStdin sends bytes to the process's stdin, chunked. Goroutine-safe.
+// writeStdin sends bytes to the process's stdin. Goroutine-safe by way of the
+// pipe; blocks until the executor has consumed the bytes.
 func (s *k8sExecSession) writeStdin(p []byte) error {
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-	for len(p) > 0 {
-		n := len(p)
-		if n > k8sStdinChunk {
-			n = k8sStdinChunk
-		}
-		// No manual size arithmetic (`1+n` trips CodeQL's
-		// allocation-size-overflow check, exactly like podmanArgs' old
-		// `len(rest)+1`); append sizes the backing array itself.
-		frame := append([]byte{k8sChannelStdin}, p[:n]...)
-		if err := s.conn.WriteMessage(websocket.BinaryMessage, frame); err != nil {
-			return fmt.Errorf("write pod exec stdin: %w", err)
-		}
-		p = p[n:]
+	if s.stdinW == nil {
+		return errors.New("write pod exec stdin: session started without stdin")
+	}
+	if _, err := s.stdinW.Write(p); err != nil {
+		return fmt.Errorf("write pod exec stdin: %w", err)
 	}
 	return nil
 }
 
-// wait blocks until the exec ends or ctx is done. On ctx expiry the
-// connection is torn down (which unblocks the read loop) and ctx's error is
-// returned — the PROCESS inside the pod may still be running; the caller owns
-// the #796 containment (delete the pod, poison the sandbox).
-func (s *k8sExecSession) wait(ctx context.Context) (int, error) {
-	select {
-	case <-ctx.Done():
-		_ = s.conn.Close()
-		<-s.done
-		return -1, ctx.Err()
-	case <-s.done:
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		return s.exitCode, s.execErr
+// closeStdin signals stdin EOF — under v5 client-go half-closes the stdin
+// stream on the wire, so a stdin-to-EOF reader terminates even without the
+// `head -c` bounding the callers keep as belt-and-braces.
+func (s *k8sExecSession) closeStdin() {
+	if s.stdinW != nil {
+		_ = s.stdinW.Close()
 	}
 }
 
-// close tears the connection down and waits, boundedly, for the read loop to
-// exit. Bounded for the same reason the podman backend bounds its own bridge
-// reap: the wait runs under the sandbox mutex on paths that must not stall
-// (Pool.Close drains parked sandboxes serially), so a wedged loop should cost
-// a leaked goroutine, never a hung shutdown.
+// result reports the exec outcome; authoritative once done is closed.
+func (s *k8sExecSession) result() (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.exitCode, s.execErr
+}
+
+// wait blocks until the exec ends or ctx is done. On ctx expiry the stream is
+// cancelled (which unblocks the executor) and ctx's error is returned — the
+// PROCESS inside the pod may still be running; the caller owns the #796
+// containment (delete the pod, poison the sandbox).
+func (s *k8sExecSession) wait(ctx context.Context) (int, error) {
+	select {
+	case <-ctx.Done():
+		s.cancel()
+		<-s.done
+		return -1, ctx.Err()
+	case <-s.done:
+		return s.result()
+	}
+}
+
+// close tears the session down, preferring a clean end over a cancellation.
+// Stdin is half-closed first (a real EOF on the wire under v5), so a process
+// blocked reading stdin — the bridge's `for line in sys.stdin` loop — exits by
+// itself and the stream finishes without error. Cancelling first worked too,
+// but it tore the websocket down under client-go's copy goroutines, which
+// logged spurious "use of closed network connection" errors on every sandbox
+// retirement. The cancel stays as the backstop for a process that ignores
+// EOF, and the whole close stays bounded for the same reason the podman
+// backend bounds its own bridge reap: the wait runs under the sandbox mutex
+// on paths that must not stall (Pool.Close drains parked sandboxes serially),
+// so a wedged stream should cost a leaked goroutine, never a hung shutdown.
 func (s *k8sExecSession) close() {
-	_ = s.conn.Close()
+	if s.stdinW != nil {
+		_ = s.stdinW.Close()
+		select {
+		case <-s.done:
+			s.cancel() // release the session context; the stream already ended
+			return
+		case <-time.After(k8sExecCloseGrace):
+		}
+	}
+	s.cancel()
 	select {
 	case <-s.done:
 	case <-time.After(bridgeReapTimeout):
-		log.Printf("sandbox: exec read loop did not exit within %s of connection close — abandoning the join to keep teardown bounded", bridgeReapTimeout)
+		log.Printf("sandbox: exec stream did not exit within %s of cancel — abandoning the join to keep teardown bounded", bridgeReapTimeout)
 	}
 }
 
 // runOneShotExec execs command in the pod, optionally feeding stdin, and
-// waits for it to finish. ctx bounds the whole call. The command must
-// consume a bounded stdin (v4 cannot signal stdin EOF): callers wrap
-// stdin-to-EOF readers in `head -c <len>`.
+// waits for it to finish. ctx bounds the whole call. Commands that consume
+// stdin to EOF stay bounded with `head -c <len>` as belt-and-braces; the
+// closeStdin below half-closes on the wire under v5.
 func (c *k8sClient) runOneShotExec(ctx context.Context, namespace, pod, container string, command []string, stdin []byte, stdout, stderr io.Writer) (int, error) {
 	session, err := c.execPod(ctx, namespace, pod, container, command, len(stdin) > 0, stdout, stderr)
 	if err != nil {
@@ -287,6 +298,7 @@ func (c *k8sClient) runOneShotExec(ctx context.Context, namespace, pod, containe
 			}
 			return -1, err
 		}
+		session.closeStdin()
 	}
 	return session.wait(ctx)
 }

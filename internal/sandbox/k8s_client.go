@@ -62,9 +62,16 @@ const k8sRequestTimeout = 30 * time.Second
 type k8sClient struct {
 	baseURL *url.URL
 	httpc   *http.Client
-	// tlsConfig is retained for the websocket dialer (exec), which cannot
-	// share http.Transport.
+	// tlsConfig is retained for the hand-rolled REST transport.
 	tlsConfig *tls.Config
+
+	// The raw PEM material behind tlsConfig, retained so the exec path can
+	// hand client-go a rest.Config built from the SAME already-validated
+	// bytes (k8s_exec.go restConfigForExec) — never a re-parse of the
+	// kubeconfig, which would bypass fleet's strict refusals.
+	caPEM   []byte
+	certPEM []byte
+	keyPEM  []byte
 
 	// Exactly one of the following is set. staticToken is a kubeconfig token;
 	// tokenFile is re-read per request so rotated bound tokens keep working.
@@ -131,6 +138,7 @@ func newInClusterClient() (*k8sClient, error) {
 	return &k8sClient{
 		baseURL:   base,
 		tlsConfig: tlsCfg,
+		caPEM:     caPEM,
 		tokenFile: inClusterTokenFile,
 		httpc: &http.Client{
 			Transport: &http.Transport{TLSClientConfig: tlsCfg},

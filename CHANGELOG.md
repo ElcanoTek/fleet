@@ -17,6 +17,37 @@ prior versions are listed because none have shipped.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The Kubernetes sandbox backend can now actually run tool calls: exec
+  streaming rides client-go instead of a hand-rolled WebSocket client
+  (#1264).** The first real cluster this backend ever met — the example
+  bundle's own kind rehearsal — showed the hand-rolled `v4.channel.k8s.io`
+  client losing exec stdin nondeterministically for payloads beyond a few KB.
+  The 28KB bridge upload wedged until its two-minute deadline on roughly four
+  of five attempts, every warm pod churned on that cycle forever, and not one
+  `bash`/`run_python`/file tool call could execute; the identical uploads
+  through client-go's `remotecommand` executor succeeded five of five on the
+  same cluster, pod and payloads, as did kubectl at 7MB. Exec now uses that
+  executor (protocol `v5.channel.k8s.io`, with a real stdin half-close on the
+  wire).
+
+  The adoption is deliberately narrow, and ADR-0049 is amended in place: its
+  own recorded revisit trigger fired. client-go is a **transport, never a
+  config loader** — pod CRUD and the boot preflight stay on the hand-rolled
+  REST client, and kubeconfig handling stays fleet's strict parser (exec
+  plugins and `insecure-skip-tls-verify` still refused; the `rest.Config`
+  handed to client-go is built from the already-validated material). The
+  in-package session API and the #1257 teardown choreography are unchanged,
+  and the fake-apiserver suite now speaks `v5` — including the stream-close
+  frame — because that is what real kubelets serve. Session teardown prefers a
+  clean end over a cancellation: stdin is half-closed first so the bridge's
+  read loop exits on EOF and the stream finishes by itself — cancelling an
+  active stream made client-go's copy goroutines log spurious "use of closed
+  network connection" errors on every sandbox retirement — with the cancel
+  kept as the bounded backstop for a process that ignores EOF.
+
+
 ### Added
 
 - **Multiple logins for hosted (official) MCP connections** (#988). A user can
