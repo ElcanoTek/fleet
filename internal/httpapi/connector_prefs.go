@@ -143,15 +143,17 @@ func remoteEnabledFor(prefs map[string]store.ConnectorPref, serverID string) boo
 }
 
 // applyConnectorPrefs filters a conversation's opted-in bundled servers by the
-// user's availability prefs and resolves their default credential-account
-// seats for the turn. Best-effort — a prefs read failure keeps operator
-// defaults rather than failing the turn. Names not in the bundled catalog
-// (remote-overlay entries) pass through untouched; the overlay applies its own
-// prefs.
-func (s *Server) applyConnectorPrefs(ctx context.Context, user string, enabled []string) ([]string, map[string]string) {
+// user's availability prefs and resolves each connector's credential-account
+// seat for the turn: the conversation's own override (#988) when it names a
+// seat that exists, else the user's connections-page default. Best-effort — a
+// prefs read failure keeps operator defaults rather than failing the turn.
+// Names not in the bundled catalog (remote-overlay entries) pass through
+// untouched except for their override, which the overlay pins; a remote name
+// without one mounts the seat its owner flagged default.
+func (s *Server) applyConnectorPrefs(ctx context.Context, user string, enabled []string, overrides map[string]string) ([]string, map[string]string) {
 	prefs, err := s.store.ListConnectorPrefs(ctx, user)
-	if err != nil || len(prefs) == 0 {
-		return enabled, nil
+	if err != nil {
+		prefs = nil
 	}
 	byName := map[string]agent.OptionalServerInfo{}
 	for _, info := range s.agent.MCPServerCatalog() {
@@ -159,10 +161,23 @@ func (s *Server) applyConnectorPrefs(ctx context.Context, user string, enabled [
 	}
 	kept := make([]string, 0, len(enabled))
 	var accountDefaults map[string]string
+	set := func(name, seat string) {
+		if seat == "" {
+			return
+		}
+		if accountDefaults == nil {
+			accountDefaults = map[string]string{}
+		}
+		accountDefaults[name] = seat
+	}
 	for _, name := range enabled {
 		info, known := byName[name]
 		if !known {
 			kept = append(kept, name)
+			// Remote connection: the override is a seat label the overlay
+			// pins verbatim (it reports an unconnected pin as skipped rather
+			// than substituting another account).
+			set(name, overrides[name])
 			continue
 		}
 		avail, _, seat := bundledPrefFor(prefs, info)
@@ -170,12 +185,12 @@ func (s *Server) applyConnectorPrefs(ctx context.Context, user string, enabled [
 			continue
 		}
 		kept = append(kept, name)
-		if seat != "" {
-			if accountDefaults == nil {
-				accountDefaults = map[string]string{}
-			}
-			accountDefaults[name] = seat
+		// A stale override (seat since de-provisioned) degrades to the user's
+		// default seat — same posture as a stale pref — so the turn still runs.
+		if o := overrides[name]; o != "" && slices.Contains(info.Accounts, o) {
+			seat = o
 		}
+		set(name, seat)
 	}
 	return kept, accountDefaults
 }

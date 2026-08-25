@@ -102,6 +102,12 @@ type Conversation struct {
 	// are gated by this list. Stored as JSONB in Postgres; marshalled
 	// as a JSON array over the wire. nil / empty = no opt-ins.
 	OptionalMCPServersEnabled []string `json:"optional_mcp_servers_enabled"`
+	// MCPAccounts is this conversation's per-connector credential-seat
+	// override (#988): server name → account label. A missing key means the
+	// user's default seat (connections-page default_account for bundled
+	// connectors; the is_default hosted seat for remote ones). Stored as
+	// JSONB; nil/empty = no overrides.
+	MCPAccounts map[string]string `json:"mcp_accounts,omitempty"`
 	// ProjectID scopes this conversation to a project/space (#509). Set at
 	// creation or re-filed later via SetConversationProject; empty = no
 	// project. The turn path uses it to inject the project's standing
@@ -698,6 +704,47 @@ func scanOptionalMCPServers(raw []byte) []string {
 	return out
 }
 
+// scanMCPAccounts decodes the conversations.mcp_accounts JSONB object; a
+// missing/empty/undecodable value is "no overrides" (nil).
+func scanMCPAccounts(raw []byte) map[string]string {
+	if len(raw) == 0 {
+		return nil
+	}
+	var out map[string]string
+	if err := json.Unmarshal(raw, &out); err != nil || len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// SetConversationMCPAccounts replaces a conversation's per-connector seat
+// overrides (#988): server name → account label, already validated by the
+// HTTP layer against the live seat catalog. nil/empty clears every override
+// (back to the user's defaults). Owner-scoped; soft-deleted conversations
+// are not mutable (#596).
+func (s *Store) SetConversationMCPAccounts(ctx context.Context, userEmail, convID string, accounts map[string]string) error {
+	if accounts == nil {
+		accounts = map[string]string{}
+	}
+	payload, err := json.Marshal(accounts)
+	if err != nil {
+		return fmt.Errorf("marshal mcp accounts: %w", err)
+	}
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE conversations SET mcp_accounts = $1, updated_at = $2
+		 WHERE id = $3 AND user_email = $4 AND deleted_at IS NULL`,
+		payload, time.Now().Unix(), convID, userEmail,
+	)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return errors.New("conversation not found")
+	}
+	return nil
+}
+
 // SetModel updates the per-chat OpenRouter slug. Empty model clears the
 // stored value; the frontend will supply its DEFAULT_MODEL on the next turn.
 // deleted_at IS NULL matches SetShareToken: a soft-deleted conversation is
@@ -1199,12 +1246,12 @@ func (s *Store) ListFiltered(ctx context.Context, userEmail string, f ListFilter
 // conversationColumns is the SELECT list (in scan order) every conversation query
 // shares, so Get, ListFiltered and ListTeamConversations stay in lockstep with
 // scanConversation. (Bare column names, so a `c.`-aliased query can use it too.)
-const conversationColumns = `id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, optional_mcp_servers_enabled, labels, approval_timeout_seconds, COALESCE(share_token, ''), COALESCE(parent_conversation_id, ''), COALESCE(branch_point_message_id, 0), thinking_config, COALESCE(project_id, '')`
+const conversationColumns = `id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, optional_mcp_servers_enabled, labels, approval_timeout_seconds, COALESCE(share_token, ''), COALESCE(parent_conversation_id, ''), COALESCE(branch_point_message_id, 0), thinking_config, COALESCE(project_id, ''), mcp_accounts`
 
 // teamConversationColumns is conversationColumns with share_token forced to
 // empty so a teammate listing cannot harvest the owner's public share
 // capability URL (#1112). Column count and scan order stay identical.
-const teamConversationColumns = `id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, optional_mcp_servers_enabled, labels, approval_timeout_seconds, '' AS share_token, COALESCE(parent_conversation_id, ''), COALESCE(branch_point_message_id, 0), thinking_config, COALESCE(project_id, '')`
+const teamConversationColumns = `id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, optional_mcp_servers_enabled, labels, approval_timeout_seconds, '' AS share_token, COALESCE(parent_conversation_id, ''), COALESCE(branch_point_message_id, 0), thinking_config, COALESCE(project_id, ''), mcp_accounts`
 
 // pgTypeMap is the pgx type map used to decode Postgres array literals reaching
 // this package over database/sql. It is read-only after init and safe for
@@ -1253,10 +1300,12 @@ func scanConversation(sc rowScanner) (Conversation, error) {
 	var optionalRaw []byte
 	var approvalTimeout sql.NullInt64
 	var thinkingRaw []byte
-	if err := sc.Scan(&c.ID, &c.UserEmail, &c.Title, &c.Persona, &c.Model, &c.Pinned, &c.Lockdown, &c.CreatedAt, &c.UpdatedAt, &c.ArchivedAt, &c.TitleLocked, &optionalRaw, textArray{&c.Labels}, &approvalTimeout, &c.ShareToken, &c.ParentConversationID, &c.BranchPointMessageID, &thinkingRaw, &c.ProjectID); err != nil {
+	var accountsRaw []byte
+	if err := sc.Scan(&c.ID, &c.UserEmail, &c.Title, &c.Persona, &c.Model, &c.Pinned, &c.Lockdown, &c.CreatedAt, &c.UpdatedAt, &c.ArchivedAt, &c.TitleLocked, &optionalRaw, textArray{&c.Labels}, &approvalTimeout, &c.ShareToken, &c.ParentConversationID, &c.BranchPointMessageID, &thinkingRaw, &c.ProjectID, &accountsRaw); err != nil {
 		return Conversation{}, err
 	}
 	c.OptionalMCPServersEnabled = scanOptionalMCPServers(optionalRaw)
+	c.MCPAccounts = scanMCPAccounts(accountsRaw)
 	c.ApprovalTimeoutSeconds = nullableSeconds(approvalTimeout)
 	c.ThinkingConfig = scanThinkingConfig(thinkingRaw)
 	return c, nil

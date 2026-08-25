@@ -58,3 +58,4 @@ reviewable, and citable. Each record names the file or test that enforces it.
 | [0046](0046-remove-per-key-spending-caps.md) | Remove per-API-key spending caps; rolling budgets are the one spend gate | Accepted |
 | [0047](0047-self-serve-team-membership.md) | Self-serve team membership — create/leave is yours, joining is granted | Accepted |
 | [0049](0049-kubernetes-backend-split-control-plane.md) | Kubernetes as a first-class deployment — split control plane, pluggable sandbox backend | Accepted |
+| [0050](0050-remote-mcp-seats.md) | Multiple logins per hosted MCP connection ("seats") | Accepted; amends ADR-0009 |

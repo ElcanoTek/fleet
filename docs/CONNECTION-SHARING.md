@@ -53,3 +53,8 @@ server's tools exactly like the owner's runs do.
 - The chat Tools picker's per-conversation opt-in applies to shared servers
   the same as own servers; scheduled runs wire all connected (own + shared)
   servers subject to the task's MCP selection.
+- Grants are **per seat** (#988): a connection name may hold several logins,
+  and sharing the "work" seat never exposes "personal". A grantee sees the
+  owner's default among the seats shared with them and has no per-grantee
+  default preference; a shared seat never becomes the default under a name
+  the grantee owns seats for. Details in `docs/REMOTE-MCP-MULTI-LOGIN.md`.

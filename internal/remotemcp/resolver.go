@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -15,11 +16,14 @@ import (
 // types. The dependency points remotemcp → agent (agent declares the interface),
 // which avoids the store → agent → remotemcp cycle.
 
-// ConnectedServersForUser returns the servers the user may USE that are ready:
+// ConnectedServersForUser returns the seats the user may USE that are ready:
 // their own connections plus ones other users shared with them (directly or
-// via the everyone wildcard). On a name collision the user's own server wins —
-// the registration name is the broker routing key, so two same-named servers
-// cannot coexist in one run; the shadowed shared server is skipped with a log
+// via the everyone wildcard), one entry per (name, account) seat (#988). The
+// run path mounts exactly one seat per name — the pinned one, else the one
+// flagged Default — so returning every seat here lets it choose without a
+// second store read. On a (name, account) collision the user's own seat wins:
+// the registration name is the broker routing key, so two same-named seats
+// cannot coexist in one run; the shadowed shared seat is skipped with a log
 // line rather than silently.
 func (s *Service) ConnectedServersForUser(ctx context.Context, email string) ([]agent.RemoteMCPConn, error) {
 	servers, err := s.store.ListRemoteMCPServers(ctx, email)
@@ -45,26 +49,48 @@ func (s *Service) ConnectedServersForUser(ctx context.Context, email string) ([]
 		return true
 	}
 	out := make([]agent.RemoteMCPConn, 0, len(servers)+len(shared))
-	names := map[string]bool{}
+	seats := map[string]bool{} // registration name → taken
+	ownNames := map[string]bool{}
 	for _, srv := range servers {
 		if srv.Status != store.RemoteMCPStatusConnected || !enabledForMe(srv.ID) {
 			continue
 		}
-		names[srv.Name] = true
-		out = append(out, agent.RemoteMCPConn{ID: srv.ID, Name: srv.Name, URL: srv.URL, AuthHeader: srv.APIKeyHeader, AuthQuery: srv.APIKeyQuery})
+		seats[agentcore.RegisteredMCPName(srv.Name, srv.Account)] = true
+		ownNames[srv.Name] = true
+		out = append(out, connFor(srv, ""))
 	}
 	for _, srv := range shared {
 		if srv.Status != store.RemoteMCPStatusConnected || !enabledForMe(srv.ID) {
 			continue
 		}
-		if names[srv.Name] {
-			log.Printf("remotemcp: shared server %q (owner %s) shadowed by %s's own server of the same name; skipping", srv.Name, srv.UserEmail, email)
+		reg := agentcore.RegisteredMCPName(srv.Name, srv.Account)
+		if seats[reg] {
+			log.Printf("remotemcp: shared seat %q (owner %s) shadowed by %s's own seat of the same name; skipping", reg, srv.UserEmail, email)
 			continue
 		}
-		names[srv.Name] = true
-		out = append(out, agent.RemoteMCPConn{ID: srv.ID, Name: srv.Name, URL: srv.URL, Owner: srv.UserEmail, AuthHeader: srv.APIKeyHeader, AuthQuery: srv.APIKeyQuery})
+		seats[reg] = true
+		conn := connFor(srv, srv.UserEmail)
+		// A shared seat never becomes the default under a name the user owns
+		// seats for: the owner of the run decides their own default.
+		if ownNames[srv.Name] {
+			conn.Default = false
+		}
+		out = append(out, conn)
 	}
 	return out, nil
+}
+
+func connFor(srv store.RemoteMCPServer, owner string) agent.RemoteMCPConn {
+	return agent.RemoteMCPConn{
+		ID:         srv.ID,
+		Name:       srv.Name,
+		Account:    srv.Account,
+		Default:    srv.IsDefault,
+		URL:        srv.URL,
+		Owner:      owner,
+		AuthHeader: srv.APIKeyHeader,
+		AuthQuery:  srv.APIKeyQuery,
+	}
 }
 
 // AcquireTokenByID mints a fresh credential for a server the user may use —

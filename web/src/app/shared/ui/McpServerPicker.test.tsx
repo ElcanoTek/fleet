@@ -180,3 +180,87 @@ describe("McpServerPicker — per-user remote (hosted) servers (#466)", () => {
     expect(rows).toEqual(["my-notion", "xandr", "magnite"]);
   });
 });
+
+// Multi-login remote connections (#988): a remote row stays the read-only
+// "Connected" pill, but when the connection has labeled seats it gains the
+// same Account select bundled rows have. Picking a label PINS that seat for
+// the task ({ server, account }); picking "Default" REMOVES the entry — the
+// run then mounts the user's default seat exactly as if nothing was chosen.
+describe("McpServerPicker — remote connections with several logins (#988)", () => {
+  const REMOTE_SEATS: McpServer[] = [
+    ...SERVERS,
+    {
+      name: "gamma",
+      description: "Gamma decks.",
+      remote: true,
+      accounts: ["personal", "work"],
+      default_account: "work",
+    },
+  ];
+
+  it("keeps the Connected pill and offers Default seat (naming the default) plus each label", () => {
+    render(<McpServerPicker mode="task" servers={REMOTE_SEATS} selection={[]} onChange={() => {}} />);
+    expect(screen.getByTestId("mcp-remote-gamma")).toHaveTextContent("Connected");
+    expect(screen.queryByTestId("mcp-toggle-gamma")).not.toBeInTheDocument();
+    const select = screen.getByTestId("mcp-account-gamma") as HTMLSelectElement;
+    expect(Array.from(select.options).map((o) => o.value)).toEqual(["", "personal", "work"]);
+    expect(select.options[0].textContent).toBe("Default seat (work)");
+    expect(select.value).toBe("");
+  });
+
+  it("picking a label pins { server, account } for the task", () => {
+    const onChange = vi.fn();
+    render(
+      <McpServerPicker
+        mode="task"
+        servers={REMOTE_SEATS}
+        selection={[{ server: "xandr" }]}
+        onChange={onChange}
+      />,
+    );
+    fireEvent.change(screen.getByTestId("mcp-account-gamma"), { target: { value: "personal" } });
+    expect(onChange).toHaveBeenCalledWith([{ server: "xandr" }, { server: "gamma", account: "personal" }]);
+  });
+
+  it("re-picking a label replaces the pinned seat and reflects it in the select", () => {
+    const onChange = vi.fn();
+    render(
+      <McpServerPicker
+        mode="task"
+        servers={REMOTE_SEATS}
+        selection={[{ server: "gamma", account: "personal" }]}
+        onChange={onChange}
+      />,
+    );
+    expect((screen.getByTestId("mcp-account-gamma") as HTMLSelectElement).value).toBe("personal");
+    fireEvent.change(screen.getByTestId("mcp-account-gamma"), { target: { value: "work" } });
+    expect(onChange).toHaveBeenCalledWith([{ server: "gamma", account: "work" }]);
+  });
+
+  it("picking Default removes the entry rather than storing account: ''", () => {
+    const onChange = vi.fn();
+    render(
+      <McpServerPicker
+        mode="task"
+        servers={REMOTE_SEATS}
+        selection={[{ server: "gamma", account: "personal" }, { server: "xandr" }]}
+        onChange={onChange}
+      />,
+    );
+    fireEvent.change(screen.getByTestId("mcp-account-gamma"), { target: { value: "" } });
+    expect(onChange).toHaveBeenCalledWith([{ server: "xandr" }]);
+  });
+
+  it("a remote connection without labeled seats still has no account control", () => {
+    render(
+      <McpServerPicker
+        mode="task"
+        servers={[{ name: "solo-remote", remote: true, accounts: [], default_account: "" }]}
+        selection={[]}
+        onChange={() => {}}
+      />,
+    );
+    expect(screen.getByTestId("mcp-remote-solo-remote")).toBeInTheDocument();
+    expect(screen.queryByTestId("mcp-account-solo-remote")).not.toBeInTheDocument();
+  });
+});

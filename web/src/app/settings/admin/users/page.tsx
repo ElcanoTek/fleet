@@ -7,10 +7,10 @@
 // manage accounts end-to-end — create, reassign role/team, reset passwords,
 // delete — so user management no longer requires CLI access to the box
 // (`fleet admin add` / `fleet chat user …` remain the scriptable equivalents).
-// Roles gate access on the chat server (viewer = read-only, admin = full +
-// these pages); granting admin also grants the Operations Center admin row
-// server-side, surfaced here via the ops badge. Row edits live in the
-// kebab-opened popover (the design's .user-pop).
+// Roles gate access on the chat server (viewer = read-only) while Operations
+// Center roles gate the scheduler. Admin is presented separately because it is
+// one unified grant: selecting it grants admin on both planes. Row edits live
+// in the kebab-opened popover (the design's .user-pop).
 //
 // Gating: useIsAdmin is VISIBILITY only (members are bounced back to
 // /settings); authorization stays server-side — every endpoint here
@@ -47,29 +47,142 @@ export type AdminUser = {
 
 const ROLES = ["member", "viewer", "admin"] as const;
 type Role = (typeof ROLES)[number];
+const CHAT_ROLE_LABELS = {
+  member: "Contributor",
+  viewer: "Viewer",
+  admin: "Admin",
+} as const satisfies Record<Role, string>;
 
-const ROLE_OPTIONS = [
-  { value: "member", label: "Member" },
-  { value: "viewer", label: "Viewer" },
-  { value: "admin", label: "Admin" },
-] as const satisfies readonly { value: Role; label: string }[];
+const CHAT_ROLE_OPTIONS = [
+  {
+    value: "viewer",
+    label: CHAT_ROLE_LABELS.viewer,
+    description: "Read-only Chat access: can view but cannot create or change content.",
+  },
+  {
+    value: "member",
+    label: CHAT_ROLE_LABELS.member,
+    description: "Can actively use Chat, including creating and updating content.",
+  },
+] as const satisfies readonly {
+  value: Role;
+  label: string;
+  description: string;
+}[];
 
 // Operations Center roles (the sched plane). "client" is presented as
-// "Operator" — it can create and run tasks; "readonly" watches.
+// "Contributor" — it can create and run tasks; "readonly" watches.
 const OPS_ROLES = ["none", "readonly", "client", "admin"] as const;
 type OpsRole = (typeof OPS_ROLES)[number];
 const OPS_ROLE_OPTIONS = [
-  { value: "none", label: "None" },
-  { value: "readonly", label: "Viewer" },
-  { value: "client", label: "Operator" },
-  { value: "admin", label: "Admin" },
-] as const satisfies readonly { value: OpsRole; label: string }[];
+  {
+    value: "none",
+    label: "None",
+    description: "No access to the Ops Center.",
+  },
+  {
+    value: "readonly",
+    label: "Viewer",
+    description: "Can view Ops Center tasks and logs but cannot change them.",
+  },
+  {
+    value: "client",
+    label: "Contributor",
+    description: "Can view, create, and run Ops Center tasks.",
+  },
+] as const satisfies readonly {
+  value: OpsRole;
+  label: string;
+  description: string;
+}[];
+const ADMIN_OPTIONS = [
+  {
+    value: "admin",
+    label: "Admin",
+    description: "Full permissions in both Chat and the Ops Center.",
+  },
+] as const;
 const opsRoleOf = (u: AdminUser): OpsRole =>
   (OPS_ROLES as readonly string[]).includes(u.ops_center_role ?? "")
     ? ((u.ops_center_role || "none") as OpsRole)
     : u.ops_center_admin
       ? "admin"
       : "none";
+
+function PermissionFields({
+  role,
+  opsRole,
+  onChange,
+  labelPrefix = "",
+}: {
+  role: Role;
+  opsRole: OpsRole;
+  onChange: (next: { role: Role; opsRole: OpsRole }) => void;
+  labelPrefix?: string;
+}) {
+  const ariaPrefix = labelPrefix ? `${labelPrefix} ` : "";
+  return (
+    <>
+      <div className="grid justify-items-start gap-[0.3rem]">
+        <span
+          className="text-[0.64rem] font-bold uppercase tracking-[0.07em] text-[var(--color-text-muted)]"
+          title="Admin grants full permissions in both Chat and the Ops Center."
+        >
+          Admin
+        </span>
+        <Segmented
+          value={role === "admin" ? "admin" : ""}
+          options={ADMIN_OPTIONS}
+          onChange={() => onChange({ role: "admin", opsRole: "admin" })}
+          label={`${ariaPrefix}Admin permissions`}
+        />
+      </div>
+      <div className="grid justify-items-start gap-[0.3rem]">
+        <span
+          className="text-[0.64rem] font-bold uppercase tracking-[0.07em] text-[var(--color-text-muted)]"
+          title="Chat permissions: what this account can do in chat. Viewer is read-only."
+        >
+          Chat
+        </span>
+        <Segmented
+          value={role}
+          options={CHAT_ROLE_OPTIONS}
+          onChange={(nextRole) =>
+            onChange({
+              role: nextRole,
+              // Leaving unified Admin revokes its implied Ops Admin grant.
+              opsRole: role === "admin" ? "none" : opsRole,
+            })
+          }
+          label={`${ariaPrefix}Chat permissions`}
+          dividers
+        />
+      </div>
+      <div className="grid justify-items-start gap-[0.3rem]">
+        <span
+          className="text-[0.64rem] font-bold uppercase tracking-[0.07em] text-[var(--color-text-muted)]"
+          title="Ops Center permissions: Viewer sees tasks and logs; Contributor also creates tasks."
+        >
+          Ops Center
+        </span>
+        <Segmented
+          value={opsRole}
+          options={OPS_ROLE_OPTIONS}
+          onChange={(nextOpsRole) =>
+            onChange({
+              // The member API role is the Chat Contributor fallback when a
+              // narrower Ops role replaces unified Admin.
+              role: role === "admin" ? "member" : role,
+              opsRole: nextOpsRole,
+            })
+          }
+          label={`${ariaPrefix}Ops Center permissions`}
+          dividers
+        />
+      </div>
+    </>
+  );
+}
 
 // generatePassword returns a random 16-char password from an unambiguous
 // alphabet (no 0/O/1/l/I). crypto.getRandomValues + rejection sampling keeps
@@ -180,8 +293,8 @@ type Menu = {
   opsRole: OpsRole;
 };
 
-const MENU_WIDTH_PX = 352; // 22rem — four-segment Ops row needs the room
-const MENU_EST_HEIGHT_PX = 330; // flip-above threshold (labels sit above controls now)
+const MENU_WIDTH_PX = 352; // 22rem — the three permission sections need room
+const MENU_EST_HEIGHT_PX = 375; // flip-above threshold (three permission sections + team)
 
 export default function AdminUsersPage() {
   const router = useRouter();
@@ -437,6 +550,8 @@ export default function AdminUsersPage() {
   const [newEmail, setNewEmail] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [newRole, setNewRole] = useState<Role>("member");
+  const [newOpsRole, setNewOpsRole] = useState<OpsRole>("none");
+  const [newTeam, setNewTeam] = useState("");
   const [addStatus, setAddStatus] = useState<string | null>(null);
   const [addedPassword, setAddedPassword] = useState<{
     email: string;
@@ -454,6 +569,8 @@ export default function AdminUsersPage() {
           email: newEmail.trim(),
           password: newPassword,
           role: newRole,
+          ops_role: newOpsRole,
+          team_id: newTeam.trim(),
         }),
       });
       if (!res.ok) {
@@ -471,6 +588,8 @@ export default function AdminUsersPage() {
       setNewEmail("");
       setNewPassword("");
       setNewRole("member");
+      setNewOpsRole("none");
+      setNewTeam("");
       setAddStatus(null);
       setAddOpen(false);
     } catch (err) {
@@ -598,7 +717,7 @@ export default function AdminUsersPage() {
                 <option value="all">Chat: all</option>
                 {ROLES.map((r) => (
                   <option key={r} value={r}>
-                    Chat: {r}
+                    Chat: {CHAT_ROLE_LABELS[r].toLowerCase()}
                   </option>
                 ))}
               </select>
@@ -751,12 +870,19 @@ export default function AdminUsersPage() {
                             {account?.role === "viewer" ? (
                               <RoleBadge>Viewer</RoleBadge>
                             ) : null}
-                            {account && opsRoleOf(account) !== "none" ? (
+                            {account &&
+                            opsRoleOf(account) !== "none" &&
+                            // A unified admin already has the accent Admin badge;
+                            // repeating "ops: admin" would present one grant as two.
+                            !(
+                              account.role === "admin" &&
+                              opsRoleOf(account) === "admin"
+                            ) ? (
                               <RoleBadge
                                 title={`Operations Center ${
                                   {
                                     admin: "admin",
-                                    client: "operator (creates tasks)",
+                                    client: "contributor (creates tasks)",
                                     readonly: "viewer (read-only)",
                                   }[
                                     opsRoleOf(account) as
@@ -767,7 +893,7 @@ export default function AdminUsersPage() {
                                 {`ops: ${
                                   {
                                     admin: "admin",
-                                    client: "operator",
+                                    client: "contributor",
                                     readonly: "viewer",
                                   }[
                                     opsRoleOf(account) as
@@ -864,36 +990,13 @@ export default function AdminUsersPage() {
               <div className="text-[0.76rem] font-semibold text-[var(--color-text-primary)] [overflow-wrap:anywhere]">
                 {menu.email}
               </div>
-              <div className="grid justify-items-start gap-[0.3rem]">
-                <span
-                  className="text-[0.64rem] font-bold uppercase tracking-[0.07em] text-[var(--color-text-muted)]"
-                  title="Chat permissions: what this account can do in chat. Viewer is read-only; Admin includes these settings pages."
-                >
-                  Chat
-                </span>
-                <Segmented
-                  value={menu.role}
-                  options={ROLE_OPTIONS}
-                  onChange={(role) => setMenu({ ...menu, role })}
-                  label="Chat permissions"
-                  dividers
-                />
-              </div>
-              <div className="grid justify-items-start gap-[0.3rem]">
-                <span
-                  className="text-[0.64rem] font-bold uppercase tracking-[0.07em] text-[var(--color-text-muted)]"
-                  title="Ops Center permissions: Viewer sees tasks and logs; Operator also creates tasks; Admin controls the ops plane. Chat Admin implies Ops Admin."
-                >
-                  Ops Center
-                </span>
-                <Segmented
-                  value={menu.opsRole}
-                  options={OPS_ROLE_OPTIONS}
-                  onChange={(opsRole) => setMenu({ ...menu, opsRole })}
-                  label="Ops Center permissions"
-                  dividers
-                />
-              </div>
+              <PermissionFields
+                role={menu.role}
+                opsRole={menu.opsRole}
+                onChange={({ role, opsRole }) =>
+                  setMenu({ ...menu, role, opsRole })
+                }
+              />
               <div className="grid gap-[0.3rem]">
                 <span className="text-[0.64rem] font-bold uppercase tracking-[0.07em] text-[var(--color-text-muted)]">
                   Team
@@ -992,22 +1095,26 @@ export default function AdminUsersPage() {
                     </button>
                   </div>
                 </ConnField>
-                <ConnField label="Role">
-                  {/* .select-wrap: hide the native chevron and draw the design's. */}
-                  <span className="relative block after:pointer-events-none after:absolute after:right-[0.7rem] after:top-1/2 after:size-2 after:-translate-y-[65%] after:rotate-45 after:border-b-[1.5px] after:border-r-[1.5px] after:border-[var(--color-text-muted)] after:content-['']">
-                    <select
-                      aria-label="New user role"
-                      value={newRole}
-                      onChange={(e) => setNewRole(e.target.value as Role)}
-                      className={`${SETTINGS_INPUT} appearance-none pr-8!`}
-                    >
-                      {ROLES.map((r) => (
-                        <option key={r} value={r}>
-                          {r}
-                        </option>
-                      ))}
-                    </select>
-                  </span>
+                <div className="grid w-full gap-[0.7rem] rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] p-[0.7rem]">
+                  <PermissionFields
+                    role={newRole}
+                    opsRole={newOpsRole}
+                    labelPrefix="New user"
+                    onChange={({ role, opsRole }) => {
+                      setNewRole(role);
+                      setNewOpsRole(opsRole);
+                    }}
+                  />
+                </div>
+                <ConnField label="Team" grow>
+                  <input
+                    aria-label="New user team"
+                    value={newTeam}
+                    placeholder="—"
+                    list="admin-users-teams"
+                    onChange={(e) => setNewTeam(e.target.value)}
+                    className={SETTINGS_INPUT}
+                  />
                 </ConnField>
                 <button
                   type="button"
@@ -1037,11 +1144,9 @@ export default function AdminUsersPage() {
               </p>
             ) : null}
             <p className="mt-2 text-[0.75rem] text-[var(--color-text-muted)]">
-              Chat and Ops Center permissions are separate: chat roles gate this
-              app, Ops Center roles gate the task scheduler (Viewer watches,
-              Operator creates tasks). Granting chat{" "}
-              <span className="uppercase">admin</span> also grants Ops Center
-              admin; explicit Ops grants survive chat-role changes. CLI
+              Chat and Ops Center permissions are separate: chat Viewer is
+              read-only, while Contributor can actively use Chat or create Ops
+              Center tasks. Admin is one unified grant across both. CLI
               equivalent for the admin case:{" "}
               <code className="font-[family-name:var(--font-code)]">
                 fleet admin add

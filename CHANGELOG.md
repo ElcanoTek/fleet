@@ -17,8 +17,56 @@ prior versions are listed because none have shipped.
 
 ## [Unreleased]
 
+### Added
+
+- **Multiple logins for hosted (official) MCP connections** (#988). A user can
+  hold several seats under one connection name — a work and a personal GitHub,
+  two Gamma workspaces — each with its own sealed token and its own share
+  grants, and pick which one a chat or a scheduled task uses. Settings →
+  Connections groups seats per name with "Set default", "Rename" and "Add
+  another account"; the chat Tools picker gains a per-conversation seat
+  override (bundled connectors too — `conversations.mcp_accounts`); the task
+  modal pins a hosted seat via `mcp_selection {server, account}`. A run mounts
+  exactly one seat per name, registered under the bundle seat formula
+  (`mcp_<name>_<account>_*`), and a pinned seat that is not connected is
+  skipped — never replaced by another account. Approval execution against a
+  hosted connection reopens the exact seat the card recorded. Migrations 051
+  (`remote_mcp_servers.account`/`is_default`, uniqueness per seat) and 052.
+  Design note: `docs/REMOTE-MCP-MULTI-LOGIN.md`; ADR-0050.
+
 ### Fixed
 
+- **Scheduled runs could not stage files where their own sandbox could read
+  them.** `download_url` resolved a relative `output_dir` against the process
+  cwd instead of the run's forced working dir, then refused its own choice as
+  "path escapes the scheduled-run worktree" — dozens of failed calls per daily
+  refresh. Relative and omitted `output_dir` now anchor to the forced dir, and
+  an absolute path outside it is refused with an error naming the worktree.
+  Runs with a forced working dir also get a `## Working directory (this run)`
+  message tail (the system-prompt section only reached interactive turns), so
+  MCP file tools are told the absolute `output_dir` to write into — an email
+  attachment saved relative to the MCP server's own directory had reported
+  success while the sandbox never saw it, stalling a dashboard for three days.
+- **`confirm_audit` turned finished work into `error` status.** A re-audit of
+  the same unbound critical tool (a managed-data write retried after
+  `stale_version`) stacked a second commitment instead of superseding the
+  first, so the single successful retry left a phantom obligation, finish was
+  refused, and the only exit was an abort that recorded a live, correct page
+  as a failed run. Unbound same-tool re-audits now supersede like record-bound
+  ones; an abort after every declared action has executed is refused with
+  guidance to finish instead of flagging the run terminal; and an abort no
+  longer demands the `critical_actions` unlock list it does not use (every
+  field abort was first rejected on that check).
+- **The npm override canary demanded an unsafe `adm-zip` override removal.** It
+  checked `onnxruntime-node@latest`, which now accepts the patched dependency,
+  while Fleet's locked Transformers release still pins `onnxruntime-node 1.24.3`
+  and its vulnerable `adm-zip ^0.5.16` range. The canary now evaluates every
+  parent version actually present in the lockfile and fails only when all of
+  them accept the patched line.
+- **The web typecheck rejected the Chat API route.** It re-exported the shared
+  `MODELS_PAGE_URL` constant even though Next.js route modules may only expose
+  recognized handlers and route configuration. Consumers already import the
+  constant from `lib/openrouterModels`, so the invalid route export is gone.
 - **Kubernetes: the sandbox backend could not execute a single tool call on a
   cluster that enforces RBAC.** fleet streams exec over a WebSocket upgrade —
   an HTTP GET — so the apiserver authorizes `get pods/exec`, but both the chart
@@ -67,6 +115,14 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **One unified Admin permission in user management.** The Users popover now
+  keeps ordinary Chat and Ops Center roles separate while presenting Admin once
+  in its own section. Selecting it grants both the chat-admin and scheduler-admin
+  roles, matching the server's existing two-plane admin semantics without two
+  misleading Admin choices or duplicate badges. The Add user form now presents
+  the same Admin, Chat, Ops Center, and Team fields, allowing the complete role
+  assignment at account creation. Every role choice includes an immediate hover
+  and keyboard-focus description of the access it grants.
 - **A `values.schema.json` for the chart.** Helm renders nothing for a key the
   templates do not read, so a misspelled value passed `helm lint`, passed
   `helm template`, and surfaced only as missing behaviour in production —
@@ -92,6 +148,31 @@ prior versions are listed because none have shipped.
   rather than failing fast; the NetworkPolicy is verified by name only; the pod
   start budget is a fixed, unconfigurable 2 minutes; and a bundle's Python MCP
   servers run in the control-plane pod, which therefore needs their runtime.
+
+### Added
+
+- **Task-lifecycle transition table (#1127)** — the task state machine now
+  exists as a tested constant: `internal/sched/models/task_lifecycle.go`
+  enumerates every guarded status edge (from → to, with its one authoritative
+  writer; the two verbatim-upsert import paths that bypass the guards are
+  documented on the table as out-of-model restore surgery)
+  plus the derived status sets (terminal, active, claimable, paused,
+  cleanup-eligible, recurrence-spawning, worker-reportable, retired), with the
+  full lifecycle narrative as its doc comment. Deliberately NOT a runtime
+  framework: every claim/recovery/pause/wake/settle query keeps its own
+  guarded SQL; the only runtime derivation is `claim.go`'s already-named
+  `taskActiveStatuses`, which now reads `models.ActiveTaskStatuses` (same
+  `{leased, running}` it always was). Drift fails loudly instead of silently:
+  behavioral per-writer matrices in `sched/db` and `sched/storage` seed a row
+  in every status, drive each db/storage transition writer, and assert the
+  outcomes match the table exactly; an SQL-literal source scan (the #1126 drift-test
+  treatment) rejects any tasks-table status literal the table doesn't know
+  (including the retired `analyzing`, rewritten away by migration 063); and
+  init-time validation makes a status added without lifecycle rows unreachable
+  and therefore a boot/test failure. Zero behavior change — surprising
+  existing edges (e.g. cancel's terminal-refusal list omits `dead_lettered`,
+  so a DLQ row can be cancelled) are encoded and flagged as current reality,
+  not fixed.
 
 ### Changed
 
@@ -617,10 +698,9 @@ prior versions are listed because none have shipped.
 
   - **`scripts/check-npm-overrides.sh`**: the rampart sharp/adm-zip overrides
     are forks of upstream's intent, correct only while upstream is broken — so
-    both CI lanes now fail with removal instructions the day
-    `@huggingface/transformers` / `onnxruntime-node` publish ranges reaching
-    the patched lines. Registry flake = skip with a notice, never a verdict.
-    Mutation-tested in both directions.
+    both CI lanes fail with removal instructions once every locked
+    `@huggingface/transformers` / `onnxruntime-node` instance accepts the
+    patched lines. Mutation-tested in both directions.
 
   - **A red scheduled scan files an issue** (all four lanes; deduped by title,
     re-failures comment). A cron failure has no PR to surface it — the rot
@@ -853,6 +933,25 @@ prior versions are listed because none have shipped.
   multi-megabyte brace-wrapped-but-invalid blob is labelled `json` instead of
   `text`. Both tiers are pinned by `TestLooksLikeJSONDocument_TieredClassification`,
   including that the exact tier still agrees with `json.Valid` case for case.
+
+- **`agent.RunTurn` and `runner.executeTask` extracted into named phase
+  helpers (#1127)** — the two ~300-line functions the audit flagged (the
+  confirmed bugs #1105/#1117 partly stemmed from how much state they juggle)
+  now read as a narrative of phases. `RunTurn` delegates to
+  `admitInteractiveTurn`, `composeTurnSystemPrompt`, `assembleTurnMessages`,
+  `interactiveRunSelection`, and `openTurnRemoteOverlay`, and its three
+  outcomes to `failedTurnResult` / `cancelledTurnResult` (pre-existing) /
+  `completedTurnResult`; `executeTask` delegates to `buildTaskRunContext`,
+  `captureRunFailure`, and one named helper per terminal outcome —
+  `parkForQuestion`, `finishStopped`, `finishLeaseLost`, `finishSuccess` —
+  joining the existing `parkForWake`/`failWallTimeout`/`failAuditAborted`/
+  `failInterrupted`/`handleRunFailure` family. Pure extraction with zero
+  behavior change: every extracted body is line-identical to its original span
+  modulo parameter threading (verified span-by-span against HEAD; all other
+  declarations in both files verified byte-identical via a hash inventory),
+  and every function-exit defer (limiter release, sandbox/workspace/MCP-scope
+  cleanup, overlay close; wall-deadline cancel, stream seal, terminal SSE
+  frame) stays registered in the parent so its firing scope is unchanged.
 - **`internal/sched/db/db.go` split by domain (#1127)** — the 2,882-line god
   file is now thirteen domain files in the same package: connection lifecycle,
   the cross-domain (un)marshal helpers, and transaction support stay in

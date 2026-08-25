@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "@/app/lib/auth";
 import { chatServerFetch } from "@/app/lib/chatServer";
 import { verifyOrigin } from "@/app/lib/csrf";
-import { MODELS_PAGE_URL } from "@/app/lib/openrouterModels";
 
 export const runtime = "nodejs";
 
@@ -14,7 +13,10 @@ export const runtime = "nodejs";
  * headers, and pipe the SSE body straight back to the browser.
  *
  * The request body matches chat-server's contract:
- *   { conversation_id?, message, persona?, model?, title?, enabled_optional? }
+ *   { conversation_id?, message, persona?, model?, title?, enabled_optional?,
+ *     mcp_accounts? }
+ * The body is forwarded verbatim — `mcp_accounts` (server → seat label, #988)
+ * needs no handling here.
  *
  * The response is an SSE stream with event types:
  *   conversation, reasoning.start/delta/end, text.delta, tool.call,
@@ -63,7 +65,3 @@ export async function POST(request: NextRequest) {
     },
   });
 }
-
-// Re-exported so other routes / tests can reference the same link without
-// hardcoding it in multiple places.
-export { MODELS_PAGE_URL };

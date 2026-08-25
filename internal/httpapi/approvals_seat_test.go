@@ -30,6 +30,10 @@ type scopedApprovalEngine struct {
 
 func (e *scopedApprovalEngine) MCPBroker() agentcore.MCPBroker { return e.shared }
 func (e *scopedApprovalEngine) MCPCatalog() []mcp.ServerTool   { return e.catalog }
+func (e *scopedApprovalEngine) OpenApprovalRemoteMCPScope(context.Context, string, string, string) (*agent.RemoteMCPOverlay, error) {
+	return nil, nil
+}
+
 func (e *scopedApprovalEngine) OpenApprovalMCPScope(_ context.Context, selection agentcore.MCPSelection, _ string) (*agent.MCPScope, error) {
 	e.requested = selection
 	if e.openErr != nil {

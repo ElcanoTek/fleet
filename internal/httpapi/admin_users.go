@@ -50,13 +50,15 @@ func WithOpsAdmins(svc OpsAdmins) Option {
 
 // handleAdminUserCreate serves POST /admin/users — provision a new account.
 // Body: {"email": ..., "password": ..., "role": "member|viewer|admin"?,
-// "team_id": ...?}. role defaults to member; role "admin" also ensures the
-// Operations Center admin row (two-plane, like `fleet admin add`).
+// "ops_role": "none|readonly|client|admin"?, "team_id": ...?}. role defaults
+// to member; role "admin" also ensures the Operations Center admin row
+// (two-plane, like `fleet admin add`).
 func (s *Server) handleAdminUserCreate(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Email    string  `json:"email"`
 		Password string  `json:"password"`
 		Role     *string `json:"role"`
+		OpsRole  *string `json:"ops_role"`
 		TeamID   *string `json:"team_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -71,6 +73,14 @@ func (s *Server) handleAdminUserCreate(w http.ResponseWriter, r *http.Request) {
 	if body.Role != nil && !store.ValidRole(*body.Role) {
 		http.Error(w, "invalid role (want member|viewer|admin)", http.StatusBadRequest)
 		return
+	}
+	if body.OpsRole != nil {
+		switch *body.OpsRole {
+		case "none", "readonly", "client", "admin":
+		default:
+			http.Error(w, "invalid ops_role (want none|readonly|client|admin)", http.StatusBadRequest)
+			return
+		}
 	}
 
 	u, err := s.store.CreateUser(r.Context(), email, body.Password)
@@ -96,7 +106,11 @@ func (s *Server) handleAdminUserCreate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if body.Role != nil && *body.Role == store.RoleAdmin {
+		// Chat Admin is the unified grant and therefore wins over any narrower
+		// ops_role supplied by an older client.
 		s.ensureOpsAdmin(r, u.Email)
+	} else if body.OpsRole != nil {
+		s.setOpsRole(r, u.Email, *body.OpsRole)
 	}
 	// %q escapes CR/LF, so request-supplied values cannot forge a log line.
 	log.Printf("admin users: created %q (role=%s) by %q", u.Email, u.Role, userFromCtx(r.Context()))

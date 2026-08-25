@@ -105,6 +105,10 @@ func (f *gatedEngine) SuggestLibraryPrompt(context.Context, string) (*agent.Libr
 }
 func (f *gatedEngine) MCPBroker() agentcore.MCPBroker { return nil }
 func (f *gatedEngine) MCPCatalog() []mcp.ServerTool   { return nil }
+func (f *gatedEngine) OpenApprovalRemoteMCPScope(context.Context, string, string, string) (*agent.RemoteMCPOverlay, error) {
+	return nil, nil
+}
+
 func (f *gatedEngine) OpenApprovalMCPScope(context.Context, agentcore.MCPSelection, string) (*agent.MCPScope, error) {
 	return nil, nil
 }

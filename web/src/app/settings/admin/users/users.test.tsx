@@ -310,15 +310,176 @@ describe("AdminUsersPage", () => {
     ).toBeInTheDocument();
   });
 
-  it("shows the ops badge for Operations Center admins", async () => {
-    mockFetch(listImpl([{ ...USERS[0], ops_center_admin: true }, USERS[1]]));
+  it("shows one badge for unified admins and an ops badge for an ops-only admin", async () => {
+    mockFetch(
+      listImpl([
+        { ...USERS[0], ops_center_admin: true, ops_center_role: "admin" },
+        { ...USERS[1], ops_center_admin: true, ops_center_role: "admin" },
+      ]),
+    );
     render(<AdminUsersPage />);
     await screen.findByText("alice@x.com");
-    expect(screen.getByTitle("Operations Center admin")).toBeInTheDocument();
-    expect(screen.getByText("ops: admin")).toBeInTheDocument();
+    const aliceRow = screen
+      .getByText("alice@x.com")
+      .closest("tr") as HTMLElement;
+    expect(within(aliceRow).getAllByText("Admin")).toHaveLength(1);
+    expect(within(aliceRow).queryByText("ops: admin")).toBeNull();
+
+    const bobRow = screen.getByText("bob@x.com").closest("tr") as HTMLElement;
+    expect(
+      within(bobRow).getByTitle("Operations Center admin"),
+    ).toBeInTheDocument();
+    expect(within(bobRow).getByText("ops: admin")).toBeInTheDocument();
   });
 
-  it("creates a user via the add form and shows the password once", async () => {
+  it("presents Admin once and grants both permission planes", async () => {
+    const calls: { body: string }[] = [];
+    mockFetch((url, init) => {
+      if (url === "/api/admin/users/bob%40x.com" && init?.method === "PATCH") {
+        calls.push({ body: String(init.body) });
+        return new Response(
+          JSON.stringify({
+            ...USERS[1],
+            role: "admin",
+            ops_center_admin: true,
+            ops_center_role: "admin",
+          }),
+          { status: 200 },
+        );
+      }
+      return listImpl()(url);
+    });
+
+    render(<AdminUsersPage />);
+    await screen.findByText("bob@x.com");
+    openKebab("bob@x.com");
+
+    const chat = screen.getByRole("group", { name: "Chat permissions" });
+    const ops = screen.getByRole("group", { name: "Ops Center permissions" });
+    const admin = screen.getByRole("group", { name: "Admin permissions" });
+    const permissionGroups = within(
+      screen.getByRole("dialog", { name: "Edit bob@x.com" }),
+    ).getAllByRole("group");
+    expect(permissionGroups.map((group) => group.getAttribute("aria-label"))).toEqual([
+      "Admin permissions",
+      "Chat permissions",
+      "Ops Center permissions",
+    ]);
+    expect(
+      within(chat).getAllByRole("button").map((button) => button.textContent),
+    ).toEqual(["Viewer", "Contributor"]);
+    expect(
+      within(ops).getAllByRole("button").map((button) => button.textContent),
+    ).toEqual(["None", "Viewer", "Contributor"]);
+    const expectTooltip = (button: HTMLElement, description: string) => {
+      expect(button).not.toHaveAttribute("title");
+      const tooltipId = button.getAttribute("aria-describedby");
+      expect(tooltipId).toBeTruthy();
+      expect(document.getElementById(tooltipId ?? "")).toHaveTextContent(
+        description,
+      );
+    };
+    expectTooltip(
+      within(admin).getByRole("button", { name: "Admin" }),
+      "Full permissions in both Chat and the Ops Center.",
+    );
+    expectTooltip(
+      within(chat).getByRole("button", { name: "Viewer" }),
+      "Read-only Chat access: can view but cannot create or change content.",
+    );
+    expectTooltip(
+      within(chat).getByRole("button", { name: "Contributor" }),
+      "Can actively use Chat, including creating and updating content.",
+    );
+    expectTooltip(
+      within(ops).getByRole("button", { name: "None" }),
+      "No access to the Ops Center.",
+    );
+    expectTooltip(
+      within(ops).getByRole("button", { name: "Viewer" }),
+      "Can view Ops Center tasks and logs but cannot change them.",
+    );
+    expectTooltip(
+      within(ops).getByRole("button", { name: "Contributor" }),
+      "Can view, create, and run Ops Center tasks.",
+    );
+    expect(within(chat).queryByRole("button", { name: "Admin" })).toBeNull();
+    expect(within(ops).queryByRole("button", { name: "Admin" })).toBeNull();
+    expect(within(admin).getAllByRole("button")).toHaveLength(1);
+
+    fireEvent.click(within(admin).getByRole("button", { name: "Admin" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(calls).toHaveLength(1));
+    expect(JSON.parse(calls[0].body)).toEqual({
+      role: "admin",
+      ops_role: "admin",
+    });
+    const bobRow = screen.getByText("bob@x.com").closest("tr") as HTMLElement;
+    await waitFor(() =>
+      expect(within(bobRow).getAllByText("Admin")).toHaveLength(1),
+    );
+    expect(within(bobRow).queryByText("ops: admin")).toBeNull();
+  });
+
+  it("leaves unified Admin safely when a narrower Chat role is selected", async () => {
+    const adminUser = {
+      ...USERS[0],
+      ops_center_admin: true,
+      ops_center_role: "admin",
+    };
+    const calls: { body: string }[] = [];
+    mockFetch((url, init) => {
+      if (url === "/api/admin/users/alice%40x.com" && init?.method === "PATCH") {
+        calls.push({ body: String(init.body) });
+        return new Response(
+          JSON.stringify({
+            ...adminUser,
+            role: "viewer",
+            ops_center_admin: false,
+            ops_center_role: "",
+          }),
+          { status: 200 },
+        );
+      }
+      return listImpl([adminUser, USERS[1]])(url);
+    });
+
+    render(<AdminUsersPage />);
+    await screen.findByText("alice@x.com");
+    openKebab("alice@x.com");
+
+    const admin = screen.getByRole("group", { name: "Admin permissions" });
+    expect(within(admin).getByRole("button", { name: "Admin" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    fireEvent.click(
+      within(screen.getByRole("group", { name: "Chat permissions" })).getByRole(
+        "button",
+        { name: "Viewer" },
+      ),
+    );
+    expect(within(admin).getByRole("button", { name: "Admin" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+    expect(
+      within(screen.getByRole("group", { name: "Ops Center permissions" })).getByRole(
+        "button",
+        { name: "None" },
+      ),
+    ).toHaveAttribute("aria-pressed", "true");
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(calls).toHaveLength(1));
+    expect(JSON.parse(calls[0].body)).toEqual({
+      role: "viewer",
+      ops_role: "none",
+    });
+  });
+
+  it("creates a user with Chat, Ops Center, and team assignments", async () => {
     const calls: { body: string }[] = [];
     mockFetch((url, init) => {
       if (url === "/api/admin/users" && init?.method === "POST") {
@@ -326,10 +487,11 @@ describe("AdminUsersPage", () => {
         return new Response(
           JSON.stringify({
             email: "carol@x.com",
-            role: "member",
-            team_id: "",
+            role: "viewer",
+            team_id: "platform",
             created_at: 3,
             updated_at: 3,
+            ops_center_role: "client",
           }),
           { status: 201 },
         );
@@ -352,6 +514,27 @@ describe("AdminUsersPage", () => {
     fireEvent.change(screen.getByLabelText("New user password"), {
       target: { value: "carol-pw-123" },
     });
+    const admin = screen.getByRole("group", {
+      name: "New user Admin permissions",
+    });
+    const chat = screen.getByRole("group", {
+      name: "New user Chat permissions",
+    });
+    const ops = screen.getByRole("group", {
+      name: "New user Ops Center permissions",
+    });
+    expect(within(admin).getAllByRole("button")).toHaveLength(1);
+    expect(
+      within(chat).getAllByRole("button").map((button) => button.textContent),
+    ).toEqual(["Viewer", "Contributor"]);
+    expect(
+      within(ops).getAllByRole("button").map((button) => button.textContent),
+    ).toEqual(["None", "Viewer", "Contributor"]);
+    fireEvent.click(within(chat).getByRole("button", { name: "Viewer" }));
+    fireEvent.click(within(ops).getByRole("button", { name: "Contributor" }));
+    fireEvent.change(screen.getByLabelText("New user team"), {
+      target: { value: "platform" },
+    });
     expect(addButton).toBeEnabled();
     fireEvent.click(addButton);
 
@@ -359,7 +542,9 @@ describe("AdminUsersPage", () => {
     expect(JSON.parse(calls[0].body)).toEqual({
       email: "carol@x.com",
       password: "carol-pw-123",
-      role: "member",
+      role: "viewer",
+      ops_role: "client",
+      team_id: "platform",
     });
     // New row appears (the email also shows in the "created" footer, so expect
     // both) and the password is shown once.
@@ -367,6 +552,53 @@ describe("AdminUsersPage", () => {
       (await screen.findAllByText("carol@x.com")).length,
     ).toBeGreaterThanOrEqual(2);
     expect(screen.getByText("carol-pw-123")).toBeInTheDocument();
+  });
+
+  it("creates a unified admin from the Add user permission fields", async () => {
+    const calls: { body: string }[] = [];
+    mockFetch((url, init) => {
+      if (url === "/api/admin/users" && init?.method === "POST") {
+        calls.push({ body: String(init.body) });
+        return new Response(
+          JSON.stringify({
+            email: "dana@x.com",
+            role: "admin",
+            team_id: "",
+            created_at: 3,
+            updated_at: 3,
+            ops_center_admin: true,
+            ops_center_role: "admin",
+          }),
+          { status: 201 },
+        );
+      }
+      return listImpl()(url);
+    });
+
+    render(<AdminUsersPage />);
+    await screen.findByText("alice@x.com");
+    fireEvent.click(screen.getByRole("button", { name: /add user/i }));
+    fireEvent.change(screen.getByLabelText("New user email"), {
+      target: { value: "dana@x.com" },
+    });
+    fireEvent.change(screen.getByLabelText("New user password"), {
+      target: { value: "dana-pw-123" },
+    });
+    fireEvent.click(
+      within(
+        screen.getByRole("group", { name: "New user Admin permissions" }),
+      ).getByRole("button", { name: "Admin" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /^add user$/i }));
+
+    await waitFor(() => expect(calls).toHaveLength(1));
+    expect(JSON.parse(calls[0].body)).toEqual({
+      email: "dana@x.com",
+      password: "dana-pw-123",
+      role: "admin",
+      ops_role: "admin",
+      team_id: "",
+    });
   });
 
   it("requires a second click to delete, then removes the row", async () => {

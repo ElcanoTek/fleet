@@ -368,6 +368,13 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 	// hooks) makes the current UTC date harder to ignore without touching
 	// the cached prefix.
 	messages = appendRuntimeDateMessage(messages, runtimeNow())
+	// Per-run working directory in the message tail. Scheduled runs and
+	// delegated children carry a forced working dir but no conversation id, so
+	// the system prompt's "## Working directory" section (interactive turns
+	// only) never reaches them — see WorkingDirTurnSuffix for what that cost.
+	if forced := tools.ForcedWorkingDirFromContext(ctx); forced != "" {
+		messages = appendWorkingDirMessage(messages, forced)
+	}
 
 	maxTokens := runMaxCompletionTokens(cfg)
 

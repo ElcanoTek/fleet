@@ -443,8 +443,12 @@ export type McpServer = {
   // remote marks a per-user remote (hosted) MCP server the caller connected via
   // OAuth (#443/#466). The orchestrator overlay auto-applies ALL of the owner's
   // connected remote servers to every scheduled run, so the picker shows them as
-  // connected/auto-available (read-only) rather than a per-task toggle.
+  // connected/auto-available rather than a per-task toggle. A remote entry is
+  // ONE per connection name; `accounts` lists its labeled seats (#988) and
+  // `default_account` names the seat runs mount when the task pins none ("" =
+  // the unlabeled "primary" seat).
   remote?: boolean;
+  default_account?: string;
 };
 
 export type LogToolCall = {

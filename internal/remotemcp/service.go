@@ -50,6 +50,9 @@ type tokenStore interface {
 	LoadServerSecrets(ctx context.Context, server *store.RemoteMCPServer) (clientSecret, registrationToken string, err error)
 	GetRemoteMCPAPIKey(ctx context.Context, server *store.RemoteMCPServer) (string, error)
 	SetRemoteMCPAPIKey(ctx context.Context, userEmail, id, apiKey string) error
+	// Seats (#988).
+	SetRemoteMCPDefaultSeat(ctx context.Context, userEmail, id string) error
+	RenameRemoteMCPAccount(ctx context.Context, userEmail, id, label string) error
 	GetOAuthTokens(ctx context.Context, server *store.RemoteMCPServer) (*store.RemoteMCPTokens, error)
 	ClearOAuthTokens(ctx context.Context, userEmail, id string) error
 	StoreOAuthTokens(ctx context.Context, server *store.RemoteMCPServer, tokens store.RemoteMCPTokens) error
@@ -173,6 +176,9 @@ type AddServerInput struct {
 	Email string
 	Name  string
 	URL   string
+	// Account is the seat label for a further login under an existing Name
+	// (#988): "work", "personal". Empty adds (or is) the unlabeled seat.
+	Account string
 	// AuthMode is "open" for servers that require no Authorization header, or
 	// "api_key" for servers authenticated by a static vendor key. Empty and
 	// "oauth" retain the discovery + authorization flow.
@@ -211,13 +217,19 @@ func (s *Service) AddServer(ctx context.Context, in AddServerInput) (*store.Remo
 	if name == "" {
 		return nil, -1, errors.New("a name is required")
 	}
+	// Validate the seat label up front: an OAuth add registers a client at
+	// the vendor before the row exists, and a label rejected only at insert
+	// would leave that registration dangling.
+	if _, err := store.CanonicalRemoteMCPAccount(in.Account); err != nil {
+		return nil, -1, err
+	}
 	if in.AuthMode == store.RemoteMCPAuthOpen {
 		toolCount, perr := s.probeServer(ctx, canonURL, "", "", "")
 		if perr != nil {
 			return nil, -1, fmt.Errorf("could not connect to the MCP server: %w", perr)
 		}
 		server, cerr := s.store.CreateRemoteMCPServer(ctx, store.RemoteMCPServerInput{
-			UserEmail: in.Email, Name: name, URL: canonURL,
+			UserEmail: in.Email, Name: name, Account: in.Account, URL: canonURL,
 			Transport: store.RemoteMCPTransportStreamableHTTP,
 			Status:    store.RemoteMCPStatusConnected,
 			AuthKind:  store.RemoteMCPAuthOpen,
@@ -243,7 +255,7 @@ func (s *Service) AddServer(ctx context.Context, in AddServerInput) (*store.Remo
 			return nil, -1, fmt.Errorf("the server did not accept this API key — check the key and try again: %w", perr)
 		}
 		server, cerr := s.store.CreateRemoteMCPServer(ctx, store.RemoteMCPServerInput{
-			UserEmail: in.Email, Name: name, URL: canonURL,
+			UserEmail: in.Email, Name: name, Account: in.Account, URL: canonURL,
 			Transport:    store.RemoteMCPTransportStreamableHTTP,
 			Status:       store.RemoteMCPStatusConnected,
 			AuthKind:     store.RemoteMCPAuthAPIKey,
@@ -286,6 +298,7 @@ func (s *Service) AddServer(ctx context.Context, in AddServerInput) (*store.Remo
 	server, err := s.store.CreateRemoteMCPServer(ctx, store.RemoteMCPServerInput{
 		UserEmail:             in.Email,
 		Name:                  name,
+		Account:               in.Account,
 		URL:                   disco.Resource,
 		Transport:             store.RemoteMCPTransportStreamableHTTP,
 		Issuer:                disco.AS.Issuer,
@@ -388,6 +401,24 @@ func (s *Service) SetAPIKey(ctx context.Context, email, serverID, apiKey string)
 		return 0, fmt.Errorf("the server did not accept this API key — the previous key is unchanged: %w", err)
 	}
 	return toolCount, s.store.SetRemoteMCPAPIKey(ctx, email, serverID, apiKey)
+}
+
+// SetDefaultSeat makes serverID the default seat among the caller's seats of
+// the same connection name (#988). Owner-scoped.
+func (s *Service) SetDefaultSeat(ctx context.Context, email, serverID string) error {
+	if !s.Enabled() {
+		return ErrDisabled
+	}
+	return s.store.SetRemoteMCPDefaultSeat(ctx, email, serverID)
+}
+
+// RenameSeat changes a seat's public account label (#988). Owner-scoped; the
+// credential is untouched.
+func (s *Service) RenameSeat(ctx context.Context, email, serverID, label string) error {
+	if !s.Enabled() {
+		return ErrDisabled
+	}
+	return s.store.RenameRemoteMCPAccount(ctx, email, serverID, label)
 }
 
 // Authorize starts the OAuth flow for a server and returns the authorization URL

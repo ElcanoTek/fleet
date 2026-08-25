@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os/exec"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -35,13 +36,13 @@ func TestBuildTaskRemoteOverlayUsesInjectedOpenerWithoutResolver(t *testing.T) {
 			}
 			return "owner@example.com", nil
 		},
-		openRemoteMCPOverlay: func(_ context.Context, email string, shadowed, enabled map[string]bool) (*agent.RemoteMCPOverlay, error) {
+		openRemoteMCPOverlay: func(_ context.Context, email string, shadowed map[string]bool, sel agent.RemoteMCPSelection) (*agent.RemoteMCPOverlay, error) {
 			gotEmail = email
 			if !shadowed["bundle"] || len(shadowed) != 1 {
 				t.Fatalf("shadowed = %v, want bundle only", shadowed)
 			}
-			if enabled != nil {
-				t.Fatalf("scheduled enabled filter = %v, want nil", enabled)
+			if sel.Filter || sel.Enabled != nil || sel.Accounts != nil {
+				t.Fatalf("scheduled selection = %+v, want all connected on default seats", sel)
 			}
 			return &agent.RemoteMCPOverlay{
 				Broker:     &scheduledRecordingBroker{},
@@ -52,7 +53,10 @@ func TestBuildTaskRemoteOverlayUsesInjectedOpenerWithoutResolver(t *testing.T) {
 	}
 	task := &models.Task{ID: taskID, CreatedBy: &ownerID}
 
-	overlay := r.buildTaskRemoteOverlay(context.Background(), task, []mcp.ServerTool{{ServerName: "bundle"}})
+	overlay, err := r.buildTaskRemoteOverlay(context.Background(), task, []mcp.ServerTool{{ServerName: "bundle"}})
+	if err != nil {
+		t.Fatalf("buildTaskRemoteOverlay: %v", err)
+	}
 	if !overlay.Active() {
 		t.Fatal("injected broker overlay is not active")
 	}
@@ -135,7 +139,7 @@ func TestBuildTaskRemoteOverlay_SkippedForDenyAllTask(t *testing.T) {
 	opened := false
 	r := &Runner{
 		ownerEmail: func(context.Context, uuid.UUID) (string, error) { return "owner@example.com", nil },
-		openRemoteMCPOverlay: func(context.Context, string, map[string]bool, map[string]bool) (*agent.RemoteMCPOverlay, error) {
+		openRemoteMCPOverlay: func(context.Context, string, map[string]bool, agent.RemoteMCPSelection) (*agent.RemoteMCPOverlay, error) {
 			opened = true
 			return &agent.RemoteMCPOverlay{
 				Broker:     &scheduledRecordingBroker{},
@@ -147,16 +151,16 @@ func TestBuildTaskRemoteOverlay_SkippedForDenyAllTask(t *testing.T) {
 	task := denyAllTask()
 	task.CreatedBy = &ownerID
 
-	if overlay := r.buildTaskRemoteOverlay(context.Background(), task, nil); overlay.Active() {
-		t.Error("deny-all task got an active remote overlay")
+	if overlay, err := r.buildTaskRemoteOverlay(context.Background(), task, nil); err != nil || overlay.Active() {
+		t.Errorf("deny-all task got an active remote overlay (err=%v)", err)
 	}
 	if opened {
 		t.Error("deny-all task opened the owner's remote connections (bearer minted, third party dialed)")
 	}
 	// Control: the same runner DOES wire the overlay when the task may call MCP.
 	permitted := &models.Task{ID: uuid.New(), CreatedBy: &ownerID}
-	if overlay := r.buildTaskRemoteOverlay(context.Background(), permitted, nil); !overlay.Active() {
-		t.Fatal("control task lost its remote overlay; the guard is too broad")
+	if overlay, err := r.buildTaskRemoteOverlay(context.Background(), permitted, nil); err != nil || !overlay.Active() {
+		t.Fatalf("control task lost its remote overlay; the guard is too broad (err=%v)", err)
 	}
 }
 
@@ -786,4 +790,58 @@ func TestTakeTaskSandbox_PerTaskLimits(t *testing.T) {
 			t.Fatalf("all-zero limits must NOT take the override path; got overrides=%v sealed=%v", rt.tookOverrides, rt.tookSealed)
 		}
 	})
+}
+
+// Seats (#988): a task's mcp_selection may pin a hosted connection's seat. The
+// pin travels to the remote overlay as an account pin (every other connection
+// still mounts on its default seat), and stays OUT of the bundle selection the
+// scope binder would reject as an unknown server.
+func TestBuildTaskRemoteOverlayPinsHostedSeats(t *testing.T) {
+	ownerID := uuid.New()
+	var gotSel agent.RemoteMCPSelection
+	r := &Runner{
+		cfg:        &config.Config{MCPServers: map[string]config.MCPServerConfig{"bundle": {Enabled: true, Command: "x"}}},
+		ownerEmail: func(context.Context, uuid.UUID) (string, error) { return "owner@example.com", nil },
+		openRemoteMCPOverlay: func(_ context.Context, _ string, _ map[string]bool, sel agent.RemoteMCPSelection) (*agent.RemoteMCPOverlay, error) {
+			gotSel = sel
+			return &agent.RemoteMCPOverlay{
+				Broker:     &scheduledRecordingBroker{},
+				Servers:    map[string]bool{"github_work": true},
+				Seats:      map[string]agentcore.MCPChoice{"github_work": {Server: "github", Account: "work"}},
+				CloseScope: func(context.Context) error { return nil },
+			}, nil
+		},
+	}
+	task := &models.Task{ID: uuid.New(), CreatedBy: &ownerID, MCPSelection: models.MCPSelection{
+		{Server: "bundle", Account: "client_a"},
+		{Server: "github", Account: "work"},
+	}}
+
+	if sel := r.taskMCPSelection(task, true); len(sel) != 1 || sel[0].Server != "bundle" || sel[0].Account != "client_a" {
+		t.Fatalf("bundle selection = %+v, want only the bundle choice", sel)
+	}
+	overlay, err := r.buildTaskRemoteOverlay(context.Background(), task, nil)
+	if err != nil {
+		t.Fatalf("buildTaskRemoteOverlay: %v", err)
+	}
+	defer overlay.Close()
+	if gotSel.Filter || gotSel.Exact || gotSel.Accounts["github"] != "work" || len(gotSel.Accounts) != 1 {
+		t.Fatalf("remote selection = %+v, want all-connected with github pinned to work", gotSel)
+	}
+
+	// A pinned name that is neither a bundle server nor one of the owner's
+	// hosted connections fails the run, like the bundle binder's own refusal.
+	unknown := &models.Task{ID: uuid.New(), CreatedBy: &ownerID, MCPSelection: models.MCPSelection{{Server: "nope", Account: "x"}}}
+	if _, err := r.buildTaskRemoteOverlay(context.Background(), unknown, nil); err == nil || !strings.Contains(err.Error(), "nope_x") {
+		t.Fatalf("unknown pin err = %v, want it named", err)
+	}
+	// A known connection whose pinned seat is not connected is skipped (the
+	// run proceeds with a notice), not an unknown server.
+	r.openRemoteMCPOverlay = func(context.Context, string, map[string]bool, agent.RemoteMCPSelection) (*agent.RemoteMCPOverlay, error) {
+		return &agent.RemoteMCPOverlay{Broker: &scheduledRecordingBroker{}, Servers: map[string]bool{}, Skipped: []string{"github_school"}, CloseScope: func(context.Context) error { return nil }}, nil
+	}
+	school := &models.Task{ID: uuid.New(), CreatedBy: &ownerID, MCPSelection: models.MCPSelection{{Server: "github", Account: "school"}}}
+	if ov, err := r.buildTaskRemoteOverlay(context.Background(), school, nil); err != nil || ov == nil || len(ov.Skipped) != 1 {
+		t.Fatalf("skipped pin: overlay %+v err %v", ov, err)
+	}
 }

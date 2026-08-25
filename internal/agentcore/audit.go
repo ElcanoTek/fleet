@@ -440,12 +440,12 @@ type confirmAuditInput struct {
 	Reasoning                     string                 `json:"reasoning" description:"Brief conclusion summarizing what was checked."`
 	ArtifactsChecked              []string               `json:"artifacts_checked" description:"Artifact paths reviewed during audit."`
 	WorkflowSectionsChecked       []string               `json:"workflow_sections_checked" description:"Workflow contract sections checked."`
-	CriticalActions               []criticalActionStruct `json:"critical_actions,omitempty" description:"Preferred typed list of {tool, identifier} entries naming each MCP tool this audit unlocks."`
+	CriticalActions               []criticalActionStruct `json:"critical_actions,omitempty" description:"Preferred typed list of {tool, identifier} entries naming each MCP tool this audit unlocks. Required when success=true; optional on an abort (success=false), which unlocks nothing."`
 	CriticalActionsBeingUnblocked []string               `json:"critical_actions_being_unblocked,omitempty" description:"Legacy free-text form (deprecated): each entry MUST contain the literal tool name so the substring matcher can extract a known suffix."`
 	SendContractChecked           bool                   `json:"send_contract_checked" description:"Whether the send/delivery contract was checked."`
 	AttachmentsChecked            []string               `json:"attachments_checked" description:"Attachment paths checked."`
 	RemainingRisks                []string               `json:"remaining_risks" description:"Remaining known risks."`
-	UserVisibleSummary            string                 `json:"user_visible_summary,omitempty" description:"When success=false, a concise final summary."`
+	UserVisibleSummary            string                 `json:"user_visible_summary,omitempty" description:"When success=false, a concise final summary. Abort ONLY while declared critical work is still undone: once every declared action has executed, an abort is refused — finish and put reservations in your final summary instead."`
 }
 
 func buildConfirmAuditTool(orch *orchestrationState) fantasy.AgentTool {
@@ -535,6 +535,28 @@ func buildConfirmAuditTool(orch *orchestrationState) fantasy.AgentTool {
 					input.Reasoning, evidence, numCompleted)), nil
 			}
 
+			// An abort after the declared critical work has ALL executed is a
+			// contradiction, not a failure: the write/send already happened and
+			// aborting cannot un-happen it. Refuse it and steer to finish. Field
+			// case: a managed-data publish succeeded on its retry, a phantom
+			// commitment (since fixed in registerCommittedActionsTyped) kept
+			// finish enforcement demanding more, and the model's only exit was
+			// confirm_audit(success=false) — which landed a run whose page WAS
+			// live as status: error. Leaving the terminal-failure flag unset
+			// here keeps the task record honest; reservations belong in the
+			// final summary as flags, which the model is told to write.
+			if orch.criticalExecutedCount > 0 && len(orch.pendingCriticalActions) == 0 && orch.allCommitmentsExhausted() {
+				orch.selfAuditRequested = true
+				orch.selfAuditConfirmedOnce = true
+				return fantasy.NewTextErrorResponse(fmt.Sprintf(
+					"Audit Abort Refused: every declared critical action already executed successfully "+
+						"(%d critical call(s) completed in this run) and nothing is outstanding. There is nothing to "+
+						"abort — the work is done and aborting cannot undo it. Finish now and report the completed "+
+						"result; put any reservations in your final summary as quality flags. Do NOT repeat the action "+
+						"and do NOT call confirm_audit(success=false) again.",
+					orch.criticalExecutedCount)), nil
+			}
+
 			orch.selfAuditRequested = true
 			orch.selfAuditConfirmedOnce = true
 			orch.auditConfirmed = false
@@ -613,7 +635,12 @@ func validateConfirmAuditArgs(args map[string]interface{}) error {
 	if len(workflowSections) == 0 {
 		return fmt.Errorf("confirm_audit requires workflow_sections_checked with exact workflow contract sections")
 	}
-	if len(legacyCriticalActions) == 0 && len(structuredCriticalActions) == 0 {
+	// The critical-actions declaration is what a PASSING audit unlocks; an
+	// abort unlocks nothing, so demanding it there was pure friction. Every
+	// observed abort in the field was first rejected on exactly this line —
+	// the model omits the list because it is not unlocking anything — and
+	// only the second attempt landed, after a wasted round trip.
+	if success && len(legacyCriticalActions) == 0 && len(structuredCriticalActions) == 0 {
 		return fmt.Errorf("confirm_audit requires critical_actions (preferred typed list) or critical_actions_being_unblocked (legacy free-text) with at least one action")
 	}
 	if !sendContractPresent {

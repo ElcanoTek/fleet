@@ -764,7 +764,10 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 	// so a headless run reaches them without mutating the shared/per-run client.
 	// Best-effort: a server that needs re-auth or whose owner can't be resolved is
 	// skipped, never failing the run.
-	remoteOverlay := r.buildTaskRemoteOverlay(ctx, task, mcpBinding.discoveryCatalog())
+	remoteOverlay, err := r.buildTaskRemoteOverlay(ctx, task, mcpBinding.discoveryCatalog())
+	if err != nil {
+		return nil, false, "", err
+	}
 	defer remoteOverlay.Close()
 
 	// The task owner's builder skills + propose_skill staging (docs/SKILLS.md):
@@ -911,15 +914,7 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 	// user to log in, so a connected remote MCP server whose token needs re-auth is
 	// skipped. Surface it in the run transcript so the owner sees the task did less
 	// than expected, and tell the agent so it doesn't silently rely on missing tools.
-	if remoteOverlay != nil && len(remoteOverlay.Skipped) > 0 {
-		log.Printf("scheduled task %s: skipped remote MCP server(s) needing re-auth: %v", task.ID, remoteOverlay.Skipped)
-		prompt = fmt.Sprintf(
-			"[notice] These remote MCP connectors were unavailable this run because their "+
-				"login expired (the task owner must reconnect them in Settings → Connections): %s. "+
-				"Proceed without them; if the task depends on one, say so in your result rather than "+
-				"guessing.\n\n%s",
-			strings.Join(remoteOverlay.Skipped, ", "), prompt)
-	}
+	prompt = withSkippedRemoteNotice(task, remoteOverlay, prompt)
 	// Loop context (#179): a prior iteration's output is fed forward so the worker
 	// can improve on it. Empty on the first / only pass.
 	if strings.TrimSpace(extraPrompt) != "" {
@@ -965,13 +960,42 @@ func taskCredentialAllowlist(task *models.Task) agentcore.CredentialAllowlist {
 	return al
 }
 
+// withSkippedRemoteNotice prefixes the prompt with the owner-visible
+// degradation notice for hosted connectors the overlay could not mount (login
+// expired, or a pinned seat not connected — #988). Unchanged prompt when
+// nothing was skipped.
+func withSkippedRemoteNotice(task *models.Task, overlay *agent.RemoteMCPOverlay, prompt string) string {
+	if overlay == nil || len(overlay.Skipped) == 0 {
+		return prompt
+	}
+	log.Printf("scheduled task %s: skipped remote MCP server(s) needing re-auth or a missing pinned seat: %v", task.ID, overlay.Skipped)
+	return fmt.Sprintf(
+		"[notice] These remote MCP connectors were unavailable this run because their "+
+			"login expired or the pinned account is not connected (the task owner must reconnect "+
+			"them in Settings → Connections): %s. "+
+			"Proceed without them; if the task depends on one, say so in your result rather than "+
+			"guessing.\n\n%s",
+		strings.Join(overlay.Skipped, ", "), prompt)
+}
+
 // buildTaskRemoteOverlay resolves the task owner's email (creator UUID →
 // chat-side email) and builds a per-user remote-MCP overlay (#443) for the run.
 // Returns nil (a no-op overlay) when the feature is off, the owner can't be
 // resolved, or no server is connected — all best-effort, never fatal.
-func (r *Runner) buildTaskRemoteOverlay(ctx context.Context, task *models.Task, baseCatalog []mcp.ServerTool) *agent.RemoteMCPOverlay {
+//
+// Seats (#988): a hosted connection the task's mcp_selection names with an
+// account is PINNED to that seat; every other connected name mounts on its
+// owner-flagged default seat (the pre-#988 "auto-available" behaviour). The
+// one fatal case is a selection entry that names neither a bundle server nor
+// one of the owner's hosted connections — that is a misspelled or gated-off
+// server, and the run must not proceed as if the operator's pin were honored.
+func (r *Runner) buildTaskRemoteOverlay(ctx context.Context, task *models.Task, baseCatalog []mcp.ServerTool) (*agent.RemoteMCPOverlay, error) {
+	_, remotePins := r.splitTaskMCPSelection(task)
 	if (r.openRemoteMCPOverlay == nil && r.remoteMCP == nil) || r.ownerEmail == nil || task.CreatedBy == nil {
-		return nil
+		if len(remotePins) > 0 {
+			return nil, unknownMCPSelectionError(remotePins)
+		}
+		return nil, nil
 	}
 	// A deny-all task reaches no connector, and the owner's hosted connections are
 	// connectors the task's own mcp_selection never names — an operator auditing
@@ -981,25 +1005,33 @@ func (r *Runner) buildTaskRemoteOverlay(ctx context.Context, task *models.Task, 
 	// never use them.
 	if taskCredentialAllowlist(task).DeniesAll() {
 		log.Printf("scheduled task %s: credential allowlist denies all MCP, skipping the owner's remote connections", task.ID)
-		return nil
+		return nil, nil
 	}
 	email, err := r.ownerEmail(ctx, *task.CreatedBy)
 	if err != nil {
 		log.Printf("scheduled task %s: cannot resolve owner email for remote MCP: %v", task.ID, err)
-		return nil
+		return nil, nil
 	}
 	if email == "" {
-		return nil
+		if len(remotePins) > 0 {
+			return nil, unknownMCPSelectionError(remotePins)
+		}
+		return nil, nil
 	}
 	shadowed := make(map[string]bool)
 	for _, st := range baseCatalog {
 		shadowed[st.ServerName] = true
 	}
 	// Scheduled runs have no interactive Tools picker, so all of the owner's
-	// connected servers participate (nil opt-in set), bounded by the overlay cap.
+	// connected servers participate (no opt-in filter), bounded by the overlay
+	// cap; pinned names mount the pinned seat.
+	sel := agent.RemoteMCPAllConnected
+	if len(remotePins) > 0 {
+		sel.Accounts = remotePins
+	}
 	var overlay *agent.RemoteMCPOverlay
 	if r.openRemoteMCPOverlay != nil {
-		overlay, err = r.openRemoteMCPOverlay(ctx, email, shadowed, nil)
+		overlay, err = r.openRemoteMCPOverlay(ctx, email, shadowed, sel)
 		if err == nil {
 			err = overlay.Validate()
 			if err != nil {
@@ -1007,16 +1039,110 @@ func (r *Runner) buildTaskRemoteOverlay(ctx context.Context, task *models.Task, 
 			}
 		}
 	} else {
-		overlay, err = agent.BuildRemoteMCPOverlay(ctx, r.remoteMCP, email, shadowed, nil)
+		overlay, err = agent.BuildRemoteMCPOverlay(ctx, r.remoteMCP, email, shadowed, sel)
 	}
 	if err != nil {
 		log.Printf("scheduled task %s: remote-mcp overlay unavailable: %v", task.ID, err)
-		return nil
+		if len(remotePins) > 0 {
+			overlay.Close()
+			return nil, fmt.Errorf("scheduled task pins hosted connection seat(s) %v but the remote MCP overlay is unavailable: %w", pinnedNames(remotePins), err)
+		}
+		return nil, nil
+	}
+	// A pinned name the overlay neither mounted nor reported skipped is not a
+	// hosted connection of the owner at all — fail loudly, like the bundle
+	// binder does for an unknown server name.
+	if unknown := unresolvedPins(remotePins, overlay); len(unknown) > 0 {
+		overlay.Close()
+		return nil, unknownMCPSelectionError(unknown)
 	}
 	if overlay.Active() {
 		log.Printf("scheduled task %s: wired %d remote MCP server(s) for %s", task.ID, len(overlay.Servers), email)
 	}
-	return overlay
+	return overlay, nil
+}
+
+// splitTaskMCPSelection partitions a task's mcp_selection into the bundle
+// choices the scope binder spawns and the hosted-connection pins (#988): a
+// server name in the bundle inventory is a bundle choice; any other name is
+// treated as a hosted connection pin (name → account label; "" = default
+// seat). Whether such a name really is one of the owner's connections is
+// checked once the overlay resolves (unresolvedPins).
+//
+// A runner with no remote-MCP capability at all keeps every name on the bundle
+// side, so the binder's own unknown/disabled-server refusal fires exactly as
+// before (#988 changes nothing for deployments without hosted connections).
+func (r *Runner) splitTaskMCPSelection(task *models.Task) (agentcore.MCPSelection, map[string]string) {
+	inventory := r.taskMCPServerInventory()
+	remoteCapable := r.openRemoteMCPOverlay != nil || r.remoteMCP != nil
+	bundle := make(agentcore.MCPSelection, 0, len(task.MCPSelection))
+	var pins map[string]string
+	for _, choice := range task.MCPSelection {
+		name := strings.TrimSpace(choice.Server)
+		if name == "" {
+			continue
+		}
+		if _, ok := inventory[name]; ok || !remoteCapable {
+			bundle = append(bundle, agentcore.MCPChoice{Server: name, Account: choice.Account})
+			continue
+		}
+		if pins == nil {
+			pins = map[string]string{}
+		}
+		pins[name] = strings.TrimSpace(choice.Account)
+	}
+	return bundle, pins
+}
+
+// unresolvedPins returns the pinned names the overlay neither mounted (any
+// seat) nor listed as skipped (a known connection whose pinned seat is not
+// connected, or needs re-auth).
+func unresolvedPins(pins map[string]string, overlay *agent.RemoteMCPOverlay) map[string]string {
+	if len(pins) == 0 {
+		return nil
+	}
+	known := map[string]bool{}
+	if overlay != nil {
+		for _, seat := range overlay.Seats {
+			known[seat.Server] = true
+		}
+		for name := range overlay.Servers {
+			known[name] = true
+		}
+		for _, name := range overlay.Skipped {
+			known[name] = true
+		}
+	}
+	var out map[string]string
+	for name, acct := range pins {
+		if known[name] || known[agentcore.RegisteredMCPName(name, acct)] {
+			continue
+		}
+		if out == nil {
+			out = map[string]string{}
+		}
+		out[name] = acct
+	}
+	return out
+}
+
+func pinnedNames(pins map[string]string) []string {
+	names := make([]string, 0, len(pins))
+	for name, acct := range pins {
+		names = append(names, agentcore.RegisteredMCPName(name, acct))
+	}
+	sort.Strings(names)
+	return names
+}
+
+// unknownMCPSelectionError mirrors agentcore.BindMCPSelection's message for a
+// selection entry that is neither a bundle server nor a hosted connection.
+func unknownMCPSelectionError(pins map[string]string) error {
+	return fmt.Errorf(
+		"mcp selection references server(s) %v which are neither in the active bundle catalog nor "+
+			"among the task owner's hosted connections — each is either misspelled, a bundle server "+
+			"configured-but-gated-off (its default-seat credentials are unset), or a hosted connection "+
+			"the owner has not connected", pinnedNames(pins))
 }
 
 // taskMCPBinding is the scheduled Agent's transport-neutral per-run MCP wiring.
@@ -1101,11 +1227,12 @@ func (r *Runner) bindTaskMCPRuntime(ctx context.Context, task *models.Task) (tas
 }
 
 func (r *Runner) taskMCPSelection(task *models.Task, allWhenEmpty bool) agentcore.MCPSelection {
-	selection := make(agentcore.MCPSelection, 0, len(task.MCPSelection))
-	for _, choice := range task.MCPSelection {
-		selection = append(selection, agentcore.MCPChoice{Server: choice.Server, Account: choice.Account})
-	}
-	if len(selection) > 0 || !allWhenEmpty {
+	// Hosted-connection pins (#988) are the remote overlay's business; the
+	// bundle binder would reject them as unknown servers. A selection that
+	// names ONLY hosted connections is still an explicit selection (not the
+	// deployment default set): it binds no bundle server.
+	selection, _ := r.splitTaskMCPSelection(task)
+	if len(task.MCPSelection) > 0 || !allWhenEmpty {
 		return selection
 	}
 	for name := range r.taskMCPServerInventory() {

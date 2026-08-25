@@ -51,6 +51,7 @@ type chatStore interface {
 	SetApprovalTimeout(ctx context.Context, userEmail, convID string, seconds *int) error
 	SetThinkingConfig(ctx context.Context, userEmail, convID string, cfg *store.ThinkingConfig) error
 	SetOptionalMCPServers(ctx context.Context, userEmail, convID string, servers []string) error
+	SetConversationMCPAccounts(ctx context.Context, userEmail, convID string, accounts map[string]string) error
 	// Per-user connector availability preferences (unified connector UX).
 	SetConnectorPref(ctx context.Context, userEmail string, p store.ConnectorPref) error
 	DeleteConnectorPref(ctx context.Context, userEmail, kind, connectorID string) error

@@ -285,6 +285,21 @@ func runDownloadURL(ctx context.Context, sb *sandbox.Sandbox, params DownloadURL
 func resolveDownloadDir(ctx context.Context, requested string) (string, error) {
 	trimmed := strings.TrimSpace(requested)
 
+	// A forced working dir (scheduled worktree runs, delegated children) is
+	// the root bash / run_python / view_file already resolve relative paths
+	// against, and the root the sandbox FileOp seam confines writes to. It
+	// has to anchor download_url the same way: before this branch a relative
+	// output_dir in a scheduled run fell through to filepath.Abs against the
+	// PROCESS cwd (/var/lib/fleet) — and the sandbox probe then refused the
+	// very path fleet had just chosen ("path escapes the scheduled-run
+	// worktree"). Observed as dozens of failed download_url calls per daily
+	// refresh run for `output_dir: "sources"`, while an omitted output_dir
+	// happened to work only because the shared workspace root WAS the forced
+	// root for non-worktree tasks.
+	if forced := ForcedWorkingDirFromContext(ctx); forced != "" {
+		return resolveForcedDownloadDir(forced, trimmed)
+	}
+
 	// Empty or "." → per-conversation workspace (matches the rewrite
 	// behavior the email MCP relies on).
 	if trimmed == "" || trimmed == "." {
@@ -333,6 +348,41 @@ func resolveDownloadDir(ctx context.Context, requested string) (string, error) {
 			Path:    trimmed,
 			Reason:  "output_dir is outside allowed directories",
 			BaseDir: strings.Join(allowed, ":"),
+		}
+	}
+	return abs, nil
+}
+
+// resolveForcedDownloadDir anchors output_dir to a forced per-run root:
+// empty or "." is the root itself, a relative path joins under it (".."
+// components rejected before the join, same as the workspace branch), and an
+// absolute path must already lie inside it. The error names the root so the
+// model can correct the call instead of retrying the same absolute path.
+func resolveForcedDownloadDir(forced, trimmed string) (string, error) {
+	root, err := filepath.Abs(forced)
+	if err != nil {
+		return "", fmt.Errorf("resolve forced working dir %s: %w", forced, err)
+	}
+	root = filepath.Clean(root)
+	if trimmed == "" || trimmed == "." {
+		return root, nil
+	}
+	if !filepath.IsAbs(trimmed) {
+		if containsDotDotComponent(trimmed) {
+			return "", &PathSecurityError{
+				Path:    trimmed,
+				Reason:  "output_dir must not contain '..' components",
+				BaseDir: root,
+			}
+		}
+		return filepath.Clean(filepath.Join(root, trimmed)), nil
+	}
+	abs := filepath.Clean(trimmed)
+	if !isSubPath(root, abs) {
+		return "", &PathSecurityError{
+			Path:    trimmed,
+			Reason:  "output_dir is outside the scheduled-run worktree; pass a relative output_dir (it lands under the worktree) or an absolute path inside it",
+			BaseDir: root,
 		}
 	}
 	return abs, nil

@@ -200,6 +200,10 @@ type approvalEngine struct {
 
 func (e *approvalEngine) MCPBroker() agentcore.MCPBroker { return e.broker }
 func (e *approvalEngine) MCPCatalog() []mcp.ServerTool   { return e.catalog }
+func (e *approvalEngine) OpenApprovalRemoteMCPScope(context.Context, string, string, string) (*agent.RemoteMCPOverlay, error) {
+	return nil, nil
+}
+
 func (e *approvalEngine) OpenApprovalMCPScope(context.Context, agentcore.MCPSelection, string) (*agent.MCPScope, error) {
 	return nil, nil
 }

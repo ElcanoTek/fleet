@@ -23,6 +23,7 @@ import {
 import { parseSseChunk, stepStreamDedup, type ServerEvent } from "@/app/lib/sse";
 import { currentDefaultModel } from "@/app/lib/modelAliases";
 import { PENDING_CONV_KEY } from "./workspaceHref";
+import { mcpAccountOverrides } from "./mcpAccounts";
 
 // One pending input in a conversation's #785 queue (wire shape of
 // queue.updated / GET /queue items).
@@ -1901,6 +1902,12 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       const enabledOptional = mcpServers.filter((s) => s.enabled).map((s) => s.name);
       if (enabledOptional.length > 0) {
         body.enabled_optional = enabledOptional;
+      }
+      // Seats picked before the first message (#988) — same full-map shape
+      // the per-conversation POST sends, so the choice sticks.
+      const mcpAccounts = mcpAccountOverrides(mcpServers);
+      if (Object.keys(mcpAccounts).length > 0) {
+        body.mcp_accounts = mcpAccounts;
       }
       if (pendingLockdown) {
         body.lockdown = true;

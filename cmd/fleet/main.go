@@ -2704,7 +2704,27 @@ func productionRemoteMCPOverlayOpener(svc *remotemcp.Service, runtime *productio
 	if svc == nil || runtime == nil {
 		return nil
 	}
-	return runtime.openRemoteOverlay
+	return func(ctx context.Context, email string, shadowed map[string]bool, sel agent.RemoteMCPSelection) (*agent.RemoteMCPOverlay, error) {
+		overlay, err := runtime.openRemoteOverlay(ctx, email, shadowed, sel)
+		if err != nil || overlay == nil {
+			return overlay, err
+		}
+		// Seat attribution (#988): the child returns public registration names
+		// only. Map each back to its {connection, account} from the parent's own
+		// (control-plane) view of the user's seats so approval staging records
+		// the seat that actually mounted. Best-effort — an unmapped name keeps
+		// the pre-#988 default-seat record.
+		if conns, cerr := svc.ConnectedServersForUser(ctx, email); cerr == nil {
+			overlay.Seats = make(map[string]agentcore.MCPChoice, len(overlay.Servers))
+			for _, c := range conns {
+				reg := agentcore.RegisteredMCPName(c.Name, c.Account)
+				if overlay.Servers[reg] {
+					overlay.Seats[reg] = agentcore.MCPChoice{Server: c.Name, Account: c.Account}
+				}
+			}
+		}
+		return overlay, nil
+	}
 }
 
 // wireRemoteMCPCatalog injects the per-user remote-MCP catalog provider (#466)
@@ -2905,11 +2925,12 @@ func chatAccountsProvider(chatStore *store.Store) handlers.ChatAccountsProvider 
 // orchestrator username for the elcano-auth tier; see ownerEmailResolver), it
 // returns that user's OAuth-connected hosted servers so GetMCPServers can surface
 // them in the task form — mirroring chat's GET /mcp-servers. Only CONNECTED
-// servers are returned; they carry no credential seats (auth is the brokered
-// per-user token) and are auto-applied to ALL the owner's runs by the run
-// overlay, so the UI renders them connected/auto-available rather than as a
-// per-task toggle. A lookup error is logged and treated as "no remote servers"
-// so it never breaks the bundle catalog.
+// servers are returned, one entry per connection NAME (#988): its Accounts are
+// the labeled seats the task can pin, DefaultAccount the seat a run mounts
+// when the task pins none. Remote servers are auto-applied to ALL the owner's
+// runs by the run overlay, so the UI renders them connected/auto-available and
+// offers the seat pick rather than an on/off toggle. A lookup error is logged
+// and treated as "no remote servers" so it never breaks the bundle catalog.
 func remoteMCPCatalogProvider(svc *remotemcp.Service) func(context.Context, string) []handlers.MCPServerCatalogEntry {
 	return func(ctx context.Context, email string) []handlers.MCPServerCatalogEntry {
 		conns, err := svc.ConnectedServersForUser(ctx, email)
@@ -2918,13 +2939,15 @@ func remoteMCPCatalogProvider(svc *remotemcp.Service) func(context.Context, stri
 			return nil
 		}
 		out := make([]handlers.MCPServerCatalogEntry, 0, len(conns))
-		for _, c := range conns {
+		for _, g := range agent.GroupRemoteMCPSeats(conns) {
 			out = append(out, handlers.MCPServerCatalogEntry{
-				Name:        c.Name,
-				DisplayName: c.Name,
-				Description: "Remote MCP server you connected (" + c.URL + "). Auto-available to your scheduled tasks.",
-				Enabled:     true,
-				Remote:      true,
+				Name:           g.Name,
+				DisplayName:    g.Name,
+				Description:    "Remote MCP server you connected (" + g.URL + "). Auto-available to your scheduled tasks on its default seat unless the task pins another.",
+				Enabled:        true,
+				Accounts:       g.Accounts,
+				DefaultAccount: g.DefaultAccount,
+				Remote:         true,
 			})
 		}
 		return out

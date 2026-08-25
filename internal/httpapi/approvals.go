@@ -1699,6 +1699,20 @@ func (s *Server) approvalMCPScope(ctx context.Context, approval *store.Approval)
 	if approval.MCPServer == "" {
 		return shared()
 	}
+	// Hosted connections (#988): a seat recorded against one of the user's
+	// remote connections reopens through the remote overlay, pinned to the
+	// exact {connection, account} — never the bundle scope, which does not
+	// know the name and would fail the approval as an unknown server.
+	if s.isRemoteConnectionName(ctx, approval.UserEmail, approval.MCPServer) {
+		overlay, err := s.agent.OpenApprovalRemoteMCPScope(ctx, approval.UserEmail, approval.MCPServer, approval.MCPAccount)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("open approval MCP scope for %s: %w", approvalSeatLabel(approval), err)
+		}
+		if overlay == nil {
+			return shared()
+		}
+		return overlay.CallBroker(), overlay.Catalog, overlay.Close, nil
+	}
 	workspace := tools.WorkspaceDirForConversation(approval.ConversationID)
 	scope, err := s.agent.OpenApprovalMCPScope(ctx, agentcore.MCPSelection{{
 		Server:  approval.MCPServer,
@@ -1723,6 +1737,41 @@ func (s *Server) approvalMCPScope(ctx context.Context, approval *store.Approval)
 		}
 	}
 	return scope.Broker, scope.Catalog, release, nil
+}
+
+// isRemoteConnectionName reports whether server names one of the user's
+// hosted connections (own or shared with them) rather than a bundle server.
+// A bundle server of the same name wins — the overlay never mounts a remote
+// name the base catalog already provides.
+func (s *Server) isRemoteConnectionName(ctx context.Context, email, server string) bool {
+	if s.remoteMCP == nil || !s.remoteMCP.Enabled() || server == "" {
+		return false
+	}
+	for _, st := range s.agent.MCPCatalog() {
+		if st.ServerName == server {
+			return false
+		}
+	}
+	for _, info := range s.agent.MCPServerCatalog() {
+		if info.Name == server {
+			return false
+		}
+	}
+	if own, err := s.remoteMCP.ListServers(ctx, email); err == nil {
+		for _, srv := range own {
+			if srv.Name == server {
+				return true
+			}
+		}
+	}
+	if shared, err := s.remoteMCP.SharedWithMe(ctx, email); err == nil {
+		for _, srv := range shared {
+			if srv.Name == server {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // approvalSeatLabel renders the public seat for an operator-facing error.

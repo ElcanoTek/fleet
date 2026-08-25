@@ -229,20 +229,22 @@ func TestAdminUserOpsRole(t *testing.T) {
 	}
 
 	w := do(t, h, http.MethodPost, "/admin/users",
-		map[string]any{"email": "op@x.com", "password": "op-pw-12345"}, "boss@x.com")
+		map[string]any{"email": "op@x.com", "password": "op-pw-12345", "ops_role": "client"}, "boss@x.com")
 	if w.Code != http.StatusCreated {
 		t.Fatalf("create: status %d (body %s)", w.Code, w.Body.String())
 	}
-
-	// grant ops client without touching the chat role
-	w = do(t, h, http.MethodPatch, "/admin/users/op@x.com",
-		map[string]any{"ops_role": "client"}, "boss@x.com")
+	// Account creation can grant ops client without touching the chat role.
 	got := decode(w)
 	if got.Role != "member" || got.OpsCenterRole != "client" || got.OpsCenterAdmin {
-		t.Fatalf("ops client grant: %+v", got)
+		t.Fatalf("create with ops client grant: %+v", got)
 	}
 
-	// invalid ops_role rejected
+	// Invalid ops_role is rejected on both create and update.
+	w = do(t, h, http.MethodPost, "/admin/users",
+		map[string]any{"email": "bad@x.com", "password": "bad-pw-12345", "ops_role": "supreme"}, "boss@x.com")
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("invalid create ops_role: status %d", w.Code)
+	}
 	w = do(t, h, http.MethodPatch, "/admin/users/op@x.com",
 		map[string]any{"ops_role": "supreme"}, "boss@x.com")
 	if w.Code != http.StatusBadRequest {

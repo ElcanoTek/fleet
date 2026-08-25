@@ -302,14 +302,20 @@ func (b *brokerBackend) openRemoteScope(ctx context.Context, spec mcpbroker.Remo
 	for _, name := range spec.Shadowed {
 		shadowed[name] = true
 	}
-	var enabled map[string]bool
+	sel := agent.RemoteMCPSelection{Filter: spec.FilterEnabled, Exact: spec.Exact}
 	if spec.FilterEnabled {
-		enabled = make(map[string]bool, len(spec.Enabled))
+		sel.Enabled = make(map[string]bool, len(spec.Enabled))
 		for _, name := range spec.Enabled {
-			enabled[name] = true
+			sel.Enabled[name] = true
 		}
 	}
-	overlay, err := agent.BuildRemoteMCPOverlay(ctx, b.remoteMCP, spec.UserEmail, shadowed, enabled)
+	if len(spec.Accounts) > 0 {
+		sel.Accounts = make(map[string]string, len(spec.Accounts))
+		for name, account := range spec.Accounts {
+			sel.Accounts[name] = account
+		}
+	}
+	overlay, err := agent.BuildRemoteMCPOverlay(ctx, b.remoteMCP, spec.UserEmail, shadowed, sel)
 	if err != nil {
 		// Resolver errors can contain database/provider detail. Discard the value;
 		// the parent receives only a stable, credential-free failure.

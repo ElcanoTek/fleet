@@ -439,3 +439,144 @@ func TestNormalizeDealID_LargeAndFloatForms(t *testing.T) {
 		})
 	}
 }
+
+// confirmAuditAbort mirrors confirmAudit for the success=false path, with the
+// critical-actions declaration deliberately OMITTED — the shape every observed
+// field abort used on its first attempt.
+func confirmAuditAbort(t *testing.T, orch *orchestrationState, summary string) fantasy.ToolResponse {
+	t.Helper()
+	input := confirmAuditInput{
+		Success:                 false,
+		Reasoning:               "cannot complete safely",
+		ArtifactsChecked:        []string{"workspace/report.csv"},
+		WorkflowSectionsChecked: []string{"build", "verify"},
+		SendContractChecked:     true,
+		AttachmentsChecked:      []string{},
+		RemainingRisks:          []string{},
+		UserVisibleSummary:      summary,
+	}
+	tool := buildConfirmAuditTool(orch)
+	raw, _ := json.Marshal(input)
+	resp, err := tool.Run(context.Background(), fantasy.ToolCall{ID: "abort", Name: toolNameConfirmAudit, Input: string(raw)})
+	if err != nil {
+		t.Fatalf("confirm_audit(success=false) returned error: %v", err)
+	}
+	return resp
+}
+
+// TestConfirmAudit_AbortDoesNotRequireCriticalActions: an abort unlocks
+// nothing, so it must not be rejected for omitting the unlock list. Before this
+// every abort in the field cost a wasted "Audit Rejected" round trip.
+func TestConfirmAudit_AbortDoesNotRequireCriticalActions(t *testing.T) {
+	o := newOrchStateForTest()
+	registerTyped(t, o, criticalActionStruct{Tool: typedCreateToolA})
+	resp := confirmAuditAbort(t, o, "source failed validation; nothing written")
+	if resp.IsError || !strings.Contains(resp.Content, "Audit Failed Terminally") {
+		t.Fatalf("abort with outstanding work must land as terminal failure, got: %+v", resp)
+	}
+	aborted, summary, _ := o.auditVerdict()
+	if !aborted || summary != "source failed validation; nothing written" {
+		t.Fatalf("verdict aborted=%v summary=%q", aborted, summary)
+	}
+	// A success=true audit still needs the declaration.
+	o2 := newOrchStateForTest()
+	if resp := confirmAudit(t, o2, nil, nil); !resp.IsError || !strings.Contains(resp.Content, "requires critical_actions") {
+		t.Fatalf("passing audit without a declaration must still be rejected, got: %+v", resp)
+	}
+}
+
+// TestReauditSupersedesStaleUnboundSameToolCommitment pins the phantom-
+// obligation fix for UNBOUND commitments: declare a write, watch it fail,
+// re-audit the same tool, retry successfully → nothing outstanding, finish
+// allowed. Before the fix the second declaration stacked on the first and the
+// run could only exit through an abort that recorded a live page as an error.
+func TestReauditSupersedesStaleUnboundSameToolCommitment(t *testing.T) {
+	o := newOrchStateForTest()
+	registerTyped(t, o, criticalActionStruct{Tool: typedCreateToolA})
+	// The attempt runs (authorized) and reports a payload-level failure.
+	if blocked, msg := o.checkCriticalTool(typedCreateToolA, "", `{"expected_version":"537"}`); blocked {
+		t.Fatalf("declared call must be authorized, got blocked: %s", msg)
+	}
+	o.recordToolResult(typedCreateToolA, `{"expected_version":"537"}`, `{"ok":false,"error":"stale_version"}`, true)
+	if missing := o.unexecutedCommitments(); len(missing) != 1 {
+		t.Fatalf("failed attempt must leave the commitment outstanding, got %v", missing)
+	}
+	// Re-audit of the SAME unbound tool supersedes instead of stacking.
+	if got := o.registerCommittedActionsTyped([]criticalActionStruct{{Tool: typedCreateToolA}}); got != 1 {
+		t.Fatalf("re-audit registered %d units, want 1", got)
+	}
+	if got := o.committedCriticalActions["create_prepared_deal"]; got != 1 {
+		t.Fatalf("stale unbound commitment not superseded: outstanding=%d, want 1", got)
+	}
+	// One successful retry clears everything.
+	o.recordToolResult(typedCreateToolA, `{"expected_version":"546"}`, `{"ok":true,"version":{"id":"549"}}`, true)
+	if missing := o.unexecutedCommitments(); len(missing) != 0 {
+		t.Fatalf("expected no outstanding commitments after the retry, got %v", missing)
+	}
+	o.mu.Lock()
+	o.selfAuditRequested, o.selfAuditConfirmedOnce = true, true
+	o.mu.Unlock()
+	if allowed, msgs := o.checkFinishEnforcement(); !allowed {
+		t.Fatalf("finish must be allowed once the retry discharged the obligation, got %v", msgs)
+	}
+}
+
+// TestReauditDoesNotRetireOtherShapesOrOtherTools: the unbound supersede is
+// scoped to the exact same full tool and the same binding shape.
+func TestReauditDoesNotRetireOtherShapesOrOtherTools(t *testing.T) {
+	o := newOrchStateForTest()
+	registerTyped(t, o,
+		criticalActionStruct{Tool: typedCreateToolA},               // unbound A
+		criticalActionStruct{Tool: typedCreateToolA, DealID: "77"}, // record-bound A
+		criticalActionStruct{Tool: typedCreateToolB},               // unbound B (other server)
+	)
+	if got := o.registerCommittedActionsTyped([]criticalActionStruct{{Tool: typedCreateToolA}}); got != 1 {
+		t.Fatalf("re-audit registered %d units, want 1", got)
+	}
+	// Retired: the unbound A. Kept: the record-bound A and the unbound B.
+	// Suffix count = 1 (fresh unbound A) + 1 (bound A) + 1 (B) = 3.
+	if got := o.committedCriticalActions["create_prepared_deal"]; got != 3 {
+		t.Fatalf("outstanding=%d, want 3 (only the same-shape same-tool commitment is retired)", got)
+	}
+	outstanding := 0
+	for _, c := range o.typedCommitments {
+		if c.remaining > 0 {
+			outstanding++
+		}
+	}
+	if outstanding != 3 {
+		t.Fatalf("typed outstanding=%d, want 3", outstanding)
+	}
+}
+
+// TestConfirmAudit_AbortAfterAllDeclaredExecutedIsRefused: once every declared
+// critical action has executed, an abort is refused (not a terminal failure)
+// and finish stays allowed — the run's status must reflect the page that IS
+// live, not the bookkeeping the model could not close.
+func TestConfirmAudit_AbortAfterAllDeclaredExecutedIsRefused(t *testing.T) {
+	o := newOrchStateForTest()
+	if resp := confirmAudit(t, o, []criticalActionStruct{{Tool: typedCreateToolA}}, nil); resp.IsError {
+		t.Fatalf("audit should pass: %s", resp.Content)
+	}
+	if blocked, msg := o.checkCriticalTool(typedCreateToolA, "", `{}`); blocked {
+		t.Fatalf("declared call blocked: %s", msg)
+	}
+	o.recordToolResult(typedCreateToolA, `{}`, `{"ok":true}`, true)
+
+	resp := confirmAuditAbort(t, o, "aborting the outstanding commitment to avoid a duplicate write")
+	if !resp.IsError || !strings.Contains(resp.Content, "Audit Abort Refused") {
+		t.Fatalf("abort after completed work must be refused, got: %+v", resp)
+	}
+	if aborted, _, _ := o.auditVerdict(); aborted {
+		t.Fatal("refused abort must not flag the run as a terminal audit failure")
+	}
+	if allowed, msgs := o.checkFinishEnforcement(); !allowed {
+		t.Fatalf("finish must be allowed after the refused abort, got %v", msgs)
+	}
+	// With work still outstanding the abort remains a real terminal failure.
+	o2 := newOrchStateForTest()
+	registerTyped(t, o2, criticalActionStruct{Tool: typedCreateToolA})
+	if resp := confirmAuditAbort(t, o2, "blocked"); resp.IsError || !strings.Contains(resp.Content, "Audit Failed Terminally") {
+		t.Fatalf("abort with outstanding work must still fail terminally, got: %+v", resp)
+	}
+}

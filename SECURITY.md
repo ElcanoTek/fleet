@@ -170,13 +170,13 @@ compromised or fresh-and-unvetted release from reaching `main`:
 
   Two `overrides` in `scripts/rampart-service/package.json` are load-bearing and
   worth disclosing: `sharp ^0.35.3` and `adm-zip ^0.6.0`, each the release
-  immediately after a vulnerable range that **no upstream release yet fixes**
-  (`@huggingface/transformers` still pins `sharp ^0.34.5`; `adm-zip` arrives
-  under `onnxruntime-node`). An override is a fork of upstream's intent, correct
-  only while upstream is broken — so `scripts/check-npm-overrides.sh` runs beside
-  the audit in both lanes and **fails the build with removal instructions the day
-  upstream's own ranges reach the patched lines**. A registry flake skips with a
-  notice rather than delivering a verdict; the audit above is the CVE gate.
+  immediately after a vulnerable range that **the locked dependency tree does
+  not yet accept** (`@huggingface/transformers` still pins `sharp ^0.34.5` and
+  `onnxruntime-node 1.24.3`, which pins `adm-zip ^0.5.16`). An override is a fork
+  of upstream's intent, correct only while that tree is broken — so
+  `scripts/check-npm-overrides.sh` runs beside the audit in both lanes and
+  **fails with removal instructions once every locked parent accepts the patched
+  line**. The audit above remains the CVE gate.
 - **Container-image CVE scanning.** CI also scans the rootless-Podman sandbox
   image (built from `config/default/sandbox/Containerfile`) with Grype in the
   `grype-scan` job, a surface `govulncheck` (Go modules only) cannot see.

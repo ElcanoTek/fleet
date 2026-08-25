@@ -342,6 +342,14 @@ func validateScopeSpec(spec ScopeSpec) error {
 	if !spec.Remote.FilterEnabled && len(spec.Remote.Enabled) != 0 {
 		return errors.New("mcpbroker: remote enabled names require filterEnabled")
 	}
+	for name := range spec.Remote.Accounts {
+		if strings.TrimSpace(name) == "" {
+			return errors.New("mcpbroker: remote account pins require a server name")
+		}
+	}
+	if spec.Remote.Exact && len(spec.Remote.Accounts) == 0 {
+		return errors.New("mcpbroker: exact remote seats require account pins")
+	}
 	return nil
 }
 

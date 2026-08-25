@@ -22,8 +22,9 @@ import type { McpServer, MCPChoice } from "@/app/shared/lib/orchestratorApi";
 // when it appears in the list; its account is the chosen credential seat
 // (account === "" / undefined means the default/shared seat).
 //
-// Row order: connected remote servers first (read-only), then the toggleable
-// roster in catalog order. Enabled rows tint in place — deliberately NOT
+// Row order: connected remote servers first (read-only — except that a
+// connection with several logins gets a seat picker, #988), then the
+// toggleable roster in catalog order. Enabled rows tint in place — deliberately NOT
 // sorted first, so a row never moves (or resizes) under the pointer when
 // toggled.
 
@@ -69,6 +70,20 @@ export function McpServerPicker({ mode, servers, selection, onChange, disabled }
     [selection, onChange],
   );
 
+  // Remote (hosted) connections are auto-available, so the ONLY per-task
+  // choice they carry is which login (seat, #988) the run uses. Picking a
+  // label pins it via { server, account }; picking "Default" REMOVES the
+  // entry — `{ server, account: "" }` means the same thing server-side, and a
+  // selection that only lists pinned seats keeps the auto-available
+  // behaviour legible.
+  const setRemoteAccount = useCallback(
+    (server: string, account: string) => {
+      const rest = selection.filter((c) => c.server !== server);
+      onChange(account ? [...rest, { server, account }] : rest);
+    },
+    [selection, onChange],
+  );
+
   // Stable regrouping (remote → rest); ties keep catalog order.
   const ordered = [...servers].sort((a, b) => Number(b.remote ?? false) - Number(a.remote ?? false));
 
@@ -90,6 +105,9 @@ export function McpServerPicker({ mode, servers, selection, onChange, disabled }
             // already-on "Connected" row (no switch to flip, no credential seat to
             // pick) rather than a control that would falsely imply per-task choice.
             if (server.remote) {
+              const seats = server.accounts ?? [];
+              const remoteChoice = findChoice(selection, server.name);
+              const remoteAccountInputId = `mcp-${mode}-${server.name}-account`;
               return (
                 <li
                   key={server.name}
@@ -110,6 +128,31 @@ export function McpServerPicker({ mode, servers, selection, onChange, disabled }
                   ) : (
                     <span className="mcp-server-picker__desc">auto-available on every run</span>
                   )}
+                  {seats.length > 0 ? (
+                    <div className="mcp-server-picker__account">
+                      <label htmlFor={remoteAccountInputId} className="mcp-server-picker__account-label">
+                        Account
+                      </label>
+                      <select
+                        id={remoteAccountInputId}
+                        className="mcp-server-picker__account-select"
+                        value={remoteChoice?.account ?? ""}
+                        disabled={disabled}
+                        aria-label={`Credential account for ${server.name}`}
+                        data-testid={`mcp-account-${server.name}`}
+                        onChange={(e) => setRemoteAccount(server.name, e.target.value)}
+                      >
+                        <option value="">
+                          Default seat{server.default_account ? ` (${server.default_account})` : ""}
+                        </option>
+                        {seats.map((acct) => (
+                          <option key={acct} value={acct}>
+                            {acct}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  ) : null}
                 </li>
               );
             }

@@ -64,6 +64,10 @@ type turnEngine interface {
 	// default bundle seat (#167 residual 2). (nil, nil) means the engine has no
 	// scope opener and the caller falls back to MCPBroker().
 	OpenApprovalMCPScope(ctx context.Context, selection agentcore.MCPSelection, workspace string) (*agent.MCPScope, error)
+	// OpenApprovalRemoteMCPScope is the hosted-connection counterpart (#988):
+	// it reopens exactly the {connection, account} seat a card recorded. nil,
+	// nil when remote MCP is not wired.
+	OpenApprovalRemoteMCPScope(ctx context.Context, email, server, account string) (*agent.RemoteMCPOverlay, error)
 	// SandboxPool exposes the per-turn sandbox warm pool for the out-of-band
 	// approved-bash execution path (runStagedBash).
 	SandboxPool() *sandbox.Pool

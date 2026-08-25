@@ -17,11 +17,18 @@ import (
 // deliberately NOT active: a paused run has stopped executing (its lease is
 // released), and a resume re-queues the task as pending, which re-passes this
 // gate before it can run again.
+//
+// Derived from the lifecycle table's ActiveTaskStatuses (#1127) — the same
+// {leased, running} it always was, now defined once. If the set ever grows,
+// the hard-coded $n placeholders in serializationNotBlockedSQL and the two
+// IN-list callers below must grow with it; the lifecycle drift test pins the
+// placeholder count to the set so that edit cannot be forgotten.
 func taskActiveStatuses() []any {
-	return []any{
-		string(models.TaskStatusLeased),
-		string(models.TaskStatusRunning),
+	out := make([]any, len(models.ActiveTaskStatuses))
+	for i, s := range models.ActiveTaskStatuses {
+		out[i] = string(s)
 	}
+	return out
 }
 
 // serializationNotBlockedSQL filters out pending tasks whose serialization key

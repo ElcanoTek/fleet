@@ -311,24 +311,23 @@ Turning it on surfaced a real backlog immediately:
   one layer down, `adm-zip <0.6.0` (GHSA-xcpc-8h2w-3j85, crafted-ZIP 4 GB
   allocation) via `onnxruntime-node`.
 
-No upstream release fixes either — the latest `@huggingface/transformers`
-still pins `sharp ^0.34.5`, and npm's own suggested "fix" was a breaking
-*downgrade* of transformers — so `package.json` carries two `overrides`
-(`sharp ^0.35.3`, `adm-zip ^0.6.0`, each the release immediately after the
-vulnerable line). The overridden stack was **installed and load-tested**, not
-just resolved: sharp renders a PNG through the new libvips, transformers loads
-on it, rampart exports its API, and adm-zip 0.6 round-trips a zip. Audit result
-after: 0 vulnerabilities in both trees.
+The locked dependency tree fixes neither: `@huggingface/transformers 4.2.0`
+still pins `sharp ^0.34.5` and `onnxruntime-node 1.24.3`, whose `adm-zip` range
+is `^0.5.16`. So `package.json` carries two `overrides` (`sharp ^0.35.3`,
+`adm-zip ^0.6.0`, each the release immediately after the vulnerable line). The
+overridden stack was **installed and load-tested**, not just resolved: sharp
+renders a PNG through the new libvips, transformers loads on it, rampart exports
+its API, and adm-zip 0.6 round-trips a zip. Audit result after: 0 vulnerabilities
+in both trees.
 
 An override is a fork of upstream's intent, correct only while upstream is
-broken — so `scripts/check-npm-overrides.sh` runs beside the audit in both
-lanes and **fails the build the day upstream's own ranges reach the patched
-lines**, with removal instructions. The reminder to drop the override is a red
-build with a two-line fix, not stale-pin archaeology later. (Registry flake =
-skip with a notice, never a verdict; mutation-tested in both directions. The
-step invokes it as `"$GITHUB_WORKSPACE/scripts/check-npm-overrides.sh"` — the
-job runs under `working-directory: web`, where a repo-relative path resolves
-wrong; exit 127 on the first CI run taught that one.)
+broken — so `scripts/check-npm-overrides.sh` runs beside the audit in both lanes
+and **fails once every parent version actually present in the lockfile accepts
+the patched line**, with removal instructions. Checking `@latest` is not enough:
+a transitive consumer can remain pinned to an older vulnerable parent. The step
+invokes it as `"$GITHUB_WORKSPACE/scripts/check-npm-overrides.sh"` — the job runs
+under `working-directory: web`, where a repo-relative path resolves wrong; exit
+127 on the first CI run taught that one.
 
 ## Findings are readable from the job log, on purpose
 
