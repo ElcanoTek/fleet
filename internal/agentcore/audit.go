@@ -204,6 +204,23 @@ func (o *orchestrationState) markCommittedExecuted(toolName, dealID, callDigest 
 	}
 }
 
+// retireOutstandingCommitments zeroes every declared-but-unexecuted
+// commitment (typed and legacy) and drops blocked calls awaiting retry. Used
+// by an explicit abort: the model has said the declared work will not be done,
+// so nothing may keep demanding it afterwards. Returns the retired summary for
+// the response text. Callers must hold o.mu.
+func (o *orchestrationState) retireOutstandingCommitments() []string {
+	retired := o.outstandingCommitmentSummary()
+	for _, c := range o.typedCommitments {
+		c.remaining = 0
+	}
+	for suffix := range o.committedCriticalActions {
+		o.committedCriticalActions[suffix] = 0
+	}
+	o.pendingCriticalActions = nil
+	return retired
+}
+
 func (o *orchestrationState) unexecutedCommitments() []string {
 	var missing []string
 	for suffix, remaining := range o.committedCriticalActions {
@@ -530,9 +547,19 @@ func buildConfirmAuditTool(orch *orchestrationState) fantasy.AgentTool {
 						"Pending: %d, completed: %d. Retry blocked actions: %v.",
 						input.Reasoning, evidence, numPending, numCompleted, names)), nil
 				}
+				// The trailer must describe the ledger, not assume it: a fresh
+				// audit that just DECLARED work used to end "All 0 critical
+				// actions executed. Finish now." — telling the model to finish
+				// before it had made the write it had just been authorized for.
+				if outstanding := orch.outstandingCommitmentSummary(); len(outstanding) > 0 {
+					return fantasy.NewTextResponse(fmt.Sprintf("Audit Confirmed: \"%s\".\n%s\n"+
+						"Declared and not yet executed: %s. Execute exactly those call(s) now — the same tool "+
+						"name(s) and record(s) as declared — then finish.",
+						input.Reasoning, evidence, strings.Join(outstanding, ", "))), nil
+				}
 				return fantasy.NewTextResponse(fmt.Sprintf("Audit Confirmed: \"%s\".\n%s\n"+
 					"All %d critical actions executed. Finish now.",
-					input.Reasoning, evidence, numCompleted)), nil
+					input.Reasoning, evidence, orch.criticalExecutedCount)), nil
 			}
 
 			// An abort after the declared critical work has ALL executed is a
@@ -557,14 +584,32 @@ func buildConfirmAuditTool(orch *orchestrationState) fantasy.AgentTool {
 					orch.criticalExecutedCount)), nil
 			}
 
+			// An abort says the declared critical work will NOT be done, so the
+			// declarations themselves are retired here. Field case: an audit
+			// bound the inline Pages write, the payload had gone by reference,
+			// the upload variant was BLOCKED, the model aborted (correctly:
+			// nothing had run) and re-audited the upload tool, which then
+			// published — but the retired-in-spirit inline declaration stayed
+			// on the ledger, finish enforcement demanded it, and the model's
+			// only exit was a second abort that landed a live page as status:
+			// error. A later confirm_audit(success=true) already clears the
+			// terminal flag; with the ledger cleared too, the run is judged on
+			// what executes after the re-audit.
+			retired := orch.retireOutstandingCommitments()
 			orch.selfAuditRequested = true
 			orch.selfAuditConfirmedOnce = true
 			orch.auditConfirmed = false
 			orch.auditTerminalFailure = true
 			orch.auditSummary = strings.TrimSpace(input.UserVisibleSummary)
 			evidence := summarizeConfirmAuditEvidence(args)
-			return fantasy.NewTextResponse(fmt.Sprintf("Audit Failed Terminally.\n%s\nSummary: %s",
-				evidence, strings.TrimSpace(input.UserVisibleSummary))), nil
+			retiredNote := ""
+			if len(retired) > 0 {
+				retiredNote = fmt.Sprintf("\nRetired declared-but-unexecuted: %s. If the task can still be completed "+
+					"another way, re-run confirm_audit declaring the tool you will actually call, then execute it; "+
+					"otherwise finish and report the blocker.", strings.Join(retired, ", "))
+			}
+			return fantasy.NewTextResponse(fmt.Sprintf("Audit Failed Terminally.\n%s\nSummary: %s%s",
+				evidence, strings.TrimSpace(input.UserVisibleSummary), retiredNote)), nil
 		},
 	)
 }
