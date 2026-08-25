@@ -580,3 +580,87 @@ func TestConfirmAudit_AbortAfterAllDeclaredExecutedIsRefused(t *testing.T) {
 		t.Fatalf("abort with outstanding work must still fail terminally, got: %+v", resp)
 	}
 }
+
+// Field case (Energizer daily, 2026-08-25): the audit declared the inline Pages
+// write, the payload had gone by reference, the upload variant was BLOCKED, the
+// model aborted (nothing had run) and re-audited the upload tool, which then
+// published the page — yet finish enforcement kept demanding the inline
+// declaration and forced a second abort, landing a live page as status: error.
+// An abort must retire what it abandons so the re-audit's execution is what
+// the run is judged on.
+func TestConfirmAudit_AbortRetiresUnexecutedCommitmentsSoReauditCanSwitchTool(t *testing.T) {
+	o := newOrchStateForTest()
+	if resp := confirmAudit(t, o, []criticalActionStruct{{Tool: typedCreateToolA}}, nil); resp.IsError {
+		t.Fatalf("first audit should pass: %s", resp.Content)
+	}
+	// The call the model actually needs is bound to a different tool → blocked.
+	if blocked, _ := o.checkCriticalTool(typedCreateToolB, "", `{}`); !blocked {
+		t.Fatal("undeclared tool must be blocked")
+	}
+
+	resp := confirmAuditAbort(t, o, "declared the wrong tool variant; nothing executed yet")
+	if resp.IsError || !strings.Contains(resp.Content, "Audit Failed Terminally") {
+		t.Fatalf("abort with outstanding work is a terminal failure at this point, got: %+v", resp)
+	}
+	if !strings.Contains(resp.Content, "Retired declared-but-unexecuted") || !strings.Contains(resp.Content, typedCreateToolA) {
+		t.Fatalf("abort must report what it retired, got: %s", resp.Content)
+	}
+	if got := o.unexecutedCommitments(); len(got) != 0 {
+		t.Fatalf("abort left commitments on the ledger: %v", got)
+	}
+	if aborted, _, _ := o.auditVerdict(); !aborted {
+		t.Fatal("abort with nothing executed must flag the run — until a later audit redeems it")
+	}
+
+	// Re-audit declaring the right tool, execute it, finish cleanly.
+	resp = confirmAudit(t, o, []criticalActionStruct{{Tool: typedCreateToolB}}, nil)
+	if resp.IsError {
+		t.Fatalf("re-audit should pass: %s", resp.Content)
+	}
+	if strings.Contains(resp.Content, "Finish now") || !strings.Contains(resp.Content, "Declared and not yet executed") || !strings.Contains(resp.Content, typedCreateToolB) {
+		t.Fatalf("re-audit trailer must name the outstanding declaration, not say finish: %s", resp.Content)
+	}
+	if blocked, msg := o.checkCriticalTool(typedCreateToolB, "", `{}`); blocked {
+		t.Fatalf("declared tool blocked after re-audit: %s", msg)
+	}
+	o.recordToolResult(typedCreateToolB, `{}`, `{"ok":true,"version":{"id":"572"}}`, true)
+	if aborted, _, _ := o.auditVerdict(); aborted {
+		t.Fatal("a successful re-audit + execution must redeem the earlier abort")
+	}
+	if allowed, msgs := o.checkFinishEnforcement(); !allowed {
+		t.Fatalf("finish must be allowed with nothing outstanding, got %v", msgs)
+	}
+	if got := o.unexecutedCommitments(); len(got) != 0 {
+		t.Fatalf("stale declaration resurfaced: %v", got)
+	}
+	// And a needless second abort now hits the completed-work refusal.
+	if resp := confirmAuditAbort(t, o, "aborting the retired inline declaration"); !resp.IsError || !strings.Contains(resp.Content, "Audit Abort Refused") {
+		t.Fatalf("abort after the work executed must be refused, got: %+v", resp)
+	}
+}
+
+// The success trailer must describe the ledger: a fresh declaration is
+// outstanding, so the response must say so rather than "Finish now".
+func TestConfirmAudit_ConfirmTrailerNamesOutstandingDeclarations(t *testing.T) {
+	o := newOrchStateForTest()
+	resp := confirmAudit(t, o, []criticalActionStruct{{Tool: typedCreateToolA}}, nil)
+	if resp.IsError {
+		t.Fatalf("audit should pass: %s", resp.Content)
+	}
+	if strings.Contains(resp.Content, "Finish now") {
+		t.Fatalf("trailer told the model to finish with a declaration outstanding: %s", resp.Content)
+	}
+	if !strings.Contains(resp.Content, "Declared and not yet executed") || !strings.Contains(resp.Content, typedCreateToolA) {
+		t.Fatalf("trailer must name the outstanding declaration: %s", resp.Content)
+	}
+	o.recordToolResult(typedCreateToolA, `{}`, `{"ok":true}`, true)
+	// A repeat audit with the same fingerprint short-circuits; a materially new
+	// one with nothing outstanding may say finish.
+	resp = confirmAudit(t, o, []criticalActionStruct{{Tool: "none"}}, nil)
+	if resp.IsError {
+		t.Fatalf("follow-up audit should pass: %s", resp.Content)
+	}
+	if !strings.Contains(resp.Content, "All 1 critical actions executed. Finish now.") {
+		t.Fatalf("trailer with nothing outstanding should count the executed call and say finish: %s", resp.Content)
+	}
+}

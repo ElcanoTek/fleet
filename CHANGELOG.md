@@ -36,6 +36,18 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **A self-audit abort now retires what it abandons, and a confirmed audit says
+  what is still outstanding.** Field case: a daily refresh audited the inline
+  Pages write, staged its payload by reference, was BLOCKED on the upload
+  variant, aborted (nothing had run), re-audited the upload tool and published
+  the page — yet finish enforcement kept demanding the abandoned inline
+  declaration and forced a second abort, landing a live page as status
+  `error`. `confirm_audit(success=false)` now zeroes every declared-but-
+  unexecuted commitment (and reports which), so the later re-audit's execution
+  is what the run is judged on. The success trailer also stopped saying
+  `All 0 critical actions executed. Finish now.` when it had just registered
+  a declaration; it now names the outstanding call(s) to make.
+
 - **Scheduled runs could not stage files where their own sandbox could read
   them.** `download_url` resolved a relative `output_dir` against the process
   cwd instead of the run's forced working dir, then refused its own choice as
