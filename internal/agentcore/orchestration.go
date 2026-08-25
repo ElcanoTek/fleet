@@ -46,6 +46,11 @@ type orchestrationState struct {
 	auditSummary             string
 	pendingCriticalActions   []pendingCriticalAction
 	completedCriticalActions []string
+	// criticalExecutedCount counts every critical call that ran and reported
+	// success in this run, whether or not it was first blocked (pending) —
+	// completedCriticalActions only ever sees the blocked-then-retried shape,
+	// so a run that audited first and executed cleanly leaves it empty.
+	criticalExecutedCount int
 
 	// committedCriticalActions counts outstanding critical-tool commitments per
 	// tool suffix declared in the most recent successful confirm_audit. Finish
@@ -865,6 +870,7 @@ func (o *orchestrationState) recordToolResult(toolName, rawInput, resultText str
 				}
 			}
 			if newly > 0 {
+				o.criticalExecutedCount++
 				delete(o.criticalToolFailureAttempts, key)
 				o.markPendingCriticalDone(toolName, argsHash)
 				if len(o.pendingCriticalActions) == 0 {
@@ -878,6 +884,7 @@ func (o *orchestrationState) recordToolResult(toolName, rawInput, resultText str
 			}
 		} else if effectiveSucceeded {
 			// Single-call critical tool (no per-record results[]).
+			o.criticalExecutedCount++
 			delete(o.criticalToolFailureAttempts, key)
 			o.markPendingCriticalDone(toolName, argsHash)
 			if len(o.pendingCriticalActions) == 0 {

@@ -19,6 +19,27 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Scheduled runs could not stage files where their own sandbox could read
+  them.** `download_url` resolved a relative `output_dir` against the process
+  cwd instead of the run's forced working dir, then refused its own choice as
+  "path escapes the scheduled-run worktree" — dozens of failed calls per daily
+  refresh. Relative and omitted `output_dir` now anchor to the forced dir, and
+  an absolute path outside it is refused with an error naming the worktree.
+  Runs with a forced working dir also get a `## Working directory (this run)`
+  message tail (the system-prompt section only reached interactive turns), so
+  MCP file tools are told the absolute `output_dir` to write into — an email
+  attachment saved relative to the MCP server's own directory had reported
+  success while the sandbox never saw it, stalling a dashboard for three days.
+- **`confirm_audit` turned finished work into `error` status.** A re-audit of
+  the same unbound critical tool (a managed-data write retried after
+  `stale_version`) stacked a second commitment instead of superseding the
+  first, so the single successful retry left a phantom obligation, finish was
+  refused, and the only exit was an abort that recorded a live, correct page
+  as a failed run. Unbound same-tool re-audits now supersede like record-bound
+  ones; an abort after every declared action has executed is refused with
+  guidance to finish instead of flagging the run terminal; and an abort no
+  longer demands the `critical_actions` unlock list it does not use (every
+  field abort was first rejected on that check).
 - **The npm override canary demanded an unsafe `adm-zip` override removal.** It
   checked `onnxruntime-node@latest`, which now accepts the patched dependency,
   while Fleet's locked Transformers release still pins `onnxruntime-node 1.24.3`
