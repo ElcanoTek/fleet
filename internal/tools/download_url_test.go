@@ -497,3 +497,67 @@ func TestDownloadURLSSRFBlocksLoopback(t *testing.T) {
 		t.Fatalf("expected unguarded download to succeed, got status=%q err=%q", allowed.Status, allowed.Error)
 	}
 }
+
+// TestDownloadURL_ForcedWorkingDirAnchorsOutputDir pins the scheduled-run
+// anchoring fix: with a forced per-run working dir in context (what the
+// scheduled runner and delegated children set), a relative output_dir must
+// land UNDER that dir, an omitted output_dir must be that dir itself, and an
+// absolute output_dir outside it must be refused with an error that names the
+// worktree. Before the fix a relative output_dir resolved against the process
+// cwd and the sandbox probe rejected fleet's own choice.
+func TestDownloadURL_ForcedWorkingDirAnchorsOutputDir(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("data"))
+	}))
+	defer srv.Close()
+
+	base, _ := downloadCtx(t)
+	// A per-run worktree inside the whitelisted workspace root, distinct from
+	// the per-conversation dir the context also carries — the forced dir must
+	// win over the conversation workspace.
+	worktree := filepath.Join(os.Getenv("FLEET_WORKSPACE_ROOT"), "runs", "wt-1")
+	if err := os.MkdirAll(worktree, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ctx := WithForcedWorkingDir(base, worktree)
+
+	t.Run("relative lands under the worktree", func(t *testing.T) {
+		res := runDownloadURL(ctx, fsTestSandbox(t), DownloadURLParams{URL: srv.URL + "/a.csv", OutputDir: "sources"})
+		if res.Status != "success" {
+			t.Fatalf("status=%q err=%q", res.Status, res.Error)
+		}
+		if want := filepath.Join(worktree, "sources"); filepath.Dir(res.SavedTo) != want {
+			t.Fatalf("saved under %s, want %s", filepath.Dir(res.SavedTo), want)
+		}
+	})
+	t.Run("omitted is the worktree itself", func(t *testing.T) {
+		res := runDownloadURL(ctx, fsTestSandbox(t), DownloadURLParams{URL: srv.URL + "/b.csv"})
+		if res.Status != "success" {
+			t.Fatalf("status=%q err=%q", res.Status, res.Error)
+		}
+		if filepath.Dir(res.SavedTo) != worktree {
+			t.Fatalf("saved under %s, want %s", filepath.Dir(res.SavedTo), worktree)
+		}
+	})
+	t.Run("absolute inside the worktree is accepted", func(t *testing.T) {
+		res := runDownloadURL(ctx, fsTestSandbox(t), DownloadURLParams{URL: srv.URL + "/c.csv", OutputDir: filepath.Join(worktree, "abs")})
+		if res.Status != "success" {
+			t.Fatalf("status=%q err=%q", res.Status, res.Error)
+		}
+	})
+	t.Run("absolute outside the worktree is refused before any fetch", func(t *testing.T) {
+		outside := filepath.Join(os.Getenv("FLEET_WORKSPACE_ROOT"), "elsewhere")
+		res := runDownloadURL(ctx, fsTestSandbox(t), DownloadURLParams{URL: srv.URL + "/d.csv", OutputDir: outside})
+		if res.Status != "error" {
+			t.Fatalf("want error for absolute output_dir outside the worktree, got %+v", res)
+		}
+		if !strings.Contains(res.Error, "worktree") || !strings.Contains(res.Error, worktree) {
+			t.Fatalf("error should name the worktree, got %q", res.Error)
+		}
+	})
+	t.Run("traversal is still rejected", func(t *testing.T) {
+		if _, err := resolveDownloadDir(ctx, "../../etc"); err == nil {
+			t.Fatal("resolveDownloadDir accepted '../../etc' under a forced dir")
+		}
+	})
+}

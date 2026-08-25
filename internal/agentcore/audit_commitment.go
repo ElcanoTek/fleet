@@ -495,21 +495,41 @@ func (o *orchestrationState) registerCommittedActionsTyped(actions []criticalAct
 		// tool + same record-set (record-bound only) so a re-audit can NEVER
 		// silently retire an unrelated obligation and escape finish
 		// enforcement.
-		if tc.hasDealBinding() {
-			for i := 0; i < preExisting; i++ {
-				old := o.typedCommitments[i]
-				if old.remaining <= 0 || old.tool != tc.tool || !old.hasDealBinding() || !old.sameDealSet(tc) {
-					continue
-				}
-				if o.committedCriticalActions[old.suffix] >= old.remaining {
-					o.committedCriticalActions[old.suffix] -= old.remaining
-				} else {
-					o.committedCriticalActions[old.suffix] = 0
-				}
-				log.Printf("Enforcement: superseded stale commitment %q on re-audit (same tool+record-set); "+
-					"obligation transferred to the fresh approval", old.describe())
-				old.remaining = 0
+		//
+		// The same applies to an UNBOUND re-audit of the same full tool (no
+		// deal_id / deal_ids — creation tools, managed-data writes, sends):
+		// an outstanding unbound prior-envelope commitment for that exact tool
+		// is retired and its obligation transferred. Field case: a managed-data
+		// write failed on stale_version, the model re-audited the same tool
+		// before its one retry, the second commitment STACKED on the first,
+		// the single successful retry discharged one, and the phantom kept
+		// finish enforcement demanding a write that must not happen twice —
+		// the run's only exit was an abort that recorded a live, correct page
+		// as status: error. Same-envelope entries are still protected by the
+		// preExisting snapshot, so multi-record creation can declare several
+		// unbound same-tool commitments at once; and a record-bound prior
+		// commitment is never retired by an unbound re-audit (or vice versa),
+		// so the two shapes cannot cannibalise each other.
+		for i := 0; i < preExisting; i++ {
+			old := o.typedCommitments[i]
+			if old.remaining <= 0 || old.tool != tc.tool || old.hasDealBinding() != tc.hasDealBinding() {
+				continue
 			}
+			if tc.hasDealBinding() && !old.sameDealSet(tc) {
+				continue
+			}
+			if o.committedCriticalActions[old.suffix] >= old.remaining {
+				o.committedCriticalActions[old.suffix] -= old.remaining
+			} else {
+				o.committedCriticalActions[old.suffix] = 0
+			}
+			shape := "same tool+record-set"
+			if !tc.hasDealBinding() {
+				shape = "same unbound tool"
+			}
+			log.Printf("Enforcement: superseded stale commitment %q on re-audit (%s); "+
+				"obligation transferred to the fresh approval", old.describe(), shape)
+			old.remaining = 0
 		}
 		o.typedCommitments = append(o.typedCommitments, tc)
 		log.Printf("Enforcement: registered committed critical action %q (from %q); %d outstanding",
