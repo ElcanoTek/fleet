@@ -287,6 +287,9 @@ same PR.
   guided tenant/API-key/BYO-client add forms, the per-user api_key auth mode):
   [`docs/MCP-CATALOG.md`](docs/MCP-CATALOG.md) +
   [`docs/CONNECTOR-ONBOARDING.md`](docs/CONNECTOR-ONBOARDING.md)
+- **Bundle-managed SES/S3 email-report infrastructure:** use the external
+  canonical [new-client email-report runbook](https://github.com/ElcanoTek/ses-s3-setup/blob/main/docs/NEW-CLIENT-EMAIL-SETUP.md);
+  keep client-specific inventory in the external client bundle.
 - **White-labeling from a bundle** (`branding:` — strings, `logo`, the themable
   color tokens, what stays build-time env, and the trust class of the two brand
   asset routes): [`docs/BRANDING.md`](docs/BRANDING.md)
