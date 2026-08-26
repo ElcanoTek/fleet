@@ -12,6 +12,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -390,7 +391,8 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	// mount of the uploads root.
 	stagedAttachments := s.attachmentsNeedWorkspaceStaging()
 	if stagedAttachments {
-		otherAttachments = stageAttachmentsIntoWorkspace(conv.ID, otherAttachments)
+		otherAttachments = stageAttachmentsIntoWorkspace(
+			filepath.Join(s.cfg.EmailAttachmentDir, "uploads"), conv.ID, otherAttachments)
 	}
 	userMessage := appendAttachmentsBlock(req.Message, imageAttachments, otherAttachments, stagedAttachments)
 	// Surface files persisted from earlier turns. The agent's run_python

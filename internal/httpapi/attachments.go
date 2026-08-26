@@ -391,9 +391,13 @@ func (s *Server) attachmentsNeedWorkspaceStaging() bool {
 // stageAttachmentsIntoWorkspace copies validated non-image attachments into
 // <conversation workspace>/attachments/ — inside the workspace claim, so the
 // advertised path resolves in every sandbox pod — and rewrites each entry's
-// Path to the staged copy. Inputs MUST come from validateAttachments: this
-// function trusts Path (it opens it) and re-sanitizes only the display Name
-// it derives the staged filename from.
+// Path to the staged copy.
+//
+// Inputs are expected from validateAttachments, but the stager does not TRUST
+// its caller: each entry's Path is re-confined to uploadsRoot with the same
+// Rel + IsLocal + rejoin barrier validateAttachments uses (also the shape
+// CodeQL's path-injection query recognizes), so a future call site that skips
+// validation cannot turn the copy source into an arbitrary host read.
 //
 // Idempotent for the queue-drain case: a drained row echoes the same
 // attachment metadata a live submit already staged, and a same-name
@@ -404,13 +408,19 @@ func (s *Server) attachmentsNeedWorkspaceStaging() bool {
 //
 // Per-entry failures degrade rather than fail the turn: the entry keeps its
 // uploads path (exactly the pre-staging behavior) and the error is logged.
-func stageAttachmentsIntoWorkspace(convID string, atts []chatAttachment) []chatAttachment {
+func stageAttachmentsIntoWorkspace(uploadsRoot, convID string, atts []chatAttachment) []chatAttachment {
 	if len(atts) == 0 {
 		return atts
 	}
+	root, err := filepath.Abs(uploadsRoot)
+	if err != nil {
+		log.Printf("attachment staging: resolve uploads root: %v (attachments keep uploads paths)", err)
+		return atts
+	}
+	root = filepath.Clean(root)
 	convDir, err := tools.EnsureWorkspaceDir(convID)
 	if err != nil {
-		log.Printf("attachment staging: workspace dir for %q: %v (attachments keep uploads paths)", convID, err)
+		log.Printf("attachment staging: workspace dir for %q: %v (attachments keep uploads paths)", logSafeSlug(convID), err)
 		return atts
 	}
 	dir := filepath.Join(convDir, "attachments")
@@ -421,9 +431,17 @@ func stageAttachmentsIntoWorkspace(convID string, atts []chatAttachment) []chatA
 	}
 	out := make([]chatAttachment, 0, len(atts))
 	for _, a := range atts {
-		dst, err := stageOneAttachment(dir, a)
+		src, ok := confineToRoot(root, a.Path)
+		if !ok {
+			// %q + CR/LF strip: on this branch Path is by definition a value
+			// that failed containment, so treat it as hostile in the log too.
+			log.Printf("attachment staging: %q is outside the uploads root (kept unstaged)", logSafeSlug(a.Path))
+			out = append(out, a)
+			continue
+		}
+		dst, err := stageOneAttachment(dir, src, a)
 		if err != nil {
-			log.Printf("attachment staging: %q: %v (this attachment keeps its uploads path)", a.Name, err)
+			log.Printf("attachment staging: %q: %v (this attachment keeps its uploads path)", logSafeSlug(a.Name), err)
 			out = append(out, a)
 			continue
 		}
@@ -433,9 +451,25 @@ func stageAttachmentsIntoWorkspace(convID string, atts []chatAttachment) []chatA
 	return out
 }
 
-// stageOneAttachment places one validated attachment under dir and returns
-// the staged path. See stageAttachmentsIntoWorkspace for the naming rules.
-func stageOneAttachment(dir string, a chatAttachment) (string, error) {
+// confineToRoot re-derives path from trusted parts: the remainder below root
+// (rejected unless local) rejoined to root — byte-identical to the input
+// whenever the guard passes, never derived from the raw value when it fails.
+func confineToRoot(root, path string) (string, bool) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", false
+	}
+	rel, err := filepath.Rel(root, filepath.Clean(abs))
+	if err != nil || !filepath.IsLocal(rel) {
+		return "", false
+	}
+	return filepath.Join(root, rel), true
+}
+
+// stageOneAttachment places one attachment (src already confined to the
+// uploads root by the caller) under dir and returns the staged path. See
+// stageAttachmentsIntoWorkspace for the naming rules.
+func stageOneAttachment(dir, src string, a chatAttachment) (string, error) {
 	base := sanitizeFilename(a.Name)
 	ext := filepath.Ext(base)
 	stem := strings.TrimSuffix(base, ext)
@@ -444,6 +478,12 @@ func stageOneAttachment(dir string, a chatAttachment) (string, error) {
 		if i > 1 {
 			name = fmt.Sprintf("%s-%d%s", stem, i, ext)
 		}
+		// sanitizeFilename already stripped separators and leading dots; the
+		// IsLocal check restates that as the barrier CodeQL's path-injection
+		// query recognizes, so the Join below is provably confined to dir.
+		if !filepath.IsLocal(name) {
+			return "", fmt.Errorf("attachment name is unusable as a staged filename")
+		}
 		dst := filepath.Join(dir, name)
 		if info, err := os.Stat(dst); err == nil {
 			if info.Mode().IsRegular() && info.Size() == a.Size {
@@ -451,7 +491,7 @@ func stageOneAttachment(dir string, a chatAttachment) (string, error) {
 			}
 			continue // occupied by something else — try the next variant
 		}
-		if err := copyAttachment(a.Path, dst); err != nil {
+		if err := copyAttachment(src, dst); err != nil {
 			if errors.Is(err, os.ErrExist) {
 				continue // lost a race for this name — try the next variant
 			}
@@ -459,19 +499,19 @@ func stageOneAttachment(dir string, a chatAttachment) (string, error) {
 		}
 		return dst, nil
 	}
-	return "", fmt.Errorf("no free staged name for %q after 100 variants", a.Name)
+	return "", fmt.Errorf("no free staged name after 100 variants")
 }
 
-// copyAttachment copies src (a validateAttachments-vetted uploads path) to a
+// copyAttachment copies src (confined to the uploads root by the caller) to a
 // fresh dst. O_EXCL so a concurrent stager can never interleave writes into
 // one file; 0o644 so the sandbox uid can read it through the claim.
 func copyAttachment(src, dst string) error {
-	in, err := os.Open(src) //nolint:gosec // src passed validateAttachments' uploads-root confinement
+	in, err := os.Open(src) //nolint:gosec // src re-derived by confineToRoot (Rel + IsLocal + rejoin against the uploads root)
 	if err != nil {
 		return fmt.Errorf("open source: %w", err)
 	}
 	defer in.Close()
-	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644) //nolint:gosec // dst is Join(workspace attachments dir, sanitized name); world-readable for the sandbox uid
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644) //nolint:gosec // dst is Join(workspace attachments dir, IsLocal-checked sanitized name); world-readable for the sandbox uid
 	if err != nil {
 		return err // undecorated: the caller inspects os.ErrExist
 	}

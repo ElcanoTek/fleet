@@ -393,13 +393,16 @@ func TestPostAttachments_ZeroConfigFallsBackToDefault(t *testing.T) {
 func TestStageAttachmentsIntoWorkspace(t *testing.T) {
 	t.Setenv("FLEET_WORKSPACE_ROOT", t.TempDir())
 	uploads := t.TempDir()
-	src := filepath.Join(uploads, "data.csv")
+	src := filepath.Join(uploads, "tok1", "data.csv")
+	if err := os.MkdirAll(filepath.Dir(src), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(src, []byte("a,b\n1,2\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	atts := []chatAttachment{{Name: "data.csv", Path: src, Size: 8}}
 
-	staged := stageAttachmentsIntoWorkspace("conv-stage", atts)
+	staged := stageAttachmentsIntoWorkspace(uploads, "conv-stage", atts)
 	if len(staged) != 1 {
 		t.Fatalf("staged = %v", staged)
 	}
@@ -412,7 +415,7 @@ func TestStageAttachmentsIntoWorkspace(t *testing.T) {
 	}
 
 	// Queue-drain echo: same name + size reuses the staged copy.
-	again := stageAttachmentsIntoWorkspace("conv-stage", atts)
+	again := stageAttachmentsIntoWorkspace(uploads, "conv-stage", atts)
 	if again[0].Path != staged[0].Path {
 		t.Fatalf("re-stage path = %q, want the reused %q", again[0].Path, staged[0].Path)
 	}
@@ -423,11 +426,14 @@ func TestStageAttachmentsIntoWorkspace(t *testing.T) {
 
 	// A NEW attachment reusing the filename (different size) gets a variant,
 	// never a clobber of the copy the agent may already have read.
-	src2 := filepath.Join(uploads, "data2.csv")
+	src2 := filepath.Join(uploads, "tok2", "data.csv")
+	if err := os.MkdirAll(filepath.Dir(src2), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(src2, []byte("different bytes!"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	variant := stageAttachmentsIntoWorkspace("conv-stage", []chatAttachment{{Name: "data.csv", Path: src2, Size: 16}})
+	variant := stageAttachmentsIntoWorkspace(uploads, "conv-stage", []chatAttachment{{Name: "data.csv", Path: src2, Size: 16}})
 	if got := filepath.Base(variant[0].Path); got != "data-2.csv" {
 		t.Fatalf("variant name = %q, want data-2.csv", got)
 	}
@@ -441,10 +447,31 @@ func TestStageAttachmentsIntoWorkspace(t *testing.T) {
 
 func TestStageAttachmentsIntoWorkspace_FailureKeepsUploadsPath(t *testing.T) {
 	t.Setenv("FLEET_WORKSPACE_ROOT", t.TempDir())
-	atts := []chatAttachment{{Name: "gone.bin", Path: filepath.Join(t.TempDir(), "missing"), Size: 4}}
-	out := stageAttachmentsIntoWorkspace("conv-stage-fail", atts)
+	uploads := t.TempDir()
+	atts := []chatAttachment{{Name: "gone.bin", Path: filepath.Join(uploads, "missing"), Size: 4}}
+	out := stageAttachmentsIntoWorkspace(uploads, "conv-stage-fail", atts)
 	if len(out) != 1 || out[0].Path != atts[0].Path {
 		t.Fatalf("failed staging should keep the uploads path, got %v", out)
+	}
+}
+
+func TestStageAttachmentsIntoWorkspace_RefusesEscapedSource(t *testing.T) {
+	// The stager must not trust its caller: a Path outside the uploads root —
+	// a flow that skipped validateAttachments — is kept unstaged, never opened
+	// relative to anything.
+	t.Setenv("FLEET_WORKSPACE_ROOT", t.TempDir())
+	uploads := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "secret.txt")
+	if err := os.WriteFile(outside, []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out := stageAttachmentsIntoWorkspace(uploads, "conv-escape", []chatAttachment{{Name: "secret.txt", Path: outside, Size: 6}})
+	if len(out) != 1 || out[0].Path != outside {
+		t.Fatalf("escaped source should stay unstaged, got %v", out)
+	}
+	convAtt := filepath.Join(tools.WorkspaceDirForConversation("conv-escape"), "attachments")
+	if entries, _ := os.ReadDir(convAtt); len(entries) != 0 {
+		t.Fatalf("escaped source was staged: %v", entries)
 	}
 }
 
