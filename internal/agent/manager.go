@@ -878,6 +878,15 @@ func defaultIfEmpty(s, def string) string {
 	return s
 }
 
+// logSafeAgent strips CR/LF from a user-influenced value before it is
+// interpolated into a log line, so a hostile value cannot forge a log entry —
+// the same guard as httpapi's logSafeSlug / handlers' logSafe / the runner's
+// logSafeRunner, declared per package because none of those is importable
+// without a cycle or a widened API.
+func logSafeAgent(s string) string {
+	return strings.NewReplacer("\r", "", "\n", "").Replace(s)
+}
+
 // Resolve loads + caches the model for a slug. Exposed so the scheduled
 // runner (cmd/fleet) resolves its task model through the SAME cached resolver
 // the interactive turns use.
@@ -1365,12 +1374,15 @@ func (m *Manager) openTurnRemoteOverlay(ctx context.Context, in TurnInput, turnC
 		// without an entry mounts its default seat (#988).
 		ov, oerr := m.openRemoteOverlay(ctx, in.UserEmail, turnCatalog, RemoteMCPEnabledOnly(in.OptionalMCPServersEnabled, in.MCPAccountDefaults))
 		if oerr != nil {
-			log.Printf("RunTurn: remote-mcp overlay unavailable for %s: %v", in.UserEmail, oerr)
+			log.Printf("RunTurn: remote-mcp overlay unavailable for %s: %v", logSafeAgent(in.UserEmail), oerr)
 		} else if ov != nil {
 			overlay = ov
 			if len(ov.Skipped) > 0 {
 				// Interactive: the user can see+fix these on the Connections page.
-				log.Printf("RunTurn: remote MCP server(s) need re-auth for %s: %v", in.UserEmail, ov.Skipped)
+				// Skipped carries USER-NAMED servers — CR/LF-strip them so a
+				// hostile name cannot forge a log entry (log-injection guard).
+				log.Printf("RunTurn: remote MCP server(s) need re-auth for %s: %s",
+					logSafeAgent(in.UserEmail), logSafeAgent(strings.Join(ov.Skipped, ", ")))
 			}
 		}
 	}
@@ -1643,7 +1655,12 @@ func (m *Manager) failedTurnResult(ctx context.Context, runErr error, res agentc
 	}
 	commitPartialSideEffects(runErr, res, commitTerminal)
 	reason, status, _ := agentcore.ClassifyStreamErrorReason(runErr)
-	log.Printf("RunTurn stream failed (reason=%s model=%s status=%d): %v", reason, modelSlug, status, runErr)
+	// modelSlug is a user-selected string and runErr can embed provider
+	// response text — CR/LF-strip both so neither can forge a log entry
+	// (log-injection guard); %q on the slug keeps a hostile value visibly
+	// quoted rather than blending into the line.
+	log.Printf("RunTurn stream failed (reason=%s model=%q status=%d): %s",
+		reason, logSafeAgent(modelSlug), status, logSafeAgent(runErr.Error()))
 	emitModelSelectionRequired(sink, reason, modelSlug, status, runErr)
 	return nil, fmt.Errorf("%w: %w", ErrModelSelectionRequired, runErr)
 }
