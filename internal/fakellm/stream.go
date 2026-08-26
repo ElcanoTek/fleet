@@ -278,6 +278,25 @@ func (s *Server) jsonToolCalls(w http.ResponseWriter, model string, calls []Tool
 	})
 }
 
+// ── /api/v1/key ──
+
+// handleKey mirrors OpenRouter's authenticated key-metadata endpoint just far
+// enough for `fleet validate-config`'s model_api check: any Bearer token gets
+// 200 with a minimal metadata body, no Authorization header gets the same 401
+// shape the real endpoint returns. The check probes THIS path (not the public
+// /api/v1/models, which 200s unauthenticated and made the check a false
+// positive — #1264), so the seam must keep serving it or E2E ladders would
+// report a spurious warning.
+func handleKey(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = io.WriteString(w, `{"error":{"message":"Missing Authentication header","code":401}}`)
+		return
+	}
+	_, _ = io.WriteString(w, `{"data":{"label":"fake-llm","usage":0,"is_free_tier":false}}`)
+}
+
 // ── /api/v1/models ──
 
 func (s *Server) handleModels(w http.ResponseWriter, _ *http.Request) {

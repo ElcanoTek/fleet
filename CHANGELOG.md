@@ -17,6 +17,21 @@ prior versions are listed because none have shipped.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`fleet validate-config`'s model_api check now actually verifies the API
+  key** (#1264). It probed OpenRouter's `/api/v1/models`, which is public —
+  it returns 200 with no Authorization header and with a garbage one — so any
+  non-empty `OPENROUTER_API_KEY` was blessed with "API key authenticates".
+  The #1264 kind rehearsal hit the consequence: a mis-created secret holding
+  64 hex characters of junk passed the check, then the first real completion
+  failed with `401 Missing Authentication header`. The check now probes
+  `GET /api/v1/key`, which requires auth (401 on a bad or missing key, 200
+  with the key's own metadata otherwise). The fake-LLM seam serves
+  `/api/v1/key` with the same auth contract, so the check stays meaningful —
+  not a spurious 404 warning — in E2E ladders running against
+  `OPENROUTER_BASE_URL`.
+
 ### Added
 
 - **Multiple logins for hosted (official) MCP connections** (#988). A user can

@@ -170,3 +170,33 @@ func TestFakeLLM_InjectedError(t *testing.T) {
 		t.Fatalf("injected 500: expected an error, got nil")
 	}
 }
+
+// TestKeyEndpointAuthContract pins /api/v1/key on the seam: 401 with
+// OpenRouter's error shape when no Bearer token is sent, 200 with metadata
+// when one is. `fleet validate-config`'s model_api check probes this path
+// (#1264), so the seam serving it — with real auth semantics — is what keeps
+// that check meaningful in E2E ladders.
+func TestKeyEndpointAuthContract(t *testing.T) {
+	srv := httptest.NewServer(fakellm.New().Handler())
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/v1/key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("no auth: status %d, want 401", resp.StatusCode)
+	}
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/key", nil)
+	req.Header.Set("Authorization", "Bearer sk-or-v1-not-a-real-key")
+	resp2, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusOK {
+		t.Errorf("with bearer: status %d, want 200", resp2.StatusCode)
+	}
+}
