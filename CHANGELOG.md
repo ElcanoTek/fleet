@@ -51,6 +51,17 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Chat attachments now reach the agent under the kubernetes sandbox
+  backend.** A sandbox pod mounts only the workspace claim, so the uploads
+  root (control-plane state) was invisible: the attachments prompt block
+  advertised absolute paths no pod could resolve, and every non-image
+  attachment read failed. The chat server now copies validated non-image
+  attachments into `<workspace>/<convID>/attachments/` — inside the claim —
+  at send time under that backend and advertises the staged paths; the copies
+  live and die with the conversation workspace. Podman keeps its zero-copy
+  read-only uploads mount; image attachments were never affected (vision
+  bytes are read host-side).
+
 - **A self-audit abort now retires what it abandons, and a confirmed audit says
   what is still outstanding.** Field case: a daily refresh audited the inline
   Pages write, staged its payload by reference, was BLOCKED on the upload

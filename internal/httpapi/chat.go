@@ -382,7 +382,17 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	// are mentioned in the appended block so the agent sees what arrived.
 	validAttachments := s.validateAttachments(req.Attachments)
 	imageAttachments, otherAttachments := splitAttachmentsByKind(validAttachments)
-	userMessage := appendAttachmentsBlock(req.Message, imageAttachments, otherAttachments)
+	// Kubernetes backend only: copy non-image attachments into the
+	// conversation workspace (the claim every sandbox pod mounts) and
+	// advertise those paths — the uploads root is control-plane state no pod
+	// can see. Images are exempt: their bytes reach the model host-side as
+	// vision input on both backends. Podman keeps its zero-copy read-only
+	// mount of the uploads root.
+	stagedAttachments := s.attachmentsNeedWorkspaceStaging()
+	if stagedAttachments {
+		otherAttachments = stageAttachmentsIntoWorkspace(conv.ID, otherAttachments)
+	}
+	userMessage := appendAttachmentsBlock(req.Message, imageAttachments, otherAttachments, stagedAttachments)
 	// Surface files persisted from earlier turns. The agent's run_python
 	// kernel resets each turn but its workspace dir doesn't — without this,
 	// a report downloaded on turn 1 gets forgotten by turn 4 even though

@@ -823,7 +823,10 @@ func splitWorkspaceNestedMounts(mounts []string, workspaceRoot string) (nested, 
 //     workspace claim, so every host path is a path the anchor must not trust.
 //   - With it, only the BUNDLE's own doc dirs survive. Everything else in the
 //     list (the uploads root) lives in control-plane state a sandbox image
-//     cannot contain, and the declaration says nothing about it.
+//     cannot contain, and the declaration says nothing about it. Chat
+//     attachments stay reachable anyway: the chat server stages them into the
+//     conversation workspace under this backend (httpapi
+//     stageAttachmentsIntoWorkspace) instead of relying on this mount.
 //   - A materialized (merged built-in + bundle) skills tree never survives:
 //     it lives under the data dir with a path derived from the bundle path, so
 //     no image can carry it. See clientconfig.IsMaterializedSkillsDir.

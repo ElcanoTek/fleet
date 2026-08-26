@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/config"
+
+	"github.com/ElcanoTek/fleet/internal/tools"
 )
 
 func TestSplitAttachmentsByKind(t *testing.T) {
@@ -96,7 +98,7 @@ func TestValidateAttachments_ConfinesToUploadsRoot(t *testing.T) {
 func TestAppendAttachmentsBlock_ImagesAndOthers(t *testing.T) {
 	images := []chatAttachment{{Name: "shot.png", Size: 100}}
 	others := []chatAttachment{{Name: "data.csv", Path: "/uploads/abc/data.csv", Size: 1024}}
-	got := appendAttachmentsBlock("hi", images, others)
+	got := appendAttachmentsBlock("hi", images, others, false)
 	if !strings.Contains(got, "User attached images") {
 		t.Errorf("missing image header in:\n%s", got)
 	}
@@ -115,7 +117,7 @@ func TestAppendAttachmentsBlock_ImagesAndOthers(t *testing.T) {
 }
 
 func TestAppendAttachmentsBlock_NoAttachmentsIsNoOp(t *testing.T) {
-	got := appendAttachmentsBlock("hello", nil, nil)
+	got := appendAttachmentsBlock("hello", nil, nil, false)
 	if got != "hello" {
 		t.Errorf("expected unchanged, got %q", got)
 	}
@@ -375,5 +377,84 @@ func TestPostAttachments_ZeroConfigFallsBackToDefault(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// ── kubernetes attachment staging (docs/DEPLOYMENT-KUBERNETES.md) ──
+//
+// Load-bearing assertions: staging copies a validated attachment into the
+// conversation workspace's attachments/ dir and rewrites Path to the staged
+// copy; re-staging the same metadata (the queue-drain echo) reuses the copy
+// instead of duplicating; a same-name different-size attachment gets a
+// numbered variant rather than clobbering; a per-entry failure keeps that
+// entry's uploads path instead of failing the turn; and the staged-variant
+// prompt trailer replaces the uploads-TTL wording.
+
+func TestStageAttachmentsIntoWorkspace(t *testing.T) {
+	t.Setenv("FLEET_WORKSPACE_ROOT", t.TempDir())
+	uploads := t.TempDir()
+	src := filepath.Join(uploads, "data.csv")
+	if err := os.WriteFile(src, []byte("a,b\n1,2\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	atts := []chatAttachment{{Name: "data.csv", Path: src, Size: 8}}
+
+	staged := stageAttachmentsIntoWorkspace("conv-stage", atts)
+	if len(staged) != 1 {
+		t.Fatalf("staged = %v", staged)
+	}
+	want := filepath.Join(tools.WorkspaceDirForConversation("conv-stage"), "attachments", "data.csv")
+	if filepath.Clean(staged[0].Path) != filepath.Clean(want) {
+		t.Fatalf("staged path = %q, want %q", staged[0].Path, want)
+	}
+	if got, err := os.ReadFile(staged[0].Path); err != nil || string(got) != "a,b\n1,2\n" {
+		t.Fatalf("staged content = (%q, %v)", got, err)
+	}
+
+	// Queue-drain echo: same name + size reuses the staged copy.
+	again := stageAttachmentsIntoWorkspace("conv-stage", atts)
+	if again[0].Path != staged[0].Path {
+		t.Fatalf("re-stage path = %q, want the reused %q", again[0].Path, staged[0].Path)
+	}
+	entries, _ := os.ReadDir(filepath.Dir(want))
+	if len(entries) != 1 {
+		t.Fatalf("re-stage duplicated the file: %v", entries)
+	}
+
+	// A NEW attachment reusing the filename (different size) gets a variant,
+	// never a clobber of the copy the agent may already have read.
+	src2 := filepath.Join(uploads, "data2.csv")
+	if err := os.WriteFile(src2, []byte("different bytes!"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	variant := stageAttachmentsIntoWorkspace("conv-stage", []chatAttachment{{Name: "data.csv", Path: src2, Size: 16}})
+	if got := filepath.Base(variant[0].Path); got != "data-2.csv" {
+		t.Fatalf("variant name = %q, want data-2.csv", got)
+	}
+	if got, err := os.ReadFile(filepath.Clean(variant[0].Path)); err != nil || string(got) != "different bytes!" {
+		t.Fatalf("variant content = (%q, %v)", got, err)
+	}
+	if got, err := os.ReadFile(staged[0].Path); err != nil || string(got) != "a,b\n1,2\n" {
+		t.Fatalf("original staged copy was clobbered: (%q, %v)", got, err)
+	}
+}
+
+func TestStageAttachmentsIntoWorkspace_FailureKeepsUploadsPath(t *testing.T) {
+	t.Setenv("FLEET_WORKSPACE_ROOT", t.TempDir())
+	atts := []chatAttachment{{Name: "gone.bin", Path: filepath.Join(t.TempDir(), "missing"), Size: 4}}
+	out := stageAttachmentsIntoWorkspace("conv-stage-fail", atts)
+	if len(out) != 1 || out[0].Path != atts[0].Path {
+		t.Fatalf("failed staging should keep the uploads path, got %v", out)
+	}
+}
+
+func TestAppendAttachmentsBlock_StagedTrailer(t *testing.T) {
+	others := []chatAttachment{{Name: "d.csv", Path: "/ws/conv/attachments/d.csv", Size: 8}}
+	got := appendAttachmentsBlock("hi", nil, others, true)
+	if !strings.Contains(got, "conversation's workspace") {
+		t.Errorf("staged trailer missing in:\n%s", got)
+	}
+	if strings.Contains(got, "temporary uploads area") {
+		t.Errorf("uploads-TTL trailer should not appear for staged attachments:\n%s", got)
 	}
 }
