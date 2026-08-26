@@ -1658,9 +1658,11 @@ func (m *Manager) failedTurnResult(ctx context.Context, runErr error, res agentc
 	// modelSlug is a user-selected string and runErr can embed provider
 	// response text — CR/LF-strip both so neither can forge a log entry
 	// (log-injection guard); %q on the slug keeps a hostile value visibly
-	// quoted rather than blending into the line.
+	// quoted rather than blending into the line. reason is a fixed enum
+	// the classifier returns, but it is DERIVED from runErr, so it gets the
+	// same guard to keep the whole line provably clean.
 	log.Printf("RunTurn stream failed (reason=%s model=%q status=%d): %s",
-		reason, logSafeAgent(modelSlug), status, logSafeAgent(runErr.Error()))
+		logSafeAgent(string(reason)), logSafeAgent(modelSlug), status, logSafeAgent(runErr.Error()))
 	emitModelSelectionRequired(sink, reason, modelSlug, status, runErr)
 	return nil, fmt.Errorf("%w: %w", ErrModelSelectionRequired, runErr)
 }
