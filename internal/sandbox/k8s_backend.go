@@ -389,6 +389,16 @@ func (b *KubernetesBackend) Namespace() string { return b.cfg.Namespace }
 // outer construction contexts from it (mirroring resolveStartTimeout).
 func (b *KubernetesBackend) StartTimeout() time.Duration { return b.cfg.StartTimeout }
 
+// ApiserverVersion reports the cluster's version string via GET /version —
+// the cheapest authenticated "is the apiserver reachable and are my
+// credentials valid" call, the same one the boot preflight opens with.
+// Exported for the /readyz sandbox check: under this backend the sandbox
+// runtime IS the apiserver, so readiness probes it instead of a local
+// `podman --version` that reports on a binary this deployment never execs.
+func (b *KubernetesBackend) ApiserverVersion(ctx context.Context) (string, error) {
+	return b.client.serverVersion(ctx)
+}
+
 // newSandbox starts one sandbox Pod and returns the wrapping handle. cfg
 // carries the backend-shared knobs (image, workspace path, limits, network
 // posture); the pool routes here from the same take paths that call

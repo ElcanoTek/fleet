@@ -6,11 +6,14 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/diskguard"
 	"github.com/ElcanoTek/fleet/internal/health"
+	"github.com/ElcanoTek/fleet/internal/sandbox"
 )
 
 type fakePinger struct{ err error }
@@ -28,7 +31,7 @@ func TestPingProbe(t *testing.T) {
 }
 
 func TestCachedSandboxProbe_MissingBinaryAndCaches(t *testing.T) {
-	p := &cachedSandboxProbe{runtimeBin: "fleet-nonexistent-runtime-xyz", ttl: time.Minute}
+	p := &cachedProbe{fresh: podmanSandboxProbe("fleet-nonexistent-runtime-xyz"), ttl: time.Minute}
 
 	first := p.probe(context.Background())
 	if first.Status != health.StatusError || first.Cached {
@@ -38,6 +41,49 @@ func TestCachedSandboxProbe_MissingBinaryAndCaches(t *testing.T) {
 	second := p.probe(context.Background())
 	if second.Status != health.StatusError || !second.Cached {
 		t.Errorf("second call within TTL should be cached, got %+v", second)
+	}
+}
+
+type fakeApiserverProber struct {
+	version string
+	err     error
+}
+
+func (f fakeApiserverProber) ApiserverVersion(context.Context) (string, error) {
+	return f.version, f.err
+}
+
+func TestK8sSandboxProbe(t *testing.T) {
+	ok := k8sSandboxProbe(fakeApiserverProber{version: "v1.36.1"})(context.Background())
+	if ok.Status != health.StatusOK || !strings.Contains(ok.Detail, "v1.36.1") {
+		t.Errorf("reachable apiserver: want ok with version in detail, got %+v", ok)
+	}
+	bad := k8sSandboxProbe(fakeApiserverProber{err: errors.New("connection refused")})(context.Background())
+	if bad.Status != health.StatusError || !strings.Contains(bad.Detail, "connection refused") {
+		t.Errorf("unreachable apiserver: want error with cause in detail, got %+v", bad)
+	}
+}
+
+func TestSandboxProbeForBackendSelection(t *testing.T) {
+	// kubernetes backend with no backend handle: the probe must report the
+	// missing handle, not fall back to a podman exec (which would report a
+	// runtime this deployment never uses) and not report ok (a lie).
+	probe := sandboxProbeFor(&config.Config{SandboxBackend: sandbox.BackendKubernetes}, nil)
+	got := probe(context.Background())
+	if got.Status != health.StatusError || !strings.Contains(got.Detail, "backend handle") {
+		t.Errorf("kubernetes backend without a handle: want the missing-handle error, got %+v", got)
+	}
+
+	// Default (podman) backend: the probe execs the runtime binary, so a
+	// nonexistent binary surfaces as an error naming it — proving the podman
+	// arm was selected.
+	probe = sandboxProbeFor(&config.Config{SandboxRuntime: "krun"}, nil)
+	got = probe(context.Background())
+	if got.Status == health.StatusOK && !strings.Contains(got.Detail, "krun") {
+		t.Errorf("podman arm: want a krun probe result, got %+v", got)
+	}
+	if got.Status == health.StatusError && !strings.Contains(got.Detail, "krun") {
+		t.Errorf("podman arm: error should name the probed binary, got %+v", got)
 	}
 }
 

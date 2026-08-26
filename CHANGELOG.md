@@ -17,6 +17,18 @@ prior versions are listed because none have shipped.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`/readyz`'s sandbox check is backend-aware** (#1264). Under
+  `FLEET_SANDBOX_BACKEND=kubernetes` the probe ran `podman --version` on the
+  control-plane host — a binary that deployment never has or uses — so
+  readiness reported a permanent, misleading `degraded`. The kubernetes
+  backend now probes what its sandboxes actually run on: one cached apiserver
+  `GET /version` (the same call the boot preflight opens with), reporting the
+  cluster version in the detail. The podman backend's `<runtime> --version`
+  probe, its #217 binary-name mapping, and the #215 unauthenticated-endpoint
+  cache bound are unchanged.
+
 ### Added
 
 - **Multiple logins for hosted (official) MCP connections** (#988). A user can
