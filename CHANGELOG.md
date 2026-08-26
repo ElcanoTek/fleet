@@ -17,6 +17,24 @@ prior versions are listed because none have shipped.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`FLEET_SANDBOX_WARM_SIZE=0` now means what it says: no warm pool**
+  (#1264). Before, `0` was indistinguishable from unset, so the engine
+  silently derived a 2..8-deep pool from `FLEET_MAX_CONCURRENT_AGENTS` — and
+  the Helm chart reinforced the confusion by omitting the env var at
+  `warmSize: 0` and documenting `0` as "derive". Found in the #1264 kind
+  rehearsal, where the bundle's overlay set `warmSize: 0`, documented itself
+  as running with no warm pool, and ran a two-pod Guaranteed-QoS pool anyway.
+  Now: unset derives (unchanged default), an explicit `0` disables warming
+  (every take pays a cold start — the pool always supported this), a positive
+  value pins the depth, and a negative value fails loudly at load. The chart's
+  `sandbox.warmSize` default is now `null` (= let the engine derive) and any
+  set value — including `0` — is passed through. **Semantic change:** an
+  operator who set `FLEET_SANDBOX_WARM_SIZE=0` (or chart `warmSize: 0`)
+  expecting derivation now gets no warm pool — delete the key to keep the
+  derived depth.
+
 ### Added
 
 - **Multiple logins for hosted (official) MCP connections** (#988). A user can

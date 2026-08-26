@@ -503,10 +503,12 @@ func warmPoolSize(maxConcurrent int) int {
 }
 
 // resolveWarmSize picks the warm-pool depth: an explicit FLEET_SANDBOX_WARM_SIZE
-// (>0) pins it; otherwise it is derived from MaxConcurrentAgents (clamped 2..8),
-// preserving the prior default (#181).
+// pins it — including 0, which disables warming entirely so every take pays a
+// cold start (#1264; the config default is a -1 "unset" sentinel precisely so
+// 0 stays expressible) — otherwise it is derived from MaxConcurrentAgents
+// (clamped 2..8), preserving the prior default (#181).
 func resolveWarmSize(cfg *config.Config) int {
-	if cfg.SandboxWarmSize > 0 {
+	if cfg.SandboxWarmSize >= 0 {
 		return cfg.SandboxWarmSize
 	}
 	return warmPoolSize(cfg.MaxConcurrentAgents)

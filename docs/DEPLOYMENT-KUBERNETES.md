@@ -469,10 +469,11 @@ Recorded here so nobody discovers them in production:
   its full CPU, memory and ephemeral-storage allocation before any turn runs.
   Do the arithmetic: the reservation is
   `warmSize × (sandbox.cpus, sandbox.memory, sandbox.diskGB)`, and it must be
-  schedulable on the runner pool on top of peak concurrency. Note that
-  `FLEET_SANDBOX_WARM_SIZE=0` does **not** mean "no warm pool" — unset, fleet
-  derives the depth from `FLEET_MAX_CONCURRENT_AGENTS`, clamped to 2..8, so
-  eight concurrent agents parks eight pods. Set it explicitly.
+  schedulable on the runner pool on top of peak concurrency. With `warmSize`
+  unset, fleet derives the depth from `FLEET_MAX_CONCURRENT_AGENTS`, clamped
+  to 2..8 — so eight concurrent agents parks eight pods. Set it explicitly to
+  pin the depth; `warmSize: 0` means **no warm pool** (every turn then pays a
+  cold pod start).
 
 - **An open sandbox pod is a full citizen of the cluster network.** Podman's
   non-lockdown default is rootless pasta/slirp4netns with no host-loopback:
