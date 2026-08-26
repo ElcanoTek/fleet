@@ -19,6 +19,21 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **Shared files: a native cross-chat file library.** Admins publish files
+  once (Settings → Shared files, or `POST /shared-files`) and every
+  conversation's agent can read them at `shared/<folder>/<name>` — on BOTH
+  sandbox backends: canonical bytes stay host-side under
+  `<DataDir>/shared_files/`, a staged copy under `<WorkspaceRoot>/shared/` is
+  mounted read-only into every sandbox (a nested `:ro` bind on podman, a
+  read-only subPath of the workspace claim on kubernetes), and a reconciler
+  (boot + every mutation + the hourly maintenance pass) heals any drift. Each
+  chat turn gets a capped "Shared file library" prompt block with paths,
+  sizes, and descriptions. Members list/download; admins upload into one
+  optional folder level, rename/move/describe, delete. The library total is
+  capped by the new live `shared_files_max_total_mb` admin setting
+  (`FLEET_SHARED_FILES_MAX_TOTAL_MB`, default 10 GiB, 0 = unlimited).
+  Migration 053. Design note: `docs/SHARED-FILES.md`.
+
 - **Multiple logins for hosted (official) MCP connections** (#988). A user can
   hold several seats under one connection name — a work and a personal GitHub,
   two Gamma workspaces — each with its own sealed token and its own share

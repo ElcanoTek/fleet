@@ -96,6 +96,7 @@ var allowedEnvVars = map[string]bool{
 	"FLEET_INPUT_QUEUE_RETENTION_DAYS": true,
 	"FLEET_TURN_EVENT_RETENTION_DAYS":  true,
 	"FLEET_UPLOAD_MAX_BYTES":           true,
+	"FLEET_SHARED_FILES_MAX_TOTAL_MB":  true,
 
 	// ── fleet transport / data (canonical) ──
 	"FLEET_SERVER_ADDR":  true,
@@ -672,6 +673,13 @@ type Config struct {
 	// experimental.proxyClientMaxBodySize in web/next.config.ts, which caps
 	// the whole proxied request at 2 GB.
 	UploadMaxBytes int64
+	// SharedFilesMaxTotalMB caps the TOTAL size of the cross-chat shared file
+	// library (docs/SHARED-FILES.md) in megabytes; uploads that would push the
+	// library past it are refused with 413. 0 = unlimited — for deployments
+	// that genuinely want a very large library and accept the disk cost.
+	// FLEET_SHARED_FILES_MAX_TOTAL_MB, default 10240 (10 GiB); admin-overridable
+	// live via the shared_files_max_total_mb workspace setting.
+	SharedFilesMaxTotalMB int
 	// AutoArchiveAfterDays soft-archives unpinned conversations untouched for
 	// this many days (#282). 0 (the default) disables it — a conversation is
 	// then only ever archived by an explicit user action. FLEET_AUTO_ARCHIVE_AFTER_DAYS.
@@ -1430,6 +1438,7 @@ func Load(envFile string) (*Config, error) {
 		InputQueueRetentionDays: lp.getenvFleetInt("INPUT_QUEUE_RETENTION_DAYS", 30),
 		TurnEventRetentionDays:  lp.getenvFleetInt("TURN_EVENT_RETENTION_DAYS", 14),
 		UploadMaxBytes:          lp.getenvFleetInt64("UPLOAD_MAX_BYTES", 1<<30),
+		SharedFilesMaxTotalMB:   lp.getenvFleetInt("SHARED_FILES_MAX_TOTAL_MB", 10240),
 		AutoArchiveAfterDays:    lp.getenvFleetInt("AUTO_ARCHIVE_AFTER_DAYS", 0),
 		SearchEnabled:           lp.getenvBool("FLEET_SEARCH_ENABLED", true),
 		ConversationSoftDelete:  lp.getenvBool("FLEET_CONVERSATION_SOFT_DELETE", false),

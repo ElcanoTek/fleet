@@ -3,6 +3,11 @@
 Design note for the upload-limit + storage-cleanup feature (2026-07). What
 shipped, how the pieces fit, and what was deliberately deferred.
 
+(Per-conversation attachments only. Files meant to be readable from *every*
+chat are the shared file library — [SHARED-FILES.md](SHARED-FILES.md) — which
+shares `FLEET_UPLOAD_MAX_BYTES` as its per-file cap but has its own storage
+trees, TTL-less retention, and library-total cap.)
+
 ## Why
 
 A user uploading a >250 MB file in the chat composer got a silent failure:

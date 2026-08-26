@@ -388,6 +388,9 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	// a report downloaded on turn 1 gets forgotten by turn 4 even though
 	// it's still on disk. Empty workspaces (first turn) skip the block.
 	userMessage = appendWorkspaceInventoryBlock(userMessage, tools.WorkspaceDirForConversation(conv.ID))
+	// Announce the cross-chat shared file library (docs/SHARED-FILES.md) the
+	// same way: read-only paths under shared/ the agent can use immediately.
+	userMessage = s.appendSharedFilesBlock(turnCtx, userMessage)
 	// Composer context handles (#517, opt-in): expand any `@url:<url>` /
 	// `@file:"path"` in the user's message into the turn context. A no-op when
 	// disabled; failures degrade to notices so the turn always proceeds.

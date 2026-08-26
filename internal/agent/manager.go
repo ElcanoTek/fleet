@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -564,6 +565,18 @@ func buildSandboxPool(cfg *config.Config, personasDir, protocolsDir, systemPromp
 	if err := os.MkdirAll(uploadsRoot, 0o755); err != nil { //nolint:gosec // same — readable by the rootless container user via bind mount
 		return nil, fmt.Errorf("ensure uploads root %s: %w", uploadsRoot, err)
 	}
+	// The shared file library's staged tree (docs/SHARED-FILES.md). It lives
+	// UNDER the workspace root because that is the one tree both backends make
+	// visible inside sandboxes; the read-only mount below then overlays the
+	// read-write workspace mount so no turn can tamper with what every other
+	// chat reads. Created here, before the pool spawns anything, because on
+	// kubernetes the pod spec mounts this directory as a subPath of the
+	// workspace claim — if the kubelet creates it first it is root-owned and
+	// the control plane can no longer stage files into it.
+	sharedFilesDir := tools.SharedFilesDir(workspaceRoot)
+	if err := os.MkdirAll(sharedFilesDir, 0o755); err != nil { //nolint:gosec // same — readable by the rootless container user via bind mount
+		return nil, fmt.Errorf("ensure shared files dir %s: %w", sharedFilesDir, err)
+	}
 
 	// Normalize the OCI runtime name to what podman understands ("libkrun" →
 	// "krun") so the --runtime flag, the preflight, and the probe binary mapping
@@ -580,7 +593,7 @@ func buildSandboxPool(cfg *config.Config, personasDir, protocolsDir, systemPromp
 		PidsLimit:        cfg.SandboxPids,   // 0 → sandbox default (128)
 		DiskLimitGB:      cfg.SandboxDiskGB, // 0 → sandbox default (5); negative disables
 		BridgeDir:        filepath.Join(filepath.Dir(workspaceRoot), "data", "sandbox-bridge"),
-		ReadOnlyMounts:   absSupportingDocs(personasDir, protocolsDir, systemPromptsDir, skillsDir, uploadsRoot),
+		ReadOnlyMounts:   absSupportingDocs(personasDir, protocolsDir, systemPromptsDir, skillsDir, uploadsRoot, sharedFilesDir),
 	}
 	// Kubernetes backend (#989): sandboxes are ephemeral pods in a cluster
 	// instead of co-located podman containers. All podman-specific boot work
@@ -699,8 +712,16 @@ func buildKubernetesSandboxPool(cfg *config.Config, poolCfg sandbox.PoolConfig, 
 	if err != nil {
 		return nil, fmt.Errorf("FLEET_SANDBOX_K8S_BUNDLE_DOCS_IN_IMAGE / sandbox.kubernetes.bundle_docs_in_image: %w", err)
 	}
-	kept, dropped := k8sDocMounts(poolCfg.Container.ReadOnlyMounts, bundleDocDirs, docsInImage)
-	poolCfg.Container.ReadOnlyMounts = kept
+	// Read-only roots nested INSIDE the workspace claim (the shared file
+	// library's staged tree) are not host paths at all — every pod sees them
+	// by construction, mounted read-only as a subPath of the claim by the pod
+	// spec builder — so they bypass the host-mount drop below entirely.
+	wsNested, hostMounts := splitWorkspaceNestedMounts(poolCfg.Container.ReadOnlyMounts, poolCfg.Container.WorkspaceHostDir)
+	if len(wsNested) > 0 {
+		log.Printf("sandbox: kubernetes backend — %d read-only root(s) inside the workspace claim %v are mounted read-only (subPath) in every sandbox pod", len(wsNested), wsNested)
+	}
+	kept, dropped := k8sDocMounts(hostMounts, bundleDocDirs, docsInImage)
+	poolCfg.Container.ReadOnlyMounts = slices.Concat(wsNested, kept)
 	if len(kept) > 0 {
 		log.Printf("sandbox: kubernetes backend — bundle_docs_in_image declared: keeping fileop read anchors for %d bundle doc root(s) %v; the SANDBOX IMAGE must carry them at these exact paths or reads fail not-found", len(kept), kept)
 	}
@@ -767,6 +788,28 @@ func buildKubernetesSandboxPool(cfg *config.Config, poolCfg sandbox.PoolConfig, 
 		log.Printf("sandbox: network mode=lockdown — every sandbox pod is labeled %s=none for the deny-all NetworkPolicy (enforcement is the cluster CNI's job — see docs/DEPLOYMENT-KUBERNETES.md)", "fleet.elcanotek.com/egress")
 	}
 	return sandbox.NewPool(poolCfg), nil
+}
+
+// splitWorkspaceNestedMounts partitions the read-only mount list into roots
+// nested inside the workspace root and everything else. Under the kubernetes
+// backend the two have opposite fates: a workspace-nested root lives in the
+// shared claim (reachable in every pod — the pod spec re-mounts it read-only
+// via subPath), while any other root is a HOST path a pod cannot bind and goes
+// through the k8sDocMounts drop rules. Pure so the policy is pinned by tests.
+func splitWorkspaceNestedMounts(mounts []string, workspaceRoot string) (nested, others []string) {
+	root := filepath.Clean(workspaceRoot)
+	for _, m := range mounts {
+		if m == "" {
+			continue
+		}
+		rel, err := filepath.Rel(root, filepath.Clean(m))
+		if workspaceRoot != "" && err == nil && rel != "." && filepath.IsLocal(rel) {
+			nested = append(nested, m)
+			continue
+		}
+		others = append(others, m)
+	}
+	return nested, others
 }
 
 // k8sDocMounts splits the supporting-doc mount list into the roots whose

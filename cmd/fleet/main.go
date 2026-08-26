@@ -385,6 +385,13 @@ func run() error {
 		"protocols":      protocolsDir,
 		"system_prompts": systemPromptsDir,
 		"skills":         skillsDir,
+		// The shared file library's staged tree (docs/SHARED-FILES.md).
+		// Registering it here does two jobs at once: EnsureWorkspaceDir plants
+		// the per-conversation `shared` symlink so the prompt block's relative
+		// paths resolve, and fileOpRoot treats the tree as a read-only
+		// supporting-doc root so write_file/edit_file refuse it (the sandbox
+		// mounts enforce the same read-only posture for bash/run_python).
+		tools.SharedFilesDirName: tools.SharedFilesDir(workspaceRootOrDefault(cfg.WorkspaceRoot)),
 	})
 
 	// Confine the host-side file tools (view_file/write_file/edit_file) to the
@@ -662,6 +669,15 @@ func run() error {
 	chatOpts = appendNotifySettingsOption(chatOpts, chatStore, taskNotifier)
 
 	chatSrv := httpapi.New(cfg, mgr, chatStore, chatOpts...)
+
+	// Materialize the shared file library's staged tree (docs/SHARED-FILES.md)
+	// before the listeners come up, so the very first turn already reads a
+	// reconciled <workspace>/shared and a wiped workspace volume self-heals at
+	// boot instead of waiting an hour for the maintenance pass. Best-effort:
+	// a degraded library must not brick boot — Sync runs again every pass.
+	if err := chatSrv.SyncSharedFiles(context.Background()); err != nil {
+		log.Printf("shared files: boot sync: %v (the hourly maintenance pass will retry)", err)
+	}
 
 	// Auto-approve-in-test (#225) bypasses the human-in-the-loop approval gate.
 	// It is off by default and intended only for CI/test pipelines with a mocked
@@ -1931,13 +1947,21 @@ func warnIfNoAdminKey(adminKey string) {
 // uploads + api_keys.json that the sandbox never mounts. Extracted from run() to
 // keep it within the cyclomatic budget.
 func confineFileToolsToWorkspace(workspaceRoot string) {
+	if abs, err := filepath.Abs(workspaceRootOrDefault(workspaceRoot)); err == nil {
+		tools.SetWorkspaceRoot(abs)
+	}
+}
+
+// workspaceRootOrDefault resolves the workspace root the way the sandbox pool
+// does: FLEET_WORKSPACE_ROOT when set, ./workspace otherwise. One resolver so
+// the shared-file library, the file-tool confinement, and the bind mount can
+// never disagree about which tree they mean.
+func workspaceRootOrDefault(workspaceRoot string) string {
 	root := strings.TrimSpace(workspaceRoot)
 	if root == "" {
 		root = "workspace"
 	}
-	if abs, err := filepath.Abs(root); err == nil {
-		tools.SetWorkspaceRoot(abs)
-	}
+	return root
 }
 
 func orchestratorAddr() string {

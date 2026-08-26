@@ -96,6 +96,7 @@ var envKnobs = []envKnob{
 	{key: "FLEET_INPUT_QUEUE_RETENTION_DAYS", fleet: true, kind: kindInt, min: bound(0)},
 	{key: "FLEET_TURN_EVENT_RETENTION_DAYS", fleet: true, kind: kindInt},
 	{key: "FLEET_UPLOAD_MAX_BYTES", fleet: true, kind: kindInt64},
+	{key: "FLEET_SHARED_FILES_MAX_TOTAL_MB", fleet: true, kind: kindInt, min: bound(0)},
 	{key: "FLEET_AUTO_ARCHIVE_AFTER_DAYS", fleet: true, kind: kindInt},
 	{key: "FLEET_SEARCH_ENABLED", kind: kindBool},
 	{key: "FLEET_CONVERSATION_SOFT_DELETE", kind: kindBool},

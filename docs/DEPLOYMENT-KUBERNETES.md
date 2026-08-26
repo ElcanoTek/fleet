@@ -296,6 +296,12 @@ protocols/foo.yaml` is *refused* (`fileop root is not inside a sandbox bind
 mount`) rather than attempted. The workspace symlinks still point at the
 bundle's absolute paths, so `bash`/`run_python` reads fail too, as not-found.
 
+The one exception is a read-only root that lives *inside* the claim: the
+shared file library's staged tree (`<workspace>/shared`,
+[SHARED-FILES.md](SHARED-FILES.md)) reaches every pod by construction, and the
+pod spec re-mounts that subPath of the same claim read-only, so the library is
+readable — and only readable — with no image rebuild and no host bind.
+
 The fix is the sandbox image. Build it with the bundle's doc dirs baked in at
 the **same absolute paths** the control plane uses (`FLEET_CLIENT_CONFIG_DIR`),
 then declare it:
