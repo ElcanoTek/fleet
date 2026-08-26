@@ -883,8 +883,13 @@ func defaultIfEmpty(s, def string) string {
 // the same guard as httpapi's logSafeSlug / handlers' logSafe / the runner's
 // logSafeRunner, declared per package because none of those is importable
 // without a cycle or a widened API.
+//
+// strings.ReplaceAll rather than the NewReplacer the siblings use: CodeQL's
+// go/log-injection query models ReplaceAll of "\n"/"\r" as the sanitizer, so
+// this spelling both is the guard and is provable as one — a NewReplacer
+// version kept the alert open as a false positive.
 func logSafeAgent(s string) string {
-	return strings.NewReplacer("\r", "", "\n", "").Replace(s)
+	return strings.ReplaceAll(strings.ReplaceAll(s, "\n", ""), "\r", "")
 }
 
 // Resolve loads + caches the model for a slug. Exposed so the scheduled
