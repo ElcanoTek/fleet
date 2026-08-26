@@ -67,6 +67,25 @@ func ConversationIDFromContext(ctx context.Context) string {
 	return ""
 }
 
+// SharedFilesDirName is the single path segment under the workspace root
+// where the cross-chat shared file library's staged tree lives
+// (docs/SHARED-FILES.md) — and the name of the per-conversation symlink
+// EnsureWorkspaceDir plants so `shared/<name>` resolves from a chat's cwd.
+// Declared here (not in internal/sharedfiles, which owns the staging logic)
+// because this package sits below both the agent manager and the store in the
+// import graph, so every consumer — mounts, symlinks, staging, prompt text —
+// can share the one constant.
+const SharedFilesDirName = "shared"
+
+// SharedFilesDir returns the staged library root for a workspace root.
+func SharedFilesDir(workspaceRoot string) string {
+	dir := filepath.Join(workspaceRoot, SharedFilesDirName)
+	if abs, err := filepath.Abs(dir); err == nil {
+		dir = abs
+	}
+	return dir
+}
+
 // WorkspaceDirForConversation returns the absolute-or-relative path to
 // the per-conversation workspace root. Resolution order:
 //   - $FLEET_WORKSPACE_ROOT/<convID> (or legacy $CHAT_WORKSPACE_ROOT)
@@ -138,7 +157,12 @@ func EnsureWorkspaceDir(conversationID string) (string, error) {
 	if err != nil {
 		return dir, nil //nolint:nilerr // skip supporting-doc links but return the dir
 	}
-	for _, name := range []string{"protocols", "personas", "system_prompts", "skills"} {
+	// SharedFilesDirName rides the same symlink machinery so `shared/<name>`
+	// (the path the shared-library prompt block advertises) resolves from the
+	// chat's cwd exactly like `protocols/<name>` does — but ONLY when cmd/fleet
+	// registered the library dir: it has no legacy $CWD fallback, because a
+	// stray ./shared dir in a dev checkout must not masquerade as the library.
+	for _, name := range []string{"protocols", "personas", "system_prompts", "skills", SharedFilesDirName} {
 		link := filepath.Join(dir, name)
 		// Don't replace an existing file — could be a real file the
 		// agent wrote. Only create the symlink if nothing is there.
@@ -160,6 +184,9 @@ func EnsureWorkspaceDir(conversationID string) (string, error) {
 		if target := configuredSupportingDocDir(name); target != "" {
 			_ = os.Symlink(target, link)
 			continue
+		}
+		if name == SharedFilesDirName {
+			continue // no legacy fallback — see the loop comment
 		}
 		target := filepath.Join(cwd, name)
 		if _, err := os.Stat(target); err != nil {

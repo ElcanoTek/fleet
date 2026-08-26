@@ -74,3 +74,37 @@ func TestK8sDocMountsIgnoresUnlistedAndEmptyPaths(t *testing.T) {
 		t.Errorf("dropped = %v; want only the path that is not a bundle doc dir", dropped)
 	}
 }
+
+// splitWorkspaceNestedMounts is the rule that lets the shared file library's
+// staged tree (docs/SHARED-FILES.md) — which lives INSIDE the workspace claim —
+// bypass the host-mount drop above: every pod mounts the claim, so a
+// workspace-nested read-only root is reachable by construction.
+func TestSplitWorkspaceNestedMounts(t *testing.T) {
+	root := "/var/lib/fleet/workspace"
+	shared := filepath.Join(root, "shared")
+	mounts := []string{
+		"", // dropped entirely
+		"/opt/fleet/client/protocols",
+		shared,
+		"/var/lib/fleet/uploads",
+		root,                             // the root itself is the rw mount, not a nested ro root
+		"/var/lib/fleet/workspace-other", // sibling with the root as a string prefix — NOT nested
+	}
+	nested, others := splitWorkspaceNestedMounts(mounts, root)
+	if len(nested) != 1 || nested[0] != shared {
+		t.Errorf("nested = %v; want only %q", nested, shared)
+	}
+	want := []string{"/opt/fleet/client/protocols", "/var/lib/fleet/uploads", root, "/var/lib/fleet/workspace-other"}
+	if len(others) != len(want) {
+		t.Fatalf("others = %v; want %v", others, want)
+	}
+	for i := range want {
+		if others[i] != want[i] {
+			t.Errorf("others[%d] = %q, want %q", i, others[i], want[i])
+		}
+	}
+	// An empty workspace root nests nothing.
+	if nested, _ := splitWorkspaceNestedMounts(mounts, ""); len(nested) != 0 {
+		t.Errorf("empty root nested = %v; want none", nested)
+	}
+}

@@ -51,6 +51,12 @@ func (s *Server) Routes() http.Handler {
 	// Read-only, hence no mutate wrapper (like /search).
 	mux.Handle("/memories/graph", auth(member(http.HandlerFunc(s.memoryGraph))))
 	mux.Handle("/memories/", auth(member(mutate(http.HandlerFunc(s.memoryByID)))))
+	// Cross-chat shared file library (docs/SHARED-FILES.md): list/download are
+	// member-level (every chat can already read the files), upload/rename/
+	// delete are admin-only — gated in-handler because the collection route
+	// mixes both tiers. mutate still keeps viewers read-only.
+	mux.Handle("/shared-files", auth(member(mutate(http.HandlerFunc(s.handleSharedFiles)))))
+	mux.Handle("/shared-files/", auth(member(mutate(http.HandlerFunc(s.handleSharedFileItem)))))
 	mux.Handle("/personas", auth(member(http.HandlerFunc(s.listPersonas))))
 	// Bundle skill roster (#513 phase 1): name + description per skill, for the
 	// composer "/" autocomplete. Read-only over the operator-owned bundle.
@@ -191,7 +197,12 @@ func bodyLimitMiddleware(next http.Handler) http.Handler {
 		switch r.Method {
 		case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
 			// /attachments has its own (larger) multipart cap; don't double-limit.
-			if !strings.HasPrefix(r.URL.Path, "/attachments") {
+			// POST /shared-files is the shared library's upload (same multipart
+			// shape, same in-handler cap) — but ONLY the POST: the collection
+			// route's other methods and every /shared-files/{id} mutation are
+			// small JSON and keep the 1 MB cap.
+			if !strings.HasPrefix(r.URL.Path, "/attachments") &&
+				(r.Method != http.MethodPost || r.URL.Path != "/shared-files") {
 				r.Body = http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)
 			}
 		}

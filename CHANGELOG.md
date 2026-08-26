@@ -19,6 +19,21 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **Shared files: a native cross-chat file library.** Admins publish files
+  once (Settings → Shared files, or `POST /shared-files`) and every
+  conversation's agent can read them at `shared/<folder>/<name>` — on BOTH
+  sandbox backends: canonical bytes stay host-side under
+  `<DataDir>/shared_files/`, a staged copy under `<WorkspaceRoot>/shared/` is
+  mounted read-only into every sandbox (a nested `:ro` bind on podman, a
+  read-only subPath of the workspace claim on kubernetes), and a reconciler
+  (boot + every mutation + the hourly maintenance pass) heals any drift. Each
+  chat turn gets a capped "Shared file library" prompt block with paths,
+  sizes, and descriptions. Members list/download; admins upload into one
+  optional folder level, rename/move/describe, delete. The library total is
+  capped by the new live `shared_files_max_total_mb` admin setting
+  (`FLEET_SHARED_FILES_MAX_TOTAL_MB`, default 10 GiB, 0 = unlimited).
+  Migration 053. Design note: `docs/SHARED-FILES.md`.
+
 - **Multiple logins for hosted (official) MCP connections** (#988). A user can
   hold several seats under one connection name — a work and a personal GitHub,
   two Gamma workspaces — each with its own sealed token and its own share
@@ -35,6 +50,17 @@ prior versions are listed because none have shipped.
   Design note: `docs/REMOTE-MCP-MULTI-LOGIN.md`; ADR-0050.
 
 ### Fixed
+
+- **Chat attachments now reach the agent under the kubernetes sandbox
+  backend.** A sandbox pod mounts only the workspace claim, so the uploads
+  root (control-plane state) was invisible: the attachments prompt block
+  advertised absolute paths no pod could resolve, and every non-image
+  attachment read failed. The chat server now copies validated non-image
+  attachments into `<workspace>/<convID>/attachments/` — inside the claim —
+  at send time under that backend and advertises the staged paths; the copies
+  live and die with the conversation workspace. Podman keeps its zero-copy
+  read-only uploads mount; image attachments were never affected (vision
+  bytes are read host-side).
 
 - **A self-audit abort now retires what it abandons, and a confirmed audit says
   what is still outstanding.** Field case: a daily refresh audited the inline
