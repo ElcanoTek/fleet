@@ -311,3 +311,85 @@ func TestCancelOutranksAuditAbort(t *testing.T) {
 		t.Error("a cancelled run must not be reported as a deliberate abort")
 	}
 }
+
+// TestExecute_RoundCapPersistsPartialTranscript closes #1271: a scheduled run
+// that exhausts the enforcement round cap is still a hard failure, but the
+// rounds it burned were paid for — so the partial work agentcore carries back
+// on the Result (#1125) must land in the persisted session log, marked as
+// round-cap-truncated, instead of being discarded by the driver's
+// `if err != nil { return err }`.
+//
+// The fixture is the never-clearing audit of
+// TestExecute_ScheduledDoesNotCollapseToOneRound plus streamed text and usage:
+// the model produces real assistant text and spend every round and never calls
+// confirm_audit, so CanFinish blocks until the cap.
+func TestExecute_RoundCapPersistsPartialTranscript(t *testing.T) {
+	model := &itMockModel{
+		streamFunc: func(_ context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
+			return func(yield func(fantasy.StreamPart) bool) {
+				if !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, ID: "t", Delta: "half-finished analysis"}) {
+					return
+				}
+				yield(fantasy.StreamPart{
+					Type:         fantasy.StreamPartTypeFinish,
+					FinishReason: fantasy.FinishReasonStop,
+					Usage:        fantasy.Usage{InputTokens: 50, OutputTokens: 10},
+				})
+			}, nil
+		},
+	}
+	a := newTestScheduledAgent(t, model)
+
+	err := a.Execute(context.Background(), "a task the agent never finishes")
+	// Failure classification is unchanged: the run still FAILS, and it fails
+	// with the same message it always did (the sentinel only makes that failure
+	// recognizable without string-matching). internal/runner's
+	// TestClassifyFailure pins the other half — this error still maps to
+	// FailureTerminal, so retries and notifications behave exactly as before.
+	if !errors.Is(err, agentcore.ErrMaxEnforcementRounds) {
+		t.Fatalf("round-capped run returned %v, want an error wrapping ErrMaxEnforcementRounds", err)
+	}
+	if !strings.Contains(err.Error(), "max enforcement rounds") {
+		t.Errorf("error %q must keep the operator-facing round-cap wording", err)
+	}
+
+	var sawNotice, sawPartial bool
+	for _, m := range a.logSession.SnapshotMessages() {
+		if m.MessageType == nil || *m.MessageType != messageTypeRoundCapTruncated {
+			continue
+		}
+		switch m.Role {
+		case roleUser:
+			if strings.Contains(m.Content, "[truncated]") && strings.Contains(m.Content, "enforcement round cap") {
+				sawNotice = true
+			}
+		case roleAssistant:
+			if strings.Contains(m.Content, "half-finished analysis") {
+				sawPartial = true
+			}
+		}
+	}
+	if !sawNotice {
+		t.Error("the persisted log carries no round-cap truncation notice")
+	}
+	if !sawPartial {
+		t.Error("round-capped run lost the partial assistant transcript it paid for")
+	}
+	// The run's spend is in the persisted log too (agentcore's orchestration
+	// accounting writes it into this same LogSession as each round streams), so
+	// the truncated transcript is not free-floating text with no cost attached.
+	if a.logSession.PromptTokens <= 0 || a.logSession.CompletionTokens <= 0 {
+		t.Errorf("round-capped run persisted no usage: prompt=%d completion=%d",
+			a.logSession.PromptTokens, a.logSession.CompletionTokens)
+	}
+	// The failure itself is still recorded as a failure, unchanged.
+	var sawFatal bool
+	for _, m := range a.logSession.SnapshotMessages() {
+		if strings.HasPrefix(m.Content, "[fatal]") && strings.Contains(m.Content, "max enforcement rounds") {
+			sawFatal = true
+		}
+	}
+	if !sawFatal {
+		t.Error("the round-cap failure must still write its [fatal] transcript line")
+	}
+}

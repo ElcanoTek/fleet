@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/remotemcp"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
@@ -288,8 +289,15 @@ func (s *Server) remoteMCPOAuthCallback(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, map[string]any{"ok": true, "server_id": server.ID, "name": server.Name, "status": server.Status})
 }
 
-// remoteMCPError maps service/store errors to HTTP statuses. The error text is
-// non-secret (the service is careful never to embed tokens in errors).
+// remoteMCPError maps service/store errors to HTTP statuses. fleet's own error
+// text is non-secret (the service never embeds tokens in errors), but the
+// default branch below relays a WRAPPED upstream failure — a discovery, DCR or
+// add-time probe error whose text comes from the vendor and can quote the
+// credential we just sent it (an echoed Authorization header, a URL carrying a
+// query-parameter key). Those credentials are registered as redaction literals
+// at acquisition (remotemcp's control-plane observer, #1274), so run the
+// relayed text through the process-wide scrubber: it is the redactor that sees
+// this error string, and pattern-matching alone would miss a novel bare token.
 func (s *Server) remoteMCPError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, store.ErrRemoteMCPNotFound):
@@ -310,6 +318,6 @@ func (s *Server) remoteMCPError(w http.ResponseWriter, err error) {
 		// Discovery / DCR / network / bad-URL failures: a 400 keeps it
 		// actionable (the user can fix the URL or try a different server)
 		// without leaking internal detail.
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		http.Error(w, agentcore.RedactSecrets(err.Error()), http.StatusBadRequest)
 	}
 }

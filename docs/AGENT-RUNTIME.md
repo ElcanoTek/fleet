@@ -329,6 +329,50 @@ instead of an unmetered paid summary.
 
 ---
 
+## The one server-name keying rule (Optional opt-in ↔ prompt roster, #1272)
+
+Every server-keyed MCP gate is keyed by **manifest (spec) server name**, but the
+name a server actually **registers** under is `<server>_<account>` for a
+named-account seat (the `_` variant convention), and the system prompt sees a
+flattened `mcp_<server>_<tool>` roster name. One rule bridges all three, and
+every layer resolves through the same helper
+(`agentcore.longestServerKey`, surfaced as `OptionalServerFor` /
+`OptionalServerForToolName`):
+
+> A key `K` governs a name `N` iff `N == K`, or `N` begins with `K_`.
+> When several keys qualify, the **longest** one wins.
+
+Consequences worth stating plainly:
+
+- **A variant seat is opt-in gated by its own key when the bundle declares one,
+  and by its base server's key when it does not.** So with only `jira` marked
+  `optional: true`, the `jira_prod` seat is withheld until `jira` is opted in —
+  it is not a silently-always-on server.
+- **The rule is applied identically at registration and in the prompt.**
+  Gate-1 (`buildFantasyTools`) and the system-prompt roster filter
+  (`Manager.activeMCPToolNames`) call the same helper, so a tool can no longer
+  be registered-and-callable while hidden from the model, or advertised while
+  absent from the roster. Before #1272, Gate-1 did an **exact** map lookup on
+  the registered name: a base-only Optional key missed the variant seat
+  entirely, and the seat registered unconditionally while the prompt (which has
+  always prefix-matched) hid it. Gate-1 now fails closed.
+- **Longest-wins is what keeps it deterministic**, which is why it is also a
+  prompt-cache concern: the roster feeds the cacheable prefix, and a
+  map-iteration-order winner would silently bust it
+  (see [`PROMPT-CACHE-CONTRACT.md`](PROMPT-CACHE-CONTRACT.md) and #1125).
+- Gate-2's per-server tool allowlist (`mcpAllowlist.toolsFor`) resolves through
+  the same helper, so a variant seat is filtered by its manifest server's
+  allowlist exactly like the default seat.
+
+The whole-name (`N == K`) branch applies only to **registered server names** — a
+registered name can legitimately *be* a declared server. It is deliberately off
+for roster names, whose trailing `_<tool>` segment means a whole-name hit would
+be a server+tool coincidence: `mcp_jira_search` is server `jira`'s `search`
+tool, never a server named `jira_search` (that server's roster names all carry a
+further `_<tool>`).
+
+---
+
 ## Per-task credential allowlist (least-privilege MCP)
 
 A scheduled task's MCP selection (`mcp_selection`) controls *which servers* it
@@ -729,6 +773,31 @@ The verifier's own spend does not debit the run's cost/token ceilings (it is a
 host-side extra around the loop), but it is recorded per call in the session
 log's labeled `aux_usage` ledger (#1118) — see
 [`docs/AUX-MODEL-CALL-METERING.md`](AUX-MODEL-CALL-METERING.md).
+
+### Round-cap exhaustion keeps its partial transcript (#1125, #1271)
+
+The enforcement loop is bounded: if the finish gates (audit → verifier →
+phone-a-friend) never clear within **20 enforcement rounds**, `agentcore.Run`
+gives up and returns a hard error wrapping **`ErrMaxEnforcementRounds`**
+(message unchanged: `max enforcement rounds (20) exceeded without task
+completion`). Scheduled is the only mode that can reach the cap — the
+interactive policy can finish at round 1.
+
+Those rounds were **paid for**, so the failure carries real work back: `Run`
+returns the accumulated `Result` — transcript entries, rounds, `FinalText` and
+usage — alongside the error (#1125), and the scheduled driver now **persists
+it** instead of discarding it on the way out (#1271). The session log ends up
+with a `[truncated]` notice naming the rounds burned and the spend, then the
+partial assistant text, both stamped `message_type: round_cap_truncated`, then
+the usual `[fatal]` line. The tool calls, enforcement nudges and token/cost
+counters were already written live (by the scheduled Observer and the
+orchestration accounting) — the assistant text was the half an operator could
+not see.
+
+To be plain about what did **not** change: the run still **failed**. It reports
+the same error, classifies as the same `terminal` failure class, and retries and
+notifies exactly as it always did. Only transcript visibility improved — a
+round-capped task is never recorded as success or partial success.
 
 ### Iterative verification loops
 

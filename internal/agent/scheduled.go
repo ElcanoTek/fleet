@@ -812,6 +812,20 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 
 	res, err := agentcore.Run(ctx, agentcore.ModeScheduled, cfg, deps)
 	if err != nil {
+		// Round-cap exhaustion is the one hard-error path that hands back real
+		// work: agentcore carries the accumulated transcript + usage on the
+		// Result (#1125), and this driver is the only mode that can reach the
+		// cap. Returning here without persisting it dropped up to 20 rounds of
+		// paid assistant text out of the session log — the tool calls, the
+		// enforcement nudges and the token/cost counters were already written
+		// live by the observer and the orchestration accounting, so the
+		// final-text half was the only thing an operator could not see (#1271).
+		// The run still FAILED: nothing below changes the error, so failure
+		// classification (FailureTerminal), retries and notifications are
+		// exactly as before — only transcript visibility improves.
+		if errors.Is(err, agentcore.ErrMaxEnforcementRounds) {
+			persistRoundCapPartial(a.logSession, res)
+		}
 		return err
 	}
 	// Persist the partial-or-final text BEFORE classifying the outcome below,
@@ -827,6 +841,48 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 		a.logSession.SetOutputJSON(string(res.OutputJSON))
 	}
 	return scheduledTerminalError(ctx, res)
+}
+
+// messageTypeRoundCapTruncated marks the session-log records a round-cap
+// exhausted run leaves behind: the notice line and the partial assistant text
+// agentcore carried back with the error. It is a session-log message_type like
+// "system_enforcement" / "error" — descriptive metadata for log readers and
+// replay, not an authorization or classification signal.
+const messageTypeRoundCapTruncated = "round_cap_truncated"
+
+// persistRoundCapPartial writes a round-cap-exhausted run's carried partial
+// work into the session log. Two records, in reading order:
+//
+//   - a notice naming the cap, the rounds burned and the spend, so the log says
+//     plainly that what follows is truncated work and not a finished answer
+//     (the deferred "[fatal]" line lands after both and names the error);
+//   - the partial assistant text itself, stamped with the same message_type so
+//     a log reader / replay can tell it from a completed run's final answer.
+//     Absent when the capped rounds produced only tool work and no prose — the
+//     notice then says so rather than pointing at text that is not there.
+//
+// Both carry messageTypeRoundCapTruncated. The token/cost counters need no
+// write here: agentcore's orchestration accounting already accumulates them
+// into this same LogSession as each round streams, so the run's spend is in the
+// persisted log whether or not it finished.
+func persistRoundCapPartial(session *LogSession, res agentcore.Result) {
+	if session == nil {
+		return
+	}
+	text := strings.TrimSpace(res.FinalText)
+	tail := "The partial work below is what those rounds produced; the run FAILED and published nothing."
+	if text == "" {
+		tail = "Those rounds produced no assistant text (tool work only); the run FAILED and published nothing."
+	}
+	t := messageTypeRoundCapTruncated
+	session.AddMessageWithMetadata(roleUser, fmt.Sprintf(
+		"[truncated] Run stopped at the enforcement round cap after %d rounds without the agent "+
+			"finishing the task (%d prompt / %d completion tokens, $%.4f spent). %s",
+		res.Rounds, res.Usage.PromptTokens, res.Usage.CompletionTokens, res.Usage.CostUSD, tail,
+	), nil, nil, &t, nil, nil, "")
+	if text != "" {
+		session.AddMessageWithMetadata(roleAssistant, text, nil, nil, &t, nil, nil, "")
+	}
 }
 
 // scheduledTerminalError converts a nil-error agentcore Result that did NOT

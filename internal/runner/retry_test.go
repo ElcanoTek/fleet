@@ -30,6 +30,13 @@ func TestClassifyFailure(t *testing.T) {
 		// ctx is an anonymous teardown: terminal, never retried by default.
 		{agentcore.ErrRunCancelled, models.FailureTerminal},
 		{fmt.Errorf("%w: context canceled", agentcore.ErrRunCancelled), models.FailureTerminal},
+		// Round-cap exhaustion (#1271) gained a sentinel so the scheduled
+		// driver can persist the partial transcript it carries without matching
+		// the error text. The CLASS must not move with it: the finish gates
+		// never cleared in 20 rounds, so another attempt spends another window
+		// to reach the same place — terminal, never retried by default.
+		{agentcore.ErrMaxEnforcementRounds, models.FailureTerminal},
+		{fmt.Errorf("%w (20) exceeded without task completion", agentcore.ErrMaxEnforcementRounds), models.FailureTerminal},
 	}
 	for _, c := range cases {
 		if got := classifyFailure(c.err); got != c.class {

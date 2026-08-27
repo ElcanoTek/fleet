@@ -127,6 +127,115 @@ func TestValidateEnvKnobsPreflight(t *testing.T) {
 	if p := config.ValidateEnvKnobs(); len(p) != 1 || !strings.Contains(p[0], "FLEET_CHAT_DB_CONNECT_TIMEOUT") {
 		t.Errorf("bare-number duration should flag, got %v", p)
 	}
+	t.Setenv("FLEET_CHAT_DB_CONNECT_TIMEOUT", "")
+
+	// #1273: knobs parsed OUTSIDE the loader are preflighted from the same
+	// registry — including the three the verb's doc comment used to call out as
+	// an exception, and one read by a package the loader never touches.
+	t.Setenv("FLEET_SCHED_RATE_LIMIT_PER_MINUTE", "6O") // letter O
+	if p := config.ValidateEnvKnobs(); len(p) != 1 || !strings.Contains(p[0], "FLEET_SCHED_RATE_LIMIT_PER_MINUTE") {
+		t.Errorf("malformed scheduler rate limit should flag, got %v", p)
+	}
+	t.Setenv("FLEET_SCHED_RATE_LIMIT_PER_MINUTE", "0") // 0 disables the window
+	if p := config.ValidateEnvKnobs(); len(p) != 0 {
+		t.Errorf("a disabled rate-limit window should preflight clean, got %v", p)
+	}
+	t.Setenv("FLEET_SCHED_RATE_LIMIT_PER_MINUTE", "")
+	t.Setenv("FLEET_SANDBOX_KATA_OVERHEAD_MB", "lots")
+	if p := config.ValidateEnvKnobs(); len(p) != 1 ||
+		!strings.Contains(p[0], "FLEET_SANDBOX_KATA_OVERHEAD_MB") {
+		t.Errorf("malformed kata overhead should flag, got %v", p)
+	}
+	t.Setenv("FLEET_SANDBOX_KATA_OVERHEAD_MB", "")
+
+	// The documented-lenient knob is preflighted too, but as an ADVISORY: it
+	// must never appear in the blocking list, since boot does not refuse on it.
+	t.Setenv("FLEET_OTEL_SAMPLE_RATIO", "half")
+	if p := config.ValidateEnvKnobs(); len(p) != 0 {
+		t.Errorf("the lenient OTEL ratio must not block, got %v", p)
+	}
+	if p := config.ValidateLenientEnvKnobs(); len(p) != 1 || !strings.Contains(p[0], "FLEET_OTEL_SAMPLE_RATIO") {
+		t.Errorf("the lenient OTEL ratio should be reported as an advisory, got %v", p)
+	}
+}
+
+// TestCheckEnvVarsLenientKnobIsAdvisory pins the validate-config wiring for the
+// lenient class (#1273): a malformed lenient knob makes env_vars WARN and
+// non-blocking (so the verb still exits 0), and the advisory carries the
+// registry's rationale — while a strict knob keeps failing blockingly.
+func TestCheckEnvVarsLenientKnobIsAdvisory(t *testing.T) {
+	clearKnobEnv(t)
+	t.Setenv("FLEET_OTEL_SAMPLE_RATIO", "half")
+
+	cfg := &config.Config{
+		SharedToken:     "placeholder-token",
+		MockMode:        true,
+		DatabaseURL:     "postgres://u:p@127.0.0.1:5432/chat?sslmode=disable",
+		ConversationTTL: 30,
+		UnpinnedCap:     100,
+		UploadMaxBytes:  1 << 20,
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("test fixture config must be valid on its own: %v", err)
+	}
+
+	res := checkEnvVars(cfg, nil)
+	if res.Status != statusWarn || res.Blocking {
+		t.Fatalf("want a non-blocking warn, got status=%q blocking=%v detail=%q", res.Status, res.Blocking, res.Detail)
+	}
+	if res.failed() {
+		t.Error("a lenient-knob advisory must not count as a blocking failure")
+	}
+	for _, want := range []string{"FLEET_OTEL_SAMPLE_RATIO", "not a boot failure", "AlwaysSample"} {
+		if !strings.Contains(res.Detail, want) {
+			t.Errorf("advisory detail should mention %q, got: %q", want, res.Detail)
+		}
+	}
+
+	// A strict knob alongside it still fails, and the advisory rides along.
+	t.Setenv("FLEET_SANDBOX_KATA_OVERHEAD_MB", "lots")
+	res = checkEnvVars(cfg, nil)
+	if res.Status != statusFail || !res.Blocking {
+		t.Fatalf("want a blocking fail, got status=%q blocking=%v", res.Status, res.Blocking)
+	}
+	if !strings.Contains(res.Detail, "FLEET_SANDBOX_KATA_OVERHEAD_MB") ||
+		!strings.Contains(res.Detail, "FLEET_OTEL_SAMPLE_RATIO") {
+		t.Errorf("detail should report both, got: %q", res.Detail)
+	}
+}
+
+// TestSchedRateLimits pins the serve-start read of the three rate-limit windows
+// through the registry (#1273): unset → the documented defaults, 0 → an
+// explicitly disabled window, malformed → an error naming the variable (rather
+// than the warn-and-default it used to be).
+func TestSchedRateLimits(t *testing.T) {
+	clearKnobEnv(t)
+
+	rl, err := schedRateLimits()
+	if err != nil {
+		t.Fatalf("unset knobs must resolve to defaults: %v", err)
+	}
+	if rl.perMinute != 60 || rl.perDay != 500 || rl.globalPerMinute != 200 {
+		t.Errorf("defaults = %+v, want 60/500/200", rl)
+	}
+
+	t.Setenv("FLEET_SCHED_RATE_LIMIT_PER_DAY", "0")
+	rl, err = schedRateLimits()
+	if err != nil || rl.perDay != 0 {
+		t.Errorf("explicit 0 must disable the window: %+v, %v", rl, err)
+	}
+
+	t.Setenv("FLEET_SCHED_RATE_LIMIT_PER_DAY", "5OO") // letters
+	if _, err := schedRateLimits(); err == nil {
+		t.Error("a malformed window must be an error, not a silent default")
+	} else if !strings.Contains(err.Error(), "FLEET_SCHED_RATE_LIMIT_PER_DAY") {
+		t.Errorf("error should name the variable, got: %v", err)
+	}
+
+	t.Setenv("FLEET_SCHED_RATE_LIMIT_PER_DAY", "-1")
+	if _, err := schedRateLimits(); err == nil {
+		t.Error("a negative window must be refused (0 is the way to disable one)")
+	}
 }
 
 // TestEmitReportExitCode verifies the exit-code contract: a blocking failure → 1,

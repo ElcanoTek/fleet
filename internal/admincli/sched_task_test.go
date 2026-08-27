@@ -21,6 +21,9 @@ type fakeTaskStore struct {
 	scheduled []*models.Task
 	present   map[uuid.UUID]string // users "present on the target box"
 	added     []*models.Task
+	// existing are the rows this box already holds, keyed by id — the import
+	// collision policy's target lookup (#1267).
+	existing map[uuid.UUID]*models.Task
 }
 
 func (f *fakeTaskStore) ListScheduledTasks(context.Context) ([]*models.Task, error) {
@@ -29,6 +32,9 @@ func (f *fakeTaskStore) ListScheduledTasks(context.Context) ([]*models.Task, err
 func (f *fakeTaskStore) AddTaskWithContext(_ context.Context, t *models.Task) (*models.Task, error) {
 	f.added = append(f.added, t)
 	return t, nil
+}
+func (f *fakeTaskStore) GetTaskWithContext(_ context.Context, id uuid.UUID) (*models.Task, error) {
+	return f.existing[id], nil
 }
 func (f *fakeTaskStore) GetUsersByIDsWithContext(_ context.Context, ids []uuid.UUID) (map[uuid.UUID]string, error) {
 	out := map[uuid.UUID]string{}
@@ -43,14 +49,22 @@ func (f *fakeTaskStore) GetUsersByIDsWithContext(_ context.Context, ids []uuid.U
 func ptr[T any](v T) *T { return &v }
 
 func TestValidateImportedTask(t *testing.T) {
-	good := &models.Task{Prompt: "do it", Recurrence: "0 9 * * *", MCPSelection: models.MCPSelection{{Server: "acme"}}}
+	good := &models.Task{Prompt: "do it", Status: models.TaskStatusScheduled, Recurrence: "0 9 * * *", MCPSelection: models.MCPSelection{{Server: "acme"}}}
 	if err := validateImportedTask(good); err != nil {
 		t.Fatalf("valid task rejected: %v", err)
 	}
 	cases := map[string]*models.Task{
-		"empty prompt":       {Prompt: "  "},
-		"bad cron":           {Prompt: "x", Recurrence: "not a cron"},
-		"mcp without server": {Prompt: "x", MCPSelection: models.MCPSelection{{Account: "a"}}},
+		"empty prompt":       {Prompt: "  ", Status: models.TaskStatusScheduled},
+		"bad cron":           {Prompt: "x", Status: models.TaskStatusScheduled, Recurrence: "not a cron"},
+		"mcp without server": {Prompt: "x", Status: models.TaskStatusScheduled, MCPSelection: models.MCPSelection{{Account: "a"}}},
+		// Transient statuses name lease/pause state no import can honor (#1267).
+		"no status":      {Prompt: "x"},
+		"leased":         {Prompt: "x", Status: models.TaskStatusLeased},
+		"running":        {Prompt: "x", Status: models.TaskStatusRunning},
+		"awaiting input": {Prompt: "x", Status: models.TaskStatusPausedAwaitingInput},
+		"awaiting wake":  {Prompt: "x", Status: models.TaskStatusPausedAwaitingWake},
+		"unknown status": {Prompt: "x", Status: models.TaskStatus("bogus")},
+		"retired status": {Prompt: "x", Status: models.TaskStatus("analyzing")},
 	}
 	for name, tk := range cases {
 		if err := validateImportedTask(tk); err == nil {
@@ -62,7 +76,7 @@ func TestValidateImportedTask(t *testing.T) {
 func TestImportTasks_RejectsUnknownVersion(t *testing.T) {
 	f := &fakeTaskStore{}
 	body := []byte(`{"version":99,"tasks":[]}`)
-	if _, err := importTasks(context.Background(), f, bytes.NewReader(body)); err == nil {
+	if _, err := importTasks(context.Background(), f, bytes.NewReader(body), taskImportOpts{}); err == nil {
 		t.Fatal("expected an unsupported-version error")
 	}
 	if len(f.added) != 0 {
@@ -82,7 +96,7 @@ func TestImportTasks_BadPayloadInsertsNothing(t *testing.T) {
 	if _, err := exportTasksEnvelope(&buf, env); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := importTasks(context.Background(), f, &buf); err == nil {
+	if _, err := importTasks(context.Background(), f, &buf, taskImportOpts{}); err == nil {
 		t.Fatal("expected import to fail on the bad recurrence")
 	}
 	if len(f.added) != 0 {
@@ -102,7 +116,7 @@ func TestImportTasks_NullsMissingCreatedBy(t *testing.T) {
 	if _, err := exportTasksEnvelope(&buf, env); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := importTasks(context.Background(), f, &buf); err != nil {
+	if _, err := importTasks(context.Background(), f, &buf, taskImportOpts{}); err != nil {
 		t.Fatalf("import: %v", err)
 	}
 	if len(f.added) != 2 {
@@ -142,7 +156,7 @@ func TestExportImportRoundTrip_Fake(t *testing.T) {
 	}
 
 	dst := &fakeTaskStore{}
-	if n, err := importTasks(context.Background(), dst, &buf); err != nil || n != 1 {
+	if n, err := importTasks(context.Background(), dst, &buf, taskImportOpts{}); err != nil || n != 1 {
 		t.Fatalf("import n=%d err=%v", n, err)
 	}
 	got := dst.added[0]
@@ -224,7 +238,7 @@ func TestExportImportRoundTrip_DB(t *testing.T) {
 		t.Fatalf("export: %v", err)
 	}
 	clean() // wipe, then import the export back
-	if n, err := importTasks(ctx, st, &buf); err != nil || n != 1 {
+	if n, err := importTasks(ctx, st, &buf, taskImportOpts{}); err != nil || n != 1 {
 		t.Fatalf("import n=%d err=%v", n, err)
 	}
 

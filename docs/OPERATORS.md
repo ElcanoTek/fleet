@@ -89,18 +89,37 @@ visible per user in `/admin/stats` (`total_cached_tokens`,
 and the interior kept verbatim (`fleet mcp account set` quotes such values for
 you). Quotes are also stripped from process-env values, so a
 podman/docker `--env-file` deployment that keeps quotes in place behaves the
-same. Numeric/bool/duration knobs **read by the config loader** are strict: an
-**unset** knob gets its default, but a **set, malformed, or out-of-range**
-value refuses to boot with an error naming the variable, the value, and the
-expected format (`FLEET_LOCKDOWN_ONLY=enabled` or `FLEET_MAX_COST_USD=5O` no
-longer silently fall back to defaults). Booleans take `1/0, true/false,
+same. **Every** numeric/bool/duration knob fleet parses is strict — not just the ones
+the config loader consumes (#1119 covered those; #1273 finished the job for the
+knobs parsed elsewhere in the binary, such as the scheduler rate limits, the
+Kata memory overhead, the agent-runtime thresholds and the SSE/notify/webpush
+knobs). An **unset** knob gets its default, but a **set, malformed, or
+out-of-range** value refuses to boot with one error naming every offending
+variable, its value, the expected format, and — for a knob parsed outside the
+loader — the package that reads it (`FLEET_LOCKDOWN_ONLY=enabled`,
+`FLEET_MAX_COST_USD=5O` and `FLEET_SANDBOX_KATA_OVERHEAD_MB=lots` all refuse
+rather than silently falling back to defaults). Booleans take `1/0, true/false,
 yes/no, on/off`; durations take Go syntax (`30s`, `5m`, `1h30m` — a bare
-number is an error). Exception: the three scheduler rate-limit knobs
-(`FLEET_SCHED_RATE_LIMIT_PER_MINUTE`, `FLEET_SCHED_RATE_LIMIT_PER_DAY`,
-`FLEET_SCHED_RATE_LIMIT_GLOBAL_PER_MINUTE`) are read at `fleet serve` start
-outside the loader — a malformed value there logs a loud warning and the
-default applies. Run `fleet validate-config` to preflight every loader knob
-before starting the service; config hot-reload applies the same rules (see
+number is an error).
+
+Two things to know about that strictness:
+
+- **A few kill-switches take the narrower Go `strconv.ParseBool` token set**
+  (`1/0/t/f/true/false`, plus `TRUE`/`True`) because that is what their reader
+  honors: `FLEET_DISABLE_PROMPT_CACHE`, `FLEET_DISABLE_OPENROUTER_MODELS`,
+  `FLEET_SCHEDULED_AUTO_COMPACT`, `FLEET_PUSH_ON_TASK_COMPLETE`,
+  `FLEET_PUSH_ON_APPROVAL_REQUEST`. `…=on` or `…=yes` is refused with a message
+  saying so, instead of being read as `false` the way it used to be.
+- **One knob is deliberately lenient:** `FLEET_OTEL_SAMPLE_RATIO`. A malformed
+  ratio does not stop the service (unset/unparseable/`NaN`/`≥1` all mean "sample
+  everything", `≤0` means "sample nothing"), because refusing to boot over a
+  tracing dial is worse than tracing too much. `fleet validate-config` still
+  preflights it and reports a typo as a **warning** rather than a blocking
+  failure.
+
+Run `fleet validate-config` to preflight every knob — loader and
+out-of-loader, blocking and advisory — before starting the service; config
+hot-reload applies the same rules to the knobs it can reload (see
 [CONFIG-RELOAD.md](CONFIG-RELOAD.md)).
 
 ## The client-config checkout
@@ -438,6 +457,40 @@ logical loss — a bad migration, an accidental delete — **not** against losin
 this host or volume, and it does not capture attachment/upload files. See
 **[`docs/BACKUP_RESTORE.md`](BACKUP_RESTORE.md)** for the full recovery runbook,
 the honest scope, and the round-trip verification procedure.
+
+## sched task export · import — moving scheduled tasks between boxes
+
+`fleet sched task export > tasks.json` writes a versioned envelope of the box's
+`scheduled` tasks; `fleet sched task import < tasks.json` writes them back,
+**preserving ids** (so a re-import of the same envelope is idempotent) and the
+full row, not just the portable definition. That is what makes it the cross-box
+migration tool — for definition-only, name-keyed moves (git-tracked job
+definitions) use `fleet task export|import` instead.
+
+Because ids are preserved, an import can land on a row this box already has,
+which is a write over **live** state rather than a create. The policy (#1267):
+
+```
+fleet sched task import < tasks.json                    # definition restore; refuses a status collision
+fleet sched task import --replace-status < tasks.json   # restore surgery: the envelope's status wins
+```
+
+- A task id that does **not** exist here is inserted verbatim, status included.
+- A task id that **does** exist, whose status differs from the envelope's, is
+  refused — the whole import aborts before writing anything, naming the task.
+  Without that, re-importing an envelope exported while a task was `scheduled`,
+  after that task ran to `success`, would rewrite `success` → `scheduled` with
+  the stale `scheduled_for`; the due sweep would re-queue it and the task's
+  external side effects (emails, MCP writes) would run again.
+- `--replace-status` is the explicit opt-in to that rewrite. Use it to restore a
+  wiped box from an envelope; know that re-queueing a finished task re-runs its
+  side effects.
+- A task that is **running or leased** here is refused under either flag, and
+  `lease_owner` / `lease_expires_at` are never importable onto an existing row.
+  An import cannot null, steal, or fabricate a lease.
+- An envelope carrying a transient status (`leased`, `running`, either paused
+  state) is rejected at validation: those name lease/pause state no import can
+  honor.
 
 ## Where the sandbox build fits
 

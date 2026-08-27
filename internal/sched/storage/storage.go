@@ -43,7 +43,30 @@ var ErrStructuredOutputContract = errors.New("structured output contract violati
 
 // ErrTaskLeaseNotHeld identifies a status write rejected before mutation
 // because the supplied per-claim owner no longer owns the row.
+//
+// It is the shared refusal of ALL THREE lease-guarded transition writers —
+// UpdateTaskStatusAtomicWithContext, RequeueTaskForRetryWithContext and
+// DeadLetterTaskWithContext — and each returns it unwrapped, so
+// errors.Is identifies a lost lease uniformly. The latter two used to rebuild
+// this exact message with fmt.Errorf instead, which made errors.Is succeed on
+// one guard and quietly fail on the other two while every message read the
+// same; the runner branches on this identity to cancel a zombie run's external
+// side effects (renewActiveLeases) and to suppress success side effects on a
+// fenced commit, so an unidentifiable lease refusal is a trap, not a cosmetic
+// inconsistency. Any new lease guard must return this sentinel, not its text.
 var ErrTaskLeaseNotHeld = errors.New("worker does not hold the lease on this task")
+
+// ErrTaskNotReportableStatus identifies a worker status report refused because
+// the requested TARGET status is not one a worker may self-report
+// (models.WorkerReportableTaskStatuses / TaskStatus.IsValidReportedStatus).
+//
+// The to-side of UpdateTaskStatusAtomicWithContext used to be caller discipline
+// only (#1269): the function wrote whatever status it was handed, so a caller
+// passing e.g. `cancelled` from a leased row produced a cancelled task still
+// holding a live lease — applySuccessOrErrorTransition clears the lease only
+// for success/error. The seam that was supposed to prevent that existed with no
+// production caller; it is now enforced here.
+var ErrTaskNotReportableStatus = errors.New("status is not worker-reportable")
 
 // ErrTaskCommitOutcomeUnknown is returned only when the terminal transaction
 // reached Commit and Commit returned an error. The caller may re-read to learn
@@ -301,6 +324,22 @@ func (s *Storage) EnqueueTaskAs(ctx context.Context, tc models.TaskCreate, creat
 // GetTask gets a task by ID.
 func (s *Storage) GetTask(taskID uuid.UUID) (*models.Task, error) {
 	return s.db.GetTask(context.Background(), taskID)
+}
+
+// GetTaskWithContext gets a task by ID under the caller's context, returning
+// (nil, nil) when no such row exists. The import paths' target lookup (#1267):
+// their collision policy must tell "no row here, this is a create" apart from
+// a real query failure, and it needs the target's status + lease, which
+// TaskExists cannot report.
+func (s *Storage) GetTaskWithContext(ctx context.Context, taskID uuid.UUID) (*models.Task, error) {
+	task, err := s.db.GetTask(ctx, taskID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return task, nil
 }
 
 // TaskExists reports whether a task row with the given id exists (#713).
@@ -740,6 +779,16 @@ func (s *Storage) DeleteTask(ctx context.Context, taskID uuid.UUID) (bool, error
 // CancelTaskAtomic cancels a task atomically. reason records WHO/why (#508 —
 // e.g. "stopped by admin"); stored on the task's Result so the attribution
 // survives as the terminal record. Empty keeps the legacy unattributed cancel.
+//
+// The from-side guard is the shared terminal set (models.TerminalTaskStatuses
+// via IsTerminal, #1269), so cancel means exactly "stop something that could
+// still run". It used to list only success/error/cancelled, which left
+// dead_lettered→cancelled a live edge: an operator sweeping old rows out of the
+// UI could move a quarantined occurrence to `cancelled`, from which there is no
+// replay path at all — the DLQ row exists to await ReplayDeadLetteredTask, and
+// the cancel silently destroyed that (#1268). A quarantined row that should
+// simply go away is removed with DeleteTask, which says so; the error below
+// names both options rather than leaving the operator with a bare refusal.
 func (s *Storage) CancelTaskAtomic(taskID uuid.UUID, reason string) (*models.Task, error) {
 	ctx := context.Background()
 	tx, err := s.db.BeginTx(ctx)
@@ -757,9 +806,11 @@ func (s *Storage) CancelTaskAtomic(taskID uuid.UUID, reason string) (*models.Tas
 		return nil, err
 	}
 
-	if task.Status == models.TaskStatusSuccess ||
-		task.Status == models.TaskStatusError ||
-		task.Status == models.TaskStatusCancelled {
+	if task.Status.IsTerminal() {
+		if task.Status == models.TaskStatusDeadLettered {
+			// Keep the "cannot cancel" prefix: the HTTP handler maps it to 400.
+			return nil, fmt.Errorf("cannot cancel task with status: %s — a quarantined run is kept for review, so replay it to run it again, or delete it to remove the record", task.Status)
+		}
 		return nil, fmt.Errorf("cannot cancel task with status: %s", task.Status)
 	}
 
@@ -1179,7 +1230,22 @@ func (s *Storage) UpdateTaskStatusAtomic(taskID uuid.UUID, nodeID uuid.UUID, upd
 // UpdateTaskStatusAtomicWithContext is UpdateTaskStatusAtomic with context. The
 // "nodeID" is the lease owner: a node UUID for the test substrate or the
 // synthetic in-box worker's identity in production.
+//
+// Both sides of the transition are guarded. The TO-side is checked first and
+// outside the transaction (#1269): a target the worker may not self-report is a
+// programming error in the caller, not a race with the row, so there is nothing
+// to lock and nothing to learn from the row — refusing before BeginTx also
+// makes the refusal uniform instead of depending on whether the caller happened
+// to hold the lease. The FROM-side refusal is the shared terminal set
+// (models.TerminalTaskStatuses via IsTerminal), matching every other transition
+// writer; a late report onto an already-settled row returns the row unchanged
+// rather than erroring, because the runner logs-and-proceeds on report failures
+// and a lost race must not fail a run that already landed.
 func (s *Storage) UpdateTaskStatusAtomicWithContext(ctx context.Context, taskID uuid.UUID, nodeID uuid.UUID, update *models.StatusUpdate) (*models.Task, error) {
+	if !update.Status.IsValidReportedStatus() {
+		return nil, fmt.Errorf("%w: %q", ErrTaskNotReportableStatus, update.Status)
+	}
+
 	tx, err := s.db.BeginTx(ctx)
 	if err != nil {
 		return nil, err
@@ -1200,7 +1266,7 @@ func (s *Storage) UpdateTaskStatusAtomicWithContext(ctx context.Context, taskID 
 		return nil, ErrTaskLeaseNotHeld
 	}
 
-	if task.Status == models.TaskStatusSuccess || task.Status == models.TaskStatusError || task.Status == models.TaskStatusCancelled {
+	if task.Status.IsTerminal() {
 		return task, nil
 	}
 
@@ -1319,9 +1385,10 @@ func applySuccessOrErrorTransition(task *models.Task, update *models.StatusUpdat
 // future ScheduledFor (the backoff), clears the lease + StartedAt, leaves
 // CompletedAt nil (the task is NOT terminal), and records the failure reason —
 // all in one tx, gated on the caller still owning the lease (a stale runner's
-// requeue is rejected, like UpdateTaskStatusAtomicWithContext). It deliberately
-// does NOT call scheduleNextRecurrence — a retry is the SAME occurrence, not the
-// next cron tick. Returns the updated task.
+// requeue is rejected with ErrTaskLeaseNotHeld, like
+// UpdateTaskStatusAtomicWithContext). It deliberately does NOT call
+// scheduleNextRecurrence — a retry is the SAME occurrence, not the next cron
+// tick. Returns the updated task.
 func (s *Storage) RequeueTaskForRetryWithContext(ctx context.Context, taskID, nodeID uuid.UUID, scheduledFor time.Time, msg string) (*models.Task, error) {
 	tx, err := s.db.BeginTx(ctx)
 	if err != nil {
@@ -1336,10 +1403,12 @@ func (s *Storage) RequeueTaskForRetryWithContext(ctx context.Context, taskID, no
 
 	hasValidLease := task.LeaseOwner != nil && *task.LeaseOwner == nodeID.String()
 	if !hasValidLease {
-		return nil, fmt.Errorf("worker does not hold the lease on this task")
+		return nil, ErrTaskLeaseNotHeld
 	}
-	// Already-terminal tasks are never resurrected by a retry.
-	if task.Status == models.TaskStatusSuccess || task.Status == models.TaskStatusError || task.Status == models.TaskStatusCancelled {
+	// Already-terminal tasks are never resurrected by a retry. The refusal set
+	// is the shared terminal set (#1269) — it used to omit dead_lettered, which
+	// was unreachable only because a quarantined row holds no lease.
+	if task.Status.IsTerminal() {
 		return task, nil
 	}
 
@@ -1376,7 +1445,8 @@ func (s *Storage) RequeueTaskForRetryWithContext(ctx context.Context, taskID, no
 // dead_letter_reason / dead_letter_attempts, stamps CompletedAt + ErrorMessage
 // (so the row reads as terminal everywhere a completed/errored task does), and
 // clears the lease — all in one tx, gated on the caller still owning the lease
-// (a stale runner's quarantine is rejected, like RequeueTaskForRetryWithContext).
+// (a stale runner's quarantine is rejected with ErrTaskLeaseNotHeld, like
+// RequeueTaskForRetryWithContext).
 //
 // It is the terminal sibling of RequeueTaskForRetryWithContext: the runner calls
 // requeue while retries remain and a transient class allows it, and calls this
@@ -1399,11 +1469,11 @@ func (s *Storage) DeadLetterTaskWithContext(ctx context.Context, taskID, nodeID 
 
 	hasValidLease := task.LeaseOwner != nil && *task.LeaseOwner == nodeID.String()
 	if !hasValidLease {
-		return nil, fmt.Errorf("worker does not hold the lease on this task")
+		return nil, ErrTaskLeaseNotHeld
 	}
-	// Already-terminal tasks are never re-quarantined.
-	if task.Status == models.TaskStatusSuccess || task.Status == models.TaskStatusError ||
-		task.Status == models.TaskStatusCancelled || task.Status == models.TaskStatusDeadLettered {
+	// Already-terminal tasks are never re-quarantined (the shared terminal set,
+	// #1269 — this writer already listed all four by hand).
+	if task.Status.IsTerminal() {
 		return task, nil
 	}
 

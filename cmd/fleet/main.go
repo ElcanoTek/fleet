@@ -692,17 +692,20 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("apikeys manager: %w", err)
 	}
+	rl, err := schedRateLimits()
+	if err != nil {
+		return err
+	}
 	hcfg := handlers.Config{
-		AdminAPIKey:         os.Getenv("ADMIN_API_KEY"),
-		Version:             version.String(),
-		DataDir:             cfg.DataDir,
-		Timezone:            timezone(),
-		DefaultTaskTimezone: defaultTaskTimezone(),
-		UploadMaxBytes:      cfg.UploadMaxBytes,
-		// Sliding-window rate limits for POST /tasks + /upload (0 disables a window).
-		SchedRateLimitPerMinute:       envIntDefault("FLEET_SCHED_RATE_LIMIT_PER_MINUTE", 60),
-		SchedRateLimitPerDay:          envIntDefault("FLEET_SCHED_RATE_LIMIT_PER_DAY", 500),
-		SchedGlobalRateLimitPerMinute: envIntDefault("FLEET_SCHED_RATE_LIMIT_GLOBAL_PER_MINUTE", 200),
+		AdminAPIKey:                   os.Getenv("ADMIN_API_KEY"),
+		Version:                       version.String(),
+		DataDir:                       cfg.DataDir,
+		Timezone:                      timezone(),
+		DefaultTaskTimezone:           defaultTaskTimezone(),
+		UploadMaxBytes:                cfg.UploadMaxBytes,
+		SchedRateLimitPerMinute:       rl.perMinute,
+		SchedRateLimitPerDay:          rl.perDay,
+		SchedGlobalRateLimitPerMinute: rl.globalPerMinute,
 		ElcanoCookieName:              "elcano_auth",
 		// Reuse the chat shared token so the Next proxy's X-User-Email path is
 		// trusted by the orchestrator too (#157). cfg.SharedToken is guaranteed
@@ -1654,20 +1657,44 @@ func bootstrapAdmins() []string {
 	return out
 }
 
-// envIntDefault reads an integer env var, returning def when unset or
-// unparseable. An explicit "0" is honored (e.g. to disable a rate-limit window).
-// These knobs (the FLEET_SCHED_RATE_LIMIT_* trio) are read at serve start,
-// OUTSIDE the config loader's strict envKnobs registry (#1119) — a malformed
-// value cannot refuse boot here, so it is loudly logged and the default applied.
-func envIntDefault(key string, def int) int {
-	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
-		if i, err := strconv.Atoi(v); err == nil {
-			return i
+// schedRateLimitWindows are the orchestrator's sliding-window rate limits for
+// POST /tasks + /upload. 0 disables a window.
+type schedRateLimitWindows struct {
+	perMinute       int
+	perDay          int
+	globalPerMinute int
+}
+
+// schedRateLimits resolves the three FLEET_SCHED_RATE_LIMIT_* windows at serve
+// start, OUTSIDE the config loader's struct literal (they are handed straight to
+// handlers.Config, which holds no *Config). Since #1273 they are scopeExternal
+// rows in the SAME envKnobs registry, so each read goes through
+// config.EnvKnobInt — one parser, one set of bounds, shared with the boot gate
+// in config.Load and with the `fleet validate-config` preflight. Before that
+// they were parsed here with a warn-and-default helper, so a typo'd window
+// silently ran at the default.
+//
+// A malformed value therefore refuses to boot: config.Load already rejected it
+// before this runs, so the error path is belt-and-braces (it also surfaces a
+// registry-row mistake rather than swallowing it).
+func schedRateLimits() (schedRateLimitWindows, error) {
+	var rl schedRateLimitWindows
+	for _, w := range []struct {
+		key string
+		def int
+		dst *int
+	}{
+		{"FLEET_SCHED_RATE_LIMIT_PER_MINUTE", 60, &rl.perMinute},
+		{"FLEET_SCHED_RATE_LIMIT_PER_DAY", 500, &rl.perDay},
+		{"FLEET_SCHED_RATE_LIMIT_GLOBAL_PER_MINUTE", 200, &rl.globalPerMinute},
+	} {
+		v, err := config.EnvKnobInt(w.key, w.def)
+		if err != nil {
+			return schedRateLimitWindows{}, fmt.Errorf("invalid environment configuration: %w", err)
 		}
-		//nolint:gosec // G706 false positive: v is rendered with %q, which escapes any CR/LF, so it cannot forge log lines. v is also an operator-set env var, not request input.
-		log.Printf("⚠ Ignoring invalid %s=%q (expected a whole number); using default %d", key, v, def)
+		*w.dst = v
 	}
-	return def
+	return rl, nil
 }
 
 // toAgentcorePricing translates the bundle's pricing config (a low-level
@@ -2727,7 +2754,10 @@ func setupRemoteMCP(cfg *config.Config, chatStore *store.Store) *remotemcp.Servi
 	// the boot-time env snapshot cannot know them. Without this the parent's
 	// literal set never learned them, and a connector echoing its own bare
 	// token back was scrubbed only if it happened to match a shape pattern.
-	svc.SetSecretObserver(agentcore.RegisterSecretLiteral)
+	// The observer is scope-aware (#1274): each server row's rotations
+	// supersede that row's previous generation, so a long-running process
+	// plateaus instead of scanning for every token it has ever seen.
+	svc.SetSecretObserver(agentcore.RegisterSecretLiterals)
 	// Abandoned OAuth flow rows are reclaimed by the maintenance loop (see
 	// runMaintenancePass), not by a daemon of their own. This used to be a
 	// `for range ticker.C` goroutine with a context.Background() per sweep —

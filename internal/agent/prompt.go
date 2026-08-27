@@ -322,25 +322,23 @@ func (m *Manager) activeMCPToolNames(enabledOptIns []string) []string {
 // longestOptionalServerFor resolves which Optional server a prefixed
 // `mcp_<server>_<tool>` roster name belongs to, or "" when none matches.
 // Server names can extend each other — the `<server>_<account>` variant
-// convention makes overlaps like "jira" / "jira_prod" real — and the previous
-// first-match break over a map range made the winner a per-iteration coin
-// flip, so whether a tool appeared in the system prompt could differ run to
-// run, silently busting the byte-stable prefix the prompt cache requires
-// (docs/PROMPT-CACHE-CONTRACT.md). The LONGEST matching server name wins:
-// deterministic (two same-length prefixes of one name at the same offset are
-// the same string), and it attributes a variant's tools to the variant's own
-// toggle rather than its shorter base name. This duplicates the longest-key
-// treatment of agentcore's mcpAllowlist.toolsFor (unexported across the
-// package boundary, and matching registered server names rather than
-// `mcp_`-prefixed roster names) — keep the two in step.
+// convention makes overlaps like "jira" / "jira_prod" real — and a first-match
+// break over a map range made the winner a per-iteration coin flip, so whether
+// a tool appeared in the system prompt could differ run to run, silently
+// busting the byte-stable prefix the prompt cache requires
+// (docs/PROMPT-CACHE-CONTRACT.md, #1125). The LONGEST matching server name
+// wins: deterministic (two same-length prefixes of one name at the same offset
+// are the same string), and it attributes a variant's tools to the variant's
+// own toggle when it declares one, falling back to its base server's toggle
+// when it does not.
+//
+// The rule itself is no longer duplicated here: it lives once in agentcore
+// (longestServerKey, surfaced as OptionalServerForToolName) and is the SAME
+// function agentcore's Gate-1 registration check resolves through, so the
+// prompt roster and the registered tool set cannot drift apart for a variant
+// seat the way they did before #1272.
 func longestOptionalServerFor(name string, optionalServers mcpOptionalSet) string {
-	best := ""
-	for server := range optionalServers {
-		if len(server) > len(best) && strings.HasPrefix(name, "mcp_"+server+"_") {
-			best = server
-		}
-	}
-	return best
+	return agentcore.OptionalServerForToolName(name, agentcore.MCPOptionalSet(optionalServers))
 }
 
 // ListPersonas returns available persona names (derived from *.yaml filenames).
