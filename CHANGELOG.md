@@ -46,6 +46,59 @@ prior versions are listed because none have shipped.
   export · import"), docs/LEGACY-IMPORT.md, and the narrowed out-of-model
   warning on `models.TaskLifecycle`.
 
+- **A round-capped scheduled run keeps the transcript it paid for (#1271).**
+  When a scheduled run exhausts the 20 enforcement rounds without its finish
+  gates ever clearing, `agentcore.Run` returns the accumulated transcript and
+  usage alongside the error (#1125) — but the scheduled driver's
+  `if err != nil { return err }` ran before its persistence block, so up to 20
+  rounds of paid assistant text never reached the session log. The driver now
+  recognizes that failure through a new `agentcore.ErrMaxEnforcementRounds`
+  sentinel (not the error text) and writes the carried partial text into the
+  log with a `round_cap_truncated` `message_type`, preceded by a notice naming
+  the rounds burned and the spend. The run still **fails** exactly as before:
+  the same error message, the same `terminal` failure class, the same retry and
+  notification behaviour — only transcript visibility changed.
+
+- **An Optional server's variant seats are now opt-in gated at registration,
+  not just hidden from the prompt (#1272).** The two layers that decide whether
+  an Optional MCP server's tools are available keyed their checks differently:
+  agentcore's Gate-1 did an **exact** map lookup on the registered server name,
+  while the system-prompt roster prefix-matched `mcp_<server>_<tool>` names and
+  resolved the longest matching Optional server. For a named-account seat
+  `jira_prod` whose bundle declares only `jira` as `optional: true`, Gate-1's
+  exact lookup missed — the seat registered and was **callable on every run**
+  while the prompt hid it from the model. Both layers now resolve through one
+  helper (`agentcore.longestServerKey`, exported as `OptionalServerFor` /
+  `OptionalServerForToolName`) implementing a single documented rule — exact key
+  wins, else the longest key the name extends across an underscore — so Gate-1
+  fails closed on a variant seat and what the model sees always matches what
+  registers. Gate-2's per-server tool allowlist resolves through the same
+  helper (its behaviour was already this rule). The rule is written up in
+  docs/AGENT-RUNTIME.md; the roster's byte-stability guard
+  (docs/PROMPT-CACHE-CONTRACT.md) is unchanged and still green.
+
+- **The runtime-secret literal set is now bounded, and the main process's
+  control-plane acquisitions feed it too (#1274).** Both follow-ups deferred
+  from #1124. (1) Every OAuth rotation mints a distinct access+refresh pair,
+  and `redact.Redactor` retained all of them for the process lifetime — with
+  hourly-expiry tokens that is ~50-70 dead secrets per server per day, each
+  costing a `strings.ReplaceAll` pass on every masked-error `Redact` and
+  keeping expired credentials in memory forever. Literals are now either
+  PERMANENT (boot-time env secrets, static api_keys — unchanged) or SCOPED to
+  one hosted-MCP server row, where each successful rotation opens a new
+  generation and the row's previous generation retires after a **15-minute
+  grace window** (`literalRetireGrace`), with a hard cap of 4 retained
+  generations per row as a refresh-storm backstop. Retirement can only ever
+  drop a value the SAME row has superseded: a re-listed secret is revived, a
+  permanent literal is never demoted, and nothing else's literals are touched.
+  Steady state per connection is 3 literals (client secret + live access +
+  live refresh) instead of unbounded growth. (2) The main process's
+  control-plane acquisitions — the OAuth callback's code exchange, the
+  authorize step's unsealed client secret, dynamic client registration, and
+  the add-time / rotate-time api_key probes — now register their credentials
+  with the process-wide scrubber before the request that could echo them, and
+  the remote-MCP HTTP error path (which relays wrapped VENDOR failure text)
+  runs through that scrubber instead of shape patterns alone.
 - **Task transition guards are now one shared set, and cancelling a
   dead-lettered task no longer erases its replayability (#1268, #1269).** The
   four storage transition writers each hand-listed their own terminal refusal

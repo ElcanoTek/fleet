@@ -1089,13 +1089,15 @@ func TestServiceSecretObserverSeesRuntimeCredentials(t *testing.T) {
 
 	var mu sync.Mutex
 	seen := map[string]bool{}
-	svc.SetSecretObserver(func(secret string) {
+	svc.SetSecretObserver(func(_ string, _ bool, secrets ...string) {
 		mu.Lock()
 		defer mu.Unlock()
-		if secret == "" {
-			t.Error("observer must never receive an empty value")
+		for _, secret := range secrets {
+			if secret == "" {
+				t.Error("observer must never receive an empty value")
+			}
+			seen[secret] = true
 		}
-		seen[secret] = true
 	})
 
 	// OAuth path: the stale access token forces a refresh through the real
