@@ -19,6 +19,15 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **`FLEET_SANDBOX_WARM_SIZE` now rejects every explicit negative at the
+  validation seam (#1299).** The knob registry row carries `min: 0`, so boot,
+  hot-reload, and `fleet validate-config` all refuse a negative depth loudly —
+  including an explicit `-1`, which previously slipped through the loader's
+  ad-hoc `< -1` check as an undocumented spelling of "derive". Unset still
+  derives from `FLEET_MAX_CONCURRENT_AGENTS`, and `0` still means "no warm
+  pool" (#1288); the safety of a negative no longer rests on the pool's
+  incidental cold-start fallback.
+
 - **Under `FLEET_DEFAULT_NETWORK_MODE=lockdown` the warm pool is now sealed
   and lockdown turns actually use it (#1291).** Two defects, one cause: warm
   spawns used the pool config verbatim (`NoNetwork=false`), while every take

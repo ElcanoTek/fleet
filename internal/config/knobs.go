@@ -190,7 +190,11 @@ var envKnobs = []envKnob{
 	{key: "FLEET_SANDBOX_MEMORY_MAX_MB", fleet: true, kind: kindInt},
 	{key: "FLEET_SANDBOX_CPUS_MAX", fleet: true, kind: kindFloat},
 	{key: "FLEET_SANDBOX_PIDS_MAX", fleet: true, kind: kindInt},
-	{key: "FLEET_SANDBOX_WARM_SIZE", fleet: true, kind: kindInt},
+	// min 0: 0 is a real value (no warm pool, #1264) and unset means "derive",
+	// so every explicit negative — the -1 sentinel spelled out included — is a
+	// misconfiguration to refuse at the seam, not something for the pool to
+	// absorb (#1299).
+	{key: "FLEET_SANDBOX_WARM_SIZE", fleet: true, kind: kindInt, min: bound(0)},
 	{key: "FLEET_SANDBOX_WARM_TTL", fleet: true, kind: kindInt},
 
 	// ── python REPL (#213) ──
