@@ -801,12 +801,17 @@ func (k *k8sImpl) runBash(ctx context.Context, req BashRequest) (BashResult, err
 	code, execErr := k.backend.client.runOneShotExec(cmdCtx, k.backend.cfg.Namespace, podName, sandboxContainerName,
 		command, nil, stdoutBuf, stderrBuf)
 
+	// snapshot(), not the live buffers: a cancelled StreamWithContext returns
+	// without joining its copy goroutines, so an abandoned copier may still be
+	// writing while this result is assembled (the PR #1285 -race finding).
+	stdoutBytes, stdoutDiscarded := stdoutBuf.snapshot()
+	stderrBytes, stderrDiscarded := stderrBuf.snapshot()
 	res := BashResult{
 		ExitCode:        code,
-		Stdout:          stdoutBuf.buf.Bytes(),
-		Stderr:          stderrBuf.buf.Bytes(),
-		StdoutDiscarded: stdoutBuf.discarded,
-		StderrDiscarded: stderrBuf.discarded,
+		Stdout:          stdoutBytes,
+		Stderr:          stderrBytes,
+		StdoutDiscarded: stdoutDiscarded,
+		StderrDiscarded: stderrDiscarded,
 	}
 	if cmdCtx.Err() != nil {
 		// Cancellation/timeout only tore down the exec CONNECTION; the shell

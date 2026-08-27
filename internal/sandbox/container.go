@@ -788,11 +788,13 @@ func (c *containerImpl) runBash(ctx context.Context, req BashRequest) (BashResul
 
 	execErr := cmd.Run()
 
+	stdoutBytes, stdoutDiscarded := stdoutBuf.snapshot()
+	stderrBytes, stderrDiscarded := stderrBuf.snapshot()
 	res := BashResult{
-		Stdout:          stdoutBuf.buf.Bytes(),
-		Stderr:          stderrBuf.buf.Bytes(),
-		StdoutDiscarded: stdoutBuf.discarded,
-		StderrDiscarded: stderrBuf.discarded,
+		Stdout:          stdoutBytes,
+		Stderr:          stderrBytes,
+		StdoutDiscarded: stdoutDiscarded,
+		StderrDiscarded: stderrDiscarded,
 	}
 	if cmd.ProcessState != nil {
 		res.ExitCode = cmd.ProcessState.ExitCode()
