@@ -5,6 +5,16 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # Manual runs. Exists because pull_request webhook deliveries were observed
+  # being dropped during a GitHub incident (2026-08-26, Actions + Pull
+  # Requests degraded): a dev->main promotion PR sat with NO way to produce
+  # the required "CI gate" check — its opened event was lost and five
+  # subsequent synchronize events never spawned a run. A dispatch on the PR's
+  # head ref runs the identical suite on the identical head SHA, so the
+  # name-matched required check is satisfied honestly; the docs-only
+  # classifier treats an un-diffable event as "run everything" (fail-safe),
+  # so a dispatched run can never skip more than an event-triggered one.
+  workflow_dispatch:
 
 permissions:
   # Least privilege at the workflow level, so nothing is granted to a job that

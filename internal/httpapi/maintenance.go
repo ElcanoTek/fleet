@@ -94,6 +94,14 @@ func (s *Server) RunMaintenance(ctx context.Context) {
 	} else if removed > 0 {
 		log.Printf("maintenance: workspace sweep removed %d orphan dir(s)", removed)
 	}
+
+	// Reconcile the shared file library's staged tree against its manifest
+	// (docs/SHARED-FILES.md): re-stage anything missing or wrong-sized, remove
+	// strays. This is what makes the mutating endpoints' staging "best-effort,
+	// self-healing" an honest claim rather than a hope.
+	if err := s.SyncSharedFiles(ctx); err != nil {
+		log.Printf("maintenance: shared files sync: %v", err)
+	}
 }
 
 // runPostTurnMaintenance runs the pass at most once per maintenanceMinInterval,

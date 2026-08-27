@@ -582,10 +582,13 @@ func (c *containerImpl) start(ctx context.Context) error {
 		// container A — already warm and waiting to be Take()'d — now has
 		// the wrong MCS and bash/run_python inside it hit "Permission
 		// denied" on the dir it's chdir'd to, and writes return "Read-only
-		// file system". Lockdown's TakeContainer always cold-starts so the
-		// latest container always has the matching MCS — that's why this
-		// only surfaces in non-lockdown chats whose turn drew a stale warm
-		// container. Same fix as the supporting-doc mounts below.
+		// file system". At the time, lockdown's TakeContainer always
+		// cold-started, so its container always had the matching MCS —
+		// which is why the bug only surfaced in non-lockdown chats whose
+		// turn drew a stale warm container. (Fleet-wide lockdown takes now
+		// claim warm containers too, #1291 — safe precisely because `:z`
+		// gives every container the same shared label.) Same fix as the
+		// supporting-doc mounts below.
 		fmt.Sprintf("--volume=%s:%s:rw,z", c.cfg.WorkspaceHostDir, c.cfg.WorkspaceHostDir),
 		// Bridge script — read-only bind of the host temp file.
 		fmt.Sprintf("--volume=%s:/opt/bridge/bridge.py:ro,Z", c.bridgeScriptPath),
@@ -788,11 +791,13 @@ func (c *containerImpl) runBash(ctx context.Context, req BashRequest) (BashResul
 
 	execErr := cmd.Run()
 
+	stdoutBytes, stdoutDiscarded := stdoutBuf.snapshot()
+	stderrBytes, stderrDiscarded := stderrBuf.snapshot()
 	res := BashResult{
-		Stdout:          stdoutBuf.buf.Bytes(),
-		Stderr:          stderrBuf.buf.Bytes(),
-		StdoutDiscarded: stdoutBuf.discarded,
-		StderrDiscarded: stderrBuf.discarded,
+		Stdout:          stdoutBytes,
+		Stderr:          stderrBytes,
+		StdoutDiscarded: stdoutDiscarded,
+		StderrDiscarded: stderrDiscarded,
 	}
 	if cmd.ProcessState != nil {
 		res.ExitCode = cmd.ProcessState.ExitCode()

@@ -12,6 +12,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -382,12 +383,26 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	// are mentioned in the appended block so the agent sees what arrived.
 	validAttachments := s.validateAttachments(req.Attachments)
 	imageAttachments, otherAttachments := splitAttachmentsByKind(validAttachments)
-	userMessage := appendAttachmentsBlock(req.Message, imageAttachments, otherAttachments)
+	// Kubernetes backend only: copy non-image attachments into the
+	// conversation workspace (the claim every sandbox pod mounts) and
+	// advertise those paths — the uploads root is control-plane state no pod
+	// can see. Images are exempt: their bytes reach the model host-side as
+	// vision input on both backends. Podman keeps its zero-copy read-only
+	// mount of the uploads root.
+	stagedAttachments := s.attachmentsNeedWorkspaceStaging()
+	if stagedAttachments {
+		otherAttachments = stageAttachmentsIntoWorkspace(
+			filepath.Join(s.cfg.EmailAttachmentDir, "uploads"), conv.ID, otherAttachments)
+	}
+	userMessage := appendAttachmentsBlock(req.Message, imageAttachments, otherAttachments, stagedAttachments)
 	// Surface files persisted from earlier turns. The agent's run_python
 	// kernel resets each turn but its workspace dir doesn't — without this,
 	// a report downloaded on turn 1 gets forgotten by turn 4 even though
 	// it's still on disk. Empty workspaces (first turn) skip the block.
 	userMessage = appendWorkspaceInventoryBlock(userMessage, tools.WorkspaceDirForConversation(conv.ID))
+	// Announce the cross-chat shared file library (docs/SHARED-FILES.md) the
+	// same way: read-only paths under shared/ the agent can use immediately.
+	userMessage = s.appendSharedFilesBlock(turnCtx, userMessage)
 	// Composer context handles (#517, opt-in): expand any `@url:<url>` /
 	// `@file:"path"` in the user's message into the turn context. A no-op when
 	// disabled; failures degrade to notices so the turn always proceeds.

@@ -174,3 +174,110 @@ func TestWorkspaceDirForConversation_ConfinesID(t *testing.T) {
 		t.Errorf("WorkspaceDirForConversation(%q) = %q; want %q", okID, got, want)
 	}
 }
+
+// TestEnsureWorkspaceDirSharedLibrarySymlink pins the shared-file-library
+// symlink policy (docs/SHARED-FILES.md): when cmd/fleet registers the library
+// dir under SharedFilesDirName, every conversation workspace gets a `shared`
+// symlink to it (that is what makes the prompt block's `shared/<name>` paths
+// resolve from the chat's cwd) — and when nothing is registered there is NO
+// legacy $CWD/shared fallback, so a stray ./shared directory in a dev checkout
+// can never masquerade as the library.
+func TestEnsureWorkspaceDirSharedLibrarySymlink(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("FLEET_WORKSPACE_ROOT", root)
+	sharedDir := SharedFilesDir(root)
+	if err := os.MkdirAll(sharedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Unregistered: no symlink, even though the dir exists on disk.
+	SetSupportingDocDirs(nil)
+	dir, err := EnsureWorkspaceDir("conv-shared-none")
+	if err != nil {
+		t.Fatalf("EnsureWorkspaceDir: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, SharedFilesDirName)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("unregistered library still produced a shared symlink: %v", err)
+	}
+
+	// Registered (what cmd/fleet does at boot): the symlink points at the
+	// staged tree, so shared/<name> resolves relative to the chat's cwd.
+	SetSupportingDocDirs(map[string]string{SharedFilesDirName: sharedDir})
+	t.Cleanup(func() { SetSupportingDocDirs(nil) })
+	dir, err = EnsureWorkspaceDir("conv-shared-linked")
+	if err != nil {
+		t.Fatalf("EnsureWorkspaceDir: %v", err)
+	}
+	target, err := os.Readlink(filepath.Join(dir, SharedFilesDirName))
+	if err != nil {
+		t.Fatalf("shared symlink missing: %v", err)
+	}
+	if target != sharedDir {
+		t.Fatalf("shared symlink -> %q, want %q", target, sharedDir)
+	}
+	if err := os.WriteFile(filepath.Join(sharedDir, "lib.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, SharedFilesDirName, "lib.txt")); err != nil {
+		t.Fatalf("shared/lib.txt does not resolve through the symlink: %v", err)
+	}
+}
+
+// TestSeedSupportingDocSymlinksScheduledWorkspace pins the #1290 seeding seam:
+// scheduled/one-shot workspaces get the same supporting-doc symlinks chat
+// workspaces get from EnsureWorkspaceDir, pointed at the registered dirs.
+func TestSeedSupportingDocSymlinksScheduledWorkspace(t *testing.T) {
+	docs := t.TempDir()
+	dir := t.TempDir()
+	SetSupportingDocDirs(map[string]string{"protocols": docs})
+	t.Cleanup(func() { SetSupportingDocDirs(nil) })
+
+	SeedSupportingDocSymlinks(dir)
+
+	target, err := os.Readlink(filepath.Join(dir, "protocols"))
+	if err != nil || target != docs {
+		t.Fatalf("protocols symlink = %q err=%v, want %q", target, err, docs)
+	}
+	// Seeding again is idempotent (Lstat guard) and repoints a stale link.
+	stale := t.TempDir()
+	SetSupportingDocDirs(map[string]string{"protocols": stale})
+	SeedSupportingDocSymlinks(dir)
+	if target, err := os.Readlink(filepath.Join(dir, "protocols")); err != nil || target != stale {
+		t.Fatalf("stale symlink not repointed: %q err=%v, want %q", target, err, stale)
+	}
+	// A real file in the way is never replaced.
+	agentFile := filepath.Join(dir, "personas")
+	if err := os.WriteFile(agentFile, []byte("mine"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	SetSupportingDocDirs(map[string]string{"personas": docs})
+	SeedSupportingDocSymlinks(dir)
+	if data, err := os.ReadFile(agentFile); err != nil || string(data) != "mine" {
+		t.Fatalf("real file clobbered: %q err=%v", data, err)
+	}
+}
+
+// TestSeedSupportingDocSymlinksNeverSelfLinks pins the workspace-ROOT case: a
+// non-worktree scheduled run seeds the shared workspace root itself, where the
+// registered shared-file library dir IS <root>/shared — planting there would
+// create a self-referential symlink (ELOOP for every later access).
+func TestSeedSupportingDocSymlinksNeverSelfLinks(t *testing.T) {
+	root := t.TempDir()
+	SetSupportingDocDirs(map[string]string{SharedFilesDirName: SharedFilesDir(root)})
+	t.Cleanup(func() { SetSupportingDocDirs(nil) })
+
+	SeedSupportingDocSymlinks(root)
+
+	if fi, err := os.Lstat(filepath.Join(root, SharedFilesDirName)); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		t.Fatal("self-referential shared symlink planted into the workspace root")
+	}
+	// And when the staged tree already exists as a real dir, it stays a dir.
+	if err := os.MkdirAll(SharedFilesDir(root), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	SeedSupportingDocSymlinks(root)
+	fi, err := os.Lstat(filepath.Join(root, SharedFilesDirName))
+	if err != nil || !fi.IsDir() || fi.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("staged library root disturbed: mode=%v err=%v", fi.Mode(), err)
+	}
+}

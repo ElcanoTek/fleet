@@ -17,7 +17,133 @@ prior versions are listed because none have shipped.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Under `FLEET_DEFAULT_NETWORK_MODE=lockdown` the warm pool is now sealed
+  and lockdown turns actually use it (#1291).** Two defects, one cause: warm
+  spawns used the pool config verbatim (`NoNetwork=false`), while every take
+  under fleet-wide lockdown forced a sealed cold start. So the pool held N
+  open-egress sandboxes nothing could ever claim — dead reserved CPU, memory
+  and disk, respawned forever by the TTL keeper — and on the kubernetes
+  backend the parked pods were labeled `fleet.elcanotek.com/egress=open`
+  directly beside a boot log line claiming every pod is labeled `none`. Warm
+  spawns on a lockdown pool are now sealed (`--network=none` / the
+  `egress=none` label, making that log line true by construction), and a
+  sealed, no-override take (`TakeContainer`, and scheduled runs without
+  per-task limits) claims a warm sandbox instead of cold-starting — lockdown
+  turns get the same warm-pool latency win open fleets always had. Everything
+  else keeps its posture: per-task resource overrides still cold-start
+  (fresh ceilings need a fresh container), a per-conversation lockdown chat
+  on a NON-lockdown fleet still cold-starts sealed (that pool's warm
+  inventory is open, and a sealed take must never receive an open sandbox),
+  and allowlisted takes are untouched (the per-turn proxy token still
+  requires a cold start).
+
+- **Scheduled runs and `fleet task run` can use the file tools on their own
+  workspace — and read bundle docs — on every backend (#1290).** Three
+  stacked, backend-independent gaps made `view_file protocols/…` (and, in the
+  one-shot harness, even `write_file notes.md`) fail for all scheduled work:
+  the harness never registered the workspace root or supporting-doc dirs, so
+  host validation fell back to the process-cwd allowlist (`/opt/fleet/client`
+  in the split control-plane image) and rejected every workspace-relative
+  path; `fileOpRoot`'s forced-working-dir branch lacked the read-only
+  supporting-doc exception the conversation branch already had, so a doc read
+  was refused even when it validated; and nothing seeded the
+  `protocols`/`personas`/`system_prompts`/`skills` symlinks into scheduled or
+  one-shot workspaces, so the system prompt's bare-path convention — which the
+  audit enforcement itself relies on ("read protocols/self-audit.md") — silently
+  broke. `fleet task run` now registers both globals with its minted workspace
+  (chmod'd container-readable), `configureRunWorkspace` seeds the symlinks for
+  every scheduled and one-shot run, and the forced-dir branch admits a
+  host-resolved doc symlink with the same narrow shape as chat: unresolved
+  path beneath the forced root, resolved target beneath a registered doc
+  root, reads only. Writes into doc mounts, non-doc symlink escapes, absolute
+  doc-mount paths, and `..` traversal out of the forced root stay refused,
+  with regression tests pinning each.
+
+- **The Kubernetes sandbox backend can now actually run tool calls: exec
+  streaming rides client-go instead of a hand-rolled WebSocket client
+  (#1264).** The first real cluster this backend ever met — the example
+  bundle's own kind rehearsal — showed the hand-rolled `v4.channel.k8s.io`
+  client losing exec stdin nondeterministically for payloads beyond a few KB.
+  The 28KB bridge upload wedged until its two-minute deadline on roughly four
+  of five attempts, every warm pod churned on that cycle forever, and not one
+  `bash`/`run_python`/file tool call could execute; the identical uploads
+  through client-go's `remotecommand` executor succeeded five of five on the
+  same cluster, pod and payloads, as did kubectl at 7MB. Exec now uses that
+  executor (protocol `v5.channel.k8s.io`, with a real stdin half-close on the
+  wire).
+
+  The adoption is deliberately narrow, and ADR-0049 is amended in place: its
+  own recorded revisit trigger fired. client-go is a **transport, never a
+  config loader** — pod CRUD and the boot preflight stay on the hand-rolled
+  REST client, and kubeconfig handling stays fleet's strict parser (exec
+  plugins and `insecure-skip-tls-verify` still refused; the `rest.Config`
+  handed to client-go is built from the already-validated material). The
+  in-package session API and the #1257 teardown choreography are unchanged,
+  and the fake-apiserver suite now speaks `v5` — including the stream-close
+  frame — because that is what real kubelets serve. Session teardown prefers a
+  clean end over a cancellation: stdin is half-closed first so the bridge's
+  read loop exits on EOF and the stream finishes by itself — cancelling an
+  active stream made client-go's copy goroutines log spurious "use of closed
+  network connection" errors on every sandbox retirement — with the cancel
+  kept as the bounded backstop for a process that ignores EOF.
+
+- **`FLEET_SANDBOX_WARM_SIZE=0` now means what it says: no warm pool**
+  (#1264). Before, `0` was indistinguishable from unset, so the engine
+  silently derived a 2..8-deep pool from `FLEET_MAX_CONCURRENT_AGENTS` — and
+  the Helm chart reinforced the confusion by omitting the env var at
+  `warmSize: 0` and documenting `0` as "derive". Found in the #1264 kind
+  rehearsal, where the bundle's overlay set `warmSize: 0`, documented itself
+  as running with no warm pool, and ran a two-pod Guaranteed-QoS pool anyway.
+  Now: unset derives (unchanged default), an explicit `0` disables warming
+  (every take pays a cold start — the pool always supported this), a positive
+  value pins the depth, and a negative value fails loudly at load. The chart's
+  `sandbox.warmSize` default is now `null` (= let the engine derive) and any
+  set value — including `0` — is passed through. **Semantic change:** an
+  operator who set `FLEET_SANDBOX_WARM_SIZE=0` (or chart `warmSize: 0`)
+  expecting derivation now gets no warm pool — delete the key to keep the
+  derived depth.
+
+- **`fleet validate-config`'s model_api check now actually verifies the API
+  key** (#1264). It probed OpenRouter's `/api/v1/models`, which is public —
+  it returns 200 with no Authorization header and with a garbage one — so any
+  non-empty `OPENROUTER_API_KEY` was blessed with "API key authenticates".
+  The #1264 kind rehearsal hit the consequence: a mis-created secret holding
+  64 hex characters of junk passed the check, then the first real completion
+  failed with `401 Missing Authentication header`. The check now probes
+  `GET /api/v1/key`, which requires auth (401 on a bad or missing key, 200
+  with the key's own metadata otherwise). The fake-LLM seam serves
+  `/api/v1/key` with the same auth contract, so the check stays meaningful —
+  not a spurious 404 warning — in E2E ladders running against
+  `OPENROUTER_BASE_URL`.
+
+- **`/readyz`'s sandbox check is backend-aware** (#1264). Under
+  `FLEET_SANDBOX_BACKEND=kubernetes` the probe ran `podman --version` on the
+  control-plane host — a binary that deployment never has or uses — so
+  readiness reported a permanent, misleading `degraded`. The kubernetes
+  backend now probes what its sandboxes actually run on: one cached apiserver
+  `GET /version` (the same call the boot preflight opens with), reporting the
+  cluster version in the detail. The podman backend's `<runtime> --version`
+  probe, its #217 binary-name mapping, and the #215 unauthenticated-endpoint
+  cache bound are unchanged.
+
 ### Added
+
+- **Shared files: a native cross-chat file library.** Admins publish files
+  once (Settings → Shared files, or `POST /shared-files`) and every
+  conversation's agent can read them at `shared/<folder>/<name>` — on BOTH
+  sandbox backends: canonical bytes stay host-side under
+  `<DataDir>/shared_files/`, a staged copy under `<WorkspaceRoot>/shared/` is
+  mounted read-only into every sandbox (a nested `:ro` bind on podman, a
+  read-only subPath of the workspace claim on kubernetes), and a reconciler
+  (boot + every mutation + the hourly maintenance pass) heals any drift. Each
+  chat turn gets a capped "Shared file library" prompt block with paths,
+  sizes, and descriptions. Members list/download; admins upload into one
+  optional folder level, rename/move/describe, delete. The library total is
+  capped by the new live `shared_files_max_total_mb` admin setting
+  (`FLEET_SHARED_FILES_MAX_TOTAL_MB`, default 10 GiB, 0 = unlimited).
+  Migration 053. Design note: `docs/SHARED-FILES.md`.
 
 - **Multiple logins for hosted (official) MCP connections** (#988). A user can
   hold several seats under one connection name — a work and a personal GitHub,
@@ -35,6 +161,29 @@ prior versions are listed because none have shipped.
   Design note: `docs/REMOTE-MCP-MULTI-LOGIN.md`; ADR-0050.
 
 ### Fixed
+
+- **Chat attachments now reach the agent under the kubernetes sandbox
+  backend.** A sandbox pod mounts only the workspace claim, so the uploads
+  root (control-plane state) was invisible: the attachments prompt block
+  advertised absolute paths no pod could resolve, and every non-image
+  attachment read failed. The chat server now copies validated non-image
+  attachments into `<workspace>/<convID>/attachments/` — inside the claim —
+  at send time under that backend and advertises the staged paths; the copies
+  live and die with the conversation workspace. Podman keeps its zero-copy
+  read-only uploads mount; image attachments were never affected (vision
+  bytes are read host-side).
+
+- **A self-audit abort now retires what it abandons, and a confirmed audit says
+  what is still outstanding.** Field case: a daily refresh audited the inline
+  Pages write, staged its payload by reference, was BLOCKED on the upload
+  variant, aborted (nothing had run), re-audited the upload tool and published
+  the page — yet finish enforcement kept demanding the abandoned inline
+  declaration and forced a second abort, landing a live page as status
+  `error`. `confirm_audit(success=false)` now zeroes every declared-but-
+  unexecuted commitment (and reports which), so the later re-audit's execution
+  is what the run is judged on. The success trailer also stopped saying
+  `All 0 critical actions executed. Finish now.` when it had just registered
+  a declaration; it now names the outstanding call(s) to make.
 
 - **Scheduled runs could not stage files where their own sandbox could read
   them.** `download_url` resolved a relative `output_dir` against the process

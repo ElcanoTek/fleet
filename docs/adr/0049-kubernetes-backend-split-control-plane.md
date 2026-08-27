@@ -55,15 +55,26 @@ privileged node" packaging track as a stepping stone.
    single-replica control-plane Deployment (strategy Recreate, no replica
    knob), the runner RBAC, workspace storage, the NetworkPolicies, optional
    in-cluster Postgres / web / Ingress. No operator, no CRDs in v1.
-6. **The API client is hand-rolled, not client-go.** The backend needs five
-   verbs plus WebSocket exec streaming; client-go would add dozens of modules
-   to a tree gated by govulncheck and image CVE scans. `internal/sandbox`
-   speaks plain REST via net/http and `v4.channel.k8s.io` exec framing via
-   gorilla/websocket (already a dependency). If the backend ever needs
-   watches/informers or exotic auth, revisit client-go rather than growing the
-   hand-rolled client. Kubeconfig support is deliberately narrow — token,
-   token-file, client-cert; exec plugins and `insecure-skip-tls-verify` are
-   refused.
+6. **REST is hand-rolled; exec streaming is client-go.** *(Amended 2026-08-25
+   — the original decision put BOTH on a hand-rolled client to keep the
+   dependency tree small, with a recorded revisit trigger. The trigger fired
+   on the first real cluster (#1264's kind rehearsal): the hand-rolled
+   `v4.channel.k8s.io` client lost exec stdin nondeterministically for
+   payloads beyond a few KB — the 28KB bridge upload wedged on ~4 of 5
+   attempts, churning every warm pod on a two-minute cycle — while client-go's
+   remotecommand executor moved the identical payloads 5 of 5 on the same
+   cluster and pod, as did kubectl at 7MB. A transport demonstrably less
+   reliable than the reference implementation is not a dependency saving.)*
+   Exec now rides `k8s.io/client-go/tools/remotecommand` (protocol
+   `v5.channel.k8s.io`, real stdin half-close), the transport kubectl itself
+   uses. The adoption is deliberately narrow: client-go is a transport, never
+   a config loader — pod CRUD and the preflight stay on the hand-rolled REST
+   client (five plain verbs that demonstrably work), and kubeconfig support
+   stays fleet's own strict parser — token, token-file, client-cert; exec
+   plugins and `insecure-skip-tls-verify` are refused; the `rest.Config`
+   handed to client-go is built from that already-validated material. If the
+   backend ever needs watches/informers, extend the client-go usage rather
+   than growing the hand-rolled client.
 
 ## What does not change
 
@@ -130,8 +141,11 @@ privileged node" packaging track as a stepping stone.
 
 ## Alternatives considered
 
-- **client-go.** Rejected for dependency weight against a five-verb surface;
-  recorded above as the explicit revisit trigger.
+- **client-go for everything.** Originally rejected for dependency weight
+  against a five-verb surface, with a recorded revisit trigger. The trigger
+  fired for exec streaming (see decision 6's amendment); CRUD remains
+  hand-rolled since plain request/response REST has no streaming semantics to
+  get wrong.
 - **Chart-only first, backend later.** Rejected by the issue itself: a chart
   that still requires privileged Podman-in-pod would enshrine the workaround.
 - **A Kubernetes operator/CRD.** Unnecessary for v1 — Helm + RBAC covers

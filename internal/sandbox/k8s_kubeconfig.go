@@ -104,12 +104,12 @@ func newKubeconfigClient(path string) (*k8sClient, string, error) {
 	}
 
 	tlsCfg := &tls.Config{MinVersion: tls.VersionTLS12}
-	server, err := applyKubeconfigCluster(&kc, clusterName, path, resolve, tlsCfg)
+	server, caPEM, err := applyKubeconfigCluster(&kc, clusterName, path, resolve, tlsCfg)
 	if err != nil {
 		return nil, "", err
 	}
 
-	client := &k8sClient{tlsConfig: tlsCfg}
+	client := &k8sClient{tlsConfig: tlsCfg, caPEM: caPEM}
 	if err := applyKubeconfigUser(&kc, userName, path, resolve, tlsCfg, client); err != nil {
 		return nil, "", err
 	}
@@ -130,41 +130,43 @@ func newKubeconfigClient(path string) (*k8sClient, string, error) {
 // its CA bundle into tlsCfg. insecure-skip-tls-verify is refused rather than
 // honored: a sandbox control channel that skips server verification can be
 // MITM'd into running tool calls on an attacker's cluster.
-func applyKubeconfigCluster(kc *kubeconfigFile, clusterName, path string, resolve func(string) string, tlsCfg *tls.Config) (server string, err error) {
+func applyKubeconfigCluster(kc *kubeconfigFile, clusterName, path string, resolve func(string) string, tlsCfg *tls.Config) (server string, caPEM []byte, err error) {
 	for _, c := range kc.Clusters {
 		if c.Name != clusterName {
 			continue
 		}
 		server = c.Cluster.Server
 		if c.Cluster.InsecureSkipTLSVerify {
-			return "", fmt.Errorf("kubeconfig %s: cluster %q sets insecure-skip-tls-verify, which the sandbox backend refuses (fail-closed) — use a CA bundle", path, clusterName)
+			return "", nil, fmt.Errorf("kubeconfig %s: cluster %q sets insecure-skip-tls-verify, which the sandbox backend refuses (fail-closed) — use a CA bundle", path, clusterName)
 		}
-		caPEM := []byte(nil)
+		// Assigns the NAMED caPEM return (no :=): the raw bytes ride back to
+		// the caller so the exec path's rest.Config is built from the same
+		// validated material.
 		switch {
 		case c.Cluster.CertificateAuthorityData != "":
 			caPEM, err = base64.StdEncoding.DecodeString(c.Cluster.CertificateAuthorityData)
 			if err != nil {
-				return "", fmt.Errorf("kubeconfig %s: decode certificate-authority-data: %w", path, err)
+				return "", nil, fmt.Errorf("kubeconfig %s: decode certificate-authority-data: %w", path, err)
 			}
 		case c.Cluster.CertificateAuthority != "":
 			caPEM, err = os.ReadFile(resolve(c.Cluster.CertificateAuthority))
 			if err != nil {
-				return "", fmt.Errorf("kubeconfig %s: read certificate-authority: %w", path, err)
+				return "", nil, fmt.Errorf("kubeconfig %s: read certificate-authority: %w", path, err)
 			}
 		}
 		if caPEM != nil {
 			pool := x509.NewCertPool()
 			if !pool.AppendCertsFromPEM(caPEM) {
-				return "", fmt.Errorf("kubeconfig %s: cluster %q CA bundle contains no usable certificates", path, clusterName)
+				return "", nil, fmt.Errorf("kubeconfig %s: cluster %q CA bundle contains no usable certificates", path, clusterName)
 			}
 			tlsCfg.RootCAs = pool
 		}
 		break
 	}
 	if server == "" {
-		return "", fmt.Errorf("kubeconfig %s: cluster %q not found or has no server", path, clusterName)
+		return "", nil, fmt.Errorf("kubeconfig %s: cluster %q not found or has no server", path, clusterName)
 	}
-	return server, nil
+	return server, caPEM, nil
 }
 
 // applyKubeconfigUser resolves the named user's credentials into the client
@@ -194,6 +196,7 @@ func applyKubeconfigUser(kc *kubeconfigFile, userName, path string, resolve func
 				return fmt.Errorf("kubeconfig %s: load client certificate: %w", path, cerr)
 			}
 			tlsCfg.Certificates = []tls.Certificate{cert}
+			client.certPEM, client.keyPEM = certPEM, keyPEM
 		case u.User.Token != "":
 			client.staticToken = u.User.Token
 		case u.User.TokenFile != "":

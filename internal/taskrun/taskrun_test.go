@@ -6,10 +6,12 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/ElcanoTek/fleet/internal/fakellm"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
+	"github.com/ElcanoTek/fleet/internal/tools"
 )
 
 func TestLoadTaskYAML(t *testing.T) {
@@ -170,5 +172,61 @@ func TestFreshWorkspacePerRun(t *testing.T) {
 	}
 	if runs != 2 {
 		t.Fatalf("expected 2 distinct per-run workspace dirs under %s, found %d", base, runs)
+	}
+}
+
+// TestOneShotRegistersFileToolConfinement pins the #1290 fix in the one-shot
+// harness: a run registers the workspace root the file tools validate against
+// (previously they fell back to the process-cwd allowlist and rejected every
+// workspace-relative path), mints a container-readable workspace, and seeds
+// the bundle's supporting-doc symlinks into it.
+func TestOneShotRegistersFileToolConfinement(t *testing.T) {
+	startFakeLLM(t, "ok")
+	base := t.TempDir()
+	t.Setenv("FLEET_WORKSPACE_ROOT", base)
+	taskFile := writeTaskFile(t, `"hello"`)
+	logPath := filepath.Join(t.TempDir(), "session.json")
+	if err := run([]string{"--log", logPath, taskFile}, "taskrun-test"); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ws string
+	for _, e := range entries {
+		if e.IsDir() && strings.HasPrefix(e.Name(), "task-run-") {
+			ws = filepath.Join(base, e.Name())
+		}
+	}
+	if ws == "" {
+		t.Fatalf("no minted per-run workspace under %s", base)
+	}
+
+	// Container-readable: the sandbox uid (1000) must be able to chdir in
+	// (MkdirTemp mints 0o700 — see resolveWorkspace).
+	fi, err := os.Stat(ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := fi.Mode().Perm(); perm&0o055 != 0o055 {
+		t.Fatalf("minted workspace not traversable by the sandbox user: %04o", perm)
+	}
+
+	// Gap (a): the workspace root is registered, so a workspace path passes
+	// host validation even when the process cwd is elsewhere.
+	if _, err := tools.ValidatePath(filepath.Join(ws, "notes.md")); err != nil {
+		t.Fatalf("workspace-relative path still rejected after run: %v", err)
+	}
+
+	// Gap (c): the generic bundle's protocols dir was symlinked into the
+	// minted workspace so bare `protocols/...` paths resolve.
+	target, err := os.Readlink(filepath.Join(ws, "protocols"))
+	if err != nil {
+		t.Fatalf("protocols symlink not seeded into the one-shot workspace: %v", err)
+	}
+	if fi, err := os.Stat(target); err != nil || !fi.IsDir() {
+		t.Fatalf("protocols symlink target %q not a dir: %v", target, err)
 	}
 }

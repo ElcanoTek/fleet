@@ -275,6 +275,10 @@ same PR.
 - **Chat stream recovery** (why a lost SSE socket reconciles against Postgres
   instead of stamping a terminal state — the walk-away-and-come-back case):
   [`docs/CHAT-STREAM-RECOVERY.md`](docs/CHAT-STREAM-RECOVERY.md)
+- **Shared files** (the native cross-chat file library: canonical bytes
+  host-side, a read-only staged tree under the workspace root both sandbox
+  backends mount, the reconciler, the size cap):
+  [`docs/SHARED-FILES.md`](docs/SHARED-FILES.md)
 - **Task titles** (the operator-facing display label, and why it is NOT the
   unique import/export `name` column): [`docs/TASK-TITLES.md`](docs/TASK-TITLES.md)
 - **MCP server hot-reload** (add/remove/update MCP servers without a restart via
@@ -287,6 +291,9 @@ same PR.
   guided tenant/API-key/BYO-client add forms, the per-user api_key auth mode):
   [`docs/MCP-CATALOG.md`](docs/MCP-CATALOG.md) +
   [`docs/CONNECTOR-ONBOARDING.md`](docs/CONNECTOR-ONBOARDING.md)
+- **Bundle-managed SES/S3 email-report infrastructure:** use the external
+  canonical [new-client email-report runbook](https://github.com/ElcanoTek/ses-s3-setup/blob/main/docs/NEW-CLIENT-EMAIL-SETUP.md);
+  keep client-specific inventory in the external client bundle.
 - **White-labeling from a bundle** (`branding:` — strings, `logo`, the themable
   color tokens, what stays build-time env, and the trust class of the two brand
   asset routes): [`docs/BRANDING.md`](docs/BRANDING.md)

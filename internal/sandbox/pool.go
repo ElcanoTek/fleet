@@ -156,8 +156,12 @@ type PoolConfig struct {
 
 	// DefaultNetworkMode is the fleet-wide egress posture (#211):
 	// NetworkModeOpen (or ""), NetworkModeAllowlisted, or NetworkModeLockdown.
-	// It is advisory data the SCHEDULED run path reads via EgressDefault to pick
-	// a take method; the pool does not act on it itself.
+	// The scheduled run path (and its interactive/approval mirrors) reads it
+	// via EgressDefault to pick a take method. Under NetworkModeLockdown the
+	// pool also acts on it itself (#1291): warm spawns are sealed
+	// (NoNetwork=true — see warmContainerConfig) so the warm inventory matches
+	// the only posture any take may receive, and a sealed default-ceilings
+	// TakeContainer claims it instead of always cold-starting.
 	DefaultNetworkMode string
 
 	// DefaultEgressAllowlist is the fleet-wide domain allowlist applied in
@@ -246,11 +250,17 @@ func (p *Pool) stale(ps parkedSandbox) bool {
 	return p.cfg.WarmTTL > 0 && p.now().Sub(ps.parkedAt) > p.cfg.WarmTTL
 }
 
-// TakeContainer always returns a fresh container-mode sandbox with
-// no-network enforced. Used by the lockdown path — lockdown chats
-// force network-isolated containers regardless of the warm pool. Always
-// cold-starts (no warm pool for forced-container turns); the latency
-// cost is the price of opt-in lockdown mode.
+// TakeContainer returns a fresh container-mode sandbox with no-network
+// enforced. Used by the lockdown paths — a per-conversation lockdown chat and
+// the fleet-wide lockdown mode force network-isolated containers.
+//
+// Under FLEET-WIDE lockdown (PoolConfig.DefaultNetworkMode) the warm pool
+// itself spawns sealed sandboxes (see warmContainerConfig), so this take
+// claims a parked one when available — it already has the exact posture and
+// pool-default ceilings a sealed take wants (#1291). On every other pool the
+// warm inventory is open-egress, so this cold-starts: a sealed take must
+// NEVER receive an open sandbox, and the cold-start latency is the price of a
+// per-conversation lockdown on an otherwise open fleet.
 //
 // Returns ErrContainerUnavailable when the pool wasn't constructed
 // with a container image (test/mock setups).
@@ -285,13 +295,20 @@ func (ov ResourceOverride) applyTo(cfg ContainerConfig) ContainerConfig {
 	return cfg
 }
 
-// TakeContainerWithOverrides cold-starts a fresh container like TakeContainer,
-// but applies per-task resource overrides (#205) and lets the caller choose the
+// TakeContainerWithOverrides returns a fresh container like TakeContainer,
+// applying per-task resource overrides (#205), and lets the caller choose the
 // network posture: noNetwork=true seals egress (--network=none, the lockdown
 // boundary and the default for sealed scheduled runs), false leaves the default
-// rootless slirp4netns egress (matching the warm pool's newSandbox). Always
-// cold-starts — a warm pooled container is already running with the pool's
-// ceilings, so per-task limits inherently require a fresh container.
+// rootless slirp4netns egress (matching an open pool's warm spawns).
+//
+// It cold-starts with ONE exception (#1291): a sealed, no-override take on a
+// pool whose fleet-wide mode is lockdown rides the warm pool, because there
+// the warm inventory is spawned sealed with the pool-default ceilings —
+// exactly what the caller asked for. Everything else must cold-start: any
+// resource override needs a fresh container (a warm pooled one is already
+// running with the pool's ceilings), and a sealed take on a NON-lockdown pool
+// must not touch the warm inventory (those sandboxes are open-egress — handing
+// one to a sealed take would break the lockdown boundary).
 //
 // Returns ErrContainerUnavailable when the pool wasn't constructed with a
 // container image (test/mock setups), exactly like TakeContainer.
@@ -304,6 +321,14 @@ func (p *Pool) TakeContainerWithOverrides(ctx context.Context, ov ResourceOverri
 	}
 	if p.cfg.Container.Image == "" {
 		return nil, func() {}, ErrContainerUnavailable
+	}
+	if noNetwork && ov == (ResourceOverride{}) && p.warmSealed() {
+		// The warm inventory is sealed and carries the pool-default ceilings,
+		// so a parked sandbox has the exact posture this take wants — claim it
+		// instead of paying a full container cold start on every lockdown turn
+		// (#1291). Take's own no-slot fallback cold-starts through
+		// warmContainerConfig, so the sealed posture holds warm or cold.
+		return p.Take(ctx)
 	}
 	cfg := p.cfg.Container
 	cfg.BridgeScript = p.cfg.BridgeScript
@@ -821,11 +846,39 @@ func (p *Pool) storageOptSupported(ctx context.Context) bool {
 	return p.storageOptOK
 }
 
+// warmSealed reports whether this pool's warm inventory spawns with egress
+// sealed: fleet-wide lockdown mode (#211) on a container backend. ModeHost is
+// excluded — a host sandbox has no network namespace to seal, and host pools
+// never reach the container take paths anyway (ErrContainerUnavailable).
+func (p *Pool) warmSealed() bool {
+	return p.cfg.DefaultNetworkMode == NetworkModeLockdown &&
+		(p.cfg.Mode == ModeContainer || p.cfg.Mode == ModeKubernetes)
+}
+
+// warmContainerConfig resolves the per-sandbox config that warm spawns (fill)
+// and Take's no-slot cold start use. Under fleet-wide lockdown the sandboxes
+// spawn SEALED (#1291): lockdown seals EVERY sandbox regardless of per-task
+// AllowNetwork (ADR-0012's kill-switch contract), so an open-egress warm
+// container is one that no take under lockdown may ever claim. Before this,
+// warm spawns used the pool config verbatim (NoNetwork=false): under lockdown
+// the pool was N idle open containers of dead reserved capacity, respawned
+// forever by the TTL keeper — and on kubernetes the parked pods carried
+// egress=open beside a boot log claiming every pod is labeled none. Sealing
+// here makes that label true by construction and is what lets sealed takes
+// claim the warm pool (TakeContainerWithOverrides).
+func (p *Pool) warmContainerConfig() ContainerConfig {
+	cfg := p.cfg.Container
+	cfg.BridgeScript = p.cfg.BridgeScript
+	if p.warmSealed() {
+		cfg.NoNetwork = true
+	}
+	return cfg
+}
+
 func (p *Pool) newSandbox(ctx context.Context) (*Sandbox, error) {
 	switch p.cfg.Mode {
 	case ModeContainer, ModeKubernetes:
-		cfg := p.cfg.Container
-		cfg.BridgeScript = p.cfg.BridgeScript
+		cfg := p.warmContainerConfig()
 		// startTimeoutFor applies the same default the backend constructor
 		// would apply internally. Without this, the OUTER context timeout is
 		// `0+5s = 5s` when StartTimeout isn't set explicitly, which

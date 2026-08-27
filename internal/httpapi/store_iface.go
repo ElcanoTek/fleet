@@ -250,6 +250,15 @@ type chatStore interface {
 	StorageConversationStats(ctx context.Context, cutoff time.Time) (store.StorageConversationStats, error)
 	DeleteUnpinnedOlderThan(ctx context.Context, cutoff time.Time) (int, error)
 	ConversationStorageMetaByIDs(ctx context.Context, ids []string) (map[string]store.ConversationStorageMeta, error)
+	// Cross-chat shared file library (migration 053, docs/SHARED-FILES.md):
+	// manifest CRUD for /shared-files plus the per-turn prompt block and the
+	// staged-tree reconciler. Bytes never pass through the store.
+	ListSharedFiles(ctx context.Context) ([]store.SharedFile, error)
+	GetSharedFile(ctx context.Context, id string) (store.SharedFile, error)
+	CreateSharedFile(ctx context.Context, f store.SharedFile) (store.SharedFile, error)
+	UpdateSharedFileMeta(ctx context.Context, id, name, folder, description string) (store.SharedFile, error)
+	DeleteSharedFile(ctx context.Context, id string) (store.SharedFile, error)
+	TotalSharedFileBytes(ctx context.Context) (int64, error)
 }
 
 // Compile-time proof that the concrete Postgres store satisfies the interface —

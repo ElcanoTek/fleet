@@ -296,6 +296,12 @@ protocols/foo.yaml` is *refused* (`fileop root is not inside a sandbox bind
 mount`) rather than attempted. The workspace symlinks still point at the
 bundle's absolute paths, so `bash`/`run_python` reads fail too, as not-found.
 
+The one exception is a read-only root that lives *inside* the claim: the
+shared file library's staged tree (`<workspace>/shared`,
+[SHARED-FILES.md](SHARED-FILES.md)) reaches every pod by construction, and the
+pod spec re-mounts that subPath of the same claim read-only, so the library is
+readable — and only readable — with no image rebuild and no host bind.
+
 The fix is the sandbox image. Build it with the bundle's doc dirs baked in at
 the **same absolute paths** the control plane uses (`FLEET_CLIENT_CONFIG_DIR`),
 then declare it:
@@ -333,7 +339,13 @@ for bash and python. Four things to be honest about:
   inside the sandbox. A wrong declaration surfaces as a not-found read.
 - **Only the bundle's own doc dirs are covered.** Other entries in the mount
   list (the uploads root) live in control-plane state no image can contain;
-  they stay dropped, with a log line each.
+  they stay dropped, with a log line each. Chat attachments don't need that
+  mount here: under this backend the chat server copies each validated
+  non-image attachment into the conversation's workspace directory
+  (`<workspace>/<convID>/attachments/`) — inside the claim every pod mounts —
+  and the prompt block advertises the staged path, so `view_file`/`bash`
+  reads work without the uploads root. (Image attachments reach the model
+  host-side as vision input on both backends and need no staging.)
 - **The merged skills tree is never covered** — see the honest-scope list.
 - **The baked copy is a snapshot.** Build and roll the control-plane and
   sandbox images from the same bundle commit, or the agent reads one release's
@@ -469,10 +481,11 @@ Recorded here so nobody discovers them in production:
   its full CPU, memory and ephemeral-storage allocation before any turn runs.
   Do the arithmetic: the reservation is
   `warmSize × (sandbox.cpus, sandbox.memory, sandbox.diskGB)`, and it must be
-  schedulable on the runner pool on top of peak concurrency. Note that
-  `FLEET_SANDBOX_WARM_SIZE=0` does **not** mean "no warm pool" — unset, fleet
-  derives the depth from `FLEET_MAX_CONCURRENT_AGENTS`, clamped to 2..8, so
-  eight concurrent agents parks eight pods. Set it explicitly.
+  schedulable on the runner pool on top of peak concurrency. With `warmSize`
+  unset, fleet derives the depth from `FLEET_MAX_CONCURRENT_AGENTS`, clamped
+  to 2..8 — so eight concurrent agents parks eight pods. Set it explicitly to
+  pin the depth; `warmSize: 0` means **no warm pool** (every turn then pays a
+  cold pod start).
 
 - **An open sandbox pod is a full citizen of the cluster network.** Podman's
   non-lockdown default is rootless pasta/slirp4netns with no host-loopback:
