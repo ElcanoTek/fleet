@@ -184,6 +184,23 @@ func contextCompactionThreshold(p EnvPrefix) float64 {
 	)
 }
 
+// defaultBudgetWindDownFraction is the fraction of the cost/token ceiling at
+// which the run starts receiving a request-local wrap-up notice (#990,
+// borrowed from Prime Agent's goal budget wind-down): the model is told to
+// stop starting substantive work and report progress/remaining/blockers
+// BEFORE the hard ceiling cuts it off mid-thought.
+const defaultBudgetWindDownFraction = 0.8
+
+// budgetWindDownFraction resolves FLEET_BUDGET_WINDDOWN_FRACTION, clamped to
+// (0,1] like the context thresholds. Setting it to 1 disables the notice in
+// practice: at 100% the hard ceiling (budgetGuardedStep) fires first.
+func budgetWindDownFraction(p EnvPrefix) float64 {
+	return clampFraction(
+		p.lookupFloatDefault("BUDGET_WINDDOWN_FRACTION", defaultBudgetWindDownFraction),
+		defaultBudgetWindDownFraction,
+	)
+}
+
 // clampFraction returns v when it lies in (0,1]; otherwise def. A misconfigured
 // threshold must not silently compact every round (≤0) or never fire (>1).
 func clampFraction(v, def float64) float64 {

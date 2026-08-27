@@ -396,7 +396,11 @@ func (o *orchestrationState) checkFinishEnforcement() (bool, []string) {
 		if !o.selfAuditRequested {
 			o.selfAuditRequested = true
 			log.Println("Enforcement: Self Audit not requested. Rejecting finish.")
-			return false, []string{"Before finishing: read protocols/self-audit.md, verify your work, then call confirm_audit(...)."}
+			// The audit wording (#990, borrowed from Prime Agent's goal
+			// completion audit) names the two rationalizations unattended runs
+			// actually fail on: declaring done on intent, and declaring done on
+			// a plausible-sounding final answer nothing verified.
+			return false, []string{"Before finishing: read protocols/self-audit.md and audit the current state against every requirement of the original task — do not treat intent, partial progress, or a plausible final answer as proof of completion. Then call confirm_audit(...)."}
 		}
 
 		if !o.selfAuditConfirmedOnce {

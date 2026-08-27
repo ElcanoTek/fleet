@@ -494,9 +494,10 @@ func summarizeDroppedMiddle(ctx context.Context, tc TurnConfig, in agentcore.Com
 	if in.OverCeiling != nil && in.OverCeiling() {
 		return placeholderCompactionSummary(len(droppable))
 	}
+	systemPrompt := compactionSummarizePromptFor(droppable)
 	agent := fantasy.NewAgent(tc.Model,
-		fantasy.WithSystemPrompt(compactionSummarizeSystemPrompt),
-		fantasy.WithPrepareStep(agentcore.ModelContextBudgetStep(compactionSummarizeSystemPrompt, nil, 4096)),
+		fantasy.WithSystemPrompt(systemPrompt),
+		fantasy.WithPrepareStep(agentcore.ModelContextBudgetStep(systemPrompt, nil, 4096)),
 	)
 	convo := append(append([]fantasy.Message{}, droppable...), fantasy.NewUserMessage("Produce the summary as instructed above."))
 	maxTokens := int64(4096)
@@ -547,8 +548,81 @@ func itoa(n int) string {
 	return string(buf[i:])
 }
 
-// compactionSummarizeSystemPrompt drives the compaction summary call (chat's
-// summarize prompt, trimmed to the compaction use).
-const compactionSummarizeSystemPrompt = `You are condensing a chat between a user and an assistant so the conversation can continue with a smaller context.
+// compactionSummarizePromptFor selects the compaction summary system prompt:
+// the structured initial template, or the iterative UPDATE variant when the
+// droppable middle already contains a previous compaction summary (identified
+// by compactionSummaryPrefix — proactive compaction inserts each summary right
+// after the pinned head, so the next compaction's droppable half carries it).
+// The update variant exists because re-summarizing a summary with the generic
+// prompt quietly sheds detail each round; treating the previous summary as a
+// baseline to update, with explicit preservation rules, keeps early facts
+// (file paths, decisions, error messages) alive across repeated compactions.
+// (Prompt structure borrowed from Prime Agent's compaction machinery — see
+// docs/PRIME-AGENT-COMPARISON.md and issue #990.)
+func compactionSummarizePromptFor(droppable []fantasy.Message) string {
+	if containsPriorCompactionSummary(droppable) {
+		return compactionSummarizeSystemPrompt + compactionSummarizeUpdateAddendum
+	}
+	return compactionSummarizeSystemPrompt
+}
 
-Produce a structured plain-text summary covering: what the user is trying to accomplish; decisions made; concrete findings (exact file paths, numbers, metric names); open threads; and working artifacts. Be specific and do not speculate. Aim for 200–600 words. Return only the summary text, no preamble.`
+// containsPriorCompactionSummary reports whether any user-role message in the
+// slice is a previous compaction summary (its text starts with
+// compactionSummaryPrefix — both agentcore's placeholder and the summarizer
+// wrapper in buildInteractiveCompactionSummarizer tag summaries that way).
+func containsPriorCompactionSummary(messages []fantasy.Message) bool {
+	for _, m := range messages {
+		if m.Role != fantasy.MessageRoleUser {
+			continue
+		}
+		for _, part := range m.Content {
+			if tp, ok := fantasy.AsMessagePart[fantasy.TextPart](part); ok &&
+				strings.HasPrefix(tp.Text, compactionSummaryPrefix) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// compactionSummarizeSystemPrompt drives the compaction summary call. The
+// fixed section structure keeps repeated compactions from drifting into
+// freeform prose, and the Critical Context section is what lets the agent
+// keep using workspace files whose creating messages are gone.
+const compactionSummarizeSystemPrompt = `You are condensing a chat between a user and an AI agent so the conversation can continue with a smaller context.
+
+Produce a structured plain-text summary with these sections (omit a section only when it has no content):
+
+## Goal
+What the user is trying to accomplish, in their own terms.
+
+## Constraints & Preferences
+Requirements, style choices, and boundaries the user stated.
+
+## Progress
+### Done
+### In Progress
+### Blocked
+
+## Key Decisions
+Decisions made and why, including alternatives that were rejected.
+
+## Next Steps
+Concrete follow-ups, in order.
+
+## Critical Context
+Exact file paths, function names, identifiers, URLs, error messages, and numbers needed to continue. The agent's sandbox workspace (files it wrote) and any persistent Python session keep their state through this summarization — the messages that created them will no longer be visible, so record the paths and variable names worth remembering.
+
+Be specific and do not speculate. Preserve exact file paths, function names, and error messages verbatim. Aim for 300–800 words. Do NOT continue the conversation — return only the summary text, no preamble.`
+
+// compactionSummarizeUpdateAddendum is appended for repeat compactions: the
+// droppable middle contains the previous summary, and the call must UPDATE it
+// rather than re-summarize from scratch (which sheds a little more early
+// detail on every round).
+const compactionSummarizeUpdateAddendum = `
+
+One or more messages beginning with "` + compactionSummaryPrefix + `" are PREVIOUS compaction summaries of still-older history. Treat the newest of them as the baseline and UPDATE it against the messages that follow it:
+- PRESERVE all baseline information the newer messages do not supersede.
+- Move items between Done / In Progress / Blocked as the newer messages show progress.
+- Add new decisions, next steps, and critical context from the newer messages.
+- PRESERVE exact file paths, function names, and error messages from the baseline.`

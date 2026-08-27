@@ -55,6 +55,40 @@ func TestCompactionSummarizerRefusesOversizedInputBeforeProvider(t *testing.T) {
 	}
 }
 
+// TestCompactionSummarizePromptSelection pins the iterative-update behavior
+// (#990): a droppable middle that carries a previous compaction summary must
+// get the UPDATE addendum (preserve-the-baseline rules), and a first
+// compaction must not.
+func TestCompactionSummarizePromptSelection(t *testing.T) {
+	fresh := []fantasy.Message{
+		fantasy.NewUserMessage("please refactor the auth flow"),
+		{Role: fantasy.MessageRoleAssistant, Content: []fantasy.MessagePart{fantasy.TextPart{Text: "working on it"}}},
+	}
+	if got := compactionSummarizePromptFor(fresh); strings.Contains(got, "PREVIOUS compaction summaries") {
+		t.Fatalf("first compaction must not use the update addendum")
+	}
+
+	repeat := append([]fantasy.Message{
+		fantasy.NewUserMessage(compactionSummaryPrefix + "] earlier summary body"),
+	}, fresh...)
+	got := compactionSummarizePromptFor(repeat)
+	if !strings.Contains(got, "PREVIOUS compaction summaries") {
+		t.Fatalf("repeat compaction must use the update addendum")
+	}
+	if !strings.Contains(got, "## Critical Context") {
+		t.Fatalf("update prompt must keep the structured template")
+	}
+
+	// An assistant message carrying the prefix text is not a summary marker:
+	// only user-role messages are compaction summaries.
+	assistantOnly := []fantasy.Message{
+		{Role: fantasy.MessageRoleAssistant, Content: []fantasy.MessagePart{fantasy.TextPart{Text: compactionSummaryPrefix + "] quoted by the model"}}},
+	}
+	if containsPriorCompactionSummary(assistantOnly) {
+		t.Fatalf("assistant-role text must not count as a prior summary")
+	}
+}
+
 func (m *itMockModel) Stream(ctx context.Context, call fantasy.Call) (fantasy.StreamResponse, error) {
 	m.mu.Lock()
 	m.streamCount++

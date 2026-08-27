@@ -17,6 +17,29 @@ prior versions are listed because none have shipped.
 
 ## [Unreleased]
 
+### Added
+
+- **Prime Agent borrowings (#990).** A comparison of fleet against
+  Prime Intellect's `prime-agent` harness, with the four ideas that cleared
+  the high-value bar ported behind fleet's existing governance
+  ([docs/PRIME-AGENT-COMPARISON.md](docs/PRIME-AGENT-COMPARISON.md)):
+  the interactive compaction summarizer now produces a **structured**
+  summary (Goal / Constraints / Progress / Key Decisions / Next Steps /
+  Critical Context) and switches to an **update-the-previous-summary**
+  prompt on repeat compactions so early facts stop eroding; both compaction
+  paths **re-announce the task-tracker plan** (host-side state the finish
+  gate keeps enforcing) right after the summary when open items remain; a
+  new `FLEET_BUDGET_WINDDOWN_FRACTION` knob (default `0.8`, clamped to
+  `(0,1]`, registered in the env-knob registry) injects a request-local
+  **budget wind-down** notice into every provider call once spend crosses
+  the soft threshold — wrap up cleanly instead of running silently into the
+  hard ceiling — with a one-shot `fleet.budget_winddown` event; and the
+  scheduled self-audit nudge now carries the **completion-audit** wording
+  (intent, partial progress, and a plausible final answer are not proof of
+  completion). Deliberate non-borrowings (the single-`ipython` RLM design,
+  self-writing harness state, agent-to-agent messaging, kernel snapshots)
+  are recorded in the comparison doc with reasons.
+
 ### Changed
 
 - **Env-knob strictness now covers the knobs parsed outside the config
