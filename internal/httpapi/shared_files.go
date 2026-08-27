@@ -31,11 +31,6 @@ import (
 // "repair" — a mutation's intermediate state. Any residual drift (a crash
 // between row and tree) self-heals on the next Sync.
 
-// sharedFileMaxPromptEntries caps the per-turn prompt block, mirroring
-// maxWorkspaceInventoryEntries: the library is announced, not inlined, and a
-// pathological 500-file library must not flood every user message.
-const sharedFileMaxPromptEntries = 50
-
 // sharedFilesLibrary derives the library's tree locations from config, the
 // same way the sandbox pool derives its workspace mount — falling back to
 // ./workspace when FLEET_WORKSPACE_ROOT is unset so both resolve identically.
@@ -378,33 +373,18 @@ func (s *Server) SyncSharedFiles(ctx context.Context) error {
 // appendWorkspaceInventoryBlock: paths the agent can read RIGHT NOW, relative
 // to its cwd (through the per-conversation "shared" symlink), instead of state
 // it must remember or rediscover. Empty library (or a read error — the turn
-// must proceed) appends nothing.
+// must proceed) appends nothing. The block text itself lives in
+// sharedfiles.PromptBlock, the one renderer both the chat and scheduled
+// drivers announce the library through (#1301).
 func (s *Server) appendSharedFilesBlock(ctx context.Context, message string) string {
 	files, err := s.store.ListSharedFiles(ctx)
 	if err != nil {
 		log.Printf("shared files: list for prompt block: %v", err)
 		return message
 	}
-	if len(files) == 0 {
+	block := sharedfiles.PromptBlock(files)
+	if block == "" {
 		return message
 	}
-	var b strings.Builder
-	b.WriteString(strings.TrimRight(message, "\n"))
-	b.WriteString("\n\n---\n**Shared file library** (files your administrator published to every conversation; read them at these paths with `bash`/`run_python`/`view_file`. They are READ-ONLY — to modify one, copy it into your workspace first):\n")
-	overflow := 0
-	if len(files) > sharedFileMaxPromptEntries {
-		overflow = len(files) - sharedFileMaxPromptEntries
-		files = files[:sharedFileMaxPromptEntries]
-	}
-	for _, f := range files {
-		fmt.Fprintf(&b, "- `%s` (%s)", sharedfiles.PromptPath(f), humanSize(f.SizeBytes))
-		if f.Description != "" {
-			fmt.Fprintf(&b, " — %s", f.Description)
-		}
-		b.WriteString("\n")
-	}
-	if overflow > 0 {
-		fmt.Fprintf(&b, "- …and %d more — use `bash ls -R shared/` to enumerate the full library.\n", overflow)
-	}
-	return b.String()
+	return strings.TrimRight(message, "\n") + "\n\n" + block
 }

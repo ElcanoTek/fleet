@@ -98,6 +98,16 @@ type Options struct {
 	UserSkills       func(ctx context.Context, email string) ([]UserSkillDoc, error)
 	SkillProposerFor func(ownerEmail string) agentcore.SkillProposer
 
+	// SharedFilesPrompt returns the shared-file-library announcement block for
+	// a run's system prompt (#1301), or "" when the library is empty or
+	// unavailable. cmd/fleet wires it over the chat store through
+	// sharedfiles.PromptBlock — the SAME renderer chat turns use — so a
+	// scheduled run is told about the staged shared/ tree it can already read
+	// (#1290 seeds the symlink) instead of discovering it only when a prompt
+	// happens to name a file. nil = no announcement (`fleet task run` has no
+	// DB and therefore no library — documented scope, not a gap).
+	SharedFilesPrompt func(ctx context.Context) string
+
 	// OpenTaskMCPScope creates one broker-owned MCP client for a scheduled run.
 	// Nil preserves the in-process compatibility binder.
 	OpenTaskMCPScope TaskMCPScopeOpener
@@ -177,6 +187,10 @@ type Runner struct {
 	userSkills       func(ctx context.Context, email string) ([]UserSkillDoc, error)
 	skillProposerFor func(ownerEmail string) agentcore.SkillProposer
 
+	// sharedFilesPrompt announces the shared file library in a run's system
+	// prompt (#1301). nil = no announcement.
+	sharedFilesPrompt func(ctx context.Context) string
+
 	openTaskMCPScope   TaskMCPScopeOpener
 	mcpServerInventory TaskMCPServerInventoryProvider
 }
@@ -226,6 +240,7 @@ func New(opts Options) *Runner {
 		openRemoteMCPOverlay: opts.OpenRemoteMCPOverlay,
 		userSkills:           opts.UserSkills,
 		skillProposerFor:     opts.SkillProposerFor,
+		sharedFilesPrompt:    opts.SharedFilesPrompt,
 		openTaskMCPScope:     opts.OpenTaskMCPScope,
 		mcpServerInventory:   opts.MCPServerInventory,
 	}
@@ -828,6 +843,15 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 	taskSystemPrompt += structuredoutput.PromptAugmentation(task.OutputSchema)
 
 	taskSystemPrompt = r.appendOwnerSkills(ctx, taskSystemPrompt, ownerSkillEmail)
+
+	// Shared file library announcement (#1301): the workspace already carries
+	// the readable shared/ tree (#1290 seeds the symlink; the staged copy is
+	// mounted on both backends), but nothing told the model it exists — so
+	// "attach historical data once, every run uses it" only worked when a
+	// prompt happened to name a file. Same renderer as chat turns; computed
+	// once per run, so the run's system prompt stays byte-stable across its
+	// turns (docs/PROMPT-CACHE-CONTRACT.md).
+	taskSystemPrompt = r.appendSharedFilesSection(ctx, taskSystemPrompt)
 
 	// Sub-agent delegation (#1043): compute the composed gate once — it decides
 	// BOTH the tool registration (SubagentOptions.Enabled below) and this
@@ -1629,6 +1653,21 @@ func (r *Runner) appendOwnerSkills(ctx context.Context, prompt, ownerEmail strin
 		return prompt
 	}
 	return prompt + renderUserSkillsSection(docs)
+}
+
+// appendSharedFilesSection appends the shared-file-library announcement
+// (#1301) to a run's system prompt. Best-effort like every other prompt
+// section here: a nil provider (feature off, or `fleet task run`'s no-DB
+// one-shot) or an empty library appends nothing, and the run proceeds.
+func (r *Runner) appendSharedFilesSection(ctx context.Context, prompt string) string {
+	if r.sharedFilesPrompt == nil {
+		return prompt
+	}
+	block := r.sharedFilesPrompt(ctx)
+	if block == "" {
+		return prompt
+	}
+	return prompt + "\n\n" + block
 }
 
 // taskSkillProposer binds propose_skill staging to the resolved task owner;

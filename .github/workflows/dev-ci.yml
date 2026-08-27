@@ -529,7 +529,9 @@ jobs:
   dev-gate:
     name: Dev gate
     # Aggregate check for branch protection: passes only when every fast-lane
-    # job succeeded (mirrors ci.yml's `CI gate`).
+    # job succeeded (mirrors ci.yml's `CI gate`). A superseded run — needed
+    # jobs cancelled by the concurrency group, none failed — concludes
+    # neutral instead of red (#1302).
     if: always()
     needs: [go, python, codeql, semgrep, web, migrations, gitleaks, helm, actions]
     runs-on: ubuntu-latest
@@ -549,6 +551,28 @@ jobs:
           # shellcheck disable=SC2153
           results="$RESULTS"
           echo "job results: $results"
+          # A real failure always wins: red means red, whatever else happened.
+          for r in $results; do
+            if [ "$r" = "failure" ]; then
+              echo "::error::a fast-lane job failed"
+              exit 1
+            fi
+          done
+          # Cancelled-but-nothing-failed means this run was SUPERSEDED: every
+          # dev merge cancels the in-flight run on the now-stale tip (the
+          # concurrency group above), and before #1302 this gate then reported
+          # FAILURE over those cancelled jobs — a red X beside a commit nobody
+          # promoted that meant nothing, yet had to be manually cleared as
+          # benign every time. This job still runs on a cancelled run because
+          # of `if: always()`; conclude neutral (exit 0) so the run's verdict
+          # stays "cancelled", not "failed". The run never vouches for the
+          # commit either way — the superseding run does.
+          for r in $results; do
+            if [ "$r" = "cancelled" ]; then
+              echo "::notice::run superseded: needed jobs were cancelled and none failed; Dev gate concludes neutral (#1302)"
+              exit 0
+            fi
+          done
           for r in $results; do
             [ "$r" = "success" ] || { echo "a fast-lane job did not succeed"; exit 1; }
           done

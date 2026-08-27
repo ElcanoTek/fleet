@@ -6,6 +6,7 @@ package sharedfiles
 // direction — missing file, wrong-sized file, stray file, stray empty folder.
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -121,6 +122,43 @@ func TestPromptPath(t *testing.T) {
 	}
 	if got := PromptPath(store.SharedFile{Name: "a.csv", Folder: "hist"}); got != "shared/hist/a.csv" {
 		t.Errorf("folder PromptPath = %q", got)
+	}
+}
+
+// TestPromptBlock pins the one announcement renderer both drivers use
+// (#1301): empty library renders nothing, entries carry the shared/ path +
+// human size + optional description, and the cap degrades to an enumeration
+// hint instead of flooding the prompt.
+func TestPromptBlock(t *testing.T) {
+	if got := PromptBlock(nil); got != "" {
+		t.Fatalf("empty-library PromptBlock = %q, want empty", got)
+	}
+
+	files := []store.SharedFile{
+		{Name: "a.csv", SizeBytes: 8, Description: "history"},
+		{Name: "b.csv", Folder: "q3", SizeBytes: 2048},
+	}
+	block := PromptBlock(files)
+	for _, want := range []string{
+		"**Shared file library**",
+		"- `shared/a.csv` (8 B) — history\n",
+		"- `shared/q3/b.csv` (2.0 KB)\n",
+	} {
+		if !strings.Contains(block, want) {
+			t.Errorf("PromptBlock missing %q in %q", want, block)
+		}
+	}
+
+	many := make([]store.SharedFile, MaxPromptEntries+3)
+	for i := range many {
+		many[i] = store.SharedFile{Name: fmt.Sprintf("f%03d.txt", i), SizeBytes: 1}
+	}
+	block = PromptBlock(many)
+	if want := "…and 3 more"; !strings.Contains(block, want) {
+		t.Errorf("overflow PromptBlock missing %q", want)
+	}
+	if strings.Count(block, "- `shared/") != MaxPromptEntries {
+		t.Errorf("overflow PromptBlock lists %d entries, want %d", strings.Count(block, "- `shared/"), MaxPromptEntries)
 	}
 }
 

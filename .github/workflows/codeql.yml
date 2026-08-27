@@ -401,6 +401,24 @@ jobs:
           # shellcheck disable=SC2153
           results="$RESULTS"
           echo "job results: $results"
+          # A real failure always wins.
+          for r in $results; do
+            if [ "$r" = "failure" ]; then
+              echo "::error::a CodeQL analysis failed"
+              exit 1
+            fi
+          done
+          # Cancelled-but-nothing-failed means the run was superseded (the
+          # caller's concurrency group cancelled it for a newer tip); this job
+          # still runs because of `if: always()`. Conclude neutral instead of
+          # painting a meaningless red X on the stale commit — the superseding
+          # run carries the real verdict (#1302).
+          for r in $results; do
+            if [ "$r" = "cancelled" ]; then
+              echo "::notice::run superseded: analyses were cancelled and none failed; CodeQL gate concludes neutral (#1302)"
+              exit 0
+            fi
+          done
           for r in $results; do
             [ "$r" = "success" ] || { echo "a CodeQL analysis did not succeed"; exit 1; }
           done

@@ -52,9 +52,15 @@ library** block (capped at 50 entries, like the workspace inventory block)
 listing each file's `shared/…` path, size, and admin-written description, with
 the instruction to copy a file into the workspace before modifying it.
 
-Scheduled/task runs get no prompt block (deliberately — see below), but the
-staged tree is mounted in their sandboxes too, so a task prompt can reference
-`<WorkspaceRoot>/shared/<name>` explicitly. (Recurring-task *input* files
+Scheduled runs under `fleet serve` get the same announcement (#1301): the
+block is appended once to the run's system prompt — computed at run start, so
+the prompt stays byte-stable across the run's turns
+(docs/PROMPT-CACHE-CONTRACT.md) — through the same renderer chat uses
+(`sharedfiles.PromptBlock`), and the workspace seeding (#1290) plants the same
+`shared` symlink, so `shared/<folder>/<name>` resolves identically. One-shot
+`fleet task run` is the exception: it has no DB and therefore no library — no
+announcement, and referencing `shared/` there resolves only if the operator
+staged something at that path themselves. (Recurring-task *input* files
 remain a separate mechanism: `tasks.files` staged per run into the MCP
 workspace `inputs/` dir.)
 
@@ -115,9 +121,10 @@ delete, and a usage meter against the cap.
   conversations + attachments or an MCP connector.
 - **No chat-composer browser.** The library is announced in the prompt block
   and managed in Settings; a composer-side picker is a follow-on.
-- **No task prompt block.** Scheduled runs can read the staged tree but are
-  not told about it automatically; wiring the block into task prompts is a
-  follow-on once someone actually needs it.
+- **No `fleet task run` announcement.** The one-shot harness has no DB, so it
+  has no library manifest to announce (or stage). Scheduled runs under
+  `fleet serve` DO get the announcement as of #1301 — the former "no task
+  prompt block" deferral shipped.
 - **No versioning/dedup.** Re-uploading a name in the same folder is a `409`;
   delete-then-upload is the update path. sha256 is recorded per file, so
   integrity is checkable, but two identical uploads store two copies.
