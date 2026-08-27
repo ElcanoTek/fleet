@@ -161,6 +161,58 @@ func PromptPath(f store.SharedFile) string {
 	return tools.SharedFilesDirName + "/" + f.Name
 }
 
+// MaxPromptEntries caps the announcement block, mirroring the workspace
+// inventory's cap: enough to make the library discoverable, bounded so a
+// large library cannot bloat every prompt.
+const MaxPromptEntries = 50
+
+// PromptBlock renders the announcement that tells the model the library
+// exists: paths it can read RIGHT NOW (through the "shared" symlink both the
+// chat and scheduled workspace seeding plant), instead of state it must
+// remember or rediscover. Returns "" for an empty library. Both drivers use
+// this one renderer — chat appends it to each turn's user message
+// (httpapi.appendSharedFilesBlock), scheduled runs to the run's system prompt
+// (#1301) — so what the model is told about the library can never differ by
+// entrypoint.
+func PromptBlock(files []store.SharedFile) string {
+	if len(files) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("---\n**Shared file library** (files your administrator published to every conversation; read them at these paths with `bash`/`run_python`/`view_file`. They are READ-ONLY — to modify one, copy it into your workspace first):\n")
+	overflow := 0
+	if len(files) > MaxPromptEntries {
+		overflow = len(files) - MaxPromptEntries
+		files = files[:MaxPromptEntries]
+	}
+	for _, f := range files {
+		fmt.Fprintf(&b, "- `%s` (%s)", PromptPath(f), humanSize(f.SizeBytes))
+		if f.Description != "" {
+			fmt.Fprintf(&b, " — %s", f.Description)
+		}
+		b.WriteString("\n")
+	}
+	if overflow > 0 {
+		fmt.Fprintf(&b, "- …and %d more — use `bash ls -R shared/` to enumerate the full library.\n", overflow)
+	}
+	return b.String()
+}
+
+// humanSize matches the httpapi attachment formatter so the same file reads
+// the same size everywhere it is announced.
+func humanSize(n int64) string {
+	switch {
+	case n < 1024:
+		return fmt.Sprintf("%d B", n)
+	case n < 1024*1024:
+		return fmt.Sprintf("%.1f KB", float64(n)/1024)
+	case n < 1024*1024*1024:
+		return fmt.Sprintf("%.1f MB", float64(n)/(1024*1024))
+	default:
+		return fmt.Sprintf("%.1f GB", float64(n)/(1024*1024*1024))
+	}
+}
+
 // canonicalPath locates a row's authentic bytes. The id is server-minted, but
 // verify locality anyway so no DB state can turn this into a traversal.
 func (l Library) canonicalPath(id string) (string, error) {

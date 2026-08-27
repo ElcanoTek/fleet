@@ -77,6 +77,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
 	"github.com/ElcanoTek/fleet/internal/scheduledrun"
 	"github.com/ElcanoTek/fleet/internal/secretbox"
+	"github.com/ElcanoTek/fleet/internal/sharedfiles"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/taskrun"
 	"github.com/ElcanoTek/fleet/internal/tools"
@@ -840,8 +841,22 @@ func run() error {
 		// scheduled runs inline the owner's ACTIVE skills into the prompt and
 		// stage agent-drafted proposals against the same chat-store rows the
 		// Skills page reviews.
-		UserSkills:         userSkillDocsProvider(chatStore),
-		SkillProposerFor:   skillProposerFactory(chatStore),
+		UserSkills:       userSkillDocsProvider(chatStore),
+		SkillProposerFor: skillProposerFactory(chatStore),
+		// Shared file library announcement (#1301): scheduled workspaces already
+		// carry the readable shared/ tree (#1290 seeds the symlink; the staged
+		// copy is mounted on both backends) — announce it in the run's system
+		// prompt through the SAME renderer chat turns use, over the same chat
+		// store manifest. Best-effort: a list error logs and the run proceeds
+		// unannounced, mirroring the chat path.
+		SharedFilesPrompt: func(ctx context.Context) string {
+			files, err := chatStore.ListSharedFiles(ctx)
+			if err != nil {
+				log.Printf("shared files: list for scheduled prompt block: %v", err)
+				return ""
+			}
+			return sharedfiles.PromptBlock(files)
+		},
 		OpenTaskMCPScope:   mcpRuntime.openTaskScope,
 		MCPServerInventory: mcpRuntime.inventory.snapshot,
 	})

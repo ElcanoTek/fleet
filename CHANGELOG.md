@@ -19,6 +19,18 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Scheduled runs are now told the shared file library exists (#1301).**
+  Since #1290/#1296 a scheduled run's workspace has carried the readable
+  `shared/` tree, but the announcement block lived only on the chat path —
+  so "attach historical data once, every run uses it" worked for scheduled
+  work only when a task prompt happened to name a file. The block renderer
+  moved to `sharedfiles.PromptBlock` (one renderer, both drivers — chat
+  turns are byte-identical to before), and `fleet serve` wires the scheduled
+  runner a provider that appends the same capped block to each run's system
+  prompt, computed once at run start so the prompt stays byte-stable across
+  the run's turns. One-shot `fleet task run` stays out of scope (no DB, no
+  library) and docs/SHARED-FILES.md now says all of this plainly.
+
 - **Superseded CI runs no longer paint a red X: the gate rollups treat
   cancelled needed jobs as neutral (#1302).** Every rapid dev merge cancels
   the in-flight `dev-ci` run on the now-stale tip (the concurrency group),
