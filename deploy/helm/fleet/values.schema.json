@@ -44,7 +44,7 @@
         "memory": { "type": "string" },
         "cpus": { "type": ["string", "number"] },
         "diskGB": { "type": "integer" },
-        "warmSize": { "type": "integer", "minimum": 0 },
+        "warmSize": { "type": ["integer", "null"], "minimum": 0 },
         "kubernetes": {
           "type": "object",
           "additionalProperties": false,

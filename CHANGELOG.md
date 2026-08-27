@@ -19,6 +19,22 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **`FLEET_SANDBOX_WARM_SIZE=0` now means what it says: no warm pool**
+  (#1264). Before, `0` was indistinguishable from unset, so the engine
+  silently derived a 2..8-deep pool from `FLEET_MAX_CONCURRENT_AGENTS` — and
+  the Helm chart reinforced the confusion by omitting the env var at
+  `warmSize: 0` and documenting `0` as "derive". Found in the #1264 kind
+  rehearsal, where the bundle's overlay set `warmSize: 0`, documented itself
+  as running with no warm pool, and ran a two-pod Guaranteed-QoS pool anyway.
+  Now: unset derives (unchanged default), an explicit `0` disables warming
+  (every take pays a cold start — the pool always supported this), a positive
+  value pins the depth, and a negative value fails loudly at load. The chart's
+  `sandbox.warmSize` default is now `null` (= let the engine derive) and any
+  set value — including `0` — is passed through. **Semantic change:** an
+  operator who set `FLEET_SANDBOX_WARM_SIZE=0` (or chart `warmSize: 0`)
+  expecting derivation now gets no warm pool — delete the key to keep the
+  derived depth.
+
 - **`fleet validate-config`'s model_api check now actually verifies the API
   key** (#1264). It probed OpenRouter's `/api/v1/models`, which is public —
   it returns 200 with no Authorization header and with a garbage one — so any

@@ -1135,9 +1135,10 @@ type Config struct {
 	// one is FLEET_UPLOAD_MAX_BYTES, default 1 GiB and operator-tunable. See
 	// sandbox.ContainerConfig.DiskLimitGB.
 	SandboxDiskGB int
-	// SandboxWarmSize overrides the warm-pool depth (FLEET_SANDBOX_WARM_SIZE).
-	// 0 (default) derives it from MaxConcurrentAgents (clamped 2..8); a positive
-	// value pins the depth explicitly (#181).
+	// SandboxWarmSize sets the warm-pool depth (FLEET_SANDBOX_WARM_SIZE).
+	// Unset (the -1 sentinel) derives it from MaxConcurrentAgents (clamped
+	// 2..8, #181); an explicit 0 disables the warm pool entirely — every take
+	// pays a cold start (#1264); a positive value pins the depth.
 	SandboxWarmSize int
 	// SandboxWarmTTLSeconds bounds how long a warm container may sit idle before
 	// it is reaped and replaced (FLEET_SANDBOX_WARM_TTL, default 300). 0 disables
@@ -1614,7 +1615,7 @@ func Load(envFile string) (*Config, error) {
 		SandboxMemoryMaxMB:    lp.getenvFleetInt("SANDBOX_MEMORY_MAX_MB", 8192),
 		SandboxCPUsMax:        lp.getenvFleetFloat("SANDBOX_CPUS_MAX", 16.0),
 		SandboxPidsMax:        lp.getenvFleetInt("SANDBOX_PIDS_MAX", 1024),
-		SandboxWarmSize:       lp.getenvFleetInt("SANDBOX_WARM_SIZE", 0),
+		SandboxWarmSize:       lp.getenvFleetInt("SANDBOX_WARM_SIZE", -1),
 		SandboxWarmTTLSeconds: lp.getenvFleetInt("SANDBOX_WARM_TTL", 300),
 
 		PythonREPLMode:           normalizePythonREPLMode(getenvFleetDefault("PYTHON_REPL_MODE", pythonREPLModePerTurn)),
@@ -1682,6 +1683,13 @@ func Load(envFile string) (*Config, error) {
 	if cfg.LockdownOnly && cfg.SandboxImage == "" {
 		fmt.Fprintln(os.Stderr, "warn: FLEET_LOCKDOWN_ONLY=true but sandbox image is unset; cannot enforce — treating as disabled")
 		cfg.LockdownOnly = false
+	}
+
+	// An explicit negative warm size is a misconfiguration, not a request to
+	// derive: fail loudly (#1264). The -1 default above means "unset"; 0 is a
+	// real value (no warm pool).
+	if cfg.SandboxWarmSize < -1 {
+		return nil, fmt.Errorf("FLEET_SANDBOX_WARM_SIZE must be >= 0 (0 disables the warm pool; leave it unset to derive from FLEET_MAX_CONCURRENT_AGENTS), got %d", cfg.SandboxWarmSize)
 	}
 
 	// Validate the sandbox egress mode (#211): an unknown value must fail loudly

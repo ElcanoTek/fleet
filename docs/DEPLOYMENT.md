@@ -51,7 +51,8 @@ the keyboard; chat still bursts to the full cap when the scheduler is idle. When
 the box is genuinely at capacity, a new chat turn waits briefly, then returns a
 clean "at capacity — resend in a moment" instead of hanging or over-subscribing
 the host. The sandbox warm pool scales with the cap (up to 8 pre-warmed) — pin it
-explicitly with `FLEET_SANDBOX_WARM_SIZE`, and a background keeper reaps and
+explicitly with `FLEET_SANDBOX_WARM_SIZE` (`0` disables the warm pool
+entirely), and a background keeper reaps and
 replaces a warm container that has sat idle past `FLEET_SANDBOX_WARM_TTL` (default
 **300s**), bounding the age of any warm container a turn can receive (so a
 long-idle container that may have been OOM-killed or cgroup-frozen is rotated out
