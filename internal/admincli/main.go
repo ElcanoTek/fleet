@@ -198,7 +198,12 @@ Users, credentials, notes:
   fleet sched apikey delete <key-id>
   fleet sched task list [--status scheduled] [--limit 50] [--json]   (most recent first; the daily-driver read)
   fleet sched task export > tasks.json    (versioned JSON of scheduled tasks → stdout)
-  fleet sched task import < tasks.json     (recreate tasks from stdin; upsert on id)
+  fleet sched task import [--replace-status] < tasks.json
+                                                 (recreate tasks from stdin; upsert on id. An id that already
+                                                  exists here is a write over live state: a status collision is
+                                                  refused unless --replace-status is passed, a running/leased
+                                                  task is never written over, and lease columns are never
+                                                  imported onto an existing row — docs/OPERATORS.md)
   fleet sched task batch-create --from-file <file> [--atomic]
                                                  (submit multiple tasks atomically or best-effort from a JSON file)
   fleet sched task set-model --model <slug> [--fallback-model <slug>] [--from-model <slug>] [--dry-run] [--no-confirm]

@@ -22,8 +22,16 @@ import (
 // AddTask adds or updates a task via the registry-derived single-row upsert
 // (taskInsertStatement, task_columns.go). The columns deliberately absent
 // from the insert or its ON CONFLICT clause — effective_priority,
-// recurrence_spawned, the result-like/pause/wake columns — are declared,
-// with per-column reasons, on their taskColumnRegistry rows.
+// recurrence_spawned, the result-like/pause/wake columns, and (since #1270)
+// the creation-time created_by_key_id provenance — are declared, with
+// per-column reasons, on their taskColumnRegistry rows.
+//
+// It stays an UNCONDITIONAL upsert: status and the lease columns ride the ON
+// CONFLICT clause, so a caller that writes an id which already exists writes
+// over live state. That verbatim behavior is load-bearing for same-generation
+// re-import idempotency, so the operator import paths validate the collision
+// at their OWN seam (internal/admincli/import_policy.go, #1267) rather than
+// having AddTask second-guess its callers.
 //
 // taskInsertArgs populates actual_duration_seconds (#274) whenever a
 // completion timestamp is present alongside a start, so EVERY write path

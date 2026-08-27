@@ -315,6 +315,22 @@ func (s *Storage) GetTask(taskID uuid.UUID) (*models.Task, error) {
 	return s.db.GetTask(context.Background(), taskID)
 }
 
+// GetTaskWithContext gets a task by ID under the caller's context, returning
+// (nil, nil) when no such row exists. The import paths' target lookup (#1267):
+// their collision policy must tell "no row here, this is a create" apart from
+// a real query failure, and it needs the target's status + lease, which
+// TaskExists cannot report.
+func (s *Storage) GetTaskWithContext(ctx context.Context, taskID uuid.UUID) (*models.Task, error) {
+	task, err := s.db.GetTask(ctx, taskID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return task, nil
+}
+
 // TaskExists reports whether a task row with the given id exists (#713).
 func (s *Storage) TaskExists(ctx context.Context, taskID uuid.UUID) (bool, error) {
 	return s.db.TaskExists(ctx, taskID)

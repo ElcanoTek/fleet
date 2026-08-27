@@ -19,6 +19,33 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **A re-imported task envelope can no longer resurrect a finished task or
+  null a live lease (#1267), and API-key provenance is now immutable after
+  creation (#1270).** `db.AddTask` is an unconditional full-column upsert
+  whose `ON CONFLICT (id)` clause carries `status`, `lease_owner` and
+  `lease_expires_at`, and two operator import paths reached it against
+  EXISTING rows with no status validation — so re-importing an envelope of a
+  task that had since run to `success` rewrote `success`→`scheduled` with the
+  stale `scheduled_for` (the due sweep re-queued it and its emails/MCP writes
+  ran again — the #1104 double-execution shape through a supported flow), and
+  an import over a `running` row overwrote its lease mid-run. The upsert stays
+  verbatim (that is what makes same-generation re-import idempotent); the
+  policy now lives at the import seam: transient statuses (`leased`,
+  `running`, both paused) are rejected at envelope validation by the SAME
+  predicate that already gated legacy-bundle births, a status collision on an
+  existing row is refused unless the operator passes the new `fleet sched task
+  import --replace-status` (the legacy importer's pre-existing `--overwrite`
+  is that path's opt-in), and NEITHER flag can touch a lease: a write over a
+  `running`/`leased` row is refused outright and the lease columns are never
+  importable onto an existing row. Separately, `created_by_key_id` — in the
+  upsert set but never in `UpdateTaskTx`, with only "historical asymmetry" as
+  its recorded reason — is now excluded from the upsert too: provenance is
+  stamped by the insert that creates the row and by nothing after it, so no
+  generic write path can re-attribute or clear the attribution the
+  own-rows authorization checks read. See docs/OPERATORS.md ("sched task
+  export · import"), docs/LEGACY-IMPORT.md, and the narrowed out-of-model
+  warning on `models.TaskLifecycle`.
+
 - **A round-capped scheduled run keeps the transcript it paid for (#1271).**
   When a scheduled run exhausts the 20 enforcement rounds without its finish
   gates ever clearing, `agentcore.Run` returns the accumulated transcript and
