@@ -439,6 +439,40 @@ this host or volume, and it does not capture attachment/upload files. See
 **[`docs/BACKUP_RESTORE.md`](BACKUP_RESTORE.md)** for the full recovery runbook,
 the honest scope, and the round-trip verification procedure.
 
+## sched task export · import — moving scheduled tasks between boxes
+
+`fleet sched task export > tasks.json` writes a versioned envelope of the box's
+`scheduled` tasks; `fleet sched task import < tasks.json` writes them back,
+**preserving ids** (so a re-import of the same envelope is idempotent) and the
+full row, not just the portable definition. That is what makes it the cross-box
+migration tool — for definition-only, name-keyed moves (git-tracked job
+definitions) use `fleet task export|import` instead.
+
+Because ids are preserved, an import can land on a row this box already has,
+which is a write over **live** state rather than a create. The policy (#1267):
+
+```
+fleet sched task import < tasks.json                    # definition restore; refuses a status collision
+fleet sched task import --replace-status < tasks.json   # restore surgery: the envelope's status wins
+```
+
+- A task id that does **not** exist here is inserted verbatim, status included.
+- A task id that **does** exist, whose status differs from the envelope's, is
+  refused — the whole import aborts before writing anything, naming the task.
+  Without that, re-importing an envelope exported while a task was `scheduled`,
+  after that task ran to `success`, would rewrite `success` → `scheduled` with
+  the stale `scheduled_for`; the due sweep would re-queue it and the task's
+  external side effects (emails, MCP writes) would run again.
+- `--replace-status` is the explicit opt-in to that rewrite. Use it to restore a
+  wiped box from an envelope; know that re-queueing a finished task re-runs its
+  side effects.
+- A task that is **running or leased** here is refused under either flag, and
+  `lease_owner` / `lease_expires_at` are never importable onto an existing row.
+  An import cannot null, steal, or fabricate a lease.
+- An envelope carrying a transient status (`leased`, `running`, either paused
+  state) is rejected at validation: those name lease/pause state no import can
+  honor.
+
 ## Where the sandbox build fits
 
 The execution sandbox is a **per-client bundle artifact**: each bundle ships its

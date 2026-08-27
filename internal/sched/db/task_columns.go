@@ -451,13 +451,20 @@ var taskColumnRegistry = []taskColumn{
 	},
 	{
 		name: "created_by_key_id",
-		read: true, insert: true, upsert: true,
-		// Historical asymmetry, preserved verbatim by #1126: the upsert path
-		// (AddTask / UpdateTask) DOES carry created_by_key_id, but UpdateTaskTx
-		// never has. Inert for today's callers — every UpdateTaskTx caller
-		// writes back a row scanned under the same lock — but flagged so the
-		// asymmetry is a decision, not an accident.
-		noTxUpdate: "creation-time provenance: never rewritten by the tx update path (note: the insert/upsert path does carry it — historical asymmetry preserved by #1126)",
+		read: true, insert: true,
+		// Provenance is IMMUTABLE after creation (#1270). #1126 inherited an
+		// asymmetry it could only preserve: the column was in the upsert set
+		// (so UpdateTask → AddTask could rewrite a task's submitting API key)
+		// but never in UpdateTaskTx, with no rationale recorded either side.
+		// The write policy is now decided rather than inherited — the row's
+		// provenance is stamped by the ONE insert that creates it and by
+		// nothing afterwards, so a later generic write (an operator import
+		// landing on an existing id, a spawn/edit round-trip through an
+		// upsert) can neither re-attribute the row to another key nor clear
+		// the attribution the authorization paths read (handlers/task_authz.go
+		// + log_authz.go key their own-rows checks on it).
+		noUpsert:   "creation-time provenance: stamped by the insert that creates the row and immutable afterwards, so no generic write path (import upsert included, #1267) can re-attribute or clear it (#1270)",
+		noTxUpdate: "creation-time provenance: immutable after the creating insert (#1270) — the tx update path re-writes a scanned row, it never re-stamps who submitted it",
 		noExport:   "creation-time provenance (the submitting API key); meaningless on the import target (#238)",
 		value:      func(t *models.Task) any { return t.CreatedByKeyID },
 		dest:       func(b *taskScanBuf) any { return &b.createdByKeyID },
