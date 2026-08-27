@@ -19,6 +19,20 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Superseded CI runs no longer paint a red X: the gate rollups treat
+  cancelled needed jobs as neutral (#1302).** Every rapid dev merge cancels
+  the in-flight `dev-ci` run on the now-stale tip (the concurrency group),
+  and `Dev gate` / `CodeQL gate` — which run even on a cancelled run via
+  `if: always()` — then reported *failure* over jobs that concluded
+  `cancelled`, leaving a misleading red X someone had to manually verify as
+  benign after every merge train. All three rollups (`Dev gate`, `CodeQL
+  gate`, and `CI gate` on main for consistency) now conclude neutral when
+  needed jobs were cancelled and none failed; a genuinely failing job still
+  turns the gate red, and a skip on a non-docs-only change still fails `CI
+  gate`. The one accepted caveat is documented in ci.yml: a human manually
+  cancelling a PR-head run and then merging over it is deliberate, not a
+  case the gate exists to catch.
+
 - **`FLEET_SANDBOX_WARM_SIZE` now rejects every explicit negative at the
   validation seam (#1299).** The knob registry row carries `min: 0`, so boot,
   hot-reload, and `fleet validate-config` all refuse a negative depth loudly —
