@@ -81,3 +81,45 @@ func TestRegisterSecretLiteralScrubsNovelFormat(t *testing.T) {
 		t.Fatalf("empty literal corrupted redaction: %q", out)
 	}
 }
+
+// TestRegisterSecretLiteralsScopedRotationKeepsLiveSecrets covers the
+// scope-aware wrapper the hosted-MCP secret observer is wired to (#1274). The
+// generation swap must never cost coverage of a credential that is still in
+// play: the fresh pair is scrubbed immediately, and the pair it superseded is
+// still scrubbed — a rotated-out token gets a grace window measured in minutes,
+// not an instant eviction, because an in-flight request can still echo it.
+func TestRegisterSecretLiteralsScopedRotationKeepsLiveSecrets(t *testing.T) {
+	const scope = "remotemcp:test-row"
+	// Marker-less placeholders: no shape pattern matches them, so only literal
+	// registration can scrub them. Names deliberately carry no credential
+	// keyword — an obviously-fake fixture assigned to a `secret`/`key`-named
+	// identifier is what trips gitleaks.
+	const (
+		carried = "placeholder-carried-across-the-swap-value"
+		oldA    = "placeholder-superseded-access-value"
+		oldB    = "placeholder-superseded-refresh-value"
+		newA    = "placeholder-live-access-value"
+		newB    = "placeholder-live-refresh-value"
+	)
+
+	RegisterSecretLiterals(scope, true, carried, oldA, oldB)
+	for _, live := range []string{carried, oldA, oldB} {
+		if out := RedactSecrets("upstream quoted " + live); strings.Contains(out, live) {
+			t.Fatalf("first generation not redacted: %q", out)
+		}
+	}
+
+	// The refresh mints a new pair; the client secret is re-listed, so it stays
+	// live across the swap.
+	RegisterSecretLiterals(scope, true, carried, newA, newB)
+	for _, live := range []string{carried, newA, newB} {
+		if out := RedactSecrets("upstream quoted " + live); strings.Contains(out, live) {
+			t.Fatalf("post-rotation live secret not redacted: %q", out)
+		}
+	}
+	for _, graced := range []string{oldA, oldB} {
+		if out := RedactSecrets("stale error quoted " + graced); strings.Contains(out, graced) {
+			t.Errorf("a just-rotated-out secret was evicted immediately instead of keeping its grace window: %q", out)
+		}
+	}
+}

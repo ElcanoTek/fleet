@@ -37,8 +37,8 @@ func toolRedactor() *redact.Redactor {
 		// construction, so a value offered concurrently is either buffered here
 		// and drained, or added directly — never dropped between the two.
 		pendingMu.Lock()
-		for _, v := range pendingLiterals {
-			r.AddLiteral(v)
+		for _, p := range pendingLiterals {
+			r.RegisterSecrets(p.scope, p.rotated, p.values...)
 		}
 		pendingLiterals = nil
 		sharedRedactor = r
@@ -65,17 +65,48 @@ func toolRedactor() *redact.Redactor {
 // boundary; it is the backstop for output that comes back from the other side of
 // it.
 func RegisterSecretLiteral(value string) {
-	if value == "" {
+	RegisterSecretLiterals("", false, value)
+}
+
+// RegisterSecretLiterals is the scope-aware form, and the function the
+// hosted-MCP control plane's runtime secret observer is wired to (#1274).
+//
+// scope names a ROTATING credential set — one hosted-MCP server row, whose
+// OAuth access+refresh pair is replaced wholesale on every refresh; rotated
+// says these values REPLACE that scope's previous generation, which the
+// redactor then retires after its grace window instead of keeping forever. An
+// empty scope means "does not rotate on a clock" and registers permanently,
+// exactly like RegisterSecretLiteral. Everything RegisterSecretLiteral
+// promises still holds: values are kept only as scrub targets, never emitted,
+// and calls before the redactor exists are buffered and drained at
+// construction (in order, so a rotation cannot be replayed out of sequence).
+func RegisterSecretLiterals(scope string, rotated bool, values ...string) {
+	kept := make([]string, 0, len(values))
+	for _, v := range values {
+		if v != "" {
+			kept = append(kept, v)
+		}
+	}
+	if len(kept) == 0 && !rotated {
 		return
 	}
 	pendingMu.Lock()
 	if sharedRedactor == nil {
-		pendingLiterals = append(pendingLiterals, value)
+		pendingLiterals = append(pendingLiterals, pendingLiteral{scope: scope, rotated: rotated, values: kept})
 		pendingMu.Unlock()
 		return
 	}
 	pendingMu.Unlock()
-	sharedRedactor.AddLiteral(value)
+	sharedRedactor.RegisterSecrets(scope, rotated, kept...)
+}
+
+// pendingLiteral is one buffered registration (see RegisterSecretLiterals):
+// the rotation semantics are order-sensitive, so the buffer keeps whole calls
+// rather than a flat value list.
+type pendingLiteral struct {
+	scope   string
+	rotated bool
+	values  []string
 }
 
 var (
@@ -83,8 +114,8 @@ var (
 	sharedRedactor *redact.Redactor
 
 	// pendingMu guards literals registered before the redactor is built. It
-	// also guards the sharedRedactor nil-check in RegisterSecretLiteral so a
+	// also guards the sharedRedactor nil-check in RegisterSecretLiterals so a
 	// value cannot be dropped by racing construction.
 	pendingMu       sync.Mutex
-	pendingLiterals []string
+	pendingLiterals []pendingLiteral
 )
