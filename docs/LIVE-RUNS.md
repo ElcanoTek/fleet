@@ -45,7 +45,12 @@ for both interactive chat and scheduled tasks (#508).
   stop is not a failure. The live stream emits a terminal
   `{"status":"stopped","stopped_by":…}` frame. The Stop button appears on the
   live view for admins and for the task's creator (the server enforces ownership
-  and never lets a member stop a teammate's task).
+  and never lets a member stop a teammate's task). Stop means only "stop
+  something that could still run": a row already in ANY terminal status —
+  `dead_lettered` included since #1268, because cancelling a quarantined run
+  would silently destroy the replay it is being kept for — is refused with a
+  400 rather than re-settled, and the error for a DLQ row names the two things
+  that do work (`fleet sched dlq replay <task_id>`, or deleting the row).
 - **Classification fix**: a force-cancelled run returns a nil error with a
   partial session; the runner previously mislabeled that as `success`.
   Interruption is now keyed on the task context, so shutdown-grace kills
