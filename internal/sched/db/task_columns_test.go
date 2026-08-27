@@ -338,6 +338,13 @@ func TestTaskRegistryRoundTrip(t *testing.T) {
 	// are zero (and its EffectivePriority is the stale pre-sweep 25), so any
 	// seeded value coming back changed means the upsert clobbered a column it
 	// is excluded from.
+	//
+	// created_by_key_id is the one upsert-excluded column whose stored value
+	// the scan DOES carry back, so zeroing it would prove nothing: hand the
+	// upsert a DIFFERENT key instead. Provenance is immutable after the
+	// creating insert (#1270), so the stored "key-1" must survive an upsert
+	// that tries to re-attribute the row.
+	got.CreatedByKeyID = strPtr("key-2-attempted-rewrite")
 	if err := d.AddTask(ctx, got); err != nil {
 		t.Fatalf("AddTask upsert: %v", err)
 	}
@@ -357,6 +364,9 @@ func TestTaskRegistryRoundTrip(t *testing.T) {
 	expUpsert.WakeCycles = 7
 	expUpsert.PausedAt = &seedTime
 	expUpsert.EffectivePriority = 7 // the in-memory task carried 25; the upsert must not write it back
+	// Provenance is stamped by the creating insert and by nothing after it
+	// (#1270): the upsert carried "key-2-attempted-rewrite" and must be ignored.
+	expUpsert.CreatedByKeyID = strPtr("key-1")
 	assertTaskFieldsEqual(t, "upsert exclusion", &expUpsert, afterUpsert, nil)
 	assertRecurrenceSpawned(t, d, task.ID, true, "upsert exclusion")
 
@@ -401,7 +411,7 @@ func TestTaskRegistryRoundTrip(t *testing.T) {
 	expTx.WakeCycles = 7
 	expTx.PausedAt = &seedTime
 	expTx.EffectivePriority = 7
-	expTx.CreatedByKeyID = strPtr("key-1") // txUpdate-excluded (historical asymmetry): must keep the stored key
+	expTx.CreatedByKeyID = strPtr("key-1") // immutable provenance (#1270): must keep the stored key
 	assertTaskFieldsEqual(t, "txUpdate exclusion", &expTx, afterTx, nil)
 	assertRecurrenceSpawned(t, d, task.ID, true, "txUpdate exclusion")
 

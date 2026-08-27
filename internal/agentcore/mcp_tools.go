@@ -19,12 +19,14 @@ import (
 // MCP tool wrapping + the ONE buildFantasyTools skeleton both modes feed
 // (merged from chat + cutlass fantasy.go).
 //
-// The Gate-1 opt-in (`if optionalServers[name] && !optIn[name] { skip }`) is
-// chat's gate and is byte-identical for both modes per the migration ledger:
-// the scheduled producer derives optIn from its task's MCPSelection server
-// names, the interactive producer from the conversation's opt-in list. Accounts
-// do NOT affect which tools register (that is §6.3 wiring); they affect which
-// subprocess/env backs the server.
+// The Gate-1 opt-in (skip unless the Optional key governing the server is in
+// optIn — see the keying rule below) is chat's gate and is byte-identical for
+// both modes per the migration ledger: the scheduled producer derives optIn
+// from its task's MCPSelection server names, the interactive producer from the
+// conversation's opt-in list. Accounts do NOT affect which tools register (that
+// is §6.3 wiring); they affect which subprocess/env backs the server — but they
+// DO change the name the server registers under, which is why Gate-1 resolves
+// its key through longestServerKey instead of an exact map lookup (#1272).
 //
 // Tool-level enforcement is routed through the Policy seam (BeforeToolCall /
 // RecordToolResult) rather than a hardcoded orchestrationState method chain, so
@@ -41,33 +43,93 @@ const maxToolsPerRequest = 128
 // governance survives an expired callCtx.
 var toolCallTimeout = 5 * time.Minute
 
+// ── THE ONE SERVER-NAME KEYING RULE (#1272) ──────────────────────────────────
+//
+// Every server-keyed MCP gate faces the same gap: the gate map is keyed by
+// MANIFEST (spec) server name, while the catalog the loop walks — and the
+// system prompt's roster of tool names — carries the REGISTERED name, which for
+// a named-account seat is "<server>_<account>" (resolveMCPVariant). One rule
+// closes that gap for every layer:
+//
+//	A key K governs a name N iff N == K, or N begins with K+"_".
+//	When several keys qualify, the LONGEST one wins.
+//
+// Longest-wins is what makes the answer deterministic over a Go map range (two
+// equal-length prefixes of one name at the same offset are the same string) —
+// the property docs/PROMPT-CACHE-CONTRACT.md rests on, because the
+// system-prompt roster applies this same rule and a coin-flip winner would
+// silently bust the cacheable prefix (#1125). It also attributes a variant
+// seat's tools to the variant's OWN key when the bundle declares one, and falls
+// back to its base server's key when it does not — which for the Optional set
+// means fail-closed: an Optional base gates its variant seats too.
+//
+// Callers, all of which MUST route through here rather than an exact lookup:
+// mcpAllowlist.toolsFor (Gate-2), optionalServerFor / OptionalServerFor
+// (Gate-1), and — via OptionalServerForToolName — internal/agent's
+// system-prompt roster filter. (The per-task credential allowlist's
+// registered-name projection, permittedRegisteredNames, and the persona
+// filter's mcp:<server>/* prefix are the same treatment over their own
+// shapes.)
+//
+// wholeName admits the "N == K" branch. It is true for a REGISTERED server
+// name, which can legitimately BE a declared server; it is false for a
+// `mcp_`-stripped roster name, whose trailing `_<tool>` segment means a
+// whole-name hit would be a server+tool coincidence and not the server (the
+// roster name `mcp_jira_search` comes from server "jira" tool "search", and
+// must not resolve to a server literally named "jira_search" — that server's
+// own roster names all carry a further `_<tool>` segment). governs, when
+// non-nil, filters out keys whose value does not participate (the Optional set
+// stores `false` for a declared-but-not-Optional server).
+func longestServerKey[V any](name string, keyed map[string]V, wholeName bool, governs func(V) bool) (string, bool) {
+	best, found := "", false
+	for key, val := range keyed {
+		if governs != nil && !governs(val) {
+			continue
+		}
+		if wholeName && key == name {
+			return key, true
+		}
+		if (!found || len(key) > len(best)) && strings.HasPrefix(name, key+"_") {
+			best, found = key, true
+		}
+	}
+	return best, found
+}
+
 // mcpAllowlist maps server name → allowed tool names. Empty/missing = allow all.
 type mcpAllowlist map[string][]string
 
-// toolsFor returns the allowlist entry governing a REGISTERED server name.
-// Entries are keyed by manifest server name, but a named-account seat registers
-// as "<server>_<account>" (resolveMCPVariant), so a name without an exact entry
-// falls back to the longest manifest key it extends across an underscore — the
-// same variant treatment the credential allowlist's registered-name projection
-// (permittedRegisteredNames) and the persona filter's mcp:<server>/* prefix
-// apply. nil = no entry (allow all).
+// toolsFor returns the allowlist entry governing a REGISTERED server name,
+// resolved by the one keying rule above: an exact manifest key wins, and a
+// named-account seat "<server>_<account>" otherwise falls back to the longest
+// manifest key it extends across an underscore. nil = no entry (allow all).
 func (al mcpAllowlist) toolsFor(registered string) []string {
-	if list, ok := al[registered]; ok {
-		return list
+	if key, ok := longestServerKey(registered, al, true, nil); ok {
+		return al[key]
 	}
-	best := -1
-	var tools []string
-	for name, list := range al {
-		if len(name) > best && strings.HasPrefix(registered, name+"_") {
-			best, tools = len(name), list
-		}
-	}
-	return tools
+	return nil
 }
 
 // mcpOptionalSet reports whether a server is Optional (participates only when
 // opted in for the run).
 type mcpOptionalSet map[string]bool
+
+// optionalTrue is the mcpOptionalSet participation filter for longestServerKey:
+// a key mapped to false is declared but not Optional, so it governs nothing.
+func optionalTrue(optional bool) bool { return optional }
+
+// optionalServerFor returns the Optional key whose per-run opt-in toggle
+// governs a REGISTERED server name, or "" when no Optional key governs it. It
+// is the one keying rule above applied to the Gate-1 set: a variant seat is
+// governed by its own key when the bundle declares one, and by its BASE
+// server's key when it does not — so `jira_prod` (registered from
+// {server: jira, account: prod}) is opt-in gated whenever `jira` is Optional,
+// instead of slipping past an exact map lookup and registering unconditionally
+// while the system prompt hid it (#1272).
+func optionalServerFor(registered string, optional mcpOptionalSet) string {
+	key, _ := longestServerKey(registered, optional, true, optionalTrue)
+	return key
+}
 
 // MCPAllowlist / MCPOptionalSet are the exported aliases the DRIVERS use to
 // build a RunConfig (the underlying map types are otherwise unexported).
@@ -77,6 +139,29 @@ type (
 	// MCPOptionalSet reports which servers are Optional (Gate-1 opt-in).
 	MCPOptionalSet = mcpOptionalSet
 )
+
+// OptionalServerFor is the driver-visible form of the Gate-1 keying rule: given
+// a REGISTERED server name it returns the Optional key whose per-run opt-in
+// toggle governs it ("" = not Optional). Exported so a driver cannot invent a
+// second rule.
+func OptionalServerFor(registered string, optional MCPOptionalSet) string {
+	return optionalServerFor(registered, optional)
+}
+
+// OptionalServerForToolName resolves the Optional key governing a prefixed
+// `mcp_<server>_<tool>` roster name — the system-prompt roster's view of the
+// same decision Gate-1 makes over the registered server name, so what the model
+// SEES and what actually REGISTERS cannot disagree for a variant seat (#1272).
+// The `mcp_` prefix is stripped and the remainder resolved by the shared rule
+// with the whole-name branch disabled (see longestServerKey).
+func OptionalServerForToolName(toolName string, optional MCPOptionalSet) string {
+	rest, ok := strings.CutPrefix(toolName, "mcp_")
+	if !ok {
+		return ""
+	}
+	key, _ := longestServerKey(rest, optional, false, optionalTrue)
+	return key
+}
 
 // toolBuildConfig parameterizes the divergences between the two modes' tool sets.
 type toolBuildConfig struct {
@@ -149,8 +234,15 @@ func buildFantasyTools(
 	mcpSkippedPersona := 0
 	for _, st := range mcpServerTools {
 		// Gate 1: Optional servers only pass if the run opted in. Byte-identical
-		// between modes.
-		if optionalServers[st.ServerName] && !optIn[st.ServerName] {
+		// between modes. The opt-in key is resolved through the ONE keying rule
+		// (optionalServerFor) rather than an exact lookup on the registered
+		// name, so a named-account variant seat is gated by its own Optional key
+		// when the bundle declares one and by its BASE server's key when it does
+		// not. The exact lookup missed the second case entirely: the seat
+		// registered (and was callable) while the system-prompt roster — which
+		// has always resolved the base key by prefix — hid it from the model
+		// (#1272).
+		if optionalKey := optionalServerFor(st.ServerName, optionalServers); optionalKey != "" && !optIn[optionalKey] {
 			mcpSkippedOptional++
 			continue
 		}

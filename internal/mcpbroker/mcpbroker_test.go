@@ -495,6 +495,46 @@ func TestClientServer_MaskedDiscoveryAndReloadAreLogged(t *testing.T) {
 	}
 }
 
+// The scope-aware form (#1274): a ROTATION registers the fresh pair and starts
+// a grace window on the pair it replaced. Both must still be scrubbed from a
+// masked error's host log right after the swap — the rotated-out token can
+// still be quoted by an in-flight request's failure, so retirement is delayed,
+// never immediate. Same bare-token fixture rationale as the test below.
+func TestClientServer_MaskedErrorLogRedactsRotatedTokens(t *testing.T) {
+	const oldBearer = "not-a-real-rotated-out-bearer-fixture"
+	const newBearer = "not-a-real-freshly-minted-bearer-fixture"
+	for _, f := range []string{oldBearer, newBearer} {
+		if scrubbed := redact.NewRedactor(nil).Redact(f); scrubbed != f {
+			t.Fatalf("fixture no longer proves the literal path: patterns now catch %q", f)
+		}
+	}
+
+	resetBrokerRedactor()
+	t.Cleanup(resetBrokerRedactor)
+	// What remotemcp's observer calls: the stored token joins the row's current
+	// generation, then a successful refresh opens the next one.
+	RegisterSecretLiterals("remotemcp:test-row", false, oldBearer)
+	RegisterSecretLiterals("remotemcp:test-row", true, newBearer)
+
+	logged := captureLog(t)
+	fake := &fakeBroker{err: fmt.Errorf("upstream rejected bearers %s and %s", oldBearer, newBearer)}
+	client := loopback(t, fake)
+
+	if _, _, err := client.CallMCP(context.Background(), "pages", "list_pages", nil); err == nil {
+		t.Fatal("CallMCP should have failed")
+	}
+
+	out := logged()
+	for _, f := range []string{oldBearer, newBearer} {
+		if strings.Contains(out, f) {
+			t.Fatalf("a token reached the host log after a rotation: %q", out)
+		}
+	}
+	if !strings.Contains(out, "[REDACTED]") {
+		t.Errorf("expected the scrubbed placeholder in %q", out)
+	}
+}
+
 // A token acquired at RUNTIME (a per-user OAuth bearer minted mid-serve, not a
 // boot-time env secret) must be scrubbed from a masked error's host log once
 // registered via RegisterSecretLiteral (#1124). Same bare-token fixture

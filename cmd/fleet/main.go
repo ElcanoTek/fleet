@@ -2754,7 +2754,10 @@ func setupRemoteMCP(cfg *config.Config, chatStore *store.Store) *remotemcp.Servi
 	// the boot-time env snapshot cannot know them. Without this the parent's
 	// literal set never learned them, and a connector echoing its own bare
 	// token back was scrubbed only if it happened to match a shape pattern.
-	svc.SetSecretObserver(agentcore.RegisterSecretLiteral)
+	// The observer is scope-aware (#1274): each server row's rotations
+	// supersede that row's previous generation, so a long-running process
+	// plateaus instead of scanning for every token it has ever seen.
+	svc.SetSecretObserver(agentcore.RegisterSecretLiterals)
 	// Abandoned OAuth flow rows are reclaimed by the maintenance loop (see
 	// runMaintenancePass), not by a daemon of their own. This used to be a
 	// `for range ticker.C` goroutine with a context.Background() per sweep —

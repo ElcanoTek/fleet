@@ -76,6 +76,116 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **A re-imported task envelope can no longer resurrect a finished task or
+  null a live lease (#1267), and API-key provenance is now immutable after
+  creation (#1270).** `db.AddTask` is an unconditional full-column upsert
+  whose `ON CONFLICT (id)` clause carries `status`, `lease_owner` and
+  `lease_expires_at`, and two operator import paths reached it against
+  EXISTING rows with no status validation — so re-importing an envelope of a
+  task that had since run to `success` rewrote `success`→`scheduled` with the
+  stale `scheduled_for` (the due sweep re-queued it and its emails/MCP writes
+  ran again — the #1104 double-execution shape through a supported flow), and
+  an import over a `running` row overwrote its lease mid-run. The upsert stays
+  verbatim (that is what makes same-generation re-import idempotent); the
+  policy now lives at the import seam: transient statuses (`leased`,
+  `running`, both paused) are rejected at envelope validation by the SAME
+  predicate that already gated legacy-bundle births, a status collision on an
+  existing row is refused unless the operator passes the new `fleet sched task
+  import --replace-status` (the legacy importer's pre-existing `--overwrite`
+  is that path's opt-in), and NEITHER flag can touch a lease: a write over a
+  `running`/`leased` row is refused outright and the lease columns are never
+  importable onto an existing row. Separately, `created_by_key_id` — in the
+  upsert set but never in `UpdateTaskTx`, with only "historical asymmetry" as
+  its recorded reason — is now excluded from the upsert too: provenance is
+  stamped by the insert that creates the row and by nothing after it, so no
+  generic write path can re-attribute or clear the attribution the
+  own-rows authorization checks read. See docs/OPERATORS.md ("sched task
+  export · import"), docs/LEGACY-IMPORT.md, and the narrowed out-of-model
+  warning on `models.TaskLifecycle`.
+
+- **A round-capped scheduled run keeps the transcript it paid for (#1271).**
+  When a scheduled run exhausts the 20 enforcement rounds without its finish
+  gates ever clearing, `agentcore.Run` returns the accumulated transcript and
+  usage alongside the error (#1125) — but the scheduled driver's
+  `if err != nil { return err }` ran before its persistence block, so up to 20
+  rounds of paid assistant text never reached the session log. The driver now
+  recognizes that failure through a new `agentcore.ErrMaxEnforcementRounds`
+  sentinel (not the error text) and writes the carried partial text into the
+  log with a `round_cap_truncated` `message_type`, preceded by a notice naming
+  the rounds burned and the spend. The run still **fails** exactly as before:
+  the same error message, the same `terminal` failure class, the same retry and
+  notification behaviour — only transcript visibility changed.
+
+- **An Optional server's variant seats are now opt-in gated at registration,
+  not just hidden from the prompt (#1272).** The two layers that decide whether
+  an Optional MCP server's tools are available keyed their checks differently:
+  agentcore's Gate-1 did an **exact** map lookup on the registered server name,
+  while the system-prompt roster prefix-matched `mcp_<server>_<tool>` names and
+  resolved the longest matching Optional server. For a named-account seat
+  `jira_prod` whose bundle declares only `jira` as `optional: true`, Gate-1's
+  exact lookup missed — the seat registered and was **callable on every run**
+  while the prompt hid it from the model. Both layers now resolve through one
+  helper (`agentcore.longestServerKey`, exported as `OptionalServerFor` /
+  `OptionalServerForToolName`) implementing a single documented rule — exact key
+  wins, else the longest key the name extends across an underscore — so Gate-1
+  fails closed on a variant seat and what the model sees always matches what
+  registers. Gate-2's per-server tool allowlist resolves through the same
+  helper (its behaviour was already this rule). The rule is written up in
+  docs/AGENT-RUNTIME.md; the roster's byte-stability guard
+  (docs/PROMPT-CACHE-CONTRACT.md) is unchanged and still green.
+
+- **The runtime-secret literal set is now bounded, and the main process's
+  control-plane acquisitions feed it too (#1274).** Both follow-ups deferred
+  from #1124. (1) Every OAuth rotation mints a distinct access+refresh pair,
+  and `redact.Redactor` retained all of them for the process lifetime — with
+  hourly-expiry tokens that is ~50-70 dead secrets per server per day, each
+  costing a `strings.ReplaceAll` pass on every masked-error `Redact` and
+  keeping expired credentials in memory forever. Literals are now either
+  PERMANENT (boot-time env secrets, static api_keys — unchanged) or SCOPED to
+  one hosted-MCP server row, where each successful rotation opens a new
+  generation and the row's previous generation retires after a **15-minute
+  grace window** (`literalRetireGrace`), with a hard cap of 4 retained
+  generations per row as a refresh-storm backstop. Retirement can only ever
+  drop a value the SAME row has superseded: a re-listed secret is revived, a
+  permanent literal is never demoted, and nothing else's literals are touched.
+  Steady state per connection is 3 literals (client secret + live access +
+  live refresh) instead of unbounded growth. (2) The main process's
+  control-plane acquisitions — the OAuth callback's code exchange, the
+  authorize step's unsealed client secret, dynamic client registration, and
+  the add-time / rotate-time api_key probes — now register their credentials
+  with the process-wide scrubber before the request that could echo them, and
+  the remote-MCP HTTP error path (which relays wrapped VENDOR failure text)
+  runs through that scrubber instead of shape patterns alone.
+- **Task transition guards are now one shared set, and cancelling a
+  dead-lettered task no longer erases its replayability (#1268, #1269).** The
+  four storage transition writers each hand-listed their own terminal refusal
+  set and they disagreed: `DeadLetterTaskWithContext` refused all four terminal
+  statuses while `CancelTaskAtomic`, `UpdateTaskStatusAtomicWithContext` and
+  `RequeueTaskForRetryWithContext` refused only three — the latter two shielded
+  from `dead_lettered` purely by the unenforced fact that a quarantined row
+  holds no lease. All four now guard on `TaskStatus.IsTerminal()`, the one
+  shared set `models.TerminalTaskStatuses` is cross-checked against at package
+  init, so a new terminal status cannot be honored by one writer and forgotten
+  by the next. Only the refusal *style* still differs, deliberately: cancel is
+  an operator request and errors, the three lease-guarded runner writers return
+  the row unchanged so a late idempotent report cannot fail a run that already
+  landed. Two consequences: **cancel now refuses a `dead_lettered` task**
+  (#1268) — the edge used to be live, so an operator sweeping old rows out of
+  the UI moved a quarantined occurrence to `cancelled`, from which no replay
+  path exists, silently destroying the review-and-replay the DLQ exists for;
+  the error names both real options (`fleet sched dlq replay <id>`, or delete
+  the row) and the UI already never offered Stop on a DLQ row, so nothing in
+  the product regressed. And **the worker-report to-side is now enforced**
+  (#1269): `models.TaskStatus.IsValidReportedStatus` existed for exactly this
+  with zero production callers, so `UpdateTaskStatusAtomicWithContext` wrote
+  whatever status it was handed — a caller passing `cancelled` from a leased
+  row produced a cancelled task still holding a live lease, and no lifecycle
+  test failed. The dead seam is now the guard, checked before the transaction
+  opens. No edge in the lifecycle table changed behavior except the removed
+  `dead_lettered → cancelled` one; the storage writer matrix grew a derived
+  off-table-target probe (every non-reportable status) so the to-side guard is
+  pinned the way the from-side already was.
+
 - **Scheduled runs are now told the shared file library exists (#1301).**
   Since #1290/#1296 a scheduled run's workspace has carried the readable
   `shared/` tree, but the announcement block lived only on the chat path —

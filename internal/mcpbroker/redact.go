@@ -56,6 +56,18 @@ func RegisterSecretLiteral(value string) {
 	brokerRedactor().AddLiteral(value)
 }
 
+// RegisterSecretLiterals is the scope-aware form the remote-MCP secret observer
+// is wired to (#1274). scope names a ROTATING credential set — one hosted-MCP
+// server row — and rotated says these values REPLACE that scope's previous
+// generation, so the redactor can retire the rotated-out access/refresh pair
+// after a grace window instead of scanning for every token this process has
+// ever held. Without it, a broker serving hourly-expiry tokens accumulated
+// ~2-3 literals per refresh per server for its whole lifetime. An empty scope
+// registers permanently, like RegisterSecretLiteral.
+func RegisterSecretLiterals(scope string, rotated bool, values ...string) {
+	brokerRedactor().RegisterSecrets(scope, rotated, values...)
+}
+
 // brokerRedactor returns the process-wide scrubber for masked-error logging: the
 // canonical pattern set plus literal redaction of secret-named env values, which
 // in the credential owner are the connector credentials themselves. Mirrors

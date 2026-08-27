@@ -85,3 +85,9 @@ internal/acpingress/data/
 
 # middle-manager state directory
 .middle-manager/
+
+# Agent-harness scratch: `git worktree` checkouts an AI coding agent creates for
+# isolated parallel work. Each entry is a full working tree, so committing them
+# would land the repo inside itself. Only the worktrees dir is ignored — the rest
+# of `.claude/` (skills, settings) stays tracked.
+.claude/worktrees/
