@@ -329,6 +329,50 @@ instead of an unmetered paid summary.
 
 ---
 
+## The one server-name keying rule (Optional opt-in ↔ prompt roster, #1272)
+
+Every server-keyed MCP gate is keyed by **manifest (spec) server name**, but the
+name a server actually **registers** under is `<server>_<account>` for a
+named-account seat (the `_` variant convention), and the system prompt sees a
+flattened `mcp_<server>_<tool>` roster name. One rule bridges all three, and
+every layer resolves through the same helper
+(`agentcore.longestServerKey`, surfaced as `OptionalServerFor` /
+`OptionalServerForToolName`):
+
+> A key `K` governs a name `N` iff `N == K`, or `N` begins with `K_`.
+> When several keys qualify, the **longest** one wins.
+
+Consequences worth stating plainly:
+
+- **A variant seat is opt-in gated by its own key when the bundle declares one,
+  and by its base server's key when it does not.** So with only `jira` marked
+  `optional: true`, the `jira_prod` seat is withheld until `jira` is opted in —
+  it is not a silently-always-on server.
+- **The rule is applied identically at registration and in the prompt.**
+  Gate-1 (`buildFantasyTools`) and the system-prompt roster filter
+  (`Manager.activeMCPToolNames`) call the same helper, so a tool can no longer
+  be registered-and-callable while hidden from the model, or advertised while
+  absent from the roster. Before #1272, Gate-1 did an **exact** map lookup on
+  the registered name: a base-only Optional key missed the variant seat
+  entirely, and the seat registered unconditionally while the prompt (which has
+  always prefix-matched) hid it. Gate-1 now fails closed.
+- **Longest-wins is what keeps it deterministic**, which is why it is also a
+  prompt-cache concern: the roster feeds the cacheable prefix, and a
+  map-iteration-order winner would silently bust it
+  (see [`PROMPT-CACHE-CONTRACT.md`](PROMPT-CACHE-CONTRACT.md) and #1125).
+- Gate-2's per-server tool allowlist (`mcpAllowlist.toolsFor`) resolves through
+  the same helper, so a variant seat is filtered by its manifest server's
+  allowlist exactly like the default seat.
+
+The whole-name (`N == K`) branch applies only to **registered server names** — a
+registered name can legitimately *be* a declared server. It is deliberately off
+for roster names, whose trailing `_<tool>` segment means a whole-name hit would
+be a server+tool coincidence: `mcp_jira_search` is server `jira`'s `search`
+tool, never a server named `jira_search` (that server's roster names all carry a
+further `_<tool>`).
+
+---
+
 ## Per-task credential allowlist (least-privilege MCP)
 
 A scheduled task's MCP selection (`mcp_selection`) controls *which servers* it

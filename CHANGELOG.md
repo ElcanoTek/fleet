@@ -19,6 +19,24 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **An Optional server's variant seats are now opt-in gated at registration,
+  not just hidden from the prompt (#1272).** The two layers that decide whether
+  an Optional MCP server's tools are available keyed their checks differently:
+  agentcore's Gate-1 did an **exact** map lookup on the registered server name,
+  while the system-prompt roster prefix-matched `mcp_<server>_<tool>` names and
+  resolved the longest matching Optional server. For a named-account seat
+  `jira_prod` whose bundle declares only `jira` as `optional: true`, Gate-1's
+  exact lookup missed — the seat registered and was **callable on every run**
+  while the prompt hid it from the model. Both layers now resolve through one
+  helper (`agentcore.longestServerKey`, exported as `OptionalServerFor` /
+  `OptionalServerForToolName`) implementing a single documented rule — exact key
+  wins, else the longest key the name extends across an underscore — so Gate-1
+  fails closed on a variant seat and what the model sees always matches what
+  registers. Gate-2's per-server tool allowlist resolves through the same
+  helper (its behaviour was already this rule). The rule is written up in
+  docs/AGENT-RUNTIME.md; the roster's byte-stability guard
+  (docs/PROMPT-CACHE-CONTRACT.md) is unchanged and still green.
+
 - **The runtime-secret literal set is now bounded, and the main process's
   control-plane acquisitions feed it too (#1274).** Both follow-ups deferred
   from #1124. (1) Every OAuth rotation mints a distinct access+refresh pair,
@@ -41,7 +59,6 @@ prior versions are listed because none have shipped.
   with the process-wide scrubber before the request that could echo them, and
   the remote-MCP HTTP error path (which relays wrapped VENDOR failure text)
   runs through that scrubber instead of shape patterns alone.
-
 - **Task transition guards are now one shared set, and cancelling a
   dead-lettered task no longer erases its replayability (#1268, #1269).** The
   four storage transition writers each hand-listed their own terminal refusal
