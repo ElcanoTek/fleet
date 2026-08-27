@@ -19,6 +19,24 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **An Optional server's variant seats are now opt-in gated at registration,
+  not just hidden from the prompt (#1272).** The two layers that decide whether
+  an Optional MCP server's tools are available keyed their checks differently:
+  agentcore's Gate-1 did an **exact** map lookup on the registered server name,
+  while the system-prompt roster prefix-matched `mcp_<server>_<tool>` names and
+  resolved the longest matching Optional server. For a named-account seat
+  `jira_prod` whose bundle declares only `jira` as `optional: true`, Gate-1's
+  exact lookup missed — the seat registered and was **callable on every run**
+  while the prompt hid it from the model. Both layers now resolve through one
+  helper (`agentcore.longestServerKey`, exported as `OptionalServerFor` /
+  `OptionalServerForToolName`) implementing a single documented rule — exact key
+  wins, else the longest key the name extends across an underscore — so Gate-1
+  fails closed on a variant seat and what the model sees always matches what
+  registers. Gate-2's per-server tool allowlist resolves through the same
+  helper (its behaviour was already this rule). The rule is written up in
+  docs/AGENT-RUNTIME.md; the roster's byte-stability guard
+  (docs/PROMPT-CACHE-CONTRACT.md) is unchanged and still green.
+
 - **Scheduled runs are now told the shared file library exists (#1301).**
   Since #1290/#1296 a scheduled run's workspace has carried the readable
   `shared/` tree, but the announcement block lived only on the chat path —
