@@ -730,6 +730,31 @@ host-side extra around the loop), but it is recorded per call in the session
 log's labeled `aux_usage` ledger (#1118) — see
 [`docs/AUX-MODEL-CALL-METERING.md`](AUX-MODEL-CALL-METERING.md).
 
+### Round-cap exhaustion keeps its partial transcript (#1125, #1271)
+
+The enforcement loop is bounded: if the finish gates (audit → verifier →
+phone-a-friend) never clear within **20 enforcement rounds**, `agentcore.Run`
+gives up and returns a hard error wrapping **`ErrMaxEnforcementRounds`**
+(message unchanged: `max enforcement rounds (20) exceeded without task
+completion`). Scheduled is the only mode that can reach the cap — the
+interactive policy can finish at round 1.
+
+Those rounds were **paid for**, so the failure carries real work back: `Run`
+returns the accumulated `Result` — transcript entries, rounds, `FinalText` and
+usage — alongside the error (#1125), and the scheduled driver now **persists
+it** instead of discarding it on the way out (#1271). The session log ends up
+with a `[truncated]` notice naming the rounds burned and the spend, then the
+partial assistant text, both stamped `message_type: round_cap_truncated`, then
+the usual `[fatal]` line. The tool calls, enforcement nudges and token/cost
+counters were already written live (by the scheduled Observer and the
+orchestration accounting) — the assistant text was the half an operator could
+not see.
+
+To be plain about what did **not** change: the run still **failed**. It reports
+the same error, classifies as the same `terminal` failure class, and retries and
+notifies exactly as it always did. Only transcript visibility improved — a
+round-capped task is never recorded as success or partial success.
+
 ### Iterative verification loops
 
 A scheduled task with a `loop_config` (#179) runs as a bounded

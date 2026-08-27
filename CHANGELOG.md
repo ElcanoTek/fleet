@@ -19,6 +19,19 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **A round-capped scheduled run keeps the transcript it paid for (#1271).**
+  When a scheduled run exhausts the 20 enforcement rounds without its finish
+  gates ever clearing, `agentcore.Run` returns the accumulated transcript and
+  usage alongside the error (#1125) — but the scheduled driver's
+  `if err != nil { return err }` ran before its persistence block, so up to 20
+  rounds of paid assistant text never reached the session log. The driver now
+  recognizes that failure through a new `agentcore.ErrMaxEnforcementRounds`
+  sentinel (not the error text) and writes the carried partial text into the
+  log with a `round_cap_truncated` `message_type`, preceded by a notice naming
+  the rounds burned and the spend. The run still **fails** exactly as before:
+  the same error message, the same `terminal` failure class, the same retry and
+  notification behaviour — only transcript visibility changed.
+
 - **Scheduled runs are now told the shared file library exists (#1301).**
   Since #1290/#1296 a scheduled run's workspace has carried the readable
   `shared/` tree, but the announcement block lived only on the chat path —
