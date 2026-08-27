@@ -102,7 +102,7 @@ func TestForceCompact_ReannouncesOpenPlan(t *testing.T) {
 
 	// A second compaction over a history already carrying a plan message keeps
 	// exactly one live copy.
-	grown := append(out, fillerMessages(30, 8)...)
+	grown := append(append([]fantasy.Message(nil), out...), fillerMessages(30, 8)...)
 	out2 := e.forceCompactMessageHistory(context.Background(), grown)
 	if got := planMessageCount(out2); got != 1 {
 		t.Fatalf("repeated compaction must keep exactly one plan message, got %d", got)
