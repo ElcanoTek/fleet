@@ -133,8 +133,10 @@ func openMCPBrokerRemoteStore(cfg *config.Config) (*store.Store, agent.RemoteMCP
 	// tokens, unsealed api_key secrets — join THIS process's literal redactor at
 	// acquisition time (#1124): boot-time RegisterEnvLiterals only knows env-file
 	// secrets, so without this a connector echoing its own bare token into an
-	// error string would reach the masked-error log unscrubbed.
-	svc.SetSecretObserver(mcpbroker.RegisterSecretLiteral)
+	// error string would reach the masked-error log unscrubbed. Rotations are
+	// scoped per server row (#1274), so this process's literal set plateaus
+	// instead of accumulating every token pair it has ever refreshed.
+	svc.SetSecretObserver(mcpbroker.RegisterSecretLiterals)
 	if !svc.Enabled() {
 		_ = st.Close()
 		return nil, nil, errors.New("broker remote MCP service is not enabled")
