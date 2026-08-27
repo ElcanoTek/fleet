@@ -153,6 +153,17 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **The post-promotion ancestry merge is automated (#1298).** Promotions
+  squash-merge dev into main, so the merge-base never advances and every
+  re-touched region read as a conflict on the next promotion PR. The new
+  `Promotion ancestry` workflow fires on every push to `main`, verifies
+  `main^{tree}` is byte-identical to `dev^{tree}` (the precondition that
+  makes `-s ours` provably safe), and pushes the `git merge -s ours`
+  ancestry merge to dev — failing loudly when the trees differ (dev moved
+  mid-promotion; a human should look). The manual fallback, with the same
+  tree-identity precondition, is documented in CONTRIBUTING.md
+  ("Promotions") instead of living as tribal knowledge.
+
 - **Shared files: a native cross-chat file library.** Admins publish files
   once (Settings → Shared files, or `POST /shared-files`) and every
   conversation's agent can read them at `shared/<folder>/<name>` — on BOTH
