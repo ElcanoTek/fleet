@@ -43,6 +43,17 @@ var ErrStructuredOutputContract = errors.New("structured output contract violati
 
 // ErrTaskLeaseNotHeld identifies a status write rejected before mutation
 // because the supplied per-claim owner no longer owns the row.
+//
+// It is the shared refusal of ALL THREE lease-guarded transition writers —
+// UpdateTaskStatusAtomicWithContext, RequeueTaskForRetryWithContext and
+// DeadLetterTaskWithContext — and each returns it unwrapped, so
+// errors.Is identifies a lost lease uniformly. The latter two used to rebuild
+// this exact message with fmt.Errorf instead, which made errors.Is succeed on
+// one guard and quietly fail on the other two while every message read the
+// same; the runner branches on this identity to cancel a zombie run's external
+// side effects (renewActiveLeases) and to suppress success side effects on a
+// fenced commit, so an unidentifiable lease refusal is a trap, not a cosmetic
+// inconsistency. Any new lease guard must return this sentinel, not its text.
 var ErrTaskLeaseNotHeld = errors.New("worker does not hold the lease on this task")
 
 // ErrTaskNotReportableStatus identifies a worker status report refused because
@@ -1374,9 +1385,10 @@ func applySuccessOrErrorTransition(task *models.Task, update *models.StatusUpdat
 // future ScheduledFor (the backoff), clears the lease + StartedAt, leaves
 // CompletedAt nil (the task is NOT terminal), and records the failure reason —
 // all in one tx, gated on the caller still owning the lease (a stale runner's
-// requeue is rejected, like UpdateTaskStatusAtomicWithContext). It deliberately
-// does NOT call scheduleNextRecurrence — a retry is the SAME occurrence, not the
-// next cron tick. Returns the updated task.
+// requeue is rejected with ErrTaskLeaseNotHeld, like
+// UpdateTaskStatusAtomicWithContext). It deliberately does NOT call
+// scheduleNextRecurrence — a retry is the SAME occurrence, not the next cron
+// tick. Returns the updated task.
 func (s *Storage) RequeueTaskForRetryWithContext(ctx context.Context, taskID, nodeID uuid.UUID, scheduledFor time.Time, msg string) (*models.Task, error) {
 	tx, err := s.db.BeginTx(ctx)
 	if err != nil {
@@ -1391,7 +1403,7 @@ func (s *Storage) RequeueTaskForRetryWithContext(ctx context.Context, taskID, no
 
 	hasValidLease := task.LeaseOwner != nil && *task.LeaseOwner == nodeID.String()
 	if !hasValidLease {
-		return nil, fmt.Errorf("worker does not hold the lease on this task")
+		return nil, ErrTaskLeaseNotHeld
 	}
 	// Already-terminal tasks are never resurrected by a retry. The refusal set
 	// is the shared terminal set (#1269) — it used to omit dead_lettered, which
@@ -1433,7 +1445,8 @@ func (s *Storage) RequeueTaskForRetryWithContext(ctx context.Context, taskID, no
 // dead_letter_reason / dead_letter_attempts, stamps CompletedAt + ErrorMessage
 // (so the row reads as terminal everywhere a completed/errored task does), and
 // clears the lease — all in one tx, gated on the caller still owning the lease
-// (a stale runner's quarantine is rejected, like RequeueTaskForRetryWithContext).
+// (a stale runner's quarantine is rejected with ErrTaskLeaseNotHeld, like
+// RequeueTaskForRetryWithContext).
 //
 // It is the terminal sibling of RequeueTaskForRetryWithContext: the runner calls
 // requeue while retries remain and a transient class allows it, and calls this
@@ -1456,7 +1469,7 @@ func (s *Storage) DeadLetterTaskWithContext(ctx context.Context, taskID, nodeID 
 
 	hasValidLease := task.LeaseOwner != nil && *task.LeaseOwner == nodeID.String()
 	if !hasValidLease {
-		return nil, fmt.Errorf("worker does not hold the lease on this task")
+		return nil, ErrTaskLeaseNotHeld
 	}
 	// Already-terminal tasks are never re-quarantined (the shared terminal set,
 	// #1269 — this writer already listed all four by hand).
