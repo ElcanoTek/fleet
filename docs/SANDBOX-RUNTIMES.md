@@ -213,8 +213,14 @@ ceiling when `runtime=kata`:
 | `2g` | `2560m` |
 | `2048m` (per-task) | `2560m` |
 
-- **`FLEET_SANDBOX_KATA_OVERHEAD_MB`** overrides the default `512`. An invalid
-  value is ignored (logged) and the default stands.
+- **`FLEET_SANDBOX_KATA_OVERHEAD_MB`** overrides the default `512`. It must be a
+  positive whole number: since #1273 the knob is a row in the one env-knob
+  registry, so a malformed or non-positive value **refuses to boot** (naming the
+  variable, the value, and `internal/sandbox` as the reader) and
+  `fleet validate-config` reports it before you start the service. It used to be
+  ignored with a log line, which meant a typo silently sized every VM off the
+  default. The point-of-use fallback still logs and defaults, but it can only be
+  reached by a value that appeared after boot.
 - The overhead is **kata-only** — libkrun's footprint is an order of magnitude
   smaller, so no bump is applied to `krun`.
 - The overhead is added **on top of** the per-task ceiling. A task at

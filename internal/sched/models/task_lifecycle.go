@@ -101,8 +101,9 @@ const (
 	TaskWriterDeriveDispatchState = "models.DeriveDispatchState"
 	// TaskWriterLegacyImport — the legacy history importer
 	// (internal/admincli/import.go, #713): restores rows verbatim, born in
-	// pending/scheduled or settled terminal statuses (validSchedTaskStatus
-	// rejects transient ones).
+	// pending/scheduled or settled terminal statuses (importableTaskStatus
+	// rejects transient ones — the same gate `sched task import` now uses,
+	// #1267).
 	TaskWriterLegacyImport = "admincli legacy import"
 	// TaskWriterScheduledPromotion — db.UpdateTasksStatusBatch
 	// (internal/sched/db/scheduling.go), called by the scheduler's due sweep
@@ -202,19 +203,34 @@ type TaskTransition struct {
 //
 // Deliberately OUTSIDE the model — out-of-model restore surgery: two
 // operator import paths write a task's status verbatim through db.AddTask's
-// unconditional full-column ON CONFLICT upsert (status, lease_owner and
-// lease_expires_at included), so they can produce any→imported-status and
-// bypass every guard in this table. They are `fleet-admin sched task import`
-// (internal/admincli/sched_task.go importTasks — validateImportedTask checks
-// prompt/MCP/recurrence, never status) and `fleet legacy import --overwrite`
-// (internal/admincli/import.go; without --overwrite, skip-by-default #713
-// protects progressed rows). Example: re-importing an envelope exported
-// while a task was scheduled, after that task ran to success, rewrites
-// success→scheduled with the stale scheduled_for and the scheduler re-runs
-// the completed task's external side effects (over a running row it also
-// nulls the live lease — the #1104 shape). Pre-existing behavior, recorded
-// here rather than changed; the validator below validates the GUARDED model
-// only.
+// unconditional full-column ON CONFLICT upsert, so with the operator's
+// explicit opt-in they can still produce any→imported-status and bypass every
+// guard in this table. They are `fleet sched task import --replace-status`
+// (internal/admincli/sched_task.go importTasks) and `fleet legacy import
+// --overwrite` (internal/admincli/import.go).
+//
+// #1267 narrowed that hole to exactly those two flags. Both paths now go
+// through the collision policy in internal/admincli/import_policy.go, so as
+// written today:
+//
+//   - the imported status is always one of this table's legacy-import birth
+//     statuses — importableTaskStatus gates BOTH paths, so no import can put
+//     a row into leased/running/paused;
+//   - without the opt-in flag, an import that lands on an existing row whose
+//     status differs is REFUSED, not silently applied: re-importing an
+//     envelope exported while a task was scheduled, after that task ran to
+//     success, no longer rewrites success→scheduled and no longer re-runs the
+//     completed task's external side effects (the #1104 double-execution
+//     shape). The legacy path's opt-in is its pre-existing --overwrite, whose
+//     documented meaning is already "the bundle snapshot wins" (#713);
+//     without it, skip-by-default protects progressed rows.
+//   - NEITHER flag can touch a lease: a write over a row that is leased or
+//     running is refused outright, and lease_owner / lease_expires_at are
+//     never importable onto an existing row (the target's values are kept).
+//
+// So the residual out-of-model edge is a flagged terminal→schedulable (or any
+// other cross-status) restore on a row that holds no lease. The validator
+// below still validates the GUARDED model only.
 var TaskLifecycle = []TaskTransition{
 	// ── Birth ───────────────────────────────────────────────────────────
 	{TaskLifecycleStart, TaskStatusPending, TaskWriterDeriveDispatchState, "immediate dispatch: no future scheduled_for, ungated, non-webhook"},

@@ -81,6 +81,26 @@ genuinely want the bundle's snapshot to win — restoring a wiped database from
 a bundle — pass `--overwrite`, which replaces already-present sched tasks and
 run logs in place.
 
+`--overwrite` is restore surgery, and it is scoped (#1267). It IS your explicit
+consent to rewrite an already-present task's runtime status from the bundle —
+including moving a finished task back to `pending`/`scheduled`, which re-queues
+it and re-runs its side effects, so that is a decision to make deliberately.
+What it does **not** license:
+
+- **A task that is running.** A row whose status is `leased` or `running` on
+  this box is refused per-record (reported as an error, the rest of the import
+  proceeds): the in-flight worker owns its lease, and writing over it mid-run
+  would strand the row while the worker's next fenced write bounced off. Wait
+  for the run to finish, or cancel it, then re-import.
+- **Lease columns.** `lease_owner` / `lease_expires_at` are never importable
+  onto an existing row — whatever the target row holds is kept, so a bundle can
+  neither fabricate nor clear a lease.
+
+Both checks also run under `--dry-run` (they are reads), so the plan cannot
+pass what the real run would refuse. Bundle tasks carrying a transient status
+(`leased`, `running`, either paused state) are rejected outright, as they always
+have been — exporters normalize those before export.
+
 Both DSN resolvers fall back to the generic `DATABASE_URL`. Because the chat
 and sched stores must live in **distinct** databases (fleet serve refuses to
 start otherwise), `fleet import` refuses to write a section whose DSN reached

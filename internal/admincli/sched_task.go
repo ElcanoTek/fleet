@@ -666,6 +666,8 @@ func schedTaskExport(argv []string) int {
 func schedTaskImport(argv []string) int {
 	fs := flag.NewFlagSet("sched task import", flag.ContinueOnError)
 	dbURL := fs.String("database-url", "", "sched Postgres DSN")
+	replaceStatus := fs.Bool("replace-status", false,
+		"restore mode: also rewrite the runtime status of tasks whose id already exists here (default is to refuse; re-queueing a finished task re-runs its side effects). Never writes a lease, and never touches a task that is running.")
 	if err := fs.Parse(argv); err != nil {
 		return 1
 	}
@@ -675,12 +677,23 @@ func schedTaskImport(argv []string) int {
 	}
 	defer st.Close()
 
-	n, err := importTasks(context.Background(), st, os.Stdin)
+	n, err := importTasks(context.Background(), st, os.Stdin, taskImportOpts{replaceStatus: *replaceStatus})
 	if err != nil {
 		return errf(5, "import: %v", err)
 	}
 	fmt.Fprintf(os.Stderr, "imported %d scheduled task(s)\n", n)
 	return 0
+}
+
+// taskImportOpts carries the operator switches for `sched task import`.
+type taskImportOpts struct {
+	// replaceStatus is the explicit opt-in to rewrite an EXISTING row's runtime
+	// status from the envelope (#1267). Default false: the import refuses the
+	// collision rather than silently moving a finished task back to a
+	// schedulable status (the scheduler would re-queue it and its external side
+	// effects — emails, MCP writes — would run again). It never licenses
+	// writing a lease: see import_policy.go.
+	replaceStatus bool
 }
 
 // taskStore is the storage subset export/import needs — narrow so the seam is
@@ -689,6 +702,9 @@ type taskStore interface {
 	ListScheduledTasks(ctx context.Context) ([]*models.Task, error)
 	AddTaskWithContext(ctx context.Context, task *models.Task) (*models.Task, error)
 	GetUsersByIDsWithContext(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]string, error)
+	// GetTaskWithContext returns the import target, or (nil, nil) when this box
+	// holds no row with that id — the collision-policy lookup (#1267).
+	GetTaskWithContext(ctx context.Context, id uuid.UUID) (*models.Task, error)
 }
 
 // exportTasks writes a versioned JSON envelope of all SCHEDULED tasks to w. Scope
@@ -716,7 +732,15 @@ func exportTasks(ctx context.Context, st taskStore, w io.Writer) (int, error) {
 // fresh target box the referencing user may be absent, which would fail the FK
 // and abort the whole import — so a CreatedBy that names a user NOT present on the
 // target is nulled (with a stderr notice) rather than failing the migration.
-func importTasks(ctx context.Context, st taskStore, r io.Reader) (int, error) {
+//
+// A task whose id ALREADY exists here is a write over live state, not a create,
+// so the collision policy in import_policy.go (#1267) runs in the same
+// up-front pass: the import refuses a status rewrite without
+// opts.replaceStatus, refuses any write over a running/leased row, and drops
+// the envelope's lease columns in favour of the target's. Rows that do not
+// exist here are still inserted verbatim — that is what makes this path (not
+// the definition-only `fleet task import`) the cross-box migration tool.
+func importTasks(ctx context.Context, st taskStore, r io.Reader, opts taskImportOpts) (int, error) {
 	raw, err := io.ReadAll(r)
 	if err != nil {
 		return 0, fmt.Errorf("read import: %w", err)
@@ -740,6 +764,23 @@ func importTasks(ctx context.Context, st taskStore, r io.Reader) (int, error) {
 		}
 	}
 
+	// Collision policy for the rows that already exist here (#1267), in the
+	// same before-anything-is-written pass: a refusal can never leave a
+	// half-applied import behind.
+	for i, t := range env.Tasks {
+		existing, err := st.GetTaskWithContext(ctx, t.ID)
+		if err != nil {
+			return 0, fmt.Errorf("task[%d] (id=%s): look up import target: %w", i, t.ID, err)
+		}
+		if existing == nil {
+			continue
+		}
+		if err := importCollisionError(t, existing, opts.replaceStatus); err != nil {
+			return 0, fmt.Errorf("task[%d] (id=%s): %w", i, t.ID, err)
+		}
+		preserveTargetLease(t, existing)
+	}
+
 	// Null out CreatedBy for any user absent on the target box (cross-box migration
 	// FK safety). Resolve all referenced users in one query.
 	if err := nullMissingCreatedBy(ctx, st, env.Tasks); err != nil {
@@ -755,13 +796,28 @@ func importTasks(ctx context.Context, st taskStore, r io.Reader) (int, error) {
 }
 
 // validateImportedTask enforces the load-bearing, PORTABLE create-time checks:
-// a non-empty prompt, every MCP selection naming a server, and a parseable cron
-// recurrence. It deliberately does NOT re-run the host/runtime-specific checks
-// (file existence, scheduled-in-the-past) — import accepts historical definitions
-// verbatim, and those are runtime concerns the scheduler re-evaluates at dispatch.
+// a non-empty prompt, an importable status, every MCP selection naming a
+// server, and a parseable cron recurrence. It deliberately does NOT re-run the
+// host/runtime-specific checks (file existence, scheduled-in-the-past) —
+// import accepts historical definitions verbatim, and those are runtime
+// concerns the scheduler re-evaluates at dispatch.
+//
+// The status gate is importableTaskStatus (import.go), the SAME predicate that
+// gates the legacy importer's births (#1267): a transient status (leased,
+// running, either paused state) names lease or pause state that no import can
+// honor, so an envelope carrying one is a live-system snapshot or corrupt, not
+// something to write. The status the envelope carries still lands verbatim on
+// a row this box does not have — importableTaskStatus bounds WHICH statuses,
+// the collision policy bounds WHEN an existing row's status may change.
 func validateImportedTask(t *models.Task) error {
 	if strings.TrimSpace(t.Prompt) == "" {
 		return fmt.Errorf("prompt is required")
+	}
+	if strings.TrimSpace(string(t.Status)) == "" {
+		return fmt.Errorf("status is required")
+	}
+	if !importableTaskStatus(t.Status) {
+		return fmt.Errorf("status %q is not importable (transient lease/pause states and unknown statuses are rejected; export normalizes them)", t.Status)
 	}
 	for i, c := range t.MCPSelection {
 		if strings.TrimSpace(c.Server) == "" {

@@ -208,6 +208,27 @@ var allowedEnvVars = map[string]bool{
 	"LLM_MAX_TOKENS":                    true,
 	"FLEET_MAX_TOOL_OUTPUT_BYTES":       true,
 
+	// ── knobs parsed at their point of use, not by the loader (#1273) ──
+	// These are scopeExternal rows in the env-knob registry (knobs.go): the
+	// boot gate and `fleet validate-config` validate them from that table, but
+	// both read the PROCESS env — so a knob missing from this allowlist would
+	// be dropped when set only in FLEET_ENV_FILE and neither would ever see
+	// the operator's value. FLEET_DISABLE_PROMPT_CACHE in particular has been
+	// documented as an env-file knob in docs/OPERATORS.md all along while
+	// being silently dropped from the file (the #1107 bug class).
+	// TestEnvKnobsAreEnvFileSettable keeps the two tables paired.
+	"FLEET_DISABLE_PROMPT_CACHE":            true,
+	"FLEET_DISABLE_OPENROUTER_MODELS":       true,
+	"FLEET_SCHEDULED_AUTO_COMPACT":          true,
+	"FLEET_MODEL_CACHE_TTL_MINUTES":         true,
+	"FLEET_RETRY_MAX_ATTEMPTS":              true,
+	"FLEET_CONTEXT_PRESSURE_WARN_THRESHOLD": true,
+	"FLEET_CONTEXT_COMPACTION_THRESHOLD":    true,
+	"FLEET_SSE_BUFFER_DURATION":             true,
+	"FLEET_SSE_BUFFER_MAX_BYTES_PER_TURN":   true,
+	"FLEET_SSE_HEARTBEAT_INTERVAL":          true,
+	"FLEET_WEBHOOK_RATE_LIMIT_PER_MINUTE":   true,
+
 	// ── process log file sink (#298) — opt-in rotating file, default OFF ──
 	"FLEET_LOG_FILE":         true,
 	"FLEET_LOG_MAX_SIZE_MB":  true,
@@ -1643,6 +1664,14 @@ func Load(envFile string) (*Config, error) {
 	// which already rejected the same values (boot and reload now agree). An
 	// UNSET knob still gets its default; only a set-but-malformed value errors,
 	// and every problem is reported in one pass.
+	//
+	// Since #1273 that one pass also covers the knobs Load does NOT consume —
+	// the ones parsed at their point of use in internal/sandbox,
+	// internal/agentcore, internal/httpapi, cmd/fleet, … — so boot strictness
+	// is uniform across the registry instead of stopping at the loader's edge.
+	// Documented-lenient rows (the OTEL sample ratio) are excluded by
+	// construction; `fleet validate-config` reports those as advisories.
+	lp.collectExternalKnobs()
 	if err := lp.err(); err != nil {
 		return nil, err
 	}

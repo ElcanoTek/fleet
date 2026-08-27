@@ -38,7 +38,10 @@ import (
 // task that already ran in fleet must not flip back to pending, a leased task
 // must not lose its lease, fleet-side run history must not be replaced).
 // --overwrite restores the old upsert behavior for the restore-from-bundle
-// use case, replacing already-present sched tasks and run logs in place.
+// use case, replacing already-present sched tasks and run logs in place — with
+// two limits it does NOT lift (#1267, import_policy.go): a task that is
+// running/leased on this box is refused per-record, and the bundle's lease
+// columns are never written onto an existing row.
 
 // migrationBundleFormat / migrationBundleVersion pin the envelope contract.
 // Import rejects an unknown format or version rather than guessing.
@@ -162,7 +165,7 @@ func cmdImport(argv []string) int {
 	schedDB := fs.String("sched-database-url", "", "sched Postgres DSN (default FLEET_SCHED_DATABASE_URL, then DATABASE_URL)")
 	dryRun := fs.Bool("dry-run", false, "validate and print the plan without writing")
 	liveOnly := fs.Bool("live-only", false, "sched section: import only live (pending/scheduled) tasks; skip terminal tasks and run logs")
-	overwrite := fs.Bool("overwrite", false, "restore mode: replace sched tasks and run logs whose UUID already exists in fleet (default is to skip them, so a re-run never reverts live state)")
+	overwrite := fs.Bool("overwrite", false, "restore mode: replace sched tasks and run logs whose UUID already exists in fleet (default is to skip them, so a re-run never reverts live state). A task that is running/leased here is still never overwritten, and lease columns are never imported onto an existing row.")
 	// The flag set mixes value flags (--*-database-url) and boolean flags, and
 	// the bundle path may come before OR after them — splitPositionalMixed is
 	// the only splitter that parses both orders correctly (#714).
@@ -452,12 +455,21 @@ func importChatSection(ctx context.Context, chatStore *store.Store, sec *chatSec
 	return nil
 }
 
-// validSchedTaskStatus is the set of statuses a bundle task may carry. The
-// exporters normalize anything transient (moc's assigned/leased/running) to a
-// terminal status before export; import stays strict rather than guessing —
-// the transient/paused states are explicitly rejected because they carry
-// lease/pending state a migrated row can't honor.
-func validSchedTaskStatus(s models.TaskStatus) bool {
+// importableTaskStatus is the set of statuses ANY import may write — the
+// legacy bundle importer's birth gate and, since #1267, the `sched task
+// import` envelope gate (validateImportedTask). The exporters normalize
+// anything transient (moc's assigned/leased/running) to a terminal status
+// before export; import stays strict rather than guessing — the
+// transient/paused states are explicitly rejected because they carry
+// lease/pause state no imported row can honor: a row imported as leased or
+// running would sit stranded until lease recovery noticed a lease that never
+// existed, and one imported as paused would await an answer or a wake nothing
+// will deliver.
+//
+// Pinned to the lifecycle table's legacy-import birth edges (both directions)
+// by TestLegacyImportBirthStatusesMatchLifecycle, which also asserts the
+// envelope path gates on this same predicate.
+func importableTaskStatus(s models.TaskStatus) bool {
 	switch s {
 	case models.TaskStatusPending, models.TaskStatusScheduled,
 		models.TaskStatusSuccess, models.TaskStatusError,
@@ -542,21 +554,20 @@ func importSchedSection(ctx context.Context, st *storage.Storage, sec *schedSect
 			stats.filtered["tasks"]++
 			continue
 		}
-		exists, err := st.TaskExists(ctx, bt.ID)
+		// Does fleet already hold this id, and may the bundle write it?
+		// (skip-by-default #713 + the #1267 collision policy — see the helper.)
+		present, write, err := resolveSchedTaskCollision(ctx, st, task, opts.overwrite)
 		if err != nil {
 			stats.errorf("task %s: %v", bt.ID, err)
 			continue
 		}
-		if exists {
-			presentTasks[bt.ID] = true
-			if !opts.overwrite {
-				// Skip-by-default (#713): fleet's row may have progressed (run,
-				// been leased, been cancelled) since the last import — writing
-				// the bundle's snapshot over it would flip a completed one-shot
-				// back to pending (double execution) or null an active lease.
-				bump(stats, "tasks", false)
-				continue
-			}
+		// Recorded even when false (a plain map write, so the log pass's
+		// lookups read the same as an absent key) — the successful-write case
+		// below sets it true.
+		presentTasks[bt.ID] = present
+		if !write {
+			bump(stats, "tasks", false)
+			continue
 		}
 		if len(bt.Files) > 0 {
 			stats.tasksWithFiles++
@@ -622,6 +633,43 @@ func importSchedSection(ctx context.Context, st *storage.Storage, sec *schedSect
 	}
 }
 
+// resolveSchedTaskCollision decides what the legacy importer may do with one
+// bundle task, given whatever row fleet already holds under that id. It reports
+// whether the row is already present and whether the bundle may write it, and
+// applies the #1267 lease policy to task before an allowed write:
+//
+//   - no row here: a plain create, nothing to protect.
+//   - present WITHOUT --overwrite: skip-by-default (#713). Fleet's row may have
+//     progressed (run, been leased, been cancelled) since the last import, and
+//     writing the bundle's snapshot over it would flip a completed one-shot
+//     back to pending (double execution) or null an active lease.
+//   - present WITH --overwrite: restore mode. --overwrite IS this path's
+//     explicit status opt-in — replacing an already-present row with the
+//     bundle's snapshot is its documented purpose — but it does NOT license
+//     writing over a row a worker is running right now (refused as a
+//     per-record error), and the bundle's lease columns never land on an
+//     existing row (import_policy.go, #1267).
+//
+// It only reads, so it runs in dry-run too: the printed plan can never pass
+// what the real run would refuse.
+func resolveSchedTaskCollision(ctx context.Context, st *storage.Storage, task *models.Task, overwrite bool) (present, write bool, err error) {
+	existing, err := st.GetTaskWithContext(ctx, task.ID)
+	if err != nil {
+		return false, false, err
+	}
+	if existing == nil {
+		return false, true, nil
+	}
+	if !overwrite {
+		return true, false, nil
+	}
+	if err := importCollisionError(task, existing, true); err != nil {
+		return true, false, err
+	}
+	preserveTargetLease(task, existing)
+	return true, true, nil
+}
+
 // buildImportedTask converts one bundle task into a models.Task: minted through
 // models.NewTask so every normalization (priority clamp, SLA defaults, timezone
 // fallback, trigger type) matches a task created through the public API, then
@@ -635,7 +683,7 @@ func buildImportedTask(st *storage.Storage, bt bundleTask, remap map[uuid.UUID]u
 		return nil, false, fmt.Errorf("empty prompt")
 	}
 	status := models.TaskStatus(bt.Status)
-	if !validSchedTaskStatus(status) {
+	if !importableTaskStatus(status) {
 		return nil, false, fmt.Errorf("unsupported status %q (exporters must normalize transient statuses)", bt.Status)
 	}
 	live := status == models.TaskStatusPending || status == models.TaskStatusScheduled

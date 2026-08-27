@@ -282,6 +282,21 @@ var ErrRunCancelled = errors.New("run cancelled before completion")
 // the same one.
 var ErrAuditAborted = errors.New("run aborted by its own self-audit")
 
+// ErrMaxEnforcementRounds classifies round-cap exhaustion: the finish gates
+// (audit → verifier → phone-a-friend) never cleared within
+// maxEnforcementRounds, so the run is a hard failure. It exists so a driver can
+// recognize THAT failure structurally instead of matching the error text,
+// because it is the one hard-error path whose Result carries real work — the
+// accumulated transcript and usage of every capped round (#1125) — that the
+// driver must persist before returning the error (#1271).
+//
+// Deliberately NOT added to the runner's classifyFailure switch: round-cap
+// exhaustion stays in the default FailureTerminal class it has always had, so
+// retry and notification behaviour is unchanged by the sentinel's existence.
+// The wrapped message is unchanged too ("max enforcement rounds (N) exceeded
+// without task completion") — operators and log greps still match it.
+var ErrMaxEnforcementRounds = errors.New("max enforcement rounds")
+
 // RunUsage is the accumulated token + cost accounting for a run. It follows the
 // LogSession token convention: PromptTokens INCLUDES cache reads, CachedTokens
 // is that cached subset (so uncached spend is PromptTokens - CachedTokens, the
@@ -664,13 +679,13 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 	// for: return the accumulated transcript + usage ALONGSIDE the error (the
 	// same partial-result-with-error contract as the ErrCommittedSideEffects
 	// path above) instead of an empty Result that dropped up to 20 rounds of
-	// billed work from every layer above (#1125). Note: the scheduled driver
-	// (the only mode that can reach this cap) currently discards the Result on
-	// any error before its persistence block — surfacing this carry there is a
-	// follow-up candidate.
+	// billed work from every layer above (#1125). The scheduled driver — the
+	// only mode that can reach this cap — keys off ErrMaxEnforcementRounds to
+	// persist that carried transcript into the session log, marked as
+	// round-cap-truncated, before it returns the error (#1271).
 	res := cancelledResult(sink, usageOrch, label, activeModel, swappedToFallback, maxEnforcementRounds)
 	res.Cancelled = false
-	return res, fmt.Errorf("max enforcement rounds (%d) exceeded without task completion", maxEnforcementRounds)
+	return res, fmt.Errorf("%w (%d) exceeded without task completion", ErrMaxEnforcementRounds, maxEnforcementRounds)
 }
 
 // runCompletion carries the last ordinary round into the single terminal

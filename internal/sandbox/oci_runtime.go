@@ -355,9 +355,15 @@ func lookRuntimeBinary(bin string) error {
 
 // kataOverheadMB resolves the Kata guest-memory overhead in MiB:
 // FLEET_SANDBOX_KATA_OVERHEAD_MB when set to a positive integer, else
-// DefaultKataOverheadMB. An invalid value is ignored (logged) and the default
-// stands — this is a tuning knob that only ever ADDS memory, so defaulting is
-// safe (unlike the memory LIMIT itself, which fails closed when unparseable).
+// DefaultKataOverheadMB.
+//
+// The knob is a scopeExternal row in the env-knob registry (#1273), so a
+// malformed or non-positive value REFUSES THE BOOT (config.Load validates the
+// whole registry) instead of being quietly ignored as it was before. The
+// local fallback below therefore only ever fires for a value that appeared
+// after boot — it stays because this path cannot fail a container create for a
+// tuning knob that only ever ADDS memory (unlike the memory LIMIT itself,
+// which fails closed when unparseable).
 func kataOverheadMB() int {
 	if v := strings.TrimSpace(os.Getenv("FLEET_SANDBOX_KATA_OVERHEAD_MB")); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
