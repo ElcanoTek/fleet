@@ -948,12 +948,18 @@ func resolveSandboxRuntime(cfg *config.Config, bundle *clientconfig.Bundle) stri
 
 // ── 7. model / API key (warning) ──
 
-// checkModelAPI does a lightweight GET /api/v1/models against the OpenRouter base
+// checkModelAPI does a lightweight GET /api/v1/key against the OpenRouter base
 // (or OPENROUTER_BASE_URL override) with the configured key, to verify the key
-// authenticates. It is a WARNING: a 401 surfaces as a fail-status warning (bad
-// key), a 200 is ok, and a timeout/transport error is a warning (transient
-// network — not a config defect). Skipped by --skip-network-checks and in
-// MockMode (no real key expected). Never prints the key.
+// authenticates. /api/v1/key and not /api/v1/models: the models list is PUBLIC
+// — it returns 200 with no Authorization header and with a garbage one — so
+// probing it blessed any non-empty key with "authenticates" (#1264 found a
+// 64-hex junk value passing this check and then failing the first real
+// completion with a 401). /api/v1/key requires auth: 401 on a bad or missing
+// key, 200 with the key's own metadata otherwise. It is a WARNING: a 401
+// surfaces as a fail-status warning (bad key), a 200 is ok, and a
+// timeout/transport error is a warning (transient network — not a config
+// defect). Skipped by --skip-network-checks and in MockMode (no real key
+// expected). Never prints the key.
 func checkModelAPI(ctx context.Context, cfg *config.Config, cfgErr error, opts validateOptions) checkResult {
 	res := checkResult{Name: "model_api", Blocking: false}
 	if cfgErr != nil || cfg == nil {
@@ -977,7 +983,7 @@ func checkModelAPI(ctx context.Context, cfg *config.Config, cfgErr error, opts v
 		return res
 	}
 
-	endpoint := openRouterModelsEndpoint()
+	endpoint := openRouterKeyEndpoint()
 	reqCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, endpoint, nil)
@@ -1010,14 +1016,15 @@ func checkModelAPI(ctx context.Context, cfg *config.Config, cfgErr error, opts v
 	return res
 }
 
-// openRouterModelsEndpoint returns the /api/v1/models URL, honoring the
+// openRouterKeyEndpoint returns the /api/v1/key URL, honoring the
 // OPENROUTER_BASE_URL override (E2E / self-hosted gateway) so the check hits the
-// same origin the running server would.
-func openRouterModelsEndpoint() string {
+// same origin the running server would. The fake-LLM seam serves this path
+// with the same auth contract, so the check stays meaningful in E2E ladders.
+func openRouterKeyEndpoint() string {
 	if override := strings.TrimSpace(os.Getenv("OPENROUTER_BASE_URL")); override != "" {
-		return strings.TrimRight(override, "/") + "/api/v1/models"
+		return strings.TrimRight(override, "/") + "/api/v1/key"
 	}
-	return "https://openrouter.ai/api/v1/models"
+	return "https://openrouter.ai/api/v1/key"
 }
 
 // ── output ──
