@@ -32,6 +32,36 @@ prior versions are listed because none have shipped.
   the same error message, the same `terminal` failure class, the same retry and
   notification behaviour — only transcript visibility changed.
 
+- **Task transition guards are now one shared set, and cancelling a
+  dead-lettered task no longer erases its replayability (#1268, #1269).** The
+  four storage transition writers each hand-listed their own terminal refusal
+  set and they disagreed: `DeadLetterTaskWithContext` refused all four terminal
+  statuses while `CancelTaskAtomic`, `UpdateTaskStatusAtomicWithContext` and
+  `RequeueTaskForRetryWithContext` refused only three — the latter two shielded
+  from `dead_lettered` purely by the unenforced fact that a quarantined row
+  holds no lease. All four now guard on `TaskStatus.IsTerminal()`, the one
+  shared set `models.TerminalTaskStatuses` is cross-checked against at package
+  init, so a new terminal status cannot be honored by one writer and forgotten
+  by the next. Only the refusal *style* still differs, deliberately: cancel is
+  an operator request and errors, the three lease-guarded runner writers return
+  the row unchanged so a late idempotent report cannot fail a run that already
+  landed. Two consequences: **cancel now refuses a `dead_lettered` task**
+  (#1268) — the edge used to be live, so an operator sweeping old rows out of
+  the UI moved a quarantined occurrence to `cancelled`, from which no replay
+  path exists, silently destroying the review-and-replay the DLQ exists for;
+  the error names both real options (`fleet sched dlq replay <id>`, or delete
+  the row) and the UI already never offered Stop on a DLQ row, so nothing in
+  the product regressed. And **the worker-report to-side is now enforced**
+  (#1269): `models.TaskStatus.IsValidReportedStatus` existed for exactly this
+  with zero production callers, so `UpdateTaskStatusAtomicWithContext` wrote
+  whatever status it was handed — a caller passing `cancelled` from a leased
+  row produced a cancelled task still holding a live lease, and no lifecycle
+  test failed. The dead seam is now the guard, checked before the transaction
+  opens. No edge in the lifecycle table changed behavior except the removed
+  `dead_lettered → cancelled` one; the storage writer matrix grew a derived
+  off-table-target probe (every non-reportable status) so the to-side guard is
+  pinned the way the from-side already was.
+
 - **Scheduled runs are now told the shared file library exists (#1301).**
   Since #1290/#1296 a scheduled run's workspace has carried the readable
   `shared/` tree, but the announcement block lived only on the chat path —
