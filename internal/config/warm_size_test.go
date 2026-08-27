@@ -41,12 +41,20 @@ func TestLoad_SandboxWarmSizeZeroIsExpressible(t *testing.T) {
 	}
 }
 
+// TestLoad_SandboxWarmSizeRejectsNegative pins the #1299 seam: the knob
+// registry's min bound refuses EVERY explicit negative — an explicit "-1" is a
+// misconfiguration, not a spelling of "derive" (only unset means derive). The
+// registry enforces this for boot, hot-reload, and `fleet validate-config`
+// alike; nothing downstream should ever see Size < 0 and have to be
+// incidentally safe about it.
 func TestLoad_SandboxWarmSizeRejectsNegative(t *testing.T) {
 	isolateEnv(t)
 	chdir(t, t.TempDir())
 
-	t.Setenv("FLEET_SANDBOX_WARM_SIZE", "-2")
-	if _, err := Load(""); err == nil || !strings.Contains(err.Error(), "FLEET_SANDBOX_WARM_SIZE") {
-		t.Fatalf("negative warm size: want a loud FLEET_SANDBOX_WARM_SIZE error, got %v", err)
+	for _, v := range []string{"-1", "-2"} {
+		t.Setenv("FLEET_SANDBOX_WARM_SIZE", v)
+		if _, err := Load(""); err == nil || !strings.Contains(err.Error(), "FLEET_SANDBOX_WARM_SIZE") {
+			t.Fatalf("warm size %s: want a loud FLEET_SANDBOX_WARM_SIZE error, got %v", v, err)
+		}
 	}
 }

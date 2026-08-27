@@ -19,6 +19,41 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Scheduled runs are now told the shared file library exists (#1301).**
+  Since #1290/#1296 a scheduled run's workspace has carried the readable
+  `shared/` tree, but the announcement block lived only on the chat path —
+  so "attach historical data once, every run uses it" worked for scheduled
+  work only when a task prompt happened to name a file. The block renderer
+  moved to `sharedfiles.PromptBlock` (one renderer, both drivers — chat
+  turns are byte-identical to before), and `fleet serve` wires the scheduled
+  runner a provider that appends the same capped block to each run's system
+  prompt, computed once at run start so the prompt stays byte-stable across
+  the run's turns. One-shot `fleet task run` stays out of scope (no DB, no
+  library) and docs/SHARED-FILES.md now says all of this plainly.
+
+- **Superseded CI runs no longer paint a red X: the gate rollups treat
+  cancelled needed jobs as neutral (#1302).** Every rapid dev merge cancels
+  the in-flight `dev-ci` run on the now-stale tip (the concurrency group),
+  and `Dev gate` / `CodeQL gate` — which run even on a cancelled run via
+  `if: always()` — then reported *failure* over jobs that concluded
+  `cancelled`, leaving a misleading red X someone had to manually verify as
+  benign after every merge train. All three rollups (`Dev gate`, `CodeQL
+  gate`, and `CI gate` on main for consistency) now conclude neutral when
+  needed jobs were cancelled and none failed; a genuinely failing job still
+  turns the gate red, and a skip on a non-docs-only change still fails `CI
+  gate`. The one accepted caveat is documented in ci.yml: a human manually
+  cancelling a PR-head run and then merging over it is deliberate, not a
+  case the gate exists to catch.
+
+- **`FLEET_SANDBOX_WARM_SIZE` now rejects every explicit negative at the
+  validation seam (#1299).** The knob registry row carries `min: 0`, so boot,
+  hot-reload, and `fleet validate-config` all refuse a negative depth loudly —
+  including an explicit `-1`, which previously slipped through the loader's
+  ad-hoc `< -1` check as an undocumented spelling of "derive". Unset still
+  derives from `FLEET_MAX_CONCURRENT_AGENTS`, and `0` still means "no warm
+  pool" (#1288); the safety of a negative no longer rests on the pool's
+  incidental cold-start fallback.
+
 - **Under `FLEET_DEFAULT_NETWORK_MODE=lockdown` the warm pool is now sealed
   and lockdown turns actually use it (#1291).** Two defects, one cause: warm
   spawns used the pool config verbatim (`NoNetwork=false`), while every take
@@ -129,6 +164,30 @@ prior versions are listed because none have shipped.
   cache bound are unchanged.
 
 ### Added
+
+- **The node-LTS move reminds itself (#1300).** The node runtime major is
+  invisible to Dependabot (see the notes in `.github/dependabot.yml`), so
+  moving to a new LTS line was initiated by a dated issue someone had to
+  remember. A weekly `node-lts-reminder.yml` cron now files that issue
+  itself — once v26 is past its scheduled Active-LTS date (2026-10-28)
+  while `web/.nvmrc` still reads 24 — carrying the full checklist: the
+  LTS/schedule.json and Fedora `nodejs26`+`nodejs26-npm` RPM preconditions,
+  then every declaration point (`web/.nvmrc`, both `engines.node` fields,
+  `@types/node`, the rampart `node:26-slim` base) bumped together under
+  `TestNodeMajorAgreesEverywhere`. Deliberately offline: the date is
+  hardcoded from nodejs/Release so a fetch hiccup can never make the
+  reminder lie; the filed issue dedupes by title.
+
+- **The post-promotion ancestry merge is automated (#1298).** Promotions
+  squash-merge dev into main, so the merge-base never advances and every
+  re-touched region read as a conflict on the next promotion PR. The new
+  `Promotion ancestry` workflow fires on every push to `main`, verifies
+  `main^{tree}` is byte-identical to `dev^{tree}` (the precondition that
+  makes `-s ours` provably safe), and pushes the `git merge -s ours`
+  ancestry merge to dev — failing loudly when the trees differ (dev moved
+  mid-promotion; a human should look). The manual fallback, with the same
+  tree-identity precondition, is documented in CONTRIBUTING.md
+  ("Promotions") instead of living as tribal knowledge.
 
 - **Shared files: a native cross-chat file library.** Admins publish files
   once (Settings → Shared files, or `POST /shared-files`) and every

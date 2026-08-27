@@ -1,0 +1,101 @@
+# Post-promotion ancestry merge (#1298).
+#
+# Promotions SQUASH-merge dev into main, so the two branches' merge-base never
+# advances past the last shared commit: any region dev changes, promotes, and
+# later changes again reads as both-sides-modified on the NEXT promotion PR —
+# spurious conflicts over content that already shipped (six files' worth on
+# #1293, with main not having moved at all). The fix, verified by hand twice
+# before it was automated here, is to record the ancestry on dev right after
+# each promotion with `git merge -s ours main`: a merge commit that makes main
+# an ancestor of dev while changing NOTHING in dev's tree.
+#
+# `-s ours` is only provably safe when main carries nothing dev lacks, so the
+# merge is gated on TREE IDENTITY: after a squash promotion, main's tree object
+# is byte-identical to the promoted dev tip's. If the trees differ, dev moved
+# mid-promotion (or something other than a promotion pushed to main) and this
+# workflow FAILS LOUDLY instead of guessing — a human runs the manual step
+# documented in CONTRIBUTING.md ("Promotions") once they've looked.
+#
+# Two non-obvious properties of the push:
+#   - It is made with GITHUB_TOKEN, and GITHUB_TOKEN pushes do not trigger
+#     workflows, so this cannot recurse and dev-ci does not re-run — which is
+#     fine, because the recorded tree is exactly the one the full `CI gate`
+#     just certified on main.
+#   - The job is idempotent: once main is an ancestor of dev (this merge, a
+#     manual one, or a merge-commit promotion) it exits green doing nothing,
+#     so a re-run after a transient failure is always safe.
+name: Promotion ancestry
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write # pushes the ancestry merge commit to dev
+
+concurrency:
+  # Queue, never cancel: each push to main must record its ancestry merge.
+  group: promotion-ancestry
+  cancel-in-progress: false
+
+jobs:
+  ancestry:
+    name: Record promotion ancestry on dev
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out main with full history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The merge needs the real commit graph (merge-base, ancestry), not a
+          # shallow snapshot.
+          fetch-depth: 0
+
+      - name: Merge main into dev with -s ours (ancestry only, tree unchanged)
+        run: |
+          set -euo pipefail
+
+          git fetch --no-tags origin dev
+          main_sha="$(git rev-parse origin/main)"
+          dev_sha="$(git rev-parse origin/dev)"
+          echo "main is ${main_sha}, dev is ${dev_sha}"
+
+          # Idempotence: nothing to record if main is already in dev's
+          # ancestry (an earlier run, a manual merge, or a merge-commit
+          # promotion).
+          if git merge-base --is-ancestor "${main_sha}" "${dev_sha}"; then
+            echo "main is already an ancestor of dev; ancestry is recorded, nothing to do."
+            exit 0
+          fi
+
+          # The safety gate: -s ours discards main's side entirely, so it is
+          # only correct when main brings nothing dev lacks — which after a
+          # squash promotion means the two TREES are byte-identical. Anything
+          # else needs eyes, not automation.
+          main_tree="$(git rev-parse "${main_sha}^{tree}")"
+          dev_tree="$(git rev-parse "${dev_sha}^{tree}")"
+          if [ "${main_tree}" != "${dev_tree}" ]; then
+            echo "::error::main's tree (${main_tree}) != dev's tree (${dev_tree}): dev moved mid-promotion, or this push to main was not a squash promotion of dev's tip. Refusing to record ancestry with -s ours — a human should look, then run the manual step in CONTRIBUTING.md (\"Promotions\")."
+            exit 1
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git checkout -B dev "${dev_sha}"
+          git merge -s ours --no-ff "${main_sha}" \
+            -m "Merge main back into dev after promotion (ancestry only; tree unchanged) (#1298)"
+
+          # Belt and braces: -s ours must not have changed dev's tree. If it
+          # somehow did, refuse to push the result.
+          merged_tree="$(git rev-parse 'HEAD^{tree}')"
+          if [ "${merged_tree}" != "${dev_tree}" ]; then
+            echo "::error::ancestry merge changed dev's tree (${dev_tree} -> ${merged_tree}); refusing to push."
+            exit 1
+          fi
+
+          # No force: if dev advanced between the fetch above and this push,
+          # the push is rejected and the run fails loudly — a re-run starts
+          # over from the new tip and the idempotence/tree gates re-decide.
+          git push origin dev
+          echo "ancestry merge pushed to dev ($(git rev-parse HEAD))."

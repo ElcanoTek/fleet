@@ -71,7 +71,10 @@ version: 2
 #
 # So bumping node is a deliberate, human-initiated change: edit web/.nvmrc,
 # and CI + bootstrap + doctor + update all follow. Check the release line first
-# — production should track Active or Maintenance LTS, never Current.
+# — production should track Active or Maintenance LTS, never Current. The move
+# to the next LTS line is not left to memory: node-lts-reminder.yml files an
+# issue (with the full declaration-point checklist) once the target major's
+# scheduled LTS date passes while web/.nvmrc is still behind (#1300).
 #
 # WHY "never Current", concretely — the rule reads like plain conservatism, and
 # then someone points out that the major on offer becomes LTS in a few weeks and

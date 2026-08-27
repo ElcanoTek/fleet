@@ -1138,7 +1138,9 @@ type Config struct {
 	// SandboxWarmSize sets the warm-pool depth (FLEET_SANDBOX_WARM_SIZE).
 	// Unset (the -1 sentinel) derives it from MaxConcurrentAgents (clamped
 	// 2..8, #181); an explicit 0 disables the warm pool entirely — every take
-	// pays a cold start (#1264); a positive value pins the depth.
+	// pays a cold start (#1264); a positive value pins the depth. Any explicit
+	// negative is rejected by the knob registry's min bound (#1299), so a
+	// loaded config only ever carries -1 (unset) or >= 0 here.
 	SandboxWarmSize int
 	// SandboxWarmTTLSeconds bounds how long a warm container may sit idle before
 	// it is reaped and replaced (FLEET_SANDBOX_WARM_TTL, default 300). 0 disables
@@ -1683,13 +1685,6 @@ func Load(envFile string) (*Config, error) {
 	if cfg.LockdownOnly && cfg.SandboxImage == "" {
 		fmt.Fprintln(os.Stderr, "warn: FLEET_LOCKDOWN_ONLY=true but sandbox image is unset; cannot enforce — treating as disabled")
 		cfg.LockdownOnly = false
-	}
-
-	// An explicit negative warm size is a misconfiguration, not a request to
-	// derive: fail loudly (#1264). The -1 default above means "unset"; 0 is a
-	// real value (no warm pool).
-	if cfg.SandboxWarmSize < -1 {
-		return nil, fmt.Errorf("FLEET_SANDBOX_WARM_SIZE must be >= 0 (0 disables the warm pool; leave it unset to derive from FLEET_MAX_CONCURRENT_AGENTS), got %d", cfg.SandboxWarmSize)
 	}
 
 	// Validate the sandbox egress mode (#211): an unknown value must fail loudly

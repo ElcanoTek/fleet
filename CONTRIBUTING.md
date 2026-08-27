@@ -181,6 +181,39 @@ first.
 - Make sure the full local suite (Go + web + mocked Playwright) is green before
   you push.
 
+### Promotions (dev → main)
+
+Feature work merges into `dev` (the fast lane); `dev` is promoted to `main`
+via a **squash**-merge PR — the squash titles are the promotion log. Squashing
+has one structural side effect: the branches' merge-base never advances, so
+any region dev changes, promotes, and later changes again would read as
+both-sides-modified (a spurious conflict) on the next promotion PR.
+
+The fix is an **ancestry merge** recorded on `dev` right after each promotion:
+`git merge -s ours main` makes main an ancestor of dev while changing nothing
+in dev's tree. The `Promotion ancestry` workflow
+([`.github/workflows/promotion-ancestry.yml`](.github/workflows/promotion-ancestry.yml))
+does this automatically on every push to `main`, gated on **tree identity** —
+`-s ours` is only provably safe when `main^{tree}` is byte-identical to
+`dev^{tree}`, i.e. main carries nothing dev lacks. If the trees differ (dev
+moved mid-promotion), the workflow fails loudly instead of guessing.
+
+If it fails and you have looked, the manual step it automates is:
+
+```bash
+git fetch origin main dev
+# Precondition — both must print the same tree hash:
+git rev-parse origin/main^{tree} origin/dev^{tree}
+git checkout -B dev origin/dev
+git merge -s ours --no-ff origin/main -m "Merge main back into dev after promotion (ancestry only; tree unchanged)"
+git push origin dev
+```
+
+If the trees differ, do **not** use `-s ours` — resolve the divergence for
+real first (dev commits that landed mid-promotion are content main genuinely
+lacks; `-s ours` from main's side would be wrong, and from dev's side it is
+only safe once you have confirmed main brings nothing new).
+
 ## Commit messages
 
 - Write clear, imperative commit subjects ("Add X", not "Added X").

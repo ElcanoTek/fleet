@@ -1091,7 +1091,8 @@ jobs:
     # without being blocked forever on a required check that never reported, the
     # classic footgun of pairing required checks with path/`if` skips. A code PR
     # cannot go green here unless every upstream job actually succeeded: a skip is
-    # allowed (docs-only), but any failure or cancellation fails the gate.
+    # allowed (docs-only), any failure fails the gate, and a superseded run
+    # (cancelled upstream jobs, none failed) concludes neutral (#1302).
     name: CI gate
     if: ${{ always() }}
     needs: [changes, gitleaks, actions, migrations, helm, go, python, codeql, semgrep, web, playwright, e2e-live, grype-scan]
@@ -1108,9 +1109,26 @@ jobs:
           echo "Upstream job results: ${RESULTS}"
           echo "docs_only: ${DOCS_ONLY}"
           case ",${RESULTS}," in
-            *,failure,*|*,cancelled,*)
-              echo "::error::A required upstream CI job failed or was cancelled."
+            *,failure,*)
+              echo "::error::A required upstream CI job failed."
               exit 1 ;;
+          esac
+          # Cancelled-but-nothing-failed means this run was SUPERSEDED: the
+          # concurrency group above cancels an in-flight PR run when a newer
+          # push replaces the head. This job still runs (`if: always()`);
+          # conclude neutral rather than stamping a meaningless red X on the
+          # stale commit — the superseding run on the new head is what the
+          # required check actually evaluates (#1302, same shape as Dev gate).
+          # Caveat, accepted deliberately: a HUMAN cancelling the run on a
+          # PR's current head also lands here and turns the required check
+          # green over a suite that did not finish. Cancelling a run and then
+          # merging over it is a deliberate two-step act, not an accident this
+          # gate is built to catch; on pushes to main cancel-in-progress is
+          # off, so no push run can reach this branch via supersession.
+          case ",${RESULTS}," in
+            *,cancelled,*)
+              echo "::notice::run superseded: upstream jobs were cancelled and none failed; CI gate concludes neutral (#1302)"
+              exit 0 ;;
           esac
           # A `skipped` job passes this gate only because the docs-only
           # classifier above is allowed to skip the suite. If nothing was
