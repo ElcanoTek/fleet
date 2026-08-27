@@ -130,6 +130,19 @@ func (c *Config) SetApprovalTimeoutSeconds(v int) {
 	c.setLive(func() { c.ApprovalTimeoutSeconds = v })
 }
 
+// LiveSharedFilesMaxTotalMB reports the shared file library's total-size cap
+// in megabytes (0 = unlimited), admin-override-aware. Read per upload request,
+// so an admin edit governs the next upload without a restart.
+func (c *Config) LiveSharedFilesMaxTotalMB() int {
+	return c.liveInt(func() int { return c.SharedFilesMaxTotalMB })
+}
+
+// SetSharedFilesMaxTotalMB applies the admin override for the shared file
+// library's total-size cap.
+func (c *Config) SetSharedFilesMaxTotalMB(v int) {
+	c.setLive(func() { c.SharedFilesMaxTotalMB = v })
+}
+
 // LiveContextHandlesEnabled reports whether composer context handles (#517)
 // are on, admin-override-aware.
 func (c *Config) LiveContextHandlesEnabled() bool {

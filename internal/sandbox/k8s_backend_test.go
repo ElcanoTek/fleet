@@ -719,3 +719,48 @@ func TestK8sCloseIsBoundedWithUnreadBridgeStdout(t *testing.T) {
 		t.Error("Close() returned but deleted no pod")
 	}
 }
+
+// TestK8sPodSpecSharedLibrarySubPathMount pins the shared-file-library posture
+// (docs/SHARED-FILES.md): a read-only root nested inside the workspace claim
+// is re-mounted from the SAME claim as a read-only subPath mount — the k8s
+// counterpart of podman's nested `--volume …:ro` overlay — while host-path
+// roots (bundle docs the image itself carries) still get anchors only, never
+// a mount.
+func TestK8sPodSpecSharedLibrarySubPathMount(t *testing.T) {
+	cfg := testContainerConfig(t)
+	shared := filepath.Join(cfg.WorkspaceHostDir, "shared")
+	cfg.ReadOnlyMounts = []string{shared, "/opt/fleet/client/protocols", ""}
+	kcfg := KubernetesConfig{Namespace: "fleet-sandbox", WorkspaceClaim: "fleet-workspace"}
+
+	pod, err := buildSandboxPod(applyContainerDefaults(cfg), kcfg, "fleet-sandbox-shared")
+	if err != nil {
+		t.Fatalf("buildSandboxPod: %v", err)
+	}
+	var found *k8sVolumeMount
+	for i, m := range pod.Spec.Containers[0].VolumeMounts {
+		if m.MountPath == shared {
+			found = &pod.Spec.Containers[0].VolumeMounts[i]
+			continue
+		}
+		// Nothing else may be read-only or subPath'd, and the host doc dir
+		// must not become a mount at all.
+		if m.ReadOnly || m.SubPath != "" {
+			t.Errorf("unexpected read-only/subPath mount %+v", m)
+		}
+		if m.MountPath == "/opt/fleet/client/protocols" {
+			t.Errorf("host doc dir got a pod mount %+v — pods have no host filesystem to bind", m)
+		}
+	}
+	if found == nil {
+		t.Fatalf("no volume mount for the shared library at %q; mounts = %+v", shared, pod.Spec.Containers[0].VolumeMounts)
+	}
+	if found.Name != "workspace" {
+		t.Errorf("shared mount volume = %q, want the workspace claim volume", found.Name)
+	}
+	if !found.ReadOnly {
+		t.Errorf("shared mount is not read-only — a turn could rewrite what every chat reads")
+	}
+	if found.SubPath != "shared" {
+		t.Errorf("shared mount subPath = %q, want %q", found.SubPath, "shared")
+	}
+}

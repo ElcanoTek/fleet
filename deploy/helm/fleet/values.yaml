@@ -93,9 +93,11 @@ sandbox:
   memory: "512m"
   cpus: "1.0"
   diskGB: 5
-  # Warm pool depth (FLEET_SANDBOX_WARM_SIZE; 0 = derive from
-  # FLEET_MAX_CONCURRENT_AGENTS).
-  warmSize: 0
+  # Warm pool depth (FLEET_SANDBOX_WARM_SIZE). null/unset (the default)
+  # derives it from FLEET_MAX_CONCURRENT_AGENTS (clamped 2..8); 0 disables the
+  # warm pool — every turn pays a cold pod start; a positive value pins the
+  # depth.
+  warmSize: null
 
 networkPolicies:
   # Ship the deny-all egress policy for sandbox pods labeled

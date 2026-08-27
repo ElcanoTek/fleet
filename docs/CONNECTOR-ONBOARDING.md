@@ -9,6 +9,17 @@ Microsoft Work IQ needs an Entra app registration — failed mid-discovery with
 no explanation of what to do. This feature makes every directory entry either
 connectable in place or honestly, visibly documented on the card.
 
+## Bundle-managed inbound email reports
+
+An SES-to-S3 email-report archive is not a connector-directory entry and is not
+provisioned by Fleet. It combines external AWS/DNS resources with a read-only
+MCP server owned by the client-config bundle. Use the external canonical
+[new-client email-report runbook](https://github.com/ElcanoTek/ses-s3-setup/blob/main/docs/NEW-CLIENT-EMAIL-SETUP.md)
+for domain/MX decisions, tenant infrastructure, IAM separation, bundle wiring,
+historical mailbox migration, validation, and rollback. Keep real client
+identifiers in that client's bundle deployment record, never in this engine
+repository.
+
 ## What shipped
 
 **API-key auth for per-user remote MCP** (migration 039, `internal/store`,

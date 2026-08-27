@@ -384,7 +384,7 @@ func (s *Store) truncateAllForTestOnce(ctx context.Context, queue bool) error {
 		}
 	}
 	if _, err := tx.ExecContext(ctx,
-		`TRUNCATE TABLE conversations, memories, memory_entities, users, panic_events, remote_mcp_servers, push_subscriptions, llm_providers, workspace_settings, notify_settings, turn_metrics, projects, user_connector_prefs, user_skills RESTART IDENTITY CASCADE`); err != nil {
+		`TRUNCATE TABLE conversations, memories, memory_entities, users, panic_events, remote_mcp_servers, push_subscriptions, llm_providers, workspace_settings, notify_settings, turn_metrics, projects, user_connector_prefs, user_skills, shared_files RESTART IDENTITY CASCADE`); err != nil {
 		return err
 	}
 	return tx.Commit()

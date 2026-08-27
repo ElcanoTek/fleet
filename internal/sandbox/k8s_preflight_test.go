@@ -13,6 +13,22 @@ import (
 	"testing"
 )
 
+// TestKubernetesBackendApiserverVersion pins the /readyz seam: the exported
+// accessor must surface the same /version answer the preflight sees, so the
+// readiness probe under this backend reports on the apiserver rather than on
+// a podman binary the control-plane host does not have.
+func TestKubernetesBackendApiserverVersion(t *testing.T) {
+	fake := newFakeKube(t)
+	backend := fake.backend(t, KubernetesConfig{Namespace: "fleet-sandboxes"})
+	version, err := backend.ApiserverVersion(context.Background())
+	if err != nil {
+		t.Fatalf("ApiserverVersion: %v", err)
+	}
+	if version == "" {
+		t.Fatal("ApiserverVersion returned an empty version string")
+	}
+}
+
 func TestK8sPreflightHappyPath(t *testing.T) {
 	fake := newFakeKube(t)
 	backend := fake.backend(t, KubernetesConfig{Namespace: "fleet-sandboxes", RuntimeClassName: "kata"})

@@ -337,7 +337,12 @@ func (s *Server) validateAttachments(atts []chatAttachment) []chatAttachment {
 // call on raw image bytes; non-image files keep absolute paths so view_file
 // or downstream tools can reach them. The agent's system prompt tells it
 // what to do with this section.
-func appendAttachmentsBlock(message string, images, others []chatAttachment) string {
+//
+// stagedInWorkspace flips the trailer for the non-image list: under the
+// kubernetes backend the files were copied into the conversation workspace
+// (see stageAttachmentsIntoWorkspace), so the uploads-area TTL warning would
+// be describing a tree the paths no longer point at.
+func appendAttachmentsBlock(message string, images, others []chatAttachment, stagedInWorkspace bool) string {
 	if len(images) == 0 && len(others) == 0 {
 		return message
 	}
@@ -354,9 +359,172 @@ func appendAttachmentsBlock(message string, images, others []chatAttachment) str
 		for _, a := range others {
 			fmt.Fprintf(&b, "- `%s` (%s, %s)\n", a.Name, humanSize(a.Size), a.Path)
 		}
-		b.WriteString("\nThese files are saved to the conversation's temporary uploads area and will be swept after the normal TTL. If the user wants to keep a file for future sessions, offer to persist it via `mcp_fast_io_upload`.\n")
+		if stagedInWorkspace {
+			b.WriteString("\nThese files are saved in this conversation's workspace (the `attachments/` subdirectory) and live as long as the conversation does. If the user wants to keep a file beyond that, offer to persist it via `mcp_fast_io_upload`.\n")
+		} else {
+			b.WriteString("\nThese files are saved to the conversation's temporary uploads area and will be swept after the normal TTL. If the user wants to keep a file for future sessions, offer to persist it via `mcp_fast_io_upload`.\n")
+		}
 	}
 	return b.String()
+}
+
+// ── kubernetes attachment staging ────────────────────────────────────────
+
+// attachmentsNeedWorkspaceStaging reports whether non-image attachments must
+// be copied into the conversation workspace to be readable from a sandbox.
+//
+// Podman: no — the uploads root is a same-path read-only bind mount, so the
+// agent reads the original bytes with zero copies. Kubernetes: yes — a
+// sandbox pod mounts only the workspace claim, the uploads root lives on the
+// control plane's data volume, and before this seam existed the attachments
+// block advertised absolute paths no pod could resolve (the gap called out in
+// docs/DEPLOYMENT-KUBERNETES.md). A nil pool (tests, degraded boot) stages
+// nothing, preserving the podman-shaped default.
+func (s *Server) attachmentsNeedWorkspaceStaging() bool {
+	if s.agent == nil {
+		return false // fixture servers run handlers with no engine at all
+	}
+	pool := s.agent.SandboxPool()
+	return pool != nil && pool.KubernetesBackend() != nil
+}
+
+// stageAttachmentsIntoWorkspace copies validated non-image attachments into
+// <conversation workspace>/attachments/ — inside the workspace claim, so the
+// advertised path resolves in every sandbox pod — and rewrites each entry's
+// Path to the staged copy.
+//
+// Inputs are expected from validateAttachments, but the stager does not TRUST
+// its caller: each entry's Path is re-confined to uploadsRoot with the same
+// Rel + IsLocal + rejoin barrier validateAttachments uses (also the shape
+// CodeQL's path-injection query recognizes), so a future call site that skips
+// validation cannot turn the copy source into an arbitrary host read.
+//
+// Idempotent for the queue-drain case: a drained row echoes the same
+// attachment metadata a live submit already staged, and a same-name
+// same-size staged copy is reused rather than duplicated. A same-name
+// different-size file (a genuinely new attachment reusing a filename) gets a
+// numbered variant instead — names are cheap, clobbering a file the agent may
+// have already read mid-conversation is not.
+//
+// Per-entry failures degrade rather than fail the turn: the entry keeps its
+// uploads path (exactly the pre-staging behavior) and the error is logged.
+func stageAttachmentsIntoWorkspace(uploadsRoot, convID string, atts []chatAttachment) []chatAttachment {
+	if len(atts) == 0 {
+		return atts
+	}
+	root, err := filepath.Abs(uploadsRoot)
+	if err != nil {
+		log.Printf("attachment staging: resolve uploads root: %v (attachments keep uploads paths)", err)
+		return atts
+	}
+	root = filepath.Clean(root)
+	convDir, err := tools.EnsureWorkspaceDir(convID)
+	if err != nil {
+		log.Printf("attachment staging: workspace dir for %q: %v (attachments keep uploads paths)", logSafeSlug(convID), err)
+		return atts
+	}
+	dir := filepath.Join(convDir, "attachments")
+	// 0o755 like every workspace dir: the sandbox uid (1000) must read it.
+	if err := os.MkdirAll(dir, 0o755); err != nil { //nolint:gosec // see comment above
+		log.Printf("attachment staging: mkdir %s: %v (attachments keep uploads paths)", dir, err)
+		return atts
+	}
+	out := make([]chatAttachment, 0, len(atts))
+	for _, a := range atts {
+		src, ok := confineToRoot(root, a.Path)
+		if !ok {
+			// %q + CR/LF strip: on this branch Path is by definition a value
+			// that failed containment, so treat it as hostile in the log too.
+			log.Printf("attachment staging: %q is outside the uploads root (kept unstaged)", logSafeSlug(a.Path))
+			out = append(out, a)
+			continue
+		}
+		dst, err := stageOneAttachment(dir, src, a)
+		if err != nil {
+			log.Printf("attachment staging: %q: %v (this attachment keeps its uploads path)", logSafeSlug(a.Name), err)
+			out = append(out, a)
+			continue
+		}
+		a.Path = filepath.ToSlash(dst)
+		out = append(out, a)
+	}
+	return out
+}
+
+// confineToRoot re-derives path from trusted parts: the remainder below root
+// (rejected unless local) rejoined to root — byte-identical to the input
+// whenever the guard passes, never derived from the raw value when it fails.
+func confineToRoot(root, path string) (string, bool) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", false
+	}
+	rel, err := filepath.Rel(root, filepath.Clean(abs))
+	if err != nil || !filepath.IsLocal(rel) {
+		return "", false
+	}
+	return filepath.Join(root, rel), true
+}
+
+// stageOneAttachment places one attachment (src already confined to the
+// uploads root by the caller) under dir and returns the staged path. See
+// stageAttachmentsIntoWorkspace for the naming rules.
+func stageOneAttachment(dir, src string, a chatAttachment) (string, error) {
+	base := sanitizeFilename(a.Name)
+	ext := filepath.Ext(base)
+	stem := strings.TrimSuffix(base, ext)
+	for i := 1; i <= 100; i++ {
+		name := base
+		if i > 1 {
+			name = fmt.Sprintf("%s-%d%s", stem, i, ext)
+		}
+		// sanitizeFilename already stripped separators and leading dots; the
+		// IsLocal check restates that as the barrier CodeQL's path-injection
+		// query recognizes, so the Join below is provably confined to dir.
+		if !filepath.IsLocal(name) {
+			return "", fmt.Errorf("attachment name is unusable as a staged filename")
+		}
+		dst := filepath.Join(dir, name)
+		if info, err := os.Stat(dst); err == nil {
+			if info.Mode().IsRegular() && info.Size() == a.Size {
+				return dst, nil // already staged (queue drain, or a re-send)
+			}
+			continue // occupied by something else — try the next variant
+		}
+		if err := copyAttachment(src, dst); err != nil {
+			if errors.Is(err, os.ErrExist) {
+				continue // lost a race for this name — try the next variant
+			}
+			return "", err
+		}
+		return dst, nil
+	}
+	return "", fmt.Errorf("no free staged name after 100 variants")
+}
+
+// copyAttachment copies src (confined to the uploads root by the caller) to a
+// fresh dst. O_EXCL so a concurrent stager can never interleave writes into
+// one file; 0o644 so the sandbox uid can read it through the claim.
+func copyAttachment(src, dst string) error {
+	in, err := os.Open(src) //nolint:gosec // src re-derived by confineToRoot (Rel + IsLocal + rejoin against the uploads root)
+	if err != nil {
+		return fmt.Errorf("open source: %w", err)
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644) //nolint:gosec // dst is Join(workspace attachments dir, IsLocal-checked sanitized name); world-readable for the sandbox uid
+	if err != nil {
+		return err // undecorated: the caller inspects os.ErrExist
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
+		_ = os.Remove(dst)
+		return fmt.Errorf("copy: %w", err)
+	}
+	if err := out.Close(); err != nil {
+		_ = os.Remove(dst)
+		return fmt.Errorf("close: %w", err)
+	}
+	return nil
 }
 
 // maxWorkspaceInventoryEntries caps how many persisted-file rows we surface

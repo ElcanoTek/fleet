@@ -45,6 +45,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/http"
 	"net/url"
 	"path"
 	"strconv"
@@ -106,6 +107,14 @@ func (c *k8sClient) restConfigForExec() *rest.Config {
 	case c.staticToken != "":
 		cfg.BearerToken = c.staticToken
 	}
+	// Never proxy: left nil, client-go defaults to honoring
+	// HTTPS_PROXY/NO_PROXY, while the hand-rolled REST transport (pod CRUD,
+	// preflight) ignores proxy env entirely — so on a box with egress-proxy
+	// env set, exec streams would silently reroute through the proxy while
+	// every other apiserver call goes direct. Pinning "no proxy" keeps both
+	// paths symmetric and matches this backend's strict posture (it already
+	// refuses kubeconfig proxy-url).
+	cfg.Proxy = func(*http.Request) (*url.URL, error) { return nil, nil }
 	return cfg
 }
 
@@ -205,16 +214,48 @@ func execOutcome(streamErr error) (int, error) {
 	return -1, fmt.Errorf("pod exec: %s", sanitizeClusterText(streamErr.Error()))
 }
 
+// k8sStdinWriteTimeout bounds how long writeStdin waits for the executor to
+// consume a payload. Normally the stream is up and the write completes in
+// microseconds; the bound exists for the dial that never finishes — an
+// apiserver that accepts TCP but stalls the WebSocket upgrade leaves the pipe
+// with no reader, and the old hand-rolled client's 15s handshake timeout is
+// gone (client-go sets none). An unbounded Write here parks the caller — which
+// may hold the sandbox mutex — forever, wedging close() and Pool.Close behind
+// it. A var so tests can shrink it.
+var k8sStdinWriteTimeout = 60 * time.Second
+
 // writeStdin sends bytes to the process's stdin. Goroutine-safe by way of the
-// pipe; blocks until the executor has consumed the bytes.
+// pipe; blocks until the executor has consumed the bytes, the stream ends, or
+// the write times out (see k8sStdinWriteTimeout). On timeout the session is
+// cancelled: a stream that cannot consume stdin within the bound is wedged,
+// and cancelling makes StreamWithContext return, which closes the pipe and
+// reaps the write goroutine.
 func (s *k8sExecSession) writeStdin(p []byte) error {
 	if s.stdinW == nil {
 		return errors.New("write pod exec stdin: session started without stdin")
 	}
-	if _, err := s.stdinW.Write(p); err != nil {
-		return fmt.Errorf("write pod exec stdin: %w", err)
+	written := make(chan error, 1)
+	go func() {
+		_, err := s.stdinW.Write(p)
+		written <- err
+	}()
+	timeout := time.NewTimer(k8sStdinWriteTimeout)
+	defer timeout.Stop()
+	select {
+	case err := <-written:
+		if err != nil {
+			return fmt.Errorf("write pod exec stdin: %w", err)
+		}
+		return nil
+	case <-s.done:
+		// Stream over; the payload can never be consumed. The stream
+		// goroutine's CloseWithError has already reaped (or will reap) the
+		// write goroutine.
+		return errors.New("write pod exec stdin: exec stream ended before consuming the payload")
+	case <-timeout.C:
+		s.cancel()
+		return fmt.Errorf("write pod exec stdin: stream did not consume the payload within %v (dial or upgrade stalled)", k8sStdinWriteTimeout)
 	}
-	return nil
 }
 
 // closeStdin signals stdin EOF — under v5 client-go half-closes the stdin

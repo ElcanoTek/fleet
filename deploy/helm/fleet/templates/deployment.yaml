@@ -144,9 +144,11 @@ spec:
               value: {{ .Values.sandbox.cpus | quote }}
             - name: FLEET_SANDBOX_DISK_GB
               value: {{ .Values.sandbox.diskGB | quote }}
-            {{- if gt (int .Values.sandbox.warmSize) 0 }}
+            {{- /* null means "let the engine derive"; 0 is a real value (no
+                 warm pool), so the gate is set-ness, not positivity (#1264). */}}
+            {{- if not (kindIs "invalid" .Values.sandbox.warmSize) }}
             - name: FLEET_SANDBOX_WARM_SIZE
-              value: {{ .Values.sandbox.warmSize | quote }}
+              value: {{ .Values.sandbox.warmSize | int | quote }}
             {{- end }}
             {{- if .Values.postgres.enabled }}
             - name: FLEET_CHAT_DATABASE_URL

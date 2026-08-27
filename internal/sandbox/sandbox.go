@@ -55,13 +55,25 @@ const BashOutputCaptureCap = 64 * 1024 * 1024
 // cappedBuffer is an io.Writer that stores at most cap bytes and counts
 // the rest, so unbounded command output can't exhaust memory. It always
 // reports a full-length write so exec's pipe copier never errors.
+//
+// Mutex-guarded, and read via snapshot(), because writer quiescence is no
+// longer guaranteed on every path: client-go's exec executor returns from a
+// cancelled StreamWithContext WITHOUT joining its stdout/stderr copy
+// goroutines, so the kubernetes backend can be assembling a cancellation
+// result while an abandoned copier is still writing (a reproduced -race
+// finding on PR #1285). Locking here makes every sink safe regardless of
+// which backend feeds it; snapshot() returns copies so no caller ever holds
+// a live reference into the buffer.
 type cappedBuffer struct {
+	mu        sync.Mutex
 	buf       bytes.Buffer
 	cap       int
 	discarded int64
 }
 
 func (c *cappedBuffer) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	remaining := c.cap - c.buf.Len()
 	if remaining <= 0 {
 		c.discarded += int64(len(p))
@@ -73,6 +85,17 @@ func (c *cappedBuffer) Write(p []byte) (int, error) {
 		return len(p), nil
 	}
 	return c.buf.Write(p)
+}
+
+// snapshot returns a copy of the captured bytes and the discarded count,
+// consistent with each other. A copy, not the live slice: a late write from
+// an abandoned copier must never mutate a result already handed out.
+func (c *cappedBuffer) snapshot() ([]byte, int64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]byte, c.buf.Len())
+	copy(out, c.buf.Bytes())
+	return out, c.discarded
 }
 
 // Mode picks a backend at construction time. Callers don't usually pick

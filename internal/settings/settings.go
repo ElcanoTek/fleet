@@ -148,6 +148,14 @@ func Registry() []Spec {
 			EnvVar: "FLEET_CONNECTOR_RECOMMENDATIONS_ENABLED"},
 		{Key: "context_handles_enabled", Kind: KindBool,
 			EnvVar: "FLEET_CONTEXT_HANDLES_ENABLED"},
+		// Shared file library total-size cap in MB (docs/SHARED-FILES.md).
+		// MinZeroOK: 0 = unlimited, for deployments that genuinely want a very
+		// large library and accept the disk cost. Live: the upload handler
+		// reads it per request. Max 16 TiB — far past any sane library, but a
+		// finite bound keeps a fat-fingered value from overflowing the
+		// bytes conversion.
+		{Key: "shared_files_max_total_mb", Kind: KindInt, Min: 1, Max: 16 * 1024 * 1024, MinZeroOK: true,
+			EnvVar: "FLEET_SHARED_FILES_MAX_TOTAL_MB"},
 	}
 }
 

@@ -44,6 +44,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -389,6 +390,16 @@ func (b *KubernetesBackend) Namespace() string { return b.cfg.Namespace }
 // outer construction contexts from it (mirroring resolveStartTimeout).
 func (b *KubernetesBackend) StartTimeout() time.Duration { return b.cfg.StartTimeout }
 
+// ApiserverVersion reports the cluster's version string via GET /version —
+// the cheapest authenticated "is the apiserver reachable and are my
+// credentials valid" call, the same one the boot preflight opens with.
+// Exported for the /readyz sandbox check: under this backend the sandbox
+// runtime IS the apiserver, so readiness probes it instead of a local
+// `podman --version` that reports on a binary this deployment never execs.
+func (b *KubernetesBackend) ApiserverVersion(ctx context.Context) (string, error) {
+	return b.client.serverVersion(ctx)
+}
+
 // newSandbox starts one sandbox Pod and returns the wrapping handle. cfg
 // carries the backend-shared knobs (image, workspace path, limits, network
 // posture); the pool routes here from the same take paths that call
@@ -528,6 +539,28 @@ func buildSandboxPod(cfg ContainerConfig, kcfg KubernetesConfig, name string) (*
 		{Name: "ipython", EmptyDir: &k8sEmptyDir{SizeLimit: "32Mi"}},
 		{Name: "cache", EmptyDir: &k8sEmptyDir{SizeLimit: "32Mi"}},
 		{Name: "config", EmptyDir: &k8sEmptyDir{SizeLimit: "8Mi"}},
+	}
+	// Read-only roots nested inside the workspace claim (today: the shared
+	// file library's staged tree, docs/SHARED-FILES.md) are re-mounted from
+	// the SAME claim as read-only subPath mounts — the k8s counterpart of the
+	// podman backend's nested `--volume …:ro` overlay, so a sandbox can read
+	// the library but no turn can rewrite what every other chat reads. Roots
+	// NOT nested in the claim carry fileop anchors only (bundle docs the
+	// image itself provides) and get no mount, exactly as before.
+	for _, dir := range cfg.ReadOnlyMounts {
+		if dir == "" {
+			continue
+		}
+		rel, err := filepath.Rel(cfg.WorkspaceHostDir, filepath.Clean(dir))
+		if err != nil || rel == "." || !filepath.IsLocal(rel) {
+			continue
+		}
+		mounts = append(mounts, k8sVolumeMount{
+			Name:      "workspace",
+			MountPath: filepath.Join(cfg.WorkspaceHostDir, rel),
+			SubPath:   filepath.ToSlash(rel),
+			ReadOnly:  true,
+		})
 	}
 
 	spec := k8sPodSpec{
@@ -768,12 +801,17 @@ func (k *k8sImpl) runBash(ctx context.Context, req BashRequest) (BashResult, err
 	code, execErr := k.backend.client.runOneShotExec(cmdCtx, k.backend.cfg.Namespace, podName, sandboxContainerName,
 		command, nil, stdoutBuf, stderrBuf)
 
+	// snapshot(), not the live buffers: a cancelled StreamWithContext returns
+	// without joining its copy goroutines, so an abandoned copier may still be
+	// writing while this result is assembled (the PR #1285 -race finding).
+	stdoutBytes, stdoutDiscarded := stdoutBuf.snapshot()
+	stderrBytes, stderrDiscarded := stderrBuf.snapshot()
 	res := BashResult{
 		ExitCode:        code,
-		Stdout:          stdoutBuf.buf.Bytes(),
-		Stderr:          stderrBuf.buf.Bytes(),
-		StdoutDiscarded: stdoutBuf.discarded,
-		StderrDiscarded: stderrBuf.discarded,
+		Stdout:          stdoutBytes,
+		Stderr:          stderrBytes,
+		StdoutDiscarded: stdoutDiscarded,
+		StderrDiscarded: stderrDiscarded,
 	}
 	if cmdCtx.Err() != nil {
 		// Cancellation/timeout only tore down the exec CONNECTION; the shell

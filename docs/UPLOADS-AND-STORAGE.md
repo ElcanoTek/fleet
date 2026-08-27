@@ -3,6 +3,19 @@
 Design note for the upload-limit + storage-cleanup feature (2026-07). What
 shipped, how the pieces fit, and what was deliberately deferred.
 
+(Per-conversation attachments only. Files meant to be readable from *every*
+chat are the shared file library — [SHARED-FILES.md](SHARED-FILES.md) — which
+shares `FLEET_UPLOAD_MAX_BYTES` as its per-file cap but has its own storage
+trees, TTL-less retention, and library-total cap.)
+
+Backend note: on podman the sandbox reads a non-image attachment through the
+read-only same-path bind mount of the uploads root, zero copies. On the
+kubernetes backend that mount does not exist (pods mount only the workspace
+claim), so the chat server copies each validated non-image attachment into
+`<workspace>/<convID>/attachments/` at send time and advertises the staged
+path; those copies live and die with the conversation workspace
+([DEPLOYMENT-KUBERNETES.md](DEPLOYMENT-KUBERNETES.md)).
+
 ## Why
 
 A user uploading a >250 MB file in the chat composer got a silent failure:

@@ -47,8 +47,61 @@ prior versions are listed because none have shipped.
   network connection" errors on every sandbox retirement — with the cancel
   kept as the bounded backstop for a process that ignores EOF.
 
+- **`FLEET_SANDBOX_WARM_SIZE=0` now means what it says: no warm pool**
+  (#1264). Before, `0` was indistinguishable from unset, so the engine
+  silently derived a 2..8-deep pool from `FLEET_MAX_CONCURRENT_AGENTS` — and
+  the Helm chart reinforced the confusion by omitting the env var at
+  `warmSize: 0` and documenting `0` as "derive". Found in the #1264 kind
+  rehearsal, where the bundle's overlay set `warmSize: 0`, documented itself
+  as running with no warm pool, and ran a two-pod Guaranteed-QoS pool anyway.
+  Now: unset derives (unchanged default), an explicit `0` disables warming
+  (every take pays a cold start — the pool always supported this), a positive
+  value pins the depth, and a negative value fails loudly at load. The chart's
+  `sandbox.warmSize` default is now `null` (= let the engine derive) and any
+  set value — including `0` — is passed through. **Semantic change:** an
+  operator who set `FLEET_SANDBOX_WARM_SIZE=0` (or chart `warmSize: 0`)
+  expecting derivation now gets no warm pool — delete the key to keep the
+  derived depth.
+
+- **`fleet validate-config`'s model_api check now actually verifies the API
+  key** (#1264). It probed OpenRouter's `/api/v1/models`, which is public —
+  it returns 200 with no Authorization header and with a garbage one — so any
+  non-empty `OPENROUTER_API_KEY` was blessed with "API key authenticates".
+  The #1264 kind rehearsal hit the consequence: a mis-created secret holding
+  64 hex characters of junk passed the check, then the first real completion
+  failed with `401 Missing Authentication header`. The check now probes
+  `GET /api/v1/key`, which requires auth (401 on a bad or missing key, 200
+  with the key's own metadata otherwise). The fake-LLM seam serves
+  `/api/v1/key` with the same auth contract, so the check stays meaningful —
+  not a spurious 404 warning — in E2E ladders running against
+  `OPENROUTER_BASE_URL`.
+
+- **`/readyz`'s sandbox check is backend-aware** (#1264). Under
+  `FLEET_SANDBOX_BACKEND=kubernetes` the probe ran `podman --version` on the
+  control-plane host — a binary that deployment never has or uses — so
+  readiness reported a permanent, misleading `degraded`. The kubernetes
+  backend now probes what its sandboxes actually run on: one cached apiserver
+  `GET /version` (the same call the boot preflight opens with), reporting the
+  cluster version in the detail. The podman backend's `<runtime> --version`
+  probe, its #217 binary-name mapping, and the #215 unauthenticated-endpoint
+  cache bound are unchanged.
 
 ### Added
+
+- **Shared files: a native cross-chat file library.** Admins publish files
+  once (Settings → Shared files, or `POST /shared-files`) and every
+  conversation's agent can read them at `shared/<folder>/<name>` — on BOTH
+  sandbox backends: canonical bytes stay host-side under
+  `<DataDir>/shared_files/`, a staged copy under `<WorkspaceRoot>/shared/` is
+  mounted read-only into every sandbox (a nested `:ro` bind on podman, a
+  read-only subPath of the workspace claim on kubernetes), and a reconciler
+  (boot + every mutation + the hourly maintenance pass) heals any drift. Each
+  chat turn gets a capped "Shared file library" prompt block with paths,
+  sizes, and descriptions. Members list/download; admins upload into one
+  optional folder level, rename/move/describe, delete. The library total is
+  capped by the new live `shared_files_max_total_mb` admin setting
+  (`FLEET_SHARED_FILES_MAX_TOTAL_MB`, default 10 GiB, 0 = unlimited).
+  Migration 053. Design note: `docs/SHARED-FILES.md`.
 
 - **Multiple logins for hosted (official) MCP connections** (#988). A user can
   hold several seats under one connection name — a work and a personal GitHub,
@@ -66,6 +119,17 @@ prior versions are listed because none have shipped.
   Design note: `docs/REMOTE-MCP-MULTI-LOGIN.md`; ADR-0050.
 
 ### Fixed
+
+- **Chat attachments now reach the agent under the kubernetes sandbox
+  backend.** A sandbox pod mounts only the workspace claim, so the uploads
+  root (control-plane state) was invisible: the attachments prompt block
+  advertised absolute paths no pod could resolve, and every non-image
+  attachment read failed. The chat server now copies validated non-image
+  attachments into `<workspace>/<convID>/attachments/` — inside the claim —
+  at send time under that backend and advertises the staged paths; the copies
+  live and die with the conversation workspace. Podman keeps its zero-copy
+  read-only uploads mount; image attachments were never affected (vision
+  bytes are read host-side).
 
 - **A self-audit abort now retires what it abandons, and a confirmed audit says
   what is still outstanding.** Field case: a daily refresh audited the inline
