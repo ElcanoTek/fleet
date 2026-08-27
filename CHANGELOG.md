@@ -19,6 +19,26 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Under `FLEET_DEFAULT_NETWORK_MODE=lockdown` the warm pool is now sealed
+  and lockdown turns actually use it (#1291).** Two defects, one cause: warm
+  spawns used the pool config verbatim (`NoNetwork=false`), while every take
+  under fleet-wide lockdown forced a sealed cold start. So the pool held N
+  open-egress sandboxes nothing could ever claim — dead reserved CPU, memory
+  and disk, respawned forever by the TTL keeper — and on the kubernetes
+  backend the parked pods were labeled `fleet.elcanotek.com/egress=open`
+  directly beside a boot log line claiming every pod is labeled `none`. Warm
+  spawns on a lockdown pool are now sealed (`--network=none` / the
+  `egress=none` label, making that log line true by construction), and a
+  sealed, no-override take (`TakeContainer`, and scheduled runs without
+  per-task limits) claims a warm sandbox instead of cold-starting — lockdown
+  turns get the same warm-pool latency win open fleets always had. Everything
+  else keeps its posture: per-task resource overrides still cold-start
+  (fresh ceilings need a fresh container), a per-conversation lockdown chat
+  on a NON-lockdown fleet still cold-starts sealed (that pool's warm
+  inventory is open, and a sealed take must never receive an open sandbox),
+  and allowlisted takes are untouched (the per-turn proxy token still
+  requires a cold start).
+
 - **The Kubernetes sandbox backend can now actually run tool calls: exec
   streaming rides client-go instead of a hand-rolled WebSocket client
   (#1264).** The first real cluster this backend ever met — the example

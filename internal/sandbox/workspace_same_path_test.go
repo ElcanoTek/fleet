@@ -246,8 +246,9 @@ func TestContainerReadOnlyMountsSamePath(t *testing.T) {
 // turn pulls A out of the pool to handle the request, A's process labels
 // no longer match the dir's MCS-B, so every read fails with EACCES and
 // every write fails with EROFS. Lockdown's TakeContainer always
-// cold-starts so it gets the latest MCS — that's why only non-lockdown
-// turns saw the bug.
+// cold-started at the time, so it got the latest MCS — that's why only
+// non-lockdown turns saw the bug. (Fleet-wide lockdown takes now claim
+// warm containers too, #1291 — safe because `:z` shares one label.)
 //
 // Fix: `:z` (lowercase) — shared label that every container shares, so
 // concurrent mounts don't trample each other's labels.
