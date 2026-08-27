@@ -64,4 +64,15 @@ func TestOrchestratorCSRFCoverage(t *testing.T) {
 			t.Errorf("POST %s wrong shared token: code=%d body=%q, want 403 from fail-closed auth (not CSRF, not success)", path, rr.Code, rr.Body.String())
 		}
 	}
+
+	// /a2a is DELIBERATELY exempt from the cookie-CSRF origin check (#1279):
+	// its dispatcher authenticates with X-API-Key only — no cookie path — and
+	// the normal A2A client is a non-browser caller that sends no Origin at
+	// all. This locks in that an origin-less POST reaches the handler (which,
+	// in this unwired mux, answers 501 a2a_disabled) instead of being CSRF-
+	// blocked; if the /a2a auth model ever grows a cookie path, this exemption
+	// and test must be revisited together.
+	if rr := do("/a2a", ""); strings.Contains(rr.Body.String(), csrfMsg) || rr.Code != http.StatusNotImplemented {
+		t.Errorf("POST /a2a no-origin: code=%d body=%q, want the 501 a2a_disabled handler response, never the CSRF block", rr.Code, rr.Body.String())
+	}
 }

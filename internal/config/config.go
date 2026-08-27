@@ -433,21 +433,27 @@ var allowedEnvVars = map[string]bool{
 	"FLEET_GUARDRAIL_URL":                     true,
 	"FLEET_CONTEXT_HANDLES_ENABLED":           true,
 	"FLEET_CONNECTOR_RECOMMENDATIONS_ENABLED": true,
-	"FLEET_SANDBOX_MEMORY":                    true,
-	"FLEET_SANDBOX_CPUS":                      true,
-	"FLEET_SANDBOX_PIDS":                      true,
-	"FLEET_SANDBOX_KATA_OVERHEAD_MB":          true,
-	"FLEET_SANDBOX_DISK_GB":                   true,
-	"FLEET_SANDBOX_MEMORY_MAX_MB":             true,
-	"FLEET_SANDBOX_CPUS_MAX":                  true,
-	"FLEET_SANDBOX_PIDS_MAX":                  true,
-	"FLEET_SANDBOX_WARM_SIZE":                 true,
-	"FLEET_SANDBOX_WARM_TTL":                  true,
-	"FLEET_PYTHON_REPL_MODE":                  true,
-	"FLEET_PYTHON_CELL_TIMEOUT":               true,
-	"FLEET_PYTHON_REPL_IDLE_TTL":              true,
-	"FLEET_PYTHON_REPL_MAX":                   true,
-	"FLEET_WORKSPACE_ROOT":                    true,
+
+	// ── A2A protocol server (#1279) ──
+	"FLEET_A2A_ENABLED": true,
+	"FLEET_A2A_PERSONA": true,
+	"FLEET_A2A_MODEL":   true,
+
+	"FLEET_SANDBOX_MEMORY":           true,
+	"FLEET_SANDBOX_CPUS":             true,
+	"FLEET_SANDBOX_PIDS":             true,
+	"FLEET_SANDBOX_KATA_OVERHEAD_MB": true,
+	"FLEET_SANDBOX_DISK_GB":          true,
+	"FLEET_SANDBOX_MEMORY_MAX_MB":    true,
+	"FLEET_SANDBOX_CPUS_MAX":         true,
+	"FLEET_SANDBOX_PIDS_MAX":         true,
+	"FLEET_SANDBOX_WARM_SIZE":        true,
+	"FLEET_SANDBOX_WARM_TTL":         true,
+	"FLEET_PYTHON_REPL_MODE":         true,
+	"FLEET_PYTHON_CELL_TIMEOUT":      true,
+	"FLEET_PYTHON_REPL_IDLE_TTL":     true,
+	"FLEET_PYTHON_REPL_MAX":          true,
+	"FLEET_WORKSPACE_ROOT":           true,
 	// Lockdown reads through the FLEET_ alias chain (#1080); the CHAT_
 	// spellings stay allowlisted so existing env files keep sealing.
 	"FLEET_LOCKDOWN_ONLY":           true,
@@ -1124,6 +1130,18 @@ type Config struct {
 	// (via the existing /settings/connections OAuth flow — never auto-connecting).
 	// FLEET_CONNECTOR_RECOMMENDATIONS_ENABLED, default false.
 	ConnectorRecommendationsEnabled bool
+	// A2AEnabled gates the A2A (Agent2Agent) protocol server (#1279): the Agent
+	// Card at /.well-known/agent-card.json and the JSON-RPC endpoint at /a2a on
+	// the orchestrator. FLEET_A2A_ENABLED, default false — the routes stay
+	// registered and answer 501 when off (docs/A2A.md).
+	A2AEnabled bool
+	// A2APersona / A2AModel pin what every A2A-created task runs with — operator
+	// policy, never caller choice, the same posture as webhook triggers
+	// (docs/EVENT-TRIGGERS.md). Empty inherits the deployment's task defaults.
+	// FLEET_A2A_PERSONA / FLEET_A2A_MODEL. The persona name is validated at task
+	// creation like any other (validateTaskCreate's persona-existence check).
+	A2APersona string
+	A2AModel   string
 	// DefaultNetworkMode is the fleet-wide sandbox egress posture (#211):
 	// "" / "open" (full slirp4netns egress for networked work — the default),
 	// "allowlisted" (networked sandboxes route HTTP(S) through the host egress
@@ -1631,10 +1649,17 @@ func Load(envFile string) (*Config, error) {
 
 		// Connector auto-recommendation (#512) — optional, default off.
 		ConnectorRecommendationsEnabled: lp.getenvFleetBool("CONNECTOR_RECOMMENDATIONS_ENABLED", false),
-		SandboxMemory:                   getenvFleet("SANDBOX_MEMORY"),
-		SandboxCPUs:                     getenvFleet("SANDBOX_CPUS"),
-		SandboxPids:                     lp.getenvInt("FLEET_SANDBOX_PIDS", 0),
-		SandboxDiskGB:                   lp.getenvInt("FLEET_SANDBOX_DISK_GB", 0),
+
+		// A2A protocol server (#1279) — optional, default off; the routes
+		// answer 501 until enabled.
+		A2AEnabled: lp.getenvFleetBool("A2A_ENABLED", false),
+		A2APersona: strings.TrimSpace(getenvFleet("A2A_PERSONA")),
+		A2AModel:   strings.TrimSpace(getenvFleet("A2A_MODEL")),
+
+		SandboxMemory: getenvFleet("SANDBOX_MEMORY"),
+		SandboxCPUs:   getenvFleet("SANDBOX_CPUS"),
+		SandboxPids:   lp.getenvInt("FLEET_SANDBOX_PIDS", 0),
+		SandboxDiskGB: lp.getenvInt("FLEET_SANDBOX_DISK_GB", 0),
 		// Per-task override ceilings (#205).
 		SandboxMemoryMaxMB:    lp.getenvFleetInt("SANDBOX_MEMORY_MAX_MB", 8192),
 		SandboxCPUsMax:        lp.getenvFleetFloat("SANDBOX_CPUS_MAX", 16.0),

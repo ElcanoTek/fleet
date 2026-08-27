@@ -248,6 +248,7 @@ var envKnobs = []envKnob{
 	{key: "FLEET_PII_REDACTION_ENABLED", fleet: true, kind: kindBool},
 	{key: "FLEET_CONTEXT_HANDLES_ENABLED", fleet: true, kind: kindBool},
 	{key: "FLEET_CONNECTOR_RECOMMENDATIONS_ENABLED", fleet: true, kind: kindBool},
+	{key: "FLEET_A2A_ENABLED", fleet: true, kind: kindBool},
 	{key: "FLEET_SANDBOX_PIDS", kind: kindInt},
 	{key: "FLEET_SANDBOX_DISK_GB", kind: kindInt},
 	{key: "FLEET_SANDBOX_MEMORY_MAX_MB", fleet: true, kind: kindInt},

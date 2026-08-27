@@ -19,6 +19,22 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **An A2A (Agent2Agent) protocol server (#1279).** External agents can now
+  discover fleet via an Agent Card (`/.well-known/agent-card.json`), delegate
+  work, stream progress, and collect results over the A2A v1.0.1 JSON-RPC +
+  SSE binding (`POST /v1/a2a`: `SendMessage`, `SendStreamingMessage`,
+  `GetTask`, `ListTasks`, `CancelTask`, `SubscribeToTask`). Every delegated
+  message runs as an ordinary governed task through the same create pipeline
+  as `POST /tasks` — operator-pinned persona/model (`FLEET_A2A_PERSONA`,
+  `FLEET_A2A_MODEL`), creator-scoped reads (an invisible task answers
+  TaskNotFound, never 403), budget/priority/rate gates intact. Off by default
+  (`FLEET_A2A_ENABLED`); routes answer 501 until enabled. Authentication is
+  the existing typed API keys — no new credential type. Streaming polls the
+  task row (source of truth), opens with the Task snapshot, and closes at the
+  terminal state per spec. Push notifications, the extended agent card, and
+  the gRPC/HTTP+JSON bindings are deferred and declared off. See
+  [docs/A2A.md](docs/A2A.md) and ADR-0051.
+
 - **Prime Agent borrowings (#990).** A comparison of fleet against
   Prime Intellect's `prime-agent` harness, with the four ideas that cleared
   the high-value bar ported behind fleet's existing governance
