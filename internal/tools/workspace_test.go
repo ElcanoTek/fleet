@@ -174,3 +174,51 @@ func TestWorkspaceDirForConversation_ConfinesID(t *testing.T) {
 		t.Errorf("WorkspaceDirForConversation(%q) = %q; want %q", okID, got, want)
 	}
 }
+
+// TestEnsureWorkspaceDirSharedLibrarySymlink pins the shared-file-library
+// symlink policy (docs/SHARED-FILES.md): when cmd/fleet registers the library
+// dir under SharedFilesDirName, every conversation workspace gets a `shared`
+// symlink to it (that is what makes the prompt block's `shared/<name>` paths
+// resolve from the chat's cwd) — and when nothing is registered there is NO
+// legacy $CWD/shared fallback, so a stray ./shared directory in a dev checkout
+// can never masquerade as the library.
+func TestEnsureWorkspaceDirSharedLibrarySymlink(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("FLEET_WORKSPACE_ROOT", root)
+	sharedDir := SharedFilesDir(root)
+	if err := os.MkdirAll(sharedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Unregistered: no symlink, even though the dir exists on disk.
+	SetSupportingDocDirs(nil)
+	dir, err := EnsureWorkspaceDir("conv-shared-none")
+	if err != nil {
+		t.Fatalf("EnsureWorkspaceDir: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, SharedFilesDirName)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("unregistered library still produced a shared symlink: %v", err)
+	}
+
+	// Registered (what cmd/fleet does at boot): the symlink points at the
+	// staged tree, so shared/<name> resolves relative to the chat's cwd.
+	SetSupportingDocDirs(map[string]string{SharedFilesDirName: sharedDir})
+	t.Cleanup(func() { SetSupportingDocDirs(nil) })
+	dir, err = EnsureWorkspaceDir("conv-shared-linked")
+	if err != nil {
+		t.Fatalf("EnsureWorkspaceDir: %v", err)
+	}
+	target, err := os.Readlink(filepath.Join(dir, SharedFilesDirName))
+	if err != nil {
+		t.Fatalf("shared symlink missing: %v", err)
+	}
+	if target != sharedDir {
+		t.Fatalf("shared symlink -> %q, want %q", target, sharedDir)
+	}
+	if err := os.WriteFile(filepath.Join(sharedDir, "lib.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, SharedFilesDirName, "lib.txt")); err != nil {
+		t.Fatalf("shared/lib.txt does not resolve through the symlink: %v", err)
+	}
+}

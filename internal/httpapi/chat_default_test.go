@@ -156,6 +156,13 @@ func (s *fakeChatStore) ListUserSkills(_ context.Context, _ string) ([]store.Use
 	return nil, nil
 }
 
+// Shared file library (docs/SHARED-FILES.md): the fake has none — the turn
+// path lists it on every run for the prompt block, and an empty library
+// appends nothing.
+func (s *fakeChatStore) ListSharedFiles(_ context.Context) ([]store.SharedFile, error) {
+	return nil, nil
+}
+
 func (s *fakeChatStore) CreateConversation(_ context.Context, userEmail, title, persona, model string, lockdown bool) (*store.Conversation, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

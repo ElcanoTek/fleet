@@ -55,6 +55,7 @@ func buildWorkspaceSettings(cfg *config.Config, st *store.Store) (*settings.Serv
 		"auto_title_enabled":                strconv.FormatBool(cfg.AutoTitle),
 		"connector_recommendations_enabled": strconv.FormatBool(cfg.ConnectorRecommendationsEnabled),
 		"context_handles_enabled":           strconv.FormatBool(cfg.ContextHandlesEnabled),
+		"shared_files_max_total_mb":         strconv.Itoa(cfg.SharedFilesMaxTotalMB),
 	}
 	pii := newPIIRedactorState(cfg)
 	guard := newGuardrailState(cfg)
@@ -88,6 +89,7 @@ func buildWorkspaceSettings(cfg *config.Config, st *store.Store) (*settings.Serv
 		"auto_title_enabled":                applyBoolSetting(cfg.SetAutoTitle),
 		"connector_recommendations_enabled": applyBoolSetting(cfg.SetConnectorRecommendationsEnabled),
 		"context_handles_enabled":           applyBoolSetting(cfg.SetContextHandlesEnabled),
+		"shared_files_max_total_mb":         applyIntSetting(cfg.SetSharedFilesMaxTotalMB),
 	}
 	svc, err := settings.NewService(st, defaults, hooks)
 	return svc, pii, guard, err

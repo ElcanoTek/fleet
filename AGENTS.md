@@ -275,6 +275,10 @@ same PR.
 - **Chat stream recovery** (why a lost SSE socket reconciles against Postgres
   instead of stamping a terminal state — the walk-away-and-come-back case):
   [`docs/CHAT-STREAM-RECOVERY.md`](docs/CHAT-STREAM-RECOVERY.md)
+- **Shared files** (the native cross-chat file library: canonical bytes
+  host-side, a read-only staged tree under the workspace root both sandbox
+  backends mount, the reconciler, the size cap):
+  [`docs/SHARED-FILES.md`](docs/SHARED-FILES.md)
 - **Task titles** (the operator-facing display label, and why it is NOT the
   unique import/export `name` column): [`docs/TASK-TITLES.md`](docs/TASK-TITLES.md)
 - **MCP server hot-reload** (add/remove/update MCP servers without a restart via

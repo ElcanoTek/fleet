@@ -75,6 +75,7 @@ needs a restart, ever.
 | `auto_title_enabled` | bool | `FLEET_AUTO_TITLE` | LLM-generated conversation titles (#302) |
 | `connector_recommendations_enabled` | bool | `FLEET_CONNECTOR_RECOMMENDATIONS_ENABLED` | Reactive connector nudges (#512) |
 | `context_handles_enabled` | bool | `FLEET_CONTEXT_HANDLES_ENABLED` | Composer `@url:`/`@file:` handles ([CONTEXT-HANDLES.md](CONTEXT-HANDLES.md)) |
+| `shared_files_max_total_mb` | int 1–16777216, or 0 = unlimited | `FLEET_SHARED_FILES_MAX_TOTAL_MB` | Total-size cap (MB) on the cross-chat shared file library; read per upload ([SHARED-FILES.md](SHARED-FILES.md)) |
 
 The registry contract: **every entry must be live-applicable** — its consumer
 re-reads the value per turn, per run, or per tool call. A setting that is bound

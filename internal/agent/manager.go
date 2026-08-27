@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -566,6 +567,18 @@ func buildSandboxPool(cfg *config.Config, personasDir, protocolsDir, systemPromp
 	if err := os.MkdirAll(uploadsRoot, 0o755); err != nil { //nolint:gosec // same — readable by the rootless container user via bind mount
 		return nil, fmt.Errorf("ensure uploads root %s: %w", uploadsRoot, err)
 	}
+	// The shared file library's staged tree (docs/SHARED-FILES.md). It lives
+	// UNDER the workspace root because that is the one tree both backends make
+	// visible inside sandboxes; the read-only mount below then overlays the
+	// read-write workspace mount so no turn can tamper with what every other
+	// chat reads. Created here, before the pool spawns anything, because on
+	// kubernetes the pod spec mounts this directory as a subPath of the
+	// workspace claim — if the kubelet creates it first it is root-owned and
+	// the control plane can no longer stage files into it.
+	sharedFilesDir := tools.SharedFilesDir(workspaceRoot)
+	if err := os.MkdirAll(sharedFilesDir, 0o755); err != nil { //nolint:gosec // same — readable by the rootless container user via bind mount
+		return nil, fmt.Errorf("ensure shared files dir %s: %w", sharedFilesDir, err)
+	}
 
 	// Normalize the OCI runtime name to what podman understands ("libkrun" →
 	// "krun") so the --runtime flag, the preflight, and the probe binary mapping
@@ -582,7 +595,7 @@ func buildSandboxPool(cfg *config.Config, personasDir, protocolsDir, systemPromp
 		PidsLimit:        cfg.SandboxPids,   // 0 → sandbox default (128)
 		DiskLimitGB:      cfg.SandboxDiskGB, // 0 → sandbox default (5); negative disables
 		BridgeDir:        filepath.Join(filepath.Dir(workspaceRoot), "data", "sandbox-bridge"),
-		ReadOnlyMounts:   absSupportingDocs(personasDir, protocolsDir, systemPromptsDir, skillsDir, uploadsRoot),
+		ReadOnlyMounts:   absSupportingDocs(personasDir, protocolsDir, systemPromptsDir, skillsDir, uploadsRoot, sharedFilesDir),
 	}
 	// Kubernetes backend (#989): sandboxes are ephemeral pods in a cluster
 	// instead of co-located podman containers. All podman-specific boot work
@@ -701,8 +714,16 @@ func buildKubernetesSandboxPool(cfg *config.Config, poolCfg sandbox.PoolConfig, 
 	if err != nil {
 		return nil, fmt.Errorf("FLEET_SANDBOX_K8S_BUNDLE_DOCS_IN_IMAGE / sandbox.kubernetes.bundle_docs_in_image: %w", err)
 	}
-	kept, dropped := k8sDocMounts(poolCfg.Container.ReadOnlyMounts, bundleDocDirs, docsInImage)
-	poolCfg.Container.ReadOnlyMounts = kept
+	// Read-only roots nested INSIDE the workspace claim (the shared file
+	// library's staged tree) are not host paths at all — every pod sees them
+	// by construction, mounted read-only as a subPath of the claim by the pod
+	// spec builder — so they bypass the host-mount drop below entirely.
+	wsNested, hostMounts := splitWorkspaceNestedMounts(poolCfg.Container.ReadOnlyMounts, poolCfg.Container.WorkspaceHostDir)
+	if len(wsNested) > 0 {
+		log.Printf("sandbox: kubernetes backend — %d read-only root(s) inside the workspace claim %v are mounted read-only (subPath) in every sandbox pod", len(wsNested), wsNested)
+	}
+	kept, dropped := k8sDocMounts(hostMounts, bundleDocDirs, docsInImage)
+	poolCfg.Container.ReadOnlyMounts = slices.Concat(wsNested, kept)
 	if len(kept) > 0 {
 		log.Printf("sandbox: kubernetes backend — bundle_docs_in_image declared: keeping fileop read anchors for %d bundle doc root(s) %v; the SANDBOX IMAGE must carry them at these exact paths or reads fail not-found", len(kept), kept)
 	}
@@ -771,6 +792,28 @@ func buildKubernetesSandboxPool(cfg *config.Config, poolCfg sandbox.PoolConfig, 
 	return sandbox.NewPool(poolCfg), nil
 }
 
+// splitWorkspaceNestedMounts partitions the read-only mount list into roots
+// nested inside the workspace root and everything else. Under the kubernetes
+// backend the two have opposite fates: a workspace-nested root lives in the
+// shared claim (reachable in every pod — the pod spec re-mounts it read-only
+// via subPath), while any other root is a HOST path a pod cannot bind and goes
+// through the k8sDocMounts drop rules. Pure so the policy is pinned by tests.
+func splitWorkspaceNestedMounts(mounts []string, workspaceRoot string) (nested, others []string) {
+	root := filepath.Clean(workspaceRoot)
+	for _, m := range mounts {
+		if m == "" {
+			continue
+		}
+		rel, err := filepath.Rel(root, filepath.Clean(m))
+		if workspaceRoot != "" && err == nil && rel != "." && filepath.IsLocal(rel) {
+			nested = append(nested, m)
+			continue
+		}
+		others = append(others, m)
+	}
+	return nested, others
+}
+
 // k8sDocMounts splits the supporting-doc mount list into the roots whose
 // fileop anchors survive under the kubernetes backend and the roots that are
 // dropped, given the operator's bundle_docs_in_image declaration.
@@ -782,7 +825,10 @@ func buildKubernetesSandboxPool(cfg *config.Config, poolCfg sandbox.PoolConfig, 
 //     workspace claim, so every host path is a path the anchor must not trust.
 //   - With it, only the BUNDLE's own doc dirs survive. Everything else in the
 //     list (the uploads root) lives in control-plane state a sandbox image
-//     cannot contain, and the declaration says nothing about it.
+//     cannot contain, and the declaration says nothing about it. Chat
+//     attachments stay reachable anyway: the chat server stages them into the
+//     conversation workspace under this backend (httpapi
+//     stageAttachmentsIntoWorkspace) instead of relying on this mount.
 //   - A materialized (merged built-in + bundle) skills tree never survives:
 //     it lives under the data dir with a path derived from the bundle path, so
 //     no image can carry it. See clientconfig.IsMaterializedSkillsDir.
@@ -832,6 +878,20 @@ func defaultIfEmpty(s, def string) string {
 		return def
 	}
 	return s
+}
+
+// logSafeAgent strips CR/LF from a user-influenced value before it is
+// interpolated into a log line, so a hostile value cannot forge a log entry —
+// the same guard as httpapi's logSafeSlug / handlers' logSafe / the runner's
+// logSafeRunner, declared per package because none of those is importable
+// without a cycle or a widened API.
+//
+// strings.ReplaceAll rather than the NewReplacer the siblings use: CodeQL's
+// go/log-injection query models ReplaceAll of "\n"/"\r" as the sanitizer, so
+// this spelling both is the guard and is provable as one — a NewReplacer
+// version kept the alert open as a false positive.
+func logSafeAgent(s string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(s, "\n", ""), "\r", "")
 }
 
 // Resolve loads + caches the model for a slug. Exposed so the scheduled
@@ -1321,12 +1381,15 @@ func (m *Manager) openTurnRemoteOverlay(ctx context.Context, in TurnInput, turnC
 		// without an entry mounts its default seat (#988).
 		ov, oerr := m.openRemoteOverlay(ctx, in.UserEmail, turnCatalog, RemoteMCPEnabledOnly(in.OptionalMCPServersEnabled, in.MCPAccountDefaults))
 		if oerr != nil {
-			log.Printf("RunTurn: remote-mcp overlay unavailable for %s: %v", in.UserEmail, oerr)
+			log.Printf("RunTurn: remote-mcp overlay unavailable for %s: %v", logSafeAgent(in.UserEmail), oerr)
 		} else if ov != nil {
 			overlay = ov
 			if len(ov.Skipped) > 0 {
 				// Interactive: the user can see+fix these on the Connections page.
-				log.Printf("RunTurn: remote MCP server(s) need re-auth for %s: %v", in.UserEmail, ov.Skipped)
+				// Skipped carries USER-NAMED servers — CR/LF-strip them so a
+				// hostile name cannot forge a log entry (log-injection guard).
+				log.Printf("RunTurn: remote MCP server(s) need re-auth for %s: %s",
+					logSafeAgent(in.UserEmail), logSafeAgent(strings.Join(ov.Skipped, ", ")))
 			}
 		}
 	}
@@ -1599,7 +1662,14 @@ func (m *Manager) failedTurnResult(ctx context.Context, runErr error, res agentc
 	}
 	commitPartialSideEffects(runErr, res, commitTerminal)
 	reason, status, _ := agentcore.ClassifyStreamErrorReason(runErr)
-	log.Printf("RunTurn stream failed (reason=%s model=%s status=%d): %v", reason, modelSlug, status, runErr)
+	// modelSlug is a user-selected string and runErr can embed provider
+	// response text — CR/LF-strip both so neither can forge a log entry
+	// (log-injection guard); %q on the slug keeps a hostile value visibly
+	// quoted rather than blending into the line. reason is a fixed enum
+	// the classifier returns, but it is DERIVED from runErr, so it gets the
+	// same guard to keep the whole line provably clean.
+	log.Printf("RunTurn stream failed (reason=%s model=%q status=%d): %s",
+		logSafeAgent(string(reason)), logSafeAgent(modelSlug), status, logSafeAgent(runErr.Error()))
 	emitModelSelectionRequired(sink, reason, modelSlug, status, runErr)
 	return nil, fmt.Errorf("%w: %w", ErrModelSelectionRequired, runErr)
 }

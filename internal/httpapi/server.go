@@ -94,6 +94,11 @@ type Server struct {
 	// another submit installed in the meantime.
 	inflightMu sync.Mutex
 	inflight   map[string]inflightEntry
+	// sharedFilesMu serializes shared-file-library staging (upload/rename/
+	// delete handlers) against the maintenance reconciler, so a Sync pass can
+	// never observe — and "repair" — a mutation's intermediate on-disk state.
+	// See internal/httpapi/shared_files.go.
+	sharedFilesMu sync.Mutex
 	// stopEpochs records the last Stop scope=all instant per conversation
 	// (#785) so claim-limbo rows accepted before it can never launch after it.
 	stopEpochs      map[string]int64
