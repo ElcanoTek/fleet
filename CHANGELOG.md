@@ -19,6 +19,25 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **A lost lease is now identifiable on all three lease-guarded task writers,
+  not one of three.** `UpdateTaskStatusAtomicWithContext` returned the
+  `storage.ErrTaskLeaseNotHeld` sentinel, but `RequeueTaskForRetryWithContext`
+  and `DeadLetterTaskWithContext` each rebuilt that sentinel's *exact* message
+  with `fmt.Errorf` instead of returning it — so `errors.Is(err,
+  ErrTaskLeaseNotHeld)` succeeded on one guard and silently failed on the other
+  two while all three errors printed identically. That is a live trap rather
+  than a cosmetic nit: the runner branches on this identity to cancel a zombie
+  run's external side effects when a renewal proves the lease is gone
+  (`renewActiveLeases`, #1116) and to suppress success side effects on a fenced
+  commit, so extending that treatment to the retry/dead-letter paths would have
+  read a false negative off an error whose text said exactly what happened.
+  Both now return the sentinel, so the operator-facing message is byte-identical
+  and only the error's identity changed. No behavior change today — neither
+  runner call site does an identity check on these two paths yet, and no HTTP,
+  CLI, chat or web surface consumes the lease error at all (it is an internal
+  runner↔storage contract). Found while working #1268/#1269 (PR #1310) and
+  fixed directly rather than filed.
+
 - **Task transition guards are now one shared set, and cancelling a
   dead-lettered task no longer erases its replayability (#1268, #1269).** The
   four storage transition writers each hand-listed their own terminal refusal

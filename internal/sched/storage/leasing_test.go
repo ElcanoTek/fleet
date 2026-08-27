@@ -1,6 +1,8 @@
 package storage
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -304,5 +306,81 @@ func TestTaskLeasingUsesFixedLeaseWindow(t *testing.T) {
 	}
 	if updatedTask.LeaseExpiresAt.Before(time.Now().UTC().Add(4 * time.Minute)) {
 		t.Errorf("Lease expiry not extended properly. Expected ~5m, got %v", updatedTask.LeaseExpiresAt)
+	}
+}
+
+// TestLeaseGuardedWritersReturnLeaseSentinel pins the error IDENTITY, not just
+// the message text, on every lease-guarded transition writer.
+//
+// UpdateTaskStatusAtomicWithContext returned ErrTaskLeaseNotHeld, but
+// RequeueTaskForRetryWithContext and DeadLetterTaskWithContext each rebuilt the
+// SAME message with fmt.Errorf instead of returning the sentinel — so
+// errors.Is worked on one of the three lease guards and silently failed on the
+// other two. The runner already branches on errors.Is(err,
+// ErrTaskLeaseNotHeld) for lease renewals and the success commit; anyone
+// extending that treatment to the retry/dead-letter paths would have gotten a
+// false negative from an error whose text says exactly what happened. Found
+// while working #1268/#1269 (PR #1310).
+//
+// Each writer is driven with an owner that holds no lease on the row — the one
+// precondition all three guards agree on structurally.
+func TestLeaseGuardedWritersReturnLeaseSentinel(t *testing.T) {
+	store, _ := newTestStore(t)
+	ctx := context.Background()
+
+	// Every case gets its own row: two of the three writers are no-ops on an
+	// already-terminal row, so a shared row could hide a guard behind a
+	// previous case's transition.
+	seed := func(t *testing.T) uuid.UUID {
+		t.Helper()
+		now := time.Now().UTC()
+		holder := uuid.New().String()
+		expires := now.Add(5 * time.Minute)
+		task := &models.Task{
+			ID: uuid.New(), Prompt: "lease sentinel", Status: models.TaskStatusRunning,
+			Priority: 10, MaxRetries: 2, CreatedAt: now, StartedAt: &now,
+			LeaseOwner: &holder, LeaseExpiresAt: &expires,
+		}
+		if _, err := store.AddTask(task); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+		return task.ID
+	}
+
+	// A stranger holds no lease on any row, so every guard must refuse it.
+	stranger := uuid.New()
+
+	for _, tc := range []struct {
+		writer string
+		call   func(taskID uuid.UUID) error
+	}{
+		{"storage.UpdateTaskStatusAtomicWithContext", func(id uuid.UUID) error {
+			_, err := store.UpdateTaskStatusAtomicWithContext(ctx, id, stranger,
+				&models.StatusUpdate{Status: models.TaskStatusRunning})
+			return err
+		}},
+		{"storage.RequeueTaskForRetryWithContext", func(id uuid.UUID) error {
+			_, err := store.RequeueTaskForRetryWithContext(ctx, id, stranger,
+				time.Now().UTC().Add(time.Minute), "retry backoff")
+			return err
+		}},
+		{"storage.DeadLetterTaskWithContext", func(id uuid.UUID) error {
+			_, err := store.DeadLetterTaskWithContext(ctx, id, stranger, "exhausted", 3)
+			return err
+		}},
+	} {
+		t.Run(tc.writer, func(t *testing.T) {
+			err := tc.call(seed(t))
+			if err == nil {
+				t.Fatal("writer accepted a caller that holds no lease")
+			}
+			if !errors.Is(err, ErrTaskLeaseNotHeld) {
+				t.Errorf("errors.Is(err, ErrTaskLeaseNotHeld) = false for %v — the lease refusal is not identifiable", err)
+			}
+			// The operator-facing text is deliberately unchanged by the fix.
+			if got := err.Error(); got != ErrTaskLeaseNotHeld.Error() {
+				t.Errorf("message = %q, want the sentinel's own text %q", got, ErrTaskLeaseNotHeld.Error())
+			}
+		})
 	}
 }
