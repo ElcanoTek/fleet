@@ -938,7 +938,7 @@ func run() error {
 	// Liveness + readiness probes (#215) on BOTH ports, sharing one check set
 	// and one drain signal (chatSrv.BeginShutdown is the single graceful-drain
 	// trigger, so both ports report not_ready while draining).
-	readinessChecks := buildReadinessChecks(cfg, chatStore, schedStorage.DB(), diskGuard)
+	readinessChecks := buildReadinessChecks(cfg, chatStore, schedStorage.DB(), diskGuard, mgr.SandboxPool())
 	// apiversion.Router (#321) makes both servers reachable under a /v1 prefix
 	// (X-Fleet-API-Version on those responses) while the legacy bare paths keep
 	// working with a Deprecation signal. It wraps INSIDE the health-probe layer so
