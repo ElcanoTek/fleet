@@ -89,18 +89,37 @@ visible per user in `/admin/stats` (`total_cached_tokens`,
 and the interior kept verbatim (`fleet mcp account set` quotes such values for
 you). Quotes are also stripped from process-env values, so a
 podman/docker `--env-file` deployment that keeps quotes in place behaves the
-same. Numeric/bool/duration knobs **read by the config loader** are strict: an
-**unset** knob gets its default, but a **set, malformed, or out-of-range**
-value refuses to boot with an error naming the variable, the value, and the
-expected format (`FLEET_LOCKDOWN_ONLY=enabled` or `FLEET_MAX_COST_USD=5O` no
-longer silently fall back to defaults). Booleans take `1/0, true/false,
+same. **Every** numeric/bool/duration knob fleet parses is strict — not just the ones
+the config loader consumes (#1119 covered those; #1273 finished the job for the
+knobs parsed elsewhere in the binary, such as the scheduler rate limits, the
+Kata memory overhead, the agent-runtime thresholds and the SSE/notify/webpush
+knobs). An **unset** knob gets its default, but a **set, malformed, or
+out-of-range** value refuses to boot with one error naming every offending
+variable, its value, the expected format, and — for a knob parsed outside the
+loader — the package that reads it (`FLEET_LOCKDOWN_ONLY=enabled`,
+`FLEET_MAX_COST_USD=5O` and `FLEET_SANDBOX_KATA_OVERHEAD_MB=lots` all refuse
+rather than silently falling back to defaults). Booleans take `1/0, true/false,
 yes/no, on/off`; durations take Go syntax (`30s`, `5m`, `1h30m` — a bare
-number is an error). Exception: the three scheduler rate-limit knobs
-(`FLEET_SCHED_RATE_LIMIT_PER_MINUTE`, `FLEET_SCHED_RATE_LIMIT_PER_DAY`,
-`FLEET_SCHED_RATE_LIMIT_GLOBAL_PER_MINUTE`) are read at `fleet serve` start
-outside the loader — a malformed value there logs a loud warning and the
-default applies. Run `fleet validate-config` to preflight every loader knob
-before starting the service; config hot-reload applies the same rules (see
+number is an error).
+
+Two things to know about that strictness:
+
+- **A few kill-switches take the narrower Go `strconv.ParseBool` token set**
+  (`1/0/t/f/true/false`, plus `TRUE`/`True`) because that is what their reader
+  honors: `FLEET_DISABLE_PROMPT_CACHE`, `FLEET_DISABLE_OPENROUTER_MODELS`,
+  `FLEET_SCHEDULED_AUTO_COMPACT`, `FLEET_PUSH_ON_TASK_COMPLETE`,
+  `FLEET_PUSH_ON_APPROVAL_REQUEST`. `…=on` or `…=yes` is refused with a message
+  saying so, instead of being read as `false` the way it used to be.
+- **One knob is deliberately lenient:** `FLEET_OTEL_SAMPLE_RATIO`. A malformed
+  ratio does not stop the service (unset/unparseable/`NaN`/`≥1` all mean "sample
+  everything", `≤0` means "sample nothing"), because refusing to boot over a
+  tracing dial is worse than tracing too much. `fleet validate-config` still
+  preflights it and reports a typo as a **warning** rather than a blocking
+  failure.
+
+Run `fleet validate-config` to preflight every knob — loader and
+out-of-loader, blocking and advisory — before starting the service; config
+hot-reload applies the same rules to the knobs it can reload (see
 [CONFIG-RELOAD.md](CONFIG-RELOAD.md)).
 
 ## The client-config checkout

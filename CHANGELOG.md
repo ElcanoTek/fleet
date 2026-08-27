@@ -17,6 +17,63 @@ prior versions are listed because none have shipped.
 
 ## [Unreleased]
 
+### Changed
+
+- **Env-knob strictness now covers the knobs parsed outside the config
+  loader (#1273).** #1119 made every knob `config.Load` reads fail loud on a
+  malformed value; a couple of dozen knobs parsed at their point of use
+  elsewhere in the binary kept silently (or warn-)defaulting, and `fleet
+  validate-config` could not preflight them at all. Those knobs are now rows
+  in the same `envKnobs` registry, in a third class (`scopeExternal`): the
+  loader does not consume their values but it **validates** them, so a
+  malformed value refuses to boot in the same one-pass error as every loader
+  knob — now naming the package that reads it — and `fleet validate-config`
+  reports it before you start the service. The knobs folded in: the three
+  `FLEET_SCHED_RATE_LIMIT_*` windows, `FLEET_BACKUP_RETENTION_DAYS`,
+  `FLEET_SANDBOX_KATA_OVERHEAD_MB`, `FLEET_TOOL_DISCLOSURE_THRESHOLD`,
+  `FLEET_MODEL_CACHE_TTL_MINUTES`, `FLEET_RETRY_MAX_ATTEMPTS`,
+  `FLEET_MAX_TOOL_OUTPUT_BYTES`, `FLEET_CONTEXT_PRESSURE_WARN_THRESHOLD`,
+  `FLEET_CONTEXT_COMPACTION_THRESHOLD`, `FLEET_DISABLE_PROMPT_CACHE`,
+  `FLEET_DISABLE_OPENROUTER_MODELS`, `FLEET_SCHEDULED_AUTO_COMPACT`,
+  `FLEET_TASK_WALL_TIMEOUT`, `FLEET_NOTIFY_TIMEOUT`, `FLEET_NOTIFY_RETRIES`,
+  `FLEET_SSE_BUFFER_DURATION`, `FLEET_SSE_BUFFER_MAX_BYTES_PER_TURN`,
+  `FLEET_SSE_HEARTBEAT_INTERVAL`, `FLEET_MAINTENANCE_MIN_INTERVAL`,
+  `FLEET_WEBHOOK_RATE_LIMIT_PER_MINUTE`, `FLEET_WORKSPACE_DOWNLOAD_MAX_BYTES`,
+  `FLEET_PUSH_ON_TASK_COMPLETE` and `FLEET_PUSH_ON_APPROVAL_REQUEST`.
+
+  **This is a behavior change for an operator running with a malformed
+  value.** A value that used to be silently discarded — including one that is
+  numerically valid but outside what its consumer accepts (`…KATA_OVERHEAD_MB=0`,
+  `…BACKUP_RETENTION_DAYS=0`, a negative rate-limit window) — now stops the
+  service at boot instead of running on the default. Five kill-switches
+  (`FLEET_DISABLE_PROMPT_CACHE`, `FLEET_DISABLE_OPENROUTER_MODELS`,
+  `FLEET_SCHEDULED_AUTO_COMPACT`, `FLEET_PUSH_ON_TASK_COMPLETE`,
+  `FLEET_PUSH_ON_APPROVAL_REQUEST`) are read with Go's `strconv.ParseBool`, so
+  the registry holds them to *its* narrower token set: `…=on` / `…=yes` is now
+  refused with a message saying so, where before it silently resolved to
+  `false` — i.e. `FLEET_DISABLE_PROMPT_CACHE=on` left caching ON and
+  `FLEET_PUSH_ON_TASK_COMPLETE=off` kept notifying. Run
+  `fleet validate-config` before upgrading to see anything that will now
+  refuse.
+
+  `FLEET_OTEL_SAMPLE_RATIO` is registered **documented-lenient** with its
+  rationale in the table: a bad tracing ratio still means "sample everything"
+  rather than stopping the service, and `validate-config` reports it as a
+  **warning** instead of a blocking failure. Two knobs left the ad-hoc path
+  entirely and now resolve through the registry's own parser at their point of
+  use: the scheduler rate-limit trio in `fleet serve`, and
+  `FLEET_BACKUP_RETENTION_DAYS` in `fleet backup` — a verb that never calls
+  `config.Load`, so a malformed retention there fails the `--prune` step
+  (exit 1) rather than pruning against the 30-day default.
+
+  Eleven of these knobs were also missing from the `.env` allowlist, so a value
+  set only in `FLEET_ENV_FILE` was silently dropped — including
+  `FLEET_DISABLE_PROMPT_CACHE`, which `docs/OPERATORS.md` has documented as an
+  env-file knob all along (the #1107 bug class). They are allowlisted now, and a
+  new test keeps the registry and the allowlist paired. A repo-wide source sweep
+  (`internal/config/knobs_sweep_test.go`) fails the suite if a new ad-hoc
+  `os.Getenv`+parse knob is introduced without a registry row.
+
 ### Fixed
 
 - **A re-imported task envelope can no longer resurrect a finished task or

@@ -10,9 +10,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/config"
 )
 
 // Backup/restore wrap pg_dump -Fc / pg_restore for the chat and sched Postgres
@@ -192,14 +193,16 @@ func backupDir(flagOut string) string {
 	return "."
 }
 
-// retentionDays resolves the prune cutoff: FLEET_BACKUP_RETENTION_DAYS, else 30.
-func retentionDays() int {
-	if v := strings.TrimSpace(os.Getenv("FLEET_BACKUP_RETENTION_DAYS")); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			return n
-		}
-	}
-	return 30
+// retentionDays resolves the prune cutoff: FLEET_BACKUP_RETENTION_DAYS, else
+// 30. The knob is a scopeExternal row in the one env-knob registry (#1273), and
+// `fleet backup` is a verb that never calls config.Load — so there is no boot
+// gate here and the read goes through config.EnvKnobInt, which applies the
+// registry's parser and its `must be >= 1` bound. A malformed value is returned
+// as an ERROR and refuses the prune rather than silently pruning on the
+// 30-day default: deleting backups off a misread retention is not a
+// recoverable mistake.
+func retentionDays() (int, error) {
+	return config.EnvKnobInt("FLEET_BACKUP_RETENTION_DAYS", 30)
 }
 
 // isTerminal reports whether f is an interactive terminal (so the restore
@@ -249,11 +252,15 @@ func cmdBackup(argv []string) int {
 		fmt.Println(path)
 	}
 	if *prune {
-		n, err := pruneOldBackups(outDir, retentionDays())
+		days, err := retentionDays()
+		if err != nil {
+			return errf(1, "prune: %v", err)
+		}
+		n, err := pruneOldBackups(outDir, days)
 		if err != nil {
 			return errf(5, "prune: %v", err)
 		}
-		fmt.Fprintf(os.Stderr, "pruned %d old backup(s) older than %d days\n", n, retentionDays())
+		fmt.Fprintf(os.Stderr, "pruned %d old backup(s) older than %d days\n", n, days)
 	}
 	return 0
 }

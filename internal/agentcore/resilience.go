@@ -87,6 +87,11 @@ type resilienceConfig struct {
 // the legacy CUTLASS_RETRY_MAX_ATTEMPTS name directly (so the lifted test's
 // t.Setenv(retryMaxAttemptsEnv, …) works unchanged) and also the canonical
 // FLEET_RETRY_MAX_ATTEMPTS via EnvPrefix.
+//
+// The knob is a scopeExternal row in the config package's env-knob registry
+// (#1273), so a malformed value refuses the boot; the warn-and-default branch
+// below remains for the engine-construction paths that run without a
+// config.Load (tests, embedders) rather than as the operator-facing behavior.
 func loadResilienceConfig() resilienceConfig {
 	return loadResilienceConfigFor("")
 }

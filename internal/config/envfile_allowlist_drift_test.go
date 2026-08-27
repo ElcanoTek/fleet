@@ -31,12 +31,16 @@ import (
 // The typed numeric/bool names are METHODS on config's loadParser since #1119;
 // collectEnvReads matches them by name whether called as a plain function or a
 // method.
+// Keys read through the env-knob registry's exported point-of-use helpers
+// (config.EnvKnobInt, #1273) are not collected here — cmd/fleet passes them
+// from a table rather than as literal call arguments. They are covered by
+// TestEnvKnobsAreEnvFileSettable instead, which asserts the allowlist over the
+// whole registry rather than over one call shape.
 var driftDirectKeyFuncs = map[string]bool{
 	"getenvDefault":   true, // internal/config
 	"getenvInt":       true,
 	"getenvBool":      true,
 	"getEnvOrDefault": true,
-	"envIntDefault":   true, // cmd/fleet
 }
 
 // driftFleetSuffixFuncs read a FLEET_-prefixed knob by suffix; the value is
