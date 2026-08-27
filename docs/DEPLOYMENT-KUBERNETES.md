@@ -296,6 +296,12 @@ protocols/foo.yaml` is *refused* (`fileop root is not inside a sandbox bind
 mount`) rather than attempted. The workspace symlinks still point at the
 bundle's absolute paths, so `bash`/`run_python` reads fail too, as not-found.
 
+The one exception is a read-only root that lives *inside* the claim: the
+shared file library's staged tree (`<workspace>/shared`,
+[SHARED-FILES.md](SHARED-FILES.md)) reaches every pod by construction, and the
+pod spec re-mounts that subPath of the same claim read-only, so the library is
+readable — and only readable — with no image rebuild and no host bind.
+
 The fix is the sandbox image. Build it with the bundle's doc dirs baked in at
 the **same absolute paths** the control plane uses (`FLEET_CLIENT_CONFIG_DIR`),
 then declare it:
@@ -333,7 +339,13 @@ for bash and python. Four things to be honest about:
   inside the sandbox. A wrong declaration surfaces as a not-found read.
 - **Only the bundle's own doc dirs are covered.** Other entries in the mount
   list (the uploads root) live in control-plane state no image can contain;
-  they stay dropped, with a log line each.
+  they stay dropped, with a log line each. Chat attachments don't need that
+  mount here: under this backend the chat server copies each validated
+  non-image attachment into the conversation's workspace directory
+  (`<workspace>/<convID>/attachments/`) — inside the claim every pod mounts —
+  and the prompt block advertises the staged path, so `view_file`/`bash`
+  reads work without the uploads root. (Image attachments reach the model
+  host-side as vision input on both backends and need no staging.)
 - **The merged skills tree is never covered** — see the honest-scope list.
 - **The baked copy is a snapshot.** Build and roll the control-plane and
   sandbox images from the same bundle commit, or the agent reads one release's

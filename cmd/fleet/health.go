@@ -19,9 +19,18 @@ import (
 )
 
 // sandboxProbeTTL caches the sandbox runtime probe so /readyz — which is
-// unauthenticated — cannot be turned into a fork bomb: the `<runtime> --version`
-// subprocess runs at most once per TTL regardless of request rate (#215).
+// unauthenticated — cannot be turned into a resource drain: the probe (a
+// `<runtime> --version` subprocess under the podman backend; one apiserver
+// GET /version under kubernetes) runs at most once per TTL regardless of
+// request rate (#215).
 const sandboxProbeTTL = 10 * time.Second
+
+// k8sSandboxProbeTimeout bounds the apiserver /version call inside the
+// kubernetes sandbox probe. The cache mutex is held across the probe
+// (deliberately — that is the singleflight), so an unbounded call against a
+// hung apiserver would park every /readyz request behind it for as long as
+// the slowest client keeps its request open.
+const k8sSandboxProbeTimeout = 5 * time.Second
 
 // dbPinger is the readiness surface both DB handles satisfy (#215).
 type dbPinger interface {
@@ -46,7 +55,36 @@ var (
 // yet (documented follow-ups): a live LLM completion probe needs the authed
 // client + cost-aware caching, and MCP liveness needs a real broker round-trip —
 // reporting either without actually probing would violate the honesty invariant.
-func buildReadinessChecks(cfg *config.Config, chatDB, schedDB dbPinger, guard *diskguard.Guard) []health.Check {
+func buildReadinessChecks(cfg *config.Config, chatDB, schedDB dbPinger, guard *diskguard.Guard, sbPool *sandbox.Pool) []health.Check {
+	return []health.Check{
+		{Name: "chat_db", Critical: true, Probe: pingProbe(chatDB)},
+		{Name: "sched_db", Critical: true, Probe: pingProbe(schedDB)},
+		{Name: "sandbox", Critical: false, Probe: (&cachedProbe{fresh: sandboxProbeFor(cfg, sbPool), ttl: sandboxProbeTTL}).probe},
+		{Name: "disk", Critical: false, Probe: diskProbe(guard)},
+	}
+}
+
+// sandboxProbeFor picks the sandbox liveness probe for the resolved backend.
+// Under podman it is `<runtime> --version` on this host; under kubernetes the
+// host has no runtime binary at all — the sandbox runtime IS the apiserver —
+// so probing podman there reported a permanent, misleading "degraded" (#1264).
+func sandboxProbeFor(cfg *config.Config, sbPool *sandbox.Pool) func(context.Context) health.Result {
+	if cfg.SandboxBackend == sandbox.BackendKubernetes {
+		// Concrete-type nil check BEFORE the interface conversion in
+		// k8sSandboxProbe's argument, so a nil handle cannot ride in as a
+		// typed non-nil interface.
+		if sbPool != nil {
+			if backend := sbPool.KubernetesBackend(); backend != nil {
+				return k8sSandboxProbe(backend)
+			}
+		}
+		// Boot fails closed before serving when the kubernetes backend cannot
+		// be built, so this arm should be unreachable — but a probe must never
+		// lie, and "ok" or a podman exec would both lie here.
+		return func(context.Context) health.Result {
+			return health.Result{Status: health.StatusError, Detail: "kubernetes backend selected but the sandbox pool has no backend handle"}
+		}
+	}
 	// Probe a best-effort guess at the runtime binary: an empty runtime means
 	// the podman default, else the OCI runtime's conventional binary name
 	// ("kata" → "kata-runtime", "krun" → "krun"). Mapping via RuntimeBinary keeps
@@ -63,11 +101,45 @@ func buildReadinessChecks(cfg *config.Config, chatDB, schedDB dbPinger, guard *d
 	if bin := sandbox.RuntimeBinary(cfg.SandboxRuntime); bin != "" {
 		runtimeBin = bin
 	}
-	return []health.Check{
-		{Name: "chat_db", Critical: true, Probe: pingProbe(chatDB)},
-		{Name: "sched_db", Critical: true, Probe: pingProbe(schedDB)},
-		{Name: "sandbox", Critical: false, Probe: (&cachedSandboxProbe{runtimeBin: runtimeBin, ttl: sandboxProbeTTL}).probe},
-		{Name: "disk", Critical: false, Probe: diskProbe(guard)},
+	return podmanSandboxProbe(runtimeBin)
+}
+
+// apiserverProber is the narrow slice of sandbox.KubernetesBackend the
+// kubernetes sandbox probe consumes (a seam for tests).
+type apiserverProber interface {
+	ApiserverVersion(ctx context.Context) (string, error)
+}
+
+// k8sSandboxProbe reports apiserver reachability as the sandbox liveness
+// signal: every sandbox operation under this backend is an apiserver call, so
+// GET /version — the same call the boot preflight opens with — is the honest
+// equivalent of the podman `--version` subprocess. Version text and errors
+// are already sanitized by the sandbox client before they reach us.
+func k8sSandboxProbe(prober apiserverProber) func(context.Context) health.Result {
+	return func(ctx context.Context) health.Result {
+		ctx, cancel := context.WithTimeout(ctx, k8sSandboxProbeTimeout)
+		defer cancel()
+		version, err := prober.ApiserverVersion(ctx)
+		if err != nil {
+			return health.Result{Status: health.StatusError, Detail: "apiserver: " + err.Error()}
+		}
+		return health.Result{Status: health.StatusOK, Detail: "apiserver " + version}
+	}
+}
+
+// podmanSandboxProbe runs `<runtime> --version` to confirm the container
+// runtime is present and responsive, returning its version in the detail. A
+// lightweight check suitable for frequent polling; deep functional
+// verification (rootless setup, image presence) lives in the boot-time
+// `fleet validate-config` preflight, not in a readiness probe.
+func podmanSandboxProbe(runtimeBin string) func(context.Context) health.Result {
+	return func(ctx context.Context) health.Result {
+		//nolint:gosec // G702: runtimeBin is operator config (FLEET_SANDBOX_RUNTIME, default "podman"), not request input — the same trusted binary the sandbox already execs for every tool call.
+		out, err := exec.CommandContext(ctx, runtimeBin, "--version").Output()
+		if err != nil {
+			return health.Result{Status: health.StatusError, Detail: runtimeBin + ": " + err.Error()}
+		}
+		return health.Result{Status: health.StatusOK, Detail: strings.TrimSpace(string(out))}
 	}
 }
 
@@ -111,19 +183,15 @@ func pingProbe(db dbPinger) func(context.Context) health.Result {
 	}
 }
 
-// cachedSandboxProbe runs `<runtime> --version` to confirm the container runtime
-// is present and responsive, returning its version in the detail. A lightweight
-// check suitable for frequent polling; deep functional verification (rootless
-// setup, image presence) lives in the boot-time `fleet validate-config`
-// preflight, not in a readiness probe.
-//
-// The result is cached for ttl: the mutex is held across the subprocess so
-// concurrent /readyz hits collapse to a single exec (singleflight), and cached
-// hits return instantly with Cached=true. This bounds podman spawns from an
-// unauthenticated endpoint to ~1 per ttl regardless of request rate (#215).
-type cachedSandboxProbe struct {
-	runtimeBin string
-	ttl        time.Duration
+// cachedProbe memoizes an expensive probe (a subprocess, a network call) for
+// ttl: the mutex is held across the fresh call so concurrent /readyz hits
+// collapse to a single execution (singleflight), and cached hits return
+// instantly with Cached=true. This bounds what an unauthenticated endpoint
+// can make the process do to ~1 probe per ttl regardless of request rate
+// (#215).
+type cachedProbe struct {
+	fresh func(context.Context) health.Result
+	ttl   time.Duration
 
 	mu        sync.Mutex
 	cached    health.Result
@@ -131,7 +199,7 @@ type cachedSandboxProbe struct {
 	hasCached bool
 }
 
-func (c *cachedSandboxProbe) probe(ctx context.Context) health.Result {
+func (c *cachedProbe) probe(ctx context.Context) health.Result {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.hasCached && time.Since(c.at) < c.ttl {
@@ -139,14 +207,7 @@ func (c *cachedSandboxProbe) probe(ctx context.Context) health.Result {
 		hit.Cached = true
 		return hit
 	}
-	var res health.Result
-	//nolint:gosec // G702: runtimeBin is operator config (FLEET_SANDBOX_RUNTIME, default "podman"), not request input — the same trusted binary the sandbox already execs for every tool call.
-	out, err := exec.CommandContext(ctx, c.runtimeBin, "--version").Output()
-	if err != nil {
-		res = health.Result{Status: health.StatusError, Detail: c.runtimeBin + ": " + err.Error()}
-	} else {
-		res = health.Result{Status: health.StatusOK, Detail: strings.TrimSpace(string(out))}
-	}
+	res := c.fresh(ctx)
 	c.cached, c.at, c.hasCached = res, time.Now(), true
 	return res
 }
