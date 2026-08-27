@@ -124,7 +124,35 @@ type Service struct {
 	// runtime-acquired credential so the host process can register it for
 	// literal redaction (#1124). Never called with an empty value; never
 	// logged here.
-	observeSecret func(secret string)
+	observeSecret SecretObserver
+}
+
+// SecretObserver receives credentials the Service acquires at RUNTIME.
+//
+// scope, when non-empty, names the ROTATING credential set the values belong to
+// — one server row, whose OAuth access+refresh pair is replaced wholesale by
+// each refresh. rotated says the values REPLACE that scope's previous
+// generation, which is what lets the host redactor retire the rotated-out
+// secrets after a grace window instead of scanning for every token the process
+// has ever held (#1274): without it a broker on hourly-expiry tokens grew its
+// literal set by ~2-3 entries per refresh per server, forever. rotated=false
+// adds to the scope's CURRENT generation (a secret about to ride a request, a
+// bearer returned unchanged) and retires nothing. An empty scope means the
+// credential does not rotate on a clock (a static api_key, a client secret
+// acquired before its row exists) and is registered for the process lifetime.
+//
+// fn must be safe for concurrent use and must ONLY register the values for
+// redaction — never log, persist or forward them.
+type SecretObserver func(scope string, rotated bool, secrets ...string)
+
+// secretScope names the rotating credential set for one server row. The row is
+// the right generation boundary: its tokens rotate together, and a rotation for
+// one row must never retire another row's (or another user's) literals.
+func secretScope(serverID string) string {
+	if strings.TrimSpace(serverID) == "" {
+		return ""
+	}
+	return "remotemcp:" + serverID
 }
 
 // NewService builds a Service. cfg is normalized; the SSRF-safe HTTP client is
@@ -139,26 +167,54 @@ func NewService(st *store.Store, cfg Config) *Service {
 // acquires at RUNTIME — minted/refreshed OAuth bearers, rotated refresh
 // tokens, sealed api_key secrets — at the moment of acquisition, before the
 // credential is used on any request. The credential-owning broker wires it to
-// mcpbroker.RegisterSecretLiteral so a connector echoing its own token into an
-// error string is scrubbed by VALUE, like boot-time env secrets (#1124). fn
-// must be safe for concurrent use and must only register the value for
-// redaction, never log or persist it. Set during wiring, before the service
-// serves traffic (the field itself is not synchronized).
-func (s *Service) SetSecretObserver(fn func(secret string)) {
+// mcpbroker.RegisterSecretLiterals (the main process wires
+// agentcore.RegisterSecretLiterals) so a connector echoing its own token into
+// an error string is scrubbed by VALUE, like boot-time env secrets (#1124).
+// See SecretObserver for the scope/rotated contract. Set during wiring, before
+// the service serves traffic (the field itself is not synchronized).
+func (s *Service) SetSecretObserver(fn SecretObserver) {
 	s.observeSecret = fn
 }
 
-// noteSecrets forwards each non-empty value to the secret observer (no-op when
-// none is registered).
+// noteSecrets registers non-rotating credentials for the process lifetime: a
+// static api_key, a client secret or registration token acquired before its
+// server row exists. No-op when no observer is registered.
 func (s *Service) noteSecrets(values ...string) {
+	s.observe("", false, values...)
+}
+
+// noteScopedSecrets registers credentials the server row is using RIGHT NOW,
+// joining its current generation without superseding anything — so a secret
+// still in play can never have its coverage shortened by this call.
+func (s *Service) noteScopedSecrets(scope string, values ...string) {
+	s.observe(scope, false, values...)
+}
+
+// noteRotatedSecrets records a completed rotation: values are the row's
+// COMPLETE live set afterwards (fresh access token, fresh refresh token, and
+// the client secret that still authenticates it), and everything the row held
+// before starts its retirement grace window. Passing an incomplete set would
+// start the clock on a live secret, so every caller lists all of them.
+func (s *Service) noteRotatedSecrets(scope string, values ...string) {
+	s.observe(scope, true, values...)
+}
+
+func (s *Service) observe(scope string, rotated bool, values ...string) {
 	if s.observeSecret == nil {
 		return
 	}
+	kept := make([]string, 0, len(values))
 	for _, v := range values {
 		if v != "" {
-			s.observeSecret(v)
+			kept = append(kept, v)
 		}
 	}
+	// A rotation with nothing to register still has to be reported: it is what
+	// retires the previous generation.
+	if len(kept) == 0 && !rotated {
+		return
+	}
+	s.observeSecret(scope, rotated, kept...)
 }
 
 // Enabled reports whether the feature can operate (encryption key + base URL).
@@ -250,6 +306,13 @@ func (s *Service) AddServer(ctx context.Context, in AddServerInput) (*store.Remo
 				return nil, -1, fmt.Errorf("invalid API key query-parameter name %q", query)
 			}
 		}
+		// Control-plane acquisition (#1274): the add-time probe sends this key
+		// upstream and its failure text is returned to the caller (and logged),
+		// so the key is registered for literal redaction before the probe runs.
+		// No scope: an api_key does not rotate on a clock, and one manual
+		// rotation per user cannot grow the literal set the way token refresh
+		// did. There is no row yet either.
+		s.noteSecrets(in.APIKey)
 		toolCount, perr := s.probeServer(ctx, canonURL, header, query, in.APIKey)
 		if perr != nil {
 			return nil, -1, fmt.Errorf("the server did not accept this API key — check the key and try again: %w", perr)
@@ -294,6 +357,13 @@ func (s *Service) AddServer(ctx context.Context, in AddServerInput) (*store.Remo
 		clientSecret = reg.ClientSecret
 		regToken = reg.RegistrationAccessToken
 	}
+	// Control-plane acquisition (#1274): a dynamic registration just minted a
+	// client secret + registration access token, and a manual add supplied one
+	// — credentials this process now holds and whose later use (the login
+	// exchange, a registration update) can quote them in an error. No scope:
+	// these live for the client REGISTRATION's lifetime, not a token's, and
+	// there is no server row to scope them to until the insert below.
+	s.noteSecrets(clientSecret, regToken)
 
 	server, err := s.store.CreateRemoteMCPServer(ctx, store.RemoteMCPServerInput{
 		UserEmail:             in.Email,
@@ -396,6 +466,9 @@ func (s *Service) SetAPIKey(ctx context.Context, email, serverID, apiKey string)
 	if server.AuthKind != store.RemoteMCPAuthAPIKey {
 		return 0, errors.New("this connection does not use an API key")
 	}
+	// Same registration as the add-time probe (#1274): the rotated key rides
+	// this request and the wrapped failure reaches the caller.
+	s.noteSecrets(apiKey)
 	toolCount, err := s.probeServer(ctx, server.URL, server.APIKeyHeader, server.APIKeyQuery, apiKey)
 	if err != nil {
 		return 0, fmt.Errorf("the server did not accept this API key — the previous key is unchanged: %w", err)
@@ -447,6 +520,10 @@ func (s *Service) Authorize(ctx context.Context, email, serverID string) (string
 	if err := s.store.BeginOAuthFlow(ctx, state, server.ID, server.UserEmail, verifier, s.cfg.FlowTTL); err != nil {
 		return "", err
 	}
+	// Control-plane acquisition (#1274): the client secret is unsealed here and
+	// will authenticate the exchange this flow ends in. Registering it now means
+	// a store or URL-building failure in between cannot quote it unscrubbed.
+	s.noteScopedSecrets(secretScope(server.ID), clientSecret)
 	fc := s.flowConfig(server, clientSecret)
 	return fc.AuthCodeURL(state, challenge), nil
 }
@@ -476,11 +553,21 @@ func (s *Service) Complete(ctx context.Context, email, state, code string) (*sto
 	if err != nil {
 		return nil, err
 	}
+	// Control-plane acquisition (#1274): the client secret and the single-use
+	// authorization code both ride the exchange request, whose failure text is
+	// returned to the caller and logged, so they are registered BEFORE it is
+	// sent. Both join this row's current generation; the successful exchange
+	// below then supersedes them, which is what retires the spent code.
+	scope := secretScope(server.ID)
+	s.noteScopedSecrets(scope, clientSecret, code)
 	fc := s.flowConfig(server, clientSecret)
 	tok, err := fc.Exchange(ctx, s.httpClient, code, flow.CodeVerifier)
 	if err != nil {
 		return nil, fmt.Errorf("exchange authorization code: %w", err)
 	}
+	// The row's first token generation. Same contract as refreshFunc: the whole
+	// live set, so the client secret stays live across the swap.
+	s.noteRotatedSecrets(scope, clientSecret, tok.AccessToken, tok.RefreshToken)
 	if err := s.store.StoreOAuthTokens(ctx, server, store.RemoteMCPTokens{
 		AccessToken:  tok.AccessToken,
 		RefreshToken: tok.RefreshToken,
@@ -569,27 +656,33 @@ func (s *Service) AcquireToken(ctx context.Context, server *store.RemoteMCPServe
 	// The unsealed client secret rides the same token-endpoint request as the
 	// refresh token (client authentication), so it is the same hazard class:
 	// register it for literal redaction before that request can quote it in an
-	// error (#1124 follow-up).
-	s.noteSecrets(clientSecret)
+	// error (#1124 follow-up). Scoped to this row and NOT marked as a rotation:
+	// it survives every token rotation, and each rotation re-lists it, so it
+	// stays live in the scan set (#1274).
+	scope := secretScope(server.ID)
+	s.noteScopedSecrets(scope, clientSecret)
 	fc := s.flowConfig(server, clientSecret)
 	margin := int64(s.cfg.RefreshMargin / time.Second)
-	bearer, err := s.store.EnsureFreshToken(ctx, server, margin, s.refreshFunc(fc))
+	bearer, err := s.store.EnsureFreshToken(ctx, server, margin, s.refreshFunc(scope, fc))
 	if err == nil {
 		// Runtime-acquired bearer: register it for literal redaction before it
-		// is used on any request (#1124).
-		s.noteSecrets(bearer)
+		// is used on any request (#1124). A bearer the store returned unchanged
+		// joins the row's current generation; one a refresh just minted is
+		// already in it (refreshFunc rotated the generation), where this is a
+		// no-op.
+		s.noteScopedSecrets(scope, bearer)
 	}
 	return bearer, err
 }
 
-func (s *Service) refreshFunc(fc mcpoauth.FlowConfig) store.RefreshFunc {
+func (s *Service) refreshFunc(scope string, fc mcpoauth.FlowConfig) store.RefreshFunc {
 	return func(ctx context.Context, current store.RemoteMCPTokens) (store.RefreshResult, error) {
 		// The stored refresh token is about to ride a token-endpoint request
 		// whose failure text could echo it; the ROTATED tokens below never
 		// leave this closure (the fresh refresh token in particular is only
 		// stored, not returned). Register all of them for literal redaction
 		// at acquisition time (#1124).
-		s.noteSecrets(current.RefreshToken)
+		s.noteScopedSecrets(scope, current.RefreshToken)
 		rctx, cancel := context.WithTimeout(ctx, s.cfg.RefreshTimeout)
 		defer cancel()
 		tok, err := fc.Refresh(rctx, s.httpClient, current.RefreshToken)
@@ -608,7 +701,13 @@ func (s *Service) refreshFunc(fc mcpoauth.FlowConfig) store.RefreshFunc {
 			}
 			return store.RefreshResult{}, err
 		}
-		s.noteSecrets(tok.AccessToken, tok.RefreshToken)
+		// The rotation SUCCEEDED, so this is the row's new generation: the fresh
+		// pair plus the client secret that still authenticates it. Everything
+		// the row held before — the access token this one replaces, the refresh
+		// token this rotation consumed — enters its grace window and is dropped
+		// after it (#1274). Listing the client secret here is what keeps it
+		// live across the swap.
+		s.noteRotatedSecrets(scope, fc.ClientSecret, tok.AccessToken, tok.RefreshToken)
 		return store.RefreshResult{Tokens: store.RemoteMCPTokens{
 			AccessToken:  tok.AccessToken,
 			RefreshToken: tok.RefreshToken,
@@ -631,8 +730,9 @@ func (s *Service) tryRevoke(ctx context.Context, server *store.RemoteMCPServer) 
 		return
 	}
 	// Same registration as AcquireToken/refreshFunc: both secrets ride the
-	// revocation request and could be echoed by its failure text.
-	s.noteSecrets(clientSecret, tokens.RefreshToken)
+	// revocation request and could be echoed by its failure text. A join, not a
+	// rotation — revocation mints nothing.
+	s.noteScopedSecrets(secretScope(server.ID), clientSecret, tokens.RefreshToken)
 	_ = mcpoauth.RevokeToken(rctx, s.httpClient, server.RevocationEndpoint, server.ClientID, clientSecret, tokens.RefreshToken)
 }
 
