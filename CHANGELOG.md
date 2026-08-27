@@ -39,6 +39,28 @@ prior versions are listed because none have shipped.
   and allowlisted takes are untouched (the per-turn proxy token still
   requires a cold start).
 
+- **Scheduled runs and `fleet task run` can use the file tools on their own
+  workspace — and read bundle docs — on every backend (#1290).** Three
+  stacked, backend-independent gaps made `view_file protocols/…` (and, in the
+  one-shot harness, even `write_file notes.md`) fail for all scheduled work:
+  the harness never registered the workspace root or supporting-doc dirs, so
+  host validation fell back to the process-cwd allowlist (`/opt/fleet/client`
+  in the split control-plane image) and rejected every workspace-relative
+  path; `fileOpRoot`'s forced-working-dir branch lacked the read-only
+  supporting-doc exception the conversation branch already had, so a doc read
+  was refused even when it validated; and nothing seeded the
+  `protocols`/`personas`/`system_prompts`/`skills` symlinks into scheduled or
+  one-shot workspaces, so the system prompt's bare-path convention — which the
+  audit enforcement itself relies on ("read protocols/self-audit.md") — silently
+  broke. `fleet task run` now registers both globals with its minted workspace
+  (chmod'd container-readable), `configureRunWorkspace` seeds the symlinks for
+  every scheduled and one-shot run, and the forced-dir branch admits a
+  host-resolved doc symlink with the same narrow shape as chat: unresolved
+  path beneath the forced root, resolved target beneath a registered doc
+  root, reads only. Writes into doc mounts, non-doc symlink escapes, absolute
+  doc-mount paths, and `..` traversal out of the forced root stay refused,
+  with regression tests pinning each.
+
 - **The Kubernetes sandbox backend can now actually run tool calls: exec
   streaming rides client-go instead of a hand-rolled WebSocket client
   (#1264).** The first real cluster this backend ever met — the example

@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -58,5 +59,29 @@ func TestConfigureRunWorkspacePrefersThreadedWorktreeRoot(t *testing.T) {
 	wantPath := fmt.Sprintf(".fleet/tool-output/slot-00/artifact-%x.txt", digest)
 	if err != nil || path != wantPath {
 		t.Fatalf("isolated worktree artifact: path=%q err=%v", path, err)
+	}
+}
+
+// TestConfigureRunWorkspaceSeedsSupportingDocSymlinks pins the #1290 seeding
+// call: binding a scheduled run's workspace plants the registered
+// supporting-doc symlinks so the system prompt's bare `protocols/...` paths
+// (and the audit enforcement's own "read protocols/self-audit.md") resolve.
+func TestConfigureRunWorkspaceSeedsSupportingDocSymlinks(t *testing.T) {
+	root := t.TempDir()
+	docs := t.TempDir()
+	tools.SetSupportingDocDirs(map[string]string{"protocols": docs})
+	t.Cleanup(func() { tools.SetSupportingDocDirs(nil) })
+	sb := sandbox.NewHost(nil)
+	t.Cleanup(sb.Close)
+
+	_, release, effective, err := configureRunWorkspace(context.Background(), sb, "", root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(release)
+
+	target, err := os.Readlink(filepath.Join(effective, "protocols"))
+	if err != nil || target != docs {
+		t.Fatalf("protocols symlink = %q err=%v, want %q", target, err, docs)
 	}
 }
