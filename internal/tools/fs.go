@@ -286,10 +286,24 @@ func fileOpRoot(ctx context.Context, resolved, valid string, writable bool) (str
 		if absErr != nil {
 			return "", absErr
 		}
-		if !isSubPath(root, validAbs) {
-			return "", &PathSecurityError{Path: valid, Reason: "path escapes the scheduled-run worktree", BaseDir: root}
+		if isSubPath(root, validAbs) {
+			return root, nil
 		}
-		return root, nil
+		// Scheduled and one-shot runs read bundle docs through the same seeded
+		// `protocols/...` symlinks as chat (#1290): host validation resolves
+		// the symlink into a registered read-only doc mount. Mirror the
+		// conversation branch's exception below, with the same narrow shape —
+		// the model's UNRESOLVED path must originate beneath the forced root,
+		// and the resolved target must land inside a registered mount. It is
+		// read-only by construction: the doc-mount check at the top of this
+		// function already refused every writable op, and the sandbox anchors
+		// those roots as read-only mounts independently.
+		if isSubPath(root, resolvedAbs) {
+			if docsRoot := supportingDocRootForPath(validAbs); docsRoot != "" {
+				return docsRoot, nil
+			}
+		}
+		return "", &PathSecurityError{Path: valid, Reason: "path escapes the scheduled-run worktree", BaseDir: root}
 	}
 
 	if convID := ConversationIDFromContext(ctx); convID != "" {

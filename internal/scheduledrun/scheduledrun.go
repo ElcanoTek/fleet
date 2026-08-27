@@ -573,6 +573,12 @@ func configureRunWorkspace(ctx context.Context, sb *sandbox.Sandbox, wtPath, sha
 	}
 	ctx = tools.WithForcedWorkingDir(ctx, effectiveRoot)
 	sb.SetDefaultWorkingDir(effectiveRoot)
+	// Seed the supporting-doc symlinks chat workspaces get from
+	// EnsureWorkspaceDir (#1290): without them the system prompt's bare
+	// `protocols/foo.yaml` convention — which the audit enforcement itself
+	// relies on ("read protocols/self-audit.md") — resolves to nothing in a
+	// scheduled or one-shot workspace. Best-effort, exactly like the chat path.
+	tools.SeedSupportingDocSymlinks(effectiveRoot)
 	if err := sb.BindFileOpRoot(ctx, effectiveRoot); err != nil {
 		return ctx, func() {}, "", fmt.Errorf("bind scheduled file capability: %w", err)
 	}

@@ -48,6 +48,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/sandbox"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/scheduledrun"
+	"github.com/ElcanoTek/fleet/internal/tools"
 )
 
 // Run executes one task YAML to completion and returns the process exit code.
@@ -144,6 +145,24 @@ func run(argv []string, progName string) error {
 	cfg.WorkspaceRoot = wsDir
 	fmt.Fprintf(os.Stderr, "%s: workspace=%s\n", progName, wsDir)
 
+	// Register the same two file-tool confinement globals the serve boot does
+	// (#1290). Without SetWorkspaceRoot, tools.ValidatePath falls back to its
+	// legacy process-cwd allowlist — /opt/fleet/client in the split
+	// control-plane image — and EVERY workspace-relative
+	// view_file/write_file/edit_file call fails "outside allowed directories".
+	// Without SetSupportingDocDirs, `view_file protocols/…` cannot resolve
+	// through the workspace symlinks into the bundle's read-only doc roots
+	// (the same registration fileOpRoot's read-only exception checks).
+	tools.SetWorkspaceRoot(wsDir)
+	tools.SetSupportingDocDirs(map[string]string{
+		"personas":       bundle.PersonasDir,
+		"protocols":      bundle.ProtocolsDir,
+		"system_prompts": bundle.SystemPromptsDir,
+		"skills":         bundle.SkillsDir,
+		// No shared-file library entry: the one-shot harness has no DB, so
+		// there is no staged tree to expose (docs/SHARED-FILES.md).
+	})
+
 	mgr, err := agent.New(agent.ManagerOptions{
 		Config:               cfg,
 		ServerSpecs:          scheduledrun.BuildMCPSpecs(cfg),
@@ -235,10 +254,14 @@ func loadTaskYAML(path string) (*models.Task, error) {
 // --workspace is used as-is (created if needed); otherwise a fresh per-run dir is
 // minted under cfg.WorkspaceRoot, else cfg.DataDir, else the OS temp dir.
 func resolveWorkspace(override string, cfg *config.Config) (string, error) {
+	// 0o755 (not 0o750) because the sandbox container user (uid 1000) must be
+	// able to chdir into the bind-mounted workspace under rootless podman —
+	// same rationale as tools.EnsureWorkspaceDir for chat workspaces.
 	if strings.TrimSpace(override) != "" {
-		if err := os.MkdirAll(override, 0o750); err != nil {
+		if err := os.MkdirAll(override, 0o755); err != nil { //nolint:gosec // see comment above — readable to the lockdown container user
 			return "", fmt.Errorf("create workspace %s: %w", override, err)
 		}
+		_ = os.Chmod(override, 0o755) //nolint:gosec // pre-existing dirs: same rationale
 		abs, err := filepath.Abs(override)
 		if err != nil {
 			return "", err
@@ -253,6 +276,10 @@ func resolveWorkspace(override string, cfg *config.Config) (string, error) {
 	dir, err := os.MkdirTemp(base, "task-run-")
 	if err != nil {
 		return "", fmt.Errorf("create per-run workspace: %w", err)
+	}
+	// MkdirTemp mints 0o700 — unreadable to the container user (see above).
+	if err := os.Chmod(dir, 0o755); err != nil { //nolint:gosec // see comment above — readable to the lockdown container user
+		return "", fmt.Errorf("open per-run workspace to the sandbox user: %w", err)
 	}
 	abs, err := filepath.Abs(dir)
 	if err != nil {

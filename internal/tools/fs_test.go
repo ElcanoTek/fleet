@@ -412,3 +412,95 @@ func TestFileToolsPoisonedSandbox(t *testing.T) {
 		t.Fatal("sanity")
 	}
 }
+
+// TestFileToolsSupportingDocsReadOnlyUnderForcedWorkingDir pins the #1290 fix:
+// a scheduled/one-shot run (forced working dir, no conversation id) reads a
+// bundle doc through its seeded workspace symlink, while writes into the doc
+// mount, non-doc symlink escapes, absolute doc-mount paths, and `..` traversal
+// out of the forced root all stay refused.
+func TestFileToolsSupportingDocsReadOnlyUnderForcedWorkingDir(t *testing.T) {
+	sb := fsTestSandbox(t)
+	parent := t.TempDir()
+	forced := filepath.Join(parent, "task-run-x")
+	if err := os.MkdirAll(forced, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	docs, err := os.MkdirTemp("/var/tmp", "fleet-doc-forced-")
+	if err != nil {
+		t.Skipf("create supporting-doc fixture outside host allowlist: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(docs) })
+	protocol := filepath.Join(docs, "self-audit.md")
+	if err := os.WriteFile(protocol, []byte("governed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Preserve the process-global boot registry for other tests.
+	supportingDocDirsMu.RLock()
+	previous := make(map[string]string, len(supportingDocDirs))
+	for k, v := range supportingDocDirs {
+		previous[k] = v
+	}
+	supportingDocDirsMu.RUnlock()
+	SetSupportingDocDirs(map[string]string{"protocols": docs})
+	t.Cleanup(func() {
+		supportingDocDirsMu.Lock()
+		supportingDocDirs = previous
+		supportingDocDirsMu.Unlock()
+	})
+
+	SeedSupportingDocSymlinks(forced)
+	if target, lerr := os.Readlink(filepath.Join(forced, "protocols")); lerr != nil || target != docs {
+		t.Fatalf("seeded protocols symlink = %q err=%v, want %q", target, lerr, docs)
+	}
+
+	ctx := WithForcedWorkingDir(context.Background(), forced)
+	if err := sb.BindFileOpRoot(context.Background(), forced); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := runViewFile(ctx, sb, ViewFileParams{Path: "protocols/self-audit.md"})
+	if err != nil || !strings.HasPrefix(got, "governed\n\n(file metadata: sha256=") {
+		t.Fatalf("supporting-doc view under forced dir = %q err=%v", got, err)
+	}
+	// Writes into the doc mount stay refused, and the doc is untouched.
+	if _, err := runEditFile(ctx, sb, EditFileParams{Path: "protocols/self-audit.md", OldText: "governed", NewText: "mutated"}); err == nil {
+		t.Fatal("supporting-doc edit succeeded under forced dir")
+	}
+	if _, err := runWriteFile(ctx, sb, WriteFileParams{Path: "protocols/self-audit.md", Content: "mutated"}); err == nil {
+		t.Fatal("supporting-doc overwrite succeeded under forced dir")
+	}
+	if data, err := os.ReadFile(protocol); err != nil || string(data) != "governed" {
+		t.Fatalf("supporting doc changed: %q err=%v", data, err)
+	}
+
+	// The exception admits ONLY registered doc roots: a symlink out of the
+	// forced root to anywhere else still escapes and is refused.
+	lootDir := t.TempDir()
+	secret := filepath.Join(lootDir, "secret.txt")
+	if err := os.WriteFile(secret, []byte("loot"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(lootDir, filepath.Join(forced, "loot")); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runViewFile(ctx, sb, ViewFileParams{Path: "loot/secret.txt"}); err == nil {
+		t.Fatalf("non-doc symlink escape succeeded: %q", out)
+	}
+
+	// The model's UNRESOLVED path must originate beneath the forced root: the
+	// doc mount's own absolute path is not admitted directly.
+	if out, err := runViewFile(ctx, sb, ViewFileParams{Path: protocol}); err == nil {
+		t.Fatalf("absolute doc-mount read bypassed the forced root: %q", out)
+	}
+
+	// `..` traversal out of the forced root stays refused even when the
+	// target exists and is inside the host allowlist.
+	escape := filepath.Join(parent, "escape.txt")
+	if err := os.WriteFile(escape, []byte("outside"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runViewFile(ctx, sb, ViewFileParams{Path: "../escape.txt"}); err == nil {
+		t.Fatalf("dot-dot escape out of the forced root succeeded: %q", out)
+	}
+}

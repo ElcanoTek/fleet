@@ -148,6 +148,25 @@ func EnsureWorkspaceDir(conversationID string) (string, error) {
 	// re-asserts our default — they can lock down via container
 	// userns instead, which is the right layer for that.
 	_ = os.Chmod(dir, 0o755) //nolint:gosec // see comment above
+	SeedSupportingDocSymlinks(dir)
+	return dir, nil
+}
+
+// SeedSupportingDocSymlinks plants the supporting-doc symlinks inside dir so
+// the bare relative paths the system prompt advertises ("protocols/foo.yaml",
+// "skills/<name>/SKILL.md") resolve from that directory's cwd. Chat
+// workspaces get this via EnsureWorkspaceDir; scheduled and one-shot
+// (`fleet task run`) workspaces call it directly from
+// scheduledrun.configureRunWorkspace (#1290) — before that, only chat
+// workspaces were seeded and scheduled work could not resolve the very
+// protocol paths the audit enforcement demands. Best-effort by design: a
+// failed symlink degrades to absolute-path access, it never fails the run.
+//
+// Symlink targets resolve inside the sandbox because both backends expose the
+// doc roots at the SAME absolute paths the host sees — read-only bind mounts
+// under podman, docs baked into the image at those paths under kubernetes
+// (`bundle_docs_in_image`, ADR-0049).
+func SeedSupportingDocSymlinks(dir string) {
 	// Resolve absolute paths for each supporting-doc dir. We prefer
 	// the ones at /opt/chat root (which themselves are symlinks to
 	// server/* — see scripts/bootstrap.sh) because those are stable
@@ -155,7 +174,7 @@ func EnsureWorkspaceDir(conversationID string) (string, error) {
 	// root-level symlinks don't exist (fresh dev checkouts).
 	cwd, err := os.Getwd()
 	if err != nil {
-		return dir, nil //nolint:nilerr // skip supporting-doc links but return the dir
+		return // skip supporting-doc links; absolute paths still work
 	}
 	// SharedFilesDirName rides the same symlink machinery so `shared/<name>`
 	// (the path the shared-library prompt block advertises) resolves from the
@@ -164,13 +183,22 @@ func EnsureWorkspaceDir(conversationID string) (string, error) {
 	// stray ./shared dir in a dev checkout must not masquerade as the library.
 	for _, name := range []string{"protocols", "personas", "system_prompts", "skills", SharedFilesDirName} {
 		link := filepath.Join(dir, name)
+		// A non-worktree scheduled run seeds the shared workspace ROOT — where
+		// the staged shared-file library itself lives — so a configured target
+		// can BE the link path. Never plant (or repoint through) a
+		// self-referential symlink. Registered dirs are absolute
+		// (SetSupportingDocDirs absolutizes), so compare absolutes.
+		linkAbs := link
+		if a, aerr := filepath.Abs(link); aerr == nil {
+			linkAbs = a
+		}
 		// Don't replace an existing file — could be a real file the
 		// agent wrote. Only create the symlink if nothing is there.
 		if _, err := os.Lstat(link); err == nil {
 			// A stale link from before a boot-time dir change (e.g. the
 			// merged skills dir moved) is repointed; a real file is never
 			// touched.
-			if configured := configuredSupportingDocDir(name); configured != "" {
+			if configured := configuredSupportingDocDir(name); configured != "" && configured != linkAbs {
 				if cur, lerr := os.Readlink(link); lerr == nil && cur != configured {
 					_ = os.Remove(link)
 					_ = os.Symlink(configured, link)
@@ -182,7 +210,9 @@ func EnsureWorkspaceDir(conversationID string) (string, error) {
 		// dirs here, including the merged bundle+builtin skills dir) wins over
 		// the legacy cwd-relative convention.
 		if target := configuredSupportingDocDir(name); target != "" {
-			_ = os.Symlink(target, link)
+			if target != linkAbs {
+				_ = os.Symlink(target, link)
+			}
 			continue
 		}
 		if name == SharedFilesDirName {
@@ -199,7 +229,6 @@ func EnsureWorkspaceDir(conversationID string) (string, error) {
 		}
 		_ = os.Symlink(target, link)
 	}
-	return dir, nil
 }
 
 // Managed workspace-root registry: cmd/fleet registers the absolute workspace
