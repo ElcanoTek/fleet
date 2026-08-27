@@ -153,6 +153,19 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **The node-LTS move reminds itself (#1300).** The node runtime major is
+  invisible to Dependabot (see the notes in `.github/dependabot.yml`), so
+  moving to a new LTS line was initiated by a dated issue someone had to
+  remember. A weekly `node-lts-reminder.yml` cron now files that issue
+  itself — once v26 is past its scheduled Active-LTS date (2026-10-28)
+  while `web/.nvmrc` still reads 24 — carrying the full checklist: the
+  LTS/schedule.json and Fedora `nodejs26`+`nodejs26-npm` RPM preconditions,
+  then every declaration point (`web/.nvmrc`, both `engines.node` fields,
+  `@types/node`, the rampart `node:26-slim` base) bumped together under
+  `TestNodeMajorAgreesEverywhere`. Deliberately offline: the date is
+  hardcoded from nodejs/Release so a fetch hiccup can never make the
+  reminder lie; the filed issue dedupes by title.
+
 - **The post-promotion ancestry merge is automated (#1298).** Promotions
   squash-merge dev into main, so the merge-base never advances and every
   re-touched region read as a conflict on the next promotion PR. The new

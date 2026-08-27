@@ -1,0 +1,93 @@
+# Node LTS reminder — files an issue when a node major this repo has decided
+# to move to reaches Active LTS and web/.nvmrc is still behind (#1300).
+#
+# WHY: the node RUNTIME major is invisible to Dependabot (see the long note in
+# .github/dependabot.yml — none of the gomod/npm/actions surfaces can see it,
+# and the one docker surface that can covers a single Containerfile). So the
+# move to a new LTS line is a deliberate, human-initiated change — and before
+# this workflow, the only thing scheduled to initiate it was a dated GitHub
+# issue a person had to remember existed. This is the same rot pattern
+# scan-cron-alarm.yml exists for: a thing with no PR attached that nothing
+# surfaces. The reminder files the issue itself, on schedule, with the full
+# checklist in the body.
+#
+# Deliberately OFFLINE and deterministic: the LTS date below is hardcoded from
+# nodejs/Release's schedule.json (v26 lts=2026-10-28) rather than fetched per
+# run, so a registry hiccup can never make the reminder lie in either
+# direction. Verifying the date (and the distro-RPM precondition) is the first
+# item of the checklist the filed issue carries — the human confirms the world,
+# the cron only refuses to let the date pass silently.
+#
+# When the bump lands (web/.nvmrc >= 26), every run is a green no-op. When the
+# NEXT even major approaches LTS (v28, lts ~2027-10), update TARGET_MAJOR and
+# LTS_DATE here — that edit is the new reminder's arming step.
+name: Node LTS reminder
+
+on:
+  schedule:
+    # Tuesday 11:00 UTC, weekly. Offset from the 07:00 canary, the 08:00 daily
+    # govulncheck, the Monday 09:00 Grype scan and the Monday 10:00 CodeQL
+    # re-scan, following the same don't-contend-for-runners reasoning those
+    # files state. Weekly is plenty: the reminder dedupes on the open issue,
+    # so cadence only bounds how late after the LTS date the first ping lands.
+    - cron: '0 11 * * 2'
+  workflow_dispatch: # manual re-check (e.g. to test the gate before the date)
+
+permissions:
+  contents: read # reads web/.nvmrc
+  issues: write # files the reminder issue
+
+jobs:
+  remind:
+    name: File the node-26 move issue once v26 is LTS and .nvmrc is behind
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out the tree (web/.nvmrc is the node declaration point)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Compare web/.nvmrc against the LTS line and file the issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_MAJOR: "26"
+          # Active LTS start for v26 per nodejs/Release schedule.json.
+          LTS_DATE: "2026-10-28"
+        run: |
+          set -euo pipefail
+
+          current="$(tr -dc '0-9' < web/.nvmrc)"
+          echo "web/.nvmrc major: ${current}; target: ${TARGET_MAJOR}; LTS date: ${LTS_DATE}"
+
+          if [ "${current}" -ge "${TARGET_MAJOR}" ]; then
+            echo "already on ${current} >= ${TARGET_MAJOR}; nothing to remind. (Next line: bump TARGET_MAJOR/LTS_DATE when its LTS date is announced.)"
+            exit 0
+          fi
+          # Lexicographic compare is exact for ISO dates.
+          if [[ "$(date -u +%F)" < "${LTS_DATE}" ]]; then
+            echo "v${TARGET_MAJOR} is not Active LTS yet (per the hardcoded schedule date); nothing to do."
+            exit 0
+          fi
+
+          title="Move the node major to ${TARGET_MAJOR}: it has reached Active LTS and web/.nvmrc is still ${current}"
+          num="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+            --search "\"$title\" in:title" --json number --jq '.[0].number // empty' || true)"
+          if [ -n "$num" ]; then
+            echo "reminder issue #${num} is already open; not duplicating."
+            exit 0
+          fi
+          gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "Filed automatically by .github/workflows/node-lts-reminder.yml (#1300): node ${TARGET_MAJOR} is past its scheduled Active LTS date (${LTS_DATE}) and web/.nvmrc still reads ${current}.
+
+          Preconditions — confirm the world before touching anything (per .github/dependabot.yml's node notes):
+
+          - [ ] v${TARGET_MAJOR} actually entered Active LTS: check nodejs/Release schedule.json (the date above was hardcoded from it in advance).
+          - [ ] The distro ships the versioned stream: \`nodejs${TARGET_MAJOR}\` + \`nodejs${TARGET_MAJOR}-npm\` exist in the Fedora repos bootstrap targets. Moving .nvmrc ahead of the RPM drops fresh boxes onto bootstrap's unversioned-\`nodejs\` fallback.
+
+          Then bump every declaration point together (\`TestNodeMajorAgreesEverywhere\` in scripts/check_versions_test.go enforces the set):
+
+          - [ ] \`web/.nvmrc\` → ${TARGET_MAJOR} (the single declaration point; CI, bootstrap, doctor, update all read it)
+          - [ ] \`web/package.json\` \`engines.node\` → \`>=${TARGET_MAJOR}\`, and \`@types/node\` → \`^${TARGET_MAJOR}\`
+          - [ ] \`scripts/rampart-service/package.json\` \`engines.node\` → \`>=${TARGET_MAJOR}\`
+          - [ ] \`scripts/rampart-service/Containerfile\` → \`node:${TARGET_MAJOR}-slim\` (a Dependabot docker PR for this may already exist — fold it in or close it against this issue)
+          - [ ] \`make test\` (\`TestNodeMajorAgreesEverywhere\` green) + \`make ci-web\`
+
+          This issue dedupes by title: the weekly cron will not file another while this one is open."
