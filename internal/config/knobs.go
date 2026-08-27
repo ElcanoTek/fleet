@@ -325,6 +325,10 @@ var envKnobs = []envKnob{
 		scope: scopeExternal, readBy: "internal/agentcore (context pressure)"},
 	{key: "FLEET_CONTEXT_COMPACTION_THRESHOLD", fleet: true, kind: kindFloat,
 		scope: scopeExternal, readBy: "internal/agentcore (context compaction)"},
+	// Clamped by the consumer to (0,1] like the two context thresholds above;
+	// 1 disables in practice (the hard ceiling fires first at 100%).
+	{key: "FLEET_BUDGET_WINDDOWN_FRACTION", fleet: true, kind: kindFloat,
+		scope: scopeExternal, readBy: "internal/agentcore (budget wind-down notice)"},
 	// The three agentcore kill-switches are read with strconv.ParseBool, so
 	// they take its narrower token set (see kindStrconvBool).
 	{key: "FLEET_DISABLE_PROMPT_CACHE", fleet: true, kind: kindStrconvBool,

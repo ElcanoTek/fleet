@@ -224,6 +224,7 @@ var allowedEnvVars = map[string]bool{
 	"FLEET_RETRY_MAX_ATTEMPTS":              true,
 	"FLEET_CONTEXT_PRESSURE_WARN_THRESHOLD": true,
 	"FLEET_CONTEXT_COMPACTION_THRESHOLD":    true,
+	"FLEET_BUDGET_WINDDOWN_FRACTION":        true,
 	"FLEET_SSE_BUFFER_DURATION":             true,
 	"FLEET_SSE_BUFFER_MAX_BYTES_PER_TURN":   true,
 	"FLEET_SSE_HEARTBEAT_INTERVAL":          true,

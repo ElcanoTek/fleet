@@ -74,6 +74,20 @@ const (
 	evtContextCompacted = "fleet.context_compacted"
 )
 
+// evtBudgetWindDown is emitted once per run when spend first crosses the
+// wind-down fraction of the cost/token ceiling (#990): from then on every
+// provider call carries a request-local wrap-up notice (budgetWindDownStep).
+// Informational — the hard stop is still budgetGuardedStep at the ceiling.
+const evtBudgetWindDown = "fleet.budget_winddown"
+
+// Budget wind-down event payload fields.
+const (
+	evtFieldSpentCostUSD = "spent_cost_usd"
+	evtFieldMaxCostUSD   = "max_cost_usd"
+	evtFieldSpentTokens  = "spent_tokens"
+	evtFieldMaxTokens    = "max_tokens"
+)
+
 // toolResultMaxStreamBytes bounds the tool-result text forwarded to the
 // Observer (the full untruncated text is still accumulated for persistence).
 const toolResultMaxStreamBytes = 4000

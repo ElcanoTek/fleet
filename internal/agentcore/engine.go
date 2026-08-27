@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -298,12 +299,68 @@ func (e *engine) forceCompactMessageHistory(ctx context.Context, messages []fant
 			compactionSummaryPrefix, len(middle)))
 	}
 
-	out := make([]fantasy.Message, 0, len(head)+1+len(tail))
+	tail = dropPlanReannounceMessages(tail)
+	out := make([]fantasy.Message, 0, len(head)+2+len(tail))
 	out = append(out, head...)
 	out = append(out, summary)
+	out = appendPlanReannounce(out, e.runOrch)
 	out = append(out, tail...)
 	e.consecutiveCompactions++
 	return out
+}
+
+// planReannouncePrefix tags the post-compaction plan-state message so a later
+// compaction can drop a stale copy before inserting a fresh one.
+const planReannouncePrefix = "[plan state after compaction"
+
+// appendPlanReannounce re-announces the task-tracker plan right after a
+// compaction summary (#990, borrowed from Prime Agent's post-compaction
+// kernel-state announcement). The plan is HOST-side state — it survives the
+// compaction that just rewrote the history — but the summarizer may not have
+// preserved it, and the finish gate (checkFinishEnforcement) still enforces
+// it; without this the model has to remember to call task_tracker view to
+// rediscover the plan it is being held to. No-op when no orchestration state
+// is bound (direct-engine tests) or the plan has no open items.
+func appendPlanReannounce(out []fantasy.Message, orch *orchestrationState) []fantasy.Message {
+	if orch == nil {
+		return out
+	}
+	rendered, ok := orch.planStateForReannounce()
+	if !ok {
+		return out
+	}
+	return append(out, fantasy.NewUserMessage(fmt.Sprintf(
+		"%s] Your task plan below is host-side state and survived the compaction above. Continue from it; update it with task_tracker as you make progress.\n\n%s",
+		planReannouncePrefix, rendered)))
+}
+
+// dropPlanReannounceMessages filters out earlier plan re-announcements from a
+// kept slice so repeated compactions leave at most ONE live plan message (the
+// fresh one inserted after the new summary). Only exact user-role messages
+// carrying the tag are dropped — they are standalone injected messages, never
+// part of a tool exchange, so removal cannot orphan a tool result. Copies
+// rather than filtering in place: the proactive path hands this a VIEW into
+// the caller's live history slice, which must stay intact if compaction is
+// abandoned.
+func dropPlanReannounceMessages(messages []fantasy.Message) []fantasy.Message {
+	out := make([]fantasy.Message, 0, len(messages))
+	for _, m := range messages {
+		if m.Role == fantasy.MessageRoleUser {
+			if tp, ok := fantasy.AsMessagePart[fantasy.TextPart](firstPart(m)); ok && strings.HasPrefix(tp.Text, planReannouncePrefix) {
+				continue
+			}
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+// firstPart returns a message's first content part (nil-safe).
+func firstPart(m fantasy.Message) fantasy.MessagePart {
+	if len(m.Content) == 0 {
+		return nil
+	}
+	return m.Content[0]
 }
 
 // proactiveCompactResult reports what proactiveCompact did, so the run loop can
@@ -358,9 +415,11 @@ func (e *engine) proactiveCompact(ctx context.Context, messages []fantasy.Messag
 			compactionSummaryPrefix, len(droppable)))
 	}
 
-	out := make([]fantasy.Message, 0, head+1+len(keep))
+	keep = dropPlanReannounceMessages(keep)
+	out := make([]fantasy.Message, 0, head+2+len(keep))
 	out = append(out, messages[:head]...)
 	out = append(out, summary)
+	out = appendPlanReannounce(out, e.runOrch)
 	out = append(out, keep...)
 
 	// Proactive compaction is a clean reduction, not a reactive resilience
@@ -625,6 +684,38 @@ func budgetGuardedStep(orch *orchestrationState, inner fantasy.PrepareStepFuncti
 	}
 }
 
+// budgetWindDownStep is the soft counterpart of budgetGuardedStep (#990,
+// borrowed from Prime Agent's goal budget wind-down): once the run's spend
+// crosses budgetWindDownFraction of a configured ceiling, every provider call
+// gets a REQUEST-LOCAL wrap-up notice appended to its message tail — the
+// model is told to stop starting substantive work while it can still finish
+// cleanly, instead of running silently into the hard stop. Request-local by
+// design: fantasy rebuilds each step's input, so the notice never enters the
+// persisted history, the carried round transcript, or the compaction input.
+// A one-shot fleet.budget_winddown event marks the crossing for operators.
+// nil-safe on orch (direct-engine tests) and sink.
+func budgetWindDownStep(envPrefix EnvPrefix, orch *orchestrationState, sink *streamSink) fantasy.PrepareStepFunction {
+	if orch == nil {
+		return nil
+	}
+	return func(ctx context.Context, opts fantasy.PrepareStepFunctionOptions) (context.Context, fantasy.PrepareStepResult, error) {
+		st := orch.checkBudgetWindDown(budgetWindDownFraction(envPrefix))
+		if !st.active {
+			return ctx, fantasy.PrepareStepResult{}, nil
+		}
+		if st.first && sink != nil {
+			sink.emit(evtBudgetWindDown, map[string]any{
+				evtFieldSpentCostUSD: st.spentCostUSD,
+				evtFieldMaxCostUSD:   st.maxCostUSD,
+				evtFieldSpentTokens:  st.spentTokens,
+				evtFieldMaxTokens:    st.maxTokens,
+			})
+		}
+		messages := append(append([]fantasy.Message(nil), opts.Messages...), fantasy.NewUserMessage(st.windDownNotice()))
+		return ctx, fantasy.PrepareStepResult{Messages: messages}, nil
+	}
+}
+
 // stepStopConditions turns the configured per-round step cap into a fantasy
 // stop condition. Zero (or negative) means "no cap" — loop until the model
 // stops on its own (bounded by the per-turn timeout + cost ceiling). This is
@@ -741,6 +832,12 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 			// history — and never observed by a provider before its durable
 			// queued->injected flip landed. nil-safe (nil when no source).
 			steeringStep(r.engine.steerSource, &r.engine.steerState, sink),
+			// Budget wind-down (#990) appends its request-local wrap-up notice
+			// after steering (so a steer lands before it) and before the
+			// reducers + cache markers, which must see the final slice. The
+			// hard ceiling in budgetGuardedStep above still blocks first once
+			// the budget is fully spent.
+			budgetWindDownStep(r.engine.envPrefix, r.orch, sink),
 			// Prompt-cache markers must be attached to the reduced message
 			// slice, and no provider call may observe the pre-reduction
 			// history. opts.Model makes fallback swaps use their own window.
