@@ -31,7 +31,7 @@ package models
 //	    recovery /   │          ├───► paused_awaiting_input ─► pending | error
 //	    crash-loop   │          ├───► paused_awaiting_wake  ─► pending | error
 //	    dead-letter) ▼          ▼
-//	              pending   dead_lettered ─► pending (replay) | cancelled
+//	              pending   dead_lettered ─► pending (replay)
 //
 //   - Birth: models.DeriveDispatchState (NewTask, POST /tasks, edits, import
 //     conflict=replace, trigger/webhook spawns, re-run/clone) yields exactly
@@ -64,12 +64,13 @@ package models
 //     resume/wake re-queue it as `pending` and the expiry sweeps fail an
 //     abandoned pause to terminal `error` (never dead_lettered — that status
 //     is reserved for the runner's lease-guarded quarantine).
-//   - Operator recovery: cancel reaches every status except
-//     success/error/cancelled (note: that guard admits dead_lettered→cancelled),
-//     and a DLQ replay resets dead_lettered→pending. These are the only
-//     GUARDED edges out of a terminal status; success/error/cancelled have
-//     none (the verbatim-upsert restore paths below sit outside the guarded
-//     model entirely).
+//   - Operator recovery: cancel reaches every NON-TERMINAL status (#1268/#1269
+//     harmonized all four writers' from-side refusal onto the one terminal set,
+//     so a quarantined row is no longer cancellable — replay it or delete it),
+//     and a DLQ replay resets dead_lettered→pending. That replay is now the ONLY
+//     GUARDED edge out of a terminal status; success/error/cancelled/dead_lettered
+//     have no cancel edge (the verbatim-upsert restore paths below sit outside the
+//     guarded model entirely).
 //   - Edits (storage.UpdateEditableTask / storage.ReplaceTaskDefinition) touch
 //     only pending/scheduled rows and re-derive the dispatch state, so they
 //     move rows within {pending, scheduled} and never off the scheduler path.
@@ -116,13 +117,15 @@ const (
 	TaskWriterClaim = "db.ClaimNextPendingTask"
 	// TaskWriterWorkerReport — storage.UpdateTaskStatusAtomicWithContext
 	// (internal/sched/storage/storage.go): the runner's lease-guarded status
-	// reports (start, renewal rides, terminal success/error). WARNING: the
-	// to-side of these edges is caller discipline, not a guard — the function
-	// writes whatever status the caller passes (IsValidReportedStatus is a
-	// dead seam with no production caller), so today's edges hold only
-	// because the runner's call sites pass running/success/error. A future
-	// caller passing e.g. cancelled from a leased row would leave a cancelled
-	// row holding a live lease, and no lifecycle test would fail.
+	// reports (start, renewal rides, terminal success/error). Since #1269 the
+	// to-side is a GUARD, not caller discipline: the writer refuses any target
+	// outside WorkerReportableTaskStatuses / IsValidReportedStatus before it
+	// opens a transaction, so a caller passing e.g. cancelled from a leased row
+	// is rejected loudly instead of leaving a cancelled row holding a live
+	// lease. The reportable set is one status WIDER than this writer's target
+	// column (it still admits `leased`, the re-lease report no production call
+	// site sends), so the table stays the tighter statement of what actually
+	// happens and the matrix pins both.
 	TaskWriterWorkerReport = "storage.UpdateTaskStatusAtomicWithContext"
 	// TaskWriterRetryRequeue — storage.RequeueTaskForRetryWithContext:
 	// lease-guarded retry of the SAME occurrence with a backoff.
@@ -263,16 +266,15 @@ var TaskLifecycle = []TaskTransition{
 	{TaskStatusPausedAwaitingWake, TaskStatusPending, TaskWriterWakeByEvent, "named event arrived early (keyed on wake_event_key)"},
 	{TaskStatusPausedAwaitingWake, TaskStatusError, TaskWriterStrandedWakeExpiry, "no wake can reach the row (NULL or day-stale wake_at)"},
 
-	// ── Operator cancel (#508): every status except success/error/cancelled.
-	//    dead_lettered→cancelled is real: the guard lists only the other
-	//    three terminals — preserved verbatim, see the lifecycle tests. ────
+	// ── Operator cancel (#508): every NON-TERMINAL status. The guard is
+	//    IsTerminal (the one shared terminal set, #1269), so all four terminal
+	//    statuses — dead_lettered included since #1268 — refuse the cancel. ──
 	{TaskStatusPending, TaskStatusCancelled, TaskWriterCancel, ""},
 	{TaskStatusScheduled, TaskStatusCancelled, TaskWriterCancel, ""},
 	{TaskStatusLeased, TaskStatusCancelled, TaskWriterCancel, ""},
 	{TaskStatusRunning, TaskStatusCancelled, TaskWriterCancel, "the in-flight run observes the cancel and stops without a second terminal write"},
 	{TaskStatusPausedAwaitingInput, TaskStatusCancelled, TaskWriterCancel, ""},
 	{TaskStatusPausedAwaitingWake, TaskStatusCancelled, TaskWriterCancel, ""},
-	{TaskStatusDeadLettered, TaskStatusCancelled, TaskWriterCancel, "guard omits dead_lettered from its terminal refusal — a DLQ row can be cancelled"},
 
 	// ── DLQ replay (#253) ───────────────────────────────────────────────
 	{TaskStatusDeadLettered, TaskStatusPending, TaskWriterDLQReplay, "fresh slate: attempts/DLQ columns/SLA artifacts cleared, spawn credit re-armed"},
@@ -305,6 +307,15 @@ var AllTaskStatuses = []TaskStatus{
 // TerminalTaskStatuses are the final states a task will not leave on its own.
 // Declared (not derived) so validateTaskLifecycle can cross-check it against
 // IsTerminal — the two must always agree, and neither can drift silently.
+//
+// This is the ONE from-side refusal set every transition writer shares
+// (#1269): storage's CancelTaskAtomic, UpdateTaskStatusAtomicWithContext,
+// RequeueTaskForRetryWithContext and DeadLetterTaskWithContext each guard on
+// TaskStatus.IsTerminal() rather than hand-listing three or four statuses, so
+// a new terminal status cannot be forgotten in one writer and honored in the
+// next. Only the REFUSAL STYLE differs, by design: cancel is an operator
+// request and errors, while the three lease-guarded runner writers return the
+// row unchanged (an idempotent late report must not fail a run).
 var TerminalTaskStatuses = []TaskStatus{
 	TaskStatusSuccess,
 	TaskStatusError,
@@ -315,6 +326,11 @@ var TerminalTaskStatuses = []TaskStatus{
 // WorkerReportableTaskStatuses are the statuses a worker may self-report
 // (mirrors IsValidReportedStatus, cross-checked by validateTaskLifecycle):
 // dead_lettered is excluded — only the runner's terminal switch quarantines.
+//
+// Since #1269 this is an ENFORCED to-side guard, not documentation: storage's
+// UpdateTaskStatusAtomicWithContext refuses a target outside this set. It is
+// deliberately one status wider than that writer's table edges (`leased` has
+// no production call site), so the guard narrows and the table describes.
 var WorkerReportableTaskStatuses = []TaskStatus{
 	TaskStatusLeased,
 	TaskStatusRunning,
