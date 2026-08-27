@@ -155,6 +155,15 @@ type orchestrationState struct {
 	// ── task tracker (scheduled finish enforcement) ──
 	taskTrackerUsed   bool
 	latestTaskTracker taskTrackerSnapshot
+	// latestTaskTrackerRendered is the tracker's most recent human-readable
+	// plan rendering (the tool's `output` field), bounded to
+	// maxTaskTrackerRenderedBytes. It is host-side state that SURVIVES a
+	// context compaction, so the engine's compaction paths re-announce it to
+	// the model when open items remain — otherwise the plan the finish gate
+	// enforces can vanish from the compacted history and the model has to
+	// remember to call task_tracker view to rediscover its own plan (#990,
+	// borrowed from Prime Agent's post-compaction kernel-state announcement).
+	latestTaskTrackerRendered string
 
 	// delegatedFinish marks this run as a spawned SUB-AGENT (#1043 follow-up):
 	// checkFinishEnforcement then skips the self-audit ritual blocks and keeps
@@ -166,6 +175,10 @@ type orchestrationState struct {
 	// ── ceilings (interactive); zero means unlimited ──
 	maxCostUSD     float64
 	maxTotalTokens int
+	// windDownAnnounced dedupes the one-shot fleet.budget_winddown event: the
+	// wrap-up notice itself repeats on every provider call past the threshold
+	// (spend only grows), but operators get exactly one event.
+	windDownAnnounced bool
 
 	// ── step / usage tracking ──
 	logSession *LogSession
@@ -338,6 +351,66 @@ func (o *orchestrationState) checkCeilings() (bool, string) {
 		}
 	}
 	return false, ""
+}
+
+// budgetWindDownState reports whether the run's spend has crossed the
+// wind-down fraction of either ceiling, with the numbers the notice and the
+// one-shot event need. Zero ceilings (unlimited) never wind down.
+type budgetWindDownState struct {
+	active       bool
+	first        bool // true exactly once, on the crossing call
+	spentCostUSD float64
+	maxCostUSD   float64
+	spentTokens  int
+	maxTokens    int
+}
+
+// checkBudgetWindDown evaluates the soft budget threshold (#990): once spend
+// reaches fraction × ceiling (cost or uncached tokens, the same math as
+// checkCeilings), every subsequent provider call gets a request-local wrap-up
+// notice — the agent is told to stop starting substantive work while it can
+// still finish cleanly, instead of running silently into the hard stop.
+// fraction is resolved per call (budgetWindDownFraction) so a live env change
+// applies mid-run; fraction >= 1 never fires here because the hard ceiling in
+// budgetGuardedStep blocks first.
+func (o *orchestrationState) checkBudgetWindDown(fraction float64) budgetWindDownState {
+	if fraction <= 0 {
+		return budgetWindDownState{}
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	st := budgetWindDownState{
+		spentCostUSD: o.CostUSD,
+		maxCostUSD:   o.maxCostUSD,
+		spentTokens:  o.PromptTokens - o.CachedTokens + o.CompletionTokens,
+		maxTokens:    o.maxTotalTokens,
+	}
+	costHit := st.maxCostUSD > 0 && st.spentCostUSD >= fraction*st.maxCostUSD
+	tokenHit := st.maxTokens > 0 && float64(st.spentTokens) >= fraction*float64(st.maxTokens)
+	if !costHit && !tokenHit {
+		return st
+	}
+	st.active = true
+	st.first = !o.windDownAnnounced
+	o.windDownAnnounced = true
+	return st
+}
+
+// windDownNotice renders the request-local wrap-up message for an active
+// wind-down state. Wording adapted from Prime Agent's goal budget wind-down.
+func (st budgetWindDownState) windDownNotice() string {
+	var parts []string
+	if st.maxCostUSD > 0 {
+		parts = append(parts, fmt.Sprintf("$%.2f of the $%.2f cost ceiling", st.spentCostUSD, st.maxCostUSD))
+	}
+	if st.maxTokens > 0 {
+		parts = append(parts, fmt.Sprintf("%d of the %d uncached-token ceiling", st.spentTokens, st.maxTokens))
+	}
+	return fmt.Sprintf(
+		"BUDGET WIND-DOWN: this run has used %s. Do not start new substantive work. "+
+			"Finish or checkpoint what is in progress and wrap up soon with: progress made, remaining work, blockers, and a concrete next step. "+
+			"The run is hard-stopped at the ceiling.",
+		strings.Join(parts, " and "))
 }
 
 // BudgetState snapshots a run's cost/token ceilings and accumulated spend. It is
@@ -913,7 +986,58 @@ func (o *orchestrationState) recordToolResult(toolName, rawInput, resultText str
 	if toolName == toolNameTaskTracker {
 		o.taskTrackerUsed = true
 		o.latestTaskTracker = parseTaskTrackerSnapshot(resultText)
+		if rendered := extractTaskTrackerRendered(resultText); rendered != "" {
+			o.latestTaskTrackerRendered = rendered
+		}
 	}
+}
+
+// maxTaskTrackerRenderedBytes bounds the plan rendering kept for the
+// post-compaction re-announcement. The tracker output is small in practice
+// (a summary line + one line per task); the cap only guards against a
+// pathological plan flooding the compacted history it is meant to relieve.
+const maxTaskTrackerRenderedBytes = 2048
+
+// extractTaskTrackerRendered pulls the human-readable plan text out of a
+// task_tracker result. Mirrors parseTaskTrackerSnapshot's tolerance: the clean
+// shape is the tool's JSON envelope (`output` field), but the governed
+// model-visible bytes can stop being one clean JSON document (hook fragments,
+// truncation envelopes) — then fall back to the raw text only when it visibly
+// carries the tool's own rendering. Empty means "nothing usable".
+func extractTaskTrackerRendered(result string) string {
+	result = strings.TrimSpace(result)
+	if result == "" {
+		return ""
+	}
+	if strings.HasPrefix(result, "{") {
+		var structured struct {
+			Output string `json:"output"`
+		}
+		if err := json.Unmarshal([]byte(result), &structured); err == nil {
+			if out := strings.TrimSpace(structured.Output); strings.Contains(out, "Task List:") {
+				return truncate(out, maxTaskTrackerRenderedBytes)
+			}
+			return ""
+		}
+	}
+	if strings.Contains(result, "Task List:") {
+		return truncate(result, maxTaskTrackerRenderedBytes)
+	}
+	return ""
+}
+
+// planStateForReannounce snapshots the tracker plan for the engine's
+// post-compaction re-announcement: the bounded rendering plus whether open
+// items remain. ok is false when the tracker was never seen, has no open
+// items (a completed plan needs no rescue), or produced no usable rendering.
+func (o *orchestrationState) planStateForReannounce() (string, bool) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	snap := o.latestTaskTracker
+	if !snap.Seen || (snap.Todo == 0 && snap.InProgress == 0) || o.latestTaskTrackerRendered == "" {
+		return "", false
+	}
+	return o.latestTaskTrackerRendered, true
 }
 
 const maxSendEmailCallsPerTask = 3

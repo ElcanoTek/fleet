@@ -168,6 +168,21 @@ stopping at its **sliced** ceiling is the exception by design: the slice is the
 parent's leash, so the child returns its partial answer and spend to the parent
 rather than failing the run.
 
+**Budget wind-down (#990).** The hard stop gets a soft leading edge, borrowed
+from Prime Agent's goal budget wind-down: once a run's spend crosses
+`FLEET_BUDGET_WINDDOWN_FRACTION` (default **0.8**, clamped to `(0,1]`; the
+usual prefix aliases apply) of a configured cost or token ceiling, every
+subsequent provider call carries a **request-local** `BUDGET WIND-DOWN`
+notice — stop starting substantive work, wrap up with progress made, remaining
+work, blockers, and a concrete next step. Request-local means it is appended
+at the `PrepareStep` boundary and never enters the persisted history, the
+carried round transcript, or compaction input. A one-shot
+`fleet.budget_winddown` SSE event marks the crossing. Unlimited (zero)
+ceilings never wind down, and setting the fraction to `1` disables the notice
+in practice (the hard ceiling fires first). The point: a run that would
+otherwise be cut off mid-thought at the ceiling gets a budgeted chance to
+finish cleanly and report a useful partial result.
+
 **Auxiliary model calls are metered too (#1118).** Model calls fleet makes on
 a run's behalf but outside the main step loop follow one rule — visible or
 counted, never invisible: the compaction summarizer and the model-invocable
@@ -326,6 +341,31 @@ accounting (the same counters the ceilings and the chat cost chip read), and
 it pre-checks the run's cost/token ceiling first: at or over budget it skips
 the model entirely and inserts the deterministic placeholder — truncation
 instead of an unmetered paid summary.
+
+**The summary is structured and iterative (#990, borrowed from Prime Agent's
+compaction).** The interactive summarizer prompt demands a fixed section
+skeleton — Goal / Constraints & Preferences / Progress (Done · In Progress ·
+Blocked) / Key Decisions / Next Steps / Critical Context — instead of freeform
+prose, and the Critical Context section explicitly records file paths and
+variable names because the sandbox workspace and any persistent Python session
+survive the summarization that hides the messages that created them. On a
+**repeat** compaction (the droppable middle contains a previous
+`[context compaction` summary) the prompt switches to an **update** variant:
+treat the previous summary as the baseline, preserve everything the newer
+messages do not supersede, move Progress items forward, keep exact paths and
+error messages — so early facts stop eroding a little further on every
+compaction round.
+
+**The task plan is re-announced after compaction (#990).** The `task_tracker`
+plan is host-side state — it survives the compaction that just rewrote the
+history, and `checkFinishEnforcement` keeps enforcing it — but the summary may
+not have preserved it. Both compaction paths (proactive and the reactive
+`context_length_exceeded` recovery) therefore insert a bounded
+`[plan state after compaction]` message right after the summary whenever the
+tracker has open items, so the model continues from the plan it is being held
+to instead of having to rediscover it via `task_tracker view`. Repeated
+compactions keep at most one live copy (a stale copy in the kept slice is
+dropped when the fresh one is inserted); a completed plan is not re-announced.
 
 ---
 
