@@ -390,8 +390,10 @@ func (r *Runner) SystemPromptForPersona(persona string) string {
 type sandboxTaker interface {
 	// Take returns a warm, network-ENABLED sandbox (the interactive default).
 	Take(ctx context.Context) (*sandbox.Sandbox, func(), error)
-	// TakeContainer cold-starts a fresh sandbox with egress SEALED
-	// (--network=none) — the lockdown boundary.
+	// TakeContainer returns a fresh sandbox with egress SEALED
+	// (--network=none) — the lockdown boundary. Warm under fleet-wide
+	// lockdown (the pool's inventory is sealed there, #1291), cold-started
+	// otherwise.
 	TakeContainer(ctx context.Context) (*sandbox.Sandbox, func(), error)
 	// TakeContainerWithOverrides cold-starts a fresh sandbox applying per-task
 	// resource overrides (#205), with the caller's chosen network posture.

@@ -4,7 +4,8 @@
 //
 // Two passes prove the SINGLE sandbox backend both modes share:
 //  1. NORMAL — Pool.Take() (warm-pool path the interactive driver uses).
-//  2. LOCKDOWN — Pool.TakeContainer() (always-cold, no-network path).
+//  2. LOCKDOWN — Pool.TakeContainer() (the no-network path; cold-started
+//     here since this probe pool sets no fleet-wide lockdown mode).
 //
 // Then a SCHEDULED smoke runs a bash + python round-trip through the sandbox
 // the SAME way the in-process worker pool's scheduled-agent TaskRunner does

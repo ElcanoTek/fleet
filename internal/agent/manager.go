@@ -665,7 +665,7 @@ func buildSandboxPool(cfg *config.Config, personasDir, protocolsDir, systemPromp
 			log.Printf("sandbox: network mode=allowlisted — networked scheduled-task, interactive chat, AND approved-bash egress filtered to %v via the host proxy (best-effort; ADR-0012).", cfg.SandboxNetworkAllowlist)
 		}
 	case sandbox.NetworkModeLockdown:
-		log.Printf("sandbox: network mode=lockdown — scheduled-task, interactive chat, AND approved-bash egress sealed regardless of per-task AllowNetwork.")
+		log.Printf("sandbox: network mode=lockdown — scheduled-task, interactive chat, AND approved-bash egress sealed regardless of per-task AllowNetwork; the warm pool spawns sealed (--network=none) containers, and sealed turns claim them (#1291).")
 	}
 	return sandbox.NewPool(poolCfg), nil
 }
@@ -787,7 +787,11 @@ func buildKubernetesSandboxPool(cfg *config.Config, poolCfg sandbox.PoolConfig, 
 		log.Printf("sandbox: run_python REPL mode=per-turn — kernel is fresh each turn (the default)")
 	}
 	if cfg.DefaultNetworkMode == sandbox.NetworkModeLockdown {
-		log.Printf("sandbox: network mode=lockdown — every sandbox pod is labeled %s=none for the deny-all NetworkPolicy (enforcement is the cluster CNI's job — see docs/DEPLOYMENT-KUBERNETES.md)", "fleet.elcanotek.com/egress")
+		// "Every pod" includes the warm pool's parked spawns: the pool seals
+		// warm spawns under fleet-wide lockdown (#1291), so this claim is true
+		// by construction. Before that fix, warm pods were labeled egress=open
+		// right beside this line.
+		log.Printf("sandbox: network mode=lockdown — every sandbox pod, warm-pool spawns included, is labeled %s=none for the deny-all NetworkPolicy (enforcement is the cluster CNI's job — see docs/DEPLOYMENT-KUBERNETES.md)", "fleet.elcanotek.com/egress")
 	}
 	return sandbox.NewPool(poolCfg), nil
 }
