@@ -8,18 +8,23 @@ package storage
 // Seeding here is PRODUCTION-SHAPED: a lease is seeded only on leased/running
 // rows, because that is the invariant the lease-guarded writers actually rest
 // on — UpdateTaskStatusAtomicWithContext, RequeueTaskForRetryWithContext and
-// DeadLetterTaskWithContext refuse by LEASE POSSESSION plus a refusal list of
-// terminal statuses, not by a positive status guard. Only claim ever grants a
-// lease and every writer that leaves {leased, running} clears it, so in
-// production those are the only lease-holding statuses; the table's edges
-// encode that effective reality. (Seeding artificial leases onto paused or
-// terminal rows would surface guard-level edges the system can never reach —
-// e.g. the terminal refusal lists omit dead_lettered in two writers — see the
-// notes on each subtest.) This makes these checks BEHAVIORAL but conditional
-// on the lease invariant, which TestLifecycleLeaseInvariant pins separately.
+// DeadLetterTaskWithContext refuse by LEASE POSSESSION plus the shared
+// terminal refusal set (models.TerminalTaskStatuses / IsTerminal, #1269), not
+// by a positive status guard. Only claim ever grants a lease and every writer
+// that leaves {leased, running} clears it, so in production those are the only
+// lease-holding statuses; the table's edges encode that effective reality.
+// (Seeding artificial leases onto paused or terminal rows would surface
+// guard-level edges the system can never reach — see the notes on each
+// subtest.) This makes these checks BEHAVIORAL but conditional on the lease
+// invariant, which TestLifecycleLeaseInvariant pins separately.
+//
+// TestLifecycleWorkerReportRefusesUnreportableTargets pins the OTHER half of
+// #1269 — the to-side guard, which needs no lease premise at all.
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -163,12 +168,11 @@ func TestLifecycleStorageWriterMatrix(t *testing.T) {
 
 	// The runner's status reports. Non-active rows hold no lease, so the call
 	// fails ErrTaskLeaseNotHeld before any status logic — which is exactly the
-	// effective guard the table encodes. NOTE (current reality, preserved):
-	// the in-transaction refusal list is success/error/cancelled only; it is
-	// lease clearance that keeps dead_lettered and the paused states out.
-	// The running→running row is a self-edge (renewal + artifact/output
-	// rides), so its assertion is status-vacuous; the surrounding rows are
-	// the meaningful ones.
+	// effective guard the table encodes. Since #1269 the in-transaction
+	// refusal set is the shared terminal set (IsTerminal), so dead_lettered is
+	// refused by the guard as well as by lease clearance. The running→running
+	// row is a self-edge (renewal + artifact/output rides), so its assertion
+	// is status-vacuous; the surrounding rows are the meaningful ones.
 	for _, target := range []models.TaskStatus{
 		models.TaskStatusRunning, models.TaskStatusSuccess, models.TaskStatusError,
 	} {
@@ -219,9 +223,11 @@ func TestLifecycleStorageWriterMatrix(t *testing.T) {
 		assertAll(models.TaskWriterRunnerDeadLetter, models.TaskStatusDeadLettered, rows)
 	})
 
-	// Operator cancel. NOTE (current reality, preserved — see #1127 report):
-	// the refusal list is success/error/cancelled, so dead_lettered→cancelled
-	// IS a legal edge and the table lists it.
+	// Operator cancel. The refusal set is the shared terminal set (#1269), so
+	// all four terminal statuses refuse — dead_lettered included (#1268): a
+	// quarantined row keeps its replayability and the error tells the operator
+	// to replay or delete it. TestCancelRefusesDeadLetteredTask pins the
+	// message; here the table simply no longer carries the edge.
 	t.Run("storage.CancelTaskAtomic", func(t *testing.T) {
 		reset()
 		rows := seedAll()
@@ -288,5 +294,89 @@ func TestLifecycleStorageWriterMatrix(t *testing.T) {
 			}
 			assertAll(models.TaskWriterImportReplace, target, rows)
 		})
+	}
+}
+
+// TestLifecycleWorkerReportRefusesUnreportableTargets probes the worker-report
+// writer with every OFF-TABLE target status — the #1269 to-side guard.
+//
+// The target set is DERIVED (every status that is not worker-reportable), so a
+// status added to the lifecycle is probed automatically. Before the guard
+// landed, a leased/running row with a valid lease accepted any of these: e.g.
+// reporting `cancelled` wrote a cancelled row that STILL HELD its lease
+// (applySuccessOrErrorTransition clears the lease only for success/error), and
+// no lifecycle test failed. Now every one is refused with
+// ErrTaskNotReportableStatus before the transaction opens, so the refusal is
+// uniform across seeded statuses instead of depending on the lease check.
+func TestLifecycleWorkerReportRefusesUnreportableTargets(t *testing.T) {
+	store, database := newTestStore(t)
+	ctx := context.Background()
+
+	for _, target := range models.AllTaskStatuses {
+		if target.IsValidReportedStatus() {
+			continue
+		}
+		t.Run("→"+string(target), func(t *testing.T) {
+			if _, err := database.Conn().ExecContext(ctx, "DELETE FROM tasks"); err != nil {
+				t.Fatalf("reset tasks: %v", err)
+			}
+			for _, seeded := range models.AllTaskStatuses {
+				row := seedStorageLifecycleRow(t, store, database, seeded)
+				_, err := store.UpdateTaskStatusAtomicWithContext(ctx, row.id, row.owner,
+					&models.StatusUpdate{Status: target})
+				if !errors.Is(err, ErrTaskNotReportableStatus) {
+					t.Errorf("report %s from %s: err=%v, want ErrTaskNotReportableStatus", target, seeded, err)
+				}
+				got, gerr := store.GetTask(row.id)
+				if gerr != nil {
+					t.Fatalf("re-read %s row: %v", seeded, gerr)
+				}
+				if got.Status != seeded {
+					t.Errorf("report %s from %s: row moved to %q, want it untouched", target, seeded, got.Status)
+				}
+				// The table must agree there is no such edge — anyone adding
+				// one has to widen the reportable set in the same change.
+				if models.TaskTransitionExists(seeded, target, models.TaskWriterWorkerReport) {
+					t.Errorf("table lists a worker-report edge %q→%q that the to-side guard refuses", seeded, target)
+				}
+			}
+		})
+	}
+}
+
+// TestCancelRefusesDeadLetteredTask pins #1268: cancelling a quarantined row is
+// refused instead of silently erasing its replayability, the row is left intact
+// (ReplayDeadLetteredTask still works afterwards), and the error names the two
+// things an operator can actually do. The message must keep the "cannot cancel"
+// substring the HTTP CancelTask handler maps to 400 rather than 500.
+func TestCancelRefusesDeadLetteredTask(t *testing.T) {
+	store, database := newTestStore(t)
+	ctx := context.Background()
+
+	row := seedStorageLifecycleRow(t, store, database, models.TaskStatusDeadLettered)
+	_, err := store.CancelTaskAtomic(row.id, "swept by an operator")
+	if err == nil {
+		t.Fatal("cancelling a dead-lettered task succeeded — its replayability would be gone")
+	}
+	for _, want := range []string{"cannot cancel", "dead_lettered", "replay", "delete"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("cancel error %q does not mention %q", err.Error(), want)
+		}
+	}
+
+	got, err := store.GetTask(row.id)
+	if err != nil {
+		t.Fatalf("re-read: %v", err)
+	}
+	if got.Status != models.TaskStatusDeadLettered {
+		t.Fatalf("row status = %q, want it still dead_lettered", got.Status)
+	}
+	// The replay path the refusal exists to protect still works.
+	replayed, err := store.ReplayDeadLetteredTask(ctx, row.id)
+	if err != nil {
+		t.Fatalf("replay after refused cancel: %v", err)
+	}
+	if replayed.Status != models.TaskStatusPending {
+		t.Fatalf("replayed status = %q, want pending", replayed.Status)
 	}
 }
