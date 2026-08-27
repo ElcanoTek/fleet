@@ -294,22 +294,35 @@ func TestGetenvDefaultHelpersStripQuotes(t *testing.T) {
 }
 
 // TestValidateEnvKnobs_FlagsEveryRegisteredKnob drives the registry itself:
-// with EVERY registered knob set to a value no kind accepts, ValidateEnvKnobs
-// must flag every single one, naming the canonical env var — proving the
-// `fleet validate-config` preflight covers the whole table, not a hand-picked
-// subset.
+// with EVERY registered knob set to a value no kind accepts, the two preflight
+// walks together must flag every single one, naming the canonical env var —
+// proving the `fleet validate-config` preflight covers the whole table, not a
+// hand-picked subset. Strict knobs (loader and out-of-loader alike) land in the
+// blocking list; documented-lenient ones land in the advisory list and NEVER in
+// the blocking one, since boot will not refuse over them (#1273).
 func TestValidateEnvKnobs_FlagsEveryRegisteredKnob(t *testing.T) {
 	isolateEnv(t)
+	var strict, lenient int
 	for i := range envKnobs {
 		// "zzz" parses under no kind: not a number, not a duration, not a
 		// recognized boolean token.
 		t.Setenv(envKnobs[i].key, "zzz")
+		if envKnobs[i].lenient {
+			lenient++
+		} else {
+			strict++
+		}
 	}
 	problems := ValidateEnvKnobs()
-	if len(problems) != len(envKnobs) {
-		t.Errorf("ValidateEnvKnobs flagged %d problems, want %d (one per registered knob)", len(problems), len(envKnobs))
+	if len(problems) != strict {
+		t.Errorf("ValidateEnvKnobs flagged %d problems, want %d (one per strict knob)", len(problems), strict)
+	}
+	advisories := ValidateLenientEnvKnobs()
+	if len(advisories) != lenient {
+		t.Errorf("ValidateLenientEnvKnobs flagged %d advisories, want %d (one per lenient knob)", len(advisories), lenient)
 	}
 	flagged := map[string]bool{}
+	blocking := map[string]bool{}
 	for _, p := range problems {
 		key, _, ok := strings.Cut(p, ":")
 		if !ok {
@@ -317,18 +330,107 @@ func TestValidateEnvKnobs_FlagsEveryRegisteredKnob(t *testing.T) {
 			continue
 		}
 		flagged[key] = true
+		blocking[key] = true
+	}
+	for _, p := range advisories {
+		key, _, ok := strings.Cut(p, ":")
+		if !ok {
+			t.Errorf("advisory %q does not lead with the env var name", p)
+			continue
+		}
+		flagged[key] = true
+		// The advisory must carry the registry's rationale, since that is what
+		// tells the operator why this one is not a boot failure.
+		if envKnobByKey[key] != nil && !strings.Contains(p, envKnobByKey[key].why) {
+			t.Errorf("advisory for %s should carry the registry rationale, got: %q", key, p)
+		}
 	}
 	for i := range envKnobs {
-		if !flagged[envKnobs[i].key] {
-			t.Errorf("knob %s not flagged by ValidateEnvKnobs", envKnobs[i].key)
+		k := &envKnobs[i]
+		if !flagged[k.key] {
+			t.Errorf("knob %s not flagged by either preflight walk", k.key)
+		}
+		if k.lenient && blocking[k.key] {
+			t.Errorf("lenient knob %s reported as a BLOCKING problem — boot does not refuse over it", k.key)
 		}
 	}
 
-	// And with a clean environment it reports nothing.
+	// And with a clean environment both report nothing.
 	isolateEnv(t)
 	if problems := ValidateEnvKnobs(); len(problems) != 0 {
 		t.Errorf("clean env should yield no problems, got %v", problems)
 	}
+	if advisories := ValidateLenientEnvKnobs(); len(advisories) != 0 {
+		t.Errorf("clean env should yield no advisories, got %v", advisories)
+	}
+}
+
+// TestExternalKnobsRefuseBoot pins the #1273 behavior change end to end: a
+// malformed OUT-OF-LOADER knob now refuses to boot through config.Load — the
+// same one-pass error the loader knobs produce, naming the variable and the
+// package that reads it — while the documented-lenient one does not.
+func TestExternalKnobsRefuseBoot(t *testing.T) {
+	t.Run("strict external knob refuses", func(t *testing.T) {
+		isolateEnv(t)
+		t.Setenv("FLEET_SANDBOX_KATA_OVERHEAD_MB", "lots")
+		_, err := Load("")
+		if err == nil {
+			t.Fatal("Load accepted a malformed FLEET_SANDBOX_KATA_OVERHEAD_MB; before #1273 it was silently ignored and the default stood")
+		}
+		for _, want := range []string{"FLEET_SANDBOX_KATA_OVERHEAD_MB", `"lots"`, "internal/sandbox"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error should mention %q, got: %v", want, err)
+			}
+		}
+	})
+
+	t.Run("out-of-range external knob refuses", func(t *testing.T) {
+		isolateEnv(t)
+		// 0 used to be honored as "no window" only by accident here: the
+		// consumer requires a positive retention, so 0 was silently discarded.
+		t.Setenv("FLEET_BACKUP_RETENTION_DAYS", "0")
+		if _, err := Load(""); err == nil {
+			t.Fatal("Load accepted FLEET_BACKUP_RETENTION_DAYS=0, which the consumer discards")
+		}
+	})
+
+	t.Run("legacy alias spelling of a fleet-chain knob refuses", func(t *testing.T) {
+		isolateEnv(t)
+		// agentcore reads this through EnvPrefix, which honors CUTLASS_ too,
+		// so the registry must reject the alias spelling as well.
+		t.Setenv("CUTLASS_RETRY_MAX_ATTEMPTS", "many")
+		if _, err := Load(""); err == nil {
+			t.Fatal("Load accepted a malformed CUTLASS_RETRY_MAX_ATTEMPTS")
+		}
+	})
+
+	t.Run("lenient knob boots", func(t *testing.T) {
+		isolateEnv(t)
+		t.Setenv("FLEET_OTEL_SAMPLE_RATIO", "half")
+		if _, err := Load(""); err != nil {
+			t.Fatalf("Load must not refuse over the documented-lenient OTEL ratio: %v", err)
+		}
+		problems := ValidateLenientEnvKnobs()
+		if len(problems) != 1 || !strings.Contains(problems[0], "FLEET_OTEL_SAMPLE_RATIO") {
+			t.Fatalf("validate-config should still preflight it as an advisory, got %q", problems)
+		}
+	})
+
+	t.Run("strconv-bool knob rejects a token its reader would drop", func(t *testing.T) {
+		isolateEnv(t)
+		// strconv.ParseBool does not accept "on": before #1273 this resolved
+		// to false, i.e. prompt caching stayed ON for an operator who asked to
+		// disable it.
+		t.Setenv("FLEET_DISABLE_PROMPT_CACHE", "on")
+		if _, err := Load(""); err == nil {
+			t.Fatal("Load accepted FLEET_DISABLE_PROMPT_CACHE=on, which the reader resolves to false")
+		}
+		isolateEnv(t)
+		t.Setenv("FLEET_DISABLE_PROMPT_CACHE", "true")
+		if _, err := Load(""); err != nil {
+			t.Fatalf("Load must accept the tokens the reader honors: %v", err)
+		}
+	})
 }
 
 func TestValidateEnvKnobs_MessagesNameValueAndConstraint(t *testing.T) {

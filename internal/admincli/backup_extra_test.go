@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -78,16 +79,31 @@ func TestBackupDir(t *testing.T) {
 
 func TestRetentionDays(t *testing.T) {
 	t.Setenv("FLEET_BACKUP_RETENTION_DAYS", "7")
-	if got := retentionDays(); got != 7 {
-		t.Errorf("env: got %d, want 7", got)
+	got, err := retentionDays()
+	if err != nil || got != 7 {
+		t.Errorf("env: got %d, %v, want 7, nil", got, err)
 	}
-	t.Setenv("FLEET_BACKUP_RETENTION_DAYS", "garbage")
-	if got := retentionDays(); got != 30 {
-		t.Errorf("invalid env falls back: got %d, want 30", got)
+	// #1273: a malformed or non-positive value is now an ERROR that refuses the
+	// prune, not a silent fall back to the 30-day default — pruning backups off
+	// a misread retention is not a recoverable mistake.
+	for _, bad := range []string{"garbage", "0", "-1"} {
+		t.Setenv("FLEET_BACKUP_RETENTION_DAYS", bad)
+		got, err := retentionDays()
+		if err == nil {
+			t.Errorf("FLEET_BACKUP_RETENTION_DAYS=%q: want an error, got %d", bad, got)
+			continue
+		}
+		if !strings.Contains(err.Error(), "FLEET_BACKUP_RETENTION_DAYS") {
+			t.Errorf("error should name the variable, got: %v", err)
+		}
+		if got != 30 {
+			t.Errorf("the returned fallback should stay the default 30, got %d", got)
+		}
 	}
 	t.Setenv("FLEET_BACKUP_RETENTION_DAYS", "")
-	if got := retentionDays(); got != 30 {
-		t.Errorf("default: got %d, want 30", got)
+	got, err = retentionDays()
+	if err != nil || got != 30 {
+		t.Errorf("default: got %d, %v, want 30, nil", got, err)
 	}
 }
 

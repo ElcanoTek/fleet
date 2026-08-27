@@ -61,6 +61,16 @@ func (p EnvPrefix) lookup(suffix string) string {
 	return ""
 }
 
+// Typed knobs read through the two helpers below are ALSO registered as
+// scopeExternal rows in internal/config's env-knob registry (#1273), so
+// config.Load refuses to boot on a malformed value and `fleet validate-config`
+// preflights it. This package keeps its lenient local fallbacks: it holds no
+// *Config, runs in embedders and tests that never call config.Load, and must
+// not fail a turn over a tuning knob. Note that lookupBool's token set is
+// strconv.ParseBool's — narrower than the loader's yes/no/on/off — which is
+// exactly why the registry marks those rows kindStrconvBool: it must never
+// certify a spelling this reader would resolve to false.
+
 // lookupBool parses the resolved value as a bool (strconv.ParseBool rules).
 // Unset / unparseable both report false, matching the original kill-switch
 // semantics in both repos.

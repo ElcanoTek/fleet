@@ -72,7 +72,13 @@ current directory.
 
 **Retention pruning** — `--prune` deletes this tool's own dumps
 (`fleet-{chat,sched}-*.dump`) older than `FLEET_BACKUP_RETENTION_DAYS` (default
-30) from the output directory after a successful backup:
+30) from the output directory after a successful backup. The knob must be a
+positive whole number: since #1273 it is a row in the one env-knob registry
+(`internal/config/knobs.go`), and a malformed or non-positive value **fails the
+prune** with an error naming the variable instead of silently pruning against
+the 30-day default — deleting backups off a misread retention is not a
+recoverable mistake. The backup itself still succeeds; only the prune step
+fails, with the usual config-error exit code 1:
 
 ```sh
 fleet backup --db=all --out /var/backups/fleet --prune
