@@ -1,0 +1,156 @@
+/* Flag brand faces — the ONE font sheet. Load this and nothing else.
+ *
+ * Vendored copy of design-system/fonts/fonts.css from ElcanoTek/flag. Keep it
+ * byte-comparable to that source apart from this provenance note and the doc
+ * links at the bottom of this comment, so a drift between the two repos is
+ * visible in a plain diff. globals.css imports it; nothing else should.
+ *
+ * Elcano ships exactly two typefaces, everywhere, in every product:
+ *
+ *   Nebula Sans  — UI, body, headings          (--font-brand)
+ *   Hack         — code, logs, tabular output  (--font-code-brand)
+ *
+ * Both are freely redistributable, which is why there is only one sheet now.
+ * The old tiering (Dubai for internal-only tools, IBM Plex for public repos)
+ * existed solely because Dubai was proprietary and could not ship in a repo
+ * carrying an outbound licence. Neither of these faces has that problem, so
+ * every product — MIT, BSL 1.1, or internal — loads this same file.
+ *
+ * Nebula Sans
+ *   © 2024 Nebula Entertainment & Broadcasting LLC, Reserved Font Name "Nebula".
+ *   Based on Source Sans, © 2010-2024 Adobe, Reserved Font Name "Source".
+ *   SIL Open Font License 1.1 — see ./nebula-sans/OFL.txt
+ *   https://www.nebulasans.com/
+ *
+ * Hack
+ *   © 2018 Source Foundry Authors — MIT License.
+ *   Bitstream Vera Sans Mono © 2003 Bitstream Inc. — Bitstream Vera License.
+ *   DejaVu contributions are public domain. See ./hack/LICENSE.md
+ *   https://sourcefoundry.org/hack/
+ *
+ * Both licences REQUIRE the licence text to travel with the binaries. Copy
+ * ./nebula-sans/OFL.txt and ./hack/LICENSE.md wherever you copy the fonts.
+ *
+ * The policy (why exactly two faces, why complete builds) lives in flag's
+ * design-system/FONTS.md. Fleet's own type scale and the tokens that read
+ * these three variables are documented in src/app/DESIGN.md.
+ */
+
+/* ── Nebula Sans ─────────────────────────────────────────────────────────
+ * 400 regular · 500 medium · 600 semibold · 700 bold, plus true italics at
+ * 400/700. Real italics, not a synthetic slant — do not remove the italic
+ * faces and let the browser oblique them instead.
+ */
+
+@font-face {
+  font-family: "Nebula Sans";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("./nebula-sans/NebulaSans-400.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Nebula Sans";
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  src: url("./nebula-sans/NebulaSans-400-italic.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Nebula Sans";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("./nebula-sans/NebulaSans-500.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Nebula Sans";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("./nebula-sans/NebulaSans-600.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Nebula Sans";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("./nebula-sans/NebulaSans-700.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Nebula Sans";
+  font-style: italic;
+  font-weight: 700;
+  font-display: swap;
+  src: url("./nebula-sans/NebulaSans-700-italic.woff2") format("woff2");
+}
+
+/* ── Hack ────────────────────────────────────────────────────────────────
+ * 400/700 × normal/italic. The .woff fallback is kept because Hack ships it
+ * and some embedded webviews in the fleet sandbox UI still want it.
+ *
+ * These are the FULL builds (1548 codepoints, incl. Greek and Cyrillic), not
+ * the `-subset` files also present in the upstream package (386 codepoints,
+ * no Greek or Cyrillic). See ../FONTS.md "Font files must be complete".
+ */
+
+@font-face {
+  font-family: "Hack";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src:
+    url("./hack/hack-regular.woff2") format("woff2"),
+    url("./hack/hack-regular.woff") format("woff");
+}
+
+@font-face {
+  font-family: "Hack";
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  src:
+    url("./hack/hack-italic.woff2") format("woff2"),
+    url("./hack/hack-italic.woff") format("woff");
+}
+
+@font-face {
+  font-family: "Hack";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src:
+    url("./hack/hack-bold.woff2") format("woff2"),
+    url("./hack/hack-bold.woff") format("woff");
+}
+
+@font-face {
+  font-family: "Hack";
+  font-style: italic;
+  font-weight: 700;
+  font-display: swap;
+  src:
+    url("./hack/hack-bolditalic.woff2") format("woff2"),
+    url("./hack/hack-bolditalic.woff") format("woff");
+}
+
+/* Brand-face selection. design-tokens.css reads these three variables and
+ * never names a family itself, so this assignment is what binds the whole
+ * token layer to Nebula Sans and Hack — independent of stylesheet import
+ * order, because the token sheet only ever reads them.
+ *
+ * --font-code-brand and --font-code-ui-brand are both Hack on purpose. They
+ * used to differ (Share Tech Mono for code, VT323 for the retro task-tracker
+ * chrome); the two-face retro language is gone and one mono now serves both.
+ * The variables stay so product CSS that reads --font-code-ui keeps working.
+ */
+:root {
+  --font-brand: "Nebula Sans";
+  --font-code-brand: "Hack";
+  --font-code-ui-brand: "Hack";
+}

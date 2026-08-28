@@ -325,6 +325,9 @@ _MONO_HINTS = (
     "source code",
     "ibm plex mono",
     "roboto mono",
+    # "hack" carries no "mono" substring, so without this hint a deck set in the
+    # Elcano brand mono would come back sans-shaped.
+    "hack",
 )
 
 

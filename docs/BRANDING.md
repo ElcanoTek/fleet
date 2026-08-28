@@ -243,6 +243,17 @@ rather than brand (a failed tool call must read as failure in every deployment),
 and several are derived with `color-mix()` from the base hue, so a partial
 override would desynchronize a swatch from its own border.
 
+**Typefaces are not themable either, and `branding:` has no key for them.** The
+web tier ships exactly two faces — Nebula Sans for UI/body/headings, Hack for
+code, logs and tabular output — self-hosted from `web/src/app/fonts/` and
+declared in one sheet there. That is an org-wide standard rather than a
+per-deployment choice, and it is also a licensing boundary: both faces are
+redistributable (SIL OFL 1.1 and MIT + Bitstream Vera) under this repo's MIT
+licence, and a bundle-supplied face would put an unreviewed font binary and an
+unknown licence into the served page. A deployment that wants its own type
+changes the standard, not a bundle. See
+[`web/src/app/DESIGN.md`](../web/src/app/DESIGN.md) "Typefaces".
+
 ## Trust class of the four brand routes
 
 `/theme.css`, `/brand/logo`, `/brand/share-image`, and `/brand/meta` are all
