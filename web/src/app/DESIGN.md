@@ -61,6 +61,14 @@ Known, deliberate exceptions:
   code/code-ui`. Small UI text steps used in markup: `0.875rem` (controls,
   banners), `0.8125rem` (secondary), `0.75rem` (captions), `0.6875rem`
   (chips/overlines).
+- **Typefaces** — IBM Plex Sans (`--font-heading`/`--font-body`) and IBM Plex
+  Mono (`--font-code`/`--font-code-ui`), self-hosted through `next/font/local`
+  in `src/app/fonts/`. Both are SIL OFL 1.1, which is what makes them
+  distributable in this MIT repo, and `src/app/fonts/OFL.txt` must stay beside
+  the `.woff2` files for that to hold. These are IBM's complete builds — do not
+  substitute a Latin-1 subset, since a missing glyph silently falls back to a
+  system font for that character alone. The flag design system's Dubai face is
+  proprietary and internal-only; it must never be referenced here.
 - **Surfaces & text** — `--color-bg`, `--color-surface-1/2`, the
   `--gradient-*` surface set, `--color-text-primary/secondary/muted/disabled`,
   `--color-border`/`-strong`/`-subtle`, `--color-overlay-soft/strong`.
