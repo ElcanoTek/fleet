@@ -1,17 +1,26 @@
 @import "tailwindcss";
+/* The ONE font sheet: every @font-face in the app, and the only place a family
+ * name is written. It sets --font-brand / --font-code-brand /
+ * --font-code-ui-brand on :root; the families below read those and never name a
+ * face themselves. Bundler-resolved url()s, so a moved file is a build error
+ * rather than a silent 404 — and no request ever leaves for a font CDN. */
+@import "./fonts/fonts.css";
 
 :root {
   color-scheme: dark;
   --theme-selector-attribute: data-theme;
   --theme-preference-storage-key: chat-theme-preference;
-  /* IBM Plex, self-hosted via next/font/local (src/app/fonts). SIL OFL 1.1 —
-   * the licence that makes it shippable in this MIT repo. Matches the flag
-   * design system's open-tier faces; the proprietary Dubai face is internal-only
-   * and must never appear here. */
-  --font-heading: var(--font-plex-sans), "Segoe UI", system-ui, sans-serif;
-  --font-body: var(--font-plex-sans), "Segoe UI", system-ui, sans-serif;
-  --font-code: var(--font-plex-mono), "SF Mono", "Consolas", monospace;
-  --font-code-ui: var(--font-plex-mono), monospace;
+  /* Nebula Sans (SIL OFL 1.1) and Hack (MIT + Bitstream Vera), self-hosted from
+   * src/app/fonts — the two faces Elcano ships everywhere. Both licences allow
+   * redistribution under this repo's MIT licence, which is why they were chosen,
+   * and both require their licence text to travel with the binaries: keep
+   * fonts/nebula-sans/OFL.txt and fonts/hack/LICENSE.md next to the .woff2
+   * files. No other face may appear here — the tail of each stack is generic
+   * fallback keywords only. */
+  --font-heading: var(--font-brand), "Segoe UI", system-ui, sans-serif;
+  --font-body: var(--font-brand), "Segoe UI", system-ui, sans-serif;
+  --font-code: var(--font-code-brand), "SF Mono", "Consolas", ui-monospace, monospace;
+  --font-code-ui: var(--font-code-ui-brand), ui-monospace, monospace;
   --font-weight-regular: 400;
   --font-weight-bold: 700;
   --font-size-display: clamp(2rem, 1.75rem + 0.8vw, 2.5rem);
@@ -868,6 +877,43 @@ body {
   transition:
     color var(--transition-base),
     background var(--transition-base);
+}
+
+/* ── Tabular figures ────────────────────────────────────────────────────────
+   Nebula Sans ships PROPORTIONAL figures by default: its digit advances span
+   407–625 units per 1000, so "1" is a third narrower than "8". The face this
+   app shipped before it had every digit at one width and so aligned columns for
+   free, which is why most of the rules in this file never had to ask. Anything
+   that reads as a COLUMN of numbers must now ask explicitly, or the column
+   renders ragged — measured in Chromium, an 8-digit table cell rendered
+   all-"1"s versus all-"8"s differs by 25.09px without tabular figures and
+   0.11px with them. Hack (--font-code) is monospaced at a uniform 0.602 em and
+   needs none of this. See src/app/DESIGN.md "Typefaces".
+
+   The table rule sits in @layer base deliberately: it makes tabular figures
+   the DEFAULT for every table — the orchestrator's task/adoption/SLA/usage
+   grids, the admin user table, and assistant-authored markdown tables alike,
+   so a numeric column added later cannot land ragged by omission — while
+   still losing to an explicit Tailwind `proportional-nums` on a cell that
+   genuinely wants prose figures. */
+@layer base {
+  table {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* The numeric readouts that are NOT inside a table, and so are not reached by
+   the rule above: KPI/stat tile values, count chips, and the per-task time and
+   SLA readouts. Grouped here rather than repeated across their own blocks so
+   the set is reviewable in one place; the stat cards, usage bars, clocks and
+   run times already declare it in their own rules below. */
+.usage-tile-value,
+.usage-tile-sub,
+.sleeping-tasks-count,
+.task-count-chip,
+.task-card-time,
+.sla-detail {
+  font-variant-numeric: tabular-nums;
 }
 
 /* Default interactive elements to the inherited font. In @layer base so it
