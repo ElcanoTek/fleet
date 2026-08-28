@@ -23,6 +23,11 @@ Editing is deliberately different: an existing task always displays and saves
 its persisted selection. A later manifest-default change never silently widens
 an existing task's connector access.
 
+Completed tasks cannot be rewritten; saving their editor resubmits a new
+one-off copy. The resubmit carries the connector picker's complete visible
+selection, including an explicit empty list, so connector changes apply to the
+new run instead of silently inheriting the completed source task's old list.
+
 ## Scope and deployment
 
 This is generic Fleet UI behavior. Which connectors are visible and default-on
