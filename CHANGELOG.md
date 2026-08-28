@@ -42,6 +42,42 @@ prior versions are listed because none have shipped.
 
 ### Changed
 
+- **Fonts: exactly two typefaces, self-hosted.** The web UI now ships
+  **Nebula Sans** (SIL OFL 1.1) for UI/body/headings and **Hack** (MIT, plus
+  Bitstream Vera for its Vera-derived glyphs) for code, logs and tabular
+  output — the two faces Elcano standardised on across every product. The
+  self-hosted IBM Plex Sans / IBM Plex Mono `.woff2` files and the
+  `next/font/local` wrapper around them are gone; the four faces are replaced
+  by one vendored sheet, `web/src/app/fonts/fonts.css` (a copy of flag's
+  `design-system/fonts/fonts.css`), which `globals.css` imports and which is
+  now the only place in the repo a font family is named. `--font-heading` /
+  `--font-body` / `--font-code` / `--font-code-ui` read `--font-brand` /
+  `--font-code-brand` / `--font-code-ui-brand` from that sheet, so no
+  component or token changed. Still self-host-only: no Google Fonts, no CDN,
+  no runtime font request off-box, and `font-src 'self' data:` in the proxy
+  CSP is unchanged. Both licence files travel with the binaries
+  (`fonts/nebula-sans/OFL.txt`, `fonts/hack/LICENSE.md`) — an OFL/MIT
+  requirement, and what keeps this MIT repo's distribution compliant. Hack's
+  advance width is 0.6021 em against IBM Plex Mono's 0.600, so the two `ch`-sized
+  monospace rules (the 2ch diff gutter, the streaming caret) shift by ~0.3% and
+  dense log/diff/table alignment is unchanged. One deliberate trade-off:
+  dropping `next/font/local` also drops Next's per-face `<link rel=preload>`;
+  `font-display: swap` covers the gap and no hand-written preload was added,
+  because it would have to name a bundler-hashed path and would rot silently.
+  One thing the swap did NOT get for free: **Nebula Sans ships proportional
+  figures** (digit advances 407–625 per 1000 em units — `1` a third narrower
+  than `8`) where IBM Plex Sans had every digit at 600, so columns of numbers
+  in the sans face aligned for free before and no longer do. `globals.css` now
+  makes tabular figures the `@layer base` default for every `table` — the
+  orchestrator's task/adoption/SLA/usage grids, the admin user table, and
+  assistant-authored markdown tables — so a numeric column added later cannot
+  land ragged by omission, plus an explicit `font-variant-numeric: tabular-nums`
+  on the numeric readouts that sit outside a table (KPI/stat tile values, count
+  chips, the per-task time and SLA readouts). Measured in a real browser rather
+  than eyeballed: an 8-digit cell whose text is all `1`s versus all `8`s
+  differed by **25.09px** before the rule and **0.11px** after, and the widest
+  spread across the 18 measured table cells and stat tiles is 0.20px.
+
 - **Env-knob strictness now covers the knobs parsed outside the config
   loader (#1273).** #1119 made every knob `config.Load` reads fail loud on a
   malformed value; a couple of dozen knobs parsed at their point of use

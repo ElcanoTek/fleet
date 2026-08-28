@@ -1,5 +1,4 @@
 import type { Metadata, Viewport } from "next";
-import { plexSans, plexMono } from "@/app/fonts";
 import {
   DEFAULT_BACKGROUND_DARK,
   DEFAULT_BACKGROUND_LIGHT,
@@ -214,7 +213,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${plexSans.variable} ${plexMono.variable} h-full antialiased`}
+      className="h-full antialiased"
       suppressHydrationWarning
     >
       <head>

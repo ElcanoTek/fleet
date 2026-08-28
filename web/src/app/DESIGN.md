@@ -61,14 +61,42 @@ Known, deliberate exceptions:
   code/code-ui`. Small UI text steps used in markup: `0.875rem` (controls,
   banners), `0.8125rem` (secondary), `0.75rem` (captions), `0.6875rem`
   (chips/overlines).
-- **Typefaces** — IBM Plex Sans (`--font-heading`/`--font-body`) and IBM Plex
-  Mono (`--font-code`/`--font-code-ui`), self-hosted through `next/font/local`
-  in `src/app/fonts/`. Both are SIL OFL 1.1, which is what makes them
-  distributable in this MIT repo, and `src/app/fonts/OFL.txt` must stay beside
-  the `.woff2` files for that to hold. These are IBM's complete builds — do not
-  substitute a Latin-1 subset, since a missing glyph silently falls back to a
-  system font for that character alone. The flag design system's Dubai face is
-  proprietary and internal-only; it must never be referenced here.
+- **Typefaces** — exactly two, everywhere: **Nebula Sans**
+  (`--font-heading`/`--font-body`) and **Hack** (`--font-code`/`--font-code-ui`).
+  Both are self-hosted from `src/app/fonts/`, declared in the single vendored
+  sheet `src/app/fonts/fonts.css` (a copy of flag's `design-system/fonts/fonts.css`)
+  which `globals.css` imports and which is the ONLY place a family name is
+  written — the token families above read `--font-brand` /
+  `--font-code-brand` / `--font-code-ui-brand` from it. There is no font CDN
+  request and no `next/font` wrapper: the `url()`s resolve through the bundler,
+  so a moved or renamed file fails the build instead of 404-ing at runtime. The
+  trade-off of dropping `next/font/local` is that Next no longer emits a
+  `<link rel=preload>` per face; `font-display: swap` covers the gap and no
+  hand-written preload is added, because a hand-written one would point at a
+  hashed asset path and rot silently.
+  - Licences: Nebula Sans is SIL OFL 1.1, Hack is MIT (plus Bitstream Vera for
+    its Vera-derived glyphs). Both permit redistribution under this repo's MIT
+    licence — that is why they were chosen — and both REQUIRE the licence text
+    to travel with the binaries, so `fonts/nebula-sans/OFL.txt` and
+    `fonts/hack/LICENSE.md` must stay beside the `.woff2` files.
+  - These are the COMPLETE builds, not the narrower subsets both upstreams also
+    publish. Do not substitute a subset: a missing glyph does not error, it
+    silently falls back to a system font for that one character, so a name
+    renders in two typefaces mid-word.
+  - **Nebula Sans has PROPORTIONAL figures** (digit advances 407–625 per 1000
+    em units; `1` is a third narrower than `8`). IBM Plex Sans, the face this
+    replaced, had every digit at 600, so numeric columns in the sans face used
+    to align for free and now do not. `globals.css` therefore makes
+    `font-variant-numeric: tabular-nums` the `@layer base` default for every
+    `table` — including assistant-authored markdown tables — and applies it
+    explicitly to the numeric readouts that sit outside a table. **Any new
+    columnar number in the sans face needs tabular figures**; put it in a
+    `table` and it inherits them, otherwise say so on the element. Hack is
+    monospaced at a uniform 0.602 em, so `--font-code` needs none of this.
+  - No other face may be added, self-hosted, or CDN-loaded. The tail of each
+    stack is generic fallback keywords only (`system-ui`, `"Segoe UI"`,
+    `sans-serif`, `ui-monospace`, `monospace`, …). The proprietary Dubai face in
+    particular must never appear here.
 - **Surfaces & text** — `--color-bg`, `--color-surface-1/2`, the
   `--gradient-*` surface set, `--color-text-primary/secondary/muted/disabled`,
   `--color-border`/`-strong`/`-subtle`, `--color-overlay-soft/strong`.
