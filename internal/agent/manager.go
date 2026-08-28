@@ -696,6 +696,19 @@ func buildKubernetesSandboxPool(cfg *config.Config, poolCfg sandbox.PoolConfig, 
 			"FLEET_DEFAULT_NETWORK_MODE=allowlisted is not supported under FLEET_SANDBOX_BACKEND=kubernetes: the host-side egress proxy " +
 				"is unreachable from sandbox pods. Use lockdown (sealed by the deny-all NetworkPolicy) or open, and shape egress with cluster NetworkPolicies (fail-closed)")
 	}
+	// A pids ceiling is a containment control — it is what bounds a fork bomb —
+	// and a Pod spec cannot express one: the cap lives on the kubelet
+	// (podPidsLimit), outside anything this process writes. Podman applies
+	// --pids-limit on every container, so the same knob means "bounded" there
+	// and "unbounded" here. That is exactly the configured-but-inert shape the
+	// three refusals above exist for, and it stayed silent only because a pids
+	// limit reads like a resource knob rather than a security one.
+	if poolCfg.Container.PidsLimit > 0 {
+		return nil, fmt.Errorf(
+			"FLEET_SANDBOX_PIDS=%d is a podman cgroup knob and has no effect under FLEET_SANDBOX_BACKEND=kubernetes: a Pod spec has no per-pod pids limit, "+
+				"so this would read as a process ceiling while imposing none. Set the kubelet's podPidsLimit on the sandbox nodes instead, and unset this knob "+
+				"to acknowledge that process counts there are bounded only by the pod's memory and CPU limits (fail-closed)", poolCfg.Container.PidsLimit)
+	}
 	// Supporting-doc mounts are same-path HOST bind mounts, and a pod has no
 	// host filesystem to bind them from — so by default they are dropped, and
 	// the fileop anchor then refuses those roots rather than trusting paths

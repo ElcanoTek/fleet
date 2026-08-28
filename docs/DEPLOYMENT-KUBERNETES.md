@@ -434,9 +434,15 @@ Recorded here so nobody discovers them in production:
 - **`FLEET_DEFAULT_NETWORK_MODE=allowlisted` is refused** at boot: the
   host-side egress proxy (ADR-0012) is unreachable from pods. Use `lockdown`
   or `open` + NetworkPolicy shaping.
-- **No per-pod pids limit.** `FLEET_SANDBOX_PIDS` has no Pod-spec equivalent;
-  runaway process counts are bounded by pod memory/CPU limits and node
-  `podPidsLimit` if you configure the kubelet.
+- **No per-pod pids limit.** `FLEET_SANDBOX_PIDS` has no Pod-spec equivalent,
+  so setting it **refuses to boot** rather than reading as a process ceiling it
+  cannot impose — `fleet validate-config` reports it too, before the upgrade.
+  A per-task `fleet sched task set-limits --pids N` is accepted (the value is
+  portable, and the same task may run on a podman deployment) but ignored here,
+  with one log line per process saying so; the memory and CPU limits from that
+  same command do apply. Runaway process counts are bounded by pod memory/CPU
+  limits and by the kubelet's `podPidsLimit` if you configure it on the sandbox
+  nodes.
 - **A bundle's Python MCP servers run in the control-plane pod.** The broker
   spawns them host-side, which on this path means inside the control plane — so
   that image needs `python3` and your bundle's `mcp/requirements.txt`. The
