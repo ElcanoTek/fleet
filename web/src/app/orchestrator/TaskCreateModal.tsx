@@ -1123,6 +1123,10 @@ export function TaskCreateModal({
             allow_delegation: allowDelegation,
             tags: taskData.tags ?? [],
             persona: taskData.persona ?? "",
+            // A terminal edit is a resubmit, but the connector picker is still
+            // editable. Echo its complete visible value so the fresh one-off
+            // run does not silently inherit the source task's stale selection.
+            mcp_selection: mcpSelection,
             ...(taskData.thinking_budget_tokens != null
               ? { thinking_budget: taskData.thinking_budget_tokens }
               : {}),

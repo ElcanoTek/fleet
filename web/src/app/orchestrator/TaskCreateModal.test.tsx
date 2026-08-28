@@ -453,6 +453,22 @@ describe("TaskCreateModal — edit mode", () => {
     expect(screen.queryByTestId("edit-scope-chooser")).toBeNull();
   });
 
+  it("resubmits a terminal task with the connector selection shown in the editor", async () => {
+    rerunTask.mockResolvedValue({ id: "99990000-9999-0000-9999-000000000000" });
+    renderModal({
+      servers: DEFAULT_ON_SERVERS,
+      editTask: { ...baseEdit, status: "success", mcp_selection: [] },
+      onUpdated: vi.fn(),
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /Tools & files/ }));
+    fireEvent.click(screen.getByTestId("mcp-toggle-email"));
+    fireEvent.click(screen.getByRole("button", { name: /save task changes/i }));
+
+    await waitFor(() => expect(rerunTask).toHaveBeenCalledTimes(1));
+    expect(rerunTask.mock.calls[0][1].mcp_selection).toEqual([{ server: "email" }]);
+  });
+
   it("closing an untouched edit form does not raise the discard guard", () => {
     const { onClose } = renderModal({ editTask: baseEdit, onUpdated: vi.fn() });
     fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
