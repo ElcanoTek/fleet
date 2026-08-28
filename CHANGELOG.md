@@ -176,6 +176,29 @@ prior versions are listed because none have shipped.
   docs/AGENT-RUNTIME.md; the roster's byte-stability guard
   (docs/PROMPT-CACHE-CONTRACT.md) is unchanged and still green.
 
+- **Kubernetes: `open` egress mode now requires a policy to boot (#1264).**
+  **Upgrade note: a deployment running `FLEET_DEFAULT_NETWORK_MODE=open`
+  without the open-egress NetworkPolicy will refuse to start.** The docs called
+  that policy *required, not optional*; the chart shipped it off by default and
+  the preflight never asked for it, so the out-of-the-box combination was the
+  unrestricted one. Measured on a stock k3s install, a sandbox in exactly that
+  configuration reached the fleet Service (`GET /healthz` → `ok`), the
+  in-cluster Postgres, the apiserver and the public internet — none of which is
+  possible under podman, where an open sandbox is rootless pasta/slirp4netns:
+  outbound-only, structurally unable to reach the fleet process. The boot
+  preflight now requires the `open` policy the same way it already required the
+  deny-all one, naming all three ways forward: enable it
+  (`networkPolicies.openEgress.create=true`), switch to `lockdown`, or set
+  `FLEET_SANDBOX_K8S_OPEN_EGRESS_ACKNOWLEDGED=true` if the cluster shapes that
+  egress with policy fleet cannot see — which is logged as a WARNING every boot
+  rather than agreed to once. `fleet validate-config` reports it before the
+  upgrade. Two chart changes ride along: the policy's `blockedCIDRs` default now
+  covers the private ranges as well as the metadata range, because that is where
+  the fleet Service, the database and the apiserver live on nearly every cluster;
+  and `networkPolicies.openEgress.name` — a key the values schema already
+  advertised while the template ignored it, deriving the name from the release —
+  is now the name actually used. ADR-0049's sealing decision amended.
+
 - **The runtime-secret literal set is now bounded, and the main process's
   control-plane acquisitions feed it too (#1274).** Both follow-ups deferred
   from #1124. (1) Every OAuth rotation mints a distinct access+refresh pair,

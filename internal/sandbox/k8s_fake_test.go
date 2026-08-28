@@ -45,6 +45,7 @@ type fakeKube struct {
 	denied         map[string]bool // "<verb> <resource>[/<sub>]" → deny
 	noPVC          bool
 	noNetpol       bool
+	absentNetpols  map[string]bool // name → 404, for testing one missing policy
 	noRuntimeClass bool
 
 	// bridgeTrailingStdout, when set, is written to the bridge's stdout AFTER
@@ -66,6 +67,7 @@ func newFakeKube(t *testing.T) *fakeKube {
 		pods:          make(map[string]*k8sPod),
 		files:         make(map[string][]byte),
 		denied:        make(map[string]bool),
+		absentNetpols: make(map[string]bool),
 		bashBehaviors: make(map[string]func(string, io.Writer, io.Writer, *websocket.Conn) int),
 	}
 	f.srv = httptest.NewTLSServer(http.HandlerFunc(f.handle))
@@ -167,7 +169,7 @@ func (f *fakeKube) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		_, _ = w.Write([]byte(`{"kind":"PersistentVolumeClaim"}`))
 	case netpolRe.MatchString(path):
-		if f.noNetpol {
+		if f.noNetpol || f.absentNetpols[netpolRe.FindStringSubmatch(path)[2]] {
 			writeK8sStatus(w, http.StatusNotFound, "NotFound", "networkpolicy not found")
 			return
 		}

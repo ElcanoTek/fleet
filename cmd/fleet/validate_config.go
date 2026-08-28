@@ -889,16 +889,19 @@ func checkKubernetesSandbox(ctx context.Context, res checkResult, cfg *config.Co
 		return strings.TrimSpace(bundleVal)
 	}
 	backend, err := sandbox.NewKubernetesBackend(sandbox.KubernetesConfig{
-		Namespace:               fill(cfg.SandboxK8sNamespace, k8s.Namespace),
-		WorkspaceClaim:          fill(cfg.SandboxK8sWorkspaceClaim, k8s.WorkspaceClaim),
-		ServiceAccount:          fill(cfg.SandboxK8sServiceAccount, k8s.ServiceAccount),
-		ImagePullSecret:         fill(cfg.SandboxK8sImagePullSecret, k8s.ImagePullSecret),
-		RuntimeClassName:        fill(cfg.SandboxK8sRuntimeClass, k8s.RuntimeClass),
-		SeccompLocalhostProfile: fill(cfg.SandboxK8sSeccompProfile, k8s.SeccompProfile),
-		KubeconfigPath:          fill(cfg.SandboxK8sKubeconfig, k8s.Kubeconfig),
-		NetworkPolicyName:       fill(cfg.SandboxK8sNetworkPolicy, k8s.NetworkPolicy),
-		NodeSelector:            nodeSelector,
-		Tolerations:             tolerations,
+		Namespace:                      fill(cfg.SandboxK8sNamespace, k8s.Namespace),
+		WorkspaceClaim:                 fill(cfg.SandboxK8sWorkspaceClaim, k8s.WorkspaceClaim),
+		ServiceAccount:                 fill(cfg.SandboxK8sServiceAccount, k8s.ServiceAccount),
+		ImagePullSecret:                fill(cfg.SandboxK8sImagePullSecret, k8s.ImagePullSecret),
+		RuntimeClassName:               fill(cfg.SandboxK8sRuntimeClass, k8s.RuntimeClass),
+		SeccompLocalhostProfile:        fill(cfg.SandboxK8sSeccompProfile, k8s.SeccompProfile),
+		KubeconfigPath:                 fill(cfg.SandboxK8sKubeconfig, k8s.Kubeconfig),
+		NetworkPolicyName:              fill(cfg.SandboxK8sNetworkPolicy, k8s.NetworkPolicy),
+		OpenEgressPolicyName:           fill(cfg.SandboxK8sOpenEgressPolicy, k8s.OpenEgressPolicy),
+		DefaultNetworkMode:             cfg.DefaultNetworkMode,
+		UnrestrictedEgressAcknowledged: cfg.SandboxK8sOpenEgressAcknowledged,
+		NodeSelector:                   nodeSelector,
+		Tolerations:                    tolerations,
 	})
 	if err != nil {
 		res.Status = statusFail

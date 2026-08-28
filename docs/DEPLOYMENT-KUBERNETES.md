@@ -487,16 +487,35 @@ Recorded here so nobody discovers them in production:
   pin the depth; `warmSize: 0` means **no warm pool** (every turn then pays a
   cold pod start).
 
-- **An open sandbox pod is a full citizen of the cluster network.** Podman's
-  non-lockdown default is rootless pasta/slirp4netns with no host-loopback:
-  outbound-only, and structurally unable to reach the fleet process itself. A
-  pod has no such limit. With `networkPolicies.openEgress.create=false` (the
-  default) nothing selects an `egress=open` sandbox, so model-authored code can
-  reach the fleet Service, the in-cluster Postgres, the apiserver, and the
-  node's cloud metadata endpoint at `169.254.169.254` — which hands out the
-  node's IAM credentials. Treat the open-egress policy as **required**, not
-  optional; the chart's default `blockedCIDRs` starts with the metadata range,
-  and you should add your Pod/Service/node ranges to it.
+- **An open sandbox pod is a full citizen of the cluster network — so boot
+  requires a policy for it.** Podman's non-lockdown default is rootless
+  pasta/slirp4netns with no host-loopback: outbound-only, and structurally
+  unable to reach the fleet process itself. A pod has no such limit: nothing
+  selects an `egress=open` sandbox unless a NetworkPolicy does, and then
+  model-authored code can reach the fleet Service, the in-cluster Postgres, the
+  apiserver, and the node's cloud metadata endpoint at `169.254.169.254` —
+  which hands out the node's IAM credentials.
+
+  With `FLEET_DEFAULT_NETWORK_MODE=open`, the boot preflight therefore requires
+  the open-egress NetworkPolicy object (`fleet-sandbox-open-egress`, or
+  `FLEET_SANDBOX_K8S_OPEN_EGRESS_POLICY` / the manifest's
+  `open_egress_policy`) exactly as it requires the deny-all one, and aborts
+  with the three ways forward named. Enable it with
+  `networkPolicies.openEgress.create=true`; the chart's `blockedCIDRs` default
+  covers the metadata range **and** the private ranges, because that is where
+  the fleet Service, the database and the apiserver actually live on nearly
+  every cluster. Trim that list only for ranges you have decided a sandbox may
+  reach.
+
+  If your cluster shapes this egress with policy fleet cannot see — a
+  CiliumNetworkPolicy, a Calico GlobalNetworkPolicy, a service mesh, a
+  namespace default-deny — set `FLEET_SANDBOX_K8S_OPEN_EGRESS_ACKNOWLEDGED=true`
+  (chart: `networkPolicies.openEgress.acknowledgeUnrestricted`). It waives the
+  requirement and logs a warning on every boot: fleet is telling you it cannot
+  verify what you have asserted.
+
+  The deny-all policy stays required in **every** mode — a scheduled run with
+  networking off gets a sealed sandbox even on an open deployment.
 
 - **A sealed sandbox's network calls hang rather than failing fast.** Podman
   lockdown is `--network=none`: no interface, so a connect fails instantly with
