@@ -32,6 +32,11 @@ const SERVERS: McpServer[] = [
   { name: "xandr", description: "Xandr DSP", tool_count: 7, accounts: ["client_a"] },
 ];
 
+const DEFAULT_ON_SERVERS: McpServer[] = [
+  { name: "email", description: "Inbound reports", tool_count: 10, enabled: true },
+  ...SERVERS,
+];
+
 function renderModal(
   overrides: Partial<Parameters<typeof TaskCreateModal>[0]> = {},
   templateList: TaskTemplate[] = [],
@@ -221,6 +226,50 @@ describe("TaskCreateModal — dirty-close guard", () => {
 });
 
 describe("TaskCreateModal — create path", () => {
+  it("starts operator-default connectors on and submits the visible selection", async () => {
+    createTask.mockResolvedValue({ id: "t-1" });
+    renderModal({ servers: DEFAULT_ON_SERVERS });
+
+    fireEvent.click(screen.getByRole("button", { name: /Tools & files/ }));
+    expect(screen.getByTestId("mcp-toggle-email")).toBeChecked();
+    expect(screen.getByTestId("mcp-toggle-xandr")).not.toBeChecked();
+
+    fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Read the inbox" } });
+    fireEvent.click(screen.getByRole("button", { name: "Launch task" }));
+
+    await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
+    expect(createTask.mock.calls[0][0].mcp_selection).toEqual([{ server: "email" }]);
+  });
+
+  it("adopts operator defaults that arrive after the modal mounts", () => {
+    const { rerender, onClose, onCreated } = renderModal({ servers: [] });
+    rerender(
+      <TaskCreateModal
+        open
+        servers={DEFAULT_ON_SERVERS}
+        onClose={onClose}
+        onCreated={onCreated}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Tools & files/ }));
+    expect(screen.getByTestId("mcp-toggle-email")).toBeChecked();
+  });
+
+  it("lets the operator replace a default-on connector with an explicit selection", async () => {
+    createTask.mockResolvedValue({ id: "t-1" });
+    renderModal({ servers: DEFAULT_ON_SERVERS });
+
+    fireEvent.click(screen.getByRole("button", { name: /Tools & files/ }));
+    fireEvent.click(screen.getByTestId("mcp-toggle-email"));
+    fireEvent.click(screen.getByTestId("mcp-toggle-xandr"));
+    fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Run Xandr only" } });
+    fireEvent.click(screen.getByRole("button", { name: "Launch task" }));
+
+    await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
+    expect(createTask.mock.calls[0][0].mcp_selection).toEqual([{ server: "xandr" }]);
+  });
+
   it("submits the typed prompt with mode-scoped schedule fields and resets after success", async () => {
     createTask.mockResolvedValue({ id: "t-1" });
     const { onClose, onCreated } = renderModal();
@@ -270,6 +319,17 @@ const baseEdit: Task = {
 };
 
 describe("TaskCreateModal — edit mode", () => {
+  it("keeps a task's saved connector selection instead of applying new defaults", () => {
+    renderModal({
+      servers: DEFAULT_ON_SERVERS,
+      editTask: { ...baseEdit, mcp_selection: [] },
+      onUpdated: vi.fn(),
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /Tools & files/ }));
+    expect(screen.getByTestId("mcp-toggle-email")).not.toBeChecked();
+  });
+
   it("prefills the form from the task and saves a non-recurring edit via PUT", async () => {
     updateTask.mockResolvedValue({ id: EDIT_ID });
     const onUpdated = vi.fn();
@@ -391,6 +451,22 @@ describe("TaskCreateModal — edit mode", () => {
     await waitFor(() => expect(rerunTask).toHaveBeenCalledTimes(1));
     expect(updateTask).not.toHaveBeenCalled();
     expect(screen.queryByTestId("edit-scope-chooser")).toBeNull();
+  });
+
+  it("resubmits a terminal task with the connector selection shown in the editor", async () => {
+    rerunTask.mockResolvedValue({ id: "99990000-9999-0000-9999-000000000000" });
+    renderModal({
+      servers: DEFAULT_ON_SERVERS,
+      editTask: { ...baseEdit, status: "success", mcp_selection: [] },
+      onUpdated: vi.fn(),
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /Tools & files/ }));
+    fireEvent.click(screen.getByTestId("mcp-toggle-email"));
+    fireEvent.click(screen.getByRole("button", { name: /save task changes/i }));
+
+    await waitFor(() => expect(rerunTask).toHaveBeenCalledTimes(1));
+    expect(rerunTask.mock.calls[0][1].mcp_selection).toEqual([{ server: "email" }]);
   });
 
   it("closing an untouched edit form does not raise the discard guard", () => {

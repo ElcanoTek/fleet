@@ -376,8 +376,19 @@ export function TaskCreateModal({
   const [sandboxCpus, setSandboxCpus] = useState(init.sandboxCpus);
   const [sandboxPids, setSandboxPids] = useState(init.sandboxPids);
 
-  // The per-task MCP selection (replaces the legacy target_node_name).
-  const [mcpSelection, setMcpSelection] = useState<MCPChoice[]>(init.mcpSelection);
+  // The per-task MCP selection (replaces the legacy target_node_name). New
+  // tasks inherit the operator's enabled-by-default catalog until the user
+  // touches the picker. Keeping the override nullable lets asynchronously
+  // loaded catalog defaults appear without an effect that could overwrite a
+  // choice the user already made. Edits always use the task's persisted list.
+  const defaultMcpSelection = servers
+    .filter((server) => !server.remote && server.enabled)
+    .map((server) => ({ server: server.name }));
+  const [mcpSelectionOverride, setMcpSelectionOverride] = useState<MCPChoice[] | null>(
+    editing ? init.mcpSelection : null,
+  );
+  const mcpSelection = mcpSelectionOverride ?? defaultMcpSelection;
+  const setMcpSelection = (next: MCPChoice[]) => setMcpSelectionOverride(next);
   const [fileCount, setFileCount] = useState(0);
 
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -472,7 +483,8 @@ export function TaskCreateModal({
     recurrence.trim() !== "" ||
     endMode !== "never" ||
     scheduledDate !== "" ||
-    mcpSelection.length > 0 ||
+    (mcpSelectionOverride !== null &&
+      JSON.stringify(mcpSelectionOverride) !== JSON.stringify(defaultMcpSelection)) ||
     fileCount > 0 ||
     model !== DEFAULT_PRIMARY_MODEL ||
     fallbackModel !== DEFAULT_FALLBACK_MODEL ||
@@ -584,7 +596,7 @@ export function TaskCreateModal({
     setSandboxMemory("");
     setSandboxCpus("");
     setSandboxPids("");
-    setMcpSelection([]);
+    setMcpSelectionOverride(null);
     setPendingTemplate(null);
     setTemplateVarValues({});
     setErrors({});
@@ -1111,6 +1123,10 @@ export function TaskCreateModal({
             allow_delegation: allowDelegation,
             tags: taskData.tags ?? [],
             persona: taskData.persona ?? "",
+            // A terminal edit is a resubmit, but the connector picker is still
+            // editable. Echo its complete visible value so the fresh one-off
+            // run does not silently inherit the source task's stale selection.
+            mcp_selection: mcpSelection,
             ...(taskData.thinking_budget_tokens != null
               ? { thinking_budget: taskData.thinking_budget_tokens }
               : {}),

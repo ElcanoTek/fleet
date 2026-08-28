@@ -154,4 +154,25 @@ func TestApplyRerunOverrides(t *testing.T) {
 			t.Errorf("explicit empty tags should clear, got %v", tc.Tags)
 		}
 	})
+
+	t.Run("nil MCP selection inherits, non-nil selection replaces", func(t *testing.T) {
+		tc := base()
+		tc.MCPSelection = models.MCPSelection{{Server: "source"}}
+		applyRerunOverrides(&tc, taskRerunOverrides{})
+		if len(tc.MCPSelection) != 1 || tc.MCPSelection[0].Server != "source" {
+			t.Fatalf("nil MCP selection should inherit, got %+v", tc.MCPSelection)
+		}
+
+		applyRerunOverrides(&tc, taskRerunOverrides{
+			MCPSelection: models.MCPSelection{{Server: "email"}},
+		})
+		if len(tc.MCPSelection) != 1 || tc.MCPSelection[0].Server != "email" {
+			t.Fatalf("explicit MCP selection should replace, got %+v", tc.MCPSelection)
+		}
+
+		applyRerunOverrides(&tc, taskRerunOverrides{MCPSelection: models.MCPSelection{}})
+		if tc.MCPSelection == nil || len(tc.MCPSelection) != 0 {
+			t.Fatalf("explicit empty MCP selection should clear, got %+v", tc.MCPSelection)
+		}
+	})
 }

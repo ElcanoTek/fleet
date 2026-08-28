@@ -2017,6 +2017,10 @@ type taskRerunOverrides struct {
 	Title                *string  `json:"title,omitempty"`
 	Tags                 []string `json:"tags,omitempty"`
 	Persona              *string  `json:"persona,omitempty"`
+	// MCPSelection is nil when omitted (inherit the source), while an explicit
+	// empty array clears the copy's connector selection. This matches Tags and
+	// lets the terminal-task editor resubmit exactly what its picker displays.
+	MCPSelection models.MCPSelection `json:"mcp_selection,omitempty"`
 }
 
 // taskRerunRequest is the (optional) body of POST /tasks/{id}/rerun|clone.
@@ -2190,6 +2194,9 @@ func applyRerunOverrides(tc *models.TaskCreate, o taskRerunOverrides) {
 	}
 	if o.Persona != nil {
 		tc.Persona = *o.Persona
+	}
+	if o.MCPSelection != nil {
+		tc.MCPSelection = o.MCPSelection
 	}
 }
 

@@ -42,6 +42,13 @@ prior versions are listed because none have shipped.
 
 ### Changed
 
+- **Operations tasks now honor connector defaults (#1333).** New task forms
+  start bundled connectors marked `enabled_by_default` in the selected state,
+  matching new Chat conversations. The selection follows asynchronously loaded
+  catalogs without overwriting a user's first toggle, is persisted explicitly
+  with the task, and editing an existing task continues to show its saved
+  connector list rather than applying newer deployment defaults retroactively.
+
 - **Fonts: exactly two typefaces, self-hosted.** The web UI now ships
   **Nebula Sans** (SIL OFL 1.1) for UI/body/headings and **Hack** (MIT, plus
   Bitstream Vera for its Vera-derived glyphs) for code, logs and tabular
@@ -880,6 +887,16 @@ prior versions are listed because none have shipped.
   CronJob, day-2 mappings — was folded into `docs/DEPLOYMENT-KUBERNETES.md`.
 
 ### Fixed
+
+- **Completed-task resubmits silently discarded connector edits.** Operations
+  lets an operator open a terminal task, change its connector picker, and save;
+  because history is immutable, that action creates a new one-off re-run. The
+  browser omitted `mcp_selection` from the re-run overrides and the server did
+  not accept it, so the new run inherited the source task's stale connectors
+  even though the editor showed the new choice. Re-run/clone overrides now
+  distinguish an omitted selection (inherit) from an explicit list, including
+  an explicit empty list (clear), and the terminal editor always sends its
+  complete visible selection.
 
 - **Three own-rows authorization holes on the task surface.** The read path for
   task rows was narrowed to own rows in #1082 and run logs in #980; three
