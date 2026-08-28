@@ -99,6 +99,25 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Kubernetes: a control plane that crashed and restarted IN PLACE still
+  leaked every sandbox pod it had running (#1264).** The boot-time orphan
+  sweep names an incarnation by `FLEET_POD_UID` — the downward-API pod UID —
+  and kubelet restarts a crashed container inside the SAME pod, so the UID it
+  reads after a SIGKILL, an OOM kill, a panic, or a failed liveness probe (the
+  chart ships one) is the value its predecessor stamped on the pods it left
+  running. The sweep read its own label back, concluded the pods were its own,
+  and skipped them; there are no ownerReferences and no periodic sweep, so
+  they stayed. Those pods are Guaranteed QoS, and on the validation cluster
+  three stranded pods held 6 CPU of reservation that nothing would reclaim —
+  enough that the warm pool's own refill could not schedule
+  (`Insufficient cpu`), and every further restart stranded another set. The
+  instance label now carries a **per-process boot nonce** alongside the UID,
+  so it changes on a container restart as well as on pod replacement. The
+  release-owner label still gates ownership, so a co-tenant release's live
+  sandboxes remain untouchable; out of cluster the pid form is unchanged.
+  (Pod *replacement* — a rolling update or a deleted pod — was already swept
+  correctly, which is why this survived the #1257 fix.)
+
 - **A lost lease is now identifiable on all three lease-guarded task writers,
   not one of three.** `UpdateTaskStatusAtomicWithContext` returned the
   `storage.ErrTaskLeaseNotHeld` sentinel, but `RequeueTaskForRetryWithContext`

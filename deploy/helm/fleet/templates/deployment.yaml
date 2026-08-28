@@ -79,11 +79,14 @@ spec:
             # anchoring the CWD; a pod spec says it directly.
             - name: EMAIL_ATTACHMENT_DIR
               value: "{{ .Values.dataDir }}/attachments"
-            # Cluster identity for the sandbox-pod orphan sweep. The UID names
-            # this incarnation and the release name marks the owner, so a
+            # Cluster identity for the sandbox-pod orphan sweep. The UID
+            # anchors this pod and the release name marks the owner, so a
             # restarted control plane can tell its predecessor's leaked pods
-            # from a co-tenant release's live ones. Without these fleet falls
-            # back to a pid heuristic that is meaningless across containers.
+            # from a co-tenant release's live ones. fleet pairs the UID with a
+            # per-process boot nonce, because kubelet restarts a crashed
+            # container in place and the UID alone would not change. Without
+            # these fleet falls back to a pid heuristic that is meaningless
+            # across containers.
             - name: FLEET_POD_UID
               valueFrom:
                 fieldRef:

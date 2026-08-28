@@ -421,7 +421,11 @@ pods), and the python REPL knobs.
   deletes the pod with zero grace; `kubectl get pods -l
   app.kubernetes.io/name=fleet-sandbox` should not show the pod after the
   cancel completes. A pod that lingers past a crash is reclaimed by the
-  boot-time orphan sweep on the next control-plane start.
+  boot-time orphan sweep on the next control-plane start — whether the crash
+  replaced the pod or kubelet restarted the container inside it, both count as
+  a new incarnation. The sweep logs `startup: pruned N orphaned sandbox
+  pod(s)`; if pods from before a restart are still `Running` and no such line
+  appears, they are stranded and hold their full Guaranteed reservation.
 
 ## Honest scope — what the kubernetes backend does differently
 
