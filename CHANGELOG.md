@@ -42,6 +42,13 @@ prior versions are listed because none have shipped.
 
 ### Changed
 
+- **Operations tasks now honor connector defaults (#1333).** New task forms
+  start bundled connectors marked `enabled_by_default` in the selected state,
+  matching new Chat conversations. The selection follows asynchronously loaded
+  catalogs without overwriting a user's first toggle, is persisted explicitly
+  with the task, and editing an existing task continues to show its saved
+  connector list rather than applying newer deployment defaults retroactively.
+
 - **Fonts: exactly two typefaces, self-hosted.** The web UI now ships
   **Nebula Sans** (SIL OFL 1.1) for UI/body/headings and **Hack** (MIT, plus
   Bitstream Vera for its Vera-derived glyphs) for code, logs and tabular
