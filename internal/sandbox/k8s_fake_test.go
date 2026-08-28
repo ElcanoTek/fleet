@@ -42,14 +42,15 @@ type fakeKube struct {
 	deleted []string
 
 	// Failure injection for preflight tests.
-	denied   map[string]bool // "<verb> <resource>[/<sub>]" → deny
-	noPVC    bool
-	noNetpol bool
+	denied         map[string]bool // "<verb> <resource>[/<sub>]" → deny
+	noPVC          bool
+	noNetpol       bool
+	noRuntimeClass bool
+
 	// unschedulable keeps every created pod Pending with the scheduler's
 	// PodScheduled=False verdict, the way a nodeSelector matching no node or a
-	// node-pinned volume leaves it.
-	unschedulable  bool
-	noRuntimeClass bool
+	// node-pinned volume leaves it. Pod behaviour, not preflight injection.
+	unschedulable bool
 
 	// bridgeTrailingStdout, when set, is written to the bridge's stdout AFTER
 	// each response line — the pod-side output nothing on the fleet side reads.
