@@ -46,19 +46,28 @@ const GLOBALS_CSS = join(APP_DIR, "globals.css");
 const ALLOWED_FAMILIES = ["Nebula Sans", "Hack"];
 
 /**
- * Faces retired from the org's products, plus the two font CDNs. Dubai is
- * PROPRIETARY and must never appear in this MIT repo at all; the rest are
- * merely no longer shipped. Matched case-insensitively.
+ * Faces retired from the org's products. Dubai is PROPRIETARY and must never
+ * appear in this MIT repo at all; the rest are merely no longer shipped. A
+ * regex is warranted here because the names have to be matched across spacing
+ * and casing variants ("IBM Plex", "IBMPlex", "ibm plex").
  */
-const BANNED_PATTERNS = [
+const BANNED_FACE_PATTERNS = [
   /IBM\s*Plex/i,
   /\bDubai\b/i,
   /Share\s*Tech/i,
   /\bVT323\b/i,
   /"Inter"|'Inter'/,
-  /fonts\.googleapis\.com/i,
-  /fonts\.gstatic\.com/i,
 ];
+
+/**
+ * The two font CDNs. Deliberately plain substrings rather than regexes: a
+ * hostname pattern with unescaped-looking dots and no anchors is exactly the
+ * shape of a URL-authorization bypass, so CodeQL flags it at High severity
+ * (js/regex/missing-regexp-anchor) even in a test that only greps source text.
+ * `includes` is both the honest operation — we want the literal string
+ * anywhere in the file — and free of the sink.
+ */
+const BANNED_CDN_SUBSTRINGS = ["fonts.googleapis.com", "fonts.gstatic.com"];
 
 function sourceFiles(dir: string, out: string[] = []): string[] {
   for (const entry of readdirSync(dir)) {
@@ -122,10 +131,18 @@ describe("no retired face and no font CDN anywhere under src/", () => {
     expect(files.length).toBeGreaterThan(50);
   });
 
-  for (const pattern of BANNED_PATTERNS) {
-    it(`has no match for ${pattern}`, () => {
+  for (const pattern of BANNED_FACE_PATTERNS) {
+    it(`names no retired face matching ${pattern}`, () => {
       const hits = files.filter((f) => pattern.test(readFileSync(f, "utf8")));
       expect(hits, `${pattern} still appears in:\n  ${hits.join("\n  ")}`).toEqual([]);
+    });
+  }
+
+  for (const host of BANNED_CDN_SUBSTRINGS) {
+    it(`loads no font from ${host}`, () => {
+      const needle = host.toLowerCase();
+      const hits = files.filter((f) => readFileSync(f, "utf8").toLowerCase().includes(needle));
+      expect(hits, `${host} still appears in:\n  ${hits.join("\n  ")}`).toEqual([]);
     });
   }
 });
