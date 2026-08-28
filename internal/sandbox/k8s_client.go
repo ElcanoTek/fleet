@@ -370,7 +370,20 @@ type k8sContainerStatus struct {
 			Reason  string `json:"reason,omitempty"`
 			Message string `json:"message,omitempty"`
 		} `json:"waiting,omitempty"`
+		// Terminated carries the kubelet's verdict on a container that has
+		// already stopped — OOMKilled being the one an operator most needs
+		// told apart from an eviction, because both look like a vanished
+		// sandbox from inside a turn. Named, unlike its Waiting sibling, so a
+		// test can construct one without restating the struct.
+		Terminated *k8sContainerTerminated `json:"terminated,omitempty"`
 	} `json:"state,omitempty"`
+}
+
+// k8sContainerTerminated is the kubelet's post-mortem for one container.
+type k8sContainerTerminated struct {
+	Reason   string `json:"reason,omitempty"`
+	Message  string `json:"message,omitempty"`
+	ExitCode int    `json:"exitCode,omitempty"`
 }
 
 func (c *k8sClient) createPod(ctx context.Context, namespace string, pod *k8sPod) error {

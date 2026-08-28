@@ -417,6 +417,12 @@ pods), and the python REPL knobs.
 - **A sealed turn can still reach the network** — your CNI is not enforcing
   NetworkPolicy (checklist item 3). The policy *object* existing is not
   enforcement.
+- **A turn died with `bridge closed unexpectedly` or a bash exec error** — the
+  error names the cluster's reason when there is one: `the sandbox pod failed:
+  Evicted — …` (a kubelet eviction, usually ephemeral storage or an `emptyDir`
+  `sizeLimit`), `the sandbox container OOMKilled, exit code 137`, or `the
+  sandbox pod is gone`. No such clause means the pod was still healthy and the
+  bridge process itself died — check the bridge stderr the error carries.
 - **Turn cancelled but you want proof nothing survived** — cancellation
   deletes the pod with zero grace; `kubectl get pods -l
   app.kubernetes.io/name=fleet-sandbox` should not show the pod after the

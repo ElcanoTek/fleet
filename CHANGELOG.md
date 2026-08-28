@@ -145,6 +145,21 @@ prior versions are listed because none have shipped.
   export · import"), docs/LEGACY-IMPORT.md, and the narrowed out-of-model
   warning on `models.TaskLifecycle`.
 
+- **Kubernetes: a sandbox the cluster killed reported no cause (#1264).** A
+  kubelet eviction (ephemeral-storage, or an `emptyDir` `sizeLimit`) and an OOM
+  kill both end a turn the same way — the exec stream dies and the caller gets
+  `bridge closed unexpectedly: EOF`, or a bash exec error naming nothing — while
+  the actual verdict sits in the pod's own status, one GET away on a client the
+  sandbox already holds. Unsaid, it gets guessed: during the #1264 validation an
+  `emptyDir` eviction was explained to the user as an OOM kill, confidently and
+  wrongly. Both error paths now append the cluster's own answer — `the sandbox
+  pod failed: Evicted — Usage of EmptyDir volume "tmp" exceeds the limit
+  "128Mi"`, `the sandbox container OOMKilled, exit code 137`, or `the sandbox
+  pod is gone` when it has been deleted outright. The lookup runs only on an
+  error path, on its own short-lived context, and contributes nothing when the
+  apiserver cannot answer, so a diagnostic can never mask the failure it is
+  describing.
+
 - **A round-capped scheduled run keeps the transcript it paid for (#1271).**
   When a scheduled run exhausts the 20 enforcement rounds without its finish
   gates ever clearing, `agentcore.Run` returns the accumulated transcript and
