@@ -4,10 +4,14 @@
   color-scheme: dark;
   --theme-selector-attribute: data-theme;
   --theme-preference-storage-key: chat-theme-preference;
-  --font-heading: var(--font-geist-sans), "Segoe UI", sans-serif;
-  --font-body: var(--font-geist-sans), "Segoe UI", sans-serif;
-  --font-code: var(--font-geist-mono), "SF Mono", "Consolas", monospace;
-  --font-code-ui: var(--font-geist-mono), monospace;
+  /* IBM Plex, self-hosted via next/font/local (src/app/fonts). SIL OFL 1.1 —
+   * the licence that makes it shippable in this MIT repo. Matches the flag
+   * design system's open-tier faces; the proprietary Dubai face is internal-only
+   * and must never appear here. */
+  --font-heading: var(--font-plex-sans), "Segoe UI", system-ui, sans-serif;
+  --font-body: var(--font-plex-sans), "Segoe UI", system-ui, sans-serif;
+  --font-code: var(--font-plex-mono), "SF Mono", "Consolas", monospace;
+  --font-code-ui: var(--font-plex-mono), monospace;
   --font-weight-regular: 400;
   --font-weight-bold: 700;
   --font-size-display: clamp(2rem, 1.75rem + 0.8vw, 2.5rem);
