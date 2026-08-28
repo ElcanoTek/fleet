@@ -158,6 +158,20 @@ prior versions are listed because none have shipped.
   the same error message, the same `terminal` failure class, the same retry and
   notification behaviour — only transcript visibility changed.
 
+- **Kubernetes: the riskier egress posture was the quieter one (#1264).** Boot
+  printed a full paragraph under `lockdown` — every pod labeled
+  `fleet.elcanotek.com/egress=none` for the deny-all NetworkPolicy — and
+  **nothing at all** under `open`, which is the default mode. So the
+  configuration where model-authored code can reach the fleet Service, the
+  in-cluster database, the apiserver and the node's metadata endpoint was the
+  one that gave the operator no signal, while the sealed one explained itself.
+  `open` now logs a WARNING naming what is reachable and the single chart knob
+  that closes it (`networkPolicies.openEgress.create=true` with
+  `blockedCIDRs`). Neither line claims enforcement: under lockdown that is the
+  CNI's job and fleet verifies only that the policy object exists, and under
+  open the protecting policy may carry any name from any tooling, so fleet
+  states the posture it creates pods with rather than inventing a verdict.
+
 - **An Optional server's variant seats are now opt-in gated at registration,
   not just hidden from the prompt (#1272).** The two layers that decide whether
   an Optional MCP server's tools are available keyed their checks differently:
