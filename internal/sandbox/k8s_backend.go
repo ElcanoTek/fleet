@@ -681,7 +681,7 @@ func (k *k8sImpl) start(ctx context.Context) error {
 func (k *k8sImpl) waitForRunning(ctx context.Context, name string) error {
 	ticker := time.NewTicker(k8sPodPollInterval)
 	defer ticker.Stop()
-	var lastState string
+	var lastState, lastSchedule string
 	for {
 		pod, err := k.backend.client.getPod(ctx, k.backend.cfg.Namespace, name)
 		if err == nil {
@@ -707,16 +707,69 @@ func (k *k8sImpl) waitForRunning(ctx context.Context, name string) error {
 					}
 				}
 			}
+			// A pod that cannot be SCHEDULED has no container status at all —
+			// nothing has been assigned to a kubelet yet — so the loop above
+			// sees nothing and the timeout below would say only "not ready".
+			// The scheduler has already written why, and on this backend it is
+			// the likeliest way a start fails: a nodeSelector or toleration
+			// that matches no node, a node-pinned PersistentVolume the sandbox
+			// cannot reach, or a cluster with no room left.
+			//
+			// Recorded, not fatal. Unlike a pull failure this often self-heals
+			// inside the start window — a warm pod retires and frees its
+			// Guaranteed reservation, a drained node comes back, the autoscaler
+			// lands a node — so it stays worth waiting out the budget.
+			if sched := podSchedulingBlocker(pod); sched != "" {
+				lastSchedule = sched
+			}
 		}
 		select {
 		case <-ctx.Done():
-			if lastState != "" {
+			switch {
+			case lastSchedule != "":
+				// The scheduler's answer first: a pod that never got a node
+				// explains the whole failure, and a container state (if any)
+				// would be stale detail beside it.
+				return fmt.Errorf("sandbox pod %s was never scheduled before the start timeout (%s): %w", name, lastSchedule, ctx.Err())
+			case lastState != "":
 				return fmt.Errorf("sandbox pod %s not ready before start timeout (last container state: %s): %w", name, lastState, ctx.Err())
 			}
 			return fmt.Errorf("sandbox pod %s not ready before start timeout: %w", name, ctx.Err())
 		case <-ticker.C:
 		}
 	}
+}
+
+// podSchedulingBlocker renders the scheduler's own explanation for a pod that
+// has not been placed, or "" when scheduling is not what is holding it up.
+//
+// Kubernetes reports this as a PodScheduled condition with status False, whose
+// message is the familiar "0/N nodes are available: …" breakdown. That text is
+// the single most useful line an operator can be handed here, so it is passed
+// through nearly whole — sanitized like all cluster-derived text, and capped
+// so a large cluster's per-node enumeration cannot turn one error into a wall.
+func podSchedulingBlocker(pod *k8sPod) string {
+	for _, c := range pod.Status.Conditions {
+		if c.Type != "PodScheduled" || c.Status != "False" {
+			continue
+		}
+		reason := sanitizeClusterText(c.Reason)
+		msg := sanitizeClusterText(c.Message)
+		const maxLen = 512
+		if len(msg) > maxLen {
+			msg = msg[:maxLen] + "…"
+		}
+		switch {
+		case reason != "" && msg != "":
+			return reason + ": " + msg
+		case reason != "":
+			return reason
+		case msg != "":
+			return msg
+		}
+		return "PodScheduled=False"
+	}
+	return ""
 }
 
 // uploadFile writes data to path inside the pod via a one-shot exec. The v4
