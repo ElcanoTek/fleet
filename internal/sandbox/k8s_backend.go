@@ -257,7 +257,9 @@ const (
 // k8sControlPlaneUID and k8sControlPlaneOwner are the control plane's own
 // cluster identity, supplied by the chart through the downward API:
 //
-//	FLEET_POD_UID   ← metadata.uid                              (this incarnation)
+//	FLEET_POD_UID   ← metadata.uid                              (this POD, not
+//	                                                             this incarnation:
+//	                                                             see k8sBootNonce)
 //	FLEET_OWNER_ID  ← metadata.labels['app.kubernetes.io/instance'] (this release)
 //
 // Both are empty when fleet talks to a cluster from outside it (a kubeconfig
