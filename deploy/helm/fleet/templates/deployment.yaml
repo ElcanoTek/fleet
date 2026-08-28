@@ -132,7 +132,14 @@ spec:
             {{- end }}
             {{- with .Values.sandbox.kubernetes.nodeSelector }}
             - name: FLEET_SANDBOX_K8S_NODE_SELECTOR
-              value: {{ $pairs := list }}{{- range $k, $v := . }}{{- $pairs = append $pairs (printf "%s=%s" $k $v) }}{{- end }}{{ join "," $pairs | quote }}
+              {{- /* %v, not %s: a label value written unquoted in YAML arrives
+                     here as a bool or a number (fleet-runner: true), and %s
+                     renders those as Go's error text — literally
+                     "fleet-runner=%!s(bool=true)", which the apiserver then
+                     rejects on every single sandbox pod. %v prints what the
+                     operator meant, and Kubernetes label values are strings
+                     anyway. */}}
+              value: {{ $pairs := list }}{{- range $k, $v := . }}{{- $pairs = append $pairs (printf "%s=%v" $k $v) }}{{- end }}{{ join "," $pairs | quote }}
             {{- end }}
             {{- with .Values.sandbox.kubernetes.tolerations }}
             - name: FLEET_SANDBOX_K8S_TOLERATIONS
