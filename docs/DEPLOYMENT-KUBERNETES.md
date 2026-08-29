@@ -431,6 +431,7 @@ pods), and the python REPL knobs.
   app.kubernetes.io/name=fleet-sandbox` should not show the pod after the
   cancel completes. A pod that lingers past a crash is reclaimed by the
   boot-time orphan sweep on the next control-plane start.
+
 ## Honest scope — what the kubernetes backend does differently
 
 Recorded here so nobody discovers them in production:
