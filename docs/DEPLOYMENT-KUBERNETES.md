@@ -422,6 +422,15 @@ pods), and the python REPL knobs.
   app.kubernetes.io/name=fleet-sandbox` should not show the pod after the
   cancel completes. A pod that lingers past a crash is reclaimed by the
   boot-time orphan sweep on the next control-plane start.
+- **A sandbox pod outlived its turn without a crash** — its delete failed while
+  the apiserver was unreachable (a managed control-plane upgrade, a network
+  blip, a throttled burst). fleet retries that delete in the background and
+  logs `reclaimed sandbox pod … on retry` when it lands, so no action is
+  needed. The boot sweep cannot help here — it deliberately skips pods carrying
+  the running incarnation's own label — so if you see `gave up deleting sandbox
+  pod …` the retry budget (~30 minutes) ran out, and that pod holds its
+  Guaranteed reservation until the next control-plane restart. Delete it by
+  hand if you need the capacity sooner.
 
 ## Honest scope — what the kubernetes backend does differently
 

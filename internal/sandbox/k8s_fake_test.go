@@ -40,6 +40,9 @@ type fakeKube struct {
 	pods    map[string]*k8sPod // name → object (status stamped Running/ready)
 	files   map[string][]byte  // "<pod>:<path>" → uploaded bytes
 	deleted []string
+	// deleteFailures makes the next N DELETEs fail with a connection-style
+	// error, the way an unreachable apiserver does.
+	deleteFailures int
 
 	// Failure injection for preflight tests.
 	denied         map[string]bool // "<verb> <resource>[/<sub>]" → deny
@@ -237,6 +240,14 @@ func (f *fakeKube) handlePod(w http.ResponseWriter, r *http.Request) {
 		}
 		_ = json.NewEncoder(w).Encode(pod)
 	case http.MethodDelete:
+		f.mu.Lock()
+		if f.deleteFailures > 0 {
+			f.deleteFailures--
+			f.mu.Unlock()
+			writeK8sStatus(w, http.StatusInternalServerError, "InternalError", "apiserver unreachable (injected)")
+			return
+		}
+		f.mu.Unlock()
 		if !ok {
 			writeK8sStatus(w, http.StatusNotFound, "NotFound", "pod not found")
 			return
