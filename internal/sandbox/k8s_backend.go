@@ -1157,7 +1157,18 @@ func (k *k8sImpl) podFailureSuffix() string {
 		if isK8sNotFound(err) {
 			return " (the sandbox pod is gone — the cluster deleted or evicted it mid-call)"
 		}
-		return ""
+		// Saying nothing here masks nothing, but it does something worse: the
+		// condition most likely to kill a sandbox IS cluster trouble, so the
+		// explanation would go missing exactly when it is most needed, and a
+		// model handed a bare EOF fills the silence with a guess — the failure
+		// this function exists to prevent. Seen on the validation cluster: a
+		// turn died during an apiserver wobble and was explained to the user as
+		// "likely container resource/disk limits or an internal sandbox timeout
+		// ceiling", neither of which had happened.
+		//
+		// Naming the unanswered question is still appended to the original
+		// error, never a replacement for it.
+		return " (the cluster could not be asked why — the apiserver did not answer)"
 	}
 	// Eviction is a POD-level verdict: kubelet sets phase=Failed with
 	// reason=Evicted and a message naming the limit that was exceeded.

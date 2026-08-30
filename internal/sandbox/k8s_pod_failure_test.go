@@ -76,9 +76,11 @@ func TestK8sPodFailureSuffix(t *testing.T) {
 	})
 }
 
-// The suffix is a diagnostic, so it must never become a second failure: an
-// apiserver that cannot answer leaves the original error exactly as it was.
-func TestK8sPodFailureSuffixStaysQuietWhenTheLookupFails(t *testing.T) {
+// The suffix is a diagnostic, so it must never become a second failure — but
+// silence is its own failure mode. An apiserver that cannot answer leaves the
+// original error intact and says plainly that the cause could not be
+// established, rather than leaving a gap for a model to fill with a guess.
+func TestK8sPodFailureSuffixNamesAnUnreachableApiserver(t *testing.T) {
 	fake := newFakeKube(t)
 	backend := fake.backend(t, KubernetesConfig{Namespace: "fleet-sandboxes"})
 	sb, err := backend.newSandbox(context.Background(), testContainerConfig(t))
@@ -94,7 +96,13 @@ func TestK8sPodFailureSuffixStaysQuietWhenTheLookupFails(t *testing.T) {
 	// below passing for the wrong reason.)
 	fake.srv.Close()
 
-	if got := k.podFailureSuffix(); got != "" {
-		t.Errorf("a failed lookup must contribute nothing rather than mask the real error, got %q", got)
+	got := k.podFailureSuffix()
+	if !strings.Contains(got, "could not be asked") || !strings.Contains(got, "apiserver") {
+		t.Errorf("an unreachable apiserver must say so, got %q", got)
+	}
+	// …and it must stay a short clause appended to the real error, never a
+	// replacement for it.
+	if len(got) > 120 {
+		t.Errorf("the clause must stay short, got %d chars: %q", len(got), got)
 	}
 }

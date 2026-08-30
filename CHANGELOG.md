@@ -157,8 +157,10 @@ prior versions are listed because none have shipped.
   "128Mi"`, `the sandbox container OOMKilled, exit code 137`, or `the sandbox
   pod is gone` when it has been deleted outright. The lookup runs only on an
   error path, on its own short-lived context, and contributes nothing when the
-  apiserver cannot answer, so a diagnostic can never mask the failure it is
-  describing.
+  apiserver cannot answer it says exactly that — `the cluster could not be asked
+  why — the apiserver did not answer` — because the condition most likely to
+  kill a sandbox is cluster trouble, and a silent diagnostic there just returns
+  the reader to guessing.
 
 - **A round-capped scheduled run keeps the transcript it paid for (#1271).**
   When a scheduled run exhausts the 20 enforcement rounds without its finish
