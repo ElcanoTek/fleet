@@ -330,6 +330,26 @@ prior versions are listed because none have shipped.
   the run's turns. One-shot `fleet task run` stays out of scope (no DB, no
   library) and docs/SHARED-FILES.md now says all of this plainly.
 
+- **Kubernetes: a sandbox pod whose delete failed was never deleted again
+  (#1264).** A close-time or cancel-time `DELETE` can fail for reasons that
+  have nothing to do with the pod — an apiserver restart, a network blip, a
+  throttled burst — and fleet logged `the pod may linger until the boot-time
+  orphan prune` and moved on. That prune could never collect it: the sweep
+  deliberately skips pods carrying the **running** incarnation's label, which
+  is exactly what these are, and a Pod owned by a live Pod gets no help from
+  the garbage collector either. So the pod kept its Guaranteed CPU and memory
+  reservation for the lifetime of the control-plane process, and enough of them
+  take a node to the point where no sandbox can schedule at all — the same end
+  state as the orphan-sweep bug above, reached by a transient blip instead of a
+  crash. Measured during the #1264 validation: an 83-second apiserver outage
+  stranded two pods, still Running 90 seconds after the cluster had recovered.
+  Failed deletes are now retried in the background with backoff for ~30 minutes
+  and logged when they land; the queue is bounded, and the drain goroutine
+  exits when it empties, so a deployment that never fails a delete never
+  carries one. The cancel path (#796) gets the same treatment, so a sandbox
+  whose containment could not be confirmed stops being uncontained as soon as
+  the apiserver answers again.
+
 - **Superseded CI runs no longer paint a red X: the gate rollups treat
   cancelled needed jobs as neutral (#1302).** Every rapid dev merge cancels
   the in-flight `dev-ci` run on the now-stale tip (the concurrency group),

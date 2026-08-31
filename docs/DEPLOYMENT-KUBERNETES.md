@@ -411,6 +411,15 @@ pods), and the python REPL knobs.
 - **`sandbox pod … not ready before start timeout`** — usually scheduling
   (no node fits the sandbox requests) or a slow first pull; `kubectl describe
   pod fleet-sandbox-…` shows which.
+- **A sandbox pod outlived its turn without a crash** — its delete failed while
+  the apiserver was unreachable (a managed control-plane upgrade, a network
+  blip, a throttled burst). fleet retries that delete in the background and
+  logs `reclaimed sandbox pod … on retry` when it lands, so no action is
+  needed. The boot sweep cannot help here — it deliberately skips pods carrying
+  the running incarnation's own label — so if you see `gave up deleting sandbox
+  pod …` the retry budget (~30 minutes) ran out, and that pod holds its
+  Guaranteed reservation until the next control-plane restart. Delete it by
+  hand if you need the capacity sooner.
 - **Workspace files owned by the wrong uid** — the claim's storage class must
   honor `fsGroup` (1000) or be provisioned world-writable at the root; both
   the control plane and sandbox pods run uid/gid 1000.

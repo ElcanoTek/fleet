@@ -340,6 +340,18 @@ func parseK8sInstanceLabel(label string) (pid int, startedAt int64, ok bool) {
 type KubernetesBackend struct {
 	cfg    KubernetesConfig
 	client *k8sClient
+
+	// reapMu guards the retry set for pod deletes that failed. A delete can
+	// fail for reasons that have nothing to do with the pod — an apiserver
+	// restart, a network blip, throttling — and the pod then keeps its
+	// Guaranteed reservation until something reclaims it. Nothing else will:
+	// the boot sweep deliberately skips pods carrying THIS incarnation's
+	// label, so it cannot reclaim fleet's own leftovers, and a Pod owned by a
+	// Pod gets no help from the garbage collector while its owner is alive.
+	// Only the process that created the pod knows it is finished with it.
+	reapMu      sync.Mutex
+	reapPending map[string]int // pod name → attempts so far
+	reapRunning bool           // a drain goroutine is live
 }
 
 // NewKubernetesBackend resolves credentials (in-cluster unless a kubeconfig
@@ -771,10 +783,107 @@ func (k *k8sImpl) deletePodNow(podName string) bool {
 		if isK8sNotFound(err) {
 			return true
 		}
-		log.Printf("sandbox: cancelled-exec pod delete unconfirmed (%s): %v", podName, err)
+		// The cancel path's containment (#796) is destroying the PID
+		// namespace, so a delete that did not land leaves model-authored
+		// stragglers running. The caller reports that honestly to the user
+		// ("could not be confirmed killed"); queue a retry so it also stops
+		// being true as soon as the apiserver answers again.
+		log.Printf("sandbox: cancelled-exec pod delete unconfirmed (%s): %v — retrying in the background", podName, err)
+		k.backend.scheduleReap(podName)
 		return false
 	}
 	return true
+}
+
+// Retry budget for a failed pod delete. The window is sized for a control-plane
+// blip an operator would call routine — a managed apiserver upgrade, an etcd
+// hiccup, a throttled burst — not for a cluster that is down for the day: past
+// that, giving up loudly is better than a goroutine retrying into the void,
+// and a restart's boot sweep reclaims what is left because a restart makes
+// every leftover somebody else's incarnation.
+var (
+	podReapInterval    = 10 * time.Second // overridden in tests
+	podReapMaxInterval = 2 * time.Minute
+	podReapMaxAttempts = 25 // ~30 minutes with the backoff below
+	podReapMaxPending  = 256
+)
+
+// scheduleReap queues a pod whose delete failed, and makes sure a drain
+// goroutine is running. The goroutine exits when the queue empties, so an
+// installation that never fails a delete never carries one.
+func (b *KubernetesBackend) scheduleReap(podName string) {
+	if podName == "" {
+		return
+	}
+	b.reapMu.Lock()
+	defer b.reapMu.Unlock()
+	if b.reapPending == nil {
+		b.reapPending = make(map[string]int)
+	}
+	if _, known := b.reapPending[podName]; !known && len(b.reapPending) >= podReapMaxPending {
+		// Refusing to grow without bound is the point of a bound; say so
+		// rather than dropping the pod silently.
+		log.Printf("sandbox: pod-delete retry queue is full (%d) — %s will be reclaimed by the boot-time orphan sweep instead", podReapMaxPending, sanitizeClusterText(podName))
+		return
+	}
+	b.reapPending[podName] = 0
+	if !b.reapRunning {
+		b.reapRunning = true
+		go b.reapLoop()
+	}
+}
+
+// reapLoop retries queued deletes until they succeed, the budget runs out, or
+// the process exits. Backoff is global rather than per-pod on purpose: these
+// failures share one cause (the apiserver is unreachable), so pacing the whole
+// queue together is what avoids hammering a cluster that is already unwell.
+func (b *KubernetesBackend) reapLoop() {
+	wait := podReapInterval
+	for {
+		time.Sleep(wait)
+		if wait *= 2; wait > podReapMaxInterval {
+			wait = podReapMaxInterval
+		}
+
+		b.reapMu.Lock()
+		names := make([]string, 0, len(b.reapPending))
+		for name := range b.reapPending {
+			names = append(names, name)
+		}
+		b.reapMu.Unlock()
+
+		for _, name := range names {
+			ctx, cancel := context.WithTimeout(context.Background(), execReapTimeout)
+			err := b.client.deletePod(ctx, b.cfg.Namespace, name)
+			cancel()
+			if err == nil || isK8sNotFound(err) {
+				b.reapMu.Lock()
+				delete(b.reapPending, name)
+				b.reapMu.Unlock()
+				log.Printf("sandbox: reclaimed sandbox pod %s on retry (its delete had failed while the apiserver was unreachable)", sanitizeClusterText(name))
+				continue
+			}
+			b.reapMu.Lock()
+			b.reapPending[name]++
+			giveUp := b.reapPending[name] >= podReapMaxAttempts
+			if giveUp {
+				delete(b.reapPending, name)
+			}
+			b.reapMu.Unlock()
+			if giveUp {
+				log.Printf("sandbox: gave up deleting sandbox pod %s after %d attempts — it holds its resource reservation until the boot-time orphan sweep on the next control-plane start: %v",
+					sanitizeClusterText(name), podReapMaxAttempts, err)
+			}
+		}
+
+		b.reapMu.Lock()
+		if len(b.reapPending) == 0 {
+			b.reapRunning = false
+			b.reapMu.Unlock()
+			return
+		}
+		b.reapMu.Unlock()
+	}
 }
 
 func (k *k8sImpl) runBash(ctx context.Context, req BashRequest) (BashResult, error) {
@@ -1145,7 +1254,8 @@ func (k *k8sImpl) close() {
 		delCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := k.backend.client.deletePod(delCtx, k.backend.cfg.Namespace, podName); err != nil && !isK8sNotFound(err) {
-			log.Printf("sandbox: close-time pod delete unconfirmed (%s): %v — the pod may linger until the boot-time orphan prune", podName, err)
+			log.Printf("sandbox: close-time pod delete unconfirmed (%s): %v — retrying in the background", podName, err)
+			k.backend.scheduleReap(podName)
 		}
 	}
 }
