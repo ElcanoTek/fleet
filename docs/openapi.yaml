@@ -731,6 +731,67 @@ paths:
                       names none (FLEET_DEFAULT_TIMEZONE). Distinct from
                       timezone — this is the zone a cron recurrence fires in.
 
+  /.well-known/agent-card.json:
+    get:
+      summary: A2A Agent Card — the protocol's discovery document (#1279).
+      description: >-
+        Public by construction (it names capabilities and the JSON-RPC endpoint
+        URL, nothing else; no secrets, no per-deployment identity beyond the
+        operator's branding bundle). Spec-fixed well-known path, unversioned
+        forever (never Deprecation-tagged on the bare path). Served with an
+        ETag + Cache-Control per A2A spec §8.6. Answers 501 until the operator
+        sets FLEET_A2A_ENABLED. See docs/A2A.md; spec pin
+        internal/a2a.SpecVersion.
+      security: []
+      responses:
+        "200":
+          description: The Agent Card.
+          content:
+            application/json:
+              schema: { type: object }
+        "304":
+          description: Not modified (If-None-Match hit the card's ETag).
+        "501":
+          description: The A2A server is not enabled on this deployment.
+
+  /a2a:
+    post:
+      summary: A2A JSON-RPC 2.0 endpoint — every A2A method over one route (#1279).
+      description: >-
+        The A2A protocol's JSON-RPC binding (spec v1.0.1, JSON-RPC + SSE only):
+        SendMessage / SendStreamingMessage / GetTask / ListTasks / CancelTask /
+        SubscribeToTask multiplex over this POST; streaming methods respond
+        with text/event-stream where each data: line is a complete JSON-RPC
+        envelope. Authentication is per JSON-RPC method inside the dispatcher
+        and accepts ONLY the credential the Agent Card declares — X-API-Key
+        (typed fleet keys or the admin key); JSON-RPC-layer errors ride HTTP
+        200 with the envelope's error member (A2A codes -32001..-32009, each
+        carrying a google.rpc.ErrorInfo detail). SendMessage runs the same
+        governed create pipeline as POST /tasks; reads are creator-scoped
+        (ADR-0043), and an invisible task answers TaskNotFound rather than 403
+        (A2A §3.3.2). Requires the A2A-Version: "1.0" header. Answers 501
+        until FLEET_A2A_ENABLED is set. See docs/A2A.md.
+      security: [{ scopedApiKey: [] }, { adminApiKey: [] }]
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        "200":
+          description: >-
+            A JSON-RPC 2.0 response envelope (result or error) — or, for the
+            streaming methods, a text/event-stream of envelopes that closes
+            when the task reaches a terminal state.
+          content:
+            application/json:
+              schema: { type: object }
+            text/event-stream:
+              schema: { type: string }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "501":
+          description: The A2A server is not enabled on this deployment.
+
   /tasks:
     get:
       summary: >-

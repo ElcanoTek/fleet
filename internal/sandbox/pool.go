@@ -278,6 +278,10 @@ type ResourceOverride struct {
 	PidsLimit   int    // e.g. 512;     0  = pool default
 }
 
+// k8sPidsOverrideWarnOnce limits the "pids override ignored" notice to one
+// line per process, the same shape as seccompUnconfinedWarnOnce.
+var k8sPidsOverrideWarnOnce sync.Once
+
 // applyTo returns cfg with this override's set (non-empty/non-zero) fields layered
 // over the pool defaults (#205). The resulting MemoryLimit/CPULimit/PidsLimit are
 // what containerImpl.start() emits verbatim as --memory / --memory-swap / --cpus /
@@ -338,6 +342,18 @@ func (p *Pool) TakeContainerWithOverrides(ctx context.Context, ov ResourceOverri
 	// Per-task overrides (#205) tighten/raise the cgroup caps within the operator
 	// ceiling already validated at task creation. An empty/zero field leaves the
 	// pool default (applyContainerDefaults fills it in NewContainer).
+	//
+	// Two of the three reach a Pod spec; the pids ceiling does not, because
+	// Kubernetes has no per-pod equivalent. Say so rather than dropping it
+	// silently: a task pinned with `set-limits --pids` gets its memory and CPU
+	// honoured here and its process ceiling ignored, and an operator who is not
+	// told will read the accepted setting as enforced. Once per process — this
+	// runs on every override take.
+	if p.cfg.Mode == ModeKubernetes && ov.PidsLimit > 0 {
+		k8sPidsOverrideWarnOnce.Do(func() {
+			log.Printf("sandbox: per-task pids limit (%d) ignored under the kubernetes backend — a Pod spec has no per-pod pids limit; memory and CPU overrides still apply. Bound process counts with the kubelet's podPidsLimit on the sandbox nodes (docs/DEPLOYMENT-KUBERNETES.md)", ov.PidsLimit)
+		})
+	}
 	cfg = ov.applyTo(cfg)
 	// See newSandbox below for why we resolve the start timeout here
 	// rather than reading it raw from cfg.

@@ -323,6 +323,13 @@ type TaskFilter struct {
 	// narrow further, never widen.
 	VisibleToUserID *uuid.UUID
 	VisibleToKeyID  *string
+	// StatusIn, when non-empty, restricts to tasks in ANY of these statuses.
+	// Added for the A2A ListTasks status filter (#1279), where one A2A
+	// TaskState fans out to several fleet statuses (SUBMITTED covers
+	// pending/scheduled/leased) — the single-status Status field cannot
+	// express that without breaking pagination totals. ANDs with Status when
+	// both are set, like every other filter.
+	StatusIn []string
 }
 
 // GetTasksFiltered gets tasks with optional filters and pagination.
@@ -335,6 +342,16 @@ func (db *Database) GetTasksFiltered(ctx context.Context, filter TaskFilter, lim
 		whereClauses = append(whereClauses, fmt.Sprintf("status = $%d", argIndex))
 		args = append(args, *filter.Status)
 		argIndex++
+	}
+
+	if len(filter.StatusIn) > 0 {
+		placeholders := make([]string, len(filter.StatusIn))
+		for i, s := range filter.StatusIn {
+			placeholders[i] = fmt.Sprintf("$%d", argIndex)
+			args = append(args, s)
+			argIndex++
+		}
+		whereClauses = append(whereClauses, "status IN ("+strings.Join(placeholders, ", ")+")")
 	}
 
 	if filter.Query != nil && *filter.Query != "" {

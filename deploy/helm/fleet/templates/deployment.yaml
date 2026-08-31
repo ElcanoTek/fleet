@@ -79,11 +79,14 @@ spec:
             # anchoring the CWD; a pod spec says it directly.
             - name: EMAIL_ATTACHMENT_DIR
               value: "{{ .Values.dataDir }}/attachments"
-            # Cluster identity for the sandbox-pod orphan sweep. The UID names
-            # this incarnation and the release name marks the owner, so a
+            # Cluster identity for the sandbox-pod orphan sweep. The UID
+            # anchors this pod and the release name marks the owner, so a
             # restarted control plane can tell its predecessor's leaked pods
-            # from a co-tenant release's live ones. Without these fleet falls
-            # back to a pid heuristic that is meaningless across containers.
+            # from a co-tenant release's live ones. fleet pairs the UID with a
+            # per-process boot nonce, because kubelet restarts a crashed
+            # container in place and the UID alone would not change. Without
+            # these fleet falls back to a pid heuristic that is meaningless
+            # across containers.
             - name: FLEET_POD_UID
               valueFrom:
                 fieldRef:
@@ -105,6 +108,12 @@ spec:
               value: {{ .Values.workspace.claimName | quote }}
             - name: FLEET_SANDBOX_K8S_NETWORK_POLICY
               value: {{ .Values.networkPolicies.denyAll.name | quote }}
+            - name: FLEET_SANDBOX_K8S_OPEN_EGRESS_POLICY
+              value: {{ .Values.networkPolicies.openEgress.name | quote }}
+            {{- if .Values.networkPolicies.openEgress.acknowledgeUnrestricted }}
+            - name: FLEET_SANDBOX_K8S_OPEN_EGRESS_ACKNOWLEDGED
+              value: "true"
+            {{- end }}
             {{- $podSA := .Values.sandbox.kubernetes.podServiceAccount }}
             {{- if and $podSA.name (or $podSA.create $podSA.external) }}
             # Only stamped when the SA will actually exist. create=false without
@@ -132,7 +141,14 @@ spec:
             {{- end }}
             {{- with .Values.sandbox.kubernetes.nodeSelector }}
             - name: FLEET_SANDBOX_K8S_NODE_SELECTOR
-              value: {{ $pairs := list }}{{- range $k, $v := . }}{{- $pairs = append $pairs (printf "%s=%s" $k $v) }}{{- end }}{{ join "," $pairs | quote }}
+              {{- /* %v, not %s: a label value written unquoted in YAML arrives
+                     here as a bool or a number (fleet-runner: true), and %s
+                     renders those as Go's error text — literally
+                     "fleet-runner=%!s(bool=true)", which the apiserver then
+                     rejects on every single sandbox pod. %v prints what the
+                     operator meant, and Kubernetes label values are strings
+                     anyway. */}}
+              value: {{ $pairs := list }}{{- range $k, $v := . }}{{- $pairs = append $pairs (printf "%s=%v" $k $v) }}{{- end }}{{ join "," $pairs | quote }}
             {{- end }}
             {{- with .Values.sandbox.kubernetes.tolerations }}
             - name: FLEET_SANDBOX_K8S_TOLERATIONS

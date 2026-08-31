@@ -50,6 +50,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ElcanoTek/fleet/internal/safe"
 )
@@ -131,7 +132,39 @@ type KubernetesConfig struct {
 	// labeled fleet.elcanotek.com/egress=none. Defaults to
 	// "fleet-sandbox-deny-all". The preflight verifies the OBJECT exists;
 	// enforcement is the CNI's job and the docs say so plainly.
+	//
+	// Required in EVERY mode, because a sealed turn can happen in any of them:
+	// a scheduled run with AllowNetwork off gets a sealed sandbox even on a
+	// deployment whose default posture is open.
 	NetworkPolicyName string
+
+	// OpenEgressPolicyName is its counterpart for Pods labeled
+	// fleet.elcanotek.com/egress=open, defaulting to
+	// "fleet-sandbox-open-egress". The preflight requires this object too
+	// whenever DefaultNetworkMode is open, because an open Pod that NO policy
+	// selects is a full citizen of the pod network: it can reach the fleet
+	// Service, the in-cluster database, the apiserver, and the node's metadata
+	// endpoint, all from model-authored code. Podman's open mode is bounded by
+	// construction (rootless pasta/slirp4netns is outbound-only and cannot
+	// reach the fleet process); here nothing is bounded unless a policy says
+	// so, which is why the docs called this policy required long before the
+	// preflight enforced it.
+	OpenEgressPolicyName string
+
+	// DefaultNetworkMode is the fleet-wide egress posture sandboxes are
+	// created with (NetworkModeOpen — including its historical "" spelling —
+	// or NetworkModeLockdown; allowlisted is refused before a backend is
+	// built). The preflight reads it to decide whether the open-egress policy
+	// is required.
+	DefaultNetworkMode string
+
+	// UnrestrictedEgressAcknowledged lets an operator boot in open mode with
+	// no open-egress policy of fleet's, for the one case fleet genuinely
+	// cannot verify: egress shaped by tooling it cannot see — a Cilium
+	// CiliumNetworkPolicy, a Calico GlobalNetworkPolicy, a service mesh, a
+	// cluster-wide default-deny. It is an explicit statement, never a default,
+	// and it is logged every boot rather than silently honoured.
+	UnrestrictedEgressAcknowledged bool
 
 	// NodeSelector pins sandbox pods to labeled nodes — the standard way to
 	// give runners a DEDICATED node pool, which is the issue's scaling story
@@ -223,7 +256,15 @@ func ParseK8sBundleDocsInImage(s string) (bool, error) {
 const (
 	defaultK8sNamespace     = "fleet-sandboxes"
 	defaultK8sNetworkPolicy = "fleet-sandbox-deny-all"
-	defaultK8sStartTimeout  = 2 * time.Minute
+	// defaultK8sOpenEgressPolicy names the chart's companion policy for
+	// egress=open pods. Symmetric with the deny-all name on purpose: an
+	// operator who reads one knob should be able to guess the other.
+	defaultK8sOpenEgressPolicy = "fleet-sandbox-open-egress"
+	// k8sUnrestrictedEgressAckEnv is named in the refusal and in the warning
+	// the acknowledgement produces, so both messages carry the exact string an
+	// operator has to set (or unset) rather than a description of it.
+	k8sUnrestrictedEgressAckEnv = "FLEET_SANDBOX_K8S_OPEN_EGRESS_ACKNOWLEDGED"
+	defaultK8sStartTimeout      = 2 * time.Minute
 )
 
 // sandboxContainerName is the single container in every sandbox Pod.
@@ -257,7 +298,9 @@ const (
 // k8sControlPlaneUID and k8sControlPlaneOwner are the control plane's own
 // cluster identity, supplied by the chart through the downward API:
 //
-//	FLEET_POD_UID   ← metadata.uid                              (this incarnation)
+//	FLEET_POD_UID   ← metadata.uid                              (this POD, not
+//	                                                             this incarnation:
+//	                                                             see k8sBootNonce)
 //	FLEET_OWNER_ID  ← metadata.labels['app.kubernetes.io/instance'] (this release)
 //
 // Both are empty when fleet talks to a cluster from outside it (a kubeconfig
@@ -267,25 +310,59 @@ var (
 	k8sControlPlaneOwner = sanitizeK8sLabelValue(os.Getenv("FLEET_OWNER_ID"))
 )
 
+// k8sBootNonce is unique to this PROCESS, and that is the point: the pod UID
+// is not. Kubelet restarts a crashed container IN PLACE — same pod, same UID,
+// same downward-API value — so an incarnation identified by UID alone cannot
+// tell its own sandbox pods from the ones the process it replaced left behind,
+// and the sweep below skips exactly the pods it exists to reclaim. The nonce
+// changes on every start, container restart included.
+//
+// crypto/rand failing is not a reason to refuse to boot. The fallback only has
+// to differ from the previous process in this pod, and a start timestamp does.
+var k8sBootNonce = func() string {
+	var b [4]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return strconv.FormatInt(time.Now().UnixNano()&0xffffffff, 16)
+	}
+	return hex.EncodeToString(b[:])
+}()
+
 // k8sInstanceLabel identifies the control-plane incarnation that owns a
 // sandbox pod.
 //
-// It prefers the pod UID, because the pid-based form this used to carry is
-// meaningless across containers: the label's pid was allocated in a pid
-// namespace that no longer exists, and the fleet process is pid 1 in its own
-// container — so after a restart the orphan sweep was effectively asking
-// whether IT was running, concluding "yes", and skipping every pod a crashed
-// incarnation left behind. A pod UID is unique per incarnation and is what the
-// cluster itself uses to tell one pod from another.
+// In cluster that is the pod UID plus this process's boot nonce. The UID is
+// diagnostic — it maps a sandbox back to the control-plane pod that made it —
+// and the nonce is what makes the value name an INCARNATION rather than a pod.
+// A SIGKILL, an OOM kill, a panic, or a failed liveness probe (the chart ships
+// one) each restart the container inside the same pod, and each is a new
+// process that must treat its predecessor's pods as orphans.
 //
-// The pid form stays as the out-of-cluster fallback, where it is still true.
-var k8sInstanceLabel = func() string {
-	if k8sControlPlaneUID != "" {
-		return "u" + k8sControlPlaneUID
+// The pid-based form this used to carry is meaningless across containers: the
+// pid came from a namespace that no longer exists and fleet is pid 1 in its
+// own container, so a restarted control plane asked whether IT was running and
+// concluded "yes". Out of cluster there is no pod identity at all, so that
+// form stays as the fallback — there it is still true.
+var k8sInstanceLabel = k8sInstanceLabelFor(k8sControlPlaneUID, k8sBootNonce)
+
+// k8sInstanceLabelFor builds the instance label. It is kept separate from the
+// package var so a test can construct ANOTHER incarnation's label — including
+// the one that matters: a different nonce under the same pod UID. An empty uid
+// means out of cluster, where the pid form is unchanged.
+func k8sInstanceLabelFor(uid, nonce string) string {
+	if uid == "" {
+		pid, start, _ := instanceLabelOwner(thisInstanceLabel)
+		return fmt.Sprintf("p%d-t%d", pid, start)
 	}
-	pid, start, _ := instanceLabelOwner(thisInstanceLabel)
-	return fmt.Sprintf("p%d-t%d", pid, start)
-}()
+	// Keep the whole value inside the 63-char label limit, trimming the UID
+	// rather than the nonce: a shortened UID is still a usable hint, while a
+	// shortened nonce could collide with the very incarnation it has to differ
+	// from. The value ends in the nonce, so it still ends alphanumeric as a
+	// label value must.
+	if limit := 63 - len(nonce) - 2; len(uid) > limit {
+		uid = uid[:limit]
+	}
+	return "u" + uid + "-" + nonce
+}
 
 // sanitizeK8sLabelValue reduces a value to something legal as a label value
 // (alphanumeric, '-', '_', '.', at most 63 chars, must start and end
@@ -340,6 +417,18 @@ func parseK8sInstanceLabel(label string) (pid int, startedAt int64, ok bool) {
 type KubernetesBackend struct {
 	cfg    KubernetesConfig
 	client *k8sClient
+
+	// reapMu guards the retry set for pod deletes that failed. A delete can
+	// fail for reasons that have nothing to do with the pod — an apiserver
+	// restart, a network blip, throttling — and the pod then keeps its
+	// Guaranteed reservation until something reclaims it. Nothing else will:
+	// the boot sweep deliberately skips pods carrying THIS incarnation's
+	// label, so it cannot reclaim fleet's own leftovers, and a Pod owned by a
+	// Pod gets no help from the garbage collector while its owner is alive.
+	// Only the process that created the pod knows it is finished with it.
+	reapMu      sync.Mutex
+	reapPending map[string]int // pod name → attempts so far
+	reapRunning bool           // a drain goroutine is live
 }
 
 // NewKubernetesBackend resolves credentials (in-cluster unless a kubeconfig
@@ -375,6 +464,9 @@ func NewKubernetesBackend(cfg KubernetesConfig) (*KubernetesBackend, error) {
 	}
 	if cfg.NetworkPolicyName == "" {
 		cfg.NetworkPolicyName = defaultK8sNetworkPolicy
+	}
+	if cfg.OpenEgressPolicyName == "" {
+		cfg.OpenEgressPolicyName = defaultK8sOpenEgressPolicy
 	}
 	if cfg.StartTimeout <= 0 {
 		cfg.StartTimeout = defaultK8sStartTimeout
@@ -681,7 +773,7 @@ func (k *k8sImpl) start(ctx context.Context) error {
 func (k *k8sImpl) waitForRunning(ctx context.Context, name string) error {
 	ticker := time.NewTicker(k8sPodPollInterval)
 	defer ticker.Stop()
-	var lastState string
+	var lastState, lastSchedule string
 	for {
 		pod, err := k.backend.client.getPod(ctx, k.backend.cfg.Namespace, name)
 		if err == nil {
@@ -707,16 +799,75 @@ func (k *k8sImpl) waitForRunning(ctx context.Context, name string) error {
 					}
 				}
 			}
+			// A pod that cannot be SCHEDULED has no container status at all —
+			// nothing has been assigned to a kubelet yet — so the loop above
+			// sees nothing and the timeout below would say only "not ready".
+			// The scheduler has already written why, and on this backend it is
+			// the likeliest way a start fails: a nodeSelector or toleration
+			// that matches no node, a node-pinned PersistentVolume the sandbox
+			// cannot reach, or a cluster with no room left.
+			//
+			// Recorded, not fatal. Unlike a pull failure this often self-heals
+			// inside the start window — a warm pod retires and frees its
+			// Guaranteed reservation, a drained node comes back, the autoscaler
+			// lands a node — so it stays worth waiting out the budget.
+			if sched := podSchedulingBlocker(pod); sched != "" {
+				lastSchedule = sched
+			}
 		}
 		select {
 		case <-ctx.Done():
-			if lastState != "" {
+			switch {
+			case lastSchedule != "":
+				// The scheduler's answer first: a pod that never got a node
+				// explains the whole failure, and a container state (if any)
+				// would be stale detail beside it.
+				return fmt.Errorf("sandbox pod %s was never scheduled before the start timeout (%s): %w", name, lastSchedule, ctx.Err())
+			case lastState != "":
 				return fmt.Errorf("sandbox pod %s not ready before start timeout (last container state: %s): %w", name, lastState, ctx.Err())
 			}
 			return fmt.Errorf("sandbox pod %s not ready before start timeout: %w", name, ctx.Err())
 		case <-ticker.C:
 		}
 	}
+}
+
+// podSchedulingBlocker renders the scheduler's own explanation for a pod that
+// has not been placed, or "" when scheduling is not what is holding it up.
+//
+// Kubernetes reports this as a PodScheduled condition with status False, whose
+// message is the familiar "0/N nodes are available: …" breakdown. That text is
+// the single most useful line an operator can be handed here, so it is passed
+// through nearly whole — sanitized like all cluster-derived text, and capped
+// so a large cluster's per-node enumeration cannot turn one error into a wall.
+func podSchedulingBlocker(pod *k8sPod) string {
+	for _, c := range pod.Status.Conditions {
+		if c.Type != "PodScheduled" || c.Status != "False" {
+			continue
+		}
+		reason := sanitizeClusterText(c.Reason)
+		msg := sanitizeClusterText(c.Message)
+		const maxLen = 512
+		if len(msg) > maxLen {
+			cut := maxLen
+			// Back up to a rune boundary so the cap cannot split a UTF-8
+			// sequence and emit an invalid byte into the error text.
+			for cut > 0 && !utf8.RuneStart(msg[cut]) {
+				cut--
+			}
+			msg = msg[:cut] + "…"
+		}
+		switch {
+		case reason != "" && msg != "":
+			return reason + ": " + msg
+		case reason != "":
+			return reason
+		case msg != "":
+			return msg
+		}
+		return "PodScheduled=False"
+	}
+	return ""
 }
 
 // uploadFile writes data to path inside the pod via a one-shot exec. The v4
@@ -771,10 +922,107 @@ func (k *k8sImpl) deletePodNow(podName string) bool {
 		if isK8sNotFound(err) {
 			return true
 		}
-		log.Printf("sandbox: cancelled-exec pod delete unconfirmed (%s): %v", podName, err)
+		// The cancel path's containment (#796) is destroying the PID
+		// namespace, so a delete that did not land leaves model-authored
+		// stragglers running. The caller reports that honestly to the user
+		// ("could not be confirmed killed"); queue a retry so it also stops
+		// being true as soon as the apiserver answers again.
+		log.Printf("sandbox: cancelled-exec pod delete unconfirmed (%s): %v — retrying in the background", podName, err)
+		k.backend.scheduleReap(podName)
 		return false
 	}
 	return true
+}
+
+// Retry budget for a failed pod delete. The window is sized for a control-plane
+// blip an operator would call routine — a managed apiserver upgrade, an etcd
+// hiccup, a throttled burst — not for a cluster that is down for the day: past
+// that, giving up loudly is better than a goroutine retrying into the void,
+// and a restart's boot sweep reclaims what is left because a restart makes
+// every leftover somebody else's incarnation.
+var (
+	podReapInterval    = 10 * time.Second // overridden in tests
+	podReapMaxInterval = 2 * time.Minute
+	podReapMaxAttempts = 25 // ~30 minutes with the backoff below
+	podReapMaxPending  = 256
+)
+
+// scheduleReap queues a pod whose delete failed, and makes sure a drain
+// goroutine is running. The goroutine exits when the queue empties, so an
+// installation that never fails a delete never carries one.
+func (b *KubernetesBackend) scheduleReap(podName string) {
+	if podName == "" {
+		return
+	}
+	b.reapMu.Lock()
+	defer b.reapMu.Unlock()
+	if b.reapPending == nil {
+		b.reapPending = make(map[string]int)
+	}
+	if _, known := b.reapPending[podName]; !known && len(b.reapPending) >= podReapMaxPending {
+		// Refusing to grow without bound is the point of a bound; say so
+		// rather than dropping the pod silently.
+		log.Printf("sandbox: pod-delete retry queue is full (%d) — %s will be reclaimed by the boot-time orphan sweep instead", podReapMaxPending, sanitizeClusterText(podName))
+		return
+	}
+	b.reapPending[podName] = 0
+	if !b.reapRunning {
+		b.reapRunning = true
+		go b.reapLoop()
+	}
+}
+
+// reapLoop retries queued deletes until they succeed, the budget runs out, or
+// the process exits. Backoff is global rather than per-pod on purpose: these
+// failures share one cause (the apiserver is unreachable), so pacing the whole
+// queue together is what avoids hammering a cluster that is already unwell.
+func (b *KubernetesBackend) reapLoop() {
+	wait := podReapInterval
+	for {
+		time.Sleep(wait)
+		if wait *= 2; wait > podReapMaxInterval {
+			wait = podReapMaxInterval
+		}
+
+		b.reapMu.Lock()
+		names := make([]string, 0, len(b.reapPending))
+		for name := range b.reapPending {
+			names = append(names, name)
+		}
+		b.reapMu.Unlock()
+
+		for _, name := range names {
+			ctx, cancel := context.WithTimeout(context.Background(), execReapTimeout)
+			err := b.client.deletePod(ctx, b.cfg.Namespace, name)
+			cancel()
+			if err == nil || isK8sNotFound(err) {
+				b.reapMu.Lock()
+				delete(b.reapPending, name)
+				b.reapMu.Unlock()
+				log.Printf("sandbox: reclaimed sandbox pod %s on retry (its delete had failed while the apiserver was unreachable)", sanitizeClusterText(name))
+				continue
+			}
+			b.reapMu.Lock()
+			b.reapPending[name]++
+			giveUp := b.reapPending[name] >= podReapMaxAttempts
+			if giveUp {
+				delete(b.reapPending, name)
+			}
+			b.reapMu.Unlock()
+			if giveUp {
+				log.Printf("sandbox: gave up deleting sandbox pod %s after %d attempts — it holds its resource reservation until the boot-time orphan sweep on the next control-plane start: %v",
+					sanitizeClusterText(name), podReapMaxAttempts, err)
+			}
+		}
+
+		b.reapMu.Lock()
+		if len(b.reapPending) == 0 {
+			b.reapRunning = false
+			b.reapMu.Unlock()
+			return
+		}
+		b.reapMu.Unlock()
+	}
 }
 
 func (k *k8sImpl) runBash(ctx context.Context, req BashRequest) (BashResult, error) {
@@ -827,7 +1075,9 @@ func (k *k8sImpl) runBash(ctx context.Context, req BashRequest) (BashResult, err
 		return res, nil
 	}
 	if execErr != nil {
-		return res, fmt.Errorf("pod exec bash: %w", execErr)
+		// Same reasoning as the bridge EOF above: an exec against an evicted
+		// or OOM-killed pod fails with a transport error that names no cause.
+		return res, fmt.Errorf("pod exec bash: %w%s", execErr, k.podFailureSuffix())
 	}
 	return res, nil
 }
@@ -1006,10 +1256,13 @@ func (k *k8sImpl) runPython(ctx context.Context, req PythonRequest) (PythonResul
 		return PythonResult{}, fmt.Errorf("python execution timed out after %v; sandbox retired: %w", timeout, ErrPoisoned)
 	case r := <-ch:
 		if r.err != nil {
-			// Session dead (pod-side bridge exited, connection dropped). The pod
-			// itself is intact — reset the bridge so the next call boots fresh.
+			// Session dead: the pod-side bridge exited, or the connection
+			// dropped — or the pod itself is gone, which reads identically
+			// from here. Reset the bridge so a surviving pod boots a fresh
+			// session on the next call, and ask the cluster which of those it
+			// was, because "EOF" alone sends the reader guessing.
 			k.terminateBridgeLocked()
-			return PythonResult{}, fmt.Errorf("bridge closed unexpectedly: %w%s", r.err, k.bridgeStderrSuffix())
+			return PythonResult{}, fmt.Errorf("bridge closed unexpectedly: %w%s%s", r.err, k.podFailureSuffix(), k.bridgeStderrSuffix())
 		}
 		if r.discarded > 0 {
 			return PythonResult{}, fmt.Errorf("bridge response exceeded %d bytes (%d bytes discarded) and was dropped — return large results by writing them to a workspace file instead", bridgeResponseCaptureCap, r.discarded)
@@ -1123,6 +1376,81 @@ func (k *k8sImpl) bridgeStderrSuffix() string {
 	return " (bridge stderr: " + stderr + ")"
 }
 
+// podFailureSuffix asks the apiserver why the sandbox pod stopped serving, and
+// renders the answer as a clause to append to whatever error the caller is
+// already returning.
+//
+// It exists because the two failures that end a turn most confusingly are
+// invisible from inside the pod. A kubelet eviction (ephemeral-storage or an
+// emptyDir sizeLimit) and an OOM kill both reach the caller as a dead exec
+// stream — `bridge closed unexpectedly: EOF`, or an exec error naming nothing
+// — while the reason sits in the pod's own status, one GET away on a client
+// this sandbox already holds. Left unsaid, a model asked to explain the
+// failure will invent a cause; observed during the #1264 validation, where an
+// emptyDir eviction was confidently reported to the user as an OOM kill.
+//
+// Diagnosis must never make things worse, so this is best-effort in every
+// direction: it runs only on an error path, on its own short-lived context
+// (the turn's is usually already cancelled), and returns "" on any doubt
+// rather than risk masking the real error with a lookup failure.
+func (k *k8sImpl) podFailureSuffix() string {
+	podName := k.currentPodName()
+	if podName == "" {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), execReapTimeout)
+	defer cancel()
+	pod, err := k.backend.client.getPod(ctx, k.backend.cfg.Namespace, podName)
+	if err != nil {
+		if isK8sNotFound(err) {
+			return " (the sandbox pod is gone — the cluster deleted or evicted it mid-call)"
+		}
+		// Saying nothing here masks nothing, but it does something worse: the
+		// condition most likely to kill a sandbox IS cluster trouble, so the
+		// explanation would go missing exactly when it is most needed, and a
+		// model handed a bare EOF fills the silence with a guess — the failure
+		// this function exists to prevent. Seen on the validation cluster: a
+		// turn died during an apiserver wobble and was explained to the user as
+		// "likely container resource/disk limits or an internal sandbox timeout
+		// ceiling", neither of which had happened.
+		//
+		// Naming the unanswered question is still appended to the original
+		// error, never a replacement for it.
+		return " (the cluster could not be asked why — the apiserver did not answer)"
+	}
+	// Eviction is a POD-level verdict: kubelet sets phase=Failed with
+	// reason=Evicted and a message naming the limit that was exceeded.
+	if pod.Status.Phase == "Failed" {
+		reason := sanitizeClusterText(pod.Status.Reason)
+		msg := sanitizeClusterText(pod.Status.Message)
+		switch {
+		case reason != "" && msg != "":
+			return " (the sandbox pod failed: " + reason + " — " + msg + ")"
+		case reason != "":
+			return " (the sandbox pod failed: " + reason + ")"
+		case msg != "":
+			return " (the sandbox pod failed: " + msg + ")"
+		default:
+			return " (the sandbox pod entered the Failed phase)"
+		}
+	}
+	// An OOM kill is a CONTAINER-level verdict and leaves the pod Running, so
+	// it has to be read separately — and it is the one most worth naming,
+	// since it is the cause a reader guesses for every vanished sandbox.
+	for _, cs := range pod.Status.ContainerStatuses {
+		t := cs.State.Terminated
+		if t == nil {
+			continue
+		}
+		reason := sanitizeClusterText(t.Reason)
+		if reason == "" {
+			reason = "terminated"
+		}
+		return fmt.Sprintf(" (the sandbox container %s, exit code %d)", reason, t.ExitCode)
+	}
+	return ""
+}
+
 // resourceUsage reports no telemetry: the k8s backend has no `podman stats`
 // counterpart wired up (kubelet metrics need a different collection path).
 // Recorded as an honest deviation in docs/DEPLOYMENT-KUBERNETES.md.
@@ -1145,7 +1473,8 @@ func (k *k8sImpl) close() {
 		delCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := k.backend.client.deletePod(delCtx, k.backend.cfg.Namespace, podName); err != nil && !isK8sNotFound(err) {
-			log.Printf("sandbox: close-time pod delete unconfirmed (%s): %v — the pod may linger until the boot-time orphan prune", podName, err)
+			log.Printf("sandbox: close-time pod delete unconfirmed (%s): %v — retrying in the background", podName, err)
+			k.backend.scheduleReap(podName)
 		}
 	}
 }
@@ -1168,11 +1497,13 @@ func (k *k8sImpl) close() {
 // The other edge cut the opposite way: a second fleet release sharing the
 // namespace could look like a dead owner and have its live sandboxes deleted.
 //
-// In-cluster the test is now identity, not liveness: the pod UID names the
-// incarnation and the release name marks the owner, both from the downward
-// API. A pod belonging to my release but not to my incarnation is by
-// definition my predecessor's, because the chart runs a single-replica
-// Recreate Deployment. A pod belonging to another release is never touched.
+// In-cluster the test is now identity, not liveness: the pod UID plus this
+// process's boot nonce names the incarnation (see k8sInstanceLabel — the UID
+// alone would survive an in-place container restart and re-open this same
+// hole) and the release name marks the owner. A pod belonging to my release
+// but not to my incarnation is by definition my predecessor's, because the
+// chart runs a single-replica Recreate Deployment. A pod belonging to another
+// release is never touched.
 // Out of cluster there is no such identity, so the pid heuristic stays — it is
 // still true there.
 func (b *KubernetesBackend) PruneOrphanedPods(ctx context.Context) (int, error) {

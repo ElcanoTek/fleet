@@ -19,6 +19,32 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **An A2A (Agent2Agent) protocol server (#1279).** External agents can now
+  discover fleet via an Agent Card (`/.well-known/agent-card.json`), delegate
+  work, stream progress, and collect results over the A2A v1.0.1 JSON-RPC +
+  SSE binding (`POST /v1/a2a`: `SendMessage`, `SendStreamingMessage`,
+  `GetTask`, `ListTasks`, `CancelTask`, `SubscribeToTask`). Every delegated
+  message runs as an ordinary governed task through the same create pipeline
+  as `POST /tasks` — operator-pinned persona/model (`FLEET_A2A_PERSONA`,
+  `FLEET_A2A_MODEL`), creator-scoped reads (an invisible task answers
+  TaskNotFound, never 403), budget/priority/rate gates intact. Off by default
+  (`FLEET_A2A_ENABLED`); routes answer 501 until enabled. Authentication is
+  the existing typed API keys — no new credential type. Streaming polls the
+  task row (source of truth), opens with the Task snapshot, and closes at the
+  terminal state per spec. Push notifications, the extended agent card, and
+  the gRPC/HTTP+JSON bindings are deferred and declared off. See
+  [docs/A2A.md](docs/A2A.md) and ADR-0051.
+
+  Hardened in pre-merge review: unary `SendMessage` now honors the spec's
+  default wait contract (`returnImmediately` absent/false blocks — bounded at
+  30 minutes — until the task is terminal or interrupted, instead of always
+  answering with the just-created SUBMITTED row); a non-refusal create
+  failure (an infrastructure error out of the budget gate) is masked as a
+  generic internal error instead of putting raw Postgres text on the wire; a
+  non-empty `tenant` is refused on every method that carries it, not just
+  two; and A2A SSE streams are bounded (64 concurrent per process, 30-minute
+  lifetime, both leaning on the lossless `SubscribeToTask` reconnect).
+
 - **Prime Agent borrowings (#990).** A comparison of fleet against
   Prime Intellect's `prime-agent` harness, with the four ideas that cleared
   the high-value bar ported behind fleet's existing governance
@@ -142,6 +168,25 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Kubernetes: a control plane that crashed and restarted IN PLACE still
+  leaked every sandbox pod it had running (#1264).** The boot-time orphan
+  sweep names an incarnation by `FLEET_POD_UID` — the downward-API pod UID —
+  and kubelet restarts a crashed container inside the SAME pod, so the UID it
+  reads after a SIGKILL, an OOM kill, a panic, or a failed liveness probe (the
+  chart ships one) is the value its predecessor stamped on the pods it left
+  running. The sweep read its own label back, concluded the pods were its own,
+  and skipped them; there are no ownerReferences and no periodic sweep, so
+  they stayed. Those pods are Guaranteed QoS, and on the validation cluster
+  three stranded pods held 6 CPU of reservation that nothing would reclaim —
+  enough that the warm pool's own refill could not schedule
+  (`Insufficient cpu`), and every further restart stranded another set. The
+  instance label now carries a **per-process boot nonce** alongside the UID,
+  so it changes on a container restart as well as on pod replacement. The
+  release-owner label still gates ownership, so a co-tenant release's live
+  sandboxes remain untouchable; out of cluster the pid form is unchanged.
+  (Pod *replacement* — a rolling update or a deleted pod — was already swept
+  correctly, which is why this survived the #1257 fix.)
+
 - **A lost lease is now identifiable on all three lease-guarded task writers,
   not one of three.** `UpdateTaskStatusAtomicWithContext` returned the
   `storage.ErrTaskLeaseNotHeld` sentinel, but `RequeueTaskForRetryWithContext`
@@ -160,6 +205,25 @@ prior versions are listed because none have shipped.
   CLI, chat or web surface consumes the lease error at all (it is an internal
   runner↔storage contract). Found while working #1268/#1269 (PR #1310) and
   fixed directly rather than filed.
+
+- **Kubernetes: `FLEET_SANDBOX_PIDS` was accepted and then ignored (#1264).**
+  The backend refuses podman-only knobs precisely so a setting cannot read as
+  containment while imposing none — `FLEET_SANDBOX_RUNTIME`,
+  `FLEET_SANDBOX_SECCOMP_PROFILE` and `FLEET_DEFAULT_NETWORK_MODE=allowlisted`
+  each abort boot with the replacement named. The pids ceiling was missing from
+  that list: it was accepted in silence, `fleet validate-config` reported the
+  backend healthy, and the sandbox ran with `ulimit -u` unlimited, because a
+  Pod spec has no per-pod pids limit (the cap lives on the kubelet, as
+  `podPidsLimit`). Podman applies `--pids-limit` on every container, so one
+  knob meant "bounded" on one backend and "unbounded" on the other. It now
+  fails closed at boot and `validate-config` reports it too, so the problem
+  surfaces before the upgrade rather than after. The per-task
+  `fleet sched task set-limits --pids N` stays accepted — the value is portable
+  and the same task may run on a podman deployment — but now logs one line per
+  process saying it is ignored here, while the memory and CPU limits from that
+  same command continue to apply. **Set `podPidsLimit` on your sandbox nodes
+  and unset `FLEET_SANDBOX_PIDS` before upgrading**; `fleet validate-config`
+  names it.
 
 - **A re-imported task envelope can no longer resurrect a finished task or
   null a live lease (#1267), and API-key provenance is now immutable after
@@ -188,6 +252,23 @@ prior versions are listed because none have shipped.
   export · import"), docs/LEGACY-IMPORT.md, and the narrowed out-of-model
   warning on `models.TaskLifecycle`.
 
+- **Kubernetes: a sandbox the cluster killed reported no cause (#1264).** A
+  kubelet eviction (ephemeral-storage, or an `emptyDir` `sizeLimit`) and an OOM
+  kill both end a turn the same way — the exec stream dies and the caller gets
+  `bridge closed unexpectedly: EOF`, or a bash exec error naming nothing — while
+  the actual verdict sits in the pod's own status, one GET away on a client the
+  sandbox already holds. Unsaid, it gets guessed: during the #1264 validation an
+  `emptyDir` eviction was explained to the user as an OOM kill, confidently and
+  wrongly. Both error paths now append the cluster's own answer — `the sandbox
+  pod failed: Evicted — Usage of EmptyDir volume "tmp" exceeds the limit
+  "128Mi"`, `the sandbox container OOMKilled, exit code 137`, or `the sandbox
+  pod is gone` when it has been deleted outright. The lookup runs only on an
+  error path, on its own short-lived context, and contributes nothing when the
+  apiserver cannot answer it says exactly that — `the cluster could not be asked
+  why — the apiserver did not answer` — because the condition most likely to
+  kill a sandbox is cluster trouble, and a silent diagnostic there just returns
+  the reader to guessing.
+
 - **A round-capped scheduled run keeps the transcript it paid for (#1271).**
   When a scheduled run exhausts the 20 enforcement rounds without its finish
   gates ever clearing, `agentcore.Run` returns the accumulated transcript and
@@ -200,6 +281,20 @@ prior versions are listed because none have shipped.
   the rounds burned and the spend. The run still **fails** exactly as before:
   the same error message, the same `terminal` failure class, the same retry and
   notification behaviour — only transcript visibility changed.
+
+- **Kubernetes: the riskier egress posture was the quieter one (#1264).** Boot
+  printed a full paragraph under `lockdown` — every pod labeled
+  `fleet.elcanotek.com/egress=none` for the deny-all NetworkPolicy — and
+  **nothing at all** under `open`, which is the default mode. So the
+  configuration where model-authored code can reach the fleet Service, the
+  in-cluster database, the apiserver and the node's metadata endpoint was the
+  one that gave the operator no signal, while the sealed one explained itself.
+  `open` now logs a WARNING naming what is reachable and the single chart knob
+  that closes it (`networkPolicies.openEgress.create=true` with
+  `blockedCIDRs`). Neither line claims enforcement: under lockdown that is the
+  CNI's job and fleet verifies only that the policy object exists, and under
+  open the protecting policy may carry any name from any tooling, so fleet
+  states the posture it creates pods with rather than inventing a verdict.
 
 - **An Optional server's variant seats are now opt-in gated at registration,
   not just hidden from the prompt (#1272).** The two layers that decide whether
@@ -218,6 +313,29 @@ prior versions are listed because none have shipped.
   helper (its behaviour was already this rule). The rule is written up in
   docs/AGENT-RUNTIME.md; the roster's byte-stability guard
   (docs/PROMPT-CACHE-CONTRACT.md) is unchanged and still green.
+
+- **Kubernetes: `open` egress mode now requires a policy to boot (#1264).**
+  **Upgrade note: a deployment running `FLEET_DEFAULT_NETWORK_MODE=open`
+  without the open-egress NetworkPolicy will refuse to start.** The docs called
+  that policy *required, not optional*; the chart shipped it off by default and
+  the preflight never asked for it, so the out-of-the-box combination was the
+  unrestricted one. Measured on a stock k3s install, a sandbox in exactly that
+  configuration reached the fleet Service (`GET /healthz` → `ok`), the
+  in-cluster Postgres, the apiserver and the public internet — none of which is
+  possible under podman, where an open sandbox is rootless pasta/slirp4netns:
+  outbound-only, structurally unable to reach the fleet process. The boot
+  preflight now requires the `open` policy the same way it already required the
+  deny-all one, naming all three ways forward: enable it
+  (`networkPolicies.openEgress.create=true`), switch to `lockdown`, or set
+  `FLEET_SANDBOX_K8S_OPEN_EGRESS_ACKNOWLEDGED=true` if the cluster shapes that
+  egress with policy fleet cannot see — which is logged as a WARNING every boot
+  rather than agreed to once. `fleet validate-config` reports it before the
+  upgrade. Two chart changes ride along: the policy's `blockedCIDRs` default now
+  covers the private ranges as well as the metadata range, because that is where
+  the fleet Service, the database and the apiserver live on nearly every cluster;
+  and `networkPolicies.openEgress.name` — a key the values schema already
+  advertised while the template ignored it, deriving the name from the release —
+  is now the name actually used. ADR-0049's sealing decision amended.
 
 - **The runtime-secret literal set is now bounded, and the main process's
   control-plane acquisitions feed it too (#1274).** Both follow-ups deferred
@@ -241,6 +359,20 @@ prior versions are listed because none have shipped.
   with the process-wide scrubber before the request that could echo them, and
   the remote-MCP HTTP error path (which relays wrapped VENDOR failure text)
   runs through that scrubber instead of shape patterns alone.
+- **Kubernetes: a `nodeSelector` value that YAML typed as a bool or a number
+  broke every turn (#1264).** The chart rendered the sandbox node selector with
+  `printf "%s=%s"`, and Go's `%s` on a non-string prints its error form — so
+  `nodeSelector: {fleet-runner: true}`, which YAML 1.1 makes a **bool**, became
+  the literal string `fleet-runner=%!s(bool=true)` (a bare number gave
+  `%!s(int64=12)`). `helm install` accepted it, boot and the cluster preflight
+  passed, and then every single turn failed at pod creation with an apiserver
+  422 quoting the mangled value back. It renders with `%v` now, so a bool or a
+  number becomes the string the operator meant — Kubernetes label values are
+  strings regardless — and both CI lanes assert that no chart value renders as
+  a Go format error, which `kubeconform` structurally cannot catch: the bad
+  text is a valid string in the rendered Deployment, and only the sandbox pod
+  created at runtime is rejected.
+
 - **Task transition guards are now one shared set, and cancelling a
   dead-lettered task no longer erases its replayability (#1268, #1269).** The
   four storage transition writers each hand-listed their own terminal refusal
@@ -271,6 +403,24 @@ prior versions are listed because none have shipped.
   off-table-target probe (every non-reportable status) so the to-side guard is
   pinned the way the from-side already was.
 
+- **Kubernetes: a sandbox that was never scheduled said only "not ready"
+  (#1264).** A pod stuck Pending has no container status to explain itself —
+  nothing has been handed to a kubelet yet — so the start-timeout error carried
+  no reason at all, while the scheduler had already written one onto the pod as
+  `PodScheduled=False` with the familiar `0/N nodes are available: …`
+  breakdown. On this backend that is the likeliest way a start fails, and it
+  lands precisely on the dedicated-runner-pool story the chart sells: a
+  `nodeSelector` or toleration matching no node, or a node-pinned
+  PersistentVolume the sandbox cannot reach (an RWO workspace claim on a
+  multi-node cluster does exactly this). The timeout now reads `sandbox pod X
+  was never scheduled before the start timeout (Unschedulable: 0/3 nodes are
+  available: 1 node(s) didn't match Pod's node affinity/selector, 2 node(s) had
+  untolerated taint(s))`. Recorded rather than fatal, unlike a pull failure:
+  unschedulable often clears inside the start window when a warm pod retires or
+  a node returns, so the budget is still worth waiting out. The message is
+  capped so a large cluster's per-node enumeration cannot turn one error into a
+  wall.
+
 - **Scheduled runs are now told the shared file library exists (#1301).**
   Since #1290/#1296 a scheduled run's workspace has carried the readable
   `shared/` tree, but the announcement block lived only on the chat path —
@@ -282,6 +432,26 @@ prior versions are listed because none have shipped.
   prompt, computed once at run start so the prompt stays byte-stable across
   the run's turns. One-shot `fleet task run` stays out of scope (no DB, no
   library) and docs/SHARED-FILES.md now says all of this plainly.
+
+- **Kubernetes: a sandbox pod whose delete failed was never deleted again
+  (#1264).** A close-time or cancel-time `DELETE` can fail for reasons that
+  have nothing to do with the pod — an apiserver restart, a network blip, a
+  throttled burst — and fleet logged `the pod may linger until the boot-time
+  orphan prune` and moved on. That prune could never collect it: the sweep
+  deliberately skips pods carrying the **running** incarnation's label, which
+  is exactly what these are, and a Pod owned by a live Pod gets no help from
+  the garbage collector either. So the pod kept its Guaranteed CPU and memory
+  reservation for the lifetime of the control-plane process, and enough of them
+  take a node to the point where no sandbox can schedule at all — the same end
+  state as the orphan-sweep bug above, reached by a transient blip instead of a
+  crash. Measured during the #1264 validation: an 83-second apiserver outage
+  stranded two pods, still Running 90 seconds after the cluster had recovered.
+  Failed deletes are now retried in the background with backoff for ~30 minutes
+  and logged when they land; the queue is bounded, and the drain goroutine
+  exits when it empties, so a deployment that never fails a delete never
+  carries one. The cancel path (#796) gets the same treatment, so a sandbox
+  whose containment could not be confirmed stops being uncontained as soon as
+  the apiserver answers again.
 
 - **Superseded CI runs no longer paint a red X: the gate rollups treat
   cancelled needed jobs as neutral (#1302).** Every rapid dev merge cancels
@@ -296,6 +466,18 @@ prior versions are listed because none have shipped.
   gate`. The one accepted caveat is documented in ci.yml: a human manually
   cancelling a PR-head run and then merging over it is deliberate, not a
   case the gate exists to catch.
+
+- **Kubernetes: an exec stream that ended by itself leaked its keepalive
+  forever (#1264).** The session context was released only by `close()` or by
+  the caller's own context dying — never by the stream simply ending. client-go's
+  websocket executor runs a keepalive for as long as that context lives, so a
+  stream killed from the far side (the sandbox pod evicted or deleted mid-exec)
+  and then abandoned left a ping loop writing to a dead socket, leaking a
+  goroutine and a socket apiece. Measured on the validation cluster: one such
+  session logged **3,285 `Websocket Ping failed` lines over fifteen hours** and
+  was still going when it was found — and, worse than the leak itself, the noise
+  buried every other line in the log, which is how the next bug hides. The
+  context is now released whoever ends the stream.
 
 - **`FLEET_SANDBOX_WARM_SIZE` now rejects every explicit negative at the
   validation seam (#1299).** The knob registry row carries `min: 0`, so boot,

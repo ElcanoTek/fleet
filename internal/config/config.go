@@ -410,44 +410,52 @@ var allowedEnvVars = map[string]bool{
 	// here; this one was not, so a value set only in FLEET_ENV_FILE was dropped
 	// and neither the podman profile override nor the kubernetes backend's
 	// fail-closed refusal of it ever saw the operator's value.
-	"FLEET_SANDBOX_SECCOMP_PROFILE":           true,
-	"FLEET_SANDBOX_BACKEND":                   true,
-	"FLEET_SANDBOX_K8S_NAMESPACE":             true,
-	"FLEET_SANDBOX_K8S_WORKSPACE_CLAIM":       true,
-	"FLEET_SANDBOX_K8S_SERVICE_ACCOUNT":       true,
-	"FLEET_SANDBOX_K8S_IMAGE_PULL_SECRET":     true,
-	"FLEET_SANDBOX_K8S_RUNTIME_CLASS":         true,
-	"FLEET_SANDBOX_K8S_SECCOMP_PROFILE":       true,
-	"FLEET_SANDBOX_K8S_KUBECONFIG":            true,
-	"FLEET_SANDBOX_K8S_NETWORK_POLICY":        true,
-	"FLEET_SANDBOX_K8S_BUNDLE_DOCS_IN_IMAGE":  true,
-	"FLEET_SANDBOX_K8S_NODE_SELECTOR":         true,
-	"FLEET_SANDBOX_K8S_TOLERATIONS":           true,
-	"FLEET_DEFAULT_NETWORK_MODE":              true,
-	"FLEET_PII_REDACTION_ENABLED":             true,
-	"FLEET_PII_REDACTION_MODE":                true,
-	"FLEET_PII_REDACTION_ENGINE":              true,
-	"FLEET_PII_RAMPART_URL":                   true,
-	"FLEET_GUARDRAIL_MODE":                    true,
-	"FLEET_GUARDRAIL_PROFILE":                 true,
-	"FLEET_GUARDRAIL_URL":                     true,
-	"FLEET_CONTEXT_HANDLES_ENABLED":           true,
-	"FLEET_CONNECTOR_RECOMMENDATIONS_ENABLED": true,
-	"FLEET_SANDBOX_MEMORY":                    true,
-	"FLEET_SANDBOX_CPUS":                      true,
-	"FLEET_SANDBOX_PIDS":                      true,
-	"FLEET_SANDBOX_KATA_OVERHEAD_MB":          true,
-	"FLEET_SANDBOX_DISK_GB":                   true,
-	"FLEET_SANDBOX_MEMORY_MAX_MB":             true,
-	"FLEET_SANDBOX_CPUS_MAX":                  true,
-	"FLEET_SANDBOX_PIDS_MAX":                  true,
-	"FLEET_SANDBOX_WARM_SIZE":                 true,
-	"FLEET_SANDBOX_WARM_TTL":                  true,
-	"FLEET_PYTHON_REPL_MODE":                  true,
-	"FLEET_PYTHON_CELL_TIMEOUT":               true,
-	"FLEET_PYTHON_REPL_IDLE_TTL":              true,
-	"FLEET_PYTHON_REPL_MAX":                   true,
-	"FLEET_WORKSPACE_ROOT":                    true,
+	"FLEET_SANDBOX_SECCOMP_PROFILE":              true,
+	"FLEET_SANDBOX_BACKEND":                      true,
+	"FLEET_SANDBOX_K8S_NAMESPACE":                true,
+	"FLEET_SANDBOX_K8S_WORKSPACE_CLAIM":          true,
+	"FLEET_SANDBOX_K8S_SERVICE_ACCOUNT":          true,
+	"FLEET_SANDBOX_K8S_IMAGE_PULL_SECRET":        true,
+	"FLEET_SANDBOX_K8S_RUNTIME_CLASS":            true,
+	"FLEET_SANDBOX_K8S_SECCOMP_PROFILE":          true,
+	"FLEET_SANDBOX_K8S_KUBECONFIG":               true,
+	"FLEET_SANDBOX_K8S_NETWORK_POLICY":           true,
+	"FLEET_SANDBOX_K8S_OPEN_EGRESS_POLICY":       true,
+	"FLEET_SANDBOX_K8S_OPEN_EGRESS_ACKNOWLEDGED": true,
+	"FLEET_SANDBOX_K8S_BUNDLE_DOCS_IN_IMAGE":     true,
+	"FLEET_SANDBOX_K8S_NODE_SELECTOR":            true,
+	"FLEET_SANDBOX_K8S_TOLERATIONS":              true,
+	"FLEET_DEFAULT_NETWORK_MODE":                 true,
+	"FLEET_PII_REDACTION_ENABLED":                true,
+	"FLEET_PII_REDACTION_MODE":                   true,
+	"FLEET_PII_REDACTION_ENGINE":                 true,
+	"FLEET_PII_RAMPART_URL":                      true,
+	"FLEET_GUARDRAIL_MODE":                       true,
+	"FLEET_GUARDRAIL_PROFILE":                    true,
+	"FLEET_GUARDRAIL_URL":                        true,
+	"FLEET_CONTEXT_HANDLES_ENABLED":              true,
+	"FLEET_CONNECTOR_RECOMMENDATIONS_ENABLED":    true,
+
+	// ── A2A protocol server (#1279) ──
+	"FLEET_A2A_ENABLED": true,
+	"FLEET_A2A_PERSONA": true,
+	"FLEET_A2A_MODEL":   true,
+
+	"FLEET_SANDBOX_MEMORY":           true,
+	"FLEET_SANDBOX_CPUS":             true,
+	"FLEET_SANDBOX_PIDS":             true,
+	"FLEET_SANDBOX_KATA_OVERHEAD_MB": true,
+	"FLEET_SANDBOX_DISK_GB":          true,
+	"FLEET_SANDBOX_MEMORY_MAX_MB":    true,
+	"FLEET_SANDBOX_CPUS_MAX":         true,
+	"FLEET_SANDBOX_PIDS_MAX":         true,
+	"FLEET_SANDBOX_WARM_SIZE":        true,
+	"FLEET_SANDBOX_WARM_TTL":         true,
+	"FLEET_PYTHON_REPL_MODE":         true,
+	"FLEET_PYTHON_CELL_TIMEOUT":      true,
+	"FLEET_PYTHON_REPL_IDLE_TTL":     true,
+	"FLEET_PYTHON_REPL_MAX":          true,
+	"FLEET_WORKSPACE_ROOT":           true,
 	// Lockdown reads through the FLEET_ alias chain (#1080); the CHAT_
 	// spellings stay allowlisted so existing env files keep sealing.
 	"FLEET_LOCKDOWN_ONLY":           true,
@@ -1077,6 +1085,15 @@ type Config struct {
 	SandboxK8sSeccompProfile  string // FLEET_SANDBOX_K8S_SECCOMP_PROFILE — node-local Localhost profile; empty = RuntimeDefault
 	SandboxK8sKubeconfig      string // FLEET_SANDBOX_K8S_KUBECONFIG — out-of-cluster auth; empty = in-cluster
 	SandboxK8sNetworkPolicy   string // FLEET_SANDBOX_K8S_NETWORK_POLICY — deny-all policy the preflight requires; default "fleet-sandbox-deny-all"
+	// SandboxK8sOpenEgressPolicy is the deny-all policy's counterpart for
+	// egress=open pods, required by the preflight whenever the default network
+	// mode is open; default "fleet-sandbox-open-egress".
+	SandboxK8sOpenEgressPolicy string // FLEET_SANDBOX_K8S_OPEN_EGRESS_POLICY
+	// SandboxK8sOpenEgressAcknowledged states that open sandbox egress is
+	// shaped by cluster policy fleet cannot see, waiving the requirement
+	// above. Env-only on purpose: it is a statement about ONE cluster, and a
+	// bundle travels between clusters.
+	SandboxK8sOpenEgressAcknowledged bool // FLEET_SANDBOX_K8S_OPEN_EGRESS_ACKNOWLEDGED
 	// SandboxK8sBundleDocsInImage declares that the sandbox IMAGE carries the
 	// bundle's supporting-doc dirs at the same absolute paths the control plane
 	// reads them from, keeping the fileop anchors for those roots valid inside
@@ -1124,6 +1141,18 @@ type Config struct {
 	// (via the existing /settings/connections OAuth flow — never auto-connecting).
 	// FLEET_CONNECTOR_RECOMMENDATIONS_ENABLED, default false.
 	ConnectorRecommendationsEnabled bool
+	// A2AEnabled gates the A2A (Agent2Agent) protocol server (#1279): the Agent
+	// Card at /.well-known/agent-card.json and the JSON-RPC endpoint at /a2a on
+	// the orchestrator. FLEET_A2A_ENABLED, default false — the routes stay
+	// registered and answer 501 when off (docs/A2A.md).
+	A2AEnabled bool
+	// A2APersona / A2AModel pin what every A2A-created task runs with — operator
+	// policy, never caller choice, the same posture as webhook triggers
+	// (docs/EVENT-TRIGGERS.md). Empty inherits the deployment's task defaults.
+	// FLEET_A2A_PERSONA / FLEET_A2A_MODEL. The persona name is validated at task
+	// creation like any other (validateTaskCreate's persona-existence check).
+	A2APersona string
+	A2AModel   string
 	// DefaultNetworkMode is the fleet-wide sandbox egress posture (#211):
 	// "" / "open" (full slirp4netns egress for networked work — the default),
 	// "allowlisted" (networked sandboxes route HTTP(S) through the host egress
@@ -1603,19 +1632,21 @@ func Load(envFile string) (*Config, error) {
 		SandboxRuntime: getenvFleet("SANDBOX_RUNTIME"),
 		// Sandbox backend (#989). Lower-cased here; validated fail-closed at
 		// boot (resolveSandboxBackend in cmd/fleet) against the bundle value.
-		SandboxBackend:              strings.ToLower(strings.TrimSpace(getenvFleet("SANDBOX_BACKEND"))),
-		SandboxK8sNamespace:         strings.TrimSpace(getenvFleet("SANDBOX_K8S_NAMESPACE")),
-		SandboxK8sWorkspaceClaim:    strings.TrimSpace(getenvFleet("SANDBOX_K8S_WORKSPACE_CLAIM")),
-		SandboxK8sServiceAccount:    strings.TrimSpace(getenvFleet("SANDBOX_K8S_SERVICE_ACCOUNT")),
-		SandboxK8sImagePullSecret:   strings.TrimSpace(getenvFleet("SANDBOX_K8S_IMAGE_PULL_SECRET")),
-		SandboxK8sRuntimeClass:      strings.TrimSpace(getenvFleet("SANDBOX_K8S_RUNTIME_CLASS")),
-		SandboxK8sSeccompProfile:    strings.TrimSpace(getenvFleet("SANDBOX_K8S_SECCOMP_PROFILE")),
-		SandboxK8sKubeconfig:        strings.TrimSpace(getenvFleet("SANDBOX_K8S_KUBECONFIG")),
-		SandboxK8sNetworkPolicy:     strings.TrimSpace(getenvFleet("SANDBOX_K8S_NETWORK_POLICY")),
-		SandboxK8sBundleDocsInImage: strings.TrimSpace(getenvFleet("SANDBOX_K8S_BUNDLE_DOCS_IN_IMAGE")),
-		SandboxK8sNodeSelector:      strings.TrimSpace(getenvFleet("SANDBOX_K8S_NODE_SELECTOR")),
-		SandboxK8sTolerations:       strings.TrimSpace(getenvFleet("SANDBOX_K8S_TOLERATIONS")),
-		DefaultNetworkMode:          strings.ToLower(strings.TrimSpace(getenvFleet("DEFAULT_NETWORK_MODE"))),
+		SandboxBackend:                   strings.ToLower(strings.TrimSpace(getenvFleet("SANDBOX_BACKEND"))),
+		SandboxK8sNamespace:              strings.TrimSpace(getenvFleet("SANDBOX_K8S_NAMESPACE")),
+		SandboxK8sWorkspaceClaim:         strings.TrimSpace(getenvFleet("SANDBOX_K8S_WORKSPACE_CLAIM")),
+		SandboxK8sServiceAccount:         strings.TrimSpace(getenvFleet("SANDBOX_K8S_SERVICE_ACCOUNT")),
+		SandboxK8sImagePullSecret:        strings.TrimSpace(getenvFleet("SANDBOX_K8S_IMAGE_PULL_SECRET")),
+		SandboxK8sRuntimeClass:           strings.TrimSpace(getenvFleet("SANDBOX_K8S_RUNTIME_CLASS")),
+		SandboxK8sSeccompProfile:         strings.TrimSpace(getenvFleet("SANDBOX_K8S_SECCOMP_PROFILE")),
+		SandboxK8sKubeconfig:             strings.TrimSpace(getenvFleet("SANDBOX_K8S_KUBECONFIG")),
+		SandboxK8sNetworkPolicy:          strings.TrimSpace(getenvFleet("SANDBOX_K8S_NETWORK_POLICY")),
+		SandboxK8sOpenEgressPolicy:       strings.TrimSpace(getenvFleet("SANDBOX_K8S_OPEN_EGRESS_POLICY")),
+		SandboxK8sOpenEgressAcknowledged: lp.getenvBool("FLEET_SANDBOX_K8S_OPEN_EGRESS_ACKNOWLEDGED", false),
+		SandboxK8sBundleDocsInImage:      strings.TrimSpace(getenvFleet("SANDBOX_K8S_BUNDLE_DOCS_IN_IMAGE")),
+		SandboxK8sNodeSelector:           strings.TrimSpace(getenvFleet("SANDBOX_K8S_NODE_SELECTOR")),
+		SandboxK8sTolerations:            strings.TrimSpace(getenvFleet("SANDBOX_K8S_TOLERATIONS")),
+		DefaultNetworkMode:               strings.ToLower(strings.TrimSpace(getenvFleet("DEFAULT_NETWORK_MODE"))),
 
 		// PII redaction (#450) — optional, default off.
 		PIIRedactionEnabled: lp.getenvFleetBool("PII_REDACTION_ENABLED", false),
@@ -1631,10 +1662,17 @@ func Load(envFile string) (*Config, error) {
 
 		// Connector auto-recommendation (#512) — optional, default off.
 		ConnectorRecommendationsEnabled: lp.getenvFleetBool("CONNECTOR_RECOMMENDATIONS_ENABLED", false),
-		SandboxMemory:                   getenvFleet("SANDBOX_MEMORY"),
-		SandboxCPUs:                     getenvFleet("SANDBOX_CPUS"),
-		SandboxPids:                     lp.getenvInt("FLEET_SANDBOX_PIDS", 0),
-		SandboxDiskGB:                   lp.getenvInt("FLEET_SANDBOX_DISK_GB", 0),
+
+		// A2A protocol server (#1279) — optional, default off; the routes
+		// answer 501 until enabled.
+		A2AEnabled: lp.getenvFleetBool("A2A_ENABLED", false),
+		A2APersona: strings.TrimSpace(getenvFleet("A2A_PERSONA")),
+		A2AModel:   strings.TrimSpace(getenvFleet("A2A_MODEL")),
+
+		SandboxMemory: getenvFleet("SANDBOX_MEMORY"),
+		SandboxCPUs:   getenvFleet("SANDBOX_CPUS"),
+		SandboxPids:   lp.getenvInt("FLEET_SANDBOX_PIDS", 0),
+		SandboxDiskGB: lp.getenvInt("FLEET_SANDBOX_DISK_GB", 0),
 		// Per-task override ceilings (#205).
 		SandboxMemoryMaxMB:    lp.getenvFleetInt("SANDBOX_MEMORY_MAX_MB", 8192),
 		SandboxCPUsMax:        lp.getenvFleetFloat("SANDBOX_CPUS_MAX", 16.0),

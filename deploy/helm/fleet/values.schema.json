@@ -90,6 +90,7 @@
           "properties": {
             "create": { "type": "boolean" },
             "name": { "type": "string" },
+            "acknowledgeUnrestricted": { "type": "boolean" },
             "blockedCIDRs": { "type": "array", "items": { "type": "string" } }
           }
         }

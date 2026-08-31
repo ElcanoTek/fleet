@@ -411,17 +411,36 @@ pods), and the python REPL knobs.
 - **`sandbox pod … not ready before start timeout`** — usually scheduling
   (no node fits the sandbox requests) or a slow first pull; `kubectl describe
   pod fleet-sandbox-…` shows which.
+- **A sandbox pod outlived its turn without a crash** — its delete failed while
+  the apiserver was unreachable (a managed control-plane upgrade, a network
+  blip, a throttled burst). fleet retries that delete in the background and
+  logs `reclaimed sandbox pod … on retry` when it lands, so no action is
+  needed. The boot sweep cannot help here — it deliberately skips pods carrying
+  the running incarnation's own label — so if you see `gave up deleting sandbox
+  pod …` the retry budget (~30 minutes) ran out, and that pod holds its
+  Guaranteed reservation until the next control-plane restart. Delete it by
+  hand if you need the capacity sooner.
 - **Workspace files owned by the wrong uid** — the claim's storage class must
   honor `fsGroup` (1000) or be provisioned world-writable at the root; both
   the control plane and sandbox pods run uid/gid 1000.
 - **A sealed turn can still reach the network** — your CNI is not enforcing
   NetworkPolicy (checklist item 3). The policy *object* existing is not
   enforcement.
+- **A turn died with `bridge closed unexpectedly` or a bash exec error** — the
+  error names the cluster's reason when there is one: `the sandbox pod failed:
+  Evicted — …` (a kubelet eviction, usually ephemeral storage or an `emptyDir`
+  `sizeLimit`), `the sandbox container OOMKilled, exit code 137`, or `the
+  sandbox pod is gone`. No such clause means the pod was still healthy and the
+  bridge process itself died — check the bridge stderr the error carries.
 - **Turn cancelled but you want proof nothing survived** — cancellation
   deletes the pod with zero grace; `kubectl get pods -l
   app.kubernetes.io/name=fleet-sandbox` should not show the pod after the
   cancel completes. A pod that lingers past a crash is reclaimed by the
-  boot-time orphan sweep on the next control-plane start.
+  boot-time orphan sweep on the next control-plane start — whether the crash
+  replaced the pod or kubelet restarted the container inside it, both count as
+  a new incarnation. The sweep logs `startup: pruned N orphaned sandbox
+  pod(s)`; if pods from before a restart are still `Running` and no such line
+  appears, they are stranded and hold their full Guaranteed reservation.
 
 ## Honest scope — what the kubernetes backend does differently
 
@@ -434,9 +453,15 @@ Recorded here so nobody discovers them in production:
 - **`FLEET_DEFAULT_NETWORK_MODE=allowlisted` is refused** at boot: the
   host-side egress proxy (ADR-0012) is unreachable from pods. Use `lockdown`
   or `open` + NetworkPolicy shaping.
-- **No per-pod pids limit.** `FLEET_SANDBOX_PIDS` has no Pod-spec equivalent;
-  runaway process counts are bounded by pod memory/CPU limits and node
-  `podPidsLimit` if you configure the kubelet.
+- **No per-pod pids limit.** `FLEET_SANDBOX_PIDS` has no Pod-spec equivalent,
+  so setting it **refuses to boot** rather than reading as a process ceiling it
+  cannot impose — `fleet validate-config` reports it too, before the upgrade.
+  A per-task `fleet sched task set-limits --pids N` is accepted (the value is
+  portable, and the same task may run on a podman deployment) but ignored here,
+  with one log line per process saying so; the memory and CPU limits from that
+  same command do apply. Runaway process counts are bounded by pod memory/CPU
+  limits and by the kubelet's `podPidsLimit` if you configure it on the sandbox
+  nodes.
 - **A bundle's Python MCP servers run in the control-plane pod.** The broker
   spawns them host-side, which on this path means inside the control plane — so
   that image needs `python3` and your bundle's `mcp/requirements.txt`. The
@@ -487,16 +512,35 @@ Recorded here so nobody discovers them in production:
   pin the depth; `warmSize: 0` means **no warm pool** (every turn then pays a
   cold pod start).
 
-- **An open sandbox pod is a full citizen of the cluster network.** Podman's
-  non-lockdown default is rootless pasta/slirp4netns with no host-loopback:
-  outbound-only, and structurally unable to reach the fleet process itself. A
-  pod has no such limit. With `networkPolicies.openEgress.create=false` (the
-  default) nothing selects an `egress=open` sandbox, so model-authored code can
-  reach the fleet Service, the in-cluster Postgres, the apiserver, and the
-  node's cloud metadata endpoint at `169.254.169.254` — which hands out the
-  node's IAM credentials. Treat the open-egress policy as **required**, not
-  optional; the chart's default `blockedCIDRs` starts with the metadata range,
-  and you should add your Pod/Service/node ranges to it.
+- **An open sandbox pod is a full citizen of the cluster network — so boot
+  requires a policy for it.** Podman's non-lockdown default is rootless
+  pasta/slirp4netns with no host-loopback: outbound-only, and structurally
+  unable to reach the fleet process itself. A pod has no such limit: nothing
+  selects an `egress=open` sandbox unless a NetworkPolicy does, and then
+  model-authored code can reach the fleet Service, the in-cluster Postgres, the
+  apiserver, and the node's cloud metadata endpoint at `169.254.169.254` —
+  which hands out the node's IAM credentials.
+
+  With `FLEET_DEFAULT_NETWORK_MODE=open`, the boot preflight therefore requires
+  the open-egress NetworkPolicy object (`fleet-sandbox-open-egress`, or
+  `FLEET_SANDBOX_K8S_OPEN_EGRESS_POLICY` / the manifest's
+  `open_egress_policy`) exactly as it requires the deny-all one, and aborts
+  with the three ways forward named. Enable it with
+  `networkPolicies.openEgress.create=true`; the chart's `blockedCIDRs` default
+  covers the metadata range **and** the private ranges, because that is where
+  the fleet Service, the database and the apiserver actually live on nearly
+  every cluster. Trim that list only for ranges you have decided a sandbox may
+  reach.
+
+  If your cluster shapes this egress with policy fleet cannot see — a
+  CiliumNetworkPolicy, a Calico GlobalNetworkPolicy, a service mesh, a
+  namespace default-deny — set `FLEET_SANDBOX_K8S_OPEN_EGRESS_ACKNOWLEDGED=true`
+  (chart: `networkPolicies.openEgress.acknowledgeUnrestricted`). It waives the
+  requirement and logs a warning on every boot: fleet is telling you it cannot
+  verify what you have asserted.
+
+  The deny-all policy stays required in **every** mode — a scheduled run with
+  networking off gets a sealed sandbox even on an open deployment.
 
 - **A sealed sandbox's network calls hang rather than failing fast.** Podman
   lockdown is `--network=none`: no interface, so a connect fails instantly with

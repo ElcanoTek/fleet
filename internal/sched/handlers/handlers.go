@@ -165,6 +165,18 @@ type Handlers struct {
 	// one-shot replay). See task_stream.go.
 	taskStreamLookup TaskStreamLookup
 
+	// a2a is the A2A protocol server's configuration (#1279), wired by cmd/fleet
+	// via SetA2A when FLEET_A2A_ENABLED is set. nil = feature off: both A2A
+	// routes stay registered (the OpenAPI parity walk needs them) and answer
+	// 501, following the unwired-subsystem convention. See a2a.go.
+	a2a *A2AConfig
+
+	// a2aStreams counts concurrently-held A2A SSE connections against
+	// a2aMaxConcurrentStreams (each one is a standing DB poller; see a2a.go).
+	// A plain int64 driven by sync/atomic, not atomic.Int64: a test clones the
+	// Handlers value, and the embedded noCopy would flag that clone.
+	a2aStreams int64
+
 	// systemPromptForPersona resolves the assembled scheduled system prompt
 	// (default prompt + persona expertise) for a persona override, exactly as the
 	// runner assembles it before dispatch (#233 cost forecast). Wired by cmd/fleet
@@ -511,22 +523,63 @@ func (h *Handlers) CreateTask(w http.ResponseWriter, r *http.Request) {
 	// value it supplied on the public create path.
 	tc.CreatedByTaskID = nil
 
-	if err := h.validateTaskCreate(&tc); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	task, err := h.createTaskGoverned(r.Context(), creator, tc)
+	if err != nil {
+		var refusal *createRefusalError
+		if errors.As(err, &refusal) {
+			writeError(w, refusal.status, refusal.detail)
+			return
+		}
+		// Everything else out of the pipeline is a budget-gate error: a hard
+		// bound is 402 + Retry-After at the window rollover, an unverifiable
+		// budget fails closed as 500.
+		writeBudgetRefusal(w, err)
 		return
 	}
+
+	log.Printf("Task created: %s (prompt: %.50s...)", task.ID, logSafe(task.Prompt))
+	localizeTask(task)
+	writeJSON(w, http.StatusOK, task)
+}
+
+// createRefusalError is a typed refusal from the shared create pipeline: the
+// HTTP status POST /tasks has always used for that refusal class, plus the
+// exact detail text. A second protocol surface (the A2A dispatcher, a2a.go)
+// maps status → its own wire errors, so every create surface stays
+// word-for-word identical to the pipeline's decisions.
+type createRefusalError struct {
+	status int
+	detail string
+}
+
+func (e *createRefusalError) Error() string { return e.detail }
+
+// createTaskGoverned is the ONE create pipeline behind POST /tasks and the A2A
+// SendMessage method: validate → run_if admin gate → per-principal budget gate
+// → models.NewTask + creator attribution → per-key priority ceiling → persist.
+// Extracted so a second protocol surface cannot become a weaker route to task
+// creation — the storage.EnqueueTask* seams skip validateTaskCreate entirely
+// (see the hand-patched model gating in cmd/fleet's approval-card adapter for
+// what bypassing this costs). Refusals return *createRefusalError; a budget
+// refusal returns the budget gate's own error so each caller can render it
+// (writeBudgetRefusal's 402 + Retry-After, or A2A's retry metadata).
+//
+// Attribution is not optional: a task with neither CreatedBy nor
+// CreatedByKeyID is readable by nobody except fleet-wide grant holders
+// (ADR-0043), so every caller must pass the real creator.
+func (h *Handlers) createTaskGoverned(ctx context.Context, creator taskCreator, tc models.TaskCreate) (*models.Task, error) {
+	if err := h.validateTaskCreate(&tc); err != nil {
+		return nil, &createRefusalError{status: http.StatusBadRequest, detail: err.Error()}
+	}
 	if msg := requireAdminForRunIf(creator.hasAdminPermission, tc.RunIf); msg != "" {
-		writeError(w, http.StatusForbidden, msg)
-		return
+		return nil, &createRefusalError{status: http.StatusForbidden, detail: msg}
 	}
 
 	// Per-principal rolling budget (#601 part 2): the SAME budgetCapError gate
 	// the batch and chat schedule_task paths run. At a hard bound the create is
-	// refused (402 + Retry-After at the window rollover); a soft crossing fires
-	// its once-per-window alert inside the gate.
-	if err := h.budgetCapError(r.Context(), creator); err != nil {
-		writeBudgetRefusal(w, err)
-		return
+	// refused; a soft crossing fires its once-per-window alert inside the gate.
+	if err := h.budgetCapError(ctx, creator); err != nil {
+		return nil, err
 	}
 
 	task := models.NewTask(tc)
@@ -538,18 +591,13 @@ func (h *Handlers) CreateTask(w http.ResponseWriter, r *http.Request) {
 	// post-default value (0→Normal), so the comparison reflects what would run.
 	// Shares priorityCapError with the batch path so the two can't drift.
 	if err := priorityCapError(creator.creatorKeyMaxPriority, task.Priority); err != nil {
-		writeError(w, http.StatusForbidden, err.Error())
-		return
+		return nil, &createRefusalError{status: http.StatusForbidden, detail: err.Error()}
 	}
 
 	if _, err := h.storage.AddTask(task); err != nil {
-		writeError(w, http.StatusInternalServerError, "Failed to create task")
-		return
+		return nil, &createRefusalError{status: http.StatusInternalServerError, detail: "Failed to create task"}
 	}
-
-	log.Printf("Task created: %s (prompt: %.50s...)", task.ID, logSafe(task.Prompt))
-	localizeTask(task)
-	writeJSON(w, http.StatusOK, task)
+	return task, nil
 }
 
 // queueTierBands groups the 0–100 priority scale into the named reporting tiers
