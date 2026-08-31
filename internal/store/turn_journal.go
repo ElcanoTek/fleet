@@ -267,9 +267,68 @@ func (s *Store) RecoverStrandedTurns(ctx context.Context) ([]RecoveredTurn, erro
 	}
 	_ = rows.Close()
 
+	var turnIDs []string
+	for _, t := range todo {
+		turnIDs = append(turnIDs, t.turnID)
+	}
+
+	journalMap := make(map[string][]TurnJournalRow)
+	eventsMap := make(map[string][]TurnEvent)
+
+	if len(turnIDs) > 0 {
+		jRows, err := s.db.QueryContext(ctx,
+			`SELECT turn_id, seq, kind, call_id, tool_name, content, is_err, synthesized, created_at
+			   FROM turn_journal WHERE turn_id = ANY($1) ORDER BY turn_id, seq`, turnIDs)
+		if err != nil {
+			return nil, err
+		}
+		for jRows.Next() {
+			var r TurnJournalRow
+			if err := jRows.Scan(&r.TurnID, &r.Seq, &r.Kind, &r.CallID, &r.ToolName,
+				&r.Content, &r.IsErr, &r.Synthesized, &r.CreatedAt); err != nil {
+				_ = jRows.Close()
+				return nil, err
+			}
+			journalMap[r.TurnID] = append(journalMap[r.TurnID], r)
+		}
+		if err := jRows.Err(); err != nil {
+			_ = jRows.Close()
+			return nil, err
+		}
+		_ = jRows.Close()
+
+		eRows, err := s.db.QueryContext(ctx,
+			`SELECT turn_id, event_id, event_name, data_json, created_at
+			 FROM turn_events
+			 WHERE turn_id = ANY($1) AND event_id > 0
+			 ORDER BY turn_id, event_id ASC`,
+			turnIDs,
+		)
+		if err != nil {
+			return nil, err
+		}
+		for eRows.Next() {
+			var e TurnEvent
+			var eid int64
+			var data string
+			if err := eRows.Scan(&e.TurnID, &eid, &e.Name, &data, &e.CreatedAt); err != nil {
+				_ = eRows.Close()
+				return nil, err
+			}
+			e.EventID = uint64(eid) //nolint:gosec // postgres BIGINT round-trips the value we wrote; never negative in practice
+			e.Data = []byte(data)
+			eventsMap[e.TurnID] = append(eventsMap[e.TurnID], e)
+		}
+		if err := eRows.Err(); err != nil {
+			_ = eRows.Close()
+			return nil, err
+		}
+		_ = eRows.Close()
+	}
+
 	var out []RecoveredTurn
 	for _, t := range todo {
-		rec, err := s.recoverOneTurn(ctx, t.turnID, t.convID)
+		rec, err := s.recoverOneTurn(ctx, t.turnID, t.convID, journalMap[t.turnID], eventsMap[t.turnID])
 		if err != nil {
 			return out, fmt.Errorf("recover turn %s: %w", t.turnID, err)
 		}
@@ -278,16 +337,8 @@ func (s *Store) RecoverStrandedTurns(ctx context.Context) ([]RecoveredTurn, erro
 	return out, nil
 }
 
-func (s *Store) recoverOneTurn(ctx context.Context, turnID, convID string) (RecoveredTurn, error) {
+func (s *Store) recoverOneTurn(ctx context.Context, turnID, convID string, journal []TurnJournalRow, events []TurnEvent) (RecoveredTurn, error) {
 	rec := RecoveredTurn{TurnID: turnID, ConversationID: convID}
-	journal, err := s.LoadTurnJournal(ctx, turnID)
-	if err != nil {
-		return rec, err
-	}
-	events, err := s.LoadTurnEvents(ctx, turnID, 0)
-	if err != nil {
-		return rec, err
-	}
 
 	entries, synthesized := buildRecoveredEntries(journal, events)
 	rec.Synthesized = len(synthesized)
