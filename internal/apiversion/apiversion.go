@@ -59,6 +59,11 @@ func unversionedForever(path string) bool {
 	switch path {
 	case "/healthz", "/health", "/readyz", "/api-info":
 		return true
+	// Well-known discovery documents are unversioned by RFC 8615 construction:
+	// the A2A Agent Card's path is fixed by that protocol's spec (#1279), so a
+	// bare-path fetch is the CORRECT usage, never a legacy one to deprecate.
+	case "/.well-known/agent-card.json":
+		return true
 	}
 	return false
 }

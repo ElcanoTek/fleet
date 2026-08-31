@@ -254,6 +254,7 @@ var envKnobs = []envKnob{
 	// reading as false and — here — as the SAFE value, which would hide the
 	// operator's intent behind an error they never see.
 	{key: "FLEET_SANDBOX_K8S_OPEN_EGRESS_ACKNOWLEDGED", kind: kindBool},
+	{key: "FLEET_A2A_ENABLED", fleet: true, kind: kindBool},
 	{key: "FLEET_SANDBOX_PIDS", kind: kindInt},
 	{key: "FLEET_SANDBOX_DISK_GB", kind: kindInt},
 	{key: "FLEET_SANDBOX_MEMORY_MAX_MB", fleet: true, kind: kindInt},

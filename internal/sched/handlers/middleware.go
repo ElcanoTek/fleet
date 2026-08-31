@@ -287,6 +287,17 @@ func (h *Handlers) CSRFMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
+		// Skip CSRF for the A2A JSON-RPC endpoint (#1279): its dispatcher
+		// authenticates with X-API-Key ONLY (a2aPrincipal) — no cookie and no
+		// bearer path — so there is no browser-auto-sent credential a
+		// cross-site request could ride. Origin-less non-browser callers (the
+		// normal A2A client) would otherwise be rejected by the cookie-CSRF
+		// origin check below despite never using cookie auth.
+		if r.URL.Path == "/a2a" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
 		// Skip for the Next-proxy header-trust path (#157). Like X-API-Key and
 		// Bearer above, a custom header cannot be attached to a cross-site
 		// browser request (it would require a CORS preflight we never grant),
