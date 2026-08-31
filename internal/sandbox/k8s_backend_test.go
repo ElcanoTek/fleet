@@ -588,6 +588,95 @@ func TestK8sPruneOrphanedPods(t *testing.T) {
 	}
 }
 
+// TestK8sInstanceLabelPerProcess pins the property the orphan sweep rests on:
+// two incarnations inside the SAME pod — what kubelet produces when it
+// restarts a crashed container in place — must not share an instance label.
+// They did when the label was the pod UID alone, and the sweep then skipped
+// every pod the crashed process had left running.
+func TestK8sInstanceLabelPerProcess(t *testing.T) {
+	const uid = "6c1e3aac-7749-443d-a50d-0060b4bfb69f"
+	first := k8sInstanceLabelFor(uid, "aaaaaaaa")
+	second := k8sInstanceLabelFor(uid, "bbbbbbbb")
+	if first == second {
+		t.Fatalf("same pod UID must still yield distinct incarnation labels, got %q twice", first)
+	}
+	for _, label := range []string{first, second} {
+		if len(label) > 63 {
+			t.Errorf("instance label %q is %d chars, over the 63-char label limit", label, len(label))
+		}
+		if !strings.Contains(label, uid) {
+			t.Errorf("instance label %q should carry the pod UID for diagnosis", label)
+		}
+	}
+	// An over-long UID is trimmed, never the nonce: the nonce is what makes
+	// the value unique, and the value must stay a legal label.
+	long := k8sInstanceLabelFor(strings.Repeat("f", 120), "aaaaaaaa")
+	if len(long) > 63 {
+		t.Errorf("over-long UID must be trimmed to fit, got %d chars", len(long))
+	}
+	if !strings.HasSuffix(long, "aaaaaaaa") {
+		t.Errorf("the nonce must survive trimming, got %q", long)
+	}
+	// Out of cluster there is no pod identity, so the pid form is unchanged.
+	if _, _, ok := parseK8sInstanceLabel(k8sInstanceLabelFor("", "aaaaaaaa")); !ok {
+		t.Error("empty uid must keep the parseable out-of-cluster pid form")
+	}
+}
+
+// TestK8sPruneSweepsPredecessorInSamePod is the regression for the in-place
+// container restart: same pod, same UID, previous process. Those pods are
+// Guaranteed QoS, so leaving them running strands their full CPU/memory
+// reservation with nothing left to reclaim it.
+func TestK8sPruneSweepsPredecessorInSamePod(t *testing.T) {
+	const uid = "6c1e3aac-7749-443d-a50d-0060b4bfb69f"
+	prevOwner, prevLabel := k8sControlPlaneOwner, k8sInstanceLabel
+	k8sControlPlaneOwner = "larkspur"
+	k8sInstanceLabel = k8sInstanceLabelFor(uid, "bbbbbbbb")
+	t.Cleanup(func() {
+		k8sControlPlaneOwner, k8sInstanceLabel = prevOwner, prevLabel
+	})
+
+	fake := newFakeKube(t)
+	backend := fake.backend(t, KubernetesConfig{Namespace: "fleet-sandboxes"})
+	addPod := func(name, instance, owner string) {
+		fake.mu.Lock()
+		fake.pods[name] = &k8sPod{Metadata: k8sObjectMeta{
+			Name: name,
+			Labels: map[string]string{
+				k8sLabelName:      k8sLabelNameValue,
+				k8sLabelManagedBy: k8sLabelManagedVal,
+				k8sLabelInstance:  instance,
+				k8sLabelOwner:     owner,
+			},
+		}}
+		fake.mu.Unlock()
+	}
+	addPod("fleet-sandbox-mine", k8sInstanceLabel, "larkspur")
+	// The predecessor container in THIS pod: same UID, earlier nonce.
+	addPod("fleet-sandbox-predecessor", k8sInstanceLabelFor(uid, "aaaaaaaa"), "larkspur")
+	// A neighbouring release's live sandbox: never ours to reclaim.
+	addPod("fleet-sandbox-neighbour", k8sInstanceLabelFor("9f1d0f6e-0000-0000-0000-000000000000", "cccccccc"), "other-release")
+
+	n, err := backend.PruneOrphanedPods(context.Background())
+	if err != nil {
+		t.Fatalf("PruneOrphanedPods: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("pruned %d, want 1 (the predecessor only)", n)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if _, ok := fake.pods["fleet-sandbox-predecessor"]; ok {
+		t.Error("a pod from a previous process in the same pod must be pruned")
+	}
+	if _, ok := fake.pods["fleet-sandbox-mine"]; !ok {
+		t.Error("this incarnation's own pod must never be pruned")
+	}
+	if _, ok := fake.pods["fleet-sandbox-neighbour"]; !ok {
+		t.Error("another release's pod must never be pruned")
+	}
+}
+
 func TestK8sProxyURLRefused(t *testing.T) {
 	fake := newFakeKube(t)
 	backend := fake.backend(t, KubernetesConfig{Namespace: "fleet-sandboxes"})

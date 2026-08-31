@@ -257,7 +257,9 @@ const (
 // k8sControlPlaneUID and k8sControlPlaneOwner are the control plane's own
 // cluster identity, supplied by the chart through the downward API:
 //
-//	FLEET_POD_UID   ← metadata.uid                              (this incarnation)
+//	FLEET_POD_UID   ← metadata.uid                              (this POD, not
+//	                                                             this incarnation:
+//	                                                             see k8sBootNonce)
 //	FLEET_OWNER_ID  ← metadata.labels['app.kubernetes.io/instance'] (this release)
 //
 // Both are empty when fleet talks to a cluster from outside it (a kubeconfig
@@ -267,25 +269,59 @@ var (
 	k8sControlPlaneOwner = sanitizeK8sLabelValue(os.Getenv("FLEET_OWNER_ID"))
 )
 
+// k8sBootNonce is unique to this PROCESS, and that is the point: the pod UID
+// is not. Kubelet restarts a crashed container IN PLACE — same pod, same UID,
+// same downward-API value — so an incarnation identified by UID alone cannot
+// tell its own sandbox pods from the ones the process it replaced left behind,
+// and the sweep below skips exactly the pods it exists to reclaim. The nonce
+// changes on every start, container restart included.
+//
+// crypto/rand failing is not a reason to refuse to boot. The fallback only has
+// to differ from the previous process in this pod, and a start timestamp does.
+var k8sBootNonce = func() string {
+	var b [4]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return strconv.FormatInt(time.Now().UnixNano()&0xffffffff, 16)
+	}
+	return hex.EncodeToString(b[:])
+}()
+
 // k8sInstanceLabel identifies the control-plane incarnation that owns a
 // sandbox pod.
 //
-// It prefers the pod UID, because the pid-based form this used to carry is
-// meaningless across containers: the label's pid was allocated in a pid
-// namespace that no longer exists, and the fleet process is pid 1 in its own
-// container — so after a restart the orphan sweep was effectively asking
-// whether IT was running, concluding "yes", and skipping every pod a crashed
-// incarnation left behind. A pod UID is unique per incarnation and is what the
-// cluster itself uses to tell one pod from another.
+// In cluster that is the pod UID plus this process's boot nonce. The UID is
+// diagnostic — it maps a sandbox back to the control-plane pod that made it —
+// and the nonce is what makes the value name an INCARNATION rather than a pod.
+// A SIGKILL, an OOM kill, a panic, or a failed liveness probe (the chart ships
+// one) each restart the container inside the same pod, and each is a new
+// process that must treat its predecessor's pods as orphans.
 //
-// The pid form stays as the out-of-cluster fallback, where it is still true.
-var k8sInstanceLabel = func() string {
-	if k8sControlPlaneUID != "" {
-		return "u" + k8sControlPlaneUID
+// The pid-based form this used to carry is meaningless across containers: the
+// pid came from a namespace that no longer exists and fleet is pid 1 in its
+// own container, so a restarted control plane asked whether IT was running and
+// concluded "yes". Out of cluster there is no pod identity at all, so that
+// form stays as the fallback — there it is still true.
+var k8sInstanceLabel = k8sInstanceLabelFor(k8sControlPlaneUID, k8sBootNonce)
+
+// k8sInstanceLabelFor builds the instance label. It is kept separate from the
+// package var so a test can construct ANOTHER incarnation's label — including
+// the one that matters: a different nonce under the same pod UID. An empty uid
+// means out of cluster, where the pid form is unchanged.
+func k8sInstanceLabelFor(uid, nonce string) string {
+	if uid == "" {
+		pid, start, _ := instanceLabelOwner(thisInstanceLabel)
+		return fmt.Sprintf("p%d-t%d", pid, start)
 	}
-	pid, start, _ := instanceLabelOwner(thisInstanceLabel)
-	return fmt.Sprintf("p%d-t%d", pid, start)
-}()
+	// Keep the whole value inside the 63-char label limit, trimming the UID
+	// rather than the nonce: a shortened UID is still a usable hint, while a
+	// shortened nonce could collide with the very incarnation it has to differ
+	// from. The value ends in the nonce, so it still ends alphanumeric as a
+	// label value must.
+	if limit := 63 - len(nonce) - 2; len(uid) > limit {
+		uid = uid[:limit]
+	}
+	return "u" + uid + "-" + nonce
+}
 
 // sanitizeK8sLabelValue reduces a value to something legal as a label value
 // (alphanumeric, '-', '_', '.', at most 63 chars, must start and end
@@ -1411,11 +1447,13 @@ func (k *k8sImpl) close() {
 // The other edge cut the opposite way: a second fleet release sharing the
 // namespace could look like a dead owner and have its live sandboxes deleted.
 //
-// In-cluster the test is now identity, not liveness: the pod UID names the
-// incarnation and the release name marks the owner, both from the downward
-// API. A pod belonging to my release but not to my incarnation is by
-// definition my predecessor's, because the chart runs a single-replica
-// Recreate Deployment. A pod belonging to another release is never touched.
+// In-cluster the test is now identity, not liveness: the pod UID plus this
+// process's boot nonce names the incarnation (see k8sInstanceLabel — the UID
+// alone would survive an in-place container restart and re-open this same
+// hole) and the release name marks the owner. A pod belonging to my release
+// but not to my incarnation is by definition my predecessor's, because the
+// chart runs a single-replica Recreate Deployment. A pod belonging to another
+// release is never touched.
 // Out of cluster there is no such identity, so the pid heuristic stays — it is
 // still true there.
 func (b *KubernetesBackend) PruneOrphanedPods(ctx context.Context) (int, error) {
