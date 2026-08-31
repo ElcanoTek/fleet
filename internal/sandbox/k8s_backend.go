@@ -998,8 +998,8 @@ func (b *KubernetesBackend) reapLoop() {
 	for {
 		time.Sleep(wait)
 		wait *= 2
-		if max := podReapMaxInterval.get(); wait > max {
-			wait = max
+		if ceiling := podReapMaxInterval.get(); wait > ceiling {
+			wait = ceiling
 		}
 
 		b.reapMu.Lock()
