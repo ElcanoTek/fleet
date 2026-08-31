@@ -50,6 +50,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ElcanoTek/fleet/internal/safe"
 )
@@ -848,7 +849,13 @@ func podSchedulingBlocker(pod *k8sPod) string {
 		msg := sanitizeClusterText(c.Message)
 		const maxLen = 512
 		if len(msg) > maxLen {
-			msg = msg[:maxLen] + "…"
+			cut := maxLen
+			// Back up to a rune boundary so the cap cannot split a UTF-8
+			// sequence and emit an invalid byte into the error text.
+			for cut > 0 && !utf8.RuneStart(msg[cut]) {
+				cut--
+			}
+			msg = msg[:cut] + "…"
 		}
 		switch {
 		case reason != "" && msg != "":
