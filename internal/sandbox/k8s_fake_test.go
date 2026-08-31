@@ -50,6 +50,11 @@ type fakeKube struct {
 	noNetpol       bool
 	noRuntimeClass bool
 
+	// unschedulable keeps every created pod Pending with the scheduler's
+	// PodScheduled=False verdict, the way a nodeSelector matching no node or a
+	// node-pinned volume leaves it. Pod behaviour, not preflight injection.
+	unschedulable bool
+
 	// bridgeTrailingStdout, when set, is written to the bridge's stdout AFTER
 	// each response line — the pod-side output nothing on the fleet side reads.
 	bridgeTrailingStdout []byte
@@ -213,11 +218,24 @@ func (f *fakeKube) handleCreatePod(w http.ResponseWriter, r *http.Request) {
 		writeK8sStatus(w, http.StatusBadRequest, "BadRequest", err.Error())
 		return
 	}
-	pod.Status = k8sPodStatus{
-		Phase: "Running",
-		ContainerStatuses: []k8sContainerStatus{
-			{Name: sandboxContainerName, Ready: true},
-		},
+	if f.unschedulable {
+		// No container statuses at all: nothing was ever assigned to a kubelet.
+		pod.Status = k8sPodStatus{
+			Phase: "Pending",
+			Conditions: []k8sPodCondition{{
+				Type:    "PodScheduled",
+				Status:  "False",
+				Reason:  "Unschedulable",
+				Message: `0/3 nodes are available: 1 node(s) didn't match Pod's node affinity/selector, 2 node(s) had untolerated taint(s).`,
+			}},
+		}
+	} else {
+		pod.Status = k8sPodStatus{
+			Phase: "Running",
+			ContainerStatuses: []k8sContainerStatus{
+				{Name: sandboxContainerName, Ready: true},
+			},
+		}
 	}
 	f.mu.Lock()
 	f.pods[pod.Metadata.Name] = &pod

@@ -318,6 +318,24 @@ prior versions are listed because none have shipped.
   off-table-target probe (every non-reportable status) so the to-side guard is
   pinned the way the from-side already was.
 
+- **Kubernetes: a sandbox that was never scheduled said only "not ready"
+  (#1264).** A pod stuck Pending has no container status to explain itself —
+  nothing has been handed to a kubelet yet — so the start-timeout error carried
+  no reason at all, while the scheduler had already written one onto the pod as
+  `PodScheduled=False` with the familiar `0/N nodes are available: …`
+  breakdown. On this backend that is the likeliest way a start fails, and it
+  lands precisely on the dedicated-runner-pool story the chart sells: a
+  `nodeSelector` or toleration matching no node, or a node-pinned
+  PersistentVolume the sandbox cannot reach (an RWO workspace claim on a
+  multi-node cluster does exactly this). The timeout now reads `sandbox pod X
+  was never scheduled before the start timeout (Unschedulable: 0/3 nodes are
+  available: 1 node(s) didn't match Pod's node affinity/selector, 2 node(s) had
+  untolerated taint(s))`. Recorded rather than fatal, unlike a pull failure:
+  unschedulable often clears inside the start window when a warm pod retires or
+  a node returns, so the budget is still worth waiting out. The message is
+  capped so a large cluster's per-node enumeration cannot turn one error into a
+  wall.
+
 - **Scheduled runs are now told the shared file library exists (#1301).**
   Since #1290/#1296 a scheduled run's workspace has carried the readable
   `shared/` tree, but the announcement block lived only on the chat path —

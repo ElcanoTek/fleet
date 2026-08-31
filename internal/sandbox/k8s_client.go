@@ -360,6 +360,19 @@ type k8sPodStatus struct {
 	Reason            string               `json:"reason,omitempty"`
 	Message           string               `json:"message,omitempty"`
 	ContainerStatuses []k8sContainerStatus `json:"containerStatuses,omitempty"`
+	// Conditions carry the SCHEDULER's verdict. A pod that never leaves
+	// Pending has no container status to explain itself — the reason lives
+	// here, as PodScheduled=False with the "0/N nodes are available: …"
+	// message.
+	Conditions []k8sPodCondition `json:"conditions,omitempty"`
+}
+
+// k8sPodCondition is one entry of pod.status.conditions.
+type k8sPodCondition struct {
+	Type    string `json:"type"`
+	Status  string `json:"status"`
+	Reason  string `json:"reason,omitempty"`
+	Message string `json:"message,omitempty"`
 }
 
 type k8sContainerStatus struct {
