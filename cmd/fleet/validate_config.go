@@ -839,6 +839,14 @@ func checkKubernetesSandbox(ctx context.Context, res checkResult, cfg *config.Co
 		res.Detail = "FLEET_DEFAULT_NETWORK_MODE=allowlisted is not supported under the kubernetes backend (the host egress proxy is unreachable from pods) — use lockdown or open"
 		return res
 	}
+	// Boot refuses a pids ceiling too: a Pod spec has no per-pod pids limit, so
+	// the knob would read as containment while imposing none. Reported here so
+	// an operator sees it BEFORE the upgrade that starts refusing it.
+	if cfg.SandboxPids > 0 {
+		res.Status = statusFail
+		res.Detail = fmt.Sprintf("FLEET_SANDBOX_PIDS=%d has no effect under the kubernetes backend (a Pod spec has no per-pod pids limit) — set the kubelet's podPidsLimit on the sandbox nodes and unset this knob", cfg.SandboxPids)
+		return res
+	}
 	image := resolveSandboxImage(cfg, bundle)
 	if image == "" {
 		res.Status = statusFail

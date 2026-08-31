@@ -161,6 +161,25 @@ prior versions are listed because none have shipped.
   runner↔storage contract). Found while working #1268/#1269 (PR #1310) and
   fixed directly rather than filed.
 
+- **Kubernetes: `FLEET_SANDBOX_PIDS` was accepted and then ignored (#1264).**
+  The backend refuses podman-only knobs precisely so a setting cannot read as
+  containment while imposing none — `FLEET_SANDBOX_RUNTIME`,
+  `FLEET_SANDBOX_SECCOMP_PROFILE` and `FLEET_DEFAULT_NETWORK_MODE=allowlisted`
+  each abort boot with the replacement named. The pids ceiling was missing from
+  that list: it was accepted in silence, `fleet validate-config` reported the
+  backend healthy, and the sandbox ran with `ulimit -u` unlimited, because a
+  Pod spec has no per-pod pids limit (the cap lives on the kubelet, as
+  `podPidsLimit`). Podman applies `--pids-limit` on every container, so one
+  knob meant "bounded" on one backend and "unbounded" on the other. It now
+  fails closed at boot and `validate-config` reports it too, so the problem
+  surfaces before the upgrade rather than after. The per-task
+  `fleet sched task set-limits --pids N` stays accepted — the value is portable
+  and the same task may run on a podman deployment — but now logs one line per
+  process saying it is ignored here, while the memory and CPU limits from that
+  same command continue to apply. **Set `podPidsLimit` on your sandbox nodes
+  and unset `FLEET_SANDBOX_PIDS` before upgrading**; `fleet validate-config`
+  names it.
+
 - **A re-imported task envelope can no longer resurrect a finished task or
   null a live lease (#1267), and API-key provenance is now immutable after
   creation (#1270).** `db.AddTask` is an unconditional full-column upsert
