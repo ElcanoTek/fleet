@@ -3,9 +3,9 @@ package clientconfig
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
-	"reflect"
 
 	"github.com/ElcanoTek/fleet/internal/config"
 )
@@ -1099,8 +1099,8 @@ func TestHTTPToolConfigs(t *testing.T) {
 			expected: nil,
 		},
 		{
-			name:  "empty http_tools slice",
-			input: []HTTPToolDef{},
+			name:     "empty http_tools slice",
+			input:    []HTTPToolDef{},
 			expected: nil,
 		},
 		{

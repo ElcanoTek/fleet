@@ -138,6 +138,7 @@ issues:
   uniq-by-line: true
 
 output:
+  sort-results: true
   sort-order:
     - linter
     - file
