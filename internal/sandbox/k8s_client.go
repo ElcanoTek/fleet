@@ -360,6 +360,19 @@ type k8sPodStatus struct {
 	Reason            string               `json:"reason,omitempty"`
 	Message           string               `json:"message,omitempty"`
 	ContainerStatuses []k8sContainerStatus `json:"containerStatuses,omitempty"`
+	// Conditions carry the SCHEDULER's verdict. A pod that never leaves
+	// Pending has no container status to explain itself — the reason lives
+	// here, as PodScheduled=False with the "0/N nodes are available: …"
+	// message.
+	Conditions []k8sPodCondition `json:"conditions,omitempty"`
+}
+
+// k8sPodCondition is one entry of pod.status.conditions.
+type k8sPodCondition struct {
+	Type    string `json:"type"`
+	Status  string `json:"status"`
+	Reason  string `json:"reason,omitempty"`
+	Message string `json:"message,omitempty"`
 }
 
 type k8sContainerStatus struct {
@@ -370,7 +383,20 @@ type k8sContainerStatus struct {
 			Reason  string `json:"reason,omitempty"`
 			Message string `json:"message,omitempty"`
 		} `json:"waiting,omitempty"`
+		// Terminated carries the kubelet's verdict on a container that has
+		// already stopped — OOMKilled being the one an operator most needs
+		// told apart from an eviction, because both look like a vanished
+		// sandbox from inside a turn. Named, unlike its Waiting sibling, so a
+		// test can construct one without restating the struct.
+		Terminated *k8sContainerTerminated `json:"terminated,omitempty"`
 	} `json:"state,omitempty"`
+}
+
+// k8sContainerTerminated is the kubelet's post-mortem for one container.
+type k8sContainerTerminated struct {
+	Reason   string `json:"reason,omitempty"`
+	Message  string `json:"message,omitempty"`
+	ExitCode int    `json:"exitCode,omitempty"`
 }
 
 func (c *k8sClient) createPod(ctx context.Context, namespace string, pod *k8sPod) error {

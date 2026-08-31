@@ -40,12 +40,21 @@ type fakeKube struct {
 	pods    map[string]*k8sPod // name → object (status stamped Running/ready)
 	files   map[string][]byte  // "<pod>:<path>" → uploaded bytes
 	deleted []string
+	// deleteFailures makes the next N DELETEs fail with a connection-style
+	// error, the way an unreachable apiserver does.
+	deleteFailures int
 
 	// Failure injection for preflight tests.
 	denied         map[string]bool // "<verb> <resource>[/<sub>]" → deny
 	noPVC          bool
 	noNetpol       bool
+	absentNetpols  map[string]bool // name → 404, for testing one missing policy
 	noRuntimeClass bool
+
+	// unschedulable keeps every created pod Pending with the scheduler's
+	// PodScheduled=False verdict, the way a nodeSelector matching no node or a
+	// node-pinned volume leaves it. Pod behaviour, not preflight injection.
+	unschedulable bool
 
 	// bridgeTrailingStdout, when set, is written to the bridge's stdout AFTER
 	// each response line — the pod-side output nothing on the fleet side reads.
@@ -66,6 +75,7 @@ func newFakeKube(t *testing.T) *fakeKube {
 		pods:          make(map[string]*k8sPod),
 		files:         make(map[string][]byte),
 		denied:        make(map[string]bool),
+		absentNetpols: make(map[string]bool),
 		bashBehaviors: make(map[string]func(string, io.Writer, io.Writer, *websocket.Conn) int),
 	}
 	f.srv = httptest.NewTLSServer(http.HandlerFunc(f.handle))
@@ -167,7 +177,7 @@ func (f *fakeKube) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		_, _ = w.Write([]byte(`{"kind":"PersistentVolumeClaim"}`))
 	case netpolRe.MatchString(path):
-		if f.noNetpol {
+		if f.noNetpol || f.absentNetpols[netpolRe.FindStringSubmatch(path)[2]] {
 			writeK8sStatus(w, http.StatusNotFound, "NotFound", "networkpolicy not found")
 			return
 		}
@@ -210,11 +220,24 @@ func (f *fakeKube) handleCreatePod(w http.ResponseWriter, r *http.Request) {
 		writeK8sStatus(w, http.StatusBadRequest, "BadRequest", err.Error())
 		return
 	}
-	pod.Status = k8sPodStatus{
-		Phase: "Running",
-		ContainerStatuses: []k8sContainerStatus{
-			{Name: sandboxContainerName, Ready: true},
-		},
+	if f.unschedulable {
+		// No container statuses at all: nothing was ever assigned to a kubelet.
+		pod.Status = k8sPodStatus{
+			Phase: "Pending",
+			Conditions: []k8sPodCondition{{
+				Type:    "PodScheduled",
+				Status:  "False",
+				Reason:  "Unschedulable",
+				Message: `0/3 nodes are available: 1 node(s) didn't match Pod's node affinity/selector, 2 node(s) had untolerated taint(s).`,
+			}},
+		}
+	} else {
+		pod.Status = k8sPodStatus{
+			Phase: "Running",
+			ContainerStatuses: []k8sContainerStatus{
+				{Name: sandboxContainerName, Ready: true},
+			},
+		}
 	}
 	f.mu.Lock()
 	f.pods[pod.Metadata.Name] = &pod
@@ -237,6 +260,14 @@ func (f *fakeKube) handlePod(w http.ResponseWriter, r *http.Request) {
 		}
 		_ = json.NewEncoder(w).Encode(pod)
 	case http.MethodDelete:
+		f.mu.Lock()
+		if f.deleteFailures > 0 {
+			f.deleteFailures--
+			f.mu.Unlock()
+			writeK8sStatus(w, http.StatusInternalServerError, "InternalError", "apiserver unreachable (injected)")
+			return
+		}
+		f.mu.Unlock()
 		if !ok {
 			writeK8sStatus(w, http.StatusNotFound, "NotFound", "pod not found")
 			return

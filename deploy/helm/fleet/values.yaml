@@ -83,6 +83,10 @@ sandbox:
     # select it here; taint it and add the matching toleration so nothing
     # else lands on it. This is fleet's horizontal scaling story — more
     # runner capacity is a bigger pool, never more fleet replicas.
+    # Label values are strings to Kubernetes. YAML 1.1 turns an unquoted
+    # true/false/on/off/yes/no or a bare number into a bool or a number, so
+    # prefer quoting them ({fleet-runner: "true"}); the chart coerces either
+    # way rather than rendering a value the apiserver refuses.
     nodeSelector: {}
     #  fleet.elcanotek.com/pool: sandboxes
     tolerations: []
@@ -120,6 +124,16 @@ networkPolicies:
     # pod network it can reach the fleet Service, the in-cluster Postgres, and
     # the apiserver. Turn this on unless you have equivalent cluster policy.
     create: false
+    # The object name fleet's boot preflight looks for when the default
+    # network mode is open. Symmetric with denyAll.name above; change both
+    # together or not at all.
+    name: fleet-sandbox-open-egress
+    # Set only if this cluster shapes open sandbox egress with policy fleet
+    # cannot see — a CiliumNetworkPolicy, a Calico GlobalNetworkPolicy, a mesh,
+    # a namespace default-deny. It waives the boot requirement above, and it is
+    # logged as a WARNING on every start, because an unverified posture should
+    # keep saying so rather than being agreed to once.
+    acknowledgeUnrestricted: false
     # CIDRs an open sandbox must NOT reach. The metadata range is not optional
     # and is not a cluster range: 169.254.169.254 hands out the NODE's IAM /
     # instance credentials to anything that can reach it, and an open sandbox
@@ -131,11 +145,17 @@ networkPolicies:
     # the apiserver reject the whole policy. A dual-stack cluster needs a
     # second, IPv6 ipBlock rule (::/0 excepting fd00:ec2::254/128); add it as
     # your own policy alongside this one.
+    # The private ranges are blocked BY DEFAULT because on nearly every cluster
+    # they are where the things a sandbox must not reach actually live: the
+    # fleet Service, the database, the apiserver, the kubelet. Measured on a
+    # stock k3s install, an open sandbox with only the metadata range blocked
+    # still reached all four. Remove a range only when you know what of yours
+    # sits in it and have decided a sandbox may talk to it.
     blockedCIDRs:
       - 169.254.0.0/16      # cloud instance metadata (IMDS), link-local
-    #  - 10.0.0.0/8
-    #  - 172.16.0.0/12
-    #  - 192.168.0.0/16
+      - 10.0.0.0/8          # pod/service/node ranges on most clusters
+      - 172.16.0.0/12
+      - 192.168.0.0/16
 
 workspace:
   # The shared workspace claim: mounted by the control plane AND every

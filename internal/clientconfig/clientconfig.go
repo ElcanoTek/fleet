@@ -459,6 +459,12 @@ type KubernetesSandbox struct {
 	// NetworkPolicy is the deny-all NetworkPolicy name the boot preflight
 	// requires to exist (default "fleet-sandbox-deny-all").
 	NetworkPolicy string `yaml:"network_policy"`
+	// OpenEgressPolicy is its counterpart for egress=open pods (default
+	// "fleet-sandbox-open-egress"), required by the preflight whenever the
+	// default network mode is open. The WAIVER for that requirement is
+	// deliberately not here: it states something true of one cluster, and a
+	// bundle is meant to travel between them.
+	OpenEgressPolicy string `yaml:"open_egress_policy"`
 	// BundleDocsInImage declares that the sandbox IMAGE carries this bundle's
 	// supporting-doc dirs (protocols/, personas/, system_prompts/, skills/) at
 	// the SAME absolute paths the control plane reads them from — the only way

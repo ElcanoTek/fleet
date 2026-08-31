@@ -386,6 +386,27 @@ jobs:
             --set 'networkPolicies.openEgress.blockedCIDRs={169.254.0.0/16,10.0.0.0/8}' \
             --set sandbox.kubernetes.runtimeClass=kata
 
+      - name: A typed value must not render as a Go format error
+        # kubeconform cannot catch this: the mangled text is a perfectly valid
+        # string in the rendered Deployment, and only the SANDBOX pod fleet
+        # creates at runtime gets rejected — long after helm reported success.
+        # YAML 1.1 makes `fleet-runner: true` a bool, and a template that
+        # printed it with %s produced "fleet-runner=%!s(bool=true)", which the
+        # apiserver refuses on every turn (#1264).
+        run: |
+          set -euo pipefail
+          out=$(helm template ci deploy/helm/fleet --namespace fleet \
+            --set image.repository=registry.invalid/fleet --set image.tag=ci \
+            --set sandbox.image=registry.invalid/fleet-sandbox:ci \
+            --set sandbox.kubernetes.nodeSelector.fleet-runner=true \
+            --set sandbox.kubernetes.nodeSelector.rack=12)
+          if grep -n '%!' <<<"$out"; then
+            echo "::error::a chart value rendered as a Go format error (above)"
+            exit 1
+          fi
+          grep -q 'fleet-runner=true' <<<"$out"
+          grep -q 'rack=12' <<<"$out"
+
   migrations:
     name: Migration DDL lint
     runs-on: ubuntu-latest

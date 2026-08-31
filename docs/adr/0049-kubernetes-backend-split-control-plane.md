@@ -45,12 +45,33 @@ privileged node" packaging track as a stepping stone.
    path, preserving the invariant (ADR-0036 territory) that an absolute
    workspace path means the same thing to the process, host-side brokers, and
    sandboxed bash/python.
-4. **Sealing is expressed as labels + a required NetworkPolicy.** Sandbox pods
-   carry `fleet.elcanotek.com/egress=none|open`; the Helm chart ships a
-   deny-all policy selecting `none`. fleet verifies the policy **object**
-   exists; enforcement is the CNI's, and the docs say so plainly rather than
-   implying a seal fleet cannot provide (the podman `--network=none` namespace
-   seal has no per-pod apiserver equivalent).
+4. **Sealing is expressed as labels + required NetworkPolicies.** *(Amended
+   2026-08-28 — the requirement now covers BOTH labels, not just `none`.)*
+   Sandbox pods carry `fleet.elcanotek.com/egress=none|open`; the Helm chart
+   ships a deny-all policy selecting `none` and a shaping policy selecting
+   `open`. fleet verifies the policy **objects** exist; enforcement is the
+   CNI's, and the docs say so plainly rather than implying a seal fleet cannot
+   provide (the podman `--network=none` namespace seal has no per-pod apiserver
+   equivalent).
+
+   The original decision required only the deny-all object, which left the
+   `open` half asymmetric with podman in a way this ADR did not intend.
+   Podman's open posture is bounded by construction — rootless
+   pasta/slirp4netns is outbound-only and structurally cannot reach the fleet
+   process — while an open **pod** that no policy selects is a full citizen of
+   the pod network. Measured on a stock k3s install during the #1264
+   validation, such a sandbox reached the fleet Service, the in-cluster
+   Postgres, the apiserver and the public internet. The docs already called
+   that policy required; boot now requires it too whenever the default network
+   mode is `open`, so "the docs say required" and "fleet requires it" stopped
+   being different statements.
+
+   One escape hatch, because fleet must not claim knowledge it lacks: egress
+   may legitimately be shaped by policy fleet cannot see (a
+   CiliumNetworkPolicy, a Calico GlobalNetworkPolicy, a mesh, a namespace
+   default-deny). `FLEET_SANDBOX_K8S_OPEN_EGRESS_ACKNOWLEDGED=true` states that
+   deliberately and is logged as a warning on every boot — an unverified
+   posture keeps saying so rather than being agreed to once.
 5. **Enterprise packaging is one Helm chart** (`deploy/helm/fleet`):
    single-replica control-plane Deployment (strategy Recreate, no replica
    knob), the runner RBAC, workspace storage, the NetworkPolicies, optional

@@ -44,6 +44,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
 
+	a2abridge "github.com/ElcanoTek/fleet/internal/a2a"
 	"github.com/ElcanoTek/fleet/internal/admincli"
 	"github.com/ElcanoTek/fleet/internal/admission"
 	"github.com/ElcanoTek/fleet/internal/agent"
@@ -885,13 +886,8 @@ func run() error {
 	pruneOrphanedSandboxes(mgr.SandboxPool())
 
 	// Share the process shutdown grace with the pool so its in-flight-task drain
-	// uses the same budget as the chat-turn drain (#278). A non-positive grace
-	// (operator set FLEET_SHUTDOWN_GRACE_SECONDS=0) maps to a negative DrainGrace
-	// so the pool force-cancels immediately instead of substituting its default.
-	poolGrace := shutdownGrace(cfg)
-	if poolGrace <= 0 {
-		poolGrace = -1
-	}
+	// uses the same budget as the chat-turn drain (#278).
+	poolGrace := poolDrainGrace(cfg)
 	// The pool reuses the task-completion notifier (#208) built above (it now
 	// also carries the budget gate's soft-limit alerts, #601 part 2).
 	pool := runner.NewPool(schedStorage, taskRunner, runner.Config{
@@ -934,6 +930,13 @@ func run() error {
 	// gated on FLEET_SELF_IMPROVE_ENABLED (default off; nil leaves feedback
 	// recorded but never auto-distilled).
 	h.SetLearnedInstructionDistiller(selfImproveDistiller(cfg, mgr))
+
+	// A2A protocol server (#1279): opt-in, fail-closed. Unwired, the routes
+	// answer 501; wired, the card is rendered ONCE (it is static per boot) and
+	// the dispatcher translates onto the same task seams wired above.
+	if err := wireA2A(cfg, bundle, h); err != nil {
+		return err
+	}
 
 	// Dataset / table agent (#514): rows run through the SAME governed
 	// interactive entrypoint (Manager.RunTurn → agentcore.Run). Extracted
@@ -1308,6 +1311,63 @@ func logConfigReload(result config.ReloadResult, err error) {
 	}
 }
 
+// poolDrainGrace maps the process shutdown grace onto the worker pool's
+// DrainGrace contract (#278): a non-positive grace (operator set
+// FLEET_SHUTDOWN_GRACE_SECONDS=0) becomes negative so the pool force-cancels
+// immediately instead of substituting its default.
+func poolDrainGrace(cfg *config.Config) time.Duration {
+	if grace := shutdownGrace(cfg); grace > 0 {
+		return grace
+	}
+	return -1
+}
+
+// wireA2A applies the FLEET_A2A_ENABLED gate (#1279): off logs the remedy and
+// leaves the routes on their 501 guard; on, a card that cannot be rendered is
+// a misconfiguration, not a degraded mode — refuse to boot rather than serve
+// a discovery document we advertise wrongly.
+func wireA2A(cfg *config.Config, bundle *clientconfig.Bundle, h *handlers.Handlers) error {
+	if !cfg.A2AEnabled {
+		log.Printf("a2a: disabled (set FLEET_A2A_ENABLED=1 to serve the A2A protocol)")
+		return nil
+	}
+	a2aCfg, err := buildA2AConfig(cfg, bundle)
+	if err != nil {
+		return fmt.Errorf("a2a: %w", err)
+	}
+	h.SetA2A(a2aCfg)
+	//nolint:gosec // G706: A2APersona/A2AModel are operator-set env config, not request input — they can't forge a log line.
+	log.Printf("a2a: enabled (card at /.well-known/agent-card.json, JSON-RPC at /v1/a2a, persona=%q model=%q)",
+		cfg.A2APersona, cfg.A2AModel)
+	return nil
+}
+
+// buildA2AConfig assembles the A2A surface's static inputs (#1279): the Agent
+// Card — identity from the branding bundle, version from the binary, endpoint
+// from FLEET_PUBLIC_BASE_URL (server-relative when unset, which still
+// satisfies clients that resolved the card from the same origin) — plus the
+// operator-pinned persona/model every A2A task runs with.
+func buildA2AConfig(cfg *config.Config, bundle *clientconfig.Bundle) (*handlers.A2AConfig, error) {
+	base := strings.TrimRight(cfg.PublicBaseURL, "/")
+	card := a2abridge.BuildCard(a2abridge.CardSpec{
+		Name:        bundle.Branding.AppName,
+		Description: strings.TrimSpace(bundle.Branding.ShareDescription),
+		Version:     version.Version(),
+		RPCURL:      base + "/v1/a2a",
+	})
+	body, etag, err := a2abridge.MarshalCard(card)
+	if err != nil {
+		return nil, fmt.Errorf("render agent card: %w", err)
+	}
+	return &handlers.A2AConfig{
+		CardJSON:      body,
+		CardETag:      etag,
+		Persona:       cfg.A2APersona,
+		Model:         cfg.A2AModel,
+		PublicBaseURL: base,
+	}, nil
+}
+
 // buildOrchestratorMux registers the orchestrator routes (chi), mirroring moc's
 // auth groups, plus the P6b notes CRUD + proposal-decision routes (admin-gated).
 func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers, reloadConfig, reloadMCP http.HandlerFunc) http.Handler {
@@ -1330,6 +1390,11 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers, r
 	// Version discovery (#321): unauthenticated, unversioned-forever (like /health).
 	// Also reachable at /v1/api-info via the apiversion.Router wrapper.
 	r.Get("/api-info", apiversion.InfoHandler(version.Version()))
+	// A2A discovery (#1279): the Agent Card, public by construction (it names
+	// capabilities and the endpoint URL, nothing else) at the well-known path
+	// the A2A spec fixes — unversioned forever (apiversion.unversionedForever).
+	// Answers 501 until FLEET_A2A_ENABLED wires SetA2A.
+	r.Get("/.well-known/agent-card.json", h.A2AAgentCard)
 
 	// Admin-gated mutations.
 	r.Group(func(r chi.Router) {
@@ -1520,6 +1585,16 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers, r
 	r.With(h.SchedRateLimitMiddleware).Post("/tasks/estimate", h.EstimateTask)
 	r.With(h.SchedRateLimitMiddleware).Post("/upload", h.HandleUpload)
 	r.Get("/files/{filename}", h.HandleDownload)
+
+	// A2A JSON-RPC endpoint (#1279): every A2A method multiplexes over this one
+	// POST (streaming methods answer with SSE), reachable as /v1/a2a via the
+	// apiversion wrapper. Outside every auth group — authentication is per
+	// JSON-RPC method inside the dispatcher (X-API-Key only, the credential the
+	// Agent Card declares), because HTTP-verb key scoping cannot see which
+	// method a JSON-RPC body carries. Same rate limiter as POST /tasks; answers
+	// 501 until FLEET_A2A_ENABLED wires SetA2A. CSRF-exempt by path
+	// (middleware.go): its auth never involves a browser-auto-sent credential.
+	r.With(h.SchedRateLimitMiddleware).Post("/a2a", h.A2ARPC)
 
 	// Webhook triggers (#177): authenticated by per-trigger HMAC-SHA256, NOT the
 	// admin API key, so external services (GitHub, Slack, CI) can fire tasks

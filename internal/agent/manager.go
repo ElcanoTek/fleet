@@ -696,6 +696,19 @@ func buildKubernetesSandboxPool(cfg *config.Config, poolCfg sandbox.PoolConfig, 
 			"FLEET_DEFAULT_NETWORK_MODE=allowlisted is not supported under FLEET_SANDBOX_BACKEND=kubernetes: the host-side egress proxy " +
 				"is unreachable from sandbox pods. Use lockdown (sealed by the deny-all NetworkPolicy) or open, and shape egress with cluster NetworkPolicies (fail-closed)")
 	}
+	// A pids ceiling is a containment control — it is what bounds a fork bomb —
+	// and a Pod spec cannot express one: the cap lives on the kubelet
+	// (podPidsLimit), outside anything this process writes. Podman applies
+	// --pids-limit on every container, so the same knob means "bounded" there
+	// and "unbounded" here. That is exactly the configured-but-inert shape the
+	// three refusals above exist for, and it stayed silent only because a pids
+	// limit reads like a resource knob rather than a security one.
+	if poolCfg.Container.PidsLimit > 0 {
+		return nil, fmt.Errorf(
+			"FLEET_SANDBOX_PIDS=%d is a podman cgroup knob and has no effect under FLEET_SANDBOX_BACKEND=kubernetes: a Pod spec has no per-pod pids limit, "+
+				"so this would read as a process ceiling while imposing none. Set the kubelet's podPidsLimit on the sandbox nodes instead, and unset this knob "+
+				"to acknowledge that process counts there are bounded only by the pod's memory and CPU limits (fail-closed)", poolCfg.Container.PidsLimit)
+	}
 	// Supporting-doc mounts are same-path HOST bind mounts, and a pod has no
 	// host filesystem to bind them from — so by default they are dropped, and
 	// the fileop anchor then refuses those roots rather than trusting paths
@@ -752,16 +765,19 @@ func buildKubernetesSandboxPool(cfg *config.Config, poolCfg sandbox.PoolConfig, 
 		return nil, fmt.Errorf("FLEET_SANDBOX_K8S_TOLERATIONS / sandbox.kubernetes.tolerations: %w", err)
 	}
 	backend, err := sandbox.NewKubernetesBackend(sandbox.KubernetesConfig{
-		Namespace:               cfg.SandboxK8sNamespace,
-		WorkspaceClaim:          cfg.SandboxK8sWorkspaceClaim,
-		ServiceAccount:          cfg.SandboxK8sServiceAccount,
-		ImagePullSecret:         cfg.SandboxK8sImagePullSecret,
-		RuntimeClassName:        cfg.SandboxK8sRuntimeClass,
-		SeccompLocalhostProfile: cfg.SandboxK8sSeccompProfile,
-		KubeconfigPath:          cfg.SandboxK8sKubeconfig,
-		NetworkPolicyName:       cfg.SandboxK8sNetworkPolicy,
-		NodeSelector:            nodeSelector,
-		Tolerations:             tolerations,
+		Namespace:                      cfg.SandboxK8sNamespace,
+		WorkspaceClaim:                 cfg.SandboxK8sWorkspaceClaim,
+		ServiceAccount:                 cfg.SandboxK8sServiceAccount,
+		ImagePullSecret:                cfg.SandboxK8sImagePullSecret,
+		RuntimeClassName:               cfg.SandboxK8sRuntimeClass,
+		SeccompLocalhostProfile:        cfg.SandboxK8sSeccompProfile,
+		KubeconfigPath:                 cfg.SandboxK8sKubeconfig,
+		NetworkPolicyName:              cfg.SandboxK8sNetworkPolicy,
+		OpenEgressPolicyName:           cfg.SandboxK8sOpenEgressPolicy,
+		DefaultNetworkMode:             cfg.DefaultNetworkMode,
+		UnrestrictedEgressAcknowledged: cfg.SandboxK8sOpenEgressAcknowledged,
+		NodeSelector:                   nodeSelector,
+		Tolerations:                    tolerations,
 	})
 	if err != nil {
 		return nil, err
@@ -786,15 +802,40 @@ func buildKubernetesSandboxPool(cfg *config.Config, poolCfg sandbox.PoolConfig, 
 	} else {
 		log.Printf("sandbox: run_python REPL mode=per-turn — kernel is fresh each turn (the default)")
 	}
-	if cfg.DefaultNetworkMode == sandbox.NetworkModeLockdown {
+	log.Print(k8sNetworkModeLine(cfg.DefaultNetworkMode))
+	return sandbox.NewPool(poolCfg), nil
+}
+
+// k8sNetworkModeLine renders the boot line describing the egress posture every
+// sandbox pod will be created with.
+//
+// Both postures speak, which they did not before (#1264): lockdown printed a
+// full paragraph and open printed nothing at all, so the riskier configuration
+// was the quieter one and an operator reading the log of an open deployment
+// saw no sign that model-authored code could reach the cluster.
+//
+// Neither line claims enforcement. Under lockdown that is the CNI's job, and
+// fleet verifies only that the policy OBJECT exists. Under open there is
+// nothing to verify: the protecting policy may carry any name and come from
+// any tooling, so fleet states the posture it is creating pods with and leaves
+// the conclusion to the reader rather than inventing a verdict.
+//
+// Only these two modes reach here — allowlisted is refused at the top of
+// buildKubernetesSandboxPool.
+func k8sNetworkModeLine(mode string) string {
+	if mode == sandbox.NetworkModeLockdown {
 		// "Every pod" includes the warm pool's parked spawns: the pool seals
 		// warm spawns under fleet-wide lockdown (#1291), so this claim is true
 		// by construction. Before that fix, warm pods were labeled egress=open
 		// right beside this line.
-		log.Printf("sandbox: network mode=lockdown — every sandbox pod, warm-pool spawns included, is labeled %s=none for the deny-all NetworkPolicy (enforcement is the cluster CNI's job — see docs/DEPLOYMENT-KUBERNETES.md)", "fleet.elcanotek.com/egress")
+		return fmt.Sprintf("sandbox: network mode=lockdown — every sandbox pod, warm-pool spawns included, is labeled %s=none for the deny-all NetworkPolicy (enforcement is the cluster CNI's job — see docs/DEPLOYMENT-KUBERNETES.md)", k8sEgressLabel)
 	}
-	return sandbox.NewPool(poolCfg), nil
+	return fmt.Sprintf("sandbox: WARNING network mode=open — every sandbox pod is labeled %s=open and has UNRESTRICTED pod-network reach unless a NetworkPolicy selects that label. Model-authored code can then reach the fleet Service, the in-cluster database, the apiserver, and the node's metadata endpoint. The chart ships that policy but does NOT enable it by default: set networkPolicies.openEgress.create=true with blockedCIDRs, or use mode=lockdown (see docs/DEPLOYMENT-KUBERNETES.md)", k8sEgressLabel)
 }
+
+// k8sEgressLabel is the pod label both the chart's NetworkPolicies and the
+// backend's pod builder key on.
+const k8sEgressLabel = "fleet.elcanotek.com/egress"
 
 // splitWorkspaceNestedMounts partitions the read-only mount list into roots
 // nested inside the workspace root and everything else. Under the kubernetes
