@@ -765,16 +765,19 @@ func buildKubernetesSandboxPool(cfg *config.Config, poolCfg sandbox.PoolConfig, 
 		return nil, fmt.Errorf("FLEET_SANDBOX_K8S_TOLERATIONS / sandbox.kubernetes.tolerations: %w", err)
 	}
 	backend, err := sandbox.NewKubernetesBackend(sandbox.KubernetesConfig{
-		Namespace:               cfg.SandboxK8sNamespace,
-		WorkspaceClaim:          cfg.SandboxK8sWorkspaceClaim,
-		ServiceAccount:          cfg.SandboxK8sServiceAccount,
-		ImagePullSecret:         cfg.SandboxK8sImagePullSecret,
-		RuntimeClassName:        cfg.SandboxK8sRuntimeClass,
-		SeccompLocalhostProfile: cfg.SandboxK8sSeccompProfile,
-		KubeconfigPath:          cfg.SandboxK8sKubeconfig,
-		NetworkPolicyName:       cfg.SandboxK8sNetworkPolicy,
-		NodeSelector:            nodeSelector,
-		Tolerations:             tolerations,
+		Namespace:                      cfg.SandboxK8sNamespace,
+		WorkspaceClaim:                 cfg.SandboxK8sWorkspaceClaim,
+		ServiceAccount:                 cfg.SandboxK8sServiceAccount,
+		ImagePullSecret:                cfg.SandboxK8sImagePullSecret,
+		RuntimeClassName:               cfg.SandboxK8sRuntimeClass,
+		SeccompLocalhostProfile:        cfg.SandboxK8sSeccompProfile,
+		KubeconfigPath:                 cfg.SandboxK8sKubeconfig,
+		NetworkPolicyName:              cfg.SandboxK8sNetworkPolicy,
+		OpenEgressPolicyName:           cfg.SandboxK8sOpenEgressPolicy,
+		DefaultNetworkMode:             cfg.DefaultNetworkMode,
+		UnrestrictedEgressAcknowledged: cfg.SandboxK8sOpenEgressAcknowledged,
+		NodeSelector:                   nodeSelector,
+		Tolerations:                    tolerations,
 	})
 	if err != nil {
 		return nil, err

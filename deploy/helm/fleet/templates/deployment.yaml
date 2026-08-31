@@ -108,6 +108,12 @@ spec:
               value: {{ .Values.workspace.claimName | quote }}
             - name: FLEET_SANDBOX_K8S_NETWORK_POLICY
               value: {{ .Values.networkPolicies.denyAll.name | quote }}
+            - name: FLEET_SANDBOX_K8S_OPEN_EGRESS_POLICY
+              value: {{ .Values.networkPolicies.openEgress.name | quote }}
+            {{- if .Values.networkPolicies.openEgress.acknowledgeUnrestricted }}
+            - name: FLEET_SANDBOX_K8S_OPEN_EGRESS_ACKNOWLEDGED
+              value: "true"
+            {{- end }}
             {{- $podSA := .Values.sandbox.kubernetes.podServiceAccount }}
             {{- if and $podSA.name (or $podSA.create $podSA.external) }}
             # Only stamped when the SA will actually exist. create=false without

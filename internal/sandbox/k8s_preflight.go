@@ -95,6 +95,26 @@ func (b *KubernetesBackend) Preflight(ctx context.Context) error {
 			b.cfg.NetworkPolicyName, b.cfg.Namespace, k8sLabelEgress, err)
 	}
 
+	// Open mode with nothing selecting the pods is the one posture where a
+	// clean preflight would certify an unrestricted sandbox. Require the
+	// companion policy the same way the sealed one is required, so "the docs
+	// say this policy is required" and "fleet requires this policy" stop being
+	// different statements.
+	if b.cfg.DefaultNetworkMode != NetworkModeLockdown {
+		switch {
+		case b.cfg.UnrestrictedEgressAcknowledged:
+			// Say it every boot. An acknowledgement that scrolls past once at
+			// install time is not an informed posture six months later.
+			log.Printf("sandbox: WARNING open sandbox egress is UNVERIFIED by fleet — %s is set, so boot did not require the %q NetworkPolicy. Sandbox pods labeled %s=open can reach whatever your cluster's own policy allows; if that is nothing, this is fine, and if you are not sure, it is not",
+				k8sUnrestrictedEgressAckEnv, b.cfg.OpenEgressPolicyName, k8sLabelEgress)
+		default:
+			if err := b.client.getNetworkPolicy(preCtx, b.cfg.Namespace, b.cfg.OpenEgressPolicyName); err != nil {
+				return fmt.Errorf("kubernetes sandbox preflight: open-egress NetworkPolicy %q not found in namespace %q — with FLEET_DEFAULT_NETWORK_MODE=open, a sandbox pod labeled %s=open that no policy selects can reach the fleet Service, the in-cluster database, the apiserver and the node metadata endpoint from model-authored code. Enable the policy the chart ships (networkPolicies.openEgress.create=true, with your cluster ranges in blockedCIDRs), or use FLEET_DEFAULT_NETWORK_MODE=lockdown, or — only if your cluster shapes this egress with policy fleet cannot see — set %s=true to state that deliberately: %w",
+					b.cfg.OpenEgressPolicyName, b.cfg.Namespace, k8sLabelEgress, k8sUnrestrictedEgressAckEnv, err)
+			}
+		}
+	}
+
 	if b.cfg.RuntimeClassName != "" {
 		if err := b.client.getRuntimeClass(preCtx, b.cfg.RuntimeClassName); err != nil {
 			return fmt.Errorf("kubernetes sandbox preflight: RuntimeClass %q not found — a hypervisor runtime that cannot be verified must abort boot, never degrade to the default runtime (ADR-0010 posture): %w", b.cfg.RuntimeClassName, err)

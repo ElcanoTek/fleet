@@ -131,7 +131,39 @@ type KubernetesConfig struct {
 	// labeled fleet.elcanotek.com/egress=none. Defaults to
 	// "fleet-sandbox-deny-all". The preflight verifies the OBJECT exists;
 	// enforcement is the CNI's job and the docs say so plainly.
+	//
+	// Required in EVERY mode, because a sealed turn can happen in any of them:
+	// a scheduled run with AllowNetwork off gets a sealed sandbox even on a
+	// deployment whose default posture is open.
 	NetworkPolicyName string
+
+	// OpenEgressPolicyName is its counterpart for Pods labeled
+	// fleet.elcanotek.com/egress=open, defaulting to
+	// "fleet-sandbox-open-egress". The preflight requires this object too
+	// whenever DefaultNetworkMode is open, because an open Pod that NO policy
+	// selects is a full citizen of the pod network: it can reach the fleet
+	// Service, the in-cluster database, the apiserver, and the node's metadata
+	// endpoint, all from model-authored code. Podman's open mode is bounded by
+	// construction (rootless pasta/slirp4netns is outbound-only and cannot
+	// reach the fleet process); here nothing is bounded unless a policy says
+	// so, which is why the docs called this policy required long before the
+	// preflight enforced it.
+	OpenEgressPolicyName string
+
+	// DefaultNetworkMode is the fleet-wide egress posture sandboxes are
+	// created with (NetworkModeOpen — including its historical "" spelling —
+	// or NetworkModeLockdown; allowlisted is refused before a backend is
+	// built). The preflight reads it to decide whether the open-egress policy
+	// is required.
+	DefaultNetworkMode string
+
+	// UnrestrictedEgressAcknowledged lets an operator boot in open mode with
+	// no open-egress policy of fleet's, for the one case fleet genuinely
+	// cannot verify: egress shaped by tooling it cannot see — a Cilium
+	// CiliumNetworkPolicy, a Calico GlobalNetworkPolicy, a service mesh, a
+	// cluster-wide default-deny. It is an explicit statement, never a default,
+	// and it is logged every boot rather than silently honoured.
+	UnrestrictedEgressAcknowledged bool
 
 	// NodeSelector pins sandbox pods to labeled nodes — the standard way to
 	// give runners a DEDICATED node pool, which is the issue's scaling story
@@ -223,7 +255,15 @@ func ParseK8sBundleDocsInImage(s string) (bool, error) {
 const (
 	defaultK8sNamespace     = "fleet-sandboxes"
 	defaultK8sNetworkPolicy = "fleet-sandbox-deny-all"
-	defaultK8sStartTimeout  = 2 * time.Minute
+	// defaultK8sOpenEgressPolicy names the chart's companion policy for
+	// egress=open pods. Symmetric with the deny-all name on purpose: an
+	// operator who reads one knob should be able to guess the other.
+	defaultK8sOpenEgressPolicy = "fleet-sandbox-open-egress"
+	// k8sUnrestrictedEgressAckEnv is named in the refusal and in the warning
+	// the acknowledgement produces, so both messages carry the exact string an
+	// operator has to set (or unset) rather than a description of it.
+	k8sUnrestrictedEgressAckEnv = "FLEET_SANDBOX_K8S_OPEN_EGRESS_ACKNOWLEDGED"
+	defaultK8sStartTimeout      = 2 * time.Minute
 )
 
 // sandboxContainerName is the single container in every sandbox Pod.
@@ -423,6 +463,9 @@ func NewKubernetesBackend(cfg KubernetesConfig) (*KubernetesBackend, error) {
 	}
 	if cfg.NetworkPolicyName == "" {
 		cfg.NetworkPolicyName = defaultK8sNetworkPolicy
+	}
+	if cfg.OpenEgressPolicyName == "" {
+		cfg.OpenEgressPolicyName = defaultK8sOpenEgressPolicy
 	}
 	if cfg.StartTimeout <= 0 {
 		cfg.StartTimeout = defaultK8sStartTimeout

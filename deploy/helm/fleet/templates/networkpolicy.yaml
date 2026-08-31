@@ -26,10 +26,14 @@ spec:
 # Egress shaping for OPEN sandbox pods: allow DNS + everything EXCEPT the
 # blocked CIDRs (your cluster/node ranges), so `pip install` works but the
 # sandbox cannot reach in-cluster Services. Ingress stays denied.
+# fleet's boot preflight REQUIRES this object whenever the default network
+# mode is open — an open pod that no policy selects can reach the fleet
+# Service, the database and the apiserver. Same honest limit as the deny-all
+# policy above: the CNI enforces it, not this object's existence.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: {{ include "fleet.fullname" . }}-sandbox-open-egress
+  name: {{ .Values.networkPolicies.openEgress.name }}
   namespace: {{ include "fleet.sandboxNamespace" . }}
   labels:
     {{- include "fleet.labels" . | nindent 4 }}
