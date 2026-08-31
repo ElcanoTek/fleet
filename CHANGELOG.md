@@ -297,6 +297,18 @@ prior versions are listed because none have shipped.
   cancelling a PR-head run and then merging over it is deliberate, not a
   case the gate exists to catch.
 
+- **Kubernetes: an exec stream that ended by itself leaked its keepalive
+  forever (#1264).** The session context was released only by `close()` or by
+  the caller's own context dying — never by the stream simply ending. client-go's
+  websocket executor runs a keepalive for as long as that context lives, so a
+  stream killed from the far side (the sandbox pod evicted or deleted mid-exec)
+  and then abandoned left a ping loop writing to a dead socket, leaking a
+  goroutine and a socket apiece. Measured on the validation cluster: one such
+  session logged **3,285 `Websocket Ping failed` lines over fifteen hours** and
+  was still going when it was found — and, worse than the leak itself, the noise
+  buried every other line in the log, which is how the next bug hides. The
+  context is now released whoever ends the stream.
+
 - **`FLEET_SANDBOX_WARM_SIZE` now rejects every explicit negative at the
   validation seam (#1299).** The knob registry row carries `min: 0`, so boot,
   hot-reload, and `fleet validate-config` all refuse a negative depth loudly —

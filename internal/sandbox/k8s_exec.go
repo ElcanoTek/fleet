@@ -77,6 +77,10 @@ const k8sExecCloseGrace = 2 * time.Second
 type k8sExecSession struct {
 	stdinW *io.PipeWriter // nil when the exec was started without stdin
 	cancel context.CancelFunc
+	// ctx is the session context cancel() releases. Held so the teardown
+	// contract below is observable: once done is closed, this context is
+	// cancelled, whoever ended the stream.
+	ctx context.Context
 
 	done chan struct{}
 
@@ -147,7 +151,7 @@ func (c *k8sClient) execPod(ctx context.Context, namespace, pod, container strin
 	}
 
 	sessCtx, cancel := context.WithCancel(context.Background())
-	s := &k8sExecSession{cancel: cancel, done: make(chan struct{}), exitCode: -1}
+	s := &k8sExecSession{cancel: cancel, ctx: sessCtx, done: make(chan struct{}), exitCode: -1}
 
 	var stdin io.Reader
 	if withStdin {
@@ -158,6 +162,19 @@ func (c *k8sClient) execPod(ctx context.Context, namespace, pod, container strin
 
 	go func() {
 		defer close(s.done)
+		// Release the context whoever ends the stream, not just the callers
+		// that reach close(). client-go's websocket executor runs a keepalive
+		// that pings every few seconds and lives until this context is
+		// cancelled — so a stream that dies on its own (the pod evicted or
+		// deleted mid-exec) left the ping loop writing to a dead socket
+		// forever. Observed on the validation cluster: one abandoned session
+		// logged 3,285 "Websocket Ping failed" lines over 15 hours, leaking a
+		// goroutine and a socket apiece and burying every other log line.
+		//
+		// Safe unconditionally: by the time this runs StreamWithContext has
+		// returned, so the context has no remaining purpose. close() still
+		// cancels for the paths that tear a LIVE stream down.
+		defer cancel()
 		streamErr := executor.StreamWithContext(sessCtx, remotecommand.StreamOptions{
 			Stdin:  stdin,
 			Stdout: stdout,
