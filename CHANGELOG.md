@@ -241,6 +241,20 @@ prior versions are listed because none have shipped.
   with the process-wide scrubber before the request that could echo them, and
   the remote-MCP HTTP error path (which relays wrapped VENDOR failure text)
   runs through that scrubber instead of shape patterns alone.
+- **Kubernetes: a `nodeSelector` value that YAML typed as a bool or a number
+  broke every turn (#1264).** The chart rendered the sandbox node selector with
+  `printf "%s=%s"`, and Go's `%s` on a non-string prints its error form — so
+  `nodeSelector: {fleet-runner: true}`, which YAML 1.1 makes a **bool**, became
+  the literal string `fleet-runner=%!s(bool=true)` (a bare number gave
+  `%!s(int64=12)`). `helm install` accepted it, boot and the cluster preflight
+  passed, and then every single turn failed at pod creation with an apiserver
+  422 quoting the mangled value back. It renders with `%v` now, so a bool or a
+  number becomes the string the operator meant — Kubernetes label values are
+  strings regardless — and both CI lanes assert that no chart value renders as
+  a Go format error, which `kubeconform` structurally cannot catch: the bad
+  text is a valid string in the rendered Deployment, and only the sandbox pod
+  created at runtime is rejected.
+
 - **Task transition guards are now one shared set, and cancelling a
   dead-lettered task no longer erases its replayability (#1268, #1269).** The
   four storage transition writers each hand-listed their own terminal refusal

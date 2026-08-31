@@ -83,6 +83,10 @@ sandbox:
     # select it here; taint it and add the matching toleration so nothing
     # else lands on it. This is fleet's horizontal scaling story — more
     # runner capacity is a bigger pool, never more fleet replicas.
+    # Label values are strings to Kubernetes. YAML 1.1 turns an unquoted
+    # true/false/on/off/yes/no or a bare number into a bool or a number, so
+    # prefer quoting them ({fleet-runner: "true"}); the chart coerces either
+    # way rather than rendering a value the apiserver refuses.
     nodeSelector: {}
     #  fleet.elcanotek.com/pool: sandboxes
     tolerations: []
