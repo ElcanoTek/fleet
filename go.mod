@@ -3,9 +3,9 @@ module github.com/ElcanoTek/fleet
 go 1.27.0
 
 require (
-	charm.land/bubbles/v2 v2.1.1
+	charm.land/bubbles/v2 v2.2.0
 	charm.land/bubbletea/v2 v2.0.9
-	charm.land/fantasy v0.41.2
+	charm.land/fantasy v0.41.3
 	charm.land/lipgloss/v2 v2.0.6
 	github.com/JohannesKaufmann/html-to-markdown v1.6.0
 	github.com/SherClockHolmes/webpush-go v1.4.0
@@ -42,21 +42,21 @@ require (
 	github.com/andybalholm/cascadia v1.3.2 // indirect
 	github.com/anthropics/anthropic-sdk-go v1.63.1 // indirect
 	github.com/atotto/clipboard v0.1.4 // indirect
-	github.com/aws/aws-sdk-go-v2 v1.43.5 // indirect
-	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.17 // indirect
-	github.com/aws/aws-sdk-go-v2/config v1.32.36 // indirect
-	github.com/aws/aws-sdk-go-v2/credentials v1.19.35 // indirect
-	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.18.36 // indirect
-	github.com/aws/aws-sdk-go-v2/internal/configsources v1.4.36 // indirect
-	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.7.36 // indirect
-	github.com/aws/aws-sdk-go-v2/internal/v4a v1.4.37 // indirect
-	github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.13.16 // indirect
-	github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.13.36 // indirect
-	github.com/aws/aws-sdk-go-v2/service/signin v1.5.5 // indirect
-	github.com/aws/aws-sdk-go-v2/service/sso v1.33.5 // indirect
-	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.38.5 // indirect
-	github.com/aws/aws-sdk-go-v2/service/sts v1.45.5 // indirect
-	github.com/aws/smithy-go v1.27.7 // indirect
+	github.com/aws/aws-sdk-go-v2 v1.43.6 // indirect
+	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.18 // indirect
+	github.com/aws/aws-sdk-go-v2/config v1.32.37 // indirect
+	github.com/aws/aws-sdk-go-v2/credentials v1.19.36 // indirect
+	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.18.37 // indirect
+	github.com/aws/aws-sdk-go-v2/internal/configsources v1.4.37 // indirect
+	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.7.37 // indirect
+	github.com/aws/aws-sdk-go-v2/internal/v4a v1.4.38 // indirect
+	github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.13.17 // indirect
+	github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.13.37 // indirect
+	github.com/aws/aws-sdk-go-v2/service/signin v1.5.6 // indirect
+	github.com/aws/aws-sdk-go-v2/service/sso v1.33.6 // indirect
+	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.38.6 // indirect
+	github.com/aws/aws-sdk-go-v2/service/sts v1.45.6 // indirect
+	github.com/aws/smithy-go v1.27.8 // indirect
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
 	github.com/aymerick/douceur v0.2.0 // indirect
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
@@ -102,7 +102,7 @@ require (
 	github.com/lib/pq v1.12.3 // indirect
 	github.com/lucasb-eyer/go-colorful v1.4.1 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
-	github.com/mattn/go-runewidth v0.0.24 // indirect
+	github.com/mattn/go-runewidth v0.0.27 // indirect
 	github.com/microcosm-cc/bluemonday v1.0.27 // indirect
 	github.com/moby/spdystream v0.5.1 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
@@ -138,8 +138,8 @@ require (
 	golang.org/x/time v0.15.0 // indirect
 	google.golang.org/api v0.293.0 // indirect
 	google.golang.org/genai v1.68.0 // indirect
-	google.golang.org/genproto/googleapis/api v0.0.0-20260810153831-ec0a7760b754 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20260810153831-ec0a7760b754 // indirect
+	google.golang.org/genproto/googleapis/api v0.0.0-20260818201246-1b0934165a6f // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260818201246-1b0934165a6f // indirect
 	google.golang.org/grpc v1.83.0 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
