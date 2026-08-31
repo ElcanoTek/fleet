@@ -1106,7 +1106,7 @@ webhook_triggers:
 providers:
   - name: my_provider
     type: openai
-    api_key_env: I1123_PROV_KEY
+    api_key_env: I1123_PROVIDER_KEY
 sandbox:
   image: "${I1123_SANDBOX_IMG:-latest}"
 `
@@ -1135,7 +1135,7 @@ sandbox:
 		"I1123_ACCT",                // AccountVars
 		"I1123_ID_VAR",              // IdentityEnv
 		"I1123_HMAC", "I1123_TOKEN", // WebhookTriggers
-		"I1123_PROV_KEY", // Providers
+		"I1123_PROVIDER_KEY", // Providers
 	}
 	for _, excl := range exclusions {
 		if slices.Contains(got, excl) {
