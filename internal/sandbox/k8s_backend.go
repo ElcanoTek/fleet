@@ -940,12 +940,29 @@ func (k *k8sImpl) deletePodNow(podName string) bool {
 // that, giving up loudly is better than a goroutine retrying into the void,
 // and a restart's boot sweep reclaims what is left because a restart makes
 // every leftover somebody else's incarnation.
+//
+// The two intervals are atomics, not for the drain goroutines' sake (each
+// computes its own wait) but for the tests': a drain goroutine legitimately
+// outlives the test that spawned it — that is the feature — so the next
+// test's shortened pacing must not be a data race against a live loop's read.
 var (
-	podReapInterval    = 10 * time.Second // overridden in tests
-	podReapMaxInterval = 2 * time.Minute
+	podReapInterval    = durationKnob(10 * time.Second) // overridden in tests
+	podReapMaxInterval = durationKnob(2 * time.Minute)
 	podReapMaxAttempts = 25 // ~30 minutes with the backoff below
 	podReapMaxPending  = 256
 )
+
+// durationKnob is an atomically read/written duration package knob.
+type reapDurationKnob struct{ ns atomic.Int64 }
+
+func durationKnob(d time.Duration) *reapDurationKnob {
+	k := &reapDurationKnob{}
+	k.ns.Store(int64(d))
+	return k
+}
+
+func (k *reapDurationKnob) get() time.Duration  { return time.Duration(k.ns.Load()) }
+func (k *reapDurationKnob) set(d time.Duration) { k.ns.Store(int64(d)) }
 
 // scheduleReap queues a pod whose delete failed, and makes sure a drain
 // goroutine is running. The goroutine exits when the queue empties, so an
@@ -977,11 +994,12 @@ func (b *KubernetesBackend) scheduleReap(podName string) {
 // failures share one cause (the apiserver is unreachable), so pacing the whole
 // queue together is what avoids hammering a cluster that is already unwell.
 func (b *KubernetesBackend) reapLoop() {
-	wait := podReapInterval
+	wait := podReapInterval.get()
 	for {
 		time.Sleep(wait)
-		if wait *= 2; wait > podReapMaxInterval {
-			wait = podReapMaxInterval
+		wait *= 2
+		if max := podReapMaxInterval.get(); wait > max {
+			wait = max
 		}
 
 		b.reapMu.Lock()

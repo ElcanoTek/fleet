@@ -101,9 +101,13 @@ func TestReapQueueIsBoundedAndSelfTerminating(t *testing.T) {
 
 func shortenReapInterval(t *testing.T) func() {
 	t.Helper()
-	oldInterval, oldMax := podReapInterval, podReapMaxInterval
-	podReapInterval, podReapMaxInterval = 10*time.Millisecond, 20*time.Millisecond
-	return func() { podReapInterval, podReapMaxInterval = oldInterval, oldMax }
+	oldInterval, oldMax := podReapInterval.get(), podReapMaxInterval.get()
+	podReapInterval.set(10 * time.Millisecond)
+	podReapMaxInterval.set(20 * time.Millisecond)
+	return func() {
+		podReapInterval.set(oldInterval)
+		podReapMaxInterval.set(oldMax)
+	}
 }
 
 func podNameForTest(i int) string {
