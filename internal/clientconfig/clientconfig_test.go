@@ -3,8 +3,12 @@ package clientconfig
 import (
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/ElcanoTek/fleet/internal/config"
 )
 
 // TestMCPServerTLSParseAndValidate covers the per-server TLS hardening block
@@ -1080,5 +1084,168 @@ func TestPricingRejectsNegativeRateAndMissingModel(t *testing.T) {
 				t.Fatalf("Load accepted a malformed pricing override (%s); want a validation error", name)
 			}
 		})
+	}
+}
+
+func TestHTTPToolConfigs(t *testing.T) {
+	tests := []struct {
+		name     string
+		env      map[string]string
+		input    []HTTPToolDef
+		expected []config.HTTPToolConfig
+	}{
+		{
+			name:     "empty http_tools",
+			input:    nil,
+			expected: nil,
+		},
+		{
+			name:     "empty http_tools slice",
+			input:    []HTTPToolDef{},
+			expected: nil,
+		},
+		{
+			name: "full mapping without env vars",
+			input: []HTTPToolDef{
+				{
+					Name:         "test_tool",
+					Description:  "A test tool",
+					Method:       "POST",
+					URL:          "https://example.com/api",
+					Headers:      map[string]string{"Authorization": "Bearer token"},
+					BodyTemplate: `{"key": "value"}`,
+					InputSchema:  map[string]interface{}{"type": "object"},
+					ResponseJQ:   ".data",
+					Critical:     true,
+				},
+			},
+			expected: []config.HTTPToolConfig{
+				{
+					Name:         "test_tool",
+					Description:  "A test tool",
+					Method:       "POST",
+					URL:          "https://example.com/api",
+					Headers:      map[string]string{"Authorization": "Bearer token"},
+					BodyTemplate: `{"key": "value"}`,
+					InputSchema:  map[string]interface{}{"type": "object"},
+					ResponseJQ:   ".data",
+					Critical:     true,
+				},
+			},
+		},
+		{
+			name: "mapping with env vars resolution",
+			env: map[string]string{
+				"FLEET_TEST_API_KEY_HTTP_TOOL": "secret123",
+				"FLEET_TEST_ANOTHER_VAR":       "value456",
+			},
+			input: []HTTPToolDef{
+				{
+					Name: "env_tool",
+					Headers: map[string]string{
+						"Authorization": "Bearer ${FLEET_TEST_API_KEY_HTTP_TOOL}",
+						"X-Custom":      "${FLEET_TEST_ANOTHER_VAR}",
+						"X-Missing":     "${FLEET_TEST_MISSING_VAR}",
+					},
+				},
+			},
+			expected: []config.HTTPToolConfig{
+				{
+					Name: "env_tool",
+					Headers: map[string]string{
+						"Authorization": "Bearer secret123",
+						"X-Custom":      "value456",
+						"X-Missing":     "",
+					},
+				},
+			},
+		},
+		{
+			name: "multiple tools",
+			input: []HTTPToolDef{
+				{Name: "tool1", Method: "GET"},
+				{Name: "tool2", Method: "POST"},
+			},
+			expected: []config.HTTPToolConfig{
+				{Name: "tool1", Method: "GET", Headers: map[string]string{}},
+				{Name: "tool2", Method: "POST", Headers: map[string]string{}},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for k, v := range tt.env {
+				t.Setenv(k, v)
+			}
+
+			b := &Bundle{HTTPTools: tt.input}
+			got := b.HTTPToolConfigs()
+
+			if !reflect.DeepEqual(got, tt.expected) {
+				t.Errorf("HTTPToolConfigs() mismatch\nGot:  %#v\nWant: %#v", got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestEnvVarNamesDefaultOnlyExcludesLiterals(t *testing.T) {
+	dir := t.TempDir()
+	manifest := `
+mcp_servers:
+  - name: local
+    command: python3
+    args: ["mcp/s.py"]
+    enabled_groups:
+      - [I1123_GROUP1, I1123_GROUP2]
+    account_vars: [I1123_ACCT]
+    env:
+      I1123_ID_VAR: "${I1123_ID_VAR:-default}"
+    identity_env: [I1123_ID_VAR]
+webhook_triggers:
+  - slug: webhook1
+    hmac_secret_env: I1123_HMAC
+    notify_user: some_user
+  - slug: webhook2
+    token_secret_env: I1123_TOKEN
+    notify_user: some_user
+providers:
+  - name: my_provider
+    type: openai
+    api_key_env: SOME_PROV_VAR
+sandbox:
+  image: "${I1123_SANDBOX_IMG:-latest}"
+`
+	if err := os.MkdirAll(filepath.Join(dir, "mcp"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "mcp", "s.py"), []byte("print('ok')"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	b, err := Load(dir)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	got := b.EnvVarNamesDefaultOnly()
+	if !slices.Contains(got, "I1123_SANDBOX_IMG") {
+		t.Errorf("default-only = %v, want I1123_SANDBOX_IMG (only default-carrying)", got)
+	}
+
+	// Exclusions
+	exclusions := []string{
+		"I1123_GROUP1", "I1123_GROUP2", // EnabledGroups
+		"I1123_ACCT",                // AccountVars
+		"I1123_ID_VAR",              // IdentityEnv
+		"I1123_HMAC", "I1123_TOKEN", // WebhookTriggers
+		"SOME_PROV_VAR", // Providers
+	}
+	for _, excl := range exclusions {
+		if slices.Contains(got, excl) {
+			t.Errorf("default-only = %v, must exclude literal %s", got, excl)
+		}
 	}
 }
