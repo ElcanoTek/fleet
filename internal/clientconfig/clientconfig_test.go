@@ -5,6 +5,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"reflect"
+
+	"github.com/ElcanoTek/fleet/internal/config"
 )
 
 // TestMCPServerTLSParseAndValidate covers the per-server TLS hardening block
@@ -1078,6 +1081,108 @@ func TestPricingRejectsNegativeRateAndMissingModel(t *testing.T) {
 			}
 			if _, err := Load(dir); err == nil {
 				t.Fatalf("Load accepted a malformed pricing override (%s); want a validation error", name)
+			}
+		})
+	}
+}
+
+func TestHTTPToolConfigs(t *testing.T) {
+	tests := []struct {
+		name     string
+		env      map[string]string
+		input    []HTTPToolDef
+		expected []config.HTTPToolConfig
+	}{
+		{
+			name:     "empty http_tools",
+			input:    nil,
+			expected: nil,
+		},
+		{
+			name:  "empty http_tools slice",
+			input: []HTTPToolDef{},
+			expected: nil,
+		},
+		{
+			name: "full mapping without env vars",
+			input: []HTTPToolDef{
+				{
+					Name:         "test_tool",
+					Description:  "A test tool",
+					Method:       "POST",
+					URL:          "https://example.com/api",
+					Headers:      map[string]string{"Authorization": "Bearer token"},
+					BodyTemplate: `{"key": "value"}`,
+					InputSchema:  map[string]interface{}{"type": "object"},
+					ResponseJQ:   ".data",
+					Critical:     true,
+				},
+			},
+			expected: []config.HTTPToolConfig{
+				{
+					Name:         "test_tool",
+					Description:  "A test tool",
+					Method:       "POST",
+					URL:          "https://example.com/api",
+					Headers:      map[string]string{"Authorization": "Bearer token"},
+					BodyTemplate: `{"key": "value"}`,
+					InputSchema:  map[string]interface{}{"type": "object"},
+					ResponseJQ:   ".data",
+					Critical:     true,
+				},
+			},
+		},
+		{
+			name: "mapping with env vars resolution",
+			env: map[string]string{
+				"FLEET_TEST_API_KEY_HTTP_TOOL": "secret123",
+				"FLEET_TEST_ANOTHER_VAR":       "value456",
+			},
+			input: []HTTPToolDef{
+				{
+					Name: "env_tool",
+					Headers: map[string]string{
+						"Authorization": "Bearer ${FLEET_TEST_API_KEY_HTTP_TOOL}",
+						"X-Custom":      "${FLEET_TEST_ANOTHER_VAR}",
+						"X-Missing":     "${FLEET_TEST_MISSING_VAR}",
+					},
+				},
+			},
+			expected: []config.HTTPToolConfig{
+				{
+					Name: "env_tool",
+					Headers: map[string]string{
+						"Authorization": "Bearer secret123",
+						"X-Custom":      "value456",
+						"X-Missing":     "",
+					},
+				},
+			},
+		},
+		{
+			name: "multiple tools",
+			input: []HTTPToolDef{
+				{Name: "tool1", Method: "GET"},
+				{Name: "tool2", Method: "POST"},
+			},
+			expected: []config.HTTPToolConfig{
+				{Name: "tool1", Method: "GET", Headers: map[string]string{}},
+				{Name: "tool2", Method: "POST", Headers: map[string]string{}},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for k, v := range tt.env {
+				t.Setenv(k, v)
+			}
+
+			b := &Bundle{HTTPTools: tt.input}
+			got := b.HTTPToolConfigs()
+
+			if !reflect.DeepEqual(got, tt.expected) {
+				t.Errorf("HTTPToolConfigs() mismatch\nGot:  %#v\nWant: %#v", got, tt.expected)
 			}
 		})
 	}
