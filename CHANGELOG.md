@@ -35,6 +35,16 @@ prior versions are listed because none have shipped.
   the gRPC/HTTP+JSON bindings are deferred and declared off. See
   [docs/A2A.md](docs/A2A.md) and ADR-0051.
 
+  Hardened in pre-merge review: unary `SendMessage` now honors the spec's
+  default wait contract (`returnImmediately` absent/false blocks — bounded at
+  30 minutes — until the task is terminal or interrupted, instead of always
+  answering with the just-created SUBMITTED row); a non-refusal create
+  failure (an infrastructure error out of the budget gate) is masked as a
+  generic internal error instead of putting raw Postgres text on the wire; a
+  non-empty `tenant` is refused on every method that carries it, not just
+  two; and A2A SSE streams are bounded (64 concurrent per process, 30-minute
+  lifetime, both leaning on the lossless `SubscribeToTask` reconnect).
+
 - **Prime Agent borrowings (#990).** A comparison of fleet against
   Prime Intellect's `prime-agent` harness, with the four ideas that cleared
   the high-value bar ported behind fleet's existing governance

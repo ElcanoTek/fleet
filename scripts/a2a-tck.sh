@@ -22,10 +22,12 @@ set -euo pipefail
 
 SUT_HOST="${1:?usage: scripts/a2a-tck.sh <fleet-orchestrator-base-url>}"
 
-# Pinned TCK commit: the last commit reviewed against this script. Bump
-# deliberately, with a look at tck/requirements/registry.py for new MUSTs.
+# NOT pinned: upstream has no release tags yet, so every run gets whatever
+# a2a-tck main is that day — results can drift between runs for upstream
+# reasons. Before wiring this into CI, replace "main" with a reviewed SHA
+# (and re-check tck/requirements/registry.py for new MUSTs when bumping).
 TCK_REPO="https://github.com/a2aproject/a2a-tck"
-TCK_COMMIT="main" # no upstream release tags yet; pin a SHA when wiring into CI
+TCK_COMMIT="main"
 
 workdir="$(mktemp -d)"
 trap 'rm -rf "$workdir"' EXIT

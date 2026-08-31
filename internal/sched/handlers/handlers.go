@@ -171,6 +171,12 @@ type Handlers struct {
 	// 501, following the unwired-subsystem convention. See a2a.go.
 	a2a *A2AConfig
 
+	// a2aStreams counts concurrently-held A2A SSE connections against
+	// a2aMaxConcurrentStreams (each one is a standing DB poller; see a2a.go).
+	// A plain int64 driven by sync/atomic, not atomic.Int64: a test clones the
+	// Handlers value, and the embedded noCopy would flag that clone.
+	a2aStreams int64
+
 	// systemPromptForPersona resolves the assembled scheduled system prompt
 	// (default prompt + persona expertise) for a persona override, exactly as the
 	// runner assembles it before dispatch (#233 cost forecast). Wired by cmd/fleet

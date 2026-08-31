@@ -28,6 +28,7 @@ import (
 
 	a2abridge "github.com/ElcanoTek/fleet/internal/a2a"
 	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
+	"github.com/ElcanoTek/fleet/internal/sched/db"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
 )
@@ -242,7 +243,8 @@ func TestA2ASendMessageCreatesGovernedTask(t *testing.T) {
 	rawKey, keyID := mintTaskKey(t, keyMgr, "creator")
 
 	_, env := rpc(t, mux, rawKey, "SendMessage", map[string]any{
-		"message": userMessage("Summarize the Q3 numbers and attach a report.", ""),
+		"message":       userMessage("Summarize the Q3 numbers and attach a report.", ""),
+		"configuration": map[string]any{"returnImmediately": true},
 	})
 	if env == nil || env.Error != nil {
 		t.Fatalf("SendMessage failed: %+v", env)
@@ -306,18 +308,103 @@ func TestA2ASendMessageCreatesGovernedTask(t *testing.T) {
 	wantRPCError(t, env, -32003, "PUSH_NOTIFICATION_NOT_SUPPORTED")
 
 	// A readonly key cannot create: definitive transport-layer 403.
-	_, readonlyRaw, err := keyMgr.CreateTypedKey("ro", apikeys.KeyTypeReadonly, nil, 0, nil, "")
-	_ = readonlyRaw
-	if err != nil {
-		t.Fatal(err)
-	}
-	roKey, roRaw, err := keyMgr.CreateTypedKey("ro2", apikeys.KeyTypeReadonly, nil, 0, nil, "")
-	_ = roKey
+	_, roRaw, err := keyMgr.CreateTypedKey("ro", apikeys.KeyTypeReadonly, nil, 0, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if rr, _ := rpc(t, mux, roRaw, "SendMessage", map[string]any{"message": userMessage("A perfectly valid prompt.", "")}); rr.Code != http.StatusForbidden {
 		t.Errorf("readonly create: code=%d, want 403", rr.Code)
+	}
+}
+
+// TestA2ASendMessageDefaultWaitsForOutcome locks the spec's unary contract: a
+// SendMessage with returnImmediately absent (the DEFAULT) MUST wait until the
+// task reaches a terminal or interrupted state, and the result is that
+// outcome — never the just-created SUBMITTED row a conformant client would
+// read as an empty delegation.
+func TestA2ASendMessageDefaultWaitsForOutcome(t *testing.T) {
+	store, keyMgr, mux := setupA2A(t)
+	rawKey, _ := mintTaskKey(t, keyMgr, "blocker")
+
+	const prompt = "Block until this task reaches its outcome."
+	envCh := make(chan *rpcEnvelope, 1)
+	go func() {
+		// Inlined rather than rpc(): no t.Fatal off the test goroutine.
+		body, err := json.Marshal(map[string]any{
+			"jsonrpc": "2.0", "id": 7, "method": "SendMessage",
+			"params": map[string]any{"message": userMessage(prompt, "")},
+		})
+		if err != nil {
+			envCh <- nil
+			return
+		}
+		req := httptest.NewRequest("POST", "/a2a", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("A2A-Version", "1.0")
+		req.Header.Set("X-API-Key", rawKey)
+		rr := httptest.NewRecorder()
+		mux.ServeHTTP(rr, req)
+		var env rpcEnvelope
+		if rr.Code == http.StatusOK && json.Unmarshal(rr.Body.Bytes(), &env) == nil {
+			envCh <- &env
+			return
+		}
+		envCh <- nil
+	}()
+
+	// Find the created row while the call blocks, then drive it terminal the
+	// way the scheduler would.
+	var created *models.Task
+	for deadline := time.Now().Add(10 * time.Second); created == nil && time.Now().Before(deadline); {
+		tasks, _, err := store.GetTasksFiltered(db.TaskFilter{}, 100, 0)
+		if err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		for _, task := range tasks {
+			if task.Prompt == prompt {
+				created = task
+				break
+			}
+		}
+		if created == nil {
+			time.Sleep(25 * time.Millisecond)
+		}
+	}
+	if created == nil {
+		t.Fatal("the blocked SendMessage never created its task")
+	}
+	select {
+	case env := <-envCh:
+		t.Fatalf("SendMessage returned before the task settled: %+v", env)
+	default:
+	}
+	if _, err := store.UpdateTasksStatusBatch([]uuid.UUID{created.ID}, models.TaskStatusPending, models.TaskStatusRunning); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpdateTasksStatusBatch([]uuid.UUID{created.ID}, models.TaskStatusRunning, models.TaskStatusSuccess); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case env := <-envCh:
+		if env == nil || env.Error != nil {
+			t.Fatalf("blocked SendMessage failed: %+v", env)
+		}
+		var result struct {
+			Task *struct {
+				Status struct {
+					State string `json:"state"`
+				} `json:"status"`
+			} `json:"task"`
+		}
+		if err := json.Unmarshal(env.Result, &result); err != nil || result.Task == nil {
+			t.Fatalf("result is not the task oneof: %s", env.Result)
+		}
+		if result.Task.Status.State != "TASK_STATE_COMPLETED" {
+			t.Errorf("blocked SendMessage state = %s, want TASK_STATE_COMPLETED", result.Task.Status.State)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("SendMessage still blocked after the task went terminal")
 	}
 }
 
@@ -327,7 +414,10 @@ func TestA2AReadsAreCreatorScoped(t *testing.T) {
 	rawB, _ := mintTaskKey(t, keyMgr, "bob")
 
 	// Key A's task, seeded through the wire.
-	_, env := rpc(t, mux, rawA, "SendMessage", map[string]any{"message": userMessage("Task belonging to key A.", "")})
+	_, env := rpc(t, mux, rawA, "SendMessage", map[string]any{
+		"message":       userMessage("Task belonging to key A.", ""),
+		"configuration": map[string]any{"returnImmediately": true},
+	})
 	if env == nil || env.Error != nil {
 		t.Fatalf("create: %+v", env)
 	}
@@ -396,6 +486,22 @@ func TestA2AReadsAreCreatorScoped(t *testing.T) {
 	if row == nil || row.CreatedByKeyID == nil || *row.CreatedByKeyID != keyA {
 		t.Fatalf("seeded task attribution wrong: %+v", row)
 	}
+
+	// The stated reason the /a2a route does its own per-method auth instead of
+	// the HTTP-verb key gating: a fleet_readonly_ key must be able to GetTask
+	// through a POST. Locked here so a TypeAllowsMethod-style regression on the
+	// route cannot pass the suite. (Scoping still applies: the readonly key is
+	// not the creator, so the task is invisible to it — the point is the 200 +
+	// JSON-RPC answer, not a transport 403/405.)
+	_, roRaw, err := keyMgr.CreateTypedKey("reader", apikeys.KeyTypeReadonly, nil, 0, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rr, env := rpc(t, mux, roRaw, "GetTask", map[string]any{"id": taskID})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("readonly GetTask over POST: code=%d, want 200 (per-method auth, not verb gating)", rr.Code)
+	}
+	wantRPCError(t, env, -32001, "TASK_NOT_FOUND")
 }
 
 func TestA2AListTasksPaginationAndFilters(t *testing.T) {
@@ -403,7 +509,8 @@ func TestA2AListTasksPaginationAndFilters(t *testing.T) {
 	rawKey, _ := mintTaskKey(t, keyMgr, "pager")
 	for i := 0; i < 3; i++ {
 		if _, env := rpc(t, mux, rawKey, "SendMessage", map[string]any{
-			"message": userMessage(fmt.Sprintf("Pagination fixture number %d.", i), ""),
+			"message":       userMessage(fmt.Sprintf("Pagination fixture number %d.", i), ""),
+			"configuration": map[string]any{"returnImmediately": true},
 		}); env == nil || env.Error != nil {
 			t.Fatalf("create %d: %+v", i, env)
 		}
@@ -465,7 +572,10 @@ func TestA2ACancelTask(t *testing.T) {
 	rawA, keyA := mintTaskKey(t, keyMgr, "canceller")
 	rawB, _ := mintTaskKey(t, keyMgr, "other")
 
-	_, env := rpc(t, mux, rawA, "SendMessage", map[string]any{"message": userMessage("A task to cancel.", "")})
+	_, env := rpc(t, mux, rawA, "SendMessage", map[string]any{
+		"message":       userMessage("A task to cancel.", ""),
+		"configuration": map[string]any{"returnImmediately": true},
+	})
 	var created struct {
 		Task struct {
 			ID string `json:"id"`
@@ -567,7 +677,8 @@ func TestA2AInputRequiredRoundTrip(t *testing.T) {
 
 	// A follow-up SendMessage with the taskId answers it through the resume seam.
 	_, env = rpc(t, mux, rawA, "SendMessage", map[string]any{
-		"message": userMessage("prod, please", paused.ID.String()),
+		"message":       userMessage("prod, please", paused.ID.String()),
+		"configuration": map[string]any{"returnImmediately": true},
 	})
 	if env == nil || env.Error != nil {
 		t.Fatalf("answer: %+v", env)

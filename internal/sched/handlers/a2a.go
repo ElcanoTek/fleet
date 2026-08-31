@@ -31,6 +31,7 @@ package handlers
 // triggers: callers send messages, not configuration.
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -38,6 +39,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	wire "github.com/a2aproject/a2a-go/v2/a2a"
@@ -78,6 +80,30 @@ const a2aStreamPollInterval = time.Second
 
 // a2aStreamHeartbeat matches the run-log stream's keep-alive cadence.
 const a2aStreamHeartbeat = 15 * time.Second
+
+// a2aStreamMaxLifetime bounds one SSE stream. Unlike the REST run-log stream
+// (which attaches to an in-memory buffer), every A2A stream is a persistent
+// once-per-second read against Postgres, and a task parked in
+// paused_awaiting_wake maps to WORKING — non-terminal — so a subscription to
+// a self-waking task would legitimately poll for days. Closing here is
+// lossless by design: the row is the source of truth, so a client that still
+// cares reconnects with SubscribeToTask and misses nothing (a close without a
+// terminal statusUpdate is indistinguishable from any dropped connection,
+// which every A2A client already has to handle).
+const a2aStreamMaxLifetime = 30 * time.Minute
+
+// a2aMaxConcurrentStreams caps concurrently-held A2A SSE connections
+// process-wide. The per-minute rate limiter only gates stream INITIATION, so
+// without a ceiling one credential could accumulate hundreds of held
+// connections — each a standing DB poller — over an hour.
+const a2aMaxConcurrentStreams = 64
+
+// a2aUnaryWaitBudget bounds a blocking unary SendMessage (returnImmediately
+// false — the spec default — MUST wait for the outcome). Long enough for the
+// task queue plus a real agent run; when it ends the freshest snapshot is
+// returned instead, which is the same shape a returnImmediately caller
+// accepts, and docs/A2A.md records the bound honestly.
+const a2aUnaryWaitBudget = 30 * time.Minute
 
 func a2aDisabled(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "application/json")
@@ -294,7 +320,7 @@ func (h *Handlers) a2aSendMessage(w http.ResponseWriter, r *http.Request, p prin
 	// answers the pending question through the same resume seam as
 	// POST /tasks/{id}/resume.
 	if params.Message.TaskID != "" {
-		h.a2aAnswerTask(w, r, p, req, params.Message.TaskID, prompt, streaming)
+		h.a2aAnswerTask(w, r, p, req, params.Message.TaskID, prompt, params.Config, streaming)
 		return
 	}
 
@@ -323,13 +349,65 @@ func (h *Handlers) a2aSendMessage(w http.ResponseWriter, r *http.Request, p prin
 		h.a2aStreamTask(w, r, req.ID, task.ID)
 		return
 	}
-	a2aWrite(w, a2abridge.NewResponse(req.ID, wire.StreamResponse{Event: a2abridge.BuildTask(task, h.a2a.PublicBaseURL, true)}))
+	// Spec: a unary SendMessage with returnImmediately false — the DEFAULT —
+	// MUST wait until the task reaches a terminal or interrupted state before
+	// returning. A conformant non-streaming client treats this result as the
+	// outcome, so answering with the just-created SUBMITTED row would hand it
+	// a delegation that appears to have produced nothing.
+	final := task
+	if params.Config == nil || !params.Config.ReturnImmediately {
+		final = h.a2aAwaitOutcome(r.Context(), task.ID, task)
+	}
+	a2aWrite(w, a2abridge.NewResponse(req.ID, wire.StreamResponse{Event: a2abridge.BuildTask(final, h.a2a.PublicBaseURL, true)}))
+}
+
+// a2aAwaitOutcome implements the unary SendMessage wait contract: poll the
+// task row (the same event source the streams use) until the task reaches a
+// terminal or interrupted (INPUT_REQUIRED / AUTH_REQUIRED) state, the caller
+// disconnects, or the wait budget ends — and return the freshest snapshot
+// either way, because the caller can only be told what is true now.
+//
+// Deliberately NOT counted against the concurrent-stream ceiling: each wait
+// is tied to one just-created or just-resumed task, so it is already bounded
+// by the create path's rate limit and the key's hourly cap, while
+// subscriptions can be opened without limit against a single task.
+func (h *Handlers) a2aAwaitOutcome(ctx context.Context, taskID uuid.UUID, latest *models.Task) *models.Task {
+	settled := func(t *models.Task) bool {
+		state, _ := a2abridge.TaskStateFor(t.Status)
+		return state.Terminal() || state == wire.TaskStateInputRequired || state == wire.TaskStateAuthRequired
+	}
+	if settled(latest) {
+		return latest
+	}
+	budget := time.NewTimer(a2aUnaryWaitBudget)
+	defer budget.Stop()
+	ticker := time.NewTicker(a2aStreamPollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return latest
+		case <-budget.C:
+			return latest
+		case <-ticker.C:
+		}
+		task, err := h.storage.GetTask(taskID)
+		if err != nil || task == nil {
+			// The row is the source of truth; if it cannot be read, the last
+			// good snapshot is the most honest thing left to say.
+			return latest
+		}
+		latest = task
+		if settled(latest) {
+			return latest
+		}
+	}
 }
 
 // a2aAnswerTask resumes a paused-awaiting-input task with the message text.
 // Only the task's creator (or a cancel-scoped operator credential) may answer
 // — answering steers the run, so the bar matches the other mutating surface.
-func (h *Handlers) a2aAnswerTask(w http.ResponseWriter, r *http.Request, p principal, req a2abridge.Request, rawID wire.TaskID, answer string, streaming bool) {
+func (h *Handlers) a2aAnswerTask(w http.ResponseWriter, r *http.Request, p principal, req a2abridge.Request, rawID wire.TaskID, answer string, cfg *wire.SendMessageConfig, streaming bool) {
 	task, err := h.a2aVisibleTask(p, rawID)
 	if err != nil {
 		a2aWrite(w, a2aErrorFrom(req.ID, err))
@@ -364,25 +442,42 @@ func (h *Handlers) a2aAnswerTask(w http.ResponseWriter, r *http.Request, p princ
 		a2aWrite(w, a2abridge.NewErrorResponse(req.ID, wire.ErrInternalError, "the task was resumed but could not be re-read", nil))
 		return
 	}
+	// The same unary wait contract as a fresh send: the resumed task has to
+	// reach its next outcome before a default-config caller is answered.
+	if cfg == nil || !cfg.ReturnImmediately {
+		updated = h.a2aAwaitOutcome(r.Context(), task.ID, updated)
+	}
 	a2aWrite(w, a2abridge.NewResponse(req.ID, wire.StreamResponse{Event: a2abridge.BuildTask(updated, h.a2a.PublicBaseURL, true)}))
 }
 
 // a2aCreateError maps the shared create pipeline's refusals onto the wire: a
 // 400-class refusal is invalid params (the validation text passes through
-// verbatim), everything else — the run_if/priority 403s, storage failures,
-// and budget refusals — is the implementation-defined server error, with the
-// budget's retry hint carried in the ErrorInfo metadata.
+// verbatim), the other typed refusals (run_if/priority 403s, the storage
+// failure) and a budget refusal are the implementation-defined server error —
+// all of those carry handler- or budget-authored text — with the budget's
+// retry hint in the ErrorInfo metadata. Anything else out of the pipeline is
+// an INFRASTRUCTURE failure (the budget gate's contract: typically a wrapped
+// Postgres error), and its text belongs in the server log, never on the wire
+// to an external caller — the REST path masks it the same way
+// (writeBudgetRefusal's fail-closed 500).
 func a2aCreateError(id json.RawMessage, err error) a2abridge.Response {
 	var refusal *createRefusalError
-	if errors.As(err, &refusal) && refusal.status == http.StatusBadRequest {
-		return a2abridge.NewErrorResponse(id, wire.ErrInvalidParams, refusal.detail, nil)
+	if errors.As(err, &refusal) {
+		if refusal.status == http.StatusBadRequest {
+			return a2abridge.NewErrorResponse(id, wire.ErrInvalidParams, refusal.detail, nil)
+		}
+		return a2abridge.NewErrorResponse(id, wire.ErrServerError, refusal.detail, nil)
 	}
-	var meta map[string]string
 	var exceeded *budget.ExceededError
-	if errors.As(err, &exceeded) && exceeded.RetryAfter > 0 {
-		meta = map[string]string{"retryAfterSeconds": strconv.Itoa(int(exceeded.RetryAfter.Seconds()))}
+	if errors.As(err, &exceeded) {
+		var meta map[string]string
+		if exceeded.RetryAfter > 0 {
+			meta = map[string]string{"retryAfterSeconds": strconv.Itoa(int(exceeded.RetryAfter.Seconds()))}
+		}
+		return a2abridge.NewErrorResponse(id, wire.ErrServerError, exceeded.Error(), meta)
 	}
-	return a2abridge.NewErrorResponse(id, wire.ErrServerError, err.Error(), meta)
+	log.Printf("A2A: task create failed (infrastructure): %v", err)
+	return a2abridge.NewErrorResponse(id, wire.ErrInternalError, "task creation failed on the server; try again", nil)
 }
 
 // a2aErrorFrom renders an error already wrapping one of the wire sentinels.
@@ -409,6 +504,10 @@ func (h *Handlers) a2aGetTask(w http.ResponseWriter, _ *http.Request, p principa
 	var params wire.GetTaskRequest
 	if err := json.Unmarshal(req.Params, &params); err != nil {
 		a2aWrite(w, a2abridge.NewErrorResponse(req.ID, wire.ErrInvalidParams, "params must be a GetTaskRequest: "+err.Error(), nil))
+		return
+	}
+	if params.Tenant != "" {
+		a2aWrite(w, a2abridge.NewErrorResponse(req.ID, wire.ErrInvalidParams, "this agent declares no tenant; omit the tenant field", nil))
 		return
 	}
 	task, err := h.a2aVisibleTask(p, params.ID)
@@ -556,6 +655,10 @@ func (h *Handlers) a2aCancelTask(w http.ResponseWriter, _ *http.Request, p princ
 		a2aWrite(w, a2abridge.NewErrorResponse(req.ID, wire.ErrInvalidParams, "params must be a CancelTaskRequest: "+err.Error(), nil))
 		return
 	}
+	if params.Tenant != "" {
+		a2aWrite(w, a2abridge.NewErrorResponse(req.ID, wire.ErrInvalidParams, "this agent declares no tenant; omit the tenant field", nil))
+		return
+	}
 	task, err := h.a2aVisibleTask(p, params.ID)
 	if err != nil {
 		a2aWrite(w, a2aErrorFrom(req.ID, err))
@@ -610,6 +713,10 @@ func (h *Handlers) a2aSubscribeToTask(w http.ResponseWriter, r *http.Request, p 
 		a2aWrite(w, a2abridge.NewErrorResponse(req.ID, wire.ErrInvalidParams, "params must be a SubscribeToTaskRequest: "+err.Error(), nil))
 		return
 	}
+	if params.Tenant != "" {
+		a2aWrite(w, a2abridge.NewErrorResponse(req.ID, wire.ErrInvalidParams, "this agent declares no tenant; omit the tenant field", nil))
+		return
+	}
 	task, err := h.a2aVisibleTask(p, params.ID)
 	if err != nil {
 		a2aWrite(w, a2aErrorFrom(req.ID, err))
@@ -640,6 +747,17 @@ func (h *Handlers) a2aStreamTask(w http.ResponseWriter, r *http.Request, rpcID j
 		writeError(w, http.StatusInternalServerError, "Streaming unsupported")
 		return
 	}
+	// Refused BEFORE the SSE headers, so the ceiling comes back as an
+	// ordinary JSON-RPC error the client can act on, not a dead stream.
+	if n := atomic.AddInt64(&h.a2aStreams, 1); n > a2aMaxConcurrentStreams {
+		atomic.AddInt64(&h.a2aStreams, -1)
+		a2aWrite(w, a2abridge.NewErrorResponse(rpcID, wire.ErrServerError,
+			fmt.Sprintf("this server is at its concurrent A2A stream ceiling (%d); retry shortly, or poll GetTask", a2aMaxConcurrentStreams), nil))
+		return
+	}
+	defer atomic.AddInt64(&h.a2aStreams, -1)
+	lifetime := time.NewTimer(a2aStreamMaxLifetime)
+	defer lifetime.Stop()
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache, no-transform")
 	w.Header().Set("Connection", "keep-alive")
@@ -684,6 +802,11 @@ func (h *Handlers) a2aStreamTask(w http.ResponseWriter, r *http.Request, rpcID j
 	for {
 		select {
 		case <-r.Context().Done():
+			return
+		case <-lifetime.C:
+			// Lifetime bound (see a2aStreamMaxLifetime): close without a
+			// terminal statusUpdate, which a conformant client treats as a
+			// dropped connection and recovers from with SubscribeToTask.
 			return
 		case <-ticker.C:
 		}

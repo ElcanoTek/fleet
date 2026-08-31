@@ -81,7 +81,7 @@ body carries (a readonly key must be able to `GetTask` through a POST).
 
 | A2A method | fleet seam |
 | --- | --- |
-| `SendMessage` | the shared create pipeline behind `POST /tasks` (`createTaskGoverned`: validate → run_if gate → budget gate → attribution → priority cap → persist); with `message.taskId`, the `POST /tasks/{id}/resume` seam |
+| `SendMessage` | the shared create pipeline behind `POST /tasks` (`createTaskGoverned`: validate → run_if gate → budget gate → attribution → priority cap → persist); with `message.taskId`, the `POST /tasks/{id}/resume` seam. Unary calls honor `configuration.returnImmediately`: `true` answers with the just-created (or just-resumed) task; `false` — the spec default — **blocks**, polling the row until the task reaches a terminal or interrupted state (or the caller disconnects, or the 30-minute wait budget ends — then the freshest snapshot is returned) |
 | `SendStreamingMessage` | the same, then the task-row watcher (below) |
 | `GetTask` | `GET /tasks/{id}` semantics, ADR-0043 creator-scoped |
 | `ListTasks` | `GET /tasks` with the same SQL-side visibility filter; cursor pagination (`pageToken`), `nextPageToken` always present (`""` at the end) |
@@ -144,6 +144,17 @@ after two minutes while the row never lies. Consequence worth knowing: a
 dropped connection loses nothing — `SubscribeToTask` re-reads the row — and
 there is no `Last-Event-ID` protocol (the A2A spec has none either).
 
+Because every stream is a standing once-per-second Postgres poller, two
+bounds apply (and lean on exactly that lossless-reconnect property): at most
+**64 concurrent A2A streams** per process (the 65th subscribe is refused with
+an ordinary JSON-RPC error naming the ceiling, before any SSE bytes), and a
+**30-minute per-stream lifetime**, after which the server closes the
+connection without a terminal `statusUpdate` — indistinguishable from any
+dropped connection, so a client that still cares resubscribes and misses
+nothing. A blocking unary `SendMessage` (previous section) is bounded the
+same 30 minutes but does not count against the stream ceiling: it is tied to
+one just-created task, so the create rate limit already bounds it.
+
 ## Honest scope
 
 - **JSON-RPC + SSE only.** The gRPC and HTTP+JSON bindings are not
@@ -163,7 +174,13 @@ there is no `Last-Event-ID` protocol (the A2A spec has none either).
 - **`paused_awaiting_wake` reports as `WORKING`** (no better honest option in
   the A2A vocabulary).
 - **`statusTimestampAfter` (ListTasks) is refused** (`-32602`) rather than
-  silently ignored.
+  silently ignored — and so is a non-empty `tenant` on **every** method that
+  carries the field (this deployment declares no tenant), for the same
+  reason.
+- **A blocking unary `SendMessage` wait is bounded at 30 minutes.** The spec
+  says wait for the outcome; a server cannot hold a connection forever, so
+  past the budget the freshest snapshot is returned — the same shape a
+  `returnImmediately` caller accepts. Long delegations should stream or poll.
 - **Task history is empty** (see above).
 - **Spec-literal `A2A-Version` handling** — absent ⇒ 0.3 ⇒ `-32009`.
 - **Fleet as an A2A *client*** (delegating outward) is out of scope — Phase 3,
