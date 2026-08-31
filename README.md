@@ -1,468 +1,420 @@
-# fleet
-
-[![CI](https://github.com/ElcanoTek/fleet/actions/workflows/ci.yml/badge.svg)](https://github.com/ElcanoTek/fleet/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-
-**A general-purpose agent fleet you run yourself — any model, in a
-sandbox, on a budget, connected to your data.**
-
-fleet is how a whole department adopts AI agents without losing sleep: every
-tool call sandboxed, every turn metered against a budget, every credential held
-server-side, and every working setup versioned so it runs again tomorrow — for
-the next person, on a schedule. MIT-licensed, on your infrastructure: your
-compute, your data, your know-how. You own the means of production.
-
-## See it in action
-
-One story, three surfaces: **plan the work in chat, automate the
-follow-through, ride along from anywhere.** The web demos are real recordings —
-real model, real sandbox, real scheduler
-([how they're made](docs/generating-demo-gif.md)).
-
-**Chat — plan the kickoff, live** _(real model + sandbox)_
-
-![Fleet chat UI — a real streamed turn with tool use](docs/screenshots/web/chat-demo.gif)
-
-**Operations Center — the follow-through, automated** _(real scheduler)_
-
-![Fleet Operations Center — recurring automations and upcoming runs](docs/screenshots/web/ops-demo.gif)
-
-**Terminal chat (`fleet chat`) — the same fleet, from your shell**
-
-![Fleet terminal chat TUI demo](docs/screenshots/tui/demo.gif)
-
-More: [screenshots of every surface](docs/screenshots/).
-
-## Contents
-
-- [See it in action](#see-it-in-action) · [Why fleet](#why-fleet) · [Batteries included](#batteries-included) · [Built for trust](#built-for-trust-governed-auditable-delegation) · [Architecture at a glance](#architecture-at-a-glance) · [Standards](#standards)
-- [Repository layout](#repository-layout) · [The client-config bundle](#the-client-config-bundle) · [No lock-in](#no-lock-in-your-agent-ip-is-portable) · [Development](#development)
-- [Deploy](#deploy) · [Operating fleet](#operating-fleet) · [Documentation](#documentation)
-- [Built by Elcano](#built-by-elcano-commercial-support) · [Contributing](#contributing) · [License](#license)
-
-## Why fleet
-
-If your team keeps reaching for the same agent recipes — the same prompts, the
-same connected tools, the same guardrails — fleet is the place to standardize
-them.
-
-- **Any model.** fleet runs its own native agent loop and lets you choose the
-  **best model for each task** rather than hard-wiring one vendor. You decide,
-  **at the model layer**, who sees your data — task by task, and you can
-  change your mind tomorrow.
-
-- **Sandboxed by default.** Model-authored local execution — bash, Python, and
-  file I/O — runs in an ephemeral rootless-Podman container with **no fast path
-  around it**. MCP calls are a documented host-side broker exception so their
-  credentials never enter the sandbox or model context. Bundle MCP and inline
-  HTTP-tool execution is owned by a dedicated broker subprocess; the main
-  agent process retains only public catalog metadata and the call transport.
-  Per-user remote MCP token acquisition and calls use the same child-owned
-  scoped boundary ([ADR-0040](docs/adr/0040-child-owned-remote-mcp-runtime.md)).
-
-- **Two isolation tiers, one config line.** Set `sandbox.runtime: kata` (or
-  `libkrun`) and every sandbox container becomes a **dedicated KVM microVM**
-  (one per turn / scheduled run / persistent-REPL conversation) — escape now
-  takes a hypervisor CVE, not a container break-out; fail-closed preflight at
-  boot. [`docs/SANDBOX-RUNTIMES.md`](docs/SANDBOX-RUNTIMES.md).
-
-- **Cost-controlled.** Per-turn cost and token **ceilings**, an iteration cap,
-  and a timeout — enforced, not advisory. A runaway loop costs a capped turn,
-  not an open-ended invoice.
-
-- **A real scheduler.** Priority queues with anti-starvation, opt-in retries
-  with backoff for *transient* failures only (deterministic ones never retry),
-  bounded log retention with optional encrypted archival, and per-key priority
-  ceilings. Every knob and default:
-  [`docs/FEATURE-NOTES.md`](docs/FEATURE-NOTES.md).
-
-- **Connected to your data.** fleet speaks [MCP](#standards): a per-deployment
-  connector catalog with multi-account credentials brokered host-side, per-task
-  tool selection, and per-user hosted-MCP connections.
-
-- **Your setups, packaged.** Personas, playbooks, skills, connectors, branding,
-  and model defaults live in a versioned **client-config bundle** (see below) —
-  standardize once, reuse everywhere.
-
-- **MIT-licensed and observable.** Structured observer events for every turn —
-  each tool call, result, token count, and cost — so you always know what an
-  agent did and what it cost.
-
-## Batteries included
-
-fleet ships usable on day one — the platform pieces you'd otherwise assemble
-yourself are already in the box, tested, and governed by the same core:
-
-- **An MCP connector library, two trust classes deep.** Your bundle's own
-  connectors run as fixed host-side broker operations (not model-authored
-  sandbox code), and a
-  curated directory of **hundreds of verified vendor-hosted MCP servers**
-  (GitHub, Google, Notion, Slack, Stripe, X, OpenRouter, Hugging Face, AWS, …)
-  is one OAuth click away — each explicitly badged *Bundled* vs *Third-party*
-  so users know what they're opting into ([`docs/MCP-CATALOG.md`](docs/MCP-CATALOG.md)).
-  Inline `http_tools` cover the "just call this REST endpoint" cases without an
-  MCP subprocess.
-- **A real scheduler, not a cron wrapper.** Priority queues with
-  anti-starvation, transient-only retries with backoff, SLA tracking, dead-letter
-  + replay, per-task sandbox limits, structured JSON output (`output_schema`),
-  live SSE run streams, batch/import/export, and an Upcoming-runs view.
-- **Automation surface for your own ecosystem.** Typed API keys + an
-  OpenAPI-specified HTTP API to enqueue and consume governed agent jobs from CI,
-  cron, bots, or other tasks ([`docs/BUILDING-ON-FLEET.md`](docs/BUILDING-ON-FLEET.md));
-  inbound HMAC webhooks and email triggers to spawn work; outbound
-  signed-webhook/email/browser-push notifications when it finishes.
-- **Memory that can be trusted.** Typed, provenanced user memory with
-  approval-gated writes, pin/retire lifecycle, human-confirmed supersession,
-  and a derived temporal knowledge graph with as-of queries
-  ([`docs/MEMORY.md`](docs/MEMORY.md)).
-- **Team surfaces.** Projects/spaces with shared instructions + curated
-  connectors + shared memory, team RBAC, read-only share links, conversation
-  branching, conversation labels, and a dataset/table agent for row-by-row
-  background work with human-approved write-backs.
-- **Quality gates for your agents.** A self-hosted eval & regression harness
-  (`fleet eval`) that replays golden prompts through the real loop and gates
-  model/bundle changes ([`docs/EVALS.md`](docs/EVALS.md)); per-run error
-  analysis; optional PII redaction.
-- **Three clients out of the box.** The web chat UI, the Operations Center,
-  and a full terminal client (`fleet chat`) — all thin views over the same
-  governed API.
-
-## Built for trust: governed, auditable delegation
-
-The hard part of agent adoption isn't technical anymore — the real barriers
-are human: *does it work, can I trust it, and am I willing to hand over
-control?* fleet earns each yes with engineering, not promises: sandboxes,
-budgets, approvals, and receipts.
-
-**Can it do the job — reproducibly?** The whole agent setup — prompts,
-personas, playbooks, skills, connectors, model defaults — is a **versioned
-bundle** (a plain git repo), so the setup that worked runs again next time, for
-the next person, on a schedule. Every turn streams structured **observer
-events** (each tool call, result, tokens, cost), so you judge work from its
-trace, not just its final answer.
-
-**Should I trust it with this task?** Limits that actually fire — cost ceiling,
-token ceiling, iteration cap, timeout — and a persisted per-turn audit trail.
-fleet owns execution end to end: there is no self-executing agent it can only
-observe, so the log records what actually ran.
-
-**Am I comfortable handing over control?** The agent has no direct power: every
-model-authored local tool call goes through the sandbox under host policy
-(optionally a KVM microVM), credentials stay host-side, sensitive actions raise a
-**default-deny allow/deny card** with no "approve all", and unattended scheduled
-work is fail-closed — network-sealed by default with an end-of-run verifier
-([`docs/AGENT-RUNTIME.md`](docs/AGENT-RUNTIME.md)). The out-of-process MCP
-address-space boundary is active for bundle MCP servers, inline HTTP tools, and
-per-run hosted MCP clients. Explicit remote-MCP OAuth/connectors HTTP endpoints
-remain parent-side control-plane code
-([ADR-0040](docs/adr/0040-child-owned-remote-mcp-runtime.md)). One caveat to respect: the
-bundle's own host-side MCP servers *do* receive brokered credentials by design,
-so treat bundle write access as production access
-([`SECURITY.md`](SECURITY.md)).
-
-## Architecture at a glance
-
-A single `fleet` process runs, on one box:
-
-1. **Interactive real-time chat** sessions (streamed over SSE), and
-2. A **scheduling engine** that runs recurring background agent tasks,
-
-both executing their tool calls inside the **same** rootless-Podman sandbox, and
-both driven by **one** unified agent runtime (`internal/agentcore`).
-
-## Standards
-
-fleet is built on open protocols. We list only what is actually implemented and
-tested in this repository:
-
-- **MCP — Model Context Protocol.** A merged Go client (stdio + HTTP) drives the
-  deployment's connector catalog, and each **user** can OAuth into hosted MCP
-  servers from the GUI (OAuth 2.1 + PKCE, dynamic registration, tokens encrypted
-  at rest, host-side). [ADR-0009](docs/adr/0009-per-user-remote-mcp-oauth.md).
-- **Agent Skills.** The bundle's `skills/` dir holds capabilities in the open
-  [Agent Skills format](https://github.com/anthropics/skills), loaded with
-  progressive disclosure (name + description in the prompt; the agent reads
-  `SKILL.md` and runs bundled scripts on demand, in the sandbox). Invoke
-  explicitly with `/skill-name` in chat.
-
-The orchestrator HTTP API is published as an OpenAPI 3.1 contract at
-[`docs/openapi.yaml`](docs/openapi.yaml); a CI test
-(`cmd/fleet/openapi_drift_test.go`) keeps its routes + auth schemes in lockstep
-with the shipped router, and gates the body schemas of every named component
-schema bound to a Go model (property existence, `required` integrity,
-type-kind). Inline operation schemas, schemas without a reflectable Go type,
-and status codes remain documentary.
-
-## Repository layout
-
-Abridged — the load-bearing directories, not every package. `internal/` alone
-holds roughly forty packages; `cmd/` also carries the test/bench helpers
-(`fake-llm`, `fleet-bench`), and `scripts/` and `.github/` hold the operator
-scripts and the CI definition.
+# Gitleaks
 
 ```
-cmd/
-  fleet/          the one unified binary — server (`fleet serve`: chat HTTP/SSE + orchestrator HTTP + scheduler + worker pool) AND operator CLI (every other verb)
-  fleet-admin/    transitional deprecation shim — forwards to `fleet`; removed after one release
-  sandbox-probe/  deploy-time sandbox smoke test
-internal/
-  agentcore/      the one unified run loop + shared agent primitives (cost ceilings, policy)
-  agent/          input sources, observers, policies, finalize (interactive + scheduled)
-  runner/         in-process capped worker pool (the old "gig", folded in)
-  creds/          MCP credential-account store (host-side credential broker)
-  clientconfig/   loads the pluggable CLIENT BUNDLE (branding, MCP catalog, prompts, skills, ...)
-  mcp/            merged Go MCP client (stdio + HTTP)
-  mcpbroker/      out-of-process bundle MCP broker transport + scoped sessions
-  sandbox/        the single execution backend (ephemeral container over a persistent workspace)
-  tools/          native agent tools (bash, python, ...)
-  store/          interactive (chat) Postgres layer + migrations
-  sched/          orchestrator/scheduler (was moc) + its migrations
-  httpapi/        chat HTTP/SSE/auth layer
-  config/         unified configuration (env loading; the MCP catalog comes from the bundle)
-  ...             (~30 more: agentcore's neighbours, netguard, mcpoauth, observability, ...)
-scripts/          bootstrap / update / doctor, the sandbox image build, and the CI policy checks
-.github/          workflows (the CI + SAST gates), CODEOWNERS, dependabot, the CodeQL gate filter
-web/              one Next.js app: /chat and /orchestrator
-config/default/   the GENERIC client bundle baked into the repo (runs bare),
-                  including config/default/sandbox/Containerfile — the sandbox
-                  image is a per-client bundle artifact (build-on-box default)
-docs/             architecture & operator docs; docs/adr/ records the load-bearing
-                  Architecture Decision Records behind the invariants
+┌─○───┐
+│ │╲  │
+│ │ ○ │
+│ ○ ░ │
+└─░───┘
 ```
 
-> **Naming note (v1 glossary):** `chat`, `moc`, `gig`, and `cutlass` — which
-> appear in code comments, env-var prefixes (`CUTLASS_*`), docs, and the
-> CHANGELOG — are the names of the internal predecessor stack that fleet
-> consolidates and replaces. They are historical aliases inside this repo, not
-> separate public projects.
+<p align="left">
+  <p align="left">
+	  <a href="https://github.com/zricethezav/gitleaks/actions/workflows/test.yml">
+		  <img alt="Github Test" src="https://github.com/zricethezav/gitleaks/actions/workflows/test.yml/badge.svg">
+	  </a>
+	  <a href="https://hub.docker.com/r/zricethezav/gitleaks">
+		  <img src="https://img.shields.io/docker/pulls/zricethezav/gitleaks.svg" />
+	  </a>
+	  <a href="https://github.com/zricethezav/gitleaks-action">
+		<img alt="gitleaks badge" src="https://img.shields.io/badge/protected%20by-gitleaks-blue">
+	 </a>
+	  <a href="https://twitter.com/intent/follow?screen_name=zricethezav">
+		  <img src="https://img.shields.io/twitter/follow/zricethezav?label=Follow%20zricethezav&style=social&color=blue" alt="Follow @zricethezav" />
+	  </a>
+  </p>
+</p>
 
-## The client-config bundle
+### Join our Discord! [![Discord](https://img.shields.io/discord/1102689410522284044.svg?label=&logo=discord&logoColor=ffffff&color=7389D8&labelColor=6A7EC2)](https://discord.gg/8Hzbrnkr7E)
 
-fleet ships **no** client-specific content. It loads a **client-config bundle**
-from `FLEET_CLIENT_CONFIG_DIR`: `manifest.yaml` supplies branding, model
-defaults, the connector catalog, and tool policy; `system_prompts/`,
-`personas/`, `protocols/`, `skills/`, and `mcp/` supply the content. Contract:
-[`config/default/README.md`](config/default/README.md).
-
-Three ways in: **run bare** (the in-repo generic bundle — good for a first
-look), **fork the public template**
-([`ElcanoTek/example-config`](https://github.com/ElcanoTek/example-config) for
-the single-box podman install,
-[`ElcanoTek/example-kubernetes-config`](https://github.com/ElcanoTek/example-kubernetes-config)
-for the Kubernetes one — they are peers, not parent and child), or
-**point at your own private repo** (the box needs a read-only fine-grained PAT
-to clone it). `bootstrap --client-config <git-url[#sha-or-tag]|path>` sets it
-up; **pin the ref in production** — the bundle runs host-side under the service
-identity ([`SECURITY.md`](SECURITY.md)), so a bundle change should be a
-deliberate operator action, not a silent pull.
-
-## No lock-in: your agent IP is portable
-
-Everything that defines how your agents behave lives in the **client-config
-bundle** — a plain git repo or directory you own (`FLEET_CLIENT_CONFIG_DIR`), not
-inside fleet's database or binary:
-
-- **`system_prompts/`** — base prompts for chat and tasks
-- **`personas/`** — reusable agent profiles
-- **`protocols/`** — playbooks your agents follow
-- **`skills/`** — packaged [Agent Skills](#standards) (`SKILL.md` + bundled scripts)
-- **`mcp/`** — your MCP connectors (+ `requirements.txt`)
-- **`manifest.yaml`** — MCP catalog, tool policy, model defaults, sandbox block
-- **`sandbox/Containerfile`** — the exact image your tool calls run in
-
-These files encode how your business actually works — your prompts, playbooks,
-and connectors carry real competitive knowledge. Safety here means owning them
-outright, rather than trusting a vendor's roadmap to stay clear of your market.
-Versioned, under your control, over an open protocol ([MCP](#standards)): your
-agent setup travels with you — fork it per team, share it across orgs, or point
-it at another MCP-capable platform. Moving off fleet doesn't mean starting
-over, which keeps adoption low-risk. The public templates show the full
-layout — [`example-config`](https://github.com/ElcanoTek/example-config) for a
-single box, [`example-kubernetes-config`](https://github.com/ElcanoTek/example-kubernetes-config)
-for a cluster.
-
-## Development
+Gitleaks is a SAST tool for **detecting** and **preventing** hardcoded secrets like passwords, api keys, and tokens in git repos. Gitleaks is an **easy-to-use, all-in-one solution** for detecting secrets, past or present, in your code.
 
 ```
-make build      # go build ./...
-make test       # go test ./...
-make lint       # golangci-lint run
+➜  ~/code(master) gitleaks detect --source . -v
+
+    ○
+    │╲
+    │ ○
+    ○ ░
+    ░    gitleaks
+
+
+Finding:     "export BUNDLE_ENTERPRISE__CONTRIBSYS__COM=cafebabe:deadbeef",
+Secret:      cafebabe:deadbeef
+RuleID:      sidekiq-secret
+Entropy:     2.609850
+File:        cmd/generate/config/rules/sidekiq.go
+Line:        23
+Commit:      cd5226711335c68be1e720b318b7bc3135a30eb2
+Author:      John
+Email:       john@users.noreply.github.com
+Date:        2022-08-03T12:31:40Z
+Fingerprint: cd5226711335c68be1e720b318b7bc3135a30eb2:cmd/generate/config/rules/sidekiq.go:sidekiq-secret:23
 ```
 
-For the full build/test workflow (including the Postgres-backed Go suites, the
-web app, and the Playwright e2e suites), see
-[`CONTRIBUTING.md`](CONTRIBUTING.md).
+## Getting Started
 
-### Running one task locally (`fleet task run`)
+Gitleaks can be installed using Homebrew, Docker, or Go. Gitleaks is also available in binary form for many popular platforms and OS types on the [releases page](https://github.com/zricethezav/gitleaks/releases). In addition, Gitleaks can be implemented as a pre-commit hook directly in your repo or as a GitHub action using [Gitleaks-Action](https://github.com/gitleaks/gitleaks-action).
 
-`fleet task run` executes a **single task YAML** to completion locally — no
-server, no database — through the **same governed runtime** the production
-scheduler uses (sandbox and credential brokering included). A debug
-entrypoint, not a second execution path. _(Formerly the separate `cutlass`
-binary; its deprecation shim has been removed.)_
+### Installing
 
-```
-fleet task run --log out.json path/to/task.yaml               # run one task through the governed runtime
-scripts/run_workflow_live.sh docs/examples/local-task.yaml    # or: build the sandbox image, isolate a workspace, tail a log
-```
+```bash
+# MacOS
+brew install gitleaks
 
-See [`docs/examples/local-task.yaml`](docs/examples/local-task.yaml) for the
-task schema (a thin mirror of the scheduled-task create shape).
+# Docker (DockerHub)
+docker pull zricethezav/gitleaks:latest
+docker run -v ${path_to_host_folder_to_scan}:/path zricethezav/gitleaks:latest [COMMAND] --source="/path" [OPTIONS]
 
-## Deploy
+# Docker (ghcr.io)
+docker pull ghcr.io/gitleaks/gitleaks:latest
+docker run -v ${path_to_host_folder_to_scan}:/path ghcr.io/gitleaks/gitleaks:latest [COMMAND] --source="/path" [OPTIONS]
 
-fleet runs as **one** `fleet` process on a **single, vertically-scaled host**: the
-browser talks only to the Next.js web app, which proxies server-side over
-loopback to the two Go backends the process boots (chat + orchestrator); Caddy
-fronts it with TLS. Single-host is by design — crash recovery uses single-owner
-DB leases and the worker cap is a per-process semaphore, so fleet scales by
-moving to a bigger box, not more replicas.
-
-```sh
-git clone https://github.com/ElcanoTek/fleet.git /opt/fleet/src
-sudo bash /opt/fleet/src/scripts/bootstrap.sh --postgres=local --enable-service \
-  --client-config https://github.com/ElcanoTek/example-config.git
-# then add your OPENROUTER_API_KEY to the env file and: fleet restart
+# From Source
+git clone https://github.com/gitleaks/gitleaks.git
+cd gitleaks
+make build
 ```
 
-**→ Full deployment guide** — host sizing, the one-command web + Caddy/TLS stack,
-the env file, and every option: **[`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)**.
+### GitHub Action
 
-**Kubernetes shop?** fleet also ships a first-class cluster path
-([ADR-0049](docs/adr/0049-kubernetes-backend-split-control-plane.md)): a Helm
-chart (`deploy/helm/fleet`) for the single-replica control plane, with agent
-sandboxes running as **ephemeral pods** via
-`FLEET_SANDBOX_BACKEND=kubernetes` — same loop, same security model, one
-backend switch. See
-**[`docs/DEPLOYMENT-KUBERNETES.md`](docs/DEPLOYMENT-KUBERNETES.md)**.
+Check out the official [Gitleaks GitHub Action](https://github.com/gitleaks/gitleaks-action)
 
-## Operating fleet
+```
+name: gitleaks
+on: [pull_request, push, workflow_dispatch]
+jobs:
+  scan:
+    name: gitleaks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE}} # Only required for Organizations, not personal accounts.
+```
 
-The operator lifecycle is **bootstrap → update → status**, one box. The server
-runs via `fleet serve`; every other verb is the idempotent operator CLI (each a
-`scripts/` shell script wrapped by a `fleet` subcommand). Each service
-self-migrates on start.
+### Pre-Commit
 
-| Verb | What it does |
-|---|---|
-| `fleet bootstrap` | provision a box (Postgres, build, install, systemd, optional web + TLS) |
-| `fleet update` | `git pull` + rebuild + reinstall the binaries in place |
-| `scripts/fleet-upgrade.sh` | drain, swap, health-gate, and auto-roll-back on failure |
-| `fleet status` / `fleet diagnose` | quick health report / redacted support bundle |
-| `fleet doctor` | diagnose **and repair** box-level drift (packages, podman prereqs, unit drift; also surfaced read-only in Settings → Admin → Doctor) |
-| `fleet restart` · `stop` · `logs` | service lifecycle |
-| `fleet chat [--email you@org]` | terminal TUI for the agent (token auto-read on-box) |
-| `fleet backup` / `fleet restore` | disaster recovery ([`docs/BACKUP_RESTORE.md`](docs/BACKUP_RESTORE.md)) |
-| `fleet timers install` | install + enable the daily backup/maintenance systemd timers on an existing box ([`docs/TIMERS.md`](docs/TIMERS.md)) |
+1. Install pre-commit from https://pre-commit.com/#install
+2. Create a `.pre-commit-config.yaml` file at the root of your repository with the following content:
 
-**→ Full operator runbook** — the env file, the client-config checkout, every
-verb in detail, process logs, and backup/restore:
-**[`docs/OPERATORS.md`](docs/OPERATORS.md)**.
+   ```
+   repos:
+     - repo: https://github.com/gitleaks/gitleaks
+       rev: v8.16.1
+       hooks:
+         - id: gitleaks
+   ```
 
-## Documentation
+   for a [native execution of GitLeaks](https://github.com/zricethezav/gitleaks/releases) or use the [`gitleaks-docker` pre-commit ID](https://github.com/zricethezav/gitleaks/blob/master/.pre-commit-hooks.yaml) for executing GitLeaks using the [official Docker images](#docker)
 
-Deep references live in [`docs/`](docs/) so this README stays an orientation, not a manual:
+3. Auto-update the config to the latest repos' versions by executing `pre-commit autoupdate`
+4. Install with `pre-commit install`
+5. Now you're all set!
 
-| Doc | What it covers |
-|---|---|
-| [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) | Full deployment guide — host sizing, the one-command web + Caddy/TLS stack, options |
-| [`docs/DEPLOYMENT-KUBERNETES.md`](docs/DEPLOYMENT-KUBERNETES.md) | Kubernetes as a first-class path — the Helm chart, the `kubernetes` sandbox backend (agent sandboxes as ephemeral pods), kind walkthrough + production checklist |
-| [`docs/OPERATORS.md`](docs/OPERATORS.md) | Operator runbook — the env file, the client-config checkout, every lifecycle verb |
-| [`docs/AGENT-RUNTIME.md`](docs/AGENT-RUNTIME.md) | Agent runtime mechanics — per-turn sandbox, ceilings, compaction, verifier, artifacts |
-| [`docs/SANDBOX-RUNTIMES.md`](docs/SANDBOX-RUNTIMES.md) | Sandbox OCI runtimes — `runc` / Kata / libkrun isolation tiers |
-| [`docs/CONFIG-RELOAD.md`](docs/CONFIG-RELOAD.md) | Which settings hot-reload without a restart, and how |
-| [`docs/SERVER-STATS.md`](docs/SERVER-STATS.md) | Admin Server tab — lightweight CPU, memory, disk, network, and uptime status |
-| [`docs/BACKUP_RESTORE.md`](docs/BACKUP_RESTORE.md) | Disaster recovery — backup + restore of both databases |
-| [`docs/WEBHOOK-SIGNING.md`](docs/WEBHOOK-SIGNING.md) · [`docs/TESTING.md`](docs/TESTING.md) | Webhook HMAC signing · the test suite + fake-LLM seam |
-| [`docs/SCANNING.md`](docs/SCANNING.md) | The scanning stack — which of golangci-lint / ruff / govulncheck / Grype / gitleaks / npm audit / CodeQL / Semgrep owns what, what actually blocks a merge, and the known gaps |
-| [`docs/CODEQL.md`](docs/CODEQL.md) | CodeQL specifics — advanced setup, the four-language matrix, the High-band gate + accepted-findings register, and why a PR-event run certifies a diff rather than a tree |
-| [`docs/BUILDING-ON-FLEET.md`](docs/BUILDING-ON-FLEET.md) | The HTTP API as an automation substrate — keys, kicking off jobs, consuming structured output |
-| [`docs/MCP-CATALOG.md`](docs/MCP-CATALOG.md) | The connector catalog — bundled vs third-party trust classes |
-| [`docs/adr/`](docs/adr/) | Architecture Decision Records — the *why* behind the non-negotiable invariants |
-| [`SECURITY.md`](SECURITY.md) · [`CONTRIBUTING.md`](CONTRIBUTING.md) | Reporting a vulnerability · contributor workflow + CI gates |
+```
+➜ git commit -m "this commit contains a secret"
+Detect hardcoded secrets.................................................Failed
+```
 
-## Built by Elcano (commercial support)
+Note: to disable the gitleaks pre-commit hook you can prepend `SKIP=gitleaks` to the commit command
+and it will skip running gitleaks
 
-fleet is built by **ElcanoTek**. Everything in this repository is the complete,
-MIT-licensed platform — there is no held-back enterprise edition. What an
-**Elcano engagement** adds is the team that built it, working inside your stack:
+```
+➜ SKIP=gitleaks git commit -m "skip gitleaks check"
+Detect hardcoded secrets................................................Skipped
+```
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/img/open-source-vs-elcano-dark.svg">
-  <img alt="Everything in this repo is the full open-source fleet platform; an Elcano engagement adds custom MCP connectors, data integrations, add-on capabilities, forward-deployed engineering, production-ready workflows, and support" src="docs/img/open-source-vs-elcano-light.svg">
-</picture>
+## Usage
 
-- **Forward-deployed engineering.** Elcano engineers embed with your team, take
-  the workflows your people already run in chat, and make them
-  production-ready: scheduled, monitored, budgeted, and verified.
-- **Custom MCP connectors & data integrations.** Bespoke connectors into the
-  systems your work actually lives in — built, credential-brokered, and
-  maintained for your deployment.
-- **Add-on capabilities.** Agents and services Elcano builds and operates
-  beyond this repo — email-native agents, monitoring and analysis tools, and
-  other domain-specific pieces, packaged into your client-config bundle.
-- **Deployment, support & operations.** fleets stood up on your infrastructure
-  and kept healthy — upgrades, sandbox images, and model changes gated by evals
-  before they ship.
+```
+Usage:
+  gitleaks [command]
 
-Engagements don't shrink the repo: client-specific work lives in each client's
-config bundle, and platform improvements land here, in the open.
+Available Commands:
+  completion  generate the autocompletion script for the specified shell
+  detect      detect secrets in code
+  help        Help about any command
+  protect     protect secrets in code
+  version     display gitleaks version
 
-[elcanotek.com](https://elcanotek.com) ·
-[hello@elcanotek.com](mailto:hello@elcanotek.com)
+Flags:
+  -b, --baseline-path string       path to baseline with issues that can be ignored
+  -c, --config string              config file path
+                                   order of precedence:
+                                   1. --config/-c
+                                   2. env var GITLEAKS_CONFIG
+                                   3. (--source/-s)/.gitleaks.toml
+                                   If none of the three options are used, then gitleaks will use the default config
+      --exit-code int              exit code when leaks have been encountered (default 1)
+  -h, --help                       help for gitleaks
+  -l, --log-level string           log level (trace, debug, info, warn, error, fatal) (default "info")
+      --max-target-megabytes int   files larger than this will be skipped
+      --no-color                   turn off color for verbose output
+      --no-banner                  suppress banner
+      --redact                     redact secrets from logs and stdout
+  -f, --report-format string       output format (json, csv, junit, sarif) (default "json")
+  -r, --report-path string         report file
+  -s, --source string              path to source (default ".")
+  -v, --verbose                    show verbose output from scan
 
-## Contributing
+Use "gitleaks [command] --help" for more information about a command.
+```
 
-Contributions are welcome — see [`CONTRIBUTING.md`](CONTRIBUTING.md) for the
-build/test workflow, branch/PR conventions, and CI gates. Please also read the
-[`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md). To report a security issue privately,
-see [`SECURITY.md`](SECURITY.md).
+### Commands
 
-## Acknowledgements
+There are two commands you will use to detect secrets; `detect` and `protect`.
 
-fleet stands on the shoulders of excellent open-source projects and open
-standards. Our thanks to the teams and communities behind them:
+#### Detect
 
-- **[Podman](https://github.com/containers/podman)** — rootless, daemonless
-  containers. Every agent tool call's model-authored local execution (`bash`,
-  `run_python`, file I/O) executes inside a rootless-Podman sandbox; there is no
-  trusted fast path that skips it. MCP is the documented host-side broker
-  exception (see above).
-- **[Kata Containers](https://katacontainers.io)** and
-  **[libkrun](https://github.com/containers/libkrun)** — the OCI runtimes behind
-  fleet's optional hypervisor-isolation tier: set `sandbox.runtime` and every
-  sandbox container becomes a dedicated KVM microVM with its own guest kernel,
-  plugging into the same Podman invocation unchanged.
-- **[Fedora](https://fedoraproject.org)** — `fedora-minimal` is the base image
-  for the default sandbox, and we think it's the safest base in the game for
-  this job: a deliberately small image (less surface to attack), backed by one
-  of the fastest CVE-response pipelines in any distribution, with the entire
-  Python data stack installed as **signed Fedora RPMs** instead of `pip` at
-  runtime — one audited supply chain, not a thousand PyPI tarballs. fleet
-  deliberately tracks the rolling tag so every on-box rebuild picks up the
-  current patches, and Grype scans keep the claim honest — on every main-targeting
-  PR that is not docs-only, plus a weekly scheduled re-scan of the existing image
-  (PRs into `dev` get no image scan; it runs at the dev→main promotion).
-- **[Model Context Protocol](https://modelcontextprotocol.io)** and its SDKs —
-  the open standard fleet speaks (stdio + HTTP) to reach tools and data through a
-  credential-brokered MCP catalog.
-- **[Agent Skills](https://github.com/anthropics/skills)** — the open skill
-  format fleet loads from the client-config bundle (`SKILL.md` + bundled scripts,
-  with progressive disclosure).
-- **[Charmbracelet](https://github.com/charmbracelet)** — fleet leans on the
-  charm stack end to end: **[Fantasy](https://github.com/charmbracelet/fantasy)**
-  is the Go framework underneath the multi-provider agent run loop, and the
-  `fleet chat` terminal client is built on
-  **[Bubble Tea](https://github.com/charmbracelet/bubbletea)**,
-  **[Bubbles](https://github.com/charmbracelet/bubbles)**,
-  **[Lip Gloss](https://github.com/charmbracelet/lipgloss)**, and
-  **[Glamour](https://github.com/charmbracelet/glamour)** — with
-  **[vhs](https://github.com/charmbracelet/vhs)** recording the README's TUI
-  demo and **[freeze](https://github.com/charmbracelet/freeze)** rendering its
-  static screenshots.
-- **[OpenRouter](https://openrouter.ai)** — unified, provider-agnostic model
-  routing that backs fleet's "any model, the right one per task" design.
+The `detect` command is used to scan repos, directories, and files. This command can be used on developer machines and in CI environments.
 
-## License
+When running `detect` on a git repository, gitleaks will parse the output of a `git log -p` command (you can see how this executed
+[here](https://github.com/zricethezav/gitleaks/blob/7240e16769b92d2a1b137c17d6bf9d55a8562899/git/git.go#L17-L25)).
+[`git log -p` generates patches](https://git-scm.com/docs/git-log#_generating_patch_text_with_p) which gitleaks will use to detect secrets.
+You can configure what commits `git log` will range over by using the `--log-opts` flag. `--log-opts` accepts any option for `git log -p`.
+For example, if you wanted to run gitleaks on a range of commits you could use the following command: `gitleaks detect --source . --log-opts="--all commitA..commitB"`.
+See the `git log` [documentation](https://git-scm.com/docs/git-log) for more information.
 
-fleet is released under the [MIT License](LICENSE).
+You can scan files and directories by using the `--no-git` option.
+
+If you want to run only specific rules you can do so by using the `--enable-rule` option (with a rule ID as a parameter), this flag can be used multiple times. For example: `--enable-rule=atlassian-api-token` will only apply that rule. You can find a list of rules [here](config/gitleaks.toml).
+
+#### Protect
+
+The `protect` command is used to scan uncommitted changes in a git repo. This command should be used on developer machines in accordance with
+[shifting left on security](https://cloud.google.com/architecture/devops/devops-tech-shifting-left-on-security).
+When running `protect` on a git repository, gitleaks will parse the output of a `git diff` command (you can see how this executed
+[here](https://github.com/zricethezav/gitleaks/blob/7240e16769b92d2a1b137c17d6bf9d55a8562899/git/git.go#L48-L49)). You can set the
+`--staged` flag to check for changes in commits that have been `git add`ed. The `--staged` flag should be used when running Gitleaks
+as a pre-commit.
+
+**NOTE**: the `protect` command can only be used on git repos, running `protect` on files or directories will result in an error message.
+
+### Creating a baseline
+
+When scanning large repositories or repositories with a long history, it can be convenient to use a baseline. When using a baseline,
+gitleaks will ignore any old findings that are present in the baseline. A baseline can be any gitleaks report. To create a gitleaks report, run gitleaks with the `--report-path` parameter.
+
+```
+gitleaks detect --report-path gitleaks-report.json # This will save the report in a file called gitleaks-report.json
+```
+
+Once as baseline is created it can be applied when running the detect command again:
+
+```
+gitleaks detect --baseline-path gitleaks-report.json --report-path findings.json
+```
+
+After running the detect command with the --baseline-path parameter, report output (findings.json) will only contain new issues.
+
+### Verify Findings
+
+You can verify a finding found by gitleaks using a `git log` command.
+Example output:
+
+```
+Finding:     aws_secret="AKIAIMNOJVGFDXXXE4OA"
+RuleID:      aws-access-token
+Secret       AKIAIMNOJVGFDXXXE4OA
+Entropy:     3.65
+File:        checks_test.go
+Line:        37
+Commit:      ec2fc9d6cb0954fb3b57201cf6133c48d8ca0d29
+Author:      Zachary Rice
+Email:       z@email.com
+Date:        2018-01-28T17:39:00Z
+Fingerprint: ec2fc9d6cb0954fb3b57201cf6133c48d8ca0d29:checks_test.go:aws-access-token:37
+```
+
+We can use the following format to verify the leak:
+
+```
+git log -L {StartLine,EndLine}:{File} {Commit}
+```
+
+So in this example it would look like:
+
+```
+git log -L 37,37:checks_test.go ec2fc9d6cb0954fb3b57201cf6133c48d8ca0d29
+```
+
+Which gives us:
+
+```
+commit ec2fc9d6cb0954fb3b57201cf6133c48d8ca0d29
+Author: zricethezav <thisispublicanyways@gmail.com>
+Date:   Sun Jan 28 17:39:00 2018 -0500
+
+    [update] entropy check
+
+diff --git a/checks_test.go b/checks_test.go
+--- a/checks_test.go
++++ b/checks_test.go
+@@ -28,0 +37,1 @@
++               "aws_secret= \"AKIAIMNOJVGFDXXXE4OA\"":          true,
+
+```
+
+## Pre-Commit hook
+
+You can run Gitleaks as a pre-commit hook by copying the example `pre-commit.py` script into
+your `.git/hooks/` directory.
+
+## Configuration
+
+Gitleaks offers a configuration format you can follow to write your own secret detection rules:
+
+```toml
+# Title for the gitleaks configuration file.
+title = "Gitleaks title"
+
+# Extend the base (this) configuration. When you extend a configuration
+# the base rules take precedence over the extended rules. I.e., if there are
+# duplicate rules in both the base configuration and the extended configuration
+# the base rules will override the extended rules.
+# Another thing to know with extending configurations is you can chain together
+# multiple configuration files to a depth of 2. Allowlist arrays are appended
+# and can contain duplicates.
+# useDefault and path can NOT be used at the same time. Choose one.
+[extend]
+# useDefault will extend the base configuration with the default gitleaks config:
+# https://github.com/zricethezav/gitleaks/blob/master/config/gitleaks.toml
+useDefault = true
+# or you can supply a path to a configuration. Path is relative to where gitleaks
+# was invoked, not the location of the base config.
+path = "common_config.toml"
+
+# An array of tables that contain information that define instructions
+# on how to detect secrets
+[[rules]]
+
+# Unique identifier for this rule
+id = "awesome-rule-1"
+
+# Short human readable description of the rule.
+description = "awesome rule 1"
+
+# Golang regular expression used to detect secrets. Note Golang's regex engine
+# does not support lookaheads.
+regex = '''one-go-style-regex-for-this-rule'''
+
+# Golang regular expression used to match paths. This can be used as a standalone rule or it can be used
+# in conjunction with a valid `regex` entry.
+path = '''a-file-path-regex'''
+
+# Array of strings used for metadata and reporting purposes.
+tags = ["tag","another tag"]
+
+# Int used to extract secret from regex match and used as the group that will have
+# its entropy checked if `entropy` is set.
+secretGroup = 3
+
+# Float representing the minimum shannon entropy a regex group must have to be considered a secret.
+entropy = 3.5
+
+# Keywords are used for pre-regex check filtering. Rules that contain
+# keywords will perform a quick string compare check to make sure the
+# keyword(s) are in the content being scanned. Ideally these values should
+# either be part of the idenitifer or unique strings specific to the rule's regex
+# (introduced in v8.6.0)
+keywords = [
+  "auth",
+  "password",
+  "token",
+]
+
+# You can include an allowlist table for a single rule to reduce false positives or ignore commits
+# with known/rotated secrets
+[rules.allowlist]
+description = "ignore commit A"
+commits = [ "commit-A", "commit-B"]
+paths = [
+  '''go\.mod''',
+  '''go\.sum'''
+]
+# note: (rule) regexTarget defaults to check the _Secret_ in the finding.
+# if regexTarget is not specified then _Secret_ will be used.
+# Acceptable values for regexTarget are "match" and "line"
+regexTarget = "match"
+regexes = [
+  '''process''',
+  '''getenv''',
+]
+# note: stopwords targets the extracted secret, not the entire regex match
+# like 'regexes' does. (stopwords introduced in 8.8.0)
+stopwords = [
+  '''client''',
+  '''endpoint''',
+]
+
+
+# This is a global allowlist which has a higher order of precedence than rule-specific allowlists.
+# If a commit listed in the `commits` field below is encountered then that commit will be skipped and no
+# secrets will be detected for said commit. The same logic applies for regexes and paths.
+[allowlist]
+description = "global allow list"
+commits = [ "commit-A", "commit-B", "commit-C"]
+paths = [
+  '''gitleaks\.toml''',
+  '''(.*?)(jpg|gif|doc)'''
+]
+
+# note: (global) regexTarget defaults to check the _Secret_ in the finding.
+# if regexTarget is not specified then _Secret_ will be used.
+# Acceptable values for regexTarget are "match" and "line"
+regexTarget = "match"
+
+regexes = [
+  '''219-09-9999''',
+  '''078-05-1120''',
+  '''(9[0-9]{2}|666)-\d{2}-\d{4}''',
+]
+# note: stopwords targets the extracted secret, not the entire regex match
+# like 'regexes' does. (stopwords introduced in 8.8.0)
+stopwords = [
+  '''client''',
+  '''endpoint''',
+]
+```
+
+Refer to the default [gitleaks config](https://github.com/zricethezav/gitleaks/blob/master/config/gitleaks.toml) for examples or follow the [contributing guidelines](https://github.com/zricethezav/gitleaks/blob/master/README.md) if you would like to contribute to the default configuration. Additionally, you can check out [this gitleaks blog post](https://blog.gitleaks.io/stop-leaking-secrets-configuration-2-3-aeed293b1fbf) which covers advanced configuration setups.
+
+### Additional Configuration
+
+#### gitleaks:allow
+
+If you are knowingly committing a test secret that gitleaks will catch you can add a `gitleaks:allow` comment to that line which will instruct gitleaks
+to ignore that secret. Ex:
+
+```
+class CustomClass:
+    discord_client_secret = '8dyfuiRyq=vVc3RRr_edRk-fK__JItpZ'  #gitleaks:allow
+
+```
+
+#### .gitleaksignore
+
+You can ignore specific findings by creating a `.gitleaksignore` file at the root of your repo. In release v8.10.0 Gitleaks added a `Fingerprint` value to the Gitleaks report. Each leak, or finding, has a Fingerprint that uniquely identifies a secret. Add this fingerprint to the `.gitleaksignore` file to ignore that specific secret. See Gitleaks' [.gitleaksignore](https://github.com/zricethezav/gitleaks/blob/master/.gitleaksignore) for an example. Note: this feature is experimental and is subject to change in the future.
+
+## Sponsorships
+
+<p align="left">
+	  <a href="https://www.tines.com/?utm_source=oss&utm_medium=sponsorship&utm_campaign=gitleaks">
+		  <img alt="Tines Sponsorship" src="https://user-images.githubusercontent.com/15034943/146411864-4878f936-b4f7-49a0-b625-f9f40c704bfa.png" width=200>
+	  </a>
+  </p>
+
+## Exit Codes
+
+You can always set the exit code when leaks are encountered with the --exit-code flag. Default exit codes below:
+
+```
+0 - no leaks present
+1 - leaks or error encountered
+126 - unknown flag
+```

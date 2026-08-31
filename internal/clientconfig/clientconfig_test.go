@@ -1132,8 +1132,8 @@ sandbox:
 	// Exclusions
 	exclusions := []string{
 		"I1123_GROUP1", "I1123_GROUP2", // EnabledGroups
-		"I1123_ACCT",   // AccountVars
-		"I1123_ID_VAR", // IdentityEnv
+		"I1123_ACCT",                // AccountVars
+		"I1123_ID_VAR",              // IdentityEnv
 		"I1123_HMAC", "I1123_TOKEN", // WebhookTriggers
 		"I1123_PROV_KEY", // Providers
 	}
