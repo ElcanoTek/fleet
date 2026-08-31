@@ -342,12 +342,8 @@ func fetchOpenRouterModels(timeout time.Duration) ([]orModelEntry, error) {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return nil, fmt.Errorf("status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 4*1024*1024))
-	if err != nil {
-		return nil, fmt.Errorf("read body: %w", err)
-	}
 	var envelope orModelsResponse
-	if err := json.Unmarshal(body, &envelope); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 4*1024*1024)).Decode(&envelope); err != nil {
 		return nil, fmt.Errorf("decode: %w", err)
 	}
 	return envelope.Data, nil
