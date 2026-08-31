@@ -989,7 +989,9 @@ func (k *k8sImpl) runBash(ctx context.Context, req BashRequest) (BashResult, err
 		return res, nil
 	}
 	if execErr != nil {
-		return res, fmt.Errorf("pod exec bash: %w", execErr)
+		// Same reasoning as the bridge EOF above: an exec against an evicted
+		// or OOM-killed pod fails with a transport error that names no cause.
+		return res, fmt.Errorf("pod exec bash: %w%s", execErr, k.podFailureSuffix())
 	}
 	return res, nil
 }
@@ -1168,10 +1170,13 @@ func (k *k8sImpl) runPython(ctx context.Context, req PythonRequest) (PythonResul
 		return PythonResult{}, fmt.Errorf("python execution timed out after %v; sandbox retired: %w", timeout, ErrPoisoned)
 	case r := <-ch:
 		if r.err != nil {
-			// Session dead (pod-side bridge exited, connection dropped). The pod
-			// itself is intact — reset the bridge so the next call boots fresh.
+			// Session dead: the pod-side bridge exited, or the connection
+			// dropped — or the pod itself is gone, which reads identically
+			// from here. Reset the bridge so a surviving pod boots a fresh
+			// session on the next call, and ask the cluster which of those it
+			// was, because "EOF" alone sends the reader guessing.
 			k.terminateBridgeLocked()
-			return PythonResult{}, fmt.Errorf("bridge closed unexpectedly: %w%s", r.err, k.bridgeStderrSuffix())
+			return PythonResult{}, fmt.Errorf("bridge closed unexpectedly: %w%s%s", r.err, k.podFailureSuffix(), k.bridgeStderrSuffix())
 		}
 		if r.discarded > 0 {
 			return PythonResult{}, fmt.Errorf("bridge response exceeded %d bytes (%d bytes discarded) and was dropped — return large results by writing them to a workspace file instead", bridgeResponseCaptureCap, r.discarded)
@@ -1283,6 +1288,81 @@ func (k *k8sImpl) bridgeStderrSuffix() string {
 		stderr = stderr[len(stderr)-maxLen:]
 	}
 	return " (bridge stderr: " + stderr + ")"
+}
+
+// podFailureSuffix asks the apiserver why the sandbox pod stopped serving, and
+// renders the answer as a clause to append to whatever error the caller is
+// already returning.
+//
+// It exists because the two failures that end a turn most confusingly are
+// invisible from inside the pod. A kubelet eviction (ephemeral-storage or an
+// emptyDir sizeLimit) and an OOM kill both reach the caller as a dead exec
+// stream — `bridge closed unexpectedly: EOF`, or an exec error naming nothing
+// — while the reason sits in the pod's own status, one GET away on a client
+// this sandbox already holds. Left unsaid, a model asked to explain the
+// failure will invent a cause; observed during the #1264 validation, where an
+// emptyDir eviction was confidently reported to the user as an OOM kill.
+//
+// Diagnosis must never make things worse, so this is best-effort in every
+// direction: it runs only on an error path, on its own short-lived context
+// (the turn's is usually already cancelled), and returns "" on any doubt
+// rather than risk masking the real error with a lookup failure.
+func (k *k8sImpl) podFailureSuffix() string {
+	podName := k.currentPodName()
+	if podName == "" {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), execReapTimeout)
+	defer cancel()
+	pod, err := k.backend.client.getPod(ctx, k.backend.cfg.Namespace, podName)
+	if err != nil {
+		if isK8sNotFound(err) {
+			return " (the sandbox pod is gone — the cluster deleted or evicted it mid-call)"
+		}
+		// Saying nothing here masks nothing, but it does something worse: the
+		// condition most likely to kill a sandbox IS cluster trouble, so the
+		// explanation would go missing exactly when it is most needed, and a
+		// model handed a bare EOF fills the silence with a guess — the failure
+		// this function exists to prevent. Seen on the validation cluster: a
+		// turn died during an apiserver wobble and was explained to the user as
+		// "likely container resource/disk limits or an internal sandbox timeout
+		// ceiling", neither of which had happened.
+		//
+		// Naming the unanswered question is still appended to the original
+		// error, never a replacement for it.
+		return " (the cluster could not be asked why — the apiserver did not answer)"
+	}
+	// Eviction is a POD-level verdict: kubelet sets phase=Failed with
+	// reason=Evicted and a message naming the limit that was exceeded.
+	if pod.Status.Phase == "Failed" {
+		reason := sanitizeClusterText(pod.Status.Reason)
+		msg := sanitizeClusterText(pod.Status.Message)
+		switch {
+		case reason != "" && msg != "":
+			return " (the sandbox pod failed: " + reason + " — " + msg + ")"
+		case reason != "":
+			return " (the sandbox pod failed: " + reason + ")"
+		case msg != "":
+			return " (the sandbox pod failed: " + msg + ")"
+		default:
+			return " (the sandbox pod entered the Failed phase)"
+		}
+	}
+	// An OOM kill is a CONTAINER-level verdict and leaves the pod Running, so
+	// it has to be read separately — and it is the one most worth naming,
+	// since it is the cause a reader guesses for every vanished sandbox.
+	for _, cs := range pod.Status.ContainerStatuses {
+		t := cs.State.Terminated
+		if t == nil {
+			continue
+		}
+		reason := sanitizeClusterText(t.Reason)
+		if reason == "" {
+			reason = "terminated"
+		}
+		return fmt.Sprintf(" (the sandbox container %s, exit code %d)", reason, t.ExitCode)
+	}
+	return ""
 }
 
 // resourceUsage reports no telemetry: the k8s backend has no `podman stats`
