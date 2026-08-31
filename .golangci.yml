@@ -138,10 +138,7 @@ issues:
   uniq-by-line: true
 
 output:
-  sort-results: true
-  sort-order:
-    - linter
-    - file
+
   show-stats: true
 
 run:
