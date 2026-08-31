@@ -327,29 +327,11 @@ func schedAPIKeyCreate(argv []string) int {
 	triggerSlugs := fs.String("trigger-slugs", "", "comma-separated trigger slugs a webhook key may fire (required for --type webhook)")
 	role := fs.String("role", "admin", "legacy role granted to the key (used only when --type is empty)")
 	// #722: the flag names its unit so an operator porting v1 numbers (which
-	// were per-HOUR) can't silently set a 60× stricter cap. --rate-limit stays
-	// as a deprecated alias for one release; both write the same value.
+	// were per-HOUR) can't silently set a 60× stricter cap.
 	rateLimit := fs.Int("rate-limit-per-minute", 0, "per-minute request rate limit (0 = unlimited)")
-	rateLimitOld := fs.Int("rate-limit", 0, "DEPRECATED alias for --rate-limit-per-minute (the unit is per MINUTE)")
 	name, flagArgs := splitPositional(argv)
 	if err := fs.Parse(flagArgs); err != nil {
 		return 1
-	}
-	oldSet, newSet := false, false
-	fs.Visit(func(f *flag.Flag) {
-		switch f.Name {
-		case "rate-limit":
-			oldSet = true
-		case "rate-limit-per-minute":
-			newSet = true
-		}
-	})
-	if oldSet {
-		if newSet {
-			return errf(1, "--rate-limit and --rate-limit-per-minute are mutually exclusive (use --rate-limit-per-minute)")
-		}
-		fmt.Fprintln(os.Stderr, "warning: --rate-limit is deprecated and will be removed; use --rate-limit-per-minute (the unit is requests per MINUTE, not per hour as in the v1 tooling)")
-		*rateLimit = *rateLimitOld
 	}
 	if strings.TrimSpace(name) == "" {
 		return errf(1, "key name required")

@@ -111,30 +111,27 @@ const STATUS_LABEL: Record<string, string> = {
   error: "Error",
 };
 
+const STATUS_VARIANTS: Record<string, BadgeVariant> = {
+  connected: "success",
+  needs_reauth: "warn",
+  error: "warn",
+};
+
 function statusVariant(status: string): BadgeVariant {
-  switch (status) {
-    case "connected":
-      return "success";
-    case "needs_reauth":
-    case "error":
-      return "warn";
-    default:
-      return "neutral";
-  }
+  return STATUS_VARIANTS[status] ?? "neutral";
 }
+
+const PROVENANCE_VARIANTS: Record<string, BadgeVariant> = {
+  Official: "success",
+  Aggregator: "warn",
+};
 
 // provenanceVariant maps the catalog helper's trust label onto the design's
 // badge palette: Official reads success, Aggregator reads warn (it sees your
 // traffic), Community reads neutral — the group intro carries the caution.
 function provenanceVariant(provenance: string): BadgeVariant {
-  switch (provenanceBadge(provenance).label) {
-    case "Official":
-      return "success";
-    case "Aggregator":
-      return "warn";
-    default:
-      return "neutral";
-  }
+  const label = provenanceBadge(provenance).label;
+  return PROVENANCE_VARIANTS[label] ?? "neutral";
 }
 
 async function fetchServers(): Promise<ListResponse | null> {
