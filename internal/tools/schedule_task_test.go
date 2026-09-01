@@ -31,6 +31,20 @@ func TestScheduleTaskParamsValidate(t *testing.T) {
 			wantErr: "not a valid RFC3339",
 		},
 		{
+			name:    "multi-line task name rejected",
+			in:      ScheduleTaskParams{Name: "Weekly\nreport", Prompt: "do it"},
+			wantErr: "single line",
+		},
+		{
+			name:    "task name over title limit rejected by runes",
+			in:      ScheduleTaskParams{Name: strings.Repeat("é", scheduleTaskTitleMaxRunes+1), Prompt: "do it"},
+			wantErr: "120 characters",
+		},
+		{
+			name: "task name at title limit accepted by runes",
+			in:   ScheduleTaskParams{Name: strings.Repeat("é", scheduleTaskTitleMaxRunes), Prompt: "do it"},
+		},
+		{
 			name: "valid cron accepted",
 			in:   ScheduleTaskParams{Prompt: "weekly report", Cron: "0 9 * * MON"},
 		},

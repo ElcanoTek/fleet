@@ -243,6 +243,14 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Tasks created through chat now show their confirmed title in the Operations
+  Center.** The `schedule_task` flow collected and confirmed a human-readable
+  name, but its adapter wrote that value to the unique import/export identity
+  column, which the board deliberately never renders. Chat-created and promoted
+  tasks now persist the confirmed label as the non-unique display `title`, so it
+  appears in Recent Tasks, Upcoming Runs, and task details and survives recurring
+  occurrences. Existing untitled tasks are unchanged.
+
 - **Webhook/email-trigger runs no longer silently drop the template task's
   persona — or any other definition field (#1357).** `buildTriggerRun`
   projected the template into the spawned run field by hand-picked field, so

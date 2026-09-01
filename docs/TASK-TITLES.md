@@ -76,6 +76,10 @@ re-run, and every clone of a job lists under the same title.
 - **Templates** — a bundle template may set `task.title`; the create form
   otherwise seeds the title from the template's own name, which is what the
   operator picked it by. Either way it stays editable.
+- **Chat-created tasks** — the name the chat assistant proposes and the user
+  confirms on the `schedule_task` approval card is stored as the display title.
+  The tool's `name` argument keeps its original spelling for compatibility,
+  but it no longer populates the unrelated unique task-definition `name` column.
 - **The prompt library** — inserting an entry seeds an empty title from the
   entry's display name. For a bundle prompt that name is the file's own `name:`
   header, which is precisely the line operators were reading off the top of the
