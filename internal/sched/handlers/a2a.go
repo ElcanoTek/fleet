@@ -352,8 +352,6 @@ func (h *Handlers) a2aSendMessage(w http.ResponseWriter, r *http.Request, p prin
 		return
 	}
 
-	// Follow-up on an existing task: the INPUT_REQUIRED round-trip. The text
-	// answers the pending question through the same resume seam as
 	// contextId rules (spec §3.4, CORE-MULTI-002a/005/006). Fleet's contexts
 	// are 1:1 with tasks (contextId == taskId by construction), so an
 	// arbitrary client-provided context cannot be honored — and §3.4.1 says a
@@ -373,6 +371,8 @@ func (h *Handlers) a2aSendMessage(w http.ResponseWriter, r *http.Request, p prin
 		return
 	}
 
+	// Follow-up on an existing task: the INPUT_REQUIRED round-trip. The text
+	// answers the pending question through the same resume seam as
 	// POST /tasks/{id}/resume.
 	if params.Message.TaskID != "" {
 		h.a2aAnswerTask(w, r, p, req, params.Message.TaskID, prompt, params.Config, streaming)
