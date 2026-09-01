@@ -476,6 +476,7 @@ func New(opts ManagerOptions) (*Manager, error) {
 	}
 	m.mcpToolRoster = m.computeMCPToolRoster(allow)
 	m.optionalServerMetadata = m.buildOptionalServerMetadata(opts.ServerSpecs)
+	m.alwaysOnServerMetadata = m.buildAlwaysOnServerMetadata(opts.ServerSpecs)
 	return m, nil
 }
 

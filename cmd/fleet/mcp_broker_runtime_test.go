@@ -119,6 +119,9 @@ func TestStartProductionMCPRuntime_InheritsThenScrubsParent(t *testing.T) {
 	if !runtime.inventory.snapshot()["demo"].UsesWorkspace {
 		t.Fatal("public scheduled inventory lost uses-workspace metadata")
 	}
+	if runtime.inventory.snapshot()["demo"].Optional {
+		t.Fatal("public scheduled inventory misclassified always-on demo as optional")
+	}
 	if !slices.Equal(runtime.inventory.snapshot()["demo"].ToolAllowlist, []string{"lookup"}) {
 		t.Fatalf("public scheduled inventory lost the Gate-2 tool allowlist after scrub: %+v", runtime.inventory.snapshot()["demo"])
 	}
@@ -151,6 +154,7 @@ func assertProductionReload(t *testing.T, runtime *productionMCPRuntime) {
 		t.Fatalf("public reload result = %+v", reloaded)
 	}
 	if inventory := runtime.inventory.snapshot(); len(inventory) != 1 || !inventory["future"].UsesWorkspace ||
+		!inventory["future"].Optional ||
 		!slices.Equal(inventory["future"].ToolAllowlist, []string{"fresh_lookup"}) {
 		t.Fatalf("live inventory after reload = %+v", inventory)
 	}

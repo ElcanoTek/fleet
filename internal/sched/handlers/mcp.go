@@ -8,18 +8,26 @@ import (
 	"net/http"
 )
 
-// MCPServerCatalogEntry is one Optional MCP server in the orchestrator's
+// MCPServerCatalogEntry is one bundle or remote MCP server in the orchestrator's
 // task-form picker. It mirrors chat's GET /mcp-servers response shape so the
 // SAME <McpServerPicker> renders in both the chat toolbar and the scheduled-task
 // form. It NEVER carries secret values — `Accounts` is the per-server credential
 // seat catalog (names only, derived from the <VAR>_<ACCOUNT> env suffix scan).
 type MCPServerCatalogEntry struct {
-	Name        string   `json:"name"`
-	DisplayName string   `json:"display_name,omitempty"`
-	Description string   `json:"description"`
-	ToolCount   int      `json:"tool_count"`
-	Enabled     bool     `json:"enabled"`
-	Accounts    []string `json:"accounts"`
+	Name        string `json:"name"`
+	DisplayName string `json:"display_name,omitempty"`
+	Description string `json:"description"`
+	ToolCount   int    `json:"tool_count"`
+	// Enabled is the initial toggle value for an optional row and the live
+	// discovery availability for an AlwaysOn row.
+	Enabled  bool     `json:"enabled"`
+	Accounts []string `json:"accounts"`
+	// AlwaysOn marks an enabled non-optional bundle server. It is a locked,
+	// informational row: mcp_selection contains only optional additions, while
+	// the scheduled runner binds every always-on server independently. For these
+	// rows Enabled reports live discovery availability rather than a default
+	// toggle value.
+	AlwaysOn bool `json:"always_on,omitempty"`
 	// Remote marks a per-user remote (hosted) MCP server the caller connected via
 	// OAuth (#443/#466), as opposed to a bundle Optional server. Remote servers
 	// are auto-applied to ALL the owner's scheduled runs by the run overlay, so
@@ -41,7 +49,7 @@ type MCPAccountEntry struct {
 	Account string `json:"account"`
 }
 
-// SetMCPCatalogProvider wires the read-only Optional-MCP catalog the orchestrator
+// SetMCPCatalogProvider wires the read-only bundle MCP catalog the orchestrator
 // serves to its task-form picker + credential-account admin table. cmd/fleet
 // builds it once from the loaded client bundle's catalog + the credential-account
 // suffix scan (creds.AccountsFor) and injects it here, keeping the handlers
@@ -59,13 +67,13 @@ func (h *Handlers) SetRemoteMCPServersProvider(p func(ctx context.Context, email
 	h.remoteMCPServers = p
 }
 
-// GetMCPServers returns the Optional-MCP catalog (read-only; never secret
+// GetMCPServers returns the bundle MCP catalog (read-only; never secret
 // values), mirroring chat's GET /mcp-servers so the scheduled-task picker works.
 // It merges the caller's per-user remote (hosted) MCP servers (#443/#466) after
 // the bundle catalog, resolving the caller's email from the authenticated
 // principal — so a server connected in chat shows up here too. An admin-API-key
 // principal carries no user, so it sees only the bundle catalog.
-// Response: { "servers": [ {name, display_name, description, tool_count, enabled, accounts[], remote?} ] }
+// Response: { "servers": [ {name, display_name, description, tool_count, enabled, accounts[], always_on?, remote?} ] }
 func (h *Handlers) GetMCPServers(w http.ResponseWriter, r *http.Request) {
 	servers := []MCPServerCatalogEntry{}
 	if h.mcpCatalog != nil {

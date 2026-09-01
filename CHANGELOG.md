@@ -99,12 +99,17 @@ prior versions are listed because none have shipped.
 
 ### Changed
 
-- **Operations tasks now honor connector defaults (#1333).** New task forms
-  start bundled connectors marked `enabled_by_default` in the selected state,
-  matching new Chat conversations. The selection follows asynchronously loaded
-  catalogs without overwriting a user's first toggle, is persisted explicitly
-  with the task, and editing an existing task continues to show its saved
-  connector list rather than applying newer deployment defaults retroactively.
+- **Operations connector selection now preserves always-on MCPs (#1333).** New
+  task forms still start bundled connectors marked `enabled_by_default` in the
+  selected state, matching new Chat conversations, but the persisted
+  `mcp_selection` is now treated as optional additions: every active
+  non-optional connector is unioned in at scheduled-run binding. The task picker
+  surfaces those connectors as locked **Always on** rows and uses live discovery
+  to mark a failed connector **Unavailable** rather than falsely painting it on.
+  Empty selections mean always-on only; remote seat pins do not remove the
+  bundle set; explicit credential deny-all and persona/tool restrictions still
+  narrow access. See [docs/OPS-CONNECTOR-DEFAULTS.md](docs/OPS-CONNECTOR-DEFAULTS.md)
+  and ADR-0052.
 
 - **Fonts: exactly two typefaces, self-hosted.** The web UI now ships
   **Nebula Sans** (SIL OFL 1.1) for UI/body/headings and **Hack** (MIT, plus

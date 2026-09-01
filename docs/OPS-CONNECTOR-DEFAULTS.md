@@ -28,6 +28,27 @@ one-off copy. The resubmit carries the connector picker's complete visible
 selection, including an explicit empty list, so connector changes apply to the
 new run instead of silently inheriting the completed source task's old list.
 
+### Always-on connectors
+
+`mcp_selection` contains optional additions only. At run binding, Fleet unions
+that list with every enabled non-optional bundle connector. Selecting an
+optional reporting connector therefore cannot remove a mandatory mailbox or
+other always-on capability. An empty selection means "always-on connectors
+only," not "all configured optional connectors."
+
+The Operations picker includes always-on connectors as locked informational
+rows. Their state comes from the Manager's live MCP discovery catalog:
+
+- **Always on** means the connector exposed tools and will be added to every
+  permitted run.
+- **Unavailable** means the connector is configured as always-on but exposed no
+  live tools. The row is unchecked and visibly marked unavailable; the UI never
+  paints it healthy just because the manifest says it is enabled.
+
+Always-on is not an authorization bypass. An explicit empty credential
+allowlist still binds no connector, and credential/tool/persona gates can only
+narrow what a run may call.
+
 ## Scope and deployment
 
 This is generic Fleet UI behavior. Which connectors are visible and default-on
@@ -36,12 +57,16 @@ remains entirely bundle-owned through `optional: true` and
 Fleet.
 
 This change does not rewrite existing task rows. Operators must edit an existing
-task once to adopt a newly visible connector. It also does not change the
-scheduled runner's legacy meaning of an empty `mcp_selection`; that compatibility
-behavior remains tracked separately from picker defaulting.
+task once to adopt a newly default-on optional connector. Existing empty
+selections continue to require no row migration: under the task-selection
+contract they receive the always-on set and no optional additions.
 
 ## Verification
 
 Component coverage proves that new tasks select and submit default-on bundled
 connectors, asynchronously loaded defaults appear, a user can replace the
-default selection, and existing tasks do not inherit later defaults.
+default selection, and existing tasks do not inherit later defaults. Runtime
+coverage proves optional choices are unioned with always-on connectors in both
+broker and compatibility paths, remote-only seat pins do not remove that set,
+and an explicit deny-all still binds nothing. Catalog and picker coverage pins
+the active/unavailable status display.

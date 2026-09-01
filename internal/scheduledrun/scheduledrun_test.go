@@ -80,7 +80,7 @@ func TestBindTaskMCPRuntime_UsesBrokerScope(t *testing.T) {
 		mcpServerInventory: func() map[string]TaskMCPServerInfo {
 			return map[string]TaskMCPServerInfo{
 				"alpha": {UsesWorkspace: true},
-				"beta":  {},
+				"beta":  {Optional: true},
 			}
 		},
 		openTaskMCPScope: func(_ context.Context, selection agentcore.MCPSelection, _ agent.MCPScopePolicy, taskID, workspace string) (*agent.MCPScope, error) {
@@ -102,9 +102,9 @@ func TestBindTaskMCPRuntime_UsesBrokerScope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bindTaskMCPRuntime: %v", err)
 	}
-	want := agentcore.MCPSelection{{Server: "alpha"}, {Server: "beta"}}
+	want := agentcore.MCPSelection{{Server: "alpha"}}
 	if !reflect.DeepEqual(gotSelection, want) {
-		t.Fatalf("scope selection = %#v, want all enabled servers %#v", gotSelection, want)
+		t.Fatalf("scope selection = %#v, want always-on servers only %#v", gotSelection, want)
 	}
 	if gotTaskID != taskID.String() {
 		t.Errorf("scope task ID = %q, want %q", gotTaskID, taskID)
@@ -164,12 +164,10 @@ func TestBuildTaskRemoteOverlay_SkippedForDenyAllTask(t *testing.T) {
 	}
 }
 
-// TestBindTaskMCPRuntime_DenyAllBindsNoServers: an empty mcp_selection means the
-// DEPLOYMENT DEFAULT SET on both binding paths, so a run permitted to call
-// nothing would otherwise be handed every bundle server (broker scope) or the
-// shared process-wide client (compatibility path). Gate-3 would reject each call,
-// but the roster would still be advertised to the model — and on the shared
-// client the servers are already live. Deny-all must bind nothing.
+// TestBindTaskMCPRuntime_DenyAllBindsNoServers: normal binding adds mandatory
+// servers even when mcp_selection is empty. A run permitted to call nothing
+// must override that union and bind nothing rather than advertising tools the
+// later Gate-3 will reject.
 func TestBindTaskMCPRuntime_DenyAllBindsNoServers(t *testing.T) {
 	t.Setenv("FLEET_WORKSPACE_ROOT", t.TempDir())
 	inventory := map[string]TaskMCPServerInfo{"alpha": {UsesWorkspace: true}, "beta": {}}
@@ -229,7 +227,7 @@ func TestBindTaskMCPRuntime_DenyAllBindsNoServers(t *testing.T) {
 }
 
 func TestTaskMCPSelection_UsesLivePublicInventory(t *testing.T) {
-	inventory := map[string]TaskMCPServerInfo{"alpha": {}}
+	inventory := map[string]TaskMCPServerInfo{"alpha": {}, "optional": {Optional: true}}
 	r := &Runner{
 		cfg: &config.Config{},
 		mcpServerInventory: func() map[string]TaskMCPServerInfo {
@@ -237,12 +235,16 @@ func TestTaskMCPSelection_UsesLivePublicInventory(t *testing.T) {
 		},
 	}
 	task := &models.Task{}
-	if got := r.taskMCPSelection(task, true); !reflect.DeepEqual(got, agentcore.MCPSelection{{Server: "alpha"}}) {
+	if got := r.taskMCPSelection(task); !reflect.DeepEqual(got, agentcore.MCPSelection{{Server: "alpha"}}) {
 		t.Fatalf("initial selection = %#v", got)
 	}
-	inventory = map[string]TaskMCPServerInfo{"beta": {}, "gamma": {UsesWorkspace: true}}
+	inventory = map[string]TaskMCPServerInfo{
+		"beta":     {},
+		"gamma":    {UsesWorkspace: true},
+		"optional": {Optional: true},
+	}
 	want := agentcore.MCPSelection{{Server: "beta"}, {Server: "gamma"}}
-	if got := r.taskMCPSelection(task, true); !reflect.DeepEqual(got, want) {
+	if got := r.taskMCPSelection(task); !reflect.DeepEqual(got, want) {
 		t.Fatalf("reloaded selection = %#v, want %#v", got, want)
 	}
 }
@@ -283,7 +285,7 @@ func TestBindTaskMCPRuntime_PreservesExplicitSelection(t *testing.T) {
 	r := &Runner{
 		cfg: &config.Config{MCPServers: map[string]config.MCPServerConfig{
 			"alpha": {Enabled: true},
-			"beta":  {Enabled: true},
+			"beta":  {Enabled: true, Optional: true},
 		}},
 		openTaskMCPScope: func(_ context.Context, selection agentcore.MCPSelection, _ agent.MCPScopePolicy, _, _ string) (*agent.MCPScope, error) {
 			got = append(agentcore.MCPSelection(nil), selection...)
@@ -298,12 +300,30 @@ func TestBindTaskMCPRuntime_PreservesExplicitSelection(t *testing.T) {
 		t.Fatalf("bindTaskMCPRuntime: %v", err)
 	}
 	defer binding.cleanup()
-	want := agentcore.MCPSelection{{Server: "beta", Account: "backup"}}
+	want := agentcore.MCPSelection{{Server: "alpha"}, {Server: "beta", Account: "backup"}}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("scope selection = %#v, want exact task selection %#v", got, want)
+		t.Fatalf("scope selection = %#v, want always-on union %#v", got, want)
 	}
 	if binding.catalog == nil {
 		t.Fatal("explicit empty scope catalog became nil")
+	}
+}
+
+func TestTaskMCPSelection_RemoteOnlyPinStillKeepsAlwaysOnBundleServers(t *testing.T) {
+	r := &Runner{
+		cfg: &config.Config{MCPServers: map[string]config.MCPServerConfig{
+			"email": {Enabled: true},
+			"xandr": {Enabled: true, Optional: true},
+		}},
+		openRemoteMCPOverlay: func(context.Context, string, map[string]bool, agent.RemoteMCPSelection) (*agent.RemoteMCPOverlay, error) {
+			return nil, nil
+		},
+	}
+	task := &models.Task{MCPSelection: models.MCPSelection{{Server: "remote-notion", Account: "work"}}}
+	got := r.taskMCPSelection(task)
+	want := agentcore.MCPSelection{{Server: "email"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("bundle selection = %#v, want always-on server despite remote-only pin %#v", got, want)
 	}
 }
 
@@ -403,6 +423,51 @@ func newCredTestRunner(t *testing.T) *Runner {
 		},
 	}
 	return &Runner{cfg: cfg}
+}
+
+func TestBindTaskMCP_CompatibilityUnionsAlwaysOnWithOptionalChoices(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not found, skipping MCP compatibility union test")
+	}
+	server := func(optional bool) config.MCPServerConfig {
+		return config.MCPServerConfig{
+			Type:     "stdio",
+			Command:  "python3",
+			Args:     []string{"-u", "-c", fakeCredServerScript},
+			Env:      map[string]string{"SECRET_TOKEN": "default-seat-token"},
+			Enabled:  true,
+			Optional: optional,
+		}
+	}
+	r := &Runner{cfg: &config.Config{MCPServers: map[string]config.MCPServerConfig{
+		"email": server(false),
+		"xandr": server(true),
+	}}}
+
+	t.Run("empty selection binds always-on only", func(t *testing.T) {
+		client, cleanup, _, err := r.bindTaskMCP(context.Background(), &models.Task{ID: uuid.New()}, false)
+		if err != nil {
+			cleanup()
+			t.Fatalf("bindTaskMCP: %v", err)
+		}
+		defer cleanup()
+		if !client.HasServer("email") || client.HasServer("xandr") {
+			t.Fatalf("servers: email=%v xandr=%v, want always-on only", client.HasServer("email"), client.HasServer("xandr"))
+		}
+	})
+
+	t.Run("optional choice adds without replacing always-on", func(t *testing.T) {
+		task := &models.Task{ID: uuid.New(), MCPSelection: models.MCPSelection{{Server: "xandr"}}}
+		client, cleanup, _, err := r.bindTaskMCP(context.Background(), task, false)
+		if err != nil {
+			cleanup()
+			t.Fatalf("bindTaskMCP: %v", err)
+		}
+		defer cleanup()
+		if !client.HasServer("email") || !client.HasServer("xandr") {
+			t.Fatalf("servers: email=%v xandr=%v, want always-on union", client.HasServer("email"), client.HasServer("xandr"))
+		}
+	})
 }
 
 // callWhoami binds the given selection through bindTaskMCP, then invokes the
@@ -817,7 +882,7 @@ func TestBuildTaskRemoteOverlayPinsHostedSeats(t *testing.T) {
 		{Server: "github", Account: "work"},
 	}}
 
-	if sel := r.taskMCPSelection(task, true); len(sel) != 1 || sel[0].Server != "bundle" || sel[0].Account != "client_a" {
+	if sel := r.taskMCPSelection(task); len(sel) != 1 || sel[0].Server != "bundle" || sel[0].Account != "client_a" {
 		t.Fatalf("bundle selection = %+v, want only the bundle choice", sel)
 	}
 	overlay, err := r.buildTaskRemoteOverlay(context.Background(), task, nil)

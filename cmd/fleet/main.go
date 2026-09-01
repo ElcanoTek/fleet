@@ -728,16 +728,28 @@ func run() error {
 	}
 	warnIfNoAdminKey(hcfg.AdminAPIKey)
 	h := handlers.New(hcfg, schedStorage, keyMgr)
-	// Wire the orchestrator's read-only Optional-MCP catalog + credential-account
-	// seats from the SAME in-process source the chat side uses: the Manager's
-	// Optional-server catalog (descriptions, tool counts, and the per-server
-	// credential-account seat names it derives from the bundle's AccountVars via
-	// creds.AccountsFor). Never exposes secret values — only server + account
-	// names. This is what makes the scheduled-task MCP picker + credential admin
-	// table work.
+	// Wire the orchestrator's read-only MCP catalog + credential-account seats
+	// from the SAME in-process source the chat side uses: the Manager's optional
+	// catalog plus its live always-on status rows (descriptions, tool counts, and
+	// the per-server credential-account seat names it derives from the bundle's
+	// AccountVars via creds.AccountsFor). Never exposes secret values — only
+	// server + account names. This is what makes the scheduled-task MCP picker +
+	// credential admin table work.
 	h.SetMCPCatalogProvider(func() []handlers.MCPServerCatalogEntry {
 		catalog := mgr.MCPServerCatalog()
-		out := make([]handlers.MCPServerCatalogEntry, 0, len(catalog))
+		alwaysOn := mgr.AlwaysOnMCPServerCatalog()
+		out := make([]handlers.MCPServerCatalogEntry, 0, len(catalog)+len(alwaysOn))
+		for _, info := range alwaysOn {
+			out = append(out, handlers.MCPServerCatalogEntry{
+				Name:        info.Name,
+				DisplayName: info.DisplayName,
+				Description: info.Description,
+				ToolCount:   info.ToolCount,
+				Enabled:     info.Available,
+				Accounts:    info.Accounts,
+				AlwaysOn:    true,
+			})
+		}
 		for _, info := range catalog {
 			out = append(out, handlers.MCPServerCatalogEntry{
 				Name:        info.Name,

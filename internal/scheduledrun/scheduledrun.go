@@ -112,8 +112,9 @@ type Options struct {
 	// Nil preserves the in-process compatibility binder.
 	OpenTaskMCPScope TaskMCPScopeOpener
 	// MCPServerInventory returns the live public bundle-server inventory used to
-	// expand an empty task selection and decide whether to mint a workspace. It
-	// carries names and booleans only, so broker mode need not retain cfg secrets.
+	// add every non-optional server to a task's explicit optional choices and
+	// decide whether to mint a workspace. It carries public metadata only, so
+	// broker mode need not retain cfg secrets.
 	MCPServerInventory TaskMCPServerInventoryProvider
 }
 
@@ -126,6 +127,10 @@ type TaskMCPScopeOpener func(ctx context.Context, selection agentcore.MCPSelecti
 // needs. Credential-bearing env, headers, URLs, and commands are absent.
 type TaskMCPServerInfo struct {
 	UsesWorkspace bool
+	// Optional distinguishes task-selectable additions from always-on servers.
+	// Scheduled runs bind every non-optional server regardless of which optional
+	// choices the task saved.
+	Optional bool
 	// ToolAllowlist is the server's Gate-2 tool allowlist (empty = every
 	// advertised tool). Carried here because broker mode scrubs the parent's
 	// config.MCPServers after boot, leaving this inventory as the only public
@@ -143,9 +148,9 @@ type TaskMCPServerInventoryProvider func() map[string]TaskMCPServerInfo
 //
 // Per-task MCP credential-account isolation: an injected OpenTaskMCPScope gives
 // every run a broker-owned client selected by public server/account names and
-// task/workspace identity. The compatibility path retains the existing local
-// behavior: an explicit selection gets a dedicated client bound via
-// agentcore.BindMCPSelection, while an empty selection reuses the shared client.
+// task/workspace identity. The compatibility path builds the same dedicated
+// selection locally. In both paths the saved task selection contains optional
+// additions; every active non-optional server is added by the runner.
 type Runner struct {
 	cfg           *config.Config
 	mgr           *agent.Manager
@@ -774,8 +779,8 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 	}
 
 	// Wire per-task MCP credential-account isolation. Broker mode opens one
-	// child-owned scope per run; the compatibility path retains its dedicated
-	// local client for explicit selections and shared client for an empty one.
+	// child-owned scope per run; the compatibility path builds the same dedicated
+	// always-on-plus-optional selection locally.
 	mcpBinding, err := r.bindTaskMCPRuntime(ctx, task)
 	if err != nil {
 		return nil, false, "", err
@@ -1200,11 +1205,10 @@ const taskMCPScopeCloseTimeout = 5 * time.Second
 
 func (r *Runner) bindTaskMCPRuntime(ctx context.Context, task *models.Task) (taskMCPBinding, error) {
 	// "May call no MCP server" is wired as "has no MCP server" (#979). Gate-3
-	// already refuses every call at the broker seam, but an empty selection means
-	// the DEPLOYMENT DEFAULT SET everywhere else in this file, so a deny-all run
-	// would otherwise spawn every bundle server and advertise its whole tool
-	// roster to the model just to reject each call. Both paths below therefore
-	// bind an empty selection rather than the default expansion.
+	// already refuses every call at the broker seam, but the normal task binding
+	// always adds mandatory bundle servers. A deny-all run must not spawn or
+	// advertise those servers just to reject each call, so both paths below bind
+	// an empty selection instead.
 	denyAll := taskCredentialAllowlist(task).DeniesAll()
 	if r.openTaskMCPScope == nil {
 		if r.mgr != nil && r.mgr.MCPClient() == nil && r.mgr.MCPBroker() != nil {
@@ -1220,7 +1224,10 @@ func (r *Runner) bindTaskMCPRuntime(ctx context.Context, task *models.Task) (tas
 		return taskMCPBinding{client: client, workdir: workdir, cleanup: cleanup}, nil
 	}
 
-	selection := r.taskMCPSelection(task, !denyAll)
+	selection := agentcore.MCPSelection{}
+	if !denyAll {
+		selection = r.taskMCPSelection(task)
+	}
 	workdir, err := r.prepareTaskMCPWorkspace(task, selection)
 	if err != nil {
 		return taskMCPBinding{}, err
@@ -1258,16 +1265,19 @@ func (r *Runner) bindTaskMCPRuntime(ctx context.Context, task *models.Task) (tas
 	return taskMCPBinding{broker: scope.Broker, catalog: catalog, workdir: workdir, cleanup: cleanup}, nil
 }
 
-func (r *Runner) taskMCPSelection(task *models.Task, allWhenEmpty bool) agentcore.MCPSelection {
+func (r *Runner) taskMCPSelection(task *models.Task) agentcore.MCPSelection {
 	// Hosted-connection pins (#988) are the remote overlay's business; the
-	// bundle binder would reject them as unknown servers. A selection that
-	// names ONLY hosted connections is still an explicit selection (not the
-	// deployment default set): it binds no bundle server.
+	// bundle binder would reject them as unknown servers. They do not affect the
+	// always-on bundle set.
 	selection, _ := r.splitTaskMCPSelection(task)
-	if len(task.MCPSelection) > 0 || !allWhenEmpty {
-		return selection
+	selected := make(map[string]bool, len(selection))
+	for _, choice := range selection {
+		selected[choice.Server] = true
 	}
-	for name := range r.taskMCPServerInventory() {
+	for name, server := range r.taskMCPServerInventory() {
+		if server.Optional || selected[name] {
+			continue
+		}
 		selection = append(selection, agentcore.MCPChoice{Server: name})
 	}
 	sort.Slice(selection, func(i, j int) bool { return selection[i].Server < selection[j].Server })
@@ -1313,6 +1323,7 @@ func (r *Runner) taskMCPServerInventory() map[string]TaskMCPServerInfo {
 		if server.Enabled {
 			out[name] = TaskMCPServerInfo{
 				UsesWorkspace: agentcore.EnvReferencesWorkspace(server.Env),
+				Optional:      server.Optional,
 				ToolAllowlist: append([]string(nil), server.ToolAllowlist...),
 			}
 		}
@@ -1337,12 +1348,9 @@ func (r *Runner) taskMCPToolAllowlist() agentcore.MCPAllowlist {
 // bindTaskMCP resolves the local compatibility client the scheduled run should
 // use. bindTaskMCPRuntime selects this path or the injected broker scope above.
 //
-//   - Empty selection → the shared process-wide client (default seat), no-op
-//     cleanup. This preserves the load-on-demand path (mcp_load_servers) for
-//     tasks that don't pre-declare servers.
-//   - Non-empty selection → a DEDICATED per-run client onto which the task's
-//     {server, account} choices are bound via agentcore.BindMCPSelection. Named
-//     accounts spawn <server>_<account> subprocesses whose env carries the
+//   - Every permitted task gets a DEDICATED per-run client containing all
+//     non-optional servers plus its saved optional {server, account} choices.
+//     Named accounts spawn <server>_<account> subprocesses whose env carries the
 //     <VAR>_<ACCOUNT> overlay on cmd.Env only. Cleanup closes those subprocesses
 //     at run end. A missing named-account credential is refused rather than
 //     silently inheriting the default seat.
@@ -1369,30 +1377,7 @@ func (r *Runner) bindTaskMCP(ctx context.Context, task *models.Task, denyAll boo
 			}
 		}, "", nil
 	}
-	if len(task.MCPSelection) == 0 {
-		// NO reconciliation workdir on this path, deliberately. The shared
-		// client's workspace-armed servers were spawned at boot against the
-		// stable PER-DEPLOYMENT dir (mcp_workspace.go), so its ledger holds the
-		// markers of every task AND every chat conversation on the box, keyed
-		// only by (ssp, deal_name) — nothing attributes a record to a run.
-		// Replaying it would inject another task's half-finished creates into
-		// this task's prompt as "the prior process stopped after submitting
-		// these creates", and an abandoned marker is only ever cleared by a
-		// matching resolution in the same file, so it would be replayed into
-		// every future run forever. An unattributable ledger is not a resume
-		// signal. A task that wants real per-run resume semantics declares an
-		// mcp_selection and gets the dedicated client below, whose workdir and
-		// ${FLEET_TASK_ID} identify exactly one run.
-		if r.taskIdentityRequested() {
-			log.Printf("scheduled task %s: no mcp_selection, so its MCP servers run on the shared "+
-				"per-deployment client — the bundle's per-task ledgers (create idempotency, email "+
-				"send-once) are inert for this run. Declare an mcp_selection for per-run identity.",
-				task.ID)
-		}
-		return r.mgr.MCPClient(), noop, "", nil
-	}
-
-	selection := r.taskMCPSelection(task, false)
+	selection := r.taskMCPSelection(task)
 
 	client := mcp.NewClient()
 	cleanup := func() {
@@ -1481,20 +1466,6 @@ func (r *Runner) stageTaskInputs(task *models.Task, inputDir string) error {
 // binder needs. Account overlays are applied by agentcore.BindMCPSelection via
 // creds.ApplyClientSuffix; this only supplies the default-seat env. Mirrors the
 // interactive agent's mcpBases so both paths resolve identical specs.
-// taskIdentityRequested reports whether the active catalog asks for a per-task
-// identity — i.e. some server's manifest env references ${FLEET_TASK_ID}. Only
-// the dedicated per-run client can supply one, so this is the signal that a
-// selection-less run is losing a guarantee the bundle asked for (its ledgers go
-// inert) rather than one it never wanted.
-func (r *Runner) taskIdentityRequested() bool {
-	for _, base := range r.mcpBases() {
-		if agentcore.EnvReferencesTaskID(base.BaseEnv) {
-			return true
-		}
-	}
-	return false
-}
-
 func (r *Runner) mcpBases() map[string]agentcore.MCPServerBase {
 	return BuildMCPBases(r.cfg)
 }

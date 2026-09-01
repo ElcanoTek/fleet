@@ -38,7 +38,7 @@ func TestGetMCPServersAndAccounts_FromProvider(t *testing.T) {
 	h.SetMCPCatalogProvider(func() []MCPServerCatalogEntry {
 		return []MCPServerCatalogEntry{
 			{Name: "xandr", DisplayName: "Xandr", Description: "DSP", ToolCount: 7, Enabled: false, Accounts: []string{"client_a", "client_b"}},
-			{Name: "sendgrid", Description: "email", ToolCount: 2, Enabled: true, Accounts: nil},
+			{Name: "sendgrid", Description: "email", ToolCount: 2, Enabled: true, Accounts: nil, AlwaysOn: true},
 		}
 	})
 
@@ -53,6 +53,9 @@ func TestGetMCPServersAndAccounts_FromProvider(t *testing.T) {
 	}
 	if len(srv.Servers) != 2 || srv.Servers[0].Name != "xandr" || srv.Servers[0].ToolCount != 7 {
 		t.Fatalf("unexpected servers: %+v", srv.Servers)
+	}
+	if !srv.Servers[1].AlwaysOn || !srv.Servers[1].Enabled {
+		t.Fatalf("always-on live status was not preserved: %+v", srv.Servers[1])
 	}
 
 	// /mcp-accounts flattens the seats; sendgrid (no accounts) contributes none.
