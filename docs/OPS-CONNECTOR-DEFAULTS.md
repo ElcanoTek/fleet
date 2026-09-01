@@ -54,8 +54,9 @@ narrow what a run may call.
 Chat's compact connector popover consumes the same live always-on status
 contract. Available rows are shown as locked **Always on** entries; a discovery
 failure is unchecked and marked **Unavailable**. The locked switch uses an
-intermediate tint between an optional connector's off and selected states so it
-does not imply that the user selected it.
+muted neutral tint only slightly stronger than an optional connector's off state
+so it does not imply that the user selected it. Its knob remains on the right,
+making availability distinct from both off and user-selected states.
 
 Only status semantics are shared. Chat keeps its compact popover and its
 per-conversation rules: optional bundled and hosted remote connectors remain

@@ -60,6 +60,10 @@
   --color-text-secondary: #d2d9de;
   --color-text-muted: #beb6cd;
   --color-text-disabled: rgba(210, 217, 222, 0.45);
+  /* Locked connector availability is on-position but deliberately neutral and
+     nearly as dim as off. Selected Optional connectors keep the brand fill. */
+  --color-connector-always-on-track: color-mix(in srgb, var(--color-text-muted) 38%, transparent);
+  --color-connector-always-on-knob: var(--color-text-muted);
   --color-overlay-soft: rgba(0, 0, 0, 0.2);
   --color-overlay-strong: rgba(0, 0, 0, 0.4);
   /* Navigation-rail row states. Distinct from --color-overlay-* (which is a
@@ -3527,13 +3531,13 @@ tr.sla-row-fail {
   background: var(--color-on-primary);
 }
 .ui-switch.ui-switch--always-on:checked {
-  /* Locked availability is intentionally between the off (32%) and selected
-     optional (100%) tracks: present, healthy, but not a user choice. */
-  background: color-mix(in srgb, var(--color-primary) 62%, transparent);
+  /* Keep locked availability only slightly stronger than off, and neutral
+     rather than brand-colored: present and healthy, but not a user choice. */
+  background: var(--color-connector-always-on-track);
   cursor: default;
 }
 .ui-switch.ui-switch--always-on:checked::before {
-  background: color-mix(in srgb, var(--color-on-primary) 72%, var(--color-text-muted));
+  background: var(--color-connector-always-on-knob);
 }
 .ui-switch:focus-visible {
   outline: none;

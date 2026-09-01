@@ -141,7 +141,7 @@ prior versions are listed because none have shipped.
   surfaces those connectors as locked **Always on** rows and uses live discovery
   to mark a failed connector **Unavailable** rather than falsely painting it on.
   Chat's compact connector popover now reports the same live locked status; its
-  always-on switch uses an intermediate tint between optional off/on states, and
+  always-on switch uses a muted neutral tint just above optional off, and
   unavailable connectors are visibly unchecked. Chat still keeps its own
   per-conversation optional/remote toggles and seat selection, and its badge and
   persisted `enabled_optional` list exclude always-on rows.
