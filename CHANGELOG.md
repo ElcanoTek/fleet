@@ -19,6 +19,28 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **A conformance rig that runs the official A2A TCK against fleet
+  end-to-end (#1279).** `scripts/a2a-tck-shim` — a loopback reverse proxy —
+  bridges the two TCK assumptions fleet does not share: it injects the
+  X-API-Key the credential-less TCK never sends, and it translates the TCK's
+  `messageId` scenario prefixes into fake-LLM `[[scenario:…]]` markers, which
+  new `cmd/fake-llm` scenarios satisfy for real (a genuine `confirm_audit`
+  clears the scheduled finish gate to COMPLETE tasks; a genuine `ask` call
+  parks them INPUT_REQUIRED; the artifact scenarios bash-create and
+  `publish_artifact` a real workspace file). The engine special-cases
+  nothing. Two wire-fidelity fixes the conformance run surfaced ride along:
+  artifact `mediaType` values are now parameter-free (`text/plain`, not
+  `text/plain; charset=utf-8`), and published files lead the artifact list
+  with the synthesized result-text artifact last — the runner substitutes
+  boilerplate result text when a run ends without any, and that must never
+  displace an explicit deliverable. New `FLEET_SCHED_TICK_SECONDS` (default
+  30, min 1) makes the scheduling cadence — the scheduler's promote/recover
+  tick and the worker pool's idle claim poll, both hardcoded to 30s until
+  now — tunable, because the TCK inspects the blocking send's own response
+  and up to 30s of dispatch latency turned every scenario test into a coin
+  flip; production deployments should leave it alone. `scripts/a2a-tck.sh`
+  documents the full rig. See docs/A2A.md's Conformance testing section.
+
 - **A2A extended agent card, contextId rules, and a tunable unary wait
   (#1279 Phase 2).** `GetExtendedAgentCard` now serves the authenticated
   card — the public card plus the operator-pinned persona/model policy and

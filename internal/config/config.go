@@ -154,6 +154,7 @@ var allowedEnvVars = map[string]bool{
 	"FLEET_SCHED_DB_MAX_CONN_IDLE_TIME": true,
 	"FLEET_SCHED_DB_MAX_CONN_LIFETIME":  true,
 	"FLEET_SCHED_DB_CONNECT_TIMEOUT":    true,
+	"FLEET_SCHED_TICK_SECONDS":          true,
 	"DB_HOST":                           true,
 	"DB_PORT":                           true,
 	"DB_USER":                           true,
@@ -1162,6 +1163,13 @@ type Config struct {
 	// default 1800 (30 minutes: task queue plus a real agent run); minimum 1.
 	// Callers that cannot wait pass returnImmediately: true.
 	A2AUnaryWaitSeconds int
+	// SchedTickSeconds is the scheduling cadence — BOTH the scheduler's
+	// promote/recover tick and the worker pool's idle claim poll, i.e. the
+	// worst-case latency between a task becoming due and a worker starting it.
+	// FLEET_SCHED_TICK_SECONDS, default 30, minimum 1. Shrink it only on dev
+	// boxes and conformance rigs (every tick is a DB scan against the sched
+	// store); the A2A TCK's blocking sends need sub-30s dispatch.
+	SchedTickSeconds int
 	// A2APersona / A2AModel pin what every A2A-created task runs with — operator
 	// policy, never caller choice, the same posture as webhook triggers
 	// (docs/EVENT-TRIGGERS.md). Empty inherits the deployment's task defaults.
@@ -1693,6 +1701,7 @@ func Load(envFile string) (*Config, error) {
 		A2AEnabled:          lp.getenvFleetBool("A2A_ENABLED", false),
 		A2APushAllowPrivate: lp.getenvFleetBool("A2A_PUSH_ALLOW_PRIVATE", false),
 		A2AUnaryWaitSeconds: lp.getenvFleetInt("A2A_UNARY_WAIT_SECONDS", 1800),
+		SchedTickSeconds:    lp.getenvFleetInt("SCHED_TICK_SECONDS", 30),
 		A2APersona:          strings.TrimSpace(getenvFleet("A2A_PERSONA")),
 		A2AModel:            strings.TrimSpace(getenvFleet("A2A_MODEL")),
 

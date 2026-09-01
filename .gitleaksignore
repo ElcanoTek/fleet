@@ -52,4 +52,5 @@ internal/agentcore/tool_output_limit_test.go:generic-api-key:155
 
 # knobs.go registry row: the flagged "secret" is the env-knob NAME
 # FLEET_A2A_UNARY_WAIT_SECONDS (generic-api-key entropy false positive).
-internal/config/knobs.go:generic-api-key:261
+# Shifted +3 by the FLEET_SCHED_TICK_SECONDS row added earlier in the file.
+internal/config/knobs.go:generic-api-key:264

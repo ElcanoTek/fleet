@@ -118,7 +118,7 @@ gate reads the run's own SARIF and never consults the code-scanning API.
 `.github/workflows/semgrep.yml` runs `p/github-actions`, `p/golang`,
 `p/javascript` and `p/python` with `--error` and no `continue-on-error`, also as a
 reusable workflow inside both gates, also with a weekly schedule. The tree is at
-zero unsuppressed findings; six false positives are waived at the line with
+zero unsuppressed findings; seven false positives are waived at the line with
 `nosemgrep: <rule-id>` plus a reason, and each waiver was mutation-tested
 (removing it makes the finding reappear, so a green scan means the waivers work
 rather than the rules having silently stopped matching). One honest limitation:
