@@ -89,13 +89,16 @@ func TestTaskSchedulerProvider_BudgetGate(t *testing.T) {
 	}
 
 	// A different user (no budget) schedules fine — behavior unchanged.
-	res, err := provider(ctx, httpapi.TaskScheduleRequest{Prompt: "unbudgeted user schedules", RequestedBy: "bob@example.com"})
+	res, err := provider(ctx, httpapi.TaskScheduleRequest{
+		Title: "Visible board title", Prompt: "unbudgeted user schedules", RequestedBy: "bob@example.com",
+	})
 	if err != nil {
 		t.Fatalf("unbudgeted schedule_task: %v", err)
 	}
 	if res.ID == "" {
 		t.Error("expected a created task id")
 	}
+	assertChatTaskTitle(t, store, res.ID, "Visible board title")
 
 	// EnqueueTask skips the HTTP handler's validation, so the chat path enforces
 	// the create-time model gate itself (#1014) — otherwise this is the one seam
@@ -174,4 +177,18 @@ func TestTaskSchedulerProvider_BudgetGate(t *testing.T) {
 			t.Error("expected a created task id")
 		}
 	})
+}
+
+func assertChatTaskTitle(t *testing.T, store *storage.Storage, taskID, wantTitle string) {
+	t.Helper()
+	createdFromChat, err := store.GetTask(uuid.MustParse(taskID))
+	if err != nil || createdFromChat == nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if createdFromChat.Title != wantTitle {
+		t.Errorf("chat-confirmed label persisted as title = %q", createdFromChat.Title)
+	}
+	if createdFromChat.Name != "" {
+		t.Errorf("chat-confirmed label leaked into unique definition name = %q", createdFromChat.Name)
+	}
 }

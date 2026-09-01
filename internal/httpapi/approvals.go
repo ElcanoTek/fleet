@@ -2034,7 +2034,7 @@ func (s *Server) runStagedScheduleTask(ctx context.Context, approval *store.Appr
 	}
 
 	req := TaskScheduleRequest{
-		Name:                 strings.TrimSpace(p.Name),
+		Title:                strings.TrimSpace(p.Name),
 		Prompt:               strings.TrimSpace(p.Prompt),
 		Model:                scheduledTaskModel(ctx, s.store, approval, p.Model),
 		Cron:                 strings.TrimSpace(p.Cron),
@@ -2061,8 +2061,8 @@ func (s *Server) runStagedScheduleTask(ctx context.Context, approval *store.Appr
 
 	var b strings.Builder
 	b.WriteString("Scheduled task created.\n")
-	if req.Name != "" {
-		fmt.Fprintf(&b, "Name: %s\n", req.Name)
+	if req.Title != "" {
+		fmt.Fprintf(&b, "Title: %s\n", req.Title)
 	}
 	switch {
 	case req.Cron != "":
