@@ -228,3 +228,62 @@ func readEnvFile(t *testing.T, path string) string {
 	}
 	return string(b)
 }
+
+// TestConfigSetEnvUpsertsOneLine — the generic writer must (1) collapse
+// duplicates to exactly one line, because the server takes the LAST line and a
+// first-only replacement silently does nothing; (2) keep the file 0600; (3)
+// refuse a malformed key without touching the file; (4) target the web file
+// under --web; and (5) unset-env removes every occurrence.
+func TestConfigSetEnvUpsertsOneLine(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, "fleet.env")
+	if err := os.WriteFile(envPath, []byte("A=1\nOPENX_API_KEY=old-1\nB=2\nOPENX_API_KEY=old-2\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code := configSetEnv([]string{"OPENX_API_KEY", "--value", "fresh-not-real", "--env-file", envPath}); code != 0 {
+		t.Fatalf("set-env exit = %d, want 0", code)
+	}
+	content := readEnvFile(t, envPath)
+	if content != "A=1\nOPENX_API_KEY=fresh-not-real\nB=2\n" {
+		t.Errorf("after set-env:\n%s", content)
+	}
+	fi, err := os.Stat(envPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o600 {
+		t.Errorf("mode = %o, want 0600", fi.Mode().Perm())
+	}
+
+	before := content
+	if code := configSetEnv([]string{"bad key", "--value", "x", "--env-file", envPath}); code == 0 {
+		t.Error("want non-zero exit for a malformed key")
+	}
+	if code := configSetEnv([]string{"--value", "x", "--env-file", envPath}); code == 0 {
+		t.Error("want non-zero exit for a missing key")
+	}
+	if readEnvFile(t, envPath) != before {
+		t.Error("env file changed by a rejected call")
+	}
+
+	webPath := filepath.Join(dir, "fleet-web.env")
+	if code := configSetEnv([]string{"NEXT_PUBLIC_X", "--value", "y", "--web", "--env-file", webPath}); code != 0 {
+		t.Fatalf("set-env --web exit = %d", code)
+	}
+	if got := readEnvFile(t, webPath); got != "NEXT_PUBLIC_X=y\n" {
+		t.Errorf("web file = %q", got)
+	}
+
+	if code := configUnsetEnv([]string{"OPENX_API_KEY", "--env-file", envPath}); code != 0 {
+		t.Fatalf("unset-env exit = %d", code)
+	}
+	if got := readEnvFile(t, envPath); got != "A=1\nB=2\n" {
+		t.Errorf("after unset-env:\n%s", got)
+	}
+	if code := configUnsetEnv([]string{"OPENX_API_KEY", "--env-file", envPath}); code != 0 {
+		t.Errorf("unset-env of an absent key exit = %d, want 0", code)
+	}
+	if code := cmdConfig([]string{"set-env", "Z", "--value", "1", "--env-file", envPath}); code != 0 {
+		t.Errorf("cmdConfig dispatch exit = %d", code)
+	}
+}

@@ -10,8 +10,15 @@ Two halves of one feature, split by privilege:
    (with broken-dnf-repo quarantine), the service user's rootless-podman
    prerequisites (subuid/subgid, dir ownership, `containers.conf`, stale pause
    namespaces), systemd unit drift vs `deploy/`, the `/usr/local/bin/fleet`
-   symlink, env-file shape/permissions, service health + the `/healthz` +
-   `/readyz` probes, the scheduled-backup timer, and a sandbox smoke run **as
+   symlink, env-file shape/permissions, the fleet-managed
+   `/etc/caddy/Caddyfile`'s layout (the `/v1` API + inbound webhooks must
+   route to the Go backends, not 404 at the web tier — a drifted
+   fleet-managed file is rewritten from `scripts/lib/caddyfile.sh` with a
+   timestamped backup, `caddy validate` and `systemctl reload caddy`; an
+   operator's own Caddyfile only gets an advisory), service health + the
+   `/healthz` + `/readyz` probes **and** `https://<domain>/api-info` fetched
+   *through* Caddy (`--resolve` pinned to this box, so it tests the proxy's
+   routing rather than DNS), the scheduled-backup timer, and a sandbox smoke run **as
    the `fleet` user** (fixing
    `fleet status`'s documented root-runs-podman false negative). Modes:
    repair (default, root), `--check` (read-only diagnosis, exit 1 on drift),
@@ -24,8 +31,10 @@ Two halves of one feature, split by privilege:
    `OPENROUTER_API_KEY` presence (never the value), disk headroom on the data
    dir and the podman image store (warn ≥ 85 %, fail ≥ 95 %), subuid/subgid
    ranges for the *process* user, `podman info`, sandbox image presence,
-   sibling unit states (`fleet-web`, `postgresql`, `caddy`), and the
-   scheduled-backup timer. Every warn/fail
+   sibling unit states (`fleet-web`, `postgresql`, `caddy`), whether the
+   Caddyfile routes the API (a fleet-managed one that predates the `/v1`
+   routes is a **fail**; an operator's own front that routes no `/v1` is a
+   warn), and the scheduled-backup timer. Every warn/fail
    carries the on-box fix command (almost always `sudo fleet doctor`).
    `?deep=1` additionally launches a throwaway
    `podman run --rm --network=none <image> true` — the definitive smoke, but

@@ -306,19 +306,23 @@ func cmdSchedAPIKey(argv []string) int {
 	}
 }
 
-func openKeyManager() (*apikeys.Manager, int) {
-	dataDir := strings.TrimSpace(os.Getenv("DATA_DIR"))
-	if dataDir == "" {
-		dataDir = strings.TrimSpace(os.Getenv("FLEET_DATA_DIR"))
-	}
-	if dataDir == "" {
-		dataDir = "./data"
-	}
-	mgr, err := apikeys.NewManager(dataDir+"/api_keys.json", "")
+// keyFormatNote is the one line every key-minting surface prints: operators
+// handed a key to look for need to know its shape, and the two families look
+// nothing alike.
+const keyFormatNote = "typed keys look like fleet_<type>_<base58> (fleet_task_…, fleet_readonly_…, fleet_webhook_…, fleet_admin_…); legacy --role keys are sk-<base64>. Send either as the X-API-Key header (the /v1 API and A2A accept nothing else)."
+
+// openKeyManager opens the store `fleet sched apikey` operates on — the
+// service's own store when it can be derived (see keyStore), announced on
+// stderr so a mismatch is never silent. The returned keyStore lets mutating
+// verbs hand the written files back to the store's owner (fixOwnership).
+func openKeyManager() (*apikeys.Manager, keyStore, int) {
+	ks := resolveKeyStore()
+	ks.announce()
+	mgr, err := apikeys.NewManager(ks.Path(), "")
 	if err != nil {
-		return nil, errf(1, "apikeys manager: %v", err)
+		return nil, ks, errf(1, "apikeys manager (%s): %v", ks.Path(), err)
 	}
-	return mgr, 0
+	return mgr, ks, 0
 }
 
 func schedAPIKeyCreate(argv []string) int {
@@ -329,6 +333,12 @@ func schedAPIKeyCreate(argv []string) int {
 	// #722: the flag names its unit so an operator porting v1 numbers (which
 	// were per-HOUR) can't silently set a 60× stricter cap.
 	rateLimit := fs.Int("rate-limit-per-minute", 0, "per-minute request rate limit (0 = unlimited)")
+	fs.Usage = func() {
+		fmt.Fprintln(fs.Output(), "usage: fleet sched apikey create <name> [--type admin|task|webhook|readonly] [--rate-limit-per-minute N] [--trigger-slugs a,b] [--role admin]")
+		fmt.Fprintln(fs.Output(), "  "+keyFormatNote)
+		fmt.Fprintln(fs.Output(), "  The key is written to the store the fleet.service process reads (announced as \"key store:\"); FLEET_DATA_DIR overrides.")
+		fs.PrintDefaults()
+	}
 	name, flagArgs := splitPositional(argv)
 	if err := fs.Parse(flagArgs); err != nil {
 		return 1
@@ -336,7 +346,7 @@ func schedAPIKeyCreate(argv []string) int {
 	if strings.TrimSpace(name) == "" {
 		return errf(1, "key name required")
 	}
-	mgr, code := openKeyManager()
+	mgr, ks, code := openKeyManager()
 	if mgr == nil {
 		return code
 	}
@@ -364,11 +374,13 @@ func schedAPIKeyCreate(argv []string) int {
 		if err != nil {
 			return errf(5, "%v", err)
 		}
+		ks.fixOwnership()
 		fmt.Printf("created API key %s (id=%s type=%s)\n", key.Name, key.KeyID, kt)
 		if kt == apikeys.KeyTypeWebhook {
 			fmt.Printf("trigger slugs: %s\n", strings.Join(slugs, ", "))
 		}
 		fmt.Printf("secret (shown once): %s\n", raw)
+		fmt.Printf("format: fleet_%s_<base58> — send it as the X-API-Key header; a free read-only check of the key is POST /v1/tasks/estimate (creates nothing).\n", kt)
 		return 0
 	}
 
@@ -378,13 +390,15 @@ func schedAPIKeyCreate(argv []string) int {
 	if err != nil {
 		return errf(5, "%v", err)
 	}
+	ks.fixOwnership()
 	fmt.Printf("created API key %s (id=%s role=%s)\n", key.Name, key.KeyID, roleVal)
 	fmt.Printf("secret (shown once): %s\n", raw)
+	fmt.Println("format: legacy sk-<base64> — send it as the X-API-Key header (prefer --type task|readonly|webhook|admin for a scoped fleet_<type>_… key).")
 	return 0
 }
 
 func schedAPIKeyList(_ []string) int {
-	mgr, code := openKeyManager()
+	mgr, _, code := openKeyManager()
 	if mgr == nil {
 		return code
 	}
@@ -409,13 +423,14 @@ func schedAPIKeyRevoke(argv []string) int {
 	if keyID == "" {
 		return errf(1, "key id required")
 	}
-	mgr, code := openKeyManager()
+	mgr, ks, code := openKeyManager()
 	if mgr == nil {
 		return code
 	}
 	if err := mgr.RevokeKey(keyID); err != nil {
 		return errf(5, "%v", err)
 	}
+	ks.fixOwnership()
 	fmt.Printf("revoked API key %s\n", keyID)
 	return 0
 }
@@ -430,7 +445,7 @@ func schedAPIKeyRotate(argv []string) int {
 	if strings.TrimSpace(keyID) == "" {
 		return errf(1, "key id required")
 	}
-	mgr, code := openKeyManager()
+	mgr, ks, code := openKeyManager()
 	if mgr == nil {
 		return code
 	}
@@ -440,6 +455,7 @@ func schedAPIKeyRotate(argv []string) int {
 	if err != nil {
 		return errf(5, "%v", err)
 	}
+	ks.fixOwnership()
 	typeStr := string(key.Type)
 	if typeStr == "" {
 		typeStr = "legacy"
@@ -454,13 +470,14 @@ func schedAPIKeyDelete(argv []string) int {
 	if keyID == "" {
 		return errf(1, "key id required")
 	}
-	mgr, code := openKeyManager()
+	mgr, ks, code := openKeyManager()
 	if mgr == nil {
 		return code
 	}
 	if err := mgr.DeleteKey(keyID); err != nil {
 		return errf(5, "%v", err)
 	}
+	ks.fixOwnership()
 	fmt.Printf("deleted API key %s\n", keyID)
 	return 0
 }

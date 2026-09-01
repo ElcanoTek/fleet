@@ -266,6 +266,11 @@ same PR.
   [ADR-0048](docs/adr/0048-codeql-severity-gating.md)
 - **HTTP API versioning** (the `/v1` prefix + `X-Fleet-API-Version` + `/api-info`
   discovery + deprecation contract): [`docs/api-versioning.md`](docs/api-versioning.md)
+- **Machine clients** (what the TLS front routes to the Go listeners and why the
+  bare paths 307 to `/login`, minting a key into the store the *service* reads,
+  `X-API-Key` as the one public auth path, `/v1/tasks/estimate` as the free
+  connection test): [`docs/API-CLIENTS.md`](docs/API-CLIENTS.md) +
+  [ADR-0053](docs/adr/0053-public-api-through-the-tls-front.md)
 - **Database migrations** (the two runners, safe-DDL patterns, the migration DDL
   linter, `fleet migrate status`, rollback scope): [`docs/MIGRATIONS.md`](docs/MIGRATIONS.md)
 - **Web-tier shutdown** (why `fleet-web` dumped core on nearly every restart:

@@ -2090,9 +2090,12 @@ func addrOr(addr, def string) string {
 // 127.0.0.1:8080) and the deployment contract: the deploy docs (Caddyfile,
 // fleet.service, DEPLOYMENT.md, grafana/README.md) all promise that the Go
 // backends bind loopback and are only reached through the on-box web tier /
-// reverse proxy. A bare ":8000" would bind every interface and expose the
-// orchestrator admin surface directly on hosts without a firewall. Multi-host
-// topologies opt in explicitly via FLEET_ORCHESTRATOR_ADDR.
+// reverse proxy (which forwards the public /v1 API here with the Next-proxy
+// header-trust headers stripped — ADR-0053). A bare ":8000" would bind every
+// interface and expose the orchestrator admin surface AND the header-trust
+// channel directly on hosts without a firewall. Multi-host topologies opt in
+// explicitly via FLEET_ORCHESTRATOR_ADDR; the Caddyfile renderer follows the
+// env-file value (scripts/lib/caddyfile.sh) when they do.
 // warnIfNoAdminKey logs a startup warning when ADMIN_API_KEY is unset. Since
 // verifyAdminKey now fails closed on an empty configured key (an empty key used
 // to match an empty header and silently authenticate admin routes), the admin

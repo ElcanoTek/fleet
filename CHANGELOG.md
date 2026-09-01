@@ -19,6 +19,19 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **`fleet config set-env <KEY>` / `unset-env <KEY>`** — the generic env-file
+  writer that only existed for two named credentials. Value from stdin
+  (`--value -`, a pipe) or a hidden TTY prompt, never argv; `--web` targets the
+  web-tier file. Writes through the same `creds.SetEnvKey` path as
+  `set-openrouter-key`, so the result is exactly one line for the key, the
+  file stays `0600` and its owner is unchanged. See
+  [docs/ENV-CLI.md](docs/ENV-CLI.md).
+
+- **`docs/API-CLIENTS.md`** — the machine-client runbook: which paths the TLS
+  front routes to the API, why the bare paths 307 to `/login`, minting a key
+  into the store the *service* reads, `X-API-Key` as the one public auth path,
+  and `POST /v1/tasks/estimate` as the free connection test.
+
 - **`fleet env` — inspect + edit the deployment env files from the CLI**
   (patterned after gig's `gig env`). `fleet env [show]` prints the server env
   file (`FLEET_ENV_FILE` / `/etc/fleet/fleet.env` / `.env.local`) and the
@@ -258,6 +271,71 @@ prior versions are listed because none have shipped.
   `os.Getenv`+parse knob is introduced without a registry row.
 
 ### Fixed
+
+- **`fleet config set-*` no longer silently loses to a duplicate line.**
+  `creds.SetEnvKey` replaced only the first `KEY=` line, but the server's
+  loader is last-assignment-wins, so on a hand-edited file carrying two lines
+  for a key the CLI printed "set KEY" and the service kept the stale later
+  value. The upsert now leaves exactly one line for the key (first position
+  kept, later duplicates dropped).
+
+- **Env-file writes keep the file's owner.** Both `fleet env edit` (an editor
+  that saves via rename hands the file to the editing user — root under sudo)
+  and the temp+rename in `creds.SetEnvKey` now restore the previous owner
+  when running as root and it changed; mode `0600` is restored as before.
+
+- **`fleet sched apikey …` writes the store the service actually reads.**
+  The CLI resolved `DATA_DIR`/`FLEET_DATA_DIR` against *its* cwd and fell
+  back to `./data`, so a root shell minted keys into `/root/data/api_keys.json`
+  — a file the unit never opens — and the caller saw a `401` indistinguishable
+  from a typo. It now derives the service's store the way the service does
+  (the unit's `WorkingDirectory` + the env *file*'s value, default `./data`),
+  prints `key store: …` on every run, warns loudly when an explicit env
+  override points elsewhere, and after each write hands `api_keys.json` +
+  the audit log back to the store directory's owner (a root-run mint used to
+  leave them root-owned inside the `fleet` user's directory, unreadable and
+  unwritable to the service). `--help` and the create output now state the
+  key formats (`fleet_<type>_<base58>` vs legacy `sk-…`) and the header.
+
+- **`fleet status` probes the sandbox image in the service user's store.**
+  Run as root it inspected root's rootful podman store and reported an image
+  "missing" that `fleet doctor` had just verified in the `fleet` user's store.
+  As root it now runs the probe as the unit's `User=` (runuser + the unit's
+  HOME/XDG_RUNTIME_DIR, like `build-sandbox-image.sh`); as anyone else it
+  labels the verdict as being about *your* store and points at the
+  authoritative check.
+
+- **The public HTTP API is now reachable through the Caddy TLS front.** The
+  Caddyfile `scripts/bootstrap.sh --enable-web --domain` wrote (and the
+  `deploy/Caddyfile` reference) proxied *everything* to the Next.js web tier,
+  which has no `/v1`, `/api-info`, `/a2a`, `/triggers` or `/webhooks` routes —
+  so every documented API URL (`docs/openapi.yaml`'s `/v1` base, the A2A agent
+  card, the GitHub/Slack webhook URLs in `docs/WEBHOOKS.md`) answered with the
+  web app's 404 while every unit was green. The layout now lives once, in
+  `scripts/lib/caddyfile.sh`: `/v1`, `/v1/*`, `/api-info`,
+  `/.well-known/agent-card.json`, `/a2a`, `/a2a/*` and `/triggers/*` route to
+  the orchestrator, `/webhooks/*` to the chat listener, everything else to Next
+  — with the Next-proxy header-trust headers (`X-User-Email`,
+  `X-User-Session-Epoch`, the shared token headers) **deleted** on both backend
+  routes so the impersonation channel stays loopback-only and `X-API-Key` is
+  the only public auth path ([ADR-0053](docs/adr/0053-public-api-through-the-tls-front.md)).
+  A test pins `deploy/Caddyfile` to the renderer's functional body.
+  - `fleet bootstrap` renders from the shared library and now **reloads** a
+    running Caddy (previously `enable --now`, a no-op on a running unit, so a
+    re-run never applied a rewritten Caddyfile); its dry-run plan names the
+    routes.
+  - `fleet doctor` diffs a fleet-managed `/etc/caddy/Caddyfile` against the
+    shipped layout (functional lines only; domain + ACME email read back from
+    the installed file) and rewrites a drifted one — timestamped backup,
+    `caddy validate`, `systemctl reload caddy` — or reports it under `--check`;
+    an operator-owned Caddyfile is advisory-only. It then fetches
+    `https://<domain>/api-info` *through* Caddy (`--resolve` pinned to
+    `127.0.0.1`) and fails when the orchestrator's JSON doesn't come back. The
+    in-process `GET /admin/doctor` gains a structural `caddy: API routing`
+    check (fleet-managed-but-stale → fail with the doctor fix).
+  - `fleet update` offers the same rewrite under its unit-adoption consent
+    rule (interactive y/N, or unattended with `--adopt-units`), with the diff
+    shown and the manual hint otherwise.
 
 - **Tasks created through chat now show their confirmed title in the Operations
   Center.** The `schedule_task` flow collected and confirmed a human-readable

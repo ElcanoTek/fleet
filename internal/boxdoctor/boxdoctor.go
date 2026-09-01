@@ -128,6 +128,7 @@ func Run(ctx context.Context, opts Options) *Report {
 	for _, c := range checkUnits(ctx, serviceName(opts.ServiceName)) {
 		add(c)
 	}
+	add(checkCaddyfile(caddyfilePath(), orchestratorAddr()))
 	for _, c := range checkRestartChurn(ctx, serviceName(opts.ServiceName)) {
 		add(c)
 	}

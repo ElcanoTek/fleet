@@ -56,7 +56,11 @@
 #   --branch <name>        override the branch fast-forwarded in SRC_DIR (env FLEET_UPDATE_BRANCH)
 #   --adopt-units          adopt a shipped deploy/*.service that differs
 #                          functionally from the installed unit, WITHOUT the
-#                          interactive prompt (env FLEET_UPDATE_ADOPT_UNITS=1)
+#                          interactive prompt (env FLEET_UPDATE_ADOPT_UNITS=1).
+#                          Also rewrites a fleet-managed /etc/caddy/Caddyfile
+#                          whose layout drifted from scripts/lib/caddyfile.sh
+#                          (e.g. one that predates the /v1 API routes) and
+#                          reloads caddy — same consent rule, same prompt.
 #   --yes / -y             skip the confirm prompt (env FLEET_UPDATE_YES=1)
 #   --no-timers            don't offer to install a missing fleet-backup /
 #                          fleet-maintenance timer pair, and don't hint about
@@ -86,6 +90,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/node-version.sh
 . "$SCRIPT_DIR/lib/node-version.sh"
+# The fleet-managed Caddyfile (marker, renderer, drift helpers) — the same
+# implementation bootstrap.sh writes from and doctor.sh repairs against.
+# shellcheck source=lib/caddyfile.sh
+. "$SCRIPT_DIR/lib/caddyfile.sh"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 SRC_DIR="${SRC_DIR:-$REPO_ROOT}"
@@ -1285,6 +1293,64 @@ if command -v systemctl >/dev/null 2>&1; then
         warn "  adopt it: sudo fleet update --adopt-units   (or: sudo fleet doctor)"
         ;;
     esac
+  fi
+
+  # ── Caddyfile drift (the fleet-managed TLS front) ──
+  # bootstrap renders /etc/caddy/Caddyfile from scripts/lib/caddyfile.sh and
+  # this script never rewrote it, so a routing fix in a new release (the /v1
+  # API + inbound webhooks proxied to the Go backends instead of 404ing at the
+  # web tier) did not reach an already-provisioned box on its own — the same
+  # gap the unit loop above closes for deploy/*.service, and the same consent
+  # rule: adopt under --adopt-units or an interactive yes, else hint. The
+  # domain + ACME email are read back from the installed file so a rewrite
+  # keeps them. A Caddyfile fleet did not write (no marker) is never touched.
+  CADDYFILE="${FLEET_CADDYFILE:-/etc/caddy/Caddyfile}"
+  if [[ -f "$CADDYFILE" ]] && caddyfile_is_managed "$CADDYFILE"; then
+    caddy_domain="$(caddyfile_domain "$CADDYFILE")"
+    if [[ -z "$caddy_domain" ]]; then
+      warn "$CADDYFILE is fleet-managed but has no site block — rerun: sudo fleet bootstrap --enable-web --domain <fqdn>"
+    else
+      caddy_rendered="$(render_fleet_caddyfile "$caddy_domain" "$(caddyfile_acme_email "$CADDYFILE")" \
+        "$(env_get FLEET_SERVER_ADDR "$backend_env_file")" "$(env_get FLEET_ORCHESTRATOR_ADDR "$backend_env_file")")"
+      caddy_diff="$(diff -u --label "$CADDYFILE (installed)" --label "scripts/lib/caddyfile.sh (shipped)" \
+        <(caddyfile_functional_body "$CADDYFILE") <(printf '%s\n' "$caddy_rendered" | caddyfile_functional_body) 2>/dev/null || true)"
+      if [[ -n "$caddy_diff" ]]; then
+        warn "$CADDYFILE differs functionally from the layout this release ships — the /v1 API + inbound webhooks may not be routed to the Go backends (API clients get the web tier's 404)."
+        do_adopt=0
+        if [[ "$DRY_RUN" == "1" ]]; then
+          info "[dry-run] would offer to rewrite $CADDYFILE for ${caddy_domain} from scripts/lib/caddyfile.sh (timestamped backup, caddy validate) and reload caddy"
+          show_unit_diff "$caddy_diff"
+        elif [[ "$ADOPT_UNITS" == "1" ]]; then
+          do_adopt=1
+        elif [[ -t 0 && "$ASSUME_YES" != "1" ]]; then
+          show_unit_diff "$caddy_diff"
+          printf '%s?%s Rewrite %s%s%s for %s from the shipped layout? %s(timestamped backup, caddy validate, systemctl reload caddy) (y/N)%s ' \
+            "$c_cyan" "$c_reset" "$c_bold" "$CADDYFILE" "$c_reset" "$caddy_domain" "$c_dim" "$c_reset"
+          read -r answer
+          case "${answer,,}" in y|yes) do_adopt=1 ;; esac
+        fi
+        if [[ "$do_adopt" == "1" ]]; then
+          caddy_backup="${CADDYFILE}.fleet-backup.$(date -u +%Y%m%dT%H%M%SZ)"
+          if cp -p "$CADDYFILE" "$caddy_backup" 2>/dev/null && printf '%s\n' "$caddy_rendered" > "$CADDYFILE" 2>/dev/null; then
+            if command -v caddy >/dev/null 2>&1 && ! caddy validate --adapter caddyfile --config "$CADDYFILE" >/dev/null 2>&1; then
+              cp -p "$caddy_backup" "$CADDYFILE"
+              warn "the rendered Caddyfile failed \`caddy validate\` — restored ${caddy_backup}; run: caddy validate --adapter caddyfile --config $CADDYFILE"
+            else
+              if systemctl is-active --quiet caddy.service 2>/dev/null; then
+                systemctl reload caddy.service >/dev/null 2>&1 || systemctl restart caddy.service >/dev/null 2>&1 \
+                  || warn "caddy reload failed — journalctl -u caddy -n 50"
+              fi
+              ok "rewrote $CADDYFILE for ${caddy_domain} (previous file: ${caddy_backup}); caddy reloaded — the /v1 API + webhooks now route to the Go backends"
+            fi
+          else
+            warn "could not rewrite $CADDYFILE (need root?) — previous file left in place"
+          fi
+        elif [[ "$DRY_RUN" != "1" ]]; then
+          warn "  review: diff $CADDYFILE <(bash -c '. $SRC_DIR/scripts/lib/caddyfile.sh; render_fleet_caddyfile ${caddy_domain}')"
+          warn "  adopt:  sudo fleet update --adopt-units   (or: sudo fleet doctor, which rewrites a drifted fleet-managed Caddyfile without asking)"
+        fi
+      fi
+    fi
   fi
 fi
 

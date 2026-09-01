@@ -10,7 +10,11 @@ cost/token ceilings, audit, host-side credentials.
 The full API surface is specified in [`openapi.yaml`](openapi.yaml) (kept
 honest by a route-parity CI test) and versioned per
 [`api-versioning.md`](api-versioning.md) (the `/v1` prefix + `X-Fleet-API-Version`).
-This page is the practical tour.
+This page is the practical tour. Getting a request **to** the API from another
+machine — which paths the TLS front routes, which store a key must land in,
+the free connection test — is [`API-CLIENTS.md`](API-CLIENTS.md). Every
+`$FLEET` below is the versioned base, `https://<domain>/v1`: the bare paths
+(`/tasks`, …) are reachable only from the box itself.
 
 ## 1. Mint a scoped API key
 
@@ -19,13 +23,18 @@ Typed keys (#190) carry their access class in the token itself —
 `fleet_webhook_…` can only fire its named triggers:
 
 ```sh
-fleet sched apikey create ci-bot --type task
+sudo fleet sched apikey create ci-bot --type task
+# key store: /var/lib/fleet/data/api_keys.json (the fleet.service store …)   ← must be the service's store
 # → prints fleet_task_<base58> exactly once — store it in your caller's secrets
 ```
 
-Optionally cap what it may submit (`--max-priority 30`) or rate-limit it.
-Authenticate with either header: `X-API-Key: <key>` or
-`Authorization: Bearer <key>`.
+Run it **on the box** so it writes the store the service reads (the CLI
+announces which store it used and warns when an env override points it
+elsewhere). Optionally rate-limit the key (`--rate-limit-per-minute N`).
+Authenticate with the `X-API-Key: <key>` header — that is the one path the
+TLS front lets through from outside (`Authorization: Bearer` is accepted only
+for on-box legacy user tokens). `POST $FLEET/tasks/estimate` is a free,
+read-only check that the key works.
 
 **Run logs are scoped to the key that submitted the task.** A key reads the
 transcript of the tasks it created (`/logs/{id}`, its `/history` siblings, and

@@ -74,7 +74,7 @@ integration that breaks here would have broken subtly later.
 ### Authentication
 
 Exactly what the card declares: a fleet API key in `X-API-Key` — typed keys
-(`fleet task-keys create`; `fleet_task_…` creates and reads its own work,
+(`fleet sched apikey create <name> --type task`; `fleet_task_…` creates and reads its own work,
 `fleet_readonly_…` reads) or the bootstrap admin key. Credential failures are
 transport-layer 401/403; everything after auth is a JSON-RPC envelope. There
 is deliberately no cookie or bearer path on `/a2a`, which is what makes its

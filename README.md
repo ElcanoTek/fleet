@@ -314,7 +314,8 @@ task schema (a thin mirror of the scheduled-task create shape).
 fleet runs as **one** `fleet` process on a **single, vertically-scaled host**: the
 browser talks only to the Next.js web app, which proxies server-side over
 loopback to the two Go backends the process boots (chat + orchestrator); Caddy
-fronts it with TLS. Single-host is by design — crash recovery uses single-owner
+fronts it with TLS and routes the public `/v1` API (plus `/api-info`, the A2A
+agent card, `/triggers/*` and `/webhooks/*`) straight to those backends. Single-host is by design — crash recovery uses single-owner
 DB leases and the worker cap is a per-process semaphore, so fleet scales by
 moving to a bigger box, not more replicas.
 
@@ -377,6 +378,7 @@ Deep references live in [`docs/`](docs/) so this README stays an orientation, no
 | [`docs/SCANNING.md`](docs/SCANNING.md) | The scanning stack — which of golangci-lint / ruff / govulncheck / Grype / gitleaks / npm audit / CodeQL / Semgrep owns what, what actually blocks a merge, and the known gaps |
 | [`docs/CODEQL.md`](docs/CODEQL.md) | CodeQL specifics — advanced setup, the four-language matrix, the High-band gate + accepted-findings register, and why a PR-event run certifies a diff rather than a tree |
 | [`docs/BUILDING-ON-FLEET.md`](docs/BUILDING-ON-FLEET.md) | The HTTP API as an automation substrate — keys, kicking off jobs, consuming structured output |
+| [`docs/API-CLIENTS.md`](docs/API-CLIENTS.md) | Reaching the API from another machine — what the TLS front routes, the key store the service reads, `X-API-Key`, the free connection test |
 | [`docs/MCP-CATALOG.md`](docs/MCP-CATALOG.md) | The connector catalog — bundled vs third-party trust classes |
 | [`docs/adr/`](docs/adr/) | Architecture Decision Records — the *why* behind the non-negotiable invariants |
 | [`SECURITY.md`](SECURITY.md) · [`CONTRIBUTING.md`](CONTRIBUTING.md) | Reporting a vulnerability · contributor workflow + CI gates |

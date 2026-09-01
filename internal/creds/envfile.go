@@ -19,6 +19,13 @@ import (
 // if it does not exist. An existing key's line is replaced in place; a new key
 // is appended. Comments and unrelated lines are preserved.
 //
+// The result always has EXACTLY ONE line for key. A hand-edited file can carry
+// duplicates (one appended below another), and the server's loader is
+// last-assignment-wins (config.loadEnvFileFiltered calls os.Setenv per line),
+// so an upsert that replaced only the first occurrence left the stale later
+// line in force — the value the operator just set was silently ignored. The
+// first occurrence keeps its position; every later duplicate is dropped.
+//
 // The value is encoded so the shared parser (splitEnvKeyValue here,
 // config.loadEnvFile on the server) reads back the exact bytes given: values
 // the parser would mangle (surrounding quotes, leading/trailing whitespace,
@@ -40,18 +47,23 @@ func SetEnvKey(path, key, value string) error {
 		return err
 	}
 	newLine := key + "=" + encoded
+	out := make([]string, 0, len(lines)+1)
 	replaced := false
-	for i, ln := range lines {
+	for _, ln := range lines {
 		if k, ok := splitEnvLine(ln); ok && k == key {
-			lines[i] = newLine
+			if replaced {
+				continue // a later duplicate: drop it, or it would win at load time
+			}
+			out = append(out, newLine)
 			replaced = true
-			break
+			continue
 		}
+		out = append(out, ln)
 	}
 	if !replaced {
-		lines = append(lines, newLine)
+		out = append(out, newLine)
 	}
-	return writeEnvLines(path, lines)
+	return writeEnvLines(path, out)
 }
 
 // DeleteEnvKey removes key from the env file. Returns true if a line was
@@ -155,7 +167,10 @@ func readEnvLines(path string) ([]string, error) {
 }
 
 // writeEnvLines writes the lines back atomically (temp + rename) with 0600 mode
-// so the secret file is never world-readable.
+// so the secret file is never world-readable. When the file already exists its
+// owner is preserved across the rename (PreserveOwner): a root-run
+// `fleet config set-*` / `fleet mcp account set` must not re-own an env file to
+// root out from under the account that owned it.
 func writeEnvLines(path string, lines []string) error {
 	dir := filepath.Dir(path)
 	if dir != "" {
@@ -163,6 +178,7 @@ func writeEnvLines(path string, lines []string) error {
 			return err
 		}
 	}
+	prev, statErr := os.Stat(path) // nil when the file is being created
 	tmp, err := os.CreateTemp(dir, ".env-*.tmp")
 	if err != nil {
 		return err
@@ -197,6 +213,11 @@ func writeEnvLines(path string, lines []string) error {
 	}
 	if err := tmp.Close(); err != nil {
 		return err
+	}
+	if statErr == nil {
+		if err := PreserveOwner(tmpName, prev); err != nil {
+			return err
+		}
 	}
 	return os.Rename(tmpName, path)
 }

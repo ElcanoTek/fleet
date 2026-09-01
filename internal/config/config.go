@@ -1033,8 +1033,11 @@ type Config struct {
 	HTTPTools []HTTPToolConfig
 
 	// ── TLS termination (chat server) ──
-	// The standard deployment fronts the Next.js app (the ONLY public entrypoint)
-	// with Caddy/Tailscale, which terminate TLS; the Go chat/orchestrator servers
+	// The standard deployment fronts the Next.js app (the only public entrypoint
+	// for BROWSERS) with Caddy/Tailscale, which terminate TLS and also route the
+	// public /v1 API + the fixed-path discovery/webhook routes to the loopback
+	// Go listeners with the header-trust headers stripped (ADR-0053,
+	// scripts/lib/caddyfile.sh); the Go chat/orchestrator servers themselves
 	// bind loopback. These knobs let an operator instead terminate TLS directly at
 	// the Fleet chat process. Default "off" — no behavior change. The orchestrator
 	// stays loopback HTTP (it is impersonation-load-bearing and MUST stay 127.0.0.1).
