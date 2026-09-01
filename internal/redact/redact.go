@@ -399,6 +399,15 @@ func (r *Redactor) Redact(input string) string {
 // so ordinary long values (PATH, URLs) are not blanket-redacted.
 var secretEnvNamePattern = regexp.MustCompile(`(?i)(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|API_?KEY)`)
 
+// IsSecretEnvName reports whether an env-var NAME denotes a credential whose
+// value must never be echoed. It is the single name-based heuristic — the same
+// one RegisterEnvLiterals uses to seed the scrubber — exported so CLI surfaces
+// that render env files (`fleet env show`) mask by the identical rule instead
+// of growing a second, drifting copy.
+func IsSecretEnvName(name string) bool {
+	return secretEnvNamePattern.MatchString(name)
+}
+
 // RegisterEnvLiterals adds the values of secret-looking env vars (by name) to r
 // as literals. environ is in os.Environ() form ("NAME=value").
 func (r *Redactor) RegisterEnvLiterals(environ []string) {
