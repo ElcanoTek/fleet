@@ -19,6 +19,22 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **`fleet env` — inspect + edit the deployment env files from the CLI**
+  (patterned after gig's `gig env`). `fleet env [show]` prints the server env
+  file (`FLEET_ENV_FILE` / `/etc/fleet/fleet.env` / `.env.local`) and the
+  web-tier file (`/etc/fleet/fleet-web.env` / `web/.env.local`) with every
+  secret value masked — by the same name heuristic the diagnose scrubber
+  seeds from (now exported as `redact.IsSecretEnvName`), plus DSN-userinfo
+  stripping so a Postgres password can't slip through under a non-secret
+  key name. `fleet env edit [--web] [--editor CMD]` opens the file in
+  `--editor` / `$VISUAL` / `$EDITOR`, or an interactive nano/vim/helix pick
+  with a `dnf install` offer for a missing choice; it creates a missing file
+  0600, fails up front with a sudo hint when the file isn't writable,
+  restores 0600 after the editor exits (vim's write-via-rename would
+  otherwise drop it), warns about lines the server's parser would silently
+  skip and about duplicate keys, and prints the validate/restart apply
+  hints. See [docs/ENV-CLI.md](docs/ENV-CLI.md).
+
 - **Immediate dispatch for synchronous task writes (#1279).** A write that
   makes a task claimable right now — a create landing in `pending` (the HTTP
   and A2A create paths), an answer resuming a paused task, a wake event — now
