@@ -184,3 +184,21 @@ func replayStoredLog(w http.ResponseWriter, taskID uuid.UUID, session *models.Lo
 func (h *Handlers) SetTaskStopper(stop func(taskID uuid.UUID, who string) bool) {
 	h.taskStopper = stop
 }
+
+// SetTaskKicker injects the runner pool's claim-loop wake (runner.Pool.Kick)
+// so a write that makes a task immediately claimable dispatches it now rather
+// than at the pool's next poll tick. Mirrors SetTaskStreamProvider: set once
+// before serving, nil-safe at every call site.
+func (h *Handlers) SetTaskKicker(kick func()) {
+	h.taskKicker = kick
+}
+
+// kickTaskQueue fires the wired task kicker, if any. Call it AFTER the
+// pending-making write has committed — the kick races the pool's scan, and a
+// scan that runs before the commit simply finds nothing (the next tick still
+// picks the task up, so the race costs latency, never a lost task).
+func (h *Handlers) kickTaskQueue() {
+	if h.taskKicker != nil {
+		h.taskKicker()
+	}
+}
