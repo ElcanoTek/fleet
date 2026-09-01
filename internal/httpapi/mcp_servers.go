@@ -21,13 +21,12 @@ import (
 
 // ── /mcp-servers ───────────────────────────────────────────────────────────
 
-// listMCPServerCatalog returns the Optional MCP server catalog without any
-// per-conversation opt-in state. The frontend calls this on startup so the
-// Tools picker can render for brand-new chats (before a conversation row
-// exists). `enabled` reflects each server's EnabledByDefault (so default-on
-// connectors like gamma start toggled on for a fresh chat); per-conversation
-// state is fetched from /conversations/{id}/mcp-servers once a conversation
-// is open and overrides this seed.
+// listMCPServerCatalog returns Optional controls plus locked always-on status
+// without any per-conversation opt-in state. The frontend calls this on startup
+// so the Tools picker can render for brand-new chats. For Optional rows,
+// `enabled` reflects EnabledByDefault; for always-on rows it reflects live
+// discovery availability. Per-conversation state later overrides only the
+// Optional seed.
 func (s *Server) listMCPServerCatalog(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -42,7 +41,11 @@ func (s *Server) listMCPServerCatalog(w http.ResponseWriter, r *http.Request) {
 	if perr != nil {
 		prefs = nil
 	}
-	servers := make([]map[string]any, 0, len(catalog))
+	// Always-on bundle servers are status rows, not opt-ins. Keep them in the
+	// same response so chat can report the actual live discovery state beside
+	// the optional controls without ever persisting them as conversation
+	// choices.
+	servers := s.alwaysOnMCPServerCatalogEntries()
 	for _, info := range catalog {
 		avail, defaultOn, _ := bundledPrefFor(prefs, info)
 		if !avail {
@@ -80,6 +83,39 @@ func (s *Server) listMCPServerCatalog(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, map[string]any{"servers": servers})
+}
+
+// alwaysOnMCPServerCatalogProvider is deliberately narrower than turnEngine.
+// Manager implements it, while existing transport fakes do not have to grow a
+// method for a read-only UI capability they do not exercise.
+type alwaysOnMCPServerCatalogProvider interface {
+	AlwaysOnMCPServerCatalog() []agent.AlwaysOnServerInfo
+}
+
+// alwaysOnMCPServerCatalogEntries returns locked status rows for chat's Tools
+// picker. Available comes from live MCP discovery; a manifest-enabled server
+// that exposed no tools is returned unchecked/unavailable rather than being
+// painted permanently on. Tool names are intentionally omitted: the public
+// status snapshot exposes only the allowlisted count.
+func (s *Server) alwaysOnMCPServerCatalogEntries() []map[string]any {
+	provider, ok := s.agent.(alwaysOnMCPServerCatalogProvider)
+	if !ok {
+		return []map[string]any{}
+	}
+	catalog := provider.AlwaysOnMCPServerCatalog()
+	servers := make([]map[string]any, 0, len(catalog))
+	for _, info := range catalog {
+		servers = append(servers, map[string]any{
+			"name":         info.Name,
+			"display_name": info.DisplayName,
+			"description":  info.Description,
+			"tools":        []string{},
+			"tool_count":   info.ToolCount,
+			"enabled":      info.Available,
+			"always_on":    true,
+		})
+	}
+	return servers
 }
 
 // remoteCatalogEntry renders one hosted connection NAME for the Tools picker
@@ -235,11 +271,11 @@ func (s *Server) optionalServerWhitelist(ctx context.Context, user string) map[s
 //	{ "servers": [{ name, description, tools: [...], tool_count,
 //	                enabled }, ...] }
 //
-// `enabled` is true when the conversation currently opted this
-// server in. Non-optional servers are NOT listed — the UI only
-// renders the toggle row for Optional ones. Reads from
-// Manager.MCPServerCatalog() (frozen at server startup) + the
-// conversation's opt-in list (fresh from Postgres).
+// `enabled` is true when the conversation currently opted an Optional server
+// in. Non-optional servers are also listed as locked `always_on` status rows;
+// their enabled state is live discovery availability, never conversation
+// state. Reads from Manager's frozen catalogs + the conversation's fresh
+// opt-in list from Postgres.
 func (s *Server) handleConversationMCPServersGet(w http.ResponseWriter, r *http.Request, user, _ string, conv *store.Conversation) {
 	enabled := make(map[string]bool, len(conv.OptionalMCPServersEnabled))
 	for _, n := range conv.OptionalMCPServersEnabled {
@@ -253,7 +289,7 @@ func (s *Server) handleConversationMCPServersGet(w http.ResponseWriter, r *http.
 	if perr != nil {
 		prefs = nil
 	}
-	servers := make([]map[string]any, 0, len(s.agent.MCPServerCatalog()))
+	servers := s.alwaysOnMCPServerCatalogEntries()
 	for _, info := range s.agent.MCPServerCatalog() {
 		if avail, _, _ := bundledPrefFor(prefs, info); !avail && !enabled[info.Name] {
 			// Hidden unless the conversation already opted it in before the

@@ -5,7 +5,8 @@ import { chatServerProxy } from "@/app/lib/chatServer";
 export const runtime = "nodejs";
 
 // GET /api/mcp-servers
-// Returns the Optional MCP server catalog with no per-conversation state.
+// Returns Optional MCP controls plus live, locked always-on status with no
+// per-conversation state.
 // `enabled` is seeded from each server's `enabled_by_default` (so default-on
 // connectors like gamma start toggled on for a fresh chat). The Tools picker
 // calls this on startup so it can render for new chats before a conversation

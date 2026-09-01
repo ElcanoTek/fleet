@@ -19,10 +19,14 @@ import (
 // test can exercise the bundle+remote whitelist merge without a Manager.
 type catalogEngine struct {
 	fakeEngine
-	catalog []agent.OptionalServerInfo
+	catalog  []agent.OptionalServerInfo
+	alwaysOn []agent.AlwaysOnServerInfo
 }
 
 func (c *catalogEngine) MCPServerCatalog() []agent.OptionalServerInfo { return c.catalog }
+func (c *catalogEngine) AlwaysOnMCPServerCatalog() []agent.AlwaysOnServerInfo {
+	return c.alwaysOn
+}
 
 // remoteMCPFixture wires serverFixture's Postgres-backed Server with a real
 // remotemcp.Service over the SAME store (cipher installed so Enabled() is

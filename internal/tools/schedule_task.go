@@ -5,12 +5,18 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"charm.land/fantasy"
 )
 
 // ScheduleTaskToolName is the canonical name of the interactive schedule_task tool.
 const ScheduleTaskToolName = "schedule_task"
+
+// scheduleTaskTitleMaxRunes mirrors the Operations Center title contract. The
+// tools package deliberately stays sched-free, so this cannot import the HTTP
+// handler's private constant.
+const scheduleTaskTitleMaxRunes = 120
 
 // ScheduleTaskParams is the agent-facing input schema for schedule_task (#239).
 // It maps to a subset of models.TaskCreate fields; the chat→orchestrator
@@ -20,7 +26,7 @@ const ScheduleTaskToolName = "schedule_task"
 // Supply EITHER cron (recurring) OR run_at (one-time future run), never both.
 // Omitting both creates a task that runs as soon as a worker is free.
 type ScheduleTaskParams struct {
-	Name                 string   `json:"name,omitempty" description:"Short human-readable label for the task, shown in the scheduler UI. Optional but recommended; must be unique across tasks."`
+	Name                 string   `json:"name,omitempty" description:"Short human-readable title for the task, shown in the Operations Center. Optional but recommended; does not need to be unique. Must be a single line of at most 120 characters."`
 	Prompt               string   `json:"prompt" description:"Full instructions for what the scheduled agent should do each run. Required."`
 	Cron                 string   `json:"cron,omitempty" description:"Standard 5-field cron expression for a RECURRING task, e.g. '0 9 * * MON-FRI'. Omit for one-time runs. Mutually exclusive with run_at."`
 	RunAt                string   `json:"run_at,omitempty" description:"RFC3339 / ISO-8601 datetime for a ONE-TIME future run, e.g. '2026-07-01T09:00:00Z'. Omit for recurring tasks. Mutually exclusive with cron."`
@@ -58,13 +64,24 @@ func NewScheduleTaskTool() fantasy.AgentTool {
 }
 
 // Validate checks a schedule_task payload for the constraints that do NOT need a
-// cron parser or storage: a non-empty prompt, a mutually-exclusive cron/run_at,
-// and a parseable run_at. Cron-expression validity is intentionally left to the
-// storage create path (storage.EnqueueTask), the single source of truth, so the
-// two cannot drift. Returns an agent-readable error.
+// cron parser or storage: the display-title shape, a non-empty prompt, a
+// mutually-exclusive cron/run_at, and a parseable run_at. Cron-expression
+// validity is intentionally left to the storage create path
+// (storage.EnqueueTask), the single source of truth, so the two cannot drift.
+// Returns an agent-readable error.
 func (p ScheduleTaskParams) Validate() error {
 	if strings.TrimSpace(p.Prompt) == "" {
 		return fmt.Errorf("schedule_task requires a non-empty prompt")
+	}
+	// Although the chat-facing argument keeps its original `name` spelling for
+	// compatibility, it is the task's display title. Keep this validation in
+	// sync with the Operations Center create/edit contract.
+	name := strings.TrimSpace(p.Name)
+	if strings.ContainsAny(name, "\r\n") {
+		return fmt.Errorf("schedule_task: task name must be a single line")
+	}
+	if utf8.RuneCountInString(name) > scheduleTaskTitleMaxRunes {
+		return fmt.Errorf("schedule_task: task name cannot exceed %d characters", scheduleTaskTitleMaxRunes)
 	}
 	cron := strings.TrimSpace(p.Cron)
 	runAt := strings.TrimSpace(p.RunAt)

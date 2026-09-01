@@ -266,11 +266,14 @@ special-cases nothing.
 
 Timing matters: the TCK inspects the **blocking send's own response**, never a
 re-fetch, so a scenario run must finish inside `FLEET_A2A_UNARY_WAIT_SECONDS`
-(25 in the rig — under the TCK client's 30s read timeout) — which is why the
-rig also sets `FLEET_SCHED_TICK_SECONDS=2`: at the production default both
-scheduling loops (the scheduler tick and the worker pool's claim poll) add up
-to 30s of dispatch latency before the run even starts, turning every
-scenario test into a coin flip.
+(25 in the rig — under the TCK client's 30s read timeout). Dispatch latency is
+no longer part of that budget: a send or follow-up answer **kicks the worker
+pool's claim loop** (`runner.Pool.Kick`, wired through the handlers'
+`SetTaskKicker` seam), so the task starts immediately instead of waiting for
+the next poll tick. The rig still sets `FLEET_SCHED_TICK_SECONDS=2` as
+belt-and-braces — the kick is advisory (a dropped kick means the poll tick
+picks the task up), and a short tick keeps any non-kicked path off the
+critical 25s window.
 
 It is not a CI job: it needs a Python toolchain and a booted rig, and its own
 spec pin (v1.0.0) trails the one this implementation uses. Run it before

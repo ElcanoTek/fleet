@@ -166,7 +166,7 @@ describe("Composer — tools popover seat picker", () => {
         }}
       />,
     );
-    fireEvent.click(screen.getByRole("button", { name: "Optional tools" }));
+    fireEvent.click(screen.getByRole("button", { name: "Connectors" }));
     const select = (await screen.findByTestId("mcp-seat-gamma")) as HTMLSelectElement;
     // Only the server with seats gets a picker; the Default option names the
     // default seat.
@@ -185,5 +185,60 @@ describe("Composer — tools popover seat picker", () => {
     // The row is still the toggle it always was.
     fireEvent.click(screen.getByRole("button", { name: /Decks and docs/ }));
     expect(toggleMcpServer).toHaveBeenCalledWith(null, "gamma");
+  });
+});
+
+describe("Composer — always-on connector status", () => {
+  it("shows available and unavailable rows as locked status, with a dimmed available switch", async () => {
+    const toggleMcpServer = vi.fn();
+    render(
+      <Host
+        overrides={{
+          mcpServers: [
+            {
+              name: "email",
+              display_name: "Email",
+              description: "Inbound reports.",
+              tools: [],
+              tool_count: 10,
+              enabled: true,
+              always_on: true,
+            },
+            {
+              name: "broken",
+              description: "Expected connector.",
+              tools: [],
+              tool_count: 0,
+              enabled: false,
+              always_on: true,
+            },
+            {
+              name: "gamma",
+              description: "Decks and docs.",
+              tools: ["create_deck"],
+              tool_count: 1,
+              enabled: true,
+            },
+          ],
+          toggleMcpServer,
+        }}
+      />,
+    );
+
+    const trigger = screen.getByRole("button", { name: "Connectors" });
+    // Only the selected Optional connector contributes to the badge.
+    expect(trigger).toHaveTextContent("1");
+    fireEvent.click(trigger);
+
+    const email = await screen.findByTestId("chat-mcp-always-on-email");
+    expect(email).toHaveTextContent("Always on");
+    expect(email.querySelector('[data-state="always-on"]')).toHaveClass(
+      "bg-[var(--color-connector-always-on-track)]",
+    );
+    const broken = screen.getByTestId("chat-mcp-always-on-broken");
+    expect(broken).toHaveTextContent("Unavailable");
+    expect(broken.querySelector('[data-state="off"]')).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Inbound reports/ })).not.toBeInTheDocument();
+    expect(toggleMcpServer).not.toHaveBeenCalled();
   });
 });

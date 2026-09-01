@@ -9,10 +9,11 @@ import (
 )
 
 // MCPServerCatalogEntry is one bundle or remote MCP server in the orchestrator's
-// task-form picker. It mirrors chat's GET /mcp-servers response shape so the
-// SAME <McpServerPicker> renders in both the chat toolbar and the scheduled-task
-// form. It NEVER carries secret values — `Accounts` is the per-server credential
-// seat catalog (names only, derived from the <VAR>_<ACCOUNT> env suffix scan).
+// task-form picker. It mirrors chat's GET /mcp-servers row contract so both
+// surfaces report the same always-on status even though chat uses a compact
+// presentation with different remote-connector semantics. It NEVER carries
+// secret values — `Accounts` is the per-server credential seat catalog (names
+// only, derived from the <VAR>_<ACCOUNT> env suffix scan).
 type MCPServerCatalogEntry struct {
 	Name        string `json:"name"`
 	DisplayName string `json:"display_name,omitempty"`

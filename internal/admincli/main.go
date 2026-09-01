@@ -20,6 +20,7 @@
 //	fleet chat                                        (interactive agent TUI, #457; --message for one-shot)
 //	fleet admin add|list|rm                           (one-step full admin across both user planes)
 //	fleet config set-openrouter-key|set-auth-pubkey|set-browserbase-key   (guided credential/env-file writes)
+//	fleet env [show|edit]                             (print the env files secrets-masked / open one in an editor)
 //	fleet chat user add|update|role|del|list
 //	fleet sched user add|update|set-role|rename|del|list
 //	fleet sched apikey create|list|revoke|rotate|delete
@@ -105,6 +106,8 @@ func Run(argv []string) int {
 		return cmdAdmin(argv[1:])
 	case "config":
 		return cmdConfig(argv[1:])
+	case "env":
+		return cmdEnv(argv[1:])
 	case "task":
 		return cmdTask(argv[1:])
 	case "mcp":
@@ -180,6 +183,10 @@ Users, credentials, notes:
                                                        mints hosted-browser live views; see docs/BROWSERBASE.md)
   fleet config set-auth-pubkey [<key>|--from <file>]  (enable Elcano SSO: validates + writes AUTH_SIGNING_PUBKEY into the web env file;
                                                        accepts the "auth pubkey" output line verbatim; --login-url/--cookie-domain optional)
+  fleet env [show]                                    (print the server + web env files with secret values masked)
+  fleet env edit [--web] [--editor CMD]               (open the server env file — or the web one — in $EDITOR, or pick
+                                                       nano/vim/helix interactively; offered via dnf install if missing.
+                                                       Restores 0600 and prints the validate/restart apply hints)
   fleet chat user add <email>    --password -
   fleet chat user update <email> --password -
   fleet chat user role <email>   --role member|viewer|admin [--team <id>]

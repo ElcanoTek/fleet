@@ -65,6 +65,11 @@ FLEET_CLIENT_CONFIG_DIR=/opt/fleet/client      # the client bundle checkout
 FLEET_ENV_FILE=/etc/fleet/fleet.env            # so config.Load reads this same file
 ```
 
+`fleet env` prints this file (and the web-tier one) with secret values masked,
+and `fleet env edit` opens it in an editor — `$EDITOR`, or an interactive
+nano/vim/helix pick — restoring the 0600 mode afterwards; see
+[ENV-CLI.md](ENV-CLI.md).
+
 You then add `OPENROUTER_API_KEY`, any listener/admin tokens, the client
 bundle's MCP connector credentials, and per-account MCP secrets
 (`fleet mcp account set <server> <account> --secret KEY=-`, value via

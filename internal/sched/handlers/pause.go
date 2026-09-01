@@ -52,6 +52,7 @@ func (h *Handlers) ResumeTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	log.Printf("Task resumed: %s (by %s)", logSafe(task.ID.String()), logSafe(p.stopLabel())) //nolint:gosec // G706: task.ID is a parsed uuid.UUID and logSafe strips CR/LF.
+	h.kickTaskQueue()
 	writeJSON(w, http.StatusOK, map[string]any{"status": string(models.TaskStatusPending)})
 }
 
@@ -100,6 +101,7 @@ func (h *Handlers) WakeTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	log.Printf("Task woken by event: %s (event %s, by %s)", logSafe(task.ID.String()), logSafe(event), logSafe(p.stopLabel())) //nolint:gosec // G706: task.ID is a parsed uuid.UUID and logSafe strips CR/LF.
+	h.kickTaskQueue()
 	writeJSON(w, http.StatusOK, map[string]any{"status": string(models.TaskStatusPending)})
 }
 

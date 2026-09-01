@@ -3,10 +3,11 @@ import { render, screen, fireEvent, cleanup } from "@testing-library/react";
 import { McpServerPicker } from "./McpServerPicker";
 import type { McpServer, MCPChoice } from "@/app/shared/lib/orchestratorApi";
 
-// The P7 gate: ONE McpServerPicker reused in BOTH the chat conversation toolbar
-// (mode="conversation") and the orchestrator task form (mode="task"), rendering
-// IDENTICALLY across modes. These tests assert that the set of controls and
-// their structure are the same regardless of mode, and that the
+// The full-size picker supports task and conversation embeddings with identical
+// control structure. Chat's compact composer uses a distinct presentation
+// because hosted connections have different runtime semantics there. These
+// tests assert the full-size component's modes stay structurally aligned and
+// that the
 // enable/disable + per-MCP account selection behave correctly.
 
 const SERVERS: McpServer[] = [
@@ -157,6 +158,7 @@ describe("McpServerPicker — always-on bundle servers (#1333)", () => {
     render(<McpServerPicker mode="task" servers={ALWAYS_ON} selection={[]} onChange={onChange} />);
     expect(screen.getByTestId("mcp-always-on-email")).toBeChecked();
     expect(screen.getByTestId("mcp-always-on-email")).toBeDisabled();
+    expect(screen.getByTestId("mcp-always-on-email")).toHaveClass("ui-switch--always-on");
     expect(screen.getByTestId("mcp-always-on-status-email")).toHaveTextContent("Always on");
     expect(screen.queryByTestId("mcp-toggle-email")).not.toBeInTheDocument();
     fireEvent.click(screen.getByTestId("mcp-always-on-email"));

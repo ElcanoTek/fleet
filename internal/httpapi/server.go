@@ -207,7 +207,10 @@ type Server struct {
 // Exactly one of Cron / RunAt should be set (or neither, for run-immediately);
 // the caller validates that before staging.
 type TaskScheduleRequest struct {
-	Name          string
+	// Title is the operator-facing label confirmed in chat. It maps to
+	// TaskCreate.Title, not TaskCreate.Name: Name is the unique portable
+	// definition key and is not rendered in the Operations Center.
+	Title         string
 	Prompt        string
 	Model         string
 	Cron          string

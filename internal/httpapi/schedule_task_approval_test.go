@@ -41,8 +41,8 @@ func TestRunStagedScheduleTask(t *testing.T) {
 	}
 
 	// The request was mapped faithfully.
-	if got.Name != "Weekly report" || got.Prompt != "Summarize the week's PRs" {
-		t.Fatalf("mapped request name/prompt wrong: %+v", got)
+	if got.Title != "Weekly report" || got.Prompt != "Summarize the week's PRs" {
+		t.Fatalf("mapped request title/prompt wrong: %+v", got)
 	}
 	if got.Cron != "0 9 * * MON" || got.RunAt != nil {
 		t.Fatalf("expected cron set, run_at nil; got %+v", got)
@@ -250,7 +250,7 @@ func TestRunStagedScheduleTask_AppliesEdits(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("edited approve: %v", err)
 	}
-	if got.Name != newName || got.Prompt != newPrompt || got.Cron != newCron {
+	if got.Title != newName || got.Prompt != newPrompt || got.Cron != newCron {
 		t.Fatalf("edits not applied: %+v", got)
 	}
 

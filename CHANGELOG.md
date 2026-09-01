@@ -19,6 +19,34 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **`fleet env` — inspect + edit the deployment env files from the CLI**
+  (patterned after gig's `gig env`). `fleet env [show]` prints the server env
+  file (`FLEET_ENV_FILE` / `/etc/fleet/fleet.env` / `.env.local`) and the
+  web-tier file (`/etc/fleet/fleet-web.env` / `web/.env.local`) with every
+  secret value masked — by the same name heuristic the diagnose scrubber
+  seeds from (now exported as `redact.IsSecretEnvName`), plus DSN-userinfo
+  stripping so a Postgres password can't slip through under a non-secret
+  key name. `fleet env edit [--web] [--editor CMD]` opens the file in
+  `--editor` / `$VISUAL` / `$EDITOR`, or an interactive nano/vim/helix pick
+  with a `dnf install` offer for a missing choice; it creates a missing file
+  0600, fails up front with a sudo hint when the file isn't writable,
+  restores 0600 after the editor exits (vim's write-via-rename would
+  otherwise drop it), warns about lines the server's parser would silently
+  skip and about duplicate keys, and prints the validate/restart apply
+  hints. See [docs/ENV-CLI.md](docs/ENV-CLI.md).
+
+- **Immediate dispatch for synchronous task writes (#1279).** A write that
+  makes a task claimable right now — a create landing in `pending` (the HTTP
+  and A2A create paths), an answer resuming a paused task, a wake event — now
+  kicks the worker pool's claim loop (`runner.Pool.Kick`) instead of leaving
+  the task to wait out the poll interval (default 30s). An A2A blocking
+  `SendMessage` holds its caller on the line for exactly that latency, which
+  is what surfaced it. The kick is advisory and coalescing: claiming still
+  goes through the pool's normal scan and admission gate, and a missed kick
+  costs latency, never correctness. Chat-`schedule_task` and webhook-trigger
+  creates (storage-level enqueues) still wait for the poll tick — they have
+  no caller blocked on the outcome.
+
 - **A conformance rig that runs the official A2A TCK against fleet
   end-to-end (#1279).** `scripts/a2a-tck-shim` — a loopback reverse proxy —
   bridges the two TCK assumptions fleet does not share: it injects the
@@ -128,6 +156,11 @@ prior versions are listed because none have shipped.
   non-optional connector is unioned in at scheduled-run binding. The task picker
   surfaces those connectors as locked **Always on** rows and uses live discovery
   to mark a failed connector **Unavailable** rather than falsely painting it on.
+  Chat's compact connector popover now reports the same live locked status; its
+  always-on switch uses a muted neutral tint just above optional off, and
+  unavailable connectors are visibly unchecked. Chat still keeps its own
+  per-conversation optional/remote toggles and seat selection, and its badge and
+  persisted `enabled_optional` list exclude always-on rows.
   Empty selections mean always-on only; remote seat pins do not remove the
   bundle set; explicit credential deny-all and persona/tool restrictions still
   narrow access. See [docs/OPS-CONNECTOR-DEFAULTS.md](docs/OPS-CONNECTOR-DEFAULTS.md)
@@ -225,6 +258,14 @@ prior versions are listed because none have shipped.
   `os.Getenv`+parse knob is introduced without a registry row.
 
 ### Fixed
+
+- **Tasks created through chat now show their confirmed title in the Operations
+  Center.** The `schedule_task` flow collected and confirmed a human-readable
+  name, but its adapter wrote that value to the unique import/export identity
+  column, which the board deliberately never renders. Chat-created and promoted
+  tasks now persist the confirmed label as the non-unique display `title`, so it
+  appears in Recent Tasks, Upcoming Runs, and task details and survives recurring
+  occurrences. Existing untitled tasks are unchanged.
 
 - **Webhook/email-trigger runs no longer silently drop the template task's
   persona — or any other definition field (#1357).** `buildTriggerRun`
