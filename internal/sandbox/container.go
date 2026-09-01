@@ -351,7 +351,17 @@ func diskQuotaArgs(diskLimitGB int, storageOptSupported bool) []string {
 // unset StartTimeout means the outer context is `0 + 5s = 5s` and
 // cancels the inner before the first-run idmapped-layer chown
 // finishes (which takes ~12s on a freshly-pulled image).
+// FLEET_SANDBOX_START_TIMEOUT_SECONDS overrides it (#1358) — the escape
+// hatch for boxes where even prepared starts exceed 30s; the boot-time
+// keep-id pre-warm (prewarm.go) is what keeps the default sufficient
+// after a sandbox image update.
 const defaultContainerStartTimeout = 30 * time.Second
+
+// keepIDUserns is THE idmap every fleet sandbox runs under, and the cache key
+// half of podman's one-time id-remapped layer copy (image × idmap): the boot
+// pre-warm (prewarm.go) and the test warm-up (main_test.go) must prime with
+// exactly this string or they prime the wrong cache entry (#1358).
+const keepIDUserns = "--userns=keep-id:uid=1000,gid=1000"
 
 // resolveStartTimeout returns the StartTimeout NewContainer will apply
 // internally given the supplied config — i.e. the caller's value if
@@ -540,7 +550,7 @@ func (c *containerImpl) start(ctx context.Context) error {
 		// host filesystem, container-sandbox to its container view —
 		// and 0o755 dirs work without `:U` (which chowns the host side
 		// to a subuid the chat user can't write to next turn).
-		"--userns=keep-id:uid=1000,gid=1000",
+		keepIDUserns,
 		fmt.Sprintf("--memory=%s", c.cfg.MemoryLimit),
 		// --memory-swap == --memory disables the swap escape: without it a
 		// process on a swap-enabled host can exceed the RSS cap via swap.
@@ -641,6 +651,18 @@ func (c *containerImpl) start(ctx context.Context) error {
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
+		// A start-timeout expiry SIGKILLs podman, which surfaces as the bare
+		// "signal: killed" with empty stderr — an error that reads like a podman
+		// regression and cost real diagnosis time (#1358). Name the actual
+		// cause and the likeliest trigger: the first keep-id start of a NEW
+		// sandbox image builds a one-time id-remapped copy of every layer,
+		// which can take minutes on slow I/O (WSL2 especially).
+		if errors.Is(startCtx.Err(), context.DeadlineExceeded) {
+			return fmt.Errorf("podman run: sandbox start exceeded the %s start timeout (FLEET_SANDBOX_START_TIMEOUT_SECONDS; default %s): %w — "+
+				"the first start after a sandbox image update builds a one-time id-remapped copy of every image layer, which can take minutes on slow disks; "+
+				"the boot pre-warm normally pays that cost up front, so either wait for it or raise the timeout (stderr: %s)",
+				c.cfg.StartTimeout, defaultContainerStartTimeout, err, bytes.TrimSpace(stderr.Bytes()))
+		}
 		return fmt.Errorf("podman run: %w (stderr: %s)", err, bytes.TrimSpace(stderr.Bytes()))
 	}
 	c.startStatsCollector()

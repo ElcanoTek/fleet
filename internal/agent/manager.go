@@ -594,8 +594,11 @@ func buildSandboxPool(cfg *config.Config, personasDir, protocolsDir, systemPromp
 		CPULimit:         cfg.SandboxCPUs,   // empty → sandbox default (1.0)
 		PidsLimit:        cfg.SandboxPids,   // 0 → sandbox default (128)
 		DiskLimitGB:      cfg.SandboxDiskGB, // 0 → sandbox default (5); negative disables
-		BridgeDir:        filepath.Join(filepath.Dir(workspaceRoot), "data", "sandbox-bridge"),
-		ReadOnlyMounts:   absSupportingDocs(personasDir, protocolsDir, systemPromptsDir, skillsDir, uploadsRoot, sharedFilesDir),
+		// 0 → sandbox default (30s). The #1358 escape hatch; the boot pre-warm
+		// below is what keeps the default sufficient after an image update.
+		StartTimeout:   time.Duration(cfg.SandboxStartTimeoutSeconds) * time.Second,
+		BridgeDir:      filepath.Join(filepath.Dir(workspaceRoot), "data", "sandbox-bridge"),
+		ReadOnlyMounts: absSupportingDocs(personasDir, protocolsDir, systemPromptsDir, skillsDir, uploadsRoot, sharedFilesDir),
 	}
 	// Kubernetes backend (#989): sandboxes are ephemeral pods in a cluster
 	// instead of co-located podman containers. All podman-specific boot work
@@ -622,6 +625,16 @@ func buildSandboxPool(cfg *config.Config, personasDir, protocolsDir, systemPromp
 	if err := sandbox.PreflightRuntime(context.Background(), poolCfg.Container.PodmanBinary, sandboxRuntime); err != nil {
 		return nil, fmt.Errorf("sandbox runtime preflight failed (fail-closed): %w", err)
 	}
+	// Pay the one-time keep-id id-remapped layer copy of a NEW sandbox image
+	// up front (#1358), BEFORE the warm pool's first cold start: without this,
+	// every start after an image update died at the start timeout mid-copy
+	// ("podman run: signal: killed") and each retry restarted the copy, so the
+	// box stayed wedged. Marker-gated: an unchanged image costs one
+	// `podman image inspect` per boot. Best-effort — the tunable start
+	// timeout plus its named error remain the backstop.
+	sandbox.PrewarmKeepIDImage(context.Background(), poolCfg.Container.PodmanBinary,
+		poolCfg.Container.Image,
+		filepath.Join(filepath.Dir(workspaceRoot), "data", "sandbox-keepid-prewarm"))
 	log.Printf("sandbox: container mode, image=%s, pool=%d, workspace=%s, runtime=%s",
 		poolCfg.Container.Image, poolCfg.Size, poolCfg.Container.WorkspaceHostDir, defaultIfEmpty(poolCfg.Container.Runtime, "podman default"))
 	if poolCfg.PersistentREPL {
@@ -778,6 +791,10 @@ func buildKubernetesSandboxPool(cfg *config.Config, poolCfg sandbox.PoolConfig, 
 		UnrestrictedEgressAcknowledged: cfg.SandboxK8sOpenEgressAcknowledged,
 		NodeSelector:                   nodeSelector,
 		Tolerations:                    tolerations,
+		// The same knob as the podman backend's container start bound (#1358):
+		// here it caps one pod's schedule+pull+start. 0 → the backend's own
+		// 2-minute default.
+		StartTimeout: time.Duration(cfg.SandboxStartTimeoutSeconds) * time.Second,
 	})
 	if err != nil {
 		return nil, err

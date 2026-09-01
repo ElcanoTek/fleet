@@ -199,6 +199,38 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Webhook/email-trigger runs no longer silently drop the template task's
+  persona — or any other definition field (#1357).** `buildTriggerRun`
+  projected the template into the spawned run field by hand-picked field, so
+  `Persona`, `Title`, `Description`, `Tags`, `SandboxLimits`, `LoopConfig`,
+  `WorktreeConfig`, `SerializationKey`, and `ExpectedDurationMinutes` all
+  reset to their defaults on every `POST /triggers/{slug}` and email-trigger
+  run. The projection is now the canonical `models.TaskToCreate` clone recipe
+  minus an explicit, reasoned exclusion registry (`triggerRunNotCarried`),
+  with a drift test that fails whenever `TaskCreate` gains a field the
+  projection neither carries nor registers — the `taskColumnRegistry`
+  discipline applied to this seam. The connector facets (`MCPSelection`,
+  `CredentialAllowlist`) stay OUT of the generic copy: only the
+  `connectorInheritance` switch — the event-trigger security boundary — may
+  set them, exactly as before.
+
+- **First sandbox start after an image update no longer dies at the start
+  timeout mid keep-id layer copy (#1358).** The first `--userns=keep-id` run
+  of a new sandbox image makes podman build a one-time id-remapped copy of
+  every layer (~88s measured for the multi-GB image on WSL2); the hard-coded
+  30s start timeout SIGKILLed podman mid-copy — the opaque
+  `podman run: signal: killed (stderr: )` — and every retry restarted the
+  copy, wedging the deployment until a manual keep-id run. Three-part fix:
+  boot now **pre-warms** the id-mapped copy (one throwaway keep-id run under
+  a generous 15-minute budget, marker-gated to the local image ID so an
+  unchanged image costs one `podman image inspect` per boot) before the warm
+  pool's first start; the start timeout is **tunable**
+  (`FLEET_SANDBOX_START_TIMEOUT_SECONDS`, min 1; also caps a pod's
+  schedule+pull+start under the kubernetes backend, whose default stays 2m);
+  and a timeout expiry now **names itself** — the error says the timeout,
+  the knob, and the id-remap cause instead of the bare `signal: killed`.
+  See [docs/SANDBOX-START-TIMEOUT.md](docs/SANDBOX-START-TIMEOUT.md).
+
 - **A2A: the two protocol defects the first official-TCK conformance run
   found (#1279).** `POST /v1/a2a/` — the trailing-slash form every
   httpx-based A2A client produces by resolving the Agent Card's interface URL
