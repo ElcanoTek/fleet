@@ -259,6 +259,38 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **The public HTTP API is now reachable through the Caddy TLS front.** The
+  Caddyfile `scripts/bootstrap.sh --enable-web --domain` wrote (and the
+  `deploy/Caddyfile` reference) proxied *everything* to the Next.js web tier,
+  which has no `/v1`, `/api-info`, `/a2a`, `/triggers` or `/webhooks` routes —
+  so every documented API URL (`docs/openapi.yaml`'s `/v1` base, the A2A agent
+  card, the GitHub/Slack webhook URLs in `docs/WEBHOOKS.md`) answered with the
+  web app's 404 while every unit was green. The layout now lives once, in
+  `scripts/lib/caddyfile.sh`: `/v1`, `/v1/*`, `/api-info`,
+  `/.well-known/agent-card.json`, `/a2a`, `/a2a/*` and `/triggers/*` route to
+  the orchestrator, `/webhooks/*` to the chat listener, everything else to Next
+  — with the Next-proxy header-trust headers (`X-User-Email`,
+  `X-User-Session-Epoch`, the shared token headers) **deleted** on both backend
+  routes so the impersonation channel stays loopback-only and `X-API-Key` is
+  the only public auth path ([ADR-0053](docs/adr/0053-public-api-through-the-tls-front.md)).
+  A test pins `deploy/Caddyfile` to the renderer's functional body.
+  - `fleet bootstrap` renders from the shared library and now **reloads** a
+    running Caddy (previously `enable --now`, a no-op on a running unit, so a
+    re-run never applied a rewritten Caddyfile); its dry-run plan names the
+    routes.
+  - `fleet doctor` diffs a fleet-managed `/etc/caddy/Caddyfile` against the
+    shipped layout (functional lines only; domain + ACME email read back from
+    the installed file) and rewrites a drifted one — timestamped backup,
+    `caddy validate`, `systemctl reload caddy` — or reports it under `--check`;
+    an operator-owned Caddyfile is advisory-only. It then fetches
+    `https://<domain>/api-info` *through* Caddy (`--resolve` pinned to
+    `127.0.0.1`) and fails when the orchestrator's JSON doesn't come back. The
+    in-process `GET /admin/doctor` gains a structural `caddy: API routing`
+    check (fleet-managed-but-stale → fail with the doctor fix).
+  - `fleet update` offers the same rewrite under its unit-adoption consent
+    rule (interactive y/N, or unattended with `--adopt-units`), with the diff
+    shown and the manual hint otherwise.
+
 - **Tasks created through chat now show their confirmed title in the Operations
   Center.** The `schedule_task` flow collected and confirmed a human-readable
   name, but its adapter wrote that value to the unique import/export identity

@@ -13,7 +13,9 @@ fleet runs as **one** `fleet` process on a **single host** (one well-sized
 server or VM). The browser only ever talks to the Next.js web app; the web app
 proxies, server-side over loopback, to the two Go backends the single process
 boots (chat on `127.0.0.1:8080`, orchestrator on `127.0.0.1:8000`). Caddy fronts the web
-app with TLS; the backends stay loopback-only.
+app with TLS and routes the **public HTTP API** (`/v1/*`, `/api-info`, the A2A
+agent card, `/triggers/*`, `/webhooks/*`) straight to those backends; the
+listeners themselves stay loopback-only.
 
 > **Your platform standard is Kubernetes?** fleet's default install remains
 > this single-VM/systemd model
@@ -128,10 +130,12 @@ lowers the host's base footprint.
 
 ## Quick start (one host)
 
-The topology (Caddy → web app → loopback backends):
+The topology (Caddy → web app → loopback backends, plus the API routed past the web app):
 
 ```
-browser ──TLS──▶ Caddy ──▶ Next web app (:3000) ──▶ fleet: chat :8080 + orchestrator :8000
+browser ────TLS──▶ Caddy ──▶ Next web app (:3000) ──▶ fleet: chat :8080 + orchestrator :8000
+API client ─TLS──▶ Caddy ──▶ /v1/*, /api-info, /.well-known/agent-card.json, /a2a, /triggers/* ──▶ orchestrator :8000
+webhooks ───TLS──▶ Caddy ──▶ /webhooks/* ──▶ chat :8080
 ```
 
 On a bare Fedora/RHEL box this is **four steps** — the bootstrap script installs
@@ -391,11 +395,41 @@ each piece yourself):
    ```
 
 4. **TLS** — `deploy/Caddyfile` reverse-proxies the public domain to the web app
-   (SSE-aware: `flush_interval -1`, long read timeout). Point it at your domain
-   and `caddy run --config deploy/Caddyfile`. This is the recommended path: the
-   Next.js app is the only public entrypoint, so Caddy (or Tailscale Serve, whose
-   `tsnet` CA provides HTTPS with no public port) terminates TLS in front of it
-   and the Go backends stay loopback.
+   (SSE-aware: `flush_interval -1`, long read timeout) **and routes the public
+   HTTP API past it**: `/v1`, `/v1/*`, `/api-info`, `/.well-known/agent-card.json`,
+   `/a2a`, `/a2a/*` and `/triggers/*` go to the orchestrator (`127.0.0.1:8000`),
+   `/webhooks/*` (GitHub/Slack-signed chat webhooks) to the chat listener
+   (`127.0.0.1:8080`), everything else to Next (`127.0.0.1:3000`). Point it at
+   your domain and `caddy run --config deploy/Caddyfile`. This is the
+   recommended path: the Next.js app is the only public entrypoint **for
+   browsers**, Caddy (or Tailscale Serve, whose `tsnet` CA provides HTTPS with
+   no public port) terminates TLS in front of everything, and the Go listeners
+   stay loopback.
+
+   Two details of that Caddyfile are load-bearing
+   ([ADR-0053](adr/0053-public-api-through-the-tls-front.md)):
+   - The backend routes **delete** `X-User-Email`, `X-User-Session-Epoch` and
+     the shared token headers (`X-Orchestrator-Server-Token`,
+     `X-Chat-Server-Token`) before forwarding. Those are the Next-proxy
+     impersonation channel; stripping them at the edge keeps it reachable from
+     loopback only, so the public API authenticates with `X-API-Key` (or a
+     webhook signature) and nothing else. Do not remove those lines.
+   - The orchestrator's **legacy bare paths** (`/tasks`, `/keys`, …) are not
+     routed — they stay behind Next's `/api/*` proxy. External clients use `/v1`.
+
+   `scripts/bootstrap.sh --enable-web --domain` writes `/etc/caddy/Caddyfile`
+   from the same layout (`scripts/lib/caddyfile.sh` renders it; a test keeps
+   `deploy/Caddyfile` in lockstep) and reloads a running Caddy. A box
+   provisioned **before** the API routes shipped still has the web-only
+   Caddyfile, and every documented API URL 404s at the web tier there:
+   `sudo fleet doctor` detects and rewrites a fleet-managed file (timestamped
+   backup, `caddy validate`, `systemctl reload caddy`) and then probes
+   `https://<domain>/api-info` through Caddy; `sudo fleet update` offers the
+   same rewrite (or does it under `--adopt-units`). A Caddyfile fleet did not
+   write is never rewritten — merge the two `handle` blocks from
+   `deploy/Caddyfile` yourself. Behind this proxy, set
+   `FLEET_TRUSTED_PROXIES=127.0.0.1,::1` (below) so the backends see real
+   client IPs.
 
    For deployments that terminate TLS **directly at the Fleet chat process**
    instead of a fronting proxy, the chat server can serve HTTPS itself via

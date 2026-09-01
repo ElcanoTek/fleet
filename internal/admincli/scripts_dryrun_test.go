@@ -205,7 +205,10 @@ func TestBootstrapDBGuardAndCaddyProtectionPresent(t *testing.T) {
 		"--force-caddy",
 		"/etc/caddy/Caddyfile.fleet-backup.",
 		"caddyfile_is_foreign",
-		`CADDY_MARKER="# Managed by fleet (scripts/bootstrap.sh)`,
+		// The marker itself moved to scripts/lib/caddyfile.sh (the one
+		// renderer, shared with update.sh + doctor.sh); bootstrap must source
+		// it rather than carry a second copy — see TestCaddyfileMarkerParity.
+		`. "$SCRIPT_DIR/lib/caddyfile.sh"`,
 	} {
 		if !strings.Contains(script, want) {
 			t.Errorf("bootstrap must contain %q", want)

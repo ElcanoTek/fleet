@@ -1,23 +1,39 @@
-# deploy/Caddyfile — TLS reverse-proxy fronting the fleet web origin.
+# deploy/Caddyfile — TLS reverse-proxy fronting fleet: the web origin AND the
+# public HTTP API.
 #
 # Topology (see web/src/app/lib/{chatServer,orchestratorServer}.ts):
 #
 #   browser ──TLS──▶ Caddy ──▶ Next.js web app (127.0.0.1:3000)
-#                                   │  server-side proxy (loopback):
-#                                   ├─▶ chat-server        127.0.0.1:8080
-#                                   └─▶ orchestrator        127.0.0.1:8000
+#                     │              │  server-side proxy (loopback):
+#                     │              ├─▶ chat-server        127.0.0.1:8080
+#                     │              └─▶ orchestrator        127.0.0.1:8000
+#                     │
+#                     ├─ /v1/*, /api-info, /.well-known/agent-card.json,
+#                     │  /a2a, /triggers/*  ──▶ orchestrator  127.0.0.1:8000
+#                     └─ /webhooks/*        ──▶ chat-server   127.0.0.1:8080
 #
-# The Next app is the ONLY public entrypoint. The two Go backends bind loopback
-# (cfg.Addr defaults to 127.0.0.1:8080; orchestrator to 127.0.0.1:8000) and are reached
-# only by Next's own /api/* route handlers — including the SSE streams, which
-# Next proxies through /api/.../stream. So Caddy fronts Next; it does NOT expose
-# :8080 / :8000 to the internet.
+# The browser only ever talks to the Next app. The two Go backends bind loopback
+# (cfg.Addr defaults to 127.0.0.1:8080; orchestrator to 127.0.0.1:8000) and are
+# reached by Next's own /api/* route handlers — including the SSE streams, which
+# Next proxies through /api/.../stream. Caddy does NOT expose :8080 / :8000 to
+# the internet; it exposes exactly the API paths below, which authenticate with
+# X-API-Key (or a webhook signature) and nothing else — see the header_up
+# deletions and ADR-0053. Every other Go route stays loopback-only.
+#
+# This file is the annotated REFERENCE. scripts/bootstrap.sh writes the live
+# /etc/caddy/Caddyfile from scripts/lib/caddyfile.sh (render_fleet_caddyfile),
+# and a test keeps the two in lockstep (functional lines, comments aside) —
+# edit the renderer and this file together. `fleet doctor` repairs an installed
+# fleet-managed Caddyfile that drifted from this layout; `fleet update` offers
+# to (or does so under --adopt-units).
 #
 # Run the web app behind this with:  cd web && npm run build && npm run start
 # (next start → 127.0.0.1:3000), wiring CHAT_SERVER_URL / ORCHESTRATOR_SERVER_URL
 # to the loopback backends and CHAT_SERVER_TOKEN to FLEET_SERVER_TOKEN.
 #
 # Replace fleet.example.com with your domain; Caddy auto-provisions the cert.
+# Behind this proxy, set FLEET_TRUSTED_PROXIES=127.0.0.1,::1 in fleet.env so the
+# backends read the real client IP from X-Forwarded-For (rate limits, IP lists).
 
 fleet.example.com {
 	encode zstd gzip
@@ -33,12 +49,54 @@ fleet.example.com {
 		X-Frame-Options "DENY"
 	}
 
-	reverse_proxy 127.0.0.1:3000 {
-		# SSE: stream tokens straight through, no response buffering, and a
-		# generous read timeout so long agent turns don't get cut off.
-		flush_interval -1
-		transport http {
-			read_timeout 30m
+	# The public HTTP API → the orchestrator listener. /v1 is the versioned
+	# surface (docs/api-versioning.md, docs/openapi.yaml); the bare paths are
+	# the ones fleet fixes as unversioned-forever: version discovery, the A2A
+	# agent card + JSON-RPC endpoint, and the inbound task triggers (webhook +
+	# email). Nothing else on the orchestrator is exposed — its legacy bare
+	# paths (/tasks, /keys, …) stay loopback-only behind Next's /api/* proxy.
+	#
+	# The header_up deletions are load-bearing: the orchestrator trusts
+	# X-User-Email when X-Orchestrator-Server-Token matches (the Next-proxy
+	# impersonation channel, #157). Stripping them here means that channel is
+	# reachable from loopback ONLY, so exposing the API adds exactly one
+	# public auth path — X-API-Key — and no header-trust surface (ADR-0053).
+	@fleet_api path /v1 /v1/* /api-info /.well-known/agent-card.json /a2a /a2a/* /triggers/*
+	handle @fleet_api {
+		reverse_proxy 127.0.0.1:8000 {
+			header_up -X-Orchestrator-Server-Token
+			header_up -X-User-Email
+			header_up -X-User-Session-Epoch
+			# SSE task streams (/v1/tasks/{id}/stream, A2A streaming): no
+			# response buffering, generous read timeout.
+			flush_interval -1
+			transport http {
+				read_timeout 30m
+			}
+		}
+	}
+
+	# Signed inbound chat webhooks (docs/WEBHOOKS.md: GitHub/Slack HMAC) →
+	# the chat listener. Same stripping rule for chat's header-trust channel.
+	@fleet_chat_webhooks path /webhooks/*
+	handle @fleet_chat_webhooks {
+		reverse_proxy 127.0.0.1:8080 {
+			header_up -X-Chat-Server-Token
+			header_up -X-User-Email
+			header_up -X-User-Session-Epoch
+		}
+	}
+
+	# Everything else → the Next.js web app: pages, /_next/*, and its own
+	# /api/* route handlers (which proxy to the backends server-side).
+	handle {
+		reverse_proxy 127.0.0.1:3000 {
+			# SSE: stream tokens straight through, no response buffering, and a
+			# generous read timeout so long agent turns don't get cut off.
+			flush_interval -1
+			transport http {
+				read_timeout 30m
+			}
 		}
 	}
 }

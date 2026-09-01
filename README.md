@@ -314,7 +314,8 @@ task schema (a thin mirror of the scheduled-task create shape).
 fleet runs as **one** `fleet` process on a **single, vertically-scaled host**: the
 browser talks only to the Next.js web app, which proxies server-side over
 loopback to the two Go backends the process boots (chat + orchestrator); Caddy
-fronts it with TLS. Single-host is by design — crash recovery uses single-owner
+fronts it with TLS and routes the public `/v1` API (plus `/api-info`, the A2A
+agent card, `/triggers/*` and `/webhooks/*`) straight to those backends. Single-host is by design — crash recovery uses single-owner
 DB leases and the worker cap is a per-process semaphore, so fleet scales by
 moving to a bigger box, not more replicas.
 
