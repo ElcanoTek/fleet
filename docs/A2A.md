@@ -57,7 +57,11 @@ callers reach the orchestrator at the same origin they fetched the card from).
   with `ETag`/`Cache-Control`.
 - `POST /a2a` (canonically `/v1/a2a`) — the JSON-RPC 2.0 binding. Streaming
   methods answer `text/event-stream` where every `data:` line is a complete
-  JSON-RPC envelope reusing the request id.
+  JSON-RPC envelope reusing the request id. The trailing-slash form
+  (`/v1/a2a/`) is accepted too: httpx-based clients (the official TCK
+  included) resolve the card's interface URL as a base and POST to
+  `<url>/`, and exact-match routing 404'd them until the first TCK run
+  caught it.
 
 Requests must carry `A2A-Version: 1.0`. Spec §3.6.2 is implemented
 literally: an absent header means protocol 0.3 and is refused with

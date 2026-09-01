@@ -53,6 +53,20 @@ func TestBuildCardShape(t *testing.T) {
 	if _, ok := doc["securityRequirements"]; !ok {
 		t.Error("card is missing securityRequirements")
 	}
+	// The scopes value must be the proto StringList OBJECT ({"list": [...]}),
+	// not the bare array a2a-go v2.5.0 marshals (a TCK card-structure MUST
+	// failure until MarshalCard normalized it).
+	var reqs []struct {
+		Schemes map[string]struct {
+			List *[]string `json:"list"`
+		} `json:"schemes"`
+	}
+	if err := json.Unmarshal(doc["securityRequirements"], &reqs); err != nil {
+		t.Fatalf("securityRequirements is not the {schemes: {name: {list: []}}} shape: %v", err)
+	}
+	if len(reqs) != 1 || reqs[0].Schemes["apiKey"].List == nil {
+		t.Errorf("securityRequirements scopes must be an object with a non-null list, got %s", doc["securityRequirements"])
+	}
 
 	var ifaces []map[string]any
 	if err := json.Unmarshal(doc["supportedInterfaces"], &ifaces); err != nil || len(ifaces) != 1 {

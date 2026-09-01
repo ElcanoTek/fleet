@@ -293,7 +293,7 @@ func (h *Handlers) CSRFMiddleware(next http.Handler) http.Handler {
 		// cross-site request could ride. Origin-less non-browser callers (the
 		// normal A2A client) would otherwise be rejected by the cookie-CSRF
 		// origin check below despite never using cookie auth.
-		if r.URL.Path == "/a2a" {
+		if r.URL.Path == "/a2a" || r.URL.Path == "/a2a/" {
 			next.ServeHTTP(w, r)
 			return
 		}

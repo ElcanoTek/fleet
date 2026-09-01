@@ -82,10 +82,50 @@ func BuildCard(spec CardSpec) *wire.AgentCard {
 	return card
 }
 
+// securityRequirement / securityRequirementScopes mirror the proto's wire
+// shape for AgentCard.securityRequirements: SecurityRequirement carries a
+// `schemes` map whose values are StringList OBJECTS ({"list": [...]}).
+// a2a-go v2.5.0's SecuritySchemeScopes ([]string) marshals the scopes as a
+// bare JSON array instead, which the published schema rejects — the official
+// TCK's card-structure MUST test failed on exactly this
+// ($.securityRequirements[0].schemes.apiKey: [] is not of type 'object').
+// MarshalCard shadows the field with these types so the wire form is
+// schema-valid regardless; drop them if the SDK fixes its marshalling.
+type securityRequirementScopes struct {
+	List []string `json:"list"`
+}
+
+type securityRequirement struct {
+	Schemes map[string]securityRequirementScopes `json:"schemes"`
+}
+
+// schemaValidRequirements re-shapes the SDK's requirements into the proto
+// StringList form. Empty scopes become an explicit empty list, never null.
+func schemaValidRequirements(opts wire.SecurityRequirementsOptions) []securityRequirement {
+	out := make([]securityRequirement, 0, len(opts))
+	for _, req := range opts {
+		schemes := make(map[string]securityRequirementScopes, len(req))
+		for name, scopes := range req {
+			list := make([]string, 0, len(scopes))
+			list = append(list, scopes...)
+			schemes[string(name)] = securityRequirementScopes{List: list}
+		}
+		out = append(out, securityRequirement{Schemes: schemes})
+	}
+	return out
+}
+
 // MarshalCard renders the card once, with the strong ETag its handler serves
 // (spec §8.6 recommends ETag + Cache-Control on the well-known document).
+// The securityRequirements field is shadowed into its schema-valid shape —
+// see schemaValidRequirements. Deterministic bytes (encoding/json sorts map
+// keys), so the ETag stays stable across restarts of the same card.
 func MarshalCard(card *wire.AgentCard) (body []byte, etag string, err error) {
-	body, err = json.Marshal(card)
+	wrapper := struct {
+		*wire.AgentCard
+		SecurityRequirements []securityRequirement `json:"securityRequirements,omitempty"`
+	}{AgentCard: card, SecurityRequirements: schemaValidRequirements(card.SecurityRequirements)}
+	body, err = json.Marshal(wrapper)
 	if err != nil {
 		return nil, "", err
 	}

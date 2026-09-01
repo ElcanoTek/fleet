@@ -168,6 +168,17 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **A2A: the two protocol defects the first official-TCK conformance run
+  found (#1279).** `POST /v1/a2a/` — the trailing-slash form every
+  httpx-based A2A client produces by resolving the Agent Card's interface URL
+  as a base (the official TCK included) — was 404'd by chi's exact matching;
+  it now routes to the same handler with the same auth, rate limiter, and
+  CSRF posture. And the Agent Card's `securityRequirements` scopes are now
+  marshaled in the schema-valid proto `StringList` shape
+  (`{"apiKey": {"list": []}}`) instead of the bare array `a2a-go` v2.5.0
+  emits, which the published card schema rejects. Baseline run recorded on
+  the issue: 52 passed / 7 failed at MUST level before these fixes.
+
 - **Kubernetes: a control plane that crashed and restarted IN PLACE still
   leaked every sandbox pod it had running (#1264).** The boot-time orphan
   sweep names an incarnation by `FLEET_POD_UID` — the downward-API pod UID —
