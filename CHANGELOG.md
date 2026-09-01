@@ -19,6 +19,24 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **A2A push notifications (#1279 Phase 2).** External A2A callers can now
+  register per-task webhooks — the four `TaskPushNotificationConfig` CRUD
+  methods plus inline registration on `SendMessage` — and receive a
+  `StreamResponse`-wrapped `statusUpdate` POST whenever the task's
+  caller-visible state changes (a doorbell: receivers re-fetch via `GetTask`,
+  per the spec's own async guidance). Caller webhook secrets are sealed at
+  rest in the new `a2a_push_configs` table (migration 066) under the store
+  cipher — no `FLEET_MCP_OAUTH_ENCRYPTION_KEY` means the card honestly
+  declares `pushNotifications: false` and the methods keep answering
+  `-32003`. Delivery is SSRF-guarded by default (resolved-IP dial check, all
+  redirects refused); `FLEET_A2A_PUSH_ALLOW_PRIVATE` relaxes the dial guard
+  for dev/TCK runs against loopback receivers. Client-supplied config ids
+  round-trip, deletes are idempotent, configs are creatable on terminal
+  tasks, and the dispatcher accepts the official TCK's snake_case parameter
+  spellings alongside the spec's camelCase. Single delivery attempt per
+  transition (spec: retry is a MAY), 1-second scan granularity. See
+  [docs/A2A.md](docs/A2A.md) and the ADR-0051 amendment.
+
 - **An A2A (Agent2Agent) protocol server (#1279).** External agents can now
   discover fleet via an Agent Card (`/.well-known/agent-card.json`), delegate
   work, stream progress, and collect results over the A2A v1.0.1 JSON-RPC +

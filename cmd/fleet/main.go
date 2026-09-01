@@ -73,6 +73,7 @@ import (
 	scheddb "github.com/ElcanoTek/fleet/internal/sched/db"
 	"github.com/ElcanoTek/fleet/internal/sched/handlers"
 	schedmodels "github.com/ElcanoTek/fleet/internal/sched/models"
+	"github.com/ElcanoTek/fleet/internal/sched/push"
 	"github.com/ElcanoTek/fleet/internal/sched/scheduler"
 	"github.com/ElcanoTek/fleet/internal/sched/slamonitor"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
@@ -934,7 +935,8 @@ func run() error {
 	// A2A protocol server (#1279): opt-in, fail-closed. Unwired, the routes
 	// answer 501; wired, the card is rendered ONCE (it is static per boot) and
 	// the dispatcher translates onto the same task seams wired above.
-	if err := wireA2A(cfg, bundle, h); err != nil {
+	a2aPush, err := wireA2A(cfg, bundle, h, schedStorage)
+	if err != nil {
 		return err
 	}
 
@@ -988,6 +990,8 @@ func run() error {
 	// contained (safe.Recover) so it never kills the process.
 	slaMon := slamonitor.New(schedStorage)
 	slaMon.Start(ctx)
+
+	startA2APush(ctx, a2aPush)
 	defer slaMon.Stop()
 
 	sigCh := make(chan os.Signal, 4)
@@ -1322,24 +1326,58 @@ func poolDrainGrace(cfg *config.Config) time.Duration {
 	return -1
 }
 
+// startA2APush runs the A2A push-notification dispatcher (#1279 Phase 2) on
+// the serve-lifetime ctx — cancelling stops new scans; an in-flight POST
+// finishes within its own 10s bound. nil (A2A or push disabled) is a no-op.
+func startA2APush(ctx context.Context, d *push.Dispatcher) {
+	if d == nil {
+		return
+	}
+	go func() {
+		defer safe.Recover("cmd.a2a-push", nil)
+		d.Run(ctx)
+	}()
+}
+
 // wireA2A applies the FLEET_A2A_ENABLED gate (#1279): off logs the remedy and
 // leaves the routes on their 501 guard; on, a card that cannot be rendered is
 // a misconfiguration, not a degraded mode — refuse to boot rather than serve
 // a discovery document we advertise wrongly.
-func wireA2A(cfg *config.Config, bundle *clientconfig.Bundle, h *handlers.Handlers) error {
+func wireA2A(cfg *config.Config, bundle *clientconfig.Bundle, h *handlers.Handlers, store *storage.Storage) (*push.Dispatcher, error) {
 	if !cfg.A2AEnabled {
 		log.Printf("a2a: disabled (set FLEET_A2A_ENABLED=1 to serve the A2A protocol)")
-		return nil
+		return nil, nil
 	}
-	a2aCfg, err := buildA2AConfig(cfg, bundle)
+	// Push notifications (#1279 Phase 2) exist only when the store cipher is
+	// configured: caller-supplied webhook secrets are sealed at rest, and
+	// plaintext storage is not an option. The card advertises exactly what the
+	// dispatcher will accept (spec §3.3.4), so a cipher-less deployment keeps
+	// answering -32003 and conformance suites skip rather than fail.
+	pushEnabled := false
+	if len(cfg.MCPOAuthEncryptionKey) > 0 {
+		cipher, cerr := secretbox.NewCipher(cfg.MCPOAuthEncryptionKey)
+		if cerr != nil {
+			return nil, fmt.Errorf("a2a: push cipher: %w", cerr)
+		}
+		store.SetA2APushCipher(cipher)
+		pushEnabled = true
+	}
+	a2aCfg, err := buildA2AConfig(cfg, bundle, pushEnabled)
 	if err != nil {
-		return fmt.Errorf("a2a: %w", err)
+		return nil, fmt.Errorf("a2a: %w", err)
 	}
 	h.SetA2A(a2aCfg)
 	//nolint:gosec // G706: A2APersona/A2AModel are operator-set env config, not request input — they can't forge a log line.
-	log.Printf("a2a: enabled (card at /.well-known/agent-card.json, JSON-RPC at /v1/a2a, persona=%q model=%q)",
-		cfg.A2APersona, cfg.A2AModel)
-	return nil
+	log.Printf("a2a: enabled (card at /.well-known/agent-card.json, JSON-RPC at /v1/a2a, persona=%q model=%q, push=%v)",
+		cfg.A2APersona, cfg.A2AModel, pushEnabled)
+	if !pushEnabled {
+		log.Printf("a2a: push notifications disabled (set FLEET_MCP_OAUTH_ENCRYPTION_KEY to store webhook configs)")
+		return nil, nil
+	}
+	if cfg.A2APushAllowPrivate {
+		log.Printf("a2a: push SSRF guard RELAXED (FLEET_A2A_PUSH_ALLOW_PRIVATE=1) — loopback/private webhook targets accepted; do not run production this way")
+	}
+	return push.New(store, cfg.A2APushAllowPrivate), nil
 }
 
 // buildA2AConfig assembles the A2A surface's static inputs (#1279): the Agent
@@ -1347,13 +1385,14 @@ func wireA2A(cfg *config.Config, bundle *clientconfig.Bundle, h *handlers.Handle
 // from FLEET_PUBLIC_BASE_URL (server-relative when unset, which still
 // satisfies clients that resolved the card from the same origin) — plus the
 // operator-pinned persona/model every A2A task runs with.
-func buildA2AConfig(cfg *config.Config, bundle *clientconfig.Bundle) (*handlers.A2AConfig, error) {
+func buildA2AConfig(cfg *config.Config, bundle *clientconfig.Bundle, pushEnabled bool) (*handlers.A2AConfig, error) {
 	base := strings.TrimRight(cfg.PublicBaseURL, "/")
 	card := a2abridge.BuildCard(a2abridge.CardSpec{
-		Name:        bundle.Branding.AppName,
-		Description: strings.TrimSpace(bundle.Branding.ShareDescription),
-		Version:     version.Version(),
-		RPCURL:      base + "/v1/a2a",
+		Name:              bundle.Branding.AppName,
+		Description:       strings.TrimSpace(bundle.Branding.ShareDescription),
+		Version:           version.Version(),
+		RPCURL:            base + "/v1/a2a",
+		PushNotifications: pushEnabled,
 	})
 	body, etag, err := a2abridge.MarshalCard(card)
 	if err != nil {
@@ -1365,6 +1404,7 @@ func buildA2AConfig(cfg *config.Config, bundle *clientconfig.Bundle) (*handlers.
 		Persona:       cfg.A2APersona,
 		Model:         cfg.A2AModel,
 		PublicBaseURL: base,
+		PushEnabled:   pushEnabled,
 	}, nil
 }
 

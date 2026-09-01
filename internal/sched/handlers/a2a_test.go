@@ -14,6 +14,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	cryptorand "crypto/rand"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -31,9 +32,16 @@ import (
 	"github.com/ElcanoTek/fleet/internal/sched/db"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
+	"github.com/ElcanoTek/fleet/internal/secretbox"
 )
 
 func setupA2A(t *testing.T) (*storage.Storage, *apikeys.Manager, *chi.Mux) {
+	return setupA2AWith(t, false)
+}
+
+// setupA2AWith is setupA2A plus the push-notification switch: pushEnabled
+// wires a store cipher and flips A2AConfig.PushEnabled, the Phase-2 posture.
+func setupA2AWith(t *testing.T, pushEnabled bool) (*storage.Storage, *apikeys.Manager, *chi.Mux) {
 	t.Helper()
 	tmpDir := t.TempDir()
 
@@ -66,10 +74,22 @@ func setupA2A(t *testing.T) (*storage.Storage, *apikeys.Manager, *chi.Mux) {
 	if err != nil {
 		t.Fatalf("card: %v", err)
 	}
+	if pushEnabled {
+		key := make([]byte, secretbox.KeyLen)
+		if _, err := cryptorand.Read(key); err != nil {
+			t.Fatal(err)
+		}
+		cipher, err := secretbox.NewCipher(key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		store.SetA2APushCipher(cipher)
+	}
 	h.SetA2A(&A2AConfig{
-		CardJSON: card,
-		CardETag: cardETag,
-		Persona:  "qa-bot",
+		CardJSON:    card,
+		CardETag:    cardETag,
+		Persona:     "qa-bot",
+		PushEnabled: pushEnabled,
 	})
 
 	r := chi.NewRouter()

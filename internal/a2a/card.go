@@ -22,6 +22,9 @@ type CardSpec struct {
 	OrgURL      string
 	Version     string // the fleet binary version
 	RPCURL      string // absolute or server-relative URL of the JSON-RPC endpoint
+	// PushNotifications declares the per-task webhook capability (#1279
+	// Phase 2) — set only when the deployment can store push configs.
+	PushNotifications bool
 }
 
 // BuildCard assembles the v1.0 Agent Card this server publishes at
@@ -30,7 +33,9 @@ type CardSpec struct {
 // the corresponding methods answer -32003/-32004 rather than MethodNotFound:
 //
 //   - streaming: true — SendStreamingMessage + SubscribeToTask ship.
-//   - pushNotifications: false — Phase 2 (needs per-task webhook storage).
+//   - pushNotifications: from CardSpec — true only when the deployment can
+//     actually store push configs (the store cipher is configured), so the
+//     card never advertises a capability the dispatcher would refuse.
 //   - extendedAgentCard: false — Phase 2.
 //
 // One skill: fleet is a general delegation target whose personas/models are
@@ -56,7 +61,7 @@ func BuildCard(spec CardSpec) *wire.AgentCard {
 			ProtocolBinding: wire.TransportProtocolJSONRPC,
 			ProtocolVersion: wire.Version,
 		}},
-		Capabilities:       wire.AgentCapabilities{Streaming: true},
+		Capabilities:       wire.AgentCapabilities{Streaming: true, PushNotifications: spec.PushNotifications},
 		DefaultInputModes:  []string{"text/plain"},
 		DefaultOutputModes: []string{"text/plain", "application/json"},
 		Skills: []wire.AgentSkill{{

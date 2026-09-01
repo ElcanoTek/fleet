@@ -437,9 +437,10 @@ var allowedEnvVars = map[string]bool{
 	"FLEET_CONNECTOR_RECOMMENDATIONS_ENABLED":    true,
 
 	// ── A2A protocol server (#1279) ──
-	"FLEET_A2A_ENABLED": true,
-	"FLEET_A2A_PERSONA": true,
-	"FLEET_A2A_MODEL":   true,
+	"FLEET_A2A_ENABLED":            true,
+	"FLEET_A2A_PUSH_ALLOW_PRIVATE": true,
+	"FLEET_A2A_PERSONA":            true,
+	"FLEET_A2A_MODEL":              true,
 
 	"FLEET_SANDBOX_MEMORY":           true,
 	"FLEET_SANDBOX_CPUS":             true,
@@ -1146,6 +1147,13 @@ type Config struct {
 	// the orchestrator. FLEET_A2A_ENABLED, default false — the routes stay
 	// registered and answer 501 when off (docs/A2A.md).
 	A2AEnabled bool
+	// A2APushAllowPrivate relaxes the SSRF dial guard on A2A push-notification
+	// deliveries (#1279 Phase 2) so loopback/private webhook receivers work —
+	// needed for development and official-TCK conformance runs, whose receiver
+	// listens on localhost. FLEET_A2A_PUSH_ALLOW_PRIVATE, default false;
+	// redirects stay refused even when set. Leave it off in production: push
+	// URLs are CALLER-supplied.
+	A2APushAllowPrivate bool
 	// A2APersona / A2AModel pin what every A2A-created task runs with — operator
 	// policy, never caller choice, the same posture as webhook triggers
 	// (docs/EVENT-TRIGGERS.md). Empty inherits the deployment's task defaults.
@@ -1665,9 +1673,10 @@ func Load(envFile string) (*Config, error) {
 
 		// A2A protocol server (#1279) — optional, default off; the routes
 		// answer 501 until enabled.
-		A2AEnabled: lp.getenvFleetBool("A2A_ENABLED", false),
-		A2APersona: strings.TrimSpace(getenvFleet("A2A_PERSONA")),
-		A2AModel:   strings.TrimSpace(getenvFleet("A2A_MODEL")),
+		A2AEnabled:          lp.getenvFleetBool("A2A_ENABLED", false),
+		A2APushAllowPrivate: lp.getenvFleetBool("A2A_PUSH_ALLOW_PRIVATE", false),
+		A2APersona:          strings.TrimSpace(getenvFleet("A2A_PERSONA")),
+		A2AModel:            strings.TrimSpace(getenvFleet("A2A_MODEL")),
 
 		SandboxMemory: getenvFleet("SANDBOX_MEMORY"),
 		SandboxCPUs:   getenvFleet("SANDBOX_CPUS"),
