@@ -24,6 +24,7 @@ import { parseSseChunk, stepStreamDedup, type ServerEvent } from "@/app/lib/sse"
 import { currentDefaultModel } from "@/app/lib/modelAliases";
 import { PENDING_CONV_KEY } from "./workspaceHref";
 import { mcpAccountOverrides } from "./mcpAccounts";
+import { enabledOptionalMcpServerNames } from "./mcpSelection";
 
 // One pending input in a conversation's #785 queue (wire shape of
 // queue.updated / GET /queue items).
@@ -1899,7 +1900,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       body.title = value.length > 80 ? value.slice(0, 80) + "…" : value;
       // Pre-chat tool toggles — the backend persists these onto the
       // new conversation so the first turn can actually use them.
-      const enabledOptional = mcpServers.filter((s) => s.enabled).map((s) => s.name);
+      const enabledOptional = enabledOptionalMcpServerNames(mcpServers);
       if (enabledOptional.length > 0) {
         body.enabled_optional = enabledOptional;
       }

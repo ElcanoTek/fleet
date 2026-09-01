@@ -43,8 +43,10 @@ discovery.
 - A zero-tool MCP server is treated as unavailable in the Operations status
   view. This is deliberately a usable-tool signal, not a full transport health
   probe.
-- Chat behavior is unchanged; its existing scoped selection already unions
-  non-optional servers.
+- Chat runtime behavior is unchanged; its existing scoped selection already
+  unions non-optional servers. Its compact connector popover now surfaces the
+  same discovery-derived locked status while keeping chat-specific remote and
+  optional controls.
 
 ## Enforcement
 
@@ -55,3 +57,5 @@ discovery.
 - `internal/agent/mcp_optin_test.go` pins discovery-derived always-on status.
 - `McpServerPicker.test.tsx` and `TaskCreateModal.test.tsx` pin locked status,
   selection independence, unavailable rendering, and optional-only persistence.
+- Chat catalog, composer, and selection-helper tests pin the same live status
+  without allowing always-on rows into `enabled_optional`.

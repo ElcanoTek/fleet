@@ -140,6 +140,11 @@ prior versions are listed because none have shipped.
   non-optional connector is unioned in at scheduled-run binding. The task picker
   surfaces those connectors as locked **Always on** rows and uses live discovery
   to mark a failed connector **Unavailable** rather than falsely painting it on.
+  Chat's compact connector popover now reports the same live locked status; its
+  always-on switch uses an intermediate tint between optional off/on states, and
+  unavailable connectors are visibly unchecked. Chat still keeps its own
+  per-conversation optional/remote toggles and seat selection, and its badge and
+  persisted `enabled_optional` list exclude always-on rows.
   Empty selections mean always-on only; remote seat pins do not remove the
   bundle set; explicit credential deny-all and persona/tool restrictions still
   narrow access. See [docs/OPS-CONNECTOR-DEFAULTS.md](docs/OPS-CONNECTOR-DEFAULTS.md)

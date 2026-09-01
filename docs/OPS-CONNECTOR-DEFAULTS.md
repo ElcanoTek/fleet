@@ -2,11 +2,11 @@
 
 ## Problem
 
-The shared connector picker is used by Chat and Operations, but only Chat
-honored a bundled optional connector's `enabled_by_default` setting. Operations
-rendered every connector off. This was especially confusing when a client
-converted a previously hidden connector into a visible, default-on option: new
-Chat conversations started with it enabled while new scheduled tasks did not.
+Chat and Operations both expose connector controls, but only Chat honored a
+bundled optional connector's `enabled_by_default` setting. Operations rendered
+every connector off. This was especially confusing when a client converted a
+previously hidden connector into a visible, default-on option: new Chat
+conversations started with it enabled while new scheduled tasks did not.
 
 ## Shipped behavior
 
@@ -49,6 +49,22 @@ Always-on is not an authorization bypass. An explicit empty credential
 allowlist still binds no connector, and credential/tool/persona gates can only
 narrow what a run may call.
 
+### Chat status parity
+
+Chat's compact connector popover consumes the same live always-on status
+contract. Available rows are shown as locked **Always on** entries; a discovery
+failure is unchecked and marked **Unavailable**. The locked switch uses an
+intermediate tint between an optional connector's off and selected states so it
+does not imply that the user selected it.
+
+Only status semantics are shared. Chat keeps its compact popover and its
+per-conversation rules: optional bundled and hosted remote connectors remain
+toggleable, account seats remain conversation-specific, and the toolbar badge
+counts only selected optional connectors. Operations keeps the full-size task
+picker, where hosted remotes are auto-applied to scheduled runs. Neither chat
+endpoint persists an always-on row into `enabled_optional`; runtime availability
+continues to come from the independent non-optional roster.
+
 ## Scope and deployment
 
 This is generic Fleet UI behavior. Which connectors are visible and default-on
@@ -69,4 +85,6 @@ default selection, and existing tasks do not inherit later defaults. Runtime
 coverage proves optional choices are unioned with always-on connectors in both
 broker and compatibility paths, remote-only seat pins do not remove that set,
 and an explicit deny-all still binds nothing. Catalog and picker coverage pins
-the active/unavailable status display.
+the active/unavailable status display. Chat API and composer coverage pins the
+same live status, its locked intermediate switch state, and the optional-only
+persistence/badge boundary.
