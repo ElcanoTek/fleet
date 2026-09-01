@@ -91,6 +91,17 @@ lowers the host's base footprint.
 > operator ceilings `FLEET_SANDBOX_{MEMORY_MAX_MB,CPUS_MAX,PIDS_MAX}` (defaults
 > 8192 / 16 / 1024). A per-task override always cold-starts that run's container.
 
+> **Sandbox start budget.** One sandbox start (`podman run`) is bounded by a
+> **30s** timeout, tunable with `FLEET_SANDBOX_START_TIMEOUT_SECONDS` (under
+> the kubernetes backend the same knob caps a pod's schedule+pull+start,
+> default there 2 minutes). The routine reason a first start is slow — the
+> one-time id-remapped image copy podman builds on the first keep-id run of a
+> new sandbox image — is paid up front by a boot-time pre-warm, so you should
+> rarely need this knob; see
+> [SANDBOX-START-TIMEOUT.md](SANDBOX-START-TIMEOUT.md) for the symptom it
+> untangles (`podman run: signal: killed` on every start after an image
+> update).
+
 > **Per-task resource telemetry.** To help right-size those caps, fleet samples
 > `podman stats` read-only over each sandbox container's lifetime and records the
 > run's peak/average CPU and memory plus cumulative I/O and peak PID count. This

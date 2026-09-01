@@ -121,12 +121,17 @@ prior versions are listed because none have shipped.
 
 ### Changed
 
-- **Operations tasks now honor connector defaults (#1333).** New task forms
-  start bundled connectors marked `enabled_by_default` in the selected state,
-  matching new Chat conversations. The selection follows asynchronously loaded
-  catalogs without overwriting a user's first toggle, is persisted explicitly
-  with the task, and editing an existing task continues to show its saved
-  connector list rather than applying newer deployment defaults retroactively.
+- **Operations connector selection now preserves always-on MCPs (#1333).** New
+  task forms still start bundled connectors marked `enabled_by_default` in the
+  selected state, matching new Chat conversations, but the persisted
+  `mcp_selection` is now treated as optional additions: every active
+  non-optional connector is unioned in at scheduled-run binding. The task picker
+  surfaces those connectors as locked **Always on** rows and uses live discovery
+  to mark a failed connector **Unavailable** rather than falsely painting it on.
+  Empty selections mean always-on only; remote seat pins do not remove the
+  bundle set; explicit credential deny-all and persona/tool restrictions still
+  narrow access. See [docs/OPS-CONNECTOR-DEFAULTS.md](docs/OPS-CONNECTOR-DEFAULTS.md)
+  and ADR-0052.
 
 - **Fonts: exactly two typefaces, self-hosted.** The web UI now ships
   **Nebula Sans** (SIL OFL 1.1) for UI/body/headings and **Hack** (MIT, plus
@@ -220,6 +225,38 @@ prior versions are listed because none have shipped.
   `os.Getenv`+parse knob is introduced without a registry row.
 
 ### Fixed
+
+- **Webhook/email-trigger runs no longer silently drop the template task's
+  persona — or any other definition field (#1357).** `buildTriggerRun`
+  projected the template into the spawned run field by hand-picked field, so
+  `Persona`, `Title`, `Description`, `Tags`, `SandboxLimits`, `LoopConfig`,
+  `WorktreeConfig`, `SerializationKey`, and `ExpectedDurationMinutes` all
+  reset to their defaults on every `POST /triggers/{slug}` and email-trigger
+  run. The projection is now the canonical `models.TaskToCreate` clone recipe
+  minus an explicit, reasoned exclusion registry (`triggerRunNotCarried`),
+  with a drift test that fails whenever `TaskCreate` gains a field the
+  projection neither carries nor registers — the `taskColumnRegistry`
+  discipline applied to this seam. The connector facets (`MCPSelection`,
+  `CredentialAllowlist`) stay OUT of the generic copy: only the
+  `connectorInheritance` switch — the event-trigger security boundary — may
+  set them, exactly as before.
+
+- **First sandbox start after an image update no longer dies at the start
+  timeout mid keep-id layer copy (#1358).** The first `--userns=keep-id` run
+  of a new sandbox image makes podman build a one-time id-remapped copy of
+  every layer (~88s measured for the multi-GB image on WSL2); the hard-coded
+  30s start timeout SIGKILLed podman mid-copy — the opaque
+  `podman run: signal: killed (stderr: )` — and every retry restarted the
+  copy, wedging the deployment until a manual keep-id run. Three-part fix:
+  boot now **pre-warms** the id-mapped copy (one throwaway keep-id run under
+  a generous 15-minute budget, marker-gated to the local image ID so an
+  unchanged image costs one `podman image inspect` per boot) before the warm
+  pool's first start; the start timeout is **tunable**
+  (`FLEET_SANDBOX_START_TIMEOUT_SECONDS`, min 1; also caps a pod's
+  schedule+pull+start under the kubernetes backend, whose default stays 2m);
+  and a timeout expiry now **names itself** — the error says the timeout,
+  the knob, and the id-remap cause instead of the bare `signal: killed`.
+  See [docs/SANDBOX-START-TIMEOUT.md](docs/SANDBOX-START-TIMEOUT.md).
 
 - **A2A: the two protocol defects the first official-TCK conformance run
   found (#1279).** `POST /v1/a2a/` — the trailing-slash form every

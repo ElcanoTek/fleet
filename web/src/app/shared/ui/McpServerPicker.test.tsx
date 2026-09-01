@@ -146,6 +146,51 @@ describe("McpServerPicker — enable/disable + account selection", () => {
   });
 });
 
+describe("McpServerPicker — always-on bundle servers (#1333)", () => {
+  const ALWAYS_ON: McpServer[] = [
+    ...SERVERS,
+    { name: "email", display_name: "Email", description: "Inbound reports", tool_count: 10, enabled: true, always_on: true },
+  ];
+
+  it("renders an available always-on server checked and locked without adding it to selection", () => {
+    const onChange = vi.fn();
+    render(<McpServerPicker mode="task" servers={ALWAYS_ON} selection={[]} onChange={onChange} />);
+    expect(screen.getByTestId("mcp-always-on-email")).toBeChecked();
+    expect(screen.getByTestId("mcp-always-on-email")).toBeDisabled();
+    expect(screen.getByTestId("mcp-always-on-status-email")).toHaveTextContent("Always on");
+    expect(screen.queryByTestId("mcp-toggle-email")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("mcp-always-on-email"));
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("reflects backend unavailability instead of painting an always-on server active", () => {
+    render(
+      <McpServerPicker
+        mode="task"
+        servers={[{ name: "email", enabled: false, always_on: true }]}
+        selection={[]}
+        onChange={() => {}}
+      />,
+    );
+    expect(screen.getByTestId("mcp-always-on-email")).not.toBeChecked();
+    expect(screen.getByTestId("mcp-always-on-status-email")).toHaveTextContent("Unavailable");
+    expect(screen.getByText("Always-on connector did not expose any tools")).toBeInTheDocument();
+  });
+
+  it("keeps always-on rows active when an optional server is selected", () => {
+    render(
+      <McpServerPicker
+        mode="task"
+        servers={ALWAYS_ON}
+        selection={[{ server: "xandr" }]}
+        onChange={() => {}}
+      />,
+    );
+    expect(screen.getByTestId("mcp-always-on-email")).toBeChecked();
+    expect(screen.getByTestId("mcp-toggle-xandr")).toBeChecked();
+  });
+});
+
 describe("McpServerPicker — per-user remote (hosted) servers (#466)", () => {
   const WITH_REMOTE: McpServer[] = [
     ...SERVERS,

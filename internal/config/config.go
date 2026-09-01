@@ -444,21 +444,22 @@ var allowedEnvVars = map[string]bool{
 	"FLEET_A2A_PERSONA":            true,
 	"FLEET_A2A_MODEL":              true,
 
-	"FLEET_SANDBOX_MEMORY":           true,
-	"FLEET_SANDBOX_CPUS":             true,
-	"FLEET_SANDBOX_PIDS":             true,
-	"FLEET_SANDBOX_KATA_OVERHEAD_MB": true,
-	"FLEET_SANDBOX_DISK_GB":          true,
-	"FLEET_SANDBOX_MEMORY_MAX_MB":    true,
-	"FLEET_SANDBOX_CPUS_MAX":         true,
-	"FLEET_SANDBOX_PIDS_MAX":         true,
-	"FLEET_SANDBOX_WARM_SIZE":        true,
-	"FLEET_SANDBOX_WARM_TTL":         true,
-	"FLEET_PYTHON_REPL_MODE":         true,
-	"FLEET_PYTHON_CELL_TIMEOUT":      true,
-	"FLEET_PYTHON_REPL_IDLE_TTL":     true,
-	"FLEET_PYTHON_REPL_MAX":          true,
-	"FLEET_WORKSPACE_ROOT":           true,
+	"FLEET_SANDBOX_MEMORY":                true,
+	"FLEET_SANDBOX_CPUS":                  true,
+	"FLEET_SANDBOX_PIDS":                  true,
+	"FLEET_SANDBOX_START_TIMEOUT_SECONDS": true,
+	"FLEET_SANDBOX_KATA_OVERHEAD_MB":      true,
+	"FLEET_SANDBOX_DISK_GB":               true,
+	"FLEET_SANDBOX_MEMORY_MAX_MB":         true,
+	"FLEET_SANDBOX_CPUS_MAX":              true,
+	"FLEET_SANDBOX_PIDS_MAX":              true,
+	"FLEET_SANDBOX_WARM_SIZE":             true,
+	"FLEET_SANDBOX_WARM_TTL":              true,
+	"FLEET_PYTHON_REPL_MODE":              true,
+	"FLEET_PYTHON_CELL_TIMEOUT":           true,
+	"FLEET_PYTHON_REPL_IDLE_TTL":          true,
+	"FLEET_PYTHON_REPL_MAX":               true,
+	"FLEET_WORKSPACE_ROOT":                true,
 	// Lockdown reads through the FLEET_ alias chain (#1080); the CHAT_
 	// spellings stay allowlisted so existing env files keep sealing.
 	"FLEET_LOCKDOWN_ONLY":           true,
@@ -1192,6 +1193,15 @@ type Config struct {
 	SandboxMemory string
 	SandboxCPUs   string
 	SandboxPids   int
+	// SandboxStartTimeoutSeconds bounds ONE sandbox start
+	// (FLEET_SANDBOX_START_TIMEOUT_SECONDS, #1358): the `podman run` that
+	// creates a container, or — under FLEET_SANDBOX_BACKEND=kubernetes — one
+	// pod's schedule+pull+start. 0 (unset) keeps each backend's default (30s
+	// podman / 2m kubernetes). The escape hatch for boxes where even prepared
+	// starts are slow; the routine cause of a slow FIRST start (the one-time
+	// keep-id id-remapped image copy after an image update) is paid up front
+	// by the boot pre-warm instead, so most deployments never need this.
+	SandboxStartTimeoutSeconds int
 	// Per-task override ceilings (#205): a scheduled task's SandboxLimits may
 	// raise its container above the global SandboxMemory/CPUs/Pids, but never
 	// past these operator-set maxima. 0 = no ceiling (any override accepted).
@@ -1699,6 +1709,8 @@ func Load(envFile string) (*Config, error) {
 		SandboxCPUs:   getenvFleet("SANDBOX_CPUS"),
 		SandboxPids:   lp.getenvInt("FLEET_SANDBOX_PIDS", 0),
 		SandboxDiskGB: lp.getenvInt("FLEET_SANDBOX_DISK_GB", 0),
+		// 0 = unset sentinel: each backend applies its own default (#1358).
+		SandboxStartTimeoutSeconds: lp.getenvInt("FLEET_SANDBOX_START_TIMEOUT_SECONDS", 0),
 		// Per-task override ceilings (#205).
 		SandboxMemoryMaxMB:    lp.getenvFleetInt("SANDBOX_MEMORY_MAX_MB", 8192),
 		SandboxCPUsMax:        lp.getenvFleetFloat("SANDBOX_CPUS_MAX", 16.0),

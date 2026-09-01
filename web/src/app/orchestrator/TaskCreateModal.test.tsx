@@ -37,6 +37,11 @@ const DEFAULT_ON_SERVERS: McpServer[] = [
   ...SERVERS,
 ];
 
+const ALWAYS_ON_SERVERS: McpServer[] = [
+  { name: "email", description: "Inbound reports", tool_count: 10, enabled: true, always_on: true },
+  ...SERVERS,
+];
+
 function renderModal(
   overrides: Partial<Parameters<typeof TaskCreateModal>[0]> = {},
   templateList: TaskTemplate[] = [],
@@ -270,6 +275,33 @@ describe("TaskCreateModal — create path", () => {
     expect(createTask.mock.calls[0][0].mcp_selection).toEqual([{ server: "xandr" }]);
   });
 
+  it("shows always-on status but persists only optional additions", async () => {
+    createTask.mockResolvedValue({ id: "t-1" });
+    renderModal({ servers: ALWAYS_ON_SERVERS });
+
+    fireEvent.click(screen.getByRole("button", { name: /Tools & files/ }));
+    expect(screen.getByTestId("mcp-always-on-email")).toBeChecked();
+    expect(screen.getByTestId("mcp-always-on-email")).toBeDisabled();
+    fireEvent.click(screen.getByTestId("mcp-toggle-xandr"));
+    expect(screen.getByTestId("mcp-always-on-email")).toBeChecked();
+
+    fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Read email and Xandr" } });
+    fireEvent.click(screen.getByRole("button", { name: "Launch task" }));
+
+    await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
+    expect(createTask.mock.calls[0][0].mcp_selection).toEqual([{ server: "xandr" }]);
+  });
+
+  it("surfaces an unavailable always-on connector in the picker and summary", () => {
+    renderModal({
+      servers: [{ name: "email", always_on: true, enabled: false, description: "Inbound reports" }],
+    });
+    expect(screen.getByText("1 unavailable")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Tools & files/ }));
+    expect(screen.getByTestId("mcp-always-on-email")).not.toBeChecked();
+    expect(screen.getByTestId("mcp-always-on-status-email")).toHaveTextContent("Unavailable");
+  });
+
   it("submits the typed prompt with mode-scoped schedule fields and resets after success", async () => {
     createTask.mockResolvedValue({ id: "t-1" });
     const { onClose, onCreated } = renderModal();
@@ -302,7 +334,7 @@ describe("TaskCreateModal — create path", () => {
     expect(screen.getByText("Sandbox only — no tools")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /Tools & files/ }));
     fireEvent.click(screen.getByTestId("mcp-toggle-xandr"));
-    expect(screen.getByText("1 server")).toBeInTheDocument();
+    expect(screen.getByText("1 selected")).toBeInTheDocument();
   });
 });
 

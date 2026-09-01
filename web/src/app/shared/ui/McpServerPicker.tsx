@@ -22,11 +22,15 @@ import type { McpServer, MCPChoice } from "@/app/shared/lib/orchestratorApi";
 // when it appears in the list; its account is the chosen credential seat
 // (account === "" / undefined means the default/shared seat).
 //
+// In Operations, the catalog can also include locked always-on rows. Their
+// checked state comes from backend discovery, never from selection, so a failed
+// connector is visibly unavailable instead of being painted permanently on.
+//
 // Row order: connected remote servers first (read-only — except that a
-// connection with several logins gets a seat picker, #988), then the
-// toggleable roster in catalog order. Enabled rows tint in place — deliberately NOT
-// sorted first, so a row never moves (or resizes) under the pointer when
-// toggled.
+// connection with several logins gets a seat picker, #988), then always-on
+// bundle servers, then the toggleable roster in catalog order. Enabled rows
+// tint in place — deliberately NOT sorted first, so a row never moves (or
+// resizes) under the pointer when toggled.
 
 export type McpServerPickerMode = "conversation" | "task";
 
@@ -84,8 +88,9 @@ export function McpServerPicker({ mode, servers, selection, onChange, disabled }
     [selection, onChange],
   );
 
-  // Stable regrouping (remote → rest); ties keep catalog order.
-  const ordered = [...servers].sort((a, b) => Number(b.remote ?? false) - Number(a.remote ?? false));
+  // Stable regrouping (remote → always-on → optional); ties keep catalog order.
+  const rowPriority = (server: McpServer) => (server.remote ? 2 : server.always_on ? 1 : 0);
+  const ordered = [...servers].sort((a, b) => rowPriority(b) - rowPriority(a));
 
   return (
     <div
@@ -95,7 +100,7 @@ export function McpServerPicker({ mode, servers, selection, onChange, disabled }
       aria-label={mode === "task" ? "MCP servers for this task" : "MCP servers for this conversation"}
     >
       {servers.length === 0 ? (
-        <p className="mcp-server-picker__empty">No optional MCP servers available.</p>
+        <p className="mcp-server-picker__empty">No MCP servers available.</p>
       ) : (
         <ul className="mcp-server-picker__list">
           {ordered.map((server) => {
@@ -153,6 +158,46 @@ export function McpServerPicker({ mode, servers, selection, onChange, disabled }
                       </select>
                     </div>
                   ) : null}
+                </li>
+              );
+            }
+            if (server.always_on) {
+              const available = server.enabled === true;
+              return (
+                <li
+                  key={server.name}
+                  className={`mcp-server-picker__row mcp-server-picker__row--always-on${
+                    available ? " mcp-server-picker__row--enabled" : " mcp-server-picker__row--unavailable"
+                  }`}
+                  data-server={server.name}
+                  data-always-on="true"
+                >
+                  <input
+                    type="checkbox"
+                    className="ui-switch"
+                    checked={available}
+                    disabled
+                    readOnly
+                    aria-label={`${server.name} always on (${available ? "available" : "unavailable"})`}
+                    data-testid={`mcp-always-on-${server.name}`}
+                  />
+                  <span className="mcp-server-picker__name">{server.display_name || server.name}</span>
+                  <span
+                    className={`mcp-server-picker__status${available ? "" : " mcp-server-picker__status--error"}`}
+                    data-testid={`mcp-always-on-status-${server.name}`}
+                  >
+                    {available ? "Always on" : "Unavailable"}
+                  </span>
+                  {available && typeof server.tool_count === "number" ? (
+                    <span className="mcp-server-picker__count">
+                      {server.tool_count} {server.tool_count === 1 ? "tool" : "tools"}
+                    </span>
+                  ) : null}
+                  <span className="mcp-server-picker__desc">
+                    {available
+                      ? server.description || "Available on every run"
+                      : "Always-on connector did not expose any tools"}
+                  </span>
                 </li>
               );
             }

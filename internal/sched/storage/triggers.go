@@ -2,7 +2,6 @@ package storage
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/ElcanoTek/fleet/internal/sched/models"
@@ -88,54 +87,59 @@ const (
 	connectorsInherited
 )
 
-// buildTriggerRun clones the trigger's template task into a fresh one-shot run
-// with the rendered prompt substituted. It deliberately drops Recurrence /
-// ScheduledFor / TriggerType so the spawned run is a normal one-shot task that
-// runs now rather than another inert trigger template — immediately claimable
-// for an ungated template; parked scheduled-for-now when the template carries
-// a run_if gate, so the scheduler evaluates the gate before dispatch. The
-// `inherit` flags decide whether the run carries the template's write-capable
-// connectors — the one place the event-trigger security default is enforced.
-func (s *Storage) buildTriggerRun(ctx context.Context, taskID uuid.UUID, prompt string, inherit connectorInheritance) (uuid.UUID, error) {
-	template, err := s.db.GetTask(ctx, taskID)
-	if err != nil {
-		return uuid.Nil, fmt.Errorf("load template task: %w", err)
-	}
+// triggerRunNotCarried enumerates the TaskCreate fields a trigger-spawned run
+// must NOT inherit verbatim from its template, each with the reason. It is the
+// taskColumnRegistry discipline applied to this seam (#1357): triggerRunCreate
+// starts from models.TaskToCreate — the one canonical Task→TaskCreate clone,
+// whose own completeness test forces every new definition field into it — and
+// then clears exactly this set, so a field added to TaskCreate flows to
+// trigger-spawned runs BY DEFAULT instead of silently resetting to its zero
+// value (the way Persona, Title, Tags, SandboxLimits, … were dropped before
+// #1357). TestTriggerRunProjectionAccountsForEveryField fails on any field
+// that is neither carried nor registered here.
+var triggerRunNotCarried = map[string]string{
+	"Prompt":              "replaced by the rendered trigger prompt (an empty render falls back to the template's own prompt)",
+	"Name":                "unique import/export identity key (#238) — a spawned run must not collide with its template row",
+	"ScheduledFor":        "the spawned run executes now (NewTask parks it scheduled-for-now itself when a run_if gate needs pre-dispatch evaluation)",
+	"Recurrence":          "a spawned run is a one-shot, never another recurring schedule",
+	"RecurrenceUntil":     "recurrence end condition — meaningless without Recurrence",
+	"RecurrenceRemaining": "recurrence end condition — meaningless without Recurrence",
+	"TriggerType":         "the spawned run is a normal claimable task, not another inert trigger template",
+	"MCPSelection":        "event-trigger security boundary — set ONLY by the connectorInheritance switch, never the generic copy",
+	"CredentialAllowlist": "event-trigger security boundary — set ONLY by the connectorInheritance switch, never the generic copy",
+}
+
+// triggerRunCreate is the template→run projection for trigger-spawned runs:
+// the full TaskToCreate clone recipe, minus the triggerRunNotCarried set (see
+// its doc), with the rendered prompt substituted and the connector facets
+// decided exclusively by `inherit`.
+func triggerRunCreate(template *models.Task, prompt string, inherit connectorInheritance) models.TaskCreate {
+	tc := models.TaskToCreate(template)
 
 	// An empty rendered prompt (no prompt_template configured) falls back to the
 	// template task's own prompt, so a trigger can be a pure fire-the-task signal.
-	if prompt == "" {
-		prompt = template.Prompt
+	if prompt != "" {
+		tc.Prompt = prompt
 	}
 
-	tc := models.TaskCreate{
-		Prompt:                 prompt,
-		Model:                  template.Model,
-		FallbackModel:          template.FallbackModel,
-		MaxIterations:          template.MaxIterations,
-		Priority:               template.Priority,
-		InstructionSelfImprove: template.InstructionSelfImprove,
-		AllowNetwork:           template.AllowNetwork,
-		AllowDelegation:        models.BoolPtr(template.AllowDelegation),
-		ThinkingBudgetTokens:   template.ThinkingBudgetTokens,
-		OutputSchema:           append(json.RawMessage(nil), template.OutputSchema...),
-		Files:                  template.Files,
-		FileNames:              template.FileNames,
-		MaxRetries:             &template.MaxRetries,
-		RetryPolicy:            template.RetryPolicy,
-		Timezone:               template.Timezone,
-		// The pre-run gate is part of the definition every spawned run must
-		// honor (models.RunIf's enforcement contract): NewTask parks the gated
-		// run scheduled-for-now, so the scheduler evaluates the gate before
-		// promoting it. Without this carry, firing a trigger executed the
-		// template's gated work with the admin-authored condition silently
-		// dropped.
-		RunIf: template.RunIf,
-	}
+	// A spawned run is a fresh one-shot that runs now, never another inert
+	// trigger template or recurring schedule — and Name is a unique identity
+	// key that would collide with the template row it was cloned from.
+	tc.Name = ""
+	tc.ScheduledFor = nil
+	tc.Recurrence = ""
+	tc.RecurrenceUntil = nil
+	tc.RecurrenceRemaining = nil
+	tc.TriggerType = ""
+
 	// Connector inheritance is the event-trigger security boundary: an untrusted
 	// inbound event never carries the template's write-capable connectors unless
 	// the template explicitly opted in (allow_event_triggers). Off ⇒ native tools
-	// only (no MCP selection, no credentials).
+	// only (no MCP selection, no credentials). Both facets are cleared
+	// unconditionally first — the generic clone above must never leak them —
+	// and only the switch below may set them.
+	tc.MCPSelection = nil
+	tc.CredentialAllowlist = nil
 	switch inherit {
 	case connectorsInherited:
 		tc.MCPSelection = template.MCPSelection
@@ -153,8 +157,24 @@ func (s *Storage) buildTriggerRun(ctx context.Context, taskID uuid.UUID, prompt 
 		// and cannot carry the deny by itself. See docs/EVENT-TRIGGERS.md.
 		tc.CredentialAllowlist = models.CredentialAllowlist{}
 	}
+	return tc
+}
 
-	run := models.NewTask(tc)
+// buildTriggerRun clones the trigger's template task into a fresh one-shot run
+// with the rendered prompt substituted — the projection itself is
+// triggerRunCreate (see triggerRunNotCarried for what is deliberately NOT
+// carried, and why). The spawned run is immediately claimable for an ungated
+// template; parked scheduled-for-now when the template carries a run_if gate,
+// so the scheduler evaluates the gate before dispatch. The `inherit` flags
+// decide whether the run carries the template's write-capable connectors —
+// the one place the event-trigger security default is enforced.
+func (s *Storage) buildTriggerRun(ctx context.Context, taskID uuid.UUID, prompt string, inherit connectorInheritance) (uuid.UUID, error) {
+	template, err := s.db.GetTask(ctx, taskID)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("load template task: %w", err)
+	}
+
+	run := models.NewTask(triggerRunCreate(template, prompt, inherit))
 	run.CreatedBy = template.CreatedBy
 	// Carry the originating API key forward so spawned-run cost keeps counting
 	// against the template owner's usage bucket (and any scope=key budget).

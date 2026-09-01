@@ -76,7 +76,7 @@ type Manager struct {
 
 	// mcpGatingMu guards the MCP catalog/spec-derived gating fields below
 	// (allowlist, mcpToolRoster, optionalServers, enabledMCPServers,
-	// optionalServerMetadata, mcpCatalog, and mcpAccounts) so a
+	// optionalServerMetadata, alwaysOnServerMetadata, mcpCatalog, and mcpAccounts) so a
 	// hot reload (#218, ReloadMCPServers) can swap them race-free while turns
 	// read them. Boot construction and unit-test literals set the fields
 	// directly (single goroutine, happens-before any turn); every RUNTIME read
@@ -136,6 +136,10 @@ type Manager struct {
 	// render the settings UI without re-walking spec structures on
 	// every request.
 	optionalServerMetadata []OptionalServerInfo
+	// alwaysOnServerMetadata is the locked informational roster used by the
+	// Operations task picker. Unlike the optional roster, it includes live
+	// availability so a failed mandatory connector is not presented as healthy.
+	alwaysOnServerMetadata []AlwaysOnServerInfo
 
 	// Source directories for persona + protocol + skill + system-prompt files.
 	// These are read on every turn because operators may edit them in place

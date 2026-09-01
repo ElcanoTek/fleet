@@ -728,30 +728,14 @@ func run() error {
 	}
 	warnIfNoAdminKey(hcfg.AdminAPIKey)
 	h := handlers.New(hcfg, schedStorage, keyMgr)
-	// Wire the orchestrator's read-only Optional-MCP catalog + credential-account
-	// seats from the SAME in-process source the chat side uses: the Manager's
-	// Optional-server catalog (descriptions, tool counts, and the per-server
-	// credential-account seat names it derives from the bundle's AccountVars via
-	// creds.AccountsFor). Never exposes secret values — only server + account
-	// names. This is what makes the scheduled-task MCP picker + credential admin
-	// table work.
-	h.SetMCPCatalogProvider(func() []handlers.MCPServerCatalogEntry {
-		catalog := mgr.MCPServerCatalog()
-		out := make([]handlers.MCPServerCatalogEntry, 0, len(catalog))
-		for _, info := range catalog {
-			out = append(out, handlers.MCPServerCatalogEntry{
-				Name:        info.Name,
-				DisplayName: info.DisplayName,
-				Description: info.Description,
-				ToolCount:   info.ToolCount,
-				Enabled:     info.EnabledByDefault,
-				// Seats are derived from the bundle's AccountVars by the Manager's
-				// catalog (creds.AccountsFor) — names only, never secret values.
-				Accounts: info.Accounts,
-			})
-		}
-		return out
-	})
+	// Wire the orchestrator's read-only MCP catalog + credential-account seats
+	// from the SAME in-process source the chat side uses: the Manager's optional
+	// catalog plus its live always-on status rows (descriptions, tool counts, and
+	// the per-server credential-account seat names it derives from the bundle's
+	// AccountVars via creds.AccountsFor). Never exposes secret values — only
+	// server + account names. This is what makes the scheduled-task MCP picker +
+	// credential admin table work.
+	h.SetMCPCatalogProvider(func() []handlers.MCPServerCatalogEntry { return mcpCatalogEntries(mgr) })
 	// Surface each caller's per-user remote (hosted) MCP servers (#443) in the
 	// orchestrator picker too (#466) — see wireRemoteMCPCatalog. No-op when the
 	// feature is disabled (remoteMCPSvc == nil).
@@ -3042,6 +3026,42 @@ func runMaintenancePass(ctx context.Context, cfg *config.Config, h *handlers.Han
 	// generous on purpose: a worktree younger than it may belong to a task
 	// still running.
 	pruneStaleWorktrees(passCtx, cfg)
+}
+
+// mcpCatalogEntries renders the orchestrator MCP picker's catalog rows: the
+// Manager's live always-on status rows (locked in the picker, Enabled =
+// discovery-backed availability) ahead of the Optional-server catalog
+// (ADR-0052). Named — not a closure in run() — so its loops don't count
+// against run's gocyclo budget; it reads the Manager fresh on every call, so
+// hot-reload keeps the picker current.
+func mcpCatalogEntries(mgr *agent.Manager) []handlers.MCPServerCatalogEntry {
+	catalog := mgr.MCPServerCatalog()
+	alwaysOn := mgr.AlwaysOnMCPServerCatalog()
+	out := make([]handlers.MCPServerCatalogEntry, 0, len(catalog)+len(alwaysOn))
+	for _, info := range alwaysOn {
+		out = append(out, handlers.MCPServerCatalogEntry{
+			Name:        info.Name,
+			DisplayName: info.DisplayName,
+			Description: info.Description,
+			ToolCount:   info.ToolCount,
+			Enabled:     info.Available,
+			Accounts:    info.Accounts,
+			AlwaysOn:    true,
+		})
+	}
+	for _, info := range catalog {
+		out = append(out, handlers.MCPServerCatalogEntry{
+			Name:        info.Name,
+			DisplayName: info.DisplayName,
+			Description: info.Description,
+			ToolCount:   info.ToolCount,
+			Enabled:     info.EnabledByDefault,
+			// Seats are derived from the bundle's AccountVars by the Manager's
+			// catalog (creds.AccountsFor) — names only, never secret values.
+			Accounts: info.Accounts,
+		})
+	}
+	return out
 }
 
 func wireRemoteMCPCatalog(h *handlers.Handlers, svc *remotemcp.Service) {
