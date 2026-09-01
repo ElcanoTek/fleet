@@ -930,6 +930,11 @@ func run() error {
 	// process now interrupts the governed run at its next checkpoint, with
 	// who-stopped-it attribution on the terminal record.
 	h.SetTaskStopper(pool.StopTask)
+	// Immediate dispatch for synchronous creates (#1279): a create/resume/wake
+	// that lands a task in pending wakes the pool's claim loop instead of
+	// waiting out the poll tick — an A2A blocking send holds its caller on the
+	// line for that latency.
+	h.SetTaskKicker(pool.Kick)
 	// Dashboard agent cards: live pool occupancy (active scheduled agents /
 	// schedulable slots), stamped onto GET /stats at response time.
 	h.SetAgentPoolStats(pool.ActiveTasks, pool.Cap)

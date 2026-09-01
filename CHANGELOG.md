@@ -19,6 +19,18 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **Immediate dispatch for synchronous task writes (#1279).** A write that
+  makes a task claimable right now — a create landing in `pending` (the HTTP
+  and A2A create paths), an answer resuming a paused task, a wake event — now
+  kicks the worker pool's claim loop (`runner.Pool.Kick`) instead of leaving
+  the task to wait out the poll interval (default 30s). An A2A blocking
+  `SendMessage` holds its caller on the line for exactly that latency, which
+  is what surfaced it. The kick is advisory and coalescing: claiming still
+  goes through the pool's normal scan and admission gate, and a missed kick
+  costs latency, never correctness. Chat-`schedule_task` and webhook-trigger
+  creates (storage-level enqueues) still wait for the poll tick — they have
+  no caller blocked on the outcome.
+
 - **A conformance rig that runs the official A2A TCK against fleet
   end-to-end (#1279).** `scripts/a2a-tck-shim` — a loopback reverse proxy —
   bridges the two TCK assumptions fleet does not share: it injects the
