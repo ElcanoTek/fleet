@@ -135,7 +135,7 @@ function MiniSwitch({ state }: { state: MiniSwitchState }) {
         state === "on"
           ? "bg-[var(--color-primary)]"
           : state === "always-on"
-            ? "bg-[color-mix(in_srgb,var(--color-primary)_62%,transparent)]"
+            ? "bg-[var(--color-connector-always-on-track)]"
           : "bg-[color-mix(in_srgb,var(--color-primary)_32%,transparent)]"
       }`}
     >
@@ -144,7 +144,7 @@ function MiniSwitch({ state }: { state: MiniSwitchState }) {
           state === "on"
             ? "translate-x-[0.625rem] bg-white"
             : state === "always-on"
-              ? "translate-x-[0.625rem] bg-[color-mix(in_srgb,var(--color-on-primary)_72%,var(--color-text-muted))]"
+              ? "translate-x-[0.625rem] bg-[var(--color-connector-always-on-knob)]"
               : "bg-[var(--color-text-muted)]"
         }`}
       />

@@ -232,7 +232,9 @@ describe("Composer — always-on connector status", () => {
 
     const email = await screen.findByTestId("chat-mcp-always-on-email");
     expect(email).toHaveTextContent("Always on");
-    expect(email.querySelector('[data-state="always-on"]')).toBeInTheDocument();
+    expect(email.querySelector('[data-state="always-on"]')).toHaveClass(
+      "bg-[var(--color-connector-always-on-track)]",
+    );
     const broken = screen.getByTestId("chat-mcp-always-on-broken");
     expect(broken).toHaveTextContent("Unavailable");
     expect(broken.querySelector('[data-state="off"]')).toBeInTheDocument();
