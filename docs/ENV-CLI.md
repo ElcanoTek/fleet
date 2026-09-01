@@ -63,6 +63,38 @@ fleet env edit [--web] [--env-file <path>] [--editor <cmd>]
    [CONFIG-RELOAD.md](CONFIG-RELOAD.md)); `systemctl restart fleet-web` for
    the web file.
 
+## `fleet config set-env` / `unset-env` — one key, no editor
+
+For a single variable — a callback token, a connector credential the bundle
+names, a knob — there is no need to open the file:
+
+```sh
+printf '%s' "$TOKEN" | sudo fleet config set-env MANIFEST_CALLBACK_TOKEN
+sudo fleet config set-env FLEET_TRUSTED_PROXIES --value 127.0.0.1,::1
+sudo fleet config set-env NEXT_PUBLIC_APP_NAME --web       # the web-tier file; hidden prompt on a TTY
+sudo fleet config unset-env OLD_KEY
+```
+
+The value is read from stdin (`--value -`, or a pipe) or a hidden prompt —
+never from argv, so it stays out of shell history. The write goes through the
+same helper the credential verbs use (`creds.SetEnvKey`): the result has
+**exactly one** line for the key (every duplicate is removed — the server
+loads last-assignment-wins, so a first-only replacement used to leave a stale
+later line in force and the "set" silently did nothing), the file is written
+atomically and kept `0600`, and **its owner is unchanged**. The key must match
+`[A-Za-z_][A-Za-z0-9_]*`, the value may not contain a line break.
+
+## Ownership
+
+Both editors leave the file owned by whoever owned it before. `fleet env edit`
+records the owner before launching the editor and restores it afterwards
+(along with `0600`), because an editor that saves via rename — vim's default —
+otherwise hands the new inode to the editing user, root under `sudo`. The
+`set-*`/`set-env` writers do the same on their temp+rename. Ownership is only
+ever touched when running as root and it actually changed; a non-root run can
+only have written a file it already owned. On the shipped units the server
+file is `root:root 0600` (systemd reads it as root) and stays that way.
+
 ## Honest scope
 
 - **No value validation beyond the line lint.** `fleet validate-config` is the

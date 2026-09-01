@@ -155,3 +155,68 @@ func TestSetEnvKeyRefusesLineBreaks(t *testing.T) {
 		t.Fatalf("file mutated by refused writes: %v", vals)
 	}
 }
+
+// TestSetEnvKeyDedupesDuplicateLines — the server's loader is last-assignment-
+// wins (config.loadEnvFileFiltered calls os.Setenv per line), so an upsert that
+// replaced only the FIRST of two duplicate lines left the stale later one in
+// force: `fleet config set-*` printed "set KEY" and changed nothing the service
+// saw. That is the duplicate-line outage class. The result must be exactly one
+// line for the key, in the first occurrence's position, with everything else
+// untouched.
+func TestSetEnvKeyDedupesDuplicateLines(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".env")
+	body := "# header\nA=1\nOPENX_API_KEY=old-1\nB=2\nOPENX_API_KEY=old-2\nexport OPENX_API_KEY=old-3\nC=3\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetEnvKey(path, "OPENX_API_KEY", "new"); err != nil {
+		t.Fatalf("SetEnvKey: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "# header\nA=1\nOPENX_API_KEY=new\nB=2\nC=3\n"
+	if string(got) != want {
+		t.Errorf("after upsert:\n%s\nwant:\n%s", got, want)
+	}
+	vals, err := ReadEnvValues(path, "OPENX_API_KEY")
+	if err != nil || vals["OPENX_API_KEY"] != "new" {
+		t.Errorf("read back = %q, %v; want new", vals["OPENX_API_KEY"], err)
+	}
+}
+
+// TestWriteEnvLinesKeepsModeAndOwnerForCaller — a non-root writer can only
+// have written a file it owns, so the rename must leave the owner as it was
+// and the mode 0600; PreserveOwner must be a no-op (never an error) there.
+func TestWriteEnvLinesKeepsModeAndOwnerForCaller(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".env")
+	if err := os.WriteFile(path, []byte("A=1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := SetEnvKey(path, "B", "2"); err != nil {
+		t.Fatalf("SetEnvKey: %v", err)
+	}
+	after, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Mode().Perm() != 0o600 {
+		t.Errorf("mode = %o, want 0600", after.Mode().Perm())
+	}
+	bu, bg, bok := FileOwner(before)
+	au, ag, aok := FileOwner(after)
+	if bok != aok || bu != au || bg != ag {
+		t.Errorf("owner changed across the rewrite: %d:%d → %d:%d", bu, bg, au, ag)
+	}
+	if err := PreserveOwner(path, before); err != nil {
+		t.Errorf("PreserveOwner no-op returned %v", err)
+	}
+	if err := PreserveOwner(path, nil); err != nil {
+		t.Errorf("PreserveOwner(nil) returned %v", err)
+	}
+}

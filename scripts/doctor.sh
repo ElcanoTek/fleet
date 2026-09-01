@@ -81,6 +81,10 @@ MAINT_TIMER="fleet-maintenance.timer"
 # does not use NodeSource.
 # shellcheck source=lib/node-version.sh
 . "$SCRIPT_DIR/lib/node-version.sh"
+# The fleet-managed Caddyfile (marker, renderer, drift helpers) — shared with
+# bootstrap.sh (which writes it) and update.sh (which offers to adopt it).
+# shellcheck source=lib/caddyfile.sh
+. "$SCRIPT_DIR/lib/caddyfile.sh"
 NODE_FLOOR="$(fleet_node_major_want "$SRC_DIR" || true)"
 if [[ -z "$NODE_FLOOR" ]]; then
   # No silent default. A hardcoded fallback would point at whatever major was
@@ -117,8 +121,11 @@ place it is declared, so this text cannot drift from it; go/git/podman/psql pres
 fleet-critical package currency (podman/crun/passt/conmon/...), the rootless-
 podman prerequisites of the fleet service user (subuid/subgid, /var/lib/fleet
 ownership, containers.conf, stale pause namespaces), systemd unit drift vs
-deploy/, the 0600 env files, service health (postgresql, fleet, fleet-web,
-caddy), the /healthz + /readyz probes, the scheduled-backup and host-maintenance
+deploy/, the 0600 env files, the fleet-managed /etc/caddy/Caddyfile's layout
+(the /v1 API + webhooks must reach the Go backends, not the web tier — rewritten
++ caddy reloaded when drifted), service health (postgresql, fleet, fleet-web,
+caddy), the /healthz + /readyz probes and https://<domain>/api-info THROUGH
+caddy, the scheduled-backup and host-maintenance
 timers, free disk on the data dir + image store, and a sandbox smoke (podman run
 as the fleet user). Reports when the source checkout is behind upstream but never
 pulls or rebuilds — that stays `fleet update`.
@@ -238,8 +245,8 @@ if [[ "$DRY_RUN" == "1" ]]; then
   info "[dry-run] 2/9 Package currency: disable broken dnf repos; dnf upgrade fleet-critical packages (podman crun passt conmon containers-common golang nodejs nodejs${NODE_FLOOR} caddy)"
   info "[dry-run] 3/9 Rootless podman: ${SERVICE_USER} user + subuid/subgid ranges, ${SERVICE_HOME} + ~/.config/containers ownership, containers.conf (cgroupfs), /run/${SERVICE_USER}, podman system migrate, podman info as ${SERVICE_USER}"
   info "[dry-run] 4/9 Installed artifacts: ${SERVICE_NAME}.service + fleet-web.service + the fleet-backup and fleet-maintenance service/timer pairs' functional drift vs ${SRC_DIR}/deploy (reinstall + daemon-reload), /usr/local/bin/fleet-web-start.sh (fleet-web's ExecStart shim) and fleet-web.service.d/10-timeout-kill.conf, then assert the RESOLVED TimeoutStopFailureMode, /usr/local/bin/fleet symlink → ${INSTALL_DIR}/fleet, binaries present"
-  info "[dry-run] 5/9 Configuration: ${ENV_FILE} exists root-owned 0600 with OPENROUTER_API_KEY + DB DSNs; ${WEB_ENV_FILE} 0600 when fleet-web is installed"
-  info "[dry-run] 6/9 Services: ${SERVICE_NAME} active; postgresql/fleet-web/caddy active when enabled (systemctl start), then /healthz + /readyz respond"
+  info "[dry-run] 5/9 Configuration: ${ENV_FILE} exists root-owned 0600 with OPENROUTER_API_KEY + DB DSNs; ${WEB_ENV_FILE} 0600 when fleet-web is installed; ${FLEET_CADDYFILE:-/etc/caddy/Caddyfile} (when fleet-managed) matches scripts/lib/caddyfile.sh — /v1/*, /api-info, agent card, /triggers/* → orchestrator, /webhooks/* → chat (rewrite from the renderer, backup kept, caddy reload); an operator-managed Caddyfile only gets an advisory when it routes no /v1"
+  info "[dry-run] 6/9 Services: ${SERVICE_NAME} active; postgresql/fleet-web/caddy active when enabled (systemctl start), then /healthz + /readyz respond, then https://<caddy domain>/api-info answers THROUGH caddy (--resolve pinned to 127.0.0.1) when caddy is active"
   info "[dry-run] 7/9 Scheduled maintenance: ${BACKUP_TIMER} installed + enabled + active (advisory when absent) and ${BACKUP_SERVICE}'s last run succeeded; ${MAINT_TIMER} likewise; free space on the data dir + the podman image store above the disk floor"
   info "[dry-run] 8/9 Sandbox smoke: podman run --rm --network=none <sandbox image> true as ${SERVICE_USER}"
   info "[dry-run] 9/9 Source freshness: report commits behind upstream (fix stays 'fleet update' — doctor never pulls or rebuilds)"
@@ -850,6 +857,54 @@ if command -v systemctl >/dev/null 2>&1 && systemctl cat fleet-web.service >/dev
   fi
 fi
 
+# ── the TLS front's routing (the fleet-managed Caddyfile) ────────────────────
+# A Caddyfile that only knows the web tier sends every documented API URL
+# (/v1/…, /api-info, the A2A agent card, /triggers/…, /webhooks/…) to Next.js,
+# which 404s them — "the API isn't routing" with every unit green. bootstrap
+# renders the file from scripts/lib/caddyfile.sh; a box provisioned before the
+# API routes shipped keeps the old layout until something rewrites it. Same
+# drift rule as units (functional lines only), and the domain + ACME email are
+# read back from the installed file so a rewrite keeps them. A Caddyfile fleet
+# did not write is never rewritten: it gets an advisory, and only when it
+# routes no /v1 at all.
+CADDYFILE="${FLEET_CADDYFILE:-/etc/caddy/Caddyfile}"
+caddy_domain=""
+if [[ -f "$CADDYFILE" ]]; then
+  if caddyfile_is_managed "$CADDYFILE"; then
+    caddy_domain="$(caddyfile_domain "$CADDYFILE")"
+    if [[ -z "$caddy_domain" ]]; then
+      fail "$CADDYFILE is fleet-managed but has no site block — rerun: sudo fleet bootstrap --enable-web --domain <fqdn>"
+    else
+      caddy_rendered="$(render_fleet_caddyfile "$caddy_domain" "$(caddyfile_acme_email "$CADDYFILE")" \
+        "$(env_get FLEET_SERVER_ADDR)" "$(env_get FLEET_ORCHESTRATOR_ADDR)")"
+      if diff -q <(caddyfile_functional_body "$CADDYFILE") <(printf '%s\n' "$caddy_rendered" | caddyfile_functional_body) >/dev/null 2>&1; then
+        pass "$CADDYFILE matches the shipped layout for ${caddy_domain} (/v1 API + webhooks routed to the Go backends)"
+      elif [[ "$CHECK_ONLY" == "1" ]]; then
+        fail "$CADDYFILE drifted from the shipped layout (scripts/lib/caddyfile.sh) — API calls to https://${caddy_domain}/v1/… may 404 at the web tier; fix: sudo fleet doctor (rewrites it, backup kept) or sudo fleet update --adopt-units"
+      else
+        caddy_backup="${CADDYFILE}.fleet-backup.$(date -u +%Y%m%dT%H%M%SZ)"
+        if cp -p "$CADDYFILE" "$caddy_backup" 2>/dev/null && printf '%s\n' "$caddy_rendered" > "$CADDYFILE" 2>/dev/null; then
+          if command -v caddy >/dev/null 2>&1 && ! caddy validate --adapter caddyfile --config "$CADDYFILE" >/dev/null 2>&1; then
+            cp -p "$caddy_backup" "$CADDYFILE"
+            fail "the rendered Caddyfile failed \`caddy validate\` — restored ${caddy_backup}; run: caddy validate --adapter caddyfile --config $CADDYFILE"
+          else
+            if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet caddy.service 2>/dev/null; then
+              systemctl reload caddy.service >/dev/null 2>&1 || systemctl restart caddy.service >/dev/null 2>&1 || true
+            fi
+            fixed "$CADDYFILE rewritten from the shipped layout for ${caddy_domain} (previous file: ${caddy_backup}); caddy reloaded"
+          fi
+        else
+          fail "could not rewrite $CADDYFILE (need root?) — review: diff <(caddyfile_functional_body $CADDYFILE) <(render_fleet_caddyfile ${caddy_domain} | caddyfile_functional_body)"
+        fi
+      fi
+    fi
+  elif caddyfile_routes_api "$CADDYFILE" "$(env_get FLEET_ORCHESTRATOR_ADDR)"; then
+    pass "$CADDYFILE is operator-managed and routes /v1 to the orchestrator"
+  else
+    advise "$CADDYFILE is not fleet-managed and does not appear to route the API — /v1/*, /api-info, /.well-known/agent-card.json, /a2a, /triggers/* belong on the orchestrator (127.0.0.1:8000) and /webhooks/* on chat (127.0.0.1:8080); see deploy/Caddyfile"
+  fi
+fi
+
 # ── 6. services ──────────────────────────────────────────────────────────────
 step "6/9  Services"
 
@@ -920,6 +975,28 @@ for probe in healthz readyz; do
     fail "http://${server_addr}/${probe} not responding — fleet logs"
   fi
 done
+
+# The public API THROUGH the TLS front. /healthz above proves the backend is up
+# on loopback; this proves caddy routes to it: /api-info is unauthenticated,
+# unversioned-forever and answered by the orchestrator only, so anything but
+# its JSON here is the web tier catching a path that should never have reached
+# it. --resolve pins the domain to this box so the probe tests OUR caddy, not
+# DNS or a NAT that can't hairpin.
+if [[ -n "$caddy_domain" ]] && command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet caddy.service 2>/dev/null; then
+  api_ok=0
+  tries=1; [[ "$CHECK_ONLY" == "0" ]] && tries=10
+  for ((i=0; i<tries; i++)); do
+    if curl -fsS --max-time 10 --resolve "${caddy_domain}:443:127.0.0.1" "https://${caddy_domain}/api-info" 2>/dev/null | grep -q '"api_version"'; then
+      api_ok=1; break
+    fi
+    [[ "$tries" -gt 1 ]] && sleep 1
+  done
+  if [[ "$api_ok" == "1" ]]; then
+    pass "https://${caddy_domain}/api-info answers through caddy — the /v1 API reaches the orchestrator"
+  else
+    fail "https://${caddy_domain}/api-info does not answer through caddy — API clients get the web tier's 404 (or there is no cert yet): journalctl -u caddy -n 50; curl -sv --resolve ${caddy_domain}:443:127.0.0.1 https://${caddy_domain}/api-info"
+  fi
+fi
 
 # ── 7. scheduled maintenance + disk headroom ─────────────────────────────────
 step "7/9  Scheduled maintenance + disk headroom"

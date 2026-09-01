@@ -65,8 +65,10 @@ FLEET_CLIENT_CONFIG_DIR=/opt/fleet/client      # the client bundle checkout
 FLEET_ENV_FILE=/etc/fleet/fleet.env            # so config.Load reads this same file
 ```
 
-`fleet env` prints this file (and the web-tier one) with secret values masked,
-and `fleet env edit` opens it in an editor — `$EDITOR`, or an interactive
+`fleet config set-env KEY` upserts one variable as exactly one line (value from
+stdin or a hidden prompt; duplicates removed; `0600` and owner kept) — prefer
+it over hand-editing. `fleet env` prints this file (and the web-tier one) with
+secret values masked, and `fleet env edit` opens it in an editor — `$EDITOR`, or an interactive
 nano/vim/helix pick — restoring the 0600 mode afterwards; see
 [ENV-CLI.md](ENV-CLI.md).
 
@@ -317,9 +319,20 @@ production-only bug. The pass covers, in order:
    (reinstall + `daemon-reload`), and the `/usr/local/bin/fleet` symlink (a
    stale *copy* there shadows every update).
 5. **Configuration** — `/etc/fleet/fleet.env` exists, root-owned `0600`, with
-   `OPENROUTER_API_KEY` + both DB DSNs; `fleet-web.env` permissions.
+   `OPENROUTER_API_KEY` + both DB DSNs; `fleet-web.env` permissions; and the
+   fleet-managed `/etc/caddy/Caddyfile` matches the shipped layout
+   (`scripts/lib/caddyfile.sh`: the `/v1` API, `/api-info`, the A2A agent
+   card and `/triggers/*` to the orchestrator, `/webhooks/*` to chat, the
+   rest to the web tier). A drifted fleet-managed file — typically one written
+   before the API routes shipped, which 404s every API call at the web tier —
+   is rewritten (timestamped backup, `caddy validate`, `systemctl reload
+   caddy`); `--check` reports it; a Caddyfile fleet did not write is never
+   touched (advisory only when it routes no `/v1`).
 6. **Services** — `postgresql` (when a local unit exists), `fleet`,
-   `fleet-web`, `caddy` active; then the `/healthz` + `/readyz` probes.
+   `fleet-web`, `caddy` active; then the `/healthz` + `/readyz` probes, and
+   `https://<domain>/api-info` fetched **through** Caddy (pinned to this box
+   with `--resolve`) — the proof that the API is routed, not just that the
+   process is up.
 7. **Scheduled backups** — `fleet-backup.timer` installed, enabled *and
    active*, and its last run succeeded. A missing timer is an *advisory*, never
    a failure (an operator who backs up at the volume or hypervisor layer is not

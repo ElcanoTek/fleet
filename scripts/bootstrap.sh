@@ -66,7 +66,11 @@
 #                              fleet-web (implies --enable-service). Email+password
 #                              login against the bundle's chat users.
 #   --domain <fqdn>            with --enable-web: front it with Caddy + automatic
-#                              TLS for <fqdn> (installs Caddy, opens 80/443).
+#                              TLS for <fqdn> (installs Caddy, opens 80/443). The
+#                              Caddyfile routes the browser to the web tier and
+#                              the public API (/v1/*, /api-info, the A2A agent
+#                              card, /triggers/*, /webhooks/*) to the Go backends
+#                              (scripts/lib/caddyfile.sh; see deploy/Caddyfile).
 #   --admin <email[,email...]> register these emails as full admins (web login +
 #                              chat-admin + Operations Center) at the end of an
 #                              --enable-service run; passwords are prompted per
@@ -152,6 +156,11 @@ set -euo pipefail
 # from elsewhere). The DB/env/bundle steps still use repo-relative defaults.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+# The fleet-managed Caddyfile: marker, renderer, foreign-file detection. ONE
+# implementation shared with update.sh + doctor.sh so the TLS front's routing
+# cannot drift between the script that writes it and the ones that check it.
+# shellcheck source=lib/caddyfile.sh
+. "$SCRIPT_DIR/lib/caddyfile.sh"
 
 POSTGRES_MODE="local"
 DRY_RUN=0
@@ -365,8 +374,9 @@ gen_pass() { head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24;
 # destroy their vhosts, so we refuse unless --force-caddy, and even then keep a
 # timestamped backup. Checked fail-fast here (before any provisioning work) and
 # again at write time inside deploy_web_tier.
-CADDY_MARKER="# Managed by fleet (scripts/bootstrap.sh) — re-runs overwrite this file."
-caddyfile_is_foreign() { [[ -s /etc/caddy/Caddyfile ]] && ! grep -qF "$CADDY_MARKER" /etc/caddy/Caddyfile; }
+# CADDY_MARKER + caddyfile_is_foreign come from scripts/lib/caddyfile.sh
+# (sourced above); the marker text is stable so every box bootstrap ever
+# provisioned keeps being recognised as fleet-managed.
 if [[ "$ENABLE_WEB" == "1" && -n "$WEB_DOMAIN" && "$FORCE_CADDY" != "1" ]] && caddyfile_is_foreign; then
   if [[ "$DRY_RUN" == "1" ]]; then
     warn "/etc/caddy/Caddyfile exists and was not written by this script — a real run would REFUSE here."
@@ -742,14 +752,17 @@ deploy_web_tier() {
     warn "--force-caddy: OVERWRITING /etc/caddy/Caddyfile — previous config saved to ${caddy_backup}"
     warn "any other sites/vhosts it served are DOWN until you merge them back in and reload caddy."
   fi
-  {
-    printf '%s\n' "$CADDY_MARKER"
-    [[ -n "${FLEET_ACME_EMAIL:-}" ]] && printf '{\n\temail %s\n}\n\n' "$FLEET_ACME_EMAIL"
-    # Security headers mirror the Go backends' securityHeadersMiddleware
-    # (cmd/fleet/tls.go) so the whole origin carries one policy; keep this
-    # block in sync with deploy/Caddyfile.
-    printf '%s {\n\tencode zstd gzip\n\theader {\n\t\tStrict-Transport-Security "max-age=63072000; includeSubDomains"\n\t\tX-Content-Type-Options "nosniff"\n\t\tX-Frame-Options "DENY"\n\t}\n\treverse_proxy 127.0.0.1:3000 {\n\t\tflush_interval -1\n\t\ttransport http {\n\t\t\tread_timeout 30m\n\t\t}\n\t}\n}\n' "$WEB_DOMAIN"
-  } > /etc/caddy/Caddyfile
+  # One renderer (scripts/lib/caddyfile.sh) writes the whole file: the web
+  # tier as the default upstream, the public API (/v1/*, /api-info, the A2A
+  # agent card, /triggers/*) to the orchestrator and /webhooks/* to the chat
+  # listener, with the Next-proxy header-trust channel stripped on both. The
+  # upstream addresses follow the env file when an operator moved a listener.
+  render_fleet_caddyfile "$WEB_DOMAIN" "${FLEET_ACME_EMAIL:-}" \
+    "$(env_get FLEET_SERVER_ADDR)" "$(env_get FLEET_ORCHESTRATOR_ADDR)" \
+    > /etc/caddy/Caddyfile
+  if command -v caddy >/dev/null 2>&1 && ! caddy validate --adapter caddyfile --config /etc/caddy/Caddyfile >/dev/null 2>&1; then
+    warn "caddy validate rejected the rendered /etc/caddy/Caddyfile — check: caddy validate --adapter caddyfile --config /etc/caddy/Caddyfile"
+  fi
   if command -v firewall-cmd >/dev/null 2>&1; then
     firewall-cmd --add-service=http --add-service=https --permanent >/dev/null 2>&1 || true
     firewall-cmd --reload >/dev/null 2>&1 || true
@@ -760,9 +773,19 @@ deploy_web_tier() {
   if id caddy >/dev/null 2>&1 && [[ ! -d /var/lib/caddy ]]; then
     install -d -o caddy -g caddy -m 0700 /var/lib/caddy
   fi
-  systemctl enable --now caddy >/dev/null 2>&1 || true
+  # `enable --now` is a no-op on an already-running caddy, so a re-run that
+  # rewrote the Caddyfile (a routing fix, a new domain) must RELOAD it too —
+  # otherwise the old config keeps serving and "the API isn't routing" survives
+  # the very bootstrap that fixed it.
+  systemctl enable caddy >/dev/null 2>&1 || true
+  if systemctl is-active --quiet caddy; then
+    systemctl reload caddy >/dev/null 2>&1 || systemctl restart caddy >/dev/null 2>&1 || true
+  else
+    systemctl start caddy >/dev/null 2>&1 || true
+  fi
   if systemctl is-active caddy >/dev/null 2>&1; then
     ok "caddy serving https://${WEB_DOMAIN} (Let's Encrypt; requires inbound 80/443 reachable)"
+    ok "  browser → web tier (:3000); /v1/*, /api-info, agent card, /triggers/* → orchestrator; /webhooks/* → chat (X-API-Key / signed webhooks only — header-trust stripped)"
   else
     warn "caddy not active — check: journalctl -u caddy -n 50"
   fi
@@ -1572,6 +1595,7 @@ if [[ "$ENABLE_WEB" == "1" ]]; then
     info "[dry-run] would ensure FLEET_SERVER_TOKEN + ADMIN_API_KEY in ${ENV_FILE} (generate-if-absent) + reload backend."
     if [[ -n "$WEB_DOMAIN" ]]; then
       info "[dry-run] would build web/ for https://${WEB_DOMAIN} → /opt/fleet/web, write fleet-web.env, enable fleet-web, install Caddy + open 80/443."
+      info "[dry-run] would write /etc/caddy/Caddyfile from scripts/lib/caddyfile.sh: https://${WEB_DOMAIN} → web tier (127.0.0.1:3000); /v1/*, /api-info, /.well-known/agent-card.json, /a2a, /triggers/* → orchestrator (127.0.0.1:8000); /webhooks/* → chat (127.0.0.1:8080); then reload caddy (an already-running caddy is reloaded, not just enabled)."
     else
       info "[dry-run] would build web/ for http://localhost:3000 → /opt/fleet/web, write fleet-web.env, enable fleet-web (loopback only; no --domain → no Caddy)."
     fi

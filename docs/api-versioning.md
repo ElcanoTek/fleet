@@ -59,6 +59,36 @@ compatibility.
 Clients MUST tolerate unknown response fields (a non-breaking addition must not
 break them).
 
+## Reaching the API through the TLS front
+
+On the single-box install the Go listeners bind loopback (chat
+`127.0.0.1:8080`, orchestrator `127.0.0.1:8000`) and Caddy is the only thing
+on `:443`. The fleet-managed Caddyfile (`scripts/lib/caddyfile.sh`, reference
+copy in `deploy/Caddyfile`) routes the public API past the Next.js web tier:
+
+| Public path | Upstream | Why it is exposed |
+|---|---|---|
+| `/v1`, `/v1/*` | orchestrator | the versioned surface — every `openapi.yaml` route |
+| `/api-info` | orchestrator | version discovery, unversioned forever |
+| `/.well-known/agent-card.json`, `/a2a`, `/a2a/*` | orchestrator | A2A discovery + JSON-RPC ([A2A.md](A2A.md)) |
+| `/triggers/*` | orchestrator | webhook + email task triggers ([EVENT-TRIGGERS.md](EVENT-TRIGGERS.md)) |
+| `/webhooks/*` | chat | GitHub/Slack-signed inbound webhooks ([WEBHOOKS.md](WEBHOOKS.md)) |
+| everything else | Next.js web tier | pages, `/_next/*`, Next's own `/api/*` proxy |
+
+So `https://<domain>/v1/tasks` with `X-API-Key` is the supported way in;
+the **legacy bare paths are not routed publicly** (`https://<domain>/tasks`
+reaches the web app, not the orchestrator) — they are reachable only from the
+box, which is one more reason to migrate to `/v1`. Both backend routes strip
+the Next-proxy header-trust headers (`X-User-Email`, `X-User-Session-Epoch`,
+`X-Orchestrator-Server-Token` / `X-Chat-Server-Token`), so `X-API-Key` and the
+webhook signatures are the only public authentication paths
+([ADR-0053](adr/0053-public-api-through-the-tls-front.md)).
+
+If `curl https://<domain>/api-info` returns the web app's HTML 404 instead of
+the JSON above, the box is running a Caddyfile that predates these routes:
+`sudo fleet doctor` rewrites a fleet-managed one (and probes `/api-info`
+through Caddy afterwards); `sudo fleet update --adopt-units` does the same.
+
 ## Not yet implemented (honest scope)
 
 - **A `Sunset` date** on the legacy bare paths: the issue's plan is `Sunset:

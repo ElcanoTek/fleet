@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ElcanoTek/fleet/internal/creds"
 )
 
 // writeTestEnvFile writes an env file into a temp dir and returns its path.
@@ -247,6 +249,38 @@ func TestEnvEdit_TrueEditor(t *testing.T) {
 		}
 		if fi.Mode().Perm() != 0o600 {
 			t.Fatalf("mode = %o, want 0600 restored after the editor loosened it", fi.Mode().Perm())
+		}
+	})
+	t.Run("editor that saves via rename keeps mode and owner", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "fleet.env")
+		if err := os.WriteFile(path, []byte("A=1\n"), 0o600); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		before, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("stat: %v", err)
+		}
+		// vim's default save: write a sibling, rename over the original — a new
+		// inode with the editor's umask mode and the editor's uid.
+		script := filepath.Join(dir, "editor.sh")
+		if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf 'A=1\\nB=2\\n' > \"$1.new\"\nchmod 644 \"$1.new\"\nmv \"$1.new\" \"$1\"\n"), 0o700); err != nil {
+			t.Fatalf("write script: %v", err)
+		}
+		if code := envEdit([]string{"--env-file", path, "--editor", script}); code != 0 {
+			t.Fatalf("envEdit = %d, want 0", code)
+		}
+		after, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("stat: %v", err)
+		}
+		if after.Mode().Perm() != 0o600 {
+			t.Fatalf("mode = %o, want 0600 after a rename-save", after.Mode().Perm())
+		}
+		bu, bg, _ := creds.FileOwner(before)
+		au, ag, _ := creds.FileOwner(after)
+		if bu != au || bg != ag {
+			t.Fatalf("owner changed %d:%d → %d:%d across the edit", bu, bg, au, ag)
 		}
 	})
 	t.Run("failing editor is an error", func(t *testing.T) {
