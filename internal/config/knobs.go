@@ -175,6 +175,9 @@ var envKnobs = []envKnob{
 	{key: "FLEET_SCHED_DB_MAX_CONN_IDLE_TIME", fleet: true, kind: kindDuration},
 	{key: "FLEET_SCHED_DB_MAX_CONN_LIFETIME", fleet: true, kind: kindDuration},
 	{key: "FLEET_SCHED_DB_CONNECT_TIMEOUT", fleet: true, kind: kindDuration},
+	// min 1: a zero tick would spin the due-task scan; "as fast as possible"
+	// is 1s, and the production default (30s) lives at the getenv site.
+	{key: "FLEET_SCHED_TICK_SECONDS", fleet: true, kind: kindInt, min: bound(1)},
 
 	// ── LLM (shared) ── bounds on the four hot-reloadable ceilings match
 	// reload.go, so boot and reload agree (#1119).

@@ -789,6 +789,7 @@ func run() error {
 
 	// ── scheduler ticker (promote scheduled→pending + recover leases) ──
 	sch := scheduler.New(schedStorage, timezone())
+	sch.SetTickInterval(cfg.SchedTickSeconds)
 	// Automatic run-history retention (#252): a daily sweep prunes old terminal
 	// runs, always keeping the most recent KeepRunsPerTask per task. Off when
 	// RunLogRetentionDays<=0.
@@ -892,9 +893,14 @@ func run() error {
 	// The pool reuses the task-completion notifier (#208) built above (it now
 	// also carries the budget gate's soft-limit alerts, #601 part 2).
 	pool := runner.NewPool(schedStorage, taskRunner, runner.Config{
-		Limiter:       agentLimiter,
-		DrainGrace:    poolGrace,
-		Notifier:      taskNotifier,
+		Limiter:    agentLimiter,
+		DrainGrace: poolGrace,
+		Notifier:   taskNotifier,
+		// FLEET_SCHED_TICK_SECONDS drives both scheduling cadences: the
+		// scheduler's promote/recover tick (SetTickInterval above) and this
+		// pool's idle claim poll — one dial for "how fast the engine notices
+		// due work". Default 30s each.
+		PollInterval:  time.Duration(cfg.SchedTickSeconds) * time.Second,
 		PublicURLBase: os.Getenv("FLEET_PUBLIC_URL"),
 		// Post-failure error-recovery diagnosis (#317): the interactive Manager
 		// doubles as the runner's ErrorAnalyzer (it has the host-side resolver +

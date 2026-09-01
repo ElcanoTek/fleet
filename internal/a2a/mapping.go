@@ -186,38 +186,25 @@ func agentMessage(taskID, slot, text string) *wire.Message {
 	}
 }
 
-// BuildArtifacts renders a terminal task's outputs as A2A artifacts:
+// BuildArtifacts renders a terminal task's outputs as A2A artifacts, primary
+// deliverables first:
 //
+//   - one artifact per PUBLISHED workspace file (the run's explicit
+//     deliverables), as a URL part pointing at the AUTHENTICATED workspace
+//     endpoint (same X-API-Key the caller already holds; the URL is not a
+//     bearer capability);
+//   - "output": the schema-validated structured result, as a data part;
 //   - "result": the free-form final answer (success only — on cancel the
 //     Result column holds the stop attribution, which statusMessage carries),
-//     as a text part.
-//   - "output": the schema-validated structured result, as a data part.
-//   - one artifact per published workspace file, as a URL part pointing at
-//     the AUTHENTICATED workspace endpoint (same X-API-Key the caller already
-//     holds; the URL is not a bearer capability).
+//     as a text part, LAST: it is fleet's synthesized supplement, and the
+//     runner substitutes a boilerplate value when the run ends without final
+//     text, so it must never displace an explicitly published deliverable
+//     from the front of the list.
 //
 // Artifact ids are stable, not random: repeated reads of the same task must
 // describe the same artifacts.
 func BuildArtifacts(t *models.Task, publicBaseURL string) []*wire.Artifact {
 	var out []*wire.Artifact
-	if t.Status == models.TaskStatusSuccess && t.Result != nil && strings.TrimSpace(*t.Result) != "" {
-		out = append(out, &wire.Artifact{
-			ID:    "result",
-			Name:  "result",
-			Parts: wire.ContentParts{&wire.Part{Content: wire.Text(*t.Result), MediaType: "text/plain"}},
-		})
-	}
-	if len(t.OutputJSON) > 0 {
-		var decoded any
-		if err := json.Unmarshal(t.OutputJSON, &decoded); err == nil {
-			out = append(out, &wire.Artifact{
-				ID:          "output",
-				Name:        "output",
-				Description: "Structured output validated against the task's declared output_schema.",
-				Parts:       wire.ContentParts{&wire.Part{Content: wire.Data{Value: decoded}, MediaType: "application/json"}},
-			})
-		}
-	}
 	var files []models.TaskArtifact
 	if len(t.Artifacts) > 0 {
 		// Best-effort: an unparsable manifest yields no file artifacts rather
@@ -239,6 +226,24 @@ func BuildArtifacts(t *models.Task, publicBaseURL string) []*wire.Artifact {
 			}},
 		})
 	}
+	if len(t.OutputJSON) > 0 {
+		var decoded any
+		if err := json.Unmarshal(t.OutputJSON, &decoded); err == nil {
+			out = append(out, &wire.Artifact{
+				ID:          "output",
+				Name:        "output",
+				Description: "Structured output validated against the task's declared output_schema.",
+				Parts:       wire.ContentParts{&wire.Part{Content: wire.Data{Value: decoded}, MediaType: "application/json"}},
+			})
+		}
+	}
+	if t.Status == models.TaskStatusSuccess && t.Result != nil && strings.TrimSpace(*t.Result) != "" {
+		out = append(out, &wire.Artifact{
+			ID:    "result",
+			Name:  "result",
+			Parts: wire.ContentParts{&wire.Part{Content: wire.Text(*t.Result), MediaType: "text/plain"}},
+		})
+	}
 	return out
 }
 
@@ -257,10 +262,17 @@ func workspaceFileURL(base, taskID, p string) string {
 
 // mediaTypeFor guesses a published file's media type from its extension,
 // defaulting to application/octet-stream. Only the extension is consulted —
-// the file body stays in the workspace and is never read here.
+// the file body stays in the workspace and is never read here. Parameters
+// (";" onward — Go's mime table appends "; charset=utf-8" to text types) are
+// stripped: the A2A Part.mediaType is a plain media type, and receivers (the
+// official TCK included) compare it exactly.
 func mediaTypeFor(name string) string {
-	if mt := mime.TypeByExtension(filepath.Ext(name)); mt != "" {
-		return mt
+	mt := mime.TypeByExtension(filepath.Ext(name))
+	if mt == "" {
+		return "application/octet-stream"
 	}
-	return "application/octet-stream"
+	if i := strings.IndexByte(mt, ';'); i >= 0 {
+		mt = strings.TrimSpace(mt[:i])
+	}
+	return mt
 }

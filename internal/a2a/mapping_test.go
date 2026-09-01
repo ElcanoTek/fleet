@@ -133,8 +133,9 @@ func TestBuildArtifactsForASuccessfulTask(t *testing.T) {
 	if len(arts) != 3 {
 		t.Fatalf("got %d artifacts, want 3 (result, output, file): %+v", len(arts), arts)
 	}
-	if arts[0].ID != "result" || arts[0].Parts[0].Text() != result {
-		t.Errorf("result artifact wrong: %+v", arts[0])
+	// Published deliverables lead; the synthesized result artifact is LAST.
+	if arts[2].ID != "result" || arts[2].Parts[0].Text() != result {
+		t.Errorf("result artifact wrong: %+v", arts[2])
 	}
 	if arts[1].ID != "output" {
 		t.Errorf("output artifact wrong id: %+v", arts[1])
@@ -142,7 +143,7 @@ func TestBuildArtifactsForASuccessfulTask(t *testing.T) {
 	if data, ok := arts[1].Parts[0].Data().(map[string]any); !ok || data["total"] != float64(42) {
 		t.Errorf("output artifact should carry the decoded JSON, got %#v", arts[1].Parts[0].Data())
 	}
-	file := arts[2]
+	file := arts[0]
 	if file.ID != "file:reports/q3 report.pdf" || file.Name != "q3 report.pdf" || file.Description != "the report" {
 		t.Errorf("file artifact metadata wrong: %+v", file)
 	}
@@ -152,6 +153,14 @@ func TestBuildArtifactsForASuccessfulTask(t *testing.T) {
 	}
 	if file.Parts[0].MediaType != "application/pdf" {
 		t.Errorf("media type = %q, want application/pdf", file.Parts[0].MediaType)
+	}
+	// Parameter stripping: Go's mime table returns "text/plain; charset=utf-8"
+	// for .txt, but the wire mediaType must be the bare type.
+	txtTask := testTask(models.TaskStatusSuccess)
+	txtTask.Artifacts = json.RawMessage(`[{"name":"output.txt","path":"output.txt","size":5}]`)
+	txtArts := BuildArtifacts(txtTask, "")
+	if len(txtArts) != 1 || txtArts[0].Parts[0].MediaType != "text/plain" {
+		t.Errorf("mediaType must be parameter-free, got %+v", txtArts)
 	}
 
 	// The stop-attribution reuse of Result must NOT become a "result" artifact.

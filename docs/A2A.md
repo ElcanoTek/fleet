@@ -250,10 +250,49 @@ that lock the mounting.
 
 The official Python TCK (`a2aproject/a2a-tck`) runs locally against a live
 server via `scripts/a2a-tck.sh` (uv + a pinned TCK commit;
-`--transport jsonrpc --level must`). It is not a CI job in Phase 1: it needs
-a Python toolchain and a booted server, and its own spec pin (v1.0.0) trails
-the one this implementation uses. Run it before releases that touch the A2A
-surface and attach `reports/compatibility.json` to the PR.
+`--transport jsonrpc --level must`), through **`scripts/a2a-tck-shim`** — a
+loopback reverse proxy the rig needs for two TCK assumptions fleet does not
+share: the TCK sends no credentials (the shim injects the X-API-Key), and it
+drives SUT task scenarios via `messageId` prefixes (`tck-complete-task-*`
+must genuinely complete, `tck-input-required-*` must park awaiting input) —
+a convention written for a2a-native servers whose executors see the Message
+object. Fleet's adapter deliberately gives the model only the message text,
+so the shim appends the matching `[[scenario:…]]` marker to the text and
+`cmd/fake-llm`'s `tck-complete`/`tck-ask`/`tck-artifact-*` scenarios do the
+rest (a real `confirm_audit` clears the scheduled finish gate; a real `ask`
+call parks the task; a real bash + `publish_artifact` produces the file the
+artifact tests inspect). All of that is harness territory — the engine
+special-cases nothing.
+
+Timing matters: the TCK inspects the **blocking send's own response**, never a
+re-fetch, so a scenario run must finish inside `FLEET_A2A_UNARY_WAIT_SECONDS`
+(25 in the rig — under the TCK client's 30s read timeout) — which is why the
+rig also sets `FLEET_SCHED_TICK_SECONDS=2`: at the production default both
+scheduling loops (the scheduler tick and the worker pool's claim poll) add up
+to 30s of dispatch latency before the run even starts, turning every
+scenario test into a coin flip.
+
+It is not a CI job: it needs a Python toolchain and a booted rig, and its own
+spec pin (v1.0.0) trails the one this implementation uses. Run it before
+releases that touch the A2A surface and attach `reports/compatibility.json`
+to the PR.
+
+Known not-green-by-construction TCK items, so a future run's failures can be
+told apart from regressions:
+
+- **CORE-SEND-003, CORE-MULTI-002a** — upstream TCK bugs (reports pending):
+  their requirement specs lack an `expected_error` binding, so the
+  spec-mandated error response fleet returns is scored "Operation failed".
+- **`tck-artifact-data`** — wants a DataPart artifact; fleet's A2A artifacts
+  are the run's real deliverables (files + result text) and no honest
+  scheduled run produces a bare structured-data artifact today. Skipping the
+  scenario means the test fails rather than fabricating engine output.
+- **Message-response test** — fleet always answers `SendMessage` with a Task
+  (every A2A call is a governed run; spec-legal — Task-or-Message is the
+  server's choice), so a test demanding a bare Message reply fails.
+- **Two raw-httpx probes** (extensions header echo, wrong-content-type
+  rejection) use a hardcoded 5s client timeout that a blocking unary send
+  legitimately exceeds.
 
 ## Not a reopening of #183/#290
 
