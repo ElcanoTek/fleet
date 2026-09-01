@@ -190,11 +190,13 @@ func (m *Manager) ReloadMCPServers(ctx context.Context, newSpecs map[string]MCPS
 	// new catalog paired with the previous roster or account metadata.
 	roster := computeMCPToolRosterFromCatalog(catalog, allow)
 	metadata := buildOptionalServerMetadataFromCatalog(newSpecs, catalog, accounts)
+	alwaysOnMetadata := buildAlwaysOnServerMetadataFromCatalog(newSpecs, catalog, accounts)
 	m.mcpGatingMu.Lock()
 	m.mcpCatalog = catalog
 	m.mcpAccounts = accounts
 	m.mcpToolRoster = roster
 	m.optionalServerMetadata = metadata
+	m.alwaysOnServerMetadata = alwaysOnMetadata
 	m.mcpGatingMu.Unlock()
 
 	return summary, nil
@@ -227,6 +229,7 @@ func (m *Manager) reloadInjectedMCP(ctx context.Context) (*mcp.ReloadSummary, er
 	accounts := cloneMCPAccounts(result.Accounts)
 	roster := computeMCPToolRosterFromCatalog(catalog, allow)
 	metadata := buildOptionalServerMetadataFromCatalog(result.Specs, catalog, accounts)
+	alwaysOnMetadata := buildAlwaysOnServerMetadataFromCatalog(result.Specs, catalog, accounts)
 	summary := &mcp.ReloadSummary{
 		Added:     append([]string(nil), result.Summary.Added...),
 		Removed:   append([]string(nil), result.Summary.Removed...),
@@ -241,6 +244,7 @@ func (m *Manager) reloadInjectedMCP(ctx context.Context) (*mcp.ReloadSummary, er
 	m.mcpAccounts = accounts
 	m.mcpToolRoster = roster
 	m.optionalServerMetadata = metadata
+	m.alwaysOnServerMetadata = alwaysOnMetadata
 	m.mcpGatingMu.Unlock()
 	return summary, nil
 }

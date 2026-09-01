@@ -437,25 +437,28 @@ var allowedEnvVars = map[string]bool{
 	"FLEET_CONNECTOR_RECOMMENDATIONS_ENABLED":    true,
 
 	// ── A2A protocol server (#1279) ──
-	"FLEET_A2A_ENABLED": true,
-	"FLEET_A2A_PERSONA": true,
-	"FLEET_A2A_MODEL":   true,
+	"FLEET_A2A_ENABLED":            true,
+	"FLEET_A2A_PUSH_ALLOW_PRIVATE": true,
+	"FLEET_A2A_UNARY_WAIT_SECONDS": true,
+	"FLEET_A2A_PERSONA":            true,
+	"FLEET_A2A_MODEL":              true,
 
-	"FLEET_SANDBOX_MEMORY":           true,
-	"FLEET_SANDBOX_CPUS":             true,
-	"FLEET_SANDBOX_PIDS":             true,
-	"FLEET_SANDBOX_KATA_OVERHEAD_MB": true,
-	"FLEET_SANDBOX_DISK_GB":          true,
-	"FLEET_SANDBOX_MEMORY_MAX_MB":    true,
-	"FLEET_SANDBOX_CPUS_MAX":         true,
-	"FLEET_SANDBOX_PIDS_MAX":         true,
-	"FLEET_SANDBOX_WARM_SIZE":        true,
-	"FLEET_SANDBOX_WARM_TTL":         true,
-	"FLEET_PYTHON_REPL_MODE":         true,
-	"FLEET_PYTHON_CELL_TIMEOUT":      true,
-	"FLEET_PYTHON_REPL_IDLE_TTL":     true,
-	"FLEET_PYTHON_REPL_MAX":          true,
-	"FLEET_WORKSPACE_ROOT":           true,
+	"FLEET_SANDBOX_MEMORY":                true,
+	"FLEET_SANDBOX_CPUS":                  true,
+	"FLEET_SANDBOX_PIDS":                  true,
+	"FLEET_SANDBOX_START_TIMEOUT_SECONDS": true,
+	"FLEET_SANDBOX_KATA_OVERHEAD_MB":      true,
+	"FLEET_SANDBOX_DISK_GB":               true,
+	"FLEET_SANDBOX_MEMORY_MAX_MB":         true,
+	"FLEET_SANDBOX_CPUS_MAX":              true,
+	"FLEET_SANDBOX_PIDS_MAX":              true,
+	"FLEET_SANDBOX_WARM_SIZE":             true,
+	"FLEET_SANDBOX_WARM_TTL":              true,
+	"FLEET_PYTHON_REPL_MODE":              true,
+	"FLEET_PYTHON_CELL_TIMEOUT":           true,
+	"FLEET_PYTHON_REPL_IDLE_TTL":          true,
+	"FLEET_PYTHON_REPL_MAX":               true,
+	"FLEET_WORKSPACE_ROOT":                true,
 	// Lockdown reads through the FLEET_ alias chain (#1080); the CHAT_
 	// spellings stay allowlisted so existing env files keep sealing.
 	"FLEET_LOCKDOWN_ONLY":           true,
@@ -1146,6 +1149,19 @@ type Config struct {
 	// the orchestrator. FLEET_A2A_ENABLED, default false — the routes stay
 	// registered and answer 501 when off (docs/A2A.md).
 	A2AEnabled bool
+	// A2APushAllowPrivate relaxes the SSRF dial guard on A2A push-notification
+	// deliveries (#1279 Phase 2) so loopback/private webhook receivers work —
+	// needed for development and official-TCK conformance runs, whose receiver
+	// listens on localhost. FLEET_A2A_PUSH_ALLOW_PRIVATE, default false;
+	// redirects stay refused even when set. Leave it off in production: push
+	// URLs are CALLER-supplied.
+	A2APushAllowPrivate bool
+	// A2AUnaryWaitSeconds bounds how long a blocking unary A2A SendMessage
+	// (returnImmediately unset — the spec default) waits for the task outcome
+	// before answering with the freshest snapshot. FLEET_A2A_UNARY_WAIT_SECONDS,
+	// default 1800 (30 minutes: task queue plus a real agent run); minimum 1.
+	// Callers that cannot wait pass returnImmediately: true.
+	A2AUnaryWaitSeconds int
 	// A2APersona / A2AModel pin what every A2A-created task runs with — operator
 	// policy, never caller choice, the same posture as webhook triggers
 	// (docs/EVENT-TRIGGERS.md). Empty inherits the deployment's task defaults.
@@ -1169,6 +1185,15 @@ type Config struct {
 	SandboxMemory string
 	SandboxCPUs   string
 	SandboxPids   int
+	// SandboxStartTimeoutSeconds bounds ONE sandbox start
+	// (FLEET_SANDBOX_START_TIMEOUT_SECONDS, #1358): the `podman run` that
+	// creates a container, or — under FLEET_SANDBOX_BACKEND=kubernetes — one
+	// pod's schedule+pull+start. 0 (unset) keeps each backend's default (30s
+	// podman / 2m kubernetes). The escape hatch for boxes where even prepared
+	// starts are slow; the routine cause of a slow FIRST start (the one-time
+	// keep-id id-remapped image copy after an image update) is paid up front
+	// by the boot pre-warm instead, so most deployments never need this.
+	SandboxStartTimeoutSeconds int
 	// Per-task override ceilings (#205): a scheduled task's SandboxLimits may
 	// raise its container above the global SandboxMemory/CPUs/Pids, but never
 	// past these operator-set maxima. 0 = no ceiling (any override accepted).
@@ -1665,14 +1690,18 @@ func Load(envFile string) (*Config, error) {
 
 		// A2A protocol server (#1279) — optional, default off; the routes
 		// answer 501 until enabled.
-		A2AEnabled: lp.getenvFleetBool("A2A_ENABLED", false),
-		A2APersona: strings.TrimSpace(getenvFleet("A2A_PERSONA")),
-		A2AModel:   strings.TrimSpace(getenvFleet("A2A_MODEL")),
+		A2AEnabled:          lp.getenvFleetBool("A2A_ENABLED", false),
+		A2APushAllowPrivate: lp.getenvFleetBool("A2A_PUSH_ALLOW_PRIVATE", false),
+		A2AUnaryWaitSeconds: lp.getenvFleetInt("A2A_UNARY_WAIT_SECONDS", 1800),
+		A2APersona:          strings.TrimSpace(getenvFleet("A2A_PERSONA")),
+		A2AModel:            strings.TrimSpace(getenvFleet("A2A_MODEL")),
 
 		SandboxMemory: getenvFleet("SANDBOX_MEMORY"),
 		SandboxCPUs:   getenvFleet("SANDBOX_CPUS"),
 		SandboxPids:   lp.getenvInt("FLEET_SANDBOX_PIDS", 0),
 		SandboxDiskGB: lp.getenvInt("FLEET_SANDBOX_DISK_GB", 0),
+		// 0 = unset sentinel: each backend applies its own default (#1358).
+		SandboxStartTimeoutSeconds: lp.getenvInt("FLEET_SANDBOX_START_TIMEOUT_SECONDS", 0),
 		// Per-task override ceilings (#205).
 		SandboxMemoryMaxMB:    lp.getenvFleetInt("SANDBOX_MEMORY_MAX_MB", 8192),
 		SandboxCPUsMax:        lp.getenvFleetFloat("SANDBOX_CPUS_MAX", 16.0),

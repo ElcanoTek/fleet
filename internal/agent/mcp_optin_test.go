@@ -91,6 +91,41 @@ func TestBuildOptionalServerMetadata_UsesInjectedPublicCatalogAndAccounts(t *tes
 	}
 }
 
+func TestBuildAlwaysOnServerMetadata_ReflectsLiveDiscoveryStatus(t *testing.T) {
+	specs := map[string]MCPServerSpec{
+		"email": {
+			Enabled:       true,
+			DisplayName:   "Email",
+			Description:   "Inbound reports",
+			ToolAllowlist: []string{"search"},
+		},
+		"broken":   {Enabled: true},
+		"optional": {Enabled: true, Optional: true},
+	}
+	catalog := []mcp.ServerTool{
+		{ServerName: "email", Tool: mcp.Tool{Name: "search"}},
+		{ServerName: "email", Tool: mcp.Tool{Name: "admin_only"}},
+		{ServerName: "optional", Tool: mcp.Tool{Name: "lookup"}},
+	}
+	got := buildAlwaysOnServerMetadataFromCatalog(specs, catalog, map[string][]string{
+		"email": {"backup"},
+	})
+	if len(got) != 2 {
+		t.Fatalf("always-on catalog = %+v, want email and broken only", got)
+	}
+	byName := map[string]AlwaysOnServerInfo{}
+	for _, info := range got {
+		byName[info.Name] = info
+	}
+	if email := byName["email"]; !email.Available || email.ToolCount != 1 ||
+		email.DisplayName != "Email" || len(email.Accounts) != 1 || email.Accounts[0] != "backup" {
+		t.Fatalf("live email status = %+v", email)
+	}
+	if broken := byName["broken"]; broken.Available || broken.ToolCount != 0 {
+		t.Fatalf("failed always-on connector was painted available: %+v", broken)
+	}
+}
+
 func TestMCPServerCatalog_ReturnsSnapshot(t *testing.T) {
 	// Catalog exposes the exact snapshot built at Manager.New(). Test
 	// that mutating the returned slice doesn't leak back into the

@@ -40,6 +40,9 @@ answer `501 {"error":"a2a_disabled"}`. Optional operator policy:
 | `FLEET_A2A_ENABLED` | Serve the A2A card + JSON-RPC endpoint (bool, default false, malformed value refuses boot) |
 | `FLEET_A2A_PERSONA` | Bundle persona every A2A-created task runs with (empty = deployment default) |
 | `FLEET_A2A_MODEL` | Model every A2A-created task runs with (empty = deployment default) |
+| `FLEET_MCP_OAUTH_ENCRYPTION_KEY` | The store cipher (docs/NOTIFICATIONS.md); required for push notifications — caller webhook secrets are sealed at rest, so without it the card declares `pushNotifications: false` and the push methods answer `-32003` |
+| `FLEET_A2A_PUSH_ALLOW_PRIVATE` | Relax the push SSRF dial guard so loopback/private webhook receivers work (bool, default false) — for dev and TCK conformance runs only; redirects stay refused |
+| `FLEET_A2A_UNARY_WAIT_SECONDS` | How long a blocking unary `SendMessage` (the spec default) waits for the task outcome before answering with the freshest snapshot (int seconds, min 1, default 1800) |
 
 Persona, model, ceilings, connectors: **operator policy, never caller
 choice** — the same posture as webhook triggers (`docs/EVENT-TRIGGERS.md`).
@@ -57,7 +60,11 @@ callers reach the orchestrator at the same origin they fetched the card from).
   with `ETag`/`Cache-Control`.
 - `POST /a2a` (canonically `/v1/a2a`) — the JSON-RPC 2.0 binding. Streaming
   methods answer `text/event-stream` where every `data:` line is a complete
-  JSON-RPC envelope reusing the request id.
+  JSON-RPC envelope reusing the request id. The trailing-slash form
+  (`/v1/a2a/`) is accepted too: httpx-based clients (the official TCK
+  included) resolve the card's interface URL as a base and POST to
+  `<url>/`, and exact-match routing 404'd them until the first TCK run
+  caught it.
 
 Requests must carry `A2A-Version: 1.0`. Spec §3.6.2 is implemented
 literally: an absent header means protocol 0.3 and is refused with
@@ -87,11 +94,48 @@ body carries (a readonly key must be able to `GetTask` through a POST).
 | `ListTasks` | `GET /tasks` with the same SQL-side visibility filter; cursor pagination (`pageToken`), `nextPageToken` always present (`""` at the end) |
 | `CancelTask` | `CancelTaskAtomic` + the live-run stopper (#508); idempotent on an already-cancelled task, `-32002` on other terminal states |
 | `SubscribeToTask` | the task-row watcher; `-32004` if the task is already terminal (the result is `GetTask`'s to serve) |
-| push-config methods | `-32003` (declared off, Phase 2) |
-| `GetExtendedAgentCard` | `-32004` (declared off, Phase 2) |
+| push-config methods | `a2a_push_configs` storage (migration 066) — sealed caller secrets, client-supplied ids honored; `-32003` while the store cipher is unset |
+| `GetExtendedAgentCard` | the authenticated card: the public card plus the operator-pinned persona/model policy and richer skill examples (auth is the 401-before-dispatch; declared-but-unconfigured answers `-32007`) |
 
 Unknown/invisible tasks answer `-32001 TaskNotFound` — never 403 — so task
 existence doesn't leak across keys (A2A §3.3.2 and ADR-0043 agree here).
+
+### Push notifications
+
+Registering a `TaskPushNotificationConfig` (the four CRUD methods, or inline
+on `SendMessage` via `configuration.taskPushNotificationConfig`) subscribes a
+webhook to the task's caller-visible state changes. Semantics, all
+deliberate:
+
+- **The push is a doorbell, not a data channel** — the spec's own async
+  guidance is that receivers re-fetch via `GetTask` on notification. Each
+  delivery POSTs one `StreamResponse`-wrapped `statusUpdate`
+  (`Content-Type: application/a2a+json`), with the config's `authentication`
+  rendered VERBATIM as `Authorization: {scheme} {credentials}` and the
+  `token` carried in both de-facto header spellings
+  (`X-A2A-Notification-Token` and `A2A-Notification-Token`).
+- **The task row is the event source**, scanned once a second — the same
+  source the SSE streams poll. A registration announces the task's current
+  state first, then each observed transition. Sub-second flaps collapse into
+  the net change; duplicates can occur around a crash. Both are spec-legal
+  ("duplicate deliveries may occur"; at-least-once ATTEMPT is the only MUST).
+- **One attempt, no retry** (spec: retry is a MAY). A dead receiver misses a
+  doorbell ring, not the state — `GetTask` always has the truth.
+- **Caller secrets are sealed at rest** (`internal/secretbox`, AAD-bound to
+  the config row) under the store cipher; without
+  `FLEET_MCP_OAUTH_ENCRYPTION_KEY` the capability is off, fail-closed.
+- **SSRF posture**: webhook URLs are CALLER-supplied, so delivery dials
+  through the resolved-IP guard (loopback/private/link-local refused, every
+  redirect refused). `FLEET_A2A_PUSH_ALLOW_PRIVATE=1` relaxes the dial guard
+  for dev/TCK runs against localhost receivers — never production.
+- Configs are creatable on terminal tasks, persist until task deletion or
+  explicit delete (`ON DELETE CASCADE`), and a repeated create for the same
+  client id is an update. Reads/writes require the task's creator or an
+  operator credential; pagination params on List are accepted and ignored
+  (spec MAY — the reference implementation does the same).
+- The dispatcher also accepts the official TCK's snake_case param spellings
+  (`task_id`, `page_size`, …) alongside the spec's camelCase — the TCK sends
+  snake_case despite the spec's own §5.5.
 Every A2A error carries the spec-required `google.rpc.ErrorInfo` detail
 (`error.data` is an array of `@type`-tagged objects; `domain:
 "a2a-protocol.org"`).
@@ -111,6 +155,14 @@ ADR-0051.
 | `running` | `TASK_STATE_WORKING` |
 | `paused_awaiting_wake` | `TASK_STATE_WORKING` (A2A has no "sleeping"; the caller needs to do nothing) |
 | `paused_awaiting_input` | `TASK_STATE_INPUT_REQUIRED` — `status.message` carries the question; answer by `SendMessage` with the same `taskId` |
+
+contextId rules (spec §3.4): fleet's contexts are 1:1 with tasks
+(`contextId == taskId` by construction), so a client-provided `contextId` on
+a NEW message is rejected with `-32602` (§3.4.1: an unacceptable context MUST
+be rejected, never silently replaced with a generated one), a follow-up's
+`contextId` is accepted exactly when it matches the task's own (mismatches
+error, §3.4.3), and an omitted `contextId` on a follow-up is inferred from
+the task.
 | `success` | `TASK_STATE_COMPLETED` |
 | `error` / `dead_lettered` | `TASK_STATE_FAILED` (retry exhaustion is an implementation detail) |
 | `cancelled` | `TASK_STATE_CANCELED` — `status.message` carries the stop attribution |
@@ -160,11 +212,12 @@ one just-created task, so the create rate limit already bounds it.
 - **JSON-RPC + SSE only.** The gRPC and HTTP+JSON bindings are not
   implemented; the card says so by declaring a single `supportedInterfaces`
   entry. Per spec §5.2 that is a complete, legal declaration.
-- **Push notifications are Phase 2** (`pushNotifications: false`; the four
-  config methods answer `-32003`). Fleet's outbound webhook config is
-  deployment-wide today (`docs/NOTIFICATIONS.md`); per-task push needs
-  per-task webhook storage plus SSRF-guarded delivery — real design work.
-- **Extended agent card is Phase 2** (`-32004`).
+- **Push deliveries are statusUpdate-only, single-attempt, 1s-granular** —
+  see the Push notifications section; `artifactUpdate`/`message` push events
+  and retry/backoff are deferred until a real integrator needs them.
+- **The extended card's extra detail is deliberately modest** — the pinned
+  persona/model policy and skill examples; per-key differentiated cards are a
+  spec MAY left unimplemented.
 - **Text parts only inbound.** `raw`/`url`/`data` parts answer `-32005`; the
   card declares `defaultInputModes: ["text/plain"]`. File intake exists on
   the REST seam (`POST /upload` + `files`), not on A2A yet.

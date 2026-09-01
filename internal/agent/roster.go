@@ -49,6 +49,19 @@ type OptionalServerInfo struct {
 	DataSources []string `json:"data_sources,omitempty"`
 }
 
+// AlwaysOnServerInfo is the public status row for an enabled non-optional MCP
+// server. Available is derived from the live discovery catalog, not merely the
+// manifest flag, so Operations can distinguish an always-on invariant from a
+// connector that failed to expose any usable tools.
+type AlwaysOnServerInfo struct {
+	Name        string
+	DisplayName string
+	Description string
+	ToolCount   int
+	Available   bool
+	Accounts    []string
+}
+
 // buildOptionalServerMetadata snapshots the Optional-server subset of the
 // spec map into the catalog shape. Cheap: tool counts come from the public MCP
 // catalog and tool descriptions are discarded (the settings UI only
@@ -111,6 +124,51 @@ func buildOptionalServerMetadataFromCatalog(
 	return out
 }
 
+func (m *Manager) buildAlwaysOnServerMetadata(specs map[string]MCPServerSpec) []AlwaysOnServerInfo {
+	m.mcpGatingMu.RLock()
+	catalog := cloneMCPCatalog(m.mcpCatalog)
+	accounts := cloneMCPAccounts(m.mcpAccounts)
+	m.mcpGatingMu.RUnlock()
+	if catalog == nil && m.mcpClient != nil {
+		catalog = m.mcpClient.GetAllTools()
+	}
+	return buildAlwaysOnServerMetadataFromCatalog(specs, catalog, accounts)
+}
+
+func buildAlwaysOnServerMetadataFromCatalog(
+	specs map[string]MCPServerSpec,
+	serverTools []mcp.ServerTool,
+	accounts map[string][]string,
+) []AlwaysOnServerInfo {
+	out := make([]AlwaysOnServerInfo, 0)
+	for name, spec := range specs {
+		if !spec.Enabled || spec.Optional {
+			continue
+		}
+		info := AlwaysOnServerInfo{
+			Name:        name,
+			DisplayName: spec.DisplayName,
+			Description: spec.Description,
+			Accounts:    append([]string(nil), accounts[name]...),
+		}
+		for _, st := range serverTools {
+			if st.ServerName != name {
+				continue
+			}
+			// Seeing the server in live discovery makes it operationally
+			// available even when its manifest allowlist hides this particular
+			// tool from the agent.
+			info.Available = true
+			if len(spec.ToolAllowlist) == 0 || slices.Contains(spec.ToolAllowlist, st.Tool.Name) {
+				info.ToolCount++
+			}
+		}
+		out = append(out, info)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
 // MCPServerCatalog returns the snapshot built at Manager.New() — list of
 // Optional MCP servers the user can toggle from the conversation settings,
 // plus any synthetic native-tool entries (image generation, etc.) that
@@ -120,6 +178,19 @@ func (m *Manager) MCPServerCatalog() []OptionalServerInfo {
 	m.mcpGatingMu.RLock()
 	defer m.mcpGatingMu.RUnlock()
 	return m.optionalServerMetadata
+}
+
+// AlwaysOnMCPServerCatalog returns enabled non-optional servers plus their live
+// discovery status. These rows are informational: callers must not turn them
+// into per-task choices because the runtime binds them independently.
+func (m *Manager) AlwaysOnMCPServerCatalog() []AlwaysOnServerInfo {
+	m.mcpGatingMu.RLock()
+	defer m.mcpGatingMu.RUnlock()
+	out := append([]AlwaysOnServerInfo(nil), m.alwaysOnServerMetadata...)
+	for i := range out {
+		out[i].Accounts = append([]string(nil), out[i].Accounts...)
+	}
+	return out
 }
 
 // OptionalNativeImageGenName is the synthetic "server" name used in the

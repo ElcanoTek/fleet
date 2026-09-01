@@ -255,7 +255,14 @@ var envKnobs = []envKnob{
 	// operator's intent behind an error they never see.
 	{key: "FLEET_SANDBOX_K8S_OPEN_EGRESS_ACKNOWLEDGED", kind: kindBool},
 	{key: "FLEET_A2A_ENABLED", fleet: true, kind: kindBool},
+	{key: "FLEET_A2A_PUSH_ALLOW_PRIVATE", fleet: true, kind: kindBool},
+	// min 1: a zero would mean "answer with the SUBMITTED row immediately",
+	// which is what returnImmediately is for — a set 0 is a misconfiguration.
+	{key: "FLEET_A2A_UNARY_WAIT_SECONDS", fleet: true, kind: kindInt, min: bound(1)},
 	{key: "FLEET_SANDBOX_PIDS", kind: kindInt},
+	// min 1: a set 0 would mean "no time at all for a sandbox start", which is
+	// a misconfiguration — unset is the way to keep the backend default (#1358).
+	{key: "FLEET_SANDBOX_START_TIMEOUT_SECONDS", kind: kindInt, min: bound(1)},
 	{key: "FLEET_SANDBOX_DISK_GB", kind: kindInt},
 	{key: "FLEET_SANDBOX_MEMORY_MAX_MB", fleet: true, kind: kindInt},
 	{key: "FLEET_SANDBOX_CPUS_MAX", fleet: true, kind: kindFloat},

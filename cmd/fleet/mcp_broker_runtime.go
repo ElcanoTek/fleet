@@ -61,6 +61,7 @@ func (i *brokerMCPInventory) replace(descriptors []mcpbroker.ServerDescriptor) {
 	for _, descriptor := range descriptors {
 		servers[descriptor.Name] = scheduledrun.TaskMCPServerInfo{
 			UsesWorkspace: descriptor.UsesWorkspace,
+			Optional:      descriptor.Optional,
 			ToolAllowlist: append([]string(nil), descriptor.ToolAllowlist...),
 		}
 	}
@@ -329,6 +330,7 @@ func taskMCPInventoryFromResolvedSpecs(src map[string]agent.MCPServerSpec) map[s
 		if spec.Enabled {
 			out[name] = scheduledrun.TaskMCPServerInfo{
 				UsesWorkspace: agentcore.EnvReferencesWorkspace(spec.Env),
+				Optional:      spec.Optional,
 				ToolAllowlist: append([]string(nil), spec.ToolAllowlist...),
 			}
 		}

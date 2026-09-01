@@ -14,6 +14,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	cryptorand "crypto/rand"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -31,9 +32,23 @@ import (
 	"github.com/ElcanoTek/fleet/internal/sched/db"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
+	"github.com/ElcanoTek/fleet/internal/secretbox"
 )
 
 func setupA2A(t *testing.T) (*storage.Storage, *apikeys.Manager, *chi.Mux) {
+	return setupA2AWith(t, false)
+}
+
+// setupA2AWith is setupA2A plus the push-notification switch: pushEnabled
+// wires a store cipher and flips A2AConfig.PushEnabled, the Phase-2 posture.
+func setupA2AWith(t *testing.T, pushEnabled bool) (*storage.Storage, *apikeys.Manager, *chi.Mux) {
+	store, keyMgr, mux, _ := setupA2AHandlers(t, pushEnabled)
+	return store, keyMgr, mux
+}
+
+// setupA2AHandlers additionally exposes the Handlers value, for tests that
+// tune A2AConfig fields (e.g. the unary wait budget) after setup.
+func setupA2AHandlers(t *testing.T, pushEnabled bool) (*storage.Storage, *apikeys.Manager, *chi.Mux, *Handlers) {
 	t.Helper()
 	tmpDir := t.TempDir()
 
@@ -60,22 +75,43 @@ func setupA2A(t *testing.T) (*storage.Storage, *apikeys.Manager, *chi.Mux) {
 		AdminAPIKey:      "admin-key",
 		DataDir:          tmpDir,
 	}, store, keyMgr)
-	card, cardETag, err := a2abridge.MarshalCard(a2abridge.BuildCard(a2abridge.CardSpec{
-		Name: "Test Fleet", Version: "0.0.0-test", RPCURL: "/v1/a2a",
-	}))
+	spec := a2abridge.CardSpec{Name: "Test Fleet", Version: "0.0.0-test", RPCURL: "/v1/a2a", Persona: "qa-bot"}
+	card, cardETag, err := a2abridge.MarshalCard(a2abridge.BuildCard(spec))
 	if err != nil {
 		t.Fatalf("card: %v", err)
 	}
+	extCard, _, err := a2abridge.MarshalCard(a2abridge.BuildExtendedCard(spec))
+	if err != nil {
+		t.Fatalf("extended card: %v", err)
+	}
+	if pushEnabled {
+		key := make([]byte, secretbox.KeyLen)
+		if _, err := cryptorand.Read(key); err != nil {
+			t.Fatal(err)
+		}
+		cipher, err := secretbox.NewCipher(key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		store.SetA2APushCipher(cipher)
+	}
 	h.SetA2A(&A2AConfig{
-		CardJSON: card,
-		CardETag: cardETag,
-		Persona:  "qa-bot",
+		CardJSON:         card,
+		CardETag:         cardETag,
+		Persona:          "qa-bot",
+		PushEnabled:      pushEnabled,
+		ExtendedCardJSON: extCard,
 	})
 
+	return store, keyMgr, newA2ATestMux(h), h
+}
+
+// newA2ATestMux mounts the two A2A routes the way buildOrchestratorMux does.
+func newA2ATestMux(h *Handlers) *chi.Mux {
 	r := chi.NewRouter()
 	r.Get("/.well-known/agent-card.json", h.A2AAgentCard)
 	r.Post("/a2a", h.A2ARPC)
-	return store, keyMgr, r
+	return r
 }
 
 type rpcEnvelope struct {
@@ -234,8 +270,12 @@ func TestA2AMethodGating(t *testing.T) {
 		_, env := rpc(t, mux, rawKey, m, map[string]any{})
 		wantRPCError(t, env, -32003, "PUSH_NOTIFICATION_NOT_SUPPORTED")
 	}
+	// GetExtendedAgentCard is a real method now (Phase 2): an authenticated
+	// caller gets the extended card back.
 	_, env = rpc(t, mux, rawKey, "GetExtendedAgentCard", map[string]any{})
-	wantRPCError(t, env, -32004, "UNSUPPORTED_OPERATION")
+	if env == nil || env.Error != nil {
+		t.Fatalf("GetExtendedAgentCard: %+v", env)
+	}
 }
 
 func TestA2ASendMessageCreatesGovernedTask(t *testing.T) {

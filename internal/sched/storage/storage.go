@@ -24,6 +24,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/metrics"
 	"github.com/ElcanoTek/fleet/internal/sched/db"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
+	"github.com/ElcanoTek/fleet/internal/secretbox"
 	"github.com/ElcanoTek/fleet/internal/structuredoutput"
 )
 
@@ -2051,4 +2052,41 @@ func (s *Storage) WakeTaskByEvent(ctx context.Context, taskID uuid.UUID, eventKe
 // ClearWakeState clears a woken task's wake columns once the run consumed them.
 func (s *Storage) ClearWakeState(ctx context.Context, taskID, leaseOwner uuid.UUID) error {
 	return s.db.ClearWakeState(ctx, taskID, leaseOwner)
+}
+
+// ── A2A push-notification configs (#1279 Phase 2) ──
+
+// SetA2APushCipher wires the secretbox cipher that seals push-config secrets
+// at rest. See db.SetA2APushCipher.
+func (s *Storage) SetA2APushCipher(c *secretbox.Cipher) { s.db.SetA2APushCipher(c) }
+
+// UpsertA2APushConfig stores an external caller's per-task webhook
+// registration. See db.UpsertA2APushConfig.
+func (s *Storage) UpsertA2APushConfig(ctx context.Context, cfg models.A2APushConfig) (*models.A2APushConfig, error) {
+	return s.db.UpsertA2APushConfig(ctx, cfg)
+}
+
+// GetA2APushConfig loads one push config. See db.GetA2APushConfig.
+func (s *Storage) GetA2APushConfig(ctx context.Context, taskID uuid.UUID, configID string) (*models.A2APushConfig, error) {
+	return s.db.GetA2APushConfig(ctx, taskID, configID)
+}
+
+// ListA2APushConfigs returns a task's push configs. See db.ListA2APushConfigs.
+func (s *Storage) ListA2APushConfigs(ctx context.Context, taskID uuid.UUID) ([]*models.A2APushConfig, error) {
+	return s.db.ListA2APushConfigs(ctx, taskID)
+}
+
+// DeleteA2APushConfig removes one push config (idempotent). See db.DeleteA2APushConfig.
+func (s *Storage) DeleteA2APushConfig(ctx context.Context, taskID uuid.UUID, configID string) error {
+	return s.db.DeleteA2APushConfig(ctx, taskID, configID)
+}
+
+// ListA2APushWork returns the due push deliveries. See db.ListA2APushWork.
+func (s *Storage) ListA2APushWork(ctx context.Context, limit int) ([]models.A2APushWork, error) {
+	return s.db.ListA2APushWork(ctx, limit)
+}
+
+// MarkA2APushAttempted records a delivery attempt. See db.MarkA2APushAttempted.
+func (s *Storage) MarkA2APushAttempted(ctx context.Context, taskID uuid.UUID, configID string, status models.TaskStatus) (bool, error) {
+	return s.db.MarkA2APushAttempted(ctx, taskID, configID, status)
 }

@@ -4473,6 +4473,9 @@ tr.sla-row-fail {
 .mcp-server-picker__row--enabled {
   background: color-mix(in srgb, var(--color-accent) 14%, transparent);
 }
+.mcp-server-picker__row--unavailable {
+  background: color-mix(in srgb, var(--color-danger) 8%, transparent);
+}
 .mcp-server-picker__toggle {
   display: flex;
   align-items: center;
@@ -4495,6 +4498,17 @@ tr.sla-row-fail {
   font-size: 0.66rem;
   color: var(--color-text-muted);
   white-space: nowrap;
+}
+.mcp-server-picker__status {
+  flex: 0 0 auto;
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-success);
+}
+.mcp-server-picker__status--error {
+  color: var(--color-danger);
 }
 .mcp-server-picker__desc {
   flex: 1;

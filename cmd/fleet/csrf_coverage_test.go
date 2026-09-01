@@ -72,7 +72,11 @@ func TestOrchestratorCSRFCoverage(t *testing.T) {
 	// in this unwired mux, answers 501 a2a_disabled) instead of being CSRF-
 	// blocked; if the /a2a auth model ever grows a cookie path, this exemption
 	// and test must be revisited together.
-	if rr := do("/a2a", ""); strings.Contains(rr.Body.String(), csrfMsg) || rr.Code != http.StatusNotImplemented {
-		t.Errorf("POST /a2a no-origin: code=%d body=%q, want the 501 a2a_disabled handler response, never the CSRF block", rr.Code, rr.Body.String())
+	// Both spellings: httpx-based A2A clients (the official TCK included)
+	// POST to the trailing-slash form, so it carries the same exemption.
+	for _, path := range []string{"/a2a", "/a2a/"} {
+		if rr := do(path, ""); strings.Contains(rr.Body.String(), csrfMsg) || rr.Code != http.StatusNotImplemented {
+			t.Errorf("POST %s no-origin: code=%d body=%q, want the 501 a2a_disabled handler response, never the CSRF block", path, rr.Code, rr.Body.String())
+		}
 	}
 }

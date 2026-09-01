@@ -382,7 +382,7 @@ export function TaskCreateModal({
   // loaded catalog defaults appear without an effect that could overwrite a
   // choice the user already made. Edits always use the task's persisted list.
   const defaultMcpSelection = servers
-    .filter((server) => !server.remote && server.enabled)
+    .filter((server) => !server.remote && !server.always_on && server.enabled)
     .map((server) => ({ server: server.name }));
   const [mcpSelectionOverride, setMcpSelectionOverride] = useState<MCPChoice[] | null>(
     editing ? init.mcpSelection : null,
@@ -828,13 +828,32 @@ export function TaskCreateModal({
     runIfCommand.trim() !== "",
   ].filter(Boolean).length;
 
-  const enabledServers = mcpSelection.length;
+  const selectedBundleNames = new Set(
+    servers.filter((server) => !server.remote && !server.always_on).map((server) => server.name),
+  );
+  const enabledServers = mcpSelection.filter((choice) =>
+    selectedBundleNames.has(choice.server),
+  ).length;
+  const alwaysOnServers = servers.filter((server) => server.always_on && server.enabled).length;
+  const unavailableAlwaysOnServers = servers.filter(
+    (server) => server.always_on && !server.enabled,
+  ).length;
+  const remoteServers = servers.filter((server) => server.remote).length;
   const toolsSummary = serversLoading
     ? "Loading servers…"
-    : enabledServers === 0 && fileCount === 0
+    : enabledServers === 0 &&
+        alwaysOnServers === 0 &&
+        remoteServers === 0 &&
+        unavailableAlwaysOnServers === 0 &&
+        fileCount === 0
       ? "Sandbox only — no tools"
       : [
-          enabledServers > 0 ? `${enabledServers} server${enabledServers === 1 ? "" : "s"}` : "",
+          alwaysOnServers > 0 ? `${alwaysOnServers} always on` : "",
+          remoteServers > 0 ? `${remoteServers} connected` : "",
+          enabledServers > 0 ? `${enabledServers} selected` : "",
+          unavailableAlwaysOnServers > 0
+            ? `${unavailableAlwaysOnServers} unavailable`
+            : "",
           fileCount > 0 ? `${fileCount} file${fileCount === 1 ? "" : "s"}` : "",
         ]
           .filter(Boolean)
@@ -1994,8 +2013,8 @@ export function TaskCreateModal({
                 <div className="form-group" data-testid="task-mcp-section">
                   <span className="task-field-label">MCP servers</span>
                   <p className="field-hint task-hint-tight">
-                    Everything off stays sandbox-only. Each enabled server acts as the credential
-                    account you pick.
+                    Always-on servers are added to every run. Select optional servers to add them;
+                    locked rows show live availability.
                   </p>
                   <McpServerPicker
                     mode="task"

@@ -438,8 +438,13 @@ export type McpServer = {
   display_name?: string;
   description?: string;
   tool_count?: number;
+  // For optional rows, enabled is the operator's default toggle state. For an
+  // always_on row it is live availability from backend discovery.
   enabled?: boolean;
   accounts?: string[];
+  // Non-optional bundle servers are informational, locked rows. They are added
+  // to every scheduled run and never persisted in mcp_selection.
+  always_on?: boolean;
   // remote marks a per-user remote (hosted) MCP server the caller connected via
   // OAuth (#443/#466). The orchestrator overlay auto-applies ALL of the owner's
   // connected remote servers to every scheduled run, so the picker shows them as

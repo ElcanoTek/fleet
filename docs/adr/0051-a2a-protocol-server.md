@@ -82,6 +82,50 @@ inter-task state or channels.
 - `internal/agentcore/entrypoint_conformance_test.go` — unchanged, which is
   the point: the A2A adapter added no entrypoint.
 
+## Amendment — Phase 2 push notifications (2026-09-01)
+
+Per-task push-notification configs shipped as scoped in the issue, three
+security-relevant decisions on top of the original record:
+
+1. **Caller webhook secrets are sealed in the sched DB** (`a2a_push_configs`,
+   migration 066) with `internal/secretbox`, AAD-bound per row, under the
+   existing store cipher (`FLEET_MCP_OAUTH_ENCRYPTION_KEY` — the same key
+   docs/NOTIFICATIONS.md already treats as the generic store cipher, injected
+   into `sched/db` via a `SetA2APushCipher` setter mirroring
+   `SetLogArchiveKey`). No cipher ⇒ the capability is off, fail-closed: the
+   card declares `pushNotifications: false` and the methods answer `-32003`.
+2. **Delivery is SSRF-guarded by default**: push URLs are CALLER-supplied
+   (the web_fetch trust class, not the operator-trusted `FLEET_WEBHOOK_URL`
+   class), so the sender dials through the resolved-IP netguard check and
+   refuses every redirect (`mcpoauth.SafeHTTPClient`).
+   `FLEET_A2A_PUSH_ALLOW_PRIVATE` (default false) relaxes only the dial
+   guard — required for the official TCK, whose receiver is on localhost —
+   and boot logs a warning when set.
+3. **Delivery is poll-based** (a 1s scan of configs whose task status moved
+   past their per-config marker), not a Storage transition bus: the task row
+   is already the A2A event source, and an observer seam would touch every
+   lifecycle writer for latency the spec does not require. The marker is
+   claimed BEFORE the POST (one-winner conditional update), so races and
+   crashes err toward a missed doorbell — superseded by the next transition —
+   never toward unbounded duplicates; the spec demands only at-least-once
+   ATTEMPT and tells clients to expect duplicates anyway.
+
+The same Phase-2 change ships `GetExtendedAgentCard` (the authenticated card
+— rendered through the same MarshalCard shadow so its securityRequirements
+stay schema-valid; auth is the dispatcher's 401-before-dispatch, satisfying
+spec §13.3's MUST), the §3.4 contextId rules (a client context on a new send
+is rejected rather than silently replaced — CORE-MULTI-002a; a mismatching
+follow-up context errors — CORE-MULTI-006), and the
+`FLEET_A2A_UNARY_WAIT_SECONDS` knob bounding the blocking-unary wait that
+the first TCK run flagged.
+
+Enforcement additions: `internal/sched/db/a2a_push_test.go` (sealed-at-rest
+round-trip, fail-closed without cipher, one-winner mark),
+`internal/sched/handlers/a2a_push_test.go` (CRUD contract incl. the TCK's
+snake_case params and client-id round-trip, inline registration, delivery
+lifecycle with exact Authorization/token/media-type assertions, and the SSRF
+guard blocking a loopback receiver by default).
+
 ## Consequences
 
 - Any A2A-speaking stack can delegate to fleet with a typed key; every run is

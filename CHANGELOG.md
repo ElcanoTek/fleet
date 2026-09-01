@@ -19,6 +19,37 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **A2A extended agent card, contextId rules, and a tunable unary wait
+  (#1279 Phase 2).** `GetExtendedAgentCard` now serves the authenticated
+  card — the public card plus the operator-pinned persona/model policy and
+  skill examples (`capabilities.extendedAgentCard: true`; unauthenticated
+  callers keep getting 401, declared-but-unconfigured answers `-32007`).
+  The spec §3.4 context rules are enforced: a client-provided `contextId` on
+  a new message is rejected (`-32602`) instead of silently replaced, and a
+  follow-up with a `contextId` that does not match the task's errors — the
+  two multi-turn MUSTs the first TCK run showed fleet violating. The
+  blocking unary `SendMessage` wait is now operator-tunable
+  (`FLEET_A2A_UNARY_WAIT_SECONDS`, default 1800). See
+  [docs/A2A.md](docs/A2A.md).
+
+- **A2A push notifications (#1279 Phase 2).** External A2A callers can now
+  register per-task webhooks — the four `TaskPushNotificationConfig` CRUD
+  methods plus inline registration on `SendMessage` — and receive a
+  `StreamResponse`-wrapped `statusUpdate` POST whenever the task's
+  caller-visible state changes (a doorbell: receivers re-fetch via `GetTask`,
+  per the spec's own async guidance). Caller webhook secrets are sealed at
+  rest in the new `a2a_push_configs` table (migration 066) under the store
+  cipher — no `FLEET_MCP_OAUTH_ENCRYPTION_KEY` means the card honestly
+  declares `pushNotifications: false` and the methods keep answering
+  `-32003`. Delivery is SSRF-guarded by default (resolved-IP dial check, all
+  redirects refused); `FLEET_A2A_PUSH_ALLOW_PRIVATE` relaxes the dial guard
+  for dev/TCK runs against loopback receivers. Client-supplied config ids
+  round-trip, deletes are idempotent, configs are creatable on terminal
+  tasks, and the dispatcher accepts the official TCK's snake_case parameter
+  spellings alongside the spec's camelCase. Single delivery attempt per
+  transition (spec: retry is a MAY), 1-second scan granularity. See
+  [docs/A2A.md](docs/A2A.md) and the ADR-0051 amendment.
+
 - **An A2A (Agent2Agent) protocol server (#1279).** External agents can now
   discover fleet via an Agent Card (`/.well-known/agent-card.json`), delegate
   work, stream progress, and collect results over the A2A v1.0.1 JSON-RPC +
@@ -68,12 +99,17 @@ prior versions are listed because none have shipped.
 
 ### Changed
 
-- **Operations tasks now honor connector defaults (#1333).** New task forms
-  start bundled connectors marked `enabled_by_default` in the selected state,
-  matching new Chat conversations. The selection follows asynchronously loaded
-  catalogs without overwriting a user's first toggle, is persisted explicitly
-  with the task, and editing an existing task continues to show its saved
-  connector list rather than applying newer deployment defaults retroactively.
+- **Operations connector selection now preserves always-on MCPs (#1333).** New
+  task forms still start bundled connectors marked `enabled_by_default` in the
+  selected state, matching new Chat conversations, but the persisted
+  `mcp_selection` is now treated as optional additions: every active
+  non-optional connector is unioned in at scheduled-run binding. The task picker
+  surfaces those connectors as locked **Always on** rows and uses live discovery
+  to mark a failed connector **Unavailable** rather than falsely painting it on.
+  Empty selections mean always-on only; remote seat pins do not remove the
+  bundle set; explicit credential deny-all and persona/tool restrictions still
+  narrow access. See [docs/OPS-CONNECTOR-DEFAULTS.md](docs/OPS-CONNECTOR-DEFAULTS.md)
+  and ADR-0052.
 
 - **Fonts: exactly two typefaces, self-hosted.** The web UI now ships
   **Nebula Sans** (SIL OFL 1.1) for UI/body/headings and **Hack** (MIT, plus
@@ -167,6 +203,49 @@ prior versions are listed because none have shipped.
   `os.Getenv`+parse knob is introduced without a registry row.
 
 ### Fixed
+
+- **Webhook/email-trigger runs no longer silently drop the template task's
+  persona — or any other definition field (#1357).** `buildTriggerRun`
+  projected the template into the spawned run field by hand-picked field, so
+  `Persona`, `Title`, `Description`, `Tags`, `SandboxLimits`, `LoopConfig`,
+  `WorktreeConfig`, `SerializationKey`, and `ExpectedDurationMinutes` all
+  reset to their defaults on every `POST /triggers/{slug}` and email-trigger
+  run. The projection is now the canonical `models.TaskToCreate` clone recipe
+  minus an explicit, reasoned exclusion registry (`triggerRunNotCarried`),
+  with a drift test that fails whenever `TaskCreate` gains a field the
+  projection neither carries nor registers — the `taskColumnRegistry`
+  discipline applied to this seam. The connector facets (`MCPSelection`,
+  `CredentialAllowlist`) stay OUT of the generic copy: only the
+  `connectorInheritance` switch — the event-trigger security boundary — may
+  set them, exactly as before.
+
+- **First sandbox start after an image update no longer dies at the start
+  timeout mid keep-id layer copy (#1358).** The first `--userns=keep-id` run
+  of a new sandbox image makes podman build a one-time id-remapped copy of
+  every layer (~88s measured for the multi-GB image on WSL2); the hard-coded
+  30s start timeout SIGKILLed podman mid-copy — the opaque
+  `podman run: signal: killed (stderr: )` — and every retry restarted the
+  copy, wedging the deployment until a manual keep-id run. Three-part fix:
+  boot now **pre-warms** the id-mapped copy (one throwaway keep-id run under
+  a generous 15-minute budget, marker-gated to the local image ID so an
+  unchanged image costs one `podman image inspect` per boot) before the warm
+  pool's first start; the start timeout is **tunable**
+  (`FLEET_SANDBOX_START_TIMEOUT_SECONDS`, min 1; also caps a pod's
+  schedule+pull+start under the kubernetes backend, whose default stays 2m);
+  and a timeout expiry now **names itself** — the error says the timeout,
+  the knob, and the id-remap cause instead of the bare `signal: killed`.
+  See [docs/SANDBOX-START-TIMEOUT.md](docs/SANDBOX-START-TIMEOUT.md).
+
+- **A2A: the two protocol defects the first official-TCK conformance run
+  found (#1279).** `POST /v1/a2a/` — the trailing-slash form every
+  httpx-based A2A client produces by resolving the Agent Card's interface URL
+  as a base (the official TCK included) — was 404'd by chi's exact matching;
+  it now routes to the same handler with the same auth, rate limiter, and
+  CSRF posture. And the Agent Card's `securityRequirements` scopes are now
+  marshaled in the schema-valid proto `StringList` shape
+  (`{"apiKey": {"list": []}}`) instead of the bare array `a2a-go` v2.5.0
+  emits, which the published card schema rejects. Baseline run recorded on
+  the issue: 52 passed / 7 failed at MUST level before these fixes.
 
 - **Kubernetes: a control plane that crashed and restarted IN PLACE still
   leaked every sandbox pod it had running (#1264).** The boot-time orphan

@@ -60,3 +60,4 @@ reviewable, and citable. Each record names the file or test that enforces it.
 | [0049](0049-kubernetes-backend-split-control-plane.md) | Kubernetes as a first-class deployment — split control plane, pluggable sandbox backend | Accepted |
 | [0050](0050-remote-mcp-seats.md) | Multiple logins per hosted MCP connection ("seats") | Accepted; amends ADR-0009 |
 | [0051](0051-a2a-protocol-server.md) | An A2A protocol server as a translation over the governed task seam | Accepted |
+| [0052](0052-operations-always-on-mcp-selection.md) | Operations MCP selections add optional servers without replacing always-on servers | Accepted |

@@ -18,6 +18,7 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
 
 	"github.com/ElcanoTek/fleet/internal/sched/models"
+	"github.com/ElcanoTek/fleet/internal/secretbox"
 )
 
 // Database is the PostgreSQL database wrapper for the orchestrator.
@@ -28,6 +29,11 @@ type Database struct {
 	// Held host-side and NEVER logged. nil = archives are gzip-only (no
 	// encryption). Set once via SetLogArchiveKey before the archival sweep runs.
 	archiveKey []byte
+
+	// pushCipher seals A2A push-config secrets at rest (#1279 Phase 2). Set
+	// once via SetA2APushCipher before serving; nil fails those stores closed
+	// (see a2a_push.go). Held in memory only, never logged.
+	pushCipher *secretbox.Cipher
 }
 
 // SetLogArchiveKey configures the host-side AES-256-GCM key used to encrypt
