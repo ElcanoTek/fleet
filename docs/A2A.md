@@ -42,6 +42,7 @@ answer `501 {"error":"a2a_disabled"}`. Optional operator policy:
 | `FLEET_A2A_MODEL` | Model every A2A-created task runs with (empty = deployment default) |
 | `FLEET_MCP_OAUTH_ENCRYPTION_KEY` | The store cipher (docs/NOTIFICATIONS.md); required for push notifications — caller webhook secrets are sealed at rest, so without it the card declares `pushNotifications: false` and the push methods answer `-32003` |
 | `FLEET_A2A_PUSH_ALLOW_PRIVATE` | Relax the push SSRF dial guard so loopback/private webhook receivers work (bool, default false) — for dev and TCK conformance runs only; redirects stay refused |
+| `FLEET_A2A_UNARY_WAIT_SECONDS` | How long a blocking unary `SendMessage` (the spec default) waits for the task outcome before answering with the freshest snapshot (int seconds, min 1, default 1800) |
 
 Persona, model, ceilings, connectors: **operator policy, never caller
 choice** — the same posture as webhook triggers (`docs/EVENT-TRIGGERS.md`).
@@ -94,7 +95,7 @@ body carries (a readonly key must be able to `GetTask` through a POST).
 | `CancelTask` | `CancelTaskAtomic` + the live-run stopper (#508); idempotent on an already-cancelled task, `-32002` on other terminal states |
 | `SubscribeToTask` | the task-row watcher; `-32004` if the task is already terminal (the result is `GetTask`'s to serve) |
 | push-config methods | `a2a_push_configs` storage (migration 066) — sealed caller secrets, client-supplied ids honored; `-32003` while the store cipher is unset |
-| `GetExtendedAgentCard` | `-32004` (declared off, Phase 2) |
+| `GetExtendedAgentCard` | the authenticated card: the public card plus the operator-pinned persona/model policy and richer skill examples (auth is the 401-before-dispatch; declared-but-unconfigured answers `-32007`) |
 
 Unknown/invisible tasks answer `-32001 TaskNotFound` — never 403 — so task
 existence doesn't leak across keys (A2A §3.3.2 and ADR-0043 agree here).
@@ -154,6 +155,14 @@ ADR-0051.
 | `running` | `TASK_STATE_WORKING` |
 | `paused_awaiting_wake` | `TASK_STATE_WORKING` (A2A has no "sleeping"; the caller needs to do nothing) |
 | `paused_awaiting_input` | `TASK_STATE_INPUT_REQUIRED` — `status.message` carries the question; answer by `SendMessage` with the same `taskId` |
+
+contextId rules (spec §3.4): fleet's contexts are 1:1 with tasks
+(`contextId == taskId` by construction), so a client-provided `contextId` on
+a NEW message is rejected with `-32602` (§3.4.1: an unacceptable context MUST
+be rejected, never silently replaced with a generated one), a follow-up's
+`contextId` is accepted exactly when it matches the task's own (mismatches
+error, §3.4.3), and an omitted `contextId` on a follow-up is inferred from
+the task.
 | `success` | `TASK_STATE_COMPLETED` |
 | `error` / `dead_lettered` | `TASK_STATE_FAILED` (retry exhaustion is an implementation detail) |
 | `cancelled` | `TASK_STATE_CANCELED` — `status.message` carries the stop attribution |
@@ -206,7 +215,9 @@ one just-created task, so the create rate limit already bounds it.
 - **Push deliveries are statusUpdate-only, single-attempt, 1s-granular** —
   see the Push notifications section; `artifactUpdate`/`message` push events
   and retry/backoff are deferred until a real integrator needs them.
-- **Extended agent card is Phase 2** (`-32004`).
+- **The extended card's extra detail is deliberately modest** — the pinned
+  persona/model policy and skill examples; per-key differentiated cards are a
+  spec MAY left unimplemented.
 - **Text parts only inbound.** `raw`/`url`/`data` parts answer `-32005`; the
   card declares `defaultInputModes: ["text/plain"]`. File intake exists on
   the REST seam (`POST /upload` + `files`), not on A2A yet.

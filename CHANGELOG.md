@@ -19,6 +19,19 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **A2A extended agent card, contextId rules, and a tunable unary wait
+  (#1279 Phase 2).** `GetExtendedAgentCard` now serves the authenticated
+  card — the public card plus the operator-pinned persona/model policy and
+  skill examples (`capabilities.extendedAgentCard: true`; unauthenticated
+  callers keep getting 401, declared-but-unconfigured answers `-32007`).
+  The spec §3.4 context rules are enforced: a client-provided `contextId` on
+  a new message is rejected (`-32602`) instead of silently replaced, and a
+  follow-up with a `contextId` that does not match the task's errors — the
+  two multi-turn MUSTs the first TCK run showed fleet violating. The
+  blocking unary `SendMessage` wait is now operator-tunable
+  (`FLEET_A2A_UNARY_WAIT_SECONDS`, default 1800). See
+  [docs/A2A.md](docs/A2A.md).
+
 - **A2A push notifications (#1279 Phase 2).** External A2A callers can now
   register per-task webhooks — the four `TaskPushNotificationConfig` CRUD
   methods plus inline registration on `SendMessage` — and receive a

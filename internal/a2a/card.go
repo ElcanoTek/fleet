@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"strconv"
 
 	wire "github.com/a2aproject/a2a-go/v2/a2a"
 )
@@ -25,6 +26,11 @@ type CardSpec struct {
 	// PushNotifications declares the per-task webhook capability (#1279
 	// Phase 2) — set only when the deployment can store push configs.
 	PushNotifications bool
+	// Persona / Model are the operator-pinned task settings, surfaced ONLY on
+	// the extended (authenticated) card — deployment policy detail the public
+	// discovery document has no business broadcasting.
+	Persona string
+	Model   string
 }
 
 // BuildCard assembles the v1.0 Agent Card this server publishes at
@@ -36,7 +42,8 @@ type CardSpec struct {
 //   - pushNotifications: from CardSpec — true only when the deployment can
 //     actually store push configs (the store cipher is configured), so the
 //     card never advertises a capability the dispatcher would refuse.
-//   - extendedAgentCard: false — Phase 2.
+//   - extendedAgentCard: true — GetExtendedAgentCard serves the
+//     authenticated variant built by BuildExtendedCard.
 //
 // One skill: fleet is a general delegation target whose personas/models are
 // operator policy, not caller-selectable, so advertising a per-persona skill
@@ -61,7 +68,7 @@ func BuildCard(spec CardSpec) *wire.AgentCard {
 			ProtocolBinding: wire.TransportProtocolJSONRPC,
 			ProtocolVersion: wire.Version,
 		}},
-		Capabilities:       wire.AgentCapabilities{Streaming: true, PushNotifications: spec.PushNotifications},
+		Capabilities:       wire.AgentCapabilities{Streaming: true, PushNotifications: spec.PushNotifications, ExtendedAgentCard: true},
 		DefaultInputModes:  []string{"text/plain"},
 		DefaultOutputModes: []string{"text/plain", "application/json"},
 		Skills: []wire.AgentSkill{{
@@ -118,6 +125,37 @@ func schemaValidRequirements(opts wire.SecurityRequirementsOptions) []securityRe
 		out = append(out, securityRequirement{Schemes: schemes})
 	}
 	return out
+}
+
+// BuildExtendedCard assembles the authenticated card (#1279 Phase 2): the
+// public card plus detail reserved for callers who presented a credential
+// (spec §13.3 — the operation MUST require authentication, and the extended
+// card MAY carry configuration the public card does not). Fleet's extra is
+// deliberately modest: the operator-pinned persona/model policy and richer
+// skill examples — deployment policy an integrator can plan around, nothing
+// secret (§13.3 also forbids leakable material here). Same card otherwise,
+// so §3.1.11's card-replacement semantics are safe.
+func BuildExtendedCard(spec CardSpec) *wire.AgentCard {
+	card := BuildCard(spec)
+	detail := "Delegated messages run under operator-pinned policy"
+	switch {
+	case spec.Persona != "" && spec.Model != "":
+		detail += ": persona " + strconv.Quote(spec.Persona) + ", model " + strconv.Quote(spec.Model) + "."
+	case spec.Persona != "":
+		detail += ": persona " + strconv.Quote(spec.Persona) + "."
+	case spec.Model != "":
+		detail += ": model " + strconv.Quote(spec.Model) + "."
+	default:
+		detail += " (the deployment's default persona and model)."
+	}
+	for i := range card.Skills {
+		card.Skills[i].Description += " " + detail
+		card.Skills[i].Examples = []string{
+			"Summarize the attached quarterly numbers and produce a report.",
+			"Investigate why the nightly export failed and propose a fix.",
+		}
+	}
+	return card
 }
 
 // MarshalCard renders the card once, with the strong ETag its handler serves

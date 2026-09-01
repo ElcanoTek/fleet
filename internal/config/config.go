@@ -439,6 +439,7 @@ var allowedEnvVars = map[string]bool{
 	// ── A2A protocol server (#1279) ──
 	"FLEET_A2A_ENABLED":            true,
 	"FLEET_A2A_PUSH_ALLOW_PRIVATE": true,
+	"FLEET_A2A_UNARY_WAIT_SECONDS": true,
 	"FLEET_A2A_PERSONA":            true,
 	"FLEET_A2A_MODEL":              true,
 
@@ -1154,6 +1155,12 @@ type Config struct {
 	// redirects stay refused even when set. Leave it off in production: push
 	// URLs are CALLER-supplied.
 	A2APushAllowPrivate bool
+	// A2AUnaryWaitSeconds bounds how long a blocking unary A2A SendMessage
+	// (returnImmediately unset — the spec default) waits for the task outcome
+	// before answering with the freshest snapshot. FLEET_A2A_UNARY_WAIT_SECONDS,
+	// default 1800 (30 minutes: task queue plus a real agent run); minimum 1.
+	// Callers that cannot wait pass returnImmediately: true.
+	A2AUnaryWaitSeconds int
 	// A2APersona / A2AModel pin what every A2A-created task runs with — operator
 	// policy, never caller choice, the same posture as webhook triggers
 	// (docs/EVENT-TRIGGERS.md). Empty inherits the deployment's task defaults.
@@ -1675,6 +1682,7 @@ func Load(envFile string) (*Config, error) {
 		// answer 501 until enabled.
 		A2AEnabled:          lp.getenvFleetBool("A2A_ENABLED", false),
 		A2APushAllowPrivate: lp.getenvFleetBool("A2A_PUSH_ALLOW_PRIVATE", false),
+		A2AUnaryWaitSeconds: lp.getenvFleetInt("A2A_UNARY_WAIT_SECONDS", 1800),
 		A2APersona:          strings.TrimSpace(getenvFleet("A2A_PERSONA")),
 		A2AModel:            strings.TrimSpace(getenvFleet("A2A_MODEL")),
 
