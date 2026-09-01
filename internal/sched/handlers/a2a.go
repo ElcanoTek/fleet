@@ -64,6 +64,13 @@ type A2AConfig struct {
 	Model   string
 	// PublicBaseURL prefixes artifact file URLs; empty yields server-relative.
 	PublicBaseURL string
+	// PushEnabled reports whether per-task push-notification configs can be
+	// stored (#1279 Phase 2): true only when the store cipher is configured
+	// (FLEET_MCP_OAUTH_ENCRYPTION_KEY), because the caller-supplied webhook
+	// secrets are sealed at rest and plaintext storage is not an option. The
+	// Agent Card's capabilities.pushNotifications mirrors this, so per spec
+	// §3.3.4 the push methods answer -32003 whenever it is false.
+	PushEnabled bool
 }
 
 // SetA2A wires the A2A protocol server (#1279). nil (never called) leaves the
@@ -178,12 +185,14 @@ func (h *Handlers) A2ARPC(w http.ResponseWriter, r *http.Request) {
 		h.a2aCancelTask(w, r, p, req)
 	case a2abridge.MethodSubscribeToTask:
 		h.a2aSubscribeToTask(w, r, p, req)
-	case a2abridge.MethodCreatePushConfig, a2abridge.MethodGetPushConfig,
-		a2abridge.MethodListPushConfigs, a2abridge.MethodDeletePushConfig:
-		// The card declares pushNotifications: false, so per spec §3.3.4 these
-		// return the SPECIFIC capability error, never MethodNotFound.
-		a2aWrite(w, a2abridge.NewErrorResponse(req.ID, wire.ErrPushNotificationNotSupported,
-			"push notifications are not supported by this server (capabilities.pushNotifications is false); poll GetTask or use SubscribeToTask", nil))
+	case a2abridge.MethodCreatePushConfig:
+		h.a2aCreatePushConfig(w, r, p, req)
+	case a2abridge.MethodGetPushConfig:
+		h.a2aGetPushConfig(w, r, p, req)
+	case a2abridge.MethodListPushConfigs:
+		h.a2aListPushConfigs(w, r, p, req)
+	case a2abridge.MethodDeletePushConfig:
+		h.a2aDeletePushConfig(w, r, p, req)
 	case a2abridge.MethodGetExtendedAgentCard:
 		a2aWrite(w, a2abridge.NewErrorResponse(req.ID, wire.ErrUnsupportedOperation,
 			"this server does not provide an extended agent card (capabilities.extendedAgentCard is false)", nil))
@@ -306,9 +315,19 @@ func (h *Handlers) a2aSendMessage(w http.ResponseWriter, r *http.Request, p prin
 		return
 	}
 	if params.Config != nil && params.Config.PushConfig != nil {
-		a2aWrite(w, a2abridge.NewErrorResponse(req.ID, wire.ErrPushNotificationNotSupported,
-			"push notifications are not supported by this server (capabilities.pushNotifications is false)", nil))
-		return
+		// Inline registration rides the send (#1279 Phase 2) — validate the
+		// shape up front so a bad webhook URL refuses the send before a task
+		// exists, and refuse outright while the capability is off: a caller
+		// who asked for notifications it cannot have must hear that, not
+		// silently miss every callback.
+		if !h.a2a.PushEnabled {
+			a2aWrite(w, a2aPushRefusal(req.ID))
+			return
+		}
+		if err := a2aValidatePushURL(params.Config.PushConfig.URL); err != nil {
+			a2aWrite(w, a2aErrorFrom(req.ID, err))
+			return
+		}
 	}
 	prompt, err := a2aPromptFromMessage(params.Message)
 	if err != nil {
@@ -344,6 +363,15 @@ func (h *Handlers) a2aSendMessage(w http.ResponseWriter, r *http.Request, p prin
 		return
 	}
 	log.Printf("Task created via A2A: %s (prompt: %.50s...)", task.ID, logSafe(task.Prompt))
+
+	// Inline push registration binds to the task this send just created (its
+	// URL was validated before the create, so a failure here is storage).
+	if params.Config != nil && params.Config.PushConfig != nil {
+		if err := h.a2aStorePushConfigInline(r, task.ID, params.Config.PushConfig); err != nil {
+			a2aWrite(w, a2aPushStoreError(req.ID, err))
+			return
+		}
+	}
 
 	if streaming {
 		h.a2aStreamTask(w, r, req.ID, task.ID)
@@ -433,6 +461,18 @@ func (h *Handlers) a2aAnswerTask(w http.ResponseWriter, r *http.Request, p princ
 		return
 	}
 	log.Printf("Task resumed via A2A: %s", task.ID)
+	// An inline push config on a follow-up binds to the task being answered —
+	// the way a caller subscribes to the outcome of the answer it just gave.
+	if cfg != nil && cfg.PushConfig != nil {
+		if err := a2aValidatePushURL(cfg.PushConfig.URL); err != nil {
+			a2aWrite(w, a2aErrorFrom(req.ID, err))
+			return
+		}
+		if err := h.a2aStorePushConfigInline(r, task.ID, cfg.PushConfig); err != nil {
+			a2aWrite(w, a2aPushStoreError(req.ID, err))
+			return
+		}
+	}
 	if streaming {
 		h.a2aStreamTask(w, r, req.ID, task.ID)
 		return
