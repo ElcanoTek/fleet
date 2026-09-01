@@ -501,6 +501,9 @@ func (h *Handlers) a2aAnswerTask(w http.ResponseWriter, r *http.Request, p princ
 		return
 	}
 	log.Printf("Task resumed via A2A: %s", task.ID)
+	// The caller is about to block on the outcome (the unary wait below or the
+	// SSE stream): dispatch the resumed task now, not at the next poll tick.
+	h.kickTaskQueue()
 	// An inline push config on a follow-up binds to the task being answered —
 	// the way a caller subscribes to the outcome of the answer it just gave.
 	if cfg != nil && cfg.PushConfig != nil {

@@ -3,20 +3,19 @@
 import { useCallback } from "react";
 import type { McpServer, MCPChoice } from "@/app/shared/lib/orchestratorApi";
 
-// ONE McpServerPicker, reused in BOTH:
-//   - the chat conversation toolbar (mode="conversation")
-//   - the orchestrator task form    (mode="task")
+// McpServerPicker is the full-size connector selection editor used by the
+// orchestrator task form. It retains a conversation mode for embedded/full-size
+// consumers, while chat's compact composer popover uses its own presentation:
+// remote connections are per-conversation toggles there but auto-applied to
+// scheduled tasks. Both presentations share the same row/status contract.
 //
-// In BOTH modes it renders an enable/disable switch per Optional server; an
+// It renders an enable/disable switch per Optional server; an
 // enabled server additionally shows its tool count and a credential-account
 // dropdown (disabled rows show their one-line purpose instead — the deciding
 // fact — per the New Task modal redesign). The structure is identical across
 // modes by design (the P7 gate asserts identical rendering): the only thing the
 // mode changes is which copy of the selection is being edited and a couple of
-// aria labels — never the set of controls shown. This is exactly the migration
-// plan's "ONE shared component" rule: chat's per-conversation opt-in and the
-// scheduled task's per-task selection reduce to the SAME { server, account }[]
-// shape, so the SAME picker drives both.
+// aria labels — never the set of controls shown.
 //
 // Selection shape: MCPChoice[] = [{ server, account? }]. A server is "enabled"
 // when it appears in the list; its account is the chosen credential seat
@@ -174,7 +173,7 @@ export function McpServerPicker({ mode, servers, selection, onChange, disabled }
                 >
                   <input
                     type="checkbox"
-                    className="ui-switch"
+                    className="ui-switch ui-switch--always-on"
                     checked={available}
                     disabled
                     readOnly

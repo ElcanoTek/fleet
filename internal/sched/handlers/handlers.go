@@ -165,6 +165,17 @@ type Handlers struct {
 	// one-shot replay). See task_stream.go.
 	taskStreamLookup TaskStreamLookup
 
+	// taskKicker nudges the in-process worker pool's claim loop after a write
+	// that makes a task immediately claimable — a create landing in pending
+	// status, a resume, a wake — so a synchronous caller (the A2A blocking
+	// unary send above all) is not handed up to a full poll interval of
+	// dispatch latency before its run starts. Wired by cmd/fleet via
+	// SetTaskKicker from the worker pool (runner.Pool.Kick); nil → tasks wait
+	// for the next poll tick, the pre-kick behavior. Purely an advisory wake:
+	// claiming still goes through the pool's normal scan and admission gate,
+	// so a missed kick costs latency, never correctness.
+	taskKicker func()
+
 	// a2a is the A2A protocol server's configuration (#1279), wired by cmd/fleet
 	// via SetA2A when FLEET_A2A_ENABLED is set. nil = feature off: both A2A
 	// routes stay registered (the OpenAPI parity walk needs them) and answer
@@ -596,6 +607,13 @@ func (h *Handlers) createTaskGoverned(ctx context.Context, creator taskCreator, 
 
 	if _, err := h.storage.AddTask(task); err != nil {
 		return nil, &createRefusalError{status: http.StatusInternalServerError, detail: "Failed to create task"}
+	}
+	// A create that lands claimable (pending, not scheduled-for-later or
+	// gate-held) dispatches now: every synchronous surface funnels through
+	// here, and the A2A blocking send in particular is already waiting on
+	// the outcome.
+	if task.Status == models.TaskStatusPending {
+		h.kickTaskQueue()
 	}
 	return task, nil
 }
