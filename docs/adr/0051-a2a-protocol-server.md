@@ -110,6 +110,15 @@ security-relevant decisions on top of the original record:
    never toward unbounded duplicates; the spec demands only at-least-once
    ATTEMPT and tells clients to expect duplicates anyway.
 
+The same Phase-2 change ships `GetExtendedAgentCard` (the authenticated card
+— rendered through the same MarshalCard shadow so its securityRequirements
+stay schema-valid; auth is the dispatcher's 401-before-dispatch, satisfying
+spec §13.3's MUST), the §3.4 contextId rules (a client context on a new send
+is rejected rather than silently replaced — CORE-MULTI-002a; a mismatching
+follow-up context errors — CORE-MULTI-006), and the
+`FLEET_A2A_UNARY_WAIT_SECONDS` knob bounding the blocking-unary wait that
+the first TCK run flagged.
+
 Enforcement additions: `internal/sched/db/a2a_push_test.go` (sealed-at-rest
 round-trip, fail-closed without cipher, one-winner mark),
 `internal/sched/handlers/a2a_push_test.go` (CRUD contract incl. the TCK's

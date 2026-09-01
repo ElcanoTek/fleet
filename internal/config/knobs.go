@@ -256,6 +256,9 @@ var envKnobs = []envKnob{
 	{key: "FLEET_SANDBOX_K8S_OPEN_EGRESS_ACKNOWLEDGED", kind: kindBool},
 	{key: "FLEET_A2A_ENABLED", fleet: true, kind: kindBool},
 	{key: "FLEET_A2A_PUSH_ALLOW_PRIVATE", fleet: true, kind: kindBool},
+	// min 1: a zero would mean "answer with the SUBMITTED row immediately",
+	// which is what returnImmediately is for — a set 0 is a misconfiguration.
+	{key: "FLEET_A2A_UNARY_WAIT_SECONDS", fleet: true, kind: kindInt, min: bound(1)},
 	{key: "FLEET_SANDBOX_PIDS", kind: kindInt},
 	{key: "FLEET_SANDBOX_DISK_GB", kind: kindInt},
 	{key: "FLEET_SANDBOX_MEMORY_MAX_MB", fleet: true, kind: kindInt},

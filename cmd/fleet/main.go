@@ -1387,24 +1387,34 @@ func wireA2A(cfg *config.Config, bundle *clientconfig.Bundle, h *handlers.Handle
 // operator-pinned persona/model every A2A task runs with.
 func buildA2AConfig(cfg *config.Config, bundle *clientconfig.Bundle, pushEnabled bool) (*handlers.A2AConfig, error) {
 	base := strings.TrimRight(cfg.PublicBaseURL, "/")
-	card := a2abridge.BuildCard(a2abridge.CardSpec{
+	spec := a2abridge.CardSpec{
 		Name:              bundle.Branding.AppName,
 		Description:       strings.TrimSpace(bundle.Branding.ShareDescription),
 		Version:           version.Version(),
 		RPCURL:            base + "/v1/a2a",
 		PushNotifications: pushEnabled,
-	})
-	body, etag, err := a2abridge.MarshalCard(card)
+		Persona:           cfg.A2APersona,
+		Model:             cfg.A2AModel,
+	}
+	body, etag, err := a2abridge.MarshalCard(a2abridge.BuildCard(spec))
 	if err != nil {
 		return nil, fmt.Errorf("render agent card: %w", err)
 	}
+	// The authenticated variant (spec §13.3): rendered through the same
+	// MarshalCard shadow so its securityRequirements stay schema-valid.
+	extBody, _, err := a2abridge.MarshalCard(a2abridge.BuildExtendedCard(spec))
+	if err != nil {
+		return nil, fmt.Errorf("render extended agent card: %w", err)
+	}
 	return &handlers.A2AConfig{
-		CardJSON:      body,
-		CardETag:      etag,
-		Persona:       cfg.A2APersona,
-		Model:         cfg.A2AModel,
-		PublicBaseURL: base,
-		PushEnabled:   pushEnabled,
+		CardJSON:         body,
+		CardETag:         etag,
+		Persona:          cfg.A2APersona,
+		Model:            cfg.A2AModel,
+		PublicBaseURL:    base,
+		PushEnabled:      pushEnabled,
+		ExtendedCardJSON: extBody,
+		UnaryWaitBudget:  time.Duration(cfg.A2AUnaryWaitSeconds) * time.Second,
 	}, nil
 }
 

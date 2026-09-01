@@ -71,6 +71,16 @@ type A2AConfig struct {
 	// Agent Card's capabilities.pushNotifications mirrors this, so per spec
 	// §3.3.4 the push methods answer -32003 whenever it is false.
 	PushEnabled bool
+	// ExtendedCardJSON is the pre-rendered authenticated card (#1279 Phase 2),
+	// marshaled by a2abridge.MarshalCard so the securityRequirements shadow
+	// applies — handing the raw wire.AgentCard to the envelope would resurrect
+	// the SDK's schema-invalid scopes shape. Served as a raw JSON result by
+	// GetExtendedAgentCard, only ever after authentication (spec §13.3 MUST).
+	ExtendedCardJSON []byte
+	// UnaryWaitBudget bounds how long a blocking unary SendMessage waits for
+	// the task outcome before answering with the freshest snapshot.
+	// FLEET_A2A_UNARY_WAIT_SECONDS; zero falls back to a2aUnaryWaitBudget.
+	UnaryWaitBudget time.Duration
 }
 
 // SetA2A wires the A2A protocol server (#1279). nil (never called) leaves the
@@ -194,8 +204,15 @@ func (h *Handlers) A2ARPC(w http.ResponseWriter, r *http.Request) {
 	case a2abridge.MethodDeletePushConfig:
 		h.a2aDeletePushConfig(w, r, p, req)
 	case a2abridge.MethodGetExtendedAgentCard:
-		a2aWrite(w, a2abridge.NewErrorResponse(req.ID, wire.ErrUnsupportedOperation,
-			"this server does not provide an extended agent card (capabilities.extendedAgentCard is false)", nil))
+		// Auth already happened above (a2aPrincipal 401s before dispatch),
+		// which is the spec §13.3 MUST; the two error branches below follow
+		// §3.1.11's declared-but-unconfigured taxonomy.
+		if len(h.a2a.ExtendedCardJSON) == 0 {
+			a2aWrite(w, a2abridge.NewErrorResponse(req.ID, wire.ErrExtendedCardNotConfigured,
+				"this server declares an extended agent card but none is configured", nil))
+			return
+		}
+		a2aWrite(w, a2abridge.NewResponse(req.ID, json.RawMessage(h.a2a.ExtendedCardJSON)))
 	default:
 		a2aWrite(w, a2abridge.NewErrorResponse(req.ID, wire.ErrMethodNotFound,
 			fmt.Sprintf("unknown A2A method %q", req.Method), nil))
@@ -337,6 +354,25 @@ func (h *Handlers) a2aSendMessage(w http.ResponseWriter, r *http.Request, p prin
 
 	// Follow-up on an existing task: the INPUT_REQUIRED round-trip. The text
 	// answers the pending question through the same resume seam as
+	// contextId rules (spec §3.4, CORE-MULTI-002a/005/006). Fleet's contexts
+	// are 1:1 with tasks (contextId == taskId by construction), so an
+	// arbitrary client-provided context cannot be honored — and §3.4.1 says a
+	// context the agent cannot accept MUST be rejected, never silently
+	// replaced with a generated one. On a follow-up, a contextId is accepted
+	// exactly when it matches the task's own (mismatches MUST error, §3.4.3);
+	// omitted, it is inferred from the task.
+	if params.Message.TaskID == "" && params.Message.ContextID != "" {
+		a2aWrite(w, a2abridge.NewErrorResponse(req.ID, wire.ErrInvalidParams,
+			"this server generates contextId (one context per task) — omit contextId on a new message", nil))
+		return
+	}
+	if params.Message.TaskID != "" && params.Message.ContextID != "" &&
+		params.Message.ContextID != string(params.Message.TaskID) {
+		a2aWrite(w, a2abridge.NewErrorResponse(req.ID, wire.ErrInvalidParams,
+			"contextId does not match the task's context (this server's contexts are 1:1 with tasks)", nil))
+		return
+	}
+
 	// POST /tasks/{id}/resume.
 	if params.Message.TaskID != "" {
 		h.a2aAnswerTask(w, r, p, req, params.Message.TaskID, prompt, params.Config, streaming)
@@ -407,7 +443,11 @@ func (h *Handlers) a2aAwaitOutcome(ctx context.Context, taskID uuid.UUID, latest
 	if settled(latest) {
 		return latest
 	}
-	budget := time.NewTimer(a2aUnaryWaitBudget)
+	waitBudget := a2aUnaryWaitBudget
+	if h.a2a.UnaryWaitBudget > 0 {
+		waitBudget = h.a2a.UnaryWaitBudget
+	}
+	budget := time.NewTimer(waitBudget)
 	defer budget.Stop()
 	ticker := time.NewTicker(a2aStreamPollInterval)
 	defer ticker.Stop()
