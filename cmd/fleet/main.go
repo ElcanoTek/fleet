@@ -1595,6 +1595,11 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers, r
 	// 501 until FLEET_A2A_ENABLED wires SetA2A. CSRF-exempt by path
 	// (middleware.go): its auth never involves a browser-auto-sent credential.
 	r.With(h.SchedRateLimitMiddleware).Post("/a2a", h.A2ARPC)
+	// The trailing-slash twin is deliberate, not tidiness: A2A clients built
+	// on httpx (the official TCK included) resolve the Agent Card's interface
+	// URL as a base and POST to "<url>/", which arrives here as /v1/a2a/ —
+	// and chi's exact matching 404'd every such call until this route existed.
+	r.With(h.SchedRateLimitMiddleware).Post("/a2a/", h.A2ARPC)
 
 	// Webhook triggers (#177): authenticated by per-trigger HMAC-SHA256, NOT the
 	// admin API key, so external services (GitHub, Slack, CI) can fire tasks

@@ -792,6 +792,32 @@ paths:
         "501":
           description: The A2A server is not enabled on this deployment.
 
+  /a2a/:
+    post:
+      summary: Trailing-slash twin of POST /a2a (#1279 TCK finding).
+      description: >-
+        Identical to POST /a2a. Exists because A2A clients built on httpx
+        (the official TCK included) resolve the Agent Card's interface URL as
+        a base and POST to "<url>/", which chi's exact matching otherwise
+        404s. Same handler, same auth, same rate limiter.
+      security: [{ scopedApiKey: [] }, { adminApiKey: [] }]
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        "200":
+          description: A JSON-RPC 2.0 response envelope, as on POST /a2a.
+          content:
+            application/json:
+              schema: { type: object }
+            text/event-stream:
+              schema: { type: string }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "501":
+          description: The A2A server is not enabled on this deployment.
+
   /tasks:
     get:
       summary: >-
