@@ -13,7 +13,7 @@
 // .tool-btn icon buttons (persona · attach · tools-with-badge · context
 // ring), and the circular arrow send button. The behavioral contracts the
 // specs drive — placeholder format, aria-labels ("Attach files", "Model",
-// "Optional tools", "Send message"), textarea-first, send flow,
+// "Connectors", "Send message"), textarea-first, send flow,
 // Enter-vs-Shift+Enter, attachments, model/persona/MCP pickers, Stop — are
 // unchanged.
 import type { Dispatch, ReactNode, RefObject, SetStateAction } from "react";
@@ -116,25 +116,36 @@ const POP_ROW_BASE =
   "flex w-full items-center justify-between gap-2 rounded-[0.5rem] text-left text-[0.82rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--rail-hover)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]";
 const POP_ROW = `${POP_ROW_BASE} px-[0.6rem] py-[0.45rem]`;
 const POP_ROW_TIGHT = `${POP_ROW_BASE} items-start px-[0.6rem] py-[0.3rem]`;
+const POP_STATUS_ROW_TIGHT =
+  "flex w-full items-start justify-between gap-2 rounded-[0.5rem] px-[0.6rem] py-[0.3rem] text-left text-[0.82rem] text-[var(--color-text-secondary)]";
 const POP_ROW_SELECTED = "bg-[color-mix(in_srgb,var(--color-accent)_12%,transparent)]";
 const POP_TITLE = "text-[0.82rem] font-medium text-[var(--color-text-primary)]";
 const POP_DESC = "text-[0.7rem] text-[var(--color-text-muted)]";
 
 // The design's .mini-switch: the visual toggle knob inside a tools pop-row.
 // Purely decorative — the row <button> carries the aria-pressed state.
-function MiniSwitch({ on }: { on: boolean }) {
+type MiniSwitchState = "off" | "on" | "always-on";
+
+function MiniSwitch({ state }: { state: MiniSwitchState }) {
   return (
     <span
       aria-hidden="true"
+      data-state={state}
       className={`relative mt-[0.2rem] h-[0.875rem] w-6 shrink-0 rounded-full transition ${
-        on
+        state === "on"
           ? "bg-[var(--color-primary)]"
+          : state === "always-on"
+            ? "bg-[color-mix(in_srgb,var(--color-primary)_62%,transparent)]"
           : "bg-[color-mix(in_srgb,var(--color-primary)_32%,transparent)]"
       }`}
     >
       <span
         className={`absolute left-[2px] top-[2px] size-[0.625rem] rounded-full transition ${
-          on ? "translate-x-[0.625rem] bg-white" : "bg-[var(--color-text-muted)]"
+          state === "on"
+            ? "translate-x-[0.625rem] bg-white"
+            : state === "always-on"
+              ? "translate-x-[0.625rem] bg-[color-mix(in_srgb,var(--color-on-primary)_72%,var(--color-text-muted))]"
+              : "bg-[var(--color-text-muted)]"
         }`}
       />
     </span>
@@ -1055,16 +1066,18 @@ export function Composer({
                       }}
                     >
                       {(() => {
-                        const enabledCount = mcpServers.filter((s) => s.enabled).length;
+                        // The badge counts choices the user made. Always-on rows
+                        // remain visible in the popover but do not inflate it.
+                        const enabledCount = mcpServers.filter((s) => s.enabled && !s.always_on).length;
                         return (
                           <button
                             ref={mcpButtonRef}
                             type="button"
-                            aria-label="Optional tools"
+                            aria-label="Connectors"
                             aria-haspopup="true"
                             aria-expanded={mcpPickerOpen}
                             disabled={isStreaming}
-                            data-tip-top="Tools for this conversation"
+                            data-tip-top="Connectors for this conversation"
                             className={`${TOOL_BTN} ${enabledCount > 0 ? TOOL_BTN_ACTIVE : ""}`}
                             onClick={() => {
                               const next = !mcpPickerOpen;
@@ -1090,18 +1103,51 @@ export function Composer({
                       })()}
                       {mcpPickerOpen && !isStreaming ? (
                         <div className={COMPOSER_POP}>
-                          {/* No section heading for now: the catalog will
-                              grow into a mix of tool types, so a "MCP
-                              servers" label would over-promise structure
-                              (the design's "Built-in" section is mock
-                              content — always-on tools are not
-                              per-conversation toggles here). */}
+                          {/* Optional rows remain per-conversation controls;
+                              always-on rows are locked live-status indicators. */}
                           <div className="grid max-h-80 grid-cols-[minmax(0,1fr)] gap-[0.1rem] overflow-y-auto">
                             {isLoadingMcpServers ? (
                               <div className="px-[0.6rem] py-[0.45rem] text-[0.74rem] text-[var(--color-text-muted)]">Loading...</div>
                             ) : (
                               mcpServers.map((server) => {
                                 const seats = server.accounts ?? [];
+                                if (server.always_on) {
+                                  const available = server.enabled;
+                                  return (
+                                    <div
+                                      key={server.name}
+                                      className={POP_STATUS_ROW_TIGHT}
+                                      aria-label={`${server.display_name || server.name}: ${available ? "always on" : "unavailable"}`}
+                                      data-testid={`chat-mcp-always-on-${server.name}`}
+                                    >
+                                      <span className="grid min-w-0 gap-[0.1rem]">
+                                        <span className="flex items-center gap-1.5">
+                                          <span className={POP_TITLE}>{server.display_name || server.name}</span>
+                                          <span
+                                            className={`text-[0.55rem] font-semibold uppercase tracking-wider ${
+                                              available ? "text-[var(--color-success)]" : "text-[var(--color-danger)]"
+                                            }`}
+                                          >
+                                            {available ? "Always on" : "Unavailable"}
+                                          </span>
+                                        </span>
+                                        {server.description ? (
+                                          <span className={`${POP_DESC} leading-snug`}>{server.description}</span>
+                                        ) : null}
+                                        {available ? (
+                                          <span className="text-[0.65rem] text-[var(--color-text-muted)]">
+                                            {server.tool_count} tool{server.tool_count === 1 ? "" : "s"}
+                                          </span>
+                                        ) : (
+                                          <span className="text-[0.65rem] text-[var(--color-danger)]">
+                                            Connector did not expose any tools
+                                          </span>
+                                        )}
+                                      </span>
+                                      <MiniSwitch state={available ? "always-on" : "off"} />
+                                    </div>
+                                  );
+                                }
                                 const row = (
                                   <button
                                     key={server.name}
@@ -1132,7 +1178,7 @@ export function Composer({
                                         {server.tool_count} tool{server.tool_count === 1 ? "" : "s"}
                                       </span>
                                     </span>
-                                    <MiniSwitch on={server.enabled} />
+                                    <MiniSwitch state={server.enabled ? "on" : "off"} />
                                   </button>
                                 );
                                 if (seats.length === 0) return row;

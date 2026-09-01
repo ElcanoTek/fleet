@@ -8,9 +8,9 @@ export const runtime = "nodejs";
 type RouteContext = { params: Promise<{ conversationId: string }> };
 
 // GET /api/conversations/{id}/mcp-servers
-// Returns the catalog of Optional MCP servers the user may toggle, with
-// each one's current opt-in state for this conversation. Non-optional
-// servers are omitted — the UI only renders rows for togglable ones.
+// Returns Optional MCP servers the user may toggle, plus locked always-on
+// status rows. Optional enabled state belongs to this conversation; always-on
+// enabled state reports live discovery availability.
 //
 // Response shape (mirrors the chat-server handler):
 //   { servers: [{ name, description, tools, tool_count, enabled }] }

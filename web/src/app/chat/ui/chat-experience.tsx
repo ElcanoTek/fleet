@@ -50,6 +50,7 @@ import {
 } from "./history";
 import { type ModelPrices } from "@/app/shared/lib/modelCost";
 import { mcpAccountOverrides } from "./mcpAccounts";
+import { enabledOptionalMcpServerNames } from "./mcpSelection";
 import { classifyBootstrapFailure } from "./bootstrapFailure";
 import { PENDING_CONV_KEY } from "./workspaceHref";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
@@ -166,10 +167,9 @@ export type RankedModel = {
   workspace?: boolean;
 };
 
-// Optional MCP servers the user can toggle on per-conversation. The catalog
-// (name, description, tool count, enabled) comes from the chat-server and
-// is fetched when a conversation is loaded. Non-optional servers are not
-// represented here — they're always on.
+// Connector rows shown in chat's Tools picker. Optional and remote rows carry
+// per-conversation controls; non-optional bundle rows are locked status only.
+// Their enabled state reports live discovery availability, not a choice.
 // Exported (and hoisted to module scope) so the extracted Composer can type
 // its mcpServers prop without re-declaring the shape.
 export type MCPServerInfo = {
@@ -199,6 +199,9 @@ export type MCPServerInfo = {
   account?: string;
   /** A per-user remote (hosted) connection rather than a bundled connector. */
   remote?: boolean;
+  /** A non-optional bundle connector. Informational and never persisted in
+   *  the conversation's enabled_optional selection. */
+  always_on?: boolean;
 };
 
 // NEW_MODEL_WINDOW_DAYS + isNewlyReleased moved into ./Composer alongside
@@ -1576,10 +1579,9 @@ export function ChatExperience({
     };
   }, [selectedModel]);
 
-  // loadMcpServerCatalog fetches the list of Optional MCP servers for the
-  // given conversation, including each server's current opt-in state.
-  // The response is used by the Tools picker to render toggles. Safe to
-  // call repeatedly — the backend is a cheap JSON read.
+  // loadMcpServerCatalog fetches Optional connector controls plus locked
+  // always-on status for the given conversation. Safe to call repeatedly —
+  // the backend is a cheap JSON read.
   const loadMcpServerCatalog = async (conversationId: string) => {
     if (isLoadingMcpServers) return;
     setIsLoadingMcpServers(true);
@@ -1649,6 +1651,7 @@ export function ChatExperience({
     name: string,
   ) => {
     const prev = mcpServers;
+    if (prev.find((server) => server.name === name)?.always_on) return;
     const nextServers = prev.map((s) =>
       s.name === name ? { ...s, enabled: !s.enabled } : s,
     );
@@ -1688,7 +1691,7 @@ export function ChatExperience({
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            enabled_optional: next.filter((s) => s.enabled).map((s) => s.name),
+            enabled_optional: enabledOptionalMcpServerNames(next),
             accounts: mcpAccountOverrides(next),
           }),
         },

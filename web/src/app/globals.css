@@ -3526,6 +3526,15 @@ tr.sla-row-fail {
   left: calc(100% - 1.03rem);
   background: var(--color-on-primary);
 }
+.ui-switch.ui-switch--always-on:checked {
+  /* Locked availability is intentionally between the off (32%) and selected
+     optional (100%) tracks: present, healthy, but not a user choice. */
+  background: color-mix(in srgb, var(--color-primary) 62%, transparent);
+  cursor: default;
+}
+.ui-switch.ui-switch--always-on:checked::before {
+  background: color-mix(in srgb, var(--color-on-primary) 72%, var(--color-text-muted));
+}
 .ui-switch:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);

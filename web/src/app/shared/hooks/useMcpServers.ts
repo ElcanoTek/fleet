@@ -4,11 +4,11 @@ import { useCallback } from "react";
 import { orchestratorApi, type McpServer } from "@/app/shared/lib/orchestratorApi";
 import { useCancellableFetch } from "@/app/shared/hooks/useCancellableFetch";
 
-// useMcpServers loads the Optional-MCP catalog (server names, tool counts, and
-// per-server credential-account names — never secret values). Feeds the shared
-// <McpServerPicker> in the orchestrator task form. The same catalog shape is
-// produced by chat's GET /api/mcp-servers for the conversation-toolbar instance
-// of the picker, so the component is genuinely reused across both views.
+// useMcpServers loads Optional controls, always-on status, and per-server
+// credential-account names (never secret values). Feeds the full-size
+// <McpServerPicker> in the orchestrator task form. Chat's compact composer uses
+// the same catalog/status fields but intentionally has a different presentation
+// because remote connectors are toggleable per conversation there.
 //
 // Built on the shared useCancellableFetch hook so the cancelled-ref guard and
 // the lone setState-after-await live in one audited place — this hook no longer
