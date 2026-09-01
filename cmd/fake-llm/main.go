@@ -78,6 +78,60 @@ func registerLiveScenarios(s *fakellm.Server) {
 		fakellm.TextStep("Scheduled task done: SCHED_TASK_OK 45."),
 	}})
 
+	// tck-complete / tck-ask: the two SUT scenarios the official A2A TCK
+	// drives (#1279). The TCK carries the scenario in the request's messageId
+	// (tck-complete-task-* / tck-input-required-*), which fleet's A2A adapter
+	// rightly never puts into a prompt — so the conformance harness's shim
+	// (scripts/a2a-tck-shim) appends the matching [[scenario:…]] marker to the
+	// message TEXT, and these scripts do the rest. A resumed run's answer text
+	// lands in the system prompt, which selectScenario reads FIRST — so a
+	// follow-up's marker naturally overrides the original task prompt's, which
+	// is exactly the multi-turn semantics the TCK expects (ask → answer with a
+	// complete marker → the resumed run completes; answer with another ask
+	// marker → it asks again).
+	tckAuditArgs := `{` +
+		`"success":true,` +
+		`"reasoning":"TCK conformance scenario: the delegated request is acknowledged and complete.",` +
+		`"artifacts_checked":["assistant reply text"],` +
+		`"workflow_sections_checked":["acknowledge","reply"],` +
+		`"critical_actions":[],` +
+		`"critical_actions_being_unblocked":["none: reply-only conformance task"],` +
+		`"send_contract_checked":true,` +
+		`"attachments_checked":[],` +
+		`"remaining_risks":[]` +
+		`}`
+	s.Scenario("tck-complete", fakellm.Scenario{Steps: []fakellm.Step{
+		fakellm.ToolStep(fakellm.ToolCall{ID: "call_tck_audit", Name: "confirm_audit", Arguments: tckAuditArgs}),
+		fakellm.TextStep("TCK task complete."),
+	}})
+	s.Scenario("tck-ask", fakellm.Scenario{Steps: []fakellm.Step{
+		fakellm.ToolStep(fakellm.ToolCall{ID: "call_tck_ask", Name: "ask",
+			Arguments: `{"question":"TCK scenario: reply to continue this task."}`}),
+	}})
+	// tck-artifact-text / tck-artifact-file: the TCK's data-model artifact
+	// scenarios. The text variant's EXACT final text becomes the task Result
+	// and therefore the "result" text artifact the test inspects; the file
+	// variants really produce output.txt in the sandbox and publish it — the
+	// empty final text keeps the file as artifacts[0], which is the slot the
+	// test asserts on.
+	s.Scenario("tck-artifact-text", fakellm.Scenario{Steps: []fakellm.Step{
+		fakellm.ToolStep(fakellm.ToolCall{ID: "call_tck_at_audit", Name: "confirm_audit", Arguments: tckAuditArgs}),
+		fakellm.TextStep("Generated text content"),
+	}})
+	s.Scenario("tck-artifact-file", fakellm.Scenario{Steps: []fakellm.Step{
+		// One turn for create+publish (tools run in order within a turn):
+		// the TCK inspects the BLOCKING send's response, so the run must
+		// finish inside the unary wait — every saved round trip counts.
+		fakellm.ToolStep(
+			fakellm.ToolCall{ID: "call_tck_af_bash", Name: "bash",
+				Arguments: `{"command":"printf 'Generated file content' > output.txt"}`},
+			fakellm.ToolCall{ID: "call_tck_af_pub", Name: "publish_artifact",
+				Arguments: `{"path":"output.txt","description":"TCK artifact scenario file"}`},
+			fakellm.ToolCall{ID: "call_tck_af_audit", Name: "confirm_audit", Arguments: tckAuditArgs},
+		),
+		fakellm.TextStep(""),
+	}})
+
 	// Default for any prompt without a marker: a deterministic echo-ish reply.
 	s.SetDefault(fakellm.Scenario{Steps: []fakellm.Step{
 		fakellm.TextStep("fake-llm reply (no scenario marker matched)."),

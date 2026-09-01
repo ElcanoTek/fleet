@@ -19,7 +19,8 @@
 # 40-hex commit SHA with the version in a trailing comment (which is also the
 # form Dependabot updates).
 #
-# The 6 false positives are suppressed at the line with a `nosemgrep:` comment
+# The false positives (7 as of #1364 — see docs/SCANNING.md for the register)
+# are suppressed at the line with a `nosemgrep:` comment
 # naming the specific rule and the reason. They are worth knowing about, because
 # three of them were ALREADY formally triaged and suppressed for gosec (which
 # runs inside golangci-lint and already blocks), and one of them is actively

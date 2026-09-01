@@ -255,7 +255,7 @@ same PR.
   [`docs/TESTING.md`](docs/TESTING.md)
 - **The scanning stack** (who checks what, why ruff owns Python lint, why
   Semgrep runs all four registry packs — `p/github-actions`, `p/golang`,
-  `p/javascript`, `p/python` — and blocks with 6 false positives waived at the
+  `p/javascript`, `p/python` — and blocks with 7 false positives waived at the
   line, what blocks vs what only reports, and the known gaps, chief among them
   that the `dev` ruleset requires no status checks):
   [`docs/SCANNING.md`](docs/SCANNING.md)

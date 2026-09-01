@@ -191,6 +191,18 @@ func (s *Scheduler) SetPausedExpiry(windowMinutes int) {
 	s.pausedExpiryMin = windowMinutes
 }
 
+// SetTickInterval configures the runLoop cadence (FLEET_SCHED_TICK_SECONDS).
+// Call before Start. seconds<=0 keeps the 30s default. The tick bounds the
+// worst-case latency between a task becoming due and a worker claiming it, so
+// dev boxes and conformance rigs driving synchronous callers (the A2A blocking
+// unary wait, the official TCK) shrink it; production deployments should not —
+// every tick is a full due-task scan plus lease-recovery pass against the DB.
+func (s *Scheduler) SetTickInterval(seconds int) {
+	if seconds > 0 {
+		s.tickInterval = time.Duration(seconds) * time.Second
+	}
+}
+
 // New creates a new Scheduler.
 func New(store *storage.Storage, timezone string) *Scheduler {
 	loc, err := time.LoadLocation(timezone)
