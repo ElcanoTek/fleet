@@ -216,6 +216,11 @@ type Pool struct {
 	pollInterval       time.Duration
 	leaseRenewInterval time.Duration
 
+	// kick wakes the claim loop ahead of the next poll tick (see Kick). A
+	// 1-buffered channel so any burst of concurrent kicks coalesces into at
+	// most one extra scan.
+	kick chan struct{}
+
 	// drainGrace bounds the post-shutdown wait for in-flight tasks to finish
 	// naturally before they are force-cancelled (see Run / drainWithGrace).
 	drainGrace time.Duration
@@ -334,6 +339,7 @@ func NewPool(store *storage.Storage, runner TaskRunner, cfg Config) *Pool {
 		limiter:            limiter,
 		pollInterval:       poll,
 		leaseRenewInterval: renew,
+		kick:               make(chan struct{}, 1),
 		drainGrace:         grace,
 		leaseOwner:         uuid.New(),
 		active:             make(map[uuid.UUID]activeRun),
@@ -453,7 +459,23 @@ func (p *Pool) Run(ctx context.Context) {
 			log.Println("runner: shutdown complete")
 			return
 		case <-ticker.C:
+		case <-p.kick:
 		}
+	}
+}
+
+// Kick wakes the claim loop to scan for pending work now instead of at the
+// next poll tick. Call it after a write that makes a task immediately
+// claimable (a create in pending status, a resume, a wake), so a synchronous
+// caller — the A2A blocking unary send above all — is not handed up to a full
+// pollInterval of dispatch latency before its run even starts. Non-blocking
+// and coalescing (any burst collapses into one extra scan), safe from any
+// goroutine, and a no-op signal when the pool is saturated: the scan admits
+// through the same limiter as every poll tick.
+func (p *Pool) Kick() {
+	select {
+	case p.kick <- struct{}{}:
+	default:
 	}
 }
 
