@@ -6,7 +6,9 @@ import (
 	"encoding/base64"
 	"flag"
 	"fmt"
+	"io"
 	"os"
+	"regexp"
 	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/creds"
@@ -20,9 +22,13 @@ import (
 // interactive prompts call the same underlying writes.
 func cmdConfig(argv []string) int {
 	if len(argv) < 1 {
-		return errf(1, "usage: fleet config set-openrouter-key | set-auth-pubkey | set-browserbase-key")
+		return errf(1, "usage: fleet config set-openrouter-key | set-auth-pubkey | set-browserbase-key | set-env <KEY> | unset-env <KEY>")
 	}
 	switch argv[0] {
+	case "set-env":
+		return configSetEnv(argv[1:])
+	case "unset-env":
+		return configUnsetEnv(argv[1:])
 	case "set-openrouter-key":
 		return configSetOpenRouterKey(argv[1:])
 	case "set-auth-pubkey":
@@ -235,4 +241,95 @@ func configSetAuthPubkey(argv []string) int {
 	fmt.Printf("set AUTH_SIGNING_PUBKEY in %s — Elcano SSO enabled\n", path)
 	fmt.Println("apply with: systemctl restart fleet-web")
 	return 0
+}
+
+// envKeyPattern is the shape of a variable name the server's env parser (and
+// systemd's EnvironmentFile=) will actually read back.
+var envKeyPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// configSetEnv upserts ONE arbitrary KEY in an env file with the same guarded
+// write the credential-specific verbs use — the generic seam that was missing.
+// Hand-editing the 0600 file is how a duplicate OPENX_API_KEY line (last one
+// wins at load) took a deployment down; this path dedupes to exactly one line,
+// keeps the file 0600 and its owner unchanged (creds.SetEnvKey), and never
+// puts the value on argv: it is read from stdin (`--value -`, or a pipe) or a
+// hidden TTY prompt. --web targets the web-tier file instead.
+func configSetEnv(argv []string) int {
+	fs := flag.NewFlagSet("config set-env", flag.ContinueOnError)
+	envFile := fs.String("env-file", "", "env file (default: the server env file — FLEET_ENV_FILE, /etc/fleet/fleet.env when present, else .env.local)")
+	web := fs.Bool("web", false, "write the web-tier env file instead (/etc/fleet/fleet-web.env when present, else web/.env.local)")
+	value := fs.String("value", "", `the value ("-" reads stdin; omit to prompt hidden, or pipe it in)`)
+	fs.Usage = func() {
+		fmt.Fprintln(fs.Output(), "usage: fleet config set-env <KEY> [--value -] [--web] [--env-file <path>]")
+		fmt.Fprintln(fs.Output(), "  Upserts KEY=VALUE as exactly one line (duplicates removed), file kept 0600 with its owner unchanged.")
+		_, _ = io.WriteString(fs.Output(), "  The value never goes on argv: printf '%s' \"$V\" | fleet config set-env KEY   (or a hidden prompt on a TTY)\n")
+		fs.PrintDefaults()
+	}
+	key, flagArgs := splitPositionalValueFlags(argv)
+	if err := fs.Parse(flagArgs); err != nil {
+		return 1
+	}
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return errf(1, "usage: fleet config set-env <KEY> [--value -] [--web] [--env-file <path>]")
+	}
+	if !envKeyPattern.MatchString(key) {
+		return errf(1, "invalid env key %q (want [A-Za-z_][A-Za-z0-9_]*)", key)
+	}
+	val, err := resolveSecret(*value, key+": ", false)
+	if err != nil {
+		return errf(1, "%v", err)
+	}
+	if strings.ContainsAny(val, "\r\n") {
+		return errf(1, "value contains a line break — an env file cannot hold it (use fleet config unset-env to remove a key)")
+	}
+	path := serverEnvFile(*envFile)
+	if *web {
+		path = webEnvFile(*envFile)
+	}
+	if err := creds.SetEnvKey(path, key, val); err != nil {
+		return errf(5, "write %s: %v", path, err)
+	}
+	fmt.Printf("set %s in %s (one line; file 0600, owner unchanged)\n", key, path)
+	printEnvApplyHint(*web)
+	return 0
+}
+
+// configUnsetEnv removes every line for KEY from the env file.
+func configUnsetEnv(argv []string) int {
+	fs := flag.NewFlagSet("config unset-env", flag.ContinueOnError)
+	envFile := fs.String("env-file", "", "env file (default: the server env file)")
+	web := fs.Bool("web", false, "edit the web-tier env file instead")
+	key, flagArgs := splitPositionalValueFlags(argv)
+	if err := fs.Parse(flagArgs); err != nil {
+		return 1
+	}
+	key = strings.TrimSpace(key)
+	if key == "" || !envKeyPattern.MatchString(key) {
+		return errf(1, "usage: fleet config unset-env <KEY> [--web] [--env-file <path>]")
+	}
+	path := serverEnvFile(*envFile)
+	if *web {
+		path = webEnvFile(*envFile)
+	}
+	removed, err := creds.DeleteEnvKey(path, key)
+	if err != nil {
+		return errf(5, "write %s: %v", path, err)
+	}
+	if !removed {
+		fmt.Printf("%s was not set in %s\n", key, path)
+		return 0
+	}
+	fmt.Printf("removed %s from %s\n", key, path)
+	printEnvApplyHint(*web)
+	return 0
+}
+
+func printEnvApplyHint(web bool) {
+	if web {
+		fmt.Println("apply with: systemctl restart fleet-web")
+		return
+	}
+	fmt.Println("preflight with: fleet validate-config")
+	fmt.Println("apply with: fleet restart   (systemctl restart fleet; reloadable knobs also apply live via kill -USR2 — docs/CONFIG-RELOAD.md)")
 }

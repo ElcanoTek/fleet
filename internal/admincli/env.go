@@ -181,6 +181,10 @@ func envEdit(argv []string) int {
 	}
 
 	before := envFileDigest(path)
+	// Remember who owned the file: an editor that saves via rename (vim's
+	// default) hands the new inode to the editing user — root under sudo — and
+	// a file the service user owned is re-owned out from under it.
+	beforeInfo, _ := os.Stat(path)
 	// context.Background() on purpose: an interactive editor session has no
 	// sane deadline — the operator closes it when they're done.
 	//nolint:gosec // G204: the editor binary+args come from the operator's own --editor flag, $VISUAL/$EDITOR, or the interactive menu — this is a local operator CLI acting for the person at the terminal, not a server path.
@@ -190,9 +194,14 @@ func envEdit(argv []string) int {
 		return errf(5, "editor %s: %v", editorArgv[0], err)
 	}
 	// The editor may have replaced the file via rename (vim's default) — put
-	// the secrets-file mode back regardless of what it left behind.
+	// the secrets-file mode AND the previous owner back regardless of what it
+	// left behind (ownership is only touched when running as root and it
+	// actually changed; see creds.PreserveOwner).
 	if err := os.Chmod(path, 0o600); err != nil {
 		return errf(5, "restore 0600 on %s: %v", path, err)
+	}
+	if err := creds.PreserveOwner(path, beforeInfo); err != nil {
+		return errf(5, "restore owner on %s: %v", path, err)
 	}
 
 	if bytes.Equal(before, envFileDigest(path)) {

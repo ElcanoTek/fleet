@@ -19,7 +19,7 @@
 //	fleet timers install [--backup] [--maintenance] [--src <dir>] [--dry-run]
 //	fleet chat                                        (interactive agent TUI, #457; --message for one-shot)
 //	fleet admin add|list|rm                           (one-step full admin across both user planes)
-//	fleet config set-openrouter-key|set-auth-pubkey|set-browserbase-key   (guided credential/env-file writes)
+//	fleet config set-openrouter-key|set-auth-pubkey|set-browserbase-key|set-env|unset-env   (guided credential/env-file writes)
 //	fleet env [show|edit]                             (print the env files secrets-masked / open one in an editor)
 //	fleet chat user add|update|role|del|list
 //	fleet sched user add|update|set-role|rename|del|list
@@ -183,6 +183,9 @@ Users, credentials, notes:
                                                        mints hosted-browser live views; see docs/BROWSERBASE.md)
   fleet config set-auth-pubkey [<key>|--from <file>]  (enable Elcano SSO: validates + writes AUTH_SIGNING_PUBKEY into the web env file;
                                                        accepts the "auth pubkey" output line verbatim; --login-url/--cookie-domain optional)
+  fleet config set-env <KEY> [--value -] [--web]      (upsert ANY key into the server — or web — env file as exactly one line:
+                                                       duplicates removed, 0600 + owner kept; value from stdin/hidden prompt, never argv)
+  fleet config unset-env <KEY> [--web]                (remove every line for KEY)
   fleet env [show]                                    (print the server + web env files with secret values masked)
   fleet env edit [--web] [--editor CMD]               (open the server env file — or the web one — in $EDITOR, or pick
                                                        nano/vim/helix interactively; offered via dnf install if missing.
@@ -199,6 +202,8 @@ Users, credentials, notes:
   fleet sched user del <username>
   fleet sched user list
   fleet sched apikey create <name> [--type admin|task|webhook|readonly] [--rate-limit-per-minute N] [--trigger-slugs a,b] [--role admin]
+                                                      (typed keys are fleet_<type>_<base58>, legacy --role keys sk-…; send as X-API-Key.
+                                                       Writes the store fleet.service reads — announced as "key store:"; FLEET_DATA_DIR overrides)
   fleet sched apikey list
   fleet sched apikey revoke <key-id>
   fleet sched apikey rotate <key-id> [--grace-hours 24]   (fresh secret, same type/scope; old key valid through the grace window)

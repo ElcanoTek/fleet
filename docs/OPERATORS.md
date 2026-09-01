@@ -65,8 +65,10 @@ FLEET_CLIENT_CONFIG_DIR=/opt/fleet/client      # the client bundle checkout
 FLEET_ENV_FILE=/etc/fleet/fleet.env            # so config.Load reads this same file
 ```
 
-`fleet env` prints this file (and the web-tier one) with secret values masked,
-and `fleet env edit` opens it in an editor — `$EDITOR`, or an interactive
+`fleet config set-env KEY` upserts one variable as exactly one line (value from
+stdin or a hidden prompt; duplicates removed; `0600` and owner kept) — prefer
+it over hand-editing. `fleet env` prints this file (and the web-tier one) with
+secret values masked, and `fleet env edit` opens it in an editor — `$EDITOR`, or an interactive
 nano/vim/helix pick — restoring the 0600 mode afterwards; see
 [ENV-CLI.md](ENV-CLI.md).
 

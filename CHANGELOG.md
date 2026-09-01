@@ -19,6 +19,19 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **`fleet config set-env <KEY>` / `unset-env <KEY>`** — the generic env-file
+  writer that only existed for two named credentials. Value from stdin
+  (`--value -`, a pipe) or a hidden TTY prompt, never argv; `--web` targets the
+  web-tier file. Writes through the same `creds.SetEnvKey` path as
+  `set-openrouter-key`, so the result is exactly one line for the key, the
+  file stays `0600` and its owner is unchanged. See
+  [docs/ENV-CLI.md](docs/ENV-CLI.md).
+
+- **`docs/API-CLIENTS.md`** — the machine-client runbook: which paths the TLS
+  front routes to the API, why the bare paths 307 to `/login`, minting a key
+  into the store the *service* reads, `X-API-Key` as the one public auth path,
+  and `POST /v1/tasks/estimate` as the free connection test.
+
 - **`fleet env` — inspect + edit the deployment env files from the CLI**
   (patterned after gig's `gig env`). `fleet env [show]` prints the server env
   file (`FLEET_ENV_FILE` / `/etc/fleet/fleet.env` / `.env.local`) and the
@@ -258,6 +271,39 @@ prior versions are listed because none have shipped.
   `os.Getenv`+parse knob is introduced without a registry row.
 
 ### Fixed
+
+- **`fleet config set-*` no longer silently loses to a duplicate line.**
+  `creds.SetEnvKey` replaced only the first `KEY=` line, but the server's
+  loader is last-assignment-wins, so on a hand-edited file carrying two lines
+  for a key the CLI printed "set KEY" and the service kept the stale later
+  value. The upsert now leaves exactly one line for the key (first position
+  kept, later duplicates dropped).
+
+- **Env-file writes keep the file's owner.** Both `fleet env edit` (an editor
+  that saves via rename hands the file to the editing user — root under sudo)
+  and the temp+rename in `creds.SetEnvKey` now restore the previous owner
+  when running as root and it changed; mode `0600` is restored as before.
+
+- **`fleet sched apikey …` writes the store the service actually reads.**
+  The CLI resolved `DATA_DIR`/`FLEET_DATA_DIR` against *its* cwd and fell
+  back to `./data`, so a root shell minted keys into `/root/data/api_keys.json`
+  — a file the unit never opens — and the caller saw a `401` indistinguishable
+  from a typo. It now derives the service's store the way the service does
+  (the unit's `WorkingDirectory` + the env *file*'s value, default `./data`),
+  prints `key store: …` on every run, warns loudly when an explicit env
+  override points elsewhere, and after each write hands `api_keys.json` +
+  the audit log back to the store directory's owner (a root-run mint used to
+  leave them root-owned inside the `fleet` user's directory, unreadable and
+  unwritable to the service). `--help` and the create output now state the
+  key formats (`fleet_<type>_<base58>` vs legacy `sk-…`) and the header.
+
+- **`fleet status` probes the sandbox image in the service user's store.**
+  Run as root it inspected root's rootful podman store and reported an image
+  "missing" that `fleet doctor` had just verified in the `fleet` user's store.
+  As root it now runs the probe as the unit's `User=` (runuser + the unit's
+  HOME/XDG_RUNTIME_DIR, like `build-sandbox-image.sh`); as anyone else it
+  labels the verdict as being about *your* store and points at the
+  authoritative check.
 
 - **The public HTTP API is now reachable through the Caddy TLS front.** The
   Caddyfile `scripts/bootstrap.sh --enable-web --domain` wrote (and the

@@ -378,6 +378,7 @@ Deep references live in [`docs/`](docs/) so this README stays an orientation, no
 | [`docs/SCANNING.md`](docs/SCANNING.md) | The scanning stack — which of golangci-lint / ruff / govulncheck / Grype / gitleaks / npm audit / CodeQL / Semgrep owns what, what actually blocks a merge, and the known gaps |
 | [`docs/CODEQL.md`](docs/CODEQL.md) | CodeQL specifics — advanced setup, the four-language matrix, the High-band gate + accepted-findings register, and why a PR-event run certifies a diff rather than a tree |
 | [`docs/BUILDING-ON-FLEET.md`](docs/BUILDING-ON-FLEET.md) | The HTTP API as an automation substrate — keys, kicking off jobs, consuming structured output |
+| [`docs/API-CLIENTS.md`](docs/API-CLIENTS.md) | Reaching the API from another machine — what the TLS front routes, the key store the service reads, `X-API-Key`, the free connection test |
 | [`docs/MCP-CATALOG.md`](docs/MCP-CATALOG.md) | The connector catalog — bundled vs third-party trust classes |
 | [`docs/adr/`](docs/adr/) | Architecture Decision Records — the *why* behind the non-negotiable invariants |
 | [`SECURITY.md`](SECURITY.md) · [`CONTRIBUTING.md`](CONTRIBUTING.md) | Reporting a vulnerability · contributor workflow + CI gates |

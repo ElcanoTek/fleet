@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	osuser "os/user"
 	"strings"
 	"time"
 
@@ -158,19 +159,69 @@ func checkSandbox(r *report, bundle *clientconfig.Bundle) {
 		r.warnLine("sandbox image", fmt.Sprintf("podman not on PATH — cannot verify %s (install podman)", ref))
 		return
 	}
+	// Rootless podman keeps one image store PER USER. The service runs as the
+	// unit's User= (fleet), so the image lives in THAT store; a root shell
+	// running `podman run` inspects root's rootful store instead and reports
+	// "missing" for an image doctor just verified. As root, probe as the
+	// service user (the same runuser/HOME/XDG_RUNTIME_DIR shape
+	// scripts/build-sandbox-image.sh and doctor.sh use); as anyone else, say
+	// whose store the verdict is about so nobody chases it.
+	svcUser, svcHome := serviceUserAndHome(serviceName(""))
+	argv, storeNote := sandboxProbeArgv(ref, svcUser, svcHome, os.Geteuid() == 0)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	//nolint:gosec // G204: fixed "podman" binary; ref is the operator's resolved bundle image, not request/LLM input.
-	cmd := exec.CommandContext(ctx, "podman", "run", "--rm", ref, "true")
+	//nolint:gosec // G204: fixed binaries (podman, or runuser+env+podman); ref is the operator's resolved bundle image and svcUser the unit's User=, not request/LLM input.
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	if svcHome != "" && os.Geteuid() == 0 && svcUser != "" && svcUser != "root" {
+		// Rootless podman re-execs and chdir()s back to the inherited cwd,
+		// which the service user may not be able to enter (e.g. /root).
+		cmd.Dir = svcHome
+	}
 	if out, err := cmd.CombinedOutput(); err != nil {
 		detail := strings.TrimSpace(string(out))
 		if detail == "" {
 			detail = err.Error()
 		}
-		r.fail("sandbox image", fmt.Sprintf("%s not runnable: %s (build it: scripts/build-sandbox-image.sh)", ref, firstLine(detail)))
+		r.fail("sandbox image", fmt.Sprintf("%s not runnable%s: %s (build it: scripts/build-sandbox-image.sh; authoritative check: sudo fleet doctor)", ref, storeNote, firstLine(detail)))
 		return
 	}
-	r.pass("sandbox image", ref+" present + runnable")
+	r.pass("sandbox image", ref+" present + runnable"+storeNote)
+}
+
+// sandboxProbeArgv builds the `podman run --rm <ref> true` probe. As root with
+// a non-root service user it runs through runuser with the unit's HOME and
+// XDG_RUNTIME_DIR so the probe reads the SERVICE's image store; otherwise it
+// runs as the caller and the note says whose store that is. Pure, for tests.
+func sandboxProbeArgv(ref, svcUser, svcHome string, asRoot bool) (argv []string, storeNote string) {
+	probe := []string{"podman", "run", "--rm", ref, "true"}
+	switch {
+	case asRoot && svcUser != "" && svcUser != "root":
+		home := svcHome
+		if home == "" {
+			home = "/var/lib/" + svcUser
+		}
+		argv = append([]string{"runuser", "-u", svcUser, "--", "env", "HOME=" + home, "XDG_RUNTIME_DIR=/run/" + svcUser}, probe...)
+		return argv, " (as " + svcUser + " — the service's image store)"
+	case asRoot:
+		return probe, " (root's store — the service runs as root too)"
+	case svcUser != "" && svcUser != "root":
+		return probe, " (YOUR store, not " + svcUser + "'s — run: sudo fleet status, or sudo fleet doctor for the authoritative check)"
+	default:
+		return probe, ""
+	}
+}
+
+// serviceUserAndHome returns the unit's User= and that account's home
+// directory, or empty strings when the unit/systemd/user is unknown.
+func serviceUserAndHome(service string) (user, home string) {
+	user = unitProperty(service, "User")
+	if user == "" || user == "root" {
+		return user, ""
+	}
+	if u, err := osuser.Lookup(user); err == nil {
+		home = u.HomeDir
+	}
+	return user, home
 }
 
 // checkService reports the systemd unit state. An installed-but-failed unit is a
