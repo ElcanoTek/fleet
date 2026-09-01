@@ -71,6 +71,7 @@ func main() {
 	}
 
 	log.Printf("a2a-tck-shim: %s -> %s (auth injection + messageId scenario markers)", *listen, *target)
+	// nosemgrep: go.lang.security.audit.net.use-tls.use-tls -- loopback-only conformance-test harness (default listen 127.0.0.1, header forbids any other use); TLS on a loopback rig would add nothing and the official TCK speaks plain HTTP to it.
 	log.Fatal(http.ListenAndServe(*listen, rp)) //nolint:gosec // loopback test harness, not a served endpoint
 }
 
