@@ -61,7 +61,8 @@ two bundle primitives fleet already governs.
 | `mcp.json` `stdio` entry | One always-on `ServerDef` of type `stdio`, appended to the MCP catalog. The subprocess **launches in the plugin root** (or the declared `cwd`), with `PLUGIN_ROOT` and `PLUGIN_DATA` set *last* in its environment. |
 | `mcp.json` `streamable-http` entry | One always-on `ServerDef` of type `http` with the literal URL and headers. |
 | `mcp.json` `sse` entry | **Reported and skipped.** fleet speaks stdio and Streamable HTTP; the spec makes legacy HTTP+SSE support optional. |
-| `extensions` / `com.example.client/` | Ignored, as the spec requires for namespaces a client does not implement. fleet reserves **`com.elcanotek.fleet`** and reads nothing from it yet (see below). |
+| `extensions["com.elcanotek.fleet"]` | fleet's own namespace (spec §8.1): per-server `tools`, `probe`, and the Optional-server knobs the portable format has no field for. See [Fleet's extension namespace](#fleets-extension-namespace). |
+| other `extensions` / `com.example.client/` | Ignored, as the spec requires for namespaces a client does not implement. |
 
 ### Skills: precedence and provenance
 
@@ -79,10 +80,11 @@ library badges it ("Plugin: acme-tools"). A bundle that opts out of the built-in
 pack still gets a merged tree when a plugin ships skills — the tree is the only
 way plugin skills reach the one `skills/` mount.
 
-Editing a plugin skill's body in place is picked up on the next read (the same
-live-reload contract as bundle skills). *Adding* a skill folder to a plugin, or
-adding a plugin, needs a bundle reload (`fleet mcp reload`, SIGHUP, or a
-restart) because the loader validates the folder set at load time.
+Plugin skills follow the disk on every read, exactly like bundle skills: editing
+a body, adding a skill folder, or adding a `skills/` dir to a plugin that had
+none is picked up on the next `Skills()` read with no restart. Adding a whole
+*plugin*, or changing its `mcp.json`, needs a bundle reload (`fleet mcp reload`,
+SIGHUP, or a restart) — the same rule as a manifest `mcp_servers[]` change.
 
 ### MCP servers: what the loader enforces
 
@@ -124,6 +126,60 @@ created before any stdio server launches, is writable by the process the
 broker runs servers as, and lives outside the plugin root so it survives a
 plugin update.
 
+### Fleet's extension namespace
+
+The portable format deliberately has no field for a client's governance knobs,
+and the spec's answer is a reverse-domain namespace in `plugin.json`'s
+`extensions` object (§8.1) that every other client ignores. fleet owns
+**`com.elcanotek.fleet`** and reads one thing from it: per-server overrides keyed
+by the server's `mcp.json` name.
+
+```json
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "acme-tools",
+  "extensions": {
+    "com.elcanotek.fleet": {
+      "mcp_servers": {
+        "validator": {
+          "tools": ["validate", "explain"],
+          "probe": {"tool": "validate", "contains": "ok", "args": {}},
+          "optional": true,
+          "enabled_by_default": false,
+          "beta": false,
+          "display_name": "Acme validator",
+          "description": "Validates release manifests.",
+          "data_sources": ["https://api.acme.example"],
+          "disabled": false
+        }
+      }
+    }
+  }
+}
+```
+
+| Key | Maps to | Notes |
+| --- | --- | --- |
+| `tools` | `ServerDef.Tools` — the per-server **allowlist** the ADR-0042 child authorizer enforces | Trimmed, de-duplicated; empty = every advertised tool, as for a manifest server. |
+| `probe` | `ServerDef.Probe` — the `fleet mcp test --deep` canary | `tool` required; `contains` and `args` optional. Must be inside `tools` when an allowlist is set (the manifest rule), else the probe is dropped with a report. |
+| `optional`, `enabled_by_default`, `beta`, `display_name`, `description`, `data_sources` | the same-named `ServerDef` fields | The Optional-server semantics and settings-UI metadata a manifest server has. |
+| `disabled` | — | `true` drops the entry without editing `mcp.json` — how an operator vendoring a third-party plugin turns off a server they don't want. Not reported (it is an explicit choice). |
+
+Deliberately **not** expressible here: anything credential-shaped (`env`,
+`enabled_env`, `account_vars`, `identity_env`). The portable format forbids
+secrets in a plugin and fleet does not smuggle them in through its own
+namespace; a server that needs a brokered credential belongs in the manifest's
+`mcp_servers[]`.
+
+Because this is fleet's namespace, its failure handling is fleet's to choose,
+and it is lenient to match the spec's top level: an unknown key is reported and
+ignored; a wrong-typed override is reported and ignored **for that server
+only**; an override naming a server `mcp.json` does not declare is reported;
+nothing in the extension can reject the plugin. (A non-object *value* for the
+namespace is still fatal — that is the portable schema's rule, not fleet's.)
+fleet reads no extension *directory* (`com.elcanotek.fleet/` at the plugin
+root).
+
 **Gates unchanged.** A plugin server is `always: true` — the portable format
 has no credential gate because it must not carry secrets, so there is nothing
 to gate on — and from there it flows through every gate a manifest server does:
@@ -154,16 +210,10 @@ surfaced by `fleet validate-config` as a **non-blocking advisory** on the
 
 ## What was deliberately not done
 
-- **No fleet-specific extension data is read.** `com.elcanotek.fleet` is
-  reserved (a constant in `plugins.go`) so a future fleet knob — a per-server
-  `tools:` allowlist, a `probe:` declaration, a credential gate — has a stable,
-  non-portable home. Nothing is parsed from it yet; a plugin that carries it
-  loads exactly as one that does not.
-- **No `tools:` allowlist and no `probe:` for plugin servers.** The portable
-  format has no field for either. Govern a plugin server's tools through
-  `agent_policy` (critical-tool suffixes) as for any server; `fleet mcp test`
-  covers the handshake + `tools/list` rung and reports the server as
-  unproven-beyond-handshake, never failed.
+- **No credential gate for plugin servers.** The extension namespace carries
+  `tools`, `probe` and the Optional-server knobs, but nothing credential-shaped:
+  a plugin server that needs a brokered secret is a manifest `mcp_servers[]`
+  entry, not a plugin entry.
 - **Fleet's own spawn-time tokens are still substituted.** A plugin env value
   containing `${FLEET_WORKSPACE}` or `${FLEET_TASK_ID}` is rewritten at spawn
   exactly like a manifest server's (docs/MCP-BUNDLE-ENV.md). The spec says a
@@ -211,6 +261,9 @@ a `plugin.json`, one skill, and an `mcp.json` whose stdio server exercises
 every row of the failure-boundary table above through `clientconfig.Load`
 (manifest deviations, MCP two-stage validation, cwd forms, name collisions,
 skill precedence and provenance, symlink escapes, `plugin_roots`, duplicate
-names, single-pass expansion). The httpapi and web tests cover the `plugin`
+names, single-pass expansion), the `com.elcanotek.fleet` overrides (allowlist
++ probe applied, probe-outside-allowlist dropped, `disabled`, wrong-typed and
+unknown keys reported per server, undeclared server names reported), and
+skill folders added or removed after load appearing on the next read. The httpapi and web tests cover the `plugin`
 provenance on `/skills`. `internal/evals/fingerprint.go` hashes `plugins/` as
 bundle content so eval runs against different plugin sets are not compared.

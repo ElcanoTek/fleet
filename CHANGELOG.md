@@ -32,8 +32,12 @@ prior versions are listed because none have shipped.
   boundaries follow the spec exactly — an unknown `plugin.json` field is
   reported, not fatal; a bad server entry skips itself; every path must
   resolve inside the plugin root — and `fleet validate-config` surfaces the
-  problems as advisories. Legacy `sse` entries are skipped, and
-  `com.elcanotek.fleet` is reserved but unread. See
+  problems as advisories. fleet's own `com.elcanotek.fleet` extension
+  namespace in `plugin.json` carries the per-server governance knobs the
+  portable format lacks — a `tools` allowlist, a `fleet mcp test --deep`
+  `probe`, the Optional-server metadata, and `disabled` — and nothing
+  credential-shaped. Plugin skill folders follow the disk on read, like
+  bundle skills. Legacy `sse` entries are skipped. See
   [docs/AGENT-PLUGINS.md](docs/AGENT-PLUGINS.md) +
   [ADR-0054](docs/adr/0054-agent-plugins.md).
 
