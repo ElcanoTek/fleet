@@ -5,8 +5,9 @@
 
 The operator lifecycle is **bootstrap → update → status**, one box. The server
 runs via `fleet serve` (bare `fleet` also serves, for back-compat); all other
-verbs are the operator CLI. (`fleet-admin <verb>` still works but is deprecated
-and will be removed.) Every verb is idempotent and exposed both as a shell script
+verbs are the operator CLI. (`fleet-admin <verb>` still works but is deprecated;
+it is removed in the first release after 1.0.0 — [ADR-0012](adr/0012-unified-fleet-cli.md).)
+Every verb is idempotent and exposed both as a shell script
 (`scripts/`) and as a `fleet` subcommand that wraps it, so a re-run converges on
 the same state rather than double-applying. None of them ever run application
 migrations — each service self-migrates on start (chat's advisory-lock runner;

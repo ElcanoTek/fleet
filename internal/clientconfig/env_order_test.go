@@ -511,6 +511,10 @@ mcp_servers:
 // or a literal naming (enable gates, account vars, …), disqualifies the name.
 func TestEnvVarNamesDefaultOnly(t *testing.T) {
 	unsetTracked(t, "I1123_DO_PURE", "I1123_DO_MIXED", "I1123_DO_GATED")
+	// The ${VAR:?} form fails the load when unset, so the required-reference
+	// case needs a value in the process env; the inventory is captured from the
+	// raw manifest, so the value never influences classification.
+	t.Setenv("I1123_DO_REQ", "req-value")
 	b, err := Load(writeManifest(t, `
 mcp_servers:
   - name: local
@@ -520,12 +524,14 @@ mcp_servers:
     env:
       MIXED: "${I1123_DO_MIXED}"
       GATED: "${I1123_DO_GATED:-gate-default}"
+      REQ: "${I1123_DO_REQ:-req-default}"
   - name: remote
     type: http
     url: "${I1123_DO_PURE:-https://fallback.example/mcp}"
     always: true
     headers:
       X-Mixed: "${I1123_DO_MIXED:-mixed-default}"
+      X-Req: "${I1123_DO_REQ:?I1123_DO_REQ is required}"
 `))
 	if err != nil {
 		t.Fatalf("load: %v", err)
@@ -540,9 +546,12 @@ mcp_servers:
 	if slices.Contains(got, "I1123_DO_GATED") {
 		t.Errorf("default-only = %v, must exclude I1123_DO_GATED (named literally as an enable gate)", got)
 	}
-	// All three still register with the allowlist inventory.
+	if slices.Contains(got, "I1123_DO_REQ") {
+		t.Errorf("default-only = %v, must exclude I1123_DO_REQ (also referenced ${VAR:?}-required)", got)
+	}
+	// All four still register with the allowlist inventory.
 	names := b.EnvVarNames()
-	for _, want := range []string{"I1123_DO_PURE", "I1123_DO_MIXED", "I1123_DO_GATED"} {
+	for _, want := range []string{"I1123_DO_PURE", "I1123_DO_MIXED", "I1123_DO_GATED", "I1123_DO_REQ"} {
 		if !slices.Contains(names, want) {
 			t.Errorf("EnvVarNames = %v, want %q", names, want)
 		}

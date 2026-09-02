@@ -1,9 +1,5 @@
 # Changelog
 
-- Align the recommended model lineup across Fleet, Chat, and MOC: new work
-  defaults to `z-ai/glm-5.2`, while advanced escalation and task fallback use
-  OpenRouter's exact `openai/gpt-5.6-sol` slug.
-
 All notable changes to fleet are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
@@ -226,6 +222,18 @@ prior versions are listed because none have shipped.
 
 ### Changed
 
+- **The `fleet-admin` shim's removal trigger is now stated consistently.**
+  README, AGENTS.md, CONTRIBUTING.md, ONBOARDING.md, docs/DEPLOYMENT.md,
+  docs/OPERATORS.md, docs/BACKUP_RESTORE.md, the Makefile and the shim's own
+  deprecation notice said "removed after one release" / "will be removed";
+  ADR-0012 (amended 2026-08-22) pins the actual trigger — the first release
+  after 1.0.0 — and notes that `scripts/update.sh` and
+  `scripts/fleet-upgrade.sh` hard-fail if `make build` stops emitting the
+  shim. Every reference now says the same thing, so a "clean up the deprecated
+  shim" pass cannot read the docs as an invitation to delete it early.
+- Align the recommended model lineup across Fleet, Chat, and MOC: new work
+  defaults to `z-ai/glm-5.2`, while advanced escalation and task fallback use
+  OpenRouter's exact `openai/gpt-5.6-sol` slug.
 - **Operations connector selection now preserves always-on MCPs (#1333).** New
   task forms still start bundled connectors marked `enabled_by_default` in the
   selected state, matching new Chat conversations, but the persisted
