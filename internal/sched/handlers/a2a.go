@@ -46,6 +46,7 @@ import (
 	"github.com/google/uuid"
 
 	a2abridge "github.com/ElcanoTek/fleet/internal/a2a"
+	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/sched/budget"
 	"github.com/ElcanoTek/fleet/internal/sched/db"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
@@ -81,6 +82,12 @@ type A2AConfig struct {
 	// the task outcome before answering with the freshest snapshot.
 	// FLEET_A2A_UNARY_WAIT_SECONDS; zero falls back to a2aUnaryWaitBudget.
 	UnaryWaitBudget time.Duration
+	// MaxDelegationDepth is the inbound recursion guard (#1368): a delegating
+	// fleet declares its hop count in X-Fleet-A2A-Depth, and a create past
+	// this ceiling is refused so two deployments pointed at each other cannot
+	// ping-pong tasks forever. FLEET_A2A_MAX_DELEGATION_DEPTH — the SAME knob
+	// the outbound peer tools refuse on; zero falls back to the default.
+	MaxDelegationDepth int
 }
 
 // SetA2A wires the A2A protocol server (#1279). nil (never called) leaves the
@@ -278,6 +285,41 @@ func (h *Handlers) a2aVisibleTask(p principal, rawID wire.TaskID) (*models.Task,
 	return task, nil
 }
 
+// a2aMaxDelegationDepth resolves the configured ceiling, defaulting when the
+// config left it zero (a test-built A2AConfig, or an older wiring).
+func a2aMaxDelegationDepth(configured int) int {
+	if configured > 0 {
+		return configured
+	}
+	return config.DefaultA2AMaxDelegationDepth
+}
+
+// a2aDelegationDepth reads the delegating peer's X-Fleet-A2A-Depth header
+// (#1368) and returns the depth to stamp on the task this create makes: 1
+// when absent (an inbound A2A create is one hop by definition), the declared
+// value otherwise, clamped up to 1, and refused past the ceiling. The header
+// is a fleet extension: a non-fleet caller never sends it and its tasks
+// simply start a fresh chain at depth 1 — the guard is cooperative, aimed at
+// fleets looping through one another, not adversarial (docs/A2A.md).
+func a2aDelegationDepth(header string, configuredMax int) (int, error) {
+	maxDepth := a2aMaxDelegationDepth(configuredMax)
+	header = strings.TrimSpace(header)
+	if header == "" {
+		return 1, nil
+	}
+	n, err := strconv.Atoi(header)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be an integer delegation depth, got %q", a2abridge.DepthHeader, header)
+	}
+	if n < 1 {
+		n = 1
+	}
+	if n > maxDepth {
+		return 0, fmt.Errorf("delegation depth %d exceeds this server's maximum of %d (FLEET_A2A_MAX_DELEGATION_DEPTH): the delegation chain is too deep, do the work locally", n, maxDepth)
+	}
+	return n, nil
+}
+
 // a2aTitle derives the task's display title from the message text: first
 // line, trimmed to the title budget.
 func a2aTitle(prompt string) string {
@@ -384,10 +426,21 @@ func (h *Handlers) a2aSendMessage(w http.ResponseWriter, r *http.Request, p prin
 		return
 	}
 
+	// Delegation depth (#1368): a fleet peer delegating to us sends its own
+	// depth+1; absent means a first hop (every inbound A2A create is one).
+	// Past the ceiling the chain is refused before a task exists.
+	depth, err := a2aDelegationDepth(r.Header.Get(a2abridge.DepthHeader), h.a2a.MaxDelegationDepth)
+	if err != nil {
+		a2aWrite(w, a2abridge.NewErrorResponse(req.ID, wire.ErrInvalidRequest, err.Error(),
+			map[string]string{"maxDelegationDepth": strconv.Itoa(a2aMaxDelegationDepth(h.a2a.MaxDelegationDepth))}))
+		return
+	}
+
 	tc := models.TaskCreate{
-		Prompt:  prompt,
-		Title:   a2aTitle(prompt),
-		Persona: h.a2a.Persona,
+		Prompt:             prompt,
+		Title:              a2aTitle(prompt),
+		Persona:            h.a2a.Persona,
+		A2ADelegationDepth: depth,
 	}
 	if h.a2a.Model != "" {
 		model := h.a2a.Model

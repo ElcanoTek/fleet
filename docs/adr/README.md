@@ -64,3 +64,4 @@ reviewable, and citable. Each record names the file or test that enforces it.
 | [0053](0053-public-api-through-the-tls-front.md) | The public HTTP API is served through the TLS front, with the header-trust channel stripped | Accepted; amends ADR-0004 |
 | [0054](0054-agent-plugins.md) | Agent Plugins load as bundle content, translated onto the existing skills + MCP primitives | Accepted |
 | [0055](0055-kubernetes-skills-staged-into-the-workspace-claim.md) | On the kubernetes backend the skills tree is staged into the workspace claim | Accepted; amends ADR-0049 |
+| [0056](0056-a2a-outbound-delegation.md) | Outbound A2A delegation as bundle-declared tools over the MCP seam | Accepted |

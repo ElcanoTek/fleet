@@ -52,8 +52,9 @@ Three mechanisms, all equivalent:
 
 **Not covered (still needs a restart):**
 
-- **Inline HTTP tools** (`http_tools`, #261) — the synthetic tools server is left
-  untouched by a reload.
+- **Inline HTTP tools** (`http_tools`, #261) and **outbound A2A peers**
+  (`a2a_peers`, #1368) — both synthetic tool servers are left untouched by a
+  reload.
 - **Per-user remote MCP connections** (#443/#449) are built fresh per turn and
   are unaffected (they were never part of the shared catalog).
 - **Connector environment changes**, including rotation, deletion, a new
@@ -91,4 +92,4 @@ definitions or bypass the normal selection gate.
 
 ## Not yet implemented (honest scope)
 
-- Reload of the inline `http_tools` catalog.
+- Reload of the inline `http_tools` and `a2a_peers` catalogs.

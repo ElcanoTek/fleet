@@ -104,6 +104,26 @@ func registerLiveScenarios(s *fakellm.Server) {
 		fakellm.ToolStep(fakellm.ToolCall{ID: "call_tck_audit", Name: "confirm_audit", Arguments: tckAuditArgs}),
 		fakellm.TextStep("TCK task complete."),
 	}})
+
+	// a2a-delegate: the outbound-delegation loopback rig (#1368). A fleet
+	// whose bundle declares itself as the a2a peer "self" runs this scenario:
+	// turn 1 delegates through mcp__a2a_self_send with a prompt that carries
+	// THIS marker again, so the remote task (depth 1) tries to re-delegate —
+	// with FLEET_A2A_MAX_DELEGATION_DEPTH=1 that second hop is refused
+	// locally (A2A_DELEGATION_DEPTH_EXCEEDED) and the chain stops at one
+	// remote task. Turn 2 polls a task id that cannot exist to exercise the
+	// remote-error rendering; then the run audits and finishes. Steps are
+	// static (fakellm has no templating), which is why the real remote task
+	// id from turn 1 is not polled here — the wait/status happy paths are
+	// covered by internal/mcp's tests against a fake peer.
+	s.Scenario("a2a-delegate", fakellm.Scenario{Steps: []fakellm.Step{
+		fakellm.ToolStep(fakellm.ToolCall{ID: "call_a2a_send", Name: "mcp__a2a_self_send",
+			Arguments: `{"message":"Loopback delegation probe. [[scenario:a2a-delegate]]"}`}),
+		fakellm.ToolStep(fakellm.ToolCall{ID: "call_a2a_status", Name: "mcp__a2a_self_status",
+			Arguments: `{"task_id":"00000000-0000-0000-0000-000000000000"}`}),
+		fakellm.ToolStep(fakellm.ToolCall{ID: "call_a2a_audit", Name: "confirm_audit", Arguments: tckAuditArgs}),
+		fakellm.TextStep("A2A delegation scenario complete."),
+	}})
 	s.Scenario("tck-ask", fakellm.Scenario{Steps: []fakellm.Step{
 		fakellm.ToolStep(fakellm.ToolCall{ID: "call_tck_ask", Name: "ask",
 			Arguments: `{"question":"TCK scenario: reply to continue this task."}`}),

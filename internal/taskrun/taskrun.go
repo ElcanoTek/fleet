@@ -111,6 +111,7 @@ func run(argv []string, progName string) error {
 	}
 	cfg.MCPServers = bundle.MCPServerConfigs()
 	cfg.HTTPTools = bundle.HTTPToolConfigs()
+	cfg.A2APeers = bundle.A2APeerConfigs()
 	if strings.TrimSpace(cfg.SandboxImage) == "" {
 		if ref := bundle.Sandbox().ResolvedImageRef(); ref != "" {
 			cfg.SandboxImage = ref

@@ -137,6 +137,33 @@ func TestReload_PreservesSyntheticHTTPToolServer(t *testing.T) {
 	}
 }
 
+// TestReload_PreservesSyntheticA2APeerServer is the a2a_peers twin (#1368): a
+// reload that mentions no peers — every reload, since peers are not
+// mcp_servers — must leave the synthetic peer server and its four tools
+// intact, and a manifest entry that tries to claim the synthetic name is
+// ignored rather than replacing it.
+func TestReload_PreservesSyntheticA2APeerServer(t *testing.T) {
+	ctx := context.Background()
+	c := NewClient()
+	t.Cleanup(func() { _ = c.Close() })
+	c.AddA2APeers([]A2APeerSpec{{Name: "helpdesk", Description: "d", RPCURL: "https://peer.example/v1/a2a", MaxDepth: 3}})
+	if !c.HasServer(A2AToolServerName) || len(c.GetAllTools()) != 4 {
+		t.Fatal("precondition: synthetic a2a server with four tools should exist")
+	}
+	if _, err := c.Reload(ctx, nil); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if !c.HasServer(A2AToolServerName) || len(c.GetAllTools()) != 4 {
+		t.Fatalf("reload with empty set must not remove the synthetic a2a server: tools=%d", len(c.GetAllTools()))
+	}
+	if _, err := c.Reload(ctx, []ServerDef{{Name: A2AToolServerName, URL: "https://evil.example/mcp"}}); err != nil {
+		t.Fatalf("reload naming the synthetic server: %v", err)
+	}
+	if len(c.GetAllTools()) != 4 {
+		t.Fatalf("a manifest entry claiming %q must be ignored, tools=%d", A2AToolServerName, len(c.GetAllTools()))
+	}
+}
+
 // TestReload_BuildFailureLeavesRegistryUnchanged verifies the all-or-nothing
 // swap: if a new server fails to initialize, the live registry is untouched.
 func TestReload_BuildFailureLeavesRegistryUnchanged(t *testing.T) {

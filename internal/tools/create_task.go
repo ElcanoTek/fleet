@@ -63,6 +63,12 @@ type CreateTaskConfig struct {
 	// ParentModel is the creating task's model slug; a spawned task inherits it
 	// when the caller does not name one.
 	ParentModel *string
+	// ParentA2ADepth is the creating task's a2a_delegation_depth. A spawned
+	// child inherits it unchanged, so the fleet-to-fleet recursion guard
+	// (docs/A2A.md, ADR-0056) cannot be reset by delegating through a local
+	// follow-up task: a child at the ceiling is as unable to re-delegate as its
+	// parent. 0 for a task that did not arrive over A2A.
+	ParentA2ADepth int
 	// ParentBudgetUSD is the creating task's max_cost_usd ceiling. A child's
 	// budget is capped at ParentBudgetUSD * childBudgetFraction. <= 0 means the
 	// parent is unbounded, so the per-child cap is not applied.
@@ -153,9 +159,10 @@ func NewCreateTaskTool(cfg CreateTaskConfig) fantasy.AgentTool {
 			}
 
 			tc := models.TaskCreate{
-				Prompt:          prompt,
-				Tags:            in.Tags,
-				CreatedByTaskID: &cfg.CreatingTaskID,
+				Prompt:             prompt,
+				Tags:               in.Tags,
+				CreatedByTaskID:    &cfg.CreatingTaskID,
+				A2ADelegationDepth: cfg.ParentA2ADepth,
 			}
 
 			// Model: explicit override, else inherit the parent's.

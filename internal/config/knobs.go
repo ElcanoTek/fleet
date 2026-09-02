@@ -312,6 +312,16 @@ var envKnobs = []envKnob{
 	{key: "FLEET_SCHED_RATE_LIMIT_GLOBAL_PER_MINUTE", kind: kindInt, min: bound(0),
 		scope: scopeExternal, readBy: "cmd/fleet (handlers.Config)"},
 
+	// ── outbound A2A delegation (#1368) ── read at the point of use because
+	// the broker child registers the peer tools without ever running Load,
+	// and the inbound depth guard shares the same ceiling. min 1: a zero
+	// depth ceiling would refuse every inbound A2A create, which is what
+	// leaving FLEET_A2A_ENABLED unset is for.
+	{key: "FLEET_A2A_MAX_DELEGATION_DEPTH", fleet: true, kind: kindInt, min: bound(1), // gitleaks:allow — a knob NAME, not a credential (generic-api-key entropy false positive)
+		scope: scopeExternal, readBy: "internal/agent (RegisterA2APeers) + cmd/fleet (buildA2AConfig)"},
+	{key: "FLEET_A2A_CLIENT_ALLOW_PRIVATE", fleet: true, kind: kindBool,
+		scope: scopeExternal, readBy: "internal/agent (RegisterA2APeers)"},
+
 	// ── backup retention (`fleet backup`, a verb that never calls Load —
 	// internal/admincli resolves it through EnvKnobInt below).
 	{key: "FLEET_BACKUP_RETENTION_DAYS", kind: kindInt, min: bound(1),
@@ -683,6 +693,28 @@ func EnvKnobInt(key string, def int) (int, error) {
 		return def, nil
 	}
 	v, set, err := k.parseInt(raw)
+	if err != nil {
+		return def, fmt.Errorf("%s: %w", k.key, err)
+	}
+	if !set {
+		return def, nil
+	}
+	return v, nil
+}
+
+// EnvKnobBool resolves a registered external bool knob, returning def when it
+// is unset (or blank) and an error when it is set but not a recognized
+// boolean token.
+func EnvKnobBool(key string, def bool) (bool, error) {
+	k, err := externalKnob(key, kindBool)
+	if err != nil {
+		return def, err
+	}
+	raw, ok := k.lookup()
+	if !ok {
+		return def, nil
+	}
+	v, set, err := k.parseBool(raw)
 	if err != nil {
 		return def, fmt.Errorf("%s: %w", k.key, err)
 	}

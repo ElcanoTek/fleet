@@ -1,0 +1,16 @@
+-- 067_add_a2a_delegation_depth.up.sql — inbound A2A delegation depth (#1368).
+--
+-- Fleet can now delegate work OUT to other A2A agents (the a2a_peers[] tools),
+-- and another fleet can delegate IN to this one (#1279). Two deployments
+-- pointed at each other could therefore ping-pong a task forever. The guard is
+-- a wire-carried hop count: an outbound send carries X-Fleet-A2A-Depth (the
+-- sender's own depth + 1), the inbound A2A server refuses values past
+-- FLEET_A2A_MAX_DELEGATION_DEPTH, and the accepted depth is stamped here on
+-- the task it creates so the task's OWN outbound sends carry it forward.
+--
+-- 0 = not a delegation (every task a human or the REST API created, and every
+-- pre-existing row). Stamped once by the creating insert from the inbound
+-- header; never re-written (excluded from the upsert and UpdateTaskTx sets —
+-- a generic write must never reset a delegated task to 0 and re-open the
+-- guard) and never exported (a re-imported definition is not a delegation).
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS a2a_delegation_depth INTEGER NOT NULL DEFAULT 0;

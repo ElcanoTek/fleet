@@ -297,3 +297,20 @@ func TestScopeAuthorizer_KeysOnRegisteredAccountVariantNames(t *testing.T) {
 		t.Fatal("the default seat was permitted in a named-account scope")
 	}
 }
+
+// TestBrokerScopePolicyCarriesA2ADepth pins the #1368 narrowing: a delegated
+// task's inbound depth must reach the credential owner even when the run has
+// no other narrowing (the nil-collapse would otherwise drop it), and a
+// human-initiated run (depth 0, nothing else) still sends no policy.
+func TestBrokerScopePolicyCarriesA2ADepth(t *testing.T) {
+	if got := brokerScopePolicy(agent.MCPScopePolicy{A2ADepth: 0}); got != nil {
+		t.Fatalf("depth 0 with no other narrowing must send no policy, got %+v", got)
+	}
+	got := brokerScopePolicy(agent.MCPScopePolicy{A2ADepth: 2})
+	if got == nil || got.A2ADepth != 2 {
+		t.Fatalf("depth 2 must survive the nil-collapse, got %+v", got)
+	}
+	if len(got.Tools) != 0 || got.RestrictCredentials {
+		t.Fatalf("depth-only policy must not invent other narrowing: %+v", got)
+	}
+}

@@ -443,6 +443,9 @@ var allowedEnvVars = map[string]bool{
 	"FLEET_A2A_UNARY_WAIT_SECONDS": true,
 	"FLEET_A2A_PERSONA":            true,
 	"FLEET_A2A_MODEL":              true,
+	// ── outbound A2A delegation (#1368); point-of-use knobs (knobs.go) ──
+	"FLEET_A2A_MAX_DELEGATION_DEPTH": true,
+	"FLEET_A2A_CLIENT_ALLOW_PRIVATE": true,
 
 	"FLEET_SANDBOX_MEMORY":                true,
 	"FLEET_SANDBOX_CPUS":                  true,
@@ -1031,6 +1034,11 @@ type Config struct {
 	// catalog — is built in whichever process holds the connector credentials.
 	// Empty (the generic default) means "no HTTP tools" and changes nothing.
 	HTTPTools []HTTPToolConfig
+	// A2APeers is the runtime outbound-A2A peer catalog (the manifest's
+	// a2a_peers: section, #1368), sourced via Bundle.A2APeerConfigs() with the
+	// same host-side header resolution and the same credential boundary as
+	// HTTPTools. Empty (the generic default) means "no peers" — no a2a tools.
+	A2APeers []A2APeerConfig
 
 	// ── TLS termination (chat server) ──
 	// The standard deployment fronts the Next.js app (the only public entrypoint
@@ -1373,6 +1381,24 @@ type HTTPToolConfig struct {
 	ResponseJQ   string
 	Critical     bool
 }
+
+// A2APeerConfig is one remote A2A agent a fleet agent may delegate to
+// (#1368), in the credential-bearing runtime shape: Headers already carry
+// their resolved values. Description is BUNDLE-AUTHORED and is the only text
+// about the peer the model ever sees — a remote agent card is never fetched
+// into the tool roster.
+type A2APeerConfig struct {
+	Name        string
+	Description string
+	RPCURL      string
+	Headers     map[string]string
+	Critical    bool
+}
+
+// DefaultA2AMaxDelegationDepth is the FLEET_A2A_MAX_DELEGATION_DEPTH default:
+// how many fleet-to-fleet delegation hops a chain may take before both the
+// inbound A2A server and the outbound peer tools refuse to extend it (#1368).
+const DefaultA2AMaxDelegationDepth = 3
 
 // applyEnvFile folds envFile's KEY=VALUE pairs into the process environment:
 // only allowlisted keys (static allowlist + RegisterAllowedEnvVars names +
