@@ -506,7 +506,6 @@ mcp_servers:
 	}
 }
 
-
 // TestEnvFileAllowlistStillGatesUnreferencedKeys: the early application admits
 // only allowlisted keys — a file key the manifest never references (and the
 // static allowlist doesn't know) must NOT enter the process env.
