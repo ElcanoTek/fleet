@@ -1,4 +1,4 @@
-# ADR-0054: Outbound A2A delegation as bundle-declared tools over the MCP seam
+# ADR-0056: Outbound A2A delegation as bundle-declared tools over the MCP seam
 
 - **Status:** Accepted
 - **Date:** 2026-09-02

@@ -151,17 +151,23 @@ supporting-doc read exception. Treat bundle skills as an interactive-chat
 capability; a scheduled task that needs one should inline the instructions in its
 prompt.
 
-**On the kubernetes sandbox backend, inheriting the built-in pack costs
-in-sandbox skill files.** `SkillsDir` is then the merged tree under the control
-plane's data dir, which sandbox pods do not mount and no sandbox image can
-carry (its name is derived from the bundle path, and it is rebuilt at boot) — so
-`skills/<name>/SKILL.md` resolves for neither the file tools nor bash, and the
-roster degrades to name + description. `skills_builtin: false` makes `SkillsDir`
-the bundle's own `skills/`, which an operator CAN bake into the sandbox image
-and declare with `sandbox.kubernetes.bundle_docs_in_image`
-([DEPLOYMENT-KUBERNETES.md](DEPLOYMENT-KUBERNETES.md#bundle-docs-inside-a-sandbox-pod)).
-There is no setting that gives you both the built-in pack and working
-in-sandbox skill files on that backend.
+**On the kubernetes sandbox backend the same tree is staged into the workspace
+claim.** A sandbox pod mounts only the workspace claim, and the merged tree
+under the control plane's data dir is something no pod mounts and no sandbox
+image can carry (its name is derived from the bundle path, and it is rebuilt
+at boot from the binary's pack, the plugins and the bundle). So at boot fleet
+re-materializes the complete tree — pack, plugin skills, bundle `skills/` —
+at `<workspace root>/skills` inside the claim and points `SkillsDir` there;
+every pod mounts that directory read-only (a `subPath` of the claim, like the
+shared file library), the fileop anchor resolves reads under it and refuses
+writes, and `Skills()` resyncs it on read, so `skills/<name>/SKILL.md`
+resolves for the file tools, bash and python exactly as on podman. No image
+bake and no `bundle_docs_in_image` declaration is involved for skills;
+`skills_builtin: false` is a taste decision on both backends. Design and the
+tamper-resistance argument:
+[ADR-0055](adr/0055-kubernetes-skills-staged-into-the-workspace-claim.md);
+operator view:
+[DEPLOYMENT-KUBERNETES.md](DEPLOYMENT-KUBERNETES.md#skills-inside-a-sandbox-pod).
 
 Manifest knobs (mirroring the MCP directory):
 

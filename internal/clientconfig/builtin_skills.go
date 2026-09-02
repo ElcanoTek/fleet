@@ -37,6 +37,14 @@ import (
 // contract for bundle skills. Every reuse verifies the tree is owned by
 // this process and not group/world-writable, so a pre-planted attacker
 // directory is refused rather than adopted (#1121).
+//
+// On the kubernetes sandbox backend the data dir is invisible to sandbox
+// pods, so cmd/fleet re-stages the SAME merged tree into
+// <workspace root>/skills — inside the one volume every pod mounts — via
+// StageSkillsAt (ADR-0055). Because a sandbox can write to the workspace
+// volume before that path is mounted read-only over it, every write below is
+// symlink-safe (temp file + rename, never through an existing entry) and a
+// pre-planted staged root is replaced rather than adopted.
 
 //go:embed all:builtin_skills
 var builtinSkillsFS embed.FS
@@ -56,8 +64,10 @@ const mergedSkillsDirName = "skills-merged"
 //
 // overlays are the Agent Plugin skill contributions (plugins.go), applied
 // between the built-in pack and the bundle's own skills. A bundle that opts
-// out of the built-in pack still gets a merged tree when a plugin ships
-// skills — the tree is the only way plugin skills reach the one skills/ mount.
+// out of the built-in pack still gets a merged tree when any plugin is loaded
+// (one overlay per plugin, skills or not yet): the tree is the only way plugin
+// skills reach the one skills/ mount, and it must already exist for a skill
+// folder added after boot to be picked up on read.
 func materializeMergedSkills(bundleSkillsDir string, builtinEnabled bool, hidden []string, overlays []skillOverlay) (string, error) {
 	if !builtinEnabled && len(overlays) == 0 {
 		return bundleSkillsDir, nil
@@ -110,15 +120,16 @@ func ensureTrustedDir(path string) error {
 }
 
 // IsMaterializedSkillsDir reports whether dir is a merged tree this package
-// materialized (`<data|cache>/skills-merged/<hash>`) rather than a bundle's
-// own `skills/`. It exists for one caller: the kubernetes sandbox backend,
-// where a supporting-doc dir is only readable in a sandbox if the sandbox
-// IMAGE carries it at the same absolute path — and a merged tree lives under
-// the control plane's data dir, which no sandbox image can plausibly reproduce
-// (its hash is derived from the bundle path, and the tree is rebuilt at boot).
-// So a bundle inheriting the built-in pack can never serve in-sandbox skill
-// reads on that backend; the caller drops the mount and says so, and the fix
-// is the bundle's `skills_builtin: false`.
+// materialized under the DATA dir (`<data|cache>/skills-merged/<hash>`) rather
+// than a bundle's own `skills/` or a tree staged by StageSkillsAt. It exists
+// for one caller: the kubernetes sandbox backend, where a supporting-doc dir
+// is only readable in a sandbox if a pod can actually see it — and a data-dir
+// merged tree lives where no pod mounts and no sandbox image can plausibly
+// reproduce (its hash is derived from the bundle path, and the tree is rebuilt
+// at boot). That backend normally never reaches this case: it stages the tree
+// into the workspace claim at boot (StageSkillsAt, ADR-0055). The check
+// remains for the degraded path where staging failed, so the mount is dropped
+// and the log says why instead of trusting an anchor nothing mounted.
 //
 // Shape-based on purpose: the layout is this package's own convention, so the
 // check belongs here, next to the code that builds the path.
@@ -128,6 +139,76 @@ func IsMaterializedSkillsDir(dir string) bool {
 		return false
 	}
 	return filepath.Base(filepath.Dir(filepath.Clean(dir))) == mergedSkillsDirName
+}
+
+// StageSkillsAt re-materializes the bundle's COMPLETE skills tree — the
+// built-in pack (per skills_builtin / skills_hidden), every Agent Plugin's
+// skills, and the bundle's own skills/ — into dir, an exact operator-derived
+// path, and points SkillsDir at it. Skills() keeps resyncing that tree on read,
+// so the edit-a-skill-in-place and plugin-folder-follows-the-disk contracts
+// hold there exactly as they do for the data-dir tree.
+//
+// The one caller is the kubernetes sandbox backend (ADR-0055): sandbox pods
+// mount nothing but the workspace claim, so the tree is staged at
+// <workspace root>/skills, where every pod sees it by construction and the pod
+// spec re-mounts it read-only over the read-write workspace mount — the same
+// shape as the shared file library's staged tree (docs/SHARED-FILES.md). It
+// runs on EVERY kubernetes boot, built-in pack or not: staging is what makes
+// `skills/<name>/SKILL.md` resolve in a pod without baking skills into the
+// sandbox image, and it is what lets plugin skills and the built-in pack reach
+// a pod at all.
+//
+// dir lives in a volume sandboxes can write to until the read-only mount is in
+// place, so it is never adopted blindly: a pre-existing path that is not a
+// plain directory owned by this process (a planted symlink, a world-writable
+// dir) is removed and rebuilt, and every file write inside is symlink-safe.
+// An error leaves SkillsDir untouched; the caller degrades loudly (skills are
+// a capability, not a boot invariant).
+func (b *Bundle) StageSkillsAt(dir string) error {
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
+		return fmt.Errorf("stage skills: empty directory")
+	}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return fmt.Errorf("stage skills: %w", err)
+	}
+	if b.BundleSkillsDir == "" {
+		b.BundleSkillsDir = b.SkillsDir
+	}
+	if filepath.Clean(abs) == filepath.Clean(b.BundleSkillsDir) {
+		return fmt.Errorf("stage skills: %s is the bundle's own skills/ dir", abs)
+	}
+	if err := ensureStagedRoot(abs); err != nil {
+		return fmt.Errorf("stage skills: %w", err)
+	}
+	if err := syncMergedSkills(b.BundleSkillsDir, abs, b.skillsBuiltin, b.skillsHidden, b.livePluginSkillOverlays()); err != nil {
+		return fmt.Errorf("stage skills into %s: %w", abs, err)
+	}
+	b.SkillsDir = abs
+	return nil
+}
+
+// ensureStagedRoot prepares a staged skills root that lives in a
+// sandbox-writable volume. Unlike the data-dir tree (#1121 refuses an
+// untrusted path and degrades), nothing but fleet legitimately owns this
+// path, so an untrusted pre-existing entry — a symlink planted by a turn
+// before the read-only mount existed, a stray file, a group/world-writable
+// dir — is REMOVED and the root rebuilt clean, loudly. os.RemoveAll on a
+// symlink removes the link, never what it points at.
+func ensureStagedRoot(dir string) error {
+	if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil { //nolint:gosec // the workspace root is sandbox-readable by design
+		return err
+	}
+	if _, err := os.Lstat(dir); err == nil {
+		if verr := verifyExistingDir(dir); verr != nil {
+			log.Printf("clientconfig: staged skills root %s is not a trusted directory (%v); replacing it", dir, verr)
+			if rerr := os.RemoveAll(dir); rerr != nil {
+				return fmt.Errorf("replace untrusted staged skills root: %w", rerr)
+			}
+		}
+	}
+	return ensureTrustedDir(dir)
 }
 
 // verifyExistingDir is the ssh-style ownership/mode check: Lstat (so a
@@ -253,7 +334,7 @@ func copyEmbeddedSkill(name, dst string) error {
 		rel := strings.TrimPrefix(strings.TrimPrefix(p, src), "/")
 		target := filepath.Join(dst, filepath.FromSlash(rel))
 		if d.IsDir() {
-			return os.MkdirAll(target, 0o755) //nolint:gosec // sandbox-readable skill docs, non-secret
+			return ensureRealDir(target)
 		}
 		data, err := builtinSkillsFS.ReadFile(p)
 		if err != nil {
@@ -281,7 +362,7 @@ func copyDirSkill(src, dst, containRoot string) error {
 		}
 		target := filepath.Join(dst, rel)
 		if d.IsDir() {
-			return os.MkdirAll(target, 0o755) //nolint:gosec // sandbox-readable skill docs, non-secret
+			return ensureRealDir(target)
 		}
 		if containRoot != "" {
 			resolved, ok := containedRegularFile(p, containRoot)
@@ -299,14 +380,67 @@ func copyDirSkill(src, dst, containRoot string) error {
 	})
 }
 
-// writeFileIfChanged avoids touching mtimes (and prompt-cache-relevant reads)
-// when the content is already current.
-func writeFileIfChanged(path string, data []byte) error {
-	if cur, err := os.ReadFile(path); err == nil && string(cur) == string(data) { // #nosec G304 — path derived from bundle content.
-		return nil
+// ensureRealDir makes target a plain directory. An existing entry that is NOT
+// a directory — a symlink (Lstat does not follow it), a regular file — is
+// removed first, so a planted symlink can never redirect the files written
+// beneath it. Matters for a tree staged in a sandbox-writable volume
+// (StageSkillsAt); harmless for the data-dir tree.
+func ensureRealDir(target string) error {
+	if info, err := os.Lstat(target); err == nil {
+		if info.IsDir() {
+			return nil
+		}
+		if rerr := os.RemoveAll(target); rerr != nil {
+			return rerr
+		}
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil { //nolint:gosec // sandbox-readable skill docs, non-secret
+	return os.MkdirAll(target, 0o755) //nolint:gosec // sandbox-readable skill docs, non-secret
+}
+
+// writeFileIfChanged avoids touching mtimes (and prompt-cache-relevant reads)
+// when the content is already current, and never writes THROUGH an existing
+// entry: the bytes land in a temp file beside the target and are renamed over
+// it. Rename replaces the directory entry itself, so a symlink planted at the
+// path (in a sandbox-writable staged tree) is replaced, not followed, and a
+// hard link to some other file is unlinked, not truncated. Readers in a
+// sandbox see the old or the new file, never a torn one.
+func writeFileIfChanged(path string, data []byte) error {
+	if info, err := os.Lstat(path); err == nil {
+		if info.Mode().IsRegular() {
+			if cur, rerr := os.ReadFile(path); rerr == nil && string(cur) == string(data) { // #nosec G304 — path derived from bundle content.
+				return nil
+			}
+		} else if rerr := os.RemoveAll(path); rerr != nil {
+			// A symlink, directory or device where a skill file belongs.
+			return rerr
+		}
+	}
+	dir := filepath.Dir(path)
+	if err := ensureRealDir(dir); err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o644) // #nosec G306 G703 — skill docs/scripts from operator-owned bundle content, non-secret.
+	tmp, err := os.CreateTemp(dir, ".skill-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Chmod(0o644); err != nil { // skill docs/scripts from operator-owned bundle content, non-secret, read by the sandbox uid
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		return err
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		_ = os.Remove(tmpName)
+		return err
+	}
+	return nil
 }

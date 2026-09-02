@@ -249,7 +249,7 @@ one just-created task, so the create rate limit already bounds it.
 
 Fleet agents can delegate work **to** remote A2A agents — another fleet, or any
 A2A v1.0 server — through peers a client-config bundle declares (#1368, the
-#1279 Phase 3; the invariants are [ADR-0054](adr/0054-a2a-outbound-delegation.md)):
+#1279 Phase 3; the invariants are [ADR-0056](adr/0056-a2a-outbound-delegation.md)):
 
 ```yaml
 a2a_peers:
@@ -319,7 +319,7 @@ guards fleets looping through one another, not an adversarial peer.
 **Honest scope (outbound).**
 
 - No remote agent-card fetch or discovery; peers are pinned by `rpc_url`.
-- No remote artifact download into the workspace (see ADR-0054 for why);
+- No remote artifact download into the workspace (see ADR-0056 for why);
   file parts are references.
 - No live tee of remote progress into the calling task's run log; SSE lives
   only inside the bounded `_wait`.

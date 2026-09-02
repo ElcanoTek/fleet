@@ -35,8 +35,31 @@ prior versions are listed because none have shipped.
   guard ships with it: sends carry `X-Fleet-A2A-Depth`, the inbound server
   refuses past `FLEET_A2A_MAX_DELEGATION_DEPTH` (default 3) and stamps the
   depth on the task (`a2a_delegation_depth`, migration 067), and the tools
-  refuse locally at the ceiling. ADR-0054 records the invariants; docs/A2A.md
+  refuse locally at the ceiling. ADR-0056 records the invariants; docs/A2A.md
   gains an "Outbound delegation" section with the honest scope.
+
+- **Kubernetes backend: skills work inside sandbox pods — built-in pack,
+  Agent Plugin skills and bundle skills alike (ADR-0055).** A sandbox pod
+  mounts only the workspace claim, and the merged skills tree lived under the
+  control plane's data dir where no pod could see it and no image could carry
+  it, so a cluster bundle had to set `skills_builtin: false` (losing the pack)
+  and plugin skills were rostered but unreadable regardless. fleet now
+  re-stages the complete tree into the claim at boot
+  (`<workspace root>/skills`, `agent.StageSkillsForBackend` →
+  `clientconfig.Bundle.StageSkillsAt`) and every pod re-mounts it read-only as
+  a subPath of the claim — the shared-file-library mechanism — so
+  `skills/<name>/SKILL.md`, reference files and bundled scripts resolve for
+  the file tools, bash and python with no image bake and no
+  `bundle_docs_in_image` involvement. The tree resyncs on every roster read
+  (edit-in-place and plugin-folder live reload hold in pods), and staging
+  never adopts or writes through a planted entry: a symlinked or
+  world-writable staged root is rebuilt, every file lands via temp-file +
+  rename, planted symlinks and hard links are replaced rather than followed
+  (the same hardening now applies to the data-dir tree). Podman is unchanged.
+  `skills_builtin: false` is a taste decision on both backends again; drop
+  `COPY skills/` from a derived sandbox image. See
+  [docs/DEPLOYMENT-KUBERNETES.md](docs/DEPLOYMENT-KUBERNETES.md#skills-inside-a-sandbox-pod)
+  + [ADR-0055](docs/adr/0055-kubernetes-skills-staged-into-the-workspace-claim.md).
 
 - **Agent Plugins (#1166)** — fleet loads the open, vendor-neutral
   [Agent Plugins](https://agent-plugins.org) package format (spec v1.0.0):
@@ -51,8 +74,12 @@ prior versions are listed because none have shipped.
   boundaries follow the spec exactly — an unknown `plugin.json` field is
   reported, not fatal; a bad server entry skips itself; every path must
   resolve inside the plugin root — and `fleet validate-config` surfaces the
-  problems as advisories. Legacy `sse` entries are skipped, and
-  `com.elcanotek.fleet` is reserved but unread. See
+  problems as advisories. fleet's own `com.elcanotek.fleet` extension
+  namespace in `plugin.json` carries the per-server governance knobs the
+  portable format lacks — a `tools` allowlist, a `fleet mcp test --deep`
+  `probe`, the Optional-server metadata, and `disabled` — and nothing
+  credential-shaped. Plugin skill folders follow the disk on read, like
+  bundle skills. Legacy `sse` entries are skipped. See
   [docs/AGENT-PLUGINS.md](docs/AGENT-PLUGINS.md) +
   [ADR-0054](docs/adr/0054-agent-plugins.md).
 

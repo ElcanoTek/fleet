@@ -7,6 +7,10 @@
   its "no k8s manifest, Helm chart, or operator in the tree" enforcement
   clause and its cluster-work-is-out-of-scope consequence; the single-box
   default install it decides **stands**)
+- **Amended by:** [ADR-0055](0055-kubernetes-skills-staged-into-the-workspace-claim.md)
+  (the skills root is staged into the workspace claim, read-only; the
+  "no control-plane push into the claim" non-goal below stands for every
+  other doc root)
 
 ## Context
 
@@ -135,7 +139,11 @@ privileged node" packaging track as a stepping stone.
 - Same-path supporting-doc bind mounts: a pod has no host filesystem to bind
   from. fleet does not synthesize them (no ConfigMap projection, no
   control-plane push into the workspace claim — both would put bundle content
-  on a writable, agent-reachable surface). Instead the sandbox IMAGE may carry
+  on a writable, agent-reachable surface). **Amended by ADR-0055 for the
+  skills root only:** the merged skills tree cannot be baked (it is built at
+  boot from the binary's pack, plugins and the bundle), so it is staged into
+  the claim and re-mounted read-only in every pod, with the tampering
+  objection answered in code. Instead the sandbox IMAGE may carry
   the bundle's doc dirs at the same absolute paths, and
   `sandbox.kubernetes.bundle_docs_in_image` declares that, which keeps those
   roots' **read-only** fileop anchors valid inside a pod. A declaration, not a

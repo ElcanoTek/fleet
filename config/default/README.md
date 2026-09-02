@@ -102,7 +102,7 @@ or cancel it. The generic bundle ships none — see the commented-out example in
 userinfo, description required, namespace collisions all fail startup loudly).
 
 Same trust posture as `http_tools`, plus three rules specific to talking to
-another agent (docs/A2A.md "Outbound delegation", ADR-0054):
+another agent (docs/A2A.md "Outbound delegation", ADR-0056):
 
 - **Credentials stay host-side.** `headers` values may carry `${ENV_VAR}`
   references, resolved from the host process env at call time in whichever
@@ -174,8 +174,12 @@ fleet merges a plugin's skills into the same roster as `skills/` (the bundle's
 own skill wins a name collision, a plugin's wins over a built-in) and appends
 its `mcp.json` servers to the MCP catalog as always-on entries launched in the
 plugin root with `PLUGIN_ROOT` / `PLUGIN_DATA` set — subject to every gate a
-manifest server already has. Extra plugin directories can be listed in
-`manifest.yaml` under `plugin_roots:`. A plugin is bundle content with the
+manifest server already has. fleet-specific knobs a plugin server needs (a
+`tools` allowlist, a `fleet mcp test --deep` `probe`, the Optional-server
+metadata, `disabled`) go in `plugin.json` under
+`extensions["com.elcanotek.fleet"]`, the spec's namespace for client-specific
+data that other clients ignore; nothing credential-shaped is accepted there.
+Extra plugin directories can be listed in `manifest.yaml` under `plugin_roots:`. A plugin is bundle content with the
 bundle's trust class; review it like `mcp/` and `skills/`. This generic bundle
 ships no plugins; the annotated example is
 `plugins/example-plugin` in [example-config](https://github.com/ElcanoTek/example-config),

@@ -226,7 +226,7 @@ remote_mcp_catalog: []
 # ${ENV_VAR} references resolved host-side at call time. `critical: true` puts
 # <name>_send / <name>_cancel behind the critical-tool gate — recommended:
 # delegating work off-box is a side effect with a cost on the remote side.
-# See docs/A2A.md "Outbound delegation" and ADR-0054.
+# See docs/A2A.md "Outbound delegation" and ADR-0056.
 #
 # The generic bundle ships NONE. Example (commented out):
 #

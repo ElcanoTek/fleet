@@ -787,3 +787,135 @@ func TestValidPluginName(t *testing.T) {
 		}
 	}
 }
+
+func TestPluginFleetExtensionOverrides(t *testing.T) {
+	manifest := `{` + testPluginSchema + `, "name": "gov", "extensions": {"com.elcanotek.fleet": {
+  "mcp_servers": {
+    "tools_srv": {"tools": ["a", "b", " a "], "probe": {"tool": "a", "contains": "ok", "args": {"n": 1}},
+                  "optional": true, "enabled_by_default": true, "beta": true,
+                  "display_name": "Tools", "description": "desc", "data_sources": ["s3://x"], "bogus": 1},
+    "bad_probe": {"tools": ["x"], "probe": {"tool": "y"}},
+    "gone": {"disabled": true},
+    "typo_srv": {"tools": "not-a-list"},
+    "missing_srv": {"optional": true}
+  },
+  "other": 1
+}}}`
+	mcp := `{` + testMCPSchema + `, "mcpServers": {
+  "tools_srv": {"type": "stdio", "command": "python3"},
+  "bad_probe": {"type": "stdio", "command": "python3"},
+  "gone":      {"type": "stdio", "command": "python3"},
+  "typo_srv":  {"type": "stdio", "command": "python3"},
+  "plain":     {"type": "stdio", "command": "python3"}}}`
+	dir := writePluginBundle(t, "", pluginFixture{dir: "g", manifest: manifest, mcp: mcp})
+	b, err := Load(dir)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(b.Plugins) != 1 {
+		t.Fatalf("the extension must never reject the plugin: %+v %v", b.Plugins, b.PluginProblems())
+	}
+	cfgs := b.MCPServerConfigs()
+	ts, ok := cfgs["tools_srv"]
+	if !ok {
+		t.Fatalf("tools_srv missing: %v", b.PluginProblems())
+	}
+	if strings.Join(ts.ToolAllowlist, ",") != "a,b" {
+		t.Errorf("ToolAllowlist = %v (trimmed, de-duplicated)", ts.ToolAllowlist)
+	}
+	if ts.Probe == nil || ts.Probe.Tool != "a" || ts.Probe.Contains != "ok" || ts.Probe.Args["n"] != float64(1) {
+		t.Errorf("Probe = %+v", ts.Probe)
+	}
+	if !ts.Optional || !ts.EnabledByDefault || !ts.Beta || ts.DisplayName != "Tools" || ts.Description != "desc" || strings.Join(ts.DataSources, ",") != "s3://x" {
+		t.Errorf("metadata not applied: %+v", ts)
+	}
+	if bp := cfgs["bad_probe"]; strings.Join(bp.ToolAllowlist, ",") != "x" || bp.Probe != nil {
+		t.Errorf("a probe outside the allowlist must be dropped, the allowlist kept: %+v", bp)
+	}
+	if _, ok := cfgs["gone"]; ok {
+		t.Error("disabled: true must drop the server")
+	}
+	if strings.Join(b.Plugins[0].MCPServers, ",") != "bad_probe,plain,tools_srv,typo_srv" {
+		t.Errorf("MCPServers = %v", b.Plugins[0].MCPServers)
+	}
+	if ty := cfgs["typo_srv"]; len(ty.ToolAllowlist) != 0 {
+		t.Errorf("a wrong-typed override must be ignored for that server only: %+v", ty)
+	}
+	if pl := cfgs["plain"]; pl.DisplayName != "plain (plugin gov)" || len(pl.ToolAllowlist) != 0 || pl.Optional {
+		t.Errorf("a server without an override keeps the defaults: %+v", pl)
+	}
+	probs := b.PluginProblems()
+	for _, want := range []string{
+		`unknown key "bogus" ignored`,
+		`unknown key "other" ignored`,
+		`probe.tool "y" is not in the server's tools allowlist; probe ignored`,
+		`mcp_servers["typo_srv"]: "tools" must be an array of strings; override ignored`,
+		`mcp_servers["missing_srv"] names a server mcp.json does not declare`,
+	} {
+		if !containsProblem(probs, want) {
+			t.Errorf("missing report %q in %v", want, probs)
+		}
+	}
+	if containsProblem(probs, `"gone"`) {
+		t.Errorf("an explicit disabled: true is not a defect and must not be reported: %v", probs)
+	}
+}
+
+func TestPluginFleetExtensionMalformedTopLevel(t *testing.T) {
+	for label, ext := range map[string]string{
+		"mcp_servers not object": `{"mcp_servers": []}`,
+		"empty":                  `{}`,
+	} {
+		t.Run(label, func(t *testing.T) {
+			manifest := `{` + testPluginSchema + `, "name": "p", "extensions": {"com.elcanotek.fleet": ` + ext + `}}`
+			dir := writePluginBundle(t, "", pluginFixture{dir: "p", manifest: manifest,
+				mcp: `{` + testMCPSchema + `, "mcpServers": {"srv": {"type": "stdio", "command": "python3"}}}`})
+			b, err := Load(dir)
+			if err != nil {
+				t.Fatalf("load: %v", err)
+			}
+			if len(b.Plugins) != 1 || strings.Join(b.Plugins[0].MCPServers, ",") != "srv" {
+				t.Errorf("plugin and server must still load: %+v %v", b.Plugins, b.PluginProblems())
+			}
+		})
+	}
+}
+
+func TestPluginSkillFoldersFollowDiskOnRead(t *testing.T) {
+	dir := writePluginBundle(t, "",
+		pluginFixture{dir: "a", manifest: minimalManifest("alpha"), skills: map[string]string{"first": "Present at load."}},
+		pluginFixture{dir: "b", manifest: minimalManifest("beta")}, // no skills/ dir at all yet
+	)
+	b, err := Load(dir)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if _, ok := skillNames(b.Skills())["first"]; !ok {
+		t.Fatal("first missing at load")
+	}
+	// A folder added to an existing skills/ dir, and a whole skills/ dir added
+	// to a plugin that had none, both appear on the next read — no reload.
+	mustWrite(t, filepath.Join(dir, "plugins", "a", "skills", "second", "SKILL.md"),
+		"---\nname: second\ndescription: added after load\n---\n\nNew.\n")
+	mustWrite(t, filepath.Join(dir, "plugins", "b", "skills", "third", "SKILL.md"),
+		"---\nname: third\ndescription: plugin grew a skills dir after load\n---\n\nNew.\n")
+	roster := skillNames(b.Skills())
+	for _, want := range []string{"first", "second", "third"} {
+		if _, ok := roster[want]; !ok {
+			t.Errorf("%q missing after being added on disk: %v", want, roster)
+		}
+	}
+	if o := b.SkillOrigin("third"); o != (SkillOrigin{Source: "plugin", Plugin: "beta"}) {
+		t.Errorf("SkillOrigin(third) = %+v", o)
+	}
+	// And a removed folder leaves the roster.
+	if err := os.RemoveAll(filepath.Join(dir, "plugins", "a", "skills", "first")); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := skillNames(b.Skills())["first"]; ok {
+		t.Error("removed plugin skill still in the roster")
+	}
+	if o := b.SkillOrigin("first"); o.Source == "plugin" {
+		t.Errorf("SkillOrigin(first) after removal = %+v", o)
+	}
+}
