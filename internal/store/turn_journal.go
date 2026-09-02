@@ -29,9 +29,11 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
+	"golang.org/x/sync/errgroup"
 )
 
 // TurnJournalKind enumerates the two journal record kinds.
@@ -327,12 +329,26 @@ func (s *Store) RecoverStrandedTurns(ctx context.Context) ([]RecoveredTurn, erro
 	}
 
 	var out []RecoveredTurn
+	var mu sync.Mutex
+	g, gCtx := errgroup.WithContext(ctx)
+	// Optional: limit concurrency to avoid overwhelming the DB if there are many stranded turns.
+	g.SetLimit(10)
+
 	for _, t := range todo {
-		rec, err := s.recoverOneTurn(ctx, t.turnID, t.convID, journalMap[t.turnID], eventsMap[t.turnID])
-		if err != nil {
-			return out, fmt.Errorf("recover turn %s: %w", t.turnID, err)
-		}
-		out = append(out, rec)
+		t := t // capture loop variable
+		g.Go(func() error {
+			rec, err := s.recoverOneTurn(gCtx, t.turnID, t.convID, journalMap[t.turnID], eventsMap[t.turnID])
+			if err != nil {
+				return fmt.Errorf("recover turn %s: %w", t.turnID, err)
+			}
+			mu.Lock()
+			out = append(out, rec)
+			mu.Unlock()
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return nil, err
 	}
 	return out, nil
 }
