@@ -19,6 +19,25 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **Outbound A2A delegation: fleet agents can delegate work to remote A2A
+  agents (#1368, the #1279 Phase 3).** A bundle's new `a2a_peers:` section
+  declares remote A2A servers (name, `rpc_url`, a bundle-authored
+  description, `${ENV_VAR}` credential headers resolved host-side, and a
+  per-peer `critical` flag); each peer registers as four tools on a synthetic
+  MCP server — `mcp__a2a_<peer>_send` (creates a remote task and returns its
+  id without waiting), `_status` (snapshot), `_wait` (SSE-backed, bounded at
+  120s), `_cancel` — so they inherit the whole governance chain like inline
+  `http_tools` do. Peer output is rendered as untrusted external content
+  (text inline under a cap, files as references, never downloaded); a remote
+  agent card is never fetched into the tool roster. Outbound connections ride
+  `netguard`'s SSRF guard with redirects refused (`FLEET_A2A_CLIENT_ALLOW_PRIVATE`
+  relaxes the dial guard for dev rigs). A cooperative fleet-to-fleet recursion
+  guard ships with it: sends carry `X-Fleet-A2A-Depth`, the inbound server
+  refuses past `FLEET_A2A_MAX_DELEGATION_DEPTH` (default 3) and stamps the
+  depth on the task (`a2a_delegation_depth`, migration 067), and the tools
+  refuse locally at the ceiling. ADR-0054 records the invariants; docs/A2A.md
+  gains an "Outbound delegation" section with the honest scope.
+
 - **Agent Plugins (#1166)** — fleet loads the open, vendor-neutral
   [Agent Plugins](https://agent-plugins.org) package format (spec v1.0.0):
   a directory with `plugin.json` + `skills/*/SKILL.md` + `mcp.json`, dropped

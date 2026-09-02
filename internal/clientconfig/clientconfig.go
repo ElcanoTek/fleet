@@ -48,6 +48,7 @@ package clientconfig
 import (
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -69,6 +70,18 @@ import (
 // mcp__http_<name> — routed, gated, redacted, and brokered host-side exactly like
 // any MCP tool.
 const HTTPToolServerName = "_http"
+
+// A2AToolServerName is the synthetic MCP-server name outbound a2a_peers[] tools
+// are registered under (#1368). Same reservation rules as HTTPToolServerName;
+// the agent sees a peer as mcp__a2a_<peer>_send / _status / _wait / _cancel.
+// Mirrors mcp.A2AToolServerName (kept in sync; internal/mcp does not import
+// this package).
+const A2AToolServerName = "_a2a"
+
+// a2aPeerNamePattern bounds a peer name: it is spliced into four tool names
+// and matched by the critical-tool suffix gate, so it must be a plain,
+// lowercase, MCP-safe identifier.
+var a2aPeerNamePattern = regexp.MustCompile(`^[a-z0-9_]{1,32}$`)
 
 // httpToolMethods is the set of HTTP methods an http_tool may declare. Kept tight
 // (no TRACE/CONNECT/OPTIONS/HEAD) to the verbs a REST tool actually needs.
@@ -162,6 +175,9 @@ type Bundle struct {
 	// alongside the MCP catalog — no MCP subprocess required. Empty in the generic
 	// bundle (defaults unchanged). See HTTPToolDef.
 	HTTPTools []HTTPToolDef
+	// A2APeers is the manifest's a2a_peers: section (#1368) — remote A2A agents
+	// this bundle's agents may delegate to. Runtime shape via A2APeerConfigs().
+	A2APeers []A2APeerDef
 
 	// WebhookTriggers is the manifest's inbound conversation-trigger catalog (the
 	// webhook_triggers: section, #268), in manifest order. Each entry maps a
@@ -869,6 +885,31 @@ type HTTPToolDef struct {
 	Critical     bool                   `yaml:"critical"`
 }
 
+// A2APeerDef is one remote A2A agent from the manifest's a2a_peers: section
+// (#1368 — #1279 Phase 3): a peer a fleet agent may delegate work to over the
+// A2A protocol. Registered as four tools on the synthetic A2AToolServerName
+// server (<name>_send, _status, _wait, _cancel), so the model addresses them
+// as mcp__a2a_<name>_send etc. — routed, gated, redacted, and brokered
+// host-side exactly like http_tools and MCP tools.
+//
+// SECURITY — the definition is BUNDLE-AUTHOR-DEFINED and therefore trusted:
+// peers are operator policy, never model choice. Headers carry the peer
+// credential as ${ENV_VAR} references resolved host-side at call time (same
+// boundary as http_tools). Description is the ONLY text about the peer the
+// model ever sees — a remote agent card is never fetched into the roster,
+// because remote card text would be a prompt-injection channel. What the
+// peer sends BACK is untrusted external content and is rendered as such.
+type A2APeerDef struct {
+	Name        string            `yaml:"name"`        // ^[a-z0-9_]{1,32}$
+	RPCURL      string            `yaml:"rpc_url"`     // the peer's JSON-RPC endpoint, http(s) only
+	Description string            `yaml:"description"` // required; bundle-authored
+	Headers     map[string]string `yaml:"headers"`     // values support ${ENV_VAR}, resolved host-side at call time
+	// Critical opts <name>_send and <name>_cancel into the critical-tool audit
+	// gate (chat: approval card; scheduled: confirm_audit accounting) —
+	// delegating work off-box is a side effect with a cost on the remote side.
+	Critical bool `yaml:"critical"`
+}
+
 // WebhookTriggerDef is one inbound conversation trigger from the manifest's
 // webhook_triggers: section (#268). An external system (GitHub, Slack, CI, a
 // Zapier hook) that presents a valid signature to POST /webhooks/{slug} starts
@@ -1035,6 +1076,7 @@ type manifest struct {
 	Models          Models                  `yaml:"models"`
 	MCPServers      []ServerDef             `yaml:"mcp_servers"`
 	HTTPTools       []HTTPToolDef           `yaml:"http_tools"`
+	A2APeers        []A2APeerDef            `yaml:"a2a_peers"`
 	WebhookTriggers []WebhookTriggerDef     `yaml:"webhook_triggers"`
 	RemoteMCPs      []RemoteMCPCatalogEntry `yaml:"remote_mcp_catalog"`
 	// RemoteMCPBuiltin toggles inheriting fleet's embedded hosted-server
@@ -1113,11 +1155,12 @@ func Load(dir string) (*Bundle, error) {
 	var rawConnectors struct {
 		MCPServers []ServerDef   `yaml:"mcp_servers"`
 		HTTPTools  []HTTPToolDef `yaml:"http_tools"`
+		A2APeers   []A2APeerDef  `yaml:"a2a_peers"`
 	}
 	if err := yaml.Unmarshal(raw, &rawConnectors); err != nil {
 		return nil, fmt.Errorf("parse connector env inventory %s: %w", manifestPath, err)
 	}
-	connectorEnvVars, connectorAccountVars := connectorEnvInventory(rawConnectors.MCPServers, rawConnectors.HTTPTools)
+	connectorEnvVars, connectorAccountVars := connectorEnvInventory(rawConnectors.MCPServers, rawConnectors.HTTPTools, rawConnectors.A2APeers)
 	// Inventory every ${...} reference in the raw manifest — url:, command:/
 	// args:, sandbox.image, providers, and the connector maps alike — and where
 	// each lives, then fold the FLEET_ENV_FILE env file into the process env
@@ -1172,9 +1215,9 @@ func Load(dir string) (*Bundle, error) {
 	// (fleet#706). Re-source those maps from the raw manifest; the pass above
 	// still fail-loads an unset ${VAR:?...} or a non-bare reserved token
 	// inside them.
-	if len(rawConnectors.MCPServers) != len(m.MCPServers) || len(rawConnectors.HTTPTools) != len(m.HTTPTools) {
-		return nil, fmt.Errorf("client config manifest %s: env interpolation altered the connector list shape (mcp_servers %d -> %d, http_tools %d -> %d); a substituted value must not inject YAML structure",
-			manifestPath, len(rawConnectors.MCPServers), len(m.MCPServers), len(rawConnectors.HTTPTools), len(m.HTTPTools))
+	if len(rawConnectors.MCPServers) != len(m.MCPServers) || len(rawConnectors.HTTPTools) != len(m.HTTPTools) || len(rawConnectors.A2APeers) != len(m.A2APeers) {
+		return nil, fmt.Errorf("client config manifest %s: env interpolation altered the connector list shape (mcp_servers %d -> %d, http_tools %d -> %d, a2a_peers %d -> %d); a substituted value must not inject YAML structure",
+			manifestPath, len(rawConnectors.MCPServers), len(m.MCPServers), len(rawConnectors.HTTPTools), len(m.HTTPTools), len(rawConnectors.A2APeers), len(m.A2APeers))
 	}
 	for i := range m.MCPServers {
 		m.MCPServers[i].Env = rawConnectors.MCPServers[i].Env
@@ -1182,6 +1225,9 @@ func Load(dir string) (*Bundle, error) {
 	}
 	for i := range m.HTTPTools {
 		m.HTTPTools[i].Headers = rawConnectors.HTTPTools[i].Headers
+	}
+	for i := range m.A2APeers {
+		m.A2APeers[i].Headers = rawConnectors.A2APeers[i].Headers
 	}
 
 	b := &Bundle{
@@ -1196,6 +1242,7 @@ func Load(dir string) (*Bundle, error) {
 		TaskTemplates:                  m.TaskTemplates,
 		MCPCatalog:                     m.MCPServers,
 		HTTPTools:                      m.HTTPTools,
+		A2APeers:                       m.A2APeers,
 		WebhookTriggers:                m.WebhookTriggers,
 		RemoteMCPCatalog:               m.RemoteMCPs,
 		Providers:                      m.Providers,
@@ -1548,6 +1595,9 @@ func (b *Bundle) validate() error {
 		if s.Name == HTTPToolServerName {
 			return fmt.Errorf("mcp_servers[%q]: name %q is reserved for inline http_tools", s.Name, HTTPToolServerName)
 		}
+		if s.Name == A2AToolServerName {
+			return fmt.Errorf("mcp_servers[%q]: name %q is reserved for a2a_peers", s.Name, A2AToolServerName)
+		}
 		if seen[s.Name] {
 			return fmt.Errorf("mcp_servers: duplicate server name %q", s.Name)
 		}
@@ -1608,6 +1658,9 @@ func (b *Bundle) validate() error {
 		}
 	}
 	if err := b.validateHTTPTools(seen); err != nil {
+		return err
+	}
+	if err := b.validateA2APeers(seen); err != nil {
 		return err
 	}
 	if err := b.validatePersonas(); err != nil {
@@ -2025,7 +2078,7 @@ func (b *Bundle) validateHTTPTools(seen map[string]bool) error {
 		if name == "" {
 			return fmt.Errorf("http_tools[%d]: name is required", i)
 		}
-		if name == HTTPToolServerName {
+		if name == HTTPToolServerName || name == A2AToolServerName {
 			return fmt.Errorf("http_tools[%q]: name is reserved", name)
 		}
 		if seen[name] {
@@ -2056,6 +2109,63 @@ func (b *Bundle) validateHTTPTools(seen map[string]bool) error {
 			if _, err := gojq.Parse(jq); err != nil {
 				return fmt.Errorf("http_tools[%q]: response_jq does not parse: %w", name, err)
 			}
+		}
+	}
+	return nil
+}
+
+// validateA2APeers is the fail-fast Load-time check for a2a_peers[] (#1368):
+// a valid MCP-safe name, an http(s) rpc_url with a host (never file:// or a
+// URL with userinfo — the credential goes in headers, resolved host-side), a
+// non-empty bundle-authored description (the only peer text the model sees),
+// and no collision in the shared tool namespace — the peer name AND its four
+// derived tool names are reserved there, so an http_tool or mcp_server cannot
+// shadow mcp__a2a_<peer>_send.
+func (b *Bundle) validateA2APeers(seen map[string]bool) error {
+	for i := range b.A2APeers {
+		p := &b.A2APeers[i]
+		name := strings.TrimSpace(p.Name)
+		if name == "" {
+			return fmt.Errorf("a2a_peers[%d]: name is required", i)
+		}
+		if !a2aPeerNamePattern.MatchString(name) {
+			return fmt.Errorf("a2a_peers[%q]: name must match %s (lowercase letters, digits, underscore; at most 32 chars)", name, a2aPeerNamePattern.String())
+		}
+		if name == HTTPToolServerName || name == A2AToolServerName {
+			return fmt.Errorf("a2a_peers[%q]: name is reserved", name)
+		}
+		if seen[name] {
+			return fmt.Errorf("a2a_peers: duplicate name %q (collides with an mcp_servers entry, an http_tool, or another peer)", name)
+		}
+		seen[name] = true
+		for _, tool := range mcp.A2AToolNames(name) {
+			if seen[tool] {
+				return fmt.Errorf("a2a_peers[%q]: derived tool name %q collides with an mcp_servers entry or an http_tool", name, tool)
+			}
+			seen[tool] = true
+		}
+		p.Name = name
+
+		rawURL := strings.TrimSpace(p.RPCURL)
+		if rawURL == "" {
+			return fmt.Errorf("a2a_peers[%q]: rpc_url is required", name)
+		}
+		u, err := url.Parse(rawURL)
+		if err != nil {
+			return fmt.Errorf("a2a_peers[%q]: rpc_url does not parse: %w", name, err)
+		}
+		if u.Scheme != "http" && u.Scheme != "https" {
+			return fmt.Errorf("a2a_peers[%q]: rpc_url scheme must be http or https, got %q", name, u.Scheme)
+		}
+		if u.Host == "" {
+			return fmt.Errorf("a2a_peers[%q]: rpc_url has no host", name)
+		}
+		if u.User != nil {
+			return fmt.Errorf("a2a_peers[%q]: rpc_url must not carry userinfo; put the credential in headers as a ${ENV_VAR} reference", name)
+		}
+		p.RPCURL = rawURL
+		if strings.TrimSpace(p.Description) == "" {
+			return fmt.Errorf("a2a_peers[%q]: description is required (it is the only text about the peer the model sees)", name)
 		}
 	}
 	return nil
@@ -2198,6 +2308,27 @@ func (b *Bundle) HTTPToolConfigs() []config.HTTPToolConfig {
 	return out
 }
 
+// A2APeerConfigs resolves the manifest's a2a_peers[] into the credential-bearing
+// runtime shape (#1368): header ${ENV_VAR} references are expanded against the
+// HOST process env here, at catalog-build time — same seam as HTTPToolConfigs.
+func (b *Bundle) A2APeerConfigs() []config.A2APeerConfig {
+	if len(b.A2APeers) == 0 {
+		return nil
+	}
+	out := make([]config.A2APeerConfig, 0, len(b.A2APeers))
+	for i := range b.A2APeers {
+		p := &b.A2APeers[i]
+		out = append(out, config.A2APeerConfig{
+			Name:        p.Name,
+			Description: p.Description,
+			RPCURL:      p.RPCURL,
+			Headers:     resolveEnvMap(p.Headers, nil),
+			Critical:    p.Critical,
+		})
+	}
+	return out
+}
+
 // scriptExtensions are the arg suffixes ValidateMCPArgPaths treats as a script
 // file path that must resolve under the bundle dir.
 var scriptExtensions = map[string]bool{
@@ -2263,6 +2394,17 @@ func (b *Bundle) AgentPolicy() AgentPolicy {
 		if b.HTTPTools[i].Critical {
 			if name := strings.TrimSpace(b.HTTPTools[i].Name); name != "" {
 				p.CriticalToolSuffixes = append(p.CriticalToolSuffixes, name)
+			}
+		}
+	}
+	// An a2a peer flagged `critical: true` gates the two operations with side
+	// effects — <peer>_send (work leaves the box, cost lands on the remote)
+	// and <peer>_cancel. The registered names end in "_<peer>_send", so the
+	// derived tool name is the suffix; status/wait are reads and stay free.
+	for i := range b.A2APeers {
+		if b.A2APeers[i].Critical {
+			if name := strings.TrimSpace(b.A2APeers[i].Name); name != "" {
+				p.CriticalToolSuffixes = append(p.CriticalToolSuffixes, name+"_send", name+"_cancel")
 			}
 		}
 	}
@@ -2384,6 +2526,14 @@ func (b *Bundle) EnvVarNames() []string {
 	// they are resolved host-side at call time exactly like an MCP server's headers.
 	for i := range b.HTTPTools {
 		for _, v := range b.HTTPTools[i].Headers {
+			for _, name := range sourceEnvRefs(v) {
+				add(name)
+			}
+		}
+	}
+	// And a2a peers' header credentials (#1368), same seam.
+	for i := range b.A2APeers {
+		for _, v := range b.A2APeers[i].Headers {
 			for _, name := range sourceEnvRefs(v) {
 				add(name)
 			}
@@ -2544,11 +2694,15 @@ func (b *Bundle) ScrubConnectorRuntimeDefinitions() {
 	for i := range b.HTTPTools {
 		b.HTTPTools[i] = HTTPToolDef{}
 	}
+	for i := range b.A2APeers {
+		b.A2APeers[i] = A2APeerDef{}
+	}
 	b.MCPCatalog = nil
 	b.HTTPTools = nil
+	b.A2APeers = nil
 }
 
-func connectorEnvInventory(servers []ServerDef, httpTools []HTTPToolDef) ([]string, []string) {
+func connectorEnvInventory(servers []ServerDef, httpTools []HTTPToolDef, a2aPeers []A2APeerDef) ([]string, []string) {
 	seen := map[string]bool{}
 	accountSeen := map[string]bool{}
 	var names, accountNames []string
@@ -2593,6 +2747,9 @@ func connectorEnvInventory(servers []ServerDef, httpTools []HTTPToolDef) ([]stri
 	}
 	for i := range httpTools {
 		walkSourceStrings(reflect.ValueOf(httpTools[i]), addRef)
+	}
+	for i := range a2aPeers {
+		walkSourceStrings(reflect.ValueOf(a2aPeers[i]), addRef)
 	}
 	slices.Sort(names)
 	slices.Sort(accountNames)

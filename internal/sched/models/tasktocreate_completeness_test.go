@@ -26,6 +26,7 @@ func TestTaskToCreateCarriesEveryDefinitionField(t *testing.T) {
 		"CreatedByTaskID":       "per-spawn lineage, set by the create_task tool (#277)",
 		"SLABreached":           "runtime-latched by the SLA monitor (#274)",
 		"ActualDurationSeconds": "runtime, populated on the terminal transition (#274)",
+		"A2ADelegationDepth":    "delegation provenance (#1368): stamped by the inbound A2A server from the peer's header; a clone/re-run/recurrence is operator work, not a hop in a peer chain",
 	}
 
 	var task Task

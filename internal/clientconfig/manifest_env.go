@@ -257,8 +257,8 @@ func recordManifestRefs(value string, segs []string, out *[]manifestRefSite) {
 // lazyResolvedManifestPath reports whether the path lies inside a connector
 // map whose values deliberately keep their raw ${...} text through Load and
 // resolve against the live process env at catalog-build/spawn time
-// (resolveEnvMap): mcp_servers[i].env, mcp_servers[i].headers, and
-// http_tools[i].headers. An unset bare reference there is legitimate — the
+// (resolveEnvMap): mcp_servers[i].env, mcp_servers[i].headers,
+// http_tools[i].headers, and a2a_peers[i].headers. An unset bare reference there is legitimate — the
 // server gates off, or optional_env drops the key.
 func lazyResolvedManifestPath(segs []string) bool {
 	if len(segs) < 3 || !strings.HasPrefix(segs[1], "[") {
@@ -267,7 +267,7 @@ func lazyResolvedManifestPath(segs []string) bool {
 	switch segs[0] {
 	case "mcp_servers":
 		return segs[2] == "env" || segs[2] == "headers"
-	case "http_tools":
+	case "http_tools", "a2a_peers":
 		return segs[2] == "headers"
 	}
 	return false

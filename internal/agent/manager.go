@@ -269,6 +269,13 @@ type MCPScopePolicy struct {
 	// "inherit global" — the scheduled driver's per-task allowlist (#184). Only
 	// the scheduled driver sets it; interactive turns leave it nil.
 	CredentialAllowlist agentcore.CredentialAllowlist
+	// A2ADepth is the run's inbound A2A delegation depth (#1368): the task
+	// row's a2a_delegation_depth, 0 for anything a human started. The broker
+	// child stamps it on the scope's a2a peer tools so a task that itself
+	// arrived over A2A cannot re-delegate past FLEET_A2A_MAX_DELEGATION_DEPTH.
+	// Public configuration state, not a credential; like every other field
+	// here it can only NARROW what the child allows.
+	A2ADepth int
 }
 
 // MCPScopeOpener binds the selected public server/account names to a per-turn
@@ -303,7 +310,7 @@ type MCPReloader func(ctx context.Context) (*MCPReloadResult, error)
 // (fleet mcp-broker) so both connect the catalog identically — one credential path,
 // not two (issue #167). httpTools may be nil/empty (the generic default), in which
 // case no inline HTTP tools are registered and behavior is unchanged.
-func BuildMCPClient(specs map[string]MCPServerSpec, httpTools []config.HTTPToolConfig) *mcp.Client {
+func BuildMCPClient(specs map[string]MCPServerSpec, httpTools []config.HTTPToolConfig, a2aPeers []config.A2APeerConfig) *mcp.Client {
 	client := mcp.NewClient()
 	for name, spec := range specs {
 		if !spec.Enabled {
@@ -344,6 +351,11 @@ func BuildMCPClient(specs map[string]MCPServerSpec, httpTools []config.HTTPToolC
 	// resolved auth headers live only in this process and are applied to the outbound
 	// request at call time — never shipped to the sandbox or the model.
 	RegisterHTTPTools(client, httpTools)
+	// Outbound A2A peers (#1368): the same synthetic-server seam. This is a
+	// shared, process-lifetime client, so the calling run's depth is unknown
+	// here and defaults to 0 (human-initiated); scheduled runs stamp their real
+	// depth on the call context (mcp.WithA2ADepth), which wins.
+	RegisterA2APeers(client, a2aPeers, 0)
 	return client
 }
 
@@ -371,6 +383,51 @@ func RegisterHTTPTools(client *mcp.Client, httpTools []config.HTTPToolConfig) {
 	}
 	client.AddHTTPTools(specs)
 	log.Printf("inline HTTP tools registered: %d", len(specs))
+}
+
+// RegisterA2APeers translates the resolved config.A2APeerConfig catalog into
+// the mcp package's spec shape and registers it onto client (#1368). Exported
+// for the same reason as RegisterHTTPTools: the interactive Manager, the
+// broker (boot client and per-scope clients), and the scheduled per-task
+// binder all register the SAME peer catalog through ONE path, host-side
+// credentials only. defaultDepth is the calling run's delegation depth when
+// the call context carries none — 0 for human-initiated work.
+//
+// The two knobs are resolved HERE, at the point of use, because the broker
+// child registers peers without ever running config.Load: a malformed value
+// was already refused at boot by the parent's external-knob gate, so the
+// child keeping its safe default on a parse error is defense in depth.
+func RegisterA2APeers(client *mcp.Client, peers []config.A2APeerConfig, defaultDepth int) {
+	if len(peers) == 0 {
+		return
+	}
+	maxDepth, err := config.EnvKnobInt("FLEET_A2A_MAX_DELEGATION_DEPTH", config.DefaultA2AMaxDelegationDepth)
+	if err != nil {
+		log.Printf("warn: %v; a2a peers keep the default delegation ceiling %d", err, config.DefaultA2AMaxDelegationDepth)
+		maxDepth = config.DefaultA2AMaxDelegationDepth
+	}
+	allowPrivate, err := config.EnvKnobBool("FLEET_A2A_CLIENT_ALLOW_PRIVATE", false)
+	if err != nil {
+		log.Printf("warn: %v; a2a peers keep the SSRF guard on", err)
+		allowPrivate = false
+	}
+	if defaultDepth < 0 {
+		defaultDepth = 0
+	}
+	specs := make([]mcp.A2APeerSpec, 0, len(peers))
+	for _, p := range peers {
+		specs = append(specs, mcp.A2APeerSpec{
+			Name:         p.Name,
+			Description:  p.Description,
+			RPCURL:       p.RPCURL,
+			Headers:      p.Headers,
+			MaxDepth:     maxDepth,
+			DefaultDepth: defaultDepth,
+			AllowPrivate: allowPrivate,
+		})
+	}
+	client.AddA2APeers(specs)
+	log.Printf("a2a peers registered: %d (delegation depth %d of max %d, private peers allowed=%v)", len(specs), defaultDepth, maxDepth, allowPrivate)
 }
 
 func New(opts ManagerOptions) (*Manager, error) {
@@ -413,7 +470,7 @@ func New(opts ManagerOptions) (*Manager, error) {
 	catalog := cloneMCPCatalog(opts.MCPCatalog)
 	accounts := cloneMCPAccounts(opts.MCPAccounts)
 	if broker == nil {
-		client = BuildMCPClient(opts.ServerSpecs, cfg.HTTPTools)
+		client = BuildMCPClient(opts.ServerSpecs, cfg.HTTPTools, cfg.A2APeers)
 		broker = agentcore.NewLocalMCPBroker(client, agentcore.DefaultRemediationHints)
 		catalog = client.GetAllTools()
 		for name, spec := range opts.ServerSpecs {

@@ -172,7 +172,7 @@ func TestReloadMCPServers_RefreshesGating(t *testing.T) {
 	specsA := map[string]MCPServerSpec{
 		"A": {Enabled: true, URL: srvA.URL},
 	}
-	m := &Manager{mcpClient: BuildMCPClient(specsA, nil)}
+	m := &Manager{mcpClient: BuildMCPClient(specsA, nil, nil)}
 	t.Cleanup(func() { _ = m.mcpClient.Close() })
 	// Seed initial gating the way New() does.
 	m.mcpToolRoster = m.computeMCPToolRoster(mcpAllowlist{})

@@ -116,6 +116,12 @@ type ScopePolicy struct {
 	// Credentials differ: false means "the run inherits global" (the historical
 	// nil allowlist), while true with an empty list denies every call.
 	RestrictCredentials bool `json:"restrictCredentials,omitempty"`
+	// A2ADepth is the run's inbound A2A delegation depth (#1368), 0 for
+	// human-initiated work. The child stamps it on the scope's a2a peer tools
+	// as their default depth (the call context cannot cross the stdio
+	// boundary) so a delegated task cannot re-delegate past the ceiling. A
+	// public integer, never a credential.
+	A2ADepth int `json:"a2aDepth,omitempty"`
 	// Credentials lists the permitted {server, account} pairs when
 	// RestrictCredentials is set.
 	Credentials []ScopeChoice `json:"credentials,omitempty"`

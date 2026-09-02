@@ -62,3 +62,4 @@ reviewable, and citable. Each record names the file or test that enforces it.
 | [0051](0051-a2a-protocol-server.md) | An A2A protocol server as a translation over the governed task seam | Accepted |
 | [0052](0052-operations-always-on-mcp-selection.md) | Operations MCP selections add optional servers without replacing always-on servers | Accepted |
 | [0053](0053-public-api-through-the-tls-front.md) | The public HTTP API is served through the TLS front, with the header-trust channel stripped | Accepted; amends ADR-0004 |
+| [0054](0054-a2a-outbound-delegation.md) | Outbound A2A delegation as bundle-declared tools over the MCP seam | Accepted |

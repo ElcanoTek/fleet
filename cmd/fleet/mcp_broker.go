@@ -62,7 +62,7 @@ func runMCPBroker() error {
 	// that holds the connector secrets, so their auth headers never cross back to
 	// the parent fleet process (only public tool descriptors + rendered text do).
 	specs := scheduledrun.BuildMCPSpecs(cfg)
-	client := agent.BuildMCPClient(specs, cfg.HTTPTools)
+	client := agent.BuildMCPClient(specs, cfg.HTTPTools, cfg.A2APeers)
 	log.Printf("mcp-broker: serving %d MCP tools over stdio", len(client.GetAllTools()))
 
 	backend := &brokerBackend{
@@ -70,6 +70,7 @@ func runMCPBroker() error {
 		client:      client,
 		bases:       scheduledrun.BuildMCPBases(cfg),
 		httpTools:   cfg.HTTPTools,
+		a2aPeers:    cfg.A2APeers,
 		bundleAllow: bundleToolAllowlist(specs),
 		enabled:     enabledServerSet(specs),
 		scopes:      make(map[string]*brokerScope),
@@ -156,6 +157,7 @@ func loadMCPBrokerConfig() (*config.Config, error) {
 	return &config.Config{
 		MCPServers: bundle.MCPServerConfigs(),
 		HTTPTools:  bundle.HTTPToolConfigs(),
+		A2APeers:   bundle.A2APeerConfigs(),
 	}, nil
 }
 
@@ -169,6 +171,7 @@ type brokerBackend struct {
 	client              *mcp.Client
 	bases               map[string]agentcore.MCPServerBase
 	httpTools           []config.HTTPToolConfig
+	a2aPeers            []config.A2APeerConfig
 	reloadConfig        func() (*config.Config, error)
 	// bundleAllow / enabled are the child's OWN Gate-2 allowlist and enabled
 	// server set, re-derived from the bundle this process loads (and reloads).
@@ -249,6 +252,7 @@ func (b *brokerBackend) OpenScope(ctx context.Context, spec mcpbroker.ScopeSpec)
 	b.reloadMu.Lock()
 	bases := cloneMCPBases(b.bases)
 	httpTools := append([]config.HTTPToolConfig(nil), b.httpTools...)
+	a2aPeers := append([]config.A2APeerConfig(nil), b.a2aPeers...)
 	bundleAllow := cloneToolAllowlist(b.bundleAllow)
 	enabled := cloneServerSet(b.enabled)
 	b.reloadMu.Unlock()
@@ -275,6 +279,18 @@ func (b *brokerBackend) OpenScope(ctx context.Context, spec mcpbroker.ScopeSpec)
 		// entry, so there is no bundle allowlist for it; it is admitted
 		// explicitly rather than falling through the "unknown server" refusal.
 		extraServers = append(extraServers, clientconfig.HTTPToolServerName)
+	}
+	if len(a2aPeers) > 0 {
+		// Outbound A2A peers (#1368) ride the same synthetic-server seam. The
+		// scope's default delegation depth comes from the parent's policy —
+		// the task row's inbound depth — because a call context cannot cross
+		// the stdio boundary; 0 (no policy) is human-initiated work.
+		depth := 0
+		if spec.Policy != nil {
+			depth = spec.Policy.A2ADepth
+		}
+		agent.RegisterA2APeers(client, a2aPeers, depth)
+		extraServers = append(extraServers, clientconfig.A2AToolServerName)
 	}
 
 	authz := newScopeAuthorizer(selection, bundleAllow, spec.Policy, extraServers...)
@@ -446,8 +462,9 @@ func (b *brokerBackend) CallMCP(ctx context.Context, server, tool string, args m
 	allowed := b.bundleAllow[server]
 	enabled := b.enabled[server]
 	b.reloadMu.Unlock()
-	// The synthetic inline-http-tools server has no manifest entry to gate on.
-	if !enabled && server != clientconfig.HTTPToolServerName {
+	// The synthetic inline-http-tools and a2a-peer servers have no manifest
+	// entry to gate on.
+	if !enabled && server != clientconfig.HTTPToolServerName && server != clientconfig.A2AToolServerName {
 		return denyPolicy(server, tool), true, nil
 	}
 	if len(allowed) > 0 && !slices.Contains(allowed, tool) {

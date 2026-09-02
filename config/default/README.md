@@ -88,6 +88,39 @@ stating plainly:
   response is returned to the model as `status <N>: <body>` so it can reason about
   the failure, not raised as an execution error.
 
+## Outbound A2A peers (`a2a_peers`)
+
+For delegating work to another agent that speaks the A2A protocol — another
+fleet deployment, or any A2A v1.0 server — the manifest's `a2a_peers:` section
+declares remote peers inline: a `name`, the peer's `rpc_url`, a bundle-authored
+`description`, optional credential `headers`, and a `critical` flag. Each peer
+registers **four** tools the agent sees alongside MCP tools
+(`mcp__a2a_<name>_send`, `_status`, `_wait`, `_cancel`): send a task and get its
+remote id back at once, poll it, wait on its event stream for a bounded time,
+or cancel it. The generic bundle ships none — see the commented-out example in
+`manifest.yaml`. Validated at load (name charset, `http(s)` URL without
+userinfo, description required, namespace collisions all fail startup loudly).
+
+Same trust posture as `http_tools`, plus three rules specific to talking to
+another agent (docs/A2A.md "Outbound delegation", ADR-0054):
+
+- **Credentials stay host-side.** `headers` values may carry `${ENV_VAR}`
+  references, resolved from the host process env at call time in whichever
+  process holds the connector secrets. They never enter the sandbox, the model
+  context, results, or logs.
+- **Peers are operator policy; the model never sees a remote agent card.** The
+  `description` you write here is the only text about the peer the model ever
+  sees — remote card text would be a prompt-injection channel into every run.
+- **What the peer sends back is untrusted external content.** Results open
+  with a banner saying so; text is inlined under a cap; file artifacts are
+  listed by name/type/URL and **not downloaded**.
+- **Outbound calls are SSRF-guarded** (`netguard` resolve-then-dial, redirects
+  refused) and a fleet-to-fleet recursion guard caps delegation chains at
+  `FLEET_A2A_MAX_DELEGATION_DEPTH` (default 3).
+- **Prefer `critical: true`.** Delegation is a side effect whose cost lands on
+  the remote side; the flag puts `_send`/`_cancel` behind the same
+  audit/approval gate as `agent_policy.critical_tools`.
+
 ## Skills
 
 The `skills/` directory holds **Agent Skills** — packaged, on-demand capabilities

@@ -114,3 +114,23 @@ func SafeHTTPClient(timeout time.Duration) *http.Client {
 		},
 	}
 }
+
+// SafeStreamingHTTPClient is SafeHTTPClient's posture — the resolve-then-dial
+// guard and the unconditional redirect refusal — for callers that READ A
+// LONG-LIVED RESPONSE BODY (an SSE subscription). http.Client.Timeout bounds
+// the whole exchange, request through the last body byte, so it would cut a
+// stream off mid-read; this client sets none and bounds the connection
+// phases individually instead (dial 10s and TLS 10s from safeTransport, plus
+// 30s for the response headers so a server that accepts and then stalls is
+// still bounded). The caller owns the overall deadline through the request
+// context — every caller MUST pass one.
+func SafeStreamingHTTPClient() *http.Client {
+	tr := safeTransport()
+	tr.ResponseHeaderTimeout = 30 * time.Second
+	return &http.Client{
+		Transport: tr,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return errRedirectBlocked
+		},
+	}
+}

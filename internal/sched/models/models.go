@@ -1058,6 +1058,10 @@ type TaskCreate struct {
 	// the historical behavior. Normalized (trimmed, empty → nil) in NewTask;
 	// immutable after creation.
 	SerializationKey *string `json:"serialization_key,omitempty"`
+	// A2ADelegationDepth is set ONLY by the inbound A2A server (#1368) from the
+	// delegating peer's X-Fleet-A2A-Depth header; it is hidden from JSON so no
+	// REST caller can claim a depth and skew the recursion guard.
+	A2ADelegationDepth int `json:"-"`
 }
 
 // SLA monitoring defaults (#274). Applied in NewTask when a task carries an
@@ -1203,6 +1207,14 @@ type Task struct {
 	// ownership check behind the transcript gate. Persisted; not settable by
 	// clients.
 	CreatedByKeyID *string `json:"created_by_key_id,omitempty"`
+	// A2ADelegationDepth is how many fleet-to-fleet A2A delegation hops this
+	// task sits at (#1368): 0 for anything a human or the REST API created,
+	// 1 for a task another agent delegated here over A2A, and so on up the
+	// chain. Stamped once at creation from the inbound X-Fleet-A2A-Depth
+	// header (bounded by FLEET_A2A_MAX_DELEGATION_DEPTH) and carried forward
+	// by the task's own outbound a2a peer sends, so a chain of deployments
+	// cannot loop. Immutable provenance, never exported.
+	A2ADelegationDepth int `json:"a2a_delegation_depth,omitempty"`
 	// SourceTaskID is the task this one was re-run / cloned from (#270), set
 	// server-side by POST /tasks/{id}/rerun|clone. nil for original tasks.
 	// Persisted; not settable by clients.
@@ -1430,6 +1442,7 @@ func NewTask(tc TaskCreate) *Task {
 		SLAWarnMultiplier:          warnMul,
 		SLAFailMultiplier:          failMul,
 		SerializationKey:           serializationKey,
+		A2ADelegationDepth:         tc.A2ADelegationDepth,
 	}
 }
 

@@ -967,6 +967,13 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 	// Appended to the TASK prompt, never the cached system prefix
 	// (docs/PROMPT-CACHE-CONTRACT.md).
 	prompt = agentcore.AugmentTaskWithCreateReconciliation(prompt, mcpBinding.workdir)
+	// Outbound A2A recursion guard (#1368): the run's inbound delegation depth
+	// rides the call context down to the a2a peer tools (it survives every
+	// derivation to the transport call), so a task that itself arrived over
+	// A2A refuses to re-delegate past FLEET_A2A_MAX_DELEGATION_DEPTH — on the
+	// shared client as much as on a per-run one. Broker deployments carry the
+	// same value in the scope policy instead (the context cannot cross stdio).
+	ctx = mcp.WithA2ADepth(ctx, task.A2ADelegationDepth)
 	runErr := a.Execute(ctx, prompt)
 	session := convertLogSession(task, a.LogSession())
 	if runErr != nil {
@@ -1239,6 +1246,7 @@ func (r *Runner) bindTaskMCPRuntime(ctx context.Context, task *models.Task) (tas
 	policy := agent.MCPScopePolicy{
 		ToolAllowlist:       r.taskMCPToolAllowlist(),
 		CredentialAllowlist: taskCredentialAllowlist(task),
+		A2ADepth:            task.A2ADelegationDepth,
 	}
 	scope, err := r.openTaskMCPScope(ctx, selection, policy, task.ID.String(), workdir)
 	if err != nil {
@@ -1412,6 +1420,9 @@ func (r *Runner) bindTaskMCP(ctx context.Context, task *models.Task, denyAll boo
 	// them. Same host-side credential path as the interactive Manager / broker.
 	if r.cfg != nil {
 		agent.RegisterHTTPTools(client, r.cfg.HTTPTools)
+		// Outbound A2A peers (#1368), same reasoning; the task's inbound depth
+		// is the default the call context normally overrides anyway.
+		agent.RegisterA2APeers(client, r.cfg.A2APeers, task.A2ADelegationDepth)
 	}
 	log.Printf("scheduled task %s: bound %d MCP server(s) on per-run client: %v", task.ID, len(registered), registered)
 	return client, cleanup, workdir, nil
