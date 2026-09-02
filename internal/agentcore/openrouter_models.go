@@ -342,13 +342,18 @@ func fetchOpenRouterModels(timeout time.Duration) ([]orModelEntry, error) {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return nil, fmt.Errorf("status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 4*1024*1024))
-	if err != nil {
-		return nil, fmt.Errorf("read body: %w", err)
-	}
+	lr := io.LimitReader(resp.Body, 4*1024*1024)
+	dec := json.NewDecoder(lr)
 	var envelope orModelsResponse
-	if err := json.Unmarshal(body, &envelope); err != nil {
+	if err := dec.Decode(&envelope); err != nil {
 		return nil, fmt.Errorf("decode: %w", err)
 	}
+	if tok, err := dec.Token(); err != io.EOF {
+		if err != nil {
+			return nil, fmt.Errorf("decode trailing: %w", err)
+		}
+		return nil, fmt.Errorf("unexpected trailing data: %v", tok)
+	}
+	_, _ = io.Copy(io.Discard, lr)
 	return envelope.Data, nil
 }
