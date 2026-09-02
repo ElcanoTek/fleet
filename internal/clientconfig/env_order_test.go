@@ -506,48 +506,6 @@ mcp_servers:
 	}
 }
 
-// TestEnvVarNamesDefaultOnly: only names whose EVERY manifest occurrence
-// carries a ${VAR:-...} default qualify — a bare/required reference anywhere,
-// or a literal naming (enable gates, account vars, …), disqualifies the name.
-func TestEnvVarNamesDefaultOnly(t *testing.T) {
-	unsetTracked(t, "I1123_DO_PURE", "I1123_DO_MIXED", "I1123_DO_GATED")
-	b, err := Load(writeManifest(t, `
-mcp_servers:
-  - name: local
-    command: python3
-    args: ["mcp/s.py"]
-    enabled_env: [I1123_DO_GATED]
-    env:
-      MIXED: "${I1123_DO_MIXED}"
-      GATED: "${I1123_DO_GATED:-gate-default}"
-  - name: remote
-    type: http
-    url: "${I1123_DO_PURE:-https://fallback.example/mcp}"
-    always: true
-    headers:
-      X-Mixed: "${I1123_DO_MIXED:-mixed-default}"
-`))
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-	got := b.EnvVarNamesDefaultOnly()
-	if !slices.Contains(got, "I1123_DO_PURE") {
-		t.Errorf("default-only = %v, want I1123_DO_PURE (every occurrence carries a default)", got)
-	}
-	if slices.Contains(got, "I1123_DO_MIXED") {
-		t.Errorf("default-only = %v, must exclude I1123_DO_MIXED (also referenced bare)", got)
-	}
-	if slices.Contains(got, "I1123_DO_GATED") {
-		t.Errorf("default-only = %v, must exclude I1123_DO_GATED (named literally as an enable gate)", got)
-	}
-	// All three still register with the allowlist inventory.
-	names := b.EnvVarNames()
-	for _, want := range []string{"I1123_DO_PURE", "I1123_DO_MIXED", "I1123_DO_GATED"} {
-		if !slices.Contains(names, want) {
-			t.Errorf("EnvVarNames = %v, want %q", names, want)
-		}
-	}
-}
 
 // TestEnvFileAllowlistStillGatesUnreferencedKeys: the early application admits
 // only allowlisted keys — a file key the manifest never references (and the

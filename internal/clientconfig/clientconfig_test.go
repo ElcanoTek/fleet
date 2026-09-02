@@ -1189,9 +1189,50 @@ func TestHTTPToolConfigs(t *testing.T) {
 	}
 }
 
-func TestEnvVarNamesDefaultOnlyExcludesLiterals(t *testing.T) {
-	dir := t.TempDir()
-	manifest := `
+func TestEnvVarNamesDefaultOnly(t *testing.T) {
+	tests := []struct {
+		name     string
+		manifest string
+		env      map[string]string
+		expected []string
+	}{
+		{
+			name: "only default-carrying",
+			manifest: `
+sandbox:
+  image: "${TEST_VAR_A:-latest}"
+`,
+			expected: []string{"TEST_VAR_A"},
+		},
+		{
+			name: "excluded if referenced bare somewhere else",
+			manifest: `
+sandbox:
+  image: "${TEST_VAR_B:-latest}"
+mcp_servers:
+  - name: local
+    command: "${TEST_VAR_B}"
+`,
+			env:      map[string]string{"TEST_VAR_B": "dummy"},
+			expected: []string{},
+		},
+		{
+			name: "excluded if referenced required somewhere else",
+			manifest: `
+sandbox:
+  image: "${TEST_VAR_C:-latest}"
+mcp_servers:
+  - name: local
+    command: "${TEST_VAR_C:?req}"
+`,
+			env:      map[string]string{"TEST_VAR_C": "dummy"},
+			expected: []string{},
+		},
+		{
+			name: "excluded if named literally",
+			manifest: `
+sandbox:
+  image: "${I1123_SANDBOX_IMG:-latest}"
 mcp_servers:
   - name: local
     command: python3
@@ -1213,39 +1254,56 @@ providers:
   - name: my_provider
     type: openai
     api_key_env: SOME_PROV_VAR
+`,
+			expected: []string{"I1123_SANDBOX_IMG"},
+		},
+		{
+			name: "multiple default-carrying references to same var",
+			manifest: `
 sandbox:
-  image: "${I1123_SANDBOX_IMG:-latest}"
-`
-	if err := os.MkdirAll(filepath.Join(dir, "mcp"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "mcp", "s.py"), []byte("print('ok')"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte(manifest), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	b, err := Load(dir)
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-
-	got := b.EnvVarNamesDefaultOnly()
-	if !slices.Contains(got, "I1123_SANDBOX_IMG") {
-		t.Errorf("default-only = %v, want I1123_SANDBOX_IMG (only default-carrying)", got)
+  image: "${TEST_VAR_D:-latest}"
+mcp_servers:
+  - name: local
+    command: "${TEST_VAR_D:-latest}"
+`,
+			expected: []string{"TEST_VAR_D"},
+		},
+		{
+			name: "empty tokens excluded",
+			manifest: `
+sandbox:
+  image: "${:-x}"
+`,
+			expected: []string{},
+		},
 	}
 
-	// Exclusions
-	exclusions := []string{
-		"I1123_GROUP1", "I1123_GROUP2", // EnabledGroups
-		"I1123_ACCT",                // AccountVars
-		"I1123_ID_VAR",              // IdentityEnv
-		"I1123_HMAC", "I1123_TOKEN", // WebhookTriggers
-		"SOME_PROV_VAR", // Providers
-	}
-	for _, excl := range exclusions {
-		if slices.Contains(got, excl) {
-			t.Errorf("default-only = %v, must exclude literal %s", got, excl)
-		}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			for k, v := range tc.env {
+				t.Setenv(k, v)
+			}
+			dir := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(dir, "mcp"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "mcp", "s.py"), []byte("print('ok')"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte(tc.manifest), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			b, err := Load(dir)
+			if err != nil {
+				t.Fatalf("load: %v", err)
+			}
+			got := b.EnvVarNamesDefaultOnly()
+			if !slices.Equal(got, tc.expected) {
+				if len(got) == 0 && len(tc.expected) == 0 {
+					return
+				}
+				t.Errorf("EnvVarNamesDefaultOnly() = %v, want %v", got, tc.expected)
+			}
+		})
 	}
 }
