@@ -25,6 +25,16 @@ func TestStringSliceFlag_String(t *testing.T) {
 			input:    stringSliceFlag{"a", "b", "c"},
 			expected: "a,b,c",
 		},
+		{
+			name:     "items with commas",
+			input:    stringSliceFlag{"a,b", "c"},
+			expected: "a,b,c",
+		},
+		{
+			name:     "items with spaces",
+			input:    stringSliceFlag{"a b", "c "},
+			expected: "a b,c ",
+		},
 	}
 
 	for _, tc := range tests {
@@ -73,6 +83,18 @@ func TestStringSliceFlag_Set(t *testing.T) {
 			input:    "b",
 			initial:  stringSliceFlag{"a"},
 			expected: stringSliceFlag{"a", "b"},
+		},
+		{
+			name:     "append empty string",
+			input:    "",
+			initial:  stringSliceFlag{"a"},
+			expected: stringSliceFlag{"a"},
+		},
+		{
+			name:     "append whitespace string",
+			input:    "   ",
+			initial:  stringSliceFlag{"a"},
+			expected: stringSliceFlag{"a"},
 		},
 	}
 

@@ -76,7 +76,9 @@ compile:
 # emit just the two deployable artifacts (used by scripts/update.sh + bootstrap.sh).
 # fleet is the ONE unified binary (#461): `fleet serve` (or bare `fleet`) runs the
 # server, every other verb is the operator CLI. fleet-admin is a thin deprecation
-# shim that forwards to the same admin dispatch for one release.
+# shim that forwards to the same admin dispatch; it stays until the first release
+# after 1.0.0 (ADR-0012) — scripts/update.sh and fleet-upgrade.sh hard-fail if it
+# is not emitted, so do not drop the line below without updating them.
 bins:
 	go build -ldflags "$(VERSION_LDFLAGS)" -o ./fleet ./cmd/fleet
 	go build -ldflags "$(VERSION_LDFLAGS)" -o ./fleet-admin ./cmd/fleet-admin
@@ -93,9 +95,9 @@ fleet-bench:
 # checkout — the fix for "fleet isn't installed" on a dev box (#461). The
 # systemd unit can keep ExecStart=$(BINDIR)/fleet (bare fleet still serves) or
 # migrate to `fleet serve` on its own schedule; both work. The fleet-admin shim
-# is installed alongside for one deprecation release (the scripts' upgrade path
-# still expects it). Override the location with PREFIX (or BINDIR) and DESTDIR
-# for packaging.
+# is installed alongside until the first release after 1.0.0 (ADR-0012; the
+# scripts' upgrade path still expects it). Override the location with PREFIX (or
+# BINDIR) and DESTDIR for packaging.
 PREFIX ?= /usr/local
 BINDIR ?= $(PREFIX)/bin
 install: bins

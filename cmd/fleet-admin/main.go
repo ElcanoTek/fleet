@@ -3,7 +3,10 @@
 // `fleet <verb>` (e.g. `fleet update`, `fleet status`) instead. This shim simply
 // forwards to the same admin dispatch the `fleet` binary uses, after printing a
 // one-line deprecation notice, so existing scripts and muscle memory keep
-// working for one release. It will be removed in a future release.
+// working. It is removed in the first release after 1.0.0 — the trigger
+// docs/adr/0012-unified-fleet-cli.md records; until then it stays, and the
+// build/upgrade scripts (Makefile bins/install, scripts/update.sh,
+// scripts/fleet-upgrade.sh) still emit and install it.
 package main
 
 import (
@@ -14,6 +17,6 @@ import (
 )
 
 func main() {
-	fmt.Fprintln(os.Stderr, "warning: `fleet-admin` is deprecated and will be removed; use `fleet <command>` instead (e.g. `fleet update`).")
+	fmt.Fprintln(os.Stderr, "warning: `fleet-admin` is deprecated and is removed in the first release after 1.0.0; use `fleet <command>` instead (e.g. `fleet update`).")
 	os.Exit(admincli.Run(os.Args[1:]))
 }

@@ -23,8 +23,8 @@ scripts/    bootstrap / update / status and e2e helpers
 
 See the top-level `README.md` for the architecture overview. The server runs via
 `fleet serve` (bare `fleet` also serves, for back-compat); all other verbs are the
-operator CLI. (`fleet-admin <verb>` still works but is deprecated and will be
-removed.)
+operator CLI. (`fleet-admin <verb>` still works but is deprecated; it is
+removed in the first release after 1.0.0 — see `docs/adr/0012-unified-fleet-cli.md`.)
 
 ## Prerequisites
 

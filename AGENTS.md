@@ -124,9 +124,9 @@ mergeable PR. See [`docs/SCANNING.md`](docs/SCANNING.md) ("Known gaps").
 
 See the README "Repository layout" for the annotated tree. In short: `cmd/` (the
 one unified `fleet` binary — `fleet serve` runs the server, every other verb is the
-operator CLI; `fleet-admin` is a transitional deprecation shim that still works for
-one release; plus the `fleet-bench`, `fake-llm` and `sandbox-probe` harness
-binaries), `internal/` (`agentcore` the one run loop, `sandbox`,
+operator CLI; `fleet-admin` is a deprecation shim that stays until the first
+release after 1.0.0, per ADR-0012; plus the `fleet-bench`, `fake-llm` and
+`sandbox-probe` harness binaries), `internal/` (`agentcore` the one run loop, `sandbox`,
 `mcp`, `creds`, `clientconfig`, `store`, `sched`, `httpapi`, …), `web/` (one
 Next.js app: `/chat`, `/orchestrator`, `/settings`, `/admin`), `deploy/` (the
 systemd units + Caddyfile for the single-box install and the
