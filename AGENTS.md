@@ -26,7 +26,7 @@ code (or docs) that assumes podman is the only executor. See the README
 ## Build · test · lint (run before opening any PR)
 
 ```sh
-make build        # compile-check ./... AND emit ./fleet + ./fleet-admin
+make build        # compile-check ./... AND emit ./fleet
 make compile      # go build ./...   (release config — see the build tag below)
 make test         # go test -p 1 -tags fleet_host_executor ./...   — run in the FOREGROUND
 make test-race    # the same, with -race   (use when touching concurrency)
@@ -124,8 +124,7 @@ mergeable PR. See [`docs/SCANNING.md`](docs/SCANNING.md) ("Known gaps").
 
 See the README "Repository layout" for the annotated tree. In short: `cmd/` (the
 one unified `fleet` binary — `fleet serve` runs the server, every other verb is the
-operator CLI; `fleet-admin` is a transitional deprecation shim that still works for
-one release; plus the `fleet-bench`, `fake-llm` and `sandbox-probe` harness
+operator CLI; plus the `fleet-bench`, `fake-llm` and `sandbox-probe` harness
 binaries), `internal/` (`agentcore` the one run loop, `sandbox`,
 `mcp`, `creds`, `clientconfig`, `store`, `sched`, `httpapi`, …), `web/` (one
 Next.js app: `/chat`, `/orchestrator`, `/settings`, `/admin`), `deploy/` (the

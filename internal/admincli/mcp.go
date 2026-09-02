@@ -15,7 +15,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/creds"
 )
 
-// cmdMCP dispatches `fleet-admin mcp account set|list|del` — the MCP credential
+// cmdMCP dispatches `fleet mcp account set|list|del` — the MCP credential
 // account store over the 0600 env file. Values are read from stdin (never argv);
 // list never prints values.
 //

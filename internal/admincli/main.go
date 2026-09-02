@@ -2,12 +2,10 @@
 // `fleet` CLI (#461). It folds chat's chat-admin (chat users) and moc's
 // -create-user/-set-role flags (sched users + API keys) into one tool, plus MCP
 // credential-account management, the notes wiki admin verbs, and the
-// bootstrap/update/status lifecycle. Both the unified `fleet` binary (as
-// `fleet <verb>`) and the transitional `fleet-admin` deprecation shim call
-// Run; nothing here boots the server (that is `fleet serve`).
+// bootstrap/update/status lifecycle. The unified `fleet` binary (as
+// `fleet <verb>`) calls Run; nothing here boots the server (that is `fleet serve`).
 //
-// Subcommands (invoked as `fleet <verb>`; `fleet-admin <verb>` still works for
-// one deprecation release):
+// Subcommands (invoked as `fleet <verb>`):
 //
 //	fleet bootstrap [--postgres=local|external] [--client-config <url|path>] [--enable-service] [--dry-run]
 //	fleet update    [--no-pull] [--client-config <dir>] [--service <name>] [--yes] [--dry-run]
@@ -61,7 +59,7 @@ import (
 
 // Run dispatches one admin/operator subcommand (argv[0] is the verb) and returns
 // the process exit code. It is the single entry point both the unified `fleet`
-// binary and the `fleet-admin` shim call.
+// binary and the `fleet` shim call.
 func Run(argv []string) int {
 	if len(argv) == 0 {
 		Usage()

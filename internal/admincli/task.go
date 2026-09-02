@@ -19,10 +19,10 @@ import (
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
 )
 
-// cmdTask dispatches `fleet-admin task export|import` (#238). These are the
+// cmdTask dispatches `fleet task export|import` (#238). These are the
 // definition-only export/import verbs: a portable JSON or YAML envelope of task
 // configuration (NOT runtime state) for backup, cross-box migration, and
-// cloning. They are distinct from `fleet-admin sched task export|import`, which
+// cloning. They are distinct from `fleet sched task export|import`, which
 // is a full-Task backup that preserves IDs and runtime state.
 func cmdTask(argv []string) int {
 	if len(argv) < 1 {
@@ -38,10 +38,9 @@ func cmdTask(argv []string) int {
 	case "run":
 		// `task run` needs the full agent runtime and is dispatched by the
 		// unified `fleet` binary BEFORE admincli (see cmd/fleet
-		// classifyInvocation). Reaching this case means the caller came through
-		// the deprecated fleet-admin shim, which cannot run it — say so plainly
-		// instead of the generic unknown-subcommand error (#722).
-		return errf(1, "`task run` is dispatched by the unified fleet binary; run `fleet task run <task.yaml>` (the deprecated fleet-admin shim cannot dispatch it)")
+		// classifyInvocation). Reaching this case means something is wrong
+		// with the invocation.
+		return errf(1, "`task run` is dispatched by the unified fleet binary; run `fleet task run <task.yaml>`")
 	default:
 		return errf(1, "unknown task subcommand %q (want export|import|memories)", argv[0])
 	}
@@ -61,12 +60,12 @@ type definitionStore interface {
 	ReplaceTaskDefinition(ctx context.Context, taskID uuid.UUID, tc models.TaskCreate) (*models.Task, error)
 }
 
-// taskExport implements `fleet-admin task export` (#238). It writes a versioned
+// taskExport implements `fleet task export` (#238). It writes a versioned
 // JSON (default) or YAML envelope of task definitions to stdout.
 //
-//	fleet-admin task export --format yaml > tasks.yaml
-//	fleet-admin task export --ids uuid1,uuid2 --format json > subset.json
-//	fleet-admin task export --recurrence-only > cron-tasks.json
+//	fleet task export --format yaml > tasks.yaml
+//	fleet task export --ids uuid1,uuid2 --format json > subset.json
+//	fleet task export --recurrence-only > cron-tasks.json
 func taskExport(argv []string) int {
 	fs := flag.NewFlagSet("task export", flag.ContinueOnError)
 	dbURL := fs.String("database-url", "", "sched Postgres DSN")
@@ -109,12 +108,12 @@ func taskExport(argv []string) int {
 	return 0
 }
 
-// taskImport implements `fleet-admin task import` (#238). It reads a JSON or
+// taskImport implements `fleet task import` (#238). It reads a JSON or
 // YAML envelope from --from <file> (or stdin when --from is "-" or omitted) and
 // creates/replaces tasks with per-record conflict handling.
 //
-//	fleet-admin task import --from tasks.yaml --dry-run
-//	fleet-admin task import --from tasks.yaml --conflict replace
+//	fleet task import --from tasks.yaml --dry-run
+//	fleet task import --from tasks.yaml --conflict replace
 func taskImport(argv []string) int {
 	fs := flag.NewFlagSet("task import", flag.ContinueOnError)
 	dbURL := fs.String("database-url", "", "sched Postgres DSN")

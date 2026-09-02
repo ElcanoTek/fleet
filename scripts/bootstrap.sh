@@ -152,8 +152,8 @@
 set -euo pipefail
 
 # Resolve this script's repo root so --enable-service can build + install the
-# binary and unit files regardless of the caller's cwd (fleet-admin invokes it
-# from elsewhere). The DB/env/bundle steps still use repo-relative defaults.
+# binary and unit files regardless of the caller's cwd.
+# The DB/env/bundle steps still use repo-relative defaults.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # The fleet-managed Caddyfile: marker, renderer, foreign-file detection. ONE
@@ -1361,7 +1361,7 @@ fi
 
 # ── write/refresh the env file (0600) ──
 # Persist the resolved DSNs + the client-bundle dir so the fleet process and
-# fleet-admin read them from the SAME 0600 file deploy/fleet.service EnvironmentFiles.
+# scripts read them from the SAME 0600 file deploy/fleet.service EnvironmentFiles.
 # Idempotent: re-running rewrites these keys in place. Local-mode passwords are
 # reused from the env file's existing DSNs (or the operator's pre-set
 # CHAT_DB_PASSWORD/SCHED_DB_PASSWORD), and the cluster role is ALTERed to match —
@@ -1397,16 +1397,16 @@ if [[ "$DRY_RUN" != "1" ]]; then
 fi
 
 # ── optionally build + install the binary + unit, then enable + start it ──
-# fleet-admin bootstrap/update operate on a SOURCE CHECKOUT (this repo) and
+# fleet bootstrap/update operate on a SOURCE CHECKOUT (this repo) and
 # install the built artifacts to FLEET_INSTALL_DIR (default /opt/fleet) — the
 # location deploy/fleet.service's ExecStart points at.
 INSTALL_DIR="${FLEET_INSTALL_DIR:-/opt/fleet}"
 if [[ "$ENABLE_SERVICE" == "1" ]]; then
   step "Building + installing the fleet binary, then enabling ${SERVICE_NAME}"
   if [[ "$DRY_RUN" == "1" ]]; then
-    info "[dry-run] would run: (cd ${REPO_ROOT} && make build)  → fleet + fleet-admin"
-    info "[dry-run] would install fleet + fleet-admin → ${INSTALL_DIR}"
-    info "[dry-run] would symlink /usr/local/bin/fleet (+ fleet-admin) → ${INSTALL_DIR} (operator PATH)"
+    info "[dry-run] would run: (cd ${REPO_ROOT} && make build)  → fleet"
+    info "[dry-run] would install fleet → ${INSTALL_DIR}"
+    info "[dry-run] would symlink /usr/local/bin/fleet → ${INSTALL_DIR} (operator PATH)"
     info "[dry-run] would install deploy/fleet-motd.sh → /etc/profile.d/fleet-motd.sh (login banner)"
     info "[dry-run] would install deploy/fleet.service + deploy/fleet-web.service → /etc/systemd/system"
     info "[dry-run] would run: systemctl daemon-reload && systemctl enable --now ${SERVICE_NAME}"
@@ -1417,19 +1417,16 @@ if [[ "$ENABLE_SERVICE" == "1" ]]; then
     if command -v go >/dev/null 2>&1 || command -v make >/dev/null 2>&1; then
       # GOTOOLCHAIN=auto: Fedora's `golang` lags go.mod's pinned version, so let
       # the toolchain fetch the required Go rather than failing an opaque build.
-      if ( cd "$REPO_ROOT" && GOTOOLCHAIN=auto make build ) && [[ -x "$REPO_ROOT/fleet" && -x "$REPO_ROOT/fleet-admin" ]]; then
+      if ( cd "$REPO_ROOT" && GOTOOLCHAIN=auto make build ) && [[ -x "$REPO_ROOT/fleet" ]]; then
         install -D -m 0755 "$REPO_ROOT/fleet"       "$INSTALL_DIR/fleet"
-        install -D -m 0755 "$REPO_ROOT/fleet-admin" "$INSTALL_DIR/fleet-admin"
-        ok "installed fleet + fleet-admin → ${INSTALL_DIR}"
+        ok "installed fleet → ${INSTALL_DIR}"
         # Put `fleet` on the operator's PATH (#461). deploy/fleet.service's
         # ExecStart points at $INSTALL_DIR/fleet, but an operator typing `fleet
         # status` / `fleet update` / `fleet chat` needs it on PATH too — that gap
         # was the "fleet isn't installed" symptom. Symlink (not copy) so a later
-        # update of $INSTALL_DIR/fleet is reflected with no second install. The
-        # fleet-admin shim is linked alongside for one deprecation release.
+        # update of $INSTALL_DIR/fleet is reflected with no second install.
         if [[ -d /usr/local/bin ]] || install -d /usr/local/bin 2>/dev/null; then
           ln -sf "$INSTALL_DIR/fleet"       /usr/local/bin/fleet       && info "linked /usr/local/bin/fleet → ${INSTALL_DIR}/fleet"
-          ln -sf "$INSTALL_DIR/fleet-admin" /usr/local/bin/fleet-admin || true
         fi
         # MOTD (#461): a login banner like the sibling chat repo's. profile.d runs
         # `fleet motd` (version + service state + commands; no secrets) on an

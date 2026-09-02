@@ -192,8 +192,7 @@ sudo fleet restart
 The first run is always the **shell script** — the `fleet` binary doesn't exist
 until it's built. Once installed, `fleet bootstrap`/`update`/`status` wrap the
 same scripts for day-2 ops. The server runs via `fleet serve` (bare `fleet` also
-serves, for back-compat); all other verbs are the operator CLI. (`fleet-admin
-<verb>` still works but is deprecated and will be removed.) The numbered steps
+serves, for back-compat); all other verbs are the operator CLI. The numbered steps
 below break down what bootstrap does (and the manual path if you'd rather run
 each piece yourself):
 
@@ -215,7 +214,7 @@ each piece yourself):
 2. **Build** the binary, the sandbox image, and the web app:
 
    ```
-   make build                              # → ./fleet AND ./fleet-admin
+   make build                              # → ./fleet
    # The sandbox image is a per-client BUNDLE artifact (build-on-box by default):
    # the Containerfile lives in the bundle at <bundle>/sandbox/Containerfile and
    # each client ships its own flavor. Build the bundle's sandbox:
@@ -281,7 +280,6 @@ each piece yourself):
 
    ```
    install -D -m 0755 fleet            /opt/fleet/fleet
-   install -D -m 0755 fleet-admin      /opt/fleet/fleet-admin
    git clone <client-config-repo>      /opt/fleet/client   # set FLEET_CLIENT_CONFIG_DIR=/opt/fleet/client
    install -D -m 0644 deploy/fleet.service /etc/systemd/system/fleet.service
    install -D -m 0600 <your-env-file>  /etc/fleet/fleet.env

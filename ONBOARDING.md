@@ -70,15 +70,14 @@ podman info >/dev/null && echo "rootless podman OK"
 git clone https://github.com/ElcanoTek/fleet.git
 cd fleet
 
-make build      # compile-check ./... AND emit ./fleet + ./fleet-admin
+make build      # compile-check ./... AND emit ./fleet
 ```
 
-`make build` runs `go build ./...` (compile-check) and then emits the two
-deployable artifacts (`./fleet`, `./fleet-admin`). If this is green your Go
+`make build` runs `go build ./...` (compile-check) and then emits the
+deployable artifact (`./fleet`). If this is green your Go
 toolchain is good. The server runs via `fleet serve` (bare `fleet` also serves,
 for back-compat); all other verbs are the operator CLI, and `make install` puts
-`fleet` on PATH. (`fleet-admin <verb>` still works but is deprecated and will be
-removed.)
+`fleet` on PATH.
 
 ---
 
@@ -262,7 +261,7 @@ no secrets in the repo, honest docs, client content stays external).
 ## Quick reference
 
 ```sh
-make build                              # ./fleet + ./fleet-admin (compile-check too)
+make build                              # ./fleet (compile-check too)
 make lint                               # golangci-lint (must pass clean)
 make test                               # go test -p 1 -tags fleet_host_executor ./...
 make test-race                          # same, with the race detector

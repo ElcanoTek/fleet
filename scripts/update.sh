@@ -21,7 +21,7 @@
 # changed. Services self-migrate on restart, so this script NEVER runs
 # application migrations.
 #
-# Invoked by `fleet-admin update`, but also runnable directly on the host.
+# Invoked by `fleet update`, but also runnable directly on the host.
 #
 # Patterned after moc's + gig's scripts/update.sh, including the "re-exec the
 # fresh copy when update.sh itself changed during the pull" trick: bash holds the
@@ -107,7 +107,7 @@ CLIENT_DIR="${FLEET_CLIENT_CONFIG_DIR:-}"
 SERVICE_NAME="${FLEET_SERVICE_NAME:-fleet}"
 # Where the running unit's binaries live. Resolved (in order): --install-dir /
 # $FLEET_INSTALL_DIR, else the dir of the unit's ExecStart, else /opt/fleet. The
-# freshly built $SRC_DIR/{fleet,fleet-admin} are installed here so the restart
+# freshly built $SRC_DIR/fleet is installed here so the restart
 # actually runs the new code (a build alone leaves the live ExecStart untouched).
 INSTALL_DIR="${FLEET_INSTALL_DIR:-}"
 NO_PULL="${FLEET_UPDATE_NO_PULL:-0}"
@@ -949,8 +949,8 @@ if [[ -n "$web_origin" ]]; then
   fi
 fi
 if [[ "$DRY_RUN" == "1" ]]; then
-  info "[dry-run] would run: (cd ${SRC_DIR} && make build)  → ${SRC_DIR}/fleet + fleet-admin"
-  info "[dry-run] would install fleet + fleet-admin → ${INSTALL_DIR:-<unit ExecStart dir, else /opt/fleet>}"
+  info "[dry-run] would run: (cd ${SRC_DIR} && make build)  → ${SRC_DIR}/fleet"
+  info "[dry-run] would install fleet → ${INSTALL_DIR:-<unit ExecStart dir, else /opt/fleet>}"
   info "[dry-run] would refresh /usr/local/bin/fleet-web-start.sh and set FLEET_NODE_BIN in /etc/fleet/fleet-web.env"
   info "[dry-run] would run: (cd ${SRC_DIR}/web && npm ci && npm run build) with the NEXT_PUBLIC_* stamps from /etc/fleet/fleet-web.env, on the node+npm the gate resolved above"
   info "[dry-run] would deploy the web build → the fleet-web unit's WorkingDirectory (else /opt/fleet/web)"
@@ -958,9 +958,9 @@ else
   require_go_toolchain
 
   ( cd "$SRC_DIR" && make build ) || die "make build failed — live binary left in place"
-  [[ -x "$SRC_DIR/fleet" && -x "$SRC_DIR/fleet-admin" ]] \
-    || die "make build did not emit ${SRC_DIR}/fleet + ${SRC_DIR}/fleet-admin"
-  ok "fleet + fleet-admin binaries built"
+  [[ -x "$SRC_DIR/fleet" ]] \
+    || die "make build did not emit ${SRC_DIR}/fleet"
+  ok "fleet binary built"
 
   # Install the freshly built binaries to the unit's ExecStart location so the
   # restart below actually runs the NEW code. Without this the build is a no-op
@@ -986,9 +986,8 @@ else
   # Skip the copy when we'd install onto ourselves (dev box running from $SRC_DIR).
   if [[ "$(cd "$INSTALL_DIR" 2>/dev/null && pwd || echo "$INSTALL_DIR")" == "$SRC_DIR" ]]; then
     info "install dir == source checkout (${SRC_DIR}) — running in place, no copy needed."
-  elif install -D -m 0755 "$SRC_DIR/fleet" "$INSTALL_DIR/fleet" 2>/dev/null \
-       && install -D -m 0755 "$SRC_DIR/fleet-admin" "$INSTALL_DIR/fleet-admin" 2>/dev/null; then
-    ok "installed fleet + fleet-admin → ${INSTALL_DIR}"
+  elif install -D -m 0755 "$SRC_DIR/fleet" "$INSTALL_DIR/fleet" 2>/dev/null; then
+    ok "installed fleet → ${INSTALL_DIR}"
   else
     die "could not install binaries into ${INSTALL_DIR} (need root? set --install-dir or FLEET_INSTALL_DIR) — live binary left in place"
   fi
@@ -1479,7 +1478,7 @@ else
 fi
 printf '%s═══════════════════════════════════════════════%s\n' "$c_green" "$c_reset"
 say
-say "  Health:    ${c_dim}fleet-admin status${c_reset}"
+say "  Health:    ${c_dim}fleet status${c_reset}"
 say "  Logs:      ${c_dim}journalctl -u ${SERVICE_NAME} -n 50${c_reset}"
 if [[ "$before_sha" != "$after_sha" ]]; then
   say "  Roll back: ${c_dim}cd $SRC_DIR && git checkout $before_sha && scripts/update.sh --no-pull${c_reset}"
