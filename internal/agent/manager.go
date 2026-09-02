@@ -742,9 +742,10 @@ func buildKubernetesSandboxPool(cfg *config.Config, poolCfg sandbox.PoolConfig, 
 		return nil, fmt.Errorf("FLEET_SANDBOX_K8S_BUNDLE_DOCS_IN_IMAGE / sandbox.kubernetes.bundle_docs_in_image: %w", err)
 	}
 	// Read-only roots nested INSIDE the workspace claim (the shared file
-	// library's staged tree) are not host paths at all — every pod sees them
-	// by construction, mounted read-only as a subPath of the claim by the pod
-	// spec builder — so they bypass the host-mount drop below entirely.
+	// library's staged tree; the skills tree StageSkillsForBackend staged at
+	// boot) are not host paths at all — every pod sees them by construction,
+	// mounted read-only as a subPath of the claim by the pod spec builder — so
+	// they bypass the host-mount drop below entirely.
 	wsNested, hostMounts := splitWorkspaceNestedMounts(poolCfg.Container.ReadOnlyMounts, poolCfg.Container.WorkspaceHostDir)
 	if len(wsNested) > 0 {
 		log.Printf("sandbox: kubernetes backend — %d read-only root(s) inside the workspace claim %v are mounted read-only (subPath) in every sandbox pod", len(wsNested), wsNested)
@@ -757,7 +758,10 @@ func buildKubernetesSandboxPool(cfg *config.Config, poolCfg sandbox.PoolConfig, 
 	for _, d := range dropped {
 		switch {
 		case clientconfig.IsMaterializedSkillsDir(d):
-			log.Printf("sandbox: kubernetes backend — skills dir %q is the merged built-in+bundle tree under the control plane's data dir, which no sandbox image can carry; in-sandbox skill reads will not resolve. Set skills_builtin: false in the bundle manifest to make skills/ the bundle's own (bake-able) dir", d)
+			// Only reachable when StageSkillsForBackend failed at boot: the
+			// staged copy inside the claim would have been split off as a
+			// nested mount above.
+			log.Printf("sandbox: kubernetes backend — skills dir %q is still the merged tree under the control plane's data dir because staging it into the workspace claim failed at boot (see the earlier 'stage skills' warning); no pod can see it, so in-sandbox skill reads will not resolve", d)
 		case docsInImage:
 			log.Printf("sandbox: kubernetes backend — %q is not a bundle doc dir, so bundle_docs_in_image does not vouch for it; in-sandbox reads there will not resolve", d)
 		}
@@ -875,6 +879,51 @@ func splitWorkspaceNestedMounts(mounts []string, workspaceRoot string) (nested, 
 		others = append(others, m)
 	}
 	return nested, others
+}
+
+// StageSkillsForBackend makes the bundle's skills tree reachable from inside
+// a sandbox on the selected backend and returns the skills dir every downstream
+// consumer (SetSupportingDocDirs, ManagerOptions.SkillsDir, the pool's
+// read-only mounts) must use from then on.
+//
+// Under podman the merged tree under the data dir is bind-mounted same-path,
+// so nothing changes and bundle.SkillsDir is returned as is. Under kubernetes a
+// pod mounts only the workspace claim, so the complete tree — built-in pack,
+// Agent Plugin skills, the bundle's own skills/ — is re-staged at
+// <workspace root>/skills (tools.StagedSkillsDir) inside that claim, where
+// buildKubernetesSandboxPool then treats it like the shared file library: a
+// read-only subPath mount in every pod, no image bake, no declaration
+// (ADR-0055). Staging always happens on that backend, whether or not the
+// built-in pack is inherited — the point is that skills reach a pod at all.
+//
+// It must run BEFORE the pool is built (the pod spec mounts the directory as a
+// subPath, so the control plane has to create it first — the same ordering
+// the shared library needs) and before the skills dir is registered anywhere.
+// A staging failure is returned with bundle.SkillsDir unchanged so the caller
+// can degrade loudly rather than fail boot: skills are a capability, not a
+// boot invariant, and buildKubernetesSandboxPool's IsMaterializedSkillsDir
+// branch then names the consequence in the log.
+func StageSkillsForBackend(cfg *config.Config, bundle *clientconfig.Bundle) (string, error) {
+	if bundle == nil {
+		return "", nil
+	}
+	if cfg == nil || cfg.SandboxBackend != sandbox.BackendKubernetes {
+		return bundle.SkillsDir, nil
+	}
+	root := strings.TrimSpace(cfg.WorkspaceRoot)
+	if root == "" {
+		root = "workspace"
+	}
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		return bundle.SkillsDir, fmt.Errorf("stage skills: resolve workspace root: %w", err)
+	}
+	staged := tools.StagedSkillsDir(abs)
+	if err := bundle.StageSkillsAt(staged); err != nil {
+		return bundle.SkillsDir, err
+	}
+	log.Printf("sandbox: kubernetes backend — skills tree (built-in pack + plugin skills + bundle skills/) staged at %s inside the workspace claim; every sandbox pod mounts it read-only, no image bake needed", staged)
+	return bundle.SkillsDir, nil
 }
 
 // k8sDocMounts splits the supporting-doc mount list into the roots whose

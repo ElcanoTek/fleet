@@ -378,7 +378,17 @@ func run() error {
 	personasDir := bundle.PersonasDir
 	protocolsDir := bundle.ProtocolsDir
 	systemPromptsDir := bundle.SystemPromptsDir
-	skillsDir := bundle.SkillsDir
+	// On the kubernetes backend the skills tree is re-staged INSIDE the
+	// workspace claim so sandbox pods can read it (ADR-0055); podman keeps the
+	// data-dir tree. Must precede every registration of the skills dir below.
+	// Degrades loudly: the pool build then logs why in-sandbox skill reads
+	// will not resolve.
+	skillsDir, err := agent.StageSkillsForBackend(cfg, bundle)
+	if err != nil {
+		// Only the kubernetes backend stages, so the message can name it
+		// outright (no tainted backend string in the log line).
+		log.Printf("warning: stage skills for the kubernetes sandbox backend: %v — skills stay unreadable inside sandbox pods", err)
+	}
 
 	// Workspace symlinks must point at the REAL loaded dirs — in particular
 	// the merged bundle+builtin skills dir — not the legacy $CWD/<name>

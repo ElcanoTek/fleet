@@ -68,16 +68,16 @@ sandbox:
     # relative to the kubelet seccomp root). Empty = RuntimeDefault.
     seccompProfile: ""
     # Declare that your SANDBOX IMAGE carries the client bundle's doc dirs
-    # (protocols/, personas/, system_prompts/, skills/) at the SAME absolute
-    # paths the control plane reads them from — i.e. you built the sandbox
-    # image with the bundle baked in. A pod mounts only the workspace claim,
-    # so without this fleet drops those roots and view_file on `protocols/…`
-    # is refused; with it the file tools work again. fleet cannot verify an
-    # image's contents: a wrong declaration shows up as a not-found read.
-    # Bundles that inherit fleet's built-in skills pack cannot serve
-    # in-sandbox skill reads either way (the merged tree lives on the
-    # control-plane data PVC) — set skills_builtin: false in the bundle to
-    # make skills/ bake-able. See docs/DEPLOYMENT-KUBERNETES.md.
+    # (protocols/, personas/, system_prompts/) at the SAME absolute paths the
+    # control plane reads them from — i.e. you built the sandbox image with
+    # the bundle baked in. A pod mounts only the workspace claim, so without
+    # this fleet drops those roots and view_file on `protocols/…` is refused;
+    # with it the file tools work again. fleet cannot verify an image's
+    # contents: a wrong declaration shows up as a not-found read.
+    # Skills are NOT covered by this flag and need no baking: fleet stages
+    # the merged skills tree (built-in pack + plugins + bundle skills/) into
+    # the workspace claim at boot and every pod mounts it read-only
+    # (ADR-0055). See docs/DEPLOYMENT-KUBERNETES.md.
     bundleDocsInImage: false
     # Pin sandbox pods to a DEDICATED runner node pool: label the pool and
     # select it here; taint it and add the matching toleration so nothing

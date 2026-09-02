@@ -853,3 +853,44 @@ func TestK8sPodSpecSharedLibrarySubPathMount(t *testing.T) {
 		t.Errorf("shared mount subPath = %q, want %q", found.SubPath, "shared")
 	}
 }
+
+// TestK8sPodSpecStagedSkillsSubPathMount pins the skills-tree posture the
+// control plane relies on under this backend (ADR-0055): the skills tree it
+// stages at <workspace>/skills at boot rides the same nested-mount rule as the
+// shared library — a read-only subPath mount of the workspace claim in every
+// pod — so `skills/<name>/SKILL.md` resolves for the file tools, bash and
+// python, and no turn can rewrite a skill every other chat runs.
+func TestK8sPodSpecStagedSkillsSubPathMount(t *testing.T) {
+	cfg := testContainerConfig(t)
+	skills := filepath.Join(cfg.WorkspaceHostDir, "skills")
+	shared := filepath.Join(cfg.WorkspaceHostDir, "shared")
+	cfg.ReadOnlyMounts = []string{skills, shared, "/opt/fleet/client/protocols"}
+	kcfg := KubernetesConfig{Namespace: "fleet-sandbox", WorkspaceClaim: "fleet-workspace"}
+
+	pod, err := buildSandboxPod(applyContainerDefaults(cfg), kcfg, "fleet-sandbox-skills")
+	if err != nil {
+		t.Fatalf("buildSandboxPod: %v", err)
+	}
+	var found *k8sVolumeMount
+	for i, m := range pod.Spec.Containers[0].VolumeMounts {
+		if m.MountPath == skills {
+			found = &pod.Spec.Containers[0].VolumeMounts[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("no volume mount for the staged skills tree at %q; mounts = %+v", skills, pod.Spec.Containers[0].VolumeMounts)
+	}
+	if found.Name != "workspace" || found.SubPath != "skills" || !found.ReadOnly {
+		t.Errorf("staged skills mount = %+v; want the workspace claim's skills subPath, read-only", *found)
+	}
+	// The anchor policy agrees: a read under the staged tree resolves as
+	// read-only, a write is refused, and the tree is never mistaken for the
+	// read-write workspace mount it sits inside.
+	anchor, readOnly, err := fileOpAnchorFor(cfg.WorkspaceHostDir, cfg.ReadOnlyMounts, filepath.Join(skills, "data-profiler"))
+	if err != nil {
+		t.Fatalf("fileOpAnchorFor: %v", err)
+	}
+	if anchor != skills || !readOnly {
+		t.Errorf("anchor = %q readOnly=%v; want the staged skills root, read-only", anchor, readOnly)
+	}
+}

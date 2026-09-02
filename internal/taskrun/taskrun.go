@@ -154,11 +154,18 @@ func run(argv []string, progName string) error {
 	// through the workspace symlinks into the bundle's read-only doc roots
 	// (the same registration fileOpRoot's read-only exception checks).
 	tools.SetWorkspaceRoot(wsDir)
+	// Same staging step as `fleet serve` (ADR-0055): under the kubernetes
+	// backend the skills tree is re-staged inside the workspace claim so the
+	// one-shot run's sandbox pod can read it; podman is a no-op.
+	skillsDir, err := agent.StageSkillsForBackend(cfg, bundle)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%s: warning: stage skills for the kubernetes sandbox backend: %v — skills stay unreadable inside sandbox pods\n", progName, err)
+	}
 	tools.SetSupportingDocDirs(map[string]string{
 		"personas":       bundle.PersonasDir,
 		"protocols":      bundle.ProtocolsDir,
 		"system_prompts": bundle.SystemPromptsDir,
-		"skills":         bundle.SkillsDir,
+		"skills":         skillsDir,
 		// No shared-file library entry: the one-shot harness has no DB, so
 		// there is no staged tree to expose (docs/SHARED-FILES.md).
 	})
@@ -168,7 +175,7 @@ func run(argv []string, progName string) error {
 		ServerSpecs:          scheduledrun.BuildMCPSpecs(cfg),
 		PersonasDir:          bundle.PersonasDir,
 		ProtocolsDir:         bundle.ProtocolsDir,
-		SkillsDir:            bundle.SkillsDir,
+		SkillsDir:            skillsDir,
 		SystemPromptsDir:     bundle.SystemPromptsDir,
 		ChatSystemPromptFile: "chat.md",
 		// No NotesProvider/NoteProposer: the one-shot harness has no sched DB, so

@@ -208,6 +208,18 @@ Every problem is logged at load as `clientconfig: warning: plugin: …` and
 surfaced by `fleet validate-config` as a **non-blocking advisory** on the
 `manifest` check, whose OK detail also counts the plugins loaded.
 
+## Kubernetes backend
+
+Plugin skills live in the merged skills tree, which under podman is
+bind-mounted from the control plane's data dir. A kubernetes sandbox pod
+mounts only the workspace claim, so on that backend fleet **stages the merged
+tree into the claim** at boot (`<workspace root>/skills`) and every pod mounts
+it read-only — built-in pack, plugin skills and bundle skills alike, no image
+bake ([ADR-0055](adr/0055-kubernetes-skills-staged-into-the-workspace-claim.md),
+[DEPLOYMENT-KUBERNETES.md](DEPLOYMENT-KUBERNETES.md#skills-inside-a-sandbox-pod)).
+A plugin's skills therefore work inside a pod exactly as on podman; the
+plugin's MCP servers run in the control-plane pod like every manifest server.
+
 ## What was deliberately not done
 
 - **No credential gate for plugin servers.** The extension namespace carries
@@ -220,13 +232,6 @@ surfaced by `fleet validate-config` as a **non-blocking advisory** on the
   client "MUST NOT perform any other placeholder or environment-variable
   expansion"; this is a documented, narrow deviation rather than a second
   substitution path, and a portable plugin has no reason to write those tokens.
-- **Kubernetes backend caveat, inherited.** Plugin skills live in the merged
-  skills tree, which the kubernetes sandbox backend cannot mount (the tree is
-  under the control plane's data dir, not in any sandbox image — see
-  `IsMaterializedSkillsDir`). On that backend a plugin's skills are in the
-  prompt roster and the `/skills` API, but not readable *inside* the sandbox —
-  the same limitation the built-in pack already has, and the bundle's
-  `skills_builtin: false` does not lift it for plugins.
 - **No marketplace, installer, signing or update checker.** Distribution and
   installation are out of the portable contract by design; a plugin arrives by
   being committed to the bundle checkout and reviewed like any other bundle

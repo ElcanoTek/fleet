@@ -632,11 +632,12 @@ func buildSandboxPod(cfg ContainerConfig, kcfg KubernetesConfig, name string) (*
 		{Name: "cache", EmptyDir: &k8sEmptyDir{SizeLimit: "32Mi"}},
 		{Name: "config", EmptyDir: &k8sEmptyDir{SizeLimit: "8Mi"}},
 	}
-	// Read-only roots nested inside the workspace claim (today: the shared
-	// file library's staged tree, docs/SHARED-FILES.md) are re-mounted from
-	// the SAME claim as read-only subPath mounts — the k8s counterpart of the
-	// podman backend's nested `--volume …:ro` overlay, so a sandbox can read
-	// the library but no turn can rewrite what every other chat reads. Roots
+	// Read-only roots nested inside the workspace claim (the shared file
+	// library's staged tree, docs/SHARED-FILES.md; the skills tree the control
+	// plane stages at boot, ADR-0055) are re-mounted from the SAME claim as
+	// read-only subPath mounts — the k8s counterpart of the podman backend's
+	// nested `--volume …:ro` overlay, so a sandbox can read the library and
+	// the skills but no turn can rewrite what every other chat reads. Roots
 	// NOT nested in the claim carry fileop anchors only (bundle docs the
 	// image itself provides) and get no mount, exactly as before.
 	for _, dir := range cfg.ReadOnlyMounts {

@@ -282,12 +282,14 @@ spec:
 
 ## Bundle docs inside a sandbox pod
 
-A bundle's `protocols/`, `personas/`, `system_prompts/` and `skills/` are how a
+A bundle's `protocols/`, `personas/` and `system_prompts/` are how a
 protocol-driven deployment works at all: the system prompt lists them by
 relative path and the agent reads them on demand. Under podman fleet
 bind-mounts each read-only at its own absolute path and symlinks them into the
 per-conversation workspace, so `protocols/foo.yaml` resolves for `view_file`,
-`bash` and `run_python` alike.
+`bash` and `run_python` alike. (Skills are the fourth such root and take a
+different route on this backend — see
+[Skills inside a sandbox pod](#skills-inside-a-sandbox-pod) below.)
 
 A sandbox pod mounts only the workspace claim. There is no host filesystem to
 bind from, so by default fleet drops those roots — and because the fileop path
@@ -296,10 +298,11 @@ protocols/foo.yaml` is *refused* (`fileop root is not inside a sandbox bind
 mount`) rather than attempted. The workspace symlinks still point at the
 bundle's absolute paths, so `bash`/`run_python` reads fail too, as not-found.
 
-The one exception is a read-only root that lives *inside* the claim: the
-shared file library's staged tree (`<workspace>/shared`,
-[SHARED-FILES.md](SHARED-FILES.md)) reaches every pod by construction, and the
-pod spec re-mounts that subPath of the same claim read-only, so the library is
+The exception is a read-only root that lives *inside* the claim: the shared
+file library's staged tree (`<workspace>/shared`,
+[SHARED-FILES.md](SHARED-FILES.md)) and the staged skills tree
+(`<workspace>/skills`, below) reach every pod by construction, and the pod
+spec re-mounts each subPath of the same claim read-only, so they are
 readable — and only readable — with no image rebuild and no host bind.
 
 The fix is the sandbox image. Build it with the bundle's doc dirs baked in at
@@ -324,7 +327,8 @@ USER root
 COPY protocols/       /opt/fleet/client/protocols/
 COPY personas/        /opt/fleet/client/personas/
 COPY system_prompts/  /opt/fleet/client/system_prompts/
-COPY skills/          /opt/fleet/client/skills/
+# NOT skills/: fleet stages the skills tree into the workspace claim itself
+# (see "Skills inside a sandbox pod"); a baked copy would never be read.
 RUN chown -R 0:0 /opt/fleet/client && chmod -R a-w,a+rX /opt/fleet/client
 USER 1000
 ```
@@ -346,17 +350,62 @@ for bash and python. Four things to be honest about:
   and the prompt block advertises the staged path, so `view_file`/`bash`
   reads work without the uploads root. (Image attachments reach the model
   host-side as vision input on both backends and need no staging.)
-- **The merged skills tree is never covered** — see the honest-scope list.
+- **Skills are not this flag's business.** The skills tree reaches pods by
+  staging (below), declared or not; `bundle_docs_in_image` vouches only for
+  the three roots above.
 - **The baked copy is a snapshot.** Build and roll the control-plane and
   sandbox images from the same bundle commit, or the agent reads one release's
   protocols while the control plane runs another's. Nothing enforces this.
 
 Boot logs the drop/keep decision for these roots: with the declaration it names
-each root it kept and each it will not vouch for; undeclared it logs a count,
-plus — always, declared or not — the merged-skills-tree case by name.
+each root it kept and each it will not vouch for; undeclared it logs a count.
 `kubectl logs deploy/fleet | grep 'kubernetes backend'` catches all of those
-lines; narrower greps miss the skills one, which is the case most likely to
-surprise you.
+lines, plus the skills staging line below.
+
+## Skills inside a sandbox pod
+
+Skills take a different route, because the tree an agent reads is not a
+bundle directory: it is **assembled at boot** from fleet's built-in pack
+(embedded in the binary), every Agent Plugin's `skills/`
+([AGENT-PLUGINS.md](AGENT-PLUGINS.md)) and the bundle's own `skills/`, into a
+merged tree under the control plane's data dir. No sandbox image can carry
+that — its path is hash-derived, it is rebuilt every boot, and two of its
+sources are not files in the bundle checkout.
+
+So on this backend fleet **stages the complete tree into the workspace
+claim** at boot, before the pod pool spawns: `<workspace root>/skills`. Every
+sandbox pod re-mounts that subPath of the claim read-only (the same mechanism
+as the shared library), the fileop anchor resolves reads under it and refuses
+writes, and the per-conversation `skills` symlink points at it, so
+`skills/<name>/SKILL.md`, reference files and bundled scripts all resolve for
+`view_file`, `bash` and `run_python` — built-in pack, plugin skills and bundle
+skills alike. The tree is resynced from its sources on every roster read, so a
+skill edit in the bundle is live in pods without an image rebuild. Design and
+the tamper-resistance argument (the claim is writable until the read-only
+mount exists, so staging never adopts a planted entry and never writes through
+one): [ADR-0055](adr/0055-kubernetes-skills-staged-into-the-workspace-claim.md).
+
+What this means for a bundle:
+
+- **Do not `COPY skills/` into the sandbox image** and do not expect
+  `bundle_docs_in_image` to cover skills; neither is consulted for them.
+- **`skills_builtin: false` is a taste decision, not a kubernetes one.** A
+  cluster bundle inherits the pack like every other bundle.
+- **The control plane must be able to create `<workspace root>/skills`** —
+  the same requirement the shared library already imposes (uid 1000, `fsGroup`
+  honored). If staging fails, boot continues and the log says
+  `warning: stage skills for the kubernetes sandbox backend: …`; skills are
+  then rostered but unreadable in pods (the pre-ADR-0055 posture), and the
+  pool build logs the consequence by name.
+- **Bytes exist twice** (bundle in the control-plane image, staged copy in the
+  claim), as for the shared library — small, and the staged copy is a derived
+  cache rebuilt at every boot.
+
+A healthy boot logs one line:
+
+```
+sandbox: kubernetes backend — skills tree (built-in pack + plugin skills + bundle skills/) staged at /var/lib/fleet/workspace/skills inside the workspace claim; every sandbox pod mounts it read-only, no image bake needed
+```
 
 ## Provider notes
 
@@ -388,7 +437,7 @@ Every knob can come from env (the chart sets these) or the bundle manifest's
 | `FLEET_SANDBOX_K8S_SECCOMP_PROFILE` | `…seccomp_profile` | node-local Localhost seccomp profile; empty = RuntimeDefault |
 | `FLEET_SANDBOX_K8S_KUBECONFIG` | `…kubeconfig` | out-of-cluster auth (token / client-cert kubeconfigs only); empty = in-cluster |
 | `FLEET_SANDBOX_K8S_NETWORK_POLICY` | `…network_policy` | deny-all policy name the preflight requires (default `fleet-sandbox-deny-all`) |
-| `FLEET_SANDBOX_K8S_BUNDLE_DOCS_IN_IMAGE` | `…bundle_docs_in_image` | the sandbox image carries the bundle's doc dirs at the same absolute paths — keeps their fileop read anchors valid in a pod ([above](#bundle-docs-inside-a-sandbox-pod)); a non-boolean refuses to boot |
+| `FLEET_SANDBOX_K8S_BUNDLE_DOCS_IN_IMAGE` | `…bundle_docs_in_image` | the sandbox image carries the bundle's `protocols/`, `personas/` and `system_prompts/` at the same absolute paths — keeps their fileop read anchors valid in a pod ([above](#bundle-docs-inside-a-sandbox-pod)); skills need no declaration (staged into the claim); a non-boolean refuses to boot |
 | `FLEET_SANDBOX_K8S_NODE_SELECTOR` | `…node_selector` | pin sandbox pods to a dedicated runner pool — env form `"pool=sandboxes,arch=amd64"`, manifest form a map; a malformed value refuses to boot |
 | `FLEET_SANDBOX_K8S_TOLERATIONS` | `…tolerations` | tolerations for a tainted runner pool — env form a JSON array of `{key,operator,value,effect}`, manifest form a YAML list |
 
@@ -486,13 +535,9 @@ Recorded here so nobody discovers them in production:
   workspace claim. Bake them into the sandbox image and declare it
   (`sandbox.kubernetes.bundle_docs_in_image`) to get the reads back; see
   [Bundle docs inside a sandbox pod](#bundle-docs-inside-a-sandbox-pod).
-  Undeclared, in-sandbox reads of those paths do not resolve at all.
-- **A bundle inheriting fleet's built-in skills pack cannot serve in-sandbox
-  skill reads**, declaration or not: the merged tree is materialized under the
-  control plane's data dir, so no sandbox image can carry it. `skills_builtin:
-  false` in the bundle manifest makes `skills/` the bundle's own (bake-able)
-  dir at the cost of the built-in pack. There is no setting that gives you
-  both.
+  Undeclared, in-sandbox reads of those paths do not resolve at all. Skills
+  are the exception: their tree is staged into the claim and works without
+  either ([Skills inside a sandbox pod](#skills-inside-a-sandbox-pod)).
 - **Disk quota is per-pod ephemeral storage**, which caps the writable layer
   and the scratch emptyDirs. The workspace claim sits outside it — and unlike
   podman there is *no* per-file cap either: podman always applies

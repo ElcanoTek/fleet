@@ -77,6 +77,24 @@ func ConversationIDFromContext(ctx context.Context) string {
 // can share the one constant.
 const SharedFilesDirName = "shared"
 
+// SkillsDirName is the per-conversation symlink name for the bundle's skills
+// tree — `skills/<name>/SKILL.md` is the roster handle every prompt uses — and,
+// on the kubernetes sandbox backend, the single path segment under the
+// workspace root where fleet STAGES that tree so every sandbox pod sees it
+// (clientconfig.Bundle.StageSkillsAt, ADR-0055). Same shape, same reasoning
+// as SharedFilesDirName: the workspace root is the one directory both sandbox
+// backends make visible.
+const SkillsDirName = "skills"
+
+// StagedSkillsDir returns the staged skills tree's path for a workspace root.
+func StagedSkillsDir(workspaceRoot string) string {
+	dir := filepath.Join(workspaceRoot, SkillsDirName)
+	if abs, err := filepath.Abs(dir); err == nil {
+		dir = abs
+	}
+	return dir
+}
+
 // SharedFilesDir returns the staged library root for a workspace root.
 func SharedFilesDir(workspaceRoot string) string {
 	dir := filepath.Join(workspaceRoot, SharedFilesDirName)
@@ -164,8 +182,9 @@ func EnsureWorkspaceDir(conversationID string) (string, error) {
 //
 // Symlink targets resolve inside the sandbox because both backends expose the
 // doc roots at the SAME absolute paths the host sees — read-only bind mounts
-// under podman, docs baked into the image at those paths under kubernetes
-// (`bundle_docs_in_image`, ADR-0049).
+// under podman; under kubernetes, docs baked into the image at those paths
+// (`bundle_docs_in_image`, ADR-0049) and the skills tree staged INSIDE the
+// workspace claim every pod mounts (StagedSkillsDir, ADR-0055).
 func SeedSupportingDocSymlinks(dir string) {
 	// Resolve absolute paths for each supporting-doc dir. We prefer
 	// the ones at /opt/chat root (which themselves are symlinks to
@@ -181,13 +200,14 @@ func SeedSupportingDocSymlinks(dir string) {
 	// chat's cwd exactly like `protocols/<name>` does — but ONLY when cmd/fleet
 	// registered the library dir: it has no legacy $CWD fallback, because a
 	// stray ./shared dir in a dev checkout must not masquerade as the library.
-	for _, name := range []string{"protocols", "personas", "system_prompts", "skills", SharedFilesDirName} {
+	for _, name := range []string{"protocols", "personas", "system_prompts", SkillsDirName, SharedFilesDirName} {
 		link := filepath.Join(dir, name)
 		// A non-worktree scheduled run seeds the shared workspace ROOT — where
-		// the staged shared-file library itself lives — so a configured target
-		// can BE the link path. Never plant (or repoint through) a
-		// self-referential symlink. Registered dirs are absolute
-		// (SetSupportingDocDirs absolutizes), so compare absolutes.
+		// the staged shared-file library (and, on kubernetes, the staged skills
+		// tree) itself lives — so a configured target can BE the link path.
+		// Never plant (or repoint through) a self-referential symlink.
+		// Registered dirs are absolute (SetSupportingDocDirs absolutizes), so
+		// compare absolutes.
 		linkAbs := link
 		if a, aerr := filepath.Abs(link); aerr == nil {
 			linkAbs = a
