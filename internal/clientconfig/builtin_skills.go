@@ -53,8 +53,13 @@ const mergedSkillsDirName = "skills-merged"
 // degrades to the bundle's own skills dir with a loud log rather than failing
 // the boot (skills are a capability, not a boot invariant). An untrusted
 // pre-existing path is NEVER adopted (#1121).
-func materializeMergedSkills(bundleSkillsDir string, builtinEnabled bool, hidden []string) (string, error) {
-	if !builtinEnabled {
+//
+// overlays are the Agent Plugin skill contributions (plugins.go), applied
+// between the built-in pack and the bundle's own skills. A bundle that opts
+// out of the built-in pack still gets a merged tree when a plugin ships
+// skills — the tree is the only way plugin skills reach the one skills/ mount.
+func materializeMergedSkills(bundleSkillsDir string, builtinEnabled bool, hidden []string, overlays []skillOverlay) (string, error) {
+	if !builtinEnabled && len(overlays) == 0 {
 		return bundleSkillsDir, nil
 	}
 	base := mergedSkillsBase()
@@ -63,7 +68,7 @@ func materializeMergedSkills(bundleSkillsDir string, builtinEnabled bool, hidden
 	}
 	sum := sha256.Sum256([]byte(bundleSkillsDir))
 	merged := filepath.Join(base, hex.EncodeToString(sum[:6]))
-	if err := syncMergedSkills(bundleSkillsDir, merged, hidden); err != nil {
+	if err := syncMergedSkills(bundleSkillsDir, merged, builtinEnabled, hidden, overlays); err != nil {
 		return bundleSkillsDir, err
 	}
 	return merged, nil
@@ -74,17 +79,23 @@ func materializeMergedSkills(bundleSkillsDir string, builtinEnabled bool, hidden
 // next to the rest of fleet state, not under world-writable /tmp. Fall
 // back to the user cache, then a uid-scoped temp name — still never the
 // predictable shared /tmp/fleet-skills path (#1121).
-func mergedSkillsBase() string {
+func mergedSkillsBase() string { return fleetStateBase(mergedSkillsDirName) }
+
+// fleetStateBase resolves <state>/<sub> for the small on-box trees this
+// package owns (the merged skills tree, the Agent Plugins' PLUGIN_DATA dirs):
+// the operator's data dir first, then the user cache, then a uid-scoped temp
+// name — never a predictable shared /tmp path (#1121).
+func fleetStateBase(sub string) string {
 	if d := strings.TrimSpace(os.Getenv("FLEET_DATA_DIR")); d != "" {
-		return filepath.Join(d, mergedSkillsDirName)
+		return filepath.Join(d, sub)
 	}
 	if d := strings.TrimSpace(os.Getenv("CHAT_DATA_DIR")); d != "" {
-		return filepath.Join(d, mergedSkillsDirName)
+		return filepath.Join(d, sub)
 	}
 	if cache, err := os.UserCacheDir(); err == nil && strings.TrimSpace(cache) != "" {
-		return filepath.Join(cache, "fleet", mergedSkillsDirName)
+		return filepath.Join(cache, "fleet", sub)
 	}
-	return filepath.Join(os.TempDir(), fmt.Sprintf("fleet-skills-%d", os.Geteuid()))
+	return filepath.Join(os.TempDir(), fmt.Sprintf("fleet-%s-%d", sub, os.Geteuid()))
 }
 
 // ensureTrustedDir creates path if missing and refuses to use it unless it
@@ -146,11 +157,13 @@ func verifyExistingDir(path string) error {
 	return nil
 }
 
-// syncMergedSkills rebuilds merged from its two sources. It writes into a
-// sibling temp dir and renames over the previous generation's entries so a
-// concurrent reader never sees a half-written skill; stale entries from a
-// prior sync are removed.
-func syncMergedSkills(bundleSkillsDir, merged string, hidden []string) error {
+// syncMergedSkills rebuilds merged from its sources, lowest precedence
+// first so a later copy overwrites an earlier one: the built-in pack (when
+// enabled, minus hidden), then each Agent Plugin's skills (first plugin by
+// name wins a collision between plugins), then the bundle's own skills/
+// (the bundle author always wins). Files are written in place only when
+// their content changed; stale entries from a prior sync are removed.
+func syncMergedSkills(bundleSkillsDir, merged string, builtinEnabled bool, hidden []string, overlays []skillOverlay) error {
 	hiddenSet := map[string]bool{}
 	for _, h := range hidden {
 		hiddenSet[strings.TrimSpace(h)] = true
@@ -162,19 +175,41 @@ func syncMergedSkills(bundleSkillsDir, merged string, hidden []string) error {
 
 	want := map[string]bool{}
 
-	// Built-in pack first, so a bundle skill with the same name overwrites it
-	// (bundle wins).
-	entries, err := fs.ReadDir(builtinSkillsFS, builtinSkillsRoot)
-	if err != nil {
-		return fmt.Errorf("read embedded skills: %w", err)
-	}
-	for _, e := range entries {
-		if !e.IsDir() || hiddenSet[e.Name()] {
-			continue
+	// Built-in pack first, so a plugin or bundle skill with the same name
+	// overwrites it.
+	if builtinEnabled {
+		entries, err := fs.ReadDir(builtinSkillsFS, builtinSkillsRoot)
+		if err != nil {
+			return fmt.Errorf("read embedded skills: %w", err)
 		}
-		want[e.Name()] = true
-		if err := copyEmbeddedSkill(e.Name(), filepath.Join(merged, e.Name())); err != nil {
-			return err
+		for _, e := range entries {
+			if !e.IsDir() || hiddenSet[e.Name()] {
+				continue
+			}
+			want[e.Name()] = true
+			if err := copyEmbeddedSkill(e.Name(), filepath.Join(merged, e.Name())); err != nil {
+				return err
+			}
+		}
+	}
+
+	// Agent Plugin overlays (plugins.go): only the skill folders the plugin
+	// loader validated, each copied with containment against its plugin root.
+	pluginOwned := map[string]string{}
+	for _, ov := range overlays {
+		for _, name := range ov.Names {
+			if prev, dup := pluginOwned[name]; dup {
+				log.Printf("clientconfig: plugin %q skill %q is shadowed by plugin %q's skill of the same name (first plugin wins)", ov.Plugin, name, prev)
+				continue
+			}
+			if want[name] {
+				log.Printf("clientconfig: plugin %q skill %q overrides the built-in skill of the same name", ov.Plugin, name)
+			}
+			pluginOwned[name] = ov.Plugin
+			want[name] = true
+			if err := copyDirSkill(filepath.Join(ov.SkillsDir, name), filepath.Join(merged, name), ov.Root); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -184,11 +219,13 @@ func syncMergedSkills(bundleSkillsDir, merged string, hidden []string) error {
 			if !e.IsDir() {
 				continue
 			}
-			if want[e.Name()] {
+			if p, fromPlugin := pluginOwned[e.Name()]; fromPlugin {
+				log.Printf("clientconfig: bundle skill %q overrides plugin %q's skill of the same name", e.Name(), p)
+			} else if want[e.Name()] {
 				log.Printf("clientconfig: bundle skill %q overrides the built-in skill of the same name", e.Name())
 			}
 			want[e.Name()] = true
-			if err := copyDirSkill(filepath.Join(bundleSkillsDir, e.Name()), filepath.Join(merged, e.Name())); err != nil {
+			if err := copyDirSkill(filepath.Join(bundleSkillsDir, e.Name()), filepath.Join(merged, e.Name()), ""); err != nil {
 				return err
 			}
 		}
@@ -226,8 +263,13 @@ func copyEmbeddedSkill(name, dst string) error {
 	})
 }
 
-// copyDirSkill mirrors one on-disk skill folder into the merged dir.
-func copyDirSkill(src, dst string) error {
+// copyDirSkill mirrors one on-disk skill folder into the merged dir. When
+// containRoot is set (an Agent Plugin skill), every file is resolved through
+// symlinks first and skipped — loudly — unless it stays under that root, per
+// the Agent Plugins package-boundary rule (spec §4.1); a symlink to a
+// directory is likewise not followed. The bundle's own skills pass "" and
+// keep the historical trusted-supply-chain behavior.
+func copyDirSkill(src, dst, containRoot string) error {
 	//nolint:gosec // G122/G703: src is the operator-owned bundle skills dir (trusted supply chain per skills.go header); paths derive from its own listing, not request input.
 	return filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -240,6 +282,14 @@ func copyDirSkill(src, dst string) error {
 		target := filepath.Join(dst, rel)
 		if d.IsDir() {
 			return os.MkdirAll(target, 0o755) //nolint:gosec // sandbox-readable skill docs, non-secret
+		}
+		if containRoot != "" {
+			resolved, ok := containedRegularFile(p, containRoot)
+			if !ok {
+				log.Printf("clientconfig: plugin skill file %s skipped: not a regular file inside the plugin root %s", p, containRoot)
+				return nil
+			}
+			p = resolved
 		}
 		data, err := os.ReadFile(p) // #nosec G304 — bundle content, operator-owned.
 		if err != nil {

@@ -32,9 +32,12 @@ import (
 type skillEntry struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
-	// Source distinguishes bundle-authored skills from fleet's built-in pack
-	// ("bundle" | "builtin") so the library UI can badge provenance.
+	// Source distinguishes bundle-authored skills from an Agent Plugin's and
+	// from fleet's built-in pack ("bundle" | "plugin" | "builtin") so the
+	// library UI can badge provenance. Plugin names the source plugin when
+	// Source is "plugin" (docs/AGENT-PLUGINS.md).
 	Source string `json:"source"`
+	Plugin string `json:"plugin,omitempty"`
 	// DeclaredAllowedTools is the skill's frontmatter `allowed-tools` (nil when
 	// absent), surfaced for REVIEW/observability — the library UI shows it so an
 	// operator can see a skill's declared tool contract. NOT an authorization
@@ -68,28 +71,23 @@ func (s *Server) listSkills(w http.ResponseWriter, r *http.Request) {
 	skills := s.bundleSkills()
 	entries := make([]skillEntry, 0, len(skills))
 	for _, sk := range skills {
+		origin := s.skillOrigin(sk.Name)
 		entries = append(entries, skillEntry{
-			Name: sk.Name, Description: sk.Description, Source: s.skillSource(sk.Name),
+			Name: sk.Name, Description: sk.Description, Source: origin.Source, Plugin: origin.Plugin,
 			DeclaredAllowedTools: sk.DeclaredAllowedTools,
 		})
 	}
 	writeJSON(w, skillsResponse{Skills: entries})
 }
 
-// skillSource reports where a merged-roster skill came from: the bundle's own
-// skills/ dir wins collisions, so presence there means "bundle".
-func (s *Server) skillSource(name string) string {
+// skillOrigin reports where a merged-roster skill came from — the bundle's
+// own skills/, an Agent Plugin, or the built-in pack — with the same
+// precedence the merged tree was built with (clientconfig.Bundle.SkillOrigin).
+func (s *Server) skillOrigin(name string) clientconfig.SkillOrigin {
 	if s.clientConfig == nil {
-		return "bundle"
+		return clientconfig.SkillOrigin{Source: "bundle"}
 	}
-	dir := s.clientConfig.BundleSkillsDir
-	if dir == "" {
-		dir = s.clientConfig.SkillsDir
-	}
-	if _, err := os.Stat(filepath.Join(dir, name, "SKILL.md")); err == nil {
-		return "bundle"
-	}
-	return "builtin"
+	return s.clientConfig.SkillOrigin(name)
 }
 
 // skillByName serves GET /skills/{name}: the skill's full SKILL.md body for
@@ -110,13 +108,18 @@ func (s *Server) skillByName(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "skill unreadable", http.StatusInternalServerError)
 			return
 		}
-		writeJSON(w, map[string]any{
+		origin := s.skillOrigin(sk.Name)
+		resp := map[string]any{
 			"name":                   sk.Name,
 			"description":            sk.Description,
-			"source":                 s.skillSource(sk.Name),
+			"source":                 origin.Source,
 			"declared_allowed_tools": sk.DeclaredAllowedTools,
 			"content":                string(data),
-		})
+		}
+		if origin.Plugin != "" {
+			resp["plugin"] = origin.Plugin
+		}
+		writeJSON(w, resp)
 		return
 	}
 	http.Error(w, "unknown skill", http.StatusNotFound)

@@ -11,7 +11,7 @@ import (
 // TestBuiltinRemoteCatalog: a malformed built-in skill fails CI, not a
 // customer boot.
 func TestBuiltinSkillsPackWellFormed(t *testing.T) {
-	merged, err := materializeMergedSkills(filepath.Join(t.TempDir(), "no-bundle-skills"), true, nil)
+	merged, err := materializeMergedSkills(filepath.Join(t.TempDir(), "no-bundle-skills"), true, nil, nil)
 	if err != nil {
 		t.Fatalf("materialize: %v", err)
 	}
@@ -162,7 +162,7 @@ func TestMergedSkills(t *testing.T) {
 func TestMergedSkillsLivesUnderDataDir(t *testing.T) {
 	data := t.TempDir()
 	t.Setenv("FLEET_DATA_DIR", data)
-	merged, err := materializeMergedSkills(filepath.Join(t.TempDir(), "skills"), true, nil)
+	merged, err := materializeMergedSkills(filepath.Join(t.TempDir(), "skills"), true, nil, nil)
 	if err != nil {
 		t.Fatalf("materialize: %v", err)
 	}
@@ -239,7 +239,7 @@ func TestMaterializeMergedSkills_DoesNotAdoptUntrustedPath(t *testing.T) {
 	}
 
 	bundle := filepath.Join(t.TempDir(), "skills")
-	got, err := materializeMergedSkills(bundle, true, nil)
+	got, err := materializeMergedSkills(bundle, true, nil, nil)
 	if err == nil {
 		t.Fatal("expected error for untrusted pre-existing path")
 	}
@@ -256,7 +256,7 @@ func TestIsMaterializedSkillsDir(t *testing.T) {
 	data := t.TempDir()
 	t.Setenv("FLEET_DATA_DIR", data)
 	bundleSkills := filepath.Join(t.TempDir(), "skills")
-	merged, err := materializeMergedSkills(bundleSkills, true, nil)
+	merged, err := materializeMergedSkills(bundleSkills, true, nil, nil)
 	if err != nil {
 		t.Fatalf("materialize: %v", err)
 	}
@@ -268,7 +268,7 @@ func TestIsMaterializedSkillsDir(t *testing.T) {
 	}
 	// Opting out of the built-in pack returns the bundle dir itself, which is
 	// exactly the case an operator reaches for on the kubernetes backend.
-	own, err := materializeMergedSkills(bundleSkills, false, nil)
+	own, err := materializeMergedSkills(bundleSkills, false, nil, nil)
 	if err != nil {
 		t.Fatalf("materialize (builtins off): %v", err)
 	}

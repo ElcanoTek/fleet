@@ -266,6 +266,9 @@ inside fleet's database or binary:
 - **`personas/`** — reusable agent profiles
 - **`protocols/`** — playbooks your agents follow
 - **`skills/`** — packaged [Agent Skills](#standards) (`SKILL.md` + bundled scripts)
+- **`plugins/`** — [Agent Plugins](https://agent-plugins.org) (`plugin.json` +
+  `skills/` + `mcp.json`), the portable package format other agent clients also
+  load; see [docs/AGENT-PLUGINS.md](docs/AGENT-PLUGINS.md)
 - **`mcp/`** — your MCP connectors (+ `requirements.txt`)
 - **`manifest.yaml`** — MCP catalog, tool policy, model defaults, sandbox block
 - **`sandbox/Containerfile`** — the exact image your tool calls run in

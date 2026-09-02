@@ -176,6 +176,17 @@ Workspace/Built-in provenance badges and a full SKILL.md read view backed by
 `GET /skills/{name}` (names resolve against the loaded roster, never raw
 paths).
 
+## Skills from Agent Plugins (#1166)
+
+A skill can also arrive inside an [Agent Plugin](AGENT-PLUGINS.md) — the
+portable `plugin.json` + `skills/` + `mcp.json` package under the bundle's
+`plugins/` dir. Plugin skills are parsed by the same `ReadSkills` and land in
+the same merged tree, so everything on this page applies to them unchanged: the
+roster handle is `skills/<name>/SKILL.md`, `/name` invocation works, and
+`allowed-tools` is surfaced, never enforced. Precedence is bundle `skills/` >
+plugin (first by plugin name) > built-in pack; `GET /skills` reports
+`source: "plugin"` plus `plugin: "<name>"` so the library can badge provenance.
+
 ## User-authored skills (the builder — phase 2, shipped)
 
 Settings → Skills gains a **"Your skills"** builder: create, edit,

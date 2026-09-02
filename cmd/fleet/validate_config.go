@@ -242,6 +242,12 @@ func checkManifest(bundle *clientconfig.Bundle, bundleErr error, cfg *config.Con
 			advisories = append(advisories, miss)
 		}
 	}
+	// Agent Plugin defects are advisory: the loader already applied the spec's
+	// failure boundaries (a bad entry skips itself, never the bundle), so the
+	// deployment runs — but the author should see what was dropped and why.
+	for _, p := range bundle.PluginProblems() {
+		advisories = append(advisories, "plugin: "+p)
+	}
 
 	if len(problems) > 0 {
 		res.Status = statusFail
@@ -259,6 +265,9 @@ func checkManifest(bundle *clientconfig.Bundle, bundleErr error, cfg *config.Con
 	}
 	res.Status = statusOK
 	res.Detail = manifestPath
+	if n := len(bundle.Plugins); n > 0 {
+		res.Detail = fmt.Sprintf("%s (%d agent plugin(s) loaded)", manifestPath, n)
+	}
 	return res
 }
 

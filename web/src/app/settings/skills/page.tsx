@@ -37,7 +37,8 @@ import { ClampText } from "../ui/atoms";
 type SkillEntry = {
   name: string;
   description: string;
-  source: string; // "bundle" | "builtin"
+  source: string; // "bundle" | "plugin" | "builtin"
+  plugin?: string; // the Agent Plugin name when source is "plugin"
   // The skill's declared `allowed-tools` (from SKILL.md frontmatter), surfaced
   // for review. fleet does NOT enforce it — a skill's real limits are the
   // sandbox, MCP allowlist, and approval gate — so it reads as a declared
@@ -426,7 +427,11 @@ export default function SkillsPage() {
                 <div className={SKILL_HEAD}>
                   <CopyChip name={s.name} />
                   <ConnBadge variant={s.source === "bundle" ? "success" : "neutral"}>
-                    {s.source === "bundle" ? "Workspace" : "Built-in"}
+                    {s.source === "bundle"
+                      ? "Workspace"
+                      : s.source === "plugin"
+                        ? `Plugin${s.plugin ? `: ${s.plugin}` : ""}`
+                        : "Built-in"}
                   </ConnBadge>
                   <button
                     type="button"
