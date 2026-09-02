@@ -11,9 +11,9 @@ import (
 // production five-minute default.
 func withMinInterval(t *testing.T, d time.Duration) {
 	t.Helper()
-	prev := maintenanceMinInterval
-	maintenanceMinInterval = d
-	t.Cleanup(func() { maintenanceMinInterval = prev })
+	prev := maintenanceMinInterval.Load()
+	maintenanceMinInterval.Store(d)
+	t.Cleanup(func() { maintenanceMinInterval.Store(prev) })
 }
 
 func TestClaimMaintenanceSlotFirstCallAlwaysWins(t *testing.T) {
