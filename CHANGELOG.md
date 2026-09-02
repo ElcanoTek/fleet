@@ -19,6 +19,24 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **Agent Plugins (#1166)** — fleet loads the open, vendor-neutral
+  [Agent Plugins](https://agent-plugins.org) package format (spec v1.0.0):
+  a directory with `plugin.json` + `skills/*/SKILL.md` + `mcp.json`, dropped
+  into the bundle's `plugins/` dir or a manifest `plugin_roots:` entry. Plugin
+  skills join the merged skills tree between the built-in pack and the
+  bundle's own `skills/` (bundle > plugin > builtin; `GET /skills` and the
+  skills library badge the provenance); `mcp.json` stdio and streamable-http
+  servers become always-on catalog entries launched in the plugin root with
+  `PLUGIN_ROOT`/`PLUGIN_DATA`, flowing through every existing gate (broker,
+  ADR-0042 child authorizer, critical-tool suffixes, hot reload). Failure
+  boundaries follow the spec exactly — an unknown `plugin.json` field is
+  reported, not fatal; a bad server entry skips itself; every path must
+  resolve inside the plugin root — and `fleet validate-config` surfaces the
+  problems as advisories. Legacy `sse` entries are skipped, and
+  `com.elcanotek.fleet` is reserved but unread. See
+  [docs/AGENT-PLUGINS.md](docs/AGENT-PLUGINS.md) +
+  [ADR-0054](docs/adr/0054-agent-plugins.md).
+
 - **`fleet config set-env <KEY>` / `unset-env <KEY>`** — the generic env-file
   writer that only existed for two named credentials. Value from stdin
   (`--value -`, a pipe) or a hidden TTY prompt, never argv; `--web` targets the

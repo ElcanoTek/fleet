@@ -13,7 +13,7 @@ import (
 // a failure a user would actually hit, so they are pinned rather than trusted to
 // survive review.
 func TestBuiltinSkillBrowserbaseCoversFailureModes(t *testing.T) {
-	merged, err := materializeMergedSkills(filepath.Join(t.TempDir(), "no-bundle-skills"), true, nil)
+	merged, err := materializeMergedSkills(filepath.Join(t.TempDir(), "no-bundle-skills"), true, nil, nil)
 	if err != nil {
 		t.Fatalf("materialize: %v", err)
 	}

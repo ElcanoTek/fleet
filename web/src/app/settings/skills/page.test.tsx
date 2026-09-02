@@ -42,6 +42,18 @@ describe("SkillsPage declared allowed-tools", () => {
     expect(screen.getByText(/\(advisory\)/)).toBeInTheDocument();
   });
 
+  it("badges a skill that came from an Agent Plugin with the plugin name", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch([
+        { name: "deploy", description: "Ship it.", source: "plugin", plugin: "acme-tools" },
+      ]),
+    );
+    render(<SkillsPage />);
+    expect(await screen.findByText("deploy")).toBeInTheDocument();
+    expect(screen.getByText("Plugin: acme-tools")).toBeInTheDocument();
+  });
+
   it("shows no tools line for a skill that declares none", async () => {
     vi.stubGlobal(
       "fetch",

@@ -20,6 +20,7 @@
 //	  protocols/           # *.yaml|md
 //	  prompts/             # *.yaml|yml|md|txt reusable prompt library entries
 //	  skills/              # <name>/SKILL.md Agent Skills (progressive disclosure)
+//	  plugins/             # <plugin>/plugin.json Agent Plugins (skills + mcp.json), plugins.go
 //	  mcp/                 # the client's Python MCP servers + requirements.txt
 //
 // The execution SANDBOX is a per-client bundle artifact: each bundle ships its
@@ -223,12 +224,25 @@ type Bundle struct {
 	// resync the merged dir on read (live-reload contract).
 	skillsBuiltin bool
 	skillsHidden  []string
-	MCPDir        string
+	// pluginSkillOverlays are the Agent Plugin skill contributions merged
+	// into SkillsDir (between the built-in pack and the bundle's own skills).
+	pluginSkillOverlays []skillOverlay
+	MCPDir              string
 	// EvalsDir holds the bundle's eval & regression sets (#502): one YAML file
 	// per set of golden cases, loaded by internal/evals.LoadSets. Optional like
 	// every content dir — a bundle without evals/ simply has no eval sets. It is
 	// a HOST-side dir (read by `fleet eval`), not bind-mounted into the sandbox.
 	EvalsDir string
+
+	// Plugins are the Agent Plugins (https://agent-plugins.org) loaded from the
+	// bundle's plugins/ dir and the manifest's plugin_roots — see plugins.go
+	// and ADR-0054. Their skills are already merged into SkillsDir and their
+	// MCP servers appended to MCPCatalog; this is the inventory for the
+	// operator surfaces (validate-config, /skills provenance).
+	Plugins []Plugin
+	// PluginRoots are the manifest's extra plugin roots, absolutized.
+	PluginRoots    []string
+	pluginProblems []string
 }
 
 // AgentPolicy is the bundle's client-configurable agent tool-behavior policy. It
@@ -734,6 +748,18 @@ type ServerDef struct {
 	// declares, never auto-discovers tools to call. Absent = the server is
 	// noted as unproven-beyond-handshake, never failed.
 	Probe *ProbeDef `yaml:"probe"`
+
+	// The three fields below are set ONLY by the Agent Plugins loader
+	// (plugins.go) and never by the manifest (unexported, so strict YAML
+	// decoding cannot reach them). dir is the subprocess working directory —
+	// the plugin root or its declared cwd — in place of the bundle dir.
+	// literalEnv says Env/Headers are already-final strings: the plugin spec
+	// expands exactly ${PLUGIN_ROOT}/${PLUGIN_DATA} and forbids any other
+	// expansion, so MCPServerConfigs must not run resolveEnvMap over them.
+	// plugin names the source plugin for provenance (PluginName()).
+	dir        string
+	literalEnv bool
+	plugin     string
 }
 
 // ProbeDef is one declared read-only canary call for `fleet mcp test --deep`.
@@ -1029,8 +1055,12 @@ type manifest struct {
 	// SkillsBuiltin toggles inheriting fleet's embedded Agent Skills pack
 	// (default TRUE); SkillsHidden tombstones individual built-in skills. The
 	// skills analogues of the remote_mcp_catalog knobs — see builtin_skills.go.
-	SkillsBuiltin     *bool            `yaml:"skills_builtin"`
-	SkillsHidden      []string         `yaml:"skills_hidden"`
+	SkillsBuiltin *bool    `yaml:"skills_builtin"`
+	SkillsHidden  []string `yaml:"skills_hidden"`
+	// PluginRoots lists extra directories (absolute, or relative to the bundle
+	// root) whose immediate children are Agent Plugins, in addition to the
+	// fixed <bundle>/plugins/ dir. See plugins.go / docs/AGENT-PLUGINS.md.
+	PluginRoots       []string         `yaml:"plugin_roots"`
 	Providers         []ProviderDef    `yaml:"providers"`
 	FallbackProviders []string         `yaml:"fallback_providers"`
 	EmptyState        EmptyState       `yaml:"empty_state"`
@@ -1194,6 +1224,33 @@ func Load(dir string) (*Bundle, error) {
 	if err := b.validate(); err != nil {
 		return nil, err
 	}
+	// Agent Plugins (plugins.go, ADR-0054): translate each plugin's mcp.json
+	// into catalog ServerDefs — after validate, so the manifest's own server
+	// and http_tool names are known and win any collision — and collect its
+	// skills for the merged tree built below. Never fails the load: every
+	// defect is a warning, at the narrowest boundary the spec defines.
+	for _, r := range m.PluginRoots {
+		r = strings.TrimSpace(r)
+		if r == "" {
+			continue
+		}
+		if !filepath.IsAbs(r) {
+			r = filepath.Join(abs, r)
+		}
+		b.PluginRoots = append(b.PluginRoots, filepath.Clean(r))
+	}
+	taken := map[string]bool{HTTPToolServerName: true}
+	for i := range b.MCPCatalog {
+		taken[b.MCPCatalog[i].Name] = true
+	}
+	for i := range b.HTTPTools {
+		taken[b.HTTPTools[i].Name] = true
+	}
+	pl := loadPlugins(abs, m.PluginRoots, taken)
+	b.Plugins = pl.plugins
+	b.pluginProblems = pl.problems
+	b.pluginSkillOverlays = pl.overlays
+	b.MCPCatalog = append(b.MCPCatalog, pl.servers...)
 	// Inherit fleet's embedded hosted-server directory (after validate: bundle
 	// entries are held to the manifest rules above; built-in entries are
 	// CI-validated where they are authored, in builtin_remote_catalog.yaml).
@@ -1209,10 +1266,23 @@ func Load(dir string) (*Bundle, error) {
 	b.BundleSkillsDir = b.SkillsDir
 	b.skillsBuiltin = m.SkillsBuiltin == nil || *m.SkillsBuiltin
 	b.skillsHidden = m.SkillsHidden
-	if mergedSkills, serr := materializeMergedSkills(b.BundleSkillsDir, b.skillsBuiltin, b.skillsHidden); serr != nil {
-		log.Printf("clientconfig: warning: builtin skills pack unavailable (%v) — using bundle skills only", serr)
+	if mergedSkills, serr := materializeMergedSkills(b.BundleSkillsDir, b.skillsBuiltin, b.skillsHidden, b.pluginSkillOverlays); serr != nil {
+		log.Printf("clientconfig: warning: builtin skills pack / plugin skills unavailable (%v) — using bundle skills only", serr)
 	} else {
 		b.SkillsDir = mergedSkills
+	}
+	// Warn (don't fail) on Agent Plugin defects: an unknown plugin.json field,
+	// a skipped skill or server entry, a rejected plugin. The spec's failure
+	// boundaries keep the rest loading; surface each so the author notices.
+	for _, p := range b.pluginProblems {
+		log.Printf("clientconfig: warning: plugin: %s", p)
+	}
+	if len(b.Plugins) > 0 {
+		names := make([]string, 0, len(b.Plugins))
+		for _, p := range b.Plugins {
+			names = append(names, fmt.Sprintf("%s(skills=%d,mcp=%d)", p.Name, len(p.Skills), len(p.MCPServers)))
+		}
+		log.Printf("clientconfig: agent plugins loaded: %s", strings.Join(names, " "))
 	}
 	// Warn (don't fail) on stdio script-path args that don't resolve under the
 	// bundle — a misspelled/missing `mcp/foo.py` would otherwise only surface as
@@ -2068,13 +2138,27 @@ func (b *Bundle) MCPServerConfigs() map[string]config.MCPServerConfig {
 		switch s.Type {
 		case "http":
 			sc.URL = s.URL
-			sc.Headers = resolveEnvMap(s.Headers, nil)
+			if s.literalEnv {
+				sc.Headers = copyStringMap(s.Headers)
+			} else {
+				sc.Headers = resolveEnvMap(s.Headers, nil)
+			}
 			sc.TLS = s.TLS.toMCP()
 		default: // stdio
 			sc.Command = s.Command
 			sc.Args = append([]string(nil), s.Args...)
-			sc.Env = resolveEnvMap(s.Env, s.OptionalEnv)
+			if s.literalEnv {
+				// An Agent Plugin server: the loader already applied the spec's
+				// only permitted expansion; ${VAR}-looking text must stay literal.
+				sc.Env = copyStringMap(s.Env)
+			} else {
+				sc.Env = resolveEnvMap(s.Env, s.OptionalEnv)
+			}
 			sc.Dir = bundleDir
+			if s.dir != "" {
+				// An Agent Plugin server launches in its plugin root (or declared cwd).
+				sc.Dir = s.dir
+			}
 			sc.IdentityEnv = append([]string(nil), s.IdentityEnv...)
 		}
 		out[s.Name] = sc
@@ -2139,6 +2223,12 @@ func (b *Bundle) ValidateMCPArgPaths() []string {
 	for i := range b.MCPCatalog {
 		s := &b.MCPCatalog[i]
 		if s.Type == "http" {
+			continue
+		}
+		if s.plugin != "" {
+			// Agent Plugin args are opaque strings by spec (§4.1) and the
+			// server launches in the plugin root, not the bundle — the
+			// bundle-relative check below does not apply.
 			continue
 		}
 		for _, arg := range s.Args {
@@ -2636,6 +2726,16 @@ func resolveEnvMap(in map[string]string, optional []string) map[string]string {
 			continue
 		}
 		out[k] = resolved
+	}
+	return out
+}
+
+// copyStringMap returns a shallow copy of in (never nil), for values that are
+// already final and must not be interpolated.
+func copyStringMap(in map[string]string) map[string]string {
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
 	}
 	return out
 }

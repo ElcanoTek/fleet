@@ -47,7 +47,7 @@ const (
 // skills of its own, so only the embedded pack is present.
 func materializeBentoPack(t *testing.T) string {
 	t.Helper()
-	merged, err := materializeMergedSkills(filepath.Join(t.TempDir(), "no-bundle-skills"), true, nil)
+	merged, err := materializeMergedSkills(filepath.Join(t.TempDir(), "no-bundle-skills"), true, nil, nil)
 	if err != nil {
 		t.Fatalf("materialize: %v", err)
 	}

@@ -25,6 +25,7 @@ supply the client's prompts, personas, playbooks, and connectors.
   protocols/           # *.yaml | *.md — reusable playbooks
   prompts/             # *.yaml | *.yml | *.md | *.txt — Git-backed prompt library
   skills/              # <name>/SKILL.md — Agent Skills (progressive disclosure)
+  plugins/             # <plugin>/plugin.json — Agent Plugins (skills + mcp.json)
   mcp/                 # the client's Python MCP servers (+ requirements.txt)
 ```
 
@@ -120,6 +121,33 @@ real boundaries remain the sandbox, the MCP tool allowlists, and the critical-to
 audit gate. Because a skill can run code in the sandbox, treat bundled scripts as
 trusted-but-reviewable — review them the way you review the bundle's `mcp/`
 servers, and use skills only from sources you trust.
+
+## Agent Plugins
+
+The `plugins/` directory holds **Agent Plugins** — the open
+[Agent Plugins standard](https://agent-plugins.org) (v1.0.0) that packages Agent
+Skills and MCP servers together so one directory loads in fleet, Cursor, VS
+Code, Copilot, Codex and other compatible clients without conversion:
+
+```
+plugins/
+  my-plugin/
+    plugin.json       # REQUIRED: "$schema" + "name" (+ optional metadata)
+    skills/<name>/SKILL.md   # skills, in the same format as skills/ above
+    mcp.json          # stdio / streamable-http MCP servers (optional)
+```
+
+fleet merges a plugin's skills into the same roster as `skills/` (the bundle's
+own skill wins a name collision, a plugin's wins over a built-in) and appends
+its `mcp.json` servers to the MCP catalog as always-on entries launched in the
+plugin root with `PLUGIN_ROOT` / `PLUGIN_DATA` set — subject to every gate a
+manifest server already has. Extra plugin directories can be listed in
+`manifest.yaml` under `plugin_roots:`. A plugin is bundle content with the
+bundle's trust class; review it like `mcp/` and `skills/`. This generic bundle
+ships no plugins; the annotated example is
+`plugins/example-plugin` in [example-config](https://github.com/ElcanoTek/example-config),
+and the full mapping + failure boundaries are in
+[docs/AGENT-PLUGINS.md](../../docs/AGENT-PLUGINS.md).
 
 ## The execution sandbox is a bundle artifact
 

@@ -23,6 +23,7 @@ var fingerprintEntries = []string{
 	"personas",
 	"protocols",
 	"skills",
+	"plugins",
 	"evals",
 }
 
