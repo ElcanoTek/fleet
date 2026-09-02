@@ -375,6 +375,7 @@ func (r *Runner) maybeAppendCreateTaskTool(base []fantasy.AgentTool, task *model
 			Enqueuer:         r.taskEnqueuer,
 			CreatingTaskID:   task.ID,
 			ParentModel:      task.Model,
+			ParentA2ADepth:   task.A2ADelegationDepth,
 			ParentBudgetUSD:  r.cfg.LiveMaxCostUSD(),
 			RecurringAllowed: task.AllowRecurringTaskCreation,
 			MaxCreations:     tools.DefaultMaxTaskCreations,

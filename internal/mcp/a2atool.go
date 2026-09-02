@@ -496,19 +496,23 @@ func a2aRenderArtifact(b *strings.Builder, a *wire.Artifact, budget *int) {
 func a2aRenderError(peer string, err error) *ToolResult {
 	var rpcErr *a2abridge.RPCError
 	var httpErr *a2abridge.HTTPError
+	// An error MESSAGE or HTTP body is peer-authored text too, so the two
+	// branches that quote it open with the same banner every success render
+	// carries: a hostile peer's "error" is as much an injection channel as its
+	// task output. The transport-failure branch quotes only fleet's own error.
 	switch {
 	case errors.As(err, &rpcErr):
 		text := fmt.Sprintf("remote A2A error %d from peer %q", rpcErr.Code, peer)
 		if reason := rpcErr.Reason(); reason != "" {
 			text += " (" + reason + ")"
 		}
-		return a2aErrorResult(text + ": " + a2aClip(rpcErr.Message, a2aStatusMessageCap))
+		return a2aErrorResult(a2aUntrustedBanner + "\n" + text + ": " + a2aClip(rpcErr.Message, a2aStatusMessageCap))
 	case errors.As(err, &httpErr):
 		text := fmt.Sprintf("peer %q answered HTTP %d: %s", peer, httpErr.Status, a2aClip(httpErr.Body, a2aStatusMessageCap))
 		if httpErr.Status == http.StatusUnauthorized || httpErr.Status == http.StatusForbidden {
 			text += " — the peer refused this deployment's credential; an operator must check the peer's headers in the bundle manifest."
 		}
-		return a2aErrorResult(text)
+		return a2aErrorResult(a2aUntrustedBanner + "\n" + text)
 	}
 	return a2aErrorResult(fmt.Sprintf("peer %q could not be reached: %v", peer, err))
 }

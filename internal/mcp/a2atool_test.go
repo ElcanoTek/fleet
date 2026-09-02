@@ -263,6 +263,11 @@ func TestA2APeerRemoteErrorsAreToolErrors(t *testing.T) {
 	if !res.IsError || !strings.Contains(res.Content[0].Text, "remote A2A error -32001") || !strings.Contains(res.Content[0].Text, "no such task") {
 		t.Fatalf("want rendered remote error, got %+v", res)
 	}
+	// The error message is peer-authored text: it must open with the same
+	// untrusted banner every success render carries.
+	if !strings.HasPrefix(res.Content[0].Text, a2aUntrustedBanner) {
+		t.Fatalf("remote error rendered without the untrusted banner: %q", res.Content[0].Text)
+	}
 
 	peer401 := &fakeA2APeer{httpCode: http.StatusUnauthorized}
 	srv401 := peer401.serve(t)

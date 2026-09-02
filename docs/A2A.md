@@ -312,9 +312,12 @@ stamps the accepted depth on the task it creates (`a2a_delegation_depth`,
 immutable provenance); the outbound tools refuse locally with
 `A2A_DELEGATION_DEPTH_EXCEEDED` when the calling run is already at the
 ceiling. The depth travels with the task row and the broker scope policy,
-never with model-controlled input. It is **cooperative**: a non-fleet peer
-drops the header and its chain restarts at depth one on the far side — this
-guards fleets looping through one another, not an adversarial peer.
+never with model-controlled input, and a follow-up task spawned locally with
+`create_task` **inherits** its parent's depth, so a run at the ceiling cannot
+restart the chain by delegating through a child. It is **cooperative**: a
+non-fleet peer drops the header and its chain restarts at depth one on the far
+side — this guards fleets looping through one another, not an adversarial
+peer.
 
 **Honest scope (outbound).**
 

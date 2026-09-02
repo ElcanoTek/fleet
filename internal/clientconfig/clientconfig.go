@@ -894,8 +894,8 @@ type HTTPToolDef struct {
 //
 // SECURITY — the definition is BUNDLE-AUTHOR-DEFINED and therefore trusted:
 // peers are operator policy, never model choice. Headers carry the peer
-// credential as ${ENV_VAR} references resolved host-side at call time (same
-// boundary as http_tools). Description is the ONLY text about the peer the
+// credential as ${ENV_VAR} references resolved host-side when the catalog is
+// built (A2APeerConfigs — the same seam and boundary as http_tools). Description is the ONLY text about the peer the
 // model ever sees — a remote agent card is never fetched into the roster,
 // because remote card text would be a prompt-injection channel. What the
 // peer sends BACK is untrusted external content and is rendered as such.
@@ -903,7 +903,7 @@ type A2APeerDef struct {
 	Name        string            `yaml:"name"`        // ^[a-z0-9_]{1,32}$
 	RPCURL      string            `yaml:"rpc_url"`     // the peer's JSON-RPC endpoint, http(s) only
 	Description string            `yaml:"description"` // required; bundle-authored
-	Headers     map[string]string `yaml:"headers"`     // values support ${ENV_VAR}, resolved host-side at call time
+	Headers     map[string]string `yaml:"headers"`     // values support ${ENV_VAR}, resolved host-side at catalog-build time
 	// Critical opts <name>_send and <name>_cancel into the critical-tool audit
 	// gate (chat: approval card; scheduled: confirm_audit accounting) —
 	// delegating work off-box is a side effect with a cost on the remote side.
