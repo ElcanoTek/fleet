@@ -245,7 +245,11 @@ func brokerScopePolicy(policy agent.MCPScopePolicy) *mcpbroker.ScopePolicy {
 			out.Credentials = append(out.Credentials, mcpbroker.ScopeChoice{Server: entry.Server, Account: entry.Account})
 		}
 	}
-	if len(out.Tools) == 0 && !out.RestrictCredentials {
+	// The inbound delegation depth (#1368) is a narrowing too: a delegated
+	// task's a2a peer tools must refuse past the ceiling in the child, which
+	// has no other source for the task row's depth.
+	out.A2ADepth = policy.A2ADepth
+	if len(out.Tools) == 0 && !out.RestrictCredentials && out.A2ADepth == 0 {
 		return nil
 	}
 	return out
@@ -512,8 +516,12 @@ func scrubParentConnectorState(bundle *clientconfig.Bundle, cfg *config.Config, 
 	for i := range cfg.HTTPTools {
 		cfg.HTTPTools[i] = config.HTTPToolConfig{}
 	}
+	for i := range cfg.A2APeers {
+		cfg.A2APeers[i] = config.A2APeerConfig{}
+	}
 	cfg.MCPServers = nil
 	cfg.HTTPTools = nil
+	cfg.A2APeers = nil
 	bundle.ScrubConnectorRuntimeDefinitions()
 	return errors.Join(errs...)
 }

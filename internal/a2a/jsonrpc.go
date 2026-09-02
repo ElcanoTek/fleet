@@ -108,6 +108,20 @@ func CodeFor(err error) int {
 	return -32603
 }
 
+// SentinelFor is CodeFor's inverse for the OUTBOUND client: the wire error
+// sentinel a remote server's JSON-RPC code denotes, so a caller can
+// errors.Is against wire.ErrTaskNotFound and friends instead of comparing
+// integers. Unknown codes (a server's implementation-defined -32000..-32099
+// range, or plain JSON-RPC codes this table does not carry) return nil.
+func SentinelFor(code int) error {
+	for _, row := range errorCodes {
+		if row.code == code {
+			return row.sentinel
+		}
+	}
+	return nil
+}
+
 var errorCodes = []struct {
 	sentinel error
 	code     int

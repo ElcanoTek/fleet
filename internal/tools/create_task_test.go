@@ -64,6 +64,7 @@ func TestCreateTask_AllowsWhenGranted(t *testing.T) {
 		Enqueuer:        enq,
 		CreatingTaskID:  parentID,
 		ParentModel:     &parentModel,
+		ParentA2ADepth:  2,
 		ParentBudgetUSD: 10,
 		MaxCreations:    DefaultMaxTaskCreations,
 		Counter:         &counter,
@@ -78,6 +79,12 @@ func TestCreateTask_AllowsWhenGranted(t *testing.T) {
 	}
 	if enq.last.CreatedByTaskID == nil || *enq.last.CreatedByTaskID != parentID {
 		t.Fatalf("expected lineage CreatedByTaskID=%s, got %v", parentID, enq.last.CreatedByTaskID)
+	}
+	// The A2A delegation depth is inherited, never reset: a child spawned by a
+	// task that arrived over A2A at depth 2 is itself at depth 2, so it cannot
+	// restart the fleet-to-fleet chain the recursion guard exists to stop.
+	if enq.last.A2ADelegationDepth != 2 {
+		t.Fatalf("expected the child to inherit a2a_delegation_depth=2, got %d", enq.last.A2ADelegationDepth)
 	}
 	if enq.last.Model == nil || *enq.last.Model != parentModel {
 		t.Fatalf("expected inherited model %q, got %v", parentModel, enq.last.Model)

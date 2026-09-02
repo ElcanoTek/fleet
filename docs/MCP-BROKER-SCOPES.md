@@ -83,8 +83,8 @@ enabled servers' gating/picker metadata.
 Reload requests use the existing correlation, cancellation, and value-free
 panic-containment machinery. Scope opening serializes with reload: an opening
 scope receives a coherent old or new base catalog, while scopes already open
-keep their original client until close. Inline `http_tools` remain boot-pinned,
-matching the existing reload contract.
+keep their original client until close. Inline `http_tools` and outbound
+`a2a_peers` remain boot-pinned, matching the existing reload contract.
 
 ## Why this is separate
 

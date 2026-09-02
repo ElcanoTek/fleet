@@ -111,10 +111,11 @@ implementing those exactly, not approximately.
   possible (use the manifest); fleet's own
   spawn-time `${FLEET_WORKSPACE}`/`${FLEET_TASK_ID}` substitution still runs
   over plugin env values (a documented deviation from "no other expansion");
-  legacy `sse` servers are skipped; on the kubernetes backend plugin skills are
-  rostered but not readable inside the sandbox, as for the built-in pack.
-  Adding a plugin or changing its `mcp.json` requires a reload (skills follow
-  the disk on read).
+  legacy `sse` servers are skipped. Adding a plugin or changing its `mcp.json`
+  requires a reload (skills follow the disk on read). The kubernetes caveat
+  this ADR first recorded — plugin skills rostered but unreadable inside a
+  pod — is lifted by [ADR-0055](0055-kubernetes-skills-staged-into-the-workspace-claim.md):
+  the merged tree is staged into the workspace claim on that backend.
 
 ## Alternatives considered
 

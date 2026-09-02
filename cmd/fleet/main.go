@@ -323,6 +323,9 @@ func run() error {
 	// the process env) and registered onto the credentialed MCP client alongside the
 	// MCP catalog. Empty in the generic bundle.
 	cfg.HTTPTools = bundle.HTTPToolConfigs()
+	// Outbound A2A peers (#1368): same resolution and the same seam. Empty in
+	// the generic bundle.
+	cfg.A2APeers = bundle.A2APeerConfigs()
 
 	// Resolve the sandbox image, OCI runtime, and backend from env + bundle
 	// (env wins). Fail-closed on an unrecognized backend value (#989).
@@ -378,7 +381,17 @@ func run() error {
 	personasDir := bundle.PersonasDir
 	protocolsDir := bundle.ProtocolsDir
 	systemPromptsDir := bundle.SystemPromptsDir
-	skillsDir := bundle.SkillsDir
+	// On the kubernetes backend the skills tree is re-staged INSIDE the
+	// workspace claim so sandbox pods can read it (ADR-0055); podman keeps the
+	// data-dir tree. Must precede every registration of the skills dir below.
+	// Degrades loudly: the pool build then logs why in-sandbox skill reads
+	// will not resolve.
+	skillsDir, err := agent.StageSkillsForBackend(cfg, bundle)
+	if err != nil {
+		// Only the kubernetes backend stages, so the message can name it
+		// outright (no tainted backend string in the log line).
+		log.Printf("warning: stage skills for the kubernetes sandbox backend: %v — skills stay unreadable inside sandbox pods", err)
+	}
 
 	// Workspace symlinks must point at the REAL loaded dirs — in particular
 	// the merged bundle+builtin skills dir — not the legacy $CWD/<name>
@@ -1401,15 +1414,23 @@ func buildA2AConfig(cfg *config.Config, bundle *clientconfig.Bundle, pushEnabled
 	if err != nil {
 		return nil, fmt.Errorf("render extended agent card: %w", err)
 	}
+	// The inbound delegation-depth ceiling (#1368) shares its knob with the
+	// outbound peer tools (agent.RegisterA2APeers), so a fleet-to-fleet chain
+	// is refused at the same hop count on both ends.
+	maxDepth, err := config.EnvKnobInt("FLEET_A2A_MAX_DELEGATION_DEPTH", config.DefaultA2AMaxDelegationDepth)
+	if err != nil {
+		return nil, err
+	}
 	return &handlers.A2AConfig{
-		CardJSON:         body,
-		CardETag:         etag,
-		Persona:          cfg.A2APersona,
-		Model:            cfg.A2AModel,
-		PublicBaseURL:    base,
-		PushEnabled:      pushEnabled,
-		ExtendedCardJSON: extBody,
-		UnaryWaitBudget:  time.Duration(cfg.A2AUnaryWaitSeconds) * time.Second,
+		CardJSON:           body,
+		CardETag:           etag,
+		Persona:            cfg.A2APersona,
+		Model:              cfg.A2AModel,
+		PublicBaseURL:      base,
+		PushEnabled:        pushEnabled,
+		ExtendedCardJSON:   extBody,
+		UnaryWaitBudget:    time.Duration(cfg.A2AUnaryWaitSeconds) * time.Second,
+		MaxDelegationDepth: maxDepth,
 	}, nil
 }
 

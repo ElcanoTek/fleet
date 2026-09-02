@@ -125,6 +125,7 @@ type taskScanBuf struct {
 	wakeReason             sql.NullString
 	wakeCycles             int
 	pausedAt               sql.NullTime
+	a2aDelegationDepth     int
 }
 
 // taskColumn is one row of the task-column registry: one tasks-table column,
@@ -985,6 +986,22 @@ var taskColumnRegistry = []taskColumn{
 		noTxUpdate: "insert-only (#1116): same doctrine as the upsert exclusion — only the guarded spawn/settle statements may change it",
 		noExport:   "runtime settlement marker (#1116): derived at insert (recurrenceSpawnedInsertValue) so restored terminal rows land settled",
 		value:      func(t *models.Task) any { return recurrenceSpawnedInsertValue(t) },
+	},
+	{
+		name: "a2a_delegation_depth",
+		read: true, insert: true,
+		// Inbound A2A delegation depth (#1368): the hop count a delegating
+		// fleet declared in X-Fleet-A2A-Depth, accepted by the inbound server
+		// under FLEET_A2A_MAX_DELEGATION_DEPTH, and carried forward by this
+		// task's own outbound sends. 0 = not a delegation. Read back because
+		// the scheduled driver stamps it on the run context for the a2a peer
+		// tools' recursion guard.
+		noUpsert:   "delegation provenance (#1368): stamped by the creating insert from the inbound header and immutable afterwards — a generic write path must never reset a delegated task to depth 0 and re-open the recursion guard",
+		noTxUpdate: "delegation provenance (#1368): immutable after the creating insert; the tx update re-writes a scanned row and never re-stamps how the task arrived",
+		noExport:   "runtime provenance (#1368): a re-imported definition is not a delegation — the import target's row starts at depth 0",
+		value:      func(t *models.Task) any { return t.A2ADelegationDepth },
+		dest:       func(b *taskScanBuf) any { return &b.a2aDelegationDepth },
+		assign:     func(b *taskScanBuf, t *models.Task) { t.A2ADelegationDepth = b.a2aDelegationDepth },
 	},
 }
 

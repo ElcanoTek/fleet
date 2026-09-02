@@ -144,7 +144,10 @@ func drainAndClose(s *Server) {
 //   - Old servers are drained + closed under their own Server.mu AFTER the swap,
 //     so a call that captured the old pointer completes cleanly.
 //
-// The synthetic inline-http-tools server (HTTPToolServerName) is never touched.
+// The synthetic servers — inline http_tools (HTTPToolServerName) and a2a peers
+// (A2AToolServerName, #1368) — are never touched: they have no manifest
+// mcp_servers entry to diff against, so without the exemption a reload would
+// read them as "removed" and close them.
 // On a build failure Reload rolls back any servers it already started and
 // returns the error with a partial summary; the live registry is left unchanged
 // in that case (the swap is all-or-nothing — it happens only after every new
@@ -159,8 +162,8 @@ func (c *Client) Reload(ctx context.Context, newServers []ServerDef) (*ReloadSum
 
 	want := make(map[string]ServerDef, len(newServers))
 	for _, d := range newServers {
-		if d.Name == HTTPToolServerName {
-			continue // never manage the synthetic inline-http tools server
+		if isSyntheticServer(d.Name) {
+			continue // never manage the synthetic tool servers
 		}
 		want[d.Name] = d
 	}
@@ -170,7 +173,7 @@ func (c *Client) Reload(ctx context.Context, newServers []ServerDef) (*ReloadSum
 	c.mu.RLock()
 	currentDefs := make(map[string]ServerDef, len(c.servers))
 	for name, s := range c.servers {
-		if name == HTTPToolServerName {
+		if isSyntheticServer(name) {
 			continue
 		}
 		currentDefs[name] = s.def
@@ -256,4 +259,11 @@ func (c *Client) Reload(ctx context.Context, newServers []ServerDef) (*ReloadSum
 	sort.Strings(summary.Restarted)
 	sort.Strings(summary.Unchanged)
 	return summary, nil
+}
+
+// isSyntheticServer reports whether name is one of the synthetic tool servers
+// that live outside the manifest's mcp_servers — registered by AddHTTPTools /
+// AddA2APeers, boot-pinned, and never part of a reload diff.
+func isSyntheticServer(name string) bool {
+	return name == HTTPToolServerName || name == A2AToolServerName
 }

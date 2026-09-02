@@ -269,6 +269,13 @@ type MCPScopePolicy struct {
 	// "inherit global" — the scheduled driver's per-task allowlist (#184). Only
 	// the scheduled driver sets it; interactive turns leave it nil.
 	CredentialAllowlist agentcore.CredentialAllowlist
+	// A2ADepth is the run's inbound A2A delegation depth (#1368): the task
+	// row's a2a_delegation_depth, 0 for anything a human started. The broker
+	// child stamps it on the scope's a2a peer tools so a task that itself
+	// arrived over A2A cannot re-delegate past FLEET_A2A_MAX_DELEGATION_DEPTH.
+	// Public configuration state, not a credential; like every other field
+	// here it can only NARROW what the child allows.
+	A2ADepth int
 }
 
 // MCPScopeOpener binds the selected public server/account names to a per-turn
@@ -303,7 +310,7 @@ type MCPReloader func(ctx context.Context) (*MCPReloadResult, error)
 // (fleet mcp-broker) so both connect the catalog identically — one credential path,
 // not two (issue #167). httpTools may be nil/empty (the generic default), in which
 // case no inline HTTP tools are registered and behavior is unchanged.
-func BuildMCPClient(specs map[string]MCPServerSpec, httpTools []config.HTTPToolConfig) *mcp.Client {
+func BuildMCPClient(specs map[string]MCPServerSpec, httpTools []config.HTTPToolConfig, a2aPeers []config.A2APeerConfig) *mcp.Client {
 	client := mcp.NewClient()
 	for name, spec := range specs {
 		if !spec.Enabled {
@@ -344,6 +351,11 @@ func BuildMCPClient(specs map[string]MCPServerSpec, httpTools []config.HTTPToolC
 	// resolved auth headers live only in this process and are applied to the outbound
 	// request at call time — never shipped to the sandbox or the model.
 	RegisterHTTPTools(client, httpTools)
+	// Outbound A2A peers (#1368): the same synthetic-server seam. This is a
+	// shared, process-lifetime client, so the calling run's depth is unknown
+	// here and defaults to 0 (human-initiated); scheduled runs stamp their real
+	// depth on the call context (mcp.WithA2ADepth), which wins.
+	RegisterA2APeers(client, a2aPeers, 0)
 	return client
 }
 
@@ -371,6 +383,51 @@ func RegisterHTTPTools(client *mcp.Client, httpTools []config.HTTPToolConfig) {
 	}
 	client.AddHTTPTools(specs)
 	log.Printf("inline HTTP tools registered: %d", len(specs))
+}
+
+// RegisterA2APeers translates the resolved config.A2APeerConfig catalog into
+// the mcp package's spec shape and registers it onto client (#1368). Exported
+// for the same reason as RegisterHTTPTools: the interactive Manager, the
+// broker (boot client and per-scope clients), and the scheduled per-task
+// binder all register the SAME peer catalog through ONE path, host-side
+// credentials only. defaultDepth is the calling run's delegation depth when
+// the call context carries none — 0 for human-initiated work.
+//
+// The two knobs are resolved HERE, at the point of use, because the broker
+// child registers peers without ever running config.Load: a malformed value
+// was already refused at boot by the parent's external-knob gate, so the
+// child keeping its safe default on a parse error is defense in depth.
+func RegisterA2APeers(client *mcp.Client, peers []config.A2APeerConfig, defaultDepth int) {
+	if len(peers) == 0 {
+		return
+	}
+	maxDepth, err := config.EnvKnobInt("FLEET_A2A_MAX_DELEGATION_DEPTH", config.DefaultA2AMaxDelegationDepth)
+	if err != nil {
+		log.Printf("warn: %v; a2a peers keep the default delegation ceiling %d", err, config.DefaultA2AMaxDelegationDepth)
+		maxDepth = config.DefaultA2AMaxDelegationDepth
+	}
+	allowPrivate, err := config.EnvKnobBool("FLEET_A2A_CLIENT_ALLOW_PRIVATE", false)
+	if err != nil {
+		log.Printf("warn: %v; a2a peers keep the SSRF guard on", err)
+		allowPrivate = false
+	}
+	if defaultDepth < 0 {
+		defaultDepth = 0
+	}
+	specs := make([]mcp.A2APeerSpec, 0, len(peers))
+	for _, p := range peers {
+		specs = append(specs, mcp.A2APeerSpec{
+			Name:         p.Name,
+			Description:  p.Description,
+			RPCURL:       p.RPCURL,
+			Headers:      p.Headers,
+			MaxDepth:     maxDepth,
+			DefaultDepth: defaultDepth,
+			AllowPrivate: allowPrivate,
+		})
+	}
+	client.AddA2APeers(specs)
+	log.Printf("a2a peers registered: %d (delegation depth %d of max %d, private peers allowed=%v)", len(specs), defaultDepth, maxDepth, allowPrivate)
 }
 
 func New(opts ManagerOptions) (*Manager, error) {
@@ -413,7 +470,7 @@ func New(opts ManagerOptions) (*Manager, error) {
 	catalog := cloneMCPCatalog(opts.MCPCatalog)
 	accounts := cloneMCPAccounts(opts.MCPAccounts)
 	if broker == nil {
-		client = BuildMCPClient(opts.ServerSpecs, cfg.HTTPTools)
+		client = BuildMCPClient(opts.ServerSpecs, cfg.HTTPTools, cfg.A2APeers)
 		broker = agentcore.NewLocalMCPBroker(client, agentcore.DefaultRemediationHints)
 		catalog = client.GetAllTools()
 		for name, spec := range opts.ServerSpecs {
@@ -742,9 +799,10 @@ func buildKubernetesSandboxPool(cfg *config.Config, poolCfg sandbox.PoolConfig, 
 		return nil, fmt.Errorf("FLEET_SANDBOX_K8S_BUNDLE_DOCS_IN_IMAGE / sandbox.kubernetes.bundle_docs_in_image: %w", err)
 	}
 	// Read-only roots nested INSIDE the workspace claim (the shared file
-	// library's staged tree) are not host paths at all — every pod sees them
-	// by construction, mounted read-only as a subPath of the claim by the pod
-	// spec builder — so they bypass the host-mount drop below entirely.
+	// library's staged tree; the skills tree StageSkillsForBackend staged at
+	// boot) are not host paths at all — every pod sees them by construction,
+	// mounted read-only as a subPath of the claim by the pod spec builder — so
+	// they bypass the host-mount drop below entirely.
 	wsNested, hostMounts := splitWorkspaceNestedMounts(poolCfg.Container.ReadOnlyMounts, poolCfg.Container.WorkspaceHostDir)
 	if len(wsNested) > 0 {
 		log.Printf("sandbox: kubernetes backend — %d read-only root(s) inside the workspace claim %v are mounted read-only (subPath) in every sandbox pod", len(wsNested), wsNested)
@@ -757,7 +815,10 @@ func buildKubernetesSandboxPool(cfg *config.Config, poolCfg sandbox.PoolConfig, 
 	for _, d := range dropped {
 		switch {
 		case clientconfig.IsMaterializedSkillsDir(d):
-			log.Printf("sandbox: kubernetes backend — skills dir %q is the merged built-in+bundle tree under the control plane's data dir, which no sandbox image can carry; in-sandbox skill reads will not resolve. Set skills_builtin: false in the bundle manifest to make skills/ the bundle's own (bake-able) dir", d)
+			// Only reachable when StageSkillsForBackend failed at boot: the
+			// staged copy inside the claim would have been split off as a
+			// nested mount above.
+			log.Printf("sandbox: kubernetes backend — skills dir %q is still the merged tree under the control plane's data dir because staging it into the workspace claim failed at boot (see the earlier 'stage skills' warning); no pod can see it, so in-sandbox skill reads will not resolve", d)
 		case docsInImage:
 			log.Printf("sandbox: kubernetes backend — %q is not a bundle doc dir, so bundle_docs_in_image does not vouch for it; in-sandbox reads there will not resolve", d)
 		}
@@ -875,6 +936,51 @@ func splitWorkspaceNestedMounts(mounts []string, workspaceRoot string) (nested, 
 		others = append(others, m)
 	}
 	return nested, others
+}
+
+// StageSkillsForBackend makes the bundle's skills tree reachable from inside
+// a sandbox on the selected backend and returns the skills dir every downstream
+// consumer (SetSupportingDocDirs, ManagerOptions.SkillsDir, the pool's
+// read-only mounts) must use from then on.
+//
+// Under podman the merged tree under the data dir is bind-mounted same-path,
+// so nothing changes and bundle.SkillsDir is returned as is. Under kubernetes a
+// pod mounts only the workspace claim, so the complete tree — built-in pack,
+// Agent Plugin skills, the bundle's own skills/ — is re-staged at
+// <workspace root>/skills (tools.StagedSkillsDir) inside that claim, where
+// buildKubernetesSandboxPool then treats it like the shared file library: a
+// read-only subPath mount in every pod, no image bake, no declaration
+// (ADR-0055). Staging always happens on that backend, whether or not the
+// built-in pack is inherited — the point is that skills reach a pod at all.
+//
+// It must run BEFORE the pool is built (the pod spec mounts the directory as a
+// subPath, so the control plane has to create it first — the same ordering
+// the shared library needs) and before the skills dir is registered anywhere.
+// A staging failure is returned with bundle.SkillsDir unchanged so the caller
+// can degrade loudly rather than fail boot: skills are a capability, not a
+// boot invariant, and buildKubernetesSandboxPool's IsMaterializedSkillsDir
+// branch then names the consequence in the log.
+func StageSkillsForBackend(cfg *config.Config, bundle *clientconfig.Bundle) (string, error) {
+	if bundle == nil {
+		return "", nil
+	}
+	if cfg == nil || cfg.SandboxBackend != sandbox.BackendKubernetes {
+		return bundle.SkillsDir, nil
+	}
+	root := strings.TrimSpace(cfg.WorkspaceRoot)
+	if root == "" {
+		root = "workspace"
+	}
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		return bundle.SkillsDir, fmt.Errorf("stage skills: resolve workspace root: %w", err)
+	}
+	staged := tools.StagedSkillsDir(abs)
+	if err := bundle.StageSkillsAt(staged); err != nil {
+		return bundle.SkillsDir, err
+	}
+	log.Printf("sandbox: kubernetes backend — skills tree (built-in pack + plugin skills + bundle skills/) staged at %s inside the workspace claim; every sandbox pod mounts it read-only, no image bake needed", staged)
+	return bundle.SkillsDir, nil
 }
 
 // k8sDocMounts splits the supporting-doc mount list into the roots whose

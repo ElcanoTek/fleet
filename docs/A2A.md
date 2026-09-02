@@ -43,6 +43,8 @@ answer `501 {"error":"a2a_disabled"}`. Optional operator policy:
 | `FLEET_MCP_OAUTH_ENCRYPTION_KEY` | The store cipher (docs/NOTIFICATIONS.md); required for push notifications — caller webhook secrets are sealed at rest, so without it the card declares `pushNotifications: false` and the push methods answer `-32003` |
 | `FLEET_A2A_PUSH_ALLOW_PRIVATE` | Relax the push SSRF dial guard so loopback/private webhook receivers work (bool, default false) — for dev and TCK conformance runs only; redirects stay refused |
 | `FLEET_A2A_UNARY_WAIT_SECONDS` | How long a blocking unary `SendMessage` (the spec default) waits for the task outcome before answering with the freshest snapshot (int seconds, min 1, default 1800) |
+| `FLEET_A2A_MAX_DELEGATION_DEPTH` | Fleet-to-fleet recursion ceiling (int, min 1, default 3): the inbound server refuses a `SendMessage` whose `X-Fleet-A2A-Depth` exceeds it, and the outbound peer tools refuse to delegate from a run already at it — see [Outbound delegation](#outbound-delegation-fleet-as-an-a2a-client) |
+| `FLEET_A2A_CLIENT_ALLOW_PRIVATE` | Relax the outbound peer tools' SSRF dial guard so loopback/private peers work (bool, default false) — dev and test rigs only; redirects stay refused |
 
 Persona, model, ceilings, connectors: **operator policy, never caller
 choice** — the same posture as webhook triggers (`docs/EVENT-TRIGGERS.md`).
@@ -236,10 +238,100 @@ one just-created task, so the create rate limit already bounds it.
   `returnImmediately` caller accepts. Long delegations should stream or poll.
 - **Task history is empty** (see above).
 - **Spec-literal `A2A-Version` handling** — absent ⇒ 0.3 ⇒ `-32009`.
-- **Fleet as an A2A *client*** (delegating outward) is out of scope — Phase 3,
-  its own issue.
+- **Fleet as an A2A *client*** — delegating outward — shipped as the
+  `a2a_peers` tools (#1368); see [Outbound delegation](#outbound-delegation-fleet-as-an-a2a-client)
+  for its own honest-scope list (no card fetch, no artifact download, no
+  live progress tee).
 - This is also **not an MCP server**: fleet exposing its tools over MCP
   remains a separate (non-)feature.
+
+## Outbound delegation (fleet as an A2A client)
+
+Fleet agents can delegate work **to** remote A2A agents — another fleet, or any
+A2A v1.0 server — through peers a client-config bundle declares (#1368, the
+#1279 Phase 3; the invariants are [ADR-0056](adr/0056-a2a-outbound-delegation.md)):
+
+```yaml
+a2a_peers:
+  - name: helpdesk                      # ^[a-z0-9_]{1,32}$
+    rpc_url: "https://support.example.com/v1/a2a"
+    description: "The helpdesk agent: password resets, access requests."
+    headers:
+      X-API-Key: "${HELPDESK_A2A_KEY}"  # resolved host-side at call time
+    critical: true
+```
+
+**Shape.** Peers register onto the credentialed MCP client as one synthetic
+server (`_a2a`) exactly like inline `http_tools` (`_http`), so the tools ride
+the same host-side seam every MCP tool does — policy gate, output redaction
+and guardrail screening, critical-tool gate, output cap, the broker's
+child-side authorization. No new governance path, no new loop: the agent calls
+a tool, the tool speaks A2A. Each peer contributes four tools, addressed as
+`mcp__a2a_<peer>_…`:
+
+| Tool | What it does |
+| --- | --- |
+| `<peer>_send` | Creates a task on the peer (`SendMessage`, `returnImmediately: true`) and returns the remote task id and initial state **without waiting**. With `task_id`, answers a question a remote task asked (`INPUT_REQUIRED`). |
+| `<peer>_status` | `GetTask` snapshot: state, status message, artifacts. |
+| `<peer>_wait` | Subscribes to the peer's event stream (`SubscribeToTask`, SSE) and returns on the next status change, a terminal state, or `wait_seconds` (1–120, default 60). An artifact event does not end the wait by itself: the client keeps reading for a one-second settle grace, because servers emit a finished task's artifacts and then its terminal status back to back — so one wait returns the completed task with its artifacts. Bounded by construction; the model calls it again while the task runs. |
+| `<peer>_cancel` | `CancelTask`; returns the resulting state. |
+
+No tool call ever blocks on a remote run, and the calling run's own
+iteration and cost ceilings keep governing. **The remote side's cost is
+invisible to fleet by construction** — the per-peer `critical: true` flag is
+the control: `<peer>_send` and `<peer>_cancel` then join the critical-tool
+gate (an approval card in chat, `confirm_audit` accounting when scheduled);
+`_status`/`_wait` are reads and stay free.
+
+**Peers are operator policy, never model choice** — the bundle names them,
+the same posture as `mcp_servers`. The bundle-authored `description` is the
+ONLY text about a peer the model ever sees: fleet does **not** fetch a remote
+agent card into the tool roster or system prompt, because card text is
+authored by the remote party and would be a prompt-injection channel into
+every run that lists the peer.
+
+**What comes back is untrusted external content**, the `web_fetch` trust
+class: every rendered result opens with a banner saying so, text parts are
+inlined under a byte cap, and file parts are described (name, media type,
+URI) but **never downloaded**.
+
+**Outbound posture.** Peer credentials are `${ENV_VAR}` header references
+resolved from the host process env at call time — never in the sandbox, the
+model context, results, or logs (the `http_tools` boundary). Every connection
+goes through `netguard`'s resolve-then-dial SSRF guard and refuses redirects
+unconditionally; every body is read through a hard byte cap. A streaming
+client without a whole-request timeout carries the SSE wait (a global timeout
+would cut the stream mid-read); its deadline is the tool call's own.
+`FLEET_A2A_CLIENT_ALLOW_PRIVATE` relaxes only the dial guard, for dev/test
+rigs against loopback peers.
+
+**Recursion guard (fleet → fleet).** An outbound send carries
+`X-Fleet-A2A-Depth: <own depth + 1>`; the inbound server refuses values past
+`FLEET_A2A_MAX_DELEGATION_DEPTH` (default 3) with `-32600` naming the knob and
+stamps the accepted depth on the task it creates (`a2a_delegation_depth`,
+immutable provenance); the outbound tools refuse locally with
+`A2A_DELEGATION_DEPTH_EXCEEDED` when the calling run is already at the
+ceiling. The depth travels with the task row and the broker scope policy,
+never with model-controlled input, and a follow-up task spawned locally with
+`create_task` **inherits** its parent's depth, so a run at the ceiling cannot
+restart the chain by delegating through a child. It is **cooperative**: a
+non-fleet peer drops the header and its chain restarts at depth one on the far
+side — this guards fleets looping through one another, not an adversarial
+peer.
+
+**Honest scope (outbound).**
+
+- No remote agent-card fetch or discovery; peers are pinned by `rpc_url`.
+- No remote artifact download into the workspace (see ADR-0056 for why);
+  file parts are references.
+- No live tee of remote progress into the calling task's run log; SSE lives
+  only inside the bounded `_wait`.
+- No client-side push-notification registration and no `ListTasks` tool.
+- Chat and scheduled runs both get the tools (they ride the shared MCP
+  client); there is no per-surface gate beyond persona `tool_permissions`.
+- Peers are boot-pinned like `http_tools`: a hot reload (`fleet mcp reload`,
+  SIGHUP) leaves the synthetic `_a2a` server untouched and does not pick up
+  manifest changes to `a2a_peers` — restart for those (docs/MCP-RELOAD.md).
 
 ## Conformance testing
 

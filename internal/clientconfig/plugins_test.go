@@ -484,12 +484,18 @@ http_tools:
     description: an inline tool
     method: GET
     url: https://example.com/x
+a2a_peers:
+  - name: helpdesk
+    rpc_url: https://peer.example/v1/a2a
+    description: a remote agent
 `
 	mcpA := `{` + testMCPSchema + `, "mcpServers": {
-  "shared": {"type": "stdio", "command": "echo"},
-  "lookup": {"type": "stdio", "command": "echo"},
-  "_http":  {"type": "stdio", "command": "echo"},
-  "mine":   {"type": "stdio", "command": "echo"}}}`
+  "shared":   {"type": "stdio", "command": "echo"},
+  "lookup":   {"type": "stdio", "command": "echo"},
+  "_http":    {"type": "stdio", "command": "echo"},
+  "_a2a":     {"type": "stdio", "command": "echo"},
+  "helpdesk": {"type": "stdio", "command": "echo"},
+  "mine":     {"type": "stdio", "command": "echo"}}}`
 	mcpB := `{` + testMCPSchema + `, "mcpServers": {"mine": {"type": "stdio", "command": "echo"}, "yours": {"type": "stdio", "command": "echo"}}}`
 	dir := writePluginBundle(t, manifest,
 		pluginFixture{dir: "a", manifest: minimalManifest("alpha"), mcp: mcpA},
@@ -509,6 +515,12 @@ http_tools:
 	if _, ok := cfgs["_http"]; ok {
 		t.Error("the reserved inline-http name must be refused")
 	}
+	if _, ok := cfgs["_a2a"]; ok {
+		t.Error("the reserved a2a-peers name must be refused (#1368)")
+	}
+	if _, ok := cfgs["helpdesk"]; ok {
+		t.Error("a plugin server must not shadow an a2a peer's name (#1368)")
+	}
 	if len(b.Plugins) != 2 {
 		t.Fatalf("plugins: %+v %v", b.Plugins, b.PluginProblems())
 	}
@@ -516,7 +528,7 @@ http_tools:
 		t.Errorf("first plugin keeps 'mine', second loses it: %v / %v", b.Plugins[0].MCPServers, b.Plugins[1].MCPServers)
 	}
 	probs := b.PluginProblems()
-	for _, want := range []string{`server "shared": collides`, `server "lookup": collides`, `server "_http"`, `plugins/b/mcp.json: server "mine": collides`} {
+	for _, want := range []string{`server "shared": collides`, `server "lookup": collides`, `server "_http"`, `server "_a2a"`, `server "helpdesk": collides`, `plugins/b/mcp.json: server "mine": collides`} {
 		if !containsProblem(probs, want) {
 			t.Errorf("missing report %q in %v", want, probs)
 		}

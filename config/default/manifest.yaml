@@ -216,6 +216,28 @@ remote_mcp_catalog: []
 #         message: { type: string }
 #       required: ["channel", "message"]
 
+# Outbound A2A peers (issue #1368) — remote A2A agents this deployment's agents
+# may DELEGATE work to. Each peer registers four tools on a synthetic server
+# (mcp__a2a_<name>_send / _status / _wait / _cancel) that ride the same
+# host-side governance seam as http_tools. Peers are operator policy, never
+# model choice; `description` is the ONLY text about the peer the model sees
+# (a remote agent card is never fetched into the roster); what the peer sends
+# back is rendered as untrusted external content. `headers` values may carry
+# ${ENV_VAR} references resolved host-side at call time. `critical: true` puts
+# <name>_send / <name>_cancel behind the critical-tool gate — recommended:
+# delegating work off-box is a side effect with a cost on the remote side.
+# See docs/A2A.md "Outbound delegation" and ADR-0056.
+#
+# The generic bundle ships NONE. Example (commented out):
+#
+# a2a_peers:
+#   - name: helpdesk
+#     rpc_url: "https://support.example.com/v1/a2a"
+#     description: "The helpdesk agent: password resets, access requests, account unlocks."
+#     headers:
+#       X-API-Key: "${HELPDESK_A2A_KEY}"
+#     critical: true
+
 # Inbound webhook-triggered conversations (issue #268). An external system
 # (GitHub, Slack, CI) that presents a valid signature to POST /webhooks/{slug}
 # starts a fresh conversation under notify_user, seeded from prompt_template

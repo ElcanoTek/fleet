@@ -129,6 +129,7 @@ func runChecks(ctx context.Context, opts validateOptions) []checkResult {
 	if cfgErr == nil && bundleErr == nil {
 		cfg.MCPServers = bundle.MCPServerConfigs()
 		cfg.HTTPTools = bundle.HTTPToolConfigs()
+		cfg.A2APeers = bundle.A2APeerConfigs()
 	}
 
 	results = append(results, checkEnvVars(cfg, cfgErr))

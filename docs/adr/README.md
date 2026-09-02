@@ -57,8 +57,11 @@ reviewable, and citable. Each record names the file or test that enforces it.
 | [0045](0045-remove-node-name-scopes.md) | Remove node-name scopes; a principal's authority is its permission set | Accepted |
 | [0046](0046-remove-per-key-spending-caps.md) | Remove per-API-key spending caps; rolling budgets are the one spend gate | Accepted |
 | [0047](0047-self-serve-team-membership.md) | Self-serve team membership — create/leave is yours, joining is granted | Accepted |
-| [0049](0049-kubernetes-backend-split-control-plane.md) | Kubernetes as a first-class deployment — split control plane, pluggable sandbox backend | Accepted |
+| [0049](0049-kubernetes-backend-split-control-plane.md) | Kubernetes as a first-class deployment — split control plane, pluggable sandbox backend | Accepted; amended by ADR-0055 |
 | [0050](0050-remote-mcp-seats.md) | Multiple logins per hosted MCP connection ("seats") | Accepted; amends ADR-0009 |
 | [0051](0051-a2a-protocol-server.md) | An A2A protocol server as a translation over the governed task seam | Accepted |
 | [0052](0052-operations-always-on-mcp-selection.md) | Operations MCP selections add optional servers without replacing always-on servers | Accepted |
 | [0053](0053-public-api-through-the-tls-front.md) | The public HTTP API is served through the TLS front, with the header-trust channel stripped | Accepted; amends ADR-0004 |
+| [0054](0054-agent-plugins.md) | Agent Plugins load as bundle content, translated onto the existing skills + MCP primitives | Accepted |
+| [0055](0055-kubernetes-skills-staged-into-the-workspace-claim.md) | On the kubernetes backend the skills tree is staged into the workspace claim | Accepted; amends ADR-0049 |
+| [0056](0056-a2a-outbound-delegation.md) | Outbound A2A delegation as bundle-declared tools over the MCP seam | Accepted |
