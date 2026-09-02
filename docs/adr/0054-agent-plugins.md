@@ -68,9 +68,16 @@ implementing those exactly, not approximately.
    server entry skips itself only; every file read or executed must resolve,
    after symlinks, inside the plugin root, enforced at the narrowest boundary.
    Nothing about a plugin can fail the bundle load.
-5. **`com.elcanotek.fleet` is reserved and empty.** fleet reads no extension
-   data in v1. A future fleet-specific knob (tools allowlist, probe, gate) goes
-   under that namespace, never into a portable field.
+5. **`com.elcanotek.fleet` carries fleet's governance knobs, and nothing
+   credential-shaped.** The portable format has no field for a per-server
+   `tools:` allowlist, a `probe:` canary, or the Optional-server metadata, so
+   fleet reads them from its own reverse-domain namespace in `plugin.json`'s
+   `extensions` (spec §8.1) — the place the spec assigns to client-specific
+   data, which every other client ignores. `env`, `enabled_env`,
+   `account_vars` and `identity_env` are deliberately not expressible there: a
+   plugin must not carry secrets, and fleet does not add a second credential
+   path beside the manifest's. The namespace is lenient (report and ignore),
+   so it can never reject a plugin.
 
 ## Enforcement
 
@@ -96,13 +103,18 @@ implementing those exactly, not approximately.
 - **Unchanged:** the security posture. A plugin server is reviewed like
   `mcp/*.py`, brokered like `mcp_servers[]`, and gated like any tool; a plugin
   skill is reviewed like `skills/*`.
-- **Costs accepted:** plugin servers cannot declare a `tools:` allowlist or a
-  `probe:` (no portable field; `agent_policy` governs them); fleet's own
+- **Costs accepted:** a plugin server's allowlist and probe live in fleet's
+  extension rather than a portable field, so they are invisible to other
+  clients (by design) and absent unless the author or operator adds them —
+  an un-annotated plugin exposes every tool it advertises, like an
+  un-annotated manifest server; a credential-gated plugin server is not
+  possible (use the manifest); fleet's own
   spawn-time `${FLEET_WORKSPACE}`/`${FLEET_TASK_ID}` substitution still runs
   over plugin env values (a documented deviation from "no other expansion");
   legacy `sse` servers are skipped; on the kubernetes backend plugin skills are
   rostered but not readable inside the sandbox, as for the built-in pack.
-  Adding a plugin or a skill folder requires a reload, not just a file edit.
+  Adding a plugin or changing its `mcp.json` requires a reload (skills follow
+  the disk on read).
 
 ## Alternatives considered
 
@@ -120,7 +132,10 @@ implementing those exactly, not approximately.
   a declared name shows up unchanged in `fleet mcp test`, the connections UI
   and tool names, which is what an author debugging their plugin expects;
   collisions are rare and are reported rather than silently renamed.
-- **Reading a fleet extension for `tools:`/`probe:` now.** Deferred: the
-  namespace is reserved so it can land later without touching a portable field,
-  but shipping an unexercised extension contract would be a claim without a
-  test.
+- **Putting fleet's per-server knobs in `manifest.yaml`** (a `plugins:` block
+  overriding vendored plugins' servers) instead of the extension. Rejected for
+  v1: the spec already provides a place for exactly this data, it travels with
+  the plugin (a fleet-authored plugin is self-describing), and `disabled` in
+  the extension gives the operator the one override they need without a second
+  schema. A manifest-side override can be added later if vendored plugins
+  updated in place turn out to churn their `plugin.json`.

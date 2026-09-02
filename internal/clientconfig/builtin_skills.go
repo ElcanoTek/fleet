@@ -56,8 +56,10 @@ const mergedSkillsDirName = "skills-merged"
 //
 // overlays are the Agent Plugin skill contributions (plugins.go), applied
 // between the built-in pack and the bundle's own skills. A bundle that opts
-// out of the built-in pack still gets a merged tree when a plugin ships
-// skills — the tree is the only way plugin skills reach the one skills/ mount.
+// out of the built-in pack still gets a merged tree when any plugin is loaded
+// (one overlay per plugin, skills or not yet): the tree is the only way plugin
+// skills reach the one skills/ mount, and it must already exist for a skill
+// folder added after boot to be picked up on read.
 func materializeMergedSkills(bundleSkillsDir string, builtinEnabled bool, hidden []string, overlays []skillOverlay) (string, error) {
 	if !builtinEnabled && len(overlays) == 0 {
 		return bundleSkillsDir, nil
