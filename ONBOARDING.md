@@ -77,8 +77,8 @@ make build      # compile-check ./... AND emit ./fleet + ./fleet-admin
 deployable artifacts (`./fleet`, `./fleet-admin`). If this is green your Go
 toolchain is good. The server runs via `fleet serve` (bare `fleet` also serves,
 for back-compat); all other verbs are the operator CLI, and `make install` puts
-`fleet` on PATH. (`fleet-admin <verb>` still works but is deprecated and will be
-removed.)
+`fleet` on PATH. (`fleet-admin <verb>` still works but is deprecated; it is
+removed in the first release after 1.0.0 — see `docs/adr/0012-unified-fleet-cli.md`.)
 
 ---
 

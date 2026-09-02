@@ -193,7 +193,8 @@ The first run is always the **shell script** — the `fleet` binary doesn't exis
 until it's built. Once installed, `fleet bootstrap`/`update`/`status` wrap the
 same scripts for day-2 ops. The server runs via `fleet serve` (bare `fleet` also
 serves, for back-compat); all other verbs are the operator CLI. (`fleet-admin
-<verb>` still works but is deprecated and will be removed.) The numbered steps
+<verb>` still works but is deprecated; it is removed in the first release after 1.0.0 —
+[ADR-0012](adr/0012-unified-fleet-cli.md).) The numbered steps
 below break down what bootstrap does (and the manual path if you'd rather run
 each piece yourself):
 
