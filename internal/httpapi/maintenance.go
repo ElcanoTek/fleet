@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"log"
+	"sync/atomic"
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/store"
@@ -49,7 +50,22 @@ import (
 // doing it once per turn. FLEET_MAINTENANCE_MIN_INTERVAL overrides it; a
 // non-positive value disables the gate entirely (every turn sweeps, the
 // pre-existing behaviour) for operators who want it back.
-var maintenanceMinInterval = envDuration("FLEET_MAINTENANCE_MIN_INTERVAL", 5*time.Minute)
+//
+// Held in an atomic so a reader on a post-turn goroutine and a writer that
+// swaps the width (the tests do; production sets it once at init) never race.
+var maintenanceMinInterval = newAtomicDuration(envDuration("FLEET_MAINTENANCE_MIN_INTERVAL", 5*time.Minute))
+
+// atomicDuration is a time.Duration readable and writable without a lock.
+type atomicDuration struct{ ns atomic.Int64 }
+
+func newAtomicDuration(d time.Duration) *atomicDuration {
+	a := &atomicDuration{}
+	a.Store(d)
+	return a
+}
+
+func (a *atomicDuration) Load() time.Duration   { return time.Duration(a.ns.Load()) }
+func (a *atomicDuration) Store(d time.Duration) { a.ns.Store(int64(d)) }
 
 // DefaultMaintenanceInterval is how often cmd/fleet's ticker runs the full
 // pass. Hourly matches the disk sweep it replaces and is frequent enough that
@@ -122,7 +138,8 @@ func (s *Server) runPostTurnMaintenance(ctx context.Context) {
 // claims the interval if so. A non-positive maintenanceMinInterval disables the
 // gate (always true), restoring the pre-gate every-turn behaviour.
 func (s *Server) claimMaintenanceSlot(now time.Time) bool {
-	if maintenanceMinInterval <= 0 {
+	minInterval := maintenanceMinInterval.Load()
+	if minInterval <= 0 {
 		return true
 	}
 	nowUnix := now.UnixNano()
@@ -130,7 +147,7 @@ func (s *Server) claimMaintenanceSlot(now time.Time) bool {
 		last := s.lastMaintenance.Load()
 		// A zero timestamp means "never swept" — the first turn after boot
 		// always sweeps, so a short-lived process still reclaims once.
-		if last != 0 && now.Sub(time.Unix(0, last)) < maintenanceMinInterval {
+		if last != 0 && now.Sub(time.Unix(0, last)) < minInterval {
 			return false
 		}
 		if s.lastMaintenance.CompareAndSwap(last, nowUnix) {

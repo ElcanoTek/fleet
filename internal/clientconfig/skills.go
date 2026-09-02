@@ -290,7 +290,7 @@ func (b *Bundle) Skills() []Skill {
 	// sources first so an operator editing a bundle skill in place is still
 	// picked up without a restart (the copy is a no-op when nothing changed).
 	if b.SkillsDir != b.BundleSkillsDir && b.BundleSkillsDir != "" {
-		if err := syncMergedSkills(b.BundleSkillsDir, b.SkillsDir, b.skillsHidden); err != nil {
+		if err := syncMergedSkills(b.BundleSkillsDir, b.SkillsDir, b.skillsBuiltin, b.skillsHidden, b.pluginSkillOverlays); err != nil {
 			log.Printf("clientconfig: warning: skills resync failed: %v", err)
 		}
 	}

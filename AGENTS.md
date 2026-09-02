@@ -286,6 +286,12 @@ same PR.
   [`docs/SHARED-FILES.md`](docs/SHARED-FILES.md)
 - **Task titles** (the operator-facing display label, and why it is NOT the
   unique import/export `name` column): [`docs/TASK-TITLES.md`](docs/TASK-TITLES.md)
+- **Agent Plugins** (the portable `plugin.json` + `skills/` + `mcp.json`
+  package format from agent-plugins.org, loaded from the bundle's `plugins/`
+  dir and `plugin_roots:`; how it maps onto the skills tree + MCP catalog, the
+  spec's failure boundaries, what is deliberately not read):
+  [`docs/AGENT-PLUGINS.md`](docs/AGENT-PLUGINS.md) +
+  [ADR-0054](docs/adr/0054-agent-plugins.md)
 - **MCP server hot-reload** (add/remove/update MCP servers without a restart via
   `fleet mcp reload` / SIGHUP / admin endpoint): [`docs/MCP-RELOAD.md`](docs/MCP-RELOAD.md)
 - **Testing MCP servers** (`fleet mcp test` per-server smoke: handshake +
