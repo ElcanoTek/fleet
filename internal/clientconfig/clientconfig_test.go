@@ -11,6 +11,86 @@ import (
 	"github.com/ElcanoTek/fleet/internal/config"
 )
 
+func TestBundle_HTTPToolConfigs(t *testing.T) {
+	t.Setenv("TEST_HTTPTOOL_ENV_VAR", "super-secret-value")
+
+	cases := []struct {
+		name     string
+		input    []HTTPToolDef
+		expected []config.HTTPToolConfig
+	}{
+		{
+			name:     "empty",
+			input:    []HTTPToolDef{},
+			expected: nil,
+		},
+		{
+			name: "no_env",
+			input: []HTTPToolDef{
+				{
+					Name:         "test_tool_1",
+					Description:  "desc 1",
+					Method:       "GET",
+					URL:          "http://example.com",
+					Headers:      map[string]string{"X-Static": "value"},
+					BodyTemplate: `{"key": "value"}`,
+					InputSchema:  map[string]interface{}{"type": "object"},
+					ResponseJQ:   ".data",
+					Critical:     true,
+				},
+			},
+			expected: []config.HTTPToolConfig{
+				{
+					Name:         "test_tool_1",
+					Description:  "desc 1",
+					Method:       "GET",
+					URL:          "http://example.com",
+					Headers:      map[string]string{"X-Static": "value"},
+					BodyTemplate: `{"key": "value"}`,
+					InputSchema:  map[string]interface{}{"type": "object"},
+					ResponseJQ:   ".data",
+					Critical:     true,
+				},
+			},
+		},
+		{
+			name: "with_env",
+			input: []HTTPToolDef{
+				{
+					Name:    "test_tool_2",
+					Method:  "POST",
+					Headers: map[string]string{"Authorization": "Bearer ${TEST_HTTPTOOL_ENV_VAR}"},
+				},
+			},
+			expected: []config.HTTPToolConfig{
+				{
+					Name:    "test_tool_2",
+					Method:  "POST",
+					Headers: map[string]string{"Authorization": "Bearer super-secret-value"},
+				},
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			b := &Bundle{HTTPTools: tc.input}
+			result := b.HTTPToolConfigs()
+
+			if tc.expected == nil {
+				if result != nil {
+					t.Errorf("expected nil, got %v", result)
+				}
+				return
+			}
+
+			if !reflect.DeepEqual(result, tc.expected) {
+				t.Errorf("expected %v, got %v", tc.expected, result)
+			}
+		})
+	}
+}
+
 // TestMCPServerTLSParseAndValidate covers the per-server TLS hardening block
 // (#280): a well-formed block threads through to MCPServerConfig, an empty block
 // is treated as "no hardening", and malformed blocks fail the load loudly.
