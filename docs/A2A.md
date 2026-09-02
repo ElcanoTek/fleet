@@ -273,7 +273,7 @@ a tool, the tool speaks A2A. Each peer contributes four tools, addressed as
 | --- | --- |
 | `<peer>_send` | Creates a task on the peer (`SendMessage`, `returnImmediately: true`) and returns the remote task id and initial state **without waiting**. With `task_id`, answers a question a remote task asked (`INPUT_REQUIRED`). |
 | `<peer>_status` | `GetTask` snapshot: state, status message, artifacts. |
-| `<peer>_wait` | Subscribes to the peer's event stream (`SubscribeToTask`, SSE) and returns on the next state/artifact change, a terminal state, or `wait_seconds` (1–120, default 60). Bounded by construction; the model calls it again while the task runs. |
+| `<peer>_wait` | Subscribes to the peer's event stream (`SubscribeToTask`, SSE) and returns on the next status change, a terminal state, or `wait_seconds` (1–120, default 60). An artifact event does not end the wait by itself: the client keeps reading for a one-second settle grace, because servers emit a finished task's artifacts and then its terminal status back to back — so one wait returns the completed task with its artifacts. Bounded by construction; the model calls it again while the task runs. |
 | `<peer>_cancel` | `CancelTask`; returns the resulting state. |
 
 No tool call ever blocks on a remote run, and the calling run's own
@@ -326,6 +326,9 @@ guards fleets looping through one another, not an adversarial peer.
 - No client-side push-notification registration and no `ListTasks` tool.
 - Chat and scheduled runs both get the tools (they ride the shared MCP
   client); there is no per-surface gate beyond persona `tool_permissions`.
+- Peers are boot-pinned like `http_tools`: a hot reload (`fleet mcp reload`,
+  SIGHUP) leaves the synthetic `_a2a` server untouched and does not pick up
+  manifest changes to `a2a_peers` — restart for those (docs/MCP-RELOAD.md).
 
 ## Conformance testing
 

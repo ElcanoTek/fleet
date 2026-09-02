@@ -276,9 +276,48 @@ func TestClientWaitForUpdateStream(t *testing.T) {
 	}
 }
 
-func TestClientWaitForUpdateArtifactEvent(t *testing.T) {
+// TestClientWaitForUpdateArtifactThenStatusInOneCall is the settle-grace
+// contract: fleet's server emits a finished task's artifacts and THEN the
+// terminal status, back to back. One wait must return both — a WORKING
+// snapshot with finished artifacts would cost the caller a second wait.
+func TestClientWaitForUpdateArtifactThenStatusInOneCall(t *testing.T) {
 	peer := &fakePeer{state: wire.TaskStateWorking}
 	peer.subscribe = func(w http.ResponseWriter, _ *http.Request, id json.RawMessage) {
+		fl := sseStart(w)
+		task := &wire.Task{ID: "remote-1", ContextID: "remote-1", Status: wire.TaskStatus{State: wire.TaskStateWorking}}
+		sseFrame(w, fl, NewResponse(id, wire.StreamResponse{Event: task}))
+		sseFrame(w, fl, NewResponse(id, wire.StreamResponse{Event: &wire.TaskArtifactUpdateEvent{
+			TaskID: "remote-1", ContextID: "remote-1", LastChunk: true,
+			Artifact: &wire.Artifact{ID: "art-1", Name: "report", Parts: []*wire.Part{wire.NewTextPart("done text")}},
+		}}))
+		time.Sleep(50 * time.Millisecond) // the server's own write gap
+		sseFrame(w, fl, NewResponse(id, wire.StreamResponse{Event: &wire.TaskStatusUpdateEvent{
+			TaskID: "remote-1", ContextID: "remote-1", Status: wire.TaskStatus{State: wire.TaskStateCompleted},
+		}}))
+	}
+	client := newTestPeer(t, peer)
+	start := time.Now()
+	res, err := client.WaitForUpdate(context.Background(), "remote-1", 10*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Changed || !res.Terminal || res.Task.Status.State != wire.TaskStateCompleted {
+		t.Fatalf("one wait must carry the terminal status that followed the artifact: %+v", res)
+	}
+	if len(res.Task.Artifacts) != 1 || res.Task.Artifacts[0].Name != "report" {
+		t.Fatalf("artifact lost: %+v", res.Task.Artifacts)
+	}
+	if elapsed := time.Since(start); elapsed >= streamSettleGrace {
+		t.Fatalf("a status update must end the read at once, not after the settle grace (%s)", elapsed)
+	}
+}
+
+// TestClientWaitForUpdateArtifactAloneSettles covers a peer that streams an
+// artifact and then goes quiet: the wait returns the artifact after the
+// settle grace, marked Changed (not TimedOut), well before the wait budget.
+func TestClientWaitForUpdateArtifactAloneSettles(t *testing.T) {
+	peer := &fakePeer{state: wire.TaskStateWorking}
+	peer.subscribe = func(w http.ResponseWriter, r *http.Request, id json.RawMessage) {
 		fl := sseStart(w)
 		task := &wire.Task{ID: "remote-1", ContextID: "remote-1", Status: wire.TaskStatus{State: wire.TaskStateWorking}}
 		sseFrame(w, fl, NewResponse(id, wire.StreamResponse{Event: task}))
@@ -286,14 +325,20 @@ func TestClientWaitForUpdateArtifactEvent(t *testing.T) {
 			TaskID: "remote-1", ContextID: "remote-1",
 			Artifact: &wire.Artifact{ID: "art-1", Name: "report", Parts: []*wire.Part{wire.NewTextPart("partial")}},
 		}}))
+		<-r.Context().Done() // quiet until the client hangs up
 	}
 	client := newTestPeer(t, peer)
-	res, err := client.WaitForUpdate(context.Background(), "remote-1", 5*time.Second)
+	start := time.Now()
+	res, err := client.WaitForUpdate(context.Background(), "remote-1", 10*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !res.Changed || res.Terminal || len(res.Task.Artifacts) != 1 || res.Task.Artifacts[0].Name != "report" {
-		t.Fatalf("artifact update not applied: %+v", res)
+	elapsed := time.Since(start)
+	if !res.Changed || res.Terminal || res.TimedOut || len(res.Task.Artifacts) != 1 || res.Task.Artifacts[0].Name != "report" {
+		t.Fatalf("artifact-only wait must settle as Changed with the artifact: %+v", res)
+	}
+	if elapsed < streamSettleGrace || elapsed > 5*time.Second {
+		t.Fatalf("expected a return after the settle grace (~%s), got %s", streamSettleGrace, elapsed)
 	}
 }
 

@@ -602,7 +602,7 @@ func parsePluginMCP(raw []byte, ctx pluginServerContext, taken map[string]bool) 
 			problems = append(problems, entryLabel+": name must be 1-64 chars of letters, digits, '_' or '-' (it becomes part of a tool name); skipped")
 			continue
 		}
-		if name == HTTPToolServerName {
+		if name == HTTPToolServerName || name == A2AToolServerName {
 			problems = append(problems, fmt.Sprintf("%s: name %q is reserved; skipped", entryLabel, name))
 			continue
 		}

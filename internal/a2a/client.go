@@ -34,6 +34,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -65,6 +66,14 @@ const (
 	// streamHeaderTimeout bounds how long a peer may take to answer the
 	// subscription's response headers before the stream starts.
 	streamHeaderTimeout = 30 * time.Second
+	// streamSettleGrace is how long WaitForUpdate keeps reading after an
+	// artifact (or message) event before returning it. Servers emit a task's
+	// artifacts and THEN its terminal status, back to back (fleet's own does:
+	// "artifacts first, then the terminal status — generation order"), so
+	// returning on the artifact alone would hand the caller a WORKING snapshot
+	// with finished artifacts and cost it a second wait for the status that
+	// was milliseconds behind.
+	streamSettleGrace = time.Second
 )
 
 // ClientOptions tunes NewClient.
@@ -298,7 +307,12 @@ func (c *Client) WaitForUpdate(ctx context.Context, id wire.TaskID, wait time.Du
 		return WaitResult{Task: t, Terminal: t.Status.State.Terminal()}, nil
 	}
 
-	res, err := readEventStream(ctx, resp.Body)
+	// After the first artifact/message event the read is bounded by the
+	// settle grace instead of the caller's wait: cancelling the request
+	// context is what unblocks the body read.
+	var settleOnce sync.Once
+	armSettle := func() { settleOnce.Do(func() { time.AfterFunc(streamSettleGrace, cancel) }) }
+	res, err := readEventStream(ctx, resp.Body, armSettle)
 	if err != nil {
 		return WaitResult{}, err
 	}
@@ -315,12 +329,15 @@ func (c *Client) WaitForUpdate(ctx context.Context, id wire.TaskID, wait time.Du
 	return res, nil
 }
 
-// readEventStream consumes SSE frames until the first change after the
-// opening snapshot, a terminal state, the ctx deadline, or stream close.
-// Each `data:` payload is a full JSON-RPC Response envelope whose result is a
-// StreamResponse oneof (the spec's streaming binding, and what fleet's own
-// server emits); `:` comment lines are keepalives.
-func readEventStream(ctx context.Context, body io.Reader) (WaitResult, error) {
+// readEventStream consumes SSE frames until a status update after the opening
+// snapshot, a terminal state, the ctx deadline, or stream close. An artifact
+// or message event does not end the read by itself: it arms the settle grace
+// (armSettle) so a status update emitted right behind it lands in the same
+// result, and the read then ends when the grace expires. Each `data:` payload
+// is a full JSON-RPC Response envelope whose result is a StreamResponse oneof
+// (the spec's streaming binding, and what fleet's own server emits); `:`
+// comment lines are keepalives.
+func readEventStream(ctx context.Context, body io.Reader, armSettle func()) (WaitResult, error) {
 	var res WaitResult
 	limited := &countingReader{r: io.LimitReader(body, maxStreamBytes)}
 	reader := bufio.NewReaderSize(limited, 64<<10)
@@ -340,6 +357,9 @@ func readEventStream(ctx context.Context, body io.Reader) (WaitResult, error) {
 					}
 					if done {
 						return res, nil
+					}
+					if res.Changed && armSettle != nil {
+						armSettle()
 					}
 				}
 			case line[0] == ':':
@@ -361,9 +381,12 @@ func readEventStream(ctx context.Context, body io.Reader) (WaitResult, error) {
 		}
 		if ctx.Err() != nil {
 			// The deadline IS the wait budget, not a failure: the caller gets the
-			// freshest snapshot and decides whether to wait again.
-			res.TimedOut = true
-			return res, nil //nolint:nilerr // intentional: ctx expiry ends the wait with the last snapshot
+			// freshest snapshot and decides whether to wait again. After a
+			// change the deadline is the settle grace, not a timeout.
+			if !res.Changed {
+				res.TimedOut = true
+			}
+			return res, nil
 		}
 		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 			if limited.n >= maxStreamBytes {
@@ -381,7 +404,9 @@ func readEventStream(ctx context.Context, body io.Reader) (WaitResult, error) {
 }
 
 // applyStreamFrame folds one decoded event into res; done reports that the
-// wait should end (a change after the snapshot, or a terminal state).
+// wait should end now (a status update after the snapshot, or a terminal
+// snapshot). Artifact and message events mark the result Changed but leave
+// the read open for the settle grace.
 func applyStreamFrame(res *WaitResult, frame []byte) (bool, error) {
 	var env clientResponse
 	if err := json.Unmarshal(frame, &env); err != nil {
@@ -415,11 +440,11 @@ func applyStreamFrame(res *WaitResult, frame []byte) (bool, error) {
 		}
 		upsertArtifact(res.Task, ev)
 		res.Changed = true
-		return true, nil
+		return false, nil // keep reading: the status update usually follows at once
 	case *wire.Message:
 		res.Message = ev
 		res.Changed = true
-		return true, nil
+		return false, nil
 	}
 	return false, nil
 }

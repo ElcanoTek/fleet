@@ -1286,12 +1286,17 @@ func Load(dir string) (*Bundle, error) {
 		}
 		b.PluginRoots = append(b.PluginRoots, filepath.Clean(r))
 	}
-	taken := map[string]bool{HTTPToolServerName: true}
+	taken := map[string]bool{HTTPToolServerName: true, A2AToolServerName: true}
 	for i := range b.MCPCatalog {
 		taken[b.MCPCatalog[i].Name] = true
 	}
 	for i := range b.HTTPTools {
 		taken[b.HTTPTools[i].Name] = true
+	}
+	// a2a peers (#1368) share the tool namespace too: a plugin server named
+	// like a peer would shadow its mcp__a2a_<peer>_* tools in the roster.
+	for i := range b.A2APeers {
+		taken[b.A2APeers[i].Name] = true
 	}
 	pl := loadPlugins(abs, m.PluginRoots, taken)
 	b.Plugins = pl.plugins
