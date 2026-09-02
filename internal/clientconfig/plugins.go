@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -66,14 +67,18 @@ import (
 // must resolve (after symlinks) inside the plugin root — an escaping path is
 // rejected at the narrowest boundary (plugin / component / skill / entry).
 //
-// Honest scope: fleet reads NOTHING from the `com.elcanotek.fleet` extension
-// namespace yet (it is reserved, and documented as such), fleet's own
-// `${FLEET_WORKSPACE}` / `${FLEET_TASK_ID}` spawn-time tokens are still
-// substituted in a plugin server's env values (a documented deviation from
-// the spec's "no other expansion" rule — see docs/AGENT-PLUGINS.md), and there
-// is no `tools:` allowlist for a plugin server because the portable format
-// has no field for one; govern its tools through `agent_policy` as for any
-// server.
+// The portable format has no field for fleet's per-server governance knobs
+// (a `tools:` allowlist, a `probe:` canary, the Optional-server metadata), so
+// those live where the spec puts client-specific data: the reverse-domain
+// extension namespace `com.elcanotek.fleet` in plugin.json (spec §8.1), read
+// by parseFleetExtension below and applied to the matching mcp.json entries.
+// Every other client ignores that namespace, so a plugin carrying it stays
+// portable.
+//
+// Honest scope: fleet's own `${FLEET_WORKSPACE}` / `${FLEET_TASK_ID}`
+// spawn-time tokens are still substituted in a plugin server's env values (a
+// documented deviation from the spec's "no other expansion" rule — see
+// docs/AGENT-PLUGINS.md); a portable plugin has no reason to write them.
 
 // Canonical schema identifiers for Agent Plugins 1.0.0 — the ONLY versions
 // this loader recognizes. Per spec §5.2 a client selects its locally supported
@@ -86,11 +91,239 @@ const (
 // PluginsDirName is the fixed bundle subdirectory scanned for plugins.
 const PluginsDirName = "plugins"
 
-// FleetPluginExtensionNamespace is the reverse-domain namespace fleet reserves
-// for its own manifest extension data / extension directory (spec §8). Nothing
-// is read from it yet; it is declared so a future fleet-specific field lands
-// under a stable name rather than a portable one.
+// FleetPluginExtensionNamespace is the reverse-domain namespace fleet owns in
+// a plugin.json `extensions` object (spec §8.1). Its shape is fleet's to
+// define; see fleetServerOverride for what is read. No extension DIRECTORY
+// (`com.elcanotek.fleet/` at the plugin root) is read.
 const FleetPluginExtensionNamespace = "com.elcanotek.fleet"
+
+// fleetServerOverride is what the com.elcanotek.fleet extension may say about
+// one mcp.json server, keyed by the server's mcp.json name under
+// `extensions["com.elcanotek.fleet"].mcp_servers`:
+//
+//	"extensions": {
+//	  "com.elcanotek.fleet": {
+//	    "mcp_servers": {
+//	      "validator": {
+//	        "tools": ["validate", "explain"],          // per-server allowlist (ServerDef.Tools)
+//	        "probe": {"tool": "validate", "contains": "ok", "args": {}},  // fleet mcp test --deep canary
+//	        "optional": true, "enabled_by_default": false, "beta": false,
+//	        "display_name": "…", "description": "…", "data_sources": ["s3://…"],
+//	        "disabled": false                          // true drops the entry entirely
+//	      }
+//	    }
+//	  }
+//	}
+//
+// These are exactly the manifest ServerDef knobs a plugin author (or the
+// bundle operator vendoring a third-party plugin) can set without a
+// credential: no env, no gate, no account vars — the portable format forbids
+// secrets and fleet does not smuggle them in through the side door. Because
+// this is fleet's own namespace, its failure handling is fleet's to choose,
+// and it is lenient to match the top level: an unknown key is reported and
+// ignored; a wrong-typed override is reported and ignored for THAT server;
+// nothing here can reject the plugin.
+type fleetServerOverride struct {
+	Tools            []string
+	Probe            *ProbeDef
+	Optional         *bool
+	EnabledByDefault *bool
+	Beta             *bool
+	DisplayName      *string
+	Description      *string
+	DataSources      []string
+	Disabled         bool
+}
+
+var fleetServerOverrideFields = map[string]bool{
+	"tools": true, "probe": true, "optional": true, "enabled_by_default": true, "beta": true,
+	"display_name": true, "description": true, "data_sources": true, "disabled": true,
+}
+
+// parseFleetExtension decodes extensions["com.elcanotek.fleet"]. It never
+// rejects the plugin: every defect is a problem string and the affected
+// override (or the whole extension, for a malformed top level) is ignored.
+func parseFleetExtension(raw json.RawMessage) (map[string]fleetServerOverride, []string) {
+	prefix := "extensions[" + FleetPluginExtensionNamespace + "]"
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &top); err != nil || top == nil {
+		return nil, []string{prefix + " must be an object; ignored"}
+	}
+	var problems []string
+	for k := range top {
+		if k != "mcp_servers" {
+			problems = append(problems, fmt.Sprintf("%s: unknown key %q ignored", prefix, k))
+		}
+	}
+	rawServers, ok := top["mcp_servers"]
+	if !ok {
+		return nil, problems
+	}
+	var servers map[string]json.RawMessage
+	if err := json.Unmarshal(rawServers, &servers); err != nil || servers == nil {
+		return nil, append(problems, prefix+".mcp_servers must be an object keyed by mcp.json server name; ignored")
+	}
+	names := make([]string, 0, len(servers))
+	for n := range servers {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	out := make(map[string]fleetServerOverride, len(names))
+	for _, name := range names {
+		label := fmt.Sprintf("%s.mcp_servers[%q]", prefix, name)
+		ov, oproblems, err := parseFleetServerOverride(label, servers[name])
+		problems = append(problems, oproblems...)
+		if err != nil {
+			problems = append(problems, fmt.Sprintf("%s: %v; override ignored", label, err))
+			continue
+		}
+		out[name] = ov
+	}
+	return out, problems
+}
+
+// parseFleetServerOverride decodes one server's override object.
+func parseFleetServerOverride(label string, raw json.RawMessage) (fleetServerOverride, []string, error) {
+	var ov fleetServerOverride
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil || fields == nil {
+		return ov, nil, errors.New("must be an object")
+	}
+	var problems []string
+	for k := range fields {
+		if !fleetServerOverrideFields[k] {
+			problems = append(problems, fmt.Sprintf("%s: unknown key %q ignored", label, k))
+		}
+	}
+	strList := func(key string) ([]string, error) {
+		rawV, ok := fields[key]
+		if !ok {
+			return nil, nil
+		}
+		var l []string
+		if err := json.Unmarshal(rawV, &l); err != nil {
+			return nil, fmt.Errorf("%q must be an array of strings", key)
+		}
+		return l, nil
+	}
+	boolPtr := func(key string) (*bool, error) {
+		rawV, ok := fields[key]
+		if !ok {
+			return nil, nil
+		}
+		var b bool
+		if err := json.Unmarshal(rawV, &b); err != nil {
+			return nil, fmt.Errorf("%q must be a boolean", key)
+		}
+		return &b, nil
+	}
+	strPtr := func(key string) (*string, error) {
+		rawV, ok := fields[key]
+		if !ok {
+			return nil, nil
+		}
+		var str string
+		if err := json.Unmarshal(rawV, &str); err != nil {
+			return nil, fmt.Errorf("%q must be a string", key)
+		}
+		return &str, nil
+	}
+	var err error
+	if ov.Tools, err = strList("tools"); err != nil {
+		return ov, problems, err
+	}
+	if ov.DataSources, err = strList("data_sources"); err != nil {
+		return ov, problems, err
+	}
+	if ov.Optional, err = boolPtr("optional"); err != nil {
+		return ov, problems, err
+	}
+	if ov.EnabledByDefault, err = boolPtr("enabled_by_default"); err != nil {
+		return ov, problems, err
+	}
+	if ov.Beta, err = boolPtr("beta"); err != nil {
+		return ov, problems, err
+	}
+	disabled, err := boolPtr("disabled")
+	if err != nil {
+		return ov, problems, err
+	}
+	ov.Disabled = disabled != nil && *disabled
+	if ov.DisplayName, err = strPtr("display_name"); err != nil {
+		return ov, problems, err
+	}
+	if ov.Description, err = strPtr("description"); err != nil {
+		return ov, problems, err
+	}
+	if rawP, ok := fields["probe"]; ok {
+		var pf map[string]json.RawMessage
+		if err := json.Unmarshal(rawP, &pf); err != nil || pf == nil {
+			return ov, problems, errors.New("\"probe\" must be an object")
+		}
+		probe := &ProbeDef{}
+		for k, v := range pf {
+			switch k {
+			case "tool":
+				if err := json.Unmarshal(v, &probe.Tool); err != nil {
+					return ov, problems, errors.New("\"probe.tool\" must be a string")
+				}
+			case "contains":
+				if err := json.Unmarshal(v, &probe.Contains); err != nil {
+					return ov, problems, errors.New("\"probe.contains\" must be a string")
+				}
+			case "args":
+				var args map[string]interface{}
+				if err := json.Unmarshal(v, &args); err != nil || args == nil {
+					return ov, problems, errors.New("\"probe.args\" must be an object")
+				}
+				probe.Args = args
+			default:
+				problems = append(problems, fmt.Sprintf("%s: unknown key %q in probe ignored", label, k))
+			}
+		}
+		if strings.TrimSpace(probe.Tool) == "" {
+			return ov, problems, errors.New("\"probe.tool\" is required")
+		}
+		ov.Probe = probe
+	}
+	return ov, problems, nil
+}
+
+// applyFleetOverride copies one override onto the translated ServerDef. The
+// probe is held to the same rule Bundle.validate applies to manifest servers:
+// it must name a tool inside the allowlist when one is set.
+func applyFleetOverride(sd *ServerDef, ov fleetServerOverride, label string, problems *[]string) {
+	if tools := normalizeToolList(ov.Tools); len(tools) > 0 {
+		sd.Tools = tools
+	}
+	if ov.Probe != nil {
+		tool := strings.TrimSpace(ov.Probe.Tool)
+		if len(sd.Tools) > 0 && !slices.Contains(sd.Tools, tool) {
+			*problems = append(*problems, fmt.Sprintf("%s: probe.tool %q is not in the server's tools allowlist; probe ignored", label, tool))
+		} else {
+			probe := *ov.Probe
+			sd.Probe = &probe
+		}
+	}
+	if ov.Optional != nil {
+		sd.Optional = *ov.Optional
+	}
+	if ov.EnabledByDefault != nil {
+		sd.EnabledByDefault = *ov.EnabledByDefault
+	}
+	if ov.Beta != nil {
+		sd.Beta = *ov.Beta
+	}
+	if ov.DisplayName != nil && strings.TrimSpace(*ov.DisplayName) != "" {
+		sd.DisplayName = strings.TrimSpace(*ov.DisplayName)
+	}
+	if ov.Description != nil && strings.TrimSpace(*ov.Description) != "" {
+		sd.Description = strings.TrimSpace(*ov.Description)
+	}
+	if len(ov.DataSources) > 0 {
+		sd.DataSources = append([]string(nil), ov.DataSources...)
+	}
+}
 
 // pluginDataDirName is the per-box state subdirectory that holds each plugin's
 // persistent PLUGIN_DATA directory (spec §9.1), keyed by plugin name so it
@@ -474,6 +707,17 @@ func loadOnePlugin(label, dir string, taken map[string]bool) (Plugin, []ServerDe
 	}
 
 	plugin := Plugin{Name: pm.Name, Version: pm.Version, Description: pm.Description, Dir: root}
+	// fleet's own extension namespace (spec §8.1): per-server governance knobs
+	// the portable format has no field for. Lenient by design — see
+	// fleetServerOverride.
+	var overrides map[string]fleetServerOverride
+	if rawExt, ok := pm.Extensions[FleetPluginExtensionNamespace]; ok {
+		var eproblems []string
+		overrides, eproblems = parseFleetExtension(rawExt)
+		for _, ep := range eproblems {
+			problems = append(problems, fmt.Sprintf("%s/plugin.json: %s", label, ep))
+		}
+	}
 	dataDir, dataErr := pluginDataDir(pm.Name)
 	if dataErr != nil {
 		problems = append(problems, fmt.Sprintf("%s: PLUGIN_DATA directory unavailable (%v); stdio MCP servers are skipped", label, dataErr))
@@ -481,43 +725,15 @@ func loadOnePlugin(label, dir string, taken map[string]bool) (Plugin, []ServerDe
 		plugin.DataDir = dataDir
 	}
 
-	// Skills (spec §7.1): fixed location skills/, immediate children only.
-	var overlay *skillOverlay
+	// Skills (spec §7.1): fixed location skills/, immediate children only. The
+	// overlay is recorded for every plugin (even one with no skills/ yet) so
+	// Bundle.Skills can rediscover folders on read — a skill added to a plugin
+	// after boot joins the roster like a bundle skill does.
 	skillsPath := filepath.Join(root, "skills")
-	if st, err := os.Stat(skillsPath); err == nil {
-		switch {
-		case !st.IsDir():
-			problems = append(problems, fmt.Sprintf("%s/skills exists but is not a directory; skills disabled for this plugin", label))
-		default:
-			if _, err := resolveContained(skillsPath, root); err != nil {
-				problems = append(problems, fmt.Sprintf("%s/skills: %v; skills disabled for this plugin", label, err))
-				break
-			}
-			skills, sproblems := ReadSkills(skillsPath)
-			for _, sp := range sproblems {
-				problems = append(problems, fmt.Sprintf("%s/%s", label, sp))
-			}
-			ov := &skillOverlay{Plugin: pm.Name, Root: root, SkillsDir: skillsPath}
-			for _, sk := range skills {
-				resolved, err := resolveContained(filepath.Join(skillsPath, sk.Dir, "SKILL.md"), root)
-				if err != nil {
-					problems = append(problems, fmt.Sprintf("%s/skills/%s: %v; skill skipped", label, sk.Dir, err))
-					continue
-				}
-				if st, err := os.Stat(resolved); err != nil || !st.Mode().IsRegular() {
-					problems = append(problems, fmt.Sprintf("%s/skills/%s: SKILL.md is not a regular file; skill skipped", label, sk.Dir))
-					continue
-				}
-				ov.Names = append(ov.Names, sk.Dir)
-			}
-			if len(ov.Names) > 0 {
-				overlay = ov
-				plugin.Skills = append([]string(nil), ov.Names...)
-			}
-		}
-	} else if !os.IsNotExist(err) {
-		problems = append(problems, fmt.Sprintf("%s/skills: %v; skills disabled for this plugin", label, err))
-	}
+	names, sproblems := discoverPluginSkills(label, root, skillsPath)
+	problems = append(problems, sproblems...)
+	overlay := &skillOverlay{Plugin: pm.Name, Root: root, SkillsDir: skillsPath, Names: names}
+	plugin.Skills = append([]string(nil), names...)
 
 	// MCP servers (spec §7.2): fixed location mcp.json.
 	var servers []ServerDef
@@ -531,7 +747,7 @@ func loadOnePlugin(label, dir string, taken map[string]bool) (Plugin, []ServerDe
 		} else if raw, err := os.ReadFile(realMCP); err != nil { // #nosec G304 — bundle content, containment checked.
 			problems = append(problems, fmt.Sprintf("%s/mcp.json: %v; MCP disabled for this plugin", label, err))
 		} else {
-			ctx := pluginServerContext{label: label, plugin: pm.Name, root: root, dataDir: dataDir, dataErr: dataErr}
+			ctx := pluginServerContext{label: label, plugin: pm.Name, root: root, dataDir: dataDir, dataErr: dataErr, overrides: overrides}
 			var mproblems []string
 			servers, mproblems = parsePluginMCP(raw, ctx, taken)
 			problems = append(problems, mproblems...)
@@ -548,11 +764,63 @@ func loadOnePlugin(label, dir string, taken map[string]bool) (Plugin, []ServerDe
 
 // pluginServerContext is what one mcp.json entry needs from its plugin.
 type pluginServerContext struct {
-	label   string
-	plugin  string
-	root    string
-	dataDir string
-	dataErr error
+	label     string
+	plugin    string
+	root      string
+	dataDir   string
+	dataErr   error
+	overrides map[string]fleetServerOverride
+}
+
+// discoverPluginSkills lists the well-formed, contained skill folders under a
+// plugin's skills/ dir (spec §7.1) in roster order. An absent skills/ is valid
+// absence (no names, no problems); a skills path that is not a directory or
+// escapes the root disables the component type with a report. Load calls it
+// with reporting; Bundle.Skills calls it again on every read, so the roster
+// follows the plugin's folder set without a restart.
+func discoverPluginSkills(label, root, skillsPath string) (names []string, problems []string) {
+	st, err := os.Stat(skillsPath)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			problems = append(problems, fmt.Sprintf("%s/skills: %v; skills disabled for this plugin", label, err))
+		}
+		return nil, problems
+	}
+	if !st.IsDir() {
+		return nil, []string{fmt.Sprintf("%s/skills exists but is not a directory; skills disabled for this plugin", label)}
+	}
+	if _, err := resolveContained(skillsPath, root); err != nil {
+		return nil, []string{fmt.Sprintf("%s/skills: %v; skills disabled for this plugin", label, err)}
+	}
+	skills, sproblems := ReadSkills(skillsPath)
+	for _, sp := range sproblems {
+		problems = append(problems, fmt.Sprintf("%s/%s", label, sp))
+	}
+	for _, sk := range skills {
+		if _, ok := containedRegularFile(filepath.Join(skillsPath, sk.Dir, "SKILL.md"), root); !ok {
+			problems = append(problems, fmt.Sprintf("%s/skills/%s: SKILL.md is not a regular file inside the plugin root; skill skipped", label, sk.Dir))
+			continue
+		}
+		names = append(names, sk.Dir)
+	}
+	return names, problems
+}
+
+// livePluginSkillOverlays re-lists every plugin's skill folders from disk so a
+// Skills() read reflects folders added or removed since Load. Discovery
+// problems are not re-reported here (Load already did, once); a plugin whose
+// skills/ became invalid simply contributes nothing until fixed.
+func (b *Bundle) livePluginSkillOverlays() []skillOverlay {
+	if len(b.pluginSkillOverlays) == 0 {
+		return nil
+	}
+	out := make([]skillOverlay, 0, len(b.pluginSkillOverlays))
+	for _, ov := range b.pluginSkillOverlays {
+		fresh := ov
+		fresh.Names, _ = discoverPluginSkills(ov.Plugin, ov.Root, ov.SkillsDir)
+		out = append(out, fresh)
+	}
+	return out
 }
 
 // parsePluginMCP validates mcp.json in the spec's two stages: the closed top
@@ -596,6 +864,7 @@ func parsePluginMCP(raw []byte, ctx pluginServerContext, taken map[string]bool) 
 	sort.Strings(names)
 	var out []ServerDef
 	var problems []string
+	usedOverrides := map[string]bool{}
 	for _, name := range names {
 		entryLabel := fmt.Sprintf("%s/mcp.json: server %q", ctx.label, name)
 		if !pluginServerNameRe.MatchString(name) {
@@ -611,12 +880,30 @@ func parsePluginMCP(raw []byte, ctx pluginServerContext, taken map[string]bool) 
 			problems = append(problems, fmt.Sprintf("%s: %v; skipped", entryLabel, err))
 			continue
 		}
+		if ov, ok := ctx.overrides[name]; ok {
+			usedOverrides[name] = true
+			if ov.Disabled {
+				// An explicit operator choice, not a defect: nothing to report.
+				continue
+			}
+			applyFleetOverride(&sd, ov, entryLabel, &problems)
+		}
 		if taken[name] {
 			problems = append(problems, fmt.Sprintf("%s: collides with an MCP server or http tool of the same name already in the catalog; skipped (the manifest and earlier plugins win)", entryLabel))
 			continue
 		}
 		taken[name] = true
 		out = append(out, sd)
+	}
+	unused := make([]string, 0, len(ctx.overrides))
+	for name := range ctx.overrides {
+		if !usedOverrides[name] {
+			unused = append(unused, name)
+		}
+	}
+	sort.Strings(unused)
+	for _, name := range unused {
+		problems = append(problems, fmt.Sprintf("%s/plugin.json: extensions[%s].mcp_servers[%q] names a server mcp.json does not declare (or one that was skipped as invalid); ignored", ctx.label, FleetPluginExtensionNamespace, name))
 	}
 	return out, problems
 }
@@ -943,11 +1230,11 @@ func (b *Bundle) SkillOrigin(name string) SkillOrigin {
 			return SkillOrigin{Source: "bundle"}
 		}
 	}
+	// Live, like the roster itself: the first plugin (by name) whose skills/
+	// holds a contained SKILL.md for the name owns it.
 	for _, ov := range b.pluginSkillOverlays {
-		for _, n := range ov.Names {
-			if n == name {
-				return SkillOrigin{Source: "plugin", Plugin: ov.Plugin}
-			}
+		if _, ok := containedRegularFile(filepath.Join(ov.SkillsDir, name, "SKILL.md"), ov.Root); ok {
+			return SkillOrigin{Source: "plugin", Plugin: ov.Plugin}
 		}
 	}
 	return SkillOrigin{Source: "builtin"}
