@@ -50,7 +50,11 @@ import {
 } from "./history";
 import { type ModelPrices } from "@/app/shared/lib/modelCost";
 import { mcpAccountOverrides } from "./mcpAccounts";
-import { enabledOptionalMcpServerNames } from "./mcpSelection";
+import {
+  droppedOptionalMcpServerNames,
+  enabledOptionalMcpServerNames,
+  reconcileMcpSelection,
+} from "./mcpSelection";
 import { classifyBootstrapFailure } from "./bootstrapFailure";
 import { PENDING_CONV_KEY } from "./workspaceHref";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
@@ -142,13 +146,13 @@ export type PendingDeleteConversation = {
   title: string;
 };
 
-// What "Save to prompt library…" is aimed at. The conversation-level menu item
-// sets just id/title (distill the whole chat); the per-message action adds the
-// reply's persisted id so the distillation stops at that exchange.
+// What "Save as workflow…" is aimed at. Both entry points — the conversation
+// kebab and the action under a finished reply — save the WHOLE chat: the value
+// of a good session is the procedure it worked out, and a single exchange
+// keeps the answer while losing the method.
 export type PromptSaveTarget = {
   id: string;
   title: string;
-  upToMessageId?: number;
 };
 
 type PersonasResponse = {
@@ -537,11 +541,8 @@ export function ChatExperience({
   const [backendUnreachable, setBackendUnreachable] = useState(false);
   const [pendingDeleteConversation, setPendingDeleteConversation] =
     useState<PendingDeleteConversation | null>(null);
-  // "Save to prompt library…" target: while set, SavePromptDialog distills
-  // this conversation into an editable prompt-library draft. upToMessageId is
-  // set when the user saved from a specific assistant reply (the "Save as
-  // prompt" action under a message) so the distillation stops there instead of
-  // folding in whatever the chat moved on to.
+  // "Save as workflow…" target: while set, SavePromptDialog turns this
+  // conversation into an editable workflow-template draft.
   const [promptSaveTarget, setPromptSaveTarget] =
     useState<PromptSaveTarget | null>(null);
   // "Download chat…" target: while set, DownloadChatDialog offers the formats.
@@ -1698,11 +1699,28 @@ export function ChatExperience({
     await postMcpServerState(conversationId, nextServers, prev);
   };
 
+  // Reconciling the picker against what the server actually PERSISTED, not
+  // against the fact that it answered.
+  //
+  // handleConversationMCPServersSet intersects the requested names with its own
+  // catalog and drops anything it does not recognize — silently, and with a
+  // 200, by design ("the server's catalog is the authoritative whitelist"). It
+  // returns the surviving set as `enabled_optional`. Treating 2xx as success
+  // and keeping the optimistic state is how a connector ends up reading ON in
+  // the Tools picker while every turn runs without it: the system prompt's MCP
+  // roster has no `mcp_<name>_*` entry, so the agent correctly reports it has
+  // no such tools and tells the user to enable a connector they can see is
+  // already enabled. Both are truthful about different state, and nothing
+  // reconciles them short of a reload.
+  //
+  // The reconciliation itself lives in mcpSelection.ts with the rest of the
+  // selection rules, and is unit-tested there.
   const postMcpServerState = async (
     conversationId: string,
     next: MCPServerInfo[],
     prev: MCPServerInfo[],
   ) => {
+    const requested = enabledOptionalMcpServerNames(next);
     try {
       const response = await fetch(
         `/api/conversations/${encodeURIComponent(conversationId)}/mcp-servers`,
@@ -1710,13 +1728,36 @@ export function ChatExperience({
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            enabled_optional: enabledOptionalMcpServerNames(next),
+            enabled_optional: requested,
             accounts: mcpAccountOverrides(next),
           }),
         },
       );
       if (!response.ok) {
         setMcpServers(prev);
+        return;
+      }
+      const body = (await response.json()) as { enabled_optional?: unknown };
+      if (!Array.isArray(body.enabled_optional)) {
+        // No authoritative list came back (an older server, or a proxy that
+        // rewrote the body). Leave the optimistic state alone rather than
+        // clearing every toggle off a shape we did not understand.
+        return;
+      }
+      const persisted = body.enabled_optional.filter(
+        (n): n is string => typeof n === "string",
+      );
+      setMcpServers(reconcileMcpSelection(next, persisted));
+      const dropped = droppedOptionalMcpServerNames(requested, persisted);
+      if (dropped.length > 0) {
+        // The toggle visibly springing back is the user-facing signal; this is
+        // the operator's. A name reaching here is one the catalog does not
+        // know — a connector added or renamed in the bundle since boot is the
+        // usual cause, and `fleet mcp reload` is the usual fix.
+        console.error(
+          "connector selection was not persisted (unknown to the server catalog):",
+          dropped,
+        );
       }
     } catch {
       setMcpServers(prev);
@@ -2459,19 +2500,18 @@ export function ChatExperience({
     }
   };
 
-  // savePromptFromMessage backs the "Save as prompt" action under a finished
-  // assistant reply. Someone decides an interaction is worth keeping the
+  // savePromptFromMessage backs the "Save as workflow" action under a
+  // finished assistant reply. Someone decides a session was worth keeping the
   // moment they finish reading a good answer — so the affordance lives there,
-  // not only in a hover-revealed sidebar kebab. The reply's persisted id rides
-  // along so the draft is distilled from THIS exchange rather than from
-  // whatever the chat wandered into afterwards.
-  const savePromptFromMessage = (message: Message) => {
+  // not only in a hover-revealed sidebar kebab. It saves the WHOLE chat, same
+  // as the kebab item: the reply is where the user is standing, not the scope
+  // of what gets saved.
+  const savePromptFromMessage = () => {
     const id = activeConversationId;
     if (!id) return;
     setPromptSaveTarget({
       id,
       title: conversations.find((c) => c.id === id)?.title ?? "this chat",
-      upToMessageId: message.dbId,
     });
   };
 
@@ -4536,10 +4576,9 @@ export function ChatExperience({
 
         {promptSaveTarget ? (
           <SavePromptDialog
-            key={`${promptSaveTarget.id}:${promptSaveTarget.upToMessageId ?? ""}`}
+            key={promptSaveTarget.id}
             conversationId={promptSaveTarget.id}
             conversationTitle={promptSaveTarget.title}
-            upToMessageId={promptSaveTarget.upToMessageId}
             onClose={() => setPromptSaveTarget(null)}
           />
         ) : null}

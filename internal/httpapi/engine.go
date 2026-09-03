@@ -50,10 +50,10 @@ type turnEngine interface {
 	// cron + name) from a conversation transcript (#455), avoiding names in
 	// existingNames. Returns an error on failure (user-initiated action).
 	SuggestRecurringTask(ctx context.Context, transcript string, existingNames []string) (*agent.RecurringTaskProposal, error)
-	// SuggestLibraryPrompt distills a conversation transcript into a
-	// prompt-library draft (name + description + content) the user reviews
-	// before saving. Returns an error on failure (user-initiated action).
-	SuggestLibraryPrompt(ctx context.Context, transcript string) (*agent.LibraryPromptDraft, error)
+	// SuggestLibraryPrompt turns a conversation into a reusable WORKFLOW
+	// TEMPLATE draft (name + description + content) the user reviews before
+	// saving. Returns an error on failure (user-initiated action).
+	SuggestLibraryPrompt(ctx context.Context, in agent.LibraryPromptInput) (*agent.LibraryPromptDraft, error)
 	// MCPBroker and MCPCatalog expose the call seam plus public discovery data
 	// for out-of-band approval execution without requiring a concrete,
 	// credentialed MCP client in the HTTP process.

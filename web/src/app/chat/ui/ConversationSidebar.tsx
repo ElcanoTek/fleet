@@ -711,7 +711,7 @@ function ConversationKebab({
             close();
           }}
         >
-          Save to prompt library…
+          Save as workflow…
         </MenuItem>
         {isShared ? (
           <>

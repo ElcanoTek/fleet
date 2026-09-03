@@ -15,6 +15,52 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **The Tools picker no longer shows a connector as ON that no turn will
+  load.** `POST /conversations/{id}/mcp-servers` intersects the requested
+  connectors with its own catalog and silently drops any name it does not
+  recognize — deliberately, and with a `200`, returning the surviving set as
+  `enabled_optional`. The chat client only reverted its optimistic state on a
+  non-2xx, so it never read that list back: a dropped connector kept reading
+  ON in the picker while every turn ran without it. The user then saw the
+  agent insist it had no `mcp_<name>_*` tools and ask them to enable a
+  connector they could see was already enabled — both statements true, about
+  different state, with nothing reconciling them short of a reload. The client
+  now folds the server's authoritative list back into its rows
+  (`reconcileMcpSelection`), matching case-insensitively because the server
+  canonicalizes to lowercase, and leaving always-on rows alone. A connector
+  that does not stick springs visibly back off, and the dropped names are
+  logged for the operator — usually a connector added or renamed in the bundle
+  since boot, which `fleet mcp reload` resolves.
+
+### Changed
+
+- **"Save to prompt library" is now "Save as workflow", and saves the recipe
+  rather than the question.** The synthesizer used to be told to extract "only
+  the crux" of the ask and to stay concrete "rather than inventing
+  placeholders", so a session that spent an afternoon working out a procedure
+  was saved as one hardcoded question that re-ran that same analysis. Worse, it
+  could not have done better: the transcript it was given kept only the
+  user/assistant text turns, so every tool call was dropped before it ever saw
+  them — on the conversation this was rebuilt against, 110 of 289 history
+  entries, which is precisely the method. It now receives the tool sequence
+  (consecutive calls collapsed with a count, failures kept as pitfalls,
+  successful results omitted as bulk) plus the conversation's persona and
+  enabled connectors, and is asked for a **workflow template**: objective,
+  inputs as `[BRACKETED PLACEHOLDERS]`, the numbered steps with the tools each
+  one used, the output shape, and the notes. This run's client names, dates and
+  targets are generalized; the method stays concrete. Over-long transcripts now
+  keep **both ends** rather than only the tail, since a workflow's opening
+  turns carry its objective and inputs. The synthesis call is also metered
+  (`library_prompt_synthesis`), which it previously was not.
+- **Saving from a reply now saves the whole chat.** The per-reply action
+  shipped scoping the synthesis to that exchange; that was the wrong call — it
+  keeps the answer and loses the procedure that produced it. Both entry points
+  (the reply footer and the conversation kebab) now save the entire
+  conversation. The reply is where the reader is standing when they decide the
+  session was worth keeping, not the scope of what gets saved.
+
+### Fixed
+
 - **A finished chat no longer keeps a "Thinking…" spinner under it.** After a
   queued follow-up drained, the transcript could keep an empty assistant bubble
   stuck mid-flight below the completed answer — a spinner that never resolved.
@@ -521,6 +567,20 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **A bring-your-own OAuth client can no longer be added without the secret
+  its vendor requires** (#1006). Verifying GitHub's official MCP server
+  surfaced the trap: the guided form called the client secret optional, GitHub
+  accepts no public clients, and a secretless add sailed through GitHub's
+  consent screen into a token exchange GitHub refused — reported to the user
+  only as "authorization_failed". Two layers close it. `remotemcp.AddServer`
+  now refuses a manual `client_id` with no secret unless the authorization
+  server's metadata lists `none` in `token_endpoint_auth_methods_supported`
+  (an omitted list means `client_secret_basic`, RFC 8414 §2) — a 422 with an
+  actionable message, before anyone is sent to a consent screen. And the
+  catalog gains `client_secret: required` (manual entries only; set on
+  `github`), which makes the form's secret field mandatory and its label
+  honest. GitHub's setup hint now names the field GitHub actually shows
+  ("Redirect URI") and says the secret is required.
 - **CI no longer goes red because the Go module proxy hiccupped.** The live
   Playwright lane on `main` failed with `[e2e-boot] FATAL: go build fleet
   failed` after a single module zip (`google.golang.org/api`) came back
