@@ -13,6 +13,24 @@ prior versions are listed because none have shipped.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A finished chat no longer keeps a "Thinking…" spinner under it.** After a
+  queued follow-up drained, the transcript could keep an empty assistant bubble
+  stuck mid-flight below the completed answer — a spinner that never resolved.
+  `followQueueDrain` re-reads the queue milliseconds after a turn ends, and
+  both that snapshot and the `/inflight` probe can still describe the turn as
+  running, so the follower was sent back at a turn already on screen.
+  `reattachToConv` found no live slot to reuse, appended a fresh `thinking`
+  one, and then dropped every replayed event through the Last-Event-ID dedup
+  because they had all been applied the first time — leaving a slot nothing
+  could ever fill and no terminal event would clear. It now declines to
+  reattach to a turn whose events it has already applied when the conversation
+  already ends in a completed assistant message, which removes the slot at the
+  source rather than relying on `settleStreamedSlot` to erase it (that cleanup
+  loses the race whenever another attach is in flight, which is why the orphan
+  appeared intermittently rather than every time).
+
 ### Added
 
 - **`fleet cleanup` reports leftover connector output in the bundle checkout.**

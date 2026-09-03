@@ -79,6 +79,10 @@ type Harness = {
   loadConversationCalls: string[];
   queueReads: number;
   inflightProbes: number;
+  // How many times a stream was actually opened. The count matters on its own:
+  // re-opening a stream for a turn already on screen is what creates an
+  // un-fillable "thinking" slot, whether or not the cleanup wins the race.
+  streamAttaches: number;
 };
 
 const makeHarness = (opts: {
@@ -236,6 +240,9 @@ const makeHarness = (opts: {
     },
     get inflightProbes() {
       return probes;
+    },
+    get streamAttaches() {
+      return attaches;
     },
   };
 };
@@ -428,6 +435,66 @@ describe("a direct submission the server queued instead of running", () => {
     expect(result.current.queuedInputs.get(CONV)?.map((i) => i.id)).toEqual(["q1"]);
   });
 
+  // The orphan this whole describe exists to prevent, pinned at the point where
+  // it is deterministic rather than as the ~5% race it surfaces as in CI.
+  //
+  // followQueueDrain loops after a successful reattach, and the queue snapshot it
+  // re-reads can still show the row it just streamed as "running" — that read
+  // happens milliseconds after the turn ended and the server's view lags. So it
+  // goes back into reattachToConv for a turn ALREADY on screen. The probe still
+  // answers inflight:true for the same turn_id, so the finished-turn guard (which
+  // only fires on inflight:false) is bypassed, and the reattach appends a fresh
+  // "thinking" slot. Every replayed event is then dropped by the Last-Event-ID
+  // dedup, because we already applied all of them, so nothing ever lands in that
+  // slot and no terminal event clears it.
+  //
+  // settleStreamedSlot usually erases the slot on the way out — which is why this
+  // only shows up sometimes. It stops erasing it when another attach is in flight
+  // concurrently, because loadConversation short-circuits while the conversation
+  // still looks attached, and the user is left with a spinner under a finished
+  // answer.
+  //
+  // Asserting on the stream count rather than on the leftover slot is what makes
+  // this deterministic: the second stream is the defect, and the cleanup that
+  // sometimes hides it is not part of the contract.
+  it("does not re-stream a turn already on screen when the queue snapshot lags", async () => {
+    const h = makeHarness({
+      initial: answeredTranscript(),
+      persisted: drainedHistory(),
+      // The lag: the row still reads "running" on the re-read after its turn
+      // has been streamed to completion, and only then goes away.
+      queue: [[queuedRow("q1", "running")], [queuedRow("q1", "running")], []],
+      // The server has not caught up either — same turn, still inflight.
+      inflight: [{ inflight: true, turn_id: "t2" }],
+      streamBodies: [
+        () =>
+          closedStream([
+            sse(1, "turn.started", { turn_id: "t2", input_id: "q1", queued: true }),
+            sse(2, "user.message", { text: "keep it clear and concise" }),
+            sse(3, "text.delta", { text: "Rewritten for the client." }),
+            sse(4, "turn.completed", {}),
+          ]),
+      ],
+    });
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    await result.current.followQueueDrain(CONV);
+
+    // The drained turn is on screen exactly once...
+    expect(h.store[CONV].map((m) => m.content)).toEqual([
+      "run the analysis",
+      "Here is the analysis.",
+      "keep it clear and concise",
+      "Rewritten for the client.",
+    ]);
+    // ...and the follower opened ONE stream to put it there. A second open is
+    // the bug: it can only append a slot whose every event is already applied.
+    expect(h.streamAttaches).toBe(1);
+    expect(h.store[CONV].some((m) => m.state === "thinking" || m.state === "streaming")).toBe(
+      false,
+    );
+  });
+
   it("follows the drain and renders the turn it eventually runs", async () => {
     const h = makeHarness({
       initial: answeredTranscript(),
@@ -455,11 +522,15 @@ describe("a direct submission the server queued instead of running", () => {
     // follow schedule: queueDrainFollowDelaysMs starts at 250ms, and only after
     // that first attempt does the drain fetch, reattach, stream and withdraw
     // the optimistic pair. vi.waitFor's default 1s deadline is enough on an
-    // idle machine and not enough on a loaded CI runner, where the store is
-    // still holding the un-withdrawn pair (5, not 4) when the deadline expires.
-    // An explicit deadline past the whole schedule fixes the flake without
-    // weakening anything: the assertion below is unchanged and still demands
-    // the store settle to exactly the four expected messages.
+    // idle machine and not enough on a loaded CI runner.
+    //
+    // The deadline below must stay UNDER this test's own timeout (the third
+    // argument to it(), raised for exactly this reason). vitest's default
+    // testTimeout is 5s and the repo overrides it nowhere, so a waitFor asking
+    // for longer than that can never reach its own deadline — vitest aborts the
+    // test first, and the useful "expected 5 to be 4" diff is replaced by a
+    // bare "Test timed out in 5000ms" that reads like a slow test rather than
+    // the defect it is.
     await vi.waitFor(() => expect(h.store[CONV].length).toBe(4), { timeout: 15000, interval: 25 });
 
     const msgs = h.store[CONV];
@@ -469,5 +540,5 @@ describe("a direct submission the server queued instead of running", () => {
     expect(msgs[2].content).toBe("keep it clear and concise");
     expect(msgs[3].content).toBe("Rewritten for the client.");
     expect(msgs.some((m) => m.state === "thinking" || m.state === "streaming")).toBe(false);
-  });
+  }, 20_000);
 });

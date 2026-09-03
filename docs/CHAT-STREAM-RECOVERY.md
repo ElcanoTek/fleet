@@ -247,6 +247,40 @@ reports nothing about a turn that completed perfectly. Recovery therefore does
 not depend on the retain window at all: the buffer is a fast path, Postgres is
 the source of truth, and the reconcile path is the one that always works.
 
+## Reattaching to a turn that is already on screen
+
+`reattachToConv` declines when the conversation already ends in a **completed**
+assistant message and the turn it is being sent at is one whose events we have
+already applied. Without that, a reattach finds no live slot to reuse and
+appends a fresh `thinking` one; every replayed event is then dropped by the
+Last-Event-ID dedup, because we applied them the first time. Nothing lands in
+the slot and no terminal event clears it — a spinner under a finished answer.
+
+Two snapshots can send the client back at such a turn, and only the first was
+originally guarded:
+
+- **`inflight: false` with a `turn_id`** — the server is holding the finished
+  turn's retain buffer. Once `loadConversation` pulled the persisted shape the
+  buffer is redundant (PR #94).
+- **`inflight: true` for a turn we already streamed** — the lagging snapshot.
+  `followQueueDrain` re-reads the queue milliseconds after a turn ends, and
+  both that read and `/inflight` can still describe it as running, so the
+  follower is sent back at a turn that is already rendered.
+
+The second case is why the guard tests the turn id rather than only the
+`inflight` flag: it declines when `currentTurnIdByConvRef` already matches the
+probed `turn_id` *and* at least one event has been applied for it. That cannot
+swallow a genuinely new turn (different id), nor one not yet started (no events
+applied), nor a resume after a dropped socket (the slot is still `thinking` or
+`streaming`, so it is reused rather than re-created).
+
+`settleStreamedSlot` does erase such a slot on the way out — which is why this
+presented as an *intermittent* orphan rather than a reliable one. It stops
+erasing it when another attach is in flight concurrently, because
+`loadConversation` short-circuits while the conversation still looks attached.
+Declining the reattach removes the slot at the source instead of depending on
+the cleanup winning that race.
+
 ## Tests
 
 - `useTurnStream.reconcile.test.ts` — `persistedAnswersLocalTurn`, including
@@ -266,6 +300,14 @@ the source of truth, and the reconcile path is the one that always works.
   conversations each fails exactly one test. The harness deps object is typed
   as `TurnStreamDeps` rather than cast through `unknown`, so adding a
   dependency is a compile error there instead of an `undefined` at runtime.
+
+- `useTurnStream.queueDrain.test.ts` — the follow-the-drain suite, including
+  *"does not re-stream a turn already on screen when the queue snapshot lags"*,
+  which pins the guard above. It asserts on the **number of streams opened**
+  rather than on the leftover slot: opening the second stream is the defect,
+  and the `settleStreamedSlot` cleanup that usually hides it is not part of the
+  contract. Asserting the slot instead reproduces only under concurrency, which
+  is what made this a ~5% CI flake instead of a failing test.
 
 - Go: `capabilities_test.go` covers the advertised cadence in both the header
   and the `fleet.capabilities` frame, and that keepalives-off advertises `0`.
