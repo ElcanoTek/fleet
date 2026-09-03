@@ -32,6 +32,10 @@ export type CatalogThirdParty = {
   // registration; the guided form collects a bring-your-own OAuth client ID
   // (+ optional secret) up front.
   client_registration?: string;
+  // "required" = the vendor's authorization server accepts no public clients,
+  // so a manual client ID is useless without its secret; the guided form makes
+  // the secret field mandatory instead of "optional" (GitHub, #1006).
+  client_secret?: string;
   // Curated Featured-shelf pick, rendered before the category listing.
   featured?: boolean;
 };

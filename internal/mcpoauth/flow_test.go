@@ -337,3 +337,22 @@ func TestReauthDetailNamesCauseAndNeverEchoesServerText(t *testing.T) {
 		t.Errorf("non-OAuth error detail = %q, want the generic fallback", got)
 	}
 }
+
+func TestPublicClientAllowed(t *testing.T) {
+	cases := []struct {
+		name    string
+		methods []string
+		want    bool
+	}{
+		{"omitted list means client_secret_basic (RFC 8414 §2)", nil, false},
+		{"basic only", []string{"client_secret_basic"}, false},
+		{"post and basic", []string{"client_secret_post", "client_secret_basic"}, false},
+		{"none listed", []string{"none"}, true},
+		{"none among others, mixed case and padding", []string{"client_secret_basic", " None "}, true},
+	}
+	for _, tc := range cases {
+		if got := PublicClientAllowed(tc.methods); got != tc.want {
+			t.Errorf("%s: PublicClientAllowed(%v) = %v, want %v", tc.name, tc.methods, got, tc.want)
+		}
+	}
+}

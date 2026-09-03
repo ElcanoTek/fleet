@@ -567,6 +567,20 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **A bring-your-own OAuth client can no longer be added without the secret
+  its vendor requires** (#1006). Verifying GitHub's official MCP server
+  surfaced the trap: the guided form called the client secret optional, GitHub
+  accepts no public clients, and a secretless add sailed through GitHub's
+  consent screen into a token exchange GitHub refused — reported to the user
+  only as "authorization_failed". Two layers close it. `remotemcp.AddServer`
+  now refuses a manual `client_id` with no secret unless the authorization
+  server's metadata lists `none` in `token_endpoint_auth_methods_supported`
+  (an omitted list means `client_secret_basic`, RFC 8414 §2) — a 422 with an
+  actionable message, before anyone is sent to a consent screen. And the
+  catalog gains `client_secret: required` (manual entries only; set on
+  `github`), which makes the form's secret field mandatory and its label
+  honest. GitHub's setup hint now names the field GitHub actually shows
+  ("Redirect URI") and says the secret is required.
 - **CI no longer goes red because the Go module proxy hiccupped.** The live
   Playwright lane on `main` failed with `[e2e-boot] FATAL: go build fleet
   failed` after a single module zip (`google.golang.org/api`) came back

@@ -59,8 +59,11 @@ type mcpCatalogThirdPartyEntry struct {
 	// "manual" = the vendor's AS has no dynamic client registration; the UI
 	// collects a bring-your-own OAuth client ID (+ optional secret) up front.
 	ClientRegistration string `json:"client_registration,omitempty"`
-	Featured           bool   `json:"featured,omitempty"` // curated Featured-shelf pick
-	Trust              string `json:"trust"`              // always "third_party" (the CLASS, vs "bundled"; distinct from Provenance)
+	// "required" = the AS accepts no public clients, so the manual client's
+	// secret field is mandatory in the form rather than "optional".
+	ClientSecret string `json:"client_secret,omitempty"`
+	Featured     bool   `json:"featured,omitempty"` // curated Featured-shelf pick
+	Trust        string `json:"trust"`              // always "third_party" (the CLASS, vs "bundled"; distinct from Provenance)
 }
 
 type mcpCatalogResponse struct {
@@ -147,6 +150,7 @@ func thirdPartyCatalogEntry(e clientconfig.RemoteMCPCatalogEntry) mcpCatalogThir
 		APIKeyHeader:       strings.TrimSpace(e.APIKeyHeader),
 		APIKeyQuery:        strings.TrimSpace(e.APIKeyQuery),
 		ClientRegistration: strings.TrimSpace(e.ClientRegistration),
+		ClientSecret:       strings.TrimSpace(e.ClientSecret),
 		Featured:           e.Featured,
 		Trust:              "third_party",
 	}

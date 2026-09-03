@@ -39,6 +39,15 @@ var ErrDisabled = errors.New("remote MCP OAuth is not configured")
 // dynamic client registration and the user supplied no manual client_id.
 var ErrManualClientRequired = errors.New("authorization server does not support dynamic client registration; provide a client_id (and secret) manually")
 
+// ErrClientSecretRequired is returned when the user supplied a manual client_id
+// without a secret but the authorization server accepts no public clients: its
+// metadata lists no "none" in token_endpoint_auth_methods_supported, and an
+// omitted list means client_secret_basic (RFC 8414 §2). Refusing at add time —
+// rather than after the vendor's consent screen, where the code exchange fails
+// with an error the relay flattens to "authorization_failed" — is what made the
+// GitHub verification in #1006 actionable.
+var ErrClientSecretRequired = errors.New("this authorization server requires a client secret (it accepts no public clients) — add the OAuth client's secret along with its client ID")
+
 // tokenStore is the slice of *store.Store this package needs (kept narrow so it
 // is easy to fake in tests).
 type tokenStore interface {
@@ -356,6 +365,11 @@ func (s *Service) AddServer(ctx context.Context, in AddServerInput) (*store.Remo
 		clientID = reg.ClientID
 		clientSecret = reg.ClientSecret
 		regToken = reg.RegistrationAccessToken
+	} else if clientSecret == "" && !mcpoauth.PublicClientAllowed(disco.AS.TokenEndpointAuthMethodsSupported) {
+		// A bring-your-own client with no secret can only work against an AS
+		// that accepts public clients; otherwise the exchange after consent is
+		// doomed, so fail here, where the user can still add the secret.
+		return nil, -1, ErrClientSecretRequired
 	}
 	// Control-plane acquisition (#1274): a dynamic registration just minted a
 	// client secret + registration access token, and a manual add supplied one

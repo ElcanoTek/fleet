@@ -312,6 +312,8 @@ func (s *Server) remoteMCPError(w http.ResponseWriter, err error) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 	case errors.Is(err, remotemcp.ErrManualClientRequired):
 		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+	case errors.Is(err, remotemcp.ErrClientSecretRequired):
+		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
 	case errors.Is(err, remotemcp.ErrDisabled):
 		http.Error(w, "remote MCP OAuth is not configured", http.StatusServiceUnavailable)
 	default:

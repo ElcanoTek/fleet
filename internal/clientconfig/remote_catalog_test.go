@@ -354,6 +354,12 @@ func TestBuiltinRemoteCatalog(t *testing.T) {
 		if e.Provenance == "community" && strings.TrimSpace(e.RepoURL) == "" {
 			t.Errorf("entry %q: a community-hosted entry must link its source repo so users can vet it", e.Name)
 		}
+		// client_secret: required only means something for a bring-your-own
+		// client (the loader rejects the other combination; this keeps the
+		// shipped data honest even if that validation ever loosens).
+		if e.ClientSecret != "" && e.ClientRegistration != "manual" {
+			t.Errorf("entry %q: client_secret %q without client_registration: manual", e.Name, e.ClientSecret)
+		}
 	}
 	if len(categories) < 8 {
 		t.Errorf("builtin catalog should span many categories, got %d: %v", len(categories), categories)
@@ -394,6 +400,53 @@ func TestBuiltinRemoteCatalog(t *testing.T) {
 	}
 	if xDocs.URL != "https://docs.x.com/mcp" || xDocs.Auth != "open" {
 		t.Errorf("x-docs = %+v, want the documented open hosted endpoint", xDocs)
+	}
+
+	// GitHub accepts no public clients (measured against its live token
+	// endpoint while verifying #1006): the entry must make the secret
+	// mandatory, or the guided form sends users through a consent screen into
+	// an exchange GitHub refuses.
+	gh, ok := byName["github"]
+	if !ok {
+		t.Fatal("builtin catalog should include GitHub")
+	}
+	if gh.ClientRegistration != "manual" || gh.ClientSecret != "required" {
+		t.Errorf("github = registration %q secret %q, want manual + required", gh.ClientRegistration, gh.ClientSecret)
+	}
+}
+
+// TestRemoteMCPCatalogClientSecretValidation: the flag takes one value and
+// only rides a manual client registration — anything else is a manifest bug
+// the loader must fail loud on, like every other catalog field.
+func TestRemoteMCPCatalogClientSecretValidation(t *testing.T) {
+	load := func(t *testing.T, fields string) error {
+		t.Helper()
+		dir := t.TempDir()
+		body := `
+remote_mcp_catalog:
+  - name: acme
+    display_name: Acme
+    description: Acme's hosted MCP server.
+    url: "https://mcp.acme.example/mcp"
+    auth: oauth
+` + fields
+		if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, err := Load(dir)
+		return err
+	}
+	if err := load(t, "    client_registration: manual\n    client_secret: required\n"); err != nil {
+		t.Errorf("manual + required should load, got %v", err)
+	}
+	if err := load(t, "    client_registration: manual\n"); err != nil {
+		t.Errorf("manual with the flag omitted should load, got %v", err)
+	}
+	if err := load(t, "    client_registration: manual\n    client_secret: optional\n"); err == nil || !strings.Contains(err.Error(), "unknown client_secret") {
+		t.Errorf("an unknown client_secret value must fail loud, got %v", err)
+	}
+	if err := load(t, "    client_secret: required\n"); err == nil || !strings.Contains(err.Error(), "only meaningful with client_registration: manual") {
+		t.Errorf("client_secret: required without a manual registration must fail loud, got %v", err)
 	}
 }
 

@@ -574,3 +574,94 @@ describe("ConnectionsPage multi-login seats", () => {
     expect(screen.queryByRole("button", { name: "Set default" })).toBeNull();
   });
 });
+
+// A manual-client OAuth entry whose vendor accepts no public clients (GitHub,
+// #1006): the secret is required, not "optional" — a blank one used to send
+// the user through GitHub's consent screen into an exchange GitHub refused.
+const GITHUB = {
+  name: "github",
+  display_name: "GitHub",
+  description: "Repositories, issues, pull requests.",
+  url: "https://api.githubcopilot.com/mcp/",
+  vendor: "GitHub, Inc.",
+  category: "development",
+  provenance: "official",
+  auth: "oauth",
+  client_registration: "manual",
+  client_secret: "required",
+  setup_hint: "Create a GitHub OAuth App.",
+  featured: true,
+  trust: "third_party",
+};
+
+describe("ConnectionsPage manual OAuth client with a required secret", () => {
+  const catalog = { ...CATALOG, third_party: [GITHUB] };
+
+  it("keeps Add disabled until both the client ID and the secret are filled", async () => {
+    vi.stubGlobal("fetch", mockFetch(undefined, catalog));
+    visit("?connector=github");
+
+    await screen.findByTestId("dir-form-github");
+    const add = screen.getByTestId("dir-form-add-github") as HTMLButtonElement;
+    expect(add.disabled).toBe(true);
+    expect(screen.getByText("OAuth client secret")).toBeInTheDocument();
+    expect(screen.queryByText(/if your client has one/)).toBeNull();
+
+    fireEvent.change(screen.getByTestId("dir-form-client-id-github"), {
+      target: { value: "Iv1.client" },
+    });
+    // The ID alone used to be enough — that is the blank-secret path that
+    // failed only after GitHub's consent screen.
+    expect(add.disabled).toBe(true);
+
+    fireEvent.change(screen.getByTestId("dir-form-client-secret-github"), {
+      target: { value: "shh" },
+    });
+    await waitFor(() => expect(add.disabled).toBe(false));
+  });
+
+  it("posts both credentials on Add", async () => {
+    let posted: Record<string, unknown> | null = null;
+    vi.stubGlobal(
+      "fetch",
+      mockFetch((body) => {
+        posted = body;
+        return { status: 200, body: { id: "srv1", name: "github" } };
+      }, catalog),
+    );
+    visit("?connector=github");
+
+    await screen.findByTestId("dir-form-github");
+    fireEvent.change(screen.getByTestId("dir-form-client-id-github"), {
+      target: { value: "Iv1.client" },
+    });
+    fireEvent.change(screen.getByTestId("dir-form-client-secret-github"), {
+      target: { value: "shh" },
+    });
+    fireEvent.click(screen.getByTestId("dir-form-add-github"));
+
+    await waitFor(() => expect(posted).not.toBeNull());
+    expect(posted).toMatchObject({
+      name: "github",
+      client_id: "Iv1.client",
+      client_secret: "shh",
+    });
+  });
+
+  it("leaves the secret optional for a manual entry without the flag", async () => {
+    const optional = { ...GITHUB, name: "acme_oauth", client_secret: undefined };
+    vi.stubGlobal(
+      "fetch",
+      mockFetch(undefined, { ...CATALOG, third_party: [optional] }),
+    );
+    visit("?connector=acme_oauth");
+
+    await screen.findByTestId("dir-form-acme_oauth");
+    const add = screen.getByTestId("dir-form-add-acme_oauth") as HTMLButtonElement;
+    expect(screen.getByText(/if your client has one/)).toBeInTheDocument();
+    fireEvent.change(screen.getByTestId("dir-form-client-id-acme_oauth"), {
+      target: { value: "Iv1.client" },
+    });
+    await waitFor(() => expect(add.disabled).toBe(false));
+  });
+});
