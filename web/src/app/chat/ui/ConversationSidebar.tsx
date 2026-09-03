@@ -683,6 +683,9 @@ function ConversationKebab({
           Labels
         </MenuItem>
         <MenuSeparator />
+        {/* Was "Download as JSON" — a label that named a file format instead
+            of an outcome, and offered the one format a non-technical reader
+            can do the least with. The dialog it opens picks the artifact. */}
         <MenuItem
           icon={<Icon name="download" className="size-4" />}
           onClick={() => {
@@ -690,7 +693,7 @@ function ConversationKebab({
             close();
           }}
         >
-          Download as JSON
+          Download chat…
         </MenuItem>
         <MenuItem
           icon={<Icon name="clock" className="size-4" />}

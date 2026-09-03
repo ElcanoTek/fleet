@@ -108,6 +108,9 @@ export type ChatTranscriptProps = {
   resendUserMessage: (userMessageId: number, editedContent: string) => void | Promise<void>;
   retryLastUserMessage: () => void | Promise<void>;
   regenerateLastAssistant: () => void | Promise<void>;
+  // "Save as prompt" under a finished reply — turns this exchange into a
+  // reusable prompt-library entry (see chat-experience.savePromptFromMessage).
+  savePromptFromMessage: (message: Message) => void;
   // Fork the conversation at a persisted message into a new thread (#454).
   branchFromMessage: (message: Message) => void | Promise<void>;
   loadMemories: () => void | Promise<void>;
@@ -222,6 +225,7 @@ export function ChatTranscript({
   resendUserMessage,
   retryLastUserMessage,
   regenerateLastAssistant,
+  savePromptFromMessage,
   branchFromMessage,
   loadMemories,
   setSelectedModel,
@@ -1005,6 +1009,22 @@ export function ChatTranscript({
                                       onClick={() => void branchFromMessage(message)}
                                     >
                                       Branch
+                                    </button>
+                                  ) : null}
+                                  {/* The capture point for a great interaction. It sits with
+                                      Copy/Branch because that is where the reader already is
+                                      when they decide this one was worth keeping — the same
+                                      action from the sidebar kebab needs the chat found and
+                                      hovered first. Persisted messages only, like Branch:
+                                      the draft is cut at this reply server-side. */}
+                                  {message.dbId && !isStreaming ? (
+                                    <button
+                                      type="button"
+                                      className="touch-target text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
+                                      title="Save this as a reusable prompt in your library"
+                                      onClick={() => savePromptFromMessage(message)}
+                                    >
+                                      Save as prompt
                                     </button>
                                   ) : null}
                                 </div>

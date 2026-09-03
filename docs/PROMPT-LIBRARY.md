@@ -14,13 +14,32 @@ Center task form. It deliberately combines two ownership models:
 
 The picker supports search, inserting an entry into the current chat/task draft,
 creating a prompt from that draft, editing UI-owned entries, and exporting the
-visible hybrid library as a versioned JSON backup. A conversation's kebab menu
-also offers "Save to prompt library…", which distills the chat into a
-self-contained draft (a host-side model call, `FLEET_LIBRARY_PROMPT_MODEL`) that
-the user reviews and edits before it is saved through the same `POST /prompts`
-path. Export is intentionally a
+visible hybrid library as a versioned JSON backup. Export is intentionally a
 plain file download so it can be placed in OneDrive, Dropbox, or any ordinary
 backup folder without a vendor integration.
+
+## Capturing a good chat as a prompt
+
+Two entry points open the same review dialog, which distills the chat into a
+self-contained draft (a host-side model call, `FLEET_LIBRARY_PROMPT_MODEL`)
+that the user reviews and edits before it is saved through the ordinary
+`POST /prompts` path. Nothing is stored until they save.
+
+- **Under a finished assistant reply** — a "Save as prompt" action beside Copy
+  and Branch. This is the primary affordance: the moment someone decides an
+  interaction is worth keeping is the moment they finish reading a good answer,
+  and until this shipped the only route was to leave the reply, find the chat's
+  row in the sidebar, hover it, and open a kebab. The reply's persisted message
+  id is sent as `up_to_message_id`, so the transcript fed to the synthesizer is
+  cut there — a chat that carried on into an unrelated tangent does not fold
+  the tangent into the saved recipe.
+- **The conversation kebab's "Save to prompt library…"** — unchanged, and
+  distills the whole chat. This is the right one for a long multi-step
+  workflow whose value is the entire recipe.
+
+`up_to_message_id` is advisory: it is optional, a malformed body is not an
+error, and an id the server cannot find in the loaded history degrades to
+distilling the whole conversation rather than to distilling nothing.
 
 ## Bundle format
 
@@ -62,7 +81,8 @@ Git entries have `source: "git"` and `read_only: true`; UI-owned entries have
 ## Shipped scope and deliberate deferrals
 
 - Shipped: live Git catalog, shared picker on both surfaces, private/shared UI
-  storage, CRUD, search, exact-content insertion, and JSON backup.
+  storage, CRUD, search, exact-content insertion, JSON backup, and both capture
+  entry points above.
 - Deferred: writing back into Git (Fleet never mutates the external bundle),
   automatic cloud-drive sync, prompt version history, and JSON re-import. The
   exported format is versioned so import can be added compatibly later.

@@ -15,6 +15,30 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **Downloading a chat now offers a file a person can actually read.** The
+  conversation kebab's one option was "Download as JSON" — a label naming a
+  format the reader had to already understand, attached to the one artifact a
+  non-technical user can do the least with. It is now **"Download chat…"**,
+  which opens a chooser describing each option by what you get to do with it:
+  **Web page** (the default — opens on a double-click, looks like the chat, and
+  prints to PDF for a client), **Text document** (Markdown, to paste into
+  email, Word, Docs or Notion), and **Raw data** (the JSON, unchanged, for
+  developers). A checkbox adds the agent's working trail — tool calls, their
+  results, and its thinking — which is **off by default**, so a 289-entry
+  research chat downloads as the conversation rather than as its machinery. The
+  rendered formats are served from a new `?format=html` and `?include=full` on
+  `GET /conversations/{id}/export`; the endpoint's default response is still
+  byte-for-byte the JSON it always returned.
+- **"Save as prompt" now sits under the reply that earned it.** Distilling a
+  chat into a reusable prompt-library entry already existed, but only behind
+  the conversation kebab in the sidebar — which meant finding and hovering the
+  chat's row, a step removed from the moment someone decides an interaction was
+  worth keeping. The action now also appears in the footer of every finished
+  assistant reply, beside Copy and Branch, and passes that reply's id
+  (`up_to_message_id` on `POST /conversations/{id}/suggest-prompt`) so the
+  draft is distilled from the exchange the user pointed at rather than from
+  whatever the chat wandered into afterwards. The review-and-edit dialog, the
+  permissions, and the `POST /prompts` save path are unchanged.
 - **MCP subprocesses no longer run in — or write into — the client bundle
   checkout.** fleet launched every stdio MCP server with its cwd set to the
   bundle root, because manifest args like `mcp/foo.py` are bundle-relative. A
