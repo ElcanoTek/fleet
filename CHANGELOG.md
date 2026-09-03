@@ -15,6 +15,24 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **Connector catalog copy is a documented, warned-on contract.** The
+  `display_name`/`description` a bundle attaches to each `mcp_servers` entry
+  is the only text a user reads in chat's Tools picker and on Settings →
+  Connections before enabling a connector, and until now a bundle could omit
+  both silently — the row then rendered a raw snake_case identifier over an
+  empty body. A missing `display_name` now falls back to a humanized label
+  derived from the server name (`openx_mcp` → "Openx",
+  `knowledge_base` → "Knowledge Base"), and each connector missing either
+  field logs one loud `clientconfig: warning:` line at boot naming the
+  connector and the field. Neither is a load error: display copy is cosmetic,
+  and failing a whole bundle over a missing sentence would take a deployment
+  down for a docs bug. The house style both sides are written to —
+  vendor-cased `display_name`, a ≤200-character `description` that leads with
+  an imperative capability sentence and ends with a gating clause naming the
+  real `enabled_env`/`enabled_groups` vars — is now written down in
+  `docs/MCP-CATALOG.md` ("Connector copy"), with enforcement left to the
+  bundle repos' own manifest tests, where bundle data belongs.
+
 - **Outbound A2A delegation: fleet agents can delegate work to remote A2A
   agents (#1368, the #1279 Phase 3).** A bundle's new `a2a_peers:` section
   declares remote A2A servers (name, `rpc_url`, a bundle-authored

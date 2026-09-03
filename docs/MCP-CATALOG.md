@@ -13,6 +13,66 @@ grouping:
 | Who sees tool traffic | Only this deployment (plus the connector's own upstream API) | The operator, under its own terms |
 | How it's enabled | Per conversation, in the Tools picker | Per user: Settings → Connections → Add + Connect |
 
+## Connector copy — `display_name` and `description`
+
+Two strings decide whether a user can tell what a connector is: the
+`display_name` and `description` a bundle attaches to each `mcp_servers`
+entry. Chat's Tools picker (the wrench popover) and Settings → Connections
+both render `display_name || name` as the row title and `description` beneath
+it — and render **nothing** when the description is empty. A connector that
+ships neither appears as a raw snake_case identifier over a blank body, which
+reads as a broken row rather than an unlabelled one.
+
+fleet cannot author that copy — bundles are data, the engine is not — so it
+does the two things an engine can:
+
+- **A derived label floor.** A missing `display_name` falls back to a
+  humanized form of the server name (`openx_mcp` → "Openx",
+  `knowledge_base` → "Knowledge Base"), so the worst case is a plain label
+  rather than a wire identifier. It is a floor, not a substitute: the
+  derivation cannot know that `openx_mcp` is spelled "OpenX".
+- **A loud boot warning.** Each connector missing either field logs one
+  `clientconfig: warning:` line naming the connector and the field. Neither
+  gap fails the load: display copy is cosmetic, and taking a deployment down
+  over a missing sentence would be the wrong trade.
+
+Because it only warns, the enforcement lives where the data lives — bundle
+repos assert the house style below in their own `manifest.yaml` tests.
+
+### The house style
+
+**`display_name`** — the service as a person names it, in the vendor's own
+casing: "OpenX", "Index Exchange", "Amazon SES Email". Title Case, ≤ 40
+characters. No underscores, and none of the words "MCP", "server", or
+"connector" — the user already knows they are looking at a connector list.
+
+**`description`** — one or two plain-text sentences, ≤ 200 characters total.
+
+1. **Capability first.** Open with a bare imperative verb and name the
+   concrete system and the objects it acts on: "Search and read inbound
+   email reports stored by Amazon SES in the tenant S3 archive." Not "This
+   server provides…", not "An MCP server for…", not "Tools for…", and not a
+   restatement of the display name.
+2. **Then gating, if any.** A connector behind `enabled_env` /
+   `enabled_groups` ends with one clause naming the real variables:
+   "Appears once `MAGNITE_ACCESS_KEY` and `MAGNITE_SECRET_KEY` are set."
+   (A long family of variables may collapse to a prefix — "once the
+   `FEEDS_AWS_*` credentials are set" — but never to a vague "once
+   configured".) Never write that clause for an ungated connector: the
+   picker shows it regardless and the sentence becomes a lie. An ungated
+   connector either stops after the capability sentence or says so plainly —
+   "No credentials required."
+
+No markdown, no emoji, no trailing whitespace; end with a period. Keep
+example prompts out of it: the row is a two-line label, and onboarding
+guidance belongs in `setup_hint` (directory entries) or the bundle's own
+docs.
+
+The same two fields, with the same style, are **required** on
+`remote_mcp_catalog` entries and on every built-in directory entry — there
+the load fails outright on a gap, because a directory listing has no other
+identity to fall back on.
+
 ## The built-in directory
 
 fleet ships a large curated directory of hosted MCP servers **embedded in the
@@ -118,6 +178,11 @@ bundled `mcp_servers` name, required `display_name`/`description`, `https://`
 `url` and `repo_url`, `provenance`/`auth` from their closed sets, lowercase
 kebab-case `category` (the set is open — a bundle may invent its own grouping
 — but the shape is not), lowercase `tags`.
+
+The bundled (`mcp_servers`) side is deliberately softer: a missing
+`display_name` is filled from the derived label and a missing `description`
+warns, both without failing the load. See "Connector copy" above for why the
+two sides differ.
 
 ## API
 
