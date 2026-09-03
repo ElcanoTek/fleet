@@ -1,5 +1,5 @@
 import type { Dispatch, RefObject, SetStateAction } from "react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   applyContextCompacted,
   applyContextPressure,
@@ -41,6 +41,24 @@ import { formatBytes } from "./formatters";
 import type { ConversationSummary, MCPServerInfo } from "./chat-experience";
 import type { PerConvComposerState } from "./usePerConvComposerState";
 import type { TurnStreamState } from "./useTurnStreamState";
+
+// Does the conversation still owe the user a turn? `queued` rows are waiting
+// for a drain kick; `running` rows were claimed by one (their turn may not
+// have registered yet). `injected` rows are NOT drain work — they were folded
+// into a turn that is already generating and complete with it.
+export function hasPendingQueueWork(items: QueuedInput[] | null | undefined): boolean {
+  return (items ?? []).some((it) => it.state === "queued" || it.state === "running");
+}
+
+// Backoff for the post-turn queue handoff (#785). The server drains the
+// queue from the finishing turn's own tail call, so the usual case resolves on
+// the first attempt; the later steps cover a drain that had to be re-kicked
+// (concurrency cap full, race-loser un-claim — 2-3s server-side timers). The
+// schedule is bounded on purpose: a row that is still queued after it runs out
+// is not draining on its own (a restart leaves rows queued deliberately — boot
+// recovery never auto-drains), and the honest answer then is an accurate chip
+// strip with a send-now button, not an endless poll.
+export const queueDrainFollowDelaysMs = [250, 500, 1000, 2000, 3000, 4000];
 
 // useTurnStream owns the live chat turn/SSE loop that used to sit inline in
 // ChatExperience (issue #401 step 3 / #435). It is the BEHAVIOR half of the
@@ -268,7 +286,9 @@ export interface TurnStreamDeps {
 // pumpStreamResponse, streamTurn, and uploadPendingAttachments are internal
 // to the loop and intentionally not returned.
 export interface UseTurnStream {
-  reattachToConv: (convId: string) => Promise<void>;
+  // Resolves true when this call attached to a turn and pumped its stream
+  // (so the caller knows the conversation was, and may still be, ours).
+  reattachToConv: (convId: string) => Promise<boolean>;
   // Tab-return / watchdog recovery for a socket that died while the device
   // slept: adopt the persisted transcript when the turn has since finished,
   // or reconnect the live stream when it is still generating. `force` skips
@@ -285,10 +305,22 @@ export interface UseTurnStream {
   resendUserMessage: (userMessageId: number, editedContent: string) => Promise<void>;
   retryLastUserMessage: () => Promise<void>;
   // #785 pending-input queue: per-conversation snapshot + mutations.
-  queuedInputs: Record<string, QueuedInput[]>;
-  refreshQueue: (convId: string) => Promise<void>;
+  //
+  // A Map, not a Record: the key is a conversation id that arrives from the URL
+  // and from stream events, and writing it as a computed property on a plain
+  // object is the remote-property-injection shape CodeQL flags (a key like
+  // "constructor" or "__proto__" would address the prototype chain rather than
+  // a conversation). A Map has no prototype chain to address, so the class is
+  // structurally impossible rather than guarded against.
+  queuedInputs: ReadonlyMap<string, QueuedInput[]>;
+  // Returns the fresh snapshot (null when the fetch failed — "unknown", not
+  // "empty"), so callers can decide without re-reading React state.
+  refreshQueue: (convId: string) => Promise<QueuedInput[] | null>;
   removeQueuedInput: (convId: string, inputId: string) => Promise<void>;
   sendNowQueuedInput: (convId: string, inputId: string) => Promise<void>;
+  // Follow the server-side drain of this conversation's queue to the screen
+  // (#785). Call it whenever a turn's stream ends.
+  followQueueDrain: (convId: string) => Promise<void>;
 }
 
 export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
@@ -351,15 +383,23 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
 
   // #785: per-conversation pending-input queue, fed by queue.updated events
   // on the live stream and by GET /queue on submit/reconnect.
-  const [queuedInputs, setQueuedInputs] = useState<Record<string, QueuedInput[]>>({});
-  const refreshQueue = async (convId: string) => {
+  const [queuedInputs, setQueuedInputs] = useState<ReadonlyMap<string, QueuedInput[]>>(
+    () => new Map<string, QueuedInput[]>(),
+  );
+  // One drain-follower per conversation (followQueueDrain re-enters itself
+  // through the reattach it awaits).
+  const queueFollowInFlightRef = useRef<Set<string>>(new Set<string>());
+  const refreshQueue = async (convId: string): Promise<QueuedInput[] | null> => {
     try {
       const res = await fetch(`/api/conversations/${encodeURIComponent(convId)}/queue`);
-      if (!res.ok) return;
+      if (!res.ok) return null;
       const body = (await res.json()) as { items?: QueuedInput[] };
-      setQueuedInputs((cur) => ({ ...cur, [convId]: body.items ?? [] }));
+      const items = body.items ?? [];
+      setQueuedInputs((cur) => new Map(cur).set(convId, items));
+      return items;
     } catch {
       // snapshot refresh is best-effort; the next queue.updated self-heals
+      return null;
     }
   };
   const removeQueuedInput = async (convId: string, inputId: string) => {
@@ -954,7 +994,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     if (event.event === "queue.updated") {
       // Full snapshot on every queue mutation (#785) — no event sourcing.
       const p = payload as { items?: QueuedInput[] };
-      setQueuedInputs((cur) => ({ ...cur, [ctx.target]: p.items ?? [] }));
+      setQueuedInputs((cur) => new Map(cur).set(ctx.target, p.items ?? []));
       return;
     }
 
@@ -1157,16 +1197,19 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     }
   };
 
-  const reattachToConv = async (convId: string) => {
-    if (attachedConvIdsRef.current.has(convId)) return;
-    if (reattachInFlightRef.current.has(convId)) return;
+  // Resolves true when this call took ownership of the conversation and pumped
+  // a stream — the signal followQueueDrain uses to tell "we showed that turn"
+  // apart from "there was nothing to attach to (yet)".
+  const reattachToConv = async (convId: string): Promise<boolean> => {
+    if (attachedConvIdsRef.current.has(convId)) return false;
+    if (reattachInFlightRef.current.has(convId)) return false;
     reattachInFlightRef.current.add(convId);
     // Hoisted so the outer catch can ask the same "was this socket superseded
     // on purpose?" question the inner finally does.
     let abortController: AbortController | null = null;
     try {
       const probe = await fetch(`/api/conversations/${convId}/inflight`, { cache: "no-store" });
-      if (!probe.ok) return;
+      if (!probe.ok) return false;
       const info = (await probe.json()) as {
         inflight?: boolean;
         turn_id?: string;
@@ -1182,8 +1225,8 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       //     phone-lock-mid-turn flow needs. Without this, the catch
       //     branch in streamTurn paints "Turn failed" even though the
       //     server actually finished cleanly.
-      if (!info.inflight && !info.turn_id) return;
-      if (attachedConvIdsRef.current.has(convId)) return;
+      if (!info.inflight && !info.turn_id) return false;
+      if (attachedConvIdsRef.current.has(convId)) return false;
 
       // If the server's still holding a retained buffer for a finished
       // turn but the local cache already shows a completed assistant
@@ -1198,7 +1241,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       if (!info.inflight && info.turn_id) {
         const existing = messagesByConvRef.current[convId] ?? [];
         const last = existing[existing.length - 1];
-        if (last && last.role === "assistant" && last.state === "done") return;
+        if (last && last.role === "assistant" && last.state === "done") return false;
       }
 
       // Align the idempotency baseline with the turn we're reattaching
@@ -1262,7 +1305,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           attachedConvIdsRef.current.delete(convId);
           markConvIdle(convId);
           delete abortControllersRef.current[convId];
-          return;
+          return false;
         }
       } catch (err) {
         attachedConvIdsRef.current.delete(convId);
@@ -1332,6 +1375,9 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           // Refresh so any server-side state we missed (new title, updated
           // metrics sidebar) shows.
           void refreshConversations();
+          // This turn is over — anything queued behind it is draining
+          // server-side right now, and nothing else would put it on screen.
+          void followQueueDrain(convId);
         }
       }
       if (ctx.evicted) {
@@ -1339,6 +1385,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         // finally) is released before the retry fires.
         setTimeout(() => void reattachToConv(convId), 150);
       }
+      return true;
     } catch {
       // Silent — reattach is best-effort. A stream we superseded on purpose is
       // not a failure and no longer owns these handles; leave them to the
@@ -1350,8 +1397,75 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         attachedConvIdsRef.current.delete(convId);
         markConvIdle(convId);
       }
+      return false;
     } finally {
       reattachInFlightRef.current.delete(convId);
+    }
+  };
+
+  // ── Following the queue to the screen ──────────────────────────────────
+  //
+  // A submission accepted while a turn was running (#785) is durable
+  // server-side and drains as its OWN turn, kicked from the finishing turn's
+  // tail call. Nothing pushed that to the browser: the finishing turn's event
+  // buffer is already sealed when the drain happens (so the settle-time
+  // `queue.updated` lands nowhere), and the drained turn opens a brand-new
+  // buffer that this client never asked to attach to. The result was the bug
+  // users reported as "my queued message never sent": the composer went idle,
+  // the QUEUED chip sat there forever, and the drained turn ran — invisibly —
+  // to a Postgres row only a page reload revealed.
+  //
+  // So after every turn's stream ends, follow the queue: re-read the
+  // authoritative snapshot, attach to the turn the drain started, and repeat
+  // for the next row. Three outcomes, all honest:
+  //   - attached → the drained turn streams like any other turn, and when it
+  //     ends this runs again for whatever is behind it;
+  //   - the queue emptied without us ever attaching → the row drained and
+  //     finished faster than we looked (or its retain buffer went), so adopt
+  //     the canonical transcript from Postgres;
+  //   - the backoff ran out with the row still queued → stop, leaving an
+  //     ACCURATE chip strip whose send-now button forces the drain. That is
+  //     the deliberate no-auto-drain-at-boot case (docs/INPUT-QUEUE.md).
+  const followQueueDrain = async (convId: string) => {
+    if (isPendingKey(convId)) return; // a brand-new chat has no queue
+    if (queueFollowInFlightRef.current.has(convId)) return;
+    queueFollowInFlightRef.current.add(convId);
+    // Set whenever we see drain work we have not yet put on screen; cleared
+    // by attaching to the turn that ran it. Still set when the queue empties
+    // means the turn happened where nobody could see it.
+    let unseenWork = false;
+    // Hard stop on how many turns one follow-through will chain. The server
+    // caps a conversation at maxPendingInputs (20) queued rows, so this can
+    // only bite if a reattach kept reporting success without the queue ever
+    // shrinking — a loop no user action could break out of.
+    let streamed = 0;
+    try {
+      for (let attempt = 0; ; attempt++) {
+        // Another path (a fresh submission, a liveness reconnect) owns the
+        // conversation now; its own stream end re-enters here.
+        if (attachedConvIdsRef.current.has(convId)) return;
+        const items = await refreshQueue(convId);
+        if (items === null) return; // snapshot unknown — don't guess
+        if (!hasPendingQueueWork(items)) break;
+        unseenWork = true;
+        if (await reattachToConv(convId)) {
+          // That turn is on screen and finished. Look again from the top:
+          // the next queued row gets the same treatment.
+          unseenWork = false;
+          streamed += 1;
+          if (streamed >= 20) return;
+          attempt = -1;
+          continue;
+        }
+        const delay = queueDrainFollowDelaysMs[attempt];
+        if (delay === undefined) return;
+        await new Promise((resolve) => window.setTimeout(resolve, delay));
+      }
+      if (unseenWork) {
+        await loadConversation(convId, { background: true });
+      }
+    } finally {
+      queueFollowInFlightRef.current.delete(convId);
     }
   };
 
@@ -1502,6 +1616,10 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         const claimedByOther = Boolean(current) && current !== doomed;
         retireStream(convId, doomed);
         if (!claimedByOther) markConvIdle(convId);
+        // Another turn-ends moment, reached without any stream's finally: a
+        // follow-up queued behind this turn is draining server-side and needs
+        // the same hand-off. Self-guards if another controller owns the conv.
+        void followQueueDrain(convId);
         return "recovered";
       }
 
@@ -1609,6 +1727,29 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         );
       }
       throw new Error(errorText || "Unable to reach the chat server.");
+    }
+
+    // The mirror image of the stale-busy race (#824): we believed the
+    // conversation was IDLE, so we posted a direct submission — and the server,
+    // which knew better, queued it (#785) and answered with a JSON ack instead
+    // of an SSE stream. Pumping that ack as SSE is how a queued follow-up used
+    // to end up as a permanent "Thinking…" bubble over a turn that was never
+    // started. Drop the optimistic pair we just rendered so this submission
+    // looks exactly like one made from the queue path — a chip, nothing more —
+    // and let the caller's followQueueDrain put the real turn on screen when
+    // the drain runs it.
+    if (classifyQueueSubmitResponse(response) === "queued") {
+      void response.body.cancel().catch(() => {});
+      attachedConvIdsRef.current.delete(target);
+      setConvMessages(target, (current) =>
+        current.filter(
+          (m) =>
+            m.id !== assistantId &&
+            // submitPrompt renders this submission's user bubble one id below.
+            !(m.id === assistantId - 1 && m.role === "user"),
+        ),
+      );
+      return;
     }
 
     // Fresh turn — reset the idempotency baseline for this conv so
@@ -2073,6 +2214,10 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         // finished without a written reply while the DB held the full answer.
         // Any already-terminal slot (done/failed/cancelled) is left alone.
         await settleStreamedSlot(finalTarget, assistantId, false);
+        // Same hand-off as the reattach path: a follow-up the user queued
+        // while this turn ran drains as its own turn, and this is the only
+        // moment we learn about it.
+        void followQueueDrain(finalTarget);
       }
     }
   };
@@ -2086,6 +2231,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     resendUserMessage,
     retryLastUserMessage,
     queuedInputs,
+    followQueueDrain,
     refreshQueue,
     removeQueuedInput,
     sendNowQueuedInput,

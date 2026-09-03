@@ -15,6 +15,42 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **MCP subprocesses no longer run in — or write into — the client bundle
+  checkout.** fleet launched every stdio MCP server with its cwd set to the
+  bundle root, because manifest args like `mcp/foo.py` are bundle-relative. A
+  server resolves a relative output path against that cwd, so whenever a model
+  passed a relative `output_dir` (or a connector fell back to a relative
+  default) the file was written into the operator's git checkout: invisible to
+  the agent (the sandbox never mounts the bundle writable), untouched by
+  reclamation (which sweeps the data dir), and accumulating customer data
+  inside a git repo. One production box had collected dozens of client
+  CSV/XLSX/PDF files plus `downloads/`, `reports/`, `sources/` and `workspace/`
+  directories there. Two shipped connectors additionally allowlist
+  `os.getcwd()` as a readable root for email attachments, which made the whole
+  checkout an attachable source. Now bundle-relative script args are
+  absolutized when the bundle loads — freeing the cwd from having to be the
+  bundle root — and every spawn path launches the subprocess in the same
+  fleet-managed directory it already substitutes for `${FLEET_WORKSPACE}`
+  (`agentcore.StdioCwd`). On the interactive broker path that is the
+  per-conversation workspace, the same directory `bash`/`run_python` work in,
+  so a relative `output_dir` now lands somewhere the agent can actually read.
+  Agent Plugins keep their plugin root (an ADR-0054 contract), and a workspace
+  that is absent or not yet created on disk falls back to the old behaviour
+  rather than failing the spawn — `exec` refuses to start a process whose cwd
+  is missing.
+- **`fleet doctor` reports leftover connector output in the bundle checkout.**
+  The fix above stops the bundle filling, but removes nothing already there, and
+  neither `fleet cleanup` nor the maintenance timer has ever known about the
+  bundle — it is the one tree on the box that nothing reclaims. Step 7 now
+  reports the untracked file count and total size in the client bundle checkout
+  beside the existing data-dir and image-store headroom checks, with the review
+  and `git clean` commands. Advisory, never a failure: doctor does not delete an
+  operator's files, and some of that residue is a real client report someone may
+  still want. Measured from `git status` rather than a directory name list, so it
+  catches whatever an agent actually named, and `--ignored=no` keeps a bundle
+  that has adopted the `.gitignore` safety net from reporting clean while still
+  filling the disk.
+
 - **`fleet update` can no longer leave the client bundle silently behind.** A
   deployment is fleet AND its bundle — connector display names and
   descriptions, personas, protocols, skills and the MCP catalog all live in the
@@ -556,6 +592,44 @@ prior versions are listed because none have shipped.
   (`{"apiKey": {"list": []}}`) instead of the bare array `a2a-go` v2.5.0
   emits, which the published card schema rejects. Baseline run recorded on
   the issue: 52 passed / 7 failed at MUST level before these fixes.
+
+- **A queued follow-up ran where nobody could see it — the "my queued message
+  never sent" report (#785 queue).** A submission accepted while a turn was
+  running is durable server-side and drains as its own turn, kicked from the
+  finishing turn's tail call. Nothing put that on the screen. The finishing
+  turn's event buffer is already SEALED when the drain happens, so the
+  settle-time `queue.updated` had no subscribers, and the drained turn opens a
+  brand-new buffer this client never asked to attach to — so the composer went
+  idle, the QUEUED chip sat there forever, and the follow-up ran to a Postgres
+  row that only a page reload revealed. The chip strip made it worse by being
+  fed exclusively by `queue.updated` on the live stream: `GET /queue` was
+  wired but never called, so switching chats or reloading showed an EMPTY
+  strip with inputs still queued — and the boot-recovery contract that
+  restored rows "are visible in the queue UI and run on send-now" had no UI to
+  be visible in.
+
+  Four changes, the first three client-side:
+  - **Follow the drain.** Every turn-ends moment (a direct submission's
+    stream, a reattach, and the liveness watchdog's recovered path) now
+    re-reads the authoritative queue snapshot and attaches
+    to the turn the drain started, chaining through as many queued rows as
+    there are. A row that drained and finished before we looked is adopted
+    from Postgres instead of being left off the transcript. The retry backoff
+    is bounded on purpose: a row still queued after it runs out is not
+    draining on its own (a restart deliberately never auto-drains), and the
+    honest answer then is an accurate chip with a send-now button, not an
+    endless poll.
+  - **Load the snapshot when a conversation opens**, so chips survive a reload
+    or a chat switch — and go away when they are stale.
+  - **A direct submission the server queued** (the mirror of the #824 stale-busy
+    race: the client thought the conversation was idle, the server knew better)
+    no longer pumps the JSON queue ack as if it were an SSE stream, which left
+    an assistant bubble thinking forever over a turn that was never started.
+    It withdraws the optimistic bubbles and becomes an ordinary chip.
+  - Server: a drained turn's buffer is seeded with the queue snapshot, next to
+    the conversation/turn metadata events, so attaching to that turn is enough
+    to learn the queue's current shape — including that the row it is running
+    has moved `queued -> running` and must no longer offer send-now/remove.
 
 - **Kubernetes: a control plane that crashed and restarted IN PLACE still
   leaked every sandbox pod it had running (#1264).** The boot-time orphan

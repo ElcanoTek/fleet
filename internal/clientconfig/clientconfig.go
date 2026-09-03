@@ -2282,10 +2282,29 @@ func (b *Bundle) MCPServerConfigs() map[string]config.MCPServerConfig {
 			} else {
 				sc.Env = resolveEnvMap(s.Env, s.OptionalEnv)
 			}
+			// Absolutize bundle-relative script args (mcp/foo.py →
+			// <bundle>/mcp/foo.py). Until now the subprocess started only
+			// because its cwd WAS the bundle root, which is exactly what
+			// forced every server's relative output path into the operator's
+			// git checkout. Resolving here decouples "the script fleet
+			// launches" from "the directory the server writes into", so the
+			// cwd is free to be a managed workspace. Non-script args, absolute
+			// args and Agent Plugin args (opaque by spec) are left untouched;
+			// a script arg that does not resolve is left as-is so
+			// ValidateMCPArgPaths still reports it as the warning it is.
+			if s.plugin == "" {
+				sc.Args = absolutizeScriptArgs(bundleDir, sc.Args)
+			}
+			// Dir is only the FALLBACK cwd; a spawn path with a
+			// fleet-managed workspace launches the subprocess there instead
+			// (agentcore.StdioCwd). Script args were absolutized above, so the
+			// bundle root is no longer load-bearing for launching.
 			sc.Dir = bundleDir
 			if s.dir != "" {
-				// An Agent Plugin server launches in its plugin root (or declared cwd).
+				// An Agent Plugin server launches in its plugin root (or declared
+				// cwd) — a spec contract, not a default, so it is pinned.
 				sc.Dir = s.dir
+				sc.DirPinned = true
 			}
 			sc.IdentityEnv = append([]string(nil), s.IdentityEnv...)
 		}
@@ -2363,6 +2382,38 @@ var scriptExtensions = map[string]bool{
 // the credential enable-gate, since a missing script is a defect whether or not
 // the connector's creds happen to be set. Load logs any problems as warnings; a
 // CI test asserts the shipped bundle returns none.
+// absolutizeScriptArgs rewrites bundle-relative script args to absolute paths
+// against bundleDir. It is deliberately conservative and mirrors
+// ValidateMCPArgPaths' matching rules exactly: only a RELATIVE arg with a known
+// script extension that actually resolves to a file under the bundle is
+// rewritten. Everything else — flags, absolute paths, non-script values, and
+// anything that does not exist — is passed through unchanged, so a typo still
+// surfaces as the ValidateMCPArgPaths warning rather than being silently
+// transformed into a different-looking one.
+func absolutizeScriptArgs(bundleDir string, args []string) []string {
+	if bundleDir == "" || len(args) == 0 {
+		return args
+	}
+	var out []string
+	for i, arg := range args {
+		if filepath.IsAbs(arg) || !scriptExtensions[strings.ToLower(filepath.Ext(arg))] {
+			continue
+		}
+		p := filepath.Join(bundleDir, arg)
+		if info, err := os.Stat(p); err != nil || info.IsDir() {
+			continue
+		}
+		if out == nil {
+			out = append([]string(nil), args...)
+		}
+		out[i] = p
+	}
+	if out == nil {
+		return args
+	}
+	return out
+}
+
 func (b *Bundle) ValidateMCPArgPaths() []string {
 	bundleDir := b.Dir
 	if abs, err := filepath.Abs(b.Dir); err == nil {

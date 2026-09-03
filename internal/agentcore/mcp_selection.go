@@ -77,10 +77,14 @@ type MCPServerBase struct {
 	// HTTPURL means an HTTP server.
 	Command string
 	Args    []string
-	// Dir is the cwd the stdio subprocess launches in (the client-config bundle
-	// root) so relative args like `mcp/foo.py` resolve there; "" inherits the
-	// fleet process cwd.
+	// Dir is the FALLBACK cwd for the stdio subprocess; "" inherits the fleet
+	// process cwd. When this spawn has a fleet-managed workspace to offer, the
+	// subprocess launches there instead (StdioCwd) so a server's relative
+	// output path stops landing in the operator's bundle checkout.
 	Dir string
+	// DirPinned marks Dir as a contract (an Agent Plugin's plugin root), never
+	// overridden by a workspace.
+	DirPinned bool
 	// HTTPURL, when set, marks this as an HTTP (fast_io) server. HTTP servers
 	// reject account variants (credentials are header-based, not env-suffixed).
 	HTTPURL string
@@ -217,8 +221,10 @@ func BindMCPSelection(ctx context.Context, client *mcp.Client, selection MCPSele
 		}
 
 		// NewStdioTransport sets variantEnv on cmd.Env — credentials are never on
-		// argv and never enter the sandbox container. base.Dir pins the subprocess
-		// cwd to the bundle root so relative `mcp/*.py` args resolve.
+		// argv and never enter the sandbox container. The subprocess launches in
+		// this scope's workspace when it has one (StdioCwd), else base.Dir;
+		// script args are absolutized at bundle load, so neither choice affects
+		// whether the server starts.
 		//
 		// Graceful degradation (#182): a best-effort server that fails to start
 		// (transport error, bad command, init timeout) is logged and SKIPPED so the
@@ -230,7 +236,8 @@ func BindMCPSelection(ctx context.Context, client *mcp.Client, selection MCPSele
 		// Every other caller has no task identity — drop token-bearing keys
 		// instead of leaking the literal placeholder to the connector.
 		variantEnv = ExpandTaskIDEnv(variantEnv, "")
-		if err := client.AddStdioServer(ctx, name, base.Command, base.Args, variantEnv, base.Dir); err != nil {
+		cwd := StdioCwd(base.Dir, base.DirPinned, workdir)
+		if err := client.AddStdioServer(ctx, name, base.Command, base.Args, variantEnv, cwd); err != nil {
 			if base.Required {
 				return registered, fmt.Errorf("register server %q: %w", name, err)
 			}

@@ -443,6 +443,18 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	buf.Emit("user.message", map[string]any{
 		"text": userMessage,
 	})
+	if queueRowID != "" {
+		// Same reason as the metadata events above: seed the queue snapshot so
+		// a client that attaches to THIS turn learns the queue's current shape
+		// from the replay. It cannot have learned it from the previous turn —
+		// that buffer was already sealed when this drain was kicked, so the
+		// settle-time queue.updated had no subscribers — and the row this turn
+		// is running has since moved queued -> running, which is the
+		// difference between a chip offering send-now/remove and an inert one.
+		qctx, qcancel := context.WithTimeout(context.Background(), 3*time.Second)
+		s.emitQueueUpdate(qctx, user, conv.ID)
+		qcancel()
+	}
 
 	// Run the turn in a goroutine so the buffer stays alive even if
 	// this HTTP response disconnects. turnCtx is intentionally NOT
