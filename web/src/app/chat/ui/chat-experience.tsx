@@ -62,6 +62,10 @@ import { MemoryGraphView } from "./MemoryGraphView";
 import { ConversationTotalsChip, type PendingAttachment } from "./ChatChips";
 import { ConversationSidebar } from "./ConversationSidebar";
 import { SavePromptDialog } from "./SavePromptDialog";
+import {
+  DownloadChatDialog,
+  type DownloadOptions,
+} from "./DownloadChatDialog";
 import { useRailCollapse } from "@/app/shared/ui/NavRail";
 import { loadWorkspaceModels } from "@/app/shared/lib/workspaceModels";
 import { PageTopBar } from "@/app/shared/ui/PageTopBar";
@@ -136,6 +140,15 @@ export type ServerConfig = {
 export type PendingDeleteConversation = {
   id: string;
   title: string;
+};
+
+// What "Save to prompt library…" is aimed at. The conversation-level menu item
+// sets just id/title (distill the whole chat); the per-message action adds the
+// reply's persisted id so the distillation stops at that exchange.
+export type PromptSaveTarget = {
+  id: string;
+  title: string;
+  upToMessageId?: number;
 };
 
 type PersonasResponse = {
@@ -525,8 +538,14 @@ export function ChatExperience({
   const [pendingDeleteConversation, setPendingDeleteConversation] =
     useState<PendingDeleteConversation | null>(null);
   // "Save to prompt library…" target: while set, SavePromptDialog distills
-  // this conversation into an editable prompt-library draft.
+  // this conversation into an editable prompt-library draft. upToMessageId is
+  // set when the user saved from a specific assistant reply (the "Save as
+  // prompt" action under a message) so the distillation stops there instead of
+  // folding in whatever the chat moved on to.
   const [promptSaveTarget, setPromptSaveTarget] =
+    useState<PromptSaveTarget | null>(null);
+  // "Download chat…" target: while set, DownloadChatDialog offers the formats.
+  const [downloadTarget, setDownloadTarget] =
     useState<ConversationSummary | null>(null);
   // Header title click-to-edit. Holds the draft string while the input is
   // open; null means the static label is shown.
@@ -2440,6 +2459,22 @@ export function ChatExperience({
     }
   };
 
+  // savePromptFromMessage backs the "Save as prompt" action under a finished
+  // assistant reply. Someone decides an interaction is worth keeping the
+  // moment they finish reading a good answer — so the affordance lives there,
+  // not only in a hover-revealed sidebar kebab. The reply's persisted id rides
+  // along so the draft is distilled from THIS exchange rather than from
+  // whatever the chat wandered into afterwards.
+  const savePromptFromMessage = (message: Message) => {
+    const id = activeConversationId;
+    if (!id) return;
+    setPromptSaveTarget({
+      id,
+      title: conversations.find((c) => c.id === id)?.title ?? "this chat",
+      upToMessageId: message.dbId,
+    });
+  };
+
   // startProjectChat creates a conversation bound to a project (#509) — the
   // server validates membership and inherits the project's defaults +
   // curated connector selection — then opens it.
@@ -2922,36 +2957,48 @@ export function ChatExperience({
     return true;
   };
 
+  // The kebab item opens the format chooser; runDownload does the fetch once
+  // the user has picked one. Keeping the transfer here (rather than in the
+  // dialog) means every entry point shares one download path.
   const downloadConversation = async (conversation: ConversationSummary) => {
-    try {
-      const response = await fetch(
-        `/api/conversations/${conversation.id}/export`,
-        {
-          method: "GET",
-        },
-      );
-      if (!response.ok) {
-        console.error("export failed", response.status, await response.text());
-        return;
-      }
-      // Prefer the filename chosen by the server (Content-Disposition),
-      // fall back to a client-side slug if that header is stripped by a
-      // proxy somewhere.
-      const cd = response.headers.get("Content-Disposition") ?? "";
-      const match = /filename="([^"]+)"/i.exec(cd);
-      const filename = match?.[1] ?? `${conversation.id}.json`;
-      const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement("a");
-      anchor.href = url;
-      anchor.download = filename;
-      document.body.appendChild(anchor);
-      anchor.click();
-      anchor.remove();
-      URL.revokeObjectURL(url);
-    } catch (err) {
-      console.error("export failed", err);
+    setDownloadTarget(conversation);
+  };
+
+  const runDownload = async (
+    conversation: ConversationSummary,
+    { format, includeWork }: DownloadOptions,
+  ) => {
+    const query = new URLSearchParams({ format });
+    if (format !== "json") {
+      query.set("include", includeWork ? "full" : "conversation");
     }
+    const response = await fetch(
+      `/api/conversations/${conversation.id}/export?${query.toString()}`,
+      { method: "GET" },
+    );
+    if (!response.ok) {
+      const detail = await response.text();
+      console.error("export failed", response.status, detail);
+      throw new Error(
+        detail.trim() || `Could not download this chat (${response.status})`,
+      );
+    }
+    // Prefer the filename chosen by the server (Content-Disposition), fall
+    // back to a client-side slug if that header is stripped by a proxy
+    // somewhere.
+    const cd = response.headers.get("Content-Disposition") ?? "";
+    const match = /filename="([^"]+)"/i.exec(cd);
+    const extension = format === "markdown" ? "md" : format;
+    const filename = match?.[1] ?? `${conversation.id}.${extension}`;
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
   };
 
   // promoteConversation asks the server to synthesize a recurring-task proposal
@@ -4489,10 +4536,19 @@ export function ChatExperience({
 
         {promptSaveTarget ? (
           <SavePromptDialog
-            key={promptSaveTarget.id}
+            key={`${promptSaveTarget.id}:${promptSaveTarget.upToMessageId ?? ""}`}
             conversationId={promptSaveTarget.id}
             conversationTitle={promptSaveTarget.title}
+            upToMessageId={promptSaveTarget.upToMessageId}
             onClose={() => setPromptSaveTarget(null)}
+          />
+        ) : null}
+        {downloadTarget ? (
+          <DownloadChatDialog
+            key={downloadTarget.id}
+            conversationTitle={downloadTarget.title}
+            onDownload={(options) => runDownload(downloadTarget, options)}
+            onClose={() => setDownloadTarget(null)}
           />
         ) : null}
         {pendingDeleteConversation ? (
@@ -4755,6 +4811,7 @@ export function ChatExperience({
               retryLastUserMessage={retryLastUserMessage}
               regenerateLastAssistant={regenerateLastAssistant}
               branchFromMessage={branchFromMessage}
+              savePromptFromMessage={savePromptFromMessage}
               loadMemories={loadMemories}
               setSelectedModel={setSelectedModel}
               setModelPickerOpen={setModelPickerOpen}

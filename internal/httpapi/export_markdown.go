@@ -12,10 +12,11 @@ import (
 
 // renderConversationMarkdown renders a conversation's replay history (#210) as
 // human-readable Markdown: a header, then each turn entry by type (text /
-// reasoning / tool_call / tool_result / summary). Best-effort — an entry whose
-// content fails to decode is skipped rather than aborting the export. Pure
-// (no I/O), so it is unit-testable.
-func renderConversationMarkdown(conv *store.Conversation, history []agent.HistoryEntry, exportedAt time.Time) string {
+// reasoning / tool_call / tool_result / summary). scope decides whether the
+// agent's working trail is included or only the conversation itself.
+// Best-effort — an entry whose content fails to decode is skipped rather than
+// aborting the export. Pure (no I/O), so it is unit-testable.
+func renderConversationMarkdown(conv *store.Conversation, history []agent.HistoryEntry, exportedAt time.Time, scope exportScope) string {
 	var b strings.Builder
 
 	title := strings.TrimSpace(conv.Title)
@@ -33,6 +34,9 @@ func renderConversationMarkdown(conv *store.Conversation, history []agent.Histor
 	b.WriteString("\n\n---\n")
 
 	for _, e := range history {
+		if !scope.keeps(e.Type) {
+			continue
+		}
 		switch e.Type {
 		case "text":
 			var c agent.TextContent

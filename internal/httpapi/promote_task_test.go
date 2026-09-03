@@ -31,6 +31,20 @@ func seedConv(t *testing.T, s *Server, user string) *store.Conversation {
 	return conv
 }
 
+// seedConvWithToolCall is seedConv plus an agent working trail, so an export
+// test can tell the readable transcript from the full one.
+func seedConvWithToolCall(t *testing.T, s *Server, user string) *store.Conversation {
+	t.Helper()
+	conv := seedConv(t, s, user)
+	if _, err := s.store.AppendHistory(context.Background(), conv.ID, []agent.HistoryEntry{
+		{Role: "assistant", Type: "tool_call", Content: json.RawMessage(`{"id":"t1","name":"bash","input":"{\"command\":\"ls\"}"}`)},
+		{Role: "tool", Type: "tool_result", Content: json.RawMessage(`{"id":"t1","name":"bash","text":"nightly-etl.log"}`)},
+	}); err != nil {
+		t.Fatalf("AppendHistory: %v", err)
+	}
+	return conv
+}
+
 func pendingScheduleApproval(t *testing.T, s *Server, user, convID string) *store.Approval {
 	t.Helper()
 	pend, err := s.store.ListPendingApprovals(context.Background(), user, convID)

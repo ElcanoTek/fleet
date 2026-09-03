@@ -412,16 +412,34 @@ func (s *Server) handleConversationExport(w http.ResponseWriter, r *http.Request
 		return
 	}
 	exportedAt := time.Now().UTC()
-	// ?format=markdown renders a human-readable transcript (#210); the default
-	// (json) preserves the prior machine-readable shape exactly.
+	// Every format below is served as an attachment, so the browser saves the
+	// file instead of rendering it — which matters for the HTML format, whose
+	// body carries model- and tool-authored text. nosniff pins that: the
+	// browser may not re-type a download into something it would execute.
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	// ?include=full adds the agent's working trail (reasoning, tool calls and
+	// results, compaction summaries) to a RENDERED transcript; the default is
+	// the readable conversation alone. JSON is unaffected: it is the archival
+	// shape and always carries every entry.
+	scope := parseExportScope(r.URL.Query().Get("include"))
+	// ?format selects the artifact: a web page a non-technical reader can open
+	// and print, a Markdown document they can paste anywhere, or the raw JSON.
+	// The default stays json so existing callers of this endpoint are unmoved.
 	switch strings.ToLower(r.URL.Query().Get("format")) {
+	case "html":
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set(
+			"Content-Disposition",
+			fmt.Sprintf(`attachment; filename="%s"`, exportFilename(conv.Title, conv.ID, "html", "chat")),
+		)
+		_, _ = io.WriteString(w, renderConversationHTML(conv, history, exportedAt, scope))
 	case "markdown", "md":
 		w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
 		w.Header().Set(
 			"Content-Disposition",
 			fmt.Sprintf(`attachment; filename="%s"`, exportFilename(conv.Title, conv.ID, "md", "chat")),
 		)
-		_, _ = io.WriteString(w, renderConversationMarkdown(conv, history, exportedAt))
+		_, _ = io.WriteString(w, renderConversationMarkdown(conv, history, exportedAt, scope))
 	default:
 		body := map[string]any{
 			"conversation": conv,

@@ -277,6 +277,9 @@ same PR.
   the npm wrapper's `uv_kill` segfault, Fedora's abort-on-timeout, the residual
   upstream teardown crash, and `LimitCORE=0` — plus the drain theory that
   measurement refuted): [`docs/WEB-TIER-SHUTDOWN.md`](docs/WEB-TIER-SHUTDOWN.md)
+- **Downloading a chat** (the three export formats and why the readable one is
+  the default, the include-the-agent's-work scope, and the HTML renderer's
+  escaping guarantees): [`docs/CHAT-EXPORT.md`](docs/CHAT-EXPORT.md)
 - **Chat stream recovery** (why a lost SSE socket reconciles against Postgres
   instead of stamping a terminal state — the walk-away-and-come-back case):
   [`docs/CHAT-STREAM-RECOVERY.md`](docs/CHAT-STREAM-RECOVERY.md)

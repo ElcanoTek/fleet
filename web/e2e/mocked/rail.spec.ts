@@ -125,7 +125,7 @@ test("the per-row kebab exposes pin / rename / labels / archive / delete", async
   await expect(menu.getByRole("menuitem", { name: "Pin", exact: true })).toBeVisible();
   await expect(menu.getByRole("menuitem", { name: "Rename", exact: true })).toBeVisible();
   await expect(menu.getByRole("menuitem", { name: "Labels", exact: true })).toBeVisible();
-  await expect(menu.getByRole("menuitem", { name: "Download as JSON", exact: true })).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: "Download chat…", exact: true })).toBeVisible();
   await expect(menu.getByRole("menuitem", { name: "Share", exact: true })).toBeVisible();
   await expect(menu.getByRole("menuitem", { name: "Select…", exact: true })).toBeVisible();
   await expect(menu.getByRole("menuitem", { name: "Archive", exact: true })).toBeVisible();

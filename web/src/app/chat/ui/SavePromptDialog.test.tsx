@@ -131,4 +131,31 @@ describe("SavePromptDialog", () => {
     expect(onClose).toHaveBeenCalled();
     expect(orchestratorApi.createPrompt).not.toHaveBeenCalled();
   });
+
+  it("cuts the distillation at the reply the user saved from", async () => {
+    // "Save as prompt" under a message passes that reply's persisted id, so a
+    // later tangent in the same chat can't leak into the saved recipe.
+    render(
+      <SavePromptDialog
+        conversationId="conv-1"
+        conversationTitle="failed tasks"
+        upToMessageId={4242}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+      "/api/conversations/conv-1/suggest-prompt",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ up_to_message_id: 4242 }),
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.getByDisplayValue(draft.name)).toBeInTheDocument(),
+    );
+    expect(
+      screen.getByText(/up to the reply you saved from/i),
+    ).toBeInTheDocument();
+  });
+
 });
