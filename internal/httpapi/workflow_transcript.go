@@ -126,12 +126,12 @@ func workflowTranscriptFromHistory(history []agent.HistoryEntry) string {
 
 // clampRunes truncates on a rune boundary, marking that it did so. Counting
 // runes (not bytes) keeps a multi-byte character from being cut in half.
-func clampRunes(s string, max int) string {
+func clampRunes(s string, limit int) string {
 	r := []rune(s)
-	if len(r) <= max {
+	if len(r) <= limit {
 		return s
 	}
-	return string(r[:max]) + "…"
+	return string(r[:limit]) + "…"
 }
 
 // collapseWhitespace folds newlines and runs of spaces into single spaces, so
