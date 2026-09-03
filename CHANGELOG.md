@@ -38,6 +38,18 @@ prior versions are listed because none have shipped.
   that is absent or not yet created on disk falls back to the old behaviour
   rather than failing the spawn — `exec` refuses to start a process whose cwd
   is missing.
+- **`fleet doctor` reports leftover connector output in the bundle checkout.**
+  The fix above stops the bundle filling, but removes nothing already there, and
+  neither `fleet cleanup` nor the maintenance timer has ever known about the
+  bundle — it is the one tree on the box that nothing reclaims. Step 7 now
+  reports the untracked file count and total size in the client bundle checkout
+  beside the existing data-dir and image-store headroom checks, with the review
+  and `git clean` commands. Advisory, never a failure: doctor does not delete an
+  operator's files, and some of that residue is a real client report someone may
+  still want. Measured from `git status` rather than a directory name list, so it
+  catches whatever an agent actually named, and `--ignored=no` keeps a bundle
+  that has adopted the `.gitignore` safety net from reporting clean while still
+  filling the disk.
 
 - **`fleet update` can no longer leave the client bundle silently behind.** A
   deployment is fleet AND its bundle — connector display names and
