@@ -449,7 +449,18 @@ describe("a direct submission the server queued instead of running", () => {
     const { result } = renderHook(() => useTurnStream(h.deps));
     await result.current.submitPrompt("keep it clear and concise");
     // followQueueDrain is fire-and-forget from submitPrompt's finally.
-    await vi.waitFor(() => expect(h.store[CONV].length).toBe(4));
+    //
+    // Unlike its siblings above, this case runs on REAL timers (afterEach
+    // restores them and it never installs fake ones), so it races the real
+    // follow schedule: queueDrainFollowDelaysMs starts at 250ms, and only after
+    // that first attempt does the drain fetch, reattach, stream and withdraw
+    // the optimistic pair. vi.waitFor's default 1s deadline is enough on an
+    // idle machine and not enough on a loaded CI runner, where the store is
+    // still holding the un-withdrawn pair (5, not 4) when the deadline expires.
+    // An explicit deadline past the whole schedule fixes the flake without
+    // weakening anything: the assertion below is unchanged and still demands
+    // the store settle to exactly the four expected messages.
+    await vi.waitFor(() => expect(h.store[CONV].length).toBe(4), { timeout: 15000, interval: 25 });
 
     const msgs = h.store[CONV];
     // No orphan: the optimistic pair was withdrawn and the drained turn's own
