@@ -473,6 +473,20 @@ func (s *Store) DeleteUser(ctx context.Context, email string) error {
 	// Owned projects: mirror DeleteProject — detach every member's
 	// conversations (the history belongs to its user), delete the shared
 	// project memories (they are project state), then the projects.
+	//
+	// A TEAM-SHARED project is not the account's to take with it. Deleting a
+	// departing owner used to destroy the project and every team learning in
+	// it, for people who are still here and never agreed to that — the routine
+	// admin action for "X left the company" quietly deleted the team's work.
+	// It now fails closed and names what to transfer first (ADR-0057).
+	// Personal projects still go with the account: nobody else can see them.
+	shared, err := s.TeamSharedProjectsOwnedBy(ctx, email)
+	if err != nil {
+		return fmt.Errorf("check owned team-shared projects: %w", err)
+	}
+	if len(shared) > 0 {
+		return &OwnsSharedProjectsError{Projects: shared}
+	}
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE conversations SET project_id = NULL
 		 WHERE project_id IN (SELECT id FROM projects WHERE owner_email = $1)`, email); err != nil {

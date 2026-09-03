@@ -8,8 +8,10 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
+	"log"
 	"net/http"
 	"path/filepath"
 	"sort"
@@ -138,6 +140,15 @@ func (s *Server) projectByID(w http.ResponseWriter, r *http.Request) {
 	parts := strings.SplitN(rest, "/", 3)
 	id := parts[0]
 
+	// Transfer is dispatched BEFORE the membership gate: the case it exists for
+	// is an admin cleaning up after an owner who left, and an admin is usually
+	// not a member of the project. Its own authorization (owner or admin) lives
+	// in the handler.
+	if len(parts) == 2 && parts[1] == "transfer" {
+		s.projectTransfer(w, r, user, id)
+		return
+	}
+
 	p := s.projectForMember(w, r, user, id)
 	if p == nil {
 		return
@@ -155,6 +166,8 @@ func (s *Server) projectByID(w http.ResponseWriter, r *http.Request) {
 			s.projectConversations(w, r, p)
 		case "team-conversations":
 			s.projectTeamConversations(w, r, p)
+		case "members":
+			s.projectMembers(w, r, p)
 		case "impact":
 			s.projectDeleteImpact(w, r, p)
 		case "files":
@@ -288,6 +301,82 @@ func (s *Server) projectDeleteImpact(w http.ResponseWriter, r *http.Request, p *
 		return
 	}
 	writeJSON(w, impact)
+}
+
+// projectTransfer handles POST /projects/{id}/transfer — hand the project to
+// another member. Body: {"to_email": "..."}.
+//
+// A project could not change hands at all, which made "the owner left" an
+// unrecoverable state: every mutation is owner-scoped, so the definition
+// froze, and deleting the departing account destroyed the project and its
+// team learnings outright (ADR-0057). Two callers may fix that:
+//
+//   - the OWNER, handing it over deliberately, and
+//   - an ADMIN, because a departed owner cannot act — which is the whole
+//     point, and why this route sits before the membership gate.
+//
+// It changes only who may edit and delete: the team, the team learnings, the
+// chats and every member's access are untouched. A caller who is neither gets
+// the same 404 a non-member gets for any project subresource, so the route
+// leaks nothing about which projects exist.
+func (s *Server) projectTransfer(w http.ResponseWriter, r *http.Request, user, projectID string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	p, err := s.store.GetProject(r.Context(), projectID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	admin := s.isAdmin(user) || roleFromCtx(r.Context()) == store.RoleAdmin
+	if p == nil || (!strings.EqualFold(p.OwnerEmail, user) && !admin) {
+		http.Error(w, "project not found", http.StatusNotFound)
+		return
+	}
+	var req struct {
+		ToEmail string `json:"to_email"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	updated, err := s.store.TransferProjectOwnership(r.Context(), projectID, req.ToEmail)
+	if err != nil {
+		switch {
+		case errors.Is(err, store.ErrUserNotFound):
+			http.Error(w, "no such user", http.StatusBadRequest)
+		case errors.Is(err, store.ErrNotAProjectMember):
+			http.Error(w, err.Error(), http.StatusBadRequest)
+		default:
+			http.Error(w, err.Error(), http.StatusBadRequest)
+		}
+		return
+	}
+	//nolint:gosec // G706: %q escapes CR/LF, so the path-supplied project id cannot forge a log line; the two emails are an authenticated caller and a normalized DB value.
+	log.Printf("projects: %q transferred project %q to %q", user, projectID, updated.OwnerEmail)
+	writeJSON(w, updated)
+}
+
+// projectMembers handles GET /projects/{id}/members — the accounts a project
+// can be transferred to: everyone in its team, plus the current owner. Emails
+// only, and only for a project the caller is already a member of, so this adds
+// no directory read a member does not already have (they can see each other's
+// shared chats and team learnings by name).
+func (s *Server) projectMembers(w http.ResponseWriter, r *http.Request, p *store.Project) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	emails, err := s.store.ProjectMemberEmails(r.Context(), p.ID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if emails == nil {
+		emails = []string{}
+	}
+	writeJSON(w, map[string]any{"members": emails})
 }
 
 // projectFile is one entry in the project home's Sources list.

@@ -2827,6 +2827,37 @@ export function ChatExperience({
   // how many members leave it and become temporary — and offers the export
   // (Item A6). The rail kebab, which has no page to load those counts on,
   // keeps a plain confirm here.
+  // transferProject hands a project to another member (ADR-0057) — the fix for
+  // "the owner left", which froze the definition and, on account deletion,
+  // destroyed the project and its team learnings. Resolves null on success, or
+  // the server's reason (which names the real constraint: no such user, or not
+  // in the project's team).
+  const transferProject = async (
+    projectID: string,
+    toEmail: string,
+  ): Promise<string | null> => {
+    try {
+      const res = await fetch(
+        `/api/projects/${encodeURIComponent(projectID)}/transfer`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ to_email: toEmail }),
+        },
+      );
+      if (!res.ok) {
+        const detail = (await res.text()).trim();
+        return detail.length > 0 && detail.length <= 300
+          ? detail
+          : `Couldn't transfer the project (HTTP ${res.status}).`;
+      }
+      await loadProjects();
+      return null;
+    } catch {
+      return "Couldn't reach the server — the project is unchanged.";
+    }
+  };
+
   const deleteProject = async (projectID: string) => {
     try {
       const res = await fetch(
@@ -5002,6 +5033,9 @@ export function ChatExperience({
               myTeam={myTeam}
               onUpdateSettings={(patch) =>
                 updateProject(projectHomeProject.id, patch)
+              }
+              onTransfer={(toEmail) =>
+                transferProject(projectHomeProject.id, toEmail)
               }
               onDelete={() => {
                 setProjectHome(null);

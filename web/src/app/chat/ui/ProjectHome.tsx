@@ -117,6 +117,7 @@ export function ProjectHome({
   onNewChat,
   onSaveInstructions,
   onUpdateSettings,
+  onTransfer,
   myTeam,
   onDelete,
 }: {
@@ -141,6 +142,9 @@ export function ProjectHome({
     name?: string;
     team_shared?: boolean;
   }) => Promise<boolean>;
+  // Hand the project to another member (ADR-0057). Resolves true on success;
+  // the dialog keeps its draft and shows the reason on failure.
+  onTransfer: (toEmail: string) => Promise<string | null>;
   // The viewer's own team (#1157): "" = not in a team, so team sharing cannot
   // work yet and the dialog says where to fix that instead of letting the
   // toggle 400. undefined = not read yet — the copy stays neutral.
@@ -756,6 +760,12 @@ export function ProjectHome({
                 this project.
               </p>
             ) : null}
+            <TransferOwnership
+              projectId={project.id}
+              projectName={project.name}
+              currentOwner={project.owner_email}
+              onTransfer={onTransfer}
+            />
             <div className="flex items-center justify-between">
               <button
                 type="button"
@@ -1076,6 +1086,154 @@ export function TeamLearningsPanel({
           alone — they still reach every chat in the project.
         </p>
       ) : null}
+    </div>
+  );
+}
+
+// ── Transfer ownership ───────────────────────────────────────────────────────
+//
+// A project is owner-only to edit and delete, and could not change hands — so
+// "the owner left" was terminal: the definition froze (every mutation is
+// owner-scoped) and deleting the departing account destroyed the project and
+// every team learning in it. Handing it over is the missing move, and the
+// admin path (a departed owner cannot click anything) is why the endpoint
+// authorizes owner-OR-admin rather than owner alone.
+//
+// Collapsed until asked for: it is a once-in-a-project action sitting in a
+// dialog people open to rename things, and it should not read as a routine
+// control.
+function TransferOwnership({
+  projectId,
+  projectName,
+  currentOwner,
+  onTransfer,
+}: {
+  projectId: string;
+  projectName: string;
+  currentOwner: string;
+  onTransfer: (toEmail: string) => Promise<string | null>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [members, setMembers] = useState<string[] | null>(null);
+  const [choice, setChoice] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const selectId = useId();
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    queueMicrotask(() => {
+      void (async () => {
+        try {
+          const res = await fetch(
+            `/api/projects/${encodeURIComponent(projectId)}/members`,
+            { cache: "no-store" },
+          );
+          if (!res.ok) {
+            if (!cancelled) setMembers([]);
+            return;
+          }
+          const data = (await res.json()) as { members?: string[] };
+          if (!cancelled) setMembers(data.members ?? []);
+        } catch {
+          if (!cancelled) setMembers([]);
+        }
+      })();
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, projectId]);
+
+  // Everyone but the current owner — handing it to themselves is a no-op the
+  // server accepts silently, but offering it would just be confusing.
+  const candidates = (members ?? []).filter(
+    (m) => m.toLowerCase() !== currentOwner.toLowerCase(),
+  );
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        className="mb-4 justify-self-start text-[0.75rem] text-[var(--color-text-muted)] underline transition hover:text-[var(--color-text-primary)]"
+        onClick={() => setOpen(true)}
+      >
+        Transfer ownership…
+      </button>
+    );
+  }
+
+  return (
+    <div className="mb-4 rounded-md border border-[var(--color-border)] p-3">
+      <label
+        htmlFor={selectId}
+        className="mb-1 block text-[0.75rem] font-medium text-[var(--color-text-secondary)]"
+      >
+        Transfer ownership of {projectName}
+      </label>
+      <p className="mb-2 text-[0.72rem] leading-[1.5] text-[var(--color-text-muted)]">
+        The new owner can edit and delete the project. Its team, team learnings
+        and everyone&rsquo;s chats are unchanged — and you stay a member if
+        you&rsquo;re on the team.
+      </p>
+      {members === null ? (
+        <p className="text-[0.75rem] text-[var(--color-text-muted)]">Loading members…</p>
+      ) : candidates.length === 0 ? (
+        <p className="text-[0.75rem] leading-[1.5] text-[var(--color-text-muted)]">
+          Nobody else is on this project&rsquo;s team yet. Share the project with
+          a team, or have an admin add someone to it, and they&rsquo;ll appear
+          here.
+        </p>
+      ) : (
+        <div className="flex flex-wrap items-center gap-2">
+          <select
+            id={selectId}
+            value={choice}
+            onChange={(e) => setChoice(e.target.value)}
+            className="min-w-0 flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-2 py-1.5 text-[0.8rem] text-[var(--color-text-primary)] outline-none focus-visible:border-[var(--color-border-strong)]"
+          >
+            <option value="">Choose a member…</option>
+            {candidates.map((m) => (
+              <option key={m} value={m}>
+                {m}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            disabled={busy || !choice}
+            className="shrink-0 rounded-md border border-[var(--color-border-strong)] px-2.5 py-1.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] disabled:opacity-40"
+            onClick={() => {
+              if (
+                !window.confirm(
+                  `Transfer ${projectName} to ${choice}? They'll be able to edit and delete it; you won't.`,
+                )
+              )
+                return;
+              setBusy(true);
+              setError(null);
+              void onTransfer(choice).then((err) => {
+                setBusy(false);
+                if (err) setError(err);
+                else setOpen(false);
+              });
+            }}
+          >
+            {busy ? "Transferring…" : "Transfer"}
+          </button>
+        </div>
+      )}
+      {error ? (
+        <p className="mt-2 text-[0.72rem] text-[var(--color-danger)]">{error}</p>
+      ) : null}
+      <button
+        type="button"
+        className="mt-2 text-[0.72rem] text-[var(--color-text-muted)] underline hover:text-[var(--color-text-primary)]"
+        onClick={() => setOpen(false)}
+      >
+        Cancel
+      </button>
     </div>
   );
 }

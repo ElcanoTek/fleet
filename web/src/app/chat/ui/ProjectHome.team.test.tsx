@@ -82,6 +82,7 @@ function renderHome(
     onNewChat: vi.fn(),
     onSaveInstructions: vi.fn(async () => true),
     onUpdateSettings: vi.fn(async () => true),
+    onTransfer: vi.fn(async () => null),
     myTeam: "quant",
     onDelete: vi.fn(),
     ...over,
@@ -263,5 +264,56 @@ describe("ProjectHome — the three context layers (D3)", () => {
     expect(helper).toHaveTextContent("Instructions");
     expect(helper).toHaveTextContent("Team learnings");
     expect(helper).toHaveTextContent("My memory");
+  });
+});
+
+describe("ProjectHome — ownership transfer", () => {
+  it("hands the project to a teammate, and never to the current owner", async () => {
+    mockRoutes({ "/members": { members: ["alice@x.com", "bob@x.com"] } });
+    const props = renderHome({ initialSettingsOpen: true });
+
+    // Collapsed by default: a once-in-a-project action should not read as a
+    // routine control in a dialog people open to rename things.
+    expect(screen.queryByLabelText(/Transfer ownership of/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Transfer ownership…" }));
+
+    const picker = await screen.findByLabelText("Transfer ownership of Quant");
+    const options = within(picker as HTMLSelectElement)
+      .getAllByRole("option")
+      .map((o) => (o as HTMLOptionElement).value);
+    // The current owner is not offered — handing it to yourself is a no-op.
+    expect(options).toEqual(["", "bob@x.com"]);
+
+    fireEvent.change(picker, { target: { value: "bob@x.com" } });
+    vi.stubGlobal("confirm", vi.fn(() => true));
+    fireEvent.click(screen.getByRole("button", { name: "Transfer" }));
+
+    await waitFor(() => expect(props.onTransfer).toHaveBeenCalledWith("bob@x.com"));
+  });
+
+  it("says why there is nobody to transfer to, rather than an empty picker", async () => {
+    mockRoutes({ "/members": { members: ["alice@x.com"] } });
+    renderHome({ initialSettingsOpen: true });
+    fireEvent.click(screen.getByRole("button", { name: "Transfer ownership…" }));
+    expect(
+      await screen.findByText(/Nobody else is on this project’s team yet/),
+    ).toBeInTheDocument();
+  });
+
+  it("surfaces the server's reason when a transfer is refused", async () => {
+    mockRoutes({ "/members": { members: ["alice@x.com", "bob@x.com"] } });
+    renderHome({
+      initialSettingsOpen: true,
+      onTransfer: vi.fn(async () => "the new owner must be a member of the project's team"),
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Transfer ownership…" }));
+    const picker = await screen.findByLabelText("Transfer ownership of Quant");
+    fireEvent.change(picker, { target: { value: "bob@x.com" } });
+    vi.stubGlobal("confirm", vi.fn(() => true));
+    fireEvent.click(screen.getByRole("button", { name: "Transfer" }));
+
+    expect(
+      await screen.findByText(/must be a member of the project’s team|must be a member of the project's team/),
+    ).toBeInTheDocument();
   });
 });

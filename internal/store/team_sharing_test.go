@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -508,5 +509,153 @@ func TestDeleteProjectDropsLearningsKeepsChats(t *testing.T) {
 	}
 	if expired != 1 {
 		t.Errorf("a detached chat is temporary again: swept %d, want 1", expired)
+	}
+}
+
+// Ownership transfer (ADR-0057). A project is owner-only to edit and delete,
+// so before this "the owner left" was terminal: the definition froze and
+// deleting the account destroyed the project and its team learnings.
+func TestTransferProjectOwnership(t *testing.T) {
+	f := newTeamFixture(t)
+	if _, err := f.s.CreateProjectMemory(f.ctx, f.project.ID, "alice@x.com", "a learning", "fact"); err != nil {
+		t.Fatal(err)
+	}
+	chat := f.sharedChat(t, "alice@x.com", f.project.ID, "Study")
+
+	// Alice → Bob, a teammate.
+	moved, err := f.s.TransferProjectOwnership(f.ctx, f.project.ID, "bob@x.com")
+	if err != nil {
+		t.Fatalf("transfer: %v", err)
+	}
+	if moved.OwnerEmail != "bob@x.com" {
+		t.Errorf("owner = %q, want bob", moved.OwnerEmail)
+	}
+	// It changes WHO MAY EDIT, and nothing else.
+	if moved.TeamID != "quant" || moved.Name != f.project.Name {
+		t.Errorf("transfer must not touch the definition: %+v", moved)
+	}
+	if mems, _ := f.s.ListProjectMemories(f.ctx, f.project.ID); len(mems) != 1 {
+		t.Error("team learnings must survive a transfer")
+	}
+	if got, _ := f.s.Get(f.ctx, "alice@x.com", chat.ID); got == nil || !got.TeamVisible {
+		t.Error("members' chats and their shares must survive a transfer")
+	}
+
+	// The new owner can now edit; the old one cannot.
+	name := "Renamed by Bob"
+	if _, err := f.s.UpdateProject(f.ctx, "bob@x.com", f.project.ID, ProjectPatch{Name: &name}); err != nil {
+		t.Errorf("new owner must be able to edit: %v", err)
+	}
+	if _, err := f.s.UpdateProject(f.ctx, "alice@x.com", f.project.ID, ProjectPatch{Name: &name}); err == nil {
+		t.Error("the previous owner must lose edit rights")
+	}
+	// Alice is still a member (same team), so she keeps using the project.
+	if list, _ := f.s.ListProjectsForUser(f.ctx, "alice@x.com", "quant"); len(list) != 1 {
+		t.Error("the previous owner stays a member via the team")
+	}
+
+	// Handing a team-shared project outside its team is refused — it would be
+	// shared with a team its owner is not in.
+	if _, err := f.s.TransferProjectOwnership(f.ctx, f.project.ID, "dana@x.com"); !errors.Is(err, ErrNotAProjectMember) {
+		t.Errorf("cross-team transfer: got %v, want ErrNotAProjectMember", err)
+	}
+	// An unknown account is refused too.
+	if _, err := f.s.TransferProjectOwnership(f.ctx, f.project.ID, "ghost@x.com"); !errors.Is(err, ErrUserNotFound) {
+		t.Errorf("unknown target: got %v, want ErrUserNotFound", err)
+	}
+	// Re-transferring to the current owner is an idempotent no-op.
+	if _, err := f.s.TransferProjectOwnership(f.ctx, f.project.ID, "bob@x.com"); err != nil {
+		t.Errorf("idempotent re-transfer: %v", err)
+	}
+}
+
+// Deleting an account that still owns a TEAM-SHARED project used to destroy
+// that project and every team learning in it — for people who are still here.
+// It now fails closed and names what to transfer first.
+func TestDeleteUserRefusesToTakeTeamSharedProjects(t *testing.T) {
+	f := newTeamFixture(t)
+	if _, err := f.s.CreateProjectMemory(f.ctx, f.project.ID, "bob@x.com", "a learning", "fact"); err != nil {
+		t.Fatal(err)
+	}
+
+	err := f.s.DeleteUser(f.ctx, "alice@x.com")
+	var owns *OwnsSharedProjectsError
+	if !errors.As(err, &owns) {
+		t.Fatalf("delete: got %v, want OwnsSharedProjectsError", err)
+	}
+	if len(owns.Projects) != 1 || owns.Projects[0] != "Quant" {
+		t.Errorf("named projects = %v, want [Quant]", owns.Projects)
+	}
+	// Nothing was destroyed on the way to that refusal.
+	if p, _ := f.s.GetProject(f.ctx, f.project.ID); p == nil {
+		t.Fatal("the refused delete must not have removed the project")
+	}
+	if mems, _ := f.s.ListProjectMemories(f.ctx, f.project.ID); len(mems) != 1 {
+		t.Error("the refused delete must not have removed team learnings")
+	}
+	if u, err := f.s.GetUser(f.ctx, "alice@x.com"); err != nil || u == nil {
+		t.Error("the refused delete must not have removed the account")
+	}
+
+	// Transfer, then the delete goes through.
+	if _, err := f.s.TransferProjectOwnership(f.ctx, f.project.ID, "bob@x.com"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.DeleteUser(f.ctx, "alice@x.com"); err != nil {
+		t.Fatalf("delete after transfer: %v", err)
+	}
+	if p, _ := f.s.GetProject(f.ctx, f.project.ID); p == nil {
+		t.Error("the team keeps its project after the owner's account is deleted")
+	}
+	if mems, _ := f.s.ListProjectMemories(f.ctx, f.project.ID); len(mems) != 1 {
+		t.Error("the team keeps its learnings too")
+	}
+}
+
+// A PERSONAL project still goes with the account: nobody else can see it, so
+// there is nothing to hand over and no one to lose it.
+func TestDeleteUserStillTakesPersonalProjects(t *testing.T) {
+	f := newTeamFixture(t)
+	personal, err := f.s.CreateProject(f.ctx, &Project{OwnerEmail: "carol@x.com", Name: "Carol's"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.DeleteUser(f.ctx, "carol@x.com"); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if p, _ := f.s.GetProject(f.ctx, personal.ID); p != nil {
+		t.Error("a personal project belongs with its account")
+	}
+}
+
+// ProjectMemberEmails is the transfer picker's options: the team, plus the
+// owner (who is a member whether or not there is a team).
+func TestProjectMemberEmails(t *testing.T) {
+	f := newTeamFixture(t)
+	got, err := f.s.ProjectMemberEmails(f.ctx, f.project.ID)
+	if err != nil {
+		t.Fatalf("members: %v", err)
+	}
+	want := []string{"alice@x.com", "bob@x.com"}
+	if len(got) != len(want) {
+		t.Fatalf("members = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("members = %v, want %v", got, want)
+		}
+	}
+
+	// A personal project has exactly one: its owner.
+	personal, err := f.s.CreateProject(f.ctx, &Project{OwnerEmail: "carol@x.com", Name: "Solo"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	solo, err := f.s.ProjectMemberEmails(f.ctx, personal.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(solo) != 1 || solo[0] != "carol@x.com" {
+		t.Errorf("personal project members = %v", solo)
 	}
 }

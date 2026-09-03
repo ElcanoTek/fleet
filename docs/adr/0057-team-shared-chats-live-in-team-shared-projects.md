@@ -30,7 +30,10 @@ obvious place to revoke, because nothing displays its state.
 ## Decision
 
 **Team sharing is offered only for a chat that is inside a team-shared project,
-and the pairing is maintained by the write paths, not by hope.**
+and the pairing is maintained by the write paths, not by hope.** And because a
+project is now where a team's shared work accumulates, it must be able to
+outlive its owner: ownership is transferable, and deleting an owner no longer
+takes the project with them.
 
 The project home is the one discovery surface: a **Team** section lists the
 team-shared chats members contributed *to that project*. That gives every
@@ -72,7 +75,15 @@ Concretely:
    first byte: private until they share it, unaffected when the original is
    unshared or deleted, and requiring no write access to the original.
    Conversations keep exactly one owner.
-5. **Two audiences, two badges.** Share-by-link and share-with-team are
+5. **A project can change hands.** `POST /projects/{id}/transfer`, authorized
+   for the owner **or an admin**, moves `projects.owner_email` and nothing
+   else. The admin arm is the reason the route exists: every project mutation
+   is owner-scoped, so a departed owner left a frozen definition, and
+   `DeleteUser` — the routine "X left the company" action — deleted their
+   projects along with every team learning in them, for people still using
+   them. `DeleteUser` now fails closed on an account owning team-shared
+   projects and names them; personal projects still go with the account.
+6. **Two audiences, two badges.** Share-by-link and share-with-team are
    independent (a chat can carry one, both, or neither) and are drawn with
    different glyphs, each always labeled with its audience. One unlabeled chain
    link previously stood for the only scope that existed, which inside a
@@ -84,11 +95,14 @@ Concretely:
 - `internal/store/team_sharing_test.go` — the read gates (teammate yes, other
   team no, teamless no, unshared no; tool entries filtered out), all five ways
   the pairing is maintained, the project-scoped Team listing, branching from a
-  shared chat, and the leave/delete impact counts.
+  shared chat, the leave/delete impact counts, ownership transfer (including
+  the cross-team refusal), and that deleting an owner of a team-shared project
+  is refused before anything is destroyed.
 - `internal/httpapi/team_sharing_http_test.go` — `team-view` over HTTP including
   the 404-for-everything-else rule, a teammate's branch landing in the project,
-  the Team section and delete-impact endpoints, and the team-learnings
-  permission gate.
+  the Team section and delete-impact endpoints, the team-learnings permission
+  gate, transfer by the owner and by an admin (and the 404 for anyone else),
+  and the admin delete's `409` naming the projects to transfer.
 - `internal/httpapi/conversation_routes_test.go` — `team-view` is in the
   dispatch table and stays in sync with it.
 - `web/src/app/chat/ui/ShareDialog.test.tsx` — the UI narrowing and its copy,
@@ -116,6 +130,10 @@ Concretely:
 - **Leaving a team is now destructive in a way it was not.** It unshares the
   leaver's chats. Settings → Team therefore confirms first and quotes the
   counts, rather than acting and reporting afterwards.
+- **Deleting a user can now fail.** An account owning team-shared projects is
+  refused until they are transferred. That is a new way for a previously
+  always-succeeding admin action to stop, and it is the point: the old
+  behavior's success was data loss for everyone else on the team.
 
 ## Alternatives considered
 

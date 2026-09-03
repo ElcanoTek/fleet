@@ -432,3 +432,127 @@ func TestMyTeamReportsLeaveImpact(t *testing.T) {
 		t.Errorf("me/team = %+v, want quant / 1 project / 1 chat", out)
 	}
 }
+
+// Ownership transfer over HTTP (ADR-0057). Two callers may do it — the owner,
+// and an ADMIN, because the case it exists for is an owner who has left and
+// cannot click anything. Everyone else gets the same 404 a non-member gets.
+func TestProjectTransferOwnership(t *testing.T) {
+	f := newTeamHTTPFixture(t)
+	body := `{"to_email":"bob@x.com"}`
+
+	// A member who is not the owner and not an admin: 404, and no transfer.
+	if w := projectSub(t, f.srv, "POST", "bob@x.com", f.project.ID+"/transfer", body); w.Code != 404 {
+		t.Errorf("member transfer: status %d, want 404", w.Code)
+	}
+	// Someone outside the team entirely: also 404 — the route leaks nothing
+	// about which projects exist.
+	if w := projectSub(t, f.srv, "POST", "zoe@x.com", f.project.ID+"/transfer", body); w.Code != 404 {
+		t.Errorf("outsider transfer: status %d, want 404", w.Code)
+	}
+	if p, _ := f.st.GetProject(f.ctx, f.project.ID); p.OwnerEmail != "alice@x.com" {
+		t.Fatalf("owner changed on a refused transfer: %q", p.OwnerEmail)
+	}
+
+	// The owner hands it over.
+	w := projectSub(t, f.srv, "POST", "alice@x.com", f.project.ID+"/transfer", body)
+	if w.Code != 200 {
+		t.Fatalf("owner transfer: status %d body %s", w.Code, w.Body.String())
+	}
+	var out store.Project
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.OwnerEmail != "bob@x.com" || out.TeamID != "quant" {
+		t.Errorf("transferred project = %+v", out)
+	}
+
+	// Handing it outside the team is refused with the reason, not a 404 —
+	// the caller is authorized, the target is wrong.
+	w = projectSub(t, f.srv, "POST", "bob@x.com", f.project.ID+"/transfer", `{"to_email":"zoe@x.com"}`)
+	if w.Code != 400 {
+		t.Errorf("cross-team transfer: status %d body %s", w.Code, w.Body.String())
+	}
+}
+
+// The admin path: a departed owner cannot act, so an admin must be able to.
+func TestProjectTransferByAdmin(t *testing.T) {
+	f := newTeamHTTPFixture(t)
+	// serverFixture's config has no ADMIN_EMAILS, so the admin arrives the
+	// other way the middleware supplies: the request's resolved role.
+	req := httptest.NewRequest("POST", "/projects/"+f.project.ID+"/transfer",
+		strings.NewReader(`{"to_email":"bob@x.com"}`))
+	ctx := context.WithValue(req.Context(), ctxKeyUser, "zoe@x.com")
+	ctx = context.WithValue(ctx, ctxKeyRole, store.RoleAdmin)
+	req = req.WithContext(ctx)
+	w := httptest.NewRecorder()
+	f.srv.projectByID(w, req)
+	if w.Code != 200 {
+		t.Fatalf("admin transfer: status %d body %s", w.Code, w.Body.String())
+	}
+	if p, _ := f.st.GetProject(f.ctx, f.project.ID); p.OwnerEmail != "bob@x.com" {
+		t.Errorf("owner after admin transfer = %q", p.OwnerEmail)
+	}
+}
+
+// GET /projects/{id}/members backs the transfer picker.
+func TestProjectMembersEndpoint(t *testing.T) {
+	f := newTeamHTTPFixture(t)
+	w := projectSub(t, f.srv, "GET", "bob@x.com", f.project.ID+"/members", "")
+	if w.Code != 200 {
+		t.Fatalf("members: status %d body %s", w.Code, w.Body.String())
+	}
+	var out struct {
+		Members []string `json:"members"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Members) != 2 {
+		t.Errorf("members = %v, want alice + bob", out.Members)
+	}
+	// Membership-gated like every other project subresource.
+	if w := projectSub(t, f.srv, "GET", "zoe@x.com", f.project.ID+"/members", ""); w.Code != 404 {
+		t.Errorf("non-member: status %d, want 404", w.Code)
+	}
+}
+
+// Deleting an account that still owns a team-shared project is refused with a
+// 409 that NAMES the projects — the admin's next step is a transfer, not a
+// support ticket. Before this the delete succeeded and took the team's project
+// and every learning in it.
+func TestAdminUserDeleteRefusesOwnedSharedProjects(t *testing.T) {
+	f := newTeamHTTPFixture(t)
+	if _, err := f.st.CreateProjectMemory(f.ctx, f.project.ID, "bob@x.com", "a learning", "fact"); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest("DELETE", "/admin/users/alice%40x.com", nil)
+	req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, "root@x.com"))
+	w := httptest.NewRecorder()
+	f.srv.handleAdminUserDelete(w, req, "alice@x.com")
+	if w.Code != 409 {
+		t.Fatalf("delete owner of a shared project: status %d body %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "Quant") {
+		t.Errorf("the 409 must name the project to transfer: %s", w.Body.String())
+	}
+	if u, err := f.st.GetUser(f.ctx, "alice@x.com"); err != nil || u == nil {
+		t.Error("the refused delete must leave the account intact")
+	}
+
+	// After a transfer the delete goes through, and the team keeps everything.
+	if _, err := f.st.TransferProjectOwnership(f.ctx, f.project.ID, "bob@x.com"); err != nil {
+		t.Fatal(err)
+	}
+	w = httptest.NewRecorder()
+	f.srv.handleAdminUserDelete(w, req, "alice@x.com")
+	if w.Code != 200 && w.Code != 204 {
+		t.Fatalf("delete after transfer: status %d body %s", w.Code, w.Body.String())
+	}
+	if p, _ := f.st.GetProject(f.ctx, f.project.ID); p == nil {
+		t.Error("the team's project must survive the owner's account deletion")
+	}
+	if mems, _ := f.st.ListProjectMemories(f.ctx, f.project.ID); len(mems) != 1 {
+		t.Error("the team's learnings must survive it too")
+	}
+}

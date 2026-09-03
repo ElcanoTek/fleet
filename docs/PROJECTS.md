@@ -13,7 +13,11 @@ Reuses the #237 team RBAC trust-group — no new membership table:
   `users.team_id` matches, plus the owner.
 - An empty `team_id` = personal project.
 - **Only the owner edits or deletes** the definition; members chat in it and
-  read/write its shared memory.
+  read/write its shared memory. Ownership can be **transferred** —
+  `POST /projects/{id}/transfer {"to_email": …}`, by the owner or an admin — so
+  "the owner left" is recoverable; see [`TEAM-SHARING.md`](TEAM-SHARING.md).
+  Deleting an account that still owns a team-shared project is refused (`409`)
+  until it is transferred.
 - Sharing always targets the creator's **own** team (the server resolves it —
   you cannot share into a team you don't belong to).
 
@@ -121,8 +125,7 @@ so the delete confirm says so, and quotes the counts.
   eval-gate-before-model-change) are follow-ons.
 - No per-project RBAC beyond the team trust-group (no roles inside a project),
   and no invitations: adding someone to an existing team is an admin action
-  (ADR-0047), not a request the invitee can send or accept. **No ownership
-  transfer** — a real gap when an owner leaves.
+  (ADR-0047), not a request the invitee can send or accept.
 - Project deletion detaches conversations (history belongs to its users) and
   deletes shared memories (they are project state).
 - No campaign lifecycle (archive/complete), and no automatic proposal of team

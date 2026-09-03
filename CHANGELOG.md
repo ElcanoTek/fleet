@@ -57,6 +57,23 @@ prior versions are listed because none have shipped.
 - **Find your stuff.** Search across a project's chats — yours and the team's —
   from one field on the project home.
 
+- **A project can change hands.** It was owner-only to edit and delete and
+  could not be transferred, which made "the owner left" terminal in two ways.
+  The definition froze — every mutation is owner-scoped, so nobody could
+  rename it, change its instructions, re-share it, or delete it. And worse,
+  deleting the departing account **destroyed the project outright**: the
+  routine admin action for "X left the company" detached every member's chats
+  and deleted every team learning in the project, silently, for people who
+  were still using it. Now `POST /projects/{id}/transfer` hands the project to
+  another member — by the owner, or by an **admin**, which is the point, since
+  a departed owner cannot click anything. It changes only who may edit and
+  delete; the team, the team learnings, the chats and everyone's access are
+  untouched. Deleting an account that still owns team-shared projects is
+  refused with a `409` naming them, so an admin transfers first instead of
+  discovering the loss afterwards. Personal projects still go with the
+  account — nobody else can see them. The control is a collapsed **Transfer
+  ownership…** in the project settings dialog.
+
 ### Fixed
 
 - **"Delete all unpinned" deleted chats filed in a project.** The rail promises

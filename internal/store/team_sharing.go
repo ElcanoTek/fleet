@@ -243,6 +243,122 @@ type ProjectImpact struct {
 	TeamSharedChats int `json:"team_shared_chats"`
 }
 
+// ErrNotAProjectMember is returned when a transfer names someone who is not in
+// the project's team — handing a team-shared project to an outsider would
+// leave it shared with a team its owner is not in, which nobody can reason
+// about.
+var ErrNotAProjectMember = errors.New("the new owner must be a member of the project's team")
+
+// OwnsSharedProjectsError is returned by DeleteUser when the account still
+// owns team-shared projects. Deleting it would take those projects — and every
+// team learning in them — away from people who are still here, so the delete
+// fails closed and names what to transfer first.
+type OwnsSharedProjectsError struct{ Projects []string }
+
+func (e *OwnsSharedProjectsError) Error() string {
+	return "account still owns team-shared projects: " + strings.Join(e.Projects, ", ")
+}
+
+// TeamSharedProjectsOwnedBy lists the NAMES of team-shared projects the user
+// owns — what a delete would destroy, and what an admin must transfer first.
+// Personal projects are excluded: nobody else can see them, so they belong
+// with the account.
+func (s *Store) TeamSharedProjectsOwnedBy(ctx context.Context, email string) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT name FROM projects WHERE owner_email = $1 AND team_id <> '' ORDER BY name`,
+		normalizeEmail(email))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err != nil {
+			return nil, err
+		}
+		out = append(out, n)
+	}
+	return out, rows.Err()
+}
+
+// ProjectMemberEmails lists who a project can be handed to: everyone in its
+// team, plus the current owner (who is always a member, team or not). Sorted,
+// deduplicated, emails only — the transfer picker's options.
+func (s *Store) ProjectMemberEmails(ctx context.Context, projectID string) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT DISTINCT email FROM (
+			SELECT p.owner_email AS email FROM projects p WHERE p.id = $1
+			UNION
+			SELECT u.email FROM users u
+			JOIN projects p ON p.id = $1
+			WHERE p.team_id <> '' AND u.team_id = p.team_id
+		) m ORDER BY email`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var e string
+		if err := rows.Scan(&e); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// TransferProjectOwnership hands a project to newOwnerEmail. It changes ONLY
+// who may edit and delete the definition: the team it is shared with, its
+// team learnings, its chats and every member's access are untouched, because
+// none of those are keyed on the owner.
+//
+// A project could not change hands at all, which made "the owner left" an
+// unrecoverable state: the definition was frozen (every mutation is
+// owner-scoped) and deleting the departing account destroyed the project and
+// its team learnings outright. This is the missing move.
+//
+// WHO may call it is the handler's gate (the owner, or an admin — the admin
+// path is the whole point, since a departed owner cannot act). What the store
+// enforces is that the result makes sense: the target exists, and for a
+// team-shared project belongs to that team.
+func (s *Store) TransferProjectOwnership(ctx context.Context, projectID, newOwnerEmail string) (*Project, error) {
+	newOwner := normalizeEmail(newOwnerEmail)
+	if newOwner == "" {
+		return nil, errors.New("new owner email required")
+	}
+	target, err := s.GetUser(ctx, newOwner)
+	if err != nil {
+		return nil, err // ErrUserNotFound for an unknown account
+	}
+	p, err := s.GetProject(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	if p == nil {
+		return nil, errors.New("project not found")
+	}
+	if p.OwnerEmail == newOwner {
+		return p, nil // already theirs — idempotent, not an error
+	}
+	if p.TeamID != "" && !strings.EqualFold(strings.TrimSpace(target.TeamID), p.TeamID) {
+		return nil, ErrNotAProjectMember
+	}
+	row := s.db.QueryRowContext(ctx,
+		`UPDATE projects SET owner_email = $1, updated_at = $2 WHERE id = $3
+		 RETURNING `+projectColumns,
+		newOwner, time.Now().Unix(), projectID)
+	updated, err := scanProject(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, errors.New("project not found")
+		}
+		return nil, err
+	}
+	return updated, nil
+}
+
 // ProjectImpact counts what a delete would take with it. Best-effort display
 // data: the counts are read outside the delete transaction, so a chat filed a
 // moment later is simply not reflected.

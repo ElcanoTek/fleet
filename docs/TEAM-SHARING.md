@@ -172,17 +172,103 @@ once-per-account act, and two surfaces already own it. So:
   chat. Co-authoring a live conversation is a different feature (one workspace,
   one sandbox, one cost ledger).
 - **No file sharing through a team share.** Transcript only, deliberately.
-- **No automatic proposal of team learnings.** The feedback→learning loop
-  (#516) exists at *task* scope and is still not project-scoped; extending it is
-  a separate, decision-gated pass, and it needs `FLEET_SELF_IMPROVE_ENABLED`,
-  which stays **off by default**. Recommendation on the record: leave it off
-  until that pass ships with project scoping.
+- **No repeated-corrections detector.** See "The auto-proposal question"
+  below — it is decided, not deferred.
 - **No campaign lifecycle** (archive/complete), **no per-project bindings** for
   scheduled tasks / skills / eval sets, **no roles inside a project**, **no
-  invitations**, **no ownership transfer** (still a real gap when an owner
-  leaves), **nothing cross-instance**.
+  invitations**, **nothing cross-instance**. (Ownership transfer *was* on this
+  list; it is built — see above.)
 - **Portfolio-wide actions** ("apply this block list to every index deal") are
   the Datasets feature's shape, not this one — see [`DATASETS.md`](DATASETS.md).
+
+## The auto-proposal question (P2), decided
+
+The brief's P2 was: *"when members keep correcting the same thing, fleet drafts
+a team learning, a member approves, and it lands in the same Team learnings
+store"* — the mirror image of Item D, gated on Q2
+(`FLEET_SELF_IMPROVE_ENABLED`). **We are not building the correction
+detector.** Not for size — because most of the outcome already ships, and the
+missing piece conflicts with the invariant this same pass establishes.
+
+**The outcome is largely already delivered, by D1 + D2.** The chat agent
+already has a `propose_memory` tool that stages a proposal a human approves —
+that is the "Save this memory?" card. Before this pass it could only propose to
+*personal* memory. It now offers **Team learnings** as the destination, and
+preselects it inside a team-shared project. So "fleet proposes a team learning,
+a member approves, it lands in the Team learnings store" is a thing that
+happens today, without anyone remembering to save it. What P2 adds on top is
+specifically the *trigger*: distilling from repeated corrections rather than
+from the model noticing a durable fact.
+
+**That trigger needs two things fleet does not have, and one it should not do.**
+
+1. *There is no feedback primitive in chat at all.* The #516 loop is built on
+   `task_feedback` — thumbs-down plus a critique box on a scheduled task's
+   run. Chat has no thumbs, no rating, no critique: a search for one across
+   `internal/httpapi`, `internal/store` and the chat UI returns nothing. P2
+   would have to design and ship per-message feedback (table, migration,
+   endpoints, UI, permissions) first. That is a feature in its own right,
+   bigger than any single item in this pass.
+2. *It lives in the other database.* `task_feedback` and
+   `learned_instructions` are in the **sched** Postgres database, with its own
+   migration system — deliberately separate from the chat store (ADR-0005).
+   Only the distiller itself (`agent.Manager.DistillLearnedInstruction`, a pure
+   `(prompt, critiques, prior) → instruction` call) ports cleanly.
+3. *And the evidence it wants is other people's private chats.* "Members keep
+   correcting the same thing" means reading across the members' chats in a
+   project. Those chats are private — that is the rule ADR-0057 is built on,
+   and the reason team sharing is a per-chat opt-in. Distilling a shared
+   learning out of them would quietly undo it. Restricting the evidence pool to
+   *team-shared* chats keeps the invariant but leaves too little signal to cross
+   any sensible threshold.
+
+So P2 is not a follow-up we are deferring; it is a design question we are
+answering **no** to in its stated form. If the need resurfaces, the honest
+version is "let a member turn a correction into a proposed team learning
+explicitly" — one button on a message, no cross-user inference — and D1's Save
+action is already most of that.
+
+**Q2 is answered with it.** `FLEET_SELF_IMPROVE_ENABLED` gates the *task*-scoped
+loop, which is an existing, unrelated feature. Nothing in Projects reads it,
+before or after this pass. It stays **off by default**, for the reason it always
+was: it feeds user-authored critiques through an LLM to draft an instruction, and
+the staged-approval design is what makes that safe rather than the flag. Turning
+it on for a given box is that box's operator decision about the task feature, not
+a prerequisite for anything here. There is no pending decision blocking Projects.
+
+## Ownership transfer
+
+A project is owner-only to edit and delete. Until now it could not change
+hands, which made "the owner left" terminal in two ways — the second worse than
+the first:
+
+- the definition **froze**: every mutation is owner-scoped, so nobody could
+  rename it, change its instructions, re-share it, or delete it;
+- deleting the departing account **destroyed the project outright**.
+  `DeleteUser` detached every member's chats and deleted the project's shared
+  memories along with the row — so the routine admin action for "X left the
+  company" silently took the team's project and every team learning in it.
+
+Both are fixed:
+
+- `POST /projects/{id}/transfer {"to_email": …}` hands the project over. It
+  changes **only** who may edit and delete — the team, the team learnings, the
+  chats and everyone's access are untouched, because none of those are keyed on
+  the owner. Two callers are authorized: the **owner**, and an **admin** —
+  the admin path is the point, since a departed owner cannot click anything, and
+  it is why the route sits *before* the membership gate (an admin is usually not
+  a member). Anyone else gets the same 404 a non-member gets for any project
+  subresource. For a team-shared project the target must be in that team, so a
+  project can never end up shared with a team its owner is not in.
+- `DeleteUser` now **fails closed** when the account still owns team-shared
+  projects, and the admin Users tab surfaces it as a `409` naming them:
+  *"transfer them to another member first, then delete the account"*. Personal
+  projects still go with the account — nobody else can see them, so there is
+  nothing to hand over and no one to lose.
+
+The UI is a collapsed **Transfer ownership…** control in the project settings
+dialog (it is a once-in-a-project action, not a routine one), backed by
+`GET /projects/{id}/members` for the picker.
 
 ## Deviations from the brief
 

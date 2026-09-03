@@ -45,6 +45,7 @@ function renderHome() {
       onNewChat={() => {}}
       onSaveInstructions={async () => true}
       onUpdateSettings={async () => true}
+      onTransfer={async () => null}
       myTeam=""
       onDelete={async () => true}
     />,
