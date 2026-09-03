@@ -7,16 +7,11 @@ export const runtime = "nodejs";
 
 type RouteContext = { params: Promise<{ conversationId: string }> };
 
-// POST /api/conversations/{id}/suggest-prompt → distills the conversation into
-// a prompt-library draft ({name, description, content}). Proxies to the chat
-// server's /conversations/{id}/suggest-prompt; nothing is persisted — the
-// client shows the draft in an editable review dialog and saves the approved
-// version through the orchestrator's existing POST /prompts.
-//
-// The optional body ({up_to_message_id}) names the reply the user is saving
-// from, so the "Save as prompt" action on a message distills that exchange
-// rather than everything the chat wandered into afterwards. It is forwarded
-// as-is; the Go handler treats it as advisory.
+// POST /api/conversations/{id}/suggest-prompt → turns the whole conversation
+// into a workflow-template draft ({name, description, content}). Proxies to
+// the chat server's /conversations/{id}/suggest-prompt; nothing is persisted —
+// the client shows the draft in an editable review dialog and saves the
+// approved version through the orchestrator's existing POST /prompts.
 export async function POST(request: NextRequest, context: RouteContext) {
   const csrf = verifyOrigin(request);
   if (!csrf.ok) return csrf.response;
@@ -26,13 +21,10 @@ export async function POST(request: NextRequest, context: RouteContext) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   const { conversationId } = await context.params;
-  const body = await request.text();
   const { upstream, error } = await chatServerProxy(
     session,
     `/conversations/${encodeURIComponent(conversationId)}/suggest-prompt`,
-    body
-      ? { method: "POST", body, headers: { "Content-Type": "application/json" } }
-      : { method: "POST" },
+    { method: "POST" },
   );
   if (error) return error;
   const text = await upstream.text();

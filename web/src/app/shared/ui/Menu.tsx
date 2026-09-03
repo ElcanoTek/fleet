@@ -45,6 +45,9 @@ export type MenuPlacement = "bottom-end" | "top-stretch" | "top-start" | "top-en
 
 const VIEWPORT_MARGIN = 8;
 
+// Space left between the menu surface and a flyout opened beside it.
+const FLYOUT_GAP = 6;
+
 function focusableItems(container: HTMLElement): HTMLElement[] {
   // The surfaces only ever render visible controls, so a plain selector is
   // sufficient — and avoids an offsetParent visibility check that has no layout
@@ -163,15 +166,24 @@ function positionMenu(menu: HTMLElement, anchor: DOMRect, placement: MenuPlaceme
 // positionFlyout places a flyout beside its trigger item (the handoff's
 // placeFlyout): open to the right, flip to the left if it would overflow, and
 // clamp vertically so it stays fully on-screen.
-function positionFlyout(flyout: HTMLElement, anchor: DOMRect) {
+//
+// The gap is measured from the MENU's edge, not the trigger item's. The item
+// is inset by the surface's own padding (p-1.5 → 6px), which is exactly the
+// gap we want to leave — so anchoring to the item put the flyout flush against
+// the menu, and which side of flush it landed on came down to sub-pixel
+// rounding of two independently rounded `left` values. Menus whose widest item
+// changed by a few pixels could therefore start overlapping their own flyout.
+function positionFlyout(flyout: HTMLElement, anchor: DOMRect, menu: DOMRect) {
   const w = flyout.offsetWidth;
   const h = flyout.offsetHeight;
   const vw = window.innerWidth;
   const vh = window.innerHeight;
-  let left = anchor.right + 6;
-  if (left + w > vw - VIEWPORT_MARGIN) left = anchor.left - w - 6;
+  let left = Math.max(anchor.right, menu.right) + FLYOUT_GAP;
+  if (left + w > vw - VIEWPORT_MARGIN) {
+    left = Math.min(anchor.left, menu.left) - w - FLYOUT_GAP;
+  }
   if (left < VIEWPORT_MARGIN) left = VIEWPORT_MARGIN;
-  let top = anchor.top - 6;
+  let top = anchor.top - FLYOUT_GAP;
   if (top + h > vh - VIEWPORT_MARGIN) top = vh - VIEWPORT_MARGIN - h;
   if (top < VIEWPORT_MARGIN) top = VIEWPORT_MARGIN;
   flyout.style.position = "fixed";
@@ -224,7 +236,13 @@ export function Menu({
     if (anchor && menu) positionMenu(menu, anchor.getBoundingClientRect(), placement);
     const flyEl = flyoutRef.current;
     const flyAnchor = flyoutAnchorRef?.current;
-    if (showFlyout && flyEl && flyAnchor) positionFlyout(flyEl, flyAnchor.getBoundingClientRect());
+    if (showFlyout && flyEl && flyAnchor && menu) {
+      positionFlyout(
+        flyEl,
+        flyAnchor.getBoundingClientRect(),
+        menu.getBoundingClientRect(),
+      );
+    }
   });
 
   // Focus the first item on open.

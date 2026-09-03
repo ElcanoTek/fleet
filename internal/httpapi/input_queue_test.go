@@ -100,7 +100,7 @@ func (f *gatedEngine) ExtractMemories(context.Context, string, string, []string)
 func (f *gatedEngine) SuggestRecurringTask(context.Context, string, []string) (*agent.RecurringTaskProposal, error) {
 	return nil, nil
 }
-func (f *gatedEngine) SuggestLibraryPrompt(context.Context, string) (*agent.LibraryPromptDraft, error) {
+func (f *gatedEngine) SuggestLibraryPrompt(context.Context, agent.LibraryPromptInput) (*agent.LibraryPromptDraft, error) {
 	return nil, nil
 }
 func (f *gatedEngine) MCPBroker() agentcore.MCPBroker { return nil }
