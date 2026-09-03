@@ -164,6 +164,11 @@ type ProjectPatch struct {
 }
 
 // UpdateProject applies a partial update, owner-only (the WHERE enforces it).
+//
+// Turning team sharing OFF also unshares every team-visible chat in the
+// project, in the same transaction: the project is where a teammate would have
+// found them, and ADR-0057's pairing says a team-shared chat never outlives
+// the place it appears.
 func (s *Store) UpdateProject(ctx context.Context, ownerEmail, id string, patch ProjectPatch) (*Project, error) {
 	if patch.Name != nil {
 		n := strings.TrimSpace(*patch.Name)
@@ -183,7 +188,12 @@ func (s *Store) UpdateProject(ctx context.Context, ownerEmail, id string, patch 
 		}
 		mcpsArg = string(raw)
 	}
-	row := s.db.QueryRowContext(ctx,
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }() // no-op after a successful Commit
+	row := tx.QueryRowContext(ctx,
 		`UPDATE projects SET
 			name            = COALESCE($1::text, name),
 			instructions    = COALESCE($2::text, instructions),
@@ -203,6 +213,17 @@ func (s *Store) UpdateProject(ctx context.Context, ownerEmail, id string, patch 
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, errors.New("project not found (or not the owner)")
 		}
+		return nil, err
+	}
+	if patch.TeamID != nil && strings.TrimSpace(*patch.TeamID) == "" {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE conversations SET team_visible = FALSE, updated_at = $1
+			 WHERE project_id = $2 AND team_visible = TRUE`,
+			time.Now().Unix(), id); err != nil {
+			return nil, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
 	return p, nil
@@ -225,8 +246,11 @@ func (s *Store) DeleteProject(ctx context.Context, ownerEmail, id string) error 
 	if n, _ := res.RowsAffected(); n == 0 {
 		return errors.New("project not found (or not the owner)")
 	}
+	// Detaching also unshares: a chat that leaves a project has nowhere for a
+	// teammate to find it, so team_visible must not outlive the project
+	// (ADR-0057, the same pairing SetConversationProject enforces).
 	if _, err := tx.ExecContext(ctx,
-		`UPDATE conversations SET project_id = NULL WHERE project_id = $1`, id); err != nil {
+		`UPDATE conversations SET project_id = NULL, team_visible = FALSE WHERE project_id = $1`, id); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx,
@@ -274,13 +298,27 @@ func (s *Store) CreateProjectConversation(ctx context.Context, userEmail, title,
 // project chat lives only under its project, so a stale pinned flag would
 // make the chat pop back into Pinned on a later unfile. A soft-deleted
 // conversation is not mutable (#596).
+//
+// Filing also enforces the ADR-0057 pairing: a team-shared chat must live in a
+// team-shared project, so moving one out of its project — to no project, or to
+// a personal one — clears team_visible in the same statement. Without that a
+// chat stays readable by the team while no surface lists it, and its owner has
+// no affordance left to revoke it.
 func (s *Store) SetConversationProject(ctx context.Context, userEmail, convID, projectID string) error {
 	var pid any // NULL when unfiling, matching the column's created-without-project state
 	if projectID != "" {
 		pid = projectID
 	}
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE conversations SET project_id = $1, pinned = (CASE WHEN $1::text IS NULL THEN pinned ELSE FALSE END), updated_at = $2 WHERE id = $3 AND user_email = $4 AND deleted_at IS NULL`,
+		`UPDATE conversations SET
+			project_id = $1,
+			pinned = (CASE WHEN $1::text IS NULL THEN pinned ELSE FALSE END),
+			team_visible = (CASE
+				WHEN $1::text IS NOT NULL
+				 AND EXISTS (SELECT 1 FROM projects WHERE id = $1::text AND team_id <> '')
+				THEN team_visible ELSE FALSE END),
+			updated_at = $2
+		 WHERE id = $3 AND user_email = $4 AND deleted_at IS NULL`,
 		pid, time.Now().Unix(), convID, userEmail,
 	)
 	if err != nil {
@@ -336,6 +374,140 @@ func (s *Store) ListProjectMemories(ctx context.Context, projectID string) ([]Me
 		out = append(out, *m)
 	}
 	return out, rows.Err()
+}
+
+// GetProjectMemory fetches one shared memory of the project, or (nil, nil)
+// when the id names no row in it. The handler reads it to decide who may
+// mutate the entry: its writer, or the project owner (ADR-0057).
+func (s *Store) GetProjectMemory(ctx context.Context, projectID, memoryID string) (*Memory, error) {
+	row := s.db.QueryRowContext(ctx,
+		`SELECT `+memoryColumns+` FROM memories WHERE id = $1 AND project_id = $2`,
+		memoryID, projectID)
+	m, err := scanMemory(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return m, nil
+}
+
+// UpdateProjectMemory applies a partial update to one team learning. The
+// project-scoped WHERE is the mirror image of UpdateMemory's `project_id IS
+// NULL`: the shared API can only touch shared rows, so neither scope can reach
+// the other. WHO may call this (the entry's writer, or the project owner) is
+// the handler's gate — the store enforces only the scope.
+//
+// Retirement is the intended "remove" for a team learning: the entry stops
+// being injected but the record — and who wrote it — survives.
+func (s *Store) UpdateProjectMemory(ctx context.Context, projectID, memoryID string, patch MemoryPatch) (*Memory, error) {
+	if patch.Content == nil && patch.Kind == nil && patch.Pinned == nil && patch.Retired == nil {
+		return nil, errors.New("empty memory patch")
+	}
+	var content *string
+	if patch.Content != nil {
+		c := normalizeMemoryContent(*patch.Content)
+		if c == "" {
+			return nil, errors.New("memory content required")
+		}
+		content = &c
+	}
+	var kind *string
+	if patch.Kind != nil {
+		k := NormalizeMemoryKind(*patch.Kind)
+		kind = &k
+	}
+	now := time.Now().Unix()
+	row := s.db.QueryRowContext(ctx,
+		`UPDATE memories SET
+			content    = COALESCE($1::text, content),
+			kind       = COALESCE($2::text, kind),
+			pinned     = COALESCE($3::boolean, pinned),
+			retired_at = CASE
+				WHEN $4::boolean IS NULL THEN retired_at
+				WHEN $4::boolean THEN COALESCE(retired_at, $5)
+				ELSE NULL END,
+			retired_by = CASE
+				WHEN $4::boolean IS NULL THEN retired_by
+				WHEN $4::boolean THEN retired_by
+				ELSE NULL END,
+			updated_at = $5
+		 WHERE id = $6 AND project_id = $7
+		 RETURNING `+memoryColumns,
+		content, kind, patch.Pinned, patch.Retired, now, memoryID, projectID,
+	)
+	m, err := scanMemory(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, errors.New("memory not found")
+		}
+		return nil, err
+	}
+	return m, nil
+}
+
+// MoveMemoryToProject promotes one of the caller's PERSONAL memories into a
+// project's shared memory — the migration path for team facts saved to
+// personal memory before the destination picker existed (Item D5). It MOVES
+// rather than copies: leaving the personal row behind would inject the same
+// fact twice in every project chat.
+//
+// The caller's ownership of the personal row is the store-side gate
+// (`user_email = $2 AND project_id IS NULL`); project membership is the
+// handler's. user_email survives the move as provenance — the project list
+// shows who contributed the learning — exactly as CreateProjectMemory records
+// it. A proposal (source 'proposed') is refused: only a fact the user has
+// actually accepted can be handed to the team.
+func (s *Store) MoveMemoryToProject(ctx context.Context, userEmail, memoryID, projectID string) (*Memory, error) {
+	if projectID == "" {
+		return nil, errors.New("project id required")
+	}
+	row := s.db.QueryRowContext(ctx,
+		`UPDATE memories SET project_id = $1, updated_at = $2
+		 WHERE id = $3 AND user_email = $4 AND project_id IS NULL AND source <> 'proposed'
+		 RETURNING `+memoryColumns,
+		projectID, time.Now().Unix(), memoryID, normalizeEmail(userEmail),
+	)
+	m, err := scanMemory(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, errors.New("memory not found")
+		}
+		return nil, err
+	}
+	return m, nil
+}
+
+// AcceptMemoryProposalIntoProject accepts one of the caller's pending memory
+// proposals INTO a project's shared memory instead of their personal memory
+// (Item D1: the "Save to: My memory | Team learnings" choice on the approval
+// card). One statement, so a proposal is either accepted somewhere or nowhere.
+//
+// The supersede machinery deliberately does not run here: a proposal's
+// supersedes claim is resolved against the user's PERSONAL memories, and
+// retiring a personal fact because its replacement was handed to the team
+// would silently drop context from every one of that user's other chats. The
+// accepted entry simply becomes a team learning; the personal fact it
+// contradicts stays for the user to retire themselves.
+func (s *Store) AcceptMemoryProposalIntoProject(ctx context.Context, userEmail, memoryID, projectID string) (*Memory, error) {
+	if projectID == "" {
+		return nil, errors.New("project id required")
+	}
+	row := s.db.QueryRowContext(ctx,
+		`UPDATE memories SET source = 'chat', project_id = $1, updated_at = $2
+		 WHERE id = $3 AND user_email = $4 AND source = 'proposed'
+		 RETURNING `+memoryColumns,
+		projectID, time.Now().Unix(), memoryID, normalizeEmail(userEmail),
+	)
+	m, err := scanMemory(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, errors.New("memory proposal not found")
+		}
+		return nil, err
+	}
+	return m, nil
 }
 
 // DeleteProjectMemory removes one shared memory from the project. Any member

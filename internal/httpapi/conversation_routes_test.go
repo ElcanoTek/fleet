@@ -55,6 +55,13 @@ func conversationRoutePairs() []routePairProbe {
 		{sub: "share", method: http.MethodPost, body: nil, want: http.StatusCreated},
 		{sub: "share", method: http.MethodDelete, body: nil, want: http.StatusNoContent},
 		{sub: "share-with-team", method: http.MethodPost, body: map[string]bool{"visible": true}, want: http.StatusOK},
+		// The one conversation route a non-owner may reach (ADR-0057). Probed
+		// on a fresh, unshared chat, so the handler answers its own 404 —
+		// distinct from the dispatcher's 405 for an unmatched pair. The 200
+		// path (a teammate reading a shared chat) is covered end to end by
+		// TestConversationTeamView, which needs a two-user team fixture this
+		// single-owner probe deliberately does not build.
+		{sub: "team-view", method: http.MethodGet, body: nil, want: http.StatusNotFound},
 		{sub: "mcp-servers", method: http.MethodGet, body: nil, want: http.StatusOK},
 		{sub: "mcp-servers", method: http.MethodPost, body: map[string][]string{"enabled_optional": {}}, want: http.StatusOK},
 		{sub: "export", method: http.MethodGet, body: nil, want: http.StatusOK},

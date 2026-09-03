@@ -140,6 +140,22 @@ type chatStore interface {
 	// ListProjectConversationPreviews is the home's 1–2 line chat history:
 	// last text-message snippet per conversation, same caller scoping.
 	ListProjectConversationPreviews(ctx context.Context, userEmail, projectID string) (map[string]string, error)
+	// Team learnings (the project's shared memory, as users see it):
+	// GetProjectMemory backs the "writer or project owner" permission check,
+	// UpdateProjectMemory the pin/edit/retire actions, and
+	// MoveMemoryToProject the promotion of a personal memory (ADR-0057).
+	GetProjectMemory(ctx context.Context, projectID, memoryID string) (*store.Memory, error)
+	UpdateProjectMemory(ctx context.Context, projectID, memoryID string, patch store.MemoryPatch) (*store.Memory, error)
+	MoveMemoryToProject(ctx context.Context, userEmail, memoryID, projectID string) (*store.Memory, error)
+	// AcceptMemoryProposalIntoProject resolves a pending memory proposal into
+	// the project's shared memory instead of the caller's personal memory.
+	AcceptMemoryProposalIntoProject(ctx context.Context, userEmail, memoryID, projectID string) (*store.Memory, error)
+	// ListProjectTeamConversations is the project home's Team section: the
+	// team-shared chats OTHER members contributed to this project.
+	ListProjectTeamConversations(ctx context.Context, callerEmail, projectID string) ([]store.Conversation, error)
+	// ProjectImpact is what deleting the project destroys — the counts the
+	// delete confirm states before an owner answers.
+	ProjectImpact(ctx context.Context, projectID string) (store.ProjectImpact, error)
 
 	// Memories + memory proposals.
 	ListMemories(ctx context.Context, userEmail string) ([]store.Memory, error)
@@ -223,6 +239,12 @@ type chatStore interface {
 	// returns the conversations same-team members have shared (team_visible),
 	// read-only; SetConversationTeamVisible flips the owner's opt-in flag.
 	ListTeamConversations(ctx context.Context, callerEmail string) ([]store.Conversation, error)
+	// GetTeamVisibleConversation is the per-conversation half of that read:
+	// the read-only transcript a teammate opens from the project home. nil =
+	// not readable, indistinguishable from "no such chat".
+	GetTeamVisibleConversation(ctx context.Context, callerEmail, convID string) (*store.TeamSharedConversation, error)
+	// LeaveTeamImpact is what leaving the team costs — quoted in the confirm.
+	LeaveTeamImpact(ctx context.Context, email, teamID string) (store.LeaveTeamImpact, error)
 	SetConversationTeamVisible(ctx context.Context, ownerEmail, convID string, visible bool) error
 	AdminStats(ctx context.Context) ([]store.AdminRow, error)
 	// MigrationStatus reports applied vs pending chat-DB migrations for

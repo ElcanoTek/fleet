@@ -135,6 +135,34 @@ func (s *Server) handleConversationShareWithTeam(w http.ResponseWriter, r *http.
 	writeJSON(w, map[string]any{"team_visible": body.Visible})
 }
 
+// handleConversationTeamView serves GET /conversations/{id}/team-view — the
+// read-only transcript of a chat a TEAMMATE shared with the team (ADR-0057).
+//
+// Same rendering as a public share link, different door: membership of the
+// team plus the owner's per-chat opt-in, instead of a capability URL. The
+// snapshot carries the owner's email (the viewer is told whose chat this is)
+// and the project it lives in, so the viewer's one forward action — Branch —
+// can file the fork back into the same project.
+//
+// What it exposes is the TRANSCRIPT only. Attachments and generated files in
+// the chat's workspace stay behind the owner-scoped workspace route: a shared
+// conversation ABOUT a report must not hand out the report.
+//
+// A chat the caller may not read is 404, indistinguishable from one that does
+// not exist — team membership is never probeable from here.
+func (s *Server) handleConversationTeamView(w http.ResponseWriter, r *http.Request, convID, user string) {
+	snap, err := s.store.GetTeamVisibleConversation(r.Context(), user, convID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if snap == nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	writeJSON(w, snap)
+}
+
 // handleSharedConversation serves the public read-only snapshot for a share
 // token. Token-gated (shared secret) but identity-less; the token in the path
 // is the authorization. Per-token rate-limited AFTER the token resolves;

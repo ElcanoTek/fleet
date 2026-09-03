@@ -164,6 +164,14 @@ type Conversation struct {
 	// disables even when a global default is set). Set via
 	// PUT /conversations/{id}/thinking_config. Stored as nullable JSONB.
 	ThinkingConfig *ThinkingConfig `json:"thinking_config,omitempty"`
+	// TeamVisible is the owner's per-chat opt-in to read-only visibility for
+	// their team (ADR-0013, surfaced by ADR-0057). false = private, the
+	// default and the only state a chat outside a team-shared project can be
+	// in. Reported on the owner's own listings so the rail can badge a
+	// team-shared chat distinctly from a link-shared one — the two audiences
+	// are different and a single unlabeled icon conflated them. Set via
+	// POST /conversations/{id}/share-with-team.
+	TeamVisible bool `json:"team_visible,omitempty"`
 }
 
 // ThinkingConfig is the persisted shape of a conversation's extended-thinking
@@ -511,15 +519,53 @@ func (s *Store) CreateConversation(ctx context.Context, userEmail, title, person
 // parent's persona/model/lockdown), records the lineage, and returns it so the
 // caller can continue the new thread independently. The branch is fully
 // independent — its messages are COPIED, not shared — so deleting the parent
-// never affects it. Errors if the parent is not found/owned by the user, or the
+// never affects it. Errors if the parent is not readable by the user, or the
 // branch point names no message in the parent.
+//
+// "Readable" is ownership OR a teammate's read of a chat its owner shared with
+// the team (ADR-0057): building on a colleague's thread is the whole point of
+// team-shared chats, and Branch needs no write access to the original — the
+// fork belongs to the brancher from the first byte, and survives the original
+// being unshared or deleted. The branch inherits the parent's project when the
+// brancher is a member of it, so a fork of a project chat lands back in the
+// project rather than in Temporary.
 func (s *Store) BranchConversation(ctx context.Context, userEmail, parentConvID string, branchPointMessageID int64, title string) (*Conversation, error) {
 	parent, err := s.Get(ctx, userEmail, parentConvID)
 	if err != nil {
 		return nil, err
 	}
 	if parent == nil {
-		return nil, sql.ErrNoRows
+		// Not the caller's own — the one other readable case is a chat a
+		// teammate shared with the team.
+		shared, terr := s.GetTeamVisibleConversation(ctx, userEmail, parentConvID)
+		if terr != nil {
+			return nil, terr
+		}
+		if shared == nil {
+			return nil, sql.ErrNoRows
+		}
+		parent = &Conversation{
+			ID:        shared.ID,
+			UserEmail: shared.OwnerEmail,
+			Title:     shared.Title,
+			Persona:   shared.Persona,
+			Model:     shared.Model,
+			ProjectID: shared.ProjectID,
+		}
+	}
+
+	// The fork is filed into the parent's project when the brancher belongs to
+	// it — the membership re-check matters for the teammate path (the project
+	// is what made the chat visible) and is a cheap no-op for the owner.
+	projectID := ""
+	if parent.ProjectID != "" {
+		member, merr := s.userIsProjectMember(ctx, userEmail, parent.ProjectID)
+		if merr != nil {
+			return nil, merr
+		}
+		if member {
+			projectID = parent.ProjectID
+		}
 	}
 
 	// The branch point must name an actual message OF THE PARENT (#578).
@@ -583,10 +629,14 @@ func (s *Store) BranchConversation(ctx context.Context, userEmail, parentConvID 
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	var projectArg any // NULL keeps the column's created-without-project state
+	if projectID != "" {
+		projectArg = projectID
+	}
 	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO conversations (id, user_email, title, persona, model, pinned, lockdown, parent_conversation_id, branch_point_message_id, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, FALSE, $6, $7, $8, $9, $10)`,
-		id, userEmail, title, parent.Persona, parent.Model, parent.Lockdown, parentConvID, branchPointMessageID, now, now,
+		`INSERT INTO conversations (id, user_email, title, persona, model, pinned, lockdown, parent_conversation_id, branch_point_message_id, project_id, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, FALSE, $6, $7, $8, $9, $10, $11)`,
+		id, userEmail, title, parent.Persona, parent.Model, parent.Lockdown, parentConvID, branchPointMessageID, projectArg, now, now,
 	); err != nil {
 		return nil, err
 	}
@@ -606,9 +656,28 @@ func (s *Store) BranchConversation(ctx context.Context, userEmail, parentConvID 
 		Lockdown:             parent.Lockdown,
 		ParentConversationID: parentConvID,
 		BranchPointMessageID: branchPointMessageID,
+		ProjectID:            projectID,
 		CreatedAt:            now,
 		UpdatedAt:            now,
 	}, nil
+}
+
+// userIsProjectMember reports whether email can see/use the project — the
+// owner always, otherwise a shared users.team_id (Project.MemberOf's rule, as
+// one query so the branch path needs no second round trip for the user row).
+func (s *Store) userIsProjectMember(ctx context.Context, email, projectID string) (bool, error) {
+	var member bool
+	err := s.db.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM projects p
+			WHERE p.id = $1
+			  AND (p.owner_email = $2
+			       OR (p.team_id <> '' AND p.team_id = (SELECT team_id FROM users WHERE email = $2)))
+		)`, projectID, normalizeEmail(email)).Scan(&member)
+	if err != nil {
+		return false, err
+	}
+	return member, nil
 }
 
 // SetOptionalMCPServers persists the user's opt-in list for this
@@ -1051,11 +1120,18 @@ func (s *Store) Delete(ctx context.Context, userEmail, convID string) error {
 // triggering this from the sidebar and which represent an intentional "keep"
 // state — are untouched. Returns the count removed. In soft-delete mode it
 // tombstones instead of hard-deleting.
+//
+// Project conversations are exempt too (#509), keying the same way the rail's
+// Temporary section and the retention sweep already do: filing a chat into a
+// project takes it OUT of the list this action clears, so sweeping it anyway
+// deleted a chat the user could not see in the section they were emptying —
+// and made "chats in a project don't expire" false at the one moment it
+// mattered most.
 func (s *Store) DeleteAllUnpinned(ctx context.Context, userEmail string) (int, error) {
 	if s.softDelete {
 		res, err := s.db.ExecContext(ctx,
 			`UPDATE conversations SET deleted_at = NOW(), updated_at = $1
-			 WHERE user_email = $2 AND pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL`,
+			 WHERE user_email = $2 AND pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL AND project_id IS NULL`,
 			time.Now().Unix(), userEmail,
 		)
 		if err != nil {
@@ -1065,7 +1141,7 @@ func (s *Store) DeleteAllUnpinned(ctx context.Context, userEmail string) (int, e
 		return int(n), nil
 	}
 	res, err := s.db.ExecContext(ctx,
-		`DELETE FROM conversations WHERE user_email = $1 AND pinned = FALSE AND archived_at IS NULL`,
+		`DELETE FROM conversations WHERE user_email = $1 AND pinned = FALSE AND archived_at IS NULL AND project_id IS NULL`,
 		userEmail,
 	)
 	if err != nil {
@@ -1128,12 +1204,17 @@ func (s *Store) DeleteByIDs(ctx context.Context, userEmail string, ids []string)
 //
 // The filter is bound as a parameter with an `$n = ”` short-circuit so no SQL is
 // concatenated from the input (defense against injection-by-clause).
+//
+// Project conversations are exempt, for the same reason DeleteAllUnpinned
+// exempts them: filing is a "keep" state, and a project chat is not in the
+// list this action clears. Deleting a specific project chat stays possible —
+// through the targeted DeleteByIDs, which the user reaches by selecting it.
 func (s *Store) DeleteAllMatching(ctx context.Context, userEmail, label string) (int, error) {
 	now := time.Now().Unix()
 	if s.softDelete {
 		res, err := s.db.ExecContext(ctx,
 			`UPDATE conversations SET deleted_at = NOW(), updated_at = $1
-			 WHERE user_email = $2 AND pinned = FALSE AND deleted_at IS NULL
+			 WHERE user_email = $2 AND pinned = FALSE AND deleted_at IS NULL AND project_id IS NULL
 			   AND ($3 = '' OR $3 = ANY(labels))`,
 			now, userEmail, label,
 		)
@@ -1145,7 +1226,7 @@ func (s *Store) DeleteAllMatching(ctx context.Context, userEmail, label string) 
 	}
 	res, err := s.db.ExecContext(ctx,
 		`DELETE FROM conversations
-		 WHERE user_email = $1 AND pinned = FALSE AND deleted_at IS NULL
+		 WHERE user_email = $1 AND pinned = FALSE AND deleted_at IS NULL AND project_id IS NULL
 		   AND ($2 = '' OR $2 = ANY(labels))`,
 		userEmail, label,
 	)
@@ -1246,12 +1327,12 @@ func (s *Store) ListFiltered(ctx context.Context, userEmail string, f ListFilter
 // conversationColumns is the SELECT list (in scan order) every conversation query
 // shares, so Get, ListFiltered and ListTeamConversations stay in lockstep with
 // scanConversation. (Bare column names, so a `c.`-aliased query can use it too.)
-const conversationColumns = `id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, optional_mcp_servers_enabled, labels, approval_timeout_seconds, COALESCE(share_token, ''), COALESCE(parent_conversation_id, ''), COALESCE(branch_point_message_id, 0), thinking_config, COALESCE(project_id, ''), mcp_accounts`
+const conversationColumns = `id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, optional_mcp_servers_enabled, labels, approval_timeout_seconds, COALESCE(share_token, ''), COALESCE(parent_conversation_id, ''), COALESCE(branch_point_message_id, 0), thinking_config, COALESCE(project_id, ''), mcp_accounts, team_visible`
 
 // teamConversationColumns is conversationColumns with share_token forced to
 // empty so a teammate listing cannot harvest the owner's public share
 // capability URL (#1112). Column count and scan order stay identical.
-const teamConversationColumns = `id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, optional_mcp_servers_enabled, labels, approval_timeout_seconds, '' AS share_token, COALESCE(parent_conversation_id, ''), COALESCE(branch_point_message_id, 0), thinking_config, COALESCE(project_id, ''), mcp_accounts`
+const teamConversationColumns = `id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, optional_mcp_servers_enabled, labels, approval_timeout_seconds, '' AS share_token, COALESCE(parent_conversation_id, ''), COALESCE(branch_point_message_id, 0), thinking_config, COALESCE(project_id, ''), mcp_accounts, team_visible`
 
 // pgTypeMap is the pgx type map used to decode Postgres array literals reaching
 // this package over database/sql. It is read-only after init and safe for
@@ -1301,7 +1382,7 @@ func scanConversation(sc rowScanner) (Conversation, error) {
 	var approvalTimeout sql.NullInt64
 	var thinkingRaw []byte
 	var accountsRaw []byte
-	if err := sc.Scan(&c.ID, &c.UserEmail, &c.Title, &c.Persona, &c.Model, &c.Pinned, &c.Lockdown, &c.CreatedAt, &c.UpdatedAt, &c.ArchivedAt, &c.TitleLocked, &optionalRaw, textArray{&c.Labels}, &approvalTimeout, &c.ShareToken, &c.ParentConversationID, &c.BranchPointMessageID, &thinkingRaw, &c.ProjectID, &accountsRaw); err != nil {
+	if err := sc.Scan(&c.ID, &c.UserEmail, &c.Title, &c.Persona, &c.Model, &c.Pinned, &c.Lockdown, &c.CreatedAt, &c.UpdatedAt, &c.ArchivedAt, &c.TitleLocked, &optionalRaw, textArray{&c.Labels}, &approvalTimeout, &c.ShareToken, &c.ParentConversationID, &c.BranchPointMessageID, &thinkingRaw, &c.ProjectID, &accountsRaw, &c.TeamVisible); err != nil {
 		return Conversation{}, err
 	}
 	c.OptionalMCPServersEnabled = scanOptionalMCPServers(optionalRaw)

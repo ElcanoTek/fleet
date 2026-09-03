@@ -226,6 +226,16 @@ func (s *Store) SetOwnTeam(ctx context.Context, email, teamID string, allowExist
 	email = normalizeEmail(email)
 	team := strings.TrimSpace(teamID)
 	if team == "" {
+		// Leaving unshares first (ADR-0057): the team-shared projects go out
+		// of view, so a chat this user shared into one would stay readable by
+		// a team they are no longer in, with no surface left on their side to
+		// revoke it. Best-effort ordering — a failure here aborts the leave
+		// rather than leaving the pair half-applied.
+		if cur, err := s.GetUser(ctx, email); err == nil {
+			if _, err := s.UnshareTeamVisibleChatsInTeam(ctx, email, cur.TeamID); err != nil {
+				return nil, err
+			}
+		}
 		empty := ""
 		return s.SetUserRoleTeam(ctx, email, nil, &empty)
 	}

@@ -66,6 +66,15 @@ type projectRequest struct {
 	Pinned *bool `json:"pinned"`
 }
 
+// projectMemoryRequest is the POST /projects/{id}/memories body: either new
+// content (the normal write) or FromMemoryID, which promotes one of the
+// caller's existing PERSONAL memories into this project's team learnings.
+type projectMemoryRequest struct {
+	Content      string `json:"content"`
+	Kind         string `json:"kind"`
+	FromMemoryID string `json:"from_memory_id"`
+}
+
 // projects handles GET/POST /projects.
 func (s *Server) projects(w http.ResponseWriter, r *http.Request) {
 	user := userFromCtx(r.Context())
@@ -144,6 +153,10 @@ func (s *Server) projectByID(w http.ResponseWriter, r *http.Request) {
 			s.projectMemories(w, r, p, memID)
 		case "conversations":
 			s.projectConversations(w, r, p)
+		case "team-conversations":
+			s.projectTeamConversations(w, r, p)
+		case "impact":
+			s.projectDeleteImpact(w, r, p)
 		case "files":
 			s.projectFiles(w, r, p)
 		case "export":
@@ -233,6 +246,50 @@ func (s *Server) projectConversations(w http.ResponseWriter, r *http.Request, p 
 	writeJSON(w, map[string]any{"conversations": out})
 }
 
+// projectTeamConversations handles GET /projects/{id}/team-conversations —
+// the project home's Team section (Item C3): the chats OTHER members of the
+// team have explicitly shared into THIS project. Two gates, neither
+// sufficient alone: a shared users.team_id and each owner's per-chat opt-in
+// (ADR-0013). Membership of the project itself is already established by
+// projectForMember before this runs.
+//
+// A personal project can never produce rows here (its chats cannot be
+// team-shared, ADR-0057), so the section renders its empty state and says how
+// to share — it does not pretend to be a different feature.
+func (s *Server) projectTeamConversations(w http.ResponseWriter, r *http.Request, p *store.Project) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	user := userFromCtx(r.Context())
+	list, err := s.store.ListProjectTeamConversations(r.Context(), user, p.ID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if list == nil {
+		list = []store.Conversation{}
+	}
+	writeJSON(w, map[string]any{"conversations": list})
+}
+
+// projectDeleteImpact handles GET /projects/{id}/impact — the counts the
+// delete confirm quotes so an owner sees what members lose (team learnings
+// die with the project; every member's chats leave it and become temporary)
+// before answering, rather than after (Item A6).
+func (s *Server) projectDeleteImpact(w http.ResponseWriter, r *http.Request, p *store.Project) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	impact, err := s.store.ProjectImpact(r.Context(), p.ID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, impact)
+}
+
 // projectFile is one entry in the project home's Sources list.
 type projectFile struct {
 	ConversationID    string `json:"conversation_id"`
@@ -286,6 +343,17 @@ func (s *Server) projectFiles(w http.ResponseWriter, r *http.Request, p *store.P
 			if err != nil {
 				return nil //nolint:nilerr // best-effort listing
 			}
+			// Regular files only. Every conversation workspace carries the
+			// bundle-mount symlinks (personas, protocols, shared, skills,
+			// system_prompts) pointing OUTSIDE the workspace root; WalkDir
+			// does not follow them, so each surfaced as a "file" whose size
+			// was the length of its target path — and whose download
+			// correctly tripped the workspace path-traversal guard, dumping
+			// "path escapes workspace" into a tab. They are plumbing, not
+			// sources: a Sources entry must be a real file the user can open.
+			if !info.Mode().IsRegular() {
+				return nil
+			}
 			rel, err := filepath.Rel(root, path)
 			if err != nil {
 				return nil //nolint:nilerr // best-effort listing
@@ -310,13 +378,72 @@ func (s *Server) projectFiles(w http.ResponseWriter, r *http.Request, p *store.P
 	writeJSON(w, map[string]any{"files": files, "truncated": truncated})
 }
 
+// mayManageProjectMemory reports whether user may mutate this team learning:
+// its writer manages their own entries, and the project owner manages all of
+// them. Members are peers otherwise — a shared learning nobody can correct is
+// worse than one anybody can, but "anybody edits anybody" is not a model a
+// team can reason about, so the rule is one line: yours, or yours to own.
+func mayManageProjectMemory(p *store.Project, m *store.Memory, user string) bool {
+	return strings.EqualFold(m.UserEmail, user) || strings.EqualFold(p.OwnerEmail, user)
+}
+
+// projectMemoryPermitted resolves memID within the project and enforces
+// mayManageProjectMemory. nil = already responded (404 for an id that is not
+// this project's, 403 for another member's entry).
+func (s *Server) projectMemoryPermitted(w http.ResponseWriter, r *http.Request, p *store.Project, memID, user string) *store.Memory {
+	m, err := s.store.GetProjectMemory(r.Context(), p.ID, memID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return nil
+	}
+	if m == nil {
+		http.Error(w, "memory not found", http.StatusNotFound)
+		return nil
+	}
+	if !mayManageProjectMemory(p, m, user) {
+		http.Error(w, "only the author or the project owner can change this team learning", http.StatusForbidden)
+		return nil
+	}
+	return m
+}
+
 // projectMemories handles GET/POST /projects/{id}/memories and
-// DELETE /projects/{id}/memories/{memID} — the SHARED memory scope every
-// member reads and writes (distinct from personal memories, #515).
+// PATCH/DELETE /projects/{id}/memories/{memID} — the SHARED memory scope every
+// member reads and writes (distinct from personal memories, #515), surfaced to
+// users as the project's "team learnings".
+//
+// Reads and writes are open to every member (that is what shared memory is);
+// CHANGING an existing entry is narrowed to its author or the project owner,
+// so one member cannot quietly rewrite another's contribution. Retire (a
+// PATCH) is the default remove — it drops the entry from injection and keeps
+// the record of who wrote what.
 func (s *Server) projectMemories(w http.ResponseWriter, r *http.Request, p *store.Project, memID string) {
 	user := userFromCtx(r.Context())
 	switch {
+	case memID != "" && r.Method == http.MethodPatch:
+		if s.projectMemoryPermitted(w, r, p, memID, user) == nil {
+			return
+		}
+		var req memoryPatchRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		memory, err := s.store.UpdateProjectMemory(r.Context(), p.ID, memID, store.MemoryPatch{
+			Content: req.Content,
+			Kind:    req.Kind,
+			Pinned:  req.Pinned,
+			Retired: req.Retired,
+		})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, memory)
 	case memID != "" && r.Method == http.MethodDelete:
+		if s.projectMemoryPermitted(w, r, p, memID, user) == nil {
+			return
+		}
 		if err := s.store.DeleteProjectMemory(r.Context(), p.ID, memID); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -333,9 +460,23 @@ func (s *Server) projectMemories(w http.ResponseWriter, r *http.Request, p *stor
 		}
 		writeJSON(w, map[string]any{"memories": memories})
 	case memID == "" && r.Method == http.MethodPost:
-		var req memoryRequest
+		var req projectMemoryRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		// Promotion path (Item D5): {"from_memory_id": ...} MOVES one of the
+		// caller's own personal memories into this project instead of writing
+		// new content — the migration for team facts saved personally before
+		// the destination picker existed. It moves rather than copies, so the
+		// same fact is not injected twice in every project chat.
+		if id := strings.TrimSpace(req.FromMemoryID); id != "" {
+			memory, err := s.store.MoveMemoryToProject(r.Context(), user, id, p.ID)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			writeJSON(w, memory)
 			return
 		}
 		memory, err := s.store.CreateProjectMemory(r.Context(), p.ID, user, req.Content, req.Kind)

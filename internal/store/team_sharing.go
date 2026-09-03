@@ -1,0 +1,266 @@
+package store
+
+// Team-visible chats inside team-shared projects (ADR-0057), plus the counts
+// the destructive confirms need.
+//
+// ADR-0013 gave a conversation owner a per-chat `team_visible` opt-in and a
+// team-scoped LIST endpoint; nothing ever read ONE such conversation, and
+// nothing tied the flag to a place where teammates would look for it. The
+// invariant this file adds is that a team-shared chat always has a home: it
+// lives in a project that is itself shared with the team. The write paths that
+// could break that pairing — moving a chat out of its project, unsharing the
+// project, deleting the project, leaving the team — clear the flag instead of
+// leaving a chat visible to a team with no surface listing it.
+//
+// The read path (GetTeamVisibleConversation) is the SECOND cross-user
+// conversation read in the store, after ListTeamConversations, and carries the
+// same two gates: a shared users.team_id AND the owner's explicit per-chat
+// opt-in. Like the public share snapshot it exposes user/assistant TEXT only —
+// never tool calls, tool results, or reasoning, which can carry command output
+// and API responses the owner never meant to hand over.
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"strings"
+	"time"
+
+	"github.com/ElcanoTek/fleet/internal/agent"
+)
+
+// TeamSharedConversation is the read-only view a teammate gets of a
+// conversation its owner shared with the team. It carries the owner's email
+// (the viewer is told whose chat this is) and the project the chat lives in
+// (the Branch action files the fork into the same project), which the
+// anonymous share snapshot deliberately omits.
+//
+// Unlike SharedConversation the message entries KEEP their persisted ids: a
+// teammate's only way to build on the chat is Branch, and a branch point is a
+// messages.id. The ids are already visible to every member of the team through
+// their own branches, so this leaks nothing the feature does not require.
+type TeamSharedConversation struct {
+	ID         string               `json:"id"`
+	OwnerEmail string               `json:"owner_email"`
+	Title      string               `json:"title"`
+	Persona    string               `json:"persona"`
+	Model      string               `json:"model"`
+	TeamID     string               `json:"team_id"`
+	ProjectID  string               `json:"project_id,omitempty"`
+	CreatedAt  int64                `json:"created_at"`
+	UpdatedAt  int64                `json:"updated_at"`
+	Messages   []agent.HistoryEntry `json:"messages"`
+}
+
+// GetTeamVisibleConversation returns the read-only transcript of convID when
+// the caller may read it as a teammate — the owner opted the chat into team
+// visibility AND owner and caller share a non-empty users.team_id — or
+// (nil, nil) when they may not (unknown id, not opted in, different team,
+// deleted). The owner reading their own chat resolves too, so one endpoint
+// serves the "what does my team see?" preview without a second code path.
+//
+// Membership state is never leaked: every refusal is the same nil.
+func (s *Store) GetTeamVisibleConversation(ctx context.Context, callerEmail, convID string) (*TeamSharedConversation, error) {
+	callerEmail = normalizeEmail(callerEmail)
+	if convID == "" {
+		return nil, nil
+	}
+	caller, err := s.GetUser(ctx, callerEmail)
+	if err != nil {
+		if errors.Is(err, ErrUserNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	team := strings.TrimSpace(caller.TeamID)
+
+	var out TeamSharedConversation
+	err = s.db.QueryRowContext(ctx, `
+		SELECT c.id, c.user_email, c.title, c.persona, c.model,
+		       COALESCE(u.team_id, ''), COALESCE(c.project_id, ''),
+		       c.created_at, c.updated_at
+		FROM conversations c
+		JOIN users u ON u.email = c.user_email
+		WHERE c.id = $1
+		  AND c.deleted_at IS NULL
+		  AND c.team_visible = TRUE
+		  AND (c.user_email = $2 OR ($3 <> '' AND u.team_id = $3))`,
+		convID, callerEmail, team,
+	).Scan(&out.ID, &out.OwnerEmail, &out.Title, &out.Persona, &out.Model,
+		&out.TeamID, &out.ProjectID, &out.CreatedAt, &out.UpdatedAt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	msgs, err := s.LoadHistory(ctx, out.ID)
+	if err != nil {
+		return nil, err
+	}
+	// Transcript only — the same filter the public snapshot applies, and for
+	// the same reason: the full history carries tool_call / tool_result /
+	// reasoning entries whose content can include command output and API
+	// responses that were never part of what the owner shared.
+	out.Messages = make([]agent.HistoryEntry, 0, len(msgs))
+	for _, m := range msgs {
+		if m.Type == "text" && (m.Role == "user" || m.Role == "assistant") {
+			out.Messages = append(out.Messages, m)
+		}
+	}
+	return &out, nil
+}
+
+// ListProjectTeamConversations returns the team-shared chats OTHER members
+// contributed to this project — the project home's Team section. The caller's
+// own chats are excluded: they already render in "your chats" (with a team
+// badge when shared), and listing them twice would read as two copies of the
+// same conversation.
+//
+// Gated exactly like ListTeamConversations — a shared users.team_id plus each
+// owner's per-chat opt-in — and additionally narrowed to this project, which
+// is what makes the section a place a team-shared chat can actually live.
+// Returns an empty list (never an error) for a caller with no team.
+func (s *Store) ListProjectTeamConversations(ctx context.Context, callerEmail, projectID string) ([]Conversation, error) {
+	callerEmail = normalizeEmail(callerEmail)
+	caller, err := s.GetUser(ctx, callerEmail)
+	if err != nil {
+		if errors.Is(err, ErrUserNotFound) {
+			return []Conversation{}, nil
+		}
+		return nil, err
+	}
+	team := strings.TrimSpace(caller.TeamID)
+	if team == "" {
+		return []Conversation{}, nil
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT `+teamConversationColumns+`
+		FROM conversations c
+		WHERE c.deleted_at IS NULL
+		  AND c.archived_at IS NULL
+		  AND c.team_visible = TRUE
+		  AND c.project_id = $1
+		  AND c.user_email <> $2
+		  AND c.user_email IN (SELECT email FROM users WHERE team_id = $3)
+		ORDER BY c.updated_at DESC, c.id DESC`,
+		projectID, callerEmail, team,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	list, err := scanConversationRows(rows)
+	if err != nil {
+		return nil, err
+	}
+	// Belt-and-suspenders, as in ListTeamConversations: a teammate listing
+	// must never carry the owner's public share capability URL.
+	for i := range list {
+		list[i].ShareToken = ""
+	}
+	if list == nil {
+		list = []Conversation{}
+	}
+	return list, nil
+}
+
+// UnshareTeamVisibleChatsInTeam clears team_visible on every conversation
+// ownerEmail has shared into a project belonging to teamID. Called when the
+// owner leaves that team: the projects stop being visible to them, so a chat
+// they shared there would otherwise stay readable by a group they are no
+// longer part of, with no surface on their side to revoke it. Returns the
+// number of chats unshared so the caller can report it.
+func (s *Store) UnshareTeamVisibleChatsInTeam(ctx context.Context, ownerEmail, teamID string) (int, error) {
+	teamID = strings.TrimSpace(teamID)
+	if teamID == "" {
+		return 0, nil
+	}
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE conversations SET team_visible = FALSE, updated_at = $1
+		WHERE user_email = $2 AND team_visible = TRUE
+		  AND project_id IN (SELECT id FROM projects WHERE team_id = $3)`,
+		time.Now().Unix(), normalizeEmail(ownerEmail), teamID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
+// LeaveTeamImpact is what a user loses by leaving their team — the numbers the
+// Leave confirm states instead of acting first and reporting afterwards.
+type LeaveTeamImpact struct {
+	// SharedProjects is the count of team-shared projects the user would stop
+	// seeing: those shared with the team that they do NOT own (an owner keeps
+	// their own projects, still shared with the team they left).
+	SharedProjects int `json:"shared_projects"`
+	// SharedChats is the count of the user's OWN chats currently shared into
+	// those projects — all of which are unshared by leaving.
+	SharedChats int `json:"shared_chats"`
+}
+
+// LeaveTeamImpact computes the two counts the Leave-team confirm quotes. A
+// caller with no team gets zeros.
+func (s *Store) LeaveTeamImpact(ctx context.Context, email, teamID string) (LeaveTeamImpact, error) {
+	var out LeaveTeamImpact
+	teamID = strings.TrimSpace(teamID)
+	if teamID == "" {
+		return out, nil
+	}
+	email = normalizeEmail(email)
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT count(*) FROM projects WHERE team_id = $1 AND owner_email <> $2`,
+		teamID, email,
+	).Scan(&out.SharedProjects); err != nil {
+		return out, err
+	}
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT count(*) FROM conversations
+		WHERE user_email = $1 AND team_visible = TRUE AND deleted_at IS NULL
+		  AND project_id IN (SELECT id FROM projects WHERE team_id = $2)`,
+		email, teamID,
+	).Scan(&out.SharedChats); err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
+// ProjectImpact is what deleting a project destroys or detaches — the numbers
+// the delete confirm states so an owner can see what members lose before they
+// answer, and decide to export first.
+type ProjectImpact struct {
+	// Memories is the count of team learnings that die with the project.
+	Memories int `json:"memories"`
+	// Chats is the count of conversations that leave the project (across all
+	// members), and Members how many distinct people own them.
+	Chats   int `json:"chats"`
+	Members int `json:"members"`
+	// TeamSharedChats is how many of those chats are currently team-visible;
+	// detaching unshares them.
+	TeamSharedChats int `json:"team_shared_chats"`
+}
+
+// ProjectImpact counts what a delete would take with it. Best-effort display
+// data: the counts are read outside the delete transaction, so a chat filed a
+// moment later is simply not reflected.
+func (s *Store) ProjectImpact(ctx context.Context, projectID string) (ProjectImpact, error) {
+	var out ProjectImpact
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT count(*) FROM memories WHERE project_id = $1`, projectID,
+	).Scan(&out.Memories); err != nil {
+		return out, err
+	}
+	err := s.db.QueryRowContext(ctx, `
+		SELECT count(*), count(DISTINCT user_email),
+		       count(*) FILTER (WHERE team_visible)
+		FROM conversations WHERE project_id = $1 AND deleted_at IS NULL`,
+		projectID,
+	).Scan(&out.Chats, &out.Members, &out.TeamSharedChats)
+	if err != nil {
+		return out, err
+	}
+	return out, nil
+}

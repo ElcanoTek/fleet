@@ -25,9 +25,13 @@ a fresh box had no way to create a team and every "Share with my team" failed.
 Team membership is now split by what the write grants:
 
 - **Create / leave: self-serve.** `PUT /me/team {"team_id": "platform"}` (`""`
-  leaves), surfaced as **Settings → Team** — and inline in the Projects modal,
-  which offers to create a team in place of a share checkbox that could not
-  work.
+  leaves), surfaced as **Settings → Team**. The Projects modal briefly offered
+  the same create inline; it no longer does (ADR-0057) — its copy pointed
+  teammates at a "join the same name" path the server refuses, and a
+  once-per-account act does not belong in a per-project dialog. A teamless
+  caller is told where to go, branched on whether they are an admin.
+  `GET /me/team` additionally reports what LEAVING would cost, so the confirm
+  can state it before acting.
 - **Join an existing team: granted.** A name another user — or a team-shared
   project — already holds is refused with `409` ("ask an admin to add you to
   it"); an admin adds you from **Settings → Admin → Users**. A shared `team_id`
@@ -58,11 +62,40 @@ Every turn in a project conversation then injects:
   personal memory (project-scoped rows are excluded from everyone's personal
   memory lists — the scopes never mix; #515 coordination).
 
-## Shared project memory
+## Shared project memory — "team learnings" to users
 
-`GET/POST /projects/{id}/memories`, `DELETE /projects/{id}/memories/{memID}` —
-any member reads/writes; rows carry the writer's email as provenance and die
-with the project. Typed exactly like personal memories (#515 kinds).
+`GET/POST /projects/{id}/memories`, `PATCH/DELETE /projects/{id}/memories/{memID}`
+— any member reads and writes; rows carry the writer's email as provenance and
+die with the project. Typed exactly like personal memories (#515 kinds).
+
+**Changing an existing entry is narrower than writing one:** its author, or the
+project owner. `PATCH` covers pin / edit / retire, and **retire is the default
+remove** — the entry stops being injected, the record of what was learned and by
+whom survives. `POST` with `{"from_memory_id": …}` MOVES one of the caller's own
+personal memories into the project (the promotion path), rather than copying it.
+
+Users never see the words "shared memory": the label everywhere in the UI is
+**Team learnings**, listed with author and date on the project home and in the
+composer's memories modal. See [`TEAM-SHARING.md`](TEAM-SHARING.md).
+
+## Team-shared chats (ADR-0057)
+
+A project shares its definition, never a member's chats — with one exception the
+owner opts into per chat. `conversations.team_visible` (ADR-0013) is surfaced by
+the Share dialog **only for a chat inside a team-shared project**, and the
+project home grows a **Team** section listing what members shared there:
+
+- `GET /projects/{id}/team-conversations` — the section's list (other members'
+  shared chats in this project; the caller's own already show under their chats).
+- `GET /conversations/{id}/team-view` — the read-only transcript, gated on a
+  shared `team_id` AND the owner's opt-in. Transcript only: no tool calls, no
+  reasoning, no workspace files.
+- `POST /conversations/{id}/branch` accepts a parent the caller can read, so a
+  teammate builds on the work by forking it into a chat they own.
+
+Every write that takes a chat's home away also clears the flag (move out,
+un-share the project, delete the project, leave the team). Details and rationale:
+[`TEAM-SHARING.md`](TEAM-SHARING.md) + ADR-0057.
 
 ## Export / audit
 
@@ -70,13 +103,28 @@ with the project. Typed exactly like personal memories (#515 kinds).
 references (shared memories verbatim + member conversation ids) as one JSON
 document — auditable without any client content entering fleet core.
 
+## Retention
+
+Filing a chat into a project is a **keep** state: project conversations are
+exempt from the TTL sweep, the unpinned-cap eviction, auto-archive, **and** the
+bulk "Delete all unpinned" / label-filtered bulk delete. (The bulk paths were
+the gap — they deleted filed chats, which made the UI's "chats in a project
+don't expire" false; fixed with `project_id IS NULL`, covered by
+`internal/store/team_sharing_test.go:TestBulkDeleteSkipsProjectChats`.)
+Deleting a project detaches its chats, which drops them back into Temporary —
+so the delete confirm says so, and quotes the counts.
+
 ## Honest scope (deferred)
 
-- Folder UI is unchanged — the sidebar "view over projects" refit, per-project
-  scheduled tasks/triggers/eval-set/skill bindings, and model policy (allowed
-  models / max cost / eval-gate-before-model-change) are follow-ons.
+- Folder UI is unchanged — per-project scheduled tasks/triggers/eval-set/skill
+  bindings, and model policy (allowed models / max cost /
+  eval-gate-before-model-change) are follow-ons.
 - No per-project RBAC beyond the team trust-group (no roles inside a project),
   and no invitations: adding someone to an existing team is an admin action
-  (ADR-0047), not a request the invitee can send or accept.
+  (ADR-0047), not a request the invitee can send or accept. **No ownership
+  transfer** — a real gap when an owner leaves.
 - Project deletion detaches conversations (history belongs to its users) and
   deletes shared memories (they are project state).
+- No campaign lifecycle (archive/complete), and no automatic proposal of team
+  learnings from repeated corrections — the #516 feedback loop is still
+  task-scoped. See [`TEAM-SHARING.md`](TEAM-SHARING.md) "Honest scope".

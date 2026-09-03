@@ -85,9 +85,11 @@ test("project name opens the home: chats, sources, instructions", async ({
   ).toBeVisible();
 
   // This member's chats in the project — and only those — each with its
-  // 1–2 line history preview.
+  // 1–2 line history preview. Named exactly: a Sources row also mentions the
+  // chat it came from, and both are buttons now that a download reports its
+  // failure in-app instead of opening a tab of server text.
   await expect(
-    home.getByRole("button", { name: /Landing page A\/B/ }),
+    home.getByRole("button", { name: "Landing page A/B You: what did variant B do to signups?" }),
   ).toBeVisible();
   await expect(
     home.getByText("You: what did variant B do to signups?"),

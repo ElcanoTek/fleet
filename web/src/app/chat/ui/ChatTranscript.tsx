@@ -23,7 +23,14 @@ import { getPill, type ProtocolPill } from "./protocolPills";
 import { Icon } from "./Icon";
 import { PythonOutput, ToolChip, taskTrackerDisplayForMessage } from "./ToolChips";
 import { CopyButton, SummaryBanner, TurnSummaryChip } from "./ChatChips";
-import { ApprovalCard, MemoryProposalCard, askAgainPrompt } from "./ApprovalCards";
+import {
+  ApprovalCard,
+  MemoryProposalCard,
+  MemoryDestinationPicker,
+  askAgainPrompt,
+  type MemoryDestination,
+  type MemoryProject,
+} from "./ApprovalCards";
 import { MessageMinimap, MINIMAP_MAX, type MinimapEntry } from "./MessageMinimap";
 // The assistant markdown pipeline (react-markdown + micromark, ~43 KiB
 // transfer) is lazy-loaded: nothing renders it until a transcript message is
@@ -114,6 +121,11 @@ export type ChatTranscriptProps = {
   // Fork the conversation at a persisted message into a new thread (#454).
   branchFromMessage: (message: Message) => void | Promise<void>;
   loadMemories: () => void | Promise<void>;
+  // The project this chat belongs to, when it is in one — the destination
+  // choice ("My memory" / "Team learnings") on the memory approval card and
+  // on the Save action under a reply (Item D1). null = not in a project, so
+  // there is no second destination and no picker.
+  memoryProject?: MemoryProject | null;
 
   // Model picker / model-required affordance
   setSelectedModel: Dispatch<SetStateAction<string>>;
@@ -228,6 +240,7 @@ export function ChatTranscript({
   savePromptFromMessage,
   branchFromMessage,
   loadMemories,
+  memoryProject,
   setSelectedModel,
   setModelPickerOpen,
   setModelSearchQuery,
@@ -968,6 +981,7 @@ export function ChatTranscript({
                                     <MemoryProposalCard
                                       key={mp.id}
                                       proposal={mp}
+                                      project={memoryProject}
                                       onResolved={(next) => {
                                         patchAssistantMessage(currentConvKey, message.id, (m) => ({
                                           ...m,
@@ -1026,6 +1040,18 @@ export function ChatTranscript({
                                     >
                                       Save as workflow
                                     </button>
+                                  ) : null}
+                                  {/* Capture what the agent just said, without
+                                      having to compose a "remember this" turn
+                                      for it. Same destination model as the
+                                      approval card, so there is one thing to
+                                      learn (Item D1). */}
+                                  {!isStreaming ? (
+                                    <SaveToMemoryAction
+                                      content={message.content}
+                                      project={memoryProject ?? null}
+                                      onSaved={() => void loadMemories()}
+                                    />
                                   ) : null}
                                 </div>
                               ) : null}
@@ -1331,5 +1357,108 @@ function SummarizeProgressCard({
         </div>
       ) : null}
     </div>
+  );
+}
+
+
+// ── "Save" under a reply (Item D1, second path) ──────────────────────────────
+//
+// The approval card only appears when the MODEL proposes a memory. This is the
+// other direction: the reader decides a line is worth keeping and says so, from
+// where they already are. It opens the same destination picker as the card —
+// one model for both paths — and only when the chat is in a project; outside
+// one there is a single destination and no choice worth showing, so the button
+// saves straight to personal memory.
+function SaveToMemoryAction({
+  content,
+  project,
+  onSaved,
+}: {
+  content: string;
+  project: MemoryProject | null;
+  onSaved: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [destination, setDestination] = useState<MemoryDestination>(
+    project?.teamShared ? "project" : "personal",
+  );
+  const [state, setState] = useState<"idle" | "saving" | "saved" | "error">(
+    "idle",
+  );
+
+  const save = async (dest: MemoryDestination) => {
+    if (state === "saving") return;
+    setState("saving");
+    try {
+      const url =
+        dest === "project" && project
+          ? `/api/projects/${encodeURIComponent(project.id)}/memories`
+          : "/api/memories";
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content, kind: "fact" }),
+      });
+      if (!res.ok) {
+        setState("error");
+        return;
+      }
+      setState("saved");
+      setOpen(false);
+      onSaved();
+    } catch {
+      setState("error");
+    }
+  };
+
+  if (state === "saved") {
+    return (
+      <span className="text-[var(--color-text-muted)]">Saved ✓</span>
+    );
+  }
+
+  if (!project) {
+    return (
+      <button
+        type="button"
+        className="touch-target text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
+        title="Save this answer to your memory"
+        onClick={() => void save("personal")}
+      >
+        {state === "saving" ? "Saving…" : state === "error" ? "Save failed" : "Save"}
+      </button>
+    );
+  }
+
+  return (
+    <span className="inline-flex flex-wrap items-center gap-2">
+      <button
+        type="button"
+        aria-expanded={open}
+        className="touch-target text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
+        title="Save this answer as a memory"
+        onClick={() => setOpen((o) => !o)}
+      >
+        {state === "error" ? "Save failed — retry" : "Save"}
+      </button>
+      {open ? (
+        <span className="inline-flex flex-wrap items-center gap-2 rounded-[0.75rem] border border-[var(--color-border)] px-2 py-1">
+          <MemoryDestinationPicker
+            project={project}
+            value={destination}
+            onChange={setDestination}
+            disabled={state === "saving"}
+          />
+          <button
+            type="button"
+            className="rounded-full bg-[var(--color-text-primary)] px-2.5 py-1 text-[0.7rem] font-medium text-[var(--color-surface-1)] transition hover:opacity-80 disabled:opacity-40"
+            disabled={state === "saving"}
+            onClick={() => void save(destination)}
+          >
+            {state === "saving" ? "Saving…" : "Save"}
+          </button>
+        </span>
+      ) : null}
+    </span>
   );
 }

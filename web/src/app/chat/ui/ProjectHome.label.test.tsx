@@ -36,10 +36,12 @@ function renderHome() {
     <ProjectHome
       project={PROJECT}
       chats={[]}
+      userEmail="owner@example.com"
       isOwner
       initialSettingsOpen
       onBack={() => {}}
       onOpenChat={() => {}}
+      onOpenTeamChat={() => {}}
       onNewChat={() => {}}
       onSaveInstructions={async () => true}
       onUpdateSettings={async () => true}

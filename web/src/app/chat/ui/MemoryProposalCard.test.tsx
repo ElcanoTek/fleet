@@ -92,3 +92,67 @@ describe("MemoryProposalCard", () => {
     );
   });
 });
+
+// Item D1: inside a project the card asks WHERE the memory goes, and shows
+// the answer before the user saves rather than defaulting silently. Inside a
+// TEAM-shared project the team is preselected — that is what a member working
+// there usually means — and the choice is still visible and flippable.
+describe("MemoryProposalCard destination", () => {
+  const project = { id: "p1", name: "Quant", teamShared: true };
+
+  it("has no destination picker outside a project", () => {
+    render(<MemoryProposalCard proposal={base} onResolved={() => {}} />);
+    expect(screen.queryByRole("group", { name: /where to save/i })).toBeNull();
+  });
+
+  it("preselects team learnings in a team-shared project and posts the project id", async () => {
+    const fetchMock = mockFetch({ supersede: "none" });
+    const resolved: MemoryProposal[] = [];
+    render(
+      <MemoryProposalCard
+        proposal={base}
+        project={project}
+        onResolved={(next) => resolved.push(next)}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Team learnings" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(String(init.body))).toEqual({ project_id: "p1" });
+    await waitFor(() => expect(resolved).toHaveLength(1));
+    expect(resolved[0].savedTo).toBe("Quant");
+  });
+
+  it("flipping to My memory posts no project id", async () => {
+    const fetchMock = mockFetch({ supersede: "none" });
+    render(
+      <MemoryProposalCard proposal={base} project={project} onResolved={() => {}} />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "My memory" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(String(init.body))).toEqual({});
+  });
+
+  it("defaults to My memory in a personal project", () => {
+    render(
+      <MemoryProposalCard
+        proposal={base}
+        project={{ ...project, teamShared: false }}
+        onResolved={() => {}}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "My memory" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+});

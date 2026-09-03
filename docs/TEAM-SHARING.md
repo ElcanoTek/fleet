@@ -1,0 +1,205 @@
+# Sharing work inside a project — team-shared chats and team learnings
+
+The design note for the Projects enhancement pass: what shipped, what it
+deliberately does not do, and where each piece is enforced. The invariant it
+introduces has its own record in
+[ADR-0057](adr/0057-team-shared-chats-live-in-team-shared-projects.md); the
+surfaces it builds on are [`PROJECTS.md`](PROJECTS.md) (ADR-0021),
+[ADR-0013](adr/0013-team-rbac.md) (per-conversation team visibility) and
+[ADR-0047](adr/0047-self-serve-team-membership.md) (who may set a team).
+
+The pass front-loads **exposure over invention**: the sharing flag, the shared
+memory store, and the retention exemptions all existed. What was missing was UI,
+affordance, and copy — and, in three places, code that told the truth.
+
+## The three things a project now answers
+
+**Find past work.** Search over a project's chat lists; empty states that name
+both filing paths (drag, or **Move to project** from a chat's ⋮ menu) and the
+reason to bother — a chat in a project doesn't expire.
+
+**Organize by campaign.** Unchanged from ADR-0021, plus the honesty fixes: the
+bulk "Delete all unpinned" now skips project chats (it did not, which made
+"project chats don't expire" false at the one moment it mattered), and removing
+a chat from a project confirms that it becomes temporary again.
+
+**Share learnings.** Two mechanisms, one vocabulary:
+
+- **Share with team** — one chat, read-only, for people in your team.
+- **Team learnings** — the project's shared memory, written by any member,
+  visible to all, injected into every chat in the project.
+
+## Vocabulary (use these words)
+
+| Term | Means | Not |
+| --- | --- | --- |
+| **Share by link** | Anyone with the URL. Read-only. Badge: chain link. | "shared" |
+| **Share with team** | Your team, read-only, inside a team-shared project. Badge: two people. | "shared" |
+| **Team learnings** | The project's shared memory, as users see it. | "shared memory" (backend term) |
+| **My memory** | The user's own personal memories. | "memories" |
+| **Set team** / **Team** field | Self-serve create / admin assignment. | "join" |
+
+A chat can be link-shared, team-shared, both, or neither. The two badges are
+different shapes and each is always labeled with its audience — one unlabeled
+chain link previously stood for the only scope that existed, and inside a
+team-shared project it read as "my team can see this", which it never meant.
+
+## Team-shared chats
+
+A chat is shared with the team from **⋮ → Share…**, which opens one dialog
+holding both scopes. The toggle is available **only for a chat inside a
+team-shared project**; otherwise it is disabled with the sentence that fits the
+case ("move it into a team-shared project" / "this project isn't shared with
+your team — share the project first"). That narrowing is the product decision
+recorded in ADR-0057: the project home's **Team** section is the one place a
+teammate looks, so a team-shared chat with no project would be readable by
+people with no surface listing it.
+
+What a teammate gets is a **read-only view** of the transcript — the same
+renderer a public share link uses, reached through team membership instead of a
+URL — with a banner naming the owner and the team, and one forward action where
+the composer would be: **Branch to continue in your own chat**. The branch is
+theirs from the first byte, filed into the same project, private until they
+share it, and unaffected if the original is later unshared or deleted. The
+owner's chat is never modified: conversations keep exactly one owner.
+
+**What team sharing exposes is the transcript only.** Tool calls, tool results
+and reasoning are filtered out server-side (the same filter the public snapshot
+applies), and attachments and generated files stay behind the owner-scoped
+workspace route. A shared conversation *about* a report does not hand out the
+report.
+
+**A team-shared chat always has a home.** Moving it out of its project, making
+the project personal, deleting the project, or leaving the team all unshare it —
+in the same statement or transaction as the change that caused it. See ADR-0057
+for why, and `internal/store/team_sharing.go` for where.
+
+### Endpoints
+
+| Route | Who | What |
+| --- | --- | --- |
+| `POST /conversations/{id}/share-with-team` | owner | the ADR-0013 opt-in, unchanged |
+| `GET /conversations/{id}/team-view` | a teammate (or the owner) | the read-only transcript |
+| `POST /conversations/{id}/branch` | anyone who can *read* the parent | fork into a chat you own |
+| `GET /projects/{id}/team-conversations` | members | the project home's Team section |
+
+Every refusal on the read paths is a `404`, indistinguishable from "no such
+chat" — team membership is not probeable from here.
+
+## Team learnings
+
+The project's shared memory has existed since ADR-0021 and, until this pass,
+**had no viewing surface anywhere**: entries were written and injected, and no
+screen listed them. There are now two, both the same list with the same
+permissions:
+
+- the **Team learnings** panel on the project home, beside Instructions so the
+  two team-level layers read as a pair;
+- a **Team learnings** tab in the composer's memories modal, so a member can see
+  and manage them without leaving the conversation.
+
+Every entry carries **who wrote it and when** (provenance was already recorded).
+Actions are Pin · Edit · Retire · Delete. **Retire is the default remove**: the
+entry stops being injected, the record survives.
+
+**Permissions in one line: members manage their own entries; the owner manages
+all.** Enforced in `internal/httpapi/projects.go` (`mayManageProjectMemory`),
+not just hidden in the UI.
+
+### Capturing one
+
+Two paths, one model — both show the destination *before* saving, never a hidden
+default:
+
+- the **memory approval card** ("Save this memory?") gains a **Save to: My
+  memory | Team learnings** control. Inside a team-shared project, Team
+  learnings is preselected; the user can flip it;
+- a **Save** action in the message action row (beside Copy · Regenerate ·
+  Branch) opens the same picker, for capturing something the agent said without
+  composing a "remember this" turn.
+
+Existing personal memories can be promoted with **Move to team learnings**
+(with a project picker when several apply). It **moves** rather than copies — two
+rows saying the same thing would be injected twice in every project chat.
+
+## The three context layers
+
+A chat in a project is fed by three layers, in the order
+`internal/agent/prompt.go` (`buildSystemPrompt`) assembles them:
+
+1. **Instructions** — one field, owner-only, injected first.
+2. **Team learnings** — the project's shared memory, tagged `[project]`.
+3. **My memory** — the reader's own personal memories.
+
+Layers 2 and 3 arrive together in the same "User Memories" block. The helper
+copy under Instructions says exactly that. (It used to say "injected before
+personal memories", which named two of the three and omitted the only
+team-writable one.)
+
+## Team management, corrected
+
+The Projects modal used to offer to **create a team inline**, with copy telling
+teammates to "join the same name" — a path the server refuses (ADR-0047: joining
+is admin-granted; an existing name returns `409`). Team creation is a
+once-per-account act, and two surfaces already own it. So:
+
+- **The Projects modal is display-only about teams.** A teamless caller sees
+  where to fix it, branched on their role — an admin can do it themselves
+  (most fleet users are admins; sending them to ask someone else would be worse
+  than useless), a member is told to ask.
+- **Settings → Team tells the truth.** "Name a team to create it. Teammates are
+  added by an admin in Settings → Admin → Users." The `409` is handled inline as
+  "That name is already in use. An admin can add you to the team…" — never "that
+  team exists", because a team-shared *project* can hold the name with no
+  members left, and the server cannot say which.
+- **Leaving confirms first**, quoting real counts: the team-shared projects you
+  stop seeing, the chats of yours that stop being shared, and the fact that
+  projects you own stay yours and stay shared with the team (verified against
+  `ListProjectsForUser`, which matches the owner regardless of team).
+- **Deleting a team-shared project confirms too**: how many team learnings die
+  with it, how many chats from how many members leave it and become temporary,
+  and the existing export offered inline.
+- **Admin → Users assigns a team from a list**, with an explicit "New team…"
+  option. The field was free text, so "Testing" and "testing" silently became
+  two trust groups — a difference that only surfaces later, as a project a
+  teammate cannot see.
+
+## Honest scope — what this pass does NOT do
+
+- **No project-level "share new chats by default".** One mechanism answers "is
+  my chat visible?" — per-chat opt-in. Revisit if members ask.
+- **No write access for teammates.** Branch is the way to build on someone's
+  chat. Co-authoring a live conversation is a different feature (one workspace,
+  one sandbox, one cost ledger).
+- **No file sharing through a team share.** Transcript only, deliberately.
+- **No automatic proposal of team learnings.** The feedback→learning loop
+  (#516) exists at *task* scope and is still not project-scoped; extending it is
+  a separate, decision-gated pass, and it needs `FLEET_SELF_IMPROVE_ENABLED`,
+  which stays **off by default**. Recommendation on the record: leave it off
+  until that pass ships with project scoping.
+- **No campaign lifecycle** (archive/complete), **no per-project bindings** for
+  scheduled tasks / skills / eval sets, **no roles inside a project**, **no
+  invitations**, **no ownership transfer** (still a real gap when an owner
+  leaves), **nothing cross-instance**.
+- **Portfolio-wide actions** ("apply this block list to every index deal") are
+  the Datasets feature's shape, not this one — see [`DATASETS.md`](DATASETS.md).
+
+## Deviations from the brief
+
+- **The Projects modal already had a shared-memory list** (per project row), so
+  "no viewing surface anywhere" was not quite right. It is relabelled *Team
+  learnings* like everywhere else; the real gap — a first-class panel with
+  authors, dates, and pin/edit/retire — is the project home's.
+- **"Delete all unpinned" did NOT skip project chats.** The brief listed this as
+  a check; it was a bug. `DeleteAllUnpinned` and `DeleteAllMatching` now filter
+  `project_id IS NULL`, matching what the TTL sweep and cap eviction already
+  did, and what the rail's Temporary list shows.
+- **`Branch` was owner-only**, as the brief suspected. It now accepts any parent
+  the caller can read.
+- **The Team section needed a server-side project filter.** `ListTeamConversations`
+  returns every team-visible chat across all projects; `GET /projects/{id}/team-conversations`
+  is the scoped read, and it excludes the caller's own chats (they already render
+  under "your chats", with a team badge).
+- **Injection order, read from the code rather than the old copy:** Instructions
+  first, then personal memories and `[project]`-tagged team learnings together
+  in one block. The helper text says "then", not "before personal memories".

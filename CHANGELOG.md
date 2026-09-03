@@ -13,7 +13,119 @@ prior versions are listed because none have shipped.
 
 ## [Unreleased]
 
+### Added
+
+- **Your team can now see one of your chats — and build on it.** The
+  per-conversation team-visibility flag has been in the store since #237
+  (ADR-0013) with **no UI at all**, while Settings → Team's own copy told users
+  a conversation could be shared with the team "from its own menu". It could
+  not. The chat kebab's **Share…** now opens one dialog holding both audiences:
+  *Share by link* (anyone with the URL) and *Share with team* (your team,
+  read-only) — two scopes, one place, so every surface that says a chat is
+  shared also lets you change it. A teammate finds the chat in a **Team**
+  section on the project's home page, opens it in the same read-only viewer
+  share links already use (owner and team named in a banner), and has exactly
+  one forward action where the composer would be: **Branch to continue in your
+  own chat**. The branch is theirs from the first byte, filed into the same
+  project, private until they share it, and unaffected when the original is
+  unshared or deleted — so building on a colleague's work needs no write access
+  to it and no co-authoring. Team sharing is offered **only inside a
+  team-shared project**, which is what gives every shared chat one place to be
+  found and its owner one place to revoke it; the store maintains that pairing
+  on every write that could break it (moving the chat out, un-sharing or
+  deleting the project, leaving the team). What it exposes is the **transcript
+  only** — no tool calls, no reasoning, and no workspace files: a shared
+  conversation *about* a report must not hand out the report. See
+  [`docs/TEAM-SHARING.md`](docs/TEAM-SHARING.md) and
+  [ADR-0057](docs/adr/0057-team-shared-chats-live-in-team-shared-projects.md).
+
+- **Team learnings: a project's shared memory finally has a screen.** Entries
+  were written and injected into every project chat, and nothing anywhere
+  listed them. There are now two views of the same list — a panel on the
+  project home beside Instructions, and a tab in the composer's memories modal
+  — each showing every entry with **who wrote it and when**, and Pin · Edit ·
+  Retire · Delete. *Retire is the default remove*: the entry stops being
+  injected, the record survives. Members manage their own entries, the owner
+  manages all, enforced server-side. Capturing one is now a choice rather than
+  a silent default: the "Save this memory?" card grows a visible **Save to: My
+  memory | Team learnings** control (team preselected inside a team-shared
+  project), a **Save** action appears beside Copy · Regenerate · Branch under a
+  reply for capturing something the agent said, and existing personal memories
+  can be promoted with **Move to team learnings** — a move, not a copy, so a
+  fact is never injected twice.
+
+- **Find your stuff.** Search across a project's chats — yours and the team's —
+  from one field on the project home.
+
 ### Fixed
+
+- **"Delete all unpinned" deleted chats filed in a project.** The rail promises
+  that filing a chat into a project takes it out of Temporary, and the TTL
+  sweep, the unpinned-cap eviction and auto-archive all honored that. The two
+  bulk deletes did not: they matched every unpinned, unarchived conversation,
+  so a project chat the user could not even see in the section they were
+  clearing was deleted with it. `DeleteAllUnpinned` and `DeleteAllMatching` now
+  filter `project_id IS NULL` like everything else, the confirm counts what
+  will actually be removed, and deleting a specific project chat stays possible
+  through the targeted select-and-delete path.
+
+- **The Projects modal invited teammates down a path the server refuses.** Its
+  teamless state offered to create a team inline, with copy saying "teammates
+  join the same name" — but joining an existing team is admin-granted, and
+  claiming a name someone holds returns 409 (ADR-0047). Team creation is a
+  once-per-account act belonging to the two surfaces that already own it, so
+  the modal is display-only about teams now and says where to go, branched on
+  the caller's role (most fleet users are admins — sending them to ask someone
+  else would be worse than useless). The same wrong sentence on Settings → Team
+  is replaced, its 409 is handled inline with the advice that actually helps,
+  and **leaving a team now confirms first**, quoting what it costs: the
+  team-shared projects you stop seeing, the chats of yours that stop being
+  shared (leaving unshares them), and the fact that projects you own stay yours.
+
+- **Deleting a team-shared project said nothing about what members lose.** The
+  confirm now states it with real counts — team learnings die with the project,
+  and every member's chats leave it and become temporary — and offers the
+  existing export inline.
+
+- **The admin Team field made a new team out of a typo.** Free text meant
+  "Testing" and "testing" silently became two trust groups, a difference that
+  only surfaces later as a project a teammate cannot see. Settings → Admin →
+  Users now assigns from a list of existing teams, with an explicit "New team…"
+  option for a genuinely new one.
+
+- **The project home's Sources panel listed workspace plumbing as files.** Every
+  conversation workspace carries the bundle-mount symlinks (`personas`,
+  `protocols`, `shared`, `skills`, `system_prompts`) pointing outside the
+  workspace root, and each appeared as a downloadable "file" of 26–54 bytes —
+  the length of its target path — whose download correctly tripped the
+  path-traversal guard and dumped raw `path escapes workspace` text into a new
+  tab. The indexer now lists regular files only, and a download that fails
+  reports it in the app instead of opening a tab of server text.
+
+- **Chat previews on the project home showed raw markdown**, so a reply that
+  opened with `**Proposed Memory:**` reached a plain-text line complete with
+  its asterisks. Previews are rendered to plain text (`stripMarkdown`), leaving
+  arithmetic and `snake_case` identifiers alone.
+
+- **The share icon on a chat row said nothing about who could see it.** Read
+  next to Settings → Team's copy about team sharing, a single unlabeled chain
+  link inside a team-shared project reasonably read as "my team can see this";
+  it meant a public link. There are now two distinct glyphs — link and team —
+  each always labeled with its audience, and a chat can carry one, both, or
+  neither.
+
+- **The Projects modal was translucent enough to compete with the page behind
+  it**, losing placeholder text and the primary button on a busy background. It
+  uses the same opaque surface tokens as the project settings and New Task
+  dialogs, so the three read as one family.
+
+- **Removing a chat from a project no longer drops it into expiry silently.**
+  The confirm says it becomes temporary and will expire unless pinned; moving a
+  team-shared chat somewhere it cannot stay shared says that too.
+
+- **Empty project states teach filing.** Both the rail's and the home's name
+  both paths (drag, or **Move to project** from a chat's ⋮ menu) and the payoff:
+  chats in a project don't expire.
 
 - **The Tools picker no longer shows a connector as ON that no turn will
   load.** `POST /conversations/{id}/mcp-servers` intersects the requested

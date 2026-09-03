@@ -61,11 +61,13 @@ import { CloseButton } from "@/app/shared/ui/CloseButton";
 import { Icon } from "./Icon";
 import { QueuedInputs } from "./QueuedInputs";
 import { ProjectsModal, type Project } from "./ProjectsModal";
-import { ProjectHome } from "./ProjectHome";
+import { ProjectHome, TeamLearningsPanel } from "./ProjectHome";
 import { MemoryGraphView } from "./MemoryGraphView";
 import { ConversationTotalsChip, type PendingAttachment } from "./ChatChips";
 import { ConversationSidebar } from "./ConversationSidebar";
 import { SavePromptDialog } from "./SavePromptDialog";
+import { ShareDialog } from "./ShareDialog";
+import { TeamChatViewer } from "./TeamChatViewer";
 import {
   DownloadChatDialog,
   type DownloadOptions,
@@ -116,9 +118,15 @@ export type ConversationSummary = {
   // colored by name-hash. Undefined/empty = unlabeled.
   labels?: string[];
   // share_token is the public read-only share token (#226). Empty/undefined =
-  // not shared; non-empty = a 🔗 badge shows in the sidebar and the kebab offers
-  // Copy link / Unshare. The owner's own GET /conversations carries it.
+  // not shared; non-empty = a link badge shows in the sidebar and the Share
+  // dialog offers Copy link / Stop sharing. The owner's own GET
+  // /conversations carries it.
   share_token?: string;
+  // team_visible is the OTHER share scope (ADR-0013 / ADR-0057): the owner
+  // opted this chat into read-only visibility for their team. Independent of
+  // share_token — a chat can be link-shared, team-shared, both, or neither,
+  // and the rail badges them distinctly because the audiences differ.
+  team_visible?: boolean;
   // project_id binds the conversation to a project/space (#509). Set at
   // creation or by re-filing (drag onto a rail project / kebab "Move to
   // project"). In the rail a project conversation lives only under its
@@ -702,7 +710,13 @@ export function ChatExperience({
   const [memoryManagerOpen, setMemoryManagerOpen] = useState(false);
   // Memory-manager tab (#523): the flat record list (default) or the derived
   // knowledge-graph view.
-  const [memoryView, setMemoryView] = useState<"list" | "graph">("list");
+  // "team" is the project's Team learnings, shown only while the open chat is
+  // in a project (Item D4) — members manage them without leaving the chat.
+  const [memoryView, setMemoryView] = useState<"list" | "graph" | "team">("list");
+  // Promotion of a personal memory into a project's team learnings (Item D5).
+  // Non-null = the picker is open for this memory id (only when more than one
+  // team-shared project is a candidate; with exactly one we just move it).
+  const [promoteMemoryId, setPromoteMemoryId] = useState<string | null>(null);
   // Projects modal state: null = closed; {} = open on the list; create opens
   // straight into the new-project form (the rail's +); selectId opens with
   // that project selected (the rail kebab's "Edit project…").
@@ -718,6 +732,10 @@ export function ChatExperience({
     id: string;
     settings?: boolean;
   }>(null);
+  // A teammate's team-shared chat, open in the read-only viewer (ADR-0057).
+  // The conversation id alone: the viewer is always opened FROM a project
+  // home, which stays set underneath, so Back is just "close me".
+  const [teamChatView, setTeamChatView] = useState<string | null>(null);
 
   const [memoryDraft, setMemoryDraft] = useState("");
   const [memoryKindDraft, setMemoryKindDraft] = useState<string>("fact");
@@ -1823,6 +1841,35 @@ export function ChatExperience({
     }
   };
 
+  // promoteMemoryToProject MOVES one personal memory into a project's team
+  // learnings (Item D5) — the migration path for team facts people saved to
+  // personal memory before a destination choice existed. A move, not a copy:
+  // two rows saying the same thing would be injected twice in every project
+  // chat. The server enforces both halves (the row must be the caller's own
+  // personal memory; the caller must be a member of the project).
+  const promoteMemoryToProject = async (id: string, projectID: string) => {
+    setMemoryError(null);
+    try {
+      const response = await fetch(
+        `/api/projects/${encodeURIComponent(projectID)}/memories`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ from_memory_id: id }),
+        },
+      );
+      if (!response.ok) throw new Error(await response.text());
+      setPromoteMemoryId(null);
+      await loadMemories();
+    } catch (err) {
+      setMemoryError(
+        err instanceof Error
+          ? err.message
+          : "Unable to move that memory to team learnings.",
+      );
+    }
+  };
+
   const deleteMemory = async (id: string) => {
     setMemoryError(null);
     try {
@@ -2602,6 +2649,25 @@ export function ChatExperience({
   const projectHomeProject = projectHome
     ? (projects.find((p) => p.id === projectHome.id) ?? null)
     : null;
+  // The read-only viewer takes the same slot as the project home (it is opened
+  // FROM it), so exactly one of the two renders and the live chat stays
+  // mounted-but-hidden underneath either.
+  const fullPageOverlay = Boolean(projectHomeProject) || Boolean(teamChatView);
+
+  // The team-shared projects this user can promote a personal memory into
+  // (Item D5). A personal project has no team to learn anything, so it is not
+  // a promotion target.
+  const teamSharedProjects = projects.filter((p) => Boolean(p.team_id));
+
+  // The open chat's project, in the shape the memory destination picker needs
+  // (Item D1). null outside a project — then there is one destination and no
+  // choice worth showing.
+  const activeProjectForMemory = (() => {
+    const p = activeConversation?.project_id
+      ? projects.find((x) => x.id === activeConversation.project_id)
+      : undefined;
+    return p ? { id: p.id, name: p.name, teamShared: Boolean(p.team_id) } : null;
+  })();
 
   const closeProjectsModal = () => {
     setProjectsModal(null);
@@ -2755,13 +2821,13 @@ export function ChatExperience({
     }
   };
 
+  // deleteProject does NOT confirm: its callers do, and they can say more than
+  // a generic window.confirm can. The project home opens a dialog quoting real
+  // counts — how many team learnings die with the project, how many chats from
+  // how many members leave it and become temporary — and offers the export
+  // (Item A6). The rail kebab, which has no page to load those counts on,
+  // keeps a plain confirm here.
   const deleteProject = async (projectID: string) => {
-    if (
-      !window.confirm(
-        "Delete this project? Conversations are kept (detached); shared project memories are removed.",
-      )
-    )
-      return;
     try {
       const res = await fetch(
         `/api/projects/${encodeURIComponent(projectID)}`,
@@ -2787,11 +2853,38 @@ export function ChatExperience({
     conversationId: string,
     projectID: string,
   ) => {
+    const conv = conversations.find((c) => c.id === conversationId);
+    // A team-shared chat cannot exist outside a team-shared project — the
+    // server clears the flag on the way out (ADR-0057) — so say so before the
+    // move rather than letting a teammate's bookmark quietly 404.
+    const leavingTeamShare =
+      Boolean(conv?.team_visible) &&
+      !projects.some((p) => p.id === projectID && p.team_id);
+    if (leavingTeamShare) {
+      const target = projects.find((p) => p.id === projectID);
+      const message = projectID
+        ? `This chat is shared with your team. Moving it to “${target?.name ?? "another project"}”, which isn't shared with your team, will unshare it. Continue?`
+        : "This chat is shared with your team. Removing it from the project will unshare it. Continue?";
+      if (!window.confirm(message)) return;
+    } else if (!projectID && conv?.project_id) {
+      // Unfiling drops a chat back into Temporary, where retention can reach
+      // it — the corollary of "chats in a project don't expire" (Item E3).
+      if (
+        !window.confirm(
+          "This chat will become temporary and expire unless pinned. Remove it from the project?",
+        )
+      )
+        return;
+    }
     const prev = conversations;
     setConversations((cs) =>
       cs.map((c) =>
         c.id === conversationId
-          ? { ...c, project_id: projectID || undefined }
+          ? {
+              ...c,
+              project_id: projectID || undefined,
+              team_visible: leavingTeamShare ? false : c.team_visible,
+            }
           : c,
       ),
     );
@@ -2822,16 +2915,23 @@ export function ChatExperience({
     }
   };
 
-  // The share dialog (#226 UX): opened whenever a share link is created or
-  // managed, so the user SEES the URL with an explicit Copy affordance instead
-  // of inferring success from a small sidebar icon. {id,token,title} of the
-  // conversation being shared; null = closed.
-  const [shareDialog, setShareDialog] = useState<{
-    id: string;
-    token: string;
-    title: string;
-  } | null>(null);
+  // The Share dialog (#226 UX, extended by ADR-0057): one dialog, two
+  // audiences — share by link (anyone with the URL) and share with the team
+  // (your team, read-only, only inside a team-shared project). It holds the
+  // conversation id only; the live state is read from `conversations` so a
+  // toggle inside the dialog is reflected without re-plumbing a snapshot.
+  // null = closed.
+  const [shareDialog, setShareDialog] = useState<{ id: string } | null>(null);
   const [shareLinkCopied, setShareLinkCopied] = useState(false);
+  const [shareBusy, setShareBusy] = useState(false);
+
+  // openShareDialog is the single entry point every surface uses (the row
+  // kebab, and any badge that says a chat is shared). Opening no longer mints
+  // a public link as a side effect: creating one is a deliberate click inside.
+  const openShareDialog = (conversation: ConversationSummary) => {
+    setShareLinkCopied(false);
+    setShareDialog({ id: conversation.id });
+  };
 
   // buildShareUrl turns a share token into the absolute, copy-paste link a
   // recipient opens. window.origin is the deployment origin the user is on (#226).
@@ -2874,10 +2974,11 @@ export function ChatExperience({
     const token = data.token ?? "";
     patchShareToken(conversation.id, token);
     if (!token) return false;
-    // Show the link explicitly — the icon-only affordance was easy to miss and
-    // clipboard writes can be silently blocked; the dialog is the honest UX.
+    // The dialog is already open (this runs from its "Create link" button) and
+    // re-renders with the URL from `conversations`. Pre-copying is a
+    // convenience; the explicit Copy button is the honest path when the
+    // clipboard write is blocked.
     setShareLinkCopied(false);
-    setShareDialog({ id: conversation.id, token, title: conversation.title });
     try {
       await navigator.clipboard.writeText(buildShareUrl(token));
       return true;
@@ -2900,25 +3001,38 @@ export function ChatExperience({
     }
   };
 
-  // copyShareLink surfaces an already-shared conversation's link (#226): opens
-  // the share dialog (URL + explicit Copy) and best-effort pre-copies.
-  const copyShareLink = async (
+  // setTeamShared flips the OTHER scope (ADR-0013's per-conversation opt-in,
+  // surfaced by ADR-0057). Optimistic like the link path; a failed write
+  // re-reads the truth rather than leaving the toggle lying.
+  const setTeamShared = async (
     conversation: ConversationSummary,
-  ): Promise<boolean> => {
-    if (!conversation.share_token) return false;
-    setShareLinkCopied(false);
-    setShareDialog({
-      id: conversation.id,
-      token: conversation.share_token,
-      title: conversation.title,
-    });
+    visible: boolean,
+  ): Promise<void> => {
+    setShareBusy(true);
+    const patch = (c: ConversationSummary) =>
+      c.id === conversation.id ? { ...c, team_visible: visible } : c;
+    setConversations((current) => current.map(patch));
+    setArchivedConversations((current) => current.map(patch));
     try {
-      await navigator.clipboard.writeText(
-        buildShareUrl(conversation.share_token),
+      const response = await fetch(
+        `/api/conversations/${encodeURIComponent(conversation.id)}/share-with-team`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ visible }),
+        },
       );
-      return true;
+      if (!response.ok) {
+        showRailError(
+          `Couldn't ${visible ? "share" : "unshare"} the chat with your team (HTTP ${response.status}).`,
+        );
+        await refreshConversations();
+      }
     } catch {
-      return false;
+      showRailError("Couldn't reach the server — the chat's team sharing is unchanged.");
+      await refreshConversations();
+    } finally {
+      setShareBusy(false);
     }
   };
 
@@ -4099,9 +4213,7 @@ export function ChatExperience({
           savePromptFromConversation={setPromptSaveTarget}
           setPendingDeleteConversation={setPendingDeleteConversation}
           setConversationLabels={setConversationLabels}
-          shareConversation={shareConversation}
-          unshareConversation={unshareConversation}
-          copyShareLink={copyShareLink}
+          openShareDialog={openShareDialog}
           archivedConversations={archivedConversations}
           showArchived={showArchived}
           setShowArchived={setShowArchived}
@@ -4138,7 +4250,16 @@ export function ChatExperience({
           onRenameProject={(projectID, name) =>
             void renameProject(projectID, name)
           }
-          onDeleteProject={(projectID) => void deleteProject(projectID)}
+          onDeleteProject={(projectID) => {
+            const p = projects.find((x) => x.id === projectID);
+            if (
+              !window.confirm(
+                `Delete ${p?.name ?? "this project"}? Its team learnings are lost, and every member's chats leave the project and become temporary. Open the project to see the counts and export first.`,
+              )
+            )
+              return;
+            void deleteProject(projectID);
+          }}
           projects={projects}
           onMoveToProject={(conversationId, projectID) =>
             void moveConversationToProject(conversationId, projectID)
@@ -4165,11 +4286,22 @@ export function ChatExperience({
                 Delete all unpinned chats?
               </h2>
               <p className="mb-4 text-[0.875rem] leading-[1.6] text-[var(--color-text-secondary)]">
-                {conversations.filter((c) => !c.pinned).length} conversation
-                {conversations.filter((c) => !c.pinned).length === 1
+                {/* Counts what the server actually deletes: unpinned chats
+                    that are NOT filed in a project. Filing is a keep state —
+                    a project chat is out of the Temporary list this action
+                    clears, and the server exempts it (store.DeleteAllUnpinned)
+                    — so counting one here would over-promise a deletion that
+                    never happens. */}
+                {
+                  conversations.filter((c) => !c.pinned && !c.project_id).length
+                }{" "}
+                conversation
+                {conversations.filter((c) => !c.pinned && !c.project_id)
+                  .length === 1
                   ? ""
                   : "s"}{" "}
-                will be removed. Pinned chats are kept. This cannot be undone.
+                will be removed. Pinned chats — and chats filed in a project —
+                are kept. This cannot be undone.
               </p>
               <div className="flex items-center justify-end gap-2">
                 <button
@@ -4230,6 +4362,56 @@ export function ChatExperience({
           </div>
         ) : null}
 
+        {promoteMemoryId ? (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center px-4">
+            <button
+              aria-label="Cancel moving the memory"
+              className="absolute inset-0 bg-[var(--color-overlay-strong)] backdrop-blur-[2px]"
+              type="button"
+              onClick={() => setPromoteMemoryId(null)}
+            />
+            <div
+              role="dialog"
+              aria-label="Move to team learnings"
+              className="relative z-10 w-full max-w-[24rem] rounded-[1rem] border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] p-5 shadow-[var(--shadow-md)]"
+            >
+              <h2 className="mb-1 text-[0.95rem] font-semibold text-[var(--color-text-primary)]">
+                Move to team learnings
+              </h2>
+              <p className="mb-3 text-[0.8rem] leading-[1.5] text-[var(--color-text-secondary)]">
+                Pick the project this belongs to. It leaves your personal
+                memory and every member of that project sees it.
+              </p>
+              <div className="grid gap-1">
+                {teamSharedProjects.map((p) => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    className="rounded-md border border-[var(--color-border)] px-3 py-2 text-left text-[0.85rem] text-[var(--color-text-primary)] transition hover:border-[var(--color-accent)]"
+                    onClick={() =>
+                      void promoteMemoryToProject(promoteMemoryId, p.id)
+                    }
+                  >
+                    {p.name}
+                    <span className="ml-2 text-[0.7rem] text-[var(--color-text-muted)]">
+                      {p.team_id}
+                    </span>
+                  </button>
+                ))}
+              </div>
+              <div className="mt-4 flex justify-end">
+                <button
+                  type="button"
+                  className="rounded-full border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.78rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)]"
+                  onClick={() => setPromoteMemoryId(null)}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
         {memoryManagerOpen ? (
           <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
             <button
@@ -4256,9 +4438,19 @@ export function ChatExperience({
               </div>
 
               {/* Knowledge-graph tab (#523): a compact derived view over the
-                  same records; the record list stays the default. */}
+                  same records; the record list stays the default. The third
+                  tab appears only inside a project — it is that project's
+                  team learnings, the same list (and the same permissions) as
+                  the project home's panel, reachable without leaving the
+                  conversation (Item D4). */}
               <div className="flex items-center gap-1">
-                {(["list", "graph"] as const).map((view) => (
+                {(
+                  [
+                    "list",
+                    "graph",
+                    ...(activeProjectForMemory ? (["team"] as const) : []),
+                  ] as const
+                ).map((view) => (
                   <button
                     key={view}
                     type="button"
@@ -4269,12 +4461,28 @@ export function ChatExperience({
                     }`}
                     onClick={() => setMemoryView(view)}
                   >
-                    {view === "list" ? "Memories" : "Graph"}
+                    {view === "list"
+                      ? "My memory"
+                      : view === "graph"
+                        ? "Graph"
+                        : "Team learnings"}
                   </button>
                 ))}
               </div>
 
-              {memoryView === "graph" ? (
+              {memoryView === "team" && activeProjectForMemory ? (
+                <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+                  <TeamLearningsPanel
+                    projectId={activeProjectForMemory.id}
+                    projectOwner={
+                      projects.find((p) => p.id === activeProjectForMemory.id)
+                        ?.owner_email ?? ""
+                    }
+                    userEmail={userEmail}
+                    teamShared={activeProjectForMemory.teamShared}
+                  />
+                </div>
+              ) : memoryView === "graph" ? (
                 <MemoryGraphView />
               ) : (
                 <>
@@ -4443,6 +4651,30 @@ export function ChatExperience({
                                       >
                                         Retire
                                       </button>
+                                      {/* Promote a personal memory the whole
+                                          team should have (Item D5). Only for
+                                          real, saved memories — a proposal has
+                                          not been accepted yet — and only when
+                                          there is a team-shared project to
+                                          promote it into. */}
+                                      {memory.source !== "proposed" &&
+                                      teamSharedProjects.length > 0 ? (
+                                        <button
+                                          type="button"
+                                          className="hover:text-[var(--color-text-primary)]"
+                                          title="Move this memory into a project's team learnings"
+                                          onClick={() => {
+                                            if (teamSharedProjects.length === 1)
+                                              void promoteMemoryToProject(
+                                                memory.id,
+                                                teamSharedProjects[0].id,
+                                              );
+                                            else setPromoteMemoryId(memory.id);
+                                          }}
+                                        >
+                                          Move to team learnings
+                                        </button>
+                                      ) : null}
                                     </>
                                   )}
                                   <button
@@ -4509,69 +4741,39 @@ export function ChatExperience({
         ) : null}
 
         {shareDialog ? (
-          <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
-            <button
-              aria-label="Close share dialog"
-              className="absolute inset-0 bg-[var(--color-overlay-strong)] backdrop-blur-[2px]"
-              type="button"
-              onClick={() => setShareDialog(null)}
-            />
-            <div className="motion-safe:animate-pop-up-base relative z-10 w-full max-w-[28rem] rounded-[1.25rem] border border-[var(--color-border-strong)] bg-[color-mix(in_srgb,var(--composer-surface)_94%,black)] p-5 shadow-[var(--composer-shadow)] backdrop-blur-sm">
-              <div className="mb-3 grid gap-2">
-                <h2 className="text-[1rem] font-semibold text-[var(--color-text-primary)]">
-                  Share link
-                </h2>
-                <p className="text-[0.875rem] leading-[1.6] text-[var(--color-text-secondary)]">
-                  Anyone with this link can view a <strong>read-only</strong>{" "}
-                  copy of <strong>&quot;{shareDialog.title}&quot;</strong>.
-                  Revoke it any time with <em>Stop sharing</em>.
-                </p>
-              </div>
-              <div className="mb-4 flex items-center gap-2">
-                <input
-                  readOnly
-                  aria-label="Share link URL"
-                  value={buildShareUrl(shareDialog.token)}
-                  onFocus={(e) => e.currentTarget.select()}
-                  className="min-w-0 flex-1 rounded-lg border border-[var(--color-border)] bg-transparent px-2.5 py-1.5 font-mono text-[0.75rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
-                />
-                <button
-                  type="button"
-                  onClick={() => {
-                    void navigator.clipboard
-                      ?.writeText(buildShareUrl(shareDialog.token))
-                      .then(() => setShareLinkCopied(true))
-                      .catch(() => setShareLinkCopied(false));
-                  }}
-                  className="shrink-0 rounded-full border border-[var(--color-accent)] px-4 py-1.5 text-[0.8125rem] font-medium text-[var(--color-text-primary)] transition hover:bg-[var(--color-accent)] hover:text-[var(--color-surface-1)]"
-                >
-                  {shareLinkCopied ? "Copied ✓" : "Copy link"}
-                </button>
-              </div>
-              <div className="flex items-center justify-between gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    const conv = conversations.find(
-                      (c) => c.id === shareDialog.id,
-                    );
-                    if (conv) void unshareConversation(conv);
-                    setShareDialog(null);
-                  }}
-                  className="rounded-full border border-[var(--color-danger-border)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-danger)] transition hover:bg-[var(--color-overlay-soft)]"
-                >
-                  Stop sharing
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setShareDialog(null)}
-                  className="rounded-full border border-[var(--color-border-strong)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
-                >
-                  Done
-                </button>
-              </div>
-            </div>
-          </div>
+          <ShareDialog
+            conversation={
+              conversations.find((c) => c.id === shareDialog.id) ??
+              archivedConversations.find((c) => c.id === shareDialog.id) ??
+              null
+            }
+            project={
+              projects.find(
+                (p) =>
+                  p.id ===
+                  (conversations.find((c) => c.id === shareDialog.id)
+                    ?.project_id ?? ""),
+              ) ?? null
+            }
+            myTeam={myTeam}
+            busy={shareBusy}
+            copied={shareLinkCopied}
+            buildShareUrl={buildShareUrl}
+            onCreateLink={(c) => void shareConversation(c)}
+            onCopyLink={(url) => {
+              void navigator.clipboard
+                ?.writeText(url)
+                .then(() => setShareLinkCopied(true))
+                .catch(() => setShareLinkCopied(false));
+            }}
+            onStopLink={(c) => void unshareConversation(c)}
+            onSetTeamShared={(c, visible) => void setTeamShared(c, visible)}
+            onOpenProjectSettings={(projectID) => {
+              setShareDialog(null);
+              setProjectHome({ id: projectID, settings: true });
+            }}
+            onClose={() => setShareDialog(null)}
+          />
         ) : null}
 
         {promptSaveTarget ? (
@@ -4714,7 +4916,7 @@ export function ChatExperience({
               chat (no active conversation) shows no name — the empty-state hero in
               the transcript stands in. Hidden while a project home is open (the
               home has its own header; the chat underneath stays mounted). */}
-          {activeConversationId && !projectHomeProject ? (
+          {activeConversationId && !fullPageOverlay ? (
             <div className="flex min-w-0 items-center gap-2 px-4 pt-3 sm:px-6">
               {renamingTitleDraft !== null ? (
                 <input
@@ -4774,16 +4976,18 @@ export function ChatExperience({
 
           {/* Project home replaces the chat content while open — the rail's
               project rows and kebab land here. */}
-          {projectHomeProject ? (
+          {projectHomeProject && !teamChatView ? (
             <ProjectHome
               key={projectHomeProject.id}
               project={projectHomeProject}
               chats={conversations.filter(
                 (c) => c.project_id === projectHomeProject.id,
               )}
+              userEmail={userEmail}
               isOwner={projectHomeProject.owner_email === userEmail}
               initialSettingsOpen={projectHome?.settings}
               onBack={() => setProjectHome(null)}
+              onOpenTeamChat={(conversationId) => setTeamChatView(conversationId)}
               onOpenChat={(conversationId) => {
                 setProjectHome(null);
                 void loadConversation(conversationId);
@@ -4806,6 +5010,22 @@ export function ChatExperience({
             />
           ) : null}
 
+          {teamChatView ? (
+            <TeamChatViewer
+              key={teamChatView}
+              conversationId={teamChatView}
+              onBack={() => setTeamChatView(null)}
+              onBranched={(newConversationId) => {
+                // The reader lands in THEIR copy, not back on the read-only
+                // view they just forked.
+                setTeamChatView(null);
+                setProjectHome(null);
+                void refreshConversations();
+                void loadConversation(newConversationId);
+              }}
+            />
+          ) : null}
+
           {/* Chat content — transcript scrolls, composer pins to the bottom.
               grid-cols-[minmax(0,1fr)] clamps the single column to the container
               width so rich content can't bleed past the right edge on mobile;
@@ -4813,7 +5033,7 @@ export function ChatExperience({
           <div
             className={[
               "grid min-h-0 min-w-0 flex-1 grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)_auto] gap-2 overflow-hidden px-3 pb-3 pt-2 sm:gap-3 sm:px-6 sm:pb-5 lg:px-8 xl:px-10",
-              projectHomeProject ? "hidden" : "",
+              fullPageOverlay ? "hidden" : "",
             ].join(" ")}
           >
             <ChatTranscript
@@ -4852,6 +5072,7 @@ export function ChatExperience({
               branchFromMessage={branchFromMessage}
               savePromptFromMessage={savePromptFromMessage}
               loadMemories={loadMemories}
+              memoryProject={activeProjectForMemory}
               setSelectedModel={setSelectedModel}
               setModelPickerOpen={setModelPickerOpen}
               setModelSearchQuery={setModelSearchQuery}
