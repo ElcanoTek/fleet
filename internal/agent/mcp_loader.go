@@ -223,6 +223,7 @@ func (a *Agent) mcpBases() map[string]agentcore.MCPServerBase {
 			Command:     sc.Command,
 			Args:        sc.Args,
 			Dir:         sc.Dir,
+			DirPinned:   sc.DirPinned,
 			HTTPHeaders: sc.Headers,
 			IdentityEnv: sc.IdentityEnv,
 		}

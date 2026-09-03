@@ -195,3 +195,46 @@ func sanitizeWorkdirPrefix(prefix string) string {
 	}
 	return prefix
 }
+
+// StdioCwd decides the working directory a stdio MCP subprocess launches in.
+//
+// A server writes a RELATIVE output path — one the model passed as `output_dir`,
+// or one of its own defaults — against its cwd. While that cwd was the client
+// bundle root, every such write landed in the operator's git checkout: invisible
+// to the agent (the sandbox never mounts the bundle writable), untouched by
+// reclamation (which sweeps the data dir, not the bundle), and accumulating
+// client data inside a git repo. Two shipped servers additionally allowlist
+// os.getcwd() as a readable root for email attachments, which made the whole
+// checkout an attachable source.
+//
+// So when a spawn path has a fleet-managed workspace to offer, the subprocess
+// launches THERE — the same directory ${FLEET_WORKSPACE} resolves to, which on
+// the interactive broker path is the per-conversation workspace the agent's own
+// bash/run_python already work in. A stray relative write then lands somewhere
+// the agent can actually read, and in the worst case somewhere reclaimable.
+//
+// Two cases keep the fallback:
+//   - pinned (Agent Plugins): the spec requires the plugin root, and its args
+//     are opaque strings fleet may not rewrite (ADR-0054);
+//   - no workspace on offer: nothing better to point at, so behaviour is
+//     unchanged rather than guessed.
+//
+// The workspace is used ONLY if it already exists as a directory. exec refuses
+// to start a process whose cwd is missing ("chdir ...: no such file or
+// directory"), so an un-materialized workspace path — a scope may carry one
+// that nothing has created yet — would turn a cosmetic improvement into a
+// server that will not boot. This function therefore never creates anything and
+// never fails: worst case it returns the old fallback.
+func StdioCwd(fallbackDir string, pinned bool, workdir string) string {
+	if pinned {
+		return fallbackDir
+	}
+	w := strings.TrimSpace(workdir)
+	if w == "" {
+		return fallbackDir
+	}
+	if info, err := os.Stat(w); err != nil || !info.IsDir() {
+		return fallbackDir
+	}
+	return w
+}

@@ -1500,6 +1500,7 @@ func BuildMCPBases(cfg *config.Config) map[string]agentcore.MCPServerBase {
 			Command:     sc.Command,
 			Args:        sc.Args,
 			Dir:         sc.Dir,
+			DirPinned:   sc.DirPinned,
 			HTTPHeaders: sc.Headers,
 			IdentityEnv: sc.IdentityEnv,
 		}
@@ -1587,6 +1588,7 @@ func BuildMCPSpecs(cfg *config.Config) map[string]agent.MCPServerSpec {
 			Args:          sc.Args,
 			Env:           sc.Env,
 			Dir:           sc.Dir,
+			DirPinned:     sc.DirPinned,
 			URL:           sc.URL,
 			Headers:       sc.Headers,
 			TLS:           sc.TLS,

@@ -1094,6 +1094,52 @@ data_dir="$(env_get FLEET_DATA_DIR)"
 check_disk_headroom "data dir" "$data_dir"
 check_disk_headroom "podman image store" "$SERVICE_HOME/.local/share/containers"
 
+# The client bundle checkout is the THIRD tree that fills, and the only one
+# nothing reclaims: `fleet cleanup` and the maintenance timer sweep the data dir,
+# and neither has ever known about the bundle.
+#
+# It fills because fleet used to launch every stdio MCP server with its cwd set
+# to the bundle root, so a relative output_dir — passed by an agent, or defaulted
+# by a connector — wrote report files straight into the operator's git checkout.
+# One box accumulated dozens of client CSV/XLSX/PDF files plus downloads/,
+# reports/, sources/ and workspace/ that way. fleet now launches those
+# subprocesses in a managed workspace instead, so this stops growing on a current
+# build — but the fix removes nothing already there, and the files are untracked
+# customer data sitting in a git repo.
+#
+# Reported against `git status`, not a name list, so it catches whatever an agent
+# actually named. Advisory, never a failure: doctor does not delete an operator's
+# files, and some of this residue is a real client report someone may still want.
+check_bundle_residue() {
+  local dir count bytes human
+  dir="$(env_get FLEET_CLIENT_CONFIG_DIR)"
+  [[ -n "$dir" && -e "$dir/.git" ]] || return 0
+  command -v git >/dev/null 2>&1 || return 0
+  git config --global --add safe.directory "$dir" 2>/dev/null || true
+  # -uall lists files inside untracked dirs, so a single `reports/` holding 300
+  # CSVs reads as 300 rather than 1. --ignored is deliberately NOT passed: a
+  # bundle that has taken the .gitignore safety net would otherwise report clean
+  # while still filling the disk.
+  mapfile -t _residue < <(git -C "$dir" status --porcelain -uall --ignored=no 2>/dev/null | awk '$1=="??"{sub(/^\?\? /,""); print}')
+  count="${#_residue[@]}"
+  if (( count == 0 )); then
+    pass "client bundle checkout is clean (${dir})"
+    return 0
+  fi
+  bytes=0
+  for f in "${_residue[@]}"; do
+    # git quotes paths containing spaces/UTF-8; strip the quotes so du can stat
+    # the real name. Unreadable or vanished entries just contribute 0.
+    f="${f%\"}"; f="${f#\"}"
+    bytes=$(( bytes + $(du -sb "$dir/$f" 2>/dev/null | awk '{print $1}' || echo 0) ))
+  done
+  human="$(numfmt --to=iec --suffix=B "$bytes" 2>/dev/null || echo "${bytes}B")"
+  advise "client bundle checkout holds ${count} untracked file(s), ${human} (${dir})"
+  advise "  MCP connector output written into the bundle; nothing reclaims it and it is one 'git add -A' from being committed"
+  advise "  review: git -C ${dir} status --porcelain -uall   —   then remove: sudo -u ${SERVICE_USER} git -C ${dir} clean -nd   (drop -n to apply)"
+}
+check_bundle_residue
+
 # ── 8. sandbox smoke ─────────────────────────────────────────────────────────
 step "8/9  Sandbox smoke"
 

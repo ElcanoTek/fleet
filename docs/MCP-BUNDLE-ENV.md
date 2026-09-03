@@ -59,8 +59,10 @@ aliases honored), else `./workspace`. A spawn path with no directory to offer
 drops the token-bearing keys so the server sees the var as **unset** (its
 documented inert posture) — never a literal token, never an empty string.
 
-**Honest scope.** MCP subprocesses are shared across conversations (host-side,
-process-lifetime), so the shared substitution is a *per-deployment* directory:
+**Honest scope.** On the *shared* spawn paths (the boot roster the broker child
+keeps for tool discovery, hot reload, `fleet mcp test`, and load-on-demand onto
+a shared client) MCP subprocesses are host-side and process-lifetime, so the
+shared substitution is a *per-deployment* directory:
 managed-run detection is on for everything the server process spawns, and
 run-ledger entries persist across runs (a dedupe window, not a per-run
 ledger). True per-run ledger semantics exist only on the dedicated-client path
@@ -68,6 +70,42 @@ ledger). True per-run ledger semantics exist only on the dedicated-client path
 run end — the ledger is post-run evidence. Bundles choose per server whether
 to opt in at all: a server whose entry never references the token is
 completely unaffected.
+
+Production `fleet serve` runs broker mode, where an interactive turn opens its
+own MCP scope and spawns fresh subprocesses for that turn — so there the
+substituted directory is the **per-conversation workspace**, the same one
+`bash`/`run_python` work in, not the per-deployment dir. The per-deployment
+directory is what the shared paths above get.
+
+## The subprocess working directory
+
+A stdio server's cwd is **not** the bundle root. Bundle-relative script args
+(`mcp/foo.py`) are absolutized when the bundle loads, which frees the cwd from
+having to be the bundle root, and each spawn path then launches the subprocess
+in the same fleet-managed directory it substitutes for `${FLEET_WORKSPACE}`
+(`agentcore.StdioCwd`).
+
+This is not cosmetic. A server writes a relative output path — one the model
+passed as `output_dir`, or one of its own defaults — against its cwd. While
+that cwd was the bundle root, those writes landed in the operator's git
+checkout: invisible to the agent (the sandbox never mounts the bundle
+writable), untouched by reclamation (which sweeps the data dir), and
+accumulating customer data inside a git repo. Two shipped connectors
+additionally allowlist `os.getcwd()` as a readable root for email attachments,
+which made the whole checkout an attachable source.
+
+Two cases keep the bundle root (or the plugin root):
+
+- **Agent Plugins.** The subprocess launches in its plugin root — a spec
+  contract (ADR-0054), since its args are opaque strings fleet may not rewrite
+  and it resolves its own bundled files against that root.
+- **No workspace on offer, or one that does not exist on disk.** `exec` refuses
+  to start a process whose cwd is missing, so an un-materialized path falls back
+  rather than taking the server down.
+
+Passing an **absolute** `output_dir` remains the rule for a connector tool: only
+the interactive path's cwd is the agent's own workspace, so a relative path is
+still not reliably readable from a scheduled run.
 
 ### 2. `MCP_VARIANT_CLIENT` injected on account-variant spawns
 
