@@ -420,6 +420,30 @@ jobs:
           go-version-file: go.mod
           check-latest: true
 
+      - name: Prefetch Go modules (retried — the proxy is not always up)
+        # setup-go's module cache is keyed on go.sum, so every dependency bump
+        # is a cold cache and this job's first `go` command pulls the whole
+        # module graph from the proxy. A single `read: connection reset by peer`
+        # there fails the job for a reason that has nothing to do with the change
+        # under test — which is exactly how the CI run on main went red after the
+        # #1395 bumps landed. Do the download HERE, retried, so the
+        # network-flaky part is isolated in a step that survives a hiccup and
+        # every `go` command after it hits a warm module cache.
+        #
+        # Retries are bounded and only cover the download: a checksum mismatch or
+        # a compile error still fails on the first try, in the step that owns it.
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if go mod download; then
+              exit 0
+            fi
+            echo "go mod download failed (attempt ${attempt}/3); retrying in $(( attempt * 10 ))s"
+            sleep "$(( attempt * 10 ))"
+          done
+          echo "::error::go mod download failed three times — the Go module proxy is unreachable from this runner"
+          exit 1
+
       - name: Install postgresql-client-18 (so pg_dump matches the server major)
         # The runner ships client 16; the postgres service is server 18, and
         # pg_dump refuses to dump a newer server ("server version mismatch"). Pull
@@ -860,6 +884,30 @@ jobs:
           # Read from go.mod so the toolchain is declared once.
           go-version-file: go.mod
           check-latest: true
+
+      - name: Prefetch Go modules (retried — the proxy is not always up)
+        # setup-go's module cache is keyed on go.sum, so every dependency bump
+        # is a cold cache and this job's first `go` command pulls the whole
+        # module graph from the proxy. A single `read: connection reset by peer`
+        # there fails the job for a reason that has nothing to do with the change
+        # under test — which is exactly how the CI run on main went red after the
+        # #1395 bumps landed. Do the download HERE, retried, so the
+        # network-flaky part is isolated in a step that survives a hiccup and
+        # every `go` command after it hits a warm module cache.
+        #
+        # Retries are bounded and only cover the download: a checksum mismatch or
+        # a compile error still fails on the first try, in the step that owns it.
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if go mod download; then
+              exit 0
+            fi
+            echo "go mod download failed (attempt ${attempt}/3); retrying in $(( attempt * 10 ))s"
+            sleep "$(( attempt * 10 ))"
+          done
+          echo "::error::go mod download failed three times — the Go module proxy is unreachable from this runner"
+          exit 1
 
       - name: Set up Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
