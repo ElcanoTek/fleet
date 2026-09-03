@@ -162,13 +162,33 @@ func clientBundleCheck() bool {
 		return true
 	}
 	n, _ := strconv.Atoi(behind)
-	if n == 0 {
-		fmt.Printf("client bundle is up to date (%s at %s, %s).\n", bundleBranch, head, dir)
-		return false
+	if n > 0 {
+		fmt.Printf("client bundle is %d commit(s) behind upstream on %s (%s) — connector names/descriptions, personas and protocols come from here.\n", n, bundleBranch, dir)
+		fmt.Printf("  refresh it: git -C %s status -sb   then   sudo fleet update\n", dir)
+		return true
 	}
-	fmt.Printf("client bundle is %d commit(s) behind upstream on %s (%s) — connector names/descriptions, personas and protocols come from here.\n", n, bundleBranch, dir)
-	fmt.Printf("  refresh it: git -C %s status -sb   then   sudo fleet update\n", dir)
-	return true
+	// Current with its OWN upstream is not the same as current. A bundle parked
+	// on a feature branch tracks that branch, so it reports zero commits behind
+	// while sitting well behind the branch every merge actually lands on — and
+	// `git pull --ff-only` succeeds, so nothing anywhere says otherwise. That is
+	// the shape that hid a stale bundle behind a green update.
+	if def, err := git("symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"); err == nil {
+		def = strings.TrimPrefix(strings.TrimSpace(def), "origin/")
+		if def != "" && bundleBranch != def && bundleBranch != "HEAD" {
+			behindDefault, derr := git("rev-list", "--count", "HEAD..origin/"+def)
+			bd, _ := strconv.Atoi(behindDefault)
+			if derr == nil && bd > 0 {
+				fmt.Printf("client bundle is on branch %s, not %s (%s) — current with its own branch but %d commit(s) behind %s.\n", bundleBranch, def, dir, bd, def)
+				fmt.Printf("  `fleet update` will NOT fix this: it fast-forwards %s, which is not where merges land.\n", bundleBranch)
+				fmt.Printf("  put it back: git -C %s checkout %s && git -C %s pull\n", dir, def, dir)
+				return true
+			}
+			fmt.Printf("client bundle is on branch %s, not %s (%s at %s) — not behind it, so this looks deliberate.\n", bundleBranch, def, dir, head)
+			return false
+		}
+	}
+	fmt.Printf("client bundle is up to date (%s at %s, %s).\n", bundleBranch, head, dir)
+	return false
 }
 
 // nodeReadiness runs the read-only node probe and returns 0 when this box can

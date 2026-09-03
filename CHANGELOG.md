@@ -28,8 +28,18 @@ prior versions are listed because none have shipped.
   usual causes and the command to inspect; a bundle still behind its upstream
   after the pull, held by a stale pin, missing its checkout, or skipped by
   `--no-pull` is carried to the **final banner** as an explicit warning naming
-  the reason. `fleet update --check` reports the bundle's freshness beside
-  fleet's and exits non-zero when it is behind.
+  the reason — printed on a `--dry-run` too, since that is the run a cautious
+  operator does first. `fleet update --check` reports the bundle's freshness
+  beside fleet's and exits non-zero when it is behind.
+- **A bundle parked on a non-default branch is reported.** This is the case a
+  "behind its upstream?" check cannot see, and the one found on a real box: a
+  checkout left on a feature branch tracks THAT branch, so `git pull --ff-only`
+  succeeds and every freshness check reports clean while the bundle sits
+  dozens of commits behind the branch merges actually land on. `fleet update`
+  and `fleet update --check` now compare against the remote's default branch
+  and say so — naming the branch, the distance, and that fast-forwarding the
+  feature branch will never fix it. A branch that is not behind the default is
+  reported as deliberate tracking, not an error.
 - **`fleet update` reconciles the bundle it pulls against the one the service
   reads.** update.sh deliberately does not source the unit's 0600 env file, so
   its own resolution (env → `--client-config` → bootstrap state file → the

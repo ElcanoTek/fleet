@@ -611,12 +611,34 @@ if [[ -e "$CLIENT_DIR/.git" ]]; then
     info "bundle ${bundle_branch}: unchanged at ${bundle_sha_after:0:12}"
   fi
   # Behind its upstream after all of the above → the pull did not take, whatever
-  # it printed. This is the check that would have caught the stale-bundle case.
+  # it printed.
   if [[ "$BUNDLE_STALE" == "0" ]] && git -C "$CLIENT_DIR" rev-parse --abbrev-ref '@{upstream}' >/dev/null 2>&1; then
     _bundle_behind="$(git -C "$CLIENT_DIR" rev-list --count 'HEAD..@{upstream}' 2>/dev/null || echo 0)"
     if [[ "${_bundle_behind:-0}" != "0" ]]; then
       BUNDLE_STALE=1
       BUNDLE_STALE_WHY="${CLIENT_DIR} is still ${_bundle_behind} commit(s) behind its upstream after the pull"
+    fi
+  fi
+
+  # On a NON-DEFAULT branch. This is the case an "is it behind its upstream?"
+  # check cannot see and the one that actually bit us: a bundle parked on a
+  # feature branch tracks that branch, so `git pull --ff-only` SUCCEEDS, the
+  # step prints "client config pulled", and the checkout is nonetheless dozens
+  # of commits behind the branch every merge lands on. Deliberately tracking a
+  # branch is a legitimate operator choice, so this names the situation and the
+  # distance rather than treating it as an error — but it never stays silent,
+  # because indistinguishable-from-current is precisely the failure.
+  if true; then
+    _bundle_default="$(git -C "$CLIENT_DIR" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+    _bundle_default="${_bundle_default#origin/}"
+    if [[ -n "$_bundle_default" && -n "$bundle_branch" && "$bundle_branch" != "$_bundle_default" && "$bundle_branch" != "HEAD" ]]; then
+      _behind_default="$(git -C "$CLIENT_DIR" rev-list --count "HEAD..origin/${_bundle_default}" 2>/dev/null || echo 0)"
+      if [[ "${_behind_default:-0}" != "0" ]]; then
+        BUNDLE_STALE=1
+        BUNDLE_STALE_WHY="${CLIENT_DIR} is on branch ${bundle_branch}, not ${_bundle_default} — current with its own branch but ${_behind_default} commit(s) behind ${_bundle_default}"
+      else
+        info "bundle is on ${bundle_branch}, not ${_bundle_default} (not behind it — deliberate branch tracking)"
+      fi
     fi
   fi
 fi
@@ -1571,6 +1593,30 @@ else
 fi
 
 say
+# Reported before the dry-run early exit below: --dry-run is what a cautious
+# operator runs FIRST, and "is my bundle actually current?" is exactly the
+# question it should answer. Printing this only on a real run would hide the
+# finding from the run most likely to be looking for it.
+report_bundle_state() {
+  if [[ "$BUNDLE_STALE" == "1" ]]; then
+    warn "the client-config bundle did NOT advance: ${BUNDLE_STALE_WHY}."
+    warn "  fleet is new, your bundle is not — connector names/descriptions, personas, protocols and"
+    warn "  the MCP catalog all come from the bundle, so the UI will still show the old ones."
+    warn "  Inspect: git -C ${CLIENT_DIR} status -sb"
+    warn "  If it is on the wrong branch, put it back on the default and re-run: sudo fleet update"
+    say
+  elif [[ -n "${bundle_sha_after:-}" ]]; then
+    if [[ -n "$bundle_sha_before" && "$bundle_sha_before" != "${bundle_sha_after:-}" ]]; then
+      say "  ${c_green}✓${c_reset} bundle ${CLIENT_DIR} updated ${bundle_sha_before:0:12} → ${bundle_sha_after:0:12}"
+    else
+      say "  ${c_dim}» bundle ${CLIENT_DIR} already current at ${bundle_sha_after:0:12}${c_reset}"
+    fi
+    say
+  fi
+}
+if [[ "$DRY_RUN" == "1" ]]; then
+  report_bundle_state
+fi
 # A dry run must not sign off with the same green "rebuilt/updated" banner a
 # real run prints — it built nothing, and on a box the node gate would stop it
 # reported a blocker three steps ago. Saying so here is the difference between
@@ -1600,20 +1646,7 @@ say
 # connector copy, personas, protocols and the MCP catalog all live in the
 # bundle — so an update that advanced fleet while the bundle stood still is a
 # half-update, and saying "✓ fleet updated" alone is how that goes unnoticed.
-if [[ "$BUNDLE_STALE" == "1" ]]; then
-  warn "the client-config bundle did NOT advance: ${BUNDLE_STALE_WHY}."
-  warn "  fleet is new, your bundle is not — connector names/descriptions, personas, protocols and"
-  warn "  the MCP catalog all come from the bundle, so the UI will still show the old ones."
-  warn "  Inspect: git -C ${CLIENT_DIR} status -sb   —   then re-run: sudo fleet update"
-  say
-elif [[ -n "${bundle_sha_after:-}" ]]; then
-  if [[ -n "$bundle_sha_before" && "$bundle_sha_before" != "${bundle_sha_after:-}" ]]; then
-    say "  ${c_green}✓${c_reset} bundle ${CLIENT_DIR} updated ${bundle_sha_before:0:12} → ${bundle_sha_after:0:12}"
-  else
-    say "  ${c_dim}» bundle ${CLIENT_DIR} already current at ${bundle_sha_after:0:12}${c_reset}"
-  fi
-  say
-fi
+report_bundle_state
 say "  Health:    ${c_dim}fleet-admin status${c_reset}"
 say "  Logs:      ${c_dim}journalctl -u ${SERVICE_NAME} -n 50${c_reset}"
 if [[ "$before_sha" != "$after_sha" ]]; then
