@@ -15,6 +15,22 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **`fleet cleanup` reports leftover connector output in the bundle checkout.**
+  The client bundle is the one tree on a fleet box that nothing reclaims:
+  `fleet cleanup` sweeps podman layers and build caches, the scheduler's daily
+  sweep prunes run history and archives logs, and neither has ever known the
+  bundle exists. `fleet doctor` already reports it on demand; this closes the
+  case where nobody runs doctor, since `fleet cleanup` is what
+  `fleet-maintenance.timer` runs daily and unattended, so the finding now
+  reaches the journal on its own. It **reports and never deletes**: a daily
+  unattended `git clean` in an operator's checkout would also remove local
+  edits, scratch files and half-finished bundle changes, which is a worse
+  failure than the disk it would reclaim, and unlike a build cache none of it is
+  reproducible. Removal stays a printed human command. Counted from `git status
+  --porcelain -uall` so it sees whatever an agent actually named (and the files
+  inside an untracked directory, not just the directory), including ignored
+  ones — a bundle carrying the `.gitignore` safety net is still filling.
+
 - **Downloading a chat now offers a file a person can actually read.** The
   conversation kebab's one option was "Download as JSON" — a label naming a
   format the reader had to already understand, attached to the one artifact a

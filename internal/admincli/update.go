@@ -125,19 +125,7 @@ func updateCheck() int {
 // nothing (a `--check` that mutated a checkout would be a worse bug than the
 // one it diagnoses), so it reports against the refs already on the box.
 func clientBundleCheck() bool {
-	dir := strings.TrimSpace(os.Getenv("FLEET_CLIENT_CONFIG_DIR"))
-	if dir == "" {
-		stateDir := strings.TrimSpace(os.Getenv("FLEET_STATE_DIR"))
-		if stateDir == "" && repoRoot() != "" {
-			stateDir = filepath.Join(repoRoot(), ".fleet-state")
-		}
-		if stateDir != "" {
-			//nolint:gosec // G304: fixed basename under a directory that is operator config (FLEET_STATE_DIR, else the fleet checkout's own .fleet-state) — never request input. This is the file bootstrap wrote for exactly this read, and the content is used only as a path to run read-only git commands in.
-			if b, err := os.ReadFile(filepath.Join(stateDir, "client-config.dir")); err == nil {
-				dir = strings.TrimSpace(string(b))
-			}
-		}
-	}
+	dir := resolveClientBundleDir()
 	if dir == "" {
 		fmt.Println("client bundle: none configured (running the in-repo generic bundle).")
 		return false
