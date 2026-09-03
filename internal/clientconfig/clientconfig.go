@@ -1057,6 +1057,18 @@ type RemoteMCPCatalogEntry struct {
 	// collects a client ID (+ optional secret) up front instead of letting the
 	// add fail mid-discovery. Empty means DCR is expected to work.
 	ClientRegistration string `yaml:"client_registration"`
+	// ClientSecret is "required" when the vendor's authorization server accepts
+	// no public clients, so a manual client ID is useless without its secret:
+	// the token exchange after the consent screen fails (GitHub, measured
+	// against its live endpoint while verifying #1006 — no dynamic
+	// registration, and a secretless exchange answers
+	// incorrect_client_credentials). The card then makes the secret field
+	// mandatory instead of "optional". Only meaningful with
+	// client_registration: manual. Empty keeps the field optional; the add
+	// path independently refuses a secretless manual client when the AS
+	// metadata rules out public clients (RFC 8414 §2 default), so this flag
+	// improves the form — it is not the only guard.
+	ClientSecret string `yaml:"client_secret"`
 	// Featured surfaces the entry in the directory's Featured section — the
 	// short, curated shelf of household-name connectors shown before the
 	// category listing. Kept small on purpose (a test caps the built-in count)
@@ -1912,6 +1924,14 @@ func validateRemoteMCPEntryMeta(e *RemoteMCPCatalogEntry) error {
 	}
 	if e.ClientRegistration != "" && e.ClientRegistration != "manual" {
 		return fmt.Errorf("remote_mcp_catalog[%q]: unknown client_registration %q (want manual or empty)", name, e.ClientRegistration)
+	}
+	if cs := strings.TrimSpace(e.ClientSecret); cs != "" {
+		if cs != "required" {
+			return fmt.Errorf("remote_mcp_catalog[%q]: unknown client_secret %q (want required or empty)", name, e.ClientSecret)
+		}
+		if e.ClientRegistration != "manual" {
+			return fmt.Errorf("remote_mcp_catalog[%q]: client_secret: required is only meaningful with client_registration: manual", name)
+		}
 	}
 	for _, tag := range e.Tags {
 		if strings.TrimSpace(tag) == "" {

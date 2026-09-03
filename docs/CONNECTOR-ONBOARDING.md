@@ -65,6 +65,24 @@ is the validation.
   RFC 7591 dynamic registration; the card collects a bring-your-own OAuth
   client ID (+ optional secret) up front and passes it to the existing manual
   client path in `AddServer`, instead of letting the add fail mid-discovery.
+- `client_secret: required` — the vendor accepts no public clients, so the
+  card makes the secret field mandatory instead of "optional". Only
+  meaningful with `client_registration: manual`. Set on `github`: its
+  metadata publishes no `token_endpoint_auth_methods_supported` (which per
+  RFC 8414 §2 means `client_secret_basic`), and its token endpoint answers
+  `incorrect_client_credentials` to a secretless exchange — measured while
+  verifying the official GitHub server for #1006.
+
+**Add-time guardrail for secretless manual clients** (`remotemcp.AddServer`,
+`ErrClientSecretRequired` → HTTP 422): a manual `client_id` with no secret is
+refused at discovery time unless the authorization server's metadata lists
+`none` in `token_endpoint_auth_methods_supported` — an omitted list means
+`client_secret_basic` (RFC 8414 §2), i.e. a secret is required
+(`mcpoauth.PublicClientAllowed`). Before this, the add succeeded, the user
+completed the vendor's consent screen, and the code exchange failed with a
+message the callback relay flattened to "authorization_failed" (#1006,
+GitHub). The catalog flag improves the form; this check is what covers the
+raw-URL add form and every vendor that carries no flag.
 
 **Guided add forms in Settings → Connections** (`DirectoryCard`):
 
@@ -76,7 +94,9 @@ is the validation.
   part of the connection URL).
 - API-key entries: a write-only key field; the add lands `connected`
   immediately.
-- `client_registration: manual` entries: client ID + optional secret fields.
+- `client_registration: manual` entries: client ID + secret fields; the secret
+  is mandatory when the entry says `client_secret: required`, optional
+  otherwise.
 - The consent gate for non-official provenance is unchanged and now also
   carries the guided form's collected values through the confirm.
 - The "remote MCP isn't configured" dead-end is admin-aware: admins see the

@@ -1152,3 +1152,97 @@ func TestServiceNoSecretObserverIsHarmless(t *testing.T) {
 		t.Fatalf("AcquireTokenByID = %q, %v; want at-refreshed", bearer, err)
 	}
 }
+
+// manualClientTestServer is an MCP resource server + authorization server with
+// NO dynamic client registration — the GitHub shape (#1006). authMethods is
+// what its metadata advertises as token_endpoint_auth_methods_supported; nil
+// omits the field, which RFC 8414 §2 defines as client_secret_basic.
+func manualClientTestServer(t *testing.T, authMethods []string) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	base := srv.URL
+	mux.HandleFunc("/mcp", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="`+base+`/.well-known/oauth-protected-resource"`)
+		w.WriteHeader(http.StatusUnauthorized)
+	})
+	mux.HandleFunc("/.well-known/oauth-protected-resource", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"resource":              base + "/mcp",
+			"authorization_servers": []string{base},
+			"scopes_supported":      []string{"repo"},
+		})
+	})
+	mux.HandleFunc("/.well-known/oauth-authorization-server", func(w http.ResponseWriter, _ *http.Request) {
+		meta := map[string]any{
+			"issuer":                           base,
+			"authorization_endpoint":           base + "/authorize",
+			"token_endpoint":                   base + "/token",
+			"code_challenge_methods_supported": []string{"S256"},
+		}
+		if authMethods != nil {
+			meta["token_endpoint_auth_methods_supported"] = authMethods
+		}
+		_ = json.NewEncoder(w).Encode(meta)
+	})
+	return srv
+}
+
+// TestServiceAddManualClientWithoutSecret locks the add-time guard that turned
+// the GitHub failure in #1006 into an actionable error: a manual client_id
+// with no secret is refused unless the AS advertises public clients ("none").
+// Before it, the add succeeded, the user completed the consent screen, and
+// the exchange failed with a message the relay flattened to
+// "authorization_failed".
+func TestServiceAddManualClientWithoutSecret(t *testing.T) {
+	cases := []struct {
+		name        string
+		authMethods []string
+		secret      string
+		wantErr     error
+	}{
+		{"metadata omits auth methods (RFC 8414 default = basic) → secret required", nil, "", ErrClientSecretRequired},
+		{"metadata lists only secret-based methods → secret required", []string{"client_secret_post", "client_secret_basic"}, "", ErrClientSecretRequired},
+		{"metadata lists none → public client allowed", []string{"none", "client_secret_basic"}, "", nil},
+		{"secret supplied → allowed regardless of metadata", nil, "shh", nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fs := newFakeStore()
+			srv := manualClientTestServer(t, tc.authMethods)
+			svc := newTestService(t, fs, srv)
+			server, _, err := svc.AddServer(context.Background(), AddServerInput{
+				Email: "u@x.com", Name: "gh", URL: srv.URL + "/mcp",
+				ClientID: "Iv1.manual", ClientSecret: tc.secret,
+			})
+			if tc.wantErr != nil {
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("AddServer err = %v, want %v", err, tc.wantErr)
+				}
+				if len(fs.servers) != 0 {
+					t.Fatalf("a refused add must leave no row behind, got %d", len(fs.servers))
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("AddServer: %v", err)
+			}
+			if server.ClientID != "Iv1.manual" || server.Status != store.RemoteMCPStatusLoginRequired {
+				t.Fatalf("server = %+v, want the manual client stored and awaiting login", server)
+			}
+		})
+	}
+}
+
+// Without a manual client_id the DCR-less AS still yields the older, distinct
+// error — the two guards must not shadow each other.
+func TestServiceAddManualClientRequiredStillWinsWithoutClientID(t *testing.T) {
+	fs := newFakeStore()
+	srv := manualClientTestServer(t, nil)
+	svc := newTestService(t, fs, srv)
+	_, _, err := svc.AddServer(context.Background(), AddServerInput{Email: "u@x.com", Name: "gh", URL: srv.URL + "/mcp"})
+	if !errors.Is(err, ErrManualClientRequired) {
+		t.Fatalf("err = %v, want ErrManualClientRequired", err)
+	}
+}

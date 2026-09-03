@@ -138,6 +138,8 @@ releases.
   client_registration: manual     # the vendor's AS has no dynamic client
                                   # registration; the card collects a
                                   # bring-your-own OAuth client ID (+ secret)
+  client_secret: required         # manual only: the AS accepts no public
+                                  # clients, so the secret field is mandatory
   featured: true                  # curated Featured-shelf pick (kept small:
                                   # 8–20 built-in entries, never community)
 ```
@@ -201,7 +203,7 @@ explicit trust tags plus the directory metadata:
 ```
 
 Entries also carry the onboarding fields when present: `setup_hint`,
-`setup_url`, `api_key_header`, `client_registration`.
+`setup_url`, `api_key_header`, `client_registration`, `client_secret`.
 
 `bundled` is the Optional-server catalog snapshot (the same source as
 `/mcp-servers`; always-on servers need no opt-in decision so they are not
@@ -238,7 +240,8 @@ default; the search/grouping/badge helpers live in
   `{placeholder}` with a live preview of the resulting endpoint URL; `api_key`
   entries get a write-only key field (sealed server-side, never echoed);
   `client_registration: manual` entries get bring-your-own OAuth client ID +
-  secret fields. The submitted add goes through the same consent gate and the
+  secret fields — the secret mandatory when the entry says
+  `client_secret: required`. The submitted add goes through the same consent gate and the
   same POST as everything else.
 - **Consent step** — adding a non-official entry opens an explicit,
   operator-named confirmation stating that the operator receives tool-call

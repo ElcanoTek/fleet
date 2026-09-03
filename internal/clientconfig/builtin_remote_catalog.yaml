@@ -164,10 +164,12 @@ servers:
     setup_hint: >-
       GitHub's authorization server does not support dynamic client
       registration: create a GitHub OAuth App (Settings -> Developer
-      settings -> OAuth Apps) with the callback URL shown in your Fleet
-      instance's OAuth settings, then paste its client ID and secret here.
+      settings -> OAuth Apps) whose Redirect URI is the callback URL shown
+      in the add form, then paste its client ID and client secret here. The
+      secret is required: GitHub rejects the token exchange without it.
     setup_url: "https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/creating-an-oauth-app"
     client_registration: manual
+    client_secret: required
   - name: gitlab
     display_name: GitLab
     description: >-

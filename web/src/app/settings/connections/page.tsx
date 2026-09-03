@@ -451,6 +451,10 @@ function DirectoryCard({
   const placeholders = placeholdersOf(entry.url);
   const manualClient =
     entry.client_registration === "manual" && entry.auth !== "api_key";
+  // The vendor accepts no public clients: a client ID without its secret sails
+  // through the consent screen into a token exchange the vendor refuses, so
+  // the secret is mandatory here rather than "optional" (GitHub, #1006).
+  const secretRequired = manualClient && entry.client_secret === "required";
   const needsForm =
     placeholders.length > 0 || entry.auth === "api_key" || manualClient;
   const [formOpen, setFormOpen] = useState(
@@ -482,6 +486,7 @@ function DirectoryCard({
     placeholders.every((ph) => placeholderValueOK(values[ph] ?? "")) &&
     (entry.auth !== "api_key" || apiKey.trim() !== "") &&
     (!manualClient || clientId.trim() !== "") &&
+    (!secretRequired || clientSecret.trim() !== "") &&
     (!anotherAccount || account.trim() !== "");
 
   const submit = async () => {
@@ -715,20 +720,31 @@ function DirectoryCard({
                   value={clientId}
                   onChange={(e) => setClientId(e.target.value)}
                   placeholder="from your app registration — see the setup guide"
+                  data-testid={`dir-form-client-id-${entry.name}`}
                 />
               </label>
               <label className="grid gap-1 text-[0.72rem] text-[var(--color-text-secondary)]">
                 <span className="font-medium">
-                  OAuth client secret (if your client has one)
+                  {secretRequired
+                    ? "OAuth client secret"
+                    : "OAuth client secret (if your client has one)"}
                 </span>
                 <input
                   className={SETTINGS_INPUT}
                   type="password"
                   autoComplete="off"
+                  required={secretRequired}
                   value={clientSecret}
                   onChange={(e) => setClientSecret(e.target.value)}
                   placeholder="stored encrypted, never shown again"
+                  data-testid={`dir-form-client-secret-${entry.name}`}
                 />
+                {secretRequired ? (
+                  <span className="text-[0.68rem] text-[var(--color-text-muted)]">
+                    Required: this vendor rejects the token exchange without
+                    the secret.
+                  </span>
+                ) : null}
               </label>
             </>
           ) : null}

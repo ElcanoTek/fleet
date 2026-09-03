@@ -231,6 +231,25 @@ func (f FlowConfig) allowsBasicAuth() bool {
 	return false
 }
 
+// PublicClientAllowed reports whether an authorization server accepts public
+// clients — ones that authenticate at the token endpoint with no client secret
+// (PKCE only) — given its advertised token_endpoint_auth_methods_supported.
+// RFC 8414 §2 makes an omitted list mean exactly ["client_secret_basic"], so an
+// AS that publishes no methods requires a secret; only an explicit "none" opens
+// the public-client path. fleet uses this at add time to refuse a manual
+// client_id with no secret BEFORE sending the user through a consent screen
+// whose code exchange is bound to fail (GitHub, measured while verifying #1006:
+// its metadata omits the list and its token endpoint answers
+// incorrect_client_credentials to a secretless exchange).
+func PublicClientAllowed(methods []string) bool {
+	for _, m := range methods {
+		if strings.EqualFold(strings.TrimSpace(m), "none") {
+			return true
+		}
+	}
+	return false
+}
+
 // parseTokenError decodes an RFC 6749 §5.2 error body into an OAuthError. A
 // non-JSON or fieldless body still yields a usable OAuthError carrying the HTTP
 // status so callers can distinguish transient (5xx) from terminal failures.
