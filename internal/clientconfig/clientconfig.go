@@ -1607,6 +1607,19 @@ func (b *Bundle) validate() error {
 			return fmt.Errorf("mcp_servers: duplicate server name %q", s.Name)
 		}
 		seen[s.Name] = true
+		// Catalog copy (display_name/description) is what a user reads in the
+		// Tools picker and on the connections page before enabling a
+		// connector. It is not load-bearing for execution, so a gap warns
+		// rather than failing the bundle — but it warns LOUDLY and once per
+		// connector, because the alternative failure mode is a silent blank
+		// row that looks like a broken connector. See connector_labels.go.
+		if strings.TrimSpace(s.DisplayName) == "" {
+			s.DisplayName = deriveDisplayName(s.Name)
+			log.Printf("clientconfig: warning: mcp_servers[%q] has no display_name; the Tools picker and connections page will show the derived label %q. Add a display_name to manifest.yaml (see docs/MCP-CATALOG.md, \"Connector copy\").", s.Name, s.DisplayName)
+		}
+		if strings.TrimSpace(s.Description) == "" {
+			log.Printf("clientconfig: warning: mcp_servers[%q] has no description; the Tools picker and connections page will render this connector with an empty body. Add a one-sentence description to manifest.yaml (see docs/MCP-CATALOG.md, \"Connector copy\").", s.Name)
+		}
 		switch s.Type {
 		case "stdio", "":
 			s.Type = "stdio"

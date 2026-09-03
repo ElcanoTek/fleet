@@ -108,6 +108,20 @@ branding:
 # runs without any credentialed connectors. A client bundle declares its own
 # mcp_servers[] here (see your out-of-repo client bundle's manifest.yaml for a
 # full example).
+#
+# Every entry should carry catalog copy — it is what a user reads in chat's
+# Tools picker and on Settings → Connections before switching a connector on.
+# fleet warns at boot for each entry missing either field, and falls back to a
+# label derived from the server name; it never invents a description. The house
+# style is in docs/MCP-CATALOG.md ("Connector copy"):
+#
+#   - name: pubmatic_mcp
+#     optional: true
+#     display_name: "PubMatic"          # the vendor's own name and casing
+#     description: "Create and manage PubMatic curated deals and pull delivery
+#       reporting. Appears once PUBMATIC_ACCESS_TOKEN is set."
+#     #                ^ capability first, in the imperative; then the gating
+#     #                  clause, naming the real enabled_env/enabled_groups vars
 mcp_servers: []
 
 # Hosted third-party MCP server directory (#538). Fleet ships a large curated
