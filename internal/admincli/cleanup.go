@@ -80,6 +80,11 @@ func cmdCleanup(argv []string) int {
 	if !dryRun {
 		fmt.Println(diskLine("after"))
 	}
+	// The bundle checkout is the one tree this sweep cannot reclaim — see
+	// bundle_residue.go for why it fills and why removal stays a human command.
+	// Reported on a dry run too: --dry-run is what an operator uses to ask what
+	// is worth reclaiming.
+	reportBundleResidue(os.Stdout)
 	return 0
 }
 
