@@ -93,6 +93,24 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Prefetch Go modules (retried — the proxy is not always up)
+        # Same reason as the full lane's `go` job: setup-go's cache is keyed on
+        # go.sum, so a dependency bump means this job's first `go` command pulls
+        # the whole module graph from the proxy, and one `read: connection reset
+        # by peer` there fails the lane over nothing. Retry the download here so
+        # everything after it hits a warm cache.
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if go mod download; then
+              exit 0
+            fi
+            echo "go mod download failed (attempt ${attempt}/3); retrying in $(( attempt * 10 ))s"
+            sleep "$(( attempt * 10 ))"
+          done
+          echo "::error::go mod download failed three times — the Go module proxy is unreachable from this runner"
+          exit 1
+
       - name: Install postgresql-client-18 (so pg_dump matches the server major)
         # This lane runs the same `go test ./...` as the full gate against the
         # same server-18 service, so it needs the same client — and it did not

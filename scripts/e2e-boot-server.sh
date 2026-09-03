@@ -221,12 +221,51 @@ SQL
 }
 
 # ── 2. build Go binaries ──
+# A transient module-proxy failure is a real CI outcome here, not a hypothetical:
+# a `read: connection reset by peer` while fetching ONE module zip
+# (google.golang.org/api) failed the whole live suite on a push to main. This
+# build is the first thing in the boot sequence that needs the FULL module graph
+# — the sandbox-invariant `go test` step ahead of it in CI pulls only part of it
+# — so a proxy hiccup lands exactly here and reads as "the live stack is broken".
+#
+# So retry, but ONLY on a failure that looks like a fetch/network error: a
+# compile error is deterministic, and retrying it just burns minutes before
+# reporting the same red. Deliberately NOT in the pattern: `checksum mismatch`
+# and `SECURITY ERROR` — a go.sum mismatch is a supply-chain signal, and
+# retrying it is exactly the wrong reflex.
+BUILD_TRANSIENT_RE='connection reset by peer|i/o timeout|TLS handshake|unexpected EOF|connection refused|no such host|server misbehaving|Client\.Timeout|dial tcp|Bad Gateway|Service Unavailable|Gateway Timeout'
+
+# go_build_retry OUT PKG LABEL — build PKG to OUT, retrying a transient fetch
+# error up to 3 times, and tail the log to stderr on the way out. The tail
+# matters: build.log is an uploaded artifact in CI and lives under .e2e-run/
+# locally, so "FATAL: go build fleet failed (see …)" alone means every
+# diagnosis starts with downloading a zip. Put the reason in the job output.
+go_build_retry() {
+  local out="$1" pkg="$2" label="$3" attempt=1 max=3
+  local attempt_log="$LOG_DIR/build-attempt.log"
+  while true; do
+    if GOTOOLCHAIN=auto go build -o "$out" "$pkg" >"$attempt_log" 2>&1; then
+      cat "$attempt_log" >>"$LOG_DIR/build.log"
+      return 0
+    fi
+    cat "$attempt_log" >>"$LOG_DIR/build.log"
+    if [[ "$attempt" -ge "$max" ]] || ! grep -Eq "$BUILD_TRANSIENT_RE" "$attempt_log"; then
+      log "build: $label FAILED (attempt $attempt/$max) — last 40 lines:"
+      tail -n 40 "$attempt_log" >&2
+      return 1
+    fi
+    log "build: $label hit a transient module-fetch error (attempt $attempt/$max); retrying in $((attempt * 5))s"
+    sleep "$((attempt * 5))"
+    attempt=$((attempt + 1))
+  done
+}
+
 build_binaries() {
   log "build: go build fleet + fake-llm"
   # One unified `fleet` binary (#461): `fleet serve` runs the server, `fleet <verb>`
   # is the operator CLI (user provisioning below). No separate fleet-admin needed.
-  GOTOOLCHAIN=auto go build -o "$BIN_DIR/fleet" ./cmd/fleet        >>"$LOG_DIR/build.log" 2>&1 || die "go build fleet failed (see $LOG_DIR/build.log)"
-  GOTOOLCHAIN=auto go build -o "$BIN_DIR/fake-llm" ./cmd/fake-llm  >>"$LOG_DIR/build.log" 2>&1 || die "go build fake-llm failed"
+  go_build_retry "$BIN_DIR/fleet"    ./cmd/fleet    fleet    || die "go build fleet failed (see $LOG_DIR/build.log)"
+  go_build_retry "$BIN_DIR/fake-llm" ./cmd/fake-llm fake-llm || die "go build fake-llm failed (see $LOG_DIR/build.log)"
 }
 
 # ── 3. ensure the sandbox image, then probe it ──
@@ -248,8 +287,8 @@ ensure_sandbox() {
       >>"$LOG_DIR/sandbox-build.log" 2>&1 || die "sandbox image build failed (see $LOG_DIR/sandbox-build.log)"
   fi
   log "sandbox: probing $FLEET_SANDBOX_IMAGE (bash + run_python, normal + lockdown)"
-  GOTOOLCHAIN=auto go build -o "$BIN_DIR/sandbox-probe" ./cmd/sandbox-probe >>"$LOG_DIR/build.log" 2>&1 \
-    || die "go build sandbox-probe failed"
+  go_build_retry "$BIN_DIR/sandbox-probe" ./cmd/sandbox-probe sandbox-probe \
+    || die "go build sandbox-probe failed (see $LOG_DIR/build.log)"
   mkdir -p "$WORKSPACE_BASE/probe-workspace" "$WORKSPACE_BASE/probe-bridge"
   chmod 0755 "$WORKSPACE_BASE/probe-workspace" "$WORKSPACE_BASE/probe-bridge" 2>/dev/null || true
   FLEET_SANDBOX_IMAGE="$FLEET_SANDBOX_IMAGE" \
