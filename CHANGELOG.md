@@ -222,6 +222,36 @@ prior versions are listed because none have shipped.
 
 ### Changed
 
+- **The recommended everyday model is now `google/gemini-3.8-flash`** (Google:
+  Gemini 3.8 Flash), replacing `google/gemini-3.7-flash` in every default slot:
+  `agentcore.DefaultCoreModel` (chat + scheduled runs + the Operations Center
+  form), `config.DefaultTitleModel` (and the metadata / error-analysis / memory
+  / recurring-task / library-prompt models that chain off it), the lockdown
+  allow-list default, the frontend `DEFAULT_MODEL` + seeded picker row, and the
+  orchestrator task form's primary-model default.
+
+  Availability was verified against the live OpenRouter catalog before the
+  swap: canonical slug `google/gemini-3.8-flash-20260902`, first listed
+  2026-09-02, served by the Google and Google AI Studio upstreams.
+
+  It is a drop-in within the family, which is why nothing else moved. Routing is
+  unchanged — `canonicalUpstream` pins `google/` **strictly** (`Only`, no
+  fallbacks) by prefix, so the new slug inherits the pin and still needs no
+  serving-precision floor; the reasoning and prompt-cache paths key on the same
+  `google/` / `gemini-` prefixes. Upstream shape is identical to 3.7:
+  1,048,576-token context, 65,536 max completion tokens, mandatory reasoning
+  enabled by default at `medium` effort, and the same
+  text+image+file+audio+video input modalities.
+
+  **Cost note:** none. OpenRouter prices 3.8 Flash exactly as it prices 3.7
+  Flash at the time of the swap — $0.75/M prompt, $3.75/M completion, with the
+  same ~90% cached-input discount — so everyday spend is unchanged.
+
+  `google/gemini-3.7-flash` stays fully selectable: it keeps its row in the
+  static cold-start context table (both slugs are 1,048,576) and its entry in
+  the fake-LLM catalog, and an admin can still pin it through Settings → Admin →
+  Features → Model tiers.
+
 - **The `fleet-admin` shim's removal trigger is now stated consistently.**
   README, AGENTS.md, CONTRIBUTING.md, ONBOARDING.md, docs/DEPLOYMENT.md,
   docs/OPERATORS.md, docs/BACKUP_RESTORE.md, the Makefile and the shim's own

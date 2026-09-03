@@ -43,7 +43,7 @@ describe("ModelPicker", () => {
     await waitFor(() => screen.getByText("OpenAI: GPT-5.6 Sol"));
     fireEvent.change(input, { target: { value: "gemini" } });
     await waitFor(() => {
-      expect(screen.getByText("Google: Gemini 3.7 Flash")).toBeInTheDocument();
+      expect(screen.getByText("Google: Gemini 3.8 Flash")).toBeInTheDocument();
     });
     expect(screen.queryByText("OpenAI: GPT-5.6 Sol")).not.toBeInTheDocument();
   });
@@ -52,9 +52,9 @@ describe("ModelPicker", () => {
     render(<Harness />);
     const input = screen.getByRole("combobox") as HTMLInputElement;
     fireEvent.focus(input);
-    await waitFor(() => screen.getByText("Google: Gemini 3.7 Flash"));
-    fireEvent.click(screen.getByText("Google: Gemini 3.7 Flash"));
-    expect(input.value).toBe("google/gemini-3.7-flash");
+    await waitFor(() => screen.getByText("Google: Gemini 3.8 Flash"));
+    fireEvent.click(screen.getByText("Google: Gemini 3.8 Flash"));
+    expect(input.value).toBe("google/gemini-3.8-flash");
   });
 
   it("renders the restaurant-style cost tier for priced catalog models", async () => {
@@ -94,7 +94,7 @@ describe("ModelPicker", () => {
     // Seed fallback (fetch rejects) — no prices anywhere, so no glyphs.
     render(<Harness />);
     fireEvent.focus(screen.getByRole("combobox"));
-    await waitFor(() => screen.getByText("Google: Gemini 3.7 Flash"));
+    await waitFor(() => screen.getByText("Google: Gemini 3.8 Flash"));
     expect(document.querySelectorAll(".model-cost")).toHaveLength(0);
   });
 

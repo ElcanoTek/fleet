@@ -68,9 +68,9 @@ const DEFAULT_TIER: Resolved = {
   key: "default_model",
   kind: "model",
   env_var: "FLEET_DEFAULT_MODEL",
-  value: "google/gemini-3.7-flash",
+  value: "google/gemini-3.8-flash",
   source: "default",
-  default: "google/gemini-3.7-flash",
+  default: "google/gemini-3.8-flash",
 };
 
 function mockFetch(
@@ -221,7 +221,7 @@ describe("FeaturesAdminPage", () => {
     expect(await screen.findByText("Model tiers")).toBeInTheDocument();
     const wrap = await screen.findByTestId("model-picker-default_model");
     const input = within(wrap).getByRole("combobox");
-    expect(input).toHaveValue("google/gemini-3.7-flash");
+    expect(input).toHaveValue("google/gemini-3.8-flash");
 
     // No Save button until the value is dirty; typing alone fires no write.
     expect(screen.queryByTestId("save-default_model")).toBeNull();
