@@ -142,13 +142,13 @@ export type PendingDeleteConversation = {
   title: string;
 };
 
-// What "Save to prompt library…" is aimed at. The conversation-level menu item
-// sets just id/title (distill the whole chat); the per-message action adds the
-// reply's persisted id so the distillation stops at that exchange.
+// What "Save as workflow…" is aimed at. Both entry points — the conversation
+// kebab and the action under a finished reply — save the WHOLE chat: the value
+// of a good session is the procedure it worked out, and a single exchange
+// keeps the answer while losing the method.
 export type PromptSaveTarget = {
   id: string;
   title: string;
-  upToMessageId?: number;
 };
 
 type PersonasResponse = {
@@ -537,11 +537,8 @@ export function ChatExperience({
   const [backendUnreachable, setBackendUnreachable] = useState(false);
   const [pendingDeleteConversation, setPendingDeleteConversation] =
     useState<PendingDeleteConversation | null>(null);
-  // "Save to prompt library…" target: while set, SavePromptDialog distills
-  // this conversation into an editable prompt-library draft. upToMessageId is
-  // set when the user saved from a specific assistant reply (the "Save as
-  // prompt" action under a message) so the distillation stops there instead of
-  // folding in whatever the chat moved on to.
+  // "Save as workflow…" target: while set, SavePromptDialog turns this
+  // conversation into an editable workflow-template draft.
   const [promptSaveTarget, setPromptSaveTarget] =
     useState<PromptSaveTarget | null>(null);
   // "Download chat…" target: while set, DownloadChatDialog offers the formats.
@@ -2459,19 +2456,18 @@ export function ChatExperience({
     }
   };
 
-  // savePromptFromMessage backs the "Save as prompt" action under a finished
-  // assistant reply. Someone decides an interaction is worth keeping the
+  // savePromptFromMessage backs the "Save as workflow" action under a
+  // finished assistant reply. Someone decides a session was worth keeping the
   // moment they finish reading a good answer — so the affordance lives there,
-  // not only in a hover-revealed sidebar kebab. The reply's persisted id rides
-  // along so the draft is distilled from THIS exchange rather than from
-  // whatever the chat wandered into afterwards.
-  const savePromptFromMessage = (message: Message) => {
+  // not only in a hover-revealed sidebar kebab. It saves the WHOLE chat, same
+  // as the kebab item: the reply is where the user is standing, not the scope
+  // of what gets saved.
+  const savePromptFromMessage = () => {
     const id = activeConversationId;
     if (!id) return;
     setPromptSaveTarget({
       id,
       title: conversations.find((c) => c.id === id)?.title ?? "this chat",
-      upToMessageId: message.dbId,
     });
   };
 
@@ -4536,10 +4532,9 @@ export function ChatExperience({
 
         {promptSaveTarget ? (
           <SavePromptDialog
-            key={`${promptSaveTarget.id}:${promptSaveTarget.upToMessageId ?? ""}`}
+            key={promptSaveTarget.id}
             conversationId={promptSaveTarget.id}
             conversationTitle={promptSaveTarget.title}
-            upToMessageId={promptSaveTarget.upToMessageId}
             onClose={() => setPromptSaveTarget(null)}
           />
         ) : null}

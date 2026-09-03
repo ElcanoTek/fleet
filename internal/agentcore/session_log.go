@@ -114,6 +114,11 @@ const (
 	// synthesizer (#455, internal/agent/recurring_task.go). Log-line only: it
 	// is a conversation-level user action with no run session at all.
 	AuxUsageRecurringTaskSynthesis = "recurring_task_synthesis"
+	// AuxUsageLibraryPromptSynthesis is the chat→workflow-template
+	// synthesizer (internal/agent/library_prompt.go). Same shape as the
+	// recurring-task one next door: a conversation-level user action with no
+	// run session, so the log line is the whole record.
+	AuxUsageLibraryPromptSynthesis = "library_prompt_synthesis"
 )
 
 // AuxUsageRecord is one host-side auxiliary model call's metered spend. Token

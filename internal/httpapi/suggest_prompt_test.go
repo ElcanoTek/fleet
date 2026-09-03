@@ -6,7 +6,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -100,89 +99,40 @@ func TestSuggestPrompt_SynthesisFailure(t *testing.T) {
 	}
 }
 
-// TestHistoryUpTo covers the per-message cut that backs the "Save as prompt"
-// action on an assistant reply: the distillation must stop at the reply the
-// user pointed at, and must degrade to the whole conversation rather than to
-// nothing when the id doesn't name an entry it can see.
-func TestHistoryUpTo(t *testing.T) {
-	history := []agent.HistoryEntry{
-		{ID: 1, Role: "user", Type: "text"},
-		{ID: 2, Role: "assistant", Type: "text"},
-		{ID: 3, Role: "user", Type: "text"},
-		{ID: 4, Role: "assistant", Type: "text"},
-	}
-	cases := []struct {
-		name string
-		id   int64
-		want int
-	}{
-		{"cuts inclusive at the named reply", 2, 2},
-		{"zero means the whole conversation", 0, 4},
-		{"negative means the whole conversation", -7, 4},
-		{"an unknown id degrades to the whole conversation", 99, 4},
-		{"the last entry keeps everything", 4, 4},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := len(historyUpTo(history, tc.id)); got != tc.want {
-				t.Errorf("historyUpTo(%d) kept %d entries, want %d", tc.id, got, tc.want)
-			}
-		})
-	}
-}
-
-// TestSuggestPrompt_HonorsUpToMessageID drives the same cut through the
-// handler: a later tangent must not reach the synthesizer when the user saved
-// from an earlier reply.
-func TestSuggestPrompt_HonorsUpToMessageID(t *testing.T) {
+// TestSuggestPrompt_FeedsTheWorkflowNotJustTheText is the point of the
+// save-as-workflow change: the synthesizer must SEE the tools the run used.
+// Feeding it the text turns alone (what promote-to-task does, correctly, for
+// its own purpose) asks it to describe a method it cannot observe.
+func TestSuggestPrompt_FeedsTheWorkflowNotJustTheText(t *testing.T) {
 	s := serverFixture(t)
 	const user = "alice@x.com"
-	conv := seedConv(t, s, user)
+	conv := seedConvWithToolCall(t, s, user)
 	engine := &fakeTurnEngine{libraryDraft: &agent.LibraryPromptDraft{Name: "n", Content: "c"}}
 	s.agent = engine
 
-	// The fixture chat is [user ask, assistant reply]. Cutting at the user
-	// entry must keep the ask and drop everything after it.
-	history, err := s.store.LoadHistory(context.Background(), conv.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(history) < 2 {
-		t.Fatalf("fixture history = %d entries, want at least 2 to cut between", len(history))
-	}
-
-	body := strings.NewReader(`{"up_to_message_id":` + strconv.FormatInt(history[0].ID, 10) + `}`)
-	req := httptest.NewRequest(http.MethodPost, "/conversations/"+conv.ID+"/suggest-prompt", body)
+	req := httptest.NewRequest(http.MethodPost, "/conversations/"+conv.ID+"/suggest-prompt", nil)
 	rec := httptest.NewRecorder()
 	s.handleSuggestPrompt(rec, req, conv.ID, user)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(engine.libraryTranscript, "summarize scheduled tasks that failed today") {
-		t.Errorf("transcript lost the ask being saved:\n%s", engine.libraryTranscript)
-	}
-	if strings.Contains(engine.libraryTranscript, "nightly-etl") {
-		t.Errorf("transcript carried a turn PAST the cut:\n%s", engine.libraryTranscript)
-	}
-}
 
-// TestSuggestPrompt_IgnoresMalformedBody proves the optional body stays
-// advisory: junk in it means "the whole conversation", not a 400 in the user's
-// face while they wait on a review dialog.
-func TestSuggestPrompt_IgnoresMalformedBody(t *testing.T) {
-	s := serverFixture(t)
-	const user = "alice@x.com"
-	conv := seedConv(t, s, user)
-	engine := &fakeTurnEngine{libraryDraft: &agent.LibraryPromptDraft{Name: "n", Content: "c"}}
-	s.agent = engine
-
-	req := httptest.NewRequest(http.MethodPost, "/conversations/"+conv.ID+"/suggest-prompt", strings.NewReader("{not json"))
-	rec := httptest.NewRecorder()
-	s.handleSuggestPrompt(rec, req, conv.ID, user)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	got := engine.libraryInput
+	if !strings.Contains(got.Transcript, "[tool: bash]") {
+		t.Errorf("transcript lost the tool the run used:\n%s", got.Transcript)
 	}
-	if !strings.Contains(engine.libraryTranscript, "nightly-etl") {
-		t.Errorf("a malformed body should distill the whole chat:\n%s", engine.libraryTranscript)
+	if !strings.Contains(got.Transcript, "summarize scheduled tasks that failed today") {
+		t.Errorf("transcript lost the ask:\n%s", got.Transcript)
+	}
+	// The whole conversation is the workflow — no turn is cut off.
+	if !strings.Contains(got.Transcript, "nightly-etl") {
+		t.Errorf("transcript lost a later turn; saving a workflow saves the WHOLE chat:\n%s", got.Transcript)
+	}
+	// Setup the transcript cannot show, and a fresh run would need.
+	if got.Title != "failed tasks" {
+		t.Errorf("Title = %q, want the conversation title", got.Title)
+	}
+	if got.Persona != "victoria" {
+		t.Errorf("Persona = %q, want the conversation persona", got.Persona)
 	}
 }

@@ -29,9 +29,9 @@ type fakeTurnEngine struct {
 	recurringProposal *agent.RecurringTaskProposal // returned by SuggestRecurringTask (#455 promote tests)
 	recurringErr      error
 
-	libraryDraft      *agent.LibraryPromptDraft // returned by SuggestLibraryPrompt (suggest-prompt tests)
-	libraryDraftErr   error
-	libraryTranscript string // captured: what the suggest-prompt cut actually fed the synthesizer
+	libraryDraft    *agent.LibraryPromptDraft // returned by SuggestLibraryPrompt (suggest-prompt tests)
+	libraryDraftErr error
+	libraryInput    agent.LibraryPromptInput // captured: exactly what suggest-prompt fed the synthesizer
 }
 
 func (f *fakeTurnEngine) RunTurn(ctx context.Context, in TurnInput, sink agent.EventSink) (*TurnResult, error) {
@@ -80,8 +80,8 @@ func (f *fakeTurnEngine) ExtractMemories(context.Context, string, string, []stri
 func (f *fakeTurnEngine) SuggestRecurringTask(context.Context, string, []string) (*agent.RecurringTaskProposal, error) {
 	return f.recurringProposal, f.recurringErr
 }
-func (f *fakeTurnEngine) SuggestLibraryPrompt(_ context.Context, transcript string) (*agent.LibraryPromptDraft, error) {
-	f.libraryTranscript = transcript
+func (f *fakeTurnEngine) SuggestLibraryPrompt(_ context.Context, in agent.LibraryPromptInput) (*agent.LibraryPromptDraft, error) {
+	f.libraryInput = in
 	return f.libraryDraft, f.libraryDraftErr
 }
 func (f *fakeTurnEngine) MCPBroker() agentcore.MCPBroker { return nil }

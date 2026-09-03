@@ -15,9 +15,9 @@ vi.mock("@/app/shared/lib/orchestratorApi", () => ({
   },
 }));
 
-// The "Save to prompt library…" review dialog: it POSTs suggest-prompt to
-// distill the conversation into a draft, lets the user edit it, and persists
-// only on Save via the orchestrator's createPrompt.
+// The "Save as workflow…" review dialog: it POSTs suggest-prompt to turn the
+// whole conversation into a workflow-template draft, lets the user edit it,
+// and persists only on Save via the orchestrator's createPrompt.
 
 const draft = {
   name: "Failed-task report",
@@ -62,7 +62,7 @@ describe("SavePromptDialog", () => {
 
     const name = await screen.findByDisplayValue("Failed-task report");
     fireEvent.change(name, { target: { value: "Daily failure digest" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save prompt" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save workflow" }));
 
     await waitFor(() =>
       expect(orchestratorApi.createPrompt).toHaveBeenCalledWith({
@@ -90,7 +90,7 @@ describe("SavePromptDialog", () => {
     fireEvent.click(
       screen.getByRole("checkbox", { name: "Share with this workspace" }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Save prompt" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save workflow" }));
     await waitFor(() =>
       expect(orchestratorApi.createPrompt).toHaveBeenCalledWith(
         expect.objectContaining({ visibility: "workspace" }),
@@ -112,7 +112,7 @@ describe("SavePromptDialog", () => {
       />,
     );
     const retry = await screen.findByRole("button", { name: "Try again" });
-    expect(screen.queryByRole("button", { name: "Save prompt" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Save workflow" })).toBeNull();
     fireEvent.click(retry);
     expect(await screen.findByDisplayValue(draft.name)).toBeInTheDocument();
   });
@@ -132,30 +132,28 @@ describe("SavePromptDialog", () => {
     expect(orchestratorApi.createPrompt).not.toHaveBeenCalled();
   });
 
-  it("cuts the distillation at the reply the user saved from", async () => {
-    // "Save as prompt" under a message passes that reply's persisted id, so a
-    // later tangent in the same chat can't leak into the saved recipe.
+  it("always reads the whole chat — the workflow is the point, not one exchange", async () => {
+    // Saving a session is saving its PROCEDURE. Scoping the synthesis to one
+    // reply would keep that answer and lose the method that produced it, so
+    // the request carries no message id and no narrowing body at all.
     render(
       <SavePromptDialog
         conversationId="conv-1"
         conversationTitle="failed tasks"
-        upToMessageId={4242}
         onClose={vi.fn()}
       />,
     );
     expect(vi.mocked(fetch)).toHaveBeenCalledWith(
       "/api/conversations/conv-1/suggest-prompt",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({ up_to_message_id: 4242 }),
-      }),
+      expect.objectContaining({ method: "POST" }),
     );
+    const init = vi.mocked(fetch).mock.calls[0][1] as RequestInit | undefined;
+    expect(init?.body).toBeUndefined();
+
     await waitFor(() =>
       expect(screen.getByDisplayValue(draft.name)).toBeInTheDocument(),
     );
-    expect(
-      screen.getByText(/up to the reply you saved from/i),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/whole conversation/i)).toBeInTheDocument();
   });
 
 });

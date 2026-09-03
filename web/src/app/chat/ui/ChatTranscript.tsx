@@ -108,9 +108,9 @@ export type ChatTranscriptProps = {
   resendUserMessage: (userMessageId: number, editedContent: string) => void | Promise<void>;
   retryLastUserMessage: () => void | Promise<void>;
   regenerateLastAssistant: () => void | Promise<void>;
-  // "Save as prompt" under a finished reply — turns this exchange into a
-  // reusable prompt-library entry (see chat-experience.savePromptFromMessage).
-  savePromptFromMessage: (message: Message) => void;
+  // "Save as workflow" under a finished reply — writes the whole chat up as a
+  // reusable template (see chat-experience.savePromptFromMessage).
+  savePromptFromMessage: () => void;
   // Fork the conversation at a persisted message into a new thread (#454).
   branchFromMessage: (message: Message) => void | Promise<void>;
   loadMemories: () => void | Promise<void>;
@@ -1011,20 +1011,20 @@ export function ChatTranscript({
                                       Branch
                                     </button>
                                   ) : null}
-                                  {/* The capture point for a great interaction. It sits with
-                                      Copy/Branch because that is where the reader already is
-                                      when they decide this one was worth keeping — the same
-                                      action from the sidebar kebab needs the chat found and
-                                      hovered first. Persisted messages only, like Branch:
-                                      the draft is cut at this reply server-side. */}
-                                  {message.dbId && !isStreaming ? (
+                                  {/* The capture point for a session worth keeping. It sits
+                                      with Copy/Branch because that is where the reader already
+                                      is when they decide so — the same action from the sidebar
+                                      kebab needs the chat found and hovered first. It saves the
+                                      WHOLE chat as a workflow template, not this one exchange:
+                                      the reply is where the user is standing, not the scope. */}
+                                  {!isStreaming ? (
                                     <button
                                       type="button"
                                       className="touch-target text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
-                                      title="Save this as a reusable prompt in your library"
-                                      onClick={() => savePromptFromMessage(message)}
+                                      title="Save this whole chat as a reusable workflow"
+                                      onClick={() => savePromptFromMessage()}
                                     >
-                                      Save as prompt
+                                      Save as workflow
                                     </button>
                                   ) : null}
                                 </div>

@@ -13,6 +13,33 @@ prior versions are listed because none have shipped.
 
 ## [Unreleased]
 
+### Changed
+
+- **"Save to prompt library" is now "Save as workflow", and saves the recipe
+  rather than the question.** The synthesizer used to be told to extract "only
+  the crux" of the ask and to stay concrete "rather than inventing
+  placeholders", so a session that spent an afternoon working out a procedure
+  was saved as one hardcoded question that re-ran that same analysis. Worse, it
+  could not have done better: the transcript it was given kept only the
+  user/assistant text turns, so every tool call was dropped before it ever saw
+  them — on the conversation this was rebuilt against, 110 of 289 history
+  entries, which is precisely the method. It now receives the tool sequence
+  (consecutive calls collapsed with a count, failures kept as pitfalls,
+  successful results omitted as bulk) plus the conversation's persona and
+  enabled connectors, and is asked for a **workflow template**: objective,
+  inputs as `[BRACKETED PLACEHOLDERS]`, the numbered steps with the tools each
+  one used, the output shape, and the notes. This run's client names, dates and
+  targets are generalized; the method stays concrete. Over-long transcripts now
+  keep **both ends** rather than only the tail, since a workflow's opening
+  turns carry its objective and inputs. The synthesis call is also metered
+  (`library_prompt_synthesis`), which it previously was not.
+- **Saving from a reply now saves the whole chat.** The per-reply action
+  shipped scoping the synthesis to that exchange; that was the wrong call — it
+  keeps the answer and loses the procedure that produced it. Both entry points
+  (the reply footer and the conversation kebab) now save the entire
+  conversation. The reply is where the reader is standing when they decide the
+  session was worth keeping, not the scope of what gets saved.
+
 ### Fixed
 
 - **A finished chat no longer keeps a "Thinking…" spinner under it.** After a

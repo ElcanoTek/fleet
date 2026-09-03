@@ -10,22 +10,24 @@ import {
 } from "@/app/shared/lib/orchestratorApi";
 import { useDialogA11y } from "@/app/shared/ui/useDialogA11y";
 
-// SavePromptDialog — "Save to prompt library…" from a conversation's kebab
-// menu. It asks the server to distill the conversation into a reusable
-// prompt-library draft (a host-side model call — the same synthesis pattern
-// as "Make recurring task…"), then shows the draft in this editable form so
-// the user reviews and trims it BEFORE anything is saved. Saving goes through
-// the orchestrator's existing POST /prompts, so permissions and the library
-// list behave exactly as if the prompt were authored by hand.
+// SavePromptDialog — "Save as workflow…". It asks the server to turn the
+// WHOLE conversation into a reusable workflow template (a host-side model
+// call — the same synthesis pattern as "Make recurring task…"), then shows
+// the draft in this editable form so the user reviews and trims it BEFORE
+// anything is saved. Saving goes through the orchestrator's existing
+// POST /prompts, so permissions and the library list behave exactly as if the
+// entry were authored by hand.
+//
+// What comes back is a procedure, not a question: objective, inputs as
+// fillable placeholders, the numbered steps with the tools each used, the
+// output shape, and the pitfalls. That is what makes a good chat worth
+// keeping — a teammate can run it next quarter against different inputs.
+// Saving one exchange, or one refined ask, would keep the answer and lose the
+// method, so the synthesis always reads the entire conversation.
 
 type Props = {
   conversationId: string;
   conversationTitle: string;
-  // Set when the user saved from a specific assistant reply ("Save as prompt"
-  // under a message): the server cuts the distilled transcript there, so a
-  // later tangent in the same chat can't leak into the saved recipe. Omitted
-  // by the conversation-level menu item, which means "the whole chat".
-  upToMessageId?: number;
   onClose: () => void;
 };
 
@@ -37,7 +39,6 @@ const FIELD =
 export function SavePromptDialog({
   conversationId,
   conversationTitle,
-  upToMessageId,
   onClose,
 }: Props) {
   const [phase, setPhase] = useState<Phase>("loading");
@@ -65,14 +66,7 @@ export function SavePromptDialog({
       try {
         const response = await fetch(
           `/api/conversations/${conversationId}/suggest-prompt`,
-          {
-            method: "POST",
-            signal: controller.signal,
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(
-              upToMessageId ? { up_to_message_id: upToMessageId } : {},
-            ),
-          },
+          { method: "POST", signal: controller.signal },
         );
         if (!response.ok) {
           throw new Error(
@@ -97,7 +91,7 @@ export function SavePromptDialog({
         setError(
           err instanceof Error
             ? err.message
-            : "Could not distill a prompt from this conversation",
+            : "Could not build a workflow from this conversation",
         );
         setPhase("edit");
       }
@@ -106,7 +100,7 @@ export function SavePromptDialog({
       cancelled = true;
       controller.abort();
     };
-  }, [conversationId, upToMessageId, attempt]);
+  }, [conversationId, attempt]);
 
   const save = async () => {
     setSaving(true);
@@ -130,7 +124,7 @@ export function SavePromptDialog({
       className="fixed inset-0 z-[1200] flex items-center justify-center bg-black/60 p-0 sm:p-4"
       role="dialog"
       aria-modal="true"
-      aria-label="Save to prompt library"
+      aria-label="Save as workflow"
     >
       <div
         ref={modalRef}
@@ -145,13 +139,13 @@ export function SavePromptDialog({
           </span>
           <div className="min-w-0 flex-1">
             <h2 className="m-0 truncate text-base font-semibold text-[var(--color-text-primary)]">
-              Save to prompt library
+              Save as workflow
             </h2>
             <p className="m-0 truncate text-xs text-[var(--color-text-muted)]">
               From “{conversationTitle}”
             </p>
           </div>
-          <CloseButton label="Close save-prompt dialog" onClick={onClose} />
+          <CloseButton label="Close save-workflow dialog" onClick={onClose} />
         </header>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
@@ -164,7 +158,8 @@ export function SavePromptDialog({
                 aria-hidden="true"
                 className="size-5 animate-spin rounded-full border-2 border-[var(--color-border-strong)] border-t-[var(--color-accent)]"
               />
-              Distilling a reusable prompt from this conversation…
+              Reading the whole chat and writing it up as a reusable
+              workflow…
             </div>
           ) : phase === "saved" ? (
             <div
@@ -178,7 +173,7 @@ export function SavePromptDialog({
                 <Icon name="check" className="size-5" />
               </span>
               <p className="m-0 text-sm text-[var(--color-text-primary)]">
-                Saved “{draft.name.trim() || "prompt"}” to your library.
+                Saved “{draft.name.trim() || "workflow"}” to your library.
               </p>
               <p className="m-0 text-xs text-[var(--color-text-muted)]">
                 Find it under the book icon next to the message box.
@@ -204,9 +199,10 @@ export function SavePromptDialog({
           ) : (
             <div className="grid gap-3">
               <p className="m-0 text-xs text-[var(--color-text-muted)]">
-                {upToMessageId
-                  ? "This draft was distilled from the chat up to the reply you saved from — review and trim it before saving. Nothing is stored until you save."
-                  : "This draft was distilled from the conversation — review and trim it before saving. Nothing is stored until you save."}
+                Written up from the whole conversation — the steps, the tools
+                each one used, and what to watch out for. Fill-in points are
+                marked in <code>[BRACKETS]</code>. Review and edit it before
+                saving; nothing is stored until you do.
               </p>
               <label className="grid gap-1 text-sm">
                 Name
@@ -232,9 +228,9 @@ export function SavePromptDialog({
                 />
               </label>
               <label className="grid gap-1 text-sm">
-                Prompt
+                Workflow
                 <textarea
-                  className={`${FIELD} min-h-56 font-mono text-xs`}
+                  className={`${FIELD} min-h-80 font-mono text-xs`}
                   value={draft.content}
                   onChange={(e) =>
                     setDraft({ ...draft, content: e.target.value })
@@ -289,7 +285,7 @@ export function SavePromptDialog({
                   }
                   onClick={() => void save()}
                 >
-                  {saving ? "Saving…" : "Save prompt"}
+                  {saving ? "Saving…" : "Save workflow"}
                 </button>
               )}
             </>
