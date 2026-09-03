@@ -374,6 +374,20 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **CI no longer goes red because the Go module proxy hiccupped.** The live
+  Playwright lane on `main` failed with `[e2e-boot] FATAL: go build fleet
+  failed` after a single module zip (`google.golang.org/api`) came back
+  `read: connection reset by peer` from the proxy — nothing to do with the
+  code under test, and the reason was visible only inside an uploaded
+  artifact. Two fixes: the Go-using jobs in both lanes now prefetch the module
+  graph in a dedicated, retried `go mod download` step (setup-go's cache is
+  keyed on `go.sum`, so every dependency bump is a cold cache and the job's
+  first `go` command pulls everything), and `scripts/e2e-boot-server.sh`
+  retries a build up to three times when — and only when — the failure looks
+  like a fetch/network error, printing the tail of `build.log` to the job
+  output on the way out. A compile error, a checksum mismatch or any other
+  deterministic failure still fails on the first attempt.
+
 - **`fleet config set-*` no longer silently loses to a duplicate line.**
   `creds.SetEnvKey` replaced only the first `KEY=` line, but the server's
   loader is last-assignment-wins, so on a hand-edited file carrying two lines
