@@ -1228,20 +1228,40 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       if (!info.inflight && !info.turn_id) return false;
       if (attachedConvIdsRef.current.has(convId)) return false;
 
-      // If the server's still holding a retained buffer for a finished
-      // turn but the local cache already shows a completed assistant
-      // message at the end, loadConversation has already pulled the
-      // canonical history from Postgres — replaying the buffer here
-      // would just duplicate every event onto a fresh slot at the end
-      // of the conversation. The retain-buffer reattach (PR #94) is
-      // for the *missing-events* case: phone locked mid-stream, SSE
-      // dropped, browser missed turn.completed, AppendHistory hadn't
-      // landed yet. Once the page-reload path fired loadConversation
-      // and got the persisted shape, the buffer is redundant. Skip.
-      if (!info.inflight && info.turn_id) {
-        const existing = messagesByConvRef.current[convId] ?? [];
-        const last = existing[existing.length - 1];
-        if (last && last.role === "assistant" && last.state === "done") return false;
+      // Nothing left to put on screen: the conversation already ends in a
+      // FINISHED assistant turn, so replaying would duplicate every event onto
+      // a fresh slot at the end of the conversation. Two ways we get here, and
+      // both must decline.
+      //
+      //   - The server says the turn is finished and is only holding its
+      //     retain buffer. That reattach (PR #94) exists for the
+      //     *missing-events* case: phone locked mid-stream, SSE dropped,
+      //     browser missed turn.completed, AppendHistory hadn't landed yet.
+      //     Once loadConversation pulled the persisted shape, it is redundant.
+      //
+      //   - The server still says INFLIGHT, but for the very turn we have
+      //     already streamed to completion. followQueueDrain re-reads the
+      //     queue milliseconds after a turn ends, and both that snapshot and
+      //     this probe lag behind it, so the follower gets sent back at a turn
+      //     that is already on screen. Attaching appends a "thinking" slot
+      //     below (no live slot to reuse — the last message is done), and
+      //     every replayed event is then dropped by the Last-Event-ID dedup
+      //     because we already applied all of them. Nothing lands in that slot
+      //     and no terminal event clears it: a spinner under a finished answer.
+      //     settleStreamedSlot erases it on the way out only when no other
+      //     attach is in flight — loadConversation short-circuits while the
+      //     conversation still looks attached — so under concurrency it
+      //     survives, which is why this surfaced as an intermittent orphan
+      //     rather than a reliable one.
+      if (info.turn_id) {
+        const alreadyStreamedThisTurn =
+          currentTurnIdByConvRef.current[convId] === info.turn_id &&
+          (lastEventIdByConvRef.current[convId] ?? 0) > 0;
+        if (!info.inflight || alreadyStreamedThisTurn) {
+          const existing = messagesByConvRef.current[convId] ?? [];
+          const last = existing[existing.length - 1];
+          if (last && last.role === "assistant" && last.state === "done") return false;
+        }
       }
 
       // Align the idempotency baseline with the turn we're reattaching
