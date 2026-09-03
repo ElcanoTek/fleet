@@ -67,9 +67,11 @@ row's injection watermark (`injected_seq`, stamped at the durable
 queued → injected flip); a post-injection intent proves the model dispatched
 a tool with the steer in context, and #820 preserves those committed side
 effects, so the row CANCELS instead of re-executing the instruction (#823 —
-at most once, never a double-sent email; the drop is logged and the queue
-snapshot updates). Intents carry the proof because they are journaled
-pre-dispatch and a degraded journal refuses dispatch outright — an
+at most once, never a double-sent email; the drop is logged, and the queue
+snapshot the client re-reads at stream end reflects it — the finishing turn's
+own buffer is already sealed, so nothing is pushed over it). Intents carry the
+proof because they are journaled pre-dispatch and a degraded journal refuses
+dispatch outright — an
 unjournaled post-injection side effect cannot exist. Re-queued rows (including
 concurrency-cap refusals and transient launch failures) get a bounded
 delayed re-kick so the queue self-heals without waiting for the next
@@ -100,6 +102,42 @@ and a partial unique index enforces one position per non-terminal item (includin
 queries additionally order by `created_at, id`, so databases upgraded from the
 pre-index schema retain deterministic behavior while migration 046 normalizes
 any legacy ties.
+
+## Getting a drained turn onto the screen
+
+The drain is server-side and the client is not subscribed to it: the finishing
+turn's event buffer is **sealed** before the drain is kicked (settlement needs
+the #798 commit, which happens after the seal), so the settle-time
+`queue.updated` has no subscribers, and the drained turn opens a brand-new
+buffer nobody asked to attach to. Nothing about that is pushed. So the web
+client goes looking, at the one moment it can learn about it — when a turn's
+stream ends (a direct submission's POST stream and a reattach alike):
+
+1. re-read `GET /conversations/{id}/queue`, the authoritative snapshot;
+2. if a `queued` or `running` row remains, attach to the turn the drain
+   started (the existing `/inflight` + `/stream` reattach) and stream it like
+   any other turn; when it ends, start again for the row behind it;
+3. if the queue emptied without ever attaching, the drained turn ran and
+   finished faster than the client looked (or its retain buffer went) — the
+   canonical transcript is in Postgres, so reload it rather than leave the
+   exchange off the screen;
+4. if the row is still `queued` when the bounded backoff runs out, stop. A
+   restart leaves rows queued deliberately (recovery never auto-drains), so an
+   accurate chip with a send-now button is the honest end state, not a poll
+   that never terminates.
+
+The chip strip itself is read from `GET /queue` whenever a conversation opens,
+not only from `queue.updated` — otherwise a reload or a chat switch shows an
+empty strip with inputs still queued, and recovery's "visible in the queue UI"
+promise has no UI to keep it in. A drained turn's buffer is also seeded with
+the snapshot alongside its conversation/turn metadata events, so attaching to
+that turn is enough to see that its own row has moved `queued → running` (an
+inert chip, no send-now/remove).
+
+A direct submission the server queues (the mirror of the stale-busy race: the
+client believed the conversation was idle) is answered with the JSON ack, not
+a stream — the client classifies the response and shows a chip instead of
+pumping the ack as SSE.
 
 ## Honest scope (deferred)
 

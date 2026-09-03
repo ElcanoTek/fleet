@@ -2091,6 +2091,15 @@ export function ChatExperience({
       if (!options.background) setIsLoadingHistory(false);
     }
 
+    // Pull the authoritative pending-input snapshot (#785). Queue chips only
+    // ever arrived on the live stream's `queue.updated`, so a page reload — or
+    // simply switching to another chat and back — showed an EMPTY strip even
+    // with inputs still queued, and the boot-recovery contract that restored
+    // rows "are visible in the queue UI and run on send-now"
+    // (docs/INPUT-QUEUE.md) had no UI to be visible in. A stale strip failed
+    // the same way in reverse: chips for rows that had long since drained.
+    void refreshQueue(conversationId);
+
     // After the DB-backed history is rendered, check whether a turn
     // is currently in-flight for this conv and, if so, attach a live
     // SSE stream so the user sees new tokens land as the agent keeps
@@ -3391,6 +3400,7 @@ export function ChatExperience({
     resendUserMessage,
     retryLastUserMessage,
     queuedInputs,
+    refreshQueue,
     removeQueuedInput,
     sendNowQueuedInput,
   } = useTurnStream(turnStreamDeps);

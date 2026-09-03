@@ -557,6 +557,44 @@ prior versions are listed because none have shipped.
   emits, which the published card schema rejects. Baseline run recorded on
   the issue: 52 passed / 7 failed at MUST level before these fixes.
 
+- **A queued follow-up ran where nobody could see it — the "my queued message
+  never sent" report (#785 queue).** A submission accepted while a turn was
+  running is durable server-side and drains as its own turn, kicked from the
+  finishing turn's tail call. Nothing put that on the screen. The finishing
+  turn's event buffer is already SEALED when the drain happens, so the
+  settle-time `queue.updated` had no subscribers, and the drained turn opens a
+  brand-new buffer this client never asked to attach to — so the composer went
+  idle, the QUEUED chip sat there forever, and the follow-up ran to a Postgres
+  row that only a page reload revealed. The chip strip made it worse by being
+  fed exclusively by `queue.updated` on the live stream: `GET /queue` was
+  wired but never called, so switching chats or reloading showed an EMPTY
+  strip with inputs still queued — and the boot-recovery contract that
+  restored rows "are visible in the queue UI and run on send-now" had no UI to
+  be visible in.
+
+  Four changes, the first three client-side:
+  - **Follow the drain.** Every turn-ends moment (a direct submission's
+    stream, a reattach, and the liveness watchdog's recovered path) now
+    re-reads the authoritative queue snapshot and attaches
+    to the turn the drain started, chaining through as many queued rows as
+    there are. A row that drained and finished before we looked is adopted
+    from Postgres instead of being left off the transcript. The retry backoff
+    is bounded on purpose: a row still queued after it runs out is not
+    draining on its own (a restart deliberately never auto-drains), and the
+    honest answer then is an accurate chip with a send-now button, not an
+    endless poll.
+  - **Load the snapshot when a conversation opens**, so chips survive a reload
+    or a chat switch — and go away when they are stale.
+  - **A direct submission the server queued** (the mirror of the #824 stale-busy
+    race: the client thought the conversation was idle, the server knew better)
+    no longer pumps the JSON queue ack as if it were an SSE stream, which left
+    an assistant bubble thinking forever over a turn that was never started.
+    It withdraws the optimistic bubbles and becomes an ordinary chip.
+  - Server: a drained turn's buffer is seeded with the queue snapshot, next to
+    the conversation/turn metadata events, so attaching to that turn is enough
+    to learn the queue's current shape — including that the row it is running
+    has moved `queued -> running` and must no longer offer send-now/remove.
+
 - **Kubernetes: a control plane that crashed and restarted IN PLACE still
   leaked every sandbox pod it had running (#1264).** The boot-time orphan
   sweep names an incarnation by `FLEET_POD_UID` — the downward-API pod UID —

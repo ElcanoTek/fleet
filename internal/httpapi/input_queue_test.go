@@ -394,3 +394,88 @@ func TestQueue_DrainWorksAtConcurrencyCapOne(t *testing.T) {
 	eng.release <- struct{}{}
 	waitFor(t, "queued turn drains at cap=1", func() bool { return eng.turns.Load() == 2 })
 }
+
+// bufferEvents snapshots a live turn buffer's event names + payloads. In-package
+// so the test can read the replay a reattaching client would receive without
+// standing up an SSE socket.
+func bufferEvents(b *turnBuffer) []bufferedEvent {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := make([]bufferedEvent, len(b.events))
+	copy(out, b.events)
+	return out
+}
+
+// A drained turn's buffer must describe the queue it came out of. The previous
+// turn's buffer is already sealed when the drain is kicked, so its settle-time
+// queue.updated reaches nobody; without a snapshot here, a client attaching to
+// the drained turn shows a chip strip that still advertises send-now/remove
+// for the row this very turn is running.
+func TestQueue_DrainedTurnStreamCarriesQueueSnapshot(t *testing.T) {
+	s := serverFixture(t)
+	const user = "alice@x.com"
+	conv, err := s.store.CreateConversation(t.Context(), user, "q", "victoria", "openrouter/auto", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng := &gatedEngine{started: make(chan struct{}, 4), release: make(chan struct{}, 4)}
+	s.agent = eng
+
+	go postChatJSON(t, s, user, map[string]any{"message": "first question", "conversation_id": conv.ID})
+	<-eng.started
+
+	w := postChatJSON(t, s, user, map[string]any{
+		"message": "queued follow-up", "conversation_id": conv.ID, "input_id": "cli-2",
+	})
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("busy submit: status=%d body=%s", w.Code, w.Body.String())
+	}
+	var ack struct {
+		Input struct{ ID string } `json:"input"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &ack); err != nil || ack.Input.ID == "" {
+		t.Fatalf("queue ack: %v body=%s", err, w.Body.String())
+	}
+
+	// Let turn 1 finish; its tail call drains the queued row as turn 2.
+	eng.release <- struct{}{}
+	waitFor(t, "queued turn to launch", func() bool { return eng.turns.Load() == 2 })
+
+	entry, ok := s.getInflight(conv.ID)
+	if !ok || entry.buf == nil {
+		t.Fatal("drained turn has no live buffer")
+	}
+	// The engine emits a turn.started of its own; the server's is the one
+	// carrying the turn id, and it comes first.
+	events := bufferEvents(entry.buf)
+	var started, snapshot *bufferedEvent
+	for i, ev := range events {
+		if ev.Name == "turn.started" && started == nil && strings.Contains(string(ev.Data), `"turn_id"`) {
+			started = &events[i]
+		}
+		if ev.Name == "queue.updated" && snapshot == nil {
+			snapshot = &events[i]
+		}
+	}
+	if started == nil {
+		t.Fatal("drained turn buffer has no turn.started")
+	}
+	if !strings.Contains(string(started.Data), ack.Input.ID) {
+		t.Errorf("turn.started should correlate its input id: %s", started.Data)
+	}
+	if snapshot == nil {
+		t.Fatal("drained turn buffer carries no queue.updated snapshot")
+	}
+	// The row is CLAIMED (running), not queued: an attaching client must not
+	// render remove/send-now affordances for work already in flight.
+	if !strings.Contains(string(snapshot.Data), ack.Input.ID) ||
+		!strings.Contains(string(snapshot.Data), `"state":"running"`) {
+		t.Errorf("queue.updated should show the drained row as running: %s", snapshot.Data)
+	}
+
+	eng.release <- struct{}{}
+	waitFor(t, "queue row completed", func() bool {
+		items, _ := s.store.ListQueuedInputs(context.Background(), user, conv.ID)
+		return len(items) == 0
+	})
+}
