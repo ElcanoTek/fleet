@@ -104,6 +104,20 @@ SRC_DIR="${SRC_DIR:-$REPO_ROOT}"
 # systemd env file (which this script deliberately does NOT source) would
 # silently update against the generic bundle instead of the client checkout.
 CLIENT_DIR="${FLEET_CLIENT_CONFIG_DIR:-}"
+# Was the bundle dir named EXPLICITLY (this shell's env, or --client-config), or
+# resolved from a fallback? It decides who wins when the service's own env file
+# names a different bundle: an explicit operator choice is honoured (with a
+# warning), a fallback is corrected to whatever the running service actually
+# reads. Without that reconcile, `fleet update` happily pulls one checkout while
+# fleet loads another and the operator is told the update succeeded.
+# The self-update re-exec ALWAYS exports FLEET_CLIENT_CONFIG_DIR (it has to —
+# the re-exec passes no argv), so the env var alone would read as "explicit" on
+# the re-exec'd run even when the first run merely fell back to that dir. The
+# re-exec therefore carries the original answer in FLEET_CLIENT_CONFIG_EXPLICIT
+# and it wins over the inference below.
+CLIENT_DIR_EXPLICIT=0
+[[ -n "$CLIENT_DIR" ]] && CLIENT_DIR_EXPLICIT=1
+[[ -n "${FLEET_CLIENT_CONFIG_EXPLICIT:-}" ]] && CLIENT_DIR_EXPLICIT="$FLEET_CLIENT_CONFIG_EXPLICIT"
 SERVICE_NAME="${FLEET_SERVICE_NAME:-fleet}"
 # Where the running unit's binaries live. Resolved (in order): --install-dir /
 # $FLEET_INSTALL_DIR, else the dir of the unit's ExecStart, else /opt/fleet. The
@@ -172,8 +186,8 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --src)            shift; [[ $# -gt 0 ]] || { echo "error: --src needs a dir" >&2; exit 1; }; SRC_DIR="$1" ;;
     --src=*)          SRC_DIR="${1#*=}" ;;
-    --client-config)  shift; [[ $# -gt 0 ]] || { echo "error: --client-config needs a dir" >&2; exit 1; }; CLIENT_DIR="$1" ;;
-    --client-config=*) CLIENT_DIR="${1#*=}" ;;
+    --client-config)  shift; [[ $# -gt 0 ]] || { echo "error: --client-config needs a dir" >&2; exit 1; }; CLIENT_DIR="$1"; CLIENT_DIR_EXPLICIT=1 ;;
+    --client-config=*) CLIENT_DIR="${1#*=}"; CLIENT_DIR_EXPLICIT=1 ;;
     --service)        shift; [[ $# -gt 0 ]] || { echo "error: --service needs a name" >&2; exit 1; }; SERVICE_NAME="$1" ;;
     --service=*)      SERVICE_NAME="${1#*=}" ;;
     --install-dir)    shift; [[ $# -gt 0 ]] || { echo "error: --install-dir needs a dir" >&2; exit 1; }; INSTALL_DIR="$1" ;;
@@ -439,6 +453,7 @@ else
         exec env FLEET_UPDATE_REEXEC=1 FLEET_UPDATE_YES=1 \
           FLEET_UPDATE_BASE_SHA="$before_sha" \
           FLEET_CLIENT_CONFIG_DIR="$CLIENT_DIR" \
+          FLEET_CLIENT_CONFIG_EXPLICIT="$CLIENT_DIR_EXPLICIT" \
           FLEET_CLIENT_CONFIG_PIN="$CLIENT_CONFIG_PIN" \
           FLEET_CLIENT_CONFIG_VERIFY="$CLIENT_CONFIG_VERIFY" \
           FLEET_SERVICE_NAME="$SERVICE_NAME" \
@@ -455,13 +470,74 @@ else
 fi
 
 # ── 2. pull the client-config bundle checkout ─────────────────────────────
+# The service's env file (the unit's EnvironmentFile=). Never sourced — read
+# key-by-key via env_get. Resolved HERE, before the bundle step, because the
+# reconcile below needs it: it is the only place that records which bundle the
+# RUNNING service actually loads.
+backend_env_file="${FLEET_ENV_FILE:-/etc/fleet/fleet.env}"
+
+# Normalize a path for comparison: resolve symlinks when we can, else just drop
+# a trailing slash. Comparison only — never used as the path we operate on.
+norm_dir() {
+  local d="${1%/}"
+  [[ -z "$d" ]] && { printf '%s' ""; return 0; }
+  if command -v realpath >/dev/null 2>&1; then
+    realpath -m "$d" 2>/dev/null || printf '%s' "$d"
+  else
+    printf '%s' "$d"
+  fi
+}
+
+# Reconcile against the service's configured bundle. fleet reads
+# FLEET_CLIENT_CONFIG_DIR from the 0600 env file; this script deliberately does
+# not source that file, so its own resolution (env → --client-config → state
+# file → the in-repo generic bundle) can land on a DIFFERENT checkout. When it
+# does, `fleet update` pulls a bundle nobody loads, prints "✓ client config
+# pulled", and the operator sees stale connector copy in the UI with no error
+# anywhere. Fallback-resolved → adopt what the service reads. Explicitly named →
+# the operator wins, but never silently.
+svc_client_dir="$(env_get FLEET_CLIENT_CONFIG_DIR "$backend_env_file")"
+if [[ -n "$svc_client_dir" && "$(norm_dir "$svc_client_dir")" != "$(norm_dir "$CLIENT_DIR")" ]]; then
+  if [[ "$CLIENT_DIR_EXPLICIT" == "1" ]]; then
+    warn "bundle mismatch: you asked to update ${CLIENT_DIR}, but ${SERVICE_NAME} loads ${svc_client_dir} (${backend_env_file})."
+    warn "  honouring your explicit choice — the service will NOT see changes pulled into ${CLIENT_DIR}."
+  elif [[ -d "$svc_client_dir" ]]; then
+    info "bundle dir reconciled: ${SERVICE_NAME} loads ${svc_client_dir} (${backend_env_file}), not the ${CLIENT_DIR} this script resolved."
+    CLIENT_DIR="$svc_client_dir"
+    ok "updating the bundle the service actually reads: ${CLIENT_DIR}"
+  else
+    warn "${SERVICE_NAME} is configured for bundle ${svc_client_dir} (${backend_env_file}), but that directory does not exist on this box."
+    warn "  continuing with ${CLIENT_DIR} — fix FLEET_CLIENT_CONFIG_DIR or the checkout, or the service is loading a bundle you cannot update."
+  fi
+fi
+
+# Bundle freshness is reported at the END alongside fleet's own SHA. A stale
+# bundle is not a build failure, so it must not abort the update — but it is the
+# difference between "fleet updated" and "your deployment updated", and burying
+# it in step 2 of 5 is how it goes unnoticed.
+BUNDLE_STALE=0
+BUNDLE_STALE_WHY=""
+bundle_sha_before=""
+[[ -e "$CLIENT_DIR/.git" ]] && bundle_sha_before="$(git -C "$CLIENT_DIR" rev-parse HEAD 2>/dev/null || true)"
+
 step "2/5  Updating the client-config bundle"
 if [[ "$CLIENT_DIR" == "$SRC_DIR/config/default" || "$CLIENT_DIR" == "config/default" ]]; then
   info "using the in-repo generic bundle (config/default) — no separate checkout to pull."
-elif [[ ! -d "$CLIENT_DIR/.git" ]]; then
+  # Only a finding when the box is SUPPOSED to run a client bundle. A generic
+  # install legitimately has none; a client box that fell back to it here is
+  # about to update against content its service never loads.
+  if [[ -n "$svc_client_dir" ]]; then
+    BUNDLE_STALE=1
+    BUNDLE_STALE_WHY="fell back to the generic bundle while ${SERVICE_NAME} loads ${svc_client_dir}"
+  fi
+elif [[ ! -e "$CLIENT_DIR/.git" ]]; then
   info "client config at ${CLIENT_DIR} is not a git checkout — leaving as-is."
+  BUNDLE_STALE=1
+  BUNDLE_STALE_WHY="${CLIENT_DIR} is not a git checkout, so nothing can be pulled into it"
 elif [[ "$NO_PULL" == "1" ]]; then
   info "rebuild-only mode — skipping client-config pull."
+  BUNDLE_STALE=1
+  BUNDLE_STALE_WHY="--no-pull / FLEET_UPDATE_NO_PULL skipped the bundle pull"
 elif [[ "$DRY_RUN" == "1" ]]; then
   if [[ -n "$CLIENT_CONFIG_PIN" ]]; then
     info "[dry-run] pinned: would git -C ${CLIENT_DIR} fetch --tags && checkout ${CLIENT_CONFIG_PIN}"
@@ -487,15 +563,61 @@ elif [[ -n "$CLIENT_CONFIG_PIN" ]]; then
   fi
   if git -C "$CLIENT_DIR" checkout --quiet "$CLIENT_CONFIG_PIN"; then
     ok "client config pinned to ${CLIENT_CONFIG_PIN} (${CLIENT_DIR})"
+    # A pin is a deliberate hold, but it is ALSO the most common reason a
+    # bundle never picks up a change the operator just merged, so say when the
+    # pin is behind its own upstream rather than only that it was applied.
+    if git -C "$CLIENT_DIR" rev-parse --abbrev-ref '@{upstream}' >/dev/null 2>&1; then
+      _pin_behind="$(git -C "$CLIENT_DIR" rev-list --count 'HEAD..@{upstream}' 2>/dev/null || echo 0)"
+      if [[ "${_pin_behind:-0}" != "0" ]]; then
+        BUNDLE_STALE=1
+        BUNDLE_STALE_WHY="pinned to ${CLIENT_CONFIG_PIN}, which is ${_pin_behind} commit(s) behind its upstream"
+      fi
+    fi
   else
     warn "could not check out pinned ref ${CLIENT_CONFIG_PIN} in ${CLIENT_DIR} — leaving the existing checkout"
+    BUNDLE_STALE=1
+    BUNDLE_STALE_WHY="pinned ref ${CLIENT_CONFIG_PIN} could not be checked out"
   fi
 else
   git config --global --add safe.directory "$CLIENT_DIR" 2>/dev/null || true
-  if git -C "$CLIENT_DIR" pull --ff-only --quiet; then
+  # NOT --quiet: when a fast-forward is refused, git's own message is the whole
+  # diagnosis (detached HEAD, no upstream, diverged, local edits, wrong branch).
+  # Swallowing it left the operator a bare "could not fast-forward" and no way
+  # to tell which of those it was.
+  _pull_err_file="$(mktemp 2>/dev/null || printf '/dev/null')"
+  if git -C "$CLIENT_DIR" pull --ff-only >"$_pull_err_file" 2>&1; then
     ok "client config pulled (${CLIENT_DIR})"
   else
-    warn "could not fast-forward ${CLIENT_DIR} — leaving the existing checkout"
+    warn "could not fast-forward ${CLIENT_DIR} — leaving the existing checkout. git said:"
+    [[ -s "$_pull_err_file" ]] && sed 's/^/    /' "$_pull_err_file" >&2
+    warn "  usual causes: the checkout is on a feature branch or detached HEAD, has local edits,"
+    warn "  or has commits the remote does not. Inspect: git -C ${CLIENT_DIR} status -sb"
+    BUNDLE_STALE=1
+    BUNDLE_STALE_WHY="git pull --ff-only was refused in ${CLIENT_DIR}"
+  fi
+  [[ "$_pull_err_file" != "/dev/null" ]] && rm -f "$_pull_err_file"
+fi
+
+# Report what the bundle actually IS now, and whether it moved. "✓ client config
+# pulled" on an already-current checkout and on one that advanced 40 commits are
+# the same line; the SHA pair is what lets an operator confirm the change they
+# just merged is on the box.
+if [[ -e "$CLIENT_DIR/.git" ]]; then
+  bundle_sha_after="$(git -C "$CLIENT_DIR" rev-parse HEAD 2>/dev/null || true)"
+  bundle_branch="$(git -C "$CLIENT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?')"
+  if [[ -n "$bundle_sha_before" && "$bundle_sha_before" != "$bundle_sha_after" ]]; then
+    ok "bundle ${bundle_branch}: ${bundle_sha_before:0:12} → ${bundle_sha_after:0:12}"
+  else
+    info "bundle ${bundle_branch}: unchanged at ${bundle_sha_after:0:12}"
+  fi
+  # Behind its upstream after all of the above → the pull did not take, whatever
+  # it printed. This is the check that would have caught the stale-bundle case.
+  if [[ "$BUNDLE_STALE" == "0" ]] && git -C "$CLIENT_DIR" rev-parse --abbrev-ref '@{upstream}' >/dev/null 2>&1; then
+    _bundle_behind="$(git -C "$CLIENT_DIR" rev-list --count 'HEAD..@{upstream}' 2>/dev/null || echo 0)"
+    if [[ "${_bundle_behind:-0}" != "0" ]]; then
+      BUNDLE_STALE=1
+      BUNDLE_STALE_WHY="${CLIENT_DIR} is still ${_bundle_behind} commit(s) behind its upstream after the pull"
+    fi
   fi
 fi
 
@@ -528,11 +650,6 @@ if [[ -d "$CLIENT_DIR/.git" && "$CLIENT_DIR" != "$SRC_DIR"/* && "$CLIENT_DIR" !=
     warn "could not chown ${CLIENT_DIR} to ${bundle_owner} — sandbox relabel may fail (EPERM) on files the pull rewrote"
   fi
 fi
-
-# The service's env file (the unit's EnvironmentFile=). Never sourced — read
-# key-by-key via env_get, both for the sandbox-image resolution below and the
-# origin reconcile in the build step.
-backend_env_file="${FLEET_ENV_FILE:-/etc/fleet/fleet.env}"
 
 # ── record the pre-build sandbox gate inputs (Containerfile hash + tag) ──
 # Compare a stored hash of the bundle's Containerfile AND the image tag the
@@ -1479,6 +1596,24 @@ else
 fi
 printf '%s═══════════════════════════════════════════════%s\n' "$c_green" "$c_reset"
 say
+# The banner above reports FLEET's sha. A deployment is fleet + its bundle, and
+# connector copy, personas, protocols and the MCP catalog all live in the
+# bundle — so an update that advanced fleet while the bundle stood still is a
+# half-update, and saying "✓ fleet updated" alone is how that goes unnoticed.
+if [[ "$BUNDLE_STALE" == "1" ]]; then
+  warn "the client-config bundle did NOT advance: ${BUNDLE_STALE_WHY}."
+  warn "  fleet is new, your bundle is not — connector names/descriptions, personas, protocols and"
+  warn "  the MCP catalog all come from the bundle, so the UI will still show the old ones."
+  warn "  Inspect: git -C ${CLIENT_DIR} status -sb   —   then re-run: sudo fleet update"
+  say
+elif [[ -n "${bundle_sha_after:-}" ]]; then
+  if [[ -n "$bundle_sha_before" && "$bundle_sha_before" != "${bundle_sha_after:-}" ]]; then
+    say "  ${c_green}✓${c_reset} bundle ${CLIENT_DIR} updated ${bundle_sha_before:0:12} → ${bundle_sha_after:0:12}"
+  else
+    say "  ${c_dim}» bundle ${CLIENT_DIR} already current at ${bundle_sha_after:0:12}${c_reset}"
+  fi
+  say
+fi
 say "  Health:    ${c_dim}fleet-admin status${c_reset}"
 say "  Logs:      ${c_dim}journalctl -u ${SERVICE_NAME} -n 50${c_reset}"
 if [[ "$before_sha" != "$after_sha" ]]; then

@@ -15,6 +15,31 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **`fleet update` can no longer leave the client bundle silently behind.** A
+  deployment is fleet AND its bundle — connector display names and
+  descriptions, personas, protocols, skills and the MCP catalog all live in the
+  bundle — but the update's final banner reported only fleet's SHA, and every
+  way the bundle could fail to advance was a soft `info`/`warn` buried in step
+  2 of 5. An update that moved fleet while the bundle stood still therefore
+  printed "✓ fleet updated" and surfaced only as stale copy in the UI. Now:
+  the step prints the bundle's **branch and before → after SHA** (and says
+  "unchanged" when it did not move); a refused `git pull --ff-only` prints
+  **git's own message** instead of swallowing it behind `--quiet`, plus the
+  usual causes and the command to inspect; a bundle still behind its upstream
+  after the pull, held by a stale pin, missing its checkout, or skipped by
+  `--no-pull` is carried to the **final banner** as an explicit warning naming
+  the reason. `fleet update --check` reports the bundle's freshness beside
+  fleet's and exits non-zero when it is behind.
+- **`fleet update` reconciles the bundle it pulls against the one the service
+  reads.** update.sh deliberately does not source the unit's 0600 env file, so
+  its own resolution (env → `--client-config` → bootstrap state file → the
+  in-repo generic bundle) could land on a different checkout than the running
+  fleet loads — pulling a bundle nobody reads and reporting success. It now
+  compares against `FLEET_CLIENT_CONFIG_DIR` in the service env file: a
+  fallback-resolved dir is corrected to what the service actually loads (said
+  out loud), while an explicitly named one still wins but warns that the
+  service will not see it.
+
 - **Connector catalog copy is a documented, warned-on contract.** The
   `display_name`/`description` a bundle attaches to each `mcp_servers` entry
   is the only text a user reads in chat's Tools picker and on Settings →

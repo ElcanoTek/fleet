@@ -97,7 +97,78 @@ func updateCheck() int {
 	} else {
 		fmt.Printf("fleet is %d commit(s) behind upstream on %s — run `fleet update` to upgrade.\n", n, branch)
 	}
-	return nodeReadiness()
+	bundleStale := clientBundleCheck()
+	if rc := nodeReadiness(); rc != 0 {
+		return rc
+	}
+	if bundleStale {
+		return 5
+	}
+	return 0
+}
+
+// clientBundleCheck reports the client-config bundle's freshness beside
+// fleet's, and returns true when it is behind.
+//
+// A deployment is fleet AND its bundle: connector display names and
+// descriptions, personas, protocols, skills and the MCP catalog all live in the
+// bundle, so "fleet is up to date" alone answers half the operator's question.
+// The two advance independently and the bundle is the half that silently does
+// not — it is a separate checkout, on its own branch, that a pin or a refused
+// fast-forward can hold back while fleet moves. A `--check` that cannot see it
+// sends an operator looking for a fleet bug when the fix is `git -C <bundle>
+// status`.
+//
+// The dir is resolved the way the RUNNING SERVICE resolves it — the env var
+// fleet itself reads — then the bootstrap-persisted state file, mirroring
+// scripts/update.sh. Read-only throughout: it fetches nothing and changes
+// nothing (a `--check` that mutated a checkout would be a worse bug than the
+// one it diagnoses), so it reports against the refs already on the box.
+func clientBundleCheck() bool {
+	dir := strings.TrimSpace(os.Getenv("FLEET_CLIENT_CONFIG_DIR"))
+	if dir == "" {
+		stateDir := strings.TrimSpace(os.Getenv("FLEET_STATE_DIR"))
+		if stateDir == "" && repoRoot() != "" {
+			stateDir = filepath.Join(repoRoot(), ".fleet-state")
+		}
+		if stateDir != "" {
+			if b, err := os.ReadFile(filepath.Join(stateDir, "client-config.dir")); err == nil {
+				dir = strings.TrimSpace(string(b))
+			}
+		}
+	}
+	if dir == "" {
+		fmt.Println("client bundle: none configured (running the in-repo generic bundle).")
+		return false
+	}
+	git := func(args ...string) (string, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		//nolint:gosec // G204: fixed "git" binary; args are literal git subcommands, dir is operator config (env / bootstrap state file), never request input.
+		out, err := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...).Output()
+		return strings.TrimSpace(string(out)), err
+	}
+	if _, err := git("rev-parse", "--is-inside-work-tree"); err != nil {
+		fmt.Printf("client bundle at %s is not a git checkout — `fleet update` cannot advance it.\n", dir)
+		return false
+	}
+	bundleBranch, _ := git("rev-parse", "--abbrev-ref", "HEAD")
+	head, _ := git("rev-parse", "--short=12", "HEAD")
+	// No upstream is the detached-HEAD / pinned case: not an error, but it does
+	// mean the bundle will never fast-forward on its own, so name it.
+	behind, err := git("rev-list", "--count", "HEAD..@{upstream}")
+	if err != nil {
+		fmt.Printf("client bundle %s at %s (%s) has no upstream tracking branch — pinned or detached; `fleet update` will not advance it.\n", bundleBranch, head, dir)
+		return true
+	}
+	n, _ := strconv.Atoi(behind)
+	if n == 0 {
+		fmt.Printf("client bundle is up to date (%s at %s, %s).\n", bundleBranch, head, dir)
+		return false
+	}
+	fmt.Printf("client bundle is %d commit(s) behind upstream on %s (%s) — connector names/descriptions, personas and protocols come from here.\n", n, bundleBranch, dir)
+	fmt.Printf("  refresh it: git -C %s status -sb   then   sudo fleet update\n", dir)
+	return true
 }
 
 // nodeReadiness runs the read-only node probe and returns 0 when this box can
