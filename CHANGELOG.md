@@ -13,6 +13,25 @@ prior versions are listed because none have shipped.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The Tools picker no longer shows a connector as ON that no turn will
+  load.** `POST /conversations/{id}/mcp-servers` intersects the requested
+  connectors with its own catalog and silently drops any name it does not
+  recognize — deliberately, and with a `200`, returning the surviving set as
+  `enabled_optional`. The chat client only reverted its optimistic state on a
+  non-2xx, so it never read that list back: a dropped connector kept reading
+  ON in the picker while every turn ran without it. The user then saw the
+  agent insist it had no `mcp_<name>_*` tools and ask them to enable a
+  connector they could see was already enabled — both statements true, about
+  different state, with nothing reconciling them short of a reload. The client
+  now folds the server's authoritative list back into its rows
+  (`reconcileMcpSelection`), matching case-insensitively because the server
+  canonicalizes to lowercase, and leaving always-on rows alone. A connector
+  that does not stick springs visibly back off, and the dropped names are
+  logged for the operator — usually a connector added or renamed in the bundle
+  since boot, which `fleet mcp reload` resolves.
+
 ### Changed
 
 - **"Save to prompt library" is now "Save as workflow", and saves the recipe

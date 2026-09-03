@@ -61,6 +61,38 @@ endpoint refuses an unknown seat up front.
   `McpServerPicker` (mode="task") continues to pin explicit
   `{server, account}` selections.
 
+## Selection is whatever the server persisted, not whatever the client asked for
+
+`POST /conversations/{id}/mcp-servers` takes the FULL opt-in set, intersects it
+with the authoritative catalog (bundle Optional entries plus the caller's
+remote rows), and **silently drops any name it does not recognize** — with a
+`200`, by design. It returns the surviving set as `enabled_optional`.
+
+**A client MUST reconcile against that response.** Treating `2xx` as success
+and keeping its optimistic toggle state produces a failure that is confusing
+out of all proportion to its size: the Tools picker shows a connector ON while
+every turn runs without it. The system prompt's *"MCP Tools (live registry)"*
+section then carries no `mcp_<name>_*` entry, so the agent correctly reports it
+has no such tools and tells the user to enable a connector they can plainly see
+is already enabled. Both are truthful about different state, and nothing
+reconciles them short of a reload.
+
+Chat does this in `postMcpServerState` via `reconcileMcpSelection` and
+`droppedOptionalMcpServerNames` (`web/src/app/chat/ui/mcpSelection.ts`). Two
+details are load-bearing:
+
+- **Compare case-insensitively.** The server canonicalizes names to lowercase;
+  an exact match would switch every mixed-case connector off and make the
+  desync worse than doing nothing.
+- **Never touch always-on rows.** They are informational status, never part of
+  the opt-in selection, and the server never echoes them back — so an empty
+  response must not switch them off.
+
+A dropped name is almost always a connector added or renamed in the bundle
+since boot (the Optional catalog is frozen at boot); `fleet mcp reload` picks
+it up. The toggle springing back is the user's signal; a `console.error`
+naming the dropped connectors is the operator's.
+
 ## API
 
 - `GET /connector-prefs` → `{"prefs": [{kind, connector_id, enabled,
