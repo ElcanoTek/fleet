@@ -4825,7 +4825,7 @@ export function ChatExperience({
               ) : null}
               {activeConversationId ? (
                 <QueuedInputs
-                  items={queuedInputs[activeConversationId] ?? []}
+                  items={queuedInputs.get(activeConversationId) ?? []}
                   onRemove={(inputId) =>
                     void removeQueuedInput(activeConversationId, inputId)
                   }
