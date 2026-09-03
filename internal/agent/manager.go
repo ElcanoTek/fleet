@@ -327,15 +327,23 @@ func BuildMCPClient(specs map[string]MCPServerSpec, httpTools []config.HTTPToolC
 			// (process-lifetime) spawn, so every run sees the same directory
 			// (managed-run detection + a cross-run ledger window). Resolved
 			// lazily so token-free catalogs create nothing on disk.
+			// One shared dir serves both jobs here: the ${FLEET_WORKSPACE}
+			// substitution AND the subprocess cwd. It is resolved
+			// unconditionally now (not only for token-bearing catalogs),
+			// because a server that never mentions the token still writes its
+			// relative output paths somewhere — and "somewhere" must not be
+			// the operator's bundle checkout.
+			shared := agentcore.SharedMCPWorkspaceDir()
 			env := spec.Env
 			if agentcore.EnvReferencesWorkspace(env) {
-				env = agentcore.ExpandWorkspaceEnv(env, agentcore.SharedMCPWorkspaceDir())
+				env = agentcore.ExpandWorkspaceEnv(env, shared)
 			}
 			// Shared spawn ⇒ no task identity: drop ${FLEET_TASK_ID}-bearing keys
 			// rather than hand the connector a literal placeholder. Only the
 			// scheduled per-run path resolves the token to a real ID.
 			env = agentcore.ExpandTaskIDEnv(env, "")
-			addErr = client.AddStdioServer(ctx, name, spec.Command, spec.Args, env, spec.Dir)
+			addErr = client.AddStdioServer(ctx, name, spec.Command, spec.Args, env,
+				agentcore.StdioCwd(spec.Dir, spec.DirPinned, shared))
 		default:
 			addErr = fmt.Errorf("spec has neither Command nor URL")
 		}

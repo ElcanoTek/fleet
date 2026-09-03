@@ -1308,11 +1308,25 @@ type MCPServerConfig struct {
 	Headers       map[string]string
 	Enabled       bool
 	ToolAllowlist []string
-	// Dir is the working directory a stdio server's subprocess launches in (the
-	// client-config bundle root), so relative command args like `mcp/foo.py`
-	// resolve against the bundle rather than the fleet process cwd. Empty for
-	// HTTP servers and for catalogs that supply absolute args.
+	// Dir is the working directory a stdio server's subprocess launches in.
+	//
+	// It is the fallback, NOT the final answer: a spawn path that has a
+	// fleet-managed workspace to offer launches the subprocess there instead
+	// (see agentcore.StdioCwd). That matters because a server writes a
+	// relative output path — one the model passed, or one of its own defaults
+	// — against its cwd, and with cwd at the bundle root those files land in
+	// the operator's git checkout where the agent can never read them.
+	// Script args are absolutized at load, so the cwd no longer has to be the
+	// bundle root for the subprocess to start.
+	//
+	// Empty for HTTP servers.
 	Dir string
+	// DirPinned marks Dir as a CONTRACT rather than a fallback: an Agent
+	// Plugin server must launch in its plugin root (agent-plugins.org §4.1,
+	// ADR-0054), because its args are opaque strings fleet may not rewrite and
+	// it resolves its own bundled files relative to that root. A pinned Dir is
+	// never overridden by a workspace.
+	DirPinned bool
 	// AccountVars are the base credential env-var names the account-suffix scan
 	// uses to discover this server's provisioned `<VAR>_<ACCOUNT>` seats
 	// (creds.AccountsFor). Surfaced (names only) in the MCP catalog + the

@@ -15,7 +15,7 @@ fleet mcp test gamma --timeout 10s   # per-server handshake budget (default 30s)
 For each requested server it loads the bundle **through the same loader the
 server boots with** (`clientconfig.Load` → `MCPServerConfigs`: env
 interpolation, the `enabled_env`/`enabled_groups` gate, TLS hardening, and the
-bundle-root working directory are identical to a real boot), spawns or
+working directory are identical to a real boot), spawns or
 connects the server **exactly as the broker would** (same `internal/mcp`
 client, same `${FLEET_WORKSPACE}` expansion — one credential path, #167), and
 runs the MCP handshake: `initialize` + `tools/list`.
