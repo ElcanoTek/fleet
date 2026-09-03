@@ -516,7 +516,7 @@ func TestSplitLockdownModels_DefaultsWhenEmpty(t *testing.T) {
 	// One slug per product tier slot, kept in sync with the frontend's
 	// DEFAULT_MODEL / ADVANCED_MODEL and the agentcore mirrors.
 	wantContains := []string{
-		"google/gemini-3.7-flash",
+		"google/gemini-3.8-flash",
 		"openai/gpt-5.6-sol",
 	}
 	for _, w := range wantContains {

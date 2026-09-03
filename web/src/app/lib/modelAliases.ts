@@ -31,8 +31,8 @@
 // dropped across tool loops and Anthropic hard-400s with "Invalid
 // `signature` in `thinking` block" (root-caused + live-verified
 // 2026-06-04).
-export const DEFAULT_MODEL = "google/gemini-3.7-flash";
-export const DEFAULT_MODEL_LABEL = "Google: Gemini 3.7 Flash";
+export const DEFAULT_MODEL = "google/gemini-3.8-flash";
+export const DEFAULT_MODEL_LABEL = "Google: Gemini 3.8 Flash";
 
 export const ADVANCED_MODEL = "openai/gpt-5.6-sol";
 export const ADVANCED_MODEL_LABEL = "OpenAI: GPT-5.6 Sol";
