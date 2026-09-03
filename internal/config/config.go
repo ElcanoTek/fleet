@@ -326,18 +326,6 @@ var allowedEnvVars = map[string]bool{
 	envSendGridAPIKey:               true,
 	envSendGridFromEmail:            true,
 
-	// ── MCP: mailbux (chat-only) ──
-	"MAILBUX_USERNAME":             true,
-	"MAILBUX_PASSWORD":             true,
-	"MAILBUX_FROM_EMAIL":           true,
-	"MAILBUX_JMAP_BASE_URL":        true,
-	"MAILBUX_SMTP_HOST":            true,
-	"MAILBUX_SMTP_PORT":            true,
-	"MAILBUX_DOWNLOAD_DIR":         true,
-	"MAILBUX_JMAP_TIMEOUT_SECONDS": true,
-	"MAILBUX_QUERY_PAGE_LIMIT":     true,
-	"MAILBUX_SEARCH_MAX_SCAN":      true,
-
 	// ── web search ──
 	"TAVILY_API_KEY": true,
 
