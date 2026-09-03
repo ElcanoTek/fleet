@@ -30,7 +30,7 @@ const (
 	// the previous DeepSeek default existed because 28 OpenRouter endpoints
 	// served that family at fp4-to-fp8. One upstream also means one prompt
 	// cache and one context length: the full 1,048,576.
-	DefaultCoreModel = "google/gemini-3.7-flash"
+	DefaultCoreModel = "google/gemini-3.8-flash"
 	// DefaultMaxModel is the strong/fallback tier — the model escalation
 	// (suggest_advanced_model) and task fallback resolve to. Exact slug, never a
 	// `~latest` alias. Unlike the previous xAI occupant of this slot, this one
@@ -68,6 +68,11 @@ var modelContextWindows = []struct {
 	// compacts early, while an over-large one feeds the upstream more than it
 	// accepts and hard-errors. Cold-start/offline only; a running fleet gets
 	// this from the live OpenRouter catalog.
+	//
+	// 3.7 keeps its row alongside the current default: the slug stays
+	// selectable (and stays the fallback an admin-configured tier may point
+	// at), and both serve the same 1,048,576 window.
+	{"google/gemini-3.8-flash", 1_048_576},
 	{"google/gemini-3.7-flash", 1_048_576},
 	{"google/gemini-2.5-pro", 1_000_000},
 	{"google/gemini-2.0", 1_000_000},

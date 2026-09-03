@@ -60,7 +60,7 @@ func testDefaults() map[string]string {
 		"approval_timeout_seconds":          "3600",
 		"phone_a_friend_enabled":            "false",
 		"subagents_enabled":                 "true",
-		"default_model":                     "google/gemini-3.7-flash",
+		"default_model":                     "google/gemini-3.8-flash",
 		"advanced_model":                    "openai/gpt-5.6-sol",
 		"memory_autoindex_enabled":          "false",
 		"error_analysis_enabled":            "true",

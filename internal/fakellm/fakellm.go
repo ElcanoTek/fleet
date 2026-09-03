@@ -148,6 +148,7 @@ func New() *Server {
 			"anthropic/claude-opus-4.8",
 			"anthropic/claude-sonnet-4.6",
 			"moonshotai/kimi-k2.6",
+			"google/gemini-3.8-flash",
 			"google/gemini-3.7-flash",
 			"google/gemini-3.5-flash",
 			"openai/gpt-5.2",

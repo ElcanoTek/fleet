@@ -35,7 +35,7 @@ model is broken* rather than *the route changed*. And because the run threw
 away the served-upstream field, there was no way to tell those two apart after
 the fact.
 
-**The default has since moved to `google/gemini-3.7-flash`**, which Google
+**The default has since moved to `google/gemini-3.8-flash`**, which Google
 serves alone and which is therefore pinned *strictly* (`Only`, no fallbacks) —
 one upstream means no pool to vary precision across, so it needs no floor. The
 floor below is unchanged and still applies to the DeepSeek family: those slugs
