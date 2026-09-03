@@ -11,9 +11,25 @@
 package httpapi
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
+
+	"github.com/ElcanoTek/fleet/internal/agent"
 )
+
+// suggestPromptRequest is the optional body of POST .../suggest-prompt.
+//
+// UpToMessageID names the assistant reply the user is saving from. The moment
+// someone decides an interaction is worth keeping is the moment they finish
+// reading a good answer — so the "Save as prompt" action lives on that reply,
+// and the distillation is cut off there. Without it, a chat that carried on
+// into an unrelated tangent would fold the tangent into the saved recipe.
+// Omitted (or zero) means the whole conversation, which is what the
+// conversation-level menu item sends.
+type suggestPromptRequest struct {
+	UpToMessageID int64 `json:"up_to_message_id"`
+}
 
 // handleSuggestPrompt backs POST /conversations/{id}/suggest-prompt. It loads
 // the conversation the caller owns, synthesizes a prompt-library draft from
@@ -33,12 +49,20 @@ func (s *Server) handleSuggestPrompt(w http.ResponseWriter, r *http.Request, con
 		return
 	}
 
+	// The body is optional and advisory: a malformed or absent one means "the
+	// whole conversation", never a 400. The dialog that posts it is a
+	// convenience affordance, not a contract the user should see fail.
+	var req suggestPromptRequest
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&req)
+	}
+
 	history, err := s.store.LoadHistory(ctx, convID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	transcript := transcriptFromHistory(history)
+	transcript := transcriptFromHistory(historyUpTo(history, req.UpToMessageID))
 	if strings.TrimSpace(transcript) == "" {
 		http.Error(w, "conversation has no content to save as a prompt", http.StatusUnprocessableEntity)
 		return
@@ -55,4 +79,21 @@ func (s *Server) handleSuggestPrompt(w http.ResponseWriter, r *http.Request, con
 		"description": draft.Description,
 		"content":     draft.Content,
 	})
+}
+
+// historyUpTo truncates history after the entry with the given persisted id,
+// inclusive. A zero id (no cut requested) or an id that isn't in this history
+// (a client-side optimistic id, an entry since compacted away) returns the
+// history unchanged — a mis-aimed cut degrades to "distill everything", which
+// is the behavior the user had before the per-message action existed.
+func historyUpTo(history []agent.HistoryEntry, id int64) []agent.HistoryEntry {
+	if id <= 0 {
+		return history
+	}
+	for i, e := range history {
+		if e.ID == id {
+			return history[:i+1]
+		}
+	}
+	return history
 }

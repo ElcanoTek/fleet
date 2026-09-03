@@ -15,6 +15,46 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **`fleet cleanup` reports leftover connector output in the bundle checkout.**
+  The client bundle is the one tree on a fleet box that nothing reclaims:
+  `fleet cleanup` sweeps podman layers and build caches, the scheduler's daily
+  sweep prunes run history and archives logs, and neither has ever known the
+  bundle exists. `fleet doctor` already reports it on demand; this closes the
+  case where nobody runs doctor, since `fleet cleanup` is what
+  `fleet-maintenance.timer` runs daily and unattended, so the finding now
+  reaches the journal on its own. It **reports and never deletes**: a daily
+  unattended `git clean` in an operator's checkout would also remove local
+  edits, scratch files and half-finished bundle changes, which is a worse
+  failure than the disk it would reclaim, and unlike a build cache none of it is
+  reproducible. Removal stays a printed human command. Counted from `git status
+  --porcelain -uall` so it sees whatever an agent actually named (and the files
+  inside an untracked directory, not just the directory), including ignored
+  ones — a bundle carrying the `.gitignore` safety net is still filling.
+
+- **Downloading a chat now offers a file a person can actually read.** The
+  conversation kebab's one option was "Download as JSON" — a label naming a
+  format the reader had to already understand, attached to the one artifact a
+  non-technical user can do the least with. It is now **"Download chat…"**,
+  which opens a chooser describing each option by what you get to do with it:
+  **Web page** (the default — opens on a double-click, looks like the chat, and
+  prints to PDF for a client), **Text document** (Markdown, to paste into
+  email, Word, Docs or Notion), and **Raw data** (the JSON, unchanged, for
+  developers). A checkbox adds the agent's working trail — tool calls, their
+  results, and its thinking — which is **off by default**, so a 289-entry
+  research chat downloads as the conversation rather than as its machinery. The
+  rendered formats are served from a new `?format=html` and `?include=full` on
+  `GET /conversations/{id}/export`; the endpoint's default response is still
+  byte-for-byte the JSON it always returned.
+- **"Save as prompt" now sits under the reply that earned it.** Distilling a
+  chat into a reusable prompt-library entry already existed, but only behind
+  the conversation kebab in the sidebar — which meant finding and hovering the
+  chat's row, a step removed from the moment someone decides an interaction was
+  worth keeping. The action now also appears in the footer of every finished
+  assistant reply, beside Copy and Branch, and passes that reply's id
+  (`up_to_message_id` on `POST /conversations/{id}/suggest-prompt`) so the
+  draft is distilled from the exchange the user pointed at rather than from
+  whatever the chat wandered into afterwards. The review-and-edit dialog, the
+  permissions, and the `POST /prompts` save path are unchanged.
 - **MCP subprocesses no longer run in — or write into — the client bundle
   checkout.** fleet launched every stdio MCP server with its cwd set to the
   bundle root, because manifest args like `mcp/foo.py` are bundle-relative. A

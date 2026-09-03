@@ -21,6 +21,11 @@ import { useDialogA11y } from "@/app/shared/ui/useDialogA11y";
 type Props = {
   conversationId: string;
   conversationTitle: string;
+  // Set when the user saved from a specific assistant reply ("Save as prompt"
+  // under a message): the server cuts the distilled transcript there, so a
+  // later tangent in the same chat can't leak into the saved recipe. Omitted
+  // by the conversation-level menu item, which means "the whole chat".
+  upToMessageId?: number;
   onClose: () => void;
 };
 
@@ -32,6 +37,7 @@ const FIELD =
 export function SavePromptDialog({
   conversationId,
   conversationTitle,
+  upToMessageId,
   onClose,
 }: Props) {
   const [phase, setPhase] = useState<Phase>("loading");
@@ -59,7 +65,14 @@ export function SavePromptDialog({
       try {
         const response = await fetch(
           `/api/conversations/${conversationId}/suggest-prompt`,
-          { method: "POST", signal: controller.signal },
+          {
+            method: "POST",
+            signal: controller.signal,
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(
+              upToMessageId ? { up_to_message_id: upToMessageId } : {},
+            ),
+          },
         );
         if (!response.ok) {
           throw new Error(
@@ -93,7 +106,7 @@ export function SavePromptDialog({
       cancelled = true;
       controller.abort();
     };
-  }, [conversationId, attempt]);
+  }, [conversationId, upToMessageId, attempt]);
 
   const save = async () => {
     setSaving(true);
@@ -191,8 +204,9 @@ export function SavePromptDialog({
           ) : (
             <div className="grid gap-3">
               <p className="m-0 text-xs text-[var(--color-text-muted)]">
-                This draft was distilled from the conversation — review and trim
-                it before saving. Nothing is stored until you save.
+                {upToMessageId
+                  ? "This draft was distilled from the chat up to the reply you saved from — review and trim it before saving. Nothing is stored until you save."
+                  : "This draft was distilled from the conversation — review and trim it before saving. Nothing is stored until you save."}
               </p>
               <label className="grid gap-1 text-sm">
                 Name

@@ -32,7 +32,7 @@ func TestRenderConversationMarkdown(t *testing.T) {
 		entry(t, "assistant", "text", agent.TextContent{Text: "done"}),
 	}
 
-	md := renderConversationMarkdown(conv, history, at)
+	md := renderConversationMarkdown(conv, history, at, scopeFull)
 
 	mustContain := []string{
 		"# Conversation: Debug session",
@@ -64,7 +64,7 @@ func TestRenderConversationMarkdown_Defaults(t *testing.T) {
 		{Role: "assistant", Type: "text", Content: json.RawMessage(`not valid json`)}, // skipped
 		entry(t, "user", "text", agent.TextContent{Text: "hi"}),
 	}
-	md := renderConversationMarkdown(conv, history, time.Unix(0, 0).UTC())
+	md := renderConversationMarkdown(conv, history, time.Unix(0, 0).UTC(), scopeFull)
 	if !strings.Contains(md, "# Conversation: Untitled") {
 		t.Errorf("empty title should render 'Untitled', got:\n%s", md)
 	}
