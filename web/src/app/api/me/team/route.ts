@@ -8,11 +8,15 @@ export const runtime = "nodejs";
 /**
  * /api/me/team — proxy to chat-server's /me/team (#1157): the caller's own
  * role/team, and the self-serve team write. GET returns
- * { email, role, team_id, admin }; PUT { team_id } creates a team (or leaves
- * one with ""). Joining a team that already has members is refused upstream
- * with 409 — team membership is what exposes team-shared projects and
- * team-visible conversations, so it stays admin-granted (ADR-0047). Every
- * status and message is passed through verbatim.
+ * { email, role, team_id, admin } plus what LEAVING would cost —
+ * { shared_projects, shared_chats } — so the Leave confirm can state the
+ * consequences before acting rather than reporting them afterwards
+ * (ADR-0057). PUT { team_id } creates a team (or leaves one with ""), and
+ * leaving also unshares the chats this user shared into that team's projects.
+ * Joining a team that already has members is refused upstream with 409 — team
+ * membership is what exposes team-shared projects and team-visible
+ * conversations, so it stays admin-granted (ADR-0047). Every status and
+ * message is passed through verbatim.
  */
 
 function passthrough(upstream: Response, body: string) {
