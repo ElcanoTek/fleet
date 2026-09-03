@@ -258,14 +258,19 @@ func probeBundleServer(name string, spec config.MCPServerConfig, timeout time.Du
 	case spec.URL != "":
 		addErr = client.AddHTTPServerWithOptions(ctx, name, spec.URL, mcp.HTTPServerOptions{Headers: spec.Headers, TLS: spec.TLS})
 	case spec.Command != "":
+		// Same shared dir the boot spawn uses, for both the token
+		// substitution and the cwd — `fleet mcp test` exists to reproduce a
+		// real boot, so it must not launch the server anywhere else.
+		shared := agentcore.SharedMCPWorkspaceDir()
 		env := spec.Env
 		if agentcore.EnvReferencesWorkspace(env) {
-			env = agentcore.ExpandWorkspaceEnv(env, agentcore.SharedMCPWorkspaceDir())
+			env = agentcore.ExpandWorkspaceEnv(env, shared)
 		}
 		// Probes have no task identity: drop ${FLEET_TASK_ID}-bearing keys like
 		// the boot-time shared spawn does, so the probe env matches production.
 		env = agentcore.ExpandTaskIDEnv(env, "")
-		addErr = client.AddStdioServer(ctx, name, spec.Command, spec.Args, env, spec.Dir)
+		addErr = client.AddStdioServer(ctx, name, spec.Command, spec.Args, env,
+			agentcore.StdioCwd(spec.Dir, spec.DirPinned, shared))
 	default:
 		addErr = fmt.Errorf("manifest entry has neither command nor url")
 	}

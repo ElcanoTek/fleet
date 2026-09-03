@@ -378,7 +378,7 @@ describe("followQueueDrain", () => {
     expect(h.loadConversationCalls).toEqual([]);
     // The chip is still there — and it is TRUE: the input is still queued,
     // and send-now on it forces the drain.
-    expect(result.current.queuedInputs[CONV]?.map((i) => i.id)).toEqual(["q1"]);
+    expect(result.current.queuedInputs.get(CONV)?.map((i) => i.id)).toEqual(["q1"]);
   });
 
   it("does nothing for a brand-new chat with no conversation yet", async () => {
@@ -425,7 +425,7 @@ describe("a direct submission the server queued instead of running", () => {
       false,
     );
     // The message is not lost — it is on the chip strip with a send-now button.
-    expect(result.current.queuedInputs[CONV]?.map((i) => i.id)).toEqual(["q1"]);
+    expect(result.current.queuedInputs.get(CONV)?.map((i) => i.id)).toEqual(["q1"]);
   });
 
   it("follows the drain and renders the turn it eventually runs", async () => {

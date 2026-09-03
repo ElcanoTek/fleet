@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 )
 
@@ -154,8 +155,34 @@ func TestSpecsToServerDefs(t *testing.T) {
 	if d := byName["http"]; d.URL != "https://x.test/mcp" || d.Headers["A"] != "b" {
 		t.Errorf("http def wrong: %+v", d)
 	}
-	if d := byName["stdio"]; d.Command != "python" || d.Dir != "/bundle" || len(d.Args) != 1 {
+	// Dir is no longer the bundle root: a stdio server launches in the shared
+	// MCP workspace so its relative output paths stop landing in the operator's
+	// bundle checkout (agentcore.StdioCwd). What the reload path MUST preserve
+	// is that this matches BuildMCPClient's spawn exactly — serverDefEqual
+	// compares Dir, so a mismatch here restarts every server on every reload.
+	if d := byName["stdio"]; d.Command != "python" || len(d.Args) != 1 {
 		t.Errorf("stdio def wrong: %+v", d)
+	}
+	wantDir := agentcore.StdioCwd("/bundle", false, agentcore.SharedMCPWorkspaceDir())
+	if d := byName["stdio"]; d.Dir != wantDir {
+		t.Errorf("stdio Dir = %q, want %q (must equal the boot spawn's cwd or every reload churns)", d.Dir, wantDir)
+	}
+}
+
+// TestSpecsToServerDefs_PinnedDirSurvives — an Agent Plugin server must still
+// launch in its plugin root. Its args are opaque strings fleet may not rewrite
+// and it resolves bundled files against that root (ADR-0054), so a workspace
+// must never displace it.
+func TestSpecsToServerDefs_PinnedDirSurvives(t *testing.T) {
+	dir := t.TempDir() // exists, so it would be chosen if the pin were ignored
+	defs := MCPServerDefs(map[string]MCPServerSpec{
+		"plugin": {Enabled: true, Command: "python", Args: []string{"s.py"}, Dir: dir, DirPinned: true},
+	})
+	if len(defs) != 1 {
+		t.Fatalf("want 1 def, got %d", len(defs))
+	}
+	if defs[0].Dir != dir {
+		t.Errorf("pinned Dir = %q, want the plugin root %q", defs[0].Dir, dir)
 	}
 }
 

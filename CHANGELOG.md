@@ -39,6 +39,41 @@ prior versions are listed because none have shipped.
   draft is distilled from the exchange the user pointed at rather than from
   whatever the chat wandered into afterwards. The review-and-edit dialog, the
   permissions, and the `POST /prompts` save path are unchanged.
+- **MCP subprocesses no longer run in — or write into — the client bundle
+  checkout.** fleet launched every stdio MCP server with its cwd set to the
+  bundle root, because manifest args like `mcp/foo.py` are bundle-relative. A
+  server resolves a relative output path against that cwd, so whenever a model
+  passed a relative `output_dir` (or a connector fell back to a relative
+  default) the file was written into the operator's git checkout: invisible to
+  the agent (the sandbox never mounts the bundle writable), untouched by
+  reclamation (which sweeps the data dir), and accumulating customer data
+  inside a git repo. One production box had collected dozens of client
+  CSV/XLSX/PDF files plus `downloads/`, `reports/`, `sources/` and `workspace/`
+  directories there. Two shipped connectors additionally allowlist
+  `os.getcwd()` as a readable root for email attachments, which made the whole
+  checkout an attachable source. Now bundle-relative script args are
+  absolutized when the bundle loads — freeing the cwd from having to be the
+  bundle root — and every spawn path launches the subprocess in the same
+  fleet-managed directory it already substitutes for `${FLEET_WORKSPACE}`
+  (`agentcore.StdioCwd`). On the interactive broker path that is the
+  per-conversation workspace, the same directory `bash`/`run_python` work in,
+  so a relative `output_dir` now lands somewhere the agent can actually read.
+  Agent Plugins keep their plugin root (an ADR-0054 contract), and a workspace
+  that is absent or not yet created on disk falls back to the old behaviour
+  rather than failing the spawn — `exec` refuses to start a process whose cwd
+  is missing.
+- **`fleet doctor` reports leftover connector output in the bundle checkout.**
+  The fix above stops the bundle filling, but removes nothing already there, and
+  neither `fleet cleanup` nor the maintenance timer has ever known about the
+  bundle — it is the one tree on the box that nothing reclaims. Step 7 now
+  reports the untracked file count and total size in the client bundle checkout
+  beside the existing data-dir and image-store headroom checks, with the review
+  and `git clean` commands. Advisory, never a failure: doctor does not delete an
+  operator's files, and some of that residue is a real client report someone may
+  still want. Measured from `git status` rather than a directory name list, so it
+  catches whatever an agent actually named, and `--ignored=no` keeps a bundle
+  that has adopted the `.gitignore` safety net from reporting clean while still
+  filling the disk.
 
 - **`fleet update` can no longer leave the client bundle silently behind.** A
   deployment is fleet AND its bundle — connector display names and

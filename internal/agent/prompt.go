@@ -216,9 +216,14 @@ type MCPServerSpec struct {
 	Command string
 	Args    []string
 	Env     map[string]string
-	// Dir is the cwd the stdio subprocess launches in (the client-config bundle
-	// root) so relative args like `mcp/foo.py` resolve there; "" inherits cwd.
+	// Dir is the FALLBACK cwd for the stdio subprocess; "" inherits cwd. A
+	// spawn with a fleet-managed workspace launches there instead
+	// (agentcore.StdioCwd), so a server's relative output path stops landing
+	// in the operator's bundle checkout.
 	Dir string
+	// DirPinned marks Dir as a contract (an Agent Plugin's plugin root) that a
+	// workspace never overrides.
+	DirPinned bool
 	// AccountVars are the base credential env-var names whose `<VAR>_<ACCOUNT>`
 	// suffixes name this server's provisioned credential seats (creds.AccountsFor).
 	AccountVars []string

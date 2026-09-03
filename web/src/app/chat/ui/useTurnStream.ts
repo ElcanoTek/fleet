@@ -305,7 +305,14 @@ export interface UseTurnStream {
   resendUserMessage: (userMessageId: number, editedContent: string) => Promise<void>;
   retryLastUserMessage: () => Promise<void>;
   // #785 pending-input queue: per-conversation snapshot + mutations.
-  queuedInputs: Record<string, QueuedInput[]>;
+  //
+  // A Map, not a Record: the key is a conversation id that arrives from the URL
+  // and from stream events, and writing it as a computed property on a plain
+  // object is the remote-property-injection shape CodeQL flags (a key like
+  // "constructor" or "__proto__" would address the prototype chain rather than
+  // a conversation). A Map has no prototype chain to address, so the class is
+  // structurally impossible rather than guarded against.
+  queuedInputs: ReadonlyMap<string, QueuedInput[]>;
   // Returns the fresh snapshot (null when the fetch failed — "unknown", not
   // "empty"), so callers can decide without re-reading React state.
   refreshQueue: (convId: string) => Promise<QueuedInput[] | null>;
@@ -376,7 +383,9 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
 
   // #785: per-conversation pending-input queue, fed by queue.updated events
   // on the live stream and by GET /queue on submit/reconnect.
-  const [queuedInputs, setQueuedInputs] = useState<Record<string, QueuedInput[]>>({});
+  const [queuedInputs, setQueuedInputs] = useState<ReadonlyMap<string, QueuedInput[]>>(
+    () => new Map<string, QueuedInput[]>(),
+  );
   // One drain-follower per conversation (followQueueDrain re-enters itself
   // through the reattach it awaits).
   const queueFollowInFlightRef = useRef<Set<string>>(new Set<string>());
@@ -386,7 +395,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       if (!res.ok) return null;
       const body = (await res.json()) as { items?: QueuedInput[] };
       const items = body.items ?? [];
-      setQueuedInputs((cur) => ({ ...cur, [convId]: items }));
+      setQueuedInputs((cur) => new Map(cur).set(convId, items));
       return items;
     } catch {
       // snapshot refresh is best-effort; the next queue.updated self-heals
@@ -985,7 +994,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     if (event.event === "queue.updated") {
       // Full snapshot on every queue mutation (#785) — no event sourcing.
       const p = payload as { items?: QueuedInput[] };
-      setQueuedInputs((cur) => ({ ...cur, [ctx.target]: p.items ?? [] }));
+      setQueuedInputs((cur) => new Map(cur).set(ctx.target, p.items ?? []));
       return;
     }
 
