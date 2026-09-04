@@ -32,6 +32,24 @@ type HistoryEntry struct {
 	Role    string          `json:"role"`    // user|assistant|tool
 	Type    string          `json:"type"`    // text|reasoning|tool_call|tool_result
 	Content json.RawMessage `json:"content"` // shape depends on Type
+
+	// InjectedContext is the server-derived suffix of a user text entry:
+	// the attachment manifest, workspace inventory, shared file library
+	// announcement, expanded context handles, skill note, connector hints.
+	// Stored in its own column (migration 056) rather than inside Content
+	// so the branch copy can leave it behind and the transcript can render
+	// it outside the user's bubble. replayHistory recomposes it for the
+	// model via ComposeUserMessage; see injected.go.
+	//
+	// `json:"-"` ON PURPOSE, and it is load-bearing. This struct is
+	// marshaled straight into the PUBLIC share snapshot and the team-shared
+	// read view, both of which deliberately expose "the transcript only".
+	// A field that serialized by default would publish another user's
+	// absolute attachment paths to every one of those readers the moment it
+	// was populated. Handlers that legitimately need it (the owner's own
+	// conversation GET, the live turn stream) opt in explicitly by naming
+	// it in their own response shape.
+	InjectedContext string `json:"-"`
 }
 
 // entryTypeToolCall is the HistoryEntry.Type for an assistant tool call. The
@@ -288,7 +306,12 @@ func replayHistory(entries []HistoryEntry) ([]fantasy.Message, error) {
 			case "user":
 				flushAssistant()
 				parts := loadHistoryImageParts(c.Images)
-				out = append(out, fantasy.NewUserMessage(c.Text, parts...))
+				// The model sees what it saw the first time: the user's text
+				// plus that turn's injected context (rows written before
+				// migration 056 carry it inside c.Text already, and their
+				// InjectedContext is empty — ComposeUserMessage is then the
+				// identity).
+				out = append(out, fantasy.NewUserMessage(ComposeUserMessage(c.Text, e.InjectedContext), parts...))
 			case "assistant":
 				pendingAssistant = append(pendingAssistant, fantasy.TextPart{Text: c.Text})
 			}

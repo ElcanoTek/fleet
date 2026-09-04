@@ -612,8 +612,14 @@ func TestDeleteUserRefusesToTakeTeamSharedProjects(t *testing.T) {
 	if !errors.As(err, &owns) {
 		t.Fatalf("delete: got %v, want OwnsSharedProjectsError", err)
 	}
-	if len(owns.Projects) != 1 || owns.Projects[0] != "Quant" {
-		t.Errorf("named projects = %v, want [Quant]", owns.Projects)
+	if len(owns.Projects) != 1 || owns.Projects[0].Name != "Quant" {
+		t.Errorf("named projects = %v, want [Quant]", owns.ProjectNames())
+	}
+	// The id travels with the name: without it the refusal is a dead end,
+	// because an admin cannot resolve a project name to an id from their own
+	// surfaces (QA #21).
+	if len(owns.Projects) == 1 && owns.Projects[0].ID != f.project.ID {
+		t.Errorf("project id = %q, want %q", owns.Projects[0].ID, f.project.ID)
 	}
 	// Nothing was destroyed on the way to that refusal.
 	if p, _ := f.s.GetProject(f.ctx, f.project.ID); p == nil {
@@ -1148,7 +1154,7 @@ func TestRevokingProjectAccessUnfilesInsteadOfHiding(t *testing.T) {
 	}{
 		{
 			name: "the owner unticks Share with my team",
-			revoke: func(t *testing.T, f teamFixture, chats map[string]string) {
+			revoke: func(t *testing.T, f teamFixture, _ map[string]string) {
 				personal := ""
 				if _, err := f.s.UpdateProject(f.ctx, alice, f.project.ID, ProjectPatch{TeamID: &personal}); err != nil {
 					t.Fatal(err)
@@ -1161,7 +1167,7 @@ func TestRevokingProjectAccessUnfilesInsteadOfHiding(t *testing.T) {
 		},
 		{
 			name: "the project is re-pointed at another team",
-			revoke: func(t *testing.T, f teamFixture, chats map[string]string) {
+			revoke: func(t *testing.T, f teamFixture, _ map[string]string) {
 				ops := "ops"
 				if _, err := f.s.UpdateProject(f.ctx, alice, f.project.ID, ProjectPatch{TeamID: &ops}); err != nil {
 					t.Fatal(err)
@@ -1172,7 +1178,7 @@ func TestRevokingProjectAccessUnfilesInsteadOfHiding(t *testing.T) {
 		},
 		{
 			name: "the project is deleted",
-			revoke: func(t *testing.T, f teamFixture, chats map[string]string) {
+			revoke: func(t *testing.T, f teamFixture, _ map[string]string) {
 				if err := f.s.DeleteProject(f.ctx, alice, f.project.ID); err != nil {
 					t.Fatal(err)
 				}
@@ -1185,7 +1191,7 @@ func TestRevokingProjectAccessUnfilesInsteadOfHiding(t *testing.T) {
 		},
 		{
 			name: "the teammate leaves the team",
-			revoke: func(t *testing.T, f teamFixture, chats map[string]string) {
+			revoke: func(t *testing.T, f teamFixture, _ map[string]string) {
 				if _, err := f.s.SetOwnTeam(f.ctx, bob, "", false); err != nil {
 					t.Fatal(err)
 				}
@@ -1197,7 +1203,7 @@ func TestRevokingProjectAccessUnfilesInsteadOfHiding(t *testing.T) {
 		},
 		{
 			name: "an admin moves the teammate to another team",
-			revoke: func(t *testing.T, f teamFixture, chats map[string]string) {
+			revoke: func(t *testing.T, f teamFixture, _ map[string]string) {
 				ops := "ops"
 				if _, err := f.s.SetUserRoleTeam(f.ctx, bob, nil, &ops); err != nil {
 					t.Fatal(err)

@@ -606,6 +606,16 @@ func (s *Store) BranchConversation(ctx context.Context, userEmail, parentConvID 
 	// copied (the existence check above already rejected any id that isn't
 	// the parent's). When the parent is a teammate's chat the copy is narrowed
 	// to exactly what team-view showed — see the redaction note above.
+	//
+	// injected_context is deliberately NOT selected, so every copied entry
+	// carries an empty one (ADR-0058). A turn's injected context is derived
+	// per-turn state — the attachment manifest with its absolute paths, the
+	// workspace inventory of the PARENT's workspace, the library listing as
+	// it stood then — not something the brancher wrote or attached, and the
+	// paths in it name another conversation's files. The branch recomputes
+	// its own on its first turn. That is true for the owner's own fork too:
+	// one rule means no copy of a message can ever carry a path into a
+	// conversation that does not own it.
 	copyQuery := `SELECT role, type, content FROM messages
 		 WHERE conversation_id = $1 AND id <= $2`
 	if redact {
@@ -625,6 +635,16 @@ func (s *Store) BranchConversation(ctx context.Context, userEmail, parentConvID 
 			return nil, err
 		}
 		e.Content = json.RawMessage(content)
+		// Rows written BEFORE migration 056 embedded the injected blocks in
+		// the message text itself, so leaving injected_context unselected is
+		// not enough for them: strip by marker as well. Belt-and-suspenders,
+		// applied to every branch (see the copyQuery note) — a legacy row is
+		// exactly the case where a path can still be riding inside the text.
+		emptied, serr := stripLegacyInjectedText(&e)
+		if serr != nil {
+			_ = rows.Close()
+			return nil, serr
+		}
 		if redact {
 			// A user text entry carries ImageRefMeta paths pointing INTO THE
 			// OWNER'S workspace, and the agent re-reads those paths verbatim
@@ -632,12 +652,25 @@ func (s *Store) BranchConversation(ctx context.Context, userEmail, parentConvID 
 			// check. Copying them would replay the owner's uploaded images
 			// into the brancher's model context — the same leak as the tool
 			// rows, through a different door.
-			stripped, serr := stripHistoryImages(e.Content)
+			stripped, imagesRemoved, serr := stripHistoryImages(e.Content)
 			if serr != nil {
 				_ = rows.Close()
 				return nil, serr
 			}
 			e.Content = stripped
+			// An image-only user message (no typed text) leaves nothing behind
+			// once its images are gone. Writing the row anyway is what put
+			// empty bubbles in a branched transcript — a placeholder for
+			// content the copy is not allowed to carry. Emit nothing instead.
+			if imagesRemoved && entryTextIsEmpty(e) {
+				continue
+			}
+		}
+		// Same rule for a legacy attachment-only message ("here" + a block,
+		// or nothing but the block): once the injected suffix is off, an
+		// otherwise-empty entry is residue, not content.
+		if emptied {
+			continue
 		}
 		entries = append(entries, e)
 	}
@@ -696,25 +729,66 @@ func (s *Store) BranchConversation(ctx context.Context, userEmail, parentConvID 
 }
 
 // stripHistoryImages drops the image references from a text history entry,
-// leaving the text itself untouched. Used on the cross-user branch path, where
-// the paths name files in another user's workspace. A payload that does not
-// decode as TextContent is passed through unchanged — the caller's other
-// filters already restrict this to text entries, and mangling an unexpected
-// shape would be worse than copying it.
-func stripHistoryImages(raw json.RawMessage) (json.RawMessage, error) {
+// leaving the text itself untouched, and reports whether it removed any. Used
+// on the cross-user branch path, where the paths name files in another user's
+// workspace. A payload that does not decode as TextContent is passed through
+// unchanged — the caller's other filters already restrict this to text
+// entries, and mangling an unexpected shape would be worse than copying it.
+func stripHistoryImages(raw json.RawMessage) (json.RawMessage, bool, error) {
 	var tc agent.TextContent
 	if err := json.Unmarshal(raw, &tc); err != nil {
-		return raw, nil //nolint:nilerr // unknown shape: pass through, see above
+		return raw, false, nil //nolint:nilerr // unknown shape: pass through, see above
 	}
 	if len(tc.Images) == 0 {
-		return raw, nil
+		return raw, false, nil
 	}
 	tc.Images = nil
 	out, err := json.Marshal(tc)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	return out, nil
+	return out, true, nil
+}
+
+// stripLegacyInjectedText removes an injected-context suffix that a
+// pre-migration-056 row embedded in its own message text, in place on e. It
+// reports whether the strip left the entry with no text at all (an
+// attachment-only message), which the branch copy drops rather than writing an
+// empty bubble.
+//
+// Only user text entries can carry one; everything else passes through. A
+// payload that does not decode as TextContent is left alone for the same
+// reason stripHistoryImages leaves it alone.
+func stripLegacyInjectedText(e *agent.HistoryEntry) (emptied bool, err error) {
+	if e.Role != "user" || e.Type != "text" {
+		return false, nil
+	}
+	var tc agent.TextContent
+	if uerr := json.Unmarshal(e.Content, &tc); uerr != nil {
+		return false, nil //nolint:nilerr // unknown shape: pass through, see above
+	}
+	userText, _, stripped := agent.StripLegacyInjectedContext(tc.Text)
+	if !stripped {
+		return false, nil
+	}
+	tc.Text = userText
+	out, merr := json.Marshal(tc)
+	if merr != nil {
+		return false, merr
+	}
+	e.Content = out
+	return strings.TrimSpace(userText) == "" && len(tc.Images) == 0, nil
+}
+
+// entryTextIsEmpty reports whether a text entry has no visible text left. Used
+// after a strip to tell "the user wrote something" from "the row only ever
+// held content this copy may not carry".
+func entryTextIsEmpty(e agent.HistoryEntry) bool {
+	var tc agent.TextContent
+	if err := json.Unmarshal(e.Content, &tc); err != nil {
+		return false // unknown shape: never drop something we cannot read
+	}
+	return strings.TrimSpace(tc.Text) == ""
 }
 
 // userIsProjectMember reports whether email can see/use the project — the
@@ -1648,9 +1722,17 @@ func (s *Store) Get(ctx context.Context, userEmail, convID string) (*Conversatio
 
 // LoadHistory returns every stored message event for a conversation in
 // insertion order.
+//
+// injected_context (migration 056) rides along on HistoryEntry so replay hands
+// the model the same bytes it saw originally. That field is `json:"-"`, so it
+// reaches a client only through a response shape that names it explicitly —
+// the public share snapshot and the team-shared read view, both of which
+// project straight from this call, must not publish another user's attachment
+// paths. See agent/injected.go and ADR-0058.
 func (s *Store) LoadHistory(ctx context.Context, convID string) ([]agent.HistoryEntry, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, role, type, content FROM messages WHERE conversation_id = $1 ORDER BY id ASC`,
+		`SELECT id, role, type, content, injected_context
+		   FROM messages WHERE conversation_id = $1 ORDER BY id ASC`,
 		convID,
 	)
 	if err != nil {
@@ -1662,7 +1744,7 @@ func (s *Store) LoadHistory(ctx context.Context, convID string) ([]agent.History
 	for rows.Next() {
 		var e agent.HistoryEntry
 		var content string
-		if err := rows.Scan(&e.ID, &e.Role, &e.Type, &content); err != nil {
+		if err := rows.Scan(&e.ID, &e.Role, &e.Type, &content, &e.InjectedContext); err != nil {
 			return nil, err
 		}
 		e.Content = json.RawMessage(content)
@@ -1699,15 +1781,19 @@ func (s *Store) appendHistoryTx(ctx context.Context, tx *sql.Tx, convID string, 
 	now := time.Now().Unix()
 
 	var b strings.Builder
-	b.WriteString(`INSERT INTO messages (conversation_id, role, type, content, created_at) VALUES `)
-	args := make([]any, 0, len(entries)*5)
+	b.WriteString(`INSERT INTO messages (conversation_id, role, type, content, created_at, injected_context) VALUES `)
+	args := make([]any, 0, len(entries)*6)
 	for i, e := range entries {
 		if i > 0 {
 			b.WriteString(", ")
 		}
-		base := i*5 + 1
-		fmt.Fprintf(&b, "($%d, $%d, $%d, $%d, $%d)", base, base+1, base+2, base+3, base+4)
-		args = append(args, convID, e.Role, e.Type, string(e.Content), now)
+		base := i*6 + 1
+		fmt.Fprintf(&b, "($%d, $%d, $%d, $%d, $%d, $%d)", base, base+1, base+2, base+3, base+4, base+5)
+		// InjectedContext is empty for every entry this path writes today
+		// except a deliberate carry-over; the branch copy CLEARS it on
+		// purpose (ADR-0058), so writing the field rather than defaulting the
+		// column keeps that intent visible instead of implicit.
+		args = append(args, convID, e.Role, e.Type, string(e.Content), now, e.InjectedContext)
 	}
 	// RETURNING id (in VALUES order) so we can link the extracted FTS plaintext
 	// rows back to their messages. Postgres preserves multi-row INSERT order.

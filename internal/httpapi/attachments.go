@@ -2,7 +2,9 @@ package httpapi
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base32"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -34,11 +36,41 @@ type uploadedAttachment struct {
 	MIME string `json:"mime,omitempty"`
 }
 
-// postAttachments accepts one-or-more files via multipart/form-data under
-// the "files" field and stashes them under <EmailAttachmentDir>/uploads/<token>/.
-// A fresh random token per upload keeps paths unguessable and prevents
-// collisions across users. The existing SweepAttachments loop covers the
-// uploads subtree without any extra wiring.
+// userUploadsRoot is the uploads subtree belonging to one user:
+// <EmailAttachmentDir>/uploads/<sha256(email) truncated>/.
+//
+// The per-user segment is what makes containment double as an OWNERSHIP check
+// (ADR-0058). Before it, uploads/ was one flat tree of random tokens and
+// validateAttachments confined a claimed path only to that root — so any
+// authenticated caller who learned a path (a copied message, an export, a
+// branched transcript) could name another user's upload in their OWN /chat
+// request and have fleet stage it, or read an image's bytes straight into
+// their model context. Confining to the caller's own subtree instead makes
+// that a rejection rather than a read.
+//
+// The segment is a hash, not the address: the uploads tree is world-readable
+// to the host user and shows up in operator `du` output and backups, and
+// there is no reason for it to enumerate who uses the box. Truncated to 32 hex
+// chars — this is a namespace separator, not a secret, and the containment
+// check never trusts it as one (the caller never supplies the segment; the
+// server derives it from the authenticated identity).
+//
+// An empty identity hashes to its own bucket rather than to the uploads root,
+// so a caller with no email still cannot reach anyone else's subtree. That is
+// a test-only shape: every route reaching here sits behind the auth + member
+// middleware, which refuses a request with no X-User-Email.
+func userUploadsRoot(baseDir, userEmail string) string {
+	sum := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(userEmail))))
+	return filepath.Join(baseDir, "uploads", hex.EncodeToString(sum[:])[:32])
+}
+
+// postAttachments accepts one-or-more files via multipart/form-data under the
+// "files" field and stashes them under
+// <EmailAttachmentDir>/uploads/<user>/<token>/. A fresh random token per
+// upload keeps paths unguessable and prevents collisions; the per-user segment
+// above is what makes a path from one user unusable by another. The existing
+// SweepAttachments loop walks the whole tree, so the extra level needs no
+// extra wiring.
 func (s *Server) postAttachments(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -78,8 +110,10 @@ func (s *Server) postAttachments(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	baseDir := filepath.Join(s.cfg.EmailAttachmentDir, "uploads")
-	if err := os.MkdirAll(baseDir, 0o755); err != nil { //nolint:gosec // mounted into the sandbox container, needs to be readable by that user
+	// Per-caller subtree, derived from the authenticated identity (never from
+	// anything in the request body) — see userUploadsRoot.
+	baseDir := userUploadsRoot(s.cfg.EmailAttachmentDir, userFromCtx(r.Context()))
+	if err := os.MkdirAll(baseDir, 0o755); err != nil { //nolint:gosec // host-side upload landing area, readable by the host user only
 		http.Error(w, "mkdir uploads: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -117,7 +151,7 @@ func saveUpload(baseDir string, fh *multipart.FileHeader) (uploadedAttachment, e
 		return uploadedAttachment{}, fmt.Errorf("token: %w", err)
 	}
 	dir := filepath.Join(baseDir, token)
-	if err := os.MkdirAll(dir, 0o755); err != nil { //nolint:gosec // mounted into the sandbox container, needs to be readable by that user
+	if err := os.MkdirAll(dir, 0o755); err != nil { //nolint:gosec // host-side landing dir; the staged copy in the conversation workspace is what a sandbox reads
 		return uploadedAttachment{}, fmt.Errorf("mkdir: %w", err)
 	}
 
@@ -275,13 +309,28 @@ func splitAttachmentsByKind(atts []chatAttachment) (images []chatAttachment, oth
 }
 
 // validateAttachments drops any entries whose path isn't a regular file
-// sitting under <EmailAttachmentDir>/uploads/. Returns the accepted subset.
-// Silent on rejections — logging is enough; the agent just won't see them.
-func (s *Server) validateAttachments(atts []chatAttachment) []chatAttachment {
+// sitting under THIS CALLER's uploads subtree
+// (<EmailAttachmentDir>/uploads/<user>/, see userUploadsRoot). Returns the
+// accepted subset. Silent on rejections — logging is enough; the agent just
+// won't see them.
+//
+// The per-user root is the ownership gate (ADR-0058): a path is accepted only
+// if the caller is the user who uploaded it, so learning another user's upload
+// path — from a copied message, an export, a branched transcript — no longer
+// lets a request pull that file into the caller's turn (neither staged for the
+// sandbox nor read host-side as vision input).
+//
+// Uploads written before the per-user segment existed sit at
+// uploads/<token>/… and therefore no longer validate for anyone. They are
+// TTL-swept ephemera whose only lifetime is between POST /attachments and the
+// next /chat call, so the blast radius is a message in flight across a
+// restart: the composer's file is dropped exactly as any other unvalidatable
+// entry is, and re-attaching it works.
+func (s *Server) validateAttachments(userEmail string, atts []chatAttachment) []chatAttachment {
 	if len(atts) == 0 {
 		return nil
 	}
-	root, err := filepath.Abs(filepath.Join(s.cfg.EmailAttachmentDir, "uploads"))
+	root, err := filepath.Abs(userUploadsRoot(s.cfg.EmailAttachmentDir, userEmail))
 	if err != nil {
 		return nil
 	}
@@ -297,7 +346,7 @@ func (s *Server) validateAttachments(atts []chatAttachment) []chatAttachment {
 			continue
 		}
 		abs = filepath.Clean(abs)
-		// Confine the path to the uploads root: filepath.Rel splits off the
+		// Confine the path to the caller's uploads root: filepath.Rel splits off the
 		// remainder below root, and filepath.IsLocal rejects a "../" escape
 		// that Rel would otherwise hand back with a nil error. Everything
 		// after the guard uses ONLY the vetted remainder rejoined to the
@@ -312,7 +361,7 @@ func (s *Server) validateAttachments(atts []chatAttachment) []chatAttachment {
 			// %q, not %s: a.Path here is the RAW client-supplied string on the
 			// branch where containment just FAILED, so it is hostile by
 			// construction. %q escapes CR/LF and cannot forge a log entry.
-			log.Printf("attachment rejected (outside uploads root): %q", a.Path)
+			log.Printf("attachment rejected (outside the caller's own uploads root): %q", a.Path)
 			continue
 		}
 		abs = filepath.Join(root, rel)
@@ -331,18 +380,18 @@ func (s *Server) validateAttachments(atts []chatAttachment) []chatAttachment {
 	return accepted
 }
 
-// appendAttachmentsBlock tacks a short, LLM-facing markdown section onto
-// the user message describing each attachment. Image attachments are flagged
-// as already-attached vision input so the agent doesn't waste a view_file
-// call on raw image bytes; non-image files keep absolute paths so view_file
-// or downstream tools can reach them. The agent's system prompt tells it
-// what to do with this section.
+// appendAttachmentsBlock tacks a short, LLM-facing markdown section onto the
+// turn's injected context describing each attachment. Image attachments are
+// flagged as already-attached vision input so the agent doesn't waste a
+// view_file call on raw image bytes; non-image files keep absolute paths so
+// view_file or downstream tools can reach them. The agent's system prompt
+// tells it what to do with this section.
 //
-// stagedInWorkspace flips the trailer for the non-image list: under the
-// kubernetes backend the files were copied into the conversation workspace
-// (see stageAttachmentsIntoWorkspace), so the uploads-area TTL warning would
-// be describing a tree the paths no longer point at.
-func appendAttachmentsBlock(message string, images, others []chatAttachment, stagedInWorkspace bool) string {
+// The non-image paths are the STAGED copies in this conversation's workspace
+// (stageAttachmentsIntoWorkspace) on both sandbox backends, so the trailer
+// describes the workspace lifetime rather than the uploads-area TTL: the
+// uploads tree is control-plane state no sandbox can resolve (ADR-0058).
+func appendAttachmentsBlock(message string, images, others []chatAttachment) string {
 	if len(images) == 0 && len(others) == 0 {
 		return message
 	}
@@ -359,39 +408,23 @@ func appendAttachmentsBlock(message string, images, others []chatAttachment, sta
 		for _, a := range others {
 			fmt.Fprintf(&b, "- `%s` (%s, %s)\n", a.Name, humanSize(a.Size), a.Path)
 		}
-		if stagedInWorkspace {
-			b.WriteString("\nThese files are saved in this conversation's workspace (the `attachments/` subdirectory) and live as long as the conversation does. If the user wants to keep a file beyond that, offer to persist it via `mcp_fast_io_upload`.\n")
-		} else {
-			b.WriteString("\nThese files are saved to the conversation's temporary uploads area and will be swept after the normal TTL. If the user wants to keep a file for future sessions, offer to persist it via `mcp_fast_io_upload`.\n")
-		}
+		b.WriteString("\nThese files are saved in this conversation's workspace (the `attachments/` subdirectory) and live as long as the conversation does. If the user wants to keep a file beyond that, offer to persist it via `mcp_fast_io_upload`.\n")
 	}
 	return b.String()
 }
 
-// ── kubernetes attachment staging ────────────────────────────────────────
-
-// attachmentsNeedWorkspaceStaging reports whether non-image attachments must
-// be copied into the conversation workspace to be readable from a sandbox.
-//
-// Podman: no — the uploads root is a same-path read-only bind mount, so the
-// agent reads the original bytes with zero copies. Kubernetes: yes — a
-// sandbox pod mounts only the workspace claim, the uploads root lives on the
-// control plane's data volume, and before this seam existed the attachments
-// block advertised absolute paths no pod could resolve (the gap called out in
-// docs/DEPLOYMENT-KUBERNETES.md). A nil pool (tests, degraded boot) stages
-// nothing, preserving the podman-shaped default.
-func (s *Server) attachmentsNeedWorkspaceStaging() bool {
-	if s.agent == nil {
-		return false // fixture servers run handlers with no engine at all
-	}
-	pool := s.agent.SandboxPool()
-	return pool != nil && pool.KubernetesBackend() != nil
-}
+// ── per-conversation attachment staging ──────────────────────────────────
 
 // stageAttachmentsIntoWorkspace copies validated non-image attachments into
-// <conversation workspace>/attachments/ — inside the workspace claim, so the
-// advertised path resolves in every sandbox pod — and rewrites each entry's
-// Path to the staged copy.
+// <conversation workspace>/attachments/ — the one tree every sandbox sees on
+// both backends (the podman workspace bind mount; the kubernetes workspace
+// claim) — and rewrites each entry's Path to the staged copy.
+//
+// This is the reachability mechanism AND the scoping boundary (ADR-0058,
+// docs/ATTACHMENT-SCOPING.md). The uploads root is mounted into no sandbox at
+// all, so an uploads path resolves nowhere inside one: knowing another user's
+// upload path is no longer enough to read it, and each turn reads through a
+// path in the conversation it belongs to.
 //
 // Inputs are expected from validateAttachments, but the stager does not TRUST
 // its caller: each entry's Path is re-confined to uploadsRoot with the same
@@ -407,7 +440,10 @@ func (s *Server) attachmentsNeedWorkspaceStaging() bool {
 // have already read mid-conversation is not.
 //
 // Per-entry failures degrade rather than fail the turn: the entry keeps its
-// uploads path (exactly the pre-staging behavior) and the error is logged.
+// uploads path and the error is logged. That degradation now FAILS CLOSED
+// rather than falling back to the original bytes — nothing mounts the uploads
+// root, so the agent gets a not-found on that path and says so, instead of
+// reading a file through a tree no conversation owns.
 func stageAttachmentsIntoWorkspace(uploadsRoot, convID string, atts []chatAttachment) []chatAttachment {
 	if len(atts) == 0 {
 		return atts

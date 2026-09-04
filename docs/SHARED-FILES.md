@@ -18,14 +18,14 @@ admin uploads (Settings → Shared files, or POST /shared-files)
 
 The staged tree lives under the **workspace root** because that is the one
 directory visible inside sandboxes on *both* backends — the podman bind mount
-and the kubernetes workspace claim. (The chat-attachment uploads root, by
-contrast, is a host-only bind mount that kubernetes pods cannot see; the
-library deliberately does not repeat that shape.) But the workspace mount is
-read-write, so the staged tree alone could be tampered with by a turn.
-(Per-conversation chat attachments solve the same reachability problem the
-per-conversation way: under the kubernetes backend they are copied into the
-conversation's own workspace directory at send time — see
-[DEPLOYMENT-KUBERNETES.md](DEPLOYMENT-KUBERNETES.md).) Hence:
+and the kubernetes workspace claim. (The chat-attachment uploads root is
+host-only state that no sandbox mounts on either backend; chat attachments
+solve the same reachability problem the per-conversation way, by being copied
+into the sending conversation's own workspace directory at send time — see
+[ATTACHMENT-SCOPING.md](ATTACHMENT-SCOPING.md) and
+[ADR-0058](adr/0058-per-conversation-attachment-scoping.md).) But the workspace
+mount is read-write, so the staged tree alone could be tampered with by a turn.
+Hence:
 
 - **Canonical bytes** stay in `<DataDir>/shared_files/<id>` — never mounted
   into any sandbox, so no agent can corrupt what the admin uploaded. Downloads

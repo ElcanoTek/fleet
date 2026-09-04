@@ -1,0 +1,32 @@
+-- 056_message_injected_context.sql — store a turn's SERVER-INJECTED context
+-- next to the user's message instead of inside it.
+--
+-- Every chat turn appends server-derived blocks to the user's message before
+-- the model sees it: the attachment manifest (with absolute paths), the
+-- workspace inventory, the shared file library announcement, expanded
+-- `@file`/`@url` context handles, the skill-invocation note, connector
+-- recommendations. Until now those blocks were concatenated INTO
+-- messages.content.text, which made them indistinguishable from what the user
+-- typed. Two consequences, both real:
+--
+--   * Branching a teammate's team-shared chat copies the parent's user
+--     messages. The copy therefore carried the OWNER'S attachment paths, and
+--     the brancher's sandbox read those files by path — the brancher attached
+--     nothing (docs/ATTACHMENT-SCOPING.md, ADR-0058).
+--   * The transcript renders the user bubble from that same text, so an
+--     admin-published "Shared file library" block reads as if the user typed
+--     it.
+--
+-- This column is the separation: content.text keeps exactly what the user
+-- wrote, injected_context keeps the derived suffix. The model still sees both
+-- (the prompt assembly concatenates them, byte-for-byte as before); the branch
+-- copy takes the text and leaves the suffix behind.
+--
+-- Additive and backward compatible: NOT NULL with a '' DEFAULT, so existing
+-- rows read as "no separately-stored injected context" and no table rewrite is
+-- needed (Postgres stores the default in the catalog). Legacy rows whose text
+-- still embeds the blocks keep rendering exactly as they do today, and the
+-- branch path strips them defensively by marker (see
+-- agent.StripLegacyInjectedContext).
+ALTER TABLE messages
+    ADD COLUMN IF NOT EXISTS injected_context TEXT NOT NULL DEFAULT '';

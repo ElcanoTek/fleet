@@ -551,6 +551,31 @@ func TestAdminUserDeleteRefusesOwnedSharedProjects(t *testing.T) {
 	if !strings.Contains(w.Body.String(), "Quant") {
 		t.Errorf("the 409 must name the project to transfer: %s", w.Body.String())
 	}
+	// The body is JSON and carries the project ID alongside the name. Names
+	// alone made the refusal a dead end: it told the admin to transfer the
+	// project and gave them no route to the control that does it, and the id
+	// cannot be recovered client-side (GET /projects is scoped to the caller's
+	// own and team-visible projects; an admin is usually neither).
+	var refusal struct {
+		Error    string `json:"error"`
+		Projects []struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"owns_shared_projects"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &refusal); err != nil {
+		t.Fatalf("409 body is not JSON: %v (%s)", err, w.Body.String())
+	}
+	if !strings.Contains(refusal.Error, "transfer them to another member first") {
+		t.Errorf("error prose = %q, want the next step spelled out", refusal.Error)
+	}
+	if len(refusal.Projects) != 1 {
+		t.Fatalf("owns_shared_projects = %+v, want exactly one", refusal.Projects)
+	}
+	if refusal.Projects[0].ID != f.project.ID || refusal.Projects[0].Name != "Quant" {
+		t.Errorf("owns_shared_projects[0] = %+v, want {%s Quant}",
+			refusal.Projects[0], f.project.ID)
+	}
 	if u, err := f.st.GetUser(f.ctx, "alice@x.com"); err != nil || u == nil {
 		t.Error("the refused delete must leave the account intact")
 	}

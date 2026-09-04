@@ -81,6 +81,33 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **A branched chat could read the original owner's attached file.** Branching
+  a teammate's team-shared chat copies the transcript only — no tool calls, no
+  tool results — but the copied *user message* still carried the block the
+  server had appended to it, absolute upload path included, and the fork's
+  `run_python` opened that path and read the rows. The brancher had attached
+  nothing. Two things are fixed. A turn's **server-injected context** (the
+  attachment manifest, the workspace inventory, the shared file library
+  announcement, expanded `@file`/`@url` handles, the skill note, connector
+  hints) is now stored in its own column (migration 056) instead of inside the
+  message text, so a copy takes the user's words and leaves the rest behind —
+  and the transcript can show it outside the user's bubble, as
+  `injected_context` on each history entry, rather than as words the user
+  typed. Legacy rows whose text still embeds those blocks are stripped by
+  marker at branch time. And **chat uploads are no longer reachable by path**:
+  the uploads tree is mounted into no sandbox on either backend (attachments
+  are copied into the *sending* conversation's workspace at send time, as the
+  kubernetes backend already did), and uploads are scoped per user so naming
+  another user's upload in your own `/chat` request is a rejection rather than
+  a read — for the sandbox and for vision input alike. Where a copy may carry
+  none of a message's content it now writes nothing, instead of an empty
+  bubble. The model still sees exactly what it saw before, joined in the
+  governed prompt assembly and byte-stable for the prompt cache. See
+  [`docs/ATTACHMENT-SCOPING.md`](docs/ATTACHMENT-SCOPING.md) and
+  [ADR-0058](docs/adr/0058-per-conversation-attachment-scoping.md); the
+  remaining cross-conversation workspace-root visibility is named there as a
+  separate, unfixed change.
+
 - **A chat shared with one team could be handed to another, silently.**
   `conversations.team_visible` was a bare boolean, so every read worked out
   *who* it was shared with from the owner's **current** team. Moving someone

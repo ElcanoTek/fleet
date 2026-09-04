@@ -31,6 +31,7 @@ import {
 import { ConnField, ConnForm, ConnPanel, SetSection } from "../../ui/panels";
 import { useIsAdmin } from "../../useIsAdmin";
 import { DeleteRefusal, parseOwnedSharedProjects } from "./DeleteRefusal";
+import type { OwnedSharedProject } from "./DeleteRefusal";
 import { Icon } from "@/app/shared/ui/Icon";
 import { NoticeBanner } from "@/app/shared/ui/NoticeBanner";
 
@@ -406,6 +407,10 @@ export default function AdminUsersPage() {
   const [deleteError, setDeleteError] = useState<{
     email: string;
     message: string;
+    // The projects the fail-closed guard named, WITH their ids, so each can
+    // link at its own transfer control. Undefined for any other failure, and
+    // for a server predating the structured 409 body.
+    projects?: OwnedSharedProject[];
   } | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
   // ── discovery toolbar state (search / filters / grouping) ──
@@ -611,19 +616,45 @@ export default function AdminUsersPage() {
         { method: "DELETE" },
       );
       if (!res.ok) {
-        // readErrorText's 200-char rule (an anti-HTML-error-page guard) is too
-        // tight for THIS body: the fail-closed refusal grows one project name
-        // at a time, and an account owning a handful of them would have had
-        // its whole explanation replaced by "Delete failed (409)." — the exact
-        // sentence the admin needs. So the refusal gets a larger, still
-        // bounded allowance, and only when the body actually is that refusal.
         const raw = (await res.text()).trim();
-        const isRefusal = parseOwnedSharedProjects(raw).length > 0;
-        throw new Error(
-          raw.length > 0 && raw.length <= (isRefusal ? 1000 : 200)
-            ? raw
-            : `Delete failed (${res.status}).`,
-        );
+        // The fail-closed refusal is JSON carrying {id, name} per project, so
+        // the notice can link at each transfer control. A pre-structured
+        // server answers in plain text; that still renders, with names parsed
+        // out of the prose and no links.
+        let message = "";
+        let projects: OwnedSharedProject[] | undefined;
+        try {
+          const body = JSON.parse(raw) as {
+            error?: string;
+            owns_shared_projects?: OwnedSharedProject[];
+          };
+          if (typeof body.error === "string") message = body.error.trim();
+          if (Array.isArray(body.owns_shared_projects)) {
+            const named = body.owns_shared_projects.filter(
+              (p) => p && typeof p.id === "string" && typeof p.name === "string",
+            );
+            if (named.length > 0) projects = named;
+          }
+        } catch {
+          message = raw;
+        }
+        // readErrorText's 200-char rule (an anti-HTML-error-page guard) is too
+        // tight for THIS body: the refusal grows one project name at a time,
+        // and an account owning a handful of them would have had its whole
+        // explanation replaced by "Delete failed (409)." — the exact sentence
+        // the admin needs. So it gets a larger, still bounded allowance, and
+        // only when the body actually is that refusal.
+        const isRefusal =
+          Boolean(projects) || parseOwnedSharedProjects(message).length > 0;
+        setDeleteError({
+          email: u.email,
+          message:
+            message.length > 0 && message.length <= (isRefusal ? 1000 : 200)
+              ? message
+              : `Delete failed (${res.status}).`,
+          projects,
+        });
+        return;
       }
       setUsers((prev) =>
         prev ? prev.filter((x) => x.email !== u.email) : prev,
@@ -1183,7 +1214,10 @@ export default function AdminUsersPage() {
               ) : null}
               {/* The refusal, where the action was taken. */}
               {deleteError && deleteError.email === menu.email ? (
-                <DeleteRefusal message={deleteError.message} />
+                <DeleteRefusal
+                  message={deleteError.message}
+                  projects={deleteError.projects}
+                />
               ) : null}
               {/* Deleting an account is a cascade, not a de-provision, and the
                   two-click button alone said none of it. The one thing it

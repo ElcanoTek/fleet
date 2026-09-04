@@ -12,7 +12,6 @@ import (
 	"errors"
 	"log"
 	"net/http"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -377,45 +376,55 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 
 	// Attachment metadata (if any) is re-validated server-side, then split
 	// by kind. Images flow into the model as multimodal vision input via
-	// TurnInput.ImageAttachments; other files keep the legacy markdown
-	// reference path so view_file etc. can still reach them. Both kinds
-	// are mentioned in the appended block so the agent sees what arrived.
-	validAttachments := s.validateAttachments(req.Attachments)
+	// TurnInput.ImageAttachments; other files are staged into this
+	// conversation's workspace and referenced by path, so view_file / bash /
+	// run_python can reach them. Both kinds are named in the injected block
+	// below so the agent sees what arrived.
+	// Validated against the CALLER's own uploads subtree: naming another
+	// user's upload path is a rejection, not a read (ADR-0058).
+	validAttachments := s.validateAttachments(user, req.Attachments)
 	imageAttachments, otherAttachments := splitAttachmentsByKind(validAttachments)
-	// Kubernetes backend only: copy non-image attachments into the
-	// conversation workspace (the claim every sandbox pod mounts) and
-	// advertise those paths — the uploads root is control-plane state no pod
-	// can see. Images are exempt: their bytes reach the model host-side as
-	// vision input on both backends. Podman keeps its zero-copy read-only
-	// mount of the uploads root.
-	stagedAttachments := s.attachmentsNeedWorkspaceStaging()
-	if stagedAttachments {
-		otherAttachments = stageAttachmentsIntoWorkspace(
-			filepath.Join(s.cfg.EmailAttachmentDir, "uploads"), conv.ID, otherAttachments)
-	}
-	userMessage := appendAttachmentsBlock(req.Message, imageAttachments, otherAttachments, stagedAttachments)
+	// Copy non-image attachments into THIS conversation's workspace and
+	// advertise those paths (ADR-0058). The uploads root is control-plane
+	// state no sandbox mounts on either backend, so the staged copy is what
+	// makes an attachment readable at all — and a path in one conversation's
+	// workspace is not a path another conversation's turn was ever handed.
+	// Images are exempt: their bytes reach the model host-side as vision
+	// input, never through a sandbox read.
+	otherAttachments = stageAttachmentsIntoWorkspace(
+		userUploadsRoot(s.cfg.EmailAttachmentDir, user), conv.ID, otherAttachments)
+	// Everything appended from here on is SERVER-INJECTED context, not
+	// something the user typed: it is accumulated separately, persisted in its
+	// own column (migration 056), and joined to the user's text only for the
+	// provider call (agent.ComposeUserMessage). That split is what keeps a
+	// branch copy — and the transcript's user bubble — free of the owner's
+	// attachment paths and the admin's library listing. Chaining the SAME
+	// appenders from an empty base preserves their byte layout, so
+	// text+injected recomposes exactly the string this used to build.
+	injected := appendAttachmentsBlock("", imageAttachments, otherAttachments)
 	// Surface files persisted from earlier turns. The agent's run_python
 	// kernel resets each turn but its workspace dir doesn't — without this,
 	// a report downloaded on turn 1 gets forgotten by turn 4 even though
 	// it's still on disk. Empty workspaces (first turn) skip the block.
-	userMessage = appendWorkspaceInventoryBlock(userMessage, tools.WorkspaceDirForConversation(conv.ID))
+	injected = appendWorkspaceInventoryBlock(injected, tools.WorkspaceDirForConversation(conv.ID))
 	// Announce the cross-chat shared file library (docs/SHARED-FILES.md) the
 	// same way: read-only paths under shared/ the agent can use immediately.
-	userMessage = s.appendSharedFilesBlock(turnCtx, userMessage)
+	injected = s.appendSharedFilesBlock(turnCtx, injected)
 	// Composer context handles (#517, opt-in): expand any `@url:<url>` /
 	// `@file:"path"` in the user's message into the turn context. A no-op when
 	// disabled; failures degrade to notices so the turn always proceeds.
-	userMessage = s.applyContextHandles(turnCtx, userMessage, req.Message, conv.ID)
+	injected = s.applyContextHandles(turnCtx, injected, req.Message, conv.ID)
 	// Explicit skill invocation (#513 phase 1): a message whose first line starts
 	// with "/<skill-name>" (exact match against the bundle roster) gets a block
 	// appended telling the agent to read that skill's SKILL.md now. Because the
-	// block lands on the persisted user message, the transcript records which
-	// skill was invoked. Unknown "/tokens" are ignored — no block, no error.
-	userMessage = s.applySkillInvocation(turnCtx, user, userMessage, req.Message)
+	// block is persisted with the user message (as its injected context), the
+	// transcript still records which skill was invoked. Unknown "/tokens" are
+	// ignored — no block, no error.
+	injected = s.applySkillInvocation(turnCtx, user, injected, req.Message)
 	// Connector auto-recommendation (#512, opt-in): if the message is relevant to
 	// an Optional connector the user hasn't enabled, note it so the agent can
 	// suggest connecting it via /settings/connections (never auto-connecting).
-	userMessage = s.applyConnectorRecommendations(userMessage, req.Message, req.EnabledOptional)
+	injected = s.applyConnectorRecommendations(injected, req.Message, req.EnabledOptional)
 
 	// Prime the buffer with the metadata events so a late reattach
 	// still sees conversation identity + turn id in its replay. The
@@ -439,9 +448,16 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 		turnStarted["queued"] = true
 	}
 	buf.Emit("turn.started", turnStarted)
-	buf.Emit("user.message", map[string]any{
-		"text": userMessage,
-	})
+	// `text` is what the USER typed; `injected_context` is the server-derived
+	// suffix, carried as its own field so a client renders it outside the user
+	// bubble (or not at all) instead of as words the user wrote. Reload agrees
+	// with the live stream: the conversation GET splits the same two halves.
+	// Omitted when empty so the common turn's frame does not grow.
+	userEvent := map[string]any{"text": req.Message}
+	if injected != "" {
+		userEvent["injected_context"] = injected
+	}
+	buf.Emit("user.message", userEvent)
 	if queueRowID != "" {
 		// Same reason as the metadata events above: seed the queue snapshot so
 		// a client that attaches to THIS turn learns the queue's current shape
@@ -475,7 +491,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 			s.activeTurns.Done()
 		}()
 		defer releaseOnce()
-		s.runTurnAsync(turnCtx, turnCancel, buf, turnToken, conv, user, req.Message, userMessage, history, append(memoryContents(memories), projectMemoryBullets...), projectInstructions, toAgentImageAttachments(imageAttachments), steer)
+		s.runTurnAsync(turnCtx, turnCancel, buf, turnToken, conv, user, req.Message, injected, history, append(memoryContents(memories), projectMemoryBullets...), projectInstructions, toAgentImageAttachments(imageAttachments), steer)
 		// The turn (and its deferred finishTurn) is done: settle this turn's
 		// queue rows against the durable #798 record — the drained row
 		// completes only if its user entry committed (a pre-commit failure
@@ -572,7 +588,12 @@ func (s *Server) runTurnAsync(
 	buf *turnBuffer,
 	turnToken uint64,
 	conv *store.Conversation,
-	user, userInput, userMessage string,
+	// userInput is what the user typed; injectedContext is this turn's
+	// server-derived suffix (attachment manifest, workspace inventory, shared
+	// library, expanded handles, skill note, connector hints). They travel
+	// separately all the way into TurnInput: the run loop joins them for the
+	// provider call and persists them in separate columns (ADR-0058).
+	user, userInput, injectedContext string,
 	history []agent.HistoryEntry,
 	memories []string,
 	projectInstructions string,
@@ -628,7 +649,8 @@ func (s *Server) runTurnAsync(
 	commits := &turnCommits{store: s.store, convID: conv.ID, turnID: buf.turnID, journal: journal}
 
 	res, err := s.agent.RunTurn(turnCtx, TurnInput{
-		UserMessage:               userMessage,
+		UserMessage:               userInput,
+		InjectedContext:           injectedContext,
 		Persona:                   conv.Persona,
 		Model:                     conv.Model,
 		History:                   history,

@@ -361,6 +361,27 @@ The UI is a collapsed **Transfer ownership…** control in the project settings
 dialog (it is a once-in-a-project action, not a routine one), backed by
 `GET /projects/{id}/members` for the picker.
 
+**The refusal names projects as data, not only as prose, because a name alone
+was a dead end.** The `409` body is JSON:
+
+```json
+{"error": "this account still owns team-shared projects (Quant) — transfer them to another member first, then delete the account",
+ "owns_shared_projects": [{"id": "…", "name": "Quant"}]}
+```
+
+The ids are the point. Every transfer surface is keyed by project id, and an
+admin cannot resolve a name to one from their own screens: `GET /projects` is
+scoped to the *caller's* own and team-visible projects, and an admin is usually
+neither the owner nor a member of the project they are being asked to have
+transferred. So the refusal renders where the delete was clicked — in the
+editor panel, wrapped — with one **Transfer {project}** link per project,
+pointing at `/chat?project={id}&settings=1`: the deep link that opens that
+project's settings dialog, where **Transfer ownership…** lives. Without it the
+admin was told what to do and handed no way to do it. The `error` field keeps
+the exact sentence, so a client that predates the structured body still shows
+the explanation (and falls back to parsing the names out of the prose, as
+links that only reach the Projects surface).
+
 ## Deviations from the brief
 
 - **The Projects modal already had a shared-memory list** (per project row), so

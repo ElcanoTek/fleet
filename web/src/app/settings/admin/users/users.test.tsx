@@ -804,7 +804,55 @@ describe("AdminUsersPage", () => {
     expect(message.className).toContain("[overflow-wrap:anywhere]");
   });
 
-  it("offers one Transfer link per named project", async () => {
+  // The refusal a current server sends: JSON carrying {id, name} per project,
+  // which is what lets each link land ON the transfer control rather than on
+  // the Projects surface with a manual step left over.
+  const ownsRefusalBody = (projects: { id: string; name: string }[]) =>
+    JSON.stringify({
+      error:
+        "this account still owns team-shared projects (" +
+        projects.map((p) => p.name).join(", ") +
+        ") — transfer them to another member first, then delete the account",
+      owns_shared_projects: projects,
+    });
+
+  it("links each named project straight at its transfer control", async () => {
+    refuseDelete(
+      "bob@x.com",
+      ownsRefusalBody([
+        { id: "11111111-1111-1111-1111-111111111111", name: "alpha" },
+        { id: "22222222-2222-2222-2222-222222222222", name: "beta" },
+      ]),
+    );
+    const panel = await confirmDelete("bob@x.com");
+
+    // ?project=<id>&settings=1 is the deep link chat reads on boot: it opens
+    // the project's settings dialog, where "Transfer ownership…" lives. An
+    // admin cannot get there any other way — GET /projects is scoped to the
+    // caller's own and team-visible projects, and an admin is usually neither
+    // the owner nor a member.
+    expect(
+      within(panel).getByRole("link", { name: "Transfer alpha" }),
+    ).toHaveAttribute(
+      "href",
+      "/chat?project=11111111-1111-1111-1111-111111111111&settings=1",
+    );
+    expect(
+      within(panel).getByRole("link", { name: "Transfer beta" }),
+    ).toHaveAttribute(
+      "href",
+      "/chat?project=22222222-2222-2222-2222-222222222222&settings=1",
+    );
+    expect(within(panel).getAllByRole("link").length).toBe(2);
+    // The prose still reads as the server wrote it.
+    expect(within(panel).getByRole("alert")).toHaveTextContent(
+      /still owns team-shared projects \(alpha, beta\)/,
+    );
+  });
+
+  it("falls back to names parsed from prose when the body carries no ids", async () => {
+    // A server predating the structured body. The refusal must still explain
+    // itself; the links just cannot be precise, so they point at Projects.
     refuseDelete(
       "bob@x.com",
       "this account still owns team-shared projects (alpha, beta) — " +
@@ -814,10 +862,6 @@ describe("AdminUsersPage", () => {
 
     const alpha = within(panel).getByRole("link", { name: "Transfer alpha" });
     const beta = within(panel).getByRole("link", { name: "Transfer beta" });
-    // The 409 carries project NAMES only (no id), and every transfer surface
-    // is keyed by project id — so the honest destination is the Projects
-    // surface in chat, where that project's settings dialog holds the
-    // collapsed "Transfer ownership…" control. See DeleteRefusal.tsx.
     expect(alpha).toHaveAttribute("href", PROJECTS_SURFACE_HREF);
     expect(beta).toHaveAttribute("href", PROJECTS_SURFACE_HREF);
     expect(within(panel).getAllByRole("link").length).toBe(2);

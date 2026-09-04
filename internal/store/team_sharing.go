@@ -302,17 +302,42 @@ var ErrNotAProjectMember = errors.New("the new owner must be a member of the pro
 // owns team-shared projects. Deleting it would take those projects — and every
 // team learning in them — away from people who are still here, so the delete
 // fails closed and names what to transfer first.
-type OwnsSharedProjectsError struct{ Projects []string }
+type OwnsSharedProjectsError struct{ Projects []ProjectRef }
 
 func (e *OwnsSharedProjectsError) Error() string {
-	return "account still owns team-shared projects: " + strings.Join(e.Projects, ", ")
+	return "account still owns team-shared projects: " + strings.Join(e.ProjectNames(), ", ")
 }
 
-// TeamSharedProjectsOwnedBy lists the NAMES of team-shared projects the user
-// owns — what a delete would destroy, and what an admin must transfer first.
+// ProjectNames is the display half of the refusal — what a human reads in the
+// sentence. The ids travel alongside it so the client can link to the control
+// that resolves the refusal; see ProjectRef.
+func (e *OwnsSharedProjectsError) ProjectNames() []string {
+	out := make([]string, 0, len(e.Projects))
+	for _, p := range e.Projects {
+		out = append(out, p.Name)
+	}
+	return out
+}
+
+// ProjectRef is a project's identity and its label together.
+//
+// The refusal used to carry NAMES only, which made it a dead end: the admin
+// was told to "transfer them to another member first" and had no route to the
+// transfer control. Resolving a name to an id from the admin surface is not
+// possible either — GET /projects is scoped to the caller's own and
+// team-visible projects, and an admin is usually neither the owner nor a
+// member of the project they are being asked to have transferred. So the id
+// travels with the name, and the client links straight at it (QA #21).
+type ProjectRef struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+// TeamSharedProjectsOwnedBy lists the team-shared projects the user owns —
+// what a delete would destroy, and what an admin must transfer first.
 // Personal projects are excluded: nobody else can see them, so they belong
 // with the account.
-func (s *Store) TeamSharedProjectsOwnedBy(ctx context.Context, email string) ([]string, error) {
+func (s *Store) TeamSharedProjectsOwnedBy(ctx context.Context, email string) ([]ProjectRef, error) {
 	return teamSharedProjectsOwnedBy(ctx, s.db, normalizeEmail(email), "")
 }
 
@@ -320,7 +345,7 @@ func (s *Store) TeamSharedProjectsOwnedBy(ctx context.Context, email string) ([]
 // the matching rows locked — what DeleteUser's fail-closed guard needs so a
 // concurrent "share this project" cannot slip past the check and be deleted by
 // the very statement the check was protecting against.
-func teamSharedProjectsOwnedByTx(ctx context.Context, tx *sql.Tx, email string) ([]string, error) {
+func teamSharedProjectsOwnedByTx(ctx context.Context, tx *sql.Tx, email string) ([]ProjectRef, error) {
 	return teamSharedProjectsOwnedBy(ctx, tx, normalizeEmail(email), " FOR UPDATE")
 }
 
@@ -329,18 +354,18 @@ type queryer interface {
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 }
 
-func teamSharedProjectsOwnedBy(ctx context.Context, q queryer, email, lock string) ([]string, error) {
+func teamSharedProjectsOwnedBy(ctx context.Context, q queryer, email, lock string) ([]ProjectRef, error) {
 	rows, err := q.QueryContext(ctx,
-		`SELECT name FROM projects WHERE owner_email = $1 AND team_id <> '' ORDER BY name`+lock,
+		`SELECT id, name FROM projects WHERE owner_email = $1 AND team_id <> '' ORDER BY name`+lock,
 		email)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []string
+	var out []ProjectRef
 	for rows.Next() {
-		var n string
-		if err := rows.Scan(&n); err != nil {
+		var n ProjectRef
+		if err := rows.Scan(&n.ID, &n.Name); err != nil {
 			return nil, err
 		}
 		out = append(out, n)

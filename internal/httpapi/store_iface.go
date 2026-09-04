@@ -153,8 +153,9 @@ type chatStore interface {
 	// ListProjectTeamConversations is the project home's Team section: the
 	// team-shared chats OTHER members contributed to this project.
 	ListProjectTeamConversations(ctx context.Context, callerEmail, projectID string) ([]store.Conversation, error)
-	// ProjectImpact is what deleting the project destroys — the counts the
-	// delete confirm states before an owner answers.
+	// ProjectImpact is what the project's destructive edits cost: what a
+	// delete destroys, and how many teammates' chats unticking "Share with my
+	// team" unfiles. Both confirms state the numbers before an owner answers.
 	ProjectImpact(ctx context.Context, projectID string) (store.ProjectImpact, error)
 	// TransferProjectOwnership hands a project to another member — the fix for
 	// "the owner left", which used to freeze the definition and destroy the

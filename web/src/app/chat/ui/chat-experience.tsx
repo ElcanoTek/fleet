@@ -2663,12 +2663,20 @@ export function ChatExperience({
   // and, when it can, which team it shares with. undefined = not read yet
   // (the dialog stays neutral rather than claiming "no team").
   const [myTeam, setMyTeam] = useState<string | undefined>(undefined);
+  // Whether the caller is a fleet admin, from the same read. The Share
+  // dialog's no-team state branches on it: an admin can add themselves to a
+  // team, a member has to ask. undefined until the read lands, so neither
+  // pointer is claimed prematurely.
+  const [myTeamAdmin, setMyTeamAdmin] = useState<boolean | undefined>(
+    undefined,
+  );
   const loadMyTeam = useCallback(async () => {
     try {
       const res = await fetch("/api/me/team", { cache: "no-store" });
       if (!res.ok) return;
-      const me = (await res.json()) as { team_id?: string };
+      const me = (await res.json()) as { team_id?: string; admin?: boolean };
       setMyTeam(me.team_id ?? "");
+      setMyTeamAdmin(me.admin ?? false);
     } catch {
       // Best-effort: leave it unknown.
     }
@@ -2682,6 +2690,59 @@ export function ChatExperience({
       cancelled = true;
     };
   }, [loadMyTeam]);
+
+  // Per-project counts of chats teammates shared into it — what the rail's
+  // per-project empty state quotes so it stops telling a teammate a project
+  // is empty while its home lists two shared chats (QA #7).
+  //
+  // ONE read for every project, not one per project: `?scope=team` already
+  // returns every team-visible chat the caller may read, carrying project_id
+  // and user_email, gated on `team_visible AND team_shared_with = my team`
+  // (store.ListTeamConversations). Reducing that list is exactly the
+  // population each project home's Team section shows, minus the caller's own
+  // chats — which that section also excludes, because they already render in
+  // "your chats" with the team badge.
+  //
+  // `undefined` means NOT KNOWN (unread, or the read failed) and the rail then
+  // asserts no number. A loaded map omits projects with none, so a missing key
+  // there is a real zero — the two cases must stay distinguishable.
+  const [teamSharedChatCounts, setTeamSharedChatCounts] = useState<
+    Record<string, number> | undefined
+  >(undefined);
+  const loadTeamSharedChatCounts = useCallback(async () => {
+    try {
+      const res = await fetch("/api/conversations?scope=team", {
+        cache: "no-store",
+      });
+      if (!res.ok) {
+        // 400 is "you have no team": a KNOWN empty, not an unknown.
+        if (res.status === 400) setTeamSharedChatCounts({});
+        return;
+      }
+      const data = (await res.json()) as {
+        conversations?: { project_id?: string; user_email?: string }[];
+      };
+      const mine = userEmail.trim().toLowerCase();
+      const counts: Record<string, number> = {};
+      for (const c of data.conversations ?? []) {
+        if (!c.project_id) continue;
+        if (mine && (c.user_email ?? "").trim().toLowerCase() === mine) continue;
+        counts[c.project_id] = (counts[c.project_id] ?? 0) + 1;
+      }
+      setTeamSharedChatCounts(counts);
+    } catch {
+      // Leave it unknown rather than claiming zero.
+    }
+  }, [userEmail]);
+  useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) void loadTeamSharedChatCounts();
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [loadTeamSharedChatCounts]);
 
   const projectHomeProject = projectHome
     ? (projects.find((p) => p.id === projectHome.id) ?? null)
@@ -3995,12 +4056,32 @@ export function ChatExperience({
     // stripped immediately so a reload or the warm-session snapshot never
     // re-applies a stale selection.
     let deepLinkConvId: string | null = null;
+    let deepLinkProject: { id: string; settings: boolean } | null = null;
     {
       const params = new URLSearchParams(window.location.search);
       const c = params.get("c");
       if (isRealConvId(c)) {
         deepLinkConvId = c;
         params.delete("c");
+      }
+      // Deep-link (?project=<id>[&settings=1]): open a project's home, or its
+      // settings dialog — which is where Transfer ownership… lives. Admin →
+      // Users needs it: deleting an account that still owns team-shared
+      // projects is refused with "transfer them to another member first", and
+      // an admin is usually neither the owner nor a member, so there was no
+      // route from that refusal to the control that resolves it (QA #21).
+      const projectID = params.get("project");
+      if (projectID && isRealConvId(projectID)) {
+        deepLinkProject = {
+          id: projectID,
+          settings: params.get("settings") === "1",
+        };
+        params.delete("project");
+        params.delete("settings");
+      }
+      // Consumed once and stripped immediately, so a reload or the warm-session
+      // snapshot never re-applies a stale selection.
+      if (deepLinkConvId || deepLinkProject) {
         const qs = params.toString();
         window.history.replaceState(
           null,
@@ -4008,6 +4089,10 @@ export function ChatExperience({
           window.location.pathname + (qs ? `?${qs}` : ""),
         );
       }
+    }
+    if (deepLinkProject) {
+      const target = deepLinkProject;
+      setProjectHome({ id: target.id, settings: target.settings });
     }
 
     // Personas — nice-to-have; the server falls back to default. Sets the
@@ -4420,6 +4505,7 @@ export function ChatExperience({
           }
           onDeleteProject={(projectID) => setPendingProjectDelete(projectID)}
           projects={projects}
+          teamSharedChatCounts={teamSharedChatCounts}
           onMoveToProject={(conversationId, projectID) =>
             void moveConversationToProject(conversationId, projectID)
           }
@@ -4977,6 +5063,10 @@ export function ChatExperience({
               ) ?? null
             }
             myTeam={myTeam}
+            userEmail={userEmail}
+            isAdmin={myTeamAdmin}
+            teamSharedProjects={teamSharedProjects}
+            error={railError}
             busy={shareBusy}
             copied={shareLinkCopied}
             buildShareUrl={buildShareUrl}
@@ -4989,10 +5079,20 @@ export function ChatExperience({
             }}
             onStopLink={(c) => void unshareConversation(c)}
             onSetTeamShared={(c, visible) => void setTeamShared(c, visible)}
+            // Deliberately does NOT close the dialog: the move is optimistic
+            // upstream, so staying open is what lets the team toggle go live
+            // in place instead of sending the user back to re-open Share.
+            onMoveToProject={(conversationId, projectID) =>
+              void moveConversationToProject(conversationId, projectID)
+            }
             onOpenProjectSettings={(projectID) => {
               setShareDialog(null);
               setTeamChatView(null);
               setProjectHome({ id: projectID, settings: true });
+            }}
+            onOpenProjects={() => {
+              setShareDialog(null);
+              setProjectsModal({});
             }}
             onClose={() => setShareDialog(null)}
           />
@@ -5361,7 +5461,11 @@ export function ChatExperience({
                   </button>
                 </div>
               ) : null}
-              <div className="pointer-events-none absolute inset-x-0 -top-16 h-16 bg-[var(--sticky-fade)]" />
+              {/* The image: hint matters — --sticky-fade is a gradient, and the
+                  un-hinted arbitrary-value form emits background-color, which
+                  drops gradient values (see Composer.tsx's own note). Without
+                  it this fade painted nothing at all. */}
+              <div className="pointer-events-none absolute inset-x-0 -top-16 h-16 bg-[image:var(--sticky-fade)]" />
               <div className="mx-auto mb-1 w-full max-w-[53rem] px-1 sm:mb-1.5 sm:px-0">
                 {showStats ? (
                   <ConversationTotalsChip
