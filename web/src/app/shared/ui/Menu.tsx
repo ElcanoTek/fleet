@@ -18,8 +18,8 @@
 //   - Escape on the flyout closes the flyout and returns focus to its trigger
 //     item; Escape on the main menu closes the menu and returns focus to the
 //     anchor that opened it.
-//   - An outside pointer-down (outside BOTH menu and flyout), a scroll, or a
-//     resize closes the menu.
+//   - An outside pointer-down (outside BOTH menu and flyout), a scroll that
+//     moves the anchor, or a resize closes the menu.
 //   - Opening focuses the first item; opening the flyout focuses its first item.
 //   - The open animation is suppressed under prefers-reduced-motion.
 //
@@ -226,6 +226,7 @@ export function Menu({
 }) {
   const menuRef = useRef<HTMLDivElement | null>(null);
   const flyoutRef = useRef<HTMLDivElement | null>(null);
+  const positionedAnchorRef = useRef<DOMRect | null>(null);
   const showFlyout = Boolean(flyout) && flyoutOpen;
 
   // Measure + reveal before paint. Runs after every render (see file header).
@@ -233,7 +234,11 @@ export function Menu({
     if (!open) return;
     const anchor = anchorRef.current;
     const menu = menuRef.current;
-    if (anchor && menu) positionMenu(menu, anchor.getBoundingClientRect(), placement);
+    if (anchor && menu) {
+      const rect = anchor.getBoundingClientRect();
+      positionMenu(menu, rect, placement);
+      positionedAnchorRef.current = rect;
+    }
     const flyEl = flyoutRef.current;
     const flyAnchor = flyoutAnchorRef?.current;
     if (showFlyout && flyEl && flyAnchor && menu) {
@@ -291,6 +296,14 @@ export function Menu({
       const t = e.target;
       const anchor = anchorRef.current;
       if (anchor && t instanceof Node && !t.contains(anchor)) return;
+      // A browser may deliver the scroll event from revealing the anchor
+      // AFTER its click has opened this menu. That queued event does not move
+      // the anchor relative to where we just positioned the menu. Closing on
+      // it makes a first click flash the menu away, especially in a long rail.
+      // Dismiss only when scrolling actually invalidates our placement.
+      const positioned = positionedAnchorRef.current;
+      const current = anchor?.getBoundingClientRect();
+      if (positioned && current && positioned.top === current.top && positioned.left === current.left) return;
       onClose();
     };
     document.addEventListener("pointerdown", onPointerDown, true);
