@@ -5,11 +5,11 @@
 // way history.ts and protocolPills.ts are.
 //
 // Folders (the old flat, single-assignment buckets) were superseded by
-// projects and their UI removed — the server still stores/serves the field,
-// but the rail ignores it, so previously-filed chats simply reappear in
-// Pinned/Temporary (filing used to auto-pin, so most land in Pinned). Labels
-// are multi (max 10, 32 chars each) and colored by name-hash (see
-// shared/lib/labelColors).
+// projects and are gone on BOTH sides now: the UI was removed here, and the
+// server dropped the column with it (see internal/httpapi/labels.go). Chats
+// that had been filed into one simply live in Pinned/Temporary (filing used to
+// auto-pin, so most landed in Pinned). Labels are multi (max 10, 32 chars
+// each) and colored by name-hash (see shared/lib/labelColors).
 
 export const MAX_LABELS = 10;
 export const MAX_LABEL_LEN = 32;

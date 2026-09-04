@@ -13,12 +13,6 @@
 // ShareGlyph moved here verbatim from ConversationSidebar so every surface
 // that shows a share state draws the same mark.
 
-// SHARE_LINK_LABEL / SHARE_TEAM_LABEL are the audience words themselves —
-// exported so the badge, the tooltip and the dialog can never drift apart.
-export const SHARE_LINK_LABEL = "Shared by link — anyone with the link";
-export const shareTeamLabel = (team?: string) =>
-  team ? `Shared with ${team}` : "Shared with your team";
-
 // ShareGlyph is the chain link: sharing by URL. `off` adds the slash for the
 // "stop sharing" variant.
 export function ShareGlyph({ className, off }: { className?: string; off?: boolean }) {
