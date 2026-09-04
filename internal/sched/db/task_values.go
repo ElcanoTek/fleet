@@ -231,8 +231,14 @@ func unmarshalCredentialAllowlist(ns sql.NullString) models.CredentialAllowlist 
 	}
 	var result models.CredentialAllowlist
 	if err := json.Unmarshal([]byte(ns.String), &result); err != nil {
-		log.Printf("Warning: failed to unmarshal credential_allowlist: %v (input: %.100s)", err, ns.String)
-		return nil
+		// Fail CLOSED. nil means "no allowlist → inherit every global seat"
+		// (the #184 nil-vs-empty contract), so answering nil for a column we
+		// could not read would hand an unreadable restriction the widest
+		// possible grant. An empty, non-nil list is "deny all"; the task then
+		// fails loudly on its first credentialed call instead of running with
+		// seats nobody granted it.
+		log.Printf("ERROR: credential_allowlist unreadable — treating as deny-all: %v (input: %.100s)", err, ns.String)
+		return models.CredentialAllowlist{}
 	}
 	return result
 }
