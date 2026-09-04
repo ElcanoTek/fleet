@@ -40,11 +40,15 @@ operator CLI. (The `fleet-admin` shim was removed — see
 ### Go
 
 ```bash
-go build ./...     # or: make build
-go vet ./...
-golangci-lint run  # or: make lint  (golangci-lint v2.x is the lint gate)
-go test ./...      # or: make test
+make build
+go vet -tags fleet_host_executor ./...
+make lint
+make test
 ```
+
+Tests and vet need the `fleet_host_executor` tag to exercise the host-mode
+fixtures; release builds deliberately omit it. The Makefile test targets carry
+the tag and serialize packages with `-p 1`.
 
 The store / HTTP / scheduler suites need Postgres. Point them at throwaway
 databases via environment variables (these mirror CI):
@@ -54,7 +58,7 @@ export FLEET_TEST_DATABASE_URL="postgres://<user>:<pass>@localhost:5432/fleet_ch
 export CHAT_TEST_DATABASE_URL="$FLEET_TEST_DATABASE_URL"
 export DATABASE_URL="postgres://<user>:<pass>@localhost:5432/fleet_sched_test?sslmode=disable"
 export FLEET_CLIENT_CONFIG_DIR="$(pwd)/config/default"
-go test -p 1 ./... -count=1
+go test -p 1 -tags fleet_host_executor ./... -count=1
 ```
 
 The chat and scheduler migration systems both use a `schema_migrations` table
@@ -64,11 +68,7 @@ suites auto-migrate from an empty database.
 ### Web
 
 ```bash
-cd web
-npm ci
-npm run lint
-npm run test     # vitest unit tests
-npm run build
+make ci-web     # both npm audits, override canary, install, lint, types, tests, build
 ```
 
 ### Playwright (browser e2e)

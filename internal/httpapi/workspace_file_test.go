@@ -51,6 +51,9 @@ func TestWorkspaceFile_HappyPath(t *testing.T) {
 	if got := w.Header().Get("Content-Type"); !strings.HasPrefix(got, "image/png") {
 		t.Errorf("Content-Type = %q, want image/png", got)
 	}
+	if got := w.Header().Get("Cache-Control"); got != "private, no-cache" {
+		t.Errorf("Cache-Control = %q, want private revalidation for mutable files", got)
+	}
 	if !strings.HasPrefix(w.Body.String(), "\x89PNG") {
 		t.Errorf("body did not start with PNG signature: %q", w.Body.String()[:min(20, w.Body.Len())])
 	}

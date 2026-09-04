@@ -25,21 +25,11 @@ export type TranscriptRow =
 /**
  * messageHasRenderableContent answers: would this message draw anything?
  *
- * Why it exists (QA finding #11). Branching a teammate's chat copies the
- * transcript only, so a turn whose whole content was an image or tool output
- * came across empty. An empty user message still rendered its bubble — a
- * ~40px rounded pill with nothing in it — and that residue is an element whose
- * measured height is decided by padding and line-box rounding rather than by
- * content. Sitting at the very bottom of a virtualized, dynamically-measured
- * transcript, a row like that is exactly what a stick-to-bottom loop
- * oscillates against: measure, total size shifts a pixel or two, follow-scroll
- * fires, measure again.
- *
- * The server now declines to write such a row when it branches a chat, but
- * every branch created BEFORE that fix already exists in users' databases and
- * cannot be repaired retroactively — so the renderer has to make the residue
- * inert too. Dropping the row entirely (rather than rendering an empty
- * container) means the virtualizer never allocates or measures it.
+ * Transcript-only teammate copies omit image attachments. Older copies may
+ * contain a user text row emptied by that omission; rendering it would draw
+ * a blank bubble and allocate an unnecessary virtual row. Skip that residue.
+ * This is content cleanup, not the fix for image/measurement oscillation:
+ * AssistantContent must preserve component identities for that.
  *
  * Deliberately conservative about what it drops:
  *

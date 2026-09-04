@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, cleanup, act } from "@testing-library/react";
 import { useRef } from "react";
 import { FileUpload, type FileUploadHandle } from "./FileUpload";
 
 // Component test for the React FileUpload (port of moc's file-upload.js). Covers
-// add/remove, the 250MB validation reuse, and the imperative uploadAll() handle
+// add/remove, upload validation, and the imperative uploadAll() handle
 // the task form drives at submit.
 
 function makeFile(name: string, size: number, type = "text/plain"): File {
@@ -90,5 +90,51 @@ describe("FileUpload", () => {
     handle!.addFiles([makeFile("dropped.csv", 20)]);
     await waitFor(() => expect(screen.getByText("dropped.csv")).toBeInTheDocument());
     expect(handle!.hasFiles()).toBe(true);
+  });
+
+  it("retries failed uploads without dropping attachments or reuploading successes", async () => {
+    let handle: FileUploadHandle | null = null;
+    render(<Harness onHandle={(h) => (handle = h)} />);
+    act(() => handle!.addFiles([makeFile("first.txt", 10), makeFile("second.txt", 10)]));
+    const uploader = vi.fn()
+      .mockResolvedValueOnce({ filename: "stored-first.txt" })
+      .mockRejectedValueOnce(new Error("Upload interrupted"))
+      .mockResolvedValueOnce({ filename: "stored-second.txt" });
+
+    await act(async () => {
+      await expect(handle!.uploadAll(uploader)).rejects.toThrow("Upload interrupted");
+    });
+    expect(handle!.hasFiles()).toBe(true);
+    expect(screen.getByText("Upload interrupted")).toBeInTheDocument();
+    await act(async () => {
+      expect(await handle!.uploadAll(uploader)).toEqual(["stored-first.txt", "stored-second.txt"]);
+    });
+    expect(uploader).toHaveBeenCalledTimes(3);
+    expect(uploader.mock.calls[2][0].name).toBe("second.txt");
+    expect(screen.queryByText("Upload interrupted")).not.toBeInTheDocument();
+  });
+
+  it("keeps a lone failed attachment eligible for the next submit", async () => {
+    let handle: FileUploadHandle | null = null;
+    render(<Harness onHandle={(h) => (handle = h)} />);
+    act(() => handle!.addFiles([makeFile("only.txt", 10)]));
+    await act(async () => {
+      await expect(handle!.uploadAll(vi.fn().mockRejectedValue(new Error("Offline"))))
+        .rejects.toThrow("Offline");
+    });
+    expect(handle!.hasFiles()).toBe(true);
+  });
+
+  it("deduplicates within a drop and counts only valid unique files toward the cap", () => {
+    let handle: FileUploadHandle | null = null;
+    render(<Harness onHandle={(h) => (handle = h)} />);
+    const first = makeFile("first.txt", 10);
+    const remaining = Array.from({ length: 9 }, (_, i) => makeFile(`next${i}.txt`, 10));
+    act(() => handle!.addFiles([
+      first, first, makeFile("too-large.bin", 2 * 1024 * 1024 * 1024), ...remaining,
+    ]));
+    expect(screen.getAllByText("first.txt")).toHaveLength(1);
+    expect(screen.getByText("next8.txt")).toBeInTheDocument();
+    expect(screen.queryByText(/not added/)).not.toBeInTheDocument();
   });
 });

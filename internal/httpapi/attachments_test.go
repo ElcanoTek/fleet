@@ -689,3 +689,59 @@ func TestAppendAttachmentsBlock_StagedTrailer(t *testing.T) {
 		t.Errorf("uploads-TTL trailer should not appear for staged attachments:\n%s", got)
 	}
 }
+
+// Workspace directories and files are agent-controlled. A previous turn can
+// plant a symlink at any staging component; the host must never follow it to
+// create files outside this conversation, or accept it as an existing copy.
+func TestStageAttachmentsIntoWorkspace_RefusesDestinationSymlinks(t *testing.T) {
+	for _, component := range []string{"attachments", "upload", "file"} {
+		t.Run(component, func(t *testing.T) {
+			t.Setenv("FLEET_WORKSPACE_ROOT", t.TempDir())
+			uploads := t.TempDir()
+			src := filepath.Join(uploads, "data.csv")
+			if err := os.WriteFile(src, []byte("uploaded bytes"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			convDir, err := tools.EnsureWorkspaceDir("conv-symlink")
+			if err != nil {
+				t.Fatal(err)
+			}
+			outside := t.TempDir()
+			link := filepath.Join(convDir, "attachments")
+			target := outside
+			if component != "attachments" {
+				link = filepath.Join(link, uploadSlug(uploads, src))
+			}
+			if component == "file" {
+				link = filepath.Join(link, "data.csv")
+				target = filepath.Join(outside, "secret.csv")
+				if err := os.WriteFile(target, []byte("host bytes"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(target, link); err != nil {
+				t.Fatal(err)
+			}
+			atts := []chatAttachment{{Name: "data.csv", Path: src}}
+			out := stageAttachmentsIntoWorkspace(uploads, "conv-symlink", atts)
+			if len(out) != 1 || out[0].Path != src {
+				t.Fatalf("symlink destination must remain unstaged, got %v", out)
+			}
+			entries, err := os.ReadDir(outside)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if component == "file" {
+				data, err := os.ReadFile(target)
+				if err != nil || string(data) != "host bytes" || len(entries) != 1 {
+					t.Fatalf("host target changed: entries=%v bytes=%q err=%v", entries, data, err)
+				}
+			} else if len(entries) != 0 {
+				t.Fatalf("staging wrote outside the conversation: %v", entries)
+			}
+		})
+	}
+}

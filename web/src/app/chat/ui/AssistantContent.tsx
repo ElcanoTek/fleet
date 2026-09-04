@@ -10,8 +10,8 @@
 // (including the markdown unit tests) keep working.
 
 import type { ReactElement, ReactNode } from "react";
-import { Children, isValidElement, useState } from "react";
-import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
+import { Children, isValidElement, useMemo, useState } from "react";
+import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { CopyButton } from "./ChatChips";
 import { DiffBlock } from "./DiffBlock";
@@ -75,6 +75,212 @@ export function renderAssistantContent(
   isStreaming = false,
   conversationId: string | null = null,
 ): ReactNode {
+  return <AssistantMarkdown content={content} isStreaming={isStreaming} conversationId={conversationId} />;
+}
+
+export default function AssistantMarkdown({
+  content,
+  isStreaming = false,
+  conversationId = null,
+}: {
+  content: string;
+  isStreaming?: boolean;
+  conversationId?: string | null;
+}) {
+  // Component functions are React element TYPES, not ordinary render callbacks.
+  // Recreating them on a virtualizer measurement remounts every image/preview,
+  // clearing failed-image state and causing another request + height change.
+  // Keep their identity through parent rerenders and appended streaming text.
+  const components = useMemo<Components>(() => ({
+    h1: ({ children }) => (
+      <h1 className="assistant-markdown-h1">{children}</h1>
+    ),
+    h2: ({ children }) => (
+      <h2 className="assistant-markdown-h2">{children}</h2>
+    ),
+    h3: ({ children }) => (
+      <h3 className="assistant-markdown-h3">{children}</h3>
+    ),
+    p: ({ children }) => <p className="assistant-markdown-p">{children}</p>,
+    ul: ({ children }) => (
+      <ul className="assistant-markdown-ul">{children}</ul>
+    ),
+    ol: ({ children }) => (
+      <ol className="assistant-markdown-ol">{children}</ol>
+    ),
+    li: ({ children }) => (
+      <li className="assistant-markdown-li">{children}</li>
+    ),
+    hr: () => <hr className="assistant-markdown-hr" />,
+    table: ({ children }) => (
+      <div className="assistant-markdown-table-shell">
+        <table className="assistant-markdown-table">{children}</table>
+      </div>
+    ),
+    thead: ({ children }) => (
+      <thead className="assistant-markdown-thead">{children}</thead>
+    ),
+    th: ({ children }) => (
+      <th className="assistant-markdown-th">{children}</th>
+    ),
+    td: ({ children }) => (
+      <td className="assistant-markdown-td">{children}</td>
+    ),
+    code: ({ children, className }) => {
+      const isBlock = Boolean(className);
+      if (isBlock) {
+        return (
+          <code className="assistant-markdown-code-block">{children}</code>
+        );
+      }
+      return (
+        <code className="assistant-markdown-code-inline">{children}</code>
+      );
+    },
+    pre: ({ children }) => {
+      // Intercept ```html fences and render them as a sandboxed
+      // preview so the agent can just emit HTML in a code block and
+      // have it render. Anything else falls through to the default
+      // <pre> styling, wrapped in a toolbar that exposes a copy
+      // button and the language tag.
+      //
+      // A fenced code block renders <pre> with exactly one child element:
+      // the inner <code>. Grab that single element child rather than
+      // keying off a `language-*` className — react-markdown routes the
+      // <code> through our own `code` override (so its `type` is that
+      // override, not the string "code") and an untagged fence
+      // (` ``` `…` ``` `) carries no language class at all. We still need
+      // its text in both cases so isUnifiedDiff() can catch untagged diffs
+      // the agent emits.
+      const codeChild = Children.toArray(children).find((c) =>
+        isValidElement(c),
+      ) as
+        | ReactElement<{ className?: string; children?: ReactNode }>
+        | undefined;
+      let language: string | null = null;
+      let rawText = "";
+      if (codeChild) {
+        const cls = codeChild.props.className ?? "";
+        const langMatch = cls.match(/language-([^\s]+)/i);
+        if (langMatch) language = langMatch[1].toLowerCase();
+        rawText =
+          typeof codeChild.props.children === "string"
+            ? codeChild.props.children
+            : Children.toArray(codeChild.props.children).join("");
+        if (language === "html") {
+          return (
+            <InlineHtmlPreview
+              html={rawText.replace(/\n$/, "")}
+              isStreaming={isStreaming}
+              conversationId={conversationId}
+            />
+          );
+        }
+        // Render unified diffs as a coloured, gutter-marked diff view:
+        // either an explicit ```diff / ```patch fence, or a bare code
+        // block whose content matches the unified-diff shape (so agents
+        // that forget the language tag still get highlighting). Everything
+        // else falls through to the plain toolbar+<pre> path unchanged.
+        if (
+          language === "diff" ||
+          language === "patch" ||
+          isUnifiedDiff(rawText)
+        ) {
+          return <DiffBlock raw={rawText} />;
+        }
+      }
+      const copyText = rawText.replace(/\n$/, "");
+      return (
+        <div className="assistant-markdown-pre-wrapper">
+          <div className="assistant-markdown-pre-toolbar">
+            <span className="assistant-markdown-pre-lang">
+              {language ?? ""}
+            </span>
+            <CopyButton
+              text={copyText}
+              title="Copy code to clipboard"
+              variant="compact"
+            />
+          </div>
+          <pre className="assistant-markdown-pre">{children}</pre>
+        </div>
+      );
+    },
+    // Rewrite relative <img> srcs to the per-conversation workspace
+    // file API. The agent saves a chart with `plt.savefig('chart.png')`
+    // and writes `![Chart](chart.png)` in its reply; without this
+    // rewrite the browser would request `/chart.png` (404) instead of
+    // the real workspace path. data: URLs and absolute http(s) URLs
+    // pass through unchanged so e.g. inline base64 still works and
+    // the agent can still link to public images.
+    img: ({ src, alt, title }) => {
+      const { href } = resolveWorkspaceHref(
+        typeof src === "string" ? src : "",
+        conversationId,
+      );
+      return (
+        <WorkspaceImage
+          key={href}
+          src={href}
+          alt={alt ?? ""}
+          title={title ?? undefined}
+        />
+      );
+    },
+    // Same rewrite for <a href>: when the agent writes
+    // `[Deck.pptx](Deck.pptx)` after producing the file via an MCP
+    // tool, the browser would otherwise try to navigate to a sibling
+    // path of the chat page and 404. Rewriting to the workspace API
+    // makes the link actually serve the file. Workspace links also
+    // get a `download` attribute so the browser saves the file
+    // instead of trying to render binary content inline, and external
+    // links open in a new tab so we don't lose the chat state.
+    // Visible styling (color + underline via .assistant-markdown-link)
+    // is what makes the link recognizable as a link at all — without
+    // it, react-markdown's bare <a> inherits body color and looks
+    // identical to surrounding text.
+    a: ({ href, title, children }) => {
+      const {
+        href: resolved,
+        isWorkspaceFile,
+        downloadFilename,
+      } = resolveWorkspaceHref(
+        typeof href === "string" ? href : "",
+        conversationId,
+      );
+      const isExternal = /^https?:\/\//i.test(resolved);
+      const extraProps: {
+        target?: string;
+        rel?: string;
+        download?: string;
+      } = {};
+      if (isWorkspaceFile) {
+        // Pass the original basename so the browser saves with the
+        // name the agent referenced, not a percent-encoded URL slice.
+        extraProps.download = downloadFilename || "";
+      } else if (isExternal) {
+        extraProps.target = "_blank";
+        extraProps.rel = "noopener noreferrer";
+      }
+      return (
+        <a
+          className="assistant-markdown-link"
+          href={resolved || undefined}
+          title={title ?? undefined}
+          {...extraProps}
+        >
+          {children}
+        </a>
+      );
+    },
+    strong: ({ children }) => (
+      <strong className="assistant-markdown-strong">{children}</strong>
+    ),
+    em: ({ children }) => (
+      <em className="assistant-markdown-em">{children}</em>
+    ),
+  }), [conversationId, isStreaming]);
+
   if (!content.trim()) {
     return null;
   }
@@ -102,194 +308,7 @@ export function renderAssistantContent(
       urlTransform={(url) =>
         /^sandbox:/i.test(url) ? url : defaultUrlTransform(url)
       }
-      components={{
-        h1: ({ children }) => (
-          <h1 className="assistant-markdown-h1">{children}</h1>
-        ),
-        h2: ({ children }) => (
-          <h2 className="assistant-markdown-h2">{children}</h2>
-        ),
-        h3: ({ children }) => (
-          <h3 className="assistant-markdown-h3">{children}</h3>
-        ),
-        p: ({ children }) => <p className="assistant-markdown-p">{children}</p>,
-        ul: ({ children }) => (
-          <ul className="assistant-markdown-ul">{children}</ul>
-        ),
-        ol: ({ children }) => (
-          <ol className="assistant-markdown-ol">{children}</ol>
-        ),
-        li: ({ children }) => (
-          <li className="assistant-markdown-li">{children}</li>
-        ),
-        hr: () => <hr className="assistant-markdown-hr" />,
-        table: ({ children }) => (
-          <div className="assistant-markdown-table-shell">
-            <table className="assistant-markdown-table">{children}</table>
-          </div>
-        ),
-        thead: ({ children }) => (
-          <thead className="assistant-markdown-thead">{children}</thead>
-        ),
-        th: ({ children }) => (
-          <th className="assistant-markdown-th">{children}</th>
-        ),
-        td: ({ children }) => (
-          <td className="assistant-markdown-td">{children}</td>
-        ),
-        code: ({ children, className }) => {
-          const isBlock = Boolean(className);
-          if (isBlock) {
-            return (
-              <code className="assistant-markdown-code-block">{children}</code>
-            );
-          }
-          return (
-            <code className="assistant-markdown-code-inline">{children}</code>
-          );
-        },
-        pre: ({ children }) => {
-          // Intercept ```html fences and render them as a sandboxed
-          // preview so the agent can just emit HTML in a code block and
-          // have it render. Anything else falls through to the default
-          // <pre> styling, wrapped in a toolbar that exposes a copy
-          // button and the language tag.
-          //
-          // A fenced code block renders <pre> with exactly one child element:
-          // the inner <code>. Grab that single element child rather than
-          // keying off a `language-*` className — react-markdown routes the
-          // <code> through our own `code` override (so its `type` is that
-          // override, not the string "code") and an untagged fence
-          // (` ``` `…` ``` `) carries no language class at all. We still need
-          // its text in both cases so isUnifiedDiff() can catch untagged diffs
-          // the agent emits.
-          const codeChild = Children.toArray(children).find((c) =>
-            isValidElement(c),
-          ) as
-            | ReactElement<{ className?: string; children?: ReactNode }>
-            | undefined;
-          let language: string | null = null;
-          let rawText = "";
-          if (codeChild) {
-            const cls = codeChild.props.className ?? "";
-            const langMatch = cls.match(/language-([^\s]+)/i);
-            if (langMatch) language = langMatch[1].toLowerCase();
-            rawText =
-              typeof codeChild.props.children === "string"
-                ? codeChild.props.children
-                : Children.toArray(codeChild.props.children).join("");
-            if (language === "html") {
-              return (
-                <InlineHtmlPreview
-                  html={rawText.replace(/\n$/, "")}
-                  isStreaming={isStreaming}
-                  conversationId={conversationId}
-                />
-              );
-            }
-            // Render unified diffs as a coloured, gutter-marked diff view:
-            // either an explicit ```diff / ```patch fence, or a bare code
-            // block whose content matches the unified-diff shape (so agents
-            // that forget the language tag still get highlighting). Everything
-            // else falls through to the plain toolbar+<pre> path unchanged.
-            if (
-              language === "diff" ||
-              language === "patch" ||
-              isUnifiedDiff(rawText)
-            ) {
-              return <DiffBlock raw={rawText} />;
-            }
-          }
-          const copyText = rawText.replace(/\n$/, "");
-          return (
-            <div className="assistant-markdown-pre-wrapper">
-              <div className="assistant-markdown-pre-toolbar">
-                <span className="assistant-markdown-pre-lang">
-                  {language ?? ""}
-                </span>
-                <CopyButton
-                  text={copyText}
-                  title="Copy code to clipboard"
-                  variant="compact"
-                />
-              </div>
-              <pre className="assistant-markdown-pre">{children}</pre>
-            </div>
-          );
-        },
-        // Rewrite relative <img> srcs to the per-conversation workspace
-        // file API. The agent saves a chart with `plt.savefig('chart.png')`
-        // and writes `![Chart](chart.png)` in its reply; without this
-        // rewrite the browser would request `/chart.png` (404) instead of
-        // the real workspace path. data: URLs and absolute http(s) URLs
-        // pass through unchanged so e.g. inline base64 still works and
-        // the agent can still link to public images.
-        img: ({ src, alt, title }) => {
-          const { href } = resolveWorkspaceHref(
-            typeof src === "string" ? src : "",
-            conversationId,
-          );
-          return (
-            <WorkspaceImage
-              src={href}
-              alt={alt ?? ""}
-              title={title ?? undefined}
-            />
-          );
-        },
-        // Same rewrite for <a href>: when the agent writes
-        // `[Deck.pptx](Deck.pptx)` after producing the file via an MCP
-        // tool, the browser would otherwise try to navigate to a sibling
-        // path of the chat page and 404. Rewriting to the workspace API
-        // makes the link actually serve the file. Workspace links also
-        // get a `download` attribute so the browser saves the file
-        // instead of trying to render binary content inline, and external
-        // links open in a new tab so we don't lose the chat state.
-        // Visible styling (color + underline via .assistant-markdown-link)
-        // is what makes the link recognizable as a link at all — without
-        // it, react-markdown's bare <a> inherits body color and looks
-        // identical to surrounding text.
-        a: ({ href, title, children }) => {
-          const {
-            href: resolved,
-            isWorkspaceFile,
-            downloadFilename,
-          } = resolveWorkspaceHref(
-            typeof href === "string" ? href : "",
-            conversationId,
-          );
-          const isExternal = /^https?:\/\//i.test(resolved);
-          const extraProps: {
-            target?: string;
-            rel?: string;
-            download?: string;
-          } = {};
-          if (isWorkspaceFile) {
-            // Pass the original basename so the browser saves with the
-            // name the agent referenced, not a percent-encoded URL slice.
-            extraProps.download = downloadFilename || "";
-          } else if (isExternal) {
-            extraProps.target = "_blank";
-            extraProps.rel = "noopener noreferrer";
-          }
-          return (
-            <a
-              className="assistant-markdown-link"
-              href={resolved || undefined}
-              title={title ?? undefined}
-              {...extraProps}
-            >
-              {children}
-            </a>
-          );
-        },
-        strong: ({ children }) => (
-          <strong className="assistant-markdown-strong">{children}</strong>
-        ),
-        em: ({ children }) => (
-          <em className="assistant-markdown-em">{children}</em>
-        ),
-      }}
+      components={components}
     >
       {normalizedContent}
     </ReactMarkdown>
@@ -390,22 +409,3 @@ function InlineHtmlPreview({
   );
 }
 
-// AssistantMarkdown is the component form of renderAssistantContent, and the
-// module's default export so ChatTranscript can `React.lazy(() =>
-// import("./AssistantContent"))`. This module (react-markdown + micromark +
-// remark-gfm, ~43 KiB transfer) is deliberately kept OUT of the initial /chat
-// bundle: nothing needs it until a transcript message actually renders, and
-// on the first-load path that matters most (the empty state) it never loads
-// at all. The lazy boundary lives in ChatTranscript; unit tests keep calling
-// renderAssistantContent directly.
-export default function AssistantMarkdown({
-  content,
-  isStreaming = false,
-  conversationId = null,
-}: {
-  content: string;
-  isStreaming?: boolean;
-  conversationId?: string | null;
-}) {
-  return <>{renderAssistantContent(content, isStreaming, conversationId)}</>;
-}

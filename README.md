@@ -6,8 +6,8 @@
 **A general-purpose agent fleet you run yourself — any model, in a
 sandbox, on a budget, connected to your data.**
 
-fleet is how a whole department adopts AI agents without losing sleep: every
-tool call sandboxed, every turn metered against a budget, every credential held
+fleet is how a whole department adopts AI agents without losing sleep: local
+execution sandboxed, every turn metered against a budget, every credential held
 server-side, and every working setup versioned so it runs again tomorrow — for
 the next person, on a schedule. MIT-licensed, on your infrastructure: your
 compute, your data, your know-how. You own the means of production.
@@ -15,15 +15,15 @@ compute, your data, your know-how. You own the means of production.
 ## See it in action
 
 One story, three surfaces: **plan the work in chat, automate the
-follow-through, ride along from anywhere.** The web demos are real recordings —
-real model, real sandbox, real scheduler
+follow-through, ride along from anywhere.** These recordings show the current
+web app and terminal client with scripted example data; no live model is used
 ([how they're made](docs/generating-demo-gif.md)).
 
-**Chat — plan the kickoff, live** _(real model + sandbox)_
+**Chat — plan the kickoff** _(scripted example)_
 
-![Fleet chat UI — a real streamed turn with tool use](docs/screenshots/web/chat-demo.gif)
+![Fleet chat UI — a kickoff plan with an example tool result](docs/screenshots/web/chat-demo.gif)
 
-**Operations Center — the follow-through, automated** _(real scheduler)_
+**Operations Center — the follow-through, automated** _(example tasks)_
 
 ![Fleet Operations Center — recurring automations and upcoming runs](docs/screenshots/web/ops-demo.gif)
 
@@ -52,8 +52,8 @@ them.
   change your mind tomorrow.
 
 - **Sandboxed by default.** Model-authored local execution — bash, Python, and
-  file I/O — runs in an ephemeral rootless-Podman container with **no fast path
-  around it**. MCP calls are a documented host-side broker exception so their
+  file I/O — runs in a sandbox: rootless Podman by default, or an ephemeral
+  Kubernetes pod. There is **no fast path around it**. MCP calls are a documented host-side broker exception so their
   credentials never enter the sandbox or model context. Bundle MCP and inline
   HTTP-tool execution is owned by a dedicated broker subprocess; the main
   agent process retains only public catalog metadata and the call transport.

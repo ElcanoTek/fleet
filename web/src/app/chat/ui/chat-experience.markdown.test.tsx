@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 // Imported from AssistantContent directly: chat-experience no longer re-exports
 // the markdown API — a static re-export would drag the lazy-loaded markdown
 // module back into the initial /chat bundle.
@@ -16,6 +16,36 @@ const CONV = "fdf80072-b988-47fb-b3c0-11cb9cb1f0ba";
 function renderMarkdown(md: string, conversationId: string | null = CONV) {
   return render(<>{renderAssistantContent(md, false, conversationId)}</>);
 }
+
+describe("markdown renderer identity", () => {
+  it("preserves a failed image placeholder when its parent rerenders", () => {
+    const md = "![Generated chart](chart.png)";
+    const { rerender } = renderMarkdown(md);
+    fireEvent.error(screen.getByRole("img", { name: "Generated chart" }));
+    const placeholder = screen.getByText(/couldn.t load image/);
+    rerender(<>{renderAssistantContent(md, false, CONV)}</>);
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
+    expect(screen.getByText(/couldn.t load image/)).toBe(placeholder);
+  });
+
+  it("preserves an HTML preview's source toggle while more text arrives", () => {
+    const md = "```html\n<html><body>Preview</body></html>\n```";
+    const { rerender } = renderMarkdown(md);
+    fireEvent.click(screen.getByRole("button", { name: "Show source" }));
+    rerender(<>{renderAssistantContent(`${md}\n\nMore explanation.`, false, CONV)}</>);
+    expect(screen.getByRole("button", { name: "Show preview" })).toBeInTheDocument();
+  });
+
+  it("tries a changed image source and another conversation after an earlier failure", () => {
+    const { rerender } = renderMarkdown("![Chart](old.png)");
+    fireEvent.error(screen.getByRole("img", { name: "Chart" }));
+    rerender(<>{renderAssistantContent("![Chart](new.png)", false, CONV)}</>);
+    expect(screen.getByRole("img")).toHaveAttribute("src", `/api/conversations/${CONV}/workspace/new.png`);
+    fireEvent.error(screen.getByRole("img"));
+    rerender(<>{renderAssistantContent("![Chart](new.png)", false, "other-conversation")}</>);
+    expect(screen.getByRole("img")).toHaveAttribute("src", "/api/conversations/other-conversation/workspace/new.png");
+  });
+});
 
 describe("renderAssistantContent — link rewriting", () => {
   it("rewrites a relative .pptx link to the workspace API and marks it as a download", () => {

@@ -3,41 +3,14 @@
 // stickToBottom — the transcript's follow-the-bottom behavior, as a pure
 // decision function plus the thin hook that acts on it.
 //
-// Why this is not just `scrollIntoView` in an effect (QA finding #11). A
-// teammate-branched chat that had contained images and tool output shook
-// vertically — but only when scrolled to the very end, and it survived a
-// reload. The mechanism is a feedback loop, not a data bug:
+// Dynamic rows can change height while a scroll is in flight. This hook avoids
+// redundant follow requests, waits for a smooth correction to settle, and
+// honors reduced motion. It only reacts to content changes, not scroll events.
 //
-//   1. the transcript is virtualized with DYNAMIC measurement, so a row's
-//      measured height feeds the spacer that feeds the scroller's
-//      scrollHeight;
-//   2. residue from the transcript-only branch copy (a user turn whose images
-//      were stripped) rendered an empty bubble whose height came from padding
-//      and line-box rounding rather than content;
-//   3. pinned at the bottom, a follow-scroll re-runs measurement, the total
-//      size moves by a pixel or two, and the follow fires again — with a
-//      `behavior: "smooth"` scroll still animating into a container that is
-//      re-measuring underneath it.
-//
-// The data half is fixed server-side (a branch copy no longer writes a row it
-// has emptied) and the residue in branches that ALREADY exist is dropped by
-// messageHasRenderableContent. But neither closes the loop: any future element
-// with an unstable height re-opens it. So the loop itself is guarded here, by
-// three rules:
-//
-//   - **Nothing moved, so do not scroll.** A follow only fires when the
-//     content actually grew past FOLLOW_BOTTOM_EPSILON_PX, or when the reader
-//     is genuinely off the bottom. Sub-pixel and few-pixel re-measure jitter
-//     is ignored instead of answered with another scroll.
-//   - **No re-entrant smooth follow.** A smooth scroll is asynchronous and
-//     animates over many frames; issuing a second one while the first is still
-//     running is what turns a one-off correction into an oscillation. The
-//     second is skipped until the first has had time to settle.
-//   - **Reduced motion means instant.** A smooth follow is the loop's motor,
-//     and globals.css's `scroll-behavior: auto !important` under
-//     `prefers-reduced-motion` does NOT reach it: an explicit `behavior` in
-//     scrollIntoView's options overrides the computed scroll-behavior, so the
-//     preference has to be honored here in JS.
+// These guards do not fix a renderer that repeatedly remounts its contents.
+// In particular, the teammate-branch image shake (#11) came from unstable
+// Markdown component identities resetting failed images on each measurement;
+// AssistantContent preserves those identities so that resize loop never starts.
 
 import { useEffect, useRef } from "react";
 import type { RefObject } from "react";

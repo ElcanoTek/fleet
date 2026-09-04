@@ -432,7 +432,8 @@ func TestLifecycleDBWriterMatrix(t *testing.T) {
 
 	t.Run("db.UpdateTasksStatusBatch scheduled→pending", func(t *testing.T) {
 		reset()
-		rows := seedAll(lifecycleSeedOpts{})
+		due := time.Now().UTC().Add(-time.Minute)
+		rows := seedAll(lifecycleSeedOpts{scheduledFor: &due})
 		ids := make([]uuid.UUID, 0, len(rows))
 		for _, r := range rows {
 			ids = append(ids, r.id)

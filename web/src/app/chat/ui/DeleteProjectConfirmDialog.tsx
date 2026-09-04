@@ -30,7 +30,7 @@ export function DeleteProjectConfirmDialog({
       onCancel={onCancel}
       onConfirm={onConfirm}
     >
-      Delete <NameChip>{projectName || "this project"}</NameChip>? Its team
+      Delete <NameChip suffix="?">{projectName || "this project"}</NameChip> Its team
       learnings are lost, and every member&apos;s chats leave the project and
       become temporary. Open the project to see the counts and export first.
     </ConfirmDialog>

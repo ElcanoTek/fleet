@@ -632,4 +632,7 @@ Recorded here so nobody discovers them in production:
 - **kind e2e is a documented walkthrough, not a CI job.** CI lints and
   template-renders the chart (`helm` job) and unit-tests the backend against a
   fake apiserver (including exec streaming and the poison path); it does not
-  stand up a cluster.
+  stand up a cluster. The opt-in `TestKubernetesLiveSandbox` suite covers the
+  real thing — exec upgrades, PVC bytes, and CNI-enforced egress — against a
+  disposable cluster you provide; see
+  [`KUBERNETES-LIVE-TEST.md`](KUBERNETES-LIVE-TEST.md).

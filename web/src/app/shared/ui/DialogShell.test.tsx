@@ -187,4 +187,48 @@ describe("DialogShell", () => {
       "z-[60]",
     );
   });
+
+  it("keeps Tab in the top dialog and skips disabled or hidden controls", () => {
+    // jsdom has no layout; supply rectangles for the visibility check.
+    const rects = vi.spyOn(HTMLElement.prototype, "getClientRects")
+      .mockReturnValue([{} as DOMRect] as unknown as DOMRectList);
+    try {
+      render(
+        <>
+          <button>Behind</button>
+          <DialogShell label="Outer" scrimLabel="Close outer" onDismiss={() => {}}>
+            <button>Outer action</button>
+          </DialogShell>
+          <DialogShell label="Inner" scrimLabel="Close inner" onDismiss={() => {}} layer="stacked">
+            <button>First</button>
+            <button disabled>Disabled</button>
+            <div hidden><button>Hidden</button></div>
+            <button>Last</button>
+          </DialogShell>
+        </>,
+      );
+      const first = screen.getByRole("button", { name: "First" });
+      const last = screen.getByRole("button", { name: "Last" });
+      fireEvent.keyDown(document, { key: "Tab" });
+      expect(first).toHaveFocus();
+      fireEvent.keyDown(first, { key: "Tab", shiftKey: true });
+      expect(last).toHaveFocus();
+      fireEvent.keyDown(last, { key: "Tab" });
+      expect(first).toHaveFocus();
+      screen.getByRole("button", { name: "Behind" }).focus();
+      fireEvent.keyDown(document, { key: "Tab", shiftKey: true });
+      expect(last).toHaveFocus();
+    } finally {
+      rects.mockRestore();
+    }
+  });
+
+  it("keeps focus on an empty dialog when tabbing in either direction", () => {
+    render(<DialogShell label="Empty" scrimLabel="Close" onDismiss={() => {}}>Body</DialogShell>);
+    const panel = screen.getByRole("dialog");
+    fireEvent.keyDown(panel, { key: "Tab" });
+    expect(panel).toHaveFocus();
+    fireEvent.keyDown(panel, { key: "Tab", shiftKey: true });
+    expect(panel).toHaveFocus();
+  });
 });

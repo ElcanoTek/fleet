@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
-import { ConfirmDialog } from "./ConfirmDialog";
+import { ConfirmDialog, NameChip } from "./ConfirmDialog";
 import { DeleteProjectConfirmDialog } from "./DeleteProjectConfirmDialog";
 
 // Finding #13: the shared in-app confirm every confirm path on the chat
@@ -142,6 +142,23 @@ describe("ConfirmDialog", () => {
       screen.getByRole("button", { name: "Cancel: Stop sharing this project?" }),
     );
     expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps rich titles and chip punctuation readable with a plain accessible name", () => {
+    render(
+      <ConfirmDialog
+        title="Transfer Research to Alex?"
+        titleContent={<>Transfer <NameChip>Research</NameChip> to <NameChip suffix="?">Alex</NameChip></>}
+        confirmLabel="Transfer"
+        onCancel={() => {}}
+        onConfirm={() => {}}
+      >
+        They can edit and delete the project.
+      </ConfirmDialog>,
+    );
+    expect(screen.getByRole("dialog", { name: "Transfer Research to Alex?" })).toBeInTheDocument();
+    expect(screen.getByRole("heading")).toHaveTextContent("Transfer Research to Alex?");
+    expect(screen.getByRole("button", { name: "Cancel: Transfer Research to Alex?" })).toBeInTheDocument();
   });
 
   it("holds the confirm while a titled confirm is busy", () => {

@@ -89,6 +89,35 @@ describe("Menu", () => {
     expect(screen.getByRole("menu", { name: "Input test" })).toBeInTheDocument();
   });
 
+  it("ignores a queued ancestor scroll that already happened before opening", () => {
+    const onClose = vi.fn();
+    render(<div data-testid="scroller"><Harness onClose={onClose} /></div>);
+    const anchor = screen.getByRole("button", { name: "Open" });
+    vi.spyOn(anchor, "getBoundingClientRect").mockReturnValue(new DOMRect(10, 40, 30, 20));
+    fireEvent.click(anchor);
+
+    // Revealing a scrolled-off anchor changes scrollTop synchronously, but
+    // its scroll event may arrive after the click's menu has been positioned.
+    fireEvent.scroll(screen.getByTestId("scroller"));
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole("menu", { name: "Test" })).toBeInTheDocument();
+  });
+
+  it("closes when a subsequent ancestor scroll moves the anchor", () => {
+    const onClose = vi.fn();
+    render(<div data-testid="scroller"><Harness onClose={onClose} /></div>);
+    const anchor = screen.getByRole("button", { name: "Open" });
+    const bounds = vi.spyOn(anchor, "getBoundingClientRect").mockReturnValue(new DOMRect(10, 40, 30, 20));
+    fireEvent.click(anchor);
+
+    bounds.mockReturnValue(new DOMRect(10, 30, 30, 20));
+    fireEvent.scroll(screen.getByTestId("scroller"));
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("menu", { name: "Test" })).toBeNull();
+  });
+
   it("still closes on resize when an editable control is not focused", () => {
     const onClose = vi.fn();
     render(<Harness onClose={onClose} />);

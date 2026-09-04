@@ -5,7 +5,7 @@ import { useDialogDismiss } from "@/app/shared/ui/useDialogDismiss";
 import { Menu, MenuItem, MenuSeparator } from "@/app/shared/ui/Menu";
 import type { ConversationSummary } from "./chat-experience";
 import type { Project } from "./ProjectsModal";
-import { ConfirmDialog } from "./ConfirmDialog";
+import { ConfirmDialog, NameChip } from "./ConfirmDialog";
 import { DialogShell } from "@/app/shared/ui/DialogShell";
 import { Icon } from "./Icon";
 import { ShareGlyph, TeamGlyph } from "./ShareGlyphs";
@@ -1573,6 +1573,7 @@ function TransferOwnership({
       {confirming ? (
         <ConfirmDialog
           title={`Transfer ${projectName} to ${choice}?`}
+          titleContent={<>Transfer <NameChip>{projectName}</NameChip> to <NameChip suffix="?">{choice}</NameChip></>}
           confirmLabel="Transfer"
           confirmTone="accent"
           layer="stacked"
@@ -1676,6 +1677,7 @@ function UnshareTeamConfirm({
           ? `Stop sharing ${projectName} with ${teamId}?`
           : `Stop sharing ${projectName} with your team?`
       }
+      titleContent={<>Stop sharing <NameChip>{projectName}</NameChip> with <NameChip icon={<TeamGlyph className="size-3 shrink-0" />} suffix="?">{teamId || "your team"}</NameChip></>}
       confirmLabel="Stop sharing"
       confirmTone="danger"
       layer="stacked"

@@ -27,6 +27,55 @@ than by a major-version bump.
 
 ## Recent changes
 
+### Added
+
+- **Opt-in real-cluster sandbox test:** `TestKubernetesLiveSandbox` runs the
+  Kubernetes backend against a disposable cluster — real exec streams, shared
+  PVC file operations, pod isolation, and CNI-enforced sealed egress. It skips
+  unless `FLEET_TEST_K8S_KUBECONFIG` is set; setup is in
+  [`docs/KUBERNETES-LIVE-TEST.md`](docs/KUBERNETES-LIVE-TEST.md).
+
+### Security
+
+- **Sandbox Tornado update:** the generic image replaces Fedora’s vulnerable
+  Tornado 6.5.7 with upstream 6.5.8 or newer, removes the stale RPM copy, and
+  verifies the runtime imports the patched overlay. Rebuild the sandbox image
+  to pick up the fix. Client bundles own their corresponding image definitions.
+
+- Confine host-side attachment staging and artifact opens to conversation roots,
+  closing workspace-symlink escapes and a download validation/open race. Keep
+  shared-file quota admission under the write lock so concurrent uploads cannot
+  exceed the configured library limit.
+
+### Fixed
+
+- Preserve task files and reasoning-budget edits through upload retries, reruns,
+  and unsaved-change prompts. Rerun APIs now validate attachment replacements;
+  omitted files still inherit the original task's attachments.
+- Recheck scheduler eligibility when promoting tasks, preserving concurrent
+  postponements, newly added conditions, and webhook-template conversions.
+- Resolve the first cron occurrence for recurring CLI batch tasks instead of
+  launching them immediately. Reject invalid timezone and impossible schedules.
+- Stabilize Markdown image components so unavailable artifacts in teammate
+  branches do not repeatedly remount, retry, and shake the bottom of the
+  transcript (Projects pass 2, #11). Preserve HTML preview source state too.
+- Keep the mobile sidebar open when a background chat restore finishes, so
+  project menus remain reachable; explicit chat navigation still closes it.
+- Keep team/project chips inline, with attached punctuation, across all five
+  project confirmations (Projects pass 2, #23).
+- Remove the global transcript fade reported in Projects pass 2 (#22),
+  restoring ordinary chat appearance and keeping branch-CTA styling local.
+- Revalidate mutable workspace downloads instead of caching them as immutable.
+  Complete Tab/Shift+Tab focus trapping in shared chat/settings dialogs.
+
+### Changed
+
+- Refresh all three README demos with the current interfaces and repeatable,
+  explicitly labeled scripted data. Recording now verifies expected content and
+  requires no live model credentials. Correct contributor commands to run the
+  same tagged Go and complete web gates as CI. See
+  [the review scope](docs/RELIABILITY-REVIEW.md).
+
 ### Removed
 
 - **The `fleet-admin` shim is gone — and `fleet update` deletes the copy on your

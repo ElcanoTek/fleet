@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
@@ -114,7 +115,8 @@ func batchCreateTasks(ctx context.Context, st batchTaskStore, r io.Reader, atomi
 
 // validateBatchTaskCreate runs the portable create-time checks the CLI can apply
 // without a live fleet process: a non-empty prompt, every MCP selection naming a
-// server, and a parseable cron recurrence. It deliberately does NOT re-run the
+// server, and a parseable cron recurrence in a valid timezone. It resolves the
+// first cron fire when no explicit date is given. It deliberately does NOT re-run the
 // host/runtime-specific checks (file existence, scheduled-in-the-past, model
 // catalog) the HTTP handler enforces — those are runtime concerns the scheduler
 // re-evaluates at dispatch, and a CLI operator may legitimately import
@@ -129,9 +131,28 @@ func validateBatchTaskCreate(tc *models.TaskCreate) error {
 			return fmt.Errorf("mcp_selection[%d] has no server", i)
 		}
 	}
+	tc.Timezone = strings.TrimSpace(tc.Timezone)
+	if tc.Timezone == "" {
+		tc.Timezone = "UTC"
+	}
+	loc, err := time.LoadLocation(tc.Timezone)
+	if err != nil {
+		return fmt.Errorf("invalid timezone %q: %w", tc.Timezone, err)
+	}
 	if tc.Recurrence = strings.TrimSpace(tc.Recurrence); tc.Recurrence != "" {
-		if _, err := cron.ParseStandard(tc.Recurrence); err != nil {
+		schedule, err := cron.ParseStandard(tc.Recurrence)
+		if err != nil {
 			return fmt.Errorf("invalid recurrence %q: %w", tc.Recurrence, err)
+		}
+		// NewTask derives dispatch state from ScheduledFor, not Recurrence.
+		// Resolve the first cron fire before constructing the task or a daily
+		// recipe will run immediately when submitted through the CLI.
+		if tc.ScheduledFor == nil {
+			next := schedule.Next(time.Now().In(loc)).UTC()
+			if next.IsZero() {
+				return fmt.Errorf("recurrence %q has no next run", tc.Recurrence)
+			}
+			tc.ScheduledFor = &next
 		}
 	}
 	return nil
