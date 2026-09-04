@@ -18,9 +18,12 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/store"
 )
 
 // sharedReadsPerMinutePerToken bounds GET /shared/{token} per share token —
@@ -109,11 +112,14 @@ func (s *Server) handleConversationUnshare(w http.ResponseWriter, r *http.Reques
 
 // handleConversationShareWithTeam toggles a conversation's team-visibility flag
 // (#237) — the OWNER opting their thread into (or out of) read-only visibility
-// for same-team members. This is distinct from public share tokens (#226):
-// team visibility is gated by shared team_id, never mints a public link, and is
-// the only path by which one teammate's conversation becomes readable by
-// another. Body: { "visible": bool } (default false = un-share). The store
-// gates on ownership, so a non-owned/unknown id is 404.
+// for their team. This is distinct from public share tokens (#226): it names
+// the team as its audience, never mints a public link, and is the only path by
+// which one teammate's conversation becomes readable by another.
+//
+// Body: { "visible": bool } (default false = un-share). The store gates on
+// ownership, so a non-owned/unknown id is 404, and enforces ADR-0057's pairing,
+// so sharing without a team or without a team-shared project to appear in is
+// 409 with the reason. The response reports the state that was STORED.
 func (s *Server) handleConversationShareWithTeam(w http.ResponseWriter, r *http.Request, convID, user string) {
 	var body struct {
 		Visible bool `json:"visible"`
@@ -121,8 +127,15 @@ func (s *Server) handleConversationShareWithTeam(w http.ResponseWriter, r *http.
 	if r.Body != nil {
 		_ = json.NewDecoder(r.Body).Decode(&body)
 	}
-	err := s.store.SetConversationTeamVisible(r.Context(), user, convID, body.Visible)
+	stored, err := s.store.SetConversationTeamVisible(r.Context(), user, convID, body.Visible)
 	if err != nil {
+		// A chat with no team, or no team-shared project to appear in, cannot
+		// be shared — 409 with the store's sentence, which names which of the
+		// two it is. This is a refusal of the request, not a server fault.
+		if errors.Is(err, store.ErrNoTeamToShareWith) || errors.Is(err, store.ErrNoTeamShareHome) {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
 		// The store returns a plain "conversation not found" when the caller
 		// doesn't own a conversation with this id → 404, matching the share path.
 		if strings.Contains(err.Error(), "not found") {
@@ -132,7 +145,9 @@ func (s *Server) handleConversationShareWithTeam(w http.ResponseWriter, r *http.
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, map[string]any{"team_visible": body.Visible})
+	// The STORED state, never the requested one: a client that is told
+	// team_visible:true must be able to believe it.
+	writeJSON(w, map[string]any{"team_visible": stored})
 }
 
 // handleConversationTeamView serves GET /conversations/{id}/team-view — the

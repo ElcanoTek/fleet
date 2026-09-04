@@ -59,8 +59,8 @@ func newTeamHTTPFixture(t *testing.T) teamHTTPFixture {
 	}); err != nil {
 		t.Fatalf("AppendHistory: %v", err)
 	}
-	if err := st.SetConversationTeamVisible(ctx, "alice@x.com", c.ID, true); err != nil {
-		t.Fatalf("SetConversationTeamVisible: %v", err)
+	if stored, err := st.SetConversationTeamVisible(ctx, "alice@x.com", c.ID, true); err != nil || !stored {
+		t.Fatalf("SetConversationTeamVisible = (%v, %v), want (true, nil)", stored, err)
 	}
 	return teamHTTPFixture{srv: srv, st: st, ctx: ctx, project: p, chat: c}
 }
@@ -409,7 +409,7 @@ func TestMyTeamReportsLeaveImpact(t *testing.T) {
 	if err := f.st.SetConversationProject(f.ctx, "bob@x.com", bobChat.ID, f.project.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.st.SetConversationTeamVisible(f.ctx, "bob@x.com", bobChat.ID, true); err != nil {
+	if _, err := f.st.SetConversationTeamVisible(f.ctx, "bob@x.com", bobChat.ID, true); err != nil {
 		t.Fatal(err)
 	}
 
@@ -494,10 +494,11 @@ func TestProjectTransferByAdmin(t *testing.T) {
 	}
 }
 
-// GET /projects/{id}/members backs the transfer picker.
+// GET /projects/{id}/members backs the transfer picker — and only the people
+// who can transfer may read it.
 func TestProjectMembersEndpoint(t *testing.T) {
 	f := newTeamHTTPFixture(t)
-	w := projectSub(t, f.srv, "GET", "bob@x.com", f.project.ID+"/members", "")
+	w := projectSub(t, f.srv, "GET", "alice@x.com", f.project.ID+"/members", "")
 	if w.Code != 200 {
 		t.Fatalf("members: status %d body %s", w.Code, w.Body.String())
 	}
@@ -509,6 +510,13 @@ func TestProjectMembersEndpoint(t *testing.T) {
 	}
 	if len(out.Members) != 2 {
 		t.Errorf("members = %v, want alice + bob", out.Members)
+	}
+	// A plain MEMBER is refused: this enumerates the whole team, including
+	// people who have never shared anything, which no other project surface
+	// gives them — and the only caller that needs it is the transfer picker,
+	// which only the owner and admins can use.
+	if w := projectSub(t, f.srv, "GET", "bob@x.com", f.project.ID+"/members", ""); w.Code != 404 {
+		t.Errorf("plain member: status %d, want 404", w.Code)
 	}
 	// Membership-gated like every other project subresource.
 	if w := projectSub(t, f.srv, "GET", "zoe@x.com", f.project.ID+"/members", ""); w.Code != 404 {
@@ -554,5 +562,102 @@ func TestAdminUserDeleteRefusesOwnedSharedProjects(t *testing.T) {
 	}
 	if mems, _ := f.st.ListProjectMemories(f.ctx, f.project.ID); len(mems) != 1 {
 		t.Error("the team's learnings must survive it too")
+	}
+}
+
+// A project already shared with a team KEEPS that team through any later edit.
+//
+// Red/green: PATCH resolved `team_shared: true` into the caller's CURRENT
+// team every time, and the Projects modal sends the flag on every save. So an
+// owner moved from `quant` to `ops` who then renamed the project handed `ops`
+// every team learning `quant` had written, and locked `quant` out — no dialog,
+// no trace. Same defect migration 054 fixed for conversations, still live for
+// the project.
+func TestPatchDoesNotRepointAnAlreadySharedProject(t *testing.T) {
+	f := newTeamHTTPFixture(t)
+	st := f.srv.store.(*store.Store)
+
+	// An admin moves the owner out of the team the project is shared with.
+	ops := "ops"
+	if _, err := st.SetUserRoleTeam(f.ctx, "alice@x.com", nil, &ops); err != nil {
+		t.Fatal(err)
+	}
+
+	// An ordinary edit that happens to re-send the flag, as the modal does.
+	w := projectSub(t, f.srv, "PATCH", "alice@x.com", f.project.ID,
+		`{"name":"Quant renamed","team_shared":true}`)
+	if w.Code != 200 {
+		t.Fatalf("patch: status %d body %s", w.Code, w.Body.String())
+	}
+	var out struct {
+		Name   string `json:"name"`
+		TeamID string `json:"team_id"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Name != "Quant renamed" {
+		t.Errorf("name = %q, want the rename to apply", out.Name)
+	}
+	if out.TeamID != "quant" {
+		t.Errorf("team = %q, want quant — a rename must not hand the project to another team", out.TeamID)
+	}
+
+	// Unsharing then re-sharing IS the deliberate way to re-point it.
+	if w := projectSub(t, f.srv, "PATCH", "alice@x.com", f.project.ID, `{"team_shared":false}`); w.Code != 200 {
+		t.Fatalf("unshare: status %d body %s", w.Code, w.Body.String())
+	}
+	w = projectSub(t, f.srv, "PATCH", "alice@x.com", f.project.ID, `{"team_shared":true}`)
+	if w.Code != 200 {
+		t.Fatalf("re-share: status %d body %s", w.Code, w.Body.String())
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.TeamID != "ops" {
+		t.Errorf("team after a deliberate re-share = %q, want ops", out.TeamID)
+	}
+}
+
+// The share endpoint reports the state it STORED, never the state it was asked
+// for — and refuses, rather than silently doing nothing, when the chat has no
+// audience or no home (ADR-0057).
+func TestShareWithTeamReportsWhatItStored(t *testing.T) {
+	f := newTeamHTTPFixture(t)
+	st := f.srv.store.(*store.Store)
+
+	// A chat with a home: 200 and team_visible:true.
+	w := convSub(t, f.srv, "POST", "alice@x.com", f.chat.ID, "share-with-team", `{"visible":true}`)
+	if w.Code != 200 {
+		t.Fatalf("share: status %d body %s", w.Code, w.Body.String())
+	}
+	var out struct {
+		TeamVisible bool `json:"team_visible"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if !out.TeamVisible {
+		t.Error("a share that took effect must report team_visible:true")
+	}
+
+	// The owner leaves the team. Sharing now has no audience to name: a 409
+	// with the reason, not a 200 the UI would badge as shared.
+	if _, err := st.SetOwnTeam(f.ctx, "alice@x.com", "", false); err != nil {
+		t.Fatal(err)
+	}
+	c2, err := st.CreateConversation(f.ctx, "alice@x.com", "Another", "victoria", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetConversationProject(f.ctx, "alice@x.com", c2.ID, f.project.ID); err != nil {
+		t.Fatal(err)
+	}
+	w = convSub(t, f.srv, "POST", "alice@x.com", c2.ID, "share-with-team", `{"visible":true}`)
+	if w.Code != 409 {
+		t.Fatalf("share with no team: status %d body %s, want 409", w.Code, w.Body.String())
+	}
+	if got, _ := st.Get(f.ctx, "alice@x.com", c2.ID); got.TeamVisible {
+		t.Error("a refused share must leave the flag FALSE")
 	}
 }

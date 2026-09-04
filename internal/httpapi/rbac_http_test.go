@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/ElcanoTek/fleet/internal/store"
 )
 
 // setRole assigns a role (and optional team) to a seeded user through the real
@@ -139,6 +141,19 @@ func TestTeamScopeEndpoint(t *testing.T) {
 	h := s.Routes()
 
 	convID := createConv(t, h, "alice@x.com", "alice shared")
+
+	// A chat is shared with the team from inside a project shared with that
+	// team (ADR-0057), so give it that home first.
+	st := s.concreteStore(t)
+	proj, err := st.CreateProject(context.Background(), &store.Project{
+		OwnerEmail: "alice@x.com", Name: "Blue", TeamID: "blue",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetConversationProject(context.Background(), "alice@x.com", convID, proj.ID); err != nil {
+		t.Fatal(err)
+	}
 
 	// Before opt-in, Bob's team view is empty.
 	w := do(t, h, http.MethodGet, "/conversations?scope=team", nil, "bob@x.com")

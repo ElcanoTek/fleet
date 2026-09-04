@@ -83,9 +83,12 @@ func (s *Server) handleMyTeamGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := teamResponse{meResponse: s.meResponseFor(u)}
-	// Best-effort: the counts are confirm-dialog copy, so a failure degrades
-	// to zeros (the dialog then omits the numbers) rather than breaking the
-	// page that shows which team you are in.
+	// Best-effort: the counts are confirm-dialog copy, so a failure leaves them
+	// ABSENT rather than breaking the page that shows which team you are in.
+	// Absent, not zero — the counts are pointers precisely so the confirm can
+	// tell "nothing to lose" from "we couldn't check", and quoting a zero it
+	// never computed is how a user agrees to lose work they were told was not
+	// there.
 	if impact, ierr := s.store.LeaveTeamImpact(r.Context(), u.Email, u.TeamID); ierr == nil {
 		out.LeaveTeamImpact = impact
 	}

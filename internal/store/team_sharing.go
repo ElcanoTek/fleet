@@ -40,26 +40,40 @@ import (
 // messages.id. The ids are already visible to every member of the team through
 // their own branches, so this leaks nothing the feature does not require.
 type TeamSharedConversation struct {
-	ID         string               `json:"id"`
-	OwnerEmail string               `json:"owner_email"`
-	Title      string               `json:"title"`
-	Persona    string               `json:"persona"`
-	Model      string               `json:"model"`
-	TeamID     string               `json:"team_id"`
-	ProjectID  string               `json:"project_id,omitempty"`
-	CreatedAt  int64                `json:"created_at"`
-	UpdatedAt  int64                `json:"updated_at"`
-	Messages   []agent.HistoryEntry `json:"messages"`
+	ID         string `json:"id"`
+	OwnerEmail string `json:"owner_email"`
+	Title      string `json:"title"`
+	Persona    string `json:"persona"`
+	Model      string `json:"model"`
+	TeamID     string `json:"team_id"`
+	ProjectID  string `json:"project_id,omitempty"`
+	// Lockdown is carried for BranchConversation, which must not hand a
+	// teammate a non-isolated fork of an isolated chat. It is the owner's own
+	// conversation setting and is serialized so the viewer knows the chat was
+	// network-isolated when it ran.
+	Lockdown  bool                 `json:"lockdown"`
+	CreatedAt int64                `json:"created_at"`
+	UpdatedAt int64                `json:"updated_at"`
+	Messages  []agent.HistoryEntry `json:"messages"`
 }
 
 // GetTeamVisibleConversation returns the read-only transcript of convID when
 // the caller may read it as a teammate — the owner opted the chat into team
-// visibility AND owner and caller share a non-empty users.team_id — or
-// (nil, nil) when they may not (unknown id, not opted in, different team,
-// deleted). The owner reading their own chat resolves too, so one endpoint
-// serves the "what does my team see?" preview without a second code path.
+// visibility AND the caller's non-empty users.team_id is the audience the
+// owner named — or (nil, nil) when they may not (unknown id, not opted in,
+// different team, archived, deleted). The owner reading their own chat
+// resolves too, so one endpoint serves the "what does my team see?" preview
+// without a second code path.
 //
-// Membership state is never leaked: every refusal is the same nil.
+// ARCHIVED is a refusal here on purpose, matching both listings: archiving
+// removes the chat from the project's Team section and from ?scope=team, so a
+// teammate who kept the id must not keep the transcript either. Archive is the
+// owner's "put this away", and the read gates agree on what that means.
+//
+// The audience is the team the OWNER NAMED when they opted in
+// (team_shared_with), not whichever team they happen to be in now — see
+// migration 054. Membership state is never leaked: every refusal is the same
+// nil.
 func (s *Store) GetTeamVisibleConversation(ctx context.Context, callerEmail, convID string) (*TeamSharedConversation, error) {
 	callerEmail = normalizeEmail(callerEmail)
 	if convID == "" {
@@ -77,17 +91,17 @@ func (s *Store) GetTeamVisibleConversation(ctx context.Context, callerEmail, con
 	var out TeamSharedConversation
 	err = s.db.QueryRowContext(ctx, `
 		SELECT c.id, c.user_email, c.title, c.persona, c.model,
-		       COALESCE(u.team_id, ''), COALESCE(c.project_id, ''),
-		       c.created_at, c.updated_at
+		       COALESCE(c.team_shared_with, ''), COALESCE(c.project_id, ''),
+		       c.lockdown, c.created_at, c.updated_at
 		FROM conversations c
-		JOIN users u ON u.email = c.user_email
 		WHERE c.id = $1
 		  AND c.deleted_at IS NULL
+		  AND c.archived_at IS NULL
 		  AND c.team_visible = TRUE
-		  AND (c.user_email = $2 OR ($3 <> '' AND u.team_id = $3))`,
+		  AND (c.user_email = $2 OR ($3 <> '' AND c.team_shared_with = $3))`,
 		convID, callerEmail, team,
 	).Scan(&out.ID, &out.OwnerEmail, &out.Title, &out.Persona, &out.Model,
-		&out.TeamID, &out.ProjectID, &out.CreatedAt, &out.UpdatedAt)
+		&out.TeamID, &out.ProjectID, &out.Lockdown, &out.CreatedAt, &out.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
@@ -118,9 +132,10 @@ func (s *Store) GetTeamVisibleConversation(ctx context.Context, callerEmail, con
 // badge when shared), and listing them twice would read as two copies of the
 // same conversation.
 //
-// Gated exactly like ListTeamConversations — a shared users.team_id plus each
-// owner's per-chat opt-in — and additionally narrowed to this project, which
-// is what makes the section a place a team-shared chat can actually live.
+// Gated exactly like ListTeamConversations — each owner's per-chat opt-in plus
+// the audience they named (team_shared_with, not their current team) — and
+// additionally narrowed to this project, which is what makes the section a
+// place a team-shared chat can actually live.
 // Returns an empty list (never an error) for a caller with no team.
 func (s *Store) ListProjectTeamConversations(ctx context.Context, callerEmail, projectID string) ([]Conversation, error) {
 	callerEmail = normalizeEmail(callerEmail)
@@ -143,7 +158,7 @@ func (s *Store) ListProjectTeamConversations(ctx context.Context, callerEmail, p
 		  AND c.team_visible = TRUE
 		  AND c.project_id = $1
 		  AND c.user_email <> $2
-		  AND c.user_email IN (SELECT email FROM users WHERE team_id = $3)
+		  AND c.team_shared_with = $3
 		ORDER BY c.updated_at DESC, c.id DESC`,
 		projectID, callerEmail, team,
 	)
@@ -178,9 +193,8 @@ func (s *Store) UnshareTeamVisibleChatsInTeam(ctx context.Context, ownerEmail, t
 		return 0, nil
 	}
 	res, err := s.db.ExecContext(ctx, `
-		UPDATE conversations SET team_visible = FALSE, updated_at = $1
-		WHERE user_email = $2 AND team_visible = TRUE
-		  AND project_id IN (SELECT id FROM projects WHERE team_id = $3)`,
+		UPDATE conversations SET team_visible = FALSE, team_shared_with = NULL, updated_at = $1
+		WHERE user_email = $2 AND team_visible = TRUE AND team_shared_with = $3`,
 		time.Now().Unix(), normalizeEmail(ownerEmail), teamID,
 	)
 	if err != nil {
@@ -196,14 +210,23 @@ type LeaveTeamImpact struct {
 	// SharedProjects is the count of team-shared projects the user would stop
 	// seeing: those shared with the team that they do NOT own (an owner keeps
 	// their own projects, still shared with the team they left).
-	SharedProjects int `json:"shared_projects"`
-	// SharedChats is the count of the user's OWN chats currently shared into
-	// those projects — all of which are unshared by leaving.
-	SharedChats int `json:"shared_chats"`
+	//
+	// A POINTER, and omitted when nil, because this is confirm-dialog copy:
+	// the difference between "leaving costs you nothing" and "we could not
+	// work out what leaving costs you" must survive serialization. As a plain
+	// int a failed count serialized as 0 and the dialog cheerfully told the
+	// user there was nothing to lose.
+	SharedProjects *int `json:"shared_projects,omitempty"`
+	// SharedChats is the count of the user's OWN chats currently shared with
+	// that team — all of which are unshared by leaving. Nil for the same
+	// reason as SharedProjects.
+	SharedChats *int `json:"shared_chats,omitempty"`
 }
 
 // LeaveTeamImpact computes the two counts the Leave-team confirm quotes. A
-// caller with no team gets zeros.
+// caller with no team gets a zeroed struct with BOTH counts nil — there is
+// nothing to leave, so there is nothing to state. On error the counts stay nil
+// so the confirm can say it doesn't know, rather than reporting zero.
 func (s *Store) LeaveTeamImpact(ctx context.Context, email, teamID string) (LeaveTeamImpact, error) {
 	var out LeaveTeamImpact
 	teamID = strings.TrimSpace(teamID)
@@ -211,20 +234,22 @@ func (s *Store) LeaveTeamImpact(ctx context.Context, email, teamID string) (Leav
 		return out, nil
 	}
 	email = normalizeEmail(email)
+	var projects, chats int
 	if err := s.db.QueryRowContext(ctx,
 		`SELECT count(*) FROM projects WHERE team_id = $1 AND owner_email <> $2`,
 		teamID, email,
-	).Scan(&out.SharedProjects); err != nil {
-		return out, err
+	).Scan(&projects); err != nil {
+		return LeaveTeamImpact{}, err
 	}
 	if err := s.db.QueryRowContext(ctx, `
 		SELECT count(*) FROM conversations
 		WHERE user_email = $1 AND team_visible = TRUE AND deleted_at IS NULL
-		  AND project_id IN (SELECT id FROM projects WHERE team_id = $2)`,
+		  AND team_shared_with = $2`,
 		email, teamID,
-	).Scan(&out.SharedChats); err != nil {
-		return out, err
+	).Scan(&chats); err != nil {
+		return LeaveTeamImpact{}, err
 	}
+	out.SharedProjects, out.SharedChats = &projects, &chats
 	return out, nil
 }
 
@@ -264,9 +289,26 @@ func (e *OwnsSharedProjectsError) Error() string {
 // Personal projects are excluded: nobody else can see them, so they belong
 // with the account.
 func (s *Store) TeamSharedProjectsOwnedBy(ctx context.Context, email string) ([]string, error) {
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT name FROM projects WHERE owner_email = $1 AND team_id <> '' ORDER BY name`,
-		normalizeEmail(email))
+	return teamSharedProjectsOwnedBy(ctx, s.db, normalizeEmail(email), "")
+}
+
+// teamSharedProjectsOwnedByTx is the same read taken INSIDE a transaction with
+// the matching rows locked — what DeleteUser's fail-closed guard needs so a
+// concurrent "share this project" cannot slip past the check and be deleted by
+// the very statement the check was protecting against.
+func teamSharedProjectsOwnedByTx(ctx context.Context, tx *sql.Tx, email string) ([]string, error) {
+	return teamSharedProjectsOwnedBy(ctx, tx, normalizeEmail(email), " FOR UPDATE")
+}
+
+// queryer is the subset of *sql.DB / *sql.Tx the shared read needs.
+type queryer interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
+func teamSharedProjectsOwnedBy(ctx context.Context, q queryer, email, lock string) ([]string, error) {
+	rows, err := q.QueryContext(ctx,
+		`SELECT name FROM projects WHERE owner_email = $1 AND team_id <> '' ORDER BY name`+lock,
+		email)
 	if err != nil {
 		return nil, err
 	}
@@ -285,6 +327,11 @@ func (s *Store) TeamSharedProjectsOwnedBy(ctx context.Context, email string) ([]
 // ProjectMemberEmails lists who a project can be handed to: everyone in its
 // team, plus the current owner (who is always a member, team or not). Sorted,
 // deduplicated, emails only — the transfer picker's options.
+//
+// This enumerates every account in the team, including people who have never
+// shared anything, which is more than a plain member could learn from the
+// project's own surfaces. The handler therefore serves it to the OWNER and
+// admins only — the only callers with a transfer to make.
 func (s *Store) ProjectMemberEmails(ctx context.Context, projectID string) ([]string, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT DISTINCT email FROM (
@@ -321,16 +368,13 @@ func (s *Store) ProjectMemberEmails(ctx context.Context, projectID string) ([]st
 //
 // WHO may call it is the handler's gate (the owner, or an admin — the admin
 // path is the whole point, since a departed owner cannot act). What the store
-// enforces is that the result makes sense: the target exists, and for a
-// team-shared project belongs to that team.
+// enforces is that the result makes sense: the project is TEAM-SHARED and the
+// target is in that team. Every refusal is the same ErrNotAProjectMember, so
+// the route says nothing about which addresses have accounts.
 func (s *Store) TransferProjectOwnership(ctx context.Context, projectID, newOwnerEmail string) (*Project, error) {
 	newOwner := normalizeEmail(newOwnerEmail)
 	if newOwner == "" {
 		return nil, errors.New("new owner email required")
-	}
-	target, err := s.GetUser(ctx, newOwner)
-	if err != nil {
-		return nil, err // ErrUserNotFound for an unknown account
 	}
 	p, err := s.GetProject(ctx, projectID)
 	if err != nil {
@@ -342,7 +386,28 @@ func (s *Store) TransferProjectOwnership(ctx context.Context, projectID, newOwne
 	if p.OwnerEmail == newOwner {
 		return p, nil // already theirs — idempotent, not an error
 	}
-	if p.TeamID != "" && !strings.EqualFold(strings.TrimSpace(target.TeamID), p.TeamID) {
+	// A PERSONAL project has no membership to check against, so "transfer" it
+	// and you are pushing a project — with instructions of your choosing, which
+	// get injected into every chat started in it — into a stranger's rail,
+	// without asking them. Transfer exists to keep a TEAM's shared work alive
+	// when its owner leaves; a personal project has no such second party.
+	if p.TeamID == "" {
+		return nil, ErrNotAProjectMember
+	}
+	// The project row is read BEFORE the account, and both failures return the
+	// same sentinel, so this route cannot be used to test whether an arbitrary
+	// address has an account here (see the handler's single 400).
+	target, err := s.GetUser(ctx, newOwner)
+	if err != nil {
+		if errors.Is(err, ErrUserNotFound) {
+			return nil, ErrNotAProjectMember
+		}
+		return nil, err
+	}
+	// Exact compare, matching every other team gate in the store. EqualFold
+	// here would have been the one loose comparison, letting a `Quant` member
+	// take over a `quant` project.
+	if strings.TrimSpace(target.TeamID) != p.TeamID {
 		return nil, ErrNotAProjectMember
 	}
 	row := s.db.QueryRowContext(ctx,

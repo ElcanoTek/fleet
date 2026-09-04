@@ -200,7 +200,19 @@ func (s *Server) projectByID(w http.ResponseWriter, r *http.Request) {
 		if req.TeamShared != nil {
 			team := ""
 			if *req.TeamShared {
-				team = s.resolveUserTeam(r, user)
+				// A project ALREADY shared with a team keeps that audience.
+				// Resolving "shared: true" to the owner's CURRENT team every
+				// time meant an unrelated edit re-pointed the project — an
+				// owner moved from `quant` to `ops` who then renamed the
+				// project handed `ops` every team learning `quant` had written
+				// and locked `quant` out, with no dialog and no trace. This is
+				// the same "stamped, not inferred" rule migration 054 applies
+				// to conversations. Re-pointing a shared project at a new team
+				// is a deliberate act: unshare it, then share it again.
+				team = p.TeamID
+				if team == "" {
+					team = s.resolveUserTeam(r, user)
+				}
 				if team == "" {
 					http.Error(w, errNoTeamForShare, http.StatusBadRequest)
 					return
@@ -343,14 +355,20 @@ func (s *Server) projectTransfer(w http.ResponseWriter, r *http.Request, user, p
 	}
 	updated, err := s.store.TransferProjectOwnership(r.Context(), projectID, req.ToEmail)
 	if err != nil {
-		switch {
-		case errors.Is(err, store.ErrUserNotFound):
-			http.Error(w, "no such user", http.StatusBadRequest)
-		case errors.Is(err, store.ErrNotAProjectMember):
-			http.Error(w, err.Error(), http.StatusBadRequest)
-		default:
-			http.Error(w, err.Error(), http.StatusBadRequest)
+		// ONE message for every "that target won't do" case. Splitting it into
+		// "no such user" vs "not a member of this team" turned the route into
+		// an account-existence oracle over arbitrary addresses — exactly the
+		// disclosure the login form's constant-time dummy hash goes out of its
+		// way to deny. Anything else is a server fault, not a bad request.
+		if errors.Is(err, store.ErrNotAProjectMember) || errors.Is(err, store.ErrUserNotFound) {
+			http.Error(w, store.ErrNotAProjectMember.Error(), http.StatusBadRequest)
+			return
 		}
+		if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "required") {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		http.Error(w, "transfer failed", http.StatusInternalServerError)
 		return
 	}
 	//nolint:gosec // G706: %q escapes CR/LF, so the path-supplied project id cannot forge a log line; the two emails are an authenticated caller and a normalized DB value.
@@ -360,12 +378,21 @@ func (s *Server) projectTransfer(w http.ResponseWriter, r *http.Request, user, p
 
 // projectMembers handles GET /projects/{id}/members — the accounts a project
 // can be transferred to: everyone in its team, plus the current owner. Emails
-// only, and only for a project the caller is already a member of, so this adds
-// no directory read a member does not already have (they can see each other's
-// shared chats and team learnings by name).
+// only.
+//
+// OWNER (or admin) only, not every member. It enumerates the whole team,
+// including people who have never shared a chat or written a learning, which
+// is a directory read the project's own surfaces do not otherwise give a plain
+// member. The only caller that needs it is the transfer picker, and only the
+// owner and admins can transfer.
 func (s *Server) projectMembers(w http.ResponseWriter, r *http.Request, p *store.Project) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	user := userFromCtx(r.Context())
+	if !strings.EqualFold(p.OwnerEmail, user) && !s.isAdmin(user) && roleFromCtx(r.Context()) != store.RoleAdmin {
+		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
 	emails, err := s.store.ProjectMemberEmails(r.Context(), p.ID)

@@ -114,9 +114,20 @@ func TestTeamVisibleConversations(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// A chat can only be shared with the team from inside a project shared
+	// with that team (ADR-0057) — the pairing is enforced by the store, so the
+	// fixture files the chat first.
+	proj, err := s.CreateProject(ctx, &Project{OwnerEmail: "alice@x.com", Name: "Blue", TeamID: "blue"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	// Alice has two conversations; she shares only one with the team.
 	shared, err := s.CreateConversation(ctx, "alice@x.com", "shared", "victoria", "", false)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetConversationProject(ctx, "alice@x.com", shared.ID, proj.ID); err != nil {
 		t.Fatal(err)
 	}
 	priv, err := s.CreateConversation(ctx, "alice@x.com", "private", "victoria", "", false)
@@ -134,8 +145,8 @@ func TestTeamVisibleConversations(t *testing.T) {
 	}
 
 	// Alice opts the "shared" conversation into team visibility.
-	if err := s.SetConversationTeamVisible(ctx, "alice@x.com", shared.ID, true); err != nil {
-		t.Fatalf("SetConversationTeamVisible: %v", err)
+	if stored, err := s.SetConversationTeamVisible(ctx, "alice@x.com", shared.ID, true); err != nil || !stored {
+		t.Fatalf("SetConversationTeamVisible = (%v, %v), want (true, nil)", stored, err)
 	}
 
 	// Bob (same team) now sees exactly the shared one — never the private one.
@@ -176,8 +187,8 @@ func TestTeamVisibleConversations(t *testing.T) {
 	}
 
 	// Un-sharing removes it from the team view again.
-	if err := s.SetConversationTeamVisible(ctx, "alice@x.com", shared.ID, false); err != nil {
-		t.Fatalf("un-share: %v", err)
+	if stored, err := s.SetConversationTeamVisible(ctx, "alice@x.com", shared.ID, false); err != nil || stored {
+		t.Fatalf("un-share = (%v, %v), want (false, nil)", stored, err)
 	}
 	if list, err := s.ListTeamConversations(ctx, "bob@x.com"); err != nil || len(list) != 0 {
 		t.Errorf("after un-share = (%v, %v), want empty", list, err)
@@ -209,7 +220,7 @@ func TestSetConversationTeamVisible_OwnershipGate(t *testing.T) {
 	}
 	// A non-owner cannot flip the flag — the WHERE user_email gate yields
 	// "conversation not found" rather than mutating someone else's row.
-	if err := s.SetConversationTeamVisible(ctx, "intruder@x.com", conv.ID, true); err == nil {
+	if _, err := s.SetConversationTeamVisible(ctx, "intruder@x.com", conv.ID, true); err == nil {
 		t.Error("non-owner should not be able to share another user's conversation")
 	}
 	// And the owner's view confirms it was never shared.

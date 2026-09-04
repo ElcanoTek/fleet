@@ -91,14 +91,23 @@ project home grows a **Team** section listing what members shared there:
 
 - `GET /projects/{id}/team-conversations` — the section's list (other members'
   shared chats in this project; the caller's own already show under their chats).
-- `GET /conversations/{id}/team-view` — the read-only transcript, gated on a
-  shared `team_id` AND the owner's opt-in. Transcript only: no tool calls, no
-  reasoning, no workspace files.
+- `GET /conversations/{id}/team-view` — the read-only transcript, gated on the
+  caller's `team_id` matching the audience the owner **named** when they shared
+  (`conversations.team_shared_with`, migration 054) AND the owner's opt-in
+  still being on. Transcript only: no tool calls, no reasoning, no workspace
+  files.
 - `POST /conversations/{id}/branch` accepts a parent the caller can read, so a
-  teammate builds on the work by forking it into a chat they own.
+  teammate builds on the work by forking it into a chat they own. A fork of
+  someone else's chat copies only what `team-view` showed, and keeps the
+  parent's lockdown.
 
-Every write that takes a chat's home away also clears the flag (move out,
-un-share the project, delete the project, leave the team). Details and rationale:
+`POST /conversations/{id}/share-with-team` refuses (`409`) unless the caller is
+in a team and the chat is in a project shared with that team, and reports the
+state it stored. Every write that takes a chat's home away clears the flag and
+the audience with it: moving it out (or into another team's project),
+un-sharing the project (or re-sharing it with a different team), deleting the
+project, leaving the team, and being moved between teams by an admin. Un-sharing
+is never refused. Details and rationale:
 [`TEAM-SHARING.md`](TEAM-SHARING.md) + ADR-0057.
 
 ## Export / audit

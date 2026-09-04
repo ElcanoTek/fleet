@@ -6,6 +6,8 @@ package httpapi
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"strings"
 
@@ -101,7 +103,15 @@ func (s *Server) memoryByID(w http.ResponseWriter, r *http.Request) {
 			ProjectID string `json:"project_id"`
 		}
 		if r.Body != nil {
-			_ = json.NewDecoder(r.Body).Decode(&dest)
+			// A MALFORMED body is refused, not ignored. Swallowing the error
+			// fell through to the personal-memory accept and answered 200 —
+			// so a client that meant "save this to the team" was told it
+			// succeeded while the memory went somewhere else. io.EOF is the
+			// legitimate empty body (the personal path) and is not an error.
+			if derr := json.NewDecoder(r.Body).Decode(&dest); derr != nil && !errors.Is(derr, io.EOF) {
+				http.Error(w, "bad json: "+derr.Error(), http.StatusBadRequest)
+				return
+			}
 		}
 		if projectID := strings.TrimSpace(dest.ProjectID); projectID != "" {
 			p := s.projectForMember(w, r, user, projectID)

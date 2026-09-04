@@ -165,10 +165,12 @@ type ProjectPatch struct {
 
 // UpdateProject applies a partial update, owner-only (the WHERE enforces it).
 //
-// Turning team sharing OFF also unshares every team-visible chat in the
-// project, in the same transaction: the project is where a teammate would have
-// found them, and ADR-0057's pairing says a team-shared chat never outlives
-// the place it appears.
+// Changing who the project is shared with also unshares every team-visible
+// chat in it whose named audience no longer matches, in the same transaction:
+// the project is where a teammate would have found them, and ADR-0057's
+// pairing says a team-shared chat never outlives the place it appears. That
+// covers turning sharing off AND handing the project to a different team —
+// the second case is reachable whenever the owner's own team changes.
 func (s *Store) UpdateProject(ctx context.Context, ownerEmail, id string, patch ProjectPatch) (*Project, error) {
 	if patch.Name != nil {
 		n := strings.TrimSpace(*patch.Name)
@@ -215,11 +217,17 @@ func (s *Store) UpdateProject(ctx context.Context, ownerEmail, id string, patch 
 		}
 		return nil, err
 	}
-	if patch.TeamID != nil && strings.TrimSpace(*patch.TeamID) == "" {
+	if patch.TeamID != nil {
+		// Unshare every chat here whose named audience is no longer this
+		// project's team — which covers turning sharing off (new team_id '',
+		// so nothing matches) AND re-sharing the project with a DIFFERENT
+		// team, where the old audience would otherwise keep reading a chat
+		// that no longer appears in anyone's Team section.
 		if _, err := tx.ExecContext(ctx,
-			`UPDATE conversations SET team_visible = FALSE, updated_at = $1
-			 WHERE project_id = $2 AND team_visible = TRUE`,
-			time.Now().Unix(), id); err != nil {
+			`UPDATE conversations SET team_visible = FALSE, team_shared_with = NULL, updated_at = $1
+			 WHERE project_id = $2 AND team_visible = TRUE
+			   AND team_shared_with IS DISTINCT FROM NULLIF($3::text, '')`,
+			time.Now().Unix(), id, p.TeamID); err != nil {
 			return nil, err
 		}
 	}
@@ -249,8 +257,17 @@ func (s *Store) DeleteProject(ctx context.Context, ownerEmail, id string) error 
 	// Detaching also unshares: a chat that leaves a project has nowhere for a
 	// teammate to find it, so team_visible must not outlive the project
 	// (ADR-0057, the same pairing SetConversationProject enforces).
+	//
+	// updated_at is bumped, and that is not cosmetic. project_id IS NULL is
+	// exactly what re-arms the TTL sweep and the unpinned cap, so detaching a
+	// four-month-old chat with its original timestamp made it sweep-eligible
+	// AT ONCE — the next turn any user on the box takes hard-deletes it. The
+	// confirm promises members their chats "become temporary, and expire
+	// unless pinned"; without this bump there was no window in which to pin
+	// one. Now the clock starts when they lose the project.
 	if _, err := tx.ExecContext(ctx,
-		`UPDATE conversations SET project_id = NULL, team_visible = FALSE WHERE project_id = $1`, id); err != nil {
+		`UPDATE conversations SET project_id = NULL, team_visible = FALSE, team_shared_with = NULL, updated_at = $2
+		 WHERE project_id = $1`, id, time.Now().Unix()); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx,
@@ -300,23 +317,56 @@ func (s *Store) CreateProjectConversation(ctx context.Context, userEmail, title,
 // conversation is not mutable (#596).
 //
 // Filing also enforces the ADR-0057 pairing: a team-shared chat must live in a
-// team-shared project, so moving one out of its project — to no project, or to
-// a personal one — clears team_visible in the same statement. Without that a
-// chat stays readable by the team while no surface lists it, and its owner has
-// no affordance left to revoke it.
+// project shared WITH THE TEAM IT WAS SHARED WITH, so moving one to no
+// project, to a personal one, or to a project belonging to a DIFFERENT team
+// clears team_visible in the same statement. Without that a chat stays
+// readable by the team while no surface lists it (the Team section matches on
+// the caller's team, which is no longer the project's), and its owner has no
+// affordance left to revoke it. Testing "the destination is shared with SOME
+// team" is not enough — that is the state a user reaches by refiling across
+// teams after an admin moves them.
 func (s *Store) SetConversationProject(ctx context.Context, userEmail, convID, projectID string) error {
 	var pid any // NULL when unfiling, matching the column's created-without-project state
 	if projectID != "" {
 		pid = projectID
 	}
-	res, err := s.db.ExecContext(ctx,
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }() // no-op after a successful Commit
+	if projectID != "" {
+		// Lock the destination project row for the length of this move. Under
+		// READ COMMITTED the pairing CASE below reads `projects` as it was
+		// when the statement started, so a concurrent "stop sharing this
+		// project" — whose own unshare sweeps `WHERE project_id = ...` and
+		// cannot see a chat that has not landed yet — left a team-visible chat
+		// in a project that is no longer shared. The lock makes the two
+		// statements take turns. A missing project is not an error here: the
+		// UPDATE's own FK/EXISTS handling still decides the outcome.
+		if _, err := tx.ExecContext(ctx,
+			`SELECT 1 FROM projects WHERE id = $1 FOR SHARE`, projectID); err != nil {
+			return err
+		}
+	}
+	res, err := tx.ExecContext(ctx,
 		`UPDATE conversations SET
 			project_id = $1,
 			pinned = (CASE WHEN $1::text IS NULL THEN pinned ELSE FALSE END),
 			team_visible = (CASE
 				WHEN $1::text IS NOT NULL
-				 AND EXISTS (SELECT 1 FROM projects WHERE id = $1::text AND team_id <> '')
+				 AND EXISTS (SELECT 1 FROM projects p
+				              WHERE p.id = $1::text
+				                AND p.team_id <> ''
+				                AND p.team_id = conversations.team_shared_with)
 				THEN team_visible ELSE FALSE END),
+			team_shared_with = (CASE
+				WHEN $1::text IS NOT NULL
+				 AND EXISTS (SELECT 1 FROM projects p
+				              WHERE p.id = $1::text
+				                AND p.team_id <> ''
+				                AND p.team_id = conversations.team_shared_with)
+				THEN team_shared_with ELSE NULL END),
 			updated_at = $2
 		 WHERE id = $3 AND user_email = $4 AND deleted_at IS NULL`,
 		pid, time.Now().Unix(), convID, userEmail,
@@ -327,7 +377,7 @@ func (s *Store) SetConversationProject(ctx context.Context, userEmail, convID, p
 	if n, _ := res.RowsAffected(); n == 0 {
 		return errors.New("conversation not found")
 	}
-	return nil
+	return tx.Commit()
 }
 
 // ── project-scoped memory (#509 + #515 scope-awareness) ──

@@ -241,8 +241,10 @@ type chatStore interface {
 	CountUsers(ctx context.Context) (int, error)
 	VerifyUser(ctx context.Context, email, plainPassword string) error
 	// Team-scoped, opt-in conversation sharing (#237). ListTeamConversations
-	// returns the conversations same-team members have shared (team_visible),
-	// read-only; SetConversationTeamVisible flips the owner's opt-in flag.
+	// returns the conversations members have shared WITH THE CALLER'S TEAM —
+	// the audience each owner named, not whoever's team they are in now
+	// (migration 054) — read-only; SetConversationTeamVisible flips the
+	// owner's opt-in and reports the state it stored.
 	ListTeamConversations(ctx context.Context, callerEmail string) ([]store.Conversation, error)
 	// GetTeamVisibleConversation is the per-conversation half of that read:
 	// the read-only transcript a teammate opens from the project home. nil =
@@ -250,7 +252,7 @@ type chatStore interface {
 	GetTeamVisibleConversation(ctx context.Context, callerEmail, convID string) (*store.TeamSharedConversation, error)
 	// LeaveTeamImpact is what leaving the team costs — quoted in the confirm.
 	LeaveTeamImpact(ctx context.Context, email, teamID string) (store.LeaveTeamImpact, error)
-	SetConversationTeamVisible(ctx context.Context, ownerEmail, convID string, visible bool) error
+	SetConversationTeamVisible(ctx context.Context, ownerEmail, convID string, visible bool) (bool, error)
 	AdminStats(ctx context.Context) ([]store.AdminRow, error)
 	// MigrationStatus reports applied vs pending chat-DB migrations for
 	// GET /admin/migrations (#256). Read-only.

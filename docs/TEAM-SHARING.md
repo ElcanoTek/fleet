@@ -55,6 +55,13 @@ recorded in ADR-0057: the project home's **Team** section is the one place a
 teammate looks, so a team-shared chat with no project would be readable by
 people with no surface listing it.
 
+**Branching a teammate's chat copies only the transcript.** The fork carries
+user/assistant text and no image references — the same filter the read applies
+— and inherits the parent's lockdown. The owner's own branch still copies their
+history in full. Without that split the filter would have been decorative: one
+click turns a redacted read into a full-history chat the brancher owns and can
+read without any filter at all.
+
 What a teammate gets is a **read-only view** of the transcript — the same
 renderer a public share link uses, reached through team membership instead of a
 URL — with a banner naming the owner and the team, and one forward action where
@@ -69,16 +76,34 @@ applies), and attachments and generated files stay behind the owner-scoped
 workspace route. A shared conversation *about* a report does not hand out the
 report.
 
+**The pairing is enforced by the store, not just offered by the UI.** Sharing
+is refused (`409`, with the reason) unless the caller is in a team and the chat
+is in a project shared with that team. Un-sharing is never refused. ADR-0057
+records why this stopped being a UI-only narrowing: every rule that revokes a
+share is keyed on the project, so a share with no project was swept by none of
+them and displayed by nothing — permanent, and unrevokable from any screen.
+
 **A team-shared chat always has a home.** Moving it out of its project, making
-the project personal, deleting the project, or leaving the team all unshare it —
-in the same statement or transaction as the change that caused it. See ADR-0057
-for why, and `internal/store/team_sharing.go` for where.
+the project personal, deleting the project, leaving the team, or being moved to
+another team by an admin all unshare it — in the same statement or transaction
+as the change that caused it. See ADR-0057 for why, and
+`internal/store/team_sharing.go` for where.
+
+**A share names its audience; it does not infer one.** Opting in stamps the
+owner's team onto the chat (`conversations.team_shared_with`, migration 054),
+and every read compares that stamp against the *caller's* team. The flag alone
+would have meant "visible to whatever team the owner is in right now", so an
+admin moving the owner from one team to another would have handed the new team
+everything the owner shared with the old one, silently. Two consequences worth
+knowing: a user with no team cannot share (there is no audience to name — the
+request is refused), and changing someone's team unshares their chats rather
+than re-pointing them.
 
 ### Endpoints
 
 | Route | Who | What |
 | --- | --- | --- |
-| `POST /conversations/{id}/share-with-team` | owner | the ADR-0013 opt-in, unchanged |
+| `POST /conversations/{id}/share-with-team` | owner | the opt-in; stamps the owner's team as the audience. `409` when there is no team or no team-shared home; the response reports the state it **stored** |
 | `GET /conversations/{id}/team-view` | a teammate (or the owner) | the read-only transcript |
 | `POST /conversations/{id}/branch` | anyone who can *read* the parent | fork into a chat you own |
 | `GET /projects/{id}/team-conversations` | members | the project home's Team section |
