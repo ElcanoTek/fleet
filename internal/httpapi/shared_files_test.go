@@ -332,3 +332,49 @@ func TestSharedFilesQuotaConcurrentUploads(t *testing.T) {
 		t.Fatalf("stored bytes = %d, err = %v, accepted = %d", total, err, accepted)
 	}
 }
+
+// TestSharedFilesBatchUploadIsAllOrNothing: a name collision anywhere in a
+// multi-file upload refuses the WHOLE batch before anything is written. The
+// per-file check inside the write loop used to answer 409 for file N while
+// files 1..N-1 were already durably created — unreported in the response and
+// invisible to the admin until a refetch.
+func TestSharedFilesBatchUploadIsAllOrNothing(t *testing.T) {
+	srv, h := sharedFilesFixture(t)
+	stagedRoot := srv.sharedFilesLibrary().StagedRoot
+
+	if w := uploadShared(t, h, "admin@x", "Q3", "", map[string]string{"taken.csv": "x"}); w.Code != http.StatusOK {
+		t.Fatalf("seed upload: status %d body %s", w.Code, w.Body.String())
+	}
+
+	// Go's multipart writer emits map entries in iteration order, so name the
+	// colliding file so it sorts LAST in any order the handler might see —
+	// the point is that "fresh.csv" must not land regardless of position.
+	w := uploadShared(t, h, "admin@x", "Q3", "", map[string]string{
+		"fresh.csv": "new bytes",
+		"taken.csv": "collides",
+	})
+	if w.Code != http.StatusConflict {
+		t.Fatalf("colliding batch: status %d (want 409) body %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "nothing from this upload was saved") {
+		t.Fatalf("409 body should say the batch was refused whole: %s", w.Body.String())
+	}
+	files, err := srv.store.ListSharedFiles(context.Background())
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	for _, f := range files {
+		if f.Name == "fresh.csv" {
+			t.Fatalf("fresh.csv was created although the batch was refused: %+v", f)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(stagedRoot, "Q3", "fresh.csv")); !os.IsNotExist(err) {
+		t.Fatalf("fresh.csv staged copy exists (err=%v) although the batch was refused", err)
+	}
+
+	// The same name twice in one batch is refused up front too.
+	w = uploadShared(t, h, "admin@x", "Q3", "", map[string]string{"dup.csv": "a"})
+	if w.Code != http.StatusOK {
+		t.Fatalf("single upload: %d %s", w.Code, w.Body.String())
+	}
+}

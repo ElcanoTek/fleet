@@ -158,14 +158,41 @@ func (s *Server) postSharedFiles(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	lib := s.sharedFilesLibrary()
-	out := make([]store.SharedFile, 0, len(files))
-	for _, fh := range files {
+	// Resolve and admit every NAME before writing anything, the same way the
+	// sizes were. Checking per file inside the write loop meant a collision
+	// on file N came back as a 409 naming only file N — while files 1..N-1
+	// were already durably created, unreported in the error response, and
+	// invisible to the admin until a refetch. Under sharedFilesMu the answer
+	// holds until our own inserts land. Duplicates WITHIN the batch are
+	// caught here too; the DB would only have rejected the second one.
+	names := make([]string, len(files))
+	seen := make(map[string]struct{}, len(files))
+	for i, fh := range files {
 		name, err := sharedfiles.SanitizeName(fh.Filename)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		if _, dup := seen[name]; dup {
+			http.Error(w, fmt.Sprintf("%s: appears twice in this upload", name), http.StatusConflict)
+			return
+		}
+		seen[name] = struct{}{}
+		if err := s.store.SharedFilePathAvailable(r.Context(), folder, name); err != nil {
+			if errors.Is(err, store.ErrSharedFileExists) || errors.Is(err, store.ErrSharedFileNameIsFolder) {
+				http.Error(w, fmt.Sprintf("%s: %v (nothing from this upload was saved)", name, err), http.StatusConflict)
+				return
+			}
+			http.Error(w, "check shared file name: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		names[i] = name
+	}
+
+	lib := s.sharedFilesLibrary()
+	out := make([]store.SharedFile, 0, len(files))
+	for i, fh := range files {
+		name := names[i]
 		id, err := randomToken()
 		if err != nil {
 			http.Error(w, "token: "+err.Error(), http.StatusInternalServerError)

@@ -33,6 +33,26 @@ type memoryPatchRequest struct {
 	ValidTo   *int64  `json:"valid_to"`
 }
 
+// writeMemoryStoreError answers a failed memory / project store call with the
+// status the failure deserves. The store distinguishes three things the old
+// blanket `400 err.Error()` collapsed: the row is not there (404), the caller
+// is not allowed (403 — a project member who is not its owner), and the
+// caller's input was bad (400). Anything else is the store's fault and is a
+// 500 — a Postgres outage used to be reported to the UI as "Bad Request", and
+// the UI showed the user their own mistake.
+func writeMemoryStoreError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, store.ErrMemoryNotFound), errors.Is(err, store.ErrMemoryProposalNotFound):
+		http.Error(w, err.Error(), http.StatusNotFound)
+	case errors.Is(err, store.ErrProjectNotOwner):
+		http.Error(w, "only the project owner can do that", http.StatusForbidden)
+	case store.IsInputError(err):
+		http.Error(w, err.Error(), http.StatusBadRequest)
+	default:
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
 func (s *Server) memories(w http.ResponseWriter, r *http.Request) {
 	user := userFromCtx(r.Context())
 	switch r.Method {
@@ -67,7 +87,7 @@ func (s *Server) memories(w http.ResponseWriter, r *http.Request) {
 		}
 		memory, err := s.store.CreateMemory(r.Context(), user, req.Content, "manual", req.Kind)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			writeMemoryStoreError(w, err)
 			return
 		}
 		// A manually created memory is ACTIVE immediately → derive its graph
@@ -120,7 +140,7 @@ func (s *Server) memoryByID(w http.ResponseWriter, r *http.Request) {
 			}
 			memory, err := s.store.AcceptMemoryProposalIntoProject(r.Context(), user, id, p.ID)
 			if err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
+				writeMemoryStoreError(w, err)
 				return
 			}
 			// No graph extraction: the knowledge graph is a personal-memory
@@ -130,7 +150,7 @@ func (s *Server) memoryByID(w http.ResponseWriter, r *http.Request) {
 		}
 		memory, supersede, err := s.store.AcceptMemoryProposal(r.Context(), user, id)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			writeMemoryStoreError(w, err)
 			return
 		}
 		// Acceptance made the memory ACTIVE → derive its graph fragment
@@ -162,13 +182,13 @@ func (s *Server) memoryByID(w http.ResponseWriter, r *http.Request) {
 			ValidTo:   req.ValidTo,
 		})
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			writeMemoryStoreError(w, err)
 			return
 		}
 		writeJSON(w, memory)
 	case http.MethodDelete:
 		if err := s.store.DeleteMemory(r.Context(), user, id); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			writeMemoryStoreError(w, err)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
