@@ -112,7 +112,8 @@ is never refused. Details and rationale:
 
 ## Export / audit
 
-`GET /projects/{id}/export` returns the full project config plus runtime-state
+`GET /projects/{id}/export` (owner or admin — it carries every member's
+conversation ids) returns the full project config plus runtime-state
 references (shared memories verbatim + member conversation ids) as one JSON
 document — auditable without any client content entering fleet core.
 

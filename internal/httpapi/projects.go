@@ -615,6 +615,18 @@ func (s *Server) projectExport(w http.ResponseWriter, r *http.Request, p *store.
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	// OWNER (or admin) only, like the member list. `conversation_ids` covers
+	// EVERY member's chats in the project, so a plain member could learn how
+	// many chats each colleague has here and collect a valid id set — neither
+	// of which any other project surface gives them. An id alone unlocks
+	// nothing (team-view needs the owner's opt-in; the transcript and
+	// workspace routes are owner-scoped), but the export exists for the one
+	// person who can destroy the project, and that is who should have it.
+	user := userFromCtx(r.Context())
+	if !strings.EqualFold(p.OwnerEmail, user) && !s.isAdmin(user) && roleFromCtx(r.Context()) != store.RoleAdmin {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
 	memories, err := s.store.ListProjectMemories(r.Context(), p.ID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

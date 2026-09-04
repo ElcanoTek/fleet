@@ -100,3 +100,40 @@ func TestProjectExport_FilenameSurvivesAnUnslugifiableName(t *testing.T) {
 		t.Errorf("Content-Disposition = %q, want the \"project\" fallback slug", cd)
 	}
 }
+
+// The export carries `conversation_ids` for EVERY member's chats in the
+// project, so it is the owner's (or an admin's) — the person who can actually
+// destroy the project and might want a copy first. A plain member reading it
+// would learn how many chats each colleague keeps here and collect a valid id
+// set, neither of which any other project surface gives them.
+func TestProjectExport_IsOwnerOnly(t *testing.T) {
+	srv := serverFixture(t)
+	st := srv.store.(*store.Store)
+	ctx := context.Background()
+	const owner, member = "owner@x.com", "member@x.com"
+
+	for _, e := range []string{owner, member} {
+		if _, err := st.CreateUser(ctx, e, "pw-123456"); err != nil {
+			t.Fatal(err)
+		}
+		team := "quant"
+		if _, err := st.SetUserRoleTeam(ctx, e, nil, &team); err != nil {
+			t.Fatal(err)
+		}
+	}
+	proj, err := st.CreateProject(ctx, &store.Project{
+		OwnerEmail: owner, Name: "Shared", TeamID: "quant",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if w := getProjectSub(t, srv, owner, proj.ID, "export"); w.Code != 200 {
+		t.Fatalf("owner: status %d, want 200 (body %s)", w.Code, w.Body.String())
+	}
+	// 404, not 403 — the same answer a non-member gets, so the refusal says
+	// nothing about which projects exist.
+	if w := getProjectSub(t, srv, member, proj.ID, "export"); w.Code != 404 {
+		t.Errorf("plain member: status %d, want 404", w.Code)
+	}
+}
