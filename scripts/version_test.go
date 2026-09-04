@@ -61,7 +61,7 @@ type testRepo struct {
 func newTestRepo(t *testing.T) *testRepo {
 	t.Helper()
 	git := gitBin(t)
-	r := &testRepo{t: t, dir: t.TempDir(), script: versionScript(t)}
+	r := &testRepo{t: t, dir: t.TempDir()}
 	r.git(git, "init", "--quiet", "--initial-branch=main")
 	// Identity + signing off: a repo-local config so the test never depends on
 	// (or touches) the machine's git identity.
@@ -69,6 +69,31 @@ func newTestRepo(t *testing.T) *testRepo {
 	r.git(git, "config", "user.name", "fleet version test")
 	r.git(git, "config", "commit.gpgsign", "false")
 	r.git(git, "config", "tag.gpgsign", "false")
+
+	// The script under test is COPIED IN at its shipped path rather than run
+	// from the fleet checkout. That is not tidiness: the script derives identity
+	// only when git discovery lands on its own checkout (otherwise a source
+	// archive unpacked inside an unrelated repo would stamp that repo's tags —
+	// see TestIdentityIsNotBorrowedFromAnEnclosingRepo). Running fleet's own
+	// copy with cwd set to a synthetic repo is exactly the case it refuses, so
+	// the copy is what makes these tests exercise the real path.
+	//
+	// It is committed, not left untracked, because an untracked file now makes
+	// the tree dirty (TestUntrackedBuildInputsMarkTheTreeDirty) and every
+	// clean-tree assertion below would inherit that.
+	body, err := os.ReadFile(versionScript(t))
+	if err != nil {
+		t.Fatalf("read version.sh: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(r.dir, "scripts"), 0o750); err != nil {
+		t.Fatalf("mkdir scripts: %v", err)
+	}
+	r.script = filepath.Join(r.dir, "scripts", "version.sh")
+	if err := os.WriteFile(r.script, body, 0o700); err != nil { //nolint:gosec // executable test fixture
+		t.Fatalf("write version.sh: %v", err)
+	}
+	r.git(git, "add", "scripts/version.sh")
+	r.git(git, "commit", "--quiet", "-m", "add version.sh")
 	return r
 }
 
@@ -308,7 +333,18 @@ func TestSemverRenderingIsStrictAndOrdered(t *testing.T) {
 func TestReleaseTagGlobIgnoresForeignTags(t *testing.T) {
 	r := newTestRepo(t)
 	r.commit("a")
-	for _, foreign := range []string{"v1.2.3", "sandbox-image-2026.09.04", "release-2026.09.04.7", "v26.9.4.1"} {
+	for _, foreign := range []string{
+		"v1.2.3",
+		"sandbox-image-2026.09.04",
+		"release-2026.09.04.7",
+		"v26.9.4.1",
+		// The one git's glob cannot exclude: in fnmatch, the trailing `[0-9]*`
+		// means "one digit then ANYTHING", so this matches --match and only the
+		// anchored regex rejects it. Left unfiltered it reached `semver` as
+		// `10#1oops` (an arithmetic abort) and, worse, read as "already
+		// released" in release.yml — which would skip cutting the real tag.
+		"v2026.09.04.1oops",
+	} {
 		r.tag(foreign)
 	}
 
@@ -339,5 +375,121 @@ func TestUnknownSubcommandFails(t *testing.T) {
 	}
 	if !strings.Contains(string(out), "unknown subcommand") {
 		t.Errorf("refusal was not explanatory: %q", out)
+	}
+}
+
+// TestSemverIsNotDerailedByAForeignTag — the failure mode that made the strict
+// regex necessary rather than merely tidy: `semver` parses the ordinal with
+// base-10 arithmetic, so a glob-matching tag with a nonnumeric ordinal did not
+// produce a wrong answer, it aborted the command that the Makefile and
+// `make helm-package` interpolate.
+func TestSemverIsNotDerailedByAForeignTag(t *testing.T) {
+	r := newTestRepo(t)
+	r.commit("a")
+	r.tag("v2026.09.04.1oops")
+
+	if got, want := r.run("semver"), "0.0.0"; got != want {
+		t.Errorf("semver with only a malformed tag = %q, want %q (and it must not abort)", got, want)
+	}
+	if got := r.run("released-at"); got != "" {
+		t.Errorf("released-at on a commit carrying only a malformed tag = %q, want empty — release.yml would read this as \"already released\" and never cut the real tag", got)
+	}
+}
+
+// TestCurrentIsReachableFromHead — `make helm-package` stamps `current` as the
+// chart's app version. Answering with "the newest tag anywhere in the repo"
+// would label a chart built from an older checkout with a release it does not
+// contain, whenever the clone has since fetched newer tags.
+func TestCurrentIsReachableFromHead(t *testing.T) {
+	r := newTestRepo(t)
+	r.commit("a")
+	r.tag("v2026.09.04.1")
+	r.commit("b")
+	r.tag("v2026.09.05.1")
+
+	// Check out the older release while the newer tag is still in the repo.
+	r.git(gitBin(t), "checkout", "--quiet", "v2026.09.04.1")
+
+	if got, want := r.run("current"), "2026.09.04.1"; got != want {
+		t.Errorf("current at the older release = %q, want %q — a chart packaged here must not claim a release it does not contain", got, want)
+	}
+	if got, want := r.run("semver"), "2026.904.1"; got != want {
+		t.Errorf("semver at the older release = %q, want %q", got, want)
+	}
+}
+
+// TestUntrackedBuildInputsMarkTheTreeDirty — `git diff HEAD` sees only tracked
+// changes, so an untracked .go file (or an embedded asset) changed what
+// `make build` produced while the stamp still claimed the pristine release.
+func TestUntrackedBuildInputsMarkTheTreeDirty(t *testing.T) {
+	r := newTestRepo(t)
+	r.commit("a")
+	r.tag("v2026.09.04.1")
+
+	if got, want := r.run("describe"), "2026.09.04.1"; got != want {
+		t.Fatalf("describe on a clean tree at the release = %q, want %q", got, want)
+	}
+
+	if err := os.WriteFile(filepath.Join(r.dir, "extra.go"), []byte("package x\n"), 0o600); err != nil {
+		t.Fatalf("write untracked file: %v", err)
+	}
+	if got := r.run("describe"); !strings.HasSuffix(got, "dirty") {
+		t.Errorf("describe with an untracked build input = %q, want a dirty marker — the binary differs from the release it would otherwise claim", got)
+	}
+}
+
+// TestIdentityIsNotBorrowedFromAnEnclosingRepo — a fleet source archive unpacked
+// inside somebody else's git checkout must report the `dev` sentinel, not that
+// repo's tags. Git discovery walks upward, so "am I in a git repo?" is not the
+// same question as "am I in THIS repo?".
+func TestIdentityIsNotBorrowedFromAnEnclosingRepo(t *testing.T) {
+	git := gitBin(t)
+	outer := t.TempDir()
+
+	run := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.Command(git, args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+		}
+	}
+	run(outer, "init", "--quiet", "--initial-branch=main")
+	run(outer, "config", "user.email", "test@example.invalid")
+	run(outer, "config", "user.name", "outer repo")
+	if err := os.WriteFile(filepath.Join(outer, "z"), []byte("z\n"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	run(outer, "add", "z")
+	run(outer, "commit", "--quiet", "-m", "outer")
+	// A tag that IS a valid fleet release name — the point is that matching the
+	// format is not enough; it has to be this repo's.
+	run(outer, "tag", "v2099.01.01.9")
+
+	// Unpack a "source archive" of fleet (just the script, at its real path)
+	// inside that checkout.
+	unpacked := filepath.Join(outer, "fleet-src")
+	if err := os.MkdirAll(filepath.Join(unpacked, "scripts"), 0o750); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	body, err := os.ReadFile(versionScript(t))
+	if err != nil {
+		t.Fatalf("read version.sh: %v", err)
+	}
+	script := filepath.Join(unpacked, "scripts", "version.sh")
+	if err := os.WriteFile(script, body, 0o700); err != nil { //nolint:gosec // executable test fixture
+		t.Fatalf("write version.sh: %v", err)
+	}
+
+	for _, sub := range []string{"describe", "current"} {
+		cmd := exec.Command(script, sub)
+		cmd.Dir = unpacked
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("version.sh %s: %v\n%s", sub, err, out)
+		}
+		if got := strings.TrimSpace(string(out)); got != "dev" {
+			t.Errorf("version.sh %s inside an unrelated git checkout = %q, want \"dev\" — it must not stamp a stranger's release into a fleet binary", sub, got)
+		}
 	}
 }

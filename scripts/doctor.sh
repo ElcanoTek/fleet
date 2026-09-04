@@ -787,11 +787,16 @@ else
 
   motd_src="$SRC_DIR/deploy/fleet-motd.sh"
   motd_dst="/etc/profile.d/fleet-motd.sh"
+  # The MODE is part of "matches", not just the bytes: profile.d is sourced by
+  # every login shell as the logging-in user, so a hook that drifted to 0600 is
+  # unreadable to everyone but root and the banner stays broken — while a
+  # content-only comparison reports it current and neither verb reinstalls it.
+  motd_mode() { stat -c '%a' "$1" 2>/dev/null || echo '?'; }
   if [[ -f "$motd_src" && -d /etc/profile.d ]]; then
-    if [[ -f "$motd_dst" ]] && cmp -s "$motd_src" "$motd_dst"; then
+    if [[ -f "$motd_dst" ]] && cmp -s "$motd_src" "$motd_dst" && [[ "$(motd_mode "$motd_dst")" == "644" ]]; then
       pass "fleet-motd.sh matches deploy/"
     elif [[ "$CHECK_ONLY" == "1" ]]; then
-      fail "${motd_dst} missing or drifted — the login banner is stale or absent (diff: $motd_dst $motd_src)"
+      fail "${motd_dst} missing, drifted, or not mode 0644 — the login banner is stale, absent, or unreadable to non-root logins (diff: $motd_dst $motd_src)"
     else
       install -D -m 0644 "$motd_src" "$motd_dst" \
         && fixed "installed ${motd_dst} from deploy/ (login banner)" \

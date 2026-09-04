@@ -70,8 +70,10 @@ func TestReleaseWorkflowTagsEveryGreenPushToMain(t *testing.T) {
 		{"head_branch == 'main'", "only main releases"},
 		{"scripts/version.sh next", "the ordinal must come from the one script that knows the format"},
 		{"contents: write", "the job cannot push a tag without it"},
-		{"--exact-match", "the idempotence check that stops a re-run opening a second ordinal"},
+		{"scripts/version.sh released-at", "the idempotence check that stops a re-run opening a second ordinal — and it must be the STRICT one, since a v2026.09.04.1oops tag matching the glob would otherwise read as \"already released\""},
+		{"gh release view", "publication must be idempotent: a re-run after a failed `gh release create` is how a tag without its release is recovered"},
 		{"gh release create", "the tag is published as a release so its notes are generated"},
+		{"group: release-${{ github.event.workflow_run.head_sha }}", "the concurrency group must key on the COMMIT: a single `release` group displaces the PENDING run when a third queues, dropping a green commit's tag entirely"},
 	} {
 		if !strings.Contains(wf, want.needle) {
 			t.Errorf(".github/workflows/release.yml no longer contains %q — %s", want.needle, want.why)
@@ -82,6 +84,12 @@ func TestReleaseWorkflowTagsEveryGreenPushToMain(t *testing.T) {
 	// points at by the time this job runs.
 	if !strings.Contains(wf, "workflow_run.head_sha") {
 		t.Errorf("release.yml does not tag github.event.workflow_run.head_sha; tagging a moved main would name a tree CI never ran")
+	}
+	// The already-tagged path must still hand the tag to the publish step. If it
+	// exits without outputs, a tag whose `gh release create` failed once can
+	// never be published by a re-run.
+	if !strings.Contains(wf, "echo \"released=true\"") {
+		t.Errorf("release.yml's already-tagged path does not set the `released` output; a tag whose publication failed would stay unpublished forever (only a human could fix it)")
 	}
 	if !strings.Contains(wf, "merge-base --is-ancestor") {
 		t.Errorf("release.yml does not prove the certified SHA is on the checked-out branch before tagging it; a rewritten main would get a release tag on an orphaned commit")

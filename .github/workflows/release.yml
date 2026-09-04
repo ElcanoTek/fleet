@@ -39,9 +39,21 @@ permissions:
   contents: read
 
 concurrency:
-  # Queue, never cancel: every release must get its own tag, and the ordinal is
-  # derived from the tags already pushed, so two of these must never race.
-  group: release
+  # Keyed to the COMMIT, not to "release".
+  #
+  # A single `release` group looks like the right answer — serialize, never
+  # cancel — and is not: GitHub keeps at most one running plus one pending run
+  # per group, and a newly queued run DISPLACES the pending one even when
+  # `cancel-in-progress` is false. Three green pushes landing while one tag job
+  # runs would drop the middle one, and a commit that passed CI would never be
+  # tagged — the exact invariant this workflow exists to hold.
+  #
+  # Keying on the head SHA means runs for different commits never contend at
+  # all, and the only thing the group still collapses is a re-run for the SAME
+  # commit, which is what it should collapse. Two commits tagging concurrently
+  # is then handled where it belongs: the retry loop below recomputes the
+  # ordinal against refetched tags when a push is rejected.
+  group: release-${{ github.event.workflow_run.head_sha }}
   cancel-in-progress: false
 
 jobs:
@@ -108,11 +120,23 @@ jobs:
           fi
 
           # Idempotence: a re-run of this workflow (or a CI re-run on a commit
-          # that already released) must not open a second ordinal for the same
-          # tree. An exact-match describe is the check — it finds a release tag
-          # ON this commit and nothing else.
-          if existing="$(git describe --tags --exact-match --match 'v[0-9][0-9][0-9][0-9].[0-9][0-9].[0-9][0-9].[0-9]*' "${HEAD_SHA}" 2>/dev/null)"; then
-            echo "::notice::${HEAD_SHA} is already released as ${existing}; nothing to do."
+          # that already released) must not open a SECOND ordinal for the same
+          # tree. `released-at` answers "is there a release tag on this commit",
+          # strictly — a `v2026.09.04.1oops` tag would otherwise read as a
+          # release here and the real tag would never be cut.
+          #
+          # It reports the tag through the step outputs rather than exiting: the
+          # tag push and the release publication are two operations, and the
+          # second can fail on its own (a transient API error, a cancelled run).
+          # Exiting here without outputs would skip the publish step forever,
+          # leaving that tag permanently without its release and needing a human.
+          # The publish step is idempotent, so re-running is the recovery.
+          if existing="$(scripts/version.sh released-at "${HEAD_SHA}")" && [ -n "${existing}" ]; then
+            echo "::notice::${HEAD_SHA} is already tagged ${existing}; not re-tagging. Checking its release is published."
+            {
+              echo "tag=${existing}"
+              echo "released=true"
+            } >>"${GITHUB_OUTPUT}"
             exit 0
           fi
 
@@ -151,6 +175,14 @@ jobs:
           TAG: ${{ steps.tag.outputs.tag }}
         run: |
           set -euo pipefail
+          # Idempotent by construction: this step also runs on a re-run for a
+          # commit that was already tagged (see the step above), which is what
+          # recovers a tag whose publication failed the first time. `gh release
+          # create` errors on an existing release, so ask first.
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            echo "::notice::release ${TAG} is already published; nothing to do."
+            exit 0
+          fi
           # --generate-notes writes the notes from the commits/PRs since the
           # previous tag, which is exactly the changelog for a rolling train —
           # the reason CHANGELOG.md no longer carries a hand-curated release

@@ -1168,8 +1168,13 @@ else
   # and never fatal: a login banner must not be able to fail an update.
   #
   # cmp-gated so a re-run is silent rather than announcing a no-op every time.
+  # The MODE is part of "current", not just the bytes: profile.d is sourced by
+  # every login shell as the logging-in user, so a hook that drifted to 0600 is
+  # unreadable to everyone but root and the banner stays broken — while a
+  # content-only comparison would report it current and never reinstall it.
   if [[ -f "$SRC_DIR/deploy/fleet-motd.sh" ]] && [[ -d /etc/profile.d ]]; then
-    if cmp -s "$SRC_DIR/deploy/fleet-motd.sh" /etc/profile.d/fleet-motd.sh; then
+    if cmp -s "$SRC_DIR/deploy/fleet-motd.sh" /etc/profile.d/fleet-motd.sh \
+      && [[ "$(stat -c '%a' /etc/profile.d/fleet-motd.sh 2>/dev/null)" == "644" ]]; then
       : # already current
     elif install -D -m 0644 "$SRC_DIR/deploy/fleet-motd.sh" /etc/profile.d/fleet-motd.sh 2>/dev/null; then
       ok "refreshed /etc/profile.d/fleet-motd.sh (login banner)"

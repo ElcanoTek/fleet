@@ -192,8 +192,11 @@ names a release and says how far past it this box is:
 | `dev (…)` | an unstamped binary — built with a bare `go build` rather than `make build` |
 
 Quote it verbatim in an issue or a security report; do not parse it. The same
-string appears in `fleet status`, `/healthz`, and the `fleet_version` field of
-`/api-info`. Full contract: [`VERSIONING.md`](VERSIONING.md).
+full string appears in the login banner and in `fleet_version` on the admin
+health summary (`GET /admin/health-summary`). `/api-info`'s `fleet_version`
+carries the **version only**, without the revision, and `/healthz` carries no
+version at all — it is a liveness probe. Full contract:
+[`VERSIONING.md`](VERSIONING.md).
 
 ## update — roll a new version in place
 

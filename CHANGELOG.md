@@ -122,6 +122,27 @@ than by a major-version bump.
   See [`docs/VERSIONING.md`](docs/VERSIONING.md) and
   [ADR-0059](docs/adr/0059-date-based-rolling-releases.md).
 
+- **Hardening from review, all in the release path.** Git's glob syntax reads
+  `[0-9]*` as "one digit then *anything*", so a tag like `v2026.09.04.1oops`
+  matched the release-tag pattern — aborting `semver` on `10#1oops`, and worse,
+  reading as "already released" in the tagging workflow so the real tag was never
+  cut; an anchored regex now decides, with the glob only pre-filtering what git
+  walks. `current` answers with the newest release **reachable from HEAD** rather
+  than the newest tag anywhere, so packaging an older checkout in a clone that
+  has fetched newer tags no longer labels the artifact with a release it does not
+  contain. The dirty check counts **untracked** build inputs (a stray `.go` file
+  changes what `make build` produces, and `git diff HEAD` never saw it). Identity
+  is derived only when git discovery lands on fleet's own checkout, so a source
+  archive unpacked inside an unrelated repository reports `dev` instead of
+  borrowing that repository's tags. The release workflow's concurrency group
+  keys on the commit: a single group would have let a third queued run displace
+  the *pending* one — dropping a green commit's tag entirely, which is the one
+  invariant it exists to hold. And a tag whose `gh release create` failed is now
+  recoverable by re-running, instead of staying permanently unpublished. Finally,
+  the MOTD convergence check compares the file's **mode** as well as its bytes: a
+  hook that drifted to `0600` is unreadable to every non-root login, and a
+  content-only comparison called it current.
+
 - **`fleet update` and `fleet doctor` now refresh the login-banner hook.**
   `/etc/profile.d/fleet-motd.sh` was installed by `scripts/bootstrap.sh` and by
   nothing else, which made it the one file in `deploy/` with no path onto an

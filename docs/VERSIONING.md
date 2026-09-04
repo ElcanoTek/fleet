@@ -59,9 +59,24 @@ $ fleet version
 2026.09.04.2 (a1b2c3d4e5f6)
 ```
 
-`fleet version` (and `fleet --version`) prints `<version> (<revision>)`. The same
-string is reported by the chat health summary, `/healthz`, and the `fleet_version`
-field of `/api-info`.
+`fleet version` (and `fleet --version`) prints `<version> (<revision>)` — the
+full build identity. The other surfaces do **not** all carry that same string,
+so be precise about which one you are reading:
+
+| Surface | What it reports |
+| --- | --- |
+| `fleet version` / `fleet --version` | `<version> (<revision>)` — the whole identity |
+| the login banner (`fleet motd`) | the same full string, rendered live from the installed binary |
+| `GET /admin/health-summary` → `fleet_version` | the same full string (admin-gated) |
+| `GET /api-info` → `fleet_version` | the **version only** — no `(<revision>)` |
+| the A2A agent card → `version` | the **version only** |
+| `GET /healthz` | **no version at all** — it is a liveness probe (`status`, and a 503 while draining or provider-degraded) |
+
+When you need the revision — a support ticket, a "which build is this?" — use
+`fleet version` or the admin health summary. `/api-info` is a machine
+compatibility probe; its `fleet_version` is an opaque label a client should not
+parse, and the field that actually carries the contract there is `api_version`
+(see [`api-versioning.md`](api-versioning.md)).
 
 The version half is `scripts/version.sh describe`, stamped in at build time:
 
