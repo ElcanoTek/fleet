@@ -193,7 +193,7 @@ func (s *Server) postSharedFiles(w http.ResponseWriter, r *http.Request) {
 		})
 		if err != nil {
 			_ = lib.RemoveCanonical(id)
-			if errors.Is(err, store.ErrSharedFileExists) {
+			if errors.Is(err, store.ErrSharedFileExists) || errors.Is(err, store.ErrSharedFileNameIsFolder) {
 				http.Error(w, fmt.Sprintf("%s: %v", name, err), http.StatusConflict)
 				return
 			}
@@ -347,7 +347,7 @@ func httpErrorForSharedFile(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, store.ErrSharedFileNotFound):
 		http.Error(w, err.Error(), http.StatusNotFound)
-	case errors.Is(err, store.ErrSharedFileExists):
+	case errors.Is(err, store.ErrSharedFileExists), errors.Is(err, store.ErrSharedFileNameIsFolder):
 		http.Error(w, err.Error(), http.StatusConflict)
 	default:
 		http.Error(w, err.Error(), http.StatusInternalServerError)

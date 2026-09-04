@@ -746,9 +746,7 @@ func (s *Server) healthz(w http.ResponseWriter, _ *http.Request) {
 	// it drains in-flight work. Checked first — a draining box is unready
 	// regardless of provider health.
 	if s.shuttingDown.Load() {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusServiceUnavailable)
-		_ = json.NewEncoder(w).Encode(map[string]any{"status": "shutting_down"})
+		writeJSONStatus(w, http.StatusServiceUnavailable, map[string]any{"status": "shutting_down"})
 		return
 	}
 	// Surface LLM provider degradation (#267): if any model's circuit is open
@@ -757,9 +755,7 @@ func (s *Server) healthz(w http.ResponseWriter, _ *http.Request) {
 	if s.agent != nil {
 		for _, h := range s.agent.ProviderHealth() {
 			if h.State == agentcore.CircuitOpen.String() {
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusServiceUnavailable)
-				_ = json.NewEncoder(w).Encode(map[string]any{
+				writeJSONStatus(w, http.StatusServiceUnavailable, map[string]any{
 					"status": "degraded",
 					"reason": "llm provider circuit open",
 					"model":  h.Slug,
@@ -815,8 +811,22 @@ func exportFilename(title, id, ext, fallback string) string {
 	return slug + "-" + shortID + "." + ext
 }
 
+// setJSONContentType stamps the JSON media type unless the handler already
+// chose one. A few responses carry an explicit charset or were built around a
+// different type, and silently clobbering that would change the response —
+// so the helpers default the header rather than owning it.
+func setJSONContentType(w http.ResponseWriter) {
+	if w.Header().Get("Content-Type") == "" {
+		w.Header().Set("Content-Type", "application/json")
+	}
+}
+
+// writeJSON encodes v as the response body. The status line and headers are
+// already committed by the time Encode runs, so a mid-body failure (typically
+// the client disconnecting) cannot change the response — log it for
+// diagnostics rather than swallowing it silently.
 func writeJSON(w http.ResponseWriter, v any) {
-	w.Header().Set("Content-Type", "application/json")
+	setJSONContentType(w)
 	if err := json.NewEncoder(w).Encode(v); err != nil {
 		log.Printf("write json: %v", err)
 	}

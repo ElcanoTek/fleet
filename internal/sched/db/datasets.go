@@ -109,6 +109,41 @@ func (db *Database) datasetRowCounts(ctx context.Context, id uuid.UUID) (map[str
 	return counts, rows.Err()
 }
 
+// datasetRowCountsFor returns per-status row counts for several datasets in one
+// round trip, keyed by dataset ID. ListDatasets called datasetRowCounts once per
+// dataset, so a listing cost 1+N queries with nothing bounding N: GET /datasets
+// has no paging, and the web Datasets panel polls it every 5s while a run is
+// active. The grouped form is served by the same
+// idx_dataset_rows_dataset_status index (migration 047).
+func (db *Database) datasetRowCountsFor(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]map[string]int, error) {
+	counts := map[uuid.UUID]map[string]int{}
+	if len(ids) == 0 {
+		return counts, nil
+	}
+	rows, err := db.conn.QueryContext(ctx,
+		`SELECT dataset_id, status, COUNT(*) FROM dataset_rows
+		 WHERE dataset_id = ANY($1::uuid[]) GROUP BY dataset_id, status`, pqUUIDArray(ids))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var (
+			id     uuid.UUID
+			status string
+			n      int
+		)
+		if err := rows.Scan(&id, &status, &n); err != nil {
+			return nil, err
+		}
+		if counts[id] == nil {
+			counts[id] = map[string]int{}
+		}
+		counts[id][status] = n
+	}
+	return counts, rows.Err()
+}
+
 // ListDatasets returns every dataset, newest first, with row counts.
 func (db *Database) ListDatasets(ctx context.Context) ([]*models.Dataset, error) {
 	rows, err := db.conn.QueryContext(ctx, "SELECT "+datasetColumns+" FROM datasets ORDER BY created_at DESC")
@@ -127,12 +162,22 @@ func (db *Database) ListDatasets(ctx context.Context) ([]*models.Dataset, error)
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	ids := make([]uuid.UUID, 0, len(out))
 	for _, d := range out {
-		counts, err := db.datasetRowCounts(ctx, d.ID)
-		if err != nil {
-			return nil, err
+		ids = append(ids, d.ID)
+	}
+	counts, err := db.datasetRowCountsFor(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	for _, d := range out {
+		// A dataset with no rows yet must still get an empty (not nil) map, so
+		// the payload shape matches what the per-dataset query returned.
+		if c := counts[d.ID]; c != nil {
+			d.RowCounts = c
+		} else {
+			d.RowCounts = map[string]int{}
 		}
-		d.RowCounts = counts
 	}
 	return out, nil
 }

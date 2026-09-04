@@ -13,7 +13,8 @@
 -- What is unsettled is whether ACCOUNT NAMES are themselves in scope. If a
 -- deployment treats them as sensitive, this column wants encryption at rest.
 -- That is a threat-model decision for the repo owner, not something a migration
--- can decide, and it is recorded in SECURITY.md rather than here: a migration is
+-- can decide, and it is recorded in SECURITY.md ("Open question: MCP account
+-- names at rest") rather than here: a migration is
 -- applied history, so a question parked in one is a question nobody can close in
 -- place. (An earlier version of this note was an untracked security to-do that
 -- pointed at a source file in an unrelated external codebase; the pointer was

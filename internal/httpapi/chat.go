@@ -244,8 +244,7 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 		}
 		if existing != nil {
 			w.Header().Set("Content-Type", "application/json; charset=utf-8")
-			w.WriteHeader(http.StatusOK)
-			_ = json.NewEncoder(w).Encode(map[string]any{
+			writeJSONStatus(w, http.StatusOK, map[string]any{
 				"queued": true,
 				"input": map[string]any{
 					"id": existing.ID, "client_input_id": existing.ClientInputID,

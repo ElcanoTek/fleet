@@ -954,6 +954,48 @@ prior versions are listed because none have shipped.
     the conversation/turn metadata events, so attaching to that turn is enough
     to learn the queue's current shape — including that the row it is running
     has moved `queued -> running` and must no longer offer send-now/remove.
+- **A shared file and a shared folder could claim the same path, and the staged
+  tree then broke permanently.** `shared_files` is constrained
+  `UNIQUE (folder, name)`, so a root-level file named `q3` and a folder named
+  `q3` are distinct rows — but the staged tree is a real filesystem, where
+  `shared/q3` cannot be a file and a directory at once. Once both rows existed,
+  `Stage` failed either way round (`not a directory` one direction, `file
+  exists` the other), so EVERY reconciler pass returned an error forever and
+  which of the two files the sandbox could actually see flapped with map
+  iteration order — while the upload handler had already answered `200` and
+  logged "will self-heal on the next maintenance pass", which it never did. Both
+  write paths (upload and rename/move) now refuse the second claimant with the
+  typed `ErrSharedFileNameIsFolder`, which the API reports as `409` while there
+  is still a request to report it on. Pre-existing colliding rows are not
+  migrated — an operator has to rename one side.
+- **A skill whose `allowed-tools` used an unrecognized YAML shape was dropped
+  from the roster entirely.** The frontmatter parser accepts the standard's list
+  and comma-scalar forms and documents itself as deliberately non-strict ("a
+  future-standard skill still loads"), but any third shape — a mapping, say —
+  returned an error that failed the whole frontmatter parse. `allowed-tools` is
+  surfaced for review and never enforced as an authorization boundary, so it now
+  costs the field rather than the skill: an unrecognized shape leaves the
+  declared list absent and the skill loads.
+- **`GET /datasets` issued one row-count query per dataset.** The listing ran
+  `1+N` round trips with nothing bounding N (the endpoint has no paging, and the
+  web Datasets panel polls it every 5s while a run is active). The counts now
+  come from a single `GROUP BY dataset_id, status` query, served by the same
+  existing index.
+- **14 JSON responses silently discarded their encode error** via
+  `_ = json.NewEncoder(w).Encode(...)`, bypassing the package's own
+  `writeJSON`/`writeJSONStatus` helpers, which log it. An unencodable value
+  means `Encode` writes nothing at all, so the client got a committed status
+  with an empty body and the server recorded nothing. Those call sites now go
+  through the helpers; the helpers in turn only *default* `Content-Type`
+  instead of overwriting it, so the four responses that set an explicit
+  `charset=utf-8` keep it.
+- **Documentation pointers that did not resolve.** Migration `022`'s security
+  note said the parked "are MCP account names sensitive at rest?" question was
+  "recorded in SECURITY.md"; it was not. SECURITY.md now carries that section
+  (and the note points at it by name). In `cmd/fleet/main.go`,
+  `wireRemoteMCPCatalog`'s doc comment sat 112 lines above the wrong function,
+  so godoc attributed it to `startMaintenanceLoop`; it is now attached to the
+  function it describes.
 
 - **Kubernetes: a control plane that crashed and restarted IN PLACE still
   leaked every sandbox pod it had running (#1264).** The boot-time orphan

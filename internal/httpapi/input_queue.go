@@ -141,8 +141,7 @@ const maxPendingInputs = 20
 // replayed (200) queue row.
 func writeQueueAck(w http.ResponseWriter, status int, convID string, row store.InputQueueRow) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	writeJSONStatus(w, status, map[string]any{
 		"queued": true,
 		"input": map[string]any{
 			"id": row.ID, "client_input_id": row.ClientInputID,
@@ -407,7 +406,7 @@ func (s *Server) handleQueueRoutes(w http.ResponseWriter, r *http.Request, user,
 			return
 		}
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		_ = json.NewEncoder(w).Encode(map[string]any{"items": queueItemsPayload(items)})
+		writeJSON(w, map[string]any{"items": queueItemsPayload(items)})
 	case subArg != "" && !strings.Contains(subArg, "/") && r.Method == http.MethodDelete:
 		ok, err := s.store.RemoveQueuedInput(r.Context(), user, convID, subArg)
 		if err != nil {

@@ -272,9 +272,7 @@ func (s *Server) remoteMCPOAuthCallback(w http.ResponseWriter, r *http.Request) 
 	if req.Error != "" {
 		// The user declined or the AS errored; surface it without treating it as a
 		// server failure.
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(map[string]any{"error": "authorization_failed", "detail": req.Error})
+		writeJSONStatus(w, http.StatusBadRequest, map[string]any{"error": "authorization_failed", "detail": req.Error})
 		return
 	}
 	if req.State == "" || req.Code == "" {

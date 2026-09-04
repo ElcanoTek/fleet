@@ -1,6 +1,8 @@
 package clientconfig
 
 import (
+	"os"
+	"path/filepath"
 	"regexp"
 	"testing"
 )
@@ -89,4 +91,71 @@ func TestValidSkillNameAgreesWithUserSkillShape(t *testing.T) {
 		}
 	}
 	t.Logf("compared %d names", len(corpus))
+}
+
+// TestDeclaredToolListShapes covers the allowed-tools shapes the roster parser
+// has to survive. The list and comma-scalar forms are exercised in
+// TestReadSkills; these are the ones that were not, and the mapping case is the
+// one that mattered: it used to fail the whole frontmatter parse and drop the
+// skill, over a field fleet surfaces for review and never enforces.
+func TestDeclaredToolListShapes(t *testing.T) {
+	dir := t.TempDir()
+	writeSkill := func(name, body string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Join(dir, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, name, "SKILL.md"), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	front := func(name, allowed string) string {
+		return "---\nname: " + name + "\ndescription: d\nallowed-tools: " + allowed + "\n---\nbody\n"
+	}
+
+	cases := []struct {
+		name    string
+		allowed string
+		want    []string
+	}{
+		// Whitespace-separated scalar: named in the field's own doc comment,
+		// previously untested.
+		{"ws-scalar", `"Read Grep"`, []string{"Read", "Grep"}},
+		// A block scalar reaches the same splitter via the newline separator.
+		{"block-scalar", "|\n  Read\n  Grep\n", []string{"Read", "Grep"}},
+		// Both empty forms mean "absent" — httpapi's omitempty depends on it.
+		{"empty-list", "[]", nil},
+		{"empty-scalar", `""`, nil},
+		// An unrecognized shape must cost the FIELD, not the skill.
+		{"mapping", "{Read: yes}", nil},
+	}
+	for _, tc := range cases {
+		writeSkill(tc.name, front(tc.name, tc.allowed))
+	}
+
+	got, problems := ReadSkills(dir)
+	byName := map[string]Skill{}
+	for _, s := range got {
+		byName[s.Name] = s
+	}
+	for _, tc := range cases {
+		s, ok := byName[tc.name]
+		if !ok {
+			t.Errorf("%s: skill dropped from the roster (problems: %v)", tc.name, problems)
+			continue
+		}
+		if len(s.DeclaredAllowedTools) != len(tc.want) {
+			t.Errorf("%s: allowed-tools = %v, want %v", tc.name, s.DeclaredAllowedTools, tc.want)
+			continue
+		}
+		for i, w := range tc.want {
+			if s.DeclaredAllowedTools[i] != w {
+				t.Errorf("%s: allowed-tools = %v, want %v", tc.name, s.DeclaredAllowedTools, tc.want)
+				break
+			}
+		}
+	}
+	if len(problems) != 0 {
+		t.Errorf("no case here is malformed enough to be a problem, got %v", problems)
+	}
 }

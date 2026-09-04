@@ -5,7 +5,6 @@
 package httpapi
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 	"runtime/debug"
@@ -224,9 +223,7 @@ func recoverMiddleware(next http.Handler) http.Handler {
 				// Same structured emission + counter + hooks every recovered panic
 				// gets (#241), labeled with the request method+path for correlation.
 				safe.EmitPanic("httpapi.handler "+r.Method+" "+r.URL.Path, rec, debug.Stack())
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusInternalServerError)
-				_ = json.NewEncoder(w).Encode(map[string]string{"error": "internal server error"})
+				writeJSONStatus(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
 			}
 		}()
 		next.ServeHTTP(w, r)
