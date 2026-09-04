@@ -147,9 +147,17 @@ The live turn stream matches: the `user.message` SSE frame carries
 `{"text": …, "injected_context": …}`, with the same omit-when-empty rule, so a
 reload and a live turn agree.
 
-Rows written before migration 056 have `injected_context` empty and the blocks
-still inside `content.text`. A client must tolerate both and must not assume an
-old conversation's user bubble is free of injected markup.
+Rows written before migration 056 have `injected_context` **NULL** and the
+blocks still inside `content.text`. A client must tolerate both and must not
+assume an old conversation's user bubble is free of injected markup.
+
+`NULL` there is not the same as `''`, and the difference is the point. The
+column is nullable with no default precisely so that a pre-split row (`NULL`)
+can be told apart from a post-split turn that simply injected nothing (`''`).
+Only the former may be run through the marker-based legacy strip on the branch
+path — the strip cannot tell an injected block from a user who typed one, and a
+"---" rule followed by `**Shared file library**` is what someone documenting
+fleet writes. See ADR-0058; do not add `NOT NULL DEFAULT ''` to this column.
 
 ## What this does not fix
 

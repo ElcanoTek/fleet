@@ -91,14 +91,26 @@ any host-side vision read. The segment is derived from the authenticated
 identity, never from the request.
 
 **3. Server-injected context is stored in its own column, not in the message
-text.** Migration 056 adds `messages.injected_context` (NOT NULL DEFAULT '').
-`content.text` keeps what the user typed; the suffix sits beside it on
+text.** Migration 056 adds `messages.injected_context` as a **nullable column
+with no default**, and that nullability is load-bearing rather than incidental:
+`NULL` is the legacy discriminator. Every write since the split supplies a
+value — the derived suffix, or `''` for a turn that injected nothing — so
+`NULL` means exactly "written before the split existed, and the blocks may
+still be inside `content.text`". Do not "tidy" this into `NOT NULL DEFAULT ''`:
+that erases the distinction, and the marker-based legacy strip below would then
+have to run against every message ever written, including ones typed after the
+migration, where a user who legitimately writes a separator followed by
+`**Shared file library**` would lose that text and everything after it from a
+branch copy. `content.text` keeps what the user typed; the suffix sits beside it on
 `agent.HistoryEntry.InjectedContext`. `agent.ComposeUserMessage` is the single
 place the two halves are joined for a provider call, and it reproduces the old
 byte layout exactly, so replayed turns are byte-for-byte what they were. (The
 cacheable prefix — system prompt plus tool definitions — is untouched; the
 message tail the rolling recency breakpoints cache is unchanged.) The branch copy does not select the column, and legacy rows (blocks
-still inside the text) are stripped by marker at branch time.
+still inside the text) are stripped by marker at branch time — and ONLY those
+rows, selected as `injected_context IS NULL`. The strip cannot tell an injected
+block from a user who typed one, so gating it on the discriminator is what
+keeps a message written today byte-identical in its copy.
 
 `HistoryEntry.InjectedContext` is `json:"-"` deliberately: the same struct is
 projected into the public share snapshot and the team-shared read view, both of

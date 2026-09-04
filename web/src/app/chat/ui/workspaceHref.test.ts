@@ -357,22 +357,25 @@ describe("unsharedFileName", () => {
     expect(unsharedFileName(`/api/conversations/${CONV}/workspace/spend.png`)).toBe(
       "spend.png",
     );
-    // Absolute, but OUR origin — the same file, named the long way.
-    expect(
-      unsharedFileName(
-        `${location.origin}/api/conversations/${CONV}/workspace/a%20b.csv`,
-      ),
-    ).toBe("a b.csv");
+    expect(unsharedFileName(`/api/conversations/${CONV}/workspace/a%20b.csv`)).toBe(
+      "a b.csv",
+    );
     expect(unsharedFileName(`/api/orchestrator/tasks/${TASK}/workspace/weekly.png`)).toBe(
       "weekly.png",
     );
   });
 
-  it("does not claim a third-party URL that merely looks like the route", () => {
-    // The route shape is specific, but it is not ours to claim on someone
-    // else's host: this is a page the reader can simply open, and replacing it
-    // with "file not shared" would be a false statement — the very dead
-    // promise the withholding exists to remove.
+  it("never claims a fully-qualified URL, whatever its host", () => {
+    // Two reasons, both deliberate. The route shape is not ours to claim on
+    // someone else's host — that page is one the reader can simply open, and
+    // "file not shared" would be a false statement. And deciding by origin
+    // cannot be made deterministic: `location` does not exist during the
+    // server pass, so the same href would render as a live link on the server
+    // and as plain text after hydration — a mismatch, and in the prerendered
+    // public share view a dead owner-scoped link visible until hydration.
+    //
+    // Nothing real is lost: resolveWorkspaceHref only ever produces
+    // root-relative routes.
     expect(
       unsharedFileName(
         `https://example.com/api/conversations/${CONV}/workspace/chart.png`,
@@ -380,7 +383,7 @@ describe("unsharedFileName", () => {
     ).toBeNull();
     expect(
       unsharedFileName(
-        `https://fleet.example.com/api/orchestrator/tasks/${TASK}/workspace/weekly.png`,
+        `${location.origin}/api/conversations/${CONV}/workspace/a%20b.csv`,
       ),
     ).toBeNull();
   });
@@ -475,6 +478,35 @@ describe("redactUnsharedFiles", () => {
       "Then read `[spend](spend.csv)` back.",
     ].join("\n");
     expect(redactUnsharedFiles(md, IMAGE_PLACEHOLDER)).toBe(md);
+  });
+
+  it("closes a fence only on a marker at least as long as the opener", () => {
+    // Documentation quoting a ``` block inside a ```` one. Comparing only the
+    // marker character closed the outer block on the inner fence: everything
+    // after it was treated as prose (so the sample's own filename got
+    // rewritten) and the real closing fence opened a phantom block (so the
+    // genuine link below escaped redaction) — wrong in both directions.
+    const md = [
+      "How to show a chart:",
+      "",
+      "````markdown",
+      "```python",
+      "plt.savefig('daily_spend_by_channel.png')",
+      "```",
+      "See [chart](daily_spend_by_channel.png) afterwards.",
+      "````",
+      "",
+      "Here is the real one: [chart](daily_spend_by_channel.png)",
+    ].join("\n");
+    const out = redactUnsharedFiles(md, IMAGE_PLACEHOLDER);
+    // Everything inside the four-backtick block is verbatim, both fences and
+    // the sample link included.
+    expect(out).toContain("```python");
+    expect(out).toContain("See [chart](daily_spend_by_channel.png) afterwards.");
+    // …and the real link outside it is still withheld.
+    expect(out).toContain(
+      "Here is the real one: daily\\_spend\\_by\\_channel\\.png (file not shared)",
+    );
   });
 
   it("is a no-op on text that names no files", () => {
