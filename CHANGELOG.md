@@ -27,6 +27,43 @@ than by a major-version bump.
 
 ## Recent changes
 
+### Removed
+
+- **The `fleet-admin` shim is gone — and `fleet update` deletes the copy on your
+  box.** `fleet-admin <verb>` has been a 24-line forwarder to the same dispatch
+  `fleet <verb>` uses since #461, printing a deprecation notice on every
+  invocation. Its removal trigger never worked: "one release" when no release had
+  ever been cut, then "the first release after 1.0.0" on a train that will never
+  cut one, then a date. Waiting longer bought nobody anything — no unit, timer or
+  Helm template ever referenced it, nothing switches on `argv[0]`, and it was
+  never even equivalent (`task run` is dispatched by `cmd/fleet` before
+  `admincli`, so the shim could only print an explanation). So it is removed now,
+  and ADR-0012's dated window is discharged rather than restated for a third
+  time.
+
+  **`fleet-admin <verb>` stops working. Use `fleet <verb>` — same flags, same
+  behaviour.** Nothing on the box breaks by itself; a person or a script has to
+  type it. If you have one that does, that is the one-word fix.
+
+  The part every previous checklist missed: deleting the shim from the repo does
+  **not** remove it from a box. `bootstrap` installed a copy at
+  `$INSTALL_DIR/fleet-admin` and symlinked `/usr/local/bin/fleet-admin` at it,
+  `update` reinstalled it every time, and nothing ever deleted either — so an
+  existing box would keep a fully working operator CLI on `PATH` that is never
+  rebuilt again, dispatching against today's databases with whatever code it was
+  compiled from. That is worse than a missing command, so **`fleet update` and
+  `fleet doctor` now delete both paths** and say what they removed (failure only
+  warns; `doctor --check` reports without removing). The existence test is
+  `-e || -L`, because removing the target first leaves the bootstrap symlink
+  dangling — and a broken link on `PATH` would be worse still.
+
+  `make build` now emits one binary. Two hard-fail guards (`update.sh`,
+  `fleet-upgrade.sh`) and one silent-skip guard in `bootstrap.sh` — the last of
+  which would have skipped installing `fleet` itself, reporting success having
+  installed nothing — are gone with it. `internal/admincli` is untouched: it is
+  `fleet`'s own dispatch and always was. See
+  [ADR-0060](docs/adr/0060-remove-the-fleet-admin-shim.md).
+
 ### Changed
 
 - **Releases are date-based now, and nobody ever tags one by hand.** fleet had a

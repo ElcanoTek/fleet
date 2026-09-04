@@ -37,7 +37,7 @@ reviewable, and citable. Each record names the file or test that enforces it.
 | [0009](0009-per-user-remote-mcp-oauth.md) | Per-user remote MCP servers via OAuth | Superseded by ADR-0040 |
 | [0010](0010-microvm-sandbox-runtimes.md) | microVM sandbox runtimes (Kata / libkrun) via a fail-closed `--runtime` selector | Accepted |
 | [0011](0011-remove-worker-node-registry.md) | Remove the worker-node registry; the in-process worker is the only runner | Accepted |
-| [0012](0012-unified-fleet-cli.md) | One `fleet` binary — `serve` plus the operator CLI (back-compat preserved) | Accepted; re-anchored by ADR-0059 |
+| [0012](0012-unified-fleet-cli.md) | One `fleet` binary — `serve` plus the operator CLI (back-compat preserved) | Accepted; completed by ADR-0060 |
 | [0013](0013-team-rbac.md) | Team RBAC — roles + opt-in, team-scoped conversation reads | Accepted; amended by ADR-0057 |
 | [0014](0014-oidc-sso-in-nextjs.md) | OIDC / OAuth2 SSO lives in the Next.js layer, not the chat server | Accepted |
 | [0015](0015-remote-mcp-tls-pinning-mtls.md) | TLS pinning and mTLS for remote MCP servers | Accepted |
@@ -68,3 +68,4 @@ reviewable, and citable. Each record names the file or test that enforces it.
 | [0057](0057-team-shared-chats-live-in-team-shared-projects.md) | A team-shared chat lives inside a team-shared project | Accepted; amends ADR-0013 |
 | [0058](0058-per-conversation-attachment-scoping.md) | Attachments are scoped per conversation; the uploads tree is mounted into no sandbox | Accepted |
 | [0059](0059-date-based-rolling-releases.md) | Date-based rolling releases; every green push to `main` is tagged automatically | Accepted; re-anchors ADR-0012 |
+| [0060](0060-remove-the-fleet-admin-shim.md) | Remove the `fleet-admin` shim, and evict it from the boxes that have it | Accepted; completes ADR-0012 |

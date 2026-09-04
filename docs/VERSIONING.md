@@ -137,9 +137,14 @@ never cuts one. So every window is a **date**:
 > removed in the first release on or after `YYYY-MM-DD`
 
 That is a real clock: the release whose tag is `vYYYY.MM.DD.N` or later is the
-one that drops it. ADR-0012's `fleet-admin` shim removal — previously "the first
-release after 1.0.0", a condition that could never be met — is re-anchored this
-way.
+one that drops it.
+
+The rule was written from a live example. ADR-0012 keyed the `fleet-admin`
+shim's removal to a release number, which on this train could never come due —
+so the window sat, restated across eight files, arming nothing. ADR-0059 dated
+it; [ADR-0060](adr/0060-remove-the-fleet-admin-shim.md) then removed the shim
+outright. `scripts/check_release_version_test.go` refuses a number-keyed window
+in any operator-facing file.
 
 ## What this replaced
 
@@ -153,8 +158,8 @@ For the record, so nobody reintroduces it:
 - three further, mutually inconsistent version strings: the Helm chart's
   `0.1.0` / `"unreleased"`, `web/package.json`'s `0.1.0`, and a fabricated
   `"fleet_version": "1.2.0"` in the `/api-info` example;
-- a `fleet-admin` removal trigger — "the first release after 1.0.0" — restated
-  across eight files and unreachable in all of them.
+- a `fleet-admin` removal trigger keyed to a 1.0.0 that was never coming,
+  restated across eight files and unreachable in all of them.
 
 `CHANGELOG.md` is still maintained, and is still where a user-visible change gets
 explained (the PR template asks for it). What it no longer does is pretend to be

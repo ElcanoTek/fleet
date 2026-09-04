@@ -182,7 +182,7 @@ func renderTriggerTemplate(tmpl string, body []byte, r *http.Request) (string, e
 		},
 	}
 
-	// G708: the template is operator-configured (set via `fleet-admin sched
+	// G708: the template is operator-configured (set via `fleet sched
 	// trigger create --template`, an admin-only path), NEVER attacker-supplied.
 	// The inbound webhook payload is exposed only as DATA (.Payload/.Body), not as
 	// the template text. The rendered output is a plain-text LLM prompt, not

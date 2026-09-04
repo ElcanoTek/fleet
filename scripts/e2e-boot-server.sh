@@ -263,7 +263,7 @@ go_build_retry() {
 build_binaries() {
   log "build: go build fleet + fake-llm"
   # One unified `fleet` binary (#461): `fleet serve` runs the server, `fleet <verb>`
-  # is the operator CLI (user provisioning below). No separate fleet-admin needed.
+  # is the operator CLI (user provisioning below). No separate admin binary needed.
   go_build_retry "$BIN_DIR/fleet"    ./cmd/fleet    fleet    || die "go build fleet failed (see $LOG_DIR/build.log)"
   go_build_retry "$BIN_DIR/fake-llm" ./cmd/fake-llm fake-llm || die "go build fake-llm failed (see $LOG_DIR/build.log)"
 }

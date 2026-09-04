@@ -78,10 +78,32 @@ func TestReleaseWorkflowTagsEveryGreenPushToMain(t *testing.T) {
 		}
 	}
 
-	// The tag must be pushed to the exact SHA CI certified, not to whatever
-	// `main` points at by the time this job runs.
+	// The tag must land on the exact SHA CI certified, not on whatever `main`
+	// points at by the time this job runs.
 	if !strings.Contains(wf, "workflow_run.head_sha") {
 		t.Errorf("release.yml does not tag github.event.workflow_run.head_sha; tagging a moved main would name a tree CI never ran")
+	}
+	if !strings.Contains(wf, "merge-base --is-ancestor") {
+		t.Errorf("release.yml does not prove the certified SHA is on the checked-out branch before tagging it; a rewritten main would get a release tag on an orphaned commit")
+	}
+
+	// The untrusted-checkout boundary, which is easy to "helpfully" undo.
+	//
+	// This job holds a `contents: write` token on a workflow_run trigger and
+	// then EXECUTES scripts/version.sh from the checkout, so a `ref:` taken from
+	// the event payload turns the checkout into a privilege-escalation sink —
+	// CodeQL's actions/untrusted-checkout/high and Semgrep's
+	// workflow-run-target-code-checkout both fail the build on it, which is how
+	// this was caught. The certified SHA reaches git as a tag TARGET only; the
+	// code that runs is the default branch's. Re-adding the ref would look like
+	// a tidy-up ("check out what we're tagging") and would be the bug.
+	for _, sink := range []string{
+		"ref: ${{ github.event.workflow_run.head_sha }}",
+		"ref: ${{ github.event.workflow_run.head_branch }}",
+	} {
+		if strings.Contains(wf, sink) {
+			t.Errorf("release.yml checks out %q. This job runs privileged and executes code from the checkout — take the SHA as a tag target, not a checkout ref (ADR-0059).", sink)
+		}
 	}
 }
 
@@ -117,45 +139,69 @@ func TestNoHandAuthoredReleaseNumbers(t *testing.T) {
 	}
 }
 
-// TestDeprecationWindowsAreDatedNotNumbered — a deprecation keyed to a release
-// NUMBER can never come due on a date-based train, which is how "removed in the
-// first release after 1.0.0" ended up restated across eight files and armed in
-// none of them. Windows are dates now; this refuses the numbered form's return.
-func TestDeprecationWindowsAreDatedNotNumbered(t *testing.T) {
+// TestDeprecationWindowsAreNotKeyedToAReleaseNumber — a deprecation keyed to a
+// release NUMBER can never come due on a date-based train. That is not
+// hypothetical: "removed in the first release after 1.0.0" was restated across
+// eight operator-facing files and armed in none of them, because no 1.0.0 was
+// ever going to be cut (ADR-0059 re-anchored it to a date; ADR-0060 then removed
+// the thing it guarded). A window must name a DATE — "the first release on or
+// after YYYY-MM-DD" — so this refuses the numbered form's return.
+//
+// The list is the operator-facing surfaces, named explicitly rather than walked:
+// a walk would also sweep up docs/adr/** and CHANGELOG.md, which QUOTE the old
+// phrase as history and must keep doing so. History is not drift.
+func TestDeprecationWindowsAreNotKeyedToAReleaseNumber(t *testing.T) {
 	root := repoRoot(t)
 
-	// `\s+` rather than a literal space throughout: these are prose sentences in
+	// `\s+` rather than a literal space: these are prose sentences in
 	// hard-wrapped Markdown and Go comments, so the phrase legitimately breaks
-	// across lines ("...the first\nrelease on or after 2026-12-01"). A
-	// space-literal pattern would report a correctly dated file as undated.
-	//
-	// "first release after <semver>" — the form that can never come due.
-	numbered := regexp.MustCompile(`(?is)first\s+release\s+(after|following)\s+\d+\.\d+`)
-	// The dated replacement, so the check is "dated form present", not merely
-	// "numbered form absent" — a deleted window is not a fixed one.
-	dated := regexp.MustCompile(`(?is)first\s+release\s+on\s+or\s+after\s+\d{4}-\d{2}-\d{2}`)
+	// across lines ("...the first\nrelease after 1.0.0").
+	numbered := regexp.MustCompile(`(?is)(first|next)\s+release\s+(after|following)\s+v?\d+\.\d+`)
 
-	// The files that carried the shim's removal trigger. Named explicitly rather
-	// than discovered: the point is that these specific operator-facing surfaces
-	// agree, and a walk would silently pass if one lost the claim entirely.
-	carriers := []string{
+	for _, rel := range []string{
 		"README.md",
 		"AGENTS.md",
 		"CONTRIBUTING.md",
 		"ONBOARDING.md",
+		"SECURITY.md",
 		"docs/DEPLOYMENT.md",
 		"docs/OPERATORS.md",
 		"docs/BACKUP_RESTORE.md",
+		"docs/VERSIONING.md",
 		"Makefile",
-		"cmd/fleet-admin/main.go",
-	}
-	for _, rel := range carriers {
+	} {
 		body := readFile(t, root, rel)
-		if numbered.MatchString(body) {
-			t.Errorf("%s still keys a deprecation to a release NUMBER (%q). No numbered release will ever be cut — use \"the first release on or after YYYY-MM-DD\" (ADR-0059, ADR-0012).", rel, numbered.FindString(body))
+		if m := numbered.FindString(body); m != "" {
+			t.Errorf("%s keys a deprecation to a release NUMBER (%q). No numbered release will ever be cut — date the window instead: \"the first release on or after YYYY-MM-DD\" (ADR-0059).", rel, m)
 		}
-		if !dated.MatchString(body) {
-			t.Errorf("%s no longer states the fleet-admin shim's dated removal window. Every carrier of that claim must agree, or the deprecation means something different depending on which file you read.", rel)
+	}
+}
+
+// TestTheFleetAdminShimIsGone — ADR-0060 removed it, and the removal has two
+// halves that are easy to half-do. The repo half is this: no package to build,
+// and nothing in the build/install path that would resurrect it. (The other half
+// — evicting the copy already installed on a box — lives in scripts/update.sh
+// and scripts/doctor.sh, which is why the strings below must stay there.)
+func TestTheFleetAdminShimIsGone(t *testing.T) {
+	root := repoRoot(t)
+
+	if _, err := os.Stat(filepath.Join(root, "cmd", "fleet-admin")); err == nil {
+		t.Errorf("cmd/fleet-admin is back. The operator CLI is `fleet <verb>` and has been since #461; the shim was removed in ADR-0060.")
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("stat cmd/fleet-admin: %v", err)
+	}
+
+	mk := readFile(t, root, "Makefile")
+	if strings.Contains(mk, "fleet-admin ./cmd/fleet-admin") || strings.Contains(mk, "/fleet-admin\"") {
+		t.Errorf("the Makefile builds or installs fleet-admin again (ADR-0060 removed it)")
+	}
+
+	// A box that already has the shim keeps a stale, never-rebuilt operator CLI
+	// on PATH until something deletes it. Both convergence paths must.
+	for _, rel := range []string{"scripts/update.sh", "scripts/doctor.sh"} {
+		body := readFile(t, root, rel)
+		if !strings.Contains(body, "/usr/local/bin/fleet-admin") {
+			t.Errorf("%s no longer evicts a leftover fleet-admin shim. Removing it from the repo does not remove it from a box — it stays on PATH running whatever code it was built from (ADR-0060).", rel)
 		}
 	}
 }

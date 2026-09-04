@@ -5,9 +5,9 @@
 
 The operator lifecycle is **bootstrap → update → status**, one box. The server
 runs via `fleet serve` (bare `fleet` also serves, for back-compat); all other
-verbs are the operator CLI. (`fleet-admin <verb>` still works but is deprecated;
-it is removed in the first release on or after 2026-12-01 —
-[ADR-0012](adr/0012-unified-fleet-cli.md).)
+verbs are the operator CLI. (The `fleet-admin` shim was removed —
+[ADR-0060](adr/0060-remove-the-fleet-admin-shim.md); `fleet update` and
+`fleet doctor` delete a copy left on a box by an earlier install.)
 Every verb is idempotent and exposed both as a shell script
 (`scripts/`) and as a `fleet` subcommand that wraps it, so a re-run converges on
 the same state rather than double-applying. None of them ever run application
@@ -46,7 +46,7 @@ fleet bootstrap   →   fleet update   →   fleet status / fleet doctor
 
 > **`bootstrap` and `update` operate on a fleet *source checkout*.** They run
 > `make build` (and, on update, `git pull`) against the checkout and install the
-> resulting `fleet` + `fleet-admin` binaries to `FLEET_INSTALL_DIR` (default
+> resulting `fleet` binary to `FLEET_INSTALL_DIR` (default
 > `/opt/fleet`, the unit's `ExecStart` dir). Keep the repo cloned on the box (Go
 > toolchain present); `status`, `restart`, `stop`, and `logs` work off the
 > installed binary alone.
@@ -264,10 +264,10 @@ scripts/fleet-upgrade.sh --dry-run              # print the plan; change nothing
 
 `scripts/fleet-upgrade.sh` is a safer companion to `update.sh` for production
 boxes. It does not pull (run `git pull` first); it `make build`s, **backs up the
-live `fleet`/`fleet-admin` binaries**, installs the new ones, `systemctl
+live `fleet` binary**, installs the new one, `systemctl
 restart`s, then **gates on the new process's `/readyz` probe** before declaring
 success — and if `/readyz` does not come green within `--health-timeout` (default
-90s) it **reinstalls the backup binaries and restarts**, so a bad build
+90s) it **reinstalls the backup binary and restarts**, so a bad build
 self-heals to the last-known-good version instead of crash-looping.
 
 The **drain is the binary's, not the script's**: `systemctl restart` sends

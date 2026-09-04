@@ -100,5 +100,5 @@ through Caddy afterwards); `sudo fleet update --adopt-units` does the same.
   <GA + 6 months>` and an eventual `410 Gone`. There is no GA date yet, so the
   legacy paths carry `Deprecation`/`Link` (the migration signal) but no `Sunset`
   and are not yet removed. Set the sunset window at GA.
-- The bare paths still serve fully (the web UI + `fleet-admin` use them today);
+- The bare paths still serve fully (the web UI + the `fleet` CLI use them today);
   their migration to `/v1` is the follow-on the deprecation window enables.

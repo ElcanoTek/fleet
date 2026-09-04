@@ -22,6 +22,12 @@
 # Consequence, stated plainly: a push to `main` whose CI is red gets NO tag. That
 # is the intent — a rolling train releases what passed, and the next green push
 # takes the next ordinal. Nothing here can be run by hand to release a red tree.
+#
+# Second consequence, smaller: the ordinal records the order releases were
+# TAGGED, not the order the commits landed. Two pushes whose CI runs finish out
+# of order would take ordinals out of order. Accepted — an ordinal disambiguates
+# a day's releases, it is not a topological sort, and the tag still points at the
+# commit its own CI run certified.
 name: Release
 
 on:
@@ -53,13 +59,26 @@ jobs:
     permissions:
       contents: write # creates the tag and the GitHub release
     steps:
-      - name: Check out the exact commit CI certified
+      # Checks out the DEFAULT BRANCH, deliberately NOT the SHA from the event.
+      #
+      # This job runs with `contents: write` on a `workflow_run` trigger, so it
+      # holds a privileged token, and this step is the one place that puts code
+      # on disk that the next step then EXECUTES (scripts/version.sh). Checking
+      # out a ref taken from the event payload there is the untrusted-checkout
+      # escalation both scanners flag (CodeQL `actions/untrusted-checkout/high`,
+      # Semgrep `workflow-run-target-code-checkout`) — and they are right to,
+      # even though the job's `if:` already narrows the trigger to a push on
+      # main: a filter is a condition, not a boundary, and the fix that removes
+      # the sink is better than the waiver that argues about it.
+      #
+      # Nothing is lost. `fetch-depth: 0` brings the whole graph, so the
+      # certified SHA is present as an OBJECT to tag even though it is not what
+      # is checked out — and the next step proves it is on this branch before
+      # tagging it. So the code that runs is main's, and the commit that gets
+      # named is still exactly the one CI certified.
+      - name: Check out the default branch (trusted code) with full history
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # The SHA from the CI run, NOT `main`: main may already have moved,
-          # and tagging a commit whose CI never ran is the one thing this
-          # workflow must not do.
-          ref: ${{ github.event.workflow_run.head_sha }}
           # Tags are the ordinal's source of truth, so they must all be here;
           # fetch-depth 0 also gives `git describe` a real commit graph.
           fetch-depth: 0
@@ -75,6 +94,18 @@ jobs:
 
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+          # The certified SHA is a tag TARGET here, never a checkout ref (see
+          # the step above). Prove it is actually on the branch we checked out
+          # before naming it: the event says CI passed on this commit, and this
+          # is what makes "and it is still part of main's history" a checked
+          # fact rather than a trusted claim. A force-push or a rewritten
+          # history lands here and fails loudly instead of minting a release
+          # tag on an orphaned commit.
+          if ! git merge-base --is-ancestor "${HEAD_SHA}" HEAD; then
+            echo "::error::${HEAD_SHA} is not an ancestor of the checked-out default branch. main was rewritten, or this run does not belong to it. Refusing to tag."
+            exit 1
+          fi
 
           # Idempotence: a re-run of this workflow (or a CI re-run on a commit
           # that already released) must not open a second ordinal for the same

@@ -13,11 +13,11 @@ import (
 	"github.com/ElcanoTek/fleet/internal/worktree"
 )
 
-// fleet-admin worktree — operator hygiene for the per-run git worktrees that
+// fleet worktree — operator hygiene for the per-run git worktrees that
 // scheduled tasks create when worktree_config is enabled (#180).
 //
-//	fleet-admin worktree list   [--workspace DIR]
-//	fleet-admin worktree prune  [--workspace DIR] [--older-than DUR] [--dry-run]
+//	fleet worktree list   [--workspace DIR]
+//	fleet worktree prune  [--workspace DIR] [--older-than DUR] [--dry-run]
 //
 // Worktrees are created under <workspace>/.fleet-worktrees/<task>-<run>. A run
 // that crashes between `git worktree add` and its cleanup leaves an orphan;
@@ -25,7 +25,7 @@ import (
 // directly (there is no DB/storage seam for worktrees), mirroring the
 // bootstrap/status host-command pattern.
 
-// cmdWorktree dispatches `fleet-admin worktree list|prune`.
+// cmdWorktree dispatches `fleet worktree list|prune`.
 func cmdWorktree(argv []string) int {
 	if len(argv) < 1 {
 		return errf(1, "usage: fleet worktree list|prune [--workspace DIR] [--older-than DUR]")

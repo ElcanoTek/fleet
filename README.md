@@ -203,7 +203,6 @@ scripts and the CI definition.
 ```
 cmd/
   fleet/          the one unified binary — server (`fleet serve`: chat HTTP/SSE + orchestrator HTTP + scheduler + worker pool) AND operator CLI (every other verb)
-  fleet-admin/    deprecation shim — forwards to `fleet`; removed in the first release on or after 2026-12-01 (ADR-0012)
   sandbox-probe/  deploy-time sandbox smoke test
 internal/
   agentcore/      the one unified run loop + shared agent primitives (cost ceilings, policy)

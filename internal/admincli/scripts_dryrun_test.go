@@ -83,7 +83,7 @@ func TestBootstrapDryRunSmoke(t *testing.T) {
 		"client bundle manifest found",
 		"pg_hba",                                 // the scram-sha-256 loopback rewrite step (#78)
 		"Building + installing the fleet binary", // the binary build+install step (#71)
-		"would install fleet + fleet-admin",
+		"would install fleet",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("bootstrap --dry-run plan missing %q\n--- output ---\n%s", want, out)
@@ -416,7 +416,8 @@ func TestUpdateDryRunSmoke(t *testing.T) {
 	out := runScriptDryRun(t, "update.sh", "--dry-run", "--no-pull")
 	for _, want := range []string{
 		"make build",
-		"would install fleet + fleet-admin", // the install-to-ExecStart step (#71)
+		"would install fleet", // the install-to-ExecStart step (#71)
+		"would remove a leftover fleet-admin shim", // the retired shim's eviction (ADR-0060)
 		"Restarting",
 	} {
 		if !strings.Contains(out, want) {

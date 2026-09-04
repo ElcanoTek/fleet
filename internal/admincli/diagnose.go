@@ -20,7 +20,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/redact"
 )
 
-// cmdDiagnose is the `fleet-admin diagnose` support-bundle collector. It gathers
+// cmdDiagnose is the `fleet diagnose` support-bundle collector. It gathers
 // the read-only health/status report, a REDACTED config summary, the migration
 // versions of both databases, and sandbox image info into a single gzipped tar
 // archive an operator can attach to an issue. It NEVER uploads anything — it only
@@ -30,9 +30,9 @@ import (
 // config section lists only env-var NAMES (no values) and bundle metadata (app
 // name, model hints, MCP server names — never credentials).
 //
-// The health section REUSES the exact `fleet-admin status` checks (see
+// The health section REUSES the exact `fleet status` checks (see
 // captureHealth) rather than re-implementing them, so the bundle's view of health
-// can never drift from `fleet-admin doctor`.
+// can never drift from `fleet doctor`.
 //
 // Exit codes: 0 wrote the bundle · 1 usage/IO error. A failed individual section
 // is NOT fatal: its file carries an "ERROR collecting …" line and the rest of the
@@ -169,8 +169,8 @@ func writeTarFile(tw *tar.Writer, name, body string, modTime time.Time) error {
 
 // ── section collectors ───────────────────────────────────────────────────────
 
-// collectStatus reuses the EXACT `fleet-admin status` health checks (captureHealth)
-// so the bundle's health view can never drift from `fleet-admin doctor`.
+// collectStatus reuses the EXACT `fleet status` health checks (captureHealth)
+// so the bundle's health view can never drift from `fleet doctor`.
 func (dc *diagnoseCollector) collectStatus(ctx context.Context) string {
 	return captureHealth(ctx, dc.chatURL, dc.schedURL, dc.bundleDir, dc.service, dc.skipSandbox)
 }
@@ -321,9 +321,9 @@ func (dc *diagnoseCollector) collectSandbox(ctx context.Context) string {
 	return sb.String()
 }
 
-// captureHealth runs the EXACT `fleet-admin status` checks and returns their
+// captureHealth runs the EXACT `fleet status` checks and returns their
 // report as a string, so the diagnose bundle's status.txt is byte-for-byte the
-// same set of ✓/✗ lines `fleet-admin doctor` prints — no duplicated logic. It
+// same set of ✓/✗ lines `fleet doctor` prints — no duplicated logic. It
 // points both report writers at one buffer (the header/summary that status sends
 // to stderr is captured here too, for a self-contained section). The DSN values
 // echoed by the checks are already userinfo-stripped (redactDSN); the whole body

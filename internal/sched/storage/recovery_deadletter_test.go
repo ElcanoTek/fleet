@@ -91,7 +91,7 @@ func TestRecoverExpiredLeasesDeadLettersPastRetryBudget(t *testing.T) {
 		t.Errorf("lease must be cleared on quarantine: owner=%v expiry=%v", got.LeaseOwner, got.LeaseExpiresAt)
 	}
 
-	// The DLQ listing sees it, so `fleet-admin sched dlq list` + replay work
+	// The DLQ listing sees it, so `fleet sched dlq list` + replay work
 	// on recovery-quarantined rows exactly as on runner-quarantined ones.
 	dlq, err := store.GetDeadLetteredTasks(context.Background(), 0, 0)
 	if err != nil {

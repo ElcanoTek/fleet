@@ -1,6 +1,6 @@
 # ADR-0012: One `fleet` binary — `serve` plus the operator CLI (back-compat preserved)
 
-- **Status:** Accepted; the shim's removal trigger re-anchored by ADR-0059
+- **Status:** Accepted; the shim removed by ADR-0060 (trigger re-anchored by ADR-0059)
 - **Date:** 2026-06-30
 - **Deciders:** fleet maintainers
 
@@ -50,6 +50,14 @@ There is **one `fleet` binary** (`cmd/fleet`) with subcommand dispatch
   the first release after 1.0.0.** Until then it stays, and it is 20 lines that
   fork no logic — it shares `internal/admincli.Run` with `fleet`, so it adds no
   second governance path.
+
+  **Discharged 2026-09-04 by [ADR-0060](0060-remove-the-fleet-admin-shim.md).**
+  The shim is gone: `cmd/fleet-admin` is deleted, the build emits one binary, and
+  `fleet update` / `fleet doctor` delete a copy already installed on a box —
+  the step every version of this checklist missed, and without which "removed"
+  would have meant "removed from the repo, still on your PATH running old code".
+  `fleet <verb>` is the only operator CLI. Everything below is the record of how
+  the window was reasoned about; the window itself no longer exists.
 
   **Re-anchored 2026-09-04 by [ADR-0059](0059-date-based-rolling-releases.md).**
   The 2026-08-22 amendment above diagnosed the problem correctly and then picked

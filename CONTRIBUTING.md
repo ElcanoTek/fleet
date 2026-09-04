@@ -12,7 +12,7 @@ your first sandbox session (a passing `make test` and one streamed chat turn).
 fleet is a Go monorepo with a Next.js frontend:
 
 ```
-cmd/        entrypoints (the one unified fleet binary — server + operator CLI; fleet-admin is a transitional deprecation shim; helpers)
+cmd/        entrypoints (the one fleet binary — server + operator CLI; helpers)
 internal/   the Go implementation (agent runtime, sandbox, MCP, scheduler, HTTP API, …)
 web/        the Next.js app (the /chat and /orchestrator views)
 config/     the generic client-config bundle baked into the repo (config/default)
@@ -23,9 +23,8 @@ scripts/    bootstrap / update / status and e2e helpers
 
 See the top-level `README.md` for the architecture overview. The server runs via
 `fleet serve` (bare `fleet` also serves, for back-compat); all other verbs are the
-operator CLI. (`fleet-admin <verb>` still works but is deprecated; it is
-removed in the first release on or after 2026-12-01 — see
-`docs/adr/0012-unified-fleet-cli.md`.)
+operator CLI. (The `fleet-admin` shim was removed — see
+`docs/adr/0060-remove-the-fleet-admin-shim.md`.)
 
 ## Prerequisites
 

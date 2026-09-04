@@ -16,7 +16,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
 )
 
-// cmdSched dispatches `fleet-admin sched user|apikey|task|trigger|dlq|budget ...`.
+// cmdSched dispatches `fleet sched user|apikey|task|trigger|dlq|budget ...`.
 func cmdSched(argv []string) int {
 	if len(argv) < 1 {
 		return errf(1, "usage: fleet sched user|apikey|task|trigger|dlq|budget ...")
@@ -273,7 +273,7 @@ func schedUserList(argv []string) int {
 		return errf(5, "%v", err)
 	}
 	if len(users) == 0 {
-		fmt.Fprintln(os.Stderr, "no sched users yet — add one with: fleet-admin sched user add <username> --role admin --password -")
+		fmt.Fprintln(os.Stderr, "no sched users yet — add one with: fleet sched user add <username> --role admin --password -")
 		return 0
 	}
 	for _, u := range users {
@@ -370,7 +370,7 @@ func schedAPIKeyCreate(argv []string) int {
 				}
 			}
 		}
-		key, raw, err := mgr.CreateTypedKey(name, kt, slugs, *rateLimit, nil, "created via fleet-admin")
+		key, raw, err := mgr.CreateTypedKey(name, kt, slugs, *rateLimit, nil, "created via the fleet CLI")
 		if err != nil {
 			return errf(5, "%v", err)
 		}
@@ -386,7 +386,7 @@ func schedAPIKeyCreate(argv []string) int {
 
 	// Legacy role-based path: mints an untyped sk- key, unchanged.
 	roleVal := *role
-	key, raw, err := mgr.CreateKey(name, nil, &roleVal, *rateLimit, nil, "created via fleet-admin")
+	key, raw, err := mgr.CreateKey(name, nil, &roleVal, *rateLimit, nil, "created via the fleet CLI")
 	if err != nil {
 		return errf(5, "%v", err)
 	}
