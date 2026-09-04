@@ -159,7 +159,10 @@ describe("ProjectsModal confirms", () => {
     const dialog = await screen.findByRole("dialog", { name: "Delete Quant?" });
     fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
 
-    expect(screen.queryByRole("dialog")).toBeNull();
+    // Named, not bare: the projects panel underneath is itself a role="dialog"
+    // now that every modal sits on the shared DialogShell, so "no dialog at
+    // all" would be asserting that the modal closed too.
+    expect(screen.queryByRole("dialog", { name: "Delete Quant?" })).toBeNull();
     expect(calls).toEqual([]);
   });
 

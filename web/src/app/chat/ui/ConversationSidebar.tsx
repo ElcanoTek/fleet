@@ -1080,7 +1080,10 @@ export function ConversationSidebar({
     options?: { preserveScroll?: boolean },
   ) => Promise<void>;
   streamingConvs: Set<string>;
-  togglePin: (conversation: ConversationSummary) => Promise<void>;
+  // Resolves to whether the pin stuck. The rail ignores it (a failed pin
+  // reverts itself via a refresh); the "Pin it and remove" confirm does not,
+  // because there the pin is what keeps the copy's promise.
+  togglePin: (conversation: ConversationSummary) => Promise<unknown>;
   toggleArchive: (
     conversation: ConversationSummary,
     archived: boolean,

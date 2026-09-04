@@ -70,17 +70,25 @@ var injectedBlockMarkers = []string{
 // when the injected blocks lived inside content.text — into the user's own
 // text and the injected suffix. It reports whether it cut anything.
 //
-// This is belt-and-suspenders, not the mechanism: rows written after 056 carry
-// the suffix in its own column and reach here with nothing to strip. It exists
-// because a box that has been running for months has thousands of rows whose
-// text still embeds an absolute attachment path, and the branch path must not
-// copy those into another user's conversation just because the row predates
-// the fix.
+// It exists because a box that has been running for months has thousands of
+// rows whose text still embeds an absolute attachment path, and the branch
+// path must not copy those into another user's conversation just because the
+// row predates the fix.
+//
+// CALL IT ONLY ON A PRE-056 ROW. Callers identify one by
+// `injected_context IS NULL` — the discriminator the migration exists to
+// provide — and the store's branch copy is gated on exactly that. The reason
+// is that this function cannot tell an injected block from a user who typed
+// one: a "---" rule followed by "**Shared file library**" is what someone
+// documenting fleet writes, and on a post-056 row that text, plus everything
+// after it, would be cut from the copy. On a pre-056 row there is no such
+// hazard worth trading — the alternative is copying a live path to another
+// user's file.
 //
 // Marker-based by necessity (the split was never recorded for those rows), so
-// it is deliberately conservative: it matches the full separator + bold header
-// sequence, and only ever cuts a suffix — it never rewrites the interior of a
-// message.
+// it is deliberately conservative within that scope: it matches the full
+// separator + bold header sequence, and only ever cuts a suffix — it never
+// rewrites the interior of a message.
 func StripLegacyInjectedContext(text string) (userText, injected string, stripped bool) {
 	cut := -1
 	for _, marker := range injectedBlockMarkers {

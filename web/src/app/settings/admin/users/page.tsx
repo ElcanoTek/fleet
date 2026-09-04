@@ -1217,6 +1217,15 @@ export default function AdminUsersPage() {
                 <DeleteRefusal
                   message={deleteError.message}
                   projects={deleteError.projects}
+                  currentOwner={deleteError.email}
+                  onTransferred={() => {
+                    // The refusal's whole purpose is unblocking this delete,
+                    // so the handover retries it rather than leaving the admin
+                    // to re-open the kebab and click Confirm delete again. A
+                    // second blocked project simply refuses again, naming what
+                    // is left.
+                    void remove(menuAccount);
+                  }}
                 />
               ) : null}
               {/* Deleting an account is a cascade, not a de-provision, and the

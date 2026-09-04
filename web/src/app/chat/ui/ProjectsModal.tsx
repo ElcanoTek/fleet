@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
-import { ConfirmModal } from "./ConfirmModal";
+import { DialogShell } from "@/app/shared/ui/DialogShell";
+import { ConfirmDialog } from "./ConfirmDialog";
 
 // Projects / Spaces modal (#509): create/edit shared team workspaces — the
 // binding object for standing instructions, curated connectors, default
@@ -244,15 +245,18 @@ export function ProjectsModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
-      <button aria-label="Close projects" className="absolute inset-0 bg-[var(--color-overlay-strong)] backdrop-blur-[2px]" type="button" onClick={onClose} />
-      {/* Opaque surface, not a translucent composer panel: page content
-          behind the modal was showing through enough to compete with the form
-          — placeholder text and the primary button lost legibility on a busy
-          background. --color-surface-1 + the standard shadow are exactly what
-          the project settings dialog and the New Task modal already use, so
-          all three now read as one family. */}
-      <div className="motion-safe:animate-pop-up-base relative z-10 flex max-h-[88vh] w-full max-w-[40rem] flex-col gap-4 overflow-hidden rounded-[1.25rem] border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] p-5 shadow-[var(--shadow-md)]">
+    <>
+      {/* The opaque panel, the scrim and the dialog semantics come from the
+          shared DialogShell — page content used to read straight through this
+          modal, and that fix now lives in one place for every dialog. The two
+          confirms below are siblings of the panel, not children of it: each
+          paints its own layer above it. */}
+      <DialogShell
+        label="Projects"
+        scrimLabel="Close projects"
+        onDismiss={onClose}
+        className="flex max-h-[88vh] max-w-[40rem] flex-col gap-4 overflow-hidden p-5"
+      >
         <div className="flex items-start justify-between gap-3">
           <div>
             <h2 className="text-[1rem] font-semibold text-[var(--color-text-primary)]">Projects</h2>
@@ -412,12 +416,13 @@ export function ProjectsModal({
             </div>
           )}
         </div>
-      </div>
+      </DialogShell>
       {confirmUnshare ? (
-        <ConfirmModal
+        <ConfirmDialog
           title="Stop sharing this project with your team?"
           confirmLabel="Stop sharing"
-          danger
+          confirmTone="danger"
+          layer="stacked"
           busy={busy}
           onCancel={() => setConfirmUnshare(false)}
           onConfirm={() => {
@@ -428,13 +433,14 @@ export function ProjectsModal({
           <p className="m-0">
             Every chat members shared into it stops being shared too.
           </p>
-        </ConfirmModal>
+        </ConfirmDialog>
       ) : null}
       {confirmDeleteId ? (
-        <ConfirmModal
+        <ConfirmDialog
           title={`Delete ${projects.find((p) => p.id === confirmDeleteId)?.name ?? "this project"}?`}
           confirmLabel="Delete project"
-          danger
+          confirmTone="danger"
+          layer="stacked"
           onCancel={() => setConfirmDeleteId(null)}
           onConfirm={() => {
             const id = confirmDeleteId;
@@ -447,8 +453,8 @@ export function ProjectsModal({
             the project and become temporary. Open the project to see the
             counts and export first.
           </p>
-        </ConfirmModal>
+        </ConfirmDialog>
       ) : null}
-    </div>
+    </>
   );
 }

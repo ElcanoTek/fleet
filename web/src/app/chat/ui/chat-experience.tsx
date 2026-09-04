@@ -58,6 +58,7 @@ import {
 import { classifyBootstrapFailure } from "./bootstrapFailure";
 import { PENDING_CONV_KEY } from "./workspaceHref";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
+import { DialogShell } from "@/app/shared/ui/DialogShell";
 import { Icon } from "./Icon";
 import { QueuedInputs } from "./QueuedInputs";
 import { ProjectsModal, type Project } from "./ProjectsModal";
@@ -2527,7 +2528,13 @@ export function ChatExperience({
     }
   };
 
-  const togglePin = async (conversation: ConversationSummary) => {
+  // Resolves true when the pin stuck. The boolean exists for "Pin it and
+  // remove", where the pin is the half that keeps a promise the copy makes out
+  // loud ("it will expire unless pinned") — a caller that cannot tell success
+  // from failure cannot tell the user the promise was not kept.
+  const togglePin = async (
+    conversation: ConversationSummary,
+  ): Promise<boolean> => {
     const nextPinned = !conversation.pinned;
     // Optimistic update
     setConversations((current) =>
@@ -2540,14 +2547,26 @@ export function ChatExperience({
           return b.updated_at - a.updated_at;
         }),
     );
-    const response = await fetch(`/api/conversations/${conversation.id}/pin`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ pinned: nextPinned }),
-    });
-    if (!response.ok) {
-      // revert on failure
+    try {
+      const response = await fetch(
+        `/api/conversations/${conversation.id}/pin`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ pinned: nextPinned }),
+        },
+      );
+      if (!response.ok) {
+        // revert on failure
+        await refreshConversations();
+        return false;
+      }
+      return true;
+    } catch {
+      // A thrown fetch is the same outcome as a rejected one: the optimistic
+      // row is a lie until the refresh corrects it.
       await refreshConversations();
+      return false;
     }
   };
 
@@ -4045,32 +4064,12 @@ export function ChatExperience({
     // stripped immediately so a reload or the warm-session snapshot never
     // re-applies a stale selection.
     let deepLinkConvId: string | null = null;
-    let deepLinkProject: { id: string; settings: boolean } | null = null;
     {
       const params = new URLSearchParams(window.location.search);
       const c = params.get("c");
       if (isRealConvId(c)) {
         deepLinkConvId = c;
         params.delete("c");
-      }
-      // Deep-link (?project=<id>[&settings=1]): open a project's home, or its
-      // settings dialog — which is where Transfer ownership… lives. Admin →
-      // Users needs it: deleting an account that still owns team-shared
-      // projects is refused with "transfer them to another member first", and
-      // an admin is usually neither the owner nor a member, so there was no
-      // route from that refusal to the control that resolves it (QA #21).
-      const projectID = params.get("project");
-      if (projectID && isRealConvId(projectID)) {
-        deepLinkProject = {
-          id: projectID,
-          settings: params.get("settings") === "1",
-        };
-        params.delete("project");
-        params.delete("settings");
-      }
-      // Consumed once and stripped immediately, so a reload or the warm-session
-      // snapshot never re-applies a stale selection.
-      if (deepLinkConvId || deepLinkProject) {
         const qs = params.toString();
         window.history.replaceState(
           null,
@@ -4078,10 +4077,6 @@ export function ChatExperience({
           window.location.pathname + (qs ? `?${qs}` : ""),
         );
       }
-    }
-    if (deepLinkProject) {
-      const target = deepLinkProject;
-      setProjectHome({ id: target.id, settings: target.settings });
     }
 
     // Personas — nice-to-have; the server falls back to default. Sets the
@@ -4508,52 +4503,49 @@ export function ChatExperience({
         ) : null}
 
         {confirmBulkDelete ? (
-          <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
-            <button
-              aria-label="Close delete-all confirmation"
-              className="absolute inset-0 bg-[var(--color-overlay-strong)] backdrop-blur-[2px]"
-              type="button"
-              onClick={() => setConfirmBulkDelete(false)}
-            />
-            <div className="motion-safe:animate-pop-up-base relative z-10 w-full max-w-[26rem] rounded-[1.25rem] border border-[var(--color-border-strong)] bg-[color-mix(in_srgb,var(--composer-surface)_94%,black)] p-5 shadow-[var(--composer-shadow)] backdrop-blur-sm">
-              <h2 className="mb-1 text-[1rem] font-semibold text-[var(--color-text-primary)]">
-                Delete all unpinned chats?
-              </h2>
-              <p className="mb-4 text-[0.875rem] leading-[1.6] text-[var(--color-text-secondary)]">
-                {/* Counts what the server actually deletes: unpinned chats
-                    that are NOT filed in a project. Filing is a keep state —
-                    a project chat is out of the Temporary list this action
-                    clears, and the server exempts it (store.DeleteAllUnpinned)
-                    — so counting one here would over-promise a deletion that
-                    never happens. */}
-                {countDeletedByDeleteAllUnpinned(conversations)} conversation
-                {countDeletedByDeleteAllUnpinned(conversations) === 1
-                  ? ""
-                  : "s"}{" "}
-                will be removed. Pinned chats — and chats filed in a project —
-                are kept. This cannot be undone.
-              </p>
-              <div className="flex items-center justify-end gap-2">
-                <button
-                  type="button"
-                  className="rounded-full border border-[var(--color-border-strong)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
-                  onClick={() => setConfirmBulkDelete(false)}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  className="rounded-full bg-[var(--color-danger)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-surface-1)] transition hover:opacity-90"
-                  onClick={async () => {
-                    setConfirmBulkDelete(false);
-                    await deleteAllUnpinned();
-                  }}
-                >
-                  Delete all
-                </button>
-              </div>
+          <DialogShell
+            label="Delete all unpinned chats?"
+            scrimLabel="Close delete-all confirmation"
+            onDismiss={() => setConfirmBulkDelete(false)}
+            className="max-w-[26rem] p-5"
+          >
+            <h2 className="mb-1 text-[1rem] font-semibold text-[var(--color-text-primary)]">
+              Delete all unpinned chats?
+            </h2>
+            <p className="mb-4 text-[0.875rem] leading-[1.6] text-[var(--color-text-secondary)]">
+              {/* Counts what the server actually deletes: unpinned chats
+                  that are NOT filed in a project. Filing is a keep state —
+                  a project chat is out of the Temporary list this action
+                  clears, and the server exempts it (store.DeleteAllUnpinned)
+                  — so counting one here would over-promise a deletion that
+                  never happens. */}
+              {countDeletedByDeleteAllUnpinned(conversations)} conversation
+              {countDeletedByDeleteAllUnpinned(conversations) === 1
+                ? ""
+                : "s"}{" "}
+              will be removed. Pinned chats — and chats filed in a project —
+              are kept. This cannot be undone.
+            </p>
+            <div className="flex items-center justify-end gap-2">
+              <button
+                type="button"
+                className="rounded-full border border-[var(--color-border-strong)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
+                onClick={() => setConfirmBulkDelete(false)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="rounded-full bg-[var(--color-danger)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-surface-1)] transition hover:opacity-90"
+                onClick={async () => {
+                  setConfirmBulkDelete(false);
+                  await deleteAllUnpinned();
+                }}
+              >
+                Delete all
+              </button>
             </div>
-          </div>
+          </DialogShell>
         ) : null}
 
         {/* Multi-select bulk delete confirmation (#279). Shows the exact
@@ -4603,7 +4595,16 @@ export function ChatExperience({
                 const conv = conversations.find(
                   (c) => c.id === req.conversationId,
                 );
-                if (conv && !conv.pinned) await togglePin(conv);
+                if (!conv || conv.pinned) return;
+                if (await togglePin(conv)) return;
+                // The move committed and the pin did not, which is exactly the
+                // expiring state this action promises to avoid. It cannot be
+                // rolled back silently — re-filing the chat would undo what the
+                // user asked for — so say which half happened and leave the
+                // one-click fix in their hands.
+                showRailError(
+                  "Removed from the project, but pinning failed — this chat can expire. Pin it from its ⋮ menu.",
+                );
               })();
             }}
           />
@@ -4645,395 +4646,382 @@ export function ChatExperience({
         ) : null}
 
         {promoteMemoryId ? (
-          <div className="fixed inset-0 z-[60] flex items-center justify-center px-4">
-            <button
-              aria-label="Cancel moving the memory"
-              className="absolute inset-0 bg-[var(--color-overlay-strong)] backdrop-blur-[2px]"
-              type="button"
-              onClick={() => setPromoteMemoryId(null)}
-            />
-            <div
-              role="dialog"
-              aria-modal="true"
-              aria-label="Move to team learnings"
-              className="relative z-10 w-full max-w-[24rem] rounded-[1rem] border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] p-5 shadow-[var(--shadow-md)]"
-            >
-              <h2 className="mb-1 text-[0.95rem] font-semibold text-[var(--color-text-primary)]">
-                Move to team learnings
-              </h2>
-              <p className="mb-3 text-[0.8rem] leading-[1.5] text-[var(--color-text-secondary)]">
-                Pick the project this belongs to. It leaves your personal
-                memory and every member of that project sees it.
-              </p>
-              <div className="grid gap-1">
-                {teamSharedProjects.map((p) => (
-                  <button
-                    key={p.id}
-                    type="button"
-                    className="rounded-md border border-[var(--color-border)] px-3 py-2 text-left text-[0.85rem] text-[var(--color-text-primary)] transition hover:border-[var(--color-accent)]"
-                    onClick={() =>
-                      void promoteMemoryToProject(promoteMemoryId, p.id)
-                    }
-                  >
-                    {p.name}
-                    <span className="ml-2 text-[0.7rem] text-[var(--color-text-muted)]">
-                      {p.team_id}
-                    </span>
-                  </button>
-                ))}
-              </div>
-              <div className="mt-4 flex justify-end">
+          <DialogShell
+            label="Move to team learnings"
+            scrimLabel="Cancel moving the memory"
+            onDismiss={() => setPromoteMemoryId(null)}
+            layer="stacked"
+            className="max-w-[24rem] p-5"
+          >
+            <h2 className="mb-1 text-[0.95rem] font-semibold text-[var(--color-text-primary)]">
+              Move to team learnings
+            </h2>
+            <p className="mb-3 text-[0.8rem] leading-[1.5] text-[var(--color-text-secondary)]">
+              Pick the project this belongs to. It leaves your personal
+              memory and every member of that project sees it.
+            </p>
+            <div className="grid gap-1">
+              {teamSharedProjects.map((p) => (
                 <button
+                  key={p.id}
                   type="button"
-                  className="rounded-full border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.78rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)]"
-                  onClick={() => setPromoteMemoryId(null)}
+                  className="rounded-md border border-[var(--color-border)] px-3 py-2 text-left text-[0.85rem] text-[var(--color-text-primary)] transition hover:border-[var(--color-accent)]"
+                  onClick={() =>
+                    void promoteMemoryToProject(promoteMemoryId, p.id)
+                  }
                 >
-                  Cancel
+                  {p.name}
+                  <span className="ml-2 text-[0.7rem] text-[var(--color-text-muted)]">
+                    {p.team_id}
+                  </span>
                 </button>
-              </div>
+              ))}
             </div>
-          </div>
+            <div className="mt-4 flex justify-end">
+              <button
+                type="button"
+                className="rounded-full border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.78rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)]"
+                onClick={() => setPromoteMemoryId(null)}
+              >
+                Cancel
+              </button>
+            </div>
+          </DialogShell>
         ) : null}
 
         {memoryManagerOpen ? (
-          <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
-            <button
-              aria-label="Close memories"
-              className="absolute inset-0 bg-[var(--color-overlay-strong)] backdrop-blur-[2px]"
-              type="button"
-              onClick={() => setMemoryManagerOpen(false)}
-            />
-            <div className="motion-safe:animate-pop-up-base relative z-10 flex max-h-[88vh] w-full max-w-[34rem] flex-col gap-4 overflow-hidden rounded-[1.25rem] border border-[var(--color-border-strong)] bg-[color-mix(in_srgb,var(--composer-surface)_94%,black)] p-5 shadow-[var(--composer-shadow)] backdrop-blur-sm">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <h2 className="text-[1rem] font-semibold text-[var(--color-text-primary)]">
-                    Memories
-                  </h2>
-                  {/* The subtitle describes the VISIBLE tab. It used to
-                      describe personal memories on all three, so on Team
-                      learnings neither half of it was true — those are scoped
-                      to the project and its team, and injected only into that
-                      project's chats (finding #18). */}
-                  <p className="mt-1 text-[0.8125rem] leading-[1.5] text-[var(--color-text-secondary)]">
-                    {memoryModalSubtitle(activeMemoryView, {
-                      userEmail,
-                      projectName: activeProjectForMemory?.name,
-                    })}
-                  </p>
-                </div>
-                <CloseButton
-                  label="Close memories"
-                  onClick={() => setMemoryManagerOpen(false)}
+          <DialogShell
+            label="Memories"
+            scrimLabel="Close memories"
+            onDismiss={() => setMemoryManagerOpen(false)}
+            className="flex max-h-[88vh] max-w-[34rem] flex-col gap-4 overflow-hidden p-5"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-[1rem] font-semibold text-[var(--color-text-primary)]">
+                  Memories
+                </h2>
+                {/* The subtitle describes the VISIBLE tab. It used to
+                    describe personal memories on all three, so on Team
+                    learnings neither half of it was true — those are scoped
+                    to the project and its team, and injected only into that
+                    project's chats (finding #18). */}
+                <p className="mt-1 text-[0.8125rem] leading-[1.5] text-[var(--color-text-secondary)]">
+                  {memoryModalSubtitle(activeMemoryView, {
+                    userEmail,
+                    projectName: activeProjectForMemory?.name,
+                  })}
+                </p>
+              </div>
+              <CloseButton
+                label="Close memories"
+                onClick={() => setMemoryManagerOpen(false)}
+              />
+            </div>
+
+            {/* Knowledge-graph tab (#523): a compact derived view over the
+                same records; the record list stays the default. The third
+                tab appears only inside a project — it is that project's
+                team learnings, the same list (and the same permissions) as
+                the project home's panel, reachable without leaving the
+                conversation (Item D4). */}
+            <div className="flex items-center gap-1">
+              {(
+                [
+                  "list",
+                  "graph",
+                  ...(activeProjectForMemory ? (["team"] as const) : []),
+                ] as const
+              ).map((view) => {
+                // Falls back to what is actually showing — see
+                // activeMemoryView.
+                const active = activeMemoryView;
+                return (
+                <button
+                  key={view}
+                  type="button"
+                  aria-current={active === view ? "true" : undefined}
+                  className={`rounded-full border px-3 py-1 text-[0.75rem] transition ${
+                    active === view
+                      ? "border-[var(--color-text-primary)] text-[var(--color-text-primary)]"
+                      : "border-[var(--color-border-strong)] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
+                  }`}
+                  onClick={() => setMemoryView(view)}
+                >
+                  {view === "list"
+                    ? "My memory"
+                    : view === "graph"
+                      ? "Graph"
+                      : "Team learnings"}
+                </button>
+                );
+              })}
+            </div>
+
+            {memoryView === "team" && activeProjectForMemory ? (
+              <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+                <TeamLearningsPanel
+                  projectId={activeProjectForMemory.id}
+                  projectOwner={
+                    projects.find((p) => p.id === activeProjectForMemory.id)
+                      ?.owner_email ?? ""
+                  }
+                  userEmail={userEmail}
+                  teamShared={activeProjectForMemory.teamShared}
                 />
               </div>
-
-              {/* Knowledge-graph tab (#523): a compact derived view over the
-                  same records; the record list stays the default. The third
-                  tab appears only inside a project — it is that project's
-                  team learnings, the same list (and the same permissions) as
-                  the project home's panel, reachable without leaving the
-                  conversation (Item D4). */}
-              <div className="flex items-center gap-1">
-                {(
-                  [
-                    "list",
-                    "graph",
-                    ...(activeProjectForMemory ? (["team"] as const) : []),
-                  ] as const
-                ).map((view) => {
-                  // Falls back to what is actually showing — see
-                  // activeMemoryView.
-                  const active = activeMemoryView;
-                  return (
-                  <button
-                    key={view}
-                    type="button"
-                    aria-current={active === view ? "true" : undefined}
-                    className={`rounded-full border px-3 py-1 text-[0.75rem] transition ${
-                      active === view
-                        ? "border-[var(--color-text-primary)] text-[var(--color-text-primary)]"
-                        : "border-[var(--color-border-strong)] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
-                    }`}
-                    onClick={() => setMemoryView(view)}
-                  >
-                    {view === "list"
-                      ? "My memory"
-                      : view === "graph"
-                        ? "Graph"
-                        : "Team learnings"}
-                  </button>
-                  );
-                })}
-              </div>
-
-              {memoryView === "team" && activeProjectForMemory ? (
-                <div className="min-h-0 flex-1 overflow-y-auto pr-1">
-                  <TeamLearningsPanel
-                    projectId={activeProjectForMemory.id}
-                    projectOwner={
-                      projects.find((p) => p.id === activeProjectForMemory.id)
-                        ?.owner_email ?? ""
-                    }
-                    userEmail={userEmail}
-                    teamShared={activeProjectForMemory.teamShared}
+            ) : memoryView === "graph" ? (
+              <MemoryGraphView />
+            ) : (
+              <>
+                <div className="grid gap-2">
+                  <textarea
+                    className="min-h-24 w-full resize-y rounded-[0.9rem] border border-[var(--color-border-strong)] bg-transparent px-3 py-2 text-[0.875rem] leading-[1.5] text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-muted)] focus:border-[var(--color-accent)]"
+                    placeholder="Remember that deal names may contain intentional typos."
+                    value={memoryDraft}
+                    onChange={(event) => setMemoryDraft(event.target.value)}
                   />
-                </div>
-              ) : memoryView === "graph" ? (
-                <MemoryGraphView />
-              ) : (
-                <>
-                  <div className="grid gap-2">
-                    <textarea
-                      className="min-h-24 w-full resize-y rounded-[0.9rem] border border-[var(--color-border-strong)] bg-transparent px-3 py-2 text-[0.875rem] leading-[1.5] text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-muted)] focus:border-[var(--color-accent)]"
-                      placeholder="Remember that deal names may contain intentional typos."
-                      value={memoryDraft}
-                      onChange={(event) => setMemoryDraft(event.target.value)}
-                    />
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div className="flex items-center gap-2">
-                        <label
-                          className="text-[0.72rem] text-[var(--color-text-muted)]"
-                          htmlFor="memory-kind"
-                        >
-                          Kind
-                        </label>
-                        <select
-                          id="memory-kind"
-                          className="rounded-md border border-[var(--color-border-strong)] bg-transparent px-2 py-1 text-[0.75rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
-                          value={memoryKindDraft}
-                          onChange={(event) =>
-                            setMemoryKindDraft(event.target.value)
-                          }
-                        >
-                          {MEMORY_KINDS.map((k) => (
-                            <option key={k} value={k}>
-                              {k}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        {editingMemoryId ? (
-                          <button
-                            type="button"
-                            className="rounded-full border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
-                            onClick={() => {
-                              setEditingMemoryId(null);
-                              setMemoryDraft("");
-                            }}
-                          >
-                            Cancel edit
-                          </button>
-                        ) : null}
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <label
+                        className="text-[0.72rem] text-[var(--color-text-muted)]"
+                        htmlFor="memory-kind"
+                      >
+                        Kind
+                      </label>
+                      <select
+                        id="memory-kind"
+                        className="rounded-md border border-[var(--color-border-strong)] bg-transparent px-2 py-1 text-[0.75rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
+                        value={memoryKindDraft}
+                        onChange={(event) =>
+                          setMemoryKindDraft(event.target.value)
+                        }
+                      >
+                        {MEMORY_KINDS.map((k) => (
+                          <option key={k} value={k}>
+                            {k}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {editingMemoryId ? (
                         <button
                           type="button"
-                          className="rounded-full bg-[var(--color-text-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-surface-1)] transition hover:opacity-80 disabled:opacity-40"
-                          disabled={!memoryDraft.trim() || isSavingMemory}
-                          onClick={() => void saveMemory()}
+                          className="rounded-full border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
+                          onClick={() => {
+                            setEditingMemoryId(null);
+                            setMemoryDraft("");
+                          }}
                         >
-                          {isSavingMemory
-                            ? "Saving..."
-                            : editingMemoryId
-                              ? "Save changes"
-                              : "Add memory"}
+                          Cancel edit
                         </button>
-                      </div>
+                      ) : null}
+                      <button
+                        type="button"
+                        className="rounded-full bg-[var(--color-text-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-surface-1)] transition hover:opacity-80 disabled:opacity-40"
+                        disabled={!memoryDraft.trim() || isSavingMemory}
+                        onClick={() => void saveMemory()}
+                      >
+                        {isSavingMemory
+                          ? "Saving..."
+                          : editingMemoryId
+                            ? "Save changes"
+                            : "Add memory"}
+                      </button>
                     </div>
                   </div>
+                </div>
 
-                  {memoryError ? (
-                    <div className="rounded-[0.75rem] border border-[var(--color-danger,#dc2626)] bg-[color-mix(in_srgb,var(--color-danger,#dc2626)_10%,transparent)] px-3 py-2 text-[0.75rem] text-[var(--color-danger,#dc2626)]">
-                      {memoryError}
-                    </div>
-                  ) : null}
+                {memoryError ? (
+                  <div className="rounded-[0.75rem] border border-[var(--color-danger,#dc2626)] bg-[color-mix(in_srgb,var(--color-danger,#dc2626)_10%,transparent)] px-3 py-2 text-[0.75rem] text-[var(--color-danger,#dc2626)]">
+                    {memoryError}
+                  </div>
+                ) : null}
 
-                  <div className="min-h-0 flex-1 overflow-y-auto pr-1">
-                    {isLoadingMemories ? (
-                      <p className="py-4 text-[0.8125rem] text-[var(--color-text-muted)]">
-                        Loading memories...
-                      </p>
-                    ) : memories.length === 0 ? (
-                      <p className="rounded-[0.9rem] border border-dashed border-[var(--color-border)] px-3 py-4 text-[0.8125rem] leading-[1.5] text-[var(--color-text-muted)]">
-                        No memories yet. Add one manually or tell chat “remember
-                        this: ...”.
-                      </p>
-                    ) : (
-                      <div className="grid gap-2">
-                        {memories.map((memory) => {
-                          const retired = memory.retired_at != null;
-                          const sourceLabel =
-                            memory.source === "chat"
-                              ? memory.origin === "auto"
-                                ? "Auto-extracted from chat"
-                                : "Saved from chat"
-                              : memory.source === "proposed"
-                                ? "Proposed"
-                                : "Manual";
-                          const learned = memory.learned_at
-                            ? new Date(
-                                memory.learned_at * 1000,
-                              ).toLocaleDateString()
-                            : null;
-                          return (
-                            <div
-                              key={memory.id}
-                              className={`rounded-[0.9rem] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] p-3 ${retired ? "opacity-60" : ""}`}
-                            >
-                              <p className="whitespace-pre-wrap text-[0.875rem] leading-[1.5] text-[var(--color-text-primary)]">
-                                {memory.pinned ? (
-                                  <span title="Pinned">📌 </span>
+                <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+                  {isLoadingMemories ? (
+                    <p className="py-4 text-[0.8125rem] text-[var(--color-text-muted)]">
+                      Loading memories...
+                    </p>
+                  ) : memories.length === 0 ? (
+                    <p className="rounded-[0.9rem] border border-dashed border-[var(--color-border)] px-3 py-4 text-[0.8125rem] leading-[1.5] text-[var(--color-text-muted)]">
+                      No memories yet. Add one manually or tell chat “remember
+                      this: ...”.
+                    </p>
+                  ) : (
+                    <div className="grid gap-2">
+                      {memories.map((memory) => {
+                        const retired = memory.retired_at != null;
+                        const sourceLabel =
+                          memory.source === "chat"
+                            ? memory.origin === "auto"
+                              ? "Auto-extracted from chat"
+                              : "Saved from chat"
+                            : memory.source === "proposed"
+                              ? "Proposed"
+                              : "Manual";
+                        const learned = memory.learned_at
+                          ? new Date(
+                              memory.learned_at * 1000,
+                            ).toLocaleDateString()
+                          : null;
+                        return (
+                          <div
+                            key={memory.id}
+                            className={`rounded-[0.9rem] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] p-3 ${retired ? "opacity-60" : ""}`}
+                          >
+                            <p className="whitespace-pre-wrap text-[0.875rem] leading-[1.5] text-[var(--color-text-primary)]">
+                              {memory.pinned ? (
+                                <span title="Pinned">📌 </span>
+                              ) : null}
+                              {memory.content}
+                            </p>
+                            <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[0.7rem] text-[var(--color-text-muted)]">
+                              <span>
+                                {memory.kind && memory.kind !== "fact" ? (
+                                  <span className="mr-1.5 rounded-full border border-[var(--color-border)] px-1.5 py-0.5">
+                                    {memory.kind}
+                                  </span>
                                 ) : null}
-                                {memory.content}
-                              </p>
-                              <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[0.7rem] text-[var(--color-text-muted)]">
-                                <span>
-                                  {memory.kind && memory.kind !== "fact" ? (
-                                    <span className="mr-1.5 rounded-full border border-[var(--color-border)] px-1.5 py-0.5">
-                                      {memory.kind}
-                                    </span>
-                                  ) : null}
-                                  {sourceLabel}
-                                  {learned ? ` · learned ${learned}` : ""}
-                                  {retired ? " · retired" : ""}
-                                </span>
-                                <div className="flex items-center gap-3">
-                                  {retired ? (
+                                {sourceLabel}
+                                {learned ? ` · learned ${learned}` : ""}
+                                {retired ? " · retired" : ""}
+                              </span>
+                              <div className="flex items-center gap-3">
+                                {retired ? (
+                                  <button
+                                    type="button"
+                                    className="hover:text-[var(--color-text-primary)]"
+                                    onClick={() =>
+                                      void patchMemory(memory.id, {
+                                        retired: false,
+                                      })
+                                    }
+                                  >
+                                    Restore
+                                  </button>
+                                ) : (
+                                  <>
                                     <button
                                       type="button"
                                       className="hover:text-[var(--color-text-primary)]"
                                       onClick={() =>
                                         void patchMemory(memory.id, {
-                                          retired: false,
+                                          pinned: !memory.pinned,
                                         })
                                       }
                                     >
-                                      Restore
+                                      {memory.pinned ? "Unpin" : "Pin"}
                                     </button>
-                                  ) : (
-                                    <>
+                                    <button
+                                      type="button"
+                                      className="hover:text-[var(--color-text-primary)]"
+                                      onClick={() => {
+                                        setEditingMemoryId(memory.id);
+                                        setMemoryDraft(memory.content);
+                                        setMemoryKindDraft(
+                                          memory.kind ?? "fact",
+                                        );
+                                      }}
+                                    >
+                                      Edit
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="hover:text-[var(--color-text-primary)]"
+                                      title="Keep for audit, stop injecting into chats"
+                                      onClick={() =>
+                                        void patchMemory(memory.id, {
+                                          retired: true,
+                                        })
+                                      }
+                                    >
+                                      Retire
+                                    </button>
+                                    {/* Promote a personal memory the whole
+                                        team should have (Item D5). Only for
+                                        real, saved memories — a proposal has
+                                        not been accepted yet — and only when
+                                        there is a team-shared project to
+                                        promote it into. */}
+                                    {memory.source !== "proposed" &&
+                                    teamSharedProjects.length > 0 ? (
                                       <button
                                         type="button"
                                         className="hover:text-[var(--color-text-primary)]"
-                                        onClick={() =>
-                                          void patchMemory(memory.id, {
-                                            pinned: !memory.pinned,
-                                          })
-                                        }
-                                      >
-                                        {memory.pinned ? "Unpin" : "Pin"}
-                                      </button>
-                                      <button
-                                        type="button"
-                                        className="hover:text-[var(--color-text-primary)]"
+                                        title="Move this memory into a project's team learnings"
                                         onClick={() => {
-                                          setEditingMemoryId(memory.id);
-                                          setMemoryDraft(memory.content);
-                                          setMemoryKindDraft(
-                                            memory.kind ?? "fact",
-                                          );
+                                          if (teamSharedProjects.length === 1)
+                                            void promoteMemoryToProject(
+                                              memory.id,
+                                              teamSharedProjects[0].id,
+                                            );
+                                          else setPromoteMemoryId(memory.id);
                                         }}
                                       >
-                                        Edit
+                                        Move to team learnings
                                       </button>
-                                      <button
-                                        type="button"
-                                        className="hover:text-[var(--color-text-primary)]"
-                                        title="Keep for audit, stop injecting into chats"
-                                        onClick={() =>
-                                          void patchMemory(memory.id, {
-                                            retired: true,
-                                          })
-                                        }
-                                      >
-                                        Retire
-                                      </button>
-                                      {/* Promote a personal memory the whole
-                                          team should have (Item D5). Only for
-                                          real, saved memories — a proposal has
-                                          not been accepted yet — and only when
-                                          there is a team-shared project to
-                                          promote it into. */}
-                                      {memory.source !== "proposed" &&
-                                      teamSharedProjects.length > 0 ? (
-                                        <button
-                                          type="button"
-                                          className="hover:text-[var(--color-text-primary)]"
-                                          title="Move this memory into a project's team learnings"
-                                          onClick={() => {
-                                            if (teamSharedProjects.length === 1)
-                                              void promoteMemoryToProject(
-                                                memory.id,
-                                                teamSharedProjects[0].id,
-                                              );
-                                            else setPromoteMemoryId(memory.id);
-                                          }}
-                                        >
-                                          Move to team learnings
-                                        </button>
-                                      ) : null}
-                                    </>
-                                  )}
-                                  <button
-                                    type="button"
-                                    className="hover:text-[var(--color-danger)]"
-                                    onClick={() => void deleteMemory(memory.id)}
-                                  >
-                                    Delete
-                                  </button>
-                                </div>
+                                    ) : null}
+                                  </>
+                                )}
+                                <button
+                                  type="button"
+                                  className="hover:text-[var(--color-danger)]"
+                                  onClick={() => void deleteMemory(memory.id)}
+                                >
+                                  Delete
+                                </button>
                               </div>
                             </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                </>
-              )}
-            </div>
-          </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+          </DialogShell>
         ) : null}
 
         {confirmSummarize ? (
-          <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
-            <button
-              aria-label="Close compact confirmation"
-              className="absolute inset-0 bg-[var(--color-overlay-strong)] backdrop-blur-[2px]"
-              type="button"
-              onClick={() => setConfirmSummarize(false)}
-            />
-            <div className="motion-safe:animate-pop-up-base relative z-10 w-full max-w-[26rem] rounded-[1.25rem] border border-[var(--color-border-strong)] bg-[color-mix(in_srgb,var(--composer-surface)_94%,black)] p-5 shadow-[var(--composer-shadow)] backdrop-blur-sm">
-              <h2 className="mb-1 text-[1rem] font-semibold text-[var(--color-text-primary)]">
-                Compact this conversation?
-              </h2>
-              <p className="mb-4 text-[0.875rem] leading-[1.6] text-[var(--color-text-secondary)]">
-                Long conversations get expensive and can hit the model&apos;s
-                context window. Compacting replaces earlier turns with a short
-                summary so the next turn stays affordable and fits. The
-                originals collapse below a banner — you can expand them again
-                anytime.
-              </p>
-              <div className="flex items-center justify-end gap-2">
-                <button
-                  type="button"
-                  className="rounded-full border border-[var(--color-border-strong)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
-                  onClick={() => setConfirmSummarize(false)}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  className="rounded-full bg-[var(--color-primary)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-on-primary)] transition hover:opacity-90"
-                  onClick={() => {
-                    setConfirmSummarize(false);
-                    void summarizeConversation();
-                  }}
-                >
-                  Compact
-                </button>
-              </div>
+          <DialogShell
+            label="Compact this conversation?"
+            scrimLabel="Close compact confirmation"
+            onDismiss={() => setConfirmSummarize(false)}
+            className="max-w-[26rem] p-5"
+          >
+            <h2 className="mb-1 text-[1rem] font-semibold text-[var(--color-text-primary)]">
+              Compact this conversation?
+            </h2>
+            <p className="mb-4 text-[0.875rem] leading-[1.6] text-[var(--color-text-secondary)]">
+              Long conversations get expensive and can hit the model&apos;s
+              context window. Compacting replaces earlier turns with a short
+              summary so the next turn stays affordable and fits. The
+              originals collapse below a banner — you can expand them again
+              anytime.
+            </p>
+            <div className="flex items-center justify-end gap-2">
+              <button
+                type="button"
+                className="rounded-full border border-[var(--color-border-strong)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
+                onClick={() => setConfirmSummarize(false)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="rounded-full bg-[var(--color-primary)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-on-primary)] transition hover:opacity-90"
+                onClick={() => {
+                  setConfirmSummarize(false);
+                  void summarizeConversation();
+                }}
+              >
+                Compact
+              </button>
             </div>
-          </div>
+          </DialogShell>
         ) : null}
 
         {shareDialog ? (
@@ -5104,44 +5092,40 @@ export function ChatExperience({
           />
         ) : null}
         {pendingDeleteConversation ? (
-          <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
-            <button
-              aria-label="Close delete confirmation"
-              className="absolute inset-0 bg-[var(--color-overlay-strong)] backdrop-blur-[2px]"
-              type="button"
-              onClick={() => setPendingDeleteConversation(null)}
-            />
-
-            <div className="motion-safe:animate-pop-up-base relative z-10 w-full max-w-[25rem] rounded-[1.25rem] border border-[var(--color-border-strong)] bg-[color-mix(in_srgb,var(--composer-surface)_94%,black)] p-5 shadow-[var(--composer-shadow)] backdrop-blur-sm">
-              <div className="mb-4 grid gap-2">
-                <h2 className="text-[1rem] font-semibold text-[var(--color-text-primary)]">
-                  Delete chat?
-                </h2>
-                <p className="text-[0.875rem] leading-[1.6] text-[var(--color-text-secondary)]">
-                  Are you sure you want to delete{" "}
-                  <strong>&quot;{pendingDeleteConversation.title}&quot;</strong>
-                  ?
-                </p>
-              </div>
-
-              <div className="flex items-center justify-end gap-2">
-                <button
-                  className="rounded-full border border-[var(--color-border-strong)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
-                  type="button"
-                  onClick={() => setPendingDeleteConversation(null)}
-                >
-                  Cancel
-                </button>
-                <button
-                  className="rounded-full bg-[var(--color-primary)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-on-primary)] transition hover:opacity-90"
-                  type="button"
-                  onClick={() => void confirmDeleteConversation()}
-                >
-                  Delete
-                </button>
-              </div>
+          <DialogShell
+            label="Delete chat?"
+            scrimLabel="Close delete confirmation"
+            onDismiss={() => setPendingDeleteConversation(null)}
+            className="max-w-[25rem] p-5"
+          >
+            <div className="mb-4 grid gap-2">
+              <h2 className="text-[1rem] font-semibold text-[var(--color-text-primary)]">
+                Delete chat?
+              </h2>
+              <p className="text-[0.875rem] leading-[1.6] text-[var(--color-text-secondary)]">
+                Are you sure you want to delete{" "}
+                <strong>&quot;{pendingDeleteConversation.title}&quot;</strong>
+                ?
+              </p>
             </div>
-          </div>
+
+            <div className="flex items-center justify-end gap-2">
+              <button
+                className="rounded-full border border-[var(--color-border-strong)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
+                type="button"
+                onClick={() => setPendingDeleteConversation(null)}
+              >
+                Cancel
+              </button>
+              <button
+                className="rounded-full bg-[var(--color-primary)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-on-primary)] transition hover:opacity-90"
+                type="button"
+                onClick={() => void confirmDeleteConversation()}
+              >
+                Delete
+              </button>
+            </div>
+          </DialogShell>
         ) : null}
 
         <main

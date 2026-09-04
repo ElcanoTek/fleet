@@ -10,7 +10,6 @@ import {
 import AdminUsersPage from "./page";
 import {
   parseOwnedSharedProjects,
-  PROJECTS_SURFACE_HREF,
 } from "./DeleteRefusal";
 
 // Settings → Admin → Users: one table joining GET /api/admin/users
@@ -816,7 +815,7 @@ describe("AdminUsersPage", () => {
       owns_shared_projects: projects,
     });
 
-  it("links each named project straight at its transfer control", async () => {
+  it("offers one inline transfer per named project", async () => {
     refuseDelete(
       "bob@x.com",
       ownsRefusalBody([
@@ -826,33 +825,75 @@ describe("AdminUsersPage", () => {
     );
     const panel = await confirmDelete("bob@x.com");
 
-    // ?project=<id>&settings=1 is the deep link chat reads on boot: it opens
-    // the project's settings dialog, where "Transfer ownership…" lives. An
-    // admin cannot get there any other way — GET /projects is scoped to the
-    // caller's own and team-visible projects, and an admin is usually neither
-    // the owner nor a member.
+    // Buttons, not links: an admin is usually neither the project's owner nor
+    // a member of its team, so every membership-gated surface 404s for them
+    // and a link would land nowhere. The two routes that DO authorize an
+    // admin are called from this panel.
     expect(
-      within(panel).getByRole("link", { name: "Transfer alpha" }),
-    ).toHaveAttribute(
-      "href",
-      "/chat?project=11111111-1111-1111-1111-111111111111&settings=1",
-    );
+      within(panel).getByRole("button", { name: "Transfer alpha" }),
+    ).toBeInTheDocument();
     expect(
-      within(panel).getByRole("link", { name: "Transfer beta" }),
-    ).toHaveAttribute(
-      "href",
-      "/chat?project=22222222-2222-2222-2222-222222222222&settings=1",
-    );
-    expect(within(panel).getAllByRole("link").length).toBe(2);
+      within(panel).getByRole("button", { name: "Transfer beta" }),
+    ).toBeInTheDocument();
+    expect(within(panel).queryAllByRole("link").length).toBe(0);
     // The prose still reads as the server wrote it.
     expect(within(panel).getByRole("alert")).toHaveTextContent(
       /still owns team-shared projects \(alpha, beta\)/,
     );
   });
 
-  it("falls back to names parsed from prose when the body carries no ids", async () => {
+  it("hands a project over and retries the delete", async () => {
+    const projectID = "11111111-1111-1111-1111-111111111111";
+    let transferred = false;
+    mockFetch((url, init) => {
+      if (
+        url === "/api/admin/users/bob%40x.com" &&
+        init?.method === "DELETE"
+      ) {
+        // Blocked until the handover lands, then it goes through — which is
+        // the whole point of offering the transfer here.
+        if (transferred) return new Response(null, { status: 204 });
+        return new Response(
+          ownsRefusalBody([{ id: projectID, name: "alpha" }]),
+          { status: 409 },
+        );
+      }
+      if (url === `/api/projects/${projectID}/members`) {
+        return new Response(
+          JSON.stringify({ members: ["bob@x.com", "carol@x.com"] }),
+          { status: 200 },
+        );
+      }
+      if (url === `/api/projects/${projectID}/transfer`) {
+        transferred = true;
+        return new Response(JSON.stringify({ id: projectID }), { status: 200 });
+      }
+      return listImpl()(url);
+    });
+
+    const panel = await confirmDelete("bob@x.com");
+    fireEvent.click(within(panel).getByRole("button", { name: "Transfer alpha" }));
+
+    // The panel also holds the account's Team select, so scope by the label.
+    const select = await within(panel).findByLabelText(/Hand alpha to/);
+    // The current owner is never offered: handing it back is a no-op that
+    // leaves the delete blocked.
+    expect(
+      within(select).queryByRole("option", { name: "bob@x.com" }),
+    ).toBeNull();
+    fireEvent.change(select, { target: { value: "carol@x.com" } });
+    fireEvent.click(within(panel).getByRole("button", { name: "Transfer" }));
+
+    // The retry removes the row, so the refusal is gone from the table.
+    await waitFor(() => {
+      expect(within(usersTable()).queryByText("bob@x.com")).toBeNull();
+    });
+  });
+
+  it("falls back to naming the projects when the body carries no ids", async () => {
     // A server predating the structured body. The refusal must still explain
-    // itself; the links just cannot be precise, so they point at Projects.
+    // itself, but without ids there is no route to call, so it names the
+    // manual step instead of offering a control that cannot work.
     refuseDelete(
       "bob@x.com",
       "this account still owns team-shared projects (alpha, beta) — " +
@@ -860,11 +901,12 @@ describe("AdminUsersPage", () => {
     );
     const panel = await confirmDelete("bob@x.com");
 
-    const alpha = within(panel).getByRole("link", { name: "Transfer alpha" });
-    const beta = within(panel).getByRole("link", { name: "Transfer beta" });
-    expect(alpha).toHaveAttribute("href", PROJECTS_SURFACE_HREF);
-    expect(beta).toHaveAttribute("href", PROJECTS_SURFACE_HREF);
-    expect(within(panel).getAllByRole("link").length).toBe(2);
+    expect(within(panel).getByRole("alert")).toHaveTextContent(
+      /Transfer alpha, beta from the project.s settings dialog/,
+    );
+    expect(
+      within(panel).queryByRole("button", { name: /^Transfer alpha$/ }),
+    ).toBeNull();
   });
 
   it("keeps the refusal when many projects push it past the generic length cap", async () => {
@@ -884,7 +926,11 @@ describe("AdminUsersPage", () => {
     expect(within(panel).getByRole("alert")).toHaveTextContent(
       /still owns team-shared projects/,
     );
-    expect(within(panel).getAllByRole("link").length).toBe(names.length);
+    // Plain-text body: every name still reaches the admin, which is the
+    // point of the larger allowance.
+    for (const n of names) {
+      expect(within(panel).getByRole("alert")).toHaveTextContent(n);
+    }
   });
 
   it("shows no transfer links for a refusal that names no project", async () => {

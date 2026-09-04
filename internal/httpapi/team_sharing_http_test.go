@@ -529,6 +529,30 @@ func TestProjectMembersEndpoint(t *testing.T) {
 	if w := projectSub(t, f.srv, "GET", "zoe@x.com", f.project.ID+"/members", ""); w.Code != 404 {
 		t.Errorf("non-member: status %d, want 404", w.Code)
 	}
+
+	// An ADMIN who is in no team and owns nothing can read it — the case the
+	// endpoint exists for. It used to sit behind the membership gate while
+	// carrying its own owner-or-admin check, so that check was unreachable for
+	// exactly this caller: an admin got the same 404 a stranger does, could
+	// POST the handover, and could not ask who to hand it to.
+	w = httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/projects/"+f.project.ID+"/members", nil)
+	req = req.WithContext(context.WithValue(
+		context.WithValue(req.Context(), ctxKeyUser, "root@x.com"),
+		ctxKeyRole, store.RoleAdmin))
+	f.srv.projectByID(w, req)
+	if w.Code != 200 {
+		t.Fatalf("admin members: status %d body %s", w.Code, w.Body.String())
+	}
+	var adminOut struct {
+		Members []string `json:"members"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &adminOut); err != nil {
+		t.Fatal(err)
+	}
+	if len(adminOut.Members) != 2 {
+		t.Errorf("admin members = %v, want alice + bob", adminOut.Members)
+	}
 }
 
 // Deleting an account that still owns a team-shared project is refused with a

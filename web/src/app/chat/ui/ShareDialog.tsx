@@ -47,7 +47,7 @@ import type { ConversationSummary } from "./chat-experience";
 import type { Project } from "./ProjectsModal";
 import { ShareGlyph, TeamGlyph } from "./ShareGlyphs";
 import { useId } from "react";
-import { useDialogDismiss } from "@/app/shared/ui/useDialogDismiss";
+import { DialogShell } from "@/app/shared/ui/DialogShell";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
 
 // The single unavailable treatment: dimmed, and a pointer that says the
@@ -190,240 +190,231 @@ export function ShareDialog({
         );
 
   const teamCheckboxId = useId();
-  useDialogDismiss(true, onClose);
 
   const toggleUnavailable = busy || Boolean(unavailable);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
-      <button
-        aria-label="Close share dialog"
-        className="absolute inset-0 bg-[var(--color-overlay-strong)] backdrop-blur-[2px]"
-        type="button"
-        onClick={onClose}
-      />
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label="Share this chat"
-        className="motion-safe:animate-pop-up-base relative z-10 w-full max-w-[28rem] rounded-[1.25rem] border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] p-5 shadow-[var(--shadow-md)]"
-      >
-        <div className="mb-4 flex items-start justify-between gap-3">
-          <h2 className="text-[1rem] font-semibold text-[var(--color-text-primary)]">
-            Share {conversation ? `“${conversation.title}”` : "this chat"}
-          </h2>
-          <CloseButton label="Close share dialog" onClick={onClose} />
-        </div>
+    <DialogShell
+      label="Share this chat"
+      scrimLabel="Close share dialog"
+      onDismiss={onClose}
+      className="max-w-[28rem] p-5"
+    >
+      <div className="mb-4 flex items-start justify-between gap-3">
+        <h2 className="text-[1rem] font-semibold text-[var(--color-text-primary)]">
+          Share {conversation ? `“${conversation.title}”` : "this chat"}
+        </h2>
+        <CloseButton label="Close share dialog" onClick={onClose} />
+      </div>
 
-        {!conversation ? (
-          <p className="text-[0.875rem] text-[var(--color-text-secondary)]">
-            This chat is no longer available.
-          </p>
-        ) : (
-          <>
-            {/* The server's own sentence when it refuses (409) — the reason is
-                actionable, so it belongs in front of the control that was
-                refused, not in a toast behind the dialog. */}
-            {error ? (
-              <p
-                role="alert"
-                className="mb-3 rounded-[0.6rem] border border-[var(--color-danger-border)] px-2.5 py-1.5 text-[0.78rem] leading-[1.55] text-[var(--color-danger)]"
+      {!conversation ? (
+        <p className="text-[0.875rem] text-[var(--color-text-secondary)]">
+          This chat is no longer available.
+        </p>
+      ) : (
+        <>
+          {/* The server's own sentence when it refuses (409) — the reason is
+              actionable, so it belongs in front of the control that was
+              refused, not in a toast behind the dialog. */}
+          {error ? (
+            <p
+              role="alert"
+              className="mb-3 rounded-[0.6rem] border border-[var(--color-danger-border)] px-2.5 py-1.5 text-[0.78rem] leading-[1.55] text-[var(--color-danger)]"
+            >
+              {error}
+            </p>
+          ) : null}
+
+          {/* ── Scope 1: the team ───────────────────────────────────── */}
+          <section className="mb-4 rounded-[0.9rem] border border-[var(--color-border)] p-3">
+            {/* The helper text sits OUTSIDE the <label>: it holds a button
+                ("project settings"), and an interactive element inside a
+                label activates that label's control when clicked. */}
+            <div className="flex items-start gap-2.5">
+              {/* A disabled input swallows pointer events in most browsers,
+                  so the not-allowed cursor has to live on a wrapper. */}
+              <span
+                className={`mt-0.5 inline-flex ${toggleUnavailable ? "cursor-not-allowed" : ""}`}
               >
-                {error}
-              </p>
-            ) : null}
-
-            {/* ── Scope 1: the team ───────────────────────────────────── */}
-            <section className="mb-4 rounded-[0.9rem] border border-[var(--color-border)] p-3">
-              {/* The helper text sits OUTSIDE the <label>: it holds a button
-                  ("project settings"), and an interactive element inside a
-                  label activates that label's control when clicked. */}
-              <div className="flex items-start gap-2.5">
-                {/* A disabled input swallows pointer events in most browsers,
-                    so the not-allowed cursor has to live on a wrapper. */}
-                <span
-                  className={`mt-0.5 inline-flex ${toggleUnavailable ? "cursor-not-allowed" : ""}`}
+                <input
+                  id={teamCheckboxId}
+                  type="checkbox"
+                  className={toggleUnavailable ? CONTROL_UNAVAILABLE : ""}
+                  checked={teamShared}
+                  disabled={toggleUnavailable}
+                  aria-disabled={toggleUnavailable || undefined}
+                  aria-label={`Share with ${teamName}`}
+                  onChange={(e) => {
+                    // `disabled` is the real treatment — a browser will not
+                    // dispatch this at all. The guard is the belt to that
+                    // braces: a synthetic click (jsdom, an extension, a
+                    // future styled control) must not reach the server with
+                    // a request ADR-0057 says it will refuse.
+                    if (toggleUnavailable) return;
+                    onSetTeamShared(conversation, e.target.checked);
+                  }}
+                />
+              </span>
+              <div className="min-w-0 flex-1">
+                <label
+                  htmlFor={teamCheckboxId}
+                  className={`flex items-center gap-1.5 text-[0.875rem] font-medium text-[var(--color-text-primary)] ${toggleUnavailable ? CONTROL_UNAVAILABLE : ""}`}
                 >
-                  <input
-                    id={teamCheckboxId}
-                    type="checkbox"
-                    className={toggleUnavailable ? CONTROL_UNAVAILABLE : ""}
-                    checked={teamShared}
-                    disabled={toggleUnavailable}
-                    aria-disabled={toggleUnavailable || undefined}
-                    aria-label={`Share with ${teamName}`}
-                    onChange={(e) => {
-                      // `disabled` is the real treatment — a browser will not
-                      // dispatch this at all. The guard is the belt to that
-                      // braces: a synthetic click (jsdom, an extension, a
-                      // future styled control) must not reach the server with
-                      // a request ADR-0057 says it will refuse.
-                      if (toggleUnavailable) return;
-                      onSetTeamShared(conversation, e.target.checked);
-                    }}
-                  />
-                </span>
-                <div className="min-w-0 flex-1">
-                  <label
-                    htmlFor={teamCheckboxId}
-                    className={`flex items-center gap-1.5 text-[0.875rem] font-medium text-[var(--color-text-primary)] ${toggleUnavailable ? CONTROL_UNAVAILABLE : ""}`}
-                  >
-                    <TeamGlyph className="size-3.5 shrink-0" />
-                    Share with team{project?.team_id ? ` (${project.team_id})` : ""}
-                  </label>
-                  {/* The copy stays at full contrast in every state: the
-                      control is what is unavailable, the explanation of why is
-                      the one thing the reader needs to be able to read. */}
-                  <p className="mt-1 block text-[0.78rem] leading-[1.55] text-[var(--color-text-secondary)]">
-                    {inMyTeamsProject ? (
-                      teamShared ? (
-                        <>
-                          Your team can read this chat from{" "}
-                          <strong className="font-medium">{project?.name}</strong>
-                          ’s home page and branch it to build on it. They
-                          can&rsquo;t change it, and files in the chat&rsquo;s
-                          workspace are not shared.
-                        </>
-                      ) : (
-                        <>
-                          Teammates get a read-only view on{" "}
-                          <strong className="font-medium">{project?.name}</strong>
-                          ’s home page. Revocable any time.
-                        </>
-                      )
-                    ) : teamShared && project ? (
-                      // Shared, but the pairing has since broken. Say so, and
-                      // leave the checkbox live so it can be taken back.
+                  <TeamGlyph className="size-3.5 shrink-0" />
+                  Share with team{project?.team_id ? ` (${project.team_id})` : ""}
+                </label>
+                {/* The copy stays at full contrast in every state: the
+                    control is what is unavailable, the explanation of why is
+                    the one thing the reader needs to be able to read. */}
+                <p className="mt-1 block text-[0.78rem] leading-[1.55] text-[var(--color-text-secondary)]">
+                  {inMyTeamsProject ? (
+                    teamShared ? (
                       <>
-                        This chat is still shared with{" "}
-                        <strong className="font-medium">{teamName}</strong>, but{" "}
-                        <strong className="font-medium">{project.name}</strong>{" "}
-                        is no longer shared with your team. Un-tick to stop
-                        sharing it.
-                      </>
-                    ) : projectIsTeamShared && project ? (
-                      <>
-                        <strong className="font-medium">{project.name}</strong>{" "}
-                        is shared with{" "}
-                        <strong className="font-medium">{project.team_id}</strong>
-                        , which you aren&rsquo;t in — so you can&rsquo;t share a
-                        chat into it.
-                      </>
-                    ) : project ? (
-                      <>
-                        <strong className="font-medium">{project.name}</strong>{" "}
-                        isn&rsquo;t shared with your team. Share the project
-                        first
-                        {/* The inline link is the OWNER's fix. Withhold it from
-                            someone we know is not the owner — project settings
-                            are owner-only, so it would point a member at a
-                            door that is locked for them; they get "ask the
-                            owner" below instead. */}
-                        {project.owner_email && iOwnProject !== false ? (
-                          <>
-                            {" "}
-                            —{" "}
-                            <button
-                              type="button"
-                              className="underline hover:text-[var(--color-text-primary)]"
-                              onClick={() => onOpenProjectSettings(project.id)}
-                            >
-                              project settings
-                            </button>
-                          </>
-                        ) : null}
-                        .
+                        Your team can read this chat from{" "}
+                        <strong className="font-medium">{project?.name}</strong>
+                        ’s home page and branch it to build on it. They
+                        can&rsquo;t change it, and files in the chat&rsquo;s
+                        workspace are not shared.
                       </>
                     ) : (
-                      "Move this chat into a team-shared project to share it with your team."
-                    )}
-                  </p>
-                  {unavailable ? (
-                    <TeamShareFix
-                      reason={unavailable}
-                      conversation={conversation}
-                      project={project}
-                      moveTargets={moveTargets}
-                      isAdmin={isAdmin}
-                      busy={busy}
-                      onMoveToProject={onMoveToProject}
-                      onOpenProjectSettings={onOpenProjectSettings}
-                      onOpenProjects={onOpenProjects}
-                    />
-                  ) : null}
-                </div>
+                      <>
+                        Teammates get a read-only view on{" "}
+                        <strong className="font-medium">{project?.name}</strong>
+                        ’s home page. Revocable any time.
+                      </>
+                    )
+                  ) : teamShared && project ? (
+                    // Shared, but the pairing has since broken. Say so, and
+                    // leave the checkbox live so it can be taken back.
+                    <>
+                      This chat is still shared with{" "}
+                      <strong className="font-medium">{teamName}</strong>, but{" "}
+                      <strong className="font-medium">{project.name}</strong>{" "}
+                      is no longer shared with your team. Un-tick to stop
+                      sharing it.
+                    </>
+                  ) : projectIsTeamShared && project ? (
+                    <>
+                      <strong className="font-medium">{project.name}</strong>{" "}
+                      is shared with{" "}
+                      <strong className="font-medium">{project.team_id}</strong>
+                      , which you aren&rsquo;t in — so you can&rsquo;t share a
+                      chat into it.
+                    </>
+                  ) : project ? (
+                    <>
+                      <strong className="font-medium">{project.name}</strong>{" "}
+                      isn&rsquo;t shared with your team. Share the project
+                      first
+                      {/* The inline link is the OWNER's fix. Withhold it from
+                          someone we know is not the owner — project settings
+                          are owner-only, so it would point a member at a
+                          door that is locked for them; they get "ask the
+                          owner" below instead. */}
+                      {project.owner_email && iOwnProject !== false ? (
+                        <>
+                          {" "}
+                          —{" "}
+                          <button
+                            type="button"
+                            className="underline hover:text-[var(--color-text-primary)]"
+                            onClick={() => onOpenProjectSettings(project.id)}
+                          >
+                            project settings
+                          </button>
+                        </>
+                      ) : null}
+                      .
+                    </>
+                  ) : (
+                    "Move this chat into a team-shared project to share it with your team."
+                  )}
+                </p>
+                {unavailable ? (
+                  <TeamShareFix
+                    reason={unavailable}
+                    conversation={conversation}
+                    project={project}
+                    moveTargets={moveTargets}
+                    isAdmin={isAdmin}
+                    busy={busy}
+                    onMoveToProject={onMoveToProject}
+                    onOpenProjectSettings={onOpenProjectSettings}
+                    onOpenProjects={onOpenProjects}
+                  />
+                ) : null}
               </div>
-            </section>
-
-            {/* ── Scope 2: a public link ──────────────────────────────── */}
-            <section className="mb-4 rounded-[0.9rem] border border-[var(--color-border)] p-3">
-              <p className="m-0 flex items-center gap-1.5 text-[0.875rem] font-medium text-[var(--color-text-primary)]">
-                <ShareGlyph className="size-3.5 shrink-0" />
-                Share by link
-              </p>
-              {token ? (
-                <>
-                  <p className="mb-2 mt-1 text-[0.78rem] leading-[1.55] text-[var(--color-text-secondary)]">
-                    <strong className="font-medium">
-                      Anyone with this link
-                    </strong>{" "}
-                    can view a read-only copy — including people outside your
-                    team.
-                  </p>
-                  <div className="flex items-center gap-2">
-                    <input
-                      readOnly
-                      aria-label="Share link URL"
-                      value={buildShareUrl(token)}
-                      onFocus={(e) => e.currentTarget.select()}
-                      className="min-w-0 flex-1 rounded-lg border border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-2.5 py-1.5 font-mono text-[0.75rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => onCopyLink(buildShareUrl(token))}
-                      className="shrink-0 rounded-full border border-[var(--color-accent)] px-3.5 py-1.5 text-[0.8125rem] font-medium text-[var(--color-text-primary)] transition hover:bg-[var(--color-accent)] hover:text-[var(--color-surface-1)]"
-                    >
-                      {copied ? "Copied ✓" : "Copy link"}
-                    </button>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => onStopLink(conversation)}
-                    className="mt-2 rounded-full border border-[var(--color-danger-border)] px-3 py-1 text-[0.78rem] font-medium text-[var(--color-danger)] transition hover:bg-[var(--color-overlay-soft)]"
-                  >
-                    Stop sharing the link
-                  </button>
-                </>
-              ) : (
-                <>
-                  <p className="mb-2 mt-1 text-[0.78rem] leading-[1.55] text-[var(--color-text-secondary)]">
-                    Creates a URL anyone can open — read-only, and not limited
-                    to your team. Revocable any time.
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => onCreateLink(conversation)}
-                    className="rounded-full border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.8125rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
-                  >
-                    Create link
-                  </button>
-                </>
-              )}
-            </section>
-
-            <div className="flex justify-end">
-              <button
-                type="button"
-                onClick={onClose}
-                className="rounded-full border border-[var(--color-border-strong)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
-              >
-                Done
-              </button>
             </div>
-          </>
-        )}
-      </div>
-    </div>
+          </section>
+
+          {/* ── Scope 2: a public link ──────────────────────────────── */}
+          <section className="mb-4 rounded-[0.9rem] border border-[var(--color-border)] p-3">
+            <p className="m-0 flex items-center gap-1.5 text-[0.875rem] font-medium text-[var(--color-text-primary)]">
+              <ShareGlyph className="size-3.5 shrink-0" />
+              Share by link
+            </p>
+            {token ? (
+              <>
+                <p className="mb-2 mt-1 text-[0.78rem] leading-[1.55] text-[var(--color-text-secondary)]">
+                  <strong className="font-medium">
+                    Anyone with this link
+                  </strong>{" "}
+                  can view a read-only copy — including people outside your
+                  team.
+                </p>
+                <div className="flex items-center gap-2">
+                  <input
+                    readOnly
+                    aria-label="Share link URL"
+                    value={buildShareUrl(token)}
+                    onFocus={(e) => e.currentTarget.select()}
+                    className="min-w-0 flex-1 rounded-lg border border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-2.5 py-1.5 font-mono text-[0.75rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => onCopyLink(buildShareUrl(token))}
+                    className="shrink-0 rounded-full border border-[var(--color-accent)] px-3.5 py-1.5 text-[0.8125rem] font-medium text-[var(--color-text-primary)] transition hover:bg-[var(--color-accent)] hover:text-[var(--color-surface-1)]"
+                  >
+                    {copied ? "Copied ✓" : "Copy link"}
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onStopLink(conversation)}
+                  className="mt-2 rounded-full border border-[var(--color-danger-border)] px-3 py-1 text-[0.78rem] font-medium text-[var(--color-danger)] transition hover:bg-[var(--color-overlay-soft)]"
+                >
+                  Stop sharing the link
+                </button>
+              </>
+            ) : (
+              <>
+                <p className="mb-2 mt-1 text-[0.78rem] leading-[1.55] text-[var(--color-text-secondary)]">
+                  Creates a URL anyone can open — read-only, and not limited
+                  to your team. Revocable any time.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => onCreateLink(conversation)}
+                  className="rounded-full border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.8125rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
+                >
+                  Create link
+                </button>
+              </>
+            )}
+          </section>
+
+          <div className="flex justify-end">
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-full border border-[var(--color-border-strong)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
+            >
+              Done
+            </button>
+          </div>
+        </>
+      )}
+    </DialogShell>
   );
 }
 

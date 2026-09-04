@@ -1,123 +1,141 @@
 "use client";
 
-import { useEffect, useRef, type ReactNode } from "react";
-import { useDialogDismiss } from "@/app/shared/ui/useDialogDismiss";
+import type { ReactNode } from "react";
+import { DialogShell } from "@/app/shared/ui/DialogShell";
 
-// ConfirmDialog is the chat surface's in-app confirmation panel.
+// ConfirmDialog is the chat surface's one in-app confirmation panel.
 //
-// It exists because three paths on this surface (move a team-shared chat into
-// a project that isn't team-shared, take a chat out of its project, delete a
-// project from the rail kebab) used `window.confirm`. A
-// native confirm is the browser's dialog, not the app's: it is unstyled, it
-// titles itself with the deployment origin, it blocks the whole tab, it looks
-// broken in a PWA window, and — the functional part — it can render only a
-// string and can hold only OK/Cancel. So it cannot show the project or the
-// team as a chip, and it cannot offer the second action the copy itself
-// promises ("expire unless pinned" with nothing to click).
+// It exists because the projects surfaces used `window.confirm` for
+// everything they had to ask about — move a team-shared chat into a project
+// that isn't team-shared, take a chat out of its project, delete a project,
+// transfer it, stop sharing it, delete a team learning. A native confirm is
+// the browser's dialog, not the app's: it is unstyled, it titles itself with
+// the deployment origin, it blocks the whole tab, it looks broken in a PWA
+// window, and — the functional part — it can render only a string and can
+// hold only OK/Cancel. So it cannot show the project or the team as a chip,
+// and it cannot offer the second action the copy itself promises ("expire
+// unless pinned" with nothing to click).
 //
-// The treatment is deliberately the one the rest of the pass already uses (see
-// ProjectHome's delete-project dialog): a --color-surface-1 panel with
-// --shadow-md over a --color-overlay-strong scrim. A later pass unifies every
-// dialog surface in the app; this is not a new visual language.
+// This file used to be TWO components. Two agents in the same pass each built
+// a chat-surface confirm — ConfirmDialog (no heading, body-as-accessible-name,
+// a secondary-action slot) and ConfirmModal (a required title, free-form body,
+// a busy state) — neither aware of the other. They are folded here: the title
+// is optional, the body is free-form, the secondary action is optional. Both
+// shapes are still reachable, and no confirm's copy changed.
 //
-// There is no visible heading. The body carries copy that was written as a
-// confirm question and reads as one; inventing a title would be new copy, so
-// the body IS the accessible name (aria-labelledby).
+// Two shapes, one primitive:
+//   • titled     — pass `title`; it is the accessible name (h2 + aria-label).
+//   • untitled   — pass `bodyId`; the body copy IS the accessible name
+//                  (aria-labelledby). Copy that was written as a confirm
+//                  question already reads as one, and inventing a heading for
+//                  it would be new copy.
 //
-// Escape cancels and focus lands in the panel on mount — the native confirm
-// answered Escape, so a replacement that didn't would be a regression for a
-// keyboard user. Not a focus trap, matching the house pattern (see
-// useDialogDismiss). A later pass folds this and ConfirmModal into one
-// primitive; this one carries a secondary action and a body-as-accessible-name
-// variant that ConfirmModal has no slot for yet.
+// The surface (opaque --color-surface-1 over the --color-overlay-strong
+// scrim), Escape-to-dismiss, click-outside, and focus-on-open all come from
+// the shared DialogShell — see that file for why the panel is opaque.
 export function ConfirmDialog({
   bodyId,
+  busy,
   cancelLabel = "Cancel",
   cancelAriaLabel,
   children,
   confirmLabel,
   confirmTone = "default",
+  layer,
   onCancel,
   onConfirm,
   secondary,
   testId,
+  title,
 }: {
-  // bodyId wires the body copy up as the dialog's accessible name.
-  bodyId: string;
+  // Wires the body copy up as the dialog's accessible name. Pass this OR
+  // `title`.
+  bodyId?: string;
+  // Disables the confirm while an in-flight action settles.
+  busy?: boolean;
   cancelLabel?: string;
   // The scrim is a button (click-outside cancels), so it needs its own label.
-  cancelAriaLabel: string;
-  children: ReactNode;
+  // Defaults to "Cancel: <title>" for a titled confirm.
+  cancelAriaLabel?: string;
+  children?: ReactNode;
   confirmLabel: string;
-  confirmTone?: "default" | "danger";
+  // "default" is the neutral filled button; "accent" is the brand-filled one
+  // the transfer confirm shipped with; "danger" tints a destructive confirm
+  // and never the cancel beside it.
+  confirmTone?: "default" | "accent" | "danger";
+  // "stacked" for a confirm summoned from inside another dialog.
+  layer?: "modal" | "stacked";
   onCancel: () => void;
   onConfirm: () => void;
   // An optional second way forward — not a second confirm, a different
   // outcome (e.g. "pin it first, then remove it").
   secondary?: { label: string; onClick: () => void };
   testId?: string;
+  title?: string;
 }) {
-  useDialogDismiss(true, onCancel);
-  const panelRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    panelRef.current?.focus();
-  }, []);
-
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
-      <button
-        aria-label={cancelAriaLabel}
-        className="absolute inset-0 bg-[var(--color-overlay-strong)] backdrop-blur-[2px]"
-        type="button"
-        onClick={onCancel}
-      />
-      <div
-        ref={panelRef}
-        tabIndex={-1}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={bodyId}
-        data-testid={testId}
-        className="relative z-10 w-full max-w-[28rem] rounded-[1rem] border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] p-5 shadow-[var(--shadow-md)] outline-none"
-      >
-        <p
-          id={bodyId}
-          className="mb-4 text-[0.875rem] leading-[1.6] text-[var(--color-text-secondary)]"
+    <DialogShell
+      label={title}
+      labelledBy={title ? undefined : bodyId}
+      scrimLabel={cancelAriaLabel ?? (title ? `Cancel: ${title}` : "Cancel")}
+      onDismiss={onCancel}
+      layer={layer}
+      className="max-w-[28rem] p-5"
+      testId={testId}
+    >
+      {title ? (
+        <h2
+          className="mb-2 text-[1rem] font-semibold text-[var(--color-text-primary)]"
+        >
+          {title}
+        </h2>
+      ) : null}
+      {children ? (
+        // One body treatment for both shapes. The grid + gap is what lets a
+        // titled confirm stack several <p className="m-0"> children (counts,
+        // then consequences); an untitled confirm's inline copy and its
+        // NameChips are one contiguous run and lay out exactly as they did.
+        <div
+          id={title ? undefined : bodyId}
+          className="mb-4 grid gap-[0.4rem] text-[0.875rem] leading-[1.6] text-[var(--color-text-secondary)]"
         >
           {children}
-        </p>
-        <div className="flex flex-wrap items-center justify-end gap-2">
-          <button
-            type="button"
-            className="rounded-md px-3 py-1.5 text-[0.8rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
-            onClick={onCancel}
-          >
-            {cancelLabel}
-          </button>
-          {secondary ? (
-            <button
-              type="button"
-              className="rounded-md border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.8rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
-              onClick={secondary.onClick}
-            >
-              {secondary.label}
-            </button>
-          ) : null}
-          <button
-            type="button"
-            className={[
-              "rounded-md px-3 py-1.5 text-[0.8rem] font-medium transition",
-              confirmTone === "danger"
-                ? "text-[var(--color-danger)] hover:bg-[color-mix(in_srgb,var(--color-danger)_10%,transparent)]"
-                : "bg-[var(--color-text-primary)] text-[var(--color-surface-1)] hover:opacity-80",
-            ].join(" ")}
-            onClick={onConfirm}
-          >
-            {confirmLabel}
-          </button>
         </div>
+      ) : null}
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        <button
+          type="button"
+          className="rounded-md px-3 py-1.5 text-[0.8rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
+          onClick={onCancel}
+        >
+          {cancelLabel}
+        </button>
+        {secondary ? (
+          <button
+            type="button"
+            className="rounded-md border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.8rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
+            onClick={secondary.onClick}
+          >
+            {secondary.label}
+          </button>
+        ) : null}
+        <button
+          type="button"
+          disabled={busy}
+          className={[
+            "rounded-md px-3 py-1.5 text-[0.8rem] font-medium transition disabled:opacity-60",
+            confirmTone === "danger"
+              ? "text-[var(--color-danger)] hover:bg-[color-mix(in_srgb,var(--color-danger)_10%,transparent)]"
+              : confirmTone === "accent"
+                ? "bg-[var(--color-accent)] text-[var(--color-surface-1)] hover:opacity-90"
+                : "bg-[var(--color-text-primary)] text-[var(--color-surface-1)] hover:opacity-80",
+          ].join(" ")}
+          onClick={onConfirm}
+        >
+          {confirmLabel}
+        </button>
       </div>
-    </div>
+    </DialogShell>
   );
 }
 
@@ -139,3 +157,5 @@ export function NameChip({
     </span>
   );
 }
+
+export default ConfirmDialog;

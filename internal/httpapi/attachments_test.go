@@ -226,7 +226,8 @@ func TestStagedAttachmentsAreScopedPerConversation(t *testing.T) {
 
 	stagedA := stageAttachmentsIntoWorkspace(uploads, "conv-a",
 		[]chatAttachment{{Name: "spend.csv", Path: src, Size: 22}})
-	wantA := filepath.Join(tools.WorkspaceDirForConversation("conv-a"), "attachments", "spend.csv")
+	wantA := filepath.Join(tools.WorkspaceDirForConversation("conv-a"), "attachments",
+		uploadSlug(uploads, src), "spend.csv")
 	if len(stagedA) != 1 || filepath.Clean(stagedA[0].Path) != filepath.Clean(wantA) {
 		t.Fatalf("staged = %#v, want the copy at %q", stagedA, wantA)
 	}
@@ -555,7 +556,8 @@ func TestStageAttachmentsIntoWorkspace(t *testing.T) {
 	if len(staged) != 1 {
 		t.Fatalf("staged = %v", staged)
 	}
-	want := filepath.Join(tools.WorkspaceDirForConversation("conv-stage"), "attachments", "data.csv")
+	want := filepath.Join(tools.WorkspaceDirForConversation("conv-stage"), "attachments",
+		uploadSlug(uploads, src), "data.csv")
 	if filepath.Clean(staged[0].Path) != filepath.Clean(want) {
 		t.Fatalf("staged path = %q, want %q", staged[0].Path, want)
 	}
@@ -563,7 +565,7 @@ func TestStageAttachmentsIntoWorkspace(t *testing.T) {
 		t.Fatalf("staged content = (%q, %v)", got, err)
 	}
 
-	// Queue-drain echo: same name + size reuses the staged copy.
+	// Queue-drain echo: the same upload resolves to the same copy.
 	again := stageAttachmentsIntoWorkspace(uploads, "conv-stage", atts)
 	if again[0].Path != staged[0].Path {
 		t.Fatalf("re-stage path = %q, want the reused %q", again[0].Path, staged[0].Path)
@@ -573,8 +575,8 @@ func TestStageAttachmentsIntoWorkspace(t *testing.T) {
 		t.Fatalf("re-stage duplicated the file: %v", entries)
 	}
 
-	// A NEW attachment reusing the filename (different size) gets a variant,
-	// never a clobber of the copy the agent may already have read.
+	// A NEW upload reusing the filename gets its own directory, so neither
+	// copy clobbers or shadows the other.
 	src2 := filepath.Join(uploads, "tok2", "data.csv")
 	if err := os.MkdirAll(filepath.Dir(src2), 0o755); err != nil {
 		t.Fatal(err)
@@ -583,14 +585,67 @@ func TestStageAttachmentsIntoWorkspace(t *testing.T) {
 		t.Fatal(err)
 	}
 	variant := stageAttachmentsIntoWorkspace(uploads, "conv-stage", []chatAttachment{{Name: "data.csv", Path: src2, Size: 16}})
-	if got := filepath.Base(variant[0].Path); got != "data-2.csv" {
-		t.Fatalf("variant name = %q, want data-2.csv", got)
+	if variant[0].Path == staged[0].Path {
+		t.Fatalf("a different upload reused the first upload's staged path %q", variant[0].Path)
+	}
+	if got := filepath.Base(variant[0].Path); got != "data.csv" {
+		t.Fatalf("variant name = %q — the name is kept; the DIRECTORY separates uploads", got)
 	}
 	if got, err := os.ReadFile(filepath.Clean(variant[0].Path)); err != nil || string(got) != "different bytes!" {
 		t.Fatalf("variant content = (%q, %v)", got, err)
 	}
 	if got, err := os.ReadFile(staged[0].Path); err != nil || string(got) != "a,b\n1,2\n" {
 		t.Fatalf("original staged copy was clobbered: (%q, %v)", got, err)
+	}
+}
+
+// A corrected re-upload that keeps the filename AND the byte count must reach
+// the agent as its own bytes.
+//
+// Reuse was keyed on name + size, so an edited value or a swapped column — the
+// common shape of a fix-and-resend — landed on the "already staged" branch and
+// handed back the PREVIOUS file. The prompt named the new attachment and the
+// model silently analyzed the old one, with nothing anywhere reporting a
+// mismatch. Two uploads are two tokens, so they can no longer collide however
+// alike their bytes.
+func TestStageAttachmentsIntoWorkspace_SameNameSameSizeIsNotTheSameFile(t *testing.T) {
+	t.Setenv("FLEET_WORKSPACE_ROOT", t.TempDir())
+	uploads := t.TempDir()
+	write := func(token, body string) string {
+		p := filepath.Join(uploads, token, "spend.csv")
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	// Identical length, different content — the case the old key could not see.
+	const before = "channel,spend\nsearch,100\n"
+	const after = "channel,spend\nsearch,900\n"
+	if len(before) != len(after) {
+		t.Fatalf("fixture must keep the byte count identical")
+	}
+	first := write("tok-first", before)
+	second := write("tok-second", after)
+
+	staged := stageAttachmentsIntoWorkspace(uploads, "conv-resend",
+		[]chatAttachment{{Name: "spend.csv", Path: first, Size: int64(len(before))}})
+	restaged := stageAttachmentsIntoWorkspace(uploads, "conv-resend",
+		[]chatAttachment{{Name: "spend.csv", Path: second, Size: int64(len(after))}})
+
+	if restaged[0].Path == staged[0].Path {
+		t.Fatalf("the corrected upload reused the first upload's staged copy at %q", restaged[0].Path)
+	}
+	got, err := os.ReadFile(filepath.Clean(restaged[0].Path))
+	if err != nil || string(got) != after {
+		t.Fatalf("staged content = (%q, %v), want the corrected bytes %q", got, err, after)
+	}
+	// And the first copy is untouched — a turn already reading it keeps
+	// reading what it was given.
+	if got, err := os.ReadFile(staged[0].Path); err != nil || string(got) != before {
+		t.Fatalf("first staged copy = (%q, %v), want %q", got, err, before)
 	}
 }
 

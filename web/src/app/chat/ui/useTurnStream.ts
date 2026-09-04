@@ -681,8 +681,22 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         const assistantIdx = current.findIndex((m) => m.id === ctx.assistantId);
         if (assistantIdx < 0) return current;
         const prev = assistantIdx > 0 ? current[assistantIdx - 1] : null;
-        if (prev && prev.role === "user" && prev.content === text) return current;
-        if (prev && prev.role === "user") return current; // already a user msg, leave it (could be edited text)
+        if (prev && prev.role === "user") {
+          // The optimistic row submitPrompt inserted. It is already showing the
+          // right words, so the row stays — but the SERVER's injected context
+          // is new information, and only this frame carries it. Merging it in
+          // rather than returning early is what makes the live turn show the
+          // same collapsed note the turn shows after a reload; without it a
+          // plain turn silently dropped the workspace inventory and shared
+          // library notes, and an attachment turn showed only the composer's
+          // own receipt. Nothing else about the row is touched (its text may
+          // legitimately differ — an edited resend).
+          if (injectedContext === undefined) return current;
+          if (prev.injectedContext === injectedContext) return current;
+          const next = current.slice();
+          next[assistantIdx - 1] = { ...prev, injectedContext };
+          return next;
+        }
         const userMsg: Message = {
           id: ctx.assistantId - 1,
           role: "user",

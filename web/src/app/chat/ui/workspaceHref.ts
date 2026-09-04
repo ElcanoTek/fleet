@@ -235,17 +235,33 @@ export function unsharedFileName(raw: string | undefined | null): string | null 
   const value = typeof raw === "string" ? raw.trim() : "";
   if (!value) return null;
 
-  // An already-resolved route, either `/api/…` or `https://host/api/…`. Both
-  // conversation- and task-workspace prefixes carry an id segment plus
-  // `/workspace/`, which is specific enough that matching it on an absolute
-  // URL cannot swallow an unrelated third-party link.
+  // An already-resolved route, either `/api/…` or `https://host/api/…`.
+  //
+  // On an ABSOLUTE url the origin decides first. The route shape is specific,
+  // but it is not ours to claim on someone else's host: a third-party page at
+  // `https://example.com/api/conversations/42/workspace/chart.png` is a link
+  // the reader can simply follow, and withholding it would replace a working
+  // link with "file not shared" — a false statement, and the exact dead
+  // promise this function exists to remove. Only a same-origin URL names a
+  // file behind THIS deployment's owner-scoped route.
+  //
+  // Server-side (no `location`), an absolute URL is treated as external: the
+  // renderer runs again in the browser, where the origin is knowable, and
+  // under-withholding for one pass shows a link that the client pass then
+  // resolves — whereas over-withholding would blank a legitimate link
+  // permanently in any non-hydrating context.
   let path = value;
   if (/^https?:\/\//i.test(value)) {
+    let url: URL;
     try {
-      path = new URL(value).pathname;
+      url = new URL(value);
     } catch {
       return null;
     }
+    if (typeof location === "undefined" || url.origin !== location.origin) {
+      return null;
+    }
+    path = url.pathname;
   }
   if (OWNER_SCOPED_FILE_ROUTE.test(path)) return routeBasename(path);
 

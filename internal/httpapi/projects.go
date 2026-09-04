@@ -140,13 +140,25 @@ func (s *Server) projectByID(w http.ResponseWriter, r *http.Request) {
 	parts := strings.SplitN(rest, "/", 3)
 	id := parts[0]
 
-	// Transfer is dispatched BEFORE the membership gate: the case it exists for
-	// is an admin cleaning up after an owner who left, and an admin is usually
-	// not a member of the project. Its own authorization (owner or admin) lives
-	// in the handler.
-	if len(parts) == 2 && parts[1] == "transfer" {
-		s.projectTransfer(w, r, user, id)
-		return
+	// Transfer, and the picker that feeds it, are dispatched BEFORE the
+	// membership gate: the case they exist for is an admin cleaning up after an
+	// owner who left, and an admin is usually not a member of the project.
+	// Their own authorization (owner or admin) lives in the handlers.
+	//
+	// `members` used to sit behind the gate while carrying its own owner-or-
+	// admin check — so the check was unreachable for the one caller it names,
+	// and an admin got the same 404 a stranger does. That made the transfer
+	// only half-reachable: an admin could POST the handover but could not ask
+	// who to hand it to, which is the whole content of the decision.
+	if len(parts) == 2 {
+		switch parts[1] {
+		case "transfer":
+			s.projectTransfer(w, r, user, id)
+			return
+		case "members":
+			s.projectMembersByID(w, r, user, id)
+			return
+		}
 	}
 
 	p := s.projectForMember(w, r, user, id)
@@ -166,8 +178,6 @@ func (s *Server) projectByID(w http.ResponseWriter, r *http.Request) {
 			s.projectConversations(w, r, p)
 		case "team-conversations":
 			s.projectTeamConversations(w, r, p)
-		case "members":
-			s.projectMembers(w, r, p)
 		case "impact":
 			s.projectImpact(w, r, p)
 		case "files":
@@ -399,13 +409,21 @@ func (s *Server) projectTransfer(w http.ResponseWriter, r *http.Request, user, p
 // is a directory read the project's own surfaces do not otherwise give a plain
 // member. The only caller that needs it is the transfer picker, and only the
 // owner and admins can transfer.
-func (s *Server) projectMembers(w http.ResponseWriter, r *http.Request, p *store.Project) {
+func (s *Server) projectMembersByID(w http.ResponseWriter, r *http.Request, user, projectID string) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	user := userFromCtx(r.Context())
-	if !strings.EqualFold(p.OwnerEmail, user) && !s.isAdmin(user) && roleFromCtx(r.Context()) != store.RoleAdmin {
+	p, err := s.store.GetProject(r.Context(), projectID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// Same shape as projectTransfer's gate, and the same 404 for everyone
+	// else: this list enumerates every account in a team, which is more than a
+	// plain member can learn from the project's own surfaces.
+	admin := s.isAdmin(user) || roleFromCtx(r.Context()) == store.RoleAdmin
+	if p == nil || (!strings.EqualFold(p.OwnerEmail, user) && !admin) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}

@@ -41,6 +41,20 @@ func userEntryWithInjected(t *testing.T, text, injected string) agent.HistoryEnt
 	return agent.HistoryEntry{Role: "user", Type: "text", Content: raw, InjectedContext: injected}
 }
 
+// markConversationPreSplit rewrites a conversation's rows to the shape a box
+// running before migration 056 actually has: injected_context IS NULL, which
+// is the discriminator the branch copy reads to decide whether the marker
+// strip may run at all. AppendHistory writes ” (a post-split row that simply
+// injected nothing), so a test that wants the legacy path must say so.
+func markConversationPreSplit(t *testing.T, s *Store, convID string) {
+	t.Helper()
+	if _, err := s.db.Exec(
+		`UPDATE messages SET injected_context = NULL WHERE conversation_id = $1`, convID,
+	); err != nil {
+		t.Fatalf("mark pre-split: %v", err)
+	}
+}
+
 // TestBranchDropsTheParentsInjectedContext: the fork carries the user's words
 // and none of the turn's injected context — no attachment path, no library
 // listing — on the owner's own branch as well as a teammate's. One rule: no
@@ -119,6 +133,7 @@ func TestBranchStripsLegacyInlineInjectedContext(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("AppendHistory: %v", err)
 	}
+	markConversationPreSplit(t, s, conv.ID)
 	ids := messageIDs(t, s, conv.ID)
 
 	branch, err := s.BranchConversation(ctx, owner, conv.ID, ids[len(ids)-1], "fork")
@@ -141,6 +156,59 @@ func TestBranchStripsLegacyInlineInjectedContext(t *testing.T) {
 	}
 	if strings.Contains(string(copied[0].Content), "attachments/uploads") {
 		t.Errorf("legacy inline path survived the copy: %s", copied[0].Content)
+	}
+}
+
+// A message written AFTER the split is copied verbatim, even when its text
+// contains something that looks exactly like an injected block.
+//
+// The legacy strip is marker-based by necessity, and a marker is a sequence a
+// person can legitimately type: a "---" rule followed by "**Shared file
+// library**" is what someone documenting fleet writes — in this repo, often.
+// Run unconditionally, the strip would cut that text and everything after it
+// out of the branch, silently. `injected_context IS NULL` is the gate: a row
+// written since migration 056 always has a value, so it can never be mistaken
+// for one whose blocks might still be inside its text.
+func TestBranchKeepsMarkerLikeTextWrittenByTheUser(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	const owner = "alice@example.com"
+	conv, err := s.CreateConversation(ctx, owner, "Docs", "victoria", "", false)
+	if err != nil {
+		t.Fatalf("CreateConversation: %v", err)
+	}
+	// A user explaining the feature, in their own words, to the assistant.
+	typed := "Does this render right?" + testInjectedLibraryBlock +
+		"\n\nThat block above is what I mean — should it be in my bubble?"
+	raw, err := json.Marshal(agent.TextContent{Text: typed})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AppendHistory(ctx, conv.ID, []agent.HistoryEntry{
+		{Role: "user", Type: "text", Content: raw},
+		{Role: "assistant", Type: "text", Content: []byte(`{"text":"No — it renders beside it."}`)},
+	}); err != nil {
+		t.Fatalf("AppendHistory: %v", err)
+	}
+	ids := messageIDs(t, s, conv.ID)
+
+	branch, err := s.BranchConversation(ctx, owner, conv.ID, ids[len(ids)-1], "fork")
+	if err != nil {
+		t.Fatalf("BranchConversation: %v", err)
+	}
+	copied, err := s.LoadHistory(ctx, branch.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(copied) != 2 {
+		t.Fatalf("copied %d entries, want 2", len(copied))
+	}
+	var tc agent.TextContent
+	if err := json.Unmarshal(copied[0].Content, &tc); err != nil {
+		t.Fatal(err)
+	}
+	if tc.Text != typed {
+		t.Errorf("copied user text = %q,\nwant it byte-identical to what the user typed:\n%q", tc.Text, typed)
 	}
 }
 

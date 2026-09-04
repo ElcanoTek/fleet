@@ -22,11 +22,23 @@
 -- (the prompt assembly concatenates them, byte-for-byte as before); the branch
 -- copy takes the text and leaves the suffix behind.
 --
--- Additive and backward compatible: NOT NULL with a '' DEFAULT, so existing
--- rows read as "no separately-stored injected context" and no table rewrite is
--- needed (Postgres stores the default in the catalog). Legacy rows whose text
--- still embeds the blocks keep rendering exactly as they do today, and the
--- branch path strips them defensively by marker (see
--- agent.StripLegacyInjectedContext).
+-- Additive and backward compatible: NULLABLE with no default, so no table
+-- rewrite is needed and every existing row reads as NULL.
+--
+-- NULL is not merely "empty" — it is the LEGACY DISCRIMINATOR, and the reason
+-- this column is not NOT NULL DEFAULT ''. Every write after this migration
+-- supplies a value: the derived suffix, or '' when a turn injected nothing. So
+-- NULL means exactly "written before the split existed, so the blocks may
+-- still be inside content.text", and '' means "written after, and this turn
+-- genuinely had no injected context". Without that distinction the two are
+-- indistinguishable, and the marker-based legacy strip on the branch path
+-- would have to run against every message ever written — including ones typed
+-- after this migration, where a user who legitimately writes a separator
+-- followed by "**Shared file library**" (documenting fleet, say) would have
+-- that text and everything after it silently cut from the copy.
+--
+-- With the discriminator, the strip runs ONLY on NULL rows, where nothing
+-- newer can be caught by it, and a post-migration message is copied verbatim
+-- no matter what its author typed.
 ALTER TABLE messages
-    ADD COLUMN IF NOT EXISTS injected_context TEXT NOT NULL DEFAULT '';
+    ADD COLUMN IF NOT EXISTS injected_context TEXT;

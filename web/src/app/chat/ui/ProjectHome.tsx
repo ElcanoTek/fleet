@@ -5,7 +5,8 @@ import { useDialogDismiss } from "@/app/shared/ui/useDialogDismiss";
 import { Menu, MenuItem, MenuSeparator } from "@/app/shared/ui/Menu";
 import type { ConversationSummary } from "./chat-experience";
 import type { Project } from "./ProjectsModal";
-import { ConfirmModal } from "./ConfirmModal";
+import { ConfirmDialog } from "./ConfirmDialog";
+import { DialogShell } from "@/app/shared/ui/DialogShell";
 import { Icon } from "./Icon";
 import { ShareGlyph, TeamGlyph } from "./ShareGlyphs";
 import { formatBytes, stripMarkdown } from "./formatters";
@@ -218,8 +219,10 @@ export function ProjectHome({
   // only so one Escape press cannot dismiss the confirm AND the settings
   // dialog under it (both listen on the document).
   const [confirmTransfer, setConfirmTransfer] = useState(false);
-  // Escape closes the settings dialog — but only while the delete confirm
-  // ISN'T stacked on top of it, so one press never dismisses both.
+  // Escape closes the settings dialog — but only while a confirm ISN'T stacked
+  // on top of it, so one press never dismisses both. DialogShell now enforces
+  // the same rule for every dialog (only the last one mounted answers
+  // Escape); this stays as the parent-side statement of it, and the two agree.
   const closeSettings = useCallback(() => setSettingsOpen(false), [setSettingsOpen]);
   useDialogDismiss(
     settingsOpen && !confirmDelete && !confirmUnshare && !confirmTransfer,
@@ -830,119 +833,111 @@ export function ProjectHome({
           the rail kebab (it's a list-ordering control, not project state the
           home needs to duplicate). */}
       {settingsOpen ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
-          <button
-            aria-label="Close settings"
-            className="absolute inset-0 bg-[var(--color-overlay-strong)] backdrop-blur-[2px]"
-            type="button"
-            onClick={() => setSettingsOpen(false)}
-          />
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-label={`Settings for ${project.name}`}
-            className="relative z-10 w-full max-w-sm rounded-[1rem] border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] p-5 shadow-[var(--shadow-md)]"
+        <DialogShell
+          label={`Settings for ${project.name}`}
+          scrimLabel="Close settings"
+          onDismiss={() => setSettingsOpen(false)}
+          className="max-w-sm p-5"
+        >
+          <h2 className="mb-4 text-[1rem] font-semibold text-[var(--color-text-primary)]">
+            Project settings
+          </h2>
+          <label
+            htmlFor={projectNameInputId}
+            className="mb-1 block text-[0.75rem] font-medium text-[var(--color-text-secondary)]"
           >
-            <h2 className="mb-4 text-[1rem] font-semibold text-[var(--color-text-primary)]">
-              Project settings
-            </h2>
-            <label
-              htmlFor={projectNameInputId}
-              className="mb-1 block text-[0.75rem] font-medium text-[var(--color-text-secondary)]"
-            >
-              Name
-            </label>
+            Name
+          </label>
+          <input
+            id={projectNameInputId}
+            value={nameDraft}
+            onChange={(e) => setNameDraft(e.target.value)}
+            maxLength={128}
+            // aria-label is kept deliberately: inside a dialog already titled
+            // "Settings for <project>", "Project name" is the unambiguous
+            // accessible name (and the one the e2e specs query by), while the
+            // htmlFor/id pair above supplies the missing click-to-focus
+            // association the bare <label> never had.
+            aria-label="Project name"
+            className="mb-4 w-full rounded-md border border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-2.5 py-2 text-[0.875rem] text-[var(--color-text-primary)] outline-none focus-visible:border-[var(--color-border-strong)]"
+          />
+          <label className="mb-1 flex items-center gap-2 text-[0.85rem] text-[var(--color-text-primary)]">
             <input
-              id={projectNameInputId}
-              value={nameDraft}
-              onChange={(e) => setNameDraft(e.target.value)}
-              maxLength={128}
-              // aria-label is kept deliberately: inside a dialog already titled
-              // "Settings for <project>", "Project name" is the unambiguous
-              // accessible name (and the one the e2e specs query by), while the
-              // htmlFor/id pair above supplies the missing click-to-focus
-              // association the bare <label> never had.
-              aria-label="Project name"
-              className="mb-4 w-full rounded-md border border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-2.5 py-2 text-[0.875rem] text-[var(--color-text-primary)] outline-none focus-visible:border-[var(--color-border-strong)]"
+              type="checkbox"
+              checked={sharedDraft}
+              disabled={myTeam === ""}
+              onChange={(e) => {
+                const next = e.target.checked;
+                // Un-ticking asks first (Item 14): the tick only clears
+                // once the confirm is answered, so Cancel leaves the
+                // dialog exactly as it was.
+                if (!next && Boolean(project.team_id)) {
+                  setConfirmUnshare(true);
+                  return;
+                }
+                setSharedDraft(next);
+              }}
             />
-            <label className="mb-1 flex items-center gap-2 text-[0.85rem] text-[var(--color-text-primary)]">
-              <input
-                type="checkbox"
-                checked={sharedDraft}
-                disabled={myTeam === ""}
-                onChange={(e) => {
-                  const next = e.target.checked;
-                  // Un-ticking asks first (Item 14): the tick only clears
-                  // once the confirm is answered, so Cancel leaves the
-                  // dialog exactly as it was.
-                  if (!next && Boolean(project.team_id)) {
-                    setConfirmUnshare(true);
-                    return;
-                  }
-                  setSharedDraft(next);
-                }}
-              />
-              Share with my team{myTeam ? ` (${myTeam})` : ""}
-            </label>
-            <p className="mb-4 text-[0.75rem] leading-[1.5] text-[var(--color-text-muted)]">
-              {myTeam === ""
-                ? "You are not in a team yet — create one in Settings → Team, then share this project with it."
-                : "Members can chat in the project, read and write its team learnings, and share individual chats into it. Only you can edit or delete the project."}
+            Share with my team{myTeam ? ` (${myTeam})` : ""}
+          </label>
+          <p className="mb-4 text-[0.75rem] leading-[1.5] text-[var(--color-text-muted)]">
+            {myTeam === ""
+              ? "You are not in a team yet — create one in Settings → Team, then share this project with it."
+              : "Members can chat in the project, read and write its team learnings, and share individual chats into it. Only you can edit or delete the project."}
+          </p>
+          {project.team_id && !sharedDraft ? (
+            // Turning sharing off is not just a visibility change: it
+            // unshares every chat members shared into the project, and the
+            // ones that belong to teammates leave it (they cannot stay filed
+            // in a project their owner can no longer see).
+            <p className="mb-4 text-[0.75rem] leading-[1.5] text-[var(--color-danger)]">
+              Turning sharing off unshares every chat members shared into this
+              project, and moves teammates&rsquo; chats to their unfiled
+              chats.
             </p>
-            {project.team_id && !sharedDraft ? (
-              // Turning sharing off is not just a visibility change: it
-              // unshares every chat members shared into the project, and the
-              // ones that belong to teammates leave it (they cannot stay filed
-              // in a project their owner can no longer see).
-              <p className="mb-4 text-[0.75rem] leading-[1.5] text-[var(--color-danger)]">
-                Turning sharing off unshares every chat members shared into this
-                project, and moves teammates&rsquo; chats to their unfiled
-                chats.
-              </p>
-            ) : null}
-            <TransferOwnership
-              projectId={project.id}
-              projectName={project.name}
-              currentOwner={project.owner_email}
-              onTransfer={onTransfer}
-              onConfirmOpenChange={setConfirmTransfer}
-            />
-            {settingsError ? (
-              <p
-                role="alert"
-                className="mb-3 text-[0.75rem] leading-[1.5] text-[var(--color-danger)]"
-              >
-                {settingsError}
-              </p>
-            ) : null}
-            <div className="flex items-center justify-between">
+          ) : null}
+          <TransferOwnership
+            projectId={project.id}
+            projectName={project.name}
+            currentOwner={project.owner_email}
+            onTransfer={onTransfer}
+            onConfirmOpenChange={setConfirmTransfer}
+          />
+          {settingsError ? (
+            <p
+              role="alert"
+              className="mb-3 text-[0.75rem] leading-[1.5] text-[var(--color-danger)]"
+            >
+              {settingsError}
+            </p>
+          ) : null}
+          <div className="flex items-center justify-between">
+            <button
+              type="button"
+              className="rounded-md px-2.5 py-1.5 text-[0.8rem] font-medium text-[var(--color-danger)] transition hover:bg-[color-mix(in_srgb,var(--color-danger)_10%,transparent)]"
+              onClick={() => setConfirmDelete(true)}
+            >
+              Delete project
+            </button>
+            <div className="flex gap-2">
               <button
                 type="button"
-                className="rounded-md px-2.5 py-1.5 text-[0.8rem] font-medium text-[var(--color-danger)] transition hover:bg-[color-mix(in_srgb,var(--color-danger)_10%,transparent)]"
-                onClick={() => setConfirmDelete(true)}
+                className="rounded-md px-3 py-1.5 text-[0.8rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)]"
+                onClick={() => setSettingsOpen(false)}
               >
-                Delete project
+                Cancel
               </button>
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  className="rounded-md px-3 py-1.5 text-[0.8rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)]"
-                  onClick={() => setSettingsOpen(false)}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  disabled={savingSettings}
-                  className="rounded-md bg-[var(--color-accent)] px-3 py-1.5 text-[0.8rem] font-medium text-[var(--color-surface-1)] transition hover:opacity-90 disabled:opacity-60"
-                  onClick={() => void saveSettings()}
-                >
-                  {savingSettings ? "Saving…" : "Save"}
-                </button>
-              </div>
+              <button
+                type="button"
+                disabled={savingSettings}
+                className="rounded-md bg-[var(--color-accent)] px-3 py-1.5 text-[0.8rem] font-medium text-[var(--color-surface-1)] transition hover:opacity-90 disabled:opacity-60"
+                onClick={() => void saveSettings()}
+              >
+                {savingSettings ? "Saving…" : "Save"}
+              </button>
             </div>
           </div>
-        </div>
+        </DialogShell>
       ) : null}
 
       {confirmUnshare ? (
@@ -1287,11 +1282,12 @@ export function TeamLearningsPanel({
         </p>
       ) : null}
       {pendingRemoval ? (
-        <ConfirmModal
+        <ConfirmDialog
           title="Delete this team learning for good?"
           confirmLabel="Delete for good"
           cancelLabel="Keep"
-          danger
+          confirmTone="danger"
+          layer="stacked"
           onCancel={() => setConfirmRemoveId(null)}
           onConfirm={() => void remove(pendingRemoval.id)}
         >
@@ -1305,7 +1301,7 @@ export function TeamLearningsPanel({
             The record of what was learned goes with it. To stop it being
             injected while keeping the record, retire it instead.
           </p>
-        </ConfirmModal>
+        </ConfirmDialog>
       ) : null}
     </div>
   );
@@ -1575,9 +1571,11 @@ function TransferOwnership({
         </div>
       )}
       {confirming ? (
-        <ConfirmModal
+        <ConfirmDialog
           title={`Transfer ${projectName} to ${choice}?`}
           confirmLabel="Transfer"
+          confirmTone="accent"
+          layer="stacked"
           busy={busy}
           onCancel={() => setConfirming(false)}
           onConfirm={() => {
@@ -1594,7 +1592,7 @@ function TransferOwnership({
           <p className="m-0">
             They&rsquo;ll be able to edit and delete it; you won&rsquo;t.
           </p>
-        </ConfirmModal>
+        </ConfirmDialog>
       ) : null}
       {error ? (
         <p className="mt-2 text-[0.72rem] text-[var(--color-danger)]">{error}</p>
@@ -1672,14 +1670,15 @@ function UnshareTeamConfirm({
       : null;
 
   return (
-    <ConfirmModal
+    <ConfirmDialog
       title={
         teamId
           ? `Stop sharing ${projectName} with ${teamId}?`
           : `Stop sharing ${projectName} with your team?`
       }
       confirmLabel="Stop sharing"
-      danger
+      confirmTone="danger"
+      layer="stacked"
       onCancel={onCancel}
       onConfirm={onConfirm}
     >
@@ -1703,7 +1702,7 @@ function UnshareTeamConfirm({
         Every chat members shared into this project stops being shared, and
         team learnings stay but only you can see them.
       </p>
-    </ConfirmModal>
+    </ConfirmDialog>
   );
 }
 
@@ -1749,68 +1748,61 @@ function DeleteProjectConfirm({
   }, [project.id]);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
-      <button
-        aria-label="Cancel deleting the project"
-        className="absolute inset-0 bg-[var(--color-overlay-strong)] backdrop-blur-[2px]"
-        type="button"
-        onClick={onCancel}
-      />
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label={`Delete ${project.name}?`}
-        className="relative z-10 w-full max-w-[28rem] rounded-[1rem] border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] p-5 shadow-[var(--shadow-md)]"
-      >
-        <h2 className="mb-2 text-[1rem] font-semibold text-[var(--color-text-primary)]">
-          Delete {project.name}?
-        </h2>
-        <ul className="mb-4 grid list-disc gap-[0.35rem] pl-[1.1rem] text-[0.85rem] leading-[1.55] text-[var(--color-text-secondary)]">
+    <DialogShell
+      label={`Delete ${project.name}?`}
+      scrimLabel="Cancel deleting the project"
+      onDismiss={onCancel}
+      layer="stacked"
+      className="max-w-[28rem] p-5"
+    >
+      <h2 className="mb-2 text-[1rem] font-semibold text-[var(--color-text-primary)]">
+        Delete {project.name}?
+      </h2>
+      <ul className="mb-4 grid list-disc gap-[0.35rem] pl-[1.1rem] text-[0.85rem] leading-[1.55] text-[var(--color-text-secondary)]">
+        <li>
+          {impact
+            ? `${plural(impact.memories, "team learning", "team learnings")} will be lost`
+            : "This project’s team learnings will be lost"}{" "}
+          — they belong to the project and are not kept anywhere else.
+        </li>
+        <li>
+          {impact
+            ? `${plural(impact.chats, "chat", "chats")} from ${plural(impact.members, "member", "members")} will leave the project`
+            : "Members’ chats will leave the project"}
+            , become temporary, and expire unless pinned. The chats themselves
+            stay with their owners.
+        </li>
+        {impact && impact.team_shared_chats > 0 ? (
           <li>
-            {impact
-              ? `${plural(impact.memories, "team learning", "team learnings")} will be lost`
-              : "This project’s team learnings will be lost"}{" "}
-            — they belong to the project and are not kept anywhere else.
+            {plural(impact.team_shared_chats, "chat", "chats")} shared with the
+            team will stop being shared.
           </li>
-          <li>
-            {impact
-              ? `${plural(impact.chats, "chat", "chats")} from ${plural(impact.members, "member", "members")} will leave the project`
-              : "Members’ chats will leave the project"}
-              , become temporary, and expire unless pinned. The chats themselves
-              stay with their owners.
-          </li>
-          {impact && impact.team_shared_chats > 0 ? (
-            <li>
-              {plural(impact.team_shared_chats, "chat", "chats")} shared with the
-              team will stop being shared.
-            </li>
-          ) : null}
-        </ul>
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <a
-            href={`/api/projects/${encodeURIComponent(project.id)}/export`}
-            className="rounded-md border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.8rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
+        ) : null}
+      </ul>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <a
+          href={`/api/projects/${encodeURIComponent(project.id)}/export`}
+          className="rounded-md border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.8rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
+        >
+          Export first
+        </a>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            className="rounded-md px-3 py-1.5 text-[0.8rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)]"
+            onClick={onCancel}
           >
-            Export first
-          </a>
-          <div className="flex gap-2">
-            <button
-              type="button"
-              className="rounded-md px-3 py-1.5 text-[0.8rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)]"
-              onClick={onCancel}
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              className="rounded-md px-3 py-1.5 text-[0.8rem] font-medium text-[var(--color-danger)] transition hover:bg-[color-mix(in_srgb,var(--color-danger)_10%,transparent)]"
-              onClick={onConfirm}
-            >
-              Delete project
-            </button>
-          </div>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="rounded-md px-3 py-1.5 text-[0.8rem] font-medium text-[var(--color-danger)] transition hover:bg-[color-mix(in_srgb,var(--color-danger)_10%,transparent)]"
+            onClick={onConfirm}
+          >
+            Delete project
+          </button>
         </div>
       </div>
-    </div>
+    </DialogShell>
   );
 }

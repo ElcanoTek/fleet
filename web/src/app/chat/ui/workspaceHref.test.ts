@@ -357,12 +357,32 @@ describe("unsharedFileName", () => {
     expect(unsharedFileName(`/api/conversations/${CONV}/workspace/spend.png`)).toBe(
       "spend.png",
     );
+    // Absolute, but OUR origin — the same file, named the long way.
     expect(
-      unsharedFileName(`https://fleet.example.com/api/conversations/${CONV}/workspace/a%20b.csv`),
+      unsharedFileName(
+        `${location.origin}/api/conversations/${CONV}/workspace/a%20b.csv`,
+      ),
     ).toBe("a b.csv");
     expect(unsharedFileName(`/api/orchestrator/tasks/${TASK}/workspace/weekly.png`)).toBe(
       "weekly.png",
     );
+  });
+
+  it("does not claim a third-party URL that merely looks like the route", () => {
+    // The route shape is specific, but it is not ours to claim on someone
+    // else's host: this is a page the reader can simply open, and replacing it
+    // with "file not shared" would be a false statement — the very dead
+    // promise the withholding exists to remove.
+    expect(
+      unsharedFileName(
+        `https://example.com/api/conversations/${CONV}/workspace/chart.png`,
+      ),
+    ).toBeNull();
+    expect(
+      unsharedFileName(
+        `https://fleet.example.com/api/orchestrator/tasks/${TASK}/workspace/weekly.png`,
+      ),
+    ).toBeNull();
   });
 
   it("leaves every href a read-only reader can still follow", () => {

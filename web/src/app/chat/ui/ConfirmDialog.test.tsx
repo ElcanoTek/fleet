@@ -3,12 +3,16 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { DeleteProjectConfirmDialog } from "./DeleteProjectConfirmDialog";
 
-// Finding #13: the shared in-app confirm the chat surface's five confirm paths
-// route through, replacing window.confirm. The treatment is the one the rest
-// of the pass uses (a --color-surface-1 panel with --shadow-md over a
+// Finding #13: the shared in-app confirm every confirm path on the chat
+// surface routes through, replacing window.confirm. The treatment comes from
+// the shared DialogShell (a --color-surface-1 panel with --shadow-md over a
 // --color-overlay-strong scrim), so these assert the contract rather than the
-// pixels: it is a real modal dialog, its accessible name is the copy itself,
-// the scrim cancels, and it can hold a second action.
+// pixels: it is a real modal dialog, the scrim cancels, and it can hold a
+// second action.
+//
+// It carries BOTH confirm shapes since the B-2 pass folded ConfirmModal into
+// it — untitled (the body copy is the accessible name) and titled (with an
+// optional busy state) — so both are covered here.
 
 describe("ConfirmDialog", () => {
   it("is a modal dialog named by its own body copy", () => {
@@ -111,6 +115,65 @@ describe("ConfirmDialog", () => {
     expect(
       screen.getByLabelText("Dismiss without deleting").className,
     ).toContain("bg-[var(--color-overlay-strong)]");
+  });
+
+  it("takes a title as its accessible name, with the body underneath", () => {
+    const onCancel = vi.fn();
+    render(
+      <ConfirmDialog
+        title="Stop sharing this project?"
+        confirmLabel="Stop sharing"
+        confirmTone="danger"
+        onCancel={onCancel}
+        onConfirm={() => {}}
+      >
+        <p className="m-0">Every shared chat stops being shared.</p>
+      </ConfirmDialog>,
+    );
+    const dialog = screen.getByRole("dialog", {
+      name: "Stop sharing this project?",
+    });
+    expect(dialog).toHaveTextContent("Every shared chat stops being shared.");
+    expect(
+      screen.getByRole("heading", { name: "Stop sharing this project?" }),
+    ).toBeInTheDocument();
+    // The scrim names the action it performs even when the caller doesn't.
+    fireEvent.click(
+      screen.getByRole("button", { name: "Cancel: Stop sharing this project?" }),
+    );
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("holds the confirm while a titled confirm is busy", () => {
+    render(
+      <ConfirmDialog
+        title="Transfer this project?"
+        confirmLabel="Transfer"
+        confirmTone="accent"
+        busy
+        onCancel={() => {}}
+        onConfirm={() => {}}
+      >
+        <p className="m-0">They will be able to edit and delete it.</p>
+      </ConfirmDialog>,
+    );
+    expect(screen.getByRole("button", { name: "Transfer" })).toBeDisabled();
+  });
+
+  it("offers no second action unless one is passed", () => {
+    render(
+      <ConfirmDialog
+        bodyId="body-solo"
+        cancelAriaLabel="Cancel the thing"
+        confirmLabel="Do it"
+        onCancel={() => {}}
+        onConfirm={() => {}}
+      >
+        Really?
+      </ConfirmDialog>,
+    );
+    // Cancel + confirm, and nothing between them.
+    expect(screen.getAllByRole("button")).toHaveLength(3); // + the scrim
   });
 });
 

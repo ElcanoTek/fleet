@@ -616,7 +616,12 @@ func (s *Store) BranchConversation(ctx context.Context, userEmail, parentConvID 
 	// its own on its first turn. That is true for the owner's own fork too:
 	// one rule means no copy of a message can ever carry a path into a
 	// conversation that does not own it.
-	copyQuery := `SELECT role, type, content FROM messages
+	// injected_context IS NULL is selected, not its value: NULL is the legacy
+	// discriminator (migration 056). Every write since the split supplies a
+	// value — the suffix, or '' for a turn that injected nothing — so NULL
+	// means and only means "written before the split, blocks may still be
+	// inside content.text". The marker strip below runs on those rows alone.
+	copyQuery := `SELECT role, type, content, injected_context IS NULL FROM messages
 		 WHERE conversation_id = $1 AND id <= $2`
 	if redact {
 		copyQuery += ` AND type = 'text' AND role IN ('user', 'assistant')`
@@ -630,20 +635,31 @@ func (s *Store) BranchConversation(ctx context.Context, userEmail, parentConvID 
 	for rows.Next() {
 		var e agent.HistoryEntry
 		var content string
-		if err := rows.Scan(&e.Role, &e.Type, &content); err != nil {
+		var preSplit bool
+		if err := rows.Scan(&e.Role, &e.Type, &content, &preSplit); err != nil {
 			_ = rows.Close()
 			return nil, err
 		}
 		e.Content = json.RawMessage(content)
 		// Rows written BEFORE migration 056 embedded the injected blocks in
-		// the message text itself, so leaving injected_context unselected is
-		// not enough for them: strip by marker as well. Belt-and-suspenders,
-		// applied to every branch (see the copyQuery note) — a legacy row is
-		// exactly the case where a path can still be riding inside the text.
-		emptied, serr := stripLegacyInjectedText(&e)
-		if serr != nil {
-			_ = rows.Close()
-			return nil, serr
+		// the message text itself, so not selecting injected_context is not
+		// enough for them: strip by marker as well.
+		//
+		// ONLY for those rows. The strip is marker-based by necessity — the
+		// split was never recorded for them — and a marker is a sequence a
+		// user can legitimately type: a "---" rule followed by
+		// "**Shared file library**" is exactly what someone documenting fleet
+		// writes. Running it on a post-split row would cut that text, and
+		// everything after it, out of the copy. Gated on preSplit, a message
+		// written today is copied verbatim no matter what its author typed.
+		emptied := false
+		if preSplit {
+			var serr error
+			emptied, serr = stripLegacyInjectedText(&e)
+			if serr != nil {
+				_ = rows.Close()
+				return nil, serr
+			}
 		}
 		if redact {
 			// A user text entry carries ImageRefMeta paths pointing INTO THE
@@ -1744,9 +1760,14 @@ func (s *Store) LoadHistory(ctx context.Context, convID string) ([]agent.History
 	for rows.Next() {
 		var e agent.HistoryEntry
 		var content string
-		if err := rows.Scan(&e.ID, &e.Role, &e.Type, &content, &e.InjectedContext); err != nil {
+		// NULL for a pre-056 row (see the migration): those keep their blocks
+		// inside content.text, so an empty string here is the honest read —
+		// there is no separately-stored suffix to hand back.
+		var injected sql.NullString
+		if err := rows.Scan(&e.ID, &e.Role, &e.Type, &content, &injected); err != nil {
 			return nil, err
 		}
+		e.InjectedContext = injected.String
 		e.Content = json.RawMessage(content)
 		out = append(out, e)
 	}

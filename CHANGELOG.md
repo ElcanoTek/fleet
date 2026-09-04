@@ -174,9 +174,12 @@ prior versions are listed because none have shipped.
   describing personal memories on the Team learnings tab. An admin
   user-delete refusal renders in the editor panel where the action was taken,
   wrapped, instead of as one unwrapped line in a table row that gave the whole
-  users table a horizontal scrollbar — and its **Transfer {project}** links now
-  land on the project's transfer control, which an admin previously had no
-  route to at all. Chat previews strip LaTeX and pipe-table syntax instead of
+  users table a horizontal scrollbar — and it now *performs* the transfer it
+  asks for, picker and all, then retries the delete. An admin is usually
+  neither the project's owner nor a member of its team, so every surface that
+  could have shown them the transfer control answered with a 404; the member
+  list that backs the picker now authorizes an admin the way the transfer route
+  already did. Chat previews strip LaTeX and pipe-table syntax instead of
   showing raw markup. And the composer's fade over the scrolling transcript
   painted nothing at all, because its gradient was emitted as a
   `background-color`.

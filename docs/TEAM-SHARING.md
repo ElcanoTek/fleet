@@ -369,18 +369,30 @@ was a dead end.** The `409` body is JSON:
  "owns_shared_projects": [{"id": "…", "name": "Quant"}]}
 ```
 
-The ids are the point. Every transfer surface is keyed by project id, and an
-admin cannot resolve a name to one from their own screens: `GET /projects` is
-scoped to the *caller's* own and team-visible projects, and an admin is usually
-neither the owner nor a member of the project they are being asked to have
-transferred. So the refusal renders where the delete was clicked — in the
-editor panel, wrapped — with one **Transfer {project}** link per project,
-pointing at `/chat?project={id}&settings=1`: the deep link that opens that
-project's settings dialog, where **Transfer ownership…** lives. Without it the
-admin was told what to do and handed no way to do it. The `error` field keeps
-the exact sentence, so a client that predates the structured body still shows
-the explanation (and falls back to parsing the names out of the prose, as
-links that only reach the Projects surface).
+The ids are the point, and **the transfer happens in that panel**, not through
+a link. A link could not work for the caller this is written for: an admin is
+usually neither the project's owner nor a member of its team, so every
+membership-gated surface — the chat rail's project list, the project home —
+answers them with a 404, and "Transfer alpha" would land on a page that cannot
+show the project, let alone its transfer control. The two routes that *do*
+authorize an admin are called from the refusal directly: `GET
+/projects/{id}/members` for the picker and `POST /projects/{id}/transfer` for
+the handover, after which the delete is retried automatically — unblocking it
+is the only reason the control is there. The current owner is not offered as
+their own successor, since handing the project back is a no-op that leaves the
+delete blocked.
+
+`GET /projects/{id}/members` had to move to make that work. It sat *behind* the
+membership gate while carrying its own owner-or-admin check, so the check was
+unreachable for exactly the caller it names: an admin got the same 404 a
+stranger does. It is now dispatched before the gate, like `transfer`, and
+authorizes itself the same way. That left the transfer half-reachable
+otherwise — an admin could POST the handover but could not ask who to hand it
+to, which is the entire content of the decision.
+
+The `error` field keeps the exact sentence, so a client that predates the
+structured body still shows the explanation; without ids it names the manual
+step rather than offering a control that cannot work.
 
 ## Deviations from the brief
 

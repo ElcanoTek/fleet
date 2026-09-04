@@ -432,12 +432,20 @@ func appendAttachmentsBlock(message string, images, others []chatAttachment) str
 // CodeQL's path-injection query recognizes), so a future call site that skips
 // validation cannot turn the copy source into an arbitrary host read.
 //
-// Idempotent for the queue-drain case: a drained row echoes the same
-// attachment metadata a live submit already staged, and a same-name
-// same-size staged copy is reused rather than duplicated. A same-name
-// different-size file (a genuinely new attachment reusing a filename) gets a
-// numbered variant instead — names are cheap, clobbering a file the agent may
-// have already read mid-conversation is not.
+// Idempotent for the queue-drain case, and keyed on the UPLOAD, not on the
+// filename: each staged copy lives in a directory named for a digest of its
+// source path below the uploads root, which is that upload's random token plus
+// its owner segment. A drained row echoes the same attachment metadata a live
+// submit already staged, resolves to the same directory, and the existing copy
+// is reused.
+//
+// Reuse used to be keyed on name + size, and that was wrong in a way the agent
+// could not see: re-upload a corrected CSV with the same filename and the same
+// byte count — an edited value, a swapped column — and the "already staged"
+// branch handed back the OLD file. The turn's prompt named the new attachment
+// and the model read the previous one, silently. Two different uploads are two
+// different tokens, so they can no longer collide however alike their bytes;
+// two references to one upload always resolve to the same copy.
 //
 // Per-entry failures degrade rather than fail the turn: the entry keeps its
 // uploads path and the error is logged. That degradation now FAILS CLOSED
@@ -475,7 +483,7 @@ func stageAttachmentsIntoWorkspace(uploadsRoot, convID string, atts []chatAttach
 			out = append(out, a)
 			continue
 		}
-		dst, err := stageOneAttachment(dir, src, a)
+		dst, err := stageOneAttachment(dir, root, src, a)
 		if err != nil {
 			log.Printf("attachment staging: %q: %v (this attachment keeps its uploads path)", logSafeSlug(a.Name), err)
 			out = append(out, a)
@@ -502,40 +510,71 @@ func confineToRoot(root, path string) (string, bool) {
 	return filepath.Join(root, rel), true
 }
 
+// uploadSlug is the per-upload directory name a staged copy lives under: a
+// short digest of the attachment's path RELATIVE to the uploads root, which is
+// `<owner digest>/<random token>/<name>` (or, for an upload written before the
+// per-owner segment existed, `<random token>/<name>`).
+//
+// Hashing the relative path rather than reading the token out of it keeps this
+// independent of that layout — a future uploads shape changes the digest, not
+// this function — and keeps the owner segment out of the workspace, where it
+// would be a user identifier sitting in a directory the model can list.
+//
+// 12 hex characters of SHA-256. The input is a server-generated random token,
+// not attacker-chosen text, and the only cost of a collision would be a reused
+// staged copy between two uploads; 48 bits is far past the point where that is
+// reachable within one conversation's attachments.
+func uploadSlug(root, src string) string {
+	rel, err := filepath.Rel(root, src)
+	if err != nil {
+		rel = src // never happens: the caller confined src to root
+	}
+	sum := sha256.Sum256([]byte(filepath.ToSlash(rel)))
+	return hex.EncodeToString(sum[:6])
+}
+
 // stageOneAttachment places one attachment (src already confined to the
 // uploads root by the caller) under dir and returns the staged path. See
 // stageAttachmentsIntoWorkspace for the naming rules.
-func stageOneAttachment(dir, src string, a chatAttachment) (string, error) {
-	base := sanitizeFilename(a.Name)
-	ext := filepath.Ext(base)
-	stem := strings.TrimSuffix(base, ext)
-	for i := 1; i <= 100; i++ {
-		name := base
-		if i > 1 {
-			name = fmt.Sprintf("%s-%d%s", stem, i, ext)
-		}
-		// sanitizeFilename already stripped separators and leading dots; the
-		// IsLocal check restates that as the barrier CodeQL's path-injection
-		// query recognizes, so the Join below is provably confined to dir.
-		if !filepath.IsLocal(name) {
-			return "", fmt.Errorf("attachment name is unusable as a staged filename")
-		}
-		dst := filepath.Join(dir, name)
-		if info, err := os.Stat(dst); err == nil {
-			if info.Mode().IsRegular() && info.Size() == a.Size {
-				return dst, nil // already staged (queue drain, or a re-send)
-			}
-			continue // occupied by something else — try the next variant
-		}
-		if err := copyAttachment(src, dst); err != nil {
-			if errors.Is(err, os.ErrExist) {
-				continue // lost a race for this name — try the next variant
-			}
-			return "", err
-		}
-		return dst, nil
+//
+// The staged path is `<dir>/<upload slug>/<sanitized name>`. The slug is what
+// makes reuse safe: it identifies the UPLOAD, so the "already staged" branch
+// can only ever return a copy of the very bytes being staged. Two uploads that
+// share a filename land in different directories and neither clobbers nor
+// shadows the other, so the numbered-variant dance is gone with the collision
+// that needed it.
+func stageOneAttachment(dir, root, src string, a chatAttachment) (string, error) {
+	name := sanitizeFilename(a.Name)
+	// sanitizeFilename already stripped separators and leading dots; the
+	// IsLocal check restates that as the barrier CodeQL's path-injection
+	// query recognizes, so the Join below is provably confined to dir.
+	if !filepath.IsLocal(name) {
+		return "", fmt.Errorf("attachment name is unusable as a staged filename")
 	}
-	return "", fmt.Errorf("no free staged name after 100 variants")
+	slug := uploadSlug(root, src)
+	stageDir := filepath.Join(dir, slug)
+	if err := os.MkdirAll(stageDir, 0o755); err != nil { //nolint:gosec // the sandbox uid must traverse it, like every workspace dir
+		return "", fmt.Errorf("mkdir staged dir: %w", err)
+	}
+	dst := filepath.Join(stageDir, name)
+	if info, err := os.Stat(dst); err == nil {
+		if info.Mode().IsRegular() {
+			// Same upload, same name: this IS the copy, whatever its size —
+			// a queue drain replaying the row, or the same attachment sent
+			// twice. Nothing else can reach this path.
+			return dst, nil
+		}
+		return "", fmt.Errorf("staged path is occupied by a non-regular file")
+	}
+	if err := copyAttachment(src, dst); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			// Lost the race to a concurrent stager for the SAME upload, which
+			// is writing the same bytes to the same path. Its copy is ours.
+			return dst, nil
+		}
+		return "", err
+	}
+	return dst, nil
 }
 
 // copyAttachment copies src (confined to the uploads root by the caller) to a
