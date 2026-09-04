@@ -42,28 +42,7 @@ import type {
 } from "./chat-experience";
 import type { Project } from "./ProjectsModal";
 import { renderPreview, type SearchResult } from "./SearchBar";
-
-// ── Share glyph (#226) ───────────────────────────────────────────────────────
-// The chain-link icon used for share affordances; `off` adds the slash for the
-// "stop sharing" variant.
-function ShareGlyph({ className, off }: { className?: string; off?: boolean }) {
-  return (
-    <svg
-      aria-hidden="true"
-      viewBox="0 0 24 24"
-      className={className}
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={1.8}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M10 13a5 5 0 0 0 7.07 0l2-2a5 5 0 0 0-7.07-7.07l-1 1" />
-      <path d="M14 11a5 5 0 0 0-7.07 0l-2 2a5 5 0 0 0 7.07 7.07l1-1" />
-      {off ? <path d="M4 4l16 16" /> : null}
-    </svg>
-  );
-}
+import { ShareGlyph, TeamGlyph } from "./ShareGlyphs";
 
 // ── Sealed-chat button + explainer tooltip ───────────────────────────────────
 // The icon-only "new sealed chat" lock lives in the Temporary section's
@@ -397,8 +376,12 @@ function ProjectKebab({
             >
               Rename
             </MenuItem>
+            {/* The TEAM glyph, not the chain link. The whole point of the pair
+                is that the chain link means "by URL" and must not read as "my
+                team can see this" (ShareGlyphs.tsx) — and this is the
+                project-level TEAM action. */}
             <MenuItem
-              icon={<ShareGlyph className="size-4" off={teamShared} />}
+              icon={<TeamGlyph className="size-4" />}
               onClick={() => {
                 close();
                 onShare();
@@ -516,8 +499,6 @@ function ConversationKebab({
   onSetLabels,
   onSetProject,
   onShare,
-  onCopyLink,
-  onUnshare,
   isShared,
   onSelect,
   onArchive,
@@ -533,9 +514,9 @@ function ConversationKebab({
   onSavePrompt: () => void;
   onSetLabels: (labels: string[]) => void;
   onSetProject: (projectID: string | null) => void;
+  // Opens the Share dialog (both scopes). It no longer mints a link as a
+  // side effect of opening: creating one is a click inside the dialog.
   onShare: () => void;
-  onCopyLink: () => void;
-  onUnshare: () => void;
   isShared: boolean;
   onSelect: () => void;
   onArchive: () => void;
@@ -713,38 +694,30 @@ function ConversationKebab({
         >
           Save as workflow…
         </MenuItem>
-        {isShared ? (
-          <>
-            <MenuItem
-              icon={<ShareGlyph className="size-4" />}
-              onClick={() => {
-                onCopyLink();
-                close();
-              }}
-            >
-              Share link…
-            </MenuItem>
-            <MenuItem
-              icon={<ShareGlyph off className="size-4" />}
-              onClick={() => {
-                onUnshare();
-                close();
-              }}
-            >
-              Stop sharing
-            </MenuItem>
-          </>
-        ) : (
-          <MenuItem
-            icon={<ShareGlyph className="size-4" />}
-            onClick={() => {
-              onShare();
-              close();
-            }}
-          >
-            Share
-          </MenuItem>
-        )}
+        {/* One entry, one dialog, two audiences (ADR-0057). The menu used to
+            fork into "Share" / "Share link… + Stop sharing" depending on
+            whether a public link existed, which made the LINK the whole
+            meaning of sharing. The dialog now owns both scopes — share by
+            link, and share with the team — so every surface that says a chat
+            is shared also lets you change it. */}
+        <MenuItem
+          // The glyph names the scope in play when only one is: a chat shared
+          // with the team but not by link gets the team mark, everything else
+          // the link mark (the dialog holds both either way).
+          icon={
+            !isShared && conversation.team_visible ? (
+              <TeamGlyph className="size-4" />
+            ) : (
+              <ShareGlyph className="size-4" />
+            )
+          }
+          onClick={() => {
+            onShare();
+            close();
+          }}
+        >
+          Share…
+        </MenuItem>
         <MenuItem
           icon={<Icon name="check-square" className="size-4" />}
           onClick={() => {
@@ -803,7 +776,6 @@ function ConvRow({
   editing,
   selecting,
   checked,
-  copied,
   onOpen,
   onToggleSelect,
   onCommitRename,
@@ -820,7 +792,6 @@ function ConvRow({
   editing: boolean;
   selecting: boolean;
   checked: boolean;
-  copied: boolean;
   onOpen: () => void;
   onToggleSelect: () => void;
   onCommitRename: (title: string) => void;
@@ -923,15 +894,23 @@ function ConvRow({
                 className="inline-block size-1.5 shrink-0 animate-pulse rounded-full bg-[var(--color-accent)]"
               />
             ) : null}
-            {copied ? (
-              <span aria-label="Link copied" title="Link copied!">
-                <Icon
-                  name="check"
-                  className="size-3 shrink-0 text-[var(--color-accent)]"
-                />
+            {/* Two audiences, two marks, each labeled (ADR-0057). A single
+                unlabeled chain link stood for "shared" and, inside a
+                team-shared project, read as "my team can see this" — which it
+                never meant. A chat can carry one badge, both, or neither. */}
+            {conversation.team_visible ? (
+              <span
+                aria-label="Shared with your team"
+                title="Shared with your team — teammates can read it"
+              >
+                <TeamGlyph className="size-3 shrink-0 text-[var(--color-accent)]" />
               </span>
-            ) : conversation.share_token ? (
-              <span aria-label="Shared" title="Shared — read-only link is live">
+            ) : null}
+            {conversation.share_token ? (
+              <span
+                aria-label="Shared by link — anyone with the link"
+                title="Shared by link — anyone with the link"
+              >
                 <ShareGlyph className="size-3 shrink-0 text-[var(--color-accent)]" />
               </span>
             ) : null}
@@ -1042,9 +1021,7 @@ export function ConversationSidebar({
   savePromptFromConversation,
   setPendingDeleteConversation,
   setConversationLabels,
-  shareConversation,
-  unshareConversation,
-  copyShareLink,
+  openShareDialog,
   archivedConversations,
   showArchived,
   setShowArchived,
@@ -1118,9 +1095,9 @@ export function ConversationSidebar({
   >;
   setConversationLabels: (conversationId: string, labels: string[]) => void;
   // Read-only sharing (#226): issue+copy a public link, revoke it, or re-copy.
-  shareConversation: (conversation: ConversationSummary) => Promise<boolean>;
-  unshareConversation: (conversation: ConversationSummary) => Promise<void>;
-  copyShareLink: (conversation: ConversationSummary) => Promise<boolean>;
+  // Opens the Share dialog for one conversation — link scope and team scope
+  // in one place (ADR-0057).
+  openShareDialog: (conversation: ConversationSummary) => void;
   archivedConversations: ConversationSummary[];
   showArchived: boolean;
   setShowArchived: Dispatch<SetStateAction<boolean>>;
@@ -1247,22 +1224,10 @@ export function ConversationSidebar({
   const [labelsOpen, setLabelsOpen] = useState(true);
   const [bulkPanel, setBulkPanel] = useState<"none" | "labels">("none");
   const bulkLabelsRef = useRef<HTMLButtonElement | null>(null);
-  // Transient "copied" feedback for share/copy actions (#226), keyed by conv id.
-  // The only effect just clears the pending timer on unmount — setState happens
-  // in handlers + the timeout callback, never synchronously in the effect body.
-  const [copiedId, setCopiedId] = useState<string | null>(null);
-  const copiedTimer = useRef<number | null>(null);
-  const flashCopied = (id: string) => {
-    setCopiedId(id);
-    if (copiedTimer.current) window.clearTimeout(copiedTimer.current);
-    copiedTimer.current = window.setTimeout(() => setCopiedId(null), 1500);
-  };
-  useEffect(
-    () => () => {
-      if (copiedTimer.current) window.clearTimeout(copiedTimer.current);
-    },
-    [],
-  );
+  // The transient per-row "copied ✓" flash is gone with the kebab's copy
+  // item: copying now happens inside the Share dialog, which reports it in
+  // place (a button that says "Copied ✓") instead of flashing a mark on a row
+  // the user may not even be looking at.
 
   // The parent's `r` shortcut asks for an inline rename by bumping renameSignal.
   // We open the inline editor for the requested id when the nonce changes,
@@ -1278,8 +1243,14 @@ export function ConversationSidebar({
 
   const labelSummaries: LabelSummary[] = deriveLabels(conversations);
   const allLabelNames = labelSummaries.map((l) => l.name);
-  const pinned = pinnedUnfiled(conversations);
-  const recent = recentUnfiled(conversations);
+  // A chat whose project the viewer cannot see is treated as unfiled, so it
+  // still appears somewhere. Only meaningful once the projects list has
+  // loaded: an empty list on first paint would move every project chat into
+  // Temporary for a frame, so the set is withheld until there is one.
+  const knownProjectIds =
+    projects.length > 0 ? new Set(projects.map((p) => p.id)) : undefined;
+  const pinned = pinnedUnfiled(conversations, knownProjectIds);
+  const recent = recentUnfiled(conversations, knownProjectIds);
   const projectTree = projectGroups(conversations, projects);
   const filtering = computeIsFiltering({
     labels: filterLabels,
@@ -1339,17 +1310,7 @@ export function ConversationSidebar({
         onMoveToProject(conversation.id, projectID ?? "")
       }
       isShared={Boolean(conversation.share_token)}
-      onShare={() =>
-        void shareConversation(conversation).then(
-          (ok) => ok && flashCopied(conversation.id),
-        )
-      }
-      onCopyLink={() =>
-        void copyShareLink(conversation).then(
-          (ok) => ok && flashCopied(conversation.id),
-        )
-      }
-      onUnshare={() => void unshareConversation(conversation)}
+      onShare={() => openShareDialog(conversation)}
       onSelect={() => onEnterSelectMode(conversation.id)}
       onArchive={() => void toggleArchive(conversation, true)}
       onDelete={() =>
@@ -1371,7 +1332,6 @@ export function ConversationSidebar({
       editing={editingId === conversation.id}
       selecting={selecting}
       checked={selectedIds.has(conversation.id)}
-      copied={copiedId === conversation.id}
       onOpen={() => void loadConversation(conversation.id)}
       onToggleSelect={() => onToggleSelection(conversation.id)}
       onCommitRename={(title) => commitRename(conversation.id, title)}
@@ -1569,8 +1529,13 @@ export function ConversationSidebar({
                 )}
                 {expanded ? (
                   chats.length === 0 ? (
-                    <p className="py-1 pl-7 pr-2 text-[0.78rem] text-[var(--color-text-muted)]">
-                      No chats yet — drag one here.
+                    <p className="py-1 pl-7 pr-2 text-[0.78rem] leading-[1.5] text-[var(--color-text-muted)]">
+                      {/* Both filing paths, and the payoff. The old copy named
+                          drag alone (mouse-only) and never said why to bother
+                          — a project chat is exempt from expiry, which is the
+                          whole reason to file one (Item E2). */}
+                      No chats yet — drag one here, or use “Move to project”
+                      from a chat’s ⋮ menu. Chats in a project don’t expire.
                     </p>
                   ) : (
                     <div className="ml-3 border-l border-[var(--color-border)] pl-1">

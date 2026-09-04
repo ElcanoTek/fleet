@@ -18,25 +18,42 @@ import (
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
-// handleConversationBranch forks the conversation the caller owns at
-// branch_point_message_id into a new conversation. Body:
+// handleConversationBranch forks a conversation the caller can READ at
+// branch_point_message_id into a new conversation they own. Body:
 //
 //	{ "branch_point_message_id": <messages.id>, "title": "optional name" }
 //
-// Returns 201 with the new conversation. 404 if the parent isn't owned/known,
+// Returns 201 with the new conversation. 404 if the parent isn't readable/known,
 // 400 for a missing/invalid branch point.
+//
+// Readable is the caller's own conversation, or a teammate's chat its owner
+// shared with the team (ADR-0057) — branching is how a member builds on a
+// colleague's thread, and it needs no write access to the original: the fork is
+// a copy the brancher owns outright.
 func (s *Server) handleConversationBranch(w http.ResponseWriter, r *http.Request, parentConvID, user string) {
-	// Confirm the parent exists and belongs to the caller before forking (Get is
-	// user-scoped, so a foreign/unknown id yields nil → 404). Also gives us the
+	// Confirm the parent exists and is readable before forking (Get is
+	// user-scoped, so a foreign/unknown id yields nil). Also gives us the
 	// parent title for the default branch name.
+	parentTitle := ""
 	parent, err := s.store.Get(r.Context(), user, parentConvID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if parent == nil {
-		http.Error(w, "not found", http.StatusNotFound)
-		return
+	switch {
+	case parent != nil:
+		parentTitle = parent.Title
+	default:
+		shared, serr := s.store.GetTeamVisibleConversation(r.Context(), user, parentConvID)
+		if serr != nil {
+			http.Error(w, serr.Error(), http.StatusInternalServerError)
+			return
+		}
+		if shared == nil {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		parentTitle = shared.Title
 	}
 
 	var body struct {
@@ -56,7 +73,7 @@ func (s *Server) handleConversationBranch(w http.ResponseWriter, r *http.Request
 		// A branch copies history, so the auto-titler (which only fires on an
 		// empty first turn) won't rename it — give it a sensible default derived
 		// from the parent.
-		if base := strings.TrimSpace(parent.Title); base != "" {
+		if base := strings.TrimSpace(parentTitle); base != "" {
 			title = base + " (branch)"
 		} else {
 			title = "Branch"

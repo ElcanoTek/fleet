@@ -247,7 +247,7 @@ export default function SharedFilesPage() {
               </ConnEmpty>
             ) : (
               groups.map((group) => (
-                <ConnGroup key={group.folder || " root"}>
+                <ConnGroup key={group.folder || "\u0000root"}>
                   <ConnGroupHead
                     title={group.folder === "" ? "Library root" : group.folder}
                   />

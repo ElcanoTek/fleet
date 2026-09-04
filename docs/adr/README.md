@@ -38,7 +38,7 @@ reviewable, and citable. Each record names the file or test that enforces it.
 | [0010](0010-microvm-sandbox-runtimes.md) | microVM sandbox runtimes (Kata / libkrun) via a fail-closed `--runtime` selector | Accepted |
 | [0011](0011-remove-worker-node-registry.md) | Remove the worker-node registry; the in-process worker is the only runner | Accepted |
 | [0012](0012-unified-fleet-cli.md) | One `fleet` binary — `serve` plus the operator CLI (back-compat preserved) | Accepted |
-| [0013](0013-team-rbac.md) | Team RBAC — roles + opt-in, team-scoped conversation reads | Accepted |
+| [0013](0013-team-rbac.md) | Team RBAC — roles + opt-in, team-scoped conversation reads | Accepted; amended by ADR-0057 |
 | [0014](0014-oidc-sso-in-nextjs.md) | OIDC / OAuth2 SSO lives in the Next.js layer, not the chat server | Accepted |
 | [0015](0015-remote-mcp-tls-pinning-mtls.md) | TLS pinning and mTLS for remote MCP servers | Accepted |
 | [0032](0032-host-side-ingress-guardrails.md) | Host-side untrusted-ingress guardrails | Accepted |
@@ -65,3 +65,4 @@ reviewable, and citable. Each record names the file or test that enforces it.
 | [0054](0054-agent-plugins.md) | Agent Plugins load as bundle content, translated onto the existing skills + MCP primitives | Accepted |
 | [0055](0055-kubernetes-skills-staged-into-the-workspace-claim.md) | On the kubernetes backend the skills tree is staged into the workspace claim | Accepted; amends ADR-0049 |
 | [0056](0056-a2a-outbound-delegation.md) | Outbound A2A delegation as bundle-declared tools over the MCP seam | Accepted |
+| [0057](0057-team-shared-chats-live-in-team-shared-projects.md) | A team-shared chat lives inside a team-shared project | Accepted; amends ADR-0013 |

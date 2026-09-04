@@ -126,11 +126,14 @@ test("the per-row kebab exposes pin / rename / labels / archive / delete", async
   await expect(menu.getByRole("menuitem", { name: "Rename", exact: true })).toBeVisible();
   await expect(menu.getByRole("menuitem", { name: "Labels", exact: true })).toBeVisible();
   await expect(menu.getByRole("menuitem", { name: "Download chat…", exact: true })).toBeVisible();
-  await expect(menu.getByRole("menuitem", { name: "Share", exact: true })).toBeVisible();
+  // One Share entry, not three: the dialog it opens holds both audiences —
+  // share by link and share with team (ADR-0057) — so the menu no longer forks
+  // on whether a public link happens to exist.
+  await expect(menu.getByRole("menuitem", { name: "Share…", exact: true })).toBeVisible();
   await expect(menu.getByRole("menuitem", { name: "Select…", exact: true })).toBeVisible();
   await expect(menu.getByRole("menuitem", { name: "Archive", exact: true })).toBeVisible();
   await expect(menu.getByRole("menuitem", { name: "Delete", exact: true })).toBeVisible();
-  // Exactly two dividers (after Labels, after Share).
+  // Exactly two dividers (after Labels, after Share…).
   await expect(menu.getByRole("separator")).toHaveCount(2);
   // No menu item carries the conversation's name.
   await expect(menu.getByRole("menuitem", { name: /Loose Recent/ })).toHaveCount(0);

@@ -252,6 +252,10 @@ export type MemoryProposal = {
   // resolutionNote surfaces what happened to the older fact after Save
   // ("Replaced the older fact." / "The older fact is pinned and was kept." …).
   resolutionNote?: string;
+  // savedTo names the PROJECT a saved proposal landed in, when the user chose
+  // "Team learnings" over "My memory" (Item D1). Undefined = personal memory,
+  // the historical behavior.
+  savedTo?: string;
 };
 
 export type Approval = {

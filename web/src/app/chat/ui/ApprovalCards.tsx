@@ -1715,26 +1715,128 @@ function supersedeNote(outcome?: string): string | undefined {
   }
 }
 
+// MemoryProject is the project a chat belongs to, as the destination picker
+// needs it: the id to POST to, the name to show, and whether the project is
+// shared with a team (which decides the PRESELECTED destination, never a
+// hidden one).
+export type MemoryProject = { id: string; name: string; teamShared: boolean };
+
+export type MemoryDestination = "personal" | "project";
+
+// MemoryDestinationPicker is the visible "Save to:" choice (Item D1). It is
+// deliberately a segmented control rather than a default with an override
+// somewhere else: a member working inside a team-shared project usually means
+// the team, and the one thing worse than the wrong default is not being able
+// to see which one is about to happen.
+//
+// Shared by both capture paths — the approval card and the "Save" action under
+// a reply — so members learn one model for both.
+export function MemoryDestinationPicker({
+  project,
+  value,
+  onChange,
+  disabled,
+}: {
+  project: MemoryProject;
+  value: MemoryDestination;
+  onChange: (next: MemoryDestination) => void;
+  disabled?: boolean;
+}) {
+  const optionClass = (active: boolean) =>
+    [
+      "rounded-full px-2.5 py-1 text-[0.7rem] transition disabled:opacity-40",
+      active
+        ? "bg-[var(--color-text-primary)] font-medium text-[var(--color-surface-1)]"
+        : "text-[var(--color-text-secondary)] hover:bg-[var(--color-overlay-soft)]",
+    ].join(" ");
+  // Spans, not divs: this renders both as a block inside the approval card and
+  // INLINE inside the message action row, and a <div> nested in that row's
+  // <span> is invalid markup React will complain about at hydration.
+  return (
+    <span className="mb-2 flex flex-wrap items-center gap-1.5">
+      <span className="text-[0.7rem] text-[var(--color-text-muted)]">Save to:</span>
+      <span
+        role="group"
+        aria-label="Where to save this memory"
+        className="inline-flex items-center gap-0.5 rounded-full border border-[var(--color-border)] p-0.5"
+      >
+        <button
+          type="button"
+          disabled={disabled}
+          aria-pressed={value === "personal"}
+          className={optionClass(value === "personal")}
+          onClick={() => onChange("personal")}
+        >
+          My memory
+        </button>
+        <button
+          type="button"
+          disabled={disabled}
+          aria-pressed={value === "project"}
+          className={optionClass(value === "project")}
+          onClick={() => onChange("project")}
+        >
+          Team learnings
+        </button>
+      </span>
+      <span className="text-[0.68rem] text-[var(--color-text-muted)]">
+        {value === "project"
+          ? `everyone in ${project.name}`
+          : "only you, in every chat"}
+      </span>
+    </span>
+  );
+}
+
 export function MemoryProposalCard({
   proposal,
+  project,
   onResolved,
 }: {
   proposal: MemoryProposal;
+  // The chat's project, when it is in one. null = no destination choice; the
+  // card behaves exactly as it always did.
+  project?: MemoryProject | null;
   onResolved: (next: MemoryProposal) => void;
 }) {
   const [submitting, setSubmitting] = useState<"save" | "dismiss" | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  // Defaults to MY MEMORY, even inside a team-shared project, and shows the
+  // picker so the team is one click away.
+  //
+  // This card holds text the MODEL extracted from the turn, not text the user
+  // chose — and publishing is one-way in the direction that matters: a
+  // retired team learning was still read. People who have clicked Save on
+  // these cards for months read it as "keep this", and a default that
+  // published to the whole project would turn that habit into a disclosure the
+  // first time the model lifted something sensitive out of a conversation.
+  // The explicit Save action on a message the user picked defaults the other
+  // way, because there the user chose the content.
+  const [destination, setDestination] = useState<MemoryDestination>("personal");
 
   const resolve = async (save: boolean) => {
     if (submitting || proposal.status !== "pending") return;
     setSubmitting(save ? "save" : "dismiss");
+    setError(null);
     try {
       if (save) {
+        const toProject = Boolean(project) && destination === "project";
         const response = await fetch(`/api/memories/${encodeURIComponent(proposal.id)}/accept`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(toProject ? { project_id: project?.id } : {}),
         });
         if (!response.ok) {
-          onResolved({ ...proposal, status: "dismissed" });
+          // A failed save is NOT a dismissal. Reporting "Dismissed." told the
+          // user they had thrown the memory away when in fact nothing was
+          // written and the proposal is still there to retry — and the team
+          // destination has its own failure (a membership re-check server
+          // side) that this card is the only place to see.
+          setError(
+            response.status === 404 && toProject
+              ? "Couldn't save to team learnings — you may no longer be a member of this project."
+              : `Couldn't save this memory (HTTP ${response.status}).`,
+          );
           return;
         }
         // #515 stage 2: the accept response reports what happened to the
@@ -1746,19 +1848,25 @@ export function MemoryProposalCard({
         } catch {
           // body is display-only; a parse failure never affects the save
         }
-        onResolved({ ...proposal, status: "saved", resolutionNote: note });
+        onResolved({
+          ...proposal,
+          status: "saved",
+          savedTo:
+            project && destination === "project" ? project.name : undefined,
+          resolutionNote: note,
+        });
       } else {
         const response = await fetch(`/api/memories/${encodeURIComponent(proposal.id)}`, {
           method: "DELETE",
         });
         if (!response.ok) {
-          onResolved({ ...proposal, status: "dismissed" });
+          setError(`Couldn't dismiss this memory (HTTP ${response.status}).`);
           return;
         }
         onResolved({ ...proposal, status: "dismissed" });
       }
     } catch {
-      onResolved({ ...proposal, status: "dismissed" });
+      setError("Couldn't reach the server — nothing was saved or dismissed.");
     } finally {
       setSubmitting(null);
     }
@@ -1786,6 +1894,22 @@ export function MemoryProposalCard({
           <span className="ml-1">(the older fact is retired only if you save)</span>
         </p>
       ) : null}
+      {proposal.status === "pending" && project ? (
+        <MemoryDestinationPicker
+          project={project}
+          value={destination}
+          onChange={setDestination}
+          disabled={submitting !== null}
+        />
+      ) : null}
+      {error ? (
+        <p
+          role="alert"
+          className="mb-2 text-[0.75rem] leading-[1.5] text-[var(--color-danger)]"
+        >
+          {error}
+        </p>
+      ) : null}
       {proposal.status === "pending" ? (
         <div className="flex items-center gap-2">
           <button
@@ -1808,7 +1932,7 @@ export function MemoryProposalCard({
       ) : (
         <div className="text-[0.75rem] text-[var(--color-text-muted)]">
           {proposal.status === "saved"
-            ? `Saved to memories.${proposal.resolutionNote ? " " + proposal.resolutionNote : ""}`
+            ? `${proposal.savedTo ? `Saved to ${proposal.savedTo}’s team learnings.` : "Saved to memories."}${proposal.resolutionNote ? " " + proposal.resolutionNote : ""}`
             : "Dismissed."}
         </div>
       )}

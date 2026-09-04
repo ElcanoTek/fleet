@@ -164,6 +164,14 @@ type Conversation struct {
 	// disables even when a global default is set). Set via
 	// PUT /conversations/{id}/thinking_config. Stored as nullable JSONB.
 	ThinkingConfig *ThinkingConfig `json:"thinking_config,omitempty"`
+	// TeamVisible is the owner's per-chat opt-in to read-only visibility for
+	// their team (ADR-0013, surfaced by ADR-0057). false = private, the
+	// default and the only state a chat outside a team-shared project can be
+	// in. Reported on the owner's own listings so the rail can badge a
+	// team-shared chat distinctly from a link-shared one — the two audiences
+	// are different and a single unlabeled icon conflated them. Set via
+	// POST /conversations/{id}/share-with-team.
+	TeamVisible bool `json:"team_visible,omitempty"`
 }
 
 // ThinkingConfig is the persisted shape of a conversation's extended-thinking
@@ -511,15 +519,69 @@ func (s *Store) CreateConversation(ctx context.Context, userEmail, title, person
 // parent's persona/model/lockdown), records the lineage, and returns it so the
 // caller can continue the new thread independently. The branch is fully
 // independent — its messages are COPIED, not shared — so deleting the parent
-// never affects it. Errors if the parent is not found/owned by the user, or the
+// never affects it. Errors if the parent is not readable by the user, or the
 // branch point names no message in the parent.
+//
+// "Readable" is ownership OR a teammate's read of a chat its owner shared with
+// the team (ADR-0057): building on a colleague's thread is the whole point of
+// team-shared chats, and Branch needs no write access to the original — the
+// fork belongs to the brancher from the first byte, and survives the original
+// being unshared or deleted. The branch inherits the parent's project when the
+// brancher is a member of it, so a fork of a project chat lands back in the
+// project rather than in Temporary.
 func (s *Store) BranchConversation(ctx context.Context, userEmail, parentConvID string, branchPointMessageID int64, title string) (*Conversation, error) {
+	// redact narrows the message copy to what a NON-OWNER was allowed to read.
+	// False for the owner's own branch, which copies the history verbatim.
+	redact := false
 	parent, err := s.Get(ctx, userEmail, parentConvID)
 	if err != nil {
 		return nil, err
 	}
 	if parent == nil {
-		return nil, sql.ErrNoRows
+		// Not the caller's own — the one other readable case is a chat a
+		// teammate shared with the team.
+		shared, terr := s.GetTeamVisibleConversation(ctx, userEmail, parentConvID)
+		if terr != nil {
+			return nil, terr
+		}
+		if shared == nil {
+			return nil, sql.ErrNoRows
+		}
+		parent = &Conversation{
+			ID:        shared.ID,
+			UserEmail: shared.OwnerEmail,
+			Title:     shared.Title,
+			Persona:   shared.Persona,
+			Model:     shared.Model,
+			ProjectID: shared.ProjectID,
+			// Lockdown rides along (see the redaction note below): the parent
+			// was created --network=none under a restricted model allowlist,
+			// and a fork that quietly drops that would turn "branch to build
+			// on it" into a way to lift the owner's isolation.
+			Lockdown: shared.Lockdown,
+		}
+		// The fork copies the PARENT'S messages, so it must copy no more than
+		// the brancher was allowed to READ. GetTeamVisibleConversation hands a
+		// teammate user/assistant text only — tool_call, tool_result and
+		// reasoning entries can carry command output and API responses the
+		// owner never shared (ADR-0057 §4). Without this the redaction is one
+		// API call away from decorative: branch the chat you can only see the
+		// prose of, then read your own copy in full.
+		redact = true
+	}
+
+	// The fork is filed into the parent's project when the brancher belongs to
+	// it — the membership re-check matters for the teammate path (the project
+	// is what made the chat visible) and is a cheap no-op for the owner.
+	projectID := ""
+	if parent.ProjectID != "" {
+		member, merr := s.userIsProjectMember(ctx, userEmail, parent.ProjectID)
+		if merr != nil {
+			return nil, merr
+		}
+		if member {
+			projectID = parent.ProjectID
+		}
 	}
 
 	// The branch point must name an actual message OF THE PARENT (#578).
@@ -542,12 +604,15 @@ func (s *Store) BranchConversation(ctx context.Context, userEmail, parentConvID 
 	// Load the parent's messages up to (and including) the branch point. The
 	// conversation_id predicate guarantees only the PARENT's messages are
 	// copied (the existence check above already rejected any id that isn't
-	// the parent's).
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT role, type, content FROM messages
-		 WHERE conversation_id = $1 AND id <= $2 ORDER BY id ASC`,
-		parentConvID, branchPointMessageID,
-	)
+	// the parent's). When the parent is a teammate's chat the copy is narrowed
+	// to exactly what team-view showed — see the redaction note above.
+	copyQuery := `SELECT role, type, content FROM messages
+		 WHERE conversation_id = $1 AND id <= $2`
+	if redact {
+		copyQuery += ` AND type = 'text' AND role IN ('user', 'assistant')`
+	}
+	copyQuery += ` ORDER BY id ASC`
+	rows, err := s.db.QueryContext(ctx, copyQuery, parentConvID, branchPointMessageID)
 	if err != nil {
 		return nil, err
 	}
@@ -560,6 +625,20 @@ func (s *Store) BranchConversation(ctx context.Context, userEmail, parentConvID 
 			return nil, err
 		}
 		e.Content = json.RawMessage(content)
+		if redact {
+			// A user text entry carries ImageRefMeta paths pointing INTO THE
+			// OWNER'S workspace, and the agent re-reads those paths verbatim
+			// on the next turn (agent.loadHistoryImageParts) with no ownership
+			// check. Copying them would replay the owner's uploaded images
+			// into the brancher's model context — the same leak as the tool
+			// rows, through a different door.
+			stripped, serr := stripHistoryImages(e.Content)
+			if serr != nil {
+				_ = rows.Close()
+				return nil, serr
+			}
+			e.Content = stripped
+		}
 		entries = append(entries, e)
 	}
 	if err := rows.Err(); err != nil {
@@ -583,10 +662,14 @@ func (s *Store) BranchConversation(ctx context.Context, userEmail, parentConvID 
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	var projectArg any // NULL keeps the column's created-without-project state
+	if projectID != "" {
+		projectArg = projectID
+	}
 	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO conversations (id, user_email, title, persona, model, pinned, lockdown, parent_conversation_id, branch_point_message_id, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, FALSE, $6, $7, $8, $9, $10)`,
-		id, userEmail, title, parent.Persona, parent.Model, parent.Lockdown, parentConvID, branchPointMessageID, now, now,
+		`INSERT INTO conversations (id, user_email, title, persona, model, pinned, lockdown, parent_conversation_id, branch_point_message_id, project_id, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, FALSE, $6, $7, $8, $9, $10, $11)`,
+		id, userEmail, title, parent.Persona, parent.Model, parent.Lockdown, parentConvID, branchPointMessageID, projectArg, now, now,
 	); err != nil {
 		return nil, err
 	}
@@ -606,9 +689,50 @@ func (s *Store) BranchConversation(ctx context.Context, userEmail, parentConvID 
 		Lockdown:             parent.Lockdown,
 		ParentConversationID: parentConvID,
 		BranchPointMessageID: branchPointMessageID,
+		ProjectID:            projectID,
 		CreatedAt:            now,
 		UpdatedAt:            now,
 	}, nil
+}
+
+// stripHistoryImages drops the image references from a text history entry,
+// leaving the text itself untouched. Used on the cross-user branch path, where
+// the paths name files in another user's workspace. A payload that does not
+// decode as TextContent is passed through unchanged — the caller's other
+// filters already restrict this to text entries, and mangling an unexpected
+// shape would be worse than copying it.
+func stripHistoryImages(raw json.RawMessage) (json.RawMessage, error) {
+	var tc agent.TextContent
+	if err := json.Unmarshal(raw, &tc); err != nil {
+		return raw, nil //nolint:nilerr // unknown shape: pass through, see above
+	}
+	if len(tc.Images) == 0 {
+		return raw, nil
+	}
+	tc.Images = nil
+	out, err := json.Marshal(tc)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// userIsProjectMember reports whether email can see/use the project — the
+// owner always, otherwise a shared users.team_id (Project.MemberOf's rule, as
+// one query so the branch path needs no second round trip for the user row).
+func (s *Store) userIsProjectMember(ctx context.Context, email, projectID string) (bool, error) {
+	var member bool
+	err := s.db.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM projects p
+			WHERE p.id = $1
+			  AND (p.owner_email = $2
+			       OR (p.team_id <> '' AND p.team_id = (SELECT team_id FROM users WHERE email = $2)))
+		)`, projectID, normalizeEmail(email)).Scan(&member)
+	if err != nil {
+		return false, err
+	}
+	return member, nil
 }
 
 // SetOptionalMCPServers persists the user's opt-in list for this
@@ -1051,11 +1175,18 @@ func (s *Store) Delete(ctx context.Context, userEmail, convID string) error {
 // triggering this from the sidebar and which represent an intentional "keep"
 // state — are untouched. Returns the count removed. In soft-delete mode it
 // tombstones instead of hard-deleting.
+//
+// Project conversations are exempt too (#509), keying the same way the rail's
+// Temporary section and the retention sweep already do: filing a chat into a
+// project takes it OUT of the list this action clears, so sweeping it anyway
+// deleted a chat the user could not see in the section they were emptying —
+// and made "chats in a project don't expire" false at the one moment it
+// mattered most.
 func (s *Store) DeleteAllUnpinned(ctx context.Context, userEmail string) (int, error) {
 	if s.softDelete {
 		res, err := s.db.ExecContext(ctx,
 			`UPDATE conversations SET deleted_at = NOW(), updated_at = $1
-			 WHERE user_email = $2 AND pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL`,
+			 WHERE user_email = $2 AND pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL AND project_id IS NULL`,
 			time.Now().Unix(), userEmail,
 		)
 		if err != nil {
@@ -1065,7 +1196,7 @@ func (s *Store) DeleteAllUnpinned(ctx context.Context, userEmail string) (int, e
 		return int(n), nil
 	}
 	res, err := s.db.ExecContext(ctx,
-		`DELETE FROM conversations WHERE user_email = $1 AND pinned = FALSE AND archived_at IS NULL`,
+		`DELETE FROM conversations WHERE user_email = $1 AND pinned = FALSE AND archived_at IS NULL AND project_id IS NULL`,
 		userEmail,
 	)
 	if err != nil {
@@ -1128,12 +1259,17 @@ func (s *Store) DeleteByIDs(ctx context.Context, userEmail string, ids []string)
 //
 // The filter is bound as a parameter with an `$n = ”` short-circuit so no SQL is
 // concatenated from the input (defense against injection-by-clause).
+//
+// Project conversations are exempt, for the same reason DeleteAllUnpinned
+// exempts them: filing is a "keep" state, and a project chat is not in the
+// list this action clears. Deleting a specific project chat stays possible —
+// through the targeted DeleteByIDs, which the user reaches by selecting it.
 func (s *Store) DeleteAllMatching(ctx context.Context, userEmail, label string) (int, error) {
 	now := time.Now().Unix()
 	if s.softDelete {
 		res, err := s.db.ExecContext(ctx,
 			`UPDATE conversations SET deleted_at = NOW(), updated_at = $1
-			 WHERE user_email = $2 AND pinned = FALSE AND deleted_at IS NULL
+			 WHERE user_email = $2 AND pinned = FALSE AND deleted_at IS NULL AND project_id IS NULL
 			   AND ($3 = '' OR $3 = ANY(labels))`,
 			now, userEmail, label,
 		)
@@ -1145,7 +1281,7 @@ func (s *Store) DeleteAllMatching(ctx context.Context, userEmail, label string) 
 	}
 	res, err := s.db.ExecContext(ctx,
 		`DELETE FROM conversations
-		 WHERE user_email = $1 AND pinned = FALSE AND deleted_at IS NULL
+		 WHERE user_email = $1 AND pinned = FALSE AND deleted_at IS NULL AND project_id IS NULL
 		   AND ($2 = '' OR $2 = ANY(labels))`,
 		userEmail, label,
 	)
@@ -1246,12 +1382,28 @@ func (s *Store) ListFiltered(ctx context.Context, userEmail string, f ListFilter
 // conversationColumns is the SELECT list (in scan order) every conversation query
 // shares, so Get, ListFiltered and ListTeamConversations stay in lockstep with
 // scanConversation. (Bare column names, so a `c.`-aliased query can use it too.)
-const conversationColumns = `id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, optional_mcp_servers_enabled, labels, approval_timeout_seconds, COALESCE(share_token, ''), COALESCE(parent_conversation_id, ''), COALESCE(branch_point_message_id, 0), thinking_config, COALESCE(project_id, ''), mcp_accounts`
+const conversationColumns = `id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, optional_mcp_servers_enabled, labels, approval_timeout_seconds, COALESCE(share_token, ''), COALESCE(parent_conversation_id, ''), COALESCE(branch_point_message_id, 0), thinking_config, COALESCE(project_id, ''), mcp_accounts, team_visible`
 
-// teamConversationColumns is conversationColumns with share_token forced to
-// empty so a teammate listing cannot harvest the owner's public share
-// capability URL (#1112). Column count and scan order stay identical.
-const teamConversationColumns = `id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, optional_mcp_servers_enabled, labels, approval_timeout_seconds, '' AS share_token, COALESCE(parent_conversation_id, ''), COALESCE(branch_point_message_id, 0), thinking_config, COALESCE(project_id, ''), mcp_accounts`
+// teamConversationColumns is conversationColumns with everything a teammate
+// has no business reading blanked out. Column count and scan order stay
+// identical so scanConversation serves both.
+//
+// What a team listing is FOR is "which chats did my colleagues share, and what
+// are they called" — the row's identity and its title. Everything else on a
+// conversation is the owner's working state, and several fields are actively
+// disclosive:
+//
+//   - share_token — the public capability URL (#1112). Harvesting it from a
+//     team listing would turn "shared with my team" into "shared with anyone".
+//   - labels — user-chosen, and people name them after what the work is
+//     ("acme-dd-confidential", "layoffs-2026"). A label is not part of what
+//     opting a chat into team visibility offers.
+//   - mcp_accounts — which connector SEAT the owner used, keyed by a label
+//     that is very often an address.
+//   - optional_mcp_servers_enabled — the owner's per-chat connector loadout.
+//   - parent_conversation_id — reveals that a shared chat was branched from a
+//     private one, and hands over that private chat's id.
+const teamConversationColumns = `id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, FALSE AS optional_mcp_servers_enabled, NULL::text[] AS labels, approval_timeout_seconds, '' AS share_token, '' AS parent_conversation_id, COALESCE(branch_point_message_id, 0), thinking_config, COALESCE(project_id, ''), NULL::jsonb AS mcp_accounts, team_visible`
 
 // pgTypeMap is the pgx type map used to decode Postgres array literals reaching
 // this package over database/sql. It is read-only after init and safe for
@@ -1301,7 +1453,7 @@ func scanConversation(sc rowScanner) (Conversation, error) {
 	var approvalTimeout sql.NullInt64
 	var thinkingRaw []byte
 	var accountsRaw []byte
-	if err := sc.Scan(&c.ID, &c.UserEmail, &c.Title, &c.Persona, &c.Model, &c.Pinned, &c.Lockdown, &c.CreatedAt, &c.UpdatedAt, &c.ArchivedAt, &c.TitleLocked, &optionalRaw, textArray{&c.Labels}, &approvalTimeout, &c.ShareToken, &c.ParentConversationID, &c.BranchPointMessageID, &thinkingRaw, &c.ProjectID, &accountsRaw); err != nil {
+	if err := sc.Scan(&c.ID, &c.UserEmail, &c.Title, &c.Persona, &c.Model, &c.Pinned, &c.Lockdown, &c.CreatedAt, &c.UpdatedAt, &c.ArchivedAt, &c.TitleLocked, &optionalRaw, textArray{&c.Labels}, &approvalTimeout, &c.ShareToken, &c.ParentConversationID, &c.BranchPointMessageID, &thinkingRaw, &c.ProjectID, &accountsRaw, &c.TeamVisible); err != nil {
 		return Conversation{}, err
 	}
 	c.OptionalMCPServersEnabled = scanOptionalMCPServers(optionalRaw)
@@ -1328,13 +1480,18 @@ func scanConversationRows(rows *sql.Rows) ([]Conversation, error) {
 // there is no team to scope to. The HTTP layer maps it to 400.
 var ErrNoTeam = errors.New("caller has no team")
 
-// ListTeamConversations returns the active conversations that members of the
-// caller's team have SHARED with the team (team_visible = TRUE), read-only (#237).
-// Team membership alone never exposes a conversation — only the owner's explicit
-// share-with-team does — so this preserves the per-user privacy default while
-// enabling "manager sees the team's shared threads". Returns ErrNoTeam when the
-// caller has no team_id. This is the ONLY cross-user conversation read path; it
-// is gated by shared team_id AND the per-conversation opt-in (see ADR-0013).
+// ListTeamConversations returns the active conversations SHARED WITH the
+// caller's team (team_visible = TRUE), read-only (#237). Team membership alone
+// never exposes a conversation — only the owner's explicit share-with-team
+// does — so this preserves the per-user privacy default while enabling
+// "manager sees the team's shared threads". Returns ErrNoTeam when the caller
+// has no team_id. Gated by the per-conversation opt-in AND the audience the
+// owner named when they opted in (see ADR-0013, amended by ADR-0057).
+//
+// The audience comes from team_shared_with, NOT from the owner's current
+// users.team_id. Matching on the owner's team meant an admin moving that owner
+// to another team silently handed every chat they had shared to the new team —
+// a group the owner never chose. A stamped audience cannot drift.
 func (s *Store) ListTeamConversations(ctx context.Context, callerEmail string) ([]Conversation, error) {
 	callerEmail = normalizeEmail(callerEmail)
 	caller, err := s.GetUser(ctx, callerEmail)
@@ -1350,7 +1507,7 @@ func (s *Store) ListTeamConversations(ctx context.Context, callerEmail string) (
 		WHERE c.deleted_at IS NULL
 		  AND c.archived_at IS NULL
 		  AND c.team_visible = TRUE
-		  AND c.user_email IN (SELECT email FROM users WHERE team_id = $1)
+		  AND c.team_shared_with = $1
 		ORDER BY c.pinned DESC, c.updated_at DESC, c.id DESC`,
 		caller.TeamID,
 	)
@@ -1370,23 +1527,100 @@ func (s *Store) ListTeamConversations(ctx context.Context, callerEmail string) (
 	return list, nil
 }
 
-// SetConversationTeamVisible flips a conversation's team_visible flag (#237). Only
-// the OWNER may change it (the WHERE user_email gate), so one teammate can't
-// expose another's conversation. Returns ErrConversationNotFound when the caller
-// doesn't own a conversation with that id.
-func (s *Store) SetConversationTeamVisible(ctx context.Context, ownerEmail, convID string, visible bool) error {
+// ErrNoTeamToShareWith and ErrNoTeamShareHome are the two ways a request to
+// team-share a chat is refused for want of an audience or a place to appear.
+// They are distinct so the UI can say which situation the user is in.
+var (
+	// ErrNoTeamToShareWith: the owner belongs to no team, so there is nobody
+	// to name as the audience.
+	ErrNoTeamToShareWith = errors.New("you are not in a team yet, so there is nobody to share this chat with")
+	// ErrNoTeamShareHome: the chat is not in a project shared with the owner's
+	// team, so a teammate would have no surface listing it.
+	ErrNoTeamShareHome = errors.New("a chat can only be shared with your team from inside a project that is shared with that team")
+)
+
+// SetConversationTeamVisible flips a conversation's team_visible flag (#237)
+// and reports the state that was actually stored. Only the OWNER may change it
+// (the WHERE user_email gate), so one teammate can't expose another's
+// conversation. Returns ErrConversationNotFound when the caller doesn't own a
+// conversation with that id.
+//
+// Opting in STAMPS THE AUDIENCE (team_shared_with = the owner's team at that
+// moment) rather than leaving readers to infer it from the owner's current team
+// (ADR-0057, migration 054). The inference was wrong the moment the owner moved
+// teams: an admin reassigning the owner silently re-pointed every chat they had
+// shared at the new team. Opting out clears the stamp, so "not shared" has one
+// representation.
+//
+// Opting in ALSO REQUIRES A HOME — the chat must sit in a project shared with
+// that same team — and refuses with ErrNoTeamToShareWith / ErrNoTeamShareHome
+// otherwise. ADR-0057 first left this narrowing to the UI. That was wrong: the
+// pairing's every revocation path (leaving the team, unsharing or deleting the
+// project) is keyed on the PROJECT, so a share with no project matched none of
+// them and no surface could revoke it — a share that outlives its owner's
+// membership with no way to take it back. Enforcing it here is what makes "a
+// team-shared chat always has a home" true rather than hoped for.
+//
+// Opting OUT is never refused. Revocation must work from whatever state a row
+// is in, including one a pre-054 client created.
+func (s *Store) SetConversationTeamVisible(ctx context.Context, ownerEmail, convID string, visible bool) (bool, error) {
 	ownerEmail = normalizeEmail(ownerEmail)
+	now := time.Now().Unix()
+	if !visible {
+		res, err := s.db.ExecContext(ctx,
+			`UPDATE conversations SET team_visible = FALSE, team_shared_with = NULL, updated_at = $1
+			 WHERE id = $2 AND user_email = $3 AND deleted_at IS NULL`,
+			now, convID, ownerEmail)
+		if err != nil {
+			return false, err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return false, errors.New("conversation not found")
+		}
+		return false, nil
+	}
+
+	// Ownership first, so the three refusals keep their precedence: a caller
+	// who owns no such chat learns nothing about teams or projects (404), and
+	// only an owner sees which of the two share preconditions they are missing.
+	var homeTeam sql.NullString
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT p.team_id
+		FROM conversations c
+		LEFT JOIN projects p ON p.id = c.project_id
+		WHERE c.id = $1 AND c.user_email = $2 AND c.deleted_at IS NULL`,
+		convID, ownerEmail).Scan(&homeTeam); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, errors.New("conversation not found")
+		}
+		return false, err
+	}
+	var ownerTeam sql.NullString
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT team_id FROM users WHERE email = $1`, ownerEmail).Scan(&ownerTeam); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return false, err
+	}
+	team := strings.TrimSpace(ownerTeam.String)
+	if team == "" {
+		return false, ErrNoTeamToShareWith
+	}
+	if strings.TrimSpace(homeTeam.String) != team {
+		return false, ErrNoTeamShareHome
+	}
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE conversations SET team_visible = $1, updated_at = $2
-		 WHERE id = $3 AND user_email = $4 AND deleted_at IS NULL`,
-		visible, time.Now().Unix(), convID, ownerEmail)
+		`UPDATE conversations c SET
+			team_visible = TRUE, team_shared_with = $1, updated_at = $2
+		 WHERE c.id = $3 AND c.user_email = $4 AND c.deleted_at IS NULL
+		   AND EXISTS (SELECT 1 FROM projects p WHERE p.id = c.project_id AND p.team_id = $1)`,
+		team, now, convID, ownerEmail)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
-		return errors.New("conversation not found")
+		// Lost a race with a write that moved the chat or unshared the project.
+		return false, ErrNoTeamShareHome
 	}
-	return nil
+	return true, nil
 }
 
 // List returns the user's active (or, when archivedOnly, archived) conversations,

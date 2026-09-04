@@ -5,12 +5,16 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import TeamSettingsPage from "./page";
 
-// Settings → Team (#1157): read your own team from GET /api/me/team, create one
-// with PUT, leave one, and surface the upstream 409 verbatim when the name
-// belongs to somebody else's trust group (joining stays admin-granted).
+// Settings → Team (#1157, copy corrected by ADR-0057): read your own team from
+// GET /api/me/team, create one with PUT, leave one behind a confirm that
+// states what leaving costs, and turn the upstream 409 into the one sentence
+// that helps — the name is taken, an admin can add you (joining stays
+// admin-granted, and the server cannot say whether a user or a team-shared
+// project holds the name, so neither does the copy).
 
 function mockFetch(
   impl: (url: string, init?: RequestInit) => Response | Promise<Response>,
@@ -23,13 +27,18 @@ function mockFetch(
   );
 }
 
-const me = (team: string, admin = false) =>
+const me = (
+  team: string,
+  admin = false,
+  impact: { shared_projects?: number; shared_chats?: number } = {},
+) =>
   new Response(
     JSON.stringify({
       email: "ann@x.com",
       role: admin ? "admin" : "member",
       team_id: team,
       admin,
+      ...impact,
     }),
     { status: 200 },
   );
@@ -63,7 +72,10 @@ describe("Settings → Team", () => {
     expect(await screen.findByTestId("team-current")).toHaveTextContent(
       "platform",
     );
-    expect(screen.getByText(/You are now in team/)).toBeInTheDocument();
+    // The confirmation names the ONE path that actually adds teammates.
+    expect(
+      screen.getByText(/Teammates get added by an admin in Settings → Admin → Users/),
+    ).toBeInTheDocument();
   });
 
   it("shows the upstream conflict when the team belongs to someone else", async () => {
@@ -85,19 +97,21 @@ describe("Settings → Team", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Create team" }));
 
-    expect(await screen.findByText(/ask an admin to add you/i)).toBeVisible();
+    expect(
+      await screen.findByText(/That name is already in use\. An admin can add you/i),
+    ).toBeVisible();
     // Still teamless: the failed write must not fake success.
     expect(screen.queryByTestId("team-current")).toBeNull();
   });
 
-  it("leaves the current team", async () => {
+  it("confirms before leaving, stating what it costs", async () => {
     const puts: string[] = [];
     mockFetch((url, init) => {
       if (url === "/api/me/team" && init?.method === "PUT") {
         puts.push(String(init.body));
         return me("");
       }
-      return me("platform");
+      return me("platform", false, { shared_projects: 3, shared_chats: 2 });
     });
 
     render(<TeamSettingsPage />);
@@ -107,9 +121,44 @@ describe("Settings → Team", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Leave team" }));
 
+    // Nothing is written until the consequences have been shown and accepted.
+    const dialog = await screen.findByRole("dialog", { name: "Leave platform?" });
+    expect(puts).toEqual([]);
+    expect(dialog).toHaveTextContent("3 team-shared projects");
+    expect(dialog).toHaveTextContent("2 chats you shared with the team");
+    expect(dialog).toHaveTextContent("Projects you own stay yours");
+
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Leave team" }),
+    );
+
     await waitFor(() => expect(puts.length).toBe(1));
     expect(JSON.parse(puts[0])).toEqual({ team_id: "" });
     expect(await screen.findByText(/You left your team/)).toBeInTheDocument();
+  });
+
+  it("cancelling the leave confirm writes nothing", async () => {
+    const puts: string[] = [];
+    mockFetch((url, init) => {
+      if (url === "/api/me/team" && init?.method === "PUT") {
+        puts.push(String(init.body));
+        return me("");
+      }
+      return me("platform", false, { shared_projects: 0, shared_chats: 0 });
+    });
+
+    render(<TeamSettingsPage />);
+    await screen.findByTestId("team-current");
+    fireEvent.click(screen.getByRole("button", { name: "Leave team" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Leave platform?" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Leave platform?" })).toBeNull(),
+    );
+    expect(puts).toEqual([]);
+    expect(screen.getByTestId("team-current")).toHaveTextContent("platform");
   });
 
   it("tells an admin they can also join an existing team", async () => {
@@ -119,6 +168,8 @@ describe("Settings → Team", () => {
     expect(
       await screen.findByText(/As an admin you can also put yourself/i),
     ).toBeInTheDocument();
+    // The wrong "everyone joins the same name" promise is gone for good.
+    expect(screen.queryByText(/joins the same name/i)).toBeNull();
     expect(screen.getByRole("button", { name: "Set team" })).toBeInTheDocument();
   });
 });

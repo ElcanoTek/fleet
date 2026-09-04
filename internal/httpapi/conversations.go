@@ -466,6 +466,13 @@ var conversationSubroutes = map[conversationSubroute]conversationSubrouteHandler
 	{sub: "share-with-team", method: http.MethodPost}: func(s *Server, w http.ResponseWriter, r *http.Request, user, id string) {
 		s.handleConversationShareWithTeam(w, r, id, user)
 	},
+	// Read a TEAMMATE's team-shared chat, read-only (ADR-0057). Deliberately
+	// NOT behind withOwnedConversation: this is the one conversation route a
+	// non-owner may reach, and its own two gates (shared team_id + the
+	// owner's per-chat opt-in) live in the store.
+	{sub: "team-view", method: http.MethodGet}: func(s *Server, w http.ResponseWriter, r *http.Request, user, id string) {
+		s.handleConversationTeamView(w, r, id, user)
+	},
 	{sub: "mcp-servers", method: http.MethodGet}:  withOwnedConversation("not found", (*Server).handleConversationMCPServersGet),
 	{sub: "mcp-servers", method: http.MethodPost}: (*Server).handleConversationMCPServersSet,
 	{sub: "export", method: http.MethodGet}:       withOwnedConversation("not found", (*Server).handleConversationExport),
