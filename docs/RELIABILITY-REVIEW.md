@@ -66,7 +66,9 @@ scripted, fictional API responses and the TUI uses paced scripted SSE. They are
 explicitly labeled examples, not evidence of live model or sandbox execution.
 The web recorder starts its own app, asserts the views it records, and fails on
 missing content. It no longer requires model credentials or silently accepts a
-missing Upcoming tab. See [the recording instructions](generating-demo-gif.md).
+missing Upcoming tab. Concurrent browser suites and recordings use separate
+throwaway authentication keys, so starting one cannot invalidate the other
+run’s magic-link fixtures. See [the recording instructions](generating-demo-gif.md).
 
 Contributor instructions now use the tagged Makefile test/vet path and the
 complete web gate, including dependency audits and the override canary.

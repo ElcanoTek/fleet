@@ -18,12 +18,11 @@ import path from "node:path";
 //   - the PRIVATE key (PKCS8 PEM) → e2e/mocked/_session.ts, to mint a token the
 //     real verifier (verifyElcanoToken) accepts.
 // NO key literal is committed to the repo, and neither value protects anything
-// real. globalSetup regenerates the file fresh each run.
-
-// Stable per-run path (one Playwright run reuses one PLAYWRIGHT process tree, so
-// the OS temp dir + a fixed name is a reliable rendezvous). The file is created
-// atomically by the first process to need it.
-const KEY_FILE = path.join(os.tmpdir(), "fleet-e2e-auth-key.json");
+// real. Each main process owns a private directory; its workers inherit the
+// exact path through the environment. Concurrent Playwright/demo runs cannot
+// replace each other's signing material.
+const KEY_FILE_ENV = "FLEET_E2E_AUTH_KEY_FILE";
+let cachedMaterial: TestAuthKeyMaterial | undefined;
 
 type TestAuthKeyMaterial = {
   // AUTH_SIGNING_PUBKEY: standard base64 of the raw 32-byte Ed25519 public key.
@@ -38,58 +37,43 @@ function rawPublicKeyStdBase64(publicKey: crypto.KeyObject): string {
   return Buffer.from(jwk.x, "base64url").toString("base64");
 }
 
-// generateTestAuthKey makes a fresh keypair and atomically writes it to KEY_FILE,
-// overwriting any stale file from a previous run.
-export function generateTestAuthKey(): TestAuthKeyMaterial {
+function generateTestAuthKey(keyFile: string): TestAuthKeyMaterial {
   const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
   const material: TestAuthKeyMaterial = {
     pubkeyStdB64: rawPublicKeyStdBase64(publicKey),
     privateKeyPem: privateKey.export({ format: "pem", type: "pkcs8" }).toString(),
   };
-  // Atomic write so a worker reading concurrently never sees a half-written
-  // file: write to a temp sibling, then rename.
-  //
-  // The sibling name carries random bytes, and the write is `wx` (O_CREAT|O_EXCL)
-  // at mode 0600. os.tmpdir() is world-writable and the old name was
-  // `${KEY_FILE}.${pid}.tmp` — fully predictable, so a local user could
-  // pre-create it as a symlink and turn this into an arbitrary-file write as the
-  // test user, and the default 0644 left the private half world-readable.
-  // O_EXCL refuses to follow or clobber a pre-planted path; rename(2) acts on the
-  // link itself, so a hostile KEY_FILE symlink is replaced rather than written
-  // through. The key is throwaway and protects nothing real — this is hygiene on
-  // a private-key write, not a fix for a reachable compromise.
-  const tmp = `${KEY_FILE}.${process.pid}.${crypto.randomBytes(6).toString("hex")}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(material), {
+  fs.writeFileSync(keyFile, JSON.stringify(material), {
     encoding: "utf8",
     mode: 0o600,
     flag: "wx",
   });
-  fs.renameSync(tmp, KEY_FILE);
   return material;
 }
 
-function readTestAuthKey(): TestAuthKeyMaterial | null {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(KEY_FILE, "utf8")) as TestAuthKeyMaterial;
-    if (parsed.pubkeyStdB64 && parsed.privateKeyPem) return parsed;
-  } catch {
-    // missing or unreadable.
-  }
-  return null;
-}
-
-// Playwright sets TEST_WORKER_INDEX only in spec-worker processes; it is absent
-// in the MAIN process that evaluates this config to build webServer.env. We use
-// that to make the main process the single generation point each run (fresh
-// keypair), while workers + the spawned Next server read the SAME file.
-const isWorkerProcess = process.env.TEST_WORKER_INDEX !== undefined;
-
-// getTestAuthKey returns the run's key material. The main config process
-// regenerates it fresh once per run; every other process (the Next server
-// started with AUTH_SIGNING_PUBKEY, and each spec worker that signs cookies in
-// e2e/mocked/_session.ts) reads the SAME persisted file, so signer + verifier
-// always agree. Falls back to generating if the file is somehow missing.
 export function getTestAuthKey(): TestAuthKeyMaterial {
-  if (!isWorkerProcess) return generateTestAuthKey();
-  return readTestAuthKey() ?? generateTestAuthKey();
+  if (cachedMaterial) return cachedMaterial;
+  // TEST_WORKER_INDEX is set only in Playwright spec workers. A missing run
+  // file is an initialization error: generating a substitute would silently
+  // sign cookies with a key the already-started server cannot verify.
+  if (process.env.TEST_WORKER_INDEX !== undefined) {
+    const keyFile = process.env[KEY_FILE_ENV];
+    if (!keyFile) throw new Error(`Playwright worker requires ${KEY_FILE_ENV}`);
+    const parsed = JSON.parse(fs.readFileSync(keyFile, "utf8")) as TestAuthKeyMaterial;
+    if (!parsed.pubkeyStdB64 || !parsed.privateKeyPem) {
+      throw new Error("Invalid Playwright authentication key material");
+    }
+    cachedMaterial = parsed;
+    return parsed;
+  }
+
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-e2e-auth-"));
+  fs.chmodSync(directory, 0o700);
+  const keyFile = path.join(directory, "key.json");
+  cachedMaterial = generateTestAuthKey(keyFile);
+  process.env[KEY_FILE_ENV] = keyFile;
+  // The main Playwright process outlives its workers and web server. Normal
+  // completion removes only this run's directory, never another run's keys.
+  process.once("exit", () => fs.rmSync(directory, { recursive: true, force: true }));
+  return cachedMaterial;
 }
