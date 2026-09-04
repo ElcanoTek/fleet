@@ -203,7 +203,7 @@ scripts and the CI definition.
 ```
 cmd/
   fleet/          the one unified binary — server (`fleet serve`: chat HTTP/SSE + orchestrator HTTP + scheduler + worker pool) AND operator CLI (every other verb)
-  fleet-admin/    deprecation shim — forwards to `fleet`; removed in the first release after 1.0.0 (ADR-0012)
+  fleet-admin/    deprecation shim — forwards to `fleet`; removed in the first release on or after 2026-12-01 (ADR-0012)
   sandbox-probe/  deploy-time sandbox smoke test
 internal/
   agentcore/      the one unified run loop + shared agent primitives (cost ceilings, policy)
@@ -358,6 +358,7 @@ self-migrates on start.
 | `fleet chat [--email you@org]` | terminal TUI for the agent (token auto-read on-box) |
 | `fleet backup` / `fleet restore` | disaster recovery ([`docs/BACKUP_RESTORE.md`](docs/BACKUP_RESTORE.md)) |
 | `fleet timers install` | install + enable the daily backup/maintenance systemd timers on an existing box ([`docs/TIMERS.md`](docs/TIMERS.md)) |
+| `fleet version` | the build identity — date-based release + revision, e.g. `2026.09.04.2 (a1b2c3d4e5f6)` ([`docs/VERSIONING.md`](docs/VERSIONING.md)) |
 
 **→ Full operator runbook** — the env file, the client-config checkout, every
 verb in detail, process logs, and backup/restore:
@@ -370,6 +371,7 @@ Deep references live in [`docs/`](docs/) so this README stays an orientation, no
 | Doc | What it covers |
 |---|---|
 | [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) | Full deployment guide — host sizing, the one-command web + Caddy/TLS stack, options |
+| [`docs/VERSIONING.md`](docs/VERSIONING.md) | Releases: date-based (`vYYYY.MM.DD.N`), tagged automatically on every green push to `main`, nobody types a version |
 | [`docs/DEPLOYMENT-KUBERNETES.md`](docs/DEPLOYMENT-KUBERNETES.md) | Kubernetes as a first-class path — the Helm chart, the `kubernetes` sandbox backend (agent sandboxes as ephemeral pods), kind walkthrough + production checklist |
 | [`docs/OPERATORS.md`](docs/OPERATORS.md) | Operator runbook — the env file, the client-config checkout, every lifecycle verb |
 | [`docs/AGENT-RUNTIME.md`](docs/AGENT-RUNTIME.md) | Agent runtime mechanics — per-turn sandbox, ceilings, compaction, verifier, artifacts |

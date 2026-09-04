@@ -31,7 +31,7 @@ Unauthenticated (same posture as `/health`), reachable at `/api-info` and
 ```json
 {
   "api_version": "1",
-  "fleet_version": "1.2.0",
+  "fleet_version": "2026.09.04.2",
   "supported_versions": ["1"],
   "deprecated_versions": [],
   "schema_url": "https://github.com/ElcanoTek/fleet/blob/main/docs/openapi.yaml"
@@ -39,9 +39,14 @@ Unauthenticated (same posture as `/health`), reachable at `/api-info` and
 ```
 
 `api_version` is the **API** major version — it increments only on a breaking
-change (below), independently of the `fleet_version` binary semver. A client can
-assert `api_version` (or the `X-Fleet-API-Version` header) at startup to confirm
-compatibility.
+change (below), independently of `fleet_version`. The two are unrelated on
+purpose: `fleet_version` is the **date-based** identity of the running build
+(`YYYY.MM.DD.N`, or `<release>+<n>.g<sha>` for a box tracking `main` between
+releases — see [`VERSIONING.md`](VERSIONING.md)), which carries no compatibility
+promise at all. `api_version` is the compatibility contract. A client can assert
+`api_version` (or the `X-Fleet-API-Version` header) at startup to confirm
+compatibility; it should treat `fleet_version` as an opaque label for support
+tickets, never parse it, and never gate behaviour on it.
 
 ## What is a breaking change
 

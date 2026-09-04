@@ -1,4 +1,4 @@
-fleet {{ .Chart.Version }} installed as {{ .Release.Name }} in {{ .Release.Namespace }}.
+fleet installed as {{ .Release.Name }} in {{ .Release.Namespace }}.
 
 Control plane : one replica (by design — single-owner scheduler; do not scale it)
 Sandbox pods  : namespace {{ include "fleet.sandboxNamespace" . }}, image {{ .Values.sandbox.image }}
@@ -8,6 +8,11 @@ Check boot (the kubernetes sandbox preflight runs before serving; a missing
 RBAC grant, workspace claim, or NetworkPolicy aborts start with the reason):
 
   kubectl -n {{ .Release.Namespace }} logs deploy/{{ include "fleet.fullname" . }} | grep -E 'sandbox|preflight'
+
+Read the running build's identity (date-based release + revision; the chart
+itself carries no version — see docs/VERSIONING.md):
+
+  kubectl -n {{ .Release.Namespace }} exec deploy/{{ include "fleet.fullname" . }} -- fleet version
 
 Reach the chat API:
 

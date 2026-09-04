@@ -23,7 +23,8 @@ files they reference (history replay silently drops a missing file).
 `fleet backup` / `fleet restore` wrap `pg_dump -Fc` (PostgreSQL
 custom format) and `pg_restore`. (These are operator-CLI verbs of the unified
 `fleet` binary; `fleet-admin backup`/`restore` still works but is deprecated —
-removed in the first release after 1.0.0, [ADR-0012](adr/0012-unified-fleet-cli.md).)
+removed in the first release on or after 2026-12-01,
+[ADR-0012](adr/0012-unified-fleet-cli.md).)
 Each database is dumped to its **own** file
 rather than a single cluster-wide `pg_dumpall`, because the two databases have
 independent DSNs (and, in `--postgres=external` deployments, independent

@@ -78,7 +78,8 @@ deployable artifacts (`./fleet`, `./fleet-admin`). If this is green your Go
 toolchain is good. The server runs via `fleet serve` (bare `fleet` also serves,
 for back-compat); all other verbs are the operator CLI, and `make install` puts
 `fleet` on PATH. (`fleet-admin <verb>` still works but is deprecated; it is
-removed in the first release after 1.0.0 — see `docs/adr/0012-unified-fleet-cli.md`.)
+removed in the first release on or after 2026-12-01 — see
+`docs/adr/0012-unified-fleet-cli.md`.)
 
 ---
 

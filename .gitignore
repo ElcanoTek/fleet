@@ -72,6 +72,9 @@ web/.e2e-live.env
 /fleet
 /fleet-admin
 /fleet-bench
+# `make helm-package` output — a stamped chart tarball, built on demand and
+# never committed (the chart is installed from the checkout; ADR-0059).
+/fleet-*.tgz
 fleet-session.json
 *.pid
 /workspace/

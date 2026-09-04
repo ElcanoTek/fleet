@@ -388,11 +388,15 @@ if [[ "$SKIP_SRC_FETCH" == "1" ]]; then
   fi
 else
   if [[ "$DRY_RUN" == "1" ]]; then
-    info "[dry-run] would: git fetch origin && fast-forward the current branch"
+    info "[dry-run] would: git fetch --tags origin && fast-forward the current branch"
     after_sha="$before_sha"
     target_branch="$(git rev-parse --abbrev-ref HEAD)"
   else
-    git fetch --quiet origin
+    # --tags is explicit rather than relying on git's tag-following: the build
+    # stamps its version from the release tags (docs/VERSIONING.md), so a
+    # checkout that fetched commits but not tags would rebuild and then report
+    # `dev+g<sha>` instead of the release it is actually running.
+    git fetch --quiet --tags origin
     target_branch="${BRANCH_OVERRIDE:-$(git rev-parse --abbrev-ref HEAD)}"
     # Refuse to act on a detached HEAD: we need a named branch both so
     # origin/$target_branch resolves and so the checkout stays reattached.
@@ -1090,6 +1094,7 @@ fi
 if [[ "$DRY_RUN" == "1" ]]; then
   info "[dry-run] would run: (cd ${SRC_DIR} && make build)  → ${SRC_DIR}/fleet + fleet-admin"
   info "[dry-run] would install fleet + fleet-admin → ${INSTALL_DIR:-<unit ExecStart dir, else /opt/fleet>}"
+  info "[dry-run] would refresh /etc/profile.d/fleet-motd.sh (login banner) if it differs from deploy/fleet-motd.sh"
   info "[dry-run] would refresh /usr/local/bin/fleet-web-start.sh and set FLEET_NODE_BIN in /etc/fleet/fleet-web.env"
   info "[dry-run] would run: (cd ${SRC_DIR}/web && npm ci && npm run build) with the NEXT_PUBLIC_* stamps from /etc/fleet/fleet-web.env, on the node+npm the gate resolved above"
   info "[dry-run] would deploy the web build → the fleet-web unit's WorkingDirectory (else /opt/fleet/web)"
@@ -1130,6 +1135,26 @@ else
     ok "installed fleet + fleet-admin → ${INSTALL_DIR}"
   else
     die "could not install binaries into ${INSTALL_DIR} (need root? set --install-dir or FLEET_INSTALL_DIR) — live binary left in place"
+  fi
+
+  # The login banner hook (#461). `fleet motd` renders dynamically from the
+  # installed binary, so the BANNER was never stale — but the /etc/profile.d
+  # shim that invokes it is shipped content that only scripts/bootstrap.sh ever
+  # installed. A box provisioned before the hook existed never got one, and an
+  # edit to deploy/fleet-motd.sh reached no existing box: the one file in the
+  # deploy set with no refresh path. Same treatment as fleet-web-start.sh below
+  # — shipped content with no operator-tunable parts, refreshed unconditionally,
+  # and never fatal: a login banner must not be able to fail an update.
+  #
+  # cmp-gated so a re-run is silent rather than announcing a no-op every time.
+  if [[ -f "$SRC_DIR/deploy/fleet-motd.sh" ]] && [[ -d /etc/profile.d ]]; then
+    if cmp -s "$SRC_DIR/deploy/fleet-motd.sh" /etc/profile.d/fleet-motd.sh; then
+      : # already current
+    elif install -D -m 0644 "$SRC_DIR/deploy/fleet-motd.sh" /etc/profile.d/fleet-motd.sh 2>/dev/null; then
+      ok "refreshed /etc/profile.d/fleet-motd.sh (login banner)"
+    else
+      warn "could not refresh /etc/profile.d/fleet-motd.sh (need root?) — the login banner may be stale or missing"
+    fi
   fi
 
   if [[ -f "$SRC_DIR/web/package.json" ]]; then

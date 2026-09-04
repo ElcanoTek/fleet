@@ -7,10 +7,20 @@ description: >-
   (FLEET_SANDBOX_BACKEND=kubernetes). The single-box podman install remains
   the default fleet deployment; this chart is the enterprise split path.
 type: application
-# Chart version tracks chart changes; appVersion is informational — operators
-# build and pin their own fleet images (no public fleet image is published).
-version: 0.1.0
-appVersion: "unreleased"
+# Both fields are PLACEHOLDERS in the checkout, and deliberately so: fleet
+# releases are date-based, tagged automatically, and derived from git — nobody
+# types a version number (ADR-0059, docs/VERSIONING.md). The chart is not
+# published separately (operators install it from a checkout and build and pin
+# their own fleet images; no public fleet image exists), so nothing in a
+# checkout consumes either field.
+#
+# `make helm-package` stamps the real values when someone actually packages the
+# chart: Helm PARSES both, and rejects the four dotted components of
+# 2026.09.04.1, so `version` gets the strict-SemVer rendering
+# (scripts/version.sh semver -> 2026.904.1) while free-form `appVersion` gets
+# the release name itself.
+version: 0.0.0
+appVersion: "0.0.0"
 kubeVersion: ">=1.29.0-0"
 home: https://github.com/ElcanoTek/fleet
 sources:

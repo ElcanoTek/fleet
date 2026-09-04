@@ -190,7 +190,7 @@ image); run them via the `npm` scripts documented below.
     every a11y issue". All 55 have since been fixed and every one of those rules
     is now `error`; `npm run lint` runs `oxlint --deny-warnings`, so a rule
     re-introduced at `warn` fails the build rather than quietly re-opening the
-    backlog. See the `## [Unreleased]` entry in
+    backlog. See the top entry in
     [`CHANGELOG.md`](../CHANGELOG.md) for what the fixes actually changed.
 
     Two things worth knowing when reading `.oxlintrc.json`:
