@@ -1175,29 +1175,18 @@ export function ChatExperience({
     setShowJumpToLatest(distanceFromBottom > 240);
   };
 
-  // Auto-scroll behavior
-  useEffect(() => {
-    const el = streamEndRef.current;
-    if (!el) return;
-    const scrollParent = conversationRef.current;
-    if (!scrollParent) {
-      el.scrollIntoView({
-        block: "end",
-        behavior: isStreaming ? "auto" : "smooth",
-      });
-      return;
-    }
-    const { scrollTop, scrollHeight, clientHeight } = scrollParent;
-    const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
-    if (isStreaming) {
-      if (distanceFromBottom < 240)
-        el.scrollIntoView({ block: "end", behavior: "auto" });
-      return;
-    }
-    if (distanceFromBottom < 160)
-      el.scrollIntoView({ block: "end", behavior: "smooth" });
-    updateJumpToLatestVisibility();
-  }, [messages, isStreaming]);
+  // Auto-scroll lives in ChatTranscript now (useStickToBottom), and this
+  // effect is gone rather than kept alongside it: two scroll drivers on the
+  // same element is what the guard cannot protect against. The unguarded
+  // smooth follow that used to be here is precisely what oscillated when a
+  // row's height wobbled by a pixel at the bottom of a branched transcript —
+  // it re-fired mid-animation, every time. The hook preserves every branch,
+  // including the no-scroll-parent case and the 240px/160px windows.
+  //
+  // updateJumpToLatestVisibility() does not need re-homing: the effect below
+  // keyed on [isLoadingHistory, messages.length] already calls it on every
+  // length change, and the scroll listener covers the rest. The call deleted
+  // here sat in the non-streaming branch, which streaming deltas never reach.
 
   useEffect(() => {
     const conversationId = activeConversationId;

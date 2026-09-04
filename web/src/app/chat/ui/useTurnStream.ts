@@ -635,9 +635,20 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       // would otherwise show a stranded "Thinking…" with no question
       // above it. Insert the user slot if it's missing — keyed on
       // adjacency to the assistant slot so we don't double-up.
-      const p = payload as { text?: string; steered?: boolean };
+      const p = payload as {
+        text?: string;
+        steered?: boolean;
+        injected_context?: string;
+      };
       const text = (p.text ?? "").trim();
       if (!text) return;
+      // The server-added suffix for this turn, on its own field since
+      // migration 056 (docs/ATTACHMENT-SCOPING.md). Carried onto the bubble so
+      // a reattach mid-turn shows the collapsed "context fleet added" note the
+      // reload path shows — without it the same turn renders two ways.
+      const injectedContext = (p.injected_context ?? "").trim()
+        ? p.injected_context
+        : undefined;
       if (p.steered) {
         // A steered mid-turn input accepted at a step boundary (#785): render
         // its user bubble above the streaming assistant slot. This must be
@@ -657,6 +668,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
             id: nowMs(),
             role: "user" as const,
             content: text,
+            injectedContext,
             state: "done" as const,
           };
           if (aIdx >= 0) next.splice(aIdx, 0, bubble);
@@ -675,6 +687,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           id: ctx.assistantId - 1,
           role: "user",
           content: text,
+          injectedContext,
           state: "done",
         };
         const next = current.slice();
@@ -2005,17 +2018,29 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     const baseId = nowMs();
     const assistantId = baseId + 1;
 
-    // Tack a short markdown block onto the displayed user message so the
-    // chips the user saw in the composer don't silently disappear — it
-    // mirrors what chat-server appends server-side for the LLM.
-    const displayedContent = uploadedAttachments.length > 0
-      ? `${value}\n\n---\n**Attached files:**\n${uploadedAttachments
-          .map((a) => `- ${a.name} (${formatBytes(a.size)})`)
-          .join("\n")}`
-      : value;
+    // The receipt for the chips the user saw in the composer, so an
+    // attachment doesn't silently disappear on send. It goes on
+    // injectedContext, NOT into content: it is not what the user typed, and
+    // putting it in the bubble is the same defect the server fix removed from
+    // the stored message (docs/ATTACHMENT-SCOPING.md). It also has to match
+    // where the same turn lands after a reload — the server returns the
+    // block on its own field, so concatenating here made one turn render two
+    // different ways depending on whether you had refreshed.
+    const attachmentReceipt =
+      uploadedAttachments.length > 0
+        ? `\n\n---\n**Attached files:**\n${uploadedAttachments
+            .map((a) => `- ${a.name} (${formatBytes(a.size)})`)
+            .join("\n")}`
+        : undefined;
 
     const nextMessages: Message[] = [
-      { id: baseId, role: "user", content: displayedContent, state: "done" },
+      {
+        id: baseId,
+        role: "user",
+        content: value,
+        injectedContext: attachmentReceipt,
+        state: "done",
+      },
       { id: assistantId, role: "assistant", content: "", state: "thinking" },
     ];
 

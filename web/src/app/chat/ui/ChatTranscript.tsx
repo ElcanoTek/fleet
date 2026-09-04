@@ -61,6 +61,9 @@ function MessageMarkdown({
   );
 }
 import { humanToolLabel, liveSubagentLabel, shortModelName, type Message } from "./history";
+import { InjectedContextNote } from "./InjectedContextNote";
+import { buildTranscriptRows, type TranscriptRow } from "./transcriptRows";
+import { useStickToBottom } from "./stickToBottom";
 
 export type ChatTranscriptProps = {
   // Scroll container + bottom sentinel refs (owned by ChatExperience)
@@ -140,20 +143,9 @@ export type ChatTranscriptProps = {
 // react-markdown + react-syntax-highlighter for every message on every keystroke
 // or scroll. To feed a flat, stable-indexed list to the virtualizer, the former
 // inline `messages.map` — with its compaction-boundary early-returns and the
-// leading summarize card/error — is flattened into this explicit row model.
-type TranscriptRow =
-  // Live compaction progress card (only while summarizing).
-  | { kind: "summarizing" }
-  // Compaction error banner.
-  | { kind: "summarize-error" }
-  // The single "Show N earlier turns" expander that stands in for the whole
-  // collapsed pre-summary range.
-  | { kind: "expander" }
-  // A compaction summary banner message.
-  | { kind: "summary"; message: Message }
-  // A normal user/assistant turn. `isPreSummary` dims pre-compaction turns when
-  // the range is expanded (matching the former inline opacity-60 rule).
-  | { kind: "message"; message: Message; isPreSummary: boolean };
+// leading summarize card/error — is flattened into an explicit row model, built
+// by buildTranscriptRows (transcriptRows.ts) so it is unit-testable without a
+// layout engine.
 
 // VirtualTranscriptRow is the absolutely-positioned wrapper the virtualizer
 // places each visible row into. It also owns the entrance-animation gate:
@@ -254,30 +246,24 @@ export function ChatTranscript({
   // provides the transcript's intended rendering optimization.
   // Flatten the message list (plus the leading summarize card/error and the
   // compaction expander) into the explicit, stable-indexed row model the
-  // virtualizer consumes. This reproduces the former inline map's control flow:
-  // when a compaction summary exists and the pre-summary range is collapsed,
-  // the whole range [0, summaryIndex) is represented by a single expander row.
-  const rows = useMemo<TranscriptRow[]>(() => {
-    const out: TranscriptRow[] = [];
-    if (isSummarizing) out.push({ kind: "summarizing" });
-    if (summarizeError) out.push({ kind: "summarize-error" });
-    const collapsed = summaryIndex >= 0 && !summaryExpanded;
-    messages.forEach((message, idx) => {
-      const isPreSummary = summaryIndex >= 0 && idx < summaryIndex;
-      if (isPreSummary && collapsed) {
-        // The single expander stands in for the first hidden turn; every other
-        // hidden turn is skipped (matches the former `return null`).
-        if (idx === 0) out.push({ kind: "expander" });
-        return;
-      }
-      if (message.kind === "summary") {
-        out.push({ kind: "summary", message });
-        return;
-      }
-      out.push({ kind: "message", message, isPreSummary });
-    });
-    return out;
-  }, [messages, summaryIndex, summaryExpanded, isSummarizing, summarizeError]);
+  // virtualizer consumes. See transcriptRows.ts — including why a message with
+  // nothing to draw gets no row at all rather than an empty container.
+  const rows = useMemo<TranscriptRow[]>(
+    () =>
+      buildTranscriptRows({
+        messages,
+        summaryIndex,
+        summaryExpanded,
+        isSummarizing,
+        summarizeError,
+      }),
+    [messages, summaryIndex, summaryExpanded, isSummarizing, summarizeError],
+  );
+
+  // Keep the transcript pinned to its end, guarded against the measure →
+  // follow-scroll → measure oscillation a dynamically-measured virtual list
+  // invites (QA finding #11). See stickToBottom.ts for the three rules.
+  useStickToBottom({ conversationRef, streamEndRef, messages, isStreaming });
 
   // Message ids whose entrance animation has already been accounted for. Marked
   // after every render (see below), so a row re-mounting on scroll never
@@ -652,7 +638,7 @@ export function ChatTranscript({
                       >
                         <div className={message.role === "user" ? "min-w-0 max-w-[88%] sm:max-w-[72%]" : "min-w-0 flex-1"}>
                           {message.role === "user" ? (
-                            <UserBubble
+                            <UserTurn
                               message={message}
                               isLastUser={message.id === lastUserMessageId}
                               isStreaming={isStreaming}
@@ -1074,6 +1060,49 @@ export function ChatTranscript({
   );
 }
 
+// ── One user turn: the bubble, and anything attached to it ───────────────
+//
+// Exactly two things: what the user typed (inside the bubble) and what fleet
+// added on their behalf (outside it, as a collapsed note). Keeping the split
+// here — rather than inside UserBubble — is the point: the bubble's markup is
+// "the sender's words", and nothing that isn't may enter it.
+//
+// Exported for tests: the transcript itself is virtualized, and jsdom performs
+// no layout, so the row that would render this never mounts there.
+export function UserTurn({
+  message,
+  isLastUser,
+  isStreaming,
+  editRequestSignal,
+  onResend,
+}: {
+  message: Message;
+  isLastUser: boolean;
+  isStreaming: boolean;
+  editRequestSignal: number;
+  onResend: (edited: string) => void;
+}) {
+  return (
+    <>
+      <UserBubble
+        message={message}
+        isLastUser={isLastUser}
+        isStreaming={isStreaming}
+        editRequestSignal={editRequestSignal}
+        onResend={onResend}
+      />
+      {/* Below the bubble because that is where it sat in the prompt: fleet
+          appends its context after the user's text. Renders nothing at all
+          when the turn has none — including every row written before
+          migration 056, whose blocks are still inside `message.content` and
+          therefore still render inside the bubble. We do not try to parse
+          them back out: a half-parsed historical bubble is worse than an
+          honest one. */}
+      <InjectedContextNote text={message.injectedContext} />
+    </>
+  );
+}
+
 // ── User bubble with inline edit ─────────────────────────────────────────
 //
 // The most-recent user message gets an "Edit" affordance. Editing submits
@@ -1237,7 +1266,13 @@ function UserBubble({
           lets the bubble's intrinsic min-width drop to a single character,
           so a pasted long URL/token wraps inside the max-w-[88%] cap
           instead of pushing the bubble past the chat column on mobile. */}
-      <div className="min-w-0 [overflow-wrap:anywhere] rounded-[1.1rem] bg-[var(--color-overlay-soft)] px-3 py-2.5 text-[0.875rem] leading-[1.55] text-[var(--color-text-primary)] sm:rounded-[1.25rem] sm:px-4 sm:py-3 sm:text-[0.9375rem] sm:leading-[1.65]">
+      <div
+        // The sender's words, and nothing else. The testid exists so that
+        // invariant is assertable: injected context must never be inside this
+        // element (QA finding #6).
+        data-testid="user-message-bubble"
+        className="min-w-0 [overflow-wrap:anywhere] rounded-[1.1rem] bg-[var(--color-overlay-soft)] px-3 py-2.5 text-[0.875rem] leading-[1.55] text-[var(--color-text-primary)] sm:rounded-[1.25rem] sm:px-4 sm:py-3 sm:text-[0.9375rem] sm:leading-[1.65]"
+      >
         <MessageMarkdown content={message.content} />
       </div>
       {isLastUser && !isStreaming ? (
