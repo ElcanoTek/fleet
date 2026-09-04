@@ -1105,7 +1105,19 @@ else
   ( cd "$SRC_DIR" && make build ) || die "make build failed — live binary left in place"
   [[ -x "$SRC_DIR/fleet" ]] \
     || die "make build did not emit ${SRC_DIR}/fleet"
-  ok "fleet binary built"
+  # Say what got built, in the words `fleet version` and the login banner use,
+  # so an operator does not have to log in again to learn the stamp. A stamp
+  # with no release in it gets one line of context: release.yml tags a push to
+  # main only AFTER its CI run goes green, minutes after the push, so an update
+  # taken right after a promotion is stamped `dev+g<sha>` for a commit that is
+  # about to be a release. Nothing here is wrong; a later update re-stamps it,
+  # and `fleet doctor` reports the mismatch until then.
+  built_identity="$("$SRC_DIR/fleet" version 2>/dev/null || true)"
+  ok "fleet binary built${built_identity:+ — ${built_identity}}"
+  case "$built_identity" in
+    "fleet dev"|"fleet dev "*|"fleet dev+"*)
+      info "no release tag is reachable from this commit — either CI has not tagged this push to main yet (it tags after the gate goes green; re-run 'fleet update' later to re-stamp), or this branch has not merged a release since one was cut" ;;
+  esac
 
   # Install the freshly built binaries to the unit's ExecStart location so the
   # restart below actually runs the NEW code. Without this the build is a no-op
