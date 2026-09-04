@@ -501,11 +501,67 @@ describe("TaskCreateModal — edit mode", () => {
     expect(rerunTask.mock.calls[0][1].mcp_selection).toEqual([{ server: "email" }]);
   });
 
+  it("resubmits with uploaded replacement attachments and the thinking budget", async () => {
+    rerunTask.mockResolvedValue({ id: "99990000-9999-0000-9999-000000000000" });
+    uploadFile.mockResolvedValue({ filename: "new-report.csv" });
+    const { container } = renderModal({
+      editTask: { ...baseEdit, status: "success", files: ["old-report.csv"], thinking_budget_tokens: 4096 },
+      onUpdated: vi.fn(),
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Tools & files/ }));
+    expect(screen.getByText(/Attach new files to replace them/)).toBeInTheDocument();
+    const file = new File(["new report"], "report.csv", { type: "text/csv" });
+    fireEvent.change(container.querySelector('input[type="file"]')!, { target: { files: [file] } });
+    fireEvent.click(screen.getByRole("button", { name: /save task changes/i }));
+    await waitFor(() => expect(rerunTask).toHaveBeenCalledTimes(1));
+    expect(uploadFile).toHaveBeenCalledWith(file);
+    expect(rerunTask.mock.calls[0][1]).toMatchObject({
+      files: ["new-report.csv"], thinking_budget_tokens: 4096,
+    });
+    expect(rerunTask.mock.calls[0][1]).not.toHaveProperty("thinking_budget");
+  });
+
   it("closing an untouched edit form does not raise the discard guard", () => {
     const { onClose } = renderModal({ editTask: baseEdit, onUpdated: vi.fn() });
     fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
     expect(screen.queryByText(/unsaved changes/i)).toBeNull();
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it("restores a stored thinking budget and guards unsaved changes to it", () => {
+    const { onClose } = renderModal({
+      editTask: { ...baseEdit, thinking_budget_tokens: 4096 }, onUpdated: vi.fn(),
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Advanced/ }));
+    expect(screen.getByLabelText("Thinking budget")).toHaveValue(4096);
+    fireEvent.change(screen.getByLabelText("Thinking budget"), { target: { value: "8192" } });
+    fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
+    expect(screen.getByText(/unsaved changes/i)).toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("guards an edit whose only unsaved change is a new attachment", () => {
+    const { container, onClose } = renderModal({ editTask: baseEdit, onUpdated: vi.fn() });
+    fireEvent.click(screen.getByRole("button", { name: /Tools & files/ }));
+    fireEvent.change(container.querySelector('input[type="file"]')!, {
+      target: { files: [new File(["report"], "report.csv")] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
+    expect(screen.getByText(/unsaved changes/i)).toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("clears the source thinking override when a resubmission selects inherit", async () => {
+    rerunTask.mockResolvedValue({ id: "99990000-9999-0000-9999-000000000000" });
+    renderModal({
+      editTask: { ...baseEdit, status: "success", thinking_budget_tokens: 4096 }, onUpdated: vi.fn(),
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Advanced/ }));
+    fireEvent.change(screen.getByLabelText("Thinking budget"), { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: /save task changes/i }));
+    await waitFor(() => expect(rerunTask).toHaveBeenCalledTimes(1));
+    expect(rerunTask.mock.calls[0][1].thinking_budget_tokens).toBe(-1);
+    expect(rerunTask.mock.calls[0][1]).not.toHaveProperty("files");
   });
 });
 

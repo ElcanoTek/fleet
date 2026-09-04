@@ -75,20 +75,11 @@ export function FileUpload({ onEntriesChange, registerHandle }: FileUploadProps)
     (files: FileList | File[]) => {
       const incoming = Array.from(files);
       const current = entriesRef.current;
-      const currentValid = current.filter((e) => e.status !== "invalid").length;
-      // Accept what fits under the cap and NAME the overflow instead of
-      // silently dropping the batch.
-      const room = Math.max(0, MAX_FILES - currentValid);
-      const accepted = incoming.slice(0, room);
-      const overflow = incoming.length - accepted.length;
-      setLimitError(
-        overflow > 0
-          ? `Up to ${MAX_FILES} files per task — ${overflow} ${overflow === 1 ? "file was" : "files were"} not added.`
-          : "",
-      );
+      let validCount = current.filter((e) => e.status !== "invalid").length;
+      let overflow = 0;
       const added: FileEntry[] = [];
-      for (const file of accepted) {
-        const dup = current.some(
+      for (const file of incoming) {
+        const dup = [...current, ...added].some(
           (e) =>
             e.file.name === file.name &&
             e.file.size === file.size &&
@@ -96,6 +87,13 @@ export function FileUpload({ onEntriesChange, registerHandle }: FileUploadProps)
         );
         if (dup) continue;
         const v = validateFile(file, { maxSize: MAX_FILE_SIZE });
+        // Duplicates and invalid files must not consume room in the batch:
+        // a valid file later in the same drop should still fit.
+        if (v.valid && validCount >= MAX_FILES) {
+          overflow++;
+          continue;
+        }
+        if (v.valid) validCount++;
         added.push({
           id: genId(),
           file,
@@ -104,6 +102,11 @@ export function FileUpload({ onEntriesChange, registerHandle }: FileUploadProps)
           error: v.valid ? "" : v.message,
         });
       }
+      setLimitError(
+        overflow > 0
+          ? `Up to ${MAX_FILES} files per task — ${overflow} ${overflow === 1 ? "file was" : "files were"} not added.`
+          : "",
+      );
       if (added.length > 0) update([...current, ...added]);
     },
     [update],
@@ -130,7 +133,7 @@ export function FileUpload({ onEntriesChange, registerHandle }: FileUploadProps)
     if (!registerHandle) return;
     registerHandle({
       hasFiles: () =>
-        entriesRef.current.some((e) => e.status === "pending" || e.status === "uploaded"),
+        entriesRef.current.some((e) => e.status !== "invalid"),
       addFiles: (files) => addFilesRef.current(files),
       reset: () => {
         setLimitError("");
@@ -138,7 +141,7 @@ export function FileUpload({ onEntriesChange, registerHandle }: FileUploadProps)
       },
       uploadAll: async (uploader) => {
         const current = entriesRef.current;
-        const pending = current.filter((e) => e.status === "pending");
+        const pending = current.filter((e) => e.status === "pending" || e.status === "error");
         if (pending.length === 0) {
           return current
             .filter((e) => e.status === "uploaded" && e.filename)
@@ -146,6 +149,7 @@ export function FileUpload({ onEntriesChange, registerHandle }: FileUploadProps)
         }
         for (const entry of pending) {
           entry.status = "uploading";
+          entry.error = "";
           updateRef.current([...entriesRef.current]);
           try {
             const result = await uploader(entry.file);
