@@ -424,10 +424,7 @@ export function ChatTranscript({
                 </div>
               </div>
             ) : null}
-            {/* Reserve the composer's 64px upward fade plus breathing room.
-                Otherwise the last reply and its actions remain obscured even
-                when this scroll region is all the way at the bottom. */}
-            <div className="mx-auto grid min-h-full w-full min-w-0 max-w-[53rem] content-start gap-3 pb-20 sm:gap-4">
+            <div className="mx-auto grid min-h-full w-full min-w-0 max-w-[53rem] content-start gap-3 pb-4 sm:gap-4 sm:pb-6">
               {isLoadingHistory ? (
                 <div className="flex min-h-full items-center justify-center pb-8 text-[0.875rem] text-[var(--color-text-muted)]">
                   Loading conversation...

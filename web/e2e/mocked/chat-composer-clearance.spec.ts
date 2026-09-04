@@ -3,7 +3,7 @@ import { loginViaCookie } from "./_session";
 import { mockChatBoot, fulfillSse } from "./_mocks";
 
 for (const viewport of [{ width: 1280, height: 800 }, { width: 390, height: 844 }]) {
-  test(`finished reply clears the composer fade at ${viewport.width}px`, async ({ page, context }) => {
+  test(`ordinary chat has no transcript fade at ${viewport.width}px`, async ({ page, context }) => {
     await page.setViewportSize(viewport);
     await loginViaCookie(context);
     await page.route("**/api/**", route => route.fulfill({ json: {} }));
@@ -20,14 +20,14 @@ for (const viewport of [{ width: 1280, height: 800 }, { width: 390, height: 844 
     const conversation = page.getByRole("region", { name: "Conversation" });
     const action = conversation.getByRole("button", { name: "Regenerate", exact: true });
     await expect(action).toBeVisible();
-    // Even at the absolute bottom, the old 16/24px padding leaves the last
-    // response controls behind the composer's 64px gradient. Visibility alone
-    // cannot detect that translucent overlay; compare their actual geometry.
+    await expect(page.locator('[data-testid="composer-fade"]')).toHaveCount(0);
+    // The team viewer owns its CTA treatment. Ordinary chat must have no
+    // gradient/mask overlay, and its final actions remain inside the scroller.
+    await expect(page.locator('[class*="sticky-fade"]')).toHaveCount(0);
     await expect.poll(async () => {
       await conversation.evaluate(el => { el.scrollTop = el.scrollHeight; });
-      const fade = page.locator('[data-testid="composer-fade"]');
-      const [actionBox, fadeBox] = await Promise.all([action.boundingBox(), fade.boundingBox()]);
-      return actionBox && fadeBox ? fadeBox.y - (actionBox.y + actionBox.height) : -1;
+      const [actionBox, transcriptBox] = await Promise.all([action.boundingBox(), conversation.boundingBox()]);
+      return actionBox && transcriptBox ? transcriptBox.y + transcriptBox.height - (actionBox.y + actionBox.height) : -1;
     }).toBeGreaterThanOrEqual(8);
   });
 }
