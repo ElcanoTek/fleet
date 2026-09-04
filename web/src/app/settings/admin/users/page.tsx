@@ -30,6 +30,7 @@ import {
 } from "../../ui/atoms";
 import { ConnField, ConnForm, ConnPanel, SetSection } from "../../ui/panels";
 import { useIsAdmin } from "../../useIsAdmin";
+import { DeleteRefusal, parseOwnedSharedProjects } from "./DeleteRefusal";
 import { Icon } from "@/app/shared/ui/Icon";
 import { NoticeBanner } from "@/app/shared/ui/NoticeBanner";
 
@@ -330,6 +331,14 @@ function joinRows(users: AdminUser[] | null, stats: UserStat[] | null): Row[] {
 // columns right-aligned tabular-nums.
 const TD =
   "whitespace-nowrap border-b border-[var(--color-border-subtle)] px-2 py-[0.55rem] text-left group-last/row:border-b-0";
+// Wrap-safety for anything server-authored that lands inside a table cell.
+// Table layout sizes a column to its content, so one long unbroken token (a
+// server sentence, a project name, a generated password, a long email) both
+// refuses to wrap AND widens the table until the whole thing grows a
+// horizontal scrollbar. `overflow-wrap: anywhere` breaks the token, and the
+// max-width caps what the cell can contribute to the column's preferred width.
+const TD_TEXT_WRAP =
+  "block max-w-[26rem] whitespace-normal [overflow-wrap:anywhere]";
 const TD_NUM = `${TD} text-right [font-variant-numeric:tabular-nums]`;
 const TH =
   "whitespace-nowrap border-b border-[var(--color-border-subtle)] px-2 py-[0.55rem] text-left text-[0.7rem] font-semibold uppercase text-[var(--color-text-muted)]";
@@ -387,6 +396,18 @@ export default function AdminUsersPage() {
   // Per-email freshly reset password, shown ONCE until dismissed/navigated.
   const [resetShown, setResetShown] = useState<Record<string, string>>({});
   const [menu, setMenu] = useState<Menu | null>(null);
+  // Delete is the one mutation whose failure is REPORTED IN THE PANEL rather
+  // than in the row (QA #21). The fail-closed 409 for an account that still
+  // owns team-shared projects is a paragraph naming projects to transfer — a
+  // next step, decided right where Confirm delete was clicked — and rendering
+  // it in the row put it far from the decision and widened the whole table.
+  // So the panel stays open on failure and holds the refusal; only a
+  // SUCCESSFUL delete closes it.
+  const [deleteError, setDeleteError] = useState<{
+    email: string;
+    message: string;
+  } | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
   // ── discovery toolbar state (search / filters / grouping) ──
   const [query, setQuery] = useState("");
   const [filterRole, setFilterRole] = useState("all");
@@ -465,6 +486,10 @@ export default function AdminUsersPage() {
   // stopPropagation onClick handler it had no accessible role for.
   useEffect(() => {
     if (!menu) return;
+    // A delete in flight pins the panel open: it is the only surface that
+    // reports the refusal, so dismissing it mid-request would drop the
+    // server's answer on the floor.
+    if (deleting) return;
     const close = (e: globalThis.MouseEvent) => {
       const target = e.target as Node | null;
       if (target && popRef.current?.contains(target)) return;
@@ -495,10 +520,12 @@ export default function AdminUsersPage() {
       document.removeEventListener("click", close);
       document.removeEventListener("keydown", onKey);
     };
-  }, [menu]);
+  }, [menu, deleting]);
 
   const openMenu = (u: AdminUser, e: MouseEvent<HTMLButtonElement>) => {
     e.stopPropagation();
+    // A previous refusal belongs to the panel session that provoked it.
+    setDeleteError(null);
     menuTriggerRef.current = e.currentTarget;
     // Fixed positioning, ported from the design's openMenu math: clamp x into
     // the viewport, open below the kebab, flip above when it would overflow.
@@ -573,26 +600,42 @@ export default function AdminUsersPage() {
     }
   };
 
+  // The panel is left OPEN while this runs and on failure: the refusal belongs
+  // under the button that provoked it. Success removes the row and closes it.
   const remove = async (u: AdminUser) => {
-    setRowStatus((s) => ({ ...s, [u.email]: "saving" }));
+    setDeleteError(null);
+    setDeleting(u.email);
     try {
       const res = await fetch(
         `/api/admin/users/${encodeURIComponent(u.email)}`,
         { method: "DELETE" },
       );
       if (!res.ok) {
+        // readErrorText's 200-char rule (an anti-HTML-error-page guard) is too
+        // tight for THIS body: the fail-closed refusal grows one project name
+        // at a time, and an account owning a handful of them would have had
+        // its whole explanation replaced by "Delete failed (409)." — the exact
+        // sentence the admin needs. So the refusal gets a larger, still
+        // bounded allowance, and only when the body actually is that refusal.
+        const raw = (await res.text()).trim();
+        const isRefusal = parseOwnedSharedProjects(raw).length > 0;
         throw new Error(
-          await readErrorText(res, `Delete failed (${res.status}).`),
+          raw.length > 0 && raw.length <= (isRefusal ? 1000 : 200)
+            ? raw
+            : `Delete failed (${res.status}).`,
         );
       }
       setUsers((prev) =>
         prev ? prev.filter((x) => x.email !== u.email) : prev,
       );
+      setMenu(null);
     } catch (err) {
-      setRowStatus((s) => ({
-        ...s,
-        [u.email]: err instanceof Error ? err.message : "Delete failed.",
-      }));
+      setDeleteError({
+        email: u.email,
+        message: err instanceof Error ? err.message : "Delete failed.",
+      });
+    } finally {
+      setDeleting(null);
     }
   };
 
@@ -928,7 +971,9 @@ export default function AdminUsersPage() {
                       <tr key={row.email} className="group/row">
                         <td className={`${TD} min-w-[12rem] whitespace-normal`}>
                           <span className="flex flex-wrap items-center gap-[0.45rem]">
-                            <span className="text-[0.8rem] text-[var(--color-text-primary)]">
+                            <span
+                              className={`text-[0.8rem] text-[var(--color-text-primary)] ${TD_TEXT_WRAP}`}
+                            >
                               {row.email}
                             </span>
                             {account?.role === "admin" ? (
@@ -977,16 +1022,25 @@ export default function AdminUsersPage() {
                               : ""}
                           </span>
                           {resetShown[row.email] ? (
-                            <span className="mt-[0.18rem] block text-[0.7rem] text-[var(--color-text-muted)]">
+                            <span
+                              className={`mt-[0.18rem] text-[0.7rem] text-[var(--color-text-muted)] ${TD_TEXT_WRAP}`}
+                            >
                               New password (shown once):{" "}
                               <code className="font-[family-name:var(--font-code)] text-[var(--color-text-secondary)]">
                                 {resetShown[row.email]}
                               </code>
                             </span>
                           ) : null}
+                          {/* Row status = the mutations that finish AFTER the
+                              panel closes (role/team save, password reset).
+                              Delete does not report here: its refusal is a
+                              next-step paragraph and belongs under the button
+                              that provoked it (see deleteError). Whatever the
+                              server says still has to survive a table cell, so
+                              it wraps and is width-capped. */}
                           {status ? (
                             <span
-                              className={`mt-[0.18rem] block text-[0.75rem] ${
+                              className={`mt-[0.18rem] text-[0.75rem] ${TD_TEXT_WRAP} ${
                                 status === "saving" || status === "saved"
                                   ? "text-[var(--color-text-muted)]"
                                   : "text-[var(--color-danger-soft)]"
@@ -1052,7 +1106,11 @@ export default function AdminUsersPage() {
               role="dialog"
               aria-label={`Edit ${menu.email}`}
               style={{ left: menu.x, top: menu.y }}
-              className="fixed z-[400] grid w-[22rem] gap-[0.7rem] rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-surface-2)] px-[0.85rem] py-[0.8rem] shadow-[var(--shadow-md)] focus:outline-none motion-safe:animate-set-fade"
+              // max-h + scroll: the panel is fixed-positioned from an
+              // estimated height, and the delete refusal is the one child that
+              // can grow it by several lines — without this it could run off
+              // the bottom of the viewport with no way to reach it.
+              className="fixed z-[400] grid max-h-[calc(100vh-1rem)] w-[22rem] gap-[0.7rem] overflow-y-auto rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-surface-2)] px-[0.85rem] py-[0.8rem] shadow-[var(--shadow-md)] focus:outline-none motion-safe:animate-set-fade"
             >
               <div className="text-[0.76rem] font-semibold text-[var(--color-text-primary)] [overflow-wrap:anywhere]">
                 {menu.email}
@@ -1114,12 +1172,19 @@ export default function AdminUsersPage() {
                 </button>
                 <InlineConfirmButton
                   label="Delete user"
-                  onConfirm={() => {
-                    setMenu(null);
-                    void remove(menuAccount);
-                  }}
+                  disabled={deleting !== null}
+                  onConfirm={() => void remove(menuAccount)}
                 />
               </div>
+              {deleting === menu.email ? (
+                <p className="text-[0.7rem] text-[var(--color-text-muted)]">
+                  Deleting…
+                </p>
+              ) : null}
+              {/* The refusal, where the action was taken. */}
+              {deleteError && deleteError.email === menu.email ? (
+                <DeleteRefusal message={deleteError.message} />
+              ) : null}
               {/* Deleting an account is a cascade, not a de-provision, and the
                   two-click button alone said none of it. The one thing it
                   CANNOT take is a team-shared project — the server refuses and

@@ -63,7 +63,11 @@ import { QueuedInputs } from "./QueuedInputs";
 import { ProjectsModal, type Project } from "./ProjectsModal";
 import { ProjectHome, TeamLearningsPanel } from "./ProjectHome";
 import { MemoryGraphView } from "./MemoryGraphView";
-import { ConversationTotalsChip, type PendingAttachment } from "./ChatChips";
+import {
+  ConversationTotalsChip,
+  TeamSharedChip,
+  type PendingAttachment,
+} from "./ChatChips";
 import { ConversationSidebar } from "./ConversationSidebar";
 import { SavePromptDialog } from "./SavePromptDialog";
 import { ShareDialog } from "./ShareDialog";
@@ -76,6 +80,17 @@ import { useRailCollapse } from "@/app/shared/ui/NavRail";
 import { loadWorkspaceModels } from "@/app/shared/lib/workspaceModels";
 import { PageTopBar } from "@/app/shared/ui/PageTopBar";
 import { BulkDeleteConfirmModal } from "./BulkDeleteConfirmModal";
+import { DeleteProjectConfirmDialog } from "./DeleteProjectConfirmDialog";
+import {
+  decideMoveConfirm,
+  MoveChatConfirmDialog,
+  type MoveConfirm,
+} from "./MoveChatConfirmDialog";
+import {
+  afterDeleteAllUnpinned,
+  countDeletedByDeleteAllUnpinned,
+} from "./deleteAllUnpinnedScope";
+import { memoryModalSubtitle } from "./memoryModalCopy";
 import { Composer } from "./Composer";
 import type { SkillInfo } from "./skillSlash";
 import { ChatTranscript } from "./ChatTranscript";
@@ -2238,8 +2253,14 @@ export function ChatExperience({
   const deleteAllUnpinned = async () => {
     const response = await fetch("/api/conversations", { method: "DELETE" });
     if (!response.ok) throw new Error("Unable to delete conversations.");
-    // Keep any pinned rows; drop everything else.
-    const remaining = conversations.filter((c) => c.pinned);
+    // Mirror the server's predicate exactly: pinned rows are kept AND so are
+    // project rows (store.DeleteAllUnpinned exempts project_id IS NOT NULL).
+    // Dropping everything but the pinned rows here made every project chat
+    // disappear from the rail for as long as the page stayed open — the
+    // deletion looked like it had taken the projects with it, which is exactly
+    // the moment a user would panic. The predicate lives in one module shared
+    // with the confirm dialog's count, so the two cannot disagree.
+    const remaining = afterDeleteAllUnpinned(conversations);
     setConversations(remaining);
     const active = activeConversationId
       ? remaining.find((c) => c.id === activeConversationId)
@@ -2247,6 +2268,9 @@ export function ChatExperience({
     if (!active) {
       clearConversation();
     }
+    // …and then re-read the list, so the server stays the authority if its
+    // filter ever gains a clause this file doesn't know about.
+    void refreshConversations();
   };
 
   // ── Multi-select bulk operations (#279) ─────────────────────────────────
@@ -2682,6 +2706,25 @@ export function ChatExperience({
     return p ? { id: p.id, name: p.name, teamShared: Boolean(p.team_id) } : null;
   })();
 
+  // The memory modal's live tab. memoryView survives closing the modal and
+  // switching conversations, but the "team" tab only exists inside a project —
+  // so reopening it from a project-less chat would leave NO tab highlighted
+  // while the personal list rendered underneath. Hoisted out of the tab strip
+  // because the modal's subtitle has to describe the same tab the strip
+  // highlights (finding #18).
+  const activeMemoryView =
+    memoryView === "team" && !activeProjectForMemory ? "list" : memoryView;
+
+  // The audience a team-shared chat is shared WITH, for the header chip. The
+  // stamp lives on the conversation server-side (conversations.team_shared_with,
+  // ADR-0057); what this surface holds is the chat's project's team, then the
+  // caller's own team. "your team" is the honest fallback — never a guess at a
+  // name.
+  const activeChatTeamAudience =
+    (activeConversation?.project_id
+      ? projects.find((p) => p.id === activeConversation.project_id)?.team_id
+      : undefined) || myTeam;
+
   const closeProjectsModal = () => {
     setProjectsModal(null);
     void loadProjects();
@@ -2870,8 +2913,9 @@ export function ChatExperience({
   // a generic window.confirm can. The project home opens a dialog quoting real
   // counts — how many team learnings die with the project, how many chats from
   // how many members leave it and become temporary — and offers the export
-  // (Item A6). The rail kebab, which has no page to load those counts on,
-  // keeps a plain confirm there.
+  // (Item A6). The rail kebab has no page to load those counts on, so it
+  // confirms with the same in-app dialog and the shorter copy, pointing at
+  // the project home for the counts and the export.
   const deleteProject = async (projectID: string) => {
     try {
       const res = await fetch(
@@ -2891,36 +2935,34 @@ export function ChatExperience({
     }
   };
 
-  // moveConversationToProject re-files a chat into a project ("" = unfile) —
-  // the drag-and-drop / kebab path (#509 follow-up). Optimistic: the row
-  // moves immediately; a failed POST restores the previous grouping.
-  const moveConversationToProject = async (
+  // pendingProjectDelete holds the rail kebab's staged project deletion while
+  // its confirmation is on screen (the project home owns the richer dialog).
+  const [pendingProjectDelete, setPendingProjectDelete] = useState<
+    string | null
+  >(null);
+
+  // pendingMove holds a staged re-filing while its confirmation is on screen.
+  const [pendingMove, setPendingMove] = useState<{
+    conversationId: string;
+    projectID: string;
+    confirm: MoveConfirm;
+  } | null>(null);
+
+  // Resolves true when the re-filing stuck, so a caller can chain a second
+  // step onto it (the "Pin it and remove" path) without acting on a move the
+  // server rejected.
+  const applyMoveToProject = async (
     conversationId: string,
     projectID: string,
-  ) => {
+  ): Promise<boolean> => {
     const conv = conversations.find((c) => c.id === conversationId);
     // A team-shared chat cannot exist outside a team-shared project — the
-    // server clears the flag on the way out (ADR-0057) — so say so before the
-    // move rather than letting a teammate's bookmark quietly 404.
+    // server clears the flag on the way out (ADR-0057) — so clear it locally
+    // in the same update, rather than letting the rail claim a share the
+    // server has already dropped.
     const leavingTeamShare =
       Boolean(conv?.team_visible) &&
       !projects.some((p) => p.id === projectID && p.team_id);
-    if (leavingTeamShare) {
-      const target = projects.find((p) => p.id === projectID);
-      const message = projectID
-        ? `This chat is shared with your team. Moving it to “${target?.name ?? "another project"}”, which isn't shared with your team, will unshare it. Continue?`
-        : "This chat is shared with your team. Removing it from the project will unshare it. Continue?";
-      if (!window.confirm(message)) return;
-    } else if (!projectID && conv?.project_id) {
-      // Unfiling drops a chat back into Temporary, where retention can reach
-      // it — the corollary of "chats in a project don't expire" (Item E3).
-      if (
-        !window.confirm(
-          "This chat will become temporary and expire unless pinned. Remove it from the project?",
-        )
-      )
-        return;
-    }
     const prev = conversations;
     setConversations((cs) =>
       cs.map((c) =>
@@ -2952,12 +2994,49 @@ export function ChatExperience({
           `Couldn't move the chat (HTTP ${response.status})${response.status === 404 ? " — the server may predate this feature; update the deployment" : ""}.`,
         );
         setConversations(prev);
+        return false;
       }
+      return true;
     } catch (err) {
       console.error("move to project error:", err);
       showRailError("Couldn't move the chat — network error.");
       setConversations(prev);
+      return false;
     }
+  };
+
+  // moveConversationToProject re-files a chat into a project ("" = unfile) —
+  // the drag-and-drop / kebab path (#509 follow-up). Optimistic: the row
+  // moves immediately; a failed POST restores the previous grouping.
+  //
+  // Two of the re-filings need a confirmation first (unsharing a team-shared
+  // chat, and dropping a chat back into Temporary). Those were the app's only
+  // native window.confirm() dialogs; they are now the app's own dialog, so the
+  // project and the team render as chips and "expire unless pinned" has a
+  // button (finding #13). The confirmation is asynchronous, so this function
+  // stages the request and applyMoveToProject does the work — from here on the
+  // confirm, or straight away when none is needed.
+  const moveConversationToProject = async (
+    conversationId: string,
+    projectID: string,
+  ) => {
+    const conv = conversations.find((c) => c.id === conversationId);
+    const target = projects.find((p) => p.id === projectID);
+    const confirm = decideMoveConfirm({
+      conversation: conv,
+      projectID,
+      target: target
+        ? { id: target.id, name: target.name, teamShared: Boolean(target.team_id) }
+        : null,
+      // The audience is the team the chat is stamped with; the caller's own
+      // team is the closest name this surface holds for it.
+      team: myTeam,
+    });
+    if (confirm) {
+      setPendingMove({ conversationId, projectID, confirm });
+      return;
+    }
+    await applyMoveToProject(conversationId, projectID);
   };
 
   // The Share dialog (#226 UX, extended by ADR-0057): one dialog, two
@@ -4339,16 +4418,7 @@ export function ChatExperience({
           onRenameProject={(projectID, name) =>
             void renameProject(projectID, name)
           }
-          onDeleteProject={(projectID) => {
-            const p = projects.find((x) => x.id === projectID);
-            if (
-              !window.confirm(
-                `Delete ${p?.name ?? "this project"}? Its team learnings are lost, and every member's chats leave the project and become temporary. Open the project to see the counts and export first.`,
-              )
-            )
-              return;
-            void deleteProject(projectID);
-          }}
+          onDeleteProject={(projectID) => setPendingProjectDelete(projectID)}
           projects={projects}
           onMoveToProject={(conversationId, projectID) =>
             void moveConversationToProject(conversationId, projectID)
@@ -4381,12 +4451,8 @@ export function ChatExperience({
                     clears, and the server exempts it (store.DeleteAllUnpinned)
                     — so counting one here would over-promise a deletion that
                     never happens. */}
-                {
-                  conversations.filter((c) => !c.pinned && !c.project_id).length
-                }{" "}
-                conversation
-                {conversations.filter((c) => !c.pinned && !c.project_id)
-                  .length === 1
+                {countDeletedByDeleteAllUnpinned(conversations)} conversation
+                {countDeletedByDeleteAllUnpinned(conversations) === 1
                   ? ""
                   : "s"}{" "}
                 will be removed. Pinned chats — and chats filed in a project —
@@ -4426,6 +4492,58 @@ export function ChatExperience({
             onConfirm={async () => {
               setBulkDeleteConfirm(false);
               await bulkDeleteConversations();
+            }}
+          />
+        ) : null}
+
+        {/* The two re-filing confirmations and the rail kebab's project
+            deletion (finding #13). All three were window.confirm — the only
+            native confirms on this surface: unstyled, titled with the browser
+            origin, blocking the whole tab, unable to render the project or the
+            team as anything but characters in a string, and unable to hold the
+            second action their own copy promises. The copy is unchanged. */}
+        {pendingMove ? (
+          <MoveChatConfirmDialog
+            confirm={pendingMove.confirm}
+            onCancel={() => setPendingMove(null)}
+            onConfirm={() => {
+              const req = pendingMove;
+              setPendingMove(null);
+              void applyMoveToProject(req.conversationId, req.projectID);
+            }}
+            onPinAndConfirm={() => {
+              const req = pendingMove;
+              setPendingMove(null);
+              // The escape hatch for the sentence's own promise: the chat
+              // leaves the project (so retention can reach it) but is pinned
+              // (so retention keeps it). Pinned only once the move actually
+              // stuck — a rejected move leaves the chat exactly as it was,
+              // rather than silently pinning a chat that never left. The
+              // retention sweep is hourly, so the ordering costs nothing.
+              // togglePin flips the current value, so a chat that is already
+              // pinned is left alone.
+              void (async () => {
+                if (!(await applyMoveToProject(req.conversationId, req.projectID)))
+                  return;
+                const conv = conversations.find(
+                  (c) => c.id === req.conversationId,
+                );
+                if (conv && !conv.pinned) await togglePin(conv);
+              })();
+            }}
+          />
+        ) : null}
+
+        {pendingProjectDelete ? (
+          <DeleteProjectConfirmDialog
+            projectName={
+              projects.find((x) => x.id === pendingProjectDelete)?.name
+            }
+            onCancel={() => setPendingProjectDelete(null)}
+            onConfirm={() => {
+              const id = pendingProjectDelete;
+              setPendingProjectDelete(null);
+              void deleteProject(id);
             }}
           />
         ) : null}
@@ -4516,9 +4634,16 @@ export function ChatExperience({
                   <h2 className="text-[1rem] font-semibold text-[var(--color-text-primary)]">
                     Memories
                   </h2>
+                  {/* The subtitle describes the VISIBLE tab. It used to
+                      describe personal memories on all three, so on Team
+                      learnings neither half of it was true — those are scoped
+                      to the project and its team, and injected only into that
+                      project's chats (finding #18). */}
                   <p className="mt-1 text-[0.8125rem] leading-[1.5] text-[var(--color-text-secondary)]">
-                    Saved memories are scoped to {userEmail || "this user"} and
-                    are added to future chats.
+                    {memoryModalSubtitle(activeMemoryView, {
+                      userEmail,
+                      projectName: activeProjectForMemory?.name,
+                    })}
                   </p>
                 </div>
                 <CloseButton
@@ -4541,15 +4666,9 @@ export function ChatExperience({
                     ...(activeProjectForMemory ? (["team"] as const) : []),
                   ] as const
                 ).map((view) => {
-                  // memoryView survives closing the modal and switching
-                  // conversations, but the "team" tab only exists inside a
-                  // project — so reopening it from a project-less chat left
-                  // NO tab highlighted while the personal list rendered
-                  // underneath. Fall back to what is actually showing.
-                  const active =
-                    memoryView === "team" && !activeProjectForMemory
-                      ? "list"
-                      : memoryView;
+                  // Falls back to what is actually showing — see
+                  // activeMemoryView.
+                  const active = activeMemoryView;
                   return (
                   <button
                     key={view}
@@ -5073,6 +5192,21 @@ export function ChatExperience({
                   <Icon name="lock" className="size-3" />
                   <span className="hidden sm:inline">Lockdown</span>
                 </span>
+              ) : null}
+              {/* "Shared with team" in the chat header (finding #4). The rail
+                  row and the project-home row already badge a team-shared
+                  chat, and both are gone exactly when it matters: the rail
+                  collapses, and under 900px it is a drawer. The header is the
+                  one surface still on screen while you type, so this is where
+                  someone composing into a shared chat can see that their team
+                  will be able to read it — and the badge is the button that
+                  opens the dialog controlling it. Not gated on ownership: the
+                  chip states a fact about the chat, not a permission. */}
+              {activeConversation?.team_visible ? (
+                <TeamSharedChip
+                  audience={activeChatTeamAudience}
+                  onClick={() => openShareDialog(activeConversation)}
+                />
               ) : null}
             </div>
           ) : null}

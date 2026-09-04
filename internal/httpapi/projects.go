@@ -169,7 +169,7 @@ func (s *Server) projectByID(w http.ResponseWriter, r *http.Request) {
 		case "members":
 			s.projectMembers(w, r, p)
 		case "impact":
-			s.projectDeleteImpact(w, r, p)
+			s.projectImpact(w, r, p)
 		case "files":
 			s.projectFiles(w, r, p)
 		case "export":
@@ -298,11 +298,25 @@ func (s *Server) projectTeamConversations(w http.ResponseWriter, r *http.Request
 	writeJSON(w, map[string]any{"conversations": list})
 }
 
-// projectDeleteImpact handles GET /projects/{id}/impact — the counts the
-// delete confirm quotes so an owner sees what members lose (team learnings
-// die with the project; every member's chats leave it and become temporary)
-// before answering, rather than after (Item A6).
-func (s *Server) projectDeleteImpact(w http.ResponseWriter, r *http.Request, p *store.Project) {
+// projectImpact handles GET /projects/{id}/impact — the counts the project's
+// destructive confirms quote so an owner sees what members lose BEFORE
+// answering, rather than after (Item A6).
+//
+// It serves two confirms, because both take access away from the same people:
+//
+//   - DELETE the project: team learnings die with it, and every member's
+//     chats leave it and become temporary (`memories`, `chats`, `members`,
+//     `team_shared_chats`);
+//   - untick "Share with my team": the owner's own chats stay put, while every
+//     OTHER member's chats in the project are unfiled into their own Temporary
+//     list, because a personal project is visible to its owner alone
+//     (`chats_from_teammates`, `teammates_with_chats` — the untick confirm
+//     quotes "{N} chats from teammates will move to their unfiled chats.").
+//
+// One read, one shape: the make-personal counts are a strict subset of the
+// delete counts, and a second endpoint answering the same question about the
+// same project would be a second thing to keep in sync.
+func (s *Server) projectImpact(w http.ResponseWriter, r *http.Request, p *store.Project) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return

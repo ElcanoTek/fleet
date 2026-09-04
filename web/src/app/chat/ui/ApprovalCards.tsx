@@ -1801,18 +1801,34 @@ export function MemoryProposalCard({
 }) {
   const [submitting, setSubmitting] = useState<"save" | "dismiss" | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // Defaults to MY MEMORY, even inside a team-shared project, and shows the
-  // picker so the team is one click away.
+  // Inside a team-shared project, TEAM LEARNINGS is preselected — the
+  // destination the context and the assistant's own framing imply
+  // (docs/TEAM-SHARING.md, "Capturing one"). "Remember that this project is
+  // for testing purposes" is a fact about the project; a personal default
+  // filed it privately on one lazy click, and disagreed with the sentence the
+  // user had just read. Outside a team-shared project (a personal project, or
+  // none) there is no team to learn anything, so My memory it is.
   //
-  // This card holds text the MODEL extracted from the turn, not text the user
-  // chose — and publishing is one-way in the direction that matters: a
-  // retired team learning was still read. People who have clicked Save on
-  // these cards for months read it as "keep this", and a default that
-  // published to the whole project would turn that habit into a disclosure the
-  // first time the model lifted something sensitive out of a conversation.
-  // The explicit Save action on a message the user picked defaults the other
-  // way, because there the user chose the content.
-  const [destination, setDestination] = useState<MemoryDestination>("personal");
+  // The picker is always shown, so whichever way it lands the user can flip it
+  // before saving — the promise the doc makes is "never a hidden default", not
+  // a particular one.
+  //
+  // Synced rather than read once at mount, and guarded by `touched`, for the
+  // same reason SaveToMemoryAction is: the projects list can land after the
+  // first render on a boot restore, and a late-arriving project must not stomp
+  // a choice the user has already made. Render-time adjustment (React's
+  // "adjusting state when a prop changes"), not an effect, so the picker never
+  // paints once with a default computed from a project it hadn't loaded yet.
+  const teamShared = Boolean(project?.teamShared);
+  const [destination, setDestination] = useState<MemoryDestination>(
+    teamShared ? "project" : "personal",
+  );
+  const [touched, setTouched] = useState(false);
+  const [seenTeamShared, setSeenTeamShared] = useState(teamShared);
+  if (teamShared !== seenTeamShared) {
+    setSeenTeamShared(teamShared);
+    if (!touched) setDestination(teamShared ? "project" : "personal");
+  }
 
   const resolve = async (save: boolean) => {
     if (submitting || proposal.status !== "pending") return;
@@ -1898,7 +1914,10 @@ export function MemoryProposalCard({
         <MemoryDestinationPicker
           project={project}
           value={destination}
-          onChange={setDestination}
+          onChange={(next) => {
+            setTouched(true);
+            setDestination(next);
+          }}
           disabled={submitting !== null}
         />
       ) : null}

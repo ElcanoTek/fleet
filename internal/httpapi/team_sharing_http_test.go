@@ -668,3 +668,89 @@ func TestShareWithTeamReportsWhatItStored(t *testing.T) {
 		t.Error("a refused share must leave the flag FALSE")
 	}
 }
+
+// Unticking "Share with my team" over HTTP moves a teammate's chats into their
+// own unfiled chats — and the confirm's counts are on the impact read that
+// precedes it.
+//
+// Red/green: the PATCH unshared the chats and left them FILED in a project the
+// teammate could no longer see, and the rail lists chats through the projects
+// the viewer can see — so their own conversations disappeared from Projects,
+// Temporary and Archived alike, with nothing deleted and nothing said.
+func TestUntickingTeamSharingUnfilesTeammateChats(t *testing.T) {
+	f := newTeamHTTPFixture(t)
+	// Bob's own chat, filed in Alice's team-shared project (a branch of hers is
+	// how this normally happens) and shared back with the team.
+	bobs, err := f.st.CreateConversation(f.ctx, "bob@x.com", "Bob's branch", "victoria", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.SetConversationProject(f.ctx, "bob@x.com", bobs.ID, f.project.ID); err != nil {
+		t.Fatal(err)
+	}
+	if stored, err := f.st.SetConversationTeamVisible(f.ctx, "bob@x.com", bobs.ID, true); err != nil || !stored {
+		t.Fatalf("SetConversationTeamVisible = (%v, %v), want (true, nil)", stored, err)
+	}
+
+	// The confirm's numbers, by their JSON names — this is the contract the
+	// dialog's copy ("{N} chats from teammates will move to their unfiled
+	// chats.") is rendered from.
+	w := projectSub(t, f.srv, "GET", "alice@x.com", f.project.ID+"/impact", "")
+	if w.Code != 200 {
+		t.Fatalf("impact: status %d body %s", w.Code, w.Body.String())
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("json: %v", err)
+	}
+	for field, want := range map[string]float64{
+		"chats_from_teammates": 1,
+		"teammates_with_chats": 1,
+	} {
+		got, ok := raw[field]
+		if !ok {
+			t.Fatalf("impact response is missing %q: %s", field, w.Body.String())
+		}
+		if got != want {
+			t.Errorf("%s = %v, want %v", field, got, want)
+		}
+	}
+
+	// The untick itself.
+	w = projectSub(t, f.srv, "PATCH", "alice@x.com", f.project.ID, `{"team_shared":false}`)
+	if w.Code != 200 {
+		t.Fatalf("untick: status %d body %s", w.Code, w.Body.String())
+	}
+
+	// Bob's chat is his again: unfiled, unshared, still there, still listed.
+	got, err := f.st.Get(f.ctx, "bob@x.com", bobs.ID)
+	if err != nil || got == nil {
+		t.Fatalf("bob's chat must still exist (err=%v)", err)
+	}
+	if got.ProjectID != "" || got.TeamVisible {
+		t.Errorf("bob's chat = project %q / team_visible %v, want unfiled and unshared",
+			got.ProjectID, got.TeamVisible)
+	}
+	list, err := f.st.List(f.ctx, "bob@x.com", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var listed bool
+	for _, c := range list {
+		if c.ID == bobs.ID {
+			listed = true
+		}
+	}
+	if !listed {
+		t.Error("bob's chat is missing from his own listing — the vanishing bug is back")
+	}
+	// Alice keeps her own chat where it was; she still owns the project.
+	mine, err := f.st.Get(f.ctx, "alice@x.com", f.chat.ID)
+	if err != nil || mine == nil {
+		t.Fatalf("alice's chat: %v", err)
+	}
+	if mine.ProjectID != f.project.ID || mine.TeamVisible {
+		t.Errorf("alice's chat = project %q / team_visible %v, want still filed and unshared",
+			mine.ProjectID, mine.TeamVisible)
+	}
+}

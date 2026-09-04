@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
+import { ConfirmModal } from "./ConfirmModal";
 
 // Projects / Spaces modal (#509): create/edit shared team workspaces — the
 // binding object for standing instructions, curated connectors, default
@@ -84,6 +85,10 @@ export function ProjectsModal({
   const [instructions, setInstructions] = useState("");
   const [teamShared, setTeamShared] = useState(false);
   const [memoryDraft, setMemoryDraft] = useState("");
+  // The two confirms this surface used to hand to window.confirm(). Copy
+  // unchanged; only the dialog is now part of the app.
+  const [confirmUnshare, setConfirmUnshare] = useState(false);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   const selected = projects.find((p) => p.id === selectedId) ?? null;
   const isOwner = selected ? selected.owner_email === userEmail : false;
@@ -152,21 +157,15 @@ export function ProjectsModal({
     setSelectedId(p?.id ?? null);
   };
 
+  // Turning sharing OFF unshares every chat members shared into the project
+  // (and unfiles the ones that are theirs). The project home says so in red
+  // beside its checkbox; this one PATCHed the identical body and said nothing,
+  // so Save asks first — in the app, not through the browser.
+  const wasShared = Boolean(projects.find((p) => p.id === selectedId)?.team_id);
+  const unsharing = Boolean(selectedId) && wasShared && !teamShared;
+
   const save = async () => {
     if (busy || !name.trim()) return;
-    // Turning sharing OFF unshares every chat members shared into the project.
-    // The project home says so in red beside its checkbox; this one PATCHed
-    // the identical body and said nothing.
-    const wasShared = Boolean(projects.find((p) => p.id === selectedId)?.team_id);
-    if (
-      selectedId &&
-      wasShared &&
-      !teamShared &&
-      !window.confirm(
-        "Stop sharing this project with your team? Every chat members shared into it stops being shared too.",
-      )
-    )
-      return;
     setBusy(true);
     setError(null);
     try {
@@ -206,16 +205,6 @@ export function ProjectsModal({
   };
 
   const remove = async (id: string) => {
-    // The project home's delete confirm quotes real counts and offers the
-    // export; this list has no page to load them on, so it states the same
-    // two consequences in words and points at the richer path.
-    const p = projects.find((x) => x.id === id);
-    if (
-      !window.confirm(
-        `Delete ${p?.name ?? "this project"}? Its team learnings are lost, and every member's chats leave the project and become temporary. Open the project to see the counts and export first.`,
-      )
-    )
-      return;
     try {
       const res = await fetch(`/api/projects/${encodeURIComponent(id)}`, { method: "DELETE" });
       if (!res.ok) throw new Error(await res.text());
@@ -326,7 +315,18 @@ export function ProjectsModal({
               <button type="button" className="rounded-full border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)]" onClick={() => setEditing(false)}>
                 Cancel
               </button>
-              <button type="button" className="rounded-full bg-[var(--color-text-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-surface-1)] transition hover:opacity-80 disabled:opacity-40" disabled={busy || !name.trim()} onClick={() => void save()}>
+              <button
+                type="button"
+                className="rounded-full bg-[var(--color-text-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-surface-1)] transition hover:opacity-80 disabled:opacity-40"
+                disabled={busy || !name.trim()}
+                onClick={() => {
+                  if (unsharing) {
+                    setConfirmUnshare(true);
+                    return;
+                  }
+                  void save();
+                }}
+              >
                 {busy ? "Saving…" : selectedId ? "Save changes" : "Create project"}
               </button>
             </div>
@@ -360,7 +360,7 @@ export function ProjectsModal({
                           <button type="button" className="hover:text-[var(--color-text-primary)]" onClick={() => openEditor(p)}>
                             Edit
                           </button>
-                          <button type="button" className="hover:text-[var(--color-danger)]" onClick={() => void remove(p.id)}>
+                          <button type="button" className="hover:text-[var(--color-danger)]" onClick={() => setConfirmDeleteId(p.id)}>
                             Delete
                           </button>
                         </>
@@ -413,6 +413,42 @@ export function ProjectsModal({
           )}
         </div>
       </div>
+      {confirmUnshare ? (
+        <ConfirmModal
+          title="Stop sharing this project with your team?"
+          confirmLabel="Stop sharing"
+          danger
+          busy={busy}
+          onCancel={() => setConfirmUnshare(false)}
+          onConfirm={() => {
+            setConfirmUnshare(false);
+            void save();
+          }}
+        >
+          <p className="m-0">
+            Every chat members shared into it stops being shared too.
+          </p>
+        </ConfirmModal>
+      ) : null}
+      {confirmDeleteId ? (
+        <ConfirmModal
+          title={`Delete ${projects.find((p) => p.id === confirmDeleteId)?.name ?? "this project"}?`}
+          confirmLabel="Delete project"
+          danger
+          onCancel={() => setConfirmDeleteId(null)}
+          onConfirm={() => {
+            const id = confirmDeleteId;
+            setConfirmDeleteId(null);
+            void remove(id);
+          }}
+        >
+          <p className="m-0">
+            Its team learnings are lost, and every member&rsquo;s chats leave
+            the project and become temporary. Open the project to see the
+            counts and export first.
+          </p>
+        </ConfirmModal>
+      ) : null}
     </div>
   );
 }

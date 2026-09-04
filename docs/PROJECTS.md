@@ -82,12 +82,29 @@ Users never see the words "shared memory": the label everywhere in the UI is
 **Team learnings**, listed with author and date on the project home and in the
 composer's memories modal. See [`TEAM-SHARING.md`](TEAM-SHARING.md).
 
+Both surfaces render one row per entry, and every action on it lives under a
+single **⋮** menu — Pin/Unpin · Edit · Retire/Restore · Delete — revealed on
+hover *and* on keyboard focus, the way a chat row's kebab works everywhere
+else. Pinned is a pin glyph beside `author · date` (and sorts the entry to the
+top); retired keeps its strikethrough and its `· retired`. **Delete asks in a
+dialog**, quoting the entry and pointing at retire; the confirm belongs to the
+click that opened it and is cleared by every other action, so no row can sit in
+a "one click from permanent" state nobody asked for.
+
 ## Team-shared chats (ADR-0057)
 
 A project shares its definition, never a member's chats — with one exception the
 owner opts into per chat. `conversations.team_visible` (ADR-0013) is surfaced by
 the Share dialog **only for a chat inside a team-shared project**, and the
-project home grows a **Team** section listing what members shared there:
+project home grows a **Shared by your team** section listing what members
+shared there. The heading names *whose* chats it holds: as plain "Team" it read
+as "every team chat", while the owner's own shared chats sit in their list
+above with the team badge — so its empty state said "No shared chats yet.
+Share one with your team from its ⋮ menu", which was false from the owner's
+vantage and told them to do the thing they had just done. It now reads
+*"Nothing shared by your teammates yet. Chats you share stay in your list
+above, marked with the team badge."*, plus a count of the viewer's own shares
+when they have any.
 
 - `GET /projects/{id}/team-conversations` — the section's list (other members'
   shared chats in this project; the caller's own already show under their chats).
@@ -109,6 +126,16 @@ un-sharing the project (or re-sharing it with a different team), deleting the
 project, leaving the team, and being moved between teams by an admin. Un-sharing
 is never refused. Details and rationale:
 [`TEAM-SHARING.md`](TEAM-SHARING.md) + ADR-0057.
+
+Two things the project home says out loud about that state. Its header chip
+**names the team** — *"Shared with Testing"*, never a bare "Shared with team" —
+and when the owner is no longer in that team (an admin moved them, which
+unshared their chats but left the project pointed at the old team) one line
+under the chip says so and names both ways out: share it with the team they are
+in now, or make it personal. And the **Sources** panel lists *the viewer's own*
+files only, and its empty state says so — a team share exposes the transcript,
+never the files, so copy promising "files from this project's chats" described
+files that exist and are withheld by design.
 
 ## Export / audit
 

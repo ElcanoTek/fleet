@@ -8,6 +8,10 @@ import {
   within,
 } from "@testing-library/react";
 import AdminUsersPage from "./page";
+import {
+  parseOwnedSharedProjects,
+  PROJECTS_SURFACE_HREF,
+} from "./DeleteRefusal";
 
 // Settings → Admin → Users: one table joining GET /api/admin/users
 // (provisioned accounts) with GET /api/admin/stats (usage per email), with all
@@ -82,6 +86,11 @@ function listImpl(users: unknown[] = USERS, stats: unknown[] = STATS) {
 const openKebab = (email: string) => {
   fireEvent.click(screen.getByRole("button", { name: `Edit ${email}` }));
 };
+
+// The users table itself — the row-edit panel renders outside it (fixed
+// position, after the table in the DOM), so scoping to the table is how "in
+// the row" is told apart from "in the panel".
+const usersTable = () => screen.getByRole("table");
 
 describe("AdminUsersPage", () => {
   beforeEach(() => {
@@ -705,7 +714,7 @@ describe("AdminUsersPage", () => {
     expect(await screen.findByText(sent.password)).toBeInTheDocument();
   });
 
-  it("surfaces the backend self-delete guard message", async () => {
+  it("surfaces the backend self-delete guard message in the panel", async () => {
     mockFetch((url, init) => {
       if (
         url === "/api/admin/users/alice%40x.com" &&
@@ -724,11 +733,164 @@ describe("AdminUsersPage", () => {
     openKebab("alice@x.com");
     fireEvent.click(screen.getByRole("button", { name: "Delete user" }));
     fireEvent.click(screen.getByRole("button", { name: /confirm delete/i }));
+    const panel = await screen.findByRole("dialog", {
+      name: "Edit alice@x.com",
+    });
     expect(
-      await screen.findByText("refusing to delete your own account"),
+      within(panel).getByText("refusing to delete your own account"),
     ).toBeInTheDocument();
-    // Row is NOT removed.
-    expect(screen.getByText("alice@x.com")).toBeInTheDocument();
+    // Row is NOT removed. (Scoped to the table: the still-open panel names
+    // the account too.)
+    expect(within(usersTable()).getByText("alice@x.com")).toBeInTheDocument();
+  });
+
+  // ── QA #21: the fail-closed delete refusal ──
+  //
+  // DELETE /admin/users/{email} 409s when the account still owns team-shared
+  // projects (docs/TEAM-SHARING.md "Ownership transfer"). The body is a
+  // paragraph naming them — a missing step, not a failure — so it has to land
+  // in the panel where Confirm delete was clicked, wrap, and offer the next
+  // step. Rendered in the row it was one unwrapped line that widened the whole
+  // table into a horizontal scroll.
+  const OWNS_REFUSAL =
+    "this account still owns team-shared projects (test 2 - shared) — " +
+    "transfer them to another member first, then delete the account";
+
+  const refuseDelete = (email: string, body: string) =>
+    mockFetch((url, init) => {
+      if (
+        url === `/api/admin/users/${encodeURIComponent(email)}` &&
+        init?.method === "DELETE"
+      ) {
+        return new Response(body, { status: 409 });
+      }
+      return listImpl()(url);
+    });
+
+  const confirmDelete = async (email: string) => {
+    render(<AdminUsersPage />);
+    await screen.findByText(email);
+    openKebab(email);
+    fireEvent.click(screen.getByRole("button", { name: "Delete user" }));
+    fireEvent.click(screen.getByRole("button", { name: /confirm delete/i }));
+    return screen.findByRole("dialog", { name: `Edit ${email}` });
+  };
+
+  it("shows the delete refusal in the editor panel, never in the row", async () => {
+    refuseDelete("bob@x.com", OWNS_REFUSAL);
+    const panel = await confirmDelete("bob@x.com");
+
+    // In the panel, under Confirm delete — the panel stays open on refusal.
+    const notice = within(panel).getByRole("alert");
+    expect(notice).toHaveTextContent(/still owns team-shared projects/);
+    // …and NOT in the table (the row rendering is gone, so the table cannot
+    // be widened by a server sentence).
+    expect(
+      within(usersTable()).queryByText(/still owns team-shared projects/),
+    ).toBeNull();
+    // The row keeps no leftover "Saving…" state either.
+    const bobRow = within(usersTable())
+      .getByText("bob@x.com")
+      .closest("tr") as HTMLElement;
+    expect(within(bobRow).queryByText("Saving…")).toBeNull();
+  });
+
+  it("wraps the refusal so a long sentence cannot run off the panel", async () => {
+    refuseDelete("bob@x.com", OWNS_REFUSAL);
+    const panel = await confirmDelete("bob@x.com");
+    // jsdom does no layout, so the wrap contract is asserted as the class that
+    // implements it: every line of the notice can break mid-token.
+    const message = within(panel).getByText(OWNS_REFUSAL);
+    expect(message.className).toContain("[overflow-wrap:anywhere]");
+  });
+
+  it("offers one Transfer link per named project", async () => {
+    refuseDelete(
+      "bob@x.com",
+      "this account still owns team-shared projects (alpha, beta) — " +
+        "transfer them to another member first, then delete the account",
+    );
+    const panel = await confirmDelete("bob@x.com");
+
+    const alpha = within(panel).getByRole("link", { name: "Transfer alpha" });
+    const beta = within(panel).getByRole("link", { name: "Transfer beta" });
+    // The 409 carries project NAMES only (no id), and every transfer surface
+    // is keyed by project id — so the honest destination is the Projects
+    // surface in chat, where that project's settings dialog holds the
+    // collapsed "Transfer ownership…" control. See DeleteRefusal.tsx.
+    expect(alpha).toHaveAttribute("href", PROJECTS_SURFACE_HREF);
+    expect(beta).toHaveAttribute("href", PROJECTS_SURFACE_HREF);
+    expect(within(panel).getAllByRole("link").length).toBe(2);
+  });
+
+  it("keeps the refusal when many projects push it past the generic length cap", async () => {
+    // The generic error-body rule stops at 200 chars (an anti-HTML-page
+    // guard); the refusal grows with the project list, so an account owning
+    // several would otherwise lose the whole sentence to "Delete failed
+    // (409)." — the one thing the admin needed to read.
+    const names = ["alpha", "beta", "gamma", "delta", "epsilon", "zeta"].map(
+      (n) => `${n} — quarterly research workspace`,
+    );
+    const body =
+      `this account still owns team-shared projects (${names.join(", ")}) — ` +
+      "transfer them to another member first, then delete the account";
+    expect(body.length).toBeGreaterThan(200);
+    refuseDelete("bob@x.com", body);
+    const panel = await confirmDelete("bob@x.com");
+    expect(within(panel).getByRole("alert")).toHaveTextContent(
+      /still owns team-shared projects/,
+    );
+    expect(within(panel).getAllByRole("link").length).toBe(names.length);
+  });
+
+  it("shows no transfer links for a refusal that names no project", async () => {
+    refuseDelete("bob@x.com", "Delete failed (500).");
+    const panel = await confirmDelete("bob@x.com");
+    expect(within(panel).getByRole("alert")).toHaveTextContent(
+      "Delete failed (500).",
+    );
+    expect(within(panel).queryAllByRole("link").length).toBe(0);
+  });
+
+  it("keeps row-level status text wrap-safe and width-capped", async () => {
+    // Save/reset failures still report in the row (they finish after the panel
+    // closes), so they carry the same wrap contract: a long server sentence
+    // must break and must not widen the column.
+    const long =
+      "PATCH refused: " + "unbreakable-token-".repeat(7) + "end-of-sentence";
+    mockFetch((url, init) => {
+      if (url === "/api/admin/users/bob%40x.com" && init?.method === "PATCH") {
+        return new Response(long, { status: 400 });
+      }
+      return listImpl()(url);
+    });
+
+    render(<AdminUsersPage />);
+    await screen.findByText("bob@x.com");
+    openKebab("bob@x.com");
+    fireEvent.change(screen.getByLabelText("Team for bob@x.com"), {
+      target: { value: "blue" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    const status = await screen.findByText(long);
+    expect(status.className).toContain("[overflow-wrap:anywhere]");
+    expect(status.className).toContain("whitespace-normal");
+    expect(status.className).toMatch(/max-w-\[/);
+  });
+});
+
+describe("parseOwnedSharedProjects", () => {
+  it("reads the names out of the 409 sentence", () => {
+    expect(parseOwnedSharedProjects(
+      "this account still owns team-shared projects (alpha, beta gamma) — " +
+        "transfer them to another member first, then delete the account",
+    )).toEqual(["alpha", "beta gamma"]);
+  });
+
+  it("returns nothing for any other error text", () => {
+    expect(parseOwnedSharedProjects("Delete failed (500).")).toEqual([]);
+    expect(parseOwnedSharedProjects("user not found")).toEqual([]);
   });
 });
 

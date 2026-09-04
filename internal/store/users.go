@@ -294,9 +294,10 @@ func (s *Store) SetOwnTeam(ctx context.Context, email, teamID string, allowExist
 	return s.GetUser(ctx, email)
 }
 
-// unshareOnTeamChange revokes the chats email shared with the team they are
-// LEAVING, whenever their team is about to change (to another team, or to
-// none). It is a no-op when the team is unchanged or was already empty.
+// unshareOnTeamChange revokes what email loses when their team is about to
+// change (to another team, or to none): the chats they shared with the team
+// they are LEAVING, and the filing of any chat of theirs that sits in a project
+// only that team could see. It is a no-op when the team is unchanged.
 //
 // This lives at the choke point on purpose. The rule users are told — leaving a
 // team unshares the chats you shared with it — was implemented only on the
@@ -320,14 +321,25 @@ func unshareOnTeamChangeTx(ctx context.Context, tx *sql.Tx, email, newTeam strin
 		return err
 	}
 	old := strings.TrimSpace(cur.String)
-	if old == "" || strings.EqualFold(old, strings.TrimSpace(newTeam)) {
-		return nil
+	newTeam = strings.TrimSpace(newTeam)
+	if strings.EqualFold(old, newTeam) {
+		return nil // nothing is changing, so nothing is revoked
 	}
-	_, err := tx.ExecContext(ctx, `
-		UPDATE conversations SET team_visible = FALSE, team_shared_with = NULL, updated_at = $1
-		WHERE user_email = $2 AND team_visible = TRUE AND team_shared_with = $3`,
-		time.Now().Unix(), email, old)
-	return err
+	if old != "" {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE conversations SET team_visible = FALSE, team_shared_with = NULL, updated_at = $1
+			WHERE user_email = $2 AND team_visible = TRUE AND team_shared_with = $3`,
+			time.Now().Unix(), email, old); err != nil {
+			return err
+		}
+	}
+	// Losing the team also loses every team-shared project in it that this user
+	// does not OWN — including the ones their own chats are filed in. Those
+	// chats stay theirs; they go back to being unfiled (the filing invariant in
+	// projects.go), because a chat filed in a project its owner cannot see is
+	// listed by no surface in the rail at all. Leaving used to unshare and stop
+	// there, so a leaver's own project chats disappeared on them.
+	return unfileChatsInInaccessibleProjectsTx(ctx, tx, email, newTeam)
 }
 
 // SetUserRoleTeam applies a partial role/team update (PATCH /admin/users/{email},
@@ -549,6 +561,12 @@ func (s *Store) DeleteUser(ctx context.Context, email string) error {
 	// original timestamp is sweep-eligible immediately. Members whose chats
 	// were filed in a departing owner's project get a full retention window,
 	// not none.
+	//
+	// This is the filing invariant on the delete-account path, and it is
+	// unconditional here — every project in the IN-list is about to stop
+	// existing, so no member can see it, exactly as in DeleteProject. The
+	// deleted account's OWN chats went with it in the statement above, so no
+	// row is left pointing at a project whose owner is gone.
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE conversations SET project_id = NULL, team_visible = FALSE, team_shared_with = NULL, updated_at = $2
 		 WHERE project_id IN (SELECT id FROM projects WHERE owner_email = $1)`, email, time.Now().Unix()); err != nil {
