@@ -39,8 +39,17 @@ import (
 
 // TurnInput carries per-turn inputs from the HTTP layer to the engine.
 type TurnInput struct {
+	// UserMessage is what the USER typed — nothing else. The server-derived
+	// blocks that used to be concatenated onto it ride in InjectedContext.
 	UserMessage string
-	Persona     string // persona name, e.g. "assistant"
+	// InjectedContext is this turn's server-derived suffix (attachment
+	// manifest, workspace inventory, shared file library, expanded context
+	// handles, skill note, connector hints). The governed prompt assembly
+	// joins the two for the provider call (ComposeUserMessage) and persists
+	// them separately, so nothing downstream mistakes injected context for
+	// something the user wrote. See injected.go and ADR-0058.
+	InjectedContext string
+	Persona         string // persona name, e.g. "assistant"
 	// Model is the OpenRouter slug to drive this turn. Required: the server
 	// holds no default. A blank or unresolvable slug fails the turn up-front.
 	Model   string
@@ -626,11 +635,23 @@ func buildSandboxPool(cfg *config.Config, personasDir, protocolsDir, systemPromp
 	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil { //nolint:gosec // bind-mount source must be readable by the rootless container user
 		return nil, fmt.Errorf("ensure workspace root %s: %w", workspaceRoot, err)
 	}
+	// The chat-attachment uploads root is NOT mounted into a sandbox on either
+	// backend (ADR-0058, docs/ATTACHMENT-SCOPING.md). It is one flat tree
+	// shared by every user and every conversation, so mounting it made a path
+	// the only thing standing between one chat's sandbox and another user's
+	// upload — and a path travels: a copied user message, an export, a
+	// branched transcript. Validated attachments are copied into the sending
+	// conversation's own workspace at send time (httpapi
+	// stageAttachmentsIntoWorkspace) and the prompt block advertises THAT
+	// path, so an attachment is reachable exactly from the conversation it was
+	// attached to. The directory is still created here: it is where uploads
+	// land host-side, and the TTL sweep plus the admin storage report both
+	// expect it to exist on a fresh box.
 	uploadsRoot := filepath.Join(cfg.EmailAttachmentDir, "uploads")
 	if abs, err := filepath.Abs(uploadsRoot); err == nil {
 		uploadsRoot = abs
 	}
-	if err := os.MkdirAll(uploadsRoot, 0o755); err != nil { //nolint:gosec // same — readable by the rootless container user via bind mount
+	if err := os.MkdirAll(uploadsRoot, 0o755); err != nil { //nolint:gosec // host-side upload landing area; not a sandbox mount source
 		return nil, fmt.Errorf("ensure uploads root %s: %w", uploadsRoot, err)
 	}
 	// The shared file library's staged tree (docs/SHARED-FILES.md). It lives
@@ -664,7 +685,7 @@ func buildSandboxPool(cfg *config.Config, personasDir, protocolsDir, systemPromp
 		// below is what keeps the default sufficient after an image update.
 		StartTimeout:   time.Duration(cfg.SandboxStartTimeoutSeconds) * time.Second,
 		BridgeDir:      filepath.Join(filepath.Dir(workspaceRoot), "data", "sandbox-bridge"),
-		ReadOnlyMounts: absSupportingDocs(personasDir, protocolsDir, systemPromptsDir, skillsDir, uploadsRoot, sharedFilesDir),
+		ReadOnlyMounts: sandboxReadOnlyMounts(cfg, personasDir, protocolsDir, systemPromptsDir, skillsDir, sharedFilesDir),
 	}
 	// Kubernetes backend (#989): sandboxes are ephemeral pods in a cluster
 	// instead of co-located podman containers. All podman-specific boot work
@@ -1000,12 +1021,13 @@ func StageSkillsForBackend(cfg *config.Config, bundle *clientconfig.Bundle) (str
 //
 //   - Without the declaration, nothing survives: a pod mounts only the
 //     workspace claim, so every host path is a path the anchor must not trust.
-//   - With it, only the BUNDLE's own doc dirs survive. Everything else in the
-//     list (the uploads root) lives in control-plane state a sandbox image
-//     cannot contain, and the declaration says nothing about it. Chat
-//     attachments stay reachable anyway: the chat server stages them into the
-//     conversation workspace under this backend (httpapi
-//     stageAttachmentsIntoWorkspace) instead of relying on this mount.
+//   - With it, only the BUNDLE's own doc dirs survive. Any other host root a
+//     future call site adds to the list lives in control-plane state a sandbox
+//     image cannot contain, and the declaration says nothing about it, so it
+//     stays dropped. (The chat-attachment uploads root used to be such an
+//     entry; since ADR-0058 it is mounted on neither backend — attachments are
+//     staged into the sending conversation's workspace instead, via httpapi
+//     stageAttachmentsIntoWorkspace.)
 //   - A materialized (merged built-in + bundle) skills tree never survives:
 //     it lives under the data dir with a path derived from the bundle path, so
 //     no image can carry it. See clientconfig.IsMaterializedSkillsDir.
@@ -1028,6 +1050,50 @@ func k8sDocMounts(mounts, bundleDocDirs []string, docsInImage bool) (kept, dropp
 		dropped = append(dropped, m)
 	}
 	return kept, dropped
+}
+
+// sandboxReadOnlyMounts is the complete set of read-only roots every sandbox
+// mounts: the bundle's supporting-doc dirs plus the shared file library's
+// staged tree.
+//
+// It takes cfg so that one tested place both decides this list and ENFORCES
+// the exclusion of the chat-attachment uploads root
+// (`<cfg.EmailAttachmentDir>/uploads`) from it. Mounting that tree is what let a turn
+// in ANY conversation read ANY user's upload given nothing but the path, and a
+// path travels: into a copied user message, an export, a branched transcript
+// (ADR-0058, docs/ATTACHMENT-SCOPING.md). Attachments reach a sandbox as a
+// per-conversation staged copy under the workspace root instead, so if you are
+// about to add cfg.EmailAttachmentDir back here, that is the regression the
+// test on this function exists to catch.
+func sandboxReadOnlyMounts(cfg *config.Config, personasDir, protocolsDir, systemPromptsDir, skillsDir, sharedFilesDir string) []string {
+	mounts := absSupportingDocs(personasDir, protocolsDir, systemPromptsDir, skillsDir, sharedFilesDir)
+	uploads := filepath.Join(cfg.EmailAttachmentDir, "uploads")
+	if abs, err := filepath.Abs(uploads); err == nil {
+		uploads = abs
+	}
+	kept := make([]string, 0, len(mounts))
+	for _, m := range mounts {
+		if pathIsWithin(uploads, m) {
+			// Enforced, not just documented: a doc dir configured to sit
+			// inside the uploads tree (or a future edit that adds the tree
+			// itself) is dropped rather than quietly re-opening the hole.
+			log.Printf("sandbox: refusing to mount %q — it is inside the chat-attachment uploads tree, which no sandbox may see (ADR-0058); attachments reach a turn as a per-conversation staged copy", logSafeAgent(m))
+			continue
+		}
+		kept = append(kept, m)
+	}
+	return kept
+}
+
+// pathIsWithin reports whether path is root or sits underneath it. Lexical on
+// purpose: it guards a mount LIST at boot, where the alternative — resolving
+// symlinks on a tree that may not exist yet — would fail open.
+func pathIsWithin(root, path string) bool {
+	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(path))
+	if err != nil {
+		return false
+	}
+	return rel == "." || filepath.IsLocal(rel)
 }
 
 // absSupportingDocs absolutizes the persona/protocol/skill/system-prompt dirs
@@ -1523,8 +1589,12 @@ func assembleTurnMessages(in TurnInput) ([]fantasy.Message, HistoryEntry, error)
 	imageParts, imageRefs := loadImageAttachments(in.ImageAttachments)
 	messages := make([]fantasy.Message, 0, len(history)+1)
 	messages = append(messages, history...)
-	messages = append(messages, fantasy.NewUserMessage(in.UserMessage, imageParts...))
+	// The model gets both halves, joined here and nowhere else; the persisted
+	// entry keeps them apart so the branch copy and the transcript can tell
+	// the user's own words from server-injected context (ADR-0058).
+	messages = append(messages, fantasy.NewUserMessage(ComposeUserMessage(in.UserMessage, in.InjectedContext), imageParts...))
 	userEntry := mustEntry("user", "text", TextContent{Text: in.UserMessage, Images: imageRefs})
+	userEntry.InjectedContext = in.InjectedContext
 	return messages, userEntry, nil
 }
 

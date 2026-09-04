@@ -58,12 +58,17 @@ import {
 import { classifyBootstrapFailure } from "./bootstrapFailure";
 import { PENDING_CONV_KEY } from "./workspaceHref";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
+import { DialogShell } from "@/app/shared/ui/DialogShell";
 import { Icon } from "./Icon";
 import { QueuedInputs } from "./QueuedInputs";
 import { ProjectsModal, type Project } from "./ProjectsModal";
 import { ProjectHome, TeamLearningsPanel } from "./ProjectHome";
 import { MemoryGraphView } from "./MemoryGraphView";
-import { ConversationTotalsChip, type PendingAttachment } from "./ChatChips";
+import {
+  ConversationTotalsChip,
+  TeamSharedChip,
+  type PendingAttachment,
+} from "./ChatChips";
 import { ConversationSidebar } from "./ConversationSidebar";
 import { SavePromptDialog } from "./SavePromptDialog";
 import { ShareDialog } from "./ShareDialog";
@@ -76,6 +81,17 @@ import { useRailCollapse } from "@/app/shared/ui/NavRail";
 import { loadWorkspaceModels } from "@/app/shared/lib/workspaceModels";
 import { PageTopBar } from "@/app/shared/ui/PageTopBar";
 import { BulkDeleteConfirmModal } from "./BulkDeleteConfirmModal";
+import { DeleteProjectConfirmDialog } from "./DeleteProjectConfirmDialog";
+import {
+  decideMoveConfirm,
+  MoveChatConfirmDialog,
+  type MoveConfirm,
+} from "./MoveChatConfirmDialog";
+import {
+  afterDeleteAllUnpinned,
+  countDeletedByDeleteAllUnpinned,
+} from "./deleteAllUnpinnedScope";
+import { memoryModalSubtitle } from "./memoryModalCopy";
 import { Composer } from "./Composer";
 import type { SkillInfo } from "./skillSlash";
 import { ChatTranscript } from "./ChatTranscript";
@@ -1160,29 +1176,18 @@ export function ChatExperience({
     setShowJumpToLatest(distanceFromBottom > 240);
   };
 
-  // Auto-scroll behavior
-  useEffect(() => {
-    const el = streamEndRef.current;
-    if (!el) return;
-    const scrollParent = conversationRef.current;
-    if (!scrollParent) {
-      el.scrollIntoView({
-        block: "end",
-        behavior: isStreaming ? "auto" : "smooth",
-      });
-      return;
-    }
-    const { scrollTop, scrollHeight, clientHeight } = scrollParent;
-    const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
-    if (isStreaming) {
-      if (distanceFromBottom < 240)
-        el.scrollIntoView({ block: "end", behavior: "auto" });
-      return;
-    }
-    if (distanceFromBottom < 160)
-      el.scrollIntoView({ block: "end", behavior: "smooth" });
-    updateJumpToLatestVisibility();
-  }, [messages, isStreaming]);
+  // Auto-scroll lives in ChatTranscript now (useStickToBottom), and this
+  // effect is gone rather than kept alongside it: two scroll drivers on the
+  // same element is what the guard cannot protect against. The unguarded
+  // smooth follow that used to be here is precisely what oscillated when a
+  // row's height wobbled by a pixel at the bottom of a branched transcript —
+  // it re-fired mid-animation, every time. The hook preserves every branch,
+  // including the no-scroll-parent case and the 240px/160px windows.
+  //
+  // updateJumpToLatestVisibility() does not need re-homing: the effect below
+  // keyed on [isLoadingHistory, messages.length] already calls it on every
+  // length change, and the scroll listener covers the rest. The call deleted
+  // here sat in the non-streaming branch, which streaming deltas never reach.
 
   useEffect(() => {
     const conversationId = activeConversationId;
@@ -2238,8 +2243,14 @@ export function ChatExperience({
   const deleteAllUnpinned = async () => {
     const response = await fetch("/api/conversations", { method: "DELETE" });
     if (!response.ok) throw new Error("Unable to delete conversations.");
-    // Keep any pinned rows; drop everything else.
-    const remaining = conversations.filter((c) => c.pinned);
+    // Mirror the server's predicate exactly: pinned rows are kept AND so are
+    // project rows (store.DeleteAllUnpinned exempts project_id IS NOT NULL).
+    // Dropping everything but the pinned rows here made every project chat
+    // disappear from the rail for as long as the page stayed open — the
+    // deletion looked like it had taken the projects with it, which is exactly
+    // the moment a user would panic. The predicate lives in one module shared
+    // with the confirm dialog's count, so the two cannot disagree.
+    const remaining = afterDeleteAllUnpinned(conversations);
     setConversations(remaining);
     const active = activeConversationId
       ? remaining.find((c) => c.id === activeConversationId)
@@ -2247,6 +2258,9 @@ export function ChatExperience({
     if (!active) {
       clearConversation();
     }
+    // …and then re-read the list, so the server stays the authority if its
+    // filter ever gains a clause this file doesn't know about.
+    void refreshConversations();
   };
 
   // ── Multi-select bulk operations (#279) ─────────────────────────────────
@@ -2514,7 +2528,13 @@ export function ChatExperience({
     }
   };
 
-  const togglePin = async (conversation: ConversationSummary) => {
+  // Resolves true when the pin stuck. The boolean exists for "Pin it and
+  // remove", where the pin is the half that keeps a promise the copy makes out
+  // loud ("it will expire unless pinned") — a caller that cannot tell success
+  // from failure cannot tell the user the promise was not kept.
+  const togglePin = async (
+    conversation: ConversationSummary,
+  ): Promise<boolean> => {
     const nextPinned = !conversation.pinned;
     // Optimistic update
     setConversations((current) =>
@@ -2527,14 +2547,26 @@ export function ChatExperience({
           return b.updated_at - a.updated_at;
         }),
     );
-    const response = await fetch(`/api/conversations/${conversation.id}/pin`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ pinned: nextPinned }),
-    });
-    if (!response.ok) {
-      // revert on failure
+    try {
+      const response = await fetch(
+        `/api/conversations/${conversation.id}/pin`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ pinned: nextPinned }),
+        },
+      );
+      if (!response.ok) {
+        // revert on failure
+        await refreshConversations();
+        return false;
+      }
+      return true;
+    } catch {
+      // A thrown fetch is the same outcome as a rejected one: the optimistic
+      // row is a lie until the refresh corrects it.
       await refreshConversations();
+      return false;
     }
   };
 
@@ -2639,12 +2671,20 @@ export function ChatExperience({
   // and, when it can, which team it shares with. undefined = not read yet
   // (the dialog stays neutral rather than claiming "no team").
   const [myTeam, setMyTeam] = useState<string | undefined>(undefined);
+  // Whether the caller is a fleet admin, from the same read. The Share
+  // dialog's no-team state branches on it: an admin can add themselves to a
+  // team, a member has to ask. undefined until the read lands, so neither
+  // pointer is claimed prematurely.
+  const [myTeamAdmin, setMyTeamAdmin] = useState<boolean | undefined>(
+    undefined,
+  );
   const loadMyTeam = useCallback(async () => {
     try {
       const res = await fetch("/api/me/team", { cache: "no-store" });
       if (!res.ok) return;
-      const me = (await res.json()) as { team_id?: string };
+      const me = (await res.json()) as { team_id?: string; admin?: boolean };
       setMyTeam(me.team_id ?? "");
+      setMyTeamAdmin(me.admin ?? false);
     } catch {
       // Best-effort: leave it unknown.
     }
@@ -2658,6 +2698,59 @@ export function ChatExperience({
       cancelled = true;
     };
   }, [loadMyTeam]);
+
+  // Per-project counts of chats teammates shared into it — what the rail's
+  // per-project empty state quotes so it stops telling a teammate a project
+  // is empty while its home lists two shared chats (QA #7).
+  //
+  // ONE read for every project, not one per project: `?scope=team` already
+  // returns every team-visible chat the caller may read, carrying project_id
+  // and user_email, gated on `team_visible AND team_shared_with = my team`
+  // (store.ListTeamConversations). Reducing that list is exactly the
+  // population each project home's Team section shows, minus the caller's own
+  // chats — which that section also excludes, because they already render in
+  // "your chats" with the team badge.
+  //
+  // `undefined` means NOT KNOWN (unread, or the read failed) and the rail then
+  // asserts no number. A loaded map omits projects with none, so a missing key
+  // there is a real zero — the two cases must stay distinguishable.
+  const [teamSharedChatCounts, setTeamSharedChatCounts] = useState<
+    Record<string, number> | undefined
+  >(undefined);
+  const loadTeamSharedChatCounts = useCallback(async () => {
+    try {
+      const res = await fetch("/api/conversations?scope=team", {
+        cache: "no-store",
+      });
+      if (!res.ok) {
+        // 400 is "you have no team": a KNOWN empty, not an unknown.
+        if (res.status === 400) setTeamSharedChatCounts({});
+        return;
+      }
+      const data = (await res.json()) as {
+        conversations?: { project_id?: string; user_email?: string }[];
+      };
+      const mine = userEmail.trim().toLowerCase();
+      const counts: Record<string, number> = {};
+      for (const c of data.conversations ?? []) {
+        if (!c.project_id) continue;
+        if (mine && (c.user_email ?? "").trim().toLowerCase() === mine) continue;
+        counts[c.project_id] = (counts[c.project_id] ?? 0) + 1;
+      }
+      setTeamSharedChatCounts(counts);
+    } catch {
+      // Leave it unknown rather than claiming zero.
+    }
+  }, [userEmail]);
+  useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) void loadTeamSharedChatCounts();
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [loadTeamSharedChatCounts]);
 
   const projectHomeProject = projectHome
     ? (projects.find((p) => p.id === projectHome.id) ?? null)
@@ -2681,6 +2774,25 @@ export function ChatExperience({
       : undefined;
     return p ? { id: p.id, name: p.name, teamShared: Boolean(p.team_id) } : null;
   })();
+
+  // The memory modal's live tab. memoryView survives closing the modal and
+  // switching conversations, but the "team" tab only exists inside a project —
+  // so reopening it from a project-less chat would leave NO tab highlighted
+  // while the personal list rendered underneath. Hoisted out of the tab strip
+  // because the modal's subtitle has to describe the same tab the strip
+  // highlights (finding #18).
+  const activeMemoryView =
+    memoryView === "team" && !activeProjectForMemory ? "list" : memoryView;
+
+  // The audience a team-shared chat is shared WITH, for the header chip. The
+  // stamp lives on the conversation server-side (conversations.team_shared_with,
+  // ADR-0057); what this surface holds is the chat's project's team, then the
+  // caller's own team. "your team" is the honest fallback — never a guess at a
+  // name.
+  const activeChatTeamAudience =
+    (activeConversation?.project_id
+      ? projects.find((p) => p.id === activeConversation.project_id)?.team_id
+      : undefined) || myTeam;
 
   const closeProjectsModal = () => {
     setProjectsModal(null);
@@ -2870,8 +2982,9 @@ export function ChatExperience({
   // a generic window.confirm can. The project home opens a dialog quoting real
   // counts — how many team learnings die with the project, how many chats from
   // how many members leave it and become temporary — and offers the export
-  // (Item A6). The rail kebab, which has no page to load those counts on,
-  // keeps a plain confirm there.
+  // (Item A6). The rail kebab has no page to load those counts on, so it
+  // confirms with the same in-app dialog and the shorter copy, pointing at
+  // the project home for the counts and the export.
   const deleteProject = async (projectID: string) => {
     try {
       const res = await fetch(
@@ -2891,48 +3004,52 @@ export function ChatExperience({
     }
   };
 
-  // moveConversationToProject re-files a chat into a project ("" = unfile) —
-  // the drag-and-drop / kebab path (#509 follow-up). Optimistic: the row
-  // moves immediately; a failed POST restores the previous grouping.
-  const moveConversationToProject = async (
+  // pendingProjectDelete holds the rail kebab's staged project deletion while
+  // its confirmation is on screen (the project home owns the richer dialog).
+  const [pendingProjectDelete, setPendingProjectDelete] = useState<
+    string | null
+  >(null);
+
+  // pendingMove holds a staged re-filing while its confirmation is on screen.
+  const [pendingMove, setPendingMove] = useState<{
+    conversationId: string;
+    projectID: string;
+    confirm: MoveConfirm;
+  } | null>(null);
+
+  // Resolves true when the re-filing stuck, so a caller can chain a second
+  // step onto it (the "Pin it and remove" path) without acting on a move the
+  // server rejected.
+  const applyMoveToProject = async (
     conversationId: string,
     projectID: string,
-  ) => {
-    const conv = conversations.find((c) => c.id === conversationId);
+  ): Promise<boolean> => {
+    // An ARCHIVED chat can be moved too — the Share dialog reaches one, and it
+    // resolves its conversation from either list. Updating only the active
+    // list left the archived row (and the still-open dialog) showing the old
+    // project until a reload, so both collections move together.
+    const conv =
+      conversations.find((c) => c.id === conversationId) ??
+      archivedConversations.find((c) => c.id === conversationId);
     // A team-shared chat cannot exist outside a team-shared project — the
-    // server clears the flag on the way out (ADR-0057) — so say so before the
-    // move rather than letting a teammate's bookmark quietly 404.
+    // server clears the flag on the way out (ADR-0057) — so clear it locally
+    // in the same update, rather than letting the rail claim a share the
+    // server has already dropped.
     const leavingTeamShare =
       Boolean(conv?.team_visible) &&
       !projects.some((p) => p.id === projectID && p.team_id);
-    if (leavingTeamShare) {
-      const target = projects.find((p) => p.id === projectID);
-      const message = projectID
-        ? `This chat is shared with your team. Moving it to “${target?.name ?? "another project"}”, which isn't shared with your team, will unshare it. Continue?`
-        : "This chat is shared with your team. Removing it from the project will unshare it. Continue?";
-      if (!window.confirm(message)) return;
-    } else if (!projectID && conv?.project_id) {
-      // Unfiling drops a chat back into Temporary, where retention can reach
-      // it — the corollary of "chats in a project don't expire" (Item E3).
-      if (
-        !window.confirm(
-          "This chat will become temporary and expire unless pinned. Remove it from the project?",
-        )
-      )
-        return;
-    }
+    const refile = (c: ConversationSummary): ConversationSummary =>
+      c.id === conversationId
+        ? {
+            ...c,
+            project_id: projectID || undefined,
+            team_visible: leavingTeamShare ? false : c.team_visible,
+          }
+        : c;
     const prev = conversations;
-    setConversations((cs) =>
-      cs.map((c) =>
-        c.id === conversationId
-          ? {
-              ...c,
-              project_id: projectID || undefined,
-              team_visible: leavingTeamShare ? false : c.team_visible,
-            }
-          : c,
-      ),
-    );
+    const prevArchived = archivedConversations;
+    setConversations((cs) => cs.map(refile));
+    setArchivedConversations((cs) => cs.map(refile));
     try {
       const response = await fetch(
         `/api/conversations/${encodeURIComponent(conversationId)}/project`,
@@ -2952,12 +3069,53 @@ export function ChatExperience({
           `Couldn't move the chat (HTTP ${response.status})${response.status === 404 ? " — the server may predate this feature; update the deployment" : ""}.`,
         );
         setConversations(prev);
+        setArchivedConversations(prevArchived);
+        return false;
       }
+      return true;
     } catch (err) {
       console.error("move to project error:", err);
       showRailError("Couldn't move the chat — network error.");
       setConversations(prev);
+      setArchivedConversations(prevArchived);
+      return false;
     }
+  };
+
+  // moveConversationToProject re-files a chat into a project ("" = unfile) —
+  // the drag-and-drop / kebab path (#509 follow-up). Optimistic: the row
+  // moves immediately; a failed POST restores the previous grouping.
+  //
+  // Two of the re-filings need a confirmation first (unsharing a team-shared
+  // chat, and dropping a chat back into Temporary). Those were the app's only
+  // native window.confirm() dialogs; they are now the app's own dialog, so the
+  // project and the team render as chips and "expire unless pinned" has a
+  // button (finding #13). The confirmation is asynchronous, so this function
+  // stages the request and applyMoveToProject does the work — from here on the
+  // confirm, or straight away when none is needed.
+  const moveConversationToProject = async (
+    conversationId: string,
+    projectID: string,
+  ) => {
+    const conv =
+      conversations.find((c) => c.id === conversationId) ??
+      archivedConversations.find((c) => c.id === conversationId);
+    const target = projects.find((p) => p.id === projectID);
+    const confirm = decideMoveConfirm({
+      conversation: conv,
+      projectID,
+      target: target
+        ? { id: target.id, name: target.name, teamShared: Boolean(target.team_id) }
+        : null,
+      // The audience is the team the chat is stamped with; the caller's own
+      // team is the closest name this surface holds for it.
+      team: myTeam,
+    });
+    if (confirm) {
+      setPendingMove({ conversationId, projectID, confirm });
+      return;
+    }
+    await applyMoveToProject(conversationId, projectID);
   };
 
   // The Share dialog (#226 UX, extended by ADR-0057): one dialog, two
@@ -4339,17 +4497,9 @@ export function ChatExperience({
           onRenameProject={(projectID, name) =>
             void renameProject(projectID, name)
           }
-          onDeleteProject={(projectID) => {
-            const p = projects.find((x) => x.id === projectID);
-            if (
-              !window.confirm(
-                `Delete ${p?.name ?? "this project"}? Its team learnings are lost, and every member's chats leave the project and become temporary. Open the project to see the counts and export first.`,
-              )
-            )
-              return;
-            void deleteProject(projectID);
-          }}
+          onDeleteProject={(projectID) => setPendingProjectDelete(projectID)}
           projects={projects}
+          teamSharedChatCounts={teamSharedChatCounts}
           onMoveToProject={(conversationId, projectID) =>
             void moveConversationToProject(conversationId, projectID)
           }
@@ -4363,56 +4513,49 @@ export function ChatExperience({
         ) : null}
 
         {confirmBulkDelete ? (
-          <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
-            <button
-              aria-label="Close delete-all confirmation"
-              className="absolute inset-0 bg-[var(--color-overlay-strong)] backdrop-blur-[2px]"
-              type="button"
-              onClick={() => setConfirmBulkDelete(false)}
-            />
-            <div className="motion-safe:animate-pop-up-base relative z-10 w-full max-w-[26rem] rounded-[1.25rem] border border-[var(--color-border-strong)] bg-[color-mix(in_srgb,var(--composer-surface)_94%,black)] p-5 shadow-[var(--composer-shadow)] backdrop-blur-sm">
-              <h2 className="mb-1 text-[1rem] font-semibold text-[var(--color-text-primary)]">
-                Delete all unpinned chats?
-              </h2>
-              <p className="mb-4 text-[0.875rem] leading-[1.6] text-[var(--color-text-secondary)]">
-                {/* Counts what the server actually deletes: unpinned chats
-                    that are NOT filed in a project. Filing is a keep state —
-                    a project chat is out of the Temporary list this action
-                    clears, and the server exempts it (store.DeleteAllUnpinned)
-                    — so counting one here would over-promise a deletion that
-                    never happens. */}
-                {
-                  conversations.filter((c) => !c.pinned && !c.project_id).length
-                }{" "}
-                conversation
-                {conversations.filter((c) => !c.pinned && !c.project_id)
-                  .length === 1
-                  ? ""
-                  : "s"}{" "}
-                will be removed. Pinned chats — and chats filed in a project —
-                are kept. This cannot be undone.
-              </p>
-              <div className="flex items-center justify-end gap-2">
-                <button
-                  type="button"
-                  className="rounded-full border border-[var(--color-border-strong)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
-                  onClick={() => setConfirmBulkDelete(false)}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  className="rounded-full bg-[var(--color-danger)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-surface-1)] transition hover:opacity-90"
-                  onClick={async () => {
-                    setConfirmBulkDelete(false);
-                    await deleteAllUnpinned();
-                  }}
-                >
-                  Delete all
-                </button>
-              </div>
+          <DialogShell
+            label="Delete all unpinned chats?"
+            scrimLabel="Close delete-all confirmation"
+            onDismiss={() => setConfirmBulkDelete(false)}
+            className="max-w-[26rem] p-5"
+          >
+            <h2 className="mb-1 text-[1rem] font-semibold text-[var(--color-text-primary)]">
+              Delete all unpinned chats?
+            </h2>
+            <p className="mb-4 text-[0.875rem] leading-[1.6] text-[var(--color-text-secondary)]">
+              {/* Counts what the server actually deletes: unpinned chats
+                  that are NOT filed in a project. Filing is a keep state —
+                  a project chat is out of the Temporary list this action
+                  clears, and the server exempts it (store.DeleteAllUnpinned)
+                  — so counting one here would over-promise a deletion that
+                  never happens. */}
+              {countDeletedByDeleteAllUnpinned(conversations)} conversation
+              {countDeletedByDeleteAllUnpinned(conversations) === 1
+                ? ""
+                : "s"}{" "}
+              will be removed. Pinned chats — and chats filed in a project —
+              are kept. This cannot be undone.
+            </p>
+            <div className="flex items-center justify-end gap-2">
+              <button
+                type="button"
+                className="rounded-full border border-[var(--color-border-strong)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
+                onClick={() => setConfirmBulkDelete(false)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="rounded-full bg-[var(--color-danger)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-surface-1)] transition hover:opacity-90"
+                onClick={async () => {
+                  setConfirmBulkDelete(false);
+                  await deleteAllUnpinned();
+                }}
+              >
+                Delete all
+              </button>
             </div>
-          </div>
+          </DialogShell>
         ) : null}
 
         {/* Multi-select bulk delete confirmation (#279). Shows the exact
@@ -4426,6 +4569,67 @@ export function ChatExperience({
             onConfirm={async () => {
               setBulkDeleteConfirm(false);
               await bulkDeleteConversations();
+            }}
+          />
+        ) : null}
+
+        {/* The two re-filing confirmations and the rail kebab's project
+            deletion (finding #13). All three were window.confirm — the only
+            native confirms on this surface: unstyled, titled with the browser
+            origin, blocking the whole tab, unable to render the project or the
+            team as anything but characters in a string, and unable to hold the
+            second action their own copy promises. The copy is unchanged. */}
+        {pendingMove ? (
+          <MoveChatConfirmDialog
+            confirm={pendingMove.confirm}
+            onCancel={() => setPendingMove(null)}
+            onConfirm={() => {
+              const req = pendingMove;
+              setPendingMove(null);
+              void applyMoveToProject(req.conversationId, req.projectID);
+            }}
+            onPinAndConfirm={() => {
+              const req = pendingMove;
+              setPendingMove(null);
+              // The escape hatch for the sentence's own promise: the chat
+              // leaves the project (so retention can reach it) but is pinned
+              // (so retention keeps it). Pinned only once the move actually
+              // stuck — a rejected move leaves the chat exactly as it was,
+              // rather than silently pinning a chat that never left. The
+              // retention sweep is hourly, so the ordering costs nothing.
+              // togglePin flips the current value, so a chat that is already
+              // pinned is left alone.
+              void (async () => {
+                if (!(await applyMoveToProject(req.conversationId, req.projectID)))
+                  return;
+                const conv = conversations.find(
+                  (c) => c.id === req.conversationId,
+                );
+                if (!conv || conv.pinned) return;
+                if (await togglePin(conv)) return;
+                // The move committed and the pin did not, which is exactly the
+                // expiring state this action promises to avoid. It cannot be
+                // rolled back silently — re-filing the chat would undo what the
+                // user asked for — so say which half happened and leave the
+                // one-click fix in their hands.
+                showRailError(
+                  "Removed from the project, but pinning failed — this chat can expire. Pin it from its ⋮ menu.",
+                );
+              })();
+            }}
+          />
+        ) : null}
+
+        {pendingProjectDelete ? (
+          <DeleteProjectConfirmDialog
+            projectName={
+              projects.find((x) => x.id === pendingProjectDelete)?.name
+            }
+            onCancel={() => setPendingProjectDelete(null)}
+            onConfirm={() => {
+              const id = pendingProjectDelete;
+              setPendingProjectDelete(null);
+              void deleteProject(id);
             }}
           />
         ) : null}
@@ -4452,394 +4656,382 @@ export function ChatExperience({
         ) : null}
 
         {promoteMemoryId ? (
-          <div className="fixed inset-0 z-[60] flex items-center justify-center px-4">
-            <button
-              aria-label="Cancel moving the memory"
-              className="absolute inset-0 bg-[var(--color-overlay-strong)] backdrop-blur-[2px]"
-              type="button"
-              onClick={() => setPromoteMemoryId(null)}
-            />
-            <div
-              role="dialog"
-              aria-modal="true"
-              aria-label="Move to team learnings"
-              className="relative z-10 w-full max-w-[24rem] rounded-[1rem] border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] p-5 shadow-[var(--shadow-md)]"
-            >
-              <h2 className="mb-1 text-[0.95rem] font-semibold text-[var(--color-text-primary)]">
-                Move to team learnings
-              </h2>
-              <p className="mb-3 text-[0.8rem] leading-[1.5] text-[var(--color-text-secondary)]">
-                Pick the project this belongs to. It leaves your personal
-                memory and every member of that project sees it.
-              </p>
-              <div className="grid gap-1">
-                {teamSharedProjects.map((p) => (
-                  <button
-                    key={p.id}
-                    type="button"
-                    className="rounded-md border border-[var(--color-border)] px-3 py-2 text-left text-[0.85rem] text-[var(--color-text-primary)] transition hover:border-[var(--color-accent)]"
-                    onClick={() =>
-                      void promoteMemoryToProject(promoteMemoryId, p.id)
-                    }
-                  >
-                    {p.name}
-                    <span className="ml-2 text-[0.7rem] text-[var(--color-text-muted)]">
-                      {p.team_id}
-                    </span>
-                  </button>
-                ))}
-              </div>
-              <div className="mt-4 flex justify-end">
+          <DialogShell
+            label="Move to team learnings"
+            scrimLabel="Cancel moving the memory"
+            onDismiss={() => setPromoteMemoryId(null)}
+            layer="stacked"
+            className="max-w-[24rem] p-5"
+          >
+            <h2 className="mb-1 text-[0.95rem] font-semibold text-[var(--color-text-primary)]">
+              Move to team learnings
+            </h2>
+            <p className="mb-3 text-[0.8rem] leading-[1.5] text-[var(--color-text-secondary)]">
+              Pick the project this belongs to. It leaves your personal
+              memory and every member of that project sees it.
+            </p>
+            <div className="grid gap-1">
+              {teamSharedProjects.map((p) => (
                 <button
+                  key={p.id}
                   type="button"
-                  className="rounded-full border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.78rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)]"
-                  onClick={() => setPromoteMemoryId(null)}
+                  className="rounded-md border border-[var(--color-border)] px-3 py-2 text-left text-[0.85rem] text-[var(--color-text-primary)] transition hover:border-[var(--color-accent)]"
+                  onClick={() =>
+                    void promoteMemoryToProject(promoteMemoryId, p.id)
+                  }
                 >
-                  Cancel
+                  {p.name}
+                  <span className="ml-2 text-[0.7rem] text-[var(--color-text-muted)]">
+                    {p.team_id}
+                  </span>
                 </button>
-              </div>
+              ))}
             </div>
-          </div>
+            <div className="mt-4 flex justify-end">
+              <button
+                type="button"
+                className="rounded-full border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.78rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)]"
+                onClick={() => setPromoteMemoryId(null)}
+              >
+                Cancel
+              </button>
+            </div>
+          </DialogShell>
         ) : null}
 
         {memoryManagerOpen ? (
-          <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
-            <button
-              aria-label="Close memories"
-              className="absolute inset-0 bg-[var(--color-overlay-strong)] backdrop-blur-[2px]"
-              type="button"
-              onClick={() => setMemoryManagerOpen(false)}
-            />
-            <div className="motion-safe:animate-pop-up-base relative z-10 flex max-h-[88vh] w-full max-w-[34rem] flex-col gap-4 overflow-hidden rounded-[1.25rem] border border-[var(--color-border-strong)] bg-[color-mix(in_srgb,var(--composer-surface)_94%,black)] p-5 shadow-[var(--composer-shadow)] backdrop-blur-sm">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <h2 className="text-[1rem] font-semibold text-[var(--color-text-primary)]">
-                    Memories
-                  </h2>
-                  <p className="mt-1 text-[0.8125rem] leading-[1.5] text-[var(--color-text-secondary)]">
-                    Saved memories are scoped to {userEmail || "this user"} and
-                    are added to future chats.
-                  </p>
-                </div>
-                <CloseButton
-                  label="Close memories"
-                  onClick={() => setMemoryManagerOpen(false)}
+          <DialogShell
+            label="Memories"
+            scrimLabel="Close memories"
+            onDismiss={() => setMemoryManagerOpen(false)}
+            className="flex max-h-[88vh] max-w-[34rem] flex-col gap-4 overflow-hidden p-5"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-[1rem] font-semibold text-[var(--color-text-primary)]">
+                  Memories
+                </h2>
+                {/* The subtitle describes the VISIBLE tab. It used to
+                    describe personal memories on all three, so on Team
+                    learnings neither half of it was true — those are scoped
+                    to the project and its team, and injected only into that
+                    project's chats (finding #18). */}
+                <p className="mt-1 text-[0.8125rem] leading-[1.5] text-[var(--color-text-secondary)]">
+                  {memoryModalSubtitle(activeMemoryView, {
+                    userEmail,
+                    projectName: activeProjectForMemory?.name,
+                  })}
+                </p>
+              </div>
+              <CloseButton
+                label="Close memories"
+                onClick={() => setMemoryManagerOpen(false)}
+              />
+            </div>
+
+            {/* Knowledge-graph tab (#523): a compact derived view over the
+                same records; the record list stays the default. The third
+                tab appears only inside a project — it is that project's
+                team learnings, the same list (and the same permissions) as
+                the project home's panel, reachable without leaving the
+                conversation (Item D4). */}
+            <div className="flex items-center gap-1">
+              {(
+                [
+                  "list",
+                  "graph",
+                  ...(activeProjectForMemory ? (["team"] as const) : []),
+                ] as const
+              ).map((view) => {
+                // Falls back to what is actually showing — see
+                // activeMemoryView.
+                const active = activeMemoryView;
+                return (
+                <button
+                  key={view}
+                  type="button"
+                  aria-current={active === view ? "true" : undefined}
+                  className={`rounded-full border px-3 py-1 text-[0.75rem] transition ${
+                    active === view
+                      ? "border-[var(--color-text-primary)] text-[var(--color-text-primary)]"
+                      : "border-[var(--color-border-strong)] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
+                  }`}
+                  onClick={() => setMemoryView(view)}
+                >
+                  {view === "list"
+                    ? "My memory"
+                    : view === "graph"
+                      ? "Graph"
+                      : "Team learnings"}
+                </button>
+                );
+              })}
+            </div>
+
+            {memoryView === "team" && activeProjectForMemory ? (
+              <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+                <TeamLearningsPanel
+                  projectId={activeProjectForMemory.id}
+                  projectOwner={
+                    projects.find((p) => p.id === activeProjectForMemory.id)
+                      ?.owner_email ?? ""
+                  }
+                  userEmail={userEmail}
+                  teamShared={activeProjectForMemory.teamShared}
                 />
               </div>
-
-              {/* Knowledge-graph tab (#523): a compact derived view over the
-                  same records; the record list stays the default. The third
-                  tab appears only inside a project — it is that project's
-                  team learnings, the same list (and the same permissions) as
-                  the project home's panel, reachable without leaving the
-                  conversation (Item D4). */}
-              <div className="flex items-center gap-1">
-                {(
-                  [
-                    "list",
-                    "graph",
-                    ...(activeProjectForMemory ? (["team"] as const) : []),
-                  ] as const
-                ).map((view) => {
-                  // memoryView survives closing the modal and switching
-                  // conversations, but the "team" tab only exists inside a
-                  // project — so reopening it from a project-less chat left
-                  // NO tab highlighted while the personal list rendered
-                  // underneath. Fall back to what is actually showing.
-                  const active =
-                    memoryView === "team" && !activeProjectForMemory
-                      ? "list"
-                      : memoryView;
-                  return (
-                  <button
-                    key={view}
-                    type="button"
-                    aria-current={active === view ? "true" : undefined}
-                    className={`rounded-full border px-3 py-1 text-[0.75rem] transition ${
-                      active === view
-                        ? "border-[var(--color-text-primary)] text-[var(--color-text-primary)]"
-                        : "border-[var(--color-border-strong)] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
-                    }`}
-                    onClick={() => setMemoryView(view)}
-                  >
-                    {view === "list"
-                      ? "My memory"
-                      : view === "graph"
-                        ? "Graph"
-                        : "Team learnings"}
-                  </button>
-                  );
-                })}
-              </div>
-
-              {memoryView === "team" && activeProjectForMemory ? (
-                <div className="min-h-0 flex-1 overflow-y-auto pr-1">
-                  <TeamLearningsPanel
-                    projectId={activeProjectForMemory.id}
-                    projectOwner={
-                      projects.find((p) => p.id === activeProjectForMemory.id)
-                        ?.owner_email ?? ""
-                    }
-                    userEmail={userEmail}
-                    teamShared={activeProjectForMemory.teamShared}
+            ) : memoryView === "graph" ? (
+              <MemoryGraphView />
+            ) : (
+              <>
+                <div className="grid gap-2">
+                  <textarea
+                    className="min-h-24 w-full resize-y rounded-[0.9rem] border border-[var(--color-border-strong)] bg-transparent px-3 py-2 text-[0.875rem] leading-[1.5] text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-muted)] focus:border-[var(--color-accent)]"
+                    placeholder="Remember that deal names may contain intentional typos."
+                    value={memoryDraft}
+                    onChange={(event) => setMemoryDraft(event.target.value)}
                   />
-                </div>
-              ) : memoryView === "graph" ? (
-                <MemoryGraphView />
-              ) : (
-                <>
-                  <div className="grid gap-2">
-                    <textarea
-                      className="min-h-24 w-full resize-y rounded-[0.9rem] border border-[var(--color-border-strong)] bg-transparent px-3 py-2 text-[0.875rem] leading-[1.5] text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-muted)] focus:border-[var(--color-accent)]"
-                      placeholder="Remember that deal names may contain intentional typos."
-                      value={memoryDraft}
-                      onChange={(event) => setMemoryDraft(event.target.value)}
-                    />
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div className="flex items-center gap-2">
-                        <label
-                          className="text-[0.72rem] text-[var(--color-text-muted)]"
-                          htmlFor="memory-kind"
-                        >
-                          Kind
-                        </label>
-                        <select
-                          id="memory-kind"
-                          className="rounded-md border border-[var(--color-border-strong)] bg-transparent px-2 py-1 text-[0.75rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
-                          value={memoryKindDraft}
-                          onChange={(event) =>
-                            setMemoryKindDraft(event.target.value)
-                          }
-                        >
-                          {MEMORY_KINDS.map((k) => (
-                            <option key={k} value={k}>
-                              {k}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        {editingMemoryId ? (
-                          <button
-                            type="button"
-                            className="rounded-full border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
-                            onClick={() => {
-                              setEditingMemoryId(null);
-                              setMemoryDraft("");
-                            }}
-                          >
-                            Cancel edit
-                          </button>
-                        ) : null}
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <label
+                        className="text-[0.72rem] text-[var(--color-text-muted)]"
+                        htmlFor="memory-kind"
+                      >
+                        Kind
+                      </label>
+                      <select
+                        id="memory-kind"
+                        className="rounded-md border border-[var(--color-border-strong)] bg-transparent px-2 py-1 text-[0.75rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
+                        value={memoryKindDraft}
+                        onChange={(event) =>
+                          setMemoryKindDraft(event.target.value)
+                        }
+                      >
+                        {MEMORY_KINDS.map((k) => (
+                          <option key={k} value={k}>
+                            {k}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {editingMemoryId ? (
                         <button
                           type="button"
-                          className="rounded-full bg-[var(--color-text-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-surface-1)] transition hover:opacity-80 disabled:opacity-40"
-                          disabled={!memoryDraft.trim() || isSavingMemory}
-                          onClick={() => void saveMemory()}
+                          className="rounded-full border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
+                          onClick={() => {
+                            setEditingMemoryId(null);
+                            setMemoryDraft("");
+                          }}
                         >
-                          {isSavingMemory
-                            ? "Saving..."
-                            : editingMemoryId
-                              ? "Save changes"
-                              : "Add memory"}
+                          Cancel edit
                         </button>
-                      </div>
+                      ) : null}
+                      <button
+                        type="button"
+                        className="rounded-full bg-[var(--color-text-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-surface-1)] transition hover:opacity-80 disabled:opacity-40"
+                        disabled={!memoryDraft.trim() || isSavingMemory}
+                        onClick={() => void saveMemory()}
+                      >
+                        {isSavingMemory
+                          ? "Saving..."
+                          : editingMemoryId
+                            ? "Save changes"
+                            : "Add memory"}
+                      </button>
                     </div>
                   </div>
+                </div>
 
-                  {memoryError ? (
-                    <div className="rounded-[0.75rem] border border-[var(--color-danger,#dc2626)] bg-[color-mix(in_srgb,var(--color-danger,#dc2626)_10%,transparent)] px-3 py-2 text-[0.75rem] text-[var(--color-danger,#dc2626)]">
-                      {memoryError}
-                    </div>
-                  ) : null}
+                {memoryError ? (
+                  <div className="rounded-[0.75rem] border border-[var(--color-danger,#dc2626)] bg-[color-mix(in_srgb,var(--color-danger,#dc2626)_10%,transparent)] px-3 py-2 text-[0.75rem] text-[var(--color-danger,#dc2626)]">
+                    {memoryError}
+                  </div>
+                ) : null}
 
-                  <div className="min-h-0 flex-1 overflow-y-auto pr-1">
-                    {isLoadingMemories ? (
-                      <p className="py-4 text-[0.8125rem] text-[var(--color-text-muted)]">
-                        Loading memories...
-                      </p>
-                    ) : memories.length === 0 ? (
-                      <p className="rounded-[0.9rem] border border-dashed border-[var(--color-border)] px-3 py-4 text-[0.8125rem] leading-[1.5] text-[var(--color-text-muted)]">
-                        No memories yet. Add one manually or tell chat “remember
-                        this: ...”.
-                      </p>
-                    ) : (
-                      <div className="grid gap-2">
-                        {memories.map((memory) => {
-                          const retired = memory.retired_at != null;
-                          const sourceLabel =
-                            memory.source === "chat"
-                              ? memory.origin === "auto"
-                                ? "Auto-extracted from chat"
-                                : "Saved from chat"
-                              : memory.source === "proposed"
-                                ? "Proposed"
-                                : "Manual";
-                          const learned = memory.learned_at
-                            ? new Date(
-                                memory.learned_at * 1000,
-                              ).toLocaleDateString()
-                            : null;
-                          return (
-                            <div
-                              key={memory.id}
-                              className={`rounded-[0.9rem] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] p-3 ${retired ? "opacity-60" : ""}`}
-                            >
-                              <p className="whitespace-pre-wrap text-[0.875rem] leading-[1.5] text-[var(--color-text-primary)]">
-                                {memory.pinned ? (
-                                  <span title="Pinned">📌 </span>
+                <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+                  {isLoadingMemories ? (
+                    <p className="py-4 text-[0.8125rem] text-[var(--color-text-muted)]">
+                      Loading memories...
+                    </p>
+                  ) : memories.length === 0 ? (
+                    <p className="rounded-[0.9rem] border border-dashed border-[var(--color-border)] px-3 py-4 text-[0.8125rem] leading-[1.5] text-[var(--color-text-muted)]">
+                      No memories yet. Add one manually or tell chat “remember
+                      this: ...”.
+                    </p>
+                  ) : (
+                    <div className="grid gap-2">
+                      {memories.map((memory) => {
+                        const retired = memory.retired_at != null;
+                        const sourceLabel =
+                          memory.source === "chat"
+                            ? memory.origin === "auto"
+                              ? "Auto-extracted from chat"
+                              : "Saved from chat"
+                            : memory.source === "proposed"
+                              ? "Proposed"
+                              : "Manual";
+                        const learned = memory.learned_at
+                          ? new Date(
+                              memory.learned_at * 1000,
+                            ).toLocaleDateString()
+                          : null;
+                        return (
+                          <div
+                            key={memory.id}
+                            className={`rounded-[0.9rem] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] p-3 ${retired ? "opacity-60" : ""}`}
+                          >
+                            <p className="whitespace-pre-wrap text-[0.875rem] leading-[1.5] text-[var(--color-text-primary)]">
+                              {memory.pinned ? (
+                                <span title="Pinned">📌 </span>
+                              ) : null}
+                              {memory.content}
+                            </p>
+                            <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[0.7rem] text-[var(--color-text-muted)]">
+                              <span>
+                                {memory.kind && memory.kind !== "fact" ? (
+                                  <span className="mr-1.5 rounded-full border border-[var(--color-border)] px-1.5 py-0.5">
+                                    {memory.kind}
+                                  </span>
                                 ) : null}
-                                {memory.content}
-                              </p>
-                              <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[0.7rem] text-[var(--color-text-muted)]">
-                                <span>
-                                  {memory.kind && memory.kind !== "fact" ? (
-                                    <span className="mr-1.5 rounded-full border border-[var(--color-border)] px-1.5 py-0.5">
-                                      {memory.kind}
-                                    </span>
-                                  ) : null}
-                                  {sourceLabel}
-                                  {learned ? ` · learned ${learned}` : ""}
-                                  {retired ? " · retired" : ""}
-                                </span>
-                                <div className="flex items-center gap-3">
-                                  {retired ? (
+                                {sourceLabel}
+                                {learned ? ` · learned ${learned}` : ""}
+                                {retired ? " · retired" : ""}
+                              </span>
+                              <div className="flex items-center gap-3">
+                                {retired ? (
+                                  <button
+                                    type="button"
+                                    className="hover:text-[var(--color-text-primary)]"
+                                    onClick={() =>
+                                      void patchMemory(memory.id, {
+                                        retired: false,
+                                      })
+                                    }
+                                  >
+                                    Restore
+                                  </button>
+                                ) : (
+                                  <>
                                     <button
                                       type="button"
                                       className="hover:text-[var(--color-text-primary)]"
                                       onClick={() =>
                                         void patchMemory(memory.id, {
-                                          retired: false,
+                                          pinned: !memory.pinned,
                                         })
                                       }
                                     >
-                                      Restore
+                                      {memory.pinned ? "Unpin" : "Pin"}
                                     </button>
-                                  ) : (
-                                    <>
+                                    <button
+                                      type="button"
+                                      className="hover:text-[var(--color-text-primary)]"
+                                      onClick={() => {
+                                        setEditingMemoryId(memory.id);
+                                        setMemoryDraft(memory.content);
+                                        setMemoryKindDraft(
+                                          memory.kind ?? "fact",
+                                        );
+                                      }}
+                                    >
+                                      Edit
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="hover:text-[var(--color-text-primary)]"
+                                      title="Keep for audit, stop injecting into chats"
+                                      onClick={() =>
+                                        void patchMemory(memory.id, {
+                                          retired: true,
+                                        })
+                                      }
+                                    >
+                                      Retire
+                                    </button>
+                                    {/* Promote a personal memory the whole
+                                        team should have (Item D5). Only for
+                                        real, saved memories — a proposal has
+                                        not been accepted yet — and only when
+                                        there is a team-shared project to
+                                        promote it into. */}
+                                    {memory.source !== "proposed" &&
+                                    teamSharedProjects.length > 0 ? (
                                       <button
                                         type="button"
                                         className="hover:text-[var(--color-text-primary)]"
-                                        onClick={() =>
-                                          void patchMemory(memory.id, {
-                                            pinned: !memory.pinned,
-                                          })
-                                        }
-                                      >
-                                        {memory.pinned ? "Unpin" : "Pin"}
-                                      </button>
-                                      <button
-                                        type="button"
-                                        className="hover:text-[var(--color-text-primary)]"
+                                        title="Move this memory into a project's team learnings"
                                         onClick={() => {
-                                          setEditingMemoryId(memory.id);
-                                          setMemoryDraft(memory.content);
-                                          setMemoryKindDraft(
-                                            memory.kind ?? "fact",
-                                          );
+                                          if (teamSharedProjects.length === 1)
+                                            void promoteMemoryToProject(
+                                              memory.id,
+                                              teamSharedProjects[0].id,
+                                            );
+                                          else setPromoteMemoryId(memory.id);
                                         }}
                                       >
-                                        Edit
+                                        Move to team learnings
                                       </button>
-                                      <button
-                                        type="button"
-                                        className="hover:text-[var(--color-text-primary)]"
-                                        title="Keep for audit, stop injecting into chats"
-                                        onClick={() =>
-                                          void patchMemory(memory.id, {
-                                            retired: true,
-                                          })
-                                        }
-                                      >
-                                        Retire
-                                      </button>
-                                      {/* Promote a personal memory the whole
-                                          team should have (Item D5). Only for
-                                          real, saved memories — a proposal has
-                                          not been accepted yet — and only when
-                                          there is a team-shared project to
-                                          promote it into. */}
-                                      {memory.source !== "proposed" &&
-                                      teamSharedProjects.length > 0 ? (
-                                        <button
-                                          type="button"
-                                          className="hover:text-[var(--color-text-primary)]"
-                                          title="Move this memory into a project's team learnings"
-                                          onClick={() => {
-                                            if (teamSharedProjects.length === 1)
-                                              void promoteMemoryToProject(
-                                                memory.id,
-                                                teamSharedProjects[0].id,
-                                              );
-                                            else setPromoteMemoryId(memory.id);
-                                          }}
-                                        >
-                                          Move to team learnings
-                                        </button>
-                                      ) : null}
-                                    </>
-                                  )}
-                                  <button
-                                    type="button"
-                                    className="hover:text-[var(--color-danger)]"
-                                    onClick={() => void deleteMemory(memory.id)}
-                                  >
-                                    Delete
-                                  </button>
-                                </div>
+                                    ) : null}
+                                  </>
+                                )}
+                                <button
+                                  type="button"
+                                  className="hover:text-[var(--color-danger)]"
+                                  onClick={() => void deleteMemory(memory.id)}
+                                >
+                                  Delete
+                                </button>
                               </div>
                             </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                </>
-              )}
-            </div>
-          </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+          </DialogShell>
         ) : null}
 
         {confirmSummarize ? (
-          <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
-            <button
-              aria-label="Close compact confirmation"
-              className="absolute inset-0 bg-[var(--color-overlay-strong)] backdrop-blur-[2px]"
-              type="button"
-              onClick={() => setConfirmSummarize(false)}
-            />
-            <div className="motion-safe:animate-pop-up-base relative z-10 w-full max-w-[26rem] rounded-[1.25rem] border border-[var(--color-border-strong)] bg-[color-mix(in_srgb,var(--composer-surface)_94%,black)] p-5 shadow-[var(--composer-shadow)] backdrop-blur-sm">
-              <h2 className="mb-1 text-[1rem] font-semibold text-[var(--color-text-primary)]">
-                Compact this conversation?
-              </h2>
-              <p className="mb-4 text-[0.875rem] leading-[1.6] text-[var(--color-text-secondary)]">
-                Long conversations get expensive and can hit the model&apos;s
-                context window. Compacting replaces earlier turns with a short
-                summary so the next turn stays affordable and fits. The
-                originals collapse below a banner — you can expand them again
-                anytime.
-              </p>
-              <div className="flex items-center justify-end gap-2">
-                <button
-                  type="button"
-                  className="rounded-full border border-[var(--color-border-strong)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
-                  onClick={() => setConfirmSummarize(false)}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  className="rounded-full bg-[var(--color-primary)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-on-primary)] transition hover:opacity-90"
-                  onClick={() => {
-                    setConfirmSummarize(false);
-                    void summarizeConversation();
-                  }}
-                >
-                  Compact
-                </button>
-              </div>
+          <DialogShell
+            label="Compact this conversation?"
+            scrimLabel="Close compact confirmation"
+            onDismiss={() => setConfirmSummarize(false)}
+            className="max-w-[26rem] p-5"
+          >
+            <h2 className="mb-1 text-[1rem] font-semibold text-[var(--color-text-primary)]">
+              Compact this conversation?
+            </h2>
+            <p className="mb-4 text-[0.875rem] leading-[1.6] text-[var(--color-text-secondary)]">
+              Long conversations get expensive and can hit the model&apos;s
+              context window. Compacting replaces earlier turns with a short
+              summary so the next turn stays affordable and fits. The
+              originals collapse below a banner — you can expand them again
+              anytime.
+            </p>
+            <div className="flex items-center justify-end gap-2">
+              <button
+                type="button"
+                className="rounded-full border border-[var(--color-border-strong)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
+                onClick={() => setConfirmSummarize(false)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="rounded-full bg-[var(--color-primary)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-on-primary)] transition hover:opacity-90"
+                onClick={() => {
+                  setConfirmSummarize(false);
+                  void summarizeConversation();
+                }}
+              >
+                Compact
+              </button>
             </div>
-          </div>
+          </DialogShell>
         ) : null}
 
         {shareDialog ? (
@@ -4850,14 +5042,23 @@ export function ChatExperience({
               null
             }
             project={
+              // Resolved from whichever list holds the chat — the dialog opens
+              // for archived conversations too, and reading only the active
+              // list left the project blank (and the move affordance wrong)
+              // for exactly those.
               projects.find(
                 (p) =>
                   p.id ===
-                  (conversations.find((c) => c.id === shareDialog.id)
+                  ((conversations.find((c) => c.id === shareDialog.id) ??
+                    archivedConversations.find((c) => c.id === shareDialog.id))
                     ?.project_id ?? ""),
               ) ?? null
             }
             myTeam={myTeam}
+            userEmail={userEmail}
+            isAdmin={myTeamAdmin}
+            teamSharedProjects={teamSharedProjects}
+            error={railError}
             busy={shareBusy}
             copied={shareLinkCopied}
             buildShareUrl={buildShareUrl}
@@ -4870,10 +5071,20 @@ export function ChatExperience({
             }}
             onStopLink={(c) => void unshareConversation(c)}
             onSetTeamShared={(c, visible) => void setTeamShared(c, visible)}
+            // Deliberately does NOT close the dialog: the move is optimistic
+            // upstream, so staying open is what lets the team toggle go live
+            // in place instead of sending the user back to re-open Share.
+            onMoveToProject={(conversationId, projectID) =>
+              void moveConversationToProject(conversationId, projectID)
+            }
             onOpenProjectSettings={(projectID) => {
               setShareDialog(null);
               setTeamChatView(null);
               setProjectHome({ id: projectID, settings: true });
+            }}
+            onOpenProjects={() => {
+              setShareDialog(null);
+              setProjectsModal({});
             }}
             onClose={() => setShareDialog(null)}
           />
@@ -4896,44 +5107,40 @@ export function ChatExperience({
           />
         ) : null}
         {pendingDeleteConversation ? (
-          <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
-            <button
-              aria-label="Close delete confirmation"
-              className="absolute inset-0 bg-[var(--color-overlay-strong)] backdrop-blur-[2px]"
-              type="button"
-              onClick={() => setPendingDeleteConversation(null)}
-            />
-
-            <div className="motion-safe:animate-pop-up-base relative z-10 w-full max-w-[25rem] rounded-[1.25rem] border border-[var(--color-border-strong)] bg-[color-mix(in_srgb,var(--composer-surface)_94%,black)] p-5 shadow-[var(--composer-shadow)] backdrop-blur-sm">
-              <div className="mb-4 grid gap-2">
-                <h2 className="text-[1rem] font-semibold text-[var(--color-text-primary)]">
-                  Delete chat?
-                </h2>
-                <p className="text-[0.875rem] leading-[1.6] text-[var(--color-text-secondary)]">
-                  Are you sure you want to delete{" "}
-                  <strong>&quot;{pendingDeleteConversation.title}&quot;</strong>
-                  ?
-                </p>
-              </div>
-
-              <div className="flex items-center justify-end gap-2">
-                <button
-                  className="rounded-full border border-[var(--color-border-strong)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
-                  type="button"
-                  onClick={() => setPendingDeleteConversation(null)}
-                >
-                  Cancel
-                </button>
-                <button
-                  className="rounded-full bg-[var(--color-primary)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-on-primary)] transition hover:opacity-90"
-                  type="button"
-                  onClick={() => void confirmDeleteConversation()}
-                >
-                  Delete
-                </button>
-              </div>
+          <DialogShell
+            label="Delete chat?"
+            scrimLabel="Close delete confirmation"
+            onDismiss={() => setPendingDeleteConversation(null)}
+            className="max-w-[25rem] p-5"
+          >
+            <div className="mb-4 grid gap-2">
+              <h2 className="text-[1rem] font-semibold text-[var(--color-text-primary)]">
+                Delete chat?
+              </h2>
+              <p className="text-[0.875rem] leading-[1.6] text-[var(--color-text-secondary)]">
+                Are you sure you want to delete{" "}
+                <strong>&quot;{pendingDeleteConversation.title}&quot;</strong>
+                ?
+              </p>
             </div>
-          </div>
+
+            <div className="flex items-center justify-end gap-2">
+              <button
+                className="rounded-full border border-[var(--color-border-strong)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
+                type="button"
+                onClick={() => setPendingDeleteConversation(null)}
+              >
+                Cancel
+              </button>
+              <button
+                className="rounded-full bg-[var(--color-primary)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-on-primary)] transition hover:opacity-90"
+                type="button"
+                onClick={() => void confirmDeleteConversation()}
+              >
+                Delete
+              </button>
+            </div>
+          </DialogShell>
         ) : null}
 
         <main
@@ -5073,6 +5280,21 @@ export function ChatExperience({
                   <Icon name="lock" className="size-3" />
                   <span className="hidden sm:inline">Lockdown</span>
                 </span>
+              ) : null}
+              {/* "Shared with team" in the chat header (finding #4). The rail
+                  row and the project-home row already badge a team-shared
+                  chat, and both are gone exactly when it matters: the rail
+                  collapses, and under 900px it is a drawer. The header is the
+                  one surface still on screen while you type, so this is where
+                  someone composing into a shared chat can see that their team
+                  will be able to read it — and the badge is the button that
+                  opens the dialog controlling it. Not gated on ownership: the
+                  chip states a fact about the chat, not a permission. */}
+              {activeConversation?.team_visible ? (
+                <TeamSharedChip
+                  audience={activeChatTeamAudience}
+                  onClick={() => openShareDialog(activeConversation)}
+                />
               ) : null}
             </div>
           ) : null}
@@ -5227,7 +5449,11 @@ export function ChatExperience({
                   </button>
                 </div>
               ) : null}
-              <div className="pointer-events-none absolute inset-x-0 -top-16 h-16 bg-[var(--sticky-fade)]" />
+              {/* The image: hint matters — --sticky-fade is a gradient, and the
+                  un-hinted arbitrary-value form emits background-color, which
+                  drops gradient values (see Composer.tsx's own note). Without
+                  it this fade painted nothing at all. */}
+              <div className="pointer-events-none absolute inset-x-0 -top-16 h-16 bg-[image:var(--sticky-fade)]" />
               <div className="mx-auto mb-1 w-full max-w-[53rem] px-1 sm:mb-1.5 sm:px-0">
                 {showStats ? (
                   <ConversationTotalsChip

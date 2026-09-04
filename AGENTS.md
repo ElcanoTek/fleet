@@ -287,6 +287,13 @@ same PR.
   host-side, a read-only staged tree under the workspace root both sandbox
   backends mount, the reconciler, the size cap):
   [`docs/SHARED-FILES.md`](docs/SHARED-FILES.md)
+- **Attachment scoping** (why the uploads tree is mounted into no sandbox, how
+  a turn's attachments reach one — staged into that conversation's own
+  workspace on both backends — the per-owner upload segment that makes
+  containment the ownership check, and the injected-context column that keeps
+  server-added context out of the user's message text):
+  [`docs/ATTACHMENT-SCOPING.md`](docs/ATTACHMENT-SCOPING.md) +
+  [ADR-0058](docs/adr/0058-per-conversation-attachment-scoping.md)
 - **Task titles** (the operator-facing display label, and why it is NOT the
   unique import/export `name` column): [`docs/TASK-TITLES.md`](docs/TASK-TITLES.md)
 - **Sharing work inside a project** (team-shared chats and the read-only view

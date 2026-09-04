@@ -81,6 +81,136 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Teammates lost access to their own chats when a project stopped being
+  shared.** Unticking "Share with my team" on a project unshared the owner's
+  chats, as it should — and took every *teammate's* chats in that project out
+  of their own rail. Not into Temporary, not into Archived: nowhere. Nothing
+  had been deleted (re-ticking the owner's checkbox brought them straight
+  back), which is exactly what made it bad: the rail lists chats through the
+  projects the viewer can see, so a chat still filed in a project the viewer
+  has lost access to is rendered by nothing at all, and a member lost
+  conversations *they own* with no trace and no explanation for as long as
+  someone else's setting stayed off. The invariant now enforced is that **a
+  chat's `project_id` never points at a project its owner cannot see**: every
+  path that takes a member's access away unfiles their chats — `project_id`
+  cleared, back into their own Temporary list — in the same transaction as the
+  revocation, and never deletes one to get there. That covers unticking the
+  share, re-pointing a project at a different team, deleting the project,
+  leaving a team, an admin moving someone between teams, handing a project
+  over, and deleting an account. The two team paths share one choke point and
+  the two project paths share one statement, so a third way to change a team
+  cannot quietly miss it; migration 055 unfiles rows already stranded. An
+  unfiled chat is temporary again — the honest cost, and precisely what
+  deleting a project has always done — so the owner's untick now confirms
+  first, quoting how many chats from teammates will move.
+
+- **The Share dialog's team toggle looked broken rather than unavailable, and
+  only described the fix.** In every state where team sharing is not possible —
+  a chat in no project, a chat in a personal project, a caller with no team —
+  the checkbox rendered enabled and simply did not respond. It is now genuinely
+  inert with one treatment applied to all of them (dimmed, `not-allowed`,
+  `aria-disabled`), and the section *offers* the fix instead of only naming it:
+  **Move to project** listing only your team-shared projects, which moves the
+  chat and enables the toggle in the same dialog; "Share this project with your
+  team" for a personal project you own; who to ask when you don't; and the
+  admin pointer when you have no team. It is never live in a state the server
+  would refuse, and a refusal now shows the server's own reason in the dialog
+  rather than in a toast behind it.
+
+- **The read-only team view served links to files it will not share.** Team
+  sharing exposes the transcript only, and the view said so for images — with a
+  placeholder reading "couldn't load image", describing an error when nothing
+  had failed — while workspace file links stayed live and opened a 404. Those
+  hrefs now render as plain text with the filename and a "(file not shared)"
+  marker, in the team view and in a public share link alike, since neither
+  reader can fetch owner-scoped bytes. The Branch call to action keeps its
+  button and its explainer word for word and drops its hard-edged plate for the
+  same gradient fade the real composer uses to stay legible over a scrolling
+  transcript.
+
+- **"Delete all unpinned" looked like it had taken the projects with it.** The
+  server was right — project chats are exempt and survived a reload — but the
+  client removed every project chat from the rail on confirm, so until the page
+  was reloaded the deletion appeared to have swept them too, at exactly the
+  moment a user would panic. The local update now uses the server's own
+  predicate (unpinned **and** unfiled), shares that predicate with the number
+  the confirm quotes so the two cannot drift, and refetches afterwards so the
+  server stays the authority.
+
+- **Five destructive confirms were the browser's, not the app's.** Moving a
+  team-shared chat to a project that isn't shared, removing a chat from a
+  project, deleting a project, unsharing on save, and transferring ownership
+  all used `window.confirm()` — unstyled, titled with the origin, blocking the
+  whole tab, unable to render a project or team as anything but quoted text,
+  and unable to hold a second action. All five now use in-app dialogs with the
+  copy unchanged, and "Remove from project" — whose copy promises the chat will
+  expire unless pinned — finally offers **Pin it and remove** beside it.
+
+- **Projects surfaces described themselves from the wrong vantage.** A
+  team-shared project was indistinguishable from a personal one in the rail
+  (the tester resorted to renaming projects by hand); a teammate's empty
+  project said "No chats yet" while its home listed two chats their team had
+  shared; the Sources panel promised files that exist and are withheld by
+  design; the "Team" section's empty state told an owner to share a chat from
+  its menu directly beneath two chats they had already shared that way; and the
+  header chip said "Shared with team" without ever naming which. Each now says
+  what is true of the reader: the labelled two-people badge on shared project
+  rows, a count of what the team shared, "Files from **your** chats", "Shared by
+  your team", and the team named — including the line an owner needs when an
+  admin has moved them out of the team their project is shared with.
+
+- **Team-learnings rows could read as one click from permanent deletion.**
+  Delete swapped the row to "Delete for good · Keep" with no dialog, and the
+  pending state survived other actions — so after retiring an entry the row sat
+  there offering "Delete for good" with nothing pending and a "Keep" that did
+  nothing. Delete now opens a real confirm, the pending state is cleared by
+  every action, and the five text links per entry collapse into the same
+  overflow menu chat rows use, with pinned entries sorted first behind a pin
+  glyph.
+
+- **Smaller honesty fixes.** Memory capture preselects **Team learnings**
+  inside a team-shared project instead of filing a project fact privately on a
+  lazy click. The memories modal's subtitle follows the visible tab rather than
+  describing personal memories on the Team learnings tab. An admin
+  user-delete refusal renders in the editor panel where the action was taken,
+  wrapped, instead of as one unwrapped line in a table row that gave the whole
+  users table a horizontal scrollbar — and it now *performs* the transfer it
+  asks for, picker and all, then retries the delete. An admin is usually
+  neither the project's owner nor a member of its team, so every surface that
+  could have shown them the transfer control answered with a 404; the member
+  list that backs the picker now authorizes an admin the way the transfer route
+  already did. Chat previews strip LaTeX and pipe-table syntax instead of
+  showing raw markup. And the composer's fade over the scrolling transcript
+  painted nothing at all, because its gradient was emitted as a
+  `background-color`.
+
+- **A branched chat could read the original owner's attached file.** Branching
+  a teammate's team-shared chat copies the transcript only — no tool calls, no
+  tool results — but the copied *user message* still carried the block the
+  server had appended to it, absolute upload path included, and the fork's
+  `run_python` opened that path and read the rows. The brancher had attached
+  nothing. Two things are fixed. A turn's **server-injected context** (the
+  attachment manifest, the workspace inventory, the shared file library
+  announcement, expanded `@file`/`@url` handles, the skill note, connector
+  hints) is now stored in its own column (migration 056) instead of inside the
+  message text, so a copy takes the user's words and leaves the rest behind —
+  and the transcript can show it outside the user's bubble, as
+  `injected_context` on each history entry, rather than as words the user
+  typed. Legacy rows whose text still embeds those blocks are stripped by
+  marker at branch time. And **chat uploads are no longer reachable by path**:
+  the uploads tree is mounted into no sandbox on either backend (attachments
+  are copied into the *sending* conversation's workspace at send time, as the
+  kubernetes backend already did), and uploads are scoped per user so naming
+  another user's upload in your own `/chat` request is a rejection rather than
+  a read — for the sandbox and for vision input alike. Where a copy may carry
+  none of a message's content it now writes nothing, instead of an empty
+  bubble. The model still sees exactly what it saw before, joined in the
+  governed prompt assembly and byte-stable for the prompt cache. See
+  [`docs/ATTACHMENT-SCOPING.md`](docs/ATTACHMENT-SCOPING.md) and
+  [ADR-0058](docs/adr/0058-per-conversation-attachment-scoping.md); the
+  remaining cross-conversation workspace-root visibility is named there as a
+  separate, unfixed change.
+
 - **A chat shared with one team could be handed to another, silently.**
   `conversations.team_visible` was a bare boolean, so every read worked out
   *who* it was shared with from the owner's **current** team. Moving someone

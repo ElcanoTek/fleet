@@ -31,7 +31,13 @@ Off by default is the deliberate choice: a long research chat can run to
 hundreds of history entries, of which a handful are the conversation, and the
 readable document is what someone downloading a chat almost always wants. The
 JSON export ignores the parameter — it is the archival shape and always
-carries everything.
+carries everything, including each entry's `injected_context`: the
+server-derived suffix of a user turn (attachment manifest, workspace
+inventory, shared file library announcement, expanded `@file`/`@url`
+handles), which since migration 056 is stored beside the user's text rather
+than inside it (see [ATTACHMENT-SCOPING.md](ATTACHMENT-SCOPING.md)). It is
+absent when empty, and the two rendered formats deliberately show only what
+the user typed.
 
 Note that this **changed the behavior of `?format=markdown`**, which shipped in
 #210 rendering every entry type and was never reachable from the UI. It now

@@ -1,9 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useId, useMemo, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useDialogDismiss } from "@/app/shared/ui/useDialogDismiss";
+import { Menu, MenuItem, MenuSeparator } from "@/app/shared/ui/Menu";
 import type { ConversationSummary } from "./chat-experience";
 import type { Project } from "./ProjectsModal";
+import { ConfirmDialog } from "./ConfirmDialog";
+import { DialogShell } from "@/app/shared/ui/DialogShell";
 import { Icon } from "./Icon";
 import { ShareGlyph, TeamGlyph } from "./ShareGlyphs";
 import { formatBytes, stripMarkdown } from "./formatters";
@@ -76,13 +79,27 @@ type TeamLearning = {
   updated_at?: number;
 };
 
-// What deleting the project would cost, from GET /api/projects/{id}/impact.
-type DeleteImpact = {
+// What a change to the project would cost, from GET /api/projects/{id}/impact
+// — read by the delete confirm and by the un-share confirm.
+type ProjectImpact = {
   memories: number;
   chats: number;
   members: number;
   team_shared_chats: number;
+  // Chats in this project owned by somebody OTHER than the owner: what making
+  // the project personal unfiles (docs/TEAM-SHARING.md, "The untick confirm
+  // quotes real counts"). OPTIONAL and nullable here on purpose — the field is
+  // newer than this UI, and the store's LeaveTeamImpact sets the precedent
+  // (internal/store/team_sharing.go): "we could not work out what this costs
+  // you" must not render as "nothing".
+  chats_from_teammates?: number | null;
+  teammates_with_chats?: number | null;
 };
+
+// plural renders "1 chat" / "2 chats" — shared by every confirm here.
+function plural(n: number, one: string, many: string): string {
+  return `${n} ${n === 1 ? one : many}`;
+}
 
 function formatDay(unixSeconds: number): string {
   if (!unixSeconds) return "";
@@ -195,10 +212,22 @@ export function ProjectHome({
     if (initialSettingsOpen) setSettingsOpenState(true);
   }
   const [confirmDelete, setConfirmDelete] = useState(false);
-  // Escape closes the settings dialog — but only while the delete confirm
-  // ISN'T stacked on top of it, so one press never dismisses both.
+  // Un-ticking "Share with my team" is not a visibility change: it moves
+  // teammates' chats out of the project. It asks first, with the count.
+  const [confirmUnshare, setConfirmUnshare] = useState(false);
+  // The transfer confirm lives inside TransferOwnership; the parent tracks it
+  // only so one Escape press cannot dismiss the confirm AND the settings
+  // dialog under it (both listen on the document).
+  const [confirmTransfer, setConfirmTransfer] = useState(false);
+  // Escape closes the settings dialog — but only while a confirm ISN'T stacked
+  // on top of it, so one press never dismisses both. DialogShell now enforces
+  // the same rule for every dialog (only the last one mounted answers
+  // Escape); this stays as the parent-side statement of it, and the two agree.
   const closeSettings = useCallback(() => setSettingsOpen(false), [setSettingsOpen]);
-  useDialogDismiss(settingsOpen && !confirmDelete, closeSettings);
+  useDialogDismiss(
+    settingsOpen && !confirmDelete && !confirmUnshare && !confirmTransfer,
+    closeSettings,
+  );
   // Search over both chat lists (Item E1). Client-side over lists already in
   // memory: a project's chats are bounded by what one member filed there, and
   // the point is finding a chat you know is here, fast.
@@ -274,6 +303,13 @@ export function ProjectHome({
   // personal project's chats cannot be team-shared at all — so the fetch is
   // skipped rather than asking for a list that is structurally empty.
   const teamShared = Boolean(project.team_id);
+  // C-9: the owner is no longer in the team this project is shared with —
+  // usually because an admin moved them, which unshared their chats but left
+  // the PROJECT pointed at the old team (only the owner can re-point it).
+  // `myTeam === undefined` means the team read has not landed, so the page
+  // stays quiet rather than accusing.
+  const strandedFromTeam =
+    isOwner && teamShared && myTeam !== undefined && myTeam !== project.team_id;
   useEffect(() => {
     if (!teamShared) return;
     let cancelled = false;
@@ -402,6 +438,10 @@ export function ProjectHome({
     [teamChats, q],
   );
   const searchable = chatList.length + (teamChats?.length ?? 0) > 0;
+  // How many of the viewer's OWN chats are team-shared. The Team section's
+  // empty state says so, because "nothing shared yet" read as false to an
+  // owner looking at their own team-badged rows.
+  const mySharedCount = chatList.filter((c) => c.team_visible).length;
 
   // A file download goes through fetch so a failure lands as an in-app error
   // instead of a tab full of server text (Item B1's secondary fix). The blob
@@ -440,47 +480,65 @@ export function ProjectHome({
     >
       <div className="mx-auto max-w-5xl">
         {/* Header: back · title (+pin) · settings */}
-        <div className="mb-4 flex items-center gap-3">
-          <button
-            type="button"
-            aria-label="Back to chat"
-            className="inline-flex size-8 shrink-0 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
-            onClick={onBack}
-          >
-            <Icon name="arrow-right" className="size-4 rotate-180" />
-          </button>
-          <Icon
-            name="briefcase"
-            className="size-5 shrink-0 text-[var(--color-accent)]"
-          />
-          <h1 className="min-w-0 flex-1 truncate text-[1.35rem] font-semibold text-[var(--color-text-primary)]">
-            {project.name}
-          </h1>
-          {project.pinned ? (
-            <Icon
-              name="pin"
-              className="size-4 shrink-0 text-[var(--color-accent)]"
-            />
-          ) : null}
-          {project.team_id ? (
-            <span
-              title={`Shared with ${project.team_id}`}
-              className="inline-flex shrink-0 items-center gap-1 rounded-full border border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-2 py-0.5 text-[0.7rem] text-[var(--color-text-muted)]"
-            >
-              <TeamGlyph className="size-3" />
-              Shared with team
-            </span>
-          ) : null}
-          {isOwner ? (
+        <div className="mb-4">
+          <div className="flex items-center gap-3">
             <button
               type="button"
-              aria-label="Project settings"
-              title="Project settings"
+              aria-label="Back to chat"
               className="inline-flex size-8 shrink-0 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
-              onClick={() => setSettingsOpen(true)}
+              onClick={onBack}
             >
-              <Icon name="settings" className="size-4" />
+              <Icon name="arrow-right" className="size-4 rotate-180" />
             </button>
+            <Icon
+              name="briefcase"
+              className="size-5 shrink-0 text-[var(--color-accent)]"
+            />
+            <h1 className="min-w-0 flex-1 truncate text-[1.35rem] font-semibold text-[var(--color-text-primary)]">
+              {project.name}
+            </h1>
+            {project.pinned ? (
+              <Icon
+                name="pin"
+                className="size-4 shrink-0 text-[var(--color-accent)]"
+              />
+            ) : null}
+            {project.team_id ? (
+              // The chip NAMES the team. "Shared with team" was true and
+              // useless: an owner an admin has since moved to another team saw a
+              // project that looked entirely normal, and the only surface that
+              // explained the state was the share dialog on one of its chats.
+              <span
+                title={`Shared with ${project.team_id}`}
+                className="inline-flex shrink-0 items-center gap-1 rounded-full border border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-2 py-0.5 text-[0.7rem] text-[var(--color-text-muted)]"
+              >
+                <TeamGlyph className="size-3" />
+                Shared with {project.team_id}
+              </span>
+            ) : null}
+            {isOwner ? (
+              <button
+                type="button"
+                aria-label="Project settings"
+                title="Project settings"
+                className="inline-flex size-8 shrink-0 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+                onClick={() => setSettingsOpen(true)}
+              >
+                <Icon name="settings" className="size-4" />
+              </button>
+            ) : null}
+          </div>
+
+          {/* C-9: the one line that explains the state, on the page rather
+              than buried in a chat's share dialog. Shown only to the owner
+              (nobody else can act on it) and only once the team read has
+              landed. */}
+          {strandedFromTeam ? (
+            <p className="mt-1.5 text-[0.78rem] leading-[1.5] text-[var(--color-text-muted)]">
+              {myTeam
+                ? `You’re no longer in ${project.team_id}. Share this project with ${myTeam} instead, or make it personal.`
+                : `You’re no longer in ${project.team_id}, and you aren’t in a team now. Make this project personal, or set a team in Settings → Team and share it with that.`}
+            </p>
           ) : null}
         </div>
 
@@ -592,18 +650,25 @@ export function ProjectHome({
 
             {teamShared ? (
               <div className="mt-6">
+                {/* C-3 / vocabulary: the heading says WHOSE chats this holds.
+                    "Team" left the owner reading their own team-badged chats
+                    directly above as if they belonged here too, and the empty
+                    state then told them to do the thing they had just done. */}
                 <p className="flex items-center gap-1.5 px-1 pb-1 text-[0.65rem] uppercase tracking-[0.1em] text-[var(--color-text-muted)]">
                   <TeamGlyph className="size-3" />
-                  Team
+                  Shared by your team
                 </p>
                 {teamChats === null ? (
                   <p className="px-1 py-2 text-[0.85rem] text-[var(--color-text-muted)]">
                     Loading…
                   </p>
                 ) : teamChats.length === 0 ? (
-                  <p className="px-1 py-2 text-[0.85rem] text-[var(--color-text-muted)]">
-                    No shared chats yet. Share one with your team from its ⋮
-                    menu.
+                  <p className="px-1 py-2 text-[0.85rem] leading-[1.6] text-[var(--color-text-muted)]">
+                    Nothing shared by your teammates yet. Chats you share stay
+                    in your list above, marked with the team badge.
+                    {mySharedCount > 0
+                      ? ` You’ve shared ${plural(mySharedCount, "chat", "chats")} with the team.`
+                      : ""}
                   </p>
                 ) : visibleTeamChats.length === 0 ? (
                   <p className="px-1 py-2 text-[0.85rem] text-[var(--color-text-muted)]">
@@ -716,9 +781,14 @@ export function ProjectHome({
                   Loading…
                 </p>
               ) : files.length === 0 ? (
-                <p className="text-[0.8rem] text-[var(--color-text-muted)]">
-                  Files from this project&apos;s chats — uploads, generated
-                  CSVs, plots — appear here.
+                // C-4 / B-1: Sources is owner-scoped by design (a team share
+                // exposes the transcript, never the files), so promising
+                // "files from this project's chats" described files that
+                // exist and are withheld on purpose. It says whose files it
+                // lists instead.
+                <p className="text-[0.8rem] leading-[1.5] text-[var(--color-text-muted)]">
+                  Files from <strong className="font-medium">your</strong>{" "}
+                  chats in this project appear here.
                 </p>
               ) : (
                 <div className="flex flex-col gap-0.5">
@@ -763,105 +833,124 @@ export function ProjectHome({
           the rail kebab (it's a list-ordering control, not project state the
           home needs to duplicate). */}
       {settingsOpen ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
-          <button
-            aria-label="Close settings"
-            className="absolute inset-0 bg-[var(--color-overlay-strong)] backdrop-blur-[2px]"
-            type="button"
-            onClick={() => setSettingsOpen(false)}
-          />
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-label={`Settings for ${project.name}`}
-            className="relative z-10 w-full max-w-sm rounded-[1rem] border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] p-5 shadow-[var(--shadow-md)]"
+        <DialogShell
+          label={`Settings for ${project.name}`}
+          scrimLabel="Close settings"
+          onDismiss={() => setSettingsOpen(false)}
+          className="max-w-sm p-5"
+        >
+          <h2 className="mb-4 text-[1rem] font-semibold text-[var(--color-text-primary)]">
+            Project settings
+          </h2>
+          <label
+            htmlFor={projectNameInputId}
+            className="mb-1 block text-[0.75rem] font-medium text-[var(--color-text-secondary)]"
           >
-            <h2 className="mb-4 text-[1rem] font-semibold text-[var(--color-text-primary)]">
-              Project settings
-            </h2>
-            <label
-              htmlFor={projectNameInputId}
-              className="mb-1 block text-[0.75rem] font-medium text-[var(--color-text-secondary)]"
-            >
-              Name
-            </label>
+            Name
+          </label>
+          <input
+            id={projectNameInputId}
+            value={nameDraft}
+            onChange={(e) => setNameDraft(e.target.value)}
+            maxLength={128}
+            // aria-label is kept deliberately: inside a dialog already titled
+            // "Settings for <project>", "Project name" is the unambiguous
+            // accessible name (and the one the e2e specs query by), while the
+            // htmlFor/id pair above supplies the missing click-to-focus
+            // association the bare <label> never had.
+            aria-label="Project name"
+            className="mb-4 w-full rounded-md border border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-2.5 py-2 text-[0.875rem] text-[var(--color-text-primary)] outline-none focus-visible:border-[var(--color-border-strong)]"
+          />
+          <label className="mb-1 flex items-center gap-2 text-[0.85rem] text-[var(--color-text-primary)]">
             <input
-              id={projectNameInputId}
-              value={nameDraft}
-              onChange={(e) => setNameDraft(e.target.value)}
-              maxLength={128}
-              // aria-label is kept deliberately: inside a dialog already titled
-              // "Settings for <project>", "Project name" is the unambiguous
-              // accessible name (and the one the e2e specs query by), while the
-              // htmlFor/id pair above supplies the missing click-to-focus
-              // association the bare <label> never had.
-              aria-label="Project name"
-              className="mb-4 w-full rounded-md border border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-2.5 py-2 text-[0.875rem] text-[var(--color-text-primary)] outline-none focus-visible:border-[var(--color-border-strong)]"
+              type="checkbox"
+              checked={sharedDraft}
+              disabled={myTeam === ""}
+              onChange={(e) => {
+                const next = e.target.checked;
+                // Un-ticking asks first (Item 14): the tick only clears
+                // once the confirm is answered, so Cancel leaves the
+                // dialog exactly as it was.
+                if (!next && Boolean(project.team_id)) {
+                  setConfirmUnshare(true);
+                  return;
+                }
+                setSharedDraft(next);
+              }}
             />
-            <label className="mb-1 flex items-center gap-2 text-[0.85rem] text-[var(--color-text-primary)]">
-              <input
-                type="checkbox"
-                checked={sharedDraft}
-                disabled={myTeam === ""}
-                onChange={(e) => setSharedDraft(e.target.checked)}
-              />
-              Share with my team{myTeam ? ` (${myTeam})` : ""}
-            </label>
-            <p className="mb-4 text-[0.75rem] leading-[1.5] text-[var(--color-text-muted)]">
-              {myTeam === ""
-                ? "You are not in a team yet — create one in Settings → Team, then share this project with it."
-                : "Members can chat in the project, read and write its team learnings, and share individual chats into it. Only you can edit or delete the project."}
+            Share with my team{myTeam ? ` (${myTeam})` : ""}
+          </label>
+          <p className="mb-4 text-[0.75rem] leading-[1.5] text-[var(--color-text-muted)]">
+            {myTeam === ""
+              ? "You are not in a team yet — create one in Settings → Team, then share this project with it."
+              : "Members can chat in the project, read and write its team learnings, and share individual chats into it. Only you can edit or delete the project."}
+          </p>
+          {project.team_id && !sharedDraft ? (
+            // Turning sharing off is not just a visibility change: it
+            // unshares every chat members shared into the project, and the
+            // ones that belong to teammates leave it (they cannot stay filed
+            // in a project their owner can no longer see).
+            <p className="mb-4 text-[0.75rem] leading-[1.5] text-[var(--color-danger)]">
+              Turning sharing off unshares every chat members shared into this
+              project, and moves teammates&rsquo; chats to their unfiled
+              chats.
             </p>
-            {project.team_id && !sharedDraft ? (
-              // Turning sharing off is not just a visibility change: it
-              // unshares every chat members shared into the project.
-              <p className="mb-4 text-[0.75rem] leading-[1.5] text-[var(--color-danger)]">
-                Turning sharing off also unshares every chat members shared into
-                this project.
-              </p>
-            ) : null}
-            <TransferOwnership
-              projectId={project.id}
-              projectName={project.name}
-              currentOwner={project.owner_email}
-              onTransfer={onTransfer}
-            />
-            {settingsError ? (
-              <p
-                role="alert"
-                className="mb-3 text-[0.75rem] leading-[1.5] text-[var(--color-danger)]"
-              >
-                {settingsError}
-              </p>
-            ) : null}
-            <div className="flex items-center justify-between">
+          ) : null}
+          <TransferOwnership
+            projectId={project.id}
+            projectName={project.name}
+            currentOwner={project.owner_email}
+            onTransfer={onTransfer}
+            onConfirmOpenChange={setConfirmTransfer}
+          />
+          {settingsError ? (
+            <p
+              role="alert"
+              className="mb-3 text-[0.75rem] leading-[1.5] text-[var(--color-danger)]"
+            >
+              {settingsError}
+            </p>
+          ) : null}
+          <div className="flex items-center justify-between">
+            <button
+              type="button"
+              className="rounded-md px-2.5 py-1.5 text-[0.8rem] font-medium text-[var(--color-danger)] transition hover:bg-[color-mix(in_srgb,var(--color-danger)_10%,transparent)]"
+              onClick={() => setConfirmDelete(true)}
+            >
+              Delete project
+            </button>
+            <div className="flex gap-2">
               <button
                 type="button"
-                className="rounded-md px-2.5 py-1.5 text-[0.8rem] font-medium text-[var(--color-danger)] transition hover:bg-[color-mix(in_srgb,var(--color-danger)_10%,transparent)]"
-                onClick={() => setConfirmDelete(true)}
+                className="rounded-md px-3 py-1.5 text-[0.8rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)]"
+                onClick={() => setSettingsOpen(false)}
               >
-                Delete project
+                Cancel
               </button>
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  className="rounded-md px-3 py-1.5 text-[0.8rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)]"
-                  onClick={() => setSettingsOpen(false)}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  disabled={savingSettings}
-                  className="rounded-md bg-[var(--color-accent)] px-3 py-1.5 text-[0.8rem] font-medium text-[var(--color-surface-1)] transition hover:opacity-90 disabled:opacity-60"
-                  onClick={() => void saveSettings()}
-                >
-                  {savingSettings ? "Saving…" : "Save"}
-                </button>
-              </div>
+              <button
+                type="button"
+                disabled={savingSettings}
+                className="rounded-md bg-[var(--color-accent)] px-3 py-1.5 text-[0.8rem] font-medium text-[var(--color-surface-1)] transition hover:opacity-90 disabled:opacity-60"
+                onClick={() => void saveSettings()}
+              >
+                {savingSettings ? "Saving…" : "Save"}
+              </button>
             </div>
           </div>
-        </div>
+        </DialogShell>
+      ) : null}
+
+      {confirmUnshare ? (
+        <UnshareTeamConfirm
+          projectId={project.id}
+          projectName={project.name}
+          teamId={project.team_id ?? ""}
+          onCancel={() => setConfirmUnshare(false)}
+          onConfirm={() => {
+            setConfirmUnshare(false);
+            setSharedDraft(false);
+          }}
+        />
       ) : null}
 
       {confirmDelete ? (
@@ -940,7 +1029,13 @@ export function TeamLearningsPanel({
   }, [load]);
 
   const [savingEdit, setSavingEdit] = useState(false);
-  const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
+  // The entry a delete confirm is up for. A DIALOG, not an inline "Delete for
+  // good · Keep" swap: the swap was easy to miss (the second click was
+  // permanent with no dialog anywhere), and worse, it persisted — retiring an
+  // entry left the row reading "Restore · Delete for good · Keep" with no
+  // delete pending at all, one click from destroying someone's contribution
+  // while "Keep" did nothing. This state is cleared by every write.
+  const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
 
   const canManage = (m: TeamLearning) =>
     (m.user_email ?? "").toLowerCase() === userEmail.toLowerCase() ||
@@ -974,6 +1069,9 @@ export function TeamLearningsPanel({
   // inline editor) knows whether it may throw that text away.
   const patch = async (id: string, body: Record<string, unknown>): Promise<boolean> => {
     setError(null);
+    // Any action clears a pending delete: the confirm belongs to the click
+    // that opened it and to nothing else.
+    setConfirmRemoveId(null);
     try {
       const res = await fetch(
         `/api/projects/${encodeURIComponent(projectId)}/memories/${encodeURIComponent(id)}`,
@@ -994,6 +1092,7 @@ export function TeamLearningsPanel({
 
   const remove = async (id: string) => {
     setError(null);
+    setConfirmRemoveId(null);
     try {
       const res = await fetch(
         `/api/projects/${encodeURIComponent(projectId)}/memories/${encodeURIComponent(id)}`,
@@ -1008,6 +1107,20 @@ export function TeamLearningsPanel({
 
   const actionClass =
     "rounded px-1 py-0.5 text-[0.68rem] text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]";
+
+  // Pinned first, the server's order otherwise. Array#sort is stable, so two
+  // pinned entries keep their relative order — pinning is a promotion, not a
+  // reshuffle.
+  const ordered = useMemo(
+    () =>
+      entries
+        ? [...entries].sort(
+            (a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)),
+          )
+        : null,
+    [entries],
+  );
+  const pendingRemoval = ordered?.find((m) => m.id === confirmRemoveId) ?? null;
 
   return (
     <div className={cardClass} data-testid="team-learnings">
@@ -1029,12 +1142,12 @@ export function TeamLearningsPanel({
         </p>
       ) : (
         <ul className="m-0 grid list-none gap-2 p-0">
-          {entries.map((m) => {
+          {(ordered ?? []).map((m) => {
             const retired = Boolean(m.retired_at);
             return (
               <li
                 key={m.id}
-                className="border-b border-[var(--color-border)] pb-2 last:border-b-0 last:pb-0"
+                className="group border-b border-[var(--color-border)] pb-2 last:border-b-0 last:pb-0"
               >
                 {editingId === m.id ? (
                   <div className="grid gap-1">
@@ -1089,84 +1202,49 @@ export function TeamLearningsPanel({
                           : "text-[var(--color-text-secondary)]",
                       ].join(" ")}
                     >
-                      {m.pinned ? (
-                        <Icon
-                          name="pin"
-                          className="mr-1 inline-block size-3 align-[-0.1em] text-[var(--color-accent)]"
-                        />
-                      ) : null}
                       {m.content}
                     </p>
+                    {/* Provenance line, and the row's ONE action affordance.
+                        Five text links per entry was heavy for a panel that
+                        will hold dozens — and put an irreversible Delete one
+                        word from Retire. Pinned is a glyph here, beside
+                        author · date, rather than a marker in the sentence,
+                        and the entry sorts to the top. */}
                     <div className="mt-1 flex flex-wrap items-center gap-2 text-[0.68rem] text-[var(--color-text-muted)]">
+                      {m.pinned ? (
+                        // Labelled: the glyph is the ONLY thing saying this
+                        // entry is pinned now that "Pin/Unpin" moved into the
+                        // menu, and Icon renders aria-hidden.
+                        <span
+                          role="img"
+                          aria-label="Pinned"
+                          title="Pinned"
+                          className="flex shrink-0 items-center text-[var(--color-accent)]"
+                        >
+                          <Icon name="pin" className="size-3" />
+                        </span>
+                      ) : null}
                       <span>
                         {m.user_email ? shortName(m.user_email) : "unknown"}
                         {m.created_at ? ` · ${formatDay(m.created_at)}` : ""}
                         {retired ? " · retired" : ""}
                       </span>
                       {canManage(m) ? (
-                        <span className="ml-auto flex items-center gap-1">
-                          <button
-                            type="button"
-                            className={actionClass}
-                            onClick={() => void patch(m.id, { pinned: !m.pinned })}
-                          >
-                            {m.pinned ? "Unpin" : "Pin"}
-                          </button>
-                          <button
-                            type="button"
-                            className={actionClass}
-                            onClick={() => {
+                        <span className="ml-auto flex items-center">
+                          <LearningActions
+                            entry={m}
+                            retired={retired}
+                            onPin={() => void patch(m.id, { pinned: !m.pinned })}
+                            onEdit={() => {
+                              setConfirmRemoveId(null);
                               setEditingId(m.id);
                               setEditDraft(m.content);
                             }}
-                          >
-                            Edit
-                          </button>
-                          <button
-                            type="button"
-                            className={actionClass}
-                            title={
-                              retired
-                                ? "Use this learning again"
-                                : "Stop using this learning; keep the record"
+                            onRetire={() =>
+                              void patch(m.id, { retired: !retired })
                             }
-                            onClick={() => void patch(m.id, { retired: !retired })}
-                          >
-                            {retired ? "Restore" : "Retire"}
-                          </button>
-                          {confirmRemove === m.id ? (
-                            <>
-                              <button
-                                type="button"
-                                className={`${actionClass} text-[var(--color-danger)]`}
-                                onClick={() => {
-                                  setConfirmRemove(null);
-                                  void remove(m.id);
-                                }}
-                              >
-                                Delete for good
-                              </button>
-                              <button
-                                type="button"
-                                className={actionClass}
-                                onClick={() => setConfirmRemove(null)}
-                              >
-                                Keep
-                              </button>
-                            </>
-                          ) : (
-                            // Asks first. Delete is irreversible and sat one
-                            // word from Retire in a row of four identically
-                            // styled 0.68rem buttons — the project owner could
-                            // destroy any member's contribution by mis-clicking.
-                            <button
-                              type="button"
-                              className={`${actionClass} hover:text-[var(--color-danger)]`}
-                              onClick={() => setConfirmRemove(m.id)}
-                            >
-                              Delete
-                            </button>
-                          )}
+                            onDelete={() => setConfirmRemoveId(m.id)}
+                          />
                         </span>
                       ) : null}
                     </div>
@@ -1203,7 +1281,131 @@ export function TeamLearningsPanel({
           alone — they still reach every chat in the project.
         </p>
       ) : null}
+      {pendingRemoval ? (
+        <ConfirmDialog
+          title="Delete this team learning for good?"
+          confirmLabel="Delete for good"
+          cancelLabel="Keep"
+          confirmTone="danger"
+          layer="stacked"
+          onCancel={() => setConfirmRemoveId(null)}
+          onConfirm={() => void remove(pendingRemoval.id)}
+        >
+          <p className="m-0 whitespace-pre-wrap text-[var(--color-text-primary)]">
+            {pendingRemoval.content}
+          </p>
+          <p className="m-0">
+            {pendingRemoval.user_email
+              ? `Written by ${shortName(pendingRemoval.user_email)}. `
+              : ""}
+            The record of what was learned goes with it. To stop it being
+            injected while keeping the record, retire it instead.
+          </p>
+        </ConfirmDialog>
+      ) : null}
     </div>
+  );
+}
+
+// LearningActions — one overflow menu per team learning, matching how a chat
+// row's ⋮ works everywhere else in fleet (the same shared Menu surface and
+// keyboard contract). Revealed on hover AND on keyboard focus: the button
+// stays in the tab order at opacity 0, and the row's group-focus-within brings
+// it into view when it, or anything else in the row, is focused.
+function LearningActions({
+  entry,
+  retired,
+  onPin,
+  onEdit,
+  onRetire,
+  onDelete,
+}: {
+  entry: TeamLearning;
+  retired: boolean;
+  onPin: () => void;
+  onEdit: () => void;
+  onRetire: () => void;
+  onDelete: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const anchorRef = useRef<HTMLButtonElement | null>(null);
+  const close = () => setOpen(false);
+  // A snippet, not the id: with several rows on screen the accessible name has
+  // to say WHICH learning this menu acts on.
+  const snippet =
+    entry.content.length > 40 ? `${entry.content.slice(0, 40)}…` : entry.content;
+  return (
+    <>
+      <button
+        ref={anchorRef}
+        type="button"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={`Actions for “${snippet}”`}
+        title="Actions"
+        className={[
+          "inline-flex size-[1.6rem] items-center justify-center rounded-[var(--radius-md)] text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none",
+          open
+            ? "opacity-100"
+            : "opacity-0 focus-visible:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100",
+        ].join(" ")}
+        onClick={() => setOpen((o) => !o)}
+      >
+        <Icon name="dots" className="size-4" />
+      </button>
+      <Menu
+        open={open}
+        onClose={close}
+        anchorRef={anchorRef}
+        placement="bottom-end"
+        label={`Actions for team learning “${snippet}”`}
+        className="min-w-[10rem]"
+      >
+        <MenuItem
+          icon={<Icon name="pin" className="size-4" />}
+          onClick={() => {
+            close();
+            onPin();
+          }}
+        >
+          {entry.pinned ? "Unpin" : "Pin"}
+        </MenuItem>
+        <MenuItem
+          icon={<Icon name="edit" className="size-4" />}
+          onClick={() => {
+            close();
+            onEdit();
+          }}
+        >
+          Edit
+        </MenuItem>
+        <MenuItem
+          icon={<Icon name={retired ? "refresh" : "stop"} className="size-4" />}
+          description={
+            retired
+              ? "Use this learning again"
+              : "Stop using it; keep the record"
+          }
+          onClick={() => {
+            close();
+            onRetire();
+          }}
+        >
+          {retired ? "Restore" : "Retire"}
+        </MenuItem>
+        <MenuSeparator />
+        <MenuItem
+          danger
+          icon={<Icon name="trash" className="size-4" />}
+          onClick={() => {
+            close();
+            onDelete();
+          }}
+        >
+          Delete
+        </MenuItem>
+      </Menu>
+    </>
   );
 }
 
@@ -1224,13 +1426,25 @@ function TransferOwnership({
   projectName,
   currentOwner,
   onTransfer,
+  onConfirmOpenChange,
 }: {
   projectId: string;
   projectName: string;
   currentOwner: string;
   onTransfer: (toEmail: string) => Promise<string | null>;
+  // Told when the confirm opens/closes, so the settings dialog above can stop
+  // answering Escape while it is up.
+  onConfirmOpenChange: (open: boolean) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [confirming, setConfirmingState] = useState(false);
+  const setConfirming = useCallback(
+    (v: boolean) => {
+      setConfirmingState(v);
+      onConfirmOpenChange(v);
+    },
+    [onConfirmOpenChange],
+  );
   const [members, setMembers] = useState<string[] | null>(null);
   const [choice, setChoice] = useState("");
   const [busy, setBusy] = useState(false);
@@ -1350,26 +1564,36 @@ function TransferOwnership({
             type="button"
             disabled={busy || !choice}
             className="shrink-0 rounded-md border border-[var(--color-border-strong)] px-2.5 py-1.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] disabled:opacity-40"
-            onClick={() => {
-              if (
-                !window.confirm(
-                  `Transfer ${projectName} to ${choice}? They'll be able to edit and delete it; you won't.`,
-                )
-              )
-                return;
-              setBusy(true);
-              setError(null);
-              void onTransfer(choice).then((err) => {
-                setBusy(false);
-                if (err) setError(err);
-                else setOpen(false);
-              });
-            }}
+            onClick={() => setConfirming(true)}
           >
             {busy ? "Transferring…" : "Transfer"}
           </button>
         </div>
       )}
+      {confirming ? (
+        <ConfirmDialog
+          title={`Transfer ${projectName} to ${choice}?`}
+          confirmLabel="Transfer"
+          confirmTone="accent"
+          layer="stacked"
+          busy={busy}
+          onCancel={() => setConfirming(false)}
+          onConfirm={() => {
+            setConfirming(false);
+            setBusy(true);
+            setError(null);
+            void onTransfer(choice).then((err) => {
+              setBusy(false);
+              if (err) setError(err);
+              else setOpen(false);
+            });
+          }}
+        >
+          <p className="m-0">
+            They&rsquo;ll be able to edit and delete it; you won&rsquo;t.
+          </p>
+        </ConfirmDialog>
+      ) : null}
       {error ? (
         <p className="mt-2 text-[0.72rem] text-[var(--color-danger)]">{error}</p>
       ) : null}
@@ -1381,6 +1605,104 @@ function TransferOwnership({
         Cancel
       </button>
     </div>
+  );
+}
+
+// ── Un-share confirm (Item 14) ───────────────────────────────────────────────
+//
+// Turning "Share with my team" off takes the project's chats away from the
+// people who filed them there: a teammate's chat cannot live in a project they
+// can no longer see, so it leaves and becomes an unfiled (temporary) chat of
+// theirs. The dialog quotes how many, from the same /impact endpoint the
+// delete confirm reads.
+//
+// The count is OPTIONAL, and the three states are deliberately different
+// sentences — the pattern `LeaveTeamImpact` establishes in
+// internal/store/team_sharing.go: "we could not work out what this costs you"
+// is not "nothing". A missing field or a failed fetch must never render as 0.
+function UnshareTeamConfirm({
+  projectId,
+  projectName,
+  teamId,
+  onCancel,
+  onConfirm,
+}: {
+  projectId: string;
+  projectName: string;
+  teamId: string;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const [impact, setImpact] = useState<ProjectImpact | null>(null);
+  const [settled, setSettled] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(() => {
+      void (async () => {
+        try {
+          const res = await fetch(
+            `/api/projects/${encodeURIComponent(projectId)}/impact`,
+            { cache: "no-store" },
+          );
+          if (!res.ok) {
+            if (!cancelled) setSettled(true);
+            return;
+          }
+          const data = (await res.json()) as ProjectImpact;
+          if (!cancelled) {
+            setImpact(data);
+            setSettled(true);
+          }
+        } catch {
+          if (!cancelled) setSettled(true);
+        }
+      })();
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId]);
+
+  const teammateChats =
+    typeof impact?.chats_from_teammates === "number"
+      ? impact.chats_from_teammates
+      : null;
+
+  return (
+    <ConfirmDialog
+      title={
+        teamId
+          ? `Stop sharing ${projectName} with ${teamId}?`
+          : `Stop sharing ${projectName} with your team?`
+      }
+      confirmLabel="Stop sharing"
+      confirmTone="danger"
+      layer="stacked"
+      onCancel={onCancel}
+      onConfirm={onConfirm}
+    >
+      {teammateChats === null ? (
+        <p className="m-0">
+          {settled
+            ? "Chats from teammates will move to their unfiled chats — we couldn’t work out how many."
+            : "Counting the chats from teammates this moves…"}
+        </p>
+      ) : teammateChats > 0 ? (
+        <p className="m-0">
+          {plural(teammateChats, "chat", "chats")} from teammates will move to
+          their unfiled chats.
+        </p>
+      ) : (
+        <p className="m-0">
+          No chats from teammates are filed here, so none will move.
+        </p>
+      )}
+      <p className="m-0">
+        Every chat members shared into this project stops being shared, and
+        team learnings stay but only you can see them.
+      </p>
+    </ConfirmDialog>
   );
 }
 
@@ -1400,7 +1722,7 @@ function DeleteProjectConfirm({
   onCancel: () => void;
   onConfirm: () => void;
 }) {
-  const [impact, setImpact] = useState<DeleteImpact | null>(null);
+  const [impact, setImpact] = useState<ProjectImpact | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -1412,7 +1734,7 @@ function DeleteProjectConfirm({
             { cache: "no-store" },
           );
           if (!res.ok) return;
-          const data = (await res.json()) as DeleteImpact;
+          const data = (await res.json()) as ProjectImpact;
           if (!cancelled) setImpact(data);
         } catch {
           // Counts are copy: without them the dialog still states WHAT is
@@ -1425,72 +1747,62 @@ function DeleteProjectConfirm({
     };
   }, [project.id]);
 
-  const plural = (n: number, one: string, many: string) =>
-    `${n} ${n === 1 ? one : many}`;
-
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
-      <button
-        aria-label="Cancel deleting the project"
-        className="absolute inset-0 bg-[var(--color-overlay-strong)] backdrop-blur-[2px]"
-        type="button"
-        onClick={onCancel}
-      />
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label={`Delete ${project.name}?`}
-        className="relative z-10 w-full max-w-[28rem] rounded-[1rem] border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] p-5 shadow-[var(--shadow-md)]"
-      >
-        <h2 className="mb-2 text-[1rem] font-semibold text-[var(--color-text-primary)]">
-          Delete {project.name}?
-        </h2>
-        <ul className="mb-4 grid list-disc gap-[0.35rem] pl-[1.1rem] text-[0.85rem] leading-[1.55] text-[var(--color-text-secondary)]">
+    <DialogShell
+      label={`Delete ${project.name}?`}
+      scrimLabel="Cancel deleting the project"
+      onDismiss={onCancel}
+      layer="stacked"
+      className="max-w-[28rem] p-5"
+    >
+      <h2 className="mb-2 text-[1rem] font-semibold text-[var(--color-text-primary)]">
+        Delete {project.name}?
+      </h2>
+      <ul className="mb-4 grid list-disc gap-[0.35rem] pl-[1.1rem] text-[0.85rem] leading-[1.55] text-[var(--color-text-secondary)]">
+        <li>
+          {impact
+            ? `${plural(impact.memories, "team learning", "team learnings")} will be lost`
+            : "This project’s team learnings will be lost"}{" "}
+          — they belong to the project and are not kept anywhere else.
+        </li>
+        <li>
+          {impact
+            ? `${plural(impact.chats, "chat", "chats")} from ${plural(impact.members, "member", "members")} will leave the project`
+            : "Members’ chats will leave the project"}
+            , become temporary, and expire unless pinned. The chats themselves
+            stay with their owners.
+        </li>
+        {impact && impact.team_shared_chats > 0 ? (
           <li>
-            {impact
-              ? `${plural(impact.memories, "team learning", "team learnings")} will be lost`
-              : "This project’s team learnings will be lost"}{" "}
-            — they belong to the project and are not kept anywhere else.
+            {plural(impact.team_shared_chats, "chat", "chats")} shared with the
+            team will stop being shared.
           </li>
-          <li>
-            {impact
-              ? `${plural(impact.chats, "chat", "chats")} from ${plural(impact.members, "member", "members")} will leave the project`
-              : "Members’ chats will leave the project"}
-              , become temporary, and expire unless pinned. The chats themselves
-              stay with their owners.
-          </li>
-          {impact && impact.team_shared_chats > 0 ? (
-            <li>
-              {plural(impact.team_shared_chats, "chat", "chats")} shared with the
-              team will stop being shared.
-            </li>
-          ) : null}
-        </ul>
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <a
-            href={`/api/projects/${encodeURIComponent(project.id)}/export`}
-            className="rounded-md border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.8rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
+        ) : null}
+      </ul>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <a
+          href={`/api/projects/${encodeURIComponent(project.id)}/export`}
+          className="rounded-md border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.8rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
+        >
+          Export first
+        </a>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            className="rounded-md px-3 py-1.5 text-[0.8rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)]"
+            onClick={onCancel}
           >
-            Export first
-          </a>
-          <div className="flex gap-2">
-            <button
-              type="button"
-              className="rounded-md px-3 py-1.5 text-[0.8rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)]"
-              onClick={onCancel}
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              className="rounded-md px-3 py-1.5 text-[0.8rem] font-medium text-[var(--color-danger)] transition hover:bg-[color-mix(in_srgb,var(--color-danger)_10%,transparent)]"
-              onClick={onConfirm}
-            >
-              Delete project
-            </button>
-          </div>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="rounded-md px-3 py-1.5 text-[0.8rem] font-medium text-[var(--color-danger)] transition hover:bg-[color-mix(in_srgb,var(--color-danger)_10%,transparent)]"
+            onClick={onConfirm}
+          >
+            Delete project
+          </button>
         </div>
       </div>
-    </div>
+    </DialogShell>
   );
 }

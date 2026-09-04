@@ -11,6 +11,15 @@ import {
 } from "@/app/shared/lib/orchestratorApi";
 import { useDialogA11y } from "./useDialogA11y";
 
+// Not on the shared DialogShell (the B-2 pass), deliberately: this is the
+// full-bleed "sheet" shape, not a centred panel — it portals to <body>, fills
+// the viewport below sm:, carries its own header bar and a backdrop that is
+// not click-to-dismiss, and traps Tab through useDialogA11y. Its panel is
+// already opaque (--color-surface-1), which is the defect that pass fixed, so
+// moving it onto the shell would only buy props that switch the shell's
+// defaults back off. PromptLibrary, DownloadChatDialog and SavePromptDialog
+// share this shape with each other.
+
 type Props = {
   currentText: string;
   // onInsert receives the entry's content and its display name. The name lets a

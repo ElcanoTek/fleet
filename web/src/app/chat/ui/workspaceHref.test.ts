@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { PENDING_CONV_KEY, resolveTaskWorkspaceHref, resolveWorkspaceHref } from "./workspaceHref";
+import {
+  PENDING_CONV_KEY,
+  redactUnsharedFiles,
+  resolveTaskWorkspaceHref,
+  resolveWorkspaceHref,
+  unsharedFileName,
+} from "./workspaceHref";
 
 const CONV = "fdf80072-b988-47fb-b3c0-11cb9cb1f0ba";
 const TASK = "11111111-1111-1111-1111-111111111111";
@@ -318,5 +324,194 @@ describe("resolveTaskWorkspaceHref", () => {
     const hidden = resolveTaskWorkspaceHref(".gitignore", TASK);
     expect(hidden.isWorkspaceFile).toBe(true);
     expect(hidden.href).toBe(`/api/orchestrator/tasks/${TASK}/workspace/.gitignore`);
+  });
+});
+
+// ── the read-only views' inverse question (#9) ─────────────────────────────
+//
+// A teammate's team view and a public share link expose the transcript ONLY:
+// the files it names stay behind the owner-scoped workspace route, which
+// answers neither reader. These cover the two halves of rendering that
+// honestly — recognising such an href, and rewriting the markdown that carries
+// it into plain text.
+
+const IMAGE_PLACEHOLDER = "Image not shared with team views.";
+
+describe("unsharedFileName", () => {
+  it("names the file behind an agent-emitted relative path", () => {
+    expect(unsharedFileName("daily_spend_by_channel.png")).toBe(
+      "daily_spend_by_channel.png",
+    );
+    expect(unsharedFileName("out/charts/spend.png")).toBe("spend.png");
+    expect(unsharedFileName("Q1%20Report.pptx")).toBe("Q1 Report.pptx");
+  });
+
+  it("names the file behind a hallucinated sandbox path", () => {
+    expect(unsharedFileName(`sandbox:/opt/chat/workspace/${CONV}/file.xlsx`)).toBe(
+      "file.xlsx",
+    );
+    expect(unsharedFileName("/opt/chat/workspace/chart.png")).toBe("chart.png");
+  });
+
+  it("names the file behind an already-resolved workspace route", () => {
+    expect(unsharedFileName(`/api/conversations/${CONV}/workspace/spend.png`)).toBe(
+      "spend.png",
+    );
+    expect(unsharedFileName(`/api/conversations/${CONV}/workspace/a%20b.csv`)).toBe(
+      "a b.csv",
+    );
+    expect(unsharedFileName(`/api/orchestrator/tasks/${TASK}/workspace/weekly.png`)).toBe(
+      "weekly.png",
+    );
+  });
+
+  it("never claims a fully-qualified URL, whatever its host", () => {
+    // Two reasons, both deliberate. The route shape is not ours to claim on
+    // someone else's host — that page is one the reader can simply open, and
+    // "file not shared" would be a false statement. And deciding by origin
+    // cannot be made deterministic: `location` does not exist during the
+    // server pass, so the same href would render as a live link on the server
+    // and as plain text after hydration — a mismatch, and in the prerendered
+    // public share view a dead owner-scoped link visible until hydration.
+    //
+    // Nothing real is lost: resolveWorkspaceHref only ever produces
+    // root-relative routes.
+    expect(
+      unsharedFileName(
+        `https://example.com/api/conversations/${CONV}/workspace/chart.png`,
+      ),
+    ).toBeNull();
+    expect(
+      unsharedFileName(
+        `${location.origin}/api/conversations/${CONV}/workspace/a%20b.csv`,
+      ),
+    ).toBeNull();
+  });
+
+  it("leaves every href a read-only reader can still follow", () => {
+    expect(unsharedFileName("https://example.com/docs")).toBeNull();
+    expect(unsharedFileName("http://example.com/api/conversations/x")).toBeNull();
+    expect(unsharedFileName("mailto:a@b.com")).toBeNull();
+    expect(unsharedFileName("data:image/png;base64,AAAA")).toBeNull();
+    expect(unsharedFileName("//cdn.example/x.png")).toBeNull();
+    expect(unsharedFileName("/settings")).toBeNull();
+    expect(unsharedFileName("#section-2")).toBeNull();
+    expect(unsharedFileName("")).toBeNull();
+    expect(unsharedFileName(null)).toBeNull();
+  });
+
+  it("refuses traversal instead of naming a file for it (#1113)", () => {
+    expect(unsharedFileName("../../auth/elcano-login")).toBeNull();
+    expect(unsharedFileName("%252e%252e/secret")).toBeNull();
+  });
+});
+
+describe("redactUnsharedFiles", () => {
+  it("turns a markdown link to a workspace file into plain marked text", () => {
+    expect(
+      redactUnsharedFiles(
+        "Full data: [daily_spend_by_channel.csv](daily_spend_by_channel.csv)",
+        IMAGE_PLACEHOLDER,
+      ),
+    ).toBe(
+      "Full data: daily\\_spend\\_by\\_channel\\.csv (file not shared)",
+    );
+  });
+
+  it("replaces an embedded workspace image with the caller's placeholder", () => {
+    expect(
+      redactUnsharedFiles("![Daily spend](daily_spend_by_channel.png)", IMAGE_PLACEHOLDER),
+    ).toBe(IMAGE_PLACEHOLDER);
+    // An image wrapped in a link to the same file — the "click the chart to
+    // download it" shape — leaves neither an image nor an anchor behind.
+    expect(
+      redactUnsharedFiles("[![Chart](chart.png)](chart.png)", IMAGE_PLACEHOLDER),
+    ).toBe("chart\\.png (file not shared)");
+  });
+
+  it("leaves links and images a reader can still resolve alone", () => {
+    const md =
+      "See [the docs](https://example.com/attribution) and ![logo](https://cdn.example/l.png) or ![inline](data:image/png;base64,AAAA).";
+    expect(redactUnsharedFiles(md, IMAGE_PLACEHOLDER)).toBe(md);
+  });
+
+  it("marks a bare workspace route pasted into prose, keeping the sentence", () => {
+    expect(
+      redactUnsharedFiles(
+        `Saved to /api/conversations/${CONV}/workspace/spend.png.`,
+        IMAGE_PLACEHOLDER,
+      ),
+    ).toBe("Saved to spend\\.png (file not shared).");
+    expect(
+      redactUnsharedFiles(
+        `It is at sandbox:/opt/chat/workspace/${CONV}/deck.pptx`,
+        IMAGE_PLACEHOLDER,
+      ),
+    ).toBe("It is at deck\\.pptx (file not shared)");
+  });
+
+  it("does not touch a bare filename in prose", () => {
+    const md = "I wrote the numbers to spend.png and moved on.";
+    expect(redactUnsharedFiles(md, IMAGE_PLACEHOLDER)).toBe(md);
+  });
+
+  it("handles the reference form, definition and all", () => {
+    const md = [
+      "The [chart][1] and the [table][tbl].",
+      "",
+      "[1]: chart.png",
+      "[tbl]: https://example.com/table",
+    ].join("\n");
+    expect(redactUnsharedFiles(md, IMAGE_PLACEHOLDER)).toBe(
+      ["The chart\\.png (file not shared) and the [table][tbl].", "", "[tbl]: https://example.com/table"].join("\n"),
+    );
+  });
+
+  it("leaves fenced blocks and inline code verbatim — quoted source is not a link", () => {
+    const md = [
+      "Run this:",
+      "",
+      "```python",
+      "plt.savefig('daily_spend_by_channel.png')",
+      "```",
+      "",
+      "Then read `[spend](spend.csv)` back.",
+    ].join("\n");
+    expect(redactUnsharedFiles(md, IMAGE_PLACEHOLDER)).toBe(md);
+  });
+
+  it("closes a fence only on a marker at least as long as the opener", () => {
+    // Documentation quoting a ``` block inside a ```` one. Comparing only the
+    // marker character closed the outer block on the inner fence: everything
+    // after it was treated as prose (so the sample's own filename got
+    // rewritten) and the real closing fence opened a phantom block (so the
+    // genuine link below escaped redaction) — wrong in both directions.
+    const md = [
+      "How to show a chart:",
+      "",
+      "````markdown",
+      "```python",
+      "plt.savefig('daily_spend_by_channel.png')",
+      "```",
+      "See [chart](daily_spend_by_channel.png) afterwards.",
+      "````",
+      "",
+      "Here is the real one: [chart](daily_spend_by_channel.png)",
+    ].join("\n");
+    const out = redactUnsharedFiles(md, IMAGE_PLACEHOLDER);
+    // Everything inside the four-backtick block is verbatim, both fences and
+    // the sample link included.
+    expect(out).toContain("```python");
+    expect(out).toContain("See [chart](daily_spend_by_channel.png) afterwards.");
+    // …and the real link outside it is still withheld.
+    expect(out).toContain(
+      "Here is the real one: daily\\_spend\\_by\\_channel\\.png (file not shared)",
+    );
+  });
+
+  it("is a no-op on text that names no files", () => {
+    const md = "Revenue rose 12% in Q3 — mostly paid search.";
+    expect(redactUnsharedFiles(md, IMAGE_PLACEHOLDER)).toBe(md);
+    expect(redactUnsharedFiles("", IMAGE_PLACEHOLDER)).toBe("");
   });
 });

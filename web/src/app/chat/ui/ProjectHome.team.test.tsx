@@ -91,6 +91,19 @@ function renderHome(
   return props;
 }
 
+// The team-learnings row keeps its actions under one ⋮ menu, like every other
+// row in fleet. The Menu surface is portaled to <body>, so its items are
+// queried from `screen` rather than from inside the panel.
+function openRowMenu(row: HTMLElement) {
+  fireEvent.click(
+    within(row).getByRole("button", { name: /^Actions for/ }),
+  );
+}
+
+function rowFor(panel: HTMLElement, content: string): HTMLElement {
+  return within(panel).getByText(content).closest("li") as HTMLElement;
+}
+
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
@@ -123,8 +136,14 @@ describe("ProjectHome — the Team section (C3)", () => {
   it("teaches how to share when the section is empty", async () => {
     mockRoutes({ "/team-conversations": { conversations: [] } });
     renderHome();
+    // The old copy ("No shared chats yet. Share one with your team from its ⋮
+    // menu.") was false from the owner's vantage — their own shared chats are
+    // badged directly above — and instructed them to do what they had done.
     expect(
-      await screen.findByText(/No shared chats yet\. Share one with your team from its ⋮ menu\./),
+      await screen.findByText(/Nothing shared by your teammates yet\./),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/Chats you share stay in your list above, marked with the team badge\./),
     ).toBeInTheDocument();
   });
 
@@ -132,7 +151,7 @@ describe("ProjectHome — the Team section (C3)", () => {
     mockRoutes({});
     renderHome({ project: { ...PROJECT, team_id: undefined } });
     await screen.findByText("Spread study");
-    expect(screen.queryByText("Team")).toBeNull();
+    expect(screen.queryByText("Shared by your team")).toBeNull();
   });
 });
 
@@ -202,7 +221,8 @@ describe("ProjectHome — Team learnings (D2)", () => {
     expect(within(panel).getByText(/bob · /)).toBeInTheDocument();
 
     // The project OWNER may manage anyone's entry.
-    fireEvent.click(within(panel).getAllByRole("button", { name: "Retire" })[0]);
+    openRowMenu(rowFor(panel, "quote spreads in bps"));
+    fireEvent.click(screen.getByRole("menuitem", { name: /^Retire/ }));
     await waitFor(() => expect(writes.length).toBe(1));
     expect(writes[0].url).toContain("/api/projects/p1/memories/m1");
     expect(JSON.parse(writes[0].body)).toEqual({ retired: true });
@@ -214,9 +234,59 @@ describe("ProjectHome — Team learnings (D2)", () => {
 
     const panel = await screen.findByTestId("team-learnings");
     // Bob wrote m1 and can act on it; alice's m2 is hers.
-    expect(within(panel).getAllByRole("button", { name: "Retire" })).toHaveLength(1);
-    const alicesRow = within(panel).getByText("alice's own note").closest("li");
-    expect(within(alicesRow as HTMLElement).queryByRole("button", { name: "Retire" })).toBeNull();
+    expect(
+      within(panel).getAllByRole("button", { name: /^Actions for/ }),
+    ).toHaveLength(1);
+    const alicesRow = rowFor(panel, "alice's own note");
+    expect(
+      within(alicesRow).queryByRole("button", { name: /^Actions for/ }),
+    ).toBeNull();
+  });
+
+  it("keeps every action under one ⋮ menu, reachable by keyboard", async () => {
+    mockRoutes(learnings);
+    renderHome();
+    const panel = await screen.findByTestId("team-learnings");
+    const row = rowFor(panel, "quote spreads in bps");
+
+    // Five text links per entry was the finding; the row now shows one
+    // control, and it is a real button so focus reaches it (the reveal is
+    // opacity, driven by hover AND group-focus-within).
+    const kebab = within(row).getByRole("button", { name: /^Actions for/ });
+    kebab.focus();
+    expect(kebab).toHaveFocus();
+
+    fireEvent.click(kebab);
+    const menu = screen.getByRole("menu");
+    expect(
+      within(menu)
+        .getAllByRole("menuitem")
+        .map((i) => (i.textContent ?? "").split("Stop using")[0].trim()),
+    ).toEqual(["Pin", "Edit", "Retire", "Delete"]);
+  });
+
+  it("sorts pinned entries first and shows the pin as a glyph", async () => {
+    mockRoutes({
+      "/memories": {
+        memories: [
+          { id: "m1", content: "unpinned first from the server", user_email: "alice@x.com" },
+          { id: "m2", content: "pinned second", user_email: "alice@x.com", pinned: true },
+        ],
+      },
+    });
+    renderHome();
+    const panel = await screen.findByTestId("team-learnings");
+    const rows = within(panel).getAllByRole("listitem");
+    expect(rows[0]).toHaveTextContent("pinned second");
+    expect(rows[1]).toHaveTextContent("unpinned first from the server");
+    // A labelled glyph beside author · date, not a word in the sentence.
+    expect(within(rows[0]).getByRole("img", { name: "Pinned" })).toBeInTheDocument();
+    expect(rows[0].querySelector("svg use")).toHaveAttribute(
+      "href",
+      "/icons/core-icons.svg#pin",
+    );
+    expect(rows[0]).not.toHaveTextContent("Pinned");
+    expect(within(rows[1]).queryByRole("img", { name: "Pinned" })).toBeNull();
   });
 
   it("says where a learning comes from when there are none", async () => {
@@ -285,8 +355,15 @@ describe("ProjectHome — ownership transfer", () => {
     expect(options).toEqual(["", "bob@x.com"]);
 
     fireEvent.change(picker, { target: { value: "bob@x.com" } });
-    vi.stubGlobal("confirm", vi.fn(() => true));
     fireEvent.click(screen.getByRole("button", { name: "Transfer" }));
+
+    // In-app confirm, not window.confirm(): it can name the project and the
+    // new owner, and it looks like the rest of the app.
+    const confirm = await screen.findByRole("dialog", {
+      name: "Transfer Quant to bob@x.com?",
+    });
+    expect(props.onTransfer).not.toHaveBeenCalled();
+    fireEvent.click(within(confirm).getByRole("button", { name: "Transfer" }));
 
     await waitFor(() => expect(props.onTransfer).toHaveBeenCalledWith("bob@x.com"));
   });
@@ -309,8 +386,11 @@ describe("ProjectHome — ownership transfer", () => {
     fireEvent.click(screen.getByRole("button", { name: "Transfer ownership…" }));
     const picker = await screen.findByLabelText("Transfer ownership of Quant");
     fireEvent.change(picker, { target: { value: "bob@x.com" } });
-    vi.stubGlobal("confirm", vi.fn(() => true));
     fireEvent.click(screen.getByRole("button", { name: "Transfer" }));
+    const confirm = await screen.findByRole("dialog", {
+      name: /^Transfer Quant to/,
+    });
+    fireEvent.click(within(confirm).getByRole("button", { name: "Transfer" }));
 
     expect(
       await screen.findByText(/must be a member of the project’s team|must be a member of the project's team/),
@@ -374,7 +454,7 @@ describe("ProjectHome — team learnings, destructive and lossy actions", () => 
     },
   };
 
-  it("asks before deleting a learning for good", async () => {
+  it("asks in a dialog before deleting a learning for good", async () => {
     const writes: { url: string; method: string }[] = [];
     mockRoutes(learnings, (url, init) =>
       writes.push({ url, method: String(init.method) }),
@@ -382,17 +462,46 @@ describe("ProjectHome — team learnings, destructive and lossy actions", () => 
     renderHome();
     const panel = await screen.findByTestId("team-learnings");
 
-    // Delete sat one word from Retire in a row of four identically styled
-    // buttons, and destroyed any member's contribution on a single click.
-    fireEvent.click(within(panel).getByRole("button", { name: "Delete" }));
+    // The inline "Delete for good · Keep" swap was easy to miss: no dialog
+    // anywhere, and the second click was permanent.
+    openRowMenu(rowFor(panel, "quote spreads in bps"));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Delete" }));
+    const dialog = await screen.findByRole("dialog", {
+      name: "Delete this team learning for good?",
+    });
     expect(writes).toHaveLength(0);
-    expect(
-      within(panel).getByRole("button", { name: "Keep" }),
-    ).toBeInTheDocument();
+    // It quotes the entry, and points at the reversible action instead.
+    expect(dialog).toHaveTextContent("quote spreads in bps");
+    expect(dialog).toHaveTextContent("retire it instead");
 
-    fireEvent.click(within(panel).getByRole("button", { name: "Delete for good" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete for good" }));
     await waitFor(() => expect(writes).toHaveLength(1));
     expect(writes[0].method).toBe("DELETE");
+  });
+
+  it("never leaves a delete pending across another action", async () => {
+    mockRoutes(learnings);
+    renderHome();
+    const panel = await screen.findByTestId("team-learnings");
+    const row = rowFor(panel, "quote spreads in bps");
+
+    // Keep dismisses it…
+    openRowMenu(row);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Delete" }));
+    fireEvent.click(screen.getByRole("button", { name: "Keep" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    // …and the confirm never survives a different action. Before, retiring an
+    // entry left the row reading "Restore · Delete for good · Keep" with no
+    // delete pending at all — one click from destroying it, and "Keep" did
+    // nothing.
+    openRowMenu(rowFor(panel, "quote spreads in bps"));
+    fireEvent.click(screen.getByRole("menuitem", { name: /^Retire/ }));
+    await waitFor(() =>
+      expect(screen.queryByRole("menuitem")).toBeNull(),
+    );
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Delete for good" })).toBeNull();
   });
 
   it("keeps the editor and the typed text when the save is refused", async () => {
@@ -408,7 +517,8 @@ describe("ProjectHome — team learnings, destructive and lossy actions", () => 
     );
     renderHome();
     const panel = await screen.findByTestId("team-learnings");
-    fireEvent.click(within(panel).getByRole("button", { name: "Edit" }));
+    openRowMenu(rowFor(panel, "quote spreads in bps"));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Edit" }));
 
     const editor = within(panel).getByLabelText("Edit team learning");
     fireEvent.change(editor, { target: { value: "a long careful rewrite" } });
@@ -420,5 +530,142 @@ describe("ProjectHome — team learnings, destructive and lossy actions", () => 
         "a long careful rewrite",
       ),
     );
+  });
+});
+
+// ── The copy findings from the project-home QA pass ──────────────────────────
+
+describe("ProjectHome — the header chip (C9)", () => {
+  it("names the team it is shared with", async () => {
+    mockRoutes({});
+    renderHome();
+    // "Shared with team" was true and useless: the page looked normal to an
+    // owner whose team had been changed under them.
+    expect(await screen.findByText("Shared with quant")).toBeInTheDocument();
+  });
+
+  it("tells an owner who is no longer in that team what to do about it", async () => {
+    mockRoutes({});
+    renderHome({ myTeam: "research" });
+    expect(
+      await screen.findByText(
+        "You’re no longer in quant. Share this project with research instead, or make it personal.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("does not claim a replacement team when the owner has none", async () => {
+    mockRoutes({});
+    renderHome({ myTeam: "" });
+    expect(
+      await screen.findByText(/You’re no longer in quant, and you aren’t in a team now\./),
+    ).toBeInTheDocument();
+  });
+
+  it("stays quiet while the team read is still out", async () => {
+    mockRoutes({});
+    renderHome({ myTeam: undefined });
+    await screen.findByText("Shared with quant");
+    expect(screen.queryByText(/You’re no longer in/)).toBeNull();
+  });
+
+  it("stays quiet for a member, who cannot act on it", async () => {
+    mockRoutes({});
+    renderHome({ isOwner: false, myTeam: "research" });
+    await screen.findByText("Shared with quant");
+    expect(screen.queryByText(/You’re no longer in/)).toBeNull();
+  });
+});
+
+describe("ProjectHome — Sources (C4 / B1)", () => {
+  it("says whose files it lists, rather than promising the project's", async () => {
+    mockRoutes({ "/files": { files: [] } });
+    renderHome();
+    // The old copy promised "files from this project's chats", which for a
+    // teammate described files that exist and are withheld by design.
+    const empty = await screen.findByText(/chats in this project appear here/);
+    expect(empty).toHaveTextContent("Files from your chats in this project appear here.");
+    expect(screen.queryByText(/uploads, generated/)).toBeNull();
+  });
+});
+
+describe("ProjectHome — Team section, the owner's vantage (C3)", () => {
+  it("counts the viewer's own shares in the empty state", async () => {
+    mockRoutes({ "/team-conversations": { conversations: [] } });
+    renderHome({
+      chats: [
+        { ...OWN_CHATS[0], team_visible: true },
+        { ...OWN_CHATS[1], team_visible: true },
+      ],
+    });
+    expect(
+      await screen.findByText(/You’ve shared 2 chats with the team\./),
+    ).toBeInTheDocument();
+  });
+
+  it("does not mention shares the viewer has not made", async () => {
+    mockRoutes({ "/team-conversations": { conversations: [] } });
+    renderHome();
+    await screen.findByText(/Nothing shared by your teammates yet\./);
+    expect(screen.queryByText(/You’ve shared/)).toBeNull();
+  });
+});
+
+describe("ProjectHome — un-ticking Share with my team (14)", () => {
+  it("quotes how many of the teammates' chats it moves", async () => {
+    mockRoutes({
+      "/impact": {
+        memories: 1,
+        chats: 9,
+        members: 3,
+        team_shared_chats: 2,
+        chats_from_teammates: 4,
+        teammates_with_chats: 2,
+      },
+    });
+    renderHome({ initialSettingsOpen: true });
+
+    fireEvent.click(screen.getByRole("checkbox"));
+    const dialog = await screen.findByRole("dialog", {
+      name: "Stop sharing Quant with quant?",
+    });
+    await waitFor(() =>
+      expect(dialog).toHaveTextContent(
+        "4 chats from teammates will move to their unfiled chats.",
+      ),
+    );
+    // Un-ticking is only staged once the confirm is answered.
+    expect(screen.getByRole("checkbox")).toBeChecked();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Stop sharing" }));
+    expect(screen.getByRole("checkbox")).not.toBeChecked();
+  });
+
+  it("keeps the tick when the confirm is cancelled", async () => {
+    mockRoutes({ "/impact": { memories: 0, chats: 0, members: 0, team_shared_chats: 0, chats_from_teammates: 0 } });
+    renderHome({ initialSettingsOpen: true });
+
+    fireEvent.click(screen.getByRole("checkbox"));
+    const dialog = await screen.findByRole("dialog", { name: /^Stop sharing/ });
+    expect(dialog).toHaveTextContent("No chats from teammates are filed here");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(screen.getByRole("checkbox")).toBeChecked();
+  });
+
+  it("says it does not know rather than claiming nothing moves", async () => {
+    // An older server, or a failed read: the count is simply absent. Rendering
+    // that as 0 is the LeaveTeamImpact bug (internal/store/team_sharing.go) —
+    // "we could not work out what this costs you" is not "nothing".
+    mockRoutes({ "/impact": { memories: 1, chats: 2, members: 2, team_shared_chats: 1 } });
+    renderHome({ initialSettingsOpen: true });
+
+    fireEvent.click(screen.getByRole("checkbox"));
+    const dialog = await screen.findByRole("dialog", { name: /^Stop sharing/ });
+    await waitFor(() =>
+      expect(dialog).toHaveTextContent(
+        "Chats from teammates will move to their unfiled chats — we couldn’t work out how many.",
+      ),
+    );
+    expect(dialog).not.toHaveTextContent("0 chats");
+    expect(dialog).not.toHaveTextContent("No chats from teammates");
   });
 });
