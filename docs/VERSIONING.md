@@ -59,13 +59,31 @@ $ fleet version
 2026.09.04.2 (a1b2c3d4e5f6)
 ```
 
-`fleet version` (and `fleet --version`) prints `<version> (<revision>)` — the
-full build identity. The other surfaces do **not** all carry that same string,
-so be precise about which one you are reading:
+`fleet version` (and `fleet --version`) prints the full build identity: the
+stamped version plus the VCS revision the Go toolchain recorded, with each fact
+stated **once**. When the stamp already names the commit (a build past a
+release, or an untagged checkout), the parenthesised revision would only repeat
+it and is left off:
+
+| What you see | What it means |
+| --- | --- |
+| `2026.09.04.2 (a1b2c3d4e5f6)` | exactly the `v2026.09.04.2` release |
+| `2026.09.04.2+dirty (a1b2c3d4e5f6)` | at the release, tree modified |
+| `2026.09.04.2+3.ga1b2c3d4e5f6` | 3 commits past the release (the stamp names the commit) |
+| `dev+ga1b2c3d4e5f6.dirty` | no release tag reachable, tree modified |
+| `dev (a1b2c3d4e5f6)` | unstamped build — a bare `go build` in a checkout |
+| `dev` | unstamped, and no VCS info either (no `.git`, or `-buildvcs=false`) |
+
+(Before this rule, an untagged modified checkout printed
+`dev+ga1b2c3d4e5f6.dirty (a1b2c3d4e5f6+dirty)` — the same commit and the same
+dirty flag twice, in the login banner and everywhere else.)
+
+The other surfaces do **not** all carry that same string, so be precise about
+which one you are reading:
 
 | Surface | What it reports |
 | --- | --- |
-| `fleet version` / `fleet --version` | `<version> (<revision>)` — the whole identity |
+| `fleet version` / `fleet --version` | the whole identity, as above |
 | the login banner (`fleet motd`) | the same full string, rendered live from the installed binary |
 | `GET /admin/health-summary` → `fleet_version` | the same full string (admin-gated) |
 | `GET /api-info` → `fleet_version` | the **version only** — no `(<revision>)` |
@@ -96,6 +114,31 @@ claiming a release it was not built from.
 > `scripts/update.sh` fetches `--tags` on every update for exactly this reason,
 > and `scripts/bootstrap.sh` already did. If you build from a source tarball with
 > no `.git`, you get `dev` — visibly unversioned rather than silently wrong.
+
+### "My box is on a release but says `dev+g<sha>`"
+
+The tag arrives **after** the build that most operators take. `release.yml`
+tags a push to `main` only once its `CI` run has gone green — minutes after the
+push — so a `fleet update` run right after a promotion fetches the new commit,
+finds no tag on it yet, and stamps `dev+g<sha>` into a binary that is running
+exactly the tree `v2026.09.04.1` will name. Nothing is wrong with the checkout.
+`update` says so at build time when the stamp carries no release, and
+`fleet doctor` (step 9) compares the installed binary's stamp with what the
+checkout would build **now** and advises a rebuild when they differ. The
+rebuild is `sudo fleet update` again; `update` always rebuilds, even when no
+new commits arrived.
+
+### "…and `.dirty`, but I edited nothing"
+
+`.dirty` means `git status` in the checkout is not empty — modified **or
+untracked** files, because both change what a build produces. On a deployed
+box that is almost never an operator edit; it is a tracked file that a build
+step rewrote. The one that did it on every box was `web/next-env.d.ts`: Next
+regenerates it on both `next dev` and `next build`, with *different* contents,
+so the update's web build flipped it and the whole checkout read as modified.
+It is gitignored now and no longer tracked, so a checkout that has taken that
+change cleans itself on the next web build. `fleet doctor` names the dirty
+paths so the next such file is a diagnosis, not a guess.
 
 ## `scripts/version.sh`
 

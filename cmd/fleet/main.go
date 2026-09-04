@@ -125,7 +125,7 @@ func main() {
 	argv := os.Args[1:]
 	switch classifyInvocation(argv) {
 	case invokeVersion:
-		// Build identity (top-level VERSION + VCS revision). Boots nothing, so it
+		// Build identity (release stamp + VCS revision; docs/VERSIONING.md). Boots nothing, so it
 		// works on a box where the DBs or sandbox are down.
 		fmt.Println("fleet " + version.String())
 	case invokeMCPBroker:
