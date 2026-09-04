@@ -43,8 +43,15 @@ than by a major-version bump.
   postponements, newly added conditions, and webhook-template conversions.
 - Resolve the first cron occurrence for recurring CLI batch tasks instead of
   launching them immediately. Reject invalid timezone and impossible schedules.
-- Keep the end of chat replies and their action buttons above the composer
-  fade on desktop and mobile.
+- Stabilize Markdown image components so unavailable artifacts in teammate
+  branches do not repeatedly remount, retry, and shake the bottom of the
+  transcript (Projects pass 2, #11). Preserve HTML preview source state too.
+- Keep the mobile sidebar open when a background chat restore finishes, so
+  project menus remain reachable; explicit chat navigation still closes it.
+- Keep team/project chips inline, with attached punctuation, across all five
+  project confirmations (Projects pass 2, #23).
+- Remove the global transcript fade reported in Projects pass 2 (#22),
+  restoring ordinary chat appearance and keeping branch-CTA styling local.
 - Revalidate mutable workspace downloads instead of caching them as immutable.
   Complete Tab/Shift+Tab focus trapping in shared chat/settings dialogs.
 

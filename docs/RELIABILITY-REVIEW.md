@@ -1,7 +1,7 @@
 # Repository reliability review
 
-This review follows the path from choosing files and editing a task to executing
-it and retrieving its output. It repairs existing behavior and completes the
+This review follows the path from project sharing, choosing files and editing a
+task to executing it and retrieving its output. It repairs existing behavior and completes the
 rerun attachment and shared-dialog keyboard interactions. It does not change the
 mandatory sandbox, broker authorization, or bundle boundaries.
 
@@ -36,10 +36,25 @@ mandatory sandbox, broker authorization, or bundle boundaries.
 - **Scheduler promotion:** the database update rechecks that a selected task is
   still due, ungated, and a cron task. Postponement, adding a `run_if` condition,
   or conversion to a webhook template now wins over a stale scheduler selection.
-- **Reply readability:** the composer's 64-pixel fade covered final reply
-  actions even at the bottom of the transcript. The transcript now reserves
-  enough space; geometric browser tests reproduce the overlap and verify its
-  removal on desktop and mobile.
+- **Reply readability (Projects pass 2, #22):** remove the global composer fade
+  and restore the original transcript spacing. The team-view branch CTA owns
+  its own treatment; normal chats receive no gradient, mask, or added padding.
+- **Branched transcripts (Projects pass 2, #11):** Markdown renderer component
+  identities remain stable across transcript rerenders. Failed workspace images
+  no longer remount and retry on every scroll/measurement update, and HTML
+  preview source toggles retain their state. An effective image-URL change still
+  creates fresh image state. The backend continues withholding parent artifacts;
+  files are not copied to work around the display bug. The browser fixture
+  reproduced 228 repeated image requests before the fix; afterward there were
+  none during 90-frame samples on both load and reload.
+- **Project confirmations (Projects pass 2, #23):** the shared confirmation body
+  uses normal prose flow instead of a grid. Team/project chips have their own
+  badge treatment and keep trailing punctuation attached in move, remove,
+  delete-project, transfer, and unshare confirmations.
+- **Mobile project navigation:** finishing a background conversation restore no
+  longer closes a drawer the user has just opened. Explicit conversation
+  navigation still closes it. A delayed-response browser regression covers both
+  paths, alongside opening project actions from a phone-sized viewport.
 - **Shared dialogs:** Tab and Shift+Tab remain inside the topmost dialog, with
   disabled, hidden and inert controls excluded. Existing Escape and focus-return
   behavior remains covered.
