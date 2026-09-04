@@ -5,8 +5,9 @@
 
 The operator lifecycle is **bootstrap → update → status**, one box. The server
 runs via `fleet serve` (bare `fleet` also serves, for back-compat); all other
-verbs are the operator CLI. (`fleet-admin <verb>` still works but is deprecated;
-it is removed in the first release after 1.0.0 — [ADR-0012](adr/0012-unified-fleet-cli.md).)
+verbs are the operator CLI. (The `fleet-admin` shim was removed —
+[ADR-0060](adr/0060-remove-the-fleet-admin-shim.md); `fleet update` and
+`fleet doctor` delete a copy left on a box by an earlier install.)
 Every verb is idempotent and exposed both as a shell script
 (`scripts/`) and as a `fleet` subcommand that wraps it, so a re-run converges on
 the same state rather than double-applying. None of them ever run application
@@ -45,7 +46,7 @@ fleet bootstrap   →   fleet update   →   fleet status / fleet doctor
 
 > **`bootstrap` and `update` operate on a fleet *source checkout*.** They run
 > `make build` (and, on update, `git pull`) against the checkout and install the
-> resulting `fleet` + `fleet-admin` binaries to `FLEET_INSTALL_DIR` (default
+> resulting `fleet` binary to `FLEET_INSTALL_DIR` (default
 > `/opt/fleet`, the unit's `ExecStart` dir). Keep the repo cloned on the box (Go
 > toolchain present); `status`, `restart`, `stop`, and `logs` work off the
 > installed binary alone.
@@ -172,6 +173,31 @@ roles/databases idempotently via `\gexec` (local) or validate the DSNs (external
 optionally `enable --now` the systemd unit. Local-mode role passwords are
 generated when unset; set `CHAT_DB_PASSWORD`/`SCHED_DB_PASSWORD` to pin them.
 
+## version — which build is this box running?
+
+```
+fleet version             # e.g. 2026.09.04.2 (a1b2c3d4e5f6)
+fleet --version           # identical
+```
+
+Releases are **date-based** and tagged automatically on every green push to
+`main` (`vYYYY.MM.DD.N`, several a day being normal), so the version string both
+names a release and says how far past it this box is:
+
+| Output | Meaning |
+| --- | --- |
+| `2026.09.04.2 (…)` | exactly that release |
+| `2026.09.04.2+3.g<sha> (…)` | 3 commits past it — the normal state of a box tracking `main` |
+| `dev+g<sha> (…)` | the checkout has no release tags (fetched with `--no-tags`, or shallow) |
+| `dev (…)` | an unstamped binary — built with a bare `go build` rather than `make build` |
+
+Quote it verbatim in an issue or a security report; do not parse it. The same
+full string appears in the login banner and in `fleet_version` on the admin
+health summary (`GET /admin/health-summary`). `/api-info`'s `fleet_version`
+carries the **version only**, without the revision, and `/healthz` carries no
+version at all — it is a liveness probe. Full contract:
+[`VERSIONING.md`](VERSIONING.md).
+
 ## update — roll a new version in place
 
 ```
@@ -203,6 +229,16 @@ silently reusing the stale local copy. Services self-migrate on restart, so
 `update` runs no migrations; it finishes with `systemctl restart fleet` and a
 unit health check.
 
+`update` also refreshes the shipped host files that no unit owns:
+`/usr/local/bin/fleet-web-start.sh` (fleet-web's `ExecStart` shim) and
+`/etc/profile.d/fleet-motd.sh` (the login-banner hook). Both are shipped content
+with no operator-tunable parts, both are rewritten only when they differ from
+`deploy/`, and neither is fatal — a box that cannot write them keeps updating and
+says so. The MOTD hook matters here because `bootstrap` used to be the only thing
+that installed it: a box provisioned before it existed never had one, and an edit
+to `deploy/fleet-motd.sh` reached no existing box. (`fleet doctor` repairs the
+same file — see below — so either verb converges it.)
+
 Before any of that — after both pulls, before the sandbox rebuild — it runs the
 **node gate**: it resolves the interpreter `web/.nvmrc` calls for and, if the
 box is short, hands the shortfall to `scripts/doctor.sh --node` (the one
@@ -231,10 +267,10 @@ scripts/fleet-upgrade.sh --dry-run              # print the plan; change nothing
 
 `scripts/fleet-upgrade.sh` is a safer companion to `update.sh` for production
 boxes. It does not pull (run `git pull` first); it `make build`s, **backs up the
-live `fleet`/`fleet-admin` binaries**, installs the new ones, `systemctl
+live `fleet` binary**, installs the new one, `systemctl
 restart`s, then **gates on the new process's `/readyz` probe** before declaring
 success — and if `/readyz` does not come green within `--health-timeout` (default
-90s) it **reinstalls the backup binaries and restarts**, so a bad build
+90s) it **reinstalls the backup binary and restarts**, so a bad build
 self-heals to the last-known-good version instead of crash-looping.
 
 The **drain is the binary's, not the script's**: `systemctl restart` sends
@@ -317,8 +353,10 @@ production-only bug. The pass covers, in order:
 4. **Installed artifacts** — functional drift of `fleet.service` /
    `fleet-web.service` / the `fleet-backup` and `fleet-maintenance` service +
    timer pairs vs `deploy/`
-   (reinstall + `daemon-reload`), and the `/usr/local/bin/fleet` symlink (a
-   stale *copy* there shadows every update).
+   (reinstall + `daemon-reload`), the `/etc/profile.d/fleet-motd.sh` login-banner
+   hook (installed from `deploy/` when missing or drifted; the banner itself is
+   rendered live by `fleet motd`, so only the hook can go stale), and the
+   `/usr/local/bin/fleet` symlink (a stale *copy* there shadows every update).
 5. **Configuration** — `/etc/fleet/fleet.env` exists, root-owned `0600`, with
    `OPENROUTER_API_KEY` + both DB DSNs; `fleet-web.env` permissions; and the
    fleet-managed `/etc/caddy/Caddyfile` matches the shipped layout

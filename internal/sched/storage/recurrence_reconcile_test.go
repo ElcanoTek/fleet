@@ -198,7 +198,7 @@ func TestImportedTerminalRecurringHistoryIsInert(t *testing.T) {
 		StartedAt:   &started,
 		CompletedAt: &completed,
 	}
-	// The import seam: fleet-admin import → AddTaskWithContext (a fresh INSERT).
+	// The import seam: `fleet sched task import` → AddTaskWithContext (a fresh INSERT).
 	if _, err := store.AddTaskWithContext(ctx, imported); err != nil {
 		t.Fatalf("AddTaskWithContext: %v", err)
 	}

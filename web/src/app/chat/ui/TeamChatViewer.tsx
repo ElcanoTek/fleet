@@ -206,15 +206,14 @@ export function TeamChatViewer({
             else's chat, and it needs no permission from them. */}
         {snapshot && branchPoint ? (
           <div className="sticky bottom-0 z-10 mt-8 pb-2 pt-4" data-testid="team-branch-cta">
-            {/* Legibility over the scrolling transcript comes from the SAME
-                treatment the live composer uses (--sticky-fade, see the
-                composer section in chat-experience.tsx): a soft gradient that
+            {/* This CTA owns its legibility treatment: a soft gradient that
                 starts fully transparent 4rem above the CTA and reaches the
                 page background behind it, bleeding past the reading column's
                 padding so there is no edge anywhere. The flat panel this
                 replaces drew a hard border and an opaque plate across the
                 transcript. The token is theme-swapped in globals.css, so each
-                theme fades to its own --color-bg.
+                theme fades to its own --color-bg. Keep it inside this CTA;
+                the ordinary chat transcript/composer has no fade overlay.
 
                 The `image:` hint is load-bearing: --sticky-fade is a gradient,
                 and the un-hinted arbitrary-value form emits background-color,

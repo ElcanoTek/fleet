@@ -49,12 +49,15 @@
 #   ADMIN_API_KEY        orchestrator admin key (default e2e-admin-key)
 #   APP_SESSION_SECRET   web HMAC session secret
 #   E2E_ENV_FILE         where to write resolved env (default web/.e2e-live.env)
+#   E2E_WORKSPACE_BASE   parent for a unique run workspace (default /tmp/fleet-e2e-<uid>)
 #   E2E_SKIP_WEB=1       boot only the backend (no next build/start)
 #   E2E_REUSE_DB=1       do not drop/recreate the chat+sched DBs
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
+# shellcheck source=scripts/e2e-sandbox-cleanup.sh
+source "$REPO_ROOT/scripts/e2e-sandbox-cleanup.sh"
 
 # ── config ──
 CHAT_PORT="${CHAT_PORT:-18080}"
@@ -94,7 +97,9 @@ LOG_DIR="${E2E_LOG_DIR:-$RUN_DIR/logs}"
 # the container user cannot enter it and run_python's chdir fails. So the
 # workspace + bridge live under a world-traversable base, NOT under the repo
 # when the repo sits inside a locked-down home. Override with E2E_WORKSPACE_BASE.
-WORKSPACE_BASE="${E2E_WORKSPACE_BASE:-${TMPDIR:-/tmp}/fleet-e2e-$(id -u)}"
+# Even an explicit E2E_WORKSPACE_BASE is a parent, never the cleanup scope:
+# concurrent runs must have distinct mount sources to prove ownership.
+WORKSPACE_BASE="$(e2e_create_workspace "${E2E_WORKSPACE_BASE:-${TMPDIR:-/tmp}/fleet-e2e-$(id -u)}")"
 WORKSPACE_DIR="$WORKSPACE_BASE/workspace"
 DATA_DIR="$WORKSPACE_BASE/data"
 mkdir -p "$BIN_DIR" "$RUN_DIR" "$LOG_DIR" "$WORKSPACE_DIR" "$DATA_DIR"
@@ -104,7 +109,7 @@ chmod 0755 "$WORKSPACE_BASE" "$WORKSPACE_DIR" "$DATA_DIR" 2>/dev/null || true
 log() { printf '[e2e-boot] %s\n' "$*" >&2; }
 die() { printf '[e2e-boot] FATAL: %s\n' "$*" >&2; exit 1; }
 
-# ── cleanup trap: kill procs, drop sandbox containers by name prefix ──
+# ── cleanup trap: kill procs, remove only this run's sandbox containers ──
 PIDS=()
 PG_TEMP_DIR=""
 PG_TEMP_STARTED=0
@@ -114,11 +119,10 @@ cleanup() {
   for pid in "${PIDS[@]:-}"; do
     [[ -n "$pid" ]] && kill "$pid" 2>/dev/null || true
   done
-  # Reap any leftover sandbox containers fleet launched. They are named
-  # chat-sandbox-<hex> (internal/sandbox/container.go); there are no labels.
-  if command -v podman >/dev/null 2>&1; then
-    podman ps -aq --filter "name=chat-sandbox-" 2>/dev/null | xargs -r podman rm -f >/dev/null 2>&1 || true
-  fi
+  # fleet.instance identifies sandbox candidates; their unique bind-mount
+  # sources prove they belong to THIS server/probe run. Other fleet instances
+  # and concurrent sandbox tests share Podman's container-name namespace.
+  e2e_cleanup_sandboxes "$WORKSPACE_BASE" || true
   # Stop the throwaway Postgres cluster if WE started one.
   if [[ "$PG_TEMP_STARTED" == "1" && -n "$PG_TEMP_DIR" ]]; then
     pg_ctl -D "$PG_TEMP_DIR/data" stop -m immediate >/dev/null 2>&1 || true
@@ -263,7 +267,7 @@ go_build_retry() {
 build_binaries() {
   log "build: go build fleet + fake-llm"
   # One unified `fleet` binary (#461): `fleet serve` runs the server, `fleet <verb>`
-  # is the operator CLI (user provisioning below). No separate fleet-admin needed.
+  # is the operator CLI (user provisioning below). No separate admin binary needed.
   go_build_retry "$BIN_DIR/fleet"    ./cmd/fleet    fleet    || die "go build fleet failed (see $LOG_DIR/build.log)"
   go_build_retry "$BIN_DIR/fake-llm" ./cmd/fake-llm fake-llm || die "go build fake-llm failed (see $LOG_DIR/build.log)"
 }

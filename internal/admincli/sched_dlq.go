@@ -18,10 +18,10 @@ import (
 
 // cmdSchedDLQ dispatches the dead-letter-queue operator verbs (#253):
 //
-//	fleet-admin sched dlq list [--tag <tag>] [--limit N] [--offset N] [--json]
-//	fleet-admin sched dlq replay <task_id>
+//	fleet sched dlq list [--tag <tag>] [--limit N] [--offset N] [--json]
+//	fleet sched dlq replay <task_id>
 //
-// These build on the existing fleet-admin sched plumbing (openSchedStorage) and
+// These build on the existing fleet sched plumbing (openSchedStorage) and
 // the re-enqueue seam from #270 (TaskToCreate / EnqueueTask) is shared with the
 // replay reset performed by storage.ReplayDeadLetteredTask. The DLQ surface is
 // deliberately an admin CLI rather than an orchestrator HTTP route + openapi

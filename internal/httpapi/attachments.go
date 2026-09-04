@@ -467,9 +467,18 @@ func stageAttachmentsIntoWorkspace(uploadsRoot, convID string, atts []chatAttach
 		log.Printf("attachment staging: workspace dir for %q: %v (attachments keep uploads paths)", logSafeSlug(convID), err)
 		return atts
 	}
-	dir := filepath.Join(convDir, "attachments")
+	// The sandbox can replace any child of its workspace with a symlink.
+	// Anchor host writes to an open root so directory swaps cannot redirect
+	// staging into another conversation or host files (including during copy).
+	workspace, err := os.OpenRoot(convDir)
+	if err != nil {
+		log.Printf("attachment staging: open workspace: %v (attachments keep uploads paths)", err)
+		return atts
+	}
+	defer workspace.Close()
+	dir := "attachments"
 	// 0o755 like every workspace dir: the sandbox uid (1000) must read it.
-	if err := os.MkdirAll(dir, 0o755); err != nil { //nolint:gosec // see comment above
+	if err := workspace.MkdirAll(dir, 0o755); err != nil {
 		log.Printf("attachment staging: mkdir %s: %v (attachments keep uploads paths)", dir, err)
 		return atts
 	}
@@ -483,13 +492,13 @@ func stageAttachmentsIntoWorkspace(uploadsRoot, convID string, atts []chatAttach
 			out = append(out, a)
 			continue
 		}
-		dst, err := stageOneAttachment(dir, root, src, a)
+		dst, err := stageOneAttachment(workspace, dir, root, src, a)
 		if err != nil {
 			log.Printf("attachment staging: %q: %v (this attachment keeps its uploads path)", logSafeSlug(a.Name), err)
 			out = append(out, a)
 			continue
 		}
-		a.Path = filepath.ToSlash(dst)
+		a.Path = filepath.ToSlash(filepath.Join(convDir, dst))
 		out = append(out, a)
 	}
 	return out
@@ -543,7 +552,7 @@ func uploadSlug(root, src string) string {
 // share a filename land in different directories and neither clobbers nor
 // shadows the other, so the numbered-variant dance is gone with the collision
 // that needed it.
-func stageOneAttachment(dir, root, src string, a chatAttachment) (string, error) {
+func stageOneAttachment(workspace *os.Root, dir, root, src string, a chatAttachment) (string, error) {
 	name := sanitizeFilename(a.Name)
 	// sanitizeFilename already stripped separators and leading dots; the
 	// IsLocal check restates that as the barrier CodeQL's path-injection
@@ -553,11 +562,11 @@ func stageOneAttachment(dir, root, src string, a chatAttachment) (string, error)
 	}
 	slug := uploadSlug(root, src)
 	stageDir := filepath.Join(dir, slug)
-	if err := os.MkdirAll(stageDir, 0o755); err != nil { //nolint:gosec // the sandbox uid must traverse it, like every workspace dir
+	if err := workspace.MkdirAll(stageDir, 0o755); err != nil {
 		return "", fmt.Errorf("mkdir staged dir: %w", err)
 	}
 	dst := filepath.Join(stageDir, name)
-	if info, err := os.Stat(dst); err == nil {
+	if info, err := workspace.Lstat(dst); err == nil {
 		if info.Mode().IsRegular() {
 			// Same upload, same name: this IS the copy, whatever its size —
 			// a queue drain replaying the row, or the same attachment sent
@@ -566,11 +575,14 @@ func stageOneAttachment(dir, root, src string, a chatAttachment) (string, error)
 		}
 		return "", fmt.Errorf("staged path is occupied by a non-regular file")
 	}
-	if err := copyAttachment(src, dst); err != nil {
+	if err := copyAttachment(workspace, src, dst); err != nil {
 		if errors.Is(err, os.ErrExist) {
 			// Lost the race to a concurrent stager for the SAME upload, which
 			// is writing the same bytes to the same path. Its copy is ours.
-			return dst, nil
+			info, statErr := workspace.Lstat(dst)
+			if statErr == nil && info.Mode().IsRegular() {
+				return dst, nil
+			}
 		}
 		return "", err
 	}
@@ -580,23 +592,23 @@ func stageOneAttachment(dir, root, src string, a chatAttachment) (string, error)
 // copyAttachment copies src (confined to the uploads root by the caller) to a
 // fresh dst. O_EXCL so a concurrent stager can never interleave writes into
 // one file; 0o644 so the sandbox uid can read it through the claim.
-func copyAttachment(src, dst string) error {
+func copyAttachment(workspace *os.Root, src, dst string) error {
 	in, err := os.Open(src) //nolint:gosec // src re-derived by confineToRoot (Rel + IsLocal + rejoin against the uploads root)
 	if err != nil {
 		return fmt.Errorf("open source: %w", err)
 	}
 	defer in.Close()
-	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644) //nolint:gosec // dst is Join(workspace attachments dir, IsLocal-checked sanitized name); world-readable for the sandbox uid
+	out, err := workspace.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		return err // undecorated: the caller inspects os.ErrExist
 	}
 	if _, err := io.Copy(out, in); err != nil {
 		_ = out.Close()
-		_ = os.Remove(dst)
+		_ = workspace.Remove(dst)
 		return fmt.Errorf("copy: %w", err)
 	}
 	if err := out.Close(); err != nil {
-		_ = os.Remove(dst)
+		_ = workspace.Remove(dst)
 		return fmt.Errorf("close: %w", err)
 	}
 	return nil

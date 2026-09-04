@@ -6,8 +6,8 @@
 **A general-purpose agent fleet you run yourself — any model, in a
 sandbox, on a budget, connected to your data.**
 
-fleet is how a whole department adopts AI agents without losing sleep: every
-tool call sandboxed, every turn metered against a budget, every credential held
+fleet is how a whole department adopts AI agents without losing sleep: local
+execution sandboxed, every turn metered against a budget, every credential held
 server-side, and every working setup versioned so it runs again tomorrow — for
 the next person, on a schedule. MIT-licensed, on your infrastructure: your
 compute, your data, your know-how. You own the means of production.
@@ -15,15 +15,15 @@ compute, your data, your know-how. You own the means of production.
 ## See it in action
 
 One story, three surfaces: **plan the work in chat, automate the
-follow-through, ride along from anywhere.** The web demos are real recordings —
-real model, real sandbox, real scheduler
+follow-through, ride along from anywhere.** These recordings show the current
+web app and terminal client with scripted example data; no live model is used
 ([how they're made](docs/generating-demo-gif.md)).
 
-**Chat — plan the kickoff, live** _(real model + sandbox)_
+**Chat — plan the kickoff** _(scripted example)_
 
-![Fleet chat UI — a real streamed turn with tool use](docs/screenshots/web/chat-demo.gif)
+![Fleet chat UI — a kickoff plan with an example tool result](docs/screenshots/web/chat-demo.gif)
 
-**Operations Center — the follow-through, automated** _(real scheduler)_
+**Operations Center — the follow-through, automated** _(example tasks)_
 
 ![Fleet Operations Center — recurring automations and upcoming runs](docs/screenshots/web/ops-demo.gif)
 
@@ -52,8 +52,8 @@ them.
   change your mind tomorrow.
 
 - **Sandboxed by default.** Model-authored local execution — bash, Python, and
-  file I/O — runs in an ephemeral rootless-Podman container with **no fast path
-  around it**. MCP calls are a documented host-side broker exception so their
+  file I/O — runs in a sandbox: rootless Podman by default, or an ephemeral
+  Kubernetes pod. There is **no fast path around it**. MCP calls are a documented host-side broker exception so their
   credentials never enter the sandbox or model context. Bundle MCP and inline
   HTTP-tool execution is owned by a dedicated broker subprocess; the main
   agent process retains only public catalog metadata and the call transport.
@@ -203,7 +203,6 @@ scripts and the CI definition.
 ```
 cmd/
   fleet/          the one unified binary — server (`fleet serve`: chat HTTP/SSE + orchestrator HTTP + scheduler + worker pool) AND operator CLI (every other verb)
-  fleet-admin/    deprecation shim — forwards to `fleet`; removed in the first release after 1.0.0 (ADR-0012)
   sandbox-probe/  deploy-time sandbox smoke test
 internal/
   agentcore/      the one unified run loop + shared agent primitives (cost ceilings, policy)
@@ -358,6 +357,7 @@ self-migrates on start.
 | `fleet chat [--email you@org]` | terminal TUI for the agent (token auto-read on-box) |
 | `fleet backup` / `fleet restore` | disaster recovery ([`docs/BACKUP_RESTORE.md`](docs/BACKUP_RESTORE.md)) |
 | `fleet timers install` | install + enable the daily backup/maintenance systemd timers on an existing box ([`docs/TIMERS.md`](docs/TIMERS.md)) |
+| `fleet version` | the build identity — date-based release + revision, e.g. `2026.09.04.2 (a1b2c3d4e5f6)` ([`docs/VERSIONING.md`](docs/VERSIONING.md)) |
 
 **→ Full operator runbook** — the env file, the client-config checkout, every
 verb in detail, process logs, and backup/restore:
@@ -370,6 +370,7 @@ Deep references live in [`docs/`](docs/) so this README stays an orientation, no
 | Doc | What it covers |
 |---|---|
 | [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) | Full deployment guide — host sizing, the one-command web + Caddy/TLS stack, options |
+| [`docs/VERSIONING.md`](docs/VERSIONING.md) | Releases: date-based (`vYYYY.MM.DD.N`), tagged automatically on every green push to `main`, nobody types a version |
 | [`docs/DEPLOYMENT-KUBERNETES.md`](docs/DEPLOYMENT-KUBERNETES.md) | Kubernetes as a first-class path — the Helm chart, the `kubernetes` sandbox backend (agent sandboxes as ephemeral pods), kind walkthrough + production checklist |
 | [`docs/OPERATORS.md`](docs/OPERATORS.md) | Operator runbook — the env file, the client-config checkout, every lifecycle verb |
 | [`docs/AGENT-RUNTIME.md`](docs/AGENT-RUNTIME.md) | Agent runtime mechanics — per-turn sandbox, ceilings, compaction, verifier, artifacts |

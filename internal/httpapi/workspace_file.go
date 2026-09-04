@@ -62,7 +62,11 @@ func (s *Server) handleWorkspaceFile(w http.ResponseWriter, r *http.Request, con
 	// `ln -s /etc/passwd workspace/<conv>/p` written by the agent (or a
 	// malicious upload) would let any user with the conversation read host
 	// secrets via this endpoint.
-	wsDir := tools.WorkspaceDirForConversation(convID)
+	wsDir, err := tools.SafeWorkspaceJoin(tools.WorkspaceDirForConversation(convID), ".")
+	if err != nil {
+		http.Error(w, "workspace unavailable", http.StatusNotFound)
+		return
+	}
 	resolvedAbs, err := tools.SafeWorkspaceJoin(wsDir, relPath)
 	switch {
 	case errors.Is(err, tools.ErrUnsafePath):
@@ -79,17 +83,34 @@ func (s *Server) handleWorkspaceFile(w http.ResponseWriter, r *http.Request, con
 		return
 	}
 
-	info, err := os.Stat(resolvedAbs) //nolint:gosec // resolvedAbs is validated by tools.SafeWorkspaceJoin to live under the workspace dir
+	// EvalSymlinks provides useful validation errors, but the workspace is
+	// still writable by the sandbox. Open through os.Root so a symlink swap
+	// after validation cannot turn this host-side broker into an arbitrary
+	// host read. Stat the opened descriptor rather than a second pathname.
+	root, err := os.OpenRoot(wsDir)
 	if err != nil {
-		if os.IsNotExist(err) {
-			http.Error(w, "file not found", http.StatusNotFound)
-			return
-		}
-		http.Error(w, "stat: "+err.Error(), http.StatusInternalServerError)
+		http.Error(w, "workspace unavailable", http.StatusNotFound)
 		return
 	}
-	if info.IsDir() {
-		http.Error(w, "path is a directory", http.StatusBadRequest)
+	defer root.Close()
+	rel, err := filepath.Rel(wsDir, resolvedAbs)
+	if err != nil || !filepath.IsLocal(rel) {
+		http.Error(w, "invalid path", http.StatusBadRequest)
+		return
+	}
+	f, err := root.Open(rel)
+	if err != nil {
+		http.Error(w, "file unavailable", http.StatusNotFound)
+		return
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		http.Error(w, "stat failed", http.StatusInternalServerError)
+		return
+	}
+	if !info.Mode().IsRegular() {
+		http.Error(w, "path is not a regular file", http.StatusBadRequest)
 		return
 	}
 
@@ -102,23 +123,10 @@ func (s *Server) handleWorkspaceFile(w http.ResponseWriter, r *http.Request, con
 	if ctype != "" {
 		w.Header().Set("Content-Type", ctype)
 	}
-	// Workspace files are effectively immutable from the user's point
-	// of view: each run_python that saves a chart picks a new filename
-	// (the agent emits e.g. `report__8a75730b.csv` or `chart_<uuid>.png`),
-	// so a cache hit on a known URL is always the right answer. A
-	// generous max-age + immutable directive is what stops the
-	// scroll-flicker on mobile: when the user scrolls past a chart and
-	// back, the browser serves from cache without revalidating instead
-	// of paint-blanking while it re-decodes a 304. 24h is more than
-	// enough for an active session and the file is gone after the
-	// orphan-workspace sweep anyway.
-	w.Header().Set("Cache-Control", "private, max-age=86400, immutable")
+	// Agents can overwrite a filename on later turns. Keep private browser
+	// caching, but revalidate before reuse so a corrected chart or download
+	// cannot remain stale for a day at the same URL.
+	w.Header().Set("Cache-Control", "private, no-cache")
 
-	f, err := os.Open(resolvedAbs) //nolint:gosec // resolvedAbs is validated to live under the workspace dir
-	if err != nil {
-		http.Error(w, "open: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	defer f.Close()
 	http.ServeContent(w, r, filepath.Base(resolvedAbs), info.ModTime(), f)
 }

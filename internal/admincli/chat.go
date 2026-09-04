@@ -198,7 +198,7 @@ func chatUserList(argv []string) int {
 		return errf(5, "%v", err)
 	}
 	if len(users) == 0 {
-		fmt.Fprintln(os.Stderr, "no chat users yet — add one with: fleet-admin chat user add <email> --password -")
+		fmt.Fprintln(os.Stderr, "no chat users yet — add one with: fleet chat user add <email> --password -")
 		return 0
 	}
 	for _, u := range users {

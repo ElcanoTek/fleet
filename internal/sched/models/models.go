@@ -92,7 +92,7 @@ const (
 // itself stays inert and is never evaluated; its gate applies to each spawned
 // run. A clean-failure retry re-parks the task `scheduled` with a backoff
 // (RequeueTaskForRetryWithContext), so the gate IS re-evaluated before each
-// retry attempt; lease-expiry recovery and `fleet-admin sched dlq replay`
+// retry attempt; lease-expiry recovery and `fleet sched dlq replay`
 // reset the task straight to pending, re-dispatching WITHOUT a gate
 // evaluation. The edit and import-replace paths refuse to attach or change a
 // gate on a pending task — honoring it would re-park a dispatch that already

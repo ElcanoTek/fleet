@@ -17,7 +17,7 @@ mkdir -p "$OUT_DIR"
 #   quantizes with a single generated palette (crisp text, stable colors).
 to_gif() {
     local in="$1" out="$2" trim="$3" speed="$4"
-    local tmp; tmp="$(mktemp -u).png"
+    local tmp; tmp="$(mktemp --suffix=.png)"
     ffmpeg -y -v error -t "$trim" -i "$in" \
         -vf "setpts=PTS/${speed},fps=9,scale=880:-1:flags=lanczos,palettegen=stats_mode=diff" "$tmp"
     ffmpeg -y -v error -t "$trim" -i "$in" -i "$tmp" \
@@ -32,10 +32,6 @@ to_gif() {
     ls -la "$out"
 }
 
-# Chat: the take is ~100s (typing → send → the model thinks + runs tools →
-# the answer streams). The useful arc is the first ~48s; 1.6x keeps the
-# streaming feel without the dead air.
-to_gif "$CHAT_IN" "$OUT_DIR/chat-demo.gif" 46 1.9
-
-# Ops: sign-in → automation fleet → Upcoming. Short take, gentle speedup.
-to_gif "$OPS_IN" "$OUT_DIR/ops-demo.gif" 40 1.5
+# Keep the complete short tours at their recorded pace.
+to_gif "$CHAT_IN" "$OUT_DIR/chat-demo.gif" 30 1.0
+to_gif "$OPS_IN" "$OUT_DIR/ops-demo.gif" 25 1.0

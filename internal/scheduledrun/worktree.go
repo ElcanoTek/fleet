@@ -188,7 +188,7 @@ func ensureWorktreeExcluded(workspaceRoot string) error {
 
 // runGit invokes host git in dir and returns combined output. The sandbox is not
 // involved: worktree management is a host-side operation on the host's git +
-// filesystem (the same posture as fleet-admin's host commands).
+// filesystem (the same posture as the operator CLI's host commands).
 func runGit(ctx context.Context, dir string, args ...string) (string, error) {
 	full := append([]string{"-C", dir}, args...)
 	//nolint:gosec // G204: fixed "git" binary; args are fleet-controlled subcommands + validated paths/refs (branch prefix is ref-name validated at task creation), passed as separate argv with no shell interpolation.

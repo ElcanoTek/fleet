@@ -142,6 +142,10 @@ func (s *Server) postSharedFiles(w http.ResponseWriter, r *http.Request) {
 		}
 		incoming += fh.Size
 	}
+	// Serialize admission with manifest writes: two uploads must not both
+	// reserve the same remaining space before either has saved its rows.
+	s.sharedFilesMu.Lock()
+	defer s.sharedFilesMu.Unlock()
 	if limit := s.sharedFilesMaxTotalBytes(); limit > 0 {
 		existing, err := s.store.TotalSharedFileBytes(r.Context())
 		if err != nil {
@@ -155,8 +159,6 @@ func (s *Server) postSharedFiles(w http.ResponseWriter, r *http.Request) {
 	}
 
 	lib := s.sharedFilesLibrary()
-	s.sharedFilesMu.Lock()
-	defer s.sharedFilesMu.Unlock()
 	out := make([]store.SharedFile, 0, len(files))
 	for _, fh := range files {
 		name, err := sharedfiles.SanitizeName(fh.Filename)

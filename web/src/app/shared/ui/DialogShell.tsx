@@ -21,22 +21,20 @@ import { useDialogDismiss } from "./useDialogDismiss";
 // body underneath. That is why the panel surface, the shadow and the radius
 // live HERE and are not props: the fix has to be un-reinventable.
 //
-// What the shell owns: the fixed overlay, the click-to-dismiss scrim (a real
-// <button>, so "click outside" is reachable from the keyboard and its
-// accessible name says what it does), the OPAQUE --color-surface-1 panel with
+// What the shell owns: the fixed overlay, the named click-to-dismiss scrim,
+// the OPAQUE --color-surface-1 panel with
 // the house shadow/radius/border, the modal enter animation,
 // role="dialog"/aria-modal on the panel (the panel is what a screen reader
 // should enter, not the full-screen wrapper), Escape-to-dismiss, and moving
-// focus into the panel on open / back to the opener on close.
+// focus into the panel on open / back to the opener on close, and trapping
+// Tab within the top panel. Escape provides keyboard dismissal; the scrim
+// stays outside the tab order so focus never leaves the modal.
 //
 // What each consumer still owns: sizing and inner layout (max-w-*, max-h-*,
 // padding, flex/grid, overflow) via `className`, its own accessible name, and
 // everything inside the panel.
 //
-// Deliberately NOT here: a Tab trap. useDialogDismiss's note said fixing Tab
-// properly needs one shared primitive for every overlay — this is that
-// primitive, so the follow-up is now a small one — but adding a trap is a
-// behavior change and this pass is a presentation-layer unification. The
+// Tab stays within the top shell, including when dialogs stack. The
 // orchestrator's `.modal-overlay` dialogs and the three portalled full-bleed
 // "sheet" dialogs (PromptLibrary, DownloadChatDialog, SavePromptDialog) are
 // deliberately not on this base either; see the notes on those files.
@@ -115,6 +113,39 @@ export function DialogShell({
   }, []);
   useDialogDismiss(true, dismiss);
 
+  useEffect(() => {
+    const onTab = (event: KeyboardEvent) => {
+      if (event.key !== "Tab" || event.defaultPrevented) return;
+      if (openShells[openShells.length - 1] !== panelRef) return;
+      const panel = panelRef.current;
+      if (!panel) return;
+      const controls = Array.from(panel.querySelectorAll<HTMLElement>(
+        'a[href], button, textarea, input, select, [tabindex], [contenteditable="true"]',
+      )).filter((node) =>
+        node.tabIndex >= 0 &&
+        !node.matches(":disabled") &&
+        !node.closest('[inert], [hidden], [aria-hidden="true"]') &&
+        node.getClientRects().length > 0 &&
+        getComputedStyle(node).visibility !== "hidden",
+      );
+      const first = controls[0];
+      const last = controls[controls.length - 1];
+      const active = document.activeElement;
+      if (!first) {
+        event.preventDefault();
+        panel.focus();
+      } else if (event.shiftKey && (active === first || active === panel || !panel.contains(active))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (active === last || active === panel || !panel.contains(active))) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", onTab);
+    return () => document.removeEventListener("keydown", onTab);
+  }, []);
+
   // Focus moves into the dialog on open and back to whatever opened it on
   // close, so a keyboard user resumes where they were instead of at the top of
   // the page behind. A trigger that the action removed simply cannot take it
@@ -140,6 +171,7 @@ export function DialogShell({
         aria-label={scrimLabel}
         className="absolute inset-0 bg-[var(--color-overlay-strong)] backdrop-blur-[2px]"
         type="button"
+        tabIndex={-1}
         onClick={onDismiss}
       />
       <div

@@ -48,6 +48,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/version"
 )
 
 // modelsEndpointURL is the public OpenRouter models listing. No auth required.
@@ -331,7 +333,11 @@ func fetchOpenRouterModels(timeout time.Duration) ([]orModelEntry, error) {
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
-	req.Header.Set("User-Agent", "fleet/1.0 (+https://github.com/ElcanoTek/fleet)")
+	// The UA carries the real build identity rather than a frozen "fleet/1.0":
+	// releases are date-based and derived from git (ADR-0059), so a hand-typed
+	// version here would be one more number nobody moves. An unstamped build
+	// honestly reports "fleet/dev".
+	req.Header.Set("User-Agent", "fleet/"+version.Version()+" (+https://github.com/ElcanoTek/fleet)")
 	req.Header.Set("Accept", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

@@ -11,9 +11,9 @@ aspirational arc, matched to the web demo recordings: plan a customer
 kickoff, then automate the follow-through:
   1. kickoff planning → two tool calls (run_python, bash) then a markdown
      answer (timeline + revenue) streamed in word-sized deltas,
-  2. "schedule the daily brief" → a short confirmation, no tools.
+  2. "draft the kickoff agenda" → a short outline, no tools.
 
-Usage: python3 mock_chat_server.py <port>   (generate_tui_gif.py starts it)
+Usage: python3 mock_chat_server.py <port>   (demo.tape starts it)
 """
 
 import json
@@ -35,9 +35,14 @@ the 12% multi-region uplift comes to **$248,640**.
 Ready to draft the kickoff deck outline, or shall I set up the daily
 progress brief first?"""
 
-ANSWER_2 = """Scheduled ✓ **meridian-daily-brief** — every weekday at 07:00.
-Each run pulls overnight updates, checks the timeline for slippage, and has
-a one-page brief waiting before standup. First run: tomorrow morning."""
+ANSWER_2 = """## Kickoff agenda
+
+1. Confirm the six-week milestones and owners.
+2. Review access, data sources, and success criteria.
+3. Agree on the pilot scope and first automation.
+4. Capture blockers and assign next steps.
+
+**Ready for your review** — a 30-minute working session."""
 
 
 def sse(handler, event, data):

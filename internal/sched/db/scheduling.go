@@ -11,14 +11,23 @@ import (
 )
 
 // UpdateTasksStatusBatch transitions tasks from fromStatus to toStatus, skipping
-// any that have left fromStatus. Returns the number transitioned.
+// any that have left fromStatus. Scheduled-to-pending promotion additionally
+// rechecks that the current definition is due, cron-triggered, and ungated.
+// Returns the number transitioned.
 func (db *Database) UpdateTasksStatusBatch(ctx context.Context, taskIDs []uuid.UUID, fromStatus, toStatus models.TaskStatus) (int, error) {
 	if len(taskIDs) == 0 {
 		return 0, nil
 	}
-	res, err := db.conn.ExecContext(ctx, `
-		UPDATE tasks SET status = $1
-		WHERE id = ANY($2::uuid[]) AND status = $3`,
+	query := `UPDATE tasks SET status = $1
+		WHERE id = ANY($2::uuid[]) AND status = $3`
+	if fromStatus == models.TaskStatusScheduled && toStatus == models.TaskStatusPending {
+		// Selection and promotion are separate statements. A concurrent edit
+		// can postpone a task, add a gate, or turn it into an inert template
+		// without changing its status. Recheck dispatch eligibility under the
+		// UPDATE's row lock so the stale selection cannot bypass that edit.
+		query += ` AND scheduled_for <= now() AND trigger_type = 'cron' AND run_if IS NULL`
+	}
+	res, err := db.conn.ExecContext(ctx, query,
 		string(toStatus),
 		uuidStrings(taskIDs),
 		string(fromStatus),

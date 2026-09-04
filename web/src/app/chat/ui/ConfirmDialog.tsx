@@ -47,6 +47,7 @@ export function ConfirmDialog({
   secondary,
   testId,
   title,
+  titleContent,
 }: {
   // Wires the body copy up as the dialog's accessible name. Pass this OR
   // `title`.
@@ -72,6 +73,8 @@ export function ConfirmDialog({
   secondary?: { label: string; onClick: () => void };
   testId?: string;
   title?: string;
+  // Rich visual title; the plain title remains the dialog and scrim name.
+  titleContent?: ReactNode;
 }) {
   return (
     <DialogShell
@@ -87,17 +90,16 @@ export function ConfirmDialog({
         <h2
           className="mb-2 text-[1rem] font-semibold text-[var(--color-text-primary)]"
         >
-          {title}
+          {titleContent ?? title}
         </h2>
       ) : null}
       {children ? (
-        // One body treatment for both shapes. The grid + gap is what lets a
-        // titled confirm stack several <p className="m-0"> children (counts,
-        // then consequences); an untitled confirm's inline copy and its
-        // NameChips are one contiguous run and lay out exactly as they did.
+        // Keep inline copy in normal text flow. A grid turns text fragments
+        // and chips into separate rows, leaving punctuation on its own line.
+        // Multi-paragraph confirms get spacing only between their paragraphs.
         <div
           id={title ? undefined : bodyId}
-          className="mb-4 grid gap-[0.4rem] text-[0.875rem] leading-[1.6] text-[var(--color-text-secondary)]"
+          className="mb-4 text-[0.875rem] leading-[1.6] text-[var(--color-text-secondary)] [&>p+p]:mt-[0.4rem]"
         >
           {children}
         </div>
@@ -146,14 +148,19 @@ export function ConfirmDialog({
 export function NameChip({
   children,
   icon,
+  suffix,
 }: {
   children: ReactNode;
   icon?: ReactNode;
+  // Keep sentence punctuation outside the badge but on the same line.
+  suffix?: string;
 }) {
   return (
-    <span className="mx-0.5 inline-flex max-w-[14rem] items-center gap-1 truncate rounded-full border border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-2 py-0.5 align-baseline text-[0.78rem] text-[var(--color-text-primary)]">
-      {icon}
-      {children}
+    <span className="whitespace-nowrap">
+      <span data-name-chip className="mx-0.5 inline-flex max-w-[14rem] items-center gap-1 rounded-full border border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-2 py-0.5 align-baseline text-[0.78rem] font-normal text-[var(--color-text-primary)]">
+        {icon}
+        <span className="min-w-0 truncate">{children}</span>
+      </span>{suffix}
     </span>
   );
 }

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
@@ -127,5 +128,50 @@ func TestValidateBatchTaskCreate(t *testing.T) {
 	good := models.TaskCreate{Prompt: "do it", Recurrence: "0 9 * * *", MCPSelection: models.MCPSelection{{Server: "acme"}}}
 	if err := validateBatchTaskCreate(&good); err != nil {
 		t.Fatalf("valid task rejected: %v", err)
+	}
+}
+
+func TestBatchCreateTasks_RecurrenceFirstFire(t *testing.T) {
+	for _, zone := range []string{"UTC", "America/New_York"} {
+		t.Run(zone, func(t *testing.T) {
+			body := `[{"prompt":"Daily report","recurrence":"0 9 * * *","timezone":"` + zone + `"}]`
+			st := &fakeBatchStore{}
+			before := time.Now()
+			res, err := batchCreateTasks(context.Background(), st, strings.NewReader(body), false)
+			if err != nil || res.Count != 1 {
+				t.Fatalf("create = %+v, %v", res, err)
+			}
+			task := st.added[0]
+			if task.Status != models.TaskStatusScheduled || task.ScheduledFor == nil || !task.ScheduledFor.After(before) {
+				t.Fatalf("recurring task dispatched immediately: %+v", task)
+			}
+			loc, err := time.LoadLocation(zone)
+			if err != nil {
+				t.Fatal(err)
+			}
+			local := task.ScheduledFor.In(loc)
+			if local.Hour() != 9 || local.Minute() != 0 || task.Timezone != zone {
+				t.Fatalf("first fire = %v in %s", local, task.Timezone)
+			}
+		})
+	}
+}
+
+func TestValidateBatchTaskCreate_ScheduleValidation(t *testing.T) {
+	for _, tc := range []models.TaskCreate{
+		{Prompt: "report", Timezone: "not/a/timezone"},
+		{Prompt: "report", Recurrence: "0 9 31 2 *"},
+	} {
+		if err := validateBatchTaskCreate(&tc); err == nil {
+			t.Fatalf("accepted invalid schedule %+v", tc)
+		}
+	}
+	explicit := time.Now().Add(2 * time.Hour)
+	tc := models.TaskCreate{Prompt: "report", Recurrence: "0 9 * * *", ScheduledFor: &explicit}
+	if err := validateBatchTaskCreate(&tc); err != nil {
+		t.Fatal(err)
+	}
+	if !tc.ScheduledFor.Equal(explicit) {
+		t.Fatal("replaced explicit first run")
 	}
 }

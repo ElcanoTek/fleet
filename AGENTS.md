@@ -26,7 +26,7 @@ code (or docs) that assumes podman is the only executor. See the README
 ## Build · test · lint (run before opening any PR)
 
 ```sh
-make build        # compile-check ./... AND emit ./fleet + ./fleet-admin
+make build        # compile-check ./... AND emit ./fleet
 make compile      # go build ./...   (release config — see the build tag below)
 make test         # go test -p 1 -tags fleet_host_executor ./...   — run in the FOREGROUND
 make test-race    # the same, with -race   (use when touching concurrency)
@@ -123,10 +123,9 @@ mergeable PR. See [`docs/SCANNING.md`](docs/SCANNING.md) ("Known gaps").
 ## Repository map
 
 See the README "Repository layout" for the annotated tree. In short: `cmd/` (the
-one unified `fleet` binary — `fleet serve` runs the server, every other verb is the
-operator CLI; `fleet-admin` is a deprecation shim that stays until the first
-release after 1.0.0, per ADR-0012; plus the `fleet-bench`, `fake-llm` and
-`sandbox-probe` harness binaries), `internal/` (`agentcore` the one run loop, `sandbox`,
+one `fleet` binary — `fleet serve` runs the server, every other verb is the
+operator CLI (the `fleet-admin` shim was removed in ADR-0060); plus the
+`fleet-bench`, `fake-llm` and `sandbox-probe` harness binaries), `internal/` (`agentcore` the one run loop, `sandbox`,
 `mcp`, `creds`, `clientconfig`, `store`, `sched`, `httpapi`, …), `web/` (one
 Next.js app: `/chat`, `/orchestrator`, `/settings`, `/admin`), `deploy/` (the
 systemd units + Caddyfile for the single-box install and the
@@ -239,6 +238,11 @@ same PR.
 
 ## Where to look
 
+- **Versioning and releases** (date-based `vYYYY.MM.DD.N`, tagged automatically
+  on every green push to `main`; there is no `VERSION` file, no semver, and no
+  release ceremony — do not add a hand-authored version number anywhere):
+  [`docs/VERSIONING.md`](docs/VERSIONING.md) +
+  [ADR-0059](docs/adr/0059-date-based-rolling-releases.md)
 - **Per-feature design notes** (shipped design, deviations from the issue, honest
   scope — one bullet per feature): [`docs/FEATURE-NOTES.md`](docs/FEATURE-NOTES.md).
   Newer features each have a dedicated page in [`docs/`](docs/), and invariant

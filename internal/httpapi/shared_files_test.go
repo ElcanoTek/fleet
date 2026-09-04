@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/ElcanoTek/fleet/internal/store"
@@ -289,5 +290,45 @@ func TestSharedFilesPathNamespaceConflict409(t *testing.T) {
 	pw := do(t, h, http.MethodPatch, "/shared-files/"+rootID, map[string]any{"name": "q3"}, "admin@x")
 	if pw.Code != http.StatusConflict {
 		t.Fatalf("colliding rename: status %d (want 409) body %s", pw.Code, pw.Body.String())
+	}
+}
+
+// Every request fits by itself, but admission must reserve capacity through
+// persistence so overlapping admin uploads cannot exceed the library cap.
+func TestSharedFilesQuotaConcurrentUploads(t *testing.T) {
+	srv, h := sharedFilesFixture(t)
+	srv.cfg.SharedFilesMaxTotalMB = 1
+	const workers = 8
+	const fileSize = 300 << 10
+	start := make(chan struct{})
+	statuses := make(chan int, workers)
+	var wg sync.WaitGroup
+	for i := range workers {
+		wg.Go(func() {
+			<-start
+			name := string(rune('a'+i)) + ".bin"
+			w := uploadShared(t, h, "admin@x", "", "", map[string]string{name: strings.Repeat("x", fileSize)})
+			statuses <- w.Code
+		})
+	}
+	close(start)
+	wg.Wait()
+	close(statuses)
+	accepted := 0
+	for status := range statuses {
+		switch status {
+		case http.StatusOK:
+			accepted++
+		case http.StatusRequestEntityTooLarge:
+		default:
+			t.Errorf("upload status = %d, want 200 or 413", status)
+		}
+	}
+	if accepted != (1<<20)/fileSize {
+		t.Fatalf("accepted %d uploads, want exactly %d within quota", accepted, (1<<20)/fileSize)
+	}
+	total, err := srv.store.TotalSharedFileBytes(context.Background())
+	if err != nil || total != int64(accepted*fileSize) {
+		t.Fatalf("stored bytes = %d, err = %v, accepted = %d", total, err, accepted)
 	}
 }

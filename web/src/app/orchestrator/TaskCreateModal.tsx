@@ -216,6 +216,8 @@ function taskToFormValues(task: Task | null) {
     // echo would reset them to the defaults).
     slaWarnMultiplier: task?.sla_warn_multiplier ?? 0,
     slaFailMultiplier: task?.sla_fail_multiplier ?? 0,
+    thinkingBudget:
+      typeof task?.thinking_budget_tokens === "number" ? String(task.thinking_budget_tokens) : "",
     sandboxMemory:
       typeof task?.sandbox_limits?.memory_mb === "number" && task.sandbox_limits.memory_mb > 0
         ? String(task.sandbox_limits.memory_mb)
@@ -371,7 +373,7 @@ export function TaskCreateModal({
   const [expectedDuration, setExpectedDuration] = useState(init.expectedDuration);
   // Per-task extended-thinking override (#220): "" = inherit the deployment
   // default, "0" = off, a positive value = this task's budget in tokens.
-  const [thinkingBudget, setThinkingBudget] = useState("");
+  const [thinkingBudget, setThinkingBudget] = useState(init.thinkingBudget);
   const [sandboxMemory, setSandboxMemory] = useState(init.sandboxMemory);
   const [sandboxCpus, setSandboxCpus] = useState(init.sandboxCpus);
   const [sandboxPids, setSandboxPids] = useState(init.sandboxPids);
@@ -527,6 +529,7 @@ export function TaskCreateModal({
     runIfOnError,
     runIfTimeout,
     expectedDuration,
+    thinkingBudget,
     sandboxMemory,
     sandboxCpus,
     sandboxPids,
@@ -556,12 +559,13 @@ export function TaskCreateModal({
     init.runIfOnError,
     init.runIfTimeout,
     init.expectedDuration,
+    init.thinkingBudget,
     init.sandboxMemory,
     init.sandboxCpus,
     init.sandboxPids,
     init.mcpSelection,
   ]);
-  const dirty = editing ? formSnapshot !== initSnapshot : createDirty;
+  const dirty = editing ? formSnapshot !== initSnapshot || fileCount > 0 : createDirty;
 
   const resetForm = useCallback(() => {
     setPrompt("");
@@ -1146,9 +1150,10 @@ export function TaskCreateModal({
             // editable. Echo its complete visible value so the fresh one-off
             // run does not silently inherit the source task's stale selection.
             mcp_selection: mcpSelection,
+            ...(taskData.files ? { files: taskData.files } : {}),
             ...(taskData.thinking_budget_tokens != null
-              ? { thinking_budget: taskData.thinking_budget_tokens }
-              : {}),
+              ? { thinking_budget_tokens: taskData.thinking_budget_tokens }
+              : { thinking_budget_tokens: -1 }),
           });
           showToast(
             `Resubmitted as task ${created.id.slice(0, 8)}… — running now`,
@@ -2025,6 +2030,12 @@ export function TaskCreateModal({
                 </div>
                 <div className="form-group">
                   <span className="task-field-label">Attachments</span>
+                  {editing && (editTask?.files?.length ?? 0) > 0 ? (
+                    <p className="field-hint task-hint-tight">
+                      This task has {editTask!.files!.length} existing {editTask!.files!.length === 1 ? "attachment" : "attachments"}.
+                      Attach new files to replace them, or leave this empty to keep them.
+                    </p>
+                  ) : null}
                   <FileUpload
                     registerHandle={(h) => (fileHandle.current = h)}
                     onEntriesChange={(entries: FileEntry[]) =>

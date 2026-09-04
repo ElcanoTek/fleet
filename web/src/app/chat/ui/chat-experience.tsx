@@ -1176,18 +1176,8 @@ export function ChatExperience({
     setShowJumpToLatest(distanceFromBottom > 240);
   };
 
-  // Auto-scroll lives in ChatTranscript now (useStickToBottom), and this
-  // effect is gone rather than kept alongside it: two scroll drivers on the
-  // same element is what the guard cannot protect against. The unguarded
-  // smooth follow that used to be here is precisely what oscillated when a
-  // row's height wobbled by a pixel at the bottom of a branched transcript —
-  // it re-fired mid-animation, every time. The hook preserves every branch,
-  // including the no-scroll-parent case and the 240px/160px windows.
-  //
-  // updateJumpToLatestVisibility() does not need re-homing: the effect below
-  // keyed on [isLoadingHistory, messages.length] already calls it on every
-  // length change, and the scroll listener covers the rest. The call deleted
-  // here sat in the non-streaming branch, which streaming deltas never reach.
+  // ChatTranscript owns content-follow scrolling. This separate effect only
+  // positions a newly loaded history; scroll events update the jump control.
 
   useEffect(() => {
     const conversationId = activeConversationId;
@@ -2044,7 +2034,7 @@ export function ChatExperience({
         setSelectedPersona(conv.persona);
         setSelectedModel(conv.model || currentDefaultModel());
       }
-      setSidebarOpen(false);
+      if (!options.background && !options.restore) setSidebarOpen(false);
       return;
     }
 
@@ -2217,7 +2207,9 @@ export function ChatExperience({
         pendingHistoryScrollRef.current = data.conversation.id;
       }
       setConvMessages(data.conversation.id, next);
-      setSidebarOpen(false);
+      // A boot restore or background revalidation must not close navigation
+      // the reader opened while that request was in flight.
+      if (!options.background && !options.restore) setSidebarOpen(false);
     } finally {
       if (!options.background) setIsLoadingHistory(false);
     }
@@ -5449,11 +5441,6 @@ export function ChatExperience({
                   </button>
                 </div>
               ) : null}
-              {/* The image: hint matters — --sticky-fade is a gradient, and the
-                  un-hinted arbitrary-value form emits background-color, which
-                  drops gradient values (see Composer.tsx's own note). Without
-                  it this fade painted nothing at all. */}
-              <div className="pointer-events-none absolute inset-x-0 -top-16 h-16 bg-[image:var(--sticky-fade)]" />
               <div className="mx-auto mb-1 w-full max-w-[53rem] px-1 sm:mb-1.5 sm:px-0">
                 {showStats ? (
                   <ConversationTotalsChip

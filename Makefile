@@ -1,5 +1,5 @@
 .PHONY: all build compile bins fleet-bench install test test-race test-cover lint lint-go lint-python lint-migrations lint-actions fmt tidy clean help \
-	govulncheck ci-go ci-web ci-e2e-mocked ci-local
+	version helm-package govulncheck ci-go ci-web ci-e2e-mocked ci-local
 
 # GOTOOLCHAIN=auto — the operator does NOT have to hand-install the pinned Go.
 #
@@ -28,9 +28,9 @@ all: build
 
 help:
 	@echo "fleet — build/test/lint targets"
-	@echo "  make build       compile-check ./... AND emit ./fleet + ./fleet-admin"
-	@echo "  make bins        emit ./fleet + ./fleet-admin only (no full compile-check)"
-	@echo "  make install     build + install fleet (and the fleet-admin shim) to PREFIX/bin (default /usr/local)"
+	@echo "  make build       compile-check ./... AND emit ./fleet"
+	@echo "  make bins        emit ./fleet only (no full compile-check)"
+	@echo "  make install     build + install fleet to PREFIX/bin (default /usr/local)"
 	@echo "  make compile     go build ./...   (compile-check every package; no artifacts)"
 	@echo "  make test        run the Go test suite"
 	@echo "  make test-race   run the Go test suite with the race detector"
@@ -40,6 +40,8 @@ help:
 	@echo "  make lint-python ruff check + ruff format --check (skips loudly if ruff is absent)"
 	@echo "  make lint-migrations  reject dangerous DDL in changed migration files (#256)"
 	@echo "  make fleet-bench build the load-testing tool (cmd/fleet-bench, #296)"
+	@echo "  make version     print this tree's date-based build identity (docs/VERSIONING.md)"
+	@echo "  make helm-package package the Helm chart, stamped from the release tags"
 	@echo "  make fmt         gofmt the tree"
 	@echo "  make tidy        go mod tidy"
 	@echo ""
@@ -51,37 +53,60 @@ help:
 	@echo "  make ci-local      the fast PR gates locally: ci-go + ci-web (no e2e)"
 
 # build is the canonical target: it BOTH compile-checks every package (the CI
-# gate AGENTS.md documents) AND emits the two deployable artifacts the README +
-# deploy/update path install (./fleet, ./fleet-admin). `go build ./...` alone
-# discards command binaries, so the `-o` lines are what actually leave artifacts
-# on disk — without them scripts/update.sh would rebuild, report success, and
-# restart the UNCHANGED old binary.
+# gate AGENTS.md documents) AND emits the deployable artifact the README +
+# deploy/update path install (./fleet). `go build ./...` alone discards command
+# binaries, so the `-o` line is what actually leaves an artifact on disk —
+# without it scripts/update.sh would rebuild, report success, and restart the
+# UNCHANGED old binary.
 build: compile bins
 
-# The release version, single-sourced from the top-level VERSION file, stamped
-# into both binaries below via `-ldflags -X` (see internal/version). `compile`
-# and the CI compile-check intentionally DON'T stamp it — a bare `go build`
-# falls back to the "dev" sentinel + VCS revision, which is honest for an
-# unstamped build. $(file <VERSION) reads the file without spawning a shell
-# (GNU Make 4.x); the strip drops the trailing newline.
-VERSION := $(strip $(file < VERSION))
+# The release version, derived from git by scripts/version.sh and stamped into
+# both binaries below via `-ldflags -X` (see internal/version). There is no
+# VERSION file and nobody types a version number: releases are date-based
+# (vYYYY.MM.DD.N) and tagged automatically by .github/workflows/release.yml on
+# every green push to main — see docs/VERSIONING.md and ADR-0059.
+#
+# `describe` yields the release when HEAD is exactly one (2026.09.04.2), or
+# "<release>+<n>.g<sha>" for a tree n commits past it, which is what a box
+# tracking main honestly is. `compile` and the CI compile-check intentionally
+# DON'T stamp it — a bare `go build` falls back to the "dev" sentinel + VCS
+# revision, which is honest for an unstamped build.
+#
+# Immediate (`:=`) assignment on purpose: one git shell-out per make run, not
+# one per reference.
+VERSION := $(shell scripts/version.sh describe)
 VERSION_PKG := github.com/ElcanoTek/fleet/internal/version
 VERSION_LDFLAGS := -X $(VERSION_PKG).version=$(VERSION)
+
+# version answers "what would a build from this tree call itself?" without
+# building anything — the same string `fleet version` will print.
+version:
+	@echo "$(VERSION)"
+
+# helm-package stamps the chart at PACKAGE time instead of carrying a version in
+# Chart.yaml. The in-tree file holds 0.0.0 placeholders because the chart is not
+# published separately (operators install it from a checkout and build their own
+# images), and a hand-maintained chart version is exactly the rotting number
+# ADR-0059 removed. Helm PARSES both fields and rejects four dotted components,
+# so `version` gets the SemVer rendering while `appVersion` — free-form — gets
+# the real release name.
+helm-package:
+	helm package deploy/helm/fleet \
+		--version "$(shell scripts/version.sh semver)" \
+		--app-version "$(shell scripts/version.sh current)"
 
 # compile-check every package (no artifacts emitted — `go build ./...` discards
 # the command binaries it produces).
 compile:
 	go build ./...
 
-# emit just the two deployable artifacts (used by scripts/update.sh + bootstrap.sh).
-# fleet is the ONE unified binary (#461): `fleet serve` (or bare `fleet`) runs the
-# server, every other verb is the operator CLI. fleet-admin is a thin deprecation
-# shim that forwards to the same admin dispatch; it stays until the first release
-# after 1.0.0 (ADR-0012) — scripts/update.sh and fleet-upgrade.sh hard-fail if it
-# is not emitted, so do not drop the line below without updating them.
+# emit just the deployable artifact (used by scripts/update.sh + bootstrap.sh).
+# fleet is the ONE binary (#461, ADR-0012): `fleet serve` (or bare `fleet`) runs
+# the server, every other verb is the operator CLI. The `fleet-admin` shim that
+# used to be emitted alongside it is gone (ADR-0060) — scripts/update.sh and
+# scripts/doctor.sh delete any leftover copy from a box they touch.
 bins:
 	go build -ldflags "$(VERSION_LDFLAGS)" -o ./fleet ./cmd/fleet
-	go build -ldflags "$(VERSION_LDFLAGS)" -o ./fleet-admin ./cmd/fleet-admin
 
 # fleet-bench: the load-testing tool (#296). A dev/ops utility, NOT part of the
 # deployed runtime — `make build`/`make install` deliberately do not emit it (so
@@ -94,17 +119,14 @@ fleet-bench:
 # `fleet update`, `fleet status`, `fleet chat`) work without cd-ing into the
 # checkout — the fix for "fleet isn't installed" on a dev box (#461). The
 # systemd unit can keep ExecStart=$(BINDIR)/fleet (bare fleet still serves) or
-# migrate to `fleet serve` on its own schedule; both work. The fleet-admin shim
-# is installed alongside until the first release after 1.0.0 (ADR-0012; the
-# scripts' upgrade path still expects it). Override the location with PREFIX (or
-# BINDIR) and DESTDIR for packaging.
+# migrate to `fleet serve` on its own schedule; both work. Override the location
+# with PREFIX (or BINDIR) and DESTDIR for packaging.
 PREFIX ?= /usr/local
 BINDIR ?= $(PREFIX)/bin
 install: bins
 	install -d "$(DESTDIR)$(BINDIR)"
 	install -m 0755 ./fleet "$(DESTDIR)$(BINDIR)/fleet"
-	install -m 0755 ./fleet-admin "$(DESTDIR)$(BINDIR)/fleet-admin"
-	@echo "installed: $(DESTDIR)$(BINDIR)/fleet (+ fleet-admin shim)"
+	@echo "installed: $(DESTDIR)$(BINDIR)/fleet"
 
 # Tests run WITH the fleet_host_executor tag so the host-mode fixtures + MockMode
 # tests compile. The release binary (`make build`/`bins`) is built WITHOUT it, so
