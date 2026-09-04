@@ -1249,3 +1249,48 @@ sandbox:
 		}
 	}
 }
+
+// TestAlwaysOnServersFiltersOptionalAndDisabled pins the filter behind the
+// "always on" label. httpapi renders this list as connectors that are
+// visible-but-locked and wired into every turn, so a mis-filter is a wrong
+// user-facing claim about which connectors can see a workspace's data —
+// and nothing asserted the filter itself.
+func TestAlwaysOnServersFiltersOptionalAndDisabled(t *testing.T) {
+	t.Setenv("FLEET_TEST_GATE_ON", "1")
+	t.Setenv("FLEET_TEST_GATE_OFF", "")
+
+	b := &Bundle{MCPCatalog: []ServerDef{
+		{Name: "always", DisplayName: "Always", Always: true},
+		{Name: "gated-on", DisplayName: "Gated On", EnabledEnv: []string{"FLEET_TEST_GATE_ON"}},
+		// Optional servers are the user's per-conversation choice, so they are
+		// never "always on" even when their gate is satisfied.
+		{Name: "optional-but-gated-on", Optional: true, EnabledEnv: []string{"FLEET_TEST_GATE_ON"}},
+		{Name: "optional-and-always", Optional: true, Always: true},
+		// A declared-but-unsatisfied gate means the server is not wired in.
+		{Name: "gated-off", EnabledEnv: []string{"FLEET_TEST_GATE_OFF"}},
+		{Name: "group-gated-off", EnabledGroups: [][]string{{"FLEET_TEST_GATE_OFF"}}},
+	}}
+
+	on := b.AlwaysOnServers()
+	got := make([]string, 0, len(on))
+	for _, s := range on {
+		got = append(got, s.Name)
+	}
+	want := []string{"always", "gated-on"}
+	if len(got) != len(want) {
+		t.Fatalf("AlwaysOnServers() = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("AlwaysOnServers() = %v, want %v", got, want)
+		}
+	}
+	// Display metadata rides along — it is what the locked row renders.
+	if first := b.AlwaysOnServers()[0]; first.DisplayName != "Always" {
+		t.Errorf("DisplayName not carried through: %+v", first)
+	}
+	// A nil bundle is a no-op, not a panic (callers hold an optional bundle).
+	if (*Bundle)(nil).AlwaysOnServers() != nil {
+		t.Errorf("nil bundle must yield nil")
+	}
+}

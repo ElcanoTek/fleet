@@ -305,6 +305,35 @@ calls*, not a claim that a fully compromised parent cannot reach the database or
 its encryption key. Full control-plane isolation is a possible future change,
 tracked separately rather than left ambiguous.
 
+## Open question: MCP account names at rest
+
+Recorded here because a migration is applied history, so a question parked in
+one is a question nobody can close in place. Migration
+`internal/sched/db/migrations/022_add_task_credential_allowlist.up.sql` points at
+this section.
+
+**What is stored.** `tasks.credential_allowlist` holds (server, account) pair
+**names** only — never credential values. The values never enter the database:
+they live in the process env file and are brokered host-side (`internal/creds`,
+ADR-0003, ADR-0042). The same is true of the sibling columns that name MCP
+servers or accounts: `tasks.mcp_selection`, the approval and remote-MCP seat
+columns on the chat store, and the per-conversation MCP account selection. None
+of them is a secret store.
+
+**What is unsettled.** Whether an account *name* is itself sensitive. A name can
+carry tenant or customer identity ("acme-prod"), so a deployment that treats its
+customer list as confidential may want these columns encrypted at rest.
+
+**Current posture: not encrypted, and deliberately so.** Encrypting one of these
+columns while its siblings stay plaintext would be theater — the same names
+appear in several tables, in logs, and in the agent's own system-prompt roster.
+The honest scope of a fix is store-wide at-rest encryption, which is the same
+decision the remote-MCP token boundary above already frames: a compromised parent
+process reaches the store and its key either way. So this is a threat-model
+decision for a deployment, tracked here rather than silently resolved: if account
+names are in scope for you, the control is disk/volume encryption plus restricted
+database access, not a per-column cipher.
+
 ## Scope
 
 This policy covers the code in this repository. Deployments are configured by a

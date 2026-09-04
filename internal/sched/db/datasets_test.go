@@ -277,3 +277,69 @@ func TestAddDatasetRowsRejectsOversizedBatch(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+// TestListDatasetsRowCountsPerDataset pins the batched row-count query in
+// ListDatasets to per-dataset attribution. The counts used to come from one
+// query per dataset, which could not mix them up; the grouped form can, and the
+// single-dataset fixture above would not notice. A dataset with no rows must
+// still come back with an empty (not nil) map, as the per-dataset form did.
+func TestListDatasetsRowCountsPerDataset(t *testing.T) {
+	db, first := setupDatasetFixture(t)
+	ctx := context.Background()
+
+	mk := func(company string) json.RawMessage {
+		raw, _ := json.Marshal(map[string]any{"company": company})
+		return raw
+	}
+
+	second := testDataset()
+	second.Name = "vendors"
+	if err := db.CreateDataset(ctx, second); err != nil {
+		t.Fatalf("CreateDataset second: %v", err)
+	}
+	if n, err := db.AddDatasetRows(ctx, second.ID, []json.RawMessage{mk("x")}); err != nil || n != 1 {
+		t.Fatalf("AddDatasetRows second: %d %v", n, err)
+	}
+
+	// A third dataset with zero rows: absent from the grouped result entirely.
+	empty := testDataset()
+	empty.Name = "empty"
+	if err := db.CreateDataset(ctx, empty); err != nil {
+		t.Fatalf("CreateDataset empty: %v", err)
+	}
+
+	// Move one of the first dataset's rows off pending so the two datasets
+	// differ in both count and status set.
+	claimed, err := db.ClaimNextDatasetRow(ctx, first.ID)
+	if err != nil || claimed == nil {
+		t.Fatalf("claim: %+v %v", claimed, err)
+	}
+
+	list, err := db.ListDatasets(ctx)
+	if err != nil {
+		t.Fatalf("ListDatasets: %v", err)
+	}
+	if len(list) != 3 {
+		t.Fatalf("want 3 datasets, got %d", len(list))
+	}
+	byID := map[uuid.UUID]*models.Dataset{}
+	for _, d := range list {
+		byID[d.ID] = d
+	}
+
+	if got := byID[first.ID].RowCounts[models.DatasetRowPending]; got != 2 {
+		t.Fatalf("first pending: want 2, got %d (%v)", got, byID[first.ID].RowCounts)
+	}
+	if got := byID[first.ID].RowCounts[models.DatasetRowRunning]; got != 1 {
+		t.Fatalf("first running: want 1, got %d (%v)", got, byID[first.ID].RowCounts)
+	}
+	if got := byID[second.ID].RowCounts[models.DatasetRowPending]; got != 1 {
+		t.Fatalf("second pending: want 1, got %d (%v)", got, byID[second.ID].RowCounts)
+	}
+	if got := byID[second.ID].RowCounts[models.DatasetRowRunning]; got != 0 {
+		t.Fatalf("second must not inherit the first dataset's statuses: %v", byID[second.ID].RowCounts)
+	}
+	if counts := byID[empty.ID].RowCounts; counts == nil || len(counts) != 0 {
+		t.Fatalf("row-less dataset wants an empty non-nil map, got %#v", counts)
+	}
+}

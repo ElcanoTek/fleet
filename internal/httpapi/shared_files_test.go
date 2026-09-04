@@ -236,3 +236,58 @@ func TestSharedFilesSyncSelfHeals(t *testing.T) {
 		t.Fatalf("staged copy not healed: (%q, %v)", got, err)
 	}
 }
+
+// TestSharedFilesPathNamespaceConflict409 walks the file-vs-folder collision
+// end to end: it must come back 409 (a conflict the admin can act on), not 500,
+// and — because the upload streams bytes before the row is written — the
+// refused upload must leave neither canonical bytes nor a staged file behind.
+func TestSharedFilesPathNamespaceConflict409(t *testing.T) {
+	srv, h := sharedFilesFixture(t)
+	lib := srv.sharedFilesLibrary()
+
+	// A file inside folder "q3" claims the path "shared/q3" as a directory.
+	if w := uploadShared(t, h, "admin@x", "q3", "", map[string]string{"x.csv": "a,b\n"}); w.Code != http.StatusOK {
+		t.Fatalf("seed upload: status %d body %s", w.Code, w.Body.String())
+	}
+	canonicalBefore, _ := os.ReadDir(lib.CanonicalDir)
+
+	// A root-level file named "q3" would need the same path as a plain file.
+	w := uploadShared(t, h, "admin@x", "", "", map[string]string{"q3": "collides"})
+	if w.Code != http.StatusConflict {
+		t.Fatalf("colliding upload: status %d (want 409) body %s", w.Code, w.Body.String())
+	}
+
+	// No orphaned canonical bytes: the handler removes what it streamed.
+	canonicalAfter, _ := os.ReadDir(lib.CanonicalDir)
+	if len(canonicalAfter) != len(canonicalBefore) {
+		t.Fatalf("refused upload leaked canonical bytes: %d -> %d", len(canonicalBefore), len(canonicalAfter))
+	}
+	// And "shared/q3" is still the directory the first upload made.
+	st, err := os.Stat(filepath.Join(lib.StagedRoot, "q3"))
+	if err != nil || !st.IsDir() {
+		t.Fatalf("staged q3 = (%v, isDir=%v); want the seeded directory", err, err == nil && st.IsDir())
+	}
+
+	// The PATCH path is gated too: renaming a root file onto a folder name.
+	if w := uploadShared(t, h, "admin@x", "", "", map[string]string{"other.csv": "x"}); w.Code != http.StatusOK {
+		t.Fatalf("second seed upload: status %d body %s", w.Code, w.Body.String())
+	}
+	var listed sharedFilesResponse
+	lw := do(t, h, http.MethodGet, "/shared-files", nil, "admin@x")
+	if err := json.NewDecoder(lw.Body).Decode(&listed); err != nil {
+		t.Fatalf("decode listing: %v", err)
+	}
+	var rootID string
+	for _, f := range listed.Files {
+		if f.Name == "other.csv" {
+			rootID = f.ID
+		}
+	}
+	if rootID == "" {
+		t.Fatalf("seeded root file missing from listing: %+v", listed.Files)
+	}
+	pw := do(t, h, http.MethodPatch, "/shared-files/"+rootID, map[string]any{"name": "q3"}, "admin@x")
+	if pw.Code != http.StatusConflict {
+		t.Fatalf("colliding rename: status %d (want 409) body %s", pw.Code, pw.Body.String())
+	}
+}

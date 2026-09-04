@@ -115,7 +115,7 @@ func (s *Server) admitConcurrentTurn(w http.ResponseWriter, user string) (releas
 // writeJSONStatus writes v as JSON with an explicit status code. (writeJSON
 // defaults to 200; this is its status-carrying sibling for error bodies.)
 func writeJSONStatus(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
+	setJSONContentType(w)
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(v); err != nil {
 		log.Printf("write json: %v", err)

@@ -2945,10 +2945,6 @@ func productionRemoteMCPOverlayOpener(svc *remotemcp.Service, runtime *productio
 	}
 }
 
-// wireRemoteMCPCatalog injects the per-user remote-MCP catalog provider (#466)
-// into the orchestrator handlers when the feature is on. A nil service (feature
-// disabled) is a no-op, so the bundle catalog is served unchanged. Kept separate
-// from run() so the nil-guard branch stays out of run()'s cyclomatic budget.
 // startMaintenanceLoop is the box's single reclamation driver: on a timer it
 // runs the chat plane's full pass (database retention sweeps + attachment files
 // + orphaned per-conversation workspaces), the orchestrator's temp-upload
@@ -3093,6 +3089,10 @@ func mcpCatalogEntries(mgr *agent.Manager) []handlers.MCPServerCatalogEntry {
 	return out
 }
 
+// wireRemoteMCPCatalog injects the per-user remote-MCP catalog provider (#466)
+// into the orchestrator handlers when the feature is on. A nil service (feature
+// disabled) is a no-op, so the bundle catalog is served unchanged. Kept separate
+// from run() so the nil-guard branch stays out of run()'s cyclomatic budget.
 func wireRemoteMCPCatalog(h *handlers.Handlers, svc *remotemcp.Service) {
 	if svc == nil {
 		return

@@ -82,6 +82,21 @@ allowlist OR `users.role = 'admin'`); viewers are read-only via the standard
 role gate. `(folder, name)` is unique — a collision is a `409`, not a silent
 rename.
 
+**Two rows can collide in two different ways, and only one of them is that
+unique constraint.** `(folder, name)` being unique still admits a root-level
+file named `q3` alongside a folder named `q3`: different pairs, same staged
+path. A filesystem cannot hold both, so the reconciler could never converge —
+`Stage` failed in one direction with `not a directory` and in the other with
+`file exists`, every pass returned an error forever, and which of the two files
+the sandbox could see depended on map iteration order. Both write paths refuse
+the second claimant with `ErrSharedFileNameIsFolder` → `409`, because the
+request is the last moment a human is present to be told. Note what this does
+**not** do: a deployment that already carries such a pair is not migrated, and
+its `Sync` keeps erroring until an operator renames one side. Nor is the guard
+race-free — "name must not equal any folder" is not expressible as a unique
+index, so it is check-then-write under the handler mutex. That closes the
+window within one process; two replicas racing the same pair can still land it.
+
 ## Governance: the size cap
 
 `shared_files_max_total_mb` (admin settings registry; env default

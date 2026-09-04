@@ -37,6 +37,42 @@ var ErrSharedFileNotFound = errors.New("shared file not found")
 // already claimed by another row.
 var ErrSharedFileExists = errors.New("a shared file with that name already exists in that folder")
 
+// ErrSharedFileNameIsFolder reports the OTHER way two rows can claim one path:
+// a root-level file named "q3" and a folder named "q3" are distinct (folder,
+// name) pairs, so UNIQUE (folder, name) admits both — but the staged tree is a
+// real filesystem, where "shared/q3" cannot be a file and a directory at once.
+// Left to the reconciler that is unrecoverable, not cosmetic: Stage fails
+// ("not a directory" one way round, "file exists" the other), so every Sync
+// pass returns an error forever and WHICH of the two rows reaches the sandbox
+// flaps with map iteration order. Rejecting the second writer is the only place
+// the conflict can still be reported to a human.
+//
+// Honest limit: unlike the (folder, name) collision, this one has NO database
+// constraint behind it — "name must not equal any folder" is not expressible as
+// a unique index — so the guard is check-then-write. The mutation handlers hold
+// sharedFilesMu, which closes the window inside one process, but that mutex is
+// process-local: two replicas racing the same pair (the split control-plane
+// deployment) can still land it, and the reconciler still cannot converge if
+// they do. Closing that properly needs a trigger or an advisory lock.
+var ErrSharedFileNameIsFolder = errors.New("that path is already claimed: a file and a folder in the shared library cannot share a name")
+
+// sharedPathNamespaceConflict matches a row whose existence would make the
+// requested (folder, name) unrepresentable as a path. The placeholders are
+// numbered to match CreateSharedFile's column order so the predicate can be
+// spliced straight into that INSERT: $1 = the id to exclude (the row being
+// updated; on insert it is the new id, which matches nothing), $2 = requested
+// name, $3 = requested folder.
+//
+// Two shapes, one per direction:
+//   - a root file named "X" is requested while some row lives in folder "X"
+//   - a row in folder "X" is requested while a root file is named "X"
+const sharedPathNamespaceConflict = `
+	SELECT 1 FROM shared_files
+	WHERE id <> $1 AND (
+		($3 = '' AND folder = $2)
+		OR ($3 <> '' AND folder = '' AND name = $3)
+	)`
+
 const sharedFileColumns = `id, name, folder, description, size_bytes, content_type, sha256, uploaded_by, created_at, updated_at`
 
 func scanSharedFile(row interface{ Scan(...any) error }) (SharedFile, error) {
@@ -52,13 +88,20 @@ func (s *Store) CreateSharedFile(ctx context.Context, f SharedFile) (SharedFile,
 	now := time.Now().Unix()
 	row := s.db.QueryRowContext(ctx, `
 		INSERT INTO shared_files (`+sharedFileColumns+`)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+		WHERE NOT EXISTS (`+sharedPathNamespaceConflict+`)
 		RETURNING `+sharedFileColumns,
 		f.ID, f.Name, f.Folder, f.Description, f.SizeBytes,
 		f.ContentType, f.SHA256, f.UploadedBy, now, now)
 	out, err := scanSharedFile(row)
 	if pgUniqueViolation(err) {
 		return SharedFile{}, ErrSharedFileExists
+	}
+	// The guard suppressed the insert rather than failing it, so no row came
+	// back. Distinguishing this from a genuine ErrNoRows needs no extra query:
+	// an INSERT ... RETURNING has nothing else to be silent about.
+	if errors.Is(err, sql.ErrNoRows) {
+		return SharedFile{}, ErrSharedFileNameIsFolder
 	}
 	return out, err
 }
@@ -99,6 +142,18 @@ func (s *Store) GetSharedFile(ctx context.Context, id string) (SharedFile, error
 // already validated name and folder; the unique constraint still backstops a
 // racing rename into an occupied path.
 func (s *Store) UpdateSharedFileMeta(ctx context.Context, id, name, folder, description string) (SharedFile, error) {
+	// The namespace guard runs first and separately: UPDATE ... WHERE NOT EXISTS
+	// would make "conflicting" and "no such id" the same empty result, and the
+	// two are different HTTP statuses (409 vs 404).
+	var conflict int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT EXISTS (`+sharedPathNamespaceConflict+`)::int`, id, name, folder).Scan(&conflict)
+	if err != nil {
+		return SharedFile{}, err
+	}
+	if conflict == 1 {
+		return SharedFile{}, ErrSharedFileNameIsFolder
+	}
 	row := s.db.QueryRowContext(ctx, `
 		UPDATE shared_files
 		SET name = $2, folder = $3, description = $4, updated_at = $5
