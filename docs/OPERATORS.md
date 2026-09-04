@@ -382,8 +382,12 @@ production-only bug. The pass covers, in order:
    worse state. See [`docs/BACKUP_RESTORE.md`](BACKUP_RESTORE.md).
 8. **Sandbox smoke** — `podman run --rm --network=none <image> true` **as the
    `fleet` user** (the image lives in *that* user's rootless store).
-9. **Source freshness** — reports commits behind upstream. Report-only:
-   pulling and rebuilding stays `fleet update`'s job; doctor never deploys.
+9. **Source freshness + build identity** — reports commits behind upstream,
+   whether the installed binary's stamped version is what the checkout would
+   build *now* (a release tag that arrived after the last `update` is the usual
+   gap — see [`VERSIONING.md`](VERSIONING.md)), and the modified/untracked
+   paths that make the checkout build as `.dirty`. Report-only: pulling and
+   rebuilding stays `fleet update`'s job; doctor never deploys.
 
 Exit codes: `0` healthy (or everything fixed) · `1` problems remain.
 

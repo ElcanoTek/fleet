@@ -249,7 +249,7 @@ if [[ "$DRY_RUN" == "1" ]]; then
   info "[dry-run] 6/9 Services: ${SERVICE_NAME} active; postgresql/fleet-web/caddy active when enabled (systemctl start), then /healthz + /readyz respond, then https://<caddy domain>/api-info answers THROUGH caddy (--resolve pinned to 127.0.0.1) when caddy is active"
   info "[dry-run] 7/9 Scheduled maintenance: ${BACKUP_TIMER} installed + enabled + active (advisory when absent) and ${BACKUP_SERVICE}'s last run succeeded; ${MAINT_TIMER} likewise; free space on the data dir + the podman image store above the disk floor"
   info "[dry-run] 8/9 Sandbox smoke: podman run --rm --network=none <sandbox image> true as ${SERVICE_USER}"
-  info "[dry-run] 9/9 Source freshness: report commits behind upstream (fix stays 'fleet update' — doctor never pulls or rebuilds)"
+  info "[dry-run] 9/9 Source freshness + build identity: report commits behind upstream, the installed binary's stamped version vs what ${SRC_DIR} would build now (a release tag fetched after the last build), and the paths that make the checkout read '.dirty' (fix stays 'fleet update' — doctor never pulls or rebuilds)"
   info "[dry-run] would restart ${SERVICE_NAME} + fleet-web after a toolchain/package upgrade or an app-unit reinstall above — a reinstalled fleet-backup unit does not bounce the app (unless --no-restart)"
   exit 0
 fi
@@ -1233,14 +1233,17 @@ else
   fail "sandbox image $sandbox_img missing from ${SERVICE_USER}'s rootless store — build it: sudo fleet update (or sudo FLEET_CLIENT_CONFIG_DIR=<bundle> scripts/build-sandbox-image.sh; a root run builds into ${SERVICE_USER}'s store)"
 fi
 
-# ── 9. source freshness ──────────────────────────────────────────────────────
-step "9/9  Source freshness"
+# ── 9. source freshness + build identity ─────────────────────────────────────
+step "9/9  Source freshness + build identity"
 
 # Report-only in every mode: pulling and rebuilding is `fleet update`'s job,
 # and doctor silently kicking off a deploy would be a surprise.
 if [[ -e "$SRC_DIR/.git" ]]; then
   git config --global --add safe.directory "$SRC_DIR" 2>/dev/null || true
-  if git -C "$SRC_DIR" fetch --quiet 2>/dev/null; then
+  # --tags because the build stamps its version from the release tags
+  # (docs/VERSIONING.md): a checkout holding the commits but not the tag would
+  # build — and the identity check below would compare against — `dev+g<sha>`.
+  if git -C "$SRC_DIR" fetch --quiet --tags 2>/dev/null; then
     behind="$(git -C "$SRC_DIR" rev-list --count 'HEAD..@{upstream}' 2>/dev/null || echo 0)"
     if [[ "${behind:-0}" -gt 0 ]]; then
       advise "source checkout is $behind commit(s) behind — run: sudo fleet update"
@@ -1249,6 +1252,46 @@ if [[ -e "$SRC_DIR/.git" ]]; then
     fi
   else
     advise "could not fetch $SRC_DIR — network or remote auth issue"
+  fi
+
+  # The installed binary's stamp vs what this checkout would stamp into a build
+  # right now. The two drift apart in one ordinary way: `fleet update` ran
+  # before release.yml tagged the push. The tag is cut only AFTER CI goes green
+  # on main — minutes after the push an operator updated on — so the binary was
+  # stamped `dev+g<sha>` for a commit that IS a release. The fetch above brought
+  # the tag in; only a rebuild re-stamps, and that stays `fleet update`'s job.
+  # version.sh must run FROM the checkout: it refuses to read a repo discovered
+  # from some other cwd (it would stamp a stranger's tags otherwise).
+  if [[ -f "$SRC_DIR/scripts/version.sh" ]]; then
+    would_stamp="$(cd "$SRC_DIR" && bash scripts/version.sh describe 2>/dev/null || echo unknown)"
+    installed_stamp=""
+    if [[ -x "$INSTALL_DIR/fleet" ]]; then
+      # `fleet version` prints "fleet <version> (<revision>)" or, when the
+      # version already names the commit, "fleet <version>": word two either way.
+      installed_stamp="$("$INSTALL_DIR/fleet" version 2>/dev/null | awk 'NR==1 {print $2}')"
+    fi
+    if [[ -z "$installed_stamp" ]]; then
+      advise "cannot read the installed binary's version (${INSTALL_DIR}/fleet version) — a build from this checkout would be ${would_stamp}"
+    elif [[ "$installed_stamp" == "$would_stamp" ]]; then
+      pass "installed fleet is ${installed_stamp} — what this checkout builds"
+    else
+      advise "installed fleet reports ${installed_stamp} but this checkout now builds ${would_stamp} — run: sudo fleet update (a release tag that arrived after the last build is the usual cause)"
+    fi
+  fi
+
+  # A modified tree stamps `.dirty` into every build. On a deployed box that is
+  # almost never an operator edit — it is a tracked file some build step rewrote
+  # (web/next-env.d.ts, until it was gitignored) — so the paths are named rather
+  # than leaving the operator to guess what "dirty" means. Untracked files count:
+  # they are build inputs too (same rule as scripts/version.sh).
+  dirty_paths="$(git -C "$SRC_DIR" status --porcelain --untracked-files=normal 2>/dev/null || true)"
+  if [[ -n "$dirty_paths" ]]; then
+    n_dirty="$(printf '%s\n' "$dirty_paths" | wc -l | tr -d ' ')"
+    dirty_sample="$(printf '%s\n' "$dirty_paths" | head -3 | awk '{print $NF}' | paste -sd ' ' -)"
+    [[ "$n_dirty" -gt 3 ]] && dirty_sample="${dirty_sample} …"
+    advise "source checkout has ${n_dirty} modified/untracked path(s) — builds from it stamp '.dirty': ${dirty_sample} (inspect: git -C ${SRC_DIR} status)"
+  else
+    pass "source checkout is clean — builds carry no '.dirty' stamp"
   fi
 else
   advise "no git checkout at $SRC_DIR — 'fleet update' will not work on this box"

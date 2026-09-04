@@ -49,6 +49,26 @@ than by a major-version bump.
 
 ### Fixed
 
+- The build identity no longer states the same fact twice. `fleet version`, the
+  login banner and the admin health summary rendered an untagged, modified
+  checkout as `dev+ge481b95080d3.dirty (e481b95080d3+dirty)` — the stamp from
+  `scripts/version.sh` already named the commit and its dirty state, and the
+  Go build info's revision was appended regardless. The revision is now
+  appended only when the stamp does not carry it, and its `+dirty` only when
+  the stamp does not already say so (`docs/VERSIONING.md`, "Reading a build's
+  identity").
+- Deployed checkouts no longer read as `.dirty` after every update.
+  `web/next-env.d.ts` was tracked, and Next regenerates it on both `next dev`
+  and `next build` with different contents, so the update's web build modified
+  a tracked file and every binary built on the box was stamped `.dirty`. The
+  file is gitignored and untracked now; `tsc --noEmit` passes without it and
+  `next build` recreates it.
+- `fleet update` prints the identity it just built and, when the stamp carries
+  no release, says why: `release.yml` tags a push to `main` only after its CI
+  run goes green, so an update taken right after a promotion is stamped
+  `dev+g<sha>` for a commit that is about to be a release. A later update
+  re-stamps it.
+
 - Preserve task files and reasoning-budget edits through upload retries, reruns,
   and unsaved-change prompts. Rerun APIs now validate attachment replacements;
   omitted files still inherit the original task's attachments.
@@ -70,6 +90,11 @@ than by a major-version bump.
 
 ### Changed
 
+- `fleet doctor` step 9 now covers the build identity as well as source
+  freshness: it fetches tags, compares the installed binary's stamped version
+  with what the checkout would build now (advising `fleet update` when they
+  differ), and names the modified/untracked paths that make a checkout build
+  as `.dirty`. Report-only, as before — doctor never pulls or rebuilds.
 - Refresh all three README demos with the current interfaces and repeatable,
   explicitly labeled scripted data. Recording now verifies expected content and
   requires no live model credentials. Correct contributor commands to run the
