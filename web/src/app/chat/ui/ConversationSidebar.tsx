@@ -376,8 +376,12 @@ function ProjectKebab({
             >
               Rename
             </MenuItem>
+            {/* The TEAM glyph, not the chain link. The whole point of the pair
+                is that the chain link means "by URL" and must not read as "my
+                team can see this" (ShareGlyphs.tsx) — and this is the
+                project-level TEAM action. */}
             <MenuItem
-              icon={<ShareGlyph className="size-4" off={teamShared} />}
+              icon={<TeamGlyph className="size-4" />}
               onClick={() => {
                 close();
                 onShare();
@@ -1239,8 +1243,14 @@ export function ConversationSidebar({
 
   const labelSummaries: LabelSummary[] = deriveLabels(conversations);
   const allLabelNames = labelSummaries.map((l) => l.name);
-  const pinned = pinnedUnfiled(conversations);
-  const recent = recentUnfiled(conversations);
+  // A chat whose project the viewer cannot see is treated as unfiled, so it
+  // still appears somewhere. Only meaningful once the projects list has
+  // loaded: an empty list on first paint would move every project chat into
+  // Temporary for a frame, so the set is withheld until there is one.
+  const knownProjectIds =
+    projects.length > 0 ? new Set(projects.map((p) => p.id)) : undefined;
+  const pinned = pinnedUnfiled(conversations, knownProjectIds);
+  const recent = recentUnfiled(conversations, knownProjectIds);
   const projectTree = projectGroups(conversations, projects);
   const filtering = computeIsFiltering({
     labels: filterLabels,

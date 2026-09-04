@@ -24,7 +24,8 @@ prior versions are listed because none have shipped.
   read-only) — two scopes, one place, so every surface that says a chat is
   shared also lets you change it. A teammate finds the chat in a **Team**
   section on the project's home page, opens it in the same read-only viewer
-  share links already use (owner and team named in a banner), and has exactly
+  share links already use — the same component, not a copy of it (owner and
+  team named in a banner) — and has exactly
   one forward action where the composer would be: **Branch to continue in your
   own chat**. The branch is theirs from the first byte, filed into the same
   project, private until they share it, and unaffected when the original is
@@ -52,7 +53,11 @@ prior versions are listed because none have shipped.
   project), a **Save** action appears beside Copy · Regenerate · Branch under a
   reply for capturing something the agent said, and existing personal memories
   can be promoted with **Move to team learnings** — a move, not a copy, so a
-  fact is never injected twice.
+  fact is never injected twice. The card's default destination is **My
+  memory**, even in a team-shared project: its text is what the *model*
+  extracted from the turn, and publishing by default there would turn a
+  months-old habit ("Save" means keep this) into a disclosure. The **Save**
+  action on a message you picked yourself defaults to the team.
 
 - **Find your stuff.** Search across a project's chats — yours and the team's —
   from one field on the project home.
@@ -75,6 +80,78 @@ prior versions are listed because none have shipped.
   ownership…** in the project settings dialog.
 
 ### Fixed
+
+- **A chat shared with one team could be handed to another, silently.**
+  `conversations.team_visible` was a bare boolean, so every read worked out
+  *who* it was shared with from the owner's **current** team. Moving someone
+  between teams — the routine admin reorg — therefore re-pointed every chat
+  they had ever shared at a group they never chose, listable and readable by
+  people with no connection to the original team. Nothing revoked the opt-in
+  and nothing asked. A share now names its own audience (migration 054),
+  compared against the *caller's* team on every read, and changing someone's
+  team revokes their shares on both the self-serve and admin paths, in the same
+  transaction as the change.
+
+- **Branching a teammate's chat handed over everything the read had filtered
+  out.** The read-only view strips tool calls, tool results and reasoning
+  because their content carries command output and API responses the owner
+  never shared — and then **Branch** copied the parent's messages verbatim into
+  a conversation the reader *owns* and can read unfiltered. One click. The copy
+  is now narrowed to exactly what the reader was shown, including the image
+  references (which point into the owner's workspace and are re-read by the
+  agent on the next turn with no ownership check), and the fork inherits the
+  parent's lockdown instead of quietly dropping it.
+
+- **Deleting a project made every member's chats immediately reapable.**
+  Detaching left `updated_at` alone, and `project_id IS NULL` is exactly what
+  re-arms the TTL sweep — so a four-month-old chat became sweep-eligible the
+  instant its project went away and was hard-deleted on the next turn anyone
+  took, while the confirm promised members their chats would "expire unless
+  pinned". There was no window in which to pin one. The detach now restarts
+  the retention clock, on project delete and on account delete alike.
+
+- **Losing access to a project made your own chats disappear.** Pinned and
+  Temporary both excluded any chat with a project, and the project section only
+  lists projects you can see — so a chat filed in a project you lost (you left
+  the team, an admin moved you, the owner re-shared it) rendered nowhere at
+  all, findable only by search. Those chats now show under Temporary, where the
+  retention rules that actually apply to them are stated.
+
+- **A project's audience drifted on an unrelated edit.** `team_shared: true`
+  resolved to the caller's *current* team every time, and the Projects modal
+  sent the flag on every save — so an owner who had changed teams handed the
+  project, and every team learning in it, to their new team by renaming it. An
+  already-shared project now keeps its team; re-pointing it takes a deliberate
+  un-share and re-share.
+
+- **Controls that reported success they hadn't achieved.** "Stop sharing the
+  link" cleared the badge optimistically and, on a thrown fetch, never
+  reconciled — telling the user a link was revoked while the URL kept
+  resolving. `share-with-team` echoed the *requested* state rather than the
+  stored one. A failed memory save reported itself as "Dismissed.", i.e. as the
+  user throwing the memory away. A failed member or team-learnings lookup
+  rendered as "nobody else is on this team" and "no team learnings yet". The
+  leave-team confirm turned a failed count into "there are none right now".
+  Each of these now says what actually happened.
+
+- **Smaller correctness fixes in the same pass.** The team-chat viewer stayed
+  up over every navigation but its own back arrow, hiding the chat pane so the
+  app looked frozen; "Project settings…" opened at most once per project;
+  editing a team learning discarded the draft before the write was confirmed;
+  **Delete** on a team learning was one unconfirmed, irreversible click beside
+  **Retire**; the project home's chat list never refreshed after its first
+  fetch; the memory modal's tab strip highlighted nothing outside a project;
+  the admin Team picker's "New team…" mode leaked from one account's menu to
+  the next; a branch error rendered above the transcript where the button that
+  caused it could not see it; the project kebab's team action drew the
+  *link* glyph; preview text left stray markers on horizontal rules, links with
+  parentheses, and escaped emphasis; project-member enumeration was open to
+  every member rather than the owner; ownership transfer distinguished "no such
+  user" from "wrong team" (an account-existence oracle) and would hand a
+  personal project to a stranger unasked; team listings shipped labels,
+  connector seats and parent conversation ids to teammates; `DeleteUser`'s
+  fail-closed guard read outside the transaction it protected; and a malformed
+  memory-accept body was silently saved to the wrong place.
 
 - **"Delete all unpinned" deleted chats filed in a project.** The rail promises
   that filing a chat into a project takes it out of Temporary, and the TTL

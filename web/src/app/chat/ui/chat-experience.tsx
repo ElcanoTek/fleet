@@ -1349,14 +1349,26 @@ export function ChatExperience({
     id: number;
     nonce: number;
   } | null>(null);
+  // Projects for the rail section (#509 follow-up): the sidebar shows the
+  // top few most-recently-updated projects as drag targets / dropdowns. The
+  // ProjectsModal still owns its own fetching (it's self-contained); this
+  // list only feeds the rail, refreshed on boot and when the modal closes
+  // (the modal is where projects get created/renamed). Declared here, above
+  // visibleOrder, because that memo needs the set of projects the viewer can
+  // see to decide which chats are "unfiled".
+  const [projects, setProjects] = useState<Project[]>([]);
   const visibleOrder = useMemo(
     () =>
       visibleConversationOrder({
         all: conversations,
         filtered: filteredConversations,
         filtering: filterLabels.length > 0 || sidebarQuery.trim().length > 0,
+        // Must mirror ConversationSidebar's own set, or j/k walks rows the
+        // sidebar isn't rendering.
+        knownProjectIds:
+          projects.length > 0 ? new Set(projects.map((p) => p.id)) : undefined,
       }),
-    [conversations, filteredConversations, filterLabels, sidebarQuery],
+    [conversations, filteredConversations, filterLabels, sidebarQuery, projects],
   );
 
   // With no query, show "default" + "advanced" + the top-ranked list. As
@@ -2007,7 +2019,14 @@ export function ChatExperience({
     // (SSE reattach) and restore (boot's auto-load of the latest chat,
     // tab-return staleness refetch) — otherwise the boot load resolving a
     // beat after the user opens a project home would silently close it.
-    if (!options.background && !options.restore) setProjectHome(null);
+    if (!options.background && !options.restore) {
+      setProjectHome(null);
+      // The team-chat viewer is a full-page overlay too, and it hid the chat
+      // pane entirely. Leaving it up while a conversation loaded behind it
+      // made every rail click look like the app had frozen: the only way out
+      // was the viewer's own back arrow.
+      setTeamChatView(null);
+    }
     // If this conversation is currently streaming, the local in-memory
     // copy has the in-flight UI updates that the server hasn't
     // persisted yet. Re-fetching would replace those with whatever's
@@ -2593,12 +2612,6 @@ export function ChatExperience({
     }
   };
 
-  // Projects for the rail section (#509 follow-up): the sidebar shows the
-  // top few most-recently-updated projects as drag targets / dropdowns. The
-  // ProjectsModal still owns its own fetching (it's self-contained); this
-  // list only feeds the rail, refreshed on boot and when the modal closes
-  // (the modal is where projects get created/renamed).
-  const [projects, setProjects] = useState<Project[]>([]);
   const loadProjects = useCallback(async () => {
     try {
       const res = await fetch("/api/projects", { cache: "no-store" });
@@ -2672,8 +2685,9 @@ export function ChatExperience({
   const closeProjectsModal = () => {
     setProjectsModal(null);
     void loadProjects();
-    // The modal can create a team on the way to sharing a project — re-read it
-    // so the project-home dialog agrees with what just happened.
+    // The modal can share a project with the caller's team, and Settings →
+    // Team can change which team that is in another tab — re-read it so the
+    // project-home dialog's copy agrees with what the modal just did.
     void loadMyTeam();
   };
 
@@ -2821,12 +2835,6 @@ export function ChatExperience({
     }
   };
 
-  // deleteProject does NOT confirm: its callers do, and they can say more than
-  // a generic window.confirm can. The project home opens a dialog quoting real
-  // counts — how many team learnings die with the project, how many chats from
-  // how many members leave it and become temporary — and offers the export
-  // (Item A6). The rail kebab, which has no page to load those counts on,
-  // keeps a plain confirm here.
   // transferProject hands a project to another member (ADR-0057) — the fix for
   // "the owner left", which froze the definition and, on account deletion,
   // destroyed the project and its team learnings. Resolves null on success, or
@@ -2858,6 +2866,12 @@ export function ChatExperience({
     }
   };
 
+  // deleteProject does NOT confirm: its callers do, and they can say more than
+  // a generic window.confirm can. The project home opens a dialog quoting real
+  // counts — how many team learnings die with the project, how many chats from
+  // how many members leave it and become temporary — and offers the export
+  // (Item A6). The rail kebab, which has no page to load those counts on,
+  // keeps a plain confirm there.
   const deleteProject = async (projectID: string) => {
     try {
       const res = await fetch(
@@ -2989,15 +3003,26 @@ export function ChatExperience({
   const shareConversation = async (
     conversation: ConversationSummary,
   ): Promise<boolean> => {
-    const response = await fetch(
-      `/api/conversations/${conversation.id}/share`,
-      {
+    setShareBusy(true);
+    let response: Response;
+    try {
+      response = await fetch(`/api/conversations/${conversation.id}/share`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({}),
-      },
-    );
+      });
+    } catch {
+      // A thrown fetch (offline, DNS, proxy reset) used to escape as an
+      // unhandled rejection and leave the button silent: the user clicked
+      // "Create link", nothing changed, and nothing said why.
+      showRailError("Couldn't reach the server — no link was created.");
+      setShareBusy(false);
+      return false;
+    } finally {
+      setShareBusy(false);
+    }
     if (!response.ok) {
+      showRailError(`Couldn't create the link (HTTP ${response.status}).`);
       await refreshConversations();
       return false;
     }
@@ -3021,14 +3046,31 @@ export function ChatExperience({
   };
 
   // unshareConversation revokes the public link (#226).
+  //
+  // The catch is not optional here. The optimistic clear runs FIRST, so a
+  // thrown fetch that skipped the reconcile left the UI saying the link was
+  // revoked — badge gone, dialog back to "Create link" — while /shared/<token>
+  // kept resolving for anyone holding the URL. Saying a link is dead when it
+  // is live is the one failure this control must not have.
   const unshareConversation = async (conversation: ConversationSummary) => {
     patchShareToken(conversation.id, "");
-    const response = await fetch(
-      `/api/conversations/${conversation.id}/share`,
-      { method: "DELETE" },
-    );
-    if (!response.ok) {
+    setShareBusy(true);
+    try {
+      const response = await fetch(
+        `/api/conversations/${conversation.id}/share`,
+        { method: "DELETE" },
+      );
+      if (!response.ok) {
+        showRailError(
+          `Couldn't stop sharing the link (HTTP ${response.status}) — it is still live.`,
+        );
+        await refreshConversations();
+      }
+    } catch {
+      showRailError("Couldn't reach the server — the link is still live.");
       await refreshConversations();
+    } finally {
+      setShareBusy(false);
     }
   };
 
@@ -3054,10 +3096,23 @@ export function ChatExperience({
         },
       );
       if (!response.ok) {
-        showRailError(
-          `Couldn't ${visible ? "share" : "unshare"} the chat with your team (HTTP ${response.status}).`,
-        );
+        // 409 is the server naming a precondition the user can act on — no
+        // team, or a chat with no team-shared project to appear in
+        // (ADR-0057). Show its sentence rather than a status code.
+        const reason =
+          response.status === 409
+            ? (await response.text()).trim()
+            : `Couldn't ${visible ? "share" : "unshare"} the chat with your team (HTTP ${response.status}).`;
+        showRailError(reason || "Couldn't share the chat with your team.");
         await refreshConversations();
+      } else {
+        // Trust the STORED state, not what we asked for.
+        const stored = (await response.json().catch(() => null)) as
+          | { team_visible?: boolean }
+          | null;
+        if (stored && stored.team_visible !== visible) {
+          await refreshConversations();
+        }
       }
     } catch {
       showRailError("Couldn't reach the server — the chat's team sharing is unchanged.");
@@ -3229,8 +3284,10 @@ export function ChatExperience({
   };
 
   const clearConversation = (opts?: { lockdown?: boolean }) => {
-    // Starting a new chat likewise dismisses an open project home.
+    // Starting a new chat likewise dismisses an open project home — and the
+    // team-chat viewer, which is the other full-page overlay.
     setProjectHome(null);
+    setTeamChatView(null);
     // The slot the user is staring at. Only tear it down when it's
     // idle — if a turn is in flight (including the brief window before
     // a per-submission pending key is promoted to a real conv id),
@@ -4269,9 +4326,10 @@ export function ChatExperience({
           }}
           searchShortcut={searchShortcut}
           onCreateProject={() => setProjectsModal({ create: true })}
-          onOpenProjectHome={(projectID, settings) =>
-            setProjectHome({ id: projectID, settings })
-          }
+          onOpenProjectHome={(projectID, settings) => {
+            setTeamChatView(null);
+            setProjectHome({ id: projectID, settings });
+          }}
           onPinProject={(projectID, pinned) =>
             void pinProject(projectID, pinned)
           }
@@ -4403,6 +4461,7 @@ export function ChatExperience({
             />
             <div
               role="dialog"
+              aria-modal="true"
               aria-label="Move to team learnings"
               className="relative z-10 w-full max-w-[24rem] rounded-[1rem] border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] p-5 shadow-[var(--shadow-md)]"
             >
@@ -4481,12 +4540,23 @@ export function ChatExperience({
                     "graph",
                     ...(activeProjectForMemory ? (["team"] as const) : []),
                   ] as const
-                ).map((view) => (
+                ).map((view) => {
+                  // memoryView survives closing the modal and switching
+                  // conversations, but the "team" tab only exists inside a
+                  // project — so reopening it from a project-less chat left
+                  // NO tab highlighted while the personal list rendered
+                  // underneath. Fall back to what is actually showing.
+                  const active =
+                    memoryView === "team" && !activeProjectForMemory
+                      ? "list"
+                      : memoryView;
+                  return (
                   <button
                     key={view}
                     type="button"
+                    aria-current={active === view ? "true" : undefined}
                     className={`rounded-full border px-3 py-1 text-[0.75rem] transition ${
-                      memoryView === view
+                      active === view
                         ? "border-[var(--color-text-primary)] text-[var(--color-text-primary)]"
                         : "border-[var(--color-border-strong)] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
                     }`}
@@ -4498,7 +4568,8 @@ export function ChatExperience({
                         ? "Graph"
                         : "Team learnings"}
                   </button>
-                ))}
+                  );
+                })}
               </div>
 
               {memoryView === "team" && activeProjectForMemory ? (
@@ -4801,6 +4872,7 @@ export function ChatExperience({
             onSetTeamShared={(c, visible) => void setTeamShared(c, visible)}
             onOpenProjectSettings={(projectID) => {
               setShareDialog(null);
+              setTeamChatView(null);
               setProjectHome({ id: projectID, settings: true });
             }}
             onClose={() => setShareDialog(null)}
@@ -5017,6 +5089,13 @@ export function ChatExperience({
               userEmail={userEmail}
               isOwner={projectHomeProject.owner_email === userEmail}
               initialSettingsOpen={projectHome?.settings}
+              onSettingsClosed={(open) =>
+                setProjectHome((cur) =>
+                  cur && cur.id === projectHomeProject.id
+                    ? { ...cur, settings: open }
+                    : cur,
+                )
+              }
               onBack={() => setProjectHome(null)}
               onOpenTeamChat={(conversationId) => setTeamChatView(conversationId)}
               onOpenChat={(conversationId) => {

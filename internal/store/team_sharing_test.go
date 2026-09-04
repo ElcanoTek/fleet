@@ -765,7 +765,7 @@ func TestTeamShareNeedsAnAudienceAndAHome(t *testing.T) {
 		name string
 		home func(t *testing.T, f teamFixture) string // returns the project id to file into ("" = none)
 	}{
-		{"no project", func(t *testing.T, f teamFixture) string { return "" }},
+		{"no project", func(_ *testing.T, _ teamFixture) string { return "" }},
 		{"a personal project", func(t *testing.T, f teamFixture) string {
 			p, err := f.s.CreateProject(f.ctx, &Project{OwnerEmail: "alice@x.com", Name: "Mine"})
 			if err != nil {
@@ -848,18 +848,18 @@ func TestUnsharingClearsTheStampedAudience(t *testing.T) {
 				t.Fatal(err)
 			}
 		}},
-		{"project stops being team-shared", func(t *testing.T, f teamFixture, c *Conversation) {
+		{"project stops being team-shared", func(t *testing.T, f teamFixture, _ *Conversation) {
 			none := ""
 			if _, err := f.s.UpdateProject(f.ctx, "alice@x.com", f.project.ID, ProjectPatch{TeamID: &none}); err != nil {
 				t.Fatal(err)
 			}
 		}},
-		{"the project is deleted", func(t *testing.T, f teamFixture, c *Conversation) {
+		{"the project is deleted", func(t *testing.T, f teamFixture, _ *Conversation) {
 			if err := f.s.DeleteProject(f.ctx, "alice@x.com", f.project.ID); err != nil {
 				t.Fatal(err)
 			}
 		}},
-		{"the owner leaves the team", func(t *testing.T, f teamFixture, c *Conversation) {
+		{"the owner leaves the team", func(t *testing.T, f teamFixture, _ *Conversation) {
 			if _, err := f.s.SetOwnTeam(f.ctx, "alice@x.com", "", false); err != nil {
 				t.Fatal(err)
 			}

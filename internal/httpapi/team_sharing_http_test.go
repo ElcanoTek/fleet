@@ -96,7 +96,7 @@ func TestConversationTeamView(t *testing.T) {
 	}
 	var snap struct {
 		OwnerEmail string `json:"owner_email"`
-		ProjectID  string `json:"project_id"`
+		TeamID     string `json:"team_id"`
 		Messages   []struct {
 			ID   int64  `json:"id"`
 			Type string `json:"type"`
@@ -105,8 +105,15 @@ func TestConversationTeamView(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &snap); err != nil {
 		t.Fatalf("json: %v", err)
 	}
-	if snap.OwnerEmail != "alice@x.com" || snap.ProjectID != f.project.ID {
+	if snap.OwnerEmail != "alice@x.com" || snap.TeamID != "quant" {
 		t.Errorf("snapshot = %+v", snap)
+	}
+	// The owner's working state is read for Branch but never sent: the fork's
+	// project and settings are decided server-side from the parent row.
+	for _, k := range []string{"persona", "model", "project_id", "lockdown"} {
+		if strings.Contains(w.Body.String(), `"`+k+`"`) {
+			t.Errorf("snapshot leaks the owner's %s", k)
+		}
 	}
 	if len(snap.Messages) != 2 || snap.Messages[0].ID == 0 {
 		t.Errorf("messages = %+v, want two text entries with ids", snap.Messages)

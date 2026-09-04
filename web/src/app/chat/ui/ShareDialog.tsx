@@ -24,6 +24,8 @@
 import type { ConversationSummary } from "./chat-experience";
 import type { Project } from "./ProjectsModal";
 import { ShareGlyph, TeamGlyph } from "./ShareGlyphs";
+import { useId } from "react";
+import { useDialogDismiss } from "@/app/shared/ui/useDialogDismiss";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
 
 export function ShareDialog({
@@ -65,9 +67,19 @@ export function ShareDialog({
   const teamShared = Boolean(conversation?.team_visible);
   const projectIsTeamShared = Boolean(project?.team_id);
   const teamName = project?.team_id || myTeam || "your team";
-  // Only a chat inside a team-shared project can be team-shared. Everything
-  // else gets the toggle disabled and a sentence that fits its case.
-  const canTeamShare = projectIsTeamShared;
+  // Only a chat inside a project shared WITH YOUR TEAM can be team-shared, and
+  // the server enforces exactly that (ADR-0057) — so the gate here has to
+  // match it or the dialog offers a control the API refuses. `myTeam ===
+  // undefined` means the team hasn't been read yet; don't disable on unknown.
+  const inMyTeamsProject =
+    projectIsTeamShared && (myTeam === undefined || project?.team_id === myTeam);
+  // Un-sharing is always available. A chat can be in a state the share rules
+  // no longer allow (its owner left the team, the project was re-shared
+  // elsewhere), and that is precisely when its owner most needs the checkbox
+  // to work — the server never refuses a revoke either.
+  const canTeamShare = inMyTeamsProject || teamShared;
+  const teamCheckboxId = useId();
+  useDialogDismiss(true, onClose);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
@@ -79,6 +91,7 @@ export function ShareDialog({
       />
       <div
         role="dialog"
+        aria-modal="true"
         aria-label="Share this chat"
         className="motion-safe:animate-pop-up-base relative z-10 w-full max-w-[28rem] rounded-[1.25rem] border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] p-5 shadow-[var(--shadow-md)]"
       >
@@ -97,8 +110,12 @@ export function ShareDialog({
           <>
             {/* ── Scope 1: the team ───────────────────────────────────── */}
             <section className="mb-4 rounded-[0.9rem] border border-[var(--color-border)] p-3">
-              <label className="flex items-start gap-2.5">
+              {/* The helper text sits OUTSIDE the <label>: it holds a button
+                  ("project settings"), and an interactive element inside a
+                  label activates that label's control when clicked. */}
+              <div className="flex items-start gap-2.5">
                 <input
+                  id={teamCheckboxId}
                   type="checkbox"
                   className="mt-0.5"
                   checked={teamShared}
@@ -108,13 +125,16 @@ export function ShareDialog({
                     onSetTeamShared(conversation, e.target.checked)
                   }
                 />
-                <span className="min-w-0 flex-1">
-                  <span className="flex items-center gap-1.5 text-[0.875rem] font-medium text-[var(--color-text-primary)]">
+                <div className="min-w-0 flex-1">
+                  <label
+                    htmlFor={teamCheckboxId}
+                    className="flex items-center gap-1.5 text-[0.875rem] font-medium text-[var(--color-text-primary)]"
+                  >
                     <TeamGlyph className="size-3.5 shrink-0" />
                     Share with team{project?.team_id ? ` (${project.team_id})` : ""}
-                  </span>
-                  <span className="mt-1 block text-[0.78rem] leading-[1.55] text-[var(--color-text-secondary)]">
-                    {canTeamShare ? (
+                  </label>
+                  <p className="mt-1 block text-[0.78rem] leading-[1.55] text-[var(--color-text-secondary)]">
+                    {inMyTeamsProject ? (
                       teamShared ? (
                         <>
                           Your team can read this chat from{" "}
@@ -130,6 +150,24 @@ export function ShareDialog({
                           ’s home page. Revocable any time.
                         </>
                       )
+                    ) : teamShared && project ? (
+                      // Shared, but the pairing has since broken. Say so, and
+                      // leave the checkbox live so it can be taken back.
+                      <>
+                        This chat is still shared with{" "}
+                        <strong className="font-medium">{teamName}</strong>, but{" "}
+                        <strong className="font-medium">{project.name}</strong>{" "}
+                        is no longer shared with your team. Un-tick to stop
+                        sharing it.
+                      </>
+                    ) : projectIsTeamShared && project ? (
+                      <>
+                        <strong className="font-medium">{project.name}</strong>{" "}
+                        is shared with{" "}
+                        <strong className="font-medium">{project.team_id}</strong>
+                        , which you aren&rsquo;t in — so you can&rsquo;t share a
+                        chat into it.
+                      </>
                     ) : project ? (
                       <>
                         <strong className="font-medium">{project.name}</strong>{" "}
@@ -153,9 +191,9 @@ export function ShareDialog({
                     ) : (
                       "Move this chat into a team-shared project to share it with your team."
                     )}
-                  </span>
-                </span>
-              </label>
+                  </p>
+                </div>
+              </div>
             </section>
 
             {/* ── Scope 2: a public link ──────────────────────────────── */}

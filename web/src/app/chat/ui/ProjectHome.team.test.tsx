@@ -317,3 +317,108 @@ describe("ProjectHome — ownership transfer", () => {
     ).toBeInTheDocument();
   });
 });
+
+// The panel's own failure modes. Each of these rendered a confident, wrong
+// statement about the project — the worst thing a surface like this can do.
+describe("ProjectHome — failure states don't lie", () => {
+  it("does not report an empty team when the members lookup failed", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input).endsWith("/members")) {
+          return new Response("boom", { status: 500 });
+        }
+        return new Response(JSON.stringify({}), { status: 200 });
+      }),
+    );
+    renderHome({ initialSettingsOpen: true });
+    fireEvent.click(screen.getByRole("button", { name: "Transfer ownership…" }));
+
+    expect(
+      await screen.findByText(/Couldn’t load this project’s members/),
+    ).toBeInTheDocument();
+    // The "nobody else is on this project's team yet" copy sends the owner off
+    // to fix a problem that may not exist.
+    expect(screen.queryByText(/Nobody else is on this project/)).toBeNull();
+    expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
+  });
+
+  it("does not report an empty project when the learnings lookup failed", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input).endsWith("/memories")) {
+          return new Response("boom", { status: 500 });
+        }
+        return new Response(JSON.stringify({}), { status: 200 });
+      }),
+    );
+    renderHome();
+    const panel = await screen.findByTestId("team-learnings");
+    expect(within(panel).getByText(/Couldn’t load team learnings/)).toBeInTheDocument();
+    expect(within(panel).queryByText(/No team learnings yet/)).toBeNull();
+  });
+});
+
+describe("ProjectHome — team learnings, destructive and lossy actions", () => {
+  const learnings = {
+    "/memories": {
+      memories: [
+        {
+          id: "m1",
+          content: "quote spreads in bps",
+          user_email: "alice@x.com",
+          created_at: 1767225600,
+        },
+      ],
+    },
+  };
+
+  it("asks before deleting a learning for good", async () => {
+    const writes: { url: string; method: string }[] = [];
+    mockRoutes(learnings, (url, init) =>
+      writes.push({ url, method: String(init.method) }),
+    );
+    renderHome();
+    const panel = await screen.findByTestId("team-learnings");
+
+    // Delete sat one word from Retire in a row of four identically styled
+    // buttons, and destroyed any member's contribution on a single click.
+    fireEvent.click(within(panel).getByRole("button", { name: "Delete" }));
+    expect(writes).toHaveLength(0);
+    expect(
+      within(panel).getByRole("button", { name: "Keep" }),
+    ).toBeInTheDocument();
+
+    fireEvent.click(within(panel).getByRole("button", { name: "Delete for good" }));
+    await waitFor(() => expect(writes).toHaveLength(1));
+    expect(writes[0].method).toBe("DELETE");
+  });
+
+  it("keeps the editor and the typed text when the save is refused", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (init?.method === "PATCH") return new Response("nope", { status: 403 });
+        if (String(input).endsWith("/memories")) {
+          return new Response(JSON.stringify(learnings["/memories"]), { status: 200 });
+        }
+        return new Response(JSON.stringify({}), { status: 200 });
+      }),
+    );
+    renderHome();
+    const panel = await screen.findByTestId("team-learnings");
+    fireEvent.click(within(panel).getByRole("button", { name: "Edit" }));
+
+    const editor = within(panel).getByLabelText("Edit team learning");
+    fireEvent.change(editor, { target: { value: "a long careful rewrite" } });
+    fireEvent.click(within(panel).getByRole("button", { name: "Save" }));
+
+    // Tearing the editor down first threw the rewrite away on any rejection.
+    await waitFor(() =>
+      expect(within(panel).getByLabelText("Edit team learning")).toHaveValue(
+        "a long careful rewrite",
+      ),
+    );
+  });
+});

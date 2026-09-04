@@ -62,9 +62,10 @@ history in full. Without that split the filter would have been decorative: one
 click turns a redacted read into a full-history chat the brancher owns and can
 read without any filter at all.
 
-What a teammate gets is a **read-only view** of the transcript — the same
-renderer a public share link uses, reached through team membership instead of a
-URL — with a banner naming the owner and the team, and one forward action where
+What a teammate gets is a **read-only view** of the transcript — literally the
+same renderer a public share link uses (`ReadOnlyTranscript`; the two differ
+only in how they load the markdown pipeline, which is a parameter), reached
+through team membership instead of a URL — with a banner naming the owner and the team, and one forward action where
 the composer would be: **Branch to continue in your own chat**. The branch is
 theirs from the first byte, filed into the same project, private until they
 share it, and unaffected if the original is later unshared or deleted. The

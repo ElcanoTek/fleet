@@ -200,3 +200,71 @@ test("a teammate finds a shared chat on the project home, reads it, and branches
   // The reader lands in their own chat, not back on the read-only view.
   await expect(page.getByTestId("team-chat-viewer")).toHaveCount(0);
 });
+
+// The viewer is a full-page overlay: while it is up, the chat pane is hidden
+// entirely. It was cleared only by its own Back arrow and by Branch, so any
+// other navigation — a rail row, New chat — loaded a conversation invisibly
+// behind it and the app simply looked frozen.
+test("leaving the team-chat viewer by any route, not just its back arrow", async ({
+  page,
+}) => {
+  await mockProjects(page, [SHARED_PROJECT]);
+  await page.route("**/api/projects/p-quant/team-conversations", (r: Route) =>
+    r.fulfill({
+      json: {
+        conversations: [
+          {
+            id: "c-theirs",
+            title: "Basis trade",
+            user_email: "bob@example.com",
+            updated_at: 1_700_000_400,
+          },
+        ],
+      },
+    }),
+  );
+  await page.route("**/api/conversations/c-theirs/team-view", (r: Route) =>
+    r.fulfill({
+      json: {
+        id: "c-theirs",
+        owner_email: "bob@example.com",
+        title: "Basis trade",
+        team_id: "quant",
+        updated_at: 1_700_000_400,
+        messages: [
+          { id: 11, role: "user", type: "text", content: { text: "how did you size it?" } },
+        ],
+      },
+    }),
+  );
+  await mockChatBoot(page, {
+    conversations: [
+      {
+        id: "c-mine",
+        title: "My own chat",
+        persona: "default",
+        model: "test-model",
+        pinned: false,
+        updated_at: 1_700_000_500,
+      },
+    ],
+  });
+  await page.goto("/chat");
+  await page.getByRole("heading", { name: /what can i help with/i }).waitFor({ timeout: 15_000 });
+
+  const openViewer = async () => {
+    await page.getByRole("button", { name: "Open project Quant" }).click();
+    await page.getByTestId("project-home").getByRole("button", { name: /Basis trade/ }).click();
+    await expect(page.getByTestId("team-chat-viewer")).toBeVisible();
+  };
+
+  // 1. A rail row.
+  await openViewer();
+  await page.getByRole("complementary").getByText("My own chat").click();
+  await expect(page.getByTestId("team-chat-viewer")).toHaveCount(0);
+
+  // 2. New chat.
+  await openViewer();
+  await page.getByRole("button", { name: /New chat/i }).first().click();
+  await expect(page.getByTestId("team-chat-viewer")).toHaveCount(0);
+});

@@ -22,6 +22,11 @@ import { lazy, Suspense, useEffect, useState } from "react";
 import { Icon } from "./Icon";
 import { TeamGlyph } from "./ShareGlyphs";
 import { CopyButton } from "./ChatChips";
+import {
+  ReadOnlyTranscript,
+  toBubbles,
+  type RawEntry,
+} from "./ReadOnlyTranscript";
 
 // The assistant markdown pipeline is lazy-loaded here for the same reason the
 // live transcript lazy-loads it (react-markdown + micromark, ~43 KiB): this
@@ -30,43 +35,23 @@ import { CopyButton } from "./ChatChips";
 // while the chunk loads.
 const AssistantMarkdown = lazy(() => import("./AssistantContent"));
 
-type RawEntry = { id?: number; role: string; type: string; content: unknown };
+// One transcript renderer, shared with the public share view — see
+// ReadOnlyTranscript. The markdown pipeline is the parameter, because this
+// door lazy-loads it and that one does not.
 
-export type TeamChatSnapshot = {
+
+// Mirrors store.TeamSharedConversation's serialized shape exactly. The owner's
+// persona, model, project and lockdown are deliberately NOT sent — the fork's
+// settings are decided server-side from the parent row, so the viewer has no
+// use for them.
+type TeamChatSnapshot = {
   id: string;
   owner_email: string;
   title: string;
-  persona: string;
-  model: string;
   team_id: string;
-  project_id?: string;
-  created_at: number;
   updated_at: number;
   messages: RawEntry[];
 };
-
-type Bubble = { role: "user" | "assistant"; text: string; lastId?: number };
-
-// toBubbles flattens the stored history entries into a clean user/assistant
-// text thread, merging consecutive same-role text (an assistant reply can land
-// as several text entries within one turn). The last merged entry's persisted
-// id is kept: that is the branch point a reader forks from.
-function toBubbles(entries: RawEntry[]): Bubble[] {
-  const out: Bubble[] = [];
-  for (const e of entries ?? []) {
-    if (e.type !== "text" || (e.role !== "user" && e.role !== "assistant")) continue;
-    const text = String((e.content as { text?: string } | null)?.text ?? "");
-    if (!text) continue;
-    const last = out[out.length - 1];
-    if (last && last.role === e.role) {
-      last.text += text;
-      if (e.id) last.lastId = e.id;
-    } else {
-      out.push({ role: e.role, text, lastId: e.id });
-    }
-  }
-  return out;
-}
 
 function shortName(email: string): string {
   const at = email.indexOf("@");
@@ -185,7 +170,11 @@ export function TeamChatViewer({
           </p>
         ) : null}
 
-        {error ? (
+        {/* Only the LOAD failure belongs up here — a branch failure renders
+            beside the button that caused it (see the sticky bar below), which
+            on any transcript longer than a viewport is the only place the
+            reader is looking. */}
+        {error && !snapshot ? (
           <p className="mb-4 rounded-[0.75rem] border border-[var(--color-danger-border)] bg-[color-mix(in_srgb,var(--color-danger)_10%,transparent)] px-3 py-2 text-[0.8rem] text-[var(--color-danger)]">
             {error}
           </p>
@@ -195,26 +184,15 @@ export function TeamChatViewer({
           <p className="text-[0.875rem] text-[var(--color-text-muted)]">Loading…</p>
         ) : null}
 
-        <div className="flex flex-col gap-5">
-          {bubbles.map((b, i) =>
-            b.role === "user" ? (
-              <div key={i} className="flex justify-end">
-                <div className="max-w-[85%] whitespace-pre-wrap rounded-[1rem] bg-[var(--color-overlay-strong)] px-4 py-2.5 text-[0.9375rem] leading-[1.55]">
-                  {b.text}
-                </div>
-              </div>
-            ) : (
-              <div key={i} className="assistant-markdown max-w-full text-[0.9375rem] leading-[1.6]">
-                <Suspense fallback={<div className="whitespace-pre-wrap">{b.text}</div>}>
-                  <AssistantMarkdown content={b.text} />
-                </Suspense>
-                <div className="mt-2 flex items-center gap-3 text-[0.7rem]">
-                  <CopyButton text={b.text} />
-                </div>
-              </div>
-            ),
+        <ReadOnlyTranscript
+          bubbles={bubbles}
+          renderAssistant={(text) => (
+            <Suspense fallback={<div className="whitespace-pre-wrap">{text}</div>}>
+              <AssistantMarkdown content={text} />
+            </Suspense>
           )}
-        </div>
+          actions={(b) => <CopyButton text={b.text} />}
+        />
 
         {snapshot && bubbles.length === 0 ? (
           <p className="text-[0.875rem] text-[var(--color-text-muted)]">
@@ -227,6 +205,14 @@ export function TeamChatViewer({
             else's chat, and it needs no permission from them. */}
         {snapshot && branchPoint ? (
           <div className="sticky bottom-0 mt-8 border-t border-[var(--color-border)] bg-[var(--color-surface-1)] pb-2 pt-4">
+            {error ? (
+              <p
+                role="alert"
+                className="mb-2 rounded-[0.75rem] border border-[var(--color-danger-border)] bg-[color-mix(in_srgb,var(--color-danger)_10%,transparent)] px-3 py-2 text-[0.8rem] text-[var(--color-danger)]"
+              >
+                {error}
+              </p>
+            ) : null}
             <button
               type="button"
               disabled={branching}

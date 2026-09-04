@@ -40,9 +40,12 @@ export type Me = {
   admin: boolean;
   // What leaving would cost, computed server-side (GET /api/me/team):
   // shared_projects = team-shared projects owned by OTHERS that go out of
-  // view; shared_chats = this user's own chats currently shared into them,
-  // all of which leaving unshares. Absent on older responses → the confirm
-  // omits the numbers rather than inventing them.
+  // view; shared_chats = this user's own chats currently shared with the team,
+  // all of which leaving unshares. ABSENT when the server could not count
+  // them (the fields are omitempty pointers on purpose) → the confirm says it
+  // doesn't know rather than reporting a zero it never computed. A dialog
+  // whose whole job is stating consequences must not degrade to "nothing to
+  // lose".
   shared_projects?: number;
   shared_chats?: number;
 };
@@ -278,7 +281,7 @@ function LeaveTeamConfirm({
 }) {
   const projects =
     sharedProjects === undefined
-      ? "the projects shared with it"
+      ? "any project shared with it"
       : sharedProjects === 0
         ? "any project shared with it (there are none right now)"
         : `${sharedProjects} team-shared project${sharedProjects === 1 ? "" : "s"}`;
@@ -292,6 +295,7 @@ function LeaveTeamConfirm({
       />
       <div
         role="dialog"
+        aria-modal="true"
         aria-label={`Leave ${team}?`}
         className="relative z-10 w-full max-w-[26rem] rounded-[1rem] border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] p-5 shadow-[var(--shadow-md)]"
       >
@@ -308,8 +312,18 @@ function LeaveTeamConfirm({
               {" "}— they stay yours, teammates just can&rsquo;t open them any more.
             </li>
           ) : null}
+          <li>
+            Chats you filed in {team}&rsquo;s projects stay yours, but move back
+            to Temporary — pin the ones you want to keep.
+          </li>
           <li>Projects you own stay yours, and stay shared with {team}.</li>
         </ul>
+        {sharedProjects === undefined || sharedChats === undefined ? (
+          <p className="mb-4 text-[0.78rem] leading-[1.5] text-[var(--color-text-muted)]">
+            We couldn&rsquo;t work out the exact numbers just now, so they
+            aren&rsquo;t shown above.
+          </p>
+        ) : null}
         <div className="flex items-center justify-end gap-2">
           <button
             type="button"

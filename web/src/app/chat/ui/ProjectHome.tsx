@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useId, useMemo, useState } from "react";
+import { useDialogDismiss } from "@/app/shared/ui/useDialogDismiss";
 import type { ConversationSummary } from "./chat-experience";
 import type { Project } from "./ProjectsModal";
 import { Icon } from "./Icon";
@@ -64,7 +65,7 @@ type ProjectFileEntry = {
 
 // One team learning. user_email is the writer (provenance, recorded at write
 // time); retired_at set = kept for the record but no longer injected.
-export type TeamLearning = {
+type TeamLearning = {
   id: string;
   content: string;
   kind?: string;
@@ -119,6 +120,7 @@ export function ProjectHome({
   onUpdateSettings,
   onTransfer,
   myTeam,
+  onSettingsClosed,
   onDelete,
 }: {
   project: Project;
@@ -149,6 +151,10 @@ export function ProjectHome({
   // work yet and the dialog says where to fix that instead of letting the
   // toggle 400. undefined = not read yet — the copy stays neutral.
   myTeam?: string;
+  // Called whenever the settings dialog opens or closes from inside, so the
+  // parent's `settings` flag tracks it and a later request to open is a state
+  // change rather than a no-op. Optional: the panel works standalone.
+  onSettingsClosed?: (open: boolean) => void;
   onDelete: () => void;
 }) {
   const [files, setFiles] = useState<ProjectFileEntry[] | null>(null);
@@ -161,10 +167,38 @@ export function ProjectHome({
   const [fetchedChats, setFetchedChats] = useState<ProjectChatEntry[] | null>(null);
   const [teamChats, setTeamChats] = useState<TeamChatEntry[] | null>(null);
   const [filesTruncated, setFilesTruncated] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(
+  // Read at mount AND on every later transition to true. As mount-only state
+  // this dialog opened at most once per project: the parent keeps ProjectHome
+  // mounted (keyed on the project id) and only flips its `settings` flag, so
+  // "Project settings…" from the rail kebab was dead after the first Cancel,
+  // and dead outright whenever the home was already open. The parent is told
+  // when it closes so its flag can fall back to false and the next open is a
+  // real transition again.
+  const [settingsOpen, setSettingsOpenState] = useState(
     Boolean(initialSettingsOpen),
   );
+  const setSettingsOpen = useCallback(
+    (open: boolean) => {
+      setSettingsOpenState(open);
+      onSettingsClosed?.(open);
+    },
+    [onSettingsClosed],
+  );
+  // Render-time reset (React's "adjust state when a prop changes" pattern, as
+  // used for the instruction and name drafts above) rather than an effect: an
+  // effect would render once with the stale value first.
+  const [seenSettingsRequest, setSeenSettingsRequest] = useState(
+    Boolean(initialSettingsOpen),
+  );
+  if (Boolean(initialSettingsOpen) !== seenSettingsRequest) {
+    setSeenSettingsRequest(Boolean(initialSettingsOpen));
+    if (initialSettingsOpen) setSettingsOpenState(true);
+  }
   const [confirmDelete, setConfirmDelete] = useState(false);
+  // Escape closes the settings dialog — but only while the delete confirm
+  // ISN'T stacked on top of it, so one press never dismisses both.
+  const closeSettings = useCallback(() => setSettingsOpen(false), [setSettingsOpen]);
+  useDialogDismiss(settingsOpen && !confirmDelete, closeSettings);
   // Search over both chat lists (Item E1). Client-side over lists already in
   // memory: a project's chats are bounded by what one member filed there, and
   // the point is finding a chat you know is here, fast.
@@ -203,6 +237,15 @@ export function ProjectHome({
   }
 
   // Chat list with previews — best-effort; failure keeps the prop list.
+  //
+  // Re-runs when the LIVE list for this project changes (a chat dragged in
+  // from the rail, one moved out, a share toggled), not only on project.id.
+  // Fetched once, this panel showed a snapshot for as long as it stayed open:
+  // file a chat into the project you are looking at and it simply did not
+  // appear until you left and came back.
+  const liveKey = chats
+    .map((c) => `${c.id}:${c.title}:${c.team_visible ? 1 : 0}:${c.share_token ? 1 : 0}`)
+    .join("|");
   useEffect(() => {
     let cancelled = false;
     queueMicrotask(() => {
@@ -225,7 +268,7 @@ export function ProjectHome({
     return () => {
       cancelled = true;
     };
-  }, [project.id]);
+  }, [project.id, liveKey]);
 
   // The Team section (Item C3). Only a team-shared project can have one — a
   // personal project's chats cannot be team-shared at all — so the fetch is
@@ -257,7 +300,9 @@ export function ProjectHome({
     };
   }, [project.id, teamShared]);
 
-  // Sources — fetched per open; best-effort (a failure shows the empty state).
+  // Sources — fetched per open. A FAILURE is reported, not rendered as an
+  // empty state: "this project has no files" and "we could not ask" look
+  // identical to a reader and only one of them is true.
   useEffect(() => {
     let cancelled = false;
     queueMicrotask(() => {
@@ -270,7 +315,10 @@ export function ProjectHome({
             },
           );
           if (!res.ok) {
-            if (!cancelled) setFiles([]);
+            if (!cancelled) {
+              setFiles([]);
+              setFileError(`Couldn’t load this project’s files (HTTP ${res.status}).`);
+            }
             return;
           }
           const data = (await res.json()) as {
@@ -279,10 +327,14 @@ export function ProjectHome({
           };
           if (!cancelled) {
             setFiles(data.files ?? []);
+            setFileError(null);
             setFilesTruncated(Boolean(data.truncated));
           }
         } catch {
-          if (!cancelled) setFiles([]);
+          if (!cancelled) {
+            setFiles([]);
+            setFileError("Couldn’t reach the server to list this project’s files.");
+          }
         }
       })();
     });
@@ -299,11 +351,18 @@ export function ProjectHome({
     if (ok) setSavedInstructions(draft);
   };
 
+  const [settingsError, setSettingsError] = useState<string | null>(null);
   const saveSettings = async () => {
     if (savingSettings) return;
+    setSettingsError(null);
+    // An empty name used to produce an empty patch, so the dialog closed with
+    // the rename silently discarded.
+    if (!nameDraft.trim()) {
+      setSettingsError("A project needs a name.");
+      return;
+    }
     const patch: { name?: string; team_shared?: boolean } = {};
-    if (nameDraft.trim() && nameDraft.trim() !== project.name)
-      patch.name = nameDraft.trim();
+    if (nameDraft.trim() !== project.name) patch.name = nameDraft.trim();
     if (sharedDraft !== Boolean(project.team_id))
       patch.team_shared = sharedDraft;
     if (Object.keys(patch).length === 0) {
@@ -713,6 +772,7 @@ export function ProjectHome({
           />
           <div
             role="dialog"
+            aria-modal="true"
             aria-label={`Settings for ${project.name}`}
             className="relative z-10 w-full max-w-sm rounded-[1rem] border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] p-5 shadow-[var(--shadow-md)]"
           >
@@ -766,6 +826,14 @@ export function ProjectHome({
               currentOwner={project.owner_email}
               onTransfer={onTransfer}
             />
+            {settingsError ? (
+              <p
+                role="alert"
+                className="mb-3 text-[0.75rem] leading-[1.5] text-[var(--color-danger)]"
+              >
+                {settingsError}
+              </p>
+            ) : null}
             <div className="flex items-center justify-between">
               <button
                 type="button"
@@ -853,7 +921,10 @@ export function TeamLearningsPanel({
       setEntries(data.memories ?? []);
       setError(null);
     } catch {
-      setEntries([]);
+      // entries stays NULL, not []: an empty array renders "No team learnings
+      // yet. Save one from any chat in this project" underneath the error,
+      // which is a claim about the project we just failed to read.
+      setEntries(null);
       setError("Couldn’t load team learnings.");
     }
   }, [projectId]);
@@ -867,6 +938,9 @@ export function TeamLearningsPanel({
       cancelled = true;
     };
   }, [load]);
+
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
 
   const canManage = (m: TeamLearning) =>
     (m.user_email ?? "").toLowerCase() === userEmail.toLowerCase() ||
@@ -896,7 +970,9 @@ export function TeamLearningsPanel({
     }
   };
 
-  const patch = async (id: string, body: Record<string, unknown>) => {
+  // Returns whether the write landed, so a caller holding unsaved text (the
+  // inline editor) knows whether it may throw that text away.
+  const patch = async (id: string, body: Record<string, unknown>): Promise<boolean> => {
     setError(null);
     try {
       const res = await fetch(
@@ -909,8 +985,10 @@ export function TeamLearningsPanel({
       );
       if (!res.ok) throw new Error(await res.text());
       await load();
+      return true;
     } catch (err) {
       setError(err instanceof Error ? err.message : "Couldn’t update that learning.");
+      return false;
     }
   };
 
@@ -941,7 +1019,9 @@ export function TeamLearningsPanel({
         <p className="mb-2 text-[0.72rem] text-[var(--color-danger)]">{error}</p>
       ) : null}
       {entries === null ? (
-        <p className="text-[0.8rem] text-[var(--color-text-muted)]">Loading…</p>
+        <p className="text-[0.8rem] text-[var(--color-text-muted)]">
+          {error ? "" : "Loading…"}
+        </p>
       ) : entries.length === 0 ? (
         <p className="text-[0.8rem] leading-[1.5] text-[var(--color-text-muted)]">
           No team learnings yet. Save one from any chat in this project — every
@@ -976,15 +1056,26 @@ export function TeamLearningsPanel({
                       <button
                         type="button"
                         className={actionClass}
-                        disabled={!editDraft.trim()}
+                        disabled={!editDraft.trim() || savingEdit}
                         onClick={() => {
                           const content = editDraft.trim();
-                          setEditingId(null);
-                          if (content && content !== m.content)
-                            void patch(m.id, { content });
+                          if (!content) return;
+                          if (content === m.content) {
+                            setEditingId(null);
+                            return;
+                          }
+                          // The editor stays up until the write lands. Tearing
+                          // it down first threw the typed text away on any
+                          // rejection — a permission error, a 500 — leaving a
+                          // one-line message and no way back to the rewrite.
+                          setSavingEdit(true);
+                          void patch(m.id, { content }).then((ok) => {
+                            setSavingEdit(false);
+                            if (ok) setEditingId(null);
+                          });
                         }}
                       >
-                        Save
+                        {savingEdit ? "Saving…" : "Save"}
                       </button>
                     </div>
                   </div>
@@ -1043,13 +1134,39 @@ export function TeamLearningsPanel({
                           >
                             {retired ? "Restore" : "Retire"}
                           </button>
-                          <button
-                            type="button"
-                            className={`${actionClass} hover:text-[var(--color-danger)]`}
-                            onClick={() => void remove(m.id)}
-                          >
-                            Delete
-                          </button>
+                          {confirmRemove === m.id ? (
+                            <>
+                              <button
+                                type="button"
+                                className={`${actionClass} text-[var(--color-danger)]`}
+                                onClick={() => {
+                                  setConfirmRemove(null);
+                                  void remove(m.id);
+                                }}
+                              >
+                                Delete for good
+                              </button>
+                              <button
+                                type="button"
+                                className={actionClass}
+                                onClick={() => setConfirmRemove(null)}
+                              >
+                                Keep
+                              </button>
+                            </>
+                          ) : (
+                            // Asks first. Delete is irreversible and sat one
+                            // word from Retire in a row of four identically
+                            // styled 0.68rem buttons — the project owner could
+                            // destroy any member's contribution by mis-clicking.
+                            <button
+                              type="button"
+                              className={`${actionClass} hover:text-[var(--color-danger)]`}
+                              onClick={() => setConfirmRemove(m.id)}
+                            >
+                              Delete
+                            </button>
+                          )}
                         </span>
                       ) : null}
                     </div>
@@ -1118,6 +1235,8 @@ function TransferOwnership({
   const [choice, setChoice] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [reloadNonce, setReloadNonce] = useState(0);
   const selectId = useId();
 
   useEffect(() => {
@@ -1131,20 +1250,32 @@ function TransferOwnership({
             { cache: "no-store" },
           );
           if (!res.ok) {
-            if (!cancelled) setMembers([]);
+            // A FAILED lookup is not an empty team. Rendering it as one told
+            // the owner "nobody else is on this project's team yet" and sent
+            // them off to fix a problem that does not exist, with no retry.
+            if (!cancelled) {
+              setMembers([]);
+              setLoadError(`Couldn’t load this project’s members (HTTP ${res.status}).`);
+            }
             return;
           }
           const data = (await res.json()) as { members?: string[] };
-          if (!cancelled) setMembers(data.members ?? []);
+          if (!cancelled) {
+            setMembers(data.members ?? []);
+            setLoadError(null);
+          }
         } catch {
-          if (!cancelled) setMembers([]);
+          if (!cancelled) {
+            setMembers([]);
+            setLoadError("Couldn’t reach the server to list this project’s members.");
+          }
         }
       })();
     });
     return () => {
       cancelled = true;
     };
-  }, [open, projectId]);
+  }, [open, projectId, reloadNonce]);
 
   // Everyone but the current owner — handing it to themselves is a no-op the
   // server accepts silently, but offering it would just be confusing.
@@ -1179,6 +1310,21 @@ function TransferOwnership({
       </p>
       {members === null ? (
         <p className="text-[0.75rem] text-[var(--color-text-muted)]">Loading members…</p>
+      ) : loadError ? (
+        <p className="text-[0.75rem] leading-[1.5] text-[var(--color-danger)]">
+          {loadError}{" "}
+          <button
+            type="button"
+            className="underline"
+            onClick={() => {
+              setMembers(null);
+              setLoadError(null);
+              setReloadNonce((n) => n + 1);
+            }}
+          >
+            Try again
+          </button>
+        </p>
       ) : candidates.length === 0 ? (
         <p className="text-[0.75rem] leading-[1.5] text-[var(--color-text-muted)]">
           Nobody else is on this project&rsquo;s team yet. Share the project with
@@ -1292,6 +1438,7 @@ function DeleteProjectConfirm({
       />
       <div
         role="dialog"
+        aria-modal="true"
         aria-label={`Delete ${project.name}?`}
         className="relative z-10 w-full max-w-[28rem] rounded-[1rem] border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] p-5 shadow-[var(--shadow-md)]"
       >

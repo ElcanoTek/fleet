@@ -56,4 +56,30 @@ describe("stripMarkdown", () => {
       "call user_email_lookup",
     );
   });
+
+  // Every case below left a stray markup character in the preview — the exact
+  // thing this function exists to prevent.
+  it("removes a horizontal rule instead of leaving one marker behind", () => {
+    // Ordered after the bullet and emphasis rules, each of these lost one
+    // marker to those and kept the rest: "***" came out as "*".
+    for (const rule of ["***", "___", "---", "- - -", "* * *", "_ _ _"]) {
+      expect(stripMarkdown(rule), rule).toBe("");
+    }
+    expect(stripMarkdown("Intro\n***\nOutro")).toBe("Intro Outro");
+  });
+
+  it("keeps a link label when the URL contains parentheses", () => {
+    expect(
+      stripMarkdown("[wiki](https://en.wikipedia.org/wiki/Foo_(bar)) is nice"),
+    ).toBe("wiki is nice");
+  });
+
+  it("renders an escaped marker as the marker, not as emphasis", () => {
+    // CommonMark shows *not bold*; the escapes were being consumed as if they
+    // were emphasis, which dropped the asterisks and kept the backslashes.
+    expect(stripMarkdown("He said: \\*not bold\\*")).toBe(
+      "He said: *not bold*",
+    );
+    expect(stripMarkdown("a \\_b\\_ c")).toBe("a _b_ c");
+  });
 });

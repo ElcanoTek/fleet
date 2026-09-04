@@ -1800,16 +1800,24 @@ export function MemoryProposalCard({
   onResolved: (next: MemoryProposal) => void;
 }) {
   const [submitting, setSubmitting] = useState<"save" | "dismiss" | null>(null);
-  // Inside a TEAM-SHARED project the team is the likely destination, so it is
-  // preselected — and shown, so the user can flip it before saving. In a
-  // personal project the default stays personal.
-  const [destination, setDestination] = useState<MemoryDestination>(
-    project?.teamShared ? "project" : "personal",
-  );
+  const [error, setError] = useState<string | null>(null);
+  // Defaults to MY MEMORY, even inside a team-shared project, and shows the
+  // picker so the team is one click away.
+  //
+  // This card holds text the MODEL extracted from the turn, not text the user
+  // chose — and publishing is one-way in the direction that matters: a
+  // retired team learning was still read. People who have clicked Save on
+  // these cards for months read it as "keep this", and a default that
+  // published to the whole project would turn that habit into a disclosure the
+  // first time the model lifted something sensitive out of a conversation.
+  // The explicit Save action on a message the user picked defaults the other
+  // way, because there the user chose the content.
+  const [destination, setDestination] = useState<MemoryDestination>("personal");
 
   const resolve = async (save: boolean) => {
     if (submitting || proposal.status !== "pending") return;
     setSubmitting(save ? "save" : "dismiss");
+    setError(null);
     try {
       if (save) {
         const toProject = Boolean(project) && destination === "project";
@@ -1819,7 +1827,16 @@ export function MemoryProposalCard({
           body: JSON.stringify(toProject ? { project_id: project?.id } : {}),
         });
         if (!response.ok) {
-          onResolved({ ...proposal, status: "dismissed" });
+          // A failed save is NOT a dismissal. Reporting "Dismissed." told the
+          // user they had thrown the memory away when in fact nothing was
+          // written and the proposal is still there to retry — and the team
+          // destination has its own failure (a membership re-check server
+          // side) that this card is the only place to see.
+          setError(
+            response.status === 404 && toProject
+              ? "Couldn't save to team learnings — you may no longer be a member of this project."
+              : `Couldn't save this memory (HTTP ${response.status}).`,
+          );
           return;
         }
         // #515 stage 2: the accept response reports what happened to the
@@ -1843,13 +1860,13 @@ export function MemoryProposalCard({
           method: "DELETE",
         });
         if (!response.ok) {
-          onResolved({ ...proposal, status: "dismissed" });
+          setError(`Couldn't dismiss this memory (HTTP ${response.status}).`);
           return;
         }
         onResolved({ ...proposal, status: "dismissed" });
       }
     } catch {
-      onResolved({ ...proposal, status: "dismissed" });
+      setError("Couldn't reach the server — nothing was saved or dismissed.");
     } finally {
       setSubmitting(null);
     }
@@ -1884,6 +1901,14 @@ export function MemoryProposalCard({
           onChange={setDestination}
           disabled={submitting !== null}
         />
+      ) : null}
+      {error ? (
+        <p
+          role="alert"
+          className="mb-2 text-[0.75rem] leading-[1.5] text-[var(--color-danger)]"
+        >
+          {error}
+        </p>
       ) : null}
       {proposal.status === "pending" ? (
         <div className="flex items-center gap-2">

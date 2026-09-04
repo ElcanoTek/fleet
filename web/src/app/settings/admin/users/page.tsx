@@ -184,9 +184,6 @@ function PermissionFields({
   );
 }
 
-// generatePassword returns a random 16-char password from an unambiguous
-// alphabet (no 0/O/1/l/I). crypto.getRandomValues + rejection sampling keeps
-// the distribution uniform; 16 chars over 55 symbols ≈ 92 bits.
 // TeamPicker replaces the free-text team field (Item A5). Typing a team name
 // silently created a new one on any typo or case difference — "Testing" and
 // "testing" became two trust groups, and the difference only shows up later,
@@ -213,8 +210,19 @@ function TeamPicker({
   // Creating a new team is a mode, not a value: the select shows "New team…"
   // while the adjacent input holds the draft. It opens automatically when the
   // current value is a name no account holds yet (a fresh team mid-edit).
+  //
+  // RESYNCED when `value` changes, not derived once. The kebab popover this
+  // renders in is reused across rows, so choosing "New team…" for one account
+  // and then opening another account's kebab left the mode set: the second
+  // account's real team appeared inside a "New team name" box while the select
+  // claimed a new team was being created.
   const known = value === "" || teams.includes(value);
   const [creating, setCreating] = useState(!known);
+  const [seenValue, setSeenValue] = useState(value);
+  if (value !== seenValue) {
+    setSeenValue(value);
+    setCreating(!(value === "" || teams.includes(value)));
+  }
   const showInput = creating || !known;
   return (
     <span className="flex min-w-0 flex-1 items-center gap-[0.35rem]">
@@ -254,6 +262,9 @@ function TeamPicker({
   );
 }
 
+// generatePassword returns a random 16-char password from an unambiguous
+// alphabet (no 0/O/1/l/I). crypto.getRandomValues + rejection sampling keeps
+// the distribution uniform; 16 chars over 55 symbols ≈ 92 bits.
 function generatePassword(): string {
   const alphabet = "abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   const out: string[] = [];
@@ -1109,6 +1120,17 @@ export default function AdminUsersPage() {
                   }}
                 />
               </div>
+              {/* Deleting an account is a cascade, not a de-provision, and the
+                  two-click button alone said none of it. The one thing it
+                  CANNOT take is a team-shared project — the server refuses and
+                  names what to transfer — so say that here too, where the
+                  admin decides. */}
+              <p className="mt-2 text-[0.7rem] leading-[1.5] text-[var(--color-text-muted)]">
+                Deleting removes their chats, memories, connected MCP servers
+                (and stored credentials), connector settings, skills and
+                personal projects. Projects they share with a team are kept —
+                transfer those first, from the project&rsquo;s settings.
+              </p>
             </div>
           ) : null}
 

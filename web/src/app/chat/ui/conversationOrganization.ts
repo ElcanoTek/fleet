@@ -106,12 +106,31 @@ export function filterConversations<T extends OrganizableConversation>(
 // pinnedUnfiled / recentUnfiled split the unsectioned conversations. A
 // project conversation lives only under its project, so both sections
 // exclude it; "Pinned" is the pinned remainder and "Temporary" the rest.
-export function pinnedUnfiled<T extends OrganizableConversation>(conversations: readonly T[]): T[] {
-  return conversations.filter((c) => c.pinned && !c.project_id);
+//
+// `knownProjectIds`, when given, is the set of projects the viewer can
+// actually see. A chat filed in a project OUTSIDE that set counts as unfiled
+// and shows here, because otherwise it shows NOWHERE: the project section only
+// iterates projects the viewer has, so losing access to a project (leaving the
+// team, an admin move, the owner re-sharing it elsewhere) made the viewer's
+// OWN chats vanish from the rail with nothing to explain it. Omitted, both
+// functions behave exactly as before.
+function isUnfiled(projectID: string | undefined, known?: ReadonlySet<string>): boolean {
+  if (!projectID) return true;
+  return known !== undefined && !known.has(projectID);
 }
 
-export function recentUnfiled<T extends OrganizableConversation>(conversations: readonly T[]): T[] {
-  return conversations.filter((c) => !c.pinned && !c.project_id);
+export function pinnedUnfiled<T extends OrganizableConversation>(
+  conversations: readonly T[],
+  knownProjectIds?: ReadonlySet<string>,
+): T[] {
+  return conversations.filter((c) => c.pinned && isUnfiled(c.project_id, knownProjectIds));
+}
+
+export function recentUnfiled<T extends OrganizableConversation>(
+  conversations: readonly T[],
+  knownProjectIds?: ReadonlySet<string>,
+): T[] {
+  return conversations.filter((c) => !c.pinned && isUnfiled(c.project_id, knownProjectIds));
 }
 
 // ── Projects in the rail (#509 follow-up) ────────────────────────────────────
@@ -163,9 +182,15 @@ export function visibleConversationOrder<T extends OrganizableConversation>(args
   all: readonly T[];
   filtered: readonly T[];
   filtering: boolean;
+  // The projects the viewer can see — see pinnedUnfiled. Must match what the
+  // sidebar passes, or j/k navigation drifts from the rendered rows.
+  knownProjectIds?: ReadonlySet<string>;
 }): T[] {
   if (args.filtering) {
     return [...args.filtered];
   }
-  return [...pinnedUnfiled(args.all), ...recentUnfiled(args.all)];
+  return [
+    ...pinnedUnfiled(args.all, args.knownProjectIds),
+    ...recentUnfiled(args.all, args.knownProjectIds),
+  ];
 }

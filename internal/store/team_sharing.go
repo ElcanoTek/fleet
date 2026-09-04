@@ -31,30 +31,35 @@ import (
 
 // TeamSharedConversation is the read-only view a teammate gets of a
 // conversation its owner shared with the team. It carries the owner's email
-// (the viewer is told whose chat this is) and the project the chat lives in
-// (the Branch action files the fork into the same project), which the
-// anonymous share snapshot deliberately omits.
+// (the viewer is told whose chat this is) and the team it was shared with,
+// which the anonymous share snapshot deliberately omits.
 //
 // Unlike SharedConversation the message entries KEEP their persisted ids: a
 // teammate's only way to build on the chat is Branch, and a branch point is a
 // messages.id. The ids are already visible to every member of the team through
 // their own branches, so this leaks nothing the feature does not require.
+//
+// What is SERIALIZED is what the viewer needs: whose chat, called what, shared
+// with whom, and the transcript. The owner's working state is read but not
+// sent — see the unexported block.
 type TeamSharedConversation struct {
 	ID         string `json:"id"`
 	OwnerEmail string `json:"owner_email"`
 	Title      string `json:"title"`
-	Persona    string `json:"persona"`
-	Model      string `json:"model"`
 	TeamID     string `json:"team_id"`
-	ProjectID  string `json:"project_id,omitempty"`
-	// Lockdown is carried for BranchConversation, which must not hand a
-	// teammate a non-isolated fork of an isolated chat. It is the owner's own
-	// conversation setting and is serialized so the viewer knows the chat was
-	// network-isolated when it ran.
-	Lockdown  bool                 `json:"lockdown"`
-	CreatedAt int64                `json:"created_at"`
-	UpdatedAt int64                `json:"updated_at"`
-	Messages  []agent.HistoryEntry `json:"messages"`
+	UpdatedAt  int64  `json:"updated_at"`
+
+	// Read for BranchConversation, which inherits them, and json:"-" because
+	// the viewer has no use for them: the fork's project and settings are
+	// decided entirely server-side from the parent row, so sending them would
+	// be the owner's per-chat state going out for nothing. Lockdown is the
+	// load-bearing one — a fork of a network-isolated chat must be isolated.
+	Persona   string `json:"-"`
+	Model     string `json:"-"`
+	ProjectID string `json:"-"`
+	Lockdown  bool   `json:"-"`
+
+	Messages []agent.HistoryEntry `json:"messages"`
 }
 
 // GetTeamVisibleConversation returns the read-only transcript of convID when
@@ -92,7 +97,7 @@ func (s *Store) GetTeamVisibleConversation(ctx context.Context, callerEmail, con
 	err = s.db.QueryRowContext(ctx, `
 		SELECT c.id, c.user_email, c.title, c.persona, c.model,
 		       COALESCE(c.team_shared_with, ''), COALESCE(c.project_id, ''),
-		       c.lockdown, c.created_at, c.updated_at
+		       c.lockdown, c.updated_at
 		FROM conversations c
 		WHERE c.id = $1
 		  AND c.deleted_at IS NULL
@@ -101,7 +106,7 @@ func (s *Store) GetTeamVisibleConversation(ctx context.Context, callerEmail, con
 		  AND (c.user_email = $2 OR ($3 <> '' AND c.team_shared_with = $3))`,
 		convID, callerEmail, team,
 	).Scan(&out.ID, &out.OwnerEmail, &out.Title, &out.Persona, &out.Model,
-		&out.TeamID, &out.ProjectID, &out.Lockdown, &out.CreatedAt, &out.UpdatedAt)
+		&out.TeamID, &out.ProjectID, &out.Lockdown, &out.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil

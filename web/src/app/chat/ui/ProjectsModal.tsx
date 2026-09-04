@@ -154,10 +154,34 @@ export function ProjectsModal({
 
   const save = async () => {
     if (busy || !name.trim()) return;
+    // Turning sharing OFF unshares every chat members shared into the project.
+    // The project home says so in red beside its checkbox; this one PATCHed
+    // the identical body and said nothing.
+    const wasShared = Boolean(projects.find((p) => p.id === selectedId)?.team_id);
+    if (
+      selectedId &&
+      wasShared &&
+      !teamShared &&
+      !window.confirm(
+        "Stop sharing this project with your team? Every chat members shared into it stops being shared too.",
+      )
+    )
+      return;
     setBusy(true);
     setError(null);
     try {
-      const body = JSON.stringify({ name: name.trim(), instructions, team_shared: teamShared });
+      // team_shared is sent only when it CHANGED. Sent unconditionally it
+      // re-resolved the audience server-side on every save, so an owner whose
+      // own team had changed handed the project — and every team learning in
+      // it — to their new team by renaming it. (The server now refuses to
+      // re-point an already-shared project for the same reason; this keeps
+      // the request honest about what the user asked for.)
+      const patch: Record<string, unknown> = {
+        name: name.trim(),
+        instructions,
+      };
+      if (!selectedId || teamShared !== wasShared) patch.team_shared = teamShared;
+      const body = JSON.stringify(patch);
       const res = selectedId
         ? await fetch(`/api/projects/${encodeURIComponent(selectedId)}`, {
             method: "PATCH",

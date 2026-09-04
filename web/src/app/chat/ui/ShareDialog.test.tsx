@@ -139,3 +139,50 @@ describe("ShareDialog", () => {
     expect(screen.queryByRole("checkbox")).toBeNull();
   });
 });
+
+// The dialog's gate must match the server's, which refuses a share with no
+// audience or no home (ADR-0057) — otherwise it offers a control the API
+// rejects — and must never block a REVOKE, which the server never refuses.
+describe("ShareDialog — the team toggle tracks what the server will accept", () => {
+  it("refuses to offer sharing into a project belonging to another team", () => {
+    renderDialog({
+      project: project({ team_id: "ops" }),
+      myTeam: "quant",
+    });
+    const box = screen.getByRole("checkbox", { name: /Share with/ });
+    expect(box).toBeDisabled();
+    expect(screen.getByText(/which you aren’t in/)).toBeInTheDocument();
+  });
+
+  it("lets the owner un-share even after the pairing has broken", () => {
+    // Shared with quant, but the project is no longer shared with the owner's
+    // team — the exact state in which the owner most needs the control, and
+    // the one a `project.team_id`-only gate disabled.
+    const onSetTeamShared = vi.fn();
+    renderDialog({
+      conversation: conversation({ team_visible: true }),
+      project: project({ team_id: undefined }),
+      myTeam: "quant",
+      onSetTeamShared,
+    });
+    const box = screen.getByRole("checkbox", { name: /Share with/ });
+    expect(box).not.toBeDisabled();
+    expect(box).toBeChecked();
+    fireEvent.click(box);
+    expect(onSetTeamShared).toHaveBeenCalledWith(expect.anything(), false);
+  });
+
+  it("does not nest the project-settings button inside the checkbox label", () => {
+    // A <button> inside a <label> activates that label's control when clicked,
+    // so "project settings" would also toggle team sharing.
+    renderDialog({ project: project({ team_id: undefined }), myTeam: "quant" });
+    const link = screen.getByRole("button", { name: "project settings" });
+    expect(link.closest("label")).toBeNull();
+  });
+});
+
+it("Escape closes the dialog", () => {
+  const props = renderDialog();
+  fireEvent.keyDown(document, { key: "Escape" });
+  expect(props.onClose).toHaveBeenCalled();
+});

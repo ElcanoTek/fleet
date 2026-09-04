@@ -1369,7 +1369,7 @@ function SummarizeProgressCard({
 // one model for both paths — and only when the chat is in a project; outside
 // one there is a single destination and no choice worth showing, so the button
 // saves straight to personal memory.
-function SaveToMemoryAction({
+export function SaveToMemoryAction({
   content,
   project,
   onSaved,
@@ -1379,9 +1379,25 @@ function SaveToMemoryAction({
   onSaved: () => void;
 }) {
   const [open, setOpen] = useState(false);
+  // The user picked this text off a message they are looking at, so inside a
+  // team-shared project the team is the likely destination and is preselected
+  // — with the picker shown, so they can flip it before saving. (The approval
+  // card, whose text the MODEL extracted, defaults the other way.) Synced
+  // rather than read once at mount: the projects list can land after the first
+  // render on a boot restore, and the picker must not sit on a default it
+  // computed from a project it had not loaded yet.
+  const teamShared = Boolean(project?.teamShared);
   const [destination, setDestination] = useState<MemoryDestination>(
-    project?.teamShared ? "project" : "personal",
+    teamShared ? "project" : "personal",
   );
+  const [touched, setTouched] = useState(false);
+  // Render-time reset rather than an effect, so the picker never paints once
+  // with the default it computed before the project was known.
+  const [seenTeamShared, setSeenTeamShared] = useState(teamShared);
+  if (teamShared !== seenTeamShared) {
+    setSeenTeamShared(teamShared);
+    if (!touched) setDestination(teamShared ? "project" : "personal");
+  }
   const [state, setState] = useState<"idle" | "saving" | "saved" | "error">(
     "idle",
   );
@@ -1446,7 +1462,10 @@ function SaveToMemoryAction({
           <MemoryDestinationPicker
             project={project}
             value={destination}
-            onChange={setDestination}
+            onChange={(d) => {
+              setTouched(true);
+              setDestination(d);
+            }}
             disabled={state === "saving"}
           />
           <button

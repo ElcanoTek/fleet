@@ -206,3 +206,48 @@ describe("project grouping (#509 follow-up)", () => {
     expect(filterConversations(all, { query: "quarterly" }).map((c) => c.title)).toEqual(["quarterly report"]);
   });
 });
+
+// A chat filed in a project the viewer can no longer see must still show
+// SOMEWHERE. Pinned and Temporary both excluded every chat with a project_id,
+// and the project section only iterates projects the viewer has — so losing
+// access to a project (leaving the team, an admin move, the owner re-sharing
+// it elsewhere) made the viewer's OWN chats vanish from the rail, findable
+// only by search, with nothing on screen to explain it.
+describe("chats whose project the viewer cannot see", () => {
+  const convs = [
+    { id: "a", title: "loose", pinned: false, updated_at: 3 },
+    { id: "b", title: "in a visible project", pinned: false, updated_at: 2, project_id: "p1" },
+    { id: "c", title: "in a lost project", pinned: false, updated_at: 1, project_id: "gone" },
+    { id: "d", title: "pinned, lost project", pinned: true, updated_at: 1, project_id: "gone" },
+  ];
+
+  it("treats them as unfiled once the visible projects are known", () => {
+    const known = new Set(["p1"]);
+    expect(recentUnfiled(convs, known).map((c) => c.title)).toEqual([
+      "loose",
+      "in a lost project",
+    ]);
+    expect(pinnedUnfiled(convs, known).map((c) => c.title)).toEqual([
+      "pinned, lost project",
+    ]);
+  });
+
+  it("changes nothing when the caller doesn't pass a set", () => {
+    // The rail withholds the set until the projects list has loaded, so a
+    // first paint must not sweep every project chat into Temporary.
+    expect(recentUnfiled(convs).map((c) => c.title)).toEqual(["loose"]);
+    expect(pinnedUnfiled(convs).map((c) => c.title)).toEqual([]);
+  });
+
+  it("keeps j/k in step with what the sidebar renders", () => {
+    const known = new Set(["p1"]);
+    expect(
+      visibleConversationOrder({
+        all: convs,
+        filtered: [],
+        filtering: false,
+        knownProjectIds: known,
+      }).map((c) => c.title),
+    ).toEqual(["pinned, lost project", "loose", "in a lost project"]);
+  });
+});
