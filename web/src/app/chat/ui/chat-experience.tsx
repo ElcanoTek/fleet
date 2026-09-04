@@ -2034,7 +2034,7 @@ export function ChatExperience({
         setSelectedPersona(conv.persona);
         setSelectedModel(conv.model || currentDefaultModel());
       }
-      setSidebarOpen(false);
+      if (!options.background && !options.restore) setSidebarOpen(false);
       return;
     }
 
@@ -2207,7 +2207,9 @@ export function ChatExperience({
         pendingHistoryScrollRef.current = data.conversation.id;
       }
       setConvMessages(data.conversation.id, next);
-      setSidebarOpen(false);
+      // A boot restore or background revalidation must not close navigation
+      // the reader opened while that request was in flight.
+      if (!options.background && !options.restore) setSidebarOpen(false);
     } finally {
       if (!options.background) setIsLoadingHistory(false);
     }

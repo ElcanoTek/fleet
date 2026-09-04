@@ -123,3 +123,16 @@ for (const width of [1280, 390]) {
     }
   });
 }
+
+test("project settings can be opened directly from the mobile sidebar", async ({ page, context }) => {
+  await page.setViewportSize({ width: 390, height: 900 });
+  await loginViaCookie(context);
+  await boot(page);
+  const sidebar = page.getByRole("complementary", { name: "Primary navigation" });
+  // Wait for the drawer's entrance animation before targeting its controls;
+  // scrolling a still-offscreen control into view changes the drawer itself.
+  await expect.poll(async () => (await sidebar.boundingBox())?.x).toBe(0);
+  await page.getByRole("button", { name: "Project options for Research" }).click();
+  await page.getByRole("menuitem", { name: "Project settings…" }).click();
+  await expect(page.getByRole("dialog", { name: "Settings for Research" })).toBeVisible();
+});
