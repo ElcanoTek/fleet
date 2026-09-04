@@ -36,7 +36,8 @@ test("record chat demo", async ({ browser, baseURL }) => {
     await composer.press("Enter");
     await expect(page.getByText("Your six-week kickoff plan")).toBeVisible();
     await expect(page.getByText("$248,640", { exact: false })).toBeVisible();
-    await page.getByText("Next step:", { exact: false }).scrollIntoViewIfNeeded();
+    await page.getByText("Your six-week kickoff plan").hover();
+    await page.mouse.wheel(0, 600);
     await page.waitForTimeout(6500);
     await page.screenshot({ path: `${out}/chat-final.png` });
   } finally {

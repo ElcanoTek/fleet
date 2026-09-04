@@ -36,6 +36,10 @@ mandatory sandbox, broker authorization, or bundle boundaries.
 - **Scheduler promotion:** the database update rechecks that a selected task is
   still due, ungated, and a cron task. Postponement, adding a `run_if` condition,
   or conversion to a webhook template now wins over a stale scheduler selection.
+- **Reply readability:** the composer's 64-pixel fade covered final reply
+  actions even at the bottom of the transcript. The transcript now reserves
+  enough space; geometric browser tests reproduce the overlap and verify its
+  removal on desktop and mobile.
 - **Shared dialogs:** Tab and Shift+Tab remain inside the topmost dialog, with
   disabled, hidden and inert controls excluded. Existing Escape and focus-return
   behavior remains covered.

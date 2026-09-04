@@ -6,8 +6,8 @@
 **A general-purpose agent fleet you run yourself — any model, in a
 sandbox, on a budget, connected to your data.**
 
-fleet is how a whole department adopts AI agents without losing sleep: every
-tool call sandboxed, every turn metered against a budget, every credential held
+fleet is how a whole department adopts AI agents without losing sleep: local
+execution sandboxed, every turn metered against a budget, every credential held
 server-side, and every working setup versioned so it runs again tomorrow — for
 the next person, on a schedule. MIT-licensed, on your infrastructure: your
 compute, your data, your know-how. You own the means of production.
@@ -52,8 +52,8 @@ them.
   change your mind tomorrow.
 
 - **Sandboxed by default.** Model-authored local execution — bash, Python, and
-  file I/O — runs in an ephemeral rootless-Podman container with **no fast path
-  around it**. MCP calls are a documented host-side broker exception so their
+  file I/O — runs in a sandbox: rootless Podman by default, or an ephemeral
+  Kubernetes pod. There is **no fast path around it**. MCP calls are a documented host-side broker exception so their
   credentials never enter the sandbox or model context. Bundle MCP and inline
   HTTP-tool execution is owned by a dedicated broker subprocess; the main
   agent process retains only public catalog metadata and the call transport.

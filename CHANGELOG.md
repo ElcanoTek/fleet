@@ -43,6 +43,8 @@ than by a major-version bump.
   postponements, newly added conditions, and webhook-template conversions.
 - Resolve the first cron occurrence for recurring CLI batch tasks instead of
   launching them immediately. Reject invalid timezone and impossible schedules.
+- Keep the end of chat replies and their action buttons above the composer
+  fade on desktop and mobile.
 - Revalidate mutable workspace downloads instead of caching them as immutable.
   Complete Tab/Shift+Tab focus trapping in shared chat/settings dialogs.
 
