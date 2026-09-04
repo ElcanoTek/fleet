@@ -27,6 +27,33 @@ than by a major-version bump.
 
 ## Recent changes
 
+### Security
+
+- Confine host-side attachment staging and artifact opens to conversation roots,
+  closing workspace-symlink escapes and a download validation/open race. Keep
+  shared-file quota admission under the write lock so concurrent uploads cannot
+  exceed the configured library limit.
+
+### Fixed
+
+- Preserve task files and reasoning-budget edits through upload retries, reruns,
+  and unsaved-change prompts. Rerun APIs now validate attachment replacements;
+  omitted files still inherit the original task's attachments.
+- Recheck scheduler eligibility when promoting tasks, preserving concurrent
+  postponements, newly added conditions, and webhook-template conversions.
+- Resolve the first cron occurrence for recurring CLI batch tasks instead of
+  launching them immediately. Reject invalid timezone and impossible schedules.
+- Revalidate mutable workspace downloads instead of caching them as immutable.
+  Complete Tab/Shift+Tab focus trapping in shared chat/settings dialogs.
+
+### Changed
+
+- Refresh all three README demos with the current interfaces and repeatable,
+  explicitly labeled scripted data. Recording now verifies expected content and
+  requires no live model credentials. Correct contributor commands to run the
+  same tagged Go and complete web gates as CI. See
+  [the review scope](docs/RELIABILITY-REVIEW.md).
+
 ### Removed
 
 - **The `fleet-admin` shim is gone — and `fleet update` deletes the copy on your

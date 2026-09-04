@@ -15,15 +15,15 @@ compute, your data, your know-how. You own the means of production.
 ## See it in action
 
 One story, three surfaces: **plan the work in chat, automate the
-follow-through, ride along from anywhere.** The web demos are real recordings —
-real model, real sandbox, real scheduler
+follow-through, ride along from anywhere.** These recordings show the current
+web app and terminal client with scripted example data; no live model is used
 ([how they're made](docs/generating-demo-gif.md)).
 
-**Chat — plan the kickoff, live** _(real model + sandbox)_
+**Chat — plan the kickoff** _(scripted example)_
 
-![Fleet chat UI — a real streamed turn with tool use](docs/screenshots/web/chat-demo.gif)
+![Fleet chat UI — a kickoff plan with an example tool result](docs/screenshots/web/chat-demo.gif)
 
-**Operations Center — the follow-through, automated** _(real scheduler)_
+**Operations Center — the follow-through, automated** _(example tasks)_
 
 ![Fleet Operations Center — recurring automations and upcoming runs](docs/screenshots/web/ops-demo.gif)
 

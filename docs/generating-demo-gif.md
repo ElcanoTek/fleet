@@ -48,7 +48,7 @@ docs/scripts/generate-tui-gif.sh
 
 The script builds `./fleet`, sets `VHS_NO_SANDBOX=true` when running as root
 (headless Chromium refuses the sandbox as root), runs the tape, and writes
-`docs/screenshots/tui/demo.gif` (~580 KB, 100×~30 cells at 1080×620 px).
+`docs/screenshots/tui/demo.gif` (1080×620 px).
 
 If you change the TUI's layout, keybindings, or the demo script, re-run the
 generator and eyeball the GIF end to end — timing is the only fragile part
@@ -61,28 +61,28 @@ where an animation is inappropriate; the README embeds the GIF.
 
 ## The web demo GIFs
 
-`docs/screenshots/web/chat-demo.gif` and `ops-demo.gif` are recorded against a
-REAL locally-booted fleet stack — real backend, real sandbox, real model — so
-the README shows the true product, not a mockup. The pipeline:
+The GIFs record the current Next.js app with deterministic, fictional API
+responses, just like the mocked browser suite. They demonstrate the interface;
+they do not certify live model, sandbox, or scheduler execution. The README
+labels them accordingly. The separate live e2e suite covers that integration.
 
-1. **Boot a local stack** (see `docs/BUILDING-ON-FLEET.md` and
-   `scripts/e2e-boot-server.sh` for the env shape): `fleet serve` + `next
-   start`, a chat user, an Operations Center user, and — for a lively ops
-   view — a few seeded recurring tasks with aspirational names.
-2. **Record**: [`scripts/record-web-demos.mjs`](scripts/record-web-demos.mjs)
-   drives Playwright with `recordVideo`: signs in, types the kickoff-planning
-   prompt at human speed, lets the real turn stream (tools + markdown), then
-   tours the Operations Center (its own operator sign-in, the automation
-   fleet, the Upcoming view). Output: two `.webm` takes.
-3. **Convert**: [`scripts/generate-web-gifs.sh`](scripts/generate-web-gifs.sh)
-   trims each take, speeds it up (a GIF should respect the reader's time),
-   quantizes with a single ffmpeg-generated palette (crisp UI text), and
-   squeezes ~2× more with `gifsicle --lossy`.
+```sh
+cd web && npm ci && npx playwright install chromium && cd ..
+node docs/scripts/record-web-demos.mjs
+docs/scripts/generate-web-gifs.sh /tmp/fleet-web-demos/chat.webm /tmp/fleet-web-demos/ops.webm
+```
 
-Because the model is real, takes vary — re-record until the take is good, then
-re-run only the conversion. The three demos tell one story on purpose: plan
-the work in chat, automate the follow-through in the Operations Center, ride
-along from the terminal.
+Playwright starts the app, creates a throwaway authenticated session, records
+the kickoff conversation and Operations Center, and asserts the expected
+content before saving each video. A missing tab or reply fails the recording.
+The capture lives in `web/e2e/screenshots/demos.spec.ts` and is opt-in, so normal
+screenshot jobs do not record videos. `DEMO_OUT_DIR` overrides the video directory.
+Use `E2E_PROD=1` after `make ci-web` to capture the production build.
+
+The converter uses ffmpeg and optionally gifsicle. Inspect the videos and the
+`chat-final.png` / `ops-final.png` captures before committing all three GIFs.
+The web conversation uses a scripted completed response; the terminal demo
+uses paced SSE frames. Neither requires credentials or incurs model cost.
 
 ## The bug the recordings caught
 

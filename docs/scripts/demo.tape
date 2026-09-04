@@ -11,7 +11,7 @@ Set Width 1080
 Set Height 620
 Set Padding 12
 Set Theme { "background": "#11111B", "foreground": "#E6E6F0", "black": "#16161E", "red": "#FF5C72", "green": "#3DF5A0", "yellow": "#FFC857", "blue": "#9D7CFF", "magenta": "#FF5FD7", "cyan": "#36E2E2", "white": "#E6E6F0", "brightBlack": "#6C7086", "brightRed": "#FF5C72", "brightGreen": "#3DF5A0", "brightYellow": "#FFC857", "brightBlue": "#9D7CFF", "brightMagenta": "#FF5FD7", "brightCyan": "#36E2E2", "brightWhite": "#E6E6F0" }
-Set Framerate 24
+Set Framerate 12
 Set TypingSpeed 35ms
 
 Hide
@@ -35,7 +35,7 @@ Sleep 400ms
 Enter
 Sleep 2.5s
 
-Type "Love it. Schedule the daily 7am progress brief."
+Type "Draft a short kickoff meeting agenda."
 Sleep 500ms
 Enter
 Sleep 6s

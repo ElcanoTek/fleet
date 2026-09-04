@@ -20,17 +20,17 @@ if [ "$(id -u)" = "0" ]; then
     export VHS_NO_SANDBOX=true
 fi
 
-go build -o fleet ./cmd/fleet
+make build
 
 # The vhs → ttyd → headless-Chromium pipeline occasionally freezes its
 # rendering mid-take under load (the app itself is fine — verified against a
 # raw pty). The tape also emits a .txt of the FINAL screen, so a good take is
-# verifiable: the closing frame must show the scheduled-brief confirmation.
+# verifiable: the closing frame must show the kickoff agenda.
 # Retry up to 3 times; fail loudly rather than shipping a frozen take.
 for attempt in 1 2 3; do
     vhs docs/scripts/demo.tape
-    if grep -q "meridian-daily-brief" docs/screenshots/tui/demo.txt; then
-        echo "take $attempt: good (final frame shows the scheduled brief)"
+    if grep -q "Ready for your review" docs/screenshots/tui/demo.txt; then
+        echo "take $attempt: good (final frame shows the kickoff agenda)"
         break
     fi
     echo "take $attempt: rendering froze mid-take — retrying" >&2
